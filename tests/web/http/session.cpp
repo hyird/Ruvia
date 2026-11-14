@@ -88,9 +88,9 @@ public:
 
 private:
     ruvia::task<ruvia::http_response> same_name_cookie(ruvia::context& c) {
-        c.draft().set_cookie({.name_ = "ruvia_session", .value_ = "handler"});
+        const std::array cookies{ruvia::set_cookie_options{.name_ = "ruvia_session", .value_ = "handler"}};
         c.session().clear();
-        co_return c.text("ok");
+        co_return c.text("ok", {.cookies_ = cookies});
     }
 };
 

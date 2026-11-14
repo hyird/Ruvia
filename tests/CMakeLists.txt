@@ -34,7 +34,7 @@ endfunction()
 # options through the installed Web target.
 function(ruvia_add_web_test name timeout)
     ruvia_add_test(${name} ruvia::web TIMEOUT ${timeout} SOURCES ${ARGN})
-    target_link_libraries(${name} PRIVATE ${RUVIA_WEB_DEPENDENCIES} ${RUVIA_HTTP_DEPENDENCIES})
+    target_link_libraries(${name} PRIVATE ruvia_core_internal ${RUVIA_WEB_DEPENDENCIES} ${RUVIA_HTTP_DEPENDENCIES})
     target_compile_definitions(${name} PRIVATE ${RUVIA_OPENSSL_DEFINITIONS})
     if(WIN32)
         target_compile_definitions(${name} PRIVATE NOMINMAX)
@@ -56,6 +56,7 @@ if(RUVIA_BUILD_CORE)
     )
     ruvia_add_test(ruvia_core_unit_tests ruvia::core TIMEOUT 180 SOURCES
         ${_ruvia_core_unit_sources})
+    target_link_libraries(ruvia_core_unit_tests PRIVATE ruvia_core_internal)
     # 作用域任务的所有权转移必须在关闭可选拷贝消除时同样有效。
     set_property(SOURCE core/scoped_operation.cpp APPEND PROPERTY COMPILE_OPTIONS
         "$<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-fno-elide-constructors>")
@@ -130,14 +131,14 @@ if(RUVIA_BUILD_WEB)
     # Owns an application whose HTTPS identities it selects and replaces at
     # runtime, on a wildcard address too.
     ruvia_add_web_test(ruvia_app_tls_identities 60 web/app/tls_identities.cpp)
-    # Owns applications whose listeners hand connections to on_connection,
+    # Owns applications whose listeners hand connections to their connection_ callback,
     # with short idle timeouts and a connection-failure hook.
     ruvia_add_web_test(ruvia_app_server_connection 60 web/app/server_connection.cpp)
     # Owns an application whose listeners it adopts, duplicates, adds and
     # removes while running, across several runs.
     ruvia_add_web_test(ruvia_app_listener_sockets 120 web/app/listener_sockets.cpp)
     # Owns an application whose request-stream listeners hand every request to
-    # on_request_stream beside an ordinary routes listener with middleware.
+    # request_stream_ beside an ordinary routes listener with middleware.
     ruvia_add_web_test(ruvia_app_request_stream 120 web/app/request_stream.cpp)
     ruvia_add_web_test(ruvia_http_server 60 web/app/http_server.cpp)
     ruvia_add_web_test(ruvia_router 60 web/app/router.cpp)

@@ -143,7 +143,7 @@ struct app_document_root_config final {
 
     http_native_path_string_type root_;
     static_root_config_storage static_options_;
-    std::chrono::milliseconds refresh_interval_{};
+    timeout_duration refresh_interval_{0};
     static_root_precompression_options precompression_;
     static_root_resident_options resident_;
 };
@@ -153,23 +153,8 @@ struct app_state final {
     ~app_state();
 
     std::vector<http_server_listener_definition> listeners_;
-    callback_registration<access_log_callback> access_log_callback_;
-    callback_registration<connection_failure_callback> connection_failure_callback_;
-    callback_registration<tls_client_hello_callback> tls_client_hello_callback_;
-    callback_registration<http2_input_callback> http2_input_callback_;
-#if defined(RUVIA_ENABLE_HTTP2)
-    callback_registration<http2_frame_callback> http2_frame_callback_;
-    callback_registration<http2_headers_callback> http2_headers_callback_;
-#endif
-#if defined(RUVIA_ENABLE_HTTP3)
-    callback_registration<http3_frame_callback> http3_frame_callback_;
-    callback_registration<http3_field_callback> http3_field_callback_;
-#endif
-    callback_registration<connection_admission_callback> connection_admission_callback_;
-    callback_registration<connection_open_callback> connection_open_callback_;
-    callback_registration<connection_close_callback> connection_close_callback_;
-    callback_registration<connection_callback> connection_callback_;
-    callback_registration<request_stream_callback> request_stream_callback_;
+    // Heap-stable: options_ borrows its members. Replaced whole by callbacks().
+    callback_registration<http_server_callbacks> callbacks_;
     http_server_options options_{};
     std::optional<app_document_root_config> document_root_config_;
     app_configuration configuration_;
@@ -217,6 +202,8 @@ void run_app(application& app, app_state& state_value);
 // thread. The caller must not hold app_state::mutex_ and must pin `runtime`
 // through app_state::runtime_controls_; run_app owns retirement.
 void request_runtime_stop(app_runtime_graph& runtime) noexcept;
+// The application's listener_controls backend; shares the state's lifetime.
+[[nodiscard]] std::shared_ptr<listener_backend> make_app_listener_backend(std::shared_ptr<app_state> state);
 
 struct app_worker_slot final {
     app_worker_slot(controller_store configured_controllers, std::unique_ptr<route_table> configured_routes, std::unique_ptr<web_worker_runtime> configured_runtime) :

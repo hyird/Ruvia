@@ -22,6 +22,7 @@
 #include "http_client_response_head.h"
 #include "http_connection_advertisement.h"
 #include "http_header.h"
+#include "http_multiplexed_stream.h"
 #include "http_priority.h"
 #include "http_request.h"
 #include "http_response.h"
@@ -33,12 +34,6 @@
 namespace ruvia {
 
 class http3_quic_connection;
-namespace detail {
-class http3_received_data_ledger;
-}  // namespace detail
-
-enum class http3_role : std::uint8_t { client,
-    server };
 
 // HTTP/3 error codes (RFC 9114 §8.1), the QPACK codes (RFC 9204 §6) and
 // H3_DATAGRAM_ERROR (RFC 9297 §5.2), carried by RESET_STREAM, STOP_SENDING
@@ -109,111 +104,8 @@ struct http3_transport_result final {
     std::optional<http3_error_code> error_code_{};
     // read_stream(): framing and QPACK bytes the codec consumed itself, which
     // the QUIC owner returns at once as receive flow credit (RFC 9000 §4.1).
-    // DATA payload returns through http3_received_data_credit instead.
+    // DATA payload returns through http_received_data_credit instead.
     std::size_t credit_bytes_{0};
-};
-
-// Head and control submissions. closed is an expected race with a reset
-// stream or a failed connection; invalid_state is a request the codec's role
-// or stream state cannot take. invalid_message is a message HTTP/3 cannot
-// carry (RFC 9114 §4.2, §4.3) or that exceeds a field section limit,
-// returned so a caller forwarding peer data can answer it.
-// peer_settings_pending: the operation depends on peer SETTINGS that have
-// not arrived (RFC 9114 §7.2.4); retry after peer_settings() reports them.
-// peer_capability_unavailable: the peer's SETTINGS do not enable the feature.
-// backpressured: submit_origin_advertisement() found the control stream's
-// output budget full; retry after acknowledgements free it.
-enum class http3_submit_status : std::uint8_t {
-    accepted,
-    closed,
-    invalid_state,
-    invalid_message,
-    peer_settings_pending,
-    peer_capability_unavailable,
-    backpressured,
-};
-
-// complete: the whole input was copied. backpressured: only consumed_bytes_
-// (possibly none) fit the stream's output budget; the caller keeps the rest
-// and retries after acknowledgements free budget (pending_output_bytes()).
-// closed: the stream is gone or its send half was abandoned.
-// invalid_message: the input would exceed the declared Content-Length;
-// nothing was consumed.
-enum class http3_data_submit_status : std::uint8_t {
-    complete,
-    backpressured,
-    closed,
-    invalid_message,
-};
-
-// The codec copies exactly the consumed prefix; no input view is retained.
-struct http3_data_submit_result final {
-    std::size_t consumed_bytes_{0};
-    http3_data_submit_status status_{http3_data_submit_status::complete};
-};
-
-enum class http3_finish_status : std::uint8_t {
-    accepted,
-    // The stream disappeared or its send half was abandoned.
-    closed,
-    // The submitted DATA does not reach the declared Content-Length, or the
-    // trailer section cannot be sent. Nothing changed; the stream stays open.
-    invalid_message,
-};
-
-struct http3_regular_request_head_view final {
-    borrowed_text method_{"GET"};
-    borrowed_text scheme_{"https"};
-    std::optional<borrowed_text> authority_{};
-    borrowed_text target_{"/"};
-    borrowed_http_headers headers_{};
-    http_request_content_plan content_{http_request_content_plan::none()};
-    http_client_request_expectation expectation_{http_client_request_expectation::none};
-    http_request_field_source field_source_{http_request_field_source::generated};
-};
-
-struct http3_connect_request_head_view final {
-    borrowed_text authority_{};
-    borrowed_http_headers headers_{};
-    http_request_field_source field_source_{http_request_field_source::generated};
-};
-
-struct http3_extended_connect_request_head_view final {
-    borrowed_text protocol_{};
-    borrowed_text scheme_{"https"};
-    borrowed_text authority_{};
-    borrowed_text target_{"/"};
-    borrowed_http_headers headers_{};
-    http_request_field_source field_source_{http_request_field_source::generated};
-};
-
-// Receive flow-control credit (RFC 9000 §4.1) for the DATA payload of one
-// event. A credit is linear and has a single way back: destroying a
-// still-valid token returns its exact byte count to the connection's credit
-// sink without throwing, so a consumer holds it until the bytes are
-// consumed. A credit that outlives its connection returns nothing.
-class http3_received_data_credit final {
-public:
-    ~http3_received_data_credit();
-    http3_received_data_credit(const http3_received_data_credit&) = delete;
-    http3_received_data_credit& operator=(const http3_received_data_credit&) = delete;
-    http3_received_data_credit(http3_received_data_credit&& other) noexcept;
-    http3_received_data_credit& operator=(http3_received_data_credit&&) = delete;
-    // Combines credits of one stream without returning any bytes. Success
-    // consumes other; invalid, mismatched or overflowing tokens throw.
-    void merge(http3_received_data_credit&& other);
-    [[nodiscard]] bool valid() const noexcept {
-        return ledger_ != nullptr && bytes_ != 0;
-    }
-
-private:
-    friend class http3_connection;
-    friend class http3_data_event;
-    http3_received_data_credit(detail::http3_received_data_ledger* ledger, std::int64_t stream_id, std::size_t bytes) noexcept;
-    void swap(http3_received_data_credit& other) noexcept;
-    detail::http3_received_data_ledger* ledger_{nullptr};
-    std::int64_t stream_id_{-1};
-    std::size_t bytes_{0};
 };
 
 // Server: a request head that passed validation (see http3_request_head).
@@ -257,18 +149,18 @@ public:
         return bytes_;
     }
     std::string_view bytes() const&& = delete;
-    [[nodiscard]] http3_received_data_credit take_credit() & noexcept {
+    [[nodiscard]] http_received_data_credit take_credit() & noexcept {
         return std::move(credit_);
     }
 
 private:
     friend class http3_connection;
-    http3_data_event(std::int64_t stream_id, std::string_view bytes, bool own_bytes, http3_received_data_credit credit);
+    http3_data_event(std::int64_t stream_id, std::string_view bytes, bool own_bytes, http_received_data_credit credit);
     std::int64_t stream_id_{-1};
     std::string_view bytes_;
     std::string owned_bytes_;
     bool owns_bytes_{false};
-    http3_received_data_credit credit_;
+    http_received_data_credit credit_;
 };
 
 // Client: a 1xx response head (RFC 9114 §4.1). request_content_signal() is
@@ -445,7 +337,7 @@ private:
 // identifier may not be submitted to again. error() is present when the
 // stream ended by RESET_STREAM or STOP_SENDING rather than by completing.
 // A stream reported by http3_request_unprocessed_event publishes no close.
-class http3_stream_close_event final {
+class http3_stream_closed_event final {
 public:
     [[nodiscard]] std::int64_t stream_id() const noexcept {
         return stream_id_;
@@ -456,7 +348,7 @@ public:
 
 private:
     friend class http3_connection;
-    constexpr http3_stream_close_event(std::int64_t stream_id, std::optional<http3_error_code> error) noexcept :
+    constexpr http3_stream_closed_event(std::int64_t stream_id, std::optional<http3_error_code> error) noexcept :
         stream_id_(stream_id),
         error_(error) {}
     std::int64_t stream_id_;
@@ -579,10 +471,10 @@ public:
         return std::get_if<http3_deferred_consume_event>(&value_);
     }
     const http3_deferred_consume_event* deferred_consume() const&& = delete;
-    [[nodiscard]] const http3_stream_close_event* stream_close() const& noexcept RUVIA_LIFETIMEBOUND {
-        return std::get_if<http3_stream_close_event>(&value_);
+    [[nodiscard]] const http3_stream_closed_event* stream_closed() const& noexcept RUVIA_LIFETIMEBOUND {
+        return std::get_if<http3_stream_closed_event>(&value_);
     }
-    const http3_stream_close_event* stream_close() const&& = delete;
+    const http3_stream_closed_event* stream_closed() const&& = delete;
     [[nodiscard]] const http3_request_unprocessed_event* request_unprocessed() const& noexcept RUVIA_LIFETIMEBOUND {
         return std::get_if<http3_request_unprocessed_event>(&value_);
     }
@@ -608,7 +500,7 @@ public:
 
 private:
     friend class http3_connection;
-    using value_type = std::variant<http3_request_head_event, http3_informational_head_event, http3_response_head_event, http3_data_event, http3_message_end_event, http3_transport_action_event, http3_deferred_consume_event, http3_stream_close_event, http3_request_unprocessed_event, http3_goaway_event, http3_datagram_event, http_origin_advertisement>;
+    using value_type = std::variant<http3_request_head_event, http3_informational_head_event, http3_response_head_event, http3_data_event, http3_message_end_event, http3_transport_action_event, http3_deferred_consume_event, http3_stream_closed_event, http3_request_unprocessed_event, http3_goaway_event, http3_datagram_event, http_origin_advertisement>;
     template <typename event_type>
     explicit http3_event(event_type event) noexcept :
         value_(std::move(event)) {}
@@ -645,19 +537,6 @@ struct http3_stream_output final {
     std::array<std::span<const std::byte>, 16> buffers_{};
     std::size_t buffer_count_{0};
     bool fin_{false};
-};
-
-enum class http3_response_head_error : std::uint8_t {
-    // The stream no longer exists or the connection failed.
-    closed,
-    // A final head was already submitted, or the role is not server.
-    invalid_state,
-    // The response cannot be represented in HTTP/3 (RFC 9114 §4.2:
-    // connection-specific fields, a non-final status, an invalid
-    // Content-Length or Transfer-Encoding).
-    invalid_message,
-    // The write plan does not describe this response.
-    response_plan_mismatch,
 };
 
 // A frame header the codec read on a request stream or on the peer's control
@@ -763,7 +642,7 @@ public:
     http3_connection(http3_connection&&) noexcept;
     http3_connection& operator=(http3_connection&&) noexcept;
 
-    [[nodiscard]] http3_role role() const noexcept;
+    [[nodiscard]] http_connection_role role() const noexcept;
 
     // Bind three locally opened unidirectional QUIC streams exactly once.
     [[nodiscard]] http3_transport_status bind_control_streams(std::int64_t control_stream_id, std::int64_t qpack_encoder_stream_id, std::int64_t qpack_decoder_stream_id);
@@ -821,15 +700,15 @@ public:
     // RFC 9110). Extended CONNECT (RFC 9220) returns peer_settings_pending
     // before the peer SETTINGS (or 0-RTT remembered ones) are known and
     // peer_capability_unavailable when they do not enable it.
-    [[nodiscard]] http3_submit_status submit_request_head(std::int64_t stream_id, const http3_regular_request_head_view& request);
-    [[nodiscard]] http3_submit_status submit_request_head(std::int64_t stream_id, const http3_connect_request_head_view& request);
-    [[nodiscard]] http3_submit_status submit_request_head(std::int64_t stream_id, const http3_extended_connect_request_head_view& request);
+    [[nodiscard]] http_submit_status submit_request_head(std::int64_t stream_id, const http_regular_request_head_view& request);
+    [[nodiscard]] http_submit_status submit_request_head(std::int64_t stream_id, const http_connect_request_head_view& request);
+    [[nodiscard]] http_submit_status submit_request_head(std::int64_t stream_id, const http_extended_connect_request_head_view& request);
     // Copies the prefix that fits the stream's output budget; empty input is
     // complete without effect. A stream whose head declared a content length
     // returns invalid_message for DATA beyond it before copying anything.
     // Submitting to a stream whose content is not open (no head, a head that
     // ended the stream, or content already finished) throws std::logic_error.
-    [[nodiscard]] http3_data_submit_result submit_data(std::int64_t stream_id, std::span<const std::byte> bytes);
+    [[nodiscard]] http_data_submit_result submit_data(std::int64_t stream_id, std::string_view bytes);
     // DATA payload submitted on the stream and not yet acknowledged.
     [[nodiscard]] std::size_t pending_output_bytes(std::int64_t stream_id) const noexcept;
     // 当前排队的 HEADERS/DATA/尾部已全部交给 QUIC；不表示对端已确认，
@@ -840,12 +719,12 @@ public:
     // The finishing calls throw std::logic_error, like submit_data(), for
     // content that is not open. finish_stream() ends the content of either
     // role, including a tunnel.
-    [[nodiscard]] http3_finish_status finish_stream(std::int64_t stream_id);
+    [[nodiscard]] http_finish_status finish_stream(std::int64_t stream_id);
     // Client: ends the request content, with a trailer section when
     // `trailers` is nonempty. Trailer fields must be valid fields a sender may
     // place in request trailers (RFC 9110 §6.5.1) within the field section
     // limits.
-    [[nodiscard]] http3_finish_status finish_request(std::int64_t stream_id, std::span<const http_header_view> trailers = {});
+    [[nodiscard]] http_finish_status finish_request(std::int64_t stream_id, std::span<const http_header_view> trailers = {});
 
     // Server response mapping (RFC 9114 §4.1-§4.3). The final head carries
     // :status, the response fields with lowercase names (§4.2), a generated
@@ -853,18 +732,18 @@ public:
     // derives; connection-specific fields are rejected. A head whose plan
     // sends content leaves the stream open for submit_data(), whose total
     // must equal the planned length before finish_stream().
-    [[nodiscard]] std::variant<http_buffered_response_write_plan, http3_response_head_error> submit_response_head(std::int64_t stream_id, const http_response& response, http_buffered_response_write_plan write_plan);
+    [[nodiscard]] std::variant<http_buffered_response_write_plan, http_response_head_error> submit_response_head(std::int64_t stream_id, const http_response& response, http_buffered_response_write_plan write_plan);
     // Streaming final head: an application Content-Length becomes the exact
     // content total; otherwise the content is unbounded. A body-suppressed
     // response (HEAD request, 204, 304) ends the stream with its head; the
     // request method is the one the stream received.
-    [[nodiscard]] std::variant<http_response_stream_commit_plan, http3_response_head_error> submit_streaming_response_head(std::int64_t stream_id, http_response head, http_response_trailer_intent trailer_intent = http_response_trailer_intent::none);
+    [[nodiscard]] std::variant<http_response_stream_commit_plan, http_response_head_error> submit_streaming_response_head(std::int64_t stream_id, http_response head, http_response_trailer_intent trailer_intent = http_response_trailer_intent::none);
     // A 1xx response before the final head (RFC 9114 §4.1). invalid_message:
     // the field section exceeds the local or peer field section limit.
-    [[nodiscard]] http3_submit_status submit_interim_response_head(std::int64_t stream_id, const http_interim_response_head& response);
+    [[nodiscard]] http_submit_status submit_interim_response_head(std::int64_t stream_id, const http_interim_response_head& response);
     // Ends a streaming response: an empty section ends the content, any other
     // section is sent as the trailing HEADERS frame. Rules as finish_stream().
-    [[nodiscard]] http3_finish_status finish_response(std::int64_t stream_id, const http_response_trailer_section& trailers);
+    [[nodiscard]] http_finish_status finish_response(std::int64_t stream_id, const http_response_trailer_section& trailers);
 
     // Accepts a CONNECT (RFC 9114 §4.4) or extended CONNECT (RFC 9220)
     // request with a 2xx head that frames no content (no Content-Length, no
@@ -873,12 +752,12 @@ public:
     // finish_stream()). Any other answer takes submit_response_head().
     // invalid_state: the stream did not receive a CONNECT head or already
     // answered it; invalid_message: the head cannot accept a tunnel.
-    [[nodiscard]] http3_submit_status submit_connect_response_head(std::int64_t stream_id, const http_response& response);
+    [[nodiscard]] http_submit_status submit_connect_response_head(std::int64_t stream_id, const http_response& response);
     // Accepts an RFC 9220 WebSocket bootstrap that
     // validate_http3_websocket_handshake() accepted: the 200 head carries the
     // negotiated subprotocol and permessage-deflate parameters, and the
     // stream continues as a tunnel like submit_connect_response_head().
-    [[nodiscard]] std::variant<websocket_extended_connect_negotiation, http3_response_head_error> submit_websocket_handshake(std::int64_t stream_id, const http_request& request, const websocket_handshake_validation_result& validation, websocket_server_handshake_options options = {});
+    [[nodiscard]] std::variant<websocket_extended_connect_negotiation, http_response_head_error> submit_websocket_handshake(std::int64_t stream_id, const http_request& request, const websocket_handshake_validation_result& validation, websocket_server_handshake_options options = {});
 
     // One QUIC DATAGRAM frame payload (RFC 9221) carrying an HTTP/3 Datagram.
     // A datagram for a stream whose head was not decoded, or that closed, is
@@ -895,10 +774,10 @@ public:
     [[nodiscard]] bool header_block_in_progress() const noexcept;
 
     // Server only: queues an RFC 9412 ORIGIN frame on the bound control stream.
-    [[nodiscard]] http3_submit_status submit_origin_advertisement(std::span<const std::string_view> origins);
+    [[nodiscard]] http_submit_status submit_origin_advertisement(std::span<const std::string_view> origins);
     // Client only: queues an RFC 9218 PRIORITY_UPDATE frame on the bound
     // control stream for an open client-initiated bidirectional request stream.
-    [[nodiscard]] http3_submit_status submit_priority_update(std::int64_t stream_id, http_priority_fields fields);
+    [[nodiscard]] http_submit_status submit_priority_update(std::int64_t stream_id, http_priority_fields fields);
     // Server only: the current RFC 9218 priority of an open request stream.
     [[nodiscard]] std::optional<http_priority> stream_priority(std::int64_t stream_id) const noexcept;
     // Final retirement of a QUIC stream, with the application error codes of
@@ -910,8 +789,8 @@ public:
     // naming the first request stream that will not be processed. drained()
     // then reports that every admitted request stream has closed. Both return
     // closed after a connection error.
-    [[nodiscard]] http3_submit_status begin_drain() noexcept;
-    [[nodiscard]] http3_submit_status finish_drain() noexcept;
+    [[nodiscard]] http_submit_status begin_drain() noexcept;
+    [[nodiscard]] http_submit_status finish_drain() noexcept;
     [[nodiscard]] bool drain_final() const noexcept;
     [[nodiscard]] bool drained() const noexcept;
     [[nodiscard]] std::optional<http3_error_code> connection_error() const noexcept;
@@ -925,7 +804,7 @@ private:
     [[nodiscard]] bool events_pending() const noexcept;
     void rethrow_if_failed();
     class impl;
-    explicit http3_connection(http3_role role, const http3_connection_options& options);
+    explicit http3_connection(http_connection_role role, const http3_connection_options& options);
     std::unique_ptr<impl> impl_;
 };
 
@@ -933,7 +812,7 @@ private:
 // stream: the negotiation's Sec-WebSocket-* request fields followed by the
 // application headers. Validate the final head with
 // validate_extended_connect_websocket_client_response().
-[[nodiscard]] http3_submit_status submit_http3_websocket_client_request(http3_connection& connection, std::int64_t stream_id, const websocket_client_negotiation& negotiation, std::string_view scheme, std::string_view authority, std::string_view target, borrowed_http_headers headers = {}, http_request_field_source source = http_request_field_source::generated);
+[[nodiscard]] http_submit_status submit_http3_websocket_client_request(http3_connection& connection, std::int64_t stream_id, const websocket_client_negotiation& negotiation, std::string_view scheme, std::string_view authority, std::string_view target, borrowed_http_headers headers = {}, http_request_field_source source = http_request_field_source::generated);
 
 struct http3_fingerprint_options final {
     std::size_t max_frames_{32};

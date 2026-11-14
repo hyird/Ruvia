@@ -56,14 +56,36 @@ std::optional<std::string_view> http_request::header(std::string_view name) cons
         return headers_[index - 1].value();
     }
 
-    for (std::size_t i = headers_.size(); i > 0; --i) {
-        const auto index = i - 1;
+    for (std::size_t index = 0; index < headers_.size(); ++index) {
         if (headers_.kind_at(index) == detail::http_field_kind::other && http_ascii_equals_ignore_case(headers_[index].name(), name)) {
             return headers_[index].value();
         }
     }
 
     return std::nullopt;
+}
+
+http_unique_field_lookup http_request::unique_header(std::string_view name) const noexcept {
+    const auto kind = detail::classify_http_field(name);
+    if (kind != detail::http_field_kind::other) {
+        const auto known_slot = detail::http_field_kind_known_slot(kind);
+        const auto index = cached_headers_[known_slot];
+        if (index == 0 || index > headers_.size()) {
+            return {};
+        }
+        if (headers_.has_repeated_known_slot(known_slot)) {
+            return {.status_ = unique_lookup_status::repeated};
+        }
+        return {.status_ = unique_lookup_status::found, .value_ = headers_[index - 1].value()};
+    }
+
+    http_unique_field_lookup result;
+    for (std::size_t index = 0; index < headers_.size() && result.status_ != unique_lookup_status::repeated; ++index) {
+        if (headers_.kind_at(index) == detail::http_field_kind::other && http_ascii_equals_ignore_case(headers_[index].name(), name)) {
+            result.add_occurrence(headers_[index].value());
+        }
+    }
+    return result;
 }
 
 std::optional<std::string_view> http_request::last_raw_query_value(std::string_view raw_name) const noexcept {
@@ -78,39 +100,19 @@ std::optional<std::string_view> http_request::last_raw_query_value(std::string_v
 }
 
 std::optional<std::string_view> http_request::cookie(std::string_view name) const noexcept {
-    if (!detail::http_request_access::has_known_header(*this, detail::http_field_kind::cookie)) {
-        return std::nullopt;
-    }
-    // The last matching pair within one field line wins.
-    const auto find_in = [name](std::string_view field_value) noexcept {
-        std::optional<std::string_view> result;
+    // The first matching pair across field lines, in wire order, wins.
+    std::optional<std::string_view> result;
+    (void)detail::http_request_access::visit_known_headers(*this, detail::http_field_kind::cookie, [name, &result](std::string_view field_value) noexcept {
         http_visit_cookie_pairs(field_value, [name, &result](std::string_view key, std::string_view value) noexcept {
             if (key == name) {
                 result = value;
+                return false;
             }
             return true;
         });
-        return result;
-    };
-    const auto last_cookie = detail::http_request_access::known_header(*this, detail::http_field_kind::cookie);
-    if (auto value = find_in(last_cookie)) {
-        return value;
-    }
-    if (!detail::http_request_access::has_repeated_known_header(*this, detail::http_field_kind::cookie)) {
-        return std::nullopt;
-    }
-    const auto last_cookie_index = cached_headers_[detail::http_field_kind_known_slot(detail::http_field_kind::cookie)];
-    // The one-based cache points to the last Cookie field; only earlier fields can contribute.
-    for (std::size_t i = last_cookie_index - 1; i > 0; --i) {
-        const auto index = i - 1;
-        if (headers_.kind_at(index) != detail::http_field_kind::cookie) {
-            continue;
-        }
-        if (auto value = find_in(headers_[index].value())) {
-            return value;
-        }
-    }
-    return std::nullopt;
+        return !result.has_value();
+    });
+    return result;
 }
 
 namespace {
@@ -191,7 +193,7 @@ std::optional<http_request_trailer_error> http_request_trailers::append_received
 }
 
 std::optional<std::string_view> http_request_trailers::field(std::string_view name) const& noexcept {
-    return detail::find_last_http_header<http_header>(fields_, name);
+    return detail::find_first_http_header(fields_, name);
 }
 namespace {
 

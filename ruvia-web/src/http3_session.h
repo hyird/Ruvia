@@ -66,7 +66,7 @@ enum class http3_body_store_status : std::uint8_t {
 // drops the credit once it consumed the bytes.
 struct http3_tunnel_chunk final {
     std::string bytes_;
-    std::optional<http3_received_data_credit> credit_;
+    std::optional<http_received_data_credit> credit_;
 };
 
 class http3_stream final {
@@ -155,7 +155,7 @@ public:
     // Buffered body: the whole content, borrowed by the request at dispatch;
     // its credit returns as it is stored. Streaming body and tunnel: the bytes
     // queued for the reader, holding their credit until it takes them.
-    [[nodiscard]] http3_body_store_status store(std::string_view data, http3_received_data_credit&& credit, protocol_byte_limit total_limit, std::size_t backlog_limit) {
+    [[nodiscard]] http3_body_store_status store(std::string_view data, http_received_data_credit&& credit, protocol_byte_limit total_limit, std::size_t backlog_limit) {
         if (http_request_body_addition_failure(received_bytes_, data.size(), total_limit).has_value()) {
             return http3_body_store_status::too_large;
         }
@@ -330,8 +330,8 @@ private:
     std::string active_chunk_;
     inbound_buffer_reservation active_reservation_;
     // Receive credit of body_ and active_chunk_ (streaming body or tunnel).
-    std::optional<http3_received_data_credit> body_credit_;
-    std::optional<http3_received_data_credit> active_credit_;
+    std::optional<http_received_data_credit> body_credit_;
+    std::optional<http_received_data_credit> active_credit_;
     std::optional<std::deque<std::string>> datagrams_;
     std::size_t datagram_bytes_{0};
     std::size_t received_bytes_{0};
@@ -498,7 +498,7 @@ private:
     void on_message_end(const http3_message_end_event& event);
     void on_stream_end(std::int64_t stream_id);
     void on_stream_abort(const http3_transport_action_event& event) noexcept;
-    void on_stream_close(const http3_stream_close_event& event) noexcept;
+    void on_stream_close(const http3_stream_closed_event& event) noexcept;
     void wake_output_waiters() noexcept;
 
     // Requests.
@@ -540,7 +540,7 @@ private:
     asio::ip::udp::endpoint path_local_;
     std::uint32_t path_interface_index_;
     std::string remote_address_;
-    // Present only with an on_tls_client_hello observer; tls_ borrows it, so
+    // Present only with a tls_client_hello_ observer; tls_ borrows it, so
     // it is declared before tls_.
     std::string local_address_;
     std::optional<tls_client_hello_observation> client_hello_;

@@ -314,7 +314,7 @@ task<void> tcp_client::write(std::string_view bytes, operation_options options) 
     return write_owned(std::string(bytes), std::move(options));
 }
 
-task<void> tcp_client::write_owned(std::string bytes, operation_options options) {
+task<void> tcp_client::write_owned(std::string&& bytes, operation_options options) {
     return state_->write(std::move(bytes), std::move(options));
 }
 

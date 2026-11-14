@@ -15,6 +15,7 @@
 #include "connection_lifecycle.h"
 #include "http_client_pool.h"
 #include "http_header.h"
+#include "io_operation.h"
 #include "redis.h"
 #include "redis_codec.h"
 #include "redis_pool.h"
@@ -243,6 +244,7 @@ redis_session::redis_session(const redis_session& other) noexcept :
     runtime_(other.runtime_),
     io_metrics_(other.io_metrics_),
     operation_options_(other.operation_options_),
+    request_stop_(other.request_stop_),
     registration_(other.registration_, this) {}
 
 redis_session redis_session::with_options(operation_options options) const {
@@ -266,7 +268,9 @@ detail::redis_pool& redis_session::blocking_pool() const noexcept {
 }
 
 task<redis_value> redis_session::execute(detail::redis_pool& pool_value, detail::redis_owned_command&& command, std::optional<timeout_duration> reply_timeout) const {
-    return pool_value.execute_owned(std::move(command), operation_options_, reply_timeout, io_metrics_);
+    return detail::start_request_linked(operation_options_, request_stop_, [pool = &pool_value, command = std::move(command), reply_timeout, io_metrics = io_metrics_](const operation_options& options) mutable {
+        return pool->execute_owned(std::move(command), options, reply_timeout, io_metrics);
+    });
 }
 
 void redis_session::expire_capability(void* target) noexcept {
@@ -274,25 +278,30 @@ void redis_session::expire_capability(void* target) noexcept {
     handle.runtime_ = nullptr;
     handle.io_metrics_ = nullptr;
     handle.operation_options_ = {};
+    handle.request_stop_ = {};
 }
 
 task<redis_value> redis_session::command(std::span<const std::string_view> args) const {
     registration_.require_active();
     const bool blocking = detail::validate_redis_pooled_command(args, true);
     if (blocking) {
-        detail::require_bounded_redis_wait(operation_options_, "raw blocking redis command requires a stop_token or finite operation timeout");
+        detail::require_bounded_redis_wait(detail::request_bound_options(operation_options_, request_stop_), "raw blocking redis command requires a stop_token or finite operation timeout");
     }
     return scoped(execute(blocking ? blocking_pool() : pool(), detail::make_owned_redis_command(args)));
 }
 
 task<redis_value> redis_session::command_owned(std::vector<std::string>&& args) const {
     registration_.require_active();
-    return pool().execute_owned(std::move(args), operation_options_, std::nullopt, io_metrics_);
+    return detail::start_request_linked(operation_options_, request_stop_, [pool = &pool(), args = std::move(args), io_metrics = io_metrics_](const operation_options& options) mutable {
+        return pool->execute_owned(std::move(args), options, std::nullopt, io_metrics);
+    });
 }
 
 task<redis_value> redis_session::script_owned(const detail::redis_orm_script& script, std::vector<std::string>&& args) const {
     registration_.require_active();
-    return detail::execute_redis_orm_script(pool(), script, std::move(args), io_metrics_, operation_options_);
+    return detail::start_request_linked(operation_options_, request_stop_, [pool = &pool(), script = &script, args = std::move(args), io_metrics = io_metrics_](const operation_options& options) mutable {
+        return detail::execute_redis_orm_script(*pool, *script, std::move(args), io_metrics, options);
+    });
 }
 
 task<void> redis_session::ping() const {
@@ -648,13 +657,13 @@ task<std::vector<bool>> redis_session::script_exists(std::span<const std::string
 
 task<std::optional<redis_key_value>> redis_session::blpop(std::span<const std::string_view> keys, redis_block_wait wait) const {
     registration_.require_active();
-    const auto reply_timeout = redis_block_reply_timeout(operation_options_, wait);
+    const auto reply_timeout = redis_block_reply_timeout(detail::request_bound_options(operation_options_, request_stop_), wait);
     return execute_mapped<std::optional<redis_key_value>>(blocking_pool(), detail::redis_blocking_pop_args("BLPOP", keys, wait), detail::parse_redis_blocking_pop_reply, reply_timeout);
 }
 
 task<std::optional<redis_key_value>> redis_session::brpop(std::span<const std::string_view> keys, redis_block_wait wait) const {
     registration_.require_active();
-    const auto reply_timeout = redis_block_reply_timeout(operation_options_, wait);
+    const auto reply_timeout = redis_block_reply_timeout(detail::request_bound_options(operation_options_, request_stop_), wait);
     return execute_mapped<std::optional<redis_key_value>>(blocking_pool(), detail::redis_blocking_pop_args("BRPOP", keys, wait), detail::parse_redis_blocking_pop_reply, reply_timeout);
 }
 
@@ -665,19 +674,19 @@ task<std::optional<redis_x_read_group_result>> redis_session::xread_group(std::s
     std::optional<timeout_duration> reply_timeout;
     if (options.block_.has_value()) {
         selected_pool = &blocking_pool();
-        reply_timeout = redis_block_reply_timeout(operation_options_, *options.block_);
+        reply_timeout = redis_block_reply_timeout(detail::request_bound_options(operation_options_, request_stop_), *options.block_);
     }
     return execute_mapped<std::optional<redis_x_read_group_result>>(*selected_pool, std::move(args), detail::parse_redis_x_read_group_reply, reply_timeout);
 }
 
 redis_pipeline redis_session::pipeline() const {
     registration_.require_active();
-    return redis_pipeline(pool(), operation_options_, registration_.scope(), io_metrics_);
+    return redis_pipeline(pool(), operation_options_, request_stop_, registration_.scope(), io_metrics_);
 }
 
 redis_transaction redis_session::transaction() const {
     registration_.require_active();
-    return redis_transaction(pool(), operation_options_, registration_.scope(), io_metrics_);
+    return redis_transaction(pool(), operation_options_, request_stop_, registration_.scope(), io_metrics_);
 }
 
 task<std::int64_t> redis_session::publish(std::string_view channel, std::string_view payload) const {
@@ -686,14 +695,15 @@ task<std::int64_t> redis_session::publish(std::string_view channel, std::string_
 
 redis_subscription redis_session::subscription() const {
     registration_.require_active();
-    detail::require_bounded_redis_wait(operation_options_, "redis subscription requires a stop_token or finite operation timeout");
-    return redis_subscription(runtime_->subscriptions(), registration_.scope(), operation_options_);
+    detail::require_bounded_redis_wait(detail::request_bound_options(operation_options_, request_stop_), "redis subscription requires a stop_token or finite operation timeout");
+    return redis_subscription(runtime_->subscriptions(), registration_.scope(), operation_options_, request_stop_);
 }
 
 template <redis_batch_mode mode>
-redis_batch<mode>::redis_batch(detail::redis_pool& pool, operation_options options, operation_scope& scope, detail::request_io_metrics* io_metrics) noexcept :
+redis_batch<mode>::redis_batch(detail::redis_pool& pool, operation_options options, stop_token request_stop, operation_scope& scope, detail::request_io_metrics* io_metrics) noexcept :
     pool_(&pool),
     options_(std::move(options)),
+    request_stop_(std::move(request_stop)),
     commands_(),
     io_metrics_(io_metrics),
     registration_(scope, this, &redis_batch::expire_capability) {}
@@ -702,6 +712,7 @@ template <redis_batch_mode mode>
 redis_batch<mode>::redis_batch(redis_batch&& other) noexcept :
     pool_(std::exchange(other.pool_, nullptr)),
     options_(std::move(other.options_)),
+    request_stop_(std::move(other.request_stop_)),
     commands_(std::move(other.commands_)),
     io_metrics_(other.io_metrics_),
     registration_(std::move(other.registration_), this) {}
@@ -718,13 +729,14 @@ template <redis_batch_mode mode>
 detail::redis_command_payload redis_batch<mode>::consume() {
     require_ready();
     auto& pool = *std::exchange(pool_, nullptr);
-    return {pool, std::move(options_), std::move(commands_)};
+    return {pool, std::move(options_), std::move(request_stop_), std::move(commands_)};
 }
 
 template <redis_batch_mode mode>
 void redis_batch<mode>::expire() noexcept {
     pool_ = nullptr;
     options_ = {};
+    request_stop_ = {};
     io_metrics_ = nullptr;
     std::vector<detail::redis_owned_command> empty;
     commands_.swap(empty);
@@ -740,7 +752,7 @@ redis_batch<mode>& redis_batch<mode>::command(std::span<const std::string_view> 
     require_ready();
     const bool barrier = detail::validate_redis_pooled_command(args, false, mode == redis_batch_mode::pipeline);
     if (barrier) {
-        detail::require_bounded_redis_wait(options_, "redis barrier pipeline requires a stop_token or finite operation timeout");
+        detail::require_bounded_redis_wait(detail::request_bound_options(options_, request_stop_), "redis barrier pipeline requires a stop_token or finite operation timeout");
     }
     return append_owned(detail::make_owned_redis_command(args));
 }
@@ -754,10 +766,11 @@ redis_batch<mode>& redis_batch<mode>::append_owned(detail::redis_owned_command c
 template <redis_batch_mode mode>
 task<std::vector<redis_value>> redis_batch<mode>::execute_owned(detail::request_io_metrics* io_metrics, detail::redis_command_payload payload_value) {
     detail::scoped_request_io_timer timer(io_metrics, detail::request_io_kind::redis);
+    const linked_operation_options linked(payload_value.options_, payload_value.request_stop_);
     if constexpr (mode == redis_batch_mode::pipeline) {
-        co_return co_await payload_value.pool_.get().execute_pipeline(std::move(payload_value.commands_), std::move(payload_value.options_));
+        co_return co_await payload_value.pool_.get().execute_pipeline(std::move(payload_value.commands_), linked.options());
     } else {
-        auto replies = co_await payload_value.pool_.get().execute_pipeline(std::move(payload_value.commands_), std::move(payload_value.options_), true);
+        auto replies = co_await payload_value.pool_.get().execute_pipeline(std::move(payload_value.commands_), linked.options(), true);
         if (replies.empty()) {
             throw redis_error(redis_error::code_type::protocol_error, "redis transaction returned no replies");
         }
@@ -787,7 +800,8 @@ template class redis_batch<redis_batch_mode::transaction>;
 redis_session redis_session::bind_caller_scope(::ruvia::operation_scope& scope, detail::request_io_metrics* io_metrics, const stop_token& stop_token_value) && {
     registration_.require_active();
     redis_session bound(*runtime_, scope, io_metrics);
-    bound.operation_options_ = override_operation_options(operation_options_, operation_options{.timeout_ = std::nullopt, .stop_token_ = stop_token_value});
+    bound.operation_options_ = operation_options_;
+    bound.request_stop_ = stop_token_value;
     return bound;
 }
 

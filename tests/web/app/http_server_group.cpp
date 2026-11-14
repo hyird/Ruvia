@@ -455,6 +455,48 @@ TEST(Ruvia, independent_group_shared_http3_endpoint_survives_repeated_migration_
     runtime.loops_[0].start(group.shutdown(runtime.loops_[0].worker())).get();
     EXPECT_EQ(group.stats().active_connections_, std::size_t{0});
 }
+
+// Every member installs its HTTP/3 observers like the other callbacks, and
+// members must agree on their presence too.
+TEST(Ruvia, independent_group_installs_http3_observers_and_requires_identical_presence) {
+    external_loops runtime;
+    asio::io_context ports;
+    ruvia::test::tcp_port_reservation tcp(ports);
+    ruvia::test::udp_port_reservation udp(ports);
+    const ruvia::test::tls_identity identity("localhost", "DNS:localhost,IP:127.0.0.1");
+    ruvia::http_server_group mismatched(runtime.loops_, [built = 0](const ruvia::worker_ref& worker) mutable {
+        auto callbacks = answer_callbacks(worker);
+        if (built++ == 0) {
+            callbacks.http3_frame_ = [](const ruvia::http3_frame_record&) noexcept {};
+        }
+        return callbacks;
+    });
+    mismatched.listen(secure(tcp.endpoint().port(), udp.endpoint().port(), identity));
+    EXPECT_THROW(runtime.loops_[0].start(mismatched.start(runtime.loops_[0].worker())).get(), std::invalid_argument);
+    runtime.loops_[0].start(mismatched.shutdown(runtime.loops_[0].worker())).get();
+
+    const auto frames = std::make_shared<std::atomic<std::size_t>>(0);
+    const auto fields = std::make_shared<std::atomic<std::size_t>>(0);
+    ruvia::http_server_group group(runtime.loops_, [frames, fields](const ruvia::worker_ref& worker) {
+        auto callbacks = answer_callbacks(worker);
+        callbacks.http3_frame_ = [frames](const ruvia::http3_frame_record&) noexcept {
+            frames->fetch_add(1);
+        };
+        callbacks.http3_field_ = [fields](const ruvia::http3_field_record&) noexcept {
+            fields->fetch_add(1);
+        };
+        return callbacks;
+    });
+    group.listen(secure(tcp.endpoint().port(), udp.endpoint().port(), identity));
+    runtime.loops_[0].start(group.start(runtime.loops_[0].worker())).get();
+    {
+        ruvia::test::http3_test_client client({asio::ip::address_v4::loopback(), udp.endpoint().port()}, identity.ca_file_, "localhost", 5s);
+        EXPECT_EQ(client.request("GET", "/worker").status_, 200);
+    }
+    runtime.loops_[0].start(group.shutdown(runtime.loops_[0].worker())).get();
+    EXPECT_GT(frames->load(), 0U);
+    EXPECT_GT(fields->load(), 0U);
+}
 #endif
 
 TEST(Ruvia, independent_group_mixed_listener_preserves_transport_during_rotation_readd_and_inheritance) {
@@ -647,7 +689,7 @@ TEST(Ruvia, independent_group_tls_preparation_keeps_caller_live_and_close_cancel
     auto timer_root = runtime.loops_[0].start(timer());
     const auto progress = tick.wait_for(2s);
     const auto queued = runtime.pool_.stats().queued_;
-    group.close();
+    group.stop();
     held.release();
     EXPECT_EQ(progress, std::future_status::ready);
     EXPECT_GT(queued, 0U);

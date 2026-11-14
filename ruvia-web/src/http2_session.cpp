@@ -23,6 +23,7 @@
 #include <asio/error.hpp>
 #include <asio/ip/tcp.hpp>
 
+#include "asio_completion.h"
 #include "borrowed_text.h"
 #include "callback_ref.h"
 #include "connection_lifecycle.h"
@@ -203,7 +204,7 @@ public:
         queued_reservation_(inbound),
         active_reservation_(inbound) {}
 
-    void enqueue(std::string_view data, http2_received_data_credit&& credit) {
+    void enqueue(std::string_view data, http_received_data_credit&& credit) {
         if (data.empty()) {
             return;
         }
@@ -220,7 +221,7 @@ public:
         queued_credit_->merge(std::move(credit));
     }
 
-    [[nodiscard]] http2_body_queue_store_status enqueue_bounded(std::string_view data, http2_received_data_credit&& credit, std::size_t backlog_limit) {
+    [[nodiscard]] http2_body_queue_store_status enqueue_bounded(std::string_view data, http_received_data_credit&& credit, std::size_t backlog_limit) {
         const auto queued_bytes = queued_chunk_.size();
         if (queued_bytes > backlog_limit || data.size() > backlog_limit - queued_bytes) {
             return http2_body_queue_store_status::backlog_overflow;
@@ -281,8 +282,8 @@ public:
 private:
     // The byte storage is destroyed before its credits, so return-window side
     // effects cannot outlive the copied data they account for.
-    std::optional<http2_received_data_credit> queued_credit_;
-    std::optional<http2_received_data_credit> active_credit_;
+    std::optional<http_received_data_credit> queued_credit_;
+    std::optional<http_received_data_credit> active_credit_;
     std::string queued_chunk_;
     inbound_buffer_reservation queued_reservation_;
     std::string active_chunk_;
@@ -377,7 +378,7 @@ public:
         return body_mode_;
     }
 
-    [[nodiscard]] http2_request_body_store_status store_body(http2_message_body_chunk_event& chunk, protocol_byte_limit total_limit, std::size_t backlog_limit) {
+    [[nodiscard]] http2_request_body_store_status store_body(http2_data_event& chunk, protocol_byte_limit total_limit, std::size_t backlog_limit) {
         const auto data = chunk.bytes();
         if (http_request_body_addition_failure(received_bytes_, data.size(), total_limit).has_value()) {
             return http2_request_body_store_status::too_large;
@@ -683,7 +684,7 @@ enum class http2_stream_data_write_status : std::uint8_t {
 };
 
 struct http2_stream_data_submit_result final {
-    http2_data_submit_result progress_{};
+    http_data_submit_result progress_{};
     // Only invalid_state or content_length_exceeded; no bytes were consumed.
     std::optional<http2_stream_data_write_status> failure_{};
 };
@@ -882,7 +883,7 @@ private:
     void reset_event_stream(std::uint32_t stream_id, http2_error_code error) noexcept;
     [[nodiscard]] http2_sans_io_stream_runtime* resolve_stream_route(const http2_request_head_event& message_head);
     void on_message_head(http2_request_head_event& message_head);
-    void on_body_chunk(http2_message_body_chunk_event& body_chunk);
+    void on_body_chunk(http2_data_event& body_chunk);
     void on_tunnel_data(http2_tunnel_data_event& tunnel_data);
     void on_tunnel_end(const http2_tunnel_end_event& tunnel_end) noexcept;
     void on_message_end(const http2_message_end_event& message_end);
@@ -1024,14 +1025,14 @@ private:
         if (submitted_head != nullptr) {
             return *submitted_head;
         }
-        const auto head_error = std::get<ruvia::http2_response_head_submit_error>(head_result);
-        if (head_error == ruvia::http2_response_head_submit_error::peer_stream_limit_reached) {
+        const auto head_error = std::get<ruvia::http_response_head_error>(head_result);
+        if (head_error == ruvia::http_response_head_error::peer_stream_limit_reached) {
             // A promised push whose stream the client's concurrency limit
             // cannot admit is cancelled; the connection is unaffected.
             (void)connection_.submit_reset(stream_id_, ruvia::http2_error_code::cancel);
             wake_writer();
         }
-        if (head_error == ruvia::http2_response_head_submit_error::closed || head_error == ruvia::http2_response_head_submit_error::peer_stream_limit_reached) {
+        if (head_error == ruvia::http_response_head_error::closed || head_error == ruvia::http_response_head_error::peer_stream_limit_reached) {
             throw inbound_transport_error(std::make_error_code(std::errc::connection_reset), reset_error_message);
         }
         throw std::logic_error("HTTP/2 streaming response head submission failed");
@@ -1058,7 +1059,7 @@ private:
         // An empty trailer section ends the stream with an empty DATA frame,
         // which needs both send windows open (RFC 9113 §6.9).
         for (;;) {
-            http2_finish_status result_value{};
+            http_finish_status result_value{};
             try {
                 result_value = connection_.finish_response(stream_id_, trailer_section);
             } catch (...) {
@@ -1066,13 +1067,13 @@ private:
                 throw;
             }
             wake_writer();
-            if (result_value == http2_finish_status::accepted) {
+            if (result_value == http_finish_status::accepted) {
                 co_return;
             }
-            if (result_value == http2_finish_status::invalid_message) {
+            if (result_value == http_finish_status::invalid_message) {
                 throw std::invalid_argument("HTTP/2 response ended before its declared Content-Length");
             }
-            if (result_value == http2_finish_status::backpressured && co_await await_http2_send_window(connection_, stream_id_, &signal_) == http2_send_window_wait_status::ready) {
+            if (result_value == http_finish_status::backpressured && co_await await_http2_send_window(connection_, stream_id_, &signal_) == http2_send_window_wait_status::ready) {
                 continue;
             }
             throw_if_terminated();
@@ -1305,7 +1306,8 @@ void http2_sans_io_session_engine::request_drain() noexcept {
 
 void http2_sans_io_session_engine::begin_drain() noexcept {
     try {
-        connection_.begin_drain();
+        // closed: the connection already failed and its termination path runs.
+        (void)connection_.begin_drain();
     } catch (...) {
         terminate(std::make_error_code(std::errc::not_enough_memory));
         return;
@@ -1334,7 +1336,8 @@ void http2_sans_io_session_engine::drain_timer_expired() noexcept {
         return;
     }
     try {
-        connection_.finish_drain();
+        // closed: the connection already failed and its termination path runs.
+        (void)connection_.finish_drain();
     } catch (...) {
         terminate(std::make_error_code(std::errc::not_enough_memory));
         return;
@@ -1372,7 +1375,8 @@ void http2_sans_io_session_engine::peer_input_ended() noexcept {
     // closing a connection". The session closes either way; a failed
     // allocation only loses this frame.
     try {
-        connection_.finish_drain();
+        // closed: the connection already failed and its termination path runs.
+        (void)connection_.finish_drain();
     } catch (...) {
         return;
     }
@@ -1560,7 +1564,7 @@ task<void> http2_sans_io_session_engine::dispatch_one(std::uint32_t stream_id) {
         http_interim_response_output interim_output(&output_target, [](void* raw, const http_interim_response_head& head) -> task<void> {
             auto& target = *static_cast<response_output_target*>(raw);
             const auto status = target.connection_.submit_interim_response_head(target.stream_id_, head);
-            if (status != http2_submit_status::accepted) {
+            if (status != http_submit_status::accepted) {
                 throw std::invalid_argument("HTTP/2 interim response rejected");
             }
             target.writer_.notify();
@@ -1568,13 +1572,13 @@ task<void> http2_sans_io_session_engine::dispatch_one(std::uint32_t stream_id) {
         });
         http_connection_advertisement_output advertisements(&output_target, [](void* raw, std::span<const std::string_view> origins) {
             auto& target = *static_cast<response_output_target*>(raw);
-            if (target.connection_.submit_origin_advertisement(origins) != http2_submit_status::accepted) {
+            if (target.connection_.submit_origin_advertisement(origins) != http_submit_status::accepted) {
                 throw std::invalid_argument("HTTP/2 ORIGIN advertisement rejected");
             }
             target.writer_.notify();
         }, [](void* raw, std::string_view value) {
             auto& target = *static_cast<response_output_target*>(raw);
-            if (target.connection_.submit_alternative_service_advertisement(target.stream_id_, {}, value) != http2_submit_status::accepted) {
+            if (target.connection_.submit_alternative_service_advertisement(target.stream_id_, {}, value) != http_submit_status::accepted) {
                 throw std::invalid_argument("HTTP/2 ALTSVC advertisement rejected");
             }
             target.writer_.notify();
@@ -1658,7 +1662,7 @@ task<void> http2_sans_io_session_engine::dispatch_one(std::uint32_t stream_id) {
                         co_return;
                     }
                     auto commit = [this, stream_id, &finish_upgrade_commit](context& context_value, const http_response& head_response) {
-                        if (connection_.submit_connect_response_head(stream_id, head_response) != http2_submit_status::accepted || !stream_runtimes_.mark_tunnel(stream_id)) {
+                        if (connection_.submit_connect_response_head(stream_id, head_response) != http_submit_status::accepted || !stream_runtimes_.mark_tunnel(stream_id)) {
                             throw std::invalid_argument("HTTP/2 CONNECT response head rejected");
                         }
                         return finish_upgrade_commit(head_response.status(), context_value);
@@ -1869,10 +1873,10 @@ void http2_sans_io_session_engine::on_message_head(http2_request_head_event& mes
     // answers with its final status alone (RFC 9110 §10.1.1).
     if (expectation_plan == http_server_expectation_plan::send_continue && resolved_route && !connect_request && !body_limit_exceeded && stream_runtime->body_mode() == request_body_mode::buffered) {
         const auto status = connection_.submit_interim_response_head(stream_id, http_interim_response_head(ruvia::http_status::continue_));
-        if (status == http2_submit_status::accepted) {
+        if (status == http_submit_status::accepted) {
             wake_writer();
         } else {
-            if (status != http2_submit_status::closed) {
+            if (status != http_submit_status::closed) {
                 reset_event_stream(stream_id, http2_error_code::internal_error);
             } else {
                 remove_stream_runtime(stream_id);
@@ -1890,7 +1894,7 @@ void http2_sans_io_session_engine::on_message_head(http2_request_head_event& mes
     }
 }
 
-void http2_sans_io_session_engine::on_body_chunk(http2_message_body_chunk_event& body_chunk) {
+void http2_sans_io_session_engine::on_body_chunk(http2_data_event& body_chunk) {
     const auto& options = session_.options();
     const auto stream_id = body_chunk.stream_id();
     auto* stream_runtime = stream_runtimes_.find(stream_id);
@@ -2047,7 +2051,7 @@ void http2_sans_io_session_engine::drain_events() {
         }
         if (auto* request_head = event->request_head()) {
             on_message_head(*request_head);
-        } else if (auto* body_chunk = event->message_body_chunk()) {
+        } else if (auto* body_chunk = event->data()) {
             on_body_chunk(*body_chunk);
         } else if (auto* tunnel_data = event->tunnel_data()) {
             on_tunnel_data(*tunnel_data);
@@ -2303,7 +2307,7 @@ http2_stream_data_submit_result submit_http2_stream_data(ruvia::http2_connection
         const auto progress = connection.submit_data(stream_id, bytes, end_stream, http2_data_output_credit_bytes);
         output_budget.note_data_submitted(stream_id, progress.consumed_bytes_);
         completion.release_credit_ = !bytes.empty() && progress.consumed_bytes_ == 0;
-        if (progress.status_ == http2_data_submit_status::invalid_message) {
+        if (progress.status_ == http_data_submit_status::invalid_message) {
             return {.failure_ = http2_stream_data_write_status::content_length_exceeded};
         }
         return {.progress_ = progress};
@@ -2359,13 +2363,13 @@ task<http2_stream_data_write_status> write_http2_stream_data(ruvia::http2_connec
         }
         const auto& result_value = submitted.progress_;
         bytes.remove_prefix(result_value.consumed_bytes_);
-        if (result_value.status_ == http2_data_submit_status::complete) {
+        if (result_value.status_ == http_data_submit_status::complete) {
             co_return http2_stream_data_write_status::completed;
         }
-        if (result_value.status_ == http2_data_submit_status::closed) {
+        if (result_value.status_ == http_data_submit_status::closed) {
             co_return http2_stream_data_write_status::peer_closed;
         }
-        if (result_value.status_ == http2_data_submit_status::expectation_pending) {
+        if (result_value.status_ == http_data_submit_status::expectation_pending) {
             co_await signal->wait();
         }
     }
@@ -2500,13 +2504,13 @@ task<multiplexed_buffered_response_write_result> http2_buffered_response_writer:
     const auto head_result = connection_.submit_response_head(stream_id, response, std::move(write_plan));
     const auto* submitted_head = std::get_if<http_buffered_response_write_plan>(&head_result);
     if (submitted_head == nullptr) {
-        const auto error = std::get<http2_response_head_submit_error>(head_result);
-        if (error == http2_response_head_submit_error::closed) {
+        const auto error = std::get<http_response_head_error>(head_result);
+        if (error == http_response_head_error::closed) {
             co_return multiplexed_buffered_response_write_result{};
         }
         // Invalid final metadata cannot leave an open peer stream waiting for a
         // response that the transactional head submission rejected.
-        session_.reset_stream_no_throw(stream_id, error == http2_response_head_submit_error::peer_stream_limit_reached ? http2_error_code::cancel : http2_error_code::internal_error);
+        session_.reset_stream_no_throw(stream_id, error == http_response_head_error::peer_stream_limit_reached ? http2_error_code::cancel : http2_error_code::internal_error);
         co_return multiplexed_buffered_response_write_result{};
     }
 
@@ -2540,7 +2544,7 @@ task<multiplexed_buffered_response_write_result> http2_buffered_response_writer:
                 co_return fail_after_commit();
             }
             body.remove_prefix(submitted.progress_.consumed_bytes_);
-            if (submitted.progress_.status_ == http2_data_submit_status::complete || submitted.progress_.status_ == http2_data_submit_status::closed) {
+            if (submitted.progress_.status_ == http_data_submit_status::complete || submitted.progress_.status_ == http_data_submit_status::closed) {
                 co_return multiplexed_buffered_response_write_result{.committed_status_ = committed_status};
             }
         } else {

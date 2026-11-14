@@ -732,7 +732,7 @@ task<void> detail::route_table::dispatch_buffered_response(const http_request& r
             if (fallback_probe.entry_.has_value() && (method == http_known_method::get || method == http_known_method::head)) {
                 auto context_value = detail::context_access::make(request, services);
                 detail::context_access::services(context_value).bind_routes(*this);
-                auto fallback_response = co_await detail::context_access::static_file_resolved(context_value, *document_root.root(), fallback_probe.relative_, {}, *fallback_probe.entry_, static_file_mode);
+                auto fallback_response = co_await detail::context_access::static_file_resolved(context_value, *document_root.root(), fallback_probe.relative_, {}, *fallback_probe.entry_, static_file_mode, http_response{});
                 auto terminal = [&fallback_response](context&) -> task<http_response> {
                     co_return std::move(fallback_response);
                 };
@@ -1020,7 +1020,6 @@ task<http_response> detail::route_table::respond_exception(context& context_valu
 task<http_response> detail::route_table::respond_exception(context& context_value, std::exception_ptr exception, http_error_handler_ref error_handler) const {
     const auto error_info = classify_exception(exception);
     detail::context_access::set_error(context_value, exception);
-    detail::context_access::discard_draft(context_value);
     report_unexpected_failure(error_info, exception, error_handler);
 
     auto response = co_await invoke_error_handler(context_value, error_info.error_.info(), error_handler);

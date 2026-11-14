@@ -11,6 +11,7 @@
 #include <asio/post.hpp>
 
 #include "asio_bridge.h"
+#include "asio_completion.h"
 #include "event_loop.h"
 #include "move_only_function.h"
 #include "worker_cancellation.h"

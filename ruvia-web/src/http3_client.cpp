@@ -23,7 +23,7 @@
 #include <asio/ip/udp.hpp>
 #include <openssl/ssl.h>
 
-#include "asio_bridge.h"
+#include "asio_completion.h"
 #include "borrowed_text.h"
 #include "byte_view.h"
 #include "client_happy_eyeballs.h"
@@ -87,13 +87,13 @@ http3_quic_crypto_callbacks client_crypto_callbacks() noexcept {
     result.recv_retry_ = ngtcp2_crypto_recv_retry_cb;
     return result;
 }
-void require_accepted(http3_submit_status status) {
-    if (status != http3_submit_status::accepted) {
+void require_accepted(http_submit_status status) {
+    if (status != http_submit_status::accepted) {
         throw http_client_error(make_error_code(http_client_errc::protocol_error), "HTTP/3 stream operation rejected");
     }
 }
-void require_accepted(http3_finish_status status) {
-    if (status != http3_finish_status::accepted) {
+void require_accepted(http_finish_status status) {
+    if (status != http_finish_status::accepted) {
         throw http_client_error(make_error_code(http_client_errc::protocol_error), "HTTP/3 stream operation rejected");
     }
 }
@@ -441,7 +441,7 @@ public:
             }
             return;
         }
-        if (!item.response_.informational_active_ && item.response_.effective_read_timeout_ && !item.done_ && !item.response_.http3_data_credit_) {
+        if (!item.response_.informational_active_ && item.response_.effective_read_timeout_ && !item.done_ && !item.response_.data_credit_) {
             item.timer_.read_deadline_ = deadline_after(item.response_.effective_read_timeout_->value());
             schedule(item);
         }
@@ -469,12 +469,12 @@ public:
         return nullptr;
     }
     void release(http_client_response_state& response) noexcept {
-        if (!response.http3_data_credit_) {
+        if (!response.data_credit_) {
             return;
         }
         // The token returns credit to the connection that issued it, or
         // nothing once that connection is gone.
-        response.http3_data_credit_.reset();
+        response.data_credit_.reset();
         if (quic_ && response.connection_generation_ == generation_) {
             writer_.notify();
             if (auto* item = find(static_cast<std::int64_t>(response.stream_id_))) {
@@ -493,10 +493,10 @@ public:
             if (const auto* websocket = request.websocket()) {
                 require_accepted(submit_http3_websocket_client_request(connection, item.id_, websocket->negotiation_, "https", request.tunnel_authority(), request.target(), headers, request.options_.field_source_));
             } else if (request.tunnel_protocol().empty()) {
-                const http3_connect_request_head_view head{.authority_ = request.tunnel_authority(), .headers_ = headers, .field_source_ = request.options_.field_source_};
+                const http_connect_request_head_view head{.authority_ = request.tunnel_authority(), .headers_ = headers, .field_source_ = request.options_.field_source_};
                 require_accepted(connection.submit_request_head(item.id_, head));
             } else {
-                const http3_extended_connect_request_head_view head{.protocol_ = request.tunnel_protocol(), .scheme_ = "https", .authority_ = request.tunnel_authority(), .target_ = request.target(), .headers_ = headers, .field_source_ = request.options_.field_source_};
+                const http_extended_connect_request_head_view head{.protocol_ = request.tunnel_protocol(), .scheme_ = "https", .authority_ = request.tunnel_authority(), .target_ = request.target(), .headers_ = headers, .field_source_ = request.options_.field_source_};
                 require_accepted(connection.submit_request_head(item.id_, head));
             }
             return;
@@ -505,7 +505,7 @@ public:
         if (const auto* upload = request.upload()) {
             expectation = upload->config_.expectation_;
         }
-        const http3_regular_request_head_view head{
+        const http_regular_request_head_view head{
             .method_ = request.method(),
             .scheme_ = "https",
             .authority_ = std::optional<borrowed_text>(request.route().authority_),
@@ -594,10 +594,10 @@ public:
             read_progress(item);
             return;
         }
-        if (response.http3_data_credit_) {
-            response.http3_data_credit_->merge(std::move(credit));
+        if (response.data_credit_) {
+            response.data_credit_->merge(std::move(credit));
         } else {
-            response.http3_data_credit_.emplace(std::move(credit));
+            response.data_credit_.emplace(std::move(credit));
         }
         item.timer_.read_deadline_.reset();
     }
@@ -668,7 +668,7 @@ public:
             output->stop();
         }
     }
-    void consume_stream_event(stream& item, const http3_stream_close_event& value) {
+    void consume_stream_event(stream& item, const http3_stream_closed_event& value) {
         auto& response = item.response_;
         const auto error = value.error();
         if (!error && item.request_end_submitted_) {
@@ -787,7 +787,7 @@ public:
                 consume_event(*end);
             } else if (const auto* action = event->transport_action()) {
                 consume_event(*action);
-            } else if (const auto* closed = event->stream_close()) {
+            } else if (const auto* closed = event->stream_closed()) {
                 consume_event(*closed);
             } else if (const auto* unprocessed = event->request_unprocessed()) {
                 consume_event(*unprocessed);
@@ -1206,8 +1206,8 @@ public:
                 item.timer_.write_deadline_.reset();
                 co_return false;
             }
-            const auto sent = quic_->http3().submit_data(item.id_, std::as_bytes(std::span(bytes.data(), bytes.size())));
-            if (sent.status_ == http3_data_submit_status::closed || sent.status_ == http3_data_submit_status::invalid_message) {
+            const auto sent = quic_->http3().submit_data(item.id_, bytes);
+            if (sent.status_ == http_data_submit_status::closed || sent.status_ == http_data_submit_status::invalid_message) {
                 throw http_client_error(make_error_code(http_client_errc::protocol_error), "HTTP/3 stream operation rejected");
             }
             // backpressured keeps the unconsumed suffix until acknowledgements
@@ -1756,7 +1756,7 @@ void http3_client_connection::release_data(http_client_response_state& response)
     if (session_) {
         session_->release(response);
     } else {
-        response.http3_data_credit_.reset();
+        response.data_credit_.reset();
     }
 }
 

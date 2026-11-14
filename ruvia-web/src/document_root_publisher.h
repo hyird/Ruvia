@@ -12,6 +12,7 @@
 #include "static_root_index.h"
 #include "stop_token.h"
 #include "task.h"
+#include "timeout_duration.h"
 
 // The application's document-root refresher and each worker's adopted
 // document-root generations.
@@ -31,13 +32,13 @@ struct http_server_options;
 class document_root_publisher final {
 public:
     // Builds the initial snapshot; a failure here fails application startup.
-    document_root_publisher(const std::filesystem::path& root, const static_root_config_storage& config, std::chrono::milliseconds interval, static_root_precompression_options precompression, static_root_resident_options resident, std::size_t worker_count);
+    document_root_publisher(const std::filesystem::path& root, const static_root_config_storage& config, timeout_duration interval, static_root_precompression_options precompression, static_root_resident_options resident, std::size_t worker_count);
     ~document_root_publisher();
 
     document_root_publisher(const document_root_publisher&) = delete;
     document_root_publisher& operator=(const document_root_publisher&) = delete;
 
-    [[nodiscard]] std::chrono::milliseconds interval() const noexcept {
+    [[nodiscard]] timeout_duration interval() const noexcept {
         return interval_;
     }
 
@@ -80,7 +81,7 @@ private:
     // The configured path, not the snapshot's canonical one: a refresh must
     // re-resolve symlinks so a retargeted root (atomic deploy) is followed.
     std::filesystem::path root_;
-    std::chrono::milliseconds interval_;
+    timeout_duration interval_;
     static_root_precompression_options precompression_;
     static_root_resident_options resident_;
     // Only the first registered worker reads or replaces current_ after startup.

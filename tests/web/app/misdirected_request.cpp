@@ -102,7 +102,7 @@ std::vector<unsigned> http2_statuses(stream_type& stream, std::initializer_list<
     std::map<std::uint32_t, std::size_t> pending{};
     std::vector<unsigned> statuses(targets.size(), 0);
     for (std::size_t i = 0; i < targets.size(); ++i) {
-        const auto submitted = peer.submit_request_head(ruvia::http2_regular_request_head_view{.scheme_ = (targets.begin() + i)->scheme_, .authority_ = (targets.begin() + i)->authority_, .target_ = "/origin"});
+        const auto submitted = peer.submit_request_head(ruvia::http_regular_request_head_view{.scheme_ = (targets.begin() + i)->scheme_, .authority_ = (targets.begin() + i)->authority_, .target_ = "/origin"});
         const auto* id = std::get_if<std::uint32_t>(&submitted);
         if (id == nullptr) {
             throw std::runtime_error("HTTP/2 test request rejected locally");

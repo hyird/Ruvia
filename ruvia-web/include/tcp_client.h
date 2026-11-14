@@ -79,13 +79,11 @@ public:
     [[nodiscard]] task<void> write(std::string_view bytes, operation_options options = {}) &;
     task<void> write(std::string_view, operation_options = {}) && = delete;
     // Exact std::string rvalues transfer storage directly without copying.
-    template <typename string_type>
-        requires std::same_as<string_type, std::string>
+    template <std::same_as<std::string> string_type>
     [[nodiscard]] task<void> write(string_type&& bytes, operation_options options = {}) & {
         return write_owned(std::move(bytes), std::move(options));
     }
-    template <typename string_type>
-        requires std::same_as<string_type, std::string>
+    template <std::same_as<std::string> string_type>
     task<void> write(string_type&&, operation_options = {}) && = delete;
 
     // Immediate whole-connection cancellation, not a send half-close. TLS uses
@@ -99,7 +97,7 @@ public:
     const worker_ref& worker() const&& = delete;
 
 private:
-    [[nodiscard]] task<void> write_owned(std::string bytes, operation_options options);
+    [[nodiscard]] task<void> write_owned(std::string&& bytes, operation_options options);
     std::shared_ptr<detail::tcp_client_state> state_;
 };
 

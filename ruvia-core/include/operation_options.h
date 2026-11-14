@@ -1,9 +1,11 @@
 #pragma once
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <concepts>
 #include <optional>
+#include <span>
 #include <stdexcept>
 #include <type_traits>
 #include <utility>
@@ -102,7 +104,7 @@ struct operation_options final {
 };
 
 // Unspecified fields inherit. A supplied token replaces the user cancellation
-// state; callers needing accumulation own a stop_group until their work joins.
+// state; accumulate with linked_operation_options instead.
 // A supplied timeout may tighten but never relax the inherited bound: two
 // relative limits keep the shorter, two deadlines keep the earlier, and a
 // mixed pair resolves the relative limit against the merge time and keeps the
@@ -134,6 +136,34 @@ struct operation_options final {
     }
     return merged;
 }
+
+// Owns the linked cancellation of one operation: base.stop_token_ plus every
+// extra parent, like .NET CancellationTokenSource.CreateLinkedTokenSource.
+// timeout_ is copied from base unchanged. Address-stable like stop_group; keep
+// it alive until every operation started with options() has completed or
+// joined. Zero or one stoppable parent passes through without allocating.
+class linked_operation_options final {
+public:
+    template <typename... extra_type>
+        requires(sizeof...(extra_type) >= 1 && (std::same_as<extra_type, stop_token> && ...))
+    explicit linked_operation_options(const operation_options& base, const extra_type&... extra) :
+        group_(std::span<const stop_token>(std::array<stop_token, sizeof...(extra_type) + 1>{base.stop_token_, extra...})),
+        options_{.timeout_ = base.timeout_, .stop_token_ = group_.token()} {}
+    linked_operation_options(const linked_operation_options&) = delete;
+    linked_operation_options& operator=(const linked_operation_options&) = delete;
+    linked_operation_options(linked_operation_options&&) = delete;
+    linked_operation_options& operator=(linked_operation_options&&) = delete;
+
+    [[nodiscard]] const operation_options& options() const& noexcept {
+        return options_;
+    }
+    const operation_options& options() const&& = delete;
+
+private:
+    // Declared first: options_ reads its token.
+    stop_group group_;
+    operation_options options_;
+};
 
 // The resolved deadline of an operation that has started, shared across its
 // asynchronous phases. Phases that hand the remaining budget to a nested

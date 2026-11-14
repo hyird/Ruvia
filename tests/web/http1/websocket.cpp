@@ -21,6 +21,7 @@
 #include <asio.hpp>
 
 #include "app.h"
+#include "asio_completion.h"
 #include "context.h"
 #include "controller.h"
 #include "event_loop.h"

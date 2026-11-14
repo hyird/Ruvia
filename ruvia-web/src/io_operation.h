@@ -7,9 +7,12 @@
 #include <optional>
 #include <stdexcept>
 #include <system_error>
+#include <type_traits>
 #include <utility>
 
+#include "operation_options.h"
 #include "stop_token.h"
+#include "task.h"
 #include "worker_cancellation.h"
 #include "worker_ref.h"
 #include "worker_timer.h"
@@ -102,6 +105,50 @@ private:
     request_io_kind kind_{request_io_kind::db};
     std::chrono::steady_clock::time_point started_at_{};
 };
+
+template <typename result_type, typename start_type>
+task<result_type> run_request_linked_operation(operation_options options, stop_token request_stop, start_type start) {
+    const linked_operation_options linked(options, request_stop);
+    co_return co_await start(linked.options());
+}
+
+// Starts one operation of a request-bound handle: the handle's own options
+// with the request's cancellation linked, never replaced by a user token
+// (CancellationTokenSource.CreateLinkedTokenSource). When either side cannot
+// stop, `start` receives the other directly, without a frame or allocation;
+// otherwise a wrapper frame owns the link until the operation completes and
+// `start` runs only when the returned task starts, so it must own its inputs.
+template <typename start_type>
+[[nodiscard]] std::invoke_result_t<start_type&, const operation_options&> start_request_linked(const operation_options& options, const stop_token& request_stop, start_type start) {
+    if (!request_stop.stoppable()) {
+        return start(options);
+    }
+    if (!options.stop_token_.stoppable()) {
+        return start(operation_options{.timeout_ = options.timeout_, .stop_token_ = request_stop});
+    }
+    using result_type = typename std::invoke_result_t<start_type&, const operation_options&>::value_type;
+    return run_request_linked_operation<result_type>(options, request_stop, std::move(start));
+}
+
+// The user token when it can stop, otherwise the request's. Alone it decides
+// whether a request-bound wait is bounded; as operation input it is complete
+// only when make_request_link() returned null.
+[[nodiscard]] inline operation_options request_bound_options(const operation_options& options, const stop_token& request_stop) {
+    if (options.stop_token_.stoppable() || !request_stop.stoppable()) {
+        return options;
+    }
+    return {.timeout_ = options.timeout_, .stop_token_ = request_stop};
+}
+
+// The heap-owned link of a long-lived request-bound resource (stream,
+// transaction) that outlives the call creating it; null when one token alone
+// cancels it, which request_bound_options() then already carries.
+[[nodiscard]] inline std::unique_ptr<const linked_operation_options> make_request_link(const operation_options& options, const stop_token& request_stop) {
+    if (!options.stop_token_.stoppable() || !request_stop.stoppable()) {
+        return nullptr;
+    }
+    return std::make_unique<const linked_operation_options>(options, request_stop);
+}
 
 class operation_interrupt;
 

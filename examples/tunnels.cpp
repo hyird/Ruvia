@@ -79,13 +79,13 @@ int main() {
         }
         app.server({.worker_count_ = 2, .process_signal_handlers_ = ruvia::process_signal_handler_policy::install})
             .listen(std::move(listener_value))
-            .on_connection_failure([](const ruvia::connection_failure_record& record) noexcept {
+            .callbacks({.connection_failure_ = [](const ruvia::connection_failure_record& record) noexcept {
             try {
                 std::cerr << "tunnel connection failed: " << ruvia::exception_text(record.exception()) << '\n';
             } catch (...) {
                 std::cerr << "tunnel connection failed\n";
             }
-        }).run();
+        }}).run();
     } catch (...) {
         std::cerr << ruvia::exception_text(std::current_exception()) << '\n';
         return 1;

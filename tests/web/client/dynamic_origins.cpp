@@ -301,7 +301,7 @@ TEST(Ruvia, http_client_redirect_policy_can_register_an_origin_and_remains_fail_
             unconfigured.on_redirect([](const ruvia::http_client_redirect_hop&, ruvia::stop_token) -> ruvia::task<bool> {
                 co_return true;
             });
-            auto still_denied = co_await unconfigured.send();
+            auto still_denied = co_await std::move(unconfigured).send();
             EXPECT_EQ(still_denied.status().value(), 302);
             EXPECT_TRUE(target.requests_.empty());
 
@@ -316,7 +316,7 @@ TEST(Ruvia, http_client_redirect_policy_can_register_an_origin_and_remains_fail_
                 co_await client.upsert({.alias_ = "discovered", .base_url_ = target_url, .versions_ = ruvia::http_client_versions{.http2_ = false}}, {.stop_token_ = std::move(stop)});
                 co_return true;
             });
-            auto accepted = co_await request.send();
+            auto accepted = co_await std::move(request).send();
             EXPECT_EQ(accepted.status().value(), 200);
             EXPECT_EQ(decisions, 1U);
             EXPECT_EQ(target.requests_.size(), 1U);
@@ -331,7 +331,7 @@ TEST(Ruvia, http_client_redirect_policy_can_register_an_origin_and_remains_fail_
                 ++decisions;
                 co_return false;
             });
-            auto result = co_await rejected.send();
+            auto result = co_await std::move(rejected).send();
             EXPECT_EQ(result.status().value(), 302);
             EXPECT_EQ(decisions, 2U);
             EXPECT_EQ(target.requests_.size(), 1U);
@@ -365,7 +365,7 @@ TEST(Ruvia, http_client_retired_origin_handles_and_cold_operations_expire_with_o
             retired.emplace(client.client());
             cold.emplace(retired->get("/cold").send());
             upload.emplace(client.client().post("/cold-upload").upload());
-            tunnel.emplace(client.client().connect("127.0.0.1:8001").open());
+            tunnel.emplace(client.client().connect("127.0.0.1:8001").connect());
             co_await client.upsert({.base_url_ = "http://127.0.0.1:8002"});
             co_await client.shutdown();
         }
@@ -417,7 +417,7 @@ TEST(Ruvia, http_client_cold_upload_and_tunnel_pin_replaced_origins_without_hand
             } catch (const ruvia::http_client_error& error) {
                 EXPECT_EQ(error.code(), ruvia::make_error_code(ruvia::http_client_errc::closing));
             }
-            auto tunnel = client.client().connect("127.0.0.1:8002").open();
+            auto tunnel = client.client().connect("127.0.0.1:8002").connect();
             co_await client.upsert({.base_url_ = "http://127.0.0.1:8003"});
             try {
                 (void)co_await std::move(tunnel);
@@ -660,7 +660,7 @@ void exercise_redirect_policy_cancellation(cancellation_case mode) {
         });
         const auto send = [&]() -> task<void> {
             try {
-                (void)co_await request.send();
+                (void)co_await std::move(request).send();
                 ADD_FAILURE() << "cancelled redirect policy sent a follow-up request";
             } catch (const http_client_error& error) {
                 EXPECT_EQ(error.code(), mode == cancellation_case::timeout ? std::make_error_code(std::errc::timed_out) : std::make_error_code(std::errc::operation_canceled));

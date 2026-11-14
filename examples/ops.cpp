@@ -2,7 +2,7 @@
 // Run ruvia_example_ops, then GET http://127.0.0.1:8098/admin/health,
 // /admin/ready?db=down (503), /admin/stats, or /admin/peer.
 // /admin/fail-after-head deliberately ends a stream with an error to demonstrate
-// on_connection_failure; it cannot be turned into a second HTTP response.
+// http_server_callbacks::connection_failure_; it cannot be turned into a second HTTP response.
 // Set RUVIA_TRUST_LOCAL_PROXY=true only when a local proxy sanitizes forwarding
 // headers. Ctrl+C closes admission, invokes the stop hook, and joins workers.
 
@@ -103,18 +103,21 @@ int main() {
             // this hook; other threads should only request application::stop().
             std::puts("admission closed; joining workers");
         })
-            .on_access([](const ruvia::access_log_record& record) noexcept {
+            .callbacks({
+                .access_ = [](const ruvia::access_log_record& record) noexcept {
             // Views are callback-scoped. Production sinks should enqueue an
             // owned record to a bounded logger instead of blocking the worker.
             std::printf("%.*s %.*s in %llu us\n", static_cast<int>(record.method().size()), record.method().data(), static_cast<int>(record.path().size()), record.path().data(), static_cast<unsigned long long>(record.duration_micros()));
-        })
-            .on_connection_failure([](const ruvia::connection_failure_record& record) noexcept {
+        },
+                .connection_failure_ = [](const ruvia::connection_failure_record& record) noexcept {
             try {
                 std::fprintf(stderr, "connection failed: %s\n", ruvia::exception_text(record.exception()).c_str());
             } catch (...) {
                 std::fputs("connection failed; formatting its reason failed\n", stderr);
             }
-        }).run();
+        },
+            })
+            .run();
     } catch (...) {
         std::fprintf(stderr, "%s\n", ruvia::exception_text(std::current_exception()).c_str());
         return 1;

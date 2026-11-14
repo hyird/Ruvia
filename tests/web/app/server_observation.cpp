@@ -317,26 +317,30 @@ TEST(Ruvia, server_observers_see_client_hellos_and_http2_input_by_connection_id)
         .listen(listener)
         .on_start([] {
         started().release();
-    })
-        .on_tls_client_hello([](const ruvia::tls_client_hello_record& hello) noexcept {
+    });
+    ruvia::http_server_callbacks observers{
+        .tls_client_hello_ = [](const ruvia::tls_client_hello_record& hello) noexcept {
         records().add(hello);
-    }).on_http2_input([](const ruvia::http2_input_record& input) noexcept {
+    },
+        .http2_input_ = [](const ruvia::http2_input_record& input) noexcept {
         records().add(input);
-    });
+    },
+    };
 #if defined(RUVIA_ENABLE_HTTP3)
-    app.on_http3_frame([](const ruvia::http3_frame_record& frame) noexcept {
+    observers.http3_frame_ = [](const ruvia::http3_frame_record& frame) noexcept {
         records().add(frame);
-    }).on_http3_field([](const ruvia::http3_field_record& field) noexcept {
+    };
+    observers.http3_field_ = [](const ruvia::http3_field_record& field) noexcept {
         records().add(field);
-    });
+    };
 #endif
+    app.callbacks(std::move(observers));
 
     std::set<std::uint64_t> connection_ids;
     {
         ruvia::test::app_run runner(app);
         ASSERT_TRUE(started().try_acquire_for(10s));
-        EXPECT_THROW(app.on_tls_client_hello(nullptr), std::logic_error);
-        EXPECT_THROW(app.on_http2_input(nullptr), std::logic_error);
+        EXPECT_THROW(app.callbacks({}), std::logic_error);
 
         for (const char* groups : {static_cast<const char*>(nullptr), "brainpoolP256r1tls13:X25519"}) {
             const auto exchange = https_connection_id(io, https_endpoint, groups);
@@ -384,10 +388,7 @@ TEST(Ruvia, server_observers_see_client_hellos_and_http2_input_by_connection_id)
     EXPECT_EQ(connection_ids.count(0), 0U);
 
     const auto observed = records().counts();
-    app.on_tls_client_hello(nullptr).on_http2_input(nullptr);
-#if defined(RUVIA_ENABLE_HTTP3)
-    app.on_http3_frame(nullptr).on_http3_field(nullptr);
-#endif
+    app.callbacks({});
     {
         ruvia::test::app_run runner(app);
         ASSERT_TRUE(started().try_acquire_for(10s));

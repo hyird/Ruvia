@@ -31,14 +31,8 @@ int main() {
 | --- | --- |
 | `application& server(server_config config)` | 配置业务 worker 数量、超时、连接数/请求数上限、入站缓冲预算及响应压缩与 CORS 策略 |
 | `application& listen(listen_config config)` | 注册监听端点（支持可多次调用监听多个地址/端口，重复端点会报错拒绝；TLS 证书在调用时立即加载校验；`inherited_sockets_` 接管已绑定的 socket） |
-| `task<void> replace_tls_identities(worker_ref caller, const listener_endpoint& endpoint, tls_config config)` | 异步替换 HTTPS 监听器及其 HTTP/3 服务的身份集合，之后的新握手使用新集合，见 [1.2](#ruvialisten_config-与-ruviatls_config) |
-| `task<void> add_listener(worker_ref caller, listen_config config)` | 异步新增监听器：全部 worker 准备成功后统一开放接入，任一失败全部回滚，见 [1.2](#ruvialisten_config-与-ruviatls_config) |
-| `task<prepared_listener> prepare_listener(worker_ref caller, listen_config config)` / `prepare_listeners(caller, span<const listen_config>)` | 先准备单项或整批监听，再由调用方开放接入，见下方“监听准备与激活” |
-| `task<void> remove_listener(worker_ref caller, const listener_endpoint& endpoint, listener_remove_options options = {})` | 停止新准入；`close_connections_` 可同时断开该监听器的既有连接 |
-| `task<listener_sockets> duplicate_listener_sockets(worker_ref caller, const listener_endpoint& endpoint) const` | 仅 POSIX：异步复制全部 worker 的监听 socket，供 exec 热升级交接 |
-| `task<bool> close_connection(worker_ref caller, std::uint64_t id)` | 异步按 ID 请求断开整条连接，返回值契约见 [1.6](#16-连接观察钩子server_observationh) |
-| `on_connection_admission(...)` / `on_connection_open(...)` / `on_connection_close(...)` | 配置传输准入、生命周期与连接附加状态，见 [1.6](#16-连接观察钩子server_observationh) |
-| `on_http2_frame(...)` / `on_http2_headers(...)` / `on_http3_frame(...)` / `on_http3_field(...)` | 启用 HTTP/2 结构化帧与 HPACK 字段观察（需 `RUVIA_ENABLE_HTTP2`）及 HTTP/3 帧与 QPACK 字段观察（需 `RUVIA_ENABLE_HTTP3`），见 [1.6](#16-连接观察钩子server_observationh) |
+| 继承自 `listener_controls` | `add_listener`、`prepare_listeners`、`remove_listener`、`wait_connections_closed`、`replace_tls_identities`、`close_connection`、`duplicate_listener_sockets`、`stats`；与 `http_server_group` 同一签名与语义，见 [1.9](#19-独立入站宿主http_serverh) |
+| `application& callbacks(http_server_callbacks callbacks)` | 整体替换宿主回调集（访问日志、连接失败、TLS/HTTP/2/HTTP/3 观察、连接准入/打开/关闭、`connection_` 与 `request_stream_` 分发）；空成员即清除，见 [1.6](#16-连接观察钩子server_observationh) |
 | `template <middleware M, typename... Args> application& use(Args&&... args)` | 注册全局中间件（每个 worker 独立构造一份实例） |
 | `template <middleware M, typename... Args> application& use_at(middleware_scope_options options, Args&&... args)` | 注册路径前缀作用域中间件（如 `{.prefix_ = "/api"}`，按完整路径段匹配；前缀 `"/"` 抛出 `std::invalid_argument`，全局请用 `use`） |
 | `template <typename S, typename... Args> application& use_worker_state(Args&&... args)` | 注册 per-worker 状态类型 `S`，在每个 worker 启动时独立构造一份实例 |
@@ -53,23 +47,16 @@ int main() {
 | `application& client(http_client_config config)` / `client(std::nullptr_t)` | 按 alias 与 `base_url_` 注册或清除 per-worker 出站 HTTP 客户端；链式调用见 [客户端手册](streaming-websocket.md#5-出站-http-客户端) |
 | `application& on_error(http_error_handler handler)` | 注册全局错误处理器，重复注册抛出 `std::invalid_argument`（另有 `scoped_error_handler_options` 重载支持按路径前缀注册） |
 | `application& on_not_found(http_not_found_handler handler)` | 注册全局 404 处理器，重复注册抛出 `std::invalid_argument`（另有 `scoped_not_found_handler_options` 重载支持按路径前缀注册） |
-| `application& on_access(access_log_callback callback)` | 注册请求访问日志回调（`noexcept`） |
-| `application& on_connection_failure(connection_failure_callback callback)` | 注册连接/握手层异常回调（`noexcept`） |
-| `application& on_tls_client_hello(tls_client_hello_callback callback)` / `on_tls_client_hello(std::nullptr_t)` | 注册或清空 TLS ClientHello 观察回调（`noexcept`），见 [1.6](#16-连接观察钩子server_observationh) |
-| `application& on_http2_input(http2_input_callback callback)` / `on_http2_input(std::nullptr_t)` | 注册或清空 HTTP/2 连接入站字节观察回调（`noexcept`），见 [1.6](#16-连接观察钩子server_observationh) |
-| `application& on_connection(connection_callback callback)` / `on_connection(std::nullptr_t)` | 注册或清空 `listener_dispatch::connection` 监听器的原始连接处理器；存在此类监听器而未注册时 `run()` 抛 `std::invalid_argument`，见 [1.7](#17-原始连接分发server_connectionh) |
-| `application& on_request_stream(request_stream_callback callback)` / `on_request_stream(std::nullptr_t)` | 注册或清空 `listener_dispatch::request_stream` 监听器的请求流处理器；存在此类监听器而未注册时 `run()` 抛 `std::invalid_argument`，见 [1.8](#18-请求流分发request_streamh) |
 | `application& on_start(app_hook hook)` / `on_stop(app_hook hook)` | 注册启动后（accept 开始前）与停机后的生命周期钩子（在 `run()` 调用线程上执行） |
-| `void run()` | 启动所有业务 worker 并阻塞，直到调用 `stop()` 或收到停止信号；允许无监听启动，再动态准备监听；全部 worker 退役后返回 |
-| `void stop()` | 线程安全地请求停机，直接断连、不设排空阶段：停止接入（取消待决 accept 与 QUIC 接收）→ 立即关闭全部连接（HTTP/1、HTTP/2、WebSocket、隧道不发送响应、`GOAWAY` 或关闭握手；HTTP/3 立即发送 `CONNECTION_CLOSE(H3_NO_ERROR)`），在途处理器观察到 `c.stop_token()` → 先停 I/O 再 join 后台操作 |
-| `http_server_stats stats() const` | 线程安全地汇总所有 worker 的连接与故障统计 |
+| `void run()` | 应用的 start + 阻塞：启动所有业务 worker，直到调用 `stop()` 或收到停止信号；允许无监听启动，再动态准备监听；全部 worker 退役后返回（对应宿主的 `start()` + `shutdown()`） |
+| `void stop()` | 线程安全地请求停机（停机态下锁存到下次 `run()`），直接断连、不设排空阶段：停止接入（取消待决 accept 与 QUIC 接收）→ 立即关闭全部连接（HTTP/1、HTTP/2、WebSocket、隧道不发送响应、`GOAWAY` 或关闭握手；HTTP/3 立即发送 `CONNECTION_CLOSE(H3_NO_ERROR)`），在途处理器观察到 `c.stop_token()` → 先停 I/O 再 join 后台操作 |
 | `blocking_pool_stats blocking_pool_stats() const` | 线程安全地读取阻塞线程池统计 |
 | `std::vector<web_worker_ref> workers() const` | 获取全部业务 worker 的跨线程派发引用 |
 | `web_worker_ref worker_for(std::uint64_t key) const` / `worker_for(std::string_view key) const` | 按哈希键确定性选择单个业务 worker 引用 |
 
 应用公开回调统一使用 `move_only_function`，签名中的 `noexcept` 在构造期受编译器约束；所有权与退役规则见 [core 可调用包装器](core-and-http.md)。
 
-`application::on_access()`、`on_connection_failure()`、`on_tls_client_hello()`、`on_http2_input()`、`on_connection()` 与 `on_request_stream()` 在配置锁外构造地址固定的回调所有者，锁内只交换拥有指针并发布借用视图，解锁后析构旧目标；`on_start(nullptr)` / `on_stop(nullptr)` 清空钩子列表、`on_error(nullptr)` / `on_not_found(nullptr)` 清空全局处理器时同样在解锁后析构被清空的目标。用户目标的移动与析构可查询应用状态，不会因重新进入配置锁而死锁。运行期间仍拒绝修改这些回调。
+`application::callbacks()` 在配置锁外构造地址固定的整组回调所有者，锁内只交换拥有指针并发布借用视图，解锁后整组析构旧目标；`on_start(nullptr)` / `on_stop(nullptr)` 清空钩子列表、`on_error(nullptr)` / `on_not_found(nullptr)` 清空全局处理器时同样在解锁后析构被清空的目标。用户目标的移动与析构可查询应用状态，不会因重新进入配置锁而死锁。运行期间拒绝修改（`std::logic_error`）。应用是进程单例：每次 `callbacks()` 替换整组，未列出的成员随之清除。
 
 ---
 
@@ -160,11 +147,11 @@ ruvia::app().listen({
 - **服务选择**：`http_` 与 `https_` 至少指定一个；同时指定且 `auto_https_redirect_ = true` 时，仅明文请求自动重定向至 HTTPS。
 - **明文与 TLS 同端口**：`http_ == https_` 创建一个物理 TCP 监听服务，按首字节选择明文或 TLS；TLS 握手失败不回退明文。两种传输共享服务限额，在各分发模式既有限制内支持动态监听、外部 `adopt()` 与 HTTP/3 配对。
 - **IPv6 监听**：`listen_config::ipv6_only_` 显式设置 IPv6 TCP/QUIC socket 的 `IPV6_V6ONLY`；`nullopt` 保留平台既有默认。继承 socket 必须与指定值一致，否则准备失败，不静默改写外部 socket。
-- `dispatch_`（`listener_dispatch`，默认 `routes`）决定该配置的 `http_`、`https_` 与 `http3_` 服务如何处理已接受的连接：`routes` 走路由、中间件与控制器；`request_stream` 把每个 HTTP 请求（HTTP/1.1、HTTP/2、HTTP/3）交给 `on_request_stream()`，见 [1.8](#18-请求流分发request_streamh)；`connection` 把每个连接（TLS 监听器在握手完成后）交给 `on_connection()`，服务器不解析 HTTP，见 [1.7](#17-原始连接分发server_connectionh)。`auto_https_redirect_` 下的明文 `http_` 服务只做重定向；`connection` 模式下设置 `http3_` 或 `auto_https_redirect_` 时 `listen()` 抛 `std::invalid_argument`。
+- `dispatch_`（`listener_dispatch`，默认 `routes`）决定该配置的 `http_`、`https_` 与 `http3_` 服务如何处理已接受的连接：`routes` 走路由、中间件与控制器；`request_stream` 把每个 HTTP 请求（HTTP/1.1、HTTP/2、HTTP/3）交给宿主回调 `http_server_callbacks::request_stream_`，见 [1.8](#18-请求流分发request_streamh)；`connection` 把每个连接（TLS 监听器在握手完成后）交给 `connection_`，服务器不解析 HTTP，见 [1.7](#17-原始连接分发server_connectionh)。`auto_https_redirect_` 下的明文 `http_` 服务只做重定向；`connection` 模式下设置 `http3_` 或 `auto_https_redirect_` 时 `listen()` 抛 `std::invalid_argument`。
 - `http3_` 在该地址的 UDP 端口上提供 HTTP/3（RFC 9114，QUIC v1），要求 `https_` 与启用 `RUVIA_ENABLE_HTTP3` 的构建（否则 `listen()` 报错）；UDP 与 TCP 端口互不冲突，可与 `https_` 同号。它复用 `tls_` 的证书、SNI 与客户端证书策略，只协商 TLS 1.3 与 ALPN `h3`。HTTPS 监听器的每个 HTTP/1.1 与 HTTP/2 响应随之携带 `Alt-Svc: h3=":<端口>"; ma=<秒>`（RFC 7838 §3；`http3_alt_svc_max_age_` 默认 24 小时且须为正），应用已自行设置 `Alt-Svc` 的响应保持原值；HTTP/3 响应本身不加。`context::advertise_alternative_service()` 仍只发送 HTTP/2 ALTSVC 帧。
 - HTTP/3 的 worker 模型：POSIX 上按 worker 下标顺序 `0..N-1` 以 `SO_REUSEADDR` + `SO_REUSEPORT` 绑定同一 UDP 端口；服务器签发的 20 字节连接 ID 用后 16 字节随机数与监听器密钥派生的掩码异或隐藏所属 worker 并携带 16 位认证标签（RFC 9000 §9.5 零明文前缀防关联）；Linux 多 worker 下通过 `SO_ATTACH_REUSEPORT_CBPF` 在内核态校验标签并将携带服务端 CID 的数据报（含连接迁移与 NAT 重绑定后的新四元组）直接投递给所属 worker（客户端 Initial 按连接 ID 密钥哈希选定 worker），其他 POSIX 平台或落到其他 worker 的数据报经有界队列（每 worker 至多 256 个在途，满则丢弃，由 QUIC 重传恢复）转交给所属 worker。Windows 由独立 Acceptor 线程以 `SO_EXCLUSIVEADDRUSE` 独占 UDP socket：按连接 ID 把数据报转交所属 worker，新连接的 Initial（客户端自选 ID）按监听器密钥加盐的哈希选定 worker（重传的 Initial 落到同一 worker，Acceptor 不保存连接状态）；业务 worker 的出站数据报经每 worker 至多 256 个在途的有界队列交回 Acceptor 发送，满则丢弃。业务 worker 在两种平台上同构，连接始终留在接受它的 worker 上；连接数与 TCP 共用 `max_connections_per_worker_` 计数与“淘汰最久空闲连接”策略。
 - `http3_early_data_` 默认关闭；显式启用后接受可恢复会话的 QUIC 0-RTT。非安全方法自动返回 `425 Too Early`，不调用路由处理器；安全方法的处理器仍等待 TLS 握手认证完成后才启动（[RFC 8470 §3](https://www.rfc-editor.org/rfc/rfc8470.html#section-3)），不能仅凭方法名称推断业务无副作用。`c.early_data()` 保留该请求实际使用早期数据的来源标记，应用仍须评估重放风险。
-- HTTP/3 支持客户端主动迁移与 NAT 重绑定：ngtcp2 完成路径验证，按 CID 将数据报转交原连接所属 worker，连接及处理器不跨线程迁移。支持普通 CONNECT（RFC 9114 §4.4）、WebSocket Extended CONNECT（RFC 9220）、CONNECT-UDP（RFC 9298）、HTTP Datagrams（RFC 9221 / RFC 9297）、RFC 9412 `ORIGIN` 帧（`c.advertise_origins()`）与 RFC 9218 优先级（`c.req().priority()`、`c.draft().priority()` 及客户端 `PRIORITY_UPDATE` 帧）。
+- HTTP/3 支持客户端主动迁移与 NAT 重绑定：ngtcp2 完成路径验证，按 CID 将数据报转交原连接所属 worker，连接及处理器不跨线程迁移。支持普通 CONNECT（RFC 9114 §4.4）、WebSocket Extended CONNECT（RFC 9220）、CONNECT-UDP（RFC 9298）、HTTP Datagrams（RFC 9221 / RFC 9297）、RFC 9412 `ORIGIN` 帧（`c.advertise_origins()`）与 RFC 9218 优先级（`c.req().priority()`、`response_options::priority_` 及客户端 `PRIORITY_UPDATE` 帧）。
 - **迁移与 CID 容量**：依赖已升级至包含[备用 CID 退休修复](https://github.com/ngtcp2/ngtcp2/commit/a359eba92519ebed1339e1efbd309fc00c65a1d7)的 ngtcp2 1.26.0。默认 `active_connection_id_limit_ = 4`，为当前路径、旧路径探测和下一候选路径保留容量；这是实现选择，RFC 9000 §18.2 的最低合法值仍为 2。出站客户端在 CID 暂时不足时等待协议补充，等待与路径验证共用 `connect_timeout_` 整体截止期，不通过重连或重放请求伪装迁移成功。真实协议错误仍关闭连接。
 - **Retry 与无状态重置**：`http3_retry_` 默认关闭；显式启用后对未携带 Token 的客户端 Initial 发送 QUIC Retry（RFC 9000 §8.1.2）完成无状态地址验证，伪造或过期的 Retry Token 以无状态 `CONNECTION_CLOSE(INVALID_TOKEN)` 拒绝。指向本 worker 已退役服务端连接 ID 的短包头数据报在关闭期结束后按速率限制发送严格小于触发包长的 Stateless Reset（RFC 9000 §10.3）。HTTP/3 不提供 Server Push（nghttp3 不实现 HTTP/3 推送）与 HTTP/2 专属的 `ALTSVC` 帧（RFC 7838 §4 仅定义于 HTTP/2；HTTP/3 使用 `Alt-Svc` 响应头）。`:authority` 与 `Host` 不一致等请求语义错误由 `http3_connection` 校验请求头时直接以 `H3_MESSAGE_ERROR` 只重置该流，不进入应用也不计入单连接请求数；nghttp3 在帧层识别的格式错误按 RFC 9114 §8 允许的方式升级为连接错误。`100 Continue` 与 `103 Early Hints` 等 1xx 照常发送。
 - HTTP/3 的超时与连接级排空复用 HTTP/2 的语义：`idle_timeout_` 同时作为 QUIC `max_idle_timeout`（未设置则不启用），握手受 `header_completion_timeout_` 约束；请求体超过 `request_body_timeout_` / `body_completion_timeout_`、或对端超过 `write_timeout_` 未确认输出、或一次流写入跨越其全部等待超过 `write_completion_timeout_` 的流以 `H3_REQUEST_CANCELLED` 单独重置；对端放弃的请求流（`RESET_STREAM`，含首部未解码的流；请求已结束时为 `STOP_SENDING`，每流计一次）比已完成响应多出 1000 条（与 HTTP/2 Rapid-Reset 同一上限）时以 `H3_EXCESSIVE_LOAD` 关闭连接；达到 `max_requests_per_connection_` 或连接超时时先发 shutdown-notice GOAWAY，经 `min(1 s, 3×PTO)` 后发最终 GOAWAY，所有已接纳流结束后以 `H3_NO_ERROR` 关闭连接；`stop()` 则立即以 `H3_NO_ERROR` 关闭。
@@ -191,10 +178,10 @@ ruvia::app().listen({
 - **监听 socket 接管（`inherited_sockets_`）**：`ruvia::listener_sockets` 以 `http_`、`https_`（监听中的 TCP socket）与 `http3_`（已绑定的 UDP socket）三组 `ruvia::native_socket`（POSIX 文件描述符，Windows `SOCKET`）代替绑定对应服务；空向量照常绑定。
   - **同端口句柄**：明文与 TLS 共用端口时，唯一 TCP 句柄组放在 `https_`；`http_` 必须为空，导出也使用 `https_`。
   - **校验**：TCP 句柄须处于监听（`SO_ACCEPTCONN`），UDP 句柄须已绑定，且本端地址族、地址与端口都等于本配置（规范化后比较，通配地址只匹配通配绑定）；非空向量要求其服务已启用。不符或同一句柄出现两次抛出 `std::invalid_argument`。
-  - **所有权**：`listen()` / `add_listener()` / `prepare_listener()` / `prepare_listeners()` 从调用起拥有全部句柄并设置 close-on-exec（Windows 清除继承标志），失败或丢弃冷任务也关闭所接管句柄。下一次 `run()` 无论成败都消费启动配置中的句柄代替绑定，之后的 `run()` 照常绑定；被 `listen()` 替换而未消费的句柄随之关闭。
+  - **所有权**：`listen()` / `add_listener()` / `prepare_listeners()` 从调用起拥有全部句柄并设置 close-on-exec（Windows 清除继承标志），失败或丢弃冷任务也关闭所接管句柄。下一次 `run()` 无论成败都消费启动配置中的句柄代替绑定，之后的 `run()` 照常绑定；被 `listen()` 替换而未消费的句柄随之关闭。
   - **数量与顺序**：POSIX 每组恰为 worker 数，否则 `run()` / `add_listener()` 抛出 `std::invalid_argument`；第 i 个交给第 i 个 worker。`http3_` 须按 `SO_REUSEPORT` 组内成员顺序给出（即 `duplicate_listener_sockets()` 的返回顺序），Linux 在该组上挂载 cBPF 分流；顺序不符时数据报经用户态转交仍到达所属 worker。Windows 每组至多 1 个，由 Acceptor 线程如自行绑定的 socket 一样使用（不再设置 `SO_EXCLUSIVEADDRUSE`）；已被其他进程关联 I/O 完成端口的 socket 无法接管，启动失败。
 - **导出（仅 POSIX）**：`co_await duplicate_listener_sockets(caller, endpoint)` 按 worker 顺序返回运行中 TCP 服务各 worker 监听 socket 的 `dup()`（HTTPS 服务一并返回 HTTP/3 的 UDP socket），未设置 `FD_CLOEXEC`，归调用方所有；本应用继续在原 socket 上接入。exec 出的新进程把它们作为 `inherited_sockets_` 交给 `listen()` 并 `run()`，旧进程随后异步 `remove_listener(caller, endpoint)` 或 `stop()`：端口始终有人监听，旧进程未接受的连接留在共享队列中由新进程接受。QUIC 连接状态不随 socket 交接，旧进程的 HTTP/3 连接随其关闭而结束。Windows 的 Acceptor 每服务只独占一个 socket，不提供该接口。
-- **运行期增删**：`ruvia::listener_endpoint` 指名服务的规则同运行期替换。
+- **运行期增删**：`ruvia::listener_endpoint` 指名服务的规则同运行期替换；非数字地址或端口 0 抛 `std::invalid_argument`，三种宿主共用同一解析规则。
   - **新增**：`co_await add_listener(caller, config)` 校验配置并异步准备凭据；与运行中监听器重复的 TCP 或 HTTP/3 UDP 端点抛出 `std::invalid_argument`。各 worker（Windows 另含 Acceptor）绑定或接管 socket，并采用准备好的 TLS 上下文与 HTTP/3 端点；全部成功后统一开放接入，全部开始接入后恢复调用方。任一失败时关闭候选 socket、等待清理并重抛首个异常，既有监听器照常服务。新增 TLS 监听器与本次运行其他监听器同时轮换票据密钥。
   - **移除**：`remove_listener(..., options = {})` 停止 TCP 接入及配对 HTTP/3 的新 Initial；默认保留既有会话，最后一条会话结束后释放监听资源。`listener_remove_options{.close_connections_ = true}` 同时断开它的 TCP/TLS/QUIC 会话，包括 WebSocket 与隧道。按稳定监听身份匹配，不误关同地址重新添加的监听器；允许当前处理器移除自身监听，不等待自身退出。
   - **持久化与并发**：成功增删更新监听配置，供之后的 `run()` 使用；调用边界同运行期替换。运行期控制通过异步门串行提交，不持有互斥锁跨挂起，也不在 worker 上调用 `future::get()` 或等待条件变量。`run()` / `stop()` 与启动前配置仍由外部控制线程同步驱动。
@@ -203,14 +190,14 @@ ruvia::app().listen({
 
 | 入口 / 边界 | 契约 |
 | --- | --- |
-| `prepare_listener(...)` / `prepare_listeners(..., span<const listen_config>)` | 返回冷任务前拥有配置与全部继承句柄；整批 TLS、QUIC、socket 和所有 worker 准备完成后交付同一个 `prepared_listener` |
+| `prepare_listeners(..., span<const listen_config>)` | 返回冷任务前拥有配置与全部继承句柄；整批 TLS、QUIC、socket 和所有 worker 准备完成后交付同一个 `prepared_listener`；单项用单元素 span |
 | `co_await std::move(prepared).activate()` | 先发布业务配置，再消耗票据开放整批接入；准备期间 TCP 握手可能完成，但不执行连接或请求处理器 |
 | `co_await std::move(prepared).cancel()` | 消耗票据并等待整批回滚；析构票据或丢弃消费它的冷任务也请求回滚，但不阻塞析构线程 |
 | 失败与停机 | 任一项失败回滚整批，原监听继续服务；宿主关闭也取消未激活事务 |
 | 串行控制 | 一张票据持有该宿主的监听事务；同一配置的多个端点须使用批量入口，不能持票再等待本宿主的另一监听控制操作 |
 | 线程与寿命 | 票据可跨线程移动、析构；`activate()` / `cancel()` 在准备时的 caller worker 等待，相关循环须持续驱动至清理完成 |
 
-`add_listener()` 仍是同一准备与激活主链的便利入口。`application`、`http_server_group` 显式传入 `caller`；单循环 `http_server` 使用绑定循环。
+`add_listener()` 仍是同一准备与激活主链的便利入口。`application`、`http_server_group` 经 `listener_controls` 共用该主链并显式传入 `caller`；单循环 `http_server` 使用绑定循环。
 
 #### 增量证书库与选择策略（`"tls_config.h"`）
 
@@ -335,17 +322,18 @@ for (const auto& worker : ruvia::app().workers()) {
 
 #### 1.6.1 原始与结构化协议观察
 
-观察回调只读、不改变协议行为，`app.h` 已包含该头。回调在连接所属 worker 线程上同步调用；多个 worker 并发调用同一目标，目标须线程安全。记录及其全部视图只在回调期间有效。未注册回调时不安装观察分支、不构造记录。
+观察回调只读、不改变协议行为，`app.h` 已包含该头。它们与分发、准入回调同属一个 `http_server_callbacks` 值：应用经 `app().callbacks({...})` 整体设置，`http_server` 构造时传入，`http_server_group` 由工厂逐成员构造。回调在连接所属 worker 线程上同步调用；多个 worker 并发调用同一目标，目标须线程安全。记录及其全部视图只在回调期间有效。未设置成员时不安装观察分支、不构造记录。
 
 ```cpp
-ruvia::app()
-    .on_tls_client_hello([](const ruvia::tls_client_hello_record& hello) noexcept {
+ruvia::app().callbacks({
+    .tls_client_hello_ = [](const ruvia::tls_client_hello_record& hello) noexcept {
         // hello.message()[0] == std::byte{1}：完整 ClientHello 握手消息
         fingerprint(hello.connection_id(), hello.message());
-    })
-    .on_http2_input([](const ruvia::http2_input_record& input) noexcept {
+    },
+    .http2_input_ = [](const ruvia::http2_input_record& input) noexcept {
         capture(input.connection_id(), input.bytes());
-    });
+    },
+});
 ```
 
 | 记录方法 | 说明 |
@@ -355,23 +343,23 @@ ruvia::app()
 | `tls_client_hello_record::quic()` | HTTP/3（QUIC）连接为 `true`，TCP 上的 TLS 为 `false` |
 | `tls_client_hello_record::message()` | 完整 ClientHello 握手消息：`msg_type`（1）、3 字节长度与正文，已完成记录层或 CRYPTO 帧重组（[RFC 9846 §4.1.2](https://www.rfc-editor.org/rfc/rfc9846.html#section-4.1.2)） |
 | `http2_input_record::bytes()` | 一次读取的已解密 HTTP/2 连接入站字节 |
-| `http2_frame_record::connection_id()` / `metadata()` | 所属连接与 HTTP/2 结构化帧事实；由 `on_http2_frame()` 注册 |
-| `http2_headers_record::connection_id()` / `metadata()` | 所属连接与 HPACK 原始字段次序；由 `on_http2_headers()` 注册 |
-| `http3_frame_record::connection_id()` / `metadata()` | 所属连接与 HTTP/3 结构化帧事实；由 `on_http3_frame()` 注册 |
-| `http3_field_record::connection_id()` / `metadata()` | 所属连接与 QPACK 原始字段次序；由 `on_http3_field()` 注册 |
+| `http2_frame_record::connection_id()` / `metadata()` | 所属连接与 HTTP/2 结构化帧事实；由 `http2_frame_` 接收 |
+| `http2_headers_record::connection_id()` / `metadata()` | 所属连接与 HPACK 原始字段次序；由 `http2_headers_` 接收 |
+| `http3_frame_record::connection_id()` / `metadata()` | 所属连接与 HTTP/3 结构化帧事实；由 `http3_frame_` 接收 |
+| `http3_field_record::connection_id()` / `metadata()` | 所属连接与 QPACK 原始字段次序；由 `http3_field_` 接收 |
 
 - **ClientHello 时机**：每个收到的 ClientHello 交付一次，先于 SNI 与证书选择；HelloRetryRequest 之后的第二个 ClientHello 再次交付。TCP TLS 与 HTTP/3 均覆盖。
 - **HTTP/2 输入顺序**：同一连接的记录按线上顺序拼接，即从客户端连接前言（[RFC 9113 §3.4](https://www.rfc-editor.org/rfc/rfc9113.html#section-3.4)）开始的完整入站字节；TLS ALPN `h2` 与明文 prior-knowledge 两条路径一致。分块边界是读取边界，不是帧边界。
 - **连接标识**：`c.conn().connection_id()` 在进程内跨 worker、宿主与重新启动保持唯一，退役 ID 永不复用；同一连接上的全部请求与观察记录共享。已服务连接永不为 0，`test_app` 请求无连接，恒为 0。
-- **结构化 HTTP/2**：要求 `RUVIA_ENABLE_HTTP2`；帧与字段观察直接复用协议解析器，适合提取 Akamai 指纹所需事实，不重建请求字段顺序。字段、序号、规范化 flags 与无效输入的可观察范围见 [Sans-I/O 观察契约](core-and-http.md#421-帧与字段观察)；原始线上字节仍使用 `on_http2_input()`。
+- **结构化 HTTP/2**：要求 `RUVIA_ENABLE_HTTP2`；帧与字段观察直接复用协议解析器，适合提取 Akamai 指纹所需事实，不重建请求字段顺序。字段、序号、规范化 flags 与无效输入的可观察范围见 [Sans-I/O 观察契约](core-and-http.md#421-帧与字段观察)；原始线上字节仍使用 `http2_input_`。
 
 #### 1.6.2 准入、生命周期与主动断连（`"http_server.h"` / `"server_observation.h"`）
 
-| 应用注册入口 | `http_server_callbacks` 字段 | 契约 |
-| --- | --- | --- |
-| `on_connection_admission(fn)` | `connection_admission_` | `bool(const connection_event&) noexcept`；TCP 在 TLS/HTTP 会话前、QUIC 在有效新 Initial 建立会话前调用，`false` 静默拒绝 |
-| `on_connection_open(fn)` | `connection_open_` | `shared_ptr<void>(const connection_event&)`；建立连接附加状态，先于握手与请求分发 |
-| `on_connection_close(fn)` | `connection_close_` | `void(const connection_event&, const shared_ptr<void>&) noexcept`；ID 退役后、释放附加状态前调用 |
+| `http_server_callbacks` 字段 | 契约 |
+| --- | --- |
+| `connection_admission_` | `bool(const connection_event&) noexcept`；TCP 在 TLS/HTTP 会话前、QUIC 在有效新 Initial 建立会话前调用，`false` 静默拒绝 |
+| `connection_open_` | `shared_ptr<void>(const connection_event&)`；建立连接附加状态，先于握手与请求分发 |
+| `connection_close_` | `void(const connection_event&, const shared_ptr<void>&) noexcept`；ID 退役后、释放附加状态前调用 |
 
 - **事件事实**：`connection_event` 提供 `connection_id()`、`local()`、`remote()`、`quic()`；端点统一为拥有 `ip_address` 与端口的 `ip_endpoint`，是接入时的真实传输快照，不采用转发头；不暴露 Asio 地址类型。事件可复制，端点地址按值返回；借用事件端点的访问器禁止右值宿主。
 - **配对与失败**：被准入回调拒绝的连接没有打开/关闭事件；获准连接覆盖握手失败、取消和冷任务销毁。打开回调抛异常时关闭一次、状态为空，并上报原异常。
@@ -382,15 +370,14 @@ ruvia::app()
 
 | 按 ID 控制入口 | 线程与生命周期 |
 | --- | --- |
-| `co_await application::close_connection(caller, id)` | 应用运行时，在显式 `caller` 所属 worker 上等待控制完成，可由业务 worker 发起 |
-| `co_await http_server_group::close_connection(caller, id)` | 宿主组运行时异步发布，`caller` 可以是成员 worker |
+| `co_await listener_controls::close_connection(caller, id)` | `application` 与 `http_server_group` 共用：宿主运行时在显式 `caller` 所属 worker 上等待控制完成，`caller` 可以是成员 worker |
 | `http_server::close_connection(id)` | 单宿主运行时，在所属循环直接执行 |
 
 - **返回值**：`true` 表示找到已登记连接并请求关闭，不表示任务已全部回收；未知或已退役 ID 返回 `false`。违反上述调用边界抛 `std::logic_error`，请求内自断连使用 `abort_connection()`。
 
 ### 1.7 原始连接分发（`"server_connection.h"`）
 
-`listen_config::dispatch_ = ruvia::listener_dispatch::connection` 的监听器把每个已接受的连接交给 `on_connection()` 注册的处理器：明文监听器交付 socket 字节，HTTPS 监听器在握手完成后交付解密字节流，服务器不解析 HTTP。同一应用可同时拥有 `routes` 与 `connection` 监听器；`app.h` 已包含该头。
+`listen_config::dispatch_ = ruvia::listener_dispatch::connection` 的监听器把每个已接受的连接交给宿主回调 `connection_`：明文监听器交付 socket 字节，HTTPS 监听器在握手完成后交付解密字节流，服务器不解析 HTTP。同一应用可同时拥有 `routes` 与 `connection` 监听器；`app.h` 已包含该头。
 
 ```cpp
 ruvia::task<void> echo(ruvia::server_connection& connection) {
@@ -405,12 +392,12 @@ ruvia::app()
         .tls_ = {.identity_ = {.certificate_chain_file_ = "certs/server.crt", .private_key_file_ = "certs/server.key"},
             .alpn_ = {"echo/1"}},
         .dispatch_ = ruvia::listener_dispatch::connection})
-    .on_connection(&echo);
+    .callbacks({.connection_ = &echo});
 ```
 
 | `ruvia::server_connection` 方法 | 说明 |
 | --- | --- |
-| `connection_id()` | 连接标识，与 `conn_info::connection_id()` 及该连接 `on_tls_client_hello` 记录的 `connection_id()` 相同 |
+| `connection_id()` | 连接标识，与 `conn_info::connection_id()` 及该连接 `tls_client_hello_` 记录的 `connection_id()` 相同 |
 | `local()` / `remote()` | 本端与对端地址端口（`ip_endpoint`，地址为拥有字节的 `ip_address`，文本经 `to_string()` 获取） |
 | `tls()` | 明文监听器为 `nullptr`；否则为 `tls_connection_transport`（`alpn()`、`server_name()`、`client_certificate_subject()`） |
 | `stop_token()` | 应用停机时请求停止 |
@@ -424,13 +411,13 @@ ruvia::app()
 - **生命周期**：对象由服务器拥有、不可复制或移动，只在处理器任务运行期间、在该连接所属 worker 线程上有效；任务结束后不得继续访问对象。一个读操作与一个输出操作（`write` / `finish`）可并发运行，同方向重叠抛 `std::logic_error`。
 - **逐次操作**：`operation`（`operation_options`）的超时或停止使 `read()` 只结束本次读取，抛 `std::system_error`（`timed_out` / `operation_canceled`），不丢输入、可继续读；使 `write()` / `finish()` 中止连接并抛同样的异常，令牌启动前已停止则不发出字节。服务器超时继续生效；非正超时抛 `std::invalid_argument`。
 - **操作回收**：`server_connection` 与 `http_tunnel` 只用读写通道租约判定在途操作；处理器退出时先中止仍活跃的 I/O，再等待回收。未启动的冷任务直接失效，随后 `co_await` 抛 `std::logic_error`。
-- **结束**：处理器任务正常返回且无在途操作时，服务器先结束仍打开的发送方向（TLS `close_notify`），再关闭 socket；任务抛出异常则立即断开，并经 `on_connection_failure()` 上报、计入 `connection_failures_`。对端复位、关闭及服务器取消的 I/O（超时、`stop()`、`abort()`）均不计故障；应用自行抛出的异常不按传输取消过滤。
+- **结束**：处理器任务正常返回且无在途操作时，服务器先结束仍打开的发送方向（TLS `close_notify`），再关闭 socket；任务抛出异常则立即断开，并经 `connection_failure_` 上报、计入 `connection_failures_`。对端复位、关闭及服务器取消的 I/O（超时、`stop()`、`abort()`）均不计故障；应用自行抛出的异常不按传输取消过滤。
 - **服务器限制**：连接占用一个 `max_connections_per_worker_` 名额且不会为接纳新连接而被淘汰；读缓冲计入入站内存双预算（超限 `read()` 抛 `std::bad_alloc`）；`idle_timeout_` 在无读写完成时关闭连接，`write_timeout_` 在写入停滞时关闭连接；`stop()` 立即关闭全部连接并请求 `stop_token()`，`run()` 等待处理器任务退出后返回。连接被关闭后，在途与后续操作抛 `std::system_error`。
 - **平台**：Windows 与 POSIX 语义一致，连接同样经 Acceptor 交给业务 worker 后处理。
 
 ### 1.8 请求流分发（`"request_stream.h"`）
 
-`listen_config::dispatch_ = ruvia::listener_dispatch::request_stream` 的监听器把每个 HTTP 请求（HTTP/1.1、明文 prior-knowledge 与 TLS 上的 HTTP/2、配对的 HTTP/3）交给 `on_request_stream()` 注册的处理器，不经过路由。同一应用可同时拥有 `routes`、`request_stream` 与 `connection` 监听器；`app.h` 已包含该头。
+`listen_config::dispatch_ = ruvia::listener_dispatch::request_stream` 的监听器把每个 HTTP 请求（HTTP/1.1、明文 prior-knowledge 与 TLS 上的 HTTP/2、配对的 HTTP/3）交给宿主回调 `request_stream_`，不经过路由。同一应用可同时拥有 `routes`、`request_stream` 与 `connection` 监听器；`app.h` 已包含该头。
 
 ```cpp
 ruvia::task<void> proxy(ruvia::request_stream& stream) {
@@ -444,8 +431,8 @@ ruvia::task<void> proxy(ruvia::request_stream& stream) {
         co_await tunnel->finish();
         co_return;
     }
-    stream.draft().header("content-type", "application/octet-stream");
-    if (co_await stream.response().commit() == ruvia::stream_commit_result::body) {
+    const std::array head{ruvia::http_header_view{"content-type", "application/octet-stream"}};
+    if (co_await stream.response({.headers_ = head}).commit() == ruvia::stream_commit_result::body) {
         while (auto chunk = co_await stream.body().read()) {
             co_await stream.response().write(*chunk);
         }
@@ -457,7 +444,7 @@ ruvia::app()
     .listen({.address_ = "0.0.0.0", .http_ = 8080, .https_ = 8443, .http3_ = 8443,
         .tls_ = {.identity_ = {.certificate_chain_file_ = "certs/server.crt", .private_key_file_ = "certs/server.key"}},
         .dispatch_ = ruvia::listener_dispatch::request_stream})
-    .on_request_stream(&proxy);
+    .callbacks({.request_stream_ = &proxy});
 ```
 
 | `ruvia::request_stream` 方法 | 说明 |
@@ -476,10 +463,10 @@ ruvia::app()
 | `run_blocking(...)` | 绑定请求取消的阻塞卸载；参数及结果契约同 `context::run_blocking()` |
 | `client(alias)` / `db(alias)` / `redis(alias)` | 借用当前 worker 注册的出站能力（`router::dispatch()` 期间为该 router 借入的客户端）；支持无参默认别名，后两者受构建特性控制 |
 | `env()` | 宿主环境只读视图 |
-| `draft()` | 编辑下一次文件工厂、流式提交或隧道/WebSocket 接受使用的响应元数据 |
-| `response()` | 流式响应（`response_stream_writer`）：提交、写正文、以可选 Trailer 结束 |
-| `co_await file(options)` / `static_file(root, options)` | 复用 `context` 文件工厂，返回完整 `http_response`；选项在调用返回前拥有化，静态根借用至任务完成，禁止传入临时根 |
-| `respond(http_response)` | 接管响应的状态、首部、Cookie 与正文/文件，在回调返回后发送；不合并尚未消费的 `draft()`，也不立即提交到线面 |
+| `policy()` | 跨替换响应策略 editor，同 `context::policy()`；作用于 `respond()` 交付、流式提交与隧道/WebSocket 接受头 |
+| `response(head = {})` | 流式响应（`response_stream_writer`）：提交、写正文、以可选 Trailer 结束；`head`（`response_options`）在提交前应用到待提交头，提交后传非默认值抛 `std::logic_error` |
+| `co_await file(options, head = {})` / `static_file(root, options, head = {})` | 复用 `context` 文件工厂，返回完整 `http_response`；选项在调用返回前拥有化，静态根借用至任务完成，禁止传入临时根 |
+| `respond(http_response)` | 接管响应的状态、首部、Cookie 与正文/文件，在回调返回后发送；不立即提交到线面 |
 | `tunnel_requested()` | CONNECT / 扩展 CONNECT（RFC 9110 §9.3.6、RFC 8441、RFC 9220），或无正文且提供 `Upgrade` 的 HTTP/1.1 请求（RFC 9110 §7.8）时为 `true` |
 | `co_await accept_tunnel(status = http_status::ok, config = {})` | 提交成功头并返回 `http_tunnel*`：CONNECT 须为 2xx，HTTP/1.1 Upgrade 须为 `101`；`101` 只能选择客户端提供的协议。非隧道请求或响应已提交时抛 `std::logic_error`。`config` 为 `http_tunnel_route_config`，复用路由隧道的协商校验 |
 | `co_await accept_websocket(config = {})` | 对提供 WebSocket Upgrade / Extended CONNECT 的请求执行正常握手，返回 `websocket_accept_result`：`session()` 为借用的 `websocket*`；握手拒绝时 `rejection()` 给出所选错误响应的 `status_` 与失败检查 `code_`（如缺失或不支持版本为 `400` / `unsupported_websocket_version`），该响应在回调返回后发出并按此状态记入访问日志 |
@@ -505,11 +492,22 @@ ruvia::app()
 
 外部项目通过 `http_server(event_loop, http_server_callbacks, server_config = {})` 复用入站驱动，不创建 `application`、不接触全局控制器注册表、不接管进程信号。链接 `ruvia::web`；事件循环可来自 `event_loop_pool` 或 `attach_event_loop()`。
 
+三种宿主的生命周期动词一致（参照 Go `net/http.Server` 的 `Close` / `Shutdown`）：
+
+| 角色 | `application` | `http_server` | `http_server_group` |
+| --- | --- | --- | --- |
+| 绑定并开始服务 | `run()`（= start + 阻塞，可重复运行） | `co_await start()` | `co_await start(caller)` |
+| 请求停止（任意线程） | `stop()`（停机态锁存到下次 `run()`） | `stop()` | `stop()` |
+| 等待完全退役 | `run()` 返回 | `co_await shutdown()` | `co_await shutdown(caller)` |
+
+- **无排空**：`shutdown()` 先请求 `stop()`，直接断连后等待回收，不发 GOAWAY 等待在途请求（比 Go `Shutdown` 更接近 `Close` + 等待）。
+- **监听控制**：`application` 与 `http_server_group` 继承同一 `listener_controls`，签名与语义一致；单循环 `http_server` 绑定所属循环、不带 `caller`，`remove_listener` / `close_connection` / `duplicate_listener_sockets` / `adopt` 同步执行（可在不可挂起的回调中调用，`adopt` 不为每连接分配协程帧）。
+
 | 方法 | 契约 |
 | --- | --- |
 | `listen(config)` | 仅在 `start()` 前暂存配置，不读取凭据；接受 `request_stream` / `connection` 分发及 TLS、HTTP/3、继承 socket |
 | `co_await add_listener(config)` | 运行期原子新增；候选准备失败完整回滚 |
-| `co_await prepare_listener(config)` / `prepare_listeners(configs)` | 分阶段准备单项或整批监听；票据契约见“监听准备与激活” |
+| `co_await prepare_listeners(configs)` | 分阶段准备整批监听（单项用单元素 span）；票据契约见“监听准备与激活” |
 | `co_await add_connection_service(config)` | 启动前或运行期异步准备不绑定监听 socket 的 TCP/TLS 服务，供外部 Acceptor 交接 |
 | `adopt(endpoint, native_socket, adopt_options = {})` | 接管已连接 socket，失败也关闭句柄；首次绑定当前循环，执行相同的 PROXY、TLS、HTTP、预算、超时与回收主链 |
 | `trusted_proxies(config)` | 启动前原子替换可信代理集合，默认不信任转发头；非法 CIDR 不改变原配置 |
@@ -518,7 +516,7 @@ ruvia::app()
 | `co_await replace_tls_identities(endpoint, config)` | 异步准备并替换 TLS 身份，保持既有客户端证书策略与记录上限 |
 | `close_connection(id)` | 按 ID 请求整连接关闭，控制边界见 [1.6](#16-连接观察钩子server_observationh) |
 | `duplicate_listener_sockets(endpoint)` | POSIX 上复制监听句柄，交接契约同应用入口 |
-| `close()` / `co_await shutdown()` | 立即断开、不提供 GOAWAY 后等待在途请求的排空模式；前者任意线程请求关闭，后者在所属循环等待全部会话与后台操作回收，不停止循环或其他宿主 |
+| `stop()` / `co_await shutdown()` | 立即断开、不提供 GOAWAY 后等待在途请求的排空模式；前者任意线程请求停止，后者在所属循环请求停止并等待全部会话与后台操作回收，不停止循环或其他宿主 |
 | `worker()` / `stats()` | 核心 worker 与宿主统计；统计可跨线程读取 |
 
 ```cpp
@@ -545,9 +543,9 @@ ruvia::task<void> serve(ruvia::event_loop loop, ruvia::stop_token stop) {
 }
 ```
 
-- **线程归属**：除 `close()`、析构与 `stats()` 外，操作均在绑定循环执行；`server_config` 的调度字段由外部循环负责，其余限额作用于该宿主的单 worker。
+- **线程归属**：除 `stop()`、析构与 `stats()` 外，操作均在绑定循环执行；`server_config` 的调度字段由外部循环负责，其余限额作用于该宿主的单 worker。
 - **原生接管**：外部服务不接收 HTTP/3、继承监听 socket 或自动重定向配置；Windows 的接管 socket 不得已绑定其他 IOCP，绑定监听仍复用独立原生 Acceptor。
-- **销毁边界**：析构仅请求关闭；调用方须继续驱动循环，直到 `shutdown()` 完成或循环自身的停止回调完成 join。
+- **销毁边界**：析构仅请求 `stop()`；调用方须继续驱动循环，直到 `shutdown()` 完成或循环自身的停止回调完成 join。
 - **出站与状态**：同循环的 `http_client`、`db_client`、`redis_client` 及 per-worker 状态由调用方拥有，经 `router` 的 `bind_*` 入口借给路由请求，使 `c.redis()` / `c.db()` / `c.client()` / `c.worker_state<T>()` 及 `session_middleware`、CSRF 等内置中间件可用，见 [1.11](#111-显式路由组合routerh)。
 - **表示策略**：构造参数 `server_config` 的 `compression_` / `cors_` 生效，范围见 [1.2](#压缩cors-与可信代理配置)。
 - **异步准备**：TLS 凭据、CA 与上下文准备需要所属循环显式借用 `blocking_pool`；缺池或拒绝准入时传播失败，不退回 worker 同步执行。纯明文服务不要求池。冷任务返回前拥有配置、敏感输入与继承 socket；丢弃未等待的任务也会释放它们。
@@ -563,20 +561,18 @@ ruvia::task<void> serve(ruvia::event_loop loop, ruvia::stop_token stop) {
 
 #### 多循环共享服务
 
-`http_server_group(span<const event_loop>, callbacks, config = {})` 将同一服务部署到调用方提供的多个循环，复用上述监听、接管及协议能力，不创建业务线程。
+`http_server_group(span<const event_loop>, http_server_callbacks_factory, config = {})` 将同一服务部署到调用方提供的多个循环，复用上述监听、接管及协议能力，不创建业务线程。工厂在各成员循环上逐个构造该成员的 `http_server_callbacks`；全部成员须设置相同的回调成员（含 `http3_frame_` / `http3_field_`，比较有无而非目标），否则 `start()` / 首次 `add_connection_service()` 抛 `std::invalid_argument`。
 
 | 入口 / 边界 | 契约 |
 | --- | --- |
 | `listen()` / `trusted_proxies()` | 启动前纯配置，可在循环尚未驱动时调用；运行后用异步新增入口 |
 | `co_await start(caller)` / `co_await shutdown(caller)` | 在显式 `caller` 的 worker 上等待；允许成员 worker 发起，调用方须持续驱动全部存活循环 |
-| `co_await add_listener(caller, config)` / `add_connection_service(caller, config)` | 前者运行期新增监听；后者启动前或运行期准备外部接管服务；失败整组回滚 |
-| `co_await prepare_listener(caller, config)` / `prepare_listeners(caller, configs)` | 整组、整批准备成功后返回一张票据；先发布业务配置，再激活 |
-| `co_await remove_listener(caller, endpoint, options = {})` / `replace_tls_identities(caller, endpoint, config)` / `duplicate_listener_sockets(caller, endpoint)` | 异步跨成员控制；POSIX 复制结果保持 worker 顺序 |
+| `co_await add_connection_service(caller, config)` | 启动前或运行期准备外部接管服务；失败整组回滚 |
+| 继承自 `listener_controls` | `add_listener`、`prepare_listeners`、`remove_listener`、`wait_connections_closed`、`replace_tls_identities`、`close_connection`、`duplicate_listener_sockets`、`stats`，与 `application` 同一签名；异步跨成员控制，POSIX 复制结果保持 worker 顺序 |
 | `co_await adopt(caller, worker_index, endpoint, socket)` | 显式指定接管 worker，冷任务即拥有 socket，失败或丢弃也关闭句柄 |
-| `co_await close_connection(caller, id)` | 按 ID 请求整连接关闭，返回值契约见 [1.6](#16-连接观察钩子server_observationh) |
-| `worker_count()` / `worker(index)` / `stats()` | 查询实际成员与汇总统计，限额仍逐 worker 执行 |
+| `worker_count()` / `worker(index)` | 查询实际成员，限额仍逐 worker 执行 |
 | 共享状态 | 同一监听器的 TLS 票据密钥、QUIC secret 与 CID 目录服务级共享；Windows 共用一个原生 Acceptor |
-| 关闭与退役 | `close()` 任意线程请求立即断连，不提供排空模式、不停止外部循环；任一成员退役或发生致命驱动故障时关闭整组，收束全部连接及在途操作 |
+| 停止与退役 | `stop()` 任意线程请求立即断连，不提供排空模式、不停止外部循环；任一成员退役或发生致命驱动故障时停止整组，收束全部连接及在途操作 |
 
 ```cpp
 #include <array>
@@ -587,7 +583,9 @@ ruvia::task<void> serve(ruvia::event_loop loop, ruvia::stop_token stop) {
 int main() {
     ruvia::event_loop_pool runtime({.loop_count_ = 2});
     const std::array loops{runtime.loop(0), runtime.loop(1)};
-    ruvia::http_server_group server(loops, {.request_stream_ = &answer});
+    ruvia::http_server_group server(loops, [](const ruvia::worker_ref&) {
+        return ruvia::http_server_callbacks{.request_stream_ = &answer};
+    });
     server.listen({.address_ = "127.0.0.1", .http_ = 8080,
         .dispatch_ = ruvia::listener_dispatch::request_stream});
     runtime.start();
@@ -747,10 +745,10 @@ WebSocket 处理器通过 `c.websocket()` 获取连接（`"websocket.h"`）。�
 | `c.req().path()` / `c.req().target()` / `c.req().route_path()` | 请求路径、原始请求目标与命中的注册路由模式 |
 | `c.req().scheme()` / `c.req().authority()` / `c.req().protocol_version()` | 请求 scheme、authority 与协议版本（`http10` / `http11` / `http2`） |
 | `c.req().param(name)` / `c.req().param<T>(name)` / `c.req().param_fields()` | 获取路径参数字符串视图、类型化解析标量值（整数或 `bool`，缺失返回 `std::nullopt`，格式非法自动抛 HTTP 400）或参数列表 |
-| `c.req().query(name)` / `c.req().query<T>(name)` / `c.req().queries(name)` / `c.req().query_fields()` | 获取单个/类型化/多个同名 URL 查询参数（已自动 URL 解码） |
-| `c.req().header(name)` / `c.req().header_fields()` | 大小写不敏感读取请求头 |
-| `c.req().cookie(name)` / `c.req().signed_cookie({.name_ = ..., .secret_ = ...})` | 读取普通 Cookie（同名取最后一个），或验证 HMAC 签名并提取 Cookie 原值；`signed_cookie` 按 `unique_cookie` 查找，同名 Cookie 出现两次及以上时不选取任一出现，验证失败返回 `std::nullopt` |
-| `c.req().cookie_fields()` | 返回保留重复项与请求顺序的只读 `request_name_value_list`；名称区分大小写，`get(name)` 取最后一个同名值，`unique(name)` 返回 `request_field_lookup`（`status_` 为 `unique_lookup_status::absent` / `found` / `repeated`，仅 `found` 时 `value_` 有意义） |
+| `c.req().query(name)` / `c.req().query<T>(name)` / `c.req().queries(name)` / `c.req().query_fields()` | 获取单个（同名取第一个）/类型化/多个同名 URL 查询参数（已自动 URL 解码） |
+| `c.req().header(name)` / `c.req().header_fields()` | 大小写不敏感读取请求头；重复字段取第一行（规则见 [core-and-http](core-and-http.md)） |
+| `c.req().cookie(name)` / `c.req().signed_cookie({.name_ = ..., .secret_ = ...})` | 读取普通 Cookie（同名取第一个），或验证 HMAC 签名并提取 Cookie 原值；`signed_cookie` 按 `unique_cookie` 查找，同名 Cookie 出现两次及以上时不选取任一出现，验证失败返回 `std::nullopt` |
+| `c.req().cookie_fields()` | 返回保留重复项与请求顺序的只读 `request_name_value_list`；名称区分大小写，`get(name)` 取第一个同名值，`unique(name)` 返回 `http_unique_field_lookup`（`status_` 为 `unique_lookup_status::absent` / `found` / `repeated`，仅 `found` 时 `value_` 有意义） |
 | `c.req().unique_cookie(name)` / `c.req().unique_header(name)` | 唯一字段查找：同名 Cookie（跨所有 `Cookie` 字段行）或请求头出现两次及以上时返回 `repeated` 而不选取任一出现；用于会话 ID、CSRF 令牌等安全相关单值字段 |
 | `c.req().negotiate(type, supported)` | 在候选列表中按 `Accept*` 权重协商最佳匹配（单候选时 `has_value()` 即表示客户端接受该值） |
 | `co_await c.req().text(operation = {})` / `co_await c.req().bytes(operation = {})` | 读取完整缓冲请求体视图（`std::string_view` / `std::span<const std::byte>`） |
@@ -778,43 +776,38 @@ HTTP/1 定长正文已完整预读且无需内容解码时，缓冲读取直接�
 
 ```cpp
 ruvia::task<ruvia::http_response> handler(ruvia::context& c) {
-    c.draft().status(ruvia::http_status::created);
-    c.draft().header("X-Custom", "value");
-    c.draft().set_cookie({
-        .name_ = "theme",
-        .value_ = "dark",
-        .attributes_ = {
-            .path_ = "/",
-            .http_only_ = ruvia::cookie_attribute_policy::emit,
-        },
-    });
-
-    // 1. 静态字面量零拷贝响应：
-    // co_return c.text(ruvia::static_text("created\n"));
-
-    // 2. 构造动态字符串并零拷贝移动返回：
+    const std::array headers{ruvia::http_header_view{"X-Custom", "value"}};
+    const std::array cookies{
+        ruvia::set_cookie_options{.name_ = "theme", .value_ = "dark", .attributes_ = {.path_ = "/", .http_only_ = ruvia::cookie_attribute_policy::emit}},
+        ruvia::set_cookie_options{.name_ = "sid", .value_ = "v", .secret_ = "signing-secret"},              // HMAC 签名
+        ruvia::set_cookie_options{.name_ = "legacy", .attributes_ = {.max_age_ = std::chrono::seconds{0}}}, // 删除
+    };
+    // 静态字面量零拷贝：c.text(ruvia::static_text("created\n"), {...})
     std::string body("created\n");
-    co_return c.text(std::move(body));
+    co_return c.text(std::move(body), {.status_ = ruvia::http_status::created, .headers_ = headers, .cookies_ = cookies});
 }
 ```
 
 | `ruvia::context` 响应方法 | 说明 |
 | --- | --- |
-| `c.draft()` / `c.edit_response()` / `c.policy()` | 返回显式元数据 editor：分别编辑下一次构造的草稿、已选定的缓冲响应、跨替换的请求级响应策略 |
-| `editor.status(code)` / `header(name, value, options = {})` / `remove_header(name)` / `priority(fields)` | 设置 `200..599` 状态、响应头或 RFC 9218 优先级；头默认替换，可指定 `http_response_header_mode::append` |
-| `editor.set_cookie(options)` / `set_signed_cookie(options)` / `delete_cookie(options)` | 设置普通/HMAC 签名 Cookie 或用过去的 `Expires` 使其过期；`max_age_ = 0s` 同样使用过去的 `Expires`，并覆盖同时设置的 `expires_` |
-| `http_response text(...)` / `html(...)` / `body(...)` | 构造 `text/plain; charset=utf-8`、`text/html; charset=utf-8` 或原始响应体（支持字符串字面量、`std::string_view`、`std::string&&`、`std::span<const std::byte>`、`ruvia::static_text`） |
-| `template <typename T> http_response json(const T& value)` | 将 `RUVIA_MODEL` 或模型数组（`ruvia::array<T>` / `boxed_array<T>`）序列化为 `application/json` 响应 |
-| `http_response redirect(redirect_response_options options)` | 构造重定向响应（默认 `302 Found`）；绝对或 `//` 开头的 Location authority 含 `\` 时抛 `std::invalid_argument`，避免浏览器把反斜杠当路径分隔符而改变主机 |
-| `task<http_response> file(file_response_options options)` | 在阻塞池上打开磁盘文件并构造响应（`co_return co_await c.file(...)`），支持 Range 与条件请求；任务完成时状态、校验器、长度与打开的句柄均已确定 |
-| `task<http_response> static_file(const static_root& root, static_file_response_options options)` | 从预构建的 `static_root` 快照构造响应（`co_await`）；文件型条目在阻塞池上于根目录之下打开 |
-| `http_response error(http_error_info_options options) const` / `error(const http_error_info& info) const` | 构造标准 JSON 错误响应（传入 `http_error_info` 时自动保留 `validation_issues`） |
+| `response_options` | `status_`、`headers_`、`cookies_`、`priority_`，只由接收它的调用读取；`headers_` / `cookies_` 须为具名数组或 vector 左值（临时对象、初始化列表、临时 `std::string` 编译期拒绝） |
+| `http_response text(body, opts = {})` / `html(body, opts = {})` / `body(body, opts = {})` / `body(opts = {})` | 构造 `text/plain; charset=utf-8`、`text/html; charset=utf-8` 或原始响应体（支持字符串字面量、`std::string_view`、`std::string&&`、`std::span<const std::byte>`、`ruvia::static_text`） |
+| `template <typename T> http_response json(const T& value, opts = {})` | 将 `RUVIA_MODEL` 或模型数组（`ruvia::array<T>` / `boxed_array<T>`）序列化为 `application/json` 响应 |
+| `http_response redirect(redirect_response_options options, response_options extra = {})` | 构造重定向响应（默认 `302 Found`）；绝对或 `//` 开头的 Location authority 含 `\` 时抛 `std::invalid_argument`，避免浏览器把反斜杠当路径分隔符而改变主机 |
+| `task<http_response> file(file_response_options options, response_options head = {})` | 在阻塞池上打开磁盘文件并构造响应（`co_return co_await c.file(...)`），支持 Range 与条件请求；`head.status_` 为完整正文时的状态；任务完成时状态、校验器、长度与打开的句柄均已确定 |
+| `task<http_response> static_file(const static_root& root, static_file_response_options options, response_options head = {})` | 从预构建的 `static_root` 快照构造响应（`co_await`）；文件型条目在阻塞池上于根目录之下打开 |
+| `http_response error(info, response_options extra = {}) const` | 构造标准 JSON 错误响应（传入 `http_error_info` 时自动保留 `validation_issues`） |
 | `task<http_response> not_found()` | 调用当前匹配的 404 处理器生成响应 |
+| `c.edit_response()` / `c.policy()` | 显式元数据 editor：分别编辑已选定的缓冲响应、跨替换的请求级响应策略 |
+| `editor.status(code)` / `header(name, value, options = {})` / `remove_header(name)` / `priority(fields)` / `set_cookie(set_cookie_options)` | 设置 `200..599` 状态、响应头、RFC 9218 优先级或 Cookie；头默认替换，可指定 `http_response_header_mode::append` |
 | `void respond(http_response&&)` / `const http_response* response() const noexcept` / `bool committed() const noexcept` | 选择或替换尚未提交的缓冲响应 / 只读观察选定响应（不包含尚待应用的 policy，不是最终线上响应头） / 查询响应头或流升级是否已提交 |
 
-草稿字段只属于下一次成功的 `body/text/json/html/file/static_file/redirect` 构造；成功后草稿清空，构造失败则保留。`error()` 构造独立错误响应，不继承草稿。异常进入错误处理器前框架清空失败处理器的草稿，避免表示字段污染错误响应。
+- **首部合并**：`headers_` 中某名称首行替换 builder 已有同名字段，其后同名行追加（不分大小写）。
+- **拒绝规则**：builder 自己决定的字段由调用方提供时抛 `std::invalid_argument`：`redirect` 的 `extra.status_` 或 `Location`；`error` 的 `extra.status_` 或 `Content-Type`；健康/就绪响应的 `extra.status_`。
+- **Cookie**：`secret_` 非空写 HMAC 签名值，由 `c.req().signed_cookie()` 读回；`attributes_.max_age_ = 0s` 删除 Cookie（写过去的 `Expires`，并覆盖同时设置的 `expires_`）。
+- **流式头**：`c.stream(head)` / `stream_text(head)` / `stream_sse(head)` 把 `response_options` 应用到待提交头，默认值不做修改；提交后传非默认值抛 `std::logic_error`，失败不留下部分修改。`stream_text` 的 `Content-Type` 与 `X-Content-Type-Options` 仅在缺失时补默认值；`stream_sse` 的 `head` 含 `Content-Type` 抛 `std::invalid_argument`，`Cache-Control` 缺失时补 `no-cache`。
 
-`respond()` 只接管传入响应，不合并草稿或被替换响应。`edit_response()` 明确修改当前已选响应；没有响应时抛 `std::logic_error`。需要跨替换保留的字段必须显式写入 `policy()`：它在缓冲响应交付或流式提交时应用一次，**也适用于错误响应**。默认不覆盖状态，显式 `policy().status(...)` 则连错误状态也覆盖；不要把表示相关的 `Content-Range`、`ETag` 等放入通用策略。安全头中间件以默认/覆盖策略保留配置的冲突规则，session 与 CSRF Cookie 使用明确的请求级策略，不依赖 `next()` 前后时机。所有 editor（包括此前保存的 editor）在流式提交后修改均抛 `std::logic_error`。
+每次构造只带本次 options，不继承其他响应。`respond()` 只接管传入响应，不合并被替换响应。`edit_response()` 明确修改当前已选响应；没有响应时抛 `std::logic_error`。需要跨替换保留的字段（如中间件在 `next()` 前设置的头）必须写入 `policy()`：它在缓冲响应交付、流式提交或升级握手时应用一次，同名字段替换处理器的值，**也适用于错误响应**。默认不覆盖状态，显式 `policy().status(...)` 则连错误状态也覆盖；不要把表示相关的 `Content-Range`、`ETag` 等放入通用策略。安全头中间件以默认/覆盖策略保留配置的冲突规则，session 与 CSRF Cookie 使用明确的请求级策略，不依赖 `next()` 前后时机。所有 editor（包括此前保存的 editor）在流式提交后修改均抛 `std::logic_error`。
 
 ### 3.3 进程内子请求（`"context.h"`）
 
@@ -906,7 +899,7 @@ const auto& user = c.request_state<current_user>();
 | `ruvia::security_headers_middleware` (`"security_middleware.h"`) | 不依赖 Session 或 Redis；注入 `X-Content-Type-Options`、`X-Frame-Options`、`Content-Security-Policy`、`Referrer-Policy`、`Permissions-Policy` 等安全响应头，对 404 同样生效；`Strict-Transport-Security` 仅在 HTTPS 下发出 |
 | `ruvia::csrf_protection` (`"security_middleware.h"`) | 基于 Double-Submit Cookie（默认 Cookie `"XSRF-TOKEN"` 与请求头 `"X-XSRF-TOKEN"`）的无状态 CSRF 防护中间件；令牌 Cookie 或请求头重复出现视同缺失；校验失败抛出 `http_error`（`403` / `csrf_token_mismatch`），经 `on_error` 应答 |
 | `ruvia::session_middleware` (`"session.h"`, 需 `RUVIA_ENABLE_REDIS`) | 基于 Redis 的服务端会话中间件；会话 Cookie 重复出现视同缺失（不加载任一会话，写入时签发新 ID）；路由中通过 `c.session().payload()`、`c.session().set(...)`、`c.session().regenerate()`、`c.session().clear()` 管理会话；`redis_alias_` 经 `c.redis(alias)` 解析，应用宿主取 `application::redis()` 注册，独立宿主取 `router::bind_redis()` 借入 |
-| `ruvia::make_health_response` / `make_readiness_response` (`"context.h"`) | 生成标准健康检查（`200 OK`）与就绪探针响应（`readiness_state::ready` 返回 `200`，`unavailable` 返回 `503`） |
+| `ruvia::make_health_response(c, extra = {})` / `make_readiness_response(c, options = {}, extra = {})` (`"context.h"`) | 生成标准健康检查（`200 OK`）与就绪探针响应（`readiness_state::ready` 返回 `200`，`unavailable` 返回 `503`）；`extra` 为 `response_options`，含 `status_` 抛 `std::invalid_argument` |
 
 两级限流使用相同的地址身份规则：IPv4-mapped IPv6 与对应 IPv4 共用配额；不带 scope 的 IPv6 按 `/64` 网络前缀计数；带 scope 的 IPv6 按完整 128 位地址及数值 scope 计数，压缩、展开和大小写形式不会产生独立配额。不同 scope 保持隔离。地址仍由可信代理配置决定，限流计数仍归当前 worker。
 
@@ -1062,7 +1055,7 @@ Ruvia 提供三种静态文件服务方式：
 - **预读缓冲**：按需分配，以移动唯一所有权随读取状态转移，不复制缓冲字节。
 - **读取租约**：HTTP/2、HTTP/3 文件读取准入成功即交付移动唯一租约，正常或异常退出均自动归还槽位。
 
-响应头之前读取并校验首个文件范围（multipart 正文也一样，先于首个边界）。提交前失败时连接或流仍得到错误响应：文件被删除、替换或改写、读取出错返回 `500 file_read_failed`；读取未完成（阻塞池队列满、未配置阻塞池、超过 `write_timeout_`）返回 `503 file_read_unavailable`；HTTP/1 随后关闭连接，HTTP/2 只结束该流（响应头已发出后则以 `RST_STREAM(INTERNAL_ERROR)` 结束）。`c.file()` / `c.static_file()` 的打开未完成时同样以 `503 file_read_unavailable` 回答：`co_await` 抛出该 `http_error`，经错误处理器得到响应。真实故障（I/O 错误、句柄耗尽、打开或读取超时、缺少阻塞池）经连接故障通道报告（`on_connection_failure()` 回调；未注册时走限流的未处理故障报告）；文件变化、队列满（计入 `blocking_pool_stats().rejected_`）与停机不报告。提交后失败按当前 HTTP 连接或流终止。resident 和已经复制到响应内的字节仍属于独立快照，不因后续磁盘变化失效。
+响应头之前读取并校验首个文件范围（multipart 正文也一样，先于首个边界）。提交前失败时连接或流仍得到错误响应：文件被删除、替换或改写、读取出错返回 `500 file_read_failed`；读取未完成（阻塞池队列满、未配置阻塞池、超过 `write_timeout_`）返回 `503 file_read_unavailable`；HTTP/1 随后关闭连接，HTTP/2 只结束该流（响应头已发出后则以 `RST_STREAM(INTERNAL_ERROR)` 结束）。`c.file()` / `c.static_file()` 的打开未完成时同样以 `503 file_read_unavailable` 回答：`co_await` 抛出该 `http_error`，经错误处理器得到响应。真实故障（I/O 错误、句柄耗尽、打开或读取超时、缺少阻塞池）经连接故障通道报告（`http_server_callbacks::connection_failure_`；未设置时走限流的未处理故障报告）；文件变化、队列满（计入 `blocking_pool_stats().rejected_`）与停机不报告。提交后失败按当前 HTTP 连接或流终止。resident 和已经复制到响应内的字节仍属于独立快照，不因后续磁盘变化失效。
 
 HTTP/2 文件正文在 `HEADERS` 之前只打开并校验、不预读；之后每块只在对端授予发送窗口后读取，至多读取窗口大小，每个连接同时最多 4 个流占用阻塞池读取或持有读取缓冲，等待窗口的流不持有缓冲。
 

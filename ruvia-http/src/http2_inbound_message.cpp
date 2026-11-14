@@ -126,7 +126,7 @@ int http2_connection::on_begin_headers(const nghttp2_frame& frame) {
         // of every event the frame produces.
         publish_event(http2_event(http2_received_priority{.stream_id_ = static_cast<std::uint32_t>(frame.hd.stream_id), .stream_dependency_ = static_cast<std::uint32_t>(frame.headers.pri_spec.stream_id), .weight_ = static_cast<std::uint16_t>(frame.headers.pri_spec.weight), .exclusive_ = frame.headers.pri_spec.exclusive != 0}));
     }
-    if (role_ == http2_role::server) {
+    if (role_ == http_connection_role::server) {
         return begin_request_headers(frame);
     }
     return frame.hd.type == NGHTTP2_PUSH_PROMISE ? begin_push_promise(frame) : begin_response_headers(frame);
@@ -477,7 +477,7 @@ void http2_connection::cancel_push_promise_on(std::uint32_t associated_stream_id
 void http2_connection::emit_request_headers(http2_stream_state& stream) {
     // A later frame in the same input batch can close this stream before the
     // public request event acquires its lease. Keep that event's storage alive.
-    if (role_ == http2_role::server) {
+    if (role_ == http_connection_role::server) {
         if (!priorities_.empty()) {
             const auto priority = std::ranges::find_if(priorities_, [&stream](const auto& entry_value) noexcept {
                 return entry_value.stream_id_ == stream.id();
@@ -490,14 +490,14 @@ void http2_connection::emit_request_headers(http2_stream_state& stream) {
         pin_stream(stream.id());
     }
     const auto request_content_signal = stream.request_content_canceled() ? std::optional<http_client_request_content_signal>(http_client_request_content_signal::exchange_complete) : std::nullopt;
-    const bool body_open = !http2_remote_peer_half_closed(stream) && (role_ == http2_role::client || stream.tunnel().pending() == nullptr);
+    const bool body_open = !http2_remote_peer_half_closed(stream) && (role_ == http_connection_role::client || stream.tunnel().pending() == nullptr);
     publish_event(http2_event(http2_message_head_record{stream.id(), request_content_signal, body_open, http2_remote_peer_half_closed(stream)}));
-    if (role_ == http2_role::server && stream.tunnel().pending() != nullptr) {
+    if (role_ == http_connection_role::server && stream.tunnel().pending() != nullptr) {
         // CONNECT has no request content; the typed remote state owns any later
         // tunnel-end signal, so a generic message_end would be misleading.
         return;
     }
-    if (role_ == http2_role::client && stream.tunnel().open() != nullptr) {
+    if (role_ == http_connection_role::client && stream.tunnel().open() != nullptr) {
         if (http2_remote_peer_half_closed(stream)) {
             publish_event(http2_event(http2_tunnel_end_event(stream.id())));
         }

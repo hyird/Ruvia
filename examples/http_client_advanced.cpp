@@ -37,11 +37,12 @@ ruvia::task<void> follow_redirect(const ruvia::http_client_ref& origin) {
             std::cout << "redirected bytes=" << bytes_value.bytes().size() << '\n';
             co_return;
         }
-        const auto location = response.header("location");
-        if (!location) {
-            throw std::runtime_error("redirect has no Location");
+        // A repeated Location cannot be recovered interoperably (RFC 9110 section 10.2.2).
+        const auto location = response.unique_header("location");
+        if (location.status_ != ruvia::unique_lookup_status::found) {
+            throw std::runtime_error("redirect needs exactly one Location");
         }
-        auto destination = ruvia::resolve_http_client_redirect_target(origin.origin(), {.current_target_ = target, .location_ = *location});
+        auto destination = ruvia::resolve_http_client_redirect_target(origin.origin(), {.current_target_ = target, .location_ = location.value_});
         const auto* resolved = std::get_if<ruvia::http_client_resolved_redirect>(&destination);
         if (!resolved || resolved->cross_origin()) {
             // Origins are fixed at startup. Following another origin requires

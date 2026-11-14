@@ -13,6 +13,7 @@
 #include <openssl/bio.h>
 #include <openssl/ssl.h>
 
+#include "asio_completion.h"
 #include "connection_lifecycle.h"
 #include "task.h"
 #include "worker_ref.h"

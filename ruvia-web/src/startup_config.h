@@ -187,20 +187,8 @@ inline void ensure_non_zero_optional_port(const std::optional<port_number>& port
     }
 }
 
-template <typename rep_type, typename period_type>
-void ensure_positive_duration(std::chrono::duration<rep_type, period_type> value, const char* message) {
-    if (value.count() <= 0) {
-        throw std::invalid_argument(message);
-    }
-}
-
 inline void ensure_positive_duration(timeout_duration value, const char* message) {
-    ensure_positive_duration(value.value(), message);
-}
-
-template <typename rep_type, typename period_type>
-void ensure_positive_optional_duration(const std::optional<std::chrono::duration<rep_type, period_type>>& value, const char* message) {
-    if (value.has_value() && value->count() <= 0) {
+    if (value.value().count() <= 0) {
         throw std::invalid_argument(message);
     }
 }

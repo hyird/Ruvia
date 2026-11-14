@@ -24,6 +24,7 @@
 #include <asio/write.hpp>
 
 #include "app.h"
+#include "asio_completion.h"
 #include "blocking_pool.h"
 #include "context.h"
 #include "controller.h"
@@ -714,8 +715,7 @@ private:
 }
 
 ruvia::task<ruvia::http_response> route_shapes_api_miss(ruvia::context& c) {
-    c.draft().status(ruvia::http_status::not_found);
-    co_return c.body("api-miss");
+    co_return c.body("api-miss", {.status_ = ruvia::http_status::not_found});
 }
 
 }  // namespace

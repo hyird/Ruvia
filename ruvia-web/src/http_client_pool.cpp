@@ -327,17 +327,18 @@ task<void> http_client_pool::refresh_dns(operation_options options) {
         }
     } lease{*this};
     client_host_resolver resolver(worker_);
-    stop_group cancellation(dns_stop_.token(), options.stop_token_);
+    const linked_operation_options linked(options, dns_stop_.token());
+    const stop_token& cancellation = linked.options().stop_token_;
     const operation_deadline timeout(options.timeout_.has_value() ? options.timeout_ : std::optional{config_.connect_timeout_});
     const auto revision = dns_revision_;
-    auto pending = resolver.resolve(config_.dial_host_, config_.dial_port_, timeout, cancellation.token());
+    auto pending = resolver.resolve(config_.dial_host_, config_.dial_port_, timeout, cancellation);
     client_resolve_result result;
     if (auto* immediate = std::get_if<client_resolve_result>(&pending)) {
         result = std::move(*immediate);
     } else {
         result = co_await std::move(std::get<task<client_resolve_result>>(pending));
     }
-    if (cancellation.token().stop_requested()) {
+    if (cancellation.stop_requested()) {
         throw http_client_error(std::make_error_code(std::errc::operation_canceled), "HTTP DNS refresh cancelled");
     }
     if (timeout.expired()) {
@@ -1112,10 +1113,9 @@ task<void> http_client_pool::execute_request_into(http_client_request_storage re
     } route_binding_value{*state_value};
     state_value->route_ = &request.route();
     const operation_deadline timeout(options.timeout_.has_value() ? options.timeout_ : config_.request_timeout_);
-    const std::array stop_tokens{request.host_stop(), options.stop_token_, dns_stop_.token()};
-    stop_group cancellation(stop_tokens);
-    options.stop_token_ = cancellation.token();
-    state_value->informational_stop_ = options.stop_token_;
+    const linked_operation_options linked(options, request.host_stop(), dns_stop_.token());
+    const stop_token& cancellation = linked.options().stop_token_;
+    state_value->informational_stop_ = cancellation;
     const auto acquire_timeout = timeout.constrained_by(state_value->effective_acquire_timeout_);
     if (requests_buffered_ >= config_.max_buffered_requests_) {
         ++failed_requests_;
@@ -1129,12 +1129,12 @@ task<void> http_client_pool::execute_request_into(http_client_request_storage re
             throw http_client_error(make_error_code(http_client_errc::protocol_unavailable), "HTTP Upgrade requires HTTP/1.1");
         }
 #ifdef RUVIA_ENABLE_HTTP3
-        if (co_await execute_http3(request, timeout, acquire_timeout, options.stop_token_, *state_value, admission)) {
+        if (co_await execute_http3(request, timeout, acquire_timeout, cancellation, *state_value, admission)) {
             ++completed_requests_;
             co_return;
         }
 #endif
-        co_await execute_tcp_request(request, timeout, acquire_timeout, options.stop_token_, *state_value, admission);
+        co_await execute_tcp_request(request, timeout, acquire_timeout, cancellation, *state_value, admission);
         ++completed_requests_;
     } catch (...) {
         ++failed_requests_;
@@ -1340,7 +1340,7 @@ void http_client_pool::release_response_data(http_client_response_state& state_v
         if (auto* const conn = find_http3_connection(state_value)) {
             conn->release_data(state_value);
         } else {
-            state_value.http3_data_credit_.reset();
+            state_value.data_credit_.reset();
         }
         return;
     }
@@ -1349,7 +1349,7 @@ void http_client_pool::release_response_data(http_client_response_state& state_v
     if (auto* const conn = find_connection(state_value)) {
         conn->release_response_data(state_value);
     } else {
-        state_value.http2_data_credit_.reset();
+        state_value.data_credit_.reset();
     }
 #else
     (void)state_value;
@@ -1682,9 +1682,9 @@ task<void> http_client_pool::migrate_http3(std::string local_address, std::uint1
         throw http_client_error(make_error_code(http_client_errc::closing), "HTTP client pool is closed");
     }
     const auto timeout = operation_deadline(config_.connect_timeout_).constrained_by(options.timeout_);
-    stop_group cancellation(host_stop, options.stop_token_);
-    options.stop_token_ = cancellation.token();
-    if (options.stop_token_.stop_requested()) {
+    const linked_operation_options linked(options, host_stop);
+    const stop_token& cancellation = linked.options().stop_token_;
+    if (cancellation.stop_requested()) {
         throw http_client_error(std::make_error_code(std::errc::operation_canceled), "HTTP/3 migration cancelled");
     }
     // Connections may be created or reclaimed while one migrates: each is
@@ -1698,7 +1698,7 @@ task<void> http_client_pool::migrate_http3(std::string local_address, std::uint1
     bool migrated = false;
     for (const auto& [index, serial] : active) {
         if (index < http3_connections_.size() && http3_connections_[index] && http3_connections_[index]->serial() == serial && http3_connections_[index]->active()) {
-            co_await http3_connections_[index]->migrate(local_address, port, timeout, options.stop_token_);
+            co_await http3_connections_[index]->migrate(local_address, port, timeout, cancellation);
             migrated = true;
         }
     }

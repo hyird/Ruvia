@@ -7,6 +7,7 @@
 // Use Ctrl+C to stop servers built with process signal handlers installed.
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -119,9 +120,8 @@ private:
         const auto body = co_await c.req().text();
         std::string owned;
         owned.assign(body.data(), body.size());
-        c.draft().status(ruvia::http_status::created);
-        c.draft().header("X-Echo", "true");
-        co_return c.text(std::move(owned));
+        const std::array headers{ruvia::http_header_view{"X-Echo", "true"}};
+        co_return c.text(std::move(owned), {.status_ = ruvia::http_status::created, .headers_ = headers});
     }
 
     ruvia::task<ruvia::http_response> redirect(ruvia::context& c) {
@@ -151,9 +151,8 @@ private:
     }
 
     ruvia::task<ruvia::http_response> options(ruvia::context& c) {
-        c.draft().status(ruvia::http_status::no_content);
-        c.draft().header("Allow", "GET, HEAD, OPTIONS");
-        co_return c.text("");
+        const std::array headers{ruvia::http_header_view{"Allow", "GET, HEAD, OPTIONS"}};
+        co_return c.text("", {.status_ = ruvia::http_status::no_content, .headers_ = headers});
     }
 
     ruvia::task<ruvia::http_response> admin_status(ruvia::context& c) {

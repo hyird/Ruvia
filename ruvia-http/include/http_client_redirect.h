@@ -20,20 +20,6 @@ namespace ruvia {
 // authorization, connection selection, and retries remain owned by the external
 // I/O runtime. The helpers only classify HTTP response fields, apply the RFC
 // method/content rewrite rules, and resolve one HTTP(S) URI-reference.
-enum class http_unique_header_status : std::uint8_t {
-    absent,
-    found,
-    repeated,
-};
-
-struct http_client_response_header_lookup final {
-    http_unique_header_status status_{};
-    std::string_view value_{};
-};
-
-[[nodiscard]] http_client_response_header_lookup lookup_unique_http_client_response_header(const http_client_response_head& head RUVIA_LIFETIMEBOUND, std::string_view name) noexcept;
-[[nodiscard]] http_client_response_header_lookup lookup_unique_http_client_response_header(const http_client_response_head&& head, std::string_view name) = delete;
-
 enum class http_client_redirect_content_disposition : std::uint8_t {
     preserve,
     // The I/O owner must omit both the representation and content-specific

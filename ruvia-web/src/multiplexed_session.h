@@ -473,7 +473,7 @@ public:
         }
     }
 
-    task<timer_sleep_result> sleep(std::chrono::milliseconds duration, const stop_token& stop_token_value) {
+    task<timer_sleep_result> sleep(timeout_duration duration, const stop_token& stop_token_value) {
         state_.ensure_body_allowed();
         // Connection termination wakes the sleep through the combined token and
         // then fails it; the caller's own stop still reports stop_requested.

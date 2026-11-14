@@ -56,7 +56,7 @@ struct http_request_access final {
 
     // Visits the value of every field line of known kind `name` in wire order and
     // returns false as soon as the visitor does. A non-repeated field is served
-    // from the cache; repeated fields scan only up to the cached last line.
+    // from the cache; repeated fields scan from the cached first line.
     template <typename visitor_type>
     static bool visit_known_headers(const http_request& request, http_field_kind name, visitor_type&& visitor) {
         const auto slot = known_header_slot(name);
@@ -64,14 +64,14 @@ struct http_request_access final {
             return true;
         }
         const auto headers = request.headers_.fields();
-        const std::size_t last_index = request.cached_headers_[slot];
-        if (last_index == 0 || last_index > headers.size()) {
+        const std::size_t first_index = request.cached_headers_[slot];
+        if (first_index == 0 || first_index > headers.size()) {
             return true;
         }
         if (!request.headers_.has_repeated_known_slot(slot)) {
-            return visitor(headers[last_index - 1].value());
+            return visitor(headers[first_index - 1].value());
         }
-        for (std::size_t i = 0; i < last_index; ++i) {
+        for (std::size_t i = first_index - 1; i < headers.size(); ++i) {
             if (request.headers_.kind_at(i) == name && !visitor(headers[i].value())) {
                 return false;
             }
@@ -131,10 +131,12 @@ struct http_request_access final {
         const auto known_slot = known_header_slot(kind);
         request.headers_.append(header_value, known_slot < cached_header_slots ? kind : http_field_kind::other);
         if (known_slot < cached_header_slots) {
+            // One-based index of the first occurrence: singular getters pick the first field line.
             if (request.cached_headers_[known_slot] != 0) {
                 request.headers_.mark_repeated_known_slot(known_slot);
+            } else {
+                request.cached_headers_[known_slot] = static_cast<std::uint16_t>(request.headers_.size());
             }
-            request.cached_headers_[known_slot] = static_cast<std::uint16_t>(request.headers_.size());
         }
         return true;
     }

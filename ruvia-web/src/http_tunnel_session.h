@@ -21,6 +21,7 @@
 #include <openssl/bio.h>
 #include <openssl/ssl.h>
 
+#include "asio_completion.h"
 #include "connection_scanner.h"
 #include "context.h"
 #include "context_access.h"

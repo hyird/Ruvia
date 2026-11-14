@@ -122,16 +122,16 @@ TEST(Ruvia, application_callback_replacement_retires_targets_outside_configurati
     int access_destroyed = 0;
     int failure_destroyed = 0;
     auto& app = ruvia::app();
-    app.on_access(querying_callback_target(access_destroyed));
-    app.on_access(querying_callback_target(access_destroyed));
+    const auto make = [&] {
+        return ruvia::http_server_callbacks{.access_ = querying_callback_target(access_destroyed), .connection_failure_ = querying_callback_target(failure_destroyed)};
+    };
+    app.callbacks(make());
+    app.callbacks(make());
+    // The whole previous set retires, every member after the lock.
     EXPECT_EQ(access_destroyed, 1);
-    app.on_access(nullptr);
-    EXPECT_EQ(access_destroyed, 2);
-
-    app.on_connection_failure(querying_callback_target(failure_destroyed));
-    app.on_connection_failure(querying_callback_target(failure_destroyed));
     EXPECT_EQ(failure_destroyed, 1);
-    app.on_connection_failure(nullptr);
+    app.callbacks({});
+    EXPECT_EQ(access_destroyed, 2);
     EXPECT_EQ(failure_destroyed, 2);
 }
 
@@ -530,8 +530,7 @@ public:
 class response_middleware final {
 public:
     ruvia::task<void> invoke(ruvia::context& c, ruvia::next&) {
-        c.draft().status(ruvia::http_status::accepted);
-        c.respond(c.text("returned by middleware"));
+        c.respond(c.text("returned by middleware", {.status_ = ruvia::http_status::accepted}));
         co_return;
     }
 };
@@ -634,8 +633,7 @@ TEST(Ruvia, route_rate_limit_rejection_reaches_the_error_handler) {
     int calls = 0;
     app.on_error([counter = &calls](ruvia::context& c, ruvia::http_error_info error) -> ruvia::task<ruvia::http_response> {
         ++*counter;
-        c.draft().status(error.status());
-        co_return c.text(error.code());
+        co_return c.text(error.code(), {.status_ = error.status()});
     });
     for (int i = 0; i < 10; ++i) {
         (void)app.request(ruvia::test_request::get("/route-config/limited"));

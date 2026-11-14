@@ -28,9 +28,8 @@
 RUVIA_MODEL(surface_json_message, RUVIA_OPTIONAL_FIELD(message, ruvia::string));
 
 ruvia::task<ruvia::http_response> surface_not_found(ruvia::context& c) {
-    c.draft().status(ruvia::http_status::not_found);
-    c.draft().header("X-Surface-Not-Found", "true");
-    co_return c.text("surface not found\n");
+    const std::array headers{ruvia::http_header_view{"X-Surface-Not-Found", "true"}};
+    co_return c.text("surface not found\n", {.status_ = ruvia::http_status::not_found, .headers_ = headers});
 }
 
 class surface_context_middleware final {
@@ -47,12 +46,13 @@ public:
             // The framework already mapped the failure to its status (400 for
             // malformed JSON, 415 for an unsupported content coding, a handler's
             // http_error); keep it. Without a mapped response it is a server fault.
-            // 替换从独立草稿构造；仅显式 policy 字段跨替换传播。
-            c.draft().status(downstream_response != nullptr ? downstream_response->status() : ruvia::http_status::internal_server_error);
-            c.draft().header("X-Surface-Error", "true");
-            c.draft().header("X-Surface-Error-Response", had_downstream_error_response ? "true" : "false");
-            c.draft().header("X-Surface-Error-Status", downstream_was_internal_error ? "internal-server-error" : "other");
-            c.respond(c.text("caught by middleware\n"));
+            // 替换只带本次 options；仅显式 policy 字段跨替换传播。
+            const std::array headers{
+                ruvia::http_header_view{"X-Surface-Error", "true"},
+                ruvia::http_header_view{"X-Surface-Error-Response", had_downstream_error_response ? "true" : "false"},
+                ruvia::http_header_view{"X-Surface-Error-Status", downstream_was_internal_error ? "internal-server-error" : "other"},
+            };
+            c.respond(c.text("caught by middleware\n", {.status_ = downstream_response != nullptr ? downstream_response->status() : ruvia::http_status::internal_server_error, .headers_ = headers}));
             co_return;
         }
         c.edit_response().header("X-Surface-Finalized", c.response() != nullptr ? "true" : "false");
@@ -63,8 +63,7 @@ public:
 class surface_return_middleware final {
 public:
     ruvia::task<void> invoke(ruvia::context& c, ruvia::next&) {
-        c.draft().status(ruvia::http_status::accepted);
-        c.respond(c.text("returned by middleware\n"));
+        c.respond(c.text("returned by middleware\n", {.status_ = ruvia::http_status::accepted}));
         co_return;
     }
 };
@@ -80,8 +79,8 @@ public:
 class surface_res_slot_only_middleware final {
 public:
     ruvia::task<void> invoke(ruvia::context& c, ruvia::next&) {
-        c.draft().header("X-Surface-Res-Slot-Only", "true");
-        c.respond(c.body());
+        const std::array headers{ruvia::http_header_view{"X-Surface-Res-Slot-Only", "true"}};
+        c.respond(c.body({.headers_ = headers}));
         co_return;
     }
 };
@@ -100,9 +99,7 @@ public:
     RUVIA_GET("/json-response", json_response);
     RUVIA_GET("/null-body", null_body);
     RUVIA_GET("/binary-body", binary_body);
-    RUVIA_GET("/header-remove", header_remove);
     RUVIA_GET("/redirect-unicode", redirect_unicode);
-    RUVIA_GET("/redirect-prepared-location", redirect_prepared_location);
     RUVIA_GET("/error", app_error);
     RUVIA_GET("/throw", throw_error);
     RUVIA_GET("/stream-throw", stream_throw);
@@ -110,7 +107,6 @@ public:
     RUVIA_GET("/middleware-return", middleware_return_handler, surface_return_middleware);
     RUVIA_GET("/pre-direct-res", pre_direct_response, surface_pre_direct_response_middleware);
     RUVIA_GET("/res-direct-buffered", direct_buffered_response);
-    RUVIA_GET("/res-remove-buffered", remove_buffered_response);
     RUVIA_GET("/res-assigned-prepared", assigned_prepared_response);
     RUVIA_POST("/multipart", buffered_multipart);
     RUVIA_POST("/bytes", bytes_body);
@@ -141,6 +137,7 @@ private:
         body.append(request.route_path());
         body.append("\nshortcut-header-host=");
         body.append(c.req().header("Host").value_or(""));
+        // Singular getters return the first of repeated field lines; unique_header() reports repeats.
         body.append("\nshortcut-header-x-dupe=");
         body.append(c.req().header("X-Dupe").value_or(""));
         body.append("\nrequest-header-x-dupe=");
@@ -182,11 +179,13 @@ private:
     }
 
     ruvia::task<ruvia::http_response> raw_body(ruvia::context& c) {
-        c.draft().status(ruvia::http_status::accepted);
-        c.draft().header("X-Raw", "first");
-        c.draft().header("X-Raw", "second", {.mode_ = ruvia::http_response_header_mode::append});
-        c.draft().header("X-Raw-Init", "true");
-        co_return c.body("raw body\n");
+        // 同名首行替换已有字段，其后同名行追加。
+        const std::array headers{
+            ruvia::http_header_view{"X-Raw", "first"},
+            ruvia::http_header_view{"X-Raw", "second"},
+            ruvia::http_header_view{"X-Raw-Init", "true"},
+        };
+        co_return c.body("raw body\n", {.status_ = ruvia::http_status::accepted, .headers_ = headers});
     }
 
     ruvia::task<ruvia::http_response> response_slot(ruvia::context& c) {
@@ -201,7 +200,6 @@ private:
     }
 
     ruvia::task<ruvia::http_response> res_slot_only(ruvia::context& c) {
-        c.draft().status(ruvia::http_status::internal_server_error);
         co_return c.text("handler should not run\n");
     }
 
@@ -216,33 +214,18 @@ private:
     }
 
     ruvia::task<ruvia::http_response> null_body(ruvia::context& c) {
-        c.draft().status(ruvia::http_status::accepted);
-        c.draft().header("X-Null-Body", "true");
-        co_return c.body();
+        const std::array headers{ruvia::http_header_view{"X-Null-Body", "true"}};
+        co_return c.body({.status_ = ruvia::http_status::accepted, .headers_ = headers});
     }
 
     ruvia::task<ruvia::http_response> binary_body(ruvia::context& c) {
         static constexpr std::array<std::byte, 3> bytes_value{std::byte{0x00}, std::byte{0x41}, std::byte{0xff}};
-        c.draft().header("X-Binary-Body", "true");
-        co_return c.body(std::span<const std::byte>(bytes_value));
-    }
-
-    ruvia::task<ruvia::http_response> header_remove(ruvia::context& c) {
-        c.draft().header("X-Remove-Me", "drop");
-        c.draft().header("X-Remove-Too", "drop");
-        c.draft().header("X-Keep-Me", "keep");
-        c.draft().remove_header("X-Remove-Me");
-        c.draft().remove_header("X-Remove-Too");
-        co_return c.text("header remove\n");
+        const std::array headers{ruvia::http_header_view{"X-Binary-Body", "true"}};
+        co_return c.body(std::span<const std::byte>(bytes_value), {.headers_ = headers});
     }
 
     ruvia::task<ruvia::http_response> redirect_unicode(ruvia::context& c) {
         co_return c.redirect({.location_ = "/目标?x=值", .status_ = ruvia::http_status::see_other});
-    }
-
-    ruvia::task<ruvia::http_response> redirect_prepared_location(ruvia::context& c) {
-        c.draft().header("Location", "/surface/wrong");
-        co_return c.redirect({.location_ = "/surface/right"});
     }
 
     ruvia::task<ruvia::http_response> app_error(ruvia::context& c) {
@@ -264,7 +247,6 @@ private:
     }
 
     ruvia::task<ruvia::http_response> middleware_return_handler(ruvia::context& c) {
-        c.draft().status(ruvia::http_status::internal_server_error);
         co_return c.text("handler should not run\n");
     }
 
@@ -273,14 +255,8 @@ private:
     }
 
     ruvia::task<ruvia::http_response> direct_buffered_response(ruvia::context& c) {
-        c.draft().header("X-Direct-Buffered", "true");
-        co_return c.body("direct buffered response\n");
-    }
-
-    ruvia::task<ruvia::http_response> remove_buffered_response(ruvia::context& c) {
-        c.draft().header("X-Remove-Buffered", "drop");
-        c.draft().remove_header("X-Remove-Buffered");
-        co_return c.body("removed buffered response\n");
+        const std::array headers{ruvia::http_header_view{"X-Direct-Buffered", "true"}};
+        co_return c.body("direct buffered response\n", {.headers_ = headers});
     }
 
     ruvia::task<ruvia::http_response> assigned_prepared_response(ruvia::context& c) {
@@ -337,8 +313,7 @@ private:
 
     ruvia::task<ruvia::http_response> discard(ruvia::context& c) {
         co_await c.req().discard_body();
-        c.draft().status(ruvia::http_status::no_content);
-        co_return c.text("");
+        co_return c.text("", {.status_ = ruvia::http_status::no_content});
     }
 
     ruvia::task<ruvia::http_response> replace_item(ruvia::context& c) {
@@ -372,36 +347,39 @@ private:
     }
 
     ruvia::task<ruvia::http_response> cookies(ruvia::context& c) {
-        c.draft().set_cookie({
-            .name_ = "session",
-            .value_ = "example",
-            .attributes_ = ruvia::cookie_options{
-                .same_site_ = ruvia::cookie_same_site::lax,
-                .max_age_ = std::chrono::seconds(3600),
-                .http_only_ = ruvia::cookie_attribute_policy::emit,
-            },
-        });
-        c.draft().set_cookie({.name_ = "theme", .value_ = "light"});
-        c.draft().set_cookie({
-            .name_ = "chip",
-            .value_ = "value",
-            .attributes_ = ruvia::cookie_options{
-                .same_site_ = ruvia::cookie_same_site::none,
-                .priority_ = ruvia::cookie_priority::high,
-                .expires_ = std::chrono::system_clock::now() + std::chrono::hours(1),
-                .prefix_ = ruvia::cookie_prefix::host,
-                .http_only_ = ruvia::cookie_attribute_policy::emit,
-                .secure_ = ruvia::cookie_attribute_policy::emit,
-                .partitioned_ = ruvia::cookie_attribute_policy::emit,
-            },
-        });
         const auto deleted = c.req().cookie("legacy-session");
-        c.draft().delete_cookie({.name_ = "legacy-session"});
+        const std::array cookies_value{
+            ruvia::set_cookie_options{
+                .name_ = "session",
+                .value_ = "example",
+                .attributes_ = ruvia::cookie_options{
+                    .same_site_ = ruvia::cookie_same_site::lax,
+                    .max_age_ = std::chrono::seconds(3600),
+                    .http_only_ = ruvia::cookie_attribute_policy::emit,
+                },
+            },
+            ruvia::set_cookie_options{.name_ = "theme", .value_ = "light"},
+            ruvia::set_cookie_options{
+                .name_ = "chip",
+                .value_ = "value",
+                .attributes_ = ruvia::cookie_options{
+                    .same_site_ = ruvia::cookie_same_site::none,
+                    .priority_ = ruvia::cookie_priority::high,
+                    .expires_ = std::chrono::system_clock::now() + std::chrono::hours(1),
+                    .prefix_ = ruvia::cookie_prefix::host,
+                    .http_only_ = ruvia::cookie_attribute_policy::emit,
+                    .secure_ = ruvia::cookie_attribute_policy::emit,
+                    .partitioned_ = ruvia::cookie_attribute_policy::emit,
+                },
+            },
+            // Max-Age=0 删除 Cookie。
+            ruvia::set_cookie_options{.name_ = "legacy-session", .attributes_ = ruvia::cookie_options{.max_age_ = std::chrono::seconds{0}}},
+        };
         std::string body;
         body.append("cookies set\nlegacy-session=");
         body.append(deleted.value_or(""));
         body.push_back('\n');
-        co_return c.text(std::move(body));
+        co_return c.text(std::move(body), {.cookies_ = cookies_value});
     }
 
     ruvia::task<ruvia::http_response> any_method(ruvia::context& c) {
@@ -424,7 +402,7 @@ private:
 
     ruvia::task<ruvia::http_response> signed_cookies(ruvia::context& c) {
         static constexpr std::string_view secret = "surface-signing-secret";
-        c.draft().set_signed_cookie({.name_ = "signed-session", .value_ = "signed-value", .secret_ = secret});
+        const std::array cookies_value{ruvia::set_cookie_options{.name_ = "signed-session", .value_ = "signed-value", .secret_ = secret}};
         const auto verified = c.req().signed_cookie({.name_ = "signed-session", .secret_ = secret});
         const auto absent = c.req().signed_cookie({.name_ = "absent", .secret_ = secret});
         std::string body;
@@ -433,7 +411,7 @@ private:
         body.append("\nabsent=");
         body.append(absent.has_value() ? "present" : "missing");
         body.push_back('\n');
-        co_return c.text(std::move(body));
+        co_return c.text(std::move(body), {.cookies_ = cookies_value});
     }
 
     ruvia::task<ruvia::http_response> manual_body(ruvia::context& c) {

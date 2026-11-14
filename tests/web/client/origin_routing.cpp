@@ -403,7 +403,7 @@ TEST(Ruvia, http_client_upgrade_on_a_negotiated_h2_origin_uses_an_http11_connect
         auto ordinary = co_await client.client().get("/ordinary").send();
         EXPECT_TRUE(ordinary.protocol_version() == ruvia::http_protocol_version::http2);
         (void)co_await ordinary.bytes();
-        auto upgraded = co_await client.client().get("/chat").header("Connection", "Upgrade").header("Upgrade", "chat").upgrade();
+        auto upgraded = co_await client.client().get("/chat").header("Connection", "Upgrade").header("Upgrade", "chat").connect();
         auto* tunnel = upgraded.tunnel();
         if (tunnel == nullptr) {
             ADD_FAILURE() << "Upgrade was not switched";
@@ -682,7 +682,7 @@ TEST(Ruvia, http_client_connection_limits_bound_open_and_idle_connections_withou
         auto waiting = handle.get("/late");
         waiting.configure({.timeouts_ = {.acquire_ = ruvia::http_client_timeout_override::after(50ms)}});
         try {
-            (void)co_await waiting.send();
+            (void)co_await std::move(waiting).send();
             ADD_FAILURE() << "admission beyond max_open_ succeeded";
         } catch (const std::system_error& error) {
             EXPECT_EQ(error.code(), std::errc::timed_out);
@@ -755,7 +755,7 @@ TEST(Ruvia, http_client_upgrade_tunnels_follow_their_own_idle_timeout) {
     config.request_timeout_ = 5s;
     run_client(io, attachment, {&peer}, config, [&](ruvia::http_client& client, const ruvia::worker_ref& worker) -> ruvia::task<void> {
         const auto upgrade = [&](ruvia::http_client_tunnel_config tunnel) {
-            return client.client().get("/chat").header("Connection", "Upgrade").header("Upgrade", "chat").upgrade(tunnel);
+            return client.client().get("/chat").header("Connection", "Upgrade").header("Upgrade", "chat").connect(tunnel);
         };
         {
             // Without an idle timeout, read_timeout_ no longer bounds the tunnel.
@@ -906,7 +906,7 @@ TEST(Ruvia, http_client_alias_without_a_fixed_origin_routes_each_request_to_its_
         };
         const auto fails_with = [&](ruvia::http_client_request request) -> ruvia::task<std::optional<std::error_code>> {
             try {
-                (void)co_await request.send();
+                (void)co_await std::move(request).send();
             } catch (const ruvia::http_client_error& error) {
                 co_return error.code();
             }
@@ -1154,6 +1154,33 @@ TEST(Ruvia, http_client_non_destructive_dns_resolution_preserves_active_connecti
         EXPECT_TRUE(second.connection_info().reused_);
         EXPECT_EQ(second.connection_info().peer_ip_.to_string(), "127.0.0.2");
         (void)co_await second.bytes();
+        lookups.join();
+    });
+}
+
+TEST(Ruvia, http_client_dns_resolution_keeps_the_tighter_of_relative_and_absolute_timeouts) {
+    using namespace origin_routing_tests;
+    ruvia::blocking_pool lookups({.thread_count_ = 1});
+    auto& io = ruvia::test::new_test_io_context();
+    auto attachment = ruvia::attach_event_loop(io, {.blocking_pool_ = &lookups});
+    routing_peer peer(io, nullptr, "0.0.0.0");
+    const std::string base_url = "http://localhost:" + std::to_string(peer.port());
+    const ruvia::http_client_config config{.base_url_ = base_url};
+    run_client(io, attachment, {&peer}, config, [&](ruvia::http_client& client, const ruvia::worker_ref&) -> ruvia::task<void> {
+        // Occupy the only lookup thread so the resolution can end only by its bound.
+        std::promise<void> release;
+        EXPECT_TRUE(lookups.submit([released = release.get_future()]() mutable {
+            (void)released.wait_for(5s);
+        }).accepted());
+        // A far absolute call deadline must not relax the tighter relative handle timeout.
+        std::optional<std::error_code> failure;
+        try {
+            (void)co_await client.client().with_options({.timeout_ = 200ms}).resolve_dns("localhost", {.timeout_ = ruvia::operation_timeout(std::chrono::steady_clock::now() + 1h)});
+        } catch (const ruvia::http_client_error& error) {
+            failure = error.code();
+        }
+        release.set_value();
+        EXPECT_EQ(failure, std::make_error_code(std::errc::timed_out));
         lookups.join();
     });
 }

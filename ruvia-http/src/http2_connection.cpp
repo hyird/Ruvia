@@ -191,11 +191,11 @@ nghttp2_ssize http2_connection::read_outbound_data(nghttp2_session*, std::int32_
     return static_cast<nghttp2_ssize>(copied);
 }
 
-http2_connection::http2_connection(http2_role role, const http2_connection_options& options) :
+http2_connection::http2_connection(http_connection_role role, const http2_connection_options& options) :
     memory_table_(make_c_library_mem_table<nghttp2_mem>(memory_)),
     role_(role) {
-    enable_push_ = role == http2_role::client && options.enable_push_;
-    receive_origin_advertisements_ = role == http2_role::client && options.receive_origin_advertisements_;
+    enable_push_ = role == http_connection_role::client && options.enable_push_;
+    receive_origin_advertisements_ = role == http_connection_role::client && options.receive_origin_advertisements_;
     receive_frame_metadata_ = options.receive_frame_metadata_;
     frame_observer_ = options.frame_observer_;
     header_observer_ = options.header_observer_;
@@ -270,7 +270,7 @@ void http2_connection::create_session() {
     }
 
     nghttp2_session* raw_session = nullptr;
-    const int result = role_ == http2_role::client ? nghttp2_session_client_new3(&raw_session, callbacks.get(), this, option.get(), &memory_table_) : nghttp2_session_server_new3(&raw_session, callbacks.get(), this, option.get(), &memory_table_);
+    const int result = role_ == http_connection_role::client ? nghttp2_session_client_new3(&raw_session, callbacks.get(), this, option.get(), &memory_table_) : nghttp2_session_server_new3(&raw_session, callbacks.get(), this, option.get(), &memory_table_);
     if (result == NGHTTP2_ERR_NOMEM) {
         memory_.rethrow_allocation_failure();
     }
@@ -568,7 +568,7 @@ int http2_connection::on_begin_frame(const nghttp2_frame_hd& header) {
     }
     switch (header.type) {
         case NGHTTP2_HEADERS:
-            if (role_ == http2_role::server && (header.stream_id & 1) != 0) {
+            if (role_ == http_connection_role::server && (header.stream_id & 1) != 0) {
                 highest_peer_stream_id_ = (std::max)(highest_peer_stream_id_, static_cast<std::uint32_t>(header.stream_id));
             }
             header_block_bytes_ = header.length;
@@ -601,7 +601,7 @@ int http2_connection::on_begin_frame(const nghttp2_frame_hd& header) {
 }
 
 int http2_connection::on_extension_chunk(const nghttp2_frame_hd& header, std::string_view data) {
-    if (role_ == http2_role::client && (header.type == static_cast<std::uint8_t>(http2_frame_type::alternative_service) || (header.type == static_cast<std::uint8_t>(http2_frame_type::origin) && receive_origin_advertisements_))) {
+    if (role_ == http_connection_role::client && (header.type == static_cast<std::uint8_t>(http2_frame_type::alternative_service) || (header.type == static_cast<std::uint8_t>(http2_frame_type::origin) && receive_origin_advertisements_))) {
         extension_payload_.append(data.data(), data.size());
     }
     return 0;
@@ -661,7 +661,7 @@ int http2_connection::on_frame_recv(const nghttp2_frame& frame) {
             break;
         case static_cast<std::uint8_t>(http2_frame_type::alternative_service):
         case static_cast<std::uint8_t>(http2_frame_type::origin):
-            if (role_ == http2_role::client && (frame.hd.type == static_cast<std::uint8_t>(http2_frame_type::alternative_service) || receive_origin_advertisements_)) {
+            if (role_ == http_connection_role::client && (frame.hd.type == static_cast<std::uint8_t>(http2_frame_type::alternative_service) || receive_origin_advertisements_)) {
                 on_advertisement_frame(frame.hd);
             }
             break;
@@ -723,7 +723,7 @@ void http2_connection::on_goaway_frame(const nghttp2_frame& frame) {
     // yet remain open and must be closed here.
     std::array<std::uint32_t, http2_stream_table::max_streams> unprocessed_stream_ids;
     std::size_t unprocessed_count = 0;
-    if (role_ == http2_role::client) {
+    if (role_ == http_connection_role::client) {
         bool response_started_above_last = false;
         streams_.for_each([&](http2_stream_state& stream) {
             if ((stream.id() & 1U) == 0 || stream.id() <= goaway.last_stream_id() || stream.is_aborted()) {
@@ -762,7 +762,7 @@ void http2_connection::on_goaway_frame(const nghttp2_frame& frame) {
     publish_event(http2_event(goaway));
     for (std::size_t i = 0; i < unprocessed_count; ++i) {
         const auto stream_id = unprocessed_stream_ids[i];
-        if (role_ == http2_role::server) {
+        if (role_ == http_connection_role::server) {
             (void)close_stream(stream_id, http2_stream_close_source::peer_goaway, goaway.error());
             continue;
         }
@@ -781,7 +781,7 @@ void http2_connection::on_advertisement_frame(const nghttp2_frame_hd& header) {
             http_clear_string_retaining_small(payload_);
         }
     } guard{extension_payload_};
-    if (role_ != http2_role::client) {
+    if (role_ != http_connection_role::client) {
         return;
     }
     const auto payload = std::span<const char>(extension_payload_.data(), extension_payload_.size());
@@ -861,7 +861,7 @@ void http2_connection::on_rst_stream_frame(const nghttp2_frame& frame) {
     // RFC 9113 §8.7: REFUSED_STREAM on a stream this client opened means the
     // server did no processing; the owner may replay the request. A refusal
     // after a response head contradicts that and stays a reset.
-    const bool refused_request = role_ == http2_role::client && error == http2_error_code::refused_stream && (stream_id & 1U) != 0 && stream != nullptr && stream->response_status() == nullptr && !stream->has_informational_response();
+    const bool refused_request = role_ == http_connection_role::client && error == http2_error_code::refused_stream && (stream_id & 1U) != 0 && stream != nullptr && stream->response_status() == nullptr && !stream->has_informational_response();
     if (stream != nullptr && !stream->is_aborted() && !http2_stream_is_closed(*stream)) {
         if (refused_request) {
             if (close_stream_impl(stream_id, http2_stream_close_source::peer, error, close_notification_type::owner_already_knows)) {
@@ -955,18 +955,21 @@ void http2_connection::submit_goaway(std::uint32_t last_stream_id) {
     check_nghttp2(nghttp2_submit_goaway(session_.get(), NGHTTP2_FLAG_NONE, static_cast<std::int32_t>(last_stream_id), NGHTTP2_NO_ERROR, reinterpret_cast<const std::uint8_t*>(http2_drain_debug.data()), http2_drain_debug.size()));
 }
 
-void http2_connection::begin_drain() {
+http_submit_status http2_connection::begin_drain() {
     // Graceful drain (RFC 9113 §6.8) without a connection error: established
     // streams keep running. A server first advertises 2^31-1 and keeps admitting
     // the streams the client may already have in flight; the final boundary
     // follows the ACK of a PING queued right behind that GOAWAY.
-    if (local_connection_state_.open() == nullptr) {
-        return;
+    if (local_connection_state_.fatal_failure() != nullptr) {
+        return http_submit_status::closed;
     }
-    if (role_ != http2_role::server) {
+    if (local_connection_state_.open() == nullptr) {
+        return http_submit_status::accepted;
+    }
+    if (role_ != http_connection_role::server) {
         begin_final_drain();
         flush_session();
-        return;
+        return http_submit_status::accepted;
     }
     // A client that ignores the first GOAWAY and withholds the ACK still cannot
     // extend the round trip indefinitely: one concurrency window of further
@@ -984,15 +987,20 @@ void http2_connection::begin_drain() {
     check_nghttp2(nghttp2_submit_ping(session_.get(), NGHTTP2_FLAG_NONE, reinterpret_cast<const std::uint8_t*>(http2_drain_ping_payload.data())));
     (void)local_connection_state_.begin_round_trip_drain(http2_max_stream_id, round_trip_limit);
     flush_session();
+    return http_submit_status::accepted;
 }
 
-void http2_connection::finish_drain() {
+http_submit_status http2_connection::finish_drain() {
+    if (local_connection_state_.fatal_failure() != nullptr) {
+        return http_submit_status::closed;
+    }
     if (local_connection_state_.open() != nullptr) {
         begin_final_drain();
     } else {
         finish_drain_round_trip();
     }
     flush_session();
+    return http_submit_status::accepted;
 }
 
 void http2_connection::begin_final_drain() {
@@ -1019,49 +1027,49 @@ void http2_connection::terminate(http2_error_code error) {
     flush_session();
 }
 
-http2_submit_status http2_connection::submit_ping() {
+http_submit_status http2_connection::submit_ping() {
     if (local_connection_state_.fatal_failure() != nullptr) {
-        return http2_submit_status::closed;
+        return http_submit_status::closed;
     }
     if (liveness_ping_outstanding_) {
-        return http2_submit_status::accepted;
+        return http_submit_status::accepted;
     }
     check_nghttp2(nghttp2_submit_ping(session_.get(), NGHTTP2_FLAG_NONE, reinterpret_cast<const std::uint8_t*>(http2_liveness_ping_payload.data())));
     liveness_ping_outstanding_ = true;
     flush_session();
-    return http2_submit_status::accepted;
+    return http_submit_status::accepted;
 }
 
-http2_submit_status http2_connection::submit_max_concurrent_streams(std::uint32_t limit) {
+http_submit_status http2_connection::submit_max_concurrent_streams(std::uint32_t limit) {
     if (local_connection_state_.fatal_failure() != nullptr) {
-        return http2_submit_status::closed;
+        return http_submit_status::closed;
     }
     if (limit > http2_local_settings::max_concurrent_streams) {
-        return http2_submit_status::invalid_message;
+        return http_submit_status::invalid_message;
     }
     const nghttp2_settings_entry entry{NGHTTP2_SETTINGS_MAX_CONCURRENT_STREAMS, limit};
     check_nghttp2(nghttp2_submit_settings(session_.get(), NGHTTP2_FLAG_NONE, &entry, 1));
     flush_session();
-    return http2_submit_status::accepted;
+    return http_submit_status::accepted;
 }
 
-http2_submit_status http2_connection::submit_priority_update(std::uint32_t stream_id, http_priority_fields fields_value) {
-    if (role_ != http2_role::client || local_connection_state_.open() == nullptr || stream_id == 0 || stream_id > http2_max_stream_id || ((stream_id & 1U) == 0 && stream_id > highest_peer_stream_id_)) {
-        return http2_submit_status::invalid_state;
+http_submit_status http2_connection::submit_priority_update(std::uint32_t stream_id, http_priority_fields fields_value) {
+    if (role_ != http_connection_role::client || local_connection_state_.open() == nullptr || stream_id == 0 || stream_id > http2_max_stream_id || ((stream_id & 1U) == 0 && stream_id > highest_peer_stream_id_)) {
+        return http_submit_status::invalid_state;
     }
     std::array<char, 32> encoded{};
     const auto size = encode_http_priority(encoded, fields_value);
     if (size.index() != 0) {
-        return http2_submit_status::invalid_message;
+        return http_submit_status::invalid_message;
     }
     // nghttp2 sends PRIORITY_UPDATE only to a peer that advertised
     // SETTINGS_NO_RFC7540_PRIORITIES=1 (RFC 9218 §2.1).
     if (peer_setting(NGHTTP2_SETTINGS_NO_RFC7540_PRIORITIES) == 0) {
-        return http2_submit_status::peer_capability_unavailable;
+        return http_submit_status::peer_capability_unavailable;
     }
     check_nghttp2(nghttp2_submit_priority_update(session_.get(), NGHTTP2_FLAG_NONE, static_cast<std::int32_t>(stream_id), reinterpret_cast<const std::uint8_t*>(encoded.data()), std::get<0>(size)));
     flush_session();
-    return http2_submit_status::accepted;
+    return http_submit_status::accepted;
 }
 
 std::uint32_t http2_connection::peer_setting(nghttp2_settings_id id) const noexcept {
@@ -1342,7 +1350,7 @@ http2_stream_state* http2_connection::create_stream(std::uint32_t stream_id) {
 }
 
 std::optional<http2_request_head_submit_error> http2_connection::local_request_admission_error() const noexcept {
-    if (role_ != http2_role::client) {
+    if (role_ != http_connection_role::client) {
         return http2_request_head_submit_error::invalid_state;
     }
     if (!started_) {
@@ -1391,7 +1399,7 @@ http2_stream_receive_status http2_connection::stream_receive_status(std::uint32_
 }
 
 std::optional<http2_server_request_view> http2_connection::server_request_view(std::uint32_t stream_id) const noexcept {
-    if (role_ != http2_role::server) {
+    if (role_ != http_connection_role::server) {
         return std::nullopt;
     }
     const auto* stream_state = streams_.find(stream_id);

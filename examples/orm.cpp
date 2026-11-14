@@ -37,17 +37,15 @@ RUVIA_DB_ENTITY(device, "orm_demo_device", RUVIA_DB_COLUMN(id, std::int64_t, db_
 RUVIA_DB_PROJECTION(device_summary, RUVIA_DB_COLUMN(id, std::int64_t), RUVIA_DB_COLUMN(label, std::string), RUVIA_DB_COLUMN(rank, std::int64_t))
 
 auto migrations() {
-    db_query expressions;
     db_schema schema({.driver_ = db_driver::postgresql});
     schema.create_table<device>({.if_not_exists_ = true});
     schema.create_index({.name_ = "orm_demo_device_labels", .table_ = device::table_name(), .keys_ = {{.column_ = "labels"}}, .if_not_exists_ = true, .method_ = db_index_method::gin});
 
     db_procedure version;
-    auto changed = expressions.binary(expressions.column("name", "new"), db_binary_operator::is_distinct_from, expressions.column("name", "old"));
-    version.begin_if(changed);
-    version.assign("new.revision", expressions.binary(expressions.column("revision", "old"), db_binary_operator::add, expressions.value(1)));
+    version.begin_if(db_expr::column("name", "new").is_distinct_from(db_expr::column("name", "old")));
+    version.assign("new.revision", db_expr::column("revision", "old") + 1);
     version.end_if();
-    version.return_value(expressions.column("new"));
+    version.return_value(db_expr::column("new"));
     schema.create_trigger_function("orm_demo_version", version, true);
     schema.drop_trigger(device::table_name(), "orm_demo_version", true);
     schema.create_trigger({.name_ = "orm_demo_version", .table_ = device::table_name(), .function_ = "orm_demo_version", .events_ = {db_trigger_event::update}});
@@ -65,9 +63,8 @@ task<void> demonstrate(db_client& db) {
     labels.emplace_back("telemetry");
     labels.emplace_back("zone-a");
     input.set<"labels">(std::move(labels));
-    const std::array<borrowed_text, 1> upsert_conflict_paths{"id"};
-    const db_upsert_options upsert_options{.conflict_paths_ = upsert_conflict_paths, .skip_update_if_no_values_changed_ = true};
-    co_await devices.upsert(input, upsert_options);
+    // The conflict target defaults to the primary key, as save() does.
+    co_await devices.upsert(input, {.skip_update_if_no_values_changed_ = true});
 
     const std::array<db_find_order, 1> find_order{{{"id", db_order_direction::asc}}};
     const db_find_options find_options{.where_ = device::column<"id">().between(1, 100) && device::column<"name">().like("%station%") && device::column<"labels">().array_contains({"telemetry"}), .order_ = find_order, .take_ = 20};
@@ -95,10 +92,9 @@ task<void> demonstrate(db_client& db) {
     auto [page, matching] = co_await builder.get_many_and_count();
     std::cout << "page=" << page.size() << ", matching=" << matching << '\n';
 
-    db_query expressions;
     auto summary = devices.query_builder("d");
-    const db_order_term summary_order[]{{expressions.column("id", "d")}};
-    summary.select({{"id"}, {"label", expressions.call("upper", {expressions.column("name", "d")})}, {"rank", expressions.over(expressions.call("row_number"), {.order_by_ = summary_order})}});
+    const db_order_term summary_order[]{{db_expr::column("id", "d")}};
+    summary.select({{"id"}, {"label", db_expr::call("upper", {db_expr::column("name", "d")})}, {"rank", db_expr::call("row_number").over({.order_by_ = summary_order})}});
     const auto summaries = co_await summary.get_many<device_summary>();
     for (const auto& item : summaries) {
         std::cout << item.get<"rank">() << ": " << item.get<"label">() << '\n';
@@ -106,7 +102,7 @@ task<void> demonstrate(db_client& db) {
     auto update_summary = devices.update_builder();
     update_summary.where(device::column<"id">() == 1)
         .set({
-            {"name", expressions.call("upper", {expressions.column("name")})},
+            {"name", db_expr::call("upper", {db_expr::column("name")})},
             device::column<"revision">() += 1,
         })
         .returning({{"id"}, device::column<"name">().as("label"), device::column<"revision">().as("rank")});

@@ -288,7 +288,7 @@ private:
     template <typename stream_type>
     task<http_connection_close> run_http2(stream_type& stream, tcp_socket_type& socket, context_services services);
 #endif
-    // A listener_dispatch::connection listener's connection: application::on_connection
+    // A listener_dispatch::connection listener's connection: the host's connection_ callback
     // owns it until its task completes. `fields` names everything but the
     // local endpoint, which this reads from `socket`.
     template <typename stream_type>

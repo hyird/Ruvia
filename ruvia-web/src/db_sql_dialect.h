@@ -167,7 +167,7 @@ inline void append_db_literal(std::string& output, const db_value& value, db_dri
 enum class db_sql_type_usage : std::uint8_t { column,
     cast };
 
-void append_db_expression(std::string& output, db_expression expression, db_driver driver);
+void append_db_expression(std::string& output, const db_expr& expression, db_driver driver);
 
 template <typename contains_fn_type>
 [[nodiscard]] inline std::string_view select_db_dollar_delimiter(std::array<char, 32>& delimiter_buf, contains_fn_type&& contains_delimiter) noexcept {
@@ -230,7 +230,7 @@ inline void append_db_lock_table_statement(std::string& output, std::string_view
         output.append(" NOWAIT");
     }
 }
-inline void append_db_perform_statement(std::string& output, db_expression expression) {
+inline void append_db_perform_statement(std::string& output, const db_expr& expression) {
     output.append("PERFORM ");
     append_db_expression(output, expression, db_driver::postgresql);
 }

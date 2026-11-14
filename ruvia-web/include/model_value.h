@@ -19,19 +19,13 @@
 
 #include "binary_text_encoding.h"
 #include "borrowed_text.h"
+#include "http_header.h"
 
 // Model value types shared by RUVIA_MODEL, SQL entities and Redis entities.
 // Kept free of HTTP routing, validation and JSON so data-access headers do not
-// inherit them.
+// inherit them; only unique_lookup_status comes from http_header.h.
 
 namespace ruvia {
-
-// Outcome of looking up one name in a collection that permits repeated names
-// (request fields, JSON object members, SQL result columns). A repeated name
-// never resolves to one of its occurrences.
-enum class unique_lookup_status : unsigned char { absent,
-    found,
-    repeated };
 
 class bytes;
 }  // namespace ruvia

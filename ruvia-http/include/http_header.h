@@ -602,6 +602,63 @@ concept http_header_field = requires(const std::remove_reference_t<field_type>& 
 template <typename range_type>
 concept http_header_field_range = std::ranges::contiguous_range<const std::remove_cvref_t<range_type>> && http_header_field<std::ranges::range_reference_t<const std::remove_cvref_t<range_type>>>;
 
+// Outcome of looking up one name in a collection that permits repeated names
+// (received fields, JSON object members, SQL result columns). A repeated name
+// never resolves to one of its occurrences.
+enum class unique_lookup_status : unsigned char { absent,
+    found,
+    repeated };
+
+// Result of looking up a field that must not resolve to one of several
+// occurrences. value_ is meaningful only when found and borrows the searched
+// storage.
+struct http_unique_field_lookup final {
+    unique_lookup_status status_{unique_lookup_status::absent};
+    std::string_view value_{};
+
+    // absent -> found(value) -> repeated (value cleared); repeated is terminal.
+    constexpr void add_occurrence(std::string_view value) noexcept {
+        if (status_ == unique_lookup_status::absent) {
+            status_ = unique_lookup_status::found;
+            value_ = value;
+        } else {
+            status_ = unique_lookup_status::repeated;
+            value_ = {};
+        }
+    }
+};
+
+// Case-insensitive field-name match over received fields; stops at the second
+// occurrence. The found value borrows the fields' storage (`fields` may be a
+// temporary view such as a span).
+template <http_header_field_range range_type>
+[[nodiscard]] constexpr http_unique_field_lookup find_unique_http_header(const range_type& fields, std::string_view name) noexcept {
+    http_unique_field_lookup result;
+    for (const auto& field : fields) {
+        if (http_ascii_equals_ignore_case(field.name(), name)) {
+            result.add_occurrence(field.value());
+            if (result.status_ == unique_lookup_status::repeated) {
+                break;
+            }
+        }
+    }
+    return result;
+}
+
+namespace detail {
+// Singular convenience accessors over received fields select the first
+// matching field line (see doc/core-and-http.md) without copying its value.
+template <http_header_field_range range_type>
+[[nodiscard]] constexpr std::optional<std::string_view> find_first_http_header(const range_type& fields, std::string_view name) noexcept {
+    for (const auto& field : fields) {
+        if (http_ascii_equals_ignore_case(field.name(), name)) {
+            return std::string_view(field.value());
+        }
+    }
+    return std::nullopt;
+}
+}  // namespace detail
+
 namespace detail {
 class http_header_range_view;
 }  // namespace detail

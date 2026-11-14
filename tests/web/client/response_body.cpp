@@ -39,6 +39,7 @@
 #include <openssl/err.h>
 #include <openssl/ssl.h>
 
+#include "asio_completion.h"
 #include "blocking_pool.h"
 #include "content_decoding_fixture.h"
 #include "event_loop.h"
@@ -478,7 +479,7 @@ private:
                     ruvia::http_response response;
                     if (!streaming_request) {
                         const std::array fields{ruvia::http_header_view{"set-cookie", "informational=ignored; Path=/"}};
-                        if (connection.submit_interim_response_head(stream_id, ruvia::http_interim_response_head(ruvia::http_status::early_hints, fields)) != ruvia::http2_submit_status::accepted) {
+                        if (connection.submit_interim_response_head(stream_id, ruvia::http_interim_response_head(ruvia::http_status::early_hints, fields)) != ruvia::http_submit_status::accepted) {
                             throw std::runtime_error("cookie test interim head rejected");
                         }
                         response.header("set-cookie", "session=ready; Path=/");
@@ -2134,7 +2135,7 @@ TEST(Ruvia, http_client_tunnel_claims_output_when_started_and_retires_after_abor
         config.request_timeout_ = std::chrono::seconds(3);
         ruvia::http_client client(worker.attachment_.loop(), config);
         auto operation = [&]() -> ruvia::task<void> {
-            auto result = co_await client.client().connect("target.test:443").open();
+            auto result = co_await client.client().connect("target.test:443").connect();
             auto* tunnel = result.tunnel();
             EXPECT_TRUE(tunnel != nullptr);
             if (tunnel == nullptr) {

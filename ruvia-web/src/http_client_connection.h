@@ -264,7 +264,7 @@ private:
     [[nodiscard]] task<void> watch_idle_http1();
 #ifdef RUVIA_ENABLE_HTTP2
     void publish_http2_head(http2_stream& stream, http2_response_head_event& event);
-    void consume_http2_data(std::uint32_t stream_id, std::string_view bytes, http2_received_data_credit credit);
+    void consume_http2_data(std::uint32_t stream_id, std::string_view bytes, http_received_data_credit credit);
     void finish_http2_message(std::uint32_t stream_id, http2_message_end_event& end);
     [[nodiscard]] task<bool> send_http2_request_data(http2_stream& stream, std::string_view bytes, http2_end_stream end_stream, const http_client_output_queue* upload = nullptr);
     [[nodiscard]] task<void> stream_http2_upload(const http_client_request_storage& request, http2_stream& stream, http_client_output_queue& upload);

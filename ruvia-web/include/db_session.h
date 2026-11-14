@@ -25,6 +25,7 @@
 #include "fixed_string.h"
 #include "http_client_types.h"
 #include "model_value.h"
+#include "operation_options.h"
 #include "operation_scope.h"
 #include "stop_token.h"
 #include "task.h"
@@ -883,12 +884,16 @@ private:
     db_stream_result() noexcept = default;
     db_stream_result(detail::db_pool_ref_type client, std::size_t slot, std::vector<std::string> column_names, operation_options options);
     void reset() noexcept;
-    // `io_metrics` is the request's counter block, or null outside a request.
-    void bind_operation_scope(::ruvia::operation_scope& scope, detail::request_io_metrics* io_metrics) noexcept;
+    // `io_metrics` is the request's counter block, or null outside a request;
+    // `request_link` owns the user/request cancellation link of this stream, or
+    // is null when one token alone already cancels it.
+    void bind_operation_scope(::ruvia::operation_scope& scope, detail::request_io_metrics* io_metrics, std::unique_ptr<const linked_operation_options> request_link) noexcept;
     static void expire_capability(void* target) noexcept;
     static task<std::optional<db_row>> read_task(detail::request_io_metrics* io_metrics, operation_guard_type operation, std::vector<std::string>& column_names, operation_options operation_value);
     static task<void> close_task(detail::request_io_metrics* io_metrics, operation_guard_type operation, operation_options operation_value);
 
+    // Declared before state_: the lease token links through it until state_ dies.
+    std::unique_ptr<const linked_operation_options> request_link_;
     state_owner_type state_;
     detail::request_io_metrics* io_metrics_{nullptr};
     scoped_capability_registration registration_;
@@ -1303,12 +1308,14 @@ private:
     task<void> query_void_prepared(std::string_view sql, std::span<const db_value> params);
     task<bool> query_bool_prepared(std::string_view sql, std::span<const db_value> params);
     void reset() noexcept;
-    void bind_operation_scope(operation_scope& scope, detail::request_io_metrics* io_metrics) noexcept;
+    void bind_operation_scope(operation_scope& scope, detail::request_io_metrics* io_metrics, std::unique_ptr<const linked_operation_options> request_link) noexcept;
     static void expire_capability(void* target) noexcept;
 
     [[nodiscard]] detail::db_query_backend query_backend(const lease_type& lease) const;
     template <bool with_count>
     static task<std::conditional_t<with_count, std::pair<db_rows, db_rows>, db_rows>> query_plan_prepared(detail::db_query_plan plan, detail::db_query_backend backend, operation_guard_type operation);
+    // Declared before state_: the lease token links through it until state_ dies.
+    std::unique_ptr<const linked_operation_options> request_link_;
     state_owner_type state_;
     detail::request_io_metrics* io_metrics_{nullptr};
     scoped_capability_registration registration_;
@@ -1332,11 +1339,12 @@ public:
 
 private:
     friend class db_session;
-    db_query_result_cache(detail::db_query_cache_state& state_value, ::ruvia::operation_scope& scope, detail::request_io_metrics* io_metrics, operation_options options) noexcept;
+    db_query_result_cache(detail::db_query_cache_state& state_value, ::ruvia::operation_scope& scope, detail::request_io_metrics* io_metrics, operation_options options, stop_token request_stop) noexcept;
     static void expire_capability(void* target) noexcept;
     detail::db_query_cache_state* state_;
     detail::request_io_metrics* io_metrics_;
     operation_options options_;
+    stop_token request_stop_;
     scoped_capability_registration registration_;
 };
 #endif
@@ -1347,7 +1355,9 @@ public:
     db_session& operator=(const db_session&) = delete;
 
     // Inherits an empty token; a supplied state replaces user cancellation.
-    // Timeout can only tighten. Accumulation requires a caller-owned stop_group.
+    // Timeout can only tighten. Accumulate with linked_operation_options. A
+    // request-bound handle links the request's cancellation into every
+    // operation; with_options() cannot replace it.
     [[nodiscard]] db_session with_options(operation_options options) const;
     [[nodiscard]] const worker_ref& worker() const& RUVIA_LIFETIMEBOUND;
     const worker_ref& worker() const&& = delete;
@@ -1453,13 +1463,16 @@ private:
     // block, or null outside a request.
     db_session(detail::db_pool_ref_type client, operation_scope& operation_scope, detail::request_io_metrics* io_metrics, detail::db_query_cache_state* cache) noexcept;
     [[nodiscard]] detail::db_query_backend query_backend() const;
-    static task<db_stream_result> query_stream_prepared(detail::db_pool_ref_type client, std::string sql, std::vector<db_value> params, operation_scope& operation_scope, detail::request_io_metrics* io_metrics, operation_options options);
-    static task<db_transaction> begin_transaction_prepared(detail::db_query_backend backend, operation_scope& operation_scope, operation_options operation_options, db_transaction_options transaction_options);
+    static task<db_stream_result> query_stream_prepared(detail::db_pool_ref_type client, std::string sql, std::vector<db_value> params, operation_scope& operation_scope, detail::request_io_metrics* io_metrics, operation_options options, stop_token request_stop);
+    static task<db_transaction> begin_transaction_prepared(detail::db_query_backend backend, operation_scope& operation_scope, operation_options operation_options, stop_token request_stop, db_transaction_options transaction_options);
 
     detail::db_query_cache_state* cache_{nullptr};
     detail::db_pool_ref_type client_;
     detail::request_io_metrics* io_metrics_{nullptr};
     operation_options options_;
+    // The caller request's cancellation, linked into every operation; empty
+    // outside a request.
+    stop_token request_stop_;
     friend class detail::worker_client_registry_view;
     [[nodiscard]] db_session bind_caller_scope(::ruvia::operation_scope& scope, detail::request_io_metrics* io_metrics, const stop_token& stop_token_value) &&;
     static void expire_capability(void* target) noexcept;

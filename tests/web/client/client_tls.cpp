@@ -25,6 +25,7 @@
 #include <openssl/err.h>
 #include <openssl/ssl.h>
 
+#include "asio_completion.h"
 #include "content_decoding_fixture.h"
 #include "event_loop.h"
 #include "http1_server_response.h"
@@ -316,7 +317,7 @@ struct tunnel_peer final {
         unsigned completed = 0;
         bool failed = false;
         try {
-            auto result = co_await client.client().connect("target.test:443").open();
+            auto result = co_await client.client().connect("target.test:443").connect();
             auto tunnel = std::move(*result.tunnel());
             for (; completed != 64; ++completed) {
                 co_await tunnel.write("x");

@@ -85,8 +85,9 @@ public:
         owner.check(context);
         (void)co_await ruvia::sleep_for(context.worker(), 1ms, context.stop_token());
         owner.check(context);
-        context.draft().header("X-Connection-Worker", std::to_string(worker_id));
-        co_return context.text(std::move(body));
+        const std::string worker = std::to_string(worker_id);
+        const std::array headers{ruvia::http_header_view{"X-Connection-Worker", worker}};
+        co_return context.text(std::move(body), {.headers_ = headers});
     }
 };
 

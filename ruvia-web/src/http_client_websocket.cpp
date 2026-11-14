@@ -223,24 +223,24 @@ http_client_websocket_request::http_client_websocket_request(const http_client_r
     path_(path),
     headers_(),
     subprotocols_() {
-    require_open();
+    require_worker();
     if (!is_valid_http_origin_form_target(path_)) {
         throw std::invalid_argument("WebSocket path must use origin-form");
     }
 }
-void http_client_websocket_request::require_open() const {
+void http_client_websocket_request::require_worker() const {
     client_.registration_.require_active();
-    if (!client_.pool_->worker().is_current() || consumed_) {
-        throw std::logic_error("WebSocket builder is consumed or used outside its worker");
+    if (!client_.pool_->worker().is_current()) {
+        throw std::logic_error("WebSocket builder used outside its worker");
     }
 }
-http_client_websocket_request& http_client_websocket_request::header(std::string_view name, std::string_view value) {
-    require_open();
+http_client_websocket_request& http_client_websocket_request::header(std::string_view name, std::string_view value) & {
+    require_worker();
     headers_.emplace_back(name, value);
     return *this;
 }
-http_client_websocket_request& http_client_websocket_request::headers(std::span<const http_header_view> fields) {
-    require_open();
+http_client_websocket_request& http_client_websocket_request::headers(std::span<const http_header_view> fields) & {
+    require_worker();
     const auto old_size = headers_.size();
     headers_.reserve(old_size + fields.size());
     try {
@@ -255,38 +255,37 @@ http_client_websocket_request& http_client_websocket_request::headers(std::span<
     }
     return *this;
 }
-http_client_websocket_request& http_client_websocket_request::subprotocol(std::string_view value) {
-    require_open();
+http_client_websocket_request& http_client_websocket_request::subprotocol(std::string_view value) & {
+    require_worker();
     subprotocols_.emplace_back(value);
     return *this;
 }
-http_client_websocket_request& http_client_websocket_request::deflate(websocket_client_deflate_offer offer) {
-    require_open();
+http_client_websocket_request& http_client_websocket_request::deflate(websocket_client_deflate_offer offer) & {
+    require_worker();
     deflate_ = offer;
     return *this;
 }
-http_client_websocket_request& http_client_websocket_request::lifecycle(websocket_lifecycle_options options) {
-    require_open();
+http_client_websocket_request& http_client_websocket_request::lifecycle(websocket_lifecycle_options options) & {
+    require_worker();
     lifecycle_ = detail::normalize_websocket_lifecycle_options(options);
     return *this;
 }
-http_client_websocket_request& http_client_websocket_request::max_message_bytes(std::size_t limit) {
-    require_open();
+http_client_websocket_request& http_client_websocket_request::max_message_bytes(std::size_t limit) & {
+    require_worker();
     if (limit == 0) {
         throw std::invalid_argument("WebSocket message limit must be greater than zero");
     }
     max_message_bytes_ = limit;
     return *this;
 }
-http_client_websocket_request& http_client_websocket_request::configure(http_client_request_options options) {
-    require_open();
+http_client_websocket_request& http_client_websocket_request::configure(http_client_request_options options) & {
+    require_worker();
     detail::validate_http_client_request_options(options);
     request_options_ = std::move(options);
     return *this;
 }
-task<websocket> http_client_websocket_request::connect() {
-    require_open();
-    consumed_ = true;
+task<websocket> http_client_websocket_request::connect() && {
+    require_worker();
     return make_scoped_operation(client_.registration_.scope(), connect_owned(std::move(*this)));
 }
 task<websocket> http_client_websocket_request::connect_owned(http_client_websocket_request request) {

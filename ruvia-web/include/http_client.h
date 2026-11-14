@@ -7,7 +7,6 @@
 #include <memory>
 #include <optional>
 #include <span>
-#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -36,7 +35,6 @@
 namespace ruvia {
 
 class context;
-class context_response_editor;
 class request_stream;
 class response_stream_writer;
 class http_client_request;
@@ -236,8 +234,12 @@ public:
     [[nodiscard]] std::span<const http_header> headers() const&& = delete;
     [[nodiscard]] std::span<const http_header> trailers() const& RUVIA_LIFETIMEBOUND;
     [[nodiscard]] std::span<const http_header> trailers() const&& = delete;
+    // Case-insensitive; the first field line wins. unique_header() reports a
+    // repeated field instead of choosing one of its lines.
     [[nodiscard]] std::optional<std::string_view> header(std::string_view name) const& RUVIA_LIFETIMEBOUND;
     [[nodiscard]] std::optional<std::string_view> header(std::string_view) const&& = delete;
+    [[nodiscard]] http_unique_field_lookup unique_header(std::string_view name) const& RUVIA_LIFETIMEBOUND;
+    [[nodiscard]] http_unique_field_lookup unique_header(std::string_view) const&& = delete;
     [[nodiscard]] std::optional<std::string_view> trailer(std::string_view name) const& RUVIA_LIFETIMEBOUND;
     [[nodiscard]] std::optional<std::string_view> trailer(std::string_view) const&& = delete;
     [[nodiscard]] http_client_response_body& stream() & noexcept RUVIA_LIFETIMEBOUND {
@@ -272,7 +274,7 @@ public:
 
 private:
     // The one forwarding chain of both pipe_to() destinations.
-    [[nodiscard]] task<void> pipe_to_destination(context_response_editor draft, response_stream_writer& writer, ::ruvia::operation_scope& destination, operation_options operation);
+    [[nodiscard]] task<void> pipe_to_destination(http_response& head, response_stream_writer& writer, ::ruvia::operation_scope& destination, operation_options operation);
     template <typename value_type>
     static task<value_type> decode_json(task<http_client_response_bytes> input) {
         auto owned = co_await std::move(input);
@@ -555,7 +557,7 @@ public:
     http_client_ref& operator=(const http_client_ref&) = delete;
 
     // Inherits an empty token; a supplied state replaces user cancellation.
-    // Timeout can only tighten. Accumulation requires a caller-owned stop_group.
+    // Timeout can only tighten. Accumulate with linked_operation_options.
     // Request-host cancellation remains independent and cannot be replaced.
     [[nodiscard]] http_client_ref with_options(operation_options options) const;
     [[nodiscard]] http_client_request request(std::string_view method, std::string_view path) const;
@@ -618,42 +620,78 @@ private:
     const detail::http_client_registry* registry_{};
 };
 
-// Owns request inputs before any cold operation is returned. Each send/upload
-// consumes this builder; response bodies are one linear stream, not replayable.
+// Owns request inputs before any cold operation is returned. Setters keep the
+// builder's value category, so chains on a temporary end in a terminal
+// directly; a named builder is consumed with std::move(builder).send().
+// Terminals: send() yields the response, upload() a streaming request body
+// exchange, connect() an HTTP/1.1 Upgrade tunnel. Response bodies are one
+// linear stream, not replayable.
 class http_client_request final {
 public:
     http_client_request(const http_client_request&) = delete;
     http_client_request& operator=(const http_client_request&) = delete;
     http_client_request(http_client_request&&) = default;
     http_client_request& operator=(http_client_request&&) = delete;
-    http_client_request& header(std::string_view name, std::string_view value);
-    http_client_request& headers(std::span<const http_header_view> fields);
-    http_client_request& query(std::string_view name, std::string_view value);
-    http_client_request& body(std::string_view bytes);
-    http_client_request& body(std::span<const std::byte> bytes);
+    http_client_request& header(std::string_view name, std::string_view value) &;
+    http_client_request&& header(std::string_view name, std::string_view value) && {
+        return std::move(header(name, value));
+    }
+    http_client_request& headers(std::span<const http_header_view> fields) &;
+    http_client_request&& headers(std::span<const http_header_view> fields) && {
+        return std::move(headers(fields));
+    }
+    http_client_request& query(std::string_view name, std::string_view value) &;
+    http_client_request&& query(std::string_view name, std::string_view value) && {
+        return std::move(query(name, value));
+    }
+    http_client_request& body(std::string_view bytes) &;
+    http_client_request&& body(std::string_view bytes) && {
+        return std::move(body(bytes));
+    }
+    http_client_request& body(std::span<const std::byte> bytes) &;
+    http_client_request&& body(std::span<const std::byte> bytes) && {
+        return std::move(body(bytes));
+    }
     // Replaces every per-request option, including the informational callback.
-    http_client_request& configure(http_client_request_options options);
+    http_client_request& configure(http_client_request_options options) &;
+    http_client_request&& configure(http_client_request_options options) && {
+        return std::move(configure(std::move(options)));
+    }
     // Per-hop redirect observation and control callback invoked on every
     // redirect hop (same-origin and cross-origin alike) before following it.
     // Returning false stops following and returns the redirect response.
-    http_client_request& on_redirect(http_client_redirect_observer observer);
-    http_client_request& on_redirect(http_client_async_redirect_observer observer);
+    http_client_request& on_redirect(http_client_redirect_observer observer) &;
+    http_client_request&& on_redirect(http_client_redirect_observer observer) && {
+        return std::move(on_redirect(std::move(observer)));
+    }
+    http_client_request& on_redirect(http_client_async_redirect_observer observer) &;
+    http_client_request&& on_redirect(http_client_async_redirect_observer observer) && {
+        return std::move(on_redirect(std::move(observer)));
+    }
     template <typename value_type>
         requires detail::is_model_json_value<value_type>
-    http_client_request& json(const value_type& value) {
-        if (consumed_) {
-            throw std::logic_error("HTTP request builder was consumed");
-        }
+    http_client_request& json(const value_type& value) & {
         auto encoded = to_json(value);
         header("Content-Type", "application/json");
         body_.swap(encoded);
         has_body_ = true;
         return *this;
     }
-    http_client_request& redirects(std::size_t maximum);
-    [[nodiscard]] task<http_client_response> send();
-    [[nodiscard]] task<http_client_exchange> upload(http_client_upload_config config = {});
-    [[nodiscard]] task<http_client_tunnel_result> upgrade(http_client_tunnel_config config = {});
+    template <typename value_type>
+        requires detail::is_model_json_value<value_type>
+    http_client_request&& json(const value_type& value) && {
+        return std::move(json(value));
+    }
+    http_client_request& redirects(std::size_t maximum) &;
+    http_client_request&& redirects(std::size_t maximum) && {
+        return std::move(redirects(maximum));
+    }
+    [[nodiscard]] task<http_client_response> send() &&;
+    task<http_client_response> send() & = delete;
+    [[nodiscard]] task<http_client_exchange> upload(http_client_upload_config config = {}) &&;
+    task<http_client_exchange> upload(http_client_upload_config = {}) & = delete;
+    [[nodiscard]] task<http_client_tunnel_result> connect(http_client_tunnel_config config = {}) &&;
+    task<http_client_tunnel_result> connect(http_client_tunnel_config = {}) & = delete;
 
 private:
     friend class http_client_ref;
@@ -676,21 +714,39 @@ private:
     http_client_redirect_observer redirect_observer_;
     http_client_async_redirect_observer async_redirect_observer_;
     bool has_body_{false};
-    bool consumed_{false};
 };
 
+// Built by http_client_ref::connect(authority) or udp(path); consumed by
+// connect(), which yields the tunnel. Setters keep the value category like
+// http_client_request.
 class http_client_connect_request final {
 public:
     http_client_connect_request(const http_client_connect_request&) = delete;
     http_client_connect_request& operator=(const http_client_connect_request&) = delete;
     http_client_connect_request(http_client_connect_request&&) = default;
     http_client_connect_request& operator=(http_client_connect_request&&) = delete;
-    http_client_connect_request& header(std::string_view name, std::string_view value);
-    http_client_connect_request& headers(std::span<const http_header_view> fields);
-    http_client_connect_request& configure(http_client_request_options options);
-    http_client_connect_request& protocol(std::string_view value);
-    http_client_connect_request& target(std::string_view value);
-    [[nodiscard]] task<http_client_tunnel_result> open(http_client_tunnel_config config = {});
+    http_client_connect_request& header(std::string_view name, std::string_view value) &;
+    http_client_connect_request&& header(std::string_view name, std::string_view value) && {
+        return std::move(header(name, value));
+    }
+    http_client_connect_request& headers(std::span<const http_header_view> fields) &;
+    http_client_connect_request&& headers(std::span<const http_header_view> fields) && {
+        return std::move(headers(fields));
+    }
+    http_client_connect_request& configure(http_client_request_options options) &;
+    http_client_connect_request&& configure(http_client_request_options options) && {
+        return std::move(configure(std::move(options)));
+    }
+    http_client_connect_request& protocol(std::string_view value) &;
+    http_client_connect_request&& protocol(std::string_view value) && {
+        return std::move(protocol(value));
+    }
+    http_client_connect_request& target(std::string_view value) &;
+    http_client_connect_request&& target(std::string_view value) && {
+        return std::move(target(value));
+    }
+    [[nodiscard]] task<http_client_tunnel_result> connect(http_client_tunnel_config config = {}) &&;
+    task<http_client_tunnel_result> connect(http_client_tunnel_config = {}) & = delete;
 
 private:
     friend class http_client_ref;
@@ -703,7 +759,6 @@ private:
     http_client_request_options request_options_;
     std::shared_ptr<http_client_informational_callback> informational_callback_;
     bool udp_;
-    bool consumed_{false};
 };
 
 // 绑定一个 Ruvia event loop 的出站 origin 集合，可在所属 worker 动态更新。
@@ -759,32 +814,56 @@ private:
 [[nodiscard]] task<std::vector<ip_address>> resolve_dns(const worker_ref& worker, std::string_view host, operation_options options = {});
 [[nodiscard]] task<std::vector<ip_address>> resolve_dns(event_loop loop, std::string_view host, operation_options options = {});
 
-// Every input is owned before connect() returns its cold operation. The builder
-// is consumed once; headers remain application fields, never handshake fields.
+// Every input is owned before connect() returns its cold operation, which
+// consumes the builder; headers remain application fields, never handshake
+// fields. Setters keep the value category like http_client_request.
 class http_client_websocket_request final {
 public:
     http_client_websocket_request(const http_client_websocket_request&) = delete;
     http_client_websocket_request& operator=(const http_client_websocket_request&) = delete;
     http_client_websocket_request(http_client_websocket_request&&) = default;
     http_client_websocket_request& operator=(http_client_websocket_request&&) = delete;
-    http_client_websocket_request& headers(std::span<const http_header_view> fields);
-    http_client_websocket_request& header(std::string_view name, std::string_view value);
-    http_client_websocket_request& configure(http_client_request_options options);
-    http_client_websocket_request& subprotocol(std::string_view value);
-    http_client_websocket_request& deflate(websocket_client_deflate_offer offer);
+    http_client_websocket_request& headers(std::span<const http_header_view> fields) &;
+    http_client_websocket_request&& headers(std::span<const http_header_view> fields) && {
+        return std::move(headers(fields));
+    }
+    http_client_websocket_request& header(std::string_view name, std::string_view value) &;
+    http_client_websocket_request&& header(std::string_view name, std::string_view value) && {
+        return std::move(header(name, value));
+    }
+    http_client_websocket_request& configure(http_client_request_options options) &;
+    http_client_websocket_request&& configure(http_client_request_options options) && {
+        return std::move(configure(std::move(options)));
+    }
+    http_client_websocket_request& subprotocol(std::string_view value) &;
+    http_client_websocket_request&& subprotocol(std::string_view value) && {
+        return std::move(subprotocol(value));
+    }
+    http_client_websocket_request& deflate(websocket_client_deflate_offer offer) &;
+    http_client_websocket_request&& deflate(websocket_client_deflate_offer offer) && {
+        return std::move(deflate(offer));
+    }
     // Pong expiry runs only while receive can observe it; blocked writes retain
     // their independent liveness bound. An absent ping interval disables probing.
-    http_client_websocket_request& lifecycle(websocket_lifecycle_options options);
+    http_client_websocket_request& lifecycle(websocket_lifecycle_options options) &;
+    http_client_websocket_request&& lifecycle(websocket_lifecycle_options options) && {
+        return std::move(lifecycle(options));
+    }
     // Applies to incoming messages and submitted application frames; zero is invalid.
-    http_client_websocket_request& max_message_bytes(std::size_t limit);
+    http_client_websocket_request& max_message_bytes(std::size_t limit) &;
+    http_client_websocket_request&& max_message_bytes(std::size_t limit) && {
+        return std::move(max_message_bytes(limit));
+    }
     // Connect and request deadlines bound opening only, not the session lifetime.
-    [[nodiscard]] task<websocket> connect();
+    [[nodiscard]] task<websocket> connect() &&;
+    task<websocket> connect() & = delete;
 
 private:
     friend class http_client_ref;
     http_client_websocket_request(const http_client_ref& client, std::string_view path);
     [[nodiscard]] static task<websocket> connect_owned(http_client_websocket_request request);
-    void require_open() const;
+    // Requires an active client on its worker.
+    void require_worker() const;
     http_client_ref client_;
     std::string path_;
     std::vector<http_header> headers_;
@@ -793,7 +872,6 @@ private:
     websocket_lifecycle_options lifecycle_{};
     std::size_t max_message_bytes_{default_max_websocket_message_bytes};
     http_client_request_options request_options_;
-    bool consumed_{false};
 };
 
 }  // namespace ruvia

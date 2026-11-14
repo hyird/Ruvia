@@ -164,7 +164,7 @@ struct http_server_tls_identities final {
 // never matches them.
 void bind_tls_local_address(SSL& tls, const asio::ip::address& local_address);
 
-// One connection's on_tls_client_hello delivery: every field of the record
+// One connection's tls_client_hello_ delivery: every field of the record
 // except the message, which the ClientHello supplies.
 struct tls_client_hello_observation final {
     tls_client_hello_callback_ref callback_;

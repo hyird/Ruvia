@@ -92,11 +92,10 @@ class peer_reset_routes final {
     }
 
     ruvia::task<void> head_only(ruvia::context& c) {
-        c.draft().status(ruvia::http_status::no_content);
         // A local timeout guarantees a closed socket; a peer RST alone need
         // not make the first small write fail on every supported transport.
         (void)co_await ruvia::sleep_for(c.worker(), idle_timeout + 500ms);
-        auto& writer = c.stream();
+        auto& writer = c.stream({.status_ = ruvia::http_status::no_content});
         try {
             co_await writer.end();
         } catch (const std::exception&) {
@@ -110,8 +109,7 @@ class peer_reset_routes final {
 
 ruvia::task<ruvia::http_response> count_error(ruvia::context& c, ruvia::http_error_info error) {
     error_handler_calls.fetch_add(1);
-    c.draft().status(error.status());
-    co_return c.text("error");
+    co_return c.text("error", {.status_ = error.status()});
 }
 
 // Sends `request`, then closes with a zero linger so the close is a reset.

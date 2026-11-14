@@ -7,6 +7,7 @@
 // without a socket. These tests use ONLY public headers, exactly like an
 // application's own test suite would.
 
+#include <array>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -200,9 +201,8 @@ class testing_facade_forbid_after final {
 public:
     ruvia::task<void> invoke(ruvia::context& c, ruvia::next& next_value) {
         co_await next_value();
-        c.draft().status(ruvia::http_status::forbidden);
-        c.draft().header("X-Test-Denied", "after");
-        c.respond(c.text("denied"));
+        const std::array headers{ruvia::http_header_view{"X-Test-Denied", "after"}};
+        c.respond(c.text("denied", {.status_ = ruvia::http_status::forbidden, .headers_ = headers}));
     }
 };
 
@@ -302,19 +302,19 @@ private:
         method.assign("PUT");
         target.assign("/mutated");
         const auto child = co_await std::move(pending);
-        c.draft().status(child.status());
-        c.draft().header("X-Test-Relayed", "1");
-        co_return c.text(child.body());
+        const std::array headers{ruvia::http_header_view{"X-Test-Relayed", "1"}};
+        co_return c.text(child.body(), {.status_ = child.status(), .headers_ = headers});
     }
 
     // A representation-specific answer whose metadata describes only its own body.
     ruvia::task<ruvia::http_response> partial(ruvia::context& c) {
-        c.draft().status(ruvia::http_status::partial_content);
-        c.draft().header("Content-Range", "bytes 0-3/10");
-        c.draft().header("ETag", "\"v1\"");
-        c.draft().header("Cache-Control", "public, max-age=60");
-        c.draft().header("Content-Type", "application/octet-stream");
-        co_return c.body("abcd");
+        static const std::array headers{
+            ruvia::http_header_view{"Content-Range", "bytes 0-3/10"},
+            ruvia::http_header_view{"ETag", "\"v1\""},
+            ruvia::http_header_view{"Cache-Control", "public, max-age=60"},
+            ruvia::http_header_view{"Content-Type", "application/octet-stream"},
+        };
+        co_return c.body("abcd", {.status_ = ruvia::http_status::partial_content, .headers_ = headers});
     }
 
     ruvia::task<ruvia::http_response> user(ruvia::context& c) {
@@ -322,9 +322,11 @@ private:
     }
 
     ruvia::task<ruvia::http_response> head_metadata(ruvia::context& c) {
-        c.draft().header("X-Handler-Method", c.req().method());
-        c.draft().header("X-Route-Param", c.req().param("id").value_or("?"));
-        co_return c.text("payload");
+        const std::array headers{
+            ruvia::http_header_view{"X-Handler-Method", c.req().method()},
+            ruvia::http_header_view{"X-Route-Param", c.req().param("id").value_or("?")},
+        };
+        co_return c.text("payload", {.headers_ = headers});
     }
 
     ruvia::task<ruvia::http_response> greet(ruvia::context& c) {
@@ -603,18 +605,15 @@ private:
 };
 
 ruvia::task<ruvia::http_response> facade_not_found(ruvia::context& c) {
-    c.draft().status(ruvia::http_status::not_found);
-    co_return c.body("custom-miss");
+    co_return c.body("custom-miss", {.status_ = ruvia::http_status::not_found});
 }
 
 ruvia::task<ruvia::http_response> api_scoped_miss(ruvia::context& c) {
-    c.draft().status(ruvia::http_status::not_found);
-    co_return c.body("api-miss");
+    co_return c.body("api-miss", {.status_ = ruvia::http_status::not_found});
 }
 
 ruvia::task<ruvia::http_response> facade_error(ruvia::context& c, ruvia::http_error_info error) {
-    c.draft().status(error.status());
-    co_return c.body("custom-error");
+    co_return c.body("custom-error", {.status_ = error.status()});
 }
 
 }  // namespace
@@ -848,15 +847,13 @@ TEST(Ruvia, testing_facade_runs_fallback_handlers_that_carry_state) {
 
     ruvia::test_app app;
     app.on_not_found([branding_value](ruvia::context& c) -> ruvia::task<ruvia::http_response> {
-        c.draft().status(ruvia::http_status::not_found);
-        co_return c.text(std::string_view(branding_value.label_));
+        co_return c.text(std::string_view(branding_value.label_), {.status_ = ruvia::http_status::not_found});
     });
     app.on_error([branding_value](ruvia::context& c, ruvia::http_error_info error) -> ruvia::task<ruvia::http_response> {
-        c.draft().status(error.status());
         std::string body;
         body.append(branding_value.label_);
         body.append(":error");
-        co_return c.text(std::move(body));
+        co_return c.text(std::move(body), {.status_ = error.status()});
     });
 
     const auto missed = app.request(ruvia::test_request::get("/nowhere"));
@@ -903,8 +900,7 @@ TEST(Ruvia, testing_facade_error_responses_are_not_renegotiated_into_406) {
     ruvia::test_app app;
     app.on_error([counter = &calls](ruvia::context& c, ruvia::http_error_info error) -> ruvia::task<ruvia::http_response> {
         ++*counter;
-        c.draft().status(error.status());
-        co_return c.text("err");
+        co_return c.text("err", {.status_ = error.status()});
     });
 
     // The test app configures no compression, so "gzip, identity;q=0" cannot be
@@ -1626,8 +1622,7 @@ TEST(Ruvia, testing_facade_subrequest_rejects_a_file_response_recovered_from_406
         if (error.status() == ruvia::http_status::not_acceptable) {
             co_return co_await c.file({.path_ = testing_facade_file_path()});
         }
-        c.draft().status(error.status());
-        co_return c.text("err");
+        co_return c.text("err", {.status_ = error.status()});
     });
     const auto res = app.request(ruvia::test_request::get("/t/sub-refused-file"));
     EXPECT_EQ(res.status(), ruvia::http_status::ok);

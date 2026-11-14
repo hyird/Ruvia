@@ -149,8 +149,7 @@ TEST(Ruvia, a_handler_after_its_interim_head_is_timed_as_a_handler_not_a_write) 
     // timed by idle_timeout, not by write_timeout.
     app.on_error([](ruvia::context& c, ruvia::http_error_info error) -> ruvia::task<ruvia::http_response> {
         (void)co_await ruvia::sleep_for(c.worker(), handler_pause);
-        c.draft().status(error.status());
-        co_return c.text("refused");
+        co_return c.text("refused", {.status_ = error.status()});
     });
     app.server({.worker_count_ = 1, .connection_scan_interval_ = 5ms, .write_timeout_ = write_timeout})
         .listen({

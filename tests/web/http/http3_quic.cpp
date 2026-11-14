@@ -121,7 +121,7 @@ public:
         }
         crypto_.reset(crypto);
         connection_.emplace(ruvia::http3_quic_connection::server({
-            .crypto_callbacks_ = ruvia::test::http3_test_crypto_callbacks(ruvia::http3_role::server),
+            .crypto_callbacks_ = ruvia::test::http3_test_crypto_callbacks(ruvia::http_connection_role::server),
             .owner_callbacks_ = {.get_new_connection_id_ = ruvia::test::http3_test_new_connection_id},
             .source_connection_id_ = source,
             .destination_connection_id_ = header.scid,
@@ -213,7 +213,7 @@ public:
         client_initial_destination_(ruvia::test::http3_test_random_connection_id(18)),
         client_tls_(identity.ca_file_, "localhost") {
         client_.emplace(ruvia::http3_quic_connection::client({
-            .crypto_callbacks_ = ruvia::test::http3_test_crypto_callbacks(ruvia::http3_role::client),
+            .crypto_callbacks_ = ruvia::test::http3_test_crypto_callbacks(ruvia::http_connection_role::client),
             .owner_callbacks_ = {.get_new_connection_id_ = ruvia::test::http3_test_new_connection_id},
             .source_connection_id_ = ruvia::test::http3_test_random_connection_id(16),
             .destination_connection_id_ = client_initial_destination_,
@@ -351,10 +351,6 @@ std::vector<std::optional<std::int64_t>> goaway_ids(const std::list<ruvia::http3
     return ids;
 }
 
-std::span<const std::byte> as_bytes(std::string_view text) noexcept {
-    return std::as_bytes(std::span(text.data(), text.size()));
-}
-
 // Submits a buffered response through the server mapping: head, the whole
 // body as DATA within the output budget, then the end of the stream.
 bool submit_buffered_response(ruvia::http3_connection& codec, std::int64_t stream_id, ruvia::http_known_method method, const ruvia::http_response& response) {
@@ -364,11 +360,11 @@ bool submit_buffered_response(ruvia::http3_connection& codec, std::int64_t strea
         return false;
     }
     if (plan.send_body()) {
-        const auto submitted = codec.submit_data(stream_id, as_bytes(response.body()));
-        if (submitted.status_ != ruvia::http3_data_submit_status::complete) {
+        const auto submitted = codec.submit_data(stream_id, response.body());
+        if (submitted.status_ != ruvia::http_data_submit_status::complete) {
             return false;
         }
-        return codec.finish_stream(stream_id) == ruvia::http3_finish_status::accepted;
+        return codec.finish_stream(stream_id) == ruvia::http_finish_status::accepted;
     }
     return true;
 }
@@ -385,8 +381,8 @@ struct served_get final {
 // http3_request_head and the buffered response mapping.
 served_get serve_get(in_memory_h3_pair& pair, std::int64_t stream_id, std::string_view path, std::string_view body) {
     served_get result;
-    const ruvia::http3_regular_request_head_view request_head{.authority_ = "localhost", .target_ = path};
-    if (pair.client().http3().submit_request_head(stream_id, request_head) != ruvia::http3_submit_status::accepted) {
+    const ruvia::http_regular_request_head_view request_head{.authority_ = "localhost", .target_ = path};
+    if (pair.client().http3().submit_request_head(stream_id, request_head) != ruvia::http_submit_status::accepted) {
         return result;
     }
     pair.exchange();
@@ -462,7 +458,7 @@ TEST(Ruvia, http3_ngtcp2_openssl_client_emits_a_real_quic_initial_packet) {
 
     constexpr ngtcp2_tstamp timestamp = NGTCP2_SECONDS;
     auto connection = ruvia::http3_quic_connection::client({
-        .crypto_callbacks_ = ruvia::test::http3_test_crypto_callbacks(ruvia::http3_role::client),
+        .crypto_callbacks_ = ruvia::test::http3_test_crypto_callbacks(ruvia::http_connection_role::client),
         .owner_callbacks_ = {.get_new_connection_id_ = ruvia::test::http3_test_new_connection_id},
         .source_connection_id_ = source_connection_id,
         .destination_connection_id_ = destination_connection_id,
@@ -554,10 +550,10 @@ TEST(Ruvia, http3_quic_server_drains_with_goaway_then_closes_the_connection_grac
 
     // RFC 9114 §5.2: a shutdown notice first, the final GOAWAY a round trip
     // later naming the first request stream that was not processed.
-    EXPECT_TRUE(pair.server().http3().begin_drain() == ruvia::http3_submit_status::accepted);
+    EXPECT_TRUE(pair.server().http3().begin_drain() == ruvia::http_submit_status::accepted);
     pair.exchange();
     EXPECT_TRUE(goaway_ids(pair.client_events_) == (std::vector<std::optional<std::int64_t>>{std::nullopt}));
-    EXPECT_TRUE(pair.server().http3().finish_drain() == ruvia::http3_submit_status::accepted);
+    EXPECT_TRUE(pair.server().http3().finish_drain() == ruvia::http_submit_status::accepted);
     pair.exchange();
     EXPECT_TRUE(pair.server().http3().drain_final());
     EXPECT_TRUE(goaway_ids(pair.client_events_) == (std::vector<std::optional<std::int64_t>>{std::nullopt, *stream_id + 4}));
@@ -631,7 +627,7 @@ TEST(Ruvia, http3_quic_client_encodes_early_transport_parameters_after_the_hands
 
     // A new connection to the same server restores them before 0-RTT.
     auto resumed = ruvia::http3_quic_connection::client({
-        .crypto_callbacks_ = ruvia::test::http3_test_crypto_callbacks(ruvia::http3_role::client),
+        .crypto_callbacks_ = ruvia::test::http3_test_crypto_callbacks(ruvia::http_connection_role::client),
         .owner_callbacks_ = {.get_new_connection_id_ = ruvia::test::http3_test_new_connection_id},
         .source_connection_id_ = ruvia::test::http3_test_random_connection_id(16),
         .destination_connection_id_ = ruvia::test::http3_test_random_connection_id(18),
@@ -838,7 +834,7 @@ private:
                 if (const auto found = streams_.find(end->stream_id()); found != streams_.end() && !found->second.responding_) {
                     respond(end->stream_id(), found->second);
                 }
-            } else if (const auto* closed = event->stream_close()) {
+            } else if (const auto* closed = event->stream_closed()) {
                 streams_.erase(closed->stream_id());
             }
         }
@@ -878,14 +874,14 @@ private:
                 continue;
             }
             while (stream.response_offset_ < stream.response_body_.size()) {
-                const auto submitted = codec.submit_data(stream_id, as_bytes(std::string_view(stream.response_body_).substr(stream.response_offset_)));
+                const auto submitted = codec.submit_data(stream_id, std::string_view(stream.response_body_).substr(stream.response_offset_));
                 stream.response_offset_ += submitted.consumed_bytes_;
-                if (submitted.status_ != ruvia::http3_data_submit_status::complete) {
+                if (submitted.status_ != ruvia::http_data_submit_status::complete) {
                     break;
                 }
             }
             if (stream.response_offset_ == stream.response_body_.size()) {
-                if (codec.finish_stream(stream_id) != ruvia::http3_finish_status::accepted) {
+                if (codec.finish_stream(stream_id) != ruvia::http_finish_status::accepted) {
                     throw std::runtime_error("server cannot finish a response");
                 }
                 stream.finished_ = true;
@@ -897,14 +893,14 @@ private:
         auto& connection = session_->connection();
         auto& codec = connection.http3();
         if (drain_requested_ && !drain_begun_) {
-            if (codec.begin_drain() != ruvia::http3_submit_status::accepted) {
+            if (codec.begin_drain() != ruvia::http_submit_status::accepted) {
                 throw std::runtime_error("server cannot begin draining");
             }
             drain_begun_ = true;
             drain_notice_pending_flush_ = true;
         } else if (drain_notice_sent_ && received && !codec.drain_final()) {
             // The peer has answered since the notice left: a round trip.
-            if (codec.finish_drain() != ruvia::http3_submit_status::accepted) {
+            if (codec.finish_drain() != ruvia::http_submit_status::accepted) {
                 throw std::runtime_error("server cannot finish draining");
             }
         } else if (codec.drain_final() && codec.drained()) {
@@ -1069,8 +1065,7 @@ public:
     ruvia::task<ruvia::http_response> retry(ruvia::context& context) {
         if (context.early_data()) {
             ++early_retries;
-            context.draft().status(ruvia::http_status::too_early);
-            co_return context.text("retry after handshake");
+            co_return context.text("retry after handshake", {.status_ = ruvia::http_status::too_early});
         }
         co_return context.text("retried");
     }
@@ -1093,10 +1088,9 @@ public:
             "https://api.localhost:8443",
         };
         context.advertise_origins(origins);
-        context.draft().priority({.urgency_ = ruvia::http_priority_urgency(2), .incremental_ = true});
         const auto pri = context.req().priority();
         std::string text("u=" + std::string(std::to_string(pri.urgency_.value())) + ",i=" + (pri.incremental_ ? "1" : "0"));
-        co_return context.text(std::string(text.data(), text.size()));
+        co_return context.text(std::string(text.data(), text.size()), {.priority_ = ruvia::http_priority_fields{.urgency_ = ruvia::http_priority_urgency(2), .incremental_ = true}});
     }
 
     ruvia::task<void> reprioritize(ruvia::context& context) {

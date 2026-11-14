@@ -175,25 +175,6 @@ struct http_client_redirect_authority final {
 
 }  // namespace
 
-http_client_response_header_lookup lookup_unique_http_client_response_header(const http_client_response_head& head, std::string_view name) noexcept {
-    std::string_view found;
-    bool seen = false;
-    for (const auto& header : head.headers()) {
-        if (!http_ascii_equals_ignore_case(header.name(), name)) {
-            continue;
-        }
-        if (seen) {
-            return {.status_ = http_unique_header_status::repeated};
-        }
-        seen = true;
-        found = header.value();
-    }
-    if (!seen) {
-        return {.status_ = http_unique_header_status::absent};
-    }
-    return {.status_ = http_unique_header_status::found, .value_ = found};
-}
-
 http_client_redirect_request_plan::http_client_redirect_request_plan(std::string_view method, http_client_redirect_content_disposition content_disposition) :
     method_(method),
     content_disposition_(content_disposition) {}

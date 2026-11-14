@@ -152,9 +152,12 @@ struct db_type_definition final {
     bool array_{false};
 };
 
-// Borrows the address-stable AST owned by its query. Import an expression or
-// pass it to an ORM operation while that query is alive; no operation retains
-// this view after returning its cold asynchronous operation.
+// A node handle inside one query's address-stable AST, produced by
+// db_expr::expression(query). Every entry point accepting db_expr accepts a
+// handle of the same query without copying, so one node (and its bound
+// value's $n) can be referenced from several clauses; a handle of another
+// query is copied. No operation retains this view after returning its cold
+// asynchronous operation.
 class db_expression final {
 public:
     db_expression() noexcept = default;
@@ -182,10 +185,6 @@ struct db_window_frame_options final {
     db_window_frame kind_{db_window_frame::rows};
     db_window_boundary start_{db_frame_boundary::unbounded_preceding};
     db_window_boundary end_{db_frame_boundary::current_row};
-};
-struct db_named_argument final {
-    borrowed_text name_{};
-    db_expression value_{};
 };
 struct db_source_column final {
     borrowed_text name_{};
@@ -223,6 +222,7 @@ struct db_window_options;
 struct db_case_branch;
 struct db_selection;
 struct db_assignment;
+struct db_named_argument;
 
 namespace detail {
 
@@ -266,7 +266,7 @@ public:
     [[nodiscard]] static db_owned_expression make_static_excluded(std::string_view name) noexcept;
     [[nodiscard]] static db_owned_expression make_value(const db_value& value);
     [[nodiscard]] static db_owned_expression make_raw_sql(std::span<const std::string_view> parts, std::span<const db_expr> args);
-    [[nodiscard]] static db_owned_expression make_call(std::string_view function, std::span<const db_expr> args);
+    [[nodiscard]] static db_owned_expression make_call(std::string_view function, std::span<const db_expr> args, std::span<const db_named_argument> named);
     [[nodiscard]] static db_owned_expression make_coalesce(std::span<const db_expr> args);
     [[nodiscard]] static db_owned_expression make_null_if(const db_owned_expression& lhs, const db_owned_expression& rhs);
     [[nodiscard]] static db_owned_expression make_greatest(std::span<const db_expr> args);
@@ -288,8 +288,13 @@ public:
     [[nodiscard]] static db_owned_expression make_binary(db_owned_expression&& lhs, db_binary_operator op, const db_owned_expression& rhs);
     [[nodiscard]] static db_owned_expression make_unary(db_unary_operator op, const db_owned_expression& operand);
     [[nodiscard]] static db_owned_expression make_unary(db_unary_operator op, db_owned_expression&& operand);
-    [[nodiscard]] static db_owned_expression make_between(const db_owned_expression& operand, const db_value& lower, const db_value& upper, bool negate);
+    [[nodiscard]] static db_owned_expression make_between(const db_owned_expression& operand, const db_owned_expression& lower, const db_owned_expression& upper, bool negate);
     [[nodiscard]] static db_owned_expression make_tuple(std::span<const db_expr> elements);
+    [[nodiscard]] static db_owned_expression make_list(std::span<const db_expr> elements);
+    [[nodiscard]] static db_owned_expression make_array(std::span<const db_expr> elements);
+    [[nodiscard]] static db_owned_expression make_any(const db_owned_expression& array);
+    [[nodiscard]] static db_owned_expression make_all(const db_owned_expression& array);
+    [[nodiscard]] static db_owned_expression make_subquery(const db_query& subquery);
     [[nodiscard]] static db_owned_expression make_in_list(const db_owned_expression& lhs, db_binary_operator op, std::size_t count, const void* context, db_value (*element_at)(const void* context, std::size_t index));
     template <typename t_type>
     [[nodiscard]] static db_owned_expression make_in_list(const db_owned_expression& lhs, db_binary_operator op, std::span<const t_type> values) {
@@ -315,6 +320,9 @@ private:
     [[nodiscard]] static db_owned_expression from_tree(tree_owner_type tree) noexcept;
     [[nodiscard]] static db_owned_expression make_variadic(db_node_kind kind, std::span<const db_expr> args, std::string_view function);
     [[nodiscard]] static db_owned_expression make_two_operand_node(db_node_kind kind, const db_owned_expression& lhs, const db_owned_expression& rhs);
+    [[nodiscard]] static db_owned_expression make_elements(db_node_kind kind, std::span<const db_expr> elements);
+    [[nodiscard]] static db_owned_expression make_operand(db_node_kind kind, const db_owned_expression& operand);
+    [[nodiscard]] static db_owned_expression make_query_node(db_node_kind kind, const db_query& subquery);
     [[nodiscard]] std::size_t append_to_tree(db_expr_tree& target) const;
     leaf_kind kind_{leaf_kind::empty};
     bool aliased_{false};
@@ -410,6 +418,11 @@ private:
     detail::db_owned_expression owned_{};
 };
 
+// The one expression factory family, for direct queries, ORM builders and
+// schema operations alike. Literal arguments and nested queries are copied
+// during construction, so an expression may outlive the values used to build
+// it. Entry points import it into their query; bind one with expression(query)
+// to reuse its node there.
 class db_expr final {
 public:
     db_expr() noexcept = default;
@@ -425,6 +438,17 @@ public:
     [[nodiscard]] static db_expr from_expression(db_expression expression, std::string_view table = {}, bool aliased = false) {
         return db_expr(detail::db_owned_expression::from_expression(expression, table, aliased));
     }
+    // Compiled for PostgreSQL, a bound value is untyped wherever the SQL
+    // around it gives it a type: the other operand, the target column, the
+    // selected function or operator overload, a Boolean context (AND/OR/NOT,
+    // IS TRUE...), an explicit cast(). Where PostgreSQL cannot type it
+    // ("any"/polymorphic arguments such as json_build_object, concat or
+    // array_agg; arithmetic with two bound operands; unary minus or ~;
+    // IS [NOT] NULL; GREATEST and friends over bound values only) it carries
+    // its C++ category: signed integers $n::int8, unsigned integers
+    // $n::numeric (the full uint64 range), doubles ::float8, booleans ::bool,
+    // text ::text. Integers in int4-only built-in arguments (left(),
+    // round(x, n), jsonb -> n) render as $n::int4.
     template <detail::db_parameter v_type>
     [[nodiscard]] static db_expr value(v_type&& val) {
         return db_expr(detail::db_owned_expression::make_value(detail::make_immediate_db_parameter(std::forward<v_type>(val))));
@@ -444,6 +468,8 @@ public:
     [[nodiscard]] static db_expr excluded(std::string_view name) {
         return db_expr(detail::db_owned_expression::make_excluded(name));
     }
+    // Trusted SQL syntax interleaved with expression arguments. Values belong in
+    // value() arguments, never in the syntax strings. parts.size() == args.size()+1.
     [[nodiscard]] static db_expr raw_sql(std::string_view expression) {
         return raw_sql(std::span<const std::string_view>(&expression, 1), {});
     }
@@ -462,11 +488,39 @@ public:
     [[nodiscard]] static db_expr interval(std::string_view spec) {
         return value(spec).cast(db_data_type::interval);
     }
-    [[nodiscard]] static db_expr call(std::string_view function, std::span<const db_expr> args = {}) {
-        return db_expr(detail::db_owned_expression::make_call(function, args));
-    }
+    [[nodiscard]] static inline db_expr call(std::string_view function, std::span<const db_expr> args = {});
+    [[nodiscard]] static inline db_expr call(std::string_view function, std::span<const db_expr> args, std::span<const db_named_argument> named);
     [[nodiscard]] static db_expr call(std::string_view function, std::initializer_list<db_expr> args) {
         return call(function, std::span<const db_expr>(args.begin(), args.size()));
+    }
+    [[nodiscard]] static db_expr binary(const db_expr& lhs, db_binary_operator op, const db_expr& rhs) {
+        return db_expr(detail::db_owned_expression::make_binary(lhs.owned_, op, rhs.owned_));
+    }
+    [[nodiscard]] static db_expr unary(db_unary_operator op, const db_expr& operand) {
+        return db_expr(detail::db_owned_expression::make_unary(op, operand.owned_));
+    }
+    // A parenthesized expression list, the right operand of IN / NOT IN.
+    [[nodiscard]] static db_expr list(std::span<const db_expr> elements) {
+        return db_expr(detail::db_owned_expression::make_list(elements));
+    }
+    [[nodiscard]] static db_expr list(std::initializer_list<db_expr> elements) {
+        return list(std::span<const db_expr>(elements.begin(), elements.size()));
+    }
+    [[nodiscard]] static db_expr array(std::span<const db_expr> elements) {
+        return db_expr(detail::db_owned_expression::make_array(elements));
+    }
+    [[nodiscard]] static db_expr array(std::initializer_list<db_expr> elements) {
+        return array(std::span<const db_expr>(elements.begin(), elements.size()));
+    }
+    [[nodiscard]] static db_expr any(const db_expr& array_value) {
+        return db_expr(detail::db_owned_expression::make_any(array_value.owned_));
+    }
+    [[nodiscard]] static db_expr all(const db_expr& array_value) {
+        return db_expr(detail::db_owned_expression::make_all(array_value.owned_));
+    }
+    // A scalar or IN subquery; the query is copied. EXISTS is db_predicate::exists.
+    [[nodiscard]] static db_expr subquery(const db_query& query) {
+        return db_expr(detail::db_owned_expression::make_subquery(query));
     }
     [[nodiscard]] static db_expr coalesce(std::span<const db_expr> args) {
         return db_expr(detail::db_owned_expression::make_coalesce(args));
@@ -682,11 +736,17 @@ public:
     }
     template <detail::db_parameter lower_type, detail::db_parameter upper_type>
     [[nodiscard]] db_predicate between(lower_type&& lower, upper_type&& upper) const {
-        return db_predicate(detail::db_owned_expression::make_between(owned_, detail::make_immediate_db_parameter(std::forward<lower_type>(lower)), detail::make_immediate_db_parameter(std::forward<upper_type>(upper)), false));
+        return between(value(std::forward<lower_type>(lower)), value(std::forward<upper_type>(upper)));
     }
     template <detail::db_parameter lower_type, detail::db_parameter upper_type>
     [[nodiscard]] db_predicate not_between(lower_type&& lower, upper_type&& upper) const {
-        return db_predicate(detail::db_owned_expression::make_between(owned_, detail::make_immediate_db_parameter(std::forward<lower_type>(lower)), detail::make_immediate_db_parameter(std::forward<upper_type>(upper)), true));
+        return not_between(value(std::forward<lower_type>(lower)), value(std::forward<upper_type>(upper)));
+    }
+    [[nodiscard]] db_predicate between(const db_expr& lower, const db_expr& upper) const {
+        return db_predicate(detail::db_owned_expression::make_between(owned_, lower.owned_, upper.owned_, false));
+    }
+    [[nodiscard]] db_predicate not_between(const db_expr& lower, const db_expr& upper) const {
+        return db_predicate(detail::db_owned_expression::make_between(owned_, lower.owned_, upper.owned_, true));
     }
 
     [[nodiscard]] const detail::db_owned_expression& owned() const& noexcept RUVIA_LIFETIMEBOUND {
@@ -834,6 +894,10 @@ struct db_case_branch final {
     db_expr then_{};
 };
 
+// One projection item of SELECT / RETURNING, shared by db_query and the ORM.
+// A bare name selects that column; an expression with a name renders
+// `expression AS name`. db_query also accepts an unnamed expression; ORM
+// projections require a name to map the result field.
 struct db_selection final {
     borrowed_text column_{};
     db_expr expression_{};
@@ -849,6 +913,8 @@ struct db_selection final {
     db_selection(const std::basic_string<char, traits_type, allocator_type>&&) = delete;
     db_selection(borrowed_text column, db_expr expression) :
         column_(column),
+        expression_(std::move(expression)) {}
+    db_selection(db_expr expression) :
         expression_(std::move(expression)) {}
     // A real SQL wildcard, not a named field. Its qualifier is owned.
     [[nodiscard]] static db_selection star(std::string_view table = {}) {
@@ -883,19 +949,43 @@ struct db_assignment final {
     }
 };
 
-// span 及元素中的文本均为借用；on_conflict 调用入口同步复制或导入。
+// INSERT ... ON CONFLICT, fields named after PostgreSQL's grammar
+// (https://www.postgresql.org/docs/current/sql-insert.html):
+//   ON CONFLICT [ ( conflict_target_ ) [ WHERE index_predicate_ ] | ON CONSTRAINT constraint_ ]
+//     DO NOTHING | DO UPDATE SET update_columns_, update_set_ [ WHERE update_where_ ]
+// db_query::on_conflict and repository upsert/on_conflict consume the same
+// struct; repository upsert defaults an empty PostgreSQL target to the
+// primary key and its SET list to the inserted non-key columns.
+// span 及元素中的文本均为借用；调用入口同步复制或导入。
 // 独立保存 options 时，数组及文本 owner 必须存活到入口消费完成。
 struct db_conflict_options final {
-    borrowed_span<borrowed_text> columns_{};
+    borrowed_span<borrowed_text> conflict_target_{};
     borrowed_text constraint_{};
-    db_expression target_where_{};
-    borrowed_span<db_assignment> update_{};
-    db_expression update_where_{};
+    db_predicate index_predicate_{};
     bool do_nothing_{false};
+    // Each column is assigned EXCLUDED.column.
+    borrowed_span<borrowed_text> update_columns_{};
+    borrowed_span<db_assignment> update_set_{};
+    db_predicate update_where_{};
+    // ANDs `target.column IS DISTINCT FROM value OR ...` over the SET columns
+    // into the update condition, so an unchanged row is not rewritten.
+    bool skip_update_if_no_values_changed_{false};
     // MariaDB matches any unique key. This explicit mode does not pretend to
     // implement PostgreSQL's conflict target semantics.
     bool any_unique_key_{false};
 };
+
+struct db_named_argument final {
+    borrowed_text name_{};
+    db_expr value_{};
+};
+
+inline db_expr db_expr::call(std::string_view function, std::span<const db_expr> args) {
+    return call(function, args, {});
+}
+inline db_expr db_expr::call(std::string_view function, std::span<const db_expr> args, std::span<const db_named_argument> named) {
+    return db_expr(detail::db_owned_expression::make_call(function, args, named));
+}
 
 inline db_expr db_expr::case_when(std::span<const db_case_branch> branches, const db_expr& otherwise) {
     return db_expr(detail::db_owned_expression::make_case_when(branches, otherwise.owned_));
@@ -989,14 +1079,21 @@ private:
     bool returns_rows_{false};
 };
 
-// A synchronous relational query AST and expression owner. Values, identifiers
-// and nested queries become owned data at each construction call. Expression
-// arguments must belong to this owner; import_expression() copies foreign nodes.
-// Returned expression views borrow this owner's storage; its memory resource must
-// outlive it. Repository and builder entry points copy expression nodes before
-// returning, so their source owner can then be destroyed. Compilation is the sole
-// place that emits SQL and assigns parameter positions.
+namespace detail {
+struct db_column_info;
+// ORM statement assembly that shares query-bound nodes: an entity value or a
+// conflict update reused by its skip-unchanged condition keeps one $n.
+template <typename e_type, typename c_type>
+db_expression entity_column_value(db_query& query, const e_type& entity);
+void apply_entity_upsert(db_query& query, std::span<const db_column_info> entity_columns, std::span<db_assignment> updates, std::span<const std::string_view> inserted_columns, const db_conflict_options& options, db_driver driver, std::string_view table, std::string_view qualifier, std::string_view update_date, std::string_view version);
+}  // namespace detail
 
+// A synchronous relational query AST. Every entry point imports its db_expr
+// arguments and copies values, identifiers and nested queries before
+// returning, so their sources may then be destroyed. A db_expression bound to
+// this query (db_expr::expression) is used in place; one bound to another
+// query is copied. Its memory resource must outlive the query. Compilation is
+// the sole place that emits SQL and assigns parameter positions.
 class db_query final {
 public:
     db_query();
@@ -1016,155 +1113,48 @@ public:
     db_query& cache(const db_cache_setting_type& setting);
     db_query& cache(std::string_view id, std::optional<std::chrono::milliseconds> duration = {});
 
-    // Trusted SQL syntax interleaved with expression arguments. Values belong in
-    // value() arguments, never in the syntax strings. parts.size() == args.size()+1.
-    db_expression sql(std::span<const std::string_view> parts, std::span<const db_expression> args);
-    db_expression sql(std::initializer_list<std::string_view> parts, std::initializer_list<db_expression> args) {
-        return sql(std::span<const std::string_view>(parts.begin(), parts.size()), std::span<const db_expression>(args.begin(), args.size()));
-    }
-    db_expression sql(std::string_view expression) {
-        return sql(std::span<const std::string_view>(&expression, 1), {});
-    }
-    db_expression column(std::string_view name, std::string_view table = {});
-    db_expression star(std::string_view table = {});
-    // Owns the value in this query's resource before returning. Compiled for
-    // PostgreSQL, a bound value is untyped wherever the SQL around it gives it a
-    // type: the other operand, the target column, the selected function or
-    // operator overload, a Boolean context (AND/OR/NOT, IS TRUE...), an
-    // explicit cast(). Where PostgreSQL cannot type it ("any"/polymorphic
-    // arguments such as json_build_object, concat or array_agg; arithmetic with
-    // two bound operands; unary minus or ~; IS [NOT] NULL; GREATEST and friends
-    // over bound values only) it carries its C++ category: signed integers
-    // $n::int8, unsigned integers $n::numeric (the full uint64 range), doubles
-    // ::float8, booleans ::bool, text ::text. Integers in int4-only built-in
-    // arguments (left(), round(x, n), jsonb -> n) render as $n::int4.
-    db_expression value(const db_value& value);
-    template <detail::db_parameter value_type>
-        requires(!std::same_as<std::remove_cvref_t<value_type>, db_value>)
-    db_expression value(value_type&& value) {
-        return this->value(detail::make_immediate_db_parameter(std::forward<value_type>(value)));
-    }
-    db_expression excluded(std::string_view column);
-    db_expression null_value();
-    db_expression default_value();
-    db_expression call(std::string_view function, std::span<const db_expression> args = {}, std::span<const db_named_argument> named = {});
-    db_expression call(std::string_view function, std::initializer_list<db_expression> args) {
-        return call(function, std::span<const db_expression>(args.begin(), args.size()));
-    }
-    db_expression coalesce(std::span<const db_expression> args);
-    db_expression coalesce(std::initializer_list<db_expression> args) {
-        return coalesce(std::span<const db_expression>(args.begin(), args.size()));
-    }
-    db_expression null_if(db_expression value, db_expression other);
-    db_expression greatest(std::span<const db_expression> args);
-    db_expression greatest(std::initializer_list<db_expression> args) {
-        return greatest(std::span<const db_expression>(args.begin(), args.size()));
-    }
-    db_expression least(std::span<const db_expression> args);
-    db_expression least(std::initializer_list<db_expression> args) {
-        return least(std::span<const db_expression>(args.begin(), args.size()));
-    }
-    db_expression binary(db_expression lhs, db_binary_operator op, db_expression rhs);
-    db_expression unary(db_unary_operator op, db_expression value);
-    db_expression between(db_expression value, db_expression lower, db_expression upper, bool negate = false);
-    db_expression tuple(std::span<const db_expression> values);
-    db_expression tuple(std::initializer_list<db_expression> values) {
-        return tuple(std::span<const db_expression>(values.begin(), values.size()));
-    }
-    db_expression list(std::span<const db_expression> values);
-    db_expression list(std::initializer_list<db_expression> values) {
-        return list(std::span<const db_expression>(values.begin(), values.size()));
-    }
-    db_expression array(std::span<const db_expression> values);
-    db_expression array(std::initializer_list<db_expression> values) {
-        return array(std::span<const db_expression>(values.begin(), values.size()));
-    }
-    db_expression any(db_expression array);
-    db_expression all(db_expression array);
-    db_expression cast(db_expression value, const db_type_definition& type);
-    db_expression cast(db_expression value, db_data_type type) {
-        return cast(value, db_type_definition{.data_type_ = type});
-    }
-    db_expression alias(db_expression value, std::string_view name);
-    db_expression case_when(std::span<const db_case_branch> branches, db_expression otherwise = {});
-    db_expression case_when(std::initializer_list<db_case_branch> branches, db_expression otherwise = {}) {
-        return case_when(std::span<const db_case_branch>(branches.begin(), branches.size()), otherwise);
-    }
-    // The const& composition entry points (exists, subquery, from, join,
-    // insert_from, with, combine) copy their argument into this query. The
-    // rvalue overloads take over an argument already allocated from this
-    // query's resource and copy any other; either way the argument is left
-    // moved-from unless it is this query itself.
-    db_expression exists(const db_query& query);
-    db_expression exists(db_query&& query);
-    db_expression subquery(const db_query& query);
-    db_expression subquery(db_query&& query);
-    db_expression aggregate(std::string_view function, std::span<const db_expression> args, bool distinct = false, std::span<const db_order_term> order = {});
-    db_expression aggregate(std::string_view function, std::initializer_list<db_expression> args, bool distinct = false, std::span<const db_order_term> order = {}) {
-        return aggregate(function, std::span<const db_expression>(args.begin(), args.size()), distinct, order);
-    }
-    db_expression filter(db_expression aggregate, db_expression predicate);
-    db_expression over(db_expression function, const db_window_options& window);
-    db_expression within_group(db_expression function, std::span<const db_order_term> order);
-    db_expression extract(db_date_part part, db_expression value);
-    db_expression subscript(db_expression array, db_expression index);
-    db_expression collate(db_expression value, std::string_view collation);
-    db_expression at_time_zone(db_expression value, db_expression zone);
-    db_expression at_time_zone(db_expression value, std::string_view zone) {
-        return at_time_zone(value, this->value(zone));
-    }
-    // Copies the expression and its referenced subqueries into this query's resource;
-    // the source must remain alive during import, but is unchanged and need not outlive the result.
-    // Both qualifiers must be empty or valid nonempty names. A mapping rewrites exact
-    // column/star qualifiers, including correlated references in nested queries, but not
-    // references bound by a local alias or unaliased table name (qualified or unqualified).
-    // Raw SQL text is not rewritten. Throws std::invalid_argument for an empty expression,
-    // invalid mapping, or a mapped correlated reference captured by a local target binding.
-    // Throws std::length_error if expression/query nesting exceeds 256 levels;
-    // a chain of one AND or OR operator counts as a single level.
-    db_expression import_expression(db_expression expression, std::string_view source_qualifier = {}, std::string_view target_qualifier = {});
     // Renders one expression with inline literals, never bound parameters.
-    [[nodiscard]] static std::string render_expression(db_expression expression, db_driver driver);
+    [[nodiscard]] static std::string render_expression(const db_expr& expression, db_driver driver);
 
     // Replacing SELECT, GROUP BY, DISTINCT ON or RETURNING lists preserves
     // the previous clause on validation or allocation failure.
-    db_query& select(std::span<const db_expression> projections);
-    db_query& select(std::initializer_list<db_expression> projections) {
-        return select(std::span<const db_expression>(projections.begin(), projections.size()));
+    db_query& select(std::span<const db_selection> projections);
+    db_query& select(std::initializer_list<db_selection> projections) {
+        return select(std::span<const db_selection>(projections.begin(), projections.size()));
     }
-    db_query& select(db_expression projection) {
-        return select(std::span<const db_expression>(&projection, 1));
+    db_query& select(const db_selection& projection) {
+        return select(std::span<const db_selection>(&projection, 1));
     }
-    db_query& add_select(db_expression projection);
+    db_query& add_select(const db_selection& projection);
     // FROM, JOIN, UPDATE/DELETE/INSERT target aliases and CTE names are single
     // unqualified identifiers: a dotted name could never be referenced.
     db_query& from(std::string_view table, std::string_view alias = {});
     db_query& from(const db_query& query, std::string_view alias, const db_source_options& options = {});
     db_query& from(db_query&& query, std::string_view alias, const db_source_options& options = {});
-    db_query& from_function(db_expression function, std::string_view alias, const db_source_options& options = {});
+    db_query& from_function(const db_expr& function, std::string_view alias, const db_source_options& options = {});
     db_query& clear_source();
-    db_query& join(db_join_type type, std::string_view table, db_expression on = {}, std::string_view alias = {}, std::span<const std::string_view> using_columns = {});
-    db_query& join(db_join_type type, std::string_view table_value, db_expression on, std::string_view alias, std::initializer_list<std::string_view> using_columns) {
+    db_query& join(db_join_type type, std::string_view table, const db_expr& on = {}, std::string_view alias = {}, std::span<const std::string_view> using_columns = {});
+    db_query& join(db_join_type type, std::string_view table_value, const db_expr& on, std::string_view alias, std::initializer_list<std::string_view> using_columns) {
         return join(type, table_value, on, alias, std::span<const std::string_view>(using_columns.begin(), using_columns.size()));
     }
-    db_query& join(db_join_type type, const db_query& query, db_expression on, std::string_view alias, const db_source_options& options = {});
-    db_query& join(db_join_type type, db_query&& query, db_expression on, std::string_view alias, const db_source_options& options = {});
-    db_query& join_function(db_join_type type, db_expression function, db_expression on, std::string_view alias, const db_source_options& options = {});
-    db_query& where(db_expression predicate);
-    db_query& and_where(db_expression predicate);
-    db_query& or_where(db_expression predicate);
+    db_query& join(db_join_type type, const db_query& query, const db_expr& on, std::string_view alias, const db_source_options& options = {});
+    db_query& join(db_join_type type, db_query&& query, const db_expr& on, std::string_view alias, const db_source_options& options = {});
+    db_query& join_function(db_join_type type, const db_expr& function, const db_expr& on, std::string_view alias, const db_source_options& options = {});
+    db_query& where(const db_expr& predicate);
+    db_query& and_where(const db_expr& predicate);
+    db_query& or_where(const db_expr& predicate);
     db_query& clear_where();
-    db_query& group_by(std::span<const db_expression> expressions);
-    db_query& group_by(std::initializer_list<db_expression> expressions) {
-        return group_by(std::span<const db_expression>(expressions.begin(), expressions.size()));
+    db_query& group_by(std::span<const db_expr> expressions);
+    db_query& group_by(std::initializer_list<db_expr> expressions) {
+        return group_by(std::span<const db_expr>(expressions.begin(), expressions.size()));
     }
-    db_query& add_group_by(db_expression expression);
-    db_query& having(db_expression predicate);
-    db_query& and_having(db_expression predicate);
-    db_query& or_having(db_expression predicate);
+    db_query& add_group_by(const db_expr& expression);
+    db_query& having(const db_expr& predicate);
+    db_query& and_having(const db_expr& predicate);
+    db_query& or_having(const db_expr& predicate);
     db_query& clear_having();
-    db_query& order_by(db_expression expression, db_order_direction direction = db_order_direction::asc, db_nulls_order nulls = db_nulls_order::default_);
-    db_query& add_order_by(db_expression expression, db_order_direction direction = db_order_direction::asc, db_nulls_order nulls = db_nulls_order::default_);
+    db_query& order_by(const db_expr& expression, db_order_direction direction = db_order_direction::asc, db_nulls_order nulls = db_nulls_order::default_);
+    db_query& add_order_by(const db_expr& expression, db_order_direction direction = db_order_direction::asc, db_nulls_order nulls = db_nulls_order::default_);
     db_query& clear_order();
     db_query& limit(std::optional<query_row_count> count);
     template <std::integral integer_type>
@@ -1185,13 +1175,13 @@ public:
         return set_offset_value(static_cast<std::uint64_t>(count));
     }
     db_query& distinct(bool enabled = true);
-    db_query& distinct_on(std::span<const db_expression> expressions);
-    db_query& distinct_on(std::initializer_list<db_expression> expressions) {
-        return distinct_on(std::span<const db_expression>(expressions.begin(), expressions.size()));
+    db_query& distinct_on(std::span<const db_expr> expressions);
+    db_query& distinct_on(std::initializer_list<db_expr> expressions) {
+        return distinct_on(std::span<const db_expr>(expressions.begin(), expressions.size()));
     }
-    db_query& returning(std::span<const db_expression> expressions);
-    db_query& returning(std::initializer_list<db_expression> expressions) {
-        return returning(std::span<const db_expression>(expressions.begin(), expressions.size()));
+    db_query& returning(std::span<const db_selection> expressions);
+    db_query& returning(std::initializer_list<db_selection> expressions) {
+        return returning(std::span<const db_selection>(expressions.begin(), expressions.size()));
     }
     // Existing positional rows cannot be reinterpreted with a different column
     // list. Use insert_rows() to append named rows and grow the column union.
@@ -1202,21 +1192,21 @@ public:
     db_query& insert_into(std::string_view table_value, std::initializer_list<std::string_view> columns, std::string_view alias = {}) {
         return insert_into(table_value, std::span<const std::string_view>(columns.begin(), columns.size()), alias);
     }
-    db_query& values(std::span<const db_expression> row);
-    db_query& values(std::initializer_list<db_expression> row) {
-        return values(std::span<const db_expression>(row.begin(), row.size()));
+    db_query& values(std::span<const db_expr> row);
+    db_query& values(std::initializer_list<db_expr> row) {
+        return values(std::span<const db_expr>(row.begin(), row.size()));
     }
     // Appends a row-major batch to an INSERT, matching fields by column name.
     // Missing fields in old/new rows become DEFAULT. values.size() must equal
-    // columns.size() * row_count and every expression must belong to this query.
-    // One explicit default-only row is supported; multiple all-default rows
-    // require at least one named column. A rejected batch preserves SQL semantics.
-    db_query& insert_rows(std::span<const std::string_view> columns, std::span<const db_expression> values, std::size_t row_count);
+    // columns.size() * row_count. One explicit default-only row is supported;
+    // multiple all-default rows require at least one named column. A rejected
+    // batch preserves SQL semantics.
+    db_query& insert_rows(std::span<const std::string_view> columns, std::span<const db_expr> values, std::size_t row_count);
     db_query& insert_from(const db_query& query);
     db_query& insert_from(db_query&& query);
     db_query& on_conflict(const db_conflict_options& conflict);
     db_query& update(std::string_view table, std::string_view alias = {});
-    db_query& set(std::string_view column, db_expression value);
+    db_query& set(std::string_view column, const db_expr& value);
     db_query& set(const db_assignment& assignment);
     // A batch is published only after every assignment is prepared. Failure
     // preserves the previous assignments; duplicate columns use the last value.
@@ -1260,6 +1250,50 @@ private:
     friend class db_write_query_builder;
     template <typename, typename>
     friend class db_repository;
+    template <typename e_type, typename c_type>
+    friend db_expression detail::entity_column_value(db_query& query, const e_type& entity);
+    friend void detail::apply_entity_upsert(db_query& query, std::span<const detail::db_column_info> entity_columns, std::span<db_assignment> updates, std::span<const std::string_view> inserted_columns, const db_conflict_options& options, db_driver driver, std::string_view table, std::string_view qualifier, std::string_view update_date, std::string_view version);
+
+    // Query-bound node builders for the ORM, relation plans and expression
+    // import. Each appends exactly its own node; arguments must belong here.
+    db_expression column(std::string_view name, std::string_view table = {});
+    db_expression star(std::string_view table = {});
+    db_expression value(const db_value& value);
+    template <detail::db_parameter value_type>
+        requires(!std::same_as<std::remove_cvref_t<value_type>, db_value>)
+    db_expression value(value_type&& value) {
+        return this->value(detail::make_immediate_db_parameter(std::forward<value_type>(value)));
+    }
+    db_expression excluded(std::string_view column);
+    db_expression null_value();
+    db_expression default_value();
+    db_expression call(std::string_view function, std::span<const db_expression> args = {});
+    db_expression binary(db_expression lhs, db_binary_operator op, db_expression rhs);
+    db_expression unary(db_unary_operator op, db_expression value);
+    db_expression alias(db_expression value, std::string_view name);
+    // The rvalue overloads take over an argument already allocated from this
+    // query's resource and copy any other; either way the argument is left
+    // moved-from unless it is this query itself.
+    db_expression exists(const db_query& query);
+    db_expression exists(db_query&& query);
+    db_expression subquery(const db_query& query);
+    db_expression subquery(db_query&& query);
+    db_expression aggregate(std::string_view function, std::span<const db_expression> args, bool distinct = false, std::span<const db_order_term> order = {});
+    // Copies the expression and its referenced subqueries into this query's resource;
+    // the source must remain alive during import, but is unchanged and need not outlive the result.
+    // Both qualifiers must be empty or valid nonempty names. A mapping rewrites exact
+    // column/star qualifiers, including correlated references in nested queries, but not
+    // references bound by a local alias or unaliased table name (qualified or unqualified).
+    // Raw SQL text is not rewritten. Throws std::invalid_argument for an empty expression,
+    // invalid mapping, or a mapped correlated reference captured by a local target binding.
+    // Throws std::length_error if expression/query nesting exceeds 256 levels;
+    // a chain of one AND or OR operator counts as a single level.
+    db_expression import_expression(db_expression expression, std::string_view source_qualifier = {}, std::string_view target_qualifier = {});
+    // Imports a public entry point argument; a handle of this query is used in place.
+    [[nodiscard]] std::size_t bind(const db_expr& expression);
+    [[nodiscard]] std::size_t bind_projection(const db_selection& projection);
+    [[nodiscard]] std::vector<std::size_t> bind_projections(std::span<const db_selection> projections);
+    [[nodiscard]] std::vector<std::size_t> bind_all(std::span<const db_expr> expressions);
 
     [[nodiscard]] bool cacheable() const;
     [[nodiscard]] std::optional<bool> cache_enabled() const;
@@ -1280,8 +1314,7 @@ private:
     [[nodiscard]] const detail::db_query_storage& storage() const;
     [[nodiscard]] std::size_t require_expression(db_expression expression) const;
     void require_select_query() const;
-    db_query& replace_expressions(std::vector<std::size_t>& target, std::span<const db_expression> expressions);
-    db_query& combine_clause_predicate(std::size_t& clause, db_binary_operator op, db_expression predicate);
+    db_query& combine_clause_predicate(std::size_t& clause, db_binary_operator op, const db_expr& predicate);
     // Every expression builder constructs exactly its own node kind and
     // appends it here; the returned handle addresses the appended node.
     [[nodiscard]] detail::db_query_node make_node(detail::db_node_kind kind, std::span<const db_expression> args = {}) const;
@@ -1301,8 +1334,8 @@ public:
     db_tuple(std::initializer_list<db_expr> elements) :
         db_tuple(std::span<const db_expr>(elements.begin(), elements.size())) {}
 
-    [[nodiscard]] db_expression expression(db_query& target, std::string_view table = {}, std::string_view alias = {}) const {
-        return owned_.import_into(target, table, alias);
+    [[nodiscard]] operator db_expr() const {
+        return db_expr(owned_);
     }
 
     [[nodiscard]] db_predicate operator==(const db_tuple& rhs) const {

@@ -37,7 +37,7 @@
 #include <asio/ssl.hpp>
 #include <openssl/ssl.h>
 
-#include "asio_bridge.h"
+#include "asio_completion.h"
 #include "blocking_pool.h"
 #include "connection_lifecycle.h"
 #include "connection_scanner.h"

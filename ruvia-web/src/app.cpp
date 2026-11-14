@@ -64,40 +64,17 @@ application& app() {
 }
 
 application::application() :
-    state_(std::make_shared<detail::app_state>()) {}
+    application(std::make_shared<detail::app_state>()) {}
+
+// app_state precedes the backend: its constructor initializes OpenSSL first.
+application::application(std::shared_ptr<detail::app_state> state) :
+    listener_controls(detail::make_app_listener_backend(state)),
+    state_(std::move(state)) {}
 
 application::~application() = default;
 
 const env& application::env() const noexcept {
     return state_->env_;
-}
-
-http_server_stats application::stats() const {
-    auto& state_value = *state_;
-    std::lock_guard lock(state_value.mutex_);
-    http_server_stats total;
-    if (!state_value.runtime_) {
-        return total;
-    }
-    for (const auto& worker : state_value.runtime_->workers_) {
-        const auto stats = worker.runtime_->stats();
-        total.active_connections_ += stats.active_connections_;
-        total.connections_refused_ += stats.connections_refused_;
-        total.connection_failures_ += stats.connection_failures_;
-        total.accept_failures_ += stats.accept_failures_;
-        total.worker_failures_ += stats.worker_failures_;
-        detail::append_listener_stats(total, stats);
-    }
-#if defined(_WIN32)
-    // The acceptor refuses and fails accepts before any worker sees them.
-    total.connections_refused_ += state_value.runtime_->acceptor_->refused();
-    total.accept_failures_ += state_value.runtime_->acceptor_->accept_failures();
-#endif
-    // One application-wide refresher owns the count; workers only adopt.
-    if (state_value.runtime_->document_root_) {
-        total.document_root_refresh_failures_ = state_value.runtime_->document_root_->failures();
-    }
-    return total;
 }
 
 blocking_pool_stats application::blocking_pool_stats() const {
@@ -351,143 +328,13 @@ application& application::trusted_proxies(trusted_proxy_config config) & {
     });
 }
 
-application& application::on_access(access_log_callback callback_value) & {
-    return detail::mutate_stopped_app(*this, *state_, "cannot register access-log hook while app is running", [callback_value = detail::own_callback(std::move(callback_value))](detail::app_state& state_value) mutable {
-        // Captured old target retires with this lambda, after the app lock.
-        std::swap(state_value.access_log_callback_, callback_value);
-        state_value.options_.access_log_.callback_ = detail::callback_access::ref(state_value.access_log_callback_);
+application& application::callbacks(http_server_callbacks callbacks) & {
+    // Built outside the lock; the swapped-out set retires with this lambda,
+    // after the app lock, so a target's destructor may reenter the app.
+    return detail::mutate_stopped_app(*this, *state_, "cannot change host callbacks while app is running", [replacement = std::make_unique<http_server_callbacks>(std::move(callbacks))](detail::app_state& state_value) mutable {
+        std::swap(state_value.callbacks_, replacement);
+        state_value.options_.use_callbacks(*state_value.callbacks_);
     });
-}
-
-application& application::on_connection_failure(connection_failure_callback callback_value) & {
-    return detail::mutate_stopped_app(*this, *state_, "cannot register connection-failure hook while app is running", [callback_value = detail::own_callback(std::move(callback_value))](detail::app_state& state_value) mutable {
-        std::swap(state_value.connection_failure_callback_, callback_value);
-        state_value.options_.connection_failure_.callback_ = detail::callback_access::ref(state_value.connection_failure_callback_);
-    });
-}
-
-application& application::on_tls_client_hello(tls_client_hello_callback callback_value) & {
-    return detail::mutate_stopped_app(*this, *state_, "cannot register TLS ClientHello hook while app is running", [callback_value = detail::own_callback(std::move(callback_value))](detail::app_state& state_value) mutable {
-        std::swap(state_value.tls_client_hello_callback_, callback_value);
-        state_value.options_.tls_client_hello_ = detail::callback_access::ref(state_value.tls_client_hello_callback_);
-    });
-}
-
-application& application::on_tls_client_hello(std::nullptr_t) & {
-    return on_tls_client_hello(tls_client_hello_callback{});
-}
-
-application& application::on_http2_input(http2_input_callback callback_value) & {
-    return detail::mutate_stopped_app(*this, *state_, "cannot register HTTP/2 input hook while app is running", [callback_value = detail::own_callback(std::move(callback_value))](detail::app_state& state_value) mutable {
-        std::swap(state_value.http2_input_callback_, callback_value);
-        state_value.options_.http2_input_ = detail::callback_access::ref(state_value.http2_input_callback_);
-    });
-}
-
-application& application::on_http2_input(std::nullptr_t) & {
-    return on_http2_input(http2_input_callback{});
-}
-
-#if defined(RUVIA_ENABLE_HTTP2)
-application& application::on_http2_frame(http2_frame_callback callback_value) & {
-    return detail::mutate_stopped_app(*this, *state_, "cannot register HTTP/2 frame hook while app is running", [callback_value = detail::own_callback(std::move(callback_value))](detail::app_state& state_value) mutable {
-        std::swap(state_value.http2_frame_callback_, callback_value);
-        state_value.options_.http2_frame_ = detail::callback_access::ref(state_value.http2_frame_callback_);
-    });
-}
-
-application& application::on_http2_frame(std::nullptr_t) & {
-    return on_http2_frame(http2_frame_callback{});
-}
-
-application& application::on_http2_headers(http2_headers_callback callback_value) & {
-    return detail::mutate_stopped_app(*this, *state_, "cannot register HTTP/2 headers hook while app is running", [callback_value = detail::own_callback(std::move(callback_value))](detail::app_state& state_value) mutable {
-        std::swap(state_value.http2_headers_callback_, callback_value);
-        state_value.options_.http2_headers_ = detail::callback_access::ref(state_value.http2_headers_callback_);
-    });
-}
-
-application& application::on_http2_headers(std::nullptr_t) & {
-    return on_http2_headers(http2_headers_callback{});
-}
-#endif
-#if defined(RUVIA_ENABLE_HTTP3)
-application& application::on_http3_frame(http3_frame_callback callback_value) & {
-    return detail::mutate_stopped_app(*this, *state_, "cannot register HTTP/3 frame hook while app is running", [callback_value = detail::own_callback(std::move(callback_value))](detail::app_state& state_value) mutable {
-        std::swap(state_value.http3_frame_callback_, callback_value);
-        state_value.options_.http3_frame_ = detail::callback_access::ref(state_value.http3_frame_callback_);
-    });
-}
-
-application& application::on_http3_frame(std::nullptr_t) & {
-    return on_http3_frame(http3_frame_callback{});
-}
-
-application& application::on_http3_field(http3_field_callback callback_value) & {
-    return detail::mutate_stopped_app(*this, *state_, "cannot register HTTP/3 field hook while app is running", [callback_value = detail::own_callback(std::move(callback_value))](detail::app_state& state_value) mutable {
-        std::swap(state_value.http3_field_callback_, callback_value);
-        state_value.options_.http3_field_ = detail::callback_access::ref(state_value.http3_field_callback_);
-    });
-}
-
-application& application::on_http3_field(std::nullptr_t) & {
-    return on_http3_field(http3_field_callback{});
-}
-#endif
-
-application& application::on_connection(connection_callback callback_value) & {
-    return detail::mutate_stopped_app(*this, *state_, "cannot register connection handler while app is running", [callback_value = detail::own_callback(std::move(callback_value))](detail::app_state& state_value) mutable {
-        std::swap(state_value.connection_callback_, callback_value);
-        state_value.options_.connection_ = detail::callback_access::ref(state_value.connection_callback_);
-    });
-}
-
-application& application::on_connection(std::nullptr_t) & {
-    return on_connection(connection_callback{});
-}
-
-application& application::on_connection_admission(connection_admission_callback callback_value) & {
-    return detail::mutate_stopped_app(*this, *state_, "cannot register connection admission hook while app is running", [callback_value = detail::own_callback(std::move(callback_value))](detail::app_state& state_value) mutable {
-        std::swap(state_value.connection_admission_callback_, callback_value);
-        state_value.options_.connection_admission_ = detail::callback_access::ref(state_value.connection_admission_callback_);
-    });
-}
-
-application& application::on_connection_admission(std::nullptr_t) & {
-    return on_connection_admission(connection_admission_callback{});
-}
-
-application& application::on_connection_open(connection_open_callback callback_value) & {
-    return detail::mutate_stopped_app(*this, *state_, "cannot register connection open hook while app is running", [callback_value = detail::own_callback(std::move(callback_value))](detail::app_state& state_value) mutable {
-        std::swap(state_value.connection_open_callback_, callback_value);
-        state_value.options_.connection_open_ = detail::callback_access::ref(state_value.connection_open_callback_);
-    });
-}
-
-application& application::on_connection_open(std::nullptr_t) & {
-    return on_connection_open(connection_open_callback{});
-}
-
-application& application::on_connection_close(connection_close_callback callback_value) & {
-    return detail::mutate_stopped_app(*this, *state_, "cannot register connection close hook while app is running", [callback_value = detail::own_callback(std::move(callback_value))](detail::app_state& state_value) mutable {
-        std::swap(state_value.connection_close_callback_, callback_value);
-        state_value.options_.connection_close_ = detail::callback_access::ref(state_value.connection_close_callback_);
-    });
-}
-
-application& application::on_connection_close(std::nullptr_t) & {
-    return on_connection_close(connection_close_callback{});
-}
-
-application& application::on_request_stream(request_stream_callback callback_value) & {
-    return detail::mutate_stopped_app(*this, *state_, "cannot register request stream handler while app is running", [callback_value = detail::own_callback(std::move(callback_value))](detail::app_state& state_value) mutable {
-        std::swap(state_value.request_stream_callback_, callback_value);
-        state_value.options_.request_stream_ = detail::callback_access::ref(state_value.request_stream_callback_);
-    });
-}
-
-application& application::on_request_stream(std::nullptr_t) & {
-    return on_request_stream(request_stream_callback{});
 }
 
 #ifdef RUVIA_ENABLE_DATABASE

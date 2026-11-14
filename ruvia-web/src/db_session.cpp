@@ -19,6 +19,7 @@
 #include "db_query_plan.h"
 #include "db_query_storage.h"
 #include "db_sql_scan.h"
+#include "io_operation.h"
 #include "operation_options.h"
 #ifdef RUVIA_ENABLE_REDIS
 #include "db_query_cache.h"
@@ -30,6 +31,21 @@ namespace {
 
 task<void> discard_rows_task(task<db_rows> rows_task) {
     (void)co_await std::move(rows_task);
+}
+
+// One statement on the pool with the handle's options and the request's
+// cancellation linked. Owns its inputs: the link may start it later.
+template <bool exec_statement>
+[[nodiscard]] auto start_db_statement(const operation_options& options, const stop_token& request_stop, detail::db_pool_ref_type client, std::string sql, std::vector<db_value> params, detail::request_io_metrics* io_metrics) {
+    return detail::start_request_linked(options, request_stop, [client, sql = std::move(sql), params = std::move(params), io_metrics](const operation_options& linked) mutable {
+        return detail::visit_db_pool(client, [&](auto& pool) {
+            if constexpr (exec_statement) {
+                return pool.execute(std::move(sql), std::move(params), linked, io_metrics);
+            } else {
+                return pool.query(std::move(sql), std::move(params), linked, io_metrics);
+            }
+        });
+    });
 }
 
 [[nodiscard]] constexpr bool has_sql_non_whitespace(std::string_view sql) noexcept {
@@ -54,6 +70,7 @@ db_session::db_session(const db_session& other) noexcept :
     client_(other.client_),
     io_metrics_(other.io_metrics_),
     options_(other.options_),
+    request_stop_(other.request_stop_),
     registration_(other.registration_, this) {}
 
 #ifdef RUVIA_ENABLE_REDIS
@@ -62,7 +79,7 @@ db_query_result_cache db_session::query_result_cache() const {
     if (!cache_) {
         throw db_error(db_error::code_type::not_configured, std::nullopt, "database query cache is not configured");
     }
-    return db_query_result_cache(*cache_, registration_.scope(), io_metrics_, options_);
+    return db_query_result_cache(*cache_, registration_.scope(), io_metrics_, options_, request_stop_);
 }
 #endif
 
@@ -86,6 +103,7 @@ void db_session::expire_capability(void* target) noexcept {
     handle.client_ = detail::db_pool_ref_type{};
     handle.io_metrics_ = nullptr;
     handle.options_ = {};
+    handle.request_stop_ = {};
 }
 
 db_driver db_session::query_driver() const {
@@ -107,18 +125,24 @@ task<db_rows> db_session::query_task(const db_query& query) const {
     auto plan = detail::db_query_plan::prepare(query, nullptr, backend);
 #ifdef RUVIA_ENABLE_REDIS
     if (backend.cache_ != nullptr && plan.first_.cache_key_.has_value()) {
-        return detail::execute_db_query_plan<false>(std::move(plan), backend, options_);
+        return detail::start_request_linked(options_, request_stop_, [plan = std::move(plan), backend](const operation_options& options) mutable {
+            return detail::execute_db_query_plan<false>(std::move(plan), backend, options);
+        });
     }
 #endif
-    auto options_copy = options_;
-    return detail::query_db_backend(backend, std::move(plan.first_.sql_), std::move(plan.first_.params_), options_copy);
+    return detail::start_request_linked(options_, request_stop_, [backend, sql = std::move(plan.first_.sql_), params = std::move(plan.first_.params_)](const operation_options& options) mutable {
+        auto options_copy = options;
+        return detail::query_db_backend(backend, std::move(sql), std::move(params), options_copy);
+    });
 }
 
 task<std::pair<db_rows, db_rows>> db_session::query_and_count_task(const db_query& query, const db_query& count) const {
     registration_.require_active();
     const auto backend = query_backend();
     auto plan = detail::db_query_plan::prepare(query, &count, backend);
-    return detail::execute_db_query_plan<true>(std::move(plan), backend, options_);
+    return detail::start_request_linked(options_, request_stop_, [plan = std::move(plan), backend](const operation_options& options) mutable {
+        return detail::execute_db_query_plan<true>(std::move(plan), backend, options);
+    });
 }
 
 task<db_exec_result> db_session::execute_query(const db_query& query) const {
@@ -127,62 +151,60 @@ task<db_exec_result> db_session::execute_query(const db_query& query) const {
     if (statement.returns_rows()) {
         throw std::invalid_argument("execute requires a statement without returned rows");
     }
-    return ::ruvia::make_scoped_operation(registration_.scope(), detail::visit_db_pool(client_, [&](auto& client) {
-        return client.execute(std::move(statement.sql_), std::move(statement.params_), options_, io_metrics_);
-    }));
+    return ::ruvia::make_scoped_operation(registration_.scope(), start_db_statement<true>(options_, request_stop_, client_, std::move(statement.sql_), std::move(statement.params_), io_metrics_));
 }
 
 task<db_exec_result> db_session::execute_prepared(std::string sql) const {
     registration_.require_active();
-    return ::ruvia::make_scoped_operation(registration_.scope(), detail::visit_db_pool(client_, [&](auto& client) {
-        return client.execute(std::move(sql), std::vector<db_value>{}, options_, io_metrics_);
-    }));
+    return ::ruvia::make_scoped_operation(registration_.scope(), start_db_statement<true>(options_, request_stop_, client_, std::move(sql), {}, io_metrics_));
 }
 
 task<db_rows> db_session::query(std::string_view sql, std::span<const db_value> params) const {
     registration_.require_active();
     auto statement = prepare_db_statement(sql, params);
-    return ::ruvia::make_scoped_operation(registration_.scope(), detail::visit_db_pool(client_, [&](auto& client) {
-        return client.query(std::move(statement.sql_), std::move(statement.params_), options_, io_metrics_);
-    }));
+    return ::ruvia::make_scoped_operation(registration_.scope(), start_db_statement<false>(options_, request_stop_, client_, std::move(statement.sql_), std::move(statement.params_), io_metrics_));
 }
 
 task<db_exec_result> db_session::execute(std::string_view sql, std::span<const db_value> params) const {
     registration_.require_active();
     auto statement = prepare_db_statement(sql, params);
-    return ::ruvia::make_scoped_operation(registration_.scope(), detail::visit_db_pool(client_, [&](auto& client) {
-        return client.execute(std::move(statement.sql_), std::move(statement.params_), options_, io_metrics_);
-    }));
+    return ::ruvia::make_scoped_operation(registration_.scope(), start_db_statement<true>(options_, request_stop_, client_, std::move(statement.sql_), std::move(statement.params_), io_metrics_));
 }
 
 task<db_stream_result> db_session::query_stream(std::string_view sql, std::span<const db_value> params) const {
     registration_.require_active();
     auto statement = prepare_db_statement(sql, params);
     auto& scope = registration_.scope();
-    return ::ruvia::make_scoped_operation(scope, query_stream_prepared(client_, std::move(statement.sql_), std::move(statement.params_), scope, io_metrics_, options_));
+    return ::ruvia::make_scoped_operation(scope, query_stream_prepared(client_, std::move(statement.sql_), std::move(statement.params_), scope, io_metrics_, options_, request_stop_));
 }
 
-task<db_stream_result> db_session::query_stream_prepared(detail::db_pool_ref_type client, std::string sql, std::vector<db_value> params, ::ruvia::operation_scope& operation_scope, detail::request_io_metrics* io_metrics, operation_options options) {
+task<db_stream_result> db_session::query_stream_prepared(detail::db_pool_ref_type client, std::string sql, std::vector<db_value> params, ::ruvia::operation_scope& operation_scope, detail::request_io_metrics* io_metrics, operation_options options, stop_token request_stop) {
     detail::scoped_request_io_timer timer(io_metrics, detail::request_io_kind::db);
+    // The stream outlives this call, so it owns the link its reads use.
+    auto request_link = detail::make_request_link(options, request_stop);
+    auto stream_options = request_link ? request_link->options() : detail::request_bound_options(options, request_stop);
     auto result_value = co_await detail::visit_db_pool(client, [&](auto& pool) {
-        return pool.stream(std::move(sql), std::move(params), std::move(options));
+        return pool.stream(std::move(sql), std::move(params), std::move(stream_options));
     });
-    result_value.bind_operation_scope(operation_scope, io_metrics);
+    result_value.bind_operation_scope(operation_scope, io_metrics, std::move(request_link));
     co_return result_value;
 }
 
 task<db_transaction> db_session::begin_transaction(db_transaction_options options) const {
     registration_.require_active();
     auto& scope = registration_.scope();
-    return ::ruvia::make_scoped_operation(scope, begin_transaction_prepared(query_backend(), scope, options_, std::move(options)));
+    return ::ruvia::make_scoped_operation(scope, begin_transaction_prepared(query_backend(), scope, options_, request_stop_, std::move(options)));
 }
 
-task<db_transaction> db_session::begin_transaction_prepared(detail::db_query_backend backend, ::ruvia::operation_scope& operation_scope, operation_options operation_options_value, db_transaction_options transaction_options) {
+task<db_transaction> db_session::begin_transaction_prepared(detail::db_query_backend backend, ::ruvia::operation_scope& operation_scope, operation_options operation_options_value, stop_token request_stop, db_transaction_options transaction_options) {
     detail::scoped_request_io_timer timer(backend.io_metrics_, detail::request_io_kind::db);
+    // The transaction outlives this call, so it owns the link its statements use.
+    auto request_link = detail::make_request_link(operation_options_value, request_stop);
+    auto transaction_operation_options = request_link ? request_link->options() : detail::request_bound_options(operation_options_value, request_stop);
     auto transaction = co_await detail::visit_db_pool(backend.pool_, [&](auto& pool) {
-        return pool.begin_transaction(std::move(operation_options_value), std::move(transaction_options));
+        return pool.begin_transaction(std::move(transaction_operation_options), std::move(transaction_options));
     });
-    transaction.bind_operation_scope(operation_scope, backend.io_metrics_);
+    transaction.bind_operation_scope(operation_scope, backend.io_metrics_, std::move(request_link));
     co_return transaction;
 }
 
@@ -193,15 +215,14 @@ task<void> db_session::notify(std::string_view channel, std::string_view payload
     }
     auto statement = prepare_db_notify(channel, payload);
     auto& scope = registration_.scope();
-    return ::ruvia::make_scoped_operation(scope, discard_rows_task(detail::visit_db_pool(client_, [&](auto& client) {
-        return client.query(std::move(statement.sql_), std::move(statement.params_), options_, io_metrics_);
-    })));
+    return ::ruvia::make_scoped_operation(scope, discard_rows_task(start_db_statement<false>(options_, request_stop_, client_, std::move(statement.sql_), std::move(statement.params_), io_metrics_)));
 }
 
 db_session db_session::bind_caller_scope(::ruvia::operation_scope& scope, detail::request_io_metrics* io_metrics, const stop_token& stop_token_value) && {
     registration_.require_active();
     db_session bound(client_, scope, io_metrics, cache_);
-    bound.options_ = override_operation_options(options_, operation_options{.timeout_ = std::nullopt, .stop_token_ = stop_token_value});
+    bound.options_ = options_;
+    bound.request_stop_ = stop_token_value;
     return bound;
 }
 

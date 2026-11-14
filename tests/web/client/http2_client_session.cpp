@@ -116,7 +116,7 @@ private:
         ruvia::http_response response;
         response.body("ok");
         const auto head = connection.submit_response_head(stream_id, response, ruvia::plan_buffered_http_response_write(built.known_method(), response));
-        if (!std::holds_alternative<ruvia::http_buffered_response_write_plan>(head) || connection.submit_data(stream_id, response.body_bytes(), ruvia::http2_end_stream::end_stream, 65535).status_ != ruvia::http2_data_submit_status::complete || connection.release(std::move(request)) != ruvia::http2_server_request_release_status::released) {
+        if (!std::holds_alternative<ruvia::http_buffered_response_write_plan>(head) || connection.submit_data(stream_id, response.body_bytes(), ruvia::http2_end_stream::end_stream, 65535).status_ != ruvia::http_data_submit_status::complete || connection.release(std::move(request)) != ruvia::http2_server_request_release_status::released) {
             throw std::runtime_error("HTTP/2 liveness peer response rejected");
         }
         responded_ = std::chrono::steady_clock::now();
@@ -233,7 +233,7 @@ public:
     // Submit capacity settings through the protocol engine so its ACK accounting
     // stays synchronized with the peer, then write every pending frame.
     [[nodiscard]] asio::awaitable<bool> flush(std::optional<std::uint8_t> stream_limit = std::nullopt) {
-        if (stream_limit && connection_.submit_max_concurrent_streams(*stream_limit) != ruvia::http2_submit_status::accepted) {
+        if (stream_limit && connection_.submit_max_concurrent_streams(*stream_limit) != ruvia::http_submit_status::accepted) {
             throw std::runtime_error("HTTP/2 scripted origin settings rejected");
         }
         ruvia::test::drain_output(connection_, output_);
@@ -272,12 +272,12 @@ public:
         ruvia::http_response response;
         response.body(body);
         const auto head = connection_.submit_response_head(stream_id, response, ruvia::plan_buffered_http_response_write(built.known_method(), response));
-        if (!std::holds_alternative<ruvia::http_buffered_response_write_plan>(head) || connection_.submit_data(stream_id, response.body_bytes(), ruvia::http2_end_stream::end_stream, 65535).status_ != ruvia::http2_data_submit_status::complete || connection_.release(std::move(request)) != ruvia::http2_server_request_release_status::released) {
+        if (!std::holds_alternative<ruvia::http_buffered_response_write_plan>(head) || connection_.submit_data(stream_id, response.body_bytes(), ruvia::http2_end_stream::end_stream, 65535).status_ != ruvia::http_data_submit_status::complete || connection_.release(std::move(request)) != ruvia::http2_server_request_release_status::released) {
             throw std::runtime_error("scripted HTTP/2 response rejected");
         }
     }
     void refuse(ruvia::http2_request_head_event&& request, ruvia::http2_error_code error) {
-        if (connection_.submit_reset(request.stream_id(), error) != ruvia::http2_submit_status::accepted) {
+        if (connection_.submit_reset(request.stream_id(), error) != ruvia::http_submit_status::accepted) {
             throw std::runtime_error("scripted HTTP/2 reset rejected");
         }
         (void)connection_.release(std::move(request));
@@ -380,7 +380,7 @@ TEST(Ruvia, http2_client_uses_available_stream_capacity_across_connections) {
     bool peer_finished = false;
 
     const auto flush = [&](std::size_t index, std::optional<std::uint32_t> stream_limit = std::nullopt) -> asio::awaitable<void> {
-        if (stream_limit && connections[index].submit_max_concurrent_streams(*stream_limit) != ruvia::http2_submit_status::accepted) {
+        if (stream_limit && connections[index].submit_max_concurrent_streams(*stream_limit) != ruvia::http_submit_status::accepted) {
             throw std::runtime_error("HTTP/2 capacity settings rejected");
         }
         std::string output;
@@ -557,7 +557,7 @@ TEST(Ruvia, http2_cold_start_cancelled_waiter_does_not_close_active_session) {
                     ruvia::http_response response;
                     response.body("first-ok");
                     const auto head = connection.submit_response_head(stream_id, response, ruvia::plan_buffered_http_response_write(built.known_method(), response));
-                    if (!std::holds_alternative<ruvia::http_buffered_response_write_plan>(head) || connection.submit_data(stream_id, response.body_bytes(), ruvia::http2_end_stream::end_stream, 65535).status_ != ruvia::http2_data_submit_status::complete || connection.release(std::move(*request)) != ruvia::http2_server_request_release_status::released) {
+                    if (!std::holds_alternative<ruvia::http_buffered_response_write_plan>(head) || connection.submit_data(stream_id, response.body_bytes(), ruvia::http2_end_stream::end_stream, 65535).status_ != ruvia::http_data_submit_status::complete || connection.release(std::move(*request)) != ruvia::http2_server_request_release_status::released) {
                         throw std::runtime_error("HTTP/2 response submission failed");
                     }
                     answered = true;
@@ -678,7 +678,7 @@ TEST(Ruvia, http_client_alpn_renegotiates_after_http2_disconnect_and_closes_on_m
                         // session deterministically: seen before the next send it
                         // opens a new connection; the PING round trip then
                         // advertises last_stream_id = 1 before the close.
-                        connection.begin_drain();
+                        EXPECT_EQ(connection.begin_drain(), ruvia::http_submit_status::accepted);
                         answered = true;
                     }
                 }
@@ -955,7 +955,7 @@ TEST(Ruvia, http2_client_draining_session_bounds_a_new_request_by_acquire_timeou
         (void)co_await first.flush();
         // The held request stays open across the drain.
         [[maybe_unused]] const auto held = co_await first.next_request();
-        first.connection().begin_drain();
+        EXPECT_EQ(first.connection().begin_drain(), ruvia::http_submit_status::accepted);
         co_await first.finish_drain();
         origin.advance();
         co_await first.read_until_end();
@@ -1013,7 +1013,7 @@ TEST(Ruvia, http2_client_draining_session_yields_to_a_free_slot) {
         co_await origin.wait_for_release();
         draining.respond(std::move(c), "c");
         (void)co_await draining.flush();
-        draining.connection().begin_drain();
+        EXPECT_EQ(draining.connection().begin_drain(), ruvia::http_submit_status::accepted);
         co_await draining.finish_drain();
         origin.advance();
         tcp_origin_connection fresh(origin, co_await origin.acceptor().async_accept(asio::use_awaitable));

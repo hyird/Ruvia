@@ -55,16 +55,16 @@ public:
         std::vector<std::byte> bytes_;
     };
 
-    impl(http3_role role, const http3_quic_connection_options& options) :
+    impl(http_connection_role role, const http3_quic_connection_options& options) :
         role_(role),
         callback_context_(options.callback_context_),
         max_udp_payload_size_(options.max_udp_payload_size_),
         max_pending_datagram_bytes_(options.max_pending_datagram_bytes_),
         memory_table_(detail::make_c_library_mem_table<ngtcp2_mem>(memory_)),
         http3_options_(resolve_http3_options(options, return_received_data_credit, this)),
-        http3_(role == http3_role::client ? http3_connection::client(http3_options_) : http3_connection::server(http3_options_)) {
+        http3_(role == http_connection_role::client ? http3_connection::client(http3_options_) : http3_connection::server(http3_options_)) {
         ngtcp2_ccerr_default(&close_error_);
-        const bool server = role == http3_role::server;
+        const bool server = role == http_connection_role::server;
         // A client may choose a zero-length Source Connection ID (RFC 9000
         // §5.1), which a server then addresses its packets to.
         if (options.max_udp_payload_size_ == 0 || options.max_pending_datagram_bytes_ == 0 || options.initial_path_.local.addr == nullptr || options.initial_path_.remote.addr == nullptr || options.source_connection_id_.datalen == 0 || (!server && options.destination_connection_id_.datalen == 0) || options.active_connection_id_limit_ < 2) {
@@ -314,7 +314,7 @@ public:
     static int recv_stream_data_callback(ngtcp2_conn* connection, std::uint32_t flags, std::int64_t stream_id, std::uint64_t, const std::uint8_t* data, std::size_t size, void* user_data, void*) noexcept {
         auto& value = self(user_data);
         try {
-            if (value.role_ == http3_role::server && (stream_id & 3) == 0 && (flags & NGTCP2_STREAM_DATA_FLAG_0RTT) != 0) {
+            if (value.role_ == http_connection_role::server && (stream_id & 3) == 0 && (flags & NGTCP2_STREAM_DATA_FLAG_0RTT) != 0) {
                 value.http3_.mark_early_data(stream_id);
             }
             const auto result = value.http3_.read_stream(stream_id, {reinterpret_cast<const std::byte*>(data), size}, (flags & NGTCP2_STREAM_DATA_FLAG_FIN) != 0, ngtcp2_conn_get_timestamp(connection));
@@ -391,13 +391,13 @@ public:
         }
         // RFC 9000 §4.6: a closed client request stream frees one slot of
         // the peer's bidirectional stream limit.
-        if (value.role_ == http3_role::server && ngtcp2_is_bidi_stream(stream_id) != 0 && ngtcp2_conn_is_local_stream2(connection, stream_id) == 0) {
+        if (value.role_ == http_connection_role::server && ngtcp2_is_bidi_stream(stream_id) != 0 && ngtcp2_conn_is_local_stream2(connection, stream_id) == 0) {
             ngtcp2_conn_extend_max_streams_bidi(connection, 1);
         }
         return 0;
     }
 
-    http3_role role_;
+    http_connection_role role_;
     void* callback_context_;
     std::size_t max_udp_payload_size_;
     std::size_t max_pending_datagram_bytes_;
@@ -429,22 +429,22 @@ public:
     std::exception_ptr callback_error_;
 };
 
-http3_quic_connection::http3_quic_connection(http3_role role, const http3_quic_connection_options& options) :
+http3_quic_connection::http3_quic_connection(http_connection_role role, const http3_quic_connection_options& options) :
     impl_(std::make_unique<impl>(role, options)) {}
 
 http3_quic_connection http3_quic_connection::client(const http3_quic_connection_options& options) {
-    return http3_quic_connection(http3_role::client, options);
+    return http3_quic_connection(http_connection_role::client, options);
 }
 
 http3_quic_connection http3_quic_connection::server(const http3_quic_connection_options& options) {
-    return http3_quic_connection(http3_role::server, options);
+    return http3_quic_connection(http_connection_role::server, options);
 }
 
 http3_quic_connection::~http3_quic_connection() = default;
 http3_quic_connection::http3_quic_connection(http3_quic_connection&&) noexcept = default;
 http3_quic_connection& http3_quic_connection::operator=(http3_quic_connection&&) noexcept = default;
 
-http3_role http3_quic_connection::role() const noexcept {
+http_connection_role http3_quic_connection::role() const noexcept {
     return impl_->role_;
 }
 
@@ -511,7 +511,7 @@ bool http3_quic_connection::http3_started() const noexcept {
 }
 
 std::optional<std::int64_t> http3_quic_connection::open_request_stream() {
-    if (impl_->role_ != http3_role::client || !impl_->http3_started_ || impl_->state_ != impl::close_state::open || ngtcp2_conn_get_streams_bidi_left2(impl_->connection_) == 0) {
+    if (impl_->role_ != http_connection_role::client || !impl_->http3_started_ || impl_->state_ != impl::close_state::open || ngtcp2_conn_get_streams_bidi_left2(impl_->connection_) == 0) {
         return std::nullopt;
     }
     std::int64_t stream_id = -1;
@@ -528,7 +528,7 @@ std::optional<std::int64_t> http3_quic_connection::open_request_stream() {
 }
 
 http3_quic_status http3_quic_connection::start_early_http3(std::span<const std::byte> transport_parameters, http3_peer_settings settings) {
-    if (impl_->role_ != http3_role::client || impl_->http3_started_ || handshake_completed() || impl_->state_ != impl::close_state::open || transport_parameters.empty()) {
+    if (impl_->role_ != http_connection_role::client || impl_->http3_started_ || handshake_completed() || impl_->state_ != impl::close_state::open || transport_parameters.empty()) {
         return http3_quic_status::invalid_state;
     }
     const auto result = ngtcp2_conn_decode_and_set_0rtt_transport_params(impl_->connection_, reinterpret_cast<const std::uint8_t*>(transport_parameters.data()), transport_parameters.size());
@@ -545,7 +545,7 @@ http3_quic_status http3_quic_connection::start_early_http3(std::span<const std::
 }
 
 http3_quic_status http3_quic_connection::reject_early_data() {
-    if (impl_->role_ != http3_role::client || impl_->state_ != impl::close_state::open) {
+    if (impl_->role_ != http_connection_role::client || impl_->state_ != impl::close_state::open) {
         return http3_quic_status::invalid_state;
     }
     if (!impl_->early_http3_) {
@@ -567,7 +567,7 @@ bool http3_quic_connection::early_data_rejected() const noexcept {
 }
 
 std::optional<std::size_t> http3_quic_connection::encode_early_transport_parameters(std::span<std::byte> output) const noexcept {
-    if (impl_->role_ == http3_role::client && ngtcp2_conn_get_remote_transport_params2(impl_->connection_) == nullptr) {
+    if (impl_->role_ == http_connection_role::client && ngtcp2_conn_get_remote_transport_params2(impl_->connection_) == nullptr) {
         return std::nullopt;
     }
     const auto size = ngtcp2_conn_encode_0rtt_transport_params2(impl_->connection_, reinterpret_cast<std::uint8_t*>(output.data()), output.size());
@@ -586,7 +586,7 @@ http3_quic_path http3_quic_connection::current_path() const& noexcept {
 }
 
 http3_quic_result http3_quic_connection::migrate(const ngtcp2_path& path, ngtcp2_tstamp timestamp) {
-    if (impl_->role_ != http3_role::client || impl_->state_ != impl::close_state::open || path.local.addr == nullptr || path.remote.addr == nullptr) {
+    if (impl_->role_ != http_connection_role::client || impl_->state_ != impl::close_state::open || path.local.addr == nullptr || path.remote.addr == nullptr) {
         return {.status_ = http3_quic_status::invalid_state};
     }
     const auto result = ngtcp2_conn_initiate_migration(impl_->connection_, &path, timestamp);

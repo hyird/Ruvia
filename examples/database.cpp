@@ -71,8 +71,7 @@ private:
         co_await load_user_found(c, found);
         std::string body;
         body.append(found ? "found\n" : "not found\n");
-        c.draft().status(found ? ruvia::http_status::ok : ruvia::http_status::not_found);
-        co_return c.text(std::move(body));
+        co_return c.text(std::move(body), {.status_ = found ? ruvia::http_status::ok : ruvia::http_status::not_found});
     }
 
     ruvia::task<ruvia::http_response> stream_users(ruvia::context& c) {
@@ -89,8 +88,7 @@ private:
         body.append("created id=");
         ruvia::http_append_unsigned(body, id);
         body.push_back('\n');
-        c.draft().status(ruvia::http_status::created);
-        co_return c.text(std::move(body));
+        co_return c.text(std::move(body), {.status_ = ruvia::http_status::created});
     }
 
     ruvia::task<ruvia::http_response> transfer(ruvia::context& c) {

@@ -22,6 +22,7 @@
 #include <asio/ssl.hpp>
 #include <asio/write.hpp>
 
+#include "asio_completion.h"
 #include "blocking_pool.h"
 #include "event_loop.h"
 #include "http_client.h"
@@ -226,8 +227,7 @@ ruvia::task<void> serve(ruvia::request_stream& request, observation& observed) {
     request_retirement retirement(observed);
     const auto path = request.request().path();
     if (path == "/forbidden") {
-        request.draft().status(ruvia::http_status::forbidden);
-        (void)co_await request.response().commit();
+        (void)co_await request.response({.status_ = ruvia::http_status::forbidden}).commit();
         co_await request.response().end();
         try {
             (void)co_await request.accept_websocket();
@@ -238,8 +238,7 @@ ruvia::task<void> serve(ruvia::request_stream& request, observation& observed) {
     }
     if (path == "/cold") {
         observed.expired_accept_.emplace(request.accept_websocket());
-        request.draft().status(ruvia::http_status::forbidden);
-        (void)co_await request.response().commit();
+        (void)co_await request.response({.status_ = ruvia::http_status::forbidden}).commit();
         co_await request.response().end();
         co_return;
     }
@@ -427,7 +426,7 @@ public:
             if (invalid_version) {
                 throw std::logic_error("malformed extended CONNECT needs the raw wire fixture");
             }
-            result_.emplace(co_await client.client().connect(destination.authority_).protocol("websocket").target(path).header("Sec-WebSocket-Version", "13").header("Sec-WebSocket-Protocol", "standalone.v1").header("Sec-WebSocket-Extensions", "permessage-deflate").open());
+            result_.emplace(co_await client.client().connect(destination.authority_).protocol("websocket").target(path).header("Sec-WebSocket-Version", "13").header("Sec-WebSocket-Protocol", "standalone.v1").header("Sec-WebSocket-Extensions", "permessage-deflate").connect());
             auto* tunnel = result_->tunnel();
             if (tunnel == nullptr) {
                 throw std::runtime_error("extended CONNECT was refused");
@@ -888,7 +887,7 @@ ruvia::task<void> exercise(ruvia::http_client& client, const target& destination
         if (deflate) {
             request.deflate({.compression_ = {.enabled_ = true}});
         }
-        auto websocket = co_await request.connect();
+        auto websocket = co_await std::move(request).connect();
         co_await websocket.text(payload);
         const auto echo = co_await websocket.read();
         EXPECT_TRUE(echo && echo->payload() == payload);
@@ -1155,7 +1154,7 @@ void exercise_protocol(ruvia::http_client_versions protocol) {
                     co_await pending.open(client, destination, "/host");
                     // Stopping this host must wake the accepted WebSocket read,
                     // retire its borrowed facade, and join every scanner write.
-                    server.close();
+                    server.stop();
                     co_await server.shutdown();
                     EXPECT_EQ(observed.entered_, observed.retired_);
                     EXPECT_EQ(server.stats().active_connections_, 0U);

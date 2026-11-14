@@ -272,14 +272,14 @@ TEST(Ruvia, file_response_preserves_normal_status_before_evaluating_request_cond
         static_file_test_request request;
         request.add_header(item.condition_);
         with_static_context(request, [&](ruvia::context& context_value) -> ruvia::task<void> {
-            context_value.draft().status(item.status_);
-            context_value.draft().header("X-Context", "preserved");
+            const std::array headers{ruvia::http_header_view{"X-Context", "preserved"}};
+            const ruvia::response_options head{.status_ = item.status_, .headers_ = headers};
             std::optional<ruvia::http_response> response;
             try {
                 if (indexed) {
-                    response.emplace(co_await context_value.static_file(root, {.relative_path_ = "payload.txt"}));
+                    response.emplace(co_await context_value.static_file(root, {.relative_path_ = "payload.txt"}, head));
                 } else {
-                    response.emplace(co_await context_value.file({.path_ = path}));
+                    response.emplace(co_await context_value.file({.path_ = path}, head));
                 }
             } catch (const ruvia::http_error&) {
             }
@@ -701,11 +701,10 @@ TEST(Ruvia, static_file_preserves_context_vary_when_adding_accept_encoding) {
     static_file_test_request request;
     request.set_method("GET");
     with_static_context(request, [&](ruvia::context& context_value) -> ruvia::task<void> {
-        context_value.draft().header("Vary", "Origin");
-
-        const auto response = co_await context_value.static_file(root, {.relative_path_ = "app.js", .content_type_ = "text/javascript"});
+        const std::array headers{ruvia::http_header_view{"Vary", "Origin"}};
+        const auto response = co_await context_value.static_file(root, {.relative_path_ = "app.js", .content_type_ = "text/javascript"}, {.headers_ = headers});
         const auto vary = response.header("Vary").value_or("");
-        // context response metadata is applied after the file's base headers. It
+        // head metadata is applied after the file's base headers. It
         // must not erase the negotiation dimension, or a shared cache can reuse an
         // identity/encoded representation for the wrong Accept-Encoding request.
         EXPECT_TRUE(vary.find("Origin") != std::string_view::npos);

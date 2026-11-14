@@ -265,10 +265,10 @@ http_server_listener_definition validate_run_listener(const http_server_listener
         }
     }
     if (listener.connection_.has_value() && !options.connection_) {
-        throw std::invalid_argument("listener_dispatch::connection requires application::on_connection()");
+        throw std::invalid_argument("listener_dispatch::connection requires http_server_callbacks::connection_");
     }
     if (listener.request_stream_ && !options.request_stream_) {
-        throw std::invalid_argument("listener_dispatch::request_stream requires application::on_request_stream()");
+        throw std::invalid_argument("listener_dispatch::request_stream requires http_server_callbacks::request_stream_");
     }
     // A QUIC connection ID names its owning worker in 16 bits.
     if (listener.http3_.has_value() && worker_count > http3_max_worker_count) {

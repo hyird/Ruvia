@@ -104,7 +104,7 @@ TEST(Ruvia, http2_client_tunnel_owns_cold_input_half_closes_and_preserves_siblin
             for (unsigned round = 0; round != 4; ++round) {
                 observation_value.finish_first_ = round >= 2;
                 std::string authority(round == 1 ? "proxy.test" : "client-target.test:443");
-                auto cold = client_origin.connect(authority).protocol(round == 1 ? "test-protocol" : "").target(round == 1 ? "/tunnel" : "").open();
+                auto cold = client_origin.connect(authority).protocol(round == 1 ? "test-protocol" : "").target(round == 1 ? "/tunnel" : "").connect();
                 authority.assign("mutated");
                 auto result_value = co_await std::move(cold);
                 EXPECT_TRUE(result_value.response() == nullptr && result_value.tunnel() != nullptr);
@@ -248,7 +248,7 @@ TEST(Ruvia, http2_client_capsule_stream_retains_results_and_cold_operations_afte
             ruvia::http_client client(attachment.loop(), {.base_url_ = client_url, .connection_limits_ = {.max_open_ = 1}, .request_timeout_ = std::chrono::seconds(5), .max_response_bytes_ = 16384, .versions_ = ruvia::http_client_versions{.http1_ = false}});
             const auto client_origin = client.client();
             try {
-                auto result_value = co_await client_origin.connect("proxy.test").protocol("test-capsules").target("/capsules").open({.max_chunk_bytes_ = 1024});
+                auto result_value = co_await client_origin.connect("proxy.test").protocol("test-capsules").target("/capsules").connect({.max_chunk_bytes_ = 1024});
                 if (!result_value.tunnel()) {
                     throw std::runtime_error("capsule CONNECT rejected");
                 }
@@ -273,7 +273,7 @@ TEST(Ruvia, http2_client_capsule_stream_retains_results_and_cold_operations_afte
                 {
                     // Without declared datagrams: no Capsule-Protocol, and the
                     // handler's datagrams()/udp()/capsules() throw std::logic_error.
-                    auto plain_result = co_await client_origin.connect("proxy.test").protocol("test-no-datagrams").target("/no-datagrams").open();
+                    auto plain_result = co_await client_origin.connect("proxy.test").protocol("test-no-datagrams").target("/no-datagrams").connect();
                     if (!plain_result.tunnel()) {
                         throw std::runtime_error("protocol CONNECT without datagrams rejected");
                     }
@@ -286,7 +286,7 @@ TEST(Ruvia, http2_client_capsule_stream_retains_results_and_cold_operations_afte
                     EXPECT_EQ(answer, std::string("rejected"));
                     co_await plain.finish();
                 }
-                auto second = co_await client_origin.connect("proxy.test").protocol("test-capsules").target("/capsules").open();
+                auto second = co_await client_origin.connect("proxy.test").protocol("test-capsules").target("/capsules").connect();
                 if (!second.tunnel()) {
                     throw std::runtime_error("second capsule CONNECT rejected");
                 }
@@ -350,7 +350,7 @@ TEST(Ruvia, http2_client_udp_tunnel_skips_dropped_capsules_and_resets_malformed_
                         ruvia::http_response accepted;
                         accepted.status(ruvia::http_status::ok);
                         accepted.header("capsule-protocol", "?1");
-                        EXPECT_TRUE(connection.submit_connect_response_head(head->stream_id(), accepted) == ruvia::http2_submit_status::accepted);
+                        EXPECT_TRUE(connection.submit_connect_response_head(head->stream_id(), accepted) == ruvia::http_submit_status::accepted);
                         std::string capsules{};
                         capsules.append("\x17\x40\xc8", 3).append(200, 'u');
                         capsules.append("\x00\x40\xc9\x03", 4).append(200, 'c');
@@ -359,7 +359,7 @@ TEST(Ruvia, http2_client_udp_tunnel_skips_dropped_capsules_and_resets_malformed_
                             "after",
                             8);
                         capsules.append("\x00\x00", 2);
-                        EXPECT_TRUE(connection.submit_data(head->stream_id(), capsules, ruvia::http2_end_stream::keep_open, 65535).status_ == ruvia::http2_data_submit_status::complete);
+                        EXPECT_TRUE(connection.submit_data(head->stream_id(), capsules, ruvia::http2_end_stream::keep_open, 65535).status_ == ruvia::http_data_submit_status::complete);
                         request.emplace(std::move(*head));
                     } else if (auto* closed = event->stream_closed()) {
                         if (closed->source() == ruvia::http2_stream_close_source::peer) {
@@ -386,7 +386,7 @@ TEST(Ruvia, http2_client_udp_tunnel_skips_dropped_capsules_and_resets_malformed_
         const std::string client_url("http://127.0.0.1:" + std::string(std::to_string(peer.local_endpoint().port())));
         ruvia::http_client client(attachment.loop(), {.base_url_ = client_url, .connection_limits_ = {.max_open_ = 1}, .request_timeout_ = std::chrono::seconds(5), .versions_ = ruvia::http_client_versions{.http1_ = false}});
         try {
-            auto opened = co_await client.client().udp("/.well-known/masque/udp/target.test/53/").open();
+            auto opened = co_await client.client().udp("/.well-known/masque/udp/target.test/53/").connect();
             if (!opened.tunnel()) {
                 throw std::runtime_error("CONNECT-UDP rejected");
             }
@@ -484,7 +484,7 @@ TEST(Ruvia, http2_client_half_closed_tunnel_rejects_truncated_capsule_on_end_str
     auto run = [&]() -> ruvia::task<void> {
         const std::string client_url("http://127.0.0.1:" + std::string(std::to_string(peer.local_endpoint().port())));
         ruvia::http_client client(attachment.loop(), {.base_url_ = client_url, .connection_limits_ = {.max_open_ = 1}, .request_timeout_ = std::chrono::seconds(5), .versions_ = ruvia::http_client_versions{.http1_ = false}});
-        auto opened = co_await client.client().udp("/.well-known/masque/udp/target.test/53/").open();
+        auto opened = co_await client.client().udp("/.well-known/masque/udp/target.test/53/").connect();
         EXPECT_TRUE(opened.tunnel() != nullptr);
         auto udp = std::move(*opened.tunnel()).udp({.max_capsule_length_ = 100});
         co_await udp.finish();
@@ -596,13 +596,13 @@ TEST(Ruvia, http2_client_stale_tunnel_malformed_abort_does_not_reset_reconnected
         const auto& worker_value = attachment.loop().worker();
         const std::string client_url("http://127.0.0.1:" + std::string(std::to_string(peer.local_endpoint().port())));
         ruvia::http_client client(attachment.loop(), {.base_url_ = client_url, .connection_limits_ = {.max_open_ = 1}, .request_timeout_ = std::chrono::seconds(5), .versions_ = ruvia::http_client_versions{.http1_ = false}});
-        auto opened1 = co_await client.client().udp("/.well-known/masque/udp/target.test/53/").open();
+        auto opened1 = co_await client.client().udp("/.well-known/masque/udp/target.test/53/").connect();
         EXPECT_TRUE(opened1.tunnel() != nullptr);
         auto udp1 = std::move(*opened1.tunnel()).udp({.max_capsule_length_ = 100});
         co_await udp1.finish();
         (void)co_await ruvia::sleep_for(worker_value, std::chrono::milliseconds(30));
 
-        auto opened2 = co_await client.client().udp("/.well-known/masque/udp/target.test/53/").open();
+        auto opened2 = co_await client.client().udp("/.well-known/masque/udp/target.test/53/").connect();
         EXPECT_TRUE(opened2.tunnel() != nullptr);
         auto udp2 = std::move(*opened2.tunnel()).udp({.max_capsule_length_ = 100});
         (void)udp2;

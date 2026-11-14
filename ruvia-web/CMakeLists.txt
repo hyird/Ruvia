@@ -120,6 +120,9 @@ target_link_libraries(ruvia-web
         ruvia::core
         ruvia::http
     PRIVATE
+        # Build-only core Asio glue (src/ headers); BUILD_INTERFACE keeps it
+        # out of the installed export of this static library.
+        "$<BUILD_INTERFACE:ruvia_core_internal>"
         # TLS (ALPN/SNI + the socket client/server drivers) and HMAC cookie
         # signing are Web-layer capabilities, so Web owns the direct OpenSSL
         # dependency while the sans-I/O HTTP target remains independent.

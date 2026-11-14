@@ -2,6 +2,7 @@
 
 #include <gtest/gtest.h>
 
+#include <array>
 #include <chrono>
 #include <exception>
 #include <memory>
@@ -92,7 +93,7 @@ struct upgrade_marker final {
     static inline unsigned calls_{};
     ruvia::task<void> invoke(ruvia::context& context, ruvia::next& next) {
         ++calls_;
-        context.draft().header("X-Upgrade-Middleware", "ran");
+        context.policy().header("X-Upgrade-Middleware", "ran");
         co_await next();
     }
 };
@@ -151,8 +152,7 @@ TEST(Ruvia, public_router_dispatches_parameters_bodies_streams_methods_and_middl
         routes.use<unmatched_header>();
         routes.on_error([&](ruvia::context& context, ruvia::http_error_info error) -> ruvia::task<ruvia::http_response> {
             ++errors;
-            context.draft().status(error.status());
-            co_return context.text("router error");
+            co_return context.text("router error", {.status_ = error.status()});
         });
         routes.add("GET", "/api/:id", &parameter);
         routes.add("GET", "/api/literal", [](ruvia::context& context) -> ruvia::task<ruvia::http_response> {
@@ -390,15 +390,14 @@ TEST(Ruvia, public_router_applies_host_representation_policies_and_its_rate_limi
         ruvia::router routes(worker);
         routes.rate_limit({.rule_ = {.max_requests_ = 4, .window_ = 60s}, .capacity_per_worker_ = 64});
         routes.on_error([](ruvia::context& context, ruvia::http_error_info error) -> ruvia::task<ruvia::http_response> {
-            context.draft().status(error.status());
-            co_return context.text("router error");
+            co_return context.text("router error", {.status_ = error.status()});
         });
         routes.add("GET", "/text", [](ruvia::context& context) -> ruvia::task<ruvia::http_response> {
             co_return context.text(text_body);
         });
         routes.stream("GET", "/stream", [](ruvia::context& context) -> ruvia::task<void> {
-            context.draft().header("Content-Type", "text/plain");
-            if (co_await context.stream().commit() == ruvia::stream_commit_result::body) {
+            static const std::array headers{ruvia::http_header_view{"Content-Type", "text/plain"}};
+            if (co_await context.stream({.headers_ = headers}).commit() == ruvia::stream_commit_result::body) {
                 co_await context.stream().write(std::string_view(text_body));
             }
         });
@@ -460,8 +459,7 @@ TEST(Ruvia, public_router_routes_websocket_and_connect_upgrades_over_http1_and_h
         unsigned errors = 0;
         routes.on_error([&](ruvia::context& context, ruvia::http_error_info error) -> ruvia::task<ruvia::http_response> {
             ++errors;
-            context.draft().status(error.status());
-            co_return context.text("router error");
+            co_return context.text("router error", {.status_ = error.status()});
         });
         routes.websocket<upgrade_marker>("/ws/:room", &echo_websocket);
         routes.connect<upgrade_marker>("echo.test:443", &echo_tunnel);
@@ -494,7 +492,7 @@ TEST(Ruvia, public_router_routes_websocket_and_connect_upgrades_over_http1_and_h
                         EXPECT_FALSE(co_await session.read()) << label;
                     }
                     {
-                        auto opened = co_await client.client().connect("echo.test:443").open();
+                        auto opened = co_await client.client().connect("echo.test:443").connect();
                         auto* tunnel = opened.tunnel();
                         EXPECT_TRUE(tunnel != nullptr) << label;
                         if (tunnel != nullptr) {
@@ -509,7 +507,7 @@ TEST(Ruvia, public_router_routes_websocket_and_connect_upgrades_over_http1_and_h
                         }
                     }
                     {
-                        auto opened = co_await client.client().udp("/.well-known/masque/udp/echo.test/53/").open();
+                        auto opened = co_await client.client().udp("/.well-known/masque/udp/echo.test/53/").connect();
                         auto* tunnel = opened.tunnel();
                         EXPECT_TRUE(tunnel != nullptr) << label;
                         if (tunnel != nullptr) {
@@ -526,7 +524,7 @@ TEST(Ruvia, public_router_routes_websocket_and_connect_upgrades_over_http1_and_h
                     }
                     EXPECT_EQ(upgrade_marker::calls_, 3U) << label;
                     {
-                        auto refused = co_await client.client().connect("other.test:443").open();
+                        auto refused = co_await client.client().connect("other.test:443").connect();
                         auto* response = refused.response();
                         EXPECT_TRUE(response != nullptr) << label;
                         if (response != nullptr) {
@@ -622,7 +620,7 @@ TEST(Ruvia, public_router_lends_borrowed_clients_and_state_to_session_middleware
                     if (!cookie.empty()) {
                         builder.header("Cookie", cookie);
                     }
-                    auto response = co_await builder.send();
+                    auto response = co_await std::move(builder).send();
                     EXPECT_EQ(response.status(), ruvia::http_status::ok) << path;
                     std::string set_cookie(response.header("Set-Cookie").value_or(""));
                     set_cookie = set_cookie.substr(0, set_cookie.find(';'));

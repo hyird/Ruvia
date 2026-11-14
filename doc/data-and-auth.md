@@ -195,20 +195,26 @@ auto report = co_await migrator.migrate(migrations);
 - **外部驱动绑定**：`db_statement::params()` 可直接读取 `db_value::type()`（`db_value_type`）及 `text()`、`signed_value()`、`unsigned_value()`、`double_value()`、`bool_value()`；不做隐式类型转换，读取错误分支抛 `std::bad_variant_access`。`null` 通过类型判别，无需取值。
 - **编译参数寿命**：语句拥有编译后的 SQL 与参数文本；`sql()`、`params()` 仅允许左值借用，视图不得超过语句寿命。外部项目可交给自己的数据库驱动，无须使用 Repository 或连接池。
 
-`db_source_options`、`db_cte_options`、`db_lock_options`、`db_window_options`、`db_conflict_options` 中的集合字段为 `borrowed_span<T>`；Repository 的 `db_find_options`、`db_upsert_options` 同样使用 `borrowed_span<T>` 借用集合及元素中的文本。请使用具名 `const std::array`、C 数组或左值容器保存元素；独立保存 options 时，数组和文本 owner 必须存活到调用入口同步复制或导入完成。同步导入型 API 的 `initializer_list` 参数不持久保存裸视图，可继续直接传入列表。
+`db_source_options`、`db_cte_options`、`db_lock_options`、`db_window_options`、`db_conflict_options` 中的集合字段为 `borrowed_span<T>`；Repository 的 `db_find_options` 同样使用 `borrowed_span<T>` 借用集合及元素中的文本。请使用具名 `const std::array`、C 数组或左值容器保存元素；独立保存 options 时，数组和文本 owner 必须存活到调用入口同步复制或导入完成。同步导入型 API 的 `initializer_list` 参数不持久保存裸视图，可继续直接传入列表。
 
-- **查询子句**：`select`、`add_select`、`distinct`、`distinct_on`、`from`、`from_function`、`join`、`where` / `and_where` / `or_where`、`group_by`、`having`、`order_by`、`limit`、`offset`、`lock`（`FOR UPDATE` / `FOR SHARE` + `NOWAIT` / `SKIP LOCKED`）、`with`（CTE / `RECURSIVE`）、`combine`（`UNION` / `INTERSECT` / `EXCEPT`）。
+- **查询子句**：`select`、`add_select`、`distinct`、`distinct_on`、`from`、`from_function`、`join`、`where` / `and_where` / `or_where`、`group_by`、`having`、`order_by`、`limit`、`offset`、`lock`（`FOR UPDATE` / `FOR SHARE` + `NOWAIT` / `SKIP LOCKED`）、`with`（CTE / `RECURSIVE`）、`combine`（`UNION` / `INTERSECT` / `EXCEPT`）。表达式参数均为 `const db_expr&`（列表为 `span` / `initializer_list<db_expr>`）；`select` / `add_select` / `returning` 的投影项为 `db_selection`：裸列名、表达式或 `expr.as("name")`（生成 `AS`）。
   `limit`、`offset`、`db_window_boundary::offset_` 及 SQL / Redis Repository 的 `skip_`、`take_` 共用 `"entity_storage.h"` 的 `query_row_count`（可选位置仍包在 `std::optional` 中）。合法整数可直接填入，构造前检查 `0..INT64_MAX`，负数或超范围抛出 `std::invalid_argument`，无异常探测用 `query_row_count::try_from_value()`；不隐式接受浮点或枚举，需要整数时用 `value()` 解包，不要预先转成无符号数。
-- **变更子句**：`insert_into`、`values`、`insert_from`、`on_conflict`（Upsert；MariaDB 仅支持 `.any_unique_key_` 的 `ON DUPLICATE KEY UPDATE`，`excluded(col)` 编译为 `VALUES(col)`）、`update`、`set`、`update_from`、`delete_from`、`delete_using`、`returning`（MariaDB 需 ≥ 10.5，支持 `INSERT ... RETURNING` 与 `DELETE ... RETURNING`，`UPDATE ... RETURNING` 仅 PostgreSQL；`db_repository::save()` 依赖此能力）。
-- **表达式**：`column`、`value`、`excluded`、`call`、`coalesce`、`null_if`、`greatest`、`least`、`case_when`、`cast`、`aggregate`、`filter`、`over`（窗口函数）、`exists`、`subquery`。
+- **变更子句**：`insert_into`、`values`、`insert_from`、`on_conflict`、`update`、`set`、`update_from`、`delete_from`、`delete_using`、`returning`（MariaDB 需 ≥ 10.5，支持 `INSERT ... RETURNING` 与 `DELETE ... RETURNING`，`UPDATE ... RETURNING` 仅 PostgreSQL；`db_repository::save()` 依赖此能力）。
+- **Upsert（`db_conflict_options`）**：字段按 [PostgreSQL INSERT](https://www.postgresql.org/docs/current/sql-insert.html) 语法命名，直接 Query 与 Repository 共用：
+  - 冲突目标：`conflict_target_`（索引列）+ `index_predicate_`（目标 `WHERE`），或 `constraint_`（`ON CONSTRAINT`）。
+  - 冲突动作：`do_nothing_`，或 `DO UPDATE SET` 的 `update_columns_`（`col = EXCLUDED.col`）与 `update_set_`（任意赋值），可加 `update_where_`。
+  - `skip_update_if_no_values_changed_` 把 `目标列 IS DISTINCT FROM 新值` 的 `OR` 链并入更新条件，未变化的行不改写。
+  - MariaDB 仅支持 `.any_unique_key_` 的 `ON DUPLICATE KEY UPDATE`，`db_expr::excluded(col)` 编译为 `VALUES(col)`。
+- **表达式（`db_expr`）**：唯一的表达式工厂族，直接 Query、ORM Builder 与 Schema 通用：`column`、`value`、`excluded`、`null`、`star`、`raw_sql`、`call`（含 `db_named_argument` 具名参数）、`binary` / `unary`、`list`、`array`、`any` / `all`、`coalesce`、`null_if`、`greatest`、`least`、`case_when`、`aggregate`、`subquery`，以及成员 `cast`、`filter`、`over`、`within_group`、`between`、运算符等；`EXISTS` 用 `db_predicate::exists(query)`。表达式拥有值与嵌套查询，可跨 Query 复用。
+- **节点句柄（`db_expression`）**：`expr.expression(query)` 把表达式导入 Query 并返回其节点句柄；各入口直接使用本 Query 的句柄而不复制，同一节点（含其绑定值）可在多处引用。其他 Query 的句柄会被复制导入。
 - **写入分类**：`has_writes()` 只依据当前语句及仍有效的 CTE / 集合操作；被替换的来源和未发布的失败追加快照不计入。含写入 CTE 的集合操作不能作为 `from`、`join`、表达式子查询或 `insert_from` 的只读来源；入口拒绝时不挂入该子查询，写入须保留在顶层 CTE。`clone()` 只复制当前语句可达的节点与子查询，不携带被替换子句、退役来源与废弃节点。
-- **组合与所有权**：`from`、`join`、`with`、`combine`、`insert_from`、`subquery`、`exists` 的 `const db_query&` 重载在返回前复制输入；对应的 `db_query&&` 重载直接接管实参 AST，实参变为 moved-from（传入当前 Query 自身时例外，按复制处理）。
+- **组合与所有权**：`from`、`join`、`with`、`combine`、`insert_from` 的 `const db_query&` 重载在返回前复制输入；对应的 `db_query&&` 重载直接接管实参 AST，实参变为 moved-from（传入当前 Query 自身时例外，按复制处理）。`db_expr::subquery(query)` 与 `db_predicate::exists(query)` 在构造时复制查询。
 - **组合失败回滚**：校验或分配失败不消费源查询，也不改变目标原有 SQL 与参数；资源恢复后可重试。
 - **锁子句替换**：`lock()` 完整构造候选后才替换旧锁；失败保留原有模式、等待策略与表名。
 - **语句类型切换**：`insert_into`、`update`、`delete_from` 把 Query 切换到另一种语句时，只保留 `WHERE` 与 `WITH`；已有 `FROM` / `JOIN`、投影、`VALUES` / 赋值、`GROUP BY` / `HAVING`、`ORDER BY`、`LIMIT` / `OFFSET`、锁、集合操作或 `DISTINCT` 时抛出 `std::invalid_argument`，以免残留的 `FROM` 静默变成 `UPDATE ... FROM` / `DELETE ... USING` 扩大目标范围。需要关联来源时显式使用 `update_from` / `delete_using`；同类语句重新指定目标不受影响。
 - **标识符**：`FROM` / `JOIN` 别名、`INSERT` / `UPDATE` / `DELETE` 目标别名、CTE 名与 `lock` 的 `OF` 目标必须是不含 `.` 的单个标识符（表名本身仍可带 schema 限定）；投影别名与列名遵循相同的唯一性规则。
-- **原始 SQL（`sql()` / `db_expr::raw_sql`）**：语法片段以 `-` 或 `/` 结尾时，编译器在其后的参数前补一个空格，避免负数字面量或 `*` 拼出 `--` / `/*` 注释。PostgreSQL 绑定模式下片段不得包含位置参数（`$` 后接数字且不处于标识符中，如 `$1`），否则抛出 `std::invalid_argument`，值请通过 `value()` 参数传入；字面量模式（如函数体 DDL）与 MariaDB 不受此限制。
-- **参数与嵌套上限**：PostgreSQL 绑定模式按节点为每个值只分配一个 `$n`（分组表达式在 `SELECT` / `GROUP BY` / `HAVING` 中复用同一编号），单条语句超过 65535 个绑定参数（协议 Bind 消息的 Int16 计数）时 `compile()` 抛出 `std::length_error`，请分批写入。表达式与子查询嵌套上限为 256 层；同一运算符的左深 `AND` / `OR` 链（`and_where` 循环、`p = std::move(p) && q`）只算一层，编译为扁平的 `(a AND b AND c)`。`render_expression()` 只以字面量渲染单个表达式。
+- **原始 SQL（`db_expr::raw_sql`）**：语法片段以 `-` 或 `/` 结尾时，编译器在其后的参数前补一个空格，避免负数字面量或 `*` 拼出 `--` / `/*` 注释。PostgreSQL 绑定模式下片段不得包含位置参数（`$` 后接数字且不处于标识符中，如 `$1`），否则抛出 `std::invalid_argument`，值请通过 `value()` 参数传入；字面量模式（如函数体 DDL）与 MariaDB 不受此限制。
+- **参数与嵌套上限**：PostgreSQL 绑定模式按节点为每个值只分配一个 `$n`（分组表达式在 `SELECT` / `GROUP BY` / `HAVING` 中按结构匹配复用同一编号，分别传入同一 `db_expr` 亦然），单条语句超过 65535 个绑定参数（协议 Bind 消息的 Int16 计数）时 `compile()` 抛出 `std::length_error`，请分批写入。表达式与子查询嵌套上限为 256 层；同一运算符的左深 `AND` / `OR` 链（`and_where` 循环、`p = std::move(p) && q`）只算一层，编译为扁平的 `(a AND b AND c)`。`db_query::render_expression(expr, driver)` 只以字面量渲染单个表达式。
 - **携带表名的表达式**：`db_expr::from_expression(expr, table)` 与 `db_expr(expr, table)` 记录的表名只在导入方未指定表名（`expression(query, {}, alias)`）时参与限定名重写；导入方指定表名时以导入方为准，其他表的限定名保持不变。`db_expr(expr, table)` 的 `table` 为借用文本，拒绝 `std::string` 等拥有型右值。
 - **NULL 谓词**：`expr == nullptr` / `expr != nullptr` 与 `is_null()` / `is_not_null()` 使用相同的 `IS NULL` / `IS NOT NULL` 语义；NULL 在比较任一侧均适用，PostgreSQL 的无类型绑定操作数统一显式标注参数类型。
 - **关系路径**：`*_join_and_select` 的路径首段同时是根实体关系名、又是根别名或另一条已加载关系的别名时抛出 `std::invalid_argument`，拒绝有歧义的关系路径；`join_relation` 的多对多中间表别名 `<alias>_junction` 已被占用时同样拒绝。
@@ -223,6 +229,7 @@ auto report = co_await migrator.migrate(migrations);
   - 调用 `schema.compile("0001_init")` 直接生成 `std::vector<db_migration>` 供 `db_migrator::migrate()` 执行。
   - `db_drop_behavior::cascade` 仅 PostgreSQL 支持。MariaDB 的 `DROP TABLE` / `ALTER TABLE ... DROP` 只为移植兼容而接受 `CASCADE` 且不产生任何效果（[DROP TABLE](https://mariadb.com/docs/server/server-usage/tables/drop-table)），因此 MariaDB 下所有 `drop_*` 传入 `cascade` 均抛出 `std::invalid_argument`，须改用 `restrict` 并显式删除依赖对象。
   - 实体生成的约束名使用去掉 schema 前缀的表名：`<表>_pkey`、`<表>_<关系>_fkey`、`<表>_<关系>_key`，多对多关系表为 `<表>_owner_fkey` / `<表>_inverse_fkey` / `<表>_pkey`。
+- **表达式输入**：列默认值、生成列、`CHECK`、索引表达式与条件、触发器 `WHEN`、Timescale 区间以及 `db_procedure` 的条件、赋值与返回值均为 `db_expr`，以字面量渲染，无需借助临时 `db_query`。
 - **`db_procedure`**：结构化构建 PL/pgSQL 过程块（变量声明、`select_into`、`begin_if`/`else_if`/`otherwise`/`end_if`、异常捕获块 `begin_block`/`catch_sql_state`、循环与 `raise_exception`）。
   - `begin_block()` 与 `apply(schema)` 的分配失败保留原正文和控制栈；资源恢复后可重试同一操作。`apply` 在完整追加本次 schema 的 SQL 及语句终止符后才发布，不留下半条语句。
 
@@ -284,7 +291,7 @@ RUVIA_DB_PROJECTION(device_summary,
 每个 `RUVIA_DB_ENTITY` 自动生成静态方法 `Entity::column<"field">(alias = {})`，返回强类型字段引用：
 
 - **比较与逻辑组合**：支持 `==`、`!=`、`<`、`<=`、`>`、`>=`、`like`、`ilike`、`between`、`in`、`not_in`、`is_null()`、`is_not_null()`、PostgreSQL 数组操作（`array_contains`、`array_overlap`）与 JSONB 操作（`json_contains`、`json_has_key`、`json_path_text_equals`）；多个谓词使用 `&&`、`||`、`!` 组合。
-- **更新赋值（生成 `db_assignment`）**：`device::column<"name">() = "edge-1"`、`device::column<"notes">().set_null()`、`device::column<"version">() += 1`、`device::column<"name">().set_excluded()`。
+- **更新赋值（生成 `db_assignment`）**：`device::column<"name">() = "edge-1"`、`device::column<"notes">().set_null()`、`device::column<"version">() += 1`、`device::column<"name">().set_excluded()`；`column<"name">().excluded()` 返回 `EXCLUDED.name` 表达式。
 
 ### 3.3 `ruvia::db_repository<Entity, Executor>` 核心操作
 
@@ -296,10 +303,10 @@ RUVIA_DB_PROJECTION(device_summary,
 | 查询 | `find_one(db_find_options)` | 查询单条实体 `std::optional<Entity>` |
 | 查询 | `find_and_count(db_find_options = {})` | 分页查询并同时返回总行数 `std::pair<entity_rows<Entity>, std::uint64_t>` |
 | 统计与存在性 | `count(db_find_options = {})` / `exists(db_find_options = {})` | 按条件统计行数或判断是否存在匹配行 |
-| 写入与变更 | `save` / `insert` / `upsert(entity, db_upsert_options)` | 保存、插入或冲突更新 Upsert（支持单条与批量 `std::span`） |
+| 写入与变更 | `save` / `insert` / `upsert(entity, db_conflict_options = {})` | 保存、插入或冲突更新 Upsert（支持单条与批量 `std::span`）；PostgreSQL 下 `DO UPDATE` 未给冲突目标时默认主键（与 `save()` 相同），默认 SET 为已插入的非主键可写列 |
 | 更新与删除 | `update(where, changes)` / `increment` / `decrement` | 按条件更新指定字段或原子自增/自减 |
 | 删除与软删 | `delete_by(where)` / `remove(entity)` / `soft_delete(where)` / `restore(where)` / `clear()` | 硬删除、按软删列（`.delete_date_ = true`）软删除与恢复、清空表 |
-| 构建器与 `RETURNING` | `query_builder(alias)` / `update_builder` / `delete_builder` / `insert_builder` | 链式构建复杂 JOIN（`left_join_and_select`）、`offset`/`limit`、CTE、窗口函数、`on_conflict(db_upsert_options)` 与子查询；写构建器通过 `.returning(...)` + `.get_many()` / `.get_one()` / `.get_scalar<T>()` 映射 `RETURNING` 结果 |
+| 构建器与 `RETURNING` | `query_builder(alias)` / `update_builder` / `delete_builder` / `insert_builder` | 链式构建复杂 JOIN（`left_join_and_select`）、`offset`/`limit`、CTE、窗口函数、`on_conflict(db_conflict_options)` 与子查询（`subquery()` / `exists()`）；写构建器通过 `.returning(...)` + `.get_many()` / `.get_one()` / `.get_scalar<T>()` 映射 `RETURNING` 结果 |
 
 ### 3.4 Builder 与直接 Query 的组合边界
 
@@ -308,7 +315,7 @@ RUVIA_DB_PROJECTION(device_summary,
 写 Builder 的 `.set(span<db_assignment>)`、`.set({...})` 和 `.set(entity)` 整批提交：字段校验与表达式导入完成后才发布 SET 列表，后续项失败不会留下此前项的部分更新。失败前已构建的 SQL 与参数语义不变；此保证针对查询构建，不等同于数据库事务。
 
 - **写入入口一致**：Repository 的 `update`、`delete_by`、`increment` / `decrement` 使用对应写 Builder；重复 SET 列以最后一次赋值为准。空 assignment 批次被拒绝；空实体变更仅在 UPDATE 自带生命周期盖章时有效。
-- **表达式列表**：读 Builder 的 `group_by`、`add_group_by`、`distinct_on` 接受 `span<const db_expr>` 或 `initializer_list<db_expr>`，列名入口保留；`db_expression` 与类型化列引用隐式转为 `db_expr`。`order_by` / `add_order_by` 共用 `db_expr` 表达式入口。
+- **表达式列表**：读 Builder 的 `group_by`、`add_group_by`、`distinct_on` 接受 `span<const db_expr>` 或 `initializer_list<db_expr>`，列名入口保留；类型化列引用隐式转为 `db_expr`。`order_by` / `add_order_by` 共用 `db_expr` 表达式入口。
 - **CTE 校验一致**：读 Builder 的 `with` 不按来源入口区分校验；只读 CTE 可与关系预加载并用，含写入的 CTE 统一要求平面结果映射。
 
 读写 Builder 统一提供 `const db_query& query() const&`：这是只读、零拷贝的 AST 借用，不是快照，不延长 Builder 的寿命。Builder 销毁或移动前必须结束借用；后续 Builder 修改会反映在视图中。直接在右值 Builder 上调用 `query()` 被拒绝，应先保存具名 Builder。`db_query::with()`、子查询 JOIN 等消费者在调用返回前克隆输入（右值重载直接接管），因此导入完成后源 Query / Builder 即可销毁，外层仍拥有完整 AST、文本和参数。
@@ -324,7 +331,7 @@ changed.set("name", "edge-2")
 
 ruvia::db_query outer;
 outer.with("changed", changed.query())
-    .select(outer.star("changed"))
+    .select(ruvia::db_selection::star("changed"))
     .from("changed");
 auto statement = outer.compile(ruvia::db_driver::postgresql, nullptr);
 // statement 包含 WITH ... UPDATE ... RETURNING 和统一编号的绑定参数；
@@ -338,9 +345,8 @@ auto statement = outer.compile(ruvia::db_driver::postgresql, nullptr);
 ```cpp
 auto read = repo.query_builder("d");
 ruvia::db_query latest;
-latest.select(latest.column("score", "s")).from("samples", "s")
-    .where(latest.binary(latest.column("device_id", "s"),
-        ruvia::db_binary_operator::equal, latest.column("id", "d")));
+latest.select(ruvia::db_expr::column("score", "s")).from("samples", "s")
+    .where(ruvia::db_expr::column("device_id", "s") == ruvia::db_expr::column("id", "d"));
 read.left_join(latest, "matched", ruvia::db_expr::value(true).is_true(),
     {.lateral_ = true});
 ```
@@ -349,7 +355,7 @@ read.left_join(latest, "matched", ruvia::db_expr::value(true).is_true(),
 
 ```cpp
 ruvia::db_query samples;
-samples.select(samples.star()).from("measurements");
+samples.select(ruvia::db_selection::star()).from("measurements");
 auto mixed = repo.query_builder("samples");
 mixed.with("samples", samples).from_cte("samples")
     .select({ruvia::db_selection::star("samples"),

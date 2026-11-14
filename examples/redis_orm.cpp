@@ -63,8 +63,7 @@ private:
         }
         cached_user_response response;
         fill(response, user_value);
-        c.draft().status(ruvia::http_status::created);
-        co_return c.json(response);
+        co_return c.json(response, {.status_ = ruvia::http_status::created});
     }
     ruvia::task<ruvia::http_response> find(ruvia::context& c) {
         auto user_value = co_await c.redis().repository<cached_user>(user_redis_config).find_one({.where_ = cached_user::column<"id">() == c.req().param("id").value_or("")});

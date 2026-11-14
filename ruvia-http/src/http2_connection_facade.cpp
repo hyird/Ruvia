@@ -1,7 +1,5 @@
 #include <cstddef>
 #include <cstdint>
-#include <exception>
-#include <limits>
 #include <optional>
 #include <span>
 #include <stdexcept>
@@ -24,6 +22,7 @@
 #include "http_header.h"
 #include "http_message.h"
 #include "http_message_access.h"
+#include "http_multiplexed_stream.h"
 #include "http_priority.h"
 #include "http_request.h"
 #include "http_response.h"
@@ -77,36 +76,26 @@ namespace {
 // or abandon stream state after the public http2_connection facade is destroyed.
 namespace detail {
 
-class http2_connection_owner_endpoint final {
+class http2_connection_owner_endpoint final : public detail::http_received_data_target {
 public:
-    http2_connection_owner_endpoint(http2_role role, const http2_connection_options& options) :
+    http2_connection_owner_endpoint(http_connection_role role, const http2_connection_options& options) :
         connection_(role, options) {}
-    http2_connection_owner_endpoint(const http2_connection_owner_endpoint&) = delete;
-    http2_connection_owner_endpoint& operator=(const http2_connection_owner_endpoint&) = delete;
-
-    void retain() noexcept {
-        ++references_;
-    }
-
-    void release() noexcept {
-        if (references_ == 0) {
-            std::terminate();
-        }
-        if (--references_ == 0) {
-            delete this;
-        }
-    }
 
     void abandon_request(std::uint32_t stream_id) noexcept {
         connection_.abandon_stream_lease(stream_id);
     }
 
-    void return_credit(std::uint32_t stream_id, std::uint32_t bytes_value) noexcept {
-        connection_.return_received_data(stream_id, bytes_value);
+    void return_credit(std::uint64_t stream_id, std::size_t bytes) noexcept override {
+        // A zero-byte return still runs once: it retries deferred leases.
+        do {
+            const auto chunk = static_cast<std::uint32_t>(bytes < UINT32_MAX ? bytes : UINT32_MAX);
+            connection_.return_received_data(static_cast<std::uint32_t>(stream_id), chunk);
+            bytes -= chunk;
+        } while (bytes != 0);
     }
     [[nodiscard]] ::ruvia::http2_event materialize_message_head_event(const detail::http2_message_head_record& value) {
         auto* stream = connection_.stream(value.stream_id_);
-        if (connection_.role() == http2_role::client) {
+        if (connection_.role() == http_connection_role::client) {
             if (stream == nullptr) {
                 throw std::logic_error("HTTP/2 response event has no stream");
             }
@@ -137,13 +126,13 @@ public:
     template <typename event_record_type>
     [[nodiscard]] ::ruvia::http2_event materialize_public_http2_event(event_record_type& value) {
         using value_type = std::decay_t<event_record_type>;
-        const bool client = connection_.role() == http2_role::client;
+        const bool client = connection_.role() == http_connection_role::client;
         if constexpr (std::is_same_v<value_type, detail::http2_message_head_record>) {
             return materialize_message_head_event(value);
         } else if constexpr (std::is_same_v<value_type, detail::http2_message_data_record>) {
-            return ::ruvia::http2_event::message_body_chunk(this, value.stream_id_, value.bytes_, value.flow_control_bytes_);
+            return ::ruvia::http2_event::data(value.stream_id_, value.bytes_, detail::http_received_data_credit_access::make(this, value.stream_id_, value.flow_control_bytes_));
         } else if constexpr (std::is_same_v<value_type, detail::http2_tunnel_data_record>) {
-            return ::ruvia::http2_event::tunnel_data(this, value.stream_id_, value.bytes_, value.flow_control_bytes_);
+            return ::ruvia::http2_event::tunnel_data(value.stream_id_, value.bytes_, detail::http_received_data_credit_access::make(this, value.stream_id_, value.flow_control_bytes_));
         } else if constexpr (std::is_same_v<value_type, detail::http2_message_end_record>) {
             auto* stream = connection_.stream(value.stream_id_);
             if (stream == nullptr) {
@@ -167,48 +156,10 @@ public:
             return ::ruvia::http2_event(std::move(value));
         }
     }
-    std::size_t references_{1};
     detail::http2_connection connection_;
 };
 
 }  // namespace detail
-
-http2_received_data_credit::http2_received_data_credit(detail::http2_connection_owner_endpoint* endpoint, std::uint32_t stream_id, std::uint32_t bytes_value) noexcept :
-    endpoint_(endpoint),
-    stream_id_(stream_id),
-    bytes_(bytes_value) {
-    endpoint_->retain();
-}
-
-http2_received_data_credit::~http2_received_data_credit() {
-    if (endpoint_ == nullptr) {
-        return;
-    }
-    endpoint_->return_credit(stream_id_, bytes_);
-    endpoint_->release();
-}
-
-http2_received_data_credit::http2_received_data_credit(http2_received_data_credit&& other) noexcept :
-    endpoint_(std::exchange(other.endpoint_, nullptr)),
-    stream_id_(std::exchange(other.stream_id_, 0)),
-    bytes_(std::exchange(other.bytes_, 0)) {}
-
-void http2_received_data_credit::merge(http2_received_data_credit&& other) {
-    if (this == &other || !valid() || !other.valid()) {
-        throw std::logic_error("invalid HTTP/2 received data credit");
-    }
-    if (endpoint_ != other.endpoint_ || stream_id_ != other.stream_id_) {
-        throw std::logic_error("HTTP/2 received data credits belong to different streams");
-    }
-    if (bytes_ > (std::numeric_limits<std::uint32_t>::max)() - other.bytes_) {
-        throw std::overflow_error("HTTP/2 received data credit overflow");
-    }
-    bytes_ += other.bytes_;
-    auto* endpoint = std::exchange(other.endpoint_, nullptr);
-    other.stream_id_ = 0;
-    other.bytes_ = 0;
-    endpoint->release();
-}
 
 http2_request_head_event::http2_request_head_event(detail::http2_connection_owner_endpoint* endpoint, std::uint32_t stream_id, http_request_expectations expectations, http_request_content_indication content, http2_server_request_snapshot snapshot) noexcept :
     stream_id_(stream_id),
@@ -280,7 +231,7 @@ void http2_connection::impl_deleter_type::operator()(detail::http2_connection_ow
     }
 }
 
-http2_connection::http2_connection(http2_role role, const http2_connection_options& options) {
+http2_connection::http2_connection(http_connection_role role, const http2_connection_options& options) {
     // Even a peer's first WINDOW_UPDATE would end a connection without budget.
     if (options.max_non_progress_frames_ == 0) {
         throw std::invalid_argument("HTTP/2 non-progress frame budget must be positive");
@@ -294,10 +245,10 @@ http2_connection http2_connection::server(http2_connection_options options) {
     if (options.enable_push_ || options.receive_origin_advertisements_) {
         throw std::invalid_argument("HTTP/2 server connection does not accept client-only options");
     }
-    return http2_connection(http2_role::server, options);
+    return http2_connection(http_connection_role::server, options);
 }
 http2_connection http2_connection::client(http2_connection_options options) {
-    return http2_connection(http2_role::client, options);
+    return http2_connection(http_connection_role::client, options);
 }
 http2_connection::~http2_connection() = default;
 http2_connection::http2_connection(http2_connection&&) noexcept = default;
@@ -311,12 +262,12 @@ websocket_handshake_validation_result validate_http2_websocket_handshake(http2_c
     return detail::validate_http2_websocket_handshake(*stream, request, options);
 }
 
-std::variant<websocket_extended_connect_negotiation, http2_websocket_handshake_submit_error> http2_connection::submit_websocket_handshake(std::uint32_t stream_id, const http_request& request, const websocket_handshake_validation_result& validation, websocket_server_handshake_options options) {
+std::variant<websocket_extended_connect_negotiation, http_response_head_error> http2_connection::submit_websocket_handshake(std::uint32_t stream_id, const http_request& request, const websocket_handshake_validation_result& validation, websocket_server_handshake_options options) {
     impl_->connection_.retry_deferred_stream_leases();
     return impl_->connection_.submit_websocket_handshake(stream_id, request, validation, options);
 }
 
-http2_role http2_connection::role() const noexcept {
+http_connection_role http2_connection::role() const noexcept {
     return impl_->connection_.role();
 }
 bool http2_connection::header_block_in_progress() const noexcept {
@@ -358,7 +309,7 @@ bool http2_connection::wants_write() const noexcept {
     return impl_->connection_.wants_write();
 }
 
-std::variant<std::uint32_t, http2_request_head_submit_error> http2_connection::submit_request_head(const http2_regular_request_head_view& request) {
+std::variant<std::uint32_t, http2_request_head_submit_error> http2_connection::submit_request_head(const http_regular_request_head_view& request) {
     impl_->connection_.retry_deferred_stream_leases();
     std::optional<std::string_view> authority;
     if (request.authority_) {
@@ -369,21 +320,21 @@ std::variant<std::uint32_t, http2_request_head_submit_error> http2_connection::s
     return result_value;
 }
 
-std::variant<std::uint32_t, http2_request_head_submit_error> http2_connection::submit_request_head(const http2_connect_request_head_view& request) {
+std::variant<std::uint32_t, http2_request_head_submit_error> http2_connection::submit_request_head(const http_connect_request_head_view& request) {
     impl_->connection_.retry_deferred_stream_leases();
     auto result_value = impl_->connection_.submit_connect_request_head(request.authority_.view(), static_cast<std::span<const http_header_view>>(request.headers_), request.field_source_);
     impl_->connection_.lease_submitted_request(result_value);
     return result_value;
 }
 
-std::variant<std::uint32_t, http2_request_head_submit_error> http2_connection::submit_request_head(const http2_extended_connect_request_head_view& request) {
+std::variant<std::uint32_t, http2_request_head_submit_error> http2_connection::submit_request_head(const http_extended_connect_request_head_view& request) {
     impl_->connection_.retry_deferred_stream_leases();
     auto result_value = impl_->connection_.submit_extended_connect_request_head(request.protocol_.view(), request.scheme_.view(), request.authority_.view(), request.target_.view(), static_cast<std::span<const http_header_view>>(request.headers_), request.field_source_);
     impl_->connection_.lease_submitted_request(result_value);
     return result_value;
 }
 
-http2_data_submit_result http2_connection::submit_data(std::uint32_t stream_id, std::string_view bytes_value, http2_end_stream end_stream, std::size_t max_payload_bytes) {
+http_data_submit_result http2_connection::submit_data(std::uint32_t stream_id, std::string_view bytes_value, http2_end_stream end_stream, std::size_t max_payload_bytes) {
     auto& connection = impl_->connection_;
     const auto result_value = connection.submit_data(stream_id, bytes_value, end_stream, max_payload_bytes);
     connection.retry_deferred_stream_lease(stream_id);
@@ -393,25 +344,25 @@ http2_data_submit_result http2_connection::submit_data(std::uint32_t stream_id, 
 http2_request_content_release_status http2_connection::release_request_content(std::uint32_t stream_id) noexcept {
     return impl_->connection_.release_request_content(stream_id);
 }
-http2_submit_status http2_connection::submit_connect_response_head(std::uint32_t stream_id, const http_response& response) {
+http_submit_status http2_connection::submit_connect_response_head(std::uint32_t stream_id, const http_response& response) {
     return impl_->connection_.submit_connect_response_head(stream_id, response);
 }
 
-http2_submit_status http2_connection::submit_interim_response_head(std::uint32_t stream_id, const http_interim_response_head& response) {
+http_submit_status http2_connection::submit_interim_response_head(std::uint32_t stream_id, const http_interim_response_head& response) {
     return impl_->connection_.submit_interim_response_head(stream_id, response);
 }
 
-std::variant<http_buffered_response_write_plan, http2_response_head_submit_error> http2_connection::submit_response_head(std::uint32_t stream_id, const http_response& response, http_buffered_response_write_plan write_plan) {
+std::variant<http_buffered_response_write_plan, http_response_head_error> http2_connection::submit_response_head(std::uint32_t stream_id, const http_response& response, http_buffered_response_write_plan write_plan) {
     impl_->connection_.retry_deferred_stream_leases();
     return impl_->connection_.submit_response_head(stream_id, response, std::move(write_plan));
 }
 
-std::variant<http_response_stream_commit_plan, http2_response_head_submit_error> http2_connection::submit_streaming_response_head(std::uint32_t stream_id, http_response response, http_response_trailer_intent trailer_intent) {
+std::variant<http_response_stream_commit_plan, http_response_head_error> http2_connection::submit_streaming_response_head(std::uint32_t stream_id, http_response response, http_response_trailer_intent trailer_intent) {
     impl_->connection_.retry_deferred_stream_leases();
     return impl_->connection_.submit_streaming_response_head(stream_id, std::move(response), trailer_intent);
 }
 
-http2_finish_status http2_connection::finish_request(std::uint32_t stream_id, std::span<const http_header_view> trailers) {
+http_finish_status http2_connection::finish_request(std::uint32_t stream_id, std::span<const http_header_view> trailers) {
     auto& connection = impl_->connection_;
     const auto status = connection.finish_request(stream_id, trailers);
     connection.retry_deferred_stream_lease(stream_id);
@@ -419,7 +370,7 @@ http2_finish_status http2_connection::finish_request(std::uint32_t stream_id, st
     return status;
 }
 
-http2_finish_status http2_connection::finish_response(std::uint32_t stream_id, const http_response_trailer_section& trailers) {
+http_finish_status http2_connection::finish_response(std::uint32_t stream_id, const http_response_trailer_section& trailers) {
     auto& connection = impl_->connection_;
     const auto status = connection.finish_response(stream_id, trailers);
     connection.retry_deferred_stream_lease(stream_id);
@@ -437,20 +388,20 @@ std::variant<http2_request_head_event, http2_push_submit_error> http2_connection
     return http2_request_head_event(impl_.get(), std::get<0>(id), {}, http_request_content_indication::no_content, {});
 }
 
-http2_submit_status http2_connection::submit_origin_advertisement(std::span<const std::string_view> origins) {
+http_submit_status http2_connection::submit_origin_advertisement(std::span<const std::string_view> origins) {
     return impl_->connection_.submit_origin_advertisement(origins);
 }
-http2_submit_status http2_connection::submit_alternative_service_advertisement(std::uint32_t stream_id, std::string_view origin, std::string_view field_value) {
+http_submit_status http2_connection::submit_alternative_service_advertisement(std::uint32_t stream_id, std::string_view origin, std::string_view field_value) {
     return impl_->connection_.submit_alternative_service_advertisement(stream_id, origin, field_value);
 }
-http2_submit_status http2_connection::submit_priority_update(std::uint32_t stream_id, http_priority_fields fields_value) {
+http_submit_status http2_connection::submit_priority_update(std::uint32_t stream_id, http_priority_fields fields_value) {
     return impl_->connection_.submit_priority_update(stream_id, fields_value);
 }
 
-http2_submit_status http2_connection::submit_reset(std::uint32_t stream_id, http2_error_code error) {
+http_submit_status http2_connection::submit_reset(std::uint32_t stream_id, http2_error_code error) {
     auto& connection = impl_->connection_;
     const auto status = connection.submit_reset(stream_id, error);
-    if (status == http2_submit_status::accepted && connection.role() == http2_role::client) {
+    if (status == http_submit_status::accepted && connection.role() == http_connection_role::client) {
         // Owner-originated resets deliberately produce no terminal event. The
         // public client facade must therefore release the pin established by
         // submit_request_head() here rather than waiting for next_event().
@@ -460,10 +411,10 @@ http2_submit_status http2_connection::submit_reset(std::uint32_t stream_id, http
     connection.retry_deferred_stream_leases();
     return status;
 }
-http2_submit_status http2_connection::submit_ping() {
+http_submit_status http2_connection::submit_ping() {
     return impl_->connection_.submit_ping();
 }
-http2_submit_status http2_connection::submit_max_concurrent_streams(std::uint32_t limit) {
+http_submit_status http2_connection::submit_max_concurrent_streams(std::uint32_t limit) {
     return impl_->connection_.submit_max_concurrent_streams(limit);
 }
 std::size_t http2_connection::available_request_streams(std::size_t local_limit) const noexcept {
@@ -496,11 +447,11 @@ http2_server_request_release_status http2_connection::release(http2_request_head
     endpoint->release();
     return live ? http2_server_request_release_status::released : http2_server_request_release_status::closed;
 }
-void http2_connection::begin_drain() {
-    impl_->connection_.begin_drain();
+http_submit_status http2_connection::begin_drain() {
+    return impl_->connection_.begin_drain();
 }
-void http2_connection::finish_drain() {
-    impl_->connection_.finish_drain();
+http_submit_status http2_connection::finish_drain() {
+    return impl_->connection_.finish_drain();
 }
 
 void http2_connection::terminate(http2_error_code error) {
@@ -518,7 +469,7 @@ std::optional<http2_error_code> http2_connection::connection_error() const noexc
 
 std::variant<std::uint32_t, http2_request_head_submit_error> submit_http2_websocket_client_request(http2_connection& connection, const websocket_client_negotiation& negotiation, std::string_view scheme, std::string_view authority, std::string_view target, borrowed_http_headers headers, http_request_field_source source) {
     const auto staged_headers = detail::stage_websocket_extended_connect_fields(negotiation, headers.view());
-    return connection.submit_request_head(http2_extended_connect_request_head_view{
+    return connection.submit_request_head(http_extended_connect_request_head_view{
         .protocol_ = "websocket",
         .scheme_ = scheme,
         .authority_ = authority,

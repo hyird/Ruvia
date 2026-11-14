@@ -20,6 +20,7 @@
 #include "middleware.h"
 #include "stop_token.h"
 #include "task.h"
+#include "timeout_duration.h"
 #include "worker_ref.h"
 
 namespace ruvia {
@@ -156,7 +157,7 @@ private:
     using commit_type = task<stream_commit_result> (*)(void*);
     using write_type = task<void> (*)(void*, std::string_view);
     using end_type = task<void> (*)(void*, std::span<const http_header_view>);
-    using sleep_type = task<timer_sleep_result> (*)(void*, std::chrono::milliseconds, const stop_token&);
+    using sleep_type = task<timer_sleep_result> (*)(void*, timeout_duration, const stop_token&);
     using bind_context_type = void (*)(void*, context*);
     using release_context_type = void (*)(void*) noexcept;
     using committed_type = bool (*)(void*) noexcept;

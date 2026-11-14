@@ -146,30 +146,30 @@ public:
             if (connection_->stream_aborted(stream_id)) {
                 co_return http2_client_data_status::rejected;
             }
-            http2_data_submit_result submitted{};
+            http_data_submit_result submitted{};
             try {
                 submitted = connection_->submit_data(stream_id, bytes, end_stream, chunk_bytes);
             } catch (const std::logic_error&) {
                 co_return http2_client_data_status::rejected;
             }
             bytes.remove_prefix(submitted.consumed_bytes_);
-            if (submitted.status_ == http2_data_submit_status::complete) {
+            if (submitted.status_ == http_data_submit_status::complete) {
                 if (end_pending && end_submitted != nullptr) {
                     *end_submitted = true;
                 }
                 end_pending = false;
             }
             wake_writer();
-            if (submitted.status_ == http2_data_submit_status::closed || submitted.status_ == http2_data_submit_status::invalid_message) {
+            if (submitted.status_ == http_data_submit_status::closed || submitted.status_ == http_data_submit_status::invalid_message) {
                 co_return http2_client_data_status::rejected;
             }
-            if (submitted.status_ == http2_data_submit_status::expectation_pending) {
+            if (submitted.status_ == http_data_submit_status::expectation_pending) {
                 // 100 (Continue) and the continue timeout both wake state waiters.
                 co_await state_signal_.wait();
                 continue;
             }
             co_await wait_output_flushed(stop);
-            if (submitted.status_ == http2_data_submit_status::backpressured) {
+            if (submitted.status_ == http_data_submit_status::backpressured) {
                 co_await wait_send_window(generation, stream_id, stop);
             }
         }
@@ -190,18 +190,18 @@ public:
             if (connection_->stream_aborted(stream_id)) {
                 co_return http2_client_data_status::rejected;
             }
-            http2_finish_status finished{};
+            http_finish_status finished{};
             try {
                 finished = connection_->finish_request(stream_id, trailers);
             } catch (const std::logic_error&) {
                 co_return http2_client_data_status::rejected;
             }
             wake_writer();
-            if (finished == http2_finish_status::accepted) {
+            if (finished == http_finish_status::accepted) {
                 co_await wait_output_flushed(stop);
                 co_return http2_client_data_status::submitted;
             }
-            if (finished != http2_finish_status::backpressured) {
+            if (finished != http_finish_status::backpressured) {
                 co_return http2_client_data_status::rejected;
             }
             co_await wait_send_window(generation, stream_id, stop);

@@ -73,10 +73,9 @@ private:
             .target_ = "/policies/label",
             .headers_ = headers,
         });
-        c.draft().status(response.status());
         // dispatch_response owns pooled bytes; text() copies them into this
         // response before the child result is destroyed on the same worker.
-        co_return c.text(response.body());
+        co_return c.text(response.body(), {.status_ = response.status()});
     }
 
     ruvia::task<ruvia::http_response> csrf(ruvia::context& c) {

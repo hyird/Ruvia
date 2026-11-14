@@ -32,9 +32,8 @@ void require(bool condition, std::string_view message) {
 }
 
 auto migrations() {
-    db_query expressions;
     db_schema schema({.driver_ = db_driver::postgresql});
-    schema.create_table<line_item>({.generated_columns_ = {{"total", expressions.binary(expressions.column("quantity"), db_binary_operator::multiply, expressions.column("unit_price"))}}});
+    schema.create_table<line_item>({.generated_columns_ = {{"total", db_expr::column("quantity") * db_expr::column("unit_price")}}});
     return schema.compile("orm_columns_001");
 }
 
@@ -59,8 +58,7 @@ task<void> demonstrate(db_client& db, db_client& concurrent) {
     const auto updated = co_await items.find_one({.where_ = line_item::column<"id">() == 1});
     require(updated && updated->get<"total">() == 28, "computed UPDATE value differs");
     input.set<"quantity">(5);
-    const borrowed_text conflict_paths[]{"id"};
-    co_await items.upsert(input, {.conflict_paths_ = conflict_paths});
+    co_await items.upsert(input);
     const auto retained = co_await items.find_one({.where_ = line_item::column<"id">() == 1});
     require(retained && retained->get<"total">() == 35, "computed UPSERT value differs");
 

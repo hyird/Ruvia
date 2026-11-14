@@ -46,8 +46,7 @@ std::atomic<int> error_handler_calls{0};
 
 ruvia::task<ruvia::http_response> counted_error(ruvia::context& c, ruvia::http_error_info error) {
     ++error_handler_calls;
-    c.draft().status(error.status());
-    co_return c.text("rejected");
+    co_return c.text("rejected", {.status_ = error.status()});
 }
 
 [[maybe_unused]] const bool application_configured = [] {

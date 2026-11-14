@@ -220,8 +220,9 @@ bool http2_client_session::begin_close(const client_transport_result& transport)
     const auto generation = generation_;
     close_result_ = transport;
     try {
-        // A client drain queues its final GOAWAY at once; idempotent.
-        connection_->begin_drain();
+        // A client drain queues its final GOAWAY at once; idempotent. closed:
+        // the connection already failed and its termination path runs.
+        (void)connection_->begin_drain();
         if (worker_.schedule_timer(close_timer_, deadline_after(http2_client_goaway_flush_time), [this, generation](worker_timer_outcome outcome) noexcept {
             if (outcome == worker_timer_outcome::expired) {
                 fail(generation, close_result_, {});
@@ -247,7 +248,7 @@ void http2_client_session::submit_reset(std::uint32_t stream_id, http2_error_cod
         return;
     }
     try {
-        if (connection_->submit_reset(stream_id, error) == http2_submit_status::accepted && connection_->wants_write()) {
+        if (connection_->submit_reset(stream_id, error) == http_submit_status::accepted && connection_->wants_write()) {
             write_signal_.notify();
         }
     } catch (...) {
@@ -301,7 +302,7 @@ void http2_client_session::check_liveness(std::uint64_t generation) noexcept {
             schedule_ping(generation, idle_deadline);
             return;
         }
-        if (connection_->submit_ping() != http2_submit_status::accepted) {
+        if (connection_->submit_ping() != http_submit_status::accepted) {
             // The connection already failed; the reader reports it.
             return;
         }
@@ -584,12 +585,12 @@ void http_client_connection::wake_http2_stream(http2_stream& stream) noexcept {
 }
 
 void http_client_connection::release_response_data(http_client_response_state& state_value) noexcept {
-    if (!state_value.http2_data_credit_) {
+    if (!state_value.data_credit_) {
         return;
     }
     // The token returns credit to its original connection even if that session
     // has already retired. Its destructor also defers allocation failures.
-    state_value.http2_data_credit_.reset();
+    state_value.data_credit_.reset();
     http2_.wake_writer();
     // The returned credit lets the peer send again: the read is active.
     if (auto* stream = find_http2_request(state_value.request_id_); stream != nullptr && stream->state_ == &state_value) {
@@ -631,7 +632,7 @@ void http_client_connection::publish_http2_head(http2_stream& stream, http2_resp
     restart_http2_stream_read(stream);
 }
 
-void http_client_connection::consume_http2_data(std::uint32_t stream_id, std::string_view bytes_value, http2_received_data_credit credit) {
+void http_client_connection::consume_http2_data(std::uint32_t stream_id, std::string_view bytes_value, http_received_data_credit credit) {
     auto* stream = find_http2_stream(stream_id);
     if (stream == nullptr || stream->complete_ || stream->failed()) {
         // Unretained credits return on destruction, including failed or
@@ -654,7 +655,7 @@ void http_client_connection::consume_http2_data(std::uint32_t stream_id, std::st
         fail_http2_stream(*stream, std::current_exception(), true);
         return;
     }
-    auto& retained_credit = state_value.http2_data_credit_;
+    auto& retained_credit = state_value.data_credit_;
     if (!retained_credit) {
         retained_credit.emplace(std::move(credit));
     } else {
@@ -726,7 +727,7 @@ task<void> http_client_connection::deliver_http2_informational(std::uint32_t str
         if (failure) {
             current->failure_ = std::move(failure);
             http2_.submit_reset(current->stream_id_);
-        } else if (!current->failed() && !state->http2_data_credit_) {
+        } else if (!current->failed() && !state->data_credit_) {
             restart_http2_stream_read(*current);
         }
         wake_http2_stream(*current);
@@ -781,7 +782,7 @@ void http_client_connection::on_http2_event(http2_event& event) {
         } catch (...) {
             fail_http2_stream(*stream, std::current_exception(), true);
         }
-    } else if (auto* chunk = event.message_body_chunk()) {
+    } else if (auto* chunk = event.data()) {
         consume_http2_data(chunk->stream_id(), chunk->bytes(), chunk->take_credit());
     } else if (auto* data = event.tunnel_data()) {
         consume_http2_data(data->stream_id(), data->bytes(), data->take_credit());
@@ -931,8 +932,8 @@ void http_client_connection::remove_http2_stream(http2_stream& stream) noexcept 
         http2_.submit_reset(stream.stream_id_, response_kept ? http2_error_code::no_error : http2_error_code::cancel);
     }
     stream.timer_.cancel();
-    if (stream.state_->http2_data_credit_) {
-        stream.state_->http2_data_credit_.reset();
+    if (stream.state_->data_credit_) {
+        stream.state_->data_credit_.reset();
         http2_.wake_writer();
     }
     const auto index = stream.registry_index_;
@@ -961,7 +962,7 @@ void http_client_connection::reprioritize(http_client_response_state& state_valu
         throw http_client_error(make_error_code(http_client_errc::closing), "HTTP/2 response connection is retired");
     }
     const auto status = http2_.connection().submit_priority_update(static_cast<std::uint32_t>(state_value.stream_id_), {.urgency_ = priority.urgency_, .incremental_ = priority.incremental_});
-    if (status != http2_submit_status::accepted) {
+    if (status != http_submit_status::accepted) {
         throw http_client_error(make_error_code(http_client_errc::protocol_error), "HTTP/2 priority update rejected");
     }
     http2_.wake_writer();
@@ -1084,10 +1085,10 @@ task<bool> http_client_connection::execute_http2(const http_client_request_stora
             const auto submitted = request.websocket() != nullptr
                 ? submit_http2_websocket_client_request(connection, request.websocket()->negotiation_, scheme, request.tunnel_authority(), source_value.target_.view(), headers, request.options_.field_source_)
                 : !request.is_tunnel()
-                ? connection.submit_request_head(::ruvia::http2_regular_request_head_view{.method_ = source_value.method_, .scheme_ = scheme, .authority_ = borrowed_text(request.route().authority_), .target_ = source_value.target_, .headers_ = headers, .content_ = content, .expectation_ = expectation, .field_source_ = request.options_.field_source_})
+                ? connection.submit_request_head(::ruvia::http_regular_request_head_view{.method_ = source_value.method_, .scheme_ = scheme, .authority_ = borrowed_text(request.route().authority_), .target_ = source_value.target_, .headers_ = headers, .content_ = content, .expectation_ = expectation, .field_source_ = request.options_.field_source_})
                 : request.tunnel_protocol().empty()
-                ? connection.submit_request_head(http2_connect_request_head_view{.authority_ = borrowed_text(request.tunnel_authority()), .headers_ = headers, .field_source_ = request.options_.field_source_})
-                : connection.submit_request_head(http2_extended_connect_request_head_view{.protocol_ = borrowed_text(request.tunnel_protocol()), .scheme_ = scheme, .authority_ = borrowed_text(request.tunnel_authority()), .target_ = source_value.target_, .headers_ = headers, .field_source_ = request.options_.field_source_});
+                ? connection.submit_request_head(http_connect_request_head_view{.authority_ = borrowed_text(request.tunnel_authority()), .headers_ = headers, .field_source_ = request.options_.field_source_})
+                : connection.submit_request_head(http_extended_connect_request_head_view{.protocol_ = borrowed_text(request.tunnel_protocol()), .scheme_ = scheme, .authority_ = borrowed_text(request.tunnel_authority()), .target_ = source_value.target_, .headers_ = headers, .field_source_ = request.options_.field_source_});
             if (const auto* accepted = std::get_if<std::uint32_t>(&submitted)) {
                 state_value.request_written_ = true;
                 stream.stream_id_ = *accepted;

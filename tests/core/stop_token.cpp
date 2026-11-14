@@ -30,6 +30,7 @@
 #include <asio/io_context.hpp>
 
 #include "asio_bridge.h"
+#include "asio_completion.h"
 #include "asio_ip_address.h"
 #include "byte_view.h"
 #include "event_loop.h"

@@ -84,16 +84,6 @@ private:
     detail::app_runtime_graph* runtime_{};
 };
 
-struct owned_tls_config final {
-    explicit owned_tls_config(tls_config config) :
-        config_(std::move(config)) {}
-    owned_tls_config(owned_tls_config&&) = default;
-    ~owned_tls_config() {
-        detail::tls_secret_cleanser cleanser(config_);
-    }
-    tls_config config_;
-};
-
 // run_blocking can stop delivering before its callable finishes. A separate
 // receipt joins actual execution/destruction, so no accepted preparation or
 // exception escapes the runtime control, even when its caller is stopping.
@@ -285,7 +275,7 @@ template <typename run_type>
 }  // namespace
 
 namespace {
-task<void> replace_app_tls_identities(std::shared_ptr<detail::app_state> state, worker_ref caller, asio::ip::tcp::endpoint target, owned_tls_config input) {
+task<void> replace_app_tls_identities(std::shared_ptr<detail::app_state> state, worker_ref caller, asio::ip::tcp::endpoint target, detail::owned_tls_config input) {
     std::shared_ptr<const detail::http_server_tls_identities> retired;
     const auto serialized = co_await state->runtime_control_gate_.acquire(caller);
     active_app_control active(state, "TLS identities can be replaced only while the app is running");
@@ -326,15 +316,7 @@ task<void> replace_app_tls_identities(std::shared_ptr<detail::app_state> state, 
         retired = std::exchange(stored, std::move(identities));
     }
 }
-}  // namespace
 
-task<void> application::replace_tls_identities(worker_ref caller, const listener_endpoint& endpoint, tls_config config) & {
-    owned_tls_config input(std::move(config));
-    const asio::ip::tcp::endpoint target(detail::normalize_listen_address(endpoint.address_.view()), endpoint.port_.value());
-    return replace_app_tls_identities(state_, std::move(caller), target, std::move(input));
-}
-
-namespace {
 task<bool> close_app_connection(std::shared_ptr<detail::app_state> state, worker_ref caller, std::uint64_t connection_id) {
     const auto serialized = co_await state->runtime_control_gate_.acquire(caller);
     active_app_control active(state, "connections can be closed only while the app is running");
@@ -357,13 +339,7 @@ task<bool> close_app_connection(std::shared_ptr<detail::app_state> state, worker
     }
     co_return closed.load(std::memory_order_relaxed);
 }
-}  // namespace
 
-task<bool> application::close_connection(worker_ref caller, std::uint64_t connection_id) & {
-    return close_app_connection(state_, std::move(caller), connection_id);
-}
-
-namespace {
 task<void> wait_app_connections(std::shared_ptr<detail::app_state> state, worker_ref caller, asio::ip::tcp::endpoint target, operation_options options) {
     detail::operation_steps steps(options);
     active_app_control active(state, "connections can be awaited only while the app is running");
@@ -386,14 +362,7 @@ task<void> wait_app_connections(std::shared_ptr<detail::app_state> state, worker
         co_await detail::connection_count::wait(count, caller, steps.next("wait_connections_closed"), stopping.token());
     }
 }
-}  // namespace
 
-task<void> application::wait_connections_closed(worker_ref caller, const listener_endpoint& endpoint, operation_options options) & {
-    const asio::ip::tcp::endpoint target(detail::normalize_listen_address(endpoint.address_.view()), endpoint.port_.value());
-    return wait_app_connections(state_, std::move(caller), target, std::move(options));
-}
-
-namespace {
 struct listener_addition_candidate final {
     std::vector<detail::http_server_listener_definition> added_;
     std::vector<detail::http_server_listener_definition> prepared_;
@@ -614,23 +583,7 @@ task<void> add_app_listener(std::shared_ptr<detail::app_state> state, worker_ref
         std::rethrow_exception(failure);
     }
 }
-}  // namespace
 
-task<prepared_listener> application::prepare_listener(worker_ref caller, listen_config config) & {
-    detail::owned_listen_configs input(std::move(config));
-    auto transaction = detail::prepared_listener_access::make(caller);
-    return detail::prepared_listener_access::launch(transaction, add_app_listener(state_, std::move(caller), std::move(input), transaction));
-}
-task<prepared_listener> application::prepare_listeners(worker_ref caller, std::span<const listen_config> configs) & {
-    detail::owned_listen_configs input(configs);
-    auto transaction = detail::prepared_listener_access::make(caller);
-    return detail::prepared_listener_access::launch(transaction, add_app_listener(state_, std::move(caller), std::move(input), transaction));
-}
-task<void> application::add_listener(worker_ref caller, listen_config config) & {
-    return detail::prepared_listener_access::add(prepare_listener(std::move(caller), std::move(config)));
-}
-
-namespace {
 task<void> remove_app_listener(std::shared_ptr<detail::app_state> state, worker_ref caller, asio::ip::tcp::endpoint target, listener_remove_options options) {
     std::optional<detail::http_server_listener_definition> retired;
     const auto serialized = co_await state->runtime_control_gate_.acquire(caller);
@@ -678,15 +631,8 @@ task<void> remove_app_listener(std::shared_ptr<detail::app_state> state, worker_
         runtime.listener_slots_[slot].reset();
     }
 }
-}  // namespace
-
-task<void> application::remove_listener(worker_ref caller, const listener_endpoint& endpoint, listener_remove_options options) & {
-    const asio::ip::tcp::endpoint target(detail::normalize_listen_address(endpoint.address_.view()), endpoint.port_.value());
-    return remove_app_listener(state_, std::move(caller), target, options);
-}
 
 #if !defined(_WIN32)
-namespace {
 task<listener_sockets> duplicate_app_listener_sockets(std::shared_ptr<detail::app_state> state, worker_ref caller, asio::ip::tcp::endpoint target) {
     const auto serialized = co_await state->runtime_control_gate_.acquire(caller);
     active_app_control active(state, "listener sockets can be duplicated only while the app is running");
@@ -735,12 +681,69 @@ task<listener_sockets> duplicate_app_listener_sockets(std::shared_ptr<detail::ap
     }
     co_return result;
 }
+#endif
+
+class app_listener_backend final : public detail::listener_backend {
+public:
+    explicit app_listener_backend(std::shared_ptr<detail::app_state> state) noexcept :
+        state_(std::move(state)) {}
+
+    task<void> add(worker_ref caller, detail::owned_listen_configs input, std::shared_ptr<detail::prepared_listener_state> transaction) override {
+        return add_app_listener(state_, std::move(caller), std::move(input), std::move(transaction));
+    }
+    task<void> remove(worker_ref caller, asio::ip::tcp::endpoint target, listener_remove_options options) override {
+        return remove_app_listener(state_, std::move(caller), target, options);
+    }
+    task<void> wait_connections(worker_ref caller, asio::ip::tcp::endpoint target, operation_options options) override {
+        return wait_app_connections(state_, std::move(caller), target, std::move(options));
+    }
+    task<void> replace_tls(worker_ref caller, asio::ip::tcp::endpoint target, detail::owned_tls_config config) override {
+        return replace_app_tls_identities(state_, std::move(caller), target, std::move(config));
+    }
+    task<bool> close_connection(worker_ref caller, std::uint64_t connection_id) override {
+        return close_app_connection(state_, std::move(caller), connection_id);
+    }
+#if !defined(_WIN32)
+    task<listener_sockets> duplicate(worker_ref caller, asio::ip::tcp::endpoint target) override {
+        return duplicate_app_listener_sockets(state_, std::move(caller), target);
+    }
+#endif
+    http_server_stats stats() const override {
+        auto& state_value = *state_;
+        std::lock_guard lock(state_value.mutex_);
+        http_server_stats total;
+        if (!state_value.runtime_) {
+            return total;
+        }
+        for (const auto& worker : state_value.runtime_->workers_) {
+            const auto stats = worker.runtime_->stats();
+            total.active_connections_ += stats.active_connections_;
+            total.connections_refused_ += stats.connections_refused_;
+            total.connection_failures_ += stats.connection_failures_;
+            total.accept_failures_ += stats.accept_failures_;
+            total.worker_failures_ += stats.worker_failures_;
+            detail::append_listener_stats(total, stats);
+        }
+#if defined(_WIN32)
+        // The acceptor refuses and fails accepts before any worker sees them.
+        total.connections_refused_ += state_value.runtime_->acceptor_->refused();
+        total.accept_failures_ += state_value.runtime_->acceptor_->accept_failures();
+#endif
+        // One application-wide refresher owns the count; workers only adopt.
+        if (state_value.runtime_->document_root_) {
+            total.document_root_refresh_failures_ = state_value.runtime_->document_root_->failures();
+        }
+        return total;
+    }
+
+private:
+    std::shared_ptr<detail::app_state> state_;
+};
+
 }  // namespace
 
-task<listener_sockets> application::duplicate_listener_sockets(worker_ref caller, const listener_endpoint& endpoint) const& {
-    const asio::ip::tcp::endpoint target(detail::normalize_listen_address(endpoint.address_.view()), endpoint.port_.value());
-    return duplicate_app_listener_sockets(state_, std::move(caller), target);
+std::shared_ptr<detail::listener_backend> detail::make_app_listener_backend(std::shared_ptr<detail::app_state> state) {
+    return std::make_shared<app_listener_backend>(std::move(state));
 }
-#endif
 
 }  // namespace ruvia

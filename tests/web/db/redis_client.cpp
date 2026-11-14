@@ -35,9 +35,15 @@
 #include <asio/use_future.hpp>
 #include <asio/write.hpp>
 
+#include "asio_completion.h"
 #include "backend_client_fixture.h"
+#include "context.h"
 #include "event_loop.h"
+#include "http_server.h"
+#include "http_server_fixture.h"
 #include "redis.h"
+#include "request_stream.h"
+#include "router.h"
 #include "stop_token.h"
 #include "task_scope.h"
 #include "worker_task_fixture.h"
@@ -185,6 +191,72 @@ TEST(Ruvia, redis_blocking_commands_ignore_the_ordinary_pool_timeout_and_honor_o
         co_await expect_cancelled(cancelled.blpop(keys, huge_wait));
         co_await expect_cancelled(cancelled.xread_group("workers", "consumer", streams, {.block_ = huge_wait}));
         co_await expect_cancelled(cancelled.command("BLPOP", "queue", "0"));
+    });
+}
+
+// Stops `user` only if the request cancellation never arrived, so a request
+// token detached by with_options() fails the expectation instead of hanging.
+ruvia::task<void> stop_unless_done(const ruvia::worker_ref& worker, ruvia::stop_source& user, ruvia::stop_token done) {
+    if (co_await ruvia::sleep_for(worker, std::chrono::seconds(5), std::move(done)) == ruvia::timer_sleep_result::elapsed) {
+        user.request_stop();
+    }
+}
+
+TEST(Ruvia, redis_request_session_with_a_user_token_keeps_request_cancellation) {
+    using namespace std::chrono_literals;
+    auto& io_context = ruvia::test::new_test_io_context();
+    auto attachment = ruvia::attach_event_loop(io_context);
+    ruvia::test::tcp_port_reservation port(io_context);
+    ruvia::test::with_connected_redis_client(attachment, {}, [&](ruvia::redis_client& client) -> ruvia::task<void> {
+        const auto& worker = attachment.loop().worker();
+        ruvia::stop_source user;
+        bool waiting = false;
+        std::optional<bool> cancelled_by_request;
+        ruvia::router routes(worker);
+        routes.bind_redis("default", client);
+        routes.add("GET", "/wait", [&](ruvia::context& context) -> ruvia::task<ruvia::http_response> {
+            const std::array<std::string_view, 1> keys{"queue"};
+            waiting = true;
+            try {
+                // The startup peer never replies: only a cancellation ends the wait.
+                (void)co_await context.redis().with_options({.stop_token_ = user.token()}).blpop(keys, ruvia::redis_block_wait::indefinitely());
+            } catch (const ruvia::redis_error& error) {
+                cancelled_by_request = error.code() == ruvia::redis_error::code_type::cancelled && !user.stop_requested();
+            }
+            co_return context.text("done");
+        });
+        routes.freeze();
+        ruvia::http_server server(attachment.loop(), {.request_stream_ = [&](ruvia::request_stream& stream) {
+            return routes.dispatch(stream);
+        }});
+        server.listen({.address_ = "127.0.0.1", .http_ = port.endpoint().port(), .dispatch_ = ruvia::listener_dispatch::request_stream});
+        co_await server.start();
+
+        asio::ip::tcp::socket peer(io_context);
+        const auto connected = co_await ruvia::async_asio([&](auto handler) {
+            peer.async_connect(port.endpoint(), std::move(handler));
+        });
+        EXPECT_TRUE(connected.succeeded());
+        constexpr std::string_view request = "GET /wait HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n";
+        const auto written = co_await ruvia::async_asio<std::size_t>([&](auto handler) {
+            asio::async_write(peer, asio::buffer(request), std::move(handler));
+        });
+        EXPECT_TRUE(written.succeeded());
+        for (int attempt = 0; attempt < 2000 && !waiting; ++attempt) {
+            (void)co_await ruvia::sleep_for(worker, 1ms);
+        }
+        EXPECT_TRUE(waiting);
+
+        ruvia::stop_source done;
+        ruvia::task_scope safety(worker);
+        safety.spawn(stop_unless_done(worker, user, done.token()));
+        // Server shutdown disconnects the request, which must reach the Redis
+        // wait although the handler replaced the user token.
+        co_await server.shutdown();
+        done.request_stop();
+        co_await safety.join();
+        ruvia::close_socket(peer);
+        EXPECT_EQ(cancelled_by_request, std::optional<bool>(true));
     });
 }
 

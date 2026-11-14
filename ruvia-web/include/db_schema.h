@@ -37,7 +37,7 @@ enum class db_table_lock_mode : std::uint8_t {
 struct db_variable_definition final {
     borrowed_text name_{};
     db_type_definition type_{};
-    db_expression default_value_{};
+    db_expr default_value_{};
 };
 
 // Structured PL/pgSQL for migration blocks and trigger functions. All inputs
@@ -55,27 +55,27 @@ public:
     void declare_variable(const db_variable_definition& variable);
     void declare_row(std::string_view name, std::string_view table);
     void declare_record(std::string_view name);
-    void assign(std::string_view target, db_expression value);
+    void assign(std::string_view target, const db_expr& value);
     void select_into(const db_query& query, std::span<const std::string_view> targets, bool strict = false);
     void execute(const db_query& query);
-    void perform(db_expression expression);
+    void perform(const db_expr& expression);
     void apply(const db_schema& schema);
-    void begin_if(db_expression condition);
-    void else_if(db_expression condition);
+    void begin_if(const db_expr& condition);
+    void else_if(const db_expr& condition);
     void otherwise();
     void end_if();
     void begin_block();
     void catch_sql_state(std::string_view state);
     void end_block();
     void begin_for_query(std::string_view target, const db_query& query);
-    void begin_foreach(std::string_view target, db_expression array, unsigned slice = 0);
+    void begin_foreach(std::string_view target, const db_expr& array, unsigned slice = 0);
     void end_loop();
-    void execute_dynamic(db_expression command, std::span<const db_expression> using_args = {});
-    void execute_dynamic(db_expression command, std::initializer_list<db_expression> using_args) {
-        execute_dynamic(command, std::span<const db_expression>(using_args.begin(), using_args.size()));
+    void execute_dynamic(const db_expr& command, std::span<const db_expr> using_args = {});
+    void execute_dynamic(const db_expr& command, std::initializer_list<db_expr> using_args) {
+        execute_dynamic(command, std::span<const db_expr>(using_args.begin(), using_args.size()));
     }
     void lock_table(std::string_view table, db_table_lock_mode mode = db_table_lock_mode::access_exclusive, bool nowait = false);
-    void return_value(db_expression expression = {});
+    void return_value(const db_expr& expression = {});
     void raise_exception(std::string_view message, std::string_view sql_state = "P0001");
     [[nodiscard]] std::string body() const;
 
@@ -88,7 +88,7 @@ private:
     // Declarations publish the name only after their text is appended, so a
     // failed declaration leaves no variable behind.
     void require_unique_variable(std::string_view name) const;
-    void append_expression(std::string& output, db_expression value) const;
+    void append_expression(std::string& output, const db_expr& value) const;
     std::string declarations_;
     std::string statements_;
     std::vector<std::string> variables_;
@@ -131,7 +131,7 @@ enum class db_function_volatility : std::uint8_t { volatile_,
 struct db_function_parameter final {
     borrowed_text name_{};
     db_type_definition type_{};
-    db_expression default_value_{};
+    db_expr default_value_{};
 };
 
 struct db_function_definition final {
@@ -156,7 +156,7 @@ struct db_trigger_definition final {
     std::vector<borrowed_text> update_columns_{};
     borrowed_text old_table_{};
     borrowed_text new_table_{};
-    db_expression when_{};
+    db_expr when_{};
     std::vector<borrowed_text> arguments_{};
 };
 
@@ -167,9 +167,9 @@ struct db_schema_column final {
     bool primary_key_{false};
     bool unique_{false};
     db_identity identity_{db_identity::none};
-    db_expression default_value_{};
+    db_expr default_value_{};
     db_generated_type generated_type_{db_generated_type::none};
-    db_expression as_expression_{};
+    db_expr as_expression_{};
 };
 
 struct db_schema_constraint final {
@@ -183,7 +183,7 @@ struct db_schema_constraint final {
     bool deferrable_{false};
     bool initially_deferred_{false};
     bool not_valid_{false};
-    db_expression check_{};
+    db_expr check_{};
 };
 
 struct db_table_definition final {
@@ -197,7 +197,7 @@ struct db_table_definition final {
 
 struct db_index_key final {
     borrowed_text column_{};
-    db_expression expression_{};
+    db_expr expression_{};
     db_order_direction order_{db_order_direction::asc};
     db_nulls_order nulls_{db_nulls_order::default_};
     borrowed_text operator_class_{};
@@ -212,7 +212,7 @@ struct db_index_definition final {
     bool concurrently_{false};
     db_index_method method_{db_index_method::btree};
     std::vector<borrowed_text> include_{};
-    db_expression where_{};
+    db_expr where_{};
 };
 
 struct db_schema_options final {
@@ -221,11 +221,11 @@ struct db_schema_options final {
 
 struct db_column_default final {
     borrowed_text column_{};
-    db_expression value_{};
+    db_expr value_{};
 };
 struct db_column_generated final {
     borrowed_text column_{};
-    db_expression expression_{};
+    db_expr expression_{};
 };
 struct db_entity_table_options final {
     std::vector<db_column_default> defaults_{};
@@ -242,7 +242,7 @@ struct db_table_option final {
 struct db_hypertable_options final {
     borrowed_text table_{};
     borrowed_text time_column_{};
-    db_expression chunk_interval_{};
+    db_expr chunk_interval_{};
     bool create_default_indexes_{true};
     bool if_not_exists_{false};
     bool migrate_data_{false};
@@ -258,8 +258,8 @@ struct db_compression_options final {
     std::vector<db_compression_order> order_by_{};
 };
 
-// Explicit, versioned schema changes. Each operation consumes its borrowed
-// expressions synchronously and stores only generated, owning SQL. Nothing
+// Explicit, versioned schema changes. Each operation consumes its expressions
+// synchronously and stores only generated, owning SQL. Nothing
 // here connects to a database or synchronizes a running application's schema.
 class db_schema final {
 public:
@@ -281,9 +281,9 @@ public:
     void add_column(std::string_view table, const db_schema_column& column, bool if_not_exists = false);
     void drop_column(std::string_view table, std::string_view column, db_drop_behavior behavior = db_drop_behavior::restrict, bool if_exists = false);
     void rename_column(std::string_view table, std::string_view column, std::string_view name);
-    void alter_column_type(std::string_view table, std::string_view column, const db_type_definition& type, db_expression using_value = {});
+    void alter_column_type(std::string_view table, std::string_view column, const db_type_definition& type, const db_expr& using_value = {});
     void set_column_nullable(std::string_view table, std::string_view column, bool nullable);
-    void set_column_default(std::string_view table, std::string_view column, db_expression expression);
+    void set_column_default(std::string_view table, std::string_view column, const db_expr& expression);
     void drop_column_default(std::string_view table, std::string_view column);
     void add_constraint(std::string_view table, const db_schema_constraint& constraint);
     void drop_constraint(std::string_view table, std::string_view name, db_drop_behavior behavior = db_drop_behavior::restrict, bool if_exists = false);
@@ -297,7 +297,7 @@ public:
     void create_view(std::string_view name, const db_query& query, bool replace = false, bool materialized = false);
     void drop_view(std::string_view name, bool materialized = false, db_drop_behavior behavior = db_drop_behavior::restrict, bool if_exists = false);
     void execute(const db_query& query);
-    void perform(db_expression expression);
+    void perform(const db_expr& expression);
     void run(const db_procedure& procedure);
     void create_trigger_function(std::string_view name, const db_procedure& procedure, bool replace = false);
     void drop_trigger_function(std::string_view name, db_drop_behavior behavior = db_drop_behavior::restrict, bool if_exists = false);
@@ -311,11 +311,11 @@ public:
     void set_table_options(std::string_view table, std::span<const db_table_option> options);
     void set_database_option(std::string_view database, std::string_view name, std::string_view value);
     void create_hypertable(const db_hypertable_options& options);
-    void set_chunk_time_interval(std::string_view table, db_expression interval);
+    void set_chunk_time_interval(std::string_view table, const db_expr& interval);
     void set_compression(std::string_view table, const db_compression_options& options);
-    void add_compression_policy(std::string_view table, db_expression after, bool if_not_exists = false);
+    void add_compression_policy(std::string_view table, const db_expr& after, bool if_not_exists = false);
     void remove_compression_policy(std::string_view table, bool if_exists = false);
-    void add_retention_policy(std::string_view table, db_expression after, bool if_not_exists = false);
+    void add_retention_policy(std::string_view table, const db_expr& after, bool if_not_exists = false);
     void remove_retention_policy(std::string_view table, bool if_exists = false);
 
     // PostgreSQL batches are one atomic DO statement. A nontransactional
@@ -338,7 +338,7 @@ private:
     void append_type(std::string& sql, const db_type_definition& type) const;
     void append_column(std::string& sql, const db_schema_column& column) const;
     void append_constraint(std::string& sql, const db_schema_constraint& constraint) const;
-    void append_expression(std::string& sql, db_expression expression) const;
+    void append_expression(std::string& sql, const db_expr& expression) const;
     void append_drop_behavior(std::string& sql, db_drop_behavior behavior) const;
     [[nodiscard]] std::string constraint_name(std::string_view table, std::string_view relation, std::string_view suffix) const;
     template <typename column_type>
@@ -368,7 +368,6 @@ void db_schema::create_table(const db_entity_table_options& options) {
     table_value.columns_.reserve(std::tuple_size_v<typename entity_type::columns_type>);
     table_value.constraints_.reserve(options.constraints_.size() + 1U + std::tuple_size_v<typename entity_type::relations_type> * 2U);
     table_value.constraints_.assign(options.constraints_.begin(), options.constraints_.end());
-    db_query defaults;
     std::vector<borrowed_text> primary;
     primary.reserve(detail::db_primary_key_count<entity_type>());
     detail::for_each_descriptor<typename entity_type::columns_type>([&]<typename c_type, std::size_t> {
@@ -379,11 +378,11 @@ void db_schema::create_table(const db_entity_table_options& options) {
             }
         }
         if constexpr (!c_type::options.default_expression_.view().empty()) {
-            column.default_value_ = defaults.sql(c_type::options.default_expression_.view());
+            column.default_value_ = db_expr::raw_sql(c_type::options.default_expression_.view());
         } else if constexpr (c_type::options.create_date_ || c_type::options.update_date_) {
-            column.default_value_ = defaults.call("now");
+            column.default_value_ = db_expr::now();
         } else if constexpr (c_type::options.version_) {
-            column.default_value_ = defaults.value(1);
+            column.default_value_ = db_expr::value(1);
         }
         if constexpr (c_type::options.primary_key_) {
             primary.push_back(column.name_);

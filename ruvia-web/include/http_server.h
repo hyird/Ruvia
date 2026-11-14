@@ -230,12 +230,12 @@ enum class listener_dispatch : std::uint8_t {
     // Only application has routes; http_server and http_server_group reject
     // it (their request_stream callback may await router::dispatch()).
     routes,
-    // The host's request_stream callback (application::on_request_stream or
-    // http_server_callbacks::request_stream_) receives each HTTP request --
+    // The host's request_stream callback (http_server_callbacks::request_stream_)
+    // receives each HTTP request --
     // HTTP/1.1, HTTP/2 and HTTP/3 alike -- as a request_stream.
     request_stream,
-    // The host's connection callback (application::on_connection or
-    // http_server_callbacks::connection_) receives each accepted connection
+    // The host's connection callback (http_server_callbacks::connection_)
+    // receives each accepted connection
     // -- on a TLS listener once its handshake completed -- as a byte stream
     // (server_connection); the server parses no HTTP on it.
     connection,
@@ -314,7 +314,7 @@ struct listen_config final {
     // neither. An explicit value whose callback is absent is rejected too.
     // Standalone hosts resolve and check it when the listener is loaded:
     // start() for listen(), the call itself for add_listener(),
-    // prepare_listener(s)() and add_connection_service().
+    // prepare_listeners() and add_connection_service().
     std::optional<listener_dispatch> dispatch_{};
     // Every connection of the TCP services must begin with a PROXY protocol
     // header (HAProxy PROXY protocol v1 or v2); nothing is guessed, and a
@@ -392,7 +392,7 @@ struct adopt_options final {
 struct document_root_config final {
     std::filesystem::path root_{};
     static_root_options static_options_{};
-    std::chrono::milliseconds refresh_interval_{std::chrono::seconds(1)};
+    timeout_duration refresh_interval_{std::chrono::seconds(1)};
     bool precompress_gzip_{false};
     bool precompress_brotli_{false};
     bool precompress_zstd_{false};
@@ -417,7 +417,7 @@ struct listener_stats final {
 // than one snapshot.
 //
 // These make a server observable without installing any callback: on_error sees
-// request failures and on_connection_failure sees lost connections, but neither
+// request failures and connection_failure_ sees lost connections, but neither
 // answers "how many, since when".
 struct http_server_stats final {
     // One entry per listener in listener order, with the connections it
@@ -431,7 +431,7 @@ struct http_server_stats final {
     // connection is not counted). A rising count means the server is shedding
     // load rather than queueing it.
     std::size_t connections_refused_{0};
-    // Connections lost to an exception, as delivered to on_connection_failure
+    // Connections lost to an exception, as delivered to connection_failure_
     // (peer resets and closes and server-cancelled I/O are not failures).
     std::size_t connection_failures_{0};
     // Accept attempts or session starts that failed, excluding peer disconnects
@@ -490,18 +490,111 @@ private:
 };
 
 namespace detail {
-class http_server_state;
 class http_server_group_state;
+class listener_backend;
 }  // namespace detail
 
+// The one runtime listener-control surface of a multi-worker host
+// (application and http_server_group). Every control is awaited from an
+// explicit caller worker -- which may be one of the host's own workers -- and
+// resumes there; controls take effect one at a time. Inputs (configurations,
+// inherited sockets, TLS secrets, endpoint text) are owned or resolved when
+// the call returns, before the task starts; secrets are cleansed when the
+// task completes or is dropped. An endpoint that is not a numeric address
+// with a nonzero port, or that no running listener serves, throws
+// std::invalid_argument. Every control requires a running host and throws
+// std::logic_error otherwise, or when the host starts stopping before every
+// worker accepted it; the host then serves as before.
+class listener_controls {
+public:
+    // Validates and loads `configs` as the host's listen() would (an endpoint
+    // a listener already serves throws std::invalid_argument), with any
+    // inherited_sockets_, on caller's blocking pool; owner threads bind or
+    // adopt the sockets. Returns once every worker prepared the whole batch;
+    // nothing accepts before activate(). Any failure rolls the whole batch
+    // back. One configuration is a one-element span.
+    [[nodiscard]] task<prepared_listener> prepare_listeners(worker_ref caller, std::span<const listen_config> configs) &;
+    task<prepared_listener> prepare_listeners(worker_ref, std::span<const listen_config>) && = delete;
+    // prepare_listeners() of one configuration, then activate(). The host
+    // keeps the listener for later runs.
+    [[nodiscard]] task<void> add_listener(worker_ref caller, listen_config config) &;
+    task<void> add_listener(worker_ref, listen_config) && = delete;
+    // Completes once every worker stopped admitting the TCP service
+    // `endpoint` names (and its HTTP/3 service), closed its sockets and its
+    // accept loop exited. Established connections are served until they end
+    // or the host stops; close_connections_ closes them now, their sessions
+    // retiring independently (a connection's own handler may remove it).
+    [[nodiscard]] task<void> remove_listener(worker_ref caller, const listener_endpoint& endpoint, listener_remove_options options = {}) &;
+    task<void> remove_listener(worker_ref, const listener_endpoint&, listener_remove_options = {}) && = delete;
+    // Completes once the serving or latest removed listener `endpoint` names
+    // has no live TCP/TLS or QUIC connection (at once when it has none). A
+    // timeout or stop in `options`, or the host stopping, throws
+    // std::system_error (timed_out or operation_canceled) and leaves the
+    // connections alone.
+    [[nodiscard]] task<void> wait_connections_closed(worker_ref caller, const listener_endpoint& endpoint, operation_options options = {}) &;
+    task<void> wait_connections_closed(worker_ref, const listener_endpoint&, operation_options = {}) && = delete;
+    // Replaces the identities (identity_, sni_, local_addresses_) of the
+    // HTTPS listener `endpoint` names, for TLS over TCP and its HTTP/3
+    // service; client_certificates_ and max_outgoing_records_ must equal the
+    // listener's (std::invalid_argument otherwise). Credentials load on
+    // caller's blocking pool. Handshakes whose ClientHello a worker processes
+    // afterwards select from the new set; established connections keep their
+    // identity, and session caches and ticket keys stay.
+    [[nodiscard]] task<void> replace_tls_identities(worker_ref caller, const listener_endpoint& endpoint, tls_config config) &;
+    task<void> replace_tls_identities(worker_ref, const listener_endpoint&, tls_config) && = delete;
+    // Closes every protocol stream of the connection; false means no live
+    // connection has this ID. IDs never name another connection.
+    [[nodiscard]] task<bool> close_connection(worker_ref caller, std::uint64_t connection_id) &;
+    task<bool> close_connection(worker_ref, std::uint64_t) && = delete;
+#ifndef _WIN32
+    // Duplicates (dup()) every worker's socket of the TCP service `endpoint`
+    // names, and of its HTTP/3 service, into http_ or https_ and http3_ in
+    // worker order -- what a process exec'd to take over the service passes as
+    // listen_config::inherited_sockets_. The duplicates are not close-on-exec
+    // and belong to the caller. QUIC connections do not move with the UDP
+    // sockets. POSIX only: on Windows the acceptor owns one exclusive socket.
+    [[nodiscard]] task<listener_sockets> duplicate_listener_sockets(worker_ref caller, const listener_endpoint& endpoint) const&;
+    task<listener_sockets> duplicate_listener_sockets(worker_ref, const listener_endpoint&) const&& = delete;
+#endif
+    // Summed across every worker; any thread.
+    [[nodiscard]] http_server_stats stats() const;
+
+protected:
+    explicit listener_controls(std::shared_ptr<detail::listener_backend> backend) noexcept;
+    ~listener_controls();
+    listener_controls(const listener_controls&) = delete;
+    listener_controls& operator=(const listener_controls&) = delete;
+
+private:
+    std::shared_ptr<detail::listener_backend> backend_;
+};
+
+// Every observation and dispatch callback of one host: http_server's
+// constructor, each http_server_group member's factory result, or
+// application::callbacks(). An empty member installs nothing, and its path
+// does no observation work.
 struct http_server_callbacks final {
+    // Serves every listener_dispatch::request_stream listener (see
+    // request_stream); a host with such a listener requires it.
     request_stream_callback request_stream_;
+    // Serves every listener_dispatch::connection listener (see
+    // server_connection); a host with such a listener requires it.
     connection_callback connection_;
     access_log_callback access_;
+    // Connections lost to an exception that escaped their session -- the
+    // failures on_error cannot answer because the response is already
+    // committed or the error handler itself failed. Without a callback they
+    // are reported to stderr. A peer reset or close, or I/O this server
+    // cancelled (stop, timeouts), is a normal end: neither delivered nor counted.
     connection_failure_callback connection_failure_;
+    // Every ClientHello a TLS listener receives, over TCP and for HTTP/3,
+    // before certificate selection; a HelloRetryRequest yields a second record.
     tls_client_hello_callback tls_client_hello_;
+    // The decrypted input of every HTTP/2 connection -- TLS with ALPN h2 and
+    // cleartext prior knowledge alike -- once per read, before parsing.
     http2_input_callback http2_input_;
 #if defined(RUVIA_ENABLE_HTTP2)
+    // Typed frame and HPACK facts from the protocol parser, in wire order.
     http2_frame_callback http2_frame_;
     http2_headers_callback http2_headers_;
 #endif
@@ -509,6 +602,8 @@ struct http_server_callbacks final {
     http3_frame_callback http3_frame_;
     http3_field_callback http3_field_;
 #endif
+    // Admission precedes TLS/HTTP processing. Open may return owned
+    // per-connection state; close runs after retirement on the owning worker.
     connection_admission_callback connection_admission_;
     connection_open_callback connection_open_;
     connection_close_callback connection_close_;
@@ -534,9 +629,7 @@ public:
     // Runtime additions use add_listener().
     http_server& listen(listen_config config) &;
     http_server& listen(listen_config) && = delete;
-    [[nodiscard]] task<prepared_listener> prepare_listener(listen_config config) &;
-    task<prepared_listener> prepare_listener(listen_config) && = delete;
-    // 整批准备并共享一次提交/回滚；所有配置均就绪后才返回。
+    // 整批准备并共享一次提交/回滚；所有配置均就绪后才返回。单个配置用单元素 span。
     // 地址/TLS 配置在调用时复制，继承 socket 的所有权同时转入，包括冷任务。
     [[nodiscard]] task<prepared_listener> prepare_listeners(std::span<const listen_config> configs) &;
     task<prepared_listener> prepare_listeners(std::span<const listen_config>) && = delete;
@@ -594,11 +687,12 @@ public:
     [[nodiscard]] bool close_connection(std::uint64_t connection_id) &;
     bool close_connection(std::uint64_t) && = delete;
 
-    // Any thread; cancels only this host, not unrelated work on the loop.
-    // Destruction requests the same close. The loop must keep running until
-    // shutdown completes, or its own retirement has joined the stop callback.
-    void close() & noexcept;
-    void close() && = delete;
+    // Any thread; requests the stop of this host only, not of unrelated work
+    // on the loop. Destruction requests the same stop. The loop must keep
+    // running until shutdown() completes, or its own retirement has joined the
+    // stop callback. shutdown() also requests it, then waits for retirement.
+    void stop() & noexcept;
+    void stop() && = delete;
     [[nodiscard]] task<void> shutdown() &;
     task<void> shutdown() && = delete;
     // Any thread.
@@ -607,7 +701,8 @@ public:
     const worker_ref& worker() const&& = delete;
 
 private:
-    std::shared_ptr<detail::http_server_state> state_;
+    // A one-member http_server_group_state: one implementation serves both hosts.
+    std::shared_ptr<detail::http_server_group_state> state_;
 };
 
 // Builds one worker's callbacks; see http_server_group.
@@ -615,8 +710,8 @@ using http_server_callbacks_factory = move_only_function<http_server_callbacks(c
 // A service shared by caller-owned loops. Configuration before start does not
 // require the loops to be driven. Controls suspend without blocking member
 // loops and resume on the explicit caller worker (which may itself be a
-// member). Drive live loops until shutdown completes. close() never stops
-// caller loops; member retirement closes the group.
+// member). Drive live loops until shutdown completes. stop() never stops
+// caller loops; member retirement stops the group.
 //
 // Each member serves its connections with its own callbacks, which the
 // factory builds -- for example a per-worker router that the request_stream_
@@ -628,7 +723,7 @@ using http_server_callbacks_factory = move_only_function<http_server_callbacks(c
 // throws std::invalid_argument. Shared thread-safe targets remain supported.
 // A throwing factory fails that operation and closes every member; callbacks
 // already built retire on their own loops after their sessions, as at shutdown.
-class http_server_group final {
+class http_server_group final : public listener_controls {
 public:
     http_server_group(std::span<const event_loop> loops, http_server_callbacks_factory callbacks, server_config config = {});
     ~http_server_group();
@@ -641,13 +736,6 @@ public:
     // configuration, dispatch_ included.
     http_server_group& listen(listen_config config) &;
     http_server_group& listen(listen_config) && = delete;
-    [[nodiscard]] task<prepared_listener> prepare_listener(worker_ref caller, listen_config config) &;
-    task<prepared_listener> prepare_listener(worker_ref, listen_config) && = delete;
-    // 整批所有 worker 就绪后才返回；单一票据统一激活或回滚全部端点。
-    [[nodiscard]] task<prepared_listener> prepare_listeners(worker_ref caller, std::span<const listen_config> configs) &;
-    task<prepared_listener> prepare_listeners(worker_ref, std::span<const listen_config>) && = delete;
-    [[nodiscard]] task<void> add_listener(worker_ref caller, listen_config config) &;
-    task<void> add_listener(worker_ref, listen_config) && = delete;
     [[nodiscard]] task<void> add_connection_service(worker_ref caller, listen_config config) &;
     task<void> add_connection_service(worker_ref, listen_config) && = delete;
     // Before start only; replaces the complete set on every worker. Parsing
@@ -660,35 +748,21 @@ public:
     // cancelling unrelated caller work.
     [[nodiscard]] task<void> start(worker_ref caller) &;
     task<void> start(worker_ref) && = delete;
-    [[nodiscard]] task<void> remove_listener(worker_ref caller, const listener_endpoint& endpoint, listener_remove_options options = {}) &;
-    task<void> remove_listener(worker_ref, const listener_endpoint&, listener_remove_options = {}) && = delete;
-    // As http_server::wait_connections_closed(), across every member.
-    [[nodiscard]] task<void> wait_connections_closed(worker_ref caller, const listener_endpoint& endpoint, operation_options options = {}) &;
-    task<void> wait_connections_closed(worker_ref, const listener_endpoint&, operation_options = {}) && = delete;
-    [[nodiscard]] task<void> replace_tls_identities(worker_ref caller, const listener_endpoint& endpoint, tls_config config) &;
-    task<void> replace_tls_identities(worker_ref, const listener_endpoint&, tls_config) && = delete;
-#ifndef _WIN32
-    [[nodiscard]] task<listener_sockets> duplicate_listener_sockets(worker_ref caller, const listener_endpoint& endpoint) const&;
-    task<listener_sockets> duplicate_listener_sockets(worker_ref, const listener_endpoint&) const&& = delete;
-#endif
     // Explicit target worker; takes socket ownership even when rejected.
     // As http_server::adopt() otherwise.
     [[nodiscard]] task<void> adopt(worker_ref caller, std::size_t worker_index, const listener_endpoint& service, native_socket socket, adopt_options options = {}) &;
     task<void> adopt(worker_ref, std::size_t, const listener_endpoint&, native_socket, adopt_options = {}) && = delete;
-    // IDs never name another connection after retirement.
-    [[nodiscard]] task<bool> close_connection(worker_ref caller, std::uint64_t connection_id) &;
-    task<bool> close_connection(worker_ref, std::uint64_t) && = delete;
-    void close() & noexcept;
-    void close() && = delete;
+    // Any thread; as http_server::stop().
+    void stop() & noexcept;
+    void stop() && = delete;
     [[nodiscard]] task<void> shutdown(worker_ref caller) &;
     task<void> shutdown(worker_ref) && = delete;
-    // Any thread.
-    [[nodiscard]] http_server_stats stats() const;
     [[nodiscard]] std::size_t worker_count() const noexcept;
     [[nodiscard]] const worker_ref& worker(std::size_t index) const& RUVIA_LIFETIMEBOUND;
     const worker_ref& worker(std::size_t) const&& = delete;
 
 private:
+    explicit http_server_group(std::shared_ptr<detail::http_server_group_state> state);
     std::shared_ptr<detail::http_server_group_state> state_;
 };
 

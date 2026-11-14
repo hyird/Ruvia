@@ -14,11 +14,10 @@
 | `"event_loop.h"` | `template <typename T> class root_task final` | 由 `event_loop::start(task<T>)` 或 `try_start(task<T>)` 返回的跨线程等待句柄。提供 `valid()`、`ready()`、`wait()`、`wait_for(operation_timeout)`、`std::move(root).get()`（仅右值提取并消费结果）；析构时若未调用 `get()` 则转为后台托管直至完成，**禁止在所属 `event_loop` 自身线程调用 `wait()` / `get()`** |
 | `"task_scope.h"` | `class task_scope final`、`task_scope::join_operation` | 单 Worker 亲和的结构化并发任务域。提供 `spawn(task<void>)`、`request_stop()`、`token()`、`stop_requested()`、`size()`、`empty()`、`join()`；构造期建立停止状态，`token() const&` 只读且不分配，第一个子任务失败时作用域自动请求停止；`join()` 返回可丢弃、仅启动前可移动的单次冷 `join_operation`，创建和启动须在绑定 Worker，启动后独占该作用域并关闭 `spawn`，并重新抛出第一个子任务失败；之后与其不等价（同一异常对象，或动态类型与 `what()` 均相同）的子任务失败在该子任务完成时交给 `report_unhandled_failure`，不被静默丢弃；析构前若曾 `spawn` 过任务，必须完成 `co_await scope.join()` |
 | `"operation_scope.h"` | `class operation_scope final`、`class scoped_capability_registration final`、`make_scoped_operation(...)` | 将借用型能力（capability）与惰性协程操作 `task<T>` 绑定到同一 Worker 作用域，`close_and_join()` 先回收冷协程帧并等待已启动操作完成后再失效 capability；`bind_worker(worker)` 借用该 Worker 句柄后，作用域内每个操作的启动、完成与冷帧回收都必须在该 Worker 上，否则 `std::terminate()` |
-| `"asio_bridge.h"` | `async_start(task<T>&&, token)`、`template <typename T> using task_completion_result`、`template <typename T> asio::awaitable<T> as_awaitable(task<T> task_value)`、`template <typename Result = void> class asio_completion final`、`template <typename Result, typename Initiate> class asio_completion_awaiter final`、`template <typename Result = void, typename Initiate> auto async_asio(Initiate&& initiate)` | 将 `ruvia::task<T>` 作为任意 Asio 完成令牌的异步操作启动，或适配为 `asio::awaitable<T>`；将基于完成回调的 Asio 异步启动操作适配为 Ruvia 协程可直接 `co_await` 的 `asio_completion_awaiter`（返回 `asio_completion<Result>`，提供 `error_code()`、`succeeded()`、`failed()`、`result()` / `take_result()`） |
+| `"asio_bridge.h"` | `async_start(task<T>&&, token)`、`template <typename T> using task_completion_result`、`template <typename T> asio::awaitable<T> as_awaitable(task<T> task_value)` | 将 `ruvia::task<T>` 作为任意 Asio 完成令牌的异步操作启动，或适配为 `asio::awaitable<T>`；反向把 Asio 回调式操作适配为 Ruvia 等待物的胶水只在构建内部使用，不安装 |
 
 - **Asio 启动**：`async_start()` 在调用线程内联启动任务，经处理器关联执行器交付 `task_completion_result<T>`；`void` 任务为 `std::exception_ptr`，其余为 `std::variant<T, std::exception_ptr>`（值在前、失败在后）。
 - **启动分配**：操作状态使用处理器关联分配器，交付前先回收协程帧；`as_awaitable()` 与 `event_loop::try_start()` / `start()` 均基于 `async_start()`。
-- **原生等待物**：`asio_completion_awaiter` 不可复制、移动或取址；跨越单个 await 表达式保存时，以启动函数原地构造（如 `std::optional::emplace`）。
 - **根任务限时等待**：`wait_for()` 只接受 `operation_timeout`：相对上限自调用时计时，非正值在构造 `operation_timeout` 时抛 `std::invalid_argument`；已过的绝对截止期只报告当前完成状态；`ready()` 在结果被 `get()` 消费后为 `false`。
 - **根任务替换**：`root_task` 移动赋值先接管源状态，再退役旧状态；旧结果析构时重写源句柄或释放其宿主，不会丢失已接管的任务。
 - **作用域任务移交**：`make_scoped_operation()` 的结果可直接交给 `task_scope::spawn()`；执行完毕后的内部移交仍保留作用域登记，直到帧释放才允许 `close_and_join()` 完成。
@@ -47,12 +46,14 @@
 - **上限合并**：`override_operation_options()` 中 token 未指定则继承、指定则替换；timeout 只收紧不放宽：同为相对取较短，同为绝对取较早，混合时把相对值按合并时刻解析为绝对截止期后取较早。
 - **显式解包**：`timeout_duration` 读取计数用 `.value().count()`（optional 用 `->value().count()`）；与经过时长比较前必须 `.value()`，禁止混合类型比较把经过时长先向上取整而提前触发超时。
 - **统一入口**：槽位租约、HTTP 客户端/服务器、WebSocket、数据库、Redis 的超时与探活使用同一类型；缓存 TTL、会话有效期与限流窗口不属于该契约。
+- **控制参数位置**：有上限的操作以末位 `operation_options options = {}` 作控制参数；时长是操作目标的 `sleep_for()` / `sleep_until()` / 写出器 `sleep()` 例外，末位为 `stop_token = {}`，不接受 `operation_options`（上限拒绝非正值，与目标语义冲突）。顺序统一为 `(worker, 对象…, 控制)`。
+- **组合取消**：只组合 token 用 `stop_group`；`operation_options` 再加额外 token 用 `linked_operation_options linked(options, extra...)`，传 `linked.options()`（timeout 原样保留，0 / 1 个可取消源不分配，须存活到操作结束；仅限左值调用 `options()`）。`with_options` / `override_operation_options` 一律替换 token，累计取消只走 `linked_operation_options`。
 
 `stop_group group{first.token(), second.token(), ...}` 或 `stop_group group{tokens_span}` 可组合任意数量的父状态，也可输入另一个 group 的 `token()`。group 不可复制或移动，必须保持地址稳定并存活到使用其 token 的所有操作结束 / join；token 的复制不会延长 group 的父源注册寿命。0 / 1 个不同有效源直接透传，不创建新状态；真实多源组合创建一个下游状态，前两个父注册内嵌，更多父注册按实际数量分配。重复源与嵌套源都只触发每个下游回调一次，不存在用户源容量被框架内部源占用的问题。
 
 `request_stop()` 支持跨线程；已停止状态的注册同步执行回调。回调可注销自身，也可销毁正在转发的 group；group 先注销父注册再退役自身取消源。回调在请求取消的线程执行，不可直接修改其他 Worker 所有的状态，应向 owner Worker 投递通知。源先销毁不会使已有 token 悬空；`has_state()` 区分空 token 与源已退役的 token，`stoppable()` 表示状态是否仍可能取消或已经取消。
 
-所有客户端 handle 的 `with_options` 使用相同规则：未指定 token 继承，提供非空 token 则替换原用户取消状态，不隐式累积；超时始终取已有值与新值中较紧的上限。需要累计时由调用方持有 `stop_group` 并传入其 token。客户端关闭通过自身 backend 的关闭、等待唤醒和 join 主链独立生效，不因 token 替换而失效，也不为每次派生 handle 建立共享取消树。Redis 独立客户端未提供 token 时沿用客户端生命周期 token，满足阻塞命令 / 订阅需要明确取消边界的契约；显式 token 替换后仍受客户端关闭约束。数据库借用外部 Redis 的缓存操作由缓存 owner 的独立停止源中止，不关闭外部 Redis 客户端。
+所有客户端 handle 的 `with_options` 使用相同规则：未指定 token 继承，提供非空 token 则替换原用户取消状态，不隐式累积；超时始终取已有值与新值中较紧的上限。需要累计时用 `linked_operation_options`。请求绑定的 HTTP 客户端、数据库与 Redis handle 另存请求取消 token，每次操作与用户 token 链接（同 .NET `CreateLinkedTokenSource`），`with_options` 无法替换；一方不可取消时直接透传，不建帧、不分配。客户端关闭通过自身 backend 的关闭、等待唤醒和 join 主链独立生效，不因 token 替换而失效，也不为每次派生 handle 建立共享取消树。Redis 独立客户端未提供 token 时沿用客户端生命周期 token，满足阻塞命令 / 订阅需要明确取消边界的契约；显式 token 替换后仍受客户端关闭约束。数据库借用外部 Redis 的缓存操作由缓存 owner 的独立停止源中止，不关闭外部 Redis 客户端。
 
 ---
 
@@ -78,7 +79,7 @@ pool.join();
 | 头文件 | 核心公开类型 / 函数 | 说明与契约 |
 | --- | --- | --- |
 | `"event_loop.h"` | `class event_loop final`、`class event_loop_stop_registration final`、`class event_loop_attachment final`、`attach_event_loop(asio::io_context&, options = {})`、`class event_loop_pool final`、`struct event_loop_pool_options` | 指向单个 Worker 运行时及其 `asio::io_context` 的轻量引用，只承担循环生命周期职责（`valid()`、`worker()`、`io_context()`、`executor()`、`report_failure(e)`、`defer_cleanup(fn)`、`try_start(task<T>)` / `start(task<T>)`、`on_stop(fn)`）；准入状态、身份、投递与定时器经 `worker()` 返回的 `worker_ref` 访问，将 Ruvia Worker 挂载到外部自管 `asio::io_context` 的适配器（`loop()`、`run()`、`stop()`、`valid()`），以及管理固定数量独立事件循环线程的池（`start()`、`stop()`、`join()`、`loop_count()`、`loop(index)`、`next_loop()`、`loop_for(key)`） |
-| `"worker_ref.h"` | `class worker_ref final`、`using worker_id_type = std::uint64_t`、`enum class post_status`、`template <typename Sig> class post_outcome final`、`class worker_shutdown_registration final`、`enum class worker_registration_status { registered, worker_stopping }`、`concept worker_shutdown_observer` | 跨线程安全的稳定派发端点与有界队列投递结果。提供 `valid()`、`accepting()`、`is_current()`、`id()`、`blocking_pool()`（借用的阻塞池或空）、`executor()`、`post(fn)`、`post_factory(factory)`、`post_payload(payload, wrap)`（准入后才把负载包装成回调，拒绝时退回负载）、`schedule_timer(...)`、`defer_resume(handle)`、`defer_completion(fn)`、`register_shutdown(owner, &Owner::registration)` |
+| `"worker_ref.h"` | `class worker_ref final`、`using worker_id_type = std::uint64_t`、`enum class post_status`、`template <typename Sig> class post_outcome final`、`class worker_shutdown_registration final`、`enum class worker_registration_status { registered, worker_stopping }`、`concept worker_shutdown_observer` | 跨线程安全的稳定派发端点与有界队列投递结果。提供 `valid()`、`accepting()`、`is_current()`、`id()`、`blocking_pool()`（借用的阻塞池或空）、`post(fn)`、`post_factory(factory)`、`post_payload(payload, wrap)`（准入后才把负载包装成回调，拒绝时退回负载）、`schedule_timer(...)`、`defer_resume(handle)`、`defer_completion(fn)`、`register_shutdown(owner, &Owner::registration)` |
 | `"worker_runtime.h"` | `class worker_runtime final`、`struct worker_runtime_options`、`struct worker_runtime_hooks`、`enum class worker_runtime_state` | 底层单 Worker 线程与两阶段启停状态机（`startup -> ready -> serve -> stop_admission -> finalize -> drain -> shutdown -> join`）；`take_failure()` 接管首个失败的上报责任，析构不再上报，重复调用返回同一失败；`loop() &` 返回该 Worker 的 `event_loop`（首次调用时创建，`report_failure()` 使运行时失败），此后运行时的 `stop_admission` 等待循环的根任务、停机回调与清理排空后才执行；循环借用运行时，任何副本不得比运行时活得久 |
 | `"worker_runtime.h"` | `class worker_group final` | 协调多个 `worker_runtime` 同步完成两阶段启动屏障（`start()` / `serve()`）与停机回收（`request_stop()` / `join()`） |
 | `"blocking_pool.h"` | `class blocking_pool final`、`template <typename T> class blocking_result final`、`run_blocking(worker_ref, fn, operation_options = {})`、`using blocking_submit_result` | 固定大小阻塞卸载线程池，由调用方拥有：通过 `event_loop_pool_options`、`attach_event_loop` 的选项或 `worker_runtime_options` 的 `blocking_pool_` 交给事件循环借用，须比事件循环存活更久；core 不持有隐式进程级池。`run_blocking` 在绑定 Worker 上 `co_await`，将 `fn` 提交至该 Worker 借用的池并在完成后回到原 Worker 恢复协程；Worker 没有池时返回 `blocking_status::unavailable`，不提交 `fn`（`worker_ref::blocking_pool()` 可预先查询）。`operation_options` 的 `timeout_` / `stop_token_` 只限定等待（相对上限自任务启动计时，绝对截止期可与调用方其他阶段共享）；已停止的令牌或已过期截止期同样不提交 `fn`。调用或交付值的异常保存在结果中并由 `value()` 或 `take_value()` 重新抛出。超时、取消或 Worker 停机先释放等待者；已开始的调用继续完成，但只持有自身数据，迟到结果被丢弃 |
@@ -89,8 +90,8 @@ pool.join();
 - **循环清理**：`event_loop::defer_cleanup(fn)` 是循环级冷路径资源清理，不属于任何已准入操作：绕过有界准入但取退役保护，回调及其输入在循环释放执行上下文前退役；退役开始后可返回 `false`。
 - **停机观察**：`register_shutdown(owner, &Owner::registration)` 将所有者成员链入 Worker 停机登记，停机线程先对全部所有者调用 `worker_stopping() noexcept`，再调用 `worker_stopping_complete() noexcept`；仅持弱引用，已在析构的所有者被跳过。
 - **停机登记寿命**：`worker_shutdown_registration` 须为所有者首个数据成员，析构即摘链；Worker 已停止接收时返回 `worker_stopping` 且不链入，重复登记抛 `std::logic_error`。
-- **原生执行器**：`worker_ref::executor()` 返回 `asio::io_context::executor_type`，可直接创建 socket、定时器并接入其他 Asio 库；不是有界业务准入入口。
-- **执行器寿命**：空引用或已退役 Worker 获取执行器抛 `std::logic_error`；停机排空期间仍可供在途操作完成。执行器借用物理 context，不延长其寿命；调用方须在运行时退役前结束原生操作。
+- **原生执行器**：`event_loop::executor()` 是唯一公开的原生执行器入口，返回 `asio::io_context::executor_type`，可直接创建 socket、定时器并接入其他 Asio 库；不是有界业务准入入口。
+- **执行器寿命**：空 loop 或执行上下文已分离时获取执行器抛 `std::logic_error`；停机排空期间仍可供在途操作完成。执行器借用物理 context，不延长其寿命；调用方须在运行时退役前结束原生操作。
 - **外部循环失败出口**：`event_loop_attachment_options::failure_` 拥有接收 `std::exception_ptr` 的回调；未配置时保留默认诊断。具名 options 通过 `std::move` 交给 `attach_event_loop()`。
 - **失败交付线程**：先请求停止，再在报告线程锁外同步调用；可能跨线程并发或重入，接收器负责自身同步。回调异常仅进入诊断，不逃出宿主 `run()`，不打断清理。
 - **失败出口寿命**：回调保留到最后一个 loop-state owner 释放；借用捕获须覆盖该寿命，禁止捕获 owning loop 形成环。全部 owner 消失后的迟到根任务异常回落默认诊断。
@@ -125,7 +126,7 @@ pool.join();
 | `"task.h"` | `void collect_thread_heap() noexcept` | 强制收集调用线程的 mimalloc 线程堆及共享 arena 的待回收范围，不影响存活分配 |
 | `"move_only_function.h"` | `template <typename Sig> class move_only_function` | 带 `3 * sizeof(void*)` 小对象内联优化（SBO）的仅移动可调用包装器；支持普通与 `noexcept` 签名，后者编译期拒绝可抛目标。`const` 包装器仍可调用可变目标，跨线程调用须由目标同步。移动赋值与赋空共用退役路径：先提取源并提交，再于独立存储销毁旧目标，支持旧目标拥有源包装器；旧目标析构时的重入赋值最终生效 |
 | `"worker_ref.h"` | `fnv1a_offset_basis`、`fnv1a_prime`、`fnv1a_accumulate`、`fnv1a_accumulate_integer` | 零分配、可编译期求值的 64 位 FNV-1a 非密码学散列；整数按小端字节混入，跨平台结果一致 |
-| `"byte_view.h"` / `"failure_report.h"` / `"asio_ip_address.h"` / `"asio_bridge.h"` | `as_bytes`、`as_chars`、`error_code_text`、`system_error_text`、`parse_ip_address`、`close_socket` | 字节/字符零拷贝视图转换（拒绝绑定临时拥有型字符串或连续字节容器，调用方须保持底层存储存活到消费完成）、跨平台 UTF-8 系统错误文本转换、严格 IPv4/IPv6 字面量解析（返回 `std::optional<asio::ip::address>`）与取消未完成 I/O 后关闭 TCP socket |
+| `"byte_view.h"` / `"failure_report.h"` | `as_bytes`、`as_chars`、`error_code_text`、`system_error_text` | 字节/字符零拷贝视图转换（拒绝绑定临时拥有型字符串或连续字节容器，调用方须保持底层存储存活到消费完成）与跨平台 UTF-8 系统错误文本转换 |
 
 **未知 Windows 系统错误**：`error_code_text()` 无法取得系统消息时返回 `category:value`，其中 `value` 为带符号十进制错误码。
 
@@ -235,6 +236,7 @@ pool.join();
 | `"http_multipart.h"` | `parse_multipart_boundary`、`parse_multipart_body`、`class multipart_body_parse_result final`、`class multipart_parser final` | 一次性与流式增量（`feed` / `poll`）的 `multipart/form-data` 解析器；一次性解析以 `multipart_body_parse_result` 值返回全部 part（`parts()`，或 `std::move(result).take_parts()` 取出）或首个协议失败（`failure()->protocol_error()`，与流式 `poll()` 同一错误），畸形或超限输入不抛异常；结果类型构造后类别固定、不可赋值 |
 | `"http_server_sent_events.h"` | `struct sse_message final`、`format_sse_message`、`class sse_parser final`、`struct sse_parser_options final`、`enum class sse_parser_state`、`class sse_event final`、`struct sse_parse_result final` | Server-Sent Events 消息格式化与校验，以及客户端 `text/event-stream` 增量解析 |
 
+- **接收字段单值查找（统一规则）**：接收侧单值 getter 遇重复字段一律取**第一行**（与 `http::HeaderMap::get`、Pingora `get_header`、Go `Header.Get` 一致）：`http_request::header` / `cookie`、`http_request_trailers::field`、`http_client_response_head::header`、web 的 `http_client_response::header` / `trailer`、`dispatch_response::header`、`request_name_value_list::get`（含 `c.req().query/header/cookie`）。不得择一的字段（`Location`、`Content-Type`、会话 ID 等）改用三态查找：`http_header.h` 的 `find_unique_http_header(fields, name)`、`http_request::unique_header`、`http_client_response_head::unique_header`、web `http_client_response::unique_header` 返回 `http_unique_field_lookup{status_, value_}`，`status_` 为 `unique_lookup_status::absent` / `found` / `repeated`，仅 `found` 时 `value_` 有意义，扫描在第二次出现处停止。web 客户端重定向遇多行 `Location` 抛 `http_client_errc::protocol_error`。`http_request::last_raw_query_value` 按名取最后一个，不属此规则。
 - **首部转移模式**：`http_response_headers::transfer_from()` 与 `http_response::transfer_headers_from()` 仅接受 `merge` / `assign` / `apply`；非法值在变更前抛出 `std::invalid_argument`，空源也不例外。
 - **响应编码接受性**：`http_response_coding_selection::accepts(token, request)` 支持自定义 coding；`evaluate_http_response_content_coding()` 区分无字段、接受、拒绝与非法栈。编码栈单遍解析，所需扩展 coding 一次性遍历请求偏好；常见栈不分配扩展存储，协商快照不借用请求。
 - **响应首部预留**：`http_response_headers::reserve()` 扩容先切换描述符表，再释放旧表，保留退役回调中的首部修改；不复制字段字节，分配失败保留原表，容量足够时不分配。
@@ -349,23 +351,23 @@ HTTP/2 出站字段直接交给 `nghttp2` 的 HPACK deflater；动态表容量�
 
 - **出站首部暂存**：字段条目与 `nghttp2_nv` 描述符向量分别复用不超过 4 KiB 的容量，超限在提交后释放。
 - **输出窗口 `take_output_batch()`**：部分批次只推进消费游标；在下一次追加或完整尾批存储交接时按摊销条件压缩前缀。
-- **流控凭证 `http2_received_data_credit`**：`message_body_chunk()` 与 `tunnel_data()` 事件携带移动专属的流控凭证；当上层消费完缓冲数据后析构凭证（唯一归还途径），才把这部分字节计入 `nghttp2` 的接收窗口并按需发送连接与流级 `WINDOW_UPDATE`（关闭了 `nghttp2` 的自动窗口更新），实现精确背压。本端通告的 1 MiB 初始流窗口在对端确认本端 `SETTINGS` 后才生效，此前对端只能使用 RFC 默认的 65535 字节（RFC 9113 §6.9.2）；对端按协议先回 `SETTINGS` ACK 再发数据时不受影响。
+- **流控凭证 `http_received_data_credit`**：`data()` 与 `tunnel_data()` 事件携带该凭证（契约见 4.2.2）；析构归还时才把这部分字节计入 `nghttp2` 的接收窗口并按需发送连接与流级 `WINDOW_UPDATE`（关闭了 `nghttp2` 的自动窗口更新），实现精确背压。本端通告的 1 MiB 初始流窗口在对端确认本端 `SETTINGS` 后才生效，此前对端只能使用 RFC 默认的 65535 字节（RFC 9113 §6.9.2）；对端按协议先回 `SETTINGS` ACK 再发数据时不受影响。
 - **凭证归属**：凭证携带签发连接，不能经其他连接归还；凭证保活该连接状态，可比 `http2_connection` 门面长寿，所属流已结束时归还为空操作；归还失败时延迟到后续 `feed()` / `next_event()` / 输出排空等调用重试。
 - **Trailer 视图 `http2_message_end_event::trailers()`**：`std::span<const http_header>`，字段名小写；客户端已丢弃响应 Trailer 禁用字段，服务端交给 `http_request_trailers::append_received()`；视图借用事件自身存储，事件移动、销毁或 `take_trailers()` 后失效。
 - **服务端请求租约 `http2_request_head_event`**：持有服务端流请求头的底层内存租约；请求处理完毕后调用 `conn.release(std::move(event))` 归还存储。
 - **初始发送半边**：`http2_request_head_event::snapshot().initial_end_stream_` 保存初始 HEADERS 的 END_STREAM 位，包含 CONNECT；不随后续 DATA、Trailer 或复位改变。
 - **请求视图借用**：`build_request(..., borrowed_text body, ...) const&` 同时借用 head 租约与正文；两者均须覆盖返回请求的使用期。临时拥有型正文与右值 head 在编译期拒绝。
 - **Web 正文队列**：待消费缓冲大小是积压额度的唯一计数来源，已交付的活跃缓冲不重复计入。
-- **DATA 部分消费 `submit_data(stream_id, bytes, end_stream, max_payload_bytes)`**：返回 `http2_data_submit_result{consumed_bytes_, status_}`，本次只编码 `min(bytes.size(), max_payload_bytes, 连接窗口, 流窗口)` 字节；帧头开销另计。`complete` 只表示这次输入全部消费，不表示 socket 已写完；`backpressured` 可以消费零字节或一个前缀。协议层既不借用也不复制未消费后缀，调用方必须保存后缀并按实际消费量推进，取得输出预算或收到 `WINDOW_UPDATE` / `SETTINGS` 后显式重试。窗口更新不会自动产生 DATA；调用方须显式重试提交。`expectation_pending` 和 `closed` 均消费零字节；前者等待 `100 Continue` 或显式 `release_request_content()`，后者停止发送。`pending_data_output_bytes()` 与输出批次 observer 仍用于已编码 DATA 和 socket 写完成记账；它们不能代替应用层输出预算。
+- **DATA 部分消费 `submit_data(stream_id, bytes, end_stream, max_payload_bytes)`**：返回 `http_data_submit_result`，本次只编码 `min(bytes.size(), max_payload_bytes, 连接窗口, 流窗口)` 字节；帧头开销另计。协议层既不借用也不复制未消费后缀，调用方必须保存后缀并按实际消费量推进，取得输出预算或收到 `WINDOW_UPDATE` / `SETTINGS` 后显式重试。窗口更新不会自动产生 DATA；调用方须显式重试提交。`expectation_pending` 和 `closed` 均消费零字节；前者等待 `100 Continue` 或显式 `release_request_content()`，后者停止发送。`pending_data_output_bytes()` 与输出批次 observer 仍用于已编码 DATA 和 socket 写完成记账；它们不能代替应用层输出预算。
 - **Web DATA 驱动**：缓冲与文件响应共用写入状态；参数绑定直接返回底层冷任务，不另建状态转换协程。
 - **Web 信用记账**：每份信用集中保存提交、序列化、写出和当前批次进度，复位时整体清零。
 - **Web 信用回收**：流重置后仍保留在途 socket 批次的信用，批次完成后才回收。
 - **长度与终结**：每次先验证完整输入及其终结意图是否符合 `Content-Length`，非法长度返回 `{0, invalid_message}`，不提交任何前缀。长度计数只推进 `consumed_bytes_`。`END_STREAM` 仅在终结输入全部消费后提交；结束后不能重复终结。
 - **空 DATA 终结与规范边界**：[RFC 9113 §6.9.1](https://www.rfc-editor.org/rfc/rfc9113.html#section-6.9.1) 允许（`MAY`）、但不要求在零窗口发送空 `END_STREAM DATA`。当前 `nghttp2` 后端等待连接与流的发送窗口都为正；这是实现限制，不是 RFC 要求。任一窗口不为正时，`submit_data()` 返回 `{0, backpressured}` 且不改变状态；调用方等待 `send_window_state()` 报告 `available_ != 0` 后重试。
-- **Trailers 与 finish**：所有正文都消费完后才调用 `finish_request()` / `finish_response()` 提交 trailers，保证 terminal HEADERS 排在正文之后；finish 不排队等待未消费正文。不带 trailers 时 finish 以空 DATA 帧结束流，遵循同一窗口规则，窗口不足时返回 `http2_finish_status::backpressured` 且不改变状态，调用方等待窗口后重试。正文未达声明长度或 Trailer 非法时返回 `invalid_message`，同样不改变状态。`ruvia-web` 的服务端流式响应按此等待现有的发送窗口信号，等待时长受写超时或请求超时约束。
+- **Trailers 与 finish**：所有正文都消费完后才调用 `finish_request()` / `finish_response()` 提交 trailers，保证 terminal HEADERS 排在正文之后；finish 不排队等待未消费正文。不带 trailers 时 finish 以空 DATA 帧结束流，遵循同一窗口规则，窗口不足时返回 `http_finish_status::backpressured` 且不改变状态，调用方等待窗口后重试。正文未达声明长度或 Trailer 非法时返回 `invalid_message`，同样不改变状态。`ruvia-web` 的服务端流式响应按此等待现有的发送窗口信号，等待时长受写超时或请求超时约束。
 - **分配失败与异常**：`nghttp2` 内部或缓存其输出时的分配失败，以及 `nghttp2` 回调期间抛出的异常，都会使连接进入致命错误（尚能排队时发送 `GOAWAY(INTERNAL_ERROR)`），随后原异常（分配失败为 `std::bad_alloc`）向调用方传播；`nghttp2` 不提供事务回滚，因此不支持在资源恢复后重试同一操作。`take_output_batch()` 复制失败时输出游标与 observer 不变；释放失败的租约或凭证仍由后续操作重试。
 - **对端帧元数据 `receive_frame_metadata_`**：开启后（客户端与服务端均可），连接把已应用的非 ACK `SETTINGS`、已应用的 `WINDOW_UPDATE` 及 `HEADERS` 优先级字段，分别以 `received_settings()`、`received_window_update()`、`received_priority()` 事件按线上顺序与其他事件一同发布；`HEADERS` 的优先级事件先于该帧产生的请求头事件，权重为 1..256。`received_settings` 以定长数组内联保存 `nghttp2` 解码后的条目（最多 33 项），不分配、也不借用 `feed()` 输入：重复的已知 ID 合并为一项（取最后的值、位于首次出现处），未知 ID 按线上顺序保留，同一帧先降后升 `HEADER_TABLE_SIZE` 时末尾另附其中的最小值。独立的 `PRIORITY` 帧（RFC 9113 §5.3.2 已弃用）由 `nghttp2` 读取后丢弃，不产生事件。关闭（默认）时不产生这些事件，也不做额外工作。请求伪首部的线上顺序始终由请求头事件的 `request_view().pseudo_header_order_` 提供。
-- **优雅排空 `begin_drain()` / `finish_drain()` / `draining()` / `drain_final()`**：服务端按 RFC 9113 §6.8 两阶段排空——先以 `nghttp2` 的 shutdown notice 发出 `GOAWAY(2^31-1, NO_ERROR)` 与 `PING`，继续接纳在途的流；收到该 `PING` 的 ACK 或所有者调用 `finish_drain()` 后发出携带最后对端流 ID 的最终 `GOAWAY`。此后编号更大的新流被直接丢弃、不作应答（对端从 `GOAWAY` 得知其未被处理）。往返期间对端新开超过 128 条流时，超出的那条流收到 `RST_STREAM(REFUSED_STREAM)`，随即发出最终 `GOAWAY`（产品上限）。RFC 只要求至少一个往返时间，不要求等到 ACK：所有者以 `finish_drain()` 为往返等待设定时间上限；未在排空时调用则直接以最终边界进入排空（适用于对端已结束输入、无法再开流）。收到对端合法 `GOAWAY` 时同样立即进入最终阶段（其发送方不得再开流），包括已在往返中的排空。`drain_final()` 为真后，所有者在剩余流结束时即可关闭连接。客户端角色一步发出最终 `GOAWAY`；客户端发出 `GOAWAY` 后到达的 `PUSH_PROMISE` 被丢弃。
+- **优雅排空 `begin_drain()` / `finish_drain()` / `draining()` / `drain_final()`**：服务端按 RFC 9113 §6.8 两阶段排空——先以 `nghttp2` 的 shutdown notice 发出 `GOAWAY(2^31-1, NO_ERROR)` 与 `PING`，继续接纳在途的流；收到该 `PING` 的 ACK 或所有者调用 `finish_drain()` 后发出携带最后对端流 ID 的最终 `GOAWAY`。此后编号更大的新流被直接丢弃、不作应答（对端从 `GOAWAY` 得知其未被处理）。往返期间对端新开超过 128 条流时，超出的那条流收到 `RST_STREAM(REFUSED_STREAM)`，随即发出最终 `GOAWAY`（产品上限）。RFC 只要求至少一个往返时间，不要求等到 ACK：所有者以 `finish_drain()` 为往返等待设定时间上限；未在排空时调用则直接以最终边界进入排空（适用于对端已结束输入、无法再开流）。收到对端合法 `GOAWAY` 时同样立即进入最终阶段（其发送方不得再开流），包括已在往返中的排空。`drain_final()` 为真后，所有者在剩余流结束时即可关闭连接。客户端角色一步发出最终 `GOAWAY`；客户端发出 `GOAWAY` 后到达的 `PUSH_PROMISE` 被丢弃。`begin_drain()` / `finish_drain()` 幂等，返回 `http_submit_status`：连接错误后为 `closed`（终止路径已在运行），否则为 `accepted`。
 - **立即终止 `terminate(http2_error_code)`**：所有者主动关闭连接（RFC 9113 §6.8）：排队携带该错误码与已处理的最后对端流 ID 的 `GOAWAY`，丢弃此后的全部入站帧，`connection_error()` 报告该错误码（`no_error` 亦然），后续提交返回 `closed`；与检测到的连接错误走同一终止路径，也会结束进行中的优雅排空。连接已出错时为空操作，保留首个错误码。所有者写出输出后关闭传输。
 - **存活探测 `submit_ping()`**：排队一个非 ACK `PING`，载荷与优雅排空的 `PING` 不同，两者的 ACK 互不影响。同一时刻最多一个探测未确认：在其 ACK 到达前再次调用返回 `accepted` 但不再排队新帧；ACK 不产生事件，任何收到的帧（含该 ACK）都可作为对端存活的证据。连接出错后返回 `closed`。
 - **对端诱发输出的预算**：核心没有时钟（`nghttp2` 基于时钟的 reset 与 glitch 限速器因此被关闭），以两个计数器限制对端不读取输出时能诱发的输出，超限即发送 `GOAWAY(ENHANCE_YOUR_CALM)` 并进入连接错误。其一是输出未排空期间的控制帧数：`PING` ACK、`SETTINGS` ACK 与因对端流错误发出的 `RST_STREAM` 合计不超过 1000，输出完全排空（`take_output_batch()` 取空）后清零（同 Go `x/net/http2` 的 `maxQueuedControlFrames`）。其二是连接生命周期内因对端流错误发出的 `RST_STREAM` 总数，上限 1024，不会回补（同 h2 `max_local_error_reset_streams`）：否则对端可反复开流、诱发流错误（如不带 `END_STREAM` 的 trailer 区段），绕过只统计对端 `RST_STREAM` 的 rapid-reset 预算。所有者主动的 `submit_reset()` 不计入这两项。此外，超过 32 项的 `SETTINGS` 帧与单个字段块超过 1024 个 `CONTINUATION` 帧同样以 `GOAWAY(ENHANCE_YOUR_CALM)` 结束连接。
@@ -402,6 +404,20 @@ HTTP/2 出站字段直接交给 `nghttp2` 的 HPACK deflater；动态表容量�
 - **借用与重入**：回调仅在 `feed()` 内同步执行，记录及字段视图仅在回调期间有效；返回前不得修改、重入、移动或销毁该连接。
 - **关闭成本**：空观察器不保留输入、不增加分配或分帧工作；开启时仍使用同一 `nghttp2` 分帧与 HPACK 主链，不另建解析器。
 
+##### 4.2.2 HTTP/2 与 HTTP/3 共享词汇（`"http_multiplexed_stream.h"`）
+
+两个协议引擎共用同一组无条件编译的类型；协议独有的枚举值只在该协议返回。
+
+| 类型 | HTTP/2 入口 | HTTP/3 入口 | 取值 |
+| --- | --- | --- | --- |
+| `http_connection_role` | 连接角色 | 连接角色 | `client`、`server` |
+| `http_regular_request_head_view` / `http_connect_request_head_view` / `http_extended_connect_request_head_view` | 客户端 `submit_request_head()` | 客户端 `submit_request_head()` | 普通、CONNECT 与 extended CONNECT 请求头 |
+| `http_submit_status` | 临时响应、CONNECT 响应、reset、SETTINGS、PRIORITY_UPDATE 等控制提交，`begin_drain()` / `finish_drain()` | 请求头、临时响应、CONNECT 响应、ORIGIN、PRIORITY_UPDATE、`begin_drain()` / `finish_drain()`、`submit_http3_websocket_client_request()` | `accepted`、`closed`、`invalid_state`、`invalid_message`、`peer_capability_unavailable`；仅 HTTP/3：`peer_settings_pending`、`backpressured`（仅 ORIGIN：控制流输出预算已满） |
+| `http_data_submit_result` | `submit_data(id, std::string_view, end_stream, max_payload_bytes)` | `submit_data(id, std::string_view)` | `consumed_bytes_` 为已消费前缀；`complete` 全部消费（不表示已写出），`backpressured` 只消费前缀（可为 0），`closed`，`invalid_message`（违反声明长度，未消费）；仅 HTTP/2：`expectation_pending` |
+| `http_finish_status` | `finish_request()`、`finish_response()` | `finish_stream()`、`finish_request()`、`finish_response()` | `accepted`、`closed`、`invalid_message`（正文未达声明长度或 Trailer 非法，流保持打开）；仅 HTTP/2：`backpressured` |
+| `http_response_head_error` | 响应头、WebSocket 握手响应、推送响应提交的失败分支 | 响应头提交的失败分支 | `closed`、`invalid_state`、`invalid_message`、`response_plan_mismatch`；仅 HTTP/2：`peer_stream_limit_reached`（推送流超出对端并发上限） |
+| `http_received_data_credit` | `http2_data_event`、`http2_tunnel_data_event` | `http3_data_event::take_credit()` | 只移动；同连接同流可 `merge()`；析构把精确字节数归还签发连接（唯一途径），可比连接长寿，连接或流已结束时归还为空操作 |
+
 
 #### 4.3 HTTP/3、QPACK 与 QUIC（`"http3_connection.h"` / `"http3_quic_connection.h"`）
 
@@ -426,9 +442,6 @@ HTTP/2 出站字段直接交给 `nghttp2` 的 HPACK deflater；动态表容量�
 | 结果类型 | 入口 | 取值 |
 | --- | --- | --- |
 | `http3_transport_status` / `http3_transport_result` | `read_stream()`、`read_datagram()`、`peek_output()`、`commit_output()`、`acknowledge_output()`、`block_stream()`、`unblock_stream()`、`shutdown_stream_*()`、`close_stream()`、`bind_control_streams()` | `accepted`、`would_block`、`events_pending`、`closed`、`invalid_state`、`protocol_error`；结果另带 `error_code_`（`protocol_error` 及失败后的 `closed`）与 `credit_bytes_`（`read_stream()` 中核心自行消费、立即归还接收信用的分帧与 QPACK 字节） |
-| `http3_submit_status` | 请求头、临时响应、CONNECT 响应、ORIGIN、PRIORITY_UPDATE、`begin_drain()` / `finish_drain()`、`submit_http3_websocket_client_request()` | `accepted`、`closed`、`invalid_state`、`invalid_message`、`peer_settings_pending`、`peer_capability_unavailable`、`backpressured`（仅 ORIGIN：控制流输出预算已满） |
-| `http3_data_submit_result` | `submit_data()` | `consumed_bytes_` 为已复制前缀；`complete` 全部复制，`backpressured` 只复制了前缀（可为 0），`closed`，`invalid_message`（超出声明长度，未复制） |
-| `http3_finish_status` | `finish_stream()`、`finish_request()`、`finish_response()` | `accepted`、`closed`、`invalid_message`（正文未达声明长度或 Trailer 非法，流保持打开） |
 
 - **错误码**：`http3_error_code` 覆盖 RFC 9114 §8.1 全部 H3 码、RFC 9204 §6 QPACK 码与 RFC 9297 的 `datagram_error`，底层为 `std::uint64_t`；收到的未知或保留码（`0x1f * N + 0x21`）原值保留，按 RFC 9114 §9 视同 `H3_NO_ERROR`。所有 reset、close、事件与 `connection_error()` 都收发该强类型，公开契约不暴露 nghttp3 宏或库错误码。
 
@@ -437,16 +450,16 @@ HTTP/2 出站字段直接交给 `nghttp2` 的 HPACK deflater；动态表容量�
 - **WebSocket 客户端**：`submit_http3_websocket_client_request()` 按 RFC 9220 提交 extended CONNECT，与 HTTP/2 的 `submit_http2_websocket_client_request()` 共用同一字段合成，应用首部均以 `borrowed_http_headers` 传入；两者的最终头都由 `validate_extended_connect_websocket_client_response()` 校验。
 - **响应事件**：客户端收到 `http3_informational_head_event` 与 `http3_response_head_event`，与 HTTP/2 同形：`head()` / `take_head()` 交出 `http_client_response_head`，`request_content_signal()` 对带 `Expect: 100-continue` 的请求在首个 100 给出 `continue_`、在仍等待 100 时到达的最终头给出 `exchange_complete`，`stream_ended()` 表示最终 HEADERS 已结束流。600–999 按 5xx 处理，101 拒绝；保持官方 `nghttp3`，其在应用回调前拒绝 000–099，这是当前实现例外。
 - **正文与 trailer**：核心校验 Content-Length 的实际字节数和终结；对端发送半边正常结束时发布 `http3_message_end_event`（隧道接收方向结束同样如此），`trailers()` 以 `std::span<const http_header>` 借用事件自身存储，无 Trailer 时为空，事件移动、销毁或 `take_trailers()` 后失效。客户端收到的 Trailer 已验证并丢弃仅违反发送方 trailer 限制的字段；服务端收到的请求 Trailer 交 `http_request_trailers::append_received()` 吸收。客户端以 `finish_request(stream_id, trailers)` 结束请求内容。驱动不再解析响应语法。
-- **未处理请求**：客户端对 GOAWAY 标识及以上仍开启的请求流（在 `http3_goaway_event` 之后，按流号升序），以及最终响应头前被 `H3_REQUEST_REJECTED` 重置或停止发送的流，发布 `http3_request_unprocessed_event`（RFC 9114 §4.1.1、§5.2），可在其他连接重试；核心为仍开启的方向排队本地 `H3_REQUEST_CANCELLED` 传输动作，此后不再有事件（含 `http3_stream_close_event`）提及该流。`http3_goaway_event::id()` 对不限定任何流的 shutdown notice 返回 `std::nullopt`。
+- **未处理请求**：客户端对 GOAWAY 标识及以上仍开启的请求流（在 `http3_goaway_event` 之后，按流号升序），以及最终响应头前被 `H3_REQUEST_REJECTED` 重置或停止发送的流，发布 `http3_request_unprocessed_event`（RFC 9114 §4.1.1、§5.2），可在其他连接重试；核心为仍开启的方向排队本地 `H3_REQUEST_CANCELLED` 传输动作，此后不再有事件（含 `http3_stream_closed_event`）提及该流。`http3_goaway_event::id()` 对不限定任何流的 shutdown notice 返回 `std::nullopt`。
 - **响应提交与预算**：服务端只通过受检响应头、临时响应和握手入口提交；`available_output_bytes(stream_id)` 是 DATA 剩余容量的唯一权威，终结或关闭流返回零。最终、临时、WebSocket 与 CONNECT 响应共用字段生成规则；临时响应超出字段节上限返回 `invalid_message`，`submit_connect_response_head()` 与 HTTP/2 一样返回提交状态。
 - **流式响应方法**：`submit_streaming_response_head()` 使用该流收到的 `:method`，与 HTTP/2 同形，不由调用方重复传入。
 
-- **流控凭证 `http3_received_data_credit`**：`http3_data_event::take_credit()` 交出与 `http2_received_data_credit` 同形的只移动凭证；同流凭证可 `merge()`，析构时把精确字节数交给 `received_data_credit_sink_`，消费方持有到读完正文为止。凭证比连接长寿时归还为空操作。
+- **流控凭证**：`http3_data_event::take_credit()` 交出 `http_received_data_credit`（见 4.2.2），归还字节交给 `received_data_credit_sink_`，消费方持有到读完正文为止。
 - **凭证去向**：`http3_quic_connection` 安装自己的回收器并拒绝调用方设置，归还的字节扩展 QUIC 流与连接接收窗口（RFC 9000 §4.1）；独立驱动通过选项提供回收器，未提供时归还被丢弃。
 - **延迟消费**：`http3_deferred_consume_event` 是 nghttp3 自行消费的分帧与 QPACK 字节以及核心丢弃的 DATA，无人持有，按 `read_stream()` 的 `credit_bytes_` 同样立即归还，不转为凭证；`http3_quic_connection` 内部处理该事件。
 - **留存输入借用**：`read_stream()` 在编译期拒绝直接传入临时拥有型连续容器与 `std::initializer_list`；命名输入及显式借用视图仍可使用。借用模式下，底层存储须覆盖对应 DATA 事件的消费；显式构造 view/span 不延长 owner 寿命。
 - **DATA 事件**：只由核心构造；移动赋值转移拥有正文、不分配，接管源凭证后归还目标未取走的凭证。
-- **事件形态**：`next_event()` 返回只可移动的 `http3_event`，与 `http2_event` 同形，由 `request_head()`、`informational_head()`、`response_head()`、`data()`、`message_end()`、`transport_action()`、`deferred_consume()`、`stream_close()`、`request_unprocessed()`、`goaway()`、`datagram()`、`origin_advertisement()` 中恰好一个返回非空指针；各事件只由核心构造，以访问器读取，拥有型内容（请求头、Trailer、数据报载荷）经右值 `take_*()` 交出。
+- **事件形态**：`next_event()` 返回只可移动的 `http3_event`，与 `http2_event` 同形，由 `request_head()`、`informational_head()`、`response_head()`、`data()`、`message_end()`、`transport_action()`、`deferred_consume()`、`stream_closed()`、`request_unprocessed()`、`goaway()`、`datagram()`、`origin_advertisement()` 中恰好一个返回非空指针；各事件只由核心构造，以访问器读取，拥有型内容（请求头、Trailer、数据报载荷）经右值 `take_*()` 交出。
 - **出站地址稳定**：名称拥有缓冲首次使用时按整节字节上界预留，后续增长不重分配；字段视图只借用至 `nghttp3` 完成提交。
 - **出站字段计数**：按实际发送数量预留描述符，扣除被过滤的分帧字段并计入生成字段。
 - **请求头校验**：服务端在连接内完成请求头校验（nghttp3 的帧层规则加上目标语法、`:authority`/`Host` 一致、接收方字段规则、Expect 与 Cookie 合并），通过者以 `http3_request_head_event` 发布、`take_head()` 交出 `http3_request_head`；畸形请求由核心按 RFC 9114 §4.1.2 以本地 STOP_SENDING 与 RESET_STREAM（`H3_MESSAGE_ERROR`）回应，不发布请求头、DATA 或消息结束事件，驱动无需自行重置。

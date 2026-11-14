@@ -15,6 +15,7 @@
 #include <asio/post.hpp>
 #include <asio/steady_timer.hpp>
 
+#include "asio_completion.h"
 #include "failure_report.h"
 #include "move_only_function.h"
 #include "worker_ref.h"
@@ -771,11 +772,16 @@ blocking_pool* worker_ref::blocking_pool() const noexcept {
     return dispatcher_ ? dispatcher_->blocking_pool() : nullptr;
 }
 
-asio::io_context::executor_type worker_ref::executor() const {
-    if (!dispatcher_) {
+detail::worker_dispatcher* detail::worker_ref_access::dispatcher(const worker_ref& worker_value) noexcept {
+    return worker_value.dispatcher_.get();
+}
+
+asio::io_context::executor_type detail::worker_executor(const worker_ref& worker_value) {
+    auto* dispatcher = detail::worker_ref_access::dispatcher(worker_value);
+    if (dispatcher == nullptr) {
         throw std::logic_error("worker has no execution context");
     }
-    return dispatcher_->executor();
+    return dispatcher->executor();
 }
 
 worker_ref detail::worker_ref_access::current() noexcept {

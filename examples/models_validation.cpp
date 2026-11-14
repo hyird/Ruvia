@@ -92,8 +92,7 @@ private:
         response.set<"role_count">(ruvia::uint32{static_cast<std::uint32_t>(roles.size())});
         response.ensure<"tags">().emplace_back(ruvia::string("created"));
         response.ensure<"tags">().emplace_back(ruvia::string("validated"));
-        c.draft().status(ruvia::http_status::created);
-        co_return c.json(response);
+        co_return c.json(response, {.status_ = ruvia::http_status::created});
     }
 
     // json_if/form_if parse and validate when the media type matches. A malformed

@@ -172,7 +172,7 @@ private:
         if (submitted_head != nullptr) {
             return *submitted_head;
         }
-        if (std::get<http3_response_head_error>(head_result) == http3_response_head_error::closed) {
+        if (std::get<http_response_head_error>(head_result) == http_response_head_error::closed) {
             throw inbound_transport_error(std::make_error_code(std::errc::connection_reset), reset_error_message);
         }
         throw std::logic_error("HTTP/3 streaming response head submission failed");
@@ -190,7 +190,7 @@ private:
     }
 
     void finish_stream_response(const http_response_trailer_section& trailer_section) {
-        http3_finish_status finished{};
+        http_finish_status finished{};
         try {
             finished = session_.codec().finish_response(stream_.id(), trailer_section);
         } catch (...) {
@@ -198,10 +198,10 @@ private:
             throw;
         }
         session_.wake_writer();
-        if (finished == http3_finish_status::invalid_message) {
+        if (finished == http_finish_status::invalid_message) {
             throw std::invalid_argument("HTTP/3 response ended before its declared Content-Length");
         }
-        if (finished != http3_finish_status::accepted) {
+        if (finished != http_finish_status::accepted) {
             throw inbound_transport_error(std::make_error_code(std::errc::connection_reset), reset_error_message);
         }
     }
@@ -268,7 +268,7 @@ public:
         if (result != http3_data_write_status::completed || signal_.stopped() || stream_.aborted()) {
             co_return signal_.terminated() ? signal_.terminal_error() : std::make_error_code(std::errc::connection_reset);
         }
-        if (disposition == http_stream_end::end && session_.codec().finish_stream(stream_.id()) != http3_finish_status::accepted) {
+        if (disposition == http_stream_end::end && session_.codec().finish_stream(stream_.id()) != http_finish_status::accepted) {
             co_return std::make_error_code(std::errc::protocol_error);
         }
         session_.wake_writer();
@@ -605,7 +605,7 @@ void http3_session::dispatch_events() {
             // STOP_SENDING, or the connection's own stream error (a malformed
             // trailer section, RFC 9114 §4.1.2), already sent.
             on_stream_abort(*action);
-        } else if (const auto* closed = event->stream_close()) {
+        } else if (const auto* closed = event->stream_closed()) {
             on_stream_close(*closed);
         }
         // A client GOAWAY (RFC 9114 §5.2) bounds only server push, which this
@@ -640,7 +640,7 @@ void http3_session::start_application() {
     base_services_->bind_routes(services_.routes_);
     set_inactivity_phase();
     if (drain_begun_) {
-        if (codec().begin_drain() != http3_submit_status::accepted) {
+        if (codec().begin_drain() != http_submit_status::accepted) {
             connection_->close(http3_error_code::internal_error);
             return;
         }
@@ -656,7 +656,7 @@ void http3_session::start_application() {
             continue;
         }
         if (stream.take_continue_pending() && !stream.request_ended() && !stream.body_failure().has_value()) {
-            if (codec().submit_interim_response_head(stream_id, http_interim_response_head(ruvia::http_status::continue_)) != http3_submit_status::accepted) {
+            if (codec().submit_interim_response_head(stream_id, http_interim_response_head(ruvia::http_status::continue_)) != http_submit_status::accepted) {
                 reset_stream(stream_id, http3_error_code::internal_error);
                 continue;
             }
@@ -720,7 +720,7 @@ void http3_session::on_request_head(http3_request_head_event& event) {
         if (!base_services_.has_value()) {
             stream.defer_continue();
         } else {
-            if (codec().submit_interim_response_head(stream_id, http_interim_response_head(ruvia::http_status::continue_)) != http3_submit_status::accepted) {
+            if (codec().submit_interim_response_head(stream_id, http_interim_response_head(ruvia::http_status::continue_)) != http_submit_status::accepted) {
                 reset_stream(stream_id, http3_error_code::internal_error);
                 return;
             }
@@ -826,7 +826,7 @@ void http3_session::on_stream_abort(const http3_transport_action_event& event) n
     }
 }
 
-void http3_session::on_stream_close(const http3_stream_close_event& event) noexcept {
+void http3_session::on_stream_close(const http3_stream_closed_event& event) noexcept {
     auto* stream = find_stream(event.stream_id());
     if (stream == nullptr) {
         finish_drain_if_ready();
@@ -979,7 +979,7 @@ task<void> http3_session::dispatch_one(std::int64_t stream_id) {
         http_interim_response_output interim_output(&target, [](void* raw, const http_interim_response_head& interim) -> task<void> {
             auto& output = *static_cast<interim_target*>(raw);
             // RFC 9114 §4.1: any number of 1xx heads may precede the final one.
-            if (output.session_.codec().submit_interim_response_head(output.stream_id_, interim) != http3_submit_status::accepted) {
+            if (output.session_.codec().submit_interim_response_head(output.stream_id_, interim) != http_submit_status::accepted) {
                 throw std::invalid_argument("HTTP/3 interim response rejected");
             }
             output.session_.wake_writer();
@@ -987,7 +987,7 @@ task<void> http3_session::dispatch_one(std::int64_t stream_id) {
         });
         http_connection_advertisement_output advertisements(this, [](void* raw, std::span<const std::string_view> origins) {
             auto& session = *static_cast<http3_session*>(raw);
-            if (session.codec().submit_origin_advertisement(origins) != http3_submit_status::accepted) {
+            if (session.codec().submit_origin_advertisement(origins) != http_submit_status::accepted) {
                 throw std::invalid_argument("HTTP/3 ORIGIN advertisement rejected");
             }
             session.wake_writer();
@@ -1058,7 +1058,7 @@ task<void> http3_session::dispatch_one(std::int64_t stream_id) {
                     break;
                 case http_request_endpoint::tunnel: {
                     auto commit = [this, stream, signal, &admission, &options](context& context_value, const http_response& head_response) {
-                        if (codec().submit_connect_response_head(stream->id(), head_response) != http3_submit_status::accepted) {
+                        if (codec().submit_connect_response_head(stream->id(), head_response) != http_submit_status::accepted) {
                             throw std::invalid_argument("HTTP/3 CONNECT response head rejected");
                         }
                         if (!stream->tunnel()) {
@@ -1422,7 +1422,7 @@ void http3_session::begin_drain() noexcept {
         drain_begun_ = true;
         // RFC 9114 §5.2: the shutdown notice still admits requests the client
         // already sent; the final GOAWAY follows a round trip later.
-        if (codec().begin_drain() != http3_submit_status::accepted) {
+        if (codec().begin_drain() != http_submit_status::accepted) {
             connection_->close(http3_error_code::internal_error);
         }
         wake_writer();
@@ -1449,7 +1449,7 @@ void http3_session::drain_timer_expired() noexcept {
     if (lifecycle_ != lifecycle_type::open || termination_.terminated()) {
         return;
     }
-    if (codec().finish_drain() != http3_submit_status::accepted) {
+    if (codec().finish_drain() != http_submit_status::accepted) {
         connection_->close(http3_error_code::internal_error);
     }
     drain_timer_.mark_expired();
@@ -1475,10 +1475,6 @@ void http3_session::finish_drain_if_ready() noexcept {
 }
 
 namespace {
-
-[[nodiscard]] std::span<const std::byte> byte_view(std::string_view bytes) noexcept {
-    return {reinterpret_cast<const std::byte*>(bytes.data()), bytes.size()};
-}
 
 [[nodiscard]] bool stream_aborted(http3_session& session, std::int64_t stream_id) noexcept {
     const auto* stream = session.find_stream(stream_id);
@@ -1512,11 +1508,11 @@ task<http3_data_write_status> write_http3_stream_data(http3_session& session, st
         if (!(co_await await_output_budget(session, stream_id, signal))) {
             co_return signal.terminated() ? http3_data_write_status::terminated : http3_data_write_status::stream_aborted;
         }
-        const auto submitted = session.codec().submit_data(stream_id, byte_view(bytes));
-        if (submitted.status_ == http3_data_submit_status::invalid_message) {
+        const auto submitted = session.codec().submit_data(stream_id, bytes);
+        if (submitted.status_ == http_data_submit_status::invalid_message) {
             throw std::length_error("HTTP/3 response exceeds Content-Length");
         }
-        if (submitted.status_ == http3_data_submit_status::closed) {
+        if (submitted.status_ == http_data_submit_status::closed) {
             // The stream no longer accepts content: it was reset, or the
             // connection ended.
             co_return signal.terminated() || session.codec().connection_error().has_value() ? http3_data_write_status::terminated : http3_data_write_status::stream_aborted;
@@ -1577,7 +1573,7 @@ task<multiplexed_buffered_response_write_result> http3_buffered_response_writer:
             if (stream_ended(stream_id)) {
                 co_return multiplexed_buffered_response_write_result{.committed_status_ = committed_status};
             }
-            if (session_.codec().finish_stream(stream_id) != http3_finish_status::accepted) {
+            if (session_.codec().finish_stream(stream_id) != http_finish_status::accepted) {
                 session_.reset_stream(stream_id, http3_error_code::internal_error);
             }
             session_.wake_writer();
@@ -1610,7 +1606,7 @@ task<multiplexed_buffered_response_write_result> http3_buffered_response_writer:
     const auto head_result = session_.codec().submit_response_head(stream_id, response, std::move(write_plan));
     const auto* submitted_head = std::get_if<http_buffered_response_write_plan>(&head_result);
     if (submitted_head == nullptr) {
-        if (std::get<http3_response_head_error>(head_result) != http3_response_head_error::closed) {
+        if (std::get<http_response_head_error>(head_result) != http_response_head_error::closed) {
             // Invalid final metadata cannot leave the peer's request waiting
             // for a response the head submission rejected.
             session_.reset_stream(stream_id, http3_error_code::internal_error);
@@ -1633,7 +1629,7 @@ task<multiplexed_buffered_response_write_result> http3_buffered_response_writer:
     }
     const auto status = co_await write_http3_stream_data(session_, stream_id, *signal, response.body_bytes());
     if (status == http3_data_write_status::completed) {
-        if (session_.codec().finish_stream(stream_id) != http3_finish_status::accepted) {
+        if (session_.codec().finish_stream(stream_id) != http_finish_status::accepted) {
             session_.reset_stream(stream_id, http3_error_code::internal_error);
         }
         session_.wake_writer();

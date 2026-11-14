@@ -117,7 +117,7 @@ struct http3_quic_connection_options final {
     std::size_t max_pending_datagram_bytes_{64 * 1024};
     void* callback_context_{nullptr};
     // The connection installs its own received_data_credit_sink_: a returned
-    // http3_received_data_credit extends the stream and connection receive
+    // http_received_data_credit extends the stream and connection receive
     // windows (RFC 9000 §4.1), so DATA credit returns only as the application
     // consumes it. Framing bytes are credited at once.
     http3_connection_options http3_{};
@@ -159,7 +159,7 @@ public:
     http3_quic_connection(http3_quic_connection&&) noexcept;
     http3_quic_connection& operator=(http3_quic_connection&&) noexcept;
 
-    [[nodiscard]] http3_role role() const noexcept;
+    [[nodiscard]] http_connection_role role() const noexcept;
     // For the QUIC-TLS adapter's connection reference
     // (ngtcp2_crypto_conn_ref::get_conn); every other capability has a member.
     [[nodiscard]] ngtcp2_conn* native_handle() noexcept;
@@ -244,7 +244,7 @@ public:
 
 private:
     class impl;
-    explicit http3_quic_connection(http3_role role, const http3_quic_connection_options& options);
+    explicit http3_quic_connection(http_connection_role role, const http3_quic_connection_options& options);
     std::unique_ptr<impl> impl_;
 };
 

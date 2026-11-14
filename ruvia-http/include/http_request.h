@@ -305,20 +305,6 @@ template <typename field_span_type>
 
 [[nodiscard]] std::size_t estimate_http1_response_head_bytes(http_status_code status, const http_response_headers& headers) noexcept;
 
-namespace detail {
-// Repeated fields retain their wire order; singular convenience accessors
-// select the last matching field without copying its borrowed value.
-template <typename field_type>
-[[nodiscard]] std::optional<std::string_view> find_last_http_header(std::span<const field_type> fields, std::string_view name) noexcept {
-    for (auto field = fields.rbegin(); field != fields.rend(); ++field) {
-        if (http_ascii_equals_ignore_case(field->name(), name)) {
-            return field->value();
-        }
-    }
-    return std::nullopt;
-}
-}  // namespace detail
-
 enum class http_request_trailer_error : unsigned char { invalid_field,
     forbidden_field,
     section_too_large };
@@ -361,6 +347,7 @@ public:
         return fields_;
     }
     std::span<const http_header> fields() const&& = delete;
+    // Case-insensitive; the first matching field line wins.
     [[nodiscard]] std::optional<std::string_view> field(std::string_view name) const& noexcept RUVIA_LIFETIMEBOUND;
     std::optional<std::string_view> field(std::string_view) const&& = delete;
 
@@ -822,14 +809,19 @@ public:
     }
     [[nodiscard]] std::span<const std::byte> body_bytes() const&& = delete;
 
-    // Case-insensitive semantic lookup; the last repeated field wins.
+    // Case-insensitive semantic lookup; the first field line wins. Use
+    // unique_header() where a repeated field must not resolve to one line.
     [[nodiscard]] std::optional<std::string_view> header(std::string_view name) const noexcept RUVIA_LIFETIMEBOUND;
+    // Case-insensitive three-state lookup: repeated when two or more field
+    // lines carry `name`, found with the single value otherwise. O(1) for
+    // known field kinds. The value borrows the request's header text.
+    [[nodiscard]] http_unique_field_lookup unique_header(std::string_view name) const noexcept RUVIA_LIFETIMEBOUND;
     // Exact raw lookup over the encoded query string. Both `raw_name` and the
     // returned value retain their percent-encoded bytes; no application/x-www-
     // form-urlencoded `+` conversion is applied. Later duplicate fields win.
     [[nodiscard]] std::optional<std::string_view> last_raw_query_value(std::string_view raw_name) const noexcept RUVIA_LIFETIMEBOUND;
-    // Case-sensitive Cookie lookup; the last matching pair across field lines wins.
-    // The returned view borrows the corresponding header text.
+    // Case-sensitive Cookie lookup; the first matching pair across field lines
+    // (in wire order) wins. The returned view borrows the header text.
     [[nodiscard]] std::optional<std::string_view> cookie(std::string_view name) const noexcept RUVIA_LIFETIMEBOUND;
 
 private:

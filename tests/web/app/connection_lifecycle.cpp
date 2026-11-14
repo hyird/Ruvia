@@ -540,20 +540,23 @@ TEST(Ruvia, application_hooks_connection_id_control_context_abort_and_virtual_lo
         .on_start([&] {
         ready.release();
     })
-        .on_connection_admission([&](const ruvia::connection_event&) noexcept {
+        .callbacks({
+            .connection_admission_ = [&](const ruvia::connection_event&) noexcept {
         ++admissions;
         return true;
-    })
-        .on_connection_open([&](const ruvia::connection_event& event) -> std::shared_ptr<void> {
+    },
+            .connection_open_ = [&](const ruvia::connection_event& event) -> std::shared_ptr<void> {
         id = event.connection_id();
         ++opens;
         opened.release();
         return std::make_shared<int>(19);
-    }).on_connection_close([&](const ruvia::connection_event&, const std::shared_ptr<void>& state, const ruvia::connection_close_info&) noexcept {
+    },
+            .connection_close_ = [&](const ruvia::connection_event&, const std::shared_ptr<void>& state, const ruvia::connection_close_info&) noexcept {
         EXPECT_EQ(*std::static_pointer_cast<int>(state), 19);
         ++closes;
         ended.release();
-    });
+    },
+        });
     ruvia::test::app_run runner(app);
     ASSERT_TRUE(ready.try_acquire_for(10s));
     asio::ip::tcp::socket pending(io);
@@ -587,7 +590,7 @@ TEST(Ruvia, application_hooks_connection_id_control_context_abort_and_virtual_lo
     runner.join();
     EXPECT_EQ(admissions.load(), 4u);
     EXPECT_EQ(opens.load(), closes.load());
-    app.on_start(nullptr).on_connection_admission(nullptr).on_connection_open(nullptr).on_connection_close(nullptr);
+    app.on_start(nullptr).callbacks({});
 }
 
 TEST(Ruvia, request_stream_abort_connection_prevents_pipelining_and_preserves_callback_failures) {

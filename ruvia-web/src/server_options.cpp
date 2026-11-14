@@ -2,6 +2,7 @@
 
 #include <atomic>
 #include <cstddef>
+#include <cstdint>
 #include <exception>
 #include <limits>
 #include <optional>
@@ -118,6 +119,53 @@ void http_server_options::set_trusted_proxies(const trusted_proxy_config& config
     ip_config.forwarding_headers_ = config.forwarding_headers_;
     ip_config.trust_x_forwarded_proto_ = config.trust_x_forwarded_proto_;
     trusted_proxies_ = http_client_ip_extractor(ip_config);
+}
+
+void http_server_options::use_callbacks(const http_server_callbacks& callbacks) noexcept {
+    request_stream_ = callback_access::ref(callbacks.request_stream_);
+    connection_ = callback_access::ref(callbacks.connection_);
+    access_log_.callback_ = callback_access::ref(callbacks.access_);
+    connection_failure_.callback_ = callback_access::ref(callbacks.connection_failure_);
+    tls_client_hello_ = callback_access::ref(callbacks.tls_client_hello_);
+    http2_input_ = callback_access::ref(callbacks.http2_input_);
+#if defined(RUVIA_ENABLE_HTTP2)
+    http2_frame_ = callback_access::ref(callbacks.http2_frame_);
+    http2_headers_ = callback_access::ref(callbacks.http2_headers_);
+#endif
+#if defined(RUVIA_ENABLE_HTTP3)
+    http3_frame_ = callback_access::ref(callbacks.http3_frame_);
+    http3_field_ = callback_access::ref(callbacks.http3_field_);
+#endif
+    connection_admission_ = callback_access::ref(callbacks.connection_admission_);
+    connection_open_ = callback_access::ref(callbacks.connection_open_);
+    connection_close_ = callback_access::ref(callbacks.connection_close_);
+}
+
+std::uint32_t callbacks_presence(const http_server_callbacks& callbacks) noexcept {
+    std::uint32_t presence = 0;
+    std::uint32_t bit = 1;
+    const auto add = [&presence, &bit](bool present) noexcept {
+        presence |= present ? bit : 0U;
+        bit <<= 1U;
+    };
+    add(static_cast<bool>(callbacks.request_stream_));
+    add(static_cast<bool>(callbacks.connection_));
+    add(static_cast<bool>(callbacks.access_));
+    add(static_cast<bool>(callbacks.connection_failure_));
+    add(static_cast<bool>(callbacks.tls_client_hello_));
+    add(static_cast<bool>(callbacks.http2_input_));
+#if defined(RUVIA_ENABLE_HTTP2)
+    add(static_cast<bool>(callbacks.http2_frame_));
+    add(static_cast<bool>(callbacks.http2_headers_));
+#endif
+#if defined(RUVIA_ENABLE_HTTP3)
+    add(static_cast<bool>(callbacks.http3_frame_));
+    add(static_cast<bool>(callbacks.http3_field_));
+#endif
+    add(static_cast<bool>(callbacks.connection_admission_));
+    add(static_cast<bool>(callbacks.connection_open_));
+    add(static_cast<bool>(callbacks.connection_close_));
+    return presence;
 }
 
 }  // namespace ruvia::detail

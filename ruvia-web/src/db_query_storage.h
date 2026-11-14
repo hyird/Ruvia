@@ -273,7 +273,7 @@ struct db_stored_conflict final {
     db_stored_conflict& operator=(db_stored_conflict&&) noexcept = default;
     std::vector<std::string> columns_;
     std::string constraint_;
-    std::size_t target_where_{no_db_node};
+    std::size_t index_predicate_{no_db_node};
     std::vector<db_stored_assignment> assignments_;
     std::size_t update_where_{no_db_node};
     bool do_nothing_{false};

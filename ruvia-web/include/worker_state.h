@@ -270,9 +270,8 @@ public:
 private:
     template <typename callable_type>
     [[nodiscard]] static task<blocking_result<std::invoke_result_t<callable_type&>>> run_blocking_combined(worker_ref worker_value, ruvia::stop_token worker_token, callable_type callable, operation_options options) {
-        const stop_group stop_owner(worker_token, options.stop_token_);
-        options.stop_token_ = stop_owner.token();
-        co_return co_await ruvia::run_blocking(std::move(worker_value), std::move(callable), std::move(options));
+        const linked_operation_options linked(options, worker_token);
+        co_return co_await ruvia::run_blocking(std::move(worker_value), std::move(callable), linked.options());
     }
 
     [[nodiscard]] void* worker_state_instance(const void* type_key) const;

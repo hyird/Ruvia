@@ -42,6 +42,7 @@ db_transaction::db_transaction(detail::db_pool_ref_type client, std::size_t slot
     state_(std::make_unique<operation_state_type>(lease_type{client, slot, std::move(options)})) {}
 
 db_transaction::db_transaction(db_transaction&& other) noexcept :
+    request_link_(std::move(other.request_link_)),
     state_(std::move(other.state_)),
     io_metrics_(other.io_metrics_),
     registration_(std::move(other.registration_), this) {}
@@ -52,7 +53,8 @@ bool db_transaction::active() const noexcept {
     return state_ != nullptr && state_->active();
 }
 
-void db_transaction::bind_operation_scope(::ruvia::operation_scope& scope, detail::request_io_metrics* io_metrics) noexcept {
+void db_transaction::bind_operation_scope(::ruvia::operation_scope& scope, detail::request_io_metrics* io_metrics, std::unique_ptr<const linked_operation_options> request_link) noexcept {
+    request_link_ = std::move(request_link);
     io_metrics_ = io_metrics;
     registration_.bind(scope, this, &db_transaction::expire_capability);
 }
@@ -354,6 +356,7 @@ db_stream_result::db_stream_result(detail::db_pool_ref_type client, std::size_t 
     state_(std::make_unique<state_type>(lease_type{client, slot, std::move(options)}, std::move(column_names))) {}
 
 db_stream_result::db_stream_result(db_stream_result&& other) noexcept :
+    request_link_(std::move(other.request_link_)),
     state_(std::move(other.state_)),
     io_metrics_(other.io_metrics_),
     registration_(std::move(other.registration_), this) {}
@@ -369,7 +372,8 @@ std::span<const std::string> db_stream_result::column_names() const& {
     return state_ != nullptr ? std::span<const std::string>(state_->column_names_) : std::span<const std::string>{};
 }
 
-void db_stream_result::bind_operation_scope(::ruvia::operation_scope& scope, detail::request_io_metrics* io_metrics) noexcept {
+void db_stream_result::bind_operation_scope(::ruvia::operation_scope& scope, detail::request_io_metrics* io_metrics, std::unique_ptr<const linked_operation_options> request_link) noexcept {
+    request_link_ = std::move(request_link);
     io_metrics_ = io_metrics;
     registration_.bind(scope, this, &db_stream_result::expire_capability);
 }

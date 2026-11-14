@@ -69,7 +69,7 @@ public:
     server_connection& operator=(server_connection&&) = delete;
 
     // conn_info::connection_id() of this connection; equal to connection_id() of its
-    // on_tls_client_hello records.
+    // tls_client_hello_ records.
     [[nodiscard]] constexpr std::uint64_t connection_id() const noexcept {
         return id_;
     }
@@ -172,7 +172,7 @@ private:
 // task completes the server ends the connection: TLS sends close_notify
 // unless the handler finished or aborted it, then the socket closes. A task
 // that throws aborts the connection; its exception reaches
-// on_connection_failure unless it is a peer reset or close, or I/O the
+// connection_failure_ unless it is a peer reset or close, or I/O the
 // server cancelled (timeouts or host shutdown).
 // 空函数指针与目标析构重入的契约同 access_log_callback。
 using connection_callback = move_only_function<task<void>(server_connection&)>;

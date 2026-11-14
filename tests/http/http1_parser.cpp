@@ -100,7 +100,7 @@ void verify_many_headers_request_head(const http1_server_request_parse_state& st
     EXPECT_EQ(state.request().path(), std::string_view("/first"));
     EXPECT_EQ(state.request().query_string(), std::string_view("part=one"));
     EXPECT_EQ(state.request().header("Host").value_or("missing"), std::string_view("target.example:8080"));
-    EXPECT_EQ(state.request().header("X-Repeat").value_or("missing"), std::string("value-") + std::to_string(many_headers_repeat_count - 1).c_str());
+    EXPECT_EQ(state.request().header("X-Repeat").value_or("missing"), std::string_view("value-0"));
     EXPECT_EQ(state.request().headers().size(), many_headers_repeat_count + 2);
     std::size_t index = 0;
     for (const auto& header : state.request().headers()) {

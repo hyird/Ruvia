@@ -85,9 +85,10 @@ public:
     [[nodiscard]] std::optional<std::string> key(const db_query& query, const db_statement& statement, db_driver driver);
     // Serves the step from the cache, or runs `database` and stores its rows.
     [[nodiscard]] task<db_rows> wrap(std::optional<std::chrono::milliseconds> duration, std::string key, db_cache_query database, operation_options options, operation_deadline deadline);
-    // `io_metrics` is the request's counter block, or null outside a request.
-    [[nodiscard]] task<void> remove(std::span<const std::string_view> ids, request_io_metrics* io_metrics, operation_options options);
-    [[nodiscard]] task<void> clear(request_io_metrics* io_metrics, operation_options options);
+    // `io_metrics` is the request's counter block, or null outside a request;
+    // `request_stop` is the caller request's cancellation, linked with options.
+    [[nodiscard]] task<void> remove(std::span<const std::string_view> ids, request_io_metrics* io_metrics, operation_options options, stop_token request_stop);
+    [[nodiscard]] task<void> clear(request_io_metrics* io_metrics, operation_options options, stop_token request_stop);
 
 private:
     // One read-through fill in flight: the caller that missed first (the

@@ -140,7 +140,8 @@ TEST(Ruvia, request_trailers_enforce_normalized_section_limit_during_chunk_decod
                 if (const auto* complete = decoded.complete()) {
                     EXPECT_TRUE(!trailers.append_received(complete->trailers()).has_value());
                     EXPECT_EQ(trailers.fields().size(), field_count);
-                    EXPECT_EQ(trailers.field("X").value_or(""), std::string(value_size, 'z'));
+                    EXPECT_EQ(trailers.field("X").value_or(""), "a");
+                    EXPECT_EQ(trailers.fields().back().value(), std::string(value_size, 'z'));
                 }
             } else {
                 EXPECT_TRUE(decoded.failure() != nullptr);
@@ -397,13 +398,13 @@ TEST(Ruvia, request_access_raw_query_lookup_preserves_encoding_and_uses_last_mat
     EXPECT_EQ(*request.last_raw_query_value("encoded%20key"), std::string_view("raw%2Fvalue"));
 }
 
-TEST(Ruvia, request_access_cookie_lookup_uses_last_match) {
+TEST(Ruvia, request_access_cookie_lookup_uses_first_match) {
     const http_header_view headers[]{{"Cookie", "sid=first; theme=dark; sid=second"}};
     const auto request = ruvia::make_parsed_http_request("GET", "/", headers, {});
 
     const auto value = request.cookie("sid");
     EXPECT_TRUE(value.has_value());
-    EXPECT_EQ(*value, std::string_view("second"));
+    EXPECT_EQ(*value, std::string_view("first"));
 }
 
 TEST(Ruvia, request_access_cookie_lookup_scans_repeated_cookie_fields) {
@@ -423,10 +424,55 @@ TEST(Ruvia, request_access_cookie_lookup_preserves_distinct_fields_with_shared_s
     const http_header_view headers[]{{"Cookie", shared}, {"Cookie", shared.substr(0, 7)}};
     const auto request = ruvia::make_parsed_http_request("GET", "/", headers, {});
     EXPECT_EQ(request.headers().size(), std::size_t{2});
-    EXPECT_EQ(request.header("Cookie").value_or("missing"), std::string_view("sid=old"));
+    EXPECT_EQ(request.header("Cookie").value_or("missing"), shared);
     EXPECT_EQ(request.cookie("sid").value_or("missing"), std::string_view("old"));
     EXPECT_EQ(request.cookie("token").value_or("missing"), std::string_view("present"));
     EXPECT_TRUE(!request.cookie("absent").has_value());
+}
+
+TEST(Ruvia, request_unique_header_distinguishes_absent_found_and_repeated) {
+    using ruvia::unique_lookup_status;
+    const http_header_view headers[]{
+        {"User-Agent", "first/1"},
+        {"Accept", "text/plain"},
+        {"X-Custom", "one"},
+        {"Accept", "text/html"},
+        {"User-Agent", "second/2"},
+        {"x-custom", "two"},
+        {"X-Empty", ""},
+        {"Content-Type", "text/plain"},
+    };
+    const auto request = ruvia::make_parsed_http_request("POST", "/", headers, {});
+
+    // Known singleton field accepted as recipient-tolerant when repeated.
+    EXPECT_TRUE(request.unique_header("user-agent").status_ == unique_lookup_status::repeated);
+    EXPECT_TRUE(request.unique_header("User-Agent").value_.empty());
+    // Known list field.
+    EXPECT_TRUE(request.unique_header("Accept").status_ == unique_lookup_status::repeated);
+    // Unknown field, case-insensitive across lines.
+    EXPECT_TRUE(request.unique_header("X-CUSTOM").status_ == unique_lookup_status::repeated);
+    EXPECT_TRUE(request.unique_header("X-Missing").status_ == unique_lookup_status::absent);
+    EXPECT_TRUE(request.unique_header("Authorization").status_ == unique_lookup_status::absent);
+
+    const auto empty = request.unique_header("x-empty");
+    EXPECT_TRUE(empty.status_ == unique_lookup_status::found);
+    EXPECT_TRUE(empty.value_.empty());
+    const auto content_type = request.unique_header("content-type");
+    EXPECT_TRUE(content_type.status_ == unique_lookup_status::found);
+    EXPECT_EQ(content_type.value_, std::string_view("text/plain"));
+
+    // Singular getters return the first line, for known and unknown kinds.
+    EXPECT_EQ(request.header("User-Agent").value_or(""), std::string_view("first/1"));
+    EXPECT_EQ(request.header("accept").value_or(""), std::string_view("text/plain"));
+    EXPECT_EQ(request.header("X-Custom").value_or(""), std::string_view("one"));
+}
+
+TEST(Ruvia, request_trailers_singular_lookup_uses_first_match) {
+    ruvia::http_request_trailers trailers;
+    const std::array fields{ruvia::http_header("x-check", "a"), ruvia::http_header("x-check", "b")};
+    EXPECT_TRUE(!trailers.append_received(fields).has_value());
+    EXPECT_EQ(trailers.field("X-Check").value_or(""), std::string_view("a"));
+    EXPECT_TRUE(ruvia::find_unique_http_header(trailers.fields(), "x-check").status_ == ruvia::unique_lookup_status::repeated);
 }
 
 TEST(Ruvia, request_body_string_view_and_known_method_bits_match_contracts) {

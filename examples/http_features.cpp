@@ -6,9 +6,11 @@
 
 #include <array>
 #include <chrono>
+#include <cstddef>
 #include <exception>
 #include <filesystem>
 #include <iostream>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -42,7 +44,6 @@ private:
         // An interim head is separate from the final response. The Web API
         // copies its input, but the operation must still finish in this request.
         co_await c.inform(ruvia::http_interim_response_head(ruvia::http_status::early_hints, hints));
-        c.draft().priority({.urgency_ = 2, .incremental_ = true});
         const auto protocol = c.req().protocol_version();
         if ((protocol == ruvia::http_protocol_version::http2 || protocol == ruvia::http_protocol_version::http3) && connection.tls()) {
             // Advertisements never change the client's trusted origin.
@@ -52,6 +53,8 @@ private:
                 c.advertise_alternative_service("h2=\":8444\"; ma=60");
             }
         }
+        std::array<ruvia::http_header_view, 1> push_header{};
+        std::size_t push_header_count = 0;
         if (protocol == ruvia::http_protocol_version::http2) {
             // Peer settings or capacity can decline push; the asset remains
             // available through an ordinary request.
@@ -60,14 +63,15 @@ private:
                 .authority_ = c.req().header("host").value_or(connection.tls() ? "localhost:8444" : "localhost:8093"),
                 .path_ = "/features/asset",
             });
-            c.draft().header("X-Push-Accepted", pushed ? "yes" : "no");
+            push_header[push_header_count++] = {"X-Push-Accepted", pushed ? "yes" : "no"};
         }
-        co_return c.text("interim responses, priorities, advertisements, and push\n");
+        co_return c.text("interim responses, priorities, advertisements, and push\n",
+            {.headers_ = std::span(push_header).first(push_header_count), .priority_ = ruvia::http_priority_fields{.urgency_ = 2, .incremental_ = true}});
     }
 
     ruvia::task<ruvia::http_response> asset(ruvia::context& c) {
-        c.draft().header("content-type", "text/css");
-        co_return c.body(ruvia::static_text("body { color: #234; }\n"));
+        const std::array headers{ruvia::http_header_view{"content-type", "text/css"}};
+        co_return c.body(ruvia::static_text("body { color: #234; }\n"), {.headers_ = headers});
     }
 
     ruvia::task<ruvia::http_response> safe(ruvia::context& c) {
@@ -79,8 +83,8 @@ private:
     }
 
     ruvia::task<void> download(ruvia::context& c) {
-        auto& output = c.stream_text();
-        c.draft().header("Trailer", "X-Example-Complete");
+        const std::array headers{ruvia::http_header_view{"Trailer", "X-Example-Complete"}};
+        auto& output = c.stream_text({.headers_ = headers});
         if (co_await output.commit() == ruvia::stream_commit_result::completed) {
             co_return;
         }

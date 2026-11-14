@@ -65,9 +65,17 @@ public:
     }
     [[nodiscard]] std::span<const http_header> headers() const&& = delete;
 
-    // Case-insensitive lookup; the last repeated field wins.
+    // Case-insensitive lookup; the first field line wins.
     [[nodiscard]] std::optional<std::string_view> header(std::string_view name) const& noexcept RUVIA_LIFETIMEBOUND;
     std::optional<std::string_view> header(std::string_view name) const&& = delete;
+
+    // Case-insensitive three-state lookup for fields that must not resolve to
+    // one of several lines (Location, Content-Type): repeated when two or more
+    // lines carry `name`. The found value borrows this head.
+    [[nodiscard]] http_unique_field_lookup unique_header(std::string_view name) const& noexcept RUVIA_LIFETIMEBOUND {
+        return find_unique_http_header(headers_, name);
+    }
+    http_unique_field_lookup unique_header(std::string_view name) const&& = delete;
 
     // Transfers the owned parsed fields to a consumer that retains the head's
     // metadata but needs to extend the fields' lifetime independently.
@@ -89,7 +97,7 @@ private:
 };
 
 inline std::optional<std::string_view> http_client_response_head::header(std::string_view name) const& noexcept {
-    return detail::find_last_http_header<http_header>(headers_, name);
+    return detail::find_first_http_header(headers_, name);
 }
 
 }  // namespace ruvia

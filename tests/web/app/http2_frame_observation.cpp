@@ -164,16 +164,18 @@ TEST(Ruvia, http2_typed_observers_fingerprint_tls_frames_independently_of_record
         .on_start([&] {
         started.release();
     })
-        .on_http2_frame([&](const ruvia::http2_frame_record& record) noexcept {
+        .callbacks({
+            .http2_frame_ = [&](const ruvia::http2_frame_record& record) noexcept {
         observations.frame(record);
-    }).on_http2_headers([&](const ruvia::http2_headers_record& record) noexcept {
+    },
+            .http2_headers_ = [&](const ruvia::http2_headers_record& record) noexcept {
         observations.header(record);
-    });
+    },
+        });
     {
         ruvia::test::app_run running(app);
         ASSERT_TRUE(started.try_acquire_for(10s));
-        EXPECT_THROW(app.on_http2_frame(nullptr), std::logic_error);
-        EXPECT_THROW(app.on_http2_headers(nullptr), std::logic_error);
+        EXPECT_THROW(app.callbacks({}), std::logic_error);
         for (const bool reverse : {false, true}) {
             for (const bool empty_initial : {false, true}) {
                 for (const auto fragment : {std::size_t{1}, std::size_t{7}, std::size_t{4096}}) {
@@ -218,5 +220,5 @@ TEST(Ruvia, http2_typed_observers_fingerprint_tls_frames_independently_of_record
         app.stop();
         running.join();
     }
-    app.on_http2_frame(nullptr).on_http2_headers(nullptr);
+    app.callbacks({});
 }

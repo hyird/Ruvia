@@ -266,11 +266,11 @@ TEST(Ruvia, connection_listeners_serve_byte_streams_beside_routes) {
         .on_start(nullptr)
         .on_start([] {
         started().release();
-    }).on_connection(&echo);
+    }).callbacks({.connection_ = &echo});
 
     ruvia::test::app_run runner(app);
     ASSERT_TRUE(started().try_acquire_for(10s));
-    EXPECT_THROW(app.on_connection(nullptr), std::logic_error);
+    EXPECT_THROW(app.callbacks({}), std::logic_error);
 
     constexpr std::string_view payload = "GET /ping HTTP/1.1\r\nHost: localhost\r\n\r\n";
     std::uint16_t plain_client_port = 0;
@@ -394,7 +394,7 @@ TEST(Ruvia, raw_connection_abort_cancels_outputs_without_reporting_faults) {
         .on_start([] {
         started().release();
     })
-        .on_connection([results](ruvia::server_connection& connection) -> ruvia::task<void> {
+        .callbacks({.connection_ = [results](ruvia::server_connection& connection) -> ruvia::task<void> {
         const auto input = co_await connection.read();
         if (!input || input->empty()) {
             throw std::runtime_error("missing abort command");
@@ -449,7 +449,7 @@ TEST(Ruvia, raw_connection_abort_cancels_outputs_without_reporting_faults) {
             throw std::system_error(std::make_error_code(std::errc::operation_canceled), "raw application cancelled");
         }
         throw std::runtime_error("raw application failed after abort");
-    }).on_connection_failure([results](const ruvia::connection_failure_record& record) noexcept {
+    }, .connection_failure_ = [results](const ruvia::connection_failure_record& record) noexcept {
         try {
             std::rethrow_exception(record.exception());
         } catch (const std::system_error& error) {
@@ -467,7 +467,7 @@ TEST(Ruvia, raw_connection_abort_cancels_outputs_without_reporting_faults) {
         } catch (...) {
             ++results->unexpected_failures_;
         }
-    });
+    }});
     ruvia::test::app_run runner(app);
     ASSERT_TRUE(started().try_acquire_for(10s));
     unsigned expected_faults = 0;
@@ -509,7 +509,7 @@ TEST(Ruvia, raw_connection_abort_cancels_outputs_without_reporting_faults) {
     }
     app.stop();
     runner.join();
-    app.on_connection_failure(nullptr);
+    app.callbacks({});
     EXPECT_EQ(results->closed_reads_.load(), 2U);
     EXPECT_EQ(results->closed_writes_.load(), 2U);
     EXPECT_EQ(results->canceled_finishes_.load(), 2U);
@@ -532,7 +532,7 @@ TEST(Ruvia, connection_idle_timeout_closes_raw_connection) {
         .on_start(nullptr)
         .on_start([] {
         started().release();
-    }).on_connection(&wait_for_input);
+    }).callbacks({.connection_ = &wait_for_input});
 
     ruvia::test::app_run runner(app);
     ASSERT_TRUE(started().try_acquire_for(10s));
@@ -569,7 +569,7 @@ TEST(Ruvia, stop_disconnects_raw_connections) {
         .on_start(nullptr)
         .on_start([] {
         started().release();
-    }).on_connection(&wait_for_input);
+    }).callbacks({.connection_ = &wait_for_input});
 
     ruvia::test::app_run runner(app);
     ASSERT_TRUE(started().try_acquire_for(10s));
@@ -593,7 +593,7 @@ TEST(Ruvia, stop_disconnects_raw_connections) {
 }
 
 // An exception escaping the handler aborts the connection and reaches
-// on_connection_failure, counted in connection_failures_.
+// connection_failure_, counted in connection_failures_.
 TEST(Ruvia, raw_handler_failure_reaches_connection_failure_hook) {
     asio::io_context io;
     ruvia::test::tcp_port_reservation reservation(io);
@@ -605,8 +605,7 @@ TEST(Ruvia, raw_handler_failure_reaches_connection_failure_hook) {
         .on_start([] {
         started().release();
     })
-        .on_connection(&fail_after_first_read)
-        .on_connection_failure(&record_failure);
+        .callbacks({.connection_ = &fail_after_first_read, .connection_failure_ = &record_failure});
 
     ruvia::test::app_run runner(app);
     ASSERT_TRUE(started().try_acquire_for(10s));
@@ -619,7 +618,7 @@ TEST(Ruvia, raw_handler_failure_reaches_connection_failure_hook) {
     }, 10s);
     app.stop();
     runner.join();
-    app.on_connection_failure(nullptr);
+    app.callbacks({});
     std::lock_guard lock(failures_mutex());
     ASSERT_EQ(failures().size(), 1U);
     EXPECT_EQ(failures()[0].remote_address_, "127.0.0.1");
@@ -637,7 +636,7 @@ TEST(Ruvia, raw_connection_return_expires_unstarted_read_write_and_finish) {
         .on_start(nullptr)
         .on_start([] {
         started().release();
-    }).on_connection([pending](ruvia::server_connection& connection) -> ruvia::task<void> {
+    }).callbacks({.connection_ = [pending](ruvia::server_connection& connection) -> ruvia::task<void> {
         if (!pending->read_) {
             pending->read_.emplace(connection.read());
             pending->write_.emplace(connection.write(bytes_of("must-not-be-sent")));
@@ -664,7 +663,7 @@ TEST(Ruvia, raw_connection_return_expires_unstarted_read_write_and_finish) {
         pending->write_.reset();
         pending->finish_.reset();
         co_await connection.write(bytes_of(expired == 3 ? "expired" : "invalid"));
-    });
+    }});
     ruvia::test::app_run runner(app);
     ASSERT_TRUE(started().try_acquire_for(10s));
     {
@@ -685,7 +684,7 @@ TEST(Ruvia, raw_connection_return_expires_unstarted_read_write_and_finish) {
     runner.join();
 }
 
-// A connection listener needs on_connection at run(); listen() rejects
+// A connection listener needs http_server_callbacks::connection_ at run(); listen() rejects
 // what such a listener cannot serve, and an ALPN list on a routes listener.
 TEST(Ruvia, connection_dispatch_configuration_is_validated) {
     asio::io_context io;
@@ -696,7 +695,7 @@ TEST(Ruvia, connection_dispatch_configuration_is_validated) {
     ruvia::test::tls_identity identity("localhost");
     const ruvia::tls_config tls{.identity_ = {.certificate_chain_file_ = identity.ca_file_, .private_key_file_ = identity.private_key_file()}};
     auto& app = ruvia::app();
-    app.server({.worker_count_ = 1}).listen(connection_listener(endpoint)).on_start(nullptr).on_connection(nullptr);
+    app.server({.worker_count_ = 1}).listen(connection_listener(endpoint)).on_start(nullptr).callbacks({});
     EXPECT_THROW(app.run(), std::invalid_argument);
 
     auto with_http3 = connection_listener(endpoint);
@@ -772,7 +771,7 @@ TEST(Ruvia, raw_connection_operation_options_bound_each_wait) {
         .on_start(nullptr)
         .on_start([] {
         started().release();
-    }).on_connection([results, read_text](ruvia::server_connection& connection) -> ruvia::task<void> {
+    }).callbacks({.connection_ = [results, read_text](ruvia::server_connection& connection) -> ruvia::task<void> {
         const auto command = co_await read_text(connection, 1);
         if (command == "r") {
             try {
@@ -864,7 +863,7 @@ TEST(Ruvia, raw_connection_operation_options_bound_each_wait) {
             ++results->aborted_after_write_;
         }
         ++results->handled_;
-    });
+    }});
     ruvia::test::app_run runner(app);
     ASSERT_TRUE(started().try_acquire_for(10s));
     const auto read_exactly = [](auto& stream, std::size_t size) {

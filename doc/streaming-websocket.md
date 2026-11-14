@@ -59,7 +59,7 @@ ruvia::task<ruvia::http_response> upload_stream(ruvia::context& c) {
 
 ### 1.2 流式响应写入（`response_stream_writer`）
 
-使用 `RUVIA_GET(path, handler, ...)`（或 `RUVIA_POST` 等）且处理器返回 `ruvia::task<void>` 时，框架自动将其推导为流式响应路由。通过 `c.stream()`（默认二进制流）或 `c.stream_text()`（自动设置 `text/plain; charset=UTF-8` 与 `X-Content-Type-Options: nosniff`，与缓冲的 `c.text(...)` 相同；应用已设置的 `X-Content-Type-Options` 保留）获取 `response_stream_writer&`：
+使用 `RUVIA_GET(path, handler, ...)`（或 `RUVIA_POST` 等）且处理器返回 `ruvia::task<void>` 时，框架自动将其推导为流式响应路由。通过 `c.stream(head = {})`（默认二进制流）或 `c.stream_text(head = {})`（缺失时补 `text/plain; charset=UTF-8` 与 `X-Content-Type-Options: nosniff`，`head` 或应用已设置的同名字段保留）获取 `response_stream_writer&`。`head` 为 `response_options`（状态、首部、Cookie、优先级），提交前应用到待提交头，默认值不做修改；提交后传非默认值抛 `std::logic_error`，失败不留下部分修改。`c.stream_sse(head = {})` 同理，但 `head` 含 `Content-Type` 抛 `std::invalid_argument`，`Cache-Control` 缺失时补 `no-cache`：
 
 | 方法签名 | 说明 |
 | --- | --- |
@@ -172,12 +172,12 @@ ruvia::task<void> stream_subscription(
 | `ruvia::context` / `context_request` 方法 | 适用协议与说明 |
 | --- | --- |
 | `co_await c.inform(const http_interim_response_head& response, operation_options operation = {})` | 在最终响应头提交前发送 `1xx` 临时响应（如 `103 Early Hints`：`http_interim_response_head(http_status::early_hints, headers)`）；提交后启动（包括先前创建的冷操作）抛 `std::logic_error`；`operation` 中断按输出操作处理（重置请求，启动前停止不发出字节） |
-| `c.draft().priority(http_priority_fields{.urgency_ = 2, .incremental_ = true})` | 设置当前响应优先级（HTTP/2 与 HTTP/3 同时更新流调度器优先级）；跨替换策略用 `c.policy().priority(...)`，客户端请求优先级（含 `PRIORITY_UPDATE` 帧动态更新）用 `c.req().priority()` |
+| `.priority_ = http_priority_fields{.urgency_ = 2, .incremental_ = true}`（`response_options`） | 设置当前响应优先级（HTTP/2 与 HTTP/3 同时更新流调度器优先级）；已选响应用 `c.edit_response().priority(...)`，跨替换策略用 `c.policy().priority(...)`，客户端请求优先级（含 `PRIORITY_UPDATE` 帧动态更新）用 `c.req().priority()` |
 | `bool c.push(http_push_request_view request)` | （HTTP/2）向开启了 Server Push 的客户端推送关联资源，同步返回 `bool` 表示是否被接纳；`method_`、`scheme_`、`authority_`、`path_` 使用 `borrowed_text`，`headers_` 使用 `borrowed_http_headers`，拒绝临时拥有型字符串与临时首部容器；对端禁用推送，或已打开的推送流（不含仅预留的推送）已达到对端 `SETTINGS_MAX_CONCURRENT_STREAMS`（包括其为 0）时返回 `false`，不发送 `PUSH_PROMISE`；已预留的推送在提交响应头时仍无并发额度则以 `RST_STREAM(CANCEL)` 取消，不视为连接失败 |
 | `void c.advertise_origins(std::span<const std::string_view> origins)` | （HTTP/2、HTTP/3，需 TLS）在连接或控制流上排入 RFC 8336 / RFC 9412 `ORIGIN` 帧，通告当前连接可合并服务的权威源集合 |
 | `void c.advertise_alternative_service(std::string_view value)` | （HTTP/2）在连接上排入 RFC 7838 `ALTSVC` 帧通告替代服务 |
 | `c.req().trailers()` / `c.req().trailer(name)` | 在流式请求体读取到 EOF 后，读取客户端发送的请求 Trailer 首部；按 RFC 9110 §6.5.1 不允许出现在 Trailer 中的字段（如 `Content-Length`、`Cache-Control`）被丢弃而不导致请求失败，也不会并入请求头 |
-| `co_await stream.end(trailers)` | 在正文阶段结束响应并发送 Trailer；须在 commit 前声明 `c.draft().header("Trailer", "...")`，completed 结果不生产 trailers |
+| `co_await stream.end(trailers)` | 在正文阶段结束响应并发送 Trailer；须在 commit 前声明 `Trailer` 头（如 `c.stream_text({.headers_ = head})`，`head` 为具名数组），completed 结果不生产 trailers |
 
 ---
 
@@ -418,8 +418,7 @@ auto response = co_await client.get("/users")
     .header("Accept", "application/json")
     .send();
 if (!response.ok()) {
-    c.draft().status(ruvia::http_status::bad_gateway);
-    co_return c.text("upstream failed");
+    co_return c.text("upstream failed", {.status_ = ruvia::http_status::bad_gateway});
 }
 auto body = co_await response.bytes();
 co_return c.text(body.text());
@@ -430,8 +429,8 @@ co_return c.text(body.text());
 | `get/post/put/patch/delete_/head/options(path)`、`request(method, path)` | 返回拥有输入的请求构造器；配置的 `base_url_` 决定 origin |
 | `.query(name, value)`、`.header(name, value)`、`.headers(fields)` | 添加查询参数与请求字段 |
 | `.body(bytes)`、`.json(value)` | 设置拥有型请求体；JSON 使用同一套 Model 序列化契约 |
-| `.send()` | 消费构造器，返回惰性 `task<http_client_response>`；同一构造器不能重复发送 |
-| `.upload(config)` | 返回流式交换；通过 `exchange.body().write()` / `end(trailers)` 上传，通过 `exchange.response()` 获取响应 |
+| `.send()` | 返回惰性 `task<http_client_response>` |
+| `.upload(config)` | 返回流式交换（请求体流式上传，结果类型不同于 `send()`）；通过 `exchange.body().write()` / `end(trailers)` 上传，通过 `exchange.response()` 获取响应 |
 | `response.ok()`、`status()`、`protocol_version()` | 查询 2xx 成功状态、HTTP 状态和实际协议版本 |
 | `response.framing()` / `content_length()` | 查询协议计划的正文分帧与已解析长度元数据；HEAD/304 可携带长度，HTTP/2、HTTP/3 的流分帧也可同时有长度，不等于解码后的字节数 |
 | `response.connection_info()` | 借用物理连接 ID、对端 IP/端口、复用标志及连接/TLS 阶段耗时；隧道结果同样提供连接信息 |
@@ -441,10 +440,13 @@ co_return c.text(body.text());
 | `response.pipe_to(c)` / `response.pipe_to(request_stream)` | 将上游响应转发给当前服务端响应；提交后的传输失败中止流，不伪造完整响应 |
 | `response.stream().pipe_to(writer)` | 只转发正文；调用方先设置响应元数据并 `commit()`，仅 `body` 结果允许转发。入站 Upgrade / CONNECT 拒绝同样支持流式输出，见[请求流分发](web-guide.md#18-请求流分发request_streamh) |
 | `response.reprioritize(http_priority)` | 对尚在传输中的 HTTP/2 或 HTTP/3 响应流发送 RFC 9218 `PRIORITY_UPDATE` 帧 |
-| `client.connect(authority).open()`、`client.udp(path).open()` | 打开字节隧道或 CONNECT-UDP；结果区分已建立的隧道与非 2xx HTTP 响应 |
-| `request.upgrade(config = {})` | 将带 `Connection: Upgrade`、`Upgrade` 字段的 HTTP/1.1 请求升级为原始字节隧道；非 101 保留为普通流式 HTTP 响应 |
+| `client.connect(authority).connect()`、`client.udp(path).connect()` | 打开字节隧道或 CONNECT-UDP；结果区分已建立的隧道与非 2xx HTTP 响应 |
+| `request.connect(config = {})` | 将带 `Connection: Upgrade`、`Upgrade` 字段的 HTTP/1.1 请求升级为原始字节隧道；非 101 保留为普通流式 HTTP 响应 |
 | `client.migrate(local_address, port)` | 对已有 HTTP/3 连接发起本地地址迁移，保留连接与流状态 |
 | `client.websocket(path).connect()` | 返回拥有型 `websocket`；与服务端共用同一个类型、消息写入器和会话状态机（见 [3.2](#32-ruviawebsocket-与-ruviawebsocket_message-api)） |
+
+- **终结动词**：`send()` 完成一次 HTTP 交换，`upload()` 返回流式上传交换，`connect()` 建立长连接会话（CONNECT / CONNECT-UDP 隧道、HTTP/1.1 Upgrade 隧道、WebSocket）。
+- **单次消费**：终结方法仅限右值（`&&`），左值重载已删除；链式临时对象直接调用，具名构造器写 `std::move(builder).send()`，重复消费在编译期拒绝。设置方法保持值类别：右值链返回右值，左值返回左值。
 
 `bytes()`、`json<T>()` 与 `stream()` 消费同一条线性正文流，不缓存可重复读取的副本。结果收集同时受调用方 `max_bytes`、客户端响应上限和 worker 共享结果预算约束。Header/Trailer 视图借用响应对象；拥有型收集结果可独立保留。
 
@@ -470,14 +472,14 @@ WebSocket 构造器通过 `.header()` / `.headers()`、`.subprotocol()`、`.defl
 - **所有权与移动**：客户端连接拥有隧道，析构中止并结构化收束在途 I/O；移动保留写入器与冷/运行操作。服务端连接仍借用请求生命周期，移出请求也不会延长会话能力。
 - **访问器**：会话状态访问器均为 `noexcept`，跨 worker 使用终止进程；已移出的连接返回空值、`none`、`0` 与 `false`。`worker()` 对已移出连接抛 `std::logic_error`；HTTP 连接元数据不属于统一 WebSocket 会话入口。
 
-WebSocket 握手错误仍抛 `http_client_error`；`handshake_rejected` 可通过 `status()` 读取拒绝响应的 HTTP 状态。配置非法抛 `std::invalid_argument`；已消费构造器或并发占用同一读写通道等调用错误抛 `std::logic_error`。
+WebSocket 握手错误仍抛 `http_client_error`；`handshake_rejected` 可通过 `status()` 读取拒绝响应的 HTTP 状态。配置非法抛 `std::invalid_argument`；跨 worker 使用 WebSocket 构造器或并发占用同一读写通道等调用错误抛 `std::logic_error`。
 
 - **失败连接观测**：`http_client_error::connection_info()` 在已有实际连接时提供自有快照，拨号尚未建立连接时为空；错误中的动态文本不借用响应资源。
 - **统一中断与重试**：`http_client_error` 继承 `std::system_error`；协议/连接池错误比较 `http_client_errc`，超时与取消比较 `std::errc::timed_out` / `operation_canceled`。`request_written() == false` 保证尚未向 transport 提交本请求字节；`true` 表示可能已交付。HTTP/2 REFUSED_STREAM / GOAWAY 与 HTTP/3 request_unprocessed 只保证未处理，不清除写出进度；协议层安全重试使用独立的未处理状态。没有该协议保证时，非幂等请求不得自动重试。中断保留该状态及连接快照。
 - **回调所有权**：请求回调由 `configure(options)` 移入；需要跨 worker 复制的 `address_validator_` 显式使用 `shared_ptr<const http_client_address_validator>`；回调与配置只经 `configure(options)` 一个入口设置。
 - **隧道借用**：`http_tunnel::read()` 返回 `optional<span<const byte>>`，仅 `nullopt` 表示 EOF；非空视图有效至下一次 read 开始，留存内容须由调用方复制。
 - **通用 Upgrade**：调用方提供并转发子协议、扩展及握手字段；此入口只校验 HTTP 切换协定，不替调用方做 WebSocket 消息协商。成功后交付 101 之后已收到的原始字节，不解释消息帧；普通 `.send()` 仍不接受意外 101。
-- **Upgrade 协议选择**：`upgrade()` 总在 HTTP/1.1 上进行，复用已协商 HTTP/1.1 的空闲连接或新建仅报价 `http/1.1` 的连接，普通请求继续使用 h2 / h3；版本集合不含 HTTP/1.1 时返回 `protocol_unavailable`。WebSocket 客户端仍按 RFC 8441 / 9220 走所协商协议。
+- **Upgrade 协议选择**：`request.connect()` 总在 HTTP/1.1 上进行，复用已协商 HTTP/1.1 的空闲连接或新建仅报价 `http/1.1` 的连接，普通请求继续使用 h2 / h3；版本集合不含 HTTP/1.1 时返回 `protocol_unavailable`。WebSocket 客户端仍按 RFC 8441 / 9220 走所协商协议。
 - **放弃上传**：`exchange.body().abandon()` 只停止发送，请求内容保持不完整，`response()` 照常可读。HTTP/1 读完响应后关闭连接；HTTP/2 在完整响应后以 `RST_STREAM(NO_ERROR)` 只结束发送侧，HTTP/3 以 `RESET_STREAM(H3_NO_ERROR)` 只重置发送半流（RFC 9113 §8.1、RFC 9114 §4.1）。
 - **可写查询**：`exchange.body().writable()` 在内容已结束、已开始 `end()`、已 `abandon()`，或交换自身停止上传（提前收到完成交换的最终响应、或失败）后返回 `false`；据此停止泵送正文，不必以 `write()` 抛出的 `std::errc::operation_canceled` 区分原因。
 

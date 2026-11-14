@@ -374,9 +374,9 @@ task<void> delete_key_batch(const redis_session& redis, std::span<const std::str
     }
 }
 
-task<void> remove_keys(redis_session redis, std::vector<std::string> keys, request_io_metrics* io_metrics, operation_options options, stop_token shutdown) {
-    stop_group cancellation{options.stop_token_, std::move(shutdown)};
-    options.stop_token_ = cancellation.token();
+task<void> remove_keys(redis_session redis, std::vector<std::string> keys, request_io_metrics* io_metrics, operation_options caller_options, stop_token shutdown, stop_token request_stop) {
+    const linked_operation_options linked(caller_options, shutdown, request_stop);
+    const operation_options& options = linked.options();
     scoped_request_io_timer timer(io_metrics, request_io_kind::redis);
     const operation_deadline deadline_value(options.timeout_);
     auto deletion = delete_key_batch(redis, keys, options, deadline_value);
@@ -385,9 +385,9 @@ task<void> remove_keys(redis_session redis, std::vector<std::string> keys, reque
     co_await std::move(deletion);
 }
 
-task<void> clear_keys(redis_session redis, std::string pattern, request_io_metrics* io_metrics, operation_options options, stop_token shutdown) {
-    stop_group cancellation{options.stop_token_, std::move(shutdown)};
-    options.stop_token_ = cancellation.token();
+task<void> clear_keys(redis_session redis, std::string pattern, request_io_metrics* io_metrics, operation_options caller_options, stop_token shutdown, stop_token request_stop) {
+    const linked_operation_options linked(caller_options, shutdown, request_stop);
+    const operation_options& options = linked.options();
     scoped_request_io_timer timer(io_metrics, request_io_kind::redis);
     const operation_deadline deadline_value(options.timeout_);
     std::optional<redis_scan_cursor> cursor;
@@ -503,9 +503,9 @@ task<db_rows> db_query_cache_state::wrap(std::optional<std::chrono::milliseconds
 // hit, and a leader that ended without one sends it back to the cache, where
 // the first to miss again leads the next fill. Each worker fills a key at most
 // once at a time; other workers and processes fill it independently.
-task<db_rows> db_query_cache_state::query(std::string key, std::chrono::milliseconds duration, db_cache_query database, operation_options options, operation_deadline deadline) {
-    stop_group cancellation{options.stop_token_, stop_.token()};
-    options.stop_token_ = cancellation.token();
+task<db_rows> db_query_cache_state::query(std::string key, std::chrono::milliseconds duration, db_cache_query database, operation_options caller_options, operation_deadline deadline) {
+    const linked_operation_options linked(caller_options, stop_.token());
+    const operation_options& options = linked.options();
     const auto started = std::chrono::steady_clock::now();
     for (;;) {
         std::optional<std::string> bytes_value;
@@ -602,7 +602,7 @@ task<db_rows> db_query_cache_state::query(std::string key, std::chrono::millisec
 }
 
 // A cache id names every result shape a repository builder derived from it.
-task<void> db_query_cache_state::remove(std::span<const std::string_view> ids, request_io_metrics* io_metrics, operation_options options) {
+task<void> db_query_cache_state::remove(std::span<const std::string_view> ids, request_io_metrics* io_metrics, operation_options options, stop_token request_stop) {
     require_open();
     for (const auto id : ids) {
         if (id.empty()) {
@@ -615,31 +615,33 @@ task<void> db_query_cache_state::remove(std::span<const std::string_view> ids, r
         append_db_cache_id_keys(keys, prefix_, id);
     }
     unlist_fills(keys);
-    return remove_keys(redis_, std::move(keys), io_metrics, std::move(options), stop_.token());
+    return remove_keys(redis_, std::move(keys), io_metrics, std::move(options), stop_.token(), std::move(request_stop));
 }
 
-task<void> db_query_cache_state::clear(request_io_metrics* io_metrics, operation_options options) {
+task<void> db_query_cache_state::clear(request_io_metrics* io_metrics, operation_options options, stop_token request_stop) {
     require_open();
     std::string pattern;
     pattern.reserve(prefix_.size() + 1);
     pattern.append(prefix_);
     pattern.push_back('*');
     unlist_all_fills();
-    return clear_keys(redis_, std::move(pattern), io_metrics, std::move(options), stop_.token());
+    return clear_keys(redis_, std::move(pattern), io_metrics, std::move(options), stop_.token(), std::move(request_stop));
 }
 }  // namespace ruvia::detail
 
 namespace ruvia {
-db_query_result_cache::db_query_result_cache(detail::db_query_cache_state& state_value, operation_scope& scope, detail::request_io_metrics* io_metrics, operation_options options) noexcept :
+db_query_result_cache::db_query_result_cache(detail::db_query_cache_state& state_value, operation_scope& scope, detail::request_io_metrics* io_metrics, operation_options options, stop_token request_stop) noexcept :
     state_(&state_value),
     io_metrics_(io_metrics),
     options_(std::move(options)),
+    request_stop_(std::move(request_stop)),
     registration_(scope, this, &db_query_result_cache::expire_capability) {}
 
 db_query_result_cache::db_query_result_cache(const db_query_result_cache& other) noexcept :
     state_(other.state_),
     io_metrics_(other.io_metrics_),
     options_(other.options_),
+    request_stop_(other.request_stop_),
     registration_(other.registration_, this) {}
 
 void db_query_result_cache::expire_capability(void* target) noexcept {
@@ -647,13 +649,14 @@ void db_query_result_cache::expire_capability(void* target) noexcept {
     cache.state_ = nullptr;
     cache.io_metrics_ = nullptr;
     cache.options_ = {};
+    cache.request_stop_ = {};
 }
 task<void> db_query_result_cache::remove(std::span<const std::string_view> ids) const {
     registration_.require_active();
-    return make_scoped_operation(registration_.scope(), state_->remove(ids, io_metrics_, options_));
+    return make_scoped_operation(registration_.scope(), state_->remove(ids, io_metrics_, options_, request_stop_));
 }
 task<void> db_query_result_cache::clear() {
     registration_.require_active();
-    return make_scoped_operation(registration_.scope(), state_->clear(io_metrics_, options_));
+    return make_scoped_operation(registration_.scope(), state_->clear(io_metrics_, options_, request_stop_));
 }
 }  // namespace ruvia

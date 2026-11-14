@@ -234,12 +234,12 @@ public:
         co_return context.text("hello over http/3");
     }
     ruvia::task<ruvia::http_response> dial_authority(ruvia::context& context) {
-        context.draft().header("set-cookie", "logical=1; Domain=localhost; Path=/; Secure");
         const auto authority = context.req().authority();
         std::string text(authority.empty() ? context.req().header("host").value_or("") : authority);
         text.push_back('|');
         text.append(context.req().header("cookie").value_or(""));
-        co_return context.text(text);
+        const std::array cookie{ruvia::http_header_view{"set-cookie", "logical=1; Domain=localhost; Path=/; Secure"}};
+        co_return context.text(text, {.headers_ = cookie});
     }
     ruvia::task<ruvia::http_response> connection_hints(ruvia::context& context) {
         const std::array fields{ruvia::http_header_view("x-hint", "connection-controls")};
@@ -274,8 +274,8 @@ public:
             bytes += chunk->size();
         }
         const auto checksum = context.req().trailer("x-upload-checksum").value_or("missing");
-        context.draft().header("Trailer", "x-response-trailer");
-        auto& out = context.stream_text();
+        const std::array trailer_header{ruvia::http_header_view{"Trailer", "x-response-trailer"}};
+        auto& out = context.stream_text({.headers_ = trailer_header});
         if (co_await out.commit() == ruvia::stream_commit_result::completed) {
             co_return;
         }
@@ -576,7 +576,7 @@ ruvia::task<void> run_protocol_lane(ruvia::http_client_ref client, ruvia::http_p
             co_await ws.close();
         }
         if (round == 2) {
-            auto tunnel_res = co_await client.connect("echo.test:443").open();
+            auto tunnel_res = co_await client.connect("echo.test:443").connect();
             auto* tunnel = tunnel_res.tunnel();
             EXPECT_TRUE(tunnel != nullptr);
             if (tunnel != nullptr) {
@@ -590,7 +590,7 @@ ruvia::task<void> run_protocol_lane(ruvia::http_client_ref client, ruvia::http_p
                 EXPECT_EQ(echoed, msg);
             }
             if (expected_version != ruvia::http_protocol_version::http11) {
-                auto udp_res = co_await client.udp("/.well-known/masque/udp/echo.test/53/").open();
+                auto udp_res = co_await client.udp("/.well-known/masque/udp/echo.test/53/").connect();
                 auto* raw_tunnel = udp_res.tunnel();
                 EXPECT_TRUE(raw_tunnel != nullptr);
                 if (raw_tunnel != nullptr) {
@@ -675,7 +675,7 @@ ruvia::task<void> exercise_independent_informational(ruvia::event_loop loop, ruv
         }
     }});
     auto first = [&]() -> ruvia::task<void> {
-        auto response = co_await request.send();
+        auto response = co_await std::move(request).send();
         const auto text = co_await response.bytes();
         EXPECT_EQ(text.text(), "hints complete");
         completed = true;
@@ -791,7 +791,7 @@ ruvia::task<void> exercise_connection_controls(ruvia::event_loop loop, std::uint
                 EXPECT_EQ(text.text(), "uploaded:4:finish-race");
                 EXPECT_EQ(response.trailer("x-response-trailer"), std::optional<std::string_view>{"verified"});
                 stage = "tunnel-open";
-                auto connected = co_await client.connect("echo.test:443").open();
+                auto connected = co_await client.connect("echo.test:443").connect();
                 auto* tunnel = connected.tunnel();
                 EXPECT_NE(tunnel, nullptr);
                 if (!tunnel) {
@@ -813,7 +813,7 @@ ruvia::task<void> exercise_connection_controls(ruvia::event_loop loop, std::uint
         try {
             auto request = client.get("/connection-silent");
             request.configure({.timeouts_ = {.read_ = ruvia::http_client_timeout_override::after(10ms)}});
-            (void)co_await request.send();
+            (void)co_await std::move(request).send();
         } catch (const ruvia::http_client_error& error) {
             timed_out = error.code() == std::make_error_code(std::errc::timed_out);
             const auto* information = error.connection_info();
@@ -1161,7 +1161,7 @@ TEST(Ruvia, a_multi_worker_app_serves_http3_and_closes_it_on_stop) {
         auto client = connect(port, identity);
         EXPECT_TRUE(client.peer_settings().enable_connect_protocol_);
         EXPECT_TRUE(client.peer_settings().h3_datagram_);
-        const auto tunnel = client.start_tunnel(ruvia::http3_connect_request_head_view{.authority_ = "echo.test:443"});
+        const auto tunnel = client.start_tunnel(ruvia::http_connect_request_head_view{.authority_ = "echo.test:443"});
         EXPECT_EQ(client.wait_for_response_head(tunnel).status_, 200);
         const std::string payload(128 * 1024, 't');
         client.send_stream_data(tunnel, byte_view(payload), true);
@@ -1169,13 +1169,13 @@ TEST(Ruvia, a_multi_worker_app_serves_http3_and_closes_it_on_stop) {
         EXPECT_EQ(echo.body_, payload);
         EXPECT_TRUE(!echo.reset_error_);
         EXPECT_EQ(client.request("GET", "/hello").status_, 200);
-        const auto cancelled = client.start_tunnel(ruvia::http3_connect_request_head_view{.authority_ = "echo.test:443"});
+        const auto cancelled = client.start_tunnel(ruvia::http_connect_request_head_view{.authority_ = "echo.test:443"});
         EXPECT_EQ(client.wait_for_response_head(cancelled).status_, 200);
         client.reset_request(cancelled, ruvia::http3_error_code::request_cancelled);
         EXPECT_EQ(client.request("GET", "/hello").status_, 200);
 
         constexpr std::array websocket_fields{ruvia::http_header_view{"sec-websocket-version", "13"}};
-        const auto websocket = client.start_tunnel(ruvia::http3_extended_connect_request_head_view{.protocol_ = "websocket", .authority_ = "localhost", .target_ = "/websocket", .headers_ = websocket_fields});
+        const auto websocket = client.start_tunnel(ruvia::http_extended_connect_request_head_view{.protocol_ = "websocket", .authority_ = "localhost", .target_ = "/websocket", .headers_ = websocket_fields});
         const auto& head = client.wait_for_response_head(websocket);
         EXPECT_EQ(head.status_, 200);
         EXPECT_TRUE(!head.header("sec-websocket-accept"));
@@ -1195,7 +1195,7 @@ TEST(Ruvia, a_multi_worker_app_serves_http3_and_closes_it_on_stop) {
     }
 
     constexpr std::array udp_fields{ruvia::http_header_view{"capsule-protocol", "?1"}};
-    const ruvia::http3_extended_connect_request_head_view udp_head{.protocol_ = "connect-udp", .authority_ = "localhost", .target_ = "/.well-known/masque/udp/echo.test/53/", .headers_ = udp_fields};
+    const ruvia::http_extended_connect_request_head_view udp_head{.protocol_ = "connect-udp", .authority_ = "localhost", .target_ = "/.well-known/masque/udp/echo.test/53/", .headers_ = udp_fields};
     {
         auto client = connect(port, identity);
         const auto tunnel = client.start_tunnel(udp_head);

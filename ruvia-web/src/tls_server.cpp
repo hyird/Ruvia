@@ -31,6 +31,7 @@
 #include <openssl/params.h>
 #include <openssl/ssl.h>
 
+#include "asio_ip_address.h"
 #include "blocking_pool.h"
 #include "client_host_resolver.h"
 #include "crypto.h"

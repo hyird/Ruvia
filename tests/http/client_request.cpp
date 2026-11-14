@@ -1026,9 +1026,7 @@ using ruvia::http_client_request_view;
 using ruvia::http_client_resolved_redirect;
 using ruvia::http_origin_view;
 using ruvia::http_scheme;
-using ruvia::http_unique_header_status;
 using ruvia::is_http_redirect_status;
-using ruvia::lookup_unique_http_client_response_header;
 using ruvia::plan_http_client_redirect_request;
 using ruvia::resolve_http_client_redirect_target;
 
@@ -1146,20 +1144,24 @@ TEST(Ruvia, http_client_redirect_request_plan_owns_preserved_method) {
     EXPECT_TRUE(plan.content_disposition() == http_client_redirect_content_disposition::preserve);
 }
 
-TEST(Ruvia, http_client_response_header_lookup_distinguishes_empty_and_repeated) {
+TEST(Ruvia, http_client_response_head_unique_header_distinguishes_empty_and_repeated) {
+    using ruvia::unique_lookup_status;
     auto parsed = ruvia::test::parse_response("GET", "HTTP/1.1 302 Found\r\nLocation:\r\nContent-Length: 0");
     const auto& head = parsed.head_;
 
-    const auto empty = lookup_unique_http_client_response_header(head, "location");
-    EXPECT_TRUE(empty.status_ == http_unique_header_status::found);
+    const auto empty = head.unique_header("location");
+    EXPECT_TRUE(empty.status_ == unique_lookup_status::found);
     EXPECT_TRUE(empty.value_.empty());
 
-    const auto missing = lookup_unique_http_client_response_header(head, "missing");
-    EXPECT_TRUE(missing.status_ == http_unique_header_status::absent);
+    const auto missing = head.unique_header("missing");
+    EXPECT_TRUE(missing.status_ == unique_lookup_status::absent);
 
-    auto repeated_parsed = ruvia::test::parse_response("GET", "HTTP/1.1 302 Found\r\nLocation:\r\nLOCATION: /second\r\nContent-Length: 0");
-    const auto repeated = lookup_unique_http_client_response_header(repeated_parsed.head_, "Location");
-    EXPECT_TRUE(repeated.status_ == http_unique_header_status::repeated);
+    auto repeated_parsed = ruvia::test::parse_response("GET", "HTTP/1.1 302 Found\r\nLocation: /first\r\nLOCATION: /second\r\nContent-Length: 0");
+    const auto repeated = repeated_parsed.head_.unique_header("Location");
+    EXPECT_TRUE(repeated.status_ == unique_lookup_status::repeated);
+    EXPECT_TRUE(repeated.value_.empty());
+    // The singular getter keeps the first field line.
+    EXPECT_EQ(repeated_parsed.head_.header("location"), std::optional<std::string_view>("/first"));
 }
 
 TEST(Ruvia, http_client_authority_matches_typed_origin) {

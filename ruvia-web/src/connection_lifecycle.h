@@ -50,6 +50,7 @@
 #include "http_response.h"
 #include "http_server.h"
 #include "io_operation.h"
+#include "operation_options.h"
 #include "server_observation.h"
 #include "server_options.h"
 #include "stop_token.h"
@@ -155,11 +156,10 @@ public:
         if (!caller.is_current()) {
             throw std::logic_error("connection wait must run on its caller worker");
         }
-        stop_group stops(options.stop_token_, host_stop);
-        options.stop_token_ = stops.token();
+        const linked_operation_options linked(options, host_stop);
         auto state = std::make_shared<wait_state>(caller);
         operation_interrupt_source source;
-        operation_interrupt interrupt(source, caller, options, state.get(), [](void* target) noexcept {
+        operation_interrupt interrupt(source, caller, linked.options(), state.get(), [](void* target) noexcept {
             static_cast<wait_state*>(target)->changed_.notify();
         }, "wait_connections_closed");
         {

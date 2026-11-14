@@ -1031,6 +1031,56 @@ TEST(Ruvia, operation_timeout_overrides_only_tighten) {
     EXPECT_EQ(merged.timeout_, ruvia::operation_timeout(std::chrono::seconds(1)));
 }
 
+TEST(Ruvia, linked_operation_options_link_tokens_and_keep_the_timeout) {
+    using clock_type = ruvia::operation_timeout::clock_type;
+    ruvia::stop_source extra;
+    // No base token and one extra pass the extra token through.
+    {
+        const ruvia::linked_operation_options linked({}, extra.token());
+        EXPECT_EQ(linked.options().stop_token_, extra.token());
+        EXPECT_FALSE(linked.options().timeout_.has_value());
+    }
+    // A relative and an absolute timeout are kept unchanged.
+    {
+        const ruvia::linked_operation_options linked({.timeout_ = std::chrono::seconds(3)}, extra.token());
+        EXPECT_EQ(linked.options().timeout_, ruvia::operation_timeout(std::chrono::seconds(3)));
+    }
+    {
+        const auto deadline = clock_type::now() + std::chrono::seconds(3);
+        const ruvia::linked_operation_options linked({.timeout_ = ruvia::operation_timeout(deadline)}, extra.token());
+        EXPECT_EQ(linked.options().timeout_->deadline(), deadline);
+    }
+    // Either the base token or an extra token cancels the linked token.
+    {
+        ruvia::stop_source base;
+        ruvia::stop_source first;
+        ruvia::stop_source second;
+        const ruvia::linked_operation_options linked({.stop_token_ = base.token()}, first.token(), second.token());
+        EXPECT_FALSE(linked.options().stop_token_.stop_requested());
+        second.request_stop();
+        EXPECT_TRUE(linked.options().stop_token_.stop_requested());
+    }
+    {
+        ruvia::stop_source base;
+        ruvia::stop_source other;
+        const ruvia::linked_operation_options linked({.stop_token_ = base.token()}, other.token());
+        EXPECT_NE(linked.options().stop_token_, base.token());
+        base.request_stop();
+        EXPECT_TRUE(linked.options().stop_token_.stop_requested());
+    }
+    // Destruction unregisters the parents: a later parent stop no longer reaches the linked token.
+    ruvia::stop_source base;
+    ruvia::stop_source other;
+    ruvia::stop_token linked_token;
+    {
+        const ruvia::linked_operation_options linked({.stop_token_ = base.token()}, other.token());
+        linked_token = linked.options().stop_token_;
+    }
+    base.request_stop();
+    other.request_stop();
+    EXPECT_FALSE(linked_token.stop_requested());
+}
+
 TEST(Ruvia, timeout_duration_checks_the_original_integer_domain) {
     using wide_milliseconds = std::chrono::duration<std::uint64_t, std::milli>;
     constexpr wide_milliseconds wide(std::numeric_limits<std::uint64_t>::max());

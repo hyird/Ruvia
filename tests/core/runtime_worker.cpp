@@ -1318,8 +1318,8 @@ bool test_dispatch_and_affinity() {
     if (&first.io_context() != &first.executor().context()) {
         return false;
     }
-    asio::ip::tcp::socket tcp(first.worker().executor());
-    asio::ip::udp::socket udp(first.worker().executor());
+    asio::ip::tcp::socket tcp(first.executor());
+    asio::ip::udp::socket udp(first.executor());
     if (&tcp.get_executor().context() != &first.io_context() || &udp.get_executor().context() != &first.io_context()) {
         return false;
     }
@@ -1402,8 +1402,8 @@ bool test_external_event_loop_attachment() {
             return false;
         }
 
-        asio::ip::tcp::socket tcp(loop.worker().executor());
-        asio::ip::udp::socket udp(loop.worker().executor());
+        asio::ip::tcp::socket tcp(loop.executor());
+        asio::ip::udp::socket udp(loop.executor());
         if (&tcp.get_executor().context() != &io_context || &udp.get_executor().context() != &io_context) {
             return false;
         }
@@ -1873,15 +1873,9 @@ bool test_external_attachment_handles_context_destruction() {
     } catch (const std::logic_error&) {
         executor_rejected = true;
     }
-    bool worker_executor_rejected = false;
-    try {
-        static_cast<void>(loop.worker().executor());
-    } catch (const std::logic_error&) {
-        worker_executor_rejected = true;
-    }
     const bool post_rejected = loop.worker().post([] {}) == ruvia::post_status::worker_stopping;
     attachment.stop();
-    return io_context_rejected && executor_rejected && worker_executor_rejected && post_rejected && !attachment.valid() && !loop.worker().valid();
+    return io_context_rejected && executor_rejected && post_rejected && !attachment.valid() && !loop.worker().valid();
 }
 
 bool test_stopped_attachment_with_queued_post_handles_context_destruction() {

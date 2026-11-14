@@ -8,6 +8,7 @@
 #include <asio/error.hpp>
 #include <asio/ip/tcp.hpp>
 
+#include "asio_completion.h"
 #include "task.h"
 #include "timeout_duration.h"
 #include "worker_ref.h"
@@ -34,12 +35,6 @@ client_happy_eyeballs::~client_happy_eyeballs() {
     if (active_ != 0) {
         std::terminate();
     }
-}
-
-void client_happy_eyeballs::close_socket(asio::ip::tcp::socket& socket) noexcept {
-    std::error_code ignored;
-    (void)socket.cancel(ignored);
-    (void)socket.close(ignored);
 }
 
 void client_happy_eyeballs::close_active() noexcept {

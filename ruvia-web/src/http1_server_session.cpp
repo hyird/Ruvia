@@ -21,6 +21,7 @@
 #include <asio/write.hpp>
 #include <openssl/ssl.h>
 
+#include "asio_completion.h"
 #include "borrowed_text.h"
 #include "byte_view.h"
 #include "connection_lifecycle.h"
@@ -1697,7 +1698,7 @@ public:
     template <typename sink>
     friend task<void> response_stream_end_thunk(void*, std::span<const http_header_view>);
     template <typename sink>
-    friend task<timer_sleep_result> response_stream_sleep_thunk(void*, std::chrono::milliseconds, const stop_token&);
+    friend task<timer_sleep_result> response_stream_sleep_thunk(void*, timeout_duration, const stop_token&);
     template <typename sink>
     friend void response_stream_bind_context_thunk(void*, context*);
     template <typename sink>
@@ -1829,7 +1830,7 @@ private:
         }
     }
 
-    task<timer_sleep_result> sleep(std::chrono::milliseconds duration, const stop_token& stop_token_value) {
+    task<timer_sleep_result> sleep(timeout_duration duration, const stop_token& stop_token_value) {
         state_.ensure_body_allowed();
         co_return co_await sleep_for(worker_, duration, stop_token_value);
     }

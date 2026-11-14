@@ -28,6 +28,7 @@
 #include <asio/use_awaitable.hpp>
 #include <asio/write.hpp>
 
+#include "asio_completion.h"
 #include "blocking_pool.h"
 #include "content_decoding_fixture.h"
 #include "event_loop.h"
@@ -130,7 +131,7 @@ TEST(Ruvia, http1_response_on_a_closing_connection_discards_trailing_bytes) {
             EXPECT_EQ(std::string_view(reinterpret_cast<const char*>(bytes_value.bytes().data()), bytes_value.size()), "hello");
         }
         {
-            auto result = co_await client.client().connect("target.test:443").open();
+            auto result = co_await client.client().connect("target.test:443").connect();
             auto* response = result.response();
             EXPECT_TRUE(response != nullptr);
             if (response != nullptr) {
@@ -809,7 +810,7 @@ TEST(Ruvia, http_capsule_client_retains_payloads_across_reads_and_rejects_trunca
         const std::string client_url = std::move(std::string("http://127.0.0.1:").append(std::to_string(acceptor.local_endpoint().port())));
         ruvia::http_client client(worker.attachment_.loop(), local_http_client_config(client_url));
         auto operation = [&]() -> ruvia::task<void> {
-            auto result = co_await client.client().connect("target.test:443").open();
+            auto result = co_await client.client().connect("target.test:443").connect();
             if (result.tunnel() == nullptr) {
                 throw std::runtime_error("expected an accepted tunnel");
             }
@@ -862,7 +863,7 @@ TEST(Ruvia, http_client_scopes_cookies_to_the_origin_authority_for_tunnels) {
     peer.start();
     auto operation = [&]() -> ruvia::task<void> {
         const std::array fields{ruvia::http_header_view{"Capsule-Protocol", "?1"}};
-        auto result = co_await client.client().connect("proxy.test:8443").protocol("connect-udp").target("/.well-known/masque/udp/target.test/53/").headers(fields).open();
+        auto result = co_await client.client().connect("proxy.test:8443").protocol("connect-udp").target("/.well-known/masque/udp/target.test/53/").headers(fields).connect();
         EXPECT_TRUE(result.tunnel() == nullptr);
         if (auto* rejected = result.response()) {
             EXPECT_EQ(rejected->status().value(), std::uint16_t{407});

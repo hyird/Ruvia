@@ -306,7 +306,8 @@ struct http_client_upload_config final {
     timeout_duration continue_timeout_{1000};
 };
 
-// connect(...).open() and udp(...).open() select the protocol; this policy bounds
+// connect(...).connect(), udp(...).connect() and an HTTP/1.1 Upgrade request's
+// connect() select the protocol; this policy bounds
 // the size of one transport write, independently of Capsule payload limits.
 struct http_client_tunnel_config final {
     std::size_t max_chunk_bytes_{64 * 1024};

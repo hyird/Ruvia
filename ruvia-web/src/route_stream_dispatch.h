@@ -17,7 +17,7 @@
 #include <asio/buffer.hpp>
 #include <asio/write.hpp>
 
-#include "asio_bridge.h"
+#include "asio_completion.h"
 #include "borrowed_text.h"
 #include "callback_ref.h"
 #include "connection_lifecycle.h"
@@ -84,7 +84,7 @@ task<void> response_stream_end_thunk(void* target, std::span<const http_header_v
 }
 
 template <typename sink>
-task<timer_sleep_result> response_stream_sleep_thunk(void* target, std::chrono::milliseconds duration, const stop_token& stop_token_value) {
+task<timer_sleep_result> response_stream_sleep_thunk(void* target, timeout_duration duration, const stop_token& stop_token_value) {
     return static_cast<sink*>(target)->sleep(duration, stop_token_value);
 }
 
@@ -596,8 +596,8 @@ struct tunnel_upgrade_session_operation final {
     };
     std::optional<websocket_borrow> websocket_{};
 
-    // Commits the upgrade head the context's draft describes and opens the
-    // session over the transport that head hands over.
+    // Commits the upgrade head the context stages (accepted status plus
+    // policy) and opens the session over the transport that head hands over.
     [[nodiscard]] task<void> establish(context& context_value) {
         auto head_response = prepare_tunnel_upgrade_response_head(context_value, request_.protocol_version(), udp_, config_.datagrams_);
         std::optional<transport_type> transport;

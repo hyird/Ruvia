@@ -738,6 +738,8 @@ struct redis_owned_command final {
 struct redis_command_payload final {
     std::reference_wrapper<redis_pool> pool_;
     operation_options options_;
+    // The caller request's cancellation, linked with options_ at execution.
+    stop_token request_stop_;
     std::vector<redis_owned_command> commands_;
 };
 
@@ -933,8 +935,9 @@ public:
 private:
     friend class redis_session;
 
-    // `io_metrics` is the request's counter block, or null outside a request.
-    redis_batch(detail::redis_pool& pool, operation_options options, operation_scope& scope, detail::request_io_metrics* io_metrics) noexcept;
+    // `io_metrics` is the request's counter block, or null outside a request;
+    // `request_stop` is the caller request's cancellation, empty outside one.
+    redis_batch(detail::redis_pool& pool, operation_options options, stop_token request_stop, operation_scope& scope, detail::request_io_metrics* io_metrics) noexcept;
     void require_ready() const;
     [[nodiscard]] detail::redis_command_payload consume();
     void expire() noexcept;
@@ -952,6 +955,7 @@ private:
 
     detail::redis_pool* pool_;
     operation_options options_;
+    stop_token request_stop_;
     std::vector<detail::redis_owned_command> commands_;
     detail::request_io_metrics* io_metrics_;
     scoped_capability_registration registration_;
@@ -1145,11 +1149,14 @@ public:
 private:
     friend class redis_session;
 
-    redis_subscription(detail::redis_subscription_set& subscriptions, operation_scope& scope, operation_options options);
+    redis_subscription(detail::redis_subscription_set& subscriptions, operation_scope& scope, const operation_options& options, const stop_token& request_stop);
 
     static void expire_capability(void* target) noexcept;
     task<void> send(std::string_view command, std::span<const std::string_view> names, bool require_names);
 
+    // The user/request cancellation link the connection observes; declared
+    // first so it outlives the connection's registration on its token.
+    linked_operation_options cancellation_;
     std::unique_ptr<detail::redis_subscription_connection> connection_;
     // Declared after the connection so it unlinks before the connection closes.
     scoped_capability_registration registration_;
@@ -1167,7 +1174,9 @@ public:
     // Returns a request-scoped view whose policy is applied to every typed
     // command and inherited by pipelines and transactions created from it.
     // Empty tokens inherit; supplied states replace user cancellation. Timeout
-    // can only tighten. Accumulation requires a caller-owned stop_group.
+    // can only tighten. Accumulate with linked_operation_options. A
+    // request-bound handle links the request's cancellation into every
+    // operation; with_options() cannot replace it.
     [[nodiscard]] redis_session with_options(operation_options options) const;
 
     // Borrows the owning worker; an expired capability cannot expose it.
@@ -1480,6 +1489,9 @@ private:
     detail::redis_client_runtime* runtime_;
     detail::request_io_metrics* io_metrics_{nullptr};
     operation_options operation_options_;
+    // The caller request's cancellation, linked into every operation; empty
+    // outside a request.
+    stop_token request_stop_;
     scoped_capability_registration registration_;
 };
 

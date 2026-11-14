@@ -11,8 +11,6 @@
 #include <type_traits>
 #include <utility>
 
-#include <asio/io_context.hpp>
-
 #include "move_only_function.h"
 #include "worker_result.h"
 #include "worker_timer.h"
@@ -155,13 +153,6 @@ public:
     // owner keeps it alive for at least the worker's lifetime.
     [[nodiscard]] ruvia::blocking_pool* blocking_pool() const noexcept;
 
-    // Native I/O integration, not bounded business admission. The executor
-    // borrows the runtime's io_context: finish its operations before the
-    // runtime/attachment retires and never retain it beyond context destruction.
-    // Empty or detached worker refs throw std::logic_error; stopping workers still
-    // expose their executor so already admitted operations can finish.
-    [[nodiscard]] asio::io_context::executor_type executor() const;
-
     // Worker-affine timer registration. This stable worker_ref must outlive the
     // borrowed registration; destruction unregisters without a late callback.
     // Returns worker_stopping without storing the completion once this worker's
@@ -272,6 +263,8 @@ struct worker_ref_access {
     static void wait_for_reservations(const worker_ref& worker) noexcept;
     [[nodiscard]] static bool timers_stopping(const worker_ref& worker) noexcept;
     static void enable_external_runner(const worker_ref& worker) noexcept;
+    // The worker's dispatcher endpoint; null for an empty worker_ref.
+    [[nodiscard]] static worker_dispatcher* dispatcher(const worker_ref& worker) noexcept;
     // The worker whose event loop runs on the calling thread; empty elsewhere.
     [[nodiscard]] static worker_ref current() noexcept;
 };

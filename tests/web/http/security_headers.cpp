@@ -33,6 +33,7 @@
 #include <asio/write.hpp>
 
 #include "app.h"
+#include "asio_completion.h"
 #include "blocking_pool.h"
 #include "context.h"
 #include "controller.h"
@@ -58,10 +59,12 @@ using ruvia::xss_protection_header_policy;
 
 [[nodiscard]] ruvia::dispatch_response security_response(const security_headers_config& options = {}, std::string_view existing_frame_options = {}) {
     auto callback = [&](ruvia::context& ctx) -> ruvia::task<void> {
-        if (!existing_frame_options.empty()) {
-            ctx.draft().header("X-Frame-Options", existing_frame_options);
+        if (existing_frame_options.empty()) {
+            ctx.respond(ctx.text("ok"));
+        } else {
+            const std::array headers{ruvia::http_header_view{"X-Frame-Options", existing_frame_options}};
+            ctx.respond(ctx.text("ok", {.headers_ = headers}));
         }
-        ctx.respond(ctx.text("ok"));
         co_return;
     };
     ruvia::test_app app;
@@ -450,8 +453,7 @@ TEST(Ruvia, csrf_rejection_reaches_the_error_handler) {
     std::string seen_code{};
     app.on_error([seen = &seen_code](ruvia::context& c, ruvia::http_error_info error) -> ruvia::task<ruvia::http_response> {
         *seen = std::string(error.code());
-        c.draft().status(error.status());
-        co_return c.text("handled");
+        co_return c.text("handled", {.status_ = error.status()});
     });
     app.use<csrf_test::csrf_test_middleware>(&csrf);
     app.use<csrf_test::accepted_response>();
@@ -1151,13 +1153,13 @@ void exercise_client_connect(unsigned mode) {
             if (mode == 3) {
                 bool unavailable = false;
                 try {
-                    auto result_value = co_await client.client().connect("target.test:443").protocol("test-datagram").target("/datagrams").open();
+                    auto result_value = co_await client.client().connect("target.test:443").protocol("test-datagram").target("/datagrams").connect();
                 } catch (const ruvia::http_client_error& error) {
                     unavailable = error.code() == ruvia::make_error_code(ruvia::http_client_errc::protocol_unavailable);
                 }
                 EXPECT_TRUE(unavailable);
             } else {
-                auto result_value = co_await client.client().connect("target.test:443").open();
+                auto result_value = co_await client.client().connect("target.test:443").connect();
                 if (mode == 2) {
                     EXPECT_TRUE(!result_value.tunnel() && result_value.response());
                     if (!result_value.response()) {
@@ -1312,7 +1314,7 @@ TEST(Ruvia, http1_client_rejected_keep_alive_connect_retires_the_proxy_connectio
         ruvia::http_client client(attachment.loop(), {.base_url_ = client_url, .connection_limits_ = {.max_open_ = 1}, .request_timeout_ = std::chrono::seconds(5)});
         try {
             {
-                auto result_value = co_await client.client().connect("target.test:443").open();
+                auto result_value = co_await client.client().connect("target.test:443").connect();
                 EXPECT_TRUE(!result_value.tunnel() && result_value.response());
                 if (!result_value.response()) {
                     throw std::runtime_error("missing CONNECT rejection");

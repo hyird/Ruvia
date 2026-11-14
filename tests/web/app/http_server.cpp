@@ -23,6 +23,7 @@
 #include <asio/read.hpp>
 #include <asio/write.hpp>
 
+#include "asio_completion.h"
 #include "blocking_pool.h"
 #include "controller.h"
 #include "event_loop.h"
@@ -488,7 +489,8 @@ TEST(Ruvia, independent_server_ipv6_only_rejects_ipv4_and_mismatched_inherited_s
     const auto socket = inherited.release();
     auto attachment = ruvia::attach_event_loop(io);
     ruvia::http_server server(attachment.loop(), {.request_stream_ = &answer});
-    EXPECT_THROW((void)server.prepare_listener({.address_ = "::1", .ipv6_only_ = false, .http_ = port, .dispatch_ = ruvia::listener_dispatch::request_stream, .inherited_sockets_ = ruvia::listener_sockets{.http_ = {socket}}}), std::invalid_argument);
+    const std::array mismatched{ruvia::listen_config{.address_ = "::1", .ipv6_only_ = false, .http_ = port, .dispatch_ = ruvia::listener_dispatch::request_stream, .inherited_sockets_ = ruvia::listener_sockets{.http_ = {socket}}}};
+    EXPECT_THROW((void)server.prepare_listeners(mismatched), std::invalid_argument);
     asio::ip::tcp::acceptor released(io);
     released.open(asio::ip::tcp::v6());
     released.set_option(asio::ip::v6_only(true));
@@ -497,13 +499,15 @@ TEST(Ruvia, independent_server_ipv6_only_rejects_ipv4_and_mismatched_inherited_s
         co_await server.start();
         bool rejected = false;
         try {
-            auto invalid = co_await server.prepare_listener({.address_ = "127.0.0.1", .ipv6_only_ = true, .http_ = port, .dispatch_ = ruvia::listener_dispatch::request_stream});
+            const std::array ipv4{ruvia::listen_config{.address_ = "127.0.0.1", .ipv6_only_ = true, .http_ = port, .dispatch_ = ruvia::listener_dispatch::request_stream}};
+            auto invalid = co_await server.prepare_listeners(ipv4);
         } catch (const std::invalid_argument&) {
             rejected = true;
         }
         EXPECT_TRUE(rejected);
         released.listen();
-        auto matching = co_await server.prepare_listener({.address_ = "::1", .ipv6_only_ = true, .http_ = port, .dispatch_ = ruvia::listener_dispatch::request_stream, .inherited_sockets_ = ruvia::listener_sockets{.http_ = {released.release()}}});
+        const std::array inherited_config{ruvia::listen_config{.address_ = "::1", .ipv6_only_ = true, .http_ = port, .dispatch_ = ruvia::listener_dispatch::request_stream, .inherited_sockets_ = ruvia::listener_sockets{.http_ = {released.release()}}}};
+        auto matching = co_await server.prepare_listeners(inherited_config);
         co_await std::move(matching).activate();
         const std::string origin = "http://[::1]:" + std::to_string(port);
         ruvia::http_client client(attachment.loop(), {.base_url_ = origin});
@@ -538,7 +542,8 @@ TEST(Ruvia, independent_server_ipv6_only_validates_inherited_quic_socket_before_
         bool rejected = false;
         std::exception_ptr failure;
         try {
-            auto prepared = co_await server.prepare_listener({.address_ = "::", .ipv6_only_ = true, .https_ = endpoint.port(), .http3_ = endpoint.port(), .tls_ = {.identity_ = {.certificate_chain_file_ = identity.ca_file_, .private_key_file_ = identity.private_key_file()}}, .dispatch_ = ruvia::listener_dispatch::request_stream, .inherited_sockets_ = ruvia::listener_sockets{.http3_ = {socket.release()}}});
+            const std::array quic{ruvia::listen_config{.address_ = "::", .ipv6_only_ = true, .https_ = endpoint.port(), .http3_ = endpoint.port(), .tls_ = {.identity_ = {.certificate_chain_file_ = identity.ca_file_, .private_key_file_ = identity.private_key_file()}}, .dispatch_ = ruvia::listener_dispatch::request_stream, .inherited_sockets_ = ruvia::listener_sockets{.http3_ = {socket.release()}}}};
+            auto prepared = co_await server.prepare_listeners(quic);
         } catch (const std::invalid_argument&) {
             rejected = true;
         } catch (...) {
@@ -676,11 +681,8 @@ ruvia::task<void> expect_file_responses(ruvia::http_client& client, std::string_
     EXPECT_NE(parts.text().find(bytes.substr(90000, 10)), std::string_view::npos);
 }
 
-void metadata(ruvia::request_stream& stream) {
-    // A default-status draft must not replace the file factory's 206 or 304.
-    stream.draft().header("x-file", "retained");
-    stream.draft().header("set-cookie", "file=retained; Path=/");
-}
+// A default-status head must not replace the file factory's 206 or 304.
+const std::array<ruvia::http_header_view, 2> metadata_headers{{{"x-file", "retained"}, {"set-cookie", "file=retained; Path=/"}}};
 
 }  // namespace request_stream_files_test
 
@@ -692,10 +694,10 @@ TEST(Ruvia, independent_request_stream_submits_complete_file_and_multipart_respo
     const auto bytes = representation();
     write_file(path, bytes);
     with_server([&](ruvia::request_stream& stream) -> ruvia::task<void> {
-        metadata(stream);
+        const ruvia::response_options metadata{.headers_ = metadata_headers};
         auto caller_path = path;
         std::string type = "application/octet-stream";
-        auto pending = stream.file({.path_ = caller_path, .content_type_ = type});
+        auto pending = stream.file({.path_ = caller_path, .content_type_ = type}, metadata);
         caller_path = directory.path() / "missing";
         type = "invalid/later";
         auto response = co_await std::move(pending);
@@ -722,17 +724,17 @@ TEST(Ruvia, independent_request_stream_static_root_rejects_paths_and_changed_ide
     write_file(replacement, std::string(bytes.size(), 'z'));
     ruvia::static_root root(directory.path(), {.default_content_type_ = "application/octet-stream", .file_types_ = {.kind_ = ruvia::static_file_type_policy::kind::all}});
     with_server([&](ruvia::request_stream& stream) -> ruvia::task<void> {
-        metadata(stream);
+        const ruvia::response_options metadata{.headers_ = metadata_headers};
         const auto target = stream.request().path();
         if (target == "/deny") {
-            stream.respond(co_await stream.static_file(root, {.relative_path_ = "../file.bin"}));
+            stream.respond(co_await stream.static_file(root, {.relative_path_ = "../file.bin"}, metadata));
         } else if (target == "/absolute") {
-            stream.respond(co_await stream.static_file(root, {.relative_path_ = "/file.bin"}));
+            stream.respond(co_await stream.static_file(root, {.relative_path_ = "/file.bin"}, metadata));
         } else if (target == "/unindexed") {
-            stream.respond(co_await stream.static_file(root, {.relative_path_ = "later.bin"}));
+            stream.respond(co_await stream.static_file(root, {.relative_path_ = "later.bin"}, metadata));
         } else {
             std::string relative = "file.bin";
-            auto pending = stream.static_file(root, {.relative_path_ = relative});
+            auto pending = stream.static_file(root, {.relative_path_ = relative}, metadata);
             relative = "missing.bin";
             stream.respond(co_await std::move(pending));
         }
@@ -834,7 +836,7 @@ TEST(Ruvia, independent_request_stream_revalidates_open_files_before_sending_the
             if (std::string_view(target).find("multiple") != std::string_view::npos) {
                 request.header("range", "bytes=0-9,90000-90009");
             }
-            auto response = co_await request.send();
+            auto response = co_await std::move(request).send();
             EXPECT_EQ(response.status(), ruvia::http_status::internal_server_error);
             EXPECT_FALSE(response.header("content-range").has_value());
             const auto body = co_await response.bytes();
@@ -891,7 +893,7 @@ TEST(Ruvia, independent_request_stream_response_forms_are_mutually_exclusive_and
                 request.header("sec-websocket-key", "dGhlIHNhbXBsZSBub25jZQ==");
                 request.header("sec-websocket-version", "13");
             }
-            auto response = co_await request.send();
+            auto response = co_await std::move(request).send();
             EXPECT_EQ(response.status(), ruvia::http_status::conflict);
             EXPECT_EQ(response.header("x-selected"), std::optional<std::string_view>("retained"));
             const auto body = co_await response.bytes();

@@ -67,17 +67,17 @@ void exercise_client(bool reset_peer, bool secure = false) {
             while (!outbound.empty()) {
                 const auto count = std::min<std::size_t>(outbound.size(), 16384);
                 const auto result_value = connection.submit_data(1, std::string_view(outbound.data(), count), ruvia::http2_end_stream::keep_open, count);
-                EXPECT_TRUE(result_value.status_ == ruvia::http2_data_submit_status::complete || result_value.status_ == ruvia::http2_data_submit_status::backpressured);
+                EXPECT_TRUE(result_value.status_ == ruvia::http_data_submit_status::complete || result_value.status_ == ruvia::http_data_submit_status::backpressured);
                 outbound.erase(0, result_value.consumed_bytes_);
-                if (result_value.status_ != ruvia::http2_data_submit_status::complete) {
+                if (result_value.status_ != ruvia::http_data_submit_status::complete) {
                     break;
                 }
             }
             if (finish_value && outbound.empty() && !ended) {
                 const auto result_value = connection.submit_data(1, {}, ruvia::http2_end_stream::end_stream, 0);
-                EXPECT_TRUE(result_value.status_ == ruvia::http2_data_submit_status::complete);
+                EXPECT_TRUE(result_value.status_ == ruvia::http_data_submit_status::complete);
                 EXPECT_EQ(result_value.consumed_bytes_, std::size_t{0});
-                ended = result_value.status_ == ruvia::http2_data_submit_status::complete;
+                ended = result_value.status_ == ruvia::http_data_submit_status::complete;
             }
             if (connection.wants_write()) {
                 ruvia::test::drain_output(connection, wire);
@@ -105,7 +105,7 @@ void exercise_client(bool reset_peer, bool secure = false) {
                         }
                         websocket.emplace(websocket_input, ruvia::websocket_connection_options{.compression_ = negotiated->compression()});
                         if (reset_peer) {
-                            EXPECT_TRUE(connection.submit_reset(1, ruvia::http2_error_code::cancel) == ruvia::http2_submit_status::accepted);
+                            EXPECT_TRUE(connection.submit_reset(1, ruvia::http2_error_code::cancel) == ruvia::http_submit_status::accepted);
                         }
                         request_lease.emplace(std::move(*request));
                     } else if (auto* data = event->tunnel_data()) {
@@ -280,24 +280,24 @@ void exercise_closing_peer(closing_peer behavior) {
             if (behavior != closing_peer::no_close && behavior != closing_peer::no_close_after_end && behavior != closing_peer::end_without_close) {
                 const auto close = websocket->output_plan();
                 EXPECT_TRUE(!close.bytes().empty());
-                EXPECT_TRUE(connection.submit_data(1, close.bytes(), ruvia::http2_end_stream::keep_open, 65535).status_ == ruvia::http2_data_submit_status::complete);
+                EXPECT_TRUE(connection.submit_data(1, close.bytes(), ruvia::http2_end_stream::keep_open, 65535).status_ == ruvia::http_data_submit_status::complete);
                 (void)websocket->consume_output(close.bytes().size());
             }
             if (behavior == closing_peer::clean_release || behavior == closing_peer::end_without_close || behavior == closing_peer::no_close_after_end || behavior == closing_peer::error_after_end) {
-                EXPECT_TRUE(connection.submit_data(1, {}, ruvia::http2_end_stream::end_stream, 65535).status_ == ruvia::http2_data_submit_status::complete);
+                EXPECT_TRUE(connection.submit_data(1, {}, ruvia::http2_end_stream::end_stream, 65535).status_ == ruvia::http_data_submit_status::complete);
             }
             // Publish the DATA/END_STREAM before releasing the real server lease.
             // Its half-open retirement emits NO_ERROR, in the same socket write.
             ruvia::test::drain_output(connection, output);
             if (behavior == closing_peer::clean_release || behavior == closing_peer::no_close || behavior == closing_peer::no_close_after_end) {
                 if (behavior == closing_peer::no_close) {
-                    EXPECT_TRUE(connection.submit_reset(1, ruvia::http2_error_code::no_error) == ruvia::http2_submit_status::accepted);
+                    EXPECT_TRUE(connection.submit_reset(1, ruvia::http2_error_code::no_error) == ruvia::http_submit_status::accepted);
                 }
                 EXPECT_TRUE(connection.release(std::move(*request)) == ruvia::http2_server_request_release_status::released);
                 released_request = true;
             } else if (behavior != closing_peer::end_without_close) {
                 const auto error = behavior == closing_peer::cancel_after_close ? ruvia::http2_error_code::cancel : ruvia::http2_error_code::protocol_error;
-                EXPECT_TRUE(connection.submit_reset(1, error) == ruvia::http2_submit_status::accepted);
+                EXPECT_TRUE(connection.submit_reset(1, error) == ruvia::http_submit_status::accepted);
             }
             std::string retirement{};
             ruvia::test::drain_output(connection, retirement);
@@ -453,7 +453,7 @@ void exercise_handshake_end(handshake_end mode) {
                         EXPECT_TRUE(websocket.submit_close(ruvia::websocket_close_status::normal_closure, "bye") == ruvia::websocket_close_submit_status::accepted);
                         const auto close = websocket.output_plan();
                         const auto end_flag = mode == handshake_end::close_without_end_stream ? ruvia::http2_end_stream::keep_open : ruvia::http2_end_stream::end_stream;
-                        EXPECT_TRUE(connection.submit_data(head->stream_id(), close.bytes(), end_flag, 65535).status_ == ruvia::http2_data_submit_status::complete);
+                        EXPECT_TRUE(connection.submit_data(head->stream_id(), close.bytes(), end_flag, 65535).status_ == ruvia::http_data_submit_status::complete);
                     }
                     request.emplace(std::move(*head));
                 }

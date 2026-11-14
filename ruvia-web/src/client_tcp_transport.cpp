@@ -21,7 +21,7 @@
 #include <openssl/bio.h>
 #include <openssl/ssl.h>
 
-#include "asio_bridge.h"
+#include "asio_completion.h"
 #include "asio_ip_address.h"
 #include "client_happy_eyeballs.h"
 #include "client_host_resolver.h"

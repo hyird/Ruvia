@@ -374,8 +374,9 @@ void redis_subscription_set::unlink(redis_subscription_connection& connection) n
 
 namespace ruvia {
 
-redis_subscription::redis_subscription(detail::redis_subscription_set& subscriptions, operation_scope& scope, operation_options options) :
-    connection_(subscriptions.open(std::move(options))),
+redis_subscription::redis_subscription(detail::redis_subscription_set& subscriptions, operation_scope& scope, const operation_options& options, const stop_token& request_stop) :
+    cancellation_(options, request_stop),
+    connection_(subscriptions.open(cancellation_.options())),
     registration_(scope, this, &redis_subscription::expire_capability) {}
 
 redis_subscription::~redis_subscription() = default;

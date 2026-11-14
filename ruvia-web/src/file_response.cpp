@@ -274,7 +274,7 @@ struct file_validators final {
     return validators;
 }
 
-[[nodiscard]] http_representation_response_plan plan_file_representation(const context& context_value, const file_response_source& source_value, const file_validators& validators) {
+[[nodiscard]] http_representation_response_plan plan_file_representation(const context& context_value, const file_response_source& source_value, const file_validators& validators, http_status_code normal_status) {
     return plan_http_representation_response(detail::context_access::request(context_value),
         http_selected_representation_metadata{
             .length_ = source_value.size_,
@@ -286,7 +286,7 @@ struct file_validators final {
             .content_coded_ = source_value.content_coding_ != http_content_coding::identity,
         },
         http_representation_response_options{
-            .normal_status_ = detail::context_access::response_status(context_value),
+            .normal_status_ = normal_status,
             .range_policy_ = source_value.range_requests_ == static_range_request_policy::honor ? http_range_request_policy::honor_byte_ranges : http_range_request_policy::ignore,
         });
 }
@@ -297,9 +297,10 @@ struct file_validators final {
 // built.
 class file_response_plan final {
 public:
-    file_response_plan(const context& context_value, const file_response_source& source_value) :
+    // `normal_status` is the status a full-body answer sends.
+    file_response_plan(const context& context_value, const file_response_source& source_value, http_status_code normal_status) :
         validators_(compute_file_validators(source_value, etag_storage_, last_modified_storage_)),
-        representation_(plan_file_representation(context_value, source_value, validators_)),
+        representation_(plan_file_representation(context_value, source_value, validators_, normal_status)),
         head_(detail::context_access::request(context_value).known_method() == http_known_method::head) {}
 
     file_response_plan(const file_response_plan&) = delete;
@@ -379,8 +380,13 @@ void add_file_headers(http_response& response, const file_response_source& sourc
     return plan.authorized_by_if_range() ? file_header_set::if_range_partial : file_header_set::full;
 }
 
-void apply_file_response_state(context& context_value, const file_response_source& source_value, http_response& response, std::optional<http_status_code> status_code) {
-    detail::context_access::apply_response_state(context_value, response, status_code);
+// `head` carries the caller's response_options; its fields apply over the file
+// fields, and `status_code` is the status the plan settled.
+void apply_file_response_state(const http_response& head, const file_response_source& source_value, http_response& response, http_status_code status_code) {
+    response.status(status_code);
+    if (!head.headers().empty()) {
+        response.transfer_headers_from(head, http_response_header_transfer::apply);
+    }
     // Declare the negotiation dimension after context response metadata is
     // applied. A caller-provided Vary value must be merged, not allowed to
     // overwrite Accept-Encoding and make differently encoded variants share
@@ -391,27 +397,27 @@ void apply_file_response_state(context& context_value, const file_response_sourc
     }
 }
 
-[[nodiscard]] http_response make_not_modified_response(context& context_value, const file_response_source& source_value, const file_validators& validators, http_status_code status_code) {
+[[nodiscard]] http_response make_not_modified_response(const http_response& head, const file_response_source& source_value, const file_validators& validators, http_status_code status_code) {
     http_response response;
     add_file_headers(response, source_value, validators, file_header_set::not_modified);
-    apply_file_response_state(context_value, source_value, response, status_code);
+    apply_file_response_state(head, source_value, response, status_code);
     return response;
 }
 
-[[nodiscard]] http_response make_full_file_response(context& context_value, const file_response_source& source_value, file_response_body_source& body, const file_validators& validators, std::optional<http_status_code> status_code) {
+[[nodiscard]] http_response make_full_file_response(const http_response& head, const file_response_source& source_value, file_response_body_source& body, const file_validators& validators, http_status_code status_code) {
     http_response response;
     add_file_headers(response, source_value, validators);
     body.set_full_body(response, source_value.size_);
-    apply_file_response_state(context_value, source_value, response, status_code);
+    apply_file_response_state(head, source_value, response, status_code);
     return response;
 }
 
-[[nodiscard]] http_response make_multipart_response(context& context_value, const file_response_source& source_value, file_response_body_source& body, const file_validators& validators, const http_byte_range_set& ranges, file_header_set header_set) {
+[[nodiscard]] http_response make_multipart_response(const http_response& head, const file_response_source& source_value, file_response_body_source& body, const file_validators& validators, const http_byte_range_set& ranges, file_header_set header_set) {
     std::array<char, detail::secure_token_size> boundary_token;
     const auto token = detail::generate_secure_token(boundary_token);
     http_response response;
     add_file_headers(response, source_value, validators, header_set, false);
-    apply_file_response_state(context_value, source_value, response, http_status::partial_content);
+    apply_file_response_state(head, source_value, response, http_status::partial_content);
     const auto media_type = response.header("Content-Type");
     const auto selected_media_type = media_type.value_or(source_value.content_type_);
     auto multipart_plan = make_http_multipart_byte_range_plan(ranges, source_value.size_, selected_media_type, token);
@@ -428,34 +434,34 @@ void apply_file_response_state(context& context_value, const file_response_sourc
 
 // Builds the response `planned` selected. An indexed file behind a response
 // that sends none of its bytes was already checked by its open.
-[[nodiscard]] http_response make_file_response(context& context_value, const file_response_source& source_value, file_response_body_source& body, const file_response_plan& planned) {
+[[nodiscard]] http_response make_file_response(const http_response& head, const file_response_source& source_value, file_response_body_source& body, const file_response_plan& planned) {
     const auto& validators = planned.validators();
     const auto& plan = planned.representation();
     if (plan.precondition_failed()) {
         throw http_error({.status_ = plan.status(), .code_ = "precondition_failed", .message_ = "file precondition failed"});
     }
     if (plan.not_modified()) {
-        return make_not_modified_response(context_value, source_value, validators, plan.status());
+        return make_not_modified_response(head, source_value, validators, plan.status());
     }
     if (plan.range_unsatisfiable()) {
         http_response response;
         response.content_range_unsatisfied(source_value.size_);
         add_file_headers(response, source_value, validators, file_header_set::range_unsatisfied);
-        apply_file_response_state(context_value, source_value, response, plan.status());
+        apply_file_response_state(head, source_value, response, plan.status());
         return response;
     }
     if (const auto* ranges = plan.multipart_ranges()) {
-        return make_multipart_response(context_value, source_value, body, validators, *ranges, partial_file_header_set(plan));
+        return make_multipart_response(head, source_value, body, validators, *ranges, partial_file_header_set(plan));
     }
     if (const auto* range = plan.partial()) {
         http_response response;
         add_file_headers(response, source_value, validators, partial_file_header_set(plan));
         response.content_range(range->offset_, range->length_, source_value.size_);
         body.set_body(response, source_value.size_, range->offset_, range->length_);
-        apply_file_response_state(context_value, source_value, response, plan.status());
+        apply_file_response_state(head, source_value, response, plan.status());
         return response;
     }
-    return make_full_file_response(context_value, source_value, body, validators, plan.status());
+    return make_full_file_response(head, source_value, body, validators, plan.status());
 }
 
 [[nodiscard]] http_error file_not_found_error() {
@@ -465,8 +471,8 @@ void apply_file_response_state(context& context_value, const file_response_sourc
 // context::file once its inputs are owned: `native_path` in the process
 // resource, since it travels to the pool thread, and `content_type` in the
 // request pool. An empty `content_type` selects the type guessed from the
-// path.
-[[nodiscard]] task<http_response> serve_file(context& context_value, http_native_path_string_type native_path, std::string content_type) {
+// path. `head` carries the caller's response_options.
+[[nodiscard]] task<http_response> serve_file(context& context_value, http_native_path_string_type native_path, std::string content_type, http_response head) {
     const auto content_type_value = content_type.empty() ? detail::guess_static_file_content_type_from_path_view(http_native_path_view_type(native_path)) : std::string_view(content_type);
     // Open once, on the blocking pool: the response is framed from this
     // handle's metadata, and the body comes from the same handle, so no path
@@ -494,18 +500,16 @@ void apply_file_response_state(context& context_value, const file_response_sourc
         .content_coding_ = http_content_coding::identity,
         .negotiates_encoding_ = false,
     };
-    const file_response_plan planned(context_value, source_value);
+    const file_response_plan planned(context_value, source_value, head.status());
     auto body = file_response_body_source::file(file_response_path(opened.path_, snapshot.identity_, std::move(opened.file_.handle_)));
-    auto response = make_file_response(context_value, source_value, body, planned);
-    detail::context_access::discard_draft(context_value);
-    co_return response;
+    co_return make_file_response(head, source_value, body, planned);
 }
 
 // static_file once its representation is selected. `served` and `base_entry`
 // view `root`'s snapshot, which the caller keeps alive until this completes;
 // `content_type` is owned in the request pool, and an empty one selects the
-// base entry's type.
-[[nodiscard]] task<http_response> serve_static_file(context& context_value, const static_root& root, static_file_representation served, detail::static_root_entry_view base_entry, std::string content_type) {
+// base entry's type. `head` carries the caller's response_options.
+[[nodiscard]] task<http_response> serve_static_file(context& context_value, const static_root& root, static_file_representation served, detail::static_root_entry_view base_entry, std::string content_type, http_response head) {
     const auto& served_entry = served.entry();
     const auto* const memory_variant = served.memory_variant();
     // A document-root snapshot keeps small files' bytes; they describe exactly
@@ -527,7 +531,7 @@ void apply_file_response_state(context& context_value, const file_response_sourc
         // static_file negotiates the representation by Accept-Encoding.
         .negotiates_encoding_ = true,
     };
-    const file_response_plan planned(context_value, source_value);
+    const file_response_plan planned(context_value, source_value, head.status());
 
     // The indexed file is opened beneath its root on the blocking pool. One
     // that cannot be opened is gone or no longer where the index found it,
@@ -545,26 +549,25 @@ void apply_file_response_state(context& context_value, const file_response_sourc
         : resident_bytes != nullptr
         ? file_response_body_source::bytes_value(*resident_bytes)
         : file_response_body_source::file(file_response_path(http_native_path_view_type(served_entry.file_path()), served_entry.identity(), std::move(opened)));
-    auto response = make_file_response(context_value, source_value, body, planned);
-    detail::context_access::discard_draft(context_value);
-    co_return response;
+    co_return make_file_response(head, source_value, body, planned);
 }
 
 }  // namespace
 
 // Not a coroutine: the options are owned before the task is returned, so a
-// stored task never reads the caller's path or content type.
-task<http_response> context::file(file_response_options options) {
+// stored task never reads the caller's path, content type or head.
+task<http_response> context::file(file_response_options options, response_options head) {
     http_native_path_string_type native_path;
     if (!assign_native_file_path(options.path_, native_path)) {
         throw file_not_found_error();
     }
-    return serve_file(*this, std::move(native_path), std::string(options.content_type_.view()));
+    auto head_response = detail::make_response(head);
+    return serve_file(*this, std::move(native_path), std::string(options.content_type_.view()), std::move(head_response));
 }
 
-// Not a coroutine: the path is resolved and the content type owned before the
-// task is returned; only `root` stays borrowed.
-task<http_response> context::static_file(const static_root& root, static_file_response_options options) {
+// Not a coroutine: the path is resolved and the content type and head owned
+// before the task is returned; only `root` stays borrowed.
+task<http_response> context::static_file(const static_root& root, static_file_response_options options, response_options head) {
     // relative_path_ is a decoded file path -- a wildcard capture from
     // req().param("*") is passed as is -- so it is never percent-decoded here:
     // a second decode would turn "%252E%252E" into a ".." no route or path
@@ -578,10 +581,10 @@ task<http_response> context::static_file(const static_root& root, static_file_re
         throw file_not_found_error();
     }
     const auto mode = services().precompressed_static_files() ? detail::static_file_selection_mode::precompressed : detail::static_file_selection_mode::identity_only;
-    return detail::context_access::static_file_resolved(*this, root, relative, options.content_type_.view(), *entry_value, mode);
+    return detail::context_access::static_file_resolved(*this, root, relative, options.content_type_.view(), *entry_value, mode, detail::make_response(head));
 }
 
-task<http_response> detail::context_access::static_file_resolved(context& context_value, const static_root& root, std::string_view relative, std::string_view content_type_value, detail::static_root_entry_view base_entry, detail::static_file_selection_mode mode) {
+task<http_response> detail::context_access::static_file_resolved(context& context_value, const static_root& root, std::string_view relative, std::string_view content_type_value, detail::static_root_entry_view base_entry, detail::static_file_selection_mode mode, http_response head) {
     // Serve a precompressed variant when the client accepts one; the bytes and
     // validators come from the variant, the Content-Type from the base entry.
     // Admission already folded Accept-Encoding; only a context created outside
@@ -598,7 +601,7 @@ task<http_response> detail::context_access::static_file_resolved(context& contex
     if (!served.has_value()) {
         throw http_error(detail::http_not_acceptable_coding_error());
     }
-    return serve_static_file(context_value, root, *served, base_entry, std::string(content_type_value));
+    return serve_static_file(context_value, root, *served, base_entry, std::string(content_type_value), std::move(head));
 }
 
 }  // namespace ruvia

@@ -107,19 +107,19 @@ void http2_connection::commit_connect_response_head(http2_stream_state& stream, 
     flush_session();
 }
 
-std::optional<http2_response_head_submit_error> http2_connection::response_head_admission_error(const http2_stream_state* stream, http_status_code status) const noexcept {
+std::optional<http_response_head_error> http2_connection::response_head_admission_error(const http2_stream_state* stream, http_status_code status) const noexcept {
     if (stream == nullptr) {
-        return http2_response_head_submit_error::closed;
+        return http_response_head_error::closed;
     }
     // A 2xx answer to a pending CONNECT opens the tunnel; only the CONNECT and
     // WebSocket handshake submissions commit one.
-    if (role_ != http2_role::server || !http2_remote_final_head_decoded(*stream) || stream->local_send().head_pending() == nullptr || (status.is_successful() && stream->tunnel().pending() != nullptr)) {
-        return http2_response_head_submit_error::invalid_state;
+    if (role_ != http_connection_role::server || !http2_remote_final_head_decoded(*stream) || stream->local_send().head_pending() == nullptr || (status.is_successful() && stream->tunnel().pending() != nullptr)) {
+        return http_response_head_error::invalid_state;
     }
     // RFC 9113 §8.4: a pushed response needs a slot under the client's
     // SETTINGS_MAX_CONCURRENT_STREAMS.
     if (stream->push_reservation() == http2_push_reservation::local && active_local_request_streams_ >= peer_setting(NGHTTP2_SETTINGS_MAX_CONCURRENT_STREAMS)) {
-        return http2_response_head_submit_error::peer_stream_limit_reached;
+        return http_response_head_error::peer_stream_limit_reached;
     }
     return std::nullopt;
 }
@@ -150,42 +150,42 @@ bool http2_connection::commit_final_response_head(http2_stream_state& stream, co
     return true;
 }
 
-std::variant<http_buffered_response_write_plan, http2_response_head_submit_error> http2_connection::submit_response_head(std::uint32_t stream_id, const http_response& response, http_buffered_response_write_plan write_plan) {
+std::variant<http_buffered_response_write_plan, http_response_head_error> http2_connection::submit_response_head(std::uint32_t stream_id, const http_response& response, http_buffered_response_write_plan write_plan) {
     auto* stream = find_outbound_stream(stream_id);
     if (const auto error = response_head_admission_error(stream, response.status())) {
         return *error;
     }
     if (write_plan.body_plan().request_method() != stream->request_known_method() || !write_plan.matches_response(response)) {
-        return http2_response_head_submit_error::response_plan_mismatch;
+        return http_response_head_error::response_plan_mismatch;
     }
     if (http_binary_final_response_control_plan(response).has_value()) {
-        return http2_response_head_submit_error::invalid_message;
+        return http_response_head_error::invalid_message;
     }
     const auto head_plan_result = http_framed_buffered_response_head_plan(write_plan, response);
     const auto* head_plan = std::get_if<http_framed_response_head_plan>(&head_plan_result);
     if (head_plan == nullptr) {
         const auto error = std::get<http_framed_response_head_plan_error>(head_plan_result);
         const bool response_plan_mismatch = error == http_framed_response_head_plan_error::response_status_mismatch || error == http_framed_response_head_plan_error::response_representation_mismatch;
-        return response_plan_mismatch ? http2_response_head_submit_error::response_plan_mismatch : http2_response_head_submit_error::invalid_message;
+        return response_plan_mismatch ? http_response_head_error::response_plan_mismatch : http_response_head_error::invalid_message;
     }
     const auto end_stream = write_plan.send_body() ? http2_end_stream::keep_open : http2_end_stream::end_stream;
     if (!commit_final_response_head(*stream, response, *head_plan, end_stream, write_plan.content_length())) {
-        return http2_response_head_submit_error::invalid_message;
+        return http_response_head_error::invalid_message;
     }
     return write_plan;
 }
 
-std::variant<http_response_stream_commit_plan, http2_response_head_submit_error> http2_connection::submit_streaming_response_head(std::uint32_t stream_id, http_response head, http_response_trailer_intent trailer_intent) {
+std::variant<http_response_stream_commit_plan, http_response_head_error> http2_connection::submit_streaming_response_head(std::uint32_t stream_id, http_response head, http_response_trailer_intent trailer_intent) {
     auto* stream = find_outbound_stream(stream_id);
     if (const auto error = response_head_admission_error(stream, head.status())) {
         return *error;
     }
     auto prepared_commit_plan = plan_http_response_stream_commit(http_response_stream_framing::http2_frames, stream->request_known_method(), head.status(), trailer_intent);
     if (!prepared_commit_plan.trailer_intent_allowed()) {
-        return http2_response_head_submit_error::invalid_message;
+        return http_response_head_error::invalid_message;
     }
     if (http_binary_final_response_control_plan(head).has_value()) {
-        return http2_response_head_submit_error::invalid_message;
+        return http_response_head_error::invalid_message;
     }
     auto stream_head = prepare_http_response_stream_head(std::move(head), std::move(prepared_commit_plan));
     const auto& commit_plan = stream_head.commit_plan();
@@ -194,39 +194,39 @@ std::variant<http_response_stream_commit_plan, http2_response_head_submit_error>
     const auto head_plan_result = http_framed_streaming_response_head_plan(commit_plan.body_plan(), stream_head.response());
     const auto* head_plan = std::get_if<http_framed_response_head_plan>(&head_plan_result);
     if (head_plan == nullptr) {
-        return http2_response_head_submit_error::invalid_message;
+        return http_response_head_error::invalid_message;
     }
     const auto end_stream = commit_plan.head_disposition() == http_response_stream_head_disposition::message_ended ? http2_end_stream::end_stream : http2_end_stream::keep_open;
     if (!commit_final_response_head(*stream, stream_head.response(), *head_plan, end_stream, head_plan->streaming_content_length())) {
-        return http2_response_head_submit_error::invalid_message;
+        return http_response_head_error::invalid_message;
     }
     return commit_plan;
 }
 
-http2_submit_status http2_connection::submit_interim_response_head(std::uint32_t stream_id, const http_interim_response_head& response) {
+http_submit_status http2_connection::submit_interim_response_head(std::uint32_t stream_id, const http_interim_response_head& response) {
     auto* stream = find_outbound_stream(stream_id);
     if (const auto error = response_head_admission_error(stream, response.status())) {
         switch (*error) {
-            case http2_response_head_submit_error::closed:
-                return http2_submit_status::closed;
-            case http2_response_head_submit_error::peer_stream_limit_reached:
-                return http2_submit_status::peer_capability_unavailable;
+            case http_response_head_error::closed:
+                return http_submit_status::closed;
+            case http_response_head_error::peer_stream_limit_reached:
+                return http_submit_status::peer_capability_unavailable;
             default:
-                return http2_submit_status::invalid_state;
+                return http_submit_status::invalid_state;
         }
     }
     if (!append_http_binary_interim_response_fields(fields_, response, max_http_header_bytes)) {
-        return http2_submit_status::invalid_message;
+        return http_submit_status::invalid_message;
     }
     submit_header_frames(*stream, http2_end_stream::keep_open);
     flush_session();
-    return http2_submit_status::accepted;
+    return http_submit_status::accepted;
 }
 
-http2_data_submit_result http2_connection::submit_data(std::uint32_t stream_id, std::string_view chunk, http2_end_stream end_stream, std::size_t max_payload_bytes) {
+http_data_submit_result http2_connection::submit_data(std::uint32_t stream_id, std::string_view chunk, http2_end_stream end_stream, std::size_t max_payload_bytes) {
     auto* stream = find_outbound_stream(stream_id);
     if (stream == nullptr) {
-        return {0, http2_data_submit_status::closed};
+        return {0, http_data_submit_status::closed};
     }
     const auto& local_send = stream->local_send();
     if (local_send.request_content_open() == nullptr && local_send.response_content_open() == nullptr && local_send.tunnel_open() == nullptr) {
@@ -234,7 +234,7 @@ http2_data_submit_result http2_connection::submit_data(std::uint32_t stream_id, 
     }
     if (local_send.request_content_open() != nullptr) {
         if (stream->request_continue_pending()) {
-            return {0, http2_data_submit_status::expectation_pending};
+            return {0, http_data_submit_status::expectation_pending};
         }
         if (stream->request_content_canceled()) {
             throw std::logic_error("HTTP/2 request content was canceled");
@@ -250,7 +250,7 @@ http2_data_submit_result http2_connection::submit_data(std::uint32_t stream_id, 
             throw std::logic_error("HTTP/2 stream content is not allowed");
         case http_local_content_check::length_exceeded:
         case http_local_content_check::length_incomplete:
-            return {0, http2_data_submit_status::invalid_message};
+            return {0, http_data_submit_status::invalid_message};
     }
     const auto window = send_window_state(stream_id);
     const std::size_t available = window.has_value() ? window->available_ : 0;
@@ -261,7 +261,7 @@ http2_data_submit_result http2_connection::submit_data(std::uint32_t stream_id, 
     // only with positive connection and stream windows.
     const bool empty_terminal = chunk.empty() && http2_ends_stream(terminal);
     if (empty_terminal && !can_send_empty_end_stream(stream_id)) {
-        return {0, http2_data_submit_status::backpressured};
+        return {0, http_data_submit_status::backpressured};
     }
     if (consumed != 0 || empty_terminal) {
         // Commit before nghttp2 sends the frame: an END_STREAM that completes the
@@ -273,7 +273,7 @@ http2_data_submit_result http2_connection::submit_data(std::uint32_t stream_id, 
         }
         (void)send_data(stream_id, chunk.substr(0, consumed), terminal);
     }
-    return {consumed, complete ? http2_data_submit_status::complete : http2_data_submit_status::backpressured};
+    return {consumed, complete ? http_data_submit_status::complete : http_data_submit_status::backpressured};
 }
 
 http2_request_content_release_status http2_connection::release_request_content(std::uint32_t stream_id) noexcept {
@@ -284,34 +284,34 @@ http2_request_content_release_status http2_connection::release_request_content(s
     return stream->release_request_continue() ? http2_request_content_release_status::released : http2_request_content_release_status::not_pending;
 }
 
-http2_submit_status http2_connection::submit_connect_response_head(std::uint32_t stream_id, const http_response& response) {
+http_submit_status http2_connection::submit_connect_response_head(std::uint32_t stream_id, const http_response& response) {
     auto* stream = find_outbound_stream(stream_id);
     if (stream == nullptr) {
-        return http2_submit_status::closed;
+        return http_submit_status::closed;
     }
-    if (role_ != http2_role::server || !http2_remote_final_head_decoded(*stream) || stream->local_send().head_pending() == nullptr || stream->tunnel().pending() == nullptr) {
-        return http2_submit_status::invalid_state;
+    if (role_ != http_connection_role::server || !http2_remote_final_head_decoded(*stream) || stream->local_send().head_pending() == nullptr || stream->tunnel().pending() == nullptr) {
+        return http_submit_status::invalid_state;
     }
     if (!is_valid_http_binary_connect_response_head(response) || http_binary_final_response_control_plan(response).has_value()) {
-        return http2_submit_status::invalid_message;
+        return http_submit_status::invalid_message;
     }
     const auto head_plan_result = http_framed_connect_response_head_plan(plan_http_response_body(http_known_method::connect, response.status()));
     const auto* head_plan = std::get_if<http_framed_response_head_plan>(&head_plan_result);
     if (head_plan == nullptr || !append_http_binary_response_fields(fields_, response, *head_plan, max_http_header_bytes)) {
-        return http2_submit_status::invalid_message;
+        return http_submit_status::invalid_message;
     }
     apply_response_priority(*stream, response.headers());
     commit_connect_response_head(*stream, http2_remote_peer_half_closed(*stream));
-    return http2_submit_status::accepted;
+    return http_submit_status::accepted;
 }
 
-std::variant<websocket_extended_connect_negotiation, http2_websocket_handshake_submit_error> http2_connection::submit_websocket_handshake(std::uint32_t stream_id, const http_request& request, const websocket_handshake_validation_result& validation, websocket_server_handshake_options options) {
+std::variant<websocket_extended_connect_negotiation, http_response_head_error> http2_connection::submit_websocket_handshake(std::uint32_t stream_id, const http_request& request, const websocket_handshake_validation_result& validation, websocket_server_handshake_options options) {
     auto* stream = find_outbound_stream(stream_id);
     if (stream == nullptr) {
-        return http2_websocket_handshake_submit_error::closed;
+        return http_response_head_error::closed;
     }
-    if (role_ != http2_role::server || !http2_remote_final_head_decoded(*stream) || http2_websocket_connect_remote_head_ended(*stream) || !http2_websocket_connect_content_acceptable(*stream) || stream->local_send().head_pending() == nullptr || !http2_is_pending_websocket_connect(*stream) || validation.accepted() == nullptr) {
-        return http2_websocket_handshake_submit_error::invalid_state;
+    if (role_ != http_connection_role::server || !http2_remote_final_head_decoded(*stream) || http2_websocket_connect_remote_head_ended(*stream) || !http2_websocket_connect_content_acceptable(*stream) || stream->local_send().head_pending() == nullptr || !http2_is_pending_websocket_connect(*stream) || validation.accepted() == nullptr) {
+        return http_response_head_error::invalid_state;
     }
     auto negotiation = make_websocket_server_negotiation(request, options);
     if (!append_http_binary_websocket_response_fields(fields_, negotiation, max_http_header_bytes)) {
@@ -322,26 +322,26 @@ std::variant<websocket_extended_connect_negotiation, http2_websocket_handshake_s
     return websocket_extended_connect_negotiation(std::move(negotiation).take_subprotocol(), compression);
 }
 
-http2_finish_status http2_connection::finish_request(std::uint32_t stream_id, std::span<const http_header_view> trailers) {
+http_finish_status http2_connection::finish_request(std::uint32_t stream_id, std::span<const http_header_view> trailers) {
     auto* stream = find_outbound_stream(stream_id);
     if (stream == nullptr) {
-        return http2_finish_status::closed;
+        return http_finish_status::closed;
     }
-    if (role_ != http2_role::client || stream->local_send().request_content_open() == nullptr || stream->request_continue_pending() || stream->request_content_canceled()) {
+    if (role_ != http_connection_role::client || stream->local_send().request_content_open() == nullptr || stream->request_continue_pending() || stream->request_content_canceled()) {
         throw std::logic_error("HTTP/2 stream is not open for finishing request");
     }
     if (!stream->local_content().length_complete()) {
-        return http2_finish_status::invalid_message;
+        return http_finish_status::invalid_message;
     }
     if (trailers.empty()) {
         if (!can_send_empty_end_stream(stream_id)) {
-            return http2_finish_status::backpressured;
+            return http_finish_status::backpressured;
         }
     } else {
         binary_field_section_size size(max_http_header_bytes);
         for (const auto& field : trailers) {
             if (!http_binary_is_valid_outbound_regular_header(field.name(), field.value()) || is_forbidden_http_request_trailer_name(field.name()) || !size.add(field.name(), field.value())) {
-                return http2_finish_status::invalid_message;
+                return http_finish_status::invalid_message;
             }
         }
         fields_.clear();
@@ -349,23 +349,23 @@ http2_finish_status http2_connection::finish_request(std::uint32_t stream_id, st
         fields_.add_lowercase_fields(trailers);
     }
     end_local_stream(*stream, trailers.empty());
-    return http2_finish_status::accepted;
+    return http_finish_status::accepted;
 }
 
-http2_finish_status http2_connection::finish_response(std::uint32_t stream_id, const http_response_trailer_section& trailers) {
+http_finish_status http2_connection::finish_response(std::uint32_t stream_id, const http_response_trailer_section& trailers) {
     auto* stream = find_outbound_stream(stream_id);
     if (stream == nullptr) {
-        return http2_finish_status::closed;
+        return http_finish_status::closed;
     }
     if (stream->local_send().response_content_open() == nullptr) {
         throw std::logic_error("HTTP/2 stream is not open for finishing response");
     }
     if (!stream->local_content().length_complete()) {
-        return http2_finish_status::invalid_message;
+        return http_finish_status::invalid_message;
     }
     if (trailers.empty()) {
         if (!can_send_empty_end_stream(stream_id)) {
-            return http2_finish_status::backpressured;
+            return http_finish_status::backpressured;
         }
     } else {
         fields_.clear();
@@ -373,7 +373,7 @@ http2_finish_status http2_connection::finish_response(std::uint32_t stream_id, c
         fields_.add_lowercase_fields(trailers.fields());
     }
     end_local_stream(*stream, trailers.empty());
-    return http2_finish_status::accepted;
+    return http_finish_status::accepted;
 }
 
 void http2_connection::end_local_stream(http2_stream_state& stream, bool empty_data) {
@@ -392,32 +392,32 @@ void http2_connection::end_local_stream(http2_stream_state& stream, bool empty_d
     flush_session();
 }
 
-http2_submit_status http2_connection::submit_reset(std::uint32_t stream_id, http2_error_code error) {
+http_submit_status http2_connection::submit_reset(std::uint32_t stream_id, http2_error_code error) {
     if (stream_id == 0 || stream_id > http2_max_stream_id) {
-        return http2_submit_status::invalid_state;
+        return http_submit_status::invalid_state;
     }
     auto* stream = streams_.find(stream_id);
     if (stream == nullptr) {
         // nghttp2 keeps no closed-stream history (RFC 9113 §5.1 lets an endpoint
         // forget closed streams); a known identifier is simply closed.
-        const bool local_id = ((stream_id & 1U) != 0) == (role_ == http2_role::client);
+        const bool local_id = ((stream_id & 1U) != 0) == (role_ == http_connection_role::client);
         const bool used = local_id ? stream_id < nghttp2_session_get_next_stream_id(session_.get()) : stream_id <= highest_peer_stream_id_;
-        return used ? http2_submit_status::closed : http2_submit_status::invalid_state;
+        return used ? http_submit_status::closed : http_submit_status::invalid_state;
     }
     if (stream->is_aborted()) {
-        return http2_submit_status::closed;
+        return http_submit_status::closed;
     }
     if (local_connection_state_.fatal_failure() != nullptr) {
         // Owner release still retires the stream and its leases after failure;
         // only the wire reset is suppressed on the terminal connection.
-        return close_stream_impl(stream_id, http2_stream_close_source::local, http2_error_code::no_error, close_notification_type::owner_already_knows) ? http2_submit_status::accepted : http2_submit_status::closed;
+        return close_stream_impl(stream_id, http2_stream_close_source::local, http2_error_code::no_error, close_notification_type::owner_already_knows) ? http_submit_status::accepted : http_submit_status::closed;
     }
     // A server owner does not own a peer stream until its initial header block
     // has decoded. A stream whose halves both ended is closed on the wire (RFC
     // 9113 §5.1): only a PROTOCOL_ERROR reset for a malformed message is
     // accepted, and it retires the stream locally without a frame.
-    if ((role_ == http2_role::server && !http2_remote_final_head_decoded(*stream)) || (http2_stream_is_closed(*stream) && error != http2_error_code::protocol_error)) {
-        return http2_submit_status::invalid_state;
+    if ((role_ == http_connection_role::server && !http2_remote_final_head_decoded(*stream)) || (http2_stream_is_closed(*stream) && error != http2_error_code::protocol_error)) {
+        return http_submit_status::invalid_state;
     }
     if (!http2_stream_is_closed(*stream)) {
         submit_owner_reset(stream_id, error);
@@ -425,28 +425,28 @@ http2_submit_status http2_connection::submit_reset(std::uint32_t stream_id, http
     cancel_push_promise_on(stream_id);
     (void)close_stream_impl(stream_id, http2_stream_close_source::local, error, close_notification_type::owner_already_knows);
     flush_session();
-    return http2_submit_status::accepted;
+    return http_submit_status::accepted;
 }
 
-http2_submit_status http2_connection::submit_extension_frame(http2_frame_type type, std::uint32_t stream_id, http2_extension_payload& payload) {
+http_submit_status http2_connection::submit_extension_frame(http2_frame_type type, std::uint32_t stream_id, http2_extension_payload& payload) {
     check_nghttp2(nghttp2_submit_extension(session_.get(), static_cast<std::uint8_t>(type), NGHTTP2_FLAG_NONE, static_cast<std::int32_t>(stream_id), &payload));
     flush_session();
-    return http2_submit_status::accepted;
+    return http_submit_status::accepted;
 }
 
-http2_submit_status http2_connection::submit_origin_advertisement(std::span<const std::string_view> origins) {
-    if (role_ != http2_role::server) {
-        return http2_submit_status::invalid_state;
+http_submit_status http2_connection::submit_origin_advertisement(std::span<const std::string_view> origins) {
+    if (role_ != http_connection_role::server) {
+        return http_submit_status::invalid_state;
     }
     if (local_connection_state_.fatal_failure() != nullptr || peer_goaway_) {
-        return http2_submit_status::closed;
+        return http_submit_status::closed;
     }
     if (!received_peer_settings_) {
-        return http2_submit_status::invalid_state;
+        return http_submit_status::invalid_state;
     }
     const auto payload_size = http_origin_payload_size(origins, extension_payload_limit(peer_setting(NGHTTP2_SETTINGS_MAX_FRAME_SIZE)));
     if (payload_size.index() != 0) {
-        return http2_submit_status::invalid_message;
+        return http_submit_status::invalid_message;
     }
     http2_extension_payload payload{
         .size_ = std::get<0>(payload_size),
@@ -459,20 +459,20 @@ http2_submit_status http2_connection::submit_origin_advertisement(std::span<cons
     return submit_extension_frame(http2_frame_type::origin, 0, payload);
 }
 
-http2_submit_status http2_connection::submit_alternative_service_advertisement(std::uint32_t stream_id, std::string_view origin, std::string_view field_value) {
-    if (role_ != http2_role::server) {
-        return http2_submit_status::invalid_state;
+http_submit_status http2_connection::submit_alternative_service_advertisement(std::uint32_t stream_id, std::string_view origin, std::string_view field_value) {
+    if (role_ != http_connection_role::server) {
+        return http_submit_status::invalid_state;
     }
     if (local_connection_state_.fatal_failure() != nullptr || peer_goaway_) {
-        return http2_submit_status::closed;
+        return http_submit_status::closed;
     }
     const auto* stream = stream_id != 0 ? streams_.find(stream_id) : nullptr;
     if (!received_peer_settings_ || (stream_id != 0 && (stream == nullptr || http2_stream_is_closed(*stream) || stream->push_reservation() == http2_push_reservation::local || !http2_remote_final_head_decoded(*stream) || stream->tunnel().not_connect() == nullptr))) {
-        return http2_submit_status::invalid_state;
+        return http_submit_status::invalid_state;
     }
     const auto payload_size = http2_alternative_service_payload_size(stream_id, origin, field_value, extension_payload_limit(peer_setting(NGHTTP2_SETTINGS_MAX_FRAME_SIZE)));
     if (payload_size.index() != 0) {
-        return http2_submit_status::invalid_message;
+        return http_submit_status::invalid_message;
     }
     http2_extension_payload payload{
         .size_ = std::get<0>(payload_size),
@@ -645,7 +645,7 @@ std::variant<std::uint32_t, http2_request_head_submit_error> http2_connection::s
 std::variant<std::uint32_t, http2_push_submit_error> http2_connection::submit_push_promise(std::uint32_t associated_stream_id, http_push_request_view request) {
     const auto* parent_value = streams_.find(associated_stream_id);
     const auto promised_id = static_cast<std::uint32_t>(nghttp2_session_get_next_stream_id(session_.get()));
-    if (role_ != http2_role::server || !received_peer_settings_ || local_connection_state_.open() == nullptr || peer_goaway_ || !parent_value || parent_value->is_aborted() || (associated_stream_id & 1U) == 0 || !http2_remote_final_head_decoded(*parent_value) || parent_value->tunnel().not_connect() == nullptr || parent_value->local_send().end_stream_committed() || promised_id > http2_max_stream_id) {
+    if (role_ != http_connection_role::server || !received_peer_settings_ || local_connection_state_.open() == nullptr || peer_goaway_ || !parent_value || parent_value->is_aborted() || (associated_stream_id & 1U) == 0 || !http2_remote_final_head_decoded(*parent_value) || parent_value->tunnel().not_connect() == nullptr || parent_value->local_send().end_stream_committed() || promised_id > http2_max_stream_id) {
         return http2_push_submit_error::invalid_state;
     }
     if (peer_setting(NGHTTP2_SETTINGS_ENABLE_PUSH) == 0) {

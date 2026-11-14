@@ -1080,12 +1080,12 @@ struct http2_extension_payload final {
 
 class http2_connection final {
 public:
-    http2_connection(http2_role role, const http2_connection_options& options);
+    http2_connection(http_connection_role role, const http2_connection_options& options);
     ~http2_connection();
     http2_connection(const http2_connection&) = delete;
     http2_connection& operator=(const http2_connection&) = delete;
 
-    [[nodiscard]] http2_role role() const noexcept {
+    [[nodiscard]] http_connection_role role() const noexcept {
         return role_;
     }
 
@@ -1122,22 +1122,22 @@ public:
     // A stale/mismatched plan is rejected distinctly before any field or stream
     // mutation. Informational status codes and HTTP/2-unrepresentable control
     // semantics are rejected as well.
-    [[nodiscard]] std::variant<http_buffered_response_write_plan, http2_response_head_submit_error> submit_response_head(std::uint32_t stream_id, const http_response& response, http_buffered_response_write_plan write_plan);
-    [[nodiscard]] std::variant<http_response_stream_commit_plan, http2_response_head_submit_error> submit_streaming_response_head(std::uint32_t stream_id, http_response head, http_response_trailer_intent trailer_intent);
-    [[nodiscard]] http2_data_submit_result submit_data(std::uint32_t stream_id, std::string_view chunk, http2_end_stream end_stream, std::size_t max_payload_bytes);
-    [[nodiscard]] http2_submit_status submit_interim_response_head(std::uint32_t stream_id, const http_interim_response_head& response);
-    [[nodiscard]] std::variant<websocket_extended_connect_negotiation, http2_websocket_handshake_submit_error> submit_websocket_handshake(std::uint32_t stream_id, const http_request& request, const websocket_handshake_validation_result& validation, websocket_server_handshake_options options);
-    [[nodiscard]] http2_submit_status submit_connect_response_head(std::uint32_t stream_id, const http_response& response);
+    [[nodiscard]] std::variant<http_buffered_response_write_plan, http_response_head_error> submit_response_head(std::uint32_t stream_id, const http_response& response, http_buffered_response_write_plan write_plan);
+    [[nodiscard]] std::variant<http_response_stream_commit_plan, http_response_head_error> submit_streaming_response_head(std::uint32_t stream_id, http_response head, http_response_trailer_intent trailer_intent);
+    [[nodiscard]] http_data_submit_result submit_data(std::uint32_t stream_id, std::string_view chunk, http2_end_stream end_stream, std::size_t max_payload_bytes);
+    [[nodiscard]] http_submit_status submit_interim_response_head(std::uint32_t stream_id, const http_interim_response_head& response);
+    [[nodiscard]] std::variant<websocket_extended_connect_negotiation, http_response_head_error> submit_websocket_handshake(std::uint32_t stream_id, const http_request& request, const websocket_handshake_validation_result& validation, websocket_server_handshake_options options);
+    [[nodiscard]] http_submit_status submit_connect_response_head(std::uint32_t stream_id, const http_response& response);
     [[nodiscard]] std::variant<std::uint32_t, http2_push_submit_error> submit_push_promise(std::uint32_t associated_stream_id, http_push_request_view request);
-    [[nodiscard]] http2_finish_status finish_request(std::uint32_t stream_id, std::span<const http_header_view> trailers = {});
-    [[nodiscard]] http2_finish_status finish_response(std::uint32_t stream_id, const http_response_trailer_section& trailers);
-    [[nodiscard]] http2_submit_status submit_origin_advertisement(std::span<const std::string_view> origins);
-    [[nodiscard]] http2_submit_status submit_alternative_service_advertisement(std::uint32_t stream_id, std::string_view origin, std::string_view field_value);
-    [[nodiscard]] http2_submit_status submit_priority_update(std::uint32_t stream_id, http_priority_fields fields);
+    [[nodiscard]] http_finish_status finish_request(std::uint32_t stream_id, std::span<const http_header_view> trailers = {});
+    [[nodiscard]] http_finish_status finish_response(std::uint32_t stream_id, const http_response_trailer_section& trailers);
+    [[nodiscard]] http_submit_status submit_origin_advertisement(std::span<const std::string_view> origins);
+    [[nodiscard]] http_submit_status submit_alternative_service_advertisement(std::uint32_t stream_id, std::string_view origin, std::string_view field_value);
+    [[nodiscard]] http_submit_status submit_priority_update(std::uint32_t stream_id, http_priority_fields fields);
 
-    [[nodiscard]] http2_submit_status submit_reset(std::uint32_t stream_id, http2_error_code error);
-    [[nodiscard]] http2_submit_status submit_ping();
-    [[nodiscard]] http2_submit_status submit_max_concurrent_streams(std::uint32_t limit);
+    [[nodiscard]] http_submit_status submit_reset(std::uint32_t stream_id, http2_error_code error);
+    [[nodiscard]] http_submit_status submit_ping();
+    [[nodiscard]] http_submit_status submit_max_concurrent_streams(std::uint32_t limit);
 
     // --- lifecycle -------------------------------------------------------------
     // A connection error is terminal: its GOAWAY has been queued (unless the
@@ -1148,8 +1148,8 @@ public:
         const auto* failure = local_connection_state_.fatal_failure();
         return failure != nullptr ? std::optional<http2_error_code>(failure->error()) : std::nullopt;
     }
-    void begin_drain();
-    void finish_drain();
+    [[nodiscard]] http_submit_status begin_drain();
+    [[nodiscard]] http_submit_status finish_drain();
     void terminate(http2_error_code error);
     [[nodiscard]] bool draining() const noexcept {
         return local_connection_state_.graceful_drain() != nullptr;
@@ -1325,7 +1325,7 @@ private:
 
     // Submits HEADERS for `stream` from the staged field list.
     void submit_header_frames(http2_stream_state& stream, http2_end_stream end_stream);
-    [[nodiscard]] std::optional<http2_response_head_submit_error> response_head_admission_error(const http2_stream_state* stream, http_status_code status) const noexcept;
+    [[nodiscard]] std::optional<http_response_head_error> response_head_admission_error(const http2_stream_state* stream, http_status_code status) const noexcept;
     [[nodiscard]] bool commit_final_response_head(http2_stream_state& stream, const http_response& response, const http_framed_response_head_plan& head_plan, http2_end_stream end_stream, std::optional<std::uint64_t> content_length);
     void commit_connect_response_head(http2_stream_state& stream, bool terminal_remote_half);
     void apply_response_priority(http2_stream_state& stream, const http_response_headers& headers);
@@ -1335,7 +1335,7 @@ private:
     // Commits the local END_STREAM, then sends it as empty DATA or with the
     // staged trailer fields.
     void end_local_stream(http2_stream_state& stream, bool empty_data);
-    [[nodiscard]] http2_submit_status submit_extension_frame(http2_frame_type type, std::uint32_t stream_id, http2_extension_payload& payload);
+    [[nodiscard]] http_submit_status submit_extension_frame(http2_frame_type type, std::uint32_t stream_id, http2_extension_payload& payload);
     // nghttp2 DATA source: copies the submitting call's bytes. A null source is
     // the empty END_STREAM a rejected client CONNECT owes, which may wait for
     // flow-control credit inside nghttp2.
@@ -1405,7 +1405,7 @@ private:
     std::exception_ptr callback_failure_;
 
     http2_local_connection_state local_connection_state_;
-    http2_role role_{http2_role::server};
+    http_connection_role role_{http_connection_role::server};
     bool enable_push_{false};
     bool receive_origin_advertisements_{false};
     bool receive_frame_metadata_{false};

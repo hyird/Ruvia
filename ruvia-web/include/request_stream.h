@@ -81,7 +81,7 @@ using request_stream_websocket_accept = callback_ref<task<websocket_accept_resul
 // the callback returns; it does not commit output to the wire. Before wire commitment, callback failures
 // replace the selected response with the framework's error answer. After wire
 // commitment, a callback exception aborts the stream (HTTP/1: the connection)
-// and reaches on_connection_failure. A callback returning without a response
+// and reaches connection_failure_. A callback returning without a response
 // answers 500; a committed response stream not explicitly ended is ended.
 class request_stream final {
 public:
@@ -168,21 +168,21 @@ public:
     [[nodiscard]] redis_session redis(std::string_view alias) const;
 #endif
 
-    // Edits the next file/static_file response or the head response().commit()
-    // or an acceptance sends. Complete responses passed to respond() keep their
-    // own metadata: respond() does not merge an unconsumed draft.
-    [[nodiscard]] context_response_editor draft() & noexcept;
-    context_response_editor draft() && = delete;
+    // The cross-replacement policy of context::policy(): applied to the
+    // response, stream head or the tunnel/WebSocket acceptance head this
+    // request sends.
+    [[nodiscard]] context_response_editor policy() & noexcept;
+    context_response_editor policy() && = delete;
 
     // Reuses Context's file factory: conditional requests, HEAD and single or
     // multipart ranges retain their settled status and opened file handle.
     // Options are owned before return; static_file() borrows root until its
     // task completes. Blocking-pool, cancellation, timeout and identity checks
-    // are the same as context::file()/static_file().
-    [[nodiscard]] task<http_response> file(file_response_options options);
-    [[nodiscard]] task<http_response> static_file(const static_root& root, static_file_response_options options = {});
+    // are the same as context::file()/static_file(), and so is `head`.
+    [[nodiscard]] task<http_response> file(file_response_options options, response_options head = {});
+    [[nodiscard]] task<http_response> static_file(const static_root& root, static_file_response_options options = {}, response_options head = {});
     // A temporary root would be destroyed before the returned task reads it.
-    task<http_response> static_file(const static_root&&, static_file_response_options = {}) = delete;
+    task<http_response> static_file(const static_root&&, static_file_response_options = {}, response_options = {}) = delete;
 
     // Transfers all response metadata and body ownership without sending yet.
     // The existing final-response driver sends buffers, files and multipart
@@ -191,20 +191,21 @@ public:
     // replaces it with an error response, releasing its file/body resources.
     void respond(http_response response);
 
-    // The streamed response: commit the head draft() describes, then write
-    // the content and end it, with trailers where the protocol carries them.
+    // The streamed response: `head` is applied to the head the writer's
+    // commit sends, as context::stream(head) does; then write the content and
+    // end it, with trailers where the protocol carries them.
     // A refused tunnel uses the same immediate, backpressured writer as any
     // response; HTTP/1.1 closes the connection after its framed response.
     // A successful CONNECT or 101 must instead use an accept operation.
-    [[nodiscard]] response_stream_writer& response() & noexcept RUVIA_LIFETIMEBOUND;
-    response_stream_writer& response() && = delete;
+    [[nodiscard]] response_stream_writer& response(response_options head = {}) & RUVIA_LIFETIMEBOUND;
+    response_stream_writer& response(response_options = {}) && = delete;
 
     // Whether accept_tunnel() can establish a tunnel: a CONNECT or extended
     // CONNECT (RFC 9110 §9.3.6, RFC 8441, RFC 9220), or an HTTP/1.1 request
     // without content offering Upgrade (RFC 9110 §7.8).
     [[nodiscard]] bool tunnel_requested() const noexcept;
 
-    // Commits the success head draft() describes and returns the byte stream
+    // Commits the success head (policy() included) and returns the byte stream
     // that follows it: `status` must be 2xx for CONNECT and 101 (Switching
     // Protocols) for an HTTP/1.1 Upgrade, which names the response's Upgrade
     // field or else the first protocol the client offered (std::invalid_argument

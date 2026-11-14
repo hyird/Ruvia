@@ -56,13 +56,13 @@ std::vector<access_entry> access_entries{};
 }
 
 [[maybe_unused]] const bool policy_configured = [] {
-    ruvia::app().on_access([](const ruvia::access_log_record& record) noexcept {
+    ruvia::app().callbacks({.access_ = [](const ruvia::access_log_record& record) noexcept {
         try {
             std::lock_guard lock(access_mutex);
             access_entries.push_back({std::string(record.method()), std::string(record.path()), record.status()});
         } catch (...) {
         }
-    });
+    }});
     return true;
 }();
 
@@ -138,7 +138,9 @@ class response_policy_routes final {
 
     ruvia::task<void> stream(ruvia::context& context_value) {
         if (context_value.req().query("fail").has_value()) {
-            context_value.draft().header("Content-Range", "bytes 0-2/10");
+            // 已暂存但未提交的流头不进入错误响应。
+            const std::array headers{ruvia::http_header_view{"Content-Range", "bytes 0-2/10"}};
+            static_cast<void>(context_value.stream({.headers_ = headers}));
             throw ruvia::http_error({.status_ = ruvia::http_status::conflict});
         }
         if (co_await context_value.stream().commit() == ruvia::stream_commit_result::completed) {
@@ -161,10 +163,8 @@ class response_policy_routes final {
 
     // 完成态不是取消：不启动正文生产，误用 write/sleep 必须明确拒绝。
     ruvia::task<void> head_loop(ruvia::context& context_value) {
-        if (context_value.req().query("not-modified").has_value()) {
-            context_value.draft().status(ruvia::http_status::not_modified);
-        }
-        auto& output = context_value.stream_text();
+        const auto status = context_value.req().query("not-modified").has_value() ? std::optional(ruvia::http_status::not_modified) : std::nullopt;
+        auto& output = context_value.stream_text({.status_ = status});
         const auto token = context_value.stop_token();
         const auto phase = co_await output.commit();
         if (phase == ruvia::stream_commit_result::body) {
@@ -233,8 +233,8 @@ class response_policy_routes final {
     }
 
     ruvia::task<void> trailer_stream(ruvia::context& context_value) {
-        auto& output = context_value.stream_text();
-        context_value.draft().header("Trailer", "X-Complete");
+        const std::array<ruvia::http_header_view, 1> trailer_field{{{"Trailer", "X-Complete"}}};
+        auto& output = context_value.stream_text({.headers_ = trailer_field});
         if (co_await output.commit() == ruvia::stream_commit_result::completed) {
             co_return;
         }

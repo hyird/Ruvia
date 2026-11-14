@@ -242,6 +242,12 @@ struct http_server_options final {
     void clear_trusted_proxies() noexcept {
         trusted_proxies_ = http_client_ip_extractor();
     }
+    // The one mapping from a host's owned callbacks to these borrowed refs;
+    // `callbacks` must outlive every worker that uses these options.
+    void use_callbacks(const http_server_callbacks& callbacks) noexcept;
 };
+
+// One bit per http_server_callbacks member that is set (presence, not targets).
+[[nodiscard]] std::uint32_t callbacks_presence(const http_server_callbacks& callbacks) noexcept;
 
 }  // namespace ruvia::detail

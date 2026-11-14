@@ -19,6 +19,11 @@ add_library(ruvia-core STATIC ${ruvia_core_sources})
 
 ruvia_configure_library(ruvia-core core)
 
+# Build-only: Asio glue headers in src/ (asio_completion.h, asio_ip_address.h)
+# shared with ruvia-web and the tests. Never installed or exported.
+add_library(ruvia_core_internal INTERFACE)
+target_include_directories(ruvia_core_internal INTERFACE "${CMAKE_CURRENT_SOURCE_DIR}/src")
+
 target_link_libraries(ruvia-core
     PUBLIC
         ${RUVIA_CORE_DEPENDENCIES}
@@ -54,7 +59,6 @@ ruvia_install_component(ruvia-core core)
 
 ruvia_install_public_headers(core
     include/asio_bridge.h
-    include/asio_ip_address.h
     include/blocking_pool.h
     include/byte_view.h
     include/channel.h

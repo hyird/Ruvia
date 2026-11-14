@@ -33,6 +33,7 @@
 #include <asio/write.hpp>
 
 #include "app.h"
+#include "asio_completion.h"
 #include "content_decoding_fixture.h"
 #include "context.h"
 #include "controller.h"
@@ -65,6 +66,8 @@ struct stream_lane_observation final {
     std::atomic<bool> uaf_route_done_{};
     std::atomic<bool> uaf_failed_{};
     std::atomic<std::size_t> uaf_decoded_bytes_{};
+    std::atomic<bool> head_candidate_rejected_{};
+    std::atomic<bool> sse_content_type_rejected_{};
 };
 
 class stream_early_respond_middleware final {
@@ -93,12 +96,14 @@ class stream_lane_routes final {
     RUVIA_POST("/server-stream-early-respond", never_stream, stream_early_respond_middleware);
     RUVIA_GET("/server-stream-plain", plain);
     RUVIA_GET("/server-stream-length/:mode", length_stream);
+    RUVIA_GET("/server-stream-head-atomic", atomic_head);
+    RUVIA_GET("/server-stream-head-typed", typed_head);
+    RUVIA_GET("/server-stream-head-sse", sse_head);
     RUVIA_ROUTES_END
 
     ruvia::task<void> output(ruvia::context& context_value) {
         auto& observed = *context_value.worker_state<std::shared_ptr<stream_lane_observation>>();
         auto& writer = context_value.stream_text();
-        auto draft = context_value.draft();
         auto policy = context_value.policy();
         auto selected = context_value.edit_response();
         try {
@@ -114,7 +119,7 @@ class stream_lane_routes final {
         } catch (const std::logic_error&) {
             observed.repeated_commit_rejected_ = true;
         }
-        for (auto editor : {draft, policy, selected}) {
+        for (auto editor : {policy, selected}) {
             try {
                 editor.header("X-Too-Late", "forbidden");
             } catch (const std::logic_error&) {
@@ -210,8 +215,8 @@ class stream_lane_routes final {
     ruvia::task<void> length_stream(ruvia::context& context_value) {
         const auto mode = context_value.req().param("mode").value_or("");
         const std::string_view declared = mode == "over" ? "4" : "10";
-        context_value.draft().header("Content-Length", declared);
-        auto& writer = context_value.stream_text();
+        const std::array headers{ruvia::http_header_view{"Content-Length", declared}};
+        auto& writer = context_value.stream_text({.headers_ = headers});
         if (co_await writer.commit() == ruvia::stream_commit_result::completed) {
             co_return;
         }
@@ -223,6 +228,58 @@ class stream_lane_routes final {
         } else {
             co_await writer.write("xyz");
         }
+        co_await writer.end();
+    }
+
+    // The second header is invalid, so the first must not reach the staged head.
+    ruvia::task<void> atomic_head(ruvia::context& context_value) {
+        auto& observed = *context_value.worker_state<std::shared_ptr<stream_lane_observation>>();
+        const std::array invalid{
+            ruvia::http_header_view{"X-Candidate", "staged"},
+            ruvia::http_header_view{"Bad Name", "value"},
+        };
+        try {
+            static_cast<void>(context_value.stream({.headers_ = invalid}));
+        } catch (const std::invalid_argument&) {
+            observed.head_candidate_rejected_ = !context_value.committed();
+        }
+        auto& writer = context_value.stream_text();
+        if (co_await writer.commit() == ruvia::stream_commit_result::completed) {
+            co_return;
+        }
+        co_await writer.write("atomic");
+        co_await writer.end();
+    }
+
+    // stream_text() fills Content-Type and X-Content-Type-Options only when absent.
+    ruvia::task<void> typed_head(ruvia::context& context_value) {
+        const std::array headers{
+            ruvia::http_header_view{"Content-Type", "text/csv"},
+            ruvia::http_header_view{"X-Content-Type-Options", "nosniff"},
+        };
+        auto& writer = context_value.stream_text({.headers_ = headers});
+        if (co_await writer.commit() == ruvia::stream_commit_result::completed) {
+            co_return;
+        }
+        co_await writer.write("a,b\n");
+        co_await writer.end();
+    }
+
+    // stream_sse() owns Content-Type; Cache-Control is only a default.
+    ruvia::task<void> sse_head(ruvia::context& context_value) {
+        auto& observed = *context_value.worker_state<std::shared_ptr<stream_lane_observation>>();
+        const std::array content_type{ruvia::http_header_view{"Content-Type", "text/plain"}};
+        try {
+            static_cast<void>(context_value.stream_sse({.headers_ = content_type}));
+        } catch (const std::invalid_argument&) {
+            observed.sse_content_type_rejected_ = !context_value.committed();
+        }
+        const std::array cache_control{ruvia::http_header_view{"Cache-Control", "no-store"}};
+        auto writer = context_value.stream_sse({.headers_ = cache_control});
+        if (co_await writer.commit() == ruvia::stream_commit_result::completed) {
+            co_return;
+        }
+        co_await writer.write({.data_ = "tick"});
         co_await writer.end();
     }
 
@@ -314,7 +371,7 @@ TEST(Ruvia, response_stream_cold_outputs_share_a_lane_only_when_started) {
     EXPECT_TRUE(stream_lane_observed->completed_);
     EXPECT_TRUE(stream_lane_observed->uncommitted_write_rejected_);
     EXPECT_TRUE(stream_lane_observed->repeated_commit_rejected_);
-    EXPECT_EQ(stream_lane_observed->committed_metadata_rejected_.load(), 3);
+    EXPECT_EQ(stream_lane_observed->committed_metadata_rejected_.load(), 2);
 }
 
 // A peer that resets a streaming response (a closed SSE tab) ends the
@@ -574,6 +631,56 @@ TEST(Ruvia, response_stream_ending_short_of_declared_length_closes_connection) {
     ASSERT_NE(head_end, std::string::npos);
     EXPECT_NE(response->substr(0, head_end).find("Content-Length: 10"), std::string::npos);
     EXPECT_EQ(response->substr(head_end + 4), "xyz");
+}
+
+TEST(Ruvia, stream_head_options_are_atomic_on_failure) {
+    auto& io = ruvia::test::new_test_io_context();
+    ruvia::test::http_server_fixture server(io);
+    stream_lane_observed->head_candidate_rejected_ = false;
+    const auto response = read_until_close(server.endpoint(), "GET /server-stream-head-atomic HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n");
+    server.finish();
+    ASSERT_TRUE(response.has_value());
+    EXPECT_TRUE(stream_lane_observed->head_candidate_rejected_);
+    const auto head_end = response->find("\r\n\r\n");
+    ASSERT_NE(head_end, std::string::npos);
+    const std::string_view head = std::string_view(*response).substr(0, head_end + 4);
+    EXPECT_TRUE(head.starts_with("HTTP/1.1 200 "));
+    EXPECT_EQ(head.find("X-Candidate"), std::string_view::npos);
+    EXPECT_NE(head.find("Content-Type: text/plain; charset=UTF-8\r\n"), std::string_view::npos);
+    EXPECT_NE(response->find("atomic", head_end), std::string::npos);
+}
+
+TEST(Ruvia, stream_text_keeps_an_application_content_type) {
+    auto& io = ruvia::test::new_test_io_context();
+    ruvia::test::http_server_fixture server(io);
+    const auto response = read_until_close(server.endpoint(), "GET /server-stream-head-typed HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n");
+    server.finish();
+    ASSERT_TRUE(response.has_value());
+    const auto head_end = response->find("\r\n\r\n");
+    ASSERT_NE(head_end, std::string::npos);
+    const std::string_view head = std::string_view(*response).substr(0, head_end + 4);
+    EXPECT_NE(head.find("Content-Type: text/csv\r\n"), std::string_view::npos);
+    EXPECT_EQ(head.find("text/plain"), std::string_view::npos);
+    const auto nosniff = head.find("X-Content-Type-Options: nosniff\r\n");
+    EXPECT_NE(nosniff, std::string_view::npos);
+    EXPECT_EQ(head.find("X-Content-Type-Options", nosniff + 1), std::string_view::npos);
+}
+
+TEST(Ruvia, stream_sse_rejects_a_content_type_and_keeps_an_application_cache_control) {
+    auto& io = ruvia::test::new_test_io_context();
+    ruvia::test::http_server_fixture server(io);
+    stream_lane_observed->sse_content_type_rejected_ = false;
+    const auto response = read_until_close(server.endpoint(), "GET /server-stream-head-sse HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n");
+    server.finish();
+    ASSERT_TRUE(response.has_value());
+    EXPECT_TRUE(stream_lane_observed->sse_content_type_rejected_);
+    const auto head_end = response->find("\r\n\r\n");
+    ASSERT_NE(head_end, std::string::npos);
+    const std::string_view head = std::string_view(*response).substr(0, head_end + 4);
+    EXPECT_NE(head.find("Content-Type: text/event-stream"), std::string_view::npos);
+    EXPECT_NE(head.find("Cache-Control: no-store\r\n"), std::string_view::npos);
+    EXPECT_EQ(head.find("no-cache"), std::string_view::npos);
+    EXPECT_NE(response->find("data: tick", head_end), std::string::npos);
 }
 
 // File bodies are read on the blocking pool on every platform; Windows plain

@@ -84,8 +84,8 @@ task<client_resolve_result> client_host_resolver::resolve_query(query input, ope
             stop_.reset();
         }
     } guard{stop_};
-    stop_group cancellation(stop_->token(), stop);
-    auto result = co_await run_blocking(*worker_, std::move(input), {.timeout_ = timeout.timeout(), .stop_token_ = cancellation.token()});
+    const linked_operation_options linked({.timeout_ = timeout.timeout(), .stop_token_ = std::move(stop)}, stop_->token());
+    auto result = co_await run_blocking(*worker_, std::move(input), linked.options());
     switch (result.status()) {
         case blocking_status::completed:
             co_return std::move(result).take_value();

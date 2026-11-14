@@ -1423,7 +1423,7 @@ private:
             if (!value.columns_.empty() && !value.constraint_.empty()) {
                 throw std::invalid_argument("conflict target cannot have both columns and a constraint");
             }
-            if (value.target_where_ != no_db_node && value.columns_.empty()) {
+            if (value.index_predicate_ != no_db_node && value.columns_.empty()) {
                 throw std::invalid_argument("a conflict predicate requires target columns");
             }
             output_.sql_ += " ON CONFLICT";
@@ -1436,9 +1436,9 @@ private:
                 output_.sql_ += " ON CONSTRAINT ";
                 output_.identifier(value.constraint_);
             }
-            if (value.target_where_ != no_db_node) {
+            if (value.index_predicate_ != no_db_node) {
                 output_.sql_ += " WHERE ";
-                expr(s, value.target_where_, depth + 1);
+                expr(s, value.index_predicate_, depth + 1);
             }
             if (value.do_nothing_) {
                 output_.sql_ += " DO NOTHING";
@@ -1454,7 +1454,7 @@ private:
                 expr(s, value.update_where_, depth + 1);
             }
         } else {
-            if (!value.any_unique_key_ || !value.columns_.empty() || !value.constraint_.empty() || value.target_where_ != no_db_node || value.update_where_ != no_db_node || value.do_nothing_) {
+            if (!value.any_unique_key_ || !value.columns_.empty() || !value.constraint_.empty() || value.index_predicate_ != no_db_node || value.update_where_ != no_db_node || value.do_nothing_) {
                 output_.unsupported("targeted or conditional upsert / DO NOTHING");
             }
             output_.sql_ += " ON DUPLICATE KEY UPDATE ";
@@ -1574,10 +1574,14 @@ private:
 
     grouped_bound_values grouped_;
 };
-void append_db_expression(std::string& output, db_expression expression, db_driver driver) {
+void append_db_expression(std::string& output, const db_expr& expression, db_driver driver) {
     if (expression.empty()) {
         throw std::invalid_argument("empty database expression");
     }
+    // Literal rendering reads one node tree; an owned expression is imported
+    // into a scratch query first.
+    db_query scratch;
+    const auto bound = expression.owned().import_into(scratch);
     db_query_compiler compiler(driver, db_parameter_mode::literal);
     const auto initial_size = output.size();
     compiler.output_.sql_ = std::move(output);
@@ -1585,7 +1589,7 @@ void append_db_expression(std::string& output, db_expression expression, db_driv
         if (compiler.output_.sql_.capacity() - initial_size < 32U) {
             compiler.output_.sql_.reserve(initial_size + 64U);
         }
-        compiler.expression(expression);
+        compiler.expression(bound);
         output = std::move(compiler.output_.sql_);
     } catch (...) {
         compiler.output_.sql_.resize(initial_size);
@@ -1604,7 +1608,7 @@ db_statement db_query::compile(db_driver driver, db_parameter_mode mode) const {
     return db_statement(std::move(compiler.output_.sql_), std::move(compiler.output_.params_), returns_rows());
 }
 
-std::string db_query::render_expression(db_expression expression, db_driver driver) {
+std::string db_query::render_expression(const db_expr& expression, db_driver driver) {
     std::string output;
     detail::append_db_expression(output, expression, driver);
     return output;

@@ -54,8 +54,7 @@ private:
     ruvia::task<ruvia::http_response> create(ruvia::context& c) {
         const auto& note = c.req().validated<note_request>();
         ++c.worker_state<note_counter>().stored_;
-        c.draft().status(ruvia::http_status::created);
-        co_return c.body(note.get<"text">().has_value() ? note.get<"text">()->view() : "empty");
+        co_return c.body(note.get<"text">().has_value() ? note.get<"text">()->view() : "empty", {.status_ = ruvia::http_status::created});
     }
 
     ruvia::task<ruvia::http_response> stats(ruvia::context& c) {
@@ -67,8 +66,7 @@ private:
 };
 
 ruvia::task<ruvia::http_response> notes_missing(ruvia::context& c) {
-    c.draft().status(ruvia::http_status::not_found);
-    co_return c.text("no such note");
+    co_return c.text("no such note", {.status_ = ruvia::http_status::not_found});
 }
 
 int g_failures = 0;

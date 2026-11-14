@@ -106,7 +106,7 @@ TEST(Ruvia, nonrouted_listeners_ignore_conflicts_and_unused_controller_and_middl
     controller_constructions = 0;
     middleware_constructions = 0;
     reject_controller = true;
-    app.server({.worker_count_ = 2}).use<unused_middleware>().on_connection(&serve_connection).on_request_stream(&serve_request).on_start(nullptr).on_start([] {
+    app.server({.worker_count_ = 2}).use<unused_middleware>().callbacks({.request_stream_ = &serve_request, .connection_ = &serve_connection}).on_start(nullptr).on_start([] {
         started.release();
     });
     for (const auto dispatch : {ruvia::listener_dispatch::connection, ruvia::listener_dispatch::request_stream}) {
@@ -136,7 +136,7 @@ TEST(Ruvia, mixed_routed_and_nonrouted_listeners_still_reject_conflicting_routes
             {.address_ = "127.0.0.1", .http_ = raw.endpoint().port(), .dispatch_ = ruvia::listener_dispatch::connection},
             {.address_ = "127.0.0.1", .http_ = routed.endpoint().port()},
         })
-        .on_connection(&serve_connection)
+        .callbacks({.connection_ = &serve_connection})
         .on_start(nullptr);
     EXPECT_THROW(app.run(), std::invalid_argument);
 }
@@ -147,7 +147,7 @@ TEST(Ruvia, adding_first_routed_listener_rejects_conflicts_without_interrupting_
     ruvia::test::tcp_port_reservation routed(io);
     reject_controller = false;
     auto& app = ruvia::app();
-    app.server({.worker_count_ = 2}).listen({.address_ = "127.0.0.1", .http_ = raw.endpoint().port(), .dispatch_ = ruvia::listener_dispatch::connection}).on_connection(&serve_connection).on_start(nullptr).on_start([] {
+    app.server({.worker_count_ = 2}).listen({.address_ = "127.0.0.1", .http_ = raw.endpoint().port(), .dispatch_ = ruvia::listener_dispatch::connection}).callbacks({.connection_ = &serve_connection}).on_start(nullptr).on_start([] {
         started.release();
     });
     ruvia::test::app_run run(app);

@@ -44,12 +44,6 @@ namespace {
     }
     return options;
 }
-
-#if defined(RUVIA_ENABLE_DATABASE) || defined(RUVIA_ENABLE_REDIS)
-[[nodiscard]] operation_options context_operation_options(const stop_token& stop_token_value) {
-    return operation_options{.timeout_ = std::nullopt, .stop_token_ = stop_token_value};
-}
-#endif
 }  // namespace
 
 worker_capabilities::worker_capabilities(asio::io_context& io_context, const worker_ref& worker_value, worker_capability_definitions definitions, worker_capability_options options) :
@@ -243,7 +237,7 @@ db_session worker_client_registry_view::db(::ruvia::operation_scope& operation_s
     if (!attached()) {
         throw db_error(db_error::code_type::not_configured, std::nullopt, "database is not configured");
     }
-    return databases_->get(operation_scope, io_metrics).with_options(context_operation_options(stop_token_value));
+    return databases_->get(operation_scope, io_metrics).bind_caller_scope(operation_scope, io_metrics, stop_token_value);
 }
 
 db_session worker_client_registry_view::db(std::string_view alias, ::ruvia::operation_scope& operation_scope, request_io_metrics* io_metrics, const stop_token& stop_token_value) const {
@@ -257,7 +251,7 @@ db_session worker_client_registry_view::db(std::string_view alias, ::ruvia::oper
     if (!attached()) {
         throw db_error(db_error::code_type::not_configured, std::nullopt, "database is not configured");
     }
-    return databases_->get(alias, operation_scope, io_metrics).with_options(context_operation_options(stop_token_value));
+    return databases_->get(alias, operation_scope, io_metrics).bind_caller_scope(operation_scope, io_metrics, stop_token_value);
 }
 #endif
 
@@ -269,7 +263,7 @@ redis_session worker_client_registry_view::redis(::ruvia::operation_scope& opera
     if (!attached()) {
         throw redis_error(redis_error::code_type::not_configured, "redis is not configured");
     }
-    return redis_->get(operation_scope, io_metrics).with_options(context_operation_options(stop_token_value));
+    return redis_->get(operation_scope, io_metrics).bind_caller_scope(operation_scope, io_metrics, stop_token_value);
 }
 
 redis_session worker_client_registry_view::redis(std::string_view alias, ::ruvia::operation_scope& operation_scope, request_io_metrics* io_metrics, const stop_token& stop_token_value) const {
@@ -283,7 +277,7 @@ redis_session worker_client_registry_view::redis(std::string_view alias, ::ruvia
     if (!attached()) {
         throw redis_error(redis_error::code_type::not_configured, "redis is not configured");
     }
-    return redis_->get(alias, operation_scope, io_metrics).with_options(context_operation_options(stop_token_value));
+    return redis_->get(alias, operation_scope, io_metrics).bind_caller_scope(operation_scope, io_metrics, stop_token_value);
 }
 #endif
 

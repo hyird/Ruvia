@@ -416,17 +416,11 @@ http_client_request http_client_ref::options(std::string_view path) const {
     return request("OPTIONS", path);
 }
 
-http_client_request& http_client_request::header(std::string_view name, std::string_view value) {
-    if (consumed_) {
-        throw std::logic_error("HTTP request builder was consumed");
-    }
+http_client_request& http_client_request::header(std::string_view name, std::string_view value) & {
     replace_field(headers_, name, value);
     return *this;
 }
-http_client_request& http_client_request::headers(std::span<const http_header_view> fields) {
-    if (consumed_) {
-        throw std::logic_error("HTTP request builder was consumed");
-    }
+http_client_request& http_client_request::headers(std::span<const http_header_view> fields) & {
     const auto old_size = headers_.size();
     headers_.reserve(old_size + fields.size());
     try {
@@ -441,10 +435,7 @@ http_client_request& http_client_request::headers(std::span<const http_header_vi
     }
     return *this;
 }
-http_client_request& http_client_request::query(std::string_view name, std::string_view value) {
-    if (consumed_) {
-        throw std::logic_error("HTTP request builder was consumed");
-    }
+http_client_request& http_client_request::query(std::string_view name, std::string_view value) & {
     if (target_ == "*") {
         throw std::invalid_argument("asterisk target cannot contain query parameters");
     }
@@ -461,53 +452,35 @@ http_client_request& http_client_request::query(std::string_view name, std::stri
     }
     return *this;
 }
-http_client_request& http_client_request::body(std::string_view value) {
-    if (consumed_) {
-        throw std::logic_error("HTTP request builder was consumed");
-    }
+http_client_request& http_client_request::body(std::string_view value) & {
     std::string owned(value);
     body_.swap(owned);
     has_body_ = true;
     return *this;
 }
-http_client_request& http_client_request::body(std::span<const std::byte> value) {
+http_client_request& http_client_request::body(std::span<const std::byte> value) & {
     return body(std::string_view(reinterpret_cast<const char*>(value.data()), value.size()));
 }
-http_client_request& http_client_request::configure(http_client_request_options options) {
-    if (consumed_) {
-        throw std::logic_error("HTTP request builder was consumed");
-    }
+http_client_request& http_client_request::configure(http_client_request_options options) & {
     detail::validate_http_client_request_options(options);
     informational_callback_ = detail::share_http_client_informational(std::move(options.informational_));
     request_options_ = std::move(options);
     return *this;
 }
-http_client_request& http_client_request::on_redirect(http_client_redirect_observer observer) {
-    if (consumed_) {
-        throw std::logic_error("HTTP request builder was consumed");
-    }
+http_client_request& http_client_request::on_redirect(http_client_redirect_observer observer) & {
     redirect_observer_ = std::move(observer);
     return *this;
 }
-http_client_request& http_client_request::on_redirect(http_client_async_redirect_observer observer) {
-    if (consumed_) {
-        throw std::logic_error("HTTP request builder was consumed");
-    }
+http_client_request& http_client_request::on_redirect(http_client_async_redirect_observer observer) & {
     async_redirect_observer_ = std::move(observer);
     return *this;
 }
-http_client_request& http_client_request::redirects(std::size_t maximum) {
-    if (consumed_) {
-        throw std::logic_error("HTTP request builder was consumed");
-    }
+http_client_request& http_client_request::redirects(std::size_t maximum) & {
     max_redirects_ = maximum;
     return *this;
 }
 
-task<http_client_tunnel_result> http_client_request::upgrade(http_client_tunnel_config config) {
-    if (consumed_) {
-        throw std::logic_error("HTTP request builder was consumed");
-    }
+task<http_client_tunnel_result> http_client_request::connect(http_client_tunnel_config config) && {
     client_.registration_.require_active();
     if (config.max_chunk_bytes_ == 0 || config.max_chunk_bytes_ > default_max_buffered_body_bytes) {
         throw std::invalid_argument("invalid HTTP Upgrade tunnel policy");
@@ -523,7 +496,6 @@ task<http_client_tunnel_result> http_client_request::upgrade(http_client_tunnel_
         request.set_body(body_);
     }
     auto operation = make_scoped_operation(client_.registration_.scope(), client_.pool_->open_tunnel(std::move(request), config, client_.options_));
-    consumed_ = true;
     std::string(method_.get_allocator()).swap(method_);
     std::string(target_.get_allocator()).swap(target_);
     std::vector<http_header>(headers_.get_allocator()).swap(headers_);
@@ -540,12 +512,8 @@ std::vector<http_header_view> http_client_request::field_views() const {
     return fields;
 }
 
-task<http_client_response> http_client_request::send() {
-    if (consumed_) {
-        throw std::logic_error("HTTP request builder was consumed");
-    }
+task<http_client_response> http_client_request::send() && {
     client_.registration_.require_active();
-    consumed_ = true;
     return make_scoped_operation(client_.registration_.scope(), send_owned(std::move(*this)));
 }
 
@@ -629,20 +597,16 @@ task<http_client_response> http_client_request::follow_redirects(http_client_req
             co_return response;
         }
 
-        std::optional<std::string_view> location;
-        for (const auto& field : response.headers()) {
-            if (http_ascii_equals_ignore_case(field.name(), "location")) {
-                if (location) {
-                    throw http_client_error(make_error_code(http_client_errc::protocol_error), "repeated redirect Location", std::nullopt, &response.connection_info(), true, redirects);
-                }
-                location = field.value();
-            }
+        const auto location_lookup = response.unique_header("location");
+        if (location_lookup.status_ == unique_lookup_status::repeated) {
+            throw http_client_error(make_error_code(http_client_errc::protocol_error), "repeated redirect Location", std::nullopt, &response.connection_info(), true, redirects);
         }
-        if (!location) {
+        if (location_lookup.status_ == unique_lookup_status::absent) {
             co_return response;
         }
+        const std::string_view location = location_lookup.value_;
         const auto current_origin = request_origin(request.client_, request.request_options_);
-        auto resolved = resolve_http_client_redirect_target(current_origin, {.current_target_ = request.target_, .location_ = *location});
+        auto resolved = resolve_http_client_redirect_target(current_origin, {.current_target_ = request.target_, .location_ = location});
         auto* next = std::get_if<http_client_resolved_redirect>(&resolved);
         if (next == nullptr) {
             co_return response;
@@ -651,7 +615,7 @@ task<http_client_response> http_client_request::follow_redirects(http_client_req
         if (request.redirect_observer_ || request.async_redirect_observer_) {
             const auto source_url = format_origin_target_url(current_origin, request.target_);
             const auto target_url = format_origin_target_url(next->origin(), next->target());
-            const http_client_redirect_hop hop_event(redirects, current_origin, request.target_, source_url, response.connection_info(), response.status(), *location, next->origin(), next->target(), target_url, next->cross_origin());
+            const http_client_redirect_hop hop_event(redirects, current_origin, request.target_, source_url, response.connection_info(), response.status(), location, next->origin(), next->target(), target_url, next->cross_origin());
             if (request.redirect_observer_) {
                 if (!request.redirect_observer_(hop_event)) {
                     co_return response;
@@ -731,10 +695,7 @@ task<http_client_response> http_client_request::follow_redirects(http_client_req
     }
 }
 
-task<http_client_exchange> http_client_request::upload(http_client_upload_config config) {
-    if (consumed_) {
-        throw std::logic_error("HTTP request builder was consumed");
-    }
+task<http_client_exchange> http_client_request::upload(http_client_upload_config config) && {
     if (has_body_) {
         throw std::invalid_argument("streamed upload cannot also have a buffered body");
     }
@@ -742,7 +703,6 @@ task<http_client_exchange> http_client_request::upload(http_client_upload_config
     if (config.max_chunk_bytes_ == 0 || config.continue_timeout_.value() <= std::chrono::milliseconds::zero() || (config.expectation_ != http_client_request_expectation::none && config.expectation_ != http_client_request_expectation::continue_)) {
         throw std::invalid_argument("streaming upload requires a bodyless head and valid upload policy");
     }
-    consumed_ = true;
     return make_scoped_operation(client_.registration_.scope(), upload_owned(std::move(*this), config));
 }
 
@@ -779,17 +739,11 @@ http_client_connect_request http_client_ref::udp(std::string_view path) const {
     registration_.require_active();
     return http_client_connect_request(*this, pool_->config().authority_, path, true);
 }
-http_client_connect_request& http_client_connect_request::header(std::string_view name, std::string_view value) {
-    if (consumed_) {
-        throw std::logic_error("CONNECT builder was consumed");
-    }
+http_client_connect_request& http_client_connect_request::header(std::string_view name, std::string_view value) & {
     replace_field(headers_, name, value);
     return *this;
 }
-http_client_connect_request& http_client_connect_request::headers(std::span<const http_header_view> fields) {
-    if (consumed_) {
-        throw std::logic_error("CONNECT builder was consumed");
-    }
+http_client_connect_request& http_client_connect_request::headers(std::span<const http_header_view> fields) & {
     const auto old_size = headers_.size();
     headers_.reserve(old_size + fields.size());
     try {
@@ -804,36 +758,26 @@ http_client_connect_request& http_client_connect_request::headers(std::span<cons
     }
     return *this;
 }
-http_client_connect_request& http_client_connect_request::configure(http_client_request_options options) {
-    if (consumed_) {
-        throw std::logic_error("CONNECT builder was consumed");
-    }
+http_client_connect_request& http_client_connect_request::configure(http_client_request_options options) & {
     detail::validate_http_client_request_options(options);
     informational_callback_ = detail::share_http_client_informational(std::move(options.informational_));
     request_options_ = std::move(options);
     return *this;
 }
-http_client_connect_request& http_client_connect_request::protocol(std::string_view value) {
-    if (consumed_ || udp_) {
+http_client_connect_request& http_client_connect_request::protocol(std::string_view value) & {
+    if (udp_) {
         throw std::logic_error("CONNECT protocol cannot be changed");
     }
     protocol_.assign(value);
     return *this;
 }
-http_client_connect_request& http_client_connect_request::target(std::string_view value) {
-    if (consumed_) {
-        throw std::logic_error("CONNECT builder was consumed");
-    }
+http_client_connect_request& http_client_connect_request::target(std::string_view value) & {
     target_.assign(value);
     return *this;
 }
-task<http_client_tunnel_result> http_client_connect_request::open(http_client_tunnel_config config) {
-    if (consumed_) {
-        throw std::logic_error("CONNECT builder was consumed");
-    }
+task<http_client_tunnel_result> http_client_connect_request::connect(http_client_tunnel_config config) && {
     const detail::inline_http_header_views<16> fields(headers_);
     auto dispatched = udp_ ? client_.dispatch_udp({.target_ = target_, .headers_ = fields.view()}, config, request_options_, informational_callback_) : client_.dispatch_connect({.authority_ = authority_, .protocol_ = protocol_, .target_ = target_, .headers_ = fields.view()}, config, request_options_, informational_callback_);
-    consumed_ = true;
     std::string(authority_.get_allocator()).swap(authority_);
     std::string(protocol_.get_allocator()).swap(protocol_);
     std::string(target_.get_allocator()).swap(target_);
@@ -863,9 +807,8 @@ task<void> http_client_ref::migrate(std::string_view local_address, std::uint16_
 namespace {
 
 task<void> refresh_client_dns(std::shared_ptr<detail::http_client_pool> pool, operation_options options, stop_token host_stop) {
-    stop_group cancellation(host_stop, options.stop_token_);
-    options.stop_token_ = cancellation.token();
-    co_await pool->refresh_dns(std::move(options));
+    const linked_operation_options linked(options, host_stop);
+    co_await pool->refresh_dns(linked.options());
 }
 
 [[nodiscard]] ip_address to_ruvia_ip_address(const asio::ip::address& address) noexcept {
@@ -927,17 +870,12 @@ task<void> refresh_client_dns(std::shared_ptr<detail::http_client_pool> pool, op
 }
 
 [[nodiscard]] task<std::vector<ip_address>> resolve_client_handle_dns(std::shared_ptr<detail::http_client_pool> pool, std::string host, operation_options handle_options, operation_options call_options, stop_token host_stop) {
-    stop_group cancellation{host_stop, handle_options.stop_token_, call_options.stop_token_};
-    std::optional<operation_timeout> effective_timeout = handle_options.timeout_;
-    if (call_options.timeout_) {
-        if (!effective_timeout || call_options.timeout_->duration() < effective_timeout->duration()) {
-            effective_timeout = call_options.timeout_;
-        }
+    auto merged = override_operation_options(handle_options, {.timeout_ = call_options.timeout_});
+    if (!merged.timeout_) {
+        merged.timeout_ = operation_timeout(pool->config().connect_timeout_);
     }
-    if (!effective_timeout) {
-        effective_timeout = operation_timeout(pool->config().connect_timeout_);
-    }
-    co_return co_await resolve_dns_owned(pool->worker(), std::move(host), {.timeout_ = effective_timeout, .stop_token_ = cancellation.token()}, pool->config().address_validator_, pool->config().dial_port_);
+    const linked_operation_options linked(merged, call_options.stop_token_, host_stop);
+    co_return co_await resolve_dns_owned(pool->worker(), std::move(host), linked.options(), pool->config().address_validator_, pool->config().dial_port_);
 }
 }  // namespace
 

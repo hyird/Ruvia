@@ -26,6 +26,7 @@ set(ruvia_http_sources
     src/http_io_buffer.cpp
     src/http_message.cpp
     src/http_multipart.cpp
+    src/http_multiplexed_stream.cpp
     src/http_priority.cpp
     src/http_protocol.cpp
     src/http_proxy_forwarding.cpp
@@ -125,6 +126,7 @@ set(ruvia_http_headers
     include/http_io_buffer.h
     include/http_message.h
     include/http_multipart.h
+    include/http_multiplexed_stream.h
     include/http_priority.h
     include/http_protocol.h
     include/http_proxy_forwarding.h

@@ -37,7 +37,7 @@
 #include <asio/ip/udp.hpp>
 #include <asio/socket_base.hpp>
 
-#include "asio_bridge.h"
+#include "asio_completion.h"
 #include "connection_lifecycle.h"
 #include "crypto.h"
 #include "failure_report.h"

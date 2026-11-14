@@ -227,12 +227,7 @@ void http_client_response_state::detach_transport_bindings() noexcept {
     if (upload_) {
         upload_->output_.stop();
     }
-#ifdef RUVIA_ENABLE_HTTP2
-    http2_data_credit_.reset();
-#endif
-#ifdef RUVIA_ENABLE_HTTP3
-    http3_data_credit_.reset();
-#endif
+    data_credit_.reset();
     connection_index_ = 0;
     connection_serial_ = 0;
     request_id_ = 0;
@@ -1099,30 +1094,26 @@ task<void> http_client_response_body::pipe_to(response_stream_writer& output, op
 }
 
 std::optional<std::string_view> http_client_response::header(std::string_view name) const& {
-    const auto& headers_value = require_response_state(state_).headers_;
-    const auto match = std::ranges::find_if(headers_value, [name](const auto& header_value) {
-        return http_ascii_equals_ignore_case(header_value.name(), name);
-    });
-    return match == headers_value.end() ? std::nullopt : std::optional<std::string_view>(match->value());
+    return detail::find_first_http_header(require_response_state(state_).headers_, name);
+}
+
+http_unique_field_lookup http_client_response::unique_header(std::string_view name) const& {
+    return find_unique_http_header(require_response_state(state_).headers_, name);
 }
 
 std::optional<std::string_view> http_client_response::trailer(std::string_view name) const& {
-    const auto& trailers_value = require_response_state(state_).trailers_;
-    const auto match = std::ranges::find_if(trailers_value, [name](const auto& header_value) {
-        return http_ascii_equals_ignore_case(header_value.name(), name);
-    });
-    return match == trailers_value.end() ? std::nullopt : std::optional<std::string_view>(match->value());
+    return detail::find_first_http_header(require_response_state(state_).trailers_, name);
 }
 
 task<void> http_client_response::pipe_to(context& output, operation_options operation) & {
-    return pipe_to_destination(output.draft(), output.stream(), output.operation_scope_, std::move(operation));
+    return pipe_to_destination(output.stream_head(), output.stream(), output.operation_scope_, std::move(operation));
 }
 
 task<void> http_client_response::pipe_to(request_stream& output, operation_options operation) & {
-    return pipe_to_destination(output.draft(), output.response(), output.operation_scope_, std::move(operation));
+    return pipe_to_destination(output.context_.stream_head(), output.response(), output.operation_scope_, std::move(operation));
 }
 
-task<void> http_client_response::pipe_to_destination(context_response_editor draft, response_stream_writer& writer, ::ruvia::operation_scope& destination, operation_options operation) {
+task<void> http_client_response::pipe_to_destination(http_response& head, response_stream_writer& writer, ::ruvia::operation_scope& destination, operation_options operation) {
     if (state_ == nullptr) {
         throw std::logic_error("response owner has moved");
     }
@@ -1130,7 +1121,7 @@ task<void> http_client_response::pipe_to_destination(context_response_editor dra
     if (!state_->body_operation_scope_.active() || !destination.active()) {
         throw std::logic_error("HTTP response pipe_to scope is closed");
     }
-    draft.status(status());
+    head.status(status());
     const auto fields = headers();
     const auto nominated = parse_http_connection_nominated_fields(fields);
     for (auto field = fields.begin(); field != fields.end(); ++field) {
@@ -1138,7 +1129,7 @@ task<void> http_client_response::pipe_to_destination(context_response_editor dra
             const bool repeated = std::any_of(fields.begin(), field, [&](const http_header& previous) {
                 return http_ascii_equals_ignore_case(previous.name(), field->name());
             });
-            draft.header(field->name(), field->value(), {.mode_ = repeated ? http_response_header_mode::append : http_response_header_mode::replace});
+            head.header(field->name(), field->value(), {.mode_ = repeated ? http_response_header_mode::append : http_response_header_mode::replace});
         }
     }
     auto source = make_scoped_operation(state_->body_operation_scope_, pipe_response(http_client_response(state_), *state_, writer, std::move(operation)));

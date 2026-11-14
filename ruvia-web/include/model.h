@@ -42,13 +42,6 @@ namespace detail {
 struct request_name_value_list_access;
 }  // namespace detail
 
-// Result of request_name_value_list::unique(name). value_ is meaningful only
-// when status_ is found and borrows the list's field storage.
-struct request_field_lookup final {
-    unique_lookup_status status_{unique_lookup_status::absent};
-    std::string_view value_{};
-};
-
 class request_name_value_list final {
 public:
     using value_type = http_header_view;
@@ -103,12 +96,12 @@ public:
     [[nodiscard]] const http_header_view& operator[](std::size_t) const&& = delete;
 
     // Duplicate fields are preserved in materialization order; scalar lookup uses
-    // the last occurrence. Header lists compare names case-insensitively;
+    // the first occurrence. Header lists compare names case-insensitively;
     // other field sources compare exactly. Enumeration preserves name spelling.
     [[nodiscard]] std::optional<std::string_view> get(std::string_view name) const noexcept {
-        for (std::size_t i = items_.size(); i > 0; --i) {
-            if (names_equal(items_[i - 1].name(), name)) {
-                return items_[i - 1].value();
+        for (const auto& item : items_) {
+            if (names_equal(item.name(), name)) {
+                return item.value();
             }
         }
         return std::nullopt;
@@ -116,20 +109,19 @@ public:
 
     // Security-relevant single-valued fields must not pick one of several
     // occurrences: a repeated name reports repeated instead of a value.
-    [[nodiscard]] request_field_lookup unique(std::string_view name) const& noexcept RUVIA_LIFETIMEBOUND {
-        request_field_lookup result;
+    [[nodiscard]] http_unique_field_lookup unique(std::string_view name) const& noexcept RUVIA_LIFETIMEBOUND {
+        http_unique_field_lookup result;
         for (const auto& item : items_) {
-            if (!names_equal(item.name(), name)) {
-                continue;
+            if (names_equal(item.name(), name)) {
+                result.add_occurrence(item.value());
+                if (result.status_ == unique_lookup_status::repeated) {
+                    break;
+                }
             }
-            if (result.status_ == unique_lookup_status::found) {
-                return {unique_lookup_status::repeated, {}};
-            }
-            result = {unique_lookup_status::found, item.value()};
         }
         return result;
     }
-    request_field_lookup unique(std::string_view) const&& = delete;
+    http_unique_field_lookup unique(std::string_view) const&& = delete;
 
     [[nodiscard]] std::size_t count(std::string_view name) const noexcept {
         std::size_t result_value = 0;

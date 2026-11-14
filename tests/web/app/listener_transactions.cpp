@@ -133,7 +133,7 @@ TEST(Ruvia, adding_first_routed_listener_builds_controllers_and_route_rate_limit
     ruvia::test::tcp_port_reservation raw(io);
     ruvia::test::tcp_port_reservation routed(io);
     auto& app = ruvia::app();
-    app.server({.worker_count_ = 1}).listen({.address_ = "127.0.0.1", .http_ = raw.endpoint().port(), .dispatch_ = ruvia::listener_dispatch::connection}).rate_limit(nullptr).on_connection(&serve_connection).on_start(nullptr).on_start([] {
+    app.server({.worker_count_ = 1}).listen({.address_ = "127.0.0.1", .http_ = raw.endpoint().port(), .dispatch_ = ruvia::listener_dispatch::connection}).rate_limit(nullptr).callbacks({.connection_ = &serve_connection}).on_start(nullptr).on_start([] {
         started.release();
     });
     ruvia::test::app_run run(app);
@@ -155,7 +155,7 @@ TEST(Ruvia, add_listener_prepare_failure_discards_already_adopted_sockets_withou
     ruvia::test::tcp_port_reservation addition(io);
     asio::ip::tcp::acceptor blocker(io, {asio::ip::address_v4::loopback(), 0});
     auto& app = ruvia::app();
-    app.server({.worker_count_ = 2}).listen({.address_ = "127.0.0.1", .http_ = original.endpoint().port(), .dispatch_ = ruvia::listener_dispatch::connection}).on_connection(&serve_connection).on_start(nullptr).on_start([] {
+    app.server({.worker_count_ = 2}).listen({.address_ = "127.0.0.1", .http_ = original.endpoint().port(), .dispatch_ = ruvia::listener_dispatch::connection}).callbacks({.connection_ = &serve_connection}).on_start(nullptr).on_start([] {
         started.release();
     });
     ruvia::test::app_run run(app);
@@ -215,7 +215,7 @@ TEST(Ruvia, mixed_listener_adopts_one_physical_socket_group_for_plain_and_tls_ra
         config.inherited_sockets_->https_.push_back(inherited_socket(io, endpoint));
     }
     auto& app = ruvia::app();
-    app.server({.worker_count_ = 2}).listen(std::move(config)).on_connection(&serve_connection).on_start(nullptr).on_start([] {
+    app.server({.worker_count_ = 2}).listen(std::move(config)).callbacks({.connection_ = &serve_connection}).on_start(nullptr).on_start([] {
         started.release();
     });
     ruvia::test::app_run runner(app);
@@ -240,7 +240,7 @@ TEST(Ruvia, runtime_tls_listener_preparation_does_not_block_its_caller_worker) {
     asio::io_context io;
     ruvia::test::tcp_port_reservation original(io), secure(io);
     auto& app = ruvia::app();
-    app.server({.worker_count_ = 1}).listen({.address_ = "127.0.0.1", .http_ = original.endpoint().port(), .dispatch_ = ruvia::listener_dispatch::connection}).on_connection(&serve_connection).on_start(nullptr).on_start([] {
+    app.server({.worker_count_ = 1}).listen({.address_ = "127.0.0.1", .http_ = original.endpoint().port(), .dispatch_ = ruvia::listener_dispatch::connection}).callbacks({.connection_ = &serve_connection}).on_start(nullptr).on_start([] {
         started.release();
     });
     ruvia::test::app_run run(app);
@@ -295,11 +295,11 @@ TEST(Ruvia, application_prepared_batch_waits_for_publication_and_rolls_back_fail
     auto& app = ruvia::app();
     app.server({.worker_count_ = 2})
         .listen({.address_ = "127.0.0.1", .http_ = original.endpoint().port(), .dispatch_ = ruvia::listener_dispatch::connection})
-        .on_connection([&](ruvia::server_connection& connection) -> ruvia::task<void> {
+        .callbacks({.connection_ = [&](ruvia::server_connection& connection) -> ruvia::task<void> {
         EXPECT_TRUE(published.load());
         ++calls;
         co_await serve_connection(connection);
-    })
+    }})
         .on_start(nullptr)
         .on_start([] {
         started.release();
@@ -352,12 +352,13 @@ TEST(Ruvia, application_prepared_batch_waits_for_publication_and_rolls_back_fail
     ruvia::test::app_run empty_run(app);
     ASSERT_TRUE(started.try_acquire_for(10s));
     wait_until_running(app);
-    auto first = loop.start(app.prepare_listener(loop.worker(), config(addition.endpoint().port()))).get();
+    const std::array first_config{config(addition.endpoint().port())};
+    auto first = loop.start(app.prepare_listeners(loop.worker(), first_config)).get();
     loop.start(std::move(first).activate()).get();
     EXPECT_TRUE(request(io, addition.endpoint()).ends_with("ready"));
     app.stop();
     empty_run.join();
-    app.on_connection(&serve_connection);
+    app.callbacks({.connection_ = &serve_connection});
 }
 
 TEST(Ruvia, application_cold_prepared_batch_owns_all_inherited_sockets_and_rejects_duplicate_handles) {

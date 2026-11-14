@@ -111,8 +111,8 @@ inline int http3_test_new_connection_id(ngtcp2_conn*, ngtcp2_cid* cid, ngtcp2_st
 }
 
 // The ngtcp2_crypto_ossl QUIC-TLS adapter callbacks for `role`.
-[[nodiscard]] inline http3_quic_crypto_callbacks http3_test_crypto_callbacks(http3_role role) noexcept {
-    const bool client = role == http3_role::client;
+[[nodiscard]] inline http3_quic_crypto_callbacks http3_test_crypto_callbacks(http_connection_role role) noexcept {
+    const bool client = role == http_connection_role::client;
     return {
         .client_initial_ = client ? ngtcp2_crypto_client_initial_cb : nullptr,
         .recv_client_initial_ = client ? nullptr : ngtcp2_crypto_recv_client_initial_cb,
@@ -297,7 +297,7 @@ public:
         local_ = socket_.local_endpoint();
         quic_local_ = local_;
         connection_.emplace(http3_quic_connection::client({
-            .crypto_callbacks_ = http3_test_crypto_callbacks(http3_role::client),
+            .crypto_callbacks_ = http3_test_crypto_callbacks(http_connection_role::client),
             .owner_callbacks_ = {.get_new_connection_id_ = http3_test_new_connection_id, .handshake_completed_ = handshake_complete, .handshake_confirmed_ = handshake_confirmed},
             .source_connection_id_ = http3_test_random_connection_id(16),
             // RFC 9000 §7.2: at least 8 unpredictable bytes.
@@ -395,8 +395,8 @@ public:
     [[nodiscard]] std::int64_t start_streaming_request(std::string_view method, std::string_view path, std::optional<http_content_length> length = std::nullopt) {
         const auto stream_id = open_stream(false);
         const auto request_authority = authority();
-        const http3_regular_request_head_view head{.method_ = method, .authority_ = std::optional<borrowed_text>(request_authority), .target_ = path, .content_ = http_request_content_plan::streaming(length)};
-        if (connection_->http3().submit_request_head(stream_id, head) != http3_submit_status::accepted) {
+        const http_regular_request_head_view head{.method_ = method, .authority_ = std::optional<borrowed_text>(request_authority), .target_ = path, .content_ = http_request_content_plan::streaming(length)};
+        if (connection_->http3().submit_request_head(stream_id, head) != http_submit_status::accepted) {
             throw std::runtime_error("HTTP/3 test client cannot submit the streaming request head");
         }
         flush();
@@ -444,32 +444,33 @@ public:
         }
     }
 
-    [[nodiscard]] std::int64_t start_tunnel(const http3_connect_request_head_view& request) {
+    [[nodiscard]] std::int64_t start_tunnel(const http_connect_request_head_view& request) {
         return open_tunnel(request);
     }
 
-    [[nodiscard]] std::int64_t start_tunnel(const http3_extended_connect_request_head_view& request) {
+    [[nodiscard]] std::int64_t start_tunnel(const http_extended_connect_request_head_view& request) {
         return open_tunnel(request);
     }
 
-    void send_stream_data(std::int64_t stream_id, std::span<const std::byte> bytes, bool finish = false) {
+    void send_stream_data(std::int64_t stream_id, std::span<const std::byte> payload, bool finish = false) {
         auto& stream = tracked_stream(stream_id);
         auto& codec = connection_->http3();
+        std::string_view bytes(reinterpret_cast<const char*>(payload.data()), payload.size());
         while (!bytes.empty()) {
             const auto submitted = codec.submit_data(stream_id, bytes);
-            bytes = bytes.subspan(submitted.consumed_bytes_);
-            if (submitted.status_ == http3_data_submit_status::backpressured && submitted.consumed_bytes_ == 0) {
+            bytes.remove_prefix(submitted.consumed_bytes_);
+            if (submitted.status_ == http_data_submit_status::backpressured && submitted.consumed_bytes_ == 0) {
                 wait_or_throw([&] {
                     return codec.pending_output_bytes(stream_id) < max_stream_output_bytes || response_complete(stream);
                 }, "HTTP/3 tunnel write did not progress");
                 if (response_complete(stream)) {
                     throw std::runtime_error("HTTP/3 tunnel closed during write");
                 }
-            } else if (submitted.status_ != http3_data_submit_status::complete && submitted.status_ != http3_data_submit_status::backpressured) {
+            } else if (submitted.status_ != http_data_submit_status::complete && submitted.status_ != http_data_submit_status::backpressured) {
                 throw std::runtime_error("HTTP/3 tunnel DATA was not accepted");
             }
         }
-        if (finish && codec.finish_stream(stream_id) != http3_finish_status::accepted) {
+        if (finish && codec.finish_stream(stream_id) != http_finish_status::accepted) {
             throw std::runtime_error("HTTP/3 tunnel FIN was not accepted");
         }
         flush();
@@ -670,7 +671,7 @@ private:
         http3_test_response response_;
         std::string unread_body_{};
         // Receive credit of unread_body_, returned as the test takes it.
-        std::optional<http3_received_data_credit> unread_credit_;
+        std::optional<http_received_data_credit> unread_credit_;
         std::vector<std::string> datagrams_{};
         bool consume_on_arrival_{false};
         bool ended_{false};
@@ -794,12 +795,12 @@ private:
 
     template <typename head_type>
     [[nodiscard]] std::int64_t open_tunnel(const head_type& request) {
-        if constexpr (std::is_same_v<head_type, http3_extended_connect_request_head_view>) {
+        if constexpr (std::is_same_v<head_type, http_extended_connect_request_head_view>) {
             // TLS completion does not imply arrival of the server's HTTP/3 SETTINGS.
             (void)peer_settings();
         }
         const auto stream_id = open_stream(false);
-        if (connection_->http3().submit_request_head(stream_id, request) != http3_submit_status::accepted) {
+        if (connection_->http3().submit_request_head(stream_id, request) != http_submit_status::accepted) {
             throw std::runtime_error("HTTP/3 tunnel request was not accepted");
         }
         flush();
@@ -816,26 +817,26 @@ private:
         for (const auto& [name, value] : headers) {
             fields.emplace_back(name, value);
         }
-        const http3_regular_request_head_view head{.method_ = method, .authority_ = std::optional<borrowed_text>(request_authority), .target_ = request_path, .headers_ = fields, .content_ = body.empty() ? http_request_content_plan::none() : http_request_content_plan::known_length(body.size())};
-        if (connection_->http3().submit_request_head(stream_id, head) != http3_submit_status::accepted) {
+        const http_regular_request_head_view head{.method_ = method, .authority_ = std::optional<borrowed_text>(request_authority), .target_ = request_path, .headers_ = fields, .content_ = body.empty() ? http_request_content_plan::none() : http_request_content_plan::known_length(body.size())};
+        if (connection_->http3().submit_request_head(stream_id, head) != http_submit_status::accepted) {
             throw std::runtime_error("HTTP/3 test client cannot submit the request head");
         }
         if (!body.empty()) {
-            send_body(stream_id, stream, std::as_bytes(std::span(body.data(), body.size())));
+            send_body(stream_id, stream, body);
         }
         flush();
         return stream_id;
     }
 
-    void send_body(std::int64_t stream_id, const stream_state& stream, std::span<const std::byte> body) {
+    void send_body(std::int64_t stream_id, const stream_state& stream, std::string_view body) {
         auto& codec = connection_->http3();
         while (!body.empty()) {
             const auto submitted = codec.submit_data(stream_id, body);
-            body = body.subspan(submitted.consumed_bytes_);
-            if (submitted.status_ == http3_data_submit_status::complete || submitted.consumed_bytes_ != 0) {
+            body.remove_prefix(submitted.consumed_bytes_);
+            if (submitted.status_ == http_data_submit_status::complete || submitted.consumed_bytes_ != 0) {
                 continue;
             }
-            if (submitted.status_ != http3_data_submit_status::backpressured) {
+            if (submitted.status_ != http_data_submit_status::backpressured) {
                 // The server stopped the upload (STOP_SENDING or a reset);
                 // its response or reset is still awaited.
                 return;
@@ -849,7 +850,7 @@ private:
                 return;
             }
         }
-        if (codec.finish_stream(stream_id) != http3_finish_status::accepted && !response_complete(stream)) {
+        if (codec.finish_stream(stream_id) != http_finish_status::accepted && !response_complete(stream)) {
             throw std::runtime_error("HTTP/3 test client cannot finish the request body");
         }
     }
@@ -1005,7 +1006,7 @@ private:
                 found->second.response_.unprocessed_ = true;
                 found->second.closed_ = true;
             }
-        } else if (const auto* closed = event.stream_close()) {
+        } else if (const auto* closed = event.stream_closed()) {
             if (const auto found = streams_.find(closed->stream_id()); found != streams_.end()) {
                 found->second.closed_ = true;
                 auto& reset_error = found->second.response_.reset_error_;

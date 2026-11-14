@@ -567,8 +567,7 @@ TEST(Ruvia, http1_stream_peer_close_stops_request_and_recycles_connections) {
         .on_error([](ruvia::context& c, ruvia::http_error_info error) -> ruvia::task<ruvia::http_response> {
         errors.fetch_add(1);
         std::cerr << "stream_disconnect error: " << error.code() << ": " << error.message() << '\n';
-        c.draft().status(error.status());
-        co_return c.text("unexpected-error");
+        co_return c.text("unexpected-error", {.status_ = error.status()});
     }).on_start([] {
         started.release();
     });

@@ -77,13 +77,6 @@ void set_default_content_type(http_response& response, http_content_type content
     }
 }
 
-void mark_plain_text(http_response& response) {
-    response.content_type(http_content_type::text_plain_utf8);
-    if (!response.header("X-Content-Type-Options")) {
-        response.header_stable_view("X-Content-Type-Options", "nosniff");
-    }
-}
-
 void mark_plain_text_defaults(http_response& response) {
     set_default_content_type(response, http_content_type::text_plain_utf8);
     if (!response.header("X-Content-Type-Options")) {
@@ -96,9 +89,6 @@ void mark_plain_text_defaults(http_response& response) {
 http_response& context_response_editor::target() const {
     if (owner_->response_output().committed()) {
         throw std::logic_error("response metadata is already committed");
-    }
-    if (target_ == target_type::draft) {
-        return owner_->response_state().draft();
     }
     if (target_ == target_type::policy) {
         return owner_->response_state().policy();
@@ -150,93 +140,108 @@ void context::store_response(http_response&& response) {
     response_state().finalize(std::move(response));
 }
 
-http_response context::body(std::string_view body) {
-    auto response = response_state().take_draft_or_new();
+http_response context::body(response_options options) {
+    return detail::make_response(options);
+}
+
+http_response context::body(std::string_view body, response_options options) {
+    auto response = detail::make_response(options);
     response.body(body);
     return response;
 }
 
-http_response context::body_owned(std::string&& body) {
-    auto response = response_state().take_draft_or_new();
+http_response context::body_owned(std::string&& body, const response_options& options) {
+    auto response = detail::make_response(options);
     response.owned_body(std::move(body));
     return response;
 }
 
-http_response context::body(std::span<const std::byte> body) {
-    auto response = response_state().take_draft_or_new();
+http_response context::body(std::span<const std::byte> body, response_options options) {
+    auto response = detail::make_response(options);
     response.body(byte_body_view(body));
     return response;
 }
 
-http_response context::body(static_text body) {
-    auto response = response_state().take_draft_or_new();
+http_response context::body(static_text body, response_options options) {
+    auto response = detail::make_response(options);
     response.static_body(body.view());
     return response;
 }
 
-http_response context::text(std::string_view body) {
-    auto response = response_state().take_draft_or_new();
+http_response context::text(std::string_view body, response_options options) {
+    auto response = detail::make_response(options);
     mark_plain_text_defaults(response);
     response.body(body);
     return response;
 }
 
-http_response context::text_owned(std::string&& body) {
-    auto response = response_state().take_draft_or_new();
+http_response context::text_owned(std::string&& body, const response_options& options) {
+    auto response = detail::make_response(options);
     mark_plain_text_defaults(response);
     response.owned_body(std::move(body));
     return response;
 }
 
-http_response context::text(static_text body) {
-    auto response = response_state().take_draft_or_new();
+http_response context::text(static_text body, response_options options) {
+    auto response = detail::make_response(options);
     mark_plain_text_defaults(response);
     response.static_body(body.view());
     return response;
 }
 
-response_stream_writer& context::stream_text() {
-    auto& writer = stream();
-    if (!response_output().committed()) {
-        mark_plain_text(response_state().draft());
+response_stream_writer& context::stream_text(response_options head) {
+    auto& writer = stream(head);
+    if (!writer.committed() && !response_output().committed()) {
+        mark_plain_text_defaults(response_state().stream_head());
     }
     return writer;
 }
 
-http_response context::json_serialized(std::string& body) {
-    auto response = response_state().take_draft_or_new();
+http_response context::json_serialized(std::string& body, const response_options& options) {
+    auto response = detail::make_response(options);
     set_default_content_type(response, http_content_type::application_json);
     response.owned_body(std::move(body));
     return response;
 }
 
-http_response context::html(std::string_view body) {
-    auto response = response_state().take_draft_or_new();
+http_response context::html(std::string_view body, response_options options) {
+    auto response = detail::make_response(options);
     set_default_content_type(response, http_content_type::text_html_utf8);
     response.body(body);
     return response;
 }
 
-http_response context::html_owned(std::string&& body) {
-    auto response = response_state().take_draft_or_new();
+http_response context::html_owned(std::string&& body, const response_options& options) {
+    auto response = detail::make_response(options);
     set_default_content_type(response, http_content_type::text_html_utf8);
     response.owned_body(std::move(body));
     return response;
 }
 
-http_response context::html(static_text body) {
-    auto response = response_state().take_draft_or_new();
+http_response context::html(static_text body, response_options options) {
+    auto response = detail::make_response(options);
     set_default_content_type(response, http_content_type::text_html_utf8);
     response.static_body(body.view());
     return response;
 }
 
-http_response context::error(http_error_info_options options) const {
-    return error(http_error_info(options));
+http_response context::error(http_error_info_options info, response_options extra) const {
+    return error(http_error_info(info), extra);
 }
 
-http_response context::error(const http_error_info& info) const {
+http_response context::error(const http_error_info& info, response_options extra) const {
+    if (extra.status_) {
+        throw std::invalid_argument("error() takes its status from the error info");
+    }
+    if (detail::response_options_carry_header(extra, "Content-Type")) {
+        throw std::invalid_argument("error() owns the Content-Type field");
+    }
+    if (detail::is_default_response_options(extra)) {
+        return detail::make_default_error_response(info);
+    }
+    const auto fields = detail::make_response(extra);
     auto response = detail::make_default_error_response(info);
+    response.transfer_headers_from(fields, http_response_header_transfer::apply);
     return response;
 }
 
@@ -257,9 +262,35 @@ task<http_response> context::not_found_task() {
 }
 
 http_response context::streaming_head() {
-    auto response = response_state().take_draft_or_new();
+    auto response = response_state().take_stream_head();
     response_state().apply_policy(response);
     return response;
+}
+
+http_response& context::stream_head() {
+    if (response_output().committed()) {
+        throw std::logic_error("response headers are already committed");
+    }
+    return response_state().stream_head();
+}
+
+// Two phases: the candidate is built (and validated) first, so a failure
+// leaves the staged head untouched.
+void context::stage_stream_head(const response_stream_writer& writer, const response_options& head) {
+    if (detail::is_default_response_options(head)) {
+        return;
+    }
+    if (writer.committed()) {
+        throw std::logic_error("response headers are already committed");
+    }
+    const auto candidate = detail::make_response(head);
+    auto& staged = stream_head();
+    if (!candidate.headers().empty()) {
+        staged.transfer_headers_from(candidate, http_response_header_transfer::apply);
+    }
+    if (head.status_) {
+        staged.status(*head.status_);
+    }
 }
 
 task<http_response> detail::context_access::commit_streaming_head(context& context_value) {
@@ -274,33 +305,34 @@ task<http_response> detail::context_access::commit_streaming_head(context& conte
     co_return response;
 }
 
-context& context::set_stable_response_header(borrowed_text name, borrowed_text value) {
-    if (response_output().committed()) {
-        throw std::logic_error("response headers are already committed");
-    }
-    response_state().draft().header_stable_view(name, value);
-    return *this;
-}
-
-void context::apply_response_state(http_response& response, std::optional<http_status_code> status_code) {
-    if (!response_state().has_draft()) {
-        if (status_code.has_value()) {
-            response.status(*status_code);
-        }
-        return;
-    }
-    const auto& metadata = response_state().draft();
-    response.status(status_code.value_or(metadata.status()));
-    if (!metadata.headers().empty()) {
-        response.transfer_headers_from(metadata, http_response_header_transfer::apply);
-    }
-}
-
 namespace {
 
-void write_cookie(http_response& response, std::string_view name, std::string_view value, const cookie_options& options) {
-    const set_cookie_plan plan(name, value, options);
+// secret_ selects the signed value context_request::signed_cookie() verifies.
+void write_cookie(http_response& response, const set_cookie_options& options) {
+    const auto name = options.name_.view();
+    const auto value = options.value_.view();
+    const auto secret = options.secret_.view();
+    if (secret.empty()) {
+        const set_cookie_plan plan(name, value, options.attributes_);
+        response.set_cookie(plan);
+        return;
+    }
+    const auto prefix = options.attributes_.prefix_ ? std::string_view(ruvia::http_cookie_prefix_text(*options.attributes_.prefix_)) : std::string_view{};
+    const detail::inline_text_concat<128> wire_name({prefix, name});
+    char signature[detail::cookie_signature_size];
+    detail::write_cookie_signature(signature, secret, wire_name.view(), value);
+    const detail::inline_text_concat<256> signed_value({value, ".", std::string_view(signature, sizeof(signature))});
+    const set_cookie_plan plan(name, signed_value.view(), options.attributes_);
     response.set_cookie(plan);
+}
+
+void write_priority(http_response& response, http_priority_fields fields_value) {
+    std::array<char, 12> value{};
+    const auto encoded = encode_http_priority(value, fields_value);
+    if ((encoded.index() != 0)) {
+        throw std::invalid_argument("invalid HTTP priority parameters");
+    }
+    response.header("Priority", std::string_view(value.data(), std::get<0>(encoded)));
 }
 
 [[nodiscard]] bool redirect_location_contains_line_break(std::string_view location) noexcept {
@@ -339,29 +371,36 @@ void write_cookie(http_response& response, std::string_view name, std::string_vi
 
 }  // namespace
 
+http_response detail::make_response(const response_options& options) {
+    http_response response;
+    if (options.status_) {
+        response.status(*options.status_);
+    }
+    const auto fields = options.headers_.view();
+    for (auto field = fields.begin(); field != fields.end(); ++field) {
+        const bool repeated = std::any_of(fields.begin(), field, [&](const http_header_view& previous) {
+            return http_ascii_equals_ignore_case(previous.name(), field->name());
+        });
+        response.header(field->name(), field->value(), {.mode_ = repeated ? http_response_header_mode::append : http_response_header_mode::replace});
+    }
+    for (const auto& cookie : options.cookies_) {
+        write_cookie(response, cookie);
+    }
+    if (options.priority_) {
+        write_priority(response, *options.priority_);
+    }
+    return response;
+}
+
 void context_response_editor::set_cookie(set_cookie_options options) {
-    write_cookie(target(), options.name_.view(), options.value_.view(), options.attributes_);
+    write_cookie(target(), options);
 }
 
-void context_response_editor::set_signed_cookie(set_signed_cookie_options options) {
-    const auto name = options.name_.view();
-    const auto value = options.value_.view();
-    const auto secret = options.secret_.view();
-    const auto prefix = options.attributes_.prefix_ ? std::string_view(ruvia::http_cookie_prefix_text(*options.attributes_.prefix_)) : std::string_view{};
-    const detail::inline_text_concat<128> wire_name({prefix, name});
-    char signature[detail::cookie_signature_size];
-    detail::write_cookie_signature(signature, secret, wire_name.view(), value);
-    const detail::inline_text_concat<256> signed_value({value, ".", std::string_view(signature, sizeof(signature))});
-    write_cookie(target(), name, signed_value.view(), options.attributes_);
+void context_response_editor::priority(http_priority_fields fields_value) {
+    write_priority(target(), fields_value);
 }
 
-void context_response_editor::delete_cookie(delete_cookie_options options) {
-    options.attributes_.max_age_.reset();
-    options.attributes_.expires_ = cookie_deletion_expires;
-    write_cookie(target(), options.name_.view(), "", options.attributes_);
-}
-
-http_response context::redirect(redirect_response_options options) {
+http_response context::redirect(redirect_response_options options, response_options extra) {
     const auto location = options.location_.view();
     const auto status_code = options.status_;
     if (!is_http_redirect_status(status_code)) {
@@ -373,32 +412,50 @@ http_response context::redirect(redirect_response_options options) {
     if (redirect_authority_contains_backslash(location)) {
         throw std::invalid_argument("redirect location authority must not contain a backslash");
     }
-    http_response response;
-    apply_response_state(response, status_code);
+    if (extra.status_) {
+        throw std::invalid_argument("redirect() takes its status from redirect_response_options");
+    }
+    if (detail::response_options_carry_header(extra, "Location")) {
+        throw std::invalid_argument("redirect() owns the Location field");
+    }
+    auto response = detail::make_response(extra);
+    response.status(status_code);
     std::string encoded_location;
     response.header("Location", percent_encode_uri_reference(location, encoded_location));
-    response_state().reset_draft();
     return response;
 }
 
-http_response make_health_response(context& context_value) {
-    return detail::context_access::make_static_json_response(context_value, R"({"status":"ok"})");
+namespace {
+
+void require_probe_status(const response_options& extra) {
+    if (extra.status_) {
+        throw std::invalid_argument("health and readiness responses own their status");
+    }
 }
 
-http_response make_readiness_response(context& context_value, readiness_response_options options) {
+}  // namespace
+
+http_response make_health_response(context&, response_options extra) {
+    require_probe_status(extra);
+    return detail::context_access::make_static_json_response(R"({"status":"ok"})", extra);
+}
+
+http_response make_readiness_response(context& context_value, readiness_response_options options, response_options extra) {
+    require_probe_status(extra);
     switch (options.state_) {
         case readiness_state::ready:
-            return detail::context_access::make_static_json_response(context_value, R"({"status":"ready"})");
+            return detail::context_access::make_static_json_response(R"({"status":"ready"})", extra);
         case readiness_state::unavailable:
             break;
         default:
             throw std::invalid_argument("readiness state is invalid");
     }
 
-    context_value.draft().status(http_status::service_unavailable);
     const auto reason = options.unavailable_reason_.view();
     if (reason.empty()) {
-        return detail::context_access::make_static_json_response(context_value, R"({"status":"not_ready"})");
+        auto response = detail::context_access::make_static_json_response(R"({"status":"not_ready"})", extra);
+        response.status(http_status::service_unavailable);
+        return response;
     }
 
     static constexpr std::string_view prefix = R"({"status":"not_ready","reason":)";
@@ -407,7 +464,9 @@ http_response make_readiness_response(context& context_value, readiness_response
     body.append(prefix);
     detail::append_json_string(body, reason);
     body.push_back('}');
-    return detail::context_access::make_owned_json_response(context_value, body);
+    auto response = detail::context_access::make_owned_json_response(context_value, body, extra);
+    response.status(http_status::service_unavailable);
+    return response;
 }
 void context::advertise_origins(std::span<const std::string_view> origins) {
     if (services().connection_advertisements() == nullptr || conn().tls() == nullptr) {
@@ -1122,15 +1181,6 @@ http_priority context_request::priority() const noexcept {
     return (parsed_value.index() == 0) ? std::get<0>(parsed_value).request_priority() : http_priority{};
 }
 
-void context_response_editor::priority(http_priority_fields fields_value) {
-    std::array<char, 12> value{};
-    const auto encoded = encode_http_priority(value, fields_value);
-    if ((encoded.index() != 0)) {
-        throw std::invalid_argument("invalid HTTP priority parameters");
-    }
-    header("Priority", std::string_view(value.data(), std::get<0>(encoded)));
-}
-
 std::optional<std::string_view> context_request::header(std::string_view name) const {
     return context_->request_.header(name);
 }
@@ -1185,26 +1235,21 @@ std::optional<std::string_view> context_request::cookie(std::string_view name) c
     return context_->request_.cookie(name);
 }
 
-request_field_lookup context_request::unique_cookie(std::string_view name) const {
+http_unique_field_lookup context_request::unique_cookie(std::string_view name) const {
     if (const auto& cache = context_->request_storage().cookies_) {
         return cache->unique(name);
     }
     // Scan every Cookie field in place; materializing cookie_fields() would allocate.
-    request_field_lookup result;
+    http_unique_field_lookup result;
     for (const auto& header_field : context_->request_.headers()) {
         if (header_field.name().size() != 6U || !http_ascii_equals_ignore_case(header_field.name(), "Cookie")) {
             continue;
         }
         http_visit_cookie_pairs(header_field.value(), [name, &result](std::string_view key, std::string_view value) noexcept {
-            if (key != name) {
-                return true;
+            if (key == name) {
+                result.add_occurrence(value);
             }
-            if (result.status_ != unique_lookup_status::absent) {
-                result = {unique_lookup_status::repeated, {}};
-                return false;
-            }
-            result = {unique_lookup_status::found, value};
-            return true;
+            return result.status_ != unique_lookup_status::repeated;
         });
         if (result.status_ == unique_lookup_status::repeated) {
             break;
@@ -1213,8 +1258,8 @@ request_field_lookup context_request::unique_cookie(std::string_view name) const
     return result;
 }
 
-request_field_lookup context_request::unique_header(std::string_view name) const {
-    return header_fields().unique(name);
+http_unique_field_lookup context_request::unique_header(std::string_view name) const {
+    return context_->request_.unique_header(name);
 }
 
 const request_name_value_list& context_request::cookie_fields() const {

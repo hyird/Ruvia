@@ -11,6 +11,7 @@
 
 #include <asio.hpp>
 
+#include "asio_completion.h"
 #include "event_loop.h"
 #include "http_client.h"
 #include "http_client_request_view.h"
@@ -216,7 +217,7 @@ void raw_stream(bool http2, bool configured_raw) {
                 EXPECT_EQ(co_await ruvia::sleep_for(worker, std::chrono::milliseconds(20), stop), ruvia::timer_sleep_result::elapsed);
                 informed = true;
             }});
-            auto response = co_await request.send();
+            auto response = co_await std::move(request).send();
             EXPECT_TRUE(informed);
             EXPECT_EQ(response.framing(), http2 ? ruvia::http_client_response_framing::stream : ruvia::http_client_response_framing::fixed_length);
             EXPECT_EQ(response.content_length(), upstream.encoded_.size());
@@ -268,7 +269,7 @@ void read_timeout(bool http2, bool total_only) {
             request.configure({.timeouts_ = {.read_ = total_only ? ruvia::http_client_timeout_override::disabled() : ruvia::http_client_timeout_override::after(std::chrono::milliseconds(20))}});
             bool timed_out = false;
             try {
-                (void)co_await request.send();
+                (void)co_await std::move(request).send();
             } catch (const ruvia::http_client_error& error) {
                 timed_out = error.code() == std::make_error_code(std::errc::timed_out);
                 observed_error.emplace(error);
@@ -397,7 +398,7 @@ TEST(Ruvia, http_client_http2_informational_backpressure_does_not_block_other_st
                     ruvia::stop_group cancellation(stop, release.token());
                     (void)co_await ruvia::sleep_for(worker, std::chrono::hours(1), cancellation.token());
                 }});
-                auto response = co_await request.send();
+                auto response = co_await std::move(request).send();
                 EXPECT_TRUE(response.ok());
                 first_returned = true;
             } catch (...) {
@@ -625,8 +626,7 @@ TEST(Ruvia, http_client_builders_enforce_consumed_state_websocket_options_and_di
         ruvia::http_client client(attachment.loop(), {.base_url_ = url});
         auto builder = client.client().post("/submit");
         builder.header("Content-Type", "text/plain").header("Digest", "SHA-256=abc=").header("Repr-Digest", "sha-256=:abc=:").header("X-Trace", "keep-me").body("body");
-        auto pending = builder.send();
-        EXPECT_THROW(builder.redirects(1), std::logic_error);
+        auto pending = std::move(builder).send();
         auto response = co_await std::move(pending);
         EXPECT_EQ(response.status(), ruvia::http_status::ok);
         const auto body = co_await response.bytes();
@@ -725,7 +725,7 @@ TEST(Ruvia, http_client_plain_connect_omits_origin_cookies_even_for_matching_aut
         const auto verified_body = co_await verified.bytes();
         EXPECT_EQ(verified_body.text(), "ok");
 
-        auto opened = co_await client.client().connect(authority).open();
+        auto opened = co_await client.client().connect(authority).connect();
         EXPECT_NE(opened.tunnel(), nullptr);
         if (opened.tunnel() != nullptr) {
             co_await opened.tunnel()->finish();
@@ -842,7 +842,7 @@ TEST(Ruvia, http1_client_generic_upgrade_preserves_early_binary_bytes_and_caller
                 ++informational_count;
                 co_return;
             }});
-            auto opened = co_await request.upgrade();
+            auto opened = co_await std::move(request).connect();
             EXPECT_EQ(opened.response(), nullptr);
             if (opened.tunnel() == nullptr) {
                 throw std::runtime_error("generic Upgrade did not open a tunnel");
@@ -871,7 +871,7 @@ TEST(Ruvia, http1_client_generic_upgrade_rejection_is_an_ordinary_response) {
     client_upgrade_tests::exchange("HTTP/1.1 426 Upgrade Required\r\nContent-Length: 6\r\nX-Rejected: yes\r\n\r\ndenied", [](ruvia::http_client& client, const ruvia::worker_ref&) -> ruvia::task<void> {
         auto request = client.client().get("/rejected");
         request.header("Connection", "Upgrade").header("Upgrade", "chat/7");
-        auto result = co_await request.upgrade();
+        auto result = co_await std::move(request).connect();
         EXPECT_EQ(result.tunnel(), nullptr);
         if (result.response() == nullptr) {
             throw std::runtime_error("rejected Upgrade lost its HTTP response");
@@ -897,7 +897,7 @@ TEST(Ruvia, http1_client_generic_upgrade_rejects_invalid_switch_agreement) {
             request.header("Connection", "Upgrade").header("Upgrade", "chat/7");
             bool rejected = false;
             try {
-                auto result = co_await request.upgrade();
+                auto result = co_await std::move(request).connect();
                 if (result.tunnel() != nullptr) {
                     result.tunnel()->abort();
                 }
@@ -907,6 +907,38 @@ TEST(Ruvia, http1_client_generic_upgrade_rejects_invalid_switch_agreement) {
             EXPECT_TRUE(rejected);
         });
     }
+}
+
+TEST(Ruvia, http1_client_redirect_rejects_repeated_location) {
+    // RFC 9110 section 10.2.2: a repeated Location has no interoperable recovery.
+    const auto observed = client_upgrade_tests::exchange("HTTP/1.1 302 Found\r\nLocation: /first\r\nLocation: /second\r\nContent-Length: 0\r\n\r\n", [](ruvia::http_client& client, const ruvia::worker_ref&) -> ruvia::task<void> {
+        bool rejected = false;
+        try {
+            (void)co_await client.client().get("/start").send();
+        } catch (const ruvia::http_client_error& error) {
+            rejected = error.code() == ruvia::make_error_code(ruvia::http_client_errc::protocol_error);
+        }
+        EXPECT_TRUE(rejected);
+    });
+    EXPECT_TRUE(observed.request_.starts_with("GET /start HTTP/1.1\r\n"));
+    EXPECT_EQ(observed.payload_.find("GET /first"), std::string::npos);
+    EXPECT_EQ(observed.payload_.find("GET /second"), std::string::npos);
+}
+
+TEST(Ruvia, http1_client_response_unique_header_reports_repeated_lines) {
+    (void)client_upgrade_tests::exchange("HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\ncontent-type: text/html\r\nX-Empty:\r\nContent-Length: 2\r\n\r\nok", [](ruvia::http_client& client, const ruvia::worker_ref&) -> ruvia::task<void> {
+        auto response = co_await client.client().get("/types").send();
+        EXPECT_TRUE(response.unique_header("Content-Type").status_ == ruvia::unique_lookup_status::repeated);
+        EXPECT_TRUE(response.unique_header("Content-Type").value_.empty());
+        EXPECT_TRUE(response.unique_header("x-missing").status_ == ruvia::unique_lookup_status::absent);
+        const auto empty = response.unique_header("x-empty");
+        EXPECT_TRUE(empty.status_ == ruvia::unique_lookup_status::found);
+        EXPECT_TRUE(empty.value_.empty());
+        // The singular getter keeps the first line.
+        EXPECT_EQ(response.header("content-type"), std::optional<std::string_view>("text/plain"));
+        const auto body = co_await response.stream().read_all();
+        EXPECT_EQ(body.text(), "ok");
+    });
 }
 
 TEST(Ruvia, http1_client_informational_callbacks_backpressure_coalesced_heads) {
@@ -934,7 +966,7 @@ TEST(Ruvia, http1_client_informational_callbacks_backpressure_coalesced_heads) {
         }});
         const auto send = [&]() -> ruvia::task<void> {
             try {
-                auto response = co_await request.send();
+                auto response = co_await std::move(request).send();
                 returned = true;
                 EXPECT_EQ(response.informational_responses().size(), std::size_t{2});
                 const auto body = co_await response.stream().read_all();
@@ -973,7 +1005,7 @@ TEST(Ruvia, http1_client_informational_callback_failure_terminates_exchange) {
         }});
         bool failed = false;
         try {
-            auto response = co_await request.send();
+            auto response = co_await std::move(request).send();
             static_cast<void>(response);
         } catch (const std::runtime_error& error) {
             failed = std::string_view(error.what()) == "informational callback failed";
@@ -1035,7 +1067,7 @@ TEST(Ruvia, http1_client_informational_callback_observes_deadline_and_explicit_s
             }});
             const auto send = [&]() -> ruvia::task<void> {
                 try {
-                    auto response = co_await request.send();
+                    auto response = co_await std::move(request).send();
                     static_cast<void>(response);
                 } catch (const ruvia::http_client_error& error) {
                     code = error.code();
@@ -1152,7 +1184,7 @@ TEST(Ruvia, http1_client_buffered_upload_receives_hints_before_blocked_write_com
             }});
             const auto send = [&]() -> ruvia::task<void> {
                 try {
-                    auto response = co_await request.send();
+                    auto response = co_await std::move(request).send();
                     EXPECT_NE(expected, outcome::cancel);
                     EXPECT_EQ(response.status().value(), expected == outcome::early_final ? 413 : 200);
                     const auto body = co_await response.stream().read_all();

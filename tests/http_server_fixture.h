@@ -879,7 +879,7 @@ inline void append(std::string& target, const std::optional<std::span<const std:
 
 // A tunnel read timeout keeps the tunnel; stopped output sends nothing.
 [[nodiscard]] inline ruvia::task<void> check_tunnel(ruvia::http_client_ref client) {
-    auto opened = co_await client.connect("operation.test:443").open();
+    auto opened = co_await client.connect("operation.test:443").connect();
     auto* tunnel = opened.tunnel();
     EXPECT_TRUE(tunnel != nullptr);
     if (tunnel == nullptr) {

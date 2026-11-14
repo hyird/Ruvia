@@ -221,10 +221,10 @@ TEST(Ruvia, http_client_ref_origin_and_expired_send_reject_after_shutdown) {
                     (void)handle.get("/").upload({});
                 }));
                 EXPECT_TRUE(throws_logic_error([&] {
-                    (void)handle.connect("127.0.0.1:8089").open();
+                    (void)handle.connect("127.0.0.1:8089").connect();
                 }));
                 EXPECT_TRUE(throws_logic_error([&] {
-                    (void)handle.udp("/udp").open();
+                    (void)handle.udp("/udp").connect();
                 }));
                 EXPECT_TRUE(throws_logic_error([&] {
                     (void)handle.with_options({});
@@ -389,19 +389,15 @@ public:
         const auto body = co_await c.req().bytes();
         fluent_client_observation observed;
         observed.set<"method">(c.req().method()).set<"body">(std::string_view(reinterpret_cast<const char*>(body.data()), body.size())).set<"query">(c.req().query("escaped name").value_or("")).set<"single_header">(c.req().header("x-owned").value_or("")).set<"span_header">(c.req().header("x-span").value_or("")).set<"authorization">(c.req().header("authorization").value_or("")).set<"proxy_authorization">(c.req().header("proxy-authorization").value_or("")).set<"cookie">(c.req().header("cookie").value_or("")).set<"content_type">(c.req().header("content-type").value_or("")).set<"authority">(c.req().authority().empty() ? c.req().header("host").value_or("") : c.req().authority());
-        c.draft().header("x-observed-method", c.req().method());
-        c.draft().header("x-observed-user-agent", c.req().header("user-agent").value_or(""));
-        if (const auto cookie = c.req().query("set-cookie")) {
-            c.draft().header("set-cookie", *cookie);
-        }
-        co_return c.json(observed);
+        const auto cookie = c.req().query("set-cookie");
+        const std::array headers{ruvia::http_header_view{"x-observed-method", c.req().method()}, ruvia::http_header_view{"x-observed-user-agent", c.req().header("user-agent").value_or("")}, ruvia::http_header_view{"set-cookie", cookie.value_or("")}};
+        co_return c.json(observed, {.headers_ = std::span(headers).first(cookie ? 3 : 2)});
     }
 
     ruvia::task<ruvia::http_response> redirect(ruvia::context& c) {
         (void)co_await c.req().bytes();
-        c.draft().status(ruvia::http_status_code(c.req().query<std::uint16_t>("status").value_or(302)));
-        c.draft().header("location", c.req().query("location").value_or("/fluent/inspect"));
-        co_return c.text("redirect");
+        const std::array headers{ruvia::http_header_view{"location", c.req().query("location").value_or("/fluent/inspect")}};
+        co_return c.text("redirect", {.status_ = ruvia::http_status_code(c.req().query<std::uint16_t>("status").value_or(302)), .headers_ = headers});
     }
 
     ruvia::task<ruvia::http_response> hold(ruvia::context& c) {
@@ -437,19 +433,14 @@ public:
         const auto& target = mode == "unregistered" ? targets.unregistered_ : targets.destination_;
         auto origin = c.client(mode == "downgrade" ? "secure" : "source");
         auto response = co_await origin.post("/fluent/redirect").query("location", std::string(target) + "/fluent/inspect").header("authorization", "Bearer source-secret").header("proxy-authorization", "Basic proxy-secret").header("cookie", "explicit=source-secret").header("content-type", "text/plain").body("source-body").send();
-        c.draft().status(response.status());
+        const auto status = response.status();
         auto body = co_await response.bytes();
-        co_return c.body(body.bytes());
+        co_return c.body(body.bytes(), {.status_ = status});
     }
 
     ruvia::task<void> stream_source(ruvia::context& c) {
-        c.draft().status(ruvia::http_status::created);
-        c.draft().header("x-stream-source", "retained");
-        c.draft().header("Content-Type", "application/octet-stream");
-        c.draft().header("Date", "Thu, 01 Jan 1970 00:00:00 GMT");
-        c.draft().header("Link", "</first>; rel=preload");
-        c.draft().header("Link", "</second>; rel=preload", {.mode_ = ruvia::http_response_header_mode::append});
-        auto& output = c.stream();
+        const std::array headers{ruvia::http_header_view{"x-stream-source", "retained"}, ruvia::http_header_view{"Content-Type", "application/octet-stream"}, ruvia::http_header_view{"Date", "Thu, 01 Jan 1970 00:00:00 GMT"}, ruvia::http_header_view{"Link", "</first>; rel=preload"}, ruvia::http_header_view{"Link", "</second>; rel=preload"}};
+        auto& output = c.stream({.status_ = ruvia::http_status::created, .headers_ = headers});
         if (co_await output.commit() == ruvia::stream_commit_result::body) {
             co_await output.write("first");
             co_await output.write("second");
@@ -604,7 +595,7 @@ TEST(Ruvia, http_client_fluent_ownership_helpers_json_and_registered_redirects) 
                 query_value.assign("changed");
                 span_value.assign("changed");
                 payload.assign("changed");
-                return request.send();
+                return std::move(request).send();
             }();
             auto response = co_await std::move(cold);
             EXPECT_TRUE(response.ok());
@@ -623,11 +614,6 @@ TEST(Ruvia, http_client_fluent_ownership_helpers_json_and_registered_redirects) 
                 replay_rejected = true;
             }
             EXPECT_TRUE(replay_rejected);
-            EXPECT_TRUE(ruvia::test::throws_on([&] {
-                auto consumed = origin.get("/fluent/inspect");
-                auto first = consumed.send();
-                (void)consumed.send();
-            }));
 
             auto temporary = origin.post(std::string("/fluent/inspect")).body(std::string("temporary-body")).send();
             auto temporary_response = co_await std::move(temporary);
@@ -1035,13 +1021,13 @@ TEST(Ruvia, http_client_unconsumed_builders_outlive_shutdown_and_client_storage)
         }
         try {
             EXPECT_TRUE(throws_logic_error([&] {
-                (void)request->send();
+                (void)std::move(*request).send();
             }));
             EXPECT_TRUE(throws_logic_error([&] {
-                (void)connect->open();
+                (void)std::move(*connect).connect();
             }));
             EXPECT_TRUE(throws_logic_error([&] {
-                (void)websocket->connect();
+                (void)std::move(*websocket).connect();
             }));
             request.reset();
             connect.reset();

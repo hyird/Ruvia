@@ -123,7 +123,6 @@ private:
     void on_delay(worker_timer_outcome outcome) noexcept;
     void on_connect(std::size_t index, const std::error_code& error) noexcept;
     void close_active() noexcept;
-    static void close_socket(asio::ip::tcp::socket& socket) noexcept;
 
     const worker_ref& worker_;
     worker_signal changed_;

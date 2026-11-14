@@ -147,7 +147,7 @@ std::string make_drop_object_sql(db_driver driver, std::string_view kind, std::s
     return sql;
 }
 
-std::string make_add_timescale_policy_sql(db_driver driver, std::string_view function, std::string_view table_value, std::string_view param_name, db_expression after, bool if_not_exists) {
+std::string make_add_timescale_policy_sql(db_driver driver, std::string_view function, std::string_view table_value, std::string_view param_name, const db_expr& after, bool if_not_exists) {
     if (after.empty()) {
         throw std::invalid_argument("schema expression is required");
     }
@@ -213,7 +213,7 @@ std::string db_schema::constraint_name(std::string_view table, std::string_view 
     name.append(suffix);
     return name;
 }
-void db_schema::append_expression(std::string& s, db_expression e) const {
+void db_schema::append_expression(std::string& s, const db_expr& e) const {
     if (e.empty()) {
         throw std::invalid_argument("schema expression is required");
     }
@@ -481,7 +481,7 @@ void db_schema::rename_column(std::string_view t, std::string_view c, std::strin
     append_db_identifier(s, n, driver_);
     append(std::move(s));
 }
-void db_schema::alter_column_type(std::string_view t, std::string_view c, const db_type_definition& ty, db_expression u) {
+void db_schema::alter_column_type(std::string_view t, std::string_view c, const db_type_definition& ty, const db_expr& u) {
     require_postgresql();
     auto s = begin_alter_column(driver_, t, c, " ALTER COLUMN ", 64U);
     s += " TYPE ";
@@ -498,7 +498,7 @@ void db_schema::set_column_nullable(std::string_view t, std::string_view c, bool
     s += n ? " DROP NOT NULL" : " SET NOT NULL";
     append(std::move(s));
 }
-void db_schema::set_column_default(std::string_view t, std::string_view c, db_expression e) {
+void db_schema::set_column_default(std::string_view t, std::string_view c, const db_expr& e) {
     auto s = begin_alter_column(driver_, t, c, " ALTER COLUMN ", 64U);
     s += " SET DEFAULT ";
     append_expression(s, e);
@@ -713,7 +713,7 @@ void db_schema::execute(const db_query& q) {
     auto st = q.compile(driver_, db_parameter_mode::literal);
     append(std::string(st.sql()));
 }
-void db_schema::perform(db_expression e) {
+void db_schema::perform(const db_expr& e) {
     require_postgresql();
     std::string s;
     s.reserve(64U);
@@ -1007,7 +1007,7 @@ void db_schema::create_hypertable(const db_hypertable_options& options) {
     sql += ')';
     append(std::move(sql), db_migration_atomicity::transactional, true);
 }
-void db_schema::set_chunk_time_interval(std::string_view table_value, db_expression interval) {
+void db_schema::set_chunk_time_interval(std::string_view table_value, const db_expr& interval) {
     require_postgresql();
     auto sql = begin_timescale_perform(driver_, "set_chunk_time_interval", table_value, 64U);
     sql += ", ";
@@ -1053,7 +1053,7 @@ void db_schema::set_compression(std::string_view table_value, const db_compressi
     }
     set_table_options(table_value, std::span<const db_table_option>(values.data(), value_count));
 }
-void db_schema::add_compression_policy(std::string_view table_value, db_expression after, bool if_not_exists) {
+void db_schema::add_compression_policy(std::string_view table_value, const db_expr& after, bool if_not_exists) {
     require_postgresql();
     append(make_add_timescale_policy_sql(driver_, "add_compression_policy", table_value, "compress_after", after, if_not_exists), db_migration_atomicity::transactional, true);
 }
@@ -1061,7 +1061,7 @@ void db_schema::remove_compression_policy(std::string_view table_value, bool if_
     require_postgresql();
     append(make_remove_timescale_policy_sql(driver_, "remove_compression_policy", table_value, if_exists), db_migration_atomicity::transactional, true);
 }
-void db_schema::add_retention_policy(std::string_view table_value, db_expression after, bool if_not_exists) {
+void db_schema::add_retention_policy(std::string_view table_value, const db_expr& after, bool if_not_exists) {
     require_postgresql();
     append(make_add_timescale_policy_sql(driver_, "add_retention_policy", table_value, "drop_after", after, if_not_exists), db_migration_atomicity::transactional, true);
 }
@@ -1168,7 +1168,7 @@ private:
 }  // namespace
 
 db_procedure::db_procedure() noexcept = default;
-void db_procedure::append_expression(std::string& output, db_expression value) const {
+void db_procedure::append_expression(std::string& output, const db_expr& value) const {
     detail::append_db_expression(output, value, pg);
 }
 void db_procedure::require_unique_variable(std::string_view name) const {
@@ -1211,7 +1211,7 @@ void db_procedure::declare_record(std::string_view name) {
     variables_.emplace_back(name);
     guard.commit();
 }
-void db_procedure::assign(std::string_view target, db_expression value) {
+void db_procedure::assign(std::string_view target, const db_expr& value) {
     procedure_append_guard guard(statements_, 32U + target.size());
     detail::append_db_qualified_identifier(statements_, target, pg);
     statements_ += " := ";
@@ -1248,7 +1248,7 @@ void db_procedure::execute(const db_query& query) {
     statements_ += ";\n";
     guard.commit();
 }
-void db_procedure::perform(db_expression expression) {
+void db_procedure::perform(const db_expr& expression) {
     procedure_append_guard guard(statements_, 48U);
     detail::append_db_perform_statement(statements_, expression);
     statements_ += ";\n";
@@ -1270,7 +1270,7 @@ void db_procedure::apply(const db_schema& schema) {
     }
     guard.commit();
 }
-void db_procedure::begin_if(db_expression condition) {
+void db_procedure::begin_if(const db_expr& condition) {
     procedure_append_guard guard(statements_, 48U);
     statements_ += "IF ";
     append_expression(statements_, condition);
@@ -1278,7 +1278,7 @@ void db_procedure::begin_if(db_expression condition) {
     blocks_.push_back(block_type::if_);
     guard.commit();
 }
-void db_procedure::else_if(db_expression condition) {
+void db_procedure::else_if(const db_expr& condition) {
     if (blocks_.empty() || blocks_.back() != block_type::if_) {
         throw std::invalid_argument("ELSEIF requires an open IF without ELSE");
     }
@@ -1342,7 +1342,7 @@ void db_procedure::begin_for_query(std::string_view target, const db_query& quer
     blocks_.push_back(block_type::loop);
     guard.commit();
 }
-void db_procedure::begin_foreach(std::string_view target, db_expression array, unsigned slice) {
+void db_procedure::begin_foreach(std::string_view target, const db_expr& array, unsigned slice) {
     procedure_append_guard guard(statements_, 48U + target.size());
     statements_ += "FOREACH ";
     detail::append_db_identifier(statements_, target, pg);
@@ -1363,7 +1363,7 @@ void db_procedure::end_loop() {
     statements_ += "END LOOP;\n";
     blocks_.pop_back();
 }
-void db_procedure::execute_dynamic(db_expression command, std::span<const db_expression> using_args) {
+void db_procedure::execute_dynamic(const db_expr& command, std::span<const db_expr> using_args) {
     procedure_append_guard guard(statements_, 48U + using_args.size() * 24U);
     statements_ += "EXECUTE ";
     append_expression(statements_, command);
@@ -1385,7 +1385,7 @@ void db_procedure::lock_table(std::string_view table, db_table_lock_mode mode, b
     statements_.append(";\n");
     guard.commit();
 }
-void db_procedure::return_value(db_expression expression) {
+void db_procedure::return_value(const db_expr& expression) {
     procedure_append_guard guard(statements_, 32U);
     statements_ += "RETURN";
     if (!expression.empty()) {

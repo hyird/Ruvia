@@ -223,16 +223,16 @@ redis_session request_stream::redis(std::string_view alias) const {
 }
 #endif
 
-context_response_editor request_stream::draft() & noexcept {
-    return context_.draft();
+context_response_editor request_stream::policy() & noexcept {
+    return context_.policy();
 }
 
-task<http_response> request_stream::file(file_response_options options) {
-    return make_scoped_operation(operation_scope_, context_.file(options));
+task<http_response> request_stream::file(file_response_options options, response_options head) {
+    return make_scoped_operation(operation_scope_, context_.file(options, head));
 }
 
-task<http_response> request_stream::static_file(const static_root& root, static_file_response_options options) {
-    return make_scoped_operation(operation_scope_, context_.static_file(root, options));
+task<http_response> request_stream::static_file(const static_root& root, static_file_response_options options, response_options head) {
+    return make_scoped_operation(operation_scope_, context_.static_file(root, options, head));
 }
 
 void request_stream::respond(http_response response) {
@@ -247,7 +247,8 @@ void request_stream::respond(http_response response) {
     context_.respond(std::move(response));
 }
 
-response_stream_writer& request_stream::response() & noexcept {
+response_stream_writer& request_stream::response(response_options head) & {
+    detail::context_access::stage_stream_head(context_, response_, head);
     return response_;
 }
 
@@ -269,7 +270,7 @@ task<http_tunnel*> request_stream::accept_tunnel_impl(http_status_code status, h
         if (!status.is_successful()) {
             throw std::invalid_argument("a CONNECT tunnel is accepted with a 2xx status");
         }
-        context_.draft().status(status);
+        detail::context_access::stream_head(context_).status(status);
     } else if (status != http_status::switching_protocols) {
         throw std::invalid_argument("an HTTP/1.1 Upgrade is accepted with 101 (Switching Protocols)");
     }

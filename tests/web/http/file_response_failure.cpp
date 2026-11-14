@@ -155,7 +155,7 @@ TEST(Ruvia, file_failures_before_the_head_get_an_error_response_and_stalled_open
 
     auto& app = ruvia::app();
     static std::binary_semaphore started{0};
-    app.server({.worker_count_ = 1, .connection_scan_interval_ = 5ms, .write_timeout_ = write_timeout}).blocking_pool({.thread_count_ = 1, .queue_capacity_ = 4}).listen({.address_ = "127.0.0.1", .http_ = endpoint.port()}).on_connection_failure(&record_failure).on_start([] {
+    app.server({.worker_count_ = 1, .connection_scan_interval_ = 5ms, .write_timeout_ = write_timeout}).blocking_pool({.thread_count_ = 1, .queue_capacity_ = 4}).listen({.address_ = "127.0.0.1", .http_ = endpoint.port()}).callbacks({.connection_failure_ = &record_failure}).on_start([] {
         started.release();
     });
     ruvia::test::app_run runner(app);

@@ -586,20 +586,13 @@ public:
     [[nodiscard]] constexpr db_field_reference with_alias(borrowed_text alias) const noexcept {
         return db_field_reference(alias);
     }
-    [[nodiscard]] db_expression expression(db_query& query, std::string_view fallback_alias = {}) const {
-        const auto qualifier = !alias_.empty() ? alias_.view() : (fallback_alias.empty() ? e_type::table_name() : fallback_alias);
-        return query.column(field_name.view(), qualifier);
-    }
-    [[nodiscard]] db_expression excluded(db_query& query) const {
-        return query.excluded(field_name.view());
-    }
     [[nodiscard]] db_expr to_expr() const {
         return db_expr(detail::db_owned_expression::make_static_column(field_name.view(), e_type::table_name(), alias_));
     }
     [[nodiscard]] operator db_expr() const {
         return to_expr();
     }
-    [[nodiscard]] db_expr excluded_expr() const noexcept {
+    [[nodiscard]] db_expr excluded() const noexcept {
         return db_expr(detail::db_owned_expression::make_static_excluded(field_name.view()));
     }
     [[nodiscard]] db_order_term asc(db_nulls_order nulls = db_nulls_order::default_) const {
@@ -831,7 +824,7 @@ public:
     [[nodiscard]] db_assignment set_excluded() const
         requires is_writable
     {
-        return db_assignment{field_name.view(), excluded_expr()};
+        return db_assignment{field_name.view(), excluded()};
     }
     template <typename number_type = std::int64_t>
         requires(is_writable && is_numeric && (std::integral<number_type> || std::floating_point<number_type>) && !std::same_as<number_type, bool>)

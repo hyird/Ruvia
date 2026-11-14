@@ -25,6 +25,7 @@
 #include <openssl/crypto.h>
 #include <openssl/ssl.h>
 
+#include "asio_completion.h"
 #include "asio_ip_address.h"
 #include "borrowed_text.h"
 #include "connection_lifecycle.h"
@@ -171,7 +172,7 @@ struct http_server_listener_definition final {
         std::shared_ptr<const std::array<std::uint8_t, 32>> secret_;
     };
 
-    // listener_dispatch::connection: application::on_connection serves every
+    // listener_dispatch::connection: the host's connection_ callback serves every
     // connection. A TLS listener offers alpn_ (tls_config::alpn_ or its
     // default) in server preference, encoded as an RFC 7301 §3.1
     // ProtocolNameList without its length prefix; empty for a cleartext one.
@@ -203,7 +204,7 @@ struct http_server_listener_definition final {
     std::optional<http3_service> http3_;
     // Absent for listener_dispatch::routes.
     std::optional<connection_dispatch> connection_;
-    // listener_dispatch::request_stream: application::on_request_stream serves
+    // listener_dispatch::request_stream: the host's request_stream_ callback serves
     // every request, on this listener and on its HTTP/3 service.
     bool request_stream_{false};
 };
@@ -367,7 +368,7 @@ struct prepared_listener_access final {
         if (!state->caller_.is_current() || !state->caller_.accepting()) {
             throw std::logic_error("listener preparation must run on its live caller worker");
         }
-        async_start(std::move(operation), asio::bind_executor(state->caller_.executor(), [state](std::exception_ptr failure) {
+        async_start(std::move(operation), asio::bind_executor(detail::worker_executor(state->caller_), [state](std::exception_ptr failure) {
             state->complete(std::move(failure));
         }));
         co_await state->ready_.wait();
@@ -440,6 +441,17 @@ inline void cleanse_identity(tls_identity_config& identity) noexcept {
     return *normalized;
 }
 
+// The one resolver of a listener_endpoint every listener control uses. Port 0
+// never names a served endpoint (listen_config rejects it), so it is rejected
+// here like a non-numeric address.
+[[nodiscard]] inline asio::ip::tcp::endpoint listener_target(const listener_endpoint& endpoint) {
+    const auto address = normalize_listen_address(endpoint.address_.view());
+    if (endpoint.port_.value() == 0) {
+        throw std::invalid_argument("listener endpoint requires a nonzero port");
+    }
+    return {address, endpoint.port_.value()};
+}
+
 // listen() and replace_tls_identities() own their tls_config, the only copy
 // of each private-key password and in-memory PEM text the application ever
 // holds: credentials are loaded from it and every such secret is cleansed
@@ -465,6 +477,43 @@ public:
 
 private:
     tls_config& config_;
+};
+
+// replace_tls_identities() owns its tls_config from the call on; the
+// passwords and PEM copies are cleansed when the control completes or is dropped.
+struct owned_tls_config final {
+    explicit owned_tls_config(tls_config config) :
+        config_(std::move(config)) {}
+    owned_tls_config(owned_tls_config&&) = default;
+    owned_tls_config(const owned_tls_config&) = delete;
+    owned_tls_config& operator=(const owned_tls_config&) = delete;
+    owned_tls_config& operator=(owned_tls_config&&) = delete;
+    ~owned_tls_config() {
+        tls_secret_cleanser cleanser(config_);
+    }
+    tls_config config_;
+};
+
+// The one runtime-control contract behind listener_controls: application and
+// http_server_group implement it. Every input is owned and every endpoint
+// resolved before the call; a returned cold task never borrows the backend
+// object (each implementation pins its state by shared_ptr).
+class listener_backend {
+public:
+    listener_backend() = default;
+    virtual ~listener_backend() = default;
+    listener_backend(const listener_backend&) = delete;
+    listener_backend& operator=(const listener_backend&) = delete;
+
+    [[nodiscard]] virtual task<void> add(worker_ref caller, owned_listen_configs input, std::shared_ptr<prepared_listener_state> transaction) = 0;
+    [[nodiscard]] virtual task<void> remove(worker_ref caller, asio::ip::tcp::endpoint target, listener_remove_options options) = 0;
+    [[nodiscard]] virtual task<void> wait_connections(worker_ref caller, asio::ip::tcp::endpoint target, operation_options options) = 0;
+    [[nodiscard]] virtual task<void> replace_tls(worker_ref caller, asio::ip::tcp::endpoint target, owned_tls_config config) = 0;
+    [[nodiscard]] virtual task<bool> close_connection(worker_ref caller, std::uint64_t connection_id) = 0;
+#ifndef _WIN32
+    [[nodiscard]] virtual task<listener_sockets> duplicate(worker_ref caller, asio::ip::tcp::endpoint target) = 0;
+#endif
+    [[nodiscard]] virtual http_server_stats stats() const = 0;
 };
 
 // Validates every TLS setting of one listener before any credential is read,

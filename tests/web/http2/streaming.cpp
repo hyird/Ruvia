@@ -82,11 +82,9 @@ class sleeping_stream_routes final {
 
     // HEAD 正常完成，不启动生产循环，也不会取消业务等待 token。
     ruvia::task<void> head_loop_sse(ruvia::context& context_value) {
-        if (context_value.req().query("not-modified").has_value()) {
-            context_value.draft().status(ruvia::http_status::not_modified);
-        }
+        const auto status = context_value.req().query("not-modified").has_value() ? std::optional(ruvia::http_status::not_modified) : std::nullopt;
         auto& observed = *context_value.worker_state<std::shared_ptr<sleeping_stream_observation>>();
-        auto writer = context_value.stream_sse();
+        auto writer = context_value.stream_sse({.status_ = status});
         const auto token = context_value.stop_token();
         if (co_await writer.commit() == ruvia::stream_commit_result::body) {
             co_await writer.write({.data_ = "tick"});
@@ -132,8 +130,8 @@ class sleeping_stream_routes final {
     }
 
     ruvia::task<void> head_trailer_write(ruvia::context& context_value) {
-        auto& out = context_value.stream_text();
-        context_value.draft().header("Trailer", "X-Complete");
+        const ruvia::http_header_view trailer_field[] = {{"Trailer", "X-Complete"}};
+        auto& out = context_value.stream_text({.headers_ = trailer_field});
         if (co_await out.commit() == ruvia::stream_commit_result::completed) {
             co_return;
         }
@@ -144,9 +142,9 @@ class sleeping_stream_routes final {
 
     ruvia::task<void> head_trailer_only(ruvia::context& context_value) {
         auto& observed = *context_value.worker_state<std::shared_ptr<sleeping_stream_observation>>();
-        auto& out = context_value.stream_text();
+        const ruvia::http_header_view trailer_field[] = {{"Trailer", "X-Complete"}};
+        auto& out = context_value.stream_text({.headers_ = trailer_field});
         const auto token = context_value.stop_token();
-        context_value.draft().header("Trailer", "X-Complete");
         const ruvia::http_header_view trailers[] = {{"X-Complete", "yes"}};
         if (co_await out.commit() == ruvia::stream_commit_result::body) {
             co_await out.end(trailers);
@@ -162,8 +160,8 @@ class sleeping_stream_routes final {
     }
 
     ruvia::task<void> stream_custom(ruvia::context& context_value) {
-        context_value.draft().header("Content-Encoding", "x-custom");
-        auto& out = context_value.stream_text();
+        const ruvia::http_header_view coding[] = {{"Content-Encoding", "x-custom"}};
+        auto& out = context_value.stream_text({.headers_ = coding});
         if (co_await out.commit() == ruvia::stream_commit_result::completed) {
             co_return;
         }
@@ -172,8 +170,7 @@ class sleeping_stream_routes final {
     }
 
     ruvia::task<void> stream_204(ruvia::context& context_value) {
-        context_value.draft().status(ruvia::http_status::no_content);
-        co_await context_value.stream_text().end();
+        co_await context_value.stream_text({.status_ = ruvia::http_status::no_content}).end();
     }
 
     ruvia::task<ruvia::http_response> bounded_buffered(ruvia::context& context_value) {
@@ -993,8 +990,8 @@ public:
         if (context_value.req().header("x-promise") != "owned-request") {
             throw std::runtime_error("lost push request metadata");
         }
-        context_value.draft().header("x-asset", "metadata");
-        co_return context_value.text("pushed-body");
+        const ruvia::http_header_view headers[] = {{"x-asset", "metadata"}};
+        co_return context_value.text("pushed-body", {.headers_ = headers});
     }
     // Answers well after the client's first, interrupted wait for it.
     ruvia::task<ruvia::http_response> delayed(ruvia::context& context_value) {

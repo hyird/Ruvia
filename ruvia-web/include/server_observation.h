@@ -245,7 +245,7 @@ struct server_observation_access;
 }  // namespace detail
 
 // One ClientHello a server TLS connection received, passed to
-// on_tls_client_hello before the server selects its certificate. The record
+// tls_client_hello_ before the server selects its certificate. The record
 // and every view are valid only for the callback.
 class tls_client_hello_record final {
 public:
@@ -304,7 +304,7 @@ private:
     bool quic_;
 };
 
-// One read of decrypted HTTP/2 connection input, passed to on_http2_input
+// One read of decrypted HTTP/2 connection input, passed to http2_input_
 // before the server parses it. The record and its view are valid only for the
 // callback.
 class http2_input_record final {

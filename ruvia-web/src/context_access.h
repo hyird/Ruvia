@@ -1403,34 +1403,26 @@ private:
     std::optional<request_query_values> values_;
 };
 
-// Draft and selected response have disjoint ownership. Building a response
-// consumes the draft; selecting or replacing a response never merges metadata.
+// The staged stream head and the selected response have disjoint ownership.
+// Builders never read context state; selecting or replacing a response never
+// merges metadata.
 class context_response_state final {
 public:
     context_response_state() noexcept = default;
 
-    [[nodiscard]] bool has_draft() const noexcept {
-        return draft_.has_value();
-    }
-    [[nodiscard]] http_status_code draft_status() const noexcept {
-        return draft_ ? draft_->status() : http_status::ok;
-    }
-    void reset_draft() noexcept {
-        draft_.reset();
-    }
-    [[nodiscard]] http_response take_draft_or_new() noexcept {
-        if (!draft_) {
+    [[nodiscard]] http_response take_stream_head() noexcept {
+        if (!stream_head_) {
             return http_response{};
         }
-        auto response = std::move(*draft_);
-        draft_.reset();
+        auto response = std::move(*stream_head_);
+        stream_head_.reset();
         return response;
     }
-    [[nodiscard]] http_response& draft() {
-        if (!draft_) {
-            draft_.emplace();
+    [[nodiscard]] http_response& stream_head() {
+        if (!stream_head_) {
+            stream_head_.emplace();
         }
-        return *draft_;
+        return *stream_head_;
     }
     [[nodiscard]] http_response* final() noexcept {
         return final_ ? &*final_ : nullptr;
@@ -1477,7 +1469,7 @@ public:
     http_response&& release_final() && = delete;
 
 private:
-    std::optional<http_response> draft_;
+    std::optional<http_response> stream_head_;
     std::optional<http_response> policy_;
     std::optional<http_response> defaults_;
     std::optional<http_status_code> policy_status_;
@@ -1532,6 +1524,24 @@ public:
     bool route_params_invalid_{false};
     bool route_params_unencoded_{false};
 };
+
+// A fresh response carrying `options`: status, header lines (the first line of
+// a name replaces, later ones append), cookies (signed when secret_ is set)
+// and priority. Throws for invalid input before anything else is touched.
+[[nodiscard]] http_response make_response(const response_options& options);
+
+[[nodiscard]] inline bool is_default_response_options(const response_options& options) noexcept {
+    return !options.status_ && options.headers_.empty() && options.cookies_.empty() && !options.priority_;
+}
+
+[[nodiscard]] inline bool response_options_carry_header(const response_options& options, std::string_view name) noexcept {
+    for (const auto& field : options.headers_) {
+        if (http_ascii_equals_ignore_case(field.name(), name)) {
+            return true;
+        }
+    }
+    return false;
+}
 
 class context_websocket_binding;
 class context_tunnel_binding;
@@ -1615,11 +1625,12 @@ struct context_access final {
     // representation is selected and the content type copied before the task
     // is returned, so `relative` and `content_type_value` are read only by
     // this call; `root` and `base_entry` (a view into it) must outlive the
-    // task, which opens a file-backed entry on the blocking pool.
-    [[nodiscard]] static task<http_response> static_file_resolved(context& context_value, const static_root& root, std::string_view relative, std::string_view content_type_value, static_root_entry_view base_entry, static_file_selection_mode mode);
+    // task, which opens a file-backed entry on the blocking pool. `head`
+    // carries the caller's response_options (see make_response).
+    [[nodiscard]] static task<http_response> static_file_resolved(context& context_value, const static_root& root, std::string_view relative, std::string_view content_type_value, static_root_entry_view base_entry, static_file_selection_mode mode, http_response head);
 
-    [[nodiscard]] static http_response make_static_json_response(context& context_value, std::string_view json_body) {
-        auto response = context_value.response_state().take_draft_or_new();
+    [[nodiscard]] static http_response make_static_json_response(std::string_view json_body, const response_options& options) {
+        auto response = make_response(options);
         if (!response.header("Content-Type")) {
             response.content_type(http_content_type::application_json);
         }
@@ -1627,8 +1638,8 @@ struct context_access final {
         return response;
     }
 
-    [[nodiscard]] static http_response make_owned_json_response(context& context_value, std::string& json_body) {
-        return context_value.json_serialized(json_body);
+    [[nodiscard]] static http_response make_owned_json_response(context& context_value, std::string& json_body, const response_options& options) {
+        return context_value.json_serialized(json_body, options);
     }
 
     [[nodiscard]] static http_interim_response_output* interim_output(context& context_value) noexcept {
@@ -1694,14 +1705,14 @@ struct context_access final {
 
     [[nodiscard]] static const http_response_headers& handshake_headers(context& context_value) {
         auto& state = context_value.response_state();
-        state.apply_policy(state.draft());
-        return state.draft().headers();
+        state.apply_policy(state.stream_head());
+        return state.stream_head().headers();
+    }
+    [[nodiscard]] static http_response& stream_head(context& context_value) {
+        return context_value.stream_head();
     }
     [[nodiscard]] static http_response& response_policy(context& context_value) {
         return context_value.response_state().policy();
-    }
-    static void discard_draft(context& context_value) {
-        context_value.response_state().reset_draft();
     }
     static void apply_response_policy(context& context_value, http_response& response) {
         context_value.response_state().apply_policy(response);
@@ -1712,13 +1723,8 @@ struct context_access final {
         response.header_stable_view(name, value);
     }
 
-    // The status the handler set; a file response sends it for the full body.
-    [[nodiscard]] static http_status_code response_status(const context& context_value) noexcept {
-        return context_value.response_state().draft_status();
-    }
-
-    static void apply_response_state(context& context_value, http_response& response, std::optional<http_status_code> status_code) {
-        context_value.apply_response_state(response, status_code);
+    static void stage_stream_head(context& context_value, const response_stream_writer& writer, const response_options& head) {
+        context_value.stage_stream_head(writer, head);
     }
 
     // Called by a driver right before it hands the upgrade/CONNECT handshake

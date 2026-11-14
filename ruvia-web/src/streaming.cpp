@@ -104,19 +104,27 @@ websocket& context::websocket() const {
     return output->get_websocket();
 }
 
-response_stream_writer& context::stream() {
+response_stream_writer& context::stream(response_options head) {
     const auto* output = response_output().response_stream();
     if (output == nullptr) {
         throw std::logic_error("response body is not streamable");
     }
-    return output->writer();
+    auto& writer = output->writer();
+    stage_stream_head(writer, head);
+    return writer;
 }
 
-sse_writer context::stream_sse() {
-    auto& writer = stream();
+sse_writer context::stream_sse(response_options head) {
+    if (detail::response_options_carry_header(head, "Content-Type")) {
+        throw std::invalid_argument("stream_sse() owns the Content-Type field");
+    }
+    auto& writer = stream(head);
     if (!writer.committed()) {
-        set_stable_response_header("Content-Type", "text/event-stream");
-        set_stable_response_header("Cache-Control", "no-cache");
+        auto& staged = stream_head();
+        staged.header_stable_view("Content-Type", "text/event-stream");
+        if (!staged.header("Cache-Control")) {
+            staged.header_stable_view("Cache-Control", "no-cache");
+        }
     }
     return sse_writer(writer);
 }
@@ -150,7 +158,7 @@ task<void> end_owned(response_stream_output output, task<void> (*end)(void*, std
     });
 }
 
-task<timer_sleep_result> sleep_stopped_by_either(void* target, task<timer_sleep_result> (*sleep)(void*, std::chrono::milliseconds, const stop_token&), std::chrono::milliseconds duration, stop_token context_stop, stop_token stop) {
+task<timer_sleep_result> sleep_stopped_by_either(void* target, task<timer_sleep_result> (*sleep)(void*, timeout_duration, const stop_token&), timeout_duration duration, stop_token context_stop, stop_token stop) {
     const stop_group either(context_stop, stop);
     co_return co_await sleep(target, duration, either.token());
 }
@@ -209,9 +217,9 @@ task<void> response_stream_writer::writeln(std::string_view chunk, operation_opt
 task<timer_sleep_result> response_stream_writer::sleep(timeout_duration duration, stop_token stop) & {
     require_active();
     if (!stop.stoppable()) {
-        return ::ruvia::make_scoped_operation(operation_scope_, sleep_(target_, duration.value(), stop_token_));
+        return ::ruvia::make_scoped_operation(operation_scope_, sleep_(target_, duration, stop_token_));
     }
-    return ::ruvia::make_scoped_operation(operation_scope_, sleep_stopped_by_either(target_, sleep_, duration.value(), stop_token_, std::move(stop)));
+    return ::ruvia::make_scoped_operation(operation_scope_, sleep_stopped_by_either(target_, sleep_, duration, stop_token_, std::move(stop)));
 }
 
 task<void> response_stream_writer::end(std::span<const http_header_view> trailers, operation_options operation) & {

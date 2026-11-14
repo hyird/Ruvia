@@ -109,44 +109,41 @@ task<void> run(db_client& db, event_loop_attachment& attachment) {
             department row;
             row.set<"id">(id);
             row.set<"name">(name);
-            const borrowed_text conflict_paths[]{"id"};
-            co_await departments.upsert(row, {.conflict_paths_ = conflict_paths});
+            co_await departments.upsert(row);
         }
         for (const auto [id, department_value, name] : {std::tuple{1LL, 1LL, "Alice"}, std::tuple{2LL, 1LL, "Bob"}, std::tuple{3LL, 2LL, "Carol"}}) {
             employee row;
             row.set<"id">(id);
             row.set<"department_id">(department_value);
             row.set<"name">(name);
-            const borrowed_text conflict_paths[]{"id"};
-            co_await employees.upsert(row, {.conflict_paths_ = conflict_paths});
+            co_await employees.upsert(row);
         }
         profile profile;
         profile.set<"id">(1);
         profile.set<"display_name">("Demo user");
-        const borrowed_text conflict_paths[]{"id"};
-        co_await profiles.upsert(profile, {.conflict_paths_ = conflict_paths});
+        co_await profiles.upsert(profile);
         user user;
         user.set<"id">(1);
         user.set<"profile_id">(1);
         user.set<"login">("demo");
-        co_await users.upsert(user, {.conflict_paths_ = conflict_paths});
+        co_await users.upsert(user);
         for (const auto [id, title] : {std::pair{1LL, "Hydraulics"}, std::pair{2LL, "Controls"}}) {
             course course;
             course.set<"id">(id);
             course.set<"title">(title);
-            co_await courses.upsert(course, {.conflict_paths_ = conflict_paths});
+            co_await courses.upsert(course);
             student student;
             student.set<"id">(id);
             student.set<"name">("Learner");
-            co_await students.upsert(student, {.conflict_paths_ = conflict_paths});
+            co_await students.upsert(student);
         }
         auto memberships = db.db().repository<student_course>();
-        const borrowed_text membership_conflict_paths[]{"student_id", "course_id"};
+        const borrowed_text membership_keys[]{"student_id", "course_id"};
         for (const auto [student_id, course_id] : {std::pair{1LL, 1LL}, std::pair{1LL, 2LL}, std::pair{2LL, 2LL}}) {
             student_course membership;
             membership.set<"student_id">(student_id);
             membership.set<"course_id">(course_id);
-            co_await memberships.upsert(membership, {.conflict_paths_ = membership_conflict_paths, .do_nothing_ = true});
+            co_await memberships.upsert(membership, {.conflict_target_ = membership_keys, .do_nothing_ = true});
         }
         co_await query_example(db);
         const std::array<borrowed_text, 1> department_relations{"employees"};

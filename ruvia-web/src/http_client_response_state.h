@@ -26,6 +26,7 @@
 #include "http_header.h"
 #include "http_io_buffer.h"
 #include "http_message.h"
+#include "http_multiplexed_stream.h"
 #include "http_protocol.h"
 #include "http_request.h"
 #include "http_response_body.h"
@@ -663,14 +664,9 @@ public:
     // Content-Encoding parsed with the final head while decoding is pending.
     std::optional<http_content_coding_field_result> content_coding_{};
     http_client_response_transport transport_{http_client_response_transport::unassigned};
-#ifdef RUVIA_ENABLE_HTTP2
-    std::optional<::ruvia::http2_received_data_credit> http2_data_credit_{};
-#endif
-#ifdef RUVIA_ENABLE_HTTP3
-    // Receive credit of buffered response DATA, returned as the consumer
-    // takes it (RFC 9000 §4.1).
-    std::optional<::ruvia::http3_received_data_credit> http3_data_credit_{};
-#endif
+    // Receive credit of buffered HTTP/2 or HTTP/3 response DATA, returned as
+    // the consumer takes it (RFC 9113 §6.9, RFC 9000 §4.1).
+    std::optional<::ruvia::http_received_data_credit> data_credit_{};
     std::optional<std::deque<std::string>> http3_datagrams_;
     std::size_t http3_datagram_bytes_{0};
     bool http3_native_datagrams_{false};

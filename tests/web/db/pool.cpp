@@ -530,14 +530,15 @@ TEST(Ruvia, db_migrator_validates_migration_list_before_allocating_runtime) {
 TEST(Ruvia, db_expression_values_and_db_value_copies_own_parameter_text) {
     const std::string value(128, 'v');
     ruvia::db_query source_value;
-    source_value.select(source_value.value(value));
+    source_value.select(ruvia::db_expr::value(value));
     const auto statement = source_value.compile(ruvia::db_driver::postgresql);
     ASSERT_EQ(statement.params().size(), std::size_t{1});
 
     for (const bool through_expressions : {false, true}) {
         ruvia::db_query destination;
-        ruvia::db_query expressions;
-        destination.select(through_expressions ? destination.import_expression(expressions.value(statement.params()[0])) : destination.value(statement.params()[0]));
+        ruvia::db_query other;
+        const auto expression = ruvia::db_expr::value(statement.params()[0]);
+        destination.select(through_expressions ? ruvia::db_expr(expression.expression(other)) : expression);
         const auto compiled = destination.compile(ruvia::db_driver::postgresql);
         ASSERT_EQ(compiled.params().size(), std::size_t{1});
         EXPECT_EQ(compiled.params()[0].text(), value);
@@ -547,7 +548,7 @@ TEST(Ruvia, db_expression_values_and_db_value_copies_own_parameter_text) {
     {
         const std::string text(4096, 'v');
         ruvia::db_query query;
-        query.select(query.value(text));
+        query.select(ruvia::db_expr::value(text));
         const auto compiled = query.compile(ruvia::db_driver::postgresql);
         ASSERT_EQ(compiled.params().size(), std::size_t{1});
         copied.emplace(compiled.params()[0]);

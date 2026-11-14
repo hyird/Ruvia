@@ -75,13 +75,20 @@ private:
                                  .body(incoming_body)
                                  .send();
             auto response = co_await std::move(operation);
-            c.draft().status(response.status());
-            if (const auto content_type = response.header("content-type")) {
-                c.draft().header("content-type", *content_type);
+            // Do not pick one of several upstream Content-Type lines (RFC 9110 section 5.3).
+            const auto content_type = response.unique_header("content-type");
+            if (content_type.status_ == ruvia::unique_lookup_status::repeated) {
+                co_return c.error({.status_ = ruvia::http_status::bad_gateway, .code_ = "upstream_error", .message_ = "upstream sent repeated Content-Type"});
+            }
+            // Forward one validated upstream Content-Type with the upstream status.
+            std::array<ruvia::http_header_view, 1> forwarded{};
+            std::size_t forwarded_count = 0;
+            if (content_type.status_ == ruvia::unique_lookup_status::found) {
+                forwarded[forwarded_count++] = {"content-type", content_type.value_};
             }
             // bytes() also reserves against this client pool's retained-result budget.
             auto body = co_await response.bytes();
-            co_return c.body(body.bytes());
+            co_return c.body(body.bytes(), {.status_ = response.status(), .headers_ = std::span(forwarded).first(forwarded_count)});
         } catch (const ruvia::http_client_error& error) {
             const auto failure = report_upstream_failure(error);
             co_return c.error({.status_ = failure.status_, .code_ = "upstream_error", .message_ = failure.message_});
@@ -101,15 +108,16 @@ private:
         // whose body is silently truncated.
         std::optional<ruvia::http_client_response> response;
         std::string_view error_body;
+        ruvia::http_status_code error_status = ruvia::http_status::ok;
         try {
             response.emplace(co_await client.get("/features/download").headers(std::span(headers).first(header_count)).send());
         } catch (const ruvia::http_client_error& error) {
             const auto failure = report_upstream_failure(error);
-            c.draft().status(failure.status_);
+            error_status = failure.status_;
             error_body = failure.message_;
         }
         if (!response) {
-            if (co_await c.stream_text().commit() == ruvia::stream_commit_result::body) {
+            if (co_await c.stream_text({.status_ = error_status}).commit() == ruvia::stream_commit_result::body) {
                 co_await c.stream().write(error_body);
             }
             co_return;
