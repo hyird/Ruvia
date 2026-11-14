@@ -22,6 +22,7 @@
 #include "http_request.h"
 #include "http_wire_writer.h"
 #include "websocket_handshake.h"
+#include "websocket_negotiation.h"
 
 // What a caller-supplied request header section must satisfy before the writer
 // will encode it, and the facts the encoder then needs from it: its field

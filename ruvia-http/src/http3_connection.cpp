@@ -22,10 +22,12 @@
 #include <vector>
 
 #include "borrowed_text.h"
+#include "http_binary_message.h"
 #include "http_c_library_memory.h"
 #include "http_connection_fields.h"
 #include "http_header.h"
 #include "http_request.h"
+
 namespace ruvia::detail {
 
 // Dynamic ORIGIN frames share the control stream with nghttp3 output. The

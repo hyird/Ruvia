@@ -44,6 +44,7 @@
 #include "http1_client_response.h"
 #include "http1_server_response.h"
 #include "http2_internal.h"
+#include "http_binary_message.h"
 #include "http_connection_fields.h"
 #include "http_header.h"
 #include "http_request.h"
