@@ -18,6 +18,7 @@
 #include "http_header.h"
 #include "http_request.h"
 #include "http_response.h"
+#include "http_response_framing.h"
 #include "http_wire_writer.h"
 
 namespace ruvia::detail {

@@ -27,6 +27,7 @@
 #include "http_connection_fields.h"
 #include "http_header.h"
 #include "http_request.h"
+#include "http_response_framing.h"
 
 namespace ruvia::detail {
 
