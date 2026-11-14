@@ -9,6 +9,7 @@ set(ruvia_http_sources
     src/http_response_server.cpp
     src/multipart_parser.cpp
     src/proxy_protocol.cpp
+    src/websocket_connection.cpp
     src/websocket_handshake.cpp
 )
 if(RUVIA_ENABLE_HTTP2)
