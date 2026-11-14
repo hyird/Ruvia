@@ -1042,7 +1042,8 @@ public:
     template <typename source, typename source_executor_type>
     db_query_builder& join(db_join_type type, const db_query_builder<source, source_executor_type>& source_value, std::string_view alias, const db_predicate& on = {}, const db_source_options& options = {}) {
         source_value.require_plain_projection();
-        query_.join(type, source_value.query_, detail::import_join_predicate<source, entity_type>(query_, on, alias_, alias), alias, options);
+        std::optional<db_query> scratch;
+        query_.join(type, source_value.target(scratch), detail::import_join_predicate<source, entity_type>(query_, on, alias_, alias), alias, options);
         return *this;
     }
     db_query_builder& join(db_join_type type, const db_query& source_value, std::string_view alias, const db_predicate& on = {}, const db_source_options& options = {}) {
@@ -1124,6 +1125,9 @@ public:
     }
     // Borrows the flat AST, without applying execution-time soft-delete filtering.
     // The builder and its resource must outlive the view; consumers clone on import.
+    // Composition entry points below (subquery, exists, join, combine, and the
+    // write builder's update_from / delete_using / insert_from) embed the
+    // filtered query, so soft-deleted rows never leak through a nested source.
     [[nodiscard]] const db_query& query() const& RUVIA_LIFETIMEBOUND {
         require_plain_projection();
         return query_;
@@ -1131,25 +1135,30 @@ public:
     const db_query& query() const&& = delete;
     db_expression subquery(db_query& expressions) const {
         require_plain_projection();
-        return expressions.subquery(query_);
+        std::optional<db_query> scratch;
+        return expressions.subquery(target(scratch));
     }
     db_expression exists(db_query& expressions) const {
         require_plain_projection();
-        return expressions.exists(query_);
+        std::optional<db_query> scratch;
+        return expressions.exists(target(scratch));
     }
     [[nodiscard]] db_predicate exists() const {
         require_plain_projection();
-        return db_predicate::exists(query_);
+        std::optional<db_query> scratch;
+        return db_predicate::exists(target(scratch));
     }
     [[nodiscard]] db_predicate not_exists() const {
         require_plain_projection();
-        return db_predicate::not_exists(query_);
+        std::optional<db_query> scratch;
+        return db_predicate::not_exists(target(scratch));
     }
     template <typename source, typename source_executor_type>
     db_query_builder& combine(db_set_operation operation, const db_query_builder<source, source_executor_type>& source_value) {
         require_plain_projection();
         source_value.require_plain_projection();
-        query_.combine(operation, source_value.query_);
+        std::optional<db_query> scratch;
+        query_.combine(operation, source_value.target(scratch));
         return *this;
     }
     db_query_builder& group_by(std::span<const db_expr> expressions) {
@@ -1652,7 +1661,8 @@ public:
     template <typename source, typename source_executor_type>
     db_write_query_builder& update_from(const db_query_builder<source, source_executor_type>& source_value, std::string_view alias) {
         source_value.require_plain_projection();
-        query_.update_from(source_value.query_, alias);
+        std::optional<db_query> scratch;
+        query_.update_from(source_value.target(scratch), alias);
         return *this;
     }
     db_write_query_builder& update_from_cte(std::string_view name, std::string_view alias = {}) {
@@ -1668,7 +1678,8 @@ public:
     template <typename source, typename source_executor_type>
     db_write_query_builder& delete_using(const db_query_builder<source, source_executor_type>& source_value, std::string_view alias) {
         source_value.require_plain_projection();
-        query_.delete_using(source_value.query_, alias);
+        std::optional<db_query> scratch;
+        query_.delete_using(source_value.target(scratch), alias);
         return *this;
     }
     db_write_query_builder& delete_using_cte(std::string_view name, std::string_view alias = {}) {
@@ -1684,7 +1695,8 @@ public:
     template <typename source, typename source_executor_type>
     db_write_query_builder& join(db_join_type type, const db_query_builder<source, source_executor_type>& source_value, std::string_view alias, const db_predicate& on = {}, const db_source_options& options = {}) {
         source_value.require_plain_projection();
-        query_.join(type, source_value.query_, detail::import_join_predicate<source, entity_type>(query_, on, alias_, alias), alias, options);
+        std::optional<db_query> scratch;
+        query_.join(type, source_value.target(scratch), detail::import_join_predicate<source, entity_type>(query_, on, alias_, alias), alias, options);
         return *this;
     }
     db_write_query_builder& join(db_join_type type, const db_query& source_value, std::string_view alias, const db_predicate& on = {}, const db_source_options& options = {}) {
@@ -1727,7 +1739,8 @@ public:
         if (!source_value.selected_.wildcard_ && count != columns.size()) {
             throw std::invalid_argument("insert_from projection and target column counts differ");
         }
-        query_.insert_into(entity_type::table_name(), columns, alias_).insert_from(source_value.query_);
+        std::optional<db_query> scratch;
+        query_.insert_into(entity_type::table_name(), columns, alias_).insert_from(source_value.target(scratch));
         inserted_column_count_ = 0;
         record_inserted_columns(columns);
         return *this;

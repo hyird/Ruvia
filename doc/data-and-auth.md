@@ -309,7 +309,7 @@ RUVIA_DB_PROJECTION(device_summary,
 
 读写 Builder 统一提供 `const db_query& query() const&`：这是只读、零拷贝的 AST 借用，不是快照，不延长 Builder 的寿命。Builder 销毁或移动前必须结束借用；后续 Builder 修改会反映在视图中。直接在右值 Builder 上调用 `query()` 被拒绝，应先保存具名 Builder。`db_query::with()`、子查询 JOIN 等消费者在调用返回前克隆输入（右值重载直接接管），因此导入完成后源 Query / Builder 即可销毁，外层仍拥有完整 AST、文本和参数。
 
-读 Builder 的 `query()` 保留原组合视图语义：它只暴露平面查询，拒绝 relation hydration；**不会应用** `get_many()` / `get_query_and_parameters()` 等执行入口经 `effective_query()` 添加的软删除过滤。组合时若需要排除软删除行，应在源 Builder 显式添加相应条件。写 Builder 的视图先执行既有写安全校验（例如 UPDATE / DELETE 必须有条件），保留完整 INSERT / UPDATE / DELETE / `on_conflict()` 与 `RETURNING`；没有增加新的 SQL 生成路线。
+读 Builder 的 `query()` 保留原组合视图语义：它只暴露平面查询，拒绝 relation hydration；**不会应用** `get_many()` / `get_query_and_parameters()` 等执行入口经 `effective_query()` 添加的软删除过滤。写 Builder 的视图先执行既有写安全校验（例如 UPDATE / DELETE 必须有条件），保留完整 INSERT / UPDATE / DELETE / `on_conflict()` 与 `RETURNING`；没有增加新的 SQL 生成路线。
 
 ```cpp
 auto repo = c.db().repository<device>();
@@ -326,6 +326,8 @@ auto statement = outer.compile(ruvia::db_driver::postgresql, nullptr);
 // statement 包含 WITH ... UPDATE ... RETURNING 和统一编号的绑定参数；
 // 外层不持有 changed 的借用，可在 changed 析构后编译或执行。
 ```
+
+- **Builder 作为源时保留软删过滤**：把读 Builder 本身交给 `subquery()`、`exists()`、`not_exists()`、`join(type, builder, ...)`、`combine()`，或写 Builder 的 `update_from()`、`delete_using()`、`insert_from()` 时，嵌入的查询带软删列 `IS NULL` 条件；源 Builder 调用 `with_deleted()` 后才包含软删除行。经 `query()` 借出的 AST 不带该条件，需要时自行添加。
 
 读写 Builder 的 `join(type, const db_query&, alias, on, db_source_options)` 接受无实体子查询；读 Builder 的 `inner_join()` / `left_join()` 同样支持此入口。`.lateral_ = true` 直接保留为相关 `JOIN LATERAL (SELECT ...)`，不会提升为普通 CTE。`on` 沿既有 predicate 导入规则把根实体限定名重绑定为外层别名；无实体子查询及其输出列没有可推断的实体表映射，相关引用和 JOIN 输出引用请显式使用外层及子查询别名。`options.columns_` 仅在调用方确实需要 SQL 列别名列表时提供，不要求枚举未知输出字段；方言限制沿底层 Query 的编译校验。
 

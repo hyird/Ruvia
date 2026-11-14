@@ -1597,6 +1597,20 @@ TEST(Ruvia, db_repository_typeorm_style_api_covers_soft_delete_save_aggregates_j
             "LEFT JOIN \"children\" AS \"c\" ON ((\"p\".\"id\" = \"c\".\"parent_id\") AND (\"c\".\"id\" > $1)) "
             "GROUP BY \"p\".\"id\"");
 
+        // A soft-deleting builder nested as a source keeps its filter unless with_deleted() opts out.
+        auto live_articles = repo.query_builder("s");
+        live_articles.select({"id"}).where(soft_entity::column<"views">() > 0);
+        auto parents_with_live = parents.query_builder("p");
+        parents_with_live.where(live_articles.exists());
+        const auto parents_with_live_sql = parents_with_live.get_query_and_parameters();
+        EXPECT_TRUE(parents_with_live_sql.sql().find("EXISTS") != std::string_view::npos);
+        EXPECT_TRUE(parents_with_live_sql.sql().find("(\"s\".\"deleted_at\" IS NULL)") != std::string_view::npos);
+        live_articles.with_deleted();
+        auto parents_with_any = parents.query_builder("p");
+        parents_with_any.where(live_articles.exists());
+        const auto parents_with_any_sql = parents_with_any.get_query_and_parameters();
+        EXPECT_TRUE(parents_with_any_sql.sql().find("deleted_at") == std::string_view::npos);
+
         db_values_builder incoming({"id", "title", "views"});
         incoming.row({db_expr::value(1), db_expr::value("Hello"), db_expr::value(10)});
         auto values_select = repo.query_builder("v");
