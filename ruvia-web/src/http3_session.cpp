@@ -37,6 +37,7 @@
 #include "http_content_negotiation.h"
 #include "http_header.h"
 #include "http_response.h"
+#include "multiplexed_session.h"
 #include "response_file.h"
 #include "server_session.h"
 #include "stop_token.h"

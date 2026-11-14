@@ -37,6 +37,7 @@
 #include "http_response.h"
 #include "inbound_buffer.h"
 #include "middleware.h"
+#include "multiplexed_session.h"
 #include "response_file.h"
 #include "server_session.h"
 #include "stop_token.h"
