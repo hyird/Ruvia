@@ -4,7 +4,7 @@
 // Build with RUVIA_ENABLE_REDIS=ON; configure RUVIA_REDIS_HOST/PORT/USER/PASSWORD.
 // Run on port 8091. POST {"id":"1","name":"Ada","age":30} as JSON to
 // /users, then GET /users/1. GET /users performs the indexed adult search.
-// backend_tls.h defines RUVIA_REDIS_TLS/CA/CERT/KEY for Redis transport.
+// backend_config.h backend_tls() reads RUVIA_REDIS_TLS/CA/CERT/KEY for Redis transport.
 #include <chrono>
 #include <cstdint>
 #include <exception>

@@ -1412,7 +1412,7 @@ std::optional<bool> db_query::cache_enabled() const {
 std::optional<std::chrono::milliseconds> db_query::cache_duration() const {
     return storage().cache_duration_;
 }
-std::string_view db_query::cache_id() const {
+std::string_view db_query::cache_id() const& {
     return storage().cache_id_;
 }
 detail::db_cache_shape db_query::cache_shape() const {

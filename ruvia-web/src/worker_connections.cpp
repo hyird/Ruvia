@@ -913,6 +913,10 @@ void worker_connections::admit_socket(std::size_t listener_index, tcp_socket_typ
     if (auto endpoint = socket.remote_endpoint(remote_error); !remote_error) {
         remote = endpoint;
     }
+    std::optional<ip_address> socket_peer;
+    if (remote) {
+        socket_peer = to_ip_address(remote->address());
+    }
     if (effective_remote) {
         remote.emplace(to_asio_address(effective_remote->address()), effective_remote->port());
     }
@@ -936,6 +940,9 @@ void worker_connections::admit_socket(std::size_t listener_index, tcp_socket_typ
             return;
         }
         connection_lifecycle lifecycle(registry_, &listeners_[listener_index]->session_, std::move(event), options_.connection_open_, options_.connection_close_, 0, connection_transport::tcp(socket));
+        if (listeners_[listener_index]->session_.proxy_protocol_) {
+            lifecycle.restrict_forwarding_trust(socket_peer);
+        }
         lifecycle.note_read(bytes_read);
         accepted_connection_lease connection(std::move(socket), gauges_[listener_index]->count_, std::move(lifecycle));
         // The session borrows its listener, whose scope joins it before the

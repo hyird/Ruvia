@@ -575,16 +575,16 @@ public:
     [[nodiscard]] task<void> migrate(std::string_view local_address, std::uint16_t port = 0) const;
     [[nodiscard]] http_client_stats stats() const;
     [[nodiscard]] std::vector<http_client_endpoint_address> dns_snapshot() const;
-    void update_dns(std::span<const http_client_endpoint_address> addresses) const;
+    void update_dns(std::span<const http_client_endpoint_address> addresses);
     [[nodiscard]] task<void> refresh_dns() const;
     // Non-destructive DNS resolution: resolves the client's dial host (or a
     // specified host) into a sorted, deduplicated IP address list without
     // retiring existing active connections or WebSockets.
     [[nodiscard]] task<std::vector<ip_address>> resolve_dns(operation_options options = {}) const;
     [[nodiscard]] task<std::vector<ip_address>> resolve_dns(std::string_view host, operation_options options = {}) const;
-    [[nodiscard]] bool close_connection(std::uint64_t id) const;
-    [[nodiscard]] std::optional<http_client_advertisement> next_advertisement() const;
-    [[nodiscard]] std::optional<http_client_push> next_push() const;
+    [[nodiscard]] bool close_connection(std::uint64_t id);
+    [[nodiscard]] std::optional<http_client_advertisement> next_advertisement();
+    [[nodiscard]] std::optional<http_client_push> next_push();
     [[nodiscard]] std::string_view host() const& RUVIA_LIFETIMEBOUND;
     [[nodiscard]] std::string_view host() const&& = delete;
     [[nodiscard]] std::uint16_t port() const;

@@ -911,9 +911,10 @@ public:
     [[nodiscard]] std::size_t column_count() const noexcept {
         return column_count_;
     }
-    [[nodiscard]] std::span<const node_type> nodes() const noexcept {
+    [[nodiscard]] std::span<const node_type> nodes() const& noexcept RUVIA_LIFETIMEBOUND {
         return nodes_;
     }
+    std::span<const node_type> nodes() const&& = delete;
     [[nodiscard]] std::size_t find(std::size_t parent_value, std::size_t relation) const noexcept;
 
     template <typename entity_type>
@@ -2663,9 +2664,10 @@ private:
         alias_(alias) {
         record_inserted_columns(inserted_columns);
     }
-    std::string_view qualifier() const {
+    std::string_view qualifier() const& noexcept RUVIA_LIFETIMEBOUND {
         return alias_.empty() ? entity_type::table_name() : std::string_view(alias_);
     }
+    std::string_view qualifier() const&& = delete;
     db_assignment prepare_assignment(const db_assignment& assignment) {
         if (!detail::require_db_column(detail::db_entity_columns<entity_type>, assignment.column_).writable_ || assignment.empty()) {
             throw std::invalid_argument("SET requires a writable entity column and expression");
@@ -2816,7 +2818,7 @@ public:
         builder.where(predicate);
         return builder.execute();
     }
-    [[nodiscard]] task<db_exec_result> clear() const {
+    [[nodiscard]] task<db_exec_result> clear() {
         auto sql = detail::format_truncate_table(entity_type::table_name(), executor_.query_driver());
         return executor_.execute_prepared(std::move(sql));
     }

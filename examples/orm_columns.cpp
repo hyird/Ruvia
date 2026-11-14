@@ -3,7 +3,7 @@
 // database selected by RUVIA_DB_HOST/PORT/USER/PASSWORD/DATABASE.
 // Build with RUVIA_ENABLE_POSTGRESQL=ON. Includes generated columns, RETURNING,
 // retained entity results, transaction isolation and read-only transactions.
-// backend_tls.h defines RUVIA_DB_TLS/CA/CERT/KEY for database transport.
+// backend_config.h backend_tls() reads RUVIA_DB_TLS/CA/CERT/KEY for database transport.
 
 #include <cstdlib>
 #include <exception>

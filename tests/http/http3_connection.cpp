@@ -2598,3 +2598,35 @@ TEST(Ruvia, http3_response_submission_validates_method_plan_and_connect_state) {
         EXPECT_EQ(peers.server_.submit_connect_response_head(0, tunnel_ok), ruvia::http3_submit_status::accepted);
     }
 }
+
+TEST(RuviaHttpPublicApi, http3_fingerprint_collector_formats_settings_and_pseudo_order) {
+    ruvia::http3_fingerprint_collector h3_collector;
+    h3_collector.observe_frame({
+        .observation_sequence_ = 0,
+        .stream_id_ = 2,
+        .type_ = ruvia::http3_frame_type::settings,
+        .payload_length_ = 12,
+    });
+    h3_collector.observe_field({
+        .stream_id_ = 0,
+        .section_ = ruvia::http3_field_section_kind::header,
+        .phase_ = ruvia::http3_field_observation_phase::begin,
+    });
+    for (const std::string_view pseudo : {":method", ":authority", ":scheme", ":path"}) {
+        h3_collector.observe_field({
+            .stream_id_ = 0,
+            .section_ = ruvia::http3_field_section_kind::header,
+            .phase_ = ruvia::http3_field_observation_phase::field,
+            .name_ = pseudo,
+            .value_ = "x",
+        });
+    }
+    h3_collector.observe_field({
+        .stream_id_ = 0,
+        .section_ = ruvia::http3_field_section_kind::header,
+        .phase_ = ruvia::http3_field_observation_phase::end,
+    });
+    EXPECT_TRUE(h3_collector.complete());
+    EXPECT_FALSE(h3_collector.failed());
+    EXPECT_EQ(h3_collector.fingerprint(), "4:12|0|m,a,s,p");
+}

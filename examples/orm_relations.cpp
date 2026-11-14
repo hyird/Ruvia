@@ -3,7 +3,7 @@
 // Build with RUVIA_ENABLE_POSTGRESQL=ON. Demonstrates relation loading,
 // joins, junction tables, relation mutations and cascading entity operations.
 // Keep writes in one explicit transaction when several entities must agree.
-// backend_tls.h defines RUVIA_DB_TLS/CA/CERT/KEY for database transport.
+// backend_config.h backend_tls() reads RUVIA_DB_TLS/CA/CERT/KEY for database transport.
 
 #include <array>
 #include <chrono>

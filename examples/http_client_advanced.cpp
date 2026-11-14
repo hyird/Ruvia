@@ -64,7 +64,7 @@ ruvia::task<ruvia::http_client_response_bytes> exercise(ruvia::event_loop loop, 
     std::optional<ruvia::http_client_response_bytes> retained;
     std::exception_ptr failure;
     try {
-        const auto origin = client.client();
+        auto origin = client.client();
         auto bounded = client.client().with_options({.timeout_ = std::chrono::seconds(5)});
         {
             const std::array<ruvia::http_header_view, 1> headers{{

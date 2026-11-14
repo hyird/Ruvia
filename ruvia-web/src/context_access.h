@@ -1608,6 +1608,10 @@ public:
         if (!services.connection_services_.info_.via_trusted_proxy_) {
             services.connection_services_.info_.client_ = lifecycle.remote_endpoint();
         }
+        if (lifecycle.forwarding_trust_restricted()) {
+            const auto& hop = lifecycle.nearest_hop();
+            services.connection_services_.peer_trusted_ = services.connection_services_.peer_trusted_ && hop.has_value() && services.trusts_peer(*hop);
+        }
         return services;
     }
 

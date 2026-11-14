@@ -6,7 +6,7 @@
 //   POST /session/rotate rotates its cookie; POST /session/clear removes it.
 // Reuse the newest sid cookie on every request. Concurrent stale writes return
 // 409; do not retry stale authenticated state under a newly created session.
-// backend_tls.h defines RUVIA_REDIS_TLS/CA/CERT/KEY; set TLS=false explicitly
+// backend_config.h backend_tls() reads RUVIA_REDIS_TLS/CA/CERT/KEY; set TLS=false explicitly
 // for local plaintext Redis. Optional USER/PASSWORD/DATABASE select its account.
 
 #include <chrono>

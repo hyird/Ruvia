@@ -256,6 +256,7 @@ ruvia::app().listen({
 - `http_cors_policy_config`（`"http_cors.h"`）：
   - `allow_any_origin_`、`allowed_origins_`（精确 Origin、`*` 或尾缀域名模式）、`allowed_origin_suffixes_`、`allowed_methods_`、`allowed_headers_`、`reflect_request_headers_`、`expose_headers_`、`allow_credentials_`、`max_age_`。
   - 默认构造 `http_cors_policy_config{}` 允许任意 Origin（`*`）、任意合法方法并反射 `Access-Control-Request-Headers`；显式配置任一列表时仅匹配所列项。
+  - **凭据需显式来源**：`allow_credentials_` 必须配合 `allowed_origins_` 或 `allowed_origin_suffixes_`；任意 Origin 与凭据同开时构造抛出 `std::invalid_argument`，不反射任意 Origin。
   - **预检判定**：仅 `OPTIONS` 同时携带合法 `Origin` 与 `Access-Control-Request-Method` 时才进入预检分支；未固定 `allowed_methods_` 时自动提升路由生成的 `Allow` 响应头为 `Access-Control-Allow-Methods`。
   - **完整校验**：策略在新增授权头前校验 `Origin` 与 `OPTIONS` 的预检字段；请求首部列表即使采用固定授权模式也须完整合法。
   - **反射与优先级**：反射模式将通过全量校验的跨行 `Access-Control-Request-Headers` 合并为单一响应字段，不覆盖应用已设置的响应头。
@@ -745,7 +746,8 @@ WebSocket 处理器通过 `c.websocket()` 获取连接（`"streaming.h"`）。�
 | `c.req().query(name)` / `c.req().query<T>(name)` / `c.req().queries(name)` / `c.req().query_fields()` | 获取单个/类型化/多个同名 URL 查询参数（已自动 URL 解码） |
 | `c.req().header(name)` / `c.req().header_fields()` | 大小写不敏感读取请求头 |
 | `c.req().cookie(name)` / `c.req().signed_cookie({.name_ = ..., .secret_ = ...})` | 读取普通 Cookie 或验证 HMAC 签名并提取 Cookie 原值 |
-| `c.req().cookie_fields()` | 返回保留重复项与请求顺序的只读 `request_name_value_list`；名称区分大小写，`get(name)` 取最后一个同名值 |
+| `c.req().cookie_fields()` | 返回保留重复项与请求顺序的只读 `request_name_value_list`；名称区分大小写，`get(name)` 取最后一个同名值，`unique(name)` 返回 `request_field_lookup`（`status_` 为 `unique_lookup_status::absent` / `found` / `repeated`，仅 `found` 时 `value_` 有意义） |
+| `c.req().unique_cookie(name)` / `c.req().unique_header(name)` | 唯一字段查找：同名 Cookie（跨所有 `Cookie` 字段行）或请求头出现两次及以上时返回 `repeated` 而不选取任一出现；用于会话 ID、CSRF 令牌等安全相关单值字段 |
 | `c.req().negotiate(type, supported)` | 在候选列表中按 `Accept*` 权重协商最佳匹配（单候选时 `has_value()` 即表示客户端接受该值） |
 | `co_await c.req().text(operation = {})` / `co_await c.req().bytes(operation = {})` | 读取完整缓冲请求体视图（`std::string_view` / `std::span<const std::byte>`） |
 | `co_await c.req().discard_body(operation = {})` | 丢弃剩余请求体字节 |
@@ -898,8 +900,8 @@ const auto& user = c.request_state<current_user>();
 | `ruvia::body_limit<MaxBytes>` (`"middleware.h"`) | 仅用于控制器或单条路由（如 `RUVIA_POST("/upload", upload, ruvia::body_limit<65536>)`），收紧该路由允许的最大请求体字节数 |
 | `ruvia::rate_limit<MaxReqs, WindowMs>` / `ruvia::sliding_window_rate_limiter` (`"middleware.h"`) | 控制器或路由级滑动窗口限流中间件（按 `c.conn().client().address()` 在当前 worker 内计数），以及可独立用于 `request_stream` / `server_connection` 或自定义维度的 `sliding_window_rate_limiter`、`rate_limit_decision`、`format_rate_limit_address_key`、`apply_rate_limit_headers` |
 | `ruvia::security_headers_middleware` (`"middleware.h"`) | 不依赖 Session 或 Redis；注入 `X-Content-Type-Options`、`X-Frame-Options`、`Content-Security-Policy`、`Referrer-Policy`、`Permissions-Policy` 等安全响应头，对 404 同样生效；`Strict-Transport-Security` 仅在 HTTPS 下发出 |
-| `ruvia::csrf_protection` (`"middleware.h"`) | 基于 Double-Submit Cookie（默认 Cookie `"XSRF-TOKEN"` 与请求头 `"X-XSRF-TOKEN"`）的无状态 CSRF 防护中间件；校验失败抛出 `http_error`（`403` / `csrf_token_mismatch`），经 `on_error` 应答 |
-| `ruvia::session_middleware` (`"middleware.h"`, 需 `RUVIA_ENABLE_REDIS`) | 基于 Redis 的服务端会话中间件；路由中通过 `c.session().payload()`、`c.session().set(...)`、`c.session().regenerate()`、`c.session().clear()` 管理会话；`redis_alias_` 经 `c.redis(alias)` 解析，应用宿主取 `application::redis()` 注册，独立宿主取 `router::bind_redis()` 借入 |
+| `ruvia::csrf_protection` (`"middleware.h"`) | 基于 Double-Submit Cookie（默认 Cookie `"XSRF-TOKEN"` 与请求头 `"X-XSRF-TOKEN"`）的无状态 CSRF 防护中间件；令牌 Cookie 或请求头重复出现视同缺失；校验失败抛出 `http_error`（`403` / `csrf_token_mismatch`），经 `on_error` 应答 |
+| `ruvia::session_middleware` (`"middleware.h"`, 需 `RUVIA_ENABLE_REDIS`) | 基于 Redis 的服务端会话中间件；会话 Cookie 重复出现视同缺失（不加载任一会话，写入时签发新 ID）；路由中通过 `c.session().payload()`、`c.session().set(...)`、`c.session().regenerate()`、`c.session().clear()` 管理会话；`redis_alias_` 经 `c.redis(alias)` 解析，应用宿主取 `application::redis()` 注册，独立宿主取 `router::bind_redis()` 借入 |
 | `ruvia::make_health_response` / `make_readiness_response` (`"context.h"`) | 生成标准健康检查（`200 OK`）与就绪探针响应（`readiness_state::ready` 返回 `200`，`unavailable` 返回 `503`） |
 
 两级限流使用相同的地址身份规则：IPv4-mapped IPv6 与对应 IPv4 共用配额；不带 scope 的 IPv6 按 `/64` 网络前缀计数；带 scope 的 IPv6 按完整 128 位地址及数值 scope 计数，压缩、展开和大小写形式不会产生独立配额。不同 scope 保持隔离。地址仍由可信代理配置决定，限流计数仍归当前 worker。

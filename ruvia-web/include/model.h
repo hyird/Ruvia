@@ -836,6 +836,20 @@ namespace detail {
 struct request_name_value_list_access;
 }  // namespace detail
 
+// Outcome of looking up one name in a collection that permits repeated names
+// (request fields, JSON object members, SQL result columns). A repeated name
+// never resolves to one of its occurrences.
+enum class unique_lookup_status : unsigned char { absent,
+    found,
+    repeated };
+
+// Result of request_name_value_list::unique(name). value_ is meaningful only
+// when status_ is found and borrows the list's field storage.
+struct request_field_lookup final {
+    unique_lookup_status status_{unique_lookup_status::absent};
+    std::string_view value_{};
+};
+
 class request_name_value_list final {
 public:
     using value_type = http_header_view;
@@ -900,6 +914,23 @@ public:
         }
         return std::nullopt;
     }
+
+    // Security-relevant single-valued fields must not pick one of several
+    // occurrences: a repeated name reports repeated instead of a value.
+    [[nodiscard]] request_field_lookup unique(std::string_view name) const& noexcept RUVIA_LIFETIMEBOUND {
+        request_field_lookup result;
+        for (const auto& item : items_) {
+            if (!names_equal(item.name(), name)) {
+                continue;
+            }
+            if (result.status_ == unique_lookup_status::found) {
+                return {unique_lookup_status::repeated, {}};
+            }
+            result = {unique_lookup_status::found, item.value()};
+        }
+        return result;
+    }
+    request_field_lookup unique(std::string_view) const&& = delete;
 
     [[nodiscard]] std::size_t count(std::string_view name) const noexcept {
         std::size_t result_value = 0;
@@ -4473,13 +4504,6 @@ private:
     }
 
 namespace ruvia {
-
-// Outcome of looking up one name in a collection that permits repeated names
-// (JSON object members, SQL result columns). A repeated name never resolves
-// to one of its occurrences.
-enum class unique_lookup_status : unsigned char { absent,
-    found,
-    repeated };
 
 // Result of json_object::get<T>(name) / json_value::get<T>(name). value() is
 // engaged only when status() is found and the member converts to (and, for a

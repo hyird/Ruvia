@@ -1027,7 +1027,7 @@ TEST(Ruvia, http2_push_routes_and_client_preserve_owners_flow_control_cold_reads
         {
             const std::string client_url("http://127.0.0.1:" + std::string(std::to_string(server.endpoint().port())));
             ruvia::http_client client(attachment.loop(), {.base_url_ = client_url, .versions_ = ruvia::http_client_versions{.http1_ = false}, .push_ = {.enabled_ = true}});
-            const auto client_origin = client.client();
+            auto client_origin = client.client();
             std::exception_ptr failure;
             try {
                 for (unsigned repeat = 0; repeat != 128; ++repeat) {
@@ -1123,7 +1123,7 @@ TEST(Ruvia, http2_push_queue_overflow_and_disabled_permission_keep_parent_respon
         auto run = [&]() -> ruvia::task<void> {
             const std::string client_url("http://127.0.0.1:" + std::string(std::to_string(server.endpoint().port())));
             ruvia::http_client client(attachment.loop(), {.base_url_ = client_url, .versions_ = ruvia::http_client_versions{.http1_ = false}, .push_ = {.enabled_ = enabled, .max_queued_pushes_ = 1}});
-            const auto client_origin = client.client();
+            auto client_origin = client.client();
             std::exception_ptr failure;
             try {
                 auto parent_value = co_await client_origin.get("/two").send();
@@ -1163,7 +1163,7 @@ TEST(Ruvia, http2_push_response_wait_honours_its_operation) {
     auto run = [&]() -> ruvia::task<void> {
         const std::string client_url("http://127.0.0.1:" + std::string(std::to_string(server.endpoint().port())));
         ruvia::http_client client(attachment.loop(), {.base_url_ = client_url, .versions_ = ruvia::http_client_versions{.http1_ = false}, .push_ = {.enabled_ = true}});
-        const auto client_origin = client.client();
+        auto client_origin = client.client();
         std::exception_ptr failure;
         try {
             auto parent_value = co_await client_origin.get("/delayed-parent").send();

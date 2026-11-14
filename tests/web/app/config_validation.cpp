@@ -1072,7 +1072,9 @@ TEST(Ruvia, proxy_listener_requires_preface_and_uses_source_for_every_peer_fact)
     runtime.loop_.start(setup()).get();
     const auto request = head(port.endpoint().port(), "X-Forwarded-For: 192.0.2.77\r\n");
     auto response = ruvia::test::exchange(io, port.endpoint(), "PROXY TCP4 203.0.113.9 127.0.0.1 4567 " + std::to_string(port.endpoint().port()) + "\r\n" + request);
-    EXPECT_NE(response.find("203.0.113.9:4567:192.0.2.77:trusted"), std::string::npos);
+    // The socket peer 127.0.0.1 is not trusted, so its claimed source cannot
+    // grant forwarding trust.
+    EXPECT_NE(response.find("203.0.113.9:4567:203.0.113.9:direct"), std::string::npos);
     response = ruvia::test::exchange(io, port.endpoint(), proxy_v2(false, port.endpoint().port()) + request);
     EXPECT_NE(response.find("198.51.100.23:4660:198.51.100.23:direct"), std::string::npos);
     response = ruvia::test::exchange(io, port.endpoint(), proxy_v2(true, port.endpoint().port()) + request);
@@ -1092,6 +1094,33 @@ TEST(Ruvia, proxy_listener_requires_preface_and_uses_source_for_every_peer_fact)
     EXPECT_EQ(admitted[1], ruvia::ip_endpoint(*ruvia::ip_address::parse("198.51.100.23"), 4660));
     EXPECT_EQ(admitted[2].address(), *ruvia::ip_address::parse("127.0.0.1"));
     EXPECT_EQ(logged, (std::vector<std::string>{"203.0.113.9", "198.51.100.23", "127.0.0.1"}));
+}
+
+TEST(Ruvia, proxy_listener_requires_trusted_socket_peer_for_forwarding) {
+    using namespace proxy_listener_test;
+    for (const bool trust_socket_peer : {false, true}) {
+        runtime runtime;
+        asio::io_context io;
+        ruvia::test::tcp_port_reservation port(io);
+        ruvia::http_server server(runtime.loop_, {.request_stream_ = &identify});
+        const auto setup = [&]() -> ruvia::task<void> {
+            ruvia::trusted_proxy_config trusted;
+            trusted.cidrs_.emplace_back("10.0.0.1/32");
+            if (trust_socket_peer) {
+                trusted.cidrs_.emplace_back("127.0.0.1/32");
+            }
+            server.trusted_proxies(std::move(trusted));
+            co_await start(server, {.address_ = "127.0.0.1", .http_ = port.endpoint().port(), .proxy_protocol_ = true});
+        };
+        runtime.loop_.start(setup()).get();
+        const auto response = ruvia::test::exchange(io, port.endpoint(), "PROXY TCP4 10.0.0.1 127.0.0.1 4567 " + std::to_string(port.endpoint().port()) + "\r\n" + head(port.endpoint().port(), "X-Forwarded-For: 1.2.3.4\r\n"));
+        if (trust_socket_peer) {
+            EXPECT_NE(response.find("10.0.0.1:4567:1.2.3.4:trusted"), std::string::npos) << response;
+        } else {
+            EXPECT_NE(response.find("10.0.0.1:4567:10.0.0.1:direct"), std::string::npos) << response;
+        }
+        runtime.loop_.start(server.shutdown()).get();
+    }
 }
 
 TEST(Ruvia, proxy_listener_bounds_header_completion_and_rejects_http3) {

@@ -723,6 +723,8 @@ public:
         closed_(other.closed_),
         state_(std::move(other.state_)),
         info_(other.info_),
+        nearest_hop_(other.nearest_hop_),
+        hop_restricted_(other.hop_restricted_),
         transport_(other.transport_),
         aborted_(other.aborted_),
         bound_(other.bound_),
@@ -775,6 +777,18 @@ public:
     }
     [[nodiscard]] const ip_endpoint& remote_endpoint() const noexcept {
         return event_.remote();
+    }
+    // On a PROXY protocol listener the event's remote is self-reported by the
+    // socket peer; forwarding trust must also hold for that nearest hop.
+    void restrict_forwarding_trust(std::optional<ip_address> nearest_hop) noexcept {
+        nearest_hop_ = nearest_hop;
+        hop_restricted_ = true;
+    }
+    [[nodiscard]] bool forwarding_trust_restricted() const noexcept {
+        return hop_restricted_;
+    }
+    [[nodiscard]] const std::optional<ip_address>& nearest_hop() const noexcept {
+        return nearest_hop_;
     }
     void set_reason(connection_close_reason reason) noexcept {
         // Keep the initiating cause when teardown subsequently cancels I/O.
@@ -859,6 +873,8 @@ private:
     connection_close_callback_ref closed_;
     std::shared_ptr<void> state_;
     connection_close_info info_;
+    std::optional<ip_address> nearest_hop_;
+    bool hop_restricted_{};
     connection_transport transport_;
     bool aborted_{};
     bool bound_{};

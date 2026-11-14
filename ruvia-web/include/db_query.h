@@ -1270,7 +1270,8 @@ private:
     [[nodiscard]] bool cacheable() const;
     [[nodiscard]] std::optional<bool> cache_enabled() const;
     [[nodiscard]] std::optional<std::chrono::milliseconds> cache_duration() const;
-    [[nodiscard]] std::string_view cache_id() const;
+    [[nodiscard]] std::string_view cache_id() const& RUVIA_LIFETIMEBOUND;
+    std::string_view cache_id() const&& = delete;
     [[nodiscard]] detail::db_cache_shape cache_shape() const;
     void copy_cache(const db_query& source, detail::db_cache_shape shape);
     void with_columns(std::string_view name, const db_query& query, db_materialization materialization, std::span<const std::string> columns);

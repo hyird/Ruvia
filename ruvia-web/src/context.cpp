@@ -1745,6 +1745,38 @@ std::optional<std::string_view> context_request::cookie(std::string_view name) c
     return context_->request_.cookie(name);
 }
 
+request_field_lookup context_request::unique_cookie(std::string_view name) const {
+    if (const auto& cache = context_->request_storage().cookies_) {
+        return cache->unique(name);
+    }
+    // Scan every Cookie field in place; materializing cookie_fields() would allocate.
+    request_field_lookup result;
+    for (const auto& header_field : context_->request_.headers()) {
+        if (header_field.name().size() != 6U || !http_ascii_equals_ignore_case(header_field.name(), "Cookie")) {
+            continue;
+        }
+        http_visit_cookie_pairs(header_field.value(), [name, &result](std::string_view key, std::string_view value) noexcept {
+            if (key != name) {
+                return true;
+            }
+            if (result.status_ != unique_lookup_status::absent) {
+                result = {unique_lookup_status::repeated, {}};
+                return false;
+            }
+            result = {unique_lookup_status::found, value};
+            return true;
+        });
+        if (result.status_ == unique_lookup_status::repeated) {
+            break;
+        }
+    }
+    return result;
+}
+
+request_field_lookup context_request::unique_header(std::string_view name) const {
+    return header_fields().unique(name);
+}
+
 const request_name_value_list& context_request::cookie_fields() const {
     auto& cache = context_->request_storage().cookies_;
     if (cache) {

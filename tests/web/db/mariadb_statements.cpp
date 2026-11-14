@@ -19,7 +19,7 @@
 #include "stop_token.h"
 #include "task_scope.h"
 #include "worker_task_fixture.h"
-#ifdef RUVIA_ENABLE_MARIADB
+
 namespace mariadb_statement_test {
 
 using pipeline_test::peer_type;
@@ -1138,4 +1138,3 @@ TEST(Ruvia, db_mariadb_call_has_the_tracked_variables_read_back) {
     EXPECT_TRUE(outcomes[6].value_ == "e");
     EXPECT_TRUE((peer.maria_commands() == std::vector<std::string>({std::string("query:SELECT v FROM t"), std::string("prepare:SELECT v FROM t"), std::string("execute:1:"), std::string("query:CALL p()"), std::string("query:SELECT @@session_track_system_variables"), std::string("execute:1:"), std::string("query:CALL p()"), std::string("query:SELECT @@session_track_system_variables"), std::string("query:SELECT v FROM t"), std::string("query:SELECT v FROM t")})));
 }
-#endif

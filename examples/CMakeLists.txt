@@ -1,9 +1,6 @@
 # Each executable is independent. Enable optional backends at configure time.
-add_custom_target(ruvia_examples_web)
-
 function(ruvia_add_example name)
     add_executable(${name} ${ARGN})
-    add_dependencies(ruvia_examples_web ${name})
     target_link_libraries(${name} PRIVATE ruvia::web)
     if(MSVC)
         target_compile_options(${name} PRIVATE /bigobj /FS)

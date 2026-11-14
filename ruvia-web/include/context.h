@@ -352,6 +352,10 @@ public:
     [[nodiscard]] std::optional<std::string_view> query(std::string_view name) const;
     [[nodiscard]] std::span<const std::string_view> queries(std::string_view name) const;
     [[nodiscard]] std::optional<std::string_view> cookie(std::string_view name) const;
+    // Absent / found / repeated, for fields that must not resolve one of
+    // several occurrences (session ids, CSRF tokens).
+    [[nodiscard]] request_field_lookup unique_cookie(std::string_view name) const;
+    [[nodiscard]] request_field_lookup unique_header(std::string_view name) const;
     [[nodiscard]] std::optional<std::string_view> param(std::string_view name) const;
 
     template <detail::parsed_integer t_type>

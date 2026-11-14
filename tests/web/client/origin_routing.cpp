@@ -661,7 +661,7 @@ TEST(Ruvia, http_client_connection_limits_bound_open_and_idle_connections_withou
     config.request_timeout_ = 5s;
     config.connection_limits_ = {.max_open_ = 2, .max_idle_http1_ = 1, .max_idle_multiplexed_ = 0};
     run_client(io, attachment, {&peer}, config, [&](ruvia::http_client& client, const ruvia::worker_ref& worker) -> ruvia::task<void> {
-        const auto handle = client.client();
+        auto handle = client.client();
         EXPECT_EQ(handle.stats().open_connections_, 0U);
         std::optional<std::uint64_t> first_id;
         std::optional<std::uint64_t> second_id;
@@ -967,7 +967,7 @@ TEST(Ruvia, http_client_dns_refresh_queries_only_live_routes_and_retires_moved_c
     config.request_timeout_ = 5s;
     config.dns_refresh_interval_ = 30ms;
     run_client(io, attachment, {&peer}, config, [&](ruvia::http_client& client, const ruvia::worker_ref& worker) -> ruvia::task<void> {
-        const auto handle = client.client();
+        auto handle = client.client();
         (void)co_await ruvia::sleep_for(worker, 150ms);
         // No connection, no query.
         EXPECT_EQ(handle.stats().dns_refreshes_, 0U);
@@ -1126,7 +1126,7 @@ TEST(Ruvia, http_client_non_destructive_dns_resolution_preserves_active_connecti
     ruvia::http_client_config config{.base_url_ = base_url};
     config.request_timeout_ = 5s;
     run_client(io, attachment, {&peer}, config, [&](ruvia::http_client& client, const ruvia::worker_ref& worker) -> ruvia::task<void> {
-        const auto handle = client.client();
+        auto handle = client.client();
         const std::array pinned{ruvia::http_client_endpoint_address("127.0.0.2", peer.port())};
         handle.update_dns(pinned);
 

@@ -30,6 +30,8 @@ struct http_cors_policy_config final {
     std::vector<std::string> allowed_headers_;
     bool reflect_request_headers_{false};
     std::vector<std::string> expose_headers_;
+    // Requires explicit origins or suffixes; with any origin the policy
+    // constructor throws std::invalid_argument.
     bool allow_credentials_{false};
     std::optional<std::chrono::seconds> max_age_{};
 };

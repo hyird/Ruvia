@@ -56,6 +56,18 @@ struct normalized_host_unit final {
     return *authority->port() != 0;
 }
 
+// An encoded NUL in the path would decode into route matching, static file
+// lookup and handler parameters; reject it with the target. Callers validate
+// the path first, so every '%' starts a complete two-hex-digit escape.
+[[nodiscard]] bool has_encoded_nul(std::string_view path) noexcept {
+    for (auto escape = path.find('%'); escape != std::string_view::npos; escape = path.find('%', escape + 3)) {
+        if (path[escape + 1] == '0' && path[escape + 2] == '0') {
+            return true;
+        }
+    }
+    return false;
+}
+
 // Splits origin-form = absolute-path [ "?" query ] and validates both parts.
 [[nodiscard]] bool split_origin_form_target(std::string_view target, std::string_view& path, std::string_view& query) noexcept {
     if (target.empty() || target.front() != '/') {
@@ -64,7 +76,7 @@ struct normalized_host_unit final {
     const auto separator = target.find('?');
     path = separator == std::string_view::npos ? target : target.substr(0, separator);
     query = separator == std::string_view::npos ? std::string_view{} : target.substr(separator + 1);
-    return is_valid_uri_component(path, true, false) && is_valid_uri_component(query, true, true);
+    return is_valid_uri_component(path, true, false) && !has_encoded_nul(path) && is_valid_uri_component(query, true, true);
 }
 
 }  // namespace
@@ -218,7 +230,7 @@ namespace {
     // The authority becomes the authoritative Host value, so it must be a
     // non-empty HTTP Host. Userinfo is rejected at this trust boundary (RFC
     // 9110 section 4.2.4) instead of being silently stripped.
-    if (authority.empty() || !is_valid_host_header(authority) || !is_valid_uri_component(path, true, false)) {
+    if (authority.empty() || !is_valid_host_header(authority) || !is_valid_uri_component(path, true, false) || has_encoded_nul(path)) {
         return false;
     }
 

@@ -314,6 +314,30 @@ TEST(Ruvia, request_header_distinguishes_missing_from_present_empty) {
     EXPECT_TRUE(known_present_empty.value_or("missing").empty());
 }
 
+TEST(Ruvia, request_target_rejects_encoded_nul_in_path) {
+    EXPECT_TRUE(ruvia::is_valid_http_origin_form_target("/a%41b"));
+    EXPECT_TRUE(ruvia::is_valid_http_origin_form_target("/a%01b"));
+    for (const auto target : {std::string_view("/a%00b"), std::string_view("/%00"), std::string_view("/a/%00/b?q=1")}) {
+        EXPECT_TRUE(!ruvia::is_valid_http_origin_form_target(target));
+        bool rejected = false;
+        try {
+            (void)ruvia::make_parsed_http_request("GET", target, {}, {});
+        } catch (const ruvia::http_protocol_error& error) {
+            rejected = error.status() == ruvia::http_status::bad_request;
+        }
+        EXPECT_TRUE(rejected);
+    }
+    bool absolute_rejected = false;
+    try {
+        (void)ruvia::make_parsed_http_request("GET", "http://example.com/a%00b", {}, {});
+    } catch (const ruvia::http_protocol_error& error) {
+        absolute_rejected = error.status() == ruvia::http_status::bad_request;
+    }
+    EXPECT_TRUE(absolute_rejected);
+    const auto request = ruvia::make_parsed_http_request("GET", "/a%41b", {}, {});
+    EXPECT_EQ(request.path(), std::string_view("/a%41b"));
+}
+
 TEST(Ruvia, parsed_request_applies_recipient_field_rules_like_wire_parsers) {
     // RFC 9110 section 5.3: only list fields may repeat; joined Range or
     // If-Range lines would otherwise resolve to their last line.
@@ -1836,180 +1860,6 @@ TEST(Ruvia, byte_range_set_rejects_out_of_range_index) {
     }));
 }
 
-TEST(Ruvia, parse_cache_control_flags_and_ages) {
-    const auto cc = ruvia::parse_cache_control("public, max-age=60, s-maxage=120, stale-while-revalidate=30, immutable");
-    EXPECT_TRUE(cc.has(ruvia::cache_control_directive::public_value));
-    EXPECT_TRUE(!cc.has(ruvia::cache_control_directive::no_store));
-    EXPECT_TRUE(cc.has(ruvia::cache_control_directive::immutable));
-    EXPECT_TRUE(!cc.has(static_cast<ruvia::cache_control_directive>(static_cast<std::uint16_t>(ruvia::cache_control_directive::public_value) | static_cast<std::uint16_t>(ruvia::cache_control_directive::immutable))));
-    EXPECT_TRUE(cc.max_age().has_value());
-    EXPECT_EQ(*cc.max_age(), std::uint64_t{60});
-    EXPECT_EQ(*cc.s_maxage(), std::uint64_t{120});
-    EXPECT_EQ(*cc.stale_while_revalidate(), std::uint64_t{30});
-}
-
-TEST(Ruvia, parse_cache_control_request_directives) {
-    const auto request = ruvia::parse_cache_control("only-if-cached, max-age=0, min-fresh=15, max-stale=30");
-    EXPECT_TRUE(request.has(ruvia::cache_control_directive::only_if_cached));
-    EXPECT_EQ(request.max_age().value_or(1), std::uint64_t{0});
-    EXPECT_EQ(request.min_fresh().value_or(0), std::uint64_t{15});
-    EXPECT_EQ(request.max_stale().value_or(0), std::uint64_t{30});
-    EXPECT_TRUE(!request.has(ruvia::cache_control_directive::max_stale_any));
-
-    const auto any_stale = ruvia::parse_cache_control("max-stale");
-    EXPECT_TRUE(any_stale.has(ruvia::cache_control_directive::max_stale_any));
-    EXPECT_TRUE(!any_stale.max_stale().has_value());
-
-    const auto invalid = ruvia::parse_cache_control("only-if-cached=yes, min-fresh=bad, max-stale=bad");
-    EXPECT_TRUE(!invalid.has(ruvia::cache_control_directive::only_if_cached));
-    EXPECT_TRUE(!invalid.min_fresh().has_value());
-    EXPECT_TRUE(!invalid.max_stale().has_value());
-    EXPECT_TRUE(!invalid.has(ruvia::cache_control_directive::max_stale_any));
-}
-
-TEST(Ruvia, parse_cache_control_request_freshness_uses_first_occurrence) {
-    ruvia::cache_control_field_parser parser;
-    parser.update("min-fresh=5, max-stale=10");
-    parser.update("min-fresh=50, max-stale");
-    const auto request = parser.finish();
-    EXPECT_EQ(request.min_fresh().value_or(0), std::uint64_t{5});
-    EXPECT_EQ(request.max_stale().value_or(0), std::uint64_t{10});
-    EXPECT_TRUE(!request.has(ruvia::cache_control_directive::max_stale_any));
-}
-
-TEST(Ruvia, parse_cache_control_no_store_and_private) {
-    const auto cc = ruvia::parse_cache_control("no-store, private, must-revalidate");
-    EXPECT_TRUE(cc.has(ruvia::cache_control_directive::no_store));
-    EXPECT_TRUE(cc.has(ruvia::cache_control_directive::private_value));
-    EXPECT_TRUE(cc.has(ruvia::cache_control_directive::must_revalidate));
-    EXPECT_TRUE(!cc.max_age().has_value());
-}
-
-TEST(Ruvia, parse_cache_control_no_transform_is_bare_and_quote_aware) {
-    const auto present = ruvia::parse_cache_control("NO-TRANSFORM");
-    EXPECT_TRUE(present.has(ruvia::cache_control_directive::no_transform));
-
-    const auto quoted = ruvia::parse_cache_control(R"(extension="a, no-transform, b")");
-    EXPECT_TRUE(!quoted.has(ruvia::cache_control_directive::no_transform));
-
-    const auto qualified = ruvia::parse_cache_control("no-transform=ignored");
-    EXPECT_TRUE(!qualified.has(ruvia::cache_control_directive::no_transform));
-}
-
-TEST(Ruvia, parse_cache_control_quoted_and_case_insensitive_and_unknown) {
-    // Directive names are case-insensitive; a quoted delta-seconds is accepted; unknown ignored.
-    const auto cc = ruvia::parse_cache_control("Max-Age=\"45\" , surrogate-control=foo, No-Cache");
-    EXPECT_TRUE(cc.has(ruvia::cache_control_directive::no_cache));
-    EXPECT_TRUE(cc.max_age().has_value());
-    EXPECT_EQ(*cc.max_age(), std::uint64_t{45});
-}
-
-TEST(Ruvia, parse_cache_control_decodes_quoted_pairs_in_delta_seconds) {
-    const auto cc = ruvia::parse_cache_control(R"(max-age="6\0", s-maxage="1\20", stale-while-revalidate="\30", stale-if-error="4\5")");
-    EXPECT_EQ(cc.max_age().value_or(0), std::uint64_t{60});
-    EXPECT_EQ(cc.s_maxage().value_or(0), std::uint64_t{120});
-    EXPECT_EQ(cc.stale_while_revalidate().value_or(0), std::uint64_t{30});
-    EXPECT_EQ(cc.stale_if_error().value_or(0), std::uint64_t{45});
-}
-
-TEST(Ruvia, parse_cache_control_rejects_bad_delta_seconds) {
-    const auto cc = ruvia::parse_cache_control("max-age=abc, s-maxage=");
-    EXPECT_TRUE(!cc.max_age().has_value());
-    EXPECT_TRUE(!cc.s_maxage().has_value());
-}
-
-TEST(Ruvia, parse_cache_control_rejects_whitespace_around_equals) {
-    const auto cc = ruvia::parse_cache_control(
-        "max-age =60, s-maxage= 120, stale-while-revalidate = 30, "
-        "stale-if-error=\t45, no-cache =\"Set-Cookie\", private = auth, "
-        "no-cache= \"ETag\", private= auth");
-    EXPECT_TRUE(!cc.max_age().has_value());
-    EXPECT_TRUE(!cc.s_maxage().has_value());
-    EXPECT_TRUE(!cc.stale_while_revalidate().has_value());
-    EXPECT_TRUE(!cc.stale_if_error().has_value());
-    EXPECT_TRUE(!cc.has(ruvia::cache_control_directive::no_cache));
-    EXPECT_TRUE(!cc.has(ruvia::cache_control_directive::private_value));
-
-    // OWS around comma separators remains valid list framing.
-    const auto separated = ruvia::parse_cache_control(" max-age=60 \t,\t no-store ");
-    EXPECT_EQ(separated.max_age().value_or(0), std::uint64_t{60});
-    EXPECT_TRUE(separated.has(ruvia::cache_control_directive::no_store));
-}
-
-TEST(Ruvia, parse_cache_control_freshness_uses_first_occurrence) {
-    const auto duplicated = ruvia::parse_cache_control(
-        "max-age=60, MAX-AGE=3600, s-maxage=120, s-maxage=7200, "
-        "stale-while-revalidate=30, stale-while-revalidate=300, "
-        "stale-if-error=45, stale-if-error=450");
-    EXPECT_EQ(duplicated.max_age().value_or(0), std::uint64_t{60});
-    EXPECT_EQ(duplicated.s_maxage().value_or(0), std::uint64_t{120});
-    EXPECT_EQ(duplicated.stale_while_revalidate().value_or(0), std::uint64_t{30});
-    EXPECT_EQ(duplicated.stale_if_error().value_or(0), std::uint64_t{45});
-
-    // An invalid first occurrence cannot be repaired by a later value; caches
-    // must not accidentally turn invalid freshness information into freshness.
-    const auto invalid_first = ruvia::parse_cache_control("max-age=invalid, max-age=3600, s-maxage=, s-maxage=7200");
-    EXPECT_TRUE(!invalid_first.max_age().has_value());
-    EXPECT_TRUE(!invalid_first.s_maxage().has_value());
-}
-
-TEST(Ruvia, cache_control_field_parser_combines_repeated_lines) {
-    ruvia::cache_control_field_parser parser;
-    parser.update("public, max-age=invalid, s-maxage=120");
-    parser.update(R"(extension="a, no-transform, b", no-transform, max-age=3600, s-maxage=7200)");
-
-    const auto cc = parser.finish();
-    EXPECT_TRUE(cc.has(ruvia::cache_control_directive::public_value));
-    EXPECT_TRUE(cc.has(ruvia::cache_control_directive::no_transform));
-    EXPECT_TRUE(!cc.max_age().has_value());
-    EXPECT_EQ(cc.s_maxage().value_or(0), std::uint64_t{120});
-}
-
-TEST(Ruvia, parse_cache_control_delta_seconds_overflow_saturates) {
-    const auto cc = ruvia::parse_cache_control(
-        "max-age=184467440737095516150, "
-        "s-maxage=\"184467440737095516150\"");
-    EXPECT_EQ(cc.max_age().value_or(0), (std::numeric_limits<std::uint64_t>::max)());
-    EXPECT_EQ(cc.s_maxage().value_or(0), (std::numeric_limits<std::uint64_t>::max)());
-}
-
-TEST(Ruvia, parse_cache_control_does_not_split_quoted_extension_values) {
-    const auto cc = ruvia::parse_cache_control("extension=\"a, public, max-age=999, b\", private");
-    EXPECT_TRUE(!cc.has(ruvia::cache_control_directive::public_value));
-    EXPECT_TRUE(!cc.max_age().has_value());
-    EXPECT_TRUE(cc.has(ruvia::cache_control_directive::private_value));
-
-    // A quoted-pair keeps the escaped quote inside the extension value; its
-    // commas likewise cannot introduce directives.
-    const auto escaped = ruvia::parse_cache_control("extension=\"a\\\", no-store, b\", immutable");
-    EXPECT_TRUE(!escaped.has(ruvia::cache_control_directive::no_store));
-    EXPECT_TRUE(escaped.has(ruvia::cache_control_directive::immutable));
-
-    // An unterminated quoted value is malformed through the end of the field,
-    // so a comma within it must not accidentally enable caching directives.
-    const auto unterminated = ruvia::parse_cache_control("extension=\"a, public, max-age=3600");
-    EXPECT_TRUE(!unterminated.has(ruvia::cache_control_directive::public_value));
-    EXPECT_TRUE(!unterminated.max_age().has_value());
-}
-
-TEST(Ruvia, parse_cache_control_ignores_arguments_on_bare_directives) {
-    const auto cc = ruvia::parse_cache_control(
-        "public=ignored, no-store=ignored, must-revalidate=x, "
-        "proxy-revalidate=\"x\", no-transform=ignored, immutable=");
-    EXPECT_TRUE(!cc.has(ruvia::cache_control_directive::public_value));
-    EXPECT_TRUE(!cc.has(ruvia::cache_control_directive::no_store));
-    EXPECT_TRUE(!cc.has(ruvia::cache_control_directive::must_revalidate));
-    EXPECT_TRUE(!cc.has(ruvia::cache_control_directive::proxy_revalidate));
-    EXPECT_TRUE(!cc.has(ruvia::cache_control_directive::no_transform));
-    EXPECT_TRUE(!cc.has(ruvia::cache_control_directive::immutable));
-
-    // no-cache and private are different: their response forms can carry a
-    // field-name list, so an argument does not invalidate the directive.
-    const auto qualified = ruvia::parse_cache_control("no-cache=\"Set-Cookie\", private=\"Authorization\"");
-    EXPECT_TRUE(qualified.has(ruvia::cache_control_directive::no_cache));
-    EXPECT_TRUE(qualified.has(ruvia::cache_control_directive::private_value));
-}
-
 TEST(Ruvia, parse_http_date_imf_fixdate) {
     // RFC 7231 example: Sun, 06 Nov 1994 08:49:37 GMT.
     const auto t = ruvia::parse_http_date("Sun, 06 Nov 1994 08:49:37 GMT");
@@ -2017,132 +1867,3 @@ TEST(Ruvia, parse_http_date_imf_fixdate) {
     EXPECT_EQ(static_cast<long long>(*t), 784111777LL);
     EXPECT_TRUE(!ruvia::parse_http_date("not a date").has_value());
 }
-
-TEST(Ruvia, format_http_vary_cache_key_distinguishes_absent_from_empty_header) {
-    const auto vary = ruvia::parse_http_vary("Accept-Language, X-Mode");
-    const std::array<ruvia::http_header_view, 1> absent{
-        ruvia::http_header_view{"X-Mode", "fast"},
-    };
-    const std::array<ruvia::http_header_view, 2> empty_value{
-        ruvia::http_header_view{"Accept-Language", ""},
-        ruvia::http_header_view{"X-Mode", "fast"},
-    };
-    const std::array<ruvia::http_header_view, 2> ows_only{
-        ruvia::http_header_view{"Accept-Language", " \t "},
-        ruvia::http_header_view{"X-Mode", "fast"},
-    };
-    const auto absent_key = ruvia::format_http_vary_cache_key(vary, absent);
-    const auto empty_key = ruvia::format_http_vary_cache_key(vary, empty_value);
-    const auto ows_key = ruvia::format_http_vary_cache_key(vary, ows_only);
-    ASSERT_TRUE(absent_key.has_value());
-    ASSERT_TRUE(empty_key.has_value());
-    ASSERT_TRUE(ows_key.has_value());
-    EXPECT_NE(*absent_key, *empty_key);
-    EXPECT_EQ(*empty_key, *ows_key);
-    EXPECT_FALSE(ruvia::http_vary_requests_match(vary, absent, empty_value));
-    EXPECT_TRUE(ruvia::http_vary_requests_match(vary, empty_value, ows_only));
-}
-
-// ETag comparison and IMF-fixdate parsing back the conditional-request handling
-// (If-Match / If-None-Match / If-Range, RFC 9110) for static file responses.
-
-// Date formatting, cache framing, and locale-independent IMF-fixdate coverage
-// live in date_parsing.cpp. This file covers precondition evaluation.
-
-TEST(Ruvia, conditional_method_plan_follows_precondition_and_range_semantics) {
-    using ruvia::http_conditional_method_plan;
-
-    const auto get = get_http_conditional_method_plan(ruvia::http_known_method::get);
-    EXPECT_TRUE(get.evaluates_preconditions_);
-    EXPECT_TRUE(get.uses_not_modified_response_);
-    EXPECT_TRUE(get.evaluates_if_modified_since_);
-    EXPECT_TRUE(get.evaluates_range_);
-
-    const auto head = get_http_conditional_method_plan(ruvia::http_known_method::head);
-    EXPECT_TRUE(head.evaluates_preconditions_);
-    EXPECT_TRUE(head.uses_not_modified_response_);
-    EXPECT_TRUE(head.evaluates_if_modified_since_);
-    EXPECT_TRUE(!head.evaluates_range_);
-
-    for (const auto method : {ruvia::http_known_method::post, ruvia::http_known_method::put, ruvia::http_known_method::delete_value, ruvia::http_known_method::patch}) {
-        const auto plan = get_http_conditional_method_plan(method);
-        EXPECT_TRUE(plan.evaluates_preconditions_);
-        EXPECT_TRUE(!plan.uses_not_modified_response_);
-        EXPECT_TRUE(!plan.evaluates_if_modified_since_);
-        EXPECT_TRUE(!plan.evaluates_range_);
-    }
-
-    for (const auto method : {ruvia::http_known_method::options, ruvia::http_known_method::connect, ruvia::http_known_method::unknown}) {
-        const auto plan = get_http_conditional_method_plan(method);
-        EXPECT_TRUE(!plan.evaluates_preconditions_);
-        EXPECT_TRUE(!plan.uses_not_modified_response_);
-        EXPECT_TRUE(!plan.evaluates_if_modified_since_);
-        EXPECT_TRUE(!plan.evaluates_range_);
-    }
-}
-
-TEST(Ruvia, http_date_precondition_comparisons) {
-    using ruvia::http_date_not_modified;
-    using ruvia::http_date_unmodified;
-
-    constexpr std::time_t canonical{784111777};
-    const auto later = canonical + 1;
-    const auto earlier = canonical - 1;
-    constexpr auto header_value = "Sun, 06 Nov 1994 08:49:37 GMT";
-
-    EXPECT_TRUE(http_date_not_modified(header_value, canonical));
-    EXPECT_TRUE(http_date_not_modified(header_value, earlier));
-    EXPECT_TRUE(!http_date_not_modified(header_value, later));
-    EXPECT_TRUE(!http_date_not_modified("not-a-date", canonical));
-
-    EXPECT_TRUE(http_date_unmodified(header_value, canonical));
-    EXPECT_TRUE(http_date_unmodified(header_value, earlier));
-    EXPECT_TRUE(!http_date_unmodified(header_value, later));
-    EXPECT_TRUE(http_date_unmodified("not-a-date", later));
-}
-
-TEST(Ruvia, http_if_range_requires_exact_validator) {
-    using ruvia::http_if_range_allows;
-
-    constexpr std::time_t canonical{784111777};
-    constexpr auto etag = R"("abc")";
-    constexpr auto date = "Sun, 06 Nov 1994 08:49:37 GMT";
-
-    EXPECT_TRUE(!http_if_range_allows("", etag, canonical, true));
-    EXPECT_TRUE(http_if_range_allows(etag, etag, canonical, true));
-    EXPECT_TRUE(!http_if_range_allows(R"(W/"abc")", etag, canonical, true));
-    EXPECT_TRUE(http_if_range_allows(date, etag, canonical, true));
-    EXPECT_TRUE(!http_if_range_allows(date, etag, canonical + 1, true));
-    EXPECT_TRUE(!http_if_range_allows(date, etag, canonical, false));
-    EXPECT_TRUE(!http_if_range_allows(date, etag, std::nullopt, true));
-    EXPECT_TRUE(http_if_range_allows(etag, etag, std::nullopt, false));
-}
-
-TEST(Ruvia, http_etag_preconditions_fold_repeated_field_lines) {
-    using ruvia::http_etag_preconditions;
-    using ruvia::http_header_view;
-
-    const http_header_view fields[]{{"If-None-Match", R"("current")"}, {"If-None-Match", R"("stale")"}};
-    const auto request = ruvia::make_parsed_http_request("GET", "/", fields, {});
-
-    const auto matched = get_http_etag_preconditions(request, R"("current")");
-    EXPECT_TRUE(matched.if_none_match_.present_);
-    EXPECT_TRUE(matched.if_none_match_.matches());
-
-    const http_header_view wildcard_fields[]{{"If-Match", "*"}};
-    const auto wildcard = ruvia::make_parsed_http_request("GET", "/", wildcard_fields, {});
-    const auto existence = get_http_etag_preconditions(wildcard, R"("unused")");
-    EXPECT_TRUE(existence.if_match_.present_);
-    EXPECT_TRUE(existence.if_match_.matches());
-    EXPECT_TRUE(existence.if_match_.wildcard_);
-}
-
-namespace {
-
-template <typename request_type>
-concept conditional_headers_accepts_request = requires(request_type&& request) { ruvia::get_http_conditional_headers(std::forward<request_type>(request)); };
-
-static_assert(conditional_headers_accepts_request<const ruvia::http_request&>);
-static_assert(!conditional_headers_accepts_request<ruvia::http_request>);
-
-}  // namespace

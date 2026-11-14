@@ -4,6 +4,7 @@
 #include <concepts>
 #include <cstddef>
 #include <cstdio>
+#include <filesystem>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -321,11 +322,11 @@ ruvia::task<void> join_distinct_failures(ruvia::worker_ref worker_value, bool& f
 }
 
 // Redirects stderr, where the unhandled-failure diagnostic writes, into a
-// temporary file for the guard's lifetime.
+// file under the test temp root for the guard's lifetime.
 class stderr_capture final {
 public:
     stderr_capture() :
-        sink_(std::tmpfile()),
+        sink_(std::fopen((directory_.path() / "stderr").c_str(), "w+b")),
         saved_(::dup(STDERR_FILENO)) {
         std::fflush(stderr);
         if (sink_ != nullptr && saved_ >= 0) {
@@ -370,6 +371,7 @@ private:
         }
     }
 
+    scoped_temp_directory directory_{"ruvia-stderr-capture"};
     std::FILE* sink_;
     int saved_;
     bool redirected_{false};

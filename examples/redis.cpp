@@ -6,7 +6,7 @@
 // Run on port 8090 (RUVIA_PORT overrides it), then GET /redis/ping.
 // Use a disposable Redis database: collection routes, scripts and transactions
 // write demo keys. Blocking reads use the separate blocking pool.
-// See backend_tls.h for RUVIA_REDIS_TLS/CA/CERT/KEY. A local plaintext Redis
+// backend_config.h backend_tls() reads RUVIA_REDIS_TLS/CA/CERT/KEY. A local plaintext Redis
 // requires the explicit setting RUVIA_REDIS_TLS=false.
 
 #include <array>

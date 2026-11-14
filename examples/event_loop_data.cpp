@@ -5,7 +5,7 @@
 // Configure the RUVIA_DB_* and RUVIA_REDIS_HOST variables used in main().
 // Each service is constructed and shut down on its own loop. Request data
 // may be borrowed only while that loop and its resource owners remain alive.
-// backend_tls.h defines RUVIA_DB_TLS and RUVIA_REDIS_TLS plus CA/CERT/KEY.
+// backend_config.h backend_tls() reads RUVIA_DB_TLS and RUVIA_REDIS_TLS plus CA/CERT/KEY.
 #include <cstdlib>
 #include <exception>
 #include <iostream>
@@ -31,8 +31,8 @@ RUVIA_REDIS_ENTITY(cached_device, "devices", RUVIA_REDIS_COLUMN(id, string, redi
 
 // Application composition, not a framework service registry. Each instance
 // owns independent pools and memory; only its loop may use these clients.
-struct worker_data final {
-    worker_data(event_loop owner_value, const db_config& sql, const redis_config& cache) :
+struct loop_backends final {
+    loop_backends(event_loop owner_value, const db_config& sql, const redis_config& cache) :
         loop_(std::move(owner_value)),
         db_(loop_, sql),
         redis_(loop_, cache) {}
@@ -103,9 +103,9 @@ int main(int argc, char** argv) {
         // Declared first, it outlives the loops.
         blocking_pool host_lookups({.thread_count_ = 1});
         event_loop_pool pool({.loop_count_ = 2, .blocking_pool_ = &host_lookups});
-        std::vector<std::unique_ptr<worker_data>> workers;
+        std::vector<std::unique_ptr<loop_backends>> backends;
         for (std::size_t index = 0; index < pool.loop_count(); ++index) {
-            workers.push_back(std::make_unique<worker_data>(pool.loop(index), sql, cache));
+            backends.push_back(std::make_unique<loop_backends>(pool.loop(index), sql, cache));
         }
         pool.start();
         std::exception_ptr failure;
@@ -118,30 +118,30 @@ int main(int argc, char** argv) {
                     if (!failure) {
                         failure = std::current_exception();
                     }
-                    for (auto& worker : workers) {
-                        worker->redis_.close();
-                        worker->db_.close();
+                    for (auto& backend : backends) {
+                        backend->redis_.close();
+                        backend->db_.close();
                     }
                 }
             }
             tasks.clear();
         };
         try {
-            for (auto& worker : workers) {
-                tasks.push_back(worker->loop_.start(worker->connect()));
+            for (auto& backend : backends) {
+                tasks.push_back(backend->loop_.start(backend->connect()));
             }
             // All clients must be ready before publishing any business work.
             observe();
             if (!failure) {
-                for (auto& worker : workers) {
-                    tasks.push_back(worker->loop_.start(worker->read()));
+                for (auto& backend : backends) {
+                    tasks.push_back(backend->loop_.start(backend->read()));
                 }
                 observe();
             }
             // Stop business admission first; loop threads must remain running
             // until every client has cancelled and joined its operations.
-            for (auto& worker : workers) {
-                tasks.push_back(worker->loop_.start(worker->shutdown()));
+            for (auto& backend : backends) {
+                tasks.push_back(backend->loop_.start(backend->shutdown()));
             }
             observe();
         } catch (...) {
@@ -158,7 +158,7 @@ int main(int argc, char** argv) {
         if (failure) {
             std::rethrow_exception(failure);
         }
-        std::cout << "Both workers completed SQL and Redis ORM lookups.\n";
+        std::cout << "Both loops completed SQL and Redis ORM lookups.\n";
     } catch (...) {
         std::cerr << ruvia::exception_text(std::current_exception()) << '\n';
         return 1;

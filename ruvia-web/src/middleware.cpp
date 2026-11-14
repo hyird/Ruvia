@@ -280,11 +280,13 @@ session_middleware::session_middleware(const session_config& config) :
 
 task<void> session_middleware::invoke(context& c, next& next_value) {
     detail::session_access::bind(c, this);
-    const auto cookie = c.req().cookie(cookie_name_);
-    if (cookie && detail::is_valid_session_id(*cookie)) {
-        detail::session_access::observe_presented_id(c, *cookie);
+    // A repeated session cookie is treated as absent: loading either occurrence
+    // would let an injected cookie fixate or shadow the session.
+    const auto cookie = c.req().unique_cookie(cookie_name_);
+    if (cookie.status_ == unique_lookup_status::found && detail::is_valid_session_id(cookie.value_)) {
+        detail::session_access::observe_presented_id(c, cookie.value_);
         auto get_task = [&] {
-            const session_key key({key_prefix_, *cookie});
+            const session_key key({key_prefix_, cookie.value_});
             return c.redis(redis_alias_).get(key.view());
         }();
         if (auto stored = co_await std::move(get_task)) {
@@ -2036,13 +2038,15 @@ csrf_protection::csrf_protection(const csrf_protection_config& config) :
 task<void> csrf_protection::invoke(context& c, next& next_value) {
     const auto method = c.req().known_method();
     const bool safe = method == http_known_method::get || method == http_known_method::head || method == http_known_method::options;
-    const auto cookie = c.req().cookie(cookie_name_);
+    // Repeated cookie or header occurrences never resolve to one token.
+    const auto cookie = c.req().unique_cookie(cookie_name_);
+    const bool has_cookie = cookie.status_ == unique_lookup_status::found && !cookie.value_.empty();
     if (!safe) {
-        const auto header_value = c.req().header(header_name_);
-        if (!cookie || cookie->empty() || !header_value || header_value->empty() || !detail::constant_time_bytes_equal(*cookie, *header_value)) {
+        const auto header_value = c.req().unique_header(header_name_);
+        if (!has_cookie || header_value.status_ != unique_lookup_status::found || header_value.value_.empty() || !detail::constant_time_bytes_equal(cookie.value_, header_value.value_)) {
             throw http_error({.status_ = ruvia::http_status::forbidden, .code_ = "csrf_token_mismatch", .message_ = "CSRF token missing or invalid"});
         }
-    } else if (!cookie || cookie->empty()) {
+    } else if (!has_cookie) {
         std::array<char, detail::secure_token_size> buffer;
         const auto token = detail::generate_secure_token(buffer);
         const auto connection = c.conn();

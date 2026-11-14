@@ -1,0 +1,107 @@
+#include <gtest/gtest.h>
+
+#include <array>
+#include <cstdint>
+#include <limits>
+#include <stdexcept>
+#include <string_view>
+
+#include "borrowed_text.h"
+#include "http1_client_request.h"
+#include "http_request.h"
+
+TEST(Ruvia, port_number_rejects_wide_inputs_without_changing_an_existing_origin) {
+    const auto rejects = [](auto input) {
+        try {
+            (void)ruvia::http_origin_view::https({.host_ = "example.test", .port_ = input});
+        } catch (const std::invalid_argument&) {
+            return true;
+        }
+        return false;
+    };
+    const std::array<std::int64_t, 7> invalid{std::numeric_limits<std::int64_t>::min(), -65093, -1, 65536, 65979, 131071, std::numeric_limits<std::int64_t>::max()};
+    for (const auto input : invalid) {
+        EXPECT_TRUE(rejects(input));
+        EXPECT_TRUE(!ruvia::port_number::try_from_value(input).has_value());
+        ruvia::http_origin_options options{.host_ = "example.test", .port_ = 8443};
+        bool assignment_rejected = false;
+        try {
+            options.port_ = input;
+        } catch (const std::invalid_argument&) {
+            assignment_rejected = true;
+        }
+        EXPECT_TRUE(assignment_rejected);
+        const auto retained = ruvia::http_origin_view::https(options);
+        EXPECT_EQ(ruvia::make_http_origin_authority(retained), "example.test:8443");
+    }
+    const auto maximum = std::numeric_limits<std::uint64_t>::max();
+    EXPECT_TRUE(rejects(maximum));
+    EXPECT_TRUE(!ruvia::port_number::try_from_value(maximum).has_value());
+}
+
+TEST(Ruvia, port_number_preserves_zero_maximum_and_scheme_default_authorities) {
+    struct port_case final {
+        std::uint64_t input_;
+        std::string_view authority_;
+    };
+    for (const auto entry : std::array{port_case{0, "[::1]:0"}, port_case{1, "[::1]:1"}, port_case{80, "[::1]:80"}, port_case{443, "[::1]"}, port_case{65535, "[::1]:65535"}}) {
+        const auto origin = ruvia::http_origin_view::https({.host_ = "[::1]", .port_ = entry.input_});
+        EXPECT_EQ(ruvia::make_http_origin_authority(origin), entry.authority_);
+    }
+    const auto absent = ruvia::http_origin_view::http({.host_ = "example.test"});
+    const auto zero = ruvia::http_origin_view::http({.host_ = "example.test", .port_ = 0});
+    EXPECT_EQ(ruvia::make_http_origin_authority(absent), "example.test");
+    EXPECT_EQ(ruvia::make_http_origin_authority(zero), "example.test:0");
+}
+
+TEST(Ruvia, port_number_rejects_invalid_authority_defaults_before_origin_comparison) {
+    const auto authority = ruvia::parse_http_authority("example.test");
+    EXPECT_TRUE(authority.has_value());
+    if (!authority) {
+        return;
+    }
+    const auto rejects = [](auto&& operation) {
+        try {
+            operation();
+        } catch (const std::invalid_argument&) {
+            return true;
+        }
+        return false;
+    };
+    for (const auto source : std::array<std::int64_t, 7>{std::numeric_limits<std::int64_t>::min(), -65093, -1, 65536, 65979, 131071, std::numeric_limits<std::int64_t>::max()}) {
+        EXPECT_TRUE(rejects([&] {
+            (void)authority->effective_port(source);
+        }));
+        EXPECT_TRUE(rejects([&] {
+            (void)ruvia::http_authorities_equal("example.test", "example.test:443", source);
+        }));
+    }
+    const auto maximum = std::numeric_limits<std::uint64_t>::max();
+    EXPECT_TRUE(rejects([&] {
+        (void)authority->effective_port(maximum);
+    }));
+    EXPECT_TRUE(rejects([&] {
+        (void)ruvia::http_authorities_equal("example.test", "example.test:443", maximum);
+    }));
+    EXPECT_TRUE(ruvia::http_authorities_equal("example.test", "EXAMPLE.test:443", 443));
+    EXPECT_TRUE(!ruvia::http_authorities_equal("example.test", "example.test:443", 80));
+}
+
+TEST(Ruvia, port_number_preserves_absent_empty_and_explicit_authority_port_rules) {
+    const auto absent = ruvia::parse_http_authority("[::1]");
+    const auto empty = ruvia::parse_http_authority("[::1]:");
+    const auto explicit_port = ruvia::parse_http_authority("[::1]:8443");
+    EXPECT_TRUE(absent && empty && explicit_port);
+    if (!absent || !empty || !explicit_port) {
+        return;
+    }
+    for (const auto source : std::array<std::uint64_t, 5>{0, 1, 80, 443, 65535}) {
+        EXPECT_TRUE(absent->effective_port(source) == source);
+        EXPECT_TRUE(empty->effective_port(source) == source);
+        EXPECT_TRUE(explicit_port->effective_port(source) == 8443);
+        EXPECT_TRUE(ruvia::http_authorities_equal("[::1]", "[::1]:", source));
+    }
+    EXPECT_TRUE(!ruvia::http_authorities_equal("[::1]", "[::1]:0", 0));
+    EXPECT_TRUE(ruvia::http_authorities_equal("[::1]:", "[::1]:65535", 65535));
+    EXPECT_TRUE(!ruvia::http_authorities_equal("[::1]:8443", "[::1]:443", 443));
+}

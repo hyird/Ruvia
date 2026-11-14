@@ -1717,7 +1717,7 @@ task<void> db_query_result_cache::remove(std::span<const std::string_view> ids) 
     registration_.require_active();
     return make_scoped_operation(registration_.scope(), state_->remove(ids, io_metrics_, options_));
 }
-task<void> db_query_result_cache::clear() const {
+task<void> db_query_result_cache::clear() {
     registration_.require_active();
     return make_scoped_operation(registration_.scope(), state_->clear(io_metrics_, options_));
 }

@@ -1525,9 +1525,6 @@ private:
 
 }  // namespace ruvia
 
-#ifdef RUVIA_ENABLE_REDIS
-#endif
-
 namespace ruvia {
 enum class redis_index_kind : std::uint8_t;
 class redis_predicate;
@@ -1786,9 +1783,10 @@ public:
     redis_literal_kind kind() const noexcept {
         return static_cast<redis_literal_kind>(storage_.index());
     }
-    std::string_view text() const noexcept {
+    std::string_view text() const& noexcept RUVIA_LIFETIMEBOUND {
         return std::get<std::string>(storage_);
     }
+    std::string_view text() const&& = delete;
     std::int64_t signed_value() const noexcept {
         return std::get<std::int64_t>(storage_);
     }

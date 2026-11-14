@@ -22,6 +22,7 @@ else()
     if(NOT _ruvia_mimalloc_type STREQUAL "STATIC_LIBRARY")
         message(FATAL_ERROR "Ruvia non-Windows core requires a real mimalloc-static STATIC_LIBRARY")
     endif()
+    # Sanitizers interpose malloc themselves; whole-archive mimalloc would override them, so link it as an ordinary archive.
     if("${CMAKE_CXX_FLAGS} ${CMAKE_EXE_LINKER_FLAGS}" MATCHES "-fsanitize=([^ ]*address|[^ ]*thread|[^ ]*memory|[^ ]*hwaddress)")
         target_link_libraries(ruvia-core PRIVATE mimalloc-static)
     else()

@@ -571,12 +571,13 @@ TEST(Ruvia, app_connection_timeouts_honor_coarse_scan_clock) {
     app_run run(app);
     EXPECT_TRUE(state().started_.try_acquire_for(3s));
 
-    // A head trickling in every 50 ms stays active across several scans.
+    // A head trickling in every 10 ms, 20x inside the header timeout, stays
+    // active across several scans.
     asio::ip::tcp::socket active(io);
     active.connect(endpoint);
     send(active, "GET /fast HTTP/1.1\r\nHost: localhost\r\nX-Pad: ");
-    for (int i = 0; i < 24; ++i) {
-        std::this_thread::sleep_for(50ms);
+    for (int i = 0; i < 120; ++i) {
+        std::this_thread::sleep_for(10ms);
         send(active, "a");
     }
     send(active, "\r\n\r\n");

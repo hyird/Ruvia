@@ -220,6 +220,7 @@ TEST(Ruvia, session_ids_isolate_prefixes_and_preserve_fixed_length_lifecycle) {
         }
         store.emplace("sess:" + std::string(48, 'B'), "existing");
         store.emplace("sess:" + std::string(48, 'g'), "existing");
+        store.emplace("sess:" + std::string(48, 'c'), "existing");
         return store;
     }());
     ruvia::app().redis({.config_ = {.host_ = "127.0.0.1", .port_ = peer.port(), .tls_ = {.mode_ = ruvia::client_tls_mode::disabled}, .pool_size_per_worker_ = 1, .connect_timeout_ = std::chrono::seconds(2), .command_timeout_ = std::chrono::seconds(2)}}).use_at<ruvia::session_middleware>({.prefix_ = "/session-ids/a"}, ruvia::session_config{.cookie_name_ = "sid_a", .key_prefix_ = "sess:"}).use_at<ruvia::session_middleware>({.prefix_ = "/session-ids/b"}, ruvia::session_config{.cookie_name_ = "sid_b", .key_prefix_ = "sess:a"});
@@ -275,6 +276,20 @@ TEST(Ruvia, session_ids_isolate_prefixes_and_preserve_fixed_length_lifecycle) {
     expect("/session-ids/a/clear", rotated.cookie_, "clear");
     expect("/session-ids/a/read", rotated.cookie_, "empty");
 
+    // A repeated session cookie resolves to neither occurrence: nothing is
+    // loaded or cleared, and a write mints a fresh ID.
+    const auto stored_id = std::string(48, 'c');
+    for (const auto& duplicated : {"sid_a=" + stored_id + "; sid_a=" + stored_id, "sid_a=" + std::string(48, 'd') + "; sid_a=" + stored_id}) {
+        const auto read = expect("/session-ids/a/read", duplicated, "empty");
+        EXPECT_TRUE(read.cookie_.empty());
+        expect("/session-ids/a/clear", duplicated, "clear");
+        const auto written = expect("/session-ids/a/set", duplicated, "set");
+        EXPECT_TRUE(written.cookie_.starts_with("sid_a="));
+        EXPECT_EQ(written.cookie_.size(), std::size_t{6 + 48});
+        EXPECT_NE(written.cookie_, "sid_a=" + stored_id);
+        expect(std::string("/session-store?id=") + stored_id, {}, "existing");
+    }
+
     const auto created = expect("/session-ids/b/set", {}, "set");
     const auto stale = request("/session-ids/b/stale", created.cookie_);
     EXPECT_EQ(stale.status_, 409U);
@@ -284,3 +299,60 @@ TEST(Ruvia, session_ids_isolate_prefixes_and_preserve_fixed_length_lifecycle) {
 }
 
 #endif
+
+namespace {
+
+class forward_csrf final {
+public:
+    static constexpr bool ruvia_runs_on_unmatched_requests = true;
+
+    explicit forward_csrf(ruvia::csrf_protection* middleware_value) :
+        middleware_(middleware_value) {}
+
+    ruvia::task<void> invoke(ruvia::context& ctx, ruvia::next& next_step) {
+        co_await middleware_->invoke(ctx, next_step);
+    }
+
+private:
+    ruvia::csrf_protection* middleware_;
+};
+
+class csrf_accepted final {
+public:
+    static constexpr bool ruvia_runs_on_unmatched_requests = true;
+
+    ruvia::task<void> invoke(ruvia::context& ctx, ruvia::next&) {
+        ctx.respond(ctx.text("accepted"));
+        co_return;
+    }
+};
+
+}  // namespace
+
+TEST(Ruvia, csrf_rejects_repeated_token_cookie_or_header) {
+    const std::string token(48, 'a');
+    const auto run = [](const ruvia::test_request& request) {
+        ruvia::csrf_protection csrf;
+        ruvia::test_app app;
+        app.use<forward_csrf>(&csrf);
+        app.use<csrf_accepted>();
+        return app.request(request).status();
+    };
+
+    auto single = ruvia::test_request::post("/");
+    single.cookie("XSRF-TOKEN", token).header("X-XSRF-TOKEN", token);
+    EXPECT_EQ(run(single), ruvia::http_status::ok);
+
+    // Both occurrences match the header, so only the repetition can reject.
+    auto repeated_cookie = ruvia::test_request::post("/");
+    repeated_cookie.cookie("XSRF-TOKEN", token).cookie("XSRF-TOKEN", token).header("X-XSRF-TOKEN", token);
+    EXPECT_EQ(run(repeated_cookie), ruvia::http_status::forbidden);
+
+    auto split_cookie = ruvia::test_request::post("/");
+    split_cookie.header("Cookie", "XSRF-TOKEN=" + std::string(48, 'b')).cookie("XSRF-TOKEN", token).header("X-XSRF-TOKEN", token);
+    EXPECT_EQ(run(split_cookie), ruvia::http_status::forbidden);
+
+    auto repeated_header = ruvia::test_request::post("/");
+    repeated_header.cookie("XSRF-TOKEN", token).header("X-XSRF-TOKEN", token).header("X-XSRF-TOKEN", token);
+    EXPECT_EQ(run(repeated_header), ruvia::http_status::forbidden);
+}

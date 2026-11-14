@@ -5,7 +5,7 @@
 // An idle read waits at most 500 ms and returns "no messages". Setup deliberately
 // reports an existing group instead of deleting somebody else's stream/group.
 // Demo data stays under ruvia:example:stream; use a disposable Redis database.
-// backend_tls.h defines RUVIA_REDIS_TLS/CA/CERT/KEY for Redis transport.
+// backend_config.h backend_tls() reads RUVIA_REDIS_TLS/CA/CERT/KEY for Redis transport.
 
 #include <array>
 #include <chrono>

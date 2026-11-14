@@ -2,10 +2,8 @@
 
 #include <algorithm>
 #include <array>
-#include <chrono>
 #include <cstddef>
 #include <cstdint>
-#include <ctime>
 #include <limits>
 #include <memory>
 #include <new>
@@ -15,15 +13,15 @@
 #include <string>
 #include <string_view>
 #include <utility>
+#include <variant>
 #include <vector>
 
 #include "content_decoding_fixture.h"
+#include "http1_chunked_body.h"
 #include "http1_client_request.h"
 #include "http1_client_response.h"
 #include "http1_server_response.h"
 #include "http_client_redirect.h"
-#include "http_cookie.h"
-#include "http_date.h"
 #include "http_header.h"
 #include "http_request.h"
 
@@ -1407,267 +1405,261 @@ TEST(Ruvia, http_client_redirect_target_options_accept_named_owners_and_copy_int
     }
 }
 
-TEST(Ruvia, set_cookie_parser_handles_deterministic_arbitrary_bytes) {
-    std::uint64_t state_value = 0x5345'5443'4F4F'4B49ULL;
-    const auto next_value = [&state_value]() {
-        state_value ^= state_value << 7U;
-        state_value ^= state_value >> 9U;
-        return state_value;
-    };
-    const auto verify_borrowed_fields = [&](std::string_view input, const ruvia::http_set_cookie_view& parsed_value) {
-        const auto is_borrowed_input_text = [input](std::string_view value) {
-            return value.empty() || input.find(value) != std::string_view::npos;
+namespace {
+
+ruvia::http1_request_content_writer chunked_request_writer() {
+    std::array<char, 1024> head{};
+    auto prepared = ruvia::http1_client_request_writer{}.prepare_streaming(ruvia::http_origin_view::http({.host_ = "example.com"}), {.method_ = "POST"}, head);
+    const auto* prepared_req = std::get_if<ruvia::prepared_http1_client_request>(&prepared);
+    if (prepared_req == nullptr || prepared_req->content_plan().streaming() == nullptr) {
+        throw std::logic_error("cannot prepare test request content");
+    }
+    return ruvia::http1_request_content_writer(*prepared_req->content_plan().streaming());
+}
+
+}  // namespace
+
+TEST(Ruvia, http1_streaming_request_chunked_upload_and_trailers) {
+    ruvia::http1_client_request_writer head_writer;
+    std::array<char, 4096> head{};
+    auto prepared = head_writer.prepare_streaming(ruvia::http_origin_view::https({.host_ = "example.com"}), {.method_ = "POST"}, head);
+    const auto* prepared_req = std::get_if<ruvia::prepared_http1_client_request>(&prepared);
+    EXPECT_TRUE(prepared_req != nullptr);
+    auto* plan = prepared_req->content_plan().streaming();
+    EXPECT_TRUE(plan != nullptr);
+    EXPECT_EQ(prepared_req->head(), std::string_view("POST / HTTP/1.1\r\nHost: example.com\r\nTransfer-Encoding: chunked\r\n\r\n"));
+    ruvia::http1_request_content_writer writer(*plan);
+    const std::string payload_value = "hello";
+    auto chunk = writer.plan_chunk(payload_value);
+    EXPECT_TRUE((chunk.index() == 0));
+    EXPECT_EQ(std::get<0>(chunk).prefix(), std::string_view("5\r\n"));
+    EXPECT_EQ(std::get<0>(chunk).suffix(), std::string_view("\r\n"));
+    writer.commit_chunk();
+    std::array<char, 128> finish_value{};
+    const std::array trailers{ruvia::http_header_view{"Digest", "value"}};
+    auto final = writer.plan_finish(finish_value, trailers);
+    EXPECT_TRUE((final.index() == 0));
+    EXPECT_EQ(std::get<0>(final), std::string_view("0\r\nDigest: value\r\n\r\n"));
+    EXPECT_TRUE(!(writer.plan_chunk(payload_value).index() == 0));
+    writer.commit_finish();
+    EXPECT_TRUE(writer.finished());
+}
+
+// RFC 9110 section 6.6.2: a sender that will generate trailer fields SHOULD
+// declare them in a Trailer field; only chunked content carries trailers.
+TEST(Ruvia, http1_streaming_request_declares_trailer_only_for_chunked_content) {
+    const std::array declared{ruvia::http_header_view{"Trailer", "Digest"}};
+    std::array<char, 1024> head{};
+    auto prepared = ruvia::http1_client_request_writer{}.prepare_streaming(ruvia::http_origin_view::http({.host_ = "example.com"}), {.method_ = "POST", .headers_ = declared}, head);
+    const auto* prepared_req = std::get_if<ruvia::prepared_http1_client_request>(&prepared);
+    EXPECT_TRUE(prepared_req != nullptr);
+    if (prepared_req != nullptr) {
+        EXPECT_EQ(prepared_req->head(),
+            std::string_view("POST / HTTP/1.1\r\nHost: example.com\r\nTrailer: Digest\r\n"
+                             "Transfer-Encoding: chunked\r\n\r\n"));
+        ruvia::http1_request_content_writer writer(*prepared_req->content_plan().streaming());
+        std::array<char, 128> finish_value{};
+        const std::array trailers{ruvia::http_header_view{"Digest", "value"}};
+        auto final = writer.plan_finish(finish_value, trailers);
+        EXPECT_TRUE((final.index() == 0));
+    }
+
+    auto known_length = ruvia::http1_client_request_writer{}.prepare_streaming(ruvia::http_origin_view::http({.host_ = "example.com"}), {.method_ = "POST", .headers_ = declared, .content_length_ = 3}, head);
+    const auto* failure = std::get_if<ruvia::http1_client_request_prepare_error>(&known_length);
+    EXPECT_TRUE(failure != nullptr && *failure == ruvia::http1_client_request_prepare_error::trailer_requires_chunked_content);
+
+    const std::array forbidden{ruvia::http_header_view{"Trailer", "Content-Length"}};
+    auto rejected = ruvia::http1_client_request_writer{}.prepare_streaming(ruvia::http_origin_view::http({.host_ = "example.com"}), {.method_ = "POST", .headers_ = forbidden}, head);
+    const auto* invalid = std::get_if<ruvia::http1_client_request_prepare_error>(&rejected);
+    EXPECT_TRUE(invalid != nullptr && *invalid == ruvia::http1_client_request_prepare_error::invalid_header);
+}
+TEST(Ruvia, http1_streaming_request_known_length_and_continue_gate) {
+    ruvia::http1_client_request_writer head_writer;
+    std::array<char, 4096> head{};
+    auto prepared = head_writer.prepare_streaming(ruvia::http_origin_view::http({.host_ = "example.com"}), {.method_ = "PUT", .content_length_ = 3}, head, {.expectation_ = ruvia::http_client_request_expectation::continue_value});
+    const auto* prepared_req = std::get_if<ruvia::prepared_http1_client_request>(&prepared);
+    EXPECT_TRUE(prepared_req != nullptr);
+    EXPECT_TRUE((prepared_req->head().find("Content-Length: 3\r\n") != std::string_view::npos));
+    ruvia::http1_request_content_writer writer(*prepared_req->content_plan().streaming());
+    const std::string payload_value = "abc";
+    EXPECT_TRUE(!(writer.plan_chunk(payload_value).index() == 0));
+    writer.release_content();
+    EXPECT_TRUE(!(writer.plan_finish({}).index() == 0));
+    auto chunk = writer.plan_chunk(payload_value);
+    EXPECT_TRUE((chunk.index() == 0));
+    EXPECT_TRUE(std::get<0>(chunk).prefix().empty());
+    EXPECT_TRUE(std::get<0>(chunk).suffix().empty());
+    writer.commit_chunk();
+    EXPECT_TRUE(!(writer.plan_chunk(payload_value).index() == 0));
+    auto finish_value = writer.plan_finish({});
+    EXPECT_TRUE((finish_value.index() == 0));
+    EXPECT_TRUE(std::get<0>(finish_value).empty());
+    writer.commit_finish();
+    EXPECT_TRUE(ruvia::test::throws_on([&] {
+        writer.commit_chunk();
+    }));
+    EXPECT_TRUE(ruvia::test::throws_on([&] {
+        writer.commit_finish();
+    }));
+}
+TEST(Ruvia, http1_streaming_request_rejects_forbidden_trailer_without_mutating_buffer) {
+    std::array<char, 1024> head{};
+    auto prepared = ruvia::http1_client_request_writer{}.prepare_streaming(ruvia::http_origin_view::http({.host_ = "example.com"}), {.method_ = "POST"}, head);
+    ruvia::http1_request_content_writer writer(*std::get<0>(prepared).content_plan().streaming());
+    std::array<char, 128> finish_value{};
+    finish_value.fill('X');
+    const std::array trailers{ruvia::http_header_view{"Content-Length", "0"}};
+    auto rejected = writer.plan_finish(finish_value, trailers);
+    EXPECT_TRUE(!(rejected.index() == 0));
+    EXPECT_EQ(finish_value.front(), 'X');
+    EXPECT_TRUE((writer.plan_finish(finish_value).index() == 0));
+}
+
+TEST(Ruvia, http1_streaming_request_finish_accepts_trailers_borrowed_from_output) {
+    enum class alias_kind { name,
+        value,
+        disjoint,
+        overlapping,
+        cross_field };
+    for (const auto kind : {alias_kind::name, alias_kind::value, alias_kind::disjoint, alias_kind::overlapping, alias_kind::cross_field}) {
+        auto writer = chunked_request_writer();
+        std::array<char, 128> buffer{};
+        buffer.fill('#');
+        std::array<ruvia::http_header_view, 2> fields{};
+        std::size_t count = 1;
+        std::string expected = "0\r\nDigest: value\r\n\r\n";
+        const auto copy = [&](std::size_t offset, std::string_view text) {
+            std::copy(text.begin(), text.end(), buffer.begin() + static_cast<std::ptrdiff_t>(offset));
+            return std::string_view(buffer.data() + offset, text.size());
         };
-        EXPECT_TRUE(is_borrowed_input_text(parsed_value.name()));
-        EXPECT_TRUE(is_borrowed_input_text(parsed_value.value()));
-        EXPECT_TRUE(is_borrowed_input_text(parsed_value.path()));
-        EXPECT_TRUE(is_borrowed_input_text(parsed_value.domain()));
-        EXPECT_TRUE(!parsed_value.has(static_cast<ruvia::http_set_cookie_attribute>(0)));
-        EXPECT_TRUE(!parsed_value.has(static_cast<ruvia::http_set_cookie_attribute>(static_cast<std::uint8_t>(ruvia::http_set_cookie_attribute::secure) | static_cast<std::uint8_t>(ruvia::http_set_cookie_attribute::partitioned))));
-    };
-    constexpr std::string_view cookie_octets = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!#$%&'*+-.^_`|~";
-
-    for (std::size_t sample = 0; sample < 4096; ++sample) {
-        std::string input(static_cast<std::size_t>(next_value() % 1025U), '\0');
-        for (auto& byte : input) {
-            byte = static_cast<char>(next_value());
+        switch (kind) {
+            case alias_kind::name:
+                fields[0] = {copy(0, "Digest"), "value"};
+                break;
+            case alias_kind::value:
+                fields[0] = {"Digest", copy(0, "value")};
+                break;
+            case alias_kind::disjoint:
+                fields[0] = {copy(0, "Digest"), copy(16, "value")};
+                break;
+            case alias_kind::overlapping: {
+                const auto text = copy(0, "DigestValue");
+                fields[0] = {text.substr(0, 6), text.substr(3)};
+                expected = "0\r\nDigest: estValue\r\n\r\n";
+                break;
+            }
+            case alias_kind::cross_field:
+                fields[0] = {"X-First", copy(32, "first")};
+                fields[1] = {copy(0, "Digest"), "second"};
+                count = 2;
+                expected = "0\r\nX-First: first\r\nDigest: second\r\n\r\n";
+                break;
         }
-
-        const auto parsed_value = ruvia::parse_set_cookie(input);
-        if (parsed_value.has_value()) {
-            verify_borrowed_fields(input, *parsed_value);
+        const auto trailers = std::span(fields).first(count);
+        const auto original = buffer;
+        const auto too_small = writer.plan_finish(std::span(buffer).first(expected.size() - 1), trailers);
+        EXPECT_TRUE(too_small.index() == 1);
+        if (too_small.index() == 1) {
+            EXPECT_TRUE(std::get<1>(too_small) == ruvia::http1_request_content_write_error::output_too_small);
         }
+        EXPECT_TRUE(buffer == original);
+        EXPECT_TRUE(!writer.finished());
 
-        std::string accepted_input("sid=");
-        for (std::size_t index = 0; index < next_value() % 129U; ++index) {
-            accepted_input.push_back(cookie_octets[next_value() % cookie_octets.size()]);
+        const auto planned = writer.plan_finish(buffer, trailers);
+        EXPECT_TRUE(planned.index() == 0);
+        if (planned.index() == 0) {
+            EXPECT_EQ(std::get<0>(planned), std::string_view(expected));
         }
-        accepted_input.append("; Path=/api; Domain=.example.test; Secure; SameSite=None");
-        const auto accepted = ruvia::parse_set_cookie(accepted_input);
-        EXPECT_TRUE(accepted.has_value());
-        if (accepted.has_value()) {
-            verify_borrowed_fields(accepted_input, *accepted);
+        EXPECT_EQ(std::string_view(buffer.data() + expected.size(), buffer.size() - expected.size()), std::string_view(original.data() + expected.size(), original.size() - expected.size()));
+        const auto repeated = writer.plan_finish(buffer, trailers);
+        EXPECT_TRUE(repeated.index() == 1);
+        if (repeated.index() == 1) {
+            EXPECT_TRUE(std::get<1>(repeated) == ruvia::http1_request_content_write_error::write_pending);
         }
-    }
-}
-
-TEST(Ruvia, set_cookie_parser_exposes_client_storage_fields) {
-    const auto parsed_value = ruvia::parse_set_cookie("sid=abc; Path=/api; Domain=.example.com; Max-Age=60; Secure; HttpOnly");
-    EXPECT_TRUE(parsed_value.has_value());
-    EXPECT_TRUE(parsed_value->name() == "sid");
-    EXPECT_TRUE(parsed_value->value() == "abc");
-    EXPECT_TRUE(parsed_value->path() == "/api");
-    EXPECT_TRUE(parsed_value->domain() == "example.com");
-    EXPECT_TRUE(parsed_value->max_age_seconds() == 60);
-    EXPECT_TRUE(parsed_value->has(ruvia::http_set_cookie_attribute::secure));
-    EXPECT_TRUE(parsed_value->has(ruvia::http_set_cookie_attribute::http_only));
-    EXPECT_TRUE(parsed_value->http_only());
-    EXPECT_TRUE(!parsed_value->same_site().has_value());
-    EXPECT_TRUE(!parsed_value->same_site_none());
-    EXPECT_TRUE(!parsed_value->has(static_cast<ruvia::http_set_cookie_attribute>(static_cast<std::uint8_t>(ruvia::http_set_cookie_attribute::secure) | static_cast<std::uint8_t>(ruvia::http_set_cookie_attribute::partitioned))));
-}
-
-TEST(Ruvia, set_cookie_parser_accepts_user_agent_cookie_pair_grammar) {
-    const auto spaced_name = ruvia::parse_set_cookie("bad name=value");
-    EXPECT_TRUE(spaced_name.has_value());
-    if (!spaced_name) {
-        return;
-    }
-    EXPECT_TRUE(spaced_name->name() == "bad name");
-
-    const auto spaced_value = ruvia::parse_set_cookie("name=bad value");
-    EXPECT_TRUE(spaced_value.has_value());
-    if (!spaced_value) {
-        return;
-    }
-    EXPECT_TRUE(spaced_value->value() == "bad value");
-}
-
-TEST(Ruvia, set_cookie_parser_ignores_nameless_cookies) {
-    // RFC 6265 section 5.2 steps 2 and 5.
-    EXPECT_TRUE(!ruvia::parse_set_cookie("sid; Path=/").has_value());
-    EXPECT_TRUE(!ruvia::parse_set_cookie("=value").has_value());
-    EXPECT_TRUE(!ruvia::parse_set_cookie(" =value").has_value());
-}
-
-TEST(Ruvia, set_cookie_parser_rejects_invalid_received_cookie) {
-    EXPECT_TRUE(!ruvia::parse_set_cookie("=").has_value());
-    EXPECT_TRUE(!ruvia::parse_set_cookie("name=bad\x01value").has_value());
-
-    std::string oversized(4097, 'v');
-    EXPECT_TRUE(!ruvia::parse_set_cookie(oversized).has_value());
-}
-
-TEST(Ruvia, set_cookie_parser_follows_user_agent_domain_and_path_algorithm) {
-    // RFC 6265 section 5.2.3: "Domain=." leaves an empty cookie-domain (host-only);
-    // an empty Domain value is ignored rather than overriding an earlier one.
-    const auto dot = ruvia::parse_set_cookie("a=b; Domain=.");
-    EXPECT_TRUE(dot.has_value() && dot->domain().empty());
-    const auto later_empty = ruvia::parse_set_cookie("a=b; Domain=example.com; Domain=");
-    EXPECT_TRUE(later_empty.has_value() && later_empty->domain() == "example.com");
-    const auto later_dot = ruvia::parse_set_cookie("a=b; Domain=example.com; Domain=.");
-    EXPECT_TRUE(later_dot.has_value() && later_dot->domain().empty());
-    const auto underscore = ruvia::parse_set_cookie("a=b; Domain=my_host.example");
-    EXPECT_TRUE(underscore.has_value() && underscore->domain() == "my_host.example");
-
-    // Section 5.2.4: Path never rejects the cookie.
-    const auto tab = ruvia::parse_set_cookie("a=b; Path=/a\tb");
-    EXPECT_TRUE(tab.has_value() && tab->path() == "/a\tb");
-    const auto utf8 = ruvia::parse_set_cookie("a=b; Path=/caf\xc3\xa9");
-    EXPECT_TRUE(utf8.has_value() && utf8->path() == "/caf\xc3\xa9");
-    const auto relative = ruvia::parse_set_cookie("a=b; Path=/api; Path=relative");
-    EXPECT_TRUE(relative.has_value() && relative->path().empty());
-}
-
-TEST(Ruvia, set_cookie_parser_ignores_oversized_attribute_value) {
-    std::string value = "sid=abc; Path=";
-    value.append(1025, 'p');
-    const auto parsed_value = ruvia::parse_set_cookie(value);
-    EXPECT_TRUE(parsed_value.has_value());
-    if (!parsed_value) {
-        return;
-    }
-    EXPECT_TRUE(parsed_value->path().empty());
-}
-
-TEST(Ruvia, set_cookie_parser_tracks_storage_security_attributes) {
-    const auto parsed_value = ruvia::parse_set_cookie("sid=abc; Path=/rel; SameSite=None");
-    EXPECT_TRUE(parsed_value.has_value());
-    if (!parsed_value) {
-        return;
-    }
-    EXPECT_TRUE(parsed_value->path() == "/rel");
-    EXPECT_TRUE(parsed_value->same_site_none());
-
-    const auto overridden = ruvia::parse_set_cookie("sid=abc; SameSite=None; SameSite=Lax");
-    EXPECT_TRUE(overridden.has_value());
-    if (!overridden) {
-        return;
-    }
-    EXPECT_TRUE(parsed_value->same_site_none());
-    EXPECT_TRUE(parsed_value->same_site() == ruvia::cookie_same_site::none);
-    EXPECT_TRUE(!overridden->same_site_none());
-    EXPECT_TRUE(overridden->same_site() == ruvia::cookie_same_site::lax);
-    const auto strict = ruvia::parse_set_cookie("sid=abc; samesite=STRICT");
-    EXPECT_TRUE(strict.has_value() && strict->same_site() == ruvia::cookie_same_site::strict);
-    const auto unknown_same_site = ruvia::parse_set_cookie("sid=abc; SameSite=Strict; SameSite=Unknown");
-    EXPECT_TRUE(unknown_same_site.has_value() && !unknown_same_site->same_site().has_value() && !unknown_same_site->same_site_none());
-}
-
-TEST(Ruvia, set_cookie_parser_preserves_quoted_cookie_value) {
-    const auto parsed_value = ruvia::parse_set_cookie("name=\"value\"; Path=/");
-    EXPECT_TRUE(parsed_value.has_value());
-    EXPECT_TRUE(parsed_value->value() == "\"value\"");
-}
-
-TEST(Ruvia, set_cookie_parser_treats_empty_domain_as_host_only) {
-    const auto parsed_value = ruvia::parse_set_cookie("sid=abc; Domain=; Path=/api");
-    EXPECT_TRUE(parsed_value.has_value());
-    EXPECT_TRUE(parsed_value->name() == "sid");
-    EXPECT_TRUE(parsed_value->domain().empty());
-    EXPECT_TRUE(parsed_value->path() == "/api");
-
-    const std::string overlong_with_nul = std::string("sid=abc; Custom=") + std::string(1100, 'a') + std::string("\0b", 2);
-    EXPECT_TRUE(!ruvia::parse_set_cookie(overlong_with_nul).has_value());
-}
-
-TEST(Ruvia, set_cookie_parser_saturates_max_age_overflow) {
-    const auto positive = ruvia::parse_set_cookie("sid=abc; Max-Age=999999999999999999999999999999999999");
-    EXPECT_TRUE(positive.has_value());
-    EXPECT_TRUE(positive->max_age_seconds() == std::chrono::duration_cast<std::chrono::seconds>(std::chrono::days(400)).count());
-
-    const auto negative = ruvia::parse_set_cookie("sid=abc; Max-Age=-999999999999999999999999999999999999");
-    EXPECT_TRUE(negative.has_value());
-    EXPECT_TRUE(negative->max_age_seconds() == std::numeric_limits<std::int64_t>::min());
-}
-
-TEST(Ruvia, set_cookie_parser_ignores_overflowing_max_age_with_trailing_bytes) {
-    const auto parsed_value = ruvia::parse_set_cookie("sid=abc; Max-Age=60; Max-Age=999999999999999999999999suffix; Path=/api");
-    ASSERT_TRUE(parsed_value.has_value());
-    EXPECT_EQ(parsed_value->max_age_seconds(), 60);
-    EXPECT_EQ(parsed_value->path(), "/api");
-}
-
-TEST(Ruvia, set_cookie_parser_ignores_invalid_later_expires_attribute) {
-    const auto parsed_value = ruvia::parse_set_cookie("sid=abc; Expires=Sun, 06 Nov 1994 08:49:37 GMT; Expires=not-a-date");
-    EXPECT_TRUE(parsed_value.has_value());
-    EXPECT_TRUE(parsed_value->expires().has_value());
-}
-
-TEST(Ruvia, set_cookie_parser_uses_cookie_date_token_grammar) {
-    const auto hyphenated = ruvia::parse_set_cookie("sid=abc; Expires=Wed, 09-Jun-2021 10:18:14 GMT");
-    EXPECT_TRUE(hyphenated.has_value());
-    if (!hyphenated) {
-        return;
-    }
-    EXPECT_TRUE(hyphenated->expires() == ruvia::parse_http_date("Wed, 09 Jun 2021 10:18:14 GMT"));
-
-    const auto short_year = ruvia::parse_set_cookie("sid=abc; Expires=Thursday, 01-Jan-70 00:00:00 GMT");
-    EXPECT_TRUE(short_year.has_value());
-    if (!short_year) {
-        return;
-    }
-    EXPECT_TRUE(short_year->expires() == ruvia::parse_http_date("Thu, 01 Jan 1970 00:00:00 GMT"));
-}
-
-TEST(Ruvia, set_cookie_parser_accepts_date_token_suffixes) {
-    const auto expected = std::chrono::system_clock::to_time_t(std::chrono::sys_days{std::chrono::year{2021} / 6 / 9} + std::chrono::hours{10} + std::chrono::minutes{18} + std::chrono::seconds{14});
-    constexpr std::string_view dates[]{"Wed, 09th Jun 2021 10:18:14 GMT", "Wed, 09 June 2021 10:18:14 GMT", "Wed, 09 jUn123 2021 10:18:14 GMT", "Wed, 09 Jun 2021year123 10:18:14 GMT", "Wed, 09 Jun 2021 10:18:14clock123 GMT", "Wed, 09 Jun 2021 10:18:14:GMT", "10:18:14clock 09th June123 2021year", "2021year June123 09th 10:18:14clock"};
-    for (const auto date : dates) {
-        const auto input = std::string("sid=abc; Expires=") + std::string(date);
-        const auto parsed_value = ruvia::parse_set_cookie(input);
-        EXPECT_TRUE(parsed_value.has_value());
-        if (parsed_value) {
-            EXPECT_TRUE(parsed_value->expires() == expected);
-        }
-    }
-
-    struct year_case final {
-        std::string_view value_;
-        int year_;
-    };
-    constexpr year_case years[]{{"70year", 1970}, {"69year", 2069}, {"00year", 2000}};
-    for (const auto& entry : years) {
-        const auto input = std::string("sid=abc; Expires=01 January ") + std::string(entry.value_) + " 0:0:0clock";
-        const auto parsed_value = ruvia::parse_set_cookie(input);
-        EXPECT_TRUE(parsed_value.has_value());
-        if (parsed_value) {
-            const auto year_start = std::chrono::system_clock::to_time_t(std::chrono::sys_days{std::chrono::year{entry.year_} / 1 / 1});
-            EXPECT_TRUE(parsed_value->expires() == year_start);
-        }
-    }
-
-    EXPECT_TRUE(!ruvia::parse_http_date("Wed, 09th June 2021year 10:18:14clock GMT"));
-}
-
-TEST(Ruvia, set_cookie_parser_preserves_date_token_widths_and_calendar_bounds) {
-    constexpr std::string_view dates[]{"Wed, 009th Jun 2021 10:18:14clock", "Wed, 09 Jun 02021year 10:18:14clock", "Wed, 09 Jun 1year 10:18:14clock", "Wed, 09 Jun 2021 010:18:14clock", "Wed, 09 Jun 2021 10:018:14clock", "Wed, 09 Jun 2021 10:18:014clock", "Wed, 09 Jun 2021 10x:18:14clock", "Wed, 09 Jun 2021 10:18x:14clock", "Wed, 09 Jux 2021 10:18:14clock", "Wed, 32nd June 2021year 10:18:14clock", "Wed, 29th February 2021year 10:18:14clock", "Wed, 09th June 1600year 10:18:14clock", "Wed, 09th June 2021year 24:18:14clock", "Wed, 09th June 2021year 10:60:14clock", "Wed, 09th June 2021year 10:18:60clock", "32nd 09 June 2021year 10:18:14clock", "09th June 2021year 24:00:00clock 10:18:14clock"};
-    for (const auto date : dates) {
-        const auto input = std::string("sid=abc; Expires=") + std::string(date);
-        const auto parsed_value = ruvia::parse_set_cookie(input);
-        EXPECT_TRUE(parsed_value.has_value());
-        if (parsed_value) {
-            EXPECT_TRUE(!parsed_value->expires());
+        writer.commit_finish();
+        EXPECT_TRUE(writer.finished());
+        const auto finished = writer.plan_finish(buffer);
+        EXPECT_TRUE(finished.index() == 1);
+        if (finished.index() == 1) {
+            EXPECT_TRUE(std::get<1>(finished) == ruvia::http1_request_content_write_error::stopped);
         }
     }
 }
 
-TEST(Ruvia, cookie_jar_deduplicates_and_expires_by_partitioned_four_tuple) {
-    const auto now = std::chrono::system_clock::from_time_t(1'700'000'000);
-    ruvia::http_cookie_jar jar(ruvia::http_scheme::https, "example.test");
-    EXPECT_TRUE(jar.absorb_set_cookie("/", "sid=part1; Path=/; Secure; Partitioned", now));
-    EXPECT_TRUE(jar.absorb_set_cookie("/", "sid=unpart1; Path=/; Secure", now));
-    EXPECT_EQ(jar.size(), std::size_t{2});
+TEST(Ruvia, http1_streaming_request_finish_accepts_output_alias_at_header_byte_limit) {
+    auto writer = chunked_request_writer();
+    constexpr std::size_t framing_bytes = std::string_view("0\r\nDigest: \r\n\r\n").size();
+    const std::string value(ruvia::max_http_header_bytes - framing_bytes, 'v');
+    std::string buffer(ruvia::max_http_header_bytes, 'v');
+    const std::array trailers{ruvia::http_header_view{"Digest", std::string_view(buffer).substr(0, value.size())}};
+    const auto planned = writer.plan_finish(std::span(buffer.data(), buffer.size()), trailers);
+    EXPECT_TRUE(planned.index() == 0);
+    if (planned.index() == 0) {
+        const std::string expected = "0\r\nDigest: " + value + "\r\n\r\n";
+        EXPECT_EQ(std::get<0>(planned), std::string_view(expected));
+    }
+    writer.commit_finish();
+    EXPECT_TRUE(writer.finished());
+}
 
-    // Updating the unpartitioned cookie leaves the partitioned entry intact.
-    EXPECT_TRUE(jar.absorb_set_cookie("/", "sid=unpart2; Path=/; Secure", now));
-    EXPECT_EQ(jar.size(), std::size_t{2});
-    const auto both = jar.cookie_header("/", true, now);
-    EXPECT_NE(both.find("sid=part1"), std::string::npos);
-    EXPECT_NE(both.find("sid=unpart2"), std::string::npos);
+TEST(Ruvia, http1_streaming_request_finish_accepts_trailer_descriptors_stored_in_output) {
+    auto writer = chunked_request_writer();
+    // The descriptor array itself lives where the trailer section is written, so
+    // every descriptor must be consumed before the first output byte lands.
+    alignas(ruvia::http_header_view) std::array<char, 256> buffer{};
+    auto* const descriptors = ::new (static_cast<void*>(buffer.data())) ruvia::http_header_view[2]{{"X-One", "first"}, {"X-Two", "second"}};
+    const std::span<const ruvia::http_header_view> trailers(descriptors, 2);
+    const auto planned = writer.plan_finish(std::span(buffer.data(), buffer.size()), trailers);
+    EXPECT_TRUE(planned.index() == 0);
+    if (planned.index() == 0) {
+        EXPECT_EQ(std::get<0>(planned), std::string_view("0\r\nX-One: first\r\nX-Two: second\r\n\r\n"));
+    }
+    writer.commit_finish();
+}
 
-    // Expiring the partitioned cookie removes only the partitioned entry.
-    EXPECT_TRUE(jar.absorb_set_cookie("/", "sid=; Path=/; Max-Age=0; Secure; Partitioned", now));
-    EXPECT_EQ(jar.size(), std::size_t{1});
-    EXPECT_EQ(jar.cookie_header("/", true, now), "sid=unpart2");
+TEST(Ruvia, http_content_length_rejects_negative_sources_without_mutating_existing_options) {
+    ruvia::http1_client_request_head_view request{.method_ = "POST", .target_ = "/upload", .content_length_ = 3};
+    for (const auto invalid : {std::numeric_limits<std::int64_t>::min(), std::int64_t{-1}}) {
+        EXPECT_TRUE(!ruvia::http_content_length::try_from_value(invalid).has_value());
+        EXPECT_TRUE(ruvia::test::throws_on([&] {
+            request.content_length_ = invalid;
+        }));
+        EXPECT_TRUE(ruvia::test::throws_on([&] {
+            (void)ruvia::http_request_content_plan::known_length(invalid);
+        }));
+        EXPECT_TRUE(ruvia::test::throws_on([&] {
+            (void)ruvia::http_request_content_plan::streaming(invalid);
+        }));
+    }
+    std::array<char, 256> head{};
+    const auto prepared = ruvia::http1_client_request_writer{}.prepare_streaming(ruvia::http_origin_view::http({.host_ = "example.com"}), request, head);
+    const auto* retained = std::get_if<ruvia::prepared_http1_client_request>(&prepared);
+    EXPECT_TRUE(retained != nullptr && retained->content_plan().streaming() != nullptr);
+    if (retained && retained->content_plan().streaming()) {
+        EXPECT_TRUE(retained->content_plan().streaming()->content_length() == 3);
+        EXPECT_TRUE(retained->head().find("Content-Length: 3\r\n") != std::string_view::npos);
+    }
+    const auto maximum = std::numeric_limits<std::uint64_t>::max();
+    const auto h2_known = ruvia::http_request_content_plan::known_length(maximum);
+    const auto h2_streaming = ruvia::http_request_content_plan::streaming(maximum);
+    EXPECT_TRUE(h2_known.known_length_content() && h2_known.known_length_content()->length() == maximum);
+    EXPECT_TRUE(h2_streaming.streaming_content() && h2_streaming.streaming_content()->expected_length() == maximum);
+}
+
+TEST(Ruvia, http1_chunk_header_encodes_lowercase_hex_and_crlf) {
+    const ruvia::http1_chunk_header zero(0);
+    const ruvia::http1_chunk_header fifteen(15);
+    const ruvia::http1_chunk_header sixteen(16);
+    const ruvia::http1_chunk_header abc(0xabc);
+    EXPECT_EQ(zero.view(), std::string_view("0\r\n"));
+    EXPECT_EQ(fifteen.view(), std::string_view("f\r\n"));
+    EXPECT_EQ(sixteen.view(), std::string_view("10\r\n"));
+    EXPECT_EQ(abc.view(), std::string_view("abc\r\n"));
+}
+
+TEST(Ruvia, http1_chunk_header_buffer_covers_size_t_max) {
+    const ruvia::http1_chunk_header header_value((std::numeric_limits<std::size_t>::max)());
+    const auto encoded = header_value.view();
+    EXPECT_EQ(encoded.size(), sizeof(std::size_t) * 2 + 2);
+    EXPECT_TRUE(encoded.ends_with("\r\n"));
 }

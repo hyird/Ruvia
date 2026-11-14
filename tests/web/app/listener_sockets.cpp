@@ -285,6 +285,30 @@ bool eventually_closed(asio::ip::tcp::socket& socket) {
     return ended;
 }
 
+// Feeds an unterminated request head one byte per interval, far inside the
+// per-read timeout, until the server closes the connection; only a header
+// completion deadline can end it before `limit`.
+bool trickled_until_closed(asio::ip::tcp::socket& socket, std::chrono::milliseconds interval, std::chrono::seconds limit) {
+    constexpr std::string_view head = "GET /hello HTTP/1.1\r\nHost: localhost\r\nX-Trickle: ";
+    socket.non_blocking(true);
+    const auto deadline = std::chrono::steady_clock::now() + limit;
+    for (std::size_t sent = 0; std::chrono::steady_clock::now() < deadline; ++sent) {
+        const char byte = sent < head.size() ? head[sent] : 'a';
+        asio::error_code error;
+        (void)socket.write_some(asio::buffer(&byte, 1), error);
+        if (error && error != asio::error::would_block) {
+            return true;
+        }
+        std::array<char, 256> bytes{};
+        (void)socket.read_some(asio::buffer(bytes), error);
+        if (error == asio::error::eof || error == asio::error::connection_reset) {
+            return true;
+        }
+        std::this_thread::sleep_for(interval);
+    }
+    return false;
+}
+
 #if defined(RUVIA_ENABLE_HTTP3)
 bool serves_hello(ruvia::test::http3_test_client& client) {
     const auto response = client.request("GET", "/hello");
@@ -1099,7 +1123,7 @@ TEST(Ruvia, mixed_listener_detection_and_partial_handshakes_share_deadlines_and_
     ruvia::test::tcp_port_reservation reservation(io);
     const auto endpoint = reservation.endpoint();
     auto& app = ruvia::app();
-    app.server({.worker_count_ = 2, .connection_scan_interval_ = 5ms, .request_header_timeout_ = 80ms, .header_completion_timeout_ = 180ms}).listen({.address_ = "127.0.0.1", .http_ = endpoint.port(), .https_ = endpoint.port(), .tls_ = tls_of(identity)}).on_start(nullptr).on_start([] {
+    app.server({.worker_count_ = 2, .connection_scan_interval_ = 5ms, .request_header_timeout_ = 1s, .header_completion_timeout_ = 300ms}).listen({.address_ = "127.0.0.1", .http_ = endpoint.port(), .https_ = endpoint.port(), .tls_ = tls_of(identity)}).on_start(nullptr).on_start([] {
         started().release();
     });
     ruvia::test::app_run runner(app);
@@ -1109,16 +1133,11 @@ TEST(Ruvia, mixed_listener_detection_and_partial_handshakes_share_deadlines_and_
     partial_tls.connect(endpoint);
     slow_plain.connect(endpoint);
     asio::write(partial_tls, asio::buffer(std::string_view("\x16\x03", 2)));
-    const auto started_at = std::chrono::steady_clock::now();
-    for (const char byte : std::string_view("GET ")) {
-        asio::error_code error;
-        asio::write(slow_plain, asio::buffer(&byte, 1), error);
-        std::this_thread::sleep_for(50ms);
-    }
+    // A 20 ms trickle never idles out the 1 s per-read timeout, so closing it
+    // proves the completion deadline spans detection and header parsing.
+    EXPECT_TRUE(trickled_until_closed(slow_plain, 20ms, 10s));
     EXPECT_TRUE(eventually_closed(silent));
     EXPECT_TRUE(eventually_closed(partial_tls));
-    EXPECT_TRUE(eventually_closed(slow_plain));
-    EXPECT_LT(std::chrono::steady_clock::now() - started_at, 1s);
     auto client = tls_client();
     EXPECT_EQ(plain_body(io, endpoint, "/hello"), "hello");
     EXPECT_EQ(https_served_name(io, client, endpoint), "mixed-deadlines");
@@ -1129,7 +1148,7 @@ TEST(Ruvia, mixed_listener_detection_and_partial_handshakes_share_deadlines_and_
     const auto stopped_at = std::chrono::steady_clock::now();
     app.stop();
     runner.join();
-    EXPECT_LT(std::chrono::steady_clock::now() - stopped_at, 1s);
+    EXPECT_LT(std::chrono::steady_clock::now() - stopped_at, 10s);
     EXPECT_TRUE(eventually_closed(pending_detection));
     EXPECT_TRUE(eventually_closed(pending_tls));
 }

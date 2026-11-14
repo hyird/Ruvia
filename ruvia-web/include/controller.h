@@ -320,9 +320,10 @@ public:
     void on_not_found(borrowed_text prefix, callback_registration<http_not_found_handler>&& handler);
     [[nodiscard]] callback_registration<http_not_found_handler> on_not_found(std::nullptr_t) noexcept;
 
-    [[nodiscard]] std::span<const worker_state_definition> worker_states() const noexcept {
+    [[nodiscard]] std::span<const worker_state_definition> worker_states() const& noexcept RUVIA_LIFETIMEBOUND {
         return worker_states_;
     }
+    std::span<const worker_state_definition> worker_states() const&& = delete;
 
     void apply(router& routes) const;
 

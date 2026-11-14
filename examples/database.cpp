@@ -8,7 +8,7 @@
 // /db/transfer expects accounts 1 and 2 to exist; it commits both updates
 // together. An uncommitted transaction rolls back when released.
 // Use a dedicated demo database: writes and migration history persist.
-// See backend_tls.h for RUVIA_DB_TLS/CA/CERT/KEY. Local plaintext servers
+// backend_config.h backend_tls() reads RUVIA_DB_TLS/CA/CERT/KEY. Local plaintext servers
 // require the explicit setting RUVIA_DB_TLS=false.
 
 #include <array>

@@ -1606,7 +1606,7 @@ public:
         const std::string_view views[]{std::string_view(ids)...};
         return remove(std::span<const std::string_view>(views));
     }
-    [[nodiscard]] task<void> clear() const;
+    [[nodiscard]] task<void> clear();
 
 private:
     friend class db_session;

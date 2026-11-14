@@ -694,6 +694,34 @@ TEST(Ruvia, db_rejected_statement_keeps_the_pooled_connection) {
     EXPECT_EQ(peer.postgres_parses().size(), std::size_t{2});
 }
 
+// The server's text for a rejected statement can quote the row it refused;
+// the error names it by SQLSTATE (and errno) without that text.
+TEST(Ruvia, db_postgresql_statement_error_omits_server_text) {
+    using namespace ruvia;
+    test::backend_startup_peer peer(test::backend_startup_peer::protocol::postgresql, false, test::backend_startup_peer::after_startup::idle, std::vector<ruvia::test::backend_startup_peer::postgres_reply>({{.error_ = std::string("duplicate key value violates unique constraint for secret@example.com"), .sql_state_ = std::string("23505")}}));
+    auto& context_value = test::new_test_io_context();
+    auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
+    db_client client(attachment.loop(), peer.config());
+    std::optional<db_error::code_type> code;
+    std::string sql_state{};
+    std::string message{};
+    test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
+        auto handle = connected.db();
+        try {
+            (void)co_await handle.execute("INSERT INTO users (email) VALUES ($1)", std::string("secret@example.com"));
+        } catch (const db_error& error) {
+            code = error.code();
+            sql_state = error.sql_state().value_or("");
+            message = error.what();
+        }
+    });
+    EXPECT_TRUE(code == db_error::code_type::statement_failed);
+    EXPECT_TRUE(sql_state == "23505");
+    EXPECT_TRUE(message.find("[sqlstate=23505]") != std::string::npos);
+    EXPECT_TRUE(message.find("secret@example.com") == std::string::npos);
+    EXPECT_TRUE(message.find("duplicate key") == std::string::npos);
+}
+
 // A statement that fails inside a transaction fails the transaction, and the
 // pool rolls it back on the kept connection before the next caller gets it.
 TEST(Ruvia, db_rejected_transaction_statement_rolls_back_on_the_kept_connection) {
@@ -761,6 +789,51 @@ TEST(Ruvia, db_copy_result_fails_the_statement_and_closes_the_connection) {
             EXPECT_EQ(peer.startups(), std::size_t{2});
             EXPECT_EQ(peer.postgres_parses().size(), std::size_t{2});
         }
+    }
+}
+#endif
+
+#ifdef RUVIA_ENABLE_MARIADB
+// The text and the prepared protocol both leave out the server's text for a
+// rejected statement, which can quote the row it refused.
+TEST(Ruvia, db_mariadb_statement_error_omits_server_text) {
+    using namespace ruvia;
+    using peer_type = test::backend_startup_peer;
+    const peer_type::maria_reply duplicate{.column_ = std::string(""), .error_ = std::string("Duplicate entry 'secret@example.com' for key 'email'"), .code_ = 1062, .sql_state_ = std::string("23000")};
+    peer_type peer(std::vector<peer_type::maria_reply>({duplicate, duplicate}), peer_type::after_startup::idle);
+    auto& context_value = test::new_test_io_context();
+    auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
+    auto config = peer.config();
+    config.driver_ = db_driver::mariadb;
+    db_client client(attachment.loop(), config);
+    std::vector<std::string> messages;
+    std::vector<std::optional<std::int64_t>> native_codes;
+    std::vector<std::string> sql_states;
+    test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
+        auto handle = connected.db();
+        const auto record = [&](const db_error& error) {
+            messages.emplace_back(error.what());
+            native_codes.push_back(error.native_code());
+            sql_states.emplace_back(error.sql_state().value_or(""));
+        };
+        try {
+            (void)co_await handle.execute("INSERT INTO users (email) VALUES ('secret@example.com')");
+        } catch (const db_error& error) {
+            record(error);
+        }
+        try {
+            (void)co_await handle.execute("INSERT INTO users (email) VALUES (?)", std::string("secret@example.com"));
+        } catch (const db_error& error) {
+            record(error);
+        }
+    });
+    ASSERT_EQ(messages.size(), std::size_t{2});
+    for (std::size_t i = 0; i < messages.size(); ++i) {
+        EXPECT_TRUE(native_codes[i] == std::optional<std::int64_t>(1062));
+        EXPECT_TRUE(sql_states[i] == "23000");
+        EXPECT_TRUE(messages[i].find("[errno=1062] [sqlstate=23000]") != std::string::npos);
+        EXPECT_TRUE(messages[i].find("secret@example.com") == std::string::npos);
+        EXPECT_TRUE(messages[i].find("Duplicate entry") == std::string::npos);
     }
 }
 #endif

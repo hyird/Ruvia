@@ -225,6 +225,11 @@ http_cors_policy::http_cors_policy(const http_cors_policy_config& config) :
     if (exact_origins_.empty() && suffix_rules_.empty()) {
         allow_any_origin_ = true;
     }
+    // Fail closed: reflecting every Origin with credentials would let any site
+    // read credentialed responses (Fetch forbids "*" with credentials).
+    if (allow_any_origin_ && allow_credentials_) {
+        throw std::invalid_argument("CORS credentials require an explicit allowed origin list");
+    }
     for (const auto& method : config.allowed_methods_) {
         const std::string_view view(method);
         if (view == "*") {
@@ -391,7 +396,7 @@ http_cors_preflight_result http_cors_policy::evaluate_preflight(http_cors_prefli
 
     std::vector<http_header> headers;
     headers.reserve(6);
-    const std::string_view allow_origin = (allow_any_origin_ && !allow_credentials_) ? std::string_view("*") : origin;
+    const std::string_view allow_origin = allow_any_origin_ ? std::string_view("*") : origin;
     headers.emplace_back("Access-Control-Allow-Origin", allow_origin);
     if (allow_credentials_) {
         headers.emplace_back("Access-Control-Allow-Credentials", "true");
@@ -447,14 +452,14 @@ bool http_cors_policy::rewrite_response_headers(borrowed_text request_origin, st
 
     const auto origin = request_origin.view();
     const bool granted = !origin.empty() && allows_origin(origin);
-    if (!allow_any_origin_ || allow_credentials_) {
+    if (!allow_any_origin_) {
         merge_http_vary_token(response_headers, "Origin");
     }
     if (!granted) {
         return false;
     }
 
-    const std::string_view allow_origin = (allow_any_origin_ && !allow_credentials_) ? std::string_view("*") : origin;
+    const std::string_view allow_origin = allow_any_origin_ ? std::string_view("*") : origin;
     response_headers.emplace_back("Access-Control-Allow-Origin", allow_origin);
     if (allow_credentials_) {
         response_headers.emplace_back("Access-Control-Allow-Credentials", "true");
@@ -475,14 +480,14 @@ bool http_cors_policy::rewrite_response_headers(borrowed_text request_origin, ht
 
     const auto origin = request_origin.view();
     const bool granted = !origin.empty() && allows_origin(origin);
-    if (!allow_any_origin_ || allow_credentials_) {
+    if (!allow_any_origin_) {
         response_headers.add_vary_token("Origin");
     }
     if (!granted) {
         return false;
     }
 
-    const std::string_view allow_origin = (allow_any_origin_ && !allow_credentials_) ? std::string_view("*") : origin;
+    const std::string_view allow_origin = allow_any_origin_ ? std::string_view("*") : origin;
     response_headers.header("Access-Control-Allow-Origin", allow_origin);
     if (allow_credentials_) {
         response_headers.header_stable_view("Access-Control-Allow-Credentials", "true");
@@ -508,7 +513,7 @@ bool http_cors_policy::apply_response_headers(const http_request& request, http_
         if (reflect_request_headers_) {
             response.add_vary_token("Access-Control-Request-Headers");
         }
-    } else if (!allow_any_origin_ || allow_credentials_) {
+    } else if (!allow_any_origin_) {
         response.add_vary_token("Origin");
     }
 
@@ -556,7 +561,7 @@ bool http_cors_policy::apply_response_headers(const http_request& request, http_
     }
 
     if (!response.header("Access-Control-Allow-Origin").has_value()) {
-        if (allow_any_origin_ && !allow_credentials_) {
+        if (allow_any_origin_) {
             response.header_stable_view("Access-Control-Allow-Origin", "*");
         } else if (origin.has_value()) {
             response.header("Access-Control-Allow-Origin", *origin);

@@ -2664,13 +2664,18 @@ void validate_mariadb_sql_length(std::size_t length) {
 }
 
 db_error mariadb_error(std::string_view operation, unsigned int native_code, const char* sql_state, const char* message, db_error::code_type error_code) {
+    // A server error's text can quote row and parameter values (`Duplicate
+    // entry '...'`), so only errno and SQLSTATE name it. libmariadb's own
+    // errors, and a connection no statement ran on, carry no row data and
+    // keep their text.
+    const bool library_text = error_code == db_error::code_type::connect_failed || native_code == 0 || (native_code >= CR_MIN_ERROR && native_code <= CR_MAX_ERROR) || (native_code >= CER_MIN_ERROR && native_code <= CER_MAX_ERROR);
     // A statement that failed because the connection did is an I/O failure,
     // not a statement the server rejected.
     if (error_code == db_error::code_type::statement_failed && (native_code == CR_SERVER_GONE_ERROR || native_code == CR_SERVER_LOST || native_code == CR_ERR_NET_READ || native_code == CR_ERR_NET_WRITE || session_ended(native_code))) {
         error_code = db_error::code_type::io_error;
     }
     const std::string_view state_view = (sql_state != nullptr && sql_state[0] != '\0') ? std::string_view(sql_state) : std::string_view{};
-    const std::string_view message_view = (message != nullptr && message[0] != '\0') ? std::string_view(message) : std::string_view{};
+    const std::string_view message_view = (library_text && message != nullptr && message[0] != '\0') ? std::string_view(message) : std::string_view{};
     std::array<char, http_max_unsigned_decimal_size> digits;
     const std::string_view code_view = native_code != 0 ? http_format_unsigned(digits, static_cast<std::uint64_t>(native_code)) : std::string_view{};
     std::string error;

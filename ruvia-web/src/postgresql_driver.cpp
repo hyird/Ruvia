@@ -472,34 +472,49 @@ db_error postgresql_error(const pg_conn& connection, std::string_view operation,
     if (error_code == db_error::code_type::statement_failed && PQstatus(&connection) == CONNECTION_BAD) {
         error_code = db_error::code_type::io_error;
     }
-    const char* state_value = result_value == nullptr ? nullptr : PQresultErrorField(const_cast<PGresult*>(result_value), PG_DIAG_SQLSTATE);
-    const char* constraint = result_value == nullptr ? nullptr : PQresultErrorField(const_cast<PGresult*>(result_value), PG_DIAG_CONSTRAINT_NAME);
-    const std::string_view state_view = (state_value != nullptr && state_value[0] != '\0') ? std::string_view(state_value) : std::string_view{};
-    const char* message = result_value == nullptr ? PQerrorMessage(const_cast<PGconn*>(&connection)) : PQresultErrorMessage(const_cast<PGresult*>(result_value));
-    std::string_view message_view{};
-    if (message != nullptr && message[0] != '\0') {
-        while (*message == ' ' || *message == '\r' || *message == '\n') {
-            ++message;
-        }
-        message_view = message;
-        while (!message_view.empty() && (message_view.back() == '\r' || message_view.back() == '\n')) {
-            message_view.remove_suffix(1);
-        }
-    }
-    std::string error;
-    error.reserve(operation.size() + 7U + (state_view.empty() ? 0U : 12U + state_view.size()) + (message_view.empty() ? 0U : 2U + message_view.size()));
-    error.append(operation);
+    std::string error(operation);
     error.append(" failed");
-    if (!state_view.empty()) {
-        error.append(" [sqlstate=");
-        error.append(state_view);
-        error.push_back(']');
+    std::string_view state_view{};
+    std::string_view constraint_view{};
+    if (result_value != nullptr) {
+        // The server's text -- its primary message as much as DETAIL, HINT
+        // and CONTEXT -- can quote row and parameter values, so a result's
+        // error is named by its SQLSTATE and the objects it concerns only.
+        state_view = postgresql_error_field(*result_value, PG_DIAG_SQLSTATE);
+        constraint_view = postgresql_error_field(*result_value, PG_DIAG_CONSTRAINT_NAME);
+        const std::array<std::pair<std::string_view, std::string_view>, 4> fields{{
+            {" [sqlstate=", state_view},
+            {" [constraint=", constraint_view},
+            {" [table=", postgresql_error_field(*result_value, PG_DIAG_TABLE_NAME)},
+            {" [column=", postgresql_error_field(*result_value, PG_DIAG_COLUMN_NAME)},
+        }};
+        for (const auto& [label, value] : fields) {
+            if (!value.empty()) {
+                error.append(label);
+                error.append(value);
+                error.push_back(']');
+            }
+        }
+    } else if (error_code == db_error::code_type::connect_failed) {
+        // libpq keeps a failed statement's text in the connection's message
+        // too; only a connection no statement ran on reports it.
+        const char* message = PQerrorMessage(&connection);
+        std::string_view message_view{};
+        if (message != nullptr && message[0] != '\0') {
+            while (*message == ' ' || *message == '\r' || *message == '\n') {
+                ++message;
+            }
+            message_view = message;
+            while (!message_view.empty() && (message_view.back() == '\r' || message_view.back() == '\n')) {
+                message_view.remove_suffix(1);
+            }
+        }
+        if (!message_view.empty()) {
+            error.append(": ");
+            error.append(message_view);
+        }
     }
-    if (!message_view.empty()) {
-        error.append(": ");
-        error.append(message_view);
-    }
-    return db_error(error_code, db_driver::postgresql, error, std::nullopt, state_view, constraint == nullptr ? std::string_view{} : std::string_view(constraint));
+    return db_error(error_code, db_driver::postgresql, error, std::nullopt, state_view, constraint_view);
 }
 
 postgresql_params::postgresql_params(std::span<const db_value> params) :

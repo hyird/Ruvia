@@ -4,7 +4,7 @@
 // CTE writes, locks, returning rows, arrays, trigger functions and query caches.
 // RUVIA_ORM_CACHE_REDIS_HOST/PORT opt into the Redis cache provider when built.
 // Use a demo database: --run inserts, changes and deletes demonstration rows.
-// backend_tls.h defines RUVIA_DB_TLS/CA/CERT/KEY and equivalent cache options.
+// backend_config.h backend_tls() reads RUVIA_DB_TLS/CA/CERT/KEY and equivalent cache options.
 
 #include <array>
 #include <chrono>

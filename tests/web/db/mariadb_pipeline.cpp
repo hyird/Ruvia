@@ -16,7 +16,7 @@
 #include "stop_token.h"
 #include "task_scope.h"
 #include "worker_task_fixture.h"
-#ifdef RUVIA_ENABLE_MARIADB
+
 namespace mariadb_pipeline_test {
 
 using pipeline_test::peer_type;
@@ -890,4 +890,3 @@ TEST(Ruvia, db_mariadb_tracked_utf8mb4_session_escapes_without_reading_its_chara
     EXPECT_TRUE(outcomes[5].value_ == "z");
     EXPECT_TRUE((peer.maria_queries() == std::vector<std::string>({std::string("SELECT 'Jos\xc3\xa9\\\\x' AS v"), std::string("SET NAMES gbk"), std::string("SELECT @@character_set_client"), std::string("SELECT '\xbf\\'' , 1 -- ' AS v"), std::string("SET NAMES utf8mb4"), std::string("CALL p()"), std::string("SELECT @@character_set_client"), std::string("SELECT 'Jos\xc3\xa9\\\\x' AS w")})));
 }
-#endif

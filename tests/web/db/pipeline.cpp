@@ -16,7 +16,7 @@
 #include "stop_token.h"
 #include "task_scope.h"
 #include "worker_task_fixture.h"
-#ifdef RUVIA_ENABLE_POSTGRESQL
+
 namespace pipeline_test {
 
 [[nodiscard]] inline std::vector<std::string> parsed_sql(peer_type& peer) {
@@ -852,4 +852,3 @@ TEST(Ruvia, db_postgresql_connection_released_after_a_waiting_transaction_stops_
     EXPECT_TRUE((pipeline_test::parsed_sql(peer) == std::vector<std::string>({std::string("BEGIN"), std::string("SELECT v FROM s"), std::string("BEGIN"), std::string("COMMIT")})));
     EXPECT_EQ(peer.startups(), std::size_t{2});
 }
-#endif

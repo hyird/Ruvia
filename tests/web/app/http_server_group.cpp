@@ -30,9 +30,6 @@
 #include "http_server.h"
 #include "http_server_fixture.h"
 #include "task_scope.h"
-#if defined(RUVIA_ENABLE_HTTP2)
-#include "http_server_fixture.h"
-#endif
 #if defined(RUVIA_ENABLE_HTTP3)
 #include "http3_test_client.h"
 #endif

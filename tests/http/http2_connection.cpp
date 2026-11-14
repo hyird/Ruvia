@@ -2597,3 +2597,49 @@ TEST(Ruvia, http2_public_trailer_declaration_does_not_authorize_forbidden_actual
         }
     }
 }
+
+TEST(RuviaHttpPublicApi, http2_akamai_fingerprint_collector_formats_settings_window_priority_and_pseudo_order) {
+    ruvia::http2_akamai_fingerprint_collector collector;
+    ruvia::http2_frame_metadata settings_frame{};
+    settings_frame.type_ = ruvia::http2_frame_type::settings;
+    settings_frame.stream_id_ = 0;
+    settings_frame.settings_[0] = {ruvia::http2_setting_id::header_table_size, 65536};
+    settings_frame.settings_[1] = {ruvia::http2_setting_id::enable_push, 0};
+    settings_frame.settings_[2] = {ruvia::http2_setting_id::initial_window_size, 6291456};
+    settings_frame.settings_[3] = {ruvia::http2_setting_id::max_header_list_size, 262144};
+    settings_frame.settings_count_ = 4;
+    collector.observe_frame(settings_frame);
+
+    ruvia::http2_frame_metadata wu_frame{};
+    wu_frame.type_ = ruvia::http2_frame_type::window_update;
+    wu_frame.stream_id_ = 0;
+    wu_frame.window_increment_ = 15663105;
+    collector.observe_frame(wu_frame);
+
+    ruvia::http2_frame_metadata pri_frame{};
+    pri_frame.type_ = ruvia::http2_frame_type::priority;
+    pri_frame.stream_id_ = 3;
+    pri_frame.priority_ = ruvia::http2_received_priority{.stream_id_ = 3, .stream_dependency_ = 0, .weight_ = 201, .exclusive_ = false};
+    collector.observe_frame(pri_frame);
+
+    collector.observe_header({.stream_id_ = 1, .phase_ = ruvia::http2_header_observation_phase::begin});
+    for (const std::string_view pseudo : {":method", ":authority", ":scheme", ":path"}) {
+        collector.observe_header({
+            .stream_id_ = 1,
+            .phase_ = ruvia::http2_header_observation_phase::field,
+            .name_ = pseudo,
+            .value_ = "x",
+        });
+    }
+    collector.observe_header({
+        .stream_id_ = 1,
+        .phase_ = ruvia::http2_header_observation_phase::field,
+        .name_ = "user-agent",
+        .value_ = "Ruvia",
+    });
+    collector.observe_header({.stream_id_ = 1, .phase_ = ruvia::http2_header_observation_phase::end});
+
+    EXPECT_TRUE(collector.complete());
+    EXPECT_FALSE(collector.failed());
+    EXPECT_EQ(collector.fingerprint(), "1:65536;2:0;4:6291456;6:262144|15663105|3:0:0:201|m,a,s,p");
+}

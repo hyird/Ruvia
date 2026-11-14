@@ -2063,7 +2063,7 @@ std::vector<http_client_endpoint_address> http_client_ref::dns_snapshot() const 
     registration_.require_active();
     return pool_->dns_snapshot();
 }
-void http_client_ref::update_dns(std::span<const http_client_endpoint_address> addresses) const {
+void http_client_ref::update_dns(std::span<const http_client_endpoint_address> addresses) {
     registration_.require_active();
     pool_->update_dns(addresses);
 }
@@ -2087,16 +2087,16 @@ task<std::vector<ip_address>> http_client_ref::resolve_dns(std::string_view host
     detail::require_client_host_lookup(host, pool_->worker());
     return make_scoped_operation(registration_.scope(), resolve_client_handle_dns(pool_owner_, std::string(host), options_, std::move(options), host_stop_token_));
 }
-bool http_client_ref::close_connection(std::uint64_t id) const {
+bool http_client_ref::close_connection(std::uint64_t id) {
     registration_.require_active();
     return pool_->close_connection(id);
 }
-std::optional<http_client_push> http_client_ref::next_push() const {
+std::optional<http_client_push> http_client_ref::next_push() {
     registration_.require_active();
     return pool_->next_push();
 }
 
-std::optional<http_client_advertisement> http_client_ref::next_advertisement() const {
+std::optional<http_client_advertisement> http_client_ref::next_advertisement() {
     registration_.require_active();
     return pool_->next_advertisement();
 }

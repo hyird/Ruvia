@@ -21,16 +21,15 @@
 #include "event_loop.h"
 #include "http_client.h"
 #include "http_server.h"
+#include "http_server_fixture.h"
 #include "middleware.h"
 #include "stop_token.h"
 #include "streaming.h"
 #include "task_scope.h"
 #ifdef RUVIA_ENABLE_REDIS
-#include "http_server_fixture.h"
 #include "redis.h"
 #endif
 
-#include "http_server_fixture.h"
 namespace public_router_test {
 using namespace std::chrono_literals;
 

@@ -6,7 +6,7 @@
 // Every subscriber connection gets its own Redis connection; the request's
 // stop token closes it when the SSE client goes away. Pub/Sub delivers at most
 // once: a closed subscription has missed what was published meanwhile.
-// backend_tls.h defines RUVIA_REDIS_TLS/CA/CERT/KEY for Redis transport.
+// backend_config.h backend_tls() reads RUVIA_REDIS_TLS/CA/CERT/KEY for Redis transport.
 
 #include <array>
 #include <cstdint>

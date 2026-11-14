@@ -486,58 +486,6 @@ TEST(Ruvia, representation_response_plan_reports_if_range_authorization) {
     EXPECT_TRUE(!ruvia::plan_http_representation_response(full, representation, options).authorized_by_if_range());
 }
 
-TEST(Ruvia, multipart_range_plan_owns_rfc_framing_and_reports_exact_length) {
-    auto ranges = ruvia::resolve_http_byte_range_set("bytes=0-2,7-9", 10);
-    std::string media_type = "text/plain";
-    std::string boundary = "unit_boundary_42";
-    auto plan = ruvia::make_http_multipart_byte_range_plan(ranges, 10, media_type, boundary);
-    media_type.assign(media_type.size(), 'x');
-    boundary.assign(boundary.size(), 'y');
-
-    EXPECT_EQ(plan.content_type(), "multipart/byteranges; boundary=unit_boundary_42");
-    EXPECT_TRUE(plan.metadata().find("Content-Type: text/plain") != std::string_view::npos);
-    EXPECT_TRUE(plan.metadata().find("Content-Range: bytes 7-9/10") != std::string_view::npos);
-    std::uint64_t content_length = 0;
-    for (const auto& segment : plan.segments()) {
-        content_length += segment.kind_ == ruvia::http_multipart_byte_range_plan::segment_kind::file ? segment.file_length_ : segment.metadata_length_;
-    }
-    EXPECT_EQ(plan.content_length(), content_length);
-    EXPECT_TRUE(plan.metadata().ends_with("--\r\n"));
-}
-
-TEST(Ruvia, multipart_range_plan_quotes_boundary_parameters) {
-    const auto ranges = ruvia::resolve_http_byte_range_set("bytes=8-9,0-1", 10);
-    auto plan = ruvia::make_http_multipart_byte_range_plan(ranges, 10, "text/plain", "range boundary");
-    EXPECT_EQ(plan.content_type(), "multipart/byteranges; boundary=\"range boundary\"");
-    EXPECT_TRUE(plan.metadata().find("Content-Range: bytes 8-9/10") < plan.metadata().find("Content-Range: bytes 0-1/10"));
-    auto clone = plan.clone();
-    EXPECT_EQ(clone.content_type(), plan.content_type());
-    EXPECT_EQ(clone.metadata(), plan.metadata());
-}
-
-TEST(Ruvia, multipart_range_plan_rejects_invalid_media_type) {
-    const auto ranges = ruvia::resolve_http_byte_range_set("bytes=0-1,8-9", 10);
-    bool threw = false;
-    try {
-        static_cast<void>(ruvia::make_http_multipart_byte_range_plan(ranges, 10, "text/plain\r\nX-Evil: yes", "valid_boundary"));
-    } catch (const std::invalid_argument&) {
-        threw = true;
-    }
-    EXPECT_TRUE(threw);
-}
-
-TEST(Ruvia, multipart_range_plan_rejects_content_length_overflow) {
-    auto ranges = ruvia::resolve_http_byte_range_set("bytes=0-9223372036854775806,9223372036854775808-18446744073709551614", (std::numeric_limits<std::uint64_t>::max)());
-    EXPECT_EQ(ranges.size(), std::size_t{2});
-    bool threw = false;
-    try {
-        static_cast<void>(ruvia::make_http_multipart_byte_range_plan(ranges, (std::numeric_limits<std::uint64_t>::max)(), "application/octet-stream", "overflow_check"));
-    } catch (const std::length_error&) {
-        threw = true;
-    }
-    EXPECT_TRUE(threw);
-}
-
 TEST(Ruvia, representation_response_plan_rejects_unknown_policy) {
     bool threw = false;
     try {

@@ -32,15 +32,11 @@
 #include <asio/use_future.hpp>
 #include <asio/write.hpp>
 
-#include "event_loop.h"
-#ifdef RUVIA_ENABLE_DATABASE
 #include "db_session.h"
-#endif
+#include "event_loop.h"
 #ifdef RUVIA_ENABLE_REDIS
 #include "redis.h"
 #endif
-
-#include "db_session.h"
 #include "task.h"
 
 namespace ruvia::test {

@@ -8,8 +8,10 @@
 #include <string>
 #include <string_view>
 #include <utility>
+#include <variant>
 
 #include "content_decoding_fixture.h"
+#include "http_cache.h"
 #include "http_content_coding.h"
 #include "http_content_negotiation.h"
 
@@ -17,7 +19,6 @@ using namespace ruvia::test;
 
 using ruvia::http_content_encoder;
 
-#include <chrono>
 #include <cmath>
 #include <cstddef>
 #include <initializer_list>
@@ -27,7 +28,7 @@ using ruvia::http_content_encoder;
 #include <vector>
 
 #include "borrowed_text.h"
-#include "http_cookie.h"
+#include "http1_chunked_body.h"
 #include "http_header.h"
 #include "http_response.h"
 
@@ -913,472 +914,6 @@ TEST(Ruvia, content_encoding_field_lines_fold_in_order_ignoring_other_fields) {
 }
 
 namespace {
-
-// True if a public cookie plan rejects the options.
-bool rejects(const ruvia::cookie_options& options) {
-    try {
-        (void)ruvia::set_cookie_plan("sid", "value", options);
-        return false;
-    } catch (const std::invalid_argument&) {
-        return true;
-    }
-}
-
-}  // namespace
-
-TEST(Ruvia, cookie_public_validation_and_prefix_parsing) {
-    EXPECT_TRUE(ruvia::is_valid_cookie_value("session-token"));
-    EXPECT_TRUE(!ruvia::is_valid_cookie_value("invalid;value"));
-    EXPECT_TRUE(ruvia::is_valid_cookie_value("\"abc\""));
-    EXPECT_TRUE(ruvia::is_valid_cookie_value("\"\""));
-    EXPECT_TRUE(!ruvia::is_valid_cookie_value("\"abc"));
-    EXPECT_TRUE(!ruvia::is_valid_cookie_value("\"a\"b\""));
-    EXPECT_TRUE(!ruvia::is_valid_cookie_value("\""));
-    const ruvia::cookie_options no_attributes{.path_ = ""};
-    const ruvia::set_cookie_plan quoted("sid", "\"abc\"", no_attributes);
-    std::string quoted_wire(quoted.size(), '\0');
-    quoted.write(quoted_wire.data());
-    EXPECT_EQ(quoted_wire, "sid=\"abc\"");
-    EXPECT_TRUE(ruvia::cookie_name_prefix("__secure-id") == ruvia::cookie_prefix::secure);
-    EXPECT_TRUE(ruvia::cookie_name_prefix("__HOST-id") == ruvia::cookie_prefix::host);
-    EXPECT_TRUE(!ruvia::cookie_name_prefix("id").has_value());
-    EXPECT_TRUE(ruvia::cookie_prefix_requirements_met(ruvia::cookie_prefix::secure, true, "/a", "example.com"));
-    EXPECT_TRUE(!ruvia::cookie_prefix_requirements_met(ruvia::cookie_prefix::secure, false, "/", ""));
-    EXPECT_TRUE(ruvia::cookie_prefix_requirements_met(ruvia::cookie_prefix::host, true, "/", ""));
-    EXPECT_TRUE(!ruvia::cookie_prefix_requirements_met(ruvia::cookie_prefix::host, true, "", ""));
-    EXPECT_TRUE(!ruvia::cookie_prefix_requirements_met(ruvia::cookie_prefix::host, true, "/", "example.com"));
-    EXPECT_EQ(ruvia::http_cookie_prefix_text(ruvia::cookie_prefix::host), std::string_view("__Host-"));
-}
-
-TEST(Ruvia, cookie_borrowed_text_accepts_stable_string_owners) {
-    const std::string path = "/account";
-    const std::string domain = "example.com";
-    std::string name = "sid";
-    const std::string value = "value";
-
-    ruvia::cookie_options options;
-    options.path_ = path;
-    options.domain_ = domain;
-    EXPECT_TRUE(!rejects(options));
-
-    const ruvia::set_cookie_plan plan(name, value, options);
-    std::string wire(plan.size(), '\0');
-    plan.write(wire.data());
-    name.assign("changed");
-    EXPECT_EQ(wire, std::string("sid=value; Path=/account; Domain=example.com"));
-    const auto parsed_value = ruvia::parse_set_cookie(wire);
-    EXPECT_TRUE(parsed_value.has_value());
-    if (parsed_value) {
-        EXPECT_EQ(parsed_value->name(), "sid");
-        EXPECT_EQ(parsed_value->path(), "/account");
-        EXPECT_EQ(parsed_value->domain(), "example.com");
-        EXPECT_TRUE(parsed_value->name().data() == wire.data());
-        EXPECT_TRUE(parsed_value->path().data() == wire.data() + wire.find("/account"));
-        EXPECT_TRUE(parsed_value->domain().data() == wire.data() + wire.find("example.com"));
-    }
-}
-
-TEST(Ruvia, cookie_expires_formats_historical_dates_at_second_resolution) {
-    using namespace std::chrono;
-    ruvia::cookie_options options;
-    options.expires_ = system_clock::time_point{seconds{-315619200}};
-    EXPECT_TRUE(!rejects(options));
-    const ruvia::set_cookie_plan historical("sid", "value", options);
-    std::string wire(historical.size(), '\0');
-    historical.write(wire.data());
-    EXPECT_EQ(wire, std::string("sid=value; Path=/; Expires=Fri, 01 Jan 1960 00:00:00 GMT"));
-
-    options.expires_ = system_clock::time_point{} - system_clock::duration{1};
-    const ruvia::set_cookie_plan fractional("sid", "value", options);
-    wire.resize(fractional.size());
-    fractional.write(wire.data());
-    EXPECT_EQ(wire, std::string("sid=value; Path=/; Expires=Wed, 31 Dec 1969 23:59:59 GMT"));
-}
-
-TEST(Ruvia, cookie_expires_rejects_dates_before_the_cookie_calendar_range) {
-    using namespace std::chrono;
-    constexpr auto cutoff = duration_cast<seconds>(sys_days{year{1601} / January / 1}.time_since_epoch());
-    // Clocks with nanosecond int64 storage cannot represent dates this early;
-    // wider calendar ranges (including MSVC's 100ns clock) exercise the edge.
-    if constexpr (ceil<seconds>(system_clock::duration::min()) <= cutoff) {
-        ruvia::cookie_options options;
-        options.expires_ = system_clock::time_point{duration_cast<system_clock::duration>(cutoff)};
-        EXPECT_TRUE(!rejects(options));
-        const ruvia::set_cookie_plan first("sid", "value", options);
-        std::string wire(first.size(), '\0');
-        first.write(wire.data());
-        EXPECT_TRUE(wire.find("01 Jan 1601") != std::string::npos);
-        options.expires_ = *options.expires_ - system_clock::duration{1};
-        EXPECT_TRUE(rejects(options));
-        bool rejected = false;
-        try {
-            (void)ruvia::set_cookie_plan("sid", "value", options);
-        } catch (const std::invalid_argument&) {
-            rejected = true;
-        }
-        EXPECT_TRUE(rejected);
-    }
-}
-
-TEST(Ruvia, cookie_samesite_enum_maps_to_wire_tokens) {
-    ruvia::cookie_options strict;
-    strict.same_site_ = ruvia::cookie_same_site::strict;
-    EXPECT_TRUE(!rejects(strict));
-
-    ruvia::cookie_options lax;
-    lax.same_site_ = ruvia::cookie_same_site::lax;
-    EXPECT_TRUE(!rejects(lax));
-
-    ruvia::cookie_options none;
-    none.same_site_ = ruvia::cookie_same_site::none;
-    none.secure_ = ruvia::cookie_attribute_policy::emit;
-    EXPECT_TRUE(!rejects(none));
-
-    EXPECT_TRUE(!ruvia::cookie_options{}.same_site_.has_value());
-}
-
-TEST(Ruvia, cookie_samesite_none_requires_secure) {
-    ruvia::cookie_options insecure_none;
-    insecure_none.same_site_ = ruvia::cookie_same_site::none;
-    insecure_none.secure_ = ruvia::cookie_attribute_policy::omit;
-    EXPECT_TRUE(rejects(insecure_none));  // RFC 6265bis §5.5
-
-    ruvia::cookie_options secure_none;
-    secure_none.same_site_ = ruvia::cookie_same_site::none;
-    secure_none.secure_ = ruvia::cookie_attribute_policy::emit;
-    EXPECT_TRUE(!rejects(secure_none));
-}
-
-TEST(Ruvia, cookie_domain_requires_dns_subdomain_syntax) {
-    const auto accepts_domain = [](std::string_view domain) {
-        ruvia::cookie_options options;
-        options.domain_ = domain;
-        return !rejects(options);
-    };
-
-    EXPECT_TRUE(accepts_domain("example.com"));
-    EXPECT_TRUE(accepts_domain("EXAMPLE.com"));
-    EXPECT_TRUE(accepts_domain("localhost"));
-    EXPECT_TRUE(accepts_domain("3.example"));
-    EXPECT_TRUE(accepts_domain("xn--bcher-kva.example"));
-
-    // Domain= is a DNS subdomain, not the generic Set-Cookie av-octet syntax
-    // used by Path. Emitting any of these values produces a non-conforming
-    // Set-Cookie field that user agents ignore or interpret inconsistently.
-    EXPECT_TRUE(!accepts_domain(".example.com"));
-    EXPECT_TRUE(!accepts_domain("example.com."));
-    EXPECT_TRUE(!accepts_domain("bad domain.example"));
-    EXPECT_TRUE(!accepts_domain("bad_domain.example"));
-    EXPECT_TRUE(!accepts_domain("-bad.example"));
-    EXPECT_TRUE(!accepts_domain("bad-.example"));
-    EXPECT_TRUE(!accepts_domain("bad..example"));
-    EXPECT_TRUE(!accepts_domain("caf\xc3\xa9.example"));
-    EXPECT_TRUE(!accepts_domain(std::string(64, 'a') + ".example"));
-}
-
-TEST(Ruvia, cookie_validation_rejects_injection_and_bad_options) {
-    const auto rejects_cookie = [](std::string_view name, std::string_view value, const ruvia::cookie_options& options) {
-        try {
-            (void)ruvia::set_cookie_plan(name, value, options);
-            return false;
-        } catch (const std::invalid_argument&) {
-            return true;
-        }
-    };
-    const ruvia::cookie_options clean;
-    EXPECT_TRUE(!rejects_cookie("sid", "value", clean));
-    EXPECT_TRUE(rejects_cookie("bad name", "value", clean));  // space -> not a token name
-    EXPECT_TRUE(rejects_cookie("sid", "a;b", clean));         // ';' in value
-    ruvia::cookie_options bad_path;
-    bad_path.path_ = "a;b";
-    EXPECT_TRUE(rejects_cookie("sid", "value", bad_path));  // ';' in path attribute
-    // Inputs the Set-Cookie parser would trim, drop, or ignore cannot be found
-    // again for same-name replacement.
-    for (const std::string_view path : {" /", "/ ", " "}) {
-        ruvia::cookie_options spaced_path;
-        spaced_path.path_ = path;
-        EXPECT_TRUE(rejects_cookie("sid", "value", spaced_path));
-    }
-    const std::string long_path(1025, 'p');
-    ruvia::cookie_options oversized_path;
-    oversized_path.path_ = long_path;
-    EXPECT_TRUE(rejects_cookie("sid", "value", oversized_path));
-    oversized_path.path_ = std::string_view(long_path).substr(1);
-    EXPECT_TRUE(!rejects_cookie("sid", "value", oversized_path));
-    const std::string long_value(4093, 'v');
-    EXPECT_TRUE(!rejects_cookie("sid", long_value, clean));
-    EXPECT_TRUE(rejects_cookie("sidx", long_value, clean));
-    ruvia::cookie_options typed_prefix;
-    typed_prefix.secure_ = ruvia::cookie_attribute_policy::emit;
-    typed_prefix.prefix_ = ruvia::cookie_prefix::secure;
-    EXPECT_TRUE(rejects_cookie("sid", long_value, typed_prefix));
-    ruvia::cookie_options bad_priority;
-    bad_priority.priority_ = static_cast<ruvia::cookie_priority>(255);
-    EXPECT_TRUE(rejects_cookie("sid", "value", bad_priority));
-    ruvia::cookie_options bad_same_site;
-    bad_same_site.same_site_ = static_cast<ruvia::cookie_same_site>(255);
-    EXPECT_TRUE(rejects_cookie("sid", "value", bad_same_site));
-    ruvia::cookie_options bad_prefix;
-    bad_prefix.prefix_ = static_cast<ruvia::cookie_prefix>(255);
-    EXPECT_TRUE(rejects_cookie("sid", "value", bad_prefix));
-    ruvia::cookie_options partitioned;
-    partitioned.partitioned_ = ruvia::cookie_attribute_policy::emit;  // partitioned requires Secure
-    EXPECT_TRUE(rejects_cookie("sid", "value", partitioned));
-    ruvia::cookie_options bad_http_only;
-    bad_http_only.http_only_ = static_cast<ruvia::cookie_attribute_policy>(255);
-    EXPECT_TRUE(rejects_cookie("sid", "value", bad_http_only));
-    ruvia::cookie_options bad_secure;
-    bad_secure.secure_ = static_cast<ruvia::cookie_attribute_policy>(255);
-    EXPECT_TRUE(rejects_cookie("sid", "value", bad_secure));
-    ruvia::cookie_options bad_partitioned;
-    bad_partitioned.partitioned_ = static_cast<ruvia::cookie_attribute_policy>(255);
-    EXPECT_TRUE(rejects_cookie("sid", "value", bad_partitioned));
-    ruvia::cookie_options negative_max_age;
-    negative_max_age.max_age_ = std::chrono::seconds{-1};
-    EXPECT_TRUE(rejects_cookie("sid", "value", negative_max_age));
-}
-
-TEST(Ruvia, cookie_secure_prefix_requires_secure) {
-    ruvia::cookie_options secured;
-    secured.prefix_ = ruvia::cookie_prefix::secure;
-    secured.secure_ = ruvia::cookie_attribute_policy::emit;
-    EXPECT_TRUE(!rejects(secured));
-
-    ruvia::cookie_options insecure;
-    insecure.prefix_ = ruvia::cookie_prefix::secure;
-    insecure.secure_ = ruvia::cookie_attribute_policy::omit;
-    EXPECT_TRUE(rejects(insecure));  // __Secure- requires Secure
-}
-
-TEST(Ruvia, cookie_host_prefix_requires_secure_root_path_no_domain) {
-    // __Host- is the strictest prefix (RFC 6265bis 4.1.3.2).
-    ruvia::cookie_options valid;
-    valid.prefix_ = ruvia::cookie_prefix::host;
-    valid.secure_ = ruvia::cookie_attribute_policy::emit;  // path defaults to "/", domain is empty
-    EXPECT_TRUE(!rejects(valid));
-
-    ruvia::cookie_options not_secure = valid;
-    not_secure.secure_ = ruvia::cookie_attribute_policy::omit;
-    EXPECT_TRUE(rejects(not_secure));
-
-    ruvia::cookie_options sub_path = valid;
-    sub_path.path_ = "/sub";
-    EXPECT_TRUE(rejects(sub_path));  // Path must be exactly "/"
-
-    ruvia::cookie_options with_domain = valid;
-    with_domain.domain_ = "example.com";
-    EXPECT_TRUE(rejects(with_domain));  // Domain must be absent
-}
-
-TEST(Ruvia, cookie_literal_prefix_name_enforces_requirements) {
-    const auto rejects_with_name = [](std::string_view name, const ruvia::cookie_options& options) {
-        try {
-            (void)ruvia::set_cookie_plan(name, "value", options);
-            return false;
-        } catch (const std::exception&) {
-            return true;
-        }
-    };
-
-    // RFC 6265bis user agents match these prefixes case-insensitively. Reject
-    // every spelling the UA would reject instead of emitting a silently dropped
-    // cookie.
-    ruvia::cookie_options insecure;                            // Secure defaults to omitted
-    EXPECT_TRUE(rejects_with_name("__Secure-tok", insecure));  // __Secure- requires Secure
-    EXPECT_TRUE(rejects_with_name("__secure-tok", insecure));
-    EXPECT_TRUE(rejects_with_name("__SeCuRe-tok", insecure));
-
-    ruvia::cookie_options host_bad_domain;
-    host_bad_domain.secure_ = ruvia::cookie_attribute_policy::emit;
-    host_bad_domain.domain_ = "example.com";  // __Host- forbids Domain
-    EXPECT_TRUE(rejects_with_name("__Host-sid", host_bad_domain));
-    EXPECT_TRUE(rejects_with_name("__HOST-sid", host_bad_domain));
-    EXPECT_TRUE(rejects_with_name("__hOsT-sid", host_bad_domain));
-
-    // A literal-prefixed name that meets the constraints is accepted.
-    ruvia::cookie_options ok_secure;
-    ok_secure.secure_ = ruvia::cookie_attribute_policy::emit;
-    EXPECT_TRUE(!rejects_with_name("__Secure-tok", ok_secure));
-    EXPECT_TRUE(!rejects_with_name("__sEcUrE-tok", ok_secure));
-    ruvia::cookie_options ok_host;
-    ok_host.secure_ = ruvia::cookie_attribute_policy::emit;  // path defaults to "/", domain empty
-    EXPECT_TRUE(!rejects_with_name("__Host-sid", ok_host));
-    EXPECT_TRUE(!rejects_with_name("__hOsT-sid", ok_host));
-
-    // A name that only resembles a prefix (missing the trailing '-') is unaffected.
-    ruvia::cookie_options plain;
-    EXPECT_TRUE(!rejects_with_name("__Secured", plain));
-    EXPECT_TRUE(!rejects_with_name("__Hostname", plain));
-}
-
-TEST(Ruvia, cookie_writer_leaves_lifetime_caps_to_user_agents) {
-    // RFC 6265bis' 400-day cookie-age-limit binds user agents, not servers.
-    ruvia::cookie_options over_cap;
-    over_cap.max_age_ = std::chrono::seconds(34560001);
-    EXPECT_TRUE(!rejects(over_cap));
-
-    ruvia::cookie_options far_expires;
-    far_expires.expires_ = std::chrono::system_clock::now() + std::chrono::hours(24 * 500);
-    EXPECT_TRUE(!rejects(far_expires));
-
-    ruvia::cookie_options deletion;
-    deletion.max_age_ = std::chrono::seconds(0);
-    EXPECT_TRUE(!rejects(deletion));
-
-    ruvia::cookie_options negative;
-    negative.max_age_ = std::chrono::seconds(-1);
-    EXPECT_TRUE(rejects(negative));
-}
-
-TEST(Ruvia, cookie_request_pair_keeps_equals_for_empty_names) {
-    const auto pair = [&](std::string_view name, std::string_view value) {
-        std::string wire(ruvia::cookie_request_pair_size(name, value), '\0');
-        const auto* const end = ruvia::write_cookie_request_pair(wire.data(), name, value);
-        EXPECT_TRUE(end == wire.data() + wire.size());
-        return wire;
-    };
-    EXPECT_EQ(pair("sid", "abc"), std::string("sid=abc"));
-    // A nameless value that looks like a cookie-pair must stay behind '='.
-    EXPECT_EQ(pair("", "session=forged"), std::string("=session=forged"));
-    EXPECT_EQ(pair("", "sid"), std::string("=sid"));
-    EXPECT_EQ(pair("sid", ""), std::string("sid="));
-    EXPECT_EQ(pair(std::string_view("\0", 1), std::string_view("\0", 1)), std::string("\0=\0", 3));
-}
-
-TEST(Ruvia, cookie_request_pair_accepts_inputs_inside_the_written_bytes) {
-    // Each input is consumed before an output byte overwrites it.
-    std::string buffer("valuename");
-    buffer.resize(16, '#');
-    const std::string_view value(buffer.data(), 5);
-    const std::string_view name(buffer.data() + 5, 4);
-    const auto* const end = ruvia::write_cookie_request_pair(buffer.data(), name, value);
-    EXPECT_TRUE(end == buffer.data() + 10);
-    EXPECT_EQ(std::string_view(buffer.data(), 10), std::string_view("name=value"));
-}
-
-TEST(Ruvia, cookie_request_pair_preserves_aliased_inputs_and_terminators) {
-    std::string header = "a";
-    header.reserve(16);
-    const std::string_view terminator(header.data() + header.size(), 1);
-    ruvia::append_cookie_request_pair(header, "b", terminator);
-    EXPECT_EQ(header, std::string("a; b=\0", 6));
-
-    std::string empty;
-    const std::string_view empty_terminator(empty.data(), 1);
-    ruvia::append_cookie_request_pair(empty, empty_terminator, empty_terminator);
-    EXPECT_EQ(std::string_view(empty), std::string_view("\0=\0", 3));
-
-    std::string growing = "sid=abc";
-    growing.resize(growing.capacity(), 'x');
-    const auto original = growing;
-    const std::string_view name(growing.data(), 3);
-    const std::string_view value(growing.data() + 4, growing.size() - 3);
-    ruvia::append_cookie_request_pair(growing, name, value);
-    auto expected = original + "; sid=" + original.substr(4);
-    expected.push_back('\0');
-    EXPECT_EQ(growing, expected);
-}
-
-TEST(Ruvia, cookie_request_pair_preserves_contents_when_allocations_are_rejected) {
-    {
-        std::string header;
-        header.reserve(1024);
-        const std::string value(300, 'v');
-        const auto expected = std::string("\0=", 2) + value;
-        try {
-            ruvia::append_cookie_request_pair(header, std::string_view(header.data(), 1), value);
-        } catch (const std::bad_alloc&) {
-            ASSERT_TRUE(header.empty());
-            ruvia::append_cookie_request_pair(header, std::string_view(header.data(), 1), value);
-        }
-        EXPECT_EQ(std::string_view(header), std::string_view(expected));
-    }
-}
-
-TEST(Ruvia, cookie_request_pair_snapshots_only_overlapping_inputs) {
-    for (const bool alias_name : {false, true}) {
-        for (const auto aliased_size : {3U, 300U}) {
-            SCOPED_TRACE(alias_name);
-            SCOPED_TRACE(aliased_size);
-            const std::string aliased(aliased_size, alias_name ? 'n' : 'v');
-            const std::string independent(300, alias_name ? 'v' : 'n');
-            const auto expected = alias_name ? aliased + "=" + independent : independent + "=" + aliased;
-            std::string output = aliased;
-            output.resize(expected.size());
-            const std::string_view borrowed(output.data(), aliased.size());
-
-            (void)ruvia::write_cookie_request_pair(output.data(), alias_name ? borrowed : independent, alias_name ? independent : borrowed);
-
-            EXPECT_EQ(output, expected);
-        }
-    }
-}
-
-TEST(Ruvia, cookie_request_pair_preserves_both_long_aliased_inputs_on_failure_and_retry) {
-    const std::string name(300, 'n');
-    const std::string value(300, 'v');
-    std::string output = value + name;
-    output.resize(name.size() + 1 + value.size());
-    const auto original = output;
-    const std::string_view borrowed_name(output.data() + value.size(), name.size());
-    const std::string_view borrowed_value(output.data(), value.size());
-
-    try {
-        (void)ruvia::write_cookie_request_pair(output.data(), borrowed_name, borrowed_value);
-    } catch (const std::bad_alloc&) {
-        ASSERT_EQ(output, original);
-        (void)ruvia::write_cookie_request_pair(output.data(), borrowed_name, borrowed_value);
-    }
-
-    EXPECT_EQ(output, name + "=" + value);
-}
-
-TEST(Ruvia, cookie_plan_serialization_emits_fields_without_attributes) {
-    const ruvia::cookie_options options{.path_ = ""};
-    const ruvia::set_cookie_plan plan("sid", "value", options);
-    std::string wire(plan.size(), '\0');
-    plan.write(wire.data());
-    EXPECT_EQ(wire, "sid=value");
-    const auto parsed_value = ruvia::parse_set_cookie(wire);
-    EXPECT_TRUE(parsed_value.has_value());
-    if (parsed_value) {
-        EXPECT_EQ(parsed_value->name(), "sid");
-        EXPECT_TRUE(parsed_value->name().data() == wire.data());
-        EXPECT_TRUE(parsed_value->path().empty());
-        EXPECT_TRUE(parsed_value->domain().empty());
-    }
-}
-
-TEST(Ruvia, cookie_plan_serialization_formats_exact_max_age_widths_and_prefixed_fields) {
-    constexpr std::int64_t ages[]{1, 9, 10, 99, 100, 999, 1000, ruvia::max_cookie_age_seconds};
-    for (const auto age : ages) {
-        const ruvia::cookie_options options{.path_ = "/", .max_age_ = std::chrono::seconds{age}, .prefix_ = ruvia::cookie_prefix::host, .secure_ = ruvia::cookie_attribute_policy::emit};
-        const ruvia::set_cookie_plan plan("sid", "value", options);
-        std::string wire(plan.size(), '\0');
-        plan.write(wire.data());
-        EXPECT_EQ(wire, std::string("__Host-sid=value; Path=/; Max-Age=") + std::to_string(age).c_str() + "; Secure");
-        const auto parsed_value = ruvia::parse_set_cookie(wire);
-        EXPECT_TRUE(parsed_value.has_value());
-        if (parsed_value) {
-            EXPECT_EQ(parsed_value->name(), "__Host-sid");
-            EXPECT_EQ(parsed_value->path(), "/");
-            EXPECT_TRUE(parsed_value->domain().empty());
-            EXPECT_TRUE(parsed_value->name().data() == wire.data());
-            EXPECT_TRUE(parsed_value->path().data() == wire.data() + wire.find('/'));
-        }
-    }
-}
-
-TEST(Ruvia, cookie_plan_serialization_writes_zero_max_age_as_deletion_expires) {
-    // max-age-av = "Max-Age=" non-zero-digit *DIGIT (RFC 6265 section 4.1.1).
-    const ruvia::cookie_options options{.path_ = "/", .expires_ = std::chrono::system_clock::time_point{std::chrono::hours{24 * 365 * 40}}, .max_age_ = std::chrono::seconds{0}};
-    const ruvia::set_cookie_plan plan("sid", "", options);
-    std::string wire(plan.size(), '\0');
-    plan.write(wire.data());
-    EXPECT_EQ(wire, "sid=; Path=/; Expires=Thu, 01 Jan 1970 00:00:00 GMT");
-}
-
-namespace {
 using ruvia::decode_url_component;
 using ruvia::has_url_encoding;
 using mode_type = ruvia::url_decode_mode;
@@ -1830,4 +1365,237 @@ TEST(Ruvia, number_format_signed_extremes) {
     output.clear();
     ruvia::http_append_signed(output, (std::numeric_limits<std::int64_t>::max)());
     EXPECT_EQ(output, "9223372036854775807");
+}
+
+TEST(RuviaHttpPublicApi, accept_encoding_candidate_order_and_transcoder) {
+    const std::array gzip_first{ruvia::http_content_coding::gzip, ruvia::http_content_coding::brotli};
+    const std::array br_first{ruvia::http_content_coding::brotli, ruvia::http_content_coding::gzip};
+
+    // Equal qvalues resolve by the caller's candidate order.
+    EXPECT_EQ(ruvia::negotiate_http_content_coding("gzip, br", gzip_first), std::optional(ruvia::http_content_coding::gzip));
+    EXPECT_EQ(ruvia::negotiate_http_content_coding("gzip, br", br_first), std::optional(ruvia::http_content_coding::brotli));
+
+    // Higher qvalue wins regardless of candidate order.
+    EXPECT_EQ(ruvia::negotiate_http_content_coding("gzip;q=0.5, br;q=0.9", gzip_first), std::optional(ruvia::http_content_coding::brotli));
+
+    // Explicit identity weight beats lower compressed weight, while implicit identity stays fallback.
+    EXPECT_EQ(ruvia::negotiate_http_content_coding("gzip;q=0.5, identity;q=0.8", gzip_first), std::optional(ruvia::http_content_coding::identity));
+    EXPECT_EQ(ruvia::negotiate_http_content_coding("gzip;q=0.5", gzip_first), std::optional(ruvia::http_content_coding::gzip));
+    EXPECT_EQ(ruvia::negotiate_http_content_coding("zstd", gzip_first), std::optional(ruvia::http_content_coding::identity));
+    EXPECT_EQ(ruvia::negotiate_http_content_coding("zstd, identity;q=0", gzip_first), std::nullopt);
+    EXPECT_EQ(ruvia::negotiate_http_content_coding("*;q=0", gzip_first), std::nullopt);
+
+    // Quote-aware Cache-Control: no-transform detection.
+    EXPECT_FALSE(ruvia::http_cache_control_has_no_transform("public, ext=\"a, no-transform, b\", max-age=60"));
+    EXPECT_TRUE(ruvia::http_cache_control_has_no_transform("public, ext=\"a, b\", no-transform, max-age=60"));
+
+    // Multi-coding streaming transcoding (gzip + br -> zstd) with native codec memory cap.
+    const std::string original(4096, 'R');
+    const std::array source_stack{ruvia::http_content_coding::gzip, ruvia::http_content_coding::brotli};
+    const auto double_encoded = ruvia::encode_http_content(source_stack, original, {.max_encoded_bytes_ = 65536});
+    ASSERT_TRUE(double_encoded.has_value());
+
+    ruvia::http_content_transcoder transcoder(source_stack, ruvia::http_content_coding::zstd, {.max_decoded_bytes_ = 8192, .max_encoded_bytes_ = 8192, .max_memory_bytes_ = 8 * 1024 * 1024});
+    std::string transcoded;
+    for (std::size_t pos = 0; pos < double_encoded->size(); pos += 17) {
+        transcoder.write(std::string_view(*double_encoded).substr(pos, 17), transcoded, false);
+    }
+    transcoder.finish(transcoded);
+
+    const auto final_decoded = ruvia::decode_http_content(ruvia::http_content_coding::zstd, transcoded, {.max_decoded_bytes_ = 8192});
+    ASSERT_TRUE(std::holds_alternative<std::string>(final_decoded));
+    EXPECT_EQ(std::string_view(std::get<std::string>(final_decoded)), original);
+
+    // Exhausted native codec memory cap throws std::bad_alloc.
+    EXPECT_THROW((void)ruvia::http_content_encoder(ruvia::http_content_coding::gzip, {.max_memory_bytes_ = 64}), std::bad_alloc);
+}
+
+TEST(RuviaHttpPublicApi, media_type_compressibility_allowlist) {
+    EXPECT_TRUE(ruvia::is_http_media_type_compressible("text/html; charset=utf-8"));
+    EXPECT_TRUE(ruvia::is_http_media_type_compressible("application/problem+json"));
+    EXPECT_TRUE(ruvia::is_http_media_type_compressible("application/wasm"));
+    EXPECT_FALSE(ruvia::is_http_media_type_compressible("application/zip"));
+    EXPECT_FALSE(ruvia::is_http_media_type_compressible("image/png"));
+}
+
+TEST(RuviaHttpPublicApi, worker_codecs_reuse_reset_stream_encoders) {
+    ruvia::http_worker_codecs codecs;
+    {
+        auto lease = codecs.acquire_stream_encoder(ruvia::http_content_coding::gzip);
+        std::string out;
+        lease.encoder().write("streamed payload", out, true);
+        lease.encoder().finish(out);
+        const auto decoded = ruvia::decode_http_content(ruvia::http_content_coding::gzip, out, {.max_decoded_bytes_ = 4096});
+        ASSERT_TRUE(std::holds_alternative<std::string>(decoded));
+        EXPECT_EQ(std::get<std::string>(decoded), "streamed payload");
+    }
+    {
+        // Second lease reuses the reset encoder from the pool.
+        auto lease = codecs.acquire_stream_encoder(ruvia::http_content_coding::gzip);
+        std::string out;
+        lease.encoder().write("reused encoder payload", out);
+        lease.encoder().finish(out);
+        const auto decoded = ruvia::decode_http_content(ruvia::http_content_coding::gzip, out, {.max_decoded_bytes_ = 4096});
+        ASSERT_TRUE(std::holds_alternative<std::string>(decoded));
+        EXPECT_EQ(std::get<std::string>(decoded), "reused encoder payload");
+    }
+}
+
+TEST(RuviaHttpPublicApi, staged_transcoder_transforms_only_within_size_window) {
+    std::string payload;
+    for (int i = 0; i < 32; ++i) {
+        payload.append("chunked-response-staging-compressible-line-0123456789\n");
+    }
+    const auto gzipped = ruvia::encode_http_content(ruvia::http_content_coding::gzip, payload, {.max_encoded_bytes_ = payload.size() + 128});
+    ASSERT_TRUE(gzipped.has_value());
+
+    // Case A: Decoded size within [min_bytes, max_bytes] -> transcodes gzip to zstd.
+    ruvia::http_staged_content_transcoder staged(ruvia::http_content_coding::gzip, ruvia::http_content_coding::zstd, {.min_bytes_ = 100, .max_bytes_ = 4096});
+    for (std::size_t pos = 0; pos < gzipped->size(); pos += 19) {
+        EXPECT_TRUE(staged.write(std::string_view(*gzipped).substr(pos, 19)));
+    }
+    auto res_in_range = staged.finish();
+    EXPECT_TRUE(res_in_range.transformed());
+    EXPECT_EQ(res_in_range.coding(), ruvia::http_content_coding::zstd);
+    EXPECT_EQ(res_in_range.decoded_bytes(), payload.size());
+    const auto decoded_zstd = ruvia::decode_http_content(ruvia::http_content_coding::zstd, res_in_range.bytes(), {.max_decoded_bytes_ = 8192});
+    ASSERT_TRUE(std::holds_alternative<std::string>(decoded_zstd));
+    EXPECT_EQ(std::get<std::string>(decoded_zstd), payload);
+
+    // Case B: Decoded size < min_bytes -> falls back to original untransformed stream!
+    ruvia::http_staged_content_transcoder too_small(ruvia::http_content_coding::gzip, ruvia::http_content_coding::zstd, {.min_bytes_ = payload.size() + 100, .max_bytes_ = 8192});
+    EXPECT_TRUE(too_small.write(*gzipped));
+    auto res_small = too_small.finish();
+    EXPECT_FALSE(res_small.transformed());
+    EXPECT_EQ(res_small.coding(), ruvia::http_content_coding::gzip);
+    EXPECT_EQ(res_small.bytes(), *gzipped);
+
+    // Case C: Decoded size > max_bytes -> spills into passthrough_output and falls back to original stream!
+    ruvia::http_staged_content_transcoder too_large(ruvia::http_content_coding::gzip, ruvia::http_content_coding::zstd, {.min_bytes_ = 16, .max_bytes_ = 256});
+    std::string passthrough_stream;
+    for (std::size_t pos = 0; pos < gzipped->size(); pos += 13) {
+        (void)too_large.write(std::string_view(*gzipped).substr(pos, 13), passthrough_stream);
+    }
+    EXPECT_TRUE(too_large.passthrough());
+    auto res_large = too_large.finish();
+    EXPECT_FALSE(res_large.transformed());
+    EXPECT_EQ(passthrough_stream + std::string(res_large.bytes()), *gzipped);
+}
+
+TEST(Ruvia, request_body_failures_own_cross_runtime_http_errors) {
+    const auto too_large = ruvia::http_request_body_size_failure(5, protocol_byte_limit::limited(4));
+    EXPECT_TRUE(too_large.has_value());
+    if (too_large) {
+        const auto error = ruvia::http_request_body_protocol_error(*too_large);
+        EXPECT_EQ(error.status(), ruvia::http_status::content_too_large);
+        EXPECT_EQ(std::string_view(error.what()), std::string_view("request body is too large"));
+    }
+    EXPECT_TRUE(!ruvia::http_request_body_addition_failure(2, 2, protocol_byte_limit::limited(4)));
+    EXPECT_TRUE(ruvia::http_request_body_addition_failure(2, 3, protocol_byte_limit::limited(4)).has_value());
+
+    const auto incomplete = ruvia::http_request_body_protocol_error(ruvia::http_request_body_failure::incomplete);
+    EXPECT_EQ(incomplete.status(), ruvia::http_status::bad_request);
+    EXPECT_EQ(std::string_view(incomplete.what()), std::string_view("incomplete request body"));
+}
+
+TEST(Ruvia, request_body_gzip_round_trip) {
+    const std::string plain = "The quick brown fox jumps over the lazy dog";
+    const std::string gz = gzip_compress(plain);
+    EXPECT_TRUE(!gz.empty());
+    EXPECT_EQ(decoded(http_content_coding::gzip, gz, decoded_body_limit), plain);
+}
+
+TEST(Ruvia, request_body_gzip_bomb_rejected) {
+    const std::string big(1u << 20, 'a');  // 1 MiB, compresses to a tiny gzip
+    const std::string gz = gzip_compress(big);
+    // A small cap must stop the expansion, not decode the whole megabyte.
+    EXPECT_TRUE(decode_error(http_content_coding::gzip, gz, 1024) == http_content_decode_error::decoded_size_exceeded);
+}
+
+TEST(Ruvia, request_body_gzip_truncated_rejected) {
+    const std::string plain(4096, 'q');
+    std::string gz = gzip_compress(plain);
+    EXPECT_TRUE(gz.size() > 6);
+    gz.resize(gz.size() - 6);  // cut into the gzip trailer -> incomplete stream
+    EXPECT_TRUE(decode_error(http_content_coding::gzip, gz) == http_content_decode_error::invalid_content);
+}
+
+TEST(Ruvia, request_body_gzip_decodes_every_rfc1952_member) {
+    const std::string first = gzip_compress("first-");
+    const std::string second = gzip_compress("second");
+    EXPECT_TRUE(!first.empty());
+    EXPECT_TRUE(!second.empty());
+    EXPECT_EQ(decoded(http_content_coding::gzip, first + second, decoded_body_limit), std::string("first-second"));
+}
+
+TEST(Ruvia, request_body_gzip_rejects_bytes_after_the_last_member) {
+    std::string encoded = gzip_compress("complete");
+    encoded.append("not-a-gzip-member");
+    EXPECT_TRUE(decode_error(http_content_coding::gzip, encoded) == http_content_decode_error::invalid_content);
+}
+
+TEST(Ruvia, request_body_brotli_round_trip) {
+    const std::string plain = "permessage brotli body content, repeated repeated repeated";
+    const std::string br = brotli_compress(plain);
+    EXPECT_TRUE(!br.empty());
+    EXPECT_EQ(decoded(http_content_coding::brotli, br, decoded_body_limit), plain);
+}
+
+TEST(Ruvia, request_body_brotli_bomb_rejected) {
+    const std::string big(1u << 20, 'a');
+    const std::string br = brotli_compress(big);
+    EXPECT_TRUE(!br.empty());
+    EXPECT_TRUE(decode_error(http_content_coding::brotli, br, 1024) == http_content_decode_error::decoded_size_exceeded);
+}
+
+TEST(Ruvia, request_body_brotli_rejects_trailing_bytes) {
+    std::string encoded = brotli_compress("complete");
+    encoded.append("trailing");
+    EXPECT_TRUE(decode_error(http_content_coding::brotli, encoded) == http_content_decode_error::invalid_content);
+}
+
+TEST(Ruvia, request_body_zstd_round_trip) {
+    const std::string plain = "zstd request body content, repeated repeated repeated repeated";
+    const std::string zz = zstd_compress(plain);
+    EXPECT_TRUE(!zz.empty());
+    EXPECT_EQ(decoded(http_content_coding::zstd, zz, decoded_body_limit), plain);
+}
+
+TEST(Ruvia, request_body_zstd_bomb_rejected) {
+    const std::string big(1u << 20, 'a');  // 1 MiB, compresses to a tiny zstd frame
+    const std::string zz = zstd_compress(big);
+    EXPECT_TRUE(!zz.empty());
+    // A small cap must stop the expansion mid-stream, not decode the whole megabyte.
+    EXPECT_TRUE(decode_error(http_content_coding::zstd, zz, 1024) == http_content_decode_error::decoded_size_exceeded);
+}
+
+TEST(Ruvia, request_body_zstd_decodes_every_rfc8878_frame) {
+    const std::string first = zstd_compress("first-");
+    const std::string second = zstd_compress("second");
+    EXPECT_TRUE(!first.empty());
+    EXPECT_TRUE(!second.empty());
+    EXPECT_EQ(decoded(http_content_coding::zstd, first + second, decoded_body_limit), std::string("first-second"));
+}
+
+TEST(Ruvia, request_body_zstd_rejects_bytes_after_the_last_frame) {
+    std::string encoded = zstd_compress("complete");
+    encoded.append("not-a-zstd-frame");
+    EXPECT_TRUE(decode_error(http_content_coding::zstd, encoded) == http_content_decode_error::invalid_content);
+}
+
+TEST(Ruvia, http_request_content_decode_errors_own_protocol_failure_status) {
+    constexpr std::array gzip{http_content_coding::gzip};
+    constexpr std::array identity{http_content_coding::identity};
+    constexpr std::array invalid_coding{static_cast<http_content_coding>(255)};
+    const auto check_protocol_error = [&](std::span<const http_content_coding> codings, std::string_view body, std::size_t max_bytes, ruvia::http_status_code expected_status) {
+        const auto result_value = decode_http_content(codings, body, {.max_decoded_bytes_ = max_bytes});
+        const auto* failure = std::get_if<http_content_decode_error>(&result_value);
+        EXPECT_TRUE(failure != nullptr);
+        if (failure != nullptr) {
+            EXPECT_EQ(ruvia::http_request_content_decode_error(*failure).status(), expected_status);
+        }
+    };
+    check_protocol_error(gzip, "not-gzip", 1024, ruvia::http_status::bad_request);
+    check_protocol_error(identity, "too large", 4, ruvia::http_status::content_too_large);
+    check_protocol_error(invalid_coding, {}, 1024, ruvia::http_status::unsupported_media_type);
 }

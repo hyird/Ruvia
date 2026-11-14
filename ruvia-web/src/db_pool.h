@@ -1766,7 +1766,8 @@ namespace ruvia::detail {
 
 // Builds the error for a failed driver call from what libmariadb reports for
 // it. A statement_failed whose cause ended the connection is reported as
-// io_error.
+// io_error. Server error text can quote row values, so what() carries only
+// errno and SQLSTATE for it; client-library and connect text is kept.
 [[nodiscard]] db_error mariadb_error(std::string_view operation, unsigned int native_code, const char* sql_state, const char* message, db_error::code_type code);
 [[nodiscard]] db_error mysql_error(const st_mysql& connection, std::string_view operation, db_error::code_type code);
 
@@ -2259,7 +2260,9 @@ struct pg_result;
 
 namespace ruvia::detail {
 // Builds the error for a failed libpq call or result. A statement_failed on a
-// connection libpq has marked bad is reported as io_error.
+// connection libpq has marked bad is reported as io_error. Server messages can
+// quote row values, so what() carries only SQLSTATE and object names; libpq
+// text is kept for connect failures alone.
 [[nodiscard]] db_error postgresql_error(const pg_conn& connection, std::string_view operation, db_error::code_type code, const pg_result* result = nullptr);
 
 // Parameters are sent in text format. A double declares float8 so the server
