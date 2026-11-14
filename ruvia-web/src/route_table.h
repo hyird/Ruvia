@@ -1,8 +1,10 @@
 #pragma once
 
+#if defined(RUVIA_ENABLE_HTTP3)
 #include <ngtcp2/ngtcp2.h>
 #include <ngtcp2/ngtcp2_crypto.h>
 #include <ngtcp2/ngtcp2_crypto_ossl.h>
+#endif
 
 #include <algorithm>
 #include <array>
@@ -51,7 +53,9 @@
 #include "ruvia/core/worker_ref.h"
 #include "ruvia/core/worker_wait.h"
 #include "ruvia/http/borrowed_text.h"
+#if defined(RUVIA_ENABLE_HTTP3)
 #include "ruvia/http/http3_connection.h"
+#endif
 #include "ruvia/http/http_content_coding.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_request.h"
