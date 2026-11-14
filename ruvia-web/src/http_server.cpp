@@ -36,6 +36,7 @@
 #include "controller.h"
 #include "event_loop.h"
 #include "http_header.h"
+#include "rate_limit.h"
 #include "server_session.h"
 #include "stop_token.h"
 #include "task_scope.h"

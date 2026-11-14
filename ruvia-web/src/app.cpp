@@ -31,6 +31,7 @@
 #include "http_response.h"
 #include "http_server.h"
 #include "middleware.h"
+#include "rate_limit.h"
 #include "server_session.h"
 #include "stop_token.h"
 #include "worker_ref.h"

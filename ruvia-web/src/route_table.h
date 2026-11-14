@@ -71,6 +71,7 @@
 #include "http_response.h"
 #include "http_server.h"
 #include "middleware.h"
+#include "rate_limit.h"
 #include "streaming.h"
 #include "streaming_session.h"
 #include "websocket_handshake.h"

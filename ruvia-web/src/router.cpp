@@ -31,6 +31,7 @@
 #include "http_request.h"
 #include "http_server.h"
 #include "middleware.h"
+#include "rate_limit.h"
 #include "route_table.h"
 #include "streaming.h"
 #include "task_scope.h"
