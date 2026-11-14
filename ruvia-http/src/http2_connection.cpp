@@ -1947,9 +1947,6 @@ private:
     std::size_t observer_depth_{0};
 };
 
-// RFC 9113 §5.1.1: stream identifiers are 31-bit values.
-inline constexpr std::uint32_t http2_max_stream_id = 0x7fffffffU;
-
 // One compile-time source of truth for every local receive constraint. These values
 // drive both the advertised SETTINGS and the matching session options and fixed
 // capacities; they are intentionally not runtime knobs that can diverge.
@@ -2187,12 +2184,6 @@ private:
         {NGHTTP2_SETTINGS_NO_RFC7540_PRIORITIES, 1},
     }};
 }
-
-// The ALTSVC (RFC 7838 §4) encoder. The size function validates the frame against
-// `max_frame_size` and returns its payload size; the write function fills
-// exactly that many bytes in the caller's destination.
-[[nodiscard]] std::variant<std::size_t, http_connection_advertisement_error> http2_alternative_service_payload_size(std::uint32_t stream_id, std::string_view origin, std::string_view field_value, std::uint32_t max_frame_size);
-void http2_write_alternative_service_payload(std::span<char> payload, std::string_view origin, std::string_view field_value) noexcept;
 
 class http2_local_connection_open final {};
 
@@ -4692,122 +4683,6 @@ http2_submit_status http2_connection::submit_alternative_service_advertisement(s
     };
     return submit_extension_frame(http2_frame_type::alternative_service, stream_id, payload);
 }
-}  // namespace ruvia::detail
-
-namespace ruvia {
-
-namespace {
-using error_type = http_connection_advertisement_error;
-constexpr std::size_t length_prefix_bytes = 2;
-std::size_t length(std::span<const char> bytes_value) {
-    return (static_cast<unsigned char>(bytes_value[0]) << 8) | static_cast<unsigned char>(bytes_value[1]);
-}
-// RFC 7838 §4: ALTSVC on stream 0 carries an origin; on a stream it does not.
-bool is_valid_alternative_service_stream(std::uint32_t stream_id, bool has_origin) {
-    return stream_id <= detail::http2_max_stream_id && (stream_id == 0) == has_origin;
-}
-std::vector<char> make_http2_frame(http2_frame_type type, std::uint32_t stream_id, std::size_t payload_size) {
-    std::vector<char> bytes(http2_frame_header_bytes + payload_size);
-    (void)encode_http2_frame_header(std::span(bytes).first(http2_frame_header_bytes), static_cast<std::uint32_t>(payload_size), type, 0, stream_id);
-    return bytes;
-}
-}  // namespace
-std::variant<http_origin_advertisement, error_type> decode_http_origin_advertisement(std::span<const char> payload_value) {
-    http_origin_advertisement result;
-    while (!payload_value.empty()) {
-        if (payload_value.size() < length_prefix_bytes) {
-            return error_type::malformed_payload;
-        }
-        const auto size = length(payload_value);
-        payload_value = payload_value.subspan(length_prefix_bytes);
-        if (size > payload_value.size()) {
-            return error_type::malformed_payload;
-        }
-        const std::string_view origin(payload_value.data(), size);
-        if (is_valid_http_serialized_origin(origin)) {
-            detail::reserve_geometric(result.origins_, result.origins_.size() + 1);
-            result.origins_.emplace_back(origin);
-        }
-        payload_value = payload_value.subspan(size);
-    }
-    return result;
-}
-std::variant<std::vector<char>, error_type> encode_http2_origin_frame(std::span<const std::string_view> origins, std::uint32_t maximum) {
-    const auto payload_size = detail::http_origin_payload_size(origins, std::min(maximum, http2_max_frame_size));
-    if (payload_size.index() != 0) {
-        return std::get<1>(payload_size);
-    }
-    auto bytes_value = make_http2_frame(http2_frame_type::origin, 0, std::get<0>(payload_size));
-    detail::write_http_origin_payload(std::span(bytes_value).subspan(http2_frame_header_bytes), origins);
-    return bytes_value;
-}
-std::variant<http_alternative_service_advertisement, error_type> decode_http2_alternative_service(std::uint32_t stream_id, std::span<const char> payload_value) {
-    if (payload_value.size() < length_prefix_bytes) {
-        return error_type::malformed_payload;
-    }
-    const auto size = length(payload_value);
-    payload_value = payload_value.subspan(length_prefix_bytes);
-    if (size > payload_value.size()) {
-        return error_type::malformed_payload;
-    }
-    if (!is_valid_alternative_service_stream(stream_id, size != 0)) {
-        return error_type::invalid_stream;
-    }
-    const std::string_view origin(payload_value.data(), size);
-    if (!origin.empty() && !is_valid_http_serialized_origin(origin)) {
-        return error_type::invalid_origin;
-    }
-    const std::string_view value(payload_value.data() + size, payload_value.size() - size);
-    if (!is_valid_http_header_value(value)) {
-        return error_type::invalid_field;
-    }
-    http_alternative_service_advertisement result;
-    result.stream_id_ = stream_id;
-    result.origin_ = origin;
-    result.field_value_ = value;
-    return result;
-}
-std::variant<std::vector<char>, error_type> encode_http2_alternative_service_frame(std::uint32_t stream_id, std::string_view origin, std::string_view value, std::uint32_t maximum) {
-    const auto payload_size = detail::http2_alternative_service_payload_size(stream_id, origin, value, maximum);
-    if (payload_size.index() != 0) {
-        return std::get<1>(payload_size);
-    }
-    auto bytes_value = make_http2_frame(http2_frame_type::alternative_service, stream_id, std::get<0>(payload_size));
-    detail::http2_write_alternative_service_payload(std::span(bytes_value).subspan(http2_frame_header_bytes), origin, value);
-    return bytes_value;
-}
-namespace detail {
-std::variant<std::size_t, error_type> http2_alternative_service_payload_size(std::uint32_t stream_id, std::string_view origin, std::string_view field_value, std::uint32_t max_frame_size) {
-    if (!is_valid_alternative_service_stream(stream_id, !origin.empty())) {
-        return error_type::invalid_stream;
-    }
-    if (!origin.empty() && !is_valid_http_serialized_origin(origin)) {
-        return error_type::invalid_origin;
-    }
-    if (!is_valid_http_header_value(field_value)) {
-        return error_type::invalid_field;
-    }
-    std::size_t remaining = std::min(max_frame_size, http2_max_frame_size);
-    if (!reserve_http_prefixed_origin(remaining, origin) || field_value.size() > remaining) {
-        return error_type::limit;
-    }
-    return length_prefix_bytes + origin.size() + field_value.size();
-}
-void http2_write_alternative_service_payload(std::span<char> payload, std::string_view origin, std::string_view field_value) noexcept {
-    auto* out = write_http_prefixed_origin(payload.data(), origin);
-    if (!field_value.empty()) {
-        std::memcpy(out, field_value.data(), field_value.size());
-    }
-}
-}  // namespace detail
-}  // namespace ruvia
-
-// Submitting a request head as the client: what an outbound :method / :path /
-// :authority and its header section must satisfy before the connection will
-// encode it, for a regular request, a CONNECT tunnel, and the extended CONNECT
-// that carries a websocket handshake.
-
-namespace ruvia::detail {
 
 template <typename prepare_type>
 std::variant<std::uint32_t, http2_request_head_submit_error> http2_connection::submit_local_request_head(http2_end_stream end_stream, const prepare_type& prepare) {

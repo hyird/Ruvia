@@ -2971,6 +2971,39 @@ inline void write_http_origin_payload(std::span<char> payload, std::span<const s
     }
 }
 
+// RFC 9113 §4.1 / §5.1.1: 24-bit frame payload limit and 31-bit stream ID limit.
+inline constexpr std::uint32_t http2_max_frame_payload_size = 16 * 1024 * 1024 - 1;
+inline constexpr std::uint32_t http2_max_stream_id = 0x7fffffffU;
+
+// RFC 7838 §4: ALTSVC on stream 0 carries an origin; on a stream it does not.
+[[nodiscard]] constexpr bool is_valid_alternative_service_stream(std::uint32_t stream_id, bool has_origin) noexcept {
+    return stream_id <= http2_max_stream_id && (stream_id == 0) == has_origin;
+}
+
+[[nodiscard]] inline std::variant<std::size_t, http_connection_advertisement_error> http2_alternative_service_payload_size(std::uint32_t stream_id, std::string_view origin, std::string_view field_value, std::uint32_t max_frame_size) {
+    if (!is_valid_alternative_service_stream(stream_id, !origin.empty())) {
+        return http_connection_advertisement_error::invalid_stream;
+    }
+    if (!origin.empty() && !is_valid_http_serialized_origin(origin)) {
+        return http_connection_advertisement_error::invalid_origin;
+    }
+    if (!is_valid_http_header_value(field_value)) {
+        return http_connection_advertisement_error::invalid_field;
+    }
+    std::size_t remaining = std::min(max_frame_size, http2_max_frame_payload_size);
+    if (!reserve_http_prefixed_origin(remaining, origin) || field_value.size() > remaining) {
+        return http_connection_advertisement_error::limit;
+    }
+    return std::size_t{2} + origin.size() + field_value.size();
+}
+
+inline void http2_write_alternative_service_payload(std::span<char> payload, std::string_view origin, std::string_view field_value) noexcept {
+    auto* out = write_http_prefixed_origin(payload.data(), origin);
+    if (!field_value.empty()) {
+        std::memcpy(out, field_value.data(), field_value.size());
+    }
+}
+
 // Local HTTP message content accounting is distinct from the peer-body accounting
 // stored on the same bidirectional stream. In particular, a server receives request
 // content while independently producing response content.

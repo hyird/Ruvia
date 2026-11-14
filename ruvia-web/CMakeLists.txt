@@ -9,13 +9,20 @@ set(ruvia_web_sources
     src/middleware.cpp
     src/router.cpp
     src/streaming.cpp
+    src/tls.cpp
     src/worker_connections.cpp
 )
 if(RUVIA_ENABLE_HTTP2)
-    list(APPEND ruvia_web_sources src/http2_session.cpp)
+    list(APPEND ruvia_web_sources
+        src/http2_client.cpp
+        src/http2_session.cpp
+    )
 endif()
 if(RUVIA_ENABLE_HTTP3)
-    list(APPEND ruvia_web_sources src/http3_session.cpp)
+    list(APPEND ruvia_web_sources
+        src/http3_client.cpp
+        src/http3_session.cpp
+    )
 endif()
 # Keep the shared database sources whenever either driver is enabled; only the
 # driver-specific translation units and disabled features are omitted.
@@ -34,7 +41,10 @@ if(RUVIA_ENABLE_POSTGRESQL)
 endif()
 # The database query-result cache stores rows in Redis.
 if(RUVIA_ENABLE_REDIS)
-    list(APPEND ruvia_web_sources src/redis_pool.cpp)
+    list(APPEND ruvia_web_sources
+        src/redis_pool.cpp
+        src/redis_session.cpp
+    )
 endif()
 if(RUVIA_ENABLE_JWT)
     list(APPEND ruvia_web_sources src/jwt.cpp)
