@@ -77,8 +77,7 @@ void append_cookie_request_pair(string& header_value, std::string_view name, std
     const auto start = header_value.size();
     const std::size_t separator_bytes = start == 0 ? 0 : 2;
     const auto remaining = header_value.max_size() - start;
-    if (remaining < separator_bytes + 1 || name.size() > remaining - separator_bytes - 1 ||
-        value.size() > remaining - separator_bytes - 1 - name.size()) {
+    if (remaining < separator_bytes + 1 || name.size() > remaining - separator_bytes - 1 || value.size() > remaining - separator_bytes - 1 - name.size()) {
         throw std::length_error("cookie request header length is not representable");
     }
     const auto borrowed_offset = [&](std::string_view input) -> std::optional<std::size_t> {
@@ -127,8 +126,7 @@ void append_cookie_request_pair(string& header_value, std::string_view name, std
 [[nodiscard]] std::optional<cookie_prefix> cookie_name_prefix(std::string_view name) noexcept;
 // RFC 6265bis 4.1.3: __Secure- requires Secure; __Host- also requires Path=/
 // and no Domain. `path` is the Path attribute value, empty when absent.
-[[nodiscard]] bool cookie_prefix_requirements_met(
-    cookie_prefix prefix, bool secure, std::string_view path, std::string_view domain) noexcept;
+[[nodiscard]] bool cookie_prefix_requirements_met(cookie_prefix prefix, bool secure, std::string_view path, std::string_view domain) noexcept;
 [[nodiscard]] std::string_view http_cookie_prefix_text(cookie_prefix prefix) noexcept;
 
 struct cookie_options final {
@@ -158,11 +156,9 @@ template <typename visitor_type>
 inline void http_visit_cookie_pairs(std::string_view value, visitor_type&& visitor) {
     while (!value.empty()) {
         const auto semicolon = value.find(';');
-        const auto part = http_trim_ows(
-            semicolon == std::string_view::npos ? value : value.substr(0, semicolon));
+        const auto part = http_trim_ows(semicolon == std::string_view::npos ? value : value.substr(0, semicolon));
         const auto equals = part.find('=');
-        if (equals != std::string_view::npos &&
-            !visitor(http_trim_ows(part.substr(0, equals)), http_trim_ows(part.substr(equals + 1)))) {
+        if (equals != std::string_view::npos && !visitor(http_trim_ows(part.substr(0, equals)), http_trim_ows(part.substr(equals + 1)))) {
             return;
         }
         if (semicolon == std::string_view::npos) {
@@ -184,8 +180,7 @@ public:
     set_cookie_plan(std::string_view name, std::string_view value, const cookie_options& options);
 
     template <typename name_type, typename value_type>
-        requires(detail::http_temporary_owning_char_string<name_type> ||
-                    detail::http_temporary_owning_char_string<value_type>)
+        requires(detail::http_temporary_owning_char_string<name_type> || detail::http_temporary_owning_char_string<value_type>)
     set_cookie_plan(name_type&&, value_type&&, const cookie_options&) = delete;
 
     set_cookie_plan(std::string_view, std::string_view, cookie_options&&) = delete;
@@ -254,23 +249,15 @@ public:
 
     void add_configured_cookie(std::string_view name, std::string_view value);
 
-    bool absorb_set_cookie(std::string_view request_target, std::string_view set_cookie_value,
-        std::chrono::system_clock::time_point now = std::chrono::system_clock::now());
+    bool absorb_set_cookie(std::string_view request_target, std::string_view set_cookie_value, std::chrono::system_clock::time_point now = std::chrono::system_clock::now());
 
-    void retain_response_cookies(std::string_view request_target,
-        std::span<const http_header> headers,
-        std::chrono::system_clock::time_point now = std::chrono::system_clock::now());
-    void retain_response_cookies(std::string_view request_target,
-        std::span<const http_header_view> headers,
-        std::chrono::system_clock::time_point now = std::chrono::system_clock::now());
+    void retain_response_cookies(std::string_view request_target, std::span<const http_header> headers, std::chrono::system_clock::time_point now = std::chrono::system_clock::now());
+    void retain_response_cookies(std::string_view request_target, std::span<const http_header_view> headers, std::chrono::system_clock::time_point now = std::chrono::system_clock::now());
 
-    [[nodiscard]] std::string cookie_header(std::string_view request_target,
-        bool include_received = true,
-        std::chrono::system_clock::time_point now = std::chrono::system_clock::now());
+    [[nodiscard]] std::string cookie_header(std::string_view request_target, bool include_received = true, std::chrono::system_clock::time_point now = std::chrono::system_clock::now());
 
     template <typename fn_type>
-    void visit_matching_cookies(std::string_view request_target, bool include_received,
-        std::chrono::system_clock::time_point now, fn_type&& fn) {
+    void visit_matching_cookies(std::string_view request_target, bool include_received, std::chrono::system_clock::time_point now, fn_type&& fn) {
         if (cookies_.empty()) {
             return;
         }
@@ -306,23 +293,20 @@ public:
     }
     void clear() noexcept;
 
-    [[nodiscard]] static bool cookie_domain_matches(
-        std::string_view host, std::string_view domain) noexcept;
-    [[nodiscard]] static bool cookie_path_matches(
-        std::string_view request_path, std::string_view cookie_path) noexcept;
+    [[nodiscard]] static bool cookie_domain_matches(std::string_view host, std::string_view domain) noexcept;
+    [[nodiscard]] static bool cookie_path_matches(std::string_view request_path, std::string_view cookie_path) noexcept;
     [[nodiscard]] static std::string_view request_path_only(std::string_view target) noexcept;
     [[nodiscard]] static std::string_view default_cookie_path(std::string_view target) noexcept;
 
 private:
     struct stored_cookie final {
-        stored_cookie(std::string_view name, std::string_view value)
-            : stored_cookie(name, value, "/", {}) {}
-        stored_cookie(std::string_view name, std::string_view value,
-            std::string_view path, std::string_view domain)
-            : name_(name),
-              value_(value),
-              path_(path),
-              domain_(domain) {}
+        stored_cookie(std::string_view name, std::string_view value) :
+            stored_cookie(name, value, "/", {}) {}
+        stored_cookie(std::string_view name, std::string_view value, std::string_view path, std::string_view domain) :
+            name_(name),
+            value_(value),
+            path_(path),
+            domain_(domain) {}
 
         std::string name_;
         std::string value_;
@@ -345,16 +329,12 @@ private:
         bool expired_{false};
     };
 
-    [[nodiscard]] std::optional<received_cookie> accept_set_cookie_view(
-        std::string_view request_target, std::string_view set_cookie_value,
-        std::chrono::system_clock::time_point now) const;
+    [[nodiscard]] std::optional<received_cookie> accept_set_cookie_view(std::string_view request_target, std::string_view set_cookie_value, std::chrono::system_clock::time_point now) const;
     bool store_received_cookie(const received_cookie& cookie);
     void reserve_cookie_slot();
     void discard_expired(std::chrono::system_clock::time_point now);
-    [[nodiscard]] static std::size_t entry_storage_bytes(std::string_view name,
-        std::string_view value, std::string_view path, std::string_view domain) noexcept;
-    [[nodiscard]] bool has_capacity(
-        std::size_t replaced_bytes, std::size_t replacement_bytes, bool adding) const noexcept;
+    [[nodiscard]] static std::size_t entry_storage_bytes(std::string_view name, std::string_view value, std::string_view path, std::string_view domain) noexcept;
+    [[nodiscard]] bool has_capacity(std::size_t replaced_bytes, std::size_t replacement_bytes, bool adding) const noexcept;
     void recompute_next_expiry() noexcept;
 
     std::string host_;
@@ -432,9 +412,9 @@ public:
 private:
     friend std::optional<http_set_cookie_view> parse_set_cookie(std::string_view value) noexcept;
 
-    constexpr http_set_cookie_view(std::string_view name, std::string_view value) noexcept
-        : name_(name),
-          value_(value) {}
+    constexpr http_set_cookie_view(std::string_view name, std::string_view value) noexcept :
+        name_(name),
+        value_(value) {}
 
     constexpr void set(http_set_cookie_attribute attribute) noexcept {
         attributes_ |= static_cast<std::uint8_t>(attribute);
@@ -572,8 +552,7 @@ public:
     [[nodiscard]] constexpr std::size_t private_field_count() const noexcept {
         return is_unqualified_private() ? 0U : private_fields_.count_;
     }
-    [[nodiscard]] constexpr std::string_view private_field(
-        std::size_t index) const& noexcept RUVIA_LIFETIMEBOUND {
+    [[nodiscard]] constexpr std::string_view private_field(std::size_t index) const& noexcept RUVIA_LIFETIMEBOUND {
         return is_unqualified_private() ? std::string_view{} : private_fields_.at(index);
     }
     std::string_view private_field(std::size_t) const&& = delete;
@@ -582,8 +561,7 @@ public:
     [[nodiscard]] constexpr std::size_t no_cache_field_count() const noexcept {
         return is_unqualified_no_cache() ? 0U : no_cache_fields_.count_;
     }
-    [[nodiscard]] constexpr std::string_view no_cache_field(
-        std::size_t index) const& noexcept RUVIA_LIFETIMEBOUND {
+    [[nodiscard]] constexpr std::string_view no_cache_field(std::size_t index) const& noexcept RUVIA_LIFETIMEBOUND {
         return is_unqualified_no_cache() ? std::string_view{} : no_cache_fields_.at(index);
     }
     std::string_view no_cache_field(std::size_t) const&& = delete;
@@ -591,11 +569,9 @@ public:
 
 private:
     friend class cache_control_field_parser;
-    friend std::optional<cache_control> parse_targeted_cache_control(
-        std::string_view value) noexcept;
+    friend std::optional<cache_control> parse_targeted_cache_control(std::string_view value) noexcept;
     template <typename input_type>
-    friend std::optional<cache_control> parse_targeted_cache_control_from_input(
-        input_type input) noexcept;
+    friend std::optional<cache_control> parse_targeted_cache_control_from_input(input_type input) noexcept;
 
     static constexpr std::size_t max_nominated_fields = 16;
     static constexpr std::size_t max_nominated_field_bytes = 256;
@@ -672,21 +648,13 @@ class http_vary_spec;
 
 namespace detail {
 [[nodiscard]] cache_control parse_cache_control_headers(http_header_range_view headers) noexcept;
-[[nodiscard]] std::optional<cache_control> parse_targeted_cache_control_headers(
-    http_header_range_view headers, std::string_view header_name) noexcept;
-[[nodiscard]] targeted_cache_control_selection resolve_targeted_cache_control_headers(
-    http_header_range_view headers, std::span<const std::string_view> target_headers) noexcept;
-[[nodiscard]] std::string rewrite_http_cache_control_max_age_headers(
-    http_header_range_view headers, std::uint64_t client_max_age);
-[[nodiscard]] std::optional<std::string> format_http_vary_cache_key_headers(
-    const http_vary_spec& vary, http_header_range_view request_headers);
-[[nodiscard]] std::uint64_t compute_http_cache_age_headers(
-    http_header_range_view response_headers, std::time_t request_time, std::time_t response_time,
-    std::time_t now) noexcept;
-void merge_http_304_response_headers_into(
-    std::vector<http_header>& cached_headers, http_header_range_view not_modified_headers);
-void merge_http_304_response_headers_into(
-    http_response_headers& cached_headers, http_header_range_view not_modified_headers);
+[[nodiscard]] std::optional<cache_control> parse_targeted_cache_control_headers(http_header_range_view headers, std::string_view header_name) noexcept;
+[[nodiscard]] targeted_cache_control_selection resolve_targeted_cache_control_headers(http_header_range_view headers, std::span<const std::string_view> target_headers) noexcept;
+[[nodiscard]] std::string rewrite_http_cache_control_max_age_headers(http_header_range_view headers, std::uint64_t client_max_age);
+[[nodiscard]] std::optional<std::string> format_http_vary_cache_key_headers(const http_vary_spec& vary, http_header_range_view request_headers);
+[[nodiscard]] std::uint64_t compute_http_cache_age_headers(http_header_range_view response_headers, std::time_t request_time, std::time_t response_time, std::time_t now) noexcept;
+void merge_http_304_response_headers_into(std::vector<http_header>& cached_headers, http_header_range_view not_modified_headers);
+void merge_http_304_response_headers_into(http_response_headers& cached_headers, http_header_range_view not_modified_headers);
 }  // namespace detail
 
 // Parse a Cache-Control field value (a single line, or several joined by commas).
@@ -699,12 +667,9 @@ template <http_header_field_source headers_type>
 // RFC 9213 Targeted HTTP Cache Control (e.g. CDN-Cache-Control).
 // Parses an RFC 8941 Structured Field Dictionary of cache directives; returns
 // std::nullopt when absent, empty, or syntactically invalid per RFC 9213 §2.1.
-[[nodiscard]] std::optional<cache_control> parse_targeted_cache_control(
-    std::string_view value) noexcept;
+[[nodiscard]] std::optional<cache_control> parse_targeted_cache_control(std::string_view value) noexcept;
 template <http_header_field_source headers_type>
-[[nodiscard]] std::optional<cache_control> parse_targeted_cache_control(
-    const headers_type& headers,
-    std::string_view header_name = "CDN-Cache-Control") noexcept {
+[[nodiscard]] std::optional<cache_control> parse_targeted_cache_control(const headers_type& headers, std::string_view header_name = "CDN-Cache-Control") noexcept {
     return detail::parse_targeted_cache_control_headers(headers, header_name);
 }
 
@@ -712,9 +677,7 @@ template <http_header_field_source headers_type>
 // order and returns the first present, valid non-empty targeted policy; falls
 // back to standard Cache-Control when no targeted header matches.
 template <http_header_field_source headers_type>
-[[nodiscard]] targeted_cache_control_selection resolve_targeted_cache_control(
-    const headers_type& headers,
-    std::span<const std::string_view> target_headers) noexcept {
+[[nodiscard]] targeted_cache_control_selection resolve_targeted_cache_control(const headers_type& headers, std::span<const std::string_view> target_headers) noexcept {
     return detail::resolve_targeted_cache_control_headers(headers, target_headers);
 }
 
@@ -722,22 +685,16 @@ template <http_header_field_source headers_type>
 // Returns false if unqualified `private` or `no-store` forbids shared-cache
 // storage; returns true when storable (after stripping any field-qualified
 // `private="field1, field2"` headers in place).
-bool strip_http_cache_private_headers(
-    std::vector<http_header>& headers, const cache_control& control) noexcept;
-bool strip_http_cache_private_headers(
-    http_response_headers& headers, const cache_control& control);
-bool strip_http_cache_private_headers(
-    http_response& response, const cache_control& control);
+bool strip_http_cache_private_headers(std::vector<http_header>& headers, const cache_control& control) noexcept;
+bool strip_http_cache_private_headers(http_response_headers& headers, const cache_control& control);
+bool strip_http_cache_private_headers(http_response& response, const cache_control& control);
 bool strip_http_cache_private_headers(std::vector<http_header>& headers) noexcept;
 bool strip_http_cache_private_headers(http_response_headers& headers);
 bool strip_http_cache_private_headers(http_response& response);
 
-bool strip_http_cache_no_cache_headers(
-    std::vector<http_header>& headers, const cache_control& control) noexcept;
-bool strip_http_cache_no_cache_headers(
-    http_response_headers& headers, const cache_control& control);
-bool strip_http_cache_no_cache_headers(
-    http_response& response, const cache_control& control);
+bool strip_http_cache_no_cache_headers(std::vector<http_header>& headers, const cache_control& control) noexcept;
+bool strip_http_cache_no_cache_headers(http_response_headers& headers, const cache_control& control);
+bool strip_http_cache_no_cache_headers(http_response& response, const cache_control& control);
 [[nodiscard]] bool http_cache_control_has_no_transform(std::string_view field_value) noexcept;
 template <http_header_field_source headers_type>
 [[nodiscard]] bool http_cache_control_has_no_transform(const headers_type& headers) noexcept {
@@ -753,19 +710,14 @@ struct http_cache_control_directive_view final {
 // Rewrites Cache-Control to preserve all directives except max-age and s-maxage
 // while setting client max-age=<client_max_age>. Header-block overloads also
 // clear Expires so the rewritten max-age governs client freshness.
-[[nodiscard]] std::string rewrite_http_cache_control_max_age(
-    std::string_view field_value, std::uint64_t client_max_age);
+[[nodiscard]] std::string rewrite_http_cache_control_max_age(std::string_view field_value, std::uint64_t client_max_age);
 template <http_header_field_source headers_type>
-[[nodiscard]] std::string rewrite_http_cache_control_max_age(
-    const headers_type& headers, std::uint64_t client_max_age) {
+[[nodiscard]] std::string rewrite_http_cache_control_max_age(const headers_type& headers, std::uint64_t client_max_age) {
     return detail::rewrite_http_cache_control_max_age_headers(headers, client_max_age);
 }
-void rewrite_http_response_cache_max_age(
-    std::vector<http_header>& response_headers, std::uint64_t client_max_age);
-void rewrite_http_response_cache_max_age(
-    http_response_headers& response_headers, std::uint64_t client_max_age);
-void rewrite_http_response_cache_max_age(
-    http_response& response, std::uint64_t client_max_age);
+void rewrite_http_response_cache_max_age(std::vector<http_header>& response_headers, std::uint64_t client_max_age);
+void rewrite_http_response_cache_max_age(http_response_headers& response_headers, std::uint64_t client_max_age);
+void rewrite_http_response_cache_max_age(http_response& response, std::uint64_t client_max_age);
 
 // Parsed multi-line Vary specification (RFC 9111 section 4.1). Field names are
 // normalized to lowercase, deduplicated, and sorted in fixed ASCII order.
@@ -808,14 +760,12 @@ template <http_header_field_source headers_type>
 // Normalizes the request header values nominated by `vary` in canonical field
 // order for cache-key generation. Returns std::nullopt when vary.is_wildcard().
 template <http_header_field_source headers_type>
-[[nodiscard]] std::optional<std::string> format_http_vary_cache_key(
-    const http_vary_spec& vary, const headers_type& request_headers) {
+[[nodiscard]] std::optional<std::string> format_http_vary_cache_key(const http_vary_spec& vary, const headers_type& request_headers) {
     return detail::format_http_vary_cache_key_headers(vary, request_headers);
 }
 
 template <http_header_field_source first_type, http_header_field_source second_type>
-[[nodiscard]] bool http_vary_requests_match(const http_vary_spec& vary,
-    const first_type& first_request, const second_type& second_request) {
+[[nodiscard]] bool http_vary_requests_match(const http_vary_spec& vary, const first_type& first_request, const second_type& second_request) {
     const auto first_key = format_http_vary_cache_key(vary, first_request);
     const auto second_key = format_http_vary_cache_key(vary, second_request);
     return first_key.has_value() && second_key.has_value() && *first_key == *second_key;
@@ -831,36 +781,20 @@ struct http_cache_age_input final {
 
 [[nodiscard]] std::optional<std::uint64_t> parse_http_age(std::string_view field_value) noexcept;
 
-[[nodiscard]] constexpr std::uint64_t compute_http_cache_age(
-    const http_cache_age_input& input) noexcept {
+[[nodiscard]] constexpr std::uint64_t compute_http_cache_age(const http_cache_age_input& input) noexcept {
     const auto add_saturating = [](std::uint64_t left, std::uint64_t right) constexpr noexcept {
         constexpr auto maximum = (std::numeric_limits<std::uint64_t>::max)();
         return left > maximum - right ? maximum : left + right;
     };
-    const std::uint64_t apparent_age =
-        (input.date_value_.has_value() && input.response_time_ > *input.date_value_)
-            ? static_cast<std::uint64_t>(input.response_time_) -
-                  static_cast<std::uint64_t>(*input.date_value_)
-            : 0U;
-    const std::uint64_t response_delay =
-        input.response_time_ > input.request_time_
-            ? static_cast<std::uint64_t>(input.response_time_) -
-                  static_cast<std::uint64_t>(input.request_time_)
-            : 0U;
-    const std::uint64_t corrected_age_value =
-        add_saturating(input.age_value_.value_or(0U), response_delay);
+    const std::uint64_t apparent_age = (input.date_value_.has_value() && input.response_time_ > *input.date_value_) ? static_cast<std::uint64_t>(input.response_time_) - static_cast<std::uint64_t>(*input.date_value_) : 0U;
+    const std::uint64_t response_delay = input.response_time_ > input.request_time_ ? static_cast<std::uint64_t>(input.response_time_) - static_cast<std::uint64_t>(input.request_time_) : 0U;
+    const std::uint64_t corrected_age_value = add_saturating(input.age_value_.value_or(0U), response_delay);
     const std::uint64_t corrected_initial_age = (std::max)(apparent_age, corrected_age_value);
-    const std::uint64_t resident_time =
-        input.now_ > input.response_time_
-            ? static_cast<std::uint64_t>(input.now_) -
-                  static_cast<std::uint64_t>(input.response_time_)
-            : 0U;
+    const std::uint64_t resident_time = input.now_ > input.response_time_ ? static_cast<std::uint64_t>(input.now_) - static_cast<std::uint64_t>(input.response_time_) : 0U;
     return add_saturating(corrected_initial_age, resident_time);
 }
 
-[[nodiscard]] constexpr std::uint64_t compute_http_cache_age(
-    std::optional<std::time_t> date_value, std::optional<std::uint64_t> age_value,
-    std::time_t request_time, std::time_t response_time, std::time_t now) noexcept {
+[[nodiscard]] constexpr std::uint64_t compute_http_cache_age(std::optional<std::time_t> date_value, std::optional<std::uint64_t> age_value, std::time_t request_time, std::time_t response_time, std::time_t now) noexcept {
     return compute_http_cache_age(http_cache_age_input{
         .date_value_ = date_value,
         .age_value_ = age_value,
@@ -871,10 +805,8 @@ struct http_cache_age_input final {
 }
 
 template <http_header_field_source headers_type>
-[[nodiscard]] std::uint64_t compute_http_cache_age(const headers_type& response_headers,
-    std::time_t request_time, std::time_t response_time, std::time_t now) noexcept {
-    return detail::compute_http_cache_age_headers(
-        response_headers, request_time, response_time, now);
+[[nodiscard]] std::uint64_t compute_http_cache_age(const headers_type& response_headers, std::time_t request_time, std::time_t response_time, std::time_t now) noexcept {
+    return detail::compute_http_cache_age_headers(response_headers, request_time, response_time, now);
 }
 
 // RFC 9110 section 15.4.5 and RFC 9111 section 4.3.4: representation metadata
@@ -887,8 +819,7 @@ void sanitize_http_304_response_headers(http_response_headers& headers);
 void sanitize_http_304_response_headers(http_response& response);
 
 template <http_header_field_source headers_type>
-void merge_http_304_response_headers(
-    std::vector<http_header>& cached_headers, const headers_type& not_modified_headers) {
+void merge_http_304_response_headers(std::vector<http_header>& cached_headers, const headers_type& not_modified_headers) {
     if constexpr (std::same_as<std::remove_cvref_t<headers_type>, std::vector<http_header>>) {
         if (&cached_headers == &not_modified_headers) {
             auto copy = not_modified_headers;
@@ -899,8 +830,7 @@ void merge_http_304_response_headers(
     detail::merge_http_304_response_headers_into(cached_headers, not_modified_headers);
 }
 template <http_header_field_source headers_type>
-void merge_http_304_response_headers(
-    http_response_headers& cached_headers, const headers_type& not_modified_headers) {
+void merge_http_304_response_headers(http_response_headers& cached_headers, const headers_type& not_modified_headers) {
     if constexpr (std::same_as<std::remove_cvref_t<headers_type>, http_response_headers>) {
         if (&cached_headers == &not_modified_headers) {
             auto copy = not_modified_headers.clone();
@@ -910,8 +840,7 @@ void merge_http_304_response_headers(
     }
     detail::merge_http_304_response_headers_into(cached_headers, not_modified_headers);
 }
-void merge_http_304_response_headers(
-    http_response& cached_response, const http_response& not_modified_response);
+void merge_http_304_response_headers(http_response& cached_response, const http_response& not_modified_response);
 
 }  // namespace ruvia
 
@@ -924,8 +853,7 @@ struct http_conditional_method_plan final {
     bool evaluates_range_;
 };
 
-[[nodiscard]] inline constexpr http_conditional_method_plan get_http_conditional_method_plan(
-    http_known_method method) noexcept {
+[[nodiscard]] inline constexpr http_conditional_method_plan get_http_conditional_method_plan(http_known_method method) noexcept {
     switch (method) {
         case http_known_method::get:
             return {true, true, true, true};
@@ -982,21 +910,17 @@ struct http_etag_preconditions final {
     http_etag_field_condition if_none_match_;
 };
 
-[[nodiscard]] http_etag_preconditions get_http_etag_preconditions(
-    const http_request& request, std::string_view etag) noexcept;
+[[nodiscard]] http_etag_preconditions get_http_etag_preconditions(const http_request& request, std::string_view etag) noexcept;
 
 // If-Modified-Since / If-Unmodified-Since: the "<=" comparisons of RFC 9110
 // section 13.1.3 and 13.1.4. A malformed date is ignored.
-[[nodiscard]] bool http_date_not_modified(
-    std::string_view header_value, std::time_t modified_seconds) noexcept;
+[[nodiscard]] bool http_date_not_modified(std::string_view header_value, std::time_t modified_seconds) noexcept;
 
-[[nodiscard]] bool http_date_unmodified(
-    std::string_view header_value, std::time_t modified_seconds) noexcept;
+[[nodiscard]] bool http_date_unmodified(std::string_view header_value, std::time_t modified_seconds) noexcept;
 
 // Whether an If-Range still authorises a range response. A date validator here
 // must match EXACTLY, unlike If-Modified-Since.
-[[nodiscard]] bool http_if_range_allows(std::string_view header_value, std::string_view etag,
-    std::optional<std::time_t> modified_seconds, bool date_validator_strong) noexcept;
+[[nodiscard]] bool http_if_range_allows(std::string_view header_value, std::string_view etag, std::optional<std::time_t> modified_seconds, bool date_validator_strong) noexcept;
 
 // Single-value RFC 9110 §8.8.2 entity-tag validation, comparison, and weakening.
 [[nodiscard]] bool is_valid_http_entity_tag(std::string_view value) noexcept;
@@ -1047,8 +971,7 @@ public:
 
     [[nodiscard]] std::vector<std::string> non_standard_options() const;
 
-    [[nodiscard]] std::string rebuild_connection_field(
-        bool retain_upgrade = false, bool include_non_standard = true) const;
+    [[nodiscard]] std::string rebuild_connection_field(bool retain_upgrade = false, bool include_non_standard = true) const;
 
 private:
     void update_header_range(detail::http_header_range_view headers);
@@ -1060,11 +983,9 @@ private:
     bool has_te_{false};
 };
 
-[[nodiscard]] http_connection_nominated_fields parse_http_connection_nominated_fields(
-    std::string_view connection_field_value);
+[[nodiscard]] http_connection_nominated_fields parse_http_connection_nominated_fields(std::string_view connection_field_value);
 template <http_header_field_source headers_type>
-[[nodiscard]] http_connection_nominated_fields parse_http_connection_nominated_fields(
-    const headers_type& headers) {
+[[nodiscard]] http_connection_nominated_fields parse_http_connection_nominated_fields(const headers_type& headers) {
     http_connection_nominated_fields nominated;
     nominated.update_headers(headers);
     return nominated;
@@ -1079,11 +1000,9 @@ template <http_header_field_source headers_type>
 // protocol hop-by-hop field names).
 [[nodiscard]] bool is_http_standard_connection_option(std::string_view option) noexcept;
 
-[[nodiscard]] bool is_http_hop_by_hop_or_nominated_field(std::string_view field_name,
-    const http_connection_nominated_fields& nominated, bool retain_upgrade = false) noexcept;
+[[nodiscard]] bool is_http_hop_by_hop_or_nominated_field(std::string_view field_name, const http_connection_nominated_fields& nominated, bool retain_upgrade = false) noexcept;
 
-[[nodiscard]] bool is_http_hop_by_hop_trailer_field(std::string_view field_name,
-    const http_connection_nominated_fields& nominated = http_connection_nominated_fields{}) noexcept;
+[[nodiscard]] bool is_http_hop_by_hop_trailer_field(std::string_view field_name, const http_connection_nominated_fields& nominated = http_connection_nominated_fields{}) noexcept;
 
 [[nodiscard]] bool is_forbidden_http_request_trailer_field_name(std::string_view field_name) noexcept;
 [[nodiscard]] bool is_forbidden_http_response_trailer_field_name(std::string_view field_name) noexcept;
@@ -1122,9 +1041,9 @@ class http_cors_preflight_result final {
 public:
     http_cors_preflight_result() noexcept = default;
 
-    http_cors_preflight_result(bool accepted, std::vector<http_header> headers) noexcept
-        : headers_(std::move(headers)),
-          accepted_(accepted) {}
+    http_cors_preflight_result(bool accepted, std::vector<http_header> headers) noexcept :
+        headers_(std::move(headers)),
+        accepted_(accepted) {}
 
     [[nodiscard]] constexpr bool accepted() const noexcept {
         return accepted_;
@@ -1168,20 +1087,15 @@ public:
     [[nodiscard]] bool allows_method(std::string_view method) const noexcept;
     [[nodiscard]] bool allows_request_header(std::string_view name) const noexcept;
 
-    [[nodiscard]] http_cors_preflight_result evaluate_preflight(
-        http_cors_preflight_input input) const;
-    [[nodiscard]] http_cors_preflight_result evaluate_preflight(
-        const http_request& request) const;
+    [[nodiscard]] http_cors_preflight_result evaluate_preflight(http_cors_preflight_input input) const;
+    [[nodiscard]] http_cors_preflight_result evaluate_preflight(const http_request& request) const;
 
     // Removes controlled Access-Control-* headers from the existing response,
     // writes computed CORS headers when the origin is permitted, and merges
     // Vary tokens (such as Origin) without duplicates.
-    bool rewrite_response_headers(
-        borrowed_text request_origin, std::vector<http_header>& response_headers) const;
-    bool rewrite_response_headers(
-        borrowed_text request_origin, http_response_headers& response_headers) const;
-    bool rewrite_response_headers(
-        borrowed_text request_origin, http_response& response) const;
+    bool rewrite_response_headers(borrowed_text request_origin, std::vector<http_header>& response_headers) const;
+    bool rewrite_response_headers(borrowed_text request_origin, http_response_headers& response_headers) const;
+    bool rewrite_response_headers(borrowed_text request_origin, http_response& response) const;
     // Applies server-side CORS headers (including OPTIONS preflight and Allow
     // promotion) without overwriting headers already set by the route handler.
     bool apply_response_headers(const http_request& request, http_response& response) const;
@@ -1210,8 +1124,7 @@ private:
 
 [[nodiscard]] bool is_http_cors_controlled_response_header(std::string_view name) noexcept;
 
-void merge_http_vary_tokens(
-    std::vector<http_header>& headers, std::span<const std::string_view> tokens);
+void merge_http_vary_tokens(std::vector<http_header>& headers, std::span<const std::string_view> tokens);
 void merge_http_vary_token(std::vector<http_header>& headers, std::string_view token);
 
 }  // namespace ruvia

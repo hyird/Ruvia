@@ -68,18 +68,18 @@ TEST(Ruvia, auto_https_redirect_points_cleartext_requests_at_the_https_service) 
             .tls_ = {.identity_ = {.certificate_chain_file_ = identity.ca_file_, .private_key_file_ = private_key}},
             .auto_https_redirect_ = true,
         })
-        .on_start([] { started.release(); });
+        .on_start([] {
+        started.release();
+    });
     ruvia::test::app_run runner(app);
     const bool ready = started.try_acquire_for(10s);
     EXPECT_TRUE(ready);
     if (ready) {
         const auto https_port = std::string(std::to_string(https_endpoint.port()));
 
-        const auto redirected = exchange(io, http_endpoint,
-            "GET /docs/page?lang=en HTTP/1.1\r\nHost: example.test:8080\r\n\r\n");
+        const auto redirected = exchange(io, http_endpoint, "GET /docs/page?lang=en HTTP/1.1\r\nHost: example.test:8080\r\n\r\n");
         EXPECT_TRUE(redirected.starts_with("HTTP/1.1 308 "));
-        EXPECT_TRUE(redirected.find(std::string("\r\nLocation: https://example.test:") + https_port + "/docs/page?lang=en\r\n") !=
-                    std::string::npos);
+        EXPECT_TRUE(redirected.find(std::string("\r\nLocation: https://example.test:") + https_port + "/docs/page?lang=en\r\n") != std::string::npos);
 
         // RFC 9112 §3.2.2: an absolute-form target names the host, so an
         // HTTP/1.0 request needs no Host field to be redirected.
@@ -88,8 +88,7 @@ TEST(Ruvia, auto_https_redirect_points_cleartext_requests_at_the_https_service) 
         EXPECT_TRUE(absolute.find(std::string("\r\nLocation: https://example.com:") + https_port + "/x?y\r\n") != std::string::npos);
 
         error_handler_calls = 0;
-        const auto refused = exchange(io, http_endpoint,
-            "GET /docs/page HTTP/1.1\r\nHost: example.test\r\nAccept-Encoding: identity;q=0, *;q=0\r\n\r\n");
+        const auto refused = exchange(io, http_endpoint, "GET /docs/page HTTP/1.1\r\nHost: example.test\r\nAccept-Encoding: identity;q=0, *;q=0\r\n\r\n");
         EXPECT_TRUE(refused.starts_with("HTTP/1.1 406 "));
         EXPECT_TRUE(refused.find("Location:") == std::string::npos);
         EXPECT_TRUE(refused.ends_with("rejected"));

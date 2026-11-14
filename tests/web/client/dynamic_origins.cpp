@@ -56,12 +56,12 @@ struct observed_configuration final {
 // pending until its client closes the transport.
 class peer final {
 public:
-    peer(asio::io_context& io, const worker_ref& worker, std::span<const std::string_view> replies)
-        : acceptor_(io, {asio::ip::make_address("127.0.0.1"), 0}),
-          socket_(io),
-          replies_(replies),
-          received_(worker),
-          finished_(worker) {
+    peer(asio::io_context& io, const worker_ref& worker, std::span<const std::string_view> replies) :
+        acceptor_(io, {asio::ip::make_address("127.0.0.1"), 0}),
+        socket_(io),
+        replies_(replies),
+        received_(worker),
+        finished_(worker) {
         asio::co_spawn(io, serve(), [this](std::exception_ptr failure) {
             failure_ = std::move(failure);
             complete_ = true;
@@ -107,8 +107,7 @@ private:
         socket_ = co_await acceptor_.async_accept(asio::use_awaitable);
         std::string input;
         for (const auto reply : replies_) {
-            const auto count = co_await asio::async_read_until(socket_, asio::dynamic_buffer(input),
-                "\r\n\r\n", asio::use_awaitable);
+            const auto count = co_await asio::async_read_until(socket_, asio::dynamic_buffer(input), "\r\n\r\n", asio::use_awaitable);
             requests_.emplace_back(input.substr(0, count));
             input.erase(0, count);
             received_.notify();
@@ -118,8 +117,7 @@ private:
         }
         std::array<char, 1> trailing;
         std::error_code error;
-        (void)co_await socket_.async_read_some(asio::buffer(trailing),
-            asio::redirect_error(asio::use_awaitable, error));
+        (void)co_await socket_.async_read_some(asio::buffer(trailing), asio::redirect_error(asio::use_awaitable, error));
         client_closed_ = error == asio::error::eof || error == asio::error::connection_reset;
         if (!client_closed_) {
             throw std::runtime_error("HTTP peer expected client transport retirement");
@@ -218,8 +216,7 @@ TEST(Ruvia, http_client_dynamic_origins_preserve_other_pool_connections_and_cook
     auto& io = ruvia::test::new_test_io_context();
     auto attachment = ruvia::attach_event_loop(io);
     const auto loop = attachment.loop();
-    constexpr std::string_view reply =
-        "HTTP/1.1 200 OK\r\nContent-Length: 0\r\nSet-Cookie: stable=1; Path=/\r\n\r\n";
+    constexpr std::string_view reply = "HTTP/1.1 200 OK\r\nContent-Length: 0\r\nSet-Cookie: stable=1; Path=/\r\n\r\n";
     const std::array replies{reply, reply};
     ruvia::test::dynamic_origin_tests::peer peer(io, loop.worker(), replies);
     const auto url = peer.url();
@@ -291,9 +288,7 @@ TEST(Ruvia, http_client_redirect_policy_can_register_an_origin_and_remains_fail_
     ruvia::test::dynamic_origin_tests::peer source(io, loop.worker(), source_replies);
     const auto source_url = source.url();
     const auto run = [&]() -> ruvia::task<void> {
-        ruvia::http_client client(loop, {.base_url_ = source_url,
-                                            .request_timeout_ = std::chrono::seconds(2),
-                                            .versions_ = ruvia::http_client_versions{.http2_ = false}});
+        ruvia::http_client client(loop, {.base_url_ = source_url, .request_timeout_ = std::chrono::seconds(2), .versions_ = ruvia::http_client_versions{.http2_ = false}});
         std::exception_ptr failure;
         try {
             auto denied = co_await client.client().get("/without-policy").send();
@@ -301,7 +296,9 @@ TEST(Ruvia, http_client_redirect_policy_can_register_an_origin_and_remains_fail_
             EXPECT_TRUE(target.requests_.empty());
 
             auto unconfigured = client.client().get("/policy-without-origin");
-            unconfigured.on_redirect([](const ruvia::http_client_redirect_hop&, ruvia::stop_token) -> ruvia::task<bool> { co_return true; });
+            unconfigured.on_redirect([](const ruvia::http_client_redirect_hop&, ruvia::stop_token) -> ruvia::task<bool> {
+                co_return true;
+            });
             auto still_denied = co_await unconfigured.send();
             EXPECT_EQ(still_denied.status().value(), 302);
             EXPECT_TRUE(target.requests_.empty());
@@ -314,8 +311,7 @@ TEST(Ruvia, http_client_redirect_policy_can_register_an_origin_and_remains_fail_
             request.on_redirect([&](const ruvia::http_client_redirect_hop& hop, ruvia::stop_token stop) -> ruvia::task<bool> {
                 ++decisions;
                 EXPECT_EQ(hop.target_origin().host(), "127.0.0.1");
-                co_await client.upsert({.alias_ = "discovered", .base_url_ = target_url, .versions_ = ruvia::http_client_versions{.http2_ = false}},
-                    {.stop_token_ = std::move(stop)});
+                co_await client.upsert({.alias_ = "discovered", .base_url_ = target_url, .versions_ = ruvia::http_client_versions{.http2_ = false}}, {.stop_token_ = std::move(stop)});
                 co_return true;
             });
             auto accepted = co_await request.send();
@@ -454,8 +450,9 @@ TEST(Ruvia, http_client_retired_origin_resources_release_after_last_cold_borrow)
         {
             auto marker = std::make_shared<ruvia::test::dynamic_origin_tests::observed_configuration>(retired, destroyed);
             observed = marker;
-            co_await client.upsert({.base_url_ = "http://127.0.0.1:8001",
-                .address_validator_ = std::make_shared<const ruvia::http_client_address_validator>([marker](const ruvia::ip_address&, std::uint16_t) { return marker != nullptr; })});
+            co_await client.upsert({.base_url_ = "http://127.0.0.1:8001", .address_validator_ = std::make_shared<const ruvia::http_client_address_validator>([marker](const ruvia::ip_address&, std::uint16_t) {
+                return marker != nullptr;
+            })});
         }
         std::optional<ruvia::http_client_ref> old(client.client());
         std::optional<ruvia::task<ruvia::http_client_exchange>> cold(old->post("/cold").upload());
@@ -465,13 +462,12 @@ TEST(Ruvia, http_client_retired_origin_resources_release_after_last_cold_borrow)
         EXPECT_FALSE(observed.expired());
         cold.reset();
         ruvia::worker_timer_registration deadline;
-        (void)worker.schedule_timer(deadline, ruvia::deadline_after(std::chrono::seconds(2)),
-            [&](ruvia::worker_timer_outcome outcome) noexcept {
-                if (outcome == ruvia::worker_timer_outcome::expired) {
-                    expired = true;
-                    retired.notify();
-                }
-            });
+        (void)worker.schedule_timer(deadline, ruvia::deadline_after(std::chrono::seconds(2)), [&](ruvia::worker_timer_outcome outcome) noexcept {
+            if (outcome == ruvia::worker_timer_outcome::expired) {
+                expired = true;
+                retired.notify();
+            }
+        });
         while (!destroyed && !expired) {
             co_await retired.wait();
         }
@@ -490,10 +486,7 @@ TEST(Ruvia, http_client_tls_upsert_prepares_owned_paths_and_password_off_worker)
     {
         std::unique_ptr<BIO, decltype(&BIO_free)> output(BIO_new_file(encrypted_key.string().c_str(), "w"), BIO_free);
         ASSERT_NE(output, nullptr);
-        ASSERT_EQ(PEM_write_bio_PrivateKey(output.get(), SSL_CTX_get0_privatekey(identity.context_.native_handle()),
-                      EVP_aes_256_cbc(), reinterpret_cast<const unsigned char*>(password.data()),
-                      static_cast<int>(password.size()), nullptr, nullptr),
-            1);
+        ASSERT_EQ(PEM_write_bio_PrivateKey(output.get(), SSL_CTX_get0_privatekey(identity.context_.native_handle()), EVP_aes_256_cbc(), reinterpret_cast<const unsigned char*>(password.data()), static_cast<int>(password.size()), nullptr, nullptr), 1);
     }
     auto& io = ruvia::test::new_test_io_context();
     ruvia::blocking_pool blocking({.thread_count_ = 1});
@@ -580,7 +573,10 @@ void exercise_origin_preparation_cancellation(cancellation_case mode) {
     blocking_pool blocking({.thread_count_ = 1, .queue_capacity_ = 4});
     std::promise<void> release;
     auto gate = release.get_future().share();
-    ASSERT_EQ(blocking.submit([gate] { gate.wait(); }), blocking_submit_status::accepted);
+    ASSERT_EQ(blocking.submit([gate] {
+        gate.wait();
+    }),
+        blocking_submit_status::accepted);
     auto attachment = attach_event_loop(io, {.blocking_pool_ = &blocking});
     const auto worker = attachment.loop().worker();
     const auto run = [&]() -> task<void> {
@@ -593,15 +589,10 @@ void exercise_origin_preparation_cancellation(cancellation_case mode) {
         std::exception_ptr failure;
         const auto update = [&]() -> task<void> {
             try {
-                co_await client.upsert(config, {.timeout_ = mode == cancellation_case::timeout
-                                                                ? timeout_duration{5}
-                                                                : timeout_duration{2000},
-                                                   .stop_token_ = stop.token()});
+                co_await client.upsert(config, {.timeout_ = mode == cancellation_case::timeout ? timeout_duration{5} : timeout_duration{2000}, .stop_token_ = stop.token()});
                 ADD_FAILURE() << "cancelled TLS preparation published an origin";
             } catch (const http_client_error& error) {
-                const auto expected = mode == cancellation_case::owner_close ? make_error_code(http_client_errc::closing)
-                                      : mode == cancellation_case::timeout   ? std::make_error_code(std::errc::timed_out)
-                                                                             : std::make_error_code(std::errc::operation_canceled);
+                const auto expected = mode == cancellation_case::owner_close ? make_error_code(http_client_errc::closing) : (mode == cancellation_case::timeout ? std::make_error_code(std::errc::timed_out) : std::make_error_code(std::errc::operation_canceled));
                 EXPECT_EQ(error.code(), expected);
             } catch (...) {
                 failure = std::current_exception();
@@ -643,8 +634,7 @@ void exercise_redirect_policy_cancellation(cancellation_case mode) {
     auto& io = new_test_io_context();
     auto attachment = attach_event_loop(io);
     const auto worker = attachment.loop().worker();
-    constexpr std::array replies{std::string_view(
-        "HTTP/1.1 302 Found\r\nContent-Length: 0\r\nLocation: http://127.0.0.1:8123/next\r\n\r\n")};
+    constexpr std::array replies{std::string_view("HTTP/1.1 302 Found\r\nContent-Length: 0\r\nLocation: http://127.0.0.1:8123/next\r\n\r\n")};
     peer source(io, worker, replies);
     const auto url = source.url();
     const auto run = [&]() -> task<void> {
@@ -655,9 +645,7 @@ void exercise_redirect_policy_cancellation(cancellation_case mode) {
         bool exited = false;
         bool send_finished = false;
         std::exception_ptr failure;
-        auto request = client.client().with_options({.timeout_ = mode == cancellation_case::timeout ? timeout_duration{200} : timeout_duration{2000},
-                                                        .stop_token_ = stop.token()})
-                           .get("/redirect");
+        auto request = client.client().with_options({.timeout_ = mode == cancellation_case::timeout ? timeout_duration{200} : timeout_duration{2000}, .stop_token_ = stop.token()}).get("/redirect");
         request.on_redirect([&](const http_client_redirect_hop& hop, stop_token token) -> task<bool> {
             entered = true;
             changed.notify();
@@ -673,9 +661,7 @@ void exercise_redirect_policy_cancellation(cancellation_case mode) {
                 (void)co_await request.send();
                 ADD_FAILURE() << "cancelled redirect policy sent a follow-up request";
             } catch (const http_client_error& error) {
-                EXPECT_EQ(error.code(), mode == cancellation_case::timeout
-                                            ? std::make_error_code(std::errc::timed_out)
-                                            : std::make_error_code(std::errc::operation_canceled));
+                EXPECT_EQ(error.code(), mode == cancellation_case::timeout ? std::make_error_code(std::errc::timed_out) : std::make_error_code(std::errc::operation_canceled));
                 EXPECT_NE(error.connection_info(), nullptr);
                 EXPECT_TRUE(exited);
             } catch (...) {
@@ -731,17 +717,19 @@ namespace ruvia::test::raw_tcp {
 // write deadlines exercise kernel backpressure rather than a fake completion.
 class byte_peer final {
 public:
-    explicit byte_peer(std::size_t bytes = 0, asio::ssl::context* tls = nullptr, bool stall_handshake = false)
-        : acceptor_(io_, {asio::ip::tcp::v4(), 0}),
-          socket_(io_),
-          timer_(io_),
-          deadline_(io_),
-          work_(asio::make_work_guard(io_)),
-          bytes_(bytes),
-          tls_(tls),
-          stall_handshake_(stall_handshake),
-          done_(asio::co_spawn(io_, serve(), asio::use_future)),
-          thread_([this] { io_.run(); }) {}
+    explicit byte_peer(std::size_t bytes = 0, asio::ssl::context* tls = nullptr, bool stall_handshake = false) :
+        acceptor_(io_, {asio::ip::tcp::v4(), 0}),
+        socket_(io_),
+        timer_(io_),
+        deadline_(io_),
+        work_(asio::make_work_guard(io_)),
+        bytes_(bytes),
+        tls_(tls),
+        stall_handshake_(stall_handshake),
+        done_(asio::co_spawn(io_, serve(), asio::use_future)),
+        thread_([this] {
+            io_.run();
+        }) {}
 
     ~byte_peer() {
         asio::post(io_, [this] {
@@ -788,8 +776,7 @@ private:
         }
         std::string bytes(bytes_, '\0');
         std::error_code error;
-        received_bytes_ = co_await asio::async_read(stream, asio::buffer(bytes),
-            asio::redirect_error(asio::use_awaitable, error));
+        received_bytes_ = co_await asio::async_read(stream, asio::buffer(bytes), asio::redirect_error(asio::use_awaitable, error));
         if (error) {
             throw std::system_error(error);
         }
@@ -882,13 +869,15 @@ private:
     co_await client.shutdown();
 }
 
-[[nodiscard]] task<void> expect_io_failure(tcp_client& client, bool writing, operation_options options,
-    std::errc expected, std::promise<void>* started = nullptr) {
+[[nodiscard]] task<void> expect_io_failure(tcp_client& client, bool writing, operation_options options, std::errc expected, std::promise<void>* started = nullptr) {
     if (started) {
         // Nested tasks enter the transport without yielding. Publish readiness
         // on the next worker turn, after cancellation is armed and socket I/O
         // has started, rather than announcing a still-cold operation.
-        if (!client.worker().post([started] { started->set_value(); }).accepted()) {
+        if (!client.worker()
+                .post([started] {
+            started->set_value();
+        }).accepted()) {
             throw std::runtime_error("TCP operation readiness was rejected");
         }
     }
@@ -1010,8 +999,7 @@ TEST(Ruvia, tcp_client_tls_and_mutual_tls_authenticate_san_and_exchange_bytes) {
 
 TEST(Ruvia, tcp_client_tls11_exchanges_bytes_and_still_authenticates_san) {
     for (const bool matching_san : {true, false}) {
-        ruvia::test::tls_identity server("server.example",
-            matching_san ? "DNS:server.example" : "DNS:other.example");
+        ruvia::test::tls_identity server("server.example", matching_san ? "DNS:server.example" : "DNS:other.example");
         auto* context = server.context_.native_handle();
         ASSERT_EQ(SSL_CTX_set_min_proto_version(context, TLS1_1_VERSION), 1);
         ASSERT_EQ(SSL_CTX_set_max_proto_version(context, TLS1_1_VERSION), 1);
@@ -1093,10 +1081,11 @@ TEST(Ruvia, tcp_client_rejects_tls10_and_h2_below_tls12_before_application_bytes
             ASSERT_EQ(SSL_CTX_set_cipher_list(context, "ECDHE-RSA-AES128-SHA"), 1);
             SSL_CTX_set_security_level(context, 0);
             SSL_CTX_set_alpn_select_cb(context, [](SSL*, const unsigned char** selected, unsigned char* size, const unsigned char*, unsigned int, void*) -> int {
-                    static constexpr unsigned char h2[] = {'h', '2'};
-                    *selected = h2;
-                    *size = sizeof(h2);
-                    return SSL_TLSEXT_ERR_OK; }, nullptr);
+                static constexpr unsigned char h2[] = {'h', '2'};
+                *selected = h2;
+                *size = sizeof(h2);
+                return SSL_TLSEXT_ERR_OK;
+            }, nullptr);
             byte_peer peer(4, &server.context_);
             auto config = peer.config();
             config.tls_.mode_ = ruvia::client_tls_mode::verify_identity;
@@ -1142,14 +1131,14 @@ TEST(Ruvia, tcp_client_owns_opaque_alpn_offers_and_reports_server_selection) {
         server_offer.insert(server_offer.end(), protocol.begin(), protocol.end());
         ruvia::test::tls_identity server("server.example");
         SSL_CTX_set_alpn_select_cb(server.context_.native_handle(), [](SSL*, const unsigned char** output, unsigned char* output_size, const unsigned char* offered, unsigned int offered_size, void* argument) -> int {
-                const auto& supported = *static_cast<const std::vector<unsigned char>*>(argument);
-                unsigned char* selected = nullptr;
-                if (SSL_select_next_proto(&selected, output_size, supported.data(),
-                        static_cast<unsigned int>(supported.size()), offered, offered_size) != OPENSSL_NPN_NEGOTIATED) {
-                    return SSL_TLSEXT_ERR_ALERT_FATAL;
-                }
-                *output = selected;
-                return SSL_TLSEXT_ERR_OK; }, &server_offer);
+            const auto& supported = *static_cast<const std::vector<unsigned char>*>(argument);
+            unsigned char* selected = nullptr;
+            if (SSL_select_next_proto(&selected, output_size, supported.data(), static_cast<unsigned int>(supported.size()), offered, offered_size) != OPENSSL_NPN_NEGOTIATED) {
+                return SSL_TLSEXT_ERR_ALERT_FATAL;
+            }
+            *output = selected;
+            return SSL_TLSEXT_ERR_OK;
+        }, &server_offer);
         byte_peer peer(4, &server.context_);
         auto config = peer.config();
         config.tls_.mode_ = ruvia::client_tls_mode::verify_identity;

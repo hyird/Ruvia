@@ -71,12 +71,11 @@ private:
 
     ruvia::task<ruvia::http_response> ready(ruvia::context& c) {
         const bool database_ready = c.req().query("db").value_or("up") != "down";
-        co_return ruvia::make_readiness_response(
-            c, {
-                   .state_ = database_ready ? ruvia::readiness_state::ready
-                                            : ruvia::readiness_state::unavailable,
-                   .unavailable_reason_ = "database is not ready",
-               });
+        co_return ruvia::make_readiness_response(c,
+            {
+                .state_ = database_ready ? ruvia::readiness_state::ready : ruvia::readiness_state::unavailable,
+                .unavailable_reason_ = "database is not ready",
+            });
     }
 };
 
@@ -88,40 +87,34 @@ int main() {
         if (env_value.get<bool>("RUVIA_TRUST_LOCAL_PROXY").value_or(false)) {
             app.trusted_proxies({.cidrs_ = {"127.0.0.1", "::1"}, .trust_x_forwarded_proto_ = true});
         }
-        app
-            .listen({.address_ = "0.0.0.0", .http_ = 8098})
-            .server({.worker_count_ = 2,
-                .process_signal_handlers_ = ruvia::process_signal_handler_policy::install})
+        app.listen({.address_ = "0.0.0.0", .http_ = 8098})
+            .server({.worker_count_ = 2, .process_signal_handlers_ = ruvia::process_signal_handler_policy::install})
             // Each worker counts independently. Route-level limits additionally
             // apply and can only tighten the deployment-wide rule.
             .rate_limit({.rule_ = {.max_requests_ = 100, .window_ = std::chrono::seconds(1)}})
             .on_start([] {
-                // Runs on the thread calling run(), after worker capabilities are
-                // ready and before any listener starts serving. Throwing rolls back
-                // startup; wait for any posted initialization before returning.
-                std::puts("all workers ready; opening admission");
-            })
+            // Runs on the thread calling run(), after worker capabilities are
+            // ready and before any listener starts serving. Throwing rolls back
+            // startup; wait for any posted initialization before returning.
+            std::puts("all workers ready; opening admission");
+        })
             .on_stop([] {
-                // Stop external producers here. Worker teardown is joined after
-                // this hook; other threads should only request application::stop().
-                std::puts("admission closed; joining workers");
-            })
+            // Stop external producers here. Worker teardown is joined after
+            // this hook; other threads should only request application::stop().
+            std::puts("admission closed; joining workers");
+        })
             .on_access([](const ruvia::access_log_record& record) noexcept {
-                // Views are callback-scoped. Production sinks should enqueue an
-                // owned record to a bounded logger instead of blocking the worker.
-                std::printf("%.*s %.*s in %llu us\n",
-                    static_cast<int>(record.method().size()), record.method().data(),
-                    static_cast<int>(record.path().size()), record.path().data(),
-                    static_cast<unsigned long long>(record.duration_micros()));
-            })
+            // Views are callback-scoped. Production sinks should enqueue an
+            // owned record to a bounded logger instead of blocking the worker.
+            std::printf("%.*s %.*s in %llu us\n", static_cast<int>(record.method().size()), record.method().data(), static_cast<int>(record.path().size()), record.path().data(), static_cast<unsigned long long>(record.duration_micros()));
+        })
             .on_connection_failure([](const ruvia::connection_failure_record& record) noexcept {
-                try {
-                    std::fprintf(stderr, "connection failed: %s\n", ruvia::exception_text(record.exception()).c_str());
-                } catch (...) {
-                    std::fputs("connection failed; formatting its reason failed\n", stderr);
-                }
-            })
-            .run();
+            try {
+                std::fprintf(stderr, "connection failed: %s\n", ruvia::exception_text(record.exception()).c_str());
+            } catch (...) {
+                std::fputs("connection failed; formatting its reason failed\n", stderr);
+            }
+        }).run();
     } catch (...) {
         std::fprintf(stderr, "%s\n", ruvia::exception_text(std::current_exception()).c_str());
         return 1;

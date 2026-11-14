@@ -56,8 +56,7 @@ class inbound_memory_routes final {
 
     ruvia::task<ruvia::http_response> buffered_body(ruvia::context& context_value) {
         const auto body = co_await context_value.req().text();
-        co_return context_value.text(
-            std::string(std::to_string(body.size())));
+        co_return context_value.text(std::string(std::to_string(body.size())));
     }
 
     ruvia::task<ruvia::http_response> stream_body(ruvia::context& context_value) {
@@ -91,9 +90,9 @@ class inbound_memory_routes final {
 
 class test_client final {
 public:
-    test_client(asio::io_context& io, const asio::ip::tcp::endpoint& server_endpoint)
-        : io_(io),
-          socket_(io) {
+    test_client(asio::io_context& io, const asio::ip::tcp::endpoint& server_endpoint) :
+        io_(io),
+        socket_(io) {
         socket_.connect(server_endpoint);
     }
 
@@ -109,12 +108,11 @@ public:
     // ends or 5 s pass first.
     [[nodiscard]] std::optional<std::string> read_until(std::string_view delimiter) {
         std::optional<std::size_t> found;
-        asio::async_read_until(socket_, asio::dynamic_buffer(input_), delimiter,
-            [&found](const std::error_code& error, std::size_t bytes) {
-                if (!error) {
-                    found = bytes;
-                }
-            });
+        asio::async_read_until(socket_, asio::dynamic_buffer(input_), delimiter, [&found](const std::error_code& error, std::size_t bytes) {
+            if (!error) {
+                found = bytes;
+            }
+        });
         run();
         if (!found) {
             return std::nullopt;
@@ -153,8 +151,7 @@ private:
     std::string input_{};
 };
 
-constexpr std::string_view connect_request =
-    "CONNECT inbound-tunnel.test:443 HTTP/1.1\r\nHost: inbound-tunnel.test:443\r\n\r\n";
+constexpr std::string_view connect_request = "CONNECT inbound-tunnel.test:443 HTTP/1.1\r\nHost: inbound-tunnel.test:443\r\n\r\n";
 
 [[nodiscard]] bool open_tunnel(test_client& client) {
     client.send(connect_request);
@@ -181,9 +178,7 @@ TEST(Ruvia, streamed_request_body_reads_count_against_the_connection_inbound_bud
     {
         // The reader's 8 KiB socket buffer exceeds the connection budget.
         test_client client(io, server.endpoint());
-        client.send(
-            "POST /inbound-stream HTTP/1.1\r\nHost: localhost\r\nContent-Length: 20000\r\nConnection: close\r\n\r\n" +
-            std::string(20000, 'b'));
+        client.send("POST /inbound-stream HTTP/1.1\r\nHost: localhost\r\nContent-Length: 20000\r\nConnection: close\r\n\r\n" + std::string(20000, 'b'));
         const auto response = client.read_to_end();
         EXPECT_TRUE(response.starts_with("HTTP/1.1 503 "));
         EXPECT_TRUE(response.find("inbound_buffer_limit") != std::string::npos);
@@ -239,8 +234,7 @@ TEST(Ruvia, http2_request_body_inbound_budget_exhaustion_answers_with_503) {
     const auto url = "http://127.0.0.1:" + std::to_string(server.endpoint().port());
 
     const auto run = [&]() -> ruvia::task<void> {
-        ruvia::http_client client(attachment.loop(),
-            {.base_url_ = url, .versions_ = {.http1_ = false, .http2_ = true}});
+        ruvia::http_client client(attachment.loop(), {.base_url_ = url, .versions_ = {.http1_ = false, .http2_ = true}});
         const std::string payload(12000, 'h');
         for (const std::string_view path : {"/inbound-buffered", "/inbound-stream"}) {
             auto response = co_await client.client().post(path).body(payload).send();
@@ -252,7 +246,9 @@ TEST(Ruvia, http2_request_body_inbound_budget_exhaustion_answers_with_503) {
         attachment.stop();
     };
     auto root = attachment.loop().start(run());
-    std::jthread driver([&] { attachment.run(); });
+    std::jthread driver([&] {
+        attachment.run();
+    });
     driver.join();
     std::move(root).get();
     server.finish();

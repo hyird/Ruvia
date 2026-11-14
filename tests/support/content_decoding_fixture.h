@@ -72,8 +72,7 @@ inline std::string zlib_deflate_compress(std::string_view data) {
 
 inline std::string gzip_compress(std::string_view data) {
     z_stream stream{};
-    if (deflateInit2(&stream, Z_BEST_COMPRESSION, Z_DEFLATED, 15 + 16, 8, Z_DEFAULT_STRATEGY) !=
-        Z_OK) {
+    if (deflateInit2(&stream, Z_BEST_COMPRESSION, Z_DEFLATED, 15 + 16, 8, Z_DEFAULT_STRATEGY) != Z_OK) {
         return {};
     }
     stream.next_in = reinterpret_cast<Bytef*>(const_cast<char*>(data.data()));
@@ -96,8 +95,7 @@ struct transfer_decode_observation final {
     std::optional<ruvia::http_protocol_error> protocol_error_;
 };
 
-inline transfer_decode_observation append_transfer_decoded(
-    http_transfer_coding_stack_decoder& decoder, std::string_view input, std::string& output) {
+inline transfer_decode_observation append_transfer_decoded(http_transfer_coding_stack_decoder& decoder, std::string_view input, std::string& output) {
     std::array<char, std::size_t{8} * 1024> window{};
     for (;;) {
         const auto result_value = decoder.decode(input, window);
@@ -123,9 +121,7 @@ inline std::string brotli_compress(std::string_view data) {
     }
     std::string out(bound, '\0');
     std::size_t out_size = bound;
-    if (BrotliEncoderCompress(BROTLI_DEFAULT_QUALITY, BROTLI_DEFAULT_WINDOW, BROTLI_DEFAULT_MODE,
-            data.size(), reinterpret_cast<const std::uint8_t*>(data.data()), &out_size,
-            reinterpret_cast<std::uint8_t*>(out.data())) != BROTLI_TRUE) {
+    if (BrotliEncoderCompress(BROTLI_DEFAULT_QUALITY, BROTLI_DEFAULT_WINDOW, BROTLI_DEFAULT_MODE, data.size(), reinterpret_cast<const std::uint8_t*>(data.data()), &out_size, reinterpret_cast<std::uint8_t*>(out.data())) != BROTLI_TRUE) {
         return {};
     }
     out.resize(out_size);
@@ -154,13 +150,11 @@ inline std::string zstd_compress_with_window(std::string_view data, int window_l
             ZSTD_freeCCtx(context_);
         }
     } guard_value{context_value};
-    if (ZSTD_isError(ZSTD_CCtx_setParameter(context_value, ZSTD_c_windowLog, window_log)) != 0 ||
-        ZSTD_isError(ZSTD_CCtx_setParameter(context_value, ZSTD_c_contentSizeFlag, 0)) != 0) {
+    if (ZSTD_isError(ZSTD_CCtx_setParameter(context_value, ZSTD_c_windowLog, window_log)) != 0 || ZSTD_isError(ZSTD_CCtx_setParameter(context_value, ZSTD_c_contentSizeFlag, 0)) != 0) {
         return {};
     }
     std::string output(ZSTD_compressBound(data.size()), '\0');
-    const auto size =
-        ZSTD_compress2(context_value, output.data(), output.size(), data.data(), data.size());
+    const auto size = ZSTD_compress2(context_value, output.data(), output.size(), data.data(), data.size());
     if (ZSTD_isError(size) != 0) {
         return {};
     }
@@ -169,8 +163,7 @@ inline std::string zstd_compress_with_window(std::string_view data, int window_l
 }
 
 inline std::string decoded(http_content_coding coding, std::string_view input, std::size_t max_bytes) {
-    auto result_value = decode_http_content(std::array{coding}, input,
-        {.max_decoded_bytes_ = max_bytes});
+    auto result_value = decode_http_content(std::array{coding}, input, {.max_decoded_bytes_ = max_bytes});
     auto* content = std::get_if<std::string>(&result_value);
     if (content == nullptr) {
         throw std::runtime_error("test content decode failed");
@@ -178,10 +171,8 @@ inline std::string decoded(http_content_coding coding, std::string_view input, s
     return std::move(*content);
 }
 
-inline http_content_decode_error decode_error(
-    http_content_coding coding, std::string_view input, std::size_t max_bytes = decoded_body_limit) {
-    const auto result_value = decode_http_content(std::array{coding}, input,
-        {.max_decoded_bytes_ = max_bytes});
+inline http_content_decode_error decode_error(http_content_coding coding, std::string_view input, std::size_t max_bytes = decoded_body_limit) {
+    const auto result_value = decode_http_content(std::array{coding}, input, {.max_decoded_bytes_ = max_bytes});
     const auto* failure = std::get_if<http_content_decode_error>(&result_value);
     if (failure == nullptr) {
         throw std::runtime_error("test content decode unexpectedly succeeded");
@@ -205,15 +196,13 @@ inline std::string chunked(std::string_view body) {
 inline std::optional<std::string> zstd_round_trip(std::string_view plain, std::size_t truncate_by) {
     const std::size_t bound = ZSTD_compressBound(plain.size());
     std::string compressed(bound, '\0');
-    const std::size_t written =
-        ZSTD_compress(compressed.data(), compressed.size(), plain.data(), plain.size(), 3);
+    const std::size_t written = ZSTD_compress(compressed.data(), compressed.size(), plain.data(), plain.size(), 3);
     if (ZSTD_isError(written) != 0 || written <= truncate_by) {
         return std::nullopt;
     }
     compressed.resize(written - truncate_by);
 
-    auto result_value = ruvia::decode_http_content(std::array{http_content_coding::zstd}, compressed,
-        {.max_decoded_bytes_ = ruvia::default_max_buffered_body_bytes});
+    auto result_value = ruvia::decode_http_content(std::array{http_content_coding::zstd}, compressed, {.max_decoded_bytes_ = ruvia::default_max_buffered_body_bytes});
     auto* decoded = std::get_if<std::string>(&result_value);
     if (decoded == nullptr) {
         return std::nullopt;
@@ -247,8 +236,7 @@ struct http1_request_message final {
     }
 };
 
-[[nodiscard]] inline http1_request_message parse_http1_request_message(
-    std::string_view buffer) {
+[[nodiscard]] inline http1_request_message parse_http1_request_message(std::string_view buffer) {
     http1_request_message message;
     message.state_.parse_head(buffer, 0);
     const auto* head = message.state_.head_ready();
@@ -301,14 +289,12 @@ using ruvia::http_client_request_content_signal;
 using ruvia::http_client_response_head;
 using ruvia::http_protocol_version;
 
-using http1_client_request_prepare_result = std::variant<ruvia::prepared_http1_client_request,
-    ruvia::http1_client_request_buffer_too_small, ruvia::http1_client_request_prepare_error>;
+using http1_client_request_prepare_result = std::variant<ruvia::prepared_http1_client_request, ruvia::http1_client_request_buffer_too_small, ruvia::http1_client_request_prepare_error>;
 
 // A prepared request feeds exactly one response parser, which takes its
 // exchange state; a test that drives several parsers from the same request
 // prepares it again for each of them.
-inline http1_client_response_parser exchange_parser(
-    http1_client_request_prepare_result prepared_result) {
+inline http1_client_response_parser exchange_parser(http1_client_request_prepare_result prepared_result) {
     auto* prepared = std::get_if<ruvia::prepared_http1_client_request>(&prepared_result);
     if (prepared == nullptr) {
         throw std::runtime_error("test request could not be prepared");
@@ -316,30 +302,22 @@ inline http1_client_response_parser exchange_parser(
     return http1_client_response_parser(std::move(*prepared).take_exchange_state());
 }
 
-inline http1_client_response_parser exchange_parser(const ruvia::http_origin_view& origin,
-    const ruvia::http_client_request_view& request, http1_client_request_wire_policy policy = {}) {
+inline http1_client_response_parser exchange_parser(const ruvia::http_origin_view& origin, const ruvia::http_client_request_view& request, http1_client_request_wire_policy policy = {}) {
     std::array<char, 2048> request_head;
-    return exchange_parser(
-        ruvia::http1_client_request_writer().prepare(origin, request, request_head, policy));
+    return exchange_parser(ruvia::http1_client_request_writer().prepare(origin, request, request_head, policy));
 }
 
-inline http1_client_response_parser exchange_parser(const ruvia::http_origin_view& origin,
-    const ruvia::http1_client_request_head_view& request, http1_client_request_wire_policy policy = {}) {
+inline http1_client_response_parser exchange_parser(const ruvia::http_origin_view& origin, const ruvia::http1_client_request_head_view& request, http1_client_request_wire_policy policy = {}) {
     std::array<char, 2048> request_head;
-    return exchange_parser(
-        ruvia::http1_client_request_writer().prepare_streaming(origin, request, request_head, policy));
+    return exchange_parser(ruvia::http1_client_request_writer().prepare_streaming(origin, request, request_head, policy));
 }
 
-inline http1_client_response_parse_result parse_wire(std::string_view method, std::string_view wire,
-    http1_close_policy close_policy = http1_close_policy::allow_reuse,
-    std::span<const ruvia::http_header_view> request_headers = {}) {
+inline http1_client_response_parse_result parse_wire(std::string_view method, std::string_view wire, http1_close_policy close_policy = http1_close_policy::allow_reuse, std::span<const ruvia::http_header_view> request_headers = {}) {
     const auto origin = ruvia::http_origin_view::https({.host_ = "example.test"});
     const http1_client_request_wire_policy policy{.close_policy_ = close_policy};
     if (method == "CONNECT") {
         std::array<char, 2048> request_head;
-        return exchange_parser(ruvia::http1_client_request_writer().prepare_connect(
-                                   "example.test:443", request_headers, request_head, policy))
-            .parse(wire);
+        return exchange_parser(ruvia::http1_client_request_writer().prepare_connect("example.test:443", request_headers, request_head, policy)).parse(wire);
     }
     ruvia::http_client_request_view request;
     request.method_ = method;
@@ -347,17 +325,13 @@ inline http1_client_response_parse_result parse_wire(std::string_view method, st
     return exchange_parser(origin, request, policy).parse(wire);
 }
 
-inline http1_client_response_parse_result parse_result(std::string_view method,
-    std::string_view header_section, http1_close_policy close_policy = http1_close_policy::allow_reuse,
-    std::span<const ruvia::http_header_view> request_headers = {}) {
+inline http1_client_response_parse_result parse_result(std::string_view method, std::string_view header_section, http1_close_policy close_policy = http1_close_policy::allow_reuse, std::span<const ruvia::http_header_view> request_headers = {}) {
     std::string wire(header_section);
     wire.append("\r\n\r\n");
     return parse_wire(method, wire, close_policy, request_headers);
 }
 
-inline http1_parsed_client_response_head parse_head(std::string_view method,
-    std::string_view header_section, http1_close_policy close_policy = http1_close_policy::allow_reuse,
-    std::span<const ruvia::http_header_view> request_headers = {}) {
+inline http1_parsed_client_response_head parse_head(std::string_view method, std::string_view header_section, http1_close_policy close_policy = http1_close_policy::allow_reuse, std::span<const ruvia::http_header_view> request_headers = {}) {
     auto result_value = parse_result(method, header_section, close_policy, request_headers);
     auto* parsed_value = result_value.parsed();
     if (parsed_value == nullptr) {
@@ -375,15 +349,12 @@ inline parsed_response parse_response(std::string_view method, std::string_view 
     return parsed_response{std::move(head).take_head()};
 }
 
-inline bool parse_fails(std::string_view method, std::string_view header_section,
-    http1_close_policy close_policy = http1_close_policy::allow_reuse,
-    std::span<const ruvia::http_header_view> request_headers = {}) {
+inline bool parse_fails(std::string_view method, std::string_view header_section, http1_close_policy close_policy = http1_close_policy::allow_reuse, std::span<const ruvia::http_header_view> request_headers = {}) {
     const auto result_value = parse_result(method, header_section, close_policy, request_headers);
     return result_value.failure() != nullptr;
 }
 
-inline const ruvia::http1_client_known_length_response& require_known_length(
-    const ruvia::http1_client_response_plan& plan) {
+inline const ruvia::http1_client_known_length_response& require_known_length(const ruvia::http1_client_response_plan& plan) {
     const auto* known_length = plan.known_length();
     if (known_length == nullptr) {
         throw std::runtime_error("test expected exact-length response framing");
@@ -391,8 +362,7 @@ inline const ruvia::http1_client_known_length_response& require_known_length(
     return *known_length;
 }
 
-inline const ruvia::http1_client_chunked_response& require_chunked(
-    const ruvia::http1_client_response_plan& plan) {
+inline const ruvia::http1_client_chunked_response& require_chunked(const ruvia::http1_client_response_plan& plan) {
     const auto* chunked = plan.chunked();
     if (chunked == nullptr) {
         throw std::runtime_error("test expected chunked response framing");
@@ -400,8 +370,7 @@ inline const ruvia::http1_client_chunked_response& require_chunked(
     return *chunked;
 }
 
-inline const ruvia::http1_client_close_delimited_response& require_close_delimited(
-    const ruvia::http1_client_response_plan& plan) {
+inline const ruvia::http1_client_close_delimited_response& require_close_delimited(const ruvia::http1_client_response_plan& plan) {
     const auto* close_delimited = plan.close_delimited();
     if (close_delimited == nullptr) {
         throw std::runtime_error("test expected close-delimited response framing");
@@ -409,8 +378,7 @@ inline const ruvia::http1_client_close_delimited_response& require_close_delimit
     return *close_delimited;
 }
 
-inline const ruvia::http1_client_response_without_content& require_without_content(
-    const ruvia::http1_client_response_plan& plan) {
+inline const ruvia::http1_client_response_without_content& require_without_content(const ruvia::http1_client_response_plan& plan) {
     const auto* without_content = plan.without_content();
     if (without_content == nullptr) {
         throw std::runtime_error("test expected a final response without content");
@@ -419,19 +387,11 @@ inline const ruvia::http1_client_response_without_content& require_without_conte
 }
 
 inline std::size_t active_plan_alternative_count(const ruvia::http1_client_response_plan& plan) noexcept {
-    return static_cast<std::size_t>(plan.informational() != nullptr) +
-           static_cast<std::size_t>(plan.without_content() != nullptr) +
-           static_cast<std::size_t>(plan.known_length() != nullptr) +
-           static_cast<std::size_t>(plan.chunked() != nullptr) +
-           static_cast<std::size_t>(plan.close_delimited() != nullptr) +
-           static_cast<std::size_t>(plan.connect_tunnel() != nullptr) +
-           static_cast<std::size_t>(plan.protocol_upgrade() != nullptr);
+    return static_cast<std::size_t>(plan.informational() != nullptr) + static_cast<std::size_t>(plan.without_content() != nullptr) + static_cast<std::size_t>(plan.known_length() != nullptr) + static_cast<std::size_t>(plan.chunked() != nullptr) + static_cast<std::size_t>(plan.close_delimited() != nullptr) + static_cast<std::size_t>(plan.connect_tunnel() != nullptr) + static_cast<std::size_t>(plan.protocol_upgrade() != nullptr);
 }
 
-inline http1_client_response_parse_error parse_failure_error(std::string_view method,
-    std::string_view header_section, std::span<const ruvia::http_header_view> request_headers = {}) {
-    const auto result_value =
-        parse_result(method, header_section, http1_close_policy::allow_reuse, request_headers);
+inline http1_client_response_parse_error parse_failure_error(std::string_view method, std::string_view header_section, std::span<const ruvia::http_header_view> request_headers = {}) {
+    const auto result_value = parse_result(method, header_section, http1_close_policy::allow_reuse, request_headers);
     const auto* failure = result_value.failure();
     if (failure == nullptr) {
         throw std::runtime_error("test expected an HTTP/1 response parse failure");
@@ -492,16 +452,14 @@ inline std::string drain_output(ruvia::http2_connection& connection) {
 // produces, so every drained string is retained for the relay's lifetime.
 class output_relay final {
 public:
-    [[nodiscard]] ruvia::http2_feed_result feed(
-        ruvia::http2_connection& from, ruvia::http2_connection& to) {
+    [[nodiscard]] ruvia::http2_feed_result feed(ruvia::http2_connection& from, ruvia::http2_connection& to) {
         return to.feed(retained_.emplace_back(drain_output(from)));
     }
 
     void transfer(ruvia::http2_connection& from, ruvia::http2_connection& to) {
         const auto status = feed(from, to);
         if (status != ruvia::http2_feed_result::accepted) {
-            throw std::runtime_error(
-                "HTTP/2 transfer failed, status " + std::to_string(static_cast<int>(status)));
+            throw std::runtime_error("HTTP/2 transfer failed, status " + std::to_string(static_cast<int>(status)));
         }
     }
 

@@ -61,8 +61,7 @@ private:
         // ">" requests never-delivered entries. A real consumer also reclaims
         // abandoned pending work (XAUTOCLAIM) and makes its effects idempotent.
         const std::array<ruvia::redis_stream_read_view, 1> streams{{{stream_key, ">"}}};
-        auto result_value = co_await redis.xread_group(group_name, "example-consumer", streams,
-            {.count_ = 10, .block_ = ruvia::redis_block_wait::for_duration(std::chrono::milliseconds(500))});
+        auto result_value = co_await redis.xread_group(group_name, "example-consumer", streams, {.count_ = 10, .block_ = ruvia::redis_block_wait::for_duration(std::chrono::milliseconds(500))});
         if (!result_value) {
             co_return c.text("no messages\n");
         }
@@ -93,10 +92,7 @@ int main() {
         auto config = example::redis_config(env_value);
         // Blocking readers do not occupy ordinary command connections.
         config.blocking_pool_size_per_worker_ = 2;
-        app.server({.process_signal_handlers_ = ruvia::process_signal_handler_policy::install})
-            .listen({.address_ = "127.0.0.1", .http_ = 8095})
-            .redis({.config_ = config})
-            .run();
+        app.server({.process_signal_handlers_ = ruvia::process_signal_handler_policy::install}).listen({.address_ = "127.0.0.1", .http_ = 8095}).redis({.config_ = config}).run();
     } catch (...) {
         std::cerr << ruvia::exception_text(std::current_exception()) << '\n';
         return 1;

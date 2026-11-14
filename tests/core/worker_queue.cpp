@@ -33,7 +33,9 @@ TEST(Ruvia, worker_queue_yields_to_io_context_between_batches) {
     bool foreign_ran{};
     unsigned runs{};
     EXPECT_TRUE(worker_value.post(reposting_task{&worker_value, &attachment, &foreign_ran, &runs}).accepted());
-    asio::post(context, [&foreign_ran] { foreign_ran = true; });
+    asio::post(context, [&foreign_ran] {
+        foreign_ran = true;
+    });
     attachment.run();
     // The repost lands behind the plain handler queued after the first batch.
     EXPECT_TRUE(foreign_ran);
@@ -68,19 +70,21 @@ TEST(Ruvia, worker_cancellation_registration_retires_before_slot_reuse) {
     ruvia::stop_source new_stop;
     std::uint64_t old_id{};
     bool identity_cleared{};
-    EXPECT_TRUE(worker_value.post([&] {
-                                current.emplace(target, state.identity_);
-                                old_id = current->id();
-                                current->arm(old_stop.token());
-                                // Foreign cancellation is queued behind this owner turn.
-                                std::jthread requester([&] { old_stop.request_stop(); });
-                                requester.join();
-                                current.reset();
-                                identity_cleared = state.identity_ == 0;
-                                current.emplace(target, state.identity_);
-                                current->arm(new_stop.token());
-                            })
-            .accepted());
+    EXPECT_TRUE(worker_value
+            .post([&] {
+        current.emplace(target, state.identity_);
+        old_id = current->id();
+        current->arm(old_stop.token());
+        // Foreign cancellation is queued behind this owner turn.
+        std::jthread requester([&] {
+            old_stop.request_stop();
+        });
+        requester.join();
+        current.reset();
+        identity_cleared = state.identity_ == 0;
+        current.emplace(target, state.identity_);
+        current->arm(new_stop.token());
+    }).accepted());
     // Drain the ready handlers, including the queued foreign cancellation,
     // while the loop stays attached for the second turn.
     context.poll();
@@ -88,13 +92,13 @@ TEST(Ruvia, worker_cancellation_registration_retires_before_slot_reuse) {
     EXPECT_TRUE(state.identity_ != 0 && state.identity_ != old_id);
     EXPECT_EQ(state.accepted_, 0u);
     EXPECT_EQ(state.stale_, 1u);
-    EXPECT_TRUE(worker_value.post([&] {
-                                new_stop.request_stop();
-                                current.reset();
-                                target->detach(state);
-                                attachment.stop();
-                            })
-            .accepted());
+    EXPECT_TRUE(worker_value
+            .post([&] {
+        new_stop.request_stop();
+        current.reset();
+        target->detach(state);
+        attachment.stop();
+    }).accepted());
     attachment.run();
     EXPECT_EQ(state.accepted_, 1u);
     EXPECT_EQ(state.identity_, std::uint64_t{0});
@@ -117,18 +121,18 @@ TEST(Ruvia, worker_cancellation_registration_handles_precancel_and_exception_unw
     ruvia::stop_source source;
     source.request_stop();
     bool unwound = false;
-    EXPECT_TRUE(worker_value.post([&] {
-                                try {
-                                    ruvia::worker_cancellation_registration registration(target, state.identity_);
-                                    registration.arm(source.token());
-                                    throw std::runtime_error("operation failed");
-                                } catch (const std::runtime_error&) {
-                                    unwound = state.identity_ == 0;
-                                }
-                                target->detach(state);
-                                attachment.stop();
-                            })
-            .accepted());
+    EXPECT_TRUE(worker_value
+            .post([&] {
+        try {
+            ruvia::worker_cancellation_registration registration(target, state.identity_);
+            registration.arm(source.token());
+            throw std::runtime_error("operation failed");
+        } catch (const std::runtime_error&) {
+            unwound = state.identity_ == 0;
+        }
+        target->detach(state);
+        attachment.stop();
+    }).accepted());
     attachment.run();
     EXPECT_TRUE(unwound);
     EXPECT_EQ(state.cancelled_, 1u);
@@ -173,7 +177,9 @@ struct deferred_resume final {
     }
     void await_suspend(std::coroutine_handle<> continuation) const {
         if (foreign_) {
-            std::jthread([this, continuation] { worker_.defer_resume(continuation); }).join();
+            std::jthread([this, continuation] {
+                worker_.defer_resume(continuation);
+            }).join();
         } else {
             worker_.defer_resume(continuation);
         }
@@ -212,9 +218,7 @@ TEST(Ruvia, worker_ref_defers_resumption_to_its_worker) {
         const auto worker_value = attachment.loop().worker();
         std::vector<int> order;
         bool on_worker = true;
-        ruvia::test::run_worker_tasks(attachment,
-            worker_resume_test::resume_twice(worker_value, order, 10, on_worker),
-            worker_resume_test::resume_twice(worker_value, order, 20, on_worker));
+        ruvia::test::run_worker_tasks(attachment, worker_resume_test::resume_twice(worker_value, order, 10, on_worker), worker_resume_test::resume_twice(worker_value, order, 20, on_worker));
         EXPECT_TRUE(on_worker);
         EXPECT_EQ(order.size(), std::size_t{10});
         for (const int first : {10, 20}) {
@@ -250,13 +254,13 @@ struct replacing_target final {
     reentry_state* state_;
     payload value_;
 
-    replacing_target(reentry_state* state, int value, int& destroyed)
-        : state_(state),
-          value_(new int(value), {&destroyed}) {}
+    replacing_target(reentry_state* state, int value, int& destroyed) :
+        state_(state),
+        value_(new int(value), {&destroyed}) {}
 
-    replacing_target(replacing_target&& other) noexcept
-        : state_(std::exchange(other.state_, nullptr)),
-          value_(std::move(other.value_)) {}
+    replacing_target(replacing_target&& other) noexcept :
+        state_(std::exchange(other.state_, nullptr)),
+        value_(std::move(other.value_)) {}
 
     ~replacing_target() {
         if (state_ != nullptr) {
@@ -299,13 +303,13 @@ struct destroy_owner_delete final {
 struct callback_lifetime final {
     bool* alive_;
 
-    explicit callback_lifetime(bool& alive) noexcept
-        : alive_(&alive) {
+    explicit callback_lifetime(bool& alive) noexcept :
+        alive_(&alive) {
         alive = true;
     }
 
-    callback_lifetime(callback_lifetime&& other) noexcept
-        : alive_(std::exchange(other.alive_, nullptr)) {}
+    callback_lifetime(callback_lifetime&& other) noexcept :
+        alive_(std::exchange(other.alive_, nullptr)) {}
 
     ~callback_lifetime() {
         if (alive_ != nullptr) {
@@ -318,13 +322,13 @@ struct clear_reentry_target final {
     callback_lifetime lifetime_;
     reentry_state* state_;
 
-    explicit clear_reentry_target(bool& alive, reentry_state* state = nullptr) noexcept
-        : lifetime_(alive),
-          state_(state) {}
+    explicit clear_reentry_target(bool& alive, reentry_state* state = nullptr) noexcept :
+        lifetime_(alive),
+        state_(state) {}
 
-    clear_reentry_target(clear_reentry_target&& other) noexcept
-        : lifetime_(std::move(other.lifetime_)),
-          state_(std::exchange(other.state_, nullptr)) {}
+    clear_reentry_target(clear_reentry_target&& other) noexcept :
+        lifetime_(std::move(other.lifetime_)),
+        state_(std::exchange(other.state_, nullptr)) {}
 
     ~clear_reentry_target() {
         if (auto* const state = std::exchange(state_, nullptr)) {
@@ -349,8 +353,9 @@ TEST(Ruvia, move_assignment_extracts_source_owned_by_old_target) {
         SCOPED_TRACE(heap_target);
         int calls = 0;
         int destroyed = 0;
-        auto nested = std::make_unique<fn_type>(
-            [value = payload_type(new int(42), {&destroyed}), &calls] { calls += *value; });
+        auto nested = std::make_unique<fn_type>([value = payload_type(new int(42), {&destroyed}), &calls] {
+            calls += *value;
+        });
         auto* const source = nested.get();
         fn_type destination;
         if (heap_target) {
@@ -359,7 +364,9 @@ TEST(Ruvia, move_assignment_extracts_source_owned_by_old_target) {
                 (void)padding;
             });
         } else {
-            destination = fn_type([owned = std::move(nested)] { (void)owned; });
+            destination = fn_type([owned = std::move(nested)] {
+                (void)owned;
+            });
         }
 
         destination = std::move(*source);
@@ -420,7 +427,9 @@ TEST(Ruvia, move_assignment_retirement_can_destroy_destination_owner) {
                 return *value;
             });
         } else {
-            *owner = callback([value = owner_payload(new int(1), {&owner, &destroyed})] { return *value; });
+            *owner = callback([value = owner_payload(new int(1), {&owner, &destroyed})] {
+                return *value;
+            });
         }
         callback source = make_replacing_target(2, destroyed, heap_target);
 
@@ -467,7 +476,9 @@ TEST(Ruvia, null_assignment_preserves_reentrant_replacement_lifetime) {
 
 TEST(Ruvia, noexcept_function_preserves_mutable_target_through_const_owner) {
     using fn_type = ruvia::move_only_function<int() noexcept>;
-    const auto throwing = [] { return 0; };
+    const auto throwing = [] {
+        return 0;
+    };
     static_assert(!std::is_constructible_v<fn_type, decltype(throwing)>);
     static_assert(std::is_nothrow_invocable_r_v<int, const fn_type&>);
 
@@ -494,8 +505,9 @@ template <typename runtime_type>
 [[nodiscard]] spawned_task spawn(runtime_type& runtime, ruvia::task<void> task_value) {
     auto completion = std::make_shared<std::promise<std::exception_ptr>>();
     auto result_value = completion->get_future();
-    asio::co_spawn(runtime.io_context(), ruvia::as_awaitable(std::move(task_value)),
-        [completion](std::exception_ptr error) { completion->set_value(std::move(error)); });
+    asio::co_spawn(runtime.io_context(), ruvia::as_awaitable(std::move(task_value)), [completion](std::exception_ptr error) {
+        completion->set_value(std::move(error));
+    });
     return {std::move(completion), std::move(result_value)};
 }
 
@@ -523,23 +535,20 @@ ruvia::task<void> close_notification(ruvia::worker_notification& notification) {
     co_return;
 }
 
-ruvia::task<void> close_and_stop_attachment(ruvia::worker_notification& notification,
-    ruvia::event_loop_attachment& attachment, asio::steady_timer& watchdog_value) {
+ruvia::task<void> close_and_stop_attachment(ruvia::worker_notification& notification, ruvia::event_loop_attachment& attachment, asio::steady_timer& watchdog_value) {
     watchdog_value.cancel();
     notification.close();
     attachment.stop();
     co_return;
 }
 
-ruvia::task<void> wait_for_one(ruvia::worker_notification& notification,
-    std::promise<void>* started, std::atomic<int>* result_value) {
+ruvia::task<void> wait_for_one(ruvia::worker_notification& notification, std::promise<void>* started, std::atomic<int>* result_value) {
     if (started != nullptr) {
         started->set_value();
     }
     const auto status = co_await notification.wait();
     if (result_value != nullptr) {
-        result_value->store(status == ruvia::worker_notification_wait_status::notified ? 1 : 2,
-            std::memory_order_release);
+        result_value->store(status == ruvia::worker_notification_wait_status::notified ? 1 : 2, std::memory_order_release);
     }
 }
 
@@ -547,35 +556,28 @@ ruvia::task<void> cold_wait(ruvia::worker_notification& notification) {
     static_cast<void>(co_await notification.wait());
 }
 
-ruvia::task<void> wait_close_and_stop_attachment(ruvia::worker_notification& notification,
-    ruvia::event_loop_attachment& attachment, std::atomic<int>& result_value) {
+ruvia::task<void> wait_close_and_stop_attachment(ruvia::worker_notification& notification, ruvia::event_loop_attachment& attachment, std::atomic<int>& result_value) {
     const auto status = co_await notification.wait();
     notification.close();
     attachment.stop();
-    result_value.store(status == ruvia::worker_notification_wait_status::notified ? 1 : 2,
-        std::memory_order_release);
+    result_value.store(status == ruvia::worker_notification_wait_status::notified ? 1 : 2, std::memory_order_release);
 }
-ruvia::task<void> notify_on_worker(
-    ruvia::worker_notification& notification, std::atomic<int>& result_value) {
+ruvia::task<void> notify_on_worker(ruvia::worker_notification& notification, std::atomic<int>& result_value) {
     result_value.store(static_cast<int>(notification.notify()), std::memory_order_release);
     co_return;
 }
 
-ruvia::task<void> close_and_destroy_on_resume(
-    std::unique_ptr<ruvia::worker_notification>& notification, std::promise<void>* started,
-    std::atomic<int>& result_value) {
+ruvia::task<void> close_and_destroy_on_resume(std::unique_ptr<ruvia::worker_notification>& notification, std::promise<void>* started, std::atomic<int>& result_value) {
     if (started != nullptr) {
         started->set_value();
     }
     const auto status = co_await notification->wait();
     notification->close();
     notification.reset();
-    result_value.store(status == ruvia::worker_notification_wait_status::notified ? 1 : 2,
-        std::memory_order_release);
+    result_value.store(status == ruvia::worker_notification_wait_status::notified ? 1 : 2, std::memory_order_release);
 }
 
-ruvia::task<void> wait_until_closed(ruvia::worker_notification& notification,
-    std::promise<void>* started, std::atomic<int>& result_value) {
+ruvia::task<void> wait_until_closed(ruvia::worker_notification& notification, std::promise<void>* started, std::atomic<int>& result_value) {
     if (started != nullptr) {
         started->set_value();
     }
@@ -593,15 +595,15 @@ struct round_state final {
     std::condition_variable changed_;
     std::size_t completed_{0};
 
-    [[nodiscard]] bool wait_for(
-        std::size_t target, std::chrono::steady_clock::time_point deadline_value) {
+    [[nodiscard]] bool wait_for(std::size_t target, std::chrono::steady_clock::time_point deadline_value) {
         std::unique_lock lock(mutex_);
-        return changed_.wait_until(lock, deadline_value, [&] { return completed_ >= target; });
+        return changed_.wait_until(lock, deadline_value, [&] {
+            return completed_ >= target;
+        });
     }
 };
 
-ruvia::task<void> wait_runtime_rounds(ruvia::worker_notification& notification,
-    round_state& rounds, std::size_t target, bool& success) {
+ruvia::task<void> wait_runtime_rounds(ruvia::worker_notification& notification, round_state& rounds, std::size_t target, bool& success) {
     for (std::size_t index = 0; index < target; ++index) {
         if (co_await notification.wait() != ruvia::worker_notification_wait_status::notified) {
             success = false;
@@ -616,8 +618,7 @@ ruvia::task<void> wait_runtime_rounds(ruvia::worker_notification& notification,
     success = true;
 }
 
-ruvia::task<void> wait_rounds(ruvia::worker_notification& notification, round_state& rounds,
-    std::size_t target, bool& success) {
+ruvia::task<void> wait_rounds(ruvia::worker_notification& notification, round_state& rounds, std::size_t target, bool& success) {
     for (std::size_t index = 0; index < target; ++index) {
         if (co_await notification.wait() != ruvia::worker_notification_wait_status::notified) {
             success = false;
@@ -640,8 +641,7 @@ struct producer_state final {
     std::atomic<bool> early_closed_{false};
 };
 
-ruvia::task<void> wait_for_producers(
-    ruvia::worker_notification& notification, producer_state& state_value, std::size_t producer_count) {
+ruvia::task<void> wait_for_producers(ruvia::worker_notification& notification, producer_state& state_value, std::size_t producer_count) {
     while (state_value.finished_.load(std::memory_order_acquire) != producer_count) {
         if (co_await notification.wait() != ruvia::worker_notification_wait_status::notified) {
             co_return;
@@ -650,8 +650,7 @@ ruvia::task<void> wait_for_producers(
     state_value.observed_.store(state_value.published_.load(std::memory_order_acquire), std::memory_order_release);
 }
 
-ruvia::task<void> observe_close_and_timer(asio::io_context& io_context,
-    ruvia::worker_notification& notification, std::atomic<bool>& timer_fired) {
+ruvia::task<void> observe_close_and_timer(asio::io_context& io_context, ruvia::worker_notification& notification, std::atomic<bool>& timer_fired) {
     asio::steady_timer timer(io_context);
     timer.expires_after(20ms);
     auto first = co_await ruvia::async_asio<void>([&timer](auto handler) mutable {
@@ -672,8 +671,7 @@ ruvia::task<void> observe_close_and_timer(asio::io_context& io_context,
     timer_fired.store(true, std::memory_order_release);
 }
 
-ruvia::task<void> probe_wrong_worker_wait(
-    ruvia::worker_notification& notification, bool& rejected) {
+ruvia::task<void> probe_wrong_worker_wait(ruvia::worker_notification& notification, bool& rejected) {
     try {
         static_cast<void>(co_await notification.wait());
     } catch (const std::logic_error&) {
@@ -681,8 +679,7 @@ ruvia::task<void> probe_wrong_worker_wait(
     }
 }
 
-ruvia::task<void> probe_concurrent_wait(
-    ruvia::worker_notification& notification, bool& rejected) {
+ruvia::task<void> probe_concurrent_wait(ruvia::worker_notification& notification, bool& rejected) {
     try {
         static_cast<void>(co_await notification.wait());
     } catch (const std::logic_error&) {
@@ -711,10 +708,8 @@ struct notify_during_registration final {
     }
 };
 
-ruvia::task<void> wait_for_registration_race(
-    ruvia::worker_notification& notification, bool& notified) {
-    notified = (co_await notify_during_registration{notification, notification.wait()}) ==
-               ruvia::worker_notification_wait_status::notified;
+ruvia::task<void> wait_for_registration_race(ruvia::worker_notification& notification, bool& notified) {
+    notified = (co_await notify_during_registration{notification, notification.wait()}) == ruvia::worker_notification_wait_status::notified;
     notification.close();
 }
 
@@ -756,8 +751,9 @@ TEST(Ruvia, worker_notification_early_latch_cold_wait_and_repeated_reuse) {
         const auto deadline_value = std::chrono::steady_clock::now() + wait_timeout;
         for (std::size_t index = 1; index < round_count; ++index) {
             std::unique_lock lock(rounds.mutex_);
-            const bool ready = rounds.changed_.wait_until(lock, deadline_value,
-                [&] { return rounds.completed_ >= index; });
+            const bool ready = rounds.changed_.wait_until(lock, deadline_value, [&] {
+                return rounds.completed_ >= index;
+            });
             lock.unlock();
             if (!ready) {
                 return;
@@ -1054,15 +1050,13 @@ TEST(Ruvia, worker_notification_close_races_producers_without_waiting_for_them) 
         });
     }
     const auto producer_deadline = std::chrono::steady_clock::now() + wait_timeout;
-    while (ready.load(std::memory_order_acquire) != producer_count &&
-           std::chrono::steady_clock::now() < producer_deadline) {
+    while (ready.load(std::memory_order_acquire) != producer_count && std::chrono::steady_clock::now() < producer_deadline) {
         std::this_thread::yield();
     }
     const bool producers_ready = ready.load(std::memory_order_acquire) == producer_count;
     begin.store(true, std::memory_order_release);
     const auto call_deadline = std::chrono::steady_clock::now() + wait_timeout;
-    while (open_calls.load(std::memory_order_acquire) != producer_count &&
-           std::chrono::steady_clock::now() < call_deadline) {
+    while (open_calls.load(std::memory_order_acquire) != producer_count && std::chrono::steady_clock::now() < call_deadline) {
         std::this_thread::yield();
     }
     const bool producers_notified_open = open_calls.load(std::memory_order_acquire) == producer_count;
@@ -1105,13 +1099,16 @@ TEST(Ruvia, worker_notification_wakes_while_public_post_queue_is_full) {
     const auto blocker = worker_ref_value.post([&] {
         blocked.set_value();
         std::unique_lock lock(gate_mutex);
-        static_cast<void>(gate_changed.wait_until(lock,
-            std::chrono::steady_clock::now() + wait_timeout, [&] { return release_worker; }));
+        static_cast<void>(gate_changed.wait_until(lock, std::chrono::steady_clock::now() + wait_timeout, [&] {
+            return release_worker;
+        }));
     });
     const bool blocker_entered = blocked_future.wait_for(wait_timeout) == std::future_status::ready;
 
     std::atomic<bool> queued_ran{false};
-    const auto queued = worker_ref_value.post([&] { queued_ran.store(true, std::memory_order_release); });
+    const auto queued = worker_ref_value.post([&] {
+        queued_ran.store(true, std::memory_order_release);
+    });
     const auto full = worker_ref_value.post([] {});
     const auto notification_result = notification.notify();
     {
@@ -1129,8 +1126,7 @@ TEST(Ruvia, worker_notification_wakes_while_public_post_queue_is_full) {
     EXPECT_TRUE(blocker_entered);
     EXPECT_TRUE(queued.accepted());
     EXPECT_EQ(full.status(), ruvia::post_status::queue_full);
-    EXPECT_TRUE(notification_result == ruvia::worker_notification_status::notified ||
-                notification_result == ruvia::worker_notification_status::coalesced);
+    EXPECT_TRUE(notification_result == ruvia::worker_notification_status::notified || notification_result == ruvia::worker_notification_status::coalesced);
     EXPECT_TRUE(wait_completed);
     EXPECT_TRUE(close_completed);
     EXPECT_TRUE(queued_ran.load(std::memory_order_acquire));
@@ -1189,8 +1185,7 @@ TEST(Ruvia, worker_notification_borrows_event_loop) {
     ruvia::worker_notification notification(loop);
     EXPECT_EQ(notification.notify(), ruvia::worker_notification_status::notified);
     std::atomic<int> wait_result{0};
-    auto waiting = spawn(
-        loop, wait_close_and_stop_attachment(notification, attachment, wait_result));
+    auto waiting = spawn(loop, wait_close_and_stop_attachment(notification, attachment, wait_result));
     attachment.run();
     EXPECT_TRUE(finish(waiting));
     EXPECT_EQ(wait_result.load(std::memory_order_acquire), 1);

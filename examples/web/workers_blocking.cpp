@@ -71,10 +71,9 @@ private:
     // becomes a typed rejection; take_value() explicitly throws
     // blocking_operation_rejected, which the default error path answers with 503.
     ruvia::task<ruvia::http_response> offload(ruvia::context& c) {
-        auto result_value = co_await c.run_blocking(
-            [input = std::string(c.req().query("input").value_or("default"))] {
-                return slow_checksum(input);
-            });
+        auto result_value = co_await c.run_blocking([input = std::string(c.req().query("input").value_or("default"))] {
+            return slow_checksum(input);
+        });
         const auto checksum = std::move(result_value).take_value();
         std::string body;
         body.append("checksum=");
@@ -87,13 +86,11 @@ private:
     // the error path, and a deadline so one wedged call cannot pin the request
     // forever.
     ruvia::task<ruvia::http_response> offload_or_shed(ruvia::context& c) {
-        auto result_value = co_await c.run_blocking(
-            [input = std::string("expensive input")] { return slow_checksum(input); },
-            {.timeout_ = std::chrono::seconds(2)});
+        auto result_value = co_await c.run_blocking([input = std::string("expensive input")] {
+            return slow_checksum(input);
+        }, {.timeout_ = std::chrono::seconds(2)});
         if (!result_value.completed()) {
-            co_return c.error({.status_ = ruvia::http_status::service_unavailable,
-                .code_ = "busy",
-                .message_ = ruvia::describe_blocking_status(result_value.status())});
+            co_return c.error({.status_ = ruvia::http_status::service_unavailable, .code_ = "busy", .message_ = ruvia::describe_blocking_status(result_value.status())});
         }
         std::string body;
         body.append("checksum=");
@@ -128,8 +125,7 @@ int main() {
     try {
         ruvia::app()
             .listen({.address_ = "0.0.0.0", .http_ = 8090})
-            .server({.worker_count_ = 2,
-                .process_signal_handlers_ = ruvia::process_signal_handler_policy::install})
+            .server({.worker_count_ = 2, .process_signal_handlers_ = ruvia::process_signal_handler_policy::install})
             // Each worker builds its own worker_stats before serving; the factory
             // form (use_worker_state<T>(fn)) covers non-default-constructible types.
             .use_worker_state<worker_stats>()

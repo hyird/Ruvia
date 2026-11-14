@@ -140,7 +140,9 @@ TEST(Ruvia, http2_upgrade_on_the_request_that_reaches_the_connection_limit_is_se
     using namespace http2_request_limit_test;
     using namespace std::chrono_literals;
     auto& app = ruvia::app();
-    app.on_start([] { started().release(); });
+    app.on_start([] {
+        started().release();
+    });
     asio::io_context io;
     ruvia::test::tcp_port_reservation reservation(io);
     const auto endpoint = reservation.endpoint();

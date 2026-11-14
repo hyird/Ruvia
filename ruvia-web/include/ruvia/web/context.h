@@ -109,11 +109,10 @@ private:
     friend class conn_info;
     friend class server_connection;
 
-    constexpr tls_connection_transport(std::optional<std::string_view> client_certificate_subject,
-        std::string_view alpn, std::string_view server_name) noexcept
-        : client_certificate_subject_(client_certificate_subject),
-          alpn_(alpn),
-          server_name_(server_name) {}
+    constexpr tls_connection_transport(std::optional<std::string_view> client_certificate_subject, std::string_view alpn, std::string_view server_name) noexcept :
+        client_certificate_subject_(client_certificate_subject),
+        alpn_(alpn),
+        server_name_(server_name) {}
 
     std::optional<std::string_view> client_certificate_subject_;
     std::string_view alpn_;
@@ -182,36 +181,33 @@ public:
 private:
     friend class detail::context_services;
 
-    conn_info(std::uint64_t id, std::string_view remote_address, plain_connection_transport transport) noexcept
-        : id_(id),
-          remote_(ip_address::parse(remote_address).value_or(ip_address{}), 0),
-          remote_text_(remote_address),
-          client_(remote_),
-          transport_(transport),
-          scheme_(http_scheme::http) {}
+    conn_info(std::uint64_t id, std::string_view remote_address, plain_connection_transport transport) noexcept :
+        id_(id),
+        remote_(ip_address::parse(remote_address).value_or(ip_address{}), 0),
+        remote_text_(remote_address),
+        client_(remote_),
+        transport_(transport),
+        scheme_(http_scheme::http) {}
 
-    conn_info(std::uint64_t id, std::string_view remote_address, tls_connection_transport transport) noexcept
-        : id_(id),
-          remote_(ip_address::parse(remote_address).value_or(ip_address{}), 0),
-          remote_text_(remote_address),
-          client_(remote_),
-          transport_(transport),
-          scheme_(http_scheme::https) {}
+    conn_info(std::uint64_t id, std::string_view remote_address, tls_connection_transport transport) noexcept :
+        id_(id),
+        remote_(ip_address::parse(remote_address).value_or(ip_address{}), 0),
+        remote_text_(remote_address),
+        client_(remote_),
+        transport_(transport),
+        scheme_(http_scheme::https) {}
 
     [[nodiscard]] static conn_info plain(std::uint64_t id, std::string_view remote_address) noexcept {
         return conn_info(id, remote_address, plain_connection_transport{});
     }
 
-    [[nodiscard]] static conn_info tls(std::uint64_t id, std::string_view remote_address,
-        std::optional<std::string_view> client_certificate_subject, std::string_view alpn,
-        std::string_view server_name) noexcept {
+    [[nodiscard]] static conn_info tls(std::uint64_t id, std::string_view remote_address, std::optional<std::string_view> client_certificate_subject, std::string_view alpn, std::string_view server_name) noexcept {
         return conn_info(id, remote_address, tls_connection_transport(client_certificate_subject, alpn, server_name));
     }
 
     // Applied only after the peer has been matched against the configured
     // trusted set. An empty scheme leaves the transport-derived value.
-    constexpr void apply_forwarded(
-        const ip_address& client_address, std::optional<http_scheme> forwarded_scheme) noexcept {
+    constexpr void apply_forwarded(const ip_address& client_address, std::optional<http_scheme> forwarded_scheme) noexcept {
         client_ = ip_endpoint(client_address, 0);
         via_trusted_proxy_ = true;
         if (forwarded_scheme.has_value()) {
@@ -296,11 +292,11 @@ class static_text final {
 public:
     // Keeps embedded NUL bytes and drops only the literal's terminator.
     template <std::size_t n>
-    consteval explicit static_text(const char (&literal)[n]) noexcept
-        : value_(literal, n > 0 && literal[n - 1] == '\0' ? n - 1 : n) {}
+    consteval explicit static_text(const char (&literal)[n]) noexcept :
+        value_(literal, n > 0 && literal[n - 1] == '\0' ? n - 1 : n) {}
 
-    consteval explicit static_text(std::string_view value) noexcept
-        : value_(value) {}
+    consteval explicit static_text(std::string_view value) noexcept :
+        value_(value) {}
 
     [[nodiscard]] constexpr std::string_view view() const noexcept {
         return value_;
@@ -345,10 +341,8 @@ public:
     [[nodiscard]] std::optional<std::string_view> trailer(std::string_view name) const noexcept;
     // Client weights select a caller-owned supported value; server order breaks
     // ties. An absent field selects the first offer, no acceptable offer is nullopt.
-    [[nodiscard]] std::optional<std::string_view> negotiate(
-        negotiable_field field, std::span<const std::string_view> supported) const noexcept;
-    [[nodiscard]] std::optional<std::string_view> negotiate(
-        negotiable_field field, std::initializer_list<std::string_view> supported) const noexcept {
+    [[nodiscard]] std::optional<std::string_view> negotiate(negotiable_field field, std::span<const std::string_view> supported) const noexcept;
+    [[nodiscard]] std::optional<std::string_view> negotiate(negotiable_field field, std::initializer_list<std::string_view> supported) const noexcept {
         return negotiate(field, std::span<const std::string_view>(supported.begin(), supported.size()));
     }
     [[nodiscard]] std::optional<std::string_view> query(std::string_view name) const;
@@ -406,12 +400,11 @@ public:
 
 private:
     friend class context;
-    explicit constexpr context_request(const context& context_value RUVIA_LIFETIMEBOUND) noexcept
-        : context_(&context_value) {}
+    explicit constexpr context_request(const context& context_value RUVIA_LIFETIMEBOUND) noexcept :
+        context_(&context_value) {}
 
     template <typename t_type>
-    [[nodiscard]] static std::optional<t_type> parse_typed(
-        std::optional<std::string_view> raw, void (*fail)());
+    [[nodiscard]] static std::optional<t_type> parse_typed(std::optional<std::string_view> raw, void (*fail)());
 
     const context* context_{nullptr};
 };
@@ -459,9 +452,9 @@ private:
     enum class target_type { draft,
         selected,
         policy };
-    context_response_editor(context& owner, target_type target) noexcept
-        : owner_(&owner),
-          target_(target) {}
+    context_response_editor(context& owner, target_type target) noexcept :
+        owner_(&owner),
+        target_(target) {}
     [[nodiscard]] http_response& target() const;
     context* owner_;
     target_type target_;
@@ -487,11 +480,11 @@ public:
 
     template <typename text_type>
         requires std::constructible_from<borrowed_text, text_type&&>
-    constexpr borrowed_file_path(text_type&& utf8) noexcept(std::is_nothrow_constructible_v<borrowed_text, text_type&&>)
-        : text_(std::forward<text_type>(utf8)) {}
+    constexpr borrowed_file_path(text_type&& utf8) noexcept(std::is_nothrow_constructible_v<borrowed_text, text_type&&>) :
+        text_(std::forward<text_type>(utf8)) {}
 
-    borrowed_file_path(const std::filesystem::path& path) noexcept
-        : native_(path.native()) {}
+    borrowed_file_path(const std::filesystem::path& path) noexcept :
+        native_(path.native()) {}
 
     borrowed_file_path(std::filesystem::path&&) = delete;
     borrowed_file_path(const std::filesystem::path&&) = delete;
@@ -527,15 +520,11 @@ private:
     friend struct detail::context_access;
     friend struct detail::session_access;
     template <typename t_type>
-    friend detail::request_binding_guard<t_type> detail::bind_validated_model(
-        context& context_value, const t_type& model);
+    friend detail::request_binding_guard<t_type> detail::bind_validated_model(context& context_value, const t_type& model);
 
     context(const http_request& request, const detail::context_services& services);
 
-    context(const http_request& request, std::string_view route_path,
-        const std::string_view* param_names, const std::string_view* param_values,
-        std::size_t param_count, std::uintptr_t route_rate_limit_scope,
-        const detail::context_services& services);
+    context(const http_request& request, std::string_view route_path, const std::string_view* param_names, const std::string_view* param_values, std::size_t param_count, std::uintptr_t route_rate_limit_scope, const detail::context_services& services);
 
 public:
     // Sends a bodyless 1xx head before the final response. Fields are copied
@@ -609,8 +598,7 @@ public:
     // With application::blocking_pool(nullptr) the result reports
     // blocking_status::unavailable without submitting the callable.
     template <typename callable_type>
-    [[nodiscard]] task<blocking_result<std::invoke_result_t<callable_type&>>> run_blocking(
-        callable_type callable, operation_options options = {}) const {
+    [[nodiscard]] task<blocking_result<std::invoke_result_t<callable_type&>>> run_blocking(callable_type callable, operation_options options = {}) const {
         return capabilities_.run_blocking(std::move(callable), std::move(options));
     }
 
@@ -686,11 +674,9 @@ public:
     // or a "*" value the route cannot capture back (one holding '\', or
     // starting with '/' at the root), and std::logic_error when the context
     // carries no route table (for example a hand-built test context).
-    [[nodiscard]] std::string url_for(
-        std::string_view pattern, std::initializer_list<std::string_view> values = {}) const;
+    [[nodiscard]] std::string url_for(std::string_view pattern, std::initializer_list<std::string_view> values = {}) const;
 
-    [[nodiscard]] std::string url_for(
-        std::string_view pattern, std::span<const std::string_view> values) const;
+    [[nodiscard]] std::string url_for(std::string_view pattern, std::span<const std::string_view> values) const;
 #ifdef RUVIA_ENABLE_DATABASE
     [[nodiscard]] db_session db() const;
     [[nodiscard]] db_session db(std::string_view alias) const;
@@ -808,8 +794,7 @@ public:
     // segment, an absolute path, or a NUL is 403 -- rejected, never resolved,
     // whichever parameter it came from -- and an unindexed name 404. A file
     // that is no longer the indexed one is 500 static_file_changed.
-    [[nodiscard]] task<http_response> static_file(
-        const static_root& root, static_file_response_options options);
+    [[nodiscard]] task<http_response> static_file(const static_root& root, static_file_response_options options);
     // A temporary root would be destroyed before the returned task reads it.
     task<http_response> static_file(const static_root&&, static_file_response_options) = delete;
 
@@ -825,9 +810,7 @@ private:
     [[nodiscard]] http_response html_owned(std::string&& body);
 
     [[nodiscard]] task<http_response> not_found_task();
-    [[nodiscard]] task<dispatch_response> dispatch_task(std::string method,
-        std::string target, std::string body, std::vector<http_header> headers,
-        ::ruvia::stop_token stop);
+    [[nodiscard]] task<dispatch_response> dispatch_task(std::string method, std::string target, std::string body, std::vector<http_header> headers, ::ruvia::stop_token stop);
     context& set_stable_response_header(std::string_view name, std::string_view value);
     void apply_response_state(http_response& response, std::optional<http_status_code> status_code);
 
@@ -890,8 +873,7 @@ struct readiness_response_options final {
 
 [[nodiscard]] http_response make_health_response(context& context_value);
 
-[[nodiscard]] http_response make_readiness_response(
-    context& context_value, readiness_response_options options = {});
+[[nodiscard]] http_response make_readiness_response(context& context_value, readiness_response_options options = {});
 
 template <typename t_type>
 inline request_state_binding<t_type> context::bind_request_state(const t_type& value) {
@@ -911,8 +893,7 @@ inline http_response context::json(const t_type& value) {
 }
 
 template <typename t_type>
-inline std::optional<t_type> context_request::parse_typed(
-    std::optional<std::string_view> raw, void (*fail)()) {
+inline std::optional<t_type> context_request::parse_typed(std::optional<std::string_view> raw, void (*fail)()) {
     if (!raw) {
         return std::nullopt;
     }
@@ -954,8 +935,7 @@ inline std::optional<bool> context_request::param(std::string_view name) const {
 namespace detail {
 
 template <validation_target target, typename model_type>
-[[nodiscard]] task<std::optional<model_type>> parse_optional_request_model(
-    const context& context_value, operation_options operation) {
+[[nodiscard]] task<std::optional<model_type>> parse_optional_request_model(const context& context_value, operation_options operation) {
     if (!request_has_body_media_type<target>(context_value.req().header("Content-Type"))) {
         co_return std::nullopt;
     }
@@ -968,15 +948,13 @@ template <validation_target target, typename model_type>
 template <typename t_type>
 task<std::optional<t_type>> context_request::json_if(operation_options operation) const {
     static_assert(detail::is_model<t_type>, "JSON body type must use RUVIA_MODEL");
-    return ::ruvia::make_scoped_operation(context_->operation_scope_,
-        detail::parse_optional_request_model<validation_target::json, t_type>(*context_, std::move(operation)));
+    return ::ruvia::make_scoped_operation(context_->operation_scope_, detail::parse_optional_request_model<validation_target::json, t_type>(*context_, std::move(operation)));
 }
 
 template <typename t_type>
 task<std::optional<t_type>> context_request::form_if(operation_options operation) const {
     static_assert(detail::is_model<t_type>, "form body type must use RUVIA_MODEL");
-    return ::ruvia::make_scoped_operation(context_->operation_scope_,
-        detail::parse_optional_request_model<validation_target::form, t_type>(*context_, std::move(operation)));
+    return ::ruvia::make_scoped_operation(context_->operation_scope_, detail::parse_optional_request_model<validation_target::form, t_type>(*context_, std::move(operation)));
 }
 
 template <typename t_type>
@@ -1004,8 +982,7 @@ template <validation_target target>
     } else if constexpr (target == validation_target::cookie) {
         return c.req().cookie_fields();
     } else {
-        static_assert(always_false<std::integral_constant<validation_target, target>>,
-            "unsupported validator target");
+        static_assert(always_false<std::integral_constant<validation_target, target>>, "unsupported validator target");
     }
 }
 
@@ -1020,8 +997,7 @@ task<void> model_validation_middleware<target, body_type>::invoke(context& c, ne
         auto binding = bind_validated_model(c, body);
         co_await next_value();
     } else {
-        auto body = parse_and_validate_request_model<target, body_type>(
-            std::cref(validation_target_fields<target>(c)));
+        auto body = parse_and_validate_request_model<target, body_type>(std::cref(validation_target_fields<target>(c)));
         auto binding = bind_validated_model(c, body);
         co_await next_value();
     }

@@ -62,12 +62,6 @@
 #ifdef RUVIA_ENABLE_HTTP3
 #include "ruvia/http/http3_connection.h"
 #endif
-#ifdef RUVIA_ENABLE_HTTP2
-#include "ruvia/http/http2_connection.h"
-#endif
-#ifdef RUVIA_ENABLE_HTTP2
-#include "ruvia/http/http2_connection.h"
-#endif
 
 namespace ruvia::detail {
 
@@ -92,15 +86,14 @@ void require_client_host_lookup(std::string_view host, const worker_ref& worker)
 // 释放等待者，再丢弃迟到结果。IP 字面量不查询，也不需要池。
 class client_host_resolver final {
 public:
-    explicit client_host_resolver(const worker_ref& worker) noexcept
-        : worker_(&worker) {}
+    explicit client_host_resolver(const worker_ref& worker) noexcept :
+        worker_(&worker) {}
     client_host_resolver(const client_host_resolver&) = delete;
     client_host_resolver& operator=(const client_host_resolver&) = delete;
     client_host_resolver(client_host_resolver&& other) noexcept;
     client_host_resolver& operator=(client_host_resolver&& other) noexcept;
 
-    [[nodiscard]] client_resolve_operation resolve(std::string_view host, std::uint16_t port,
-        const operation_deadline& timeout, stop_token stop = {});
+    [[nodiscard]] client_resolve_operation resolve(std::string_view host, std::uint16_t port, const operation_deadline& timeout, stop_token stop = {});
     void cancel() noexcept;
 
 private:
@@ -122,12 +115,12 @@ template <typename results_type>
 class client_address_sequence final {
 public:
     using endpoint_type = std::remove_cvref_t<decltype(std::declval<const results_type&>().begin()->endpoint())>;
-    explicit client_address_sequence(const results_type& addresses)
-        : addresses_(addresses),
-          first_(addresses.begin()),
-          other_(addresses.begin()),
-          first_is_v6_(!addresses.empty() && addresses.begin()->endpoint().address().is_v6()),
-          pending_(advance()) {}
+    explicit client_address_sequence(const results_type& addresses) :
+        addresses_(addresses),
+        first_(addresses.begin()),
+        other_(addresses.begin()),
+        first_is_v6_(!addresses.empty() && addresses.begin()->endpoint().address().is_v6()),
+        pending_(advance()) {}
     client_address_sequence(results_type&&) = delete;
 
     [[nodiscard]] bool has_next() const noexcept {
@@ -188,10 +181,8 @@ struct client_happy_eyeballs_result final {
 // success or cancellation.
 class client_happy_eyeballs final {
 public:
-    client_happy_eyeballs(const worker_ref& worker, const asio::ip::tcp::socket::executor_type& executor,
-        const asio::ip::tcp::resolver::results_type& addresses);
-    client_happy_eyeballs(worker_ref&&, const asio::ip::tcp::socket::executor_type&,
-        const asio::ip::tcp::resolver::results_type&) = delete;
+    client_happy_eyeballs(const worker_ref& worker, const asio::ip::tcp::socket::executor_type& executor, const asio::ip::tcp::resolver::results_type& addresses);
+    client_happy_eyeballs(worker_ref&&, const asio::ip::tcp::socket::executor_type&, const asio::ip::tcp::resolver::results_type&) = delete;
     ~client_happy_eyeballs();
     client_happy_eyeballs(const client_happy_eyeballs&) = delete;
     client_happy_eyeballs& operator=(const client_happy_eyeballs&) = delete;
@@ -202,9 +193,9 @@ public:
 
 private:
     struct attempt final {
-        attempt(const asio::ip::tcp::socket::executor_type& executor, asio::ip::tcp::endpoint endpoint)
-            : socket_(executor),
-              endpoint_(std::move(endpoint)) {}
+        attempt(const asio::ip::tcp::socket::executor_type& executor, asio::ip::tcp::endpoint endpoint) :
+            socket_(executor),
+            endpoint_(std::move(endpoint)) {}
         attempt(const attempt&) = delete;
         attempt& operator=(const attempt&) = delete;
         attempt(attempt&&) noexcept = default;
@@ -252,19 +243,17 @@ enum class client_phase : unsigned char { fresh,
 template <typename owner_type>
 class client_lifecycle final {
 public:
-    client_lifecycle(owner_type& owner_value, const event_loop& loop, const worker_ref& worker_value,
-        client_phase initial = client_phase::fresh)
-        : owner_(owner_value),
-          loop_(loop),
-          worker_(worker_value),
-          close_signal_(worker_value),
-          phase_(initial) {
+    client_lifecycle(owner_type& owner_value, const event_loop& loop, const worker_ref& worker_value, client_phase initial = client_phase::fresh) :
+        owner_(owner_value),
+        loop_(loop),
+        worker_(worker_value),
+        close_signal_(worker_value),
+        phase_(initial) {
         operations_.bind_worker(worker_value);
     }
 
     ~client_lifecycle() {
-        if (phase_.load(std::memory_order_acquire) != client_phase::closed ||
-            !close_complete_ || operations_.has_pending_operations()) {
+        if (phase_.load(std::memory_order_acquire) != client_phase::closed || !close_complete_ || operations_.has_pending_operations()) {
             std::terminate();
         }
     }
@@ -328,7 +317,9 @@ public:
             return;
         }
         try {
-            if (!loop_.defer_cleanup([state = owner_.shared_from_this()] { state->lifecycle_.start_close(); }) &&
+            if (!loop_.defer_cleanup([state = owner_.shared_from_this()] {
+                state->lifecycle_.start_close();
+            }) &&
                 phase_.load(std::memory_order_acquire) != client_phase::closed) {
                 std::terminate();
             }
@@ -367,8 +358,7 @@ private:
     task<void> connect_on_worker() {
         require_current(" must connect on its bound event loop");
         auto expected = client_phase::fresh;
-        if (!phase_.compare_exchange_strong(expected, client_phase::connecting,
-                std::memory_order_acq_rel, std::memory_order_acquire)) {
+        if (!phase_.compare_exchange_strong(expected, client_phase::connecting, std::memory_order_acq_rel, std::memory_order_acquire)) {
             if (expected == client_phase::closing || expected == client_phase::closed) {
                 throw std::runtime_error(message(" closed before connecting"));
             }
@@ -382,8 +372,7 @@ private:
             }
             co_await owner_.backend().connect();
             expected = client_phase::connecting;
-            if (!phase_.compare_exchange_strong(expected, client_phase::connected,
-                    std::memory_order_acq_rel, std::memory_order_acquire)) {
+            if (!phase_.compare_exchange_strong(expected, client_phase::connected, std::memory_order_acq_rel, std::memory_order_acquire)) {
                 throw std::runtime_error(message(" stopped while connecting"));
             }
             connecting_ = false;
@@ -406,16 +395,14 @@ private:
     [[nodiscard]] bool begin_close() noexcept {
         auto phase = phase_.load(std::memory_order_acquire);
         while (phase != client_phase::closed && phase != client_phase::closing) {
-            if (phase_.compare_exchange_weak(phase, client_phase::closing,
-                    std::memory_order_acq_rel, std::memory_order_acquire)) {
+            if (phase_.compare_exchange_weak(phase, client_phase::closing, std::memory_order_acq_rel, std::memory_order_acquire)) {
                 return true;
             }
         }
         return false;
     }
 
-    [[nodiscard]] static task<void> shutdown_owned(std::shared_ptr<owner_type> state_value,
-        shutdown_mode mode) {
+    [[nodiscard]] static task<void> shutdown_owned(std::shared_ptr<owner_type> state_value, shutdown_mode mode) {
         auto& lifecycle = state_value->lifecycle_;
         if (!lifecycle.loop_.worker().is_current()) {
             throw std::logic_error("client shutdown must run on its bound event loop");
@@ -512,8 +499,7 @@ namespace ruvia::detail {
 
 // A client transport host, also used for TLS SNI and peer verification: an
 // unbracketed IP literal or an ASCII DNS host name.
-inline void validate_client_origin_host(
-    std::string_view host, const char* empty_message, const char* invalid_message) {
+inline void validate_client_origin_host(std::string_view host, const char* empty_message, const char* invalid_message) {
     ensure_config_host(host, empty_message, invalid_message);
     if (!is_client_ip_address(host) && !is_valid_dns_host(host)) {
         throw std::invalid_argument(invalid_message);
@@ -541,14 +527,12 @@ inline void validate_client_tls_config(const client_tls_config& config) {
         // The override replaces the origin host for SNI and peer verification.
         validate_client_origin_host(*config.server_name_, "TLS server name must not be empty", "TLS server name is invalid");
     }
-    if (config.mode_ == client_tls_mode::disabled &&
-        (config.ca_file_.has_value() || config.identity_.has_value() || config.server_name_.has_value())) {
+    if (config.mode_ == client_tls_mode::disabled && (config.ca_file_.has_value() || config.identity_.has_value() || config.server_name_.has_value())) {
         throw std::invalid_argument("disabled TLS must not have TLS credentials or a server name");
     }
     // Database drivers read identity files themselves; every client keeps
     // the one file-based shape.
-    if (config.identity_.has_value() &&
-        (!config.identity_->certificate_chain_pem_.empty() || !config.identity_->private_key_pem_.empty())) {
+    if (config.identity_.has_value() && (!config.identity_->certificate_chain_pem_.empty() || !config.identity_->private_key_pem_.empty())) {
         throw std::invalid_argument("client TLS identities must be PEM files, not in-memory PEM");
     }
 }
@@ -567,8 +551,7 @@ struct client_tls_config_storage final {
     // Validates the file paths. With client_tls_files::parse and TLS enabled,
     // also reads the trust store and the client identity (when configured);
     // throws when either cannot be loaded.
-    client_tls_config_storage(
-        const client_tls_config& source_value, client_tls_files files);
+    client_tls_config_storage(const client_tls_config& source_value, client_tls_files files);
 
     // Copies share the parsed trust store and identity; no file is re-read.
     client_tls_config_storage(const client_tls_config_storage& source_value);
@@ -598,9 +581,7 @@ struct client_tls_config_storage final {
 // Owns paths and password before returning the cold task. Blocking work owns
 // only TLS material, never a client's worker-affine configuration or callbacks.
 // A started parser is joined even after cancellation; callers reject publication.
-[[nodiscard]] task<client_tls_config_storage> prepare_client_tls_config(
-    worker_ref worker, client_tls_config_storage config,
-    std::string_view private_key_password, stop_token stop);
+[[nodiscard]] task<client_tls_config_storage> prepare_client_tls_config(worker_ref worker, client_tls_config_storage config, std::string_view private_key_password, stop_token stop);
 
 enum class client_tls_setup_error : std::uint8_t {
     none,
@@ -647,10 +628,10 @@ class client_tls_socket;
 template <typename handler_type>
 class client_tls_write_handler final {
 public:
-    client_tls_write_handler(handler_type&& handler, client_tls_socket& socket, bool counted)
-        : handler_(std::move(handler)),
-          socket_(&socket),
-          counted_(counted) {}
+    client_tls_write_handler(handler_type&& handler, client_tls_socket& socket, bool counted) :
+        handler_(std::move(handler)),
+        socket_(&socket),
+        counted_(counted) {}
 
     void operator()(const std::error_code& error, std::size_t bytes);
 
@@ -679,8 +660,8 @@ public:
     using protocol_type = asio::ip::tcp;
     using endpoint_type = asio::ip::tcp::endpoint;
 
-    explicit client_tls_socket(const executor_type& executor)
-        : socket_(executor) {}
+    explicit client_tls_socket(const executor_type& executor) :
+        socket_(executor) {}
 
     [[nodiscard]] executor_type get_executor() noexcept {
         return socket_.get_executor();
@@ -778,8 +759,7 @@ public:
     template <typename buffers_type, typename handler_type>
     void async_read_some(const buffers_type& buffers, handler_type&& handler) {
         if (cancelled_) {
-            asio::post(socket_.get_executor(),
-                asio::append(std::forward<handler_type>(handler), asio::error::operation_aborted, std::size_t{0}));
+            asio::post(socket_.get_executor(), asio::append(std::forward<handler_type>(handler), asio::error::operation_aborted, std::size_t{0}));
             return;
         }
         socket_.async_read_some(buffers, std::forward<handler_type>(handler));
@@ -789,8 +769,7 @@ public:
         using completion_type = client_tls_write_handler<std::decay_t<handler_type>>;
         if (cancelled_) {
             write_failed_ = true;
-            asio::post(socket_.get_executor(),
-                asio::append(std::forward<handler_type>(handler), asio::error::operation_aborted, std::size_t{0}));
+            asio::post(socket_.get_executor(), asio::append(std::forward<handler_type>(handler), asio::error::operation_aborted, std::size_t{0}));
             return;
         }
         // Like Asio's own speculative write, but its outcome stays visible:
@@ -800,8 +779,7 @@ public:
         if (writes_ == 0 && socket_.non_blocking()) {
             std::error_code error;
             const auto written = socket_.write_some(buffers, error);
-            if (error != asio::error::would_block && error != asio::error::try_again &&
-                error != asio::error::interrupted) {
+            if (error != asio::error::would_block && error != asio::error::try_again && error != asio::error::interrupted) {
                 if (error) {
                     write_failed_ = true;
                     asio::post(socket_.get_executor(), asio::append(std::forward<handler_type>(handler), error, written));
@@ -812,8 +790,7 @@ public:
                     ++writes_;
                 }
                 try {
-                    asio::post(socket_.get_executor(),
-                        asio::append(completion_type(std::forward<handler_type>(handler), *this, partial), error, written));
+                    asio::post(socket_.get_executor(), asio::append(completion_type(std::forward<handler_type>(handler), *this, partial), error, written));
                 } catch (...) {
                     if (partial) {
                         --writes_;
@@ -872,15 +849,11 @@ template <typename handler_type>
 namespace asio {
 
 template <template <typename, typename> class associator_type, typename handler_type, typename candidate_type>
-struct associator<associator_type, ruvia::detail::client_tls_write_handler<handler_type>, candidate_type>
-    : associator_type<handler_type, candidate_type> {
-    static typename associator_type<handler_type, candidate_type>::type get(
-        const ruvia::detail::client_tls_write_handler<handler_type>& handler) noexcept {
+struct associator<associator_type, ruvia::detail::client_tls_write_handler<handler_type>, candidate_type> : associator_type<handler_type, candidate_type> {
+    static typename associator_type<handler_type, candidate_type>::type get(const ruvia::detail::client_tls_write_handler<handler_type>& handler) noexcept {
         return associator_type<handler_type, candidate_type>::get(handler.handler_);
     }
-    static auto get(const ruvia::detail::client_tls_write_handler<handler_type>& handler,
-        const candidate_type& candidate) noexcept
-        -> decltype(associator_type<handler_type, candidate_type>::get(handler.handler_, candidate)) {
+    static auto get(const ruvia::detail::client_tls_write_handler<handler_type>& handler, const candidate_type& candidate) noexcept -> decltype(associator_type<handler_type, candidate_type>::get(handler.handler_, candidate)) {
         return associator_type<handler_type, candidate_type>::get(handler.handler_, candidate);
     }
 };
@@ -965,10 +938,8 @@ struct client_tcp_endpoint final {
 // for a DNS host on a worker without a blocking pool.
 class client_tcp_transport final {
 public:
-    client_tcp_transport(asio::io_context& io, asio::ssl::context& tls, const worker_ref& worker_value,
-        client_tcp_endpoint endpoint, client_wire_counters& counters);
-    client_tcp_transport(asio::io_context&, asio::ssl::context&, worker_ref&&, client_tcp_endpoint,
-        client_wire_counters&) = delete;
+    client_tcp_transport(asio::io_context& io, asio::ssl::context& tls, const worker_ref& worker_value, client_tcp_endpoint endpoint, client_wire_counters& counters);
+    client_tcp_transport(asio::io_context&, asio::ssl::context&, worker_ref&&, client_tcp_endpoint, client_wire_counters&) = delete;
     ~client_tcp_transport();
     client_tcp_transport(const client_tcp_transport&) = delete;
     client_tcp_transport& operator=(const client_tcp_transport&) = delete;
@@ -1014,8 +985,7 @@ public:
     // sequence form sends framed parts (chunk prefix, payload, suffix) as one
     // transport write, which is one TLS record sequence and one deadline cycle.
     [[nodiscard]] task<client_transport_result> write(std::string_view bytes, const operation_deadline& timeout);
-    [[nodiscard]] task<client_transport_result> write(
-        std::span<const asio::const_buffer> buffers, const operation_deadline& timeout);
+    [[nodiscard]] task<client_transport_result> write(std::span<const asio::const_buffer> buffers, const operation_deadline& timeout);
 
     [[nodiscard]] client_abort_reason abort_reason() const noexcept {
         return abort_reason_;
@@ -1067,8 +1037,7 @@ private:
     void send_close_notify() noexcept;
     [[nodiscard]] bool arm(lane_deadline& lane, const operation_deadline& timeout);
     [[nodiscard]] bool clear(lane_deadline& lane) noexcept;
-    [[nodiscard]] client_transport_result finish(lane_deadline& lane, const operation_deadline& timeout,
-        const std::error_code& error, std::size_t bytes, client_transport_status failure) noexcept;
+    [[nodiscard]] client_transport_result finish(lane_deadline& lane, const operation_deadline& timeout, const std::error_code& error, std::size_t bytes, client_transport_status failure) noexcept;
     [[nodiscard]] client_transport_result aborted() const noexcept;
 
     const worker_ref& worker_;
@@ -1114,8 +1083,7 @@ namespace ruvia::detail {
 }
 
 // The HTTP client's mapping of a failed client_tcp_transport result.
-[[nodiscard]] inline std::error_code http_client_transport_error(
-    const client_transport_result& result) noexcept {
+[[nodiscard]] inline std::error_code http_client_transport_error(const client_transport_result& result) noexcept {
     switch (result.status_) {
         case client_transport_status::aborted:
             return http_client_abort_error(result.abort_);
@@ -1130,8 +1098,7 @@ namespace ruvia::detail {
         case client_transport_status::io_failed:
             break;
     }
-    return result.error_ == std::errc::protocol_error ? make_error_code(http_client_errc::protocol_error)
-                                                      : make_error_code(http_client_errc::io_error);
+    return result.error_ == std::errc::protocol_error ? make_error_code(http_client_errc::protocol_error) : make_error_code(http_client_errc::io_error);
 }
 
 // The one message of each error class an exchange reports without a more
@@ -1177,15 +1144,12 @@ namespace ruvia::detail {
 [[noreturn]] inline void throw_http_client_wait_failure(worker_wait_status status, std::string_view operation) {
     switch (status) {
         case worker_wait_status::timed_out:
-            throw http_client_error(std::make_error_code(std::errc::timed_out),
-                std::string(operation).append(" timed out"));
+            throw http_client_error(std::make_error_code(std::errc::timed_out), std::string(operation).append(" timed out"));
         case worker_wait_status::cancelled:
-            throw http_client_error(std::make_error_code(std::errc::operation_canceled),
-                std::string(operation).append(" cancelled"));
+            throw http_client_error(std::make_error_code(std::errc::operation_canceled), std::string(operation).append(" cancelled"));
         case worker_wait_status::closed:
         case worker_wait_status::worker_stopping:
-            throw http_client_error(make_error_code(http_client_errc::closing),
-                http_client_error_message(make_error_code(http_client_errc::closing)));
+            throw http_client_error(make_error_code(http_client_errc::closing), http_client_error_message(make_error_code(http_client_errc::closing)));
         case worker_wait_status::value:
             break;
     }
@@ -1193,8 +1157,7 @@ namespace ruvia::detail {
 }
 
 // The code of a failure the client reported as http_client_error.
-[[nodiscard]] inline std::optional<std::error_code> http_client_failure_code(
-    const std::exception_ptr& failure) noexcept {
+[[nodiscard]] inline std::optional<std::error_code> http_client_failure_code(const std::exception_ptr& failure) noexcept {
     try {
         std::rethrow_exception(failure);
     } catch (const http_client_error& error) {
@@ -1205,8 +1168,7 @@ namespace ruvia::detail {
 }
 
 // `eof_message` describes a peer close where the caller still needed bytes.
-[[noreturn]] inline void throw_http_client_transport_error(
-    const client_transport_result& result, std::string_view eof_message) {
+[[noreturn]] inline void throw_http_client_transport_error(const client_transport_result& result, std::string_view eof_message) {
     if (result.status_ == client_transport_status::aborted) {
         throw_http_client_abort(result.abort_);
     }
@@ -1232,8 +1194,7 @@ void validate_http_client_route_options(const http_client_request_options& optio
 // The checks of configure(): route overrides and the field source.
 void validate_http_client_request_options(const http_client_request_options& options);
 // Shares a request's informational callback between its exchanges; null when empty.
-[[nodiscard]] std::shared_ptr<http_client_informational_callback> share_http_client_informational(
-    http_client_informational_callback&& callback);
+[[nodiscard]] std::shared_ptr<http_client_informational_callback> share_http_client_informational(http_client_informational_callback&& callback);
 
 // Every field of `options` except the informational callback, which the
 // exchanges of a request (one per redirect hop) share through
@@ -1272,8 +1233,7 @@ class http_client_request_storage final {
 public:
     // Complete owning boundary: reserve field metadata once and normalize/copy
     // every field before asynchronous work can outlive caller storage.
-    http_client_request_storage(std::string_view method, std::string_view target,
-        std::span<const http_header_view> fields);
+    http_client_request_storage(std::string_view method, std::string_view target, std::span<const http_header_view> fields);
 
     http_client_request_storage(const http_client_request_storage&) = delete;
     http_client_request_storage& operator=(const http_client_request_storage&) = delete;
@@ -1363,8 +1323,7 @@ public:
     std::shared_ptr<http_client_pool> pool_owner_;
 
 private:
-    http_client_request_storage(
-        std::string_view method, std::string_view target);
+    http_client_request_storage(std::string_view method, std::string_view target);
 
     std::string method_;
     std::string target_;
@@ -1419,15 +1378,13 @@ public:
     http_client_result_budget_lease(http_client_result_budget_lease&& other) noexcept;
     ~http_client_result_budget_lease();
 
-    [[nodiscard]] static std::optional<http_client_result_budget_lease> try_acquire(
-        const std::shared_ptr<http_client_result_budget_domain>& domain, std::size_t bytes) noexcept;
+    [[nodiscard]] static std::optional<http_client_result_budget_lease> try_acquire(const std::shared_ptr<http_client_result_budget_domain>& domain, std::size_t bytes) noexcept;
     [[nodiscard]] std::pair<std::shared_ptr<http_client_result_budget_domain>, std::size_t> release() && noexcept {
         return {std::move(domain_), std::exchange(bytes_, 0)};
     }
 
 private:
-    http_client_result_budget_lease(
-        const std::shared_ptr<http_client_result_budget_domain>& domain, std::size_t bytes_value) noexcept;
+    http_client_result_budget_lease(const std::shared_ptr<http_client_result_budget_domain>& domain, std::size_t bytes_value) noexcept;
 
     // Keep the domain alive until after releasing the reservation.
     std::shared_ptr<http_client_result_budget_domain> domain_;
@@ -1509,8 +1466,7 @@ public:
     explicit client_request_policy(const http_client_config_storage& config);
     // The complete view borrows the request, policy text and both scratch buffers;
     // keep their owners alive through protocol serialization.
-    [[nodiscard]] http_client_request_view prepare_request(
-        const http_client_request_storage& request, client_prepared_request_scratch& scratch);
+    [[nodiscard]] http_client_request_view prepare_request(const http_client_request_storage& request, client_prepared_request_scratch& scratch);
     // Stored and configured cookies belong to the fixed origin: false for a
     // request whose authority override or tunnel authority names another
     // host or port. Requires a resolved request route.
@@ -1558,20 +1514,16 @@ void retain_http_client_binary_response_head(http_client_response_state& state_v
 // response completed, records status, version and body plan, retains origin
 // cookies, settles tunnel acceptance (rejecting an invalid CONNECT-UDP head),
 // selects collection of an encoded body, then wakes the head consumer.
-void publish_http_client_final_head(
-    http_client_response_state& state_value, client_request_policy& policy, const http_client_final_head& head);
+void publish_http_client_final_head(http_client_response_state& state_value, client_request_policy& policy, const http_client_final_head& head);
 
 // Validates an RFC 8441 Extended CONNECT WebSocket response head (HTTP/2 or
 // HTTP/3) and records the negotiated subprotocol and compression on `websocket`.
-void accept_extended_connect_websocket_response(http_client_websocket_handshake& websocket,
-    http_status_code status, std::span<const http_header> headers, bool stream_ended,
-    std::string_view error_message);
+void accept_extended_connect_websocket_response(http_client_websocket_handshake& websocket, http_status_code status, std::span<const http_header> headers, bool stream_ended, std::string_view error_message);
 
 // Ends a received body: decodes a collected Content-Encoding within the
 // response byte limit, failing with timeout when `timeout` expired before or
 // during decoding.
-void finish_http_client_response_body(http_client_response_state& state_value, const operation_deadline& timeout,
-    bool content_semantics_present, std::size_t max_decoded_bytes);
+void finish_http_client_response_body(http_client_response_state& state_value, const operation_deadline& timeout, bool content_semantics_present, std::size_t max_decoded_bytes);
 
 }  // namespace ruvia::detail
 
@@ -1594,8 +1546,7 @@ public:
 
     using owner = std::unique_ptr<http_client_response_memory_domain, deleter_type>;
 
-    [[nodiscard]] static owner create(const worker_ref& worker,
-        const std::shared_ptr<http_client_result_budget_domain>& result_budget_domain);
+    [[nodiscard]] static owner create(const worker_ref& worker, const std::shared_ptr<http_client_result_budget_domain>& result_budget_domain);
 
     http_client_response_memory_domain(const http_client_response_memory_domain&) = delete;
     http_client_response_memory_domain& operator=(const http_client_response_memory_domain&) = delete;
@@ -1616,8 +1567,7 @@ private:
         active,
         retired };
 
-    http_client_response_memory_domain(const worker_ref& worker_value,
-        const std::shared_ptr<http_client_result_budget_domain>& result_budget_domain);
+    http_client_response_memory_domain(const worker_ref& worker_value, const std::shared_ptr<http_client_result_budget_domain>& result_budget_domain);
     ~http_client_response_memory_domain();
 
     void destroy() noexcept;
@@ -1641,16 +1591,16 @@ private:
 class http_client_in_flight_reservation final {
 public:
     constexpr http_client_in_flight_reservation() noexcept = default;
-    explicit constexpr http_client_in_flight_reservation(http_client_response_memory_domain* domain) noexcept
-        : domain_(domain) {}
+    explicit constexpr http_client_in_flight_reservation(http_client_response_memory_domain* domain) noexcept :
+        domain_(domain) {}
     ~http_client_in_flight_reservation() {
         clear();
     }
     http_client_in_flight_reservation(const http_client_in_flight_reservation&) = delete;
     http_client_in_flight_reservation& operator=(const http_client_in_flight_reservation&) = delete;
-    http_client_in_flight_reservation(http_client_in_flight_reservation&& other) noexcept
-        : domain_(std::exchange(other.domain_, nullptr)),
-          bytes_(std::exchange(other.bytes_, 0)) {}
+    http_client_in_flight_reservation(http_client_in_flight_reservation&& other) noexcept :
+        domain_(std::exchange(other.domain_, nullptr)),
+        bytes_(std::exchange(other.bytes_, 0)) {}
     http_client_in_flight_reservation& operator=(http_client_in_flight_reservation&& other) noexcept {
         if (this != &other) {
             clear();
@@ -1765,22 +1715,19 @@ inline void validate_http_client_versions(const http_client_versions& versions, 
     std::optional<http_authority_view> authority;
     if (!url.empty()) {
         authority = parse_http_authority(url);
-        if (!authority || authority->host().empty() || authority->port_kind() == http_authority_port_kind::empty ||
-            authority->port() == 0 || url.find_first_of("/?#") != std::string_view::npos) {
+        if (!authority || authority->host().empty() || authority->port_kind() == http_authority_port_kind::empty || authority->port() == 0 || url.find_first_of("/?#") != std::string_view::npos) {
             throw std::invalid_argument("HTTP client base_url must contain only a fixed origin or a scheme");
         }
     }
     auto result = spec;
     if (authority) {
-        result.origin_ = tls ? http_origin_view::https({.host_ = authority->host(), .port_ = authority->effective_port(443)})
-                             : http_origin_view::http({.host_ = authority->host(), .port_ = authority->effective_port(80)});
+        result.origin_ = tls ? http_origin_view::https({.host_ = authority->host(), .port_ = authority->effective_port(443)}) : http_origin_view::http({.host_ = authority->host(), .port_ = authority->effective_port(80)});
     }
     auto host = result.origin_ ? result.origin_->host() : std::string_view{};
     if (host.starts_with('[')) {
         host = host.substr(1, host.size() - 2);
     }
-    if (config.push_.max_queued_pushes_ == 0 || config.push_.max_concurrent_pushes_ == 0 ||
-        (config.push_.timeout_ && config.push_.timeout_->value().count() <= 0)) {
+    if (config.push_.max_queued_pushes_ == 0 || config.push_.max_concurrent_pushes_ == 0 || (config.push_.timeout_ && config.push_.timeout_->value().count() <= 0)) {
         throw std::invalid_argument("HTTP push bounds and configured timeout must be positive");
     }
     if (config.advertisements_.max_queued_advertisements_ == 0 || config.advertisements_.max_retained_bytes_ == 0) {
@@ -1790,20 +1737,17 @@ inline void validate_http_client_versions(const http_client_versions& versions, 
         throw std::invalid_argument("ORIGIN advertisements require authenticated HTTPS");
     }
     validate_http_client_versions(config.versions_, scheme);
-    if (config.http3_.max_concurrent_streams_ == 0 || config.http3_.max_alt_svc_entries_ == 0 ||
-        config.http3_.max_datagram_bytes_ == 0 || config.http3_.max_stream_output_bytes_ == 0) {
+    if (config.http3_.max_concurrent_streams_ == 0 || config.http3_.max_alt_svc_entries_ == 0 || config.http3_.max_datagram_bytes_ == 0 || config.http3_.max_stream_output_bytes_ == 0) {
         throw std::invalid_argument("HTTP/3 resource bounds must be positive");
     }
-    if (config.http3_.max_datagram_bytes_ < 1200 || config.http3_.max_datagram_bytes_ > 65527 ||
-        config.http3_.max_concurrent_streams_ > (std::numeric_limits<std::uint32_t>::max)()) {
+    if (config.http3_.max_datagram_bytes_ < 1200 || config.http3_.max_datagram_bytes_ > 65527 || config.http3_.max_concurrent_streams_ > (std::numeric_limits<std::uint32_t>::max)()) {
         throw std::invalid_argument("HTTP/3 transport limits exceed QUIC bounds");
     }
     validate_client_tls_config(config.tls_);
     if (scheme == http_scheme::https && config.tls_.mode_ == client_tls_mode::disabled) {
         throw std::invalid_argument("HTTPS client requires TLS; use the http scheme for plaintext");
     }
-    if (config.received_cookies_ != http_client_received_cookie_policy::ignore &&
-        config.received_cookies_ != http_client_received_cookie_policy::retain_and_send) {
+    if (config.received_cookies_ != http_client_received_cookie_policy::ignore && config.received_cookies_ != http_client_received_cookie_policy::retain_and_send) {
         throw std::invalid_argument("http client received cookie policy is invalid");
     }
     if (config.dial_host_) {
@@ -1814,24 +1758,17 @@ inline void validate_http_client_versions(const http_client_versions& versions, 
     }
     detail::ensure_positive_optional_durations("HTTP DNS refresh interval must be positive", config.dns_refresh_interval_);
     if (result.origin_) {
-        validate_client_origin_host(
-            host, "http client host must not be empty", "http client host is invalid");
+        validate_client_origin_host(host, "http client host must not be empty", "http client host is invalid");
     }
     if (config.connection_limits_.max_open_ && *config.connection_limits_.max_open_ == 0) {
         throw std::invalid_argument("http client open connection limit must be greater than zero");
     }
-    detail::ensure_positive_size(config.max_concurrent_http2_streams_per_connection_,
-        "http client HTTP/2 stream limit per connection must be greater than zero");
-    detail::ensure_positive_size(
-        config.max_buffered_requests_, "http client buffered request limit must be greater than zero");
+    detail::ensure_positive_size(config.max_concurrent_http2_streams_per_connection_, "http client HTTP/2 stream limit per connection must be greater than zero");
+    detail::ensure_positive_size(config.max_buffered_requests_, "http client buffered request limit must be greater than zero");
     detail::ensure_positive_size(config.max_cookies_, "http client cookie limit must be greater than zero");
-    detail::ensure_positive_size(
-        config.max_cookie_bytes_, "http client cookie byte limit must be greater than zero");
-    detail::ensure_positive_size(
-        config.max_response_bytes_, "http client response byte limit must be greater than zero");
-    detail::ensure_positive_optional_durations("configured http client timeouts must be greater than zero",
-        std::optional{config.connect_timeout_}, config.write_timeout_, config.read_timeout_, config.request_timeout_,
-        config.acquire_timeout_, config.idle_timeout_, config.http2_ping_interval_);
+    detail::ensure_positive_size(config.max_cookie_bytes_, "http client cookie byte limit must be greater than zero");
+    detail::ensure_positive_size(config.max_response_bytes_, "http client response byte limit must be greater than zero");
+    detail::ensure_positive_optional_durations("configured http client timeouts must be greater than zero", std::optional{config.connect_timeout_}, config.write_timeout_, config.read_timeout_, config.request_timeout_, config.acquire_timeout_, config.idle_timeout_, config.http2_ping_interval_);
     validate_client_user_agent(config.user_agent_.view());
     validate_client_tcp_config(config.tcp_);
     // Every configured cookie is validated, including one a later entry with
@@ -1846,8 +1783,7 @@ inline void validate_http_client_versions(const http_client_versions& versions, 
 
 // Capacity of the deduplicated configured cookies, each stored with the
 // default "/" path like a retained cookie.
-inline void validate_http_client_configured_cookie_capacity(
-    std::span<const http_header> cookies, std::size_t max_cookies, std::size_t max_cookie_bytes) {
+inline void validate_http_client_configured_cookie_capacity(std::span<const http_header> cookies, std::size_t max_cookies, std::size_t max_cookie_bytes) {
     if (cookies.size() > max_cookies) {
         throw std::invalid_argument("configured HTTP client cookies exceed the client cookie limit");
     }
@@ -1863,17 +1799,11 @@ inline void validate_http_client_configured_cookie_capacity(
 }
 
 struct http_client_config_storage final {
-    http_client_config_storage(const http_client_config& source_value,
-        client_tls_files files = client_tls_files::parse)
-        : http_client_config_storage(
-              source_value, validate_http_client_config(source_value), files) {}
+    http_client_config_storage(const http_client_config& source_value, client_tls_files files = client_tls_files::parse) :
+        http_client_config_storage(source_value, validate_http_client_config(source_value), files) {}
 
-    http_client_config_storage(
-        const http_client_config_storage& source_value)
-        : http_client_config_storage(source_value,
-              http_client_origin_spec{.scheme_ = source_value.scheme_,
-                  .origin_ = source_value.fixed_origin_ ? std::optional(source_value.origin()) : std::nullopt},
-              client_tls_files::keep_paths) {}
+    http_client_config_storage(const http_client_config_storage& source_value) :
+        http_client_config_storage(source_value, http_client_origin_spec{.scheme_ = source_value.scheme_, .origin_ = source_value.fixed_origin_ ? std::optional(source_value.origin()) : std::nullopt}, client_tls_files::keep_paths) {}
 
     std::string host_;
     std::string dial_host_;
@@ -1956,11 +1886,9 @@ private:
     // Startup parses TLS files; asynchronous updates first own paths only.
     // Allocator-rebound copies share already prepared material.
     template <typename source_type>
-    [[nodiscard]] static client_tls_config_storage tls_storage(
-        const source_type& source_value, http_scheme scheme, client_tls_files files) {
+    [[nodiscard]] static client_tls_config_storage tls_storage(const source_type& source_value, http_scheme scheme, client_tls_files files) {
         if constexpr (std::same_as<source_type, http_client_config>) {
-            return {source_value.tls_,
-                scheme == http_scheme::https ? files : client_tls_files::keep_paths};
+            return {source_value.tls_, scheme == http_scheme::https ? files : client_tls_files::keep_paths};
         } else {
             return {source_value.tls_};
         }
@@ -1969,47 +1897,46 @@ private:
     // Resolve representation differences at the boundary, then own every field
     // and cookie through one allocator-bound construction path.
     template <typename source_type>
-        requires(std::same_as<source_type, http_client_config> ||
-                    std::same_as<source_type, http_client_config_storage>)
-    http_client_config_storage(
-        const source_type& source_value, http_client_origin_spec spec, client_tls_files files)
-        : host_(transport_host(spec.origin_)),
-          dial_host_(dial_host_view(source_value, spec.origin_)),
-          dial_port_(dial_port_value(source_value, spec.origin_)),
-          address_validator_(source_value.address_validator_),
-          dns_refresh_interval_(source_value.dns_refresh_interval_),
-          decode_content_(source_value.decode_content_),
-          fixed_origin_(spec.origin_.has_value()),
-          uri_host_(spec.origin_ ? spec.origin_->host() : std::string_view{}),
-          scheme_(spec.scheme_),
-          port_(spec.origin_ ? spec.origin_->port() : (spec.scheme_ == http_scheme::https ? 443 : 80)),
-          authority_(spec.origin_ ? make_http_origin_authority(origin()) : std::string{}),
-          connection_limits_(source_value.connection_limits_),
-          max_concurrent_http2_streams_per_connection_(source_value.max_concurrent_http2_streams_per_connection_),
-          max_buffered_requests_(source_value.max_buffered_requests_),
-          max_cookies_(source_value.max_cookies_),
-          max_cookie_bytes_(source_value.max_cookie_bytes_),
-          connect_timeout_(source_value.connect_timeout_),
-          write_timeout_(source_value.write_timeout_),
-          read_timeout_(source_value.read_timeout_),
-          request_timeout_(source_value.request_timeout_),
-          acquire_timeout_(source_value.acquire_timeout_),
-          idle_timeout_(source_value.idle_timeout_),
-          http2_ping_interval_(source_value.http2_ping_interval_),
-          max_response_bytes_(source_value.max_response_bytes_),
-          versions_(source_value.versions_),
-          advertisements_(source_value.advertisements_),
-          push_(source_value.push_),
-          http3_(source_value.http3_),
-          tls_(tls_storage(source_value, scheme_, files)),
-          tcp_(source_value.tcp_),
-          received_cookies_(source_value.received_cookies_),
-          user_agent_(user_agent_view(source_value)) {
+        requires(std::same_as<source_type, http_client_config> || std::same_as<source_type, http_client_config_storage>)
+    http_client_config_storage(const source_type& source_value, http_client_origin_spec spec, client_tls_files files) :
+        host_(transport_host(spec.origin_)),
+        dial_host_(dial_host_view(source_value, spec.origin_)),
+        dial_port_(dial_port_value(source_value, spec.origin_)),
+        address_validator_(source_value.address_validator_),
+        dns_refresh_interval_(source_value.dns_refresh_interval_),
+        decode_content_(source_value.decode_content_),
+        fixed_origin_(spec.origin_.has_value()),
+        uri_host_(spec.origin_ ? spec.origin_->host() : std::string_view{}),
+        scheme_(spec.scheme_),
+        port_(spec.origin_ ? spec.origin_->port() : (spec.scheme_ == http_scheme::https ? 443 : 80)),
+        authority_(spec.origin_ ? make_http_origin_authority(origin()) : std::string{}),
+        connection_limits_(source_value.connection_limits_),
+        max_concurrent_http2_streams_per_connection_(source_value.max_concurrent_http2_streams_per_connection_),
+        max_buffered_requests_(source_value.max_buffered_requests_),
+        max_cookies_(source_value.max_cookies_),
+        max_cookie_bytes_(source_value.max_cookie_bytes_),
+        connect_timeout_(source_value.connect_timeout_),
+        write_timeout_(source_value.write_timeout_),
+        read_timeout_(source_value.read_timeout_),
+        request_timeout_(source_value.request_timeout_),
+        acquire_timeout_(source_value.acquire_timeout_),
+        idle_timeout_(source_value.idle_timeout_),
+        http2_ping_interval_(source_value.http2_ping_interval_),
+        max_response_bytes_(source_value.max_response_bytes_),
+        versions_(source_value.versions_),
+        advertisements_(source_value.advertisements_),
+        push_(source_value.push_),
+        http3_(source_value.http3_),
+        tls_(tls_storage(source_value, scheme_, files)),
+        tcp_(source_value.tcp_),
+        received_cookies_(source_value.received_cookies_),
+        user_agent_(user_agent_view(source_value)) {
         cookies_.reserve(source_value.cookies_.size());
         for (const auto& cookie : source_value.cookies_) {
             if constexpr (std::same_as<source_type, http_client_config>) {
-                const auto existing = std::ranges::find_if(cookies_,
-                    [name = cookie.name()](const http_header& entry) { return entry.name() == name; });
+                const auto existing = std::ranges::find_if(cookies_, [name = cookie.name()](const http_header& entry) {
+                    return entry.name() == name;
+                });
                 if (existing != cookies_.end()) {
                     *existing = http_header(cookie.name(), cookie.value());
                     continue;
@@ -2050,9 +1977,9 @@ inline std::uint64_t next_nonzero_id(std::uint64_t& value) noexcept {
 // protocol cursor commits it. Terminal wakeups never free a pending SSL span.
 class http_client_output_queue final {
 public:
-    http_client_output_queue(const worker_ref& worker_value)
-        : data_(worker_value),
-          space_(worker_value) {}
+    http_client_output_queue(const worker_ref& worker_value) :
+        data_(worker_value),
+        space_(worker_value) {}
     void notify_data() noexcept {
         data_.notify();
         if (wake_ != nullptr) {
@@ -2120,9 +2047,9 @@ private:
 
 class http_client_tunnel_state final {
 public:
-    http_client_tunnel_state(const worker_ref& worker_value, http_client_tunnel_config config)
-        : output_(worker_value),
-          config_(config) {}
+    http_client_tunnel_state(const worker_ref& worker_value, http_client_tunnel_config config) :
+        output_(worker_value),
+        config_(config) {}
     http_client_output_queue output_;
     http_client_tunnel_config config_;
     bool udp_{};
@@ -2132,9 +2059,9 @@ public:
 
 class http_client_upload_state final {
 public:
-    http_client_upload_state(const worker_ref& worker_value, http_client_upload_config config)
-        : output_(worker_value),
-          config_(config) {}
+    http_client_upload_state(const worker_ref& worker_value, http_client_upload_config config) :
+        output_(worker_value),
+        config_(config) {}
     http_client_upload_state(worker_ref&&, http_client_upload_config) = delete;
     http_client_output_queue output_;
     http_client_upload_config config_;
@@ -2176,10 +2103,8 @@ struct http_client_stream_timer final {
         return deadline;
     }
 
-    [[nodiscard]] bool expired(const operation_deadline& timeout,
-        time_point now = std::chrono::steady_clock::now()) const noexcept {
-        return timeout.expired() || (read_deadline_ && *read_deadline_ <= now) ||
-               (write_deadline_ && *write_deadline_ <= now);
+    [[nodiscard]] bool expired(const operation_deadline& timeout, time_point now = std::chrono::steady_clock::now()) const noexcept {
+        return timeout.expired() || (read_deadline_ && *read_deadline_ <= now) || (write_deadline_ && *write_deadline_ <= now);
     }
 
     template <typename callback_type>
@@ -2190,19 +2115,17 @@ struct http_client_stream_timer final {
         }
         timer_.cancel();
         timer_at_.reset();
-        if (worker.schedule_timer(timer_, *deadline,
-                [on_expired = std::forward<callback_type>(on_expired)](worker_timer_outcome outcome) mutable noexcept {
-                    if (outcome == worker_timer_outcome::expired) {
-                        on_expired();
-                    }
-                }) == worker_timer_schedule_status::scheduled) {
+        if (worker.schedule_timer(timer_, *deadline, [on_expired = std::forward<callback_type>(on_expired)](worker_timer_outcome outcome) mutable noexcept {
+            if (outcome == worker_timer_outcome::expired) {
+                on_expired();
+            }
+        }) == worker_timer_schedule_status::scheduled) {
             timer_at_ = deadline;
         }
     }
 
     template <typename timeout_source_type, typename expired_type, typename error_type>
-    void schedule_with_retry(const worker_ref& worker, const timeout_source_type& timeout_source,
-        expired_type on_expired, error_type on_error) {
+    void schedule_with_retry(const worker_ref& worker, const timeout_source_type& timeout_source, expired_type on_expired, error_type on_error) {
         const auto current_timeout = [&timeout_source]() noexcept -> const operation_deadline& {
             if constexpr (std::is_pointer_v<timeout_source_type>) {
                 return *timeout_source;
@@ -2210,30 +2133,27 @@ struct http_client_stream_timer final {
                 return timeout_source;
             }
         };
-        schedule(worker, current_timeout(),
-            [this, &worker, &timeout_source, current_timeout, on_expired, on_error]() noexcept {
-                timer_at_.reset();
-                if (expired(current_timeout())) {
-                    on_expired();
-                    return;
-                }
-                try {
-                    schedule_with_retry(worker, timeout_source, on_expired, on_error);
-                } catch (...) {
-                    on_error(std::current_exception());
-                }
-            });
+        schedule(worker, current_timeout(), [this, &worker, &timeout_source, current_timeout, on_expired, on_error]() noexcept {
+            timer_at_.reset();
+            if (expired(current_timeout())) {
+                on_expired();
+                return;
+            }
+            try {
+                schedule_with_retry(worker, timeout_source, on_expired, on_error);
+            } catch (...) {
+                on_error(std::current_exception());
+            }
+        });
     }
 };
 
-template <typename wake_fn_type, typename stop_predicate_type, typename release_fn_type,
-    typename send_chunk_fn_type, typename finish_fn_type>
-[[nodiscard]] task<void> run_multiplexed_client_upload(const worker_ref& worker,
-    const http_client_request_storage& request, http_client_output_queue& upload, worker_signal& stream_signal,
-    wake_fn_type&& wake_fn, stop_predicate_type&& stop_predicate, release_fn_type&& release_content,
-    send_chunk_fn_type&& send_chunk, finish_fn_type&& finish_upload) {
+template <typename wake_fn_type, typename stop_predicate_type, typename release_fn_type, typename send_chunk_fn_type, typename finish_fn_type>
+[[nodiscard]] task<void> run_multiplexed_client_upload(const worker_ref& worker, const http_client_request_storage& request, http_client_output_queue& upload, worker_signal& stream_signal, wake_fn_type&& wake_fn, stop_predicate_type&& stop_predicate, release_fn_type&& release_content, send_chunk_fn_type&& send_chunk, finish_fn_type&& finish_upload) {
     upload.wake_target_ = &wake_fn;
-    upload.wake_ = [](void* target) noexcept { (*static_cast<std::remove_reference_t<wake_fn_type>*>(target))(); };
+    upload.wake_ = [](void* target) noexcept {
+        (*static_cast<std::remove_reference_t<wake_fn_type>*>(target))();
+    };
     struct upload_wake_guard final {
         http_client_output_queue& upload_;
         ~upload_wake_guard() {
@@ -2243,14 +2163,12 @@ template <typename wake_fn_type, typename stop_predicate_type, typename release_
     } wake_guard{upload};
     worker_timer_registration continue_timer;
     if (request.upload() != nullptr && !request.upload()->content_released_) {
-        (void)worker.schedule_timer(continue_timer,
-            deadline_after(request.upload()->config_.continue_timeout_.value()),
-            [&upload, policy = request.upload()](worker_timer_outcome outcome) noexcept {
-                if (outcome == worker_timer_outcome::expired && !upload.stopped_) {
-                    policy->content_released_ = true;
-                    upload.notify_data();
-                }
-            });
+        (void)worker.schedule_timer(continue_timer, deadline_after(request.upload()->config_.continue_timeout_.value()), [&upload, policy = request.upload()](worker_timer_outcome outcome) noexcept {
+            if (outcome == worker_timer_outcome::expired && !upload.stopped_) {
+                policy->content_released_ = true;
+                upload.notify_data();
+            }
+        });
     }
     while (!upload.ended_ && !upload.stopped_ && !stop_predicate()) {
         if (request.is_tunnel() ? !request.tunnel()->accepted_ : !request.upload()->content_released_) {
@@ -2352,10 +2270,8 @@ public:
     // Owned fields must already use this response's resource. A 100 (Continue)
     // releases request content gated on it.
     template <typename fields_type>
-        requires(std::is_same_v<std::remove_cvref_t<fields_type>, std::span<const http_header>> ||
-                 std::is_same_v<fields_type, std::vector<http_header>>)
-    void retain_informational(http_status_code status, fields_type&& fields_value,
-        std::optional<http_client_request_content_signal> request_content_signal) {
+        requires(std::is_same_v<std::remove_cvref_t<fields_type>, std::span<const http_header>> || std::is_same_v<fields_type, std::vector<http_header>>)
+    void retain_informational(http_status_code status, fields_type&& fields_value, std::optional<http_client_request_content_signal> request_content_signal) {
         constexpr bool transferring = std::is_same_v<fields_type, std::vector<http_header>>;
         http_client_informational_response head(status);
         if constexpr (!transferring) {
@@ -2367,8 +2283,7 @@ public:
         // (e.g. repeated 103 Early Hints) stay acceptable.
         auto budget = informational_budget_;
         for (const auto& field : fields_value) {
-            if (!budget.add(field.name().size()) || !budget.add(field.value().size()) ||
-                !budget.add(http_field_line_overhead)) {
+            if (!budget.add(field.name().size()) || !budget.add(field.value().size()) || !budget.add(http_field_line_overhead)) {
                 throw http_client_error(make_error_code(http_client_errc::protocol_error), "informational response metadata exceeds byte limit");
             }
             if constexpr (!transferring) {
@@ -2387,8 +2302,7 @@ public:
     }
 
     [[nodiscard]] http_client_output_queue* output() noexcept {
-        return tunnel_ ? &tunnel_->output_ : upload_ ? &upload_->output_
-                                                     : nullptr;
+        return tunnel_ ? &tunnel_->output_ : (upload_ ? &upload_->output_ : nullptr);
     }
     [[nodiscard]] bool receive_complete() const noexcept {
         return complete_ || (tunnel_ && tunnel_->accepted_ && tunnel_->receive_ended_);
@@ -2499,8 +2413,7 @@ enum class http_client_operation_lane : std::uint8_t {
 // throws http_client_error(cancelled) before anything is armed.
 class http_client_operation_interruption final {
 public:
-    http_client_operation_interruption(http_client_response_state& state, http_client_operation_lane lane,
-        const operation_options& operation);
+    http_client_operation_interruption(http_client_response_state& state, http_client_operation_lane lane, const operation_options& operation);
     ~http_client_operation_interruption();
     http_client_operation_interruption(const http_client_operation_interruption&) = delete;
     http_client_operation_interruption& operator=(const http_client_operation_interruption&) = delete;
@@ -2520,10 +2433,9 @@ private:
 template <typename target_type>
 class http_client_response_cancellation final {
 public:
-    http_client_response_cancellation(const std::shared_ptr<target_type>& target,
-        std::uint64_t& identity, http_client_response_state& response)
-        : response_(response),
-          registration_(target, identity) {
+    http_client_response_cancellation(const std::shared_ptr<target_type>& target, std::uint64_t& identity, http_client_response_state& response) :
+        response_(response),
+        registration_(target, identity) {
         response_.cancellation_id_ = registration_.id();
     }
     http_client_response_cancellation(std::shared_ptr<target_type>&&, std::uint64_t&, http_client_response_state&) = delete;
@@ -2595,10 +2507,8 @@ class http2_client_session final {
 public:
     // `ping_interval` bounds silence: no received frame for one interval sends
     // a PING, and another silent interval fails the session with timeout.
-    http2_client_session(http_client_connection& handler, client_tcp_transport& transport, task_scope& tasks,
-        const worker_ref& worker_value, std::optional<timeout_duration> ping_interval);
-    http2_client_session(http_client_connection&, client_tcp_transport&, task_scope&, worker_ref&&,
-        std::optional<timeout_duration>) = delete;
+    http2_client_session(http_client_connection& handler, client_tcp_transport& transport, task_scope& tasks, const worker_ref& worker_value, std::optional<timeout_duration> ping_interval);
+    http2_client_session(http_client_connection&, client_tcp_transport&, task_scope&, worker_ref&&, std::optional<timeout_duration>) = delete;
 
     http2_client_session(const http2_client_session&) = delete;
     http2_client_session& operator=(const http2_client_session&) = delete;
@@ -2607,8 +2517,7 @@ public:
     // client preface, reads until the peer SETTINGS (draining events through
     // the handler), then spawns the reader and writer. The previous
     // generation's tasks must have finished.
-    [[nodiscard]] task<http2_client_session_start_result> start(
-        http2_connection_options options, const operation_deadline& timeout);
+    [[nodiscard]] task<http2_client_session_start_result> start(http2_connection_options options, const operation_deadline& timeout);
 
     // The live connection of the current generation; check usable() first.
     [[nodiscard]] ::ruvia::http2_connection& connection() noexcept;
@@ -2664,8 +2573,7 @@ public:
     // a stream that no longer sends (std::logic_error); other exceptions
     // propagate.
     template <typename stop_type>
-    [[nodiscard]] task<http2_client_data_status> send_data(std::uint32_t stream_id, std::string_view bytes,
-        http2_end_stream end_stream, std::size_t chunk_bytes, stop_type stop, bool* end_submitted = nullptr) {
+    [[nodiscard]] task<http2_client_data_status> send_data(std::uint32_t stream_id, std::string_view bytes, http2_end_stream end_stream, std::size_t chunk_bytes, stop_type stop, bool* end_submitted = nullptr) {
         const auto generation = generation_;
         bool end_pending = http2_ends_stream(end_stream);
         while (!bytes.empty() || end_pending) {
@@ -2689,8 +2597,7 @@ public:
                 end_pending = false;
             }
             wake_writer();
-            if (submitted.status_ == http2_data_submit_status::closed ||
-                submitted.status_ == http2_data_submit_status::invalid_message) {
+            if (submitted.status_ == http2_data_submit_status::closed || submitted.status_ == http2_data_submit_status::invalid_message) {
                 co_return http2_client_data_status::rejected;
             }
             if (submitted.status_ == http2_data_submit_status::expectation_pending) {
@@ -2711,8 +2618,7 @@ public:
     // send_data(). Rejected when the stream no longer sends (std::logic_error),
     // the content is incomplete or a trailer is invalid (invalid_message).
     template <typename stop_type>
-    [[nodiscard]] task<http2_client_data_status> finish_request(
-        std::uint32_t stream_id, std::span<const http_header_view> trailers, stop_type stop) {
+    [[nodiscard]] task<http2_client_data_status> finish_request(std::uint32_t stream_id, std::span<const http_header_view> trailers, stop_type stop) {
         const auto generation = generation_;
         for (;;) {
             if (ended(generation) || stop()) {
@@ -2857,9 +2763,9 @@ public:
     // One registered HTTP/2 request or push stream; a stack or driver record
     // that unregisters before its response state can be released.
     struct http2_stream final {
-        http2_stream(const worker_ref& worker_value, http_client_response_state& state_value)
-            : signal_(worker_value),
-              state_(&state_value) {}
+        http2_stream(const worker_ref& worker_value, http_client_response_state& state_value) :
+            signal_(worker_value),
+            state_(&state_value) {}
         http2_stream(worker_ref&&, http_client_response_state&) = delete;
 
         worker_signal signal_;
@@ -2898,9 +2804,7 @@ public:
     // `server_name` is the TLS SNI and verified name (empty for http); `alpn`
     // is the TLS ALPN offer, and over plaintext http2 selects prior-knowledge
     // h2c, anything else HTTP/1.1.
-    http_client_connection(http_client_pool& pool, std::size_t index, std::uint64_t serial,
-        std::string_view dial_host, std::uint16_t dial_port, std::string_view server_name, bool alias_route,
-        client_alpn alpn);
+    http_client_connection(http_client_pool& pool, std::size_t index, std::uint64_t serial, std::string_view dial_host, std::uint16_t dial_port, std::string_view server_name, bool alias_route, client_alpn alpn);
     void capture_connection_info(http_client_response_state& response, bool reused) const;
     void retire_addresses() noexcept;
     [[nodiscard]] std::uint64_t connection_id() const noexcept {
@@ -2920,8 +2824,7 @@ public:
     [[nodiscard]] bool alias_route() const noexcept {
         return alias_route_;
     }
-    [[nodiscard]] bool serves(std::string_view dial_host, std::uint16_t dial_port, std::string_view server_name,
-        client_alpn alpn) const noexcept;
+    [[nodiscard]] bool serves(std::string_view dial_host, std::uint16_t dial_port, std::string_view server_name, client_alpn alpn) const noexcept;
     // Kept between uses: an HTTP/1 connection between exchanges, or an HTTP/2
     // session admitting streams without any.
     [[nodiscard]] bool idle() const noexcept;
@@ -2947,9 +2850,7 @@ public:
     // transport remains connected and is reused; a replacement returns false.
     // A previous HTTP/2 generation that is draining or still unwinding is
     // waited for first, within `acquire_timeout`.
-    [[nodiscard]] task<bool> ensure_connected(
-        const operation_deadline& timeout, const operation_deadline& acquire_timeout,
-        stop_token stop_token_value, http_client_response_state& response);
+    [[nodiscard]] task<bool> ensure_connected(const operation_deadline& timeout, const operation_deadline& acquire_timeout, stop_token stop_token_value, http_client_response_state& response);
     // Terminal close of the current connection; a running HTTP/2 session
     // fails through its single transition so every stream is woken.
     void close() noexcept;
@@ -2986,14 +2887,11 @@ public:
     // (ensure_connected() already rejects that outcome for an http2_only
     // client.) `acquire_timeout` bounds the first attempt's reconnect and
     // stream-capacity waits; a retry attempt gets its own acquisition bound.
-    [[nodiscard]] task<bool> execute_http2(const http_client_request_storage& request,
-        const operation_deadline& timeout, const operation_deadline& acquire_timeout, stop_token stop_token_value,
-        http_client_response_state& state_value);
+    [[nodiscard]] task<bool> execute_http2(const http_client_request_storage& request, const operation_deadline& timeout, const operation_deadline& acquire_timeout, stop_token stop_token_value, http_client_response_state& state_value);
     // Registers a stream whose timeout_ is set and arms its deadline timer.
     void register_http2_stream(http2_stream& stream);
     void remove_http2_stream(http2_stream& stream) noexcept;
-    void cancel_http2_stream(std::uint64_t request_id, client_abort_reason reason,
-        http2_error_code error = http2_error_code::cancel) noexcept;
+    void cancel_http2_stream(std::uint64_t request_id, client_abort_reason reason, http2_error_code error = http2_error_code::cancel) noexcept;
     [[nodiscard]] std::uint64_t next_http2_request_id() noexcept;
     void reprioritize(http_client_response_state& state_value, http_priority priority);
     // Wakes the writer to flush WINDOW_UPDATE for released DATA credit; the
@@ -3076,14 +2974,11 @@ private:
     void publish_http2_head(http2_stream& stream, http2_response_head_event& event);
     void consume_http2_data(std::uint32_t stream_id, std::string_view bytes, http2_received_data_credit credit);
     void finish_http2_message(std::uint32_t stream_id, http2_message_end_event& end);
-    [[nodiscard]] task<bool> send_http2_request_data(http2_stream& stream, std::string_view bytes,
-        http2_end_stream end_stream, const http_client_output_queue* upload = nullptr);
-    [[nodiscard]] task<void> stream_http2_upload(const http_client_request_storage& request, http2_stream& stream,
-        http_client_output_queue& upload);
+    [[nodiscard]] task<bool> send_http2_request_data(http2_stream& stream, std::string_view bytes, http2_end_stream end_stream, const http_client_output_queue* upload = nullptr);
+    [[nodiscard]] task<void> stream_http2_upload(const http_client_request_storage& request, http2_stream& stream, http_client_output_queue& upload);
     // The one wait for a previous HTTP/2 generation to retire: its session and
     // every stream that borrows its transport.
-    [[nodiscard]] task<void> wait_for_http2_session_stop(
-        const operation_deadline& timeout, stop_token stop_token_value, http_client_response_state& response);
+    [[nodiscard]] task<void> wait_for_http2_session_stop(const operation_deadline& timeout, stop_token stop_token_value, http_client_response_state& response);
 #endif
 
     http_client_pool& pool_;
@@ -3157,14 +3052,11 @@ private:
 // including cancellation completions of both UDP directions.
 class http3_client_connection final {
 public:
-    http3_client_connection(http_client_pool& pool, http3_client_tls& tls, std::size_t index, std::uint64_t serial,
-        std::string_view host, std::uint16_t port, std::string_view server_name);
+    http3_client_connection(http_client_pool& pool, http3_client_tls& tls, std::size_t index, std::uint64_t serial, std::string_view host, std::uint16_t port, std::string_view server_name);
     ~http3_client_connection();
     http3_client_connection(const http3_client_connection&) = delete;
     http3_client_connection& operator=(const http3_client_connection&) = delete;
-    [[nodiscard]] task<bool> execute(const http_client_request_storage& request, bool fallback,
-        const operation_deadline& timeout, const operation_deadline& acquire_timeout,
-        stop_token stop, http_client_response_state& response);
+    [[nodiscard]] task<bool> execute(const http_client_request_storage& request, bool fallback, const operation_deadline& timeout, const operation_deadline& acquire_timeout, stop_token stop, http_client_response_state& response);
     void close() noexcept;
     void retire_addresses() noexcept;
     [[nodiscard]] std::uint64_t connection_id() const noexcept;
@@ -3176,8 +3068,7 @@ public:
     void reprioritize(http_client_response_state& response, http_priority priority);
     [[nodiscard]] std::size_t available() const noexcept;
     [[nodiscard]] bool active() const noexcept;
-    [[nodiscard]] task<void> migrate(std::string_view local_address, std::uint16_t port,
-        const operation_deadline& timeout, stop_token stop);
+    [[nodiscard]] task<void> migrate(std::string_view local_address, std::uint16_t port, const operation_deadline& timeout, stop_token stop);
     [[nodiscard]] task<bool> send_datagram(http_client_response_state& response, std::span<const std::byte> bytes);
     [[nodiscard]] std::uint64_t serial() const noexcept {
         return serial_;
@@ -3205,9 +3096,7 @@ public:
 private:
     class session;
     class address_race;
-    [[nodiscard]] task<void> select_endpoint(bool allow_early,
-        const operation_deadline& timeout, const operation_deadline& acquire_timeout,
-        stop_token stop, http_client_response_state& response);
+    [[nodiscard]] task<void> select_endpoint(bool allow_early, const operation_deadline& timeout, const operation_deadline& acquire_timeout, stop_token stop, http_client_response_state& response);
     http3_client_tls& tls_;
     http3_client_route route_;
     std::uint64_t serial_;
@@ -3264,8 +3153,7 @@ using http_client_cancellation_target = worker_cancellation_target<http_client_p
 // connection only after a plain I/O failure (TLS failures, timeouts and
 // cancellation excluded), for an idempotent request (RFC 9110 section 9.2.2)
 // whose content is buffered, before any response head was published.
-[[nodiscard]] bool can_retry_reused_connection_request(std::optional<std::error_code> failure,
-    const http_client_request_storage& request, const http_client_response_state& response) noexcept;
+[[nodiscard]] bool can_retry_reused_connection_request(std::optional<std::error_code> failure, const http_client_request_storage& request, const http_client_response_state& response) noexcept;
 
 // One origin client on one worker: request admission and buffering limits,
 // on-demand connections keyed by route (dial host, dial port, TLS server name,
@@ -3276,19 +3164,15 @@ using http_client_cancellation_target = worker_cancellation_target<http_client_p
 class http_client_pool final {
 public:
     // Process-lifetime storage backs the pool and its retained responses.
-    http_client_pool(asio::io_context& io_context, const worker_ref& worker_value,
-        http_client_config_storage config, const http_client_worker_services& services);
-    http_client_pool(asio::io_context&, worker_ref&&, http_client_config_storage,
-        const http_client_worker_services&) = delete;
+    http_client_pool(asio::io_context& io_context, const worker_ref& worker_value, http_client_config_storage config, const http_client_worker_services& services);
+    http_client_pool(asio::io_context&, worker_ref&&, http_client_config_storage, const http_client_worker_services&) = delete;
     ~http_client_pool();
     http_client_pool(const http_client_pool&) = delete;
     http_client_pool& operator=(const http_client_pool&) = delete;
 
     [[nodiscard]] task<http_client_response> execute(http_client_request_storage request, operation_options options);
-    [[nodiscard]] task<http_client_exchange> open_request(
-        http_client_request_storage request, http_client_upload_config upload, operation_options options);
-    [[nodiscard]] task<http_client_tunnel_result> open_tunnel(
-        http_client_request_storage request, http_client_tunnel_config config, operation_options options);
+    [[nodiscard]] task<http_client_exchange> open_request(http_client_request_storage request, http_client_upload_config upload, operation_options options);
+    [[nodiscard]] task<http_client_tunnel_result> open_tunnel(http_client_request_storage request, http_client_tunnel_config config, operation_options options);
     void close_now() noexcept;
     [[nodiscard]] task<void> join();
     [[nodiscard]] http_client_stats stats() const noexcept;
@@ -3297,8 +3181,7 @@ public:
     [[nodiscard]] task<void> refresh_dns(operation_options options);
     [[nodiscard]] bool close_connection(std::uint64_t id) noexcept;
     [[nodiscard]] std::uint64_t next_connection_id() noexcept;
-    [[nodiscard]] task<client_resolve_result> resolve_addresses(std::string_view host, std::uint16_t port,
-        client_host_resolver& resolver, const operation_deadline& timeout);
+    [[nodiscard]] task<client_resolve_result> resolve_addresses(std::string_view host, std::uint16_t port, client_host_resolver& resolver, const operation_deadline& timeout);
     [[nodiscard]] std::optional<http_client_advertisement> next_advertisement() {
         return advertisements_.next();
     }
@@ -3322,15 +3205,12 @@ public:
     // TLS-authenticated responses of `route` update its entries in this pool's
     // bounded Alt-Svc cache.
     void observe_alt_svc(const http_client_route& route, std::span<const http_header> fields);
-    [[nodiscard]] task<void> migrate_http3(std::string local_address, std::uint16_t port,
-        operation_options options, stop_token host_stop);
+    [[nodiscard]] task<void> migrate_http3(std::string local_address, std::uint16_t port, operation_options options, stop_token host_stop);
 #ifdef RUVIA_ENABLE_HTTP3
     // `operation` follows the client's per-operation contract: an interrupted
     // read keeps queued input, an interrupted send abandons the tunnel.
-    [[nodiscard]] task<std::optional<http_tunnel_input>> read_http3_tunnel_input(
-        http_client_response_state& state, operation_options operation);
-    [[nodiscard]] task<bool> send_http3_datagram(
-        http_client_response_state& state, std::string_view payload, operation_options operation);
+    [[nodiscard]] task<std::optional<http_tunnel_input>> read_http3_tunnel_input(http_client_response_state& state, operation_options operation);
+    [[nodiscard]] task<bool> send_http3_datagram(http_client_response_state& state, std::string_view payload, operation_options operation);
 #endif
     [[nodiscard]] http_client_response_memory_domain& response_memory() noexcept {
         return *response_memory_;
@@ -3428,20 +3308,14 @@ private:
 #ifdef RUVIA_ENABLE_HTTP2
     [[nodiscard]] task<void> run_http2_push(std::unique_ptr<http2_push_driver> driver);
 #endif
-    [[nodiscard]] task<void> execute_into(
-        http_client_request_storage request, operation_options options, http_client_response_state* state);
-    [[nodiscard]] task<void> execute_request_into(
-        http_client_request_storage request, operation_options options, http_client_response_state* state);
+    [[nodiscard]] task<void> execute_into(http_client_request_storage request, operation_options options, http_client_response_state* state);
+    [[nodiscard]] task<void> execute_request_into(http_client_request_storage request, operation_options options, http_client_response_state* state);
     // Routes the request to a reusable connection of its route, a new one
     // within max_open_, or waits within the acquisition bound. The returned
     // connection counts this request among its users_.
-    [[nodiscard]] task<http_client_connection*> acquire_tcp_connection(const http_client_request_storage& request,
-        const operation_deadline& acquire_timeout, stop_token stop, http_client_response_state& state,
-        request_admission& admission);
+    [[nodiscard]] task<http_client_connection*> acquire_tcp_connection(const http_client_request_storage& request, const operation_deadline& acquire_timeout, stop_token stop, http_client_response_state& state, request_admission& admission);
     void release_tcp_connection(http_client_connection& connection) noexcept;
-    [[nodiscard]] task<void> execute_tcp_request(const http_client_request_storage& request,
-        const operation_deadline& timeout, const operation_deadline& acquire_timeout, stop_token stop,
-        http_client_response_state& state, request_admission& admission);
+    [[nodiscard]] task<void> execute_tcp_request(const http_client_request_storage& request, const operation_deadline& timeout, const operation_deadline& acquire_timeout, stop_token stop, http_client_response_state& state, request_admission& admission);
     // One wait for admission_changed(), the acquisition deadline or a stop;
     // the caller re-checks every condition. Throws timeout once the bound expired.
     [[nodiscard]] task<void> wait_for_admission(const operation_deadline& acquire_timeout);
@@ -3458,20 +3332,14 @@ private:
     [[nodiscard]] task<void> run_reclaimer();
     void reclaim_connections() noexcept;
     [[nodiscard]] http_client_connection* find_connection(const http_client_response_state& state) noexcept;
-    [[nodiscard]] task<void> execute_tcp(http_client_connection& connection, const http_client_request_storage& request,
-        const operation_deadline& timeout, const operation_deadline& acquire_timeout, stop_token stop_token_value,
-        http_client_response_state& state_value);
+    [[nodiscard]] task<void> execute_tcp(http_client_connection& connection, const http_client_request_storage& request, const operation_deadline& timeout, const operation_deadline& acquire_timeout, stop_token stop_token_value, http_client_response_state& state_value);
     // Runs the request as an HTTP/1 exchange on `connection`, reconnecting it
     // when needed. False, with nothing sent, when the connection speaks HTTP/2.
     // `connected_http1_generation` names a connection this request has just
     // negotiated, which is not idle-probed.
-    [[nodiscard]] task<bool> execute_http1(http_client_connection& connection,
-        const http_client_request_storage& request, const operation_deadline& timeout,
-        const operation_deadline& acquire_timeout, stop_token stop_token_value, http_client_response_state& state_value,
-        std::optional<std::uint64_t> connected_http1_generation);
+    [[nodiscard]] task<bool> execute_http1(http_client_connection& connection, const http_client_request_storage& request, const operation_deadline& timeout, const operation_deadline& acquire_timeout, stop_token stop_token_value, http_client_response_state& state_value, std::optional<std::uint64_t> connected_http1_generation);
     // Spawns the request driver for `state_value`, which the caller's response owns.
-    void spawn_request(http_client_request_storage request, operation_options options,
-        http_client_response_state& state_value);
+    void spawn_request(http_client_request_storage request, operation_options options, http_client_response_state& state_value);
 
 #ifdef RUVIA_ENABLE_HTTP3
     // An h3 alternative (RFC 7838) advertised by the responses of one route:
@@ -3487,11 +3355,8 @@ private:
         std::chrono::steady_clock::time_point broken_until_;
         std::uint64_t used_;
     };
-    [[nodiscard]] alternative_service* find_alternative_service(
-        const http_client_route& route, std::chrono::steady_clock::time_point now) noexcept;
-    [[nodiscard]] task<bool> execute_http3(const http_client_request_storage& request,
-        const operation_deadline& timeout, const operation_deadline& acquire_timeout,
-        stop_token stop, http_client_response_state& state, request_admission& admission);
+    [[nodiscard]] alternative_service* find_alternative_service(const http_client_route& route, std::chrono::steady_clock::time_point now) noexcept;
+    [[nodiscard]] task<bool> execute_http3(const http_client_request_storage& request, const operation_deadline& timeout, const operation_deadline& acquire_timeout, stop_token stop, http_client_response_state& state, request_admission& admission);
     [[nodiscard]] http3_client_connection* find_http3_connection(const http_client_response_state& state) noexcept;
     void release_http3_connection(http3_client_connection& connection) noexcept;
 #endif
@@ -3573,32 +3438,25 @@ class tls_tunnel_output;
 // the connection's pool lease, and its cancellation, for the whole run.
 class http1_client_exchange final {
 public:
-    http1_client_exchange(http_client_pool& pool, http_client_connection& connection) noexcept
-        : pool_(pool),
-          connection_(connection) {}
+    http1_client_exchange(http_client_pool& pool, http_client_connection& connection) noexcept :
+        pool_(pool),
+        connection_(connection) {}
 
     http1_client_exchange(const http1_client_exchange&) = delete;
     http1_client_exchange& operator=(const http1_client_exchange&) = delete;
 
-    [[nodiscard]] task<void> run(const http_client_request_storage& request, const operation_deadline& timeout,
-        stop_token stop_token_value, http_client_response_state& state_value);
+    [[nodiscard]] task<void> run(const http_client_request_storage& request, const operation_deadline& timeout, stop_token stop_token_value, http_client_response_state& state_value);
 
 private:
     // Receives the final response head, then the body or an accepted tunnel.
-    [[nodiscard]] task<void> receive(const http_client_request_storage& request, const operation_deadline& timeout,
-        http_client_response_state& state_value, http1_client_response_parser& parser);
+    [[nodiscard]] task<void> receive(const http_client_request_storage& request, const operation_deadline& timeout, http_client_response_state& state_value, http1_client_response_parser& parser);
     // Waits until the consumer releases pending and borrowed response bytes.
-    [[nodiscard]] task<void> wait_for_body_space(
-        http_client_response_state& state_value, const operation_deadline& timeout);
+    [[nodiscard]] task<void> wait_for_body_space(http_client_response_state& state_value, const operation_deadline& timeout);
     void expire_tunnel() noexcept;
-    [[nodiscard]] task<void> write_tunnel_output(http_client_output_queue& output, const operation_deadline& timeout,
-        tls_tunnel_output* tls, std::exception_ptr& failure);
-    [[nodiscard]] task<void> run_tunnel(http_client_response_state& state_value, const operation_deadline& timeout,
-        bool websocket);
-    [[nodiscard]] task<void> write_immediate(std::span<const asio::const_buffer> parts, const operation_deadline& timeout,
-        http1_client_response_parser& parser, bool& completed, std::exception_ptr& failure);
-    [[nodiscard]] task<void> write_upload(http_client_response_state& state_value, const operation_deadline& timeout,
-        http1_request_content_writer writer, http1_client_response_parser& parser, std::exception_ptr& failure);
+    [[nodiscard]] task<void> write_tunnel_output(http_client_output_queue& output, const operation_deadline& timeout, tls_tunnel_output* tls, std::exception_ptr& failure);
+    [[nodiscard]] task<void> run_tunnel(http_client_response_state& state_value, const operation_deadline& timeout, bool websocket);
+    [[nodiscard]] task<void> write_immediate(std::span<const asio::const_buffer> parts, const operation_deadline& timeout, http1_client_response_parser& parser, bool& completed, std::exception_ptr& failure);
+    [[nodiscard]] task<void> write_upload(http_client_response_state& state_value, const operation_deadline& timeout, http1_request_content_writer writer, http1_client_response_parser& parser, std::exception_ptr& failure);
     // One transport write of all `parts` (a head, or a framed upload chunk:
     // prefix, payload, suffix) under the write timeout.
     [[nodiscard]] task<void> write(std::span<const asio::const_buffer> parts, const operation_deadline& timeout);
@@ -3609,9 +3467,7 @@ private:
     // Appends at most `max_bytes` read from the transport to `target` under the
     // read inactivity bound; returns the read, which is not ok() at the peer's
     // end of stream, and throws any other transport failure.
-    [[nodiscard]] task<client_transport_result> read_append(
-        http_io_buffer& target, std::size_t max_bytes, const operation_deadline& timeout,
-        bool read_inactivity_bound = true);
+    [[nodiscard]] task<client_transport_result> read_append(http_io_buffer& target, std::size_t max_bytes, const operation_deadline& timeout, bool read_inactivity_bound = true);
 
     http_client_pool& pool_;
     http_client_connection& connection_;
@@ -3634,18 +3490,10 @@ class http_client_pool;
 // backs the pools and their retained responses.
 class http_client_registry final {
 public:
-    http_client_registry(asio::io_context& io_context, const worker_ref& worker_value,
-        std::span<const http_client_definition_type> definitions,
-        const http_client_worker_services& services);
-    http_client_registry(asio::io_context& io_context, const worker_ref& worker_value,
-        std::span<const http_client_config> configs,
-        const http_client_worker_services& services);
-    http_client_registry(asio::io_context&, worker_ref&&,
-        std::span<const http_client_definition_type>,
-        const http_client_worker_services&) = delete;
-    http_client_registry(asio::io_context&, worker_ref&&,
-        std::span<const http_client_config>,
-        const http_client_worker_services&) = delete;
+    http_client_registry(asio::io_context& io_context, const worker_ref& worker_value, std::span<const http_client_definition_type> definitions, const http_client_worker_services& services);
+    http_client_registry(asio::io_context& io_context, const worker_ref& worker_value, std::span<const http_client_config> configs, const http_client_worker_services& services);
+    http_client_registry(asio::io_context&, worker_ref&&, std::span<const http_client_definition_type>, const http_client_worker_services&) = delete;
+    http_client_registry(asio::io_context&, worker_ref&&, std::span<const http_client_config>, const http_client_worker_services&) = delete;
     ~http_client_registry();
     http_client_registry(const http_client_registry&) = delete;
     http_client_registry& operator=(const http_client_registry&) = delete;
@@ -3682,8 +3530,7 @@ private:
     void publish(std::string alias, pool_owner_type replacement);
 
     void require_mutable() const;
-    [[nodiscard]] task<void> retire_origin(alias_map_type::iterator position,
-        pool_owner_type replacement, task<void> joining);
+    [[nodiscard]] task<void> retire_origin(alias_map_type::iterator position, pool_owner_type replacement, task<void> joining);
 
     template <typename config_type>
     void initialize(std::span<const config_type> configs);

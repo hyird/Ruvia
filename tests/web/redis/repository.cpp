@@ -55,32 +55,22 @@ namespace {
 
 using ruvia::redis_index_kind;
 
-RUVIA_REDIS_ENTITY(test_redis_user, "users",
-    RUVIA_REDIS_COLUMN(id, ruvia::string, ruvia::redis_column_options{.primary_key_ = true}),
-    RUVIA_REDIS_COLUMN(name, std::string),
-    RUVIA_REDIS_COLUMN(active, bool),
-    RUVIA_REDIS_COLUMN(role, std::string, ruvia::redis_column_options{.nullable_ = true}),
-    RUVIA_REDIS_COLUMN(age, std::int32_t, ruvia::redis_column_options{.nullable_ = true}),
-    RUVIA_REDIS_COLUMN(score, double, ruvia::redis_column_options{.nullable_ = true}));
+RUVIA_REDIS_ENTITY(test_redis_user, "users", RUVIA_REDIS_COLUMN(id, ruvia::string, ruvia::redis_column_options{.primary_key_ = true}), RUVIA_REDIS_COLUMN(name, std::string), RUVIA_REDIS_COLUMN(active, bool), RUVIA_REDIS_COLUMN(role, std::string, ruvia::redis_column_options{.nullable_ = true}), RUVIA_REDIS_COLUMN(age, std::int32_t, ruvia::redis_column_options{.nullable_ = true}), RUVIA_REDIS_COLUMN(score, double, ruvia::redis_column_options{.nullable_ = true}));
 
 const ruvia::redis_repository_config test_redis_repository_config{
     .prefix_ = "users",
     .indexes_ = {{.column_ = "name", .kind_ = redis_index_kind::tag}},
 };
 
-RUVIA_REDIS_ENTITY(test_redis_unsigned_pk_user, "upk_users",
-    RUVIA_REDIS_COLUMN(id, std::uint64_t, ruvia::redis_column_options{.primary_key_ = true}),
-    RUVIA_REDIS_COLUMN(name, std::string));
+RUVIA_REDIS_ENTITY(test_redis_unsigned_pk_user, "upk_users", RUVIA_REDIS_COLUMN(id, std::uint64_t, ruvia::redis_column_options{.primary_key_ = true}), RUVIA_REDIS_COLUMN(name, std::string));
 
-RUVIA_REDIS_ENTITY(test_redis_signed_pk_user, "spk_users",
-    RUVIA_REDIS_COLUMN(id, std::int64_t, ruvia::redis_column_options{.primary_key_ = true}),
-    RUVIA_REDIS_COLUMN(name, std::string));
+RUVIA_REDIS_ENTITY(test_redis_signed_pk_user, "spk_users", RUVIA_REDIS_COLUMN(id, std::int64_t, ruvia::redis_column_options{.primary_key_ = true}), RUVIA_REDIS_COLUMN(name, std::string));
 
 class redis_test_worker final {
 public:
-    explicit redis_test_worker(asio::io_context& io_context)
-        : io_context_(io_context),
-          attachment_(ruvia::attach_event_loop(io_context)) {}
+    explicit redis_test_worker(asio::io_context& io_context) :
+        io_context_(io_context),
+        attachment_(ruvia::attach_event_loop(io_context)) {}
 
     redis_test_worker(const redis_test_worker&) = delete;
     redis_test_worker& operator=(const redis_test_worker&) = delete;
@@ -118,11 +108,11 @@ class redis_command_server final {
 public:
     struct stalled_tag final {};
 
-    explicit redis_command_server(std::vector<std::string> replies, std::chrono::milliseconds reply_delay = {})
-        : redis_command_server(std::move(replies), false, reply_delay) {}
+    explicit redis_command_server(std::vector<std::string> replies, std::chrono::milliseconds reply_delay = {}) :
+        redis_command_server(std::move(replies), false, reply_delay) {}
 
-    explicit redis_command_server(stalled_tag)
-        : redis_command_server(std::vector<std::string>(), true, {}) {}
+    explicit redis_command_server(stalled_tag) :
+        redis_command_server(std::vector<std::string>(), true, {}) {}
 
     ~redis_command_server() noexcept(false) {
         finish();
@@ -133,8 +123,7 @@ public:
     }
 
     void wait_until_commands_read() {
-        if (commands_read_future_.wait_for(std::chrono::seconds(5)) !=
-            std::future_status::ready) {
+        if (commands_read_future_.wait_for(std::chrono::seconds(5)) != std::future_status::ready) {
             throw std::runtime_error("Redis peer did not receive its commands");
         }
         commands_read_future_.get();
@@ -162,16 +151,18 @@ public:
     }
 
 private:
-    redis_command_server(std::vector<std::string> replies, bool stalled, std::chrono::milliseconds reply_delay)
-        : replies_(std::move(replies)),
-          reply_delay_(reply_delay),
-          gate_(io_context_),
-          acceptor_(io_context_, {asio::ip::tcp::v4(), 0}),
-          socket_(io_context_),
-          work_(asio::make_work_guard(io_context_)),
-          commands_read_future_(commands_read_.get_future()),
-          done_(asio::co_spawn(io_context_, serve(stalled), asio::use_future)),
-          thread_([this] { io_context_.run(); }) {}
+    redis_command_server(std::vector<std::string> replies, bool stalled, std::chrono::milliseconds reply_delay) :
+        replies_(std::move(replies)),
+        reply_delay_(reply_delay),
+        gate_(io_context_),
+        acceptor_(io_context_, {asio::ip::tcp::v4(), 0}),
+        socket_(io_context_),
+        work_(asio::make_work_guard(io_context_)),
+        commands_read_future_(commands_read_.get_future()),
+        done_(asio::co_spawn(io_context_, serve(stalled), asio::use_future)),
+        thread_([this] {
+            io_context_.run();
+        }) {}
 
     asio::awaitable<std::string> read_line() {
         std::string result{};
@@ -249,10 +240,7 @@ private:
             if (!commands_ready && !closing_) {
                 commands_read_.set_exception(std::current_exception());
             }
-            if (error.code() != asio::error::eof &&
-                error.code() != asio::error::connection_reset &&
-                !(closing_ && (error.code() == asio::error::operation_aborted ||
-                                  error.code() == asio::error::bad_descriptor))) {
+            if (error.code() != asio::error::eof && error.code() != asio::error::connection_reset && !(closing_ && (error.code() == asio::error::operation_aborted || error.code() == asio::error::bad_descriptor))) {
                 throw;
             }
         } catch (...) {
@@ -312,10 +300,11 @@ template <typename fn_type>
 // Runs `exercise` against the connected client on the worker thread while the
 // peer answers; a peer failure surfaces after the worker has stopped.
 template <typename exercise_type>
-void exercise_with_server(redis_test_worker& worker, ruvia::redis_client& client,
-    redis_command_server& server, exercise_type exercise) {
+void exercise_with_server(redis_test_worker& worker, ruvia::redis_client& client, redis_command_server& server, exercise_type exercise) {
     auto root = worker.loop().start(ruvia::test::exercise_backend_client(client, exercise));
-    std::jthread runner([&worker] { worker.run(); });
+    std::jthread runner([&worker] {
+        worker.run();
+    });
     std::exception_ptr peer_failure;
     try {
         server.wait_until_commands_read();
@@ -414,8 +403,7 @@ TEST(Ruvia, redis_repository_scripts_run_by_digest_and_reload_on_noscript) {
     // body through EVAL under the digest it first named.
     const std::string noscript("-NOSCRIPT No matching script. Please use EVAL.\r\n");
     for (const bool cached : {true, false}) {
-        redis_command_server server(cached ? std::vector<std::string>({std::string(":1\r\n"), std::string(":1\r\n")})
-                                           : std::vector<std::string>({std::string(noscript), std::string(":1\r\n"), std::string(noscript), std::string(":1\r\n")}));
+        redis_command_server server(cached ? std::vector<std::string>({std::string(":1\r\n"), std::string(":1\r\n")}) : std::vector<std::string>({std::string(noscript), std::string(":1\r\n"), std::string(noscript), std::string(":1\r\n")}));
         auto& io_context = ruvia::test::new_test_io_context();
         redis_test_worker worker(io_context);
         std::uint64_t inserted = 0;
@@ -440,12 +428,10 @@ TEST(Ruvia, redis_repository_scripts_run_by_digest_and_reload_on_noscript) {
         const std::size_t stride = cached ? 1 : 2;
         for (std::size_t operation = 0; operation < 2; ++operation) {
             const auto& by_digest = commands[operation * stride];
-            EXPECT_TRUE(by_digest.size() >= 4 && by_digest[0] == "EVALSHA" && by_digest[1].size() == 40 &&
-                        by_digest[2] == "1" && by_digest[3].ends_with(":u-1"));
+            EXPECT_TRUE(by_digest.size() >= 4 && by_digest[0] == "EVALSHA" && by_digest[1].size() == 40 && by_digest[2] == "1" && by_digest[3].ends_with(":u-1"));
             if (!cached) {
                 const auto& reloaded = commands[operation * stride + 1];
-                EXPECT_TRUE(reloaded.size() == by_digest.size() && reloaded[0] == "EVAL" &&
-                            reloaded[1].find("redis.call") != std::string::npos);
+                EXPECT_TRUE(reloaded.size() == by_digest.size() && reloaded[0] == "EVAL" && reloaded[1].find("redis.call") != std::string::npos);
                 EXPECT_EQ(sha1_hex(reloaded[1]), by_digest[1]);
                 EXPECT_TRUE(std::equal(reloaded.begin() + 2, reloaded.end(), by_digest.begin() + 2, by_digest.end()));
             }
@@ -483,7 +469,9 @@ TEST(Ruvia, redis_repository_script_reload_shares_the_operation_timeout) {
                 }
             };
             auto root = worker.loop().start(test::exercise_backend_client(client, exercise));
-            std::jthread runner([&worker] { worker.run(); });
+            std::jthread runner([&worker] {
+                worker.run();
+            });
             root.wait();
             worker.stop();
             runner.join();
@@ -511,8 +499,7 @@ TEST(Ruvia, redis_repository_find_without_take_rejects_a_truncated_page) {
         {
             ruvia::redis_client client(worker.loop(), make_redis_config(server));
             exercise_with_server(worker, client, server, [&](ruvia::redis_client& connected) -> ruvia::task<void> {
-                const auto repository =
-                    connected.redis().repository<test_redis_user>(test_redis_repository_config);
+                const auto repository = connected.redis().repository<test_redis_user>(test_redis_repository_config);
                 ruvia::redis_find_options options;
                 if (paged) {
                     options.take_ = ruvia::redis_find_default_take;
@@ -531,8 +518,7 @@ TEST(Ruvia, redis_repository_find_without_take_rejects_a_truncated_page) {
         EXPECT_EQ(server.commands().size(), std::size_t{1});
         if (server.commands().size() == 1) {
             const auto& args = server.commands().front();
-            EXPECT_TRUE(args.size() >= 6U && args[0] == "FT.SEARCH" && args[3] == "LIMIT" && args[4] == "0" &&
-                        args[5] == "100");
+            EXPECT_TRUE(args.size() >= 6U && args[0] == "FT.SEARCH" && args[3] == "LIMIT" && args[4] == "0" && args[5] == "100");
         }
     }
 }
@@ -545,8 +531,7 @@ TEST(Ruvia, redis_repository_search_consumes_expired_documents_without_truncatio
     {
         ruvia::redis_client client(worker.loop(), make_redis_config(server));
         exercise_with_server(worker, client, server, [&](ruvia::redis_client& connected) -> ruvia::task<void> {
-            const auto repository =
-                connected.redis().repository<test_redis_user>(test_redis_repository_config);
+            const auto repository = connected.redis().repository<test_redis_user>(test_redis_repository_config);
             // A returned null document occupies the complete search page even
             // though the expired entity is omitted from the decoded rows.
             const auto rows = co_await repository.find();
@@ -568,8 +553,7 @@ TEST(Ruvia, redis_repository_pre_cancelled_operations_report_cancellation) {
         const auto handle = client.redis();
         ruvia::stop_source cancellation;
         cancellation.request_stop();
-        const auto repository = handle.with_options({.stop_token_ = cancellation.token()})
-                                    .repository<test_redis_user>(test_redis_repository_config);
+        const auto repository = handle.with_options({.stop_token_ = cancellation.token()}).repository<test_redis_user>(test_redis_repository_config);
         const std::string id(2048, 'i');
 
         auto exercise = [&]() -> ruvia::task<void> {
@@ -596,8 +580,7 @@ TEST(Ruvia, redis_repository_input_may_die_before_a_cancelled_await) {
         const auto handle = client.redis();
         ruvia::stop_source cancellation;
         cancellation.request_stop();
-        const auto repository = handle.with_options({.stop_token_ = cancellation.token()})
-                                    .repository<test_redis_user>(test_redis_repository_config);
+        const auto repository = handle.with_options({.stop_token_ = cancellation.token()}).repository<test_redis_user>(test_redis_repository_config);
 
         std::optional<test_redis_user> input;
         input.emplace();
@@ -634,15 +617,16 @@ TEST(Ruvia, redis_repository_inflight_operation_observes_cancellation) {
         auto exercise = [&](ruvia::redis_client& connected) -> ruvia::task<void> {
             const auto repository = connected.redis().with_options({.stop_token_ = cancellation.token()}).repository<test_redis_user>(test_redis_repository_config);
             try {
-                auto operation = repository.exists(
-                    {.where_ = test_redis_user::column<"name">() == "Alice"});
+                auto operation = repository.exists({.where_ = test_redis_user::column<"name">() == "Alice"});
                 (void)co_await std::move(operation);
             } catch (const ruvia::redis_error& error) {
                 observed_error = error.code();
             }
         };
         auto root = worker.loop().start(ruvia::test::exercise_backend_client(client, exercise));
-        std::jthread runner([&worker] { worker.run(); });
+        std::jthread runner([&worker] {
+            worker.run();
+        });
         std::exception_ptr peer_failure;
         try {
             server.wait_until_commands_read();
@@ -656,8 +640,7 @@ TEST(Ruvia, redis_repository_inflight_operation_observes_cancellation) {
         runner.join();
         server.finish();
         std::move(root).get();
-        EXPECT_EQ(observed_error,
-            std::optional{ruvia::redis_error::code_type::cancelled});
+        EXPECT_EQ(observed_error, std::optional{ruvia::redis_error::code_type::cancelled});
         if (peer_failure) {
             std::rethrow_exception(peer_failure);
         }
@@ -673,25 +656,33 @@ TEST(Ruvia, redis_repository_rejects_invalid_input_before_io) {
         test_redis_user missing_id;
         missing_id.set<"name">("Alice");
         missing_id.set<"active">(true);
-        EXPECT_TRUE(throws_invalid_argument([&] { (void)repository.insert(missing_id); }));
-        EXPECT_TRUE(throws_invalid_argument(
-            [&] { (void)repository.insert(make_user(),
-                      {.ttl_ = std::chrono::milliseconds(0)}); }));
-        EXPECT_TRUE(throws_invalid_argument(
-            [&] { (void)repository.insert(make_user(),
-                      {.ttl_ = std::chrono::milliseconds(10), .persist_ = true}); }));
+        EXPECT_TRUE(throws_invalid_argument([&] {
+            (void)repository.insert(missing_id);
+        }));
+        EXPECT_TRUE(throws_invalid_argument([&] {
+            (void)repository.insert(make_user(), {.ttl_ = std::chrono::milliseconds(0)});
+        }));
+        EXPECT_TRUE(throws_invalid_argument([&] {
+            (void)repository.insert(make_user(), {.ttl_ = std::chrono::milliseconds(10), .persist_ = true});
+        }));
         EXPECT_TRUE(throws_invalid_argument([&] {
             (void)repository.find_one({.where_ = test_redis_user::column<"id">() == ""});
         }));
-        for (const auto invalid : {std::numeric_limits<std::int64_t>::min(),
-                 std::numeric_limits<std::int64_t>::min() + 5, std::int64_t{-1}}) {
-            EXPECT_TRUE(throws_invalid_argument([&] { (void)repository.find_one({.take_ = invalid}); }));
-            EXPECT_TRUE(throws_invalid_argument([&] { (void)repository.count({.skip_ = invalid}); }));
+        for (const auto invalid : {std::numeric_limits<std::int64_t>::min(), std::numeric_limits<std::int64_t>::min() + 5, std::int64_t{-1}}) {
+            EXPECT_TRUE(throws_invalid_argument([&] {
+                (void)repository.find_one({.take_ = invalid});
+            }));
+            EXPECT_TRUE(throws_invalid_argument([&] {
+                (void)repository.count({.skip_ = invalid});
+            }));
         }
-        for (const auto invalid : {static_cast<std::uint64_t>((std::numeric_limits<std::int64_t>::max)()) + 1,
-                 (std::numeric_limits<std::uint64_t>::max)()}) {
-            EXPECT_TRUE(throws_invalid_argument([&] { (void)repository.find_one({.take_ = invalid}); }));
-            EXPECT_TRUE(throws_invalid_argument([&] { (void)repository.count({.skip_ = invalid}); }));
+        for (const auto invalid : {static_cast<std::uint64_t>((std::numeric_limits<std::int64_t>::max)()) + 1, (std::numeric_limits<std::uint64_t>::max)()}) {
+            EXPECT_TRUE(throws_invalid_argument([&] {
+                (void)repository.find_one({.take_ = invalid});
+            }));
+            EXPECT_TRUE(throws_invalid_argument([&] {
+                (void)repository.count({.skip_ = invalid});
+            }));
         }
         EXPECT_TRUE(throws_invalid_argument([&] {
             (void)repository.exists({.order_ = ruvia::redis_find_order{.column_ = "missing_field"}});
@@ -718,8 +709,7 @@ TEST(Ruvia, redis_repository_rejects_invalid_input_before_io) {
             (void)indexed_users.find({.where_ = test_redis_user::column<"id">().in({"u-1", ""})});
         }));
 
-        const auto unsigned_repo = client.redis().repository<test_redis_unsigned_pk_user>(
-            {.prefix_ = "upk_users", .indexes_ = {{.column_ = "id", .kind_ = redis_index_kind::numeric}}});
+        const auto unsigned_repo = client.redis().repository<test_redis_unsigned_pk_user>({.prefix_ = "upk_users", .indexes_ = {{.column_ = "id", .kind_ = redis_index_kind::numeric}}});
         test_redis_unsigned_pk_user unsigned_changes;
         unsigned_changes.set<"name">("Alice");
         EXPECT_TRUE(throws_invalid_argument([&] {
@@ -732,28 +722,21 @@ TEST(Ruvia, redis_repository_rejects_invalid_input_before_io) {
             (void)unsigned_repo.update(test_redis_unsigned_pk_user::column<"id">() == -1, unsigned_changes);
         }));
 
-        const auto signed_repo = client.redis().repository<test_redis_signed_pk_user>(
-            {.prefix_ = "spk_users", .indexes_ = {{.column_ = "id", .kind_ = redis_index_kind::numeric}}});
+        const auto signed_repo = client.redis().repository<test_redis_signed_pk_user>({.prefix_ = "spk_users", .indexes_ = {{.column_ = "id", .kind_ = redis_index_kind::numeric}}});
         test_redis_signed_pk_user signed_changes;
         signed_changes.set<"name">("Bob");
         EXPECT_TRUE(throws_invalid_argument([&] {
-            (void)signed_repo.find_one({.where_ = test_redis_signed_pk_user::column<"id">() ==
-                                                  std::numeric_limits<std::uint64_t>::max()});
+            (void)signed_repo.find_one({.where_ = test_redis_signed_pk_user::column<"id">() == std::numeric_limits<std::uint64_t>::max()});
         }));
         EXPECT_TRUE(throws_invalid_argument([&] {
-            (void)signed_repo.update(
-                test_redis_signed_pk_user::column<"id">() == std::numeric_limits<std::uint64_t>::max(),
-                signed_changes);
+            (void)signed_repo.update(test_redis_signed_pk_user::column<"id">() == std::numeric_limits<std::uint64_t>::max(), signed_changes);
         }));
         co_return;
     });
 }
 
 namespace {
-RUVIA_REDIS_ENTITY(redis_query_user, "query-user",
-    RUVIA_REDIS_COLUMN(id, ruvia::string, ruvia::redis_column_options{.primary_key_ = true}),
-    RUVIA_REDIS_COLUMN(email, ruvia::string),
-    RUVIA_REDIS_COLUMN(age, std::int32_t));
+RUVIA_REDIS_ENTITY(redis_query_user, "query-user", RUVIA_REDIS_COLUMN(id, ruvia::string, ruvia::redis_column_options{.primary_key_ = true}), RUVIA_REDIS_COLUMN(email, ruvia::string), RUVIA_REDIS_COLUMN(age, std::int32_t));
 }
 
 TEST(Ruvia, redis_predicate_composition_moves_source_and_preserves_range) {
@@ -784,13 +767,9 @@ TEST(Ruvia, redis_predicate_supports_copy_and_where_or_where_combination) {
 }
 
 namespace {
-RUVIA_REDIS_ENTITY(redis_unsigned_pk_entity, "unsigned-pk",
-    RUVIA_REDIS_COLUMN(id, std::uint64_t, ruvia::redis_column_options{.primary_key_ = true}),
-    RUVIA_REDIS_COLUMN(name, ruvia::string));
+RUVIA_REDIS_ENTITY(redis_unsigned_pk_entity, "unsigned-pk", RUVIA_REDIS_COLUMN(id, std::uint64_t, ruvia::redis_column_options{.primary_key_ = true}), RUVIA_REDIS_COLUMN(name, ruvia::string));
 
-RUVIA_REDIS_ENTITY(redis_signed_pk_entity, "signed-pk",
-    RUVIA_REDIS_COLUMN(id, std::int64_t, ruvia::redis_column_options{.primary_key_ = true}),
-    RUVIA_REDIS_COLUMN(name, ruvia::string));
+RUVIA_REDIS_ENTITY(redis_signed_pk_entity, "signed-pk", RUVIA_REDIS_COLUMN(id, std::int64_t, ruvia::redis_column_options{.primary_key_ = true}), RUVIA_REDIS_COLUMN(name, ruvia::string));
 }  // namespace
 
 TEST(Ruvia, redis_predicate_holds_signed_and_unsigned_primary_key_comparisons) {
@@ -817,7 +796,9 @@ TEST(Ruvia, redis_predicate_negation_and_entity_column_name) {
     const auto pred = !(redis_query_user::column<"email">() == "alice@example.com");
     EXPECT_TRUE(!pred.empty());
     const ruvia::redis_predicate empty;
-    EXPECT_TRUE(ruvia::test::throws_on([&] { (void)!empty; }));
+    EXPECT_TRUE(ruvia::test::throws_on([&] {
+        (void)!empty;
+    }));
 }
 
 namespace {
@@ -829,9 +810,7 @@ const ruvia::redis_repository_config search_config{
 };
 
 template <typename command_type>
-concept borrows_temporary_command = requires(command_type command) {
-    std::move(command).arguments();
-};
+concept borrows_temporary_command = requires(command_type command) { std::move(command).arguments(); };
 static_assert(!borrows_temporary_command<ruvia::redis_compiled_command>);
 }  // namespace
 
@@ -869,10 +848,7 @@ TEST(Ruvia, redis_search_compilation_owns_configuration_and_binary_predicates) {
 
 TEST(Ruvia, redis_search_mapping_rejects_invalid_schema_and_query_fields_offline) {
     using mapping_type = ruvia::redis_search_mapping;
-    for (const ruvia::redis_repository_config& config : {
-             ruvia::redis_repository_config{.indexes_ = {{.column_ = "missing"}}},
-             ruvia::redis_repository_config{.indexes_ = {{.column_ = "age", .kind_ = ruvia::redis_index_kind::tag}}},
-             ruvia::redis_repository_config{.indexes_ = {{.column_ = "email"}, {.column_ = "email"}}}}) {
+    for (const ruvia::redis_repository_config& config : {ruvia::redis_repository_config{.indexes_ = {{.column_ = "missing"}}}, ruvia::redis_repository_config{.indexes_ = {{.column_ = "age", .kind_ = ruvia::redis_index_kind::tag}}}, ruvia::redis_repository_config{.indexes_ = {{.column_ = "email"}, {.column_ = "email"}}}}) {
         EXPECT_THROW((void)mapping_type::create<redis_query_user>(config), std::invalid_argument);
     }
     const auto mapping = mapping_type::create<redis_query_user>(search_config);
@@ -964,20 +940,11 @@ TEST(Ruvia, redis_search_index_compilation_keeps_tag_shadows_and_documents) {
 
 namespace {
 
-RUVIA_REDIS_ENTITY(redis_user, "user",
-    RUVIA_REDIS_COLUMN(id, ruvia::string, ruvia::redis_column_options{.primary_key_ = true}),
-    RUVIA_REDIS_COLUMN(name, std::string),
-    RUVIA_REDIS_COLUMN(active, bool),
-    RUVIA_REDIS_COLUMN(age, std::int32_t, ruvia::redis_column_options{.nullable_ = true}),
-    RUVIA_REDIS_COLUMN(score, double, ruvia::redis_column_options{.nullable_ = true}));
+RUVIA_REDIS_ENTITY(redis_user, "user", RUVIA_REDIS_COLUMN(id, ruvia::string, ruvia::redis_column_options{.primary_key_ = true}), RUVIA_REDIS_COLUMN(name, std::string), RUVIA_REDIS_COLUMN(active, bool), RUVIA_REDIS_COLUMN(age, std::int32_t, ruvia::redis_column_options{.nullable_ = true}), RUVIA_REDIS_COLUMN(score, double, ruvia::redis_column_options{.nullable_ = true}));
 
-RUVIA_REDIS_ENTITY(nullable_redis_text, "text_value",
-    RUVIA_REDIS_COLUMN(id, std::int64_t, ruvia::redis_column_options{.primary_key_ = true}),
-    RUVIA_REDIS_COLUMN(text, ruvia::string, ruvia::redis_column_options{.nullable_ = true}));
+RUVIA_REDIS_ENTITY(nullable_redis_text, "text_value", RUVIA_REDIS_COLUMN(id, std::int64_t, ruvia::redis_column_options{.primary_key_ = true}), RUVIA_REDIS_COLUMN(text, ruvia::string, ruvia::redis_column_options{.nullable_ = true}));
 
-RUVIA_REDIS_ENTITY(numeric_redis_entity, "numeric_input",
-    RUVIA_REDIS_COLUMN(id, std::int32_t, ruvia::redis_column_options{.primary_key_ = true}),
-    RUVIA_REDIS_COLUMN(score, float, ruvia::redis_column_options{.nullable_ = true}));
+RUVIA_REDIS_ENTITY(numeric_redis_entity, "numeric_input", RUVIA_REDIS_COLUMN(id, std::int32_t, ruvia::redis_column_options{.primary_key_ = true}), RUVIA_REDIS_COLUMN(score, float, ruvia::redis_column_options{.nullable_ = true}));
 
 }  // namespace
 
@@ -1025,7 +992,9 @@ TEST(Ruvia, redis_entity_tracks_unset_value_and_null_states) {
     EXPECT_EQ(redis_user::prefix(), std::string_view("user"));
     EXPECT_TRUE(!user_value.is_set<"id">());
     EXPECT_TRUE(!user_value.is_null<"id">());
-    EXPECT_TRUE(ruvia::test::throws_on([&] { (void)user_value.get<"id">(); }));
+    EXPECT_TRUE(ruvia::test::throws_on([&] {
+        (void)user_value.get<"id">();
+    }));
 
     user_value.set<"id">("u-1");
     user_value.set<"name">("Alice");
@@ -1042,7 +1011,9 @@ TEST(Ruvia, redis_entity_tracks_unset_value_and_null_states) {
     user_value.set_null<"age">();
     EXPECT_TRUE(user_value.is_set<"age">());
     EXPECT_TRUE(user_value.is_null<"age">());
-    EXPECT_TRUE(ruvia::test::throws_on([&] { (void)user_value.get<"age">(); }));
+    EXPECT_TRUE(ruvia::test::throws_on([&] {
+        (void)user_value.get<"age">();
+    }));
 
     user_value.reset<"age">();
     EXPECT_TRUE(!user_value.is_set<"age">());
@@ -1067,9 +1038,7 @@ TEST(Ruvia, redis_entity_move_preserves_owned_values_and_resource) {
     }
 }
 
-RUVIA_REDIS_ENTITY(redis_byte_numbers, "byte_numbers",
-    RUVIA_REDIS_COLUMN(id, std::int8_t, ruvia::redis_column_options{.primary_key_ = true}),
-    RUVIA_REDIS_COLUMN(flags, std::uint8_t));
+RUVIA_REDIS_ENTITY(redis_byte_numbers, "byte_numbers", RUVIA_REDIS_COLUMN(id, std::int8_t, ruvia::redis_column_options{.primary_key_ = true}), RUVIA_REDIS_COLUMN(flags, std::uint8_t));
 
 TEST(Ruvia, redis_entity_supports_8bit_integers) {
     redis_byte_numbers numbers;
@@ -1087,9 +1056,7 @@ TEST(Ruvia, redis_error_uses_runtime_error_message_and_stable_code) {
 
 namespace {
 
-RUVIA_REDIS_ENTITY(client_user, "client_users",
-    RUVIA_REDIS_COLUMN(id, ruvia::string, ruvia::redis_column_options{.primary_key_ = true}),
-    RUVIA_REDIS_COLUMN(name, ruvia::string))
+RUVIA_REDIS_ENTITY(client_user, "client_users", RUVIA_REDIS_COLUMN(id, ruvia::string, ruvia::redis_column_options{.primary_key_ = true}), RUVIA_REDIS_COLUMN(name, ruvia::string))
 
 // Deterministic RESP peer, not an external Redis dependency. All sockets and
 // cancellation run on its own thread, including cleanup after a failed test.
@@ -1116,15 +1083,17 @@ public:
         slow_blocking_connect,
         close_after_reply };
 
-    explicit redis_peer(mode_type mode = mode_type::normal, asio::ssl::context* tls_context = nullptr)
-        : mode_(mode),
-          tls_context_(tls_context),
-          acceptor_(io_, {asio::ip::tcp::v4(), 0}),
-          socket_(io_),
-          port_(acceptor_.local_endpoint().port()),
-          work_(asio::make_work_guard(io_)),
-          done_(asio::co_spawn(io_, serve(), asio::use_future)),
-          thread_([this] { io_.run(); }) {}
+    explicit redis_peer(mode_type mode = mode_type::normal, asio::ssl::context* tls_context = nullptr) :
+        mode_(mode),
+        tls_context_(tls_context),
+        acceptor_(io_, {asio::ip::tcp::v4(), 0}),
+        socket_(io_),
+        port_(acceptor_.local_endpoint().port()),
+        work_(asio::make_work_guard(io_)),
+        done_(asio::co_spawn(io_, serve(), asio::use_future)),
+        thread_([this] {
+            io_.run();
+        }) {}
 
     ~redis_peer() {
         asio::post(io_, [this] {
@@ -1207,9 +1176,7 @@ private:
                 if (!acceptor_.is_open()) {
                     co_return;
                 }
-                if (error.code() != asio::error::eof &&
-                    error.code() != asio::error::connection_reset &&
-                    error.code() != asio::ssl::error::stream_truncated) {
+                if (error.code() != asio::error::eof && error.code() != asio::error::connection_reset && error.code() != asio::ssl::error::stream_truncated) {
                     throw;
                 }
             }
@@ -1248,8 +1215,7 @@ private:
                 const auto bulk = co_await line(stream, buffer);
                 const auto size = static_cast<std::size_t>(std::stoul(std::string(std::string_view(bulk).substr(1))));
                 if (buffer.size() < size + 2) {
-                    co_await asio::async_read(stream, buffer,
-                        asio::transfer_exactly(size + 2 - buffer.size()), asio::use_awaitable);
+                    co_await asio::async_read(stream, buffer, asio::transfer_exactly(size + 2 - buffer.size()), asio::use_awaitable);
                 }
                 std::string arg(size, '\0');
                 std::istream input(&buffer);
@@ -1266,12 +1232,8 @@ private:
                 continue;
             }
             std::string reply{};
-            const bool transaction_mode = mode_ == mode_type::transaction_success ||
-                                          mode_ == mode_type::transaction_exec_error ||
-                                          mode_ == mode_type::transaction_wrong_exec ||
-                                          mode_ == mode_type::transaction_queue_error;
-            const bool barrier_mode = mode_ == mode_type::barrier_success || mode_ == mode_type::barrier_stall ||
-                                      mode_ == mode_type::barrier_malformed || mode_ == mode_type::barrier_error;
+            const bool transaction_mode = mode_ == mode_type::transaction_success || mode_ == mode_type::transaction_exec_error || mode_ == mode_type::transaction_wrong_exec || mode_ == mode_type::transaction_queue_error;
+            const bool barrier_mode = mode_ == mode_type::barrier_success || mode_ == mode_type::barrier_stall || mode_ == mode_type::barrier_malformed || mode_ == mode_type::barrier_error;
             if (barrier_mode && (args.front() == "SET" || args.front() == "WAIT" || args.front() == "WAITAOF")) {
                 transaction_commands.push_back(args);
                 if (args.front() == "SET") {
@@ -1316,23 +1278,16 @@ private:
                 }
             } else if (mode_ == mode_type::batch_echo && args.front() != "PING") {
                 reply = "$" + std::string(std::to_string(args.back().size())) + std::string("\r\n") + args.back() + "\r\n";
-            } else if ((mode_ == mode_type::coalesced_pings || mode_ == mode_type::coalesced_arrays ||
-                           mode_ == mode_type::coalesced_large) &&
-                       args.front() == "PING") {
-                if (co_await line(stream, buffer) != "*1" || co_await line(stream, buffer) != "$4" ||
-                    co_await line(stream, buffer) != "PING") {
+            } else if ((mode_ == mode_type::coalesced_pings || mode_ == mode_type::coalesced_arrays || mode_ == mode_type::coalesced_large) && args.front() == "PING") {
+                if (co_await line(stream, buffer) != "*1" || co_await line(stream, buffer) != "$4" || co_await line(stream, buffer) != "PING") {
                     throw std::runtime_error("expected second pipelined PING");
                 }
                 if (mode_ == mode_type::coalesced_large) {
                     reply = "$65537\r\n" + std::string(65537, 'x') + "\r\n+PONG\r\n";
                 } else {
-                    reply = mode_ == mode_type::coalesced_arrays
-                                ? "*3\r\n+\r\n+\r\n+\r\n*3\r\n+\r\n+\r\n+\r\n"
-                                : "+PONG\r\n+PONG\r\n";
+                    reply = mode_ == mode_type::coalesced_arrays ? "*3\r\n+\r\n+\r\n+\r\n*3\r\n+\r\n+\r\n+\r\n" : "+PONG\r\n+PONG\r\n";
                 }
-            } else if ((mode_ == mode_type::huge_array ||
-                           (mode_ == mode_type::reject_then_ping && first_connection_)) &&
-                       args.front() == "PING") {
+            } else if ((mode_ == mode_type::huge_array || (mode_ == mode_type::reject_then_ping && first_connection_)) && args.front() == "PING") {
                 reply = "*1048576\r\n";
             } else if (mode_ == mode_type::nested_arrays && args.front() == "PING") {
                 for (int index = 0; index < 100; ++index) {
@@ -1350,8 +1305,7 @@ private:
             } else if (args.front() == "PING") {
                 reply = args.size() == 1 ? "+PONG\r\n" : "$" + std::string(std::to_string(args[1].size())) + std::string("\r\n") + args[1] + "\r\n";
             } else if (args.front() == "NESTED") {
-                reply = "*2\r\n*2\r\n$20\r\n" + std::string(20, 'a') + "\r\n$20\r\n" + std::string(20, 'b') +
-                        "\r\n$1\r\nc\r\n";
+                reply = "*2\r\n*2\r\n$20\r\n" + std::string(20, 'a') + "\r\n$20\r\n" + std::string(20, 'b') + "\r\n$1\r\nc\r\n";
             } else if (args.front() == "GET") {
                 reply = "$128\r\n" + std::string(128, 'v') + "\r\n";
             } else if (args.front() == "EXPIREAT" || args.front() == "PEXPIREAT") {
@@ -1366,9 +1320,7 @@ private:
                 }
                 reply = "+OK\r\n";
             } else if (args.front() == "BLPOP") {
-                reply = args[1] == "filled"
-                            ? "*2\r\n$6\r\nfilled\r\n$3\r\n" + std::string("a\0b", 3) + "\r\n"
-                            : "*-1\r\n";
+                reply = args[1] == "filled" ? "*2\r\n$6\r\nfilled\r\n$3\r\n" + std::string("a\0b", 3) + "\r\n" : "*-1\r\n";
             } else {
                 reply = "-ERR test error\r\n";
             }
@@ -1468,8 +1420,7 @@ ruvia::task<void> check_blocking_wait_starts_at_write(ruvia::redis_client& clien
     co_await client.shutdown();
 }
 
-ruvia::task<void> check_coalesced_replies(ruvia::redis_client& client,
-    bool arrays = false) {
+ruvia::task<void> check_coalesced_replies(ruvia::redis_client& client, bool arrays = false) {
     co_await client.connect();
     auto pipeline = client.redis().pipeline();
     pipeline.command("PING").command("PING");
@@ -1478,9 +1429,7 @@ ruvia::task<void> check_coalesced_replies(ruvia::redis_client& client,
         const auto replies = co_await std::move(pipeline).exec();
         accepted = replies.size() == 2;
         if (accepted && arrays) {
-            accepted = replies[0].kind() == ruvia::redis_value::kind_type::array &&
-                       replies[1].kind() == ruvia::redis_value::kind_type::array &&
-                       replies[0].array().size() == 3 && replies[1].array().size() == 3;
+            accepted = replies[0].kind() == ruvia::redis_value::kind_type::array && replies[1].kind() == ruvia::redis_value::kind_type::array && replies[0].array().size() == 3 && replies[1].array().size() == 3;
         } else if (accepted) {
             accepted = replies[0].string() == "PONG" && replies[1].string() == "PONG";
         }
@@ -1596,8 +1545,7 @@ ruvia::task<void> check_nested_array_at_depth_limit(ruvia::redis_client& client)
         }
         value = &value->array()[0];
     }
-    EXPECT_TRUE(valid && value->kind() == ruvia::redis_value::kind_type::string &&
-                value->string() == "PONG");
+    EXPECT_TRUE(valid && value->kind() == ruvia::redis_value::kind_type::string && value->string() == "PONG");
     co_await client.shutdown();
 }
 
@@ -1630,8 +1578,7 @@ ruvia::task<void> connect_until_stopped(ruvia::redis_client& client, bool& cance
     }
 }
 
-ruvia::task<void> check_expiration(ruvia::redis_client& client,
-    std::chrono::system_clock::time_point expires_at) {
+ruvia::task<void> check_expiration(ruvia::redis_client& client, std::chrono::system_clock::time_point expires_at) {
     co_await client.connect();
     const bool applied = co_await client.redis().expire_at("session", expires_at);
     EXPECT_TRUE(applied);
@@ -1665,9 +1612,7 @@ ruvia::task<void> check_runtime_handle_timeout(ruvia::event_loop loop, ruvia::re
     co_await client.shutdown();
 }
 
-ruvia::task<void> check_runtime_handle_cancellation_group(ruvia::event_loop loop,
-    ruvia::redis_config config, ruvia::stop_source& base_stop,
-    ruvia::stop_source& override_stop) {
+ruvia::task<void> check_runtime_handle_cancellation_group(ruvia::event_loop loop, ruvia::redis_config config, ruvia::stop_source& base_stop, ruvia::stop_source& override_stop) {
     config.command_timeout_.reset();
     ruvia::redis_client client(loop, config);
     co_await client.connect();
@@ -1702,8 +1647,7 @@ TEST(Ruvia, redis_client_handle_uses_explicit_stop_group_after_copy_and_derivati
         redis_peer peer;
         ruvia::stop_source base_stop;
         ruvia::stop_source override_stop;
-        auto operation = pool.loop(0).start(check_runtime_handle_cancellation_group(
-            pool.loop(0), peer.config(), base_stop, override_stop));
+        auto operation = pool.loop(0).start(check_runtime_handle_cancellation_group(pool.loop(0), peer.config(), base_stop, override_stop));
         peer.wait_for_blocked_command();
         (stop_base ? base_stop : override_stop).request_stop();
         std::move(operation).get();
@@ -1848,8 +1792,7 @@ TEST(Ruvia, redis_value_copy_assignment_from_its_own_subtree) {
     pool.join();
 }
 
-ruvia::task<void> check_reconnect_after_peer_close(
-    ruvia::redis_client& client, redis_peer& peer) {
+ruvia::task<void> check_reconnect_after_peer_close(ruvia::redis_client& client, redis_peer& peer) {
     co_await client.connect();
     auto redis = client.redis();
     EXPECT_TRUE(co_await redis.ping("first") == "first");
@@ -1926,8 +1869,7 @@ TEST(Ruvia, redis_pipeline_barriers_follow_writes_on_the_same_connection_and_dra
 }
 
 TEST(Ruvia, redis_transaction_owns_framing_and_handles_exec_outcomes) {
-    for (const auto mode : {redis_peer::mode_type::transaction_success, redis_peer::mode_type::transaction_exec_error,
-             redis_peer::mode_type::transaction_wrong_exec, redis_peer::mode_type::transaction_queue_error}) {
+    for (const auto mode : {redis_peer::mode_type::transaction_success, redis_peer::mode_type::transaction_exec_error, redis_peer::mode_type::transaction_wrong_exec, redis_peer::mode_type::transaction_queue_error}) {
         redis_peer peer(mode);
         ruvia::event_loop_pool pool({.loop_count_ = 1});
         ruvia::redis_client client(pool.loop(0), peer.config());
@@ -2061,18 +2003,14 @@ TEST(Ruvia, redis_client_expire_at_preserves_the_requested_deadline) {
     ruvia::event_loop_pool pool({.loop_count_ = 1});
     ruvia::redis_client client(pool.loop(0), peer.config());
     pool.start();
-    const auto expires_at = std::chrono::system_clock::time_point{
-                                std::chrono::seconds(2'000'000'000)} +
-                            std::chrono::microseconds(1'001);
+    const auto expires_at = std::chrono::system_clock::time_point{std::chrono::seconds(2'000'000'000)} + std::chrono::microseconds(1'001);
     pool.loop(0).start(check_expiration(client, expires_at)).get();
     const auto command = peer.expiration_command();
     pool.join();
     EXPECT_EQ(command, (std::vector<std::string>({std::string("PEXPIREAT"), std::string("session"), std::string("2000000000002")})));
 }
 
-ruvia::task<void> check_pipeline_abort_and_reconnect(ruvia::redis_client& client,
-    ruvia::operation_options options, ruvia::redis_error::code_type expected,
-    std::string_view barrier = {}) {
+ruvia::task<void> check_pipeline_abort_and_reconnect(ruvia::redis_client& client, ruvia::operation_options options, ruvia::redis_error::code_type expected, std::string_view barrier = {}) {
     co_await client.connect();
     std::exception_ptr failure;
     try {
@@ -2120,9 +2058,7 @@ TEST(Ruvia, redis_pipeline_timeout_and_cancellation_release_the_slot_for_reconne
         ruvia::redis_client client(pool.loop(0), peer.config());
         ruvia::stop_source stop;
         pool.start();
-        auto pending = pool.loop(0).start(check_pipeline_abort_and_reconnect(client,
-            {.timeout_ = cancel ? std::chrono::seconds(5) : std::chrono::milliseconds(100), .stop_token_ = stop.token()},
-            cancel ? ruvia::redis_error::code_type::cancelled : ruvia::redis_error::code_type::timeout));
+        auto pending = pool.loop(0).start(check_pipeline_abort_and_reconnect(client, {.timeout_ = cancel ? std::chrono::seconds(5) : std::chrono::milliseconds(100), .stop_token_ = stop.token()}, cancel ? ruvia::redis_error::code_type::cancelled : ruvia::redis_error::code_type::timeout));
         peer.wait_for_blocked_command();
         if (cancel) {
             stop.request_stop();
@@ -2190,8 +2126,7 @@ TEST(Ruvia, redis_client_close_and_shutdown_waiters_join_pending_commands) {
     ruvia::event_loop_pool pool({.loop_count_ = 1});
     ruvia::redis_client client(pool.loop(0), peer.config());
     std::array<ruvia::stop_source, 6> sources;
-    ruvia::stop_group group{sources[0].token(), sources[1].token(), sources[2].token(),
-        sources[3].token(), sources[4].token(), sources[5].token()};
+    ruvia::stop_group group{sources[0].token(), sources[1].token(), sources[2].token(), sources[3].token(), sources[4].token(), sources[5].token()};
     pool.start();
     auto pending = pool.loop(0).start(blocked_command(client, group.token()));
     peer.wait_for_blocked_command();
@@ -2324,10 +2259,11 @@ TEST(Ruvia, redis_client_cold_connect_can_be_discarded_without_starting_the_pool
 // an unbracketed IP literal or an ASCII DNS name.
 TEST(Ruvia, redis_client_rejects_invalid_hosts_at_configuration) {
     ruvia::event_loop_pool pool({.loop_count_ = 1});
-    for (const std::string_view host : {std::string_view("a::b::c"), std::string_view("-leading.example"),
-             std::string_view("b\xc3\xbc"
-                              "cher.example"),
-             std::string_view("host:6379")}) {
+    for (const std::string_view host :
+        {std::string_view("a::b::c"), std::string_view("-leading.example"),
+            std::string_view("b\xc3\xbc"
+                             "cher.example"),
+            std::string_view("host:6379")}) {
         std::string message{};
         try {
             ruvia::redis_client client(pool.loop(0), {.host_ = std::string(host)});
@@ -2346,10 +2282,7 @@ TEST(Ruvia, redis_client_failed_connect_can_be_shutdown) {
     unavailable.open(asio::ip::tcp::v4());
     unavailable.bind({asio::ip::tcp::v4(), 0});
     ruvia::event_loop_pool pool({.loop_count_ = 1});
-    ruvia::redis_client client(pool.loop(0), {.host_ = "127.0.0.1",
-                                                 .port_ = unavailable.local_endpoint().port(),
-                                                 .pool_size_per_worker_ = 1,
-                                                 .connect_timeout_ = std::chrono::seconds(1)});
+    ruvia::redis_client client(pool.loop(0), {.host_ = "127.0.0.1", .port_ = unavailable.local_endpoint().port(), .pool_size_per_worker_ = 1, .connect_timeout_ = std::chrono::seconds(1)});
     pool.start();
     bool failed = false;
     try {
@@ -2380,8 +2313,7 @@ TEST(Ruvia, redis_tls_rejects_untrusted_and_wrong_name_before_authentication) {
         redis_peer peer(redis_peer::mode_type::normal, &identity.context_);
         auto config = peer.config();
         config.password_ = "must-not-send";
-        config.tls_ = {.ca_file_ = trust_ca ? std::optional<std::filesystem::path>(identity.ca_file_) : std::nullopt,
-            .server_name_ = trust_ca ? "wrong.test" : "redis.test"};
+        config.tls_ = {.ca_file_ = trust_ca ? std::optional<std::filesystem::path>(identity.ca_file_) : std::nullopt, .server_name_ = trust_ca ? "wrong.test" : "redis.test"};
         ruvia::event_loop_pool pool({.loop_count_ = 1});
         ruvia::redis_client client(pool.loop(0), config);
         pool.start();

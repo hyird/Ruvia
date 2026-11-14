@@ -23,7 +23,6 @@
 
 #include "ruvia/core/event_loop.h"
 #include "ruvia/core/stop_token.h"
-#include "ruvia/core/task_scope.h"
 
 #include "worker_task_fixture.h"
 
@@ -49,8 +48,7 @@ ruvia::task<void> observe_join(ruvia::task_scope::join_operation join, bool& com
     completed = true;
 }
 
-ruvia::task<void> join_and_destroy_on_failure(std::optional<ruvia::task_scope>& primary,
-    bool& completed_after_node_release) {
+ruvia::task<void> join_and_destroy_on_failure(std::optional<ruvia::task_scope>& primary, bool& completed_after_node_release) {
     bool caught = false;
     try {
         co_await primary->join();
@@ -61,8 +59,7 @@ ruvia::task<void> join_and_destroy_on_failure(std::optional<ruvia::task_scope>& 
     primary.reset();
 }
 
-ruvia::task<void> verify_stop_callback_reentrant_join_waits_for_finish(
-    ruvia::worker_ref worker_value, bool& success) {
+ruvia::task<void> verify_stop_callback_reentrant_join_waits_for_finish(ruvia::worker_ref worker_value, bool& success) {
     std::optional<ruvia::task_scope> primary(std::in_place, worker_value);
     ruvia::task_scope observer(worker_value);
     bool active_during_stop_callback = false;
@@ -70,16 +67,14 @@ ruvia::task<void> verify_stop_callback_reentrant_join_waits_for_finish(
     ruvia::stop_registration registration;
     primary->token().register_callback(registration, [&] {
         active_during_stop_callback = primary.has_value() && primary->size() == 1;
-        observer.spawn(join_and_destroy_on_failure(
-            primary, completed_after_node_release));
+        observer.spawn(join_and_destroy_on_failure(primary, completed_after_node_release));
     });
     primary->spawn(fail());
     while (primary.has_value()) {
         static_cast<void>(co_await ruvia::sleep_for(worker_value, std::chrono::milliseconds(1)));
     }
     co_await observer.join();
-    success = active_during_stop_callback && completed_after_node_release &&
-              !primary.has_value();
+    success = active_during_stop_callback && completed_after_node_release && !primary.has_value();
 }
 
 ruvia::task<void> wait_for_stop(ruvia::worker_ref worker_value, ruvia::stop_token token, bool& stopped) {
@@ -196,11 +191,12 @@ ruvia::task<void> exercise(ruvia::worker_ref worker_value, bool& success) {
             const auto& observed = scope;
             retained = observed.token();
             ruvia::stop_registration registration;
-            retained.register_callback(registration, [&] { ++notifications; });
+            retained.register_callback(registration, [&] {
+                ++notifications;
+            });
             scope.request_stop();
             scope.request_stop();
-            if (observed.token() != retained || !observed.stop_requested() ||
-                !retained.stop_requested() || notifications != 1) {
+            if (observed.token() != retained || !observed.stop_requested() || !retained.stop_requested() || notifications != 1) {
                 co_return;
             }
         }
@@ -249,9 +245,9 @@ ruvia::task<void> exercise(ruvia::worker_ref worker_value, bool& success) {
     {
         bool scope_clean_on_retire = true;
         struct unjoined_scope_holder final {
-            explicit unjoined_scope_holder(const ruvia::worker_ref& w, bool& clean)
-                : clean_(clean),
-                  scope_(w) {}
+            explicit unjoined_scope_holder(const ruvia::worker_ref& w, bool& clean) :
+                clean_(clean),
+                scope_(w) {}
             ~unjoined_scope_holder() {
                 if (!scope_.empty()) {
                     clean_ = false;
@@ -303,8 +299,7 @@ ruvia::task<void> exercise(ruvia::worker_ref worker_value, bool& success) {
     try {
         co_await scope.join();
     } catch (const std::runtime_error& error) {
-        success = calls == 1 && scope.size() == 0 && scope.stop_requested() &&
-                  std::string_view(error.what()) == "child failed";
+        success = calls == 1 && scope.size() == 0 && scope.stop_requested() && std::string_view(error.what()) == "child failed";
     }
 }
 
@@ -330,9 +325,9 @@ ruvia::task<void> join_distinct_failures(ruvia::worker_ref worker_value, bool& f
 // temporary file for the guard's lifetime.
 class stderr_capture final {
 public:
-    stderr_capture()
-        : sink_(std::tmpfile()),
-          saved_(::dup(STDERR_FILENO)) {
+    stderr_capture() :
+        sink_(std::tmpfile()),
+        saved_(::dup(STDERR_FILENO)) {
         std::fflush(stderr);
         if (sink_ != nullptr && saved_ >= 0) {
             redirected_ = ::dup2(::fileno(sink_), STDERR_FILENO) >= 0;
@@ -391,9 +386,7 @@ bool verify_additional_child_failures_are_reported() {
     stderr_capture capture;
     ruvia::test::run_worker_tasks(attachment, join_distinct_failures(attachment.loop().worker(), first_rethrown));
     const auto text = capture.finish();
-    return first_rethrown &&
-           text.find("ruvia: additional task scope child failed: second child failed") != std::string_view::npos &&
-           text.find("additional task scope child failed: child failed") == std::string_view::npos;
+    return first_rethrown && text.find("ruvia: additional task scope child failed: second child failed") != std::string_view::npos && text.find("additional task scope child failed: child failed") == std::string_view::npos;
 }
 #endif
 
@@ -413,10 +406,7 @@ TEST(Ruvia, TaskScopeLifecycle) {
     const auto worker_value = attachment.loop().worker();
     bool success = false;
     bool reentrant_stop_join_safe = false;
-    ruvia::test::run_worker_tasks(attachment,
-        ruvia::test::task_scope_tests::exercise(worker_value, success),
-        ruvia::test::task_scope_tests::verify_stop_callback_reentrant_join_waits_for_finish(
-            worker_value, reentrant_stop_join_safe));
+    ruvia::test::run_worker_tasks(attachment, ruvia::test::task_scope_tests::exercise(worker_value, success), ruvia::test::task_scope_tests::verify_stop_callback_reentrant_join_waits_for_finish(worker_value, reentrant_stop_join_safe));
     bool additional_failures_reported = true;
 #ifndef _WIN32
     additional_failures_reported = ruvia::test::task_scope_tests::verify_additional_child_failures_are_reported();

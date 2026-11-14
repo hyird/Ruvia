@@ -112,8 +112,8 @@ using frame = ruvia::test::received_frame;
 // Nonblocking reads bound every wire assertion, including a missing GOAWAY.
 class peer final {
 public:
-    explicit peer(asio::ip::tcp::socket& socket)
-        : socket_(socket) {
+    explicit peer(asio::ip::tcp::socket& socket) :
+        socket_(socket) {
         socket_.non_blocking(true);
     }
     frame next() {
@@ -152,15 +152,18 @@ std::uint32_t uint32(std::string_view bytes) {
 
 void register_start_hook(ruvia::application& app) {
     static std::once_flag hooks;
-    std::call_once(hooks, [&app] { app.on_start([] { observed().started_.release(); }); });
+    std::call_once(hooks, [&app] {
+        app.on_start([] {
+            observed().started_.release();
+        });
+    });
 }
 
 frame next_of_type(peer& client, ruvia::http2_frame_type type) {
     frame value;
     do {
         value = client.next();
-    } while (value.header_.type_ != static_cast<std::uint8_t>(type) ||
-             (type == ruvia::http2_frame_type::ping && (value.header_.flags_ & 0x1) != 0));
+    } while (value.header_.type_ != static_cast<std::uint8_t>(type) || (type == ruvia::http2_frame_type::ping && (value.header_.flags_ & 0x1) != 0));
     return value;
 }
 
@@ -191,7 +194,9 @@ void check_stop_closes_connection() {
     peer client(socket);
     // The server's SETTINGS shows the session runs before stop begins.
     (void)next_of_type(client, ruvia::http2_frame_type::settings);
-    ruvia::test::wait_until([&state] { return state.entered_.load(); }, 3s);
+    ruvia::test::wait_until([&state] {
+        return state.entered_.load();
+    }, 3s);
 
     const auto stop_started = std::chrono::steady_clock::now();
     app.stop();
@@ -217,13 +222,12 @@ void check_stop_closes_connection() {
 // acknowledges the server's PING.
 class silent_peer_run final {
 public:
-    silent_peer_run(ruvia::server_config config, std::string_view requests,
-        std::optional<std::string_view> settings_payload = std::string_view{})
-        : app_(ruvia::app()),
-          reservation_(io_),
-          endpoint_(reservation_.endpoint()),
-          run_(configure(app_, std::move(config), endpoint_)),
-          socket_(io_) {
+    silent_peer_run(ruvia::server_config config, std::string_view requests, std::optional<std::string_view> settings_payload = std::string_view{}) :
+        app_(ruvia::app()),
+        reservation_(io_),
+        endpoint_(reservation_.endpoint()),
+        run_(configure(app_, std::move(config), endpoint_)),
+        socket_(io_) {
         if (!observed().started_.try_acquire_for(3s)) {
             throw std::runtime_error("HTTP/2 drain app did not start");
         }
@@ -246,8 +250,7 @@ public:
     }
 
 private:
-    static ruvia::application& configure(
-        ruvia::application& app, ruvia::server_config config, const asio::ip::tcp::endpoint& endpoint) {
+    static ruvia::application& configure(ruvia::application& app, ruvia::server_config config, const asio::ip::tcp::endpoint& endpoint) {
         register_start_hook(app);
         app.server(std::move(config));
         app.listen({.address_ = "127.0.0.1", .http_ = endpoint.port()});
@@ -271,21 +274,20 @@ void expect_round_trip_start(peer& client) {
 
 // The final GOAWAY(NO_ERROR) with `last_stream_id`, then the server's end of
 // the connection.
-void expect_final_goaway_and_end(
-    peer& client, std::uint32_t last_stream_id) {
+void expect_final_goaway_and_end(peer& client, std::uint32_t last_stream_id) {
     const auto last = next_of_type(client, ruvia::http2_frame_type::goaway);
     EXPECT_EQ(uint32(last.payload_) & 0x7fffffffU, last_stream_id);
     EXPECT_EQ(uint32(std::string_view(last.payload_).substr(4)), 0U);
-    ruvia::test::wait_until([&client] { return client.ended(); }, 3s);
+    ruvia::test::wait_until([&client] {
+        return client.ended();
+    }, 3s);
 }
 
 void check_idle_timeout_drain(bool stalled_stream) {
     auto& state = observed();
     state.entered_ = false;
     state.cancelled_ = false;
-    silent_peer_run run(
-        {.worker_count_ = 1, .idle_timeout_ = 300ms, .connection_scan_interval_ = 5ms},
-        stalled_stream ? request(1, "/stalled") : std::string());
+    silent_peer_run run({.worker_count_ = 1, .idle_timeout_ = 300ms, .connection_scan_interval_ = 5ms}, stalled_stream ? request(1, "/stalled") : std::string());
     peer client(run.socket());
     expect_round_trip_start(client);
     // Without the ACK the drain still ends within its round-trip bound
@@ -295,7 +297,9 @@ void check_idle_timeout_drain(bool stalled_stream) {
     // Ends the server's lingering close at once.
     run.socket().close();
     if (stalled_stream) {
-        ruvia::test::wait_until([&state] { return state.cancelled_.load(); }, 3s);
+        ruvia::test::wait_until([&state] {
+            return state.cancelled_.load();
+        }, 3s);
     }
     run.app().stop();
     run.join();
@@ -315,8 +319,7 @@ std::vector<frame> ping_round_trip(asio::ip::tcp::socket& socket, peer& client, 
     std::vector<frame> frames{};
     for (;;) {
         auto value = client.next();
-        const bool ack = is_frame(value, ruvia::http2_frame_type::ping, 0) && (value.header_.flags_ & 0x1) != 0 &&
-                         value.payload_ == opaque;
+        const bool ack = is_frame(value, ruvia::http2_frame_type::ping, 0) && (value.header_.flags_ & 0x1) != 0 && value.payload_ == opaque;
         const bool goaway = is_frame(value, ruvia::http2_frame_type::goaway, 0);
         frames.push_back(std::move(value));
         if (ack || goaway) {
@@ -329,8 +332,7 @@ std::vector<frame> ping_round_trip(asio::ip::tcp::socket& socket, peer& client, 
 // connection-wide inactivity clock -- until the server sends a frame `done`
 // accepts. Returns every frame received; fails after 3 s.
 template <typename predicate_type>
-std::vector<frame> keep_busy_until(peer& client, asio::ip::tcp::socket& socket, std::string_view traffic,
-    predicate_type done) {
+std::vector<frame> keep_busy_until(peer& client, asio::ip::tcp::socket& socket, std::string_view traffic, predicate_type done) {
     const auto deadline = std::chrono::steady_clock::now() + 3s;
     std::vector<frame> seen{};
     for (std::uint8_t tag = 1;; ++tag) {
@@ -356,8 +358,7 @@ void expect_stream_end(peer& client, std::uint32_t stream_id) {
         const auto value = client.next();
         EXPECT_TRUE(!is_frame(value, ruvia::http2_frame_type::goaway, 0));
         EXPECT_TRUE(!is_frame(value, ruvia::http2_frame_type::rst_stream, stream_id));
-        const bool ending = is_frame(value, ruvia::http2_frame_type::headers, stream_id) ||
-                            is_frame(value, ruvia::http2_frame_type::data, stream_id);
+        const bool ending = is_frame(value, ruvia::http2_frame_type::headers, stream_id) || is_frame(value, ruvia::http2_frame_type::data, stream_id);
         if (ending && (value.header_.flags_ & 0x1) != 0) {
             return;
         }
@@ -366,8 +367,7 @@ void expect_stream_end(peer& client, std::uint32_t stream_id) {
 
 // The RST_STREAM error code the server sent for `stream_id`; also checks
 // that no GOAWAY ended the connection meanwhile.
-std::uint32_t reset_code(const std::vector<frame>& frames,
-    std::uint32_t stream_id) {
+std::uint32_t reset_code(const std::vector<frame>& frames, std::uint32_t stream_id) {
     std::uint32_t code = 0xffffffffU;
     for (const auto& value : frames) {
         EXPECT_TRUE(!is_frame(value, ruvia::http2_frame_type::goaway, 0));
@@ -413,8 +413,7 @@ TEST(Ruvia, http2_peer_end_of_input_gets_final_goaway_before_close) {
 // renew it.
 TEST(Ruvia, http2_idle_timeout_runs_from_last_stream_end_despite_pings) {
     using namespace http2_goaway_test;
-    silent_peer_run run(
-        {.worker_count_ = 1, .idle_timeout_ = 300ms, .connection_scan_interval_ = 5ms}, request(1, "/brief"));
+    silent_peer_run run({.worker_count_ = 1, .idle_timeout_ = 300ms, .connection_scan_interval_ = 5ms}, request(1, "/brief"));
     peer client(run.socket());
     expect_stream_end(client, 1);
     const auto frames = keep_busy_until(client, run.socket(), {}, [](const frame& value) {
@@ -434,9 +433,7 @@ TEST(Ruvia, http2_request_body_timeout_resets_only_the_stalled_stream) {
     using namespace http2_goaway_test;
     observed().uploads_ = 0;
     observed().uploaded_bytes_ = 0;
-    silent_peer_run run(
-        {.worker_count_ = 1, .connection_scan_interval_ = 5ms, .request_body_timeout_ = 300ms},
-        request(1, "/upload", "POST") + data_frame(1, "a", false) + request(3, "/upload", "POST"));
+    silent_peer_run run({.worker_count_ = 1, .connection_scan_interval_ = 5ms, .request_body_timeout_ = 300ms}, request(1, "/upload", "POST") + data_frame(1, "a", false) + request(3, "/upload", "POST"));
     peer client(run.socket());
     const auto frames = keep_busy_until(client, run.socket(), data_frame(3, "b", false), [](const frame& value) {
         return is_frame(value, ruvia::http2_frame_type::rst_stream, 1);
@@ -460,8 +457,7 @@ TEST(Ruvia, http2_request_body_timeout_resets_only_the_stalled_stream) {
 TEST(Ruvia, http2_send_window_wait_is_bounded_by_write_timeout) {
     using namespace http2_goaway_test;
     // SETTINGS_INITIAL_WINDOW_SIZE = 0.
-    silent_peer_run run({.worker_count_ = 1, .connection_scan_interval_ = 5ms, .write_timeout_ = 300ms},
-        request(1, "/brief"), std::string_view("\x00\x04\x00\x00\x00\x00", 6));
+    silent_peer_run run({.worker_count_ = 1, .connection_scan_interval_ = 5ms, .write_timeout_ = 300ms}, request(1, "/brief"), std::string_view("\x00\x04\x00\x00\x00\x00", 6));
     peer client(run.socket());
     const auto frames = keep_busy_until(client, run.socket(), {}, [](const frame& value) {
         return is_frame(value, ruvia::http2_frame_type::rst_stream, 1);
@@ -481,8 +477,7 @@ TEST(Ruvia, http2_send_window_wait_is_bounded_by_write_timeout) {
 // ready: the request-header deadlines bound it, not idle_timeout_.
 TEST(Ruvia, http2_readiness_is_bounded_by_header_completion_timeout) {
     using namespace http2_goaway_test;
-    silent_peer_run run({.worker_count_ = 1, .connection_scan_interval_ = 5ms, .header_completion_timeout_ = 300ms},
-        {}, std::nullopt);
+    silent_peer_run run({.worker_count_ = 1, .connection_scan_interval_ = 5ms, .header_completion_timeout_ = 300ms}, {}, std::nullopt);
     peer client(run.socket());
     expect_round_trip_start(client);
     expect_final_goaway_and_end(client, 0);

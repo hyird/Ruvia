@@ -50,8 +50,8 @@ private:
 
     using read_type = detail::callback_ref<task<std::optional<std::span<const std::byte>>>(operation_options)>;
 
-    body_reader(void* target, read_type::invoke_type read) noexcept
-        : read_(detail::callback_access::make<task<std::optional<std::span<const std::byte>>>(operation_options)>(target, read)) {}
+    body_reader(void* target, read_type::invoke_type read) noexcept :
+        read_(detail::callback_access::make<task<std::optional<std::span<const std::byte>>>(operation_options)>(target, read)) {}
 
 public:
     body_reader(const body_reader&) = delete;
@@ -168,19 +168,17 @@ private:
     using aborted_type = bool (*)(void*) noexcept;
 
     // `interrupts` is the sink's; it routes stop requests to output operations.
-    response_stream_writer(void* target, detail::operation_interrupt_source& interrupts,
-        commit_type commit, write_type write, end_type end, sleep_type sleep, bind_context_type bind_context,
-        release_context_type release_context, committed_type committed, aborted_type aborted) noexcept
-        : target_(target),
-          interrupts_(&interrupts),
-          commit_(commit),
-          write_(write),
-          end_(end),
-          sleep_(sleep),
-          bind_context_(bind_context),
-          release_context_(release_context),
-          committed_(committed),
-          aborted_(aborted) {}
+    response_stream_writer(void* target, detail::operation_interrupt_source& interrupts, commit_type commit, write_type write, end_type end, sleep_type sleep, bind_context_type bind_context, release_context_type release_context, committed_type committed, aborted_type aborted) noexcept :
+        target_(target),
+        interrupts_(&interrupts),
+        commit_(commit),
+        write_(write),
+        end_(end),
+        sleep_(sleep),
+        bind_context_(bind_context),
+        release_context_(release_context),
+        committed_(committed),
+        aborted_(aborted) {}
 
     void bind_worker(const worker_ref& worker_value) noexcept {
         worker_ = &worker_value;
@@ -276,14 +274,8 @@ struct streaming_access final {
         return body_reader(target, read);
     }
 
-    [[nodiscard]] static response_stream_writer make_response_stream_writer(
-        void* target, operation_interrupt_source& interrupts, response_stream_writer::commit_type commit,
-        response_stream_writer::write_type write, response_stream_writer::end_type end,
-        response_stream_writer::sleep_type sleep, response_stream_writer::bind_context_type bind_context,
-        response_stream_writer::release_context_type release_context,
-        response_stream_writer::committed_type committed, response_stream_writer::aborted_type aborted) noexcept {
-        return response_stream_writer(
-            target, interrupts, commit, write, end, sleep, bind_context, release_context, committed, aborted);
+    [[nodiscard]] static response_stream_writer make_response_stream_writer(void* target, operation_interrupt_source& interrupts, response_stream_writer::commit_type commit, response_stream_writer::write_type write, response_stream_writer::end_type end, response_stream_writer::sleep_type sleep, response_stream_writer::bind_context_type bind_context, response_stream_writer::release_context_type release_context, response_stream_writer::committed_type committed, response_stream_writer::aborted_type aborted) noexcept {
+        return response_stream_writer(target, interrupts, commit, write, end, sleep, bind_context, release_context, committed, aborted);
     }
 
     static void bind_worker(body_reader& reader, const worker_ref& worker_value) noexcept {
@@ -315,9 +307,9 @@ namespace ruvia {
 
 class multipart_reader final {
 public:
-    multipart_reader(body_reader& body_reader_value, multipart_parse_options options)
-        : body_reader_(nullptr),
-          state_(std::in_place_type<expired_state_type>) {
+    multipart_reader(body_reader& body_reader_value, multipart_parse_options options) :
+        body_reader_(nullptr),
+        state_(std::in_place_type<expired_state_type>) {
         if (body_reader_value.operation_scope_.active()) {
             state_.emplace<receiving_state_type>(options);
             body_reader_ = &body_reader_value;
@@ -343,8 +335,8 @@ public:
 
 private:
     struct receiving_state_type final {
-        explicit receiving_state_type(multipart_parse_options options)
-            : parser_(options) {}
+        explicit receiving_state_type(multipart_parse_options options) :
+            parser_(options) {}
 
         multipart_parser parser_;
     };
@@ -356,8 +348,8 @@ private:
 
     class read_guard_type final {
     public:
-        explicit read_guard_type(multipart_reader& reader_value) noexcept
-            : reader_(reader_value) {}
+        explicit read_guard_type(multipart_reader& reader_value) noexcept :
+            reader_(reader_value) {}
 
         ~read_guard_type() {
             if (!committed_ && std::holds_alternative<receiving_state_type>(reader_.state_)) {
@@ -492,8 +484,7 @@ private:
     [[nodiscard]] static task<std::optional<http_capsule>> read_owned(detail::capsule_state_pin pin, operation_options operation);
     [[nodiscard]] task<void> write_frame(std::string_view prefix, std::string_view payload, bool datagram, operation_options operation);
     [[nodiscard]] task<void> write_owned(std::uint64_t type, std::string&& payload, operation_options operation);
-    [[nodiscard]] task<void> write_frame_owned(
-        std::string_view prefix, std::string&& payload, bool datagram, operation_options operation);
+    [[nodiscard]] task<void> write_frame_owned(std::string_view prefix, std::string&& payload, bool datagram, operation_options operation);
     explicit http_capsule_stream(http_tunnel& tunnel, http_capsule_config config);
     explicit http_capsule_stream(http_client_tunnel&& tunnel, http_capsule_config config);
     void release() noexcept;
@@ -527,9 +518,9 @@ public:
 
 private:
     friend class http_datagram_stream;
-    http_datagram(http_capsule capsule, std::size_t offset) noexcept
-        : capsule_(std::move(capsule)),
-          offset_(offset) {}
+    http_datagram(http_capsule capsule, std::size_t offset) noexcept :
+        capsule_(std::move(capsule)),
+        offset_(offset) {}
     http_capsule capsule_;
     std::size_t offset_{};
 };
@@ -577,8 +568,7 @@ private:
     static task<std::optional<http_datagram>> read_owned(detail::capsule_state_pin pin, bool udp, operation_options operation);
     [[nodiscard]] task<void> send_payload(std::string_view payload, bool udp, operation_options operation);
     [[nodiscard]] task<void> send_owned(std::string&& payload, operation_options operation);
-    [[nodiscard]] task<void> send_payload_owned(
-        std::string&& payload, bool udp, operation_options operation);
+    [[nodiscard]] task<void> send_payload_owned(std::string&& payload, bool udp, operation_options operation);
     http_capsule_stream stream_;
 };
 
@@ -620,8 +610,8 @@ private:
     friend class http_tunnel;
     friend class http_client_tunnel;
     [[nodiscard]] task<void> send_owned(std::string&& payload, operation_options operation);
-    explicit http_udp_tunnel(http_datagram_stream stream) noexcept
-        : stream_(std::move(stream)) {}
+    explicit http_udp_tunnel(http_datagram_stream stream) noexcept :
+        stream_(std::move(stream)) {}
     http_datagram_stream stream_;
 };
 struct http_tunnel_route_config final {
@@ -698,10 +688,7 @@ private:
     using finish_type = task<void> (*)(void*, operation_options);
     // malformed: the received tunnel data is malformed (RFC 9297 section 3.3).
     using abort_type = void (*)(void*, bool malformed) noexcept;
-    http_tunnel(detail::inbound_buffer_account* inbound, const worker_ref& worker_value,
-        void* target, read_type read, write_type write, finish_type finish_value, abort_type abort,
-        bool datagrams, read_datagram_type read_datagram = nullptr,
-        write_datagram_type write_datagram = nullptr) noexcept;
+    http_tunnel(detail::inbound_buffer_account* inbound, const worker_ref& worker_value, void* target, read_type read, write_type write, finish_type finish_value, abort_type abort, bool datagrams, read_datagram_type read_datagram = nullptr, write_datagram_type write_datagram = nullptr) noexcept;
     [[nodiscard]] task<std::optional<std::span<const std::byte>>> read_borrowed(operation_options operation);
     [[nodiscard]] task<std::optional<std::string>> read_raw(operation_options operation);
     [[nodiscard]] task<void> write_owned(std::string&& bytes, operation_options operation);
@@ -824,10 +811,10 @@ public:
 
 private:
     friend struct detail::websocket_accept_access;
-    explicit websocket_accept_result(websocket& session) noexcept
-        : value_(&session) {}
-    explicit websocket_accept_result(websocket_rejection rejection) noexcept
-        : value_(rejection) {}
+    explicit websocket_accept_result(websocket& session) noexcept :
+        value_(&session) {}
+    explicit websocket_accept_result(websocket_rejection rejection) noexcept :
+        value_(rejection) {}
     std::variant<websocket*, websocket_rejection> value_;
 };
 
@@ -1015,8 +1002,7 @@ private:
     friend class detail::websocket_state;
     websocket_message_writer(detail::websocket_state& owner, websocket_opcode opcode, bool compress) noexcept;
     [[nodiscard]] task<void> submit(std::string_view chunk, bool final, operation_options operation);
-    [[nodiscard]] task<void> submit_owned(
-        std::string&& chunk, bool final, operation_options operation);
+    [[nodiscard]] task<void> submit_owned(std::string&& chunk, bool final, operation_options operation);
     [[nodiscard]] bool message_open() const noexcept;
     static void expire_capability(void* target) noexcept;
 

@@ -20,7 +20,9 @@
 #include <openssl/ssl.h>
 
 #include "ruvia/core/event_loop.h"
+#include "ruvia/core/stop_token.h"
 #include "ruvia/core/worker_ref.h"
+#include "ruvia/http/borrowed_text.h"
 #include "ruvia/http/http_content_coding.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_response.h"
@@ -31,24 +33,9 @@
 
 #include "connection_lifecycle.h"
 #include "context_access.h"
+#include "http_client_pool.h"
 #include "route_table.h"
 
-#ifdef RUVIA_ENABLE_DATABASE
-#include "ruvia/web/db/db_session.h"
-#endif
-#ifdef RUVIA_ENABLE_REDIS
-#include "ruvia/web/redis/redis.h"
-#endif
-
-#include <fstream>
-#include <istream>
-#include <system_error>
-
-#include "ruvia/core/stop_token.h"
-#include "ruvia/http/borrowed_text.h"
-
-#include "connection_lifecycle.h"
-#include "http_client_pool.h"
 #ifdef RUVIA_ENABLE_DATABASE
 #include "ruvia/web/db/db_session.h"
 
@@ -71,23 +58,17 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <fstream>
 #include <initializer_list>
+#include <istream>
 #include <span>
+#include <system_error>
 #include <type_traits>
 
 #include <asio/ip/address.hpp>
 #include <asio/ip/tcp.hpp>
 #include <asio/ip/udp.hpp>
 #include <openssl/crypto.h>
-
-#include "ruvia/core/stop_token.h"
-#ifdef RUVIA_ENABLE_DATABASE
-#include "db_pool.h"
-#endif
-#ifdef RUVIA_ENABLE_REDIS
-#include "redis_pool.h"
-#endif
-
 namespace ruvia::detail {
 
 app_state::app_state() {
@@ -108,8 +89,8 @@ application& app() {
     return instance;
 }
 
-application::application()
-    : state_(std::make_shared<detail::app_state>()) {}
+application::application() :
+    state_(std::make_shared<detail::app_state>()) {}
 
 application::~application() = default;
 
@@ -171,8 +152,7 @@ std::vector<web_worker_ref> application::workers() const {
 web_worker_ref application::worker_for(std::uint64_t key) const {
     auto& state_value = *state_;
     std::lock_guard lock(state_value.mutex_);
-    if (!state_value.runtime_ || !state_value.runtime_->workers_ready_ ||
-        state_value.runtime_->workers_.empty()) {
+    if (!state_value.runtime_ || !state_value.runtime_->workers_ready_ || state_value.runtime_->workers_.empty()) {
         return {};
     }
     return state_value.runtime_->workers_[key % state_value.runtime_->workers_.size()].runtime_->web_worker();
@@ -306,13 +286,10 @@ namespace ruvia {
 
 namespace {
 
-[[nodiscard]] detail::static_root_precompression_options make_static_root_precompression_options(
-    const document_root_config& config) {
-    detail::ensure_positive_size(config.precompress_min_bytes_,
-        "document root precompression minimum size must be greater than zero");
+[[nodiscard]] detail::static_root_precompression_options make_static_root_precompression_options(const document_root_config& config) {
+    detail::ensure_positive_size(config.precompress_min_bytes_, "document root precompression minimum size must be greater than zero");
     if (config.precompress_max_bytes_ < config.precompress_min_bytes_) {
-        throw std::invalid_argument(
-            "document root precompression maximum size must not be smaller than the minimum size");
+        throw std::invalid_argument("document root precompression maximum size must not be smaller than the minimum size");
     }
     return detail::static_root_precompression_options{
         .gzip_ = config.precompress_gzip_,
@@ -327,125 +304,102 @@ namespace {
 
 application& application::document_root(document_root_config config) & {
     std::optional<detail::app_document_root_config> retired;
-    return detail::mutate_stopped_app(*this, *state_,
-        "cannot change document root while app is running", [&config, &retired](detail::app_state& state_value) {
-            if (config.root_.empty()) {
-                throw std::invalid_argument("document root must not be empty");
-            }
-            detail::ensure_positive_duration(config.refresh_interval_,
-                "document root refresh interval must be greater than zero");
-            detail::validate_static_root_options(config.static_options_);
-            const auto precompression = make_static_root_precompression_options(config);
+    return detail::mutate_stopped_app(*this, *state_, "cannot change document root while app is running", [&config, &retired](detail::app_state& state_value) {
+        if (config.root_.empty()) {
+            throw std::invalid_argument("document root must not be empty");
+        }
+        detail::ensure_positive_duration(config.refresh_interval_, "document root refresh interval must be greater than zero");
+        detail::validate_static_root_options(config.static_options_);
+        const auto precompression = make_static_root_precompression_options(config);
 
-            detail::app_document_root_config replacement(
-                detail::store_validated_static_root_config(config.static_options_));
-            http_assign_native_path(replacement.root_, config.root_);
-            replacement.refresh_interval_ = config.refresh_interval_;
-            replacement.precompression_ = precompression;
-            replacement.resident_ = detail::static_root_resident_options{
-                .max_file_bytes_ = config.static_options_.resident_max_bytes_.value_or(std::size_t{64} * 1024),
-                .budget_bytes_ = config.static_options_.resident_budget_bytes_.value_or(std::size_t{16} * 1024 * 1024),
-            };
+        detail::app_document_root_config replacement(detail::store_validated_static_root_config(config.static_options_));
+        http_assign_native_path(replacement.root_, config.root_);
+        replacement.refresh_interval_ = config.refresh_interval_;
+        replacement.precompression_ = precompression;
+        replacement.resident_ = detail::static_root_resident_options{
+            .max_file_bytes_ = config.static_options_.resident_max_bytes_.value_or(std::size_t{64} * 1024),
+            .budget_bytes_ = config.static_options_.resident_budget_bytes_.value_or(std::size_t{16} * 1024 * 1024),
+        };
 
-            retired = std::exchange(state_value.document_root_config_, std::move(replacement));
-        });
+        retired = std::exchange(state_value.document_root_config_, std::move(replacement));
+    });
 }
 
 application& application::document_root(std::nullptr_t) & {
     std::optional<detail::app_document_root_config> retired;
-    return detail::mutate_stopped_app(*this, *state_,
-        "cannot change document root while app is running",
-        [&retired](detail::app_state& state_value) {
-            retired = std::exchange(state_value.document_root_config_, std::nullopt);
-        });
+    return detail::mutate_stopped_app(*this, *state_, "cannot change document root while app is running", [&retired](detail::app_state& state_value) {
+        retired = std::exchange(state_value.document_root_config_, std::nullopt);
+    });
 }
 
 application& application::use_middleware(detail::owned_middleware_descriptor descriptor) & {
-    return detail::mutate_stopped_app(*this, *state_,
-        "cannot add app middleware while app is running",
-        [&descriptor](detail::app_state& state_value) {
-            state_value.configuration_.add_middleware(std::move(descriptor));
-        });
+    return detail::mutate_stopped_app(*this, *state_, "cannot add app middleware while app is running", [&descriptor](detail::app_state& state_value) {
+        state_value.configuration_.add_middleware(std::move(descriptor));
+    });
 }
 
 application& application::blocking_pool(blocking_pool_options config) & {
-    return detail::mutate_stopped_app(*this, *state_,
-        "cannot change the blocking pool while app is running",
-        [&config](detail::app_state& state_value) { state_value.blocking_pool_ = config; });
+    return detail::mutate_stopped_app(*this, *state_, "cannot change the blocking pool while app is running", [&config](detail::app_state& state_value) {
+        state_value.blocking_pool_ = config;
+    });
 }
 
 application& application::blocking_pool(std::nullptr_t) & {
-    return detail::mutate_stopped_app(*this, *state_,
-        "cannot change the blocking pool while app is running",
-        [](detail::app_state& state_value) { state_value.blocking_pool_.reset(); });
+    return detail::mutate_stopped_app(*this, *state_, "cannot change the blocking pool while app is running", [](detail::app_state& state_value) {
+        state_value.blocking_pool_.reset();
+    });
 }
 
 application& application::use_worker_state_definition(detail::worker_state_definition definition) & {
-    return detail::mutate_stopped_app(*this, *state_,
-        "cannot register worker state while app is running",
-        [&definition](detail::app_state& state_value) {
-            state_value.configuration_.add_worker_state(std::move(definition));
-        });
+    return detail::mutate_stopped_app(*this, *state_, "cannot register worker state while app is running", [&definition](detail::app_state& state_value) {
+        state_value.configuration_.add_worker_state(std::move(definition));
+    });
 }
 
 application& application::on_error(http_error_handler handler) & {
-    return detail::mutate_stopped_app(*this, *state_,
-        "cannot change error handler while app is running",
-        [handler = detail::own_callback(std::move(handler))](detail::app_state& state_value) mutable {
-            state_value.configuration_.on_error(std::move(handler));
-        });
+    return detail::mutate_stopped_app(*this, *state_, "cannot change error handler while app is running", [handler = detail::own_callback(std::move(handler))](detail::app_state& state_value) mutable {
+        state_value.configuration_.on_error(std::move(handler));
+    });
 }
 
 application& application::on_not_found(http_not_found_handler handler) & {
-    return detail::mutate_stopped_app(*this, *state_,
-        "cannot change not found handler while app is running",
-        [handler = detail::own_callback(std::move(handler))](detail::app_state& state_value) mutable {
-            state_value.configuration_.on_not_found(std::move(handler));
-        });
+    return detail::mutate_stopped_app(*this, *state_, "cannot change not found handler while app is running", [handler = detail::own_callback(std::move(handler))](detail::app_state& state_value) mutable {
+        state_value.configuration_.on_not_found(std::move(handler));
+    });
 }
 
 application& application::on_error(std::nullptr_t) & {
-    return detail::mutate_stopped_app(*this, *state_,
-        "cannot change error handler while app is running",
-        [retired = detail::callback_registration<http_error_handler>()](detail::app_state& state_value) mutable {
-            // The cleared target retires with this lambda, after the app lock.
-            retired = state_value.configuration_.on_error(nullptr);
-        });
+    return detail::mutate_stopped_app(*this, *state_, "cannot change error handler while app is running", [retired = detail::callback_registration<http_error_handler>()](detail::app_state& state_value) mutable {
+        // The cleared target retires with this lambda, after the app lock.
+        retired = state_value.configuration_.on_error(nullptr);
+    });
 }
 
 application& application::on_not_found(std::nullptr_t) & {
-    return detail::mutate_stopped_app(*this, *state_,
-        "cannot change not found handler while app is running",
-        [retired = detail::callback_registration<http_not_found_handler>()](detail::app_state& state_value) mutable {
-            retired = state_value.configuration_.on_not_found(nullptr);
-        });
+    return detail::mutate_stopped_app(*this, *state_, "cannot change not found handler while app is running", [retired = detail::callback_registration<http_not_found_handler>()](detail::app_state& state_value) mutable {
+        retired = state_value.configuration_.on_not_found(nullptr);
+    });
 }
 
 application& application::on_error(scoped_error_handler_options options) & {
-    return detail::mutate_stopped_app(*this, *state_,
-        "cannot change error handler while app is running",
-        [prefix = options.prefix_, handler = detail::own_callback(std::move(options.handler_))](detail::app_state& state_value) mutable {
-            state_value.configuration_.on_error(prefix, std::move(handler));
-        });
+    return detail::mutate_stopped_app(*this, *state_, "cannot change error handler while app is running", [prefix = options.prefix_, handler = detail::own_callback(std::move(options.handler_))](detail::app_state& state_value) mutable {
+        state_value.configuration_.on_error(prefix, std::move(handler));
+    });
 }
 
 application& application::on_not_found(scoped_not_found_handler_options options) & {
-    return detail::mutate_stopped_app(*this, *state_,
-        "cannot change not found handler while app is running",
-        [prefix = options.prefix_, handler = detail::own_callback(std::move(options.handler_))](detail::app_state& state_value) mutable {
-            state_value.configuration_.on_not_found(prefix, std::move(handler));
-        });
+    return detail::mutate_stopped_app(*this, *state_, "cannot change not found handler while app is running", [prefix = options.prefix_, handler = detail::own_callback(std::move(options.handler_))](detail::app_state& state_value) mutable {
+        state_value.configuration_.on_not_found(prefix, std::move(handler));
+    });
 }
 
 }  // namespace ruvia
 
 namespace ruvia {
 
-web_worker_context::web_worker_context(const worker_ref& worker_value,
-    const detail::worker_client_registry_view& client_registries,
-    const detail::worker_state_registry* worker_states, const ::ruvia::stop_token& stop_token_value) noexcept
-    : capabilities_(worker_value, stop_token_value, worker_states),
-      client_registries_(client_registries) {
+web_worker_context::web_worker_context(const worker_ref& worker_value, const detail::worker_client_registry_view& client_registries, const detail::worker_state_registry* worker_states, const ::ruvia::stop_token& stop_token_value) noexcept :
+    capabilities_(worker_value, stop_token_value, worker_states),
+    client_registries_(client_registries) {
     operation_scope_.bind_worker(worker_value);
 }
 const worker_ref& web_worker_context::worker() const& noexcept {
@@ -484,8 +438,8 @@ redis_session web_worker_context::redis(std::string_view alias) const {
 }
 #endif
 
-web_worker_ref::web_worker_ref(std::shared_ptr<detail::web_worker_dispatch> dispatch) noexcept
-    : dispatch_(std::move(dispatch)) {}
+web_worker_ref::web_worker_ref(std::shared_ptr<detail::web_worker_dispatch> dispatch) noexcept :
+    dispatch_(std::move(dispatch)) {}
 
 bool web_worker_ref::valid() const noexcept {
     return dispatch_ && dispatch_->valid();
@@ -507,16 +461,14 @@ web_worker_stats web_worker_ref::stats() const noexcept {
     return dispatch_ ? dispatch_->stats() : web_worker_stats{};
 }
 
-web_worker_post_result web_worker_ref::post_task(
-    move_only_function<task<void>(web_worker_context&)> task_value) const {
+web_worker_post_result web_worker_ref::post_task(move_only_function<task<void>(web_worker_context&)> task_value) const {
     if (dispatch_) {
         return dispatch_->post(std::move(task_value));
     }
     // A handle without a worker refuses with worker_stopping and returns the task.
-    return worker_ref().post_payload(std::move(task_value),
-        [](move_only_function<task<void>(web_worker_context&)>&&) -> move_only_function<void()> {
-            std::terminate();  // An empty handle never admits.
-        });
+    return worker_ref().post_payload(std::move(task_value), [](move_only_function<task<void>(web_worker_context&)>&&) -> move_only_function<void()> {
+        std::terminate();  // An empty handle never admits.
+    });
 }
 
 }  // namespace ruvia
@@ -539,14 +491,13 @@ using abandon_reservation_type = std::unique_ptr<web_worker_dispatch, abandon_re
 
 }  // namespace
 
-web_worker_dispatch::web_worker_dispatch(ruvia::worker_runtime& runtime,
-    worker_capabilities& capabilities, task_scope& jobs, const stop_token& stop_token_value)
-    : worker_(runtime.worker()),
-      runtime_(runtime),
-      client_registries_(capabilities.client_registries()),
-      worker_states_(capabilities.worker_states()),
-      jobs_(jobs),
-      stop_token_(stop_token_value) {}
+web_worker_dispatch::web_worker_dispatch(ruvia::worker_runtime& runtime, worker_capabilities& capabilities, task_scope& jobs, const stop_token& stop_token_value) :
+    worker_(runtime.worker()),
+    runtime_(runtime),
+    client_registries_(capabilities.client_registries()),
+    worker_states_(capabilities.worker_states()),
+    jobs_(jobs),
+    stop_token_(stop_token_value) {}
 
 web_worker_ref web_worker_dispatch::make_ref(std::shared_ptr<web_worker_dispatch> dispatch) noexcept {
     return web_worker_ref(std::move(dispatch));
@@ -713,23 +664,18 @@ struct test_app::impl_type final {
         try {
             const auto controller_registrars = detail::seal_controller_registrars();
             controllers_ = detail::controller_store(controller_registrars);
-            route_plan_ = detail::compile_route_plan(
-                controller_registrars, controllers_, configuration_);
+            route_plan_ = detail::compile_route_plan(controller_registrars, controllers_, configuration_);
             routes_.emplace(*route_plan_, controllers_);
 
-            capabilities_.emplace(event_loop_.io_context(), worker_,
-                detail::worker_capability_definitions{.worker_states_ = configuration_.worker_states()},
+            capabilities_.emplace(event_loop_.io_context(), worker_, detail::worker_capability_definitions{.worker_states_ = configuration_.worker_states()},
                 detail::worker_capability_options{
                     .default_rate_limit_ = options_.default_rate_limit_per_worker_,
-                    .route_rate_limits_ = routes_->has_route_rate_limit()
-                                              ? detail::route_rate_limit_presence::present
-                                              : detail::route_rate_limit_presence::absent,
+                    .route_rate_limits_ = routes_->has_route_rate_limit() ? detail::route_rate_limit_presence::present : detail::route_rate_limit_presence::absent,
                     .rate_limit_capacity_ = options_.rate_limit_capacity_per_worker_,
                     .max_decoded_body_bytes_ = options_.server_.max_buffered_body_bytes_,
                     .http_client_worker_ = options_.server_.http_client_worker_,
                     .env_ = &env_,
-                    .trusted_proxies_ =
-                        options_.trusted_proxies_.empty() ? nullptr : &options_.trusted_proxies_,
+                    .trusted_proxies_ = options_.trusted_proxies_.empty() ? nullptr : &options_.trusted_proxies_,
                     .precompressed_static_files_ = options_.compression_.has_value(),
                     .file_io_timeout_ = options_.server_.write_timeout_,
                     .connection_failure_ = &options_.connection_failure_,
@@ -746,8 +692,7 @@ struct test_app::impl_type final {
 
     [[nodiscard]] task<dispatch_response> execute_request(const test_request& request) {
         const auto request_start = std::chrono::steady_clock::now();
-        detail::inline_http_header_views<16> active_headers(
-            request.headers_.size() + (!request.cookies_.empty() ? 1U : 0U));
+        detail::inline_http_header_views<16> active_headers(request.headers_.size() + (!request.cookies_.empty() ? 1U : 0U));
         for (const auto& [name, value] : request.headers_) {
             active_headers.push_back(http_header_view(name, value));
         }
@@ -757,8 +702,7 @@ struct test_app::impl_type final {
         std::optional<http_protocol_error> parse_error;
         auto parsed_value = [&]() {
             try {
-                return make_parsed_http_request(request.method_, request.target_, active_headers.view(),
-                    std::as_bytes(std::span(request.body_.data(), request.body_.size())));
+                return make_parsed_http_request(request.method_, request.target_, active_headers.view(), std::as_bytes(std::span(request.body_.data(), request.body_.size())));
             } catch (const http_protocol_error& error) {
                 parse_error = error;
                 return make_parsed_http_request("GET", "/", {}, {});
@@ -768,18 +712,15 @@ struct test_app::impl_type final {
         const auto& routes_value = *routes_;
         const auto resolution = routes_value.resolve(parsed_value);
         // A test request has no transport connection, hence connection id zero.
-        const auto services = capabilities_->make_context_services(stop_token_)
-                                  .with_plain_transport(0, request.remote_address_, request.remote_port_);
+        const auto services = capabilities_->make_context_services(stop_token_).with_plain_transport(0, request.remote_address_, request.remote_port_);
 
         // A malformed request is rejected before admission, with no coding
         // promise, exactly as a server answers a malformed head.
         std::optional<detail::http_request_admission> admission;
         http_response response;
         if (parse_error.has_value()) {
-            const auto rejection = detail::http_request_rejection::error(
-                detail::copy_http_protocol_error_info(*parse_error));
-            response = co_await detail::respond_http_request_rejection(
-                routes_value, parsed_value, rejection, services);
+            const auto rejection = detail::http_request_rejection::error(detail::copy_http_protocol_error_info(*parse_error));
+            response = co_await detail::respond_http_request_rejection(routes_value, parsed_value, rejection, services);
         } else {
             // These borrowed arguments must remain in the coroutine frame across
             // suspension. MSVC cannot tail-transfer this call with braced temporaries.
@@ -791,19 +732,13 @@ struct test_app::impl_type final {
                 .pinned_arrival_ = request.arrival_,
             };
             const auto policy = detail::http_request_admission_policy::server(options_);
-            auto admitted = co_await detail::admit_and_dispatch_buffered_request(
-                routes_value, input, policy, services, response);
+            auto admitted = co_await detail::admit_and_dispatch_buffered_request(routes_value, input, policy, services, response);
             admission.emplace(std::move(admitted));
         }
         const auto& request_services = admission ? admission->services() : services;
-        const auto remote_ip =
-            ip_address::parse(request.remote_address_).value_or(ip_address{});
-        const auto tail = admission ? admission->tail()
-                                    : detail::http_response_tail(parsed_value,
-                                          detail::http_response_coding_policy::disabled(),
-                                          remote_ip, remote_ip, request_start);
-        const auto prepared = co_await tail.prepare_or_finish(
-            response, options_, worker_, routes_value, request_services);
+        const auto remote_ip = ip_address::parse(request.remote_address_).value_or(ip_address{});
+        const auto tail = admission ? admission->tail() : detail::http_response_tail(parsed_value, detail::http_response_coding_policy::disabled(), remote_ip, remote_ip, request_start);
+        const auto prepared = co_await tail.prepare_or_finish(response, options_, worker_, routes_value, request_services);
 
         dispatch_response result_value;
         result_value.copy_head_from(response);
@@ -813,8 +748,7 @@ struct test_app::impl_type final {
         // are framing concerns and stay absent here.
         if (!prepared.write_plan_.body_plan().body_suppressed()) {
             if (response.file_body() || response.has_multipart_file_body()) {
-                detail::response_file_source source(response,
-                    {.worker_ = worker_, .stop_ = stop_token_, .timeout_ = options_.server_.write_timeout_});
+                detail::response_file_source source(response, {.worker_ = worker_, .stop_ = stop_token_, .timeout_ = options_.server_.write_timeout_});
                 for (;;) {
                     const auto chunk = co_await source.next();
                     if (chunk.kind() == detail::response_body_chunk::kind_type::end) {
@@ -834,8 +768,8 @@ struct test_app::impl_type final {
     }
 };
 
-test_app::test_app()
-    : impl_(std::make_unique<impl_type>()) {}
+test_app::test_app() :
+    impl_(std::make_unique<impl_type>()) {}
 
 test_app::~test_app() = default;
 
@@ -953,16 +887,20 @@ void invoke_stop_hooks(detail::app_state& state_value) noexcept {
 // while a slow startup hook still runs, before the stop can take effect.
 class process_signal_handling final {
 public:
-    explicit process_signal_handling(application& owner)
-        : runtime_({.queue_capacity_ = 1, .io_policy_ = worker_io_policy::single_owner}),
-          signals_(runtime_.io_context()) {
+    explicit process_signal_handling(application& owner) :
+        runtime_({.queue_capacity_ = 1, .io_policy_ = worker_io_policy::single_owner}),
+        signals_(runtime_.io_context()) {
         runtime_.configure({
-            .stop_admission_ = [this] {
-                std::error_code ignored;
-                signals_.clear(ignored);
-                signals_.cancel(ignored);
-                runtime_.finalize(); },
-            .failure_ = [&owner](std::exception_ptr) noexcept { owner.stop(); },
+            .stop_admission_ =
+                [this] {
+            std::error_code ignored;
+            signals_.clear(ignored);
+            signals_.cancel(ignored);
+            runtime_.finalize();
+        },
+            .failure_ = [&owner](std::exception_ptr) noexcept {
+            owner.stop();
+        },
         });
         // A failed registration or thread start must join the runtime while
         // signals_ is alive: its stop hook still clears and cancels the set,
@@ -1008,9 +946,9 @@ private:
 
 class app_run_coordinator final {
 public:
-    app_run_coordinator(application& owner_value, detail::app_state& state_value)
-        : owner_(owner_value),
-          state_(state_value) {}
+    app_run_coordinator(application& owner_value, detail::app_state& state_value) :
+        owner_(owner_value),
+        state_(state_value) {}
 
     void run() {
         begin_run();
@@ -1102,8 +1040,7 @@ private:
 
     void build_and_publish_runtime() {
         const bool routes_enabled = std::ranges::any_of(state_.listeners_, [](const auto& listener) {
-            return !listener.connection_.has_value() && !listener.request_stream_ &&
-                   !std::holds_alternative<detail::http_server_listener_definition::redirect_http_to_https>(listener.transport_);
+            return !listener.connection_.has_value() && !listener.request_stream_ && !std::holds_alternative<detail::http_server_listener_definition::redirect_http_to_https>(listener.transport_);
         });
         std::vector<detail::controller_registrar> controller_registrars;
         if (routes_enabled) {
@@ -1115,10 +1052,9 @@ private:
         prepared_options.env_ = &state_.env_;
         prepared_options.failure_ = detail::worker_failure_sink{
             .target_ = &owner_,
-            .invoke_ =
-                [](void* target, const std::exception_ptr&) noexcept {
-                    static_cast<application*>(target)->stop();
-                },
+            .invoke_ = [](void* target, const std::exception_ptr&) noexcept {
+            static_cast<application*>(target)->stop();
+        },
         };
 
         if (state_.document_root_config_.has_value()) {
@@ -1129,23 +1065,15 @@ private:
             const auto& document_root = *state_.document_root_config_;
             // Precompressed variants are negotiated by the compression policy,
             // so without it the refresher never builds them.
-            const auto precompression = prepared_options.compression_.has_value()
-                                            ? document_root.precompression_
-                                            : detail::static_root_precompression_options{};
-            runtime->document_root_ = std::make_unique<detail::document_root_publisher>(
-                http_make_path_from_native_path(document_root.root_), document_root.static_options_,
-                document_root.refresh_interval_, precompression, document_root.resident_,
-                state_.options_.server_.worker_count_);
-            prepared_options.document_root_ =
-                detail::http_server_options::document_root_state::refreshing(*runtime->document_root_);
+            const auto precompression = prepared_options.compression_.has_value() ? document_root.precompression_ : detail::static_root_precompression_options{};
+            runtime->document_root_ = std::make_unique<detail::document_root_publisher>(http_make_path_from_native_path(document_root.root_), document_root.static_options_, document_root.refresh_interval_, precompression, document_root.resident_, state_.options_.server_.worker_count_);
+            prepared_options.document_root_ = detail::http_server_options::document_root_state::refreshing(*runtime->document_root_);
         }
         if (state_.blocking_pool_.has_value()) {
-            runtime->blocking_pool_ =
-                std::make_unique<blocking_pool>(*state_.blocking_pool_);
+            runtime->blocking_pool_ = std::make_unique<blocking_pool>(*state_.blocking_pool_);
         }
 
-        const auto validated_configuration =
-            detail::validate_http_server_configuration(state_.listeners_, std::move(prepared_options));
+        const auto validated_configuration = detail::validate_http_server_configuration(state_.listeners_, std::move(prepared_options));
         // Workers number the listeners, and their HTTP/3 services, in this order.
         runtime->listener_slots_.reserve(validated_configuration.listeners().size());
         for (const auto& listener : validated_configuration.listeners()) {
@@ -1158,21 +1086,19 @@ private:
         // controllers, routes and middleware must neither be sealed nor built.
         detail::controller_store first_controllers(controller_registrars);
         if (routes_enabled) {
-            runtime->route_plan_ = detail::compile_route_plan(
-                controller_registrars, first_controllers, state_.configuration_);
+            runtime->route_plan_ = detail::compile_route_plan(controller_registrars, first_controllers, state_.configuration_);
         } else {
             runtime->route_plan_ = std::make_unique<detail::compiled_route_plan>();
         }
 #if defined(RUVIA_ENABLE_HTTP3)
-        if (std::ranges::any_of(validated_configuration.listeners(),
-                [](const auto& listener) { return listener.http3_.has_value(); })) {
-            runtime->http3_directory_ = std::make_unique<detail::http3_worker_directory>(
-                state_.options_.server_.worker_count_);
+        if (std::ranges::any_of(validated_configuration.listeners(), [](const auto& listener) {
+            return listener.http3_.has_value();
+        })) {
+            runtime->http3_directory_ = std::make_unique<detail::http3_worker_directory>(state_.options_.server_.worker_count_);
         }
 #endif
 #if defined(_WIN32)
-        runtime->acceptor_ = std::make_unique<detail::windows_acceptor>(
-            validated_configuration.listeners(), state_.options_.server_.worker_count_,
+        runtime->acceptor_ = std::make_unique<detail::windows_acceptor>(validated_configuration.listeners(), state_.options_.server_.worker_count_,
 #if defined(RUVIA_ENABLE_HTTP3)
             runtime->http3_directory_.get(),
 #endif
@@ -1180,10 +1106,8 @@ private:
 #endif
         runtime->workers_.reserve(state_.options_.server_.worker_count_);
         for (std::size_t i = 0; i < state_.options_.server_.worker_count_; ++i) {
-            auto controllers =
-                i == 0 ? std::move(first_controllers) : detail::controller_store(controller_registrars);
-            auto routes_value = std::make_unique<detail::route_table>(
-                *runtime->route_plan_, controllers);
+            auto controllers = i == 0 ? std::move(first_controllers) : detail::controller_store(controller_registrars);
+            auto routes_value = std::make_unique<detail::route_table>(*runtime->route_plan_, controllers);
             const detail::worker_capability_definitions capabilities{
 #ifdef RUVIA_ENABLE_DATABASE
                 .databases_ = std::span<const detail::db_definition>(state_.databases_),
@@ -1195,8 +1119,7 @@ private:
                 .http_clients_ = std::span<const detail::http_client_definition_type>(state_.http_clients_),
             };
 #if defined(RUVIA_ENABLE_HTTP3)
-            auto worker_value = std::make_unique<detail::web_worker_runtime>(
-                validated_configuration, *routes_value, capabilities, runtime->blocking_pool_.get(), i,
+            auto worker_value = std::make_unique<detail::web_worker_runtime>(validated_configuration, *routes_value, capabilities, runtime->blocking_pool_.get(), i,
                 detail::http3_worker_placement{
                     .directory_ = runtime->http3_directory_.get(),
                     .worker_index_ = i,
@@ -1208,14 +1131,12 @@ private:
                 runtime->http3_directory_->bind_worker(i, worker_value->runtime().worker());
             }
 #else
-            auto worker_value = std::make_unique<detail::web_worker_runtime>(
-                validated_configuration, *routes_value, capabilities, runtime->blocking_pool_.get(), i);
+            auto worker_value = std::make_unique<detail::web_worker_runtime>(validated_configuration, *routes_value, capabilities, runtime->blocking_pool_.get(), i);
 #endif
 #if defined(_WIN32)
             runtime->acceptor_->bind_worker(i, worker_value->acceptor_target());
 #endif
-            runtime->workers_.emplace_back(
-                std::move(controllers), std::move(routes_value), std::move(worker_value));
+            runtime->workers_.emplace_back(std::move(controllers), std::move(routes_value), std::move(worker_value));
         }
 
         for (auto& slot : runtime->workers_) {
@@ -1278,7 +1199,9 @@ private:
         if (!state_.lifecycle_.mark_running()) {
             return;
         }
-        state_.lifecycle_changed_.wait(lock, [this] { return state_.lifecycle_.stop_requested(); });
+        state_.lifecycle_changed_.wait(lock, [this] {
+            return state_.lifecycle_.stop_requested();
+        });
     }
 
     void stop_signal_handling() noexcept {
@@ -1294,7 +1217,9 @@ private:
             // Controls suspend their callers; only this owner waits to retire
             // their borrowed runtime and frozen configuration after joining.
             std::unique_lock lock(state_.mutex_);
-            state_.lifecycle_changed_.wait(lock, [this] { return state_.runtime_controls_ == 0; });
+            state_.lifecycle_changed_.wait(lock, [this] {
+                return state_.runtime_controls_ == 0;
+            });
             retired = std::move(state_.runtime_);
         }
         retired.reset();
@@ -1352,43 +1277,39 @@ namespace {
 #endif
 }  // namespace
 
-worker_capabilities::worker_capabilities(asio::io_context& io_context, const worker_ref& worker_value,
-    worker_capability_definitions definitions,
-    worker_capability_options options)
-    : worker_(require_worker_capabilities_worker(worker_value)),
+worker_capabilities::worker_capabilities(asio::io_context& io_context, const worker_ref& worker_value, worker_capability_definitions definitions, worker_capability_options options) :
+    worker_(require_worker_capabilities_worker(worker_value)),
 #ifdef RUVIA_ENABLE_REDIS
-      redis_(io_context, definitions.redis_, worker_),
+    redis_(io_context, definitions.redis_, worker_),
 #endif
 #ifdef RUVIA_ENABLE_DATABASE
-      databases_(io_context, worker_, definitions.databases_
+    databases_(io_context, worker_, definitions.databases_
 #ifdef RUVIA_ENABLE_REDIS
-          ,
-          &redis_
+        ,
+        &redis_
 #else
-          ,
-          nullptr
+        ,
+        nullptr
 #endif
-          ),
+        ),
 #endif
-      http_client_services_(make_http_client_worker_services(options.http_client_worker_)),
-      http_clients_(io_context, worker_,
-          definitions.http_clients_, http_client_services_),
-      worker_states_(definitions.worker_states_),
-      rate_limiter_(
-          options.default_rate_limit_, options.route_rate_limits_, options.rate_limit_capacity_),
-      options_(require_worker_capability_options(std::move(options))),
-      worker_services_{
-          .worker_ = worker_,
-          .clients_ = client_registries(),
-          .rate_limiter_ = &rate_limiter_,
-          .env_ = options_.env_,
-          .max_decoded_body_bytes_ = options_.max_decoded_body_bytes_,
-          .states_ = &worker_states_,
-          .precompressed_static_files_ = options_.precompressed_static_files_,
-          .file_io_timeout_ = options_.file_io_timeout_,
-          .connection_failure_ = options_.connection_failure_,
-          .trusted_proxies_ = options_.trusted_proxies_,
-      } {
+    http_client_services_(make_http_client_worker_services(options.http_client_worker_)),
+    http_clients_(io_context, worker_, definitions.http_clients_, http_client_services_),
+    worker_states_(definitions.worker_states_),
+    rate_limiter_(options.default_rate_limit_, options.route_rate_limits_, options.rate_limit_capacity_),
+    options_(require_worker_capability_options(std::move(options))),
+    worker_services_{
+        .worker_ = worker_,
+        .clients_ = client_registries(),
+        .rate_limiter_ = &rate_limiter_,
+        .env_ = options_.env_,
+        .max_decoded_body_bytes_ = options_.max_decoded_body_bytes_,
+        .states_ = &worker_states_,
+        .precompressed_static_files_ = options_.precompressed_static_files_,
+        .file_io_timeout_ = options_.file_io_timeout_,
+        .connection_failure_ = options_.connection_failure_,
+        .trusted_proxies_ = options_.trusted_proxies_,
+    } {
 }
 
 task<void> worker_capabilities::start() {
@@ -1477,8 +1398,7 @@ void bind_borrowed_alias(std::vector<entry_type>& entries, std::string_view alia
 }
 
 template <typename entry_type>
-[[nodiscard]] auto find_borrowed_alias(const std::vector<entry_type>& entries, std::string_view alias) noexcept
-    -> decltype(entries.front().client_) {
+[[nodiscard]] auto find_borrowed_alias(const std::vector<entry_type>& entries, std::string_view alias) noexcept -> decltype(entries.front().client_) {
     for (const auto& entry : entries) {
         if (std::string_view(entry.alias_) == alias) {
             return entry.client_;
@@ -1493,10 +1413,10 @@ borrowed_clients::borrowed_clients() = default;
 bool borrowed_clients::empty() const noexcept {
     return http_clients_.empty()
 #ifdef RUVIA_ENABLE_DATABASE
-           && databases_.empty()
+        && databases_.empty()
 #endif
 #ifdef RUVIA_ENABLE_REDIS
-           && redis_.empty()
+        && redis_.empty()
 #endif
         ;
 }
@@ -1535,27 +1455,23 @@ const redis_client* borrowed_clients::redis(std::string_view alias) const noexce
 void* worker_context_capabilities::worker_state_instance(const void* type_key) const {
     auto* instance = worker_states_ == nullptr ? nullptr : worker_states_->instance(type_key);
     if (instance == nullptr) {
-        throw std::logic_error(
-            "worker state type is not registered: call application::use_worker_state<state_type>() or router::bind_worker_state()");
+        throw std::logic_error("worker state type is not registered: call application::use_worker_state<state_type>() or router::bind_worker_state()");
     }
     return instance;
 }
 
 #ifdef RUVIA_ENABLE_DATABASE
-db_session worker_client_registry_view::db(::ruvia::operation_scope& operation_scope,
-    request_io_metrics* io_metrics, const stop_token& stop_token_value) const {
+db_session worker_client_registry_view::db(::ruvia::operation_scope& operation_scope, request_io_metrics* io_metrics, const stop_token& stop_token_value) const {
     if (borrowed_ != nullptr) {
         return db(default_capability_alias, operation_scope, io_metrics, stop_token_value);
     }
     if (!attached()) {
         throw db_error(db_error::code_type::not_configured, std::nullopt, "database is not configured");
     }
-    return databases_->get(operation_scope, io_metrics)
-        .with_options(context_operation_options(stop_token_value));
+    return databases_->get(operation_scope, io_metrics).with_options(context_operation_options(stop_token_value));
 }
 
-db_session worker_client_registry_view::db(std::string_view alias, ::ruvia::operation_scope& operation_scope,
-    request_io_metrics* io_metrics, const stop_token& stop_token_value) const {
+db_session worker_client_registry_view::db(std::string_view alias, ::ruvia::operation_scope& operation_scope, request_io_metrics* io_metrics, const stop_token& stop_token_value) const {
     if (borrowed_ != nullptr) {
         const auto* client = borrowed_->database(alias);
         if (client == nullptr) {
@@ -1566,26 +1482,22 @@ db_session worker_client_registry_view::db(std::string_view alias, ::ruvia::oper
     if (!attached()) {
         throw db_error(db_error::code_type::not_configured, std::nullopt, "database is not configured");
     }
-    return databases_->get(alias, operation_scope, io_metrics)
-        .with_options(context_operation_options(stop_token_value));
+    return databases_->get(alias, operation_scope, io_metrics).with_options(context_operation_options(stop_token_value));
 }
 #endif
 
 #ifdef RUVIA_ENABLE_REDIS
-redis_session worker_client_registry_view::redis(::ruvia::operation_scope& operation_scope,
-    request_io_metrics* io_metrics, const stop_token& stop_token_value) const {
+redis_session worker_client_registry_view::redis(::ruvia::operation_scope& operation_scope, request_io_metrics* io_metrics, const stop_token& stop_token_value) const {
     if (borrowed_ != nullptr) {
         return redis(default_capability_alias, operation_scope, io_metrics, stop_token_value);
     }
     if (!attached()) {
         throw redis_error(redis_error::code_type::not_configured, "redis is not configured");
     }
-    return redis_->get(operation_scope, io_metrics)
-        .with_options(context_operation_options(stop_token_value));
+    return redis_->get(operation_scope, io_metrics).with_options(context_operation_options(stop_token_value));
 }
 
-redis_session worker_client_registry_view::redis(std::string_view alias, ::ruvia::operation_scope& operation_scope,
-    request_io_metrics* io_metrics, const stop_token& stop_token_value) const {
+redis_session worker_client_registry_view::redis(std::string_view alias, ::ruvia::operation_scope& operation_scope, request_io_metrics* io_metrics, const stop_token& stop_token_value) const {
     if (borrowed_ != nullptr) {
         const auto* client = borrowed_->redis(alias);
         if (client == nullptr) {
@@ -1596,39 +1508,33 @@ redis_session worker_client_registry_view::redis(std::string_view alias, ::ruvia
     if (!attached()) {
         throw redis_error(redis_error::code_type::not_configured, "redis is not configured");
     }
-    return redis_->get(alias, operation_scope, io_metrics)
-        .with_options(context_operation_options(stop_token_value));
+    return redis_->get(alias, operation_scope, io_metrics).with_options(context_operation_options(stop_token_value));
 }
 #endif
 
-http_client_ref worker_client_registry_view::client(
-    ::ruvia::operation_scope& operation_scope, const stop_token& stop_token_value) const {
+http_client_ref worker_client_registry_view::client(::ruvia::operation_scope& operation_scope, const stop_token& stop_token_value) const {
     if (borrowed_ != nullptr) {
         return client(default_capability_alias, operation_scope, stop_token_value);
     }
     if (!attached()) {
-        throw http_client_error(
-            make_error_code(http_client_errc::not_configured), "http client is not configured");
+        throw http_client_error(make_error_code(http_client_errc::not_configured), "http client is not configured");
     }
     return http_clients_->get(operation_scope, stop_token_value);
 }
 
-http_client_ref worker_client_registry_view::client(std::string_view alias,
-    ::ruvia::operation_scope& operation_scope, const stop_token& stop_token_value) const {
+http_client_ref worker_client_registry_view::client(std::string_view alias, ::ruvia::operation_scope& operation_scope, const stop_token& stop_token_value) const {
     if (borrowed_ != nullptr) {
         return borrowed_http_clients(alias).client().bind_caller_scope(operation_scope, stop_token_value);
     }
     if (!attached()) {
-        throw http_client_error(
-            make_error_code(http_client_errc::not_configured), "http client is not configured");
+        throw http_client_error(make_error_code(http_client_errc::not_configured), "http client is not configured");
     }
     return http_clients_->get(alias, operation_scope, stop_token_value);
 }
 const http_client& worker_client_registry_view::borrowed_http_clients(std::string_view alias) const {
     const auto* clients = borrowed_->http_clients(alias);
     if (clients == nullptr) {
-        throw http_client_error(
-            make_error_code(http_client_errc::not_configured), "http client is not configured");
+        throw http_client_error(make_error_code(http_client_errc::not_configured), "http client is not configured");
     }
     return *clients;
 }
@@ -1640,16 +1546,15 @@ namespace {
 
 template <typename variables_type>
 [[nodiscard]] auto find_variable_slot(variables_type& variables, std::string_view name) noexcept {
-    return std::ranges::lower_bound(
-        variables, name, std::ranges::less{}, [](const detail::env_variable& variable) noexcept {
-            return std::string_view(variable.name_);
-        });
+    return std::ranges::lower_bound(variables, name, std::ranges::less{}, [](const detail::env_variable& variable) noexcept {
+        return std::string_view(variable.name_);
+    });
 }
 
 }  // namespace
 
-env::env()
-    : state_(std::make_unique<detail::env_state>()) {}
+env::env() :
+    state_(std::make_unique<detail::env_state>()) {}
 
 env::~env() = default;
 
@@ -1674,14 +1579,10 @@ std::optional<bool> env::parse_bool_value(std::string_view value) noexcept {
     // ASCII-only case fold via the shared owner: the boolean tokens are ASCII, and
     // std::tolower is locale-dependent (a non-"C" LC_CTYPE set by the host app could
     // fold bytes unexpectedly).
-    if (http_ascii_equals_ignore_case(value, "true") ||
-        http_ascii_equals_ignore_case(value, "yes") ||
-        http_ascii_equals_ignore_case(value, "on")) {
+    if (http_ascii_equals_ignore_case(value, "true") || http_ascii_equals_ignore_case(value, "yes") || http_ascii_equals_ignore_case(value, "on")) {
         return true;
     }
-    if (http_ascii_equals_ignore_case(value, "false") ||
-        http_ascii_equals_ignore_case(value, "no") ||
-        http_ascii_equals_ignore_case(value, "off")) {
+    if (http_ascii_equals_ignore_case(value, "false") || http_ascii_equals_ignore_case(value, "no") || http_ascii_equals_ignore_case(value, "off")) {
         return false;
     }
 
@@ -1700,8 +1601,7 @@ std::filesystem::path detail::dotenv_executable_directory() {
 #ifdef _WIN32
     std::wstring buffer(260, L'\0');
     for (;;) {
-        const auto length =
-            ::GetModuleFileNameW(nullptr, buffer.data(), static_cast<DWORD>(buffer.size()));
+        const auto length = ::GetModuleFileNameW(nullptr, buffer.data(), static_cast<DWORD>(buffer.size()));
         if (length == 0) {
             throw std::runtime_error("failed to resolve executable path");
         }
@@ -1719,9 +1619,7 @@ std::filesystem::path detail::dotenv_executable_directory() {
             throw std::runtime_error("failed to resolve executable path");
         }
         if (static_cast<std::size_t>(length) < buffer.size()) {
-            return std::filesystem::path(
-                std::string_view(buffer.data(), static_cast<std::size_t>(length)))
-                .parent_path();
+            return std::filesystem::path(std::string_view(buffer.data(), static_cast<std::size_t>(length))).parent_path();
         }
         buffer.resize(buffer.size() * 2);
     }
@@ -1740,12 +1638,10 @@ env& env::load_dotenv(dotenv_options options) & {
 }
 
 env& env::load_dotenv(const std::filesystem::path& path, dotenv_options options) & {
-    if (options.existing_variables_ != dotenv_existing_variable_policy::preserve &&
-        options.existing_variables_ != dotenv_existing_variable_policy::override) {
+    if (options.existing_variables_ != dotenv_existing_variable_policy::preserve && options.existing_variables_ != dotenv_existing_variable_policy::override) {
         throw std::invalid_argument("dotenv existing variable policy is invalid");
     }
-    if (options.missing_file_ != dotenv_missing_file_policy::ignore &&
-        options.missing_file_ != dotenv_missing_file_policy::require) {
+    if (options.missing_file_ != dotenv_missing_file_policy::ignore && options.missing_file_ != dotenv_missing_file_policy::require) {
         throw std::invalid_argument("dotenv missing file policy is invalid");
     }
     std::ifstream input(path);
@@ -1831,8 +1727,7 @@ namespace {
     });
 }
 
-[[nodiscard]] std::string location_message(
-    const std::filesystem::path& path, std::size_t line_number, std::string_view message) {
+[[nodiscard]] std::string location_message(const std::filesystem::path& path, std::size_t line_number, std::string_view message) {
     auto result_value = dotenv_path_message("invalid dotenv entry in ", path);
     result_value += ':';
     result_value += std::to_string(line_number);
@@ -1841,12 +1736,10 @@ namespace {
     return result_value;
 }
 
-[[nodiscard]] std::size_t dotenv_utf8_sequence_length(std::string_view value, std::size_t index,
-    const std::filesystem::path& path, std::size_t line_number) {
+[[nodiscard]] std::size_t dotenv_utf8_sequence_length(std::string_view value, std::size_t index, const std::filesystem::path& path, std::size_t line_number) {
     const auto sequence = ::ruvia::scan_utf8_sequence(value, index);
     if (!sequence.well_formed_) {
-        throw std::invalid_argument(
-            location_message(path, line_number, "value is not valid UTF-8").c_str());
+        throw std::invalid_argument(location_message(path, line_number, "value is not valid UTF-8").c_str());
     }
     return sequence.length_;
 }
@@ -1871,8 +1764,7 @@ namespace {
     }
 }
 
-[[nodiscard]] std::string parse_double_quoted_value(std::string_view value,
-    const std::filesystem::path& path, std::size_t line_number, std::size_t& consumed) {
+[[nodiscard]] std::string parse_double_quoted_value(std::string_view value, const std::filesystem::path& path, std::size_t line_number, std::size_t& consumed) {
     std::string result;
     std::size_t literal_start = 1;
     bool has_escape = false;
@@ -1892,8 +1784,7 @@ namespace {
         }
         if (current == '\\') {
             if (index + 1 == value.size()) {
-                throw std::invalid_argument(
-                    location_message(path, line_number, "unfinished escape sequence").c_str());
+                throw std::invalid_argument(location_message(path, line_number, "unfinished escape sequence").c_str());
             }
             has_escape = true;
             result.append(value.substr(literal_start, index - literal_start));
@@ -1902,21 +1793,17 @@ namespace {
                 result.push_back(*decoded);
             } else {
                 result.push_back('\\');
-                const auto length = static_cast<unsigned char>(escaped) >= 0x80
-                                        ? dotenv_utf8_sequence_length(value, index, path, line_number)
-                                        : 1;
+                const auto length = static_cast<unsigned char>(escaped) >= 0x80 ? dotenv_utf8_sequence_length(value, index, path, line_number) : 1;
                 result.append(value.substr(index, length));
                 index += length - 1;
             }
             literal_start = index + 1;
         }
     }
-    throw std::invalid_argument(
-        location_message(path, line_number, "unterminated double-quoted value").c_str());
+    throw std::invalid_argument(location_message(path, line_number, "unterminated double-quoted value").c_str());
 }
 
-[[nodiscard]] std::string parse_single_quoted_value(std::string_view value,
-    const std::filesystem::path& path, std::size_t line_number, std::size_t& consumed) {
+[[nodiscard]] std::string parse_single_quoted_value(std::string_view value, const std::filesystem::path& path, std::size_t line_number, std::size_t& consumed) {
     for (std::size_t index = 1; index < value.size(); ++index) {
         if (value[index] == '\'') {
             consumed = index + 1;
@@ -1926,21 +1813,17 @@ namespace {
             index += dotenv_utf8_sequence_length(value, index, path, line_number) - 1;
         }
     }
-    throw std::invalid_argument(
-        location_message(path, line_number, "unterminated single-quoted value").c_str());
+    throw std::invalid_argument(location_message(path, line_number, "unterminated single-quoted value").c_str());
 }
 
-void validate_quoted_remainder(
-    std::string_view value, const std::filesystem::path& path, std::size_t line_number) {
+void validate_quoted_remainder(std::string_view value, const std::filesystem::path& path, std::size_t line_number) {
     value = trim_left(value);
     if (!value.empty() && value.front() != '#') {
-        throw std::invalid_argument(
-            location_message(path, line_number, "unexpected characters after quoted value").c_str());
+        throw std::invalid_argument(location_message(path, line_number, "unexpected characters after quoted value").c_str());
     }
 }
 
-[[nodiscard]] std::string parse_unquoted_value(std::string_view value,
-    const std::filesystem::path& path, std::size_t line_number) {
+[[nodiscard]] std::string parse_unquoted_value(std::string_view value, const std::filesystem::path& path, std::size_t line_number) {
     std::size_t end = value.size();
     for (std::size_t index = 0; index < value.size(); ++index) {
         if (value[index] == '#' && (index == 0 || is_space(value[index - 1]))) {
@@ -1955,8 +1838,7 @@ void validate_quoted_remainder(
     return std::string(trim(value.substr(0, end)));
 }
 
-[[nodiscard]] std::string parse_value(
-    std::string_view value, const std::filesystem::path& path, std::size_t line_number) {
+[[nodiscard]] std::string parse_value(std::string_view value, const std::filesystem::path& path, std::size_t line_number) {
     value = trim_left(value);
     if (value.empty()) {
         return {};
@@ -1981,15 +1863,12 @@ void validate_quoted_remainder(
 
 void strip_utf8_bom(std::string_view& line) noexcept {
     constexpr unsigned char bom[] = {0xEF, 0xBB, 0xBF};
-    if (line.size() >= 3 && static_cast<unsigned char>(line[0]) == bom[0] &&
-        static_cast<unsigned char>(line[1]) == bom[1] &&
-        static_cast<unsigned char>(line[2]) == bom[2]) {
+    if (line.size() >= 3 && static_cast<unsigned char>(line[0]) == bom[0] && static_cast<unsigned char>(line[1]) == bom[1] && static_cast<unsigned char>(line[2]) == bom[2]) {
         line.remove_prefix(3);
     }
 }
 
-[[nodiscard]] env_variable parse_entry(
-    std::string_view line, const std::filesystem::path& path, std::size_t line_number) {
+[[nodiscard]] env_variable parse_entry(std::string_view line, const std::filesystem::path& path, std::size_t line_number) {
     line = trim(line);
     if (line.starts_with("export") && line.size() > 6 && is_space(line[6])) {
         line = trim(line.substr(6));
@@ -2002,8 +1881,7 @@ void strip_utf8_bom(std::string_view& line) noexcept {
 
     const auto key = trim(line.substr(0, separator));
     if (!is_valid_key(key)) {
-        throw std::invalid_argument(
-            location_message(path, line_number, "invalid variable name").c_str());
+        throw std::invalid_argument(location_message(path, line_number, "invalid variable name").c_str());
     }
 
     auto parsed_value = parse_value(line.substr(separator + 1), path, line_number);
@@ -2015,8 +1893,7 @@ void strip_utf8_bom(std::string_view& line) noexcept {
 
 }  // namespace
 
-std::vector<env_variable> read_dotenv_entries(
-    std::istream& input, const std::filesystem::path& path) {
+std::vector<env_variable> read_dotenv_entries(std::istream& input, const std::filesystem::path& path) {
     std::vector<env_variable> entries;
     // Indices into entries ordered by name: duplicate detection stays
     // O(log N) per line and never borrows a name that a reallocation of
@@ -2044,11 +1921,9 @@ std::vector<env_variable> read_dotenv_entries(
         auto entry = parse_entry(view, path, line_number);
         // One file assigning a name twice is ambiguous configuration; the
         // existing-variable policy only arbitrates against other sources.
-        const auto slot = std::ranges::lower_bound(
-            entries_by_name, std::string_view(entry.name_), std::ranges::less{}, entry_name);
+        const auto slot = std::ranges::lower_bound(entries_by_name, std::string_view(entry.name_), std::ranges::less{}, entry_name);
         if (slot != entries_by_name.end() && entry_name(*slot) == std::string_view(entry.name_)) {
-            throw std::invalid_argument(
-                location_message(path, line_number, "duplicate variable name").c_str());
+            throw std::invalid_argument(location_message(path, line_number, "duplicate variable name").c_str());
         }
         entries_by_name.insert(slot, entries.size());
         entries.push_back(std::move(entry));
@@ -2066,15 +1941,15 @@ std::vector<env_variable> read_dotenv_entries(
 namespace ruvia {
 
 application& application::load_dotenv(dotenv_options options) & {
-    return detail::mutate_stopped_app(
-        *this, *state_, "cannot load dotenv while app is running", [&](detail::app_state& state_value) {
-            state_value.env_.load_dotenv(options);
-        });
+    return detail::mutate_stopped_app(*this, *state_, "cannot load dotenv while app is running", [&](detail::app_state& state_value) {
+        state_value.env_.load_dotenv(options);
+    });
 }
 
 application& application::load_dotenv(const std::filesystem::path& path, dotenv_options options) & {
-    return detail::mutate_stopped_app(*this, *state_, "cannot load dotenv while app is running",
-        [&](detail::app_state& state_value) { state_value.env_.load_dotenv(path, options); });
+    return detail::mutate_stopped_app(*this, *state_, "cannot load dotenv while app is running", [&](detail::app_state& state_value) {
+        state_value.env_.load_dotenv(path, options);
+    });
 }
 
 namespace {
@@ -2102,13 +1977,7 @@ void cleanse_identity(tls_identity_config& identity) noexcept {
 
 [[nodiscard]] bool has_tls_configuration(const tls_config& config) noexcept {
     const auto& identity = config.identity_;
-    return !identity.certificate_chain_file_.empty() || !identity.private_key_file_.empty() ||
-           !identity.certificate_chain_pem_.empty() || !identity.private_key_pem_.empty() ||
-           !identity.private_key_password_.empty() || config.client_certificates_.ca_file_.has_value() ||
-           config.client_certificates_.requirement_ != tls_client_certificate_requirement::optional ||
-           !config.sni_.empty() || !config.local_addresses_.empty() ||
-           config.certificate_store_ != nullptr || static_cast<bool>(config.select_certificate_) ||
-           config.default_certificate_ != 0;
+    return !identity.certificate_chain_file_.empty() || !identity.private_key_file_.empty() || !identity.certificate_chain_pem_.empty() || !identity.private_key_pem_.empty() || !identity.private_key_password_.empty() || config.client_certificates_.ca_file_.has_value() || config.client_certificates_.requirement_ != tls_client_certificate_requirement::optional || !config.sni_.empty() || !config.local_addresses_.empty() || config.certificate_store_ != nullptr || static_cast<bool>(config.select_certificate_) || config.default_certificate_ != 0;
 }
 
 // listen() and replace_tls_identities() own their tls_config, the only copy
@@ -2117,8 +1986,8 @@ void cleanse_identity(tls_identity_config& identity) noexcept {
 // when the call returns or throws.
 class tls_secret_cleanser final {
 public:
-    explicit tls_secret_cleanser(tls_config& config) noexcept
-        : config_(config) {}
+    explicit tls_secret_cleanser(tls_config& config) noexcept :
+        config_(config) {}
     ~tls_secret_cleanser() {
         cleanse_identity(config_.identity_);
         for (auto& sni : config_.sni_) {
@@ -2178,8 +2047,7 @@ private:
     return encoded;
 }
 
-void append_listen_config(
-    std::vector<detail::http_server_listener_definition>& replacement, const listen_config& config) {
+void append_listen_config(std::vector<detail::http_server_listener_definition>& replacement, const listen_config& config) {
     const auto address = normalize_listen_address(config.address_.view());
     if (config.ipv6_only_ && !address.is_v6()) {
         throw std::invalid_argument("IPV6_V6ONLY requires an IPv6 listen address");
@@ -2190,10 +2058,8 @@ void append_listen_config(
     detail::ensure_non_zero_optional_port(config.http_, "HTTP listen port must not be zero");
     detail::ensure_non_zero_optional_port(config.https_, "HTTPS listen port must not be zero");
     const bool mixed = config.http_.has_value() && config.http_ == config.https_;
-    if (config.auto_https_redirect_ &&
-        (!config.http_.has_value() || !config.https_.has_value())) {
-        throw std::invalid_argument(
-            "automatic HTTPS redirect requires both HTTP and HTTPS ports");
+    if (config.auto_https_redirect_ && (!config.http_.has_value() || !config.https_.has_value())) {
+        throw std::invalid_argument("automatic HTTPS redirect requires both HTTP and HTTPS ports");
     }
 
     if (!config.https_.has_value() && has_tls_configuration(config.tls_)) {
@@ -2214,12 +2080,7 @@ void append_listen_config(
             throw std::invalid_argument("HTTP/3 Alt-Svc max age must be greater than zero");
         }
         // The secret is generated per validated configuration.
-        http3.emplace(detail::http_server_listener_definition::http3_service{
-            .port_ = config.http3_->value(),
-            .alt_svc_max_age_ = config.http3_alt_svc_max_age_,
-            .early_data_ = config.http3_early_data_,
-            .retry_ = config.http3_retry_,
-            .secret_ = {}});
+        http3.emplace(detail::http_server_listener_definition::http3_service{.port_ = config.http3_->value(), .alt_svc_max_age_ = config.http3_alt_svc_max_age_, .early_data_ = config.http3_early_data_, .retry_ = config.http3_retry_, .secret_ = {}});
 #else
         throw std::invalid_argument("HTTP/3 listen port requires a build with RUVIA_ENABLE_HTTP3");
 #endif
@@ -2235,8 +2096,7 @@ void append_listen_config(
     // UDP endpoints are a separate namespace from the TCP ones above.
     const auto ensure_unique_http3_endpoint = [&](std::uint16_t port) {
         for (const auto& existing : replacement) {
-            if (existing.http3_.has_value() && existing.http3_->port_ == port &&
-                existing.endpoint_.address() == address) {
+            if (existing.http3_.has_value() && existing.http3_->port_ == port && existing.endpoint_.address() == address) {
                 throw std::invalid_argument("duplicate HTTP/3 listen endpoint");
             }
         }
@@ -2246,8 +2106,7 @@ void append_listen_config(
         const auto endpoint = asio::ip::tcp::endpoint(address, config.http_->value());
         ensure_unique_endpoint(endpoint);
         if (config.auto_https_redirect_) {
-            replacement.emplace_back(endpoint,
-                detail::http_server_listener_definition::redirect_http_to_https{config.https_->value()});
+            replacement.emplace_back(endpoint, detail::http_server_listener_definition::redirect_http_to_https{config.https_->value()});
         } else {
             replacement.emplace_back(endpoint);
             replacement.back().request_stream_ = config.dispatch_ == listener_dispatch::request_stream;
@@ -2270,8 +2129,7 @@ void append_listen_config(
         if (mixed) {
             tls.tcp_mode_ = detail::http_server_listener_definition::tls_tcp_mode::detect_plain_or_tls;
             if (config.auto_https_redirect_) {
-                tls.plaintext_redirect_.emplace(
-                    detail::http_server_listener_definition::redirect_http_to_https{config.https_->value()});
+                tls.plaintext_redirect_.emplace(detail::http_server_listener_definition::redirect_http_to_https{config.https_->value()});
             }
         }
         replacement.emplace_back(endpoint, std::move(tls), std::move(http3));
@@ -2286,8 +2144,8 @@ void append_listen_config(
 
 class tls_secret_span_cleanser final {
 public:
-    explicit tls_secret_span_cleanser(std::span<const listen_config> configs) noexcept
-        : configs_(configs) {}
+    explicit tls_secret_span_cleanser(std::span<const listen_config> configs) noexcept :
+        configs_(configs) {}
 
     ~tls_secret_span_cleanser() {
         for (const auto& config : configs_) {
@@ -2344,8 +2202,7 @@ void validate_owned_inherited_sockets(std::span<const listen_config> configs) {
                 throw std::invalid_argument("inherited TCP sockets require their service");
             }
             for (const auto socket : handles) {
-                detail::adopt_inherited_tcp_socket(socket, {address, port->value()},
-                    "inherited TCP socket does not serve its endpoint", config.ipv6_only_);
+                detail::adopt_inherited_tcp_socket(socket, {address, port->value()}, "inherited TCP socket does not serve its endpoint", config.ipv6_only_);
             }
         };
         tcp(sockets.http_, config.http_);
@@ -2354,8 +2211,7 @@ void validate_owned_inherited_sockets(std::span<const listen_config> configs) {
             throw std::invalid_argument("inherited UDP sockets require HTTP/3");
         }
         for (const auto socket : sockets.http3_) {
-            detail::adopt_inherited_udp_socket(socket, {address, config.http3_->value()},
-                "inherited UDP socket does not serve its endpoint", config.ipv6_only_);
+            detail::adopt_inherited_udp_socket(socket, {address, config.http3_->value()}, "inherited UDP socket does not serve its endpoint", config.ipv6_only_);
         }
     }
 }
@@ -2367,8 +2223,7 @@ void validate_owned_inherited_sockets(std::span<const listen_config> configs) {
 // A failed listen() or add_listener() closes every handle it was given that
 // no definition it built owns -- those close with their definition -- each
 // handle once. No run has claimed any of them yet.
-void close_unowned_inherited_sockets(std::span<const listen_config> configs,
-    std::span<const detail::http_server_listener_definition> built) noexcept {
+void close_unowned_inherited_sockets(std::span<const listen_config> configs, std::span<const detail::http_server_listener_definition> built) noexcept {
     std::size_t position = 0;
     visit_inherited_sockets(configs, [&](native_socket socket) {
         const auto current = position++;
@@ -2397,8 +2252,7 @@ void adopt_inherited_sockets(std::span<detail::http_server_listener_definition> 
     if (config.http_.has_value() && config.http_ == config.https_ && !sockets.http_.empty()) {
         throw std::invalid_argument("a mixed HTTP/HTTPS listener inherits its single TCP socket group in https_, not http_");
     }
-    if ((!sockets.http_.empty() && !config.http_.has_value()) || (!sockets.https_.empty() && !config.https_.has_value()) ||
-        (!sockets.http3_.empty() && !config.http3_.has_value())) {
+    if ((!sockets.http_.empty() && !config.http_.has_value()) || (!sockets.https_.empty() && !config.https_.has_value()) || (!sockets.http3_.empty() && !config.http3_.has_value())) {
         throw std::invalid_argument("inherited listener sockets require their service's listen port");
     }
 #if defined(_WIN32)
@@ -2412,40 +2266,29 @@ void adopt_inherited_sockets(std::span<detail::http_server_listener_definition> 
     for (auto& definition : built) {
         const bool https = std::holds_alternative<detail::http_server_listener_definition::tls>(definition.transport_);
         const std::span<const native_socket> tcp = https ? sockets.https_ : sockets.http_;
-        const auto udp = definition.http3_.has_value() ? std::span<const native_socket>(sockets.http3_)
-                                                       : std::span<const native_socket>();
+        const auto udp = definition.http3_.has_value() ? std::span<const native_socket>(sockets.http3_) : std::span<const native_socket>();
         if (tcp.empty() && udp.empty()) {
             continue;
         }
         for (const auto socket : tcp) {
-            detail::adopt_inherited_tcp_socket(socket, definition.endpoint_,
-                https ? "inherited HTTPS sockets must listen on the configured address and port"
-                      : "inherited HTTP sockets must listen on the configured address and port",
-                config.ipv6_only_);
+            detail::adopt_inherited_tcp_socket(socket, definition.endpoint_, https ? "inherited HTTPS sockets must listen on the configured address and port" : "inherited HTTP sockets must listen on the configured address and port", config.ipv6_only_);
         }
         if (!udp.empty()) {
             const asio::ip::udp::endpoint endpoint(definition.endpoint_.address(), definition.http3_->port_);
             for (const auto socket : udp) {
-                detail::adopt_inherited_udp_socket(
-                    socket, endpoint, "inherited HTTP/3 sockets must be UDP sockets bound to the configured address and port", config.ipv6_only_);
+                detail::adopt_inherited_udp_socket(socket, endpoint, "inherited HTTP/3 sockets must be UDP sockets bound to the configured address and port", config.ipv6_only_);
             }
         }
-        definition.inherited_sockets_ = std::make_shared<detail::inherited_listener_sockets>(
-            std::vector<native_socket>(tcp.begin(), tcp.end()),
-            std::vector<native_socket>(udp.begin(), udp.end()));
+        definition.inherited_sockets_ = std::make_shared<detail::inherited_listener_sockets>(std::vector<native_socket>(tcp.begin(), tcp.end()), std::vector<native_socket>(udp.begin(), udp.end()));
     }
 }
 
 // The listener definitions `configs` describe, with their inherited sockets.
-void append_listen_configs(
-    std::vector<detail::http_server_listener_definition>& replacement, std::span<const listen_config> configs) {
+void append_listen_configs(std::vector<detail::http_server_listener_definition>& replacement, std::span<const listen_config> configs) {
     ensure_distinct_inherited_sockets(configs);
     std::size_t endpoint_count = 0;
     for (const auto& config : configs) {
-        endpoint_count += config.http_.has_value() && config.http_ == config.https_
-                              ? 1
-                              : static_cast<std::size_t>(config.http_.has_value()) +
-                                    static_cast<std::size_t>(config.https_.has_value());
+        endpoint_count += config.http_.has_value() && config.http_ == config.https_ ? 1 : static_cast<std::size_t>(config.http_.has_value()) + static_cast<std::size_t>(config.https_.has_value());
     }
     replacement.reserve(replacement.size() + endpoint_count);
     for (const auto& config : configs) {
@@ -2457,8 +2300,7 @@ void append_listen_configs(
 
 // The caller holds the application lock. Awaited controls may originate on
 // any worker, including one of this run's own workers.
-[[nodiscard]] detail::app_runtime_graph& running_runtime(
-    detail::app_state& state_value, const char* not_running_message) {
+[[nodiscard]] detail::app_runtime_graph& running_runtime(detail::app_state& state_value, const char* not_running_message) {
     if (!state_value.lifecycle_.running() || state_value.runtime_ == nullptr) {
         throw std::logic_error(not_running_message);
     }
@@ -2467,8 +2309,8 @@ void append_listen_configs(
 
 class active_app_control final {
 public:
-    active_app_control(std::shared_ptr<detail::app_state> state, const char* not_running)
-        : state_(std::move(state)) {
+    active_app_control(std::shared_ptr<detail::app_state> state, const char* not_running) :
+        state_(std::move(state)) {
         std::lock_guard lock(state_->mutex_);
         runtime_ = &running_runtime(*state_, not_running);
         ++state_->runtime_controls_;
@@ -2490,8 +2332,8 @@ private:
 };
 
 struct owned_tls_config final {
-    explicit owned_tls_config(tls_config config)
-        : config_(std::move(config)) {}
+    explicit owned_tls_config(tls_config config) :
+        config_(std::move(config)) {}
     owned_tls_config(owned_tls_config&&) = default;
     ~owned_tls_config() {
         tls_secret_cleanser cleanser(config_);
@@ -2506,17 +2348,16 @@ template <typename function_type>
 task<std::invoke_result_t<function_type&>> prepare_runtime_control(worker_ref caller, function_type function) {
     using result_type = std::invoke_result_t<function_type&>;
     detail::runtime_control_completion completion(caller);
-    auto result = co_await run_blocking(caller, completion.make_command(
-                                                    [function = std::move(function)](const auto& receipt) mutable -> result_type {
-                                                        try {
-                                                            auto prepared = function();
-                                                            receipt.complete();
-                                                            return prepared;
-                                                        } catch (...) {
-                                                            receipt.complete(std::current_exception());
-                                                            throw;
-                                                        }
-                                                    }));
+    auto result = co_await run_blocking(caller, completion.make_command([function = std::move(function)](const auto& receipt) mutable -> result_type {
+        try {
+            auto prepared = function();
+            receipt.complete();
+            return prepared;
+        } catch (...) {
+            receipt.complete(std::current_exception());
+            throw;
+        }
+    }));
     co_await completion.wait();
     if (auto failure = completion.failure()) {
         std::rethrow_exception(failure);
@@ -2537,8 +2378,7 @@ task<std::invoke_result_t<function_type&>> prepare_runtime_control(worker_ref ca
 
 // The slot every worker of the run serves `target` in. The caller holds the
 // application lock, and the stored listeners name `target`.
-[[nodiscard]] std::size_t runtime_listener_slot(
-    const detail::app_runtime_graph& runtime, const asio::ip::tcp::endpoint& target) {
+[[nodiscard]] std::size_t runtime_listener_slot(const detail::app_runtime_graph& runtime, const asio::ip::tcp::endpoint& target) {
     for (std::size_t slot = 0; slot < runtime.listener_slots_.size(); ++slot) {
         if (runtime.listener_slots_[slot] == target) {
             return slot;
@@ -2549,8 +2389,7 @@ task<std::invoke_result_t<function_type&>> prepare_runtime_control(worker_ref ca
 
 // The index of the HTTPS listener `target` names in the running app, whose
 // identities `config` may replace. The caller holds the application lock.
-[[nodiscard]] std::size_t find_replaceable_tls_listener(
-    detail::app_state& state_value, const asio::ip::tcp::endpoint& target, const tls_config& config) {
+[[nodiscard]] std::size_t find_replaceable_tls_listener(detail::app_state& state_value, const asio::ip::tcp::endpoint& target, const tls_config& config) {
     (void)running_runtime(state_value, "TLS identities can be replaced only while the app is running");
     const auto index = stored_listener_index(state_value, target);
     const auto* tls = std::get_if<detail::http_server_listener_definition::tls>(&state_value.listeners_[index].transport_);
@@ -2566,20 +2405,18 @@ using control_list = std::vector<move_only_function<void()>>;
 // Builds, before anything is posted, one control per worker that runs
 // `run(worker, worker_index)` on that worker's thread for `publication`.
 template <typename run_type>
-void make_worker_controls(control_list& controls, detail::app_runtime_graph& runtime,
-    detail::runtime_control_completion& publication, const run_type& run) {
+void make_worker_controls(control_list& controls, detail::app_runtime_graph& runtime, detail::runtime_control_completion& publication, const run_type& run) {
     controls.reserve(runtime.workers_.size());
     for (std::size_t index = 0; index < runtime.workers_.size(); ++index) {
-        controls.emplace_back(publication.make_command(
-            [run, worker = runtime.workers_[index].runtime_.get(), index](const auto& receipt) mutable {
-                std::exception_ptr failure;
-                try {
-                    run(*worker, index);
-                } catch (...) {
-                    failure = std::current_exception();
-                }
-                receipt.complete(std::move(failure));
-            }));
+        controls.emplace_back(publication.make_command([run, worker = runtime.workers_[index].runtime_.get(), index](const auto& receipt) mutable {
+            std::exception_ptr failure;
+            try {
+                run(*worker, index);
+            } catch (...) {
+                failure = std::current_exception();
+            }
+            receipt.complete(std::move(failure));
+        }));
     }
 }
 
@@ -2605,8 +2442,7 @@ struct runtime_route_candidate final {
     std::vector<std::unique_ptr<detail::rate_limiter>> rate_limiters_;
 };
 
-[[nodiscard]] runtime_route_candidate prepare_runtime_routes(
-    const detail::app_state& state_value, std::size_t worker_count) {
+[[nodiscard]] runtime_route_candidate prepare_runtime_routes(const detail::app_state& state_value, std::size_t worker_count) {
     runtime_route_candidate result;
     const auto registrars = detail::seal_controller_registrars();
     auto& controllers = result.controllers_;
@@ -2625,28 +2461,25 @@ struct runtime_route_candidate final {
     if (tables.front()->has_route_rate_limit() && !state_value.options_.default_rate_limit_per_worker_.has_value()) {
         rate_limiters.reserve(worker_count);
         for (std::size_t index = 0; index < worker_count; ++index) {
-            rate_limiters.push_back(std::make_unique<detail::rate_limiter>(std::nullopt,
-                detail::route_rate_limit_presence::present, state_value.options_.rate_limit_capacity_per_worker_));
+            rate_limiters.push_back(std::make_unique<detail::rate_limiter>(std::nullopt, detail::route_rate_limit_presence::present, state_value.options_.rate_limit_capacity_per_worker_));
         }
     }
     return result;
 }
 
-task<void> enable_runtime_routes(worker_ref caller, detail::app_runtime_graph& runtime,
-    runtime_route_candidate& candidate) {
+task<void> enable_runtime_routes(worker_ref caller, detail::app_runtime_graph& runtime, runtime_route_candidate& candidate) {
     detail::runtime_control_completion publication(caller);
     control_list controls;
-    make_worker_controls(controls, runtime, publication,
-        [&runtime, &candidate](detail::web_worker_runtime& worker, std::size_t index) noexcept {
-            auto& controllers = candidate.controllers_;
-            auto& tables = candidate.tables_;
-            auto& rate_limiters = candidate.rate_limiters_;
-            if (!rate_limiters.empty()) {
-                worker.adopt_route_rate_limiter(*rate_limiters[index]);
-            }
-            std::swap(runtime.workers_[index].controllers_, controllers[index]);
-            runtime.workers_[index].routes_->swap(*tables[index]);
-        });
+    make_worker_controls(controls, runtime, publication, [&runtime, &candidate](detail::web_worker_runtime& worker, std::size_t index) noexcept {
+        auto& controllers = candidate.controllers_;
+        auto& tables = candidate.tables_;
+        auto& rate_limiters = candidate.rate_limiters_;
+        if (!rate_limiters.empty()) {
+            worker.adopt_route_rate_limiter(*rate_limiters[index]);
+        }
+        std::swap(runtime.workers_[index].controllers_, controllers[index]);
+        runtime.workers_[index].routes_->swap(*tables[index]);
+    });
     // Retain both plans even if stopping makes some workers refuse adoption.
     // Once published, later additions reuse this run's compiled route ability,
     // including when binding the first routed listener subsequently fails.
@@ -2666,8 +2499,7 @@ task<void> enable_runtime_routes(worker_ref caller, detail::app_runtime_graph& r
 #if defined(_WIN32)
 // Builds an acceptor control before any owner thread prepares new resources.
 template <typename run_type>
-[[nodiscard]] move_only_function<void()> make_acceptor_control(
-    detail::windows_acceptor& acceptor, detail::runtime_control_completion& publication, run_type run) {
+[[nodiscard]] move_only_function<void()> make_acceptor_control(detail::windows_acceptor& acceptor, detail::runtime_control_completion& publication, run_type run) {
     return publication.make_command([&acceptor, run = std::move(run)](const auto& receipt) mutable {
         std::exception_ptr failure;
         try {
@@ -2682,8 +2514,7 @@ template <typename run_type>
 // Runs `run(acceptor)` on the acceptor thread for `publication`; false when
 // the acceptor stops first.
 template <typename run_type>
-[[nodiscard]] bool post_acceptor_control(
-    detail::windows_acceptor& acceptor, detail::runtime_control_completion& publication, run_type run) {
+[[nodiscard]] bool post_acceptor_control(detail::windows_acceptor& acceptor, detail::runtime_control_completion& publication, run_type run) {
     return acceptor.post_control(make_acceptor_control(acceptor, publication, std::move(run)));
 }
 #endif
@@ -2702,24 +2533,20 @@ template <typename run_type>
 
 // add_listener() rejects an endpoint a running listener serves, as listen()
 // rejects one its call names twice.
-void detail::ensure_new_listener_endpoints(std::span<const http_server_listener_definition> existing,
-    std::span<const http_server_listener_definition> added) {
+void detail::ensure_new_listener_endpoints(std::span<const http_server_listener_definition> existing, std::span<const http_server_listener_definition> added) {
     for (const auto& candidate : added) {
         for (const auto& listener : existing) {
             if (listener.endpoint_ == candidate.endpoint_) {
                 throw std::invalid_argument("duplicate listen endpoint");
             }
-            if (candidate.http3_.has_value() && listener.http3_.has_value() &&
-                listener.http3_->port_ == candidate.http3_->port_ &&
-                listener.endpoint_.address() == candidate.endpoint_.address()) {
+            if (candidate.http3_.has_value() && listener.http3_.has_value() && listener.http3_->port_ == candidate.http3_->port_ && listener.endpoint_.address() == candidate.endpoint_.address()) {
                 throw std::invalid_argument("duplicate HTTP/3 listen endpoint");
             }
         }
     }
 }
 
-std::vector<detail::http_server_listener_definition> detail::load_server_listeners(
-    std::span<const listen_config> configs) {
+std::vector<detail::http_server_listener_definition> detail::load_server_listeners(std::span<const listen_config> configs) {
     const tls_secret_span_cleanser secret_cleanser(configs);
     std::vector<http_server_listener_definition> listeners;
     try {
@@ -2784,7 +2611,9 @@ std::vector<detail::http_server_listener_definition> detail::owned_listen_config
 }
 
 bool detail::owned_listen_configs::needs_tls_preparation() const noexcept {
-    return std::ranges::any_of(configs_, [](const auto& config) { return config.https_.has_value(); });
+    return std::ranges::any_of(configs_, [](const auto& config) {
+        return config.https_.has_value();
+    });
 }
 
 application& application::listen(listen_config config) & {
@@ -2803,8 +2632,9 @@ application& application::listen(std::span<const listen_config> configs) & {
     auto replacement = detail::load_server_listeners(configs);
     // The replaced definitions retire with `replacement`, after the lock,
     // closing inherited sockets no run consumed.
-    detail::mutate_stopped_app(*this, *state_, "cannot change listeners while app is running",
-        [&replacement](detail::app_state& state_value) { state_value.listeners_.swap(replacement); });
+    detail::mutate_stopped_app(*this, *state_, "cannot change listeners while app is running", [&replacement](detail::app_state& state_value) {
+        state_value.listeners_.swap(replacement);
+    });
     return *this;
 }
 
@@ -2813,8 +2643,7 @@ application& application::listen(std::initializer_list<listen_config> configs) &
 }
 
 namespace {
-task<void> replace_app_tls_identities(std::shared_ptr<detail::app_state> state, worker_ref caller,
-    asio::ip::tcp::endpoint target, owned_tls_config input) {
+task<void> replace_app_tls_identities(std::shared_ptr<detail::app_state> state, worker_ref caller, asio::ip::tcp::endpoint target, owned_tls_config input) {
     std::shared_ptr<const detail::http_server_tls_identities> retired;
     const auto serialized = co_await state->runtime_control_gate_.acquire(caller);
     active_app_control active(state, "TLS identities can be replaced only while the app is running");
@@ -2835,10 +2664,9 @@ task<void> replace_app_tls_identities(std::shared_ptr<detail::app_state> state, 
         (void)running_runtime(*state, "TLS identities can be replaced only while the app is running");
         index = stored_listener_index(*state, target);
         const auto slot = runtime_listener_slot(runtime, target);
-        make_worker_controls(controls, runtime, completion,
-            [slot, identities](detail::web_worker_runtime& worker, std::size_t) {
-                worker.adopt_tls_identities(slot, identities);
-            });
+        make_worker_controls(controls, runtime, completion, [slot, identities](detail::web_worker_runtime& worker, std::size_t) {
+            worker.adopt_tls_identities(slot, identities);
+        });
         posted = post_worker_controls(runtime, controls);
     }
     co_await completion.wait();
@@ -2856,28 +2684,25 @@ task<void> replace_app_tls_identities(std::shared_ptr<detail::app_state> state, 
 }
 }  // namespace
 
-task<void> application::replace_tls_identities(
-    worker_ref caller, const listener_endpoint& endpoint, tls_config config) & {
+task<void> application::replace_tls_identities(worker_ref caller, const listener_endpoint& endpoint, tls_config config) & {
     owned_tls_config input(std::move(config));
     const asio::ip::tcp::endpoint target(normalize_listen_address(endpoint.address_.view()), endpoint.port_.value());
     return replace_app_tls_identities(state_, std::move(caller), target, std::move(input));
 }
 
 namespace {
-task<bool> close_app_connection(
-    std::shared_ptr<detail::app_state> state, worker_ref caller, std::uint64_t connection_id) {
+task<bool> close_app_connection(std::shared_ptr<detail::app_state> state, worker_ref caller, std::uint64_t connection_id) {
     const auto serialized = co_await state->runtime_control_gate_.acquire(caller);
     active_app_control active(state, "connections can be closed only while the app is running");
     auto& runtime = active.runtime();
     std::atomic<bool> closed{false};
     detail::runtime_control_completion completion(caller);
     control_list controls;
-    make_worker_controls(controls, runtime, completion,
-        [connection_id, &closed](detail::web_worker_runtime& worker, std::size_t) noexcept {
-            if (worker.close_connection(connection_id)) {
-                closed.store(true, std::memory_order_relaxed);
-            }
-        });
+    make_worker_controls(controls, runtime, completion, [connection_id, &closed](detail::web_worker_runtime& worker, std::size_t) noexcept {
+        if (worker.close_connection(connection_id)) {
+            closed.store(true, std::memory_order_relaxed);
+        }
+    });
     const bool posted = post_worker_controls(runtime, controls);
     co_await completion.wait();
     if (auto failure = completion.failure()) {
@@ -2895,8 +2720,7 @@ task<bool> application::close_connection(worker_ref caller, std::uint64_t connec
 }
 
 namespace {
-task<void> wait_app_connections(std::shared_ptr<detail::app_state> state, worker_ref caller,
-    asio::ip::tcp::endpoint target, operation_options options) {
+task<void> wait_app_connections(std::shared_ptr<detail::app_state> state, worker_ref caller, asio::ip::tcp::endpoint target, operation_options options) {
     detail::operation_steps steps(options);
     active_app_control active(state, "connections can be awaited only while the app is running");
     auto& runtime = active.runtime();
@@ -2933,8 +2757,7 @@ struct listener_addition_candidate final {
     std::optional<runtime_route_candidate> routes_;
 };
 
-[[nodiscard]] std::exception_ptr control_round_failure(const detail::runtime_control_completion& completion,
-    bool posted, std::size_t targets, const char* message) noexcept {
+[[nodiscard]] std::exception_ptr control_round_failure(const detail::runtime_control_completion& completion, bool posted, std::size_t targets, const char* message) noexcept {
     if (auto failure = completion.failure()) {
         return failure;
     }
@@ -2948,9 +2771,7 @@ struct listener_addition_candidate final {
     return {};
 }
 
-task<void> add_app_listener(
-    std::shared_ptr<detail::app_state> state, worker_ref caller, detail::owned_listen_configs input,
-    std::shared_ptr<detail::prepared_listener_state> transaction) {
+task<void> add_app_listener(std::shared_ptr<detail::app_state> state, worker_ref caller, detail::owned_listen_configs input, std::shared_ptr<detail::prepared_listener_state> transaction) {
     const auto serialized = co_await state->runtime_control_gate_.acquire(caller);
     active_app_control active(state, "listeners can be added only while the app is running");
     auto& runtime = active.runtime();
@@ -2960,37 +2781,32 @@ task<void> add_app_listener(
     const bool inexpensive = std::ranges::none_of(input.configs_, [needs_routes](const auto& config) {
         return config.https_.has_value() || (needs_routes && config.dispatch_ == listener_dispatch::routes);
     });
-    auto prepare =
-        [state, worker_count, key_origin, needs_routes, input = std::move(input)]() mutable {
-            listener_addition_candidate result;
-            result.added_ = input.load();
-            result.prepared_.reserve(result.added_.size());
-            for (const auto& definition : result.added_) {
-                result.prepared_.push_back(detail::validate_run_listener(
-                    definition, state->options_, key_origin));
-            }
-            result.sessions_.reserve(worker_count);
-            for (std::size_t worker = 0; worker < worker_count; ++worker) {
-                auto& sessions = result.sessions_.emplace_back();
-                sessions.reserve(result.prepared_.size());
-                for (const auto& definition : result.prepared_) {
-                    if (std::holds_alternative<detail::http_server_listener_definition::tls>(definition.transport_)) {
-                        sessions.push_back(detail::prepare_http_server_session_config(
-                            definition, static_cast<bool>(state->options_.tls_client_hello_)));
-                    } else {
-                        sessions.emplace_back();
-                    }
+    auto prepare = [state, worker_count, key_origin, needs_routes, input = std::move(input)]() mutable {
+        listener_addition_candidate result;
+        result.added_ = input.load();
+        result.prepared_.reserve(result.added_.size());
+        for (const auto& definition : result.added_) {
+            result.prepared_.push_back(detail::validate_run_listener(definition, state->options_, key_origin));
+        }
+        result.sessions_.reserve(worker_count);
+        for (std::size_t worker = 0; worker < worker_count; ++worker) {
+            auto& sessions = result.sessions_.emplace_back();
+            sessions.reserve(result.prepared_.size());
+            for (const auto& definition : result.prepared_) {
+                if (std::holds_alternative<detail::http_server_listener_definition::tls>(definition.transport_)) {
+                    sessions.push_back(detail::prepare_http_server_session_config(definition, static_cast<bool>(state->options_.tls_client_hello_)));
+                } else {
+                    sessions.emplace_back();
                 }
             }
-            if (needs_routes && std::ranges::any_of(result.added_, [](const auto& listener) {
-                    return !listener.connection_.has_value() && !listener.request_stream_ &&
-                           !std::holds_alternative<detail::http_server_listener_definition::redirect_http_to_https>(
-                               listener.transport_);
-                })) {
-                result.routes_.emplace(prepare_runtime_routes(*state, worker_count));
-            }
-            return result;
-        };
+        }
+        if (needs_routes && std::ranges::any_of(result.added_, [](const auto& listener) {
+            return !listener.connection_.has_value() && !listener.request_stream_ && !std::holds_alternative<detail::http_server_listener_definition::redirect_http_to_https>(listener.transport_);
+        })) {
+            result.routes_.emplace(prepare_runtime_routes(*state, worker_count));
+        }
+        return result;
+    };
     // Pure plaintext additions need no file/PEM/route work and still work on
     // callers whose blocking pool is disabled.
     auto candidate = inexpensive ? prepare() : (co_await prepare_runtime_control(caller, std::move(prepare)));
@@ -3008,8 +2824,9 @@ task<void> add_app_listener(
         state->listeners_.reserve(state->listeners_.size() + added.size());
         http3_slots.reserve(added.size());
 #if defined(RUVIA_ENABLE_HTTP3)
-        if (runtime.http3_directory_ == nullptr &&
-            std::ranges::any_of(prepared, [](const auto& definition) { return definition.http3_.has_value(); })) {
+        if (runtime.http3_directory_ == nullptr && std::ranges::any_of(prepared, [](const auto& definition) {
+            return definition.http3_.has_value();
+        })) {
             auto created = std::make_unique<detail::http3_worker_directory>(runtime.workers_.size());
             for (std::size_t index = 0; index < runtime.workers_.size(); ++index) {
                 created->bind_worker(index, runtime.workers_[index].runtime_->runtime().worker());
@@ -3021,8 +2838,7 @@ task<void> add_app_listener(
         first_slot = runtime.listener_slots_.size();
         runtime.listener_slots_.resize(first_slot + added.size());
         for (const auto& definition : prepared) {
-            http3_slots.push_back(
-                definition.http3_.has_value() ? std::optional<std::size_t>(runtime.http3_slot_count_++) : std::nullopt);
+            http3_slots.push_back(definition.http3_.has_value() ? std::optional<std::size_t>(runtime.http3_slot_count_++) : std::nullopt);
         }
     }
     if (candidate.routes_) {
@@ -3044,39 +2860,38 @@ task<void> add_app_listener(
     control_list prepare_controls;
     control_list discard_controls;
     control_list open_controls;
-    make_worker_controls(prepare_controls, runtime, prepared_completion,
-        [&](detail::web_worker_runtime& worker, std::size_t worker_index) {
-            for (std::size_t index = 0; index < prepared.size(); ++index) {
-                worker.prepare_listener(first_slot + index, http3_slots[index], prepared[index],
-                    std::move(candidate.sessions_[worker_index][index])
+    make_worker_controls(prepare_controls, runtime, prepared_completion, [&](detail::web_worker_runtime& worker, std::size_t worker_index) {
+        for (std::size_t index = 0; index < prepared.size(); ++index) {
 #if defined(RUVIA_ENABLE_HTTP3)
-                        ,
-                    directory
+            worker.prepare_listener(first_slot + index, http3_slots[index], prepared[index], std::move(candidate.sessions_[worker_index][index]), directory);
+#else
+            worker.prepare_listener(first_slot + index, http3_slots[index], prepared[index], std::move(candidate.sessions_[worker_index][index]));
 #endif
-                );
-            }
-        });
-    make_worker_controls(discard_controls, runtime, discarded_completion,
-        [discard, receipt = std::make_shared<detail::runtime_control_completion::receipt>(discarded_completion.make_receipt())](detail::web_worker_runtime& worker, std::size_t) { discard(worker, receipt); });
-    make_worker_controls(open_controls, runtime, opened_completion,
-        [open](detail::web_worker_runtime& worker, std::size_t) { open(worker); });
+        }
+    });
+    make_worker_controls(discard_controls, runtime, discarded_completion, [discard, receipt = std::make_shared<detail::runtime_control_completion::receipt>(discarded_completion.make_receipt())](detail::web_worker_runtime& worker, std::size_t) {
+        discard(worker, receipt);
+    });
+    make_worker_controls(open_controls, runtime, opened_completion, [open](detail::web_worker_runtime& worker, std::size_t) {
+        open(worker);
+    });
 #if defined(_WIN32)
-    auto prepare_acceptor = make_acceptor_control(*runtime.acceptor_, prepared_completion,
-        [&](detail::windows_acceptor& acceptor) {
-            for (std::size_t index = 0; index < prepared.size(); ++index) {
-                acceptor.prepare_listener(first_slot + index, http3_slots[index], prepared[index]
+    auto prepare_acceptor = make_acceptor_control(*runtime.acceptor_, prepared_completion, [&](detail::windows_acceptor& acceptor) {
+        for (std::size_t index = 0; index < prepared.size(); ++index) {
 #if defined(RUVIA_ENABLE_HTTP3)
-                    ,
-                    directory
+            acceptor.prepare_listener(first_slot + index, http3_slots[index], prepared[index], directory);
+#else
+            acceptor.prepare_listener(first_slot + index, http3_slots[index], prepared[index]);
 #endif
-                );
-            }
-        });
-    auto discard_acceptor = make_acceptor_control(*runtime.acceptor_, discarded_completion,
-        [discard, receipt = std::make_shared<detail::runtime_control_completion::receipt>(discarded_completion.make_receipt())](detail::windows_acceptor& acceptor) { discard(acceptor, receipt); });
+        }
+    });
+    auto discard_acceptor = make_acceptor_control(*runtime.acceptor_, discarded_completion, [discard, receipt = std::make_shared<detail::runtime_control_completion::receipt>(discarded_completion.make_receipt())](detail::windows_acceptor& acceptor) {
+        discard(acceptor, receipt);
+    });
     detail::runtime_control_completion accepting_completion(caller);
-    auto open_acceptor = make_acceptor_control(*runtime.acceptor_, accepting_completion,
-        [open](detail::windows_acceptor& acceptor) { open(acceptor); });
+    auto open_acceptor = make_acceptor_control(*runtime.acceptor_, accepting_completion, [open](detail::windows_acceptor& acceptor) {
+        open(acceptor);
+    });
 #endif
     bool posted = post_worker_controls(runtime, prepare_controls);
 #if defined(_WIN32)
@@ -3086,8 +2901,7 @@ task<void> add_app_listener(
     prepare_acceptor = nullptr;
 #endif
     co_await prepared_completion.wait();
-    auto failure = control_round_failure(prepared_completion, posted, control_targets(runtime),
-        "the app began stopping before every worker prepared the listeners");
+    auto failure = control_round_failure(prepared_completion, posted, control_targets(runtime), "the app began stopping before every worker prepared the listeners");
     if (!failure) {
         try {
             co_await transaction->checkpoint(runtime.workers_.front().runtime_->cancellation());
@@ -3102,8 +2916,7 @@ task<void> add_app_listener(
         }
         open_controls.clear();
         co_await opened_completion.wait();
-        failure = control_round_failure(opened_completion, posted, runtime.workers_.size(),
-            "the app began stopping before every worker accepted the listeners");
+        failure = control_round_failure(opened_completion, posted, runtime.workers_.size(), "the app began stopping before every worker accepted the listeners");
 #if defined(_WIN32)
         if (!failure) {
             {
@@ -3112,8 +2925,7 @@ task<void> add_app_listener(
             }
             open_acceptor = nullptr;
             co_await accepting_completion.wait();
-            failure = control_round_failure(accepting_completion, posted, 1,
-                "the app began stopping before the acceptor accepted the listeners");
+            failure = control_round_failure(accepting_completion, posted, 1, "the app began stopping before the acceptor accepted the listeners");
         }
 #endif
     }
@@ -3121,8 +2933,7 @@ task<void> add_app_listener(
         std::lock_guard lock(state->mutex_);
         if (!state->lifecycle_.running()) {
             try {
-                failure = std::make_exception_ptr(
-                    std::logic_error("the app began stopping before every worker accepted the listeners"));
+                failure = std::make_exception_ptr(std::logic_error("the app began stopping before every worker accepted the listeners"));
             } catch (...) {
                 failure = std::current_exception();
             }
@@ -3158,22 +2969,19 @@ task<void> add_app_listener(
 task<prepared_listener> application::prepare_listener(worker_ref caller, listen_config config) & {
     detail::owned_listen_configs input(std::move(config));
     auto transaction = detail::prepared_listener_access::make(caller);
-    return detail::prepared_listener_access::launch(transaction,
-        add_app_listener(state_, std::move(caller), std::move(input), transaction));
+    return detail::prepared_listener_access::launch(transaction, add_app_listener(state_, std::move(caller), std::move(input), transaction));
 }
 task<prepared_listener> application::prepare_listeners(worker_ref caller, std::span<const listen_config> configs) & {
     detail::owned_listen_configs input(configs);
     auto transaction = detail::prepared_listener_access::make(caller);
-    return detail::prepared_listener_access::launch(transaction,
-        add_app_listener(state_, std::move(caller), std::move(input), transaction));
+    return detail::prepared_listener_access::launch(transaction, add_app_listener(state_, std::move(caller), std::move(input), transaction));
 }
 task<void> application::add_listener(worker_ref caller, listen_config config) & {
     return detail::prepared_listener_access::add(prepare_listener(std::move(caller), std::move(config)));
 }
 
 namespace {
-task<void> remove_app_listener(
-    std::shared_ptr<detail::app_state> state, worker_ref caller, asio::ip::tcp::endpoint target, listener_remove_options options) {
+task<void> remove_app_listener(std::shared_ptr<detail::app_state> state, worker_ref caller, asio::ip::tcp::endpoint target, listener_remove_options options) {
     std::optional<detail::http_server_listener_definition> retired;
     const auto serialized = co_await state->runtime_control_gate_.acquire(caller);
     active_app_control active(state, "listeners can be removed only while the app is running");
@@ -3186,25 +2994,21 @@ task<void> remove_app_listener(
     }
 #if defined(_WIN32)
     detail::runtime_control_completion accepting_completion(caller);
-    auto accepting_lifetime = std::make_shared<detail::runtime_control_completion::receipt>(
-        accepting_completion.make_receipt());
-    const bool accepting_posted = post_acceptor_control(*runtime.acceptor_, accepting_completion,
-        [slot, receipt = std::move(accepting_lifetime)](detail::windows_acceptor& acceptor) {
-            acceptor.remove_listener(slot, receipt);
-        });
+    auto accepting_lifetime = std::make_shared<detail::runtime_control_completion::receipt>(accepting_completion.make_receipt());
+    const bool accepting_posted = post_acceptor_control(*runtime.acceptor_, accepting_completion, [slot, receipt = std::move(accepting_lifetime)](detail::windows_acceptor& acceptor) {
+        acceptor.remove_listener(slot, receipt);
+    });
     co_await accepting_completion.wait();
-    if (auto failure = control_round_failure(accepting_completion, accepting_posted, 1,
-            "the app began stopping before the acceptor removed the listener")) {
+    if (auto failure = control_round_failure(accepting_completion, accepting_posted, 1, "the app began stopping before the acceptor removed the listener")) {
         std::rethrow_exception(failure);
     }
 #endif
     detail::runtime_control_completion completion(caller);
     control_list controls;
     auto lifetime = std::make_shared<detail::runtime_control_completion::receipt>(completion.make_receipt());
-    make_worker_controls(controls, runtime, completion,
-        [slot, receipt = std::move(lifetime), options](detail::web_worker_runtime& worker, std::size_t) {
-            worker.remove_listener(slot, receipt, options);
-        });
+    make_worker_controls(controls, runtime, completion, [slot, receipt = std::move(lifetime), options](detail::web_worker_runtime& worker, std::size_t) {
+        worker.remove_listener(slot, receipt, options);
+    });
     bool posted = false;
     {
         std::lock_guard lock(state->mutex_);
@@ -3212,8 +3016,7 @@ task<void> remove_app_listener(
     }
     controls.clear();
     co_await completion.wait();
-    if (auto failure = control_round_failure(completion, posted, runtime.workers_.size(),
-            "the app began stopping before every worker removed the listener")) {
+    if (auto failure = control_round_failure(completion, posted, runtime.workers_.size(), "the app began stopping before every worker removed the listener")) {
         std::rethrow_exception(failure);
     }
     {
@@ -3236,8 +3039,7 @@ task<void> application::remove_listener(worker_ref caller, const listener_endpoi
 
 #if !defined(_WIN32)
 namespace {
-task<listener_sockets> duplicate_app_listener_sockets(
-    std::shared_ptr<detail::app_state> state, worker_ref caller, asio::ip::tcp::endpoint target) {
+task<listener_sockets> duplicate_app_listener_sockets(std::shared_ptr<detail::app_state> state, worker_ref caller, asio::ip::tcp::endpoint target) {
     const auto serialized = co_await state->runtime_control_gate_.acquire(caller);
     active_app_control active(state, "listener sockets can be duplicated only while the app is running");
     auto& runtime = active.runtime();
@@ -3253,18 +3055,16 @@ task<listener_sockets> duplicate_app_listener_sockets(
         http3 = stored.http3_.has_value();
         const auto slot = runtime_listener_slot(runtime, target);
         duplicates.resize(runtime.workers_.size());
-        make_worker_controls(controls, runtime, completion,
-            [slot, &duplicates](detail::web_worker_runtime& worker, std::size_t index) {
-                duplicates[index] = worker.duplicate_listener(slot);
-            });
+        make_worker_controls(controls, runtime, completion, [slot, &duplicates](detail::web_worker_runtime& worker, std::size_t index) {
+            duplicates[index] = worker.duplicate_listener(slot);
+        });
     }
     const bool posted = post_worker_controls(runtime, controls);
     co_await completion.wait();
     listener_sockets result;
     auto& tcp = https ? result.https_ : result.http_;
     try {
-        if (auto failure = control_round_failure(completion, posted, duplicates.size(),
-                "the app began stopping before every worker duplicated its sockets")) {
+        if (auto failure = control_round_failure(completion, posted, duplicates.size(), "the app began stopping before every worker duplicated its sockets")) {
             std::rethrow_exception(failure);
         }
         tcp.reserve(duplicates.size());
@@ -3288,106 +3088,87 @@ task<listener_sockets> duplicate_app_listener_sockets(
 }
 }  // namespace
 
-task<listener_sockets> application::duplicate_listener_sockets(
-    worker_ref caller, const listener_endpoint& endpoint) const& {
+task<listener_sockets> application::duplicate_listener_sockets(worker_ref caller, const listener_endpoint& endpoint) const& {
     const asio::ip::tcp::endpoint target(normalize_listen_address(endpoint.address_.view()), endpoint.port_.value());
     return duplicate_app_listener_sockets(state_, std::move(caller), target);
 }
 #endif
 
 application& application::server(server_config config) & {
-    return detail::mutate_stopped_app(*this, *state_,
-        "cannot change server config while app is running",
-        [&config](detail::app_state& state_value) { state_value.options_.set_server(config); });
+    return detail::mutate_stopped_app(*this, *state_, "cannot change server config while app is running", [&config](detail::app_state& state_value) {
+        state_value.options_.set_server(config);
+    });
 }
 
 application& application::on_start(app_hook hook) & {
-    return detail::mutate_stopped_app(*this, *state_,
-        "cannot register on_start hook while app is running",
-        [hook = detail::own_callback(std::move(hook))](detail::app_state& state_value) mutable {
-            if (!hook) {
-                throw std::invalid_argument("on_start hook must not be null");
-            }
-            state_value.on_start_hooks_.push_back(std::move(hook));
-        });
+    return detail::mutate_stopped_app(*this, *state_, "cannot register on_start hook while app is running", [hook = detail::own_callback(std::move(hook))](detail::app_state& state_value) mutable {
+        if (!hook) {
+            throw std::invalid_argument("on_start hook must not be null");
+        }
+        state_value.on_start_hooks_.push_back(std::move(hook));
+    });
 }
 
 application& application::on_start(std::nullptr_t) & {
-    return detail::mutate_stopped_app(*this, *state_,
-        "cannot register on_start hook while app is running",
-        [retired = std::vector<detail::callback_registration<app_hook>>{}](detail::app_state& state_value) mutable {
-            // The cleared targets retire with this lambda, after the app lock.
-            retired.swap(state_value.on_start_hooks_);
-        });
+    return detail::mutate_stopped_app(*this, *state_, "cannot register on_start hook while app is running", [retired = std::vector<detail::callback_registration<app_hook>>{}](detail::app_state& state_value) mutable {
+        // The cleared targets retire with this lambda, after the app lock.
+        retired.swap(state_value.on_start_hooks_);
+    });
 }
 
 application& application::on_stop(app_hook hook) & {
-    return detail::mutate_stopped_app(*this, *state_,
-        "cannot register on_stop hook while app is running",
-        [hook = detail::own_callback(std::move(hook))](detail::app_state& state_value) mutable {
-            if (!hook) {
-                throw std::invalid_argument("on_stop hook must not be null");
-            }
-            state_value.on_stop_hooks_.push_back(std::move(hook));
-        });
+    return detail::mutate_stopped_app(*this, *state_, "cannot register on_stop hook while app is running", [hook = detail::own_callback(std::move(hook))](detail::app_state& state_value) mutable {
+        if (!hook) {
+            throw std::invalid_argument("on_stop hook must not be null");
+        }
+        state_value.on_stop_hooks_.push_back(std::move(hook));
+    });
 }
 
 application& application::on_stop(std::nullptr_t) & {
-    return detail::mutate_stopped_app(*this, *state_,
-        "cannot register on_stop hook while app is running",
-        [retired = std::vector<detail::callback_registration<app_hook>>{}](detail::app_state& state_value) mutable {
-            retired.swap(state_value.on_stop_hooks_);
-        });
+    return detail::mutate_stopped_app(*this, *state_, "cannot register on_stop hook while app is running", [retired = std::vector<detail::callback_registration<app_hook>>{}](detail::app_state& state_value) mutable {
+        retired.swap(state_value.on_stop_hooks_);
+    });
 }
 
 application& application::rate_limit(rate_limit_config config) & {
-    return detail::mutate_stopped_app(*this, *state_,
-        "cannot change the default rate limit per worker while app is running",
-        [config](detail::app_state& state_value) { state_value.options_.set_rate_limit(config); });
+    return detail::mutate_stopped_app(*this, *state_, "cannot change the default rate limit per worker while app is running", [config](detail::app_state& state_value) {
+        state_value.options_.set_rate_limit(config);
+    });
 }
 
 application& application::rate_limit(std::nullptr_t) & {
-    return detail::mutate_stopped_app(*this, *state_,
-        "cannot change the default rate limit per worker while app is running",
-        [](detail::app_state& state_value) { state_value.options_.clear_rate_limit(); });
+    return detail::mutate_stopped_app(*this, *state_, "cannot change the default rate limit per worker while app is running", [](detail::app_state& state_value) {
+        state_value.options_.clear_rate_limit();
+    });
 }
 
 application& application::trusted_proxies(trusted_proxy_config config) & {
-    return detail::mutate_stopped_app(*this, *state_,
-        "cannot change trusted proxies while app is running",
-        [config = std::move(config)](detail::app_state& state_value) {
-            state_value.options_.set_trusted_proxies(config);
-        });
+    return detail::mutate_stopped_app(*this, *state_, "cannot change trusted proxies while app is running", [config = std::move(config)](detail::app_state& state_value) {
+        state_value.options_.set_trusted_proxies(config);
+    });
 }
 
 application& application::on_access(access_log_callback callback_value) & {
-    return detail::mutate_stopped_app(*this, *state_,
-        "cannot register access-log hook while app is running",
-        [callback_value = detail::own_callback(std::move(callback_value))](detail::app_state& state_value) mutable {
-            // Captured old target retires with this lambda, after the app lock.
-            std::swap(state_value.access_log_callback_, callback_value);
-            state_value.options_.access_log_.callback_ = detail::callback_access::ref(state_value.access_log_callback_);
-        });
+    return detail::mutate_stopped_app(*this, *state_, "cannot register access-log hook while app is running", [callback_value = detail::own_callback(std::move(callback_value))](detail::app_state& state_value) mutable {
+        // Captured old target retires with this lambda, after the app lock.
+        std::swap(state_value.access_log_callback_, callback_value);
+        state_value.options_.access_log_.callback_ = detail::callback_access::ref(state_value.access_log_callback_);
+    });
 }
 
 application& application::on_connection_failure(connection_failure_callback callback_value) & {
-    return detail::mutate_stopped_app(*this, *state_,
-        "cannot register connection-failure hook while app is running",
-        [callback_value = detail::own_callback(std::move(callback_value))](detail::app_state& state_value) mutable {
-            std::swap(state_value.connection_failure_callback_, callback_value);
-            state_value.options_.connection_failure_.callback_ =
-                detail::callback_access::ref(state_value.connection_failure_callback_);
-        });
+    return detail::mutate_stopped_app(*this, *state_, "cannot register connection-failure hook while app is running", [callback_value = detail::own_callback(std::move(callback_value))](detail::app_state& state_value) mutable {
+        std::swap(state_value.connection_failure_callback_, callback_value);
+        state_value.options_.connection_failure_.callback_ = detail::callback_access::ref(state_value.connection_failure_callback_);
+    });
 }
 
 application& application::on_tls_client_hello(tls_client_hello_callback callback_value) & {
-    return detail::mutate_stopped_app(*this, *state_,
-        "cannot register TLS ClientHello hook while app is running",
-        [callback_value = detail::own_callback(std::move(callback_value))](detail::app_state& state_value) mutable {
-            std::swap(state_value.tls_client_hello_callback_, callback_value);
-            state_value.options_.tls_client_hello_ =
-                detail::callback_access::ref(state_value.tls_client_hello_callback_);
-        });
+    return detail::mutate_stopped_app(*this, *state_, "cannot register TLS ClientHello hook while app is running", [callback_value = detail::own_callback(std::move(callback_value))](detail::app_state& state_value) mutable {
+        std::swap(state_value.tls_client_hello_callback_, callback_value);
+        state_value.options_.tls_client_hello_ = detail::callback_access::ref(state_value.tls_client_hello_callback_);
+    });
 }
 
 application& application::on_tls_client_hello(std::nullptr_t) & {
@@ -3395,12 +3176,10 @@ application& application::on_tls_client_hello(std::nullptr_t) & {
 }
 
 application& application::on_http2_input(http2_input_callback callback_value) & {
-    return detail::mutate_stopped_app(*this, *state_,
-        "cannot register HTTP/2 input hook while app is running",
-        [callback_value = detail::own_callback(std::move(callback_value))](detail::app_state& state_value) mutable {
-            std::swap(state_value.http2_input_callback_, callback_value);
-            state_value.options_.http2_input_ = detail::callback_access::ref(state_value.http2_input_callback_);
-        });
+    return detail::mutate_stopped_app(*this, *state_, "cannot register HTTP/2 input hook while app is running", [callback_value = detail::own_callback(std::move(callback_value))](detail::app_state& state_value) mutable {
+        std::swap(state_value.http2_input_callback_, callback_value);
+        state_value.options_.http2_input_ = detail::callback_access::ref(state_value.http2_input_callback_);
+    });
 }
 
 application& application::on_http2_input(std::nullptr_t) & {
@@ -3409,12 +3188,10 @@ application& application::on_http2_input(std::nullptr_t) & {
 
 #if defined(RUVIA_ENABLE_HTTP2)
 application& application::on_http2_frame(http2_frame_callback callback_value) & {
-    return detail::mutate_stopped_app(*this, *state_,
-        "cannot register HTTP/2 frame hook while app is running",
-        [callback_value = detail::own_callback(std::move(callback_value))](detail::app_state& state_value) mutable {
-            std::swap(state_value.http2_frame_callback_, callback_value);
-            state_value.options_.http2_frame_ = detail::callback_access::ref(state_value.http2_frame_callback_);
-        });
+    return detail::mutate_stopped_app(*this, *state_, "cannot register HTTP/2 frame hook while app is running", [callback_value = detail::own_callback(std::move(callback_value))](detail::app_state& state_value) mutable {
+        std::swap(state_value.http2_frame_callback_, callback_value);
+        state_value.options_.http2_frame_ = detail::callback_access::ref(state_value.http2_frame_callback_);
+    });
 }
 
 application& application::on_http2_frame(std::nullptr_t) & {
@@ -3422,12 +3199,10 @@ application& application::on_http2_frame(std::nullptr_t) & {
 }
 
 application& application::on_http2_headers(http2_headers_callback callback_value) & {
-    return detail::mutate_stopped_app(*this, *state_,
-        "cannot register HTTP/2 headers hook while app is running",
-        [callback_value = detail::own_callback(std::move(callback_value))](detail::app_state& state_value) mutable {
-            std::swap(state_value.http2_headers_callback_, callback_value);
-            state_value.options_.http2_headers_ = detail::callback_access::ref(state_value.http2_headers_callback_);
-        });
+    return detail::mutate_stopped_app(*this, *state_, "cannot register HTTP/2 headers hook while app is running", [callback_value = detail::own_callback(std::move(callback_value))](detail::app_state& state_value) mutable {
+        std::swap(state_value.http2_headers_callback_, callback_value);
+        state_value.options_.http2_headers_ = detail::callback_access::ref(state_value.http2_headers_callback_);
+    });
 }
 
 application& application::on_http2_headers(std::nullptr_t) & {
@@ -3436,12 +3211,10 @@ application& application::on_http2_headers(std::nullptr_t) & {
 #endif
 #if defined(RUVIA_ENABLE_HTTP3)
 application& application::on_http3_frame(http3_frame_callback callback_value) & {
-    return detail::mutate_stopped_app(*this, *state_,
-        "cannot register HTTP/3 frame hook while app is running",
-        [callback_value = detail::own_callback(std::move(callback_value))](detail::app_state& state_value) mutable {
-            std::swap(state_value.http3_frame_callback_, callback_value);
-            state_value.options_.http3_frame_ = detail::callback_access::ref(state_value.http3_frame_callback_);
-        });
+    return detail::mutate_stopped_app(*this, *state_, "cannot register HTTP/3 frame hook while app is running", [callback_value = detail::own_callback(std::move(callback_value))](detail::app_state& state_value) mutable {
+        std::swap(state_value.http3_frame_callback_, callback_value);
+        state_value.options_.http3_frame_ = detail::callback_access::ref(state_value.http3_frame_callback_);
+    });
 }
 
 application& application::on_http3_frame(std::nullptr_t) & {
@@ -3449,12 +3222,10 @@ application& application::on_http3_frame(std::nullptr_t) & {
 }
 
 application& application::on_http3_field(http3_field_callback callback_value) & {
-    return detail::mutate_stopped_app(*this, *state_,
-        "cannot register HTTP/3 field hook while app is running",
-        [callback_value = detail::own_callback(std::move(callback_value))](detail::app_state& state_value) mutable {
-            std::swap(state_value.http3_field_callback_, callback_value);
-            state_value.options_.http3_field_ = detail::callback_access::ref(state_value.http3_field_callback_);
-        });
+    return detail::mutate_stopped_app(*this, *state_, "cannot register HTTP/3 field hook while app is running", [callback_value = detail::own_callback(std::move(callback_value))](detail::app_state& state_value) mutable {
+        std::swap(state_value.http3_field_callback_, callback_value);
+        state_value.options_.http3_field_ = detail::callback_access::ref(state_value.http3_field_callback_);
+    });
 }
 
 application& application::on_http3_field(std::nullptr_t) & {
@@ -3463,12 +3234,10 @@ application& application::on_http3_field(std::nullptr_t) & {
 #endif
 
 application& application::on_connection(connection_callback callback_value) & {
-    return detail::mutate_stopped_app(*this, *state_,
-        "cannot register connection handler while app is running",
-        [callback_value = detail::own_callback(std::move(callback_value))](detail::app_state& state_value) mutable {
-            std::swap(state_value.connection_callback_, callback_value);
-            state_value.options_.connection_ = detail::callback_access::ref(state_value.connection_callback_);
-        });
+    return detail::mutate_stopped_app(*this, *state_, "cannot register connection handler while app is running", [callback_value = detail::own_callback(std::move(callback_value))](detail::app_state& state_value) mutable {
+        std::swap(state_value.connection_callback_, callback_value);
+        state_value.options_.connection_ = detail::callback_access::ref(state_value.connection_callback_);
+    });
 }
 
 application& application::on_connection(std::nullptr_t) & {
@@ -3476,12 +3245,10 @@ application& application::on_connection(std::nullptr_t) & {
 }
 
 application& application::on_connection_admission(connection_admission_callback callback_value) & {
-    return detail::mutate_stopped_app(*this, *state_,
-        "cannot register connection admission hook while app is running",
-        [callback_value = detail::own_callback(std::move(callback_value))](detail::app_state& state_value) mutable {
-            std::swap(state_value.connection_admission_callback_, callback_value);
-            state_value.options_.connection_admission_ = detail::callback_access::ref(state_value.connection_admission_callback_);
-        });
+    return detail::mutate_stopped_app(*this, *state_, "cannot register connection admission hook while app is running", [callback_value = detail::own_callback(std::move(callback_value))](detail::app_state& state_value) mutable {
+        std::swap(state_value.connection_admission_callback_, callback_value);
+        state_value.options_.connection_admission_ = detail::callback_access::ref(state_value.connection_admission_callback_);
+    });
 }
 
 application& application::on_connection_admission(std::nullptr_t) & {
@@ -3489,12 +3256,10 @@ application& application::on_connection_admission(std::nullptr_t) & {
 }
 
 application& application::on_connection_open(connection_open_callback callback_value) & {
-    return detail::mutate_stopped_app(*this, *state_,
-        "cannot register connection open hook while app is running",
-        [callback_value = detail::own_callback(std::move(callback_value))](detail::app_state& state_value) mutable {
-            std::swap(state_value.connection_open_callback_, callback_value);
-            state_value.options_.connection_open_ = detail::callback_access::ref(state_value.connection_open_callback_);
-        });
+    return detail::mutate_stopped_app(*this, *state_, "cannot register connection open hook while app is running", [callback_value = detail::own_callback(std::move(callback_value))](detail::app_state& state_value) mutable {
+        std::swap(state_value.connection_open_callback_, callback_value);
+        state_value.options_.connection_open_ = detail::callback_access::ref(state_value.connection_open_callback_);
+    });
 }
 
 application& application::on_connection_open(std::nullptr_t) & {
@@ -3502,12 +3267,10 @@ application& application::on_connection_open(std::nullptr_t) & {
 }
 
 application& application::on_connection_close(connection_close_callback callback_value) & {
-    return detail::mutate_stopped_app(*this, *state_,
-        "cannot register connection close hook while app is running",
-        [callback_value = detail::own_callback(std::move(callback_value))](detail::app_state& state_value) mutable {
-            std::swap(state_value.connection_close_callback_, callback_value);
-            state_value.options_.connection_close_ = detail::callback_access::ref(state_value.connection_close_callback_);
-        });
+    return detail::mutate_stopped_app(*this, *state_, "cannot register connection close hook while app is running", [callback_value = detail::own_callback(std::move(callback_value))](detail::app_state& state_value) mutable {
+        std::swap(state_value.connection_close_callback_, callback_value);
+        state_value.options_.connection_close_ = detail::callback_access::ref(state_value.connection_close_callback_);
+    });
 }
 
 application& application::on_connection_close(std::nullptr_t) & {
@@ -3515,12 +3278,10 @@ application& application::on_connection_close(std::nullptr_t) & {
 }
 
 application& application::on_request_stream(request_stream_callback callback_value) & {
-    return detail::mutate_stopped_app(*this, *state_,
-        "cannot register request stream handler while app is running",
-        [callback_value = detail::own_callback(std::move(callback_value))](detail::app_state& state_value) mutable {
-            std::swap(state_value.request_stream_callback_, callback_value);
-            state_value.options_.request_stream_ = detail::callback_access::ref(state_value.request_stream_callback_);
-        });
+    return detail::mutate_stopped_app(*this, *state_, "cannot register request stream handler while app is running", [callback_value = detail::own_callback(std::move(callback_value))](detail::app_state& state_value) mutable {
+        std::swap(state_value.request_stream_callback_, callback_value);
+        state_value.options_.request_stream_ = detail::callback_access::ref(state_value.request_stream_callback_);
+    });
 }
 
 application& application::on_request_stream(std::nullptr_t) & {
@@ -3529,56 +3290,51 @@ application& application::on_request_stream(std::nullptr_t) & {
 
 #ifdef RUVIA_ENABLE_DATABASE
 application& application::database(db_registration_config config) & {
-    return detail::mutate_stopped_app(*this, *state_,
-        "cannot configure database while app is running", [&](detail::app_state& state_value) {
-            detail::validate_capability_alias(config.alias_.view(), "database alias must not be empty");
-            detail::db_definition replacement{std::string(config.alias_.view()),
-                detail::db_config_storage(config.config_)};
-            if (config.query_cache_) {
+    return detail::mutate_stopped_app(*this, *state_, "cannot configure database while app is running", [&](detail::app_state& state_value) {
+        detail::validate_capability_alias(config.alias_.view(), "database alias must not be empty");
+        detail::db_definition replacement{std::string(config.alias_.view()), detail::db_config_storage(config.config_)};
+        if (config.query_cache_) {
 #ifdef RUVIA_ENABLE_REDIS
-                replacement.query_cache_.emplace(*config.query_cache_);
+            replacement.query_cache_.emplace(*config.query_cache_);
 #else
-                throw std::invalid_argument("database query cache requires Redis support");
+            throw std::invalid_argument("database query cache requires Redis support");
 #endif
-            }
-            detail::upsert_named_capability_definition(state_value.databases_, std::move(replacement));
-        });
+        }
+        detail::upsert_named_capability_definition(state_value.databases_, std::move(replacement));
+    });
 }
 
 application& application::database(std::nullptr_t) & {
-    return detail::mutate_stopped_app(*this, *state_,
-        "cannot configure database while app is running",
-        [](detail::app_state& state_value) { state_value.databases_.clear(); });
+    return detail::mutate_stopped_app(*this, *state_, "cannot configure database while app is running", [](detail::app_state& state_value) {
+        state_value.databases_.clear();
+    });
 }
 #endif
 
 #ifdef RUVIA_ENABLE_REDIS
 application& application::redis(redis_registration_config config) & {
-    return detail::mutate_stopped_app(*this, *state_, "cannot configure redis while app is running",
-        [&](detail::app_state& state_value) {
-            detail::upsert_named_capability_definition(
-                state_value.redis_, config.alias_.view(), config.config_, "redis alias must not be empty");
-        });
+    return detail::mutate_stopped_app(*this, *state_, "cannot configure redis while app is running", [&](detail::app_state& state_value) {
+        detail::upsert_named_capability_definition(state_value.redis_, config.alias_.view(), config.config_, "redis alias must not be empty");
+    });
 }
 
 application& application::redis(std::nullptr_t) & {
-    return detail::mutate_stopped_app(*this, *state_, "cannot configure redis while app is running",
-        [](detail::app_state& state_value) { state_value.redis_.clear(); });
+    return detail::mutate_stopped_app(*this, *state_, "cannot configure redis while app is running", [](detail::app_state& state_value) {
+        state_value.redis_.clear();
+    });
 }
 #endif
 
 application& application::client(http_client_config config) & {
-    return detail::mutate_stopped_app(*this, *state_,
-        "cannot configure HTTP client while app is running", [&](detail::app_state& state_value) {
-            detail::upsert_named_capability_definition(state_value.http_clients_, config.alias_.view(), config,
-                "HTTP client alias must not be empty");
-        });
+    return detail::mutate_stopped_app(*this, *state_, "cannot configure HTTP client while app is running", [&](detail::app_state& state_value) {
+        detail::upsert_named_capability_definition(state_value.http_clients_, config.alias_.view(), config, "HTTP client alias must not be empty");
+    });
 }
 
 application& application::client(std::nullptr_t) & {
-    return detail::mutate_stopped_app(*this, *state_,
-        "cannot configure HTTP client while app is running",
-        [](detail::app_state& state_value) { state_value.http_clients_.clear(); });
+    return detail::mutate_stopped_app(*this, *state_, "cannot configure HTTP client while app is running", [](detail::app_state& state_value) {
+        state_value.http_clients_.clear();
+    });
 }
 
 }  // namespace ruvia

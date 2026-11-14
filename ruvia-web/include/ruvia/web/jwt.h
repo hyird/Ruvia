@@ -33,8 +33,7 @@ enum class jwt_expiration_claim_policy : std::uint8_t {
 
 class jwt_error final : public std::runtime_error {
 public:
-    enum class code_type : std::uint8_t {
-        malformed_token,
+    enum class code_type : std::uint8_t { malformed_token,
         invalid_header,
         invalid_payload,
         signature_mismatch,
@@ -42,12 +41,11 @@ public:
         expired,
         not_yet_valid,
         missing_claim,
-        claim_mismatch
-    };
+        claim_mismatch };
 
-    jwt_error(code_type code, std::string_view message)
-        : std::runtime_error(std::string(message)),
-          code_(code) {}
+    jwt_error(code_type code, std::string_view message) :
+        std::runtime_error(std::string(message)),
+        code_(code) {}
 
     [[nodiscard]] code_type code() const noexcept {
         return code_;
@@ -82,9 +80,9 @@ public:
 private:
     friend struct detail::jwt_payload_access;
 
-    jwt_claim(std::string name, std::string value) noexcept
-        : name_(std::move(name)),
-          value_(std::move(value)) {}
+    jwt_claim(std::string name, std::string value) noexcept :
+        name_(std::move(name)),
+        value_(std::move(value)) {}
 
     std::string name_;
     std::string value_;
@@ -204,12 +202,10 @@ private:
 // (RFC 6750 §2.1: 1*( ALPHA / DIGIT / "-" / "." / "_" / "~" / "+" / "/" )
 // *"="), or nullopt for another scheme or a malformed token. The scheme name
 // is case-insensitive and is followed by one or more SP.
-[[nodiscard]] std::optional<std::string_view> jwt_bearer_token(
-    std::string_view authorization RUVIA_LIFETIMEBOUND) noexcept;
+[[nodiscard]] std::optional<std::string_view> jwt_bearer_token(std::string_view authorization RUVIA_LIFETIMEBOUND) noexcept;
 
 template <typename authorization_type>
-    requires(std::convertible_to<authorization_type&&, std::string_view> &&
-                !std::constructible_from<borrowed_text, authorization_type&&>)
+    requires(std::convertible_to<authorization_type&&, std::string_view> && !std::constructible_from<borrowed_text, authorization_type&&>)
 std::optional<std::string_view> jwt_bearer_token(authorization_type&&) = delete;
 
 }  // namespace ruvia

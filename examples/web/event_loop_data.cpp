@@ -26,21 +26,17 @@
 namespace {
 using namespace ruvia;
 
-RUVIA_DB_ENTITY(device, "orm_demo_device",
-    RUVIA_DB_COLUMN(id, std::int64_t, db_column_options{.primary_key_ = true}),
-    RUVIA_DB_COLUMN(name, std::string))
+RUVIA_DB_ENTITY(device, "orm_demo_device", RUVIA_DB_COLUMN(id, std::int64_t, db_column_options{.primary_key_ = true}), RUVIA_DB_COLUMN(name, std::string))
 
-RUVIA_REDIS_ENTITY(cached_device, "devices",
-    RUVIA_REDIS_COLUMN(id, string, redis_column_options{.primary_key_ = true}),
-    RUVIA_REDIS_COLUMN(name, string))
+RUVIA_REDIS_ENTITY(cached_device, "devices", RUVIA_REDIS_COLUMN(id, string, redis_column_options{.primary_key_ = true}), RUVIA_REDIS_COLUMN(name, string))
 
 // Application composition, not a framework service registry. Each instance
 // owns independent pools and memory; only its loop may use these clients.
 struct worker_data final {
-    worker_data(event_loop owner_value, const db_config& sql, const redis_config& cache)
-        : loop_(std::move(owner_value)),
-          db_(loop_, sql),
-          redis_(loop_, cache) {}
+    worker_data(event_loop owner_value, const db_config& sql, const redis_config& cache) :
+        loop_(std::move(owner_value)),
+        db_(loop_, sql),
+        redis_(loop_, cache) {}
 
     task<void> connect() {
         co_await db_.connect();

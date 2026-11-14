@@ -179,8 +179,7 @@ inline void append_db_number(std::string& output, std::uint64_t value) {
 template <std::floating_point number_type>
 inline void append_db_number(std::string& output, number_type value) {
     // SQL numeric literals cannot contain the inf/nan spellings of to_chars.
-    http_append_formatted_finite_number(output, value, "database floating-point value must be finite",
-        "database floating-point value cannot be formatted");
+    http_append_formatted_finite_number(output, value, "database floating-point value must be finite", "database floating-point value cannot be formatted");
 }
 
 // The result shapes a repository builder derives from one query. An id-keyed
@@ -209,23 +208,21 @@ public:
         closing,
     };
 
-    db_error(code_type code, std::optional<db_driver> driver, std::string_view message,
-        std::optional<std::int64_t> native_code = std::nullopt, std::string_view sql_state = {},
-        std::string_view constraint_name = {})
-        : std::runtime_error(std::string(message)),
-          code_(code),
-          driver_(driver),
-          native_code_(native_code),
-          sql_state_(sql_state),
-          constraint_name_(constraint_name) {}
+    db_error(code_type code, std::optional<db_driver> driver, std::string_view message, std::optional<std::int64_t> native_code = std::nullopt, std::string_view sql_state = {}, std::string_view constraint_name = {}) :
+        std::runtime_error(std::string(message)),
+        code_(code),
+        driver_(driver),
+        native_code_(native_code),
+        sql_state_(sql_state),
+        constraint_name_(constraint_name) {}
 
-    db_error(const db_error& other)
-        : std::runtime_error(other),
-          code_(other.code_),
-          driver_(other.driver_),
-          native_code_(other.native_code_),
-          sql_state_(other.sql_state_, other.sql_state_.get_allocator()),
-          constraint_name_(other.constraint_name_, other.constraint_name_.get_allocator()) {}
+    db_error(const db_error& other) :
+        std::runtime_error(other),
+        code_(other.code_),
+        driver_(other.driver_),
+        native_code_(other.native_code_),
+        sql_state_(other.sql_state_, other.sql_state_.get_allocator()),
+        constraint_name_(other.constraint_name_, other.constraint_name_.get_allocator()) {}
     db_error(db_error&&) = default;
     db_error& operator=(const db_error&) = default;
     db_error& operator=(db_error&&) = default;
@@ -294,9 +291,9 @@ public:
         unexpected_row_count,
     };
 
-    db_conversion_error(code_type code, std::string_view message)
-        : std::runtime_error(std::string(message)),
-          code_(code) {}
+    db_conversion_error(code_type code, std::string_view message) :
+        std::runtime_error(std::string(message)),
+        code_(code) {}
 
     [[nodiscard]] code_type code() const noexcept {
         return code_;
@@ -315,8 +312,7 @@ template <typename t_type, bool allow_array>
 struct db_mapped_value_traits<std::optional<t_type>, allow_array> : db_mapped_value_traits<t_type, allow_array> {};
 
 template <typename t_type, bool allow_array>
-struct db_mapped_value_traits<std::vector<t_type>, allow_array>
-    : std::bool_constant<allow_array && db_mapped_value_traits<t_type, false>::value> {};
+struct db_mapped_value_traits<std::vector<t_type>, allow_array> : std::bool_constant<allow_array && db_mapped_value_traits<t_type, false>::value> {};
 
 // The one text-to-scalar conversion for database results: fields and array
 // elements accept the same boolean tokens and numeric syntax.
@@ -327,10 +323,7 @@ template <text_scalar t_type>
         if constexpr (std::is_same_v<t_type, bool>) {
             throw db_conversion_error(db_conversion_error::code_type::invalid_format, "database text is not a boolean");
         } else {
-            throw db_conversion_error(*error == text_scalar_parse_error::out_of_range
-                                          ? db_conversion_error::code_type::out_of_range
-                                          : db_conversion_error::code_type::invalid_format,
-                "database text is not a valid number");
+            throw db_conversion_error(*error == text_scalar_parse_error::out_of_range ? db_conversion_error::code_type::out_of_range : db_conversion_error::code_type::invalid_format, "database text is not a valid number");
         }
     }
     return std::get<t_type>(std::move(parsed));
@@ -347,8 +340,7 @@ concept db_mapped_value = detail::db_mapped_value_traits<t_type>::value;
 
 class db_value final {
 private:
-    using storage_type = std::variant<std::monostate, borrowed_text, std::string, std::int64_t,
-        std::uint64_t, double, bool>;
+    using storage_type = std::variant<std::monostate, borrowed_text, std::string, std::int64_t, std::uint64_t, double, bool>;
 
 public:
     db_value(std::nullptr_t);
@@ -373,15 +365,15 @@ public:
 
     template <typename t_type>
         requires detail::is_model_integer<std::remove_cvref_t<t_type>>
-    db_value(t_type value)
-        : storage_(make_integer_storage(value)) {}
+    db_value(t_type value) :
+        storage_(make_integer_storage(value)) {}
 
     // 有限输入超出 double 范围时在构造阶段抛出 std::out_of_range，
     // 不先窄化成无穷大。普通精度舍入及显式非有限输入的后续校验保持不变。
     template <typename t_type>
         requires std::is_floating_point_v<std::remove_cvref_t<t_type>>
-    db_value(t_type value)
-        : storage_(std::in_place_type<double>, detail::checked_model_float<double>(value)) {}
+    db_value(t_type value) :
+        storage_(std::in_place_type<double>, detail::checked_model_float<double>(value)) {}
 
     // Reading a different alternative throws std::bad_variant_access; values
     // are never coerced. Text borrows this value and, for borrowed inputs,
@@ -439,8 +431,7 @@ inline constexpr bool db_owning_char_string<std::basic_string<char, traits_type,
 // vector of db_value -- cannot construct a db_value, so it fails this concept and
 // the span overload keeps winning without needing an explicit exclusion.
 template <typename param_type>
-concept db_parameter =
-    std::constructible_from<db_value, param_type&&> || db_owning_char_string<std::remove_cvref_t<param_type>>;
+concept db_parameter = std::constructible_from<db_value, param_type&&> || db_owning_char_string<std::remove_cvref_t<param_type>>;
 
 template <typename... params_type>
 concept db_parameter_pack = sizeof...(params_type) > 0 && (db_parameter<params_type> && ...);
@@ -540,8 +531,7 @@ private:
     friend class db_rows;
 
     db_row() noexcept = default;
-    db_row(const db_field* fields_value, std::size_t size, const std::string* column_names,
-        std::size_t column_count) noexcept;
+    db_row(const db_field* fields_value, std::size_t size, const std::string* column_names, std::size_t column_count) noexcept;
 
     std::span<const db_field> fields_{};
     std::span<const std::string> column_names_{};
@@ -578,8 +568,8 @@ public:
 
     db_operation_state() noexcept = default;
 
-    explicit db_operation_state(payload payload_value) noexcept
-        : state_(std::in_place_type<active_type>, std::move(payload_value)) {
+    explicit db_operation_state(payload payload_value) noexcept :
+        state_(std::in_place_type<active_type>, std::move(payload_value)) {
         static_assert(std::is_nothrow_move_constructible_v<payload>);
     }
 
@@ -633,9 +623,7 @@ private:
     void start() {
         auto* active = std::get_if<active_type>(&state_);
         if (active == nullptr) {
-            throw std::logic_error(std::holds_alternative<operating_type>(state_)
-                                       ? "database operation is already in progress"
-                                       : "database resource is not active");
+            throw std::logic_error(std::holds_alternative<operating_type>(state_) ? "database operation is already in progress" : "database resource is not active");
         }
         if (cold_borrows_ == 0) {
             std::terminate();
@@ -696,16 +684,16 @@ class db_operation_guard final {
 public:
     using state_type = db_operation_state<payload>;
 
-    explicit db_operation_guard(state_type& state_value) noexcept
-        : state_(&state_value) {
+    explicit db_operation_guard(state_type& state_value) noexcept :
+        state_(&state_value) {
         state_->register_cold_borrow();
     }
 
     db_operation_guard(const db_operation_guard&) = delete;
     db_operation_guard& operator=(const db_operation_guard&) = delete;
-    db_operation_guard(db_operation_guard&& other) noexcept
-        : state_(std::exchange(other.state_, nullptr)),
-          started_(std::exchange(other.started_, false)) {}
+    db_operation_guard(db_operation_guard&& other) noexcept :
+        state_(std::exchange(other.state_, nullptr)),
+        started_(std::exchange(other.started_, false)) {}
     db_operation_guard& operator=(db_operation_guard&&) = delete;
 
     ~db_operation_guard() {
@@ -771,10 +759,9 @@ public:
 private:
     friend struct detail::db_result_access;
 
-    constexpr db_exec_result(
-        std::uint64_t affected_rows, std::optional<std::uint64_t> last_insert_id) noexcept
-        : affected_rows_(affected_rows),
-          last_insert_id_(last_insert_id) {}
+    constexpr db_exec_result(std::uint64_t affected_rows, std::optional<std::uint64_t> last_insert_id) noexcept :
+        affected_rows_(affected_rows),
+        last_insert_id_(last_insert_id) {}
 
     std::uint64_t affected_rows_{0};
     std::optional<std::uint64_t> last_insert_id_;
@@ -809,9 +796,9 @@ private:
     struct no_raw_result_type final {};
 
     struct owned_raw_result_type final {
-        owned_raw_result_type(void* owned_value, void (*owned_release)(void*) noexcept) noexcept
-            : value_(owned_value),
-              release_(owned_release) {}
+        owned_raw_result_type(void* owned_value, void (*owned_release)(void*) noexcept) noexcept :
+            value_(owned_value),
+            release_(owned_release) {}
 
         void* value_;
         void (*release_)(void*) noexcept;
@@ -887,14 +874,12 @@ private:
     using state_owner_type = std::unique_ptr<state_type>;
 
     db_stream_result() noexcept = default;
-    db_stream_result(detail::db_pool_ref_type client, std::size_t slot, std::vector<std::string> column_names,
-        operation_options options);
+    db_stream_result(detail::db_pool_ref_type client, std::size_t slot, std::vector<std::string> column_names, operation_options options);
     void reset() noexcept;
     // `io_metrics` is the request's counter block, or null outside a request.
     void bind_operation_scope(::ruvia::operation_scope& scope, detail::request_io_metrics* io_metrics) noexcept;
     static void expire_capability(void* target) noexcept;
-    static task<std::optional<db_row>> read_task(detail::request_io_metrics* io_metrics,
-        operation_guard_type operation, std::vector<std::string>& column_names, operation_options operation_value);
+    static task<std::optional<db_row>> read_task(detail::request_io_metrics* io_metrics, operation_guard_type operation, std::vector<std::string>& column_names, operation_options operation_value);
     static task<void> close_task(detail::request_io_metrics* io_metrics, operation_guard_type operation, operation_options operation_value);
 
     state_owner_type state_;
@@ -919,8 +904,7 @@ struct db_result_access final {
         return db_rows();
     }
 
-    [[nodiscard]] static constexpr db_exec_result make_exec_result(std::uint64_t affected_rows,
-        std::optional<std::uint64_t> last_insert_id = std::nullopt) noexcept {
+    [[nodiscard]] static constexpr db_exec_result make_exec_result(std::uint64_t affected_rows, std::optional<std::uint64_t> last_insert_id = std::nullopt) noexcept {
         return db_exec_result(affected_rows, last_insert_id);
     }
 
@@ -945,8 +929,7 @@ struct db_result_access final {
     }
 
     static void own_raw_result(db_rows& result_value, void* raw, void (*release)(void*) noexcept) noexcept {
-        if (raw == nullptr || release == nullptr ||
-            std::holds_alternative<db_rows::owned_raw_result_type>(result_value.raw_result_)) {
+        if (raw == nullptr || release == nullptr || std::holds_alternative<db_rows::owned_raw_result_type>(result_value.raw_result_)) {
             std::terminate();
         }
         result_value.raw_result_.template emplace<db_rows::owned_raw_result_type>(raw, release);
@@ -964,8 +947,7 @@ struct db_result_access final {
         return db_field::borrowed(value);
     }
 
-    [[nodiscard]] static db_row borrowed_row(const db_field* fields_value, std::size_t size,
-        const std::string* column_names, std::size_t column_count) noexcept {
+    [[nodiscard]] static db_row borrowed_row(const db_field* fields_value, std::size_t size, const std::string* column_names, std::size_t column_count) noexcept {
         return db_row(fields_value, size, column_names, column_count);
     }
 
@@ -976,14 +958,11 @@ struct db_result_access final {
     }
 
     static void append_row(db_rows& result_value, std::size_t row_start, std::size_t field_count) {
-        result_value.rows_.push_back(borrowed_row(result_value.fields_.data() + row_start, field_count,
-            result_value.column_names_.data(), result_value.column_names_.size()));
+        result_value.rows_.push_back(borrowed_row(result_value.fields_.data() + row_start, field_count, result_value.column_names_.data(), result_value.column_names_.size()));
     }
 
     template <typename field_at_type>
-    [[nodiscard]] static db_row materialize_stream_row(std::vector<db_field>& fields_value,
-        const std::vector<std::string>& column_names, std::size_t field_count,
-        field_at_type&& field_at) {
+    [[nodiscard]] static db_row materialize_stream_row(std::vector<db_field>& fields_value, const std::vector<std::string>& column_names, std::size_t field_count, field_at_type&& field_at) {
         fields_value.clear();
         fields_value.reserve(field_count);
         for (std::size_t field = 0; field < field_count; ++field) {
@@ -1030,8 +1009,7 @@ namespace ruvia::detail {
 
 // MariaDB's lexer peeks at the byte after "--" and sees its terminating NUL at
 // the end of the statement, so a final "--" is a comment as well.
-[[nodiscard]] inline constexpr bool is_mariadb_double_dash_comment(
-    std::string_view sql, std::size_t index) noexcept {
+[[nodiscard]] inline constexpr bool is_mariadb_double_dash_comment(std::string_view sql, std::size_t index) noexcept {
     if (index + 2 > sql.size() || sql[index] != '-' || sql[index + 1] != '-') {
         return false;
     }
@@ -1051,8 +1029,7 @@ namespace ruvia::detail {
     return false;
 }
 
-[[nodiscard]] constexpr std::size_t skip_sql_quoted_run(
-    std::string_view sql, std::size_t index, char terminator, bool backslash_escapes) noexcept {
+[[nodiscard]] constexpr std::size_t skip_sql_quoted_run(std::string_view sql, std::size_t index, char terminator, bool backslash_escapes) noexcept {
     const auto size = sql.size();
     if (index >= size) {
         return size;
@@ -1079,8 +1056,7 @@ namespace ruvia::detail {
     return size;
 }
 
-[[nodiscard]] constexpr std::size_t skip_sql_line_comment(
-    std::string_view sql, std::size_t start, bool carriage_return_ends_comment) noexcept {
+[[nodiscard]] constexpr std::size_t skip_sql_line_comment(std::string_view sql, std::size_t start, bool carriage_return_ends_comment) noexcept {
     auto cursor_value = start;
     while (cursor_value < sql.size() && sql[cursor_value] != '\n' && (!carriage_return_ends_comment || sql[cursor_value] != '\r')) {
         ++cursor_value;
@@ -1088,8 +1064,7 @@ namespace ruvia::detail {
     return cursor_value < sql.size() ? cursor_value + 1 : sql.size();
 }
 
-[[nodiscard]] constexpr std::size_t skip_sql_block_comment(
-    std::string_view sql, std::size_t index) noexcept {
+[[nodiscard]] constexpr std::size_t skip_sql_block_comment(std::string_view sql, std::size_t index) noexcept {
     auto cursor_value = index + 2;
     while (cursor_value + 1 < sql.size()) {
         if (sql[cursor_value] == '*' && sql[cursor_value + 1] == '/') {
@@ -1122,8 +1097,7 @@ namespace ruvia::detail {
 // The index just past the construct starting at `index`. For an ordinary byte
 // that is `index + 1`; for a literal, identifier or comment it is the first
 // index after its terminator, or `sql.size()` when the construct is unclosed.
-[[nodiscard]] constexpr std::size_t skip_sql_atom(
-    std::string_view sql, std::size_t index, bool backslash_escapes) noexcept {
+[[nodiscard]] constexpr std::size_t skip_sql_atom(std::string_view sql, std::size_t index, bool backslash_escapes) noexcept {
     const auto size = sql.size();
     if (index >= size) {
         return size;
@@ -1172,8 +1146,7 @@ namespace ruvia::detail {
 // string literals, but their delimiter is either $$ or $tag$. Keep this scan
 // separate from skip_sql_atom(): MariaDB's '?' binder shares that generic helper
 // and must not treat its ordinary '$' identifiers as quoted strings.
-[[nodiscard]] constexpr std::size_t skip_postgresql_dollar_quoted_atom(
-    std::string_view sql, std::size_t index) noexcept {
+[[nodiscard]] constexpr std::size_t skip_postgresql_dollar_quoted_atom(std::string_view sql, std::size_t index) noexcept {
     const auto size = sql.size();
     if (index >= size || sql[index] != '$') {
         return index < size ? index + 1 : size;
@@ -1206,10 +1179,8 @@ namespace ruvia::detail {
     return is_postgresql_dollar_tag_continue(character) || byte == '$';
 }
 
-[[nodiscard]] constexpr bool has_postgresql_escape_string_prefix(
-    std::string_view sql, std::size_t index) noexcept {
-    if (index + 1 >= sql.size() || (sql[index] != 'E' && sql[index] != 'e') ||
-        sql[index + 1] != '\'') {
+[[nodiscard]] constexpr bool has_postgresql_escape_string_prefix(std::string_view sql, std::size_t index) noexcept {
+    if (index + 1 >= sql.size() || (sql[index] != 'E' && sql[index] != 'e') || sql[index + 1] != '\'') {
         return false;
     }
     return index == 0 || !is_postgresql_identifier_continue(sql[index - 1]);
@@ -1219,8 +1190,7 @@ namespace ruvia::detail {
 // separator: ordinary strings and quoted identifiers use doubled delimiters,
 // not backslash escapes, and '#' is an operator byte rather than a comment
 // opener. Escape strings keep the explicit E'...' backslash rule.
-[[nodiscard]] constexpr std::size_t skip_postgresql_sql_atom(
-    std::string_view sql, std::size_t index) noexcept {
+[[nodiscard]] constexpr std::size_t skip_postgresql_sql_atom(std::string_view sql, std::size_t index) noexcept {
     const auto size = sql.size();
     if (index >= size) {
         return size;
@@ -1232,8 +1202,7 @@ namespace ruvia::detail {
     // In PostgreSQL an unquoted identifier may contain '$'. A would-be
     // delimiter immediately after an identifier byte is part of that name,
     // not the start of a dollar-quoted string.
-    if (sql[index] == '$' &&
-        (index == 0 || !is_postgresql_identifier_continue(sql[index - 1]))) {
+    if (sql[index] == '$' && (index == 0 || !is_postgresql_identifier_continue(sql[index - 1]))) {
         const auto next_value = skip_postgresql_dollar_quoted_atom(sql, index);
         if (next_value != index + 1) {
             return next_value;
@@ -1269,8 +1238,7 @@ namespace ruvia::detail {
 // npos. Bytes inside literals, quoted identifiers and comments are data and are
 // skipped whole. A byte that opens one of those constructs is that construct
 // and is never reported as syntax.
-[[nodiscard]] constexpr std::size_t find_sql_syntax_byte(
-    std::string_view sql, char wanted, bool backslash_escapes, std::size_t from = 0) noexcept {
+[[nodiscard]] constexpr std::size_t find_sql_syntax_byte(std::string_view sql, char wanted, bool backslash_escapes, std::size_t from = 0) noexcept {
     for (auto index = from; index < sql.size();) {
         const auto next_value = skip_sql_atom(sql, index, backslash_escapes);
         if (next_value == index + 1 && sql[index] == wanted) {
@@ -1284,8 +1252,7 @@ namespace ruvia::detail {
 // PostgreSQL adds dollar-quoted strings to the generic opaque constructs. This
 // variant is used by migration statement validation; the MariaDB parameter
 // binder intentionally continues to use find_sql_syntax_byte().
-[[nodiscard]] constexpr std::size_t find_postgresql_syntax_byte(
-    std::string_view sql, char wanted, std::size_t from = 0) noexcept {
+[[nodiscard]] constexpr std::size_t find_postgresql_syntax_byte(std::string_view sql, char wanted, std::size_t from = 0) noexcept {
     for (auto index = from; index < sql.size();) {
         const auto next_value = skip_postgresql_sql_atom(sql, index);
         if (next_value == index + 1 && sql[index] == wanted) {
@@ -1332,8 +1299,7 @@ task<result_type> map_db_query(task<db_rows> query, mapper_type mapper) {
 
 inline std::uint64_t db_count_value(const db_rows& rows) {
     if (rows.size() != 1) {
-        throw db_conversion_error(
-            db_conversion_error::code_type::unexpected_row_count, "database count did not return exactly one row");
+        throw db_conversion_error(db_conversion_error::code_type::unexpected_row_count, "database count did not return exactly one row");
     }
     const auto count = rows.front()["count"].as<std::uint64_t>();
     if (!count) {
@@ -1343,8 +1309,7 @@ inline std::uint64_t db_count_value(const db_rows& rows) {
 }
 
 template <typename result_type, typename mapper_type>
-task<std::pair<result_type, std::uint64_t>> map_db_query_and_count(
-    task<std::pair<db_rows, db_rows>> query, mapper_type mapper) {
+task<std::pair<result_type, std::uint64_t>> map_db_query_and_count(task<std::pair<db_rows, db_rows>> query, mapper_type mapper) {
     auto rows = co_await std::move(query);
     const auto count = db_count_value(rows.second);
     co_return std::pair{mapper(std::move(rows.first)), count};
@@ -1367,8 +1332,7 @@ struct db_sql_parameter_count {
         if (sql[index] == '\0') {
             return {0, false};
         }
-        const auto next_value =
-            driver == db_driver::mariadb ? skip_sql_atom(sql, index, true) : skip_postgresql_sql_atom(sql, index);
+        const auto next_value = driver == db_driver::mariadb ? skip_sql_atom(sql, index, true) : skip_postgresql_sql_atom(sql, index);
         if (next_value != index + 1) {
             index = next_value;
             continue;
@@ -1410,33 +1374,28 @@ struct db_sql_parameter_count {
 
 template <fixed_string sql, db_driver driver, std::size_t parameter_count>
 void validate_db_sql_literal(db_driver actual_driver) {
-    static_assert(driver == db_driver::unspecified || driver == db_driver::mariadb || driver == db_driver::postgresql,
-        "SQL literal requires a valid database driver");
+    static_assert(driver == db_driver::unspecified || driver == db_driver::mariadb || driver == db_driver::postgresql, "SQL literal requires a valid database driver");
     static_assert(sql.view().find('\0') == std::string_view::npos, "SQL literal must not contain NUL bytes");
     if constexpr (driver == db_driver::unspecified) {
         constexpr auto mariadb_result = count_db_sql_parameters(sql.view(), db_driver::mariadb);
         constexpr auto postgresql_result = count_db_sql_parameters(sql.view(), db_driver::postgresql);
         constexpr bool has_mariadb = mariadb_result.count_ > 0;
         constexpr bool has_postgresql = postgresql_result.count_ > 0 || !postgresql_result.valid_;
-        static_assert(!(has_mariadb && has_postgresql),
-            "SQL literal with both '?' and '$n' requires an explicit database driver");
+        static_assert(!(has_mariadb && has_postgresql), "SQL literal with both '?' and '$n' requires an explicit database driver");
         if constexpr (has_postgresql) {
             static_assert(postgresql_result.valid_, "SQL literal contains an invalid parameter index");
-            static_assert(postgresql_result.count_ == parameter_count,
-                "SQL placeholder count does not match the number of arguments");
+            static_assert(postgresql_result.count_ == parameter_count, "SQL placeholder count does not match the number of arguments");
             if (actual_driver != db_driver::postgresql) {
                 throw std::invalid_argument("SQL literal dialect does not match the database driver");
             }
         } else if constexpr (has_mariadb) {
             static_assert(mariadb_result.valid_, "SQL literal contains an invalid parameter index");
-            static_assert(mariadb_result.count_ == parameter_count,
-                "SQL placeholder count does not match the number of arguments");
+            static_assert(mariadb_result.count_ == parameter_count, "SQL placeholder count does not match the number of arguments");
             if (actual_driver != db_driver::mariadb) {
                 throw std::invalid_argument("SQL literal dialect does not match the database driver");
             }
         } else {
-            static_assert(parameter_count == 0,
-                "SQL placeholder count does not match the number of arguments");
+            static_assert(parameter_count == 0, "SQL placeholder count does not match the number of arguments");
             if (actual_driver != db_driver::mariadb && actual_driver != db_driver::postgresql) {
                 throw std::invalid_argument("SQL literal dialect does not match the database driver");
             }
@@ -1444,8 +1403,7 @@ void validate_db_sql_literal(db_driver actual_driver) {
     } else {
         constexpr auto result_value = count_db_sql_parameters(sql.view(), driver);
         static_assert(result_value.valid_, "SQL literal contains an invalid parameter index");
-        static_assert(result_value.count_ == parameter_count,
-            "SQL placeholder count does not match the number of arguments");
+        static_assert(result_value.count_ == parameter_count, "SQL placeholder count does not match the number of arguments");
         if (actual_driver != driver) {
             throw std::invalid_argument("SQL literal dialect does not match the database driver");
         }
@@ -1487,14 +1445,10 @@ public:
     task<db_rows> query(std::string_view, std::span<const db_value> = {}) && = delete;
     task<db_rows> query(std::string_view, std::initializer_list<db_value>) & = delete;
     task<db_rows> query(std::string_view, std::initializer_list<db_value>) && = delete;
-    [[nodiscard]] task<db_exec_result> execute(
-        std::string_view sql, std::span<const db_value> params = {}) &;
-    task<db_exec_result> execute(
-        std::string_view, std::span<const db_value> = {}) && = delete;
-    task<db_exec_result> execute(
-        std::string_view, std::initializer_list<db_value>) & = delete;
-    task<db_exec_result> execute(
-        std::string_view, std::initializer_list<db_value>) && = delete;
+    [[nodiscard]] task<db_exec_result> execute(std::string_view sql, std::span<const db_value> params = {}) &;
+    task<db_exec_result> execute(std::string_view, std::span<const db_value> = {}) && = delete;
+    task<db_exec_result> execute(std::string_view, std::initializer_list<db_value>) & = delete;
+    task<db_exec_result> execute(std::string_view, std::initializer_list<db_value>) && = delete;
 
     // Bound parameters as ordinary arguments, with the same synchronous cloning
     // and the same temporary-safety as db_session::query()/execute().
@@ -1532,8 +1486,7 @@ public:
 
     template <typename... params_type>
         requires detail::db_parameter_pack<params_type...>
-    [[nodiscard]] task<db_exec_result> execute(
-        std::string_view sql, params_type&&... params) & {
+    [[nodiscard]] task<db_exec_result> execute(std::string_view sql, params_type&&... params) & {
         const db_value values[]{detail::make_immediate_db_parameter(std::forward<params_type>(params))...};
         return execute(sql, std::span<const db_value>(values));
     }
@@ -1565,14 +1518,10 @@ public:
     task<bool> try_advisory_lock(std::int32_t, std::int32_t) && = delete;
     [[nodiscard]] task<bool> try_advisory_lock(std::string_view key, std::int64_t seed = 0) &;
     task<bool> try_advisory_lock(std::string_view, std::int64_t = 0) && = delete;
-    [[nodiscard]] task<void> declare_cursor(
-        std::string_view name, std::string_view sql, std::span<const db_value> params = {}, bool scroll = false) &;
-    task<void> declare_cursor(
-        std::string_view, std::string_view, std::span<const db_value> = {}, bool = false) && = delete;
-    task<void> declare_cursor(
-        std::string_view, std::string_view, std::initializer_list<db_value>, bool = false) & = delete;
-    task<void> declare_cursor(
-        std::string_view, std::string_view, std::initializer_list<db_value>, bool = false) && = delete;
+    [[nodiscard]] task<void> declare_cursor(std::string_view name, std::string_view sql, std::span<const db_value> params = {}, bool scroll = false) &;
+    task<void> declare_cursor(std::string_view, std::string_view, std::span<const db_value> = {}, bool = false) && = delete;
+    task<void> declare_cursor(std::string_view, std::string_view, std::initializer_list<db_value>, bool = false) & = delete;
+    task<void> declare_cursor(std::string_view, std::string_view, std::initializer_list<db_value>, bool = false) && = delete;
     [[nodiscard]] task<db_rows> fetch_cursor(std::string_view name, std::uint64_t count = 1) &;
     task<db_rows> fetch_cursor(std::string_view, std::uint64_t = 1) && = delete;
     [[nodiscard]] task<void> close_cursor(std::string_view name) &;
@@ -1597,23 +1546,20 @@ private:
         registration_.require_active();
         auto& scope = registration_.scope();
         auto task_value = query_and_count_task(query, count);
-        return make_scoped_operation(scope,
-            detail::map_db_query_and_count<result_type>(std::move(task_value), std::move(mapper)));
+        return make_scoped_operation(scope, detail::map_db_query_and_count<result_type>(std::move(task_value), std::move(mapper)));
     }
     template <typename result_type, typename mapper_type>
     [[nodiscard]] task<result_type> query_mapped(const db_query& query, mapper_type mapper) {
         registration_.require_active();
         auto& scope = registration_.scope();
         auto task_value = query_task(query);
-        return make_scoped_operation(scope,
-            detail::map_db_query<result_type>(std::move(task_value), std::move(mapper)));
+        return make_scoped_operation(scope, detail::map_db_query<result_type>(std::move(task_value), std::move(mapper)));
     }
     template <typename driver_type>
     friend class detail::db_pool;
 
     struct lease_type final {
-        lease_type(detail::db_pool_ref_type client, std::size_t slot,
-            operation_options options) noexcept;
+        lease_type(detail::db_pool_ref_type client, std::size_t slot, operation_options options) noexcept;
         void abort() noexcept;
 
         detail::db_pool_ref_type client_;
@@ -1626,14 +1572,12 @@ private:
 
     using state_owner_type = std::unique_ptr<operation_state_type>;
 
-    db_transaction(detail::db_pool_ref_type client, std::size_t slot,
-        operation_options options);
+    db_transaction(detail::db_pool_ref_type client, std::size_t slot, operation_options options);
     template <typename result_type, bool exec_statement>
     task<result_type> run_statement(std::string sql, std::vector<db_value> params);
     // `io_metrics` is the request's counter block, or null outside a request.
     template <typename result_type, bool exec_statement>
-    static task<result_type> statement_task(std::string sql, std::vector<db_value> params,
-        detail::request_io_metrics* io_metrics, operation_guard_type operation);
+    static task<result_type> statement_task(std::string sql, std::vector<db_value> params, detail::request_io_metrics* io_metrics, operation_guard_type operation);
     template <bool commit_lease>
     static task<void> finish_task(detail::request_io_metrics* io_metrics, operation_guard_type operation);
     // A command naming one identifier: SAVEPOINT, RELEASE, CLOSE and the like.
@@ -1647,8 +1591,7 @@ private:
 
     [[nodiscard]] detail::db_query_backend query_backend(const lease_type& lease) const;
     template <bool with_count>
-    static task<std::conditional_t<with_count, std::pair<db_rows, db_rows>, db_rows>> query_plan_prepared(
-        detail::db_query_plan plan, detail::db_query_backend backend, operation_guard_type operation);
+    static task<std::conditional_t<with_count, std::pair<db_rows, db_rows>, db_rows>> query_plan_prepared(detail::db_query_plan plan, detail::db_query_backend backend, operation_guard_type operation);
     state_owner_type state_;
     detail::request_io_metrics* io_metrics_{nullptr};
     scoped_capability_registration registration_;
@@ -1672,8 +1615,7 @@ public:
 
 private:
     friend class db_session;
-    db_query_result_cache(detail::db_query_cache_state& state_value, ::ruvia::operation_scope& scope,
-        detail::request_io_metrics* io_metrics, operation_options options) noexcept;
+    db_query_result_cache(detail::db_query_cache_state& state_value, ::ruvia::operation_scope& scope, detail::request_io_metrics* io_metrics, operation_options options) noexcept;
     static void expire_capability(void* target) noexcept;
     detail::db_query_cache_state* state_;
     detail::request_io_metrics* io_metrics_;
@@ -1700,16 +1642,11 @@ public:
     [[nodiscard]] db_repository<entity_type, db_session> repository() const;
 
     [[nodiscard]] task<db_rows> query(std::string_view sql, std::span<const db_value> params = {}) const;
-    task<db_rows> query(
-        std::string_view sql, std::initializer_list<db_value> params) const = delete;
-    [[nodiscard]] task<db_exec_result> execute(
-        std::string_view sql, std::span<const db_value> params = {}) const;
-    task<db_exec_result> execute(
-        std::string_view sql, std::initializer_list<db_value> params) const = delete;
-    [[nodiscard]] task<db_stream_result> query_stream(
-        std::string_view sql, std::span<const db_value> params = {}) const;
-    task<db_stream_result> query_stream(
-        std::string_view sql, std::initializer_list<db_value> params) const = delete;
+    task<db_rows> query(std::string_view sql, std::initializer_list<db_value> params) const = delete;
+    [[nodiscard]] task<db_exec_result> execute(std::string_view sql, std::span<const db_value> params = {}) const;
+    task<db_exec_result> execute(std::string_view sql, std::initializer_list<db_value> params) const = delete;
+    [[nodiscard]] task<db_stream_result> query_stream(std::string_view sql, std::span<const db_value> params = {}) const;
+    task<db_stream_result> query_stream(std::string_view sql, std::initializer_list<db_value> params) const = delete;
     // Bound parameters as ordinary arguments: query(sql, id, name). Each one is
     // converted to a db_value and cloned into the prepared statement before the
     // call returns -- the span overloads below build the statement synchronously,
@@ -1750,22 +1687,19 @@ public:
 
     template <typename... params_type>
         requires detail::db_parameter_pack<params_type...>
-    [[nodiscard]] task<db_exec_result> execute(
-        std::string_view sql, params_type&&... params) const {
+    [[nodiscard]] task<db_exec_result> execute(std::string_view sql, params_type&&... params) const {
         const db_value values[]{detail::make_immediate_db_parameter(std::forward<params_type>(params))...};
         return execute(sql, std::span<const db_value>(values));
     }
 
     template <typename... params_type>
         requires detail::db_parameter_pack<params_type...>
-    [[nodiscard]] task<db_stream_result> query_stream(
-        std::string_view sql, params_type&&... params) const {
+    [[nodiscard]] task<db_stream_result> query_stream(std::string_view sql, params_type&&... params) const {
         const db_value values[]{detail::make_immediate_db_parameter(std::forward<params_type>(params))...};
         return query_stream(sql, std::span<const db_value>(values));
     }
 
-    [[nodiscard]] task<db_transaction> begin_transaction(
-        db_transaction_options options = {}) const;
+    [[nodiscard]] task<db_transaction> begin_transaction(db_transaction_options options = {}) const;
     [[nodiscard]] task<void> notify(std::string_view channel, std::string_view payload = {}) const;
 
 private:
@@ -1787,39 +1721,30 @@ private:
         registration_.require_active();
         auto& scope = registration_.scope();
         auto task_value = query_and_count_task(query, count);
-        return make_scoped_operation(scope,
-            detail::map_db_query_and_count<result_type>(std::move(task_value), std::move(mapper)));
+        return make_scoped_operation(scope, detail::map_db_query_and_count<result_type>(std::move(task_value), std::move(mapper)));
     }
     template <typename result_type, typename mapper_type>
     [[nodiscard]] task<result_type> query_mapped(const db_query& query, mapper_type mapper) const {
         registration_.require_active();
         auto& scope = registration_.scope();
         auto task_value = query_task(query);
-        return make_scoped_operation(scope,
-            detail::map_db_query<result_type>(std::move(task_value), std::move(mapper)));
+        return make_scoped_operation(scope, detail::map_db_query<result_type>(std::move(task_value), std::move(mapper)));
     }
 
     // cache is nullptr when the alias has no query cache; without Redis
     // support it is always nullptr. `io_metrics` is the request's counter
     // block, or null outside a request.
-    db_session(detail::db_pool_ref_type client,
-        operation_scope& operation_scope, detail::request_io_metrics* io_metrics,
-        detail::db_query_cache_state* cache) noexcept;
+    db_session(detail::db_pool_ref_type client, operation_scope& operation_scope, detail::request_io_metrics* io_metrics, detail::db_query_cache_state* cache) noexcept;
     [[nodiscard]] detail::db_query_backend query_backend() const;
-    static task<db_stream_result> query_stream_prepared(detail::db_pool_ref_type client, std::string sql,
-        std::vector<db_value> params,
-        operation_scope& operation_scope, detail::request_io_metrics* io_metrics, operation_options options);
-    static task<db_transaction> begin_transaction_prepared(detail::db_query_backend backend,
-        operation_scope& operation_scope, operation_options operation_options,
-        db_transaction_options transaction_options);
+    static task<db_stream_result> query_stream_prepared(detail::db_pool_ref_type client, std::string sql, std::vector<db_value> params, operation_scope& operation_scope, detail::request_io_metrics* io_metrics, operation_options options);
+    static task<db_transaction> begin_transaction_prepared(detail::db_query_backend backend, operation_scope& operation_scope, operation_options operation_options, db_transaction_options transaction_options);
 
     detail::db_query_cache_state* cache_{nullptr};
     detail::db_pool_ref_type client_;
     detail::request_io_metrics* io_metrics_{nullptr};
     operation_options options_;
     friend class detail::worker_client_registry_view;
-    [[nodiscard]] db_session bind_caller_scope(::ruvia::operation_scope& scope,
-        detail::request_io_metrics* io_metrics, const stop_token& stop_token_value) &&;
+    [[nodiscard]] db_session bind_caller_scope(::ruvia::operation_scope& scope, detail::request_io_metrics* io_metrics, const stop_token& stop_token_value) &&;
     static void expire_capability(void* target) noexcept;
     scoped_capability_registration registration_;
 };
@@ -1834,8 +1759,7 @@ public:
 #ifdef RUVIA_ENABLE_REDIS
     // Cache operations borrow an existing Redis capability on the same worker.
     // Connect Redis first and shut this client down before its Redis owner.
-    db_client(event_loop loop, const db_config& config, const redis_session& cache_store,
-        const db_cache_config& cache_policy);
+    db_client(event_loop loop, const db_config& config, const redis_session& cache_store, const db_cache_config& cache_policy);
 #endif
     ~db_client();
 

@@ -77,8 +77,8 @@ public:
     private:
         friend class task_scope;
 
-        explicit join_operation(task_scope& scope) noexcept
-            : scope_(&scope) {}
+        explicit join_operation(task_scope& scope) noexcept :
+            scope_(&scope) {}
 
         task_scope* scope_;
         bool started_{false};
@@ -98,8 +98,8 @@ private:
     struct task_scope_open_type final {};
     class task_scope_joining_type final {
     public:
-        explicit task_scope_joining_type(std::coroutine_handle<> continuation) noexcept
-            : continuation_(continuation) {}
+        explicit task_scope_joining_type(std::coroutine_handle<> continuation) noexcept :
+            continuation_(continuation) {}
 
         [[nodiscard]] std::coroutine_handle<> continuation() const noexcept {
             return continuation_;
@@ -205,8 +205,7 @@ private:
 class scoped_capability_registration final {
 public:
     scoped_capability_registration() noexcept = default;
-    scoped_capability_registration(operation_scope& scope, void* target,
-        void (*cleanup)(void*) noexcept) noexcept;
+    scoped_capability_registration(operation_scope& scope, void* target, void (*cleanup)(void*) noexcept) noexcept;
     scoped_capability_registration(const scoped_capability_registration& other, void* target) noexcept;
     scoped_capability_registration(scoped_capability_registration&& other, void* target) noexcept;
     ~scoped_capability_registration();
@@ -235,8 +234,7 @@ private:
 };
 
 template <typename t_type>
-[[nodiscard]] task<t_type> make_scoped_operation(
-    operation_scope& scope, task<t_type> task_value) {
+[[nodiscard]] task<t_type> make_scoped_operation(operation_scope& scope, task<t_type> task_value) {
     task_value.bind_scope(scope);
     return task_value;
 }
@@ -260,8 +258,8 @@ public:
         wait_operation(const wait_operation&) = delete;
         wait_operation& operator=(const wait_operation&) = delete;
         // Only a cold operation may move; a linked waiter must stay address-stable.
-        wait_operation(wait_operation&& other) noexcept
-            : signal_(std::exchange(other.signal_, nullptr)) {
+        wait_operation(wait_operation&& other) noexcept :
+            signal_(std::exchange(other.signal_, nullptr)) {
             if (other.started_) {
                 std::terminate();
             }
@@ -304,8 +302,8 @@ public:
         }
 
     private:
-        explicit wait_operation(worker_signal& signal) noexcept
-            : signal_(&signal) {
+        explicit wait_operation(worker_signal& signal) noexcept :
+            signal_(&signal) {
             ++signal.reserved_waits_;
         }
         void release_reservation() noexcept {
@@ -326,8 +324,8 @@ private:
     using awaiter_type = wait_operation;
 
 public:
-    explicit worker_signal(const worker_ref& worker_value)
-        : worker_(require_worker(worker_value)) {}
+    explicit worker_signal(const worker_ref& worker_value) :
+        worker_(require_worker(worker_value)) {}
     worker_signal(worker_ref&&) = delete;
     worker_signal(const worker_ref&&) = delete;
 
@@ -402,16 +400,15 @@ inline void worker_signal::notify() {
         // A detached intrusive node has no recoverable owner. Dispatch failure
         // is terminal instead of silently stranding the continuation. On the
         // worker's own thread this small fixed callable is posted directly.
-        detail::worker_ref_access::defer_or_terminate(
-            worker_, [this, waiter, continuation] { resume_scheduled(waiter, continuation); });
+        detail::worker_ref_access::defer_or_terminate(worker_, [this, waiter, continuation] {
+            resume_scheduled(waiter, continuation);
+        });
         waiter = next_value;
     }
 }
 
-inline void worker_signal::resume_scheduled(
-    awaiter_type* waiter, std::coroutine_handle<> continuation) noexcept {
-    if (!worker_.is_current() || waiter->state_ != await_state_type::scheduled ||
-        waiter->continuation_ != continuation || scheduled_waiters_ == 0) {
+inline void worker_signal::resume_scheduled(awaiter_type* waiter, std::coroutine_handle<> continuation) noexcept {
+    if (!worker_.is_current() || waiter->state_ != await_state_type::scheduled || waiter->continuation_ != continuation || scheduled_waiters_ == 0) {
         std::terminate();
     }
     --scheduled_waiters_;
@@ -459,16 +456,12 @@ class sleep_operation;
 // completes or is dropped cold. This is the same borrow-only boundary the
 // request hot path applies everywhere else; a temporary worker_ref would dangle in
 // the cold operation.
-[[nodiscard]] sleep_operation sleep_for(
-    const worker_ref& worker_value, timeout_duration duration, stop_token stop_token_value = {});
+[[nodiscard]] sleep_operation sleep_for(const worker_ref& worker_value, timeout_duration duration, stop_token stop_token_value = {});
 sleep_operation sleep_for(worker_ref&&, timeout_duration, stop_token = {}) = delete;
 sleep_operation sleep_for(const worker_ref&&, timeout_duration, stop_token = {}) = delete;
-[[nodiscard]] sleep_operation sleep_until(const worker_ref& worker_value,
-    std::chrono::steady_clock::time_point deadline, stop_token stop_token_value = {});
-sleep_operation sleep_until(
-    worker_ref&&, std::chrono::steady_clock::time_point, stop_token = {}) = delete;
-sleep_operation sleep_until(
-    const worker_ref&&, std::chrono::steady_clock::time_point, stop_token = {}) = delete;
+[[nodiscard]] sleep_operation sleep_until(const worker_ref& worker_value, std::chrono::steady_clock::time_point deadline, stop_token stop_token_value = {});
+sleep_operation sleep_until(worker_ref&&, std::chrono::steady_clock::time_point, stop_token = {}) = delete;
+sleep_operation sleep_until(const worker_ref&&, std::chrono::steady_clock::time_point, stop_token = {}) = delete;
 
 // One sleep on the caller's worker: single-use, movable only before it is
 // awaited, and started on the borrowed worker by co_await. An empty stop token
@@ -488,20 +481,17 @@ public:
 
 private:
     friend sleep_operation sleep_for(const worker_ref&, timeout_duration, stop_token);
-    friend sleep_operation sleep_until(
-        const worker_ref&, std::chrono::steady_clock::time_point, stop_token);
+    friend sleep_operation sleep_until(const worker_ref&, std::chrono::steady_clock::time_point, stop_token);
 
-    sleep_operation(const worker_ref& worker_value, timeout_duration duration,
-        stop_token stop_token_value) noexcept
-        : worker_(&worker_value),
-          target_(duration),
-          stop_token_(std::move(stop_token_value)) {}
+    sleep_operation(const worker_ref& worker_value, timeout_duration duration, stop_token stop_token_value) noexcept :
+        worker_(&worker_value),
+        target_(duration),
+        stop_token_(std::move(stop_token_value)) {}
 
-    sleep_operation(const worker_ref& worker_value, std::chrono::steady_clock::time_point deadline,
-        stop_token stop_token_value) noexcept
-        : worker_(&worker_value),
-          target_(deadline),
-          stop_token_(std::move(stop_token_value)) {}
+    sleep_operation(const worker_ref& worker_value, std::chrono::steady_clock::time_point deadline, stop_token stop_token_value) noexcept :
+        worker_(&worker_value),
+        target_(deadline),
+        stop_token_(std::move(stop_token_value)) {}
 
     const worker_ref* worker_;
     std::variant<timeout_duration, std::chrono::steady_clock::time_point> target_;

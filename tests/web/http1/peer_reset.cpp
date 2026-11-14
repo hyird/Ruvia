@@ -128,7 +128,9 @@ void send_and_reset(asio::io_context& io, const asio::ip::tcp::endpoint& endpoin
 }
 
 void wait_until_idle(ruvia::application& app) {
-    ruvia::test::wait_until([&app] { return app.stats().active_connections_ == 0; }, 10s);
+    ruvia::test::wait_until([&app] {
+        return app.stats().active_connections_ == 0;
+    }, 10s);
 }
 
 // Reads until the server closes the connection.
@@ -147,10 +149,9 @@ TEST(Ruvia, a_peer_reset_during_a_handlers_transport_write_is_a_normal_connectio
 
     auto& app = ruvia::app();
     static std::binary_semaphore started{0};
-    app.server({.worker_count_ = 1, .idle_timeout_ = idle_timeout, .connection_scan_interval_ = 5ms})
-        .listen({.address_ = "127.0.0.1", .http_ = endpoint.port()})
-        .on_error(&count_error)
-        .on_start([] { started.release(); });
+    app.server({.worker_count_ = 1, .idle_timeout_ = idle_timeout, .connection_scan_interval_ = 5ms}).listen({.address_ = "127.0.0.1", .http_ = endpoint.port()}).on_error(&count_error).on_start([] {
+        started.release();
+    });
     ruvia::test::app_run runner(app);
     const bool ready = started.try_acquire_for(10s);
     EXPECT_TRUE(ready);
@@ -161,8 +162,7 @@ TEST(Ruvia, a_peer_reset_during_a_handlers_transport_write_is_a_normal_connectio
         EXPECT_EQ(app.stats().active_connections_, std::size_t{0});
 
         peer_closed.store(false);
-        send_and_reset(io, endpoint,
-            "POST /peer-reset/body HTTP/1.1\r\nHost: localhost\r\nContent-Length: 4\r\nExpect: 100-continue\r\n\r\n");
+        send_and_reset(io, endpoint, "POST /peer-reset/body HTTP/1.1\r\nHost: localhost\r\nContent-Length: 4\r\nExpect: 100-continue\r\n\r\n");
         peer_closed.store(true);
         wait_until_idle(app);
         EXPECT_EQ(app.stats().active_connections_, std::size_t{0});

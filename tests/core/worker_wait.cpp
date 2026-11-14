@@ -38,9 +38,9 @@ namespace ruvia::test::worker_wait_tests {
 // blocks: the shared state owns the wait slot and its shutdown registration,
 // and each acquire owns a worker_single_wait_awaiter.
 struct semaphore_state final {
-    semaphore_state(worker_ref worker_value, std::size_t permits) noexcept
-        : worker_(std::move(worker_value)),
-          permits_(permits) {}
+    semaphore_state(worker_ref worker_value, std::size_t permits) noexcept :
+        worker_(std::move(worker_value)),
+        permits_(permits) {}
 
     [[nodiscard]] const worker_ref& worker() const noexcept {
         return worker_;
@@ -118,14 +118,14 @@ public:
     private:
         friend class worker_semaphore;
 
-        acquire_operation(std::shared_ptr<semaphore_state> state_value, operation_options options) noexcept
-            : wait_(std::move(state_value), std::move(options)) {}
+        acquire_operation(std::shared_ptr<semaphore_state> state_value, operation_options options) noexcept :
+            wait_(std::move(state_value), std::move(options)) {}
 
         worker_single_wait_awaiter<std::monostate, semaphore_state> wait_;
     };
 
-    worker_semaphore(const worker_ref& worker_value, std::size_t permits)
-        : state_(make_worker_wait_state<semaphore_state>(worker_value, permits)) {}
+    worker_semaphore(const worker_ref& worker_value, std::size_t permits) :
+        state_(make_worker_wait_state<semaphore_state>(worker_value, permits)) {}
 
     [[nodiscard]] acquire_operation acquire(operation_options options = {}) {
         return acquire_operation(state_, std::move(options));
@@ -154,8 +154,7 @@ struct semaphore_outcomes final {
     bool released_{false};
 };
 
-task<void> exercise_semaphore(
-    const worker_ref& worker_value, std::binary_semaphore& released, semaphore_outcomes& outcomes) {
+task<void> exercise_semaphore(const worker_ref& worker_value, std::binary_semaphore& released, semaphore_outcomes& outcomes) {
     worker_semaphore semaphore(worker_value, 1);
     outcomes.permit_ = (co_await semaphore.acquire()).has_value();
     try {
@@ -163,30 +162,31 @@ task<void> exercise_semaphore(
     } catch (const std::invalid_argument&) {
         outcomes.nonpositive_rejected_ = true;
     }
-    outcomes.timed_out_ =
-        (co_await semaphore.acquire({.timeout_ = std::chrono::milliseconds(5)})).status() == worker_wait_status::timed_out;
-    outcomes.deadline_passed_ =
-        (co_await semaphore.acquire({.timeout_ = operation_timeout(std::chrono::steady_clock::time_point{})})).status() ==
-        worker_wait_status::timed_out;
+    outcomes.timed_out_ = (co_await semaphore.acquire({.timeout_ = std::chrono::milliseconds(5)})).status() == worker_wait_status::timed_out;
+    outcomes.deadline_passed_ = (co_await semaphore.acquire({.timeout_ = operation_timeout(std::chrono::steady_clock::time_point{})})).status() == worker_wait_status::timed_out;
 
     stop_source source;
-    static_cast<void>(worker_value.post([&source] { source.request_stop(); }));
-    outcomes.cancelled_ =
-        (co_await semaphore.acquire({.timeout_ = std::chrono::seconds(30), .stop_token_ = source.token()})).status() ==
-        worker_wait_status::cancelled;
+    static_cast<void>(worker_value.post([&source] {
+        source.request_stop();
+    }));
+    outcomes.cancelled_ = (co_await semaphore.acquire({.timeout_ = std::chrono::seconds(30), .stop_token_ = source.token()})).status() == worker_wait_status::cancelled;
 
     std::thread releaser([&] {
         released.acquire();
         semaphore.release();
     });
-    static_cast<void>(worker_value.post([&released] { released.release(); }));
+    static_cast<void>(worker_value.post([&released] {
+        released.release();
+    }));
     const auto handed_off = co_await semaphore.acquire({.timeout_ = std::chrono::seconds(30)});
     releaser.join();
     outcomes.released_ = handed_off.has_value();
 }
 
 task<void> wait_through_stop(event_loop_attachment& attachment, worker_semaphore& semaphore, bool& stopping) {
-    asio::post(attachment.loop().executor(), [&attachment] { attachment.stop(); });
+    asio::post(attachment.loop().executor(), [&attachment] {
+        attachment.stop();
+    });
     stopping = (co_await semaphore.acquire()).status() == worker_wait_status::worker_stopping;
 }
 
@@ -236,23 +236,18 @@ TEST(Ruvia, WorkerShutdownRegistrationRunsBothPhasesOnce) {
         asio::io_context io_context;
         auto attachment = attach_event_loop(io_context, {.queue_capacity_ = 8});
         const auto worker_value = attachment.loop().worker();
-        EXPECT_EQ(worker_value.register_shutdown(observer, &counting_observer::registration_),
-            worker_registration_status::registered);
-        EXPECT_THROW(static_cast<void>(worker_value.register_shutdown(observer, &counting_observer::registration_)),
-            std::logic_error);
-        EXPECT_EQ(worker_value.register_shutdown(dropped, &counting_observer::registration_),
-            worker_registration_status::registered);
+        EXPECT_EQ(worker_value.register_shutdown(observer, &counting_observer::registration_), worker_registration_status::registered);
+        EXPECT_THROW(static_cast<void>(worker_value.register_shutdown(observer, &counting_observer::registration_)), std::logic_error);
+        EXPECT_EQ(worker_value.register_shutdown(dropped, &counting_observer::registration_), worker_registration_status::registered);
         // Destroying the owner unlinks it before the worker stops.
         dropped.reset();
         attachment.stop();
         io_context.run();
-        EXPECT_EQ(worker_value.register_shutdown(std::make_shared<counting_observer>(), &counting_observer::registration_),
-            worker_registration_status::worker_stopping);
+        EXPECT_EQ(worker_value.register_shutdown(std::make_shared<counting_observer>(), &counting_observer::registration_), worker_registration_status::worker_stopping);
     }
     EXPECT_EQ(observer->stopping_, 1);
     EXPECT_TRUE(observer->complete_after_stopping_);
-    EXPECT_EQ(worker_ref{}.register_shutdown(observer, &counting_observer::registration_),
-        worker_registration_status::worker_stopping);
+    EXPECT_EQ(worker_ref{}.register_shutdown(observer, &counting_observer::registration_), worker_registration_status::worker_stopping);
 }
 
 TEST(Ruvia, WorkerCompletionLaneBypassesFullQueue) {
@@ -260,9 +255,18 @@ TEST(Ruvia, WorkerCompletionLaneBypassesFullQueue) {
     auto attachment = attach_event_loop(io_context, {.queue_capacity_ = 1});
     const auto worker_value = attachment.loop().worker();
     int ran = 0;
-    ASSERT_TRUE(worker_value.post([&ran] { ++ran; }).accepted());
-    ASSERT_EQ(worker_value.post([&ran] { ++ran; }).status(), post_status::queue_full);
-    EXPECT_TRUE(worker_value.defer_completion([&ran] { ran += 10; }));
+    ASSERT_TRUE(worker_value
+            .post([&ran] {
+        ++ran;
+    }).accepted());
+    ASSERT_EQ(worker_value
+                  .post([&ran] {
+        ++ran;
+    }).status(),
+        post_status::queue_full);
+    EXPECT_TRUE(worker_value.defer_completion([&ran] {
+        ran += 10;
+    }));
     EXPECT_THROW(static_cast<void>(worker_value.defer_completion(move_only_function<void()>{})), std::invalid_argument);
     io_context.run_one();
     io_context.poll();
@@ -273,10 +277,10 @@ TEST(Ruvia, WorkerCompletionLaneBypassesFullQueue) {
     struct destruction_flag final {
         bool* destroyed_;
         destruction_flag(const destruction_flag&) = delete;
-        destruction_flag(destruction_flag&& other) noexcept
-            : destroyed_(std::exchange(other.destroyed_, nullptr)) {}
-        explicit destruction_flag(bool& destroyed) noexcept
-            : destroyed_(&destroyed) {}
+        destruction_flag(destruction_flag&& other) noexcept :
+            destroyed_(std::exchange(other.destroyed_, nullptr)) {}
+        explicit destruction_flag(bool& destroyed) noexcept :
+            destroyed_(&destroyed) {}
         ~destruction_flag() {
             if (destroyed_ != nullptr) {
                 *destroyed_ = true;
@@ -328,13 +332,13 @@ struct payload_state final {
 
 struct payload final {
     payload() = default;
-    explicit payload(payload_state& state)
-        : value_(std::make_unique<int>(42)),
-          state_(&state) {}
+    explicit payload(payload_state& state) :
+        value_(std::make_unique<int>(42)),
+        state_(&state) {}
     payload(const payload&) = delete;
     payload& operator=(const payload&) = delete;
-    payload(payload&& other)
-        : state_(other.state_) {
+    payload(payload&& other) :
+        state_(other.state_) {
         if (state_ != nullptr) {
             if (state_->query_on_move_) {
                 state_->reenter_();
@@ -373,8 +377,7 @@ task<void> exercise_payload_retirement(worker_ref worker, bool& success) {
             state.query_on_move_ = true;
             {
                 const auto result = co_await receiver.wait();
-                if (!result.has_value() || *result.value().value_ != 42 ||
-                    observed != one_shot_complete_status::already_completed) {
+                if (!result.has_value() || *result.value().value_ != 42 || observed != one_shot_complete_status::already_completed) {
                     co_return;
                 }
             }
@@ -392,7 +395,9 @@ task<void> exercise_payload_retirement(worker_ref worker, bool& success) {
     {
         payload_state state;
         auto [completion, receiver] = make_one_shot<payload>(worker);
-        state.reenter_ = [&] { receiver.close(); };
+        state.reenter_ = [&] {
+            receiver.close();
+        };
         if (!completion.complete(payload(state)).accepted()) {
             co_return;
         }
@@ -404,22 +409,21 @@ task<void> exercise_payload_retirement(worker_ref worker, bool& success) {
             failed = true;
         }
         state.throw_on_move_ = false;
-        if (!failed || state.destroyed_ != 1 ||
-            (co_await receiver.wait()).status() != worker_wait_status::closed) {
+        if (!failed || state.destroyed_ != 1 || (co_await receiver.wait()).status() != worker_wait_status::closed) {
             co_return;
         }
     }
     {
         payload_state state;
         auto [completion, receiver] = make_one_shot<payload>(worker);
-        state.reenter_ = [&] { receiver.close(); };
+        state.reenter_ = [&] {
+            receiver.close();
+        };
         receiver.close();
         state.query_on_move_ = true;
         {
             auto rejected = completion.complete(payload(state));
-            if (rejected != one_shot_complete_status::receiver_closed ||
-                rejected == one_shot_complete_status::completed ||
-                rejected.rejected() == nullptr || !rejected.rejected()->value_) {
+            if (rejected != one_shot_complete_status::receiver_closed || rejected == one_shot_complete_status::completed || rejected.rejected() == nullptr || !rejected.rejected()->value_) {
                 co_return;
             }
             auto taken = std::move(rejected).take_rejected();
@@ -469,10 +473,7 @@ bool test_completion_move_can_close_receiver(bool stop_worker) {
     {
         const auto result = completion.complete(payload(state));
         closer.join();
-        rejected = result.status() == (stop_worker ? one_shot_complete_status::worker_stopping
-                                                   : one_shot_complete_status::receiver_closed) &&
-                   result.rejected() != nullptr && result.rejected()->value_ &&
-                   *result.rejected()->value_ == 42;
+        rejected = result.status() == (stop_worker ? one_shot_complete_status::worker_stopping : one_shot_complete_status::receiver_closed) && result.rejected() != nullptr && result.rejected()->value_ && *result.rejected()->value_ == 42;
     }
     receiver.close();
     return rejected && closed_during_move && state.destroyed_ == 1;
@@ -527,8 +528,7 @@ bool test_concurrent_completion_reservation(bool throw_first) {
     }
     bool received = false;
     ruvia::test::run_worker_tasks(attachment, verify_payload_value(receiver, received));
-    return concurrent && second_status == one_shot_complete_status::in_progress &&
-           first_completed == !throw_first && first_failed == throw_first && retried && received;
+    return concurrent && second_status == one_shot_complete_status::in_progress && first_completed == !throw_first && first_failed == throw_first && retried && received;
 }
 
 task<void> wait_for_cancellation(one_shot_receiver<payload>& receiver, stop_token token, bool& cancelled) {
@@ -551,7 +551,9 @@ task<void> exercise_cancellation_during_completion(worker_ref worker, bool& succ
         }
     };
     bool completed = false;
-    std::thread producer([&] { completed = completion.complete(payload(state)).accepted(); });
+    std::thread producer([&] {
+        completed = completion.complete(payload(state)).accepted();
+    });
     entered.acquire();
     bool cancellation_won = false;
     std::thread release([&] {
@@ -571,8 +573,7 @@ task<void> exercise_cancellation_during_completion(worker_ref worker, bool& succ
     }
     co_await scope.join();
     const auto result = co_await receiver.wait();
-    success = cancellation_won && cancelled && completed && result.has_value() &&
-              result.value().value_ && *result.value().value_ == 42;
+    success = cancellation_won && cancelled && completed && result.has_value() && result.value().value_ && *result.value().value_ == 42;
 }
 
 }  // namespace ruvia::test::one_shot_tests
@@ -581,8 +582,8 @@ namespace {
 
 class throwing_move final {
 public:
-    explicit throwing_move(int value) noexcept
-        : value_(value) {}
+    explicit throwing_move(int value) noexcept :
+        value_(value) {}
 
     throwing_move(const throwing_move&) = delete;
     throwing_move& operator=(const throwing_move&) = delete;
@@ -606,21 +607,18 @@ private:
 
 ruvia::task<void> wait_for_value(ruvia::one_shot_receiver<int>& receiver, int expected, bool& success) {
     const auto result_value = co_await receiver.wait({.timeout_ = std::chrono::seconds(1)});
-    success = result_value.status() == ruvia::worker_wait_status::value && result_value.has_value() &&
-              result_value.value() == expected;
+    success = result_value.status() == ruvia::worker_wait_status::value && result_value.has_value() && result_value.value() == expected;
 }
 
-ruvia::task<void> wait_for_worker_stopping(ruvia::event_loop_attachment& attachment,
-    ruvia::one_shot_receiver<int>& receiver, bool& success) {
-    asio::post(attachment.loop().executor(), [&attachment] { attachment.stop(); });
+ruvia::task<void> wait_for_worker_stopping(ruvia::event_loop_attachment& attachment, ruvia::one_shot_receiver<int>& receiver, bool& success) {
+    asio::post(attachment.loop().executor(), [&attachment] {
+        attachment.stop();
+    });
     const auto result_value = co_await receiver.wait();
     success = result_value.status() == ruvia::worker_wait_status::worker_stopping && !result_value.has_value();
 }
 
-ruvia::task<void> settled_outcomes_survive_worker_stopping(ruvia::event_loop_attachment& attachment,
-    ruvia::one_shot_completion<int> delivered_completion, ruvia::one_shot_receiver<int>& delivered_receiver,
-    ruvia::one_shot_completion<int> closed_completion, ruvia::one_shot_receiver<int>& closed_receiver,
-    bool& success) {
+ruvia::task<void> settled_outcomes_survive_worker_stopping(ruvia::event_loop_attachment& attachment, ruvia::one_shot_completion<int> delivered_completion, ruvia::one_shot_receiver<int>& delivered_receiver, ruvia::one_shot_completion<int> closed_completion, ruvia::one_shot_receiver<int>& closed_receiver, bool& success) {
     const bool completed = delivered_completion.complete(1).accepted();
     const auto delivered = co_await delivered_receiver.wait();
     closed_receiver.close();
@@ -628,10 +626,7 @@ ruvia::task<void> settled_outcomes_survive_worker_stopping(ruvia::event_loop_att
     const auto duplicate = delivered_completion.complete(2);
     const auto after_consumed = co_await delivered_receiver.wait();
     const auto after_close = closed_completion.complete(3);
-    success = completed && delivered.has_value() && delivered.value() == 1 &&
-              duplicate.status() == ruvia::one_shot_complete_status::already_completed &&
-              after_consumed.status() == ruvia::worker_wait_status::closed &&
-              after_close.status() == ruvia::one_shot_complete_status::receiver_closed;
+    success = completed && delivered.has_value() && delivered.value() == 1 && duplicate.status() == ruvia::one_shot_complete_status::already_completed && after_consumed.status() == ruvia::worker_wait_status::closed && after_close.status() == ruvia::one_shot_complete_status::receiver_closed;
 }
 
 ruvia::task<void> wait_until_closed(ruvia::one_shot_receiver<int>& receiver, bool& success) {
@@ -639,8 +634,7 @@ ruvia::task<void> wait_until_closed(ruvia::one_shot_receiver<int>& receiver, boo
     success = result_value.status() == ruvia::worker_wait_status::closed;
 }
 
-ruvia::one_shot_receiver<int>::wait_operation make_cold_wait_after_receiver_close(
-    ruvia::worker_ref worker_value, bool timed, bool completed = false) {
+ruvia::one_shot_receiver<int>::wait_operation make_cold_wait_after_receiver_close(ruvia::worker_ref worker_value, bool timed, bool completed = false) {
     auto [completion, receiver] = ruvia::make_one_shot<int>(std::move(worker_value));
     if (completed) {
         static_cast<void>(completion.complete(7));
@@ -651,18 +645,12 @@ ruvia::one_shot_receiver<int>::wait_operation make_cold_wait_after_receiver_clos
     return receiver.wait();
 }
 
-ruvia::task<void> verify_cold_wait_operations(ruvia::one_shot_receiver<int>::wait_operation wait,
-    ruvia::one_shot_receiver<int>::wait_operation timed_wait,
-    ruvia::one_shot_receiver<int>::wait_operation completed_wait,
-    ruvia::one_shot_receiver<int>::wait_operation completed_timed_wait, bool& success) {
+ruvia::task<void> verify_cold_wait_operations(ruvia::one_shot_receiver<int>::wait_operation wait, ruvia::one_shot_receiver<int>::wait_operation timed_wait, ruvia::one_shot_receiver<int>::wait_operation completed_wait, ruvia::one_shot_receiver<int>::wait_operation completed_timed_wait, bool& success) {
     const auto cold_closed = co_await std::move(wait);
     const auto timed_cold_closed = co_await std::move(timed_wait);
     const auto completed_cold_closed = co_await std::move(completed_wait);
     const auto completed_timed_cold_closed = co_await std::move(completed_timed_wait);
-    success = cold_closed.status() == ruvia::worker_wait_status::closed &&
-              timed_cold_closed.status() == ruvia::worker_wait_status::closed &&
-              completed_cold_closed.status() == ruvia::worker_wait_status::closed &&
-              completed_timed_cold_closed.status() == ruvia::worker_wait_status::closed;
+    success = cold_closed.status() == ruvia::worker_wait_status::closed && timed_cold_closed.status() == ruvia::worker_wait_status::closed && completed_cold_closed.status() == ruvia::worker_wait_status::closed && completed_timed_cold_closed.status() == ruvia::worker_wait_status::closed;
 }
 
 ruvia::task<void> exercise(ruvia::worker_ref worker_value, bool& success) {
@@ -689,9 +677,7 @@ ruvia::task<void> exercise(ruvia::worker_ref worker_value, bool& success) {
         auto [completion, receiver] = ruvia::make_one_shot<int>(worker_value);
         const auto completed = completion.complete(7);
         const auto duplicate = completion.complete(8);
-        if (!completed.accepted() ||
-            duplicate.status() != ruvia::one_shot_complete_status::already_completed ||
-            duplicate.rejected() == nullptr || *duplicate.rejected() != 8) {
+        if (!completed.accepted() || duplicate.status() != ruvia::one_shot_complete_status::already_completed || duplicate.rejected() == nullptr || *duplicate.rejected() != 8) {
             co_return;
         }
         const auto result_value = co_await receiver.wait();
@@ -703,8 +689,7 @@ ruvia::task<void> exercise(ruvia::worker_ref worker_value, bool& success) {
     {
         auto [completion, receiver] = ruvia::make_one_shot<int>(worker_value);
         const auto timeout = co_await receiver.wait({.timeout_ = std::chrono::milliseconds(1)});
-        if (timeout.status() != ruvia::worker_wait_status::timed_out ||
-            !completion.complete(9).accepted()) {
+        if (timeout.status() != ruvia::worker_wait_status::timed_out || !completion.complete(9).accepted()) {
             co_return;
         }
         const auto late = co_await receiver.wait();
@@ -716,10 +701,11 @@ ruvia::task<void> exercise(ruvia::worker_ref worker_value, bool& success) {
     {
         ruvia::stop_source source;
         auto [completion, receiver] = ruvia::make_one_shot<int>(worker_value);
-        static_cast<void>(worker_value.post([&source] { source.request_stop(); }));
+        static_cast<void>(worker_value.post([&source] {
+            source.request_stop();
+        }));
         const auto cancelled = co_await receiver.wait({.timeout_ = std::chrono::seconds(1), .stop_token_ = source.token()});
-        if (cancelled.status() != ruvia::worker_wait_status::cancelled ||
-            !completion.complete(11).accepted()) {
+        if (cancelled.status() != ruvia::worker_wait_status::cancelled || !completion.complete(11).accepted()) {
             co_return;
         }
         const auto late = co_await receiver.wait();
@@ -754,8 +740,7 @@ ruvia::task<void> exercise(ruvia::worker_ref worker_value, bool& success) {
         source.request_stop();
         auto [completion, receiver] = ruvia::make_one_shot<int>(worker_value);
         const auto cancelled = co_await receiver.wait({.timeout_ = std::chrono::seconds(1), .stop_token_ = source.token()});
-        if (cancelled.status() != ruvia::worker_wait_status::cancelled ||
-            !completion.complete(12).accepted()) {
+        if (cancelled.status() != ruvia::worker_wait_status::cancelled || !completion.complete(12).accepted()) {
             co_return;
         }
         const auto late = co_await receiver.wait();
@@ -769,9 +754,7 @@ ruvia::task<void> exercise(ruvia::worker_ref worker_value, bool& success) {
         receiver.close();
         const auto closed = co_await receiver.wait();
         const auto rejected = completion.complete(10);
-        if (closed.status() != ruvia::worker_wait_status::closed ||
-            rejected.status() != ruvia::one_shot_complete_status::receiver_closed ||
-            rejected.rejected() == nullptr || *rejected.rejected() != 10) {
+        if (closed.status() != ruvia::worker_wait_status::closed || rejected.status() != ruvia::one_shot_complete_status::receiver_closed || rejected.rejected() == nullptr || *rejected.rejected() != 10) {
             co_return;
         }
     }
@@ -790,9 +773,7 @@ ruvia::task<void> exercise(ruvia::worker_ref worker_value, bool& success) {
         }
         const auto closed = co_await std::move(wait);
         const auto rejected = completion.complete(std::make_shared<int>(15));
-        if (closed.status() != ruvia::worker_wait_status::closed || closed.has_value() ||
-            rejected.status() != ruvia::one_shot_complete_status::receiver_closed ||
-            rejected.rejected() == nullptr || **rejected.rejected() != 15) {
+        if (closed.status() != ruvia::worker_wait_status::closed || closed.has_value() || rejected.status() != ruvia::one_shot_complete_status::receiver_closed || rejected.rejected() == nullptr || **rejected.rejected() != 15) {
             co_return;
         }
     }
@@ -810,8 +791,7 @@ ruvia::task<void> exercise(ruvia::worker_ref worker_value, bool& success) {
         }
         receiver.close();
         co_await scope.join();
-        if (!pending_closed || !duplicate_rejected ||
-            completion.complete(13).status() != ruvia::one_shot_complete_status::receiver_closed) {
+        if (!pending_closed || !duplicate_rejected || completion.complete(13).status() != ruvia::one_shot_complete_status::receiver_closed) {
             co_return;
         }
     }
@@ -847,12 +827,7 @@ TEST(Ruvia, OneShotLifecycle) {
         auto timed_cold_wait = make_cold_wait_after_receiver_close(worker_value, true);
         auto completed_cold_wait = make_cold_wait_after_receiver_close(worker_value, false, true);
         auto completed_timed_cold_wait = make_cold_wait_after_receiver_close(worker_value, true, true);
-        ruvia::test::run_worker_tasks(attachment, exercise(worker_value, success),
-            verify_cold_wait_operations(std::move(cold_wait), std::move(timed_cold_wait),
-                std::move(completed_cold_wait), std::move(completed_timed_cold_wait),
-                cold_wait_operations_safe),
-            ruvia::test::one_shot_tests::exercise_payload_retirement(worker_value, payload_retirement_safe),
-            ruvia::test::one_shot_tests::exercise_cancellation_during_completion(worker_value, cancellation_during_completion));
+        ruvia::test::run_worker_tasks(attachment, exercise(worker_value, success), verify_cold_wait_operations(std::move(cold_wait), std::move(timed_cold_wait), std::move(completed_cold_wait), std::move(completed_timed_cold_wait), cold_wait_operations_safe), ruvia::test::one_shot_tests::exercise_payload_retirement(worker_value, payload_retirement_safe), ruvia::test::one_shot_tests::exercise_cancellation_during_completion(worker_value, cancellation_during_completion));
     }
 
     bool worker_stopping = false;
@@ -871,9 +846,7 @@ TEST(Ruvia, OneShotLifecycle) {
         const auto worker_value = attachment.loop().worker();
         auto [delivered_completion, delivered_receiver] = ruvia::make_one_shot<int>(worker_value);
         auto [closed_completion, closed_receiver] = ruvia::make_one_shot<int>(worker_value);
-        ruvia::test::run_worker_tasks(attachment,
-            settled_outcomes_survive_worker_stopping(attachment, std::move(delivered_completion), delivered_receiver,
-                std::move(closed_completion), closed_receiver, settled_outcomes_kept));
+        ruvia::test::run_worker_tasks(attachment, settled_outcomes_survive_worker_stopping(attachment, std::move(delivered_completion), delivered_receiver, std::move(closed_completion), closed_receiver, settled_outcomes_kept));
     }
 
     bool cross_thread_value = false;
@@ -884,7 +857,9 @@ TEST(Ruvia, OneShotLifecycle) {
         const auto worker_value = attachment.loop().worker();
         auto [completion, receiver] = ruvia::make_one_shot<int>(worker_value);
         std::binary_semaphore receiver_scheduled{0};
-        asio::post(io_context, [&receiver_scheduled] { receiver_scheduled.release(); });
+        asio::post(io_context, [&receiver_scheduled] {
+            receiver_scheduled.release();
+        });
         std::thread completer([&] {
             receiver_scheduled.acquire();
             cross_thread_completed = completion.complete(77).accepted();
@@ -1047,8 +1022,7 @@ TEST(Ruvia, WorkerDeliveryRejectedAccessBypassesPayloadAddressOperator) {
 
 namespace {
 
-ruvia::task<void> exercise_lease_and_close(
-    ruvia::pool_lease_scheduler& scheduler, asio::io_context& io_context, bool& success) {
+ruvia::task<void> exercise_lease_and_close(ruvia::pool_lease_scheduler& scheduler, asio::io_context& io_context, bool& success) {
     {
         auto discarded_cold_acquire = scheduler.acquire();
         static_cast<void>(discarded_cold_acquire);
@@ -1075,11 +1049,11 @@ ruvia::task<void> exercise_lease_and_close(
         co_return;
     }
 
-    asio::post(io_context, [&scheduler] { (void)scheduler.close(); });
+    asio::post(io_context, [&scheduler] {
+        (void)scheduler.close();
+    });
     const auto waiting_at_close = co_await scheduler.acquire();
-    if (!handoff_released ||
-        waiting_at_close.status() != ruvia::worker_wait_status::closed ||
-        !scheduler.closing() || scheduler.close()) {
+    if (!handoff_released || waiting_at_close.status() != ruvia::worker_wait_status::closed || !scheduler.closing() || scheduler.close()) {
         co_return;
     }
     scheduler.release(index);
@@ -1100,8 +1074,7 @@ ruvia::task<void> exercise_lease_and_close(
     }
 }
 
-ruvia::task<void> exercise_worker_bound_acquire_timeout(
-    ruvia::pool_lease_scheduler& scheduler, bool& success) {
+ruvia::task<void> exercise_worker_bound_acquire_timeout(ruvia::pool_lease_scheduler& scheduler, bool& success) {
     bool zero_rejected = false;
     bool negative_rejected = false;
     try {
@@ -1117,23 +1090,20 @@ ruvia::task<void> exercise_worker_bound_acquire_timeout(
     const auto passed_deadline = co_await scheduler.acquire({.timeout_ = ruvia::operation_timeout(std::chrono::steady_clock::time_point{})});
     const auto result_value = co_await scheduler.acquire({.timeout_ = std::chrono::milliseconds(1)});
     const auto deadline_value = co_await scheduler.acquire({.timeout_ = ruvia::operation_timeout(std::chrono::steady_clock::now() + std::chrono::milliseconds(1))});
-    success = zero_rejected && negative_rejected &&
-              passed_deadline.status() == ruvia::worker_wait_status::timed_out &&
-              result_value.status() == ruvia::worker_wait_status::timed_out &&
-              deadline_value.status() == ruvia::worker_wait_status::timed_out;
+    success = zero_rejected && negative_rejected && passed_deadline.status() == ruvia::worker_wait_status::timed_out && result_value.status() == ruvia::worker_wait_status::timed_out && deadline_value.status() == ruvia::worker_wait_status::timed_out;
 }
 
-ruvia::task<void> exercise_saturated_acquire_timeout(
-    ruvia::pool_lease_scheduler& scheduler, asio::io_context& io_context, bool& success) {
-    asio::post(io_context, [&scheduler] { (void)scheduler.close(); });
+ruvia::task<void> exercise_saturated_acquire_timeout(ruvia::pool_lease_scheduler& scheduler, asio::io_context& io_context, bool& success) {
+    asio::post(io_context, [&scheduler] {
+        (void)scheduler.close();
+    });
     const auto result_value = co_await scheduler.acquire({.timeout_ = std::chrono::milliseconds::max()});
     // A maximum positive timeout is effectively unbounded: its worker timer
     // must not wrap into the past and time out before the close notification.
     success = result_value.status() == ruvia::worker_wait_status::closed;
 }
 
-ruvia::task<void> exercise_acquire_cancellation(ruvia::pool_lease_scheduler& scheduler,
-    asio::io_context& io_context, const ruvia::worker_ref& worker_value, bool& success) {
+ruvia::task<void> exercise_acquire_cancellation(ruvia::pool_lease_scheduler& scheduler, asio::io_context& io_context, const ruvia::worker_ref& worker_value, bool& success) {
     ruvia::stop_source source;
     asio::post(io_context, [&scheduler, &source] {
         source.request_stop();
@@ -1145,9 +1115,7 @@ ruvia::task<void> exercise_acquire_cancellation(ruvia::pool_lease_scheduler& sch
     success = result_value.status() == ruvia::worker_wait_status::cancelled;
 }
 
-ruvia::task<void> observe_waiter(ruvia::pool_lease_scheduler& scheduler,
-    std::optional<ruvia::timeout_duration> timeout, ruvia::stop_token token,
-    std::optional<ruvia::worker_wait_status>& status) {
+ruvia::task<void> observe_waiter(ruvia::pool_lease_scheduler& scheduler, std::optional<ruvia::timeout_duration> timeout, ruvia::stop_token token, std::optional<ruvia::worker_wait_status>& status) {
     const auto result = co_await scheduler.acquire({.timeout_ = timeout, .stop_token_ = std::move(token)});
     status = result.status();
     if (result.has_value()) {
@@ -1155,16 +1123,14 @@ ruvia::task<void> observe_waiter(ruvia::pool_lease_scheduler& scheduler,
     }
 }
 
-ruvia::task<void> expire_then_release(ruvia::pool_lease_scheduler& scheduler, std::size_t slot,
-    ruvia::stop_source& cancellation, std::optional<ruvia::worker_wait_status>& status) {
+ruvia::task<void> expire_then_release(ruvia::pool_lease_scheduler& scheduler, std::size_t slot, ruvia::stop_source& cancellation, std::optional<ruvia::worker_wait_status>& status) {
     const auto result = co_await scheduler.acquire({.timeout_ = std::chrono::milliseconds(1)});
     status = result.status();
     cancellation.request_stop();
     scheduler.release(slot);
 }
 
-ruvia::task<void> exercise_timeout_between_cancel_and_release(
-    const ruvia::worker_ref& worker, bool& success) {
+ruvia::task<void> exercise_timeout_between_cancel_and_release(const ruvia::worker_ref& worker, bool& success) {
     ruvia::pool_lease_scheduler scheduler(1, worker);
     const auto held = co_await scheduler.acquire();
     if (!held.has_value()) {
@@ -1179,13 +1145,10 @@ ruvia::task<void> exercise_timeout_between_cancel_and_release(
     scope.spawn(expire_then_release(scheduler, held.value(), cancellation, timed_out));
     scope.spawn(observe_waiter(scheduler, std::chrono::seconds(30), {}, leased));
     co_await scope.join();
-    success = cancelled == ruvia::worker_wait_status::cancelled &&
-              timed_out == ruvia::worker_wait_status::timed_out &&
-              leased == ruvia::worker_wait_status::value;
+    success = cancelled == ruvia::worker_wait_status::cancelled && timed_out == ruvia::worker_wait_status::timed_out && leased == ruvia::worker_wait_status::value;
 }
 
-ruvia::task<void> exercise_passed_deadline_does_not_steal_same_turn_release(
-    const ruvia::worker_ref& worker_value, bool& success) {
+ruvia::task<void> exercise_passed_deadline_does_not_steal_same_turn_release(const ruvia::worker_ref& worker_value, bool& success) {
     ruvia::pool_lease_scheduler scheduler(1, worker_value);
     const ruvia::operation_timeout passed(std::chrono::steady_clock::time_point{});
     const ruvia::operation_timeout now(std::chrono::steady_clock::now());
@@ -1213,9 +1176,7 @@ ruvia::task<void> exercise_passed_deadline_does_not_steal_same_turn_release(
     scheduler.release(reacquired.value());
     success = zero_timed_out && negative_timed_out;
 }
-ruvia::task<void> exercise_repeated_lifecycle(ruvia::pool_lease_scheduler& scheduler,
-    asio::io_context& io_context,
-    std::optional<ruvia::worker_wait_result<std::size_t>>& retained_result, bool& success) {
+ruvia::task<void> exercise_repeated_lifecycle(ruvia::pool_lease_scheduler& scheduler, asio::io_context& io_context, std::optional<ruvia::worker_wait_result<std::size_t>>& retained_result, bool& success) {
     for (std::size_t i = 0; i < 32; ++i) {
         auto discarded_cold_acquire = scheduler.acquire();
         static_cast<void>(discarded_cold_acquire);
@@ -1241,7 +1202,9 @@ ruvia::task<void> exercise_repeated_lifecycle(ruvia::pool_lease_scheduler& sched
         }
 
         ruvia::stop_source source;
-        asio::post(io_context, [&source] { source.request_stop(); });
+        asio::post(io_context, [&source] {
+            source.request_stop();
+        });
         const auto cancelled = co_await scheduler.acquire({.stop_token_ = source.token()});
         if (cancelled.status() != ruvia::worker_wait_status::cancelled) {
             co_return;
@@ -1249,8 +1212,7 @@ ruvia::task<void> exercise_repeated_lifecycle(ruvia::pool_lease_scheduler& sched
     }
 
     scheduler.release(held.value());
-    success = retained_result.has_value() && retained_result->has_value() &&
-              retained_result->value() == held.value();
+    success = retained_result.has_value() && retained_result->has_value() && retained_result->value() == held.value();
 }
 
 ruvia::task<void> observe_timed_out_acquire(ruvia::pool_lease_acquire pending, bool& timed_out) {
@@ -1286,9 +1248,10 @@ bool test_scheduler_owns_timeout_for_lazy_acquires() {
     return success;
 }
 
-ruvia::task<void> observe_worker_acquire(ruvia::pool_lease_acquire pending,
-    const ruvia::worker_ref& worker_value, ruvia::stop_source& source, bool& cancelled) {
-    static_cast<void>(worker_value.post([&source] { source.request_stop(); }));
+ruvia::task<void> observe_worker_acquire(ruvia::pool_lease_acquire pending, const ruvia::worker_ref& worker_value, ruvia::stop_source& source, bool& cancelled) {
+    static_cast<void>(worker_value.post([&source] {
+        source.request_stop();
+    }));
     const auto result_value = co_await std::move(pending);
     cancelled = result_value.status() == ruvia::worker_wait_status::cancelled;
 }
@@ -1317,15 +1280,13 @@ bool test_scheduler_retains_worker_binding_for_lazy_acquires() {
         bool cancelled = false;
         auto prepared = std::move(*pending);
         pending.reset();
-        ruvia::test::run_worker_tasks(
-            attachment, observe_worker_acquire(std::move(prepared), worker_value, source, cancelled));
+        ruvia::test::run_worker_tasks(attachment, observe_worker_acquire(std::move(prepared), worker_value, source, cancelled));
         success = success && cancelled;
     }
     return success;
 }
 
-ruvia::task<void> exercise_repeated_test(asio::io_context& io_context,
-    const ruvia::worker_ref& worker_value, bool& success) {
+ruvia::task<void> exercise_repeated_test(asio::io_context& io_context, const ruvia::worker_ref& worker_value, bool& success) {
     std::optional<ruvia::worker_wait_result<std::size_t>> retained_result;
     {
         ruvia::pool_lease_scheduler scheduler(1, worker_value);
@@ -1344,8 +1305,7 @@ struct handoff_state final {
     bool ordered_{true};
 };
 
-task<void> release_immediately(
-    pool_lease_scheduler& scheduler, handoff_state& state, std::size_t index) {
+task<void> release_immediately(pool_lease_scheduler& scheduler, handoff_state& state, std::size_t index) {
     const auto result = co_await scheduler.acquire();
     if (!result.has_value()) {
         state.ordered_ = false;
@@ -1370,8 +1330,7 @@ task<void> exercise_long_chain(const worker_ref& worker, bool& success) {
     }
     scheduler.release(held.value());
     co_await scope.join();
-    success = state.peak_ == 1 && state.depth_ == 0 &&
-              state.completed_ == waiter_count && state.ordered_;
+    success = state.peak_ == 1 && state.depth_ == 0 && state.completed_ == waiter_count && state.ordered_;
 }
 
 task<void> exercise_committed_handoff(const worker_ref& worker, bool& success) {
@@ -1388,8 +1347,7 @@ task<void> exercise_committed_handoff(const worker_ref& worker, bool& success) {
     cancellation.request_stop();
     (void)scheduler.close();
     co_await scope.join();
-    success = handoff_deferred && handed_off == worker_wait_status::value &&
-              closed == worker_wait_status::closed;
+    success = handoff_deferred && handed_off == worker_wait_status::value && closed == worker_wait_status::closed;
 }
 
 task<void> exercise_close_defers_resumption(const worker_ref& worker, bool& success) {
@@ -1403,8 +1361,7 @@ task<void> exercise_close_defers_resumption(const worker_ref& worker, bool& succ
     // Waiters observe closure only after the closing caller's turn.
     const bool resumed_inline = first.has_value() || second.has_value();
     co_await scope.join();
-    success = closed_now && !resumed_inline && first == worker_wait_status::closed &&
-              second == worker_wait_status::closed;
+    success = closed_now && !resumed_inline && first == worker_wait_status::closed && second == worker_wait_status::closed;
 }
 
 }  // namespace ruvia::test::lease_handoff
@@ -1413,13 +1370,11 @@ namespace {
 
 // Like channel and one_shot waits, a worker that stops completes queued and
 // saturated acquires as worker_stopping, while a free slot is still leased.
-ruvia::task<void> record_acquire_status(ruvia::pool_lease_scheduler& scheduler, ruvia::operation_options options,
-    ruvia::worker_wait_status& status) {
+ruvia::task<void> record_acquire_status(ruvia::pool_lease_scheduler& scheduler, ruvia::operation_options options, ruvia::worker_wait_status& status) {
     status = (co_await scheduler.acquire(std::move(options))).status();
 }
 
-ruvia::task<void> exercise_acquire_observes_worker_stop(
-    ruvia::event_loop_attachment& attachment, const ruvia::worker_ref& worker_value, bool& success) {
+ruvia::task<void> exercise_acquire_observes_worker_stop(ruvia::event_loop_attachment& attachment, const ruvia::worker_ref& worker_value, bool& success) {
     ruvia::pool_lease_scheduler scheduler(1, worker_value);
     const auto held = co_await scheduler.acquire();
     if (!held.has_value()) {
@@ -1430,14 +1385,14 @@ ruvia::task<void> exercise_acquire_observes_worker_stop(
     ruvia::task_scope scope(worker_value);
     scope.spawn(record_acquire_status(scheduler, {}, queued));
     scope.spawn(record_acquire_status(scheduler, {.timeout_ = std::chrono::seconds(30)}, timed));
-    static_cast<void>(worker_value.post([&attachment] { attachment.stop(); }));
+    static_cast<void>(worker_value.post([&attachment] {
+        attachment.stop();
+    }));
     co_await scope.join();
     const auto saturated = co_await scheduler.acquire({.timeout_ = std::chrono::seconds(30)});
     scheduler.release(held.value());
     const auto free_slot = co_await scheduler.acquire();
-    success = queued == ruvia::worker_wait_status::worker_stopping &&
-              timed == ruvia::worker_wait_status::worker_stopping &&
-              saturated.status() == ruvia::worker_wait_status::worker_stopping && free_slot.has_value();
+    success = queued == ruvia::worker_wait_status::worker_stopping && timed == ruvia::worker_wait_status::worker_stopping && saturated.status() == ruvia::worker_wait_status::worker_stopping && free_slot.has_value();
     if (free_slot.has_value()) {
         scheduler.release(free_slot.value());
     }
@@ -1463,18 +1418,7 @@ TEST(Ruvia, PoolLeaseSchedulerLifecycle) {
     bool handoff_chain_success = false;
     bool committed_handoff_success = false;
     bool close_deferred_success = false;
-    ruvia::test::run_worker_tasks(attachment,
-        ruvia::test::lease_handoff::exercise_long_chain(worker_value, handoff_chain_success),
-        ruvia::test::lease_handoff::exercise_committed_handoff(worker_value, committed_handoff_success),
-        ruvia::test::lease_handoff::exercise_close_defers_resumption(worker_value, close_deferred_success),
-        exercise_lease_and_close(lease_scheduler, io_context, lease_success),
-        exercise_worker_bound_acquire_timeout(worker_timeout_scheduler, worker_timeout_success),
-        exercise_passed_deadline_does_not_steal_same_turn_release(
-            worker_value, nonpositive_timeout_success),
-        exercise_saturated_acquire_timeout(saturated_timeout_scheduler, io_context, saturated_timeout_success),
-        exercise_timeout_between_cancel_and_release(worker_value, mixed_waiters_success),
-        exercise_acquire_cancellation(cancellation_scheduler, io_context, worker_value, cancellation_success),
-        exercise_repeated_test(io_context, worker_value, repeated_lifecycle_success));
+    ruvia::test::run_worker_tasks(attachment, ruvia::test::lease_handoff::exercise_long_chain(worker_value, handoff_chain_success), ruvia::test::lease_handoff::exercise_committed_handoff(worker_value, committed_handoff_success), ruvia::test::lease_handoff::exercise_close_defers_resumption(worker_value, close_deferred_success), exercise_lease_and_close(lease_scheduler, io_context, lease_success), exercise_worker_bound_acquire_timeout(worker_timeout_scheduler, worker_timeout_success), exercise_passed_deadline_does_not_steal_same_turn_release(worker_value, nonpositive_timeout_success), exercise_saturated_acquire_timeout(saturated_timeout_scheduler, io_context, saturated_timeout_success), exercise_timeout_between_cancel_and_release(worker_value, mixed_waiters_success), exercise_acquire_cancellation(cancellation_scheduler, io_context, worker_value, cancellation_success), exercise_repeated_test(io_context, worker_value, repeated_lifecycle_success));
     EXPECT_TRUE(lease_success);
     EXPECT_TRUE(worker_timeout_success);
     EXPECT_TRUE(nonpositive_timeout_success);

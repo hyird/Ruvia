@@ -109,8 +109,7 @@ private:
     [[nodiscard]] static std::optional<bool> parse_bool_value(std::string_view value) noexcept;
 
     template <typename t_type>
-    [[nodiscard]] static std::optional<std::remove_cvref_t<t_type>> parse_typed_value(
-        std::string_view value) noexcept;
+    [[nodiscard]] static std::optional<std::remove_cvref_t<t_type>> parse_typed_value(std::string_view value) noexcept;
 
     template <typename t_type>
     [[nodiscard]] static std::optional<t_type> parse_arithmetic_value(std::string_view value) noexcept;
@@ -129,8 +128,7 @@ std::optional<std::remove_cvref_t<t_type>> env::get(std::string_view name) const
     }
     auto parsed_value = parse_typed_value<t_type>(*value);
     if (!parsed_value.has_value()) {
-        throw std::invalid_argument(
-            "invalid value for environment variable '" + std::string(name) + "'");
+        throw std::invalid_argument("invalid value for environment variable '" + std::string(name) + "'");
     }
     return parsed_value;
 }
@@ -152,8 +150,7 @@ std::optional<std::remove_cvref_t<t_type>> env::parse_typed_value(std::string_vi
     } else if constexpr (std::is_floating_point_v<value_type>) {
         return parse_arithmetic_value<value_type>(value);
     } else {
-        static_assert(unsupported_typed_env_value<value_type>,
-            "env::get<T>() supports string_view, bool, integral, and floating-point values");
+        static_assert(unsupported_typed_env_value<value_type>, "env::get<T>() supports string_view, bool, integral, and floating-point values");
     }
 }
 
@@ -207,8 +204,7 @@ public:
     // registration; route model validators must be declared on their route.
     template <middleware middleware_type, typename... args_types>
     application& use(args_types&&... args) & {
-        return use_middleware(
-            detail::make_owned_middleware_descriptor<middleware_type>(std::forward<args_types>(args)...));
+        return use_middleware(detail::make_owned_middleware_descriptor<middleware_type>(std::forward<args_types>(args)...));
     }
     template <middleware middleware_type, typename... args_types>
     application& use(args_types&&...) && = delete;
@@ -225,8 +221,7 @@ public:
     // std::invalid_argument: use<T>() is the only app-wide spelling.
     template <middleware middleware_type, typename... args_types>
     application& use_at(const middleware_scope_options& options, args_types&&... args) & {
-        return use_middleware(
-            detail::make_scoped_app_middleware<middleware_type>(options, std::forward<args_types>(args)...));
+        return use_middleware(detail::make_scoped_app_middleware<middleware_type>(options, std::forward<args_types>(args)...));
     }
     template <middleware middleware_type, typename... args_types>
     application& use_at(const middleware_scope_options&, args_types&&...) && = delete;
@@ -235,8 +230,7 @@ public:
     // request or posted job only borrows its own worker's instance.
     template <typename state_type, typename factory_type>
     application& use_worker_state(factory_type&& factory) & {
-        return use_worker_state_definition(
-            detail::worker_state_definition::make<state_type>(std::forward<factory_type>(factory)));
+        return use_worker_state_definition(detail::worker_state_definition::make<state_type>(std::forward<factory_type>(factory)));
     }
     template <typename state_type, typename factory_type>
     application& use_worker_state(factory_type&&) && = delete;
@@ -288,10 +282,8 @@ public:
     // to handshakes racing the stop, which closes them. Concurrent calls take
     // effect in the order they publish. config's password and PEM copies are
     // owned immediately and cleansed on completion or destruction of the task.
-    [[nodiscard]] task<void> replace_tls_identities(
-        worker_ref caller, const listener_endpoint& endpoint, tls_config config) &;
-    task<void> replace_tls_identities(
-        worker_ref caller, const listener_endpoint& endpoint, tls_config config) && = delete;
+    [[nodiscard]] task<void> replace_tls_identities(worker_ref caller, const listener_endpoint& endpoint, tls_config config) &;
+    task<void> replace_tls_identities(worker_ref caller, const listener_endpoint& endpoint, tls_config config) && = delete;
     // Adds config's listeners to the running app, validated and loaded as
     // listen() would (an endpoint a listener already serves throws
     // std::invalid_argument), with any inherited_sockets_. Preparation uses
@@ -347,10 +339,8 @@ public:
     // unknown endpoint throws std::invalid_argument; the lifecycle
     // rules of add_listener() apply. POSIX only: on Windows the acceptor owns
     // a single exclusive socket per service.
-    [[nodiscard]] task<listener_sockets> duplicate_listener_sockets(
-        worker_ref caller, const listener_endpoint& endpoint) const&;
-    task<listener_sockets> duplicate_listener_sockets(
-        worker_ref caller, const listener_endpoint& endpoint) const&& = delete;
+    [[nodiscard]] task<listener_sockets> duplicate_listener_sockets(worker_ref caller, const listener_endpoint& endpoint) const&;
+    task<listener_sockets> duplicate_listener_sockets(worker_ref caller, const listener_endpoint& endpoint) const&& = delete;
 #endif
     application& document_root(document_root_config config) &;
     application& document_root(document_root_config config) && = delete;
@@ -716,9 +706,9 @@ public:
 private:
     friend class test_app;
 
-    test_request(std::string_view method_token, std::string_view target)
-        : method_(method_token),
-          target_(target) {}
+    test_request(std::string_view method_token, std::string_view target) :
+        method_(method_token),
+        target_(target) {}
 
     std::string method_;
     std::string target_;
@@ -749,20 +739,17 @@ public:
     // first-request lifecycle guard instead of the process lifecycle.
     template <middleware middleware_type, typename... args_types>
     test_app& use(args_types&&... args) {
-        return use_middleware(
-            detail::make_owned_middleware_descriptor<middleware_type>(std::forward<args_types>(args)...));
+        return use_middleware(detail::make_owned_middleware_descriptor<middleware_type>(std::forward<args_types>(args)...));
     }
 
     template <middleware middleware_type, typename... args_types>
     test_app& use_at(const middleware_scope_options& options, args_types&&... args) {
-        return use_middleware(
-            detail::make_scoped_app_middleware<middleware_type>(options, std::forward<args_types>(args)...));
+        return use_middleware(detail::make_scoped_app_middleware<middleware_type>(options, std::forward<args_types>(args)...));
     }
 
     template <typename state_type, typename factory_type>
     test_app& use_worker_state(factory_type&& factory) {
-        return use_worker_state_definition(
-            detail::worker_state_definition::make<state_type>(std::forward<factory_type>(factory)));
+        return use_worker_state_definition(detail::worker_state_definition::make<state_type>(std::forward<factory_type>(factory)));
     }
 
     template <typename state_type>

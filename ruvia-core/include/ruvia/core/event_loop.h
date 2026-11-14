@@ -46,8 +46,7 @@ namespace ruvia {
 // on MSVC.
 template <typename t_type>
     requires detail::asio_task_result<t_type>
-using task_completion_result = std::conditional_t<std::is_void_v<t_type>, std::exception_ptr,
-    std::variant<t_type, std::exception_ptr>>;
+using task_completion_result = std::conditional_t<std::is_void_v<t_type>, std::exception_ptr, std::variant<t_type, std::exception_ptr>>;
 
 }  // namespace ruvia
 
@@ -59,8 +58,7 @@ template <typename t_type, typename handler_type>
 class task_completion_state final {
 public:
     using handler_allocator_type = asio::associated_allocator_t<handler_type>;
-    using state_allocator_type = typename std::allocator_traits<handler_allocator_type>::template rebind_alloc<
-        task_completion_state>;
+    using state_allocator_type = typename std::allocator_traits<handler_allocator_type>::template rebind_alloc<task_completion_state>;
     using state_allocator_traits_type = std::allocator_traits<state_allocator_type>;
 
     static task_completion_state* create(task<t_type>&& task_value, handler_type&& handler_value) {
@@ -68,8 +66,7 @@ public:
         state_allocator_type state_allocator(handler_allocator);
         auto* state_value = state_allocator_traits_type::allocate(state_allocator, 1);
         try {
-            state_allocator_traits_type::construct(state_allocator, state_value, std::move(task_value),
-                std::forward<handler_type>(handler_value), std::move(handler_allocator));
+            state_allocator_traits_type::construct(state_allocator, state_value, std::move(task_value), std::forward<handler_type>(handler_value), std::move(handler_allocator));
         } catch (...) {
             state_allocator_traits_type::deallocate(state_allocator, state_value, 1);
             throw;
@@ -77,11 +74,10 @@ public:
         return state_value;
     }
 
-    task_completion_state(
-        task<t_type>&& task_value, handler_type&& handler_value, handler_allocator_type allocator_value)
-        : task_(std::move(task_value)),
-          handler_(std::forward<handler_type>(handler_value)),
-          allocator_(std::move(allocator_value)) {}
+    task_completion_state(task<t_type>&& task_value, handler_type&& handler_value, handler_allocator_type allocator_value) :
+        task_(std::move(task_value)),
+        handler_(std::forward<handler_type>(handler_value)),
+        allocator_(std::move(allocator_value)) {}
 
     void start() {
         task_.coroutine_.promise().control_.set_completion(this, &task_completion_state::complete);
@@ -93,10 +89,9 @@ public:
         auto executor = asio::get_associated_executor(state_value->handler_);
         auto completion_allocator = state_value->allocator_;
         state_owner_type owner_value(state_value, state_deleter_type{state_allocator_type(state_value->allocator_)});
-        asio::post(executor, asio::bind_allocator(std::move(completion_allocator),
-                                 [owner_value = std::move(owner_value)]() mutable {
-                                     deliver(std::move(owner_value));
-                                 }));
+        asio::post(executor, asio::bind_allocator(std::move(completion_allocator), [owner_value = std::move(owner_value)]() mutable {
+            deliver(std::move(owner_value));
+        }));
     }
 
 private:
@@ -123,8 +118,7 @@ private:
                     owner_value->task_.coroutine_.promise().result();
                     return {};
                 } else {
-                    return task_completion_result<t_type>(
-                        std::in_place_index<0>, owner_value->task_.coroutine_.promise().result());
+                    return task_completion_result<t_type>(std::in_place_index<0>, owner_value->task_.coroutine_.promise().result());
                 }
             } catch (...) {
                 if constexpr (std::is_void_v<t_type>) {
@@ -168,16 +162,12 @@ template <typename t_type, typename completion_token_type>
     requires detail::asio_task_result<t_type>
 auto async_start(task<t_type>&& task_value, completion_token_type&& token) {
     task_value.prepare_direct_start();
-    using completion_signature_type =
-        std::conditional_t<std::is_void_v<t_type>, void(std::exception_ptr), void(task_completion_result<t_type>&&)>;
-    return asio::async_initiate<completion_token_type, completion_signature_type>(
-        [](auto&& handler, task<t_type> started_task) {
-            using handler_type = std::decay_t<decltype(handler)>;
-            auto* state_value = detail::task_completion_state<t_type, handler_type>::create(
-                std::move(started_task), std::forward<decltype(handler)>(handler));
-            state_value->start();
-        },
-        token, std::move(task_value));
+    using completion_signature_type = std::conditional_t<std::is_void_v<t_type>, void(std::exception_ptr), void(task_completion_result<t_type>&&)>;
+    return asio::async_initiate<completion_token_type, completion_signature_type>([](auto&& handler, task<t_type> started_task) {
+        using handler_type = std::decay_t<decltype(handler)>;
+        auto* state_value = detail::task_completion_state<t_type, handler_type>::create(std::move(started_task), std::forward<decltype(handler)>(handler));
+        state_value->start();
+    }, token, std::move(task_value));
 }
 
 // Adapts a lazy task for an Asio coroutine owner such as co_spawn. A failed
@@ -254,10 +244,9 @@ public:
     }
 
 private:
-    asio_completion(std::error_code error_code, result_storage_type&& result_value) noexcept(
-        std::is_nothrow_move_constructible_v<result_storage_type>)
-        : error_code_(error_code),
-          result_(std::move(result_value)) {}
+    asio_completion(std::error_code error_code, result_storage_type&& result_value) noexcept(std::is_nothrow_move_constructible_v<result_storage_type>) :
+        error_code_(error_code),
+        result_(std::move(result_value)) {}
 
     std::error_code error_code_;
     [[no_unique_address]] result_storage_type result_;
@@ -271,8 +260,8 @@ private:
 template <typename result_type, typename initiate_type>
 class asio_completion_awaiter final {
 public:
-    explicit asio_completion_awaiter(initiate_type initiate)
-        : initiate_(std::move(initiate)) {}
+    explicit asio_completion_awaiter(initiate_type initiate) :
+        initiate_(std::move(initiate)) {}
     asio_completion_awaiter(const asio_completion_awaiter&) = delete;
     asio_completion_awaiter& operator=(const asio_completion_awaiter&) = delete;
     void operator&() const = delete;
@@ -342,9 +331,9 @@ void report_root_task_failure(const std::weak_ptr<event_loop_state>& loop, std::
 
 class root_task_completion final {
 public:
-    root_task_completion(worker_ref worker_value, std::weak_ptr<event_loop_state> loop_value) noexcept
-        : worker_(std::move(worker_value)),
-          loop_(std::move(loop_value)) {}
+    root_task_completion(worker_ref worker_value, std::weak_ptr<event_loop_state> loop_value) noexcept :
+        worker_(std::move(worker_value)),
+        loop_(std::move(loop_value)) {}
 
     root_task_completion(const root_task_completion&) = delete;
     root_task_completion& operator=(const root_task_completion&) = delete;
@@ -362,13 +351,17 @@ public:
     void wait() const {
         require_foreign_thread();
         std::unique_lock lock(mutex_);
-        completed_.wait(lock, [this] { return complete_; });
+        completed_.wait(lock, [this] {
+            return complete_;
+        });
     }
 
     [[nodiscard]] bool wait_until(std::chrono::steady_clock::time_point deadline) const {
         require_foreign_thread();
         std::unique_lock lock(mutex_);
-        return completed_.wait_until(lock, deadline, [this] { return complete_; });
+        return completed_.wait_until(lock, deadline, [this] {
+            return complete_;
+        });
     }
 
     void abandon() noexcept {
@@ -455,8 +448,8 @@ struct root_task_void_result final {};
 template <typename t_type>
 class root_task_state final {
 public:
-    root_task_state(worker_ref worker_value, std::weak_ptr<event_loop_state> loop_value) noexcept
-        : completion_(std::move(worker_value), std::move(loop_value)) {}
+    root_task_state(worker_ref worker_value, std::weak_ptr<event_loop_state> loop_value) noexcept :
+        completion_(std::move(worker_value), std::move(loop_value)) {}
 
     // The type-independent completion protocol; only the result is typed here.
     [[nodiscard]] root_task_completion& completion() noexcept {
@@ -505,8 +498,8 @@ public:
     root_task(const root_task&) = delete;
     root_task& operator=(const root_task&) = delete;
 
-    root_task(root_task&& other) noexcept
-        : state_(std::move(other.state_)) {}
+    root_task(root_task&& other) noexcept :
+        state_(std::move(other.state_)) {}
 
     root_task& operator=(root_task&& other) noexcept {
         if (this != &other) {
@@ -571,8 +564,8 @@ public:
     void get() & = delete;
 
 private:
-    explicit root_task(std::shared_ptr<detail::root_task_state<t_type>> state_value) noexcept
-        : state_(std::move(state_value)) {}
+    explicit root_task(std::shared_ptr<detail::root_task_state<t_type>> state_value) noexcept :
+        state_(std::move(state_value)) {}
 
     [[nodiscard]] const detail::root_task_state<t_type>& require_state() const {
         if (!state_) {
@@ -626,8 +619,7 @@ private:
 // root_task (value()/take_value()); a rejection owns the unconsumed cold task
 // (rejected()/take_rejected()) with its post_status.
 template <typename t_type>
-using event_loop_start_result =
-    worker_delivery_result<task<t_type>, post_status, post_status::accepted, root_task<t_type>>;
+using event_loop_start_result = worker_delivery_result<task<t_type>, post_status, post_status::accepted, root_task<t_type>>;
 
 namespace detail {
 
@@ -639,22 +631,21 @@ struct root_task_launch_guard final {
     std::optional<task<t_type>> task_;
     std::shared_ptr<detail::root_task_state<t_type>> completion_;
 
-    root_task_launch_guard(task<t_type> task_value, std::shared_ptr<detail::root_task_state<t_type>> state_value) noexcept
-        : task_(std::move(task_value)),
-          completion_(std::move(state_value)) {}
+    root_task_launch_guard(task<t_type> task_value, std::shared_ptr<detail::root_task_state<t_type>> state_value) noexcept :
+        task_(std::move(task_value)),
+        completion_(std::move(state_value)) {}
     root_task_launch_guard(const root_task_launch_guard&) = delete;
     root_task_launch_guard& operator=(const root_task_launch_guard&) = delete;
-    root_task_launch_guard(root_task_launch_guard&& other) noexcept
-        : task_(std::move(other.task_)),
-          completion_(std::move(other.completion_)) {}
+    root_task_launch_guard(root_task_launch_guard&& other) noexcept :
+        task_(std::move(other.task_)),
+        completion_(std::move(other.completion_)) {}
     root_task_launch_guard& operator=(root_task_launch_guard&&) = delete;
     ~root_task_launch_guard() {
         // A rejected or discarded launch still owns a cold frame.
         // Retire it before waking a caller that may reclaim its inputs.
         task_.reset();
         if (completion_ != nullptr) {
-            completion_->completion().complete_failure(
-                std::make_exception_ptr(event_loop_start_rejected(post_status::worker_stopping)));
+            completion_->completion().complete_failure(std::make_exception_ptr(event_loop_start_rejected(post_status::worker_stopping)));
         }
     }
     void release() noexcept {
@@ -671,18 +662,17 @@ struct root_task_completion_handler final {
     std::shared_ptr<void> retirement_lease_;
     bool delivered_{false};
 
-    root_task_completion_handler(executor_type executor_value, std::shared_ptr<detail::root_task_state<t_type>> state_value,
-        std::shared_ptr<void> lease_value) noexcept
-        : executor_(std::move(executor_value)),
-          completion_(std::move(state_value)),
-          retirement_lease_(std::move(lease_value)) {}
+    root_task_completion_handler(executor_type executor_value, std::shared_ptr<detail::root_task_state<t_type>> state_value, std::shared_ptr<void> lease_value) noexcept :
+        executor_(std::move(executor_value)),
+        completion_(std::move(state_value)),
+        retirement_lease_(std::move(lease_value)) {}
     root_task_completion_handler(const root_task_completion_handler&) = delete;
     root_task_completion_handler& operator=(const root_task_completion_handler&) = delete;
-    root_task_completion_handler(root_task_completion_handler&& other) noexcept
-        : executor_(std::move(other.executor_)),
-          completion_(std::move(other.completion_)),
-          retirement_lease_(std::move(other.retirement_lease_)),
-          delivered_(std::exchange(other.delivered_, false)) {}
+    root_task_completion_handler(root_task_completion_handler&& other) noexcept :
+        executor_(std::move(other.executor_)),
+        completion_(std::move(other.completion_)),
+        retirement_lease_(std::move(other.retirement_lease_)),
+        delivered_(std::exchange(other.delivered_, false)) {}
     root_task_completion_handler& operator=(root_task_completion_handler&&) = delete;
     ~root_task_completion_handler() {
         if (delivered_) {
@@ -728,8 +718,7 @@ public:
     void reset() noexcept;
 
 private:
-    explicit event_loop_stop_registration(
-        std::shared_ptr<detail::event_loop_stop_listener> listener_value) noexcept;
+    explicit event_loop_stop_registration(std::shared_ptr<detail::event_loop_stop_listener> listener_value) noexcept;
 
     std::shared_ptr<detail::event_loop_stop_listener> listener_;
     friend class event_loop;
@@ -795,11 +784,9 @@ public:
         auto completion = std::make_shared<detail::root_task_state<t_type>>(worker(), state_);
         const auto bound_executor = executor();
         const auto status = worker().post_factory([&]() -> move_only_function<void()> {
-            return [bound_executor, retirement_lease = std::move(retirement_lease),
-                       launch = detail::root_task_launch_guard<t_type>(std::move(task_value), completion)]() mutable {
+            return [bound_executor, retirement_lease = std::move(retirement_lease), launch = detail::root_task_launch_guard<t_type>(std::move(task_value), completion)]() mutable {
                 try {
-                    async_start(std::move(*launch.task_),
-                        detail::root_task_completion_handler<t_type>(bound_executor, launch.completion_, std::move(retirement_lease)));
+                    async_start(std::move(*launch.task_), detail::root_task_completion_handler<t_type>(bound_executor, launch.completion_, std::move(retirement_lease)));
                     launch.release();
                 } catch (...) {
                     auto failed_completion = std::move(launch.completion_);
@@ -819,11 +806,11 @@ public:
     template <typename t_type>
         requires detail::asio_task_result<t_type>
     [[nodiscard]] root_task<t_type> start(task<t_type> task_value) const {
-        auto started = try_start(std::move(task_value));
-        if (!started.accepted()) {
-            throw event_loop_start_rejected(started.status());
+        auto start_result = try_start(std::move(task_value));
+        if (!start_result.accepted()) {
+            throw event_loop_start_rejected(start_result.status());
         }
-        return std::move(started).take_value();
+        return std::move(start_result).take_value();
     }
 
     // Stop cleanup is asynchronous and joined before runtime retirement. The
@@ -833,19 +820,15 @@ public:
     // Cancelling an unstarted callback moves and destroys its target outside
     // the listener lock; those operations may request loop stop.
     template <typename fn_type>
-        requires std::invocable<fn_type&> &&
-                 std::same_as<std::invoke_result_t<fn_type&>, task<void>> &&
-                 std::move_constructible<std::decay_t<fn_type>>
+        requires std::invocable<fn_type&> && std::same_as<std::invoke_result_t<fn_type&>, task<void>> && std::move_constructible<std::decay_t<fn_type>>
     [[nodiscard]] event_loop_stop_registration on_stop(fn_type&& fn) const {
         const event_loop snapshot = *this;
-        return snapshot.register_stop_callback(
-            move_only_function<task<void>()>(std::forward<fn_type>(fn)));
+        return snapshot.register_stop_callback(move_only_function<task<void>()>(std::forward<fn_type>(fn)));
     }
 
 private:
     explicit event_loop(std::shared_ptr<detail::event_loop_state> state_value) noexcept;
-    [[nodiscard]] event_loop_stop_registration register_stop_callback(
-        move_only_function<task<void>()> callback) const;
+    [[nodiscard]] event_loop_stop_registration register_stop_callback(move_only_function<task<void>()> callback) const;
     [[nodiscard]] std::shared_ptr<void> acquire_root_lease() const;
     [[nodiscard]] bool defer_cleanup_task(move_only_function<void()> task) const;
 
@@ -930,8 +913,7 @@ private:
 // Attach a Ruvia worker to a caller-owned io_context. The caller retains
 // ownership of the context's unrelated work and stop/restart policy; stop()
 // retires only Ruvia-managed work and never cancels unrelated operations.
-[[nodiscard]] event_loop_attachment attach_event_loop(
-    asio::io_context& io_context, event_loop_attachment_options options = {});
+[[nodiscard]] event_loop_attachment attach_event_loop(asio::io_context& io_context, event_loop_attachment_options options = {});
 
 }  // namespace ruvia
 
@@ -1034,11 +1016,9 @@ public:
         friend class worker_notification;
     };
 
-    explicit worker_notification(
-        worker_runtime& runtime, worker_notification_options options = {});
+    explicit worker_notification(worker_runtime& runtime, worker_notification_options options = {});
     // Borrows the loop's worker; the loop must remain address-stable and alive.
-    explicit worker_notification(
-        const event_loop& loop, worker_notification_options options = {});
+    explicit worker_notification(const event_loop& loop, worker_notification_options options = {});
     worker_notification(event_loop&&, worker_notification_options = {}) = delete;
     worker_notification(const event_loop&&, worker_notification_options = {}) = delete;
     ~worker_notification();
@@ -1084,14 +1064,10 @@ template <typename traits_type, typename allocator_type>
 inline constexpr bool is_owning_char_string<std::basic_string<char, traits_type, allocator_type>> = true;
 
 template <typename t_type>
-concept temporary_owning_char_string =
-    is_owning_char_string<std::remove_cvref_t<t_type>> && !std::is_lvalue_reference_v<t_type&&>;
+concept temporary_owning_char_string = is_owning_char_string<std::remove_cvref_t<t_type>> && !std::is_lvalue_reference_v<t_type&&>;
 
 template <typename range_type>
-concept temporary_owning_byte_range =
-    !std::is_lvalue_reference_v<range_type&&> && std::ranges::contiguous_range<range_type> &&
-    !std::ranges::borrowed_range<range_type> &&
-    std::same_as<std::remove_cv_t<std::ranges::range_value_t<range_type>>, std::byte>;
+concept temporary_owning_byte_range = !std::is_lvalue_reference_v<range_type&&> && std::ranges::contiguous_range<range_type> && !std::ranges::borrowed_range<range_type> && std::same_as<std::remove_cv_t<std::ranges::range_value_t<range_type>>, std::byte>;
 
 }  // namespace detail
 
@@ -1159,8 +1135,7 @@ namespace ruvia {
 //
 // A std::system_error is described by system_error_text,
 // so the line stays UTF-8 on Windows.
-void report_unhandled_failure(
-    std::string_view context_value, std::exception_ptr exception, std::size_t occurrences = 1) noexcept;
+void report_unhandled_failure(std::string_view context_value, std::exception_ptr exception, std::size_t occurrences = 1) noexcept;
 
 // True for the same exception object, or for two std::exception objects of the
 // same dynamic type with the same what(): the same fault seen by several units.

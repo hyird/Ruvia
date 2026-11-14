@@ -40,8 +40,7 @@ public:
     }
 
     template <std::integral integer_type>
-    [[nodiscard]] static constexpr std::optional<http_status_code> try_from_value(
-        integer_type value) noexcept {
+    [[nodiscard]] static constexpr std::optional<http_status_code> try_from_value(integer_type value) noexcept {
         if (!is_valid_value(value)) {
             return std::nullopt;
         }
@@ -91,8 +90,8 @@ public:
 private:
     struct validated_tag_type {};
 
-    constexpr http_status_code(std::uint16_t value, validated_tag_type) noexcept
-        : value_(value) {}
+    constexpr http_status_code(std::uint16_t value, validated_tag_type) noexcept :
+        value_(value) {}
 
     std::uint16_t value_;
 };
@@ -105,15 +104,12 @@ namespace detail {
 inline constexpr std::size_t http_status_code_token_size = 3;
 using http_status_code_token_type = std::array<char, http_status_code_token_size>;
 
-[[nodiscard]] inline constexpr http_status_code_token_type http_status_code_token(
-    http_status_code status) noexcept {
+[[nodiscard]] inline constexpr http_status_code_token_type http_status_code_token(http_status_code status) noexcept {
     const auto value = status.value();
-    return {static_cast<char>('0' + value / 100), static_cast<char>('0' + (value / 10) % 10),
-        static_cast<char>('0' + value % 10)};
+    return {static_cast<char>('0' + value / 100), static_cast<char>('0' + (value / 10) % 10), static_cast<char>('0' + value % 10)};
 }
 
-[[nodiscard]] inline constexpr std::string_view http_status_code_token_view(
-    const http_status_code_token_type& token) noexcept {
+[[nodiscard]] inline constexpr std::string_view http_status_code_token_view(const http_status_code_token_type& token) noexcept {
     return std::string_view(token.data(), token.size());
 }
 
@@ -203,8 +199,7 @@ class http_received_status final {
 public:
     // Validate the original integer before narrowing the three-digit code.
     template <std::integral integer_type>
-    [[nodiscard]] static constexpr std::optional<http_received_status> try_from_value(
-        integer_type value) noexcept {
+    [[nodiscard]] static constexpr std::optional<http_received_status> try_from_value(integer_type value) noexcept {
         if (std::cmp_less(+value, 0) || std::cmp_greater(+value, 999)) {
             return std::nullopt;
         }
@@ -217,8 +212,7 @@ public:
 
     // Parses the received status-code = 3DIGIT of an HTTP/1 status line or an
     // HTTP/2 :status value: exactly three ASCII digits, no sign or spaces.
-    [[nodiscard]] static constexpr std::optional<http_received_status> try_parse(
-        std::string_view digits) noexcept {
+    [[nodiscard]] static constexpr std::optional<http_received_status> try_parse(std::string_view digits) noexcept {
         if (digits.size() != 3) {
             return std::nullopt;
         }
@@ -232,9 +226,9 @@ public:
         return try_from_value(value);
     }
 
-    constexpr http_received_status(http_status_code status) noexcept
-        : status_(status),
-          value_(status.value()) {}
+    constexpr http_received_status(http_status_code status) noexcept :
+        status_(status),
+        value_(status.value()) {}
 
     // The status the response is processed as.
     [[nodiscard]] constexpr http_status_code status() const noexcept {
@@ -249,9 +243,9 @@ public:
     friend constexpr bool operator==(http_received_status, http_received_status) = default;
 
 private:
-    constexpr http_received_status(http_status_code status, std::uint16_t value) noexcept
-        : status_(status),
-          value_(value) {}
+    constexpr http_received_status(http_status_code status, std::uint16_t value) noexcept :
+        status_(status),
+        value_(value) {}
 
     http_status_code status_;
     std::uint16_t value_;
@@ -394,9 +388,7 @@ static_assert(std::is_trivially_copyable_v<http_received_status>);
 // The redirect status codes whose Location a client may follow
 // (RFC 9110 sections 15.4.2-15.4.4, 15.4.8, 15.4.9).
 [[nodiscard]] inline constexpr bool is_http_redirect_status(http_status_code status) noexcept {
-    return status == http_status::moved_permanently || status == http_status::found ||
-           status == http_status::see_other || status == http_status::temporary_redirect ||
-           status == http_status::permanent_redirect;
+    return status == http_status::moved_permanently || status == http_status::found || status == http_status::see_other || status == http_status::temporary_redirect || status == http_status::permanent_redirect;
 }
 
 namespace detail {
@@ -473,8 +465,8 @@ public:
     }
 
 private:
-    explicit protocol_byte_limit(std::size_t bytes_value) noexcept
-        : maximum_(bytes_value) {}
+    explicit protocol_byte_limit(std::size_t bytes_value) noexcept :
+        maximum_(bytes_value) {}
 
     std::optional<std::size_t> maximum_;
 };
@@ -491,10 +483,9 @@ namespace ruvia {
 // reporting never allocates or borrows.
 class http_protocol_error final : public std::exception {
 public:
-    http_protocol_error(
-        http_status_code status, std::string_view code, std::string_view message) noexcept
-        : status_(status),
-          code_(code) {
+    http_protocol_error(http_status_code status, std::string_view code, std::string_view message) noexcept :
+        status_(status),
+        code_(code) {
         const auto size = (std::min)(message.size(), message_.size() - 1);
         if (size != 0) {
             std::memcpy(message_.data(), message.data(), size);
@@ -520,8 +511,7 @@ private:
     std::array<char, 128> message_{};
 };
 
-enum class http_parse_error : std::uint8_t {
-    header_too_large,
+enum class http_parse_error : std::uint8_t { header_too_large,
     uri_too_long,
     invalid_request_line,
     unsupported_http_version,
@@ -534,8 +524,7 @@ enum class http_parse_error : std::uint8_t {
     invalid_content_length,
     conflicting_content_length,
     invalid_transfer_encoding,
-    unsupported_transfer_encoding
-};
+    unsupported_transfer_encoding };
 
 [[nodiscard]] http_protocol_error http_parse_protocol_error(http_parse_error error) noexcept;
 
@@ -547,14 +536,12 @@ namespace ruvia {
     return c >= 'A' && c <= 'Z' ? static_cast<unsigned char>(c + ('a' - 'A')) : c;
 }
 
-[[nodiscard]] constexpr bool http_ascii_equals_ignore_case(
-    std::string_view left, std::string_view right) noexcept {
+[[nodiscard]] constexpr bool http_ascii_equals_ignore_case(std::string_view left, std::string_view right) noexcept {
     if (left.size() != right.size()) {
         return false;
     }
     for (std::size_t i = 0; i < left.size(); ++i) {
-        if (http_ascii_to_lower(static_cast<unsigned char>(left[i])) !=
-            http_ascii_to_lower(static_cast<unsigned char>(right[i]))) {
+        if (http_ascii_to_lower(static_cast<unsigned char>(left[i])) != http_ascii_to_lower(static_cast<unsigned char>(right[i]))) {
             return false;
         }
     }
@@ -601,8 +588,7 @@ inline constexpr std::array<bool, 256> http_token_char_table = [] {
     for (unsigned c = 'a'; c <= 'z'; ++c) {
         table_value[c] = true;
     }
-    for (const unsigned char c :
-        {'!', '#', '$', '%', '&', '\'', '*', '+', '-', '.', '^', '_', '`', '|', '~'}) {
+    for (const unsigned char c : {'!', '#', '$', '%', '&', '\'', '*', '+', '-', '.', '^', '_', '`', '|', '~'}) {
         table_value[c] = true;
     }
     return table_value;
@@ -703,8 +689,7 @@ namespace ruvia {
 // section 5.6.4 quoted-string, or value.size() when there is none. A quoted-pair
 // (`\"`) does not end the string. This is the only quote-aware delimiter scan;
 // every list and parameter visitor below is built on it.
-[[nodiscard]] constexpr std::size_t http_find_unquoted_delimiter(
-    std::string_view value, std::size_t start, char delimiter) noexcept {
+[[nodiscard]] constexpr std::size_t http_find_unquoted_delimiter(std::string_view value, std::size_t start, char delimiter) noexcept {
     if (start >= value.size()) {
         return value.size();
     }
@@ -747,8 +732,7 @@ template <typename visitor_type>
 // are reported; framing-sensitive callers can reject them. Returning false from
 // the visitor stops traversal. Views borrow the input field.
 template <typename visitor_type>
-inline void http_visit_comma_separated_quoted_field_items(
-    std::string_view value, visitor_type&& visitor) {
+inline void http_visit_comma_separated_quoted_field_items(std::string_view value, visitor_type&& visitor) {
     std::size_t start = 0;
     for (;;) {
         const auto end = start + http_find_unquoted_delimiter(value.substr(start), 0, ',');
@@ -765,13 +749,11 @@ inline void http_visit_comma_separated_quoted_field_items(
 // quotes. Do not use for Cookie: RFC 6265 gives '"' no special meaning there.
 // Views borrow the input.
 template <typename visitor_type>
-inline void http_visit_semicolon_parameters_quoted_field(
-    std::string_view value, visitor_type&& visitor) {
+inline void http_visit_semicolon_parameters_quoted_field(std::string_view value, visitor_type&& visitor) {
     std::size_t start = 0;
     for (;;) {
         const auto end = start + http_find_unquoted_delimiter(value.substr(start), 0, ';');
-        if (!detail::http_emit_field_parameter(http_trim_ows(value.substr(start, end - start)), visitor) ||
-            end == value.size()) {
+        if (!detail::http_emit_field_parameter(http_trim_ows(value.substr(start, end - start)), visitor) || end == value.size()) {
             return;
         }
         start = end + 1;
@@ -797,9 +779,9 @@ inline void http_visit_semicolon_parameters_quoted_field(
 // the closing DQUOTE are never read.
 class http_quoted_string_cursor final {
 public:
-    explicit constexpr http_quoted_string_cursor(borrowed_text input) noexcept
-        : input_(input.view()),
-          state_(!input_.empty() && input_.front() == '"' ? state_type::open : state_type::failed) {}
+    explicit constexpr http_quoted_string_cursor(borrowed_text input) noexcept :
+        input_(input.view()),
+        state_(!input_.empty() && input_.front() == '"' ? state_type::open : state_type::failed) {}
 
     [[nodiscard]] constexpr bool next(unsigned char& out) noexcept {
         if (state_ != state_type::open) {
@@ -868,8 +850,8 @@ private:
 // to distinguish end from malformed input.
 class http_field_name_list final {
 public:
-    explicit http_field_name_list(borrowed_text field) noexcept
-        : remaining_(field.view()) {}
+    explicit http_field_name_list(borrowed_text field) noexcept :
+        remaining_(field.view()) {}
 
     [[nodiscard]] std::optional<std::string_view> next() noexcept;
 
@@ -903,8 +885,7 @@ enum class http_field_list_parse_status : std::uint8_t { ok,
 // recipient; every other member goes to `visitor`, whose non-ok status stops
 // the walk and is returned.
 template <typename visitor_type>
-[[nodiscard]] inline http_field_list_parse_status http_visit_list_members(
-    std::string_view value, http_field_list_role role, visitor_type&& visitor) {
+[[nodiscard]] inline http_field_list_parse_status http_visit_list_members(std::string_view value, http_field_list_role role, visitor_type&& visitor) {
     auto status = http_field_list_parse_status::ok;
     http_visit_comma_separated_quoted_field_items(value, [&status, role, &visitor](std::string_view member) {
         if (member.empty()) {
@@ -922,8 +903,7 @@ template <typename visitor_type>
 // `#token` lists: a member that is not a token is malformed; a visitor that
 // returns false rejects the field.
 template <typename visitor_type>
-[[nodiscard]] inline http_field_list_parse_status http_visit_token_list(
-    std::string_view value, http_field_list_role role, visitor_type&& visitor) {
+[[nodiscard]] inline http_field_list_parse_status http_visit_token_list(std::string_view value, http_field_list_role role, visitor_type&& visitor) {
     return http_visit_list_members(value, role, [&visitor](std::string_view member) {
         if (!is_valid_http_header_name(member)) {
             return http_field_list_parse_status::malformed;
@@ -935,8 +915,7 @@ template <typename visitor_type>
 // The first nonempty list member accepted by `predicate`, or an empty view.
 // Members are not validated; a quoted-string member is never split.
 template <typename predicate_type>
-[[nodiscard]] inline std::string_view http_find_header_token(
-    std::string_view value, predicate_type&& predicate) noexcept {
+[[nodiscard]] inline std::string_view http_find_header_token(std::string_view value, predicate_type&& predicate) noexcept {
     std::string_view found;
     http_visit_comma_separated_quoted_field_items(value, [&found, &predicate](std::string_view member) noexcept {
         if (!member.empty() && predicate(member)) {
@@ -955,8 +934,9 @@ std::string_view http_find_header_token(value_type&&, predicate_type&&) = delete
 // grammar-checked lists use http_visit_list_members.
 template <typename visitor_type>
 inline void http_visit_comma_separated_quoted(std::string_view value, visitor_type&& visitor) {
-    http_visit_comma_separated_quoted_field_items(
-        value, [&visitor](std::string_view item) { return item.empty() || visitor(item); });
+    http_visit_comma_separated_quoted_field_items(value, [&visitor](std::string_view item) {
+        return item.empty() || visitor(item);
+    });
 }
 
 // Plain comma-delimited token scan for fields whose grammar never permits
@@ -1012,9 +992,7 @@ template <typename predicate_type>
     }
     const auto expected_first = http_ascii_to_lower(static_cast<unsigned char>(expected.front()));
     return !http_find_header_token(value, [expected, expected_first](std::string_view token) noexcept {
-        return token.size() == expected.size() &&
-               http_ascii_to_lower(static_cast<unsigned char>(token.front())) == expected_first &&
-               http_ascii_equals_ignore_case(token, expected);
+        return token.size() == expected.size() && http_ascii_to_lower(static_cast<unsigned char>(token.front())) == expected_first && http_ascii_equals_ignore_case(token, expected);
     }).empty();
 }
 
@@ -1029,12 +1007,10 @@ template <typename predicate_type>
 // `part` is one OWS-trimmed segment as produced by http_all_parameters.
 [[nodiscard]] inline bool is_valid_http_transfer_parameter(std::string_view part) noexcept {
     const auto equals = part.find('=');
-    return equals != std::string_view::npos && is_valid_http_header_name(http_trim_ows(part.substr(0, equals))) &&
-           is_http_token_or_quoted_string(http_trim_ows(part.substr(equals + 1)));
+    return equals != std::string_view::npos && is_valid_http_header_name(http_trim_ows(part.substr(0, equals))) && is_http_token_or_quoted_string(http_trim_ows(part.substr(equals + 1)));
 }
 
-[[nodiscard]] inline std::string_view http_header_token_before_parameters(
-    std::string_view value) noexcept {
+[[nodiscard]] inline std::string_view http_header_token_before_parameters(std::string_view value) noexcept {
     const auto semicolon = value.find(';');
     return http_trim_ows(semicolon == std::string_view::npos ? value : value.substr(0, semicolon));
 }
@@ -1064,8 +1040,7 @@ enum class http_scheme : std::uint8_t {
     https,
 };
 
-enum class http_known_method : std::uint8_t {
-    get,
+enum class http_known_method : std::uint8_t { get,
     post,
     put,
     delete_value,
@@ -1073,13 +1048,10 @@ enum class http_known_method : std::uint8_t {
     head,
     options,
     connect,
-    unknown
-};
+    unknown };
 
 [[nodiscard]] constexpr std::uint32_t http_known_method_bit(http_known_method method) noexcept {
-    return method == http_known_method::unknown
-               ? 0U
-               : (std::uint32_t{1} << static_cast<std::uint32_t>(method));
+    return method == http_known_method::unknown ? 0U : (std::uint32_t{1} << static_cast<std::uint32_t>(method));
 }
 
 // HTTP methods are an extensible, case-sensitive token space. http_known_method is
@@ -1102,10 +1074,10 @@ namespace ruvia {
 // represents initial fields and trailers for requests and responses.
 class http_header final {
 public:
-    http_header(std::string_view name, std::string_view value)
-        : name_size_(name.size()),
-          value_size_(value.size()),
-          owned_(true) {
+    http_header(std::string_view name, std::string_view value) :
+        name_size_(name.size()),
+        value_size_(value.size()),
+        owned_(true) {
         if (value.size() > (std::numeric_limits<std::size_t>::max)() - name.size()) {
             throw std::length_error("HTTP header storage size overflows size_t");
         }
@@ -1121,11 +1093,11 @@ public:
         }
     }
 
-    http_header(const http_header& other)
-        : bytes_(!other.owned_ ? other.bytes_ : nullptr),
-          name_size_(other.name_size_),
-          value_size_(other.value_size_),
-          owned_(other.owned_) {
+    http_header(const http_header& other) :
+        bytes_(!other.owned_ ? other.bytes_ : nullptr),
+        name_size_(other.name_size_),
+        value_size_(other.value_size_),
+        owned_(other.owned_) {
         if (owned_) {
             const auto size = name_size_ + value_size_;
             if (size != 0) {
@@ -1135,11 +1107,11 @@ public:
         }
     }
 
-    http_header(http_header&& other) noexcept
-        : bytes_(std::exchange(other.bytes_, nullptr)),
-          name_size_(std::exchange(other.name_size_, 0)),
-          value_size_(std::exchange(other.value_size_, 0)),
-          owned_(std::exchange(other.owned_, false)) {}
+    http_header(http_header&& other) noexcept :
+        bytes_(std::exchange(other.bytes_, nullptr)),
+        name_size_(std::exchange(other.name_size_, 0)),
+        value_size_(std::exchange(other.value_size_, 0)),
+        owned_(std::exchange(other.owned_, false)) {}
 
     http_header& operator=(const http_header& other) {
         if (this != &other) {
@@ -1166,12 +1138,10 @@ public:
 
     // Owning boundaries that normalize field names lower-case them while
     // copying, so the field still costs one allocation.
-    [[nodiscard]] static http_header copy_with_lowercase_name(
-        std::string_view name, std::string_view value) {
+    [[nodiscard]] static http_header copy_with_lowercase_name(std::string_view name, std::string_view value) {
         auto result = http_header(name, value);
         for (std::size_t index = 0; index < result.name_size_; ++index) {
-            result.bytes_[index] =
-                static_cast<char>(http_ascii_to_lower(static_cast<unsigned char>(result.bytes_[index])));
+            result.bytes_[index] = static_cast<char>(http_ascii_to_lower(static_cast<unsigned char>(result.bytes_[index])));
         }
         return result;
     }
@@ -1190,12 +1160,11 @@ private:
 
     constexpr http_header() noexcept = default;
 
-    constexpr http_header(
-        const char* static_bytes, std::size_t name_size, std::size_t value_size) noexcept
-        : bytes_(const_cast<char*>(static_bytes)),
-          name_size_(name_size),
-          value_size_(value_size),
-          owned_(false) {}
+    constexpr http_header(const char* static_bytes, std::size_t name_size, std::size_t value_size) noexcept :
+        bytes_(const_cast<char*>(static_bytes)),
+        name_size_(name_size),
+        value_size_(value_size),
+        owned_(false) {}
 
     void release() noexcept {
         auto* const bytes = std::exchange(bytes_, nullptr);
@@ -1223,13 +1192,12 @@ class http_header_view final {
 public:
     constexpr http_header_view() noexcept = default;
 
-    constexpr http_header_view(std::string_view name, std::string_view value) noexcept
-        : name_(name),
-          value_(value) {}
+    constexpr http_header_view(std::string_view name, std::string_view value) noexcept :
+        name_(name),
+        value_(value) {}
 
     template <typename name_type, typename value_type>
-        requires(detail::http_temporary_owning_char_string<name_type> ||
-                    detail::http_temporary_owning_char_string<value_type>)
+        requires(detail::http_temporary_owning_char_string<name_type> || detail::http_temporary_owning_char_string<value_type>)
     http_header_view(name_type&& name, value_type&& value) = delete;
 
     [[nodiscard]] constexpr std::string_view name() const noexcept {
@@ -1261,21 +1229,16 @@ concept http_header_field = requires(const std::remove_reference_t<field_type>& 
 };
 
 template <typename range_type>
-concept http_header_field_range =
-    std::ranges::contiguous_range<const std::remove_cvref_t<range_type>> &&
-    http_header_field<std::ranges::range_reference_t<const std::remove_cvref_t<range_type>>>;
+concept http_header_field_range = std::ranges::contiguous_range<const std::remove_cvref_t<range_type>> && http_header_field<std::ranges::range_reference_t<const std::remove_cvref_t<range_type>>>;
 
 namespace detail {
 class http_header_range_view;
 }  // namespace detail
 
 template <typename source_type>
-concept http_header_field_source =
-    std::same_as<std::remove_cvref_t<source_type>, detail::http_header_range_view> ||
-    http_header_field_range<source_type> ||
-    requires(const std::remove_cvref_t<source_type>& source) {
-        { source.headers() } -> http_header_field_range;
-    };
+concept http_header_field_source = std::same_as<std::remove_cvref_t<source_type>, detail::http_header_range_view> || http_header_field_range<source_type> || requires(const std::remove_cvref_t<source_type>& source) {
+    { source.headers() } -> http_header_field_range;
+};
 namespace detail {
 
 class http_header_range_view final {
@@ -1320,10 +1283,10 @@ public:
         using difference_type = std::ptrdiff_t;
 
         constexpr iterator() noexcept = default;
-        constexpr iterator(const void* data, accessor_type at, std::size_t index) noexcept
-            : data_(data),
-              at_(at),
-              index_(index) {}
+        constexpr iterator(const void* data, accessor_type at, std::size_t index) noexcept :
+            data_(data),
+            at_(at),
+            index_(index) {}
 
         [[nodiscard]] constexpr http_header_view operator*() const noexcept {
             return at_(data_, index_);
@@ -1337,8 +1300,7 @@ public:
             ++index_;
             return copy;
         }
-        [[nodiscard]] friend constexpr bool operator==(
-            const iterator& left, const iterator& right) noexcept {
+        [[nodiscard]] friend constexpr bool operator==(const iterator& left, const iterator& right) noexcept {
             return left.data_ == right.data_ && left.index_ == right.index_;
         }
 
@@ -1375,10 +1337,8 @@ public:
     constexpr http_priority_urgency() noexcept = default;
 
     template <std::integral integer_type>
-    constexpr http_priority_urgency(integer_type value)
-        : value_(is_valid_value(value)
-                     ? static_cast<std::uint8_t>(value)
-                     : throw std::invalid_argument("HTTP priority urgency must be between 0 and 7")) {}
+    constexpr http_priority_urgency(integer_type value) :
+        value_(is_valid_value(value) ? static_cast<std::uint8_t>(value) : throw std::invalid_argument("HTTP priority urgency must be between 0 and 7")) {}
 
     template <std::integral integer_type>
     [[nodiscard]] static constexpr bool is_valid_value(integer_type value) noexcept {
@@ -1402,8 +1362,8 @@ public:
 private:
     struct validated_tag_type {};
 
-    constexpr http_priority_urgency(std::uint8_t value, validated_tag_type) noexcept
-        : value_(value) {}
+    constexpr http_priority_urgency(std::uint8_t value, validated_tag_type) noexcept :
+        value_(value) {}
 
     std::uint8_t value_{3};
 };
@@ -1437,15 +1397,13 @@ struct http_priority_update final {
 // Missing response parameters remain absent for intermediary merging.
 [[nodiscard]] std::variant<http_priority_fields, http_priority_error> parse_http_priority(std::string_view value) noexcept;
 namespace detail {
-[[nodiscard]] std::variant<http_priority_fields, http_priority_error> parse_http_priority_headers(
-    http_header_range_view headers) noexcept;
+[[nodiscard]] std::variant<http_priority_fields, http_priority_error> parse_http_priority_headers(http_header_range_view headers) noexcept;
 }  // namespace detail
 
 // Reads all Priority field lines in wire order without allocating. A later
 // dictionary member replaces the earlier member, including an invalid value.
 template <http_header_field_source headers_type>
-[[nodiscard]] std::variant<http_priority_fields, http_priority_error> parse_http_priority(
-    const headers_type& headers) noexcept {
+[[nodiscard]] std::variant<http_priority_fields, http_priority_error> parse_http_priority(const headers_type& headers) noexcept {
     return detail::parse_http_priority_headers(headers);
 }
 [[nodiscard]] std::variant<std::size_t, http_priority_error> encode_http_priority(std::span<char> output, http_priority_fields fields_value) noexcept;
@@ -1526,17 +1484,11 @@ enum class http_connection_advertisement_error : std::uint8_t {
 // RFC 8336 ORIGIN payload decoding. Invalid serialized
 // origins are ignored; truncated length-delimited entries reject the payload.
 // Origin authority and connection coalescing require the runtime's TLS identity.
-[[nodiscard]] std::variant<http_origin_advertisement, http_connection_advertisement_error>
-decode_http_origin_advertisement(std::span<const char> payload_value);
-[[nodiscard]] std::variant<std::vector<char>, http_connection_advertisement_error>
-encode_http2_origin_frame(std::span<const std::string_view> origins,
-    std::uint32_t max_frame_size = 16384);
+[[nodiscard]] std::variant<http_origin_advertisement, http_connection_advertisement_error> decode_http_origin_advertisement(std::span<const char> payload_value);
+[[nodiscard]] std::variant<std::vector<char>, http_connection_advertisement_error> encode_http2_origin_frame(std::span<const std::string_view> origins, std::uint32_t max_frame_size = 16384);
 // RFC 7838 ALTSVC. Stream 0 carries an explicit origin; a request stream
 // carries an empty origin and inherits the request origin. The value is an
 // Alt-Svc field value; transport authority and cache policy are external.
-[[nodiscard]] std::variant<http_alternative_service_advertisement, http_connection_advertisement_error>
-decode_http2_alternative_service(std::uint32_t stream_id, std::span<const char> payload_value);
-[[nodiscard]] std::variant<std::vector<char>, http_connection_advertisement_error>
-encode_http2_alternative_service_frame(std::uint32_t stream_id, std::string_view origin, std::string_view field_value,
-    std::uint32_t max_frame_size = 16384);
+[[nodiscard]] std::variant<http_alternative_service_advertisement, http_connection_advertisement_error> decode_http2_alternative_service(std::uint32_t stream_id, std::span<const char> payload_value);
+[[nodiscard]] std::variant<std::vector<char>, http_connection_advertisement_error> encode_http2_alternative_service_frame(std::uint32_t stream_id, std::string_view origin, std::string_view field_value, std::uint32_t max_frame_size = 16384);
 }  // namespace ruvia

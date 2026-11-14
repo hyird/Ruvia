@@ -133,11 +133,8 @@ inline void append(std::string& target, const std::optional<std::span<const std:
 
 // An upload write that cannot complete in time, or is stopped, aborts the
 // exchange: no further content is accepted and no response follows.
-[[nodiscard]] inline ruvia::task<void> check_upload_abort(
-    ruvia::http_client_ref client, const ruvia::worker_ref& worker, bool cancel) {
-    auto exchange = co_await client.post("/operation/held-upload")
-                        .upload({.expectation_ = ruvia::http_client_request_expectation::continue_value,
-                            .continue_timeout_ = 10s});
+[[nodiscard]] inline ruvia::task<void> check_upload_abort(ruvia::http_client_ref client, const ruvia::worker_ref& worker, bool cancel) {
+    auto exchange = co_await client.post("/operation/held-upload").upload({.expectation_ = ruvia::http_client_request_expectation::continue_value, .continue_timeout_ = 10s});
     ruvia::stop_source stop;
     ruvia::task_scope stopper(worker);
     ruvia::operation_options operation{.timeout_ = interruption};

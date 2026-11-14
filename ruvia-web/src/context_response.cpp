@@ -67,8 +67,7 @@ namespace ruvia {
 namespace {
 
 [[nodiscard]] std::string_view byte_body_view(std::span<const std::byte> body) noexcept {
-    return body.empty() ? std::string_view{}
-                        : std::string_view(reinterpret_cast<const char*>(body.data()), body.size());
+    return body.empty() ? std::string_view{} : std::string_view(reinterpret_cast<const char*>(body.data()), body.size());
 }
 
 // text() and stream_text(): plain UTF-8 text plus nosniff, so a browser never
@@ -120,16 +119,14 @@ void context_response_editor::status(http_status_code status_code) {
     }
 }
 
-std::string context::url_for(
-    std::string_view pattern, std::span<const std::string_view> values) const {
+std::string context::url_for(std::string_view pattern, std::span<const std::string_view> values) const {
     if (services().routes() == nullptr) {
         throw std::logic_error("url_for requires a route table bound to this context");
     }
     return services().routes()->url_for(pattern, values);
 }
 
-std::string context::url_for(
-    std::string_view pattern, std::initializer_list<std::string_view> values) const {
+std::string context::url_for(std::string_view pattern, std::initializer_list<std::string_view> values) const {
     return url_for(pattern, std::span<const std::string_view>(values.begin(), values.size()));
 }
 
@@ -253,8 +250,7 @@ task<http_response> context::not_found_task() {
     // Selected only here, on demand: every matched request carries the table,
     // and few of them ever ask for a not-found answer.
     const auto* routes = services().routes();
-    const auto handler = routes == nullptr ? detail::http_not_found_handler_ref{nullptr}
-                                           : routes->not_found_handler_for(request_.path());
+    const auto handler = routes == nullptr ? detail::http_not_found_handler_ref{nullptr} : routes->not_found_handler_for(request_.path());
     if (handler != nullptr) {
         co_return co_await handler(*this);
     }
@@ -288,8 +284,7 @@ context& context::set_stable_response_header(std::string_view name, std::string_
     return *this;
 }
 
-void context::apply_response_state(
-    http_response& response, std::optional<http_status_code> status_code) {
+void context::apply_response_state(http_response& response, std::optional<http_status_code> status_code) {
     if (!response_state().has_draft()) {
         if (status_code.has_value()) {
             response.status(*status_code);
@@ -305,8 +300,7 @@ void context::apply_response_state(
 
 namespace {
 
-void write_cookie(http_response& response, std::string_view name, std::string_view value,
-    const cookie_options& options) {
+void write_cookie(http_response& response, std::string_view name, std::string_view value, const cookie_options& options) {
     const set_cookie_plan plan(name, value, options);
     response.set_cookie(plan);
 }
@@ -355,14 +349,11 @@ void context_response_editor::set_signed_cookie(set_signed_cookie_options option
     const auto name = options.name_.view();
     const auto value = options.value_.view();
     const auto secret = options.secret_.view();
-    const auto prefix = options.attributes_.prefix_
-                            ? std::string_view(ruvia::http_cookie_prefix_text(*options.attributes_.prefix_))
-                            : std::string_view{};
+    const auto prefix = options.attributes_.prefix_ ? std::string_view(ruvia::http_cookie_prefix_text(*options.attributes_.prefix_)) : std::string_view{};
     const detail::inline_text_concat<128> wire_name({prefix, name});
     char signature[detail::cookie_signature_size];
     detail::write_cookie_signature(signature, secret, wire_name.view(), value);
-    const detail::inline_text_concat<256> signed_value(
-        {value, ".", std::string_view(signature, sizeof(signature))});
+    const detail::inline_text_concat<256> signed_value({value, ".", std::string_view(signature, sizeof(signature))});
     write_cookie(target(), name, signed_value.view(), options.attributes_);
 }
 
@@ -399,8 +390,7 @@ http_response make_health_response(context& context_value) {
 http_response make_readiness_response(context& context_value, readiness_response_options options) {
     switch (options.state_) {
         case readiness_state::ready:
-            return detail::context_access::make_static_json_response(
-                context_value, R"({"status":"ready"})");
+            return detail::context_access::make_static_json_response(context_value, R"({"status":"ready"})");
         case readiness_state::unavailable:
             break;
         default:
@@ -410,8 +400,7 @@ http_response make_readiness_response(context& context_value, readiness_response
     context_value.draft().status(http_status::service_unavailable);
     const auto reason = options.unavailable_reason_.view();
     if (reason.empty()) {
-        return detail::context_access::make_static_json_response(
-            context_value, R"({"status":"not_ready"})");
+        return detail::context_access::make_static_json_response(context_value, R"({"status":"not_ready"})");
     }
 
     static constexpr std::string_view prefix = R"({"status":"not_ready","reason":)";
@@ -477,8 +466,7 @@ void http_connection_advertisement_output::advertise_alternative_service(std::st
     }
     service_(target_, value);
 }
-task<void> http_interim_response_output::inform(
-    const http_interim_response_head& response, operation_options operation, context& context_value) {
+task<void> http_interim_response_output::inform(const http_interim_response_head& response, operation_options operation, context& context_value) {
     if (final_committed_) {
         throw std::logic_error("the final response has already started");
     }
@@ -487,19 +475,16 @@ task<void> http_interim_response_output::inform(
     for (const auto& field : response.headers()) {
         owned.emplace_back(field.name(), field.value());
     }
-    return ::ruvia::make_scoped_operation(
-        scope_, write_owned(response.status(), std::move(owned), std::move(operation), context_value));
+    return ::ruvia::make_scoped_operation(scope_, write_owned(response.status(), std::move(owned), std::move(operation), context_value));
 }
-task<void> http_interim_response_output::write_owned(http_status_code status,
-    std::vector<http_header> fields_value, operation_options operation, context& context_value) {
+task<void> http_interim_response_output::write_owned(http_status_code status, std::vector<http_header> fields_value, operation_options operation, context& context_value) {
     auto lease = claim_operation_lane(output_active_, "interim response output is already active");
     if (final_committed_) {
         throw std::logic_error("the final response has already started");
     }
     const detail::inline_http_header_views<16> active_views(fields_value);
     const http_interim_response_head head(status, active_views.view());
-    operation_interrupt interrupt(interrupts_, context_value.worker(), operation, &context_value,
-        &context_access::reset_interrupted_request, "interim response write");
+    operation_interrupt interrupt(interrupts_, context_value.worker(), operation, &context_value, &context_access::reset_interrupted_request, "interim response write");
     try {
         co_await write_(target_, head);
     } catch (...) {
@@ -551,16 +536,13 @@ task<dispatch_response> context::dispatch(dispatch_options options) {
     if (services().dispatch_depth() >= 8) {
         throw std::logic_error("subrequest nesting limit exceeded");
     }
-    if (!is_valid_http_method_token(options.method_) ||
-        classify_http_method(options.method_) == http_known_method::connect ||
-        !is_valid_http_origin_form_target(options.target_)) {
+    if (!is_valid_http_method_token(options.method_) || classify_http_method(options.method_) == http_known_method::connect || !is_valid_http_origin_form_target(options.target_)) {
         throw std::invalid_argument("dispatch requires a valid method and origin-form target");
     }
     if (options.body_.size() > services().max_decoded_body_bytes()) {
         throw std::invalid_argument("subrequest body exceeds the configured limit");
     }
-    if (options.method_.size() > max_subrequest_header_bytes ||
-        options.target_.size() > max_subrequest_header_bytes - options.method_.size()) {
+    if (options.method_.size() > max_subrequest_header_bytes || options.target_.size() > max_subrequest_header_bytes - options.method_.size()) {
         throw std::invalid_argument("subrequest headers exceed the configured limit");
     }
     std::size_t header_bytes = options.method_.size() + options.target_.size();
@@ -571,8 +553,7 @@ task<dispatch_response> context::dispatch(dispatch_options options) {
         if (is_http_protocol_managed_request_field(header.name())) {
             throw std::invalid_argument("subrequest framing headers are owned by dispatch");
         }
-        if (header.name().size() > max_subrequest_header_bytes - header_bytes ||
-            header.value().size() > max_subrequest_header_bytes - header_bytes - header.name().size()) {
+        if (header.name().size() > max_subrequest_header_bytes - header_bytes || header.value().size() > max_subrequest_header_bytes - header_bytes - header.name().size()) {
             throw std::invalid_argument("subrequest headers exceed the configured limit");
         }
         header_bytes += header.name().size() + header.value().size();
@@ -590,14 +571,10 @@ task<dispatch_response> context::dispatch(dispatch_options options) {
             headers.emplace_back(header.name(), header.value());
         }
     }
-    return ::ruvia::make_scoped_operation(operation_scope_,
-        dispatch_task(std::move(method), std::move(target), std::move(body), std::move(headers),
-            std::move(options.stop_token_)));
+    return ::ruvia::make_scoped_operation(operation_scope_, dispatch_task(std::move(method), std::move(target), std::move(body), std::move(headers), std::move(options.stop_token_)));
 }
 
-task<dispatch_response> context::dispatch_task(std::string method, std::string target,
-    std::string body_storage, std::vector<http_header> headers,
-    ::ruvia::stop_token stop_token_value) {
+task<dispatch_response> context::dispatch_task(std::string method, std::string target, std::string body_storage, std::vector<http_header> headers, ::ruvia::stop_token stop_token_value) {
     const std::string_view body = body_storage;
     std::array<char, http_max_unsigned_decimal_size> content_length_text;
     const auto content_length = http_format_unsigned(content_length_text, body.size());
@@ -609,8 +586,7 @@ task<dispatch_response> context::dispatch_task(std::string method, std::string t
     active_headers.push_back(http_header_view("Content-Length", content_length));
     const auto request = [&]() {
         try {
-            return make_parsed_http_request(method, target, active_headers.view(),
-                std::as_bytes(std::span(body.data(), body.size())));
+            return make_parsed_http_request(method, target, active_headers.view(), std::as_bytes(std::span(body.data(), body.size())));
         } catch (const http_protocol_error&) {
             throw std::invalid_argument("invalid subrequest");
         }
@@ -619,8 +595,7 @@ task<dispatch_response> context::dispatch_task(std::string method, std::string t
     const auto resolution = routes.resolve(request);
     if (const auto* resolved = resolution.resolved()) {
         const auto& endpoint = resolved->route().endpoint();
-        if (endpoint.buffered() == nullptr ||
-            endpoint.request_body_mode() != detail::request_body_mode::buffered) {
+        if (endpoint.buffered() == nullptr || endpoint.request_body_mode() != detail::request_body_mode::buffered) {
             throw std::logic_error("dispatch requires a buffered route");
         }
     }
@@ -644,10 +619,8 @@ task<dispatch_response> context::dispatch_task(std::string method, std::string t
             .coding_ = http_response_coding_selection_for(request),
         },
         policy, services().for_subrequest(stop), response);
-    if (detail::http_response_needs_not_acceptable(admission.tail().coding_policy(), request, response) &&
-        !response.status().is_error()) {
-        response = co_await routes.handle_error(request,
-            http_error_info(detail::http_not_acceptable_coding_error()), admission.services());
+    if (detail::http_response_needs_not_acceptable(admission.tail().coding_policy(), request, response) && !response.status().is_error()) {
+        response = co_await routes.handle_error(request, http_error_info(detail::http_not_acceptable_coding_error()), admission.services());
     }
     // The error handler answers the 406 with any response shape, so the file
     // check covers whichever response is final.
@@ -679,21 +652,18 @@ task<dispatch_response> context::dispatch_task(std::string method, std::string t
 #endif
 namespace ruvia {
 
-context::context(const http_request& request, const detail::context_services& services)
-    : context(request, {}, nullptr, nullptr, 0, 0, services) {}
+context::context(const http_request& request, const detail::context_services& services) :
+    context(request, {}, nullptr, nullptr, 0, 0, services) {}
 
-context::context(const http_request& request,
-    std::string_view route_path, const std::string_view* param_names,
-    const std::string_view* param_values, std::size_t param_count, std::uintptr_t route_rate_limit_scope,
-    const detail::context_services& services)
-    : request_(request),
-      capabilities_(services.worker(), services.get_stop_token(), services.worker_states()),
-      route_path_(route_path),
-      param_names_(param_names),
-      param_values_(param_values),
-      param_count_(param_count < detail::max_route_params ? param_count : detail::max_route_params),
-      route_rate_limit_scope_(route_rate_limit_scope),
-      request_storage_(std::make_unique<detail::context_request_storage>(services)) {
+context::context(const http_request& request, std::string_view route_path, const std::string_view* param_names, const std::string_view* param_values, std::size_t param_count, std::uintptr_t route_rate_limit_scope, const detail::context_services& services) :
+    request_(request),
+    capabilities_(services.worker(), services.get_stop_token(), services.worker_states()),
+    route_path_(route_path),
+    param_names_(param_names),
+    param_values_(param_values),
+    param_count_(param_count < detail::max_route_params ? param_count : detail::max_route_params),
+    route_rate_limit_scope_(route_rate_limit_scope),
+    request_storage_(std::make_unique<detail::context_request_storage>(services)) {
     operation_scope_.bind_worker(services.worker());
 }
 context::~context() = default;
@@ -795,28 +765,24 @@ void context::respond(http_response&& response) {
 #ifdef RUVIA_ENABLE_DATABASE
 db_session context::db() const {
     const auto& services_value = services();
-    return services_value.client_registries().db(
-        operation_scope_, services_value.io_metrics(), capabilities_.stop_token());
+    return services_value.client_registries().db(operation_scope_, services_value.io_metrics(), capabilities_.stop_token());
 }
 
 db_session context::db(std::string_view alias) const {
     const auto& services_value = services();
-    return services_value.client_registries().db(
-        alias, operation_scope_, services_value.io_metrics(), capabilities_.stop_token());
+    return services_value.client_registries().db(alias, operation_scope_, services_value.io_metrics(), capabilities_.stop_token());
 }
 #endif
 
 #ifdef RUVIA_ENABLE_REDIS
 redis_session context::redis() const {
     const auto& services_value = services();
-    return services_value.client_registries().redis(
-        operation_scope_, services_value.io_metrics(), capabilities_.stop_token());
+    return services_value.client_registries().redis(operation_scope_, services_value.io_metrics(), capabilities_.stop_token());
 }
 
 redis_session context::redis(std::string_view alias) const {
     const auto& services_value = services();
-    return services_value.client_registries().redis(
-        alias, operation_scope_, services_value.io_metrics(), capabilities_.stop_token());
+    return services_value.client_registries().redis(alias, operation_scope_, services_value.io_metrics(), capabilities_.stop_token());
 }
 #endif
 
@@ -835,8 +801,7 @@ conn_info detail::context_services::resolve_conn_info(const http_request& reques
     if (!connection_services_.peer_trusted_ || worker_services_->trusted_proxies_ == nullptr) {
         return resolved;
     }
-    const auto forwarded =
-        worker_services_->trusted_proxies_->resolve(resolved.remote().address(), request);
+    const auto forwarded = worker_services_->trusted_proxies_->resolve(resolved.remote().address(), request);
     if (forwarded.from_forwarded_header()) {
         resolved.apply_forwarded(forwarded.address(), forwarded.scheme());
     }
@@ -866,14 +831,12 @@ namespace {
         return false;
     }
     const auto text_length = static_cast<int>(text.size());
-    const auto wide_length =
-        ::MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, text.data(), text_length, nullptr, 0);
+    const auto wide_length = ::MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, text.data(), text_length, nullptr, 0);
     if (wide_length <= 0) {
         return false;
     }
     output.resize(static_cast<std::size_t>(wide_length));
-    if (::MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, text.data(), text_length, output.data(),
-            wide_length) != wide_length) {
+    if (::MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, text.data(), text_length, output.data(), wide_length) != wide_length) {
         return false;
     }
 #else
@@ -885,9 +848,7 @@ namespace {
 inline constexpr std::size_t file_response_header_reserve = 7;
 
 [[nodiscard]] http_error static_file_changed_error() {
-    return http_error({.status_ = ruvia::http_status::internal_server_error,
-        .code_ = "static_file_changed",
-        .message_ = "static file changed since its index was built"});
+    return http_error({.status_ = ruvia::http_status::internal_server_error, .code_ = "static_file_changed", .message_ = "static file changed since its index was built"});
 }
 
 // context::file's open, run on the blocking pool. The path travels with it in
@@ -906,12 +867,8 @@ struct opened_file_path final {
 // the request's stop token. An abandoned open keeps running on the pool and
 // frees what it owns there.
 template <typename open_type>
-[[nodiscard]] task<blocking_result<std::invoke_result_t<open_type&>>> run_file_open(
-    context& context_value, open_type open) {
-    return run_blocking(context_value.worker(),
-        {.timeout_ = detail::context_access::services(context_value).file_io_timeout(),
-            .stop_token_ = context_value.stop_token()},
-        std::move(open));
+[[nodiscard]] task<blocking_result<std::invoke_result_t<open_type&>>> run_file_open(context& context_value, open_type open) {
+    return run_blocking(context_value.worker(), {.timeout_ = detail::context_access::services(context_value).file_io_timeout(), .stop_token_ = context_value.stop_token()}, std::move(open));
 }
 
 // The open's value. An open that never completed is answered as a file body
@@ -922,9 +879,7 @@ template <typename value_type>
 [[nodiscard]] value_type take_file_open(context& context_value, blocking_result<value_type>&& result) {
     if (result.status() != blocking_status::completed) {
         const auto failure = detail::response_file_failure::read_not_completed(result.status());
-        detail::context_access::services(context_value)
-            .connection_failure()
-            .invoke(detail::context_access::services(context_value).remote_address(), failure.fault());
+        detail::context_access::services(context_value).connection_failure().invoke(detail::context_access::services(context_value).remote_address(), failure.fault());
         std::rethrow_exception(failure.response_error());
     }
     return std::move(result).take_value();
@@ -939,11 +894,10 @@ template <typename value_type>
 class file_response_path final {
 public:
     // `path` must be NUL-terminated (a c_str() or path::native() view).
-    file_response_path(http_native_path_view_type path, http_response_file_identity identity,
-        http_response_file_descriptor opened)
-        : path_(path),
-          identity_(identity),
-          opened_(std::move(opened)) {
+    file_response_path(http_native_path_view_type path, http_response_file_identity identity, http_response_file_descriptor opened) :
+        path_(path),
+        identity_(identity),
+        opened_(std::move(opened)) {
         if (path_.empty() || !opened_) {
             throw std::logic_error("file response has no native path or opened handle");
         }
@@ -953,8 +907,7 @@ public:
         response.file_body(path_, size, offset, length, identity_, std::move(opened_));
     }
 
-    void set_multipart_body(http_response& response, std::uint64_t size,
-        http_multipart_byte_range_plan&& plan) {
+    void set_multipart_body(http_response& response, std::uint64_t size, http_multipart_byte_range_plan&& plan) {
         response.multipart_file_body(path_, size, identity_, std::move(plan), std::move(opened_));
     }
 
@@ -974,8 +927,7 @@ public:
         return file_response_body_source(bytes_value);
     }
 
-    void set_body(http_response& response, std::uint64_t size,
-        std::uint64_t offset, std::uint64_t length) {
+    void set_body(http_response& response, std::uint64_t size, std::uint64_t offset, std::uint64_t length) {
         if (auto* path = std::get_if<file_response_path>(&value_)) {
             path->set_body(response, size, offset, length);
             return;
@@ -990,18 +942,15 @@ public:
         // lease at all. Borrowing would need a per-response reference on the
         // snapshot (shared ownership on the hot path) or a lease release hook
         // inside http_response.
-        std::string owned(
-            bytes_value.substr(static_cast<std::size_t>(offset), static_cast<std::size_t>(length)));
+        std::string owned(bytes_value.substr(static_cast<std::size_t>(offset), static_cast<std::size_t>(length)));
         response.file_bytes_body(std::move(owned));
     }
 
-    void set_full_body(
-        http_response& response, std::uint64_t size) {
+    void set_full_body(http_response& response, std::uint64_t size) {
         set_body(response, size, 0, size);
     }
 
-    void set_multipart_body(http_response& response,
-        std::uint64_t size, http_multipart_byte_range_plan&& plan) {
+    void set_multipart_body(http_response& response, std::uint64_t size, http_multipart_byte_range_plan&& plan) {
         if (auto* path = std::get_if<file_response_path>(&value_)) {
             path->set_multipart_body(response, size, std::move(plan));
             return;
@@ -1009,16 +958,13 @@ public:
         const auto source_value = std::get<std::string_view>(value_);
         std::size_t total_size = 0;
         for (const auto& segment : plan.segments()) {
-            total_size += segment.kind_ == http_multipart_byte_range_plan::segment_kind::file
-                              ? static_cast<std::size_t>(segment.file_length_)
-                              : segment.metadata_length_;
+            total_size += segment.kind_ == http_multipart_byte_range_plan::segment_kind::file ? static_cast<std::size_t>(segment.file_length_) : segment.metadata_length_;
         }
         std::string body;
         body.reserve(total_size);
         for (const auto& segment : plan.segments()) {
             if (segment.kind_ == http_multipart_byte_range_plan::segment_kind::file) {
-                body.append(source_value.substr(static_cast<std::size_t>(segment.file_offset_),
-                    static_cast<std::size_t>(segment.file_length_)));
+                body.append(source_value.substr(static_cast<std::size_t>(segment.file_offset_), static_cast<std::size_t>(segment.file_length_)));
             } else {
                 body.append(plan.metadata().substr(segment.metadata_offset_, segment.metadata_length_));
             }
@@ -1027,11 +973,11 @@ public:
     }
 
 private:
-    explicit file_response_body_source(file_response_path path) noexcept
-        : value_(std::move(path)) {}
+    explicit file_response_body_source(file_response_path path) noexcept :
+        value_(std::move(path)) {}
 
-    explicit file_response_body_source(std::string_view bytes_value) noexcept
-        : value_(bytes_value) {}
+    explicit file_response_body_source(std::string_view bytes_value) noexcept :
+        value_(bytes_value) {}
 
     std::variant<file_response_path, std::string_view> value_;
 };
@@ -1068,9 +1014,7 @@ struct file_validators final {
     std::time_t modified_seconds_{0};
 };
 
-[[nodiscard]] file_validators compute_file_validators(const file_response_source& source_value,
-    std::array<char, detail::static_file_etag_size>& etag_storage,
-    std::array<char, http_imf_fixdate_size>& last_modified_storage) noexcept {
+[[nodiscard]] file_validators compute_file_validators(const file_response_source& source_value, std::array<char, detail::static_file_etag_size>& etag_storage, std::array<char, http_imf_fixdate_size>& last_modified_storage) noexcept {
     file_validators validators;
     // RFC 9110 §8.8.2.1 forbids an origin server from emitting a
     // Last-Modified value later than the message origination time. Filesystems
@@ -1085,8 +1029,7 @@ struct file_validators final {
     validators.modified_seconds_ = last_modified_is_actual ? source_value.modified_seconds_ : response_seconds;
     if (source_value.response_validators_ == static_response_validator_policy::emit) {
         if (source_value.precomputed_etag_.empty()) {
-            etag_storage = detail::format_static_file_snapshot_etag(
-                source_value.size_, source_value.modified_token_, source_value.identity_);
+            etag_storage = detail::format_static_file_snapshot_etag(source_value.size_, source_value.modified_token_, source_value.identity_);
             validators.etag_ = std::string_view(etag_storage.data(), etag_storage.size());
         } else {
             validators.etag_ = source_value.precomputed_etag_;
@@ -1098,8 +1041,7 @@ struct file_validators final {
         if (source_value.precomputed_last_modified_.empty() || !last_modified_is_actual) {
             if (const auto date = format_http_date(validators.modified_seconds_)) {
                 last_modified_storage = *date;
-                validators.last_modified_ =
-                    std::string_view(last_modified_storage.data(), last_modified_storage.size());
+                validators.last_modified_ = std::string_view(last_modified_storage.data(), last_modified_storage.size());
             }
         } else {
             validators.last_modified_ = source_value.precomputed_last_modified_;
@@ -1108,14 +1050,12 @@ struct file_validators final {
     return validators;
 }
 
-[[nodiscard]] http_representation_response_plan plan_file_representation(const context& context_value,
-    const file_response_source& source_value, const file_validators& validators) {
+[[nodiscard]] http_representation_response_plan plan_file_representation(const context& context_value, const file_response_source& source_value, const file_validators& validators) {
     return plan_http_representation_response(detail::context_access::request(context_value),
         http_selected_representation_metadata{
             .length_ = source_value.size_,
             .etag_ = validators.etag_,
-            .last_modified_ = validators.last_modified_.empty() ? std::nullopt
-                                                                : std::optional(validators.modified_seconds_),
+            .last_modified_ = validators.last_modified_.empty() ? std::nullopt : std::optional(validators.modified_seconds_),
             // Filesystem mtime cannot establish that a representation changed
             // at most once during the second in its Last-Modified value.
             .strong_date_validator_ = false,
@@ -1123,9 +1063,7 @@ struct file_validators final {
         },
         http_representation_response_options{
             .normal_status_ = detail::context_access::response_status(context_value),
-            .range_policy_ = source_value.range_requests_ == static_range_request_policy::honor
-                                 ? http_range_request_policy::honor_byte_ranges
-                                 : http_range_request_policy::ignore,
+            .range_policy_ = source_value.range_requests_ == static_range_request_policy::honor ? http_range_request_policy::honor_byte_ranges : http_range_request_policy::ignore,
         });
 }
 
@@ -1135,10 +1073,10 @@ struct file_validators final {
 // built.
 class file_response_plan final {
 public:
-    file_response_plan(const context& context_value, const file_response_source& source_value)
-        : validators_(compute_file_validators(source_value, etag_storage_, last_modified_storage_)),
-          representation_(plan_file_representation(context_value, source_value, validators_)),
-          head_(detail::context_access::request(context_value).known_method() == http_known_method::head) {}
+    file_response_plan(const context& context_value, const file_response_source& source_value) :
+        validators_(compute_file_validators(source_value, etag_storage_, last_modified_storage_)),
+        representation_(plan_file_representation(context_value, source_value, validators_)),
+        head_(detail::context_access::request(context_value).known_method() == http_known_method::head) {}
 
     file_response_plan(const file_response_plan&) = delete;
     file_response_plan& operator=(const file_response_plan&) = delete;
@@ -1157,8 +1095,7 @@ public:
     // only describes them, so no transport read ever checks the file behind
     // such a response; its open has to.
     [[nodiscard]] bool sends_file_bytes() const noexcept {
-        return !head_ && representation_.precondition_failed() == nullptr &&
-               representation_.not_modified() == nullptr && representation_.range_unsatisfiable() == nullptr;
+        return !head_ && representation_.precondition_failed() == nullptr && representation_.not_modified() == nullptr && representation_.range_unsatisfiable() == nullptr;
     }
 
 private:
@@ -1188,12 +1125,9 @@ enum class file_header_set : std::uint8_t {
     range_unsatisfied,
 };
 
-void add_file_headers(http_response& response, const file_response_source& source_value,
-    const file_validators& validators, file_header_set header_set = file_header_set::full,
-    bool emit_content_type = true) {
+void add_file_headers(http_response& response, const file_response_source& source_value, const file_validators& validators, file_header_set header_set = file_header_set::full, bool emit_content_type = true) {
     const bool full = header_set == file_header_set::full;
-    const bool carries_content =
-        header_set == file_header_set::full || header_set == file_header_set::if_range_partial;
+    const bool carries_content = header_set == file_header_set::full || header_set == file_header_set::if_range_partial;
     response.reserve_headers(file_response_header_reserve);
     if (full && emit_content_type) {
         response.header("Content-Type", source_value.content_type_);
@@ -1204,11 +1138,9 @@ void add_file_headers(http_response& response, const file_response_source& sourc
     // A precompressed variant carries the original Content-Type with the
     // encoding declared here.
     if (carries_content && source_value.content_coding_ != http_content_coding::identity) {
-        response.header_stable_view(
-            "Content-Encoding", http_content_coding_token(source_value.content_coding_));
+        response.header_stable_view("Content-Encoding", http_content_coding_token(source_value.content_coding_));
     }
-    if (header_set != file_header_set::not_modified &&
-        source_value.range_requests_ == static_range_request_policy::honor) {
+    if (header_set != file_header_set::not_modified && source_value.range_requests_ == static_range_request_policy::honor) {
         response.header_stable_view("Accept-Ranges", "bytes");
     }
     if (source_value.response_validators_ == static_response_validator_policy::emit) {
@@ -1223,8 +1155,7 @@ void add_file_headers(http_response& response, const file_response_source& sourc
     return plan.authorized_by_if_range() ? file_header_set::if_range_partial : file_header_set::full;
 }
 
-void apply_file_response_state(context& context_value, const file_response_source& source_value,
-    http_response& response, std::optional<http_status_code> status_code) {
+void apply_file_response_state(context& context_value, const file_response_source& source_value, http_response& response, std::optional<http_status_code> status_code) {
     detail::context_access::apply_response_state(context_value, response, status_code);
     // Declare the negotiation dimension after context response metadata is
     // applied. A caller-provided Vary value must be merged, not allowed to
@@ -1236,17 +1167,14 @@ void apply_file_response_state(context& context_value, const file_response_sourc
     }
 }
 
-[[nodiscard]] http_response make_not_modified_response(context& context_value,
-    const file_response_source& source_value, const file_validators& validators, http_status_code status_code) {
+[[nodiscard]] http_response make_not_modified_response(context& context_value, const file_response_source& source_value, const file_validators& validators, http_status_code status_code) {
     http_response response;
     add_file_headers(response, source_value, validators, file_header_set::not_modified);
     apply_file_response_state(context_value, source_value, response, status_code);
     return response;
 }
 
-[[nodiscard]] http_response make_full_file_response(context& context_value,
-    const file_response_source& source_value, file_response_body_source& body, const file_validators& validators,
-    std::optional<http_status_code> status_code) {
+[[nodiscard]] http_response make_full_file_response(context& context_value, const file_response_source& source_value, file_response_body_source& body, const file_validators& validators, std::optional<http_status_code> status_code) {
     http_response response;
     add_file_headers(response, source_value, validators);
     body.set_full_body(response, source_value.size_);
@@ -1254,9 +1182,7 @@ void apply_file_response_state(context& context_value, const file_response_sourc
     return response;
 }
 
-[[nodiscard]] http_response make_multipart_response(context& context_value,
-    const file_response_source& source_value, file_response_body_source& body, const file_validators& validators,
-    const http_byte_range_set& ranges, file_header_set header_set) {
+[[nodiscard]] http_response make_multipart_response(context& context_value, const file_response_source& source_value, file_response_body_source& body, const file_validators& validators, const http_byte_range_set& ranges, file_header_set header_set) {
     std::array<char, detail::secure_token_size> boundary_token;
     const auto token = detail::generate_secure_token(boundary_token);
     http_response response;
@@ -1264,8 +1190,7 @@ void apply_file_response_state(context& context_value, const file_response_sourc
     apply_file_response_state(context_value, source_value, response, http_status::partial_content);
     const auto media_type = response.header("Content-Type");
     const auto selected_media_type = media_type.value_or(source_value.content_type_);
-    auto multipart_plan = make_http_multipart_byte_range_plan(
-        ranges, source_value.size_, selected_media_type, token);
+    auto multipart_plan = make_http_multipart_byte_range_plan(ranges, source_value.size_, selected_media_type, token);
 
     // The outer representation is the multipart body, which is not
     // content-coded; coded representations never reach this path.
@@ -1279,14 +1204,11 @@ void apply_file_response_state(context& context_value, const file_response_sourc
 
 // Builds the response `planned` selected. An indexed file behind a response
 // that sends none of its bytes was already checked by its open.
-[[nodiscard]] http_response make_file_response(context& context_value, const file_response_source& source_value,
-    file_response_body_source& body, const file_response_plan& planned) {
+[[nodiscard]] http_response make_file_response(context& context_value, const file_response_source& source_value, file_response_body_source& body, const file_response_plan& planned) {
     const auto& validators = planned.validators();
     const auto& plan = planned.representation();
     if (plan.precondition_failed()) {
-        throw http_error({.status_ = plan.status(),
-            .code_ = "precondition_failed",
-            .message_ = "file precondition failed"});
+        throw http_error({.status_ = plan.status(), .code_ = "precondition_failed", .message_ = "file precondition failed"});
     }
     if (plan.not_modified()) {
         return make_not_modified_response(context_value, source_value, validators, plan.status());
@@ -1299,8 +1221,7 @@ void apply_file_response_state(context& context_value, const file_response_sourc
         return response;
     }
     if (const auto* ranges = plan.multipart_ranges()) {
-        return make_multipart_response(
-            context_value, source_value, body, validators, *ranges, partial_file_header_set(plan));
+        return make_multipart_response(context_value, source_value, body, validators, *ranges, partial_file_header_set(plan));
     }
     if (const auto* range = plan.partial()) {
         http_response response;
@@ -1314,29 +1235,23 @@ void apply_file_response_state(context& context_value, const file_response_sourc
 }
 
 [[nodiscard]] http_error file_not_found_error() {
-    return http_error({.status_ = ruvia::http_status::not_found,
-        .code_ = "not_found",
-        .message_ = "file not found"});
+    return http_error({.status_ = ruvia::http_status::not_found, .code_ = "not_found", .message_ = "file not found"});
 }
 
 // context::file once its inputs are owned: `native_path` in the process
 // resource, since it travels to the pool thread, and `content_type` in the
 // request pool. An empty `content_type` selects the type guessed from the
 // path.
-[[nodiscard]] task<http_response> serve_file(
-    context& context_value, http_native_path_string_type native_path, std::string content_type) {
-    const auto content_type_value = content_type.empty() ? detail::guess_static_file_content_type_from_path_view(
-                                                               http_native_path_view_type(native_path))
-                                                         : std::string_view(content_type);
+[[nodiscard]] task<http_response> serve_file(context& context_value, http_native_path_string_type native_path, std::string content_type) {
+    const auto content_type_value = content_type.empty() ? detail::guess_static_file_content_type_from_path_view(http_native_path_view_type(native_path)) : std::string_view(content_type);
     // Open once, on the blocking pool: the response is framed from this
     // handle's metadata, and the body comes from the same handle, so no path
     // is resolved twice.
-    auto opened = take_file_open(context_value,
-        co_await run_file_open(context_value, [path = std::move(native_path)]() mutable {
-            opened_file_path result{.path_ = std::move(path)};
-            result.file_ = detail::open_response_file(result.path_.c_str(), result.error_);
-            return result;
-        }));
+    auto opened = take_file_open(context_value, co_await run_file_open(context_value, [path = std::move(native_path)]() mutable {
+        opened_file_path result{.path_ = std::move(path)};
+        result.file_ = detail::open_response_file(result.path_.c_str(), result.error_);
+        return result;
+    }));
     if (opened.error_) {
         throw file_not_found_error();
     }
@@ -1356,8 +1271,7 @@ void apply_file_response_state(context& context_value, const file_response_sourc
         .negotiates_encoding_ = false,
     };
     const file_response_plan planned(context_value, source_value);
-    auto body = file_response_body_source::file(
-        file_response_path(opened.path_, snapshot.identity_, std::move(opened.file_.handle_)));
+    auto body = file_response_body_source::file(file_response_path(opened.path_, snapshot.identity_, std::move(opened.file_.handle_)));
     auto response = make_file_response(context_value, source_value, body, planned);
     detail::context_access::discard_draft(context_value);
     co_return response;
@@ -1367,8 +1281,7 @@ void apply_file_response_state(context& context_value, const file_response_sourc
 // view `root`'s snapshot, which the caller keeps alive until this completes;
 // `content_type` is owned in the request pool, and an empty one selects the
 // base entry's type.
-[[nodiscard]] task<http_response> serve_static_file(context& context_value, const static_root& root,
-    static_file_representation served, detail::static_root_entry_view base_entry, std::string content_type) {
+[[nodiscard]] task<http_response> serve_static_file(context& context_value, const static_root& root, static_file_representation served, detail::static_root_entry_view base_entry, std::string content_type) {
     const auto& served_entry = served.entry();
     const auto* const memory_variant = served.memory_variant();
     // A document-root snapshot keeps small files' bytes; they describe exactly
@@ -1378,16 +1291,14 @@ void apply_file_response_state(context& context_value, const file_response_sourc
     const file_response_source source_value{
         .size_ = memory_variant == nullptr ? served_entry.size() : memory_variant->size(),
         .modified_token_ = memory_variant == nullptr ? served_entry.modified_token() : memory_variant->modified_token(),
-        .modified_seconds_ =
-            memory_variant == nullptr ? served_entry.modified_seconds() : memory_variant->modified_seconds(),
+        .modified_seconds_ = memory_variant == nullptr ? served_entry.modified_seconds() : memory_variant->modified_seconds(),
         .identity_ = file_backed ? served_entry.identity() : http_response_file_identity::unchecked(),
         .content_type_ = content_type.empty() ? base_entry.content_type() : std::string_view(content_type),
         .cache_control_ = base_entry.get_cache_control(),
         .range_requests_ = base_entry.range_requests(),
         .response_validators_ = base_entry.response_validators(),
         .precomputed_etag_ = memory_variant == nullptr ? served_entry.etag() : memory_variant->etag(),
-        .precomputed_last_modified_ =
-            memory_variant == nullptr ? served_entry.last_modified() : memory_variant->last_modified(),
+        .precomputed_last_modified_ = memory_variant == nullptr ? served_entry.last_modified() : memory_variant->last_modified(),
         .content_coding_ = served.content_coding(),
         // static_file negotiates the representation by Accept-Encoding.
         .negotiates_encoding_ = true,
@@ -1400,19 +1311,16 @@ void apply_file_response_state(context& context_value, const file_response_sourc
     // of its bytes checks the opened handle against the index there too.
     http_response_file_descriptor opened;
     if (file_backed) {
-        opened = take_file_open(context_value,
-            co_await run_file_open(context_value,
-                detail::static_root_access::entry_open(root, served_entry, !planned.sends_file_bytes())));
+        opened = take_file_open(context_value, co_await run_file_open(context_value, detail::static_root_access::entry_open(root, served_entry, !planned.sends_file_bytes())));
         if (!opened) {
             throw static_file_changed_error();
         }
     }
-    auto body = memory_variant != nullptr ? file_response_body_source::bytes_value(memory_variant->bytes())
-                : resident_bytes != nullptr
-                    ? file_response_body_source::bytes_value(*resident_bytes)
-                    : file_response_body_source::file(file_response_path(
-                          http_native_path_view_type(served_entry.file_path()), served_entry.identity(),
-                          std::move(opened)));
+    auto body = memory_variant != nullptr
+        ? file_response_body_source::bytes_value(memory_variant->bytes())
+        : resident_bytes != nullptr
+        ? file_response_body_source::bytes_value(*resident_bytes)
+        : file_response_body_source::file(file_response_path(http_native_path_view_type(served_entry.file_path()), served_entry.identity(), std::move(opened)));
     auto response = make_file_response(context_value, source_value, body, planned);
     detail::context_access::discard_draft(context_value);
     co_return response;
@@ -1445,16 +1353,11 @@ task<http_response> context::static_file(const static_root& root, static_file_re
     if (!entry_value.has_value()) {
         throw file_not_found_error();
     }
-    const auto mode = services().precompressed_static_files() ? detail::static_file_selection_mode::precompressed
-                                                              : detail::static_file_selection_mode::identity_only;
-    return detail::context_access::static_file_resolved(
-        *this, root, relative, options.content_type_.view(), *entry_value, mode);
+    const auto mode = services().precompressed_static_files() ? detail::static_file_selection_mode::precompressed : detail::static_file_selection_mode::identity_only;
+    return detail::context_access::static_file_resolved(*this, root, relative, options.content_type_.view(), *entry_value, mode);
 }
 
-task<http_response> detail::context_access::static_file_resolved(
-    context& context_value, const static_root& root, std::string_view relative,
-    std::string_view content_type_value, detail::static_root_entry_view base_entry,
-    detail::static_file_selection_mode mode) {
+task<http_response> detail::context_access::static_file_resolved(context& context_value, const static_root& root, std::string_view relative, std::string_view content_type_value, detail::static_root_entry_view base_entry, detail::static_file_selection_mode mode) {
     // Serve a precompressed variant when the client accepts one; the bytes and
     // validators come from the variant, the Content-Type from the base entry.
     // Admission already folded Accept-Encoding; only a context created outside
@@ -1466,14 +1369,12 @@ task<http_response> detail::context_access::static_file_resolved(
         if (const auto* admitted = context_value.services().response_coding()) {
             return select_static_file_representation(root, relative, *admitted, base_entry);
         }
-        return select_static_file_representation(
-            root, relative, http_response_coding_selection_for(context_value.request_), base_entry);
+        return select_static_file_representation(root, relative, http_response_coding_selection_for(context_value.request_), base_entry);
     }();
     if (!served.has_value()) {
         throw http_error(detail::http_not_acceptable_coding_error());
     }
-    return serve_static_file(
-        context_value, root, *served, base_entry, std::string(content_type_value));
+    return serve_static_file(context_value, root, *served, base_entry, std::string(content_type_value));
 }
 
 }  // namespace ruvia
@@ -1486,9 +1387,7 @@ namespace detail {
 // endpoint: RFC 9110 15.5.16 assigns that 415, distinct from the 400 a
 // malformed body of the RIGHT type earns below.
 [[noreturn]] void throw_invalid_json_content_type() {
-    throw http_error({.status_ = http_status::unsupported_media_type,
-        .code_ = "unsupported_media_type",
-        .message_ = "request body must be application/json"});
+    throw http_error({.status_ = http_status::unsupported_media_type, .code_ = "unsupported_media_type", .message_ = "request body must be application/json"});
 }
 
 [[noreturn]] void throw_invalid_json_body() {
@@ -1496,9 +1395,7 @@ namespace detail {
 }
 
 [[noreturn]] void throw_invalid_form_content_type() {
-    throw http_error({.status_ = http_status::unsupported_media_type,
-        .code_ = "unsupported_media_type",
-        .message_ = "request body must be application/x-www-form-urlencoded"});
+    throw http_error({.status_ = http_status::unsupported_media_type, .code_ = "unsupported_media_type", .message_ = "request body must be application/x-www-form-urlencoded"});
 }
 
 [[noreturn]] void throw_invalid_query() {
@@ -1514,15 +1411,13 @@ namespace detail {
 namespace {
 
 [[nodiscard]] const request_name_value_list& empty_request_fields() noexcept {
-    static const request_name_value_list empty =
-        detail::request_name_value_list_access::make();
+    static const request_name_value_list empty = detail::request_name_value_list_access::make();
     return empty;
 }
 
 // Unencoded names and values borrow the request query string; decoded ones
 // live in the request arena. Form decoding keeps an invalid '%' literally.
-void ensure_request_query(const http_request& request,
-    detail::context_request_storage& request_storage) {
+void ensure_request_query(const http_request& request, detail::context_request_storage& request_storage) {
     auto& cache = request_storage.query_;
     if (cache) {
         return;
@@ -1563,8 +1458,7 @@ void ensure_request_query(const http_request& request,
 }
 
 // Counts encoded captures only; decoding validates them once, in ensure_route_params.
-[[nodiscard]] std::size_t count_encoded_route_params(const std::string_view* param_values,
-    std::size_t param_count, detail::context_request_storage& request_storage) {
+[[nodiscard]] std::size_t count_encoded_route_params(const std::string_view* param_values, std::size_t param_count, detail::context_request_storage& request_storage) {
     if (request_storage.route_params_unencoded_) {
         return 0;
     }
@@ -1580,9 +1474,7 @@ void ensure_request_query(const http_request& request,
 
 // Route names and unencoded captures borrow stable route/request storage; a
 // "*" capture rejects escapes revealing a path separator, as static paths do.
-void ensure_route_params(const std::string_view* param_names,
-    const std::string_view* param_values, std::size_t param_count,
-    detail::context_request_storage& request_storage) {
+void ensure_route_params(const std::string_view* param_names, const std::string_view* param_values, std::size_t param_count, detail::context_request_storage& request_storage) {
     auto& cache = request_storage.route_params_;
     if (cache) {
         return;
@@ -1607,8 +1499,7 @@ void ensure_route_params(const std::string_view* param_names,
         std::string_view decoded_value = param_values[i];
         if (has_url_encoding(decoded_value, url_decode_mode::percent)) {
             char* const out = decoded_bytes.data() + cursor;
-            const auto size = detail::decode_url_bytes(
-                decoded_value, out, url_decode_mode::percent, param_names[i] == "*");
+            const auto size = detail::decode_url_bytes(decoded_value, out, url_decode_mode::percent, param_names[i] == "*");
             if (!size) {
                 decoded_bytes.clear();
                 request_storage.route_params_invalid_ = true;
@@ -1637,15 +1528,12 @@ void ensure_route_params(const std::string_view* param_names,
 }
 
 [[nodiscard]] multipart_boundary get_multipart_boundary(const http_request& request) {
-    const auto boundary = parse_multipart_boundary(
-        request.header("Content-Type").value_or(std::string_view{}));
+    const auto boundary = parse_multipart_boundary(request.header("Content-Type").value_or(std::string_view{}));
     if (const auto* parsed = boundary.boundary()) {
         return *parsed;
     }
     if (boundary.not_applicable() != nullptr) {
-        throw http_error({.status_ = http_status::unsupported_media_type,
-            .code_ = "unsupported_media_type",
-            .message_ = "request body must be multipart/form-data"});
+        throw http_error({.status_ = http_status::unsupported_media_type, .code_ = "unsupported_media_type", .message_ = "request body must be multipart/form-data"});
     }
     if (const auto* failure = boundary.failure()) {
         throw failure->protocol_error();
@@ -1660,14 +1548,10 @@ void ensure_route_params(const std::string_view* param_names,
 // the route's decoded-size cap still bounds the work.
 inline constexpr std::size_t inline_request_decode_bytes = 64 * 1024;
 
-[[nodiscard]] task<std::variant<std::string, http_content_decode_error>> decode_request_content(
-    const worker_ref& worker_value, const stop_token& stop_token_value,
-    std::span<const http_content_coding> codings, std::string_view raw,
-    http_content_decode_options options) {
+[[nodiscard]] task<std::variant<std::string, http_content_decode_error>> decode_request_content(const worker_ref& worker_value, const stop_token& stop_token_value, std::span<const http_content_coding> codings, std::string_view raw, http_content_decode_options options) {
     if (worker_value.blocking_pool() != nullptr && options.max_decoded_bytes_ > inline_request_decode_bytes) {
         if (raw.size() <= inline_request_decode_bytes) {
-            auto inline_result = decode_http_content(codings, raw,
-                {.max_decoded_bytes_ = inline_request_decode_bytes});
+            auto inline_result = decode_http_content(codings, raw, {.max_decoded_bytes_ = inline_request_decode_bytes});
             const auto* failure = std::get_if<http_content_decode_error>(&inline_result);
             if (failure == nullptr || *failure != http_content_decode_error::decoded_size_exceeded) {
                 co_return inline_result;
@@ -1678,12 +1562,9 @@ inline constexpr std::size_t inline_request_decode_bytes = 64 * 1024;
         const auto coding_count = (std::min)(codings.size(), max_content_codings);
         std::copy_n(codings.data(), coding_count, owned_codings.data());
         std::string owned_raw(raw);
-        auto offloaded = co_await run_blocking(worker_value, {.stop_token_ = stop_token_value},
-            [owned_codings, coding_count, owned_raw = std::move(owned_raw),
-                limit = options.max_decoded_bytes_]() {
-                return decode_http_content(std::span<const http_content_coding>(owned_codings.data(), coding_count),
-                    owned_raw, {.max_decoded_bytes_ = limit});
-            });
+        auto offloaded = co_await run_blocking(worker_value, {.stop_token_ = stop_token_value}, [owned_codings, coding_count, owned_raw = std::move(owned_raw), limit = options.max_decoded_bytes_]() {
+            return decode_http_content(std::span<const http_content_coding>(owned_codings.data(), coding_count), owned_raw, {.max_decoded_bytes_ = limit});
+        });
         // A codec failure on the pool is rethrown here; pool saturation or
         // shutdown throws blocking_operation_rejected (mapped to 503).
         co_return std::move(offloaded).take_value();
@@ -1692,12 +1573,10 @@ inline constexpr std::size_t inline_request_decode_bytes = 64 * 1024;
 }
 
 // Rejects an invalid or unsupported Content-Encoding; the result owns the codings span.
-[[nodiscard]] http_content_coding_field_result require_decodable_request_coding(
-    const http_request& request, detail::unsupported_request_content_coding::read_type read) {
+[[nodiscard]] http_content_coding_field_result require_decodable_request_coding(const http_request& request, detail::unsupported_request_content_coding::read_type read) {
     auto parsed_coding = request_content_coding(request);
     if (const auto* invalid = parsed_coding.invalid()) {
-        throw http_protocol_error(
-            invalid->status(), "invalid_content_encoding", "invalid request Content-Encoding");
+        throw http_protocol_error(invalid->status(), "invalid_content_encoding", "invalid request Content-Encoding");
     }
     if (parsed_coding.unsupported() != nullptr) {
         throw detail::unsupported_request_content_coding(read);
@@ -1730,15 +1609,13 @@ task<std::string_view> read_request_text(const context& context_value, operation
     // Transparently decode a request body whose Content-Encoding we understand,
     // so handlers always see the decoded representation (RFC 9110 §8.4).
     const auto& services = detail::context_access::services(context_value);
-    const auto parsed_coding = require_decodable_request_coding(
-        request, detail::unsupported_request_content_coding::read_type::decoded);
+    const auto parsed_coding = require_decodable_request_coding(request, detail::unsupported_request_content_coding::read_type::decoded);
     const auto codings = parsed_coding.codings();
     if (codings.empty()) {
         detail::context_access::mark_body_identity(context_value);
         co_return raw;
     }
-    auto decode_result = co_await decode_request_content(services.worker(), context_value.stop_token(), codings, raw,
-        {.max_decoded_bytes_ = services.max_decoded_request_body_bytes()});
+    auto decode_result = co_await decode_request_content(services.worker(), context_value.stop_token(), codings, raw, {.max_decoded_bytes_ = services.max_decoded_request_body_bytes()});
     auto* decoded_content = std::get_if<std::string>(&decode_result);
     if (decoded_content == nullptr) {
         throw http_request_content_decode_error(std::get<http_content_decode_error>(decode_result));
@@ -1833,13 +1710,11 @@ std::optional<std::string_view> context_request::header(std::string_view name) c
 }
 
 std::span<const http_header> context_request::trailers() const noexcept {
-    return context_->services().request_trailers() != nullptr ? context_->services().request_trailers()->fields()
-                                                              : std::span<const http_header>{};
+    return context_->services().request_trailers() != nullptr ? context_->services().request_trailers()->fields() : std::span<const http_header>{};
 }
 
 std::optional<std::string_view> context_request::trailer(std::string_view name) const noexcept {
-    return context_->services().request_trailers() != nullptr ? context_->services().request_trailers()->field(name)
-                                                              : std::nullopt;
+    return context_->services().request_trailers() != nullptr ? context_->services().request_trailers()->field(name) : std::nullopt;
 }
 
 const request_name_value_list& context_request::header_fields() const {
@@ -1893,19 +1768,16 @@ const request_name_value_list& context_request::cookie_fields() const {
     // Keep the candidate private until every Cookie field has been visited.
     std::optional<request_name_value_list> cookies;
     for (const auto& header_field : context_->request_.headers()) {
-        if (header_field.name().size() != 6U ||
-            !http_ascii_equals_ignore_case(header_field.name(), "Cookie")) {
+        if (header_field.name().size() != 6U || !http_ascii_equals_ignore_case(header_field.name(), "Cookie")) {
             continue;
         }
         if (!cookies) {
             cookies.emplace(detail::request_name_value_list_access::make());
         }
-        http_visit_cookie_pairs(header_field.value(),
-            [&cookies](std::string_view key, std::string_view value) {
-                detail::request_name_value_list_access::push_back(
-                    *cookies, http_header_view{key, value});
-                return true;
-            });
+        http_visit_cookie_pairs(header_field.value(), [&cookies](std::string_view key, std::string_view value) {
+            detail::request_name_value_list_access::push_back(*cookies, http_header_view{key, value});
+            return true;
+        });
     }
     if (!cookies) {
         return empty_request_fields();
@@ -1943,8 +1815,7 @@ std::optional<std::string_view> context_request::param(std::string_view name) co
     return storage.route_params_->get(name);
 }
 
-std::optional<std::string_view> context_request::negotiate(
-    negotiable_field field, std::span<const std::string_view> supported) const noexcept {
+std::optional<std::string_view> context_request::negotiate(negotiable_field field, std::span<const std::string_view> supported) const noexcept {
     if (supported.empty()) {
         return std::nullopt;
     }
@@ -1953,9 +1824,7 @@ std::optional<std::string_view> context_request::negotiate(
     const bool encoding = field == negotiable_field::encoding;
     const auto header_name = negotiation_header_name(field);
     // Only Accept-Language needs prefix matching in the generic token parser.
-    const auto token_mode = field == negotiable_field::language
-                                ? http_accept_token_match_mode::language_prefix
-                                : http_accept_token_match_mode::exact;
+    const auto token_mode = field == negotiable_field::language ? http_accept_token_match_mode::language_prefix : http_accept_token_match_mode::exact;
 
     static constexpr std::size_t inline_value_capacity = 8;
     std::array<std::string_view, inline_value_capacity> inline_values{};
@@ -2002,14 +1871,12 @@ std::optional<std::string_view> context_request::negotiate(
             }
         } else {
             for (const auto& header_field : headers) {
-                if (http_ascii_equals_ignore_case(header_field.name(), header_name) &&
-                    !header_field.value().empty()) {
+                if (http_ascii_equals_ignore_case(header_field.name(), header_name) && !header_field.value().empty()) {
                     accumulate(header_field.value());
                 }
             }
         }
-        const auto quality = encoding ? encoding_quality.quality(http_ascii_equals_ignore_case(offered, "identity"))
-                                      : match.quality();
+        const auto quality = encoding ? encoding_quality.quality(http_ascii_equals_ignore_case(offered, "identity")) : match.quality();
         if (quality == 0) {
             continue;
         }
@@ -2034,8 +1901,7 @@ task<std::span<const std::byte>> context_request::bytes(operation_options operat
     return ::ruvia::make_scoped_operation(context_->operation_scope_, read_request_bytes(*context_, std::move(operation)));
 }
 
-std::optional<std::string_view> context_request::signed_cookie(
-    signed_cookie_lookup_options options) const {
+std::optional<std::string_view> context_request::signed_cookie(signed_cookie_lookup_options options) const {
     const auto name = options.name_.view();
     const auto secret = options.secret_.view();
     const auto stored = cookie(name);
@@ -2057,8 +1923,7 @@ std::optional<std::string_view> context_request::signed_cookie(
 }
 
 task<std::vector<multipart_part>> context_request::multipart(operation_options operation) const {
-    return ::ruvia::make_scoped_operation(
-        context_->operation_scope_, read_request_multipart(*context_, std::move(operation)));
+    return ::ruvia::make_scoped_operation(context_->operation_scope_, read_request_multipart(*context_, std::move(operation)));
 }
 
 task<void> context_request::discard_body(operation_options operation) const {
@@ -2077,12 +1942,11 @@ multipart_reader context_request::multipart_reader() const {
     const auto boundary = get_multipart_boundary(context_->request_);
     // The reader parses raw body bytes as they arrive and decodes no content
     // coding, so only an identity body is accepted.
-    const auto parsed_coding = require_decodable_request_coding(
-        context_->request_, detail::unsupported_request_content_coding::read_type::streaming);
-    if (std::ranges::any_of(parsed_coding.codings(),
-            [](http_content_coding coding) { return coding != http_content_coding::identity; })) {
-        throw detail::unsupported_request_content_coding(
-            detail::unsupported_request_content_coding::read_type::streaming);
+    const auto parsed_coding = require_decodable_request_coding(context_->request_, detail::unsupported_request_content_coding::read_type::streaming);
+    if (std::ranges::any_of(parsed_coding.codings(), [](http_content_coding coding) {
+        return coding != http_content_coding::identity;
+    })) {
+        throw detail::unsupported_request_content_coding(detail::unsupported_request_content_coding::read_type::streaming);
     }
     return ::ruvia::multipart_reader(body_reader(), {.boundary_ = boundary});
 }
@@ -2091,19 +1955,19 @@ multipart_reader context_request::multipart_reader() const {
 namespace ruvia::detail {
 class http_capsule_stream_state final {
 public:
-    http_capsule_stream_state(http_tunnel& tunnel, http_capsule_config config)
-        : worker_(tunnel.worker_),
-          server_(&tunnel),
-          decoder_(config),
-          config_(config),
-          inbound_(tunnel.inbound_),
-          payload_reservation_(inbound_) {}
-    http_capsule_stream_state(http_client_tunnel&& tunnel, http_capsule_config config)
-        : worker_(tunnel.response_.state_->memory_domain().worker()),
-          memory_pin_(http_client_response(tunnel.response_.state_)),
-          client_(std::move(tunnel)),
-          decoder_(config),
-          config_(config) {}
+    http_capsule_stream_state(http_tunnel& tunnel, http_capsule_config config) :
+        worker_(tunnel.worker_),
+        server_(&tunnel),
+        decoder_(config),
+        config_(config),
+        inbound_(tunnel.inbound_),
+        payload_reservation_(inbound_) {}
+    http_capsule_stream_state(http_client_tunnel&& tunnel, http_capsule_config config) :
+        worker_(tunnel.response_.state_->memory_domain().worker()),
+        memory_pin_(http_client_response(tunnel.response_.state_)),
+        client_(std::move(tunnel)),
+        decoder_(config),
+        config_(config) {}
     void require() const {
         if (closed_ || (client_ && (!client_->response_.state_ || client_->response_.state_->pool_ == nullptr))) {
             throw std::logic_error("capsule stream is closed");
@@ -2204,10 +2068,7 @@ public:
     // a client tunnel reports them as its http_client_error subclass.
     [[noreturn]] void throw_interrupted(operation_interrupt_cause cause, const char* operation_name) const {
         if (client_) {
-            throw http_client_error(std::make_error_code(cause == operation_interrupt_cause::timed_out
-                                                             ? std::errc::timed_out
-                                                             : std::errc::operation_canceled),
-                operation_name);
+            throw http_client_error(std::make_error_code(cause == operation_interrupt_cause::timed_out ? std::errc::timed_out : std::errc::operation_canceled), operation_name);
         }
         operation_interrupt::throw_cause(cause, operation_name);
     }
@@ -2334,12 +2195,12 @@ public:
 };
 class capsule_state_pin final {
 public:
-    explicit capsule_state_pin(http_capsule_stream_state& state_value) noexcept
-        : state_(&state_value) {
+    explicit capsule_state_pin(http_capsule_stream_state& state_value) noexcept :
+        state_(&state_value) {
         state_->retain();
     }
-    capsule_state_pin(capsule_state_pin&& other) noexcept
-        : state_(std::exchange(other.state_, nullptr)) {}
+    capsule_state_pin(capsule_state_pin&& other) noexcept :
+        state_(std::exchange(other.state_, nullptr)) {}
     capsule_state_pin(const capsule_state_pin&) = delete;
     ~capsule_state_pin() {
         if (state_) {
@@ -2363,10 +2224,10 @@ struct capsule_write_input final {
 // partly received capsule for the next read.
 class running_capsule_operation final {
 public:
-    running_capsule_operation(http_capsule_stream_state& state_value, bool output)
-        : state_(state_value),
-          exceptions_(std::uncaught_exceptions()),
-          lane_(state_value.claim_lane(output)) {}
+    running_capsule_operation(http_capsule_stream_state& state_value, bool output) :
+        state_(state_value),
+        exceptions_(std::uncaught_exceptions()),
+        lane_(state_value.claim_lane(output)) {}
     ~running_capsule_operation() {
         if (aborts_ && std::uncaught_exceptions() > exceptions_) {
             state_.abort();
@@ -2388,29 +2249,25 @@ namespace ruvia {
 namespace {
 constexpr const char* tunnel_lane_in_progress = "HTTP tunnel operation already in progress on this direction";
 template <typename input_type>
-task<std::optional<input_type>> read_tunnel(void* target,
-    task<std::optional<input_type>> (*read)(void*, operation_options), bool& read_active, operation_options operation) {
+task<std::optional<input_type>> read_tunnel(void* target, task<std::optional<input_type>> (*read)(void*, operation_options), bool& read_active, operation_options operation) {
     auto lease = detail::claim_operation_lane(read_active, tunnel_lane_in_progress);
     co_return co_await read(target, std::move(operation));
 }
-task<void> write_tunnel(void* target, task<void> (*write)(void*, std::string_view, operation_options),
-    std::string bytes_value, bool& write_active, bool& ended, operation_options operation) {
+task<void> write_tunnel(void* target, task<void> (*write)(void*, std::string_view, operation_options), std::string bytes_value, bool& write_active, bool& ended, operation_options operation) {
     auto lease = detail::claim_operation_lane(write_active, tunnel_lane_in_progress);
     if (ended) {
         throw std::logic_error("HTTP tunnel send direction has ended");
     }
     co_await write(target, bytes_value, std::move(operation));
 }
-task<bool> write_tunnel_datagram(void* target, task<bool> (*write)(void*, std::string_view, operation_options),
-    std::string_view bytes, bool& write_active, bool& ended, operation_options operation) {
+task<bool> write_tunnel_datagram(void* target, task<bool> (*write)(void*, std::string_view, operation_options), std::string_view bytes, bool& write_active, bool& ended, operation_options operation) {
     auto lease = detail::claim_operation_lane(write_active, tunnel_lane_in_progress);
     if (ended) {
         throw std::logic_error("HTTP tunnel send direction has ended");
     }
     co_return co_await write(target, bytes, std::move(operation));
 }
-task<void> finish_tunnel(void* target, task<void> (*finish_value)(void*, operation_options),
-    bool& ended, bool& write_active, operation_options operation) {
+task<void> finish_tunnel(void* target, task<void> (*finish_value)(void*, operation_options), bool& ended, bool& write_active, operation_options operation) {
     auto lease = detail::claim_operation_lane(write_active, tunnel_lane_in_progress);
     if (!ended) {
         co_await finish_value(target, std::move(operation));
@@ -2419,19 +2276,17 @@ task<void> finish_tunnel(void* target, task<void> (*finish_value)(void*, operati
 }
 }  // namespace
 
-http_tunnel::http_tunnel(detail::inbound_buffer_account* inbound, const worker_ref& worker_value,
-    void* target, read_type read, write_type write, finish_type finish_value, abort_type abort,
-    bool datagrams, read_datagram_type read_datagram, write_datagram_type write_datagram) noexcept
-    : inbound_(inbound),
-      worker_(worker_value),
-      target_(target),
-      read_(read),
-      write_(write),
-      finish_(finish_value),
-      abort_(abort),
-      read_datagram_(read_datagram),
-      write_datagram_(write_datagram),
-      datagrams_(datagrams) {
+http_tunnel::http_tunnel(detail::inbound_buffer_account* inbound, const worker_ref& worker_value, void* target, read_type read, write_type write, finish_type finish_value, abort_type abort, bool datagrams, read_datagram_type read_datagram, write_datagram_type write_datagram) noexcept :
+    inbound_(inbound),
+    worker_(worker_value),
+    target_(target),
+    read_(read),
+    write_(write),
+    finish_(finish_value),
+    abort_(abort),
+    read_datagram_(read_datagram),
+    write_datagram_(write_datagram),
+    datagrams_(datagrams) {
     operations_.bind_worker(worker_);
 }
 
@@ -2475,13 +2330,11 @@ task<std::optional<std::string>> http_tunnel::read_raw(operation_options operati
 }
 task<std::optional<detail::http_tunnel_input>> http_tunnel::read_datagram_raw(operation_options operation) {
     require_active();
-    return ::ruvia::make_scoped_operation(
-        operations_, read_tunnel(target_, read_datagram_, read_active_, std::move(operation)));
+    return ::ruvia::make_scoped_operation(operations_, read_tunnel(target_, read_datagram_, read_active_, std::move(operation)));
 }
 task<bool> http_tunnel::write_datagram_raw(std::string_view bytes, operation_options operation) {
     require_active();
-    return ::ruvia::make_scoped_operation(operations_,
-        write_tunnel_datagram(target_, write_datagram_, bytes, write_active_, send_ended_, std::move(operation)));
+    return ::ruvia::make_scoped_operation(operations_, write_tunnel_datagram(target_, write_datagram_, bytes, write_active_, send_ended_, std::move(operation)));
 }
 task<void> http_tunnel::write(std::string_view bytes_value, operation_options operation) & {
     require_active();
@@ -2505,13 +2358,11 @@ task<void> http_tunnel::write_raw(std::string&& bytes_value, operation_options o
         throw std::logic_error("HTTP tunnel send direction has ended");
     }
     auto owned = std::move(bytes_value);
-    return ::ruvia::make_scoped_operation(operations_,
-        write_tunnel(target_, write_, std::move(owned), write_active_, send_ended_, std::move(operation)));
+    return ::ruvia::make_scoped_operation(operations_, write_tunnel(target_, write_, std::move(owned), write_active_, send_ended_, std::move(operation)));
 }
 task<void> http_tunnel::finish(operation_options operation) & {
     require_active();
-    return ::ruvia::make_scoped_operation(
-        operations_, finish_tunnel(target_, finish_, send_ended_, write_active_, std::move(operation)));
+    return ::ruvia::make_scoped_operation(operations_, finish_tunnel(target_, finish_, send_ended_, write_active_, std::move(operation)));
 }
 void http_tunnel::abort() & noexcept {
     abort_input(false);
@@ -2525,16 +2376,16 @@ void http_tunnel::abort_input(bool malformed) noexcept {
     }
 }
 
-http_capsule::http_capsule(detail::http_capsule_stream_state& state_value, std::uint64_t type, std::string payload_value) noexcept
-    : state_(&state_value),
-      type_(type),
-      payload_(std::move(payload_value)) {
+http_capsule::http_capsule(detail::http_capsule_stream_state& state_value, std::uint64_t type, std::string payload_value) noexcept :
+    state_(&state_value),
+    type_(type),
+    payload_(std::move(payload_value)) {
     state_->retain();
 }
-http_capsule::http_capsule(http_capsule&& other) noexcept
-    : state_(std::exchange(other.state_, nullptr)),
-      type_(other.type_),
-      payload_(std::move(other.payload_)) {
+http_capsule::http_capsule(http_capsule&& other) noexcept :
+    state_(std::exchange(other.state_, nullptr)),
+    type_(other.type_),
+    payload_(std::move(other.payload_)) {
     other.payload_.reset();
 }
 http_capsule& http_capsule::operator=(http_capsule&& other) noexcept {
@@ -2577,8 +2428,8 @@ http_capsule_stream::http_capsule_stream(http_client_tunnel&& tunnel, http_capsu
     http_capsule_decoder validation(config);
     state_ = new detail::http_capsule_stream_state(std::move(tunnel), config);
 }
-http_capsule_stream::http_capsule_stream(http_capsule_stream&& other) noexcept
-    : state_(std::exchange(other.state_, nullptr)) {}
+http_capsule_stream::http_capsule_stream(http_capsule_stream&& other) noexcept :
+    state_(std::exchange(other.state_, nullptr)) {}
 http_capsule_stream& http_capsule_stream::operator=(http_capsule_stream&& other) noexcept {
     if (this != &other) {
         release();
@@ -2618,8 +2469,7 @@ task<std::optional<http_capsule>> http_capsule_stream::read(operation_options op
         throw std::logic_error("capsule stream is empty");
     }
     state_->require();
-    return ::ruvia::make_scoped_operation(
-        state_->read_scope_, read_owned(detail::capsule_state_pin(*state_), std::move(operation)));
+    return ::ruvia::make_scoped_operation(state_->read_scope_, read_owned(detail::capsule_state_pin(*state_), std::move(operation)));
 }
 task<std::optional<http_capsule>> http_capsule_stream::read_owned(detail::capsule_state_pin pin, operation_options operation) {
     auto& state_value = pin.state();
@@ -2652,8 +2502,7 @@ task<std::optional<http_capsule>> http_capsule_stream::read_owned(detail::capsul
     }
 }
 task<void> http_capsule_stream::write(std::uint64_t type, std::span<const std::byte> payload_value, operation_options operation) & {
-    return write(type, std::string_view(reinterpret_cast<const char*>(payload_value.data()), payload_value.size()),
-        std::move(operation));
+    return write(type, std::string_view(reinterpret_cast<const char*>(payload_value.data()), payload_value.size()), std::move(operation));
 }
 task<void> http_capsule_stream::write(std::uint64_t type, std::string_view payload_value, operation_options operation) & {
     if (!state_) {
@@ -2670,8 +2519,7 @@ task<void> http_capsule_stream::write(std::uint64_t type, std::string_view paylo
     }
     return write_frame(std::string_view(header.data(), std::get<0>(encoded)), payload_value, false, std::move(operation));
 }
-task<void> http_capsule_stream::write_owned(
-    std::uint64_t type, std::string&& payload_value, operation_options operation) {
+task<void> http_capsule_stream::write_owned(std::uint64_t type, std::string&& payload_value, operation_options operation) {
     if (!state_) {
         throw std::logic_error("capsule stream is empty");
     }
@@ -2684,11 +2532,9 @@ task<void> http_capsule_stream::write_owned(
     if ((encoded.index() != 0) || payload_value.size() > state_->config_.max_capsule_length_) {
         throw std::length_error("invalid capsule type or payload length");
     }
-    return write_frame_owned(std::string_view(header.data(), std::get<0>(encoded)),
-        std::move(payload_value), false, std::move(operation));
+    return write_frame_owned(std::string_view(header.data(), std::get<0>(encoded)), std::move(payload_value), false, std::move(operation));
 }
-task<void> http_capsule_stream::write_frame(
-    std::string_view prefix, std::string_view payload_value, bool datagram, operation_options operation) {
+task<void> http_capsule_stream::write_frame(std::string_view prefix, std::string_view payload_value, bool datagram, operation_options operation) {
     const auto write = +[](detail::capsule_write_input input) -> task<void> {
         auto& state_value = input.pin_.state();
         state_value.throw_if_stopped_before_start(input.operation_, "capsule write");
@@ -2719,11 +2565,9 @@ task<void> http_capsule_stream::write_frame(
     bytes_value.reserve(prefix.size() + payload_value.size());
     bytes_value.append(prefix);
     bytes_value.append(payload_value);
-    return ::ruvia::make_scoped_operation(state_->output_scope_,
-        write(detail::capsule_write_input{detail::capsule_state_pin(*state_), std::move(bytes_value), datagram, std::move(operation)}));
+    return ::ruvia::make_scoped_operation(state_->output_scope_, write(detail::capsule_write_input{detail::capsule_state_pin(*state_), std::move(bytes_value), datagram, std::move(operation)}));
 }
-task<void> http_capsule_stream::write_frame_owned(
-    std::string_view prefix, std::string&& payload_value, bool datagram, operation_options operation) {
+task<void> http_capsule_stream::write_frame_owned(std::string_view prefix, std::string&& payload_value, bool datagram, operation_options operation) {
     if (prefix.empty()) {
         const auto write = +[](detail::capsule_write_input input) -> task<void> {
             auto& state_value = input.pin_.state();
@@ -2752,8 +2596,7 @@ task<void> http_capsule_stream::write_frame_owned(
             }
         };
         auto owned = std::move(payload_value);
-        return ::ruvia::make_scoped_operation(state_->output_scope_,
-            write(detail::capsule_write_input{detail::capsule_state_pin(*state_), std::move(owned), datagram, std::move(operation)}));
+        return ::ruvia::make_scoped_operation(state_->output_scope_, write(detail::capsule_write_input{detail::capsule_state_pin(*state_), std::move(owned), datagram, std::move(operation)}));
     }
     return write_frame(prefix, payload_value, datagram, std::move(operation));
 }
@@ -2775,12 +2618,11 @@ task<void> http_capsule_stream::finish(operation_options operation) & {
             state_value.send_ended_ = true;
         }
     };
-    return ::ruvia::make_scoped_operation(
-        state_->output_scope_, finish_value(detail::capsule_state_pin(*state_), std::move(operation)));
+    return ::ruvia::make_scoped_operation(state_->output_scope_, finish_value(detail::capsule_state_pin(*state_), std::move(operation)));
 }
 
-http_datagram_stream::http_datagram_stream(http_capsule_stream&& stream)
-    : stream_(std::move(stream)) {
+http_datagram_stream::http_datagram_stream(http_capsule_stream&& stream) :
+    stream_(std::move(stream)) {
     if (!stream_.state_) {
         throw std::logic_error("HTTP Datagram stream is empty");
     }
@@ -2802,11 +2644,9 @@ task<std::optional<http_datagram>> http_datagram_stream::read(operation_options 
         throw std::logic_error("HTTP Datagram stream is empty");
     }
     stream_.state_->require();
-    return ::ruvia::make_scoped_operation(
-        stream_.state_->read_scope_, read_owned(detail::capsule_state_pin(*stream_.state_), false, std::move(operation)));
+    return ::ruvia::make_scoped_operation(stream_.state_->read_scope_, read_owned(detail::capsule_state_pin(*stream_.state_), false, std::move(operation)));
 }
-task<std::optional<http_datagram>> http_datagram_stream::read_owned(
-    detail::capsule_state_pin pin, bool udp, operation_options operation) {
+task<std::optional<http_datagram>> http_datagram_stream::read_owned(detail::capsule_state_pin pin, bool udp, operation_options operation) {
     auto& state_value = pin.state();
     state_value.throw_if_stopped_before_start(operation, "HTTP Datagram read");
     const detail::operation_steps steps(std::move(operation));
@@ -2822,8 +2662,7 @@ task<std::optional<http_datagram>> http_datagram_stream::read_owned(
             }
             // The decoder drops other capsule types and, for CONNECT-UDP, unknown
             // Context IDs before the length limit applies (RFC 9297 section 3.2).
-            if (!state_value.native_input_ && !state_value.poll_capsule(
-                                                  fin, udp ? http_capsule_retention::udp_payloads : http_capsule_retention::datagrams)) {
+            if (!state_value.native_input_ && !state_value.poll_capsule(fin, udp ? http_capsule_retention::udp_payloads : http_capsule_retention::datagrams)) {
                 continue;
             }
             const bool native = state_value.native_input_;
@@ -2877,14 +2716,12 @@ task<std::optional<http_datagram>> http_datagram_stream::read_owned(
     }
 }
 task<void> http_datagram_stream::send(std::span<const std::byte> payload_value, operation_options operation) & {
-    return send(std::string_view(reinterpret_cast<const char*>(payload_value.data()), payload_value.size()),
-        std::move(operation));
+    return send(std::string_view(reinterpret_cast<const char*>(payload_value.data()), payload_value.size()), std::move(operation));
 }
 task<void> http_datagram_stream::send(std::string_view payload_value, operation_options operation) & {
     return send_payload(payload_value, false, std::move(operation));
 }
-task<void> http_datagram_stream::send_owned(
-    std::string&& payload_value, operation_options operation) {
+task<void> http_datagram_stream::send_owned(std::string&& payload_value, operation_options operation) {
     return send_payload_owned(std::move(payload_value), false, std::move(operation));
 }
 task<void> http_datagram_stream::send_payload(std::string_view payload_value, bool udp, operation_options operation) {
@@ -2897,13 +2734,11 @@ task<void> http_datagram_stream::send_payload(std::string_view payload_value, bo
         throw std::logic_error("HTTP Datagram sending direction is closed");
     }
     const auto context_bytes = udp ? std::size_t{1} : std::size_t{0};
-    if (context_bytes > state_value.config_.max_capsule_length_ ||
-        payload_value.size() > state_value.config_.max_capsule_length_ - context_bytes) {
+    if (context_bytes > state_value.config_.max_capsule_length_ || payload_value.size() > state_value.config_.max_capsule_length_ - context_bytes) {
         throw std::length_error("HTTP Datagram exceeds capsule bound");
     }
     http_datagram_session session_value;
-    const auto plan = udp ? session_value.prepare_udp_datagram(std::span(payload_value.data(), payload_value.size()))
-                          : session_value.prepare_datagram(std::span(payload_value.data(), payload_value.size()));
+    const auto plan = udp ? session_value.prepare_udp_datagram(std::span(payload_value.data(), payload_value.size())) : session_value.prepare_datagram(std::span(payload_value.data(), payload_value.size()));
     if (plan.index() != 0) {
         throw std::length_error("HTTP Datagram payload exceeds its bound");
     }
@@ -2912,8 +2747,7 @@ task<void> http_datagram_stream::send_payload(std::string_view payload_value, bo
     }
     return stream_.write_frame(std::get<0>(plan).prefix(), payload_value, false, std::move(operation));
 }
-task<void> http_datagram_stream::send_payload_owned(
-    std::string&& payload_value, bool udp, operation_options operation) {
+task<void> http_datagram_stream::send_payload_owned(std::string&& payload_value, bool udp, operation_options operation) {
     if (!stream_.state_) {
         throw std::logic_error("HTTP Datagram stream is empty");
     }
@@ -2923,22 +2757,18 @@ task<void> http_datagram_stream::send_payload_owned(
         throw std::logic_error("HTTP Datagram sending direction is closed");
     }
     const auto context_bytes = udp ? std::size_t{1} : std::size_t{0};
-    if (context_bytes > state_value.config_.max_capsule_length_ ||
-        payload_value.size() > state_value.config_.max_capsule_length_ - context_bytes) {
+    if (context_bytes > state_value.config_.max_capsule_length_ || payload_value.size() > state_value.config_.max_capsule_length_ - context_bytes) {
         throw std::length_error("HTTP Datagram exceeds capsule bound");
     }
     http_datagram_session session_value;
-    const auto plan = udp ? session_value.prepare_udp_datagram(std::span(payload_value.data(), payload_value.size()))
-                          : session_value.prepare_datagram(std::span(payload_value.data(), payload_value.size()));
+    const auto plan = udp ? session_value.prepare_udp_datagram(std::span(payload_value.data(), payload_value.size())) : session_value.prepare_datagram(std::span(payload_value.data(), payload_value.size()));
     if (plan.index() != 0) {
         throw std::length_error("HTTP Datagram payload exceeds its bound");
     }
     if (state_value.has_native_transport()) {
-        return stream_.write_frame_owned(udp ? std::string_view("\0", 1) : std::string_view{},
-            std::move(payload_value), true, std::move(operation));
+        return stream_.write_frame_owned(udp ? std::string_view("\0", 1) : std::string_view{}, std::move(payload_value), true, std::move(operation));
     }
-    return stream_.write_frame_owned(
-        std::get<0>(plan).prefix(), std::move(payload_value), false, std::move(operation));
+    return stream_.write_frame_owned(std::get<0>(plan).prefix(), std::move(payload_value), false, std::move(operation));
 }
 task<std::optional<http_datagram>> http_udp_tunnel::read(operation_options operation) & {
     auto* state_value = stream_.stream_.state_;
@@ -2946,18 +2776,15 @@ task<std::optional<http_datagram>> http_udp_tunnel::read(operation_options opera
         throw std::logic_error("UDP tunnel is empty");
     }
     state_value->require();
-    return ::ruvia::make_scoped_operation(state_value->read_scope_,
-        http_datagram_stream::read_owned(detail::capsule_state_pin(*state_value), true, std::move(operation)));
+    return ::ruvia::make_scoped_operation(state_value->read_scope_, http_datagram_stream::read_owned(detail::capsule_state_pin(*state_value), true, std::move(operation)));
 }
 task<void> http_udp_tunnel::send(std::span<const std::byte> payload_value, operation_options operation) & {
-    return send(std::string_view(reinterpret_cast<const char*>(payload_value.data()), payload_value.size()),
-        std::move(operation));
+    return send(std::string_view(reinterpret_cast<const char*>(payload_value.data()), payload_value.size()), std::move(operation));
 }
 task<void> http_udp_tunnel::send(std::string_view payload_value, operation_options operation) & {
     return stream_.send_payload(payload_value, true, std::move(operation));
 }
-task<void> http_udp_tunnel::send_owned(
-    std::string&& payload_value, operation_options operation) {
+task<void> http_udp_tunnel::send_owned(std::string&& payload_value, operation_options operation) {
     return stream_.send_payload_owned(std::move(payload_value), true, std::move(operation));
 }
 }  // namespace ruvia
@@ -2965,26 +2792,21 @@ task<void> http_udp_tunnel::send_owned(
 namespace ruvia::detail {
 
 const std::unique_ptr<BIO_METHOD, decltype(&BIO_meth_free)> tls_tunnel_output::bio_method_ = [] {
-    std::unique_ptr<BIO_METHOD, decltype(&BIO_meth_free)> method(
-        BIO_meth_new(BIO_get_new_index() | BIO_TYPE_SOURCE_SINK, "Ruvia TLS tunnel output"), &BIO_meth_free);
-    if (!method || BIO_meth_set_create(method.get(), &create_bio) != 1 ||
-        BIO_meth_set_destroy(method.get(), &destroy_bio) != 1 ||
-        BIO_meth_set_write_ex(method.get(), &write_bio) != 1 ||
-        BIO_meth_set_ctrl(method.get(), &control_bio) != 1) {
+    std::unique_ptr<BIO_METHOD, decltype(&BIO_meth_free)> method(BIO_meth_new(BIO_get_new_index() | BIO_TYPE_SOURCE_SINK, "Ruvia TLS tunnel output"), &BIO_meth_free);
+    if (!method || BIO_meth_set_create(method.get(), &create_bio) != 1 || BIO_meth_set_destroy(method.get(), &destroy_bio) != 1 || BIO_meth_set_write_ex(method.get(), &write_bio) != 1 || BIO_meth_set_ctrl(method.get(), &control_bio) != 1) {
         throw std::bad_alloc();
     }
     return method;
 }();
 
-tls_tunnel_output::tls_tunnel_output(SSL& ssl, asio::ip::tcp::socket& socket,
-    const worker_ref& worker_value, connection_lifecycle* lifecycle)
-    : ssl_(ssl),
-      socket_(socket),
-      worker_(worker_value),
-      lifecycle_(lifecycle),
-      available_(worker_value),
-      flushed_(worker_value),
-      tasks_(worker_value) {
+tls_tunnel_output::tls_tunnel_output(SSL& ssl, asio::ip::tcp::socket& socket, const worker_ref& worker_value, connection_lifecycle* lifecycle) :
+    ssl_(ssl),
+    socket_(socket),
+    worker_(worker_value),
+    lifecycle_(lifecycle),
+    available_(worker_value),
+    flushed_(worker_value),
+    tasks_(worker_value) {
     if (!worker_.is_current()) {
         std::terminate();
     }
@@ -3134,8 +2956,7 @@ task<std::error_code> tls_tunnel_output::finish() {
         const auto result_value = SSL_shutdown(&ssl_);
         if (result_value < 0) {
             const auto code = ERR_get_error();
-            fail(code == 0 ? std::make_error_code(std::errc::protocol_error)
-                           : std::error_code(static_cast<int>(code), asio::error::get_ssl_category()));
+            fail(code == 0 ? std::make_error_code(std::errc::protocol_error) : std::error_code(static_cast<int>(code), asio::error::get_ssl_category()));
             co_return error_;
         }
         send_ended_ = true;
@@ -3159,12 +2980,12 @@ int enforce_security(const SSL*, const SSL_CTX*, int, int, int, void*, void*) no
 void guard_native_handshake(const SSL*, int, int) noexcept;
 
 struct tls_context_policy final {
-    tls_context_policy(SSL_CTX& context, std::string_view host, std::uint64_t limit)
-        : host_(host),
-          record_limit_(limit),
-          original_security_(SSL_CTX_get_security_callback(&context)),
-          original_security_data_(SSL_CTX_get0_security_ex_data(&context)),
-          original_info_(SSL_CTX_get_info_callback(&context)) {
+    tls_context_policy(SSL_CTX& context, std::string_view host, std::uint64_t limit) :
+        host_(host),
+        record_limit_(limit),
+        original_security_(SSL_CTX_get_security_callback(&context)),
+        original_security_data_(SSL_CTX_get0_security_ex_data(&context)),
+        original_info_(SSL_CTX_get_info_callback(&context)) {
         if (original_security_ == enforce_security) {
             const auto* previous = static_cast<const tls_context_policy*>(original_security_data_);
             original_security_ = previous->original_security_;
@@ -3184,8 +3005,7 @@ struct tls_context_policy final {
     void (*original_info_)(const SSL*, int, int);
 };
 
-int enforce_security(const SSL* ssl, const SSL_CTX* context, int operation, int bits, int nid,
-    void* other, void* opaque) noexcept {
+int enforce_security(const SSL* ssl, const SSL_CTX* context, int operation, int bits, int nid, void* other, void* opaque) noexcept {
     const auto& policy = *static_cast<const tls_context_policy*>(opaque);
     if (operation == SSL_SECOP_VERSION) {
         if (nid < TLS1_1_VERSION) {
@@ -3198,8 +3018,7 @@ int enforce_security(const SSL* ssl, const SSL_CTX* context, int operation, int 
     if (operation == SSL_SECOP_COMPRESSION) {
         return 0;
     }
-    if (operation == SSL_SECOP_CIPHER_SUPPORTED || operation == SSL_SECOP_CIPHER_SHARED ||
-        operation == SSL_SECOP_CIPHER_CHECK) {
+    if (operation == SSL_SECOP_CIPHER_SUPPORTED || operation == SSL_SECOP_CIPHER_SHARED || operation == SSL_SECOP_CIPHER_CHECK) {
         const auto* cipher = static_cast<const SSL_CIPHER*>(other);
         switch (SSL_CIPHER_get_id(cipher)) {
             case TLS1_CK_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256:
@@ -3225,16 +3044,12 @@ int enforce_security(const SSL* ssl, const SSL_CTX* context, int operation, int 
                 }
         }
     }
-    if (ssl && SSL_version(ssl) == TLS1_1_VERSION &&
-        (nid == NID_md5_sha1 || nid == NID_sha1) &&
-        (operation == SSL_SECOP_SIGALG_SUPPORTED || operation == SSL_SECOP_SIGALG_SHARED ||
-            operation == SSL_SECOP_SIGALG_CHECK || operation == SSL_SECOP_SIGALG_MASK)) {
+    if (ssl && SSL_version(ssl) == TLS1_1_VERSION && (nid == NID_md5_sha1 || nid == NID_sha1) && (operation == SSL_SECOP_SIGALG_SUPPORTED || operation == SSL_SECOP_SIGALG_SHARED || operation == SSL_SECOP_SIGALG_CHECK || operation == SSL_SECOP_SIGALG_MASK)) {
         // These are handshake signature operations only. In particular,
         // SSL_SECOP_CA_MD, EE_KEY and CA_KEY are never exempted.
         return 1;
     }
-    return policy.original_security_ &&
-           policy.original_security_(ssl, context, operation, bits, nid, other, policy.original_security_data_);
+    return policy.original_security_ && policy.original_security_(ssl, context, operation, bits, nid, other, policy.original_security_data_);
 }
 
 int deny_security(const SSL*, const SSL_CTX*, int, int, int, void*, void*) noexcept {
@@ -3276,15 +3091,13 @@ void guard_native_handshake(const SSL* ssl, int where, int result) noexcept {
         // connection is initialized and before any handshake is processed.
         SSL_set_options(const_cast<SSL*>(ssl), SSL_OP_NO_RENEGOTIATION | SSL_OP_NO_COMPRESSION);
     }
-    const auto* policy = static_cast<const tls_context_policy*>(
-        SSL_CTX_get_ex_data(SSL_get_SSL_CTX(ssl), context_index));
+    const auto* policy = static_cast<const tls_context_policy*>(SSL_CTX_get_ex_data(SSL_get_SSL_CTX(ssl), context_index));
     if (policy && policy->original_info_) {
         policy->original_info_(ssl, where, result);
     }
 }
 
-long deny_output(BIO* bio, int operation, const char*, std::size_t, int, long, int result,
-    std::size_t* processed) noexcept {
+long deny_output(BIO* bio, int operation, const char*, std::size_t, int, long, int result, std::size_t* processed) noexcept {
     if (operation == BIO_CB_WRITE) {
         ERR_raise_data(ERR_LIB_SSL, ERR_R_OPERATION_FAIL, "TLS outgoing record limit or policy allocation failure");
         BIO_clear_retry_flags(bio);
@@ -3296,8 +3109,7 @@ long deny_output(BIO* bio, int operation, const char*, std::size_t, int, long, i
     return result;
 }
 
-long guard_output(BIO* bio, int operation, const char* bytes, std::size_t size, int arg,
-    long larg, int result, std::size_t* processed) noexcept {
+long guard_output(BIO* bio, int operation, const char* bytes, std::size_t size, int arg, long larg, int result, std::size_t* processed) noexcept {
     if (operation == BIO_CB_WRITE) {
         const auto* state = static_cast<const tls_record_state*>(BIO_get_ex_data(bio, bio_index));
         if (!state || state->blocked_) {
@@ -3380,15 +3192,11 @@ int verify_native_certificate(X509_STORE_CTX* store, void* opaque) noexcept {
         return 0;
     }
     const bool ip = is_client_ip_address(policy.host_);
-    const auto matched = ip ? X509_check_ip_asc(leaf, policy.host_.c_str(), 0)
-                            : X509_check_host(leaf, policy.host_.c_str(), policy.host_.size(),
-                                  X509_CHECK_FLAG_NEVER_CHECK_SUBJECT | X509_CHECK_FLAG_NO_PARTIAL_WILDCARDS, nullptr);
+    const auto matched = ip ? X509_check_ip_asc(leaf, policy.host_.c_str(), 0) : X509_check_host(leaf, policy.host_.c_str(), policy.host_.size(), X509_CHECK_FLAG_NEVER_CHECK_SUBJECT | X509_CHECK_FLAG_NO_PARTIAL_WILDCARDS, nullptr);
     if (matched == 1) {
         return 1;
     }
-    X509_STORE_CTX_set_error(store, matched == 0
-                                        ? (ip ? X509_V_ERR_IP_ADDRESS_MISMATCH : X509_V_ERR_HOSTNAME_MISMATCH)
-                                        : X509_V_ERR_APPLICATION_VERIFICATION);
+    X509_STORE_CTX_set_error(store, matched == 0 ? (ip ? X509_V_ERR_IP_ADDRESS_MISMATCH : X509_V_ERR_HOSTNAME_MISMATCH) : X509_V_ERR_APPLICATION_VERIFICATION);
     return 0;
 }
 
@@ -3411,8 +3219,7 @@ thread_local native_tls_context_scope* native_tls_context_scope::current_ = null
 // every context, connection and BIO.
 void register_tls_policy_indexes() {
     static const bool registered = [] {
-        context_index = SSL_CTX_get_ex_new_index(
-            0, nullptr, native_tls_context_scope::new_context, nullptr, free_context_policy);
+        context_index = SSL_CTX_get_ex_new_index(0, nullptr, native_tls_context_scope::new_context, nullptr, free_context_policy);
         record_index = SSL_get_ex_new_index(0, nullptr, nullptr, copy_record_state, free_record_state);
         bio_index = BIO_get_ex_new_index(0, nullptr, nullptr, nullptr, nullptr);
         if (context_index < 0 || record_index < 0 || bio_index < 0) {
@@ -3423,10 +3230,10 @@ void register_tls_policy_indexes() {
     (void)registered;
 }
 
-native_tls_context_scope::native_tls_context_scope(std::string_view host, std::uint64_t record_limit)
-    : host_(host),
-      record_limit_(record_limit),
-      previous_(current_) {
+native_tls_context_scope::native_tls_context_scope(std::string_view host, std::uint64_t record_limit) :
+    host_(host),
+    record_limit_(record_limit),
+    previous_(current_) {
     // 构造通知只安装回调和 ex_data；不查询未初始化的 context 参数或 SSL 状态。
     register_tls_policy_indexes();
     current_ = host_.empty() ? nullptr : this;
@@ -3442,8 +3249,7 @@ void native_tls_context_scope::rethrow_failure() const {
     }
 }
 
-void native_tls_context_scope::new_context(void* parent, void*, CRYPTO_EX_DATA* storage, int index,
-    long, void*) noexcept {
+void native_tls_context_scope::new_context(void* parent, void*, CRYPTO_EX_DATA* storage, int index, long, void*) noexcept {
     if (!current_) {
         return;
     }
@@ -3542,8 +3348,7 @@ bool tls_served_certificate::check(const http_target_origin& origin) const noexc
     }
     if (origin.host_kind() == http_target_host_kind::dns_name) {
         const auto host = origin.host();
-        return X509_check_host(certificate_, host.data(), host.size(),
-                   X509_CHECK_FLAG_NO_PARTIAL_WILDCARDS | X509_CHECK_FLAG_NEVER_CHECK_SUBJECT, nullptr) == 1;
+        return X509_check_host(certificate_, host.data(), host.size(), X509_CHECK_FLAG_NO_PARTIAL_WILDCARDS | X509_CHECK_FLAG_NEVER_CHECK_SUBJECT, nullptr) == 1;
     }
     const auto address = origin.address();
     return X509_check_ip(certificate_, address.data(), address.size(), 0) == 1;
@@ -3604,14 +3409,12 @@ void use_certificate_chain_pem(SSL_CTX& context, std::string_view text) {
     const auto input = open_pem_text(text);
     auto* const password_callback = SSL_CTX_get_default_passwd_cb(&context);
     auto* const password_userdata = SSL_CTX_get_default_passwd_cb_userdata(&context);
-    const std::unique_ptr<X509, x509_deleter> leaf(
-        PEM_read_bio_X509_AUX(input.get(), nullptr, password_callback, password_userdata));
+    const std::unique_ptr<X509, x509_deleter> leaf(PEM_read_bio_X509_AUX(input.get(), nullptr, password_callback, password_userdata));
     if (leaf == nullptr || SSL_CTX_use_certificate(&context, leaf.get()) != 1) {
         throw_tls_credential_error("use_certificate_chain_pem");
     }
     for (;;) {
-        std::unique_ptr<X509, x509_deleter> issuer(
-            PEM_read_bio_X509(input.get(), nullptr, password_callback, password_userdata));
+        std::unique_ptr<X509, x509_deleter> issuer(PEM_read_bio_X509(input.get(), nullptr, password_callback, password_userdata));
         if (issuer == nullptr) {
             break;
         }
@@ -3630,8 +3433,7 @@ void use_certificate_chain_pem(SSL_CTX& context, std::string_view text) {
 
 void use_private_key_pem(SSL_CTX& context, std::string_view text) {
     const auto input = open_pem_text(text);
-    const std::unique_ptr<EVP_PKEY, private_key_deleter> private_key(PEM_read_bio_PrivateKey(input.get(), nullptr,
-        SSL_CTX_get_default_passwd_cb(&context), SSL_CTX_get_default_passwd_cb_userdata(&context)));
+    const std::unique_ptr<EVP_PKEY, private_key_deleter> private_key(PEM_read_bio_PrivateKey(input.get(), nullptr, SSL_CTX_get_default_passwd_cb(&context), SSL_CTX_get_default_passwd_cb_userdata(&context)));
     if (private_key == nullptr || SSL_CTX_use_PrivateKey(&context, private_key.get()) != 1) {
         throw_tls_credential_error("use_private_key_pem");
     }
@@ -3641,13 +3443,12 @@ void use_private_key_pem(SSL_CTX& context, std::string_view text) {
 // An absent password uses a caller provider, or an empty noninteractive default.
 class tls_password_scope final {
 public:
-    tls_password_scope(SSL_CTX& context_value, std::string_view password) noexcept
-        : context_(&context_value),
-          password_(password),
-          previous_callback_(SSL_CTX_get_default_passwd_cb(&context_value)),
-          previous_userdata_(SSL_CTX_get_default_passwd_cb_userdata(&context_value)) {
-        const bool default_source = previous_userdata_ == nullptr &&
-                                    (previous_callback_ == nullptr || previous_callback_ == PEM_def_callback);
+    tls_password_scope(SSL_CTX& context_value, std::string_view password) noexcept :
+        context_(&context_value),
+        password_(password),
+        previous_callback_(SSL_CTX_get_default_passwd_cb(&context_value)),
+        previous_userdata_(SSL_CTX_get_default_passwd_cb_userdata(&context_value)) {
+        const bool default_source = previous_userdata_ == nullptr && (previous_callback_ == nullptr || previous_callback_ == PEM_def_callback);
         if (!password.empty() || default_source) {
             SSL_CTX_set_default_passwd_cb(context_, &copy_password);
             SSL_CTX_set_default_passwd_cb_userdata(context_, this);
@@ -3701,14 +3502,11 @@ private:
 
 void throw_tls_credential_error(const char* operation) {
     const auto code = ::ERR_get_error();
-    const auto error = ERR_SYSTEM_ERROR(code)
-                           ? std::error_code(ERR_GET_REASON(code), asio::error::get_system_category())
-                           : std::error_code(static_cast<int>(code), asio::error::get_ssl_category());
+    const auto error = ERR_SYSTEM_ERROR(code) ? std::error_code(ERR_GET_REASON(code), asio::error::get_system_category()) : std::error_code(static_cast<int>(code), asio::error::get_ssl_category());
     throw asio::system_error(error, operation);
 }
 
-tls_certificate tls_certificate::load(const char* certificate_chain_file, const char* private_key_file,
-    std::string_view private_key_password) {
+tls_certificate tls_certificate::load(const char* certificate_chain_file, const char* private_key_file, std::string_view private_key_password) {
     const auto scratch = make_scratch_context();
     {
         const tls_password_scope password_scope(*scratch, private_key_password);
@@ -3724,8 +3522,7 @@ tls_certificate tls_certificate::load(const char* certificate_chain_file, const 
     return adopt_loaded(*scratch);
 }
 
-tls_certificate tls_certificate::load_pem(std::string_view certificate_chain, std::string_view private_key,
-    std::string_view private_key_password) {
+tls_certificate tls_certificate::load_pem(std::string_view certificate_chain, std::string_view private_key, std::string_view private_key_password) {
     const auto scratch = make_scratch_context();
     {
         const tls_password_scope password_scope(*scratch, private_key_password);
@@ -3773,13 +3570,13 @@ tls_certificate::tls_certificate(X509* certificate, STACK_OF(X509) * chain, EVP_
     private_key_ = private_key;
 }
 
-tls_certificate::tls_certificate(const tls_certificate& other)
-    : tls_certificate(other.certificate_, other.chain_, other.private_key_) {}
+tls_certificate::tls_certificate(const tls_certificate& other) :
+    tls_certificate(other.certificate_, other.chain_, other.private_key_) {}
 
-tls_certificate::tls_certificate(tls_certificate&& other) noexcept
-    : certificate_(std::exchange(other.certificate_, nullptr)),
-      chain_(std::exchange(other.chain_, nullptr)),
-      private_key_(std::exchange(other.private_key_, nullptr)) {}
+tls_certificate::tls_certificate(tls_certificate&& other) noexcept :
+    certificate_(std::exchange(other.certificate_, nullptr)),
+    chain_(std::exchange(other.chain_, nullptr)),
+    private_key_(std::exchange(other.private_key_, nullptr)) {}
 
 tls_certificate& tls_certificate::operator=(tls_certificate&& other) noexcept {
     if (this != &other) {
@@ -3852,16 +3649,16 @@ tls_trust_store tls_trust_store::load_default() {
     return tls_trust_store(store.release());
 }
 
-tls_trust_store::tls_trust_store(const tls_trust_store& other)
-    : store_(other.store_) {
+tls_trust_store::tls_trust_store(const tls_trust_store& other) :
+    store_(other.store_) {
     if (store_ != nullptr && X509_STORE_up_ref(store_) != 1) {
         store_ = nullptr;
         throw std::bad_alloc();
     }
 }
 
-tls_trust_store::tls_trust_store(tls_trust_store&& other) noexcept
-    : store_(std::exchange(other.store_, nullptr)) {}
+tls_trust_store::tls_trust_store(tls_trust_store&& other) noexcept :
+    store_(std::exchange(other.store_, nullptr)) {}
 
 tls_trust_store& tls_trust_store::operator=(const tls_trust_store& other) {
     if (this != &other) {
@@ -3894,8 +3691,7 @@ namespace {
 struct cleanse_identity final {
     tls_identity_config& identity_;
     ~cleanse_identity() {
-        for (auto* secret : {&identity_.certificate_chain_pem_, &identity_.private_key_pem_,
-                 &identity_.private_key_password_}) {
+        for (auto* secret : {&identity_.certificate_chain_pem_, &identity_.private_key_pem_, &identity_.private_key_password_}) {
             if (!secret->empty()) {
                 OPENSSL_cleanse(secret->data(), secret->size());
                 secret->clear();
@@ -3926,31 +3722,24 @@ void require_accepting_caller(const worker_ref& caller) {
 
 struct tls_certificate_store::state final {
     detail::runtime_control_gate writer_;
-    std::atomic<std::shared_ptr<const detail::tls_certificate_snapshot>> snapshot_{
-        std::make_shared<const detail::tls_certificate_snapshot>()};
+    std::atomic<std::shared_ptr<const detail::tls_certificate_snapshot>> snapshot_{std::make_shared<const detail::tls_certificate_snapshot>()};
 
-    [[nodiscard]] static task<void> insert_or_assign(
-        std::shared_ptr<state> owner, worker_ref caller, tls_certificate_id id,
-        owned_identity_pointer identity) {
+    [[nodiscard]] static task<void> insert_or_assign(std::shared_ptr<state> owner, worker_ref caller, tls_certificate_id id, owned_identity_pointer identity) {
         const auto lease = co_await owner->writer_.acquire(caller);
         require_accepting_caller(caller);
-        auto prepared = co_await run_blocking(caller,
-            [current = owner->snapshot_.load(std::memory_order_acquire), id,
-                identity = std::move(identity)]() mutable {
-                auto certificate = std::make_shared<const detail::tls_certificate>(
-                    detail::load_server_tls_certificate(identity->value_));
-                identity.reset();
-                auto next = std::make_shared<detail::tls_certificate_snapshot>(*current);
-                next->insert_or_assign(id, std::move(certificate));
-                return next;
-            });
+        auto prepared = co_await run_blocking(caller, [current = owner->snapshot_.load(std::memory_order_acquire), id, identity = std::move(identity)]() mutable {
+            auto certificate = std::make_shared<const detail::tls_certificate>(detail::load_server_tls_certificate(identity->value_));
+            identity.reset();
+            auto next = std::make_shared<detail::tls_certificate_snapshot>(*current);
+            next->insert_or_assign(id, std::move(certificate));
+            return next;
+        });
         auto next = std::move(prepared).take_value();
         require_accepting_caller(caller);
         owner->snapshot_.store(std::move(next), std::memory_order_release);
     }
 
-    [[nodiscard]] static task<bool> erase(
-        std::shared_ptr<state> owner, worker_ref caller, tls_certificate_id id) {
+    [[nodiscard]] static task<bool> erase(std::shared_ptr<state> owner, worker_ref caller, tls_certificate_id id) {
         const auto lease = co_await owner->writer_.acquire(caller);
         require_accepting_caller(caller);
         auto current = owner->snapshot_.load(std::memory_order_acquire);
@@ -3959,12 +3748,11 @@ struct tls_certificate_store::state final {
         }
         // Copying an arbitrarily large immutable map is real preparation, not
         // a synchronous erase disguised by posting a closure to the caller.
-        auto prepared = co_await run_blocking(caller,
-            [current = std::move(current), id] {
-                auto next = std::make_shared<detail::tls_certificate_snapshot>(*current);
-                next->erase(id);
-                return next;
-            });
+        auto prepared = co_await run_blocking(caller, [current = std::move(current), id] {
+            auto next = std::make_shared<detail::tls_certificate_snapshot>(*current);
+            next->erase(id);
+            return next;
+        });
         auto next = std::move(prepared).take_value();
         require_accepting_caller(caller);
         owner->snapshot_.store(std::move(next), std::memory_order_release);
@@ -3972,12 +3760,11 @@ struct tls_certificate_store::state final {
     }
 };
 
-tls_certificate_store::tls_certificate_store()
-    : state_(std::make_shared<state>()) {}
+tls_certificate_store::tls_certificate_store() :
+    state_(std::make_shared<state>()) {}
 tls_certificate_store::~tls_certificate_store() = default;
 
-task<void> tls_certificate_store::insert_or_assign(
-    worker_ref caller, tls_certificate_id id, tls_identity_config identity) {
+task<void> tls_certificate_store::insert_or_assign(worker_ref caller, tls_certificate_id id, tls_identity_config identity) {
     const cleanse_identity cleanse{identity};
     auto owner = state_;
     if (id == 0) {
@@ -4008,8 +3795,7 @@ bool tls_certificate_selection::offers_signature_algorithm(std::uint16_t algorit
     return std::ranges::find(signature_algorithms_, algorithm) != signature_algorithms_.end();
 }
 
-std::shared_ptr<const detail::tls_certificate_snapshot> detail::tls_certificate_store_access::snapshot(
-    const tls_certificate_store& store) noexcept {
+std::shared_ptr<const detail::tls_certificate_snapshot> detail::tls_certificate_store_access::snapshot(const tls_certificate_store& store) noexcept {
     return store.state_->snapshot_.load(std::memory_order_acquire);
 }
 
@@ -4036,8 +3822,7 @@ namespace {
 [[nodiscard]] bool set_ticket_mac_key(EVP_MAC_CTX& mac, const tls_session_ticket_key& key) noexcept {
     static char digest[] = "SHA256";
     const OSSL_PARAM parameters[] = {
-        OSSL_PARAM_construct_octet_string(
-            OSSL_MAC_PARAM_KEY, const_cast<unsigned char*>(key.hmac_key_.data()), key.hmac_key_.size()),
+        OSSL_PARAM_construct_octet_string(OSSL_MAC_PARAM_KEY, const_cast<unsigned char*>(key.hmac_key_.data()), key.hmac_key_.size()),
         OSSL_PARAM_construct_utf8_string(OSSL_MAC_PARAM_DIGEST, digest, 0),
         OSSL_PARAM_construct_end(),
     };
@@ -4056,9 +3841,9 @@ tls_session_ticket_key::~tls_session_ticket_key() {
     OPENSSL_cleanse(aes_key_.data(), aes_key_.size());
 }
 
-tls_session_ticket_key_ring::tls_session_ticket_key_ring(std::chrono::steady_clock::time_point origin)
-    : origin_(origin),
-      current_(generate_ticket_key()) {
+tls_session_ticket_key_ring::tls_session_ticket_key_ring(std::chrono::steady_clock::time_point origin) :
+    origin_(origin),
+    current_(generate_ticket_key()) {
     if (!current_.has_value()) {
         throw std::runtime_error("failed to generate TLS session ticket keys");
     }
@@ -4071,8 +3856,7 @@ std::uint64_t tls_session_ticket_key_ring::epoch_at(std::chrono::steady_clock::t
     return static_cast<std::uint64_t>((now - origin_) / tls_session_lifetime);
 }
 
-std::chrono::steady_clock::time_point tls_session_ticket_key_ring::next_rotation(
-    std::chrono::steady_clock::time_point now) const noexcept {
+std::chrono::steady_clock::time_point tls_session_ticket_key_ring::next_rotation(std::chrono::steady_clock::time_point now) const noexcept {
     return origin_ + (epoch_at(now) + 1) * std::chrono::duration_cast<std::chrono::steady_clock::duration>(tls_session_lifetime);
 }
 
@@ -4107,8 +3891,8 @@ bool tls_session_ticket_key_ring::copy_to(std::chrono::steady_clock::time_point 
     return has_current;
 }
 
-tls_session_ticket_key_set::tls_session_ticket_key_set()
-    : aes_256_cbc_(EVP_CIPHER_fetch(nullptr, "AES-256-CBC", nullptr)) {
+tls_session_ticket_key_set::tls_session_ticket_key_set() :
+    aes_256_cbc_(EVP_CIPHER_fetch(nullptr, "AES-256-CBC", nullptr)) {
     if (aes_256_cbc_ == nullptr) {
         throw std::runtime_error("failed to fetch the TLS session ticket cipher");
     }
@@ -4120,8 +3904,7 @@ tls_session_ticket_key_set::~tls_session_ticket_key_set() {
 
 void tls_session_ticket_key_set::install(SSL_CTX& context) {
     const int index = ticket_key_set_index();
-    if (index < 0 || SSL_CTX_set_ex_data(&context, index, this) != 1 ||
-        SSL_CTX_set_tlsext_ticket_key_evp_cb(&context, &tls_session_ticket_key_set::protect_ticket) != 1) {
+    if (index < 0 || SSL_CTX_set_ex_data(&context, index, this) != 1 || SSL_CTX_set_tlsext_ticket_key_evp_cb(&context, &tls_session_ticket_key_set::protect_ticket) != 1) {
         throw std::runtime_error("failed to install TLS session ticket keys");
     }
     (void)SSL_CTX_set_timeout(&context, static_cast<long>(tls_session_lifetime.count()));
@@ -4130,13 +3913,11 @@ void tls_session_ticket_key_set::install(SSL_CTX& context) {
 // SSL_CTX_set_tlsext_ticket_key_evp_cb(3): returns 1 when the key is set up,
 // 2 when a ticket decrypted with the previous key should be renewed, 0 when no
 // ticket is issued or the key name is unknown (full handshake), -1 on error.
-int tls_session_ticket_key_set::protect_ticket(SSL* ssl, unsigned char* key_name, unsigned char* iv,
-    EVP_CIPHER_CTX* cipher, EVP_MAC_CTX* mac, int encrypt) noexcept {
+int tls_session_ticket_key_set::protect_ticket(SSL* ssl, unsigned char* key_name, unsigned char* iv, EVP_CIPHER_CTX* cipher, EVP_MAC_CTX* mac, int encrypt) noexcept {
     // OpenSSL calls the callback of the connection's initial context, but an
     // SNI switch may already have replaced the context; every context of the
     // listener points at the same set.
-    const auto* keys = static_cast<const tls_session_ticket_key_set*>(
-        SSL_CTX_get_ex_data(SSL_get_SSL_CTX(ssl), ticket_key_set_index()));
+    const auto* keys = static_cast<const tls_session_ticket_key_set*>(SSL_CTX_get_ex_data(SSL_get_SSL_CTX(ssl), ticket_key_set_index()));
     if (keys == nullptr || cipher == nullptr || mac == nullptr) {
         return -1;
     }
@@ -4147,9 +3928,7 @@ int tls_session_ticket_key_set::protect_ticket(SSL* ssl, unsigned char* key_name
         const auto& key = *keys->current_;
         std::ranges::copy(key.name_, key_name);
         const int iv_size = EVP_CIPHER_get_iv_length(keys->aes_256_cbc_);
-        if (iv_size <= 0 || iv_size > EVP_MAX_IV_LENGTH || RAND_bytes(iv, iv_size) != 1 ||
-            EVP_EncryptInit_ex2(cipher, keys->aes_256_cbc_, key.aes_key_.data(), iv, nullptr) != 1 ||
-            !set_ticket_mac_key(*mac, key)) {
+        if (iv_size <= 0 || iv_size > EVP_MAX_IV_LENGTH || RAND_bytes(iv, iv_size) != 1 || EVP_EncryptInit_ex2(cipher, keys->aes_256_cbc_, key.aes_key_.data(), iv, nullptr) != 1 || !set_ticket_mac_key(*mac, key)) {
             return -1;
         }
         return 1;
@@ -4159,8 +3938,7 @@ int tls_session_ticket_key_set::protect_ticket(SSL* ssl, unsigned char* key_name
         return 0;
     }
     const auto& key = current ? *keys->current_ : *keys->previous_;
-    if (!set_ticket_mac_key(*mac, key) ||
-        EVP_DecryptInit_ex2(cipher, keys->aes_256_cbc_, key.aes_key_.data(), iv, nullptr) != 1) {
+    if (!set_ticket_mac_key(*mac, key) || EVP_DecryptInit_ex2(cipher, keys->aes_256_cbc_, key.aes_key_.data(), iv, nullptr) != 1) {
         return -1;
     }
     return current ? 1 : 2;

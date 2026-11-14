@@ -34,45 +34,21 @@ struct user;
 struct course;
 struct student;
 
-RUVIA_DB_ENTITY(department, "orm_relations.orm_department",
-    RUVIA_DB_COLUMN(id, std::int64_t, db_column_options{.primary_key_ = true}),
-    RUVIA_DB_COLUMN(name, std::string),
-    RUVIA_DB_ONE_TO_MANY(employees, employee, department))
+RUVIA_DB_ENTITY(department, "orm_relations.orm_department", RUVIA_DB_COLUMN(id, std::int64_t, db_column_options{.primary_key_ = true}), RUVIA_DB_COLUMN(name, std::string), RUVIA_DB_ONE_TO_MANY(employees, employee, department))
 
-RUVIA_DB_ENTITY(employee, "orm_relations.orm_employee",
-    RUVIA_DB_COLUMN(id, std::int64_t, db_column_options{.primary_key_ = true}),
-    RUVIA_DB_COLUMN(department_id, std::int64_t),
-    RUVIA_DB_COLUMN(name, std::string),
-    RUVIA_DB_MANY_TO_ONE(department, department, RUVIA_DB_JOIN_COLUMN(department_id, id)))
+RUVIA_DB_ENTITY(employee, "orm_relations.orm_employee", RUVIA_DB_COLUMN(id, std::int64_t, db_column_options{.primary_key_ = true}), RUVIA_DB_COLUMN(department_id, std::int64_t), RUVIA_DB_COLUMN(name, std::string), RUVIA_DB_MANY_TO_ONE(department, department, RUVIA_DB_JOIN_COLUMN(department_id, id)))
 
-RUVIA_DB_ENTITY(profile, "orm_relations.orm_profile",
-    RUVIA_DB_COLUMN(id, std::int64_t, db_column_options{.primary_key_ = true}),
-    RUVIA_DB_COLUMN(display_name, std::string),
-    RUVIA_DB_ONE_TO_ONE(user, user, RUVIA_DB_INVERSE(profile)))
+RUVIA_DB_ENTITY(profile, "orm_relations.orm_profile", RUVIA_DB_COLUMN(id, std::int64_t, db_column_options{.primary_key_ = true}), RUVIA_DB_COLUMN(display_name, std::string), RUVIA_DB_ONE_TO_ONE(user, user, RUVIA_DB_INVERSE(profile)))
 
-RUVIA_DB_ENTITY(user, "orm_relations.orm_user",
-    RUVIA_DB_COLUMN(id, std::int64_t, db_column_options{.primary_key_ = true}),
-    RUVIA_DB_COLUMN(profile_id, std::int64_t),
-    RUVIA_DB_COLUMN(login, std::string),
-    RUVIA_DB_ONE_TO_ONE(profile, profile, RUVIA_DB_JOIN_COLUMN(profile_id, id)))
+RUVIA_DB_ENTITY(user, "orm_relations.orm_user", RUVIA_DB_COLUMN(id, std::int64_t, db_column_options{.primary_key_ = true}), RUVIA_DB_COLUMN(profile_id, std::int64_t), RUVIA_DB_COLUMN(login, std::string), RUVIA_DB_ONE_TO_ONE(profile, profile, RUVIA_DB_JOIN_COLUMN(profile_id, id)))
 
-using student_course_table_type = RUVIA_DB_JOIN_TABLE("orm_relations.orm_student_course",
-    RUVIA_DB_JOIN_COLUMNS(RUVIA_DB_JOIN_COLUMN(student_id, id)),
-    RUVIA_DB_JOIN_COLUMNS(RUVIA_DB_JOIN_COLUMN(course_id, id)));
+using student_course_table_type = RUVIA_DB_JOIN_TABLE("orm_relations.orm_student_course", RUVIA_DB_JOIN_COLUMNS(RUVIA_DB_JOIN_COLUMN(student_id, id)), RUVIA_DB_JOIN_COLUMNS(RUVIA_DB_JOIN_COLUMN(course_id, id)));
 
-RUVIA_DB_ENTITY(course, "orm_relations.orm_course",
-    RUVIA_DB_COLUMN(id, std::int64_t, db_column_options{.primary_key_ = true}),
-    RUVIA_DB_COLUMN(title, std::string),
-    RUVIA_DB_MANY_TO_MANY(students, student, RUVIA_DB_INVERSE(courses)))
+RUVIA_DB_ENTITY(course, "orm_relations.orm_course", RUVIA_DB_COLUMN(id, std::int64_t, db_column_options{.primary_key_ = true}), RUVIA_DB_COLUMN(title, std::string), RUVIA_DB_MANY_TO_MANY(students, student, RUVIA_DB_INVERSE(courses)))
 
-RUVIA_DB_ENTITY(student, "orm_relations.orm_student",
-    RUVIA_DB_COLUMN(id, std::int64_t, db_column_options{.primary_key_ = true}),
-    RUVIA_DB_COLUMN(name, std::string),
-    RUVIA_DB_MANY_TO_MANY(courses, course, student_course_table_type))
+RUVIA_DB_ENTITY(student, "orm_relations.orm_student", RUVIA_DB_COLUMN(id, std::int64_t, db_column_options{.primary_key_ = true}), RUVIA_DB_COLUMN(name, std::string), RUVIA_DB_MANY_TO_MANY(courses, course, student_course_table_type))
 
-RUVIA_DB_ENTITY(student_course, "orm_relations.orm_student_course",
-    RUVIA_DB_COLUMN(student_id, std::int64_t, db_column_options{.primary_key_ = true}),
-    RUVIA_DB_COLUMN(course_id, std::int64_t, db_column_options{.primary_key_ = true}))
+RUVIA_DB_ENTITY(student_course, "orm_relations.orm_student_course", RUVIA_DB_COLUMN(student_id, std::int64_t, db_column_options{.primary_key_ = true}), RUVIA_DB_COLUMN(course_id, std::int64_t, db_column_options{.primary_key_ = true}))
 
 auto migrations() {
     db_schema schema({.driver_ = db_driver::postgresql});
@@ -107,9 +83,7 @@ task<void> query_example(db_client& db) {
     }
 
     auto builder = employees.query_builder("employee");
-    builder.left_join_and_select("department", "department")
-        .left_join_and_select("department.employees", "colleague")
-        .limit(25);
+    builder.left_join_and_select("department", "department").left_join_and_select("department.employees", "colleague").limit(25);
     auto [joined, joined_total] = co_await builder.get_many_and_count();
     if (rows.size() < 2 || joined.size() < 2 || total != 3 || joined_total != 3) {
         throw std::runtime_error("relation example expected at least two employees");

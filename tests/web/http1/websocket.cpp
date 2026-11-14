@@ -49,8 +49,9 @@ struct websocket_eof_observation {
 };
 const auto websocket_eof_observed = std::make_shared<websocket_eof_observation>();
 [[maybe_unused]] const bool websocket_eof_observation_registered = [] {
-    ruvia::app().use_worker_state<std::shared_ptr<websocket_eof_observation>>(
-        [] { return websocket_eof_observed; });
+    ruvia::app().use_worker_state<std::shared_ptr<websocket_eof_observation>>([] {
+        return websocket_eof_observed;
+    });
     return true;
 }();
 
@@ -63,20 +64,13 @@ class http1_websocket_routes final {
     RUVIA_ROUTES_BEGIN(http1_websocket_routes)
     // Unsigned input beyond the signed millisecond range saturates before
     // normalization; the Pong timeout defaults to the saturated Ping interval.
-    const auto longest_heartbeat = ruvia::websocket_route_config{
-        .lifecycle_ = {.heartbeat_ = {.ping_interval_ =
-                                          std::chrono::duration<std::uint64_t, std::milli>{
-                                              (std::numeric_limits<std::uint64_t>::max)()}}}};
-    const auto required_subprotocol =
-        ruvia::websocket_route_config{.subprotocols_ = {"chat.v1"}, .require_subprotocol_ = true};
-    const auto takeover_deflate =
-        ruvia::websocket_route_config{.deflate_ = {.context_takeover_ = true, .deflater_ = {.mem_level_ = 4}}};
+    const auto longest_heartbeat = ruvia::websocket_route_config{.lifecycle_ = {.heartbeat_ = {.ping_interval_ = std::chrono::duration<std::uint64_t, std::milli>{(std::numeric_limits<std::uint64_t>::max)()}}}};
+    const auto required_subprotocol = ruvia::websocket_route_config{.subprotocols_ = {"chat.v1"}, .require_subprotocol_ = true};
+    const auto takeover_deflate = ruvia::websocket_route_config{.deflate_ = {.context_takeover_ = true, .deflater_ = {.mem_level_ = 4}}};
     // Short enough for a Ping and a lapsed Pong window inside the handler's
     // idle start, long enough that a tick write delayed by a busy CI host is
     // not mistaken for a stalled peer (that budget is interval + timeout).
-    const auto short_heartbeat = ruvia::websocket_route_config{
-        .lifecycle_ = {.heartbeat_ = {.ping_interval_ = std::chrono::milliseconds(100),
-                           .pong_timeout_ = std::chrono::milliseconds(150)}}};
+    const auto short_heartbeat = ruvia::websocket_route_config{.lifecycle_ = {.heartbeat_ = {.ping_interval_ = std::chrono::milliseconds(100), .pong_timeout_ = std::chrono::milliseconds(150)}}};
     RUVIA_GET_WS("/http1-websocket-eof", read_until_eof);
     RUVIA_GET_WS("/http1-websocket-close-lanes", close_exclusively);
     RUVIA_GET_WS("/http1-websocket-longest-heartbeat", write_stalled, longest_heartbeat);
@@ -87,8 +81,7 @@ class http1_websocket_routes final {
     RUVIA_GET_WS("/http1-websocket-echo-send", echo_send);
     RUVIA_GET_WS("/http1-websocket-deflate-echo", echo_all);
     RUVIA_GET_WS("/http1-websocket-deflate-takeover", echo_all, takeover_deflate);
-    const auto small_message = ruvia::websocket_route_config{
-        .max_message_bytes_ = ruvia::protocol_byte_limit::limited(256)};
+    const auto small_message = ruvia::websocket_route_config{.max_message_bytes_ = ruvia::protocol_byte_limit::limited(256)};
     RUVIA_GET_WS("/http1-websocket-small-message", echo_all, small_message);
     RUVIA_ROUTES_END
 
@@ -151,14 +144,12 @@ class http1_websocket_routes final {
     // peer answers every Ping.
     ruvia::task<void> write_without_reading(ruvia::context& context_value) {
         auto& websocket_value = context_value.websocket();
-        if (co_await ruvia::sleep_for(context_value.worker(), std::chrono::milliseconds(300)) !=
-            ruvia::timer_sleep_result::elapsed) {
+        if (co_await ruvia::sleep_for(context_value.worker(), std::chrono::milliseconds(300)) != ruvia::timer_sleep_result::elapsed) {
             co_return;
         }
         for (int i = 0; i < 20; ++i) {
             co_await websocket_value.text("tick");
-            if (co_await ruvia::sleep_for(context_value.worker(), std::chrono::milliseconds(10)) !=
-                ruvia::timer_sleep_result::elapsed) {
+            if (co_await ruvia::sleep_for(context_value.worker(), std::chrono::milliseconds(10)) != ruvia::timer_sleep_result::elapsed) {
                 co_return;
             }
         }
@@ -190,8 +181,7 @@ class http1_websocket_routes final {
             co_await std::move(echo);
             {
                 // A dropped, never-started send releases the read lane.
-                auto dropped = websocket_value.send(
-                    ruvia::websocket_message::borrow(ruvia::websocket_opcode::text, "dropped"));
+                auto dropped = websocket_value.send(ruvia::websocket_message::borrow(ruvia::websocket_opcode::text, "dropped"));
                 static_cast<void>(dropped);
             }
             std::optional<ruvia::websocket_message> second;
@@ -201,8 +191,7 @@ class http1_websocket_routes final {
             };
             reads.spawn(receive());
             try {
-                static_cast<void>(websocket_value.send(
-                    ruvia::websocket_message::borrow(ruvia::websocket_opcode::text, "overlap")));
+                static_cast<void>(websocket_value.send(ruvia::websocket_message::borrow(ruvia::websocket_opcode::text, "overlap")));
             } catch (const std::logic_error&) {
                 observed_value.send_during_read_rejected_ = true;
             }
@@ -496,10 +485,16 @@ TEST(Ruvia, http1_websocket_read_reports_orderly_peer_eof_as_end) {
     std::exception_ptr failure;
     auto run = [&]() -> ruvia::task<void> {
         asio::steady_timer watchdog_value(io, std::chrono::seconds(5));
-        watchdog_value.async_wait([&](std::error_code timeout) { if (!timeout) { ruvia::close_socket(client); } });
+        watchdog_value.async_wait([&](std::error_code timeout) {
+            if (!timeout) {
+                ruvia::close_socket(client);
+            }
+        });
         try {
             const auto send = [&](std::string_view bytes_value) -> ruvia::task<void> {
-                const auto result_value = co_await ruvia::async_asio<std::size_t>([&](auto handler) { asio::async_write(client, asio::buffer(bytes_value), std::move(handler)); });
+                const auto result_value = co_await ruvia::async_asio<std::size_t>([&](auto handler) {
+                    asio::async_write(client, asio::buffer(bytes_value), std::move(handler));
+                });
                 if (result_value.error_code()) {
                     throw std::system_error(result_value.error_code());
                 }
@@ -514,7 +509,9 @@ TEST(Ruvia, http1_websocket_read_reports_orderly_peer_eof_as_end) {
             std::string head{};
             char byte{};
             while (!head.ends_with("\r\n\r\n")) {
-                const auto read = co_await ruvia::async_asio<std::size_t>([&](auto handler) { client.async_read_some(asio::buffer(&byte, 1), std::move(handler)); });
+                const auto read = co_await ruvia::async_asio<std::size_t>([&](auto handler) {
+                    client.async_read_some(asio::buffer(&byte, 1), std::move(handler));
+                });
                 if (read.error_code()) {
                     throw std::system_error(read.error_code());
                 }
@@ -535,7 +532,9 @@ TEST(Ruvia, http1_websocket_read_reports_orderly_peer_eof_as_end) {
             client.shutdown(asio::ip::tcp::socket::shutdown_send);
             std::array<char, 256> input{};
             for (;;) {
-                const auto read = co_await ruvia::async_asio<std::size_t>([&](auto handler) { client.async_read_some(asio::buffer(input), std::move(handler)); });
+                const auto read = co_await ruvia::async_asio<std::size_t>([&](auto handler) {
+                    client.async_read_some(asio::buffer(input), std::move(handler));
+                });
                 if (read.error_code()) {
                     break;
                 }
@@ -614,17 +613,25 @@ TEST(Ruvia, http1_websocket_send_echoes_borrowed_message_while_holding_read_lane
     std::exception_ptr failure;
     auto run = [&]() -> ruvia::task<void> {
         asio::steady_timer watchdog_value(io, std::chrono::seconds(5));
-        watchdog_value.async_wait([&](std::error_code timeout) { if (!timeout) { ruvia::close_socket(client); } });
+        watchdog_value.async_wait([&](std::error_code timeout) {
+            if (!timeout) {
+                ruvia::close_socket(client);
+            }
+        });
         try {
             const auto send = [&](std::string_view bytes_value) -> ruvia::task<void> {
-                const auto result_value = co_await ruvia::async_asio<std::size_t>([&](auto handler) { asio::async_write(client, asio::buffer(bytes_value), std::move(handler)); });
+                const auto result_value = co_await ruvia::async_asio<std::size_t>([&](auto handler) {
+                    asio::async_write(client, asio::buffer(bytes_value), std::move(handler));
+                });
                 if (result_value.error_code()) {
                     throw std::system_error(result_value.error_code());
                 }
             };
             const auto expect = [&](std::string_view expected) -> ruvia::task<void> {
                 std::string received(expected.size(), '\0');
-                const auto result_value = co_await ruvia::async_asio<std::size_t>([&](auto handler) { asio::async_read(client, asio::buffer(received), std::move(handler)); });
+                const auto result_value = co_await ruvia::async_asio<std::size_t>([&](auto handler) {
+                    asio::async_read(client, asio::buffer(received), std::move(handler));
+                });
                 if (result_value.error_code()) {
                     throw std::system_error(result_value.error_code());
                 }
@@ -640,7 +647,9 @@ TEST(Ruvia, http1_websocket_send_echoes_borrowed_message_while_holding_read_lane
             std::string head{};
             char byte{};
             while (!head.ends_with("\r\n\r\n")) {
-                const auto read = co_await ruvia::async_asio<std::size_t>([&](auto handler) { client.async_read_some(asio::buffer(&byte, 1), std::move(handler)); });
+                const auto read = co_await ruvia::async_asio<std::size_t>([&](auto handler) {
+                    client.async_read_some(asio::buffer(&byte, 1), std::move(handler));
+                });
                 if (read.error_code()) {
                     throw std::system_error(read.error_code());
                 }
@@ -653,14 +662,16 @@ TEST(Ruvia, http1_websocket_send_echoes_borrowed_message_while_holding_read_lane
             co_await expect(std::string_view("\x81\x02hi", 4));
             constexpr std::array<char, 9> binary_frame{'\x82', '\x83', '\0', '\0', '\0', '\0', 'a', 'b', 'c'};
             co_await send(std::string_view(binary_frame.data(), binary_frame.size()));
-            co_await expect(std::string_view(
-                "\x82\x03"
-                "abc",
-                5));
+            co_await expect(
+                std::string_view("\x82\x03"
+                                 "abc",
+                    5));
             client.shutdown(asio::ip::tcp::socket::shutdown_send);
             std::array<char, 256> input{};
             for (;;) {
-                const auto read = co_await ruvia::async_asio<std::size_t>([&](auto handler) { client.async_read_some(asio::buffer(input), std::move(handler)); });
+                const auto read = co_await ruvia::async_asio<std::size_t>([&](auto handler) {
+                    client.async_read_some(asio::buffer(input), std::move(handler));
+                });
                 if (read.error_code()) {
                     break;
                 }
@@ -701,7 +712,11 @@ TEST(Ruvia, http1_websocket_longest_heartbeat_never_aborts_a_slow_write) {
     bool payload_intact = true;
     auto run = [&]() -> ruvia::task<void> {
         asio::steady_timer watchdog_value(io, std::chrono::seconds(10));
-        watchdog_value.async_wait([&](std::error_code timeout) { if (!timeout) { ruvia::close_socket(client); } });
+        watchdog_value.async_wait([&](std::error_code timeout) {
+            if (!timeout) {
+                ruvia::close_socket(client);
+            }
+        });
         try {
             constexpr std::string_view upgrade =
                 "GET /http1-websocket-longest-heartbeat HTTP/1.1\r\n"
@@ -710,14 +725,18 @@ TEST(Ruvia, http1_websocket_longest_heartbeat_never_aborts_a_slow_write) {
                 "Upgrade: websocket\r\n"
                 "Sec-WebSocket-Version: 13\r\n"
                 "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n";
-            const auto sent = co_await ruvia::async_asio<std::size_t>([&](auto handler) { asio::async_write(client, asio::buffer(upgrade), std::move(handler)); });
+            const auto sent = co_await ruvia::async_asio<std::size_t>([&](auto handler) {
+                asio::async_write(client, asio::buffer(upgrade), std::move(handler));
+            });
             if (sent.error_code()) {
                 throw std::system_error(sent.error_code());
             }
             std::string head{};
             char byte{};
             while (!head.ends_with("\r\n\r\n")) {
-                const auto read = co_await ruvia::async_asio<std::size_t>([&](auto handler) { client.async_read_some(asio::buffer(&byte, 1), std::move(handler)); });
+                const auto read = co_await ruvia::async_asio<std::size_t>([&](auto handler) {
+                    client.async_read_some(asio::buffer(&byte, 1), std::move(handler));
+                });
                 if (read.error_code()) {
                     throw std::system_error(read.error_code());
                 }
@@ -726,9 +745,13 @@ TEST(Ruvia, http1_websocket_longest_heartbeat_never_aborts_a_slow_write) {
             EXPECT_TRUE(head.starts_with("HTTP/1.1 101 "));
             // Leave the server's write blocked across many connection scans.
             asio::steady_timer stall(io, std::chrono::milliseconds(300));
-            (void)co_await ruvia::async_asio([&](auto handler) { stall.async_wait(std::move(handler)); });
+            (void)co_await ruvia::async_asio([&](auto handler) {
+                stall.async_wait(std::move(handler));
+            });
             std::array<unsigned char, 10> frame_head{};
-            const auto head_read = co_await ruvia::async_asio<std::size_t>([&](auto handler) { asio::async_read(client, asio::buffer(frame_head), std::move(handler)); });
+            const auto head_read = co_await ruvia::async_asio<std::size_t>([&](auto handler) {
+                asio::async_read(client, asio::buffer(frame_head), std::move(handler));
+            });
             if (head_read.error_code()) {
                 throw std::system_error(head_read.error_code());
             }
@@ -793,8 +816,7 @@ TEST(Ruvia, http1_websocket_heartbeat_does_not_abort_an_unread_responsive_peer) 
     }
     EXPECT_TRUE(head.starts_with("HTTP/1.1 101 "));
     ruvia::http_io_buffer peer_input;
-    ruvia::websocket_connection peer(peer_input, {.role_ = ruvia::websocket_connection_role::client,
-                                                     .mask_key_generator_ = &http1_websocket_test::zero_mask});
+    ruvia::websocket_connection peer(peer_input, {.role_ = ruvia::websocket_connection_role::client, .mask_key_generator_ = &http1_websocket_test::zero_mask});
     const auto flush = [&] {
         const std::string bytes_value(peer.output_plan().bytes());
         if (!bytes_value.empty()) {
@@ -850,29 +872,35 @@ TEST(Ruvia, http1_websocket_required_subprotocol_refuses_offers_without_one) {
     std::exception_ptr failure;
     std::array<std::string, 3> heads{std::string{}, std::string{}, std::string{}};
     auto run = [&]() -> ruvia::task<void> {
-        constexpr std::array<std::string_view, 3> offers{
-            "", "Sec-WebSocket-Protocol: other\r\n", "Sec-WebSocket-Protocol: other, chat.v1\r\n"};
+        constexpr std::array<std::string_view, 3> offers{"", "Sec-WebSocket-Protocol: other\r\n", "Sec-WebSocket-Protocol: other, chat.v1\r\n"};
         for (std::size_t index = 0; index != offers.size(); ++index) {
             asio::ip::tcp::socket client(io);
             asio::steady_timer watchdog_value(io, std::chrono::seconds(5));
-            watchdog_value.async_wait([&](std::error_code timeout) { if (!timeout) { ruvia::close_socket(client); } });
+            watchdog_value.async_wait([&](std::error_code timeout) {
+                if (!timeout) {
+                    ruvia::close_socket(client);
+                }
+            });
             try {
                 client.connect(server.endpoint());
-                const std::string upgrade(std::string(
-                                              "GET /http1-websocket-required-subprotocol HTTP/1.1\r\n"
-                                              "Host: 127.0.0.1\r\n"
-                                              "Connection: Upgrade\r\n"
-                                              "Upgrade: websocket\r\n"
-                                              "Sec-WebSocket-Version: 13\r\n"
-                                              "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n") +
-                                          std::string(offers[index]) + "\r\n");
-                const auto sent = co_await ruvia::async_asio<std::size_t>([&](auto handler) { asio::async_write(client, asio::buffer(upgrade), std::move(handler)); });
+                const std::string upgrade(std::string("GET /http1-websocket-required-subprotocol HTTP/1.1\r\n"
+                                                      "Host: 127.0.0.1\r\n"
+                                                      "Connection: Upgrade\r\n"
+                                                      "Upgrade: websocket\r\n"
+                                                      "Sec-WebSocket-Version: 13\r\n"
+                                                      "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n") +
+                    std::string(offers[index]) + "\r\n");
+                const auto sent = co_await ruvia::async_asio<std::size_t>([&](auto handler) {
+                    asio::async_write(client, asio::buffer(upgrade), std::move(handler));
+                });
                 if (sent.error_code()) {
                     throw std::system_error(sent.error_code());
                 }
                 char byte{};
                 while (!heads[index].ends_with("\r\n\r\n")) {
-                    const auto read = co_await ruvia::async_asio<std::size_t>([&](auto handler) { client.async_read_some(asio::buffer(&byte, 1), std::move(handler)); });
+                    const auto read = co_await ruvia::async_asio<std::size_t>([&](auto handler) {
+                        client.async_read_some(asio::buffer(&byte, 1), std::move(handler));
+                    });
                     if (read.error_code()) {
                         throw std::system_error(read.error_code());
                     }
@@ -914,7 +942,11 @@ TEST(Ruvia, http1_websocket_upgrade_with_continue_expectation_sends_100_before_1
     auto run = [&]() -> ruvia::task<void> {
         asio::ip::tcp::socket client(io);
         asio::steady_timer watchdog_value(io, std::chrono::seconds(5));
-        watchdog_value.async_wait([&](std::error_code timeout) { if (!timeout) { ruvia::close_socket(client); } });
+        watchdog_value.async_wait([&](std::error_code timeout) {
+            if (!timeout) {
+                ruvia::close_socket(client);
+            }
+        });
         try {
             client.connect(server.endpoint());
             constexpr std::string_view upgrade =
@@ -926,14 +958,18 @@ TEST(Ruvia, http1_websocket_upgrade_with_continue_expectation_sends_100_before_1
                 "Sec-WebSocket-Version: 13\r\n"
                 "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n"
                 "Sec-WebSocket-Protocol: chat.v1\r\n\r\n";
-            const auto sent = co_await ruvia::async_asio<std::size_t>([&](auto handler) { asio::async_write(client, asio::buffer(upgrade), std::move(handler)); });
+            const auto sent = co_await ruvia::async_asio<std::size_t>([&](auto handler) {
+                asio::async_write(client, asio::buffer(upgrade), std::move(handler));
+            });
             if (sent.error_code()) {
                 throw std::system_error(sent.error_code());
             }
             for (auto& head : heads) {
                 char byte{};
                 while (!head.ends_with("\r\n\r\n")) {
-                    const auto read = co_await ruvia::async_asio<std::size_t>([&](auto handler) { client.async_read_some(asio::buffer(&byte, 1), std::move(handler)); });
+                    const auto read = co_await ruvia::async_asio<std::size_t>([&](auto handler) {
+                        client.async_read_some(asio::buffer(&byte, 1), std::move(handler));
+                    });
                     if (read.error_code()) {
                         throw std::system_error(read.error_code());
                     }
@@ -1013,15 +1049,14 @@ TEST(Ruvia, http1_websocket_deflate_echoes_with_shared_and_takeover_codecs) {
     for (const bool takeover : {false, true}) {
         asio::ip::tcp::socket client(io);
         client.connect(server.endpoint());
-        const std::string upgrade(std::string("GET ") +
-                                  (takeover ? "/http1-websocket-deflate-takeover" : "/http1-websocket-deflate-echo") +
-                                  " HTTP/1.1\r\n"
-                                  "Host: 127.0.0.1\r\n"
-                                  "Connection: Upgrade\r\n"
-                                  "Upgrade: websocket\r\n"
-                                  "Sec-WebSocket-Version: 13\r\n"
-                                  "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n"
-                                  "Sec-WebSocket-Extensions: permessage-deflate\r\n\r\n");
+        const std::string upgrade(std::string("GET ") + (takeover ? "/http1-websocket-deflate-takeover" : "/http1-websocket-deflate-echo") +
+            " HTTP/1.1\r\n"
+            "Host: 127.0.0.1\r\n"
+            "Connection: Upgrade\r\n"
+            "Upgrade: websocket\r\n"
+            "Sec-WebSocket-Version: 13\r\n"
+            "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n"
+            "Sec-WebSocket-Extensions: permessage-deflate\r\n\r\n");
         asio::write(client, asio::buffer(upgrade));
         std::string head{};
         char byte{};
@@ -1033,12 +1068,7 @@ TEST(Ruvia, http1_websocket_deflate_echoes_with_shared_and_takeover_codecs) {
         EXPECT_TRUE(head.find("permessage-deflate") != std::string::npos);
         EXPECT_TRUE((head.find("server_no_context_takeover") == std::string::npos) == takeover);
         ruvia::http_io_buffer peer_input;
-        ruvia::websocket_connection peer(peer_input, {.message_limit_ = ruvia::protocol_byte_limit::unlimited(),
-                                                         .compression_ = {.enabled_ = true,
-                                                             .server_no_context_takeover_ = !takeover,
-                                                             .client_no_context_takeover_ = !takeover},
-                                                         .role_ = ruvia::websocket_connection_role::client,
-                                                         .mask_key_generator_ = &http1_websocket_test::zero_mask});
+        ruvia::websocket_connection peer(peer_input, {.message_limit_ = ruvia::protocol_byte_limit::unlimited(), .compression_ = {.enabled_ = true, .server_no_context_takeover_ = !takeover, .client_no_context_takeover_ = !takeover}, .role_ = ruvia::websocket_connection_role::client, .mask_key_generator_ = &http1_websocket_test::zero_mask});
         const auto flush = [&] {
             const std::string bytes_value(peer.output_plan().bytes());
             asio::write(client, asio::buffer(bytes_value));
@@ -1066,8 +1096,7 @@ TEST(Ruvia, http1_websocket_deflate_echoes_with_shared_and_takeover_codecs) {
             }
         };
         // Small, mid-size, past 64 KiB, incompressible, then small again.
-        for (const auto& payload : {sample_message(32, 1), sample_message(4096, 2), sample_message(70'000, 3),
-                 noise_message(70'000), sample_message(32, 4)}) {
+        for (const auto& payload : {sample_message(32, 1), sample_message(4096, 2), sample_message(70'000, 3), noise_message(70'000), sample_message(32, 4)}) {
             static_cast<void>(echo(payload));
         }
         const auto repeated = sample_message(2000, 5);
@@ -1122,7 +1151,9 @@ struct observation {
 };
 const auto observed = std::make_shared<observation>();
 [[maybe_unused]] const bool observation_registered = [] {
-    ruvia::app().use_worker_state<std::shared_ptr<observation>>([] { return observed; });
+    ruvia::app().use_worker_state<std::shared_ptr<observation>>([] {
+        return observed;
+    });
     return true;
 }();
 
@@ -1175,10 +1206,16 @@ void exercise_connect(bool finish_first) {
     std::exception_ptr failure;
     auto run = [&]() -> ruvia::task<void> {
         asio::steady_timer watchdog_value(io, std::chrono::seconds(5));
-        watchdog_value.async_wait([&](std::error_code timeout) { if (!timeout) { ruvia::close_socket(client); } });
+        watchdog_value.async_wait([&](std::error_code timeout) {
+            if (!timeout) {
+                ruvia::close_socket(client);
+            }
+        });
         try {
             const auto send = [&](std::string_view bytes_value) -> ruvia::task<void> {
-                const auto result_value = co_await ruvia::async_asio<std::size_t>([&](auto handler) { asio::async_write(client, asio::buffer(bytes_value), std::move(handler)); });
+                const auto result_value = co_await ruvia::async_asio<std::size_t>([&](auto handler) {
+                    asio::async_write(client, asio::buffer(bytes_value), std::move(handler));
+                });
                 if (result_value.error_code()) {
                     throw std::system_error(result_value.error_code());
                 }
@@ -1188,7 +1225,9 @@ void exercise_connect(bool finish_first) {
             std::string head{};
             char byte{};
             while (!head.ends_with("\r\n\r\n")) {
-                const auto read = co_await ruvia::async_asio<std::size_t>([&](auto handler) { client.async_read_some(asio::buffer(&byte, 1), std::move(handler)); });
+                const auto read = co_await ruvia::async_asio<std::size_t>([&](auto handler) {
+                    client.async_read_some(asio::buffer(&byte, 1), std::move(handler));
+                });
                 if (read.error_code()) {
                     throw std::system_error(read.error_code());
                 }
@@ -1204,7 +1243,9 @@ void exercise_connect(bool finish_first) {
                 client.shutdown(asio::ip::tcp::socket::shutdown_send);
             }
             for (;;) {
-                const auto read = co_await ruvia::async_asio<std::size_t>([&](auto handler) { client.async_read_some(asio::buffer(input), std::move(handler)); });
+                const auto read = co_await ruvia::async_asio<std::size_t>([&](auto handler) {
+                    client.async_read_some(asio::buffer(input), std::move(handler));
+                });
                 if (read.error_code() == asio::error::eof) {
                     break;
                 }
@@ -1254,7 +1295,9 @@ class http1_interim_routes final {
         link_value.assign("changed before starting the operation");
         if (context_value.req().protocol_version() == ruvia::http_protocol_version::http11) {
             ruvia::task_scope output(context_value.worker());
-            const auto send_first = [&]() -> ruvia::task<void> { co_await std::move(first); };
+            const auto send_first = [&]() -> ruvia::task<void> {
+                co_await std::move(first);
+            };
             output.spawn(send_first());
             unsigned rejected = 0;
             for (unsigned attempt = 0; attempt < 2; ++attempt) {
@@ -1305,15 +1348,23 @@ std::string exchange_closing_request(std::string_view request) {
     std::exception_ptr failure;
     auto run = [&]() -> ruvia::task<void> {
         asio::steady_timer watchdog_value(io, std::chrono::seconds(5));
-        watchdog_value.async_wait([&](std::error_code timeout) { if (!timeout) { ruvia::close_socket(client); } });
+        watchdog_value.async_wait([&](std::error_code timeout) {
+            if (!timeout) {
+                ruvia::close_socket(client);
+            }
+        });
         try {
-            const auto written = co_await ruvia::async_asio<std::size_t>([&](auto handler) { asio::async_write(client, asio::buffer(request), std::move(handler)); });
+            const auto written = co_await ruvia::async_asio<std::size_t>([&](auto handler) {
+                asio::async_write(client, asio::buffer(request), std::move(handler));
+            });
             if (written.error_code()) {
                 throw std::system_error(written.error_code());
             }
             std::array<char, 4096> input{};
             for (;;) {
-                const auto read = co_await ruvia::async_asio<std::size_t>([&](auto handler) { client.async_read_some(asio::buffer(input), std::move(handler)); });
+                const auto read = co_await ruvia::async_asio<std::size_t>([&](auto handler) {
+                    client.async_read_some(asio::buffer(input), std::move(handler));
+                });
                 if (read.error_code() == asio::error::eof) {
                     break;
                 }

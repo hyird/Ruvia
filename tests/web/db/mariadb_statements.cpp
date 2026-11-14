@@ -85,8 +85,7 @@ constexpr std::string_view server_tracked_list =
 
 // DATE, DATETIME and TIMESTAMP: a length, then year, month, day, hour,
 // minute, second and microseconds as far as they are not zero.
-[[nodiscard]] inline std::string datetime(unsigned year, unsigned month, unsigned day, unsigned hour = 0,
-    unsigned minute = 0, unsigned second = 0, unsigned microsecond = 0) {
+[[nodiscard]] inline std::string datetime(unsigned year, unsigned month, unsigned day, unsigned hour = 0, unsigned minute = 0, unsigned second = 0, unsigned microsecond = 0) {
     if (year == 0 && month == 0 && day == 0 && hour == 0 && minute == 0 && second == 0 && microsecond == 0) {
         return std::string(1, '\0');
     }
@@ -102,8 +101,7 @@ constexpr std::string_view server_tracked_list =
 
 // TIME: a length, then the sign, days, hours, minutes, seconds and
 // microseconds.
-[[nodiscard]] inline std::string time(
-    bool negative, unsigned days, unsigned hour, unsigned minute, unsigned second, unsigned microsecond = 0) {
+[[nodiscard]] inline std::string time(bool negative, unsigned days, unsigned hour, unsigned minute, unsigned second, unsigned microsecond = 0) {
     std::string bytes(1, negative ? '\1' : '\0');
     bytes += little(days, 4);
     bytes += std::string({static_cast<char>(hour), static_cast<char>(minute), static_cast<char>(second)});
@@ -114,8 +112,7 @@ constexpr std::string_view server_tracked_list =
 }
 
 // Runs `sql` twice alone: the first use as text, the second prepared.
-inline ruvia::task<void> twice(ruvia::db_session handle, std::string_view sql, std::optional<ruvia::db_rows>& text,
-    std::optional<ruvia::db_rows>& prepared) {
+inline ruvia::task<void> twice(ruvia::db_session handle, std::string_view sql, std::optional<ruvia::db_rows>& text, std::optional<ruvia::db_rows>& prepared) {
     text.emplace(co_await handle.query(sql));
     prepared.emplace(co_await handle.query(sql));
 }
@@ -145,8 +142,7 @@ inline ruvia::task<void> twice(ruvia::db_session handle, std::string_view sql, s
 }
 
 template <typename... param_types>
-inline ruvia::task<void> query_with(
-    ruvia::db_session handle, std::string_view sql, pipeline_test::outcome& result, param_types... params) {
+inline ruvia::task<void> query_with(ruvia::db_session handle, std::string_view sql, pipeline_test::outcome& result, param_types... params) {
     try {
         result.value_ = first_row(co_await handle.query(sql, params...));
     } catch (const ruvia::db_error& error) {
@@ -155,8 +151,7 @@ inline ruvia::task<void> query_with(
 }
 
 template <typename... param_types>
-inline ruvia::task<void> execute_with(
-    ruvia::db_session handle, std::string_view sql, pipeline_test::outcome& result, param_types... params) {
+inline ruvia::task<void> execute_with(ruvia::db_session handle, std::string_view sql, pipeline_test::outcome& result, param_types... params) {
     try {
         const auto executed = co_await handle.execute(sql, params...);
         result.affected_rows_ = executed.affected_rows();
@@ -186,9 +181,7 @@ TEST(Ruvia, db_mariadb_repeated_statement_runs_prepared_from_its_second_use) {
     EXPECT_TRUE(outcomes[0].value_ == "a");
     EXPECT_TRUE(outcomes[1].value_ == "b");
     EXPECT_TRUE(outcomes[2].value_ == "c");
-    EXPECT_TRUE((peer.maria_commands() ==
-                 std::vector<std::string>({std::string("query:SELECT v FROM t WHERE id = 7"), std::string("prepare:SELECT v FROM t WHERE id = ?"),
-                     std::string("execute:1:i:7"), std::string("execute:1:i:7")})));
+    EXPECT_TRUE((peer.maria_commands() == std::vector<std::string>({std::string("query:SELECT v FROM t WHERE id = 7"), std::string("prepare:SELECT v FROM t WHERE id = ?"), std::string("execute:1:i:7"), std::string("execute:1:i:7")})));
 }
 
 // Parameters travel in the binary protocol with the types their literals
@@ -217,8 +210,8 @@ TEST(Ruvia, db_mariadb_prepared_parameters_keep_their_types) {
     const auto commands = peer.maria_commands();
     EXPECT_EQ(commands.size(), std::size_t{3});
     EXPECT_TRUE(commands.front() ==
-                "query:SELECT v FROM t WHERE a = 42 AND b = 'it''s' AND c = 1.5e0 AND d <=> NULL "
-                "AND e = 1 AND f = 7");
+        "query:SELECT v FROM t WHERE a = 42 AND b = 'it''s' AND c = 1.5e0 AND d <=> NULL "
+        "AND e = 1 AND f = 7");
     EXPECT_TRUE(commands.back() == "execute:1:i:42,s:it's,d:1.5,null,t:1,i:7");
 }
 
@@ -228,19 +221,12 @@ TEST(Ruvia, db_mariadb_prepared_parameters_keep_their_types) {
 TEST(Ruvia, db_mariadb_prepared_reals_read_as_the_text_protocol_sends_them) {
     using namespace ruvia;
     using namespace mariadb_statement_test;
-    const std::vector<std::pair<double, std::string>> doubles({{0.1, std::string("0.1")}, {1e20, std::string("1e20")}, {1e15, std::string("1e15")},
-        {123456789012345.0, std::string("123456789012345")}, {1.5e-15, std::string("0.0000000000000015")}, {1e-5, std::string("0.00001")},
-        {-0.000123, std::string("-0.000123")}, {1.0 / 3, std::string("0.3333333333333333")}, {1e-14, std::string("0.00000000000001")},
-        {2.5e300, std::string("2.5e300")}, {12345678901234567890.0, std::string("1.2345678901234567e19")}, {1e16, std::string("1e16")},
-        // dtoa reports an overflow for infinity and NaN, which the server
-        // writes as 0 (VARIANCE() of values near DBL_MAX overflows).
-        {std::numeric_limits<double>::infinity(), "0"}, {-std::numeric_limits<double>::infinity(), std::string("0")},
-        {std::numeric_limits<double>::quiet_NaN(), std::string("0")}});
-    const std::vector<std::pair<float, std::string>> floats({{0.1F, std::string("0.1")}, {3.14159265F, std::string("3.14159")},
-        {16777217.0F, std::string("16777200")}, {-1.17549435e-38F, std::string("-1.17549e-38")}, {3.4e38F, std::string("3.4e38")}, {1e-5F, std::string("0.00001")},
-        {0.33333334F, std::string("0.333333")}, {1e-7F, std::string("0.0000001")}, {1234567.0F, std::string("1234570")}, {1e10F, std::string("10000000000")},
-        {123456.0F, std::string("123456")}, {2.5F, std::string("2.5")}, {std::numeric_limits<float>::infinity(), std::string("0")},
-        {-std::numeric_limits<float>::infinity(), std::string("0")}, {std::numeric_limits<float>::quiet_NaN(), std::string("0")}});
+    const std::vector<std::pair<double, std::string>> doubles(
+        {{0.1, std::string("0.1")}, {1e20, std::string("1e20")}, {1e15, std::string("1e15")}, {123456789012345.0, std::string("123456789012345")}, {1.5e-15, std::string("0.0000000000000015")}, {1e-5, std::string("0.00001")}, {-0.000123, std::string("-0.000123")}, {1.0 / 3, std::string("0.3333333333333333")}, {1e-14, std::string("0.00000000000001")}, {2.5e300, std::string("2.5e300")}, {12345678901234567890.0, std::string("1.2345678901234567e19")}, {1e16, std::string("1e16")},
+            // dtoa reports an overflow for infinity and NaN, which the server
+            // writes as 0 (VARIANCE() of values near DBL_MAX overflows).
+            {std::numeric_limits<double>::infinity(), "0"}, {-std::numeric_limits<double>::infinity(), std::string("0")}, {std::numeric_limits<double>::quiet_NaN(), std::string("0")}});
+    const std::vector<std::pair<float, std::string>> floats({{0.1F, std::string("0.1")}, {3.14159265F, std::string("3.14159")}, {16777217.0F, std::string("16777200")}, {-1.17549435e-38F, std::string("-1.17549e-38")}, {3.4e38F, std::string("3.4e38")}, {1e-5F, std::string("0.00001")}, {0.33333334F, std::string("0.333333")}, {1e-7F, std::string("0.0000001")}, {1234567.0F, std::string("1234570")}, {1e10F, std::string("10000000000")}, {123456.0F, std::string("123456")}, {2.5F, std::string("2.5")}, {std::numeric_limits<float>::infinity(), std::string("0")}, {-std::numeric_limits<float>::infinity(), std::string("0")}, {std::numeric_limits<float>::quiet_NaN(), std::string("0")}});
     std::vector<binary_row> rows{};
     std::vector<std::optional<std::string>> expected{};
     for (std::size_t index = 0; index < doubles.size(); ++index) {
@@ -248,19 +234,14 @@ TEST(Ruvia, db_mariadb_prepared_reals_read_as_the_text_protocol_sends_them) {
         expected.emplace_back(std::in_place, doubles[index].second);
         expected.emplace_back(std::in_place, floats[index].second);
     }
-    peer_type peer(std::vector<ruvia::test::backend_startup_peer::maria_reply>({{.rows_ = std::vector<std::string>({std::string("x")})},
-                       {.columns_ = std::vector<ruvia::test::backend_startup_peer::maria_column>({{.name_ = std::string("d"), .type_ = type_double, .decimals_ = not_fixed, .length_ = 22},
-                            {.name_ = std::string("f"), .type_ = type_float, .decimals_ = not_fixed, .length_ = 12}}),
-                           .binary_rows_ = std::vector<std::vector<std::optional<std::string>>>(rows)}}),
-        peer_type::after_startup::idle);
+    peer_type peer(std::vector<ruvia::test::backend_startup_peer::maria_reply>({{.rows_ = std::vector<std::string>({std::string("x")})}, {.columns_ = std::vector<ruvia::test::backend_startup_peer::maria_column>({{.name_ = std::string("d"), .type_ = type_double, .decimals_ = not_fixed, .length_ = 22}, {.name_ = std::string("f"), .type_ = type_float, .decimals_ = not_fixed, .length_ = 12}}), .binary_rows_ = std::vector<std::vector<std::optional<std::string>>>(rows)}}), peer_type::after_startup::idle);
     auto& context_value = test::new_test_io_context();
     auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
     db_client client(attachment.loop(), config(peer));
     std::optional<db_rows> text_rows;
     std::optional<db_rows> prepared_rows;
     test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
-        co_await twice(connected.db().with_options({.timeout_ = std::chrono::seconds(5)}), "SELECT d, f FROM reals",
-            text_rows, prepared_rows);
+        co_await twice(connected.db().with_options({.timeout_ = std::chrono::seconds(5)}), "SELECT d, f FROM reals", text_rows, prepared_rows);
     });
     EXPECT_TRUE(prepared_rows.has_value());
     EXPECT_TRUE((values(*prepared_rows) == expected));
@@ -269,34 +250,9 @@ TEST(Ruvia, db_mariadb_prepared_reals_read_as_the_text_protocol_sends_them) {
 TEST(Ruvia, db_mariadb_prepared_values_read_as_the_text_protocol_sends_them) {
     using namespace ruvia;
     using namespace mariadb_statement_test;
-    const std::vector<column> columns({{.name_ = std::string("dd"), .type_ = type_double, .decimals_ = 6, .length_ = 20},
-        {.name_ = std::string("fd"), .type_ = type_float, .decimals_ = 3, .length_ = 9},
-        {.name_ = std::string("z"), .type_ = type_long, .flags_ = unsigned_flag | zerofill_flag, .length_ = 8},
-        {.name_ = std::string("dt3"), .type_ = type_datetime, .decimals_ = 3, .length_ = 23},
-        {.name_ = std::string("t3"), .type_ = type_time, .decimals_ = 3, .length_ = 14},
-        {.name_ = std::string("t"), .type_ = type_time, .length_ = 10},
-        {.name_ = std::string("da"), .type_ = type_date, .length_ = 10},
-        {.name_ = std::string("de"), .type_ = type_newdecimal, .decimals_ = 10, .length_ = 32},
-        {.name_ = std::string("bu"), .type_ = type_longlong, .flags_ = unsigned_flag, .length_ = 20},
-        {.name_ = std::string("b"), .type_ = type_longlong, .length_ = 20},
-        {.name_ = std::string("bl"), .type_ = type_blob, .flags_ = 128, .length_ = 65535},
-        {.name_ = std::string("n"), .type_ = type_double, .decimals_ = not_fixed, .length_ = 22}});
-    const std::vector<binary_row> rows({binary_row({std::string(real(1.5)), std::string(single(1.5F)), std::string(little(42, 4)), std::string(datetime(2001, 2, 3, 4, 5, 6, 789000)), std::string(time(true, 34, 22, 59, 59, 500000)),
-                                            std::string(time(false, 1, 1, 0, 0)), std::string(datetime(0, 0, 0)), std::string(text("-1.5000000000")), std::string(little(18446744073709551615ULL, 8)),
-                                            std::string(little(static_cast<std::uint64_t>(INT64_MIN), 8)), std::string(text(std::string("\0\xff\x10", 3))), std::nullopt}),
-        binary_row({std::string(real(123456789.123457)), std::string(single(0.1F)), std::string(little(0, 4)), std::string(datetime(0, 0, 0)), std::string(time(true, 0, 0, 0, 0, 500000)),
-            std::string(time(false, 34, 22, 59, 59)), std::string(datetime(2024, 2, 29)), std::string(text("0.0000000001")), std::string(little(0, 8)), std::string(little(7, 8)),
-            std::string(text("")), std::string(real(0.1))}),
-        binary_row({std::string(real(1e10)), std::string(single(2.001F)), std::string(little(99999999, 4)), std::string(datetime(2038, 1, 19, 3, 14, 7, 999000)),
-            std::string(time(false, 0, 12, 34, 56, 1000)), std::string(time(false, 0, 0, 0, 1)), std::string(datetime(9999, 12, 31)),
-            std::string(text("12345678901234567890.0000000000")), std::string(little(1, 8)), std::string(little(static_cast<std::uint64_t>(-1), 8)),
-            std::string(text("x")), std::nullopt})});
-    const std::vector<std::optional<std::string>> expected({std::string("1.500000"), std::string("1.500"), std::string("00000042"), std::string("2001-02-03 04:05:06.789"),
-        std::string("-838:59:59.500"), std::string("25:00:00"), std::string("0000-00-00"), std::string("-1.5000000000"), std::string("18446744073709551615"), std::string("-9223372036854775808"),
-        std::string("\0\xff\x10", 3), std::nullopt, std::string("123456789.123457"), std::string("0.100"), std::string("00000000"), std::string("0000-00-00 00:00:00.000"),
-        std::string("-00:00:00.500"), std::string("838:59:59"), std::string("2024-02-29"), std::string("0.0000000001"), std::string("0"), std::string("7"), std::string(""), std::string("0.1"), std::string("10000000000.000000"), std::string("2.001"),
-        std::string("99999999"), std::string("2038-01-19 03:14:07.999"), std::string("12:34:56.001"), std::string("00:00:01"), std::string("9999-12-31"),
-        std::string("12345678901234567890.0000000000"), std::string("1"), std::string("-1"), std::string("x"), std::nullopt});
+    const std::vector<column> columns({{.name_ = std::string("dd"), .type_ = type_double, .decimals_ = 6, .length_ = 20}, {.name_ = std::string("fd"), .type_ = type_float, .decimals_ = 3, .length_ = 9}, {.name_ = std::string("z"), .type_ = type_long, .flags_ = unsigned_flag | zerofill_flag, .length_ = 8}, {.name_ = std::string("dt3"), .type_ = type_datetime, .decimals_ = 3, .length_ = 23}, {.name_ = std::string("t3"), .type_ = type_time, .decimals_ = 3, .length_ = 14}, {.name_ = std::string("t"), .type_ = type_time, .length_ = 10}, {.name_ = std::string("da"), .type_ = type_date, .length_ = 10}, {.name_ = std::string("de"), .type_ = type_newdecimal, .decimals_ = 10, .length_ = 32}, {.name_ = std::string("bu"), .type_ = type_longlong, .flags_ = unsigned_flag, .length_ = 20}, {.name_ = std::string("b"), .type_ = type_longlong, .length_ = 20}, {.name_ = std::string("bl"), .type_ = type_blob, .flags_ = 128, .length_ = 65535}, {.name_ = std::string("n"), .type_ = type_double, .decimals_ = not_fixed, .length_ = 22}});
+    const std::vector<binary_row> rows({binary_row({std::string(real(1.5)), std::string(single(1.5F)), std::string(little(42, 4)), std::string(datetime(2001, 2, 3, 4, 5, 6, 789000)), std::string(time(true, 34, 22, 59, 59, 500000)), std::string(time(false, 1, 1, 0, 0)), std::string(datetime(0, 0, 0)), std::string(text("-1.5000000000")), std::string(little(18446744073709551615ULL, 8)), std::string(little(static_cast<std::uint64_t>(INT64_MIN), 8)), std::string(text(std::string("\0\xff\x10", 3))), std::nullopt}), binary_row({std::string(real(123456789.123457)), std::string(single(0.1F)), std::string(little(0, 4)), std::string(datetime(0, 0, 0)), std::string(time(true, 0, 0, 0, 0, 500000)), std::string(time(false, 34, 22, 59, 59)), std::string(datetime(2024, 2, 29)), std::string(text("0.0000000001")), std::string(little(0, 8)), std::string(little(7, 8)), std::string(text("")), std::string(real(0.1))}), binary_row({std::string(real(1e10)), std::string(single(2.001F)), std::string(little(99999999, 4)), std::string(datetime(2038, 1, 19, 3, 14, 7, 999000)), std::string(time(false, 0, 12, 34, 56, 1000)), std::string(time(false, 0, 0, 0, 1)), std::string(datetime(9999, 12, 31)), std::string(text("12345678901234567890.0000000000")), std::string(little(1, 8)), std::string(little(static_cast<std::uint64_t>(-1), 8)), std::string(text("x")), std::nullopt})});
+    const std::vector<std::optional<std::string>> expected({std::string("1.500000"), std::string("1.500"), std::string("00000042"), std::string("2001-02-03 04:05:06.789"), std::string("-838:59:59.500"), std::string("25:00:00"), std::string("0000-00-00"), std::string("-1.5000000000"), std::string("18446744073709551615"), std::string("-9223372036854775808"), std::string("\0\xff\x10", 3), std::nullopt, std::string("123456789.123457"), std::string("0.100"), std::string("00000000"), std::string("0000-00-00 00:00:00.000"), std::string("-00:00:00.500"), std::string("838:59:59"), std::string("2024-02-29"), std::string("0.0000000001"), std::string("0"), std::string("7"), std::string(""), std::string("0.1"), std::string("10000000000.000000"), std::string("2.001"), std::string("99999999"), std::string("2038-01-19 03:14:07.999"), std::string("12:34:56.001"), std::string("00:00:01"), std::string("9999-12-31"), std::string("12345678901234567890.0000000000"), std::string("1"), std::string("-1"), std::string("x"), std::nullopt});
     peer_type peer(std::vector<ruvia::test::backend_startup_peer::maria_reply>({{.rows_ = std::vector<std::string>({std::string("x")})}, {.columns_ = std::vector<ruvia::test::backend_startup_peer::maria_column>(columns), .binary_rows_ = std::vector<std::vector<std::optional<std::string>>>(rows)}}), peer_type::after_startup::idle);
     auto& context_value = test::new_test_io_context();
     auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
@@ -304,8 +260,7 @@ TEST(Ruvia, db_mariadb_prepared_values_read_as_the_text_protocol_sends_them) {
     std::optional<db_rows> text_rows;
     std::optional<db_rows> prepared_rows;
     test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
-        co_await twice(
-            connected.db().with_options({.timeout_ = std::chrono::seconds(5)}), "SELECT * FROM typed", text_rows, prepared_rows);
+        co_await twice(connected.db().with_options({.timeout_ = std::chrono::seconds(5)}), "SELECT * FROM typed", text_rows, prepared_rows);
     });
     EXPECT_TRUE(prepared_rows.has_value());
     EXPECT_TRUE((values(*prepared_rows) == expected));
@@ -316,13 +271,7 @@ TEST(Ruvia, db_mariadb_prepared_values_read_as_the_text_protocol_sends_them) {
 TEST(Ruvia, db_mariadb_statement_the_server_will_not_prepare_runs_as_text) {
     using namespace ruvia;
     using mariadb_statement_test::peer_type;
-    peer_type peer(std::vector<ruvia::test::backend_startup_peer::maria_reply>({{.rows_ = std::vector<std::string>({std::string("a")})},
-                       {.error_ = std::string("This command is not supported in the prepared statement protocol yet"),
-                           .code_ = 1295,
-                           .sql_state_ = std::string("HY000"),
-                           .prepare_fails_ = true},
-                       {.rows_ = std::vector<std::string>({std::string("b")})}, {.rows_ = std::vector<std::string>({std::string("c")})}}),
-        peer_type::after_startup::idle);
+    peer_type peer(std::vector<ruvia::test::backend_startup_peer::maria_reply>({{.rows_ = std::vector<std::string>({std::string("a")})}, {.error_ = std::string("This command is not supported in the prepared statement protocol yet"), .code_ = 1295, .sql_state_ = std::string("HY000"), .prepare_fails_ = true}, {.rows_ = std::vector<std::string>({std::string("b")})}, {.rows_ = std::vector<std::string>({std::string("c")})}}), peer_type::after_startup::idle);
     auto& context_value = test::new_test_io_context();
     auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
     db_client client(attachment.loop(), mariadb_statement_test::config(peer));
@@ -336,8 +285,7 @@ TEST(Ruvia, db_mariadb_statement_the_server_will_not_prepare_runs_as_text) {
     EXPECT_TRUE(outcomes[0].value_ == "a");
     EXPECT_TRUE(outcomes[1].value_ == "b");
     EXPECT_TRUE(outcomes[2].value_ == "c");
-    EXPECT_TRUE((peer.maria_commands() ==
-                 std::vector<std::string>({std::string("query:SHOW v"), std::string("prepare:SHOW v"), std::string("query:SHOW v"), std::string("query:SHOW v")})));
+    EXPECT_TRUE((peer.maria_commands() == std::vector<std::string>({std::string("query:SHOW v"), std::string("prepare:SHOW v"), std::string("query:SHOW v"), std::string("query:SHOW v")})));
 }
 
 // A statement the server no longer holds is prepared and run once more; the
@@ -345,10 +293,8 @@ TEST(Ruvia, db_mariadb_statement_the_server_will_not_prepare_runs_as_text) {
 TEST(Ruvia, db_mariadb_stale_prepared_statement_is_prepared_again_once) {
     using namespace ruvia;
     using mariadb_statement_test::peer_type;
-    const peer_type::maria_reply unknown{
-        .error_ = "Unknown prepared statement handler", .code_ = 1243, .sql_state_ = "HY000"};
-    peer_type peer(std::vector<ruvia::test::backend_startup_peer::maria_reply>({{.rows_ = std::vector<std::string>({std::string("a")})}, {.rows_ = std::vector<std::string>({std::string("b")})}, unknown, {.rows_ = std::vector<std::string>({std::string("c")})}, unknown, unknown}),
-        peer_type::after_startup::idle);
+    const peer_type::maria_reply unknown{.error_ = "Unknown prepared statement handler", .code_ = 1243, .sql_state_ = "HY000"};
+    peer_type peer(std::vector<ruvia::test::backend_startup_peer::maria_reply>({{.rows_ = std::vector<std::string>({std::string("a")})}, {.rows_ = std::vector<std::string>({std::string("b")})}, unknown, {.rows_ = std::vector<std::string>({std::string("c")})}, unknown, unknown}), peer_type::after_startup::idle);
     auto& context_value = test::new_test_io_context();
     auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
     db_client client(attachment.loop(), mariadb_statement_test::config(peer));
@@ -364,10 +310,7 @@ TEST(Ruvia, db_mariadb_stale_prepared_statement_is_prepared_again_once) {
     EXPECT_TRUE(outcomes[2].value_ == "c");
     // Stale again on its retry: the error reaches the caller.
     EXPECT_TRUE(outcomes[3].error_ == db_error::code_type::statement_failed);
-    EXPECT_TRUE((peer.maria_commands() ==
-                 std::vector<std::string>({std::string("query:SELECT v FROM t"), std::string("prepare:SELECT v FROM t"), std::string("execute:1:"),
-                     std::string("execute:1:"), std::string("close:1"), std::string("prepare:SELECT v FROM t"), std::string("execute:2:"), std::string("execute:2:"), std::string("close:2"),
-                     std::string("prepare:SELECT v FROM t"), std::string("execute:3:")})));
+    EXPECT_TRUE((peer.maria_commands() == std::vector<std::string>({std::string("query:SELECT v FROM t"), std::string("prepare:SELECT v FROM t"), std::string("execute:1:"), std::string("execute:1:"), std::string("close:1"), std::string("prepare:SELECT v FROM t"), std::string("execute:2:"), std::string("execute:2:"), std::string("close:2"), std::string("prepare:SELECT v FROM t"), std::string("execute:3:")})));
 }
 
 // A cached statement alone on its connection runs prepared; the statements
@@ -378,9 +321,7 @@ TEST(Ruvia, db_mariadb_stale_prepared_statement_is_prepared_again_once) {
 TEST(Ruvia, db_mariadb_cached_statements_arriving_together_run_as_pipelined_text) {
     using namespace ruvia;
     using mariadb_statement_test::peer_type;
-    peer_type peer(std::vector<ruvia::test::backend_startup_peer::maria_reply>({{.rows_ = std::vector<std::string>({std::string("a")})}, {.rows_ = std::vector<std::string>({std::string("b")})}, {.rows_ = std::vector<std::string>({std::string("c")}), .hold_ = 1}, {.rows_ = std::vector<std::string>({std::string("d")}), .batch_ = 2},
-                       {.rows_ = std::vector<std::string>({std::string("e")})}}),
-        peer_type::after_startup::idle);
+    peer_type peer(std::vector<ruvia::test::backend_startup_peer::maria_reply>({{.rows_ = std::vector<std::string>({std::string("a")})}, {.rows_ = std::vector<std::string>({std::string("b")})}, {.rows_ = std::vector<std::string>({std::string("c")}), .hold_ = 1}, {.rows_ = std::vector<std::string>({std::string("d")}), .batch_ = 2}, {.rows_ = std::vector<std::string>({std::string("e")})}}), peer_type::after_startup::idle);
     auto& context_value = test::new_test_io_context();
     auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
     db_client client(attachment.loop(), mariadb_statement_test::config(peer));
@@ -399,18 +340,14 @@ TEST(Ruvia, db_mariadb_cached_statements_arriving_together_run_as_pipelined_text
     for (std::size_t index = 0; index < outcomes.size(); ++index) {
         EXPECT_TRUE(outcomes[index].value_ == std::string(1, static_cast<char>('a' + index)));
     }
-    EXPECT_TRUE((peer.maria_commands() == std::vector<std::string>({std::string("query:SELECT v FROM t"), std::string("prepare:SELECT v FROM t"),
-                                              std::string("execute:1:"), std::string("execute:1:"), std::string("query:SELECT v FROM t"),
-                                              std::string("query:SELECT v FROM t")})));
+    EXPECT_TRUE((peer.maria_commands() == std::vector<std::string>({std::string("query:SELECT v FROM t"), std::string("prepare:SELECT v FROM t"), std::string("execute:1:"), std::string("execute:1:"), std::string("query:SELECT v FROM t"), std::string("query:SELECT v FROM t")})));
 }
 
 // Inside a transaction a statement is prepared on its second use as well.
 TEST(Ruvia, db_mariadb_transaction_statement_runs_prepared_from_its_second_use) {
     using namespace ruvia;
     using mariadb_statement_test::peer_type;
-    peer_type peer(std::vector<ruvia::test::backend_startup_peer::maria_reply>({{.column_ = std::string(""), .status_ = 3}, {.rows_ = std::vector<std::string>({std::string("a")}), .status_ = 3}, {.rows_ = std::vector<std::string>({std::string("b")}), .status_ = 3},
-                       {.column_ = std::string("")}}),
-        peer_type::after_startup::idle);
+    peer_type peer(std::vector<ruvia::test::backend_startup_peer::maria_reply>({{.column_ = std::string(""), .status_ = 3}, {.rows_ = std::vector<std::string>({std::string("a")}), .status_ = 3}, {.rows_ = std::vector<std::string>({std::string("b")}), .status_ = 3}, {.column_ = std::string("")}}), peer_type::after_startup::idle);
     auto& context_value = test::new_test_io_context();
     auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
     db_client client(attachment.loop(), mariadb_statement_test::config(peer));
@@ -425,9 +362,7 @@ TEST(Ruvia, db_mariadb_transaction_statement_runs_prepared_from_its_second_use) 
     });
     EXPECT_TRUE(results[0] == "a");
     EXPECT_TRUE(results[1] == "b");
-    EXPECT_TRUE((peer.maria_commands() ==
-                 std::vector<std::string>({std::string("query:START TRANSACTION"), std::string("query:SELECT v FROM t WHERE id = 3"),
-                     std::string("prepare:SELECT v FROM t WHERE id = ?"), std::string("execute:1:i:3"), std::string("query:COMMIT")})));
+    EXPECT_TRUE((peer.maria_commands() == std::vector<std::string>({std::string("query:START TRANSACTION"), std::string("query:SELECT v FROM t WHERE id = 3"), std::string("prepare:SELECT v FROM t WHERE id = ?"), std::string("execute:1:i:3"), std::string("query:COMMIT")})));
 }
 
 // The least recently used statement is closed on the server when a new one
@@ -467,13 +402,7 @@ TEST(Ruvia, db_mariadb_least_recently_used_prepared_statement_is_closed_for_a_ne
 TEST(Ruvia, db_mariadb_prepared_server_error_above_the_client_range_is_the_statements_own) {
     using namespace ruvia;
     using mariadb_statement_test::peer_type;
-    peer_type peer(std::vector<ruvia::test::backend_startup_peer::maria_reply>({{.column_ = std::string(""), .affected_rows_ = 1},
-                       {.column_ = std::string(""),
-                           .error_ = std::string("CONSTRAINT `t.v` failed for `db`.`t`"),
-                           .code_ = 4025,
-                           .sql_state_ = std::string("23000")},
-                       {.column_ = std::string(""), .affected_rows_ = 1}}),
-        peer_type::after_startup::reaccept);
+    peer_type peer(std::vector<ruvia::test::backend_startup_peer::maria_reply>({{.column_ = std::string(""), .affected_rows_ = 1}, {.column_ = std::string(""), .error_ = std::string("CONSTRAINT `t.v` failed for `db`.`t`"), .code_ = 4025, .sql_state_ = std::string("23000")}, {.column_ = std::string(""), .affected_rows_ = 1}}), peer_type::after_startup::reaccept);
     auto& context_value = test::new_test_io_context();
     auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
     db_client client(attachment.loop(), mariadb_statement_test::config(peer));
@@ -488,9 +417,7 @@ TEST(Ruvia, db_mariadb_prepared_server_error_above_the_client_range_is_the_state
     EXPECT_TRUE(outcomes[1].error_ == db_error::code_type::statement_failed);
     EXPECT_TRUE(outcomes[1].sql_state_ == "23000");
     EXPECT_EQ(outcomes[2].affected_rows_, std::uint64_t{1});
-    EXPECT_TRUE((peer.maria_commands() ==
-                 std::vector<std::string>({std::string("query:INSERT INTO t (v) VALUES (1)"),
-                     std::string("prepare:INSERT INTO t (v) VALUES (1)"), std::string("execute:1:"), std::string("execute:1:")})));
+    EXPECT_TRUE((peer.maria_commands() == std::vector<std::string>({std::string("query:INSERT INTO t (v) VALUES (1)"), std::string("prepare:INSERT INTO t (v) VALUES (1)"), std::string("execute:1:"), std::string("execute:1:")})));
     EXPECT_EQ(peer.startups(), std::size_t{1});
 }
 
@@ -527,13 +454,7 @@ TEST(Ruvia, db_mariadb_parameters_read_otherwise_than_their_literals_run_as_text
     for (const auto& result : outcomes) {
         EXPECT_TRUE(result.value_ == "v");
     }
-    EXPECT_TRUE((peer.maria_commands() ==
-                 std::vector<std::string>({std::string("query:SELECT v FROM t WHERE a = 5"), std::string("prepare:SELECT v FROM t WHERE a = ?"),
-                     std::string("execute:1:i:6"), std::string("query:SELECT v FROM t WHERE a = -1"),
-                     std::string("query:SELECT v FROM t WHERE a = -9223372036854775808"),
-                     std::string("query:SELECT v FROM t WHERE a = 18446744073709551615"), std::string("execute:1:i:7"),
-                     std::string("query:SELECT v FROM t WHERE a = 1.5e0"), std::string("prepare:SELECT v FROM t WHERE a = ?"), std::string("execute:2:d:2.5"),
-                     std::string("query:SELECT v FROM t WHERE a = -2.5e0"), std::string("query:SELECT v FROM t WHERE a = -0e0")})));
+    EXPECT_TRUE((peer.maria_commands() == std::vector<std::string>({std::string("query:SELECT v FROM t WHERE a = 5"), std::string("prepare:SELECT v FROM t WHERE a = ?"), std::string("execute:1:i:6"), std::string("query:SELECT v FROM t WHERE a = -1"), std::string("query:SELECT v FROM t WHERE a = -9223372036854775808"), std::string("query:SELECT v FROM t WHERE a = 18446744073709551615"), std::string("execute:1:i:7"), std::string("query:SELECT v FROM t WHERE a = 1.5e0"), std::string("prepare:SELECT v FROM t WHERE a = ?"), std::string("execute:2:d:2.5"), std::string("query:SELECT v FROM t WHERE a = -2.5e0"), std::string("query:SELECT v FROM t WHERE a = -0e0")})));
 }
 
 // Where the text protocol takes only an integer literal (LIMIT, OFFSET and
@@ -579,17 +500,7 @@ TEST(Ruvia, db_mariadb_integer_only_placeholders_run_prepared_only_with_integers
     for (const auto& result : outcomes) {
         EXPECT_TRUE(result.value_ == "v");
     }
-    const std::vector<std::string> expected({std::string("query:SELECT v FROM t LIMIT 2"), std::string("prepare:SELECT v FROM t LIMIT ?"),
-        std::string("execute:1:i:3"), std::string("query:SELECT v FROM t LIMIT '4'"), std::string("query:SELECT v FROM t LIMIT 1.5e0"),
-        std::string("query:SELECT v FROM t LIMIT NULL"), std::string("query:SELECT v FROM t LIMIT 1"), std::string("query:SELECT v FROM t LIMIT '4'"),
-        std::string("query:SELECT v FROM t LIMIT 1.5e0"), std::string("query:SELECT v FROM t LIMIT NULL"), std::string("query:SELECT v FROM t LIMIT 1"),
-        std::string("execute:1:i:5"), std::string("query:SELECT v FROM t WHERE w = 'x' LIMIT 1, 2"),
-        std::string("prepare:SELECT v FROM t WHERE w = ? LIMIT ?, ?"), std::string("execute:2:s:x,i:1,i:2"),
-        std::string("query:SELECT v FROM t WHERE w = 'x' LIMIT '1', 2"), std::string("query:SELECT v FROM t WHERE w = 'x' LIMIT '1', 2"),
-        std::string("query:SELECT v FROM t ORDER BY v OFFSET 1 ROWS FETCH FIRST 2 ROWS ONLY"),
-        std::string("prepare:SELECT v FROM t ORDER BY v OFFSET ? ROWS FETCH FIRST ? ROWS ONLY"), std::string("execute:3:i:1,i:2"),
-        std::string("query:SELECT v FROM t ORDER BY v OFFSET 1 ROWS FETCH FIRST 2e0 ROWS ONLY"),
-        std::string("query:SELECT v FROM t ORDER BY v OFFSET 1 ROWS FETCH FIRST 2e0 ROWS ONLY")});
+    const std::vector<std::string> expected({std::string("query:SELECT v FROM t LIMIT 2"), std::string("prepare:SELECT v FROM t LIMIT ?"), std::string("execute:1:i:3"), std::string("query:SELECT v FROM t LIMIT '4'"), std::string("query:SELECT v FROM t LIMIT 1.5e0"), std::string("query:SELECT v FROM t LIMIT NULL"), std::string("query:SELECT v FROM t LIMIT 1"), std::string("query:SELECT v FROM t LIMIT '4'"), std::string("query:SELECT v FROM t LIMIT 1.5e0"), std::string("query:SELECT v FROM t LIMIT NULL"), std::string("query:SELECT v FROM t LIMIT 1"), std::string("execute:1:i:5"), std::string("query:SELECT v FROM t WHERE w = 'x' LIMIT 1, 2"), std::string("prepare:SELECT v FROM t WHERE w = ? LIMIT ?, ?"), std::string("execute:2:s:x,i:1,i:2"), std::string("query:SELECT v FROM t WHERE w = 'x' LIMIT '1', 2"), std::string("query:SELECT v FROM t WHERE w = 'x' LIMIT '1', 2"), std::string("query:SELECT v FROM t ORDER BY v OFFSET 1 ROWS FETCH FIRST 2 ROWS ONLY"), std::string("prepare:SELECT v FROM t ORDER BY v OFFSET ? ROWS FETCH FIRST ? ROWS ONLY"), std::string("execute:3:i:1,i:2"), std::string("query:SELECT v FROM t ORDER BY v OFFSET 1 ROWS FETCH FIRST 2e0 ROWS ONLY"), std::string("query:SELECT v FROM t ORDER BY v OFFSET 1 ROWS FETCH FIRST 2e0 ROWS ONLY")});
     EXPECT_TRUE((peer.maria_commands() == expected));
 }
 
@@ -602,8 +513,7 @@ TEST(Ruvia, db_mariadb_integer_only_placeholders_run_prepared_only_with_integers
 TEST(Ruvia, db_mariadb_statements_the_binary_protocol_runs_otherwise_are_never_prepared) {
     using namespace ruvia;
     using namespace mariadb_statement_test;
-    constexpr std::array<std::string_view, 4> text_only{"/* note */ CALL p()",
-        "INSERT INTO t (v) VALUES (1) RETURNING v", "/*!100000 SELECT v FROM t */", "LOAD XML INFILE 'x' INTO TABLE t"};
+    constexpr std::array<std::string_view, 4> text_only{"/* note */ CALL p()", "INSERT INTO t (v) VALUES (1) RETURNING v", "/*!100000 SELECT v FROM t */", "LOAD XML INFILE 'x' INTO TABLE t"};
     // The tenth answers the read-back of the tracked variables after the
     // CALL and the executable comment.
     std::vector<reply> replies(12, reply{.rows_ = std::vector<std::string>({std::string("v")})});
@@ -632,8 +542,7 @@ TEST(Ruvia, db_mariadb_statements_the_binary_protocol_runs_otherwise_are_never_p
     for (const auto sql : text_only) {
         expected.insert(expected.end(), 2, "query:" + std::string(sql));
     }
-    expected.insert(expected.end(), {"query:(SELECT v FROM t)", "query:SELECT @@session_track_system_variables",
-                                        "prepare:(SELECT v FROM t)", "execute:1:", "execute:1:"});
+    expected.insert(expected.end(), {"query:(SELECT v FROM t)", "query:SELECT @@session_track_system_variables", "prepare:(SELECT v FROM t)", "execute:1:", "execute:1:"});
     EXPECT_TRUE((peer.maria_commands() == expected));
 }
 
@@ -645,16 +554,9 @@ TEST(Ruvia, db_mariadb_prepared_values_without_a_fixed_scale_read_as_the_text_pr
     using namespace ruvia;
     using namespace mariadb_statement_test;
     constexpr std::uint8_t auto_digits = 39;
-    const std::vector<column> columns({{.name_ = std::string("dd"), .type_ = type_double, .decimals_ = 6, .length_ = 20},
-        {.name_ = std::string("dt"), .type_ = type_datetime, .decimals_ = auto_digits, .length_ = 26},
-        {.name_ = std::string("t"), .type_ = type_time, .decimals_ = auto_digits, .length_ = 17}});
-    const std::vector<binary_row> rows({binary_row({std::string(real(std::numeric_limits<double>::infinity())), std::string(datetime(1970, 1, 1, 0, 0, 1, 500000)),
-                                            std::string(time(false, 0, 0, 0, 1, 500000))}),
-        binary_row({std::string(real(std::numeric_limits<double>::quiet_NaN())), std::string(datetime(1970, 1, 1, 0, 0, 1)), std::string(time(false, 0, 1, 2, 3))}),
-        binary_row({std::string(real(-std::numeric_limits<double>::infinity())), std::string(datetime(2020, 1, 1, 10, 0, 0, 10)),
-            std::string(time(true, 1, 10, 0, 0, 250000))})});
-    const std::vector<std::optional<std::string>> expected({std::string("0"), std::string("1970-01-01 00:00:01.500000"), std::string("00:00:01.500000"), std::string("0"),
-        std::string("1970-01-01 00:00:01"), std::string("01:02:03"), std::string("0"), std::string("2020-01-01 10:00:00.000010"), std::string("-34:00:00.250000")});
+    const std::vector<column> columns({{.name_ = std::string("dd"), .type_ = type_double, .decimals_ = 6, .length_ = 20}, {.name_ = std::string("dt"), .type_ = type_datetime, .decimals_ = auto_digits, .length_ = 26}, {.name_ = std::string("t"), .type_ = type_time, .decimals_ = auto_digits, .length_ = 17}});
+    const std::vector<binary_row> rows({binary_row({std::string(real(std::numeric_limits<double>::infinity())), std::string(datetime(1970, 1, 1, 0, 0, 1, 500000)), std::string(time(false, 0, 0, 0, 1, 500000))}), binary_row({std::string(real(std::numeric_limits<double>::quiet_NaN())), std::string(datetime(1970, 1, 1, 0, 0, 1)), std::string(time(false, 0, 1, 2, 3))}), binary_row({std::string(real(-std::numeric_limits<double>::infinity())), std::string(datetime(2020, 1, 1, 10, 0, 0, 10)), std::string(time(true, 1, 10, 0, 0, 250000))})});
+    const std::vector<std::optional<std::string>> expected({std::string("0"), std::string("1970-01-01 00:00:01.500000"), std::string("00:00:01.500000"), std::string("0"), std::string("1970-01-01 00:00:01"), std::string("01:02:03"), std::string("0"), std::string("2020-01-01 10:00:00.000010"), std::string("-34:00:00.250000")});
     peer_type peer(std::vector<ruvia::test::backend_startup_peer::maria_reply>({{.rows_ = std::vector<std::string>({std::string("x")})}, {.columns_ = std::vector<ruvia::test::backend_startup_peer::maria_column>(columns), .binary_rows_ = std::vector<std::vector<std::optional<std::string>>>(rows)}}), peer_type::after_startup::idle);
     auto& context_value = test::new_test_io_context();
     auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
@@ -662,8 +564,7 @@ TEST(Ruvia, db_mariadb_prepared_values_without_a_fixed_scale_read_as_the_text_pr
     std::optional<db_rows> text_rows;
     std::optional<db_rows> prepared_rows;
     test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
-        co_await twice(
-            connected.db().with_options({.timeout_ = std::chrono::seconds(5)}), "SELECT * FROM auto", text_rows, prepared_rows);
+        co_await twice(connected.db().with_options({.timeout_ = std::chrono::seconds(5)}), "SELECT * FROM auto", text_rows, prepared_rows);
     });
     EXPECT_TRUE(prepared_rows.has_value());
     EXPECT_TRUE((values(*prepared_rows) == expected));
@@ -680,10 +581,7 @@ TEST(Ruvia, db_mariadb_statement_with_a_year_column_runs_as_text) {
     using namespace mariadb_statement_test;
     const std::vector<column> padded({{.name_ = std::string("y"), .type_ = type_year, .flags_ = unsigned_flag | zerofill_flag, .length_ = 4}});
     const std::vector<column> plain({{.name_ = std::string("y"), .type_ = type_year, .flags_ = unsigned_flag, .length_ = 4}});
-    peer_type peer(std::vector<ruvia::test::backend_startup_peer::maria_reply>({{.rows_ = std::vector<std::string>({std::string("0000")})},
-                       {.rows_ = std::vector<std::string>({std::string("0000")}), .columns_ = std::vector<ruvia::test::backend_startup_peer::maria_column>(plain), .binary_rows_ = std::vector<std::vector<std::optional<std::string>>>({std::vector<std::optional<std::string>>({std::string(little(0, 2))})}), .prepare_columns_ = std::vector<ruvia::test::backend_startup_peer::maria_column>(padded)},
-                       {.rows_ = std::vector<std::string>({std::string("0000")})}, {.rows_ = std::vector<std::string>({std::string("0")})}, {.rows_ = std::vector<std::string>({std::string("0")}), .columns_ = std::vector<ruvia::test::backend_startup_peer::maria_column>(plain)}, {.rows_ = std::vector<std::string>({std::string("0")})}}),
-        peer_type::after_startup::idle);
+    peer_type peer(std::vector<ruvia::test::backend_startup_peer::maria_reply>({{.rows_ = std::vector<std::string>({std::string("0000")})}, {.rows_ = std::vector<std::string>({std::string("0000")}), .columns_ = std::vector<ruvia::test::backend_startup_peer::maria_column>(plain), .binary_rows_ = std::vector<std::vector<std::optional<std::string>>>({std::vector<std::optional<std::string>>({std::string(little(0, 2))})}), .prepare_columns_ = std::vector<ruvia::test::backend_startup_peer::maria_column>(padded)}, {.rows_ = std::vector<std::string>({std::string("0000")})}, {.rows_ = std::vector<std::string>({std::string("0")})}, {.rows_ = std::vector<std::string>({std::string("0")}), .columns_ = std::vector<ruvia::test::backend_startup_peer::maria_column>(plain)}, {.rows_ = std::vector<std::string>({std::string("0")})}}), peer_type::after_startup::idle);
     auto& context_value = test::new_test_io_context();
     auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
     db_client client(attachment.loop(), config(peer));
@@ -703,13 +601,7 @@ TEST(Ruvia, db_mariadb_statement_with_a_year_column_runs_as_text) {
     for (const std::size_t index : {3, 4, 5}) {
         EXPECT_TRUE(outcomes[index].value_ == "0");
     }
-    EXPECT_TRUE((peer.maria_commands() == std::vector<std::string>({std::string("query:SELECT y FROM t UNION ALL SELECT y FROM u"),
-                                              std::string("prepare:SELECT y FROM t UNION ALL SELECT y FROM u"),
-                                              std::string("query:SELECT y FROM t UNION ALL SELECT y FROM u"),
-                                              std::string("query:SELECT y FROM t UNION ALL SELECT y FROM u"),
-                                              std::string("query:SELECT MIN(y) AS y FROM t"), std::string("close:1"),
-                                              std::string("prepare:SELECT MIN(y) AS y FROM t"), std::string("query:SELECT MIN(y) AS y FROM t"),
-                                              std::string("query:SELECT MIN(y) AS y FROM t")})));
+    EXPECT_TRUE((peer.maria_commands() == std::vector<std::string>({std::string("query:SELECT y FROM t UNION ALL SELECT y FROM u"), std::string("prepare:SELECT y FROM t UNION ALL SELECT y FROM u"), std::string("query:SELECT y FROM t UNION ALL SELECT y FROM u"), std::string("query:SELECT y FROM t UNION ALL SELECT y FROM u"), std::string("query:SELECT MIN(y) AS y FROM t"), std::string("close:1"), std::string("prepare:SELECT MIN(y) AS y FROM t"), std::string("query:SELECT MIN(y) AS y FROM t"), std::string("query:SELECT MIN(y) AS y FROM t")})));
 }
 
 // A YEAR the prepare did not describe (the column was altered to YEAR since,
@@ -723,14 +615,7 @@ TEST(Ruvia, db_mariadb_year_column_appearing_at_execution_reads_padded_or_fails_
     const std::vector<column> number({{.name_ = std::string("y"), .type_ = type_long, .length_ = 11}});
     const std::vector<column> padded({{.name_ = std::string("y"), .type_ = type_year, .flags_ = unsigned_flag | zerofill_flag, .length_ = 4}});
     const std::vector<column> plain({{.name_ = std::string("y"), .type_ = type_year, .flags_ = unsigned_flag, .length_ = 4}});
-    peer_type peer(std::vector<ruvia::test::backend_startup_peer::maria_reply>({{.rows_ = std::vector<std::string>({std::string("x")})},
-                       {.columns_ = std::vector<ruvia::test::backend_startup_peer::maria_column>(padded),
-                           .binary_rows_ = std::vector<std::vector<std::optional<std::string>>>({std::vector<std::optional<std::string>>({std::string(little(0, 2))}), std::vector<std::optional<std::string>>({std::string(little(2155, 2))})}),
-                           .prepare_columns_ = std::vector<ruvia::test::backend_startup_peer::maria_column>(number)},
-                       {.rows_ = std::vector<std::string>({std::string("y")})},
-                       {.columns_ = std::vector<ruvia::test::backend_startup_peer::maria_column>(plain), .binary_rows_ = std::vector<std::vector<std::optional<std::string>>>({std::vector<std::optional<std::string>>({std::string(little(0, 2))})}), .prepare_columns_ = std::vector<ruvia::test::backend_startup_peer::maria_column>(number)},
-                       {.rows_ = std::vector<std::string>({std::string("0")})}}),
-        peer_type::after_startup::idle);
+    peer_type peer(std::vector<ruvia::test::backend_startup_peer::maria_reply>({{.rows_ = std::vector<std::string>({std::string("x")})}, {.columns_ = std::vector<ruvia::test::backend_startup_peer::maria_column>(padded), .binary_rows_ = std::vector<std::vector<std::optional<std::string>>>({std::vector<std::optional<std::string>>({std::string(little(0, 2))}), std::vector<std::optional<std::string>>({std::string(little(2155, 2))})}), .prepare_columns_ = std::vector<ruvia::test::backend_startup_peer::maria_column>(number)}, {.rows_ = std::vector<std::string>({std::string("y")})}, {.columns_ = std::vector<ruvia::test::backend_startup_peer::maria_column>(plain), .binary_rows_ = std::vector<std::vector<std::optional<std::string>>>({std::vector<std::optional<std::string>>({std::string(little(0, 2))})}), .prepare_columns_ = std::vector<ruvia::test::backend_startup_peer::maria_column>(number)}, {.rows_ = std::vector<std::string>({std::string("0")})}}), peer_type::after_startup::idle);
     auto& context_value = test::new_test_io_context();
     auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
     db_client client(attachment.loop(), config(peer));
@@ -749,9 +634,7 @@ TEST(Ruvia, db_mariadb_year_column_appearing_at_execution_reads_padded_or_fails_
     EXPECT_TRUE(outcomes[0].value_ == "y");
     EXPECT_TRUE(outcomes[1].error_ == db_error::code_type::statement_failed);
     EXPECT_TRUE(outcomes[2].value_ == "0");
-    EXPECT_TRUE((peer.maria_commands() ==
-                 std::vector<std::string>({std::string("query:SELECT y FROM t"), std::string("prepare:SELECT y FROM t"), std::string("execute:1:"),
-                     std::string("query:SELECT y FROM u"), std::string("prepare:SELECT y FROM u"), std::string("execute:2:"), std::string("query:SELECT y FROM u")})));
+    EXPECT_TRUE((peer.maria_commands() == std::vector<std::string>({std::string("query:SELECT y FROM t"), std::string("prepare:SELECT y FROM t"), std::string("execute:1:"), std::string("query:SELECT y FROM u"), std::string("prepare:SELECT y FROM u"), std::string("execute:2:"), std::string("query:SELECT y FROM u")})));
 }
 
 // A table that gained a column since the statement was prepared: the server
@@ -765,10 +648,7 @@ TEST(Ruvia, db_mariadb_statement_whose_result_changed_shape_fails_once_and_is_pr
     using namespace mariadb_statement_test;
     const std::vector<column> one({{.name_ = std::string("v")}});
     const std::vector<column> two({{.name_ = std::string("v")}, {.name_ = std::string("w")}});
-    peer_type peer(std::vector<ruvia::test::backend_startup_peer::maria_reply>({{.rows_ = std::vector<std::string>({std::string("1")})}, {.columns_ = std::vector<ruvia::test::backend_startup_peer::maria_column>(one), .binary_rows_ = std::vector<std::vector<std::optional<std::string>>>({std::vector<std::optional<std::string>>({std::string(text("1"))})})},
-                       {.columns_ = std::vector<ruvia::test::backend_startup_peer::maria_column>(two), .binary_rows_ = std::vector<std::vector<std::optional<std::string>>>({std::vector<std::optional<std::string>>({std::string(text("2")), std::string(text("2"))}), std::vector<std::optional<std::string>>({std::string(text("3")), std::string(text("4"))})})},
-                       {.columns_ = std::vector<ruvia::test::backend_startup_peer::maria_column>(two), .binary_rows_ = std::vector<std::vector<std::optional<std::string>>>({std::vector<std::optional<std::string>>({std::string(text("3")), std::string(text("2"))})})}}),
-        peer_type::after_startup::reaccept);
+    peer_type peer(std::vector<ruvia::test::backend_startup_peer::maria_reply>({{.rows_ = std::vector<std::string>({std::string("1")})}, {.columns_ = std::vector<ruvia::test::backend_startup_peer::maria_column>(one), .binary_rows_ = std::vector<std::vector<std::optional<std::string>>>({std::vector<std::optional<std::string>>({std::string(text("1"))})})}, {.columns_ = std::vector<ruvia::test::backend_startup_peer::maria_column>(two), .binary_rows_ = std::vector<std::vector<std::optional<std::string>>>({std::vector<std::optional<std::string>>({std::string(text("2")), std::string(text("2"))}), std::vector<std::optional<std::string>>({std::string(text("3")), std::string(text("4"))})})}, {.columns_ = std::vector<ruvia::test::backend_startup_peer::maria_column>(two), .binary_rows_ = std::vector<std::vector<std::optional<std::string>>>({std::vector<std::optional<std::string>>({std::string(text("3")), std::string(text("2"))})})}}), peer_type::after_startup::reaccept);
     auto& context_value = test::new_test_io_context();
     auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
     db_client client(attachment.loop(), config(peer));
@@ -784,9 +664,7 @@ TEST(Ruvia, db_mariadb_statement_whose_result_changed_shape_fails_once_and_is_pr
     EXPECT_TRUE(outcomes[2].error_ == db_error::code_type::statement_failed);
     EXPECT_TRUE(outcomes[2].value_.empty());
     EXPECT_TRUE(outcomes[3].value_ == "3|2");
-    EXPECT_TRUE((peer.maria_commands() ==
-                 std::vector<std::string>({std::string("query:SELECT NEXTVAL(s), t.* FROM t"), std::string("prepare:SELECT NEXTVAL(s), t.* FROM t"),
-                     std::string("execute:1:"), std::string("execute:1:"), std::string("close:1"), std::string("prepare:SELECT NEXTVAL(s), t.* FROM t"), std::string("execute:2:")})));
+    EXPECT_TRUE((peer.maria_commands() == std::vector<std::string>({std::string("query:SELECT NEXTVAL(s), t.* FROM t"), std::string("prepare:SELECT NEXTVAL(s), t.* FROM t"), std::string("execute:1:"), std::string("execute:1:"), std::string("close:1"), std::string("prepare:SELECT NEXTVAL(s), t.* FROM t"), std::string("execute:2:")})));
     EXPECT_EQ(peer.startups(), std::size_t{1});
 }
 
@@ -798,11 +676,7 @@ TEST(Ruvia, db_mariadb_statement_whose_result_changed_shape_fails_inside_a_trans
     using namespace mariadb_statement_test;
     const std::vector<column> one({{.name_ = std::string("v")}});
     const std::vector<column> two({{.name_ = std::string("v")}, {.name_ = std::string("w")}});
-    peer_type peer(std::vector<ruvia::test::backend_startup_peer::maria_reply>({{.column_ = std::string(""), .status_ = 3}, {.rows_ = std::vector<std::string>({std::string("1")}), .status_ = 3},
-                       {.status_ = 3, .columns_ = std::vector<ruvia::test::backend_startup_peer::maria_column>(one), .binary_rows_ = std::vector<std::vector<std::optional<std::string>>>({std::vector<std::optional<std::string>>({std::string(text("1"))})})},
-                       {.status_ = 3, .columns_ = std::vector<ruvia::test::backend_startup_peer::maria_column>(two), .binary_rows_ = std::vector<std::vector<std::optional<std::string>>>({std::vector<std::optional<std::string>>({std::string(text("1")), std::string(text("2"))})})},
-                       {.column_ = std::string("")}, {.rows_ = std::vector<std::string>({std::string("after")})}}),
-        peer_type::after_startup::reaccept);
+    peer_type peer(std::vector<ruvia::test::backend_startup_peer::maria_reply>({{.column_ = std::string(""), .status_ = 3}, {.rows_ = std::vector<std::string>({std::string("1")}), .status_ = 3}, {.status_ = 3, .columns_ = std::vector<ruvia::test::backend_startup_peer::maria_column>(one), .binary_rows_ = std::vector<std::vector<std::optional<std::string>>>({std::vector<std::optional<std::string>>({std::string(text("1"))})})}, {.status_ = 3, .columns_ = std::vector<ruvia::test::backend_startup_peer::maria_column>(two), .binary_rows_ = std::vector<std::vector<std::optional<std::string>>>({std::vector<std::optional<std::string>>({std::string(text("1")), std::string(text("2"))})})}, {.column_ = std::string("")}, {.rows_ = std::vector<std::string>({std::string("after")})}}), peer_type::after_startup::reaccept);
     auto& context_value = test::new_test_io_context();
     auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
     db_client client(attachment.loop(), config(peer));
@@ -825,10 +699,7 @@ TEST(Ruvia, db_mariadb_statement_whose_result_changed_shape_fails_inside_a_trans
     EXPECT_TRUE((results == std::vector<std::string>({std::string("1"), std::string("1")})));
     EXPECT_TRUE(failure == db_error::code_type::statement_failed);
     EXPECT_TRUE(after.value_ == "after");
-    EXPECT_TRUE((peer.maria_commands() ==
-                 std::vector<std::string>({std::string("query:START TRANSACTION"), std::string("query:SELECT * FROM t"), std::string("prepare:SELECT * FROM t"),
-                     std::string("execute:1:"), std::string("execute:1:"), std::string("query:ROLLBACK"), std::string("close:1"), std::string("prepare:SELECT * FROM t"),
-                     std::string("execute:2:")})));
+    EXPECT_TRUE((peer.maria_commands() == std::vector<std::string>({std::string("query:START TRANSACTION"), std::string("query:SELECT * FROM t"), std::string("prepare:SELECT * FROM t"), std::string("execute:1:"), std::string("execute:1:"), std::string("query:ROLLBACK"), std::string("close:1"), std::string("prepare:SELECT * FROM t"), std::string("execute:2:")})));
     EXPECT_EQ(peer.startups(), std::size_t{1});
 }
 
@@ -844,8 +715,7 @@ TEST(Ruvia, db_mariadb_abandoned_prepare_is_finished_from_the_cached_statement_t
     // More than the socket buffers of both ends hold.
     sql.append(std::size_t{15} * 1024 * 1024, 'x');
     sql.append(" */");
-    peer_type peer(std::vector<ruvia::test::backend_startup_peer::maria_reply>({{.rows_ = std::vector<std::string>({std::string("text")})}, {.rows_ = std::vector<std::string>({std::string("second")}), .read_hold_ = 1}, {.rows_ = std::vector<std::string>({std::string("third")})}}),
-        peer_type::after_startup::idle);
+    peer_type peer(std::vector<ruvia::test::backend_startup_peer::maria_reply>({{.rows_ = std::vector<std::string>({std::string("text")})}, {.rows_ = std::vector<std::string>({std::string("second")}), .read_hold_ = 1}, {.rows_ = std::vector<std::string>({std::string("third")})}}), peer_type::after_startup::idle);
     auto& context_value = test::new_test_io_context();
     auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
     db_client client(attachment.loop(), config(peer));
@@ -873,8 +743,7 @@ TEST(Ruvia, db_mariadb_abandoned_prepare_is_finished_from_the_cached_statement_t
     EXPECT_EQ(commands.size(), std::size_t{5});
     if (commands.size() == 5) {
         EXPECT_TRUE(commands[1] == std::string("prepare:") + sql);
-        EXPECT_TRUE((std::vector<std::string>(commands.begin() + 2, commands.end()) ==
-                     std::vector<std::string>({std::string("query:SELECT v FROM t"), std::string("prepare:SELECT v FROM t"), std::string("execute:2:")})));
+        EXPECT_TRUE((std::vector<std::string>(commands.begin() + 2, commands.end()) == std::vector<std::string>({std::string("query:SELECT v FROM t"), std::string("prepare:SELECT v FROM t"), std::string("execute:2:")})));
     }
     EXPECT_EQ(peer.startups(), std::size_t{1});
 }
@@ -887,14 +756,7 @@ TEST(Ruvia, db_mariadb_prepared_statement_failing_in_its_rows_leaves_the_others_
     using namespace ruvia;
     using namespace mariadb_statement_test;
     const reply unknown{.error_ = "Unknown prepared statement handler", .code_ = 1243, .sql_state_ = "HY000"};
-    peer_type peer(std::vector<ruvia::test::backend_startup_peer::maria_reply>({{.rows_ = std::vector<std::string>({std::string("1")})},
-                       {.rows_ = std::vector<std::string>({std::string("2")}),
-                           .error_ = std::string("DOUBLE value is out of range"),
-                           .code_ = 1690,
-                           .sql_state_ = std::string("22003"),
-                           .error_after_rows_ = true},
-                       {.rows_ = std::vector<std::string>({std::string("b")})}, {.rows_ = std::vector<std::string>({std::string("b")})}, unknown, {.rows_ = std::vector<std::string>({std::string("b")})}}),
-        peer_type::after_startup::reaccept);
+    peer_type peer(std::vector<ruvia::test::backend_startup_peer::maria_reply>({{.rows_ = std::vector<std::string>({std::string("1")})}, {.rows_ = std::vector<std::string>({std::string("2")}), .error_ = std::string("DOUBLE value is out of range"), .code_ = 1690, .sql_state_ = std::string("22003"), .error_after_rows_ = true}, {.rows_ = std::vector<std::string>({std::string("b")})}, {.rows_ = std::vector<std::string>({std::string("b")})}, unknown, {.rows_ = std::vector<std::string>({std::string("b")})}}), peer_type::after_startup::reaccept);
     auto& context_value = test::new_test_io_context();
     auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
     db_client client(attachment.loop(), config(peer));
@@ -913,10 +775,7 @@ TEST(Ruvia, db_mariadb_prepared_statement_failing_in_its_rows_leaves_the_others_
     EXPECT_TRUE(outcomes[2].value_ == "b");
     EXPECT_TRUE(outcomes[3].value_ == "b");
     EXPECT_TRUE(outcomes[4].value_ == "b");
-    EXPECT_TRUE((peer.maria_commands() ==
-                 std::vector<std::string>({std::string("query:SELECT v * 3 FROM t"), std::string("prepare:SELECT v * 3 FROM t"), std::string("execute:1:"),
-                     std::string("reset:1"), std::string("query:SELECT v FROM u"), std::string("prepare:SELECT v FROM u"), std::string("execute:2:"), std::string("execute:2:"),
-                     std::string("close:2"), std::string("prepare:SELECT v FROM u"), std::string("execute:3:")})));
+    EXPECT_TRUE((peer.maria_commands() == std::vector<std::string>({std::string("query:SELECT v * 3 FROM t"), std::string("prepare:SELECT v * 3 FROM t"), std::string("execute:1:"), std::string("reset:1"), std::string("query:SELECT v FROM u"), std::string("prepare:SELECT v FROM u"), std::string("execute:2:"), std::string("execute:2:"), std::string("close:2"), std::string("prepare:SELECT v FROM u"), std::string("execute:3:")})));
     EXPECT_EQ(peer.startups(), std::size_t{1});
 }
 
@@ -927,14 +786,7 @@ TEST(Ruvia, db_mariadb_prepared_statement_failing_in_its_rows_leaves_the_others_
 TEST(Ruvia, db_mariadb_prepared_statement_runs_again_after_its_rows_failed) {
     using namespace ruvia;
     using namespace mariadb_statement_test;
-    peer_type peer(std::vector<ruvia::test::backend_startup_peer::maria_reply>({{.rows_ = std::vector<std::string>({std::string("1")})},
-                       {.rows_ = std::vector<std::string>({std::string("2")}),
-                           .error_ = std::string("Subquery returns more than 1 row"),
-                           .code_ = 1242,
-                           .sql_state_ = std::string("21000"),
-                           .error_after_rows_ = true},
-                       {.rows_ = std::vector<std::string>({std::string("3")})}, {.rows_ = std::vector<std::string>({std::string("f1")})}, {.rows_ = std::vector<std::string>({std::string("f2")})}}),
-        peer_type::after_startup::reaccept);
+    peer_type peer(std::vector<ruvia::test::backend_startup_peer::maria_reply>({{.rows_ = std::vector<std::string>({std::string("1")})}, {.rows_ = std::vector<std::string>({std::string("2")}), .error_ = std::string("Subquery returns more than 1 row"), .code_ = 1242, .sql_state_ = std::string("21000"), .error_after_rows_ = true}, {.rows_ = std::vector<std::string>({std::string("3")})}, {.rows_ = std::vector<std::string>({std::string("f1")})}, {.rows_ = std::vector<std::string>({std::string("f2")})}}), peer_type::after_startup::reaccept);
     auto& context_value = test::new_test_io_context();
     auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
     db_client client(attachment.loop(), config(peer));
@@ -955,9 +807,7 @@ TEST(Ruvia, db_mariadb_prepared_statement_runs_again_after_its_rows_failed) {
     EXPECT_TRUE(outcomes[2].value_ == "3");
     EXPECT_TRUE(outcomes[3].value_ == "f1");
     EXPECT_TRUE(outcomes[4].value_ == "f2");
-    EXPECT_TRUE((peer.maria_commands() ==
-                 std::vector<std::string>({std::string("query:SELECT (SELECT v FROM t)"), std::string("prepare:SELECT (SELECT v FROM t)"),
-                     std::string("execute:1:"), std::string("reset:1"), std::string("execute:1:"), std::string("query:SELECT v FROM f1"), std::string("query:SELECT v FROM f2")})));
+    EXPECT_TRUE((peer.maria_commands() == std::vector<std::string>({std::string("query:SELECT (SELECT v FROM t)"), std::string("prepare:SELECT (SELECT v FROM t)"), std::string("execute:1:"), std::string("reset:1"), std::string("execute:1:"), std::string("query:SELECT v FROM f1"), std::string("query:SELECT v FROM f2")})));
     EXPECT_EQ(peer.startups(), std::size_t{1});
 }
 
@@ -968,11 +818,7 @@ TEST(Ruvia, db_mariadb_prepared_statement_runs_again_after_its_rows_failed) {
 TEST(Ruvia, db_mariadb_session_change_drops_the_cached_statements) {
     using namespace ruvia;
     using namespace mariadb_statement_test;
-    peer_type peer(
-        std::vector<ruvia::test::backend_startup_peer::maria_reply>({{.rows_ = std::vector<std::string>({std::string("a")})}, {.rows_ = std::vector<std::string>({std::string("b")})},
-            {.column_ = std::string(""), .tracked_ = std::vector<std::pair<std::string, std::string>>({{std::string("sql_mode"), std::string("PIPES_AS_CONCAT,ANSI_QUOTES,STRICT_TRANS_TABLES")}})},
-            {.rows_ = std::vector<std::string>({std::string("c")})}, {.rows_ = std::vector<std::string>({std::string("d")})}}),
-        peer_type::after_startup::idle);
+    peer_type peer(std::vector<ruvia::test::backend_startup_peer::maria_reply>({{.rows_ = std::vector<std::string>({std::string("a")})}, {.rows_ = std::vector<std::string>({std::string("b")})}, {.column_ = std::string(""), .tracked_ = std::vector<std::pair<std::string, std::string>>({{std::string("sql_mode"), std::string("PIPES_AS_CONCAT,ANSI_QUOTES,STRICT_TRANS_TABLES")}})}, {.rows_ = std::vector<std::string>({std::string("c")})}, {.rows_ = std::vector<std::string>({std::string("d")})}}), peer_type::after_startup::idle);
     auto& context_value = test::new_test_io_context();
     auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
     db_client client(attachment.loop(), config(peer));
@@ -981,8 +827,7 @@ TEST(Ruvia, db_mariadb_session_change_drops_the_cached_statements) {
         const auto handle = connected.db().with_options({.timeout_ = std::chrono::seconds(5)});
         co_await pipeline_test::query(handle, "SELECT 'a' || 'b' AS v", outcomes[0]);
         co_await pipeline_test::query(handle, "SELECT 'a' || 'b' AS v", outcomes[1]);
-        co_await pipeline_test::execute(
-            handle, "SET SESSION sql_mode = CONCAT(@@sql_mode, ',PIPES_AS_CONCAT,ANSI_QUOTES')", outcomes[2]);
+        co_await pipeline_test::execute(handle, "SET SESSION sql_mode = CONCAT(@@sql_mode, ',PIPES_AS_CONCAT,ANSI_QUOTES')", outcomes[2]);
         co_await pipeline_test::query(handle, "SELECT 'a' || 'b' AS v", outcomes[3]);
         co_await pipeline_test::query(handle, "SELECT 'a' || 'b' AS v", outcomes[4]);
     });
@@ -991,10 +836,7 @@ TEST(Ruvia, db_mariadb_session_change_drops_the_cached_statements) {
     EXPECT_TRUE(!outcomes[2].error_.has_value());
     EXPECT_TRUE(outcomes[3].value_ == "c");
     EXPECT_TRUE(outcomes[4].value_ == "d");
-    EXPECT_TRUE((peer.maria_commands() ==
-                 std::vector<std::string>({std::string("query:SELECT 'a' || 'b' AS v"), std::string("prepare:SELECT 'a' || 'b' AS v"),
-                     std::string("execute:1:"), std::string("query:SET SESSION sql_mode = CONCAT(@@sql_mode, ',PIPES_AS_CONCAT,ANSI_QUOTES')"),
-                     std::string("query:SELECT 'a' || 'b' AS v"), std::string("close:1"), std::string("prepare:SELECT 'a' || 'b' AS v"), std::string("execute:2:")})));
+    EXPECT_TRUE((peer.maria_commands() == std::vector<std::string>({std::string("query:SELECT 'a' || 'b' AS v"), std::string("prepare:SELECT 'a' || 'b' AS v"), std::string("execute:1:"), std::string("query:SET SESSION sql_mode = CONCAT(@@sql_mode, ',PIPES_AS_CONCAT,ANSI_QUOTES')"), std::string("query:SELECT 'a' || 'b' AS v"), std::string("close:1"), std::string("prepare:SELECT 'a' || 'b' AS v"), std::string("execute:2:")})));
     EXPECT_EQ(peer.maria_session_setups(), std::size_t{1});
 }
 
@@ -1004,11 +846,7 @@ TEST(Ruvia, db_mariadb_session_change_drops_the_cached_statements) {
 TEST(Ruvia, db_mariadb_rowless_stream_preserves_session_changes_and_invalidates_prepared_statements) {
     using namespace ruvia;
     using namespace mariadb_statement_test;
-    peer_type peer(
-        std::vector<ruvia::test::backend_startup_peer::maria_reply>({{.rows_ = std::vector<std::string>({std::string("0")})}, {.rows_ = std::vector<std::string>({std::string("0")})},
-            {.column_ = std::string(""), .status_ = 514, .tracked_ = std::vector<std::pair<std::string, std::string>>({{std::string("sql_mode"), std::string("PIPES_AS_CONCAT,NO_BACKSLASH_ESCAPES")}})},
-            {.rows_ = std::vector<std::string>({std::string("ab")}), .status_ = 514}, {.rows_ = std::vector<std::string>({std::string("ab")}), .status_ = 514}}),
-        peer_type::after_startup::idle);
+    peer_type peer(std::vector<ruvia::test::backend_startup_peer::maria_reply>({{.rows_ = std::vector<std::string>({std::string("0")})}, {.rows_ = std::vector<std::string>({std::string("0")})}, {.column_ = std::string(""), .status_ = 514, .tracked_ = std::vector<std::pair<std::string, std::string>>({{std::string("sql_mode"), std::string("PIPES_AS_CONCAT,NO_BACKSLASH_ESCAPES")}})}, {.rows_ = std::vector<std::string>({std::string("ab")}), .status_ = 514}, {.rows_ = std::vector<std::string>({std::string("ab")}), .status_ = 514}}), peer_type::after_startup::idle);
     auto& context_value = test::new_test_io_context();
     auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
     db_client client(attachment.loop(), config(peer));
@@ -1031,10 +869,7 @@ TEST(Ruvia, db_mariadb_rowless_stream_preserves_session_changes_and_invalidates_
     EXPECT_TRUE(outcomes[1].value_ == "0");
     EXPECT_TRUE(outcomes[2].value_ == "ab");
     EXPECT_TRUE(outcomes[3].value_ == "ab");
-    EXPECT_TRUE((peer.maria_commands() ==
-                 std::vector<std::string>({std::string("query:SELECT 'a' || 'b' AS v"), std::string("prepare:SELECT 'a' || 'b' AS v"),
-                     std::string("execute:1:"), std::string("query:SET SESSION sql_mode = 'PIPES_AS_CONCAT,NO_BACKSLASH_ESCAPES'"),
-                     std::string("query:SELECT 'a' || 'b' AS v"), std::string("close:1"), std::string("prepare:SELECT 'a' || 'b' AS v"), std::string("execute:2:")})));
+    EXPECT_TRUE((peer.maria_commands() == std::vector<std::string>({std::string("query:SELECT 'a' || 'b' AS v"), std::string("prepare:SELECT 'a' || 'b' AS v"), std::string("execute:1:"), std::string("query:SET SESSION sql_mode = 'PIPES_AS_CONCAT,NO_BACKSLASH_ESCAPES'"), std::string("query:SELECT 'a' || 'b' AS v"), std::string("close:1"), std::string("prepare:SELECT 'a' || 'b' AS v"), std::string("execute:2:")})));
     EXPECT_EQ(peer.startups(), std::size_t{1});
 }
 
@@ -1046,8 +881,7 @@ TEST(Ruvia, db_mariadb_statements_run_as_text_while_the_client_character_set_dif
     using namespace ruvia;
     using namespace mariadb_statement_test;
     const std::vector<std::pair<std::string, std::string>> gbk({{std::string("character_set_client"), std::string("gbk")}, {std::string("character_set_connection"), std::string("gbk")}, {std::string("character_set_results"), std::string("gbk")}});
-    const std::vector<std::pair<std::string, std::string>> utf8mb4({{std::string("character_set_client"), std::string("utf8mb4")},
-        {std::string("character_set_connection"), std::string("utf8mb4")}, {std::string("character_set_results"), std::string("utf8mb4")}});
+    const std::vector<std::pair<std::string, std::string>> utf8mb4({{std::string("character_set_client"), std::string("utf8mb4")}, {std::string("character_set_connection"), std::string("utf8mb4")}, {std::string("character_set_results"), std::string("utf8mb4")}});
     std::vector<reply> replies({{.column_ = std::string(""), .tracked_ = std::vector<std::pair<std::string, std::string>>(gbk)}});
     replies.insert(replies.end(), 3, reply{.rows_ = std::vector<std::string>({std::string("v")})});
     replies.push_back({.column_ = "", .tracked_ = utf8mb4});
@@ -1071,10 +905,7 @@ TEST(Ruvia, db_mariadb_statements_run_as_text_while_the_client_character_set_dif
     for (const std::size_t index : {1, 2, 3, 5, 6}) {
         EXPECT_TRUE(outcomes[index].value_ == "v");
     }
-    EXPECT_TRUE((peer.maria_commands() ==
-                 std::vector<std::string>({std::string("query:SET NAMES gbk"), std::string("query:SELECT v FROM t"), std::string("query:SELECT v FROM t"),
-                     std::string("query:SELECT v FROM t"), std::string("query:SET NAMES utf8mb4"), std::string("query:SELECT v FROM t"),
-                     std::string("prepare:SELECT v FROM t"), std::string("execute:1:")})));
+    EXPECT_TRUE((peer.maria_commands() == std::vector<std::string>({std::string("query:SET NAMES gbk"), std::string("query:SELECT v FROM t"), std::string("query:SELECT v FROM t"), std::string("query:SELECT v FROM t"), std::string("query:SET NAMES utf8mb4"), std::string("query:SELECT v FROM t"), std::string("prepare:SELECT v FROM t"), std::string("execute:1:")})));
 }
 
 // SET and USE change the session every cached statement was prepared in, so
@@ -1083,10 +914,7 @@ TEST(Ruvia, db_mariadb_statements_run_as_text_while_the_client_character_set_dif
 TEST(Ruvia, db_mariadb_set_and_use_run_as_text) {
     using namespace ruvia;
     using namespace mariadb_statement_test;
-    peer_type peer(std::vector<ruvia::test::backend_startup_peer::maria_reply>({{.rows_ = std::vector<std::string>({std::string("a")})}, {.rows_ = std::vector<std::string>({std::string("b")})}, {.column_ = std::string("")}, {.column_ = std::string("")}, {.column_ = std::string("")},
-                       {.column_ = std::string(""), .tracked_ = std::vector<std::pair<std::string, std::string>>({{std::string("sql_mode"), std::string("PIPES_AS_CONCAT")}})}, {.rows_ = std::vector<std::string>({std::string("c")})},
-                       {.rows_ = std::vector<std::string>({std::string("d")})}}),
-        peer_type::after_startup::idle);
+    peer_type peer(std::vector<ruvia::test::backend_startup_peer::maria_reply>({{.rows_ = std::vector<std::string>({std::string("a")})}, {.rows_ = std::vector<std::string>({std::string("b")})}, {.column_ = std::string("")}, {.column_ = std::string("")}, {.column_ = std::string("")}, {.column_ = std::string(""), .tracked_ = std::vector<std::pair<std::string, std::string>>({{std::string("sql_mode"), std::string("PIPES_AS_CONCAT")}})}, {.rows_ = std::vector<std::string>({std::string("c")})}, {.rows_ = std::vector<std::string>({std::string("d")})}}), peer_type::after_startup::idle);
     auto& context_value = test::new_test_io_context();
     auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
     db_client client(attachment.loop(), config(peer));
@@ -1107,11 +935,7 @@ TEST(Ruvia, db_mariadb_set_and_use_run_as_text) {
     }
     EXPECT_TRUE(outcomes[6].value_ == "c");
     EXPECT_TRUE(outcomes[7].value_ == "d");
-    EXPECT_TRUE((peer.maria_commands() ==
-                 std::vector<std::string>({std::string("query:SELECT v FROM t"), std::string("prepare:SELECT v FROM t"), std::string("execute:1:"),
-                     std::string("query:USE other"), std::string("query:USE other"), std::string("query:SET SESSION sql_mode = 'STRICT_TRANS_TABLES'"),
-                     std::string("query:SET SESSION sql_mode = 'PIPES_AS_CONCAT'"), std::string("query:SELECT v FROM t"), std::string("close:1"),
-                     std::string("prepare:SELECT v FROM t"), std::string("execute:2:")})));
+    EXPECT_TRUE((peer.maria_commands() == std::vector<std::string>({std::string("query:SELECT v FROM t"), std::string("prepare:SELECT v FROM t"), std::string("execute:1:"), std::string("query:USE other"), std::string("query:USE other"), std::string("query:SET SESSION sql_mode = 'STRICT_TRANS_TABLES'"), std::string("query:SET SESSION sql_mode = 'PIPES_AS_CONCAT'"), std::string("query:SELECT v FROM t"), std::string("close:1"), std::string("prepare:SELECT v FROM t"), std::string("execute:2:")})));
 }
 
 // Either of character_set_client and character_set_connection alone off
@@ -1156,11 +980,10 @@ TEST(Ruvia, db_mariadb_one_character_set_variable_off_utf8mb4_runs_statements_as
             "query:SELECT 'a\xff"
             "b' AS v";
         EXPECT_TRUE((peer.maria_commands() ==
-                     std::vector<std::string>({std::string("query:SELECT v FROM t"), std::string("prepare:SELECT v FROM t"), std::string("execute:1:"),
-                         std::string("query:SET SESSION ") + variable + " = gbk", std::string(text), std::string(text), std::string(text),
-                         std::string("query:SET SESSION ") + variable + " = utf8mb4", std::string(text), std::string("close:1"), std::string("prepare:SELECT ? AS v"),
-                         std::string("execute:2:s:a\xff"
-                                     "b")})));
+            std::vector<std::string>(
+                {std::string("query:SELECT v FROM t"), std::string("prepare:SELECT v FROM t"), std::string("execute:1:"), std::string("query:SET SESSION ") + variable + " = gbk", std::string(text), std::string(text), std::string(text), std::string("query:SET SESSION ") + variable + " = utf8mb4", std::string(text), std::string("close:1"), std::string("prepare:SELECT ? AS v"),
+                    std::string("execute:2:s:a\xff"
+                                "b")})));
     }
 }
 
@@ -1207,10 +1030,7 @@ TEST(Ruvia, db_mariadb_untracked_session_runs_nothing_prepared) {
         EXPECT_TRUE(!outcomes[2].error_.has_value());
         EXPECT_TRUE(outcomes[3].value_ == "v");
         EXPECT_TRUE(outcomes[4].value_ == "v");
-        EXPECT_TRUE((peer.maria_commands() ==
-                     std::vector<std::string>({std::string("query:SELECT v FROM t"), std::string("prepare:SELECT v FROM t"), std::string("execute:1:"),
-                         std::string("query:SET SESSION session_track_system_variables = ''"), std::string("query:SELECT v FROM t"),
-                         std::string("query:SELECT v FROM t")})));
+        EXPECT_TRUE((peer.maria_commands() == std::vector<std::string>({std::string("query:SELECT v FROM t"), std::string("prepare:SELECT v FROM t"), std::string("execute:1:"), std::string("query:SET SESSION session_track_system_variables = ''"), std::string("query:SELECT v FROM t"), std::string("query:SELECT v FROM t")})));
     }
 }
 
@@ -1231,7 +1051,9 @@ TEST(Ruvia, db_mariadb_statements_that_run_as_text_take_no_cache_places) {
     auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
     db_client client(attachment.loop(), config(peer));
     std::size_t failures = 0;
-    const auto select = [](std::size_t index) { return "SELECT v FROM t" + std::string(std::to_string(index)); };
+    const auto select = [](std::size_t index) {
+        return "SELECT v FROM t" + std::string(std::to_string(index));
+    };
     test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
         const auto handle = connected.db().with_options({.timeout_ = std::chrono::seconds(5)});
         const auto run = [&](std::string sql) -> task<void> {
@@ -1254,7 +1076,9 @@ TEST(Ruvia, db_mariadb_statements_that_run_as_text_take_no_cache_places) {
     EXPECT_EQ(failures, std::size_t{0});
     const auto commands = peer.maria_commands();
     EXPECT_EQ(commands.size(), std::size_t{cached * 3 + calls * 2 + 1 + cached});
-    EXPECT_TRUE(std::ranges::none_of(commands, [](const std::string& command) { return command.starts_with("close:"); }));
+    EXPECT_TRUE(std::ranges::none_of(commands, [](const std::string& command) {
+        return command.starts_with("close:");
+    }));
     EXPECT_TRUE(commands[cached * 3 + calls * 2] == "query:SELECT @@session_track_system_variables");
     std::size_t unexpected = 0;
     for (std::size_t index = 0; index < cached; ++index) {
@@ -1270,10 +1094,7 @@ TEST(Ruvia, db_mariadb_statements_that_run_as_text_take_no_cache_places) {
 TEST(Ruvia, db_mariadb_reports_of_other_variables_keep_the_cached_statements) {
     using namespace ruvia;
     using namespace mariadb_statement_test;
-    peer_type peer(std::vector<ruvia::test::backend_startup_peer::maria_reply>({{.rows_ = std::vector<std::string>({std::string("a")})}, {.rows_ = std::vector<std::string>({std::string("b")})},
-                       {.column_ = std::string(""), .affected_rows_ = 1, .tracked_ = std::vector<std::pair<std::string, std::string>>({{std::string("last_gtid"), std::string("0-1-5")}})},
-                       {.column_ = std::string(""), .tracked_ = std::vector<std::pair<std::string, std::string>>({{std::string("autocommit"), std::string("OFF")}})}, {.rows_ = std::vector<std::string>({std::string("c")})}}),
-        peer_type::after_startup::idle);
+    peer_type peer(std::vector<ruvia::test::backend_startup_peer::maria_reply>({{.rows_ = std::vector<std::string>({std::string("a")})}, {.rows_ = std::vector<std::string>({std::string("b")})}, {.column_ = std::string(""), .affected_rows_ = 1, .tracked_ = std::vector<std::pair<std::string, std::string>>({{std::string("last_gtid"), std::string("0-1-5")}})}, {.column_ = std::string(""), .tracked_ = std::vector<std::pair<std::string, std::string>>({{std::string("autocommit"), std::string("OFF")}})}, {.rows_ = std::vector<std::string>({std::string("c")})}}), peer_type::after_startup::idle);
     auto& context_value = test::new_test_io_context();
     auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
     db_client client(attachment.loop(), config(peer));
@@ -1288,9 +1109,7 @@ TEST(Ruvia, db_mariadb_reports_of_other_variables_keep_the_cached_statements) {
     });
     EXPECT_TRUE(outcomes[2].affected_rows_ == 1);
     EXPECT_TRUE(outcomes[4].value_ == "c");
-    EXPECT_TRUE((peer.maria_commands() ==
-                 std::vector<std::string>({std::string("query:SELECT v FROM t"), std::string("prepare:SELECT v FROM t"), std::string("execute:1:"),
-                     std::string("query:INSERT INTO t (v) VALUES ('w')"), std::string("query:SET autocommit = 0"), std::string("execute:1:")})));
+    EXPECT_TRUE((peer.maria_commands() == std::vector<std::string>({std::string("query:SELECT v FROM t"), std::string("prepare:SELECT v FROM t"), std::string("execute:1:"), std::string("query:INSERT INTO t (v) VALUES ('w')"), std::string("query:SET autocommit = 0"), std::string("execute:1:")})));
 }
 
 // A stored procedure may turn session tracking off without a report, so the
@@ -1300,9 +1119,7 @@ TEST(Ruvia, db_mariadb_reports_of_other_variables_keep_the_cached_statements) {
 TEST(Ruvia, db_mariadb_call_has_the_tracked_variables_read_back) {
     using namespace ruvia;
     using namespace mariadb_statement_test;
-    peer_type peer(std::vector<ruvia::test::backend_startup_peer::maria_reply>({{.rows_ = std::vector<std::string>({std::string("a")})}, {.rows_ = std::vector<std::string>({std::string("b")})}, {.column_ = std::string("")}, {.rows_ = std::vector<std::string>({std::string(server_tracked_list)})},
-                       {.rows_ = std::vector<std::string>({std::string("c")})}, {.column_ = std::string("")}, {.rows_ = std::vector<std::string>({std::string("time_zone")})}, {.rows_ = std::vector<std::string>({std::string("d")})}, {.rows_ = std::vector<std::string>({std::string("e")})}}),
-        peer_type::after_startup::idle);
+    peer_type peer(std::vector<ruvia::test::backend_startup_peer::maria_reply>({{.rows_ = std::vector<std::string>({std::string("a")})}, {.rows_ = std::vector<std::string>({std::string("b")})}, {.column_ = std::string("")}, {.rows_ = std::vector<std::string>({std::string(server_tracked_list)})}, {.rows_ = std::vector<std::string>({std::string("c")})}, {.column_ = std::string("")}, {.rows_ = std::vector<std::string>({std::string("time_zone")})}, {.rows_ = std::vector<std::string>({std::string("d")})}, {.rows_ = std::vector<std::string>({std::string("e")})}}), peer_type::after_startup::idle);
     auto& context_value = test::new_test_io_context();
     auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
     db_client client(attachment.loop(), config(peer));
@@ -1320,10 +1137,6 @@ TEST(Ruvia, db_mariadb_call_has_the_tracked_variables_read_back) {
     EXPECT_TRUE(outcomes[3].value_ == "c");
     EXPECT_TRUE(outcomes[5].value_ == "d");
     EXPECT_TRUE(outcomes[6].value_ == "e");
-    EXPECT_TRUE((peer.maria_commands() ==
-                 std::vector<std::string>({std::string("query:SELECT v FROM t"), std::string("prepare:SELECT v FROM t"), std::string("execute:1:"),
-                     std::string("query:CALL p()"), std::string("query:SELECT @@session_track_system_variables"), std::string("execute:1:"), std::string("query:CALL p()"),
-                     std::string("query:SELECT @@session_track_system_variables"), std::string("query:SELECT v FROM t"),
-                     std::string("query:SELECT v FROM t")})));
+    EXPECT_TRUE((peer.maria_commands() == std::vector<std::string>({std::string("query:SELECT v FROM t"), std::string("prepare:SELECT v FROM t"), std::string("execute:1:"), std::string("query:CALL p()"), std::string("query:SELECT @@session_track_system_variables"), std::string("execute:1:"), std::string("query:CALL p()"), std::string("query:SELECT @@session_track_system_variables"), std::string("query:SELECT v FROM t"), std::string("query:SELECT v FROM t")})));
 }
 #endif

@@ -23,15 +23,14 @@ public:
     const auto chat_options = ruvia::websocket_route_config{
         .subprotocols_ = {"chat.v1"},
         .require_subprotocol_ = true,
-        .lifecycle_ =
-            {
-                .heartbeat_ =
-                    {
-                        .ping_interval_ = std::chrono::seconds(30),
-                        .pong_timeout_ = std::chrono::seconds(10),
-                    },
-                .close_handshake_timeout_ = std::chrono::seconds(5),
-            },
+        .lifecycle_ = {
+            .heartbeat_ =
+                {
+                    .ping_interval_ = std::chrono::seconds(30),
+                    .pong_timeout_ = std::chrono::seconds(10),
+                },
+            .close_handshake_timeout_ = std::chrono::seconds(5),
+        },
     };
     RUVIA_GET_WS("/echo", echo);
     RUVIA_GET_WS("/chat", chat, chat_options);

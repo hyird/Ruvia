@@ -66,8 +66,7 @@ std::string http_exchange(asio::io_context& io, const asio::ip::tcp::endpoint& e
 
 // The status line of `request` on a fresh TLS connection offering `sni`
 // (none when null). The client authenticates nothing: the server decides.
-std::string https_exchange(
-    asio::io_context& io, const asio::ip::tcp::endpoint& endpoint, const char* sni, std::string_view request) {
+std::string https_exchange(asio::io_context& io, const asio::ip::tcp::endpoint& endpoint, const char* sni, std::string_view request) {
     asio::ssl::context client(asio::ssl::context::tls_client);
     client.set_verify_mode(asio::ssl::verify_none);
     asio::ssl::stream<asio::ip::tcp::socket> stream(io, client);
@@ -87,8 +86,7 @@ std::string https_exchange(
 }
 
 [[nodiscard]] std::string get(std::string_view target, std::string_view host) {
-    return std::string("GET ") + std::string(target) + " HTTP/1.1\r\nHost: " + std::string(host) +
-           "\r\nConnection: close\r\n\r\n";
+    return std::string("GET ") + std::string(target) + " HTTP/1.1\r\nHost: " + std::string(host) + "\r\nConnection: close\r\n\r\n";
 }
 
 #if defined(RUVIA_ENABLE_HTTP2)
@@ -105,8 +103,7 @@ std::vector<unsigned> http2_statuses(stream_type& stream, std::initializer_list<
     std::map<std::uint32_t, std::size_t> pending{};
     std::vector<unsigned> statuses(targets.size(), 0);
     for (std::size_t i = 0; i < targets.size(); ++i) {
-        const auto submitted = peer.submit_request_head(ruvia::http2_regular_request_head_view{
-            .scheme_ = (targets.begin() + i)->scheme_, .authority_ = (targets.begin() + i)->authority_, .target_ = "/origin"});
+        const auto submitted = peer.submit_request_head(ruvia::http2_regular_request_head_view{.scheme_ = (targets.begin() + i)->scheme_, .authority_ = (targets.begin() + i)->authority_, .target_ = "/origin"});
         const auto* id = std::get_if<std::uint32_t>(&submitted);
         if (id == nullptr) {
             throw std::runtime_error("HTTP/2 test request rejected locally");
@@ -141,8 +138,7 @@ std::vector<unsigned> http2_statuses(stream_type& stream, std::initializer_list<
     return statuses;
 }
 
-std::vector<unsigned> h2_over_tls(
-    asio::io_context& io, const asio::ip::tcp::endpoint& endpoint, std::initializer_list<http2_target> targets) {
+std::vector<unsigned> h2_over_tls(asio::io_context& io, const asio::ip::tcp::endpoint& endpoint, std::initializer_list<http2_target> targets) {
     asio::ssl::context client(asio::ssl::context::tls_client);
     client.set_verify_mode(asio::ssl::verify_none);
     static constexpr unsigned char alpn[] = {2, 'h', '2'};
@@ -158,8 +154,7 @@ std::vector<unsigned> h2_over_tls(
     return http2_statuses(stream, targets);
 }
 
-std::vector<unsigned> h2_cleartext(
-    asio::io_context& io, const asio::ip::tcp::endpoint& endpoint, std::initializer_list<http2_target> targets) {
+std::vector<unsigned> h2_cleartext(asio::io_context& io, const asio::ip::tcp::endpoint& endpoint, std::initializer_list<http2_target> targets) {
     asio::ip::tcp::socket socket(io);
     socket.connect(endpoint);
     return http2_statuses(socket, targets);
@@ -189,7 +184,9 @@ TEST(Ruvia, requests_the_connection_cannot_carry_are_answered_421) {
             .https_ = https_endpoint.port(),
             .tls_ = {.identity_ = {.certificate_chain_file_ = identity.ca_file_, .private_key_file_ = private_key}},
         })
-        .on_start([] { started.release(); });
+        .on_start([] {
+        started.release();
+    });
     const auto ip_host = std::move(std::string("127.0.0.1:").append(std::to_string(https_endpoint.port())));
     for (const bool trusted : {false, true}) {
         if (trusted) {
@@ -206,38 +203,24 @@ TEST(Ruvia, requests_the_connection_cannot_carry_are_answered_421) {
             EXPECT_EQ(https_exchange(io, https_endpoint, nullptr, get("/origin", "a.wild.test")), "HTTP/1.1 200 OK");
             EXPECT_EQ(https_exchange(io, https_endpoint, nullptr, get("/origin", ip_host)), "HTTP/1.1 200 OK");
             EXPECT_EQ(https_exchange(io, https_endpoint, "localhost", get("/origin", "%6Cocalhost")), "HTTP/1.1 200 OK");
-            EXPECT_EQ(https_exchange(io, https_endpoint, "localhost", get("https://%6Cocalhost/origin", "localhost")),
-                "HTTP/1.1 200 OK");
-            EXPECT_EQ(https_exchange(io, https_endpoint, "localhost", get("/origin", "localhost%2E%2E")),
-                "HTTP/1.1 421 Misdirected Request");
-            EXPECT_EQ(https_exchange(io, https_endpoint, nullptr, get("/origin", ".wild.test")),
-                "HTTP/1.1 421 Misdirected Request");
-            EXPECT_EQ(https_exchange(io, https_endpoint, nullptr, get("/origin", "%2Ewild.test")),
-                "HTTP/1.1 421 Misdirected Request");
-            EXPECT_EQ(https_exchange(io, https_endpoint, nullptr, get("/origin", "*.wild.test")),
-                "HTTP/1.1 421 Misdirected Request");
-            EXPECT_EQ(https_exchange(io, https_endpoint, nullptr, get("/origin", "127.0.0.1.")),
-                "HTTP/1.1 421 Misdirected Request");
+            EXPECT_EQ(https_exchange(io, https_endpoint, "localhost", get("https://%6Cocalhost/origin", "localhost")), "HTTP/1.1 200 OK");
+            EXPECT_EQ(https_exchange(io, https_endpoint, "localhost", get("/origin", "localhost%2E%2E")), "HTTP/1.1 421 Misdirected Request");
+            EXPECT_EQ(https_exchange(io, https_endpoint, nullptr, get("/origin", ".wild.test")), "HTTP/1.1 421 Misdirected Request");
+            EXPECT_EQ(https_exchange(io, https_endpoint, nullptr, get("/origin", "%2Ewild.test")), "HTTP/1.1 421 Misdirected Request");
+            EXPECT_EQ(https_exchange(io, https_endpoint, nullptr, get("/origin", "*.wild.test")), "HTTP/1.1 421 Misdirected Request");
+            EXPECT_EQ(https_exchange(io, https_endpoint, nullptr, get("/origin", "127.0.0.1.")), "HTTP/1.1 421 Misdirected Request");
             // Names it does not cover, whatever SNI was offered.
-            EXPECT_EQ(https_exchange(io, https_endpoint, "localhost", get("/origin", "attacker.example")),
-                "HTTP/1.1 421 Misdirected Request");
-            EXPECT_EQ(https_exchange(io, https_endpoint, "attacker.example", get("/origin", "attacker.example")),
-                "HTTP/1.1 421 Misdirected Request");
-            EXPECT_EQ(https_exchange(io, https_endpoint, nullptr, get("/origin", "attacker.example")),
-                "HTTP/1.1 421 Misdirected Request");
-            EXPECT_EQ(https_exchange(io, https_endpoint, nullptr, get("/origin", "a.b.wild.test")),
-                "HTTP/1.1 421 Misdirected Request");
-            EXPECT_EQ(https_exchange(io, https_endpoint, nullptr, get("/origin", "wild.test")),
-                "HTTP/1.1 421 Misdirected Request");
-            EXPECT_EQ(https_exchange(io, https_endpoint, nullptr, get("/origin", "[::1]")),
-                "HTTP/1.1 421 Misdirected Request");
-            EXPECT_EQ(https_exchange(io, https_endpoint, nullptr, get("https://attacker.example/origin", "localhost")),
-                "HTTP/1.1 421 Misdirected Request");
+            EXPECT_EQ(https_exchange(io, https_endpoint, "localhost", get("/origin", "attacker.example")), "HTTP/1.1 421 Misdirected Request");
+            EXPECT_EQ(https_exchange(io, https_endpoint, "attacker.example", get("/origin", "attacker.example")), "HTTP/1.1 421 Misdirected Request");
+            EXPECT_EQ(https_exchange(io, https_endpoint, nullptr, get("/origin", "attacker.example")), "HTTP/1.1 421 Misdirected Request");
+            EXPECT_EQ(https_exchange(io, https_endpoint, nullptr, get("/origin", "a.b.wild.test")), "HTTP/1.1 421 Misdirected Request");
+            EXPECT_EQ(https_exchange(io, https_endpoint, nullptr, get("/origin", "wild.test")), "HTTP/1.1 421 Misdirected Request");
+            EXPECT_EQ(https_exchange(io, https_endpoint, nullptr, get("/origin", "[::1]")), "HTTP/1.1 421 Misdirected Request");
+            EXPECT_EQ(https_exchange(io, https_endpoint, nullptr, get("https://attacker.example/origin", "localhost")), "HTTP/1.1 421 Misdirected Request");
 #if defined(RUVIA_ENABLE_HTTP2)
             // HTTP/2 refuses only the misdirected stream; the connection
             // still serves the covered one.
-            const auto h2 = h2_over_tls(io, https_endpoint,
-                {{"https", "attacker.example"}, {"https", "localhost"}, {"https", "x.wild.test:443"}});
+            const auto h2 = h2_over_tls(io, https_endpoint, {{"https", "attacker.example"}, {"https", "localhost"}, {"https", "x.wild.test:443"}});
             EXPECT_EQ(h2.size(), std::size_t{3});
             if (h2.size() == 3) {
                 EXPECT_EQ(h2[0], 421U);
@@ -247,10 +230,8 @@ TEST(Ruvia, requests_the_connection_cannot_carry_are_answered_421) {
 #endif
 
             // A cleartext connection carries no "https" target.
-            EXPECT_EQ(http_exchange(io, http_endpoint, get("https://a.example/origin", "x")),
-                "HTTP/1.1 421 Misdirected Request");
-            EXPECT_EQ(http_exchange(io, http_endpoint, get("HTTPS://localhost:443/origin", "x")),
-                "HTTP/1.1 421 Misdirected Request");
+            EXPECT_EQ(http_exchange(io, http_endpoint, get("https://a.example/origin", "x")), "HTTP/1.1 421 Misdirected Request");
+            EXPECT_EQ(http_exchange(io, http_endpoint, get("HTTPS://localhost:443/origin", "x")), "HTTP/1.1 421 Misdirected Request");
             EXPECT_EQ(http_exchange(io, http_endpoint, get("http://a.example/origin", "x")), "HTTP/1.1 200 OK");
             EXPECT_EQ(http_exchange(io, http_endpoint, get("/origin", "attacker.example")), "HTTP/1.1 200 OK");
 #if defined(RUVIA_ENABLE_HTTP2)

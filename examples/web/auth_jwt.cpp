@@ -22,8 +22,7 @@ namespace {
 
 // Demonstration only. Production must load an independently generated random
 // key from protected configuration, never reuse this public example key.
-constexpr std::string_view jwt_secret =
-    "development-only-not-for-production-0123456789abcdef0123456789abcdef";
+constexpr std::string_view jwt_secret = "development-only-not-for-production-0123456789abcdef0123456789abcdef";
 
 inline constexpr std::array<ruvia::jwt_claim_view, 1> default_claims{{
     {.name_ = "scope", .value_ = "example"},
@@ -63,9 +62,7 @@ public:
         if (!token) {
             // RFC 9110 15.5.2: a 401 names the scheme that would succeed.
             c.policy().header("WWW-Authenticate", "Bearer");
-            c.respond(c.error({.status_ = ruvia::http_status::unauthorized,
-                .code_ = "missing_token",
-                .message_ = "missing bearer token"}));
+            c.respond(c.error({.status_ = ruvia::http_status::unauthorized, .code_ = "missing_token", .message_ = "missing bearer token"}));
             co_return;
         }
 
@@ -78,9 +75,7 @@ public:
         } catch (const ruvia::jwt_error&) {
             // RFC 6750 3.1: a presented but unusable token is invalid_token.
             c.policy().header("WWW-Authenticate", R"(Bearer error="invalid_token")");
-            c.respond(c.error({.status_ = ruvia::http_status::unauthorized,
-                .code_ = "invalid_token",
-                .message_ = "invalid bearer token"}));
+            c.respond(c.error({.status_ = ruvia::http_status::unauthorized, .code_ = "invalid_token", .message_ = "invalid bearer token"}));
             co_return;
         }
 
@@ -124,11 +119,7 @@ private:
 
 int main() {
     try {
-        ruvia::app()
-            .listen({.address_ = "0.0.0.0", .http_ = 8085})
-            .server({.worker_count_ = 2,
-                .process_signal_handlers_ = ruvia::process_signal_handler_policy::install})
-            .run();
+        ruvia::app().listen({.address_ = "0.0.0.0", .http_ = 8085}).server({.worker_count_ = 2, .process_signal_handlers_ = ruvia::process_signal_handler_policy::install}).run();
     } catch (...) {
         std::cerr << ruvia::exception_text(std::current_exception()) << '\n';
         return 1;

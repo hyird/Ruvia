@@ -9,8 +9,6 @@
 #include <string_view>
 #include <utility>
 
-#include "ruvia/web/redis/redis.h"
-
 struct redisReader;
 struct redisReadTask;
 struct redisReplyObjectFunctions;
@@ -39,6 +37,7 @@ struct redisReplyObjectFunctions;
 
 #include "connection_lifecycle.h"
 #include "http_client_pool.h"
+
 namespace ruvia::detail {
 
 // Serializes a command into RESP multi-bulk form, appending directly to the
@@ -53,18 +52,15 @@ void append_resp_header(std::string& output, std::size_t arg_count);
 void append_resp_bulk(std::string& output, std::string_view arg);
 void serialize_resp_command(std::string& output, std::span<const std::string_view> args);
 void serialize_resp_command(std::string& output, std::span<const std::string> args);
-void serialize_resp_command(
-    std::string& output, std::string_view first, std::span<const std::string_view> rest);
+void serialize_resp_command(std::string& output, std::string_view first, std::span<const std::string_view> rest);
 void append_resp_command(std::string& output, std::span<const std::string_view> args);
 void append_resp_command(std::string& output, std::span<const std::string> args);
-void append_resp_command(
-    std::string& output, std::string_view first, std::span<const std::string_view> rest);
+void append_resp_command(std::string& output, std::string_view first, std::span<const std::string_view> rest);
 // Throws std::invalid_argument when args is empty, or std::length_error when
 // the complete RESP command size cannot be represented by std::size_t.
 [[nodiscard]] std::size_t resp_command_serialized_size(std::span<const std::string_view> args);
 [[nodiscard]] std::size_t resp_command_serialized_size(std::span<const std::string> args);
-[[nodiscard]] std::size_t resp_command_serialized_size(
-    std::string_view first, std::span<const std::string_view> rest);
+[[nodiscard]] std::size_t resp_command_serialized_size(std::string_view first, std::span<const std::string_view> rest);
 [[nodiscard]] const char* hiredis_reader_error(const redisReader& reader_value) noexcept;
 
 // The only RESP reply construction path: hiredis' reader calls these object
@@ -104,9 +100,9 @@ private:
         failed };
 
     struct root_slot final {
-        root_slot(redis_reply_builder& owner, redis_value&& value) noexcept
-            : owner_(&owner),
-              value_(std::move(value)) {}
+        root_slot(redis_reply_builder& owner, redis_value&& value) noexcept :
+            owner_(&owner),
+            value_(std::move(value)) {}
         redis_reply_builder* owner_;
         redis_value value_;
     };
@@ -142,8 +138,7 @@ namespace ruvia::detail {
 inline constexpr std::size_t redis_int_scratch_size = 20;
 inline constexpr std::size_t redis_score_scratch_size = 64;
 
-[[nodiscard]] inline std::string_view format_redis_int(
-    std::span<char, redis_int_scratch_size> scratch, std::int64_t value) noexcept {
+[[nodiscard]] inline std::string_view format_redis_int(std::span<char, redis_int_scratch_size> scratch, std::int64_t value) noexcept {
     const auto end = std::to_chars(scratch.data(), scratch.data() + scratch.size(), value).ptr;
     return {scratch.data(), static_cast<std::size_t>(end - scratch.data())};
 }
@@ -151,8 +146,7 @@ inline constexpr std::size_t redis_score_scratch_size = 64;
 // Redis accepts "+inf"/"-inf" as sorted-set scores and range bounds, and
 // replies them back, so the client round-trips infinities. NaN has no Redis
 // spelling and is rejected.
-[[nodiscard]] inline std::string_view format_redis_score(
-    std::span<char, redis_score_scratch_size> scratch, double value) {
+[[nodiscard]] inline std::string_view format_redis_score(std::span<char, redis_score_scratch_size> scratch, double value) {
     if (std::isinf(value)) {
         return value > 0 ? "+inf" : "-inf";
     }
@@ -170,8 +164,7 @@ inline constexpr std::size_t redis_score_scratch_size = 64;
 // RESP command. The enumeration runs twice, once to size the request and once
 // to append it, so the argument layout is written in exactly one place.
 template <typename enumerate_type>
-[[nodiscard]] redis_owned_command encode_redis_command(
-    const enumerate_type& enumerate_arguments) {
+[[nodiscard]] redis_owned_command encode_redis_command(const enumerate_type& enumerate_arguments) {
     std::size_t arg_count = 0;
     std::size_t bulk_bytes = 0;
     enumerate_arguments([&](std::string_view arg) {
@@ -183,41 +176,31 @@ template <typename enumerate_type>
     redis_owned_command command{std::string()};
     command.wire_.reserve(size);
     append_resp_header(command.wire_, arg_count);
-    enumerate_arguments([&](std::string_view arg) { append_resp_bulk(command.wire_, arg); });
+    enumerate_arguments([&](std::string_view arg) {
+        append_resp_bulk(command.wire_, arg);
+    });
     return command;
 }
 
-[[nodiscard]] redis_owned_command make_owned_redis_command(
-    std::initializer_list<std::string_view> args);
+[[nodiscard]] redis_owned_command make_owned_redis_command(std::initializer_list<std::string_view> args);
 
 [[nodiscard]] bool redis_set_returns_previous(redis_set_previous_value_policy policy);
 
-[[nodiscard]] redis_owned_command redis_command_with_keys(std::string_view command,
-    std::span<const std::string_view> keys);
-[[nodiscard]] redis_owned_command redis_mset_args(
-    std::span<const std::pair<std::string_view, std::string_view>> items);
-[[nodiscard]] redis_owned_command redis_set_args(std::string_view key,
-    std::string_view value, const redis_set_options& options);
-[[nodiscard]] redis_owned_command redis_hset_fields_args(std::string_view key,
-    std::span<const std::pair<std::string_view, std::string_view>> fields_value);
-[[nodiscard]] redis_owned_command redis_command_with_key_fields(std::string_view command,
-    std::string_view key, std::span<const std::string_view> fields_value);
-[[nodiscard]] redis_owned_command redis_eval_args(std::string_view command,
-    std::string_view script, std::span<const std::string_view> keys,
-    std::span<const std::string_view> argv);
-[[nodiscard]] redis_owned_command redis_blocking_pop_args(std::string_view command,
-    std::span<const std::string_view> keys, redis_block_wait wait);
-[[nodiscard]] redis_owned_command redis_x_read_group_args(std::string_view group,
-    std::string_view consumer, std::span<const redis_stream_read_view> streams,
-    const redis_x_read_group_options& options);
+[[nodiscard]] redis_owned_command redis_command_with_keys(std::string_view command, std::span<const std::string_view> keys);
+[[nodiscard]] redis_owned_command redis_mset_args(std::span<const std::pair<std::string_view, std::string_view>> items);
+[[nodiscard]] redis_owned_command redis_set_args(std::string_view key, std::string_view value, const redis_set_options& options);
+[[nodiscard]] redis_owned_command redis_hset_fields_args(std::string_view key, std::span<const std::pair<std::string_view, std::string_view>> fields_value);
+[[nodiscard]] redis_owned_command redis_command_with_key_fields(std::string_view command, std::string_view key, std::span<const std::string_view> fields_value);
+[[nodiscard]] redis_owned_command redis_eval_args(std::string_view command, std::string_view script, std::span<const std::string_view> keys, std::span<const std::string_view> argv);
+[[nodiscard]] redis_owned_command redis_blocking_pop_args(std::string_view command, std::span<const std::string_view> keys, redis_block_wait wait);
+[[nodiscard]] redis_owned_command redis_x_read_group_args(std::string_view group, std::string_view consumer, std::span<const redis_stream_read_view> streams, const redis_x_read_group_options& options);
 
 }  // namespace ruvia::detail
 
 namespace ruvia::detail {
 
 struct redis_types_access final {
-    [[nodiscard]] static redis_set_result set_result(bool applied,
-        std::optional<std::string> previous = std::nullopt) {
+    [[nodiscard]] static redis_set_result set_result(bool applied, std::optional<std::string> previous = std::nullopt) {
         return redis_set_result(applied, std::move(previous));
     }
 
@@ -229,13 +212,11 @@ struct redis_types_access final {
         return cursor_value.value_;
     }
 
-    [[nodiscard]] static redis_key_value key_value(
-        std::string&& key, std::string&& value) noexcept {
+    [[nodiscard]] static redis_key_value key_value(std::string&& key, std::string&& value) noexcept {
         return redis_key_value(std::move(key), std::move(value));
     }
 
-    [[nodiscard]] static redis_scored_value scored_value(
-        std::string&& value, double score) noexcept {
+    [[nodiscard]] static redis_scored_value scored_value(std::string&& value, double score) noexcept {
         return redis_scored_value(std::move(value), score);
     }
 
@@ -243,13 +224,11 @@ struct redis_types_access final {
         return redis_scan_result{};
     }
 
-    [[nodiscard]] static std::optional<redis_scan_cursor>& next_cursor(
-        redis_scan_result& result_value) noexcept {
+    [[nodiscard]] static std::optional<redis_scan_cursor>& next_cursor(redis_scan_result& result_value) noexcept {
         return result_value.next_cursor_;
     }
 
-    [[nodiscard]] static std::vector<std::string>& values(
-        redis_scan_result& result_value) noexcept {
+    [[nodiscard]] static std::vector<std::string>& values(redis_scan_result& result_value) noexcept {
         return result_value.values_;
     }
 
@@ -257,13 +236,11 @@ struct redis_types_access final {
         return redis_hash_scan_result{};
     }
 
-    [[nodiscard]] static std::optional<redis_scan_cursor>& next_cursor(
-        redis_hash_scan_result& result_value) noexcept {
+    [[nodiscard]] static std::optional<redis_scan_cursor>& next_cursor(redis_hash_scan_result& result_value) noexcept {
         return result_value.next_cursor_;
     }
 
-    [[nodiscard]] static std::vector<redis_key_value>& entries(
-        redis_hash_scan_result& result_value) noexcept {
+    [[nodiscard]] static std::vector<redis_key_value>& entries(redis_hash_scan_result& result_value) noexcept {
         return result_value.entries_;
     }
 
@@ -271,18 +248,15 @@ struct redis_types_access final {
         return redis_z_scan_result{};
     }
 
-    [[nodiscard]] static std::optional<redis_scan_cursor>& next_cursor(
-        redis_z_scan_result& result_value) noexcept {
+    [[nodiscard]] static std::optional<redis_scan_cursor>& next_cursor(redis_z_scan_result& result_value) noexcept {
         return result_value.next_cursor_;
     }
 
-    [[nodiscard]] static std::vector<redis_scored_value>& entries(
-        redis_z_scan_result& result_value) noexcept {
+    [[nodiscard]] static std::vector<redis_scored_value>& entries(redis_z_scan_result& result_value) noexcept {
         return result_value.entries_;
     }
 
-    [[nodiscard]] static redis_stream_entry stream_entry(
-        std::string&& id) noexcept {
+    [[nodiscard]] static redis_stream_entry stream_entry(std::string&& id) noexcept {
         return redis_stream_entry(std::move(id));
     }
 
@@ -290,13 +264,11 @@ struct redis_types_access final {
         return entry_value.fields_;
     }
 
-    [[nodiscard]] static redis_stream_read_result stream_read_result(
-        std::string&& stream) noexcept {
+    [[nodiscard]] static redis_stream_read_result stream_read_result(std::string&& stream) noexcept {
         return redis_stream_read_result(std::move(stream));
     }
 
-    [[nodiscard]] static std::vector<redis_stream_entry>& entries(
-        redis_stream_read_result& result_value) noexcept {
+    [[nodiscard]] static std::vector<redis_stream_entry>& entries(redis_stream_read_result& result_value) noexcept {
         return result_value.entries_;
     }
 
@@ -304,22 +276,18 @@ struct redis_types_access final {
         return redis_x_read_group_result{};
     }
 
-    [[nodiscard]] static std::vector<redis_stream_read_result>& streams(
-        redis_x_read_group_result& result_value) noexcept {
+    [[nodiscard]] static std::vector<redis_stream_read_result>& streams(redis_x_read_group_result& result_value) noexcept {
         return result_value.streams_;
     }
 
-    [[nodiscard]] static constexpr redis_ttl ttl(redis_ttl_state state_value,
-        std::optional<std::chrono::milliseconds> remaining = std::nullopt) noexcept {
+    [[nodiscard]] static constexpr redis_ttl ttl(redis_ttl_state state_value, std::optional<std::chrono::milliseconds> remaining = std::nullopt) noexcept {
         return redis_ttl(state_value, remaining);
     }
 
-    [[nodiscard]] static redis_pubsub_event pubsub_confirmation(redis_pubsub_confirmation_kind kind,
-        std::optional<std::string_view> name, std::int64_t subscription_count) noexcept {
+    [[nodiscard]] static redis_pubsub_event pubsub_confirmation(redis_pubsub_confirmation_kind kind, std::optional<std::string_view> name, std::int64_t subscription_count) noexcept {
         return redis_pubsub_event(redis_pubsub_confirmation(kind, name, subscription_count));
     }
-    [[nodiscard]] static redis_pubsub_event pubsub_message(std::string_view channel,
-        std::optional<std::string_view> pattern, std::string_view payload) noexcept {
+    [[nodiscard]] static redis_pubsub_event pubsub_message(std::string_view channel, std::optional<std::string_view> pattern, std::string_view payload) noexcept {
         return redis_pubsub_event(redis_pubsub_message(channel, pattern, payload));
     }
 
@@ -327,18 +295,15 @@ struct redis_types_access final {
         return redis_value::null_value();
     }
 
-    [[nodiscard]] static redis_value string_value(
-        std::string_view value) {
+    [[nodiscard]] static redis_value string_value(std::string_view value) {
         return redis_value::string_value(value);
     }
 
-    [[nodiscard]] static redis_value error_value(
-        std::string_view value) {
+    [[nodiscard]] static redis_value error_value(std::string_view value) {
         return redis_value::error_value(value);
     }
 
-    [[nodiscard]] static redis_value integer_value(
-        std::int64_t value) {
+    [[nodiscard]] static redis_value integer_value(std::int64_t value) {
         return redis_value::integer_value(value);
     }
 
@@ -372,8 +337,7 @@ void throw_if_redis_transaction_reply_error(const redis_value& value, std::size_
 
 // Reply decoders. Those taking only (redis_value&&, memory_resource*) are
 // mappers for map_redis_command; results own storage in `resource`.
-[[nodiscard]] std::optional<std::string> parse_redis_optional_string(
-    redis_value&& value);
+[[nodiscard]] std::optional<std::string> parse_redis_optional_string(redis_value&& value);
 [[nodiscard]] std::int64_t parse_redis_integer(redis_value&& value);
 [[nodiscard]] bool parse_redis_integer_bool(redis_value&& value);
 // Accept only the OK / PONG status reply, compared case-insensitively.
@@ -381,27 +345,19 @@ void parse_redis_ok(redis_value&& value);
 void parse_redis_pong(redis_value&& value);
 [[nodiscard]] std::vector<bool> parse_redis_bool_array(redis_value&& value);
 // Every element must be a string; a nil element is a protocol error.
-[[nodiscard]] std::vector<std::string> parse_redis_string_array(
-    redis_value&& value);
-[[nodiscard]] std::vector<std::optional<std::string>> parse_redis_optional_string_array(
-    redis_value&& value);
-[[nodiscard]] std::vector<redis_scored_value> parse_redis_scored_array(
-    redis_value&& value);
+[[nodiscard]] std::vector<std::string> parse_redis_string_array(redis_value&& value);
+[[nodiscard]] std::vector<std::optional<std::string>> parse_redis_optional_string_array(redis_value&& value);
+[[nodiscard]] std::vector<redis_scored_value> parse_redis_scored_array(redis_value&& value);
 [[nodiscard]] redis_scan_result parse_redis_scan_result(redis_value&& value);
-[[nodiscard]] redis_hash_scan_result parse_redis_hash_scan_result(
-    redis_value&& value);
+[[nodiscard]] redis_hash_scan_result parse_redis_hash_scan_result(redis_value&& value);
 [[nodiscard]] redis_z_scan_result parse_redis_z_scan_result(redis_value&& value);
-[[nodiscard]] std::optional<redis_key_value> parse_redis_blocking_pop_reply(
-    redis_value&& value);
-[[nodiscard]] std::optional<redis_x_read_group_result> parse_redis_x_read_group_reply(
-    redis_value&& value);
+[[nodiscard]] std::optional<redis_key_value> parse_redis_blocking_pop_reply(redis_value&& value);
+[[nodiscard]] std::optional<redis_x_read_group_result> parse_redis_x_read_group_reply(redis_value&& value);
 
 [[nodiscard]] double parse_redis_double(std::string_view value, std::string_view context_value);
 [[nodiscard]] std::optional<double> parse_redis_optional_double(redis_value&& value, std::string_view context_value);
-[[nodiscard]] std::vector<redis_key_value> parse_redis_key_value_array(
-    redis_value&& value, std::string_view context_value);
-[[nodiscard]] redis_set_result parse_redis_set_reply(
-    redis_value&& value, const redis_set_options& options);
+[[nodiscard]] std::vector<redis_key_value> parse_redis_key_value_array(redis_value&& value, std::string_view context_value);
+[[nodiscard]] redis_set_result parse_redis_set_reply(redis_value&& value, const redis_set_options& options);
 // TTL/PTTL: -2 is a missing key, -1 a key without expiry.
 [[nodiscard]] redis_ttl parse_redis_ttl(redis_value&& value, bool seconds_precision);
 // A pushed reply of a subscribed connection. Views borrow `value`.
@@ -418,26 +374,21 @@ inline void validate_redis_config(const redis_config& config) {
     validate_client_origin_host(config.host_, "redis host must not be empty", "redis host is invalid");
     detail::ensure_non_zero_port(config.port_.value(), "redis port must not be zero");
     detail::ensure_positive_size(config.pool_size_per_worker_, "redis pool size must be greater than zero");
-    detail::ensure_positive_size(
-        config.blocking_pool_size_per_worker_, "redis blocking pool size must be greater than zero");
-    detail::ensure_positive_optional_durations("configured redis timeouts must be greater than zero",
-        config.connect_timeout_, config.command_timeout_, config.acquire_timeout_);
+    detail::ensure_positive_size(config.blocking_pool_size_per_worker_, "redis blocking pool size must be greater than zero");
+    detail::ensure_positive_optional_durations("configured redis timeouts must be greater than zero", config.connect_timeout_, config.command_timeout_, config.acquire_timeout_);
     detail::ensure_positive_size(config.max_array_depth_, "redis max array depth must be greater than zero");
-    detail::ensure_positive_optional_size(
-        config.max_reply_bytes_, "configured redis reply byte limit must be greater than zero");
+    detail::ensure_positive_optional_size(config.max_reply_bytes_, "configured redis reply byte limit must be greater than zero");
     validate_client_tcp_config(config.tcp_);
-    detail::ensure_positive_optional_duration(
-        config.subscription_ping_interval_, "redis subscription ping interval must be greater than zero");
+    detail::ensure_positive_optional_duration(config.subscription_ping_interval_, "redis subscription ping interval must be greater than zero");
 }
 
 // PMR-owned runtime form of the ordinary public redis_config value.
 struct redis_config_storage final {
-    redis_config_storage(const redis_config& source_value)
-        : redis_config_storage(
-              validated_config_tag_type{}, validate(source_value)) {}
+    redis_config_storage(const redis_config& source_value) :
+        redis_config_storage(validated_config_tag_type{}, validate(source_value)) {}
 
-    redis_config_storage(const redis_config_storage& source_value)
-        : redis_config_storage(validated_config_tag_type{}, source_value) {}
+    redis_config_storage(const redis_config_storage& source_value) :
+        redis_config_storage(validated_config_tag_type{}, source_value) {}
 
     std::string host_;
     std::uint16_t port_;
@@ -473,8 +424,7 @@ private:
     // Public configuration parses the TLS files every pool's context
     // installs; allocator-rebound copies share them.
     template <typename source_type>
-    [[nodiscard]] static client_tls_config_storage tls_storage(
-        const source_type& source_value) {
+    [[nodiscard]] static client_tls_config_storage tls_storage(const source_type& source_value) {
         if constexpr (std::same_as<source_type, redis_config>) {
             return {source_value.tls_, client_tls_files::parse};
         } else {
@@ -485,25 +435,23 @@ private:
     // Public configuration validation and allocator-rebound copies enter the
     // same owning construction path; no intermediate string copies or views.
     template <typename source_type>
-        requires(std::same_as<source_type, redis_config> ||
-                    std::same_as<source_type, redis_config_storage>)
-    redis_config_storage(
-        validated_config_tag_type, const source_type& source_value)
-        : host_(source_value.host_),
-          port_(resolved_port(source_value)),
-          username_(source_value.username_),
-          password_(source_value.password_),
-          tls_(tls_storage(source_value)),
-          database_(source_value.database_),
-          pool_size_per_worker_(source_value.pool_size_per_worker_),
-          blocking_pool_size_per_worker_(source_value.blocking_pool_size_per_worker_),
-          connect_timeout_(source_value.connect_timeout_),
-          command_timeout_(source_value.command_timeout_),
-          acquire_timeout_(source_value.acquire_timeout_),
-          max_reply_bytes_(source_value.max_reply_bytes_),
-          max_array_depth_(source_value.max_array_depth_),
-          tcp_(source_value.tcp_),
-          subscription_ping_interval_(source_value.subscription_ping_interval_) {}
+        requires(std::same_as<source_type, redis_config> || std::same_as<source_type, redis_config_storage>)
+    redis_config_storage(validated_config_tag_type, const source_type& source_value) :
+        host_(source_value.host_),
+        port_(resolved_port(source_value)),
+        username_(source_value.username_),
+        password_(source_value.password_),
+        tls_(tls_storage(source_value)),
+        database_(source_value.database_),
+        pool_size_per_worker_(source_value.pool_size_per_worker_),
+        blocking_pool_size_per_worker_(source_value.blocking_pool_size_per_worker_),
+        connect_timeout_(source_value.connect_timeout_),
+        command_timeout_(source_value.command_timeout_),
+        acquire_timeout_(source_value.acquire_timeout_),
+        max_reply_bytes_(source_value.max_reply_bytes_),
+        max_array_depth_(source_value.max_array_depth_),
+        tcp_(source_value.tcp_),
+        subscription_ping_interval_(source_value.subscription_ping_interval_) {}
 };
 
 using redis_definition_type = named_capability_definition<redis_config_storage>;
@@ -543,10 +491,8 @@ enum class redis_request_content : bool { ordinary,
 // an aborted result without an owner reason is an expired deadline.
 class redis_connection final {
 public:
-    redis_connection(asio::io_context& io_context, asio::ssl::context& tls_context, const worker_ref& worker_value,
-        const redis_config_storage& config, client_wire_counters& counters);
-    redis_connection(asio::io_context&, asio::ssl::context&, worker_ref&&, const redis_config_storage&,
-        client_wire_counters&) = delete;
+    redis_connection(asio::io_context& io_context, asio::ssl::context& tls_context, const worker_ref& worker_value, const redis_config_storage& config, client_wire_counters& counters);
+    redis_connection(asio::io_context&, asio::ssl::context&, worker_ref&&, const redis_config_storage&, client_wire_counters&) = delete;
     ~redis_connection();
 
     redis_connection(const redis_connection&) = delete;
@@ -560,23 +506,20 @@ public:
     // sent unsolicited bytes would desynchronize the next reply, so it is
     // replaced. The optional operation deadline bounds establishment together
     // with connect_timeout; AUTH and SELECT replies also honor command_timeout.
-    task<void> connect(const operation_deadline* operation_timeout_value,
-        std::optional<timeout_duration> command_timeout);
+    task<void> connect(const operation_deadline* operation_timeout_value, std::optional<timeout_duration> command_timeout);
     // Serialized request storage: append RESP commands, then write_request().
     [[nodiscard]] std::string& write_buffer() noexcept {
         return write_buffer_;
     }
     // Sends and then releases the serialized request, wiping it first when it
     // carries a credential, whether or not the write succeeded.
-    task<void> write_request(
-        const operation_deadline& timeout, redis_request_content content = redis_request_content::ordinary);
+    task<void> write_request(const operation_deadline& timeout, redis_request_content content = redis_request_content::ordinary);
     // Reads one complete reply, allocating its nodes from `resource`. Throws
     // redis_error(io_error) when the connection is or becomes closed. A
     // non-null `input_time` receives the time of every socket read that
     // delivered bytes, so a subscription's idle clock restarts on partial
     // replies too.
-    task<redis_value> read_reply(const operation_deadline& timeout,
-        std::chrono::steady_clock::time_point* input_time = nullptr);
+    task<redis_value> read_reply(const operation_deadline& timeout, std::chrono::steady_clock::time_point* input_time = nullptr);
 
     void close() noexcept;
     // Cancellation/shutdown: records the reason so a resolve completing after
@@ -587,11 +530,9 @@ public:
 
 private:
     void ensure_reader();
-    task<void> authenticate(const operation_deadline& connect_timeout,
-        std::optional<timeout_duration> command_timeout);
+    task<void> authenticate(const operation_deadline& connect_timeout, std::optional<timeout_duration> command_timeout);
     // One connection-setup command (AUTH, SELECT) and its reply.
-    task<redis_value> exchange_control_command(
-        std::span<const std::string_view> args, operation_deadline deadline, redis_request_content content);
+    task<redis_value> exchange_control_command(std::span<const std::string_view> args, operation_deadline deadline, redis_request_content content);
 
     const redis_config_storage& config_;
     client_tcp_transport transport_;
@@ -617,17 +558,11 @@ class redis_pool final {
 public:
     // `tls_context` is borrowed from the owning runtime and shared by every
     // pool of the alias; it is configured only when TLS is enabled.
-    redis_pool(asio::io_context& io_context, const redis_config_storage& config, asio::ssl::context& tls_context,
-        std::optional<timeout_duration> command_timeout, std::size_t pool_size,
-        const worker_ref& worker_value);
-    redis_pool(asio::io_context&, redis_config_storage&&, asio::ssl::context&, std::optional<timeout_duration>,
-        std::size_t, const worker_ref&) = delete;
-    redis_pool(asio::io_context&, const redis_config_storage&&, asio::ssl::context&,
-        std::optional<timeout_duration>, std::size_t, const worker_ref&) = delete;
-    redis_pool(asio::io_context&, const redis_config_storage&, asio::ssl::context&,
-        std::optional<timeout_duration>, std::size_t, worker_ref&&) = delete;
-    redis_pool(asio::io_context&, const redis_config_storage&, asio::ssl::context&,
-        std::optional<timeout_duration>, std::size_t, const worker_ref&&) = delete;
+    redis_pool(asio::io_context& io_context, const redis_config_storage& config, asio::ssl::context& tls_context, std::optional<timeout_duration> command_timeout, std::size_t pool_size, const worker_ref& worker_value);
+    redis_pool(asio::io_context&, redis_config_storage&&, asio::ssl::context&, std::optional<timeout_duration>, std::size_t, const worker_ref&) = delete;
+    redis_pool(asio::io_context&, const redis_config_storage&&, asio::ssl::context&, std::optional<timeout_duration>, std::size_t, const worker_ref&) = delete;
+    redis_pool(asio::io_context&, const redis_config_storage&, asio::ssl::context&, std::optional<timeout_duration>, std::size_t, worker_ref&&) = delete;
+    redis_pool(asio::io_context&, const redis_config_storage&, asio::ssl::context&, std::optional<timeout_duration>, std::size_t, const worker_ref&&) = delete;
     ~redis_pool();
 
     redis_pool(const redis_pool&) = delete;
@@ -638,18 +573,12 @@ public:
     // `reply_timeout` starts when the command is written, so a server-side
     // block window is not consumed by slot acquisition or a lazy connect.
     // `io_metrics` is the request's counter block, or null outside a request.
-    task<redis_value> execute_owned(redis_owned_command command, operation_options options = {},
-        std::optional<timeout_duration> reply_timeout = std::nullopt,
-        request_io_metrics* io_metrics = nullptr, std::optional<operation_deadline> deadline = std::nullopt);
-    task<redis_value> execute_owned(std::vector<std::string> args, operation_options options = {},
-        std::optional<timeout_duration> reply_timeout = std::nullopt,
-        request_io_metrics* io_metrics = nullptr, std::optional<operation_deadline> deadline = std::nullopt);
+    task<redis_value> execute_owned(redis_owned_command command, operation_options options = {}, std::optional<timeout_duration> reply_timeout = std::nullopt, request_io_metrics* io_metrics = nullptr, std::optional<operation_deadline> deadline = std::nullopt);
+    task<redis_value> execute_owned(std::vector<std::string> args, operation_options options = {}, std::optional<timeout_duration> reply_timeout = std::nullopt, request_io_metrics* io_metrics = nullptr, std::optional<operation_deadline> deadline = std::nullopt);
     // The caller keeps `args` alive until the operation completes. `deadline`
     // is copied, so repeated commands share the operation's absolute bound.
-    task<redis_value> execute_borrowed(redis_command_args_view args,
-        operation_options options, operation_deadline deadline);
-    task<std::vector<redis_value>> execute_pipeline(
-        std::vector<redis_owned_command> commands, operation_options options, bool wrap_transaction = false);
+    task<redis_value> execute_borrowed(redis_command_args_view args, operation_options options, operation_deadline deadline);
+    task<std::vector<redis_value>> execute_pipeline(std::vector<redis_owned_command> commands, operation_options options, bool wrap_transaction = false);
 
 private:
     // Every deadline belongs to a connection's transport; the slot pool only
@@ -667,10 +596,7 @@ private:
     using connection_owner_type = std::unique_ptr<redis_connection>;
 
     template <typename result_type, typename command_source_type>
-    task<result_type> execute_commands(command_source_type source, operation_options options,
-        std::optional<timeout_duration> reply_timeout,
-        std::optional<operation_deadline> deadline, request_io_metrics* io_metrics = nullptr,
-        bool wrap_transaction = false);
+    task<result_type> execute_commands(command_source_type source, operation_options options, std::optional<timeout_duration> reply_timeout, std::optional<operation_deadline> deadline, request_io_metrics* io_metrics = nullptr, bool wrap_transaction = false);
 
     const redis_config_storage& config_;
     std::optional<timeout_duration> command_timeout_;
@@ -792,16 +718,14 @@ private:
 // redis_subscription. Destroying the set with live connections terminates.
 class redis_subscription_set final {
 public:
-    redis_subscription_set(asio::io_context& io_context, asio::ssl::context& tls_context,
-        const redis_config_storage& config, const worker_ref& worker_value);
+    redis_subscription_set(asio::io_context& io_context, asio::ssl::context& tls_context, const redis_config_storage& config, const worker_ref& worker_value);
     redis_subscription_set(asio::io_context&, asio::ssl::context&, const redis_config_storage&, worker_ref&&) = delete;
     ~redis_subscription_set();
 
     redis_subscription_set(const redis_subscription_set&) = delete;
     redis_subscription_set& operator=(const redis_subscription_set&) = delete;
 
-    using connection_owner_type =
-        std::unique_ptr<redis_subscription_connection>;
+    using connection_owner_type = std::unique_ptr<redis_subscription_connection>;
 
     // A closed set opens connections that are already closing, so a late
     // subscription observes shutdown instead of connecting.
@@ -839,8 +763,7 @@ namespace ruvia::detail {
 // configuration, TLS context and worker.
 class redis_client_runtime final {
 public:
-    redis_client_runtime(asio::io_context& io_context, const worker_ref& worker_value,
-        redis_config_storage config);
+    redis_client_runtime(asio::io_context& io_context, const worker_ref& worker_value, redis_config_storage config);
     redis_client_runtime(asio::io_context&, worker_ref&&, redis_config_storage) = delete;
     ~redis_client_runtime();
 
@@ -895,8 +818,7 @@ namespace ruvia::detail {
 
 class redis_registry final {
 public:
-    redis_registry(asio::io_context& io_context,
-        std::span<const redis_definition_type> redis, worker_ref worker_value);
+    redis_registry(asio::io_context& io_context, std::span<const redis_definition_type> redis, worker_ref worker_value);
     ~redis_registry();
 
     redis_registry(const redis_registry&) = delete;
@@ -908,8 +830,7 @@ public:
     [[nodiscard]] bool empty() const noexcept;
     // `io_metrics` is the request's counter block, or null outside a request.
     [[nodiscard]] redis_session get(::ruvia::operation_scope& operation_scope, request_io_metrics* io_metrics) const;
-    [[nodiscard]] redis_session get(
-        std::string_view alias, ::ruvia::operation_scope& operation_scope, request_io_metrics* io_metrics) const;
+    [[nodiscard]] redis_session get(std::string_view alias, ::ruvia::operation_scope& operation_scope, request_io_metrics* io_metrics) const;
 
 private:
     using entry_type = std::unique_ptr<redis_client_runtime>;

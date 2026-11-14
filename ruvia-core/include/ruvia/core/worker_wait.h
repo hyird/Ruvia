@@ -29,20 +29,17 @@ template <typename owner_type>
 class worker_cancellation_target;
 
 template <typename owner_type>
-[[nodiscard]] inline std::shared_ptr<worker_cancellation_target<owner_type>>
-make_worker_cancellation_target(owner_type& owner_value, const worker_ref& worker_value);
+[[nodiscard]] inline std::shared_ptr<worker_cancellation_target<owner_type>> make_worker_cancellation_target(owner_type& owner_value, const worker_ref& worker_value);
 
 template <typename owner_type>
-class worker_cancellation_target final
-    : public std::enable_shared_from_this<worker_cancellation_target<owner_type>> {
+class worker_cancellation_target final : public std::enable_shared_from_this<worker_cancellation_target<owner_type>> {
 private:
     struct constructor_token final {};
 
 public:
-    worker_cancellation_target(
-        constructor_token, owner_type& owner_value, const worker_ref& worker_value) noexcept
-        : owner_(&owner_value),
-          worker_(worker_value) {}
+    worker_cancellation_target(constructor_token, owner_type& owner_value, const worker_ref& worker_value) noexcept :
+        owner_(&owner_value),
+        worker_(worker_value) {}
     worker_cancellation_target(const worker_cancellation_target&) = delete;
     worker_cancellation_target& operator=(const worker_cancellation_target&) = delete;
     worker_cancellation_target(worker_cancellation_target&&) = delete;
@@ -79,8 +76,7 @@ public:
     }
 
 private:
-    friend std::shared_ptr<worker_cancellation_target<owner_type>>
-    make_worker_cancellation_target<owner_type>(owner_type&, const worker_ref&);
+    friend std::shared_ptr<worker_cancellation_target<owner_type>> make_worker_cancellation_target<owner_type>(owner_type&, const worker_ref&);
 
     // Construction is restricted to make_worker_cancellation_target via constructor_token.
     std::atomic<owner_type*> owner_;
@@ -89,19 +85,17 @@ private:
 };
 
 template <typename owner_type>
-[[nodiscard]] inline std::shared_ptr<worker_cancellation_target<owner_type>>
-make_worker_cancellation_target(owner_type& owner_value, const worker_ref& worker_value) {
+[[nodiscard]] inline std::shared_ptr<worker_cancellation_target<owner_type>> make_worker_cancellation_target(owner_type& owner_value, const worker_ref& worker_value) {
     using target_type = worker_cancellation_target<owner_type>;
-    return std::make_shared<target_type>(
-        typename target_type::constructor_token{}, owner_value, worker_value);
+    return std::make_shared<target_type>(typename target_type::constructor_token{}, owner_value, worker_value);
 }
 
 template <typename target_type>
 class worker_cancellation_dispatch final {
 public:
-    worker_cancellation_dispatch(std::shared_ptr<target_type> target, std::uint64_t operation_id) noexcept
-        : target_(std::move(target)),
-          operation_id_(operation_id) {}
+    worker_cancellation_dispatch(std::shared_ptr<target_type> target, std::uint64_t operation_id) noexcept :
+        target_(std::move(target)),
+        operation_id_(operation_id) {}
     void operator()() noexcept {
         target_->dispatch(operation_id_);
     }
@@ -114,9 +108,9 @@ private:
 template <typename target_type>
 class worker_cancellation_post final {
 public:
-    worker_cancellation_post(target_type* target, std::uint64_t operation_id) noexcept
-        : target_(target),
-          operation_id_(operation_id) {
+    worker_cancellation_post(target_type* target, std::uint64_t operation_id) noexcept :
+        target_(target),
+        operation_id_(operation_id) {
         if (!target_) {
             std::terminate();
         }
@@ -139,9 +133,7 @@ private:
 };
 
 template <typename target_type>
-inline constexpr bool worker_cancellation_post_is_inline =
-    detail::move_only_function_fits_inline<worker_cancellation_post<target_type>> &&
-    detail::move_only_function_fits_inline<worker_cancellation_dispatch<target_type>>;
+inline constexpr bool worker_cancellation_post_is_inline = detail::move_only_function_fits_inline<worker_cancellation_post<target_type>> && detail::move_only_function_fits_inline<worker_cancellation_dispatch<target_type>>;
 
 // Worker-affine registration owns the supplied identity until reset(). Bind
 // owner state before arm(), which may deliver an already-requested stop inline.
@@ -154,10 +146,10 @@ class worker_cancellation_registration final {
     static_assert(worker_cancellation_post_is_inline<target_type>);
 
 public:
-    worker_cancellation_registration(const std::shared_ptr<target_type>& target, std::uint64_t& identity)
-        : target_(target.get()),
-          identity_(&identity),
-          id_(require_target(target).next_operation_id()) {
+    worker_cancellation_registration(const std::shared_ptr<target_type>& target, std::uint64_t& identity) :
+        target_(target.get()),
+        identity_(&identity),
+        id_(require_target(target).next_operation_id()) {
         identity = id_;
     }
     worker_cancellation_registration(std::shared_ptr<target_type>&&, std::uint64_t&) = delete;
@@ -261,8 +253,7 @@ public:
         if (auto* suspended = std::get_if<suspend_race_suspended_type>(&state_)) {
             const auto continuation = suspended->continuation();
             try {
-                state_.template emplace<suspend_race_ready_after_suspend_type>(
-                    std::move(value), continuation);
+                state_.template emplace<suspend_race_ready_after_suspend_type>(std::move(value), continuation);
             } catch (...) {
                 state_.template emplace<suspend_race_suspended_type>(continuation);
                 throw;
@@ -293,8 +284,8 @@ public:
 private:
     class suspend_race_suspended_type final {
     public:
-        explicit suspend_race_suspended_type(std::coroutine_handle<> continuation) noexcept
-            : continuation_(continuation) {}
+        explicit suspend_race_suspended_type(std::coroutine_handle<> continuation) noexcept :
+            continuation_(continuation) {}
 
         [[nodiscard]] std::coroutine_handle<> continuation() const noexcept {
             return continuation_;
@@ -306,9 +297,8 @@ private:
 
     class suspend_race_ready_before_suspend_type final {
     public:
-        explicit suspend_race_ready_before_suspend_type(t_type&& value) noexcept(
-            std::is_nothrow_move_constructible_v<t_type>)
-            : value_(std::move(value)) {}
+        explicit suspend_race_ready_before_suspend_type(t_type&& value) noexcept(std::is_nothrow_move_constructible_v<t_type>) :
+            value_(std::move(value)) {}
 
         [[nodiscard]] t_type take_value() && noexcept(std::is_nothrow_move_constructible_v<t_type>) {
             return std::move(value_);
@@ -320,10 +310,9 @@ private:
 
     class suspend_race_ready_after_suspend_type final {
     public:
-        suspend_race_ready_after_suspend_type(t_type&& value, std::coroutine_handle<> continuation) noexcept(
-            std::is_nothrow_move_constructible_v<t_type>)
-            : value_(std::move(value)),
-              continuation_(continuation) {}
+        suspend_race_ready_after_suspend_type(t_type&& value, std::coroutine_handle<> continuation) noexcept(std::is_nothrow_move_constructible_v<t_type>) :
+            value_(std::move(value)),
+            continuation_(continuation) {}
 
         [[nodiscard]] std::coroutine_handle<> continuation() const noexcept {
             return continuation_;
@@ -338,8 +327,7 @@ private:
         std::coroutine_handle<> continuation_;
     };
 
-    using state_type = std::variant<suspend_race_pending, suspend_race_suspended_type,
-        suspend_race_ready_before_suspend_type, suspend_race_ready_after_suspend_type>;
+    using state_type = std::variant<suspend_race_pending, suspend_race_suspended_type, suspend_race_ready_before_suspend_type, suspend_race_ready_after_suspend_type>;
 
     state_type state_;
 };
@@ -373,22 +361,18 @@ class worker_wait_slot;
 // through a worker_shutdown_registration member named
 // shutdown_registration_ (see make_worker_wait_state()).
 template <typename state_type>
-concept worker_shutdown_registered =
-    worker_shutdown_observer<state_type> &&
-    std::same_as<decltype(state_type::shutdown_registration_), worker_shutdown_registration>;
+concept worker_shutdown_registered = worker_shutdown_observer<state_type> && std::same_as<decltype(state_type::shutdown_registration_), worker_shutdown_registration>;
 
 // The domain state contract: the bound worker, the lock guarding the slot,
 // the slot itself, and the shutdown registration that routes the worker's
 // stopping notification to the slot. Every slot member is called with that
 // lock held.
 template <typename state_type, typename t_type>
-concept worker_wait_state =
-    std::is_trivially_move_constructible_v<t_type> && worker_shutdown_registered<state_type> &&
-    requires(state_type& state, const state_type& const_state) {
-        { const_state.worker() } -> std::same_as<const worker_ref&>;
-        state.lock_state();
-        { state.wait_slot() } -> std::same_as<worker_wait_slot<t_type, state_type>&>;
-    };
+concept worker_wait_state = std::is_trivially_move_constructible_v<t_type> && worker_shutdown_registered<state_type> && requires(state_type& state, const state_type& const_state) {
+    { const_state.worker() } -> std::same_as<const worker_ref&>;
+    state.lock_state();
+    { state.wait_slot() } -> std::same_as<worker_wait_slot<t_type, state_type>&>;
+};
 
 // The single pending-waiter attachment of a domain state. The state owns it by
 // value next to its domain fields and guards it with its own lock; every
@@ -496,20 +480,20 @@ template <typename t_type, typename state_type>
     requires std::is_trivially_move_constructible_v<t_type>
 class worker_single_wait_awaiter final {
 public:
-    worker_single_wait_awaiter(std::shared_ptr<state_type> state_value, operation_options options) noexcept
-        : state_(std::move(state_value)),
-          timeout_(options.timeout_),
-          stop_token_(std::move(options.stop_token_)) {
+    worker_single_wait_awaiter(std::shared_ptr<state_type> state_value, operation_options options) noexcept :
+        state_(std::move(state_value)),
+        timeout_(options.timeout_),
+        stop_token_(std::move(options.stop_token_)) {
         static_assert(worker_wait_state<state_type, t_type>);
     }
 
     worker_single_wait_awaiter(const worker_single_wait_awaiter&) = delete;
     worker_single_wait_awaiter& operator=(const worker_single_wait_awaiter&) = delete;
-    worker_single_wait_awaiter(worker_single_wait_awaiter&& other) noexcept
-        : state_(std::move(other.state_)),
-          timeout_(other.timeout_),
-          deadline_(other.deadline_),
-          stop_token_(std::move(other.stop_token_)) {
+    worker_single_wait_awaiter(worker_single_wait_awaiter&& other) noexcept :
+        state_(std::move(other.state_)),
+        timeout_(other.timeout_),
+        deadline_(other.deadline_),
+        stop_token_(std::move(other.stop_token_)) {
         if (other.started_) {
             std::terminate();
         }
@@ -579,10 +563,9 @@ public:
             if (deadline_ && slot.holds(waiter)) {
                 auto status = worker_timer_schedule_status::worker_stopping;
                 try {
-                    status = owner_value.worker().schedule_timer(timer_, *deadline_,
-                        [waiter](worker_timer_outcome outcome) noexcept {
-                            waiter->on_timer_completed(outcome);
-                        });
+                    status = owner_value.worker().schedule_timer(timer_, *deadline_, [waiter](worker_timer_outcome outcome) noexcept {
+                        waiter->on_timer_completed(outcome);
+                    });
                 } catch (...) {
                     (void)slot.detach(waiter);
                     throw;
@@ -651,8 +634,7 @@ private:
             if (!owner_value.wait_slot().detach(this)) {
                 return;
             }
-            if (!complete_status(outcome == worker_timer_outcome::expired ? worker_wait_status::timed_out
-                                                                          : worker_wait_status::worker_stopping)) {
+            if (!complete_status(outcome == worker_timer_outcome::expired ? worker_wait_status::timed_out : worker_wait_status::worker_stopping)) {
                 return;
             }
             continuation = completion_.continuation();
@@ -672,10 +654,9 @@ private:
     // closing the domain from there would. The generation keeps a stale
     // callback from cancelling a later wait on the same slot.
     void register_cancellation() {
-        stop_token_.register_callback(stop_registration_,
-            [state_ptr = state_.get(), generation = generation_] {
-                request_cancellation(*state_ptr, generation);
-            });
+        stop_token_.register_callback(stop_registration_, [state_ptr = state_.get(), generation = generation_] {
+            request_cancellation(*state_ptr, generation);
+        });
     }
 
     std::shared_ptr<state_type> state_;
@@ -702,8 +683,7 @@ template <typename state_type, typename... arg_types>
     }
 [[nodiscard]] std::shared_ptr<state_type> make_worker_wait_state(arg_types&&... args) {
     auto state_value = std::make_shared<state_type>(std::forward<arg_types>(args)...);
-    if (state_value->worker().register_shutdown(state_value, &state_type::shutdown_registration_) !=
-        worker_registration_status::registered) {
+    if (state_value->worker().register_shutdown(state_value, &state_type::shutdown_registration_) != worker_registration_status::registered) {
         throw std::runtime_error("cannot register state on a stopping worker");
     }
     return state_value;
@@ -725,8 +705,7 @@ template <typename t_type>
 class one_shot_completion;
 
 template <typename t_type>
-using one_shot_complete_result =
-    worker_delivery_result<t_type, one_shot_complete_status, one_shot_complete_status::completed>;
+using one_shot_complete_result = worker_delivery_result<t_type, one_shot_complete_status, one_shot_complete_status::completed>;
 
 namespace detail {
 
@@ -740,8 +719,8 @@ struct one_shot_ready final {};
 
 template <typename t_type>
 struct one_shot_state final {
-    explicit one_shot_state(worker_ref target)
-        : worker_(std::move(target)) {
+    explicit one_shot_state(worker_ref target) :
+        worker_(std::move(target)) {
         if (!worker_.valid()) {
             throw std::invalid_argument("one-shot requires a valid worker");
         }
@@ -772,8 +751,7 @@ struct one_shot_state final {
     worker_shutdown_registration shutdown_registration_;
     worker_ref worker_;
     std::mutex mutex_;
-    using lifecycle_type = std::variant<one_shot_pending, one_shot_completing, one_shot_ready,
-        one_shot_consumed, one_shot_receiver_closed, one_shot_worker_stopping>;
+    using lifecycle_type = std::variant<one_shot_pending, one_shot_completing, one_shot_ready, one_shot_consumed, one_shot_receiver_closed, one_shot_worker_stopping>;
     lifecycle_type lifecycle_;
     // After publishing consumed/closed, the thread that claimed ready owns this
     // stable slot until its value has been moved or destroyed outside mutex_.
@@ -786,8 +764,7 @@ void one_shot_state<t_type>::worker_stopping() noexcept {
     std::lock_guard lock(mutex_);
     // Delivered, consumed and closed outcomes stay terminal; only an
     // unresolved exchange is ended by worker shutdown.
-    if (std::holds_alternative<one_shot_pending>(lifecycle_) ||
-        std::holds_alternative<one_shot_completing>(lifecycle_)) {
+    if (std::holds_alternative<one_shot_pending>(lifecycle_) || std::holds_alternative<one_shot_completing>(lifecycle_)) {
         lifecycle_.template emplace<one_shot_worker_stopping>();
     }
     wait_slot_.complete(worker_wait_status::worker_stopping);
@@ -811,14 +788,12 @@ public:
         // Payload code may synchronously rebind this handle while the call is active.
         const auto state = state_;
         if (state == nullptr) {
-            return detail::worker_delivery_access::reject<one_shot_complete_result<t_type>>(
-                one_shot_complete_status::receiver_closed, std::move(value));
+            return detail::worker_delivery_access::reject<one_shot_complete_result<t_type>>(one_shot_complete_status::receiver_closed, std::move(value));
         }
         std::optional<one_shot_complete_status> rejection;
         {
             std::lock_guard lock(state->mutex_);
-            if (std::holds_alternative<detail::one_shot_ready>(state->lifecycle_) ||
-                std::holds_alternative<detail::one_shot_consumed>(state->lifecycle_)) {
+            if (std::holds_alternative<detail::one_shot_ready>(state->lifecycle_) || std::holds_alternative<detail::one_shot_consumed>(state->lifecycle_)) {
                 rejection = one_shot_complete_status::already_completed;
             } else if (std::holds_alternative<detail::one_shot_completing>(state->lifecycle_)) {
                 rejection = one_shot_complete_status::in_progress;
@@ -849,8 +824,7 @@ public:
             std::lock_guard lock(state->mutex_);
             if (std::holds_alternative<detail::one_shot_receiver_closed>(state->lifecycle_)) {
                 rejection = one_shot_complete_status::receiver_closed;
-            } else if (std::holds_alternative<detail::one_shot_worker_stopping>(state->lifecycle_) ||
-                       !state->worker_.accepting()) {
+            } else if (std::holds_alternative<detail::one_shot_worker_stopping>(state->lifecycle_) || !state->worker_.accepting()) {
                 state->lifecycle_.template emplace<detail::one_shot_worker_stopping>();
                 state->wait_slot_.complete(worker_wait_status::worker_stopping);
                 rejection = one_shot_complete_status::worker_stopping;
@@ -868,8 +842,8 @@ public:
     }
 
 private:
-    explicit one_shot_completion(std::shared_ptr<detail::one_shot_state<t_type>> state_value)
-        : state_(std::move(state_value)) {}
+    explicit one_shot_completion(std::shared_ptr<detail::one_shot_state<t_type>> state_value) :
+        state_(std::move(state_value)) {}
     std::shared_ptr<detail::one_shot_state<t_type>> state_;
     template <typename u_type>
     friend auto make_one_shot(worker_ref);
@@ -914,13 +888,11 @@ public:
                 wait_.complete_ready(worker_wait_status::worker_stopping);
                 return true;
             }
-            if (std::holds_alternative<detail::one_shot_receiver_closed>(owner_value.lifecycle_) ||
-                std::holds_alternative<detail::one_shot_consumed>(owner_value.lifecycle_)) {
+            if (std::holds_alternative<detail::one_shot_receiver_closed>(owner_value.lifecycle_) || std::holds_alternative<detail::one_shot_consumed>(owner_value.lifecycle_)) {
                 wait_.complete_ready(worker_wait_status::closed);
                 return true;
             }
-            assert(std::holds_alternative<detail::one_shot_pending>(owner_value.lifecycle_) ||
-                   std::holds_alternative<detail::one_shot_completing>(owner_value.lifecycle_));
+            assert(std::holds_alternative<detail::one_shot_pending>(owner_value.lifecycle_) || std::holds_alternative<detail::one_shot_completing>(owner_value.lifecycle_));
             return wait_.complete_or_publish("one-shot supports one pending receiver");
         }
 
@@ -940,8 +912,8 @@ public:
         friend class one_shot_receiver;
         using state_type = detail::one_shot_state<t_type>;
 
-        wait_operation(std::shared_ptr<state_type> state_value, operation_options options) noexcept
-            : wait_(std::move(state_value), std::move(options)) {}
+        wait_operation(std::shared_ptr<state_type> state_value, operation_options options) noexcept :
+            wait_(std::move(state_value), std::move(options)) {}
 
         worker_single_wait_awaiter<std::monostate, state_type> wait_;
     };
@@ -978,8 +950,7 @@ public:
         {
             std::lock_guard lock(state->mutex_);
             discard = std::holds_alternative<detail::one_shot_ready>(state->lifecycle_);
-            if (!discard && !std::holds_alternative<detail::one_shot_pending>(state->lifecycle_) &&
-                !std::holds_alternative<detail::one_shot_completing>(state->lifecycle_)) {
+            if (!discard && !std::holds_alternative<detail::one_shot_pending>(state->lifecycle_) && !std::holds_alternative<detail::one_shot_completing>(state->lifecycle_)) {
                 return;
             }
             state->lifecycle_.template emplace<detail::one_shot_receiver_closed>();
@@ -991,8 +962,8 @@ public:
     }
 
 private:
-    explicit one_shot_receiver(std::shared_ptr<detail::one_shot_state<t_type>> state_value)
-        : state_(std::move(state_value)) {}
+    explicit one_shot_receiver(std::shared_ptr<detail::one_shot_state<t_type>> state_value) :
+        state_(std::move(state_value)) {}
     std::shared_ptr<detail::one_shot_state<t_type>> state_;
     template <typename u_type>
     friend auto make_one_shot(worker_ref);
@@ -1078,8 +1049,7 @@ public:
 private:
     friend class pool_lease_scheduler;
 
-    pool_lease_acquire(pool_lease_scheduler::impl_type& owner_value, std::optional<operation_timeout> timeout,
-        stop_token stop_token_value) noexcept;
+    pool_lease_acquire(pool_lease_scheduler::impl_type& owner_value, std::optional<operation_timeout> timeout, stop_token stop_token_value) noexcept;
     void cancel_registrations() noexcept;
     void complete(worker_wait_result<std::size_t> result_value) noexcept;
     [[nodiscard]] std::coroutine_handle<> resolve(worker_wait_result<std::size_t> result_value) noexcept;
@@ -1128,8 +1098,7 @@ struct channel_options final {
 };
 
 template <typename t_type>
-using channel_send_result =
-    worker_delivery_result<t_type, channel_send_status, channel_send_status::sent>;
+using channel_send_result = worker_delivery_result<t_type, channel_send_status, channel_send_status::sent>;
 
 namespace detail {
 
@@ -1154,10 +1123,10 @@ struct channel_state final {
         return capacity + 1;
     }
 
-    channel_state(worker_ref target, std::size_t requested_capacity)
-        : worker_(std::move(target)),
-          slots_(slot_count(requested_capacity)),
-          capacity_(requested_capacity) {
+    channel_state(worker_ref target, std::size_t requested_capacity) :
+        worker_(std::move(target)),
+        slots_(slot_count(requested_capacity)),
+        capacity_(requested_capacity) {
         if (!worker_.valid()) {
             throw std::invalid_argument("channel requires a valid worker");
         }
@@ -1269,9 +1238,9 @@ struct channel_state final {
     // Owns one reserved or claimed slot; user destruction runs without mutex_.
     class node_guard final {
     public:
-        node_guard(channel_state& state, node* slot) noexcept
-            : state_(state),
-              slot_(slot) {}
+        node_guard(channel_state& state, node* slot) noexcept :
+            state_(state),
+            slot_(slot) {}
         node_guard(const node_guard&) = delete;
         node_guard& operator=(const node_guard&) = delete;
         ~node_guard() {
@@ -1372,11 +1341,11 @@ class channel_send_operation final {
 public:
     channel_send_operation(const channel_send_operation&) = delete;
     channel_send_operation& operator=(const channel_send_operation&) = delete;
-    channel_send_operation(channel_send_operation&& other) noexcept(std::is_nothrow_move_constructible_v<t_type>)
-        : state_(std::move(other.state_)),
-          value_(std::move(other.value_)),
-          timeout_(other.timeout_),
-          stop_token_(std::move(other.stop_token_)) {
+    channel_send_operation(channel_send_operation&& other) noexcept(std::is_nothrow_move_constructible_v<t_type>) :
+        state_(std::move(other.state_)),
+        value_(std::move(other.value_)),
+        timeout_(other.timeout_),
+        stop_token_(std::move(other.stop_token_)) {
         if (other.started_) {
             std::terminate();
         }
@@ -1443,9 +1412,9 @@ public:
             if (queued_) {
                 auto status = worker_timer_schedule_status::worker_stopping;
                 try {
-                    status = worker_.schedule_timer(timer_,
-                        deadline_.value_or(std::chrono::steady_clock::time_point::max()),
-                        [this](worker_timer_outcome outcome) noexcept { on_timer_completed(outcome); });
+                    status = worker_.schedule_timer(timer_, deadline_.value_or(std::chrono::steady_clock::time_point::max()), [this](worker_timer_outcome outcome) noexcept {
+                        on_timer_completed(outcome);
+                    });
                 } catch (...) {
                     (void)state.remove_send_waiter(*this);
                     throw;
@@ -1460,7 +1429,9 @@ public:
         // Registered only once the wait really suspends; a stop already
         // requested runs the callback inline and completes the wait.
         if (suspended && stop_token_.stoppable()) {
-            stop_token_.register_callback(stop_registration_, [this] { request_cancellation(); });
+            stop_token_.register_callback(stop_registration_, [this] {
+                request_cancellation();
+            });
         }
         return suspended;
     }
@@ -1508,12 +1479,11 @@ private:
         node* slot_;
     };
 
-    channel_send_operation(std::shared_ptr<state_type> state_value, t_type&& value, operation_options options) noexcept(
-        std::is_nothrow_move_constructible_v<t_type>)
-        : state_(std::move(state_value)),
-          value_(std::move(value)),
-          timeout_(options.timeout_),
-          stop_token_(std::move(options.stop_token_)) {}
+    channel_send_operation(std::shared_ptr<state_type> state_value, t_type&& value, operation_options options) noexcept(std::is_nothrow_move_constructible_v<t_type>) :
+        state_(std::move(state_value)),
+        value_(std::move(value)),
+        timeout_(options.timeout_),
+        stop_token_(std::move(options.stop_token_)) {}
 
     void complete_ready(outcome_type outcome) noexcept {
         (void)completion_.complete(std::move(outcome));
@@ -1538,9 +1508,7 @@ private:
             if (!state_->remove_send_waiter(*this)) {
                 return;
             }
-            if (!completion_.complete({outcome == worker_timer_outcome::expired ? channel_send_status::timed_out
-                                                                                : channel_send_status::worker_stopping,
-                    nullptr})) {
+            if (!completion_.complete({outcome == worker_timer_outcome::expired ? channel_send_status::timed_out : channel_send_status::worker_stopping, nullptr})) {
                 return;
             }
             continuation = completion_.continuation();
@@ -1713,8 +1681,8 @@ public:
     }
 
 private:
-    explicit channel_sender(std::shared_ptr<detail::channel_state<t_type>> state_value)
-        : state_(std::move(state_value)) {}
+    explicit channel_sender(std::shared_ptr<detail::channel_state<t_type>> state_value) :
+        state_(std::move(state_value)) {}
 
     std::shared_ptr<detail::channel_state<t_type>> state_;
     template <typename u_type>
@@ -1790,8 +1758,8 @@ public:
         using state_type = detail::channel_state<t_type>;
         using node = typename state_type::node;
 
-        receive_operation(std::shared_ptr<state_type> state_value, operation_options options) noexcept
-            : wait_(std::move(state_value), std::move(options)) {}
+        receive_operation(std::shared_ptr<state_type> state_value, operation_options options) noexcept :
+            wait_(std::move(state_value), std::move(options)) {}
 
         worker_single_wait_awaiter<node*, state_type> wait_;
     };
@@ -1832,8 +1800,8 @@ public:
     }
 
 private:
-    explicit channel_receiver(std::shared_ptr<detail::channel_state<t_type>> state_value)
-        : state_(std::move(state_value)) {}
+    explicit channel_receiver(std::shared_ptr<detail::channel_state<t_type>> state_value) :
+        state_(std::move(state_value)) {}
 
     std::shared_ptr<detail::channel_state<t_type>> state_;
     template <typename u_type>
@@ -1845,8 +1813,7 @@ template <typename t_type>
 // transferring the stable dispatcher endpoint into the channel state.
 // NOLINTNEXTLINE(performance-unnecessary-value-param)
 [[nodiscard]] auto make_channel(worker_ref worker_value, channel_options options) {
-    auto state_value = make_worker_wait_state<detail::channel_state<t_type>>(
-        std::move(worker_value), options.capacity_);
+    auto state_value = make_worker_wait_state<detail::channel_state<t_type>>(std::move(worker_value), options.capacity_);
     channel_sender<t_type> sender(state_value);
     return std::pair(std::move(sender), channel_receiver<t_type>(std::move(state_value)));
 }

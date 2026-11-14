@@ -91,8 +91,7 @@ void wait_until_running(ruvia::application& app) {
         } catch (const std::logic_error&) {
         }
         return false;
-    },
-        10s);
+    }, 10s);
 }
 
 std::string request(asio::io_context& io, const asio::ip::tcp::endpoint& endpoint, std::string_view path = "/ready") {
@@ -119,8 +118,7 @@ bool closed(ruvia::native_socket socket) {
 #if defined(_WIN32)
     int value = 0;
     int length = sizeof(value);
-    return ::getsockopt(socket, SOL_SOCKET, SO_TYPE, reinterpret_cast<char*>(&value), &length) == SOCKET_ERROR &&
-           ::WSAGetLastError() == WSAENOTSOCK;
+    return ::getsockopt(socket, SOL_SOCKET, SO_TYPE, reinterpret_cast<char*>(&value), &length) == SOCKET_ERROR && ::WSAGetLastError() == WSAENOTSOCK;
 #else
     return ::fcntl(socket, F_GETFD) == -1 && errno == EBADF;
 #endif
@@ -135,12 +133,9 @@ TEST(Ruvia, adding_first_routed_listener_builds_controllers_and_route_rate_limit
     ruvia::test::tcp_port_reservation raw(io);
     ruvia::test::tcp_port_reservation routed(io);
     auto& app = ruvia::app();
-    app.server({.worker_count_ = 1})
-        .listen({.address_ = "127.0.0.1", .http_ = raw.endpoint().port(), .dispatch_ = ruvia::listener_dispatch::connection})
-        .rate_limit(nullptr)
-        .on_connection(&serve_connection)
-        .on_start(nullptr)
-        .on_start([] { started.release(); });
+    app.server({.worker_count_ = 1}).listen({.address_ = "127.0.0.1", .http_ = raw.endpoint().port(), .dispatch_ = ruvia::listener_dispatch::connection}).rate_limit(nullptr).on_connection(&serve_connection).on_start(nullptr).on_start([] {
+        started.release();
+    });
     ruvia::test::app_run run(app);
     ASSERT_TRUE(started.try_acquire_for(10s));
     wait_until_running(app);
@@ -160,11 +155,9 @@ TEST(Ruvia, add_listener_prepare_failure_discards_already_adopted_sockets_withou
     ruvia::test::tcp_port_reservation addition(io);
     asio::ip::tcp::acceptor blocker(io, {asio::ip::address_v4::loopback(), 0});
     auto& app = ruvia::app();
-    app.server({.worker_count_ = 2})
-        .listen({.address_ = "127.0.0.1", .http_ = original.endpoint().port(), .dispatch_ = ruvia::listener_dispatch::connection})
-        .on_connection(&serve_connection)
-        .on_start(nullptr)
-        .on_start([] { started.release(); });
+    app.server({.worker_count_ = 2}).listen({.address_ = "127.0.0.1", .http_ = original.endpoint().port(), .dispatch_ = ruvia::listener_dispatch::connection}).on_connection(&serve_connection).on_start(nullptr).on_start([] {
+        started.release();
+    });
     ruvia::test::app_run run(app);
     ASSERT_TRUE(started.try_acquire_for(10s));
     wait_until_running(app);
@@ -222,7 +215,9 @@ TEST(Ruvia, mixed_listener_adopts_one_physical_socket_group_for_plain_and_tls_ra
         config.inherited_sockets_->https_.push_back(inherited_socket(io, endpoint));
     }
     auto& app = ruvia::app();
-    app.server({.worker_count_ = 2}).listen(std::move(config)).on_connection(&serve_connection).on_start(nullptr).on_start([] { started.release(); });
+    app.server({.worker_count_ = 2}).listen(std::move(config)).on_connection(&serve_connection).on_start(nullptr).on_start([] {
+        started.release();
+    });
     ruvia::test::app_run runner(app);
     ASSERT_TRUE(started.try_acquire_for(10s));
     asio::ssl::context client(asio::ssl::context::tls_client);
@@ -233,8 +228,7 @@ TEST(Ruvia, mixed_listener_adopts_one_physical_socket_group_for_plain_and_tls_ra
         asio::ssl::stream<asio::ip::tcp::socket> stream(io, client);
         stream.next_layer().connect(endpoint);
         stream.handshake(asio::ssl::stream_base::client);
-        asio::write(stream, asio::buffer(std::string_view(
-                                "GET /ready HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")));
+        asio::write(stream, asio::buffer(std::string_view("GET /ready HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")));
         EXPECT_TRUE(ruvia::test::read_to_end(stream).ends_with("ready"));
     }
     app.stop();
@@ -246,11 +240,9 @@ TEST(Ruvia, runtime_tls_listener_preparation_does_not_block_its_caller_worker) {
     asio::io_context io;
     ruvia::test::tcp_port_reservation original(io), secure(io);
     auto& app = ruvia::app();
-    app.server({.worker_count_ = 1})
-        .listen({.address_ = "127.0.0.1", .http_ = original.endpoint().port(), .dispatch_ = ruvia::listener_dispatch::connection})
-        .on_connection(&serve_connection)
-        .on_start(nullptr)
-        .on_start([] { started.release(); });
+    app.server({.worker_count_ = 1}).listen({.address_ = "127.0.0.1", .http_ = original.endpoint().port(), .dispatch_ = ruvia::listener_dispatch::connection}).on_connection(&serve_connection).on_start(nullptr).on_start([] {
+        started.release();
+    });
     ruvia::test::app_run run(app);
     ASSERT_TRUE(started.try_acquire_for(10s));
     wait_until_running(app);
@@ -264,11 +256,12 @@ TEST(Ruvia, runtime_tls_listener_preparation_does_not_block_its_caller_worker) {
     entered.acquire();
 
     const auto loop = control_loop();
-    auto addition = loop.start(app.add_listener(loop.worker(),
-        {.address_ = "127.0.0.1", .https_ = secure.endpoint().port(), .tls_ = {.identity_ = {.certificate_chain_file_ = identity.ca_file_, .private_key_file_ = identity.private_key_file()}}, .dispatch_ = ruvia::listener_dispatch::connection}));
+    auto addition = loop.start(app.add_listener(loop.worker(), {.address_ = "127.0.0.1", .https_ = secure.endpoint().port(), .tls_ = {.identity_ = {.certificate_chain_file_ = identity.ca_file_, .private_key_file_ = identity.private_key_file()}}, .dispatch_ = ruvia::listener_dispatch::connection}));
     std::promise<void> heartbeat;
     auto observed = heartbeat.get_future();
-    const auto posted = loop.worker().post([&heartbeat] { heartbeat.set_value(); });
+    const auto posted = loop.worker().post([&heartbeat] {
+        heartbeat.set_value();
+    });
     EXPECT_EQ(posted, ruvia::post_status::accepted);
     if (posted == ruvia::post_status::accepted) {
         EXPECT_EQ(observed.wait_for(1s), std::future_status::ready);
@@ -287,8 +280,7 @@ TEST(Ruvia, runtime_tls_listener_preparation_does_not_block_its_caller_worker) {
     asio::ssl::stream<asio::ip::tcp::socket> stream(io, client);
     stream.next_layer().connect(secure.endpoint());
     stream.handshake(asio::ssl::stream_base::client);
-    asio::write(stream, asio::buffer(std::string_view(
-                            "GET /ready HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")));
+    asio::write(stream, asio::buffer(std::string_view("GET /ready HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")));
     EXPECT_TRUE(ruvia::test::read_to_end(stream).ends_with("ready"));
     app.stop();
     run.join();
@@ -304,12 +296,14 @@ TEST(Ruvia, application_prepared_batch_waits_for_publication_and_rolls_back_fail
     app.server({.worker_count_ = 2})
         .listen({.address_ = "127.0.0.1", .http_ = original.endpoint().port(), .dispatch_ = ruvia::listener_dispatch::connection})
         .on_connection([&](ruvia::server_connection& connection) -> ruvia::task<void> {
-            EXPECT_TRUE(published.load());
-            ++calls;
-            co_await serve_connection(connection);
-        })
+        EXPECT_TRUE(published.load());
+        ++calls;
+        co_await serve_connection(connection);
+    })
         .on_start(nullptr)
-        .on_start([] { started.release(); });
+        .on_start([] {
+        started.release();
+    });
     ruvia::test::app_run run(app);
     ASSERT_TRUE(started.try_acquire_for(10s));
     wait_until_running(app);

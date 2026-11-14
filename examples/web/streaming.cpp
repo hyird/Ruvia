@@ -54,8 +54,7 @@ private:
         std::size_t bytes_value = 0;
         auto reader_value = c.req().multipart_reader();
         while (auto part = co_await reader_value.read()) {
-            if (part->phase() == ruvia::multipart_chunk_phase::first ||
-                part->phase() == ruvia::multipart_chunk_phase::complete) {
+            if (part->phase() == ruvia::multipart_chunk_phase::first || part->phase() == ruvia::multipart_chunk_phase::complete) {
                 ++parts;
             }
             bytes_value += part->body().size();
@@ -77,8 +76,7 @@ private:
         }
         co_await stream.write("part 1\n");
         co_await stream.writeln("part 2");
-        if (co_await stream.sleep(std::chrono::milliseconds(20)) ==
-            ruvia::timer_sleep_result::stop_requested) {
+        if (co_await stream.sleep(std::chrono::milliseconds(20)) == ruvia::timer_sleep_result::stop_requested) {
             co_return;
         }
         if (!stream.aborted()) {
@@ -94,15 +92,11 @@ private:
         // 客户端断开（FIN/RST）会停止 c.stop_token()；把它传给业务订阅等待。
         const auto stop = c.stop_token();
         co_await events_value.write({.data_ = "connected", .event_ = "open", .id_ = "1"});
-        if (co_await ruvia::sleep_for(c.worker(), std::chrono::milliseconds(20), stop) ==
-            ruvia::timer_sleep_result::stop_requested) {
+        if (co_await ruvia::sleep_for(c.worker(), std::chrono::milliseconds(20), stop) == ruvia::timer_sleep_result::stop_requested) {
             co_return;
         }
         if (!events_value.aborted()) {
-            co_await events_value.write({.data_ = "heartbeat",
-                .event_ = "tick",
-                .id_ = "2",
-                .retry_ = std::chrono::milliseconds{3000}});
+            co_await events_value.write({.data_ = "heartbeat", .event_ = "tick", .id_ = "2", .retry_ = std::chrono::milliseconds{3000}});
         }
     }
 };

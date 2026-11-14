@@ -62,9 +62,7 @@ public:
     const worker_ref& worker() const&& = delete;
 
     void run();
-    void run(move_only_function<void()> startup_handler,
-        move_only_function<void(std::exception_ptr)> failure_handler,
-        move_only_function<void()> shutdown_handler);
+    void run(move_only_function<void()> startup_handler, move_only_function<void(std::exception_ptr)> failure_handler, move_only_function<void()> shutdown_handler);
 
     void close() noexcept;
     void stop_timers() noexcept;
@@ -255,8 +253,8 @@ private:
     }
 
     struct lease_token_type final {
-        explicit lease_token_type(std::shared_ptr<event_loop_state> owner_value) noexcept
-            : owner_(std::move(owner_value)) {}
+        explicit lease_token_type(std::shared_ptr<event_loop_state> owner_value) noexcept :
+            owner_(std::move(owner_value)) {}
         ~lease_token_type();
         std::shared_ptr<event_loop_state> owner_;
     };
@@ -292,8 +290,7 @@ private:
 // A caller-owned io_context bound to one loop: its claim, the worker endpoint,
 // and the same worker stop chain that a pool loop's worker_runtime owns.
 struct attached_context final {
-    attached_context(asio::io_context& io_context, std::size_t queue_capacity, blocking_pool* pool,
-        move_only_function<void(std::exception_ptr)> failure);
+    attached_context(asio::io_context& io_context, std::size_t queue_capacity, blocking_pool* pool, move_only_function<void(std::exception_ptr)> failure);
 
     external_context_claim claim_;
     worker_runtime_context runtime_;
@@ -318,8 +315,7 @@ struct event_loop_state final : std::enable_shared_from_this<event_loop_state> {
 
     event_loop_state(std::size_t queue_capacity, blocking_pool* pool);
     explicit event_loop_state(worker_runtime& runtime);
-    event_loop_state(asio::io_context& external_context, std::size_t queue_capacity, blocking_pool* pool,
-        move_only_function<void(std::exception_ptr)> failure);
+    event_loop_state(asio::io_context& external_context, std::size_t queue_capacity, blocking_pool* pool, move_only_function<void(std::exception_ptr)> failure);
 
     [[nodiscard]] worker_runtime& owned_runtime() noexcept {
         return *std::get_if<worker_runtime>(&context_ownership_);
@@ -413,8 +409,7 @@ struct timer_slot final {
 // Heap order: earliest deadline first, ties broken by registration order.
 struct timer_entry_later final {
     bool operator()(const timer_entry& left, const timer_entry& right) const noexcept {
-        return left.deadline_ > right.deadline_ ||
-               (left.deadline_ == right.deadline_ && left.sequence_ > right.sequence_);
+        return left.deadline_ > right.deadline_ || (left.deadline_ == right.deadline_ && left.sequence_ > right.sequence_);
     }
 };
 
@@ -459,15 +454,12 @@ public:
     }
     // Links `registration`, a member of the object `owner` aliases, for both
     // stop phases; worker_stopping once the worker stops accepting.
-    [[nodiscard]] worker_registration_status register_shutdown(worker_shutdown_registration& registration,
-        std::weak_ptr<void> owner, const worker_shutdown_operations_type& operations);
+    [[nodiscard]] worker_registration_status register_shutdown(worker_shutdown_registration& registration, std::weak_ptr<void> owner, const worker_shutdown_operations_type& operations);
     // Runs after the first stopping batch has notified every hook, or now if
     // no batch is active. The active bit is published with accepting=false.
     void when_shutdown_notifications_complete(move_only_function<void()> callback);
     void when_idle(move_only_function<void()> callback);
-    worker_timer_schedule_status schedule_timer(worker_timer_registration& registration,
-        std::chrono::steady_clock::time_point deadline,
-        move_only_function<void(worker_timer_outcome)> completion);
+    worker_timer_schedule_status schedule_timer(worker_timer_registration& registration, std::chrono::steady_clock::time_point deadline, move_only_function<void(worker_timer_outcome)> completion);
     // From any thread. A notified cancellation of a still-live timer delivers
     // `cancelled` inline from the handler a foreign thread posts, or deferred
     // when the caller is already running on this worker.
@@ -486,9 +478,7 @@ public:
     // context has drained but before that identity is cleared. Startup failures
     // enter the same first-failure path as handler failures. Shutdown is a
     // terminal cleanup hook and must not throw.
-    void run_context(move_only_function<void()> startup_handler,
-        move_only_function<void(std::exception_ptr)> failure_handler,
-        move_only_function<void()> shutdown_handler);
+    void run_context(move_only_function<void()> startup_handler, move_only_function<void(std::exception_ptr)> failure_handler, move_only_function<void()> shutdown_handler);
     void close() noexcept;
     // Called after worker activity is serialized with teardown (by a joined
     // pool thread, an attached context's terminal handler, or its context
@@ -517,8 +507,8 @@ private:
     friend class ruvia::worker_shutdown_registration;
     static constexpr std::size_t no_node = static_cast<std::size_t>(-1);
     struct waiter_node_type final {
-        explicit waiter_node_type(move_only_function<void()> callback_value) noexcept
-            : callback_(std::move(callback_value)) {}
+        explicit waiter_node_type(move_only_function<void()> callback_value) noexcept :
+            callback_(std::move(callback_value)) {}
 
         move_only_function<void()> callback_;
         waiter_node_type* next_{nullptr};
@@ -593,8 +583,7 @@ private:
     [[nodiscard]] move_only_function<void(worker_timer_outcome)> release_timer_slot(std::size_t slot) noexcept;
     // Removes a live timer from the queue and hands back its completion; empty
     // when the timer already expired or was cancelled.
-    [[nodiscard]] move_only_function<void(worker_timer_outcome)> take_timer(
-        std::size_t slot, std::uint64_t generation) noexcept;
+    [[nodiscard]] move_only_function<void(worker_timer_outcome)> take_timer(std::size_t slot, std::uint64_t generation) noexcept;
 
     asio::io_context& io_context_;
     std::unique_ptr<asio::steady_timer> timer_;
@@ -648,15 +637,13 @@ class runtime_lifecycle final {
 public:
     [[nodiscard]] bool start() noexcept {
         auto expected = worker_runtime_state::ready;
-        return state_.compare_exchange_strong(
-            expected, worker_runtime_state::running, std::memory_order_acq_rel, std::memory_order_acquire);
+        return state_.compare_exchange_strong(expected, worker_runtime_state::running, std::memory_order_acq_rel, std::memory_order_acquire);
     }
 
     [[nodiscard]] bool request_stop() noexcept {
         auto observed_value = state_.load(std::memory_order_acquire);
         while (observed_value == worker_runtime_state::ready || observed_value == worker_runtime_state::running) {
-            if (state_.compare_exchange_weak(observed_value, worker_runtime_state::stopping, std::memory_order_acq_rel,
-                    std::memory_order_acquire)) {
+            if (state_.compare_exchange_weak(observed_value, worker_runtime_state::stopping, std::memory_order_acq_rel, std::memory_order_acquire)) {
                 return true;
             }
         }
@@ -665,8 +652,7 @@ public:
 
     void complete_stop() noexcept {
         auto expected = worker_runtime_state::stopping;
-        (void)state_.compare_exchange_strong(
-            expected, worker_runtime_state::stopped, std::memory_order_acq_rel, std::memory_order_acquire);
+        (void)state_.compare_exchange_strong(expected, worker_runtime_state::stopped, std::memory_order_acq_rel, std::memory_order_acquire);
     }
 
     [[nodiscard]] worker_runtime_state state() const noexcept {
@@ -728,23 +714,22 @@ public:
         reached,
         aborted };
 
-    explicit impl_type(worker_runtime_options options)
-        : io_context_(
-              asio::config_from_concurrency_hint(options.io_policy_ == worker_io_policy::single_owner
-                                                     ? ASIO_CONCURRENCY_HINT_UNSAFE_IO
-                                                     : ASIO_CONCURRENCY_HINT_DEFAULT)),
-          context_(io_context_, options.queue_capacity_, options.blocking_pool_),
-          stop_(context_) {
+    explicit impl_type(worker_runtime_options options) :
+        io_context_(asio::config_from_concurrency_hint(options.io_policy_ == worker_io_policy::single_owner ? ASIO_CONCURRENCY_HINT_UNSAFE_IO : ASIO_CONCURRENCY_HINT_DEFAULT)),
+        context_(io_context_, options.queue_capacity_, options.blocking_pool_),
+        stop_(context_) {
         stop_.configure({
-            .stop_admission_ = [this] { begin_stop_admission(); },
-            // The hook's target may reenter finalize() while it moves or dies.
-            .finalize_ =
+            .stop_admission_ =
                 [this] {
-                    auto hook = std::move(hooks_.finalize_);
-                    if (hook) {
-                        hook();
-                    }
-                },
+            begin_stop_admission();
+        },
+            // The hook's target may reenter finalize() while it moves or dies.
+            .finalize_ = [this] {
+            auto hook = std::move(hooks_.finalize_);
+            if (hook) {
+                hook();
+            }
+        },
         });
     }
 
@@ -765,8 +750,7 @@ public:
 
     void bind_group(worker_group& group, worker_runtime& member) {
         const std::lock_guard lock(mutex_);
-        if (group_ != nullptr || group_notifications_ != 0 || failure_.failed() ||
-            lifecycle_.state() != worker_runtime_state::ready) {
+        if (group_ != nullptr || group_notifications_ != 0 || failure_.failed() || lifecycle_.state() != worker_runtime_state::ready) {
             throw std::logic_error("worker group member must be cold and belong to one group");
         }
         group_ = &group;
@@ -780,7 +764,9 @@ public:
         }
         group_ = nullptr;
         group_member_ = nullptr;
-        condition_.wait(lock, [this] { return group_notifications_ == 0; });
+        condition_.wait(lock, [this] {
+            return group_notifications_ == 0;
+        });
     }
 
     void notify_group(std::exception_ptr failure = {}) noexcept {
@@ -887,7 +873,9 @@ public:
             }
         }
         auto created = std::make_shared<detail::event_loop_state>(owner);
-        created->failure_sink_ = [&owner](std::exception_ptr failure) { (void)owner.fail(std::move(failure)); };
+        created->failure_sink_ = [&owner](std::exception_ptr failure) {
+            (void)owner.fail(std::move(failure));
+        };
         {
             const std::lock_guard lock(mutex_);
             if (loop_) {
@@ -897,8 +885,7 @@ public:
         }
         // A worker that already stops never notifies the loop; retire its
         // admission directly.
-        if (context_.worker().register_shutdown(created, &detail::event_loop_state::shutdown_registration_) !=
-            worker_registration_status::registered) {
+        if (context_.worker().register_shutdown(created, &detail::event_loop_state::shutdown_registration_) != worker_registration_status::registered) {
             created->stop();
         }
         return created;
@@ -914,7 +901,9 @@ public:
             return false;
         }
         try {
-            thread_ = std::thread([this] { run(true); });
+            thread_ = std::thread([this] {
+                run(true);
+            });
         } catch (...) {
             const auto failure = std::current_exception();
             lock.unlock();
@@ -928,8 +917,7 @@ public:
     void mark_ready() noexcept {
         {
             const std::lock_guard lock(mutex_);
-            if (ready_ != phase_type::pending ||
-                lifecycle_.state() != worker_runtime_state::running) {
+            if (ready_ != phase_type::pending || lifecycle_.state() != worker_runtime_state::running) {
                 return;
             }
             ready_ = phase_type::reached;
@@ -942,7 +930,9 @@ public:
         if (lifecycle_.state() == worker_runtime_state::ready) {
             throw std::logic_error("worker runtime has not been launched");
         }
-        phase_changed_.wait(lock, [&] { return phase != phase_type::pending || failure_.failed(); });
+        phase_changed_.wait(lock, [&] {
+            return phase != phase_type::pending || failure_.failed();
+        });
         if (const auto failure = failure_.observe()) {
             std::rethrow_exception(failure);
         }
@@ -961,7 +951,9 @@ public:
             serve_requested_ = true;
         }
         // A refused control means stopping already aborted the serving phase.
-        (void)post_control([this] { apply_serve(); });
+        (void)post_control([this] {
+            apply_serve();
+        });
     }
 
     void apply_serve() noexcept {
@@ -978,8 +970,7 @@ public:
         }
         {
             const std::lock_guard lock(mutex_);
-            if (serving_ != phase_type::pending ||
-                lifecycle_.state() != worker_runtime_state::running) {
+            if (serving_ != phase_type::pending || lifecycle_.state() != worker_runtime_state::running) {
                 return;
             }
             serving_ = phase_type::reached;
@@ -1063,18 +1054,17 @@ public:
 
     void run(bool launch_startup) noexcept {
         try {
-            context_.run(
-                [this, launch_startup] {
-                    if (launch_startup && hooks_.startup_) {
-                        hooks_.startup_();
-                    }
-                },
-                [this](std::exception_ptr failure) noexcept { (void)fail(std::move(failure)); },
-                [this] {
-                    if (hooks_.shutdown_) {
-                        hooks_.shutdown_();
-                    }
-                });
+            context_.run([this, launch_startup] {
+                if (launch_startup && hooks_.startup_) {
+                    hooks_.startup_();
+                }
+            }, [this](std::exception_ptr failure) noexcept {
+                (void)fail(std::move(failure));
+            }, [this] {
+                if (hooks_.shutdown_) {
+                    hooks_.shutdown_();
+                }
+            });
         } catch (...) {
             (void)record_failure(std::current_exception(), false);
         }
@@ -1100,17 +1090,17 @@ public:
             return 0;
         }
         if (!thread_.joinable()) {
-            thread_ = std::thread([this] { run(false); });
+            thread_ = std::thread([this] {
+                run(false);
+            });
         }
         HANDLE duplicate{};
-        if (!::DuplicateHandle(::GetCurrentProcess(), thread_.native_handle(),
-                ::GetCurrentProcess(), &duplicate, SYNCHRONIZE, FALSE, 0)) {
+        if (!::DuplicateHandle(::GetCurrentProcess(), thread_.native_handle(), ::GetCurrentProcess(), &duplicate, SYNCHRONIZE, FALSE, 0)) {
             const auto error = ::GetLastError();
             if (!std::in_range<int>(error)) {
                 throw std::runtime_error("worker thread handle duplication returned an out-of-range system error");
             }
-            throw std::system_error(static_cast<int>(error), std::system_category(),
-                "failed to duplicate worker thread wait handle");
+            throw std::system_error(static_cast<int>(error), std::system_category(), "failed to duplicate worker thread wait handle");
         }
         return reinterpret_cast<std::uintptr_t>(duplicate);
     }
@@ -1130,7 +1120,9 @@ public:
             }
             // Wait for an external stop dispatch before establishing an owner
             // and draining its work, even when our stop lost its transition.
-            condition_.wait(lock, [this] { return !joining_ && !stop_dispatching_; });
+            condition_.wait(lock, [this] {
+                return !joining_ && !stop_dispatching_;
+            });
             if (joined_) {
                 return;
             }
@@ -1143,7 +1135,9 @@ public:
         }
         if (drain_unstarted) {
             try {
-                joining_thread = std::thread([this] { run(false); });
+                joining_thread = std::thread([this] {
+                    run(false);
+                });
             } catch (...) {
                 // Thread creation failure does not waive accepted work or
                 // owner-affine cleanup. Establish owner identity synchronously.
@@ -1191,8 +1185,8 @@ public:
     bool stop_admission_delegated_{false};
 };
 
-worker_runtime::worker_runtime(worker_runtime_options options)
-    : impl_(std::make_unique<impl_type>(options)) {}
+worker_runtime::worker_runtime(worker_runtime_options options) :
+    impl_(std::make_unique<impl_type>(options)) {}
 
 worker_runtime::~worker_runtime() {
     impl_->request_stop();
@@ -1259,9 +1253,9 @@ void worker_runtime::join() {
     impl_->join();
 }
 #if defined(_WIN32)
-worker_runtime::thread_join_operation::thread_join_operation(worker_runtime& owner, worker_ref caller) noexcept
-    : owner_(&owner),
-      caller_(std::move(caller)) {}
+worker_runtime::thread_join_operation::thread_join_operation(worker_runtime& owner, worker_ref caller) noexcept :
+    owner_(&owner),
+    caller_(std::move(caller)) {}
 
 worker_runtime::thread_join_operation::~thread_join_operation() {
     if (started_ && !resumed_) {
@@ -1278,8 +1272,7 @@ bool worker_runtime::thread_join_operation::await_ready() {
     }
     owner_->request_stop();
     const std::lock_guard lock(owner_->impl_->mutex_);
-    if (owner_->impl_->joining_ || (owner_->impl_->stop_dispatching_ &&
-                                       owner_->impl_->stop_dispatch_thread_ == std::this_thread::get_id())) {
+    if (owner_->impl_->joining_ || (owner_->impl_->stop_dispatching_ && owner_->impl_->stop_dispatch_thread_ == std::this_thread::get_id())) {
         throw std::logic_error("cannot prepare a worker thread wait during join or its own stop dispatch");
     }
     started_ = true;
@@ -1341,11 +1334,10 @@ worker_runtime_context& worker_runtime::context() & noexcept {
     return impl_->context_;
 }
 
-worker_runtime_context::worker_runtime_context(
-    asio::io_context& io_context, std::size_t queue_capacity, blocking_pool* pool)
-    : io_context_(&io_context),
-      dispatcher_(std::make_shared<detail::worker_dispatcher>(io_context, queue_capacity, pool)),
-      worker_(detail::worker_ref_access::make(dispatcher_)) {}
+worker_runtime_context::worker_runtime_context(asio::io_context& io_context, std::size_t queue_capacity, blocking_pool* pool) :
+    io_context_(&io_context),
+    dispatcher_(std::make_shared<detail::worker_dispatcher>(io_context, queue_capacity, pool)),
+    worker_(detail::worker_ref_access::make(dispatcher_)) {}
 
 worker_runtime_context::~worker_runtime_context() {
     detach();
@@ -1363,11 +1355,8 @@ void worker_runtime_context::run() {
     dispatcher_->run_context({}, {}, {});
 }
 
-void worker_runtime_context::run(move_only_function<void()> startup_handler,
-    move_only_function<void(std::exception_ptr)> failure_handler,
-    move_only_function<void()> shutdown_handler) {
-    dispatcher_->run_context(
-        std::move(startup_handler), std::move(failure_handler), std::move(shutdown_handler));
+void worker_runtime_context::run(move_only_function<void()> startup_handler, move_only_function<void(std::exception_ptr)> failure_handler, move_only_function<void()> shutdown_handler) {
+    dispatcher_->run_context(std::move(startup_handler), std::move(failure_handler), std::move(shutdown_handler));
 }
 
 void worker_runtime_context::close() noexcept {
@@ -1385,9 +1374,9 @@ void worker_runtime_context::detach() noexcept {
 
 namespace ruvia::detail {
 
-worker_stop_chain::worker_stop_chain(worker_runtime_context& context)
-    : context_(context),
-      work_(asio::make_work_guard(context.io_context())) {}
+worker_stop_chain::worker_stop_chain(worker_runtime_context& context) :
+    context_(context),
+    work_(asio::make_work_guard(context.io_context())) {}
 
 void worker_stop_chain::configure(hooks_type hooks) noexcept {
     {
@@ -1452,7 +1441,9 @@ void worker_stop_chain::abandon() noexcept {
 }
 
 void worker_stop_chain::defer_stop_control_locked() noexcept {
-    worker_ref_access::defer_or_terminate(context_.worker(), [this] { apply_stop(); });
+    worker_ref_access::defer_or_terminate(context_.worker(), [this] {
+        apply_stop();
+    });
 }
 
 void worker_stop_chain::apply_stop() noexcept {
@@ -1653,7 +1644,9 @@ std::exception_ptr worker_group::join(std::exception_ptr primary) noexcept {
     request_stop();
     {
         std::unique_lock lock(mutex_);
-        stop_changed_.wait(lock, [this] { return !stop_dispatching_ && !joining_; });
+        stop_changed_.wait(lock, [this] {
+            return !stop_dispatching_ && !joining_;
+        });
         if (joined_) {
             return join_failure_;
         }
@@ -1725,7 +1718,9 @@ bool worker_group::launch(worker_runtime& member) {
 
 void worker_group::wait_for_stop_dispatch() noexcept {
     std::unique_lock lock(mutex_);
-    stop_changed_.wait(lock, [this] { return !stop_dispatching_; });
+    stop_changed_.wait(lock, [this] {
+        return !stop_dispatching_;
+    });
 }
 
 void worker_group::rethrow_phase_failure(std::exception_ptr fallback) {
@@ -1796,8 +1791,7 @@ struct event_loop_pool::impl_type final {
         }
         loops_.reserve(count);
         for (std::size_t i = 0; i < count; ++i) {
-            loops_.push_back(std::make_shared<detail::event_loop_state>(
-                options.queue_capacity_, options.blocking_pool_));
+            loops_.push_back(std::make_shared<detail::event_loop_state>(options.queue_capacity_, options.blocking_pool_));
             loops_.back()->install_shutdown_registration();
         }
     }
@@ -1818,13 +1812,14 @@ struct event_loop_pool::impl_type final {
             auto* const stable_runtime = &loop->owned_runtime();
             stable_runtime->configure({
                 .stop_admission_ = [weak_loop, stable_runtime] {
-                    if (const auto locked_loop = weak_loop.lock()) {
-                        locked_loop->complete_stop_admission();
-                    } else {
-                        // Construction rollback can destroy an unpublished
-                        // state before its core owner drains this control.
-                        stable_runtime->finalize();
-                    } },
+                if (const auto locked_loop = weak_loop.lock()) {
+                    locked_loop->complete_stop_admission();
+                } else {
+                    // Construction rollback can destroy an unpublished
+                    // state before its core owner drains this control.
+                    stable_runtime->finalize();
+                }
+            },
             });
             group_.add(*stable_runtime);
         }
@@ -1882,14 +1877,15 @@ struct event_loop_pool::impl_type final {
     std::atomic<std::size_t> next_index_{0};
 };
 
-event_loop_pool::event_loop_pool(event_loop_pool_options options)
-    : impl_(std::make_shared<impl_type>(options)) {
+event_loop_pool::event_loop_pool(event_loop_pool_options options) :
+    impl_(std::make_shared<impl_type>(options)) {
     impl_->bind_callbacks(impl_);
 }
 
 event_loop_pool::~event_loop_pool() {
-    if (std::ranges::any_of(
-            impl_->loops_, [](const auto& loop) { return loop->runtime_.worker().is_current(); })) {
+    if (std::ranges::any_of(impl_->loops_, [](const auto& loop) {
+        return loop->runtime_.worker().is_current();
+    })) {
         std::terminate();
     }
     impl_->stop();
@@ -1910,8 +1906,9 @@ void event_loop_pool::stop() noexcept {
 }
 
 void event_loop_pool::join() {
-    if (std::ranges::any_of(
-            impl_->loops_, [](const auto& loop) { return loop->runtime_.worker().is_current(); })) {
+    if (std::ranges::any_of(impl_->loops_, [](const auto& loop) {
+        return loop->runtime_.worker().is_current();
+    })) {
         throw std::logic_error("cannot join an event loop pool from one of its workers");
     }
     impl_->stop();
@@ -1951,8 +1948,7 @@ namespace {
 
 // Routes through the loop while it is alive, or to the unhandled-failure
 // diagnostic under `context` once it has retired.
-void report_through_loop(const std::weak_ptr<detail::event_loop_state>& loop, std::exception_ptr failure,
-    const char* context) noexcept {
+void report_through_loop(const std::weak_ptr<detail::event_loop_state>& loop, std::exception_ptr failure, const char* context) noexcept {
     if (const auto state_value = loop.lock()) {
         state_value->route_failure(std::move(failure), context);
         return;
@@ -1968,8 +1964,8 @@ class external_context_attachment_service final : public asio::execution_context
 public:
     static asio::execution_context::id id;
 
-    explicit external_context_attachment_service(asio::execution_context& context_value)
-        : asio::execution_context::service(context_value) {}
+    explicit external_context_attachment_service(asio::execution_context& context_value) :
+        asio::execution_context::service(context_value) {}
 
     [[nodiscard]] bool claim() noexcept {
         const std::lock_guard lock(mutex_);
@@ -2030,8 +2026,8 @@ private:
 
 asio::execution_context::id external_context_attachment_service::id;
 
-external_context_claim::external_context_claim(asio::io_context& io_context)
-    : service_(&asio::use_service<external_context_attachment_service>(io_context)) {
+external_context_claim::external_context_claim(asio::io_context& io_context) :
+    service_(&asio::use_service<external_context_attachment_service>(io_context)) {
     if (!service_->claim()) {
         throw std::invalid_argument("an io_context can have only one Ruvia event loop attachment");
     }
@@ -2052,12 +2048,11 @@ void external_context_claim::release(event_loop_state* state_value) noexcept {
     service_->release_state(state_value);
 }
 
-attached_context::attached_context(asio::io_context& io_context, std::size_t queue_capacity, blocking_pool* pool,
-    move_only_function<void(std::exception_ptr)> failure)
-    : claim_(io_context),
-      runtime_(io_context, queue_capacity, pool),
-      stop_(runtime_),
-      failure_(std::move(failure)) {
+attached_context::attached_context(asio::io_context& io_context, std::size_t queue_capacity, blocking_pool* pool, move_only_function<void(std::exception_ptr)> failure) :
+    claim_(io_context),
+    runtime_(io_context, queue_capacity, pool),
+    stop_(runtime_),
+    failure_(std::move(failure)) {
     worker_ref_access::enable_external_runner(runtime_.worker());
 }
 
@@ -2065,16 +2060,14 @@ attached_context::attached_context(asio::io_context& io_context, std::size_t que
 // returned task frame and its completion chain have retired.
 class event_loop_stop_listener final : public std::enable_shared_from_this<event_loop_stop_listener> {
 public:
-    event_loop_stop_listener(worker_ref worker_value, asio::io_context::executor_type executor,
-        move_only_function<task<void>()> callback_value, std::weak_ptr<event_loop_state> loop)
-        : worker_(std::move(worker_value)),
-          executor_(std::move(executor)),
-          callback_(std::move(callback_value)),
-          loop_(std::move(loop)) {}
+    event_loop_stop_listener(worker_ref worker_value, asio::io_context::executor_type executor, move_only_function<task<void>()> callback_value, std::weak_ptr<event_loop_state> loop) :
+        worker_(std::move(worker_value)),
+        executor_(std::move(executor)),
+        callback_(std::move(callback_value)),
+        loop_(std::move(loop)) {}
 
     void install_shutdown_registration() {
-        if (worker_.register_shutdown(shared_from_this(), &event_loop_stop_listener::shutdown_registration_) !=
-            worker_registration_status::registered) {
+        if (worker_.register_shutdown(shared_from_this(), &event_loop_stop_listener::shutdown_registration_) != worker_registration_status::registered) {
             throw std::runtime_error("cannot register a stop callback on a stopping event loop");
         }
     }
@@ -2120,8 +2113,9 @@ public:
             start_callback(std::move(self));
             return;
         }
-        worker_ref_access::defer_or_terminate(worker_,
-            [self = std::move(self)]() mutable noexcept { self->start_callback(std::move(self)); });
+        worker_ref_access::defer_or_terminate(worker_, [self = std::move(self)]() mutable noexcept {
+            self->start_callback(std::move(self));
+        });
     }
 
 private:
@@ -2152,16 +2146,14 @@ private:
         }
 
         try {
-            async_start(std::move(*task),
-                asio::bind_executor(executor_,
-                    [self = std::move(self)](std::exception_ptr failure) mutable {
-                        if (failure != nullptr) {
-                            self->report(std::move(failure));
-                        }
-                        self->callback_ = nullptr;
-                        auto active_loop = std::move(self->active_loop_);
-                        active_loop->retirement_.finish();
-                    }));
+            async_start(std::move(*task), asio::bind_executor(executor_, [self = std::move(self)](std::exception_ptr failure) mutable {
+                if (failure != nullptr) {
+                    self->report(std::move(failure));
+                }
+                self->callback_ = nullptr;
+                auto active_loop = std::move(self->active_loop_);
+                active_loop->retirement_.finish();
+            }));
         } catch (...) {
             report(std::current_exception());
             std::terminate();
@@ -2181,39 +2173,39 @@ private:
     std::shared_ptr<event_loop_state> active_loop_;
 };
 
-event_loop_state::event_loop_state(std::size_t queue_capacity, blocking_pool* pool)
-    : context_ownership_(std::in_place_type<worker_runtime>,
-          worker_runtime_options{.queue_capacity_ = queue_capacity, .blocking_pool_ = pool}),
-      io_context_(&owned_runtime().io_context()),
-      executor_(io_context_->get_executor()),
-      runtime_(owned_runtime().context()) {}
+event_loop_state::event_loop_state(std::size_t queue_capacity, blocking_pool* pool) :
+    context_ownership_(std::in_place_type<worker_runtime>, worker_runtime_options{.queue_capacity_ = queue_capacity, .blocking_pool_ = pool}),
+    io_context_(&owned_runtime().io_context()),
+    executor_(io_context_->get_executor()),
+    runtime_(owned_runtime().context()) {}
 
-event_loop_state::event_loop_state(worker_runtime& runtime)
-    : context_ownership_(std::in_place_type<borrowed_runtime>, &runtime),
-      io_context_(&runtime.io_context()),
-      executor_(io_context_->get_executor()),
-      runtime_(runtime.context()) {}
+event_loop_state::event_loop_state(worker_runtime& runtime) :
+    context_ownership_(std::in_place_type<borrowed_runtime>, &runtime),
+    io_context_(&runtime.io_context()),
+    executor_(io_context_->get_executor()),
+    runtime_(runtime.context()) {}
 
-event_loop_state::event_loop_state(asio::io_context& external_context, std::size_t queue_capacity, blocking_pool* pool,
-    move_only_function<void(std::exception_ptr)> failure)
-    : context_ownership_(std::in_place_type<attached_context>, external_context, queue_capacity, pool, std::move(failure)),
-      io_context_(std::addressof(external_context)),
-      executor_(external_context.get_executor()),
-      runtime_(std::get_if<attached_context>(&context_ownership_)->runtime_) {}
+event_loop_state::event_loop_state(asio::io_context& external_context, std::size_t queue_capacity, blocking_pool* pool, move_only_function<void(std::exception_ptr)> failure) :
+    context_ownership_(std::in_place_type<attached_context>, external_context, queue_capacity, pool, std::move(failure)),
+    io_context_(std::addressof(external_context)),
+    executor_(external_context.get_executor()),
+    runtime_(std::get_if<attached_context>(&context_ownership_)->runtime_) {}
 
 void event_loop_state::attach(const std::shared_ptr<event_loop_state>& self) {
     auto& attached = *std::get_if<attached_context>(&context_ownership_);
     attached.stop_.configure({
         // Only stop() requests this chain, so its gate is already sealing.
         // Joining it keeps the chain from finalizing before the gate drains.
-        .stop_admission_ = [this] { complete_stop_admission(); },
+        .stop_admission_ =
+            [this] {
+        complete_stop_admission();
+    },
         // Releasing the claim can destroy this state together with its chain;
         // the chain then releases its work guard on the still-running context.
-        .finalize_ =
-            [this, &attached] {
-                runtime_.detach();
-                attached.claim_.release(this);
-            },
+        .finalize_ = [this, &attached] {
+        runtime_.detach();
+        attached.claim_.release(this);
+    },
     });
     attached.claim_.retain(self);
 }
@@ -2225,10 +2217,7 @@ void event_loop_state::shutdown_external_context() noexcept {
     if (retirement_.pending() != 0) {
         // Their frames and leases are owned by handlers that this shutdown
         // destroys without running; nothing can retire them safely.
-        report_unhandled_failure("attached event loop",
-            std::make_exception_ptr(std::logic_error(
-                "io_context destroyed while its attached event loop still had root tasks, stop "
-                "callbacks, or cleanup pending; keep running the context until the attachment retires")));
+        report_unhandled_failure("attached event loop", std::make_exception_ptr(std::logic_error("io_context destroyed while its attached event loop still had root tasks, stop callbacks, or cleanup pending; keep running the context until the attachment retires")));
         std::terminate();
     }
     stopping_.store(true, std::memory_order_release);
@@ -2237,8 +2226,7 @@ void event_loop_state::shutdown_external_context() noexcept {
     worker_ref_access::wait_for_reservations(runtime_.worker());
 }
 void event_loop_state::install_shutdown_registration() {
-    if (runtime_.worker().register_shutdown(shared_from_this(), &event_loop_state::shutdown_registration_) !=
-        worker_registration_status::registered) {
+    if (runtime_.worker().register_shutdown(shared_from_this(), &event_loop_state::shutdown_registration_) != worker_registration_status::registered) {
         throw std::runtime_error("cannot register an event loop on a stopping worker");
     }
 }
@@ -2280,11 +2268,11 @@ void event_loop_state::stop() noexcept {
     }
     const std::weak_ptr<event_loop_state> weak = weak_from_this();
     if (!retirement_.begin_stop([weak] {
-            if (auto state_value = weak.lock()) {
-                auto* const state_ptr = state_value.get();
-                state_ptr->defer_finalize_stop(std::move(state_value));
-            }
-        })) {
+        if (auto state_value = weak.lock()) {
+            auto* const state_ptr = state_value.get();
+            state_ptr->defer_finalize_stop(std::move(state_value));
+        }
+    })) {
         return;
     }
     if (auto* attached = std::get_if<attached_context>(&context_ownership_)) {
@@ -2325,7 +2313,9 @@ void event_loop_state::defer_finalize_stop(std::shared_ptr<event_loop_state> sel
     try {
         // A detached context ran shutdown_external_context(), which
         // already abandoned the stop chain this would finalize.
-        (void)worker_value.defer_completion([state_value = std::move(self)] { state_value->finalize_stop(); });
+        (void)worker_value.defer_completion([state_value = std::move(self)] {
+            state_value->finalize_stop();
+        });
     } catch (...) {
         fail_teardown_start(std::current_exception());
     }
@@ -2347,21 +2337,18 @@ void report_root_task_failure(const std::weak_ptr<event_loop_state>& loop, std::
 
 }  // namespace detail
 
-event_loop_stop_registration::event_loop_stop_registration(
-    std::shared_ptr<detail::event_loop_stop_listener> listener_value) noexcept
-    : listener_(std::move(listener_value)) {}
+event_loop_stop_registration::event_loop_stop_registration(std::shared_ptr<detail::event_loop_stop_listener> listener_value) noexcept :
+    listener_(std::move(listener_value)) {}
 
-event_loop_start_rejected::event_loop_start_rejected(post_status status)
-    : std::runtime_error(status == post_status::queue_full ? "event loop root task queue is full"
-                                                           : "event loop is stopping"),
-      status_(status) {}
+event_loop_start_rejected::event_loop_start_rejected(post_status status) :
+    std::runtime_error(status == post_status::queue_full ? "event loop root task queue is full" : "event loop is stopping"),
+    status_(status) {}
 
 event_loop_stop_registration::~event_loop_stop_registration() {
     reset();
 }
 
-event_loop_stop_registration& event_loop_stop_registration::operator=(
-    event_loop_stop_registration&& other) noexcept {
+event_loop_stop_registration& event_loop_stop_registration::operator=(event_loop_stop_registration&& other) noexcept {
     if (this == &other) {
         return *this;
     }
@@ -2382,8 +2369,8 @@ void event_loop_stop_registration::reset() noexcept {
     }
 }
 
-event_loop::event_loop(std::shared_ptr<detail::event_loop_state> state_value) noexcept
-    : state_(std::move(state_value)) {}
+event_loop::event_loop(std::shared_ptr<detail::event_loop_state> state_value) noexcept :
+    state_(std::move(state_value)) {}
 
 bool event_loop::valid() const noexcept {
     return worker().valid();
@@ -2447,15 +2434,14 @@ bool event_loop::defer_cleanup_task(move_only_function<void()> task_value) const
         std::shared_ptr<detail::event_loop_state> state_;
         move_only_function<void()> task_;
 
-        cleanup_control(std::shared_ptr<detail::event_loop_state> state_value,
-            move_only_function<void()> task_input) noexcept
-            : state_(std::move(state_value)),
-              task_(std::move(task_input)) {}
+        cleanup_control(std::shared_ptr<detail::event_loop_state> state_value, move_only_function<void()> task_input) noexcept :
+            state_(std::move(state_value)),
+            task_(std::move(task_input)) {}
         cleanup_control(const cleanup_control&) = delete;
         cleanup_control& operator=(const cleanup_control&) = delete;
-        cleanup_control(cleanup_control&& other) noexcept
-            : state_(std::move(other.state_)),
-              task_(std::move(other.task_)) {}
+        cleanup_control(cleanup_control&& other) noexcept :
+            state_(std::move(other.state_)),
+            task_(std::move(other.task_)) {}
         cleanup_control& operator=(cleanup_control&&) = delete;
         ~cleanup_control() {
             if (state_) {
@@ -2464,11 +2450,12 @@ bool event_loop::defer_cleanup_task(move_only_function<void()> task_value) const
             }
         }
     };
-    return state_->runtime_.worker().defer_completion([control = cleanup_control(state_, std::move(task_value))]() mutable { control.task_(); });
+    return state_->runtime_.worker().defer_completion([control = cleanup_control(state_, std::move(task_value))]() mutable {
+        control.task_();
+    });
 }
 
-event_loop_stop_registration event_loop::register_stop_callback(
-    move_only_function<task<void>()> callback_value) const {
+event_loop_stop_registration event_loop::register_stop_callback(move_only_function<task<void>()> callback_value) const {
     if (!state_) {
         throw std::logic_error("cannot register a stop callback on an invalid event loop");
     }
@@ -2478,21 +2465,20 @@ event_loop_stop_registration event_loop::register_stop_callback(
     if (!state_->runtime_.worker().accepting()) {
         throw std::runtime_error("cannot register a stop callback on a stopping event loop");
     }
-    auto listener_value = std::make_shared<detail::event_loop_stop_listener>(
-        state_->runtime_.worker(), state_->executor_, std::move(callback_value), state_);
+    auto listener_value = std::make_shared<detail::event_loop_stop_listener>(state_->runtime_.worker(), state_->executor_, std::move(callback_value), state_);
     listener_value->install_shutdown_registration();
     return event_loop_stop_registration(std::move(listener_value));
 }
 
-event_loop_attachment::event_loop_attachment(std::shared_ptr<detail::event_loop_state> state_value) noexcept
-    : state_(std::move(state_value)) {}
+event_loop_attachment::event_loop_attachment(std::shared_ptr<detail::event_loop_state> state_value) noexcept :
+    state_(std::move(state_value)) {}
 
 event_loop_attachment::~event_loop_attachment() {
     stop();
 }
 
-event_loop_attachment::event_loop_attachment(event_loop_attachment&& other) noexcept
-    : state_(std::move(other.state_)) {}
+event_loop_attachment::event_loop_attachment(event_loop_attachment&& other) noexcept :
+    state_(std::move(other.state_)) {}
 
 bool event_loop_attachment::valid() const noexcept {
     return state_ != nullptr && state_->runtime_.worker().valid();
@@ -2519,10 +2505,8 @@ void event_loop_attachment::stop() noexcept {
     }
 }
 
-event_loop_attachment attach_event_loop(
-    asio::io_context& io_context, event_loop_attachment_options options) {
-    auto state_value = std::make_shared<detail::event_loop_state>(
-        io_context, options.queue_capacity_, options.blocking_pool_, std::move(options.failure_));
+event_loop_attachment attach_event_loop(asio::io_context& io_context, event_loop_attachment_options options) {
+    auto state_value = std::make_shared<detail::event_loop_state>(io_context, options.queue_capacity_, options.blocking_pool_, std::move(options.failure_));
     const std::weak_ptr<detail::event_loop_state> weak_state = state_value;
     // root_task uses this sink directly; it must not call event_loop_state::route_failure,
     // which would route back through this same sink.
@@ -2548,8 +2532,8 @@ thread_local const worker_dispatcher* g_current_worker = nullptr;
 
 class current_worker_guard final {
 public:
-    explicit current_worker_guard(const worker_dispatcher& worker_value)
-        : previous_(std::exchange(g_current_worker, &worker_value)) {
+    explicit current_worker_guard(const worker_dispatcher& worker_value) :
+        previous_(std::exchange(g_current_worker, &worker_value)) {
         if (previous_ != nullptr && previous_ != &worker_value) {
             g_current_worker = previous_;
             throw std::logic_error("one thread cannot run multiple Ruvia workers concurrently");
@@ -2577,15 +2561,15 @@ worker_id_type next_worker_dispatcher_id() noexcept {
     return g_next_worker_id.fetch_add(1, std::memory_order_relaxed);
 }
 
-worker_dispatcher::worker_dispatcher(asio::io_context& io_context, std::size_t capacity, ruvia::blocking_pool* pool)
-    : io_context_(io_context),
-      timer_(std::make_unique<asio::steady_timer>(io_context)),
-      capacity_(checked_queue_capacity(capacity)),
-      blocking_pool_(pool),
-      nodes_(),
-      worker_id_(next_worker_dispatcher_id()),
-      timers_(),
-      timer_slots_() {
+worker_dispatcher::worker_dispatcher(asio::io_context& io_context, std::size_t capacity, ruvia::blocking_pool* pool) :
+    io_context_(io_context),
+    timer_(std::make_unique<asio::steady_timer>(io_context)),
+    capacity_(checked_queue_capacity(capacity)),
+    blocking_pool_(pool),
+    nodes_(),
+    worker_id_(next_worker_dispatcher_id()),
+    timers_(),
+    timer_slots_() {
     // At most `capacity_` nodes are pending (reserved or ready) and at most
     // `capacity_` belong to the batch drain() is running, since a batch is
     // the ready list it spliced. Twice the capacity therefore keeps the
@@ -2620,7 +2604,9 @@ namespace ruvia::detail {
 
 void worker_dispatcher::schedule_drain_locked() {
     if (!drain_scheduled_) {
-        asio::post(io_context_, [self = shared_from_this()] { self->drain(); });
+        asio::post(io_context_, [self = shared_from_this()] {
+            self->drain();
+        });
         drain_scheduled_ = true;
     }
 }
@@ -2757,8 +2743,7 @@ bool worker_dispatcher::defer_if_attached(move_only_function<void()> task_value)
     return true;
 }
 
-worker_registration_status worker_dispatcher::register_shutdown(worker_shutdown_registration& hook,
-    std::weak_ptr<void> owner, const worker_shutdown_operations_type& operations) {
+worker_registration_status worker_dispatcher::register_shutdown(worker_shutdown_registration& hook, std::weak_ptr<void> owner, const worker_shutdown_operations_type& operations) {
     // begin_stopping() clears accepting under the admission mutex before
     // notify_stopping() first takes this mutex on the same thread, so a
     // registration that still observes accepting here is linked before the
@@ -2867,15 +2852,12 @@ void worker_dispatcher::notify_waiters(waiter_node_type* head, bool invoke) noex
     }
 }
 
-void worker_dispatcher::run_context(move_only_function<void()> startup_handler,
-    move_only_function<void(std::exception_ptr)> failure_handler,
-    move_only_function<void()> shutdown_handler) {
+void worker_dispatcher::run_context(move_only_function<void()> startup_handler, move_only_function<void(std::exception_ptr)> failure_handler, move_only_function<void()> shutdown_handler) {
     current_worker_guard current(*this);
     bool failure_delivered = false;
     std::exception_ptr deferred_failure;
     std::exception_ptr delivered_failure;
-    const auto deliver_failure = [this, &failure_delivered, &deferred_failure, &delivered_failure, &failure_handler](
-                                     std::exception_ptr failure) {
+    const auto deliver_failure = [this, &failure_delivered, &deferred_failure, &delivered_failure, &failure_handler](std::exception_ptr failure) {
         notify_stopping(begin_stopping(true));
         abandon_queued();
         if (!failure_delivered) {
@@ -2979,7 +2961,9 @@ void worker_dispatcher::detach_context() noexcept {
 
 void worker_dispatcher::wait_for_reservations() noexcept {
     std::unique_lock lock(mutex_);
-    pending_changed_.wait(lock, [this] { return pending_count_ == 0; });
+    pending_changed_.wait(lock, [this] {
+        return pending_count_ == 0;
+    });
 }
 
 bool worker_dispatcher::attached() const noexcept {
@@ -3197,8 +3181,8 @@ void worker_dispatcher::drain() {
 
 namespace ruvia {
 
-worker_ref::worker_ref(std::shared_ptr<detail::worker_dispatcher> dispatcher) noexcept
-    : dispatcher_(std::move(dispatcher)) {}
+worker_ref::worker_ref(std::shared_ptr<detail::worker_dispatcher> dispatcher) noexcept :
+    dispatcher_(std::move(dispatcher)) {}
 
 bool worker_ref::valid() const noexcept {
     return dispatcher_ && dispatcher_->attached();
@@ -3239,19 +3223,19 @@ post_result_type worker_ref::post_task(move_only_function<void()> task_value) co
     if (!task_value) {
         throw std::invalid_argument("worker post requires a callable task");
     }
-    return dispatcher_ ? dispatcher_->post(std::move(task_value))
-                       : detail::worker_delivery_access::reject<post_result_type>(post_status::worker_stopping, std::move(task_value));
+    return dispatcher_ ? dispatcher_->post(std::move(task_value)) : detail::worker_delivery_access::reject<post_result_type>(post_status::worker_stopping, std::move(task_value));
 }
 
 void worker_ref::defer_resume(std::coroutine_handle<> continuation) const noexcept {
     if (!dispatcher_) {
         std::terminate();
     }
-    dispatcher_->defer_or_terminate([continuation] { continuation.resume(); });
+    dispatcher_->defer_or_terminate([continuation] {
+        continuation.resume();
+    });
 }
 
-worker_ref detail::worker_ref_access::make(
-    const std::shared_ptr<worker_dispatcher>& dispatcher) noexcept {
+worker_ref detail::worker_ref_access::make(const std::shared_ptr<worker_dispatcher>& dispatcher) noexcept {
     return worker_ref(dispatcher);
 }
 
@@ -3264,24 +3248,21 @@ bool worker_ref::defer_completion(move_only_function<void()> completion) const {
     return dispatcher && dispatcher->defer_if_attached(std::move(completion));
 }
 
-void detail::worker_ref_access::defer_or_terminate(
-    const worker_ref& worker_value, move_only_function<void()> task_value) noexcept {
+void detail::worker_ref_access::defer_or_terminate(const worker_ref& worker_value, move_only_function<void()> task_value) noexcept {
     if (!worker_value.dispatcher_) {
         std::terminate();
     }
     worker_value.dispatcher_->defer_or_terminate(std::move(task_value));
 }
 
-worker_registration_status worker_ref::link_shutdown(worker_shutdown_registration& registration,
-    std::weak_ptr<void> owner, const detail::worker_shutdown_operations_type& operations) const {
+worker_registration_status worker_ref::link_shutdown(worker_shutdown_registration& registration, std::weak_ptr<void> owner, const detail::worker_shutdown_operations_type& operations) const {
     if (!dispatcher_) {
         return worker_registration_status::worker_stopping;
     }
     return dispatcher_->register_shutdown(registration, std::move(owner), operations);
 }
 
-void detail::worker_ref_access::when_shutdown_notifications_complete(
-    const worker_ref& worker_value, move_only_function<void()> callback_value) {
+void detail::worker_ref_access::when_shutdown_notifications_complete(const worker_ref& worker_value, move_only_function<void()> callback_value) {
     const auto& dispatcher = worker_value.dispatcher_;
     if (!dispatcher) {
         throw std::runtime_error("cannot observe shutdown notifications on a stopped worker");
@@ -3289,8 +3270,7 @@ void detail::worker_ref_access::when_shutdown_notifications_complete(
     dispatcher->when_shutdown_notifications_complete(std::move(callback_value));
 }
 
-void detail::worker_ref_access::when_idle(
-    const worker_ref& worker_value, move_only_function<void()> callback_value) {
+void detail::worker_ref_access::when_idle(const worker_ref& worker_value, move_only_function<void()> callback_value) {
     const auto& dispatcher = worker_value.dispatcher_;
     if (!dispatcher) {
         throw std::runtime_error("cannot observe idleness on a stopped worker");
@@ -3314,9 +3294,7 @@ void detail::worker_ref_access::enable_external_runner(const worker_ref& worker_
     }
 }
 
-worker_timer_schedule_status worker_ref::schedule_timer(worker_timer_registration& registration,
-    std::chrono::steady_clock::time_point deadline_value,
-    move_only_function<void(worker_timer_outcome)> completion) const& {
+worker_timer_schedule_status worker_ref::schedule_timer(worker_timer_registration& registration, std::chrono::steady_clock::time_point deadline_value, move_only_function<void(worker_timer_outcome)> completion) const& {
     if (!dispatcher_) {
         throw std::runtime_error("cannot schedule a timer on a stopped worker");
     }
@@ -3359,8 +3337,7 @@ void worker_timer_registration::unregister(bool notify) noexcept {
     const auto* slot_state = std::exchange(slot_state_, nullptr);
     const auto slot = std::exchange(slot_, 0);
     const auto generation = std::exchange(generation_, 0);
-    if (dispatcher == nullptr || slot_state == nullptr ||
-        slot_state->active_generation_.load(std::memory_order_acquire) != generation) {
+    if (dispatcher == nullptr || slot_state == nullptr || slot_state->active_generation_.load(std::memory_order_acquire) != generation) {
         return;
     }
     if (!notify && detail::current_worker_dispatcher() != dispatcher) {
@@ -3383,8 +3360,7 @@ worker_timer_cancellation worker_timer_registration::cancellation() const& {
     return worker_timer_cancellation(*dispatcher_, slot_, generation_);
 }
 
-void worker_timer_registration::bind(detail::worker_dispatcher& dispatcher, std::size_t slot,
-    std::uint64_t generation, const detail::timer_slot& slot_state) noexcept {
+void worker_timer_registration::bind(detail::worker_dispatcher& dispatcher, std::size_t slot, std::uint64_t generation, const detail::timer_slot& slot_state) noexcept {
     dispatcher_ = &dispatcher;
     slot_state_ = &slot_state;
     slot_ = slot;
@@ -3401,16 +3377,15 @@ void worker_timer_registration::release() noexcept {
 bool worker_timer_registration::pending() const noexcept {
     // Pairs with the release store that deactivates the slot on its own worker
     // before expiry or cancellation delivers a completion.
-    return slot_state_ != nullptr && generation_ != 0 &&
-           slot_state_->active_generation_.load(std::memory_order_acquire) == generation_;
+    return slot_state_ != nullptr && generation_ != 0 && slot_state_->active_generation_.load(std::memory_order_acquire) == generation_;
 }
 
 // Only a cold operation may move; a started one is referenced by its timer
 // callback and must stay address-stable.
-sleep_operation::sleep_operation(sleep_operation&& other) noexcept
-    : worker_(std::exchange(other.worker_, nullptr)),
-      target_(other.target_),
-      stop_token_(std::move(other.stop_token_)) {
+sleep_operation::sleep_operation(sleep_operation&& other) noexcept :
+    worker_(std::exchange(other.worker_, nullptr)),
+    target_(other.target_),
+    stop_token_(std::move(other.stop_token_)) {
     if (other.started_) {
         std::terminate();
     }
@@ -3443,18 +3418,18 @@ bool sleep_operation::await_suspend(std::coroutine_handle<> continuation) {
         }
         return std::get<std::chrono::steady_clock::time_point>(target_);
     }();
-    const auto status = worker_->schedule_timer(registration_, deadline,
-        [this](worker_timer_outcome value) {
-            outcome_ = value;
-            continuation_.resume();
-        });
+    const auto status = worker_->schedule_timer(registration_, deadline, [this](worker_timer_outcome value) {
+        outcome_ = value;
+        continuation_.resume();
+    });
     if (status == worker_timer_schedule_status::worker_stopping) {
         outcome_ = worker_timer_outcome::cancelled;
         return false;
     }
     if (stop_token_.stoppable()) {
-        stop_token_.register_callback(stop_registration_,
-            [cancellation = registration_.cancellation()] { cancellation.cancel(); });
+        stop_token_.register_callback(stop_registration_, [cancellation = registration_.cancellation()] {
+            cancellation.cancel();
+        });
     }
     return true;
 }
@@ -3462,26 +3437,21 @@ bool sleep_operation::await_suspend(std::coroutine_handle<> continuation) {
 // A zero/negative duration never suspends and keeps the default expired
 // outcome, so it reports elapsed unless stop was already requested.
 timer_sleep_result sleep_operation::await_resume() const noexcept {
-    return outcome_ == worker_timer_outcome::expired && !stop_token_.stop_requested()
-               ? timer_sleep_result::elapsed
-               : timer_sleep_result::stop_requested;
+    return outcome_ == worker_timer_outcome::expired && !stop_token_.stop_requested() ? timer_sleep_result::elapsed : timer_sleep_result::stop_requested;
 }
 
 sleep_operation sleep_for(const worker_ref& worker_value, timeout_duration duration, stop_token stop_token_value) {
     return sleep_operation(worker_value, duration, std::move(stop_token_value));
 }
 
-sleep_operation sleep_until(const worker_ref& worker_value,
-    std::chrono::steady_clock::time_point deadline, stop_token stop_token_value) {
+sleep_operation sleep_until(const worker_ref& worker_value, std::chrono::steady_clock::time_point deadline, stop_token stop_token_value) {
     return sleep_operation(worker_value, deadline, std::move(stop_token_value));
 }
 }  // namespace ruvia
 
 namespace ruvia::detail {
 
-worker_timer_schedule_status worker_dispatcher::schedule_timer(worker_timer_registration& registration,
-    std::chrono::steady_clock::time_point deadline_value,
-    move_only_function<void(worker_timer_outcome)> completion) {
+worker_timer_schedule_status worker_dispatcher::schedule_timer(worker_timer_registration& registration, std::chrono::steady_clock::time_point deadline_value, move_only_function<void(worker_timer_outcome)> completion) {
     if (!is_current()) {
         throw std::logic_error("worker timers must be scheduled on their worker");
     }
@@ -3573,8 +3543,7 @@ worker_timer_schedule_status worker_dispatcher::schedule_timer(worker_timer_regi
     return worker_timer_schedule_status::scheduled;
 }
 
-void worker_dispatcher::request_timer_cancellation(
-    std::size_t slot, std::uint64_t generation, bool notify) noexcept {
+void worker_dispatcher::request_timer_cancellation(std::size_t slot, std::uint64_t generation, bool notify) noexcept {
     if (current_worker_dispatcher() != this) {
         std::lock_guard lock(mutex_);
         if (timers_stopping_.load(std::memory_order_acquire) || !context_attached_) {
@@ -3625,8 +3594,7 @@ void worker_dispatcher::request_timer_cancellation(
 }
 
 void worker_dispatcher::pop_stale_timer_top() noexcept {
-    while (!timers_.empty() &&
-           !has_live_timer_entry(timers_.front().slot_, timers_.front().generation_)) {
+    while (!timers_.empty() && !has_live_timer_entry(timers_.front().slot_, timers_.front().generation_)) {
         std::ranges::pop_heap(timers_, timer_entry_later{});
         timers_.pop_back();
         if (stale_timer_count_ != 0) {
@@ -3669,8 +3637,7 @@ void worker_dispatcher::release_drained_timer_heap() noexcept {
     }
 }
 
-move_only_function<void(worker_timer_outcome)> worker_dispatcher::take_timer(
-    std::size_t slot_index, std::uint64_t generation) noexcept {
+move_only_function<void(worker_timer_outcome)> worker_dispatcher::take_timer(std::size_t slot_index, std::uint64_t generation) noexcept {
     if (!has_occupied_timer(slot_index, generation)) {
         return {};
     }
@@ -3706,8 +3673,7 @@ void worker_dispatcher::stop_timers() noexcept {
         if (!timer_slots_[index].occupied_) {
             continue;
         }
-        const bool active =
-            timer_slots_[index].active_generation_.load(std::memory_order_acquire) != 0;
+        const bool active = timer_slots_[index].active_generation_.load(std::memory_order_acquire) != 0;
         auto completion = release_timer_slot(index);
         try {
             if (active && completion) {
@@ -3760,8 +3726,7 @@ void worker_dispatcher::fire_timers() {
     try {
         for (;;) {
             pop_stale_timer_top();
-            if (timers_.empty() || timers_.front().deadline_ > now ||
-                timers_.front().sequence_ >= sequence_limit) {
+            if (timers_.empty() || timers_.front().deadline_ > now || timers_.front().sequence_ >= sequence_limit) {
                 break;
             }
             std::ranges::pop_heap(timers_, timer_entry_later{});
@@ -3800,21 +3765,18 @@ void worker_dispatcher::fail_timers(std::string_view context_value, std::excepti
 }
 
 bool worker_dispatcher::has_timer(std::size_t slot, std::uint64_t generation) const noexcept {
-    return generation != 0 && slot < timer_slots_.size() &&
-           timer_slots_[slot].active_generation_.load(std::memory_order_acquire) == generation;
+    return generation != 0 && slot < timer_slots_.size() && timer_slots_[slot].active_generation_.load(std::memory_order_acquire) == generation;
 }
 
 bool worker_dispatcher::has_occupied_timer(std::size_t slot, std::uint64_t generation) const noexcept {
-    return generation != 0 && slot < timer_slots_.size() && timer_slots_[slot].occupied_ &&
-           timer_slots_[slot].generation_ == generation;
+    return generation != 0 && slot < timer_slots_.size() && timer_slots_[slot].occupied_ && timer_slots_[slot].generation_ == generation;
 }
 
 bool worker_dispatcher::has_live_timer_entry(std::size_t slot, std::uint64_t generation) const noexcept {
     return has_occupied_timer(slot, generation) && !timer_slots_[slot].cancel_requested_;
 }
 
-move_only_function<void(worker_timer_outcome)> worker_dispatcher::release_timer_slot(
-    std::size_t slot_index) noexcept {
+move_only_function<void(worker_timer_outcome)> worker_dispatcher::release_timer_slot(std::size_t slot_index) noexcept {
     auto& slot = timer_slots_[slot_index];
     slot.occupied_ = false;
     slot.cancel_requested_ = false;

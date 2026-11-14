@@ -41,13 +41,12 @@
 #include "ruvia/web/streaming.h"
 
 #include "connection_lifecycle.h"
-#include "http_client_pool.h"
+
 namespace ruvia::detail {
 namespace {
 void throw_if_abandoned(const http_client_response_state& state_value) {
     if (state_value.abandoned_) {
-        throw http_client_error(
-            std::make_error_code(std::errc::operation_canceled), "HTTP request abandoned before transport admission");
+        throw http_client_error(std::make_error_code(std::errc::operation_canceled), "HTTP request abandoned before transport admission");
     }
 }
 
@@ -55,7 +54,7 @@ void throw_if_abandoned(const http_client_response_state& state_value) {
 // Existing owners never move; only the vector of owner pointers may grow.
 template <typename owner_type>
 [[nodiscard]] std::size_t free_connection_position(std::vector<owner_type>& owners) {
-    const auto free = std::ranges::find(owners, nullptr);
+    const auto free = std::ranges::find(owners, nullptr, &owner_type::get);
     if (free != owners.end()) {
         return static_cast<std::size_t>(free - owners.begin());
     }
@@ -72,11 +71,8 @@ constexpr std::chrono::minutes alternative_service_retry_delay{5};
 #endif
 }  // namespace
 
-bool can_retry_reused_connection_request(std::optional<std::error_code> failure,
-    const http_client_request_storage& request, const http_client_response_state& response) noexcept {
-    return failure == make_error_code(http_client_errc::io_error) && request.upload() == nullptr && !request.is_tunnel() &&
-           is_http_method_idempotent(request.method()) && !response.head_ready_ && response.informational_.empty() &&
-           !response.abandoned_;
+bool can_retry_reused_connection_request(std::optional<std::error_code> failure, const http_client_request_storage& request, const http_client_response_state& response) noexcept {
+    return failure == make_error_code(http_client_errc::io_error) && request.upload() == nullptr && !request.is_tunnel() && is_http_method_idempotent(request.method()) && !response.head_ready_ && response.informational_.empty() && !response.abandoned_;
 }
 
 // Moves a request from buffered to in flight once a connection serves it.
@@ -101,10 +97,10 @@ struct http_client_pool::request_admission final {
 // One admission wait's cancellation: a stop reaches cancel_operation_by_id(),
 // which wakes admission waiters to observe it.
 struct http_client_pool::admission_waiter final {
-    admission_waiter(http_client_pool& pool, http_client_response_state& state_value, const stop_token& stop)
-        : pool_(pool),
-          next_(pool.admission_waiters_),
-          cancellation_(pool.cancellation_target_, cancellation_id_, state_value) {
+    admission_waiter(http_client_pool& pool, http_client_response_state& state_value, const stop_token& stop) :
+        pool_(pool),
+        next_(pool.admission_waiters_),
+        cancellation_(pool.cancellation_target_, cancellation_id_, state_value) {
         pool_.admission_waiters_ = this;
         try {
             cancellation_.arm(stop);
@@ -135,24 +131,23 @@ struct http_client_pool::admission_waiter final {
     http_client_response_cancellation<http_client_cancellation_target> cancellation_;
 };
 
-http_client_pool::http_client_pool(asio::io_context& io_context, const worker_ref& worker_value,
-    http_client_config_storage config, const http_client_worker_services& services)
-    : io_context_(io_context),
-      worker_(worker_value),
-      config_(std::move(config)),
-      origin_(config_.fixed_origin_ ? std::optional(config_.origin()) : std::nullopt),
-      policy_(config_),
-      advertisements_(worker_, config_.advertisements_),
-      pushes_(),
-      result_budget_domain_(services.result_budget_),
-      worker_limits_(services.limits_),
-      tls_context_(asio::ssl::context::tls_client),
-      cancellation_target_(make_worker_cancellation_target(*this, worker_)),
-      background_tasks_(worker_),
-      connections_(),
-      admission_signal_(worker_),
-      reclaim_signal_(worker_),
-      dns_changed_(worker_) {
+http_client_pool::http_client_pool(asio::io_context& io_context, const worker_ref& worker_value, http_client_config_storage config, const http_client_worker_services& services) :
+    io_context_(io_context),
+    worker_(worker_value),
+    config_(std::move(config)),
+    origin_(config_.fixed_origin_ ? std::optional(config_.origin()) : std::nullopt),
+    policy_(config_),
+    advertisements_(worker_, config_.advertisements_),
+    pushes_(),
+    result_budget_domain_(services.result_budget_),
+    worker_limits_(services.limits_),
+    tls_context_(asio::ssl::context::tls_client),
+    cancellation_target_(make_worker_cancellation_target(*this, worker_)),
+    background_tasks_(worker_),
+    connections_(),
+    admission_signal_(worker_),
+    reclaim_signal_(worker_),
+    dns_changed_(worker_) {
     // Connections are created on demand; a DNS alias still needs its lookup
     // pool from the start.
     if (!config_.dial_host_.empty()) {
@@ -195,8 +190,7 @@ void http_client_pool::validate_addresses(const client_resolve_result& result) c
         return;
     }
     const auto validate = [this](const asio::ip::tcp::endpoint& endpoint) {
-        if (!(*config_.address_validator_)(
-                to_ip_address(endpoint.address()).normalized_ipv4(), endpoint.port())) {
+        if (!(*config_.address_validator_)(to_ip_address(endpoint.address()).normalized_ipv4(), endpoint.port())) {
             throw http_client_error(make_error_code(http_client_errc::resolve_failed), "HTTP dial address rejected");
         }
     };
@@ -215,25 +209,22 @@ void http_client_pool::install_addresses(client_resolve_result result) {
         throw http_client_error(make_error_code(http_client_errc::resolve_failed), "HTTP DNS resolution failed");
     }
     const bool had_addresses = dns_addresses_.literal_.has_value() || !dns_addresses_.addresses_.empty();
-    const bool changed = dns_addresses_.literal_ != result.literal_ ||
-                         !std::equal(dns_addresses_.addresses_.begin(), dns_addresses_.addresses_.end(),
-                             result.addresses_.begin(), result.addresses_.end(),
-                             [](const auto& left, const auto& right) { return left.endpoint() == right.endpoint(); });
+    const bool changed = dns_addresses_.literal_ != result.literal_ || !std::equal(dns_addresses_.addresses_.begin(), dns_addresses_.addresses_.end(), result.addresses_.begin(), result.addresses_.end(), [](const auto& left, const auto& right) {
+        return left.endpoint() == right.endpoint();
+    });
     dns_addresses_ = std::move(result);
     ++dns_revision_;
     if (had_addresses && changed) {
         // Only connections dialed through this snapshot: request routes with
         // their own dial host keep theirs.
         for (auto& connection : connections_) {
-            if (connection && connection->transport_.endpoint().port_ == config_.dial_port_ &&
-                http_ascii_equals_ignore_case(connection->transport_.endpoint().host_, config_.dial_host_)) {
+            if (connection && connection->transport_.endpoint().port_ == config_.dial_port_ && http_ascii_equals_ignore_case(connection->transport_.endpoint().host_, config_.dial_host_)) {
                 connection->retire_addresses();
             }
         }
 #ifdef RUVIA_ENABLE_HTTP3
         for (auto& connection : http3_connections_) {
-            if (connection && connection->route().port_ == config_.dial_port_ &&
-                http_ascii_equals_ignore_case(connection->route().host_, config_.dial_host_)) {
+            if (connection && connection->route().port_ == config_.dial_port_ && http_ascii_equals_ignore_case(connection->route().host_, config_.dial_host_)) {
                 connection->retire_addresses();
             }
         }
@@ -273,8 +264,7 @@ void http_client_pool::update_dns(std::span<const http_client_endpoint_address> 
     install_addresses(std::move(result));
 }
 
-task<client_resolve_result> http_client_pool::resolve_addresses(std::string_view host, std::uint16_t port,
-    client_host_resolver& resolver, const operation_deadline& timeout) {
+task<client_resolve_result> http_client_pool::resolve_addresses(std::string_view host, std::uint16_t port, client_host_resolver& resolver, const operation_deadline& timeout) {
     const bool primary = host == config_.dial_host_ && port == config_.dial_port_;
     if (primary && (dns_addresses_.literal_ || !dns_addresses_.addresses_.empty())) {
         validate_addresses(dns_addresses_);
@@ -342,17 +332,16 @@ void http_client_pool::schedule_dns_refresh() {
     if (!config_.dns_refresh_interval_ || closing_ || background_joined_) {
         return;
     }
-    (void)worker_.schedule_timer(dns_refresh_timer_, deadline_after(config_.dns_refresh_interval_->value()),
-        [this](worker_timer_outcome outcome) noexcept {
-            if (outcome != worker_timer_outcome::expired || closing_) {
-                return;
-            }
-            try {
-                background_tasks_.spawn(background_refresh_dns());
-            } catch (...) {
-                report_unhandled_failure("HTTP DNS refresh", std::current_exception());
-            }
-        });
+    (void)worker_.schedule_timer(dns_refresh_timer_, deadline_after(config_.dns_refresh_interval_->value()), [this](worker_timer_outcome outcome) noexcept {
+        if (outcome != worker_timer_outcome::expired || closing_) {
+            return;
+        }
+        try {
+            background_tasks_.spawn(background_refresh_dns());
+        } catch (...) {
+            report_unhandled_failure("HTTP DNS refresh", std::current_exception());
+        }
+    });
 }
 
 namespace {
@@ -360,22 +349,21 @@ namespace {
     if (result.literal_) {
         return result.literal_->address() == address;
     }
-    return std::ranges::any_of(result.addresses_, [&address](const auto& entry) { return entry.endpoint().address() == address; });
+    return std::ranges::any_of(result.addresses_, [&address](const auto& entry) {
+        return entry.endpoint().address() == address;
+    });
 }
 }  // namespace
 
 void http_client_pool::retire_unresolved(std::string_view host, std::uint16_t port, const client_resolve_result& result) noexcept {
     for (auto& connection : connections_) {
-        if (connection && connection->connected_ && connection->transport_.endpoint().port_ == port &&
-            http_ascii_equals_ignore_case(connection->transport_.endpoint().host_, host) &&
-            !resolved_to(result, connection->transport_.peer_endpoint().address())) {
+        if (connection && connection->connected_ && connection->transport_.endpoint().port_ == port && http_ascii_equals_ignore_case(connection->transport_.endpoint().host_, host) && !resolved_to(result, connection->transport_.peer_endpoint().address())) {
             connection->retire_addresses();
         }
     }
 #ifdef RUVIA_ENABLE_HTTP3
     for (auto& connection : http3_connections_) {
-        if (connection == nullptr || connection->route().port_ != port ||
-            !http_ascii_equals_ignore_case(connection->route().host_, host)) {
+        if (connection == nullptr || connection->route().port_ != port || !http_ascii_equals_ignore_case(connection->route().host_, host)) {
             continue;
         }
         if (const auto peer = connection->peer_address(); peer && !resolved_to(result, *peer)) {
@@ -574,19 +562,7 @@ http_client_stats http_client_pool::stats() const noexcept {
         idle += connection_value && connection_value->idle() ? 1U : 0U;
     }
 #endif
-    return {.buffered_requests_ = requests_buffered_,
-        .in_flight_requests_ = requests_in_flight_,
-        .completed_requests_ = completed_requests_,
-        .failed_requests_ = failed_requests_,
-        .plaintext_bytes_sent_ = wire_counters_.sent_,
-        .plaintext_bytes_received_ = wire_counters_.received_,
-        .idle_connections_with_pending_data_ = idle_connections_with_pending_data_,
-        .open_connections_ = open_connections_,
-        .idle_connections_ = idle,
-        .dns_refreshes_ = dns_refreshes_,
-        .dropped_advertisements_ = advertisements_.dropped(),
-        .received_pushes_ = received_pushes_,
-        .rejected_pushes_ = rejected_pushes_};
+    return {.buffered_requests_ = requests_buffered_, .in_flight_requests_ = requests_in_flight_, .completed_requests_ = completed_requests_, .failed_requests_ = failed_requests_, .plaintext_bytes_sent_ = wire_counters_.sent_, .plaintext_bytes_received_ = wire_counters_.received_, .idle_connections_with_pending_data_ = idle_connections_with_pending_data_, .open_connections_ = open_connections_, .idle_connections_ = idle, .dns_refreshes_ = dns_refreshes_, .dropped_advertisements_ = advertisements_.dropped(), .received_pushes_ = received_pushes_, .rejected_pushes_ = rejected_pushes_};
 }
 
 void http_client_pool::cancel_operation_by_id(std::uint64_t cancellation_id) noexcept {
@@ -635,8 +611,7 @@ void http_client_pool::reprioritize(http_client_response_state& state_value, htt
 #endif
     (void)state_value;
     (void)priority;
-    throw http_client_error(
-        make_error_code(http_client_errc::protocol_unavailable), "priority updates require HTTP/2 or HTTP/3");
+    throw http_client_error(make_error_code(http_client_errc::protocol_unavailable), "priority updates require HTTP/2 or HTTP/3");
 }
 
 std::optional<http_client_push> http_client_pool::next_push() {
@@ -651,8 +626,7 @@ std::optional<http_client_push> http_client_pool::next_push() {
     return result_value;
 }
 
-void http_client_pool::spawn_request(
-    http_client_request_storage request, operation_options options, http_client_response_state& state_value) {
+void http_client_pool::spawn_request(http_client_request_storage request, operation_options options, http_client_response_state& state_value) {
     state_value.buffered_limit_ = config_.max_response_bytes_;
     state_value.effective_connect_timeout_ = request.options_.timeouts_.connect_.resolve(config_.connect_timeout_);
     state_value.effective_read_timeout_ = request.options_.timeouts_.read_.resolve(config_.read_timeout_);
@@ -669,8 +643,7 @@ void http_client_pool::spawn_request(
     background_tasks_.spawn(execute_into(std::move(request), std::move(options), &state_value));
 }
 
-task<http_client_tunnel_result> http_client_pool::open_tunnel(
-    http_client_request_storage request, http_client_tunnel_config config, operation_options options) {
+task<http_client_tunnel_result> http_client_pool::open_tunnel(http_client_request_storage request, http_client_tunnel_config config, operation_options options) {
     require_accepting();
     http_client_response response(*this);
     auto& state_value = *response.state_;
@@ -684,8 +657,7 @@ task<http_client_tunnel_result> http_client_pool::open_tunnel(
     co_return http_client_tunnel_result(std::move(response));
 }
 
-task<http_client_exchange> http_client_pool::open_request(
-    http_client_request_storage request, http_client_upload_config upload, operation_options options) {
+task<http_client_exchange> http_client_pool::open_request(http_client_request_storage request, http_client_upload_config upload, operation_options options) {
     require_accepting();
     http_client_response response(*this);
     auto& state_value = *response.state_;
@@ -704,8 +676,7 @@ task<http_client_response> http_client_pool::execute(http_client_request_storage
     co_return response;
 }
 
-task<void> http_client_pool::execute_into(
-    http_client_request_storage request, operation_options options, http_client_response_state* state_value) {
+task<void> http_client_pool::execute_into(http_client_request_storage request, operation_options options, http_client_response_state* state_value) {
     http_client_response keep_alive(state_value);
     try {
         co_await execute_request_into(std::move(request), std::move(options), state_value);
@@ -716,8 +687,7 @@ task<void> http_client_pool::execute_into(
                 std::rethrow_exception(failure);
             } catch (const http_client_error& error) {
                 try {
-                    throw http_client_error(error.code(), error.what(), error.status(),
-                        state_value->connection_info_.id_ != 0 ? &state_value->connection_info_ : nullptr, state_value->request_written_);
+                    throw http_client_error(error.code(), error.what(), error.status(), state_value->connection_info_.id_ != 0 ? &state_value->connection_info_ : nullptr, state_value->request_written_);
                 } catch (...) {
                     failure = std::current_exception();
                 }
@@ -765,9 +735,7 @@ http_client_connection* http_client_pool::find_connection(const http_client_resp
         return nullptr;
     }
     auto* const connection_value = connections_[state_value.connection_index_].get();
-    return connection_value != nullptr && connection_value->serial() == state_value.connection_serial_
-               ? connection_value
-               : nullptr;
+    return connection_value != nullptr && connection_value->serial() == state_value.connection_serial_ ? connection_value : nullptr;
 }
 
 void http_client_pool::admission_changed() noexcept {
@@ -844,9 +812,7 @@ std::size_t http_client_pool::idle_count(bool multiplexed) const noexcept {
 std::optional<std::uint64_t> http_client_pool::least_recent_idle(bool multiplexed) const noexcept {
     std::optional<std::uint64_t> oldest;
     for (const auto& owner : connections_) {
-        if (owner && owner->users_ == 0 && owner->idle() &&
-            (owner->protocol_ != http_client_connection::protocol_type::http1) == multiplexed &&
-            (!oldest || owner->idle_order_ < *oldest)) {
+        if (owner && owner->users_ == 0 && owner->idle() && (owner->protocol_ != http_client_connection::protocol_type::http1) == multiplexed && (!oldest || owner->idle_order_ < *oldest)) {
             oldest = owner->idle_order_;
         }
     }
@@ -1005,9 +971,7 @@ client_alpn http_client_pool::tcp_offer(const http_client_request_storage& reque
     return config_.scheme_ == http_scheme::http || prefers_http11_ ? client_alpn::http11 : client_alpn::negotiate;
 }
 
-task<http_client_connection*> http_client_pool::acquire_tcp_connection(const http_client_request_storage& request,
-    const operation_deadline& acquire_timeout, stop_token stop, http_client_response_state& state_value,
-    request_admission& admission) {
+task<http_client_connection*> http_client_pool::acquire_tcp_connection(const http_client_request_storage& request, const operation_deadline& acquire_timeout, stop_token stop, http_client_response_state& state_value, request_admission& admission) {
     const auto& route = request.route();
     const auto offer = tcp_offer(request);
     const bool fresh = request.options_.fresh_connection_;
@@ -1048,8 +1012,7 @@ task<http_client_connection*> http_client_pool::acquire_tcp_connection(const htt
             }
 #endif
             // The most recently used idle HTTP/1 connection, so the others age out.
-            if (candidate->protocol_ == http_client_connection::protocol_type::http1 && candidate->connected_ &&
-                candidate->http1_operations_ == 0 && (selected == nullptr || candidate->idle_order_ > selected->idle_order_)) {
+            if (candidate->protocol_ == http_client_connection::protocol_type::http1 && candidate->connected_ && candidate->http1_operations_ == 0 && (selected == nullptr || candidate->idle_order_ > selected->idle_order_)) {
                 selected = candidate;
             }
         }
@@ -1059,9 +1022,7 @@ task<http_client_connection*> http_client_pool::acquire_tcp_connection(const htt
         if (selected == nullptr && !negotiating && admits_new_connection()) {
             start_reclaimer();
             const auto index = free_connection_position(connections_);
-            connections_[index] = std::make_unique<http_client_connection>(*this, index,
-                ++next_connection_serial_, route.dial_host_, route.dial_port_, route.server_name_, route.alias_transport_,
-                offer);
+            connections_[index] = std::make_unique<http_client_connection>(*this, index, ++next_connection_serial_, route.dial_host_, route.dial_port_, route.server_name_, route.alias_transport_, offer);
             ++open_connections_;
             selected = connections_[index].get();
             selected->fresh_ = fresh;
@@ -1086,8 +1047,7 @@ void http_client_pool::release_tcp_connection(http_client_connection& connection
     }
     --connection_value.users_;
     if (connection_value.users_ == 0 && connection_value.idle()) {
-        mark_idle(connection_value.idle_order_,
-            connection_value.protocol_ != http_client_connection::protocol_type::http1);
+        mark_idle(connection_value.idle_order_, connection_value.protocol_ != http_client_connection::protocol_type::http1);
     }
     if (connection_value.reclaimable()) {
         connection_retired();
@@ -1096,9 +1056,7 @@ void http_client_pool::release_tcp_connection(http_client_connection& connection
     }
 }
 
-task<void> http_client_pool::execute_tcp_request(const http_client_request_storage& request,
-    const operation_deadline& timeout, const operation_deadline& acquire_timeout, stop_token stop,
-    http_client_response_state& state_value, request_admission& admission) {
+task<void> http_client_pool::execute_tcp_request(const http_client_request_storage& request, const operation_deadline& timeout, const operation_deadline& acquire_timeout, stop_token stop, http_client_response_state& state_value, request_admission& admission) {
     auto* const connection_value = co_await acquire_tcp_connection(request, acquire_timeout, stop, state_value, admission);
     struct connection_use final {
         http_client_pool& pool_;
@@ -1116,8 +1074,7 @@ task<void> http_client_pool::execute_tcp_request(const http_client_request_stora
     co_await execute_tcp(*connection_value, request, timeout, acquire_timeout, std::move(stop), state_value);
 }
 
-task<void> http_client_pool::execute_request_into(
-    http_client_request_storage request, operation_options options, http_client_response_state* state_value) {
+task<void> http_client_pool::execute_request_into(http_client_request_storage request, operation_options options, http_client_response_state* state_value) {
     try {
         throw_if_abandoned(*state_value);
         // The storage is at its final address in this frame.
@@ -1165,9 +1122,7 @@ task<void> http_client_pool::execute_request_into(
     }
 }
 
-task<void> http_client_pool::execute_tcp(http_client_connection& connection_value,
-    const http_client_request_storage& request, const operation_deadline& timeout,
-    const operation_deadline& acquire_timeout, stop_token stop_token_value, http_client_response_state& state_value) {
+task<void> http_client_pool::execute_tcp(http_client_connection& connection_value, const http_client_request_storage& request, const operation_deadline& timeout, const operation_deadline& acquire_timeout, stop_token stop_token_value, http_client_response_state& state_value) {
     std::optional<std::uint64_t> connected_http1_generation;
 #ifdef RUVIA_ENABLE_HTTP2
     // A cancelled HTTP/1 producer still owns its SSL stream until its
@@ -1184,8 +1139,7 @@ task<void> http_client_pool::execute_tcp(http_client_connection& connection_valu
         connected_http1_generation = connection_value.generation_;
     }
 #endif
-    if (co_await execute_http1(connection_value, request, timeout, acquire_timeout, stop_token_value, state_value,
-            connected_http1_generation)) {
+    if (co_await execute_http1(connection_value, request, timeout, acquire_timeout, stop_token_value, state_value, connected_http1_generation)) {
         co_return;
     }
 #ifdef RUVIA_ENABLE_HTTP2
@@ -1196,19 +1150,13 @@ task<void> http_client_pool::execute_tcp(http_client_connection& connection_valu
     // it and its replacement speaks HTTP/1.1. One protocol change per request,
     // unless the origin required HTTP/1.1: then the replacement offered no h2
     // and the change is final.
-    if (!prefers_http11() ||
-        !co_await execute_http1(connection_value, request, timeout, acquire_timeout, stop_token_value, state_value,
-            connection_value.generation_)) {
-        throw http_client_error(
-            make_error_code(http_client_errc::protocol_unavailable), "upstream renegotiated the protocol repeatedly");
+    if (!prefers_http11() || !co_await execute_http1(connection_value, request, timeout, acquire_timeout, stop_token_value, state_value, connection_value.generation_)) {
+        throw http_client_error(make_error_code(http_client_errc::protocol_unavailable), "upstream renegotiated the protocol repeatedly");
     }
 #endif
 }
 
-task<bool> http_client_pool::execute_http1(http_client_connection& connection_value,
-    const http_client_request_storage& request, const operation_deadline& timeout,
-    const operation_deadline& acquire_timeout, stop_token stop_token_value, http_client_response_state& state_value,
-    std::optional<std::uint64_t> connected_http1_generation) {
+task<bool> http_client_pool::execute_http1(http_client_connection& connection_value, const http_client_request_storage& request, const operation_deadline& timeout, const operation_deadline& acquire_timeout, stop_token stop_token_value, http_client_response_state& state_value, std::optional<std::uint64_t> connected_http1_generation) {
     // A negotiated HTTP/1 connection can have several operations that already
     // hold outer HTTP/2-capacity slots. Waiting for this connection's single
     // exchange slot does not own its socket: a timeout/cancellation here must
@@ -1237,8 +1185,7 @@ task<bool> http_client_pool::execute_http1(http_client_connection& connection_va
             --connection_.http1_operations_;
         }
     } operation{*this, connection_value, must_buffer};
-    const auto acquired =
-        co_await connection_value.http1_scheduler_.acquire({.timeout_ = acquire_timeout.timeout(), .stop_token_ = stop_token_value});
+    const auto acquired = co_await connection_value.http1_scheduler_.acquire({.timeout_ = acquire_timeout.timeout(), .stop_token_ = stop_token_value});
     if (!acquired.has_value()) {
         throw_http_client_wait_failure(acquired.status(), "HTTP/1 connection acquire");
     }
@@ -1273,8 +1220,7 @@ task<bool> http_client_pool::execute_http1(http_client_connection& connection_va
         // or exchange while waiting for this slot invalidates the snapshot.
         bool reused_http1 = false;
         if (!connection_value.connected_ || connected_http1_generation != connection_value.generation_) {
-            reused_http1 =
-                co_await connection_value.ensure_connected(timeout, acquire_timeout, stop_token_value, state_value);
+            reused_http1 = co_await connection_value.ensure_connected(timeout, acquire_timeout, stop_token_value, state_value);
         }
         if (connection_value.protocol_ == http_client_connection::protocol_type::http2) {
             co_return false;
@@ -1293,8 +1239,7 @@ task<bool> http_client_pool::execute_http1(http_client_connection& connection_va
                 connection_value.begin_idle();
                 co_return true;
             }
-            if (retried || !reused_http1 ||
-                !can_retry_reused_connection_request(http_client_failure_code(failure), request, state_value)) {
+            if (retried || !reused_http1 || !can_retry_reused_connection_request(http_client_failure_code(failure), request, state_value)) {
                 std::rethrow_exception(failure);
             }
             connection_value.close();
@@ -1329,8 +1274,7 @@ void http_client_pool::abandon_response(http_client_response_state& state_value,
             if (auto* const found = find_connection(state_value)) {
                 const auto error = malformed ? http2_error_code::protocol_error : http2_error_code::cancel;
                 auto& conn = *found;
-                if (conn.generation_ == state_value.connection_generation_ &&
-                    error == http2_error_code::protocol_error && state_value.stream_id_ != 0) {
+                if (conn.generation_ == state_value.connection_generation_ && error == http2_error_code::protocol_error && state_value.stream_id_ != 0) {
                     conn.http2_.submit_reset(static_cast<std::uint32_t>(state_value.stream_id_), error);
                 }
                 if (state_value.request_id_ != 0) {
@@ -1397,13 +1341,11 @@ void http_client_pool::observe_alt_svc(const http_client_route& route, std::span
     // Only TLS-authenticated responses, for requests that may use HTTP/3 beside
     // a TCP version, advertise alternatives. Entries are keyed by the actual
     // route, so an alias without a fixed origin learns them per destination.
-    if (config_.scheme_ != http_scheme::https || (!config_.versions_.http3_ && !route.versions_.http3_) ||
-        (!route.versions_.http1_ && !route.versions_.http2_)) {
+    if (config_.scheme_ != http_scheme::https || (!config_.versions_.http3_ && !route.versions_.http3_) || (!route.versions_.http1_ && !route.versions_.http2_)) {
         return;
     }
     const auto names_route = [&route](const alternative_service& service) noexcept {
-        return service.route_port_ == route.dial_port_ && http_ascii_equals_ignore_case(service.route_host_, route.dial_host_) &&
-               http_ascii_equals_ignore_case(service.server_name_, route.server_name_);
+        return service.route_port_ == route.dial_port_ && http_ascii_equals_ignore_case(service.route_host_, route.dial_host_) && http_ascii_equals_ignore_case(service.server_name_, route.server_name_);
     };
     // The route's failed alternatives stay unavailable across a re-advertisement.
     std::vector<alternative_service> previous;
@@ -1451,18 +1393,15 @@ void http_client_pool::observe_alt_svc(const http_client_route& route, std::span
             if (!authority.empty() && authority.front() == ':') {
                 const auto port_text = authority.substr(1);
                 unsigned parsed_port = 0;
-                const auto parsed = std::from_chars(
-                    port_text.data(), port_text.data() + port_text.size(), parsed_port);
-                if (parsed.ec != std::errc{} || parsed.ptr != port_text.data() + port_text.size() ||
-                    parsed_port == 0 || parsed_port > 65535) {
+                const auto parsed = std::from_chars(port_text.data(), port_text.data() + port_text.size(), parsed_port);
+                if (parsed.ec != std::errc{} || parsed.ptr != port_text.data() + port_text.size() || parsed_port == 0 || parsed_port > 65535) {
                     return true;
                 }
                 port = static_cast<std::uint16_t>(parsed_port);
                 host = route.dial_host_;
             } else {
                 const auto parsed_authority = parse_http_authority(authority);
-                if (!parsed_authority || parsed_authority->port_kind() != http_authority_port_kind::value ||
-                    *parsed_authority->port() == 0) {
+                if (!parsed_authority || parsed_authority->port_kind() != http_authority_port_kind::value || *parsed_authority->port() == 0) {
                     return true;
                 }
                 port = *parsed_authority->port();
@@ -1522,14 +1461,7 @@ void http_client_pool::observe_alt_svc(const http_client_route& route, std::span
             if (alternative_services_.size() == config_.http3_.max_alt_svc_entries_) {
                 alternative_services_.erase(std::ranges::min_element(alternative_services_, {}, &alternative_service::used_));
             }
-            alternative_service entry{.route_host_ = std::string(route.dial_host_),
-                .route_port_ = route.dial_port_,
-                .server_name_ = std::string(route.server_name_),
-                .host_ = std::string(host),
-                .port_ = port,
-                .expires_ = now + std::chrono::seconds(seconds),
-                .broken_until_ = {},
-                .used_ = ++alternative_clock_};
+            alternative_service entry{.route_host_ = std::string(route.dial_host_), .route_port_ = route.dial_port_, .server_name_ = std::string(route.server_name_), .host_ = std::string(host), .port_ = port, .expires_ = now + std::chrono::seconds(seconds), .broken_until_ = {}, .used_ = ++alternative_clock_};
             for (const auto& failed : previous) {
                 if (failed.port_ == port && http_ascii_equals_ignore_case(failed.host_, host)) {
                     entry.broken_until_ = failed.broken_until_;
@@ -1551,9 +1483,7 @@ http3_client_connection* http_client_pool::find_http3_connection(const http_clie
         return nullptr;
     }
     auto* const connection_value = http3_connections_[state_value.connection_index_].get();
-    return connection_value != nullptr && connection_value->serial() == state_value.connection_serial_
-               ? connection_value
-               : nullptr;
+    return connection_value != nullptr && connection_value->serial() == state_value.connection_serial_ ? connection_value : nullptr;
 }
 
 void http_client_pool::release_http3_connection(http3_client_connection& connection_value) noexcept {
@@ -1571,9 +1501,7 @@ void http_client_pool::release_http3_connection(http3_client_connection& connect
     }
 }
 
-task<bool> http_client_pool::execute_http3(const http_client_request_storage& request,
-    const operation_deadline& timeout, const operation_deadline& acquire_timeout, stop_token stop,
-    http_client_response_state& state, request_admission& admission) {
+task<bool> http_client_pool::execute_http3(const http_client_request_storage& request, const operation_deadline& timeout, const operation_deadline& acquire_timeout, stop_token stop, http_client_response_state& state, request_admission& admission) {
     require_open();
     const auto& route = request.route();
     const auto& versions = route.versions_;
@@ -1596,7 +1524,9 @@ task<bool> http_client_pool::execute_http3(const http_client_request_storage& re
             co_return false;
         }
         const auto now = std::chrono::steady_clock::now();
-        std::erase_if(alternative_services_, [now](const alternative_service& service) { return service.expires_ <= now; });
+        std::erase_if(alternative_services_, [now](const alternative_service& service) {
+            return service.expires_ <= now;
+        });
         auto* const alternative = find_alternative_service(route, now);
         if (alternative == nullptr) {
             co_return false;
@@ -1612,8 +1542,7 @@ task<bool> http_client_pool::execute_http3(const http_client_request_storage& re
         for (;;) {
             throw_if_admission_ended(stop, state);
             for (auto& owner : http3_connections_) {
-                if (!fresh && owner && owner->serves(host, port, route.server_name_) &&
-                    (owner->available() != 0 || owner->connecting())) {
+                if (!fresh && owner && owner->serves(host, port, route.server_name_) && (owner->available() != 0 || owner->connecting())) {
                     selected = owner.get();
                     break;
                 }
@@ -1624,8 +1553,7 @@ task<bool> http_client_pool::execute_http3(const http_client_request_storage& re
                     http3_tls_ = std::make_unique<http3_client_tls>(*this);
                 }
                 const auto index = free_connection_position(http3_connections_);
-                http3_connections_[index] = std::make_unique<http3_client_connection>(*this,
-                    *http3_tls_, index, ++next_connection_serial_, host, port, route.server_name_);
+                http3_connections_[index] = std::make_unique<http3_client_connection>(*this, *http3_tls_, index, ++next_connection_serial_, host, port, route.server_name_);
                 ++open_connections_;
                 selected = http3_connections_[index].get();
                 selected->fresh_ = fresh;
@@ -1658,9 +1586,7 @@ task<bool> http_client_pool::execute_http3(const http_client_request_storage& re
         // RFC 7838 section 2.4: the request falls back to TCP, and the failed
         // alternative is not tried again for a while.
         for (auto& service : alternative_services_) {
-            if (service.port_ == port && http_ascii_equals_ignore_case(service.host_, host) && service.route_port_ == route.dial_port_ &&
-                http_ascii_equals_ignore_case(service.route_host_, route.dial_host_) &&
-                http_ascii_equals_ignore_case(service.server_name_, route.server_name_)) {
+            if (service.port_ == port && http_ascii_equals_ignore_case(service.host_, host) && service.route_port_ == route.dial_port_ && http_ascii_equals_ignore_case(service.route_host_, route.dial_host_) && http_ascii_equals_ignore_case(service.server_name_, route.server_name_)) {
                 service.broken_until_ = std::chrono::steady_clock::now() + alternative_service_retry_delay;
             }
         }
@@ -1668,20 +1594,16 @@ task<bool> http_client_pool::execute_http3(const http_client_request_storage& re
     co_return used;
 }
 
-http_client_pool::alternative_service* http_client_pool::find_alternative_service(
-    const http_client_route& route, std::chrono::steady_clock::time_point now) noexcept {
+http_client_pool::alternative_service* http_client_pool::find_alternative_service(const http_client_route& route, std::chrono::steady_clock::time_point now) noexcept {
     for (auto& service : alternative_services_) {
-        if (service.broken_until_ <= now && service.route_port_ == route.dial_port_ &&
-            http_ascii_equals_ignore_case(service.route_host_, route.dial_host_) &&
-            http_ascii_equals_ignore_case(service.server_name_, route.server_name_)) {
+        if (service.broken_until_ <= now && service.route_port_ == route.dial_port_ && http_ascii_equals_ignore_case(service.route_host_, route.dial_host_) && http_ascii_equals_ignore_case(service.server_name_, route.server_name_)) {
             return &service;
         }
     }
     return nullptr;
 }
 
-task<std::optional<http_tunnel_input>> http_client_pool::read_http3_tunnel_input(
-    http_client_response_state& state, operation_options operation) {
+task<std::optional<http_tunnel_input>> http_client_pool::read_http3_tunnel_input(http_client_response_state& state, operation_options operation) {
     auto lane = claim_operation_lane(state.body_operation_active_, "HTTP/3 tunnel input is already active");
     const http_client_operation_interruption interruption(state, http_client_operation_lane::read, operation);
     for (;;) {
@@ -1715,11 +1637,8 @@ task<std::optional<http_tunnel_input>> http_client_pool::read_http3_tunnel_input
     }
 }
 
-task<bool> http_client_pool::send_http3_datagram(
-    http_client_response_state& state, std::string_view payload, operation_options operation) {
-    auto* const connection_value = state.tunnel_ && state.transport_ == http_client_response_transport::http3
-                                       ? find_http3_connection(state)
-                                       : nullptr;
+task<bool> http_client_pool::send_http3_datagram(http_client_response_state& state, std::string_view payload, operation_options operation) {
+    auto* const connection_value = state.tunnel_ && state.transport_ == http_client_response_transport::http3 ? find_http3_connection(state) : nullptr;
     if (connection_value == nullptr) {
         throw http_client_error(make_error_code(http_client_errc::closing), "HTTP/3 tunnel output closed");
     }
@@ -1736,8 +1655,7 @@ task<bool> http_client_pool::send_http3_datagram(
 }
 #endif
 
-task<void> http_client_pool::migrate_http3(std::string local_address, std::uint16_t port,
-    operation_options options, stop_token host_stop) {
+task<void> http_client_pool::migrate_http3(std::string local_address, std::uint16_t port, operation_options options, stop_token host_stop) {
 #ifdef RUVIA_ENABLE_HTTP3
     require_accepting();
     if (closing_) {
@@ -1759,8 +1677,7 @@ task<void> http_client_pool::migrate_http3(std::string local_address, std::uint1
     }
     bool migrated = false;
     for (const auto& [index, serial] : active) {
-        if (index < http3_connections_.size() && http3_connections_[index] &&
-            http3_connections_[index]->serial() == serial && http3_connections_[index]->active()) {
+        if (index < http3_connections_.size() && http3_connections_[index] && http3_connections_[index]->serial() == serial && http3_connections_[index]->active()) {
             co_await http3_connections_[index]->migrate(local_address, port, timeout, options.stop_token_);
             migrated = true;
         }
@@ -1780,10 +1697,10 @@ task<void> http_client_pool::migrate_http3(std::string local_address, std::uint1
 }  // namespace ruvia::detail
 
 namespace ruvia {
-http_client_push::http_client_push(http_client_response response) noexcept
-    : response_(std::move(response)) {}
-http_client_push::http_client_push(http_client_push&& other) noexcept
-    : response_(std::move(other.response_)) {}
+http_client_push::http_client_push(http_client_response response) noexcept :
+    response_(std::move(response)) {}
+http_client_push::http_client_push(http_client_push&& other) noexcept :
+    response_(std::move(other.response_)) {}
 http_client_push& http_client_push::operator=(http_client_push&& other) noexcept {
     if (this != &other) {
         release();
@@ -1820,8 +1737,7 @@ task<http_client_response> http_client_push::response(operation_options operatio
     if (state_value->push_response_.taken() || state_value->push_response_.has_pending_receive()) {
         throw std::logic_error("push response has already been transferred or is active");
     }
-    return state_value->push_response_.receive(
-        http_client_response(state_value), "HTTP push failed before its response head", std::move(operation));
+    return state_value->push_response_.receive(http_client_response(state_value), "HTTP push failed before its response head", std::move(operation));
 }
 }  // namespace ruvia
 
@@ -1831,20 +1747,19 @@ bool is_tls_error(const std::error_code& error) noexcept {
     return error.category() == asio::error::get_ssl_category() || error == asio::ssl::error::stream_truncated;
 }
 
-client_tcp_transport::client_tcp_transport(asio::io_context& io, asio::ssl::context& tls,
-    const worker_ref& worker_value, client_tcp_endpoint endpoint, client_wire_counters& counters)
-    : worker_(worker_value),
-      tls_(tls),
-      endpoint_(endpoint),
-      literal_endpoint_([&]() -> std::optional<asio::ip::tcp::endpoint> {
-          if (const auto address = parse_ip_address(endpoint_.host_)) {
-              return asio::ip::tcp::endpoint(*address, endpoint_.port_);
-          }
-          return std::nullopt;
-      }()),
-      counters_(counters),
-      resolver_(worker_value),
-      stream_(io.get_executor(), tls) {
+client_tcp_transport::client_tcp_transport(asio::io_context& io, asio::ssl::context& tls, const worker_ref& worker_value, client_tcp_endpoint endpoint, client_wire_counters& counters) :
+    worker_(worker_value),
+    tls_(tls),
+    endpoint_(endpoint),
+    literal_endpoint_([&]() -> std::optional<asio::ip::tcp::endpoint> {
+        if (const auto address = parse_ip_address(endpoint_.host_)) {
+            return asio::ip::tcp::endpoint(*address, endpoint_.port_);
+        }
+        return std::nullopt;
+    }()),
+    counters_(counters),
+    resolver_(worker_value),
+    stream_(io.get_executor(), tls) {
     // Owners build their transports eagerly, before any member that must be
     // retired, so a host this worker cannot look up rejects the client itself.
     require_client_host_lookup(endpoint_.host_, worker_);
@@ -1901,8 +1816,7 @@ void client_tcp_transport::send_close_notify() noexcept {
     // cancelled write it would follow a cut or lost one, so the close goes
     // without the alert. A post-handshake message still being read keeps the
     // engine in init.
-    if (!layer.records_whole() || !socket.is_open() || SSL_is_init_finished(native) != 1 ||
-        (SSL_get_shutdown(native) & SSL_SENT_SHUTDOWN) != 0) {
+    if (!layer.records_whole() || !socket.is_open() || SSL_is_init_finished(native) != 1 || (SSL_get_shutdown(native) & SSL_SENT_SHUTDOWN) != 0) {
         return;
     }
     // Send our alert without waiting for the peer's: recording its alert as
@@ -1941,13 +1855,11 @@ client_idle_transport_status client_tcp_transport::idle_status() noexcept {
     }
     std::error_code error;
     char byte{};
-    const auto bytes = socket.receive(
-        asio::buffer(&byte, 1), asio::socket_base::message_peek, error);
+    const auto bytes = socket.receive(asio::buffer(&byte, 1), asio::socket_base::message_peek, error);
     if (error == asio::error::would_block) {
         return client_idle_transport_status::reusable;
     }
-    return !error && bytes != 0 ? client_idle_transport_status::pending_data
-                                : client_idle_transport_status::closed;
+    return !error && bytes != 0 ? client_idle_transport_status::pending_data : client_idle_transport_status::closed;
 }
 
 task<void> client_tcp_transport::wait_readable() {
@@ -1990,12 +1902,10 @@ bool client_tcp_transport::clear(lane_deadline& lane) noexcept {
 }
 
 client_transport_result client_tcp_transport::aborted() const noexcept {
-    return {.status_ = client_transport_status::aborted,
-        .abort_ = abort_reason_ == client_abort_reason::none ? client_abort_reason::timeout : abort_reason_};
+    return {.status_ = client_transport_status::aborted, .abort_ = abort_reason_ == client_abort_reason::none ? client_abort_reason::timeout : abort_reason_};
 }
 
-client_transport_result client_tcp_transport::finish(lane_deadline& lane, const operation_deadline& timeout,
-    const std::error_code& error, std::size_t bytes, client_transport_status failure) noexcept {
+client_transport_result client_tcp_transport::finish(lane_deadline& lane, const operation_deadline& timeout, const std::error_code& error, std::size_t bytes, client_transport_status failure) noexcept {
     if ((clear(lane) || timeout.expired()) && abort_reason_ == client_abort_reason::none) {
         abort_reason_ = client_abort_reason::timeout;
     }
@@ -2064,8 +1974,7 @@ task<client_transport_result> client_tcp_transport::connect(const operation_dead
         const auto connected = co_await async_asio([this, endpoint = *resolved.literal_](auto handler) mutable {
             stream_.next_layer().socket().async_connect(endpoint, std::move(handler));
         });
-        if (connected.error_code() || abort_reason_ != client_abort_reason::none ||
-            read_.deadline_.expired() || timeout.expired()) {
+        if (connected.error_code() || abort_reason_ != client_abort_reason::none || read_.deadline_.expired() || timeout.expired()) {
             co_return finish(read_, timeout, connected.error_code(), 0, client_transport_status::connect_failed);
         }
     } else {
@@ -2080,8 +1989,7 @@ task<client_transport_result> client_tcp_transport::connect(const operation_dead
         } connector_guard{connecting_};
         auto connected = co_await connector.connect();
         connecting_ = nullptr;
-        if (connected.error_ || abort_reason_ != client_abort_reason::none || read_.deadline_.expired() ||
-            timeout.expired()) {
+        if (connected.error_ || abort_reason_ != client_abort_reason::none || read_.deadline_.expired() || timeout.expired()) {
             co_return finish(read_, timeout, connected.error_, 0, client_transport_status::connect_failed);
         }
         if (!connected.socket_) {
@@ -2105,12 +2013,9 @@ task<client_transport_result> client_tcp_transport::connect(const operation_dead
         co_return finish(read_, timeout, mode_error, 0, client_transport_status::connect_failed);
     }
     tls_started_ = true;
-    if (const auto prepared =
-            prepare_client_tls_stream(*stream_.native_handle(), endpoint_.identity_host_.empty() ? endpoint_.tls_->tls_host(endpoint_.host_) : endpoint_.identity_host_, endpoint_.alpn_);
-        prepared != client_tls_setup_error::none) {
+    if (const auto prepared = prepare_client_tls_stream(*stream_.native_handle(), endpoint_.identity_host_.empty() ? endpoint_.tls_->tls_host(endpoint_.host_) : endpoint_.identity_host_, endpoint_.alpn_); prepared != client_tls_setup_error::none) {
         (void)clear(read_);
-        co_return client_transport_result{.status_ = client_transport_status::tls_failed,
-            .error_ = make_client_tls_setup_error_code(prepared)};
+        co_return client_transport_result{.status_ = client_transport_status::tls_failed, .error_ = make_client_tls_setup_error_code(prepared)};
     }
     const auto tls_started = std::chrono::steady_clock::now();
     const auto handshake = co_await async_asio([this](auto handler) mutable {
@@ -2139,20 +2044,19 @@ task<client_transport_result> client_tcp_transport::read_some(std::span<char> by
     }
     const auto buffer = asio::buffer(bytes_value);
     const auto completion = secure()
-                                ? co_await async_asio<std::size_t>([this, buffer](auto handler) mutable {
-                                      stream_.async_read_some(buffer, std::move(handler));
-                                  })
-                                : co_await async_asio<std::size_t>([this, buffer](auto handler) mutable {
-                                      stream_.next_layer().socket().async_read_some(buffer, std::move(handler));
-                                  });
+        ? co_await async_asio<std::size_t>([this, buffer](auto handler) mutable {
+        stream_.async_read_some(buffer, std::move(handler));
+    })
+        : co_await async_asio<std::size_t>([this, buffer](auto handler) mutable {
+        stream_.next_layer().socket().async_read_some(buffer, std::move(handler));
+    });
     // After a TLS failure the engine owes the peer no further records.
     if (is_tls_error(completion.error_code())) {
         tls_close_ready_ = false;
     }
     const auto transferred = completion.result();
     counters_.received_ += transferred;
-    auto result_value = finish(read_, timeout, completion.error_code(),
-        completion.error_code() ? 0 : transferred, client_transport_status::io_failed);
+    auto result_value = finish(read_, timeout, completion.error_code(), completion.error_code() ? 0 : transferred, client_transport_status::io_failed);
     if (result_value.ok() && result_value.bytes_ == 0) {
         result_value.status_ = client_transport_status::eof;
     }
@@ -2173,8 +2077,8 @@ task<client_transport_result> client_tcp_transport::write_buffers(buffers_type b
     }
     struct write_guard final {
         bool& writing_;
-        explicit write_guard(bool& writing) noexcept
-            : writing_(writing) {
+        explicit write_guard(bool& writing) noexcept :
+            writing_(writing) {
             writing_ = true;
         }
         ~write_guard() noexcept {
@@ -2182,19 +2086,18 @@ task<client_transport_result> client_tcp_transport::write_buffers(buffers_type b
         }
     } guard(writing_);
     const auto completion = secure()
-                                ? co_await async_asio<std::size_t>([this, buffers](auto handler) mutable {
-                                      asio::async_write(stream_, buffers, std::move(handler));
-                                  })
-                                : co_await async_asio<std::size_t>([this, buffers](auto handler) mutable {
-                                      asio::async_write(stream_.next_layer().socket(), buffers, std::move(handler));
-                                  });
+        ? co_await async_asio<std::size_t>([this, buffers](auto handler) mutable {
+        asio::async_write(stream_, buffers, std::move(handler));
+    })
+        : co_await async_asio<std::size_t>([this, buffers](auto handler) mutable {
+        asio::async_write(stream_.next_layer().socket(), buffers, std::move(handler));
+    });
     if (completion.error_code()) {
         tls_close_ready_ = false;
     }
     const auto transferred = completion.result();
     counters_.sent_ += transferred;
-    auto result_value = finish(write_, timeout, completion.error_code(),
-        completion.error_code() ? 0 : transferred, client_transport_status::io_failed);
+    auto result_value = finish(write_, timeout, completion.error_code(), completion.error_code() ? 0 : transferred, client_transport_status::io_failed);
     if (result_value.status_ == client_transport_status::eof) {
         result_value.status_ = client_transport_status::io_failed;
     }
@@ -2205,8 +2108,7 @@ task<client_transport_result> client_tcp_transport::write(std::string_view bytes
     return write_buffers(asio::buffer(bytes_value), timeout);
 }
 
-task<client_transport_result> client_tcp_transport::write(
-    std::span<const asio::const_buffer> buffers, const operation_deadline& timeout) {
+task<client_transport_result> client_tcp_transport::write(std::span<const asio::const_buffer> buffers, const operation_deadline& timeout) {
     return write_buffers(buffers, timeout);
 }
 
@@ -2216,9 +2118,9 @@ namespace ruvia::detail {
 namespace {
 
 struct client_tls_preparation final {
-    explicit client_tls_preparation(client_tls_config_storage config)
-        : config_(std::move(config)),
-          password_() {}
+    explicit client_tls_preparation(client_tls_config_storage config) :
+        config_(std::move(config)),
+        password_() {}
     ~client_tls_preparation() {
         if (!password_.empty()) {
             OPENSSL_cleanse(password_.data(), password_.size());
@@ -2228,36 +2130,30 @@ struct client_tls_preparation final {
     std::string password_;
 };
 
-task<client_tls_config_storage> prepare_client_tls_owned(worker_ref worker,
-    std::unique_ptr<client_tls_preparation> input,
-    stop_token stop) {
-    auto result = co_await run_blocking(std::move(worker),
-        [input = std::move(input), stop = std::move(stop)]() mutable {
-            if (stop.stop_requested()) {
-                throw std::runtime_error("client TLS preparation cancelled");
-            }
-            input->config_.parse_files(input->password_);
-            return std::move(input->config_);
-        });
+task<client_tls_config_storage> prepare_client_tls_owned(worker_ref worker, std::unique_ptr<client_tls_preparation> input, stop_token stop) {
+    auto result = co_await run_blocking(std::move(worker), [input = std::move(input), stop = std::move(stop)]() mutable {
+        if (stop.stop_requested()) {
+            throw std::runtime_error("client TLS preparation cancelled");
+        }
+        input->config_.parse_files(input->password_);
+        return std::move(input->config_);
+    });
     co_return std::move(result).take_value();
 }
 
 constexpr std::array<unsigned char, 9> http11_alpn = {8, 'h', 't', 't', 'p', '/', '1', '.', '1'};
 constexpr std::array<unsigned char, 3> http2_alpn = {2, 'h', '2'};
-constexpr std::array<unsigned char, 12> negotiated_http_alpn = {
-    2, 'h', '2', 8, 'h', 't', 't', 'p', '/', '1', '.', '1'};
+constexpr std::array<unsigned char, 12> negotiated_http_alpn = {2, 'h', '2', 8, 'h', 't', 't', 'p', '/', '1', '.', '1'};
 
 [[nodiscard]] bool configure_client_tls_peer_identity(SSL& connection, const char* host, bool ip_address) noexcept {
     X509_VERIFY_PARAM* const parameters = SSL_get0_param(&connection);
     if (ip_address) {
-        return X509_VERIFY_PARAM_set1_host(parameters, nullptr, 0) == 1 &&
-               X509_VERIFY_PARAM_set1_ip_asc(parameters, host) == 1;
+        return X509_VERIFY_PARAM_set1_host(parameters, nullptr, 0) == 1 && X509_VERIFY_PARAM_set1_ip_asc(parameters, host) == 1;
     }
     // RFC 9110 §4.3.4 / RFC 9525 §6.3: DNS-ID only, never the subject Common
     // Name, and a wildcard only as the complete left-most label.
     X509_VERIFY_PARAM_set_hostflags(parameters, X509_CHECK_FLAG_NEVER_CHECK_SUBJECT | X509_CHECK_FLAG_NO_PARTIAL_WILDCARDS);
-    return X509_VERIFY_PARAM_set1_ip(parameters, nullptr, 0) == 1 &&
-           X509_VERIFY_PARAM_set1_host(parameters, host, 0) == 1;
+    return X509_VERIFY_PARAM_set1_ip(parameters, nullptr, 0) == 1 && X509_VERIFY_PARAM_set1_host(parameters, host, 0) == 1;
 }
 
 // Prepares SNI and the expected peer identity; TLS always authenticates the peer.
@@ -2327,11 +2223,10 @@ public:
     std::terminate();
 }
 
-client_tls_config_storage::client_tls_config_storage(
-    const client_tls_config& source_value, client_tls_files files)
-    : mode_(source_value.mode_),
-      minimum_version_(source_value.minimum_version_),
-      max_outgoing_records_(source_value.max_outgoing_records_) {
+client_tls_config_storage::client_tls_config_storage(const client_tls_config& source_value, client_tls_files files) :
+    mode_(source_value.mode_),
+    minimum_version_(source_value.minimum_version_),
+    max_outgoing_records_(source_value.max_outgoing_records_) {
     if (source_value.ca_file_.has_value()) {
         ca_file_.emplace(make_tls_file_name(*source_value.ca_file_));
     }
@@ -2357,9 +2252,7 @@ void client_tls_config_storage::parse_files(std::string_view private_key_passwor
     }
 }
 
-task<client_tls_config_storage> prepare_client_tls_config(
-    worker_ref worker, client_tls_config_storage config,
-    std::string_view private_key_password, stop_token stop) {
+task<client_tls_config_storage> prepare_client_tls_config(worker_ref worker, client_tls_config_storage config, std::string_view private_key_password, stop_token stop) {
     auto input = std::make_unique<client_tls_preparation>(std::move(config));
     // Keep the secret at one stable address: moving an SSO string can leave
     // uncleansed bytes behind in an abandoned coroutine or callable frame.
@@ -2367,13 +2260,12 @@ task<client_tls_config_storage> prepare_client_tls_config(
     return prepare_client_tls_owned(std::move(worker), std::move(input), std::move(stop));
 }
 
-client_tls_config_storage::client_tls_config_storage(
-    const client_tls_config_storage& source_value)
-    : mode_(source_value.mode_),
-      minimum_version_(source_value.minimum_version_),
-      max_outgoing_records_(source_value.max_outgoing_records_),
-      trust_store_(source_value.trust_store_),
-      certificate_(source_value.certificate_) {
+client_tls_config_storage::client_tls_config_storage(const client_tls_config_storage& source_value) :
+    mode_(source_value.mode_),
+    minimum_version_(source_value.minimum_version_),
+    max_outgoing_records_(source_value.max_outgoing_records_),
+    trust_store_(source_value.trust_store_),
+    certificate_(source_value.certificate_) {
     if (source_value.ca_file_.has_value()) {
         ca_file_.emplace(*source_value.ca_file_);
     }
@@ -2414,9 +2306,7 @@ client_tls_setup_error prepare_client_tls_stream(SSL& ssl, std::string_view host
     // Keep a stricter context minimum (in particular QUIC's TLS 1.3).
     // Mixed ALPN offers may negotiate HTTP/1.1 over TLS 1.1; the shared TCP
     // transport checks the selected protocol before exposing any byte I/O.
-    if (std::ranges::equal(protocols, http2_alpn) &&
-        SSL_get_min_proto_version(&ssl) < TLS1_2_VERSION &&
-        SSL_set_min_proto_version(&ssl, TLS1_2_VERSION) != 1) {
+    if (std::ranges::equal(protocols, http2_alpn) && SSL_get_min_proto_version(&ssl) < TLS1_2_VERSION && SSL_set_min_proto_version(&ssl, TLS1_2_VERSION) != 1) {
         return client_tls_setup_error::protocol_failed;
     }
     if (const auto prepared = prepare_client_tls_session(ssl, host); prepared != client_tls_setup_error::none) {
@@ -2437,12 +2327,10 @@ std::error_code make_client_tls_setup_error_code(client_tls_setup_error error) n
 
 namespace ruvia::detail {
 
-client_happy_eyeballs::client_happy_eyeballs(const worker_ref& worker,
-    const asio::ip::tcp::socket::executor_type& executor,
-    const asio::ip::tcp::resolver::results_type& addresses)
-    : worker_(worker),
-      changed_(worker),
-      attempts_() {
+client_happy_eyeballs::client_happy_eyeballs(const worker_ref& worker, const asio::ip::tcp::socket::executor_type& executor, const asio::ip::tcp::resolver::results_type& addresses) :
+    worker_(worker),
+    changed_(worker),
+    attempts_() {
     if (addresses.empty()) {
         return;
     }
@@ -2493,8 +2381,9 @@ void client_happy_eyeballs::schedule_next() noexcept {
         return;
     }
     try {
-        const auto status = worker_.schedule_timer(delay_, deadline_after(client_connection_attempt_delay),
-            [this](worker_timer_outcome outcome) noexcept { on_delay(outcome); });
+        const auto status = worker_.schedule_timer(delay_, deadline_after(client_connection_attempt_delay), [this](worker_timer_outcome outcome) noexcept {
+            on_delay(outcome);
+        });
         if (status != worker_timer_schedule_status::worker_stopping) {
             return;
         }
@@ -2513,8 +2402,9 @@ void client_happy_eyeballs::start_next() noexcept {
     current.active_ = true;
     ++active_;
     try {
-        current.socket_.async_connect(current.endpoint_,
-            [this, index](const std::error_code& error) noexcept { on_connect(index, error); });
+        current.socket_.async_connect(current.endpoint_, [this, index](const std::error_code& error) noexcept {
+            on_connect(index, error);
+        });
     } catch (...) {
         current.active_ = false;
         --active_;
@@ -2588,8 +2478,7 @@ task<client_happy_eyeballs_result> client_happy_eyeballs::connect() & {
                 co_return client_happy_eyeballs_result{std::move(socket), {}};
             }
         } else if (active_ == 0 && next_ == attempts_.size()) {
-            co_return client_happy_eyeballs_result{{},
-                last_error_ ? last_error_ : std::error_code(asio::error::host_unreachable)};
+            co_return client_happy_eyeballs_result{{}, last_error_ ? last_error_ : std::error_code(asio::error::host_unreachable)};
         }
         co_await changed_.wait();
     }
@@ -2623,8 +2512,8 @@ void require_client_host_lookup(std::string_view host, const worker_ref& worker)
     }
 }
 
-client_host_resolver::client_host_resolver(client_host_resolver&& other) noexcept
-    : worker_(other.worker_) {
+client_host_resolver::client_host_resolver(client_host_resolver&& other) noexcept :
+    worker_(other.worker_) {
     if (other.stop_) {
         std::terminate();
     }
@@ -2638,8 +2527,7 @@ client_host_resolver& client_host_resolver::operator=(client_host_resolver&& oth
     return *this;
 }
 
-client_resolve_operation client_host_resolver::resolve(std::string_view host, std::uint16_t port,
-    const operation_deadline& timeout, stop_token stop) {
+client_resolve_operation client_host_resolver::resolve(std::string_view host, std::uint16_t port, const operation_deadline& timeout, stop_token stop) {
     if (stop.stop_requested()) {
         return client_resolve_result{.error_ = asio::error::operation_aborted};
     }
@@ -2661,8 +2549,7 @@ task<client_resolve_result> client_host_resolver::resolve_query(query input, ope
         }
     } guard{stop_};
     stop_group cancellation(stop_->token(), stop);
-    auto result = co_await run_blocking(
-        *worker_, {.timeout_ = timeout.timeout(), .stop_token_ = cancellation.token()}, std::move(input));
+    auto result = co_await run_blocking(*worker_, {.timeout_ = timeout.timeout(), .stop_token_ = cancellation.token()}, std::move(input));
     switch (result.status()) {
         case blocking_status::completed:
             co_return std::move(result).take_value();
@@ -2737,8 +2624,7 @@ namespace {
 [[noreturn]] void throw_transport_error(const client_transport_result& result) {
     std::error_code error = result.error_;
     if (result.status_ == client_transport_status::aborted) {
-        error = std::make_error_code(result.abort_ == client_abort_reason::timeout ? std::errc::timed_out
-                                                                                   : std::errc::operation_canceled);
+        error = std::make_error_code(result.abort_ == client_abort_reason::timeout ? std::errc::timed_out : std::errc::operation_canceled);
     }
     if (!error) {
         error = std::make_error_code(std::errc::io_error);
@@ -2749,17 +2635,16 @@ namespace {
 
 class tcp_client_backend final {
 public:
-    tcp_client_backend(event_loop& loop, const worker_ref& worker, const tcp_client_config& config)
-        : host_(owned_host(config)),
-          alpn_(owned_alpn(config)),
-          tls_config_(config.tls_, client_tls_files::parse),
-          tls_context_(make_tls_context(tls_config_)),
-          transport_(loop.io_context(), tls_context_, worker,
-              {host_, config.port_.value(), tls_config_.mode_ == client_tls_mode::disabled ? nullptr : &tls_config_, config.tcp_, alpn_}, counters_),
-          cancellation_(make_worker_cancellation_target(*this, worker)),
-          connect_timeout_(config.connect_timeout_),
-          read_timeout_(config.read_timeout_),
-          write_timeout_(config.write_timeout_) {}
+    tcp_client_backend(event_loop& loop, const worker_ref& worker, const tcp_client_config& config) :
+        host_(owned_host(config)),
+        alpn_(owned_alpn(config)),
+        tls_config_(config.tls_, client_tls_files::parse),
+        tls_context_(make_tls_context(tls_config_)),
+        transport_(loop.io_context(), tls_context_, worker, {host_, config.port_.value(), tls_config_.mode_ == client_tls_mode::disabled ? nullptr : &tls_config_, config.tcp_, alpn_}, counters_),
+        cancellation_(make_worker_cancellation_target(*this, worker)),
+        connect_timeout_(config.connect_timeout_),
+        read_timeout_(config.read_timeout_),
+        write_timeout_(config.write_timeout_) {}
 
     ~tcp_client_backend() {
         cancellation_->detach(*this);
@@ -2857,11 +2742,11 @@ private:
 
 class tcp_client_state final : public std::enable_shared_from_this<tcp_client_state> {
 public:
-    tcp_client_state(event_loop loop, const tcp_client_config& config)
-        : loop_(client_lifecycle<tcp_client_state>::require_loop(std::move(loop))),
-          worker_(loop_.worker()),
-          backend_(loop_, worker_, config),
-          lifecycle_(*this, loop_, worker_) {}
+    tcp_client_state(event_loop loop, const tcp_client_config& config) :
+        loop_(client_lifecycle<tcp_client_state>::require_loop(std::move(loop))),
+        worker_(loop_.worker()),
+        backend_(loop_, worker_, config),
+        lifecycle_(*this, loop_, worker_) {}
 
     void bind_stop() {
         lifecycle_.bind_stop();
@@ -2908,8 +2793,7 @@ private:
         state->backend_.connect_options_ = std::move(options);
         co_await state->lifecycle_.connect();
     }
-    [[nodiscard]] static task<std::optional<std::span<const std::byte>>> read_owned(
-        std::shared_ptr<tcp_client_state> state, operation_options options) {
+    [[nodiscard]] static task<std::optional<std::span<const std::byte>>> read_owned(std::shared_ptr<tcp_client_state> state, operation_options options) {
         state->lifecycle_.require_ready();
         // Lane admission errors are caller errors, not transport failures.
         try {
@@ -2919,8 +2803,7 @@ private:
             throw;
         }
     }
-    [[nodiscard]] static task<void> write_owned(std::shared_ptr<tcp_client_state> state,
-        std::string bytes, operation_options options) {
+    [[nodiscard]] static task<void> write_owned(std::shared_ptr<tcp_client_state> state, std::string bytes, operation_options options) {
         state->lifecycle_.require_ready();
         try {
             co_await state->backend_.write(std::move(bytes), std::move(options));
@@ -2941,8 +2824,8 @@ private:
 
 namespace ruvia {
 
-tcp_client::tcp_client(event_loop loop, const tcp_client_config& config)
-    : state_(std::make_shared<detail::tcp_client_state>(std::move(loop), config)) {
+tcp_client::tcp_client(event_loop loop, const tcp_client_config& config) :
+    state_(std::make_shared<detail::tcp_client_state>(std::move(loop), config)) {
     state_->bind_stop();
 }
 

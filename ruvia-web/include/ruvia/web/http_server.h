@@ -592,19 +592,19 @@ private:
         std::uint64_t redis_duration_micros_{0};
     };
 
-    explicit constexpr access_log_record(const fields_type& fields) noexcept
-        : method_(fields.method_),
-          path_(fields.path_),
-          remote_address_(fields.remote_address_),
-          client_address_(fields.client_address_),
-          duration_micros_(fields.duration_micros_),
-          db_count_(fields.db_count_),
-          db_duration_micros_(fields.db_duration_micros_),
-          redis_count_(fields.redis_count_),
-          redis_duration_micros_(fields.redis_duration_micros_),
-          status_(fields.status_),
-          known_method_(fields.known_method_),
-          protocol_version_(fields.protocol_version_) {}
+    explicit constexpr access_log_record(const fields_type& fields) noexcept :
+        method_(fields.method_),
+        path_(fields.path_),
+        remote_address_(fields.remote_address_),
+        client_address_(fields.client_address_),
+        duration_micros_(fields.duration_micros_),
+        db_count_(fields.db_count_),
+        db_duration_micros_(fields.db_duration_micros_),
+        redis_count_(fields.redis_count_),
+        redis_duration_micros_(fields.redis_duration_micros_),
+        status_(fields.status_),
+        known_method_(fields.known_method_),
+        protocol_version_(fields.protocol_version_) {}
 
     std::string_view method_;
     std::string_view path_;
@@ -656,9 +656,9 @@ public:
 private:
     friend struct detail::connection_failure_record_access;
 
-    connection_failure_record(ip_address remote_address, std::exception_ptr exception) noexcept
-        : remote_address_(remote_address),
-          exception_(std::move(exception)) {}
+    connection_failure_record(ip_address remote_address, std::exception_ptr exception) noexcept :
+        remote_address_(remote_address),
+        exception_(std::move(exception)) {}
 
     ip_address remote_address_{};
     std::exception_ptr exception_;
@@ -773,11 +773,11 @@ namespace ruvia {
 
 class connection_event final {
 public:
-    connection_event(std::uint64_t id, ip_endpoint local, ip_endpoint remote, bool quic) noexcept
-        : id_(id),
-          local_(std::move(local)),
-          remote_(std::move(remote)),
-          quic_(quic) {}
+    connection_event(std::uint64_t id, ip_endpoint local, ip_endpoint remote, bool quic) noexcept :
+        id_(id),
+        local_(std::move(local)),
+        remote_(std::move(remote)),
+        quic_(quic) {}
     [[nodiscard]] std::uint64_t connection_id() const noexcept {
         return id_;
     }
@@ -968,9 +968,7 @@ private:
     using finish_type = task<void> (*)(void*, operation_options);
     using abort_type = void (*)(void*) noexcept;
 
-    server_connection(const detail::server_connection_fields& fields, const ::ruvia::stop_token& stop_token_value,
-        const worker_ref& worker_value, void* target, read_type read, write_type write, finish_type finish_value,
-        abort_type abort_value) noexcept;
+    server_connection(const detail::server_connection_fields& fields, const ::ruvia::stop_token& stop_token_value, const worker_ref& worker_value, void* target, read_type read, write_type write, finish_type finish_value, abort_type abort_value) noexcept;
     void require_active() const;
     [[nodiscard]] task<void> write_owned(std::string&& bytes, operation_options operation);
 
@@ -1061,12 +1059,12 @@ private:
         std::span<const std::byte> message_;
     };
 
-    explicit tls_client_hello_record(const fields_type& fields) noexcept
-        : connection_id_(fields.connection_id_),
-          local_(ip_address::parse(fields.local_address_).value_or(ip_address{}), fields.local_port_),
-          remote_(ip_address::parse(fields.remote_address_).value_or(ip_address{}), fields.remote_port_),
-          message_(fields.message_),
-          quic_(fields.quic_) {}
+    explicit tls_client_hello_record(const fields_type& fields) noexcept :
+        connection_id_(fields.connection_id_),
+        local_(ip_address::parse(fields.local_address_).value_or(ip_address{}), fields.local_port_),
+        remote_(ip_address::parse(fields.remote_address_).value_or(ip_address{}), fields.remote_port_),
+        message_(fields.message_),
+        quic_(fields.quic_) {}
 
     std::uint64_t connection_id_;
     ip_endpoint local_;
@@ -1095,9 +1093,9 @@ public:
 private:
     friend struct detail::server_observation_access;
 
-    constexpr http2_input_record(std::uint64_t connection_id, std::span<const std::byte> bytes) noexcept
-        : connection_id_(connection_id),
-          bytes_(bytes) {}
+    constexpr http2_input_record(std::uint64_t connection_id, std::span<const std::byte> bytes) noexcept :
+        connection_id_(connection_id),
+        bytes_(bytes) {}
 
     std::uint64_t connection_id_;
     std::span<const std::byte> bytes_;
@@ -1121,9 +1119,9 @@ public:
 
 private:
     friend struct detail::server_observation_access;
-    constexpr http2_frame_record(std::uint64_t connection_id, const http2_frame_metadata& metadata) noexcept
-        : connection_id_(connection_id),
-          metadata_(metadata) {}
+    constexpr http2_frame_record(std::uint64_t connection_id, const http2_frame_metadata& metadata) noexcept :
+        connection_id_(connection_id),
+        metadata_(metadata) {}
     std::uint64_t connection_id_;
     const http2_frame_metadata& metadata_;
 };
@@ -1139,9 +1137,9 @@ public:
 
 private:
     friend struct detail::server_observation_access;
-    constexpr http2_headers_record(std::uint64_t connection_id, const http2_header_metadata& metadata) noexcept
-        : connection_id_(connection_id),
-          metadata_(metadata) {}
+    constexpr http2_headers_record(std::uint64_t connection_id, const http2_header_metadata& metadata) noexcept :
+        connection_id_(connection_id),
+        metadata_(metadata) {}
     std::uint64_t connection_id_;
     const http2_header_metadata& metadata_;
 };
@@ -1158,9 +1156,9 @@ public:
 
 private:
     friend struct detail::server_observation_access;
-    constexpr http3_frame_record(std::uint64_t connection_id, const http3_frame_metadata& metadata) noexcept
-        : connection_id_(connection_id),
-          metadata_(metadata) {}
+    constexpr http3_frame_record(std::uint64_t connection_id, const http3_frame_metadata& metadata) noexcept :
+        connection_id_(connection_id),
+        metadata_(metadata) {}
     std::uint64_t connection_id_;
     const http3_frame_metadata& metadata_;
 };
@@ -1176,9 +1174,9 @@ public:
 
 private:
     friend struct detail::server_observation_access;
-    constexpr http3_field_record(std::uint64_t connection_id, const http3_field_metadata& metadata) noexcept
-        : connection_id_(connection_id),
-          metadata_(metadata) {}
+    constexpr http3_field_record(std::uint64_t connection_id, const http3_field_metadata& metadata) noexcept :
+        connection_id_(connection_id),
+        metadata_(metadata) {}
     std::uint64_t connection_id_;
     const http3_field_metadata& metadata_;
 };
@@ -1336,8 +1334,7 @@ public:
 
     // Bound to this request's cancellation, including client abandonment.
     template <typename callable_type>
-    [[nodiscard]] task<blocking_result<std::invoke_result_t<callable_type&>>> run_blocking(
-        callable_type callable, operation_options options = {}) const {
+    [[nodiscard]] task<blocking_result<std::invoke_result_t<callable_type&>>> run_blocking(callable_type callable, operation_options options = {}) const {
         return context_.run_blocking(std::move(callable), std::move(options));
     }
 
@@ -1426,13 +1423,11 @@ private:
     friend class router;
     friend class detail::router_state;
 
-    request_stream(context& context_value, response_stream_writer& response,
-        const detail::request_stream_tunnel_accept* accept_tunnel,
-        const detail::request_stream_websocket_accept* accept_websocket = nullptr) noexcept
-        : context_(context_value),
-          response_(response),
-          accept_tunnel_(accept_tunnel),
-          accept_websocket_(accept_websocket) {
+    request_stream(context& context_value, response_stream_writer& response, const detail::request_stream_tunnel_accept* accept_tunnel, const detail::request_stream_websocket_accept* accept_websocket = nullptr) noexcept :
+        context_(context_value),
+        response_(response),
+        accept_tunnel_(accept_tunnel),
+        accept_websocket_(accept_websocket) {
         operation_scope_.bind_worker(context_value.worker());
     }
 

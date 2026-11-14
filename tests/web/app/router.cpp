@@ -64,8 +64,8 @@ struct lifetime final {
 };
 
 struct counted_middleware final {
-    explicit counted_middleware(std::shared_ptr<lifetime> state)
-        : state_(std::move(state)) {
+    explicit counted_middleware(std::shared_ptr<lifetime> state) :
+        state_(std::move(state)) {
         if (state_->fail_) {
             throw std::runtime_error("constructor failure");
         }
@@ -125,8 +125,7 @@ ruvia::task<void> echo_udp(ruvia::context& context) {
     co_await channel.finish();
 }
 
-ruvia::task<void> check(ruvia::http_client& client, std::string_view method, std::string_view path,
-    ruvia::http_status_code status, std::string_view body) {
+ruvia::task<void> check(ruvia::http_client& client, std::string_view method, std::string_view path, ruvia::http_status_code status, std::string_view body) {
     auto response = co_await client.client().request(method, path).send();
     EXPECT_EQ(response.status(), status);
     const auto content = co_await response.text();
@@ -202,8 +201,11 @@ TEST(Ruvia, public_router_dispatches_parameters_bodies_streams_methods_and_middl
         routes.freeze();
         EXPECT_THROW(routes.add("GET", "/late", &parameter), std::logic_error);
 
-        ruvia::http_server server(attachment.loop(), {.request_stream_ = [&](ruvia::request_stream& stream) { return routes.dispatch(stream); },
-                                                         .connection_failure_ = [&](const ruvia::connection_failure_record&) noexcept { ++connection_failures; }});
+        ruvia::http_server server(attachment.loop(), {.request_stream_ = [&](ruvia::request_stream& stream) {
+            return routes.dispatch(stream);
+        }, .connection_failure_ = [&](const ruvia::connection_failure_record&) noexcept {
+            ++connection_failures;
+        }});
         server.listen({.address_ = "127.0.0.1", .http_ = port.endpoint().port(), .dispatch_ = ruvia::listener_dispatch::request_stream});
         const std::string origin = "http://127.0.0.1:" + std::to_string(port.endpoint().port());
         ruvia::http_client client(attachment.loop(), {.base_url_ = origin, .versions_ = ruvia::http_client_versions{.http2_ = false}});
@@ -401,7 +403,10 @@ TEST(Ruvia, public_router_applies_host_representation_policies_and_its_rate_limi
         EXPECT_THROW(routes.rate_limit({.rule_ = {.max_requests_ = 1, .window_ = 1s}}), std::logic_error);
 
         ruvia::http_server server(attachment.loop(),
-            {.request_stream_ = [&](ruvia::request_stream& stream) { return routes.dispatch(stream); }},
+            {.request_stream_ =
+                    [&](ruvia::request_stream& stream) {
+            return routes.dispatch(stream);
+        }},
             {.compression_ = ruvia::compression_config{.min_bytes_ = 16}, .cors_ = ruvia::http_cors_policy_config{}});
         server.listen({.address_ = "127.0.0.1", .http_ = port.endpoint().port(), .dispatch_ = ruvia::listener_dispatch::request_stream});
         const std::string origin = "http://127.0.0.1:" + std::to_string(port.endpoint().port());
@@ -410,23 +415,14 @@ TEST(Ruvia, public_router_applies_host_representation_policies_and_its_rate_limi
         try {
             co_await server.start();
             for (const auto path : {"/text", "/stream"}) {
-                auto response = co_await client.client()
-                                    .get(path)
-                                    .header("Origin", "https://site.test")
-                                    .header("Accept-Encoding", "gzip")
-                                    .configure({.decode_content_ = false})
-                                    .send();
+                auto response = co_await client.client().get(path).header("Origin", "https://site.test").header("Accept-Encoding", "gzip").configure({.decode_content_ = false}).send();
                 EXPECT_EQ(response.status(), ruvia::http_status::ok) << path;
                 EXPECT_EQ(response.header("Content-Encoding").value_or(""), "gzip") << path;
                 EXPECT_EQ(response.header("Access-Control-Allow-Origin").value_or(""), "*") << path;
                 const auto encoded = co_await response.text();
                 EXPECT_LT(encoded.text().size(), text_body.size()) << path;
             }
-            auto preflight = co_await client.client()
-                                 .request("OPTIONS", "/text")
-                                 .header("Origin", "https://site.test")
-                                 .header("Access-Control-Request-Method", "GET")
-                                 .send();
+            auto preflight = co_await client.client().request("OPTIONS", "/text").header("Origin", "https://site.test").header("Access-Control-Request-Method", "GET").send();
             EXPECT_EQ(preflight.status(), ruvia::http_status::no_content);
             EXPECT_EQ(preflight.header("Access-Control-Allow-Origin").value_or(""), "*");
             (void)co_await preflight.text();
@@ -469,7 +465,9 @@ TEST(Ruvia, public_router_routes_websocket_and_connect_upgrades_over_http1_and_h
         routes.connect_protocol<upgrade_marker>("connect-udp", "/.well-known/masque/udp/:host/:port/", &echo_udp);
         routes.freeze();
 
-        ruvia::http_server server(attachment.loop(), {.request_stream_ = [&](ruvia::request_stream& stream) { return routes.dispatch(stream); }});
+        ruvia::http_server server(attachment.loop(), {.request_stream_ = [&](ruvia::request_stream& stream) {
+            return routes.dispatch(stream);
+        }});
         server.listen({.address_ = "127.0.0.1", .http_ = port.endpoint().port(), .dispatch_ = ruvia::listener_dispatch::request_stream});
         const std::string origin = "http://127.0.0.1:" + std::to_string(port.endpoint().port());
         std::exception_ptr failure;
@@ -609,7 +607,9 @@ TEST(Ruvia, public_router_lends_borrowed_clients_and_state_to_session_middleware
             routes.freeze();
             EXPECT_THROW(routes.bind_redis("other", redis), std::logic_error);
 
-            ruvia::http_server server(attachment.loop(), {.request_stream_ = [&](ruvia::request_stream& stream) { return routes.dispatch(stream); }});
+            ruvia::http_server server(attachment.loop(), {.request_stream_ = [&](ruvia::request_stream& stream) {
+                return routes.dispatch(stream);
+            }});
             server.listen({.address_ = "127.0.0.1", .http_ = port.endpoint().port(), .dispatch_ = ruvia::listener_dispatch::request_stream});
             std::exception_ptr serving_failure;
             try {
@@ -711,7 +711,9 @@ TEST(Ruvia, public_router_buffered_body_reads_honour_their_operation) {
             ruvia::task_scope stopper(context.worker());
             const auto stop_later = [&]() -> ruvia::task<void> {
                 (void)co_await ruvia::sleep_for(context.worker(), 50ms);
-                std::thread([&stop] { stop.request_stop(); }).join();
+                std::thread([&stop] {
+                    stop.request_stop();
+                }).join();
             };
             stopper.spawn(stop_later());
             interruptions += (co_await code_of(request.bytes({.stop_token_ = stop.token()}))) == std::errc::operation_canceled;
@@ -720,7 +722,9 @@ TEST(Ruvia, public_router_buffered_body_reads_honour_their_operation) {
             co_return context.text(co_await request.text());
         });
         routes.freeze();
-        ruvia::http_server server(attachment.loop(), {.request_stream_ = [&](ruvia::request_stream& stream) { return routes.dispatch(stream); }});
+        ruvia::http_server server(attachment.loop(), {.request_stream_ = [&](ruvia::request_stream& stream) {
+            return routes.dispatch(stream);
+        }});
         server.listen({.address_ = "127.0.0.1", .http_ = plain.endpoint().port(), .dispatch_ = ruvia::listener_dispatch::request_stream});
         ruvia::listen_config tls{.address_ = "127.0.0.1", .https_ = secure.endpoint().port(), .tls_ = {.identity_ = {.certificate_chain_file_ = identity.ca_file_, .private_key_file_ = identity.private_key_file()}}, .dispatch_ = ruvia::listener_dispatch::request_stream};
 #if defined(RUVIA_ENABLE_HTTP3)
@@ -816,7 +820,9 @@ TEST(Ruvia, public_router_binds_http_clients_by_its_own_unique_aliases) {
             co_return context.text(std::string(first.text()) + ":" + std::string(second.text()));
         });
         routes.freeze();
-        ruvia::http_server server(attachment.loop(), {.request_stream_ = [&](ruvia::request_stream& stream) { return routes.dispatch(stream); }});
+        ruvia::http_server server(attachment.loop(), {.request_stream_ = [&](ruvia::request_stream& stream) {
+            return routes.dispatch(stream);
+        }});
         server.listen({.address_ = "127.0.0.1", .http_ = port.endpoint().port()});
         std::exception_ptr failure;
         try {

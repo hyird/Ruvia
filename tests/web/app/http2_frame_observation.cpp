@@ -76,9 +76,7 @@ private:
 };
 
 void setting(std::string& payload, std::uint16_t id, std::uint32_t value) {
-    const std::array<char, 6> bytes{static_cast<char>(id >> 8), static_cast<char>(id),
-        static_cast<char>(value >> 24), static_cast<char>(value >> 16),
-        static_cast<char>(value >> 8), static_cast<char>(value)};
+    const std::array<char, 6> bytes{static_cast<char>(id >> 8), static_cast<char>(id), static_cast<char>(value >> 24), static_cast<char>(value >> 16), static_cast<char>(value >> 8), static_cast<char>(value)};
     payload.append(bytes.data(), bytes.size());
 }
 
@@ -93,18 +91,18 @@ std::string opening(bool reverse, bool empty_initial) {
     setting(payload, 3, 29);
     ruvia::test::append_frame(wire, ruvia::http2_frame_type::settings, 0, 0, payload);
     // Exclusive dependency zero, weight 256: a standalone PRIORITY on idle 3.
-    ruvia::test::append_frame(wire, ruvia::http2_frame_type::priority, 0, 3,
-        std::string_view("\x80\0\0\0\xff", 5));
-    ruvia::test::append_frame(wire, ruvia::http2_frame_type::window_update, 0, 0,
-        std::string_view("\0\x70\0\x01", 4));
+    ruvia::test::append_frame(wire, ruvia::http2_frame_type::priority, 0, 3, std::string_view("\x80\0\0\0\xff", 5));
+    ruvia::test::append_frame(wire, ruvia::http2_frame_type::window_update, 0, 0, std::string_view("\0\x70\0\x01", 4));
     std::string block;
-    const std::array names = reverse
-                                 ? std::array{":path", ":authority", ":scheme", ":method"}
-                                 : std::array{":method", ":scheme", ":authority", ":path"};
+    const std::array names = reverse ? std::array{":path", ":authority", ":scheme", ":method"} : std::array{":method", ":scheme", ":authority", ":path"};
     for (const std::string_view name : names) {
-        const auto value = name == ":method" ? "GET" : name == ":scheme"  ? "https"
-                                                   : name == ":authority" ? "localhost"
-                                                                          : "/fingerprint";
+        const auto value = name == ":method"
+            ? "GET"
+            : name == ":scheme"
+            ? "https"
+            : name == ":authority"
+            ? "localhost"
+            : "/fingerprint";
         ruvia::hpack_encoder::encode_header(block, name, value);
     }
     // PADDED | PRIORITY | END_STREAM, followed by two CONTINUATION frames.
@@ -113,21 +111,17 @@ std::string opening(bool reverse, bool empty_initial) {
     payload.append(block.data(), 1);
     payload.append(2, '\0');
     ruvia::test::append_frame(wire, ruvia::http2_frame_type::headers, 0x29, 1, payload);
-    ruvia::test::append_frame(wire, ruvia::http2_frame_type::continuation, 0, 1,
-        std::string_view(block).substr(1, 2));
-    ruvia::test::append_frame(wire, ruvia::http2_frame_type::continuation, 0x4, 1,
-        std::string_view(block).substr(3));
+    ruvia::test::append_frame(wire, ruvia::http2_frame_type::continuation, 0, 1, std::string_view(block).substr(1, 2));
+    ruvia::test::append_frame(wire, ruvia::http2_frame_type::continuation, 0x4, 1, std::string_view(block).substr(3));
     return wire;
 }
 
-std::uint64_t exchange(asio::io_context& io, const asio::ip::tcp::endpoint& endpoint,
-    bool reverse, bool empty_initial, std::size_t fragment) {
+std::uint64_t exchange(asio::io_context& io, const asio::ip::tcp::endpoint& endpoint, bool reverse, bool empty_initial, std::size_t fragment) {
     asio::ssl::context tls(asio::ssl::context::tls_client);
     tls.set_verify_mode(asio::ssl::verify_none);
     asio::ssl::stream<asio::ip::tcp::socket> stream(io, tls);
     static constexpr unsigned char alpn[]{2, 'h', '2'};
-    if (SSL_set_alpn_protos(stream.native_handle(), alpn, sizeof(alpn)) != 0 ||
-        SSL_set_tlsext_host_name(stream.native_handle(), "localhost") != 1) {
+    if (SSL_set_alpn_protos(stream.native_handle(), alpn, sizeof(alpn)) != 0 || SSL_set_tlsext_host_name(stream.native_handle(), "localhost") != 1) {
         throw std::runtime_error("cannot configure TLS h2 test client");
     }
     stream.next_layer().connect(endpoint);
@@ -146,8 +140,7 @@ std::uint64_t exchange(asio::io_context& io, const asio::ip::tcp::endpoint& endp
     const auto deadline = std::chrono::steady_clock::now() + 10s;
     for (;;) {
         const auto frame = ruvia::test::read_frame(stream, deadline);
-        if (frame.header_.type_ == static_cast<std::uint8_t>(ruvia::http2_frame_type::data) &&
-            frame.header_.stream_id_ == 1) {
+        if (frame.header_.type_ == static_cast<std::uint8_t>(ruvia::http2_frame_type::data) && frame.header_.stream_id_ == 1) {
             body.append(frame.payload_);
             if ((frame.header_.flags_ & 1) != 0) {
                 return std::stoull(body);
@@ -168,9 +161,14 @@ TEST(Ruvia, http2_typed_observers_fingerprint_tls_frames_independently_of_record
     auto& app = ruvia::app();
     app.server({.worker_count_ = 2})
         .listen({.address_ = "127.0.0.1", .https_ = endpoint.port(), .tls_ = {.identity_ = {.certificate_chain_file_ = identity.ca_file_, .private_key_file_ = identity.private_key_file()}}})
-        .on_start([&] { started.release(); })
-        .on_http2_frame([&](const ruvia::http2_frame_record& record) noexcept { observations.frame(record); })
-        .on_http2_headers([&](const ruvia::http2_headers_record& record) noexcept { observations.header(record); });
+        .on_start([&] {
+        started.release();
+    })
+        .on_http2_frame([&](const ruvia::http2_frame_record& record) noexcept {
+        observations.frame(record);
+    }).on_http2_headers([&](const ruvia::http2_headers_record& record) noexcept {
+        observations.header(record);
+    });
     {
         ruvia::test::app_run running(app);
         ASSERT_TRUE(started.try_acquire_for(10s));
@@ -206,9 +204,7 @@ TEST(Ruvia, http2_typed_observers_fingerprint_tls_frames_independently_of_record
                     EXPECT_EQ(observed.frames_[offset + 3].priority_->weight_, 42u);
                     EXPECT_TRUE(observed.frames_[offset + 4].type_ == ruvia::http2_frame_type::continuation);
                     EXPECT_TRUE(observed.frames_[offset + 5].type_ == ruvia::http2_frame_type::continuation);
-                    const std::vector<std::string> expected = reverse
-                                                                  ? std::vector<std::string>{":path", ":authority", ":scheme", ":method"}
-                                                                  : std::vector<std::string>{":method", ":scheme", ":authority", ":path"};
+                    const std::vector<std::string> expected = reverse ? std::vector<std::string>{":path", ":authority", ":scheme", ":method"} : std::vector<std::string>{":method", ":scheme", ":authority", ":path"};
                     EXPECT_EQ(observed.pseudo_names_, expected);
                     ASSERT_EQ(observed.first_frames_.size(), 4u);
                     for (const auto sequence : observed.first_frames_) {

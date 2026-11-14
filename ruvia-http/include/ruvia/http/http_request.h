@@ -29,10 +29,8 @@ public:
     constexpr http_content_length() noexcept = default;
 
     template <std::integral integer_type>
-    constexpr http_content_length(integer_type value)
-        : value_(is_valid_value(value)
-                     ? static_cast<std::uint64_t>(value)
-                     : throw std::invalid_argument("HTTP Content-Length must be in 0..18446744073709551615")) {}
+    constexpr http_content_length(integer_type value) :
+        value_(is_valid_value(value) ? static_cast<std::uint64_t>(value) : throw std::invalid_argument("HTTP Content-Length must be in 0..18446744073709551615")) {}
 
     template <std::integral integer_type>
     [[nodiscard]] static constexpr bool is_valid_value(integer_type value) noexcept {
@@ -56,8 +54,8 @@ public:
 private:
     struct validated_tag_type {};
 
-    constexpr http_content_length(std::uint64_t value, validated_tag_type) noexcept
-        : value_(value) {}
+    constexpr http_content_length(std::uint64_t value, validated_tag_type) noexcept :
+        value_(value) {}
 
     std::uint64_t value_{0};
 };
@@ -73,8 +71,7 @@ enum class http_request_content_semantics : std::uint8_t {
     content_type_required,
 };
 
-[[nodiscard]] constexpr http_request_content_semantics classify_http_request_content_semantics(
-    std::string_view method) noexcept {
+[[nodiscard]] constexpr http_request_content_semantics classify_http_request_content_semantics(std::string_view method) noexcept {
     if (method == "CONNECT" || method == "TRACE") {
         return http_request_content_semantics::forbidden;
     }
@@ -87,10 +84,8 @@ enum class http_request_content_semantics : std::uint8_t {
 // Whether a request method should explicitly send Content-Length: 0 when
 // forwarded or generated with no body (false for GET, HEAD, DELETE, OPTIONS,
 // TRACE, CONNECT; true for POST, PUT, PATCH and extension methods).
-[[nodiscard]] constexpr bool http_method_sends_zero_content_length(
-    std::string_view method) noexcept {
-    if (method.empty() || method == "GET" || method == "HEAD" || method == "DELETE" ||
-        method == "OPTIONS" || method == "TRACE" || method == "CONNECT") {
+[[nodiscard]] constexpr bool http_method_sends_zero_content_length(std::string_view method) noexcept {
+    if (method.empty() || method == "GET" || method == "HEAD" || method == "DELETE" || method == "OPTIONS" || method == "TRACE" || method == "CONNECT") {
         return false;
     }
     return true;
@@ -119,8 +114,8 @@ public:
 
 private:
     friend class http_request_content_plan;
-    explicit constexpr http_known_length_request_content(http_content_length length) noexcept
-        : length_(length) {}
+    explicit constexpr http_known_length_request_content(http_content_length length) noexcept :
+        length_(length) {}
     http_content_length length_;
 };
 
@@ -132,8 +127,8 @@ public:
 
 private:
     friend class http_request_content_plan;
-    explicit constexpr http_streaming_request_content(std::optional<http_content_length> length) noexcept
-        : length_(length) {}
+    explicit constexpr http_streaming_request_content(std::optional<http_content_length> length) noexcept :
+        length_(length) {}
     std::optional<http_content_length> length_{};
 };
 
@@ -151,8 +146,7 @@ public:
     }
     // A known zero keeps the send half open until the request is finished; it
     // cannot send content or wait for 100 Continue.
-    [[nodiscard]] static constexpr http_request_content_plan streaming(
-        std::optional<http_content_length> length = {}) noexcept {
+    [[nodiscard]] static constexpr http_request_content_plan streaming(std::optional<http_content_length> length = {}) noexcept {
         return http_request_content_plan(http_streaming_request_content(length));
     }
     [[nodiscard]] constexpr const http_request_without_content* without_content() const& noexcept RUVIA_LIFETIMEBOUND {
@@ -179,14 +173,13 @@ public:
     }
 
 private:
-    using value_type = std::variant<http_request_without_content, http_known_length_request_content,
-        http_streaming_request_content>;
-    explicit constexpr http_request_content_plan(http_request_without_content value) noexcept
-        : value_(value) {}
-    explicit constexpr http_request_content_plan(http_known_length_request_content value) noexcept
-        : value_(value) {}
-    explicit constexpr http_request_content_plan(http_streaming_request_content value) noexcept
-        : value_(value) {}
+    using value_type = std::variant<http_request_without_content, http_known_length_request_content, http_streaming_request_content>;
+    explicit constexpr http_request_content_plan(http_request_without_content value) noexcept :
+        value_(value) {}
+    explicit constexpr http_request_content_plan(http_known_length_request_content value) noexcept :
+        value_(value) {}
+    explicit constexpr http_request_content_plan(http_streaming_request_content value) noexcept :
+        value_(value) {}
     value_type value_;
 };
 
@@ -245,9 +238,7 @@ public:
 
     [[nodiscard]] constexpr bool add_field(std::size_t name_bytes, std::size_t value_bytes) noexcept {
         const auto remaining = max_http_header_bytes - bytes_;
-        if (fields_ == max_http_header_fields || remaining < http_field_line_overhead ||
-            name_bytes > remaining - http_field_line_overhead ||
-            value_bytes > remaining - http_field_line_overhead - name_bytes) {
+        if (fields_ == max_http_header_fields || remaining < http_field_line_overhead || name_bytes > remaining - http_field_line_overhead || value_bytes > remaining - http_field_line_overhead - name_bytes) {
             return false;
         }
         bytes_ += name_bytes + value_bytes + http_field_line_overhead;
@@ -279,15 +270,13 @@ private:
 
 namespace detail {
 
-[[nodiscard]] constexpr std::size_t saturating_add_size(
-    std::size_t left, std::size_t right) noexcept {
+[[nodiscard]] constexpr std::size_t saturating_add_size(std::size_t left, std::size_t right) noexcept {
     constexpr auto maximum = (std::numeric_limits<std::size_t>::max)();
     return left > maximum - right ? maximum : left + right;
 }
 
 template <typename field_span_type>
-[[nodiscard]] constexpr std::size_t estimate_http1_fields_bytes_impl(
-    const field_span_type& fields, bool include_terminating_crlf) noexcept {
+[[nodiscard]] constexpr std::size_t estimate_http1_fields_bytes_impl(const field_span_type& fields, bool include_terminating_crlf) noexcept {
     std::size_t total = include_terminating_crlf ? 2U : 0U;
     for (const auto& field : fields) {
         total = saturating_add_size(total, field.name().size());
@@ -299,44 +288,35 @@ template <typename field_span_type>
 
 }  // namespace detail
 
-[[nodiscard]] constexpr std::size_t estimate_http1_field_section_bytes(
-    std::span<const http_header> fields, bool include_terminating_crlf = true) noexcept {
+[[nodiscard]] constexpr std::size_t estimate_http1_field_section_bytes(std::span<const http_header> fields, bool include_terminating_crlf = true) noexcept {
     return detail::estimate_http1_fields_bytes_impl(fields, include_terminating_crlf);
 }
 
-[[nodiscard]] constexpr std::size_t estimate_http1_field_section_bytes(
-    std::span<const http_header_view> fields, bool include_terminating_crlf = true) noexcept {
+[[nodiscard]] constexpr std::size_t estimate_http1_field_section_bytes(std::span<const http_header_view> fields, bool include_terminating_crlf = true) noexcept {
     return detail::estimate_http1_fields_bytes_impl(fields, include_terminating_crlf);
 }
 
-[[nodiscard]] std::size_t estimate_http1_field_section_bytes(
-    const http_response_headers& fields, bool include_terminating_crlf = true) noexcept;
+[[nodiscard]] std::size_t estimate_http1_field_section_bytes(const http_response_headers& fields, bool include_terminating_crlf = true) noexcept;
 
 // Equivalent HTTP/1.1 wire byte size of a response status line ("HTTP/1.1 NNN
 // <reason>\r\n"), all header field lines, and the terminating CRLF.
-[[nodiscard]] constexpr std::size_t estimate_http1_response_head_bytes(
-    http_status_code status, std::span<const http_header> headers) noexcept {
+[[nodiscard]] constexpr std::size_t estimate_http1_response_head_bytes(http_status_code status, std::span<const http_header> headers) noexcept {
     const std::size_t status_line_bytes = 15U + http_reason_phrase(status).size();
-    return detail::saturating_add_size(
-        status_line_bytes, estimate_http1_field_section_bytes(headers, true));
+    return detail::saturating_add_size(status_line_bytes, estimate_http1_field_section_bytes(headers, true));
 }
 
-[[nodiscard]] constexpr std::size_t estimate_http1_response_head_bytes(
-    http_status_code status, std::span<const http_header_view> headers) noexcept {
+[[nodiscard]] constexpr std::size_t estimate_http1_response_head_bytes(http_status_code status, std::span<const http_header_view> headers) noexcept {
     const std::size_t status_line_bytes = 15U + http_reason_phrase(status).size();
-    return detail::saturating_add_size(
-        status_line_bytes, estimate_http1_field_section_bytes(headers, true));
+    return detail::saturating_add_size(status_line_bytes, estimate_http1_field_section_bytes(headers, true));
 }
 
-[[nodiscard]] std::size_t estimate_http1_response_head_bytes(
-    http_status_code status, const http_response_headers& headers) noexcept;
+[[nodiscard]] std::size_t estimate_http1_response_head_bytes(http_status_code status, const http_response_headers& headers) noexcept;
 
 namespace detail {
 // Repeated fields retain their wire order; singular convenience accessors
 // select the last matching field without copying its borrowed value.
 template <typename field_type>
-[[nodiscard]] std::optional<std::string_view> find_last_http_header(
-    std::span<const field_type> fields, std::string_view name) noexcept {
+[[nodiscard]] std::optional<std::string_view> find_last_http_header(std::span<const field_type> fields, std::string_view name) noexcept {
     for (auto field = fields.rbegin(); field != fields.rend(); ++field) {
         if (http_ascii_equals_ignore_case(field->name(), name)) {
             return field->value();
@@ -409,16 +389,14 @@ enum class http_field_kind : std::uint8_t;
 // Shared request/response restrictions (RFC 9110 section 6.5.1): fields that
 // control framing, routing, authentication or representation interpretation.
 // Direction-specific permissions are composed below and by response policy.
-[[nodiscard]] bool is_forbidden_common_trailer_name(
-    std::string_view name, http_field_kind kind) noexcept;
+[[nodiscard]] bool is_forbidden_common_trailer_name(std::string_view name, http_field_kind kind) noexcept;
 
 // Trailer advertisements and actual request sections use the same policy.
 // Accept-Ranges is permitted in response trailers, not request trailers.
 [[nodiscard]] bool is_forbidden_http_request_trailer_name(std::string_view name) noexcept;
 
 template <typename forbidden_name_type>
-[[nodiscard]] inline bool is_valid_http_trailer_field_value(
-    std::string_view value, http_field_list_role role, forbidden_name_type&& forbidden_name) noexcept {
+[[nodiscard]] inline bool is_valid_http_trailer_field_value(std::string_view value, http_field_list_role role, forbidden_name_type&& forbidden_name) noexcept {
     // RFC 9110 section 5.6.1.1: senders must not generate empty list elements,
     // but `#field-name` itself can represent an empty list.
     const auto list_role = http_trim_ows(value).empty() ? http_field_list_role::recipient : role;
@@ -427,18 +405,17 @@ template <typename forbidden_name_type>
     }) == http_field_list_parse_status::ok;
 }
 
-[[nodiscard]] inline bool is_valid_http_request_trailer_field_value(
-    std::string_view value, http_field_list_role role) noexcept {
-    return is_valid_http_trailer_field_value(value, role,
-        [](std::string_view name) noexcept { return is_forbidden_http_request_trailer_name(name); });
+[[nodiscard]] inline bool is_valid_http_request_trailer_field_value(std::string_view value, http_field_list_role role) noexcept {
+    return is_valid_http_trailer_field_value(value, role, [](std::string_view name) noexcept {
+        return is_forbidden_http_request_trailer_name(name);
+    });
 }
 
 // The single rule for one generated request trailer field: valid field syntax
 // (RFC 9110 section 5), a name a sender may place in request trailers (RFC 9110
 // section 6.5.1), and a charge to the section `budget`, which is unchanged on
 // failure.
-[[nodiscard]] inline std::optional<http_request_trailer_error> charge_http_request_trailer_field(
-    http_field_section_budget& budget, std::string_view name, std::string_view value) noexcept {
+[[nodiscard]] inline std::optional<http_request_trailer_error> charge_http_request_trailer_field(http_field_section_budget& budget, std::string_view name, std::string_view value) noexcept {
     if (!is_valid_http_header_name(name) || !is_valid_http_header_value(value)) {
         return http_request_trailer_error::invalid_field;
     }
@@ -465,8 +442,7 @@ enum class http_request_content_indication : std::uint8_t { no_content,
 // RFC 9110 Section 10.1.1 forbids a client from generating 100-continue when
 // the request has no content. Keep this sender check next to the recipient-side
 // expectation state so HTTP/1 and HTTP/2 cannot derive different answers.
-[[nodiscard]] constexpr bool http_client_expectation_is_valid(
-    bool has_continue, http_request_content_indication content) noexcept {
+[[nodiscard]] constexpr bool http_client_expectation_is_valid(bool has_continue, http_request_content_indication content) noexcept {
     return !has_continue || content == http_request_content_indication::will_follow;
 }
 
@@ -483,8 +459,7 @@ enum class http_server_expectation_plan : std::uint8_t {
 };
 
 [[nodiscard]] inline http_protocol_error http_unsupported_expectation_error() noexcept {
-    return http_protocol_error(
-        http_status::expectation_failed, "unsupported_expectation", "unsupported Expect header");
+    return http_protocol_error(http_status::expectation_failed, "unsupported_expectation", "unsupported Expect header");
 }
 
 // Incremental recipient-side state for the RFC 9110 Expect #list. Repeated field
@@ -510,8 +485,7 @@ public:
         flags_ &= static_cast<std::uint8_t>(~continue_value);
     }
 
-    [[nodiscard]] http_server_expectation_plan server_plan(http_request_content_indication content,
-        http_unsupported_expectation_policy unsupported_policy) const noexcept {
+    [[nodiscard]] http_server_expectation_plan server_plan(http_request_content_indication content, http_unsupported_expectation_policy unsupported_policy) const noexcept {
         if (has_unsupported() && unsupported_policy == http_unsupported_expectation_policy::reject) {
             return http_server_expectation_plan::reject_unsupported;
         }
@@ -583,8 +557,7 @@ public:
     }
 
     [[nodiscard]] constexpr std::optional<std::uint16_t> port() const noexcept {
-        return port_kind_ == http_authority_port_kind::value ? std::optional<std::uint16_t>(port_)
-                                                             : std::nullopt;
+        return port_kind_ == http_authority_port_kind::value ? std::optional<std::uint16_t>(port_) : std::nullopt;
     }
 
     // Returns the explicit port or caller fallback. This numeric observation
@@ -596,11 +569,10 @@ public:
 private:
     friend struct detail::http_authority_view_access;
 
-    constexpr http_authority_view(
-        std::string_view host, http_authority_port_kind port_kind, std::uint16_t port) noexcept
-        : host_(host),
-          port_(port),
-          port_kind_(port_kind) {}
+    constexpr http_authority_view(std::string_view host, http_authority_port_kind port_kind, std::uint16_t port) noexcept :
+        host_(host),
+        port_(port),
+        port_kind_(port_kind) {}
 
     std::string_view host_;
     std::uint16_t port_{0};
@@ -628,12 +600,9 @@ private:
 // absolute-form targets to origin-form (with "/" when the path is empty and
 // preserving any query), converts an OPTIONS target with an empty path and no
 // query to "*", and preserves all other forms verbatim.
-[[nodiscard]] std::string normalize_http_proxy_request_target(
-    std::string_view method, std::string_view target);
-[[nodiscard]] std::string normalize_http_proxy_request_target(
-    http_known_method method, std::string_view target);
-[[nodiscard]] std::string normalize_http_proxy_request_target(
-    const http_request& request);
+[[nodiscard]] std::string normalize_http_proxy_request_target(std::string_view method, std::string_view target);
+[[nodiscard]] std::string normalize_http_proxy_request_target(http_known_method method, std::string_view target);
+[[nodiscard]] std::string normalize_http_proxy_request_target(const http_request& request);
 
 enum class http_max_forwards_status : std::uint8_t {
     absent,
@@ -673,36 +642,24 @@ public:
         return is_valid() && current_ == 0;
     }
     [[nodiscard]] constexpr std::optional<std::uint64_t> decremented() const noexcept {
-        return (is_valid() && current_ > 0) ? std::optional<std::uint64_t>(current_ - 1)
-                                            : std::nullopt;
+        return (is_valid() && current_ > 0) ? std::optional<std::uint64_t>(current_ - 1) : std::nullopt;
     }
     [[nodiscard]] std::string format_decremented() const;
 
 private:
-    constexpr http_max_forwards_result(
-        http_max_forwards_status status, std::uint64_t current) noexcept
-        : current_(current),
-          status_(status) {}
+    constexpr http_max_forwards_result(http_max_forwards_status status, std::uint64_t current) noexcept :
+        current_(current),
+        status_(status) {}
 
     std::uint64_t current_{0};
     http_max_forwards_status status_{http_max_forwards_status::absent};
 };
 
-[[nodiscard]] std::optional<std::uint64_t> parse_http_max_forwards_value(
-    std::string_view field_value,
-    std::uint64_t max_saturation = (std::numeric_limits<std::uint64_t>::max)()) noexcept;
-[[nodiscard]] http_max_forwards_result parse_http_max_forwards(
-    std::string_view field_value,
-    std::uint64_t max_saturation = (std::numeric_limits<std::uint64_t>::max)()) noexcept;
-[[nodiscard]] http_max_forwards_result parse_http_max_forwards(
-    std::span<const http_header> headers,
-    std::uint64_t max_saturation = (std::numeric_limits<std::uint64_t>::max)()) noexcept;
-[[nodiscard]] http_max_forwards_result parse_http_max_forwards(
-    std::span<const http_header_view> headers,
-    std::uint64_t max_saturation = (std::numeric_limits<std::uint64_t>::max)()) noexcept;
-[[nodiscard]] http_max_forwards_result parse_http_max_forwards(
-    const http_request& request,
-    std::uint64_t max_saturation = (std::numeric_limits<std::uint64_t>::max)()) noexcept;
+[[nodiscard]] std::optional<std::uint64_t> parse_http_max_forwards_value(std::string_view field_value, std::uint64_t max_saturation = (std::numeric_limits<std::uint64_t>::max)()) noexcept;
+[[nodiscard]] http_max_forwards_result parse_http_max_forwards(std::string_view field_value, std::uint64_t max_saturation = (std::numeric_limits<std::uint64_t>::max)()) noexcept;
+[[nodiscard]] http_max_forwards_result parse_http_max_forwards(std::span<const http_header> headers, std::uint64_t max_saturation = (std::numeric_limits<std::uint64_t>::max)()) noexcept;
+[[nodiscard]] http_max_forwards_result parse_http_max_forwards(std::span<const http_header_view> headers, std::uint64_t max_saturation = (std::numeric_limits<std::uint64_t>::max)()) noexcept;
+[[nodiscard]] http_max_forwards_result parse_http_max_forwards(const http_request& request, std::uint64_t max_saturation = (std::numeric_limits<std::uint64_t>::max)()) noexcept;
 }  // namespace ruvia
 
 namespace ruvia {
@@ -798,11 +755,8 @@ public:
         return origin;
     }
 
-    [[nodiscard]] static constexpr http_target_origin ip_address(
-        http_target_host_kind kind, std::span<const std::uint8_t> address) noexcept {
-        if ((kind == http_target_host_kind::ipv4 && address.size() != 4) ||
-            (kind == http_target_host_kind::ipv6 && address.size() != 16) ||
-            (kind != http_target_host_kind::ipv4 && kind != http_target_host_kind::ipv6)) {
+    [[nodiscard]] static constexpr http_target_origin ip_address(http_target_host_kind kind, std::span<const std::uint8_t> address) noexcept {
+        if ((kind == http_target_host_kind::ipv4 && address.size() != 4) || (kind == http_target_host_kind::ipv6 && address.size() != 16) || (kind != http_target_host_kind::ipv4 && kind != http_target_host_kind::ipv6)) {
             return misdirected();
         }
         http_target_origin origin(http_target_origin_action::verify_certificate);
@@ -815,8 +769,8 @@ public:
     }
 
 private:
-    explicit constexpr http_target_origin(http_target_origin_action action) noexcept
-        : action_(action) {
+    explicit constexpr http_target_origin(http_target_origin_action action) noexcept :
+        action_(action) {
         if (std::is_constant_evaluated()) {
             decoded_host_.fill('\0');
             address_.fill(0);
@@ -850,8 +804,7 @@ private:
 //   empty authority, which RFC 9112 §3.3 completes with the server's
 //   configured default rather than a client-chosen name.
 // The port is not compared: certificates name hosts, not ports. Allocation free.
-[[nodiscard]] http_target_origin decide_http_target_origin(
-    const http_request& request, http_target_origin_connection connection) noexcept;
+[[nodiscard]] http_target_origin decide_http_target_origin(const http_request& request, http_target_origin_connection connection) noexcept;
 
 }  // namespace ruvia
 
@@ -884,12 +837,12 @@ public:
     http_request_header_block() noexcept = default;
     http_request_header_block(const http_request_header_block&) = delete;
     http_request_header_block& operator=(const http_request_header_block&) = delete;
-    http_request_header_block(http_request_header_block&& other) noexcept
-        : fields_(std::exchange(other.fields_, nullptr)),
-          kinds_(std::exchange(other.kinds_, nullptr)),
-          size_(std::exchange(other.size_, std::uint16_t{0})),
-          capacity_(std::exchange(other.capacity_, std::uint16_t{0})),
-          repeated_known_bits_(std::exchange(other.repeated_known_bits_, std::uint32_t{0})) {}
+    http_request_header_block(http_request_header_block&& other) noexcept :
+        fields_(std::exchange(other.fields_, nullptr)),
+        kinds_(std::exchange(other.kinds_, nullptr)),
+        size_(std::exchange(other.size_, std::uint16_t{0})),
+        capacity_(std::exchange(other.capacity_, std::uint16_t{0})),
+        repeated_known_bits_(std::exchange(other.repeated_known_bits_, std::uint32_t{0})) {}
     http_request_header_block& operator=(http_request_header_block&& other) noexcept {
         if (this != &other) {
             release();
@@ -938,8 +891,7 @@ public:
         if (count <= capacity_) {
             return;
         }
-        auto* memory = static_cast<std::byte*>(
-            ::operator new(bytes_for(count), std::align_val_t{alignof(http_header_view)}));
+        auto* memory = static_cast<std::byte*>(::operator new(bytes_for(count), std::align_val_t{alignof(http_header_view)}));
         auto* replacement = reinterpret_cast<http_header_view*>(memory);
         auto* replacement_kinds = reinterpret_cast<http_field_kind*>(replacement + count);
         for (std::size_t i = 0; i < size_; ++i) {
@@ -961,8 +913,7 @@ public:
             throw std::logic_error("request header block is full");
         }
         if (size_ == capacity_) {
-            reserve((std::min)(static_cast<std::size_t>((std::numeric_limits<std::uint16_t>::max)()),
-                (std::max)(std::size_t{1}, std::size_t(capacity_) * 2)));
+            reserve((std::min)(static_cast<std::size_t>((std::numeric_limits<std::uint16_t>::max)()), (std::max)(std::size_t{1}, std::size_t(capacity_) * 2)));
         }
         std::construct_at(fields_ + size_, field);
         kinds_[size_] = kind;
@@ -1085,8 +1036,7 @@ public:
     // Exact raw lookup over the encoded query string. Both `raw_name` and the
     // returned value retain their percent-encoded bytes; no application/x-www-
     // form-urlencoded `+` conversion is applied. Later duplicate fields win.
-    [[nodiscard]] std::optional<std::string_view> last_raw_query_value(
-        std::string_view raw_name) const noexcept RUVIA_LIFETIMEBOUND;
+    [[nodiscard]] std::optional<std::string_view> last_raw_query_value(std::string_view raw_name) const noexcept RUVIA_LIFETIMEBOUND;
     // Case-sensitive Cookie lookup; the last matching pair across field lines wins.
     // The returned view borrows the corresponding header text.
     [[nodiscard]] std::optional<std::string_view> cookie(std::string_view name) const noexcept RUVIA_LIFETIMEBOUND;
@@ -1128,9 +1078,7 @@ private:
 // http_field_section_budget rule (max_http_header_bytes, max_http_header_fields)
 // throws the 431 header_too_large error. Body framing fields are intentionally
 // not interpreted because this API represents an already-parsed request.
-[[nodiscard]] http_request make_parsed_http_request(
-    borrowed_text method, borrowed_text target, std::span<const http_header_view> headers,
-    borrowed_span<std::byte> body = {});
+[[nodiscard]] http_request make_parsed_http_request(borrowed_text method, borrowed_text target, std::span<const http_header_view> headers, borrowed_span<std::byte> body = {});
 }  // namespace ruvia
 
 namespace ruvia {
@@ -1314,19 +1262,16 @@ enum class http_forwarded_header_kind : std::uint8_t {
 struct http_forwarded_header_spec final {
     http_forwarded_header_spec() noexcept = default;
 
-    http_forwarded_header_spec(std::string_view name,
-        http_forwarded_header_kind kind = http_forwarded_header_kind::auto_detect)
-        : name_(name),
-          kind_(kind) {}
+    http_forwarded_header_spec(std::string_view name, http_forwarded_header_kind kind = http_forwarded_header_kind::auto_detect) :
+        name_(name),
+        kind_(kind) {}
 
-    http_forwarded_header_spec(const char* name,
-        http_forwarded_header_kind kind = http_forwarded_header_kind::auto_detect)
-        : http_forwarded_header_spec(std::string_view(name), kind) {}
+    http_forwarded_header_spec(const char* name, http_forwarded_header_kind kind = http_forwarded_header_kind::auto_detect) :
+        http_forwarded_header_spec(std::string_view(name), kind) {}
 
-    http_forwarded_header_spec(const std::string& name,
-        http_forwarded_header_kind kind = http_forwarded_header_kind::auto_detect)
-        : name_(name),
-          kind_(kind) {}
+    http_forwarded_header_spec(const std::string& name, http_forwarded_header_kind kind = http_forwarded_header_kind::auto_detect) :
+        name_(name),
+        kind_(kind) {}
 
     std::string name_;
     http_forwarded_header_kind kind_{http_forwarded_header_kind::auto_detect};
@@ -1367,8 +1312,8 @@ struct http_client_ip_result final {
 // Stateless client IP extractor for deployments behind trusted reverse proxies.
 class http_client_ip_extractor final {
 public:
-    http_client_ip_extractor() noexcept
-        : enabled_(false) {}
+    http_client_ip_extractor() noexcept :
+        enabled_(false) {}
 
     explicit http_client_ip_extractor(const http_client_ip_config& config);
 
@@ -1384,19 +1329,13 @@ public:
     [[nodiscard]] bool is_trusted_proxy(const ip_address& address) const noexcept;
     [[nodiscard]] bool is_trusted_proxy(std::string_view address_text) const noexcept;
 
-    [[nodiscard]] http_client_ip_result resolve(
-        const ip_address& peer_ip, std::span<const http_header> headers) const noexcept;
-    [[nodiscard]] http_client_ip_result resolve(
-        const ip_address& peer_ip, std::span<const http_header_view> headers) const noexcept;
-    [[nodiscard]] http_client_ip_result resolve(
-        const ip_address& peer_ip, const http_request& request) const noexcept;
+    [[nodiscard]] http_client_ip_result resolve(const ip_address& peer_ip, std::span<const http_header> headers) const noexcept;
+    [[nodiscard]] http_client_ip_result resolve(const ip_address& peer_ip, std::span<const http_header_view> headers) const noexcept;
+    [[nodiscard]] http_client_ip_result resolve(const ip_address& peer_ip, const http_request& request) const noexcept;
 
-    [[nodiscard]] std::optional<http_client_ip_result> resolve(
-        std::string_view peer_ip, std::span<const http_header> headers) const noexcept;
-    [[nodiscard]] std::optional<http_client_ip_result> resolve(
-        std::string_view peer_ip, std::span<const http_header_view> headers) const noexcept;
-    [[nodiscard]] std::optional<http_client_ip_result> resolve(
-        std::string_view peer_ip, const http_request& request) const noexcept;
+    [[nodiscard]] std::optional<http_client_ip_result> resolve(std::string_view peer_ip, std::span<const http_header> headers) const noexcept;
+    [[nodiscard]] std::optional<http_client_ip_result> resolve(std::string_view peer_ip, std::span<const http_header_view> headers) const noexcept;
+    [[nodiscard]] std::optional<http_client_ip_result> resolve(std::string_view peer_ip, const http_request& request) const noexcept;
 
 private:
     struct compiled_header final {
@@ -1410,21 +1349,15 @@ private:
     bool trust_x_forwarded_proto_{false};
 };
 
-[[nodiscard]] inline http_client_ip_result extract_http_client_ip(
-    const http_client_ip_extractor& extractor, const ip_address& peer_ip,
-    std::span<const http_header> headers) noexcept {
+[[nodiscard]] inline http_client_ip_result extract_http_client_ip(const http_client_ip_extractor& extractor, const ip_address& peer_ip, std::span<const http_header> headers) noexcept {
     return extractor.resolve(peer_ip, headers);
 }
 
-[[nodiscard]] inline http_client_ip_result extract_http_client_ip(
-    const http_client_ip_extractor& extractor, const ip_address& peer_ip,
-    std::span<const http_header_view> headers) noexcept {
+[[nodiscard]] inline http_client_ip_result extract_http_client_ip(const http_client_ip_extractor& extractor, const ip_address& peer_ip, std::span<const http_header_view> headers) noexcept {
     return extractor.resolve(peer_ip, headers);
 }
 
-[[nodiscard]] inline http_client_ip_result extract_http_client_ip(
-    const http_client_ip_extractor& extractor, const ip_address& peer_ip,
-    const http_request& request) noexcept {
+[[nodiscard]] inline http_client_ip_result extract_http_client_ip(const http_client_ip_extractor& extractor, const ip_address& peer_ip, const http_request& request) noexcept {
     return extractor.resolve(peer_ip, request);
 }
 
@@ -1432,8 +1365,7 @@ private:
 
 namespace ruvia {
 [[nodiscard]] constexpr bool is_tls_grease_value(std::uint16_t value) noexcept {
-    const auto widened_value = static_cast<std::uint32_t>(value);
-    return (widened_value & 0x0f0fU) == 0x0a0aU && (widened_value >> 8U) == (widened_value & 0xffU);
+    return (value & 0x0f0fU) == 0x0a0aU && static_cast<unsigned int>(value >> 8U) == (value & 0xffU);
 }
 
 struct tls_client_hello_fingerprints final {
@@ -1503,17 +1435,12 @@ public:
     std::string server_name_;
 };
 
-[[nodiscard]] std::optional<tls_client_hello_info> parse_tls_client_hello(
-    std::span<const std::byte> message);
-[[nodiscard]] std::optional<tls_client_hello_info> parse_tls_client_hello(
-    std::string_view message);
+[[nodiscard]] std::optional<tls_client_hello_info> parse_tls_client_hello(std::span<const std::byte> message);
+[[nodiscard]] std::optional<tls_client_hello_info> parse_tls_client_hello(std::string_view message);
 
-[[nodiscard]] std::optional<tls_client_hello_fingerprints> compute_tls_client_hello_fingerprints(
-    std::span<const std::byte> message, bool quic = false);
-[[nodiscard]] std::optional<tls_client_hello_fingerprints> compute_tls_client_hello_fingerprints(
-    std::string_view message, bool quic = false);
-[[nodiscard]] inline tls_client_hello_fingerprints compute_tls_client_hello_fingerprints(
-    const tls_client_hello_info& hello, bool quic = false) {
+[[nodiscard]] std::optional<tls_client_hello_fingerprints> compute_tls_client_hello_fingerprints(std::span<const std::byte> message, bool quic = false);
+[[nodiscard]] std::optional<tls_client_hello_fingerprints> compute_tls_client_hello_fingerprints(std::string_view message, bool quic = false);
+[[nodiscard]] inline tls_client_hello_fingerprints compute_tls_client_hello_fingerprints(const tls_client_hello_info& hello, bool quic = false) {
     return hello.fingerprints(quic);
 }
 

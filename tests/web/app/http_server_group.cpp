@@ -55,9 +55,15 @@ struct external_loops final {
         }
     }
     void start() {
-        first_thread_ = std::jthread([this] { first_attachment_.run(); });
-        second_thread_ = std::jthread([this] { second_attachment_.run(); });
-        const auto ready = []() -> ruvia::task<void> { co_return; };
+        first_thread_ = std::jthread([this] {
+            first_attachment_.run();
+        });
+        second_thread_ = std::jthread([this] {
+            second_attachment_.run();
+        });
+        const auto ready = []() -> ruvia::task<void> {
+            co_return;
+        };
         loops_[0].start(ready()).get();
         loops_[1].start(ready()).get();
     }
@@ -78,8 +84,8 @@ struct held_work final {
     std::shared_ptr<std::counting_semaphore<>> gate_{std::make_shared<std::counting_semaphore<>>(0)};
     std::ptrdiff_t count_;
 
-    explicit held_work(std::ptrdiff_t count = 1)
-        : count_(count) {}
+    explicit held_work(std::ptrdiff_t count = 1) :
+        count_(count) {}
     ~held_work() {
         release();
     }
@@ -149,8 +155,7 @@ ruvia::listen_config secure(std::uint16_t tcp, std::uint16_t udp, const ruvia::t
 
 template <typename stream_type>
 std::string request_on(stream_type& stream, std::string_view path = "/proxy") {
-    const std::string head = "GET " + std::string(path) +
-                             " HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n";
+    const std::string head = "GET " + std::string(path) + " HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n";
     asio::write(stream, asio::buffer(head));
     const auto response = ruvia::test::read_to_end(stream);
     return std::string(response);
@@ -177,8 +182,7 @@ ruvia::task<void> raw_transport_answer(ruvia::server_connection& connection) {
         head.append(reinterpret_cast<const char*>(bytes->data()), bytes->size());
     }
     const std::string_view body = connection.tls() != nullptr ? "tls" : "plain";
-    const std::string response = "HTTP/1.1 200 OK\r\nContent-Length: " +
-                                 std::to_string(body.size()) + "\r\nConnection: close\r\n\r\n" + std::string(body);
+    const std::string response = "HTTP/1.1 200 OK\r\nContent-Length: " + std::to_string(body.size()) + "\r\nConnection: close\r\n\r\n" + std::string(body);
     co_await connection.write(std::as_bytes(std::span(response.data(), response.size())));
     co_await connection.finish();
 }
@@ -316,7 +320,9 @@ TEST(Ruvia, independent_group_start_failure_preserves_external_unrelated_work) {
     group.listen(plain(busy.local_endpoint().port()));
     EXPECT_THROW(runtime.loops_[0].start(group.start(runtime.loops_[0].worker())).get(), std::system_error);
     runtime.loops_[0].start(group.shutdown(runtime.loops_[0].worker())).get();
-    const auto alive = []() -> ruvia::task<int> { co_return 42; };
+    const auto alive = []() -> ruvia::task<int> {
+        co_return 42;
+    };
     EXPECT_EQ(runtime.loops_[0].start(alive()).get(), 42);
     EXPECT_EQ(runtime.loops_[1].start(alive()).get(), 42);
     ruvia::http_server_group replacement(runtime.loops_, &answer_callbacks);
@@ -419,9 +425,7 @@ TEST(Ruvia, independent_group_shared_http3_endpoint_survives_repeated_migration_
     ASSERT_EQ(initial.status_, 200);
     ASSERT_FALSE(initial.body_.empty());
     const ruvia::test::tls_identity rotated("localhost", "DNS:localhost,IP:127.0.0.1");
-    runtime.loops_[0].start(group.replace_tls_identities(runtime.loops_[0].worker(), {.address_ = "127.0.0.1", .port_ = tcp.endpoint().port()},
-                                {.identity_ = {.certificate_chain_file_ = rotated.ca_file_, .private_key_file_ = rotated.private_key_file()}}))
-        .get();
+    runtime.loops_[0].start(group.replace_tls_identities(runtime.loops_[0].worker(), {.address_ = "127.0.0.1", .port_ = tcp.endpoint().port()}, {.identity_ = {.certificate_chain_file_ = rotated.ca_file_, .private_key_file_ = rotated.private_key_file()}})).get();
     {
         ruvia::test::http3_test_client renewed({asio::ip::address_v4::loopback(), udp.endpoint().port()}, rotated.ca_file_, "localhost", 5s);
         EXPECT_EQ(renewed.request("GET", "/worker").status_, 200);
@@ -467,7 +471,9 @@ TEST(Ruvia, independent_group_mixed_listener_preserves_transport_during_rotation
     ruvia::http_server_group group(runtime.loops_, &answer_callbacks);
     runtime.loops_[0].start(group.start(runtime.loops_[0].worker())).get();
     runtime.loops_[0].start(group.add_listener(runtime.loops_[0].worker(), config)).get();
-    auto plaintext = std::async(std::launch::async, [port] { return request(port, "/proxy"); });
+    auto plaintext = std::async(std::launch::async, [port] {
+        return request(port, "/proxy");
+    });
     EXPECT_NE(tls_request(port, first).find("127.0.0.1:direct:https"), std::string::npos);
     EXPECT_NE(plaintext.get().find("127.0.0.1:direct:http"), std::string::npos);
     runtime.loops_[0].start(group.replace_tls_identities(runtime.loops_[0].worker(), target, secure(port, 0, second).tls_)).get();
@@ -537,7 +543,9 @@ TEST(Ruvia, mixed_raw_connection_services_detect_transport_after_single_and_grou
     }
     runtime.loops_[0].start(single.shutdown()).get();
 
-    ruvia::http_server_group group(runtime.loops_, [](const ruvia::worker_ref&) { return ruvia::http_server_callbacks{.connection_ = &raw_transport_answer}; });
+    ruvia::http_server_group group(runtime.loops_, [](const ruvia::worker_ref&) {
+        return ruvia::http_server_callbacks{.connection_ = &raw_transport_answer};
+    });
     runtime.loops_[0].start(group.add_connection_service(runtime.loops_[0].worker(), config)).get();
     runtime.loops_[0].start(group.start(runtime.loops_[0].worker())).get();
     for (std::size_t worker = 0; worker < group.worker_count(); ++worker) {
@@ -576,11 +584,12 @@ TEST(Ruvia, independent_group_cross_worker_add_preserves_caller_timers_and_cold_
     held_work held;
     std::promise<void> blocked;
     auto blocked_result = blocked.get_future();
-    ASSERT_TRUE(runtime.loops_[1].worker().post([gate = held.gate_, &blocked] {
-                                              blocked.set_value();
-                                              gate->acquire();
-                                          })
-            .accepted());
+    ASSERT_TRUE(runtime.loops_[1]
+            .worker()
+            .post([gate = held.gate_, &blocked] {
+        blocked.set_value();
+        gate->acquire();
+    }).accepted());
     blocked_result.get();
     auto operation = runtime.loops_[0].start(std::move(addition));
     std::promise<void> ticked;
@@ -599,8 +608,7 @@ TEST(Ruvia, independent_group_cross_worker_add_preserves_caller_timers_and_cold_
 
     auto removal = [&] {
         std::string address = "127.0.0.1";
-        auto pending = group.remove_listener(runtime.loops_[0].worker(),
-            {.address_ = address, .port_ = port.endpoint().port()});
+        auto pending = group.remove_listener(runtime.loops_[0].worker(), {.address_ = address, .port_ = port.endpoint().port()});
         address.assign(address.size(), 'x');
         return pending;
     }();
@@ -622,16 +630,15 @@ TEST(Ruvia, independent_group_tls_preparation_keeps_caller_live_and_close_cancel
     std::counting_semaphore<> occupied{0};
     held_work held(2);
     for (int index = 0; index != 2; ++index) {
-        ASSERT_TRUE(runtime.pool_.submit([gate = held.gate_, &occupied] {
-                                     occupied.release();
-                                     gate->acquire();
-                                 })
-                .accepted());
+        ASSERT_TRUE(runtime.pool_
+                .submit([gate = held.gate_, &occupied] {
+            occupied.release();
+            gate->acquire();
+        }).accepted());
     }
     occupied.acquire();
     occupied.acquire();
-    auto operation = runtime.loops_[0].start(group.add_listener(runtime.loops_[0].worker(),
-        secure(port.endpoint().port(), 0, identity)));
+    auto operation = runtime.loops_[0].start(group.add_listener(runtime.loops_[0].worker(), secure(port.endpoint().port(), 0, identity)));
     std::promise<void> ticked;
     auto tick = ticked.get_future();
     const auto timer = [&]() -> ruvia::task<void> {
@@ -669,8 +676,7 @@ TEST(Ruvia, independent_group_cold_adoption_owns_socket_and_endpoint_before_exec
     discarded.connect(acceptor.local_endpoint());
     {
         auto accepted = acceptor.accept();
-        auto cold = group.adopt(runtime.loops_[0].worker(), 1,
-            {.address_ = "127.0.0.1", .port_ = port}, accepted.release());
+        auto cold = group.adopt(runtime.loops_[0].worker(), 1, {.address_ = "127.0.0.1", .port_ = port}, accepted.release());
         (void)cold;
     }
     discarded.non_blocking(true);
@@ -684,8 +690,7 @@ TEST(Ruvia, independent_group_cold_adoption_owns_socket_and_endpoint_before_exec
     auto accepted = acceptor.accept();
     auto adoption = [&] {
         std::string address = "127.0.0.1";
-        auto pending = group.adopt(runtime.loops_[0].worker(), 1,
-            {.address_ = address, .port_ = port}, accepted.release());
+        auto pending = group.adopt(runtime.loops_[0].worker(), 1, {.address_ = address, .port_ = port}, accepted.release());
         address.assign(address.size(), 'x');
         return pending;
     }();
@@ -704,9 +709,7 @@ TEST(Ruvia, independent_group_discarded_cold_addition_closes_all_inherited_liste
     ruvia::http_server_group original(runtime.loops_, &answer_callbacks);
     original.listen(plain(port.endpoint().port()));
     runtime.loops_[0].start(original.start(runtime.loops_[0].worker())).get();
-    auto sockets = runtime.loops_[0].start(original.duplicate_listener_sockets(runtime.loops_[0].worker(),
-                                               {.address_ = "127.0.0.1", .port_ = port.endpoint().port()}))
-                       .get();
+    auto sockets = runtime.loops_[0].start(original.duplicate_listener_sockets(runtime.loops_[0].worker(), {.address_ = "127.0.0.1", .port_ = port.endpoint().port()})).get();
     ASSERT_EQ(sockets.http_.size(), 2U);
     const auto descriptors = sockets.http_;
     ruvia::http_server_group replacement(runtime.loops_, &answer_callbacks);
@@ -737,14 +740,14 @@ TEST(Ruvia, independent_group_member_retirement_cancels_pending_cross_worker_add
     held_work held;
     std::promise<void> blocked;
     auto blocked_result = blocked.get_future();
-    ASSERT_TRUE(runtime.loops_[1].worker().post([gate = held.gate_, &blocked] {
-                                              blocked.set_value();
-                                              gate->acquire();
-                                          })
-            .accepted());
+    ASSERT_TRUE(runtime.loops_[1]
+            .worker()
+            .post([gate = held.gate_, &blocked] {
+        blocked.set_value();
+        gate->acquire();
+    }).accepted());
     blocked_result.get();
-    auto operation = runtime.loops_[0].start(group.add_listener(runtime.loops_[0].worker(),
-        plain(port.endpoint().port())));
+    auto operation = runtime.loops_[0].start(group.add_listener(runtime.loops_[0].worker(), plain(port.endpoint().port())));
     std::promise<void> submitted;
     auto submitted_result = submitted.get_future();
     const auto observe = [&]() -> ruvia::task<void> {
@@ -800,7 +803,9 @@ TEST(Ruvia, independent_group_prepared_batch_defers_handlers_and_rolls_back_aban
         queued[index].connect(endpoints[index]);
         asio::write(queued[index], asio::buffer(head));
     }
-    const auto barrier = []() -> ruvia::task<void> { co_return; };
+    const auto barrier = []() -> ruvia::task<void> {
+        co_return;
+    };
     for (const auto& loop : runtime.loops_) {
         loop.start(barrier()).get();
     }
@@ -992,8 +997,7 @@ TEST(Ruvia, independent_group_force_remove_from_its_own_handler_does_not_join_it
     ruvia::http_server_group* owner = nullptr;
     ruvia::http_server_group group(runtime.loops_, [&](const ruvia::worker_ref&) {
         return ruvia::http_server_callbacks{.request_stream_ = [&](ruvia::request_stream& stream) -> ruvia::task<void> {
-            co_await owner->remove_listener(stream.worker(),
-                {.address_ = "127.0.0.1", .port_ = port.endpoint().port()}, {.close_connections_ = true});
+            co_await owner->remove_listener(stream.worker(), {.address_ = "127.0.0.1", .port_ = port.endpoint().port()}, {.close_connections_ = true});
             removed.release();
         }};
     });
@@ -1051,8 +1055,9 @@ TEST(Ruvia, independent_group_factory_builds_per_worker_routers_on_member_loops)
             co_return context.text(std::to_string(id));
         });
         routes->freeze();
-        return ruvia::http_server_callbacks{
-            .request_stream_ = [routes = std::move(routes)](ruvia::request_stream& stream) { return routes->dispatch(stream); }};
+        return ruvia::http_server_callbacks{.request_stream_ = [routes = std::move(routes)](ruvia::request_stream& stream) {
+            return routes->dispatch(stream);
+        }};
     });
     const auto caller = runtime.loops_[0].worker();
     runtime.loops_[0].start(group.add_connection_service(caller, {.address_ = "127.0.0.1", .http_ = port})).get();

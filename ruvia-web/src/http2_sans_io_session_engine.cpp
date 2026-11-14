@@ -53,8 +53,8 @@ inline constexpr std::size_t http2_data_output_credit_slots = 4;
 // protocol output storage and are deliberately not included in this bound.
 class http2_data_output_budget final {
 public:
-    explicit http2_data_output_budget(const worker_ref& worker_value)
-        : changed_(worker_value) {}
+    explicit http2_data_output_budget(const worker_ref& worker_value) :
+        changed_(worker_value) {}
     http2_data_output_budget(worker_ref&&) = delete;
     http2_data_output_budget(const http2_data_output_budget&) = delete;
     http2_data_output_budget& operator=(const http2_data_output_budget&) = delete;
@@ -72,10 +72,8 @@ public:
         return false;
     }
 
-    [[nodiscard]] task<bool> acquire(std::uint32_t stream_id, multiplexed_stream_signal& stream,
-        const ruvia::http2_connection& connection, const bool* aborted) {
-        while (!stream.terminated() && !connection.stream_aborted(stream_id) &&
-               (aborted == nullptr || !*aborted)) {
+    [[nodiscard]] task<bool> acquire(std::uint32_t stream_id, multiplexed_stream_signal& stream, const ruvia::http2_connection& connection, const bool* aborted) {
+        while (!stream.terminated() && !connection.stream_aborted(stream_id) && (aborted == nullptr || !*aborted)) {
             if (try_acquire(stream_id)) {
                 co_return true;
             }
@@ -121,8 +119,7 @@ public:
     // This is required when reset/close discards encoded DATA without producing a
     // socket completion callback. Already serialized bytes remain charged until
     // their containing socket batch completes.
-    void release_and_reconcile(std::uint32_t stream_id,
-        const ruvia::http2_connection& connection) noexcept {
+    void release_and_reconcile(std::uint32_t stream_id, const ruvia::http2_connection& connection) noexcept {
         release(stream_id);
         reconcile(connection, false);
     }
@@ -140,10 +137,7 @@ public:
             }
             // Stream removal is not evidence that serialized DATA was written.
             // Keep its credit until every submitted payload byte crossed the socket.
-            if ((cancelled_[i] && progress.written_ >= progress.emitted_ &&
-                    connection.pending_data_output_bytes(stream_id) == 0) ||
-                (!cancelled_[i] && progress.written_ >= progress.submitted_ &&
-                    connection.pending_data_output_bytes(stream_id) == 0)) {
+            if ((cancelled_[i] && progress.written_ >= progress.emitted_ && connection.pending_data_output_bytes(stream_id) == 0) || (!cancelled_[i] && progress.written_ >= progress.submitted_ && connection.pending_data_output_bytes(stream_id) == 0)) {
                 clear(i);
             }
         }
@@ -192,9 +186,9 @@ enum class http2_body_queue_store_status : std::uint8_t {
 // invalidate the borrowed view.
 class http2_sans_io_body_queue final {
 public:
-    explicit http2_sans_io_body_queue(inbound_buffer_account* inbound = nullptr) noexcept
-        : queued_reservation_(inbound),
-          active_reservation_(inbound) {}
+    explicit http2_sans_io_body_queue(inbound_buffer_account* inbound = nullptr) noexcept :
+        queued_reservation_(inbound),
+        active_reservation_(inbound) {}
 
     void enqueue(std::string_view data, http2_received_data_credit&& credit) {
         if (data.empty()) {
@@ -213,8 +207,7 @@ public:
         queued_credit_->merge(std::move(credit));
     }
 
-    [[nodiscard]] http2_body_queue_store_status enqueue_bounded(std::string_view data,
-        http2_received_data_credit&& credit, std::size_t backlog_limit) {
+    [[nodiscard]] http2_body_queue_store_status enqueue_bounded(std::string_view data, http2_received_data_credit&& credit, std::size_t backlog_limit) {
         const auto queued_bytes = queued_chunk_.size();
         if (queued_bytes > backlog_limit || data.size() > backlog_limit - queued_bytes) {
             return http2_body_queue_store_status::backlog_overflow;
@@ -298,10 +291,10 @@ enum class http2_request_body_store_status : std::uint8_t {
 class http2_sans_io_stream_runtime final {
 public:
     // The owning table resolves metadata and body resources before construction.
-    explicit http2_sans_io_stream_runtime(std::uint32_t stream_id, inbound_buffer_account* inbound = nullptr) noexcept
-        : stream_id_(stream_id),
-          buffered_reservation_(inbound),
-          body_queue_(inbound) {}
+    explicit http2_sans_io_stream_runtime(std::uint32_t stream_id, inbound_buffer_account* inbound = nullptr) noexcept :
+        stream_id_(stream_id),
+        buffered_reservation_(inbound),
+        body_queue_(inbound) {}
 
     void bind_push_parent(std::uint32_t id) noexcept {
         push_parent_ = id;
@@ -375,8 +368,7 @@ public:
         return body_mode_;
     }
 
-    [[nodiscard]] http2_request_body_store_status store_body(
-        http2_message_body_chunk_event& chunk, protocol_byte_limit total_limit, std::size_t backlog_limit) {
+    [[nodiscard]] http2_request_body_store_status store_body(http2_message_body_chunk_event& chunk, protocol_byte_limit total_limit, std::size_t backlog_limit) {
         const auto data = chunk.bytes();
         if (http_request_body_addition_failure(received_bytes_, data.size(), total_limit).has_value()) {
             return http2_request_body_store_status::too_large;
@@ -445,17 +437,14 @@ public:
     // The request body is still open and has gone `inactivity` without DATA,
     // or `completion` since it opened (the stream's request_body_timeout_ and
     // body_completion_timeout_).
-    [[nodiscard]] bool request_body_overdue(std::int64_t now_ms,
-        const std::optional<timeout_duration>& inactivity,
-        const std::optional<timeout_duration>& completion) const noexcept {
+    [[nodiscard]] bool request_body_overdue(std::int64_t now_ms, const std::optional<timeout_duration>& inactivity, const std::optional<timeout_duration>& completion) const noexcept {
         return request_body_deadline_.overdue(now_ms, inactivity, completion);
     }
 
 private:
     friend class http2_sans_io_stream_runtime_table;
 
-    [[nodiscard]] multiplexed_stream_signal* begin_dispatch(
-        const worker_ref& worker_value, multiplexed_session_termination& termination) {
+    [[nodiscard]] multiplexed_stream_signal* begin_dispatch(const worker_ref& worker_value, multiplexed_session_termination& termination) {
         if (!route_selected_ || signal_) {
             return nullptr;
         }
@@ -504,10 +493,9 @@ private:
 // by another stream being admitted or erased.
 class http2_sans_io_stream_runtime_table final {
 public:
-    explicit http2_sans_io_stream_runtime_table(
-        multiplexed_session_termination& termination, inbound_buffer_account* body_account = nullptr) noexcept
-        : termination_(termination),
-          body_account_(body_account) {}
+    explicit http2_sans_io_stream_runtime_table(multiplexed_session_termination& termination, inbound_buffer_account* body_account = nullptr) noexcept :
+        termination_(termination),
+        body_account_(body_account) {}
 
     [[nodiscard]] http2_sans_io_stream_runtime* find(std::uint32_t stream_id) noexcept {
         for (auto& slot : inline_) {
@@ -565,8 +553,7 @@ public:
         return *result_value;
     }
 
-    [[nodiscard]] multiplexed_stream_signal* begin_dispatch(
-        std::uint32_t stream_id, const worker_ref& worker_value) {
+    [[nodiscard]] multiplexed_stream_signal* begin_dispatch(std::uint32_t stream_id, const worker_ref& worker_value) {
         auto* runtime = find(stream_id);
         if (runtime == nullptr) {
             return nullptr;
@@ -649,8 +636,7 @@ private:
     // typical cadence, pmr overflow for deeper multiplexing, so the table's
     // resident footprint stays small in every connection.
     static constexpr std::size_t inline_capacity = 2;
-    using overflow_runtime_type =
-        std::unique_ptr<http2_sans_io_stream_runtime>;
+    using overflow_runtime_type = std::unique_ptr<http2_sans_io_stream_runtime>;
 
     void account_removal(const http2_sans_io_stream_runtime& runtime) noexcept {
         if (runtime.tunnel()) {
@@ -680,9 +666,7 @@ enum class http2_send_window_wait_status : std::uint8_t {
 // Stream existence, abort and session end are re-checked after every wake.
 // The session resets a stream whose wait outlasts write_timeout_ (Pingora
 // bounds the h2 capacity wait by its write timeout), which ends it as aborted.
-[[nodiscard]] task<http2_send_window_wait_status> await_http2_send_window(
-    ruvia::http2_connection& connection, std::uint32_t stream_id,
-    multiplexed_stream_signal* signal, const bool* aborted = nullptr);
+[[nodiscard]] task<http2_send_window_wait_status> await_http2_send_window(ruvia::http2_connection& connection, std::uint32_t stream_id, multiplexed_stream_signal* signal, const bool* aborted = nullptr);
 
 enum class http2_stream_data_write_status : std::uint8_t {
     completed,
@@ -702,20 +686,13 @@ struct http2_stream_data_submit_result final {
 // One synchronous DATA submission. The caller already owns output credit for
 // nonempty bytes and keeps the payload alive. Records consumed credit, releases
 // unused credit on every exit, and wakes the socket writer even on exceptions.
-[[nodiscard]] http2_stream_data_submit_result submit_http2_stream_data(
-    ruvia::http2_connection& connection, std::uint32_t stream_id,
-    worker_signal& write_signal, http2_data_output_budget& output_budget,
-    std::string_view bytes, http2_end_stream end_stream);
+[[nodiscard]] http2_stream_data_submit_result submit_http2_stream_data(ruvia::http2_connection& connection, std::uint32_t stream_id, worker_signal& write_signal, http2_data_output_budget& output_budget, std::string_view bytes, http2_end_stream end_stream);
 
 // Submits caller-owned input with a credit-sized payload allowance, retaining
 // each unconsumed suffix until window and output credit are available.
 // An empty END_STREAM takes no output credit but, like any DATA frame, waits
 // for both send windows to be positive. The caller keeps bytes alive.
-[[nodiscard]] task<http2_stream_data_write_status> write_http2_stream_data(
-    ruvia::http2_connection& connection, std::uint32_t stream_id,
-    multiplexed_stream_signal* signal, worker_signal& write_signal,
-    http2_data_output_budget& output_budget, std::string_view bytes,
-    http2_end_stream end_stream, const bool* aborted = nullptr);
+[[nodiscard]] task<http2_stream_data_write_status> write_http2_stream_data(ruvia::http2_connection& connection, std::uint32_t stream_id, multiplexed_stream_signal* signal, worker_signal& write_signal, http2_data_output_budget& output_budget, std::string_view bytes, http2_end_stream end_stream, const bool* aborted = nullptr);
 
 }  // namespace ruvia::detail
 
@@ -747,23 +724,18 @@ inline constexpr std::size_t http2_file_read_slots = http2_data_output_credit_sl
 // while holding one of http2_file_read_slots through its DATA submission.
 class http2_buffered_response_writer final {
 public:
-    http2_buffered_response_writer(http2_sans_io_session_engine& session, ruvia::http2_connection& connection,
-        http2_sans_io_stream_runtime_table& stream_runtimes, worker_signal& write_signal,
-        http2_data_output_budget& output_budget, response_file_io file_io) noexcept;
+    http2_buffered_response_writer(http2_sans_io_session_engine& session, ruvia::http2_connection& connection, http2_sans_io_stream_runtime_table& stream_runtimes, worker_signal& write_signal, http2_data_output_budget& output_budget, response_file_io file_io) noexcept;
 
     http2_buffered_response_writer(const http2_buffered_response_writer&) = delete;
     http2_buffered_response_writer& operator=(const http2_buffered_response_writer&) = delete;
     http2_buffered_response_writer(http2_buffered_response_writer&&) = delete;
     http2_buffered_response_writer& operator=(http2_buffered_response_writer&&) = delete;
 
-    [[nodiscard]] task<multiplexed_buffered_response_write_result> write(std::uint32_t stream_id,
-        const http_response& response, http_buffered_response_write_plan write_plan);
+    [[nodiscard]] task<multiplexed_buffered_response_write_result> write(std::uint32_t stream_id, const http_response& response, http_buffered_response_write_plan write_plan);
 
 private:
-    [[nodiscard]] task<http2_stream_data_write_status> write_data(
-        std::uint32_t stream_id, std::string_view chunk, http2_end_stream end_stream);
-    [[nodiscard]] task<multiplexed_buffered_response_write_result> write_file_body(
-        std::uint32_t stream_id, response_file_source& source, http_status_code committed_status);
+    [[nodiscard]] task<http2_stream_data_write_status> write_data(std::uint32_t stream_id, std::string_view chunk, http2_end_stream end_stream);
+    [[nodiscard]] task<multiplexed_buffered_response_write_result> write_file_body(std::uint32_t stream_id, response_file_source& source, http_status_code committed_status);
     [[nodiscard]] bool stream_ended(std::uint32_t stream_id) const noexcept;
     void wake_writer() noexcept;
 
@@ -852,8 +824,7 @@ private:
 // dispatch, route execution, stream lifetime, and joins compile once.
 class http2_sans_io_session_engine final {
 public:
-    http2_sans_io_session_engine(asio::any_io_executor executor, asio::ip::tcp::socket& socket,
-        const route_table& routes_value, http2_sans_io_session_context session_value);
+    http2_sans_io_session_engine(asio::any_io_executor executor, asio::ip::tcp::socket& socket, const route_table& routes_value, http2_sans_io_session_context session_value);
 
     http2_sans_io_session_engine(const http2_sans_io_session_engine&) = delete;
     http2_sans_io_session_engine& operator=(const http2_sans_io_session_engine&) = delete;
@@ -967,8 +938,7 @@ constexpr std::chrono::milliseconds http2_drain_round_trip_bound{std::chrono::se
 // Streaming request-body reader for the sans-I/O session; the body_reader facade wraps
 // it for handler consumption. Chunk-for-chunk port of the coroutine read_body_chunk.
 // Admission always binds the runtime-owned signal before this facade can exist.
-class http2_sans_io_request_body_reader final
-    : public multiplexed_request_body_reader_base<http2_sans_io_request_body_reader> {
+class http2_sans_io_request_body_reader final : public multiplexed_request_body_reader_base<http2_sans_io_request_body_reader> {
 public:
     static constexpr const char* terminated_error_message = "HTTP/2 connection ended during body read";
     static constexpr const char* reset_error_message = "HTTP/2 request stream reset during body read";
@@ -976,16 +946,13 @@ public:
     // continue_output is non-null when the request carries a pending
     // 100-continue expectation: the first read sends it, as the HTTP/1 reader
     // does, so an unread content never prompts the client to send it.
-    http2_sans_io_request_body_reader(ruvia::http2_connection& connection, std::uint32_t stream_id,
-        http2_sans_io_body_queue& body_queue, const std::optional<http_request_body_failure>& body_failure,
-        multiplexed_stream_signal& signal, worker_signal& write_signal,
-        http_interim_response_output* continue_output) noexcept
-        : multiplexed_request_body_reader_base(signal, continue_output),
-          connection_(connection),
-          stream_id_(stream_id),
-          body_queue_(body_queue),
-          body_failure_(body_failure),
-          write_signal_(write_signal) {}
+    http2_sans_io_request_body_reader(ruvia::http2_connection& connection, std::uint32_t stream_id, http2_sans_io_body_queue& body_queue, const std::optional<http_request_body_failure>& body_failure, multiplexed_stream_signal& signal, worker_signal& write_signal, http_interim_response_output* continue_output) noexcept :
+        multiplexed_request_body_reader_base(signal, continue_output),
+        connection_(connection),
+        stream_id_(stream_id),
+        body_queue_(body_queue),
+        body_failure_(body_failure),
+        write_signal_(write_signal) {}
 
 private:
     friend class multiplexed_request_body_reader_base<http2_sans_io_request_body_reader>;
@@ -1020,26 +987,17 @@ private:
     worker_signal& write_signal_;
 };
 
-class http2_sans_io_response_stream_sink final
-    : public multiplexed_response_stream_sink_base<http2_sans_io_response_stream_sink, http2_sans_io_stream_runtime> {
+class http2_sans_io_response_stream_sink final : public multiplexed_response_stream_sink_base<http2_sans_io_response_stream_sink, http2_sans_io_stream_runtime> {
 public:
-    http2_sans_io_response_stream_sink(ruvia::http2_connection& connection, std::uint32_t stream_id,
-        http2_sans_io_stream_runtime& stream_runtime,
-        worker_signal& write_signal, multiplexed_stream_signal& stream_signal,
-        http2_data_output_budget& output_budget,
-        http_known_method request_method, worker_codecs& codecs,
-        http_response_coding_selection response_coding,
-        const compression_config* compression, const http_cors_policy* cors) noexcept
-        : multiplexed_response_stream_sink_base(
-              stream_runtime, stream_signal, request_method, codecs, response_coding, compression, cors),
-          connection_(connection),
-          stream_id_(stream_id),
-          write_signal_(write_signal),
-          output_budget_(output_budget) {}
+    http2_sans_io_response_stream_sink(ruvia::http2_connection& connection, std::uint32_t stream_id, http2_sans_io_stream_runtime& stream_runtime, worker_signal& write_signal, multiplexed_stream_signal& stream_signal, http2_data_output_budget& output_budget, http_known_method request_method, worker_codecs& codecs, http_response_coding_selection response_coding, const compression_config* compression, const http_cors_policy* cors) noexcept :
+        multiplexed_response_stream_sink_base(stream_runtime, stream_signal, request_method, codecs, response_coding, compression, cors),
+        connection_(connection),
+        stream_id_(stream_id),
+        write_signal_(write_signal),
+        output_budget_(output_budget) {}
 
 private:
-    friend class multiplexed_response_stream_sink_base<http2_sans_io_response_stream_sink,
-        http2_sans_io_stream_runtime>;
+    friend class multiplexed_response_stream_sink_base<http2_sans_io_response_stream_sink, http2_sans_io_stream_runtime>;
 
     static constexpr const char* terminated_error_message = "HTTP/2 connection ended during response stream";
     static constexpr const char* sleep_terminated_error_message = "HTTP/2 connection ended during sleep";
@@ -1054,10 +1012,8 @@ private:
         write_signal_.notify();
     }
 
-    [[nodiscard]] http_response_stream_commit_plan submit_streaming_head(
-        http_response&& response, http_response_trailer_intent trailer_intent) {
-        const auto head_result =
-            connection_.submit_streaming_response_head(stream_id_, std::move(response), trailer_intent);
+    [[nodiscard]] http_response_stream_commit_plan submit_streaming_head(http_response&& response, http_response_trailer_intent trailer_intent) {
+        const auto head_result = connection_.submit_streaming_response_head(stream_id_, std::move(response), trailer_intent);
         const auto* submitted_head = std::get_if<http_response_stream_commit_plan>(&head_result);
         if (submitted_head != nullptr) {
             return *submitted_head;
@@ -1069,17 +1025,14 @@ private:
             (void)connection_.submit_reset(stream_id_, ruvia::http2_error_code::cancel);
             wake_writer();
         }
-        if (head_error == ruvia::http2_response_head_submit_error::closed ||
-            head_error == ruvia::http2_response_head_submit_error::peer_stream_limit_reached) {
-            throw inbound_transport_error(
-                std::make_error_code(std::errc::connection_reset), reset_error_message);
+        if (head_error == ruvia::http2_response_head_submit_error::closed || head_error == ruvia::http2_response_head_submit_error::peer_stream_limit_reached) {
+            throw inbound_transport_error(std::make_error_code(std::errc::connection_reset), reset_error_message);
         }
         throw std::logic_error("HTTP/2 streaming response head submission failed");
     }
 
     task<void> write_encoded_data(std::string_view chunk) {
-        const auto status = co_await write_http2_stream_data(connection_, stream_id_, &signal_,
-            write_signal_, output_budget_, chunk, http2_end_stream::keep_open);
+        const auto status = co_await write_http2_stream_data(connection_, stream_id_, &signal_, write_signal_, output_budget_, chunk, http2_end_stream::keep_open);
         switch (status) {
             case http2_stream_data_write_status::completed:
                 co_return;
@@ -1087,8 +1040,7 @@ private:
                 throw inbound_transport_error(signal_.terminal_error(), terminated_error_message);
             case http2_stream_data_write_status::local_aborted:
             case http2_stream_data_write_status::peer_closed:
-                throw inbound_transport_error(
-                    std::make_error_code(std::errc::connection_reset), reset_error_message);
+                throw inbound_transport_error(std::make_error_code(std::errc::connection_reset), reset_error_message);
             case http2_stream_data_write_status::invalid_state:
                 throw std::logic_error("invalid HTTP/2 response stream DATA state");
             case http2_stream_data_write_status::content_length_exceeded:
@@ -1114,14 +1066,11 @@ private:
             if (result_value == http2_finish_status::invalid_message) {
                 throw std::invalid_argument("HTTP/2 response ended before its declared Content-Length");
             }
-            if (result_value == http2_finish_status::backpressured &&
-                co_await await_http2_send_window(connection_, stream_id_, &signal_) ==
-                    http2_send_window_wait_status::ready) {
+            if (result_value == http2_finish_status::backpressured && co_await await_http2_send_window(connection_, stream_id_, &signal_) == http2_send_window_wait_status::ready) {
                 continue;
             }
             throw_if_terminated();
-            throw inbound_transport_error(
-                std::make_error_code(std::errc::connection_reset), reset_error_message);
+            throw inbound_transport_error(std::make_error_code(std::errc::connection_reset), reset_error_message);
         }
     }
 
@@ -1133,27 +1082,20 @@ private:
 
 // Duplex CONNECT transport driven by one HTTP/2 session reader and writer.
 // Queued input retains its receive-window credit until the application consumes it.
-class http2_sans_io_tunnel_transport final
-    : public multiplexed_tunnel_transport_base<http2_sans_io_tunnel_transport> {
+class http2_sans_io_tunnel_transport final : public multiplexed_tunnel_transport_base<http2_sans_io_tunnel_transport> {
 public:
-    http2_sans_io_tunnel_transport(http2_sans_io_session_engine& engine, ruvia::http2_connection& connection,
-        std::uint32_t stream_id, http2_sans_io_body_queue& body_queue, multiplexed_stream_signal& signal,
-        worker_signal& write_signal, http2_data_output_budget& output_budget) noexcept
-        : multiplexed_tunnel_transport_base(signal),
-          engine_(&engine),
-          connection_(connection),
-          stream_id_(stream_id),
-          body_queue_(body_queue),
-          write_signal_(write_signal),
-          output_budget_(output_budget) {}
+    http2_sans_io_tunnel_transport(http2_sans_io_session_engine& engine, ruvia::http2_connection& connection, std::uint32_t stream_id, http2_sans_io_body_queue& body_queue, multiplexed_stream_signal& signal, worker_signal& write_signal, http2_data_output_budget& output_budget) noexcept :
+        multiplexed_tunnel_transport_base(signal),
+        engine_(&engine),
+        connection_(connection),
+        stream_id_(stream_id),
+        body_queue_(body_queue),
+        write_signal_(write_signal),
+        output_budget_(output_budget) {}
 
-    [[nodiscard]] task<std::error_code> write_bytes(
-        std::string_view bytes_value, http_stream_end disposition) {
-        const auto terminal = disposition == http_stream_end::end
-                                  ? http2_end_stream::end_stream
-                                  : http2_end_stream::keep_open;
-        const auto status = co_await write_http2_stream_data(connection_, stream_id_, &signal_,
-            write_signal_, output_budget_, bytes_value, terminal, &aborted_);
+    [[nodiscard]] task<std::error_code> write_bytes(std::string_view bytes_value, http_stream_end disposition) {
+        const auto terminal = disposition == http_stream_end::end ? http2_end_stream::end_stream : http2_end_stream::keep_open;
+        const auto status = co_await write_http2_stream_data(connection_, stream_id_, &signal_, write_signal_, output_budget_, bytes_value, terminal, &aborted_);
         switch (status) {
             case http2_stream_data_write_status::completed:
                 co_return std::error_code{};
@@ -1177,8 +1119,7 @@ public:
             return;
         }
         aborted_ = true;
-        engine_->reset_stream_no_throw(
-            stream_id_, malformed ? http2_error_code::protocol_error : http2_error_code::cancel);
+        engine_->reset_stream_no_throw(stream_id_, malformed ? http2_error_code::protocol_error : http2_error_code::cancel);
         signal_.wake();
     }
 
@@ -1187,14 +1128,10 @@ private:
 
     void require_live() const {
         if (aborted_ || signal_.terminated()) {
-            throw inbound_transport_error(
-                aborted_ ? std::make_error_code(std::errc::operation_canceled)
-                         : signal_.terminal_error(),
-                "HTTP/2 tunnel read");
+            throw inbound_transport_error(aborted_ ? std::make_error_code(std::errc::operation_canceled) : signal_.terminal_error(), "HTTP/2 tunnel read");
         }
         if (connection_.stream_receive_status(stream_id_) == http2_stream_receive_status::closed) {
-            throw inbound_transport_error(
-                std::make_error_code(std::errc::connection_reset), "HTTP/2 tunnel read");
+            throw inbound_transport_error(std::make_error_code(std::errc::connection_reset), "HTTP/2 tunnel read");
         }
     }
 
@@ -1244,59 +1181,45 @@ struct push_target final {
     std::uint32_t stream_id_;
 };
 
-[[nodiscard]] http2_sans_io_stream_runtime* http2_select_stream_route(const route_table& routes_value,
-    bool request_stream, const http2_server_request_view& request, http2_sans_io_stream_runtime_table& stream_runtimes,
-    std::uint32_t stream_id) {
+[[nodiscard]] http2_sans_io_stream_runtime* http2_select_stream_route(const route_table& routes_value, bool request_stream, const http2_server_request_view& request, http2_sans_io_stream_runtime_table& stream_runtimes, std::uint32_t stream_id) {
     auto& runtime = stream_runtimes.ensure_accepted(stream_id);
-    auto [resolution, body_mode] = resolve_multiplexed_stream_route(
-        routes_value, request_stream, request.method_, request.path_, request.authority_, request.protocol_);
+    auto [resolution, body_mode] = resolve_multiplexed_stream_route(routes_value, request_stream, request.method_, request.path_, request.authority_, request.protocol_);
     return runtime.select_route(std::move(resolution), body_mode) ? &runtime : nullptr;
 }
 
 }  // namespace
-http2_sans_io_session_engine::http2_sans_io_session_engine(asio::any_io_executor executor,
-    asio::ip::tcp::socket& socket, const route_table& routes_value,
-    http2_sans_io_session_context session_value)
-    : executor_(std::move(executor)),
-      socket_(socket),
-      routes_(routes_value),
-      session_(std::move(session_value)),
-      inbound_buffers_(*session_.options().inbound_budget_,
-          session_.options().server_.max_inbound_buffer_bytes_per_connection_),
-      base_services_(session_.services().with_inbound_buffers(inbound_buffers_)),
-      remote_address_(session_.services().remote_address()),
-      connection_(ruvia::http2_connection::server({.frame_observer_ = session_.options().http2_frame_
-                                                                          ? +[](void* target, const http2_frame_metadata& metadata) noexcept {
-                                                                                auto& self = *static_cast<http2_sans_io_session_engine*>(target);
-                                                                                self.session_.options().http2_frame_(server_observation_access::http2_frame(
-                                                                                    self.base_services_.get_conn_info().connection_id(), metadata));
-                                                                            }
-                                                                          : nullptr,
-          .header_observer_ = session_.options().http2_headers_ ? +[](void* target, const http2_header_metadata& metadata) noexcept {
-              auto& self = *static_cast<http2_sans_io_session_engine*>(target);
-              self.session_.options().http2_headers_(server_observation_access::http2_headers(
-                  self.base_services_.get_conn_info().connection_id(), metadata));
-          }
-                                                                : nullptr,
-          .observer_context_ = this})),
-      write_signal_(session_.services().worker()),
-      output_budget_(session_.services().worker()),
-      handler_finished_(session_.services().worker()),
-      writer_finished_(session_.services().worker()),
-      admission_policy_(http_request_admission_policy::server(session_.options())),
-      stream_runtimes_(termination_, &inbound_buffers_),
-      buffered_response_writer_(*this, connection_, stream_runtimes_, write_signal_, output_budget_, response_file_io{.worker_ = session_.services().worker(), .stop_ = session_.services().get_stop_token(), .timeout_ = session_.options().server_.write_timeout_}) {
+http2_sans_io_session_engine::http2_sans_io_session_engine(asio::any_io_executor executor, asio::ip::tcp::socket& socket, const route_table& routes_value, http2_sans_io_session_context session_value) :
+    executor_(std::move(executor)),
+    socket_(socket),
+    routes_(routes_value),
+    session_(std::move(session_value)),
+    inbound_buffers_(*session_.options().inbound_budget_, session_.options().server_.max_inbound_buffer_bytes_per_connection_),
+    base_services_(session_.services().with_inbound_buffers(inbound_buffers_)),
+    remote_address_(session_.services().remote_address()),
+    connection_(ruvia::http2_connection::server({.frame_observer_ = session_.options().http2_frame_ ? +[](void* target, const http2_frame_metadata& metadata) noexcept {
+                                                     auto& self = *static_cast<http2_sans_io_session_engine*>(target);
+                                                     self.session_.options().http2_frame_(server_observation_access::http2_frame(self.base_services_.get_conn_info().connection_id(), metadata));
+                                                 } : nullptr, .header_observer_ = session_.options().http2_headers_ ? +[](void* target, const http2_header_metadata& metadata) noexcept {
+                                                     auto& self = *static_cast<http2_sans_io_session_engine*>(target);
+                                                     self.session_.options().http2_headers_(server_observation_access::http2_headers(self.base_services_.get_conn_info().connection_id(), metadata));
+                                                 } : nullptr, .observer_context_ = this})),
+    write_signal_(session_.services().worker()),
+    output_budget_(session_.services().worker()),
+    handler_finished_(session_.services().worker()),
+    writer_finished_(session_.services().worker()),
+    admission_policy_(http_request_admission_policy::server(session_.options())),
+    stream_runtimes_(termination_, &inbound_buffers_),
+    buffered_response_writer_(*this, connection_, stream_runtimes_, write_signal_, output_budget_, response_file_io{.worker_ = session_.services().worker(), .stop_ = session_.services().get_stop_token(), .timeout_ = session_.options().server_.write_timeout_}) {
     // A plaintext handoff reuses the HTTP/1 scanner entry. It now tracks a
     // multiplexed session, not an unadmitted HTTP/1 request-head read.
     base_services_.bind_routes(routes_);
     session_.scanner_entry().bind_lifecycle(base_services_.connection_lifecycle_value());
     set_inactivity_phase();
-    session_.scanner_entry().register_periodic_check(
-        scanner_checks_, this,
-        [](void* target, std::int64_t now_ms) noexcept {
-            static_cast<http2_sans_io_session_engine*>(target)->expire_stream_deadlines(now_ms);
-        },
-        [](void* target) noexcept { static_cast<http2_sans_io_session_engine*>(target)->request_drain(); });
+    session_.scanner_entry().register_periodic_check(scanner_checks_, this, [](void* target, std::int64_t now_ms) noexcept {
+        static_cast<http2_sans_io_session_engine*>(target)->expire_stream_deadlines(now_ms);
+    }, [](void* target) noexcept {
+        static_cast<http2_sans_io_session_engine*>(target)->request_drain();
+    });
 }
 
 bool http2_sans_io_session_engine::wants_write() const noexcept {
@@ -1308,12 +1231,9 @@ void http2_sans_io_session_engine::take_output(std::string& output) {
     // core batch operation only consumes output and invokes its observer after the
     // copy succeeds, so allocation failure leaves protocol bytes and budget intact.
     output.clear();
-    (void)connection_.take_output_batch(
-        http2_data_output_credit_slots * http2_data_output_credit_bytes + 4096, output,
-        [](void* context_value, std::uint32_t stream_id, std::size_t payload_bytes) noexcept {
-            static_cast<http2_data_output_budget*>(context_value)->note_data_output(stream_id, payload_bytes);
-        },
-        &output_budget_);
+    (void)connection_.take_output_batch(http2_data_output_credit_slots * http2_data_output_credit_bytes + 4096, output, [](void* context_value, std::uint32_t stream_id, std::size_t payload_bytes) noexcept {
+        static_cast<http2_data_output_budget*>(context_value)->note_data_output(stream_id, payload_bytes);
+    }, &output_budget_);
     output_write_in_flight_ = !output.empty();
 }
 
@@ -1396,7 +1316,11 @@ void http2_sans_io_session_engine::arm_drain_timer() noexcept {
     }
     // RFC 9113 §6.8 asks only for "at least one round-trip time" before the
     // final GOAWAY; nothing requires waiting for the PING ACK.
-    drain_timer_.arm(session_.services().worker(), http2_drain_round_trip_bound, [this]() noexcept { drain_timer_expired(); }, [this]() noexcept { terminate(std::make_error_code(std::errc::not_enough_memory)); });
+    drain_timer_.arm(session_.services().worker(), http2_drain_round_trip_bound, [this]() noexcept {
+        drain_timer_expired();
+    }, [this]() noexcept {
+        terminate(std::make_error_code(std::errc::not_enough_memory));
+    });
 }
 
 void http2_sans_io_session_engine::drain_timer_expired() noexcept {
@@ -1450,9 +1374,7 @@ void http2_sans_io_session_engine::peer_input_ended() noexcept {
 }
 
 void http2_sans_io_session_engine::set_inactivity_phase() noexcept {
-    session_.scanner_entry().set_phase(multiplexed_inactivity_phase(connection_.received_peer_settings(),
-        connection_.header_block_in_progress(), stream_runtimes_.size() != 0 || active_handler_tasks_ != 0,
-        stream_runtimes_.tunnel_count() != 0));
+    session_.scanner_entry().set_phase(multiplexed_inactivity_phase(connection_.received_peer_settings(), connection_.header_block_in_progress(), stream_runtimes_.size() != 0 || active_handler_tasks_ != 0, stream_runtimes_.tunnel_count() != 0));
 }
 
 void http2_sans_io_session_engine::expire_stream_deadlines(std::int64_t now_ms) noexcept {
@@ -1473,8 +1395,7 @@ void http2_sans_io_session_engine::expire_stream_deadlines(std::int64_t now_ms) 
                 return;
             }
             auto* signal = runtime.signal();
-            if (signal != nullptr && server.write_timeout_.has_value() &&
-                signal->output_wait_expired(now_ms, *server.write_timeout_)) {
+            if (signal != nullptr && server.write_timeout_.has_value() && signal->output_wait_expired(now_ms, *server.write_timeout_)) {
                 overdue_stream = runtime.stream_id();
             }
         });
@@ -1510,8 +1431,7 @@ void http2_sans_io_session_engine::terminate(std::error_code error) noexcept {
     if (!termination_.terminate(error)) {
         return;
     }
-    if (auto* lifecycle = base_services_.connection_lifecycle_value();
-        lifecycle != nullptr && (!drain_finished_ || error == std::errc::timed_out)) {
+    if (auto* lifecycle = base_services_.connection_lifecycle_value(); lifecycle != nullptr && (!drain_finished_ || error == std::errc::timed_out)) {
         lifecycle->note_error(error);
     }
     output_budget_.wake();
@@ -1525,8 +1445,7 @@ void http2_sans_io_session_engine::terminate(std::error_code error) noexcept {
     write_signal_.notify();
 }
 
-void http2_sans_io_session_engine::reset_stream_no_throw(
-    std::uint32_t stream_id, http2_error_code error) noexcept {
+void http2_sans_io_session_engine::reset_stream_no_throw(std::uint32_t stream_id, http2_error_code error) noexcept {
     try {
         (void)connection_.submit_reset(stream_id, error);
         if (auto* signal = stream_runtimes_.signal_for(stream_id)) {
@@ -1547,9 +1466,7 @@ bool http2_sans_io_session_engine::push_request(std::uint32_t associated_stream_
         return false;
     }
     const auto original = head->request_view();
-    if (!http_ascii_equals_ignore_case(original.scheme_, request.scheme_) ||
-        !http_authorities_equal(borrowed_text(original.authority_), request.authority_,
-            http_ascii_equals_ignore_case(original.scheme_, "https") ? 443 : 80)) {
+    if (!http_ascii_equals_ignore_case(original.scheme_, request.scheme_) || !http_authorities_equal(borrowed_text(original.authority_), request.authority_, http_ascii_equals_ignore_case(original.scheme_, "https") ? 443 : 80)) {
         throw std::invalid_argument("push request must use its associated request origin");
     }
     auto promised = connection_.submit_push_request(associated_stream_id, request);
@@ -1563,8 +1480,7 @@ bool http2_sans_io_session_engine::push_request(std::uint32_t associated_stream_
     const auto id = promised_event.stream_id();
     http2_sans_io_stream_runtime* runtime = nullptr;
     try {
-        runtime = http2_select_stream_route(
-            routes_, static_cast<bool>(base_services_.request_stream()), promised_event.request_view(), stream_runtimes_, id);
+        runtime = http2_select_stream_route(routes_, static_cast<bool>(base_services_.request_stream()), promised_event.request_view(), stream_runtimes_, id);
         if (runtime == nullptr || !runtime->hold_request_head(std::move(promised_event))) {
             throw std::logic_error("HTTP/2 push dispatch admission failed");
         }
@@ -1605,9 +1521,7 @@ task<void> http2_sans_io_session_engine::dispatch_one(std::uint32_t stream_id) {
     } cleanup{*this, stream_id};
     try {
         const auto& options = session_.options();
-        const auto request_start = options.access_log_.callback_
-                                       ? std::chrono::steady_clock::now()
-                                       : std::chrono::steady_clock::time_point{};
+        const auto request_start = options.access_log_.callback_ ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
         auto* stream_runtime = stream_runtimes_.find(stream_id);
         auto* request_head = stream_runtime != nullptr ? stream_runtime->request_head() : nullptr;
         if (request_head == nullptr) {
@@ -1640,12 +1554,14 @@ task<void> http2_sans_io_session_engine::dispatch_one(std::uint32_t stream_id) {
             if (target.connection_.submit_origin_advertisement(origins) != http2_submit_status::accepted) {
                 throw std::invalid_argument("HTTP/2 ORIGIN advertisement rejected");
             }
-            target.writer_.notify(); }, [](void* raw, std::string_view value) {
+            target.writer_.notify();
+        }, [](void* raw, std::string_view value) {
             auto& target = *static_cast<response_output_target*>(raw);
             if (target.connection_.submit_alternative_service_advertisement(target.stream_id_, {}, value) != http2_submit_status::accepted) {
                 throw std::invalid_argument("HTTP/2 ALTSVC advertisement rejected");
             }
-            target.writer_.notify(); });
+            target.writer_.notify();
+        });
         push_target push_target_value{*this, stream_id};
         http_push_output push_output(&push_target_value, [](void* raw, http_push_request_view promised_request) -> bool {
             auto& target = *static_cast<push_target*>(raw);
@@ -1686,12 +1602,9 @@ task<void> http2_sans_io_session_engine::dispatch_one(std::uint32_t stream_id) {
         const auto* resolved = admission.resolved();
 
         std::optional<body_reader_binding<http2_sans_io_request_body_reader>> body_reader_storage;
-        if (streaming_body && !request_head->snapshot().connect_pending_ &&
-            !stream_runtime->body_failure().has_value()) {
+        if (streaming_body && !request_head->snapshot().connect_pending_ && !stream_runtime->body_failure().has_value()) {
             const bool continue_on_read = expectation_plan == http_server_expectation_plan::send_continue && resolved != nullptr;
-            body_reader_storage.emplace(connection_, stream_id, stream_runtime->body_queue(),
-                stream_runtime->body_failure(), *stream_signal, write_signal_,
-                continue_on_read ? &interim_output : nullptr);
+            body_reader_storage.emplace(connection_, stream_id, stream_runtime->body_queue(), stream_runtime->body_failure(), *stream_signal, write_signal_, continue_on_read ? &interim_output : nullptr);
         }
         auto dispatch_services = request_services;
         if (body_reader_storage) {
@@ -1704,75 +1617,54 @@ task<void> http2_sans_io_session_engine::dispatch_one(std::uint32_t stream_id) {
         const auto reset_dispatch_stream = [this, stream_id](bool cancelled) noexcept {
             reset_stream_no_throw(stream_id, cancelled ? http2_error_code::cancel : http2_error_code::internal_error);
         };
-        const auto finish_upgrade_commit = [this, stream_id, stream_runtime, stream_signal, &admission, &options](
-                                               http_status_code status, context& context_value) {
+        const auto finish_upgrade_commit = [this, stream_id, stream_runtime, stream_signal, &admission, &options](http_status_code status, context& context_value) {
             stream_runtime->mark_response_committed();
             set_inactivity_phase();
             context_access::commit_upgrade(context_value);
             wake_writer();
             admission.tail().record_access(options.access_log_, status);
-            return http2_sans_io_tunnel_transport(*this, connection_, stream_id,
-                stream_runtime->body_queue(), *stream_signal, write_signal_, output_budget_);
+            return http2_sans_io_tunnel_transport(*this, connection_, stream_id, stream_runtime->body_queue(), *stream_signal, write_signal_, output_budget_);
         };
         bool body_failure_handled = false;
-        if (const auto& body_failure = stream_runtime->body_failure();
-            body_failure.has_value() &&
-            admission.endpoint() != http_request_endpoint::rejection) {
+        if (const auto& body_failure = stream_runtime->body_failure(); body_failure.has_value() && admission.endpoint() != http_request_endpoint::rejection) {
             body_failure_handled = true;
-            response = co_await respond_http_request_body_failure(
-                routes_, request, *body_failure, request_services, admission.tail());
+            response = co_await respond_http_request_body_failure(routes_, request, *body_failure, request_services, admission.tail());
         } else {
             switch (admission.endpoint()) {
                 case http_request_endpoint::rejection:
                     admission.tail().disable_response_coding();
-                    response = co_await respond_http_request_rejection(
-                        routes_, request, *admission.rejection(), request_services);
+                    response = co_await respond_http_request_rejection(routes_, request, *admission.rejection(), request_services);
                     break;
                 case http_request_endpoint::tunnel: {
                     if (!streaming_body || !request_head->snapshot().connect_pending_) {
                         reset_stream_no_throw(stream_id, http2_error_code::internal_error);
                         co_return;
                     }
-                    auto commit = [this, stream_id, &finish_upgrade_commit](
-                                      context& context_value, const http_response& head_response) {
-                        if (connection_.submit_connect_response_head(stream_id, head_response) !=
-                                http2_submit_status::accepted ||
-                            !stream_runtimes_.mark_tunnel(stream_id)) {
+                    auto commit = [this, stream_id, &finish_upgrade_commit](context& context_value, const http_response& head_response) {
+                        if (connection_.submit_connect_response_head(stream_id, head_response) != http2_submit_status::accepted || !stream_runtimes_.mark_tunnel(stream_id)) {
                             throw std::invalid_argument("HTTP/2 CONNECT response head rejected");
                         }
                         return finish_upgrade_commit(head_response.status(), context_value);
                     };
-                    auto commit_websocket = [this, stream_id, &request, &finish_upgrade_commit](
-                                                context& context_value, const websocket_route_endpoint& endpoint,
-                                                std::span<const http_header_view> headers)
-                        -> task<websocket_upgrade_attempt<http2_sans_io_tunnel_transport>> {
-                        const auto validation = ruvia::validate_http2_websocket_handshake(
-                            connection_, stream_id, request, endpoint.handshake_validation());
+                    auto commit_websocket = [this, stream_id, &request, &finish_upgrade_commit](context& context_value, const websocket_route_endpoint& endpoint, std::span<const http_header_view> headers) -> task<websocket_upgrade_attempt<http2_sans_io_tunnel_transport>> {
+                        const auto validation = ruvia::validate_http2_websocket_handshake(connection_, stream_id, request, endpoint.handshake_validation());
                         if (const auto* failure = validation.failure()) {
                             co_return reject_request_stream_websocket(context_value, *failure);
                         }
-                        const auto result = connection_.submit_websocket_handshake(stream_id, request, validation,
-                            {.supported_subprotocols_ = endpoint.subprotocols(), .response_headers_ = headers, .deflate_ = endpoint.deflate()});
+                        const auto result = connection_.submit_websocket_handshake(stream_id, request, validation, {.supported_subprotocols_ = endpoint.subprotocols(), .response_headers_ = headers, .deflate_ = endpoint.deflate()});
                         const auto* handshake = std::get_if<websocket_extended_connect_negotiation>(&result);
                         if (handshake == nullptr || !stream_runtimes_.mark_tunnel(stream_id)) {
                             throw std::invalid_argument("HTTP/2 WebSocket handshake rejected");
                         }
-                        co_return websocket_upgrade_commit<http2_sans_io_tunnel_transport>(
-                            finish_upgrade_commit(http_status::ok, context_value), handshake->compression(),
-                            handshake->subprotocol());
+                        co_return websocket_upgrade_commit<http2_sans_io_tunnel_transport>(finish_upgrade_commit(http_status::ok, context_value), handshake->compression(), handshake->subprotocol());
                     };
-                    http2_sans_io_response_stream_sink refusal_sink(connection_, stream_id,
-                        *stream_runtime, write_signal_, *stream_signal, output_budget_, request.known_method(), *options.codecs_, *admission.tail().coding_policy().selection(),
-                        options.compression_ ? &*options.compression_ : nullptr, admission.tail().cors(options));
+                    http2_sans_io_response_stream_sink refusal_sink(connection_, stream_id, *stream_runtime, write_signal_, *stream_signal, output_budget_, request.known_method(), *options.codecs_, *admission.tail().coding_policy().selection(), options.compression_ ? &*options.compression_ : nullptr, admission.tail().cors(options));
                     auto refusal_writer = make_response_stream_writer(refusal_sink);
                     auto upgrade_services = dispatch_services;
                     if (is_request_stream_tunnel_route(resolved->route())) {
                         upgrade_services.bind_response_stream(refusal_writer);
                     }
-                    auto buffered = co_await execute_tunnel_upgrade_session<http2_sans_io_tunnel_transport>(
-                        routes_, request, *resolved, upgrade_services, options,
-                        session_.scanner_entry(), inbound_buffers_, admission.udp_tunnel(),
-                        std::string_view{}, commit, commit_websocket);
+                    auto buffered = co_await execute_tunnel_upgrade_session<http2_sans_io_tunnel_transport>(routes_, request, *resolved, upgrade_services, options, session_.scanner_entry(), inbound_buffers_, admission.udp_tunnel(), std::string_view{}, commit, commit_websocket);
                     if (refusal_sink.committed()) {
                         admission.tail().record_access(options.access_log_, committed_response_stream_status(refusal_sink));
                         co_return;
@@ -1785,16 +1677,13 @@ task<void> http2_sans_io_session_engine::dispatch_one(std::uint32_t stream_id) {
                 }
                 case http_request_endpoint::websocket: {
                     const auto& websocket_endpoint = *resolved->route().endpoint().websocket();
-                    const auto handshake_validation = ruvia::validate_http2_websocket_handshake(
-                        connection_, stream_id, request, websocket_endpoint.handshake_validation());
+                    const auto handshake_validation = ruvia::validate_http2_websocket_handshake(connection_, stream_id, request, websocket_endpoint.handshake_validation());
                     if (handshake_validation.accepted() == nullptr) {
                         const auto* failure = handshake_validation.failure();
                         if (failure == nullptr) {
                             throw std::logic_error("HTTP/2 WebSocket validation returned no outcome");
                         }
-                        response = co_await routes_.handle_error(request,
-                            http_error_info({.status_ = failure->protocol_error().status(), .code_ = failure->protocol_error().code(), .message_ = std::string_view(failure->protocol_error().what())}),
-                            request_services);
+                        response = co_await routes_.handle_error(request, http_error_info({.status_ = failure->protocol_error().status(), .code_ = failure->protocol_error().code(), .message_ = std::string_view(failure->protocol_error().what())}), request_services);
                         failure->apply_required_response_headers(response);
                         break;
                     }
@@ -1802,28 +1691,17 @@ task<void> http2_sans_io_session_engine::dispatch_one(std::uint32_t stream_id) {
                         reset_stream_no_throw(stream_id, http2_error_code::internal_error);
                         co_return;
                     }
-                    auto commit = [this, stream_id, &request, &handshake_validation, &websocket_endpoint,
-                                      &finish_upgrade_commit](
-                                      context& context_value, std::span<const http_header_view> headers) {
-                        const auto handshake_result = connection_.submit_websocket_handshake(stream_id, request,
-                            handshake_validation,
-                            {.supported_subprotocols_ = websocket_endpoint.subprotocols(),
-                                .response_headers_ = headers,
-                                .deflate_ = websocket_endpoint.deflate()});
-                        const auto* submitted_handshake =
-                            std::get_if<websocket_extended_connect_negotiation>(&handshake_result);
+                    auto commit = [this, stream_id, &request, &handshake_validation, &websocket_endpoint, &finish_upgrade_commit](context& context_value, std::span<const http_header_view> headers) {
+                        const auto handshake_result = connection_.submit_websocket_handshake(stream_id, request, handshake_validation, {.supported_subprotocols_ = websocket_endpoint.subprotocols(), .response_headers_ = headers, .deflate_ = websocket_endpoint.deflate()});
+                        const auto* submitted_handshake = std::get_if<websocket_extended_connect_negotiation>(&handshake_result);
                         if (submitted_handshake == nullptr || !stream_runtimes_.mark_tunnel(stream_id)) {
                             // The handshake is not started, so stream dispatch still
                             // answers this pending CONNECT with an error response.
                             throw std::invalid_argument("HTTP/2 WebSocket handshake rejected");
                         }
-                        return websocket_upgrade_commit<http2_sans_io_tunnel_transport>(
-                            finish_upgrade_commit(http_status::ok, context_value),
-                            submitted_handshake->compression(), submitted_handshake->subprotocol());
+                        return websocket_upgrade_commit<http2_sans_io_tunnel_transport>(finish_upgrade_commit(http_status::ok, context_value), submitted_handshake->compression(), submitted_handshake->subprotocol());
                     };
-                    auto buffered = co_await execute_websocket_upgrade_session<http2_sans_io_tunnel_transport>(
-                        routes_, request, *resolved, dispatch_services, options,
-                        session_.scanner_entry(), inbound_buffers_, std::string_view{}, commit);
+                    auto buffered = co_await execute_websocket_upgrade_session<http2_sans_io_tunnel_transport>(routes_, request, *resolved, dispatch_services, options, session_.scanner_entry(), inbound_buffers_, std::string_view{}, commit);
                     if (!buffered) {
                         co_return;
                     }
@@ -1836,40 +1714,32 @@ task<void> http2_sans_io_session_engine::dispatch_one(std::uint32_t stream_id) {
                     if (connection_.stream_aborted(stream_id)) {
                         stream_signal->stop();
                     }
-                    const stop_group request_stop(
-                        dispatch_services.get_stop_token(), stream_signal->terminal_stop_token());
+                    const stop_group request_stop(dispatch_services.get_stop_token(), stream_signal->terminal_stop_token());
                     const auto request_stop_token = request_stop.token();
                     auto stream_services = dispatch_services;
                     stream_services.bind_stop_token(request_stop_token);
-                    http2_sans_io_response_stream_sink sink_value(connection_, stream_id,
-                        *stream_runtime, write_signal_, *stream_signal, output_budget_, request.known_method(), *options.codecs_, *admission.tail().coding_policy().selection(),
-                        options.compression_ ? &*options.compression_ : nullptr, admission.tail().cors(options));
-                    auto result_value = co_await dispatch_response_stream_with(sink_value, routes_, request, *resolved, stream_services,
-                        [this, stream_id]() noexcept { return connection_.stream_aborted(stream_id); });
-                    if (complete_multiplexed_response_stream_dispatch(result_value,
-                            stream_runtime->body_failure().has_value(), options, remote_address_,
-                            admission.tail(), response, body_failure_handled, reset_dispatch_stream)) {
+                    http2_sans_io_response_stream_sink sink_value(connection_, stream_id, *stream_runtime, write_signal_, *stream_signal, output_budget_, request.known_method(), *options.codecs_, *admission.tail().coding_policy().selection(), options.compression_ ? &*options.compression_ : nullptr, admission.tail().cors(options));
+                    auto result_value = co_await dispatch_response_stream_with(sink_value, routes_, request, *resolved, stream_services, [this, stream_id]() noexcept {
+                        return connection_.stream_aborted(stream_id);
+                    });
+                    if (complete_multiplexed_response_stream_dispatch(result_value, stream_runtime->body_failure().has_value(), options, remote_address_, admission.tail(), response, body_failure_handled, reset_dispatch_stream)) {
                         co_return;
                     }
                     break;
                 }
                 case http_request_endpoint::buffered:
                     if (resolved == nullptr) {
-                        co_await routes_.dispatch_buffered_response(request, resolution,
-                            options.document_root_.binding(), dispatch_services, admission.static_file_mode(), response);
+                        co_await routes_.dispatch_buffered_response(request, resolution, options.document_root_.binding(), dispatch_services, admission.static_file_mode(), response);
                         break;
                     }
                     [[fallthrough]];
                 case http_request_endpoint::stream_body:
-                    body_failure_handled = co_await routes_.dispatch_resolved_route(request,
-                        *resolved, dispatch_services, &stream_runtime->body_failure(), response);
+                    body_failure_handled = co_await routes_.dispatch_resolved_route(request, *resolved, dispatch_services, &stream_runtime->body_failure(), response);
                     break;
             }
         }
 
-        co_await finish_multiplexed_buffered_response(stream_id, stream_runtime->body_failure(),
-            body_failure_handled, response, request, routes_, request_services,
-            options, remote_address_, admission.tail(), buffered_response_writer_, reset_dispatch_stream);
+        co_await finish_multiplexed_buffered_response(stream_id, stream_runtime->body_failure(), body_failure_handled, response, request, routes_, request_services, options, remote_address_, admission.tail(), buffered_response_writer_, reset_dispatch_stream);
     } catch (...) {
         const auto failure = std::current_exception();
         if (!connection_.stream_aborted(stream_id)) {
@@ -1917,8 +1787,7 @@ bool http2_sans_io_session_engine::admit_stream(std::uint32_t stream_id) {
     return true;
 }
 
-void http2_sans_io_session_engine::reset_event_stream(
-    std::uint32_t stream_id, http2_error_code error) noexcept {
+void http2_sans_io_session_engine::reset_event_stream(std::uint32_t stream_id, http2_error_code error) noexcept {
     auto* signal = stream_runtimes_.signal_for(stream_id);
     reset_stream_no_throw(stream_id, error);
     if (signal != nullptr) {
@@ -1929,14 +1798,12 @@ void http2_sans_io_session_engine::reset_event_stream(
     wake_writer();
 }
 
-http2_sans_io_stream_runtime* http2_sans_io_session_engine::resolve_stream_route(
-    const http2_request_head_event& message_head) {
+http2_sans_io_stream_runtime* http2_sans_io_session_engine::resolve_stream_route(const http2_request_head_event& message_head) {
     const auto request_view = message_head.request_view();
     if (request_view.method_.empty()) {
         return nullptr;
     }
-    return http2_select_stream_route(routes_, static_cast<bool>(base_services_.request_stream()), request_view,
-        stream_runtimes_, message_head.stream_id());
+    return http2_select_stream_route(routes_, static_cast<bool>(base_services_.request_stream()), request_view, stream_runtimes_, message_head.stream_id());
 }
 
 void http2_sans_io_session_engine::on_message_head(http2_request_head_event& message_head) {
@@ -1944,12 +1811,10 @@ void http2_sans_io_session_engine::on_message_head(http2_request_head_event& mes
     const auto stream_id = message_head.stream_id();
     base_services_.note_connection_request();
     ++accepted_request_heads_;
-    if (!connection_.draining() && options.server_.max_requests_per_connection_.has_value() &&
-        accepted_request_heads_ >= *options.server_.max_requests_per_connection_) {
+    if (!connection_.draining() && options.server_.max_requests_per_connection_.has_value() && accepted_request_heads_ >= *options.server_.max_requests_per_connection_) {
         begin_drain();
     }
-    const auto expectation_plan =
-        message_head.expectation_plan(http_unsupported_expectation_policy::reject);
+    const auto expectation_plan = message_head.expectation_plan(http_unsupported_expectation_policy::reject);
     const auto snapshot = message_head.snapshot();
     auto* stream_runtime = resolve_stream_route(message_head);
     if (stream_runtime == nullptr || !stream_runtime->hold_request_head(std::move(message_head))) {
@@ -1966,17 +1831,13 @@ void http2_sans_io_session_engine::on_message_head(http2_request_head_event& mes
     if (snapshot.body_open_ && !connect_request) {
         stream_runtimes_.mark_request_body_open(stream_id, session_.scanner_entry().last_active_ms());
     }
-    const bool resolved_route =
-        stream_runtime->route_selected() && stream_runtime->resolution().resolved() != nullptr;
-    const bool streaming_body = !connect_request && stream_runtime->route_selected() &&
-                                stream_runtime->body_mode() == request_body_mode::stream &&
-                                snapshot.body_open_;
+    const bool resolved_route = stream_runtime->route_selected() && stream_runtime->resolution().resolved() != nullptr;
+    const bool streaming_body = !connect_request && stream_runtime->route_selected() && stream_runtime->body_mode() == request_body_mode::stream && snapshot.body_open_;
     const bool body_limit_exceeded = [&]() noexcept {
         if (!resolved_route || connect_request || !snapshot.declared_content_length_.has_value()) {
             return false;
         }
-        const auto total_limit = http_request_body_limit(
-            stream_runtime->resolution(), stream_runtime->body_mode(), admission_policy_);
+        const auto total_limit = http_request_body_limit(stream_runtime->resolution(), stream_runtime->body_mode(), admission_policy_);
         const auto failure = http_request_body_size_failure(*snapshot.declared_content_length_, total_limit);
         if (!failure.has_value()) {
             return false;
@@ -1989,10 +1850,8 @@ void http2_sans_io_session_engine::on_message_head(http2_request_head_event& mes
     // it is sent now; a streaming handler's first body read sends it; an
     // unresolved or already-oversized request never reads the content and
     // answers with its final status alone (RFC 9110 §10.1.1).
-    if (expectation_plan == http_server_expectation_plan::send_continue && resolved_route && !connect_request &&
-        !body_limit_exceeded && stream_runtime->body_mode() == request_body_mode::buffered) {
-        const auto status = connection_.submit_interim_response_head(
-            stream_id, http_interim_response_head(ruvia::http_status::continue_value));
+    if (expectation_plan == http_server_expectation_plan::send_continue && resolved_route && !connect_request && !body_limit_exceeded && stream_runtime->body_mode() == request_body_mode::buffered) {
+        const auto status = connection_.submit_interim_response_head(stream_id, http_interim_response_head(ruvia::http_status::continue_value));
         if (status == http2_submit_status::accepted) {
             wake_writer();
         } else {
@@ -2007,8 +1866,7 @@ void http2_sans_io_session_engine::on_message_head(http2_request_head_event& mes
     // An unresolved or already-oversized request is answered from its head
     // alone; waiting for content the client may withhold (Expect) would stall
     // the stream.
-    if (expectation_plan == http_server_expectation_plan::reject_unsupported || connect_request ||
-        streaming_body || !resolved_route || body_limit_exceeded) {
+    if (expectation_plan == http_server_expectation_plan::reject_unsupported || connect_request || streaming_body || !resolved_route || body_limit_exceeded) {
         if (!admit_stream(stream_id)) {
             reset_event_stream(stream_id, http2_error_code::internal_error);
         }
@@ -2044,19 +1902,14 @@ void http2_sans_io_session_engine::on_body_chunk(http2_message_body_chunk_event&
         wake_writer();
         return;
     }
-    const auto total_limit =
-        http_request_body_limit(stream_runtime->resolution(), stream_runtime->body_mode(), admission_policy_);
-    const auto store_status =
-        stream_runtime->store_body(body_chunk, total_limit, options.server_.max_buffered_body_bytes_);
+    const auto total_limit = http_request_body_limit(stream_runtime->resolution(), stream_runtime->body_mode(), admission_policy_);
+    const auto store_status = stream_runtime->store_body(body_chunk, total_limit, options.server_.max_buffered_body_bytes_);
     if (store_status == http2_request_body_store_status::backlog_overflow) {
         reset_event_stream(stream_id, http2_error_code::cancel);
         return;
     }
-    if (store_status == http2_request_body_store_status::too_large ||
-        store_status == http2_request_body_store_status::buffer_limit) {
-        const auto failure = store_status == http2_request_body_store_status::buffer_limit
-                                 ? http_request_body_failure::buffer_limit
-                                 : http_request_body_failure::too_large;
+    if (store_status == http2_request_body_store_status::too_large || store_status == http2_request_body_store_status::buffer_limit) {
+        const auto failure = store_status == http2_request_body_store_status::buffer_limit ? http_request_body_failure::buffer_limit : http_request_body_failure::too_large;
         if (failure == http_request_body_failure::buffer_limit) {
             stream_runtime->discard_body();
         }
@@ -2105,9 +1958,7 @@ void http2_sans_io_session_engine::on_tunnel_data(http2_tunnel_data_event& tunne
         wake_writer();
         return;
     }
-    if (stream_runtime->body_queue().enqueue_bounded(tunnel_data.bytes(),
-            tunnel_data.take_credit(), options.server_.max_buffered_body_bytes_) !=
-        http2_body_queue_store_status::stored) {
+    if (stream_runtime->body_queue().enqueue_bounded(tunnel_data.bytes(), tunnel_data.take_credit(), options.server_.max_buffered_body_bytes_) != http2_body_queue_store_status::stored) {
         reset_event_stream(stream_id, http2_error_code::cancel);
         return;
     }
@@ -2207,8 +2058,7 @@ void http2_sans_io_session_engine::drain_events() {
 http2_feed_result http2_sans_io_session_engine::feed_and_drain(std::string_view bytes_value) {
     // Once per read, outside the retry loop below, which feeds the same bytes again.
     if (const auto observer = session_.options().http2_input_) {
-        observer(server_observation_access::http2_input(base_services_.get_conn_info().connection_id(),
-            std::as_bytes(std::span(bytes_value.data(), bytes_value.size()))));
+        observer(server_observation_access::http2_input(base_services_.get_conn_info().connection_id(), std::as_bytes(std::span(bytes_value.data(), bytes_value.size()))));
     }
     for (;;) {
         const auto result_value = connection_.feed(bytes_value);
@@ -2254,8 +2104,7 @@ task<void> run_http2_sans_io_writer(stream_type& stream, http2_sans_io_session_e
                 // RFC 8441 tunnel); this clock lets write_timeout close a peer
                 // that stopped reading regardless. Every transfer renews it.
                 const connection_scanner::entry::write_scope write_stall_clock(engine.scanner_entry());
-                const auto write_result = co_await connection_gather_write(
-                    stream, write_scratch, {}, engine.scanner_entry());
+                const auto write_result = co_await connection_gather_write(stream, write_scratch, {}, engine.scanner_entry());
                 write_error = write_result.error_;
             }
             if (write_error) {
@@ -2264,8 +2113,7 @@ task<void> run_http2_sans_io_writer(stream_type& stream, http2_sans_io_session_e
             }
             engine.output_write_completed();
             // Leave room for the frame header and string capacity growth, but keep retention bounded.
-            http_clear_string_retaining_small(
-                write_scratch, http2_data_output_credit_slots * http2_data_output_credit_bytes + 4096);
+            http_clear_string_retaining_small(write_scratch, http2_data_output_credit_slots * http2_data_output_credit_bytes + 4096);
         }
         if (engine.writer_should_exit()) {
             co_return;
@@ -2275,16 +2123,15 @@ task<void> run_http2_sans_io_writer(stream_type& stream, http2_sans_io_session_e
 }
 
 template <typename stream_type>
-task<http_connection_close> run_http2_sans_io_session_impl(stream_type& stream, asio::ip::tcp::socket& socket,
-    const route_table& routes_value, http2_sans_io_session_context session_value,
-    std::string_view initial_bytes) {
+task<http_connection_close> run_http2_sans_io_session_impl(stream_type& stream, asio::ip::tcp::socket& socket, const route_table& routes_value, http2_sans_io_session_context session_value, std::string_view initial_bytes) {
     auto executor = asio::any_io_executor(stream.get_executor());
     http2_sans_io_session_engine engine(executor, socket, routes_value, std::move(session_value));
 
     engine.writer_submitting();
     try {
-        ruvia::async_start(run_http2_sans_io_writer(stream, engine),
-            asio::bind_executor(executor, [&engine](std::exception_ptr exception) noexcept { engine.writer_completed(exception); }));
+        ruvia::async_start(run_http2_sans_io_writer(stream, engine), asio::bind_executor(executor, [&engine](std::exception_ptr exception) noexcept {
+            engine.writer_completed(exception);
+        }));
     } catch (...) {
         engine.writer_launch_failed();
         engine.terminate(std::make_error_code(std::errc::operation_canceled));
@@ -2304,24 +2151,20 @@ task<http_connection_close> run_http2_sans_io_session_impl(stream_type& stream, 
             std::array<char, 4096> read_buffer;
             for (;;) {
                 engine.set_inactivity_phase();
-                auto read_completion =
-                    co_await ruvia::async_asio<std::size_t>([&stream, &read_buffer](auto handler) mutable {
-                        stream.async_read_some(asio::buffer(read_buffer), std::move(handler));
-                    });
+                auto read_completion = co_await ruvia::async_asio<std::size_t>([&stream, &read_buffer](auto handler) mutable {
+                    stream.async_read_some(asio::buffer(read_buffer), std::move(handler));
+                });
                 const auto error = read_completion.error_code();
                 const auto bytes_read = read_completion.result();
                 if (error || bytes_read == 0) {
-                    reader_terminal_error =
-                        error ? error
-                              : std::make_error_code(std::errc::connection_reset);
+                    reader_terminal_error = error ? error : std::make_error_code(std::errc::connection_reset);
                     if (reader_terminal_error == asio::error::eof) {
                         engine.peer_input_ended();
                     }
                     break;
                 }
                 engine.touch_activity();
-                const auto result_value =
-                    engine.feed_and_drain(std::string_view(read_buffer.data(), bytes_read));
+                const auto result_value = engine.feed_and_drain(std::string_view(read_buffer.data(), bytes_read));
                 engine.wake_writer();
                 if (result_value == http2_feed_result::protocol_failure || engine.write_failed()) {
                     if (result_value == http2_feed_result::protocol_failure) {
@@ -2338,8 +2181,7 @@ task<http_connection_close> run_http2_sans_io_session_impl(stream_type& stream, 
 
     if (!engine.terminated()) {
         if (!reader_terminal_error) {
-            reader_terminal_error = engine.connection_failed() ? std::make_error_code(std::errc::protocol_error)
-                                                               : std::make_error_code(std::errc::connection_aborted);
+            reader_terminal_error = engine.connection_failed() ? std::make_error_code(std::errc::protocol_error) : std::make_error_code(std::errc::connection_aborted);
         }
         engine.terminate(reader_terminal_error);
     }
@@ -2369,23 +2211,17 @@ task<http_connection_close> run_http2_sans_io_session_impl(stream_type& stream, 
     if (reader_terminal_error == asio::error::eof) {
         co_return http_connection_close::notify;
     }
-    co_return engine.drain_finished() || engine.connection_failed() ? http_connection_close::linger
-                                                                    : http_connection_close::abort;
+    co_return engine.drain_finished() || engine.connection_failed() ? http_connection_close::linger : http_connection_close::abort;
 }
 
 }  // namespace
 
-task<http_connection_close> run_http2_sans_io_session(inbound_socket_stream& stream, const route_table& routes_value,
-    http2_sans_io_session_context session_value, std::string_view initial_bytes) {
-    return run_http2_sans_io_session_impl(
-        stream, stream.lowest_layer(), routes_value, std::move(session_value), initial_bytes);
+task<http_connection_close> run_http2_sans_io_session(inbound_socket_stream& stream, const route_table& routes_value, http2_sans_io_session_context session_value, std::string_view initial_bytes) {
+    return run_http2_sans_io_session_impl(stream, stream.lowest_layer(), routes_value, std::move(session_value), initial_bytes);
 }
 
-task<http_connection_close> run_http2_sans_io_session(server_tls_stream& stream,
-    const route_table& routes_value, http2_sans_io_session_context session_value,
-    std::string_view initial_bytes) {
-    return run_http2_sans_io_session_impl(
-        stream, stream.lowest_layer(), routes_value, std::move(session_value), initial_bytes);
+task<http_connection_close> run_http2_sans_io_session(server_tls_stream& stream, const route_table& routes_value, http2_sans_io_session_context session_value, std::string_view initial_bytes) {
+    return run_http2_sans_io_session_impl(stream, stream.lowest_layer(), routes_value, std::move(session_value), initial_bytes);
 }
 
 }  // namespace ruvia::detail
@@ -2393,8 +2229,7 @@ task<http_connection_close> run_http2_sans_io_session(server_tls_stream& stream,
 namespace ruvia::detail {
 namespace {
 
-[[nodiscard]] http2_stream_data_write_status classify_aborted_write(
-    const multiplexed_stream_signal* signal, const bool* aborted) noexcept {
+[[nodiscard]] http2_stream_data_write_status classify_aborted_write(const multiplexed_stream_signal* signal, const bool* aborted) noexcept {
     if (aborted != nullptr && *aborted) {
         return http2_stream_data_write_status::local_aborted;
     }
@@ -2406,16 +2241,12 @@ namespace {
 
 }  // namespace
 
-task<http2_send_window_wait_status> await_http2_send_window(
-    ruvia::http2_connection& connection, std::uint32_t stream_id,
-    multiplexed_stream_signal* signal, const bool* aborted) {
+task<http2_send_window_wait_status> await_http2_send_window(ruvia::http2_connection& connection, std::uint32_t stream_id, multiplexed_stream_signal* signal, const bool* aborted) {
     // Marks the whole wait, across wakes that find no capacity, so the
     // session's write_timeout check sees one continuous stall.
     std::optional<multiplexed_stream_signal::output_wait_guard> wait_guard;
     for (;;) {
-        if ((aborted != nullptr && *aborted) ||
-            connection.stream_aborted(stream_id) ||
-            signal == nullptr || signal->terminated()) {
+        if ((aborted != nullptr && *aborted) || connection.stream_aborted(stream_id) || signal == nullptr || signal->terminated()) {
             co_return http2_send_window_wait_status::aborted;
         }
         const auto window = connection.send_window_state(stream_id);
@@ -2432,10 +2263,7 @@ task<http2_send_window_wait_status> await_http2_send_window(
     }
 }
 
-http2_stream_data_submit_result submit_http2_stream_data(
-    ruvia::http2_connection& connection, std::uint32_t stream_id,
-    worker_signal& write_signal, http2_data_output_budget& output_budget,
-    std::string_view bytes, http2_end_stream end_stream) {
+http2_stream_data_submit_result submit_http2_stream_data(ruvia::http2_connection& connection, std::uint32_t stream_id, worker_signal& write_signal, http2_data_output_budget& output_budget, std::string_view bytes, http2_end_stream end_stream) {
     struct submission_completion final {
         http2_data_output_budget& budget_;
         worker_signal& write_signal_;
@@ -2449,8 +2277,7 @@ http2_stream_data_submit_result submit_http2_stream_data(
         }
     } completion{output_budget, write_signal, stream_id, !bytes.empty()};
     try {
-        const auto progress = connection.submit_data(
-            stream_id, bytes, end_stream, http2_data_output_credit_bytes);
+        const auto progress = connection.submit_data(stream_id, bytes, end_stream, http2_data_output_credit_bytes);
         output_budget.note_data_submitted(stream_id, progress.consumed_bytes_);
         completion.release_credit_ = !bytes.empty() && progress.consumed_bytes_ == 0;
         if (progress.status_ == http2_data_submit_status::invalid_message) {
@@ -2462,11 +2289,7 @@ http2_stream_data_submit_result submit_http2_stream_data(
     }
 }
 
-task<http2_stream_data_write_status> write_http2_stream_data(
-    ruvia::http2_connection& connection, std::uint32_t stream_id,
-    multiplexed_stream_signal* signal, worker_signal& write_signal,
-    http2_data_output_budget& output_budget, std::string_view bytes,
-    http2_end_stream end_stream, const bool* aborted) {
+task<http2_stream_data_write_status> write_http2_stream_data(ruvia::http2_connection& connection, std::uint32_t stream_id, multiplexed_stream_signal* signal, worker_signal& write_signal, http2_data_output_budget& output_budget, std::string_view bytes, http2_end_stream end_stream, const bool* aborted) {
     // The caller owns the suffix until consumed. Each reservation covers only
     // encoded payload and remains charged through socket write completion.
     for (;;) {
@@ -2487,8 +2310,7 @@ task<http2_stream_data_write_status> write_http2_stream_data(
                 co_return classify_aborted_write(signal, aborted);
             }
             if (window->available_ == 0) {
-                if (co_await await_http2_send_window(connection, stream_id, signal, aborted) ==
-                    http2_send_window_wait_status::aborted) {
+                if (co_await await_http2_send_window(connection, stream_id, signal, aborted) == http2_send_window_wait_status::aborted) {
                     co_return classify_aborted_write(signal, aborted);
                 }
             }
@@ -2498,15 +2320,13 @@ task<http2_stream_data_write_status> write_http2_stream_data(
                 if (!(co_await output_budget.acquire(stream_id, *signal, connection, aborted))) {
                     co_return classify_aborted_write(signal, aborted);
                 }
-                if ((aborted != nullptr && *aborted) || signal->terminated() ||
-                    connection.stream_aborted(stream_id)) {
+                if ((aborted != nullptr && *aborted) || signal->terminated() || connection.stream_aborted(stream_id)) {
                     output_budget.release(stream_id);
                     co_return classify_aborted_write(signal, aborted);
                 }
             }
         }
-        const auto submitted = submit_http2_stream_data(
-            connection, stream_id, write_signal, output_budget, bytes, end_stream);
+        const auto submitted = submit_http2_stream_data(connection, stream_id, write_signal, output_budget, bytes, end_stream);
         if (submitted.failure_) {
             co_return *submitted.failure_;
         }
@@ -2545,16 +2365,14 @@ namespace {
 
 }  // namespace
 
-http2_buffered_response_writer::http2_buffered_response_writer(http2_sans_io_session_engine& session,
-    ruvia::http2_connection& connection, http2_sans_io_stream_runtime_table& stream_runtimes,
-    worker_signal& write_signal, http2_data_output_budget& output_budget, response_file_io file_io) noexcept
-    : session_(session),
-      connection_(connection),
-      stream_runtimes_(stream_runtimes),
-      write_signal_(write_signal),
-      output_budget_(output_budget),
-      file_io_(std::move(file_io)),
-      file_reads_(file_io_.worker_, http2_file_read_slots) {}
+http2_buffered_response_writer::http2_buffered_response_writer(http2_sans_io_session_engine& session, ruvia::http2_connection& connection, http2_sans_io_stream_runtime_table& stream_runtimes, worker_signal& write_signal, http2_data_output_budget& output_budget, response_file_io file_io) noexcept :
+    session_(session),
+    connection_(connection),
+    stream_runtimes_(stream_runtimes),
+    write_signal_(write_signal),
+    output_budget_(output_budget),
+    file_io_(std::move(file_io)),
+    file_reads_(file_io_.worker_, http2_file_read_slots) {}
 void http2_buffered_response_writer::wake_writer() noexcept {
     write_signal_.notify();
 }
@@ -2568,16 +2386,13 @@ bool http2_buffered_response_writer::stream_ended(std::uint32_t stream_id) const
     return signal != nullptr && signal->terminated();
 }
 
-task<http2_stream_data_write_status> http2_buffered_response_writer::write_data(
-    std::uint32_t stream_id, std::string_view chunk, http2_end_stream end_stream) {
+task<http2_stream_data_write_status> http2_buffered_response_writer::write_data(std::uint32_t stream_id, std::string_view chunk, http2_end_stream end_stream) {
     auto* runtime = stream_runtimes_.find(stream_id);
     auto* signal = runtime != nullptr ? runtime->signal() : nullptr;
-    return write_http2_stream_data(
-        connection_, stream_id, signal, write_signal_, output_budget_, chunk, end_stream);
+    return write_http2_stream_data(connection_, stream_id, signal, write_signal_, output_budget_, chunk, end_stream);
 }
 
-task<multiplexed_buffered_response_write_result> http2_buffered_response_writer::write_file_body(
-    std::uint32_t stream_id, response_file_source& source, http_status_code committed_status) {
+task<multiplexed_buffered_response_write_result> http2_buffered_response_writer::write_file_body(std::uint32_t stream_id, response_file_source& source, http_status_code committed_status) {
     const auto fail_after_commit = [this, stream_id]() noexcept {
         session_.reset_stream_no_throw(stream_id, http2_error_code::internal_error);
     };
@@ -2589,13 +2404,12 @@ task<multiplexed_buffered_response_write_result> http2_buffered_response_writer:
             // Read only what the peer has granted: a stream without send
             // window holds neither a read buffer nor a pool task.
             auto* runtime = stream_runtimes_.find(stream_id);
-            if (co_await await_http2_send_window(
-                    connection_, stream_id, runtime != nullptr ? runtime->signal() : nullptr) ==
-                http2_send_window_wait_status::aborted) {
+            if (co_await await_http2_send_window(connection_, stream_id, runtime != nullptr ? runtime->signal() : nullptr) == http2_send_window_wait_status::aborted) {
                 co_return multiplexed_buffered_response_write_result{.committed_status_ = committed_status};
             }
-            auto acquired = co_await file_reads_.acquire(
-                [this, stream_id]() noexcept { return stream_ended(stream_id); });
+            auto acquired = co_await file_reads_.acquire([this, stream_id]() noexcept {
+                return stream_ended(stream_id);
+            });
             if (!acquired) {
                 co_return multiplexed_buffered_response_write_result{.committed_status_ = committed_status};
             }
@@ -2641,8 +2455,7 @@ task<multiplexed_buffered_response_write_result> http2_buffered_response_writer:
     }
 }
 
-task<multiplexed_buffered_response_write_result> http2_buffered_response_writer::write(
-    std::uint32_t stream_id, const http_response& response, http_buffered_response_write_plan write_plan) {
+task<multiplexed_buffered_response_write_result> http2_buffered_response_writer::write(std::uint32_t stream_id, const http_response& response, http_buffered_response_write_plan write_plan) {
     if (stream_ended(stream_id)) {
         co_return multiplexed_buffered_response_write_result{};
     }
@@ -2652,17 +2465,15 @@ task<multiplexed_buffered_response_write_result> http2_buffered_response_writer:
     // that cannot be served still gets an error response, and a stream
     // without window holds no buffer. HEAD and status-suppressed bodies do not
     // transfer a representation.
-    if (!write_plan.body_plan().body_suppressed() &&
-        (response.file_body() || response.has_multipart_file_body())) {
-        if (const auto open_failure = co_await file_reads_.open_file_body(
-                source, response, file_io_,
-                [this, stream_id]() noexcept { return stream_ended(stream_id); })) {
+    if (!write_plan.body_plan().body_suppressed() && (response.file_body() || response.has_multipart_file_body())) {
+        if (const auto open_failure = co_await file_reads_.open_file_body(source, response, file_io_, [this, stream_id]() noexcept {
+            return stream_ended(stream_id);
+        })) {
             co_return *open_failure;
         }
     }
 
-    const auto head_result =
-        connection_.submit_response_head(stream_id, response, std::move(write_plan));
+    const auto head_result = connection_.submit_response_head(stream_id, response, std::move(write_plan));
     const auto* submitted_head = std::get_if<http_buffered_response_write_plan>(&head_result);
     if (submitted_head == nullptr) {
         const auto error = std::get<http2_response_head_submit_error>(head_result);
@@ -2671,10 +2482,7 @@ task<multiplexed_buffered_response_write_result> http2_buffered_response_writer:
         }
         // Invalid final metadata cannot leave an open peer stream waiting for a
         // response that the transactional head submission rejected.
-        session_.reset_stream_no_throw(stream_id,
-            error == http2_response_head_submit_error::peer_stream_limit_reached
-                ? http2_error_code::cancel
-                : http2_error_code::internal_error);
+        session_.reset_stream_no_throw(stream_id, error == http2_response_head_submit_error::peer_stream_limit_reached ? http2_error_code::cancel : http2_error_code::internal_error);
         co_return multiplexed_buffered_response_write_result{};
     }
 
@@ -2703,14 +2511,12 @@ task<multiplexed_buffered_response_write_result> http2_buffered_response_writer:
     if (!body.empty() && signal != nullptr && !signal->terminated() && !connection_.stream_aborted(stream_id)) {
         const auto window = connection_.send_window_state(stream_id);
         if (window && window->available_ != 0 && output_budget_.try_acquire(stream_id)) {
-            const auto submitted = submit_http2_stream_data(
-                connection_, stream_id, write_signal_, output_budget_, body, http2_end_stream::end_stream);
+            const auto submitted = submit_http2_stream_data(connection_, stream_id, write_signal_, output_budget_, body, http2_end_stream::end_stream);
             if (submitted.failure_) {
                 co_return fail_after_commit();
             }
             body.remove_prefix(submitted.progress_.consumed_bytes_);
-            if (submitted.progress_.status_ == http2_data_submit_status::complete ||
-                submitted.progress_.status_ == http2_data_submit_status::closed) {
+            if (submitted.progress_.status_ == http2_data_submit_status::complete || submitted.progress_.status_ == http2_data_submit_status::closed) {
                 co_return multiplexed_buffered_response_write_result{.committed_status_ = committed_status};
             }
         } else {
@@ -2748,21 +2554,19 @@ constexpr std::chrono::milliseconds http2_client_goaway_flush_time{1000};
 
 }  // namespace
 
-http2_client_session::http2_client_session(http_client_connection& handler, client_tcp_transport& transport, task_scope& tasks,
-    const worker_ref& worker_value, std::optional<timeout_duration> ping_interval)
-    : handler_(handler),
-      transport_(transport),
-      tasks_(tasks),
-      worker_(worker_value),
-      ping_interval_(ping_interval),
-      read_buffer_(),
-      write_buffer_(),
-      write_signal_(worker_value),
-      state_signal_(worker_value),
-      capacity_signal_(worker_value) {}
+http2_client_session::http2_client_session(http_client_connection& handler, client_tcp_transport& transport, task_scope& tasks, const worker_ref& worker_value, std::optional<timeout_duration> ping_interval) :
+    handler_(handler),
+    transport_(transport),
+    tasks_(tasks),
+    worker_(worker_value),
+    ping_interval_(ping_interval),
+    read_buffer_(),
+    write_buffer_(),
+    write_signal_(worker_value),
+    state_signal_(worker_value),
+    capacity_signal_(worker_value) {}
 
-task<http2_client_session_start_result> http2_client_session::start(
-    http2_connection_options options, const operation_deadline& timeout) {
+task<http2_client_session_start_result> http2_client_session::start(http2_connection_options options, const operation_deadline& timeout) {
     if (session_tasks_ != 0) {
         std::terminate();
     }
@@ -2782,8 +2586,7 @@ task<http2_client_session_start_result> http2_client_session::start(
             http_clear_string_retaining_small(write_buffer_, write_batch_bytes);
             if (!written.ok()) {
                 reset();
-                co_return http2_client_session_start_result{
-                    .status_ = http2_client_session_start_status::transport_failed, .transport_ = written};
+                co_return http2_client_session_start_result{.status_ = http2_client_session_start_status::transport_failed, .transport_ = written};
             }
         }
         if (connection_->received_peer_settings()) {
@@ -2792,8 +2595,7 @@ task<http2_client_session_start_result> http2_client_session::start(
         const auto read = co_await transport_.read_some(input, timeout);
         if (!read.ok()) {
             reset();
-            co_return http2_client_session_start_result{
-                .status_ = http2_client_session_start_status::transport_failed, .transport_ = read};
+            co_return http2_client_session_start_result{.status_ = http2_client_session_start_status::transport_failed, .transport_ = read};
         }
         if (!feed(std::string_view(input.data(), read.bytes_))) {
             reset();
@@ -2819,8 +2621,7 @@ task<http2_client_session_start_result> http2_client_session::start(
         if (ping_interval_) {
             last_input_ = std::chrono::steady_clock::now();
             ping_pending_ = false;
-            schedule_ping(generation,
-                saturating_deadline(last_input_, ping_interval_->value()));
+            schedule_ping(generation, saturating_deadline(last_input_, ping_interval_->value()));
         }
     } catch (...) {
         const auto failure = std::current_exception();
@@ -2907,12 +2708,11 @@ bool http2_client_session::begin_close(const client_transport_result& transport)
     try {
         // A client drain queues its final GOAWAY at once; idempotent.
         connection_->begin_drain();
-        if (worker_.schedule_timer(close_timer_, deadline_after(http2_client_goaway_flush_time),
-                [this, generation](worker_timer_outcome outcome) noexcept {
-                    if (outcome == worker_timer_outcome::expired) {
-                        fail(generation, close_result_, {});
-                    }
-                }) != worker_timer_schedule_status::scheduled) {
+        if (worker_.schedule_timer(close_timer_, deadline_after(http2_client_goaway_flush_time), [this, generation](worker_timer_outcome outcome) noexcept {
+            if (outcome == worker_timer_outcome::expired) {
+                fail(generation, close_result_, {});
+            }
+        }) != worker_timer_schedule_status::scheduled) {
             // A stopping worker cannot bound the flush.
             fail(generation, transport, {});
             return false;
@@ -2933,8 +2733,7 @@ void http2_client_session::submit_reset(std::uint32_t stream_id, http2_error_cod
         return;
     }
     try {
-        if (connection_->submit_reset(stream_id, error) == http2_submit_status::accepted &&
-            connection_->wants_write()) {
+        if (connection_->submit_reset(stream_id, error) == http2_submit_status::accepted && connection_->wants_write()) {
             write_signal_.notify();
         }
     } catch (...) {
@@ -2978,8 +2777,7 @@ void http2_client_session::check_liveness(std::uint64_t generation) noexcept {
         }
         if (ping_pending_) {
             if (now >= saturating_deadline(ping_sent_at_, interval)) {
-                fail(generation,
-                    {.status_ = client_transport_status::aborted, .abort_ = client_abort_reason::timeout}, {});
+                fail(generation, {.status_ = client_transport_status::aborted, .abort_ = client_abort_reason::timeout}, {});
             } else {
                 schedule_ping(generation, saturating_deadline(ping_sent_at_, interval));
             }
@@ -3022,8 +2820,7 @@ bool http2_client_session::feed(std::string_view bytes_value) {
 
 void http2_client_session::publish_state() noexcept {
     state_signal_.notify();
-    const auto capacity =
-        usable() ? connection_->available_request_streams(std::numeric_limits<std::size_t>::max()) : 0;
+    const auto capacity = usable() ? connection_->available_request_streams(std::numeric_limits<std::size_t>::max()) : 0;
     if (capacity > request_capacity_) {
         capacity_signal_.notify();
         handler_.on_http2_capacity();
@@ -3091,8 +2888,7 @@ task<void> http2_client_session::run_writer(std::uint64_t generation) {
             while (generation_ == generation && !failed_ && connection_->wants_write()) {
                 take_output_batch(write_buffer_);
                 writing_ = true;
-                const auto written =
-                    co_await transport_.write(write_buffer_, operation_deadline(handler_.http2_write_timeout()));
+                const auto written = co_await transport_.write(write_buffer_, operation_deadline(handler_.http2_write_timeout()));
                 writing_ = false;
                 // Retain ordinary heads and frame-sized DATA batches, but
                 // return an unexpectedly larger indivisible frame before
@@ -3130,8 +2926,7 @@ void http2_client_session::drain() {
     publish_state();
 }
 
-void http2_client_session::fail(
-    std::uint64_t generation, const client_transport_result& transport, std::exception_ptr failure) noexcept {
+void http2_client_session::fail(std::uint64_t generation, const client_transport_result& transport, std::exception_ptr failure) noexcept {
     if (generation != generation_ || failed_) {
         return;
     }
@@ -3150,8 +2945,9 @@ http_client_connection::http2_stream* http_client_connection::find_http2_stream(
     if (stream_id != 0 && last_http2_stream_ != nullptr && last_http2_stream_->stream_id_ == stream_id) {
         return last_http2_stream_;
     }
-    const auto match = std::ranges::find_if(
-        http2_streams_, [stream_id](const http2_stream* stream) { return stream->stream_id_ == stream_id; });
+    const auto match = std::ranges::find_if(http2_streams_, [stream_id](const http2_stream* stream) {
+        return stream->stream_id_ == stream_id;
+    });
     if (match == http2_streams_.end()) {
         return nullptr;
     }
@@ -3160,8 +2956,9 @@ http_client_connection::http2_stream* http_client_connection::find_http2_stream(
 }
 
 http_client_connection::http2_stream* http_client_connection::find_http2_request(std::uint64_t request_id) noexcept {
-    const auto match = std::ranges::find_if(
-        http2_streams_, [request_id](const http2_stream* stream) { return stream->request_id_ == request_id; });
+    const auto match = std::ranges::find_if(http2_streams_, [request_id](const http2_stream* stream) {
+        return stream->request_id_ == request_id;
+    });
     return match == http2_streams_.end() ? nullptr : *match;
 }
 
@@ -3189,16 +2986,13 @@ void http_client_connection::restart_http2_stream_read(http2_stream& stream) {
         return;
     }
     // An accepted tunnel is bounded by its own idle timeout, not read_timeout_.
-    const auto& read_timeout = stream.state_->tunnel_ && stream.state_->tunnel_->accepted_
-                                   ? stream.state_->tunnel_->config_.idle_timeout_
-                                   : stream.state_->effective_read_timeout_;
+    const auto& read_timeout = stream.state_->tunnel_ && stream.state_->tunnel_->accepted_ ? stream.state_->tunnel_->config_.idle_timeout_ : stream.state_->effective_read_timeout_;
     if (!read_timeout && stream.state_->tunnel_ && stream.state_->tunnel_->accepted_) {
         stream.timer_.read_deadline_.reset();
         schedule_http2_stream_timer(stream);
         return;
     }
-    if (!read_timeout || stream.complete_ || stream.state_->informational_active_ ||
-        (stream.state_->tunnel_ && stream.state_->tunnel_->receive_ended_)) {
+    if (!read_timeout || stream.complete_ || stream.state_->informational_active_ || (stream.state_->tunnel_ && stream.state_->tunnel_->receive_ended_)) {
         return;
     }
     stream.timer_.read_deadline_ = deadline_after(read_timeout->value());
@@ -3206,25 +3000,20 @@ void http_client_connection::restart_http2_stream_read(http2_stream& stream) {
 }
 
 void http_client_connection::schedule_http2_stream_timer(http2_stream& stream) {
-    stream.timer_.schedule_with_retry(
-        pool_.worker(), stream.timeout_,
-        [this, request_id = stream.request_id_]() noexcept {
-            cancel_http2_stream(request_id, client_abort_reason::timeout);
-        },
-        [this, &stream](std::exception_ptr failure) noexcept {
-            fail_http2_stream(stream, std::move(failure), true);
-        });
+    stream.timer_.schedule_with_retry(pool_.worker(), stream.timeout_, [this, request_id = stream.request_id_]() noexcept {
+        cancel_http2_stream(request_id, client_abort_reason::timeout);
+    }, [this, &stream](std::exception_ptr failure) noexcept {
+        fail_http2_stream(stream, std::move(failure), true);
+    });
 }
 
-void http_client_connection::arm_http2_write_timer(
-    worker_timer_registration& write_timer, const http2_stream& stream) {
+void http_client_connection::arm_http2_write_timer(worker_timer_registration& write_timer, const http2_stream& stream) {
     if (const auto deadline = stream.timeout_->constrained_by(stream.state_->effective_write_timeout_).deadline()) {
-        (void)pool_.worker().schedule_timer(write_timer, *deadline,
-            [this, request_id = stream.request_id_](worker_timer_outcome outcome) noexcept {
-                if (outcome == worker_timer_outcome::expired) {
-                    cancel_http2_stream(request_id, client_abort_reason::timeout);
-                }
-            });
+        (void)pool_.worker().schedule_timer(write_timer, *deadline, [this, request_id = stream.request_id_](worker_timer_outcome outcome) noexcept {
+            if (outcome == worker_timer_outcome::expired) {
+                cancel_http2_stream(request_id, client_abort_reason::timeout);
+            }
+        });
     }
 }
 
@@ -3246,8 +3035,7 @@ void http_client_connection::register_http2_stream(http2_stream& stream) {
 }
 
 bool http_client_connection::http2_exchange_complete(const http2_stream& stream) noexcept {
-    if (stream.state_->tunnel_ && stream.state_->tunnel_->accepted_ &&
-        stream.state_->tunnel_->receive_ended_ && stream.state_->tunnel_->output_.ended_) {
+    if (stream.state_->tunnel_ && stream.state_->tunnel_->accepted_ && stream.state_->tunnel_->receive_ended_ && stream.state_->tunnel_->output_.ended_) {
         return true;
     }
     if (!stream.complete_) {
@@ -3259,8 +3047,7 @@ bool http_client_connection::http2_exchange_complete(const http2_stream& stream)
     return !stream.request_body_pending_;
 }
 
-void http_client_connection::fail_http2_stream(
-    http2_stream& stream, std::exception_ptr failure, bool reset_stream) noexcept {
+void http_client_connection::fail_http2_stream(http2_stream& stream, std::exception_ptr failure, bool reset_stream) noexcept {
     if (http2_exchange_complete(stream) || stream.failed()) {
         return;
     }
@@ -3307,8 +3094,7 @@ void http_client_connection::publish_http2_head(http2_stream& stream, http2_resp
     const auto protocol_version = event.head().protocol_version();
     retain_http_client_binary_response_head(state_value, std::move(event).take_head());
     if (auto* websocket = stream.websocket_) {
-        accept_extended_connect_websocket_response(*websocket, received_status.status(), state_value.headers_,
-            stream_ended, "invalid HTTP/2 WebSocket handshake response");
+        accept_extended_connect_websocket_response(*websocket, received_status.status(), state_value.headers_, stream_ended, "invalid HTTP/2 WebSocket handshake response");
         // HTTP request lifetime ends at the accepted handshake. WebSocket
         // operations own their deadlines; the session itself has no total cap.
         static const operation_deadline websocket_lifetime(std::nullopt);
@@ -3330,8 +3116,7 @@ void http_client_connection::publish_http2_head(http2_stream& stream, http2_resp
     restart_http2_stream_read(stream);
 }
 
-void http_client_connection::consume_http2_data(
-    std::uint32_t stream_id, std::string_view bytes_value, http2_received_data_credit credit) {
+void http_client_connection::consume_http2_data(std::uint32_t stream_id, std::string_view bytes_value, http2_received_data_credit credit) {
     auto* stream = find_http2_stream(stream_id);
     if (stream == nullptr || stream->complete_ || stream->failed()) {
         // Unretained credits return on destruction, including failed or
@@ -3382,8 +3167,7 @@ void http_client_connection::finish_http2_message(std::uint32_t stream_id, http2
         if (stream->timeout_ == nullptr) {
             std::terminate();
         }
-        finish_http_client_response_body(
-            state_value, *stream->timeout_, content_semantics_present, pool_.config().max_response_bytes_);
+        finish_http_client_response_body(state_value, *stream->timeout_, content_semantics_present, pool_.config().max_response_bytes_);
         stream->complete_ = true;
         stream->timer_.read_deadline_.reset();
         // Response EOF is independent of the request send half (RFC 9113 8.1).
@@ -3440,15 +3224,11 @@ void http_client_connection::on_http2_event(http2_event& event) {
     } else if (const auto* service = event.alternative_service_advertisement()) {
         pool_.advertisements().retain(index_, *service);
         if (service->stream_id_ != 0) {
-            if (auto* stream = find_http2_stream(service->stream_id_);
-                stream != nullptr && stream->addresses_origin_ && stream->state_ != nullptr && stream->state_->route_ != nullptr) {
+            if (auto* stream = find_http2_stream(service->stream_id_); stream != nullptr && stream->addresses_origin_ && stream->state_ != nullptr && stream->state_->route_ != nullptr) {
                 const http_header field("alt-svc", service->field_value_);
                 pool_.observe_alt_svc(*stream->state_->route_, std::span<const http_header>(&field, 1));
             }
-        } else if (alias_route() && service->origin_.size() > 8 &&
-                   http_ascii_equals_ignore_case(std::string_view(service->origin_).substr(0, 8), "https://") &&
-                   http_authorities_equal(borrowed_text(std::string_view(service->origin_).substr(8)),
-                       borrowed_text(std::string_view(pool_.config().authority_)), 443)) {
+        } else if (alias_route() && service->origin_.size() > 8 && http_ascii_equals_ignore_case(std::string_view(service->origin_).substr(0, 8), "https://") && http_authorities_equal(borrowed_text(std::string_view(service->origin_).substr(8)), borrowed_text(std::string_view(pool_.config().authority_)), 443)) {
             const http_header field("alt-svc", service->field_value_);
             pool_.observe_alt_svc(http_client_route{.origin_ = pool_.config().origin(), .authority_ = pool_.config().authority_, .dial_host_ = pool_.config().dial_host_, .dial_port_ = pool_.config().dial_port_, .server_name_ = pool_.config().host_, .alias_origin_ = true, .versions_ = pool_.config().versions_}, std::span<const http_header>(&field, 1));
         }
@@ -3461,8 +3241,7 @@ void http_client_connection::on_http2_event(http2_event& event) {
             return;
         }
         try {
-            stream->state_->retain_informational(
-                interim->head().status(), interim->head().headers(), interim->request_content_signal());
+            stream->state_->retain_informational(interim->head().status(), interim->head().headers(), interim->request_content_signal());
             if (stream->state_->informational_callback_ && !stream->state_->informational_active_) {
                 stream->state_->informational_active_ = true;
                 stream->timer_.read_deadline_.reset();
@@ -3506,8 +3285,7 @@ void http_client_connection::on_http2_event(http2_event& event) {
     } else if (auto* end = event.message_end()) {
         finish_http2_message(end->stream_id(), *end);
     } else if (const auto* closed = event.stream_closed()) {
-        if (auto* stream = find_http2_stream(closed->stream_id());
-            stream != nullptr && !stream->failed() && !stream->retryable_) {
+        if (auto* stream = find_http2_stream(closed->stream_id()); stream != nullptr && !stream->failed() && !stream->retryable_) {
             auto& state_value = *stream->state_;
             if (stream->complete_) {
                 // A peer can stop the remaining upload after a complete response,
@@ -3516,9 +3294,7 @@ void http_client_connection::on_http2_event(http2_event& event) {
                     output->stop();
                 }
                 stream->signal_.notify();
-            } else if (closed->source() == http2_stream_close_source::peer &&
-                       closed->error() == http2_error_code::http11_required && !state_value.head_ready_ &&
-                       !state_value.promised_request_) {
+            } else if (closed->source() == http2_stream_close_source::peer && closed->error() == http2_error_code::http11_required && !state_value.head_ready_ && !state_value.promised_request_) {
                 // RFC 9113 section 7: the origin refuses this request over
                 // HTTP/2. Like Pingora, a negotiate pool prefers HTTP/1.1 from
                 // now on and this session admits no further request.
@@ -3529,9 +3305,7 @@ void http_client_connection::on_http2_event(http2_event& event) {
                     http2_.mark_draining();
                 }
                 stream->signal_.notify();
-            } else if (stream->websocket_ && state_value.tunnel_->accepted_ && state_value.tunnel_->receive_ended_ &&
-                       closed->source() == http2_stream_close_source::peer &&
-                       closed->error() == http2_error_code::no_error) {
+            } else if (stream->websocket_ && state_value.tunnel_->accepted_ && state_value.tunnel_->receive_ended_ && closed->source() == http2_stream_close_source::peer && closed->error() == http2_error_code::no_error) {
                 // A server can retire its half-open request lease immediately
                 // after Close + END_STREAM. Keep the buffered Close for the
                 // WebSocket parser; NO_ERROR alone is never a close handshake.
@@ -3544,9 +3318,7 @@ void http_client_connection::on_http2_event(http2_event& event) {
                 state_value.tunnel_->output_.space_.notify();
                 state_value.data_signal_.notify();
                 stream->signal_.notify();
-            } else if (!state_value.tunnel_ || !state_value.tunnel_->accepted_ || !state_value.tunnel_->receive_ended_ ||
-                       !state_value.tunnel_->output_.end_requested_ ||
-                       closed->error() != http2_error_code::no_error) {
+            } else if (!state_value.tunnel_ || !state_value.tunnel_->accepted_ || !state_value.tunnel_->receive_ended_ || !state_value.tunnel_->output_.end_requested_ || closed->error() != http2_error_code::no_error) {
                 stream->error_ = make_error_code(http_client_errc::protocol_error);
                 stream->signal_.notify();
             }
@@ -3554,8 +3326,7 @@ void http_client_connection::on_http2_event(http2_event& event) {
     } else if (const auto* unprocessed = event.request_unprocessed()) {
         // Published after a peer GOAWAY (whose own event marks the session
         // draining) or for RST_STREAM(REFUSED_STREAM), which keeps it usable.
-        if (auto* stream = find_http2_stream(unprocessed->stream_id());
-            stream != nullptr && !stream->complete_ && !stream->failed()) {
+        if (auto* stream = find_http2_stream(unprocessed->stream_id()); stream != nullptr && !stream->complete_ && !stream->failed()) {
             stream->retryable_ = true;
             stream->signal_.notify();
         }
@@ -3571,8 +3342,7 @@ void http_client_connection::on_http2_event(http2_event& event) {
     }
 }
 
-void http_client_connection::on_http2_failure(
-    const client_transport_result& transport, std::exception_ptr failure) noexcept {
+void http_client_connection::on_http2_failure(const client_transport_result& transport, std::exception_ptr failure) noexcept {
     connected_ = false;
     // An h2-only offer reconnects as HTTP/2 again.
     if (alpn_ != client_alpn::http2) {
@@ -3588,9 +3358,7 @@ void http_client_connection::on_http2_failure(
     }
     for (auto* stream : http2_streams_) {
         stream->state_->request_informational_stop();
-        if (transport.status_ == client_transport_status::eof && failure == nullptr && !stream->failed() && !stream->retryable_ &&
-            stream->tunnel_end_submitted_ && http2_.output_flushed() &&
-            stream->state_->tunnel_->receive_ended_) {
+        if (transport.status_ == client_transport_status::eof && failure == nullptr && !stream->failed() && !stream->retryable_ && stream->tunnel_end_submitted_ && http2_.output_flushed() && stream->state_->tunnel_->receive_ended_) {
             // Both wire halves finished, even if the upload driver is still
             // queued behind this read callback. EOF cannot invalidate them.
             stream->state_->tunnel_->output_.finish();
@@ -3609,8 +3377,7 @@ void http_client_connection::on_http2_failure(
     }
 }
 
-void http_client_connection::cancel_http2_stream(
-    std::uint64_t request_id, client_abort_reason reason, http2_error_code error) noexcept {
+void http_client_connection::cancel_http2_stream(std::uint64_t request_id, client_abort_reason reason, http2_error_code error) noexcept {
     auto* const match = find_http2_request(request_id);
     if (match == nullptr) {
         return;
@@ -3628,9 +3395,7 @@ void http_client_connection::cancel_http2_stream(
 void http_client_connection::remove_http2_stream(http2_stream& stream) noexcept {
     // The core decides whether a half is still open. In particular a successful
     // early response does not retire an abandoned or Continue-cancelled upload.
-    const bool both_halves_closed =
-        stream.complete_ && !stream.failed() &&
-        (stream.state_->output() != nullptr ? stream.state_->output()->ended_ : !stream.request_body_pending_);
+    const bool both_halves_closed = stream.complete_ && !stream.failed() && (stream.state_->output() != nullptr ? stream.state_->output()->ended_ : !stream.request_body_pending_);
     // Once the complete response arrived, only the unfinished sending half
     // ends, without error (RFC 9113 section 8.1), whether the caller abandoned
     // its upload or the response made it unnecessary.
@@ -3665,31 +3430,27 @@ void http_client_connection::remove_http2_stream(http2_stream& stream) noexcept 
 }
 
 void http_client_connection::reprioritize(http_client_response_state& state_value, http_priority priority) {
-    if (generation_ != state_value.connection_generation_ || !http2_.has_connection() || !http2_.running() ||
-        http2_.failed()) {
+    if (generation_ != state_value.connection_generation_ || !http2_.has_connection() || !http2_.running() || http2_.failed()) {
         throw http_client_error(make_error_code(http_client_errc::closing), "HTTP/2 response connection is retired");
     }
-    const auto status = http2_.connection().submit_priority_update(static_cast<std::uint32_t>(state_value.stream_id_),
-        {.urgency_ = priority.urgency_, .incremental_ = priority.incremental_});
+    const auto status = http2_.connection().submit_priority_update(static_cast<std::uint32_t>(state_value.stream_id_), {.urgency_ = priority.urgency_, .incremental_ = priority.incremental_});
     if (status != http2_submit_status::accepted) {
         throw http_client_error(make_error_code(http_client_errc::protocol_error), "HTTP/2 priority update rejected");
     }
     http2_.wake_writer();
 }
 
-task<void> http_client_connection::wait_for_http2_session_stop(
-    const operation_deadline& timeout, stop_token stop_token_value, http_client_response_state& response) {
+task<void> http_client_connection::wait_for_http2_session_stop(const operation_deadline& timeout, stop_token stop_token_value, http_client_response_state& response) {
     worker_timer_registration deadline_timer;
     if (const auto deadline = timeout.deadline()) {
         if (*deadline <= std::chrono::steady_clock::now()) {
             throw http_client_error(std::make_error_code(std::errc::timed_out), "HTTP/2 session shutdown wait timed out");
         }
-        (void)pool_.worker().schedule_timer(deadline_timer, *deadline,
-            [this](worker_timer_outcome outcome) noexcept {
-                if (outcome == worker_timer_outcome::expired) {
-                    http2_.state_signal().notify();
-                }
-            });
+        (void)pool_.worker().schedule_timer(deadline_timer, *deadline, [this](worker_timer_outcome outcome) noexcept {
+            if (outcome == worker_timer_outcome::expired) {
+                http2_.state_signal().notify();
+            }
+        });
     }
     http2_state_waiter waiter{.next_ = state_waiters_};
     state_waiters_ = &waiter;
@@ -3720,25 +3481,23 @@ task<void> http_client_connection::wait_for_http2_session_stop(
     }
 }
 
-task<bool> http_client_connection::execute_http2(const http_client_request_storage& request,
-    const operation_deadline& timeout, const operation_deadline& acquire_timeout, stop_token stop_token_value,
-    http_client_response_state& state_value) {
+task<bool> http_client_connection::execute_http2(const http_client_request_storage& request, const operation_deadline& timeout, const operation_deadline& acquire_timeout, stop_token stop_token_value, http_client_response_state& state_value) {
     if (request.is_upgrade()) {
         throw http_client_error(make_error_code(http_client_errc::protocol_unavailable), "HTTP Upgrade requires HTTP/1.1");
     }
     const auto& config = pool_.config();
     const std::string_view scheme = config.scheme_ == http_scheme::https ? "https" : "http";
     const auto content = request.upload() != nullptr
-                             ? ::ruvia::http_request_content_plan::streaming(request.upload()->config_.content_length_)
-                         : request.has_body() ? ::ruvia::http_request_content_plan::known_length(request.body().size())
-                                              : ::ruvia::http_request_content_plan::none();
+        ? ::ruvia::http_request_content_plan::streaming(request.upload()->config_.content_length_)
+        : request.has_body()
+        ? ::ruvia::http_request_content_plan::known_length(request.body().size())
+        : ::ruvia::http_request_content_plan::none();
 
     for (int attempt_value = 0; attempt_value < 2; ++attempt_value) {
         // Each attempt acquires its stream like a connection slot: the slot's
         // reconnect and the wait for request-stream capacity both end at
         // acquire_timeout_. A retry is a new acquisition.
-        const auto attempt_acquire =
-            attempt_value == 0 ? acquire_timeout : timeout.constrained_by(state_value.effective_acquire_timeout_);
+        const auto attempt_acquire = attempt_value == 0 ? acquire_timeout : timeout.constrained_by(state_value.effective_acquire_timeout_);
         if (!http2_.usable()) {
             (void)co_await ensure_connected(timeout, attempt_acquire, stop_token_value, state_value);
             if (protocol_ != protocol_type::http2) {
@@ -3778,8 +3537,7 @@ task<bool> http_client_connection::execute_http2(const http_client_request_stora
         cancellation.arm(stop_token_value);
 
         auto& connection = http2_.connection();
-        const auto expectation = request.upload() != nullptr ? request.upload()->config_.expectation_
-                                                             : http_client_request_expectation::none;
+        const auto expectation = request.upload() != nullptr ? request.upload()->config_.expectation_ : http_client_request_expectation::none;
         // Prepared once per attempt: a wait for stream capacity resubmits the
         // same head instead of rescanning the jar on every session wake.
         client_prepared_request_scratch scratch;
@@ -3797,29 +3555,12 @@ task<bool> http_client_connection::execute_http2(const http_client_request_stora
                 break;
             }
             const auto submitted = request.websocket() != nullptr
-                                       ? submit_http2_websocket_client_request(connection,
-                                             request.websocket()->negotiation_, scheme, request.tunnel_authority(),
-                                             source_value.target_.view(), headers, request.options_.field_source_)
-                                   : !request.is_tunnel()
-                                       ? connection.submit_request_head(::ruvia::http2_regular_request_head_view{
-                                             .method_ = source_value.method_,
-                                             .scheme_ = scheme,
-                                             .authority_ = borrowed_text(request.route().authority_),
-                                             .target_ = source_value.target_,
-                                             .headers_ = headers,
-                                             .content_ = content,
-                                             .expectation_ = expectation,
-                                             .field_source_ = request.options_.field_source_})
-                                   : request.tunnel_protocol().empty()
-                                       ? connection.submit_request_head(http2_connect_request_head_view{
-                                             .authority_ = borrowed_text(request.tunnel_authority()), .headers_ = headers, .field_source_ = request.options_.field_source_})
-                                       : connection.submit_request_head(http2_extended_connect_request_head_view{
-                                             .protocol_ = borrowed_text(request.tunnel_protocol()),
-                                             .scheme_ = scheme,
-                                             .authority_ = borrowed_text(request.tunnel_authority()),
-                                             .target_ = source_value.target_,
-                                             .headers_ = headers,
-                                             .field_source_ = request.options_.field_source_});
+                ? submit_http2_websocket_client_request(connection, request.websocket()->negotiation_, scheme, request.tunnel_authority(), source_value.target_.view(), headers, request.options_.field_source_)
+                : !request.is_tunnel()
+                ? connection.submit_request_head(::ruvia::http2_regular_request_head_view{.method_ = source_value.method_, .scheme_ = scheme, .authority_ = borrowed_text(request.route().authority_), .target_ = source_value.target_, .headers_ = headers, .content_ = content, .expectation_ = expectation, .field_source_ = request.options_.field_source_})
+                : request.tunnel_protocol().empty()
+                ? connection.submit_request_head(http2_connect_request_head_view{.authority_ = borrowed_text(request.tunnel_authority()), .headers_ = headers, .field_source_ = request.options_.field_source_})
+                : connection.submit_request_head(http2_extended_connect_request_head_view{.protocol_ = borrowed_text(request.tunnel_protocol()), .scheme_ = scheme, .authority_ = borrowed_text(request.tunnel_authority()), .target_ = source_value.target_, .headers_ = headers, .field_source_ = request.options_.field_source_});
             if (const auto* accepted = std::get_if<std::uint32_t>(&submitted)) {
                 state_value.request_written_ = true;
                 stream.stream_id_ = *accepted;
@@ -3846,8 +3587,7 @@ task<bool> http_client_connection::execute_http2(const http_client_request_stora
                 break;
             }
             const auto error = std::get<http2_request_head_submit_error>(submitted);
-            if (error == http2_request_head_submit_error::peer_stream_limit_reached ||
-                error == http2_request_head_submit_error::local_stream_capacity_reached) {
+            if (error == http2_request_head_submit_error::peer_stream_limit_reached || error == http2_request_head_submit_error::local_stream_capacity_reached) {
                 // Outer admission counts the local stream limit; a lower peer
                 // limit parks here until a stream closes or the peer raises
                 // it, within the attempt's acquisition bound.
@@ -3867,14 +3607,11 @@ task<bool> http_client_connection::execute_http2(const http_client_request_stora
             break;
         }
 
-        if (auto* upload = request.output();
-            upload != nullptr && stream.stream_id_ != 0 && !stream.failed() && !stream.retryable_) {
+        if (auto* upload = request.output(); upload != nullptr && stream.stream_id_ != 0 && !stream.failed() && !stream.retryable_) {
             co_await stream_http2_upload(request, stream, *upload);
         }
-        while ((!stream.complete_ || state_value.informational_active_) &&
-               !stream.failed() && !stream.retryable_) {
-            if (request.tunnel() != nullptr && request.tunnel()->accepted_ && request.tunnel()->receive_ended_ &&
-                request.tunnel()->output_.ended_ && !state_value.informational_active_) {
+        while ((!stream.complete_ || state_value.informational_active_) && !stream.failed() && !stream.retryable_) {
+            if (request.tunnel() != nullptr && request.tunnel()->accepted_ && request.tunnel()->receive_ended_ && request.tunnel()->output_.ended_ && !state_value.informational_active_) {
                 stream.complete_ = true;
                 break;
             }
@@ -3893,32 +3630,26 @@ task<bool> http_client_connection::execute_http2(const http_client_request_stora
             if (alpn_ == client_alpn::negotiate && pool_.prefers_http11() && request.output() == nullptr && may_retry) {
                 continue;
             }
-            throw http_client_error(
-                make_error_code(http_client_errc::protocol_unavailable), "upstream requires HTTP/1.1 for this request");
+            throw http_client_error(make_error_code(http_client_errc::protocol_unavailable), "upstream requires HTTP/1.1 for this request");
         }
         // No stream ID means no request head or body was submitted to this
         // connection. A transport failure at the stream-capacity wait is safe
         // to retry even for a streaming upload; protocol and cancellation
         // failures must still be reported.
-        if (stream.stream_id_ == 0 && failure == nullptr && error == make_error_code(http_client_errc::io_error) &&
-            may_retry) {
+        if (stream.stream_id_ == 0 && failure == nullptr && error == make_error_code(http_client_errc::io_error) && may_retry) {
             continue;
         }
         // The same rule as an HTTP/1 exchange on a reused connection.
-        if (stream.stream_id_ != 0 && reused_session && may_retry &&
-            can_retry_reused_connection_request(
-                failure != nullptr ? http_client_failure_code(failure) : error, request, state_value)) {
+        if (stream.stream_id_ != 0 && reused_session && may_retry && can_retry_reused_connection_request(failure != nullptr ? http_client_failure_code(failure) : error, request, state_value)) {
             continue;
         }
-        if (retryable && (request.output() == nullptr || stream.stream_id_ == 0) &&
-            attempt_value == 0 && !timeout.expired()) {
+        if (retryable && (request.output() == nullptr || stream.stream_id_ == 0) && attempt_value == 0 && !timeout.expired()) {
             state_value.informational_.clear();
             state_value.informational_budget_ = {};
             continue;
         }
         if (retryable) {
-            throw http_client_error(make_error_code(http_client_errc::protocol_error),
-                "HTTP/2 request was not processed by the server (GOAWAY or REFUSED_STREAM)");
+            throw http_client_error(make_error_code(http_client_errc::protocol_error), "HTTP/2 request was not processed by the server (GOAWAY or REFUSED_STREAM)");
         }
         if (failure != nullptr) {
             std::rethrow_exception(failure);
@@ -3931,8 +3662,7 @@ task<bool> http_client_connection::execute_http2(const http_client_request_stora
     throw http_client_error(make_error_code(http_client_errc::protocol_error), "HTTP/2 request retry exhausted");
 }
 
-task<bool> http_client_connection::send_http2_request_data(http2_stream& stream,
-    std::string_view bytes, http2_end_stream end_stream, const http_client_output_queue* upload) {
+task<bool> http_client_connection::send_http2_request_data(http2_stream& stream, std::string_view bytes, http2_end_stream end_stream, const http_client_output_queue* upload) {
     // Flow-control waits are part of the write, even when no socket write
     // exists yet or the response receive half has already ended.
     worker_timer_registration write_timer;
@@ -3942,74 +3672,65 @@ task<bool> http_client_connection::send_http2_request_data(http2_stream& stream,
     };
     // Keep one frame-sized copy in the sans-I/O/session output while the caller
     // or upload queue retains the unsent suffix until it reaches the transport.
-    const auto status = co_await http2_.send_data(
-        stream.stream_id_, bytes, end_stream, http2_default_max_frame_size, stopped);
+    const auto status = co_await http2_.send_data(stream.stream_id_, bytes, end_stream, http2_default_max_frame_size, stopped);
     // Until the response head, and through an accepted tunnel, sending
     // progress also proves the exchange alive: an origin may read the whole
     // request before it answers.
-    if (status == http2_client_data_status::submitted && stream.timer_.read_deadline_ &&
-        (!stream.state_->head_ready_ || (stream.state_->tunnel_ && stream.state_->tunnel_->accepted_))) {
+    if (status == http2_client_data_status::submitted && stream.timer_.read_deadline_ && (!stream.state_->head_ready_ || (stream.state_->tunnel_ && stream.state_->tunnel_->accepted_))) {
         restart_http2_stream_read(stream);
     }
     // A complete response may close the stream before its buffered request
     // content was sent; that response stands.
     if (status == http2_client_data_status::rejected && (upload != nullptr || !stream.complete_)) {
-        stream.error_ = upload != nullptr ? make_error_code(http_client_errc::invalid_request)
-                                          : make_error_code(http_client_errc::protocol_error);
+        stream.error_ = upload != nullptr ? make_error_code(http_client_errc::invalid_request) : make_error_code(http_client_errc::protocol_error);
         http2_.submit_reset(stream.stream_id_);
     }
     co_return status == http2_client_data_status::submitted && !stopped();
 }
 
-task<void> http_client_connection::stream_http2_upload(
-    const http_client_request_storage& request, http2_stream& stream, http_client_output_queue& upload) {
+task<void> http_client_connection::stream_http2_upload(const http_client_request_storage& request, http2_stream& stream, http_client_output_queue& upload) {
     auto& connection = http2_.connection();
-    const auto stopped = [&stream, &upload] { return stream.failed() || stream.retryable_ || upload.stopped_; };
-    co_await run_multiplexed_client_upload(
-        pool_.worker(), request, upload, stream.signal_,
-        [&stream, &state_signal = http2_.state_signal()]() noexcept {
-            stream.signal_.notify();
-            state_signal.notify();
-        },
-        [&stream]() noexcept { return stream.failed() || stream.retryable_; },
-        [&]() noexcept {
-            return request.is_tunnel() ||
-                   connection.release_request_content(stream.stream_id_) != http2_request_content_release_status::closed;
-        },
-        [&](std::string_view chunk) {
-            return send_http2_request_data(stream, chunk, http2_end_stream::keep_open, &upload);
-        },
-        [&]() -> task<bool> {
-            worker_timer_registration write_timer;
-            arm_http2_write_timer(write_timer, stream);
-            http2_client_data_status finished{};
-            if (request.is_tunnel()) {
-                finished = co_await http2_.send_data(stream.stream_id_, {}, http2_end_stream::end_stream, 0, stopped,
-                    &stream.tunnel_end_submitted_);
-            } else {
-                const inline_http_header_views trailers(request.upload()->trailers_);
-                finished = co_await http2_.finish_request(stream.stream_id_, trailers.view(), stopped);
-            }
-            if (finished == http2_client_data_status::rejected) {
-                stream.error_ = make_error_code(http_client_errc::invalid_request);
-                http2_.submit_reset(stream.stream_id_);
-                co_return false;
-            }
-            co_return finished == http2_client_data_status::submitted && !stopped();
-        });
+    const auto stopped = [&stream, &upload] {
+        return stream.failed() || stream.retryable_ || upload.stopped_;
+    };
+    co_await run_multiplexed_client_upload(pool_.worker(), request, upload, stream.signal_, [&stream, &state_signal = http2_.state_signal()]() noexcept {
+        stream.signal_.notify();
+        state_signal.notify();
+    }, [&stream]() noexcept {
+        return stream.failed() || stream.retryable_;
+    }, [&]() noexcept {
+        return request.is_tunnel() || connection.release_request_content(stream.stream_id_) != http2_request_content_release_status::closed;
+    }, [&](std::string_view chunk) {
+        return send_http2_request_data(stream, chunk, http2_end_stream::keep_open, &upload);
+    }, [&]() -> task<bool> {
+        worker_timer_registration write_timer;
+        arm_http2_write_timer(write_timer, stream);
+        http2_client_data_status finished{};
+        if (request.is_tunnel()) {
+            finished = co_await http2_.send_data(stream.stream_id_, {}, http2_end_stream::end_stream, 0, stopped, &stream.tunnel_end_submitted_);
+        } else {
+            const inline_http_header_views trailers(request.upload()->trailers_);
+            finished = co_await http2_.finish_request(stream.stream_id_, trailers.view(), stopped);
+        }
+        if (finished == http2_client_data_status::rejected) {
+            stream.error_ = make_error_code(http_client_errc::invalid_request);
+            http2_.submit_reset(stream.stream_id_);
+            co_return false;
+        }
+        co_return finished == http2_client_data_status::submitted && !stopped();
+    });
 }
 
 // --- server push: pool policy over a connection's stream registry ---------------
 
 struct http_client_pool::http2_push_driver final {
-    http2_push_driver(http_client_pool& pool, http_client_connection& connection, http_client_response response,
-        http_client_response_state& state_value)
-        : pool_(pool),
-          connection_(connection),
-          response_(std::move(response)),
-          state_(state_value),
-          timeout_(pool.config_.push_.timeout_),
-          stream_(pool.worker_, state_value) {}
+    http2_push_driver(http_client_pool& pool, http_client_connection& connection, http_client_response response, http_client_response_state& state_value) :
+        pool_(pool),
+        connection_(connection),
+        response_(std::move(response)),
+        state_(state_value),
+        timeout_(pool.config_.push_.timeout_),
+        stream_(pool.worker_, state_value) {}
     ~http2_push_driver() {
         if (registered_) {
             connection_.remove_http2_stream(stream_);
@@ -4032,11 +3753,7 @@ void http_client_pool::accept_http2_push(http_client_connection& connection, con
     const bool https = config_.scheme_ == http_scheme::https;
     // Only a connection authenticated for the alias route speaks for its
     // origin (RFC 9113 section 8.4).
-    if (!config_.push_.enabled_ || !connection.alias_route() || pushes_.size() >= config_.push_.max_queued_pushes_ ||
-        active_pushes_ >= config_.push_.max_concurrent_pushes_ ||
-        !http_ascii_equals_ignore_case(promise.request_.scheme_, https ? "https" : "http") ||
-        !http_authorities_equal(borrowed_text(promise.request_.authority_),
-            borrowed_text(std::string_view(config_.authority_)), https ? 443 : 80)) {
+    if (!config_.push_.enabled_ || !connection.alias_route() || pushes_.size() >= config_.push_.max_queued_pushes_ || active_pushes_ >= config_.push_.max_concurrent_pushes_ || !http_ascii_equals_ignore_case(promise.request_.scheme_, https ? "https" : "http") || !http_authorities_equal(borrowed_text(promise.request_.authority_), borrowed_text(std::string_view(config_.authority_)), https ? 443 : 80)) {
         ++rejected_pushes_;
         connection.http2_.submit_reset(promise.promised_stream_id_);
         return;
@@ -4082,8 +3799,7 @@ void http_client_pool::accept_http2_push(http_client_connection& connection, con
     }
 }
 
-task<void> http_client_pool::run_http2_push(
-    std::unique_ptr<http2_push_driver> driver) {
+task<void> http_client_pool::run_http2_push(std::unique_ptr<http2_push_driver> driver) {
     auto& stream = driver->stream_;
     auto& state_value = driver->state_;
     try {
@@ -4094,8 +3810,7 @@ task<void> http_client_pool::run_http2_push(
         }
         state_value.failure_ = stream.failure_;
         if (stream.error_) {
-            state_value.failure_ =
-                std::make_exception_ptr(http_client_error(*stream.error_, http_client_error_message(*stream.error_)));
+            state_value.failure_ = std::make_exception_ptr(http_client_error(*stream.error_, http_client_error_message(*stream.error_)));
         }
     } catch (...) {
         state_value.failure_ = std::current_exception();

@@ -72,8 +72,8 @@ namespace ruvia {
 template <typename value_type>
 class local_ring_queue final {
 public:
-    explicit local_ring_queue(std::size_t capacity)
-        : storage_(allocate_storage(capacity)) {}
+    explicit local_ring_queue(std::size_t capacity) :
+        storage_(allocate_storage(capacity)) {}
 
     local_ring_queue(const local_ring_queue&) = delete;
     local_ring_queue& operator=(const local_ring_queue&) = delete;
@@ -230,11 +230,9 @@ namespace {
     return std::clamp(half_hardware_threads, std::size_t{2}, std::size_t{8});
 }
 
-[[nodiscard]] std::size_t resolve_queue_capacity(
-    std::size_t requested, std::size_t thread_count) {
+[[nodiscard]] std::size_t resolve_queue_capacity(std::size_t requested, std::size_t thread_count) {
     constexpr std::size_t default_per_thread_capacity = 64;
-    if (requested == 0 &&
-        thread_count > std::numeric_limits<std::size_t>::max() / default_per_thread_capacity) {
+    if (requested == 0 && thread_count > std::numeric_limits<std::size_t>::max() / default_per_thread_capacity) {
         throw std::invalid_argument("blocking pool storage capacity is out of range");
     }
     const auto capacity = requested != 0 ? requested : thread_count * default_per_thread_capacity;
@@ -268,9 +266,9 @@ std::string_view describe_blocking_status(blocking_status status) noexcept {
 }
 
 // Only blocking_result::value() constructs this, after ruling out completed.
-blocking_operation_rejected::blocking_operation_rejected(blocking_status status)
-    : std::runtime_error(std::string(describe_blocking_status(status))),
-      status_(status) {}
+blocking_operation_rejected::blocking_operation_rejected(blocking_status status) :
+    std::runtime_error(std::string(describe_blocking_status(status))),
+    status_(status) {}
 
 struct blocking_pool::impl_type final {
     struct node_type final {
@@ -278,12 +276,12 @@ struct blocking_pool::impl_type final {
         node_type* next_{nullptr};
     };
 
-    explicit impl_type(const blocking_pool_options& options)
-        : thread_count_(resolve_thread_count(options.thread_count_)),
-          queue_capacity_(resolve_queue_capacity(options.queue_capacity_, thread_count_)),
-          queue_(queue_capacity_),
-          nodes_(),
-          threads_() {
+    explicit impl_type(const blocking_pool_options& options) :
+        thread_count_(resolve_thread_count(options.thread_count_)),
+        queue_capacity_(resolve_queue_capacity(options.queue_capacity_, thread_count_)),
+        queue_(queue_capacity_),
+        nodes_(),
+        threads_() {
         // Reserved/queued submissions occupy at most queue_capacity_ nodes;
         // each thread may also hold one node while moving its callable out.
         nodes_.resize(queue_capacity_ + thread_count_);
@@ -297,7 +295,9 @@ struct blocking_pool::impl_type final {
         threads_.reserve(thread_count_);
         try {
             for (std::size_t i = 0; i < thread_count_; ++i) {
-                threads_.emplace_back([self] { self->run(); });
+                threads_.emplace_back([self] {
+                    self->run();
+                });
             }
         } catch (...) {
             // A pool that could not start all of its threads is not a pool the
@@ -312,15 +312,17 @@ struct blocking_pool::impl_type final {
     void run() noexcept {
         struct current_pool_guard final {
             const void* previous_;
-            explicit current_pool_guard(const impl_type* pool) noexcept
-                : previous_(std::exchange(g_current_blocking_pool, pool)) {}
+            explicit current_pool_guard(const impl_type* pool) noexcept :
+                previous_(std::exchange(g_current_blocking_pool, pool)) {}
             ~current_pool_guard() {
                 g_current_blocking_pool = previous_;
             }
         } current_guard(this);
         std::unique_lock lock(mutex_);
         for (;;) {
-            condition_.wait(lock, [this] { return stopping_ || queued_ != 0; });
+            condition_.wait(lock, [this] {
+                return stopping_ || queued_ != 0;
+            });
             if (stopping_) {
                 // Stopping discards every task that has not already been
                 // picked up. A worker must never start queued work after
@@ -417,7 +419,9 @@ struct blocking_pool::impl_type final {
         std::vector<std::thread> joining_threads;
         {
             std::unique_lock lock(mutex_);
-            condition_.wait(lock, [this] { return !joining_; });
+            condition_.wait(lock, [this] {
+                return !joining_;
+            });
             if (!joined_) {
                 joining_ = true;
                 joining_threads.swap(threads_);
@@ -436,9 +440,7 @@ struct blocking_pool::impl_type final {
                 condition_.notify_all();
             }
             condition_.wait(lock, [this] {
-                return (stop_drain_thread_ == std::thread::id{} ||
-                           stop_drain_thread_ == std::this_thread::get_id()) &&
-                       reserved_ == 0;
+                return (stop_drain_thread_ == std::thread::id{} || stop_drain_thread_ == std::this_thread::get_id()) && reserved_ == 0;
             });
         }
     }
@@ -479,8 +481,8 @@ struct blocking_pool::impl_type final {
     bool joined_{false};
 };
 
-blocking_pool::blocking_pool(blocking_pool_options options)
-    : impl_(std::make_shared<impl_type>(options)) {
+blocking_pool::blocking_pool(blocking_pool_options options) :
+    impl_(std::make_shared<impl_type>(options)) {
     impl_->start(impl_);
 }
 
@@ -519,13 +521,11 @@ blocking_submit_result blocking_pool::submit(move_only_function<void()> task_val
         std::lock_guard lock(owner.mutex_);
         if (owner.stopping_) {
             ++owner.discarded_;
-            return detail::worker_delivery_access::reject<blocking_submit_result>(
-                blocking_submit_status::pool_stopped, std::move(task_value));
+            return detail::worker_delivery_access::reject<blocking_submit_result>(blocking_submit_status::pool_stopped, std::move(task_value));
         }
         if (owner.queued_ + owner.reserved_ >= owner.queue_capacity_) {
             ++owner.rejected_;
-            return detail::worker_delivery_access::reject<blocking_submit_result>(
-                blocking_submit_status::queue_full, std::move(task_value));
+            return detail::worker_delivery_access::reject<blocking_submit_result>(blocking_submit_status::queue_full, std::move(task_value));
         }
         node = owner.free_head_;
         owner.free_head_ = node->next_;
@@ -549,8 +549,7 @@ blocking_submit_result blocking_pool::submit(move_only_function<void()> task_val
     if (stopped) {
         // Stopping never recycles nodes, so the reserved node stays exclusive
         // until its callable has been handed back.
-        auto rejected = detail::worker_delivery_access::reject<blocking_submit_result>(
-            blocking_submit_status::pool_stopped, std::move(node->task_));
+        auto rejected = detail::worker_delivery_access::reject<blocking_submit_result>(blocking_submit_status::pool_stopped, std::move(node->task_));
         bool notify = false;
         {
             std::lock_guard lock(owner.mutex_);
@@ -623,8 +622,7 @@ public:
 
         // Commit the freed slot to the next waiter before deferring its continuation.
         // Cancellation and closure cannot replace this result after the handoff.
-        [[nodiscard]] bool commit_handoff(
-            std::size_t index, std::coroutine_handle<>& continuation) noexcept {
+        [[nodiscard]] bool commit_handoff(std::size_t index, std::coroutine_handle<>& continuation) noexcept {
             continuation = {};
             if (head_ == nullptr) {
                 return false;
@@ -647,8 +645,7 @@ public:
 
         // Commit cancellation while still inside a stop callback, but let the
         // caller resume the coroutine only after that callback has returned.
-        [[nodiscard]] bool commit_cancellation(
-            pool_lease_acquire& waiter, std::coroutine_handle<>& continuation) noexcept {
+        [[nodiscard]] bool commit_cancellation(pool_lease_acquire& waiter, std::coroutine_handle<>& continuation) noexcept {
             continuation = {};
             if (!waiter.queued_) {
                 return false;
@@ -695,16 +692,15 @@ public:
         pool_lease_acquire* tail_{nullptr};
     };
 
-    impl_type(std::size_t pool_size, const worker_ref& worker_value)
-        : worker_(worker_value),
-          next_free_(pool_size, no_free_slot),
-          waiter_state_(std::make_shared<waiter_state_type>(worker_value)) {
+    impl_type(std::size_t pool_size, const worker_ref& worker_value) :
+        worker_(worker_value),
+        next_free_(pool_size, no_free_slot),
+        waiter_state_(std::make_shared<waiter_state_type>(worker_value)) {
         for (std::size_t i = 0; i < pool_size; ++i) {
             next_free_[i] = free_head_;
             free_head_ = i;
         }
-        if (worker_.register_shutdown(waiter_state_, &waiter_state_type::shutdown_registration_) !=
-            worker_registration_status::registered) {
+        if (worker_.register_shutdown(waiter_state_, &waiter_state_type::shutdown_registration_) != worker_registration_status::registered) {
             waiter_state_->stopping_ = true;
         }
     }
@@ -716,8 +712,8 @@ public:
     }
 
     struct waiter_state_type final : std::enable_shared_from_this<waiter_state_type> {
-        explicit waiter_state_type(worker_ref worker_value) noexcept
-            : worker_(std::move(worker_value)) {}
+        explicit waiter_state_type(worker_ref worker_value) noexcept :
+            worker_(std::move(worker_value)) {}
 
         // First member: unlinks from the worker registry after every other member is gone.
         worker_shutdown_registration shutdown_registration_;
@@ -740,7 +736,9 @@ public:
             }
             try {
                 // A detached worker has already retired every suspended acquire.
-                (void)worker_.defer_completion([retained = shared_from_this()] { retained->stop_waiters(); });
+                (void)worker_.defer_completion([retained = shared_from_this()] {
+                    retained->stop_waiters();
+                });
             } catch (...) {
                 std::terminate();
             }
@@ -764,8 +762,7 @@ public:
         }
     };
 
-    [[nodiscard]] std::optional<acquire_result_type> try_acquire(
-        const std::optional<std::chrono::steady_clock::time_point>& deadline, const stop_token& stop_token_value) {
+    [[nodiscard]] std::optional<acquire_result_type> try_acquire(const std::optional<std::chrono::steady_clock::time_point>& deadline, const stop_token& stop_token_value) {
         if (!worker_.is_current()) {
             throw std::logic_error("pool lease acquire must run on its bound worker");
         }
@@ -776,8 +773,7 @@ public:
             return worker_wait_result<std::size_t>::with_status(worker_wait_status::cancelled);
         }
         if (free_head_ == no_free_slot) {
-            if (waiter_state_->stopping_ || !worker_.accepting() ||
-                detail::worker_ref_access::timers_stopping(worker_)) {
+            if (waiter_state_->stopping_ || !worker_.accepting() || detail::worker_ref_access::timers_stopping(worker_)) {
                 return worker_wait_result<std::size_t>::with_status(worker_wait_status::worker_stopping);
             }
             if (deadline.has_value() && *deadline <= std::chrono::steady_clock::now()) {
@@ -844,19 +840,18 @@ pool_lease_acquire pool_lease_scheduler::acquire(operation_options options) & {
     return pool_lease_acquire(*impl_, options.timeout_, std::move(options.stop_token_));
 }
 
-pool_lease_acquire::pool_lease_acquire(pool_lease_scheduler::impl_type& owner_value,
-    std::optional<operation_timeout> timeout, stop_token stop_token_value) noexcept
-    : owner_(&owner_value),
-      timeout_(timeout),
-      stop_token_(std::move(stop_token_value)) {
+pool_lease_acquire::pool_lease_acquire(pool_lease_scheduler::impl_type& owner_value, std::optional<operation_timeout> timeout, stop_token stop_token_value) noexcept :
+    owner_(&owner_value),
+    timeout_(timeout),
+    stop_token_(std::move(stop_token_value)) {
     ++owner_->reserved_acquires_;
 }
 
-pool_lease_acquire::pool_lease_acquire(pool_lease_acquire&& other) noexcept
-    : owner_(other.awaited_ ? nullptr : std::exchange(other.owner_, nullptr)),
-      timeout_(other.timeout_),
-      deadline_(other.deadline_),
-      stop_token_(std::move(other.stop_token_)) {
+pool_lease_acquire::pool_lease_acquire(pool_lease_acquire&& other) noexcept :
+    owner_(other.awaited_ ? nullptr : std::exchange(other.owner_, nullptr)),
+    timeout_(other.timeout_),
+    deadline_(other.deadline_),
+    stop_token_(std::move(other.stop_token_)) {
     if (other.awaited_) {
         std::terminate();
     }
@@ -924,12 +919,9 @@ bool pool_lease_acquire::await_suspend(std::coroutine_handle<> continuation) {
     if (deadline_.has_value()) {
         auto status = worker_timer_schedule_status::worker_stopping;
         try {
-            status = owner_->worker_.schedule_timer(deadline_timer_, *deadline_,
-                [waiter_state, waiter = this](worker_timer_outcome outcome) noexcept {
-                    (void)waiter_state->queue_.expire(*waiter, outcome == worker_timer_outcome::expired
-                                                                   ? worker_wait_status::timed_out
-                                                                   : worker_wait_status::worker_stopping);
-                });
+            status = owner_->worker_.schedule_timer(deadline_timer_, *deadline_, [waiter_state, waiter = this](worker_timer_outcome outcome) noexcept {
+                (void)waiter_state->queue_.expire(*waiter, outcome == worker_timer_outcome::expired ? worker_wait_status::timed_out : worker_wait_status::worker_stopping);
+            });
         } catch (...) {
             cancel_registrations();
             throw;
@@ -941,8 +933,9 @@ bool pool_lease_acquire::await_suspend(std::coroutine_handle<> continuation) {
     }
 
     if (stop_token_.stoppable()) {
-        stop_token_.register_callback(stop_registration_,
-            [waiter_state, waiter = this, waiter_id] { waiter_state->request_cancellation(*waiter, waiter_id); });
+        stop_token_.register_callback(stop_registration_, [waiter_state, waiter = this, waiter_id] {
+            waiter_state->request_cancellation(*waiter, waiter_id);
+        });
     }
     if (result_.has_value()) {
         return false;
@@ -1000,14 +993,12 @@ class worker_notification_wait_allocator final {
 public:
     using value_type = t_type;
 
-    explicit worker_notification_wait_allocator(
-        worker_notification_wait_resource& resource) noexcept
-        : resource_(&resource) {}
+    explicit worker_notification_wait_allocator(worker_notification_wait_resource& resource) noexcept :
+        resource_(&resource) {}
 
     template <typename other_type>
-    worker_notification_wait_allocator(
-        const worker_notification_wait_allocator<other_type>& other) noexcept
-        : resource_(other.resource_) {}
+    worker_notification_wait_allocator(const worker_notification_wait_allocator<other_type>& other) noexcept :
+        resource_(other.resource_) {}
 
     [[nodiscard]] t_type* allocate(std::size_t count) const {
         return static_cast<t_type*>(resource_->allocate(count * sizeof(t_type), alignof(t_type)));
@@ -1018,8 +1009,7 @@ public:
     }
 
     template <typename other_type>
-    [[nodiscard]] bool operator==(
-        const worker_notification_wait_allocator<other_type>& other) const noexcept {
+    [[nodiscard]] bool operator==(const worker_notification_wait_allocator<other_type>& other) const noexcept {
         return resource_ == other.resource_;
     }
 
@@ -1085,8 +1075,7 @@ void disconnect_native_receiver(native_wake_descriptor receiver) noexcept;
 
 class worker_notification_state final {
 public:
-    worker_notification_state(asio::io_context& io_context, const worker_ref& worker,
-        worker_notification_options options);
+    worker_notification_state(asio::io_context& io_context, const worker_ref& worker, worker_notification_options options);
     ~worker_notification_state();
 
     worker_notification_state(const worker_notification_state&) = delete;
@@ -1168,12 +1157,12 @@ void configure_pipe_descriptor(int descriptor) {
 
 }  // namespace
 
-native_wake_pair::native_wake_pair(native_wake_pair&& other) noexcept
-    : sender_(std::exchange(other.sender_, -1)),
-      receiver_(std::exchange(other.receiver_, -1))
+native_wake_pair::native_wake_pair(native_wake_pair&& other) noexcept :
+    sender_(std::exchange(other.sender_, -1)),
+    receiver_(std::exchange(other.receiver_, -1))
 #ifndef __linux__
-      ,
-      receiver_guard_(std::exchange(other.receiver_guard_, -1))
+    ,
+    receiver_guard_(std::exchange(other.receiver_guard_, -1))
 #endif
 {
 }
@@ -1317,8 +1306,8 @@ void close_descriptor(HANDLE& descriptor) noexcept {
 
 class pipe_connect_operation final {
 public:
-    explicit pipe_connect_operation(HANDLE pipe)
-        : pipe_(pipe) {
+    explicit pipe_connect_operation(HANDLE pipe) :
+        pipe_(pipe) {
         event_ = CreateEventW(nullptr, TRUE, FALSE, nullptr);
         if (event_ == nullptr) {
             throw_native_wake_error("CreateEventW(named-pipe connect)", static_cast<int>(GetLastError()));
@@ -1393,8 +1382,7 @@ private:
             std::terminate();
         }
         DWORD bytes_transferred = 0;
-        if (!GetOverlappedResult(pipe_, &overlapped_, &bytes_transferred, FALSE) &&
-            GetLastError() != ERROR_OPERATION_ABORTED) {
+        if (!GetOverlappedResult(pipe_, &overlapped_, &bytes_transferred, FALSE) && GetLastError() != ERROR_OPERATION_ABORTED) {
             std::terminate();
         }
         pending_ = false;
@@ -1420,8 +1408,7 @@ struct local_security_descriptor final {
     constexpr wchar_t prefix[] = L"\\\\.\\pipe\\Ruvia-WorkerNotification-";
     constexpr wchar_t hex[] = L"0123456789abcdef";
     std::array<std::uint8_t, 16> random_bytes{};
-    if (BCryptGenRandom(nullptr, random_bytes.data(), static_cast<ULONG>(random_bytes.size()),
-            BCRYPT_USE_SYSTEM_PREFERRED_RNG) < 0) {
+    if (BCryptGenRandom(nullptr, random_bytes.data(), static_cast<ULONG>(random_bytes.size()), BCRYPT_USE_SYSTEM_PREFERRED_RNG) < 0) {
         throw std::runtime_error("BCryptGenRandom failed for native worker notification name");
     }
 
@@ -1449,9 +1436,9 @@ void validate_pipe_client_process(HANDLE server_pipe) {
 
 }  // namespace
 
-native_wake_pair::native_wake_pair(native_wake_pair&& other) noexcept
-    : sender_(std::exchange(other.sender_, nullptr)),
-      receiver_(std::exchange(other.receiver_, nullptr)) {}
+native_wake_pair::native_wake_pair(native_wake_pair&& other) noexcept :
+    sender_(std::exchange(other.sender_, nullptr)),
+    receiver_(std::exchange(other.receiver_, nullptr)) {}
 
 native_wake_pair& native_wake_pair::operator=(native_wake_pair&& other) noexcept {
     std::swap(sender_, other.sender_);
@@ -1506,20 +1493,15 @@ native_wake_pair make_native_wake_pair(std::chrono::milliseconds startup_timeout
     // Restrict access to the pipe owner's SID; the random name and later client-PID
     // check prevent another local process from impersonating this worker channel.
     local_security_descriptor security_descriptor;
-    if (!ConvertStringSecurityDescriptorToSecurityDescriptorW(
-            L"D:P(A;;GA;;;OW)", SDDL_REVISION_1, &security_descriptor.value_, nullptr)) {
-        throw_native_wake_error("ConvertStringSecurityDescriptorToSecurityDescriptorW",
-            static_cast<int>(GetLastError()));
+    if (!ConvertStringSecurityDescriptorToSecurityDescriptorW(L"D:P(A;;GA;;;OW)", SDDL_REVISION_1, &security_descriptor.value_, nullptr)) {
+        throw_native_wake_error("ConvertStringSecurityDescriptorToSecurityDescriptorW", static_cast<int>(GetLastError()));
     }
     SECURITY_ATTRIBUTES security_attributes{};
     security_attributes.nLength = sizeof(security_attributes);
     security_attributes.lpSecurityDescriptor = security_descriptor.value_;
     security_attributes.bInheritHandle = FALSE;
 
-    pair.receiver_ = CreateNamedPipeW(pipe_name.data(),
-        PIPE_ACCESS_INBOUND | FILE_FLAG_OVERLAPPED,
-        PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT | PIPE_REJECT_REMOTE_CLIENTS,
-        1, 4096, 4096, 0, &security_attributes);
+    pair.receiver_ = CreateNamedPipeW(pipe_name.data(), PIPE_ACCESS_INBOUND | FILE_FLAG_OVERLAPPED, PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT | PIPE_REJECT_REMOTE_CLIENTS, 1, 4096, 4096, 0, &security_attributes);
     if (!valid_descriptor(pair.receiver_)) {
         const DWORD error = GetLastError();
         pair.receiver_ = nullptr;
@@ -1532,8 +1514,7 @@ native_wake_pair make_native_wake_pair(std::chrono::milliseconds startup_timeout
         // ERROR_PIPE_CONNECTED here precedes our CreateFile call: validate the peer,
         // then fail closed because this instance has no writer handle owned by us.
         validate_pipe_client_process(pair.receiver_);
-        throw std::runtime_error(
-            "native worker notification pipe connected before its writer handle was opened");
+        throw std::runtime_error("native worker notification pipe connected before its writer handle was opened");
     }
 
     for (;;) {
@@ -1546,8 +1527,7 @@ native_wake_pair make_native_wake_pair(std::chrono::milliseconds startup_timeout
             throw_native_wake_error("WaitNamedPipeW", static_cast<int>(error));
         }
 
-        pair.sender_ = CreateFileW(pipe_name.data(), GENERIC_WRITE, 0, nullptr, OPEN_EXISTING,
-            FILE_ATTRIBUTE_NORMAL, nullptr);
+        pair.sender_ = CreateFileW(pipe_name.data(), GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
         if (valid_descriptor(pair.sender_)) {
             break;
         }
@@ -1589,8 +1569,7 @@ void* worker_notification_wait_resource::allocate(std::size_t bytes_value, std::
     return allocation_;
 }
 
-void worker_notification_wait_resource::deallocate(
-    void* pointer, std::size_t, std::size_t) noexcept {
+void worker_notification_wait_resource::deallocate(void* pointer, std::size_t, std::size_t) noexcept {
     if (!allocated() || pointer != allocation_) {
         std::terminate();
     }
@@ -1604,15 +1583,13 @@ void throw_native_wake_error(const char* operation, int error) {
     throw std::system_error(error, std::system_category(), operation);
 }
 
-worker_notification_state::worker_notification_state(asio::io_context& io_context,
-    const worker_ref& worker, worker_notification_options options)
-    : io_context_(io_context),
-      worker_(worker) {
+worker_notification_state::worker_notification_state(asio::io_context& io_context, const worker_ref& worker, worker_notification_options options) :
+    io_context_(io_context),
+    worker_(worker) {
     if (!worker_.valid() || !worker_.accepting()) {
         throw std::invalid_argument("worker notification requires an accepting worker runtime");
     }
-    if (options.startup_timeout_.value() <= std::chrono::milliseconds::zero() ||
-        options.startup_timeout_.value() > std::chrono::minutes(1)) {
+    if (options.startup_timeout_.value() <= std::chrono::milliseconds::zero() || options.startup_timeout_.value() > std::chrono::minutes(1)) {
         throw std::invalid_argument("worker notification startup timeout must be in (0, 1 minute]");
     }
     wake_ = make_native_wake_pair(options.startup_timeout_.value());
@@ -1620,8 +1597,7 @@ worker_notification_state::worker_notification_state(asio::io_context& io_contex
 
 worker_notification_state::~worker_notification_state() {
     const auto activity = activity_.load(std::memory_order_acquire);
-    if ((activity & count_mask) != 0 || wait_pending_ || wait_continuation_ ||
-        receiver_stream_.has_value() || wait_resource_.allocated()) {
+    if ((activity & count_mask) != 0 || wait_pending_ || wait_continuation_ || receiver_stream_.has_value() || wait_resource_.allocated()) {
         std::terminate();
     }
     retire_receiver();
@@ -1702,14 +1678,15 @@ bool worker_notification_state::begin_wait(std::coroutine_handle<> continuation)
     wait_pending_ = true;
     wait_continuation_ = continuation;
     try {
-        auto handler = asio::bind_allocator(
-            worker_notification_wait_allocator<std::byte>(wait_resource_),
+        auto handler = asio::bind_allocator(worker_notification_wait_allocator<std::byte>(wait_resource_),
 #ifdef _WIN32
             [this](const asio::error_code& error, std::size_t bytes_transferred) noexcept {
-                complete_wait(error, bytes_transferred);
-            }
+            complete_wait(error, bytes_transferred);
+        }
 #else
-            [this](const asio::error_code& error) noexcept { complete_wait(error, 0); }
+            [this](const asio::error_code& error) noexcept {
+            complete_wait(error, 0);
+        }
 #endif
         );
 #ifdef _WIN32
@@ -1773,8 +1750,7 @@ bool worker_notification_state::enter_producer() noexcept {
         if ((state_value & count_mask) == count_mask) {
             std::terminate();
         }
-        if (activity_.compare_exchange_weak(state_value, state_value + 1, std::memory_order_acq_rel,
-                std::memory_order_acquire)) {
+        if (activity_.compare_exchange_weak(state_value, state_value + 1, std::memory_order_acq_rel, std::memory_order_acquire)) {
             return true;
         }
     }
@@ -1849,8 +1825,7 @@ void worker_notification_state::retire_receiver() noexcept {
     wake_.close_receiver();
 }
 
-void worker_notification_state::complete_wait(
-    const std::error_code& error, std::size_t bytes_transferred) noexcept {
+void worker_notification_state::complete_wait(const std::error_code& error, std::size_t bytes_transferred) noexcept {
     if (!wait_pending_ || !wait_continuation_) {
         std::terminate();
     }
@@ -1886,9 +1861,7 @@ namespace {
 
 // The only place a notification's state is built; every public constructor
 // hands its runtime's io_context and worker_ref to this entry.
-[[nodiscard]] std::unique_ptr<worker_notification_state>
-make_worker_notification_state(
-    asio::io_context& io_context, const worker_ref& worker, worker_notification_options options) {
+[[nodiscard]] std::unique_ptr<worker_notification_state> make_worker_notification_state(asio::io_context& io_context, const worker_ref& worker, worker_notification_options options) {
     return std::make_unique<worker_notification_state>(io_context, worker, options);
 }
 
@@ -1898,8 +1871,8 @@ make_worker_notification_state(
 
 namespace ruvia {
 
-worker_notification::wait_operation::wait_operation(worker_notification& owner_value) noexcept
-    : owner_(&owner_value) {}
+worker_notification::wait_operation::wait_operation(worker_notification& owner_value) noexcept :
+    owner_(&owner_value) {}
 
 bool worker_notification::wait_operation::await_ready() {
     return owner_->state_->wait_ready();
@@ -1913,17 +1886,15 @@ worker_notification_wait_status worker_notification::wait_operation::await_resum
     return owner_->state_->take_wait_result();
 }
 
-worker_notification::worker_notification(state_pointer state) noexcept
-    : state_(std::move(state)),
-      wait_awaiter_(*this) {}
+worker_notification::worker_notification(state_pointer state) noexcept :
+    state_(std::move(state)),
+    wait_awaiter_(*this) {}
 
-worker_notification::worker_notification(
-    worker_runtime& runtime, worker_notification_options options)
-    : worker_notification(detail::make_worker_notification_state(runtime.io_context(), runtime.worker(), options)) {}
+worker_notification::worker_notification(worker_runtime& runtime, worker_notification_options options) :
+    worker_notification(detail::make_worker_notification_state(runtime.io_context(), runtime.worker(), options)) {}
 
-worker_notification::worker_notification(
-    const event_loop& loop, worker_notification_options options)
-    : worker_notification(detail::make_worker_notification_state(loop.io_context(), loop.worker(), options)) {}
+worker_notification::worker_notification(const event_loop& loop, worker_notification_options options) :
+    worker_notification(detail::make_worker_notification_state(loop.io_context(), loop.worker(), options)) {}
 worker_notification::~worker_notification() = default;
 
 worker_notification_status worker_notification::notify() noexcept {

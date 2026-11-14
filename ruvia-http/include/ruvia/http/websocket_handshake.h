@@ -48,8 +48,7 @@ public:
     }
 
     template <std::integral integer_type>
-    [[nodiscard]] static constexpr std::optional<websocket_close_code> try_from_value(
-        integer_type value) noexcept {
+    [[nodiscard]] static constexpr std::optional<websocket_close_code> try_from_value(integer_type value) noexcept {
         if (!is_valid_value(value)) {
             return std::nullopt;
         }
@@ -59,9 +58,7 @@ public:
     template <std::integral integer_type>
     [[nodiscard]] static constexpr bool is_valid_value(integer_type value) noexcept {
         const auto integer_value = +value;
-        return (integer_value >= 1000 && integer_value <= 1003) ||
-               (integer_value >= 1007 && integer_value <= 1014) ||
-               (integer_value >= 3000 && integer_value <= 4999);
+        return (integer_value >= 1000 && integer_value <= 1003) || (integer_value >= 1007 && integer_value <= 1014) || (integer_value >= 3000 && integer_value <= 4999);
     }
 
     [[nodiscard]] constexpr std::uint16_t value() const noexcept {
@@ -73,8 +70,8 @@ public:
 private:
     struct validated_tag_type {};
 
-    constexpr websocket_close_code(std::uint16_t value, validated_tag_type) noexcept
-        : value_(value) {}
+    constexpr websocket_close_code(std::uint16_t value, validated_tag_type) noexcept :
+        value_(value) {}
 
     std::uint16_t value_;
 };
@@ -88,13 +85,11 @@ inline constexpr auto going_away = websocket_close_code::from_value(1001);
 inline constexpr auto internal_error = websocket_close_code::from_value(1011);
 }  // namespace websocket_close_status
 
-enum class websocket_opcode : std::uint8_t {
-    text = 0x1,
+enum class websocket_opcode : std::uint8_t { text = 0x1,
     binary = 0x2,
     close = 0x8,
     ping = 0x9,
-    pong = 0xA
-};
+    pong = 0xA };
 // Exact RFC 7692 negotiation, including independent sender dictionaries and
 // windows. Omitted max-window parameters imply 15; presence also controls the
 // negotiated extension's wire metadata.
@@ -157,8 +152,7 @@ public:
     // Construct a zero-copy message over caller-owned payload storage, rejecting
     // direct owning-string temporaries. Keep that storage alive and unchanged
     // until the view, or a send operation borrowing it, is no longer in use.
-    [[nodiscard]] static constexpr websocket_message borrow(
-        websocket_opcode opcode, borrowed_text payload_value) noexcept {
+    [[nodiscard]] static constexpr websocket_message borrow(websocket_opcode opcode, borrowed_text payload_value) noexcept {
         return websocket_message(opcode, payload_value.view());
     }
 
@@ -188,9 +182,9 @@ public:
     }
 
 private:
-    constexpr websocket_message(websocket_opcode opcode, std::string_view payload_value) noexcept
-        : opcode_(opcode),
-          payload_(payload_value) {}
+    constexpr websocket_message(websocket_opcode opcode, std::string_view payload_value) noexcept :
+        opcode_(opcode),
+        payload_(payload_value) {}
 
     websocket_opcode opcode_{websocket_opcode::text};
     std::string_view payload_;
@@ -211,14 +205,12 @@ enum class websocket_frame_submit_status : std::uint8_t {
     // of its own opcode may be submitted until its final fragment.
     message_in_progress
 };
-enum class websocket_close_submit_status : std::uint8_t {
-    accepted,
+enum class websocket_close_submit_status : std::uint8_t { accepted,
     already_closing,
     closed,
     invalid_code,
     invalid_reason,
-    reason_too_large
-};
+    reason_too_large };
 enum class websocket_abort_disposition : std::uint8_t { abort_transport,
     no_transport_action };
 // Why a WebSocket session ended, as this endpoint observed it; none while it is
@@ -278,11 +270,10 @@ public:
 
 private:
     friend class websocket_connection;
-    constexpr websocket_output_plan(std::string_view bytes_value, std::string_view borrowed_bytes_value,
-        websocket_transport_disposition disposition) noexcept
-        : bytes_(bytes_value),
-          borrowed_bytes_(borrowed_bytes_value),
-          disposition_(disposition) {}
+    constexpr websocket_output_plan(std::string_view bytes_value, std::string_view borrowed_bytes_value, websocket_transport_disposition disposition) noexcept :
+        bytes_(bytes_value),
+        borrowed_bytes_(borrowed_bytes_value),
+        disposition_(disposition) {}
     std::string_view bytes_;
     std::string_view borrowed_bytes_;
     websocket_transport_disposition disposition_;
@@ -303,8 +294,8 @@ public:
 
 private:
     friend class websocket_event;
-    explicit constexpr websocket_ping_event(std::string_view payload_value) noexcept
-        : payload_(payload_value) {}
+    explicit constexpr websocket_ping_event(std::string_view payload_value) noexcept :
+        payload_(payload_value) {}
     std::string_view payload_;
 };
 
@@ -316,8 +307,8 @@ public:
 
 private:
     friend class websocket_event;
-    explicit constexpr websocket_pong_event(std::string_view payload_value) noexcept
-        : payload_(payload_value) {}
+    explicit constexpr websocket_pong_event(std::string_view payload_value) noexcept :
+        payload_(payload_value) {}
     std::string_view payload_;
 };
 
@@ -334,9 +325,9 @@ public:
 
 private:
     friend class websocket_event;
-    constexpr websocket_close_event(std::uint16_t close_code, std::string_view reason) noexcept
-        : close_code_(close_code),
-          reason_(reason) {}
+    constexpr websocket_close_event(std::uint16_t close_code, std::string_view reason) noexcept :
+        close_code_(close_code),
+        reason_(reason) {}
     std::uint16_t close_code_;
     std::string_view reason_;
 };
@@ -349,8 +340,8 @@ public:
 
 private:
     friend class websocket_event;
-    explicit constexpr websocket_protocol_error_event(std::uint16_t close_code) noexcept
-        : close_code_(close_code) {}
+    explicit constexpr websocket_protocol_error_event(std::uint16_t close_code) noexcept :
+        close_code_(close_code) {}
     std::uint16_t close_code_;
 };
 
@@ -396,12 +387,11 @@ public:
 
 private:
     friend class websocket_connection;
-    using value_type = std::variant<websocket_message, websocket_ping_event, websocket_pong_event,
-        websocket_close_event, websocket_protocol_error_event, websocket_transport_end_event>;
+    using value_type = std::variant<websocket_message, websocket_ping_event, websocket_pong_event, websocket_close_event, websocket_protocol_error_event, websocket_transport_end_event>;
     static_assert(static_cast<std::uint8_t>(websocket_event_kind::transport_end) + 1 == std::variant_size_v<value_type>);
     template <typename event_type>
-    explicit websocket_event(event_type event) noexcept
-        : value_(std::move(event)) {}
+    explicit websocket_event(event_type event) noexcept :
+        value_(std::move(event)) {}
     [[nodiscard]] static websocket_event message(websocket_opcode opcode, std::string_view payload_value) noexcept {
         return websocket_event(websocket_message::borrow(opcode, payload_value));
     }
@@ -463,22 +453,18 @@ public:
     // level is 0 through 9 and the negotiated window 8 through 15; anything
     // else throws std::invalid_argument. false reports a codec failure;
     // allocation exceptions propagate with their original type.
-    [[nodiscard]] bool deflate_message(
-        std::string_view payload, std::string& out, int compression_level, int window_bits);
+    [[nodiscard]] bool deflate_message(std::string_view payload, std::string& out, int compression_level, int window_bits);
 
     // Appends the decompressed message to `out`, bounded by `message_limit`
     // across everything this call appends (RFC 7692 section 7.2.2).
-    [[nodiscard]] websocket_inflate_result inflate_message(
-        std::string_view payload, std::string& out, protocol_byte_limit message_limit);
+    [[nodiscard]] websocket_inflate_result inflate_message(std::string_view payload, std::string& out, protocol_byte_limit message_limit);
 
 private:
     static constexpr int min_window_bits = 8;
     static constexpr int max_window_bits = 15;
     static constexpr int compression_levels = 10;
 
-    std::array<detail::zlib_deflate_stream*,
-        static_cast<std::size_t>((max_window_bits - min_window_bits + 1) * compression_levels)>
-        deflaters_{};
+    std::array<detail::zlib_deflate_stream*, static_cast<std::size_t>((max_window_bits - min_window_bits + 1) * compression_levels)> deflaters_{};
     detail::zlib_inflate_stream* inflater_{nullptr};
 };
 
@@ -502,8 +488,8 @@ struct websocket_frame_options final {
 // bytes would expire before the transport writes them.
 class websocket_borrowed_payload final {
 public:
-    explicit constexpr websocket_borrowed_payload(borrowed_text bytes) noexcept
-        : bytes_(bytes) {}
+    explicit constexpr websocket_borrowed_payload(borrowed_text bytes) noexcept :
+        bytes_(bytes) {}
 
     [[nodiscard]] constexpr std::string_view bytes() const noexcept {
         return bytes_.view();
@@ -576,8 +562,7 @@ public:
     void notify_transport_eof() noexcept;
     // `cause` tells why the driver aborts (none records aborted); an earlier
     // termination cause is kept.
-    [[nodiscard]] websocket_abort_disposition abort(
-        websocket_termination cause = websocket_termination::aborted) noexcept;
+    [[nodiscard]] websocket_abort_disposition abort(websocket_termination cause = websocket_termination::aborted) noexcept;
     [[nodiscard]] websocket_liveness_mode liveness_mode() const noexcept;
     [[nodiscard]] websocket_termination termination() const noexcept;
     // RFC 6455 wire bytes of whole frames: header, mask key and payload as
@@ -605,17 +590,14 @@ public:
     // can be retried unless resetting the codec also failed, in which case
     // liveness_mode() reports inactive.
     // This form copies the payload into the connection's output before returning.
-    [[nodiscard]] websocket_frame_submit_status submit_frame(
-        websocket_opcode opcode, std::string_view payload, websocket_frame_options options = {});
+    [[nodiscard]] websocket_frame_submit_status submit_frame(websocket_opcode opcode, std::string_view payload, websocket_frame_options options = {});
     // The same submission queuing an uncompressed, unmasked payload by
     // reference: output_plan() exposes it as borrowed_bytes() after the frame
     // header. Its bytes must stay alive and unchanged until consume_output()
     // has acknowledged them, abort(), or destruction. A masked (client) or
     // compressed frame, or a payload overlapping the pending output, is copied.
-    [[nodiscard]] websocket_frame_submit_status submit_frame(
-        websocket_opcode opcode, websocket_borrowed_payload payload, websocket_frame_options options = {});
-    [[nodiscard]] websocket_close_submit_status submit_close(
-        websocket_close_code code, std::string_view reason);
+    [[nodiscard]] websocket_frame_submit_status submit_frame(websocket_opcode opcode, websocket_borrowed_payload payload, websocket_frame_options options = {});
+    [[nodiscard]] websocket_close_submit_status submit_close(websocket_close_code code, std::string_view reason);
 
 private:
     class impl_type;
@@ -673,10 +655,9 @@ public:
 
 private:
     [[nodiscard]] bool append_elements(std::string_view value, bool skip_duplicates) noexcept {
-        return detail::http_visit_token_list(value, detail::http_field_list_role::recipient,
-                   [this, skip_duplicates](std::string_view protocol) noexcept {
-                       return (skip_duplicates && contains(protocol)) || append(protocol);
-                   }) == detail::http_field_list_parse_status::ok;
+        return detail::http_visit_token_list(value, detail::http_field_list_role::recipient, [this, skip_duplicates](std::string_view protocol) noexcept {
+            return (skip_duplicates && contains(protocol)) || append(protocol);
+        }) == detail::http_field_list_parse_status::ok;
     }
 
     std::array<std::string_view, max_websocket_subprotocols> protocols_{};
@@ -727,8 +708,8 @@ private:
         unsupported_version,
         unsupported_subprotocol };
 
-    explicit constexpr websocket_handshake_failure(kind_type kind) noexcept
-        : kind_(kind) {}
+    explicit constexpr websocket_handshake_failure(kind_type kind) noexcept :
+        kind_(kind) {}
 
     kind_type kind_;
 };
@@ -786,11 +767,8 @@ private:
 class http2_connection;
 class http2_stream_state;
 class websocket_request_header_validator;
-inline constexpr std::string_view websocket_switching_protocols_head_prefix =
-    "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ";
-[[nodiscard]] websocket_handshake_validation_result validate_http2_websocket_handshake(
-    const http2_stream_state&, const http_request&,
-    websocket_handshake_validation_options) noexcept;
+inline constexpr std::string_view websocket_switching_protocols_head_prefix = "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ";
+[[nodiscard]] websocket_handshake_validation_result validate_http2_websocket_handshake(const http2_stream_state&, const http_request&, websocket_handshake_validation_options) noexcept;
 }  // namespace detail
 
 class websocket_handshake_validation_result final {
@@ -807,47 +785,33 @@ public:
 
 private:
     friend class detail::websocket_request_header_validator;
-    friend websocket_handshake_validation_result validate_http2_websocket_handshake(
-        http2_connection&, std::uint32_t, const http_request&,
-        websocket_handshake_validation_options) noexcept;
-    friend websocket_handshake_validation_result detail::validate_http2_websocket_handshake(
-        const detail::http2_stream_state&, const http_request&,
-        websocket_handshake_validation_options) noexcept;
-    friend websocket_handshake_validation_result validate_http3_websocket_handshake(
-        const http3_request_head&, const http_request&, websocket_handshake_validation_options) noexcept;
-    friend websocket_handshake_validation_result validate_websocket_handshake(
-        const http_request&, const http1_request_body_plan&, websocket_handshake_validation_options) noexcept;
+    friend websocket_handshake_validation_result validate_http2_websocket_handshake(http2_connection&, std::uint32_t, const http_request&, websocket_handshake_validation_options) noexcept;
+    friend websocket_handshake_validation_result detail::validate_http2_websocket_handshake(const detail::http2_stream_state&, const http_request&, websocket_handshake_validation_options) noexcept;
+    friend websocket_handshake_validation_result validate_http3_websocket_handshake(const http3_request_head&, const http_request&, websocket_handshake_validation_options) noexcept;
+    friend websocket_handshake_validation_result validate_websocket_handshake(const http_request&, const http1_request_body_plan&, websocket_handshake_validation_options) noexcept;
 
     using value_type = std::variant<websocket_handshake_accepted, websocket_handshake_failure>;
 
-    explicit constexpr websocket_handshake_validation_result(
-        websocket_handshake_accepted accepted) noexcept
-        : value_(accepted) {}
+    explicit constexpr websocket_handshake_validation_result(websocket_handshake_accepted accepted) noexcept :
+        value_(accepted) {}
 
-    explicit constexpr websocket_handshake_validation_result(
-        websocket_handshake_failure failure) noexcept
-        : value_(failure) {}
+    explicit constexpr websocket_handshake_validation_result(websocket_handshake_failure failure) noexcept :
+        value_(failure) {}
 
     [[nodiscard]] static constexpr websocket_handshake_validation_result make_accepted() noexcept {
         return websocket_handshake_validation_result(websocket_handshake_accepted());
     }
 
-    [[nodiscard]] static constexpr websocket_handshake_validation_result
-    make_invalid_request() noexcept {
-        return websocket_handshake_validation_result(
-            websocket_handshake_failure(websocket_handshake_failure::kind_type::invalid_request));
+    [[nodiscard]] static constexpr websocket_handshake_validation_result make_invalid_request() noexcept {
+        return websocket_handshake_validation_result(websocket_handshake_failure(websocket_handshake_failure::kind_type::invalid_request));
     }
 
-    [[nodiscard]] static constexpr websocket_handshake_validation_result
-    make_unsupported_version() noexcept {
-        return websocket_handshake_validation_result(
-            websocket_handshake_failure(websocket_handshake_failure::kind_type::unsupported_version));
+    [[nodiscard]] static constexpr websocket_handshake_validation_result make_unsupported_version() noexcept {
+        return websocket_handshake_validation_result(websocket_handshake_failure(websocket_handshake_failure::kind_type::unsupported_version));
     }
 
-    [[nodiscard]] static constexpr websocket_handshake_validation_result
-    make_unsupported_subprotocol() noexcept {
-        return websocket_handshake_validation_result(
-            websocket_handshake_failure(websocket_handshake_failure::kind_type::unsupported_subprotocol));
+    [[nodiscard]] static constexpr websocket_handshake_validation_result make_unsupported_subprotocol() noexcept {
+        return websocket_handshake_validation_result(websocket_handshake_failure(websocket_handshake_failure::kind_type::unsupported_subprotocol));
     }
 
     value_type value_;
@@ -871,18 +835,16 @@ private:
     friend class http2_connection;
     friend class detail::http2_connection;
     friend class http3_connection;
-    websocket_extended_connect_negotiation(std::string subprotocol, websocket_compression compression) noexcept
-        : subprotocol_(std::move(subprotocol)),
-          compression_(compression) {}
+    websocket_extended_connect_negotiation(std::string subprotocol, websocket_compression compression) noexcept :
+        subprotocol_(std::move(subprotocol)),
+        compression_(compression) {}
     std::string subprotocol_;
     websocket_compression compression_;
 };
 
 // Validates an RFC 6455 HTTP/1.1 opening handshake, including the parser-owned
 // request-body framing plan. It does not create or write a response.
-[[nodiscard]] websocket_handshake_validation_result validate_websocket_handshake(
-    const http_request& request, const http1_request_body_plan& body_plan,
-    websocket_handshake_validation_options options = {}) noexcept;
+[[nodiscard]] websocket_handshake_validation_result validate_websocket_handshake(const http_request& request, const http1_request_body_plan& body_plan, websocket_handshake_validation_options options = {}) noexcept;
 
 // Owned HTTP/1.1 101 response plan. for_each_response_part emits stable views for
 // scatter-gather I/O; compression() configures the subsequent websocket driver
@@ -931,20 +893,18 @@ public:
     void for_each_response_part(visitor_type&&) const&& = delete;
 
 private:
-    friend websocket_server_handshake make_websocket_server_handshake(
-        const http_request&, websocket_server_handshake_options);
+    friend websocket_server_handshake make_websocket_server_handshake(const http_request&, websocket_server_handshake_options);
 
     inline static constexpr std::string_view subprotocol_header_prefix = "Sec-WebSocket-Protocol: ";
     inline static constexpr std::string_view extensions_header_prefix = "Sec-WebSocket-Extensions: ";
     inline static constexpr std::string_view crlf = "\r\n";
 
-    websocket_server_handshake(std::array<char, 28> accept, std::string subprotocol,
-        websocket_compression compression, std::vector<http_header> response_headers_value) noexcept
-        : accept_(accept),
-          subprotocol_(std::move(subprotocol)),
-          compression_(compression),
-          compression_extension_(compression),
-          response_headers_(std::move(response_headers_value)) {}
+    websocket_server_handshake(std::array<char, 28> accept, std::string subprotocol, websocket_compression compression, std::vector<http_header> response_headers_value) noexcept :
+        accept_(accept),
+        subprotocol_(std::move(subprotocol)),
+        compression_(compression),
+        compression_extension_(compression),
+        response_headers_(std::move(response_headers_value)) {}
 
     std::array<char, 28> accept_;
     std::string subprotocol_;
@@ -956,8 +916,7 @@ private:
 // Call after validate_websocket_handshake() succeeds. The selected subprotocol
 // and response fields are copied; the response plan borrows no
 // request or server-preference storage.
-[[nodiscard]] websocket_server_handshake make_websocket_server_handshake(
-    const http_request& request, websocket_server_handshake_options options = {});
+[[nodiscard]] websocket_server_handshake make_websocket_server_handshake(const http_request& request, websocket_server_handshake_options options = {});
 
 }  // namespace ruvia
 
@@ -997,9 +956,7 @@ namespace detail {
 // The server's Sec-WebSocket-Protocol and Sec-WebSocket-Extensions selection
 // against the offer; `extended` (RFC 8441) also rejects connection-specific
 // fields. The result view borrows `fields`.
-[[nodiscard]] std::variant<websocket_client_negotiation_result_view, websocket_client_handshake_error>
-validate_websocket_client_selection(
-    const websocket_client_negotiation& negotiation, std::span<const http_header> fields, bool extended);
+[[nodiscard]] std::variant<websocket_client_negotiation_result_view, websocket_client_handshake_error> validate_websocket_client_selection(const websocket_client_negotiation& negotiation, std::span<const http_header> fields, bool extended);
 }  // namespace detail
 
 // HTTP-version-independent RFC 6455/7692 client negotiation owner. Configuration
@@ -1023,16 +980,12 @@ public:
     std::span<const http_header> request_fields() const&& = delete;
     // The server's Sec-WebSocket-Protocol and Sec-WebSocket-Extensions selection
     // in `fields` alone, without status or connection-specific field checks.
-    [[nodiscard]] std::variant<websocket_client_negotiation_result_view, websocket_client_handshake_error>
-    validate_fields(std::span<const http_header> fields) const;
+    [[nodiscard]] std::variant<websocket_client_negotiation_result_view, websocket_client_handshake_error> validate_fields(std::span<const http_header> fields) const;
     template <detail::http_temporary_owning_range<http_header> fields_type>
-    std::variant<websocket_client_negotiation_result_view, websocket_client_handshake_error>
-    validate_fields(fields_type&&) const = delete;
+    std::variant<websocket_client_negotiation_result_view, websocket_client_handshake_error> validate_fields(fields_type&&) const = delete;
 
 private:
-    friend std::variant<websocket_client_negotiation_result_view, websocket_client_handshake_error>
-    detail::validate_websocket_client_selection(
-        const websocket_client_negotiation&, std::span<const http_header>, bool);
+    friend std::variant<websocket_client_negotiation_result_view, websocket_client_handshake_error> detail::validate_websocket_client_selection(const websocket_client_negotiation&, std::span<const http_header>, bool);
 
     websocket_client_deflate_offer deflate_;
     std::array<http_header, 3> fields_{};
@@ -1053,35 +1006,17 @@ class http1_parsed_client_response_head;
 // and any header the request writer would refuse.
 void validate_http1_websocket_client_handshake_configuration(std::span<const http_header_view> headers);
 
-[[nodiscard]] std::variant<prepared_http1_client_request, http1_client_request_buffer_too_small,
-    http1_client_request_prepare_error>
-prepare_http1_websocket_client_request(const http_origin_view& origin, std::string_view target,
-    std::span<const char, 24> encoded_key, const websocket_client_negotiation& negotiation,
-    std::span<const http_header> headers, std::span<char> head_buffer,
-    http_request_field_source source = http_request_field_source::generated);
-[[nodiscard]] std::variant<prepared_http1_client_request, http1_client_request_buffer_too_small,
-    http1_client_request_prepare_error>
-prepare_http1_websocket_client_request(const http_origin_view& origin, std::string_view target,
-    std::span<const char, 24> encoded_key, const websocket_client_negotiation& negotiation,
-    std::span<const http_header_view> headers, std::span<char> head_buffer,
-    http_request_field_source source = http_request_field_source::generated);
+[[nodiscard]] std::variant<prepared_http1_client_request, http1_client_request_buffer_too_small, http1_client_request_prepare_error> prepare_http1_websocket_client_request(const http_origin_view& origin, std::string_view target, std::span<const char, 24> encoded_key, const websocket_client_negotiation& negotiation, std::span<const http_header> headers, std::span<char> head_buffer, http_request_field_source source = http_request_field_source::generated);
+[[nodiscard]] std::variant<prepared_http1_client_request, http1_client_request_buffer_too_small, http1_client_request_prepare_error> prepare_http1_websocket_client_request(const http_origin_view& origin, std::string_view target, std::span<const char, 24> encoded_key, const websocket_client_negotiation& negotiation, std::span<const http_header_view> headers, std::span<char> head_buffer, http_request_field_source source = http_request_field_source::generated);
 
 // Validates the 101 response against the key, then the server's selection
 // against the negotiation. The result view borrows the response head.
-[[nodiscard]] std::variant<websocket_client_negotiation_result_view, websocket_client_handshake_error>
-validate_http1_websocket_client_response(std::span<const char, 24> encoded_key,
-    const websocket_client_negotiation& negotiation, const http1_parsed_client_response_head& response RUVIA_LIFETIMEBOUND);
-std::variant<websocket_client_negotiation_result_view, websocket_client_handshake_error>
-validate_http1_websocket_client_response(std::span<const char, 24>,
-    const websocket_client_negotiation&, const http1_parsed_client_response_head&&) = delete;
+[[nodiscard]] std::variant<websocket_client_negotiation_result_view, websocket_client_handshake_error> validate_http1_websocket_client_response(std::span<const char, 24> encoded_key, const websocket_client_negotiation& negotiation, const http1_parsed_client_response_head& response RUVIA_LIFETIMEBOUND);
+std::variant<websocket_client_negotiation_result_view, websocket_client_handshake_error> validate_http1_websocket_client_response(std::span<const char, 24>, const websocket_client_negotiation&, const http1_parsed_client_response_head&&) = delete;
 
 // Extended CONNECT over HTTP/2 or HTTP/3: validates the server's 2xx final
 // head on a still-open stream, then its selection against the negotiation.
 // The result view borrows the response head.
-[[nodiscard]] std::variant<websocket_client_negotiation_result_view, websocket_client_handshake_error>
-validate_extended_connect_websocket_client_response(
-    const websocket_client_negotiation& negotiation, const http_client_response_head& head, bool stream_open);
-std::variant<websocket_client_negotiation_result_view, websocket_client_handshake_error>
-validate_extended_connect_websocket_client_response(
-    const websocket_client_negotiation&, const http_client_response_head&&, bool) = delete;
+[[nodiscard]] std::variant<websocket_client_negotiation_result_view, websocket_client_handshake_error> validate_extended_connect_websocket_client_response(const websocket_client_negotiation& negotiation, const http_client_response_head& head, bool stream_open);
+std::variant<websocket_client_negotiation_result_view, websocket_client_handshake_error> validate_extended_connect_websocket_client_response(const websocket_client_negotiation&, const http_client_response_head&&, bool) = delete;
 }  // namespace ruvia

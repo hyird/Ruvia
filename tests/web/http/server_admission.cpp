@@ -38,11 +38,7 @@ constexpr std::size_t admitted_requests = 4;
 constexpr auto phase_timeout = std::chrono::milliseconds(200);
 
 [[nodiscard]] ruvia::server_config admission_server_config() {
-    return {.worker_count_ = 1,
-        .idle_timeout_ = phase_timeout,
-        .connection_scan_interval_ = std::chrono::milliseconds(5),
-        .request_header_timeout_ = phase_timeout,
-        .request_body_timeout_ = phase_timeout};
+    return {.worker_count_ = 1, .idle_timeout_ = phase_timeout, .connection_scan_interval_ = std::chrono::milliseconds(5), .request_header_timeout_ = phase_timeout, .request_body_timeout_ = phase_timeout};
 }
 
 // Error-handler calls of the request in flight; the server worker writes, the
@@ -56,8 +52,7 @@ ruvia::task<ruvia::http_response> counted_error(ruvia::context& c, ruvia::http_e
 }
 
 [[maybe_unused]] const bool application_configured = [] {
-    ruvia::app().rate_limit(ruvia::rate_limit_config{
-        .rule_ = {.max_requests_ = admitted_requests, .window_ = std::chrono::minutes(10)}});
+    ruvia::app().rate_limit(ruvia::rate_limit_config{.rule_ = {.max_requests_ = admitted_requests, .window_ = std::chrono::minutes(10)}});
     ruvia::app().trusted_proxies({.cidrs_ = {"127.0.0.1/32"}});
     ruvia::app().on_error(&counted_error);
     return true;
@@ -99,8 +94,7 @@ class admission_routes final {
 
 // Sends one GET on a fresh connection that the server closes after its
 // response; returns everything the server wrote.
-std::string exchange(asio::io_context& io, const asio::ip::tcp::endpoint& server_endpoint, std::string_view target,
-    std::string_view headers) {
+std::string exchange(asio::io_context& io, const asio::ip::tcp::endpoint& server_endpoint, std::string_view target, std::string_view headers) {
     std::string request{"GET "};
     request.append(target).append(" HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n");
     request.append(headers).append("\r\n");
@@ -120,8 +114,7 @@ std::string lowercase(std::string_view text) {
 // Sends `prefix` on a fresh HTTP/1.1 connection, then stalls. Returns the
 // bytes the server wrote before closing, or nullopt when it is still open
 // after 5 s.
-std::optional<std::string> stalled_connection_output(const asio::ip::tcp::endpoint& server_endpoint,
-    const asio::ip::address_v4& local_address, std::string_view prefix) {
+std::optional<std::string> stalled_connection_output(const asio::ip::tcp::endpoint& server_endpoint, const asio::ip::address_v4& local_address, std::string_view prefix) {
     auto& io = ruvia::test::new_test_io_context();
     asio::ip::tcp::socket socket(io);
     socket.open(asio::ip::tcp::v4());
@@ -148,8 +141,7 @@ std::optional<std::string> stalled_connection_output(const asio::ip::tcp::endpoi
 std::string status_codes(std::string_view output) {
     constexpr std::string_view status_line = "HTTP/1.1 ";
     std::string codes{};
-    for (auto position = output.find(status_line); position != std::string_view::npos;
-        position = output.find(status_line, position + status_line.size())) {
+    for (auto position = output.find(status_line); position != std::string_view::npos; position = output.find(status_line, position + status_line.size())) {
         codes.append(output.substr(position + status_line.size(), 3));
     }
     return codes;
@@ -209,8 +201,7 @@ TEST(Ruvia, http1_server_closes_connections_stalled_past_request_phase_timeouts)
     EXPECT_TRUE((head ? std::string_view(*head) : std::string_view{}).find("plain") == std::string_view::npos);
     // Payload read: an admitted request whose body stalls. A distinct loopback
     // source address keeps it outside the rate-limit budget of the other case.
-    const auto upload = stalled_connection_output(server.endpoint(), asio::ip::make_address_v4("127.0.0.2"),
-        "POST /upload HTTP/1.1\r\nHost: a\r\nContent-Length: 10\r\n\r\nab");
+    const auto upload = stalled_connection_output(server.endpoint(), asio::ip::make_address_v4("127.0.0.2"), "POST /upload HTTP/1.1\r\nHost: a\r\nContent-Length: 10\r\n\r\nab");
     EXPECT_TRUE(upload.has_value());
     EXPECT_TRUE((upload ? std::string_view(*upload) : std::string_view{}).find("uploaded") == std::string_view::npos);
     EXPECT_TRUE((upload ? std::string_view(*upload) : std::string_view{}).find(" 429 ") == std::string_view::npos);
@@ -234,8 +225,7 @@ TEST(Ruvia, http1_failed_handler_error_response_is_not_renegotiated_into_406) {
         std::string request("GET /boom HTTP/1.1\r\nHost: a\r\nConnection: close\r\nAccept-Encoding: ");
         request.append(refused);
         request.append("\r\n\r\n");
-        const auto output =
-            stalled_connection_output(server.endpoint(), asio::ip::make_address_v4(source), request);
+        const auto output = stalled_connection_output(server.endpoint(), asio::ip::make_address_v4(source), request);
         EXPECT_TRUE(output.has_value());
         EXPECT_TRUE((output ? std::string_view(*output) : std::string_view{}).starts_with("HTTP/1.1 500 "));
         EXPECT_TRUE((output ? std::string_view(*output) : std::string_view{}).find("rejected") != std::string_view::npos);
@@ -304,33 +294,26 @@ TEST(Ruvia, http1_unread_buffered_body_keeps_the_connection) {
     auto& io = ruvia::test::new_test_io_context();
     ruvia::test::http_server_fixture server(io, admission_server_config());
     const auto output_from = [&](std::string_view source, std::string_view requests) {
-        auto output =
-            stalled_connection_output(server.endpoint(), asio::ip::make_address_v4(source), requests);
+        auto output = stalled_connection_output(server.endpoint(), asio::ip::make_address_v4(source), requests);
         EXPECT_TRUE(output.has_value());
         return std::move(output).value_or(std::string{});
     };
     const std::string next("GET /plain HTTP/1.1\r\nHost: a\r\n\r\n");
     const std::string length_body("Content-Length: 5\r\n\r\nhello");
 
-    EXPECT_EQ(
-        status_codes(output_from("127.0.0.10", std::string("POST /missing HTTP/1.1\r\nHost: a\r\n") + length_body + next)),
-        std::string("404200"));
+    EXPECT_EQ(status_codes(output_from("127.0.0.10", std::string("POST /missing HTTP/1.1\r\nHost: a\r\n") + length_body + next)), std::string("404200"));
     EXPECT_EQ(status_codes(output_from("127.0.0.11",
                   std::string("POST /plain HTTP/1.1\r\nHost: a\r\nTransfer-Encoding: chunked\r\n\r\n"
                               "5\r\nhello\r\n0\r\n\r\n") +
                       next)),
         std::string("405200"));
-    EXPECT_EQ(
-        status_codes(output_from("127.0.0.12", std::string("POST /ignore HTTP/1.1\r\nHost: a\r\n") + length_body + next)),
-        std::string("200200"));
-    const auto streamed =
-        output_from("127.0.0.13", std::string("POST /stream-ignore HTTP/1.1\r\nHost: a\r\n") + length_body + next);
+    EXPECT_EQ(status_codes(output_from("127.0.0.12", std::string("POST /ignore HTTP/1.1\r\nHost: a\r\n") + length_body + next)), std::string("200200"));
+    const auto streamed = output_from("127.0.0.13", std::string("POST /stream-ignore HTTP/1.1\r\nHost: a\r\n") + length_body + next);
     EXPECT_EQ(status_codes(streamed), std::string("200200"));
     EXPECT_TRUE(streamed.find("event") != std::string::npos);
 
     // Body bytes still to come: the response closes the connection.
-    const auto partial =
-        output_from("127.0.0.14", "POST /missing HTTP/1.1\r\nHost: a\r\nContent-Length: 100\r\n\r\nab");
+    const auto partial = output_from("127.0.0.14", "POST /missing HTTP/1.1\r\nHost: a\r\nContent-Length: 100\r\n\r\nab");
     EXPECT_EQ(status_codes(partial), std::string("404"));
     EXPECT_TRUE(partial.find("Connection: close\r\n") != std::string::npos);
 
@@ -340,11 +323,8 @@ TEST(Ruvia, http1_unread_buffered_body_keeps_the_connection) {
     for (std::size_t i = 0; i < admitted_requests; ++i) {
         spent.append(next);
     }
-    EXPECT_EQ(
-        status_codes(output_from("127.0.0.15", std::string(spent) + "POST /upload HTTP/1.1\r\nHost: a\r\n" + length_body + next)),
-        std::string("200200200200429429"));
-    const auto limited_partial =
-        output_from("127.0.0.16", std::string(spent) + "POST /upload HTTP/1.1\r\nHost: a\r\nContent-Length: 100\r\n\r\nab");
+    EXPECT_EQ(status_codes(output_from("127.0.0.15", std::string(spent) + "POST /upload HTTP/1.1\r\nHost: a\r\n" + length_body + next)), std::string("200200200200429429"));
+    const auto limited_partial = output_from("127.0.0.16", std::string(spent) + "POST /upload HTTP/1.1\r\nHost: a\r\nContent-Length: 100\r\n\r\nab");
     EXPECT_EQ(status_codes(limited_partial), std::string("200200200200429"));
     EXPECT_TRUE(limited_partial.find("Connection: close\r\n") != std::string::npos);
     server.finish();

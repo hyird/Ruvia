@@ -15,12 +15,19 @@ UseTab: Never
 # remaining clang-format rules.
 ColumnLimit: 0
 AlignAfterOpenBracket: DontAlign
+AlignOperands: DontAlign
+BracedInitializerIndentWidth: 4
+BreakAfterOpenBracketBracedList: true
+BreakBeforeCloseBracketBracedList: true
 BinPackArguments: true
 BinPackParameters: true
 AllowShortFunctionsOnASingleLine: Empty
+AllowShortLambdasOnASingleLine: Empty
 AllowShortEnumsOnASingleLine: true
+LambdaBodyIndentation: OuterScope
 InsertBraces: true
 BreakBeforeBraces: Attach
+BreakConstructorInitializers: AfterColon
 BreakTemplateDeclarations: Yes
 PackConstructorInitializers: Never
 ReflowComments: false

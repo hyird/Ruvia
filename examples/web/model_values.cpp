@@ -13,13 +13,7 @@
 
 #include "ruvia/web/middleware.h"
 #include "ruvia/web/model.h"
-RUVIA_MODEL(import_record,
-    RUVIA_REQUIRED_FIELD(name, ruvia::string),
-    RUVIA_REQUIRED_FIELD(count, ruvia::int64),
-    RUVIA_OPTIONAL_FIELD(ratio, ruvia::double_value),
-    RUVIA_OPTIONAL_FIELD(enabled, ruvia::bool_value),
-    RUVIA_OPTIONAL_FIELD(labels, ruvia::array<ruvia::string>),
-    RUVIA_OPTIONAL_FIELD(metadata, ruvia::json_object));
+RUVIA_MODEL(import_record, RUVIA_REQUIRED_FIELD(name, ruvia::string), RUVIA_REQUIRED_FIELD(count, ruvia::int64), RUVIA_OPTIONAL_FIELD(ratio, ruvia::double_value), RUVIA_OPTIONAL_FIELD(enabled, ruvia::bool_value), RUVIA_OPTIONAL_FIELD(labels, ruvia::array<ruvia::string>), RUVIA_OPTIONAL_FIELD(metadata, ruvia::json_object));
 
 int main() {
     try {
@@ -30,9 +24,9 @@ int main() {
             // views inside this scope.
             auto object = ruvia::json_object::parse(input);
             if (!object.for_each_field([](std::string_view name, const ruvia::json_value& value) {
-                    std::cout << name << "=" << value.view() << '\n';
-                    return true;  // false intentionally stops traversal.
-                })) {
+                std::cout << name << "=" << value.view() << '\n';
+                return true;  // false intentionally stops traversal.
+            })) {
                 throw std::runtime_error("object traversal did not complete");
             }
             // get(name) reports absent / found / repeated; a repeated name is
@@ -42,13 +36,13 @@ int main() {
                 throw std::runtime_error("labels must appear exactly once");
             }
             if (!labels.value() || !labels.value()->for_each_element([](const ruvia::json_value& element) {
-                    const auto label = element.get<ruvia::string>();
-                    if (!label) {
-                        return false;
-                    }
-                    std::cout << "label=" << label->view() << '\n';
-                    return true;
-                })) {
+                const auto label = element.get<ruvia::string>();
+                if (!label) {
+                    return false;
+                }
+                std::cout << "label=" << label->view() << '\n';
+                return true;
+            })) {
                 throw std::runtime_error("labels must be an array of strings");
             }
         }

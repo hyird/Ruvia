@@ -188,25 +188,20 @@ public:
         std::size_t procedure_status_hold_{0};
     };
 
-    explicit backend_startup_peer(protocol selected = protocol::postgresql, bool defer_authentication = true,
-        after_startup behavior = after_startup::idle, std::vector<postgres_reply> replies = {},
-        std::size_t connections = 1)
-        : backend_startup_peer(selected, defer_authentication, behavior, std::move(replies), {}, {}, connections) {}
+    explicit backend_startup_peer(protocol selected = protocol::postgresql, bool defer_authentication = true, after_startup behavior = after_startup::idle, std::vector<postgres_reply> replies = {}, std::size_t connections = 1) :
+        backend_startup_peer(selected, defer_authentication, behavior, std::move(replies), {}, {}, connections) {}
 
     // A PostgreSQL peer whose connections, in accept order, each answer their
     // own scripted replies.
-    explicit backend_startup_peer(std::vector<std::vector<postgres_reply>> connection_replies)
-        : backend_startup_peer(
-              protocol::postgresql, false, after_startup::idle, {}, std::move(connection_replies), {}, 0) {}
+    explicit backend_startup_peer(std::vector<std::vector<postgres_reply>> connection_replies) :
+        backend_startup_peer(protocol::postgresql, false, after_startup::idle, {}, std::move(connection_replies), {}, 0) {}
 
     // A MariaDB peer that answers its connections' COM_QUERY commands from
     // one script, in order. Unless `session_tracking` is false, it announces
     // session tracking and answers the client's setup of it on each new
     // connection itself, outside the script.
-    backend_startup_peer(std::vector<maria_reply> replies, after_startup behavior, std::size_t connections = 1,
-        bool session_tracking = true)
-        : backend_startup_peer(
-              protocol::mariadb, false, behavior, {}, {}, std::move(replies), connections, session_tracking) {}
+    backend_startup_peer(std::vector<maria_reply> replies, after_startup behavior, std::size_t connections = 1, bool session_tracking = true) :
+        backend_startup_peer(protocol::mariadb, false, behavior, {}, {}, std::move(replies), connections, session_tracking) {}
 
     ~backend_startup_peer() noexcept(false) {
         asio::post(io_, [this] {
@@ -246,7 +241,9 @@ public:
     }
 
     void authenticate() {
-        asio::post(io_, [this] { gate_.cancel(); });
+        asio::post(io_, [this] {
+            gate_.cancel();
+        });
     }
 
     void release_replies() {
@@ -265,12 +262,16 @@ public:
 
     // Every Parse message received so far, read on the peer's own thread.
     [[nodiscard]] std::vector<postgres_parse> postgres_parses() {
-        return asio::post(io_, asio::use_future([this] { return postgres_parses_; })).get();
+        return asio::post(io_, asio::use_future([this] {
+            return postgres_parses_;
+        })).get();
     }
 
     // Every COM_QUERY text received so far, read on the peer's own thread.
     [[nodiscard]] std::vector<std::string> maria_queries() {
-        return asio::post(io_, asio::use_future([this] { return maria_queries_; })).get();
+        return asio::post(io_, asio::use_future([this] {
+            return maria_queries_;
+        })).get();
     }
 
     // Every MariaDB command received so far: "query:<sql>", "prepare:<sql>",
@@ -278,18 +279,24 @@ public:
     // DATA LOCAL INFILE, "infile:<content>", where each parameter reads
     // "i:<n>", "u:<n>", "d:<n>", "t:<n>", "s:<text>" or "null".
     [[nodiscard]] std::vector<std::string> maria_commands() {
-        return asio::post(io_, asio::use_future([this] { return maria_commands_; })).get();
+        return asio::post(io_, asio::use_future([this] {
+            return maria_commands_;
+        })).get();
     }
 
     // Startups received so far, read on the peer's own thread.
     [[nodiscard]] std::size_t startups() {
-        return asio::post(io_, asio::use_future([this] { return startup_count_; })).get();
+        return asio::post(io_, asio::use_future([this] {
+            return startup_count_;
+        })).get();
     }
 
     // MariaDB connections that turned on session tracking, read on the
     // peer's own thread.
     [[nodiscard]] std::size_t maria_session_setups() {
-        return asio::post(io_, asio::use_future([this] { return maria_session_setups_; })).get();
+        return asio::post(io_, asio::use_future([this] {
+            return maria_session_setups_;
+        })).get();
     }
 
     void wait_for_disconnects() {
@@ -305,32 +312,29 @@ public:
 
 #ifdef RUVIA_ENABLE_DATABASE
     [[nodiscard]] db_config config() const {
-        return {.driver_ = db_driver::postgresql,
-            .host_ = "127.0.0.1",
-            .port_ = port(),
-            .tls_ = {.mode_ = client_tls_mode::disabled}};
+        return {.driver_ = db_driver::postgresql, .host_ = "127.0.0.1", .port_ = port(), .tls_ = {.mode_ = client_tls_mode::disabled}};
     }
 #endif
 
 private:
-    backend_startup_peer(protocol selected, bool defer_authentication, after_startup behavior,
-        std::vector<postgres_reply> replies, std::vector<std::vector<postgres_reply>> connection_replies,
-        std::vector<maria_reply> maria_replies, std::size_t connections, bool maria_session_tracking = true)
-        : gate_(io_, asio::steady_timer::time_point::max()),
-          defer_authentication_(defer_authentication),
-          maria_session_tracking_(maria_session_tracking),
-          after_startup_(behavior),
-          postgres_replies_(std::move(replies)),
-          connection_replies_(std::move(connection_replies)),
-          connection_next_(connection_replies_.size(), 0),
-          maria_replies_(std::move(maria_replies)),
-          startup_ready_(startup_.get_future()),
-          idle_close_ready_(idle_close_.get_future()),
-          acceptor_(io_, {asio::ip::tcp::v4(), 0}),
-          sockets_(make_sockets(io_, std::max(connections, connection_replies_.size()))),
-          work_(asio::make_work_guard(io_)),
-          done_(asio::co_spawn(io_, serve(selected), asio::use_future)),
-          thread_([this] { io_.run(); }) {}
+    backend_startup_peer(protocol selected, bool defer_authentication, after_startup behavior, std::vector<postgres_reply> replies, std::vector<std::vector<postgres_reply>> connection_replies, std::vector<maria_reply> maria_replies, std::size_t connections, bool maria_session_tracking = true) :
+        gate_(io_, asio::steady_timer::time_point::max()),
+        defer_authentication_(defer_authentication),
+        maria_session_tracking_(maria_session_tracking),
+        after_startup_(behavior),
+        postgres_replies_(std::move(replies)),
+        connection_replies_(std::move(connection_replies)),
+        connection_next_(connection_replies_.size(), 0),
+        maria_replies_(std::move(maria_replies)),
+        startup_ready_(startup_.get_future()),
+        idle_close_ready_(idle_close_.get_future()),
+        acceptor_(io_, {asio::ip::tcp::v4(), 0}),
+        sockets_(make_sockets(io_, std::max(connections, connection_replies_.size()))),
+        work_(asio::make_work_guard(io_)),
+        done_(asio::co_spawn(io_, serve(selected), asio::use_future)),
+        thread_([this] {
+            io_.run();
+        }) {}
 
     static std::vector<asio::ip::tcp::socket> make_sockets(asio::io_context& io, std::size_t count) {
         std::vector<asio::ip::tcp::socket> sockets;
@@ -360,8 +364,7 @@ private:
     }
 
     static std::uint32_t integer(const unsigned char* bytes) {
-        return (std::uint32_t{bytes[0]} << 24) | (std::uint32_t{bytes[1]} << 16) |
-               (std::uint32_t{bytes[2]} << 8) | std::uint32_t{bytes[3]};
+        return (std::uint32_t{bytes[0]} << 24) | (std::uint32_t{bytes[1]} << 16) | (std::uint32_t{bytes[2]} << 8) | std::uint32_t{bytes[3]};
     }
 
     static void append_integer(std::string& bytes, std::uint32_t value) {
@@ -413,14 +416,7 @@ private:
         }
         std::string response;
         message(response, 'R', std::string(4, '\0'));
-        for (const auto& [name, value] : std::array{
-                 std::pair{"server_version", "16.6"},
-                 std::pair{"server_encoding", "UTF8"},
-                 std::pair{"client_encoding", "UTF8"},
-                 std::pair{"DateStyle", "ISO, MDY"},
-                 std::pair{"integer_datetimes", "on"},
-                 std::pair{"standard_conforming_strings", "on"},
-                 std::pair{"TimeZone", "UTC"}}) {
+        for (const auto& [name, value] : std::array{std::pair{"server_version", "16.6"}, std::pair{"server_encoding", "UTF8"}, std::pair{"client_encoding", "UTF8"}, std::pair{"DateStyle", "ISO, MDY"}, std::pair{"integer_datetimes", "on"}, std::pair{"standard_conforming_strings", "on"}, std::pair{"TimeZone", "UTC"}}) {
             std::string parameter(name);
             parameter.push_back('\0');
             parameter.append(value);
@@ -441,8 +437,7 @@ private:
     // server does. A Parse that `reply` makes fail keeps no statement, and a
     // Bind of that name is recorded as 'b'; a Bind of any other name the
     // session does not hold is a client defect.
-    asio::awaitable<std::optional<std::string>> postgres_flight(asio::ip::tcp::socket& socket,
-        const postgres_reply* reply, std::map<std::string, std::size_t>& statements) {
+    asio::awaitable<std::optional<std::string>> postgres_flight(asio::ip::tcp::socket& socket, const postgres_reply* reply, std::map<std::string, std::size_t>& statements) {
         std::string messages;
         for (;;) {
             std::array<unsigned char, 5> header{};
@@ -486,8 +481,7 @@ private:
     }
 
     // Parse: statement name, query text, Int16 count, then one Int32 OID each.
-    void record_postgres_parse(
-        const std::vector<unsigned char>& body, std::map<std::string, std::size_t>& statements, bool fails) {
+    void record_postgres_parse(const std::vector<unsigned char>& body, std::map<std::string, std::size_t>& statements, bool fails) {
         auto [name, query_start] = text_at(body, 0);
         auto [sql, offset] = text_at(body, query_start);
         postgres_parse parsed;
@@ -515,8 +509,7 @@ private:
 
     // Bind: portal name, statement name, formats, then the values. False for a
     // name whose Parse failed.
-    [[nodiscard]] bool record_postgres_bind(
-        const std::vector<unsigned char>& body, const std::map<std::string, std::size_t>& statements) {
+    [[nodiscard]] bool record_postgres_bind(const std::vector<unsigned char>& body, const std::map<std::string, std::size_t>& statements) {
         const auto portal_end = text_at(body, 0).second;
         auto [name, offset] = text_at(body, portal_end);
         const auto statement = statements.find(name);
@@ -564,9 +557,7 @@ private:
 
     static void postgres_error(std::string& response, const postgres_reply& reply) {
         std::string fields;
-        for (const auto& [code, value] : std::array{std::pair{'S', std::string_view("ERROR")},
-                 std::pair{'C', std::string_view(reply.sql_state_)}, std::pair{'M', std::string_view(reply.error_)},
-                 std::pair{'R', std::string_view(reply.routine_)}}) {
+        for (const auto& [code, value] : std::array{std::pair{'S', std::string_view("ERROR")}, std::pair{'C', std::string_view(reply.sql_state_)}, std::pair{'M', std::string_view(reply.error_)}, std::pair{'R', std::string_view(reply.routine_)}}) {
             if (value.empty()) {
                 continue;
             }
@@ -581,8 +572,7 @@ private:
     // Answers each message of a flight in order, with `reply` supplying the
     // statement's outcome. An incomplete answer stops after the first row,
     // before CommandComplete and ReadyForQuery.
-    static void postgres_flight_response(
-        std::string& response, std::string_view messages, const postgres_reply& reply, bool complete = true) {
+    static void postgres_flight_response(std::string& response, std::string_view messages, const postgres_reply& reply, bool complete = true) {
         for (const char type : messages) {
             switch (type) {
                 case 'C':
@@ -598,9 +588,7 @@ private:
                     message(response, '1', {});
                     break;
                 case 'b': {
-                    const postgres_reply missing{.error_ = "prepared statement does not exist",
-                        .sql_state_ = "26000",
-                        .routine_ = "FetchPreparedStatement"};
+                    const postgres_reply missing{.error_ = "prepared statement does not exist", .sql_state_ = "26000", .routine_ = "FetchPreparedStatement"};
                     postgres_error(response, missing);
                     message(response, 'Z', std::string_view(&reply.status_, 1));
                     return;
@@ -639,8 +627,7 @@ private:
                         const auto& value = reply.rows_[index];
                         std::string row;
                         append_short(row, 1);
-                        append_integer(row, null ? std::numeric_limits<std::uint32_t>::max()
-                                                 : static_cast<std::uint32_t>(value.size()));
+                        append_integer(row, null ? std::numeric_limits<std::uint32_t>::max() : static_cast<std::uint32_t>(value.size()));
                         if (!null) {
                             row.append(value);
                         }
@@ -710,21 +697,18 @@ private:
 
     template <typename reply_type>
     [[nodiscard]] bool held(const reply_type& reply) const {
-        return (reply.deferred_ && !replies_released_) ||
-               (reply.hold_ != 0 && std::ranges::find(released_holds_, reply.hold_) == released_holds_.end());
+        return (reply.deferred_ && !replies_released_) || (reply.hold_ != 0 && std::ranges::find(released_holds_, reply.hold_) == released_holds_.end());
     }
 
     // Answers `replies` from `next` in order, each batch of flights in one
     // write. Returns true when a dropping reply closed the connection.
-    asio::awaitable<bool> postgres_script(asio::ip::tcp::socket& socket, std::vector<postgres_reply>& replies,
-        std::size_t& next, std::map<std::string, std::size_t>& statements) {
+    asio::awaitable<bool> postgres_script(asio::ip::tcp::socket& socket, std::vector<postgres_reply>& replies, std::size_t& next, std::map<std::string, std::size_t>& statements) {
         while (next < replies.size()) {
             const auto& reply = replies[next];
             std::vector<std::string> flights;
             while (flights.size() < std::max<std::size_t>(reply.batch_, 1)) {
                 const auto answer = next + flights.size();
-                auto messages =
-                    co_await postgres_flight(socket, answer < replies.size() ? &replies[answer] : nullptr, statements);
+                auto messages = co_await postgres_flight(socket, answer < replies.size() ? &replies[answer] : nullptr, statements);
                 if (!messages) {
                     co_return false;
                 }
@@ -759,8 +743,7 @@ private:
                 }
                 postgres_flight_response(response, messages, replies[next++]);
             }
-            co_await asio::async_write(socket,
-                asio::buffer(response.data() + written_prefix, response.size() - written_prefix), asio::use_awaitable);
+            co_await asio::async_write(socket, asio::buffer(response.data() + written_prefix, response.size() - written_prefix), asio::use_awaitable);
             if (reply.close_after_) {
                 close_idle_connection(socket);
                 co_return true;
@@ -795,8 +778,7 @@ private:
         co_await maria_packet(socket, greeting, 0);
         std::array<unsigned char, 4> header{};
         co_await asio::async_read(socket, asio::buffer(header), asio::use_awaitable);
-        const auto size = std::size_t{header[0]} | (std::size_t{header[1]} << 8) |
-                          (std::size_t{header[2]} << 16);
+        const auto size = std::size_t{header[0]} | (std::size_t{header[1]} << 8) | (std::size_t{header[2]} << 16);
         if (size > 65536) {
             throw std::runtime_error("invalid MariaDB handshake length");
         }
@@ -806,8 +788,7 @@ private:
         if (closing_) {
             co_return;
         }
-        co_await maria_packet(socket, std::string_view("\0\0\0\x02\0\0\0", 7),
-            static_cast<unsigned char>(header[3] + 1));
+        co_await maria_packet(socket, std::string_view("\0\0\0\x02\0\0\0", 7), static_cast<unsigned char>(header[3] + 1));
         if (!maria_session_tracking_) {
             co_return;
         }
@@ -816,21 +797,17 @@ private:
         // the server does.
         std::array<unsigned char, 4> setup_header{};
         co_await asio::async_read(socket, asio::buffer(setup_header), asio::use_awaitable);
-        const auto setup_size =
-            std::size_t{setup_header[0]} | (std::size_t{setup_header[1]} << 8) | (std::size_t{setup_header[2]} << 16);
+        const auto setup_size = std::size_t{setup_header[0]} | (std::size_t{setup_header[1]} << 8) | (std::size_t{setup_header[2]} << 16);
         std::string setup(setup_size, '\0');
         co_await asio::async_read(socket, asio::buffer(setup), asio::use_awaitable);
         constexpr std::string_view setup_start = "\x03SET SESSION session_track_system_variables = '";
         constexpr std::string_view setup_end = "', session_track_schema = ON";
-        if (!setup.starts_with(setup_start) || !setup.ends_with(setup_end) ||
-            setup.find("sql_mode,") == std::string::npos || setup.find('*') != std::string::npos) {
+        if (!setup.starts_with(setup_start) || !setup.ends_with(setup_end) || setup.find("sql_mode,") == std::string::npos || setup.find('*') != std::string::npos) {
             throw std::runtime_error("MariaDB client did not turn on session tracking first");
         }
         ++maria_session_setups_;
-        const auto tracked =
-            setup.substr(setup_start.size(), setup.size() - setup_start.size() - setup_end.size());
-        co_await maria_packet(
-            socket, maria_ok(0, 0, 2, {{"session_track_schema", "ON"}, {"session_track_system_variables", tracked}}), 1);
+        const auto tracked = setup.substr(setup_start.size(), setup.size() - setup_start.size() - setup_end.size());
+        co_await maria_packet(socket, maria_ok(0, 0, 2, {{"session_track_schema", "ON"}, {"session_track_system_variables", tracked}}), 1);
     }
 
     // Column count, one VARCHAR column definition and its EOF, and one row
@@ -879,8 +856,7 @@ private:
 
     // An OK packet; with `tracked` system variables it reports them as
     // changed (SERVER_SESSION_STATE_CHANGED), as session tracking does.
-    static std::string maria_ok(std::uint64_t affected, std::uint64_t insert_id, std::uint16_t status,
-        const std::vector<std::pair<std::string, std::string>>& tracked) {
+    static std::string maria_ok(std::uint64_t affected, std::uint64_t insert_id, std::uint16_t status, const std::vector<std::pair<std::string, std::string>>& tracked) {
         std::string packet(1, '\0');
         maria_length(packet, affected);
         maria_length(packet, insert_id);
@@ -1002,8 +978,7 @@ private:
                 case 0x08: {
                     const auto value = maria_integer(payload, offset, 8);
                     offset += 8;
-                    logged.append((type & 0x8000) != 0 ? std::string("u:") + std::to_string(value).c_str()
-                                                       : std::string("i:") + std::to_string(static_cast<std::int64_t>(value)).c_str());
+                    logged.append((type & 0x8000) != 0 ? std::string("u:") + std::to_string(value).c_str() : std::string("i:") + std::to_string(static_cast<std::int64_t>(value)).c_str());
                     break;
                 }
                 case 0x05: {
@@ -1034,11 +1009,9 @@ private:
         return logged;
     }
 
-    static void maria_column_definition(
-        std::string& response, const maria_column& definition, unsigned char& sequence) {
+    static void maria_column_definition(std::string& response, const maria_column& definition, unsigned char& sequence) {
         std::string column;
-        for (const std::string_view part : {std::string_view("def"), std::string_view(), std::string_view(),
-                 std::string_view(), std::string_view(definition.name_), std::string_view()}) {
+        for (const std::string_view part : {std::string_view("def"), std::string_view(), std::string_view(), std::string_view(), std::string_view(definition.name_), std::string_view()}) {
             column.push_back(static_cast<char>(part.size()));
             column.append(part);
         }
@@ -1072,9 +1045,7 @@ private:
         const auto id = ++maria_statement_ids_;
         const auto params = static_cast<std::size_t>(std::ranges::count(sql, '?'));
         maria_statements_[id] = maria_statement{params, {}};
-        const auto columns = executed == nullptr                  ? std::vector<maria_column>{}
-                             : executed->prepare_columns_.empty() ? maria_columns(*executed)
-                                                                  : executed->prepare_columns_;
+        const auto columns = executed == nullptr ? std::vector<maria_column>{} : (executed->prepare_columns_.empty() ? maria_columns(*executed) : executed->prepare_columns_);
         unsigned char sequence = 1;
         std::string packet(1, '\0');
         for (int shift = 0; shift < 32; shift += 8) {
@@ -1103,11 +1074,9 @@ private:
 
     // The packets answering one command, sequence numbers from 1: text rows
     // for a COM_QUERY, binary rows for a COM_STMT_EXECUTE.
-    static void maria_response(std::string& response, const maria_reply& reply, bool binary,
-        std::vector<std::pair<std::size_t, std::size_t>>& holds) {
+    static void maria_response(std::string& response, const maria_reply& reply, bool binary, std::vector<std::pair<std::size_t, std::size_t>>& holds) {
         unsigned char sequence = 1;
-        const auto ok = [&](std::uint64_t affected, std::uint64_t insert_id, std::uint16_t status,
-                            const std::vector<std::pair<std::string, std::string>>& tracked) {
+        const auto ok = [&](std::uint64_t affected, std::uint64_t insert_id, std::uint16_t status, const std::vector<std::pair<std::string, std::string>>& tracked) {
             maria_packet(response, maria_ok(affected, insert_id, status, tracked), sequence++);
         };
         const auto error = [&] {
@@ -1148,8 +1117,7 @@ private:
                 row.append((columns.size() + 9) / 8, '\0');
                 for (std::size_t index = 0; index < values.size(); ++index) {
                     if (!values[index].has_value()) {
-                        row[bitmap + (index + 2) / 8] =
-                            static_cast<char>(row[bitmap + (index + 2) / 8] | (1 << ((index + 2) % 8)));
+                        row[bitmap + (index + 2) / 8] = static_cast<char>(row[bitmap + (index + 2) / 8] | (1 << ((index + 2) % 8)));
                         continue;
                     }
                     row.append(*values[index]);
@@ -1235,8 +1203,7 @@ private:
     asio::awaitable<bool> maria_script(asio::ip::tcp::socket& socket) {
         while (next_maria_ < maria_replies_.size()) {
             const auto& reply = maria_replies_[next_maria_];
-            while (reply.read_hold_ != 0 &&
-                   std::ranges::find(released_holds_, reply.read_hold_) == released_holds_.end() && !closing_) {
+            while (reply.read_hold_ != 0 && std::ranges::find(released_holds_, reply.read_hold_) == released_holds_.end() && !closing_) {
                 std::error_code ignored;
                 co_await gate_.async_wait(asio::redirect_error(asio::use_awaitable, ignored));
             }
@@ -1335,17 +1302,11 @@ private:
                 // EOF/reset/connection abort/broken pipe are the client's public close path
                 // (a reply written after the client closed). Only cancellation
                 // caused by this peer's own teardown may suppress an aborted wait.
-                if (error.code() != asio::error::eof &&
-                    error.code() != asio::error::connection_reset &&
-                    error.code() != asio::error::connection_aborted &&
-                    error.code() != asio::error::broken_pipe &&
-                    !(closing_ && (error.code() == asio::error::operation_aborted ||
-                                      error.code() == asio::error::bad_descriptor))) {
+                if (error.code() != asio::error::eof && error.code() != asio::error::connection_reset && error.code() != asio::error::connection_aborted && error.code() != asio::error::broken_pipe && !(closing_ && (error.code() == asio::error::operation_aborted || error.code() == asio::error::bad_descriptor))) {
                     throw;
                 }
             }
-            const bool script_done = selected == protocol::mariadb ? next_maria_ >= maria_replies_.size()
-                                                                   : next_reply_ >= postgres_replies_.size();
+            const bool script_done = selected == protocol::mariadb ? next_maria_ >= maria_replies_.size() : next_reply_ >= postgres_replies_.size();
             if (closing_ || after_startup_ != after_startup::reaccept || script_done) {
                 co_return;
             }
@@ -1449,7 +1410,9 @@ inline void drive_backend_task(event_loop_attachment& attachment, task<void> ope
     // The observer runs before the root completion handler is retired. Keep the
     // owner running until root.wait() publishes completion, not merely until
     // the observer sets its flag.
-    std::jthread runner([&attachment] { attachment.run(); });
+    std::jthread runner([&attachment] {
+        attachment.run();
+    });
     completed.wait();
     io.stop();
     runner.join();
@@ -1485,8 +1448,7 @@ task<void> exercise_backend_client(client_type& client, callback_type& callback)
 }
 
 template <typename client_type, typename callback_type>
-void drive_backend_client(
-    event_loop_attachment& attachment, client_type& client, callback_type&& callback) {
+void drive_backend_client(event_loop_attachment& attachment, client_type& client, callback_type&& callback) {
     try {
         drive_backend_task(attachment, exercise_backend_client(client, callback));
     } catch (...) {
@@ -1498,11 +1460,8 @@ void drive_backend_client(
 
 #ifdef RUVIA_ENABLE_DATABASE
 template <typename callback_type>
-void with_connected_db_client(event_loop_attachment& attachment, db_config config,
-    backend_startup_peer::after_startup behavior, callback_type&& callback) {
-    backend_startup_peer peer(config.driver_ == db_driver::postgresql ? backend_startup_peer::protocol::postgresql
-                                                                      : backend_startup_peer::protocol::mariadb,
-        false, behavior, {}, config.pool_size_per_worker_);
+void with_connected_db_client(event_loop_attachment& attachment, db_config config, backend_startup_peer::after_startup behavior, callback_type&& callback) {
+    backend_startup_peer peer(config.driver_ == db_driver::postgresql ? backend_startup_peer::protocol::postgresql : backend_startup_peer::protocol::mariadb, false, behavior, {}, config.pool_size_per_worker_);
     config.host_ = "127.0.0.1";
     config.port_ = peer.port();
     config.username_ = "test";
@@ -1515,15 +1474,13 @@ void with_connected_db_client(event_loop_attachment& attachment, db_config confi
 
 template <typename callback_type>
 void with_connected_db_client(event_loop_attachment& attachment, db_config config, callback_type&& callback) {
-    with_connected_db_client(attachment, std::move(config), backend_startup_peer::after_startup::idle,
-        std::forward<callback_type>(callback));
+    with_connected_db_client(attachment, std::move(config), backend_startup_peer::after_startup::idle, std::forward<callback_type>(callback));
 }
 #endif
 
 #ifdef RUVIA_ENABLE_REDIS
 template <typename callback_type>
-void with_connected_redis_client(
-    event_loop_attachment& attachment, redis_config config, callback_type&& callback) {
+void with_connected_redis_client(event_loop_attachment& attachment, redis_config config, callback_type&& callback) {
     backend_startup_peer peer(backend_startup_peer::protocol::redis, false);
     config.host_ = "127.0.0.1";
     config.port_ = peer.port();

@@ -41,18 +41,14 @@ template <typename traits_type, typename allocator_type>
 inline constexpr bool is_http_owning_char_string<std::basic_string<char, traits_type, allocator_type>> = true;
 
 template <typename t_type>
-concept http_temporary_owning_char_string =
-    is_http_owning_char_string<std::remove_cvref_t<t_type>> && !std::is_lvalue_reference_v<t_type&&>;
+concept http_temporary_owning_char_string = is_http_owning_char_string<std::remove_cvref_t<t_type>> && !std::is_lvalue_reference_v<t_type&&>;
 
 // std::span<const element_type> parameters bind every contiguous range,
 // including temporary std::string, std::vector, and std::array values. Use this
 // shared predicate on deleted overloads of span entry points whose results
 // borrow the input; borrowed ranges (span, string_view) and lvalues still bind.
 template <typename range_type, typename element_type>
-concept http_temporary_owning_range =
-    !std::is_lvalue_reference_v<range_type&&> && std::ranges::contiguous_range<range_type> &&
-    !std::ranges::borrowed_range<range_type> &&
-    std::same_as<std::remove_cv_t<std::ranges::range_value_t<range_type>>, element_type>;
+concept http_temporary_owning_range = !std::is_lvalue_reference_v<range_type&&> && std::ranges::contiguous_range<range_type> && !std::ranges::borrowed_range<range_type> && std::same_as<std::remove_cv_t<std::ranges::range_value_t<range_type>>, element_type>;
 
 }  // namespace ruvia::detail
 
@@ -87,15 +83,15 @@ class borrowed_text final {
 public:
     constexpr borrowed_text() noexcept = default;
 
-    constexpr borrowed_text(std::string_view value) noexcept
-        : value_(value) {}
+    constexpr borrowed_text(std::string_view value) noexcept :
+        value_(value) {}
 
-    constexpr borrowed_text(const char* value) noexcept
-        : value_(detail::http_borrowed_c_string_view(value)) {}
+    constexpr borrowed_text(const char* value) noexcept :
+        value_(detail::http_borrowed_c_string_view(value)) {}
 
     template <typename traits_type, typename allocator_type>
-    constexpr borrowed_text(const std::basic_string<char, traits_type, allocator_type>& value) noexcept
-        : value_(value) {}
+    constexpr borrowed_text(const std::basic_string<char, traits_type, allocator_type>& value) noexcept :
+        value_(value) {}
 
     template <detail::http_temporary_owning_char_string string>
     borrowed_text(string&&) = delete;
@@ -111,8 +107,7 @@ public:
     }
 
     template <typename traits_type, typename allocator_type>
-    constexpr borrowed_text& operator=(
-        const std::basic_string<char, traits_type, allocator_type>& value) noexcept {
+    constexpr borrowed_text& operator=(const std::basic_string<char, traits_type, allocator_type>& value) noexcept {
         value_ = std::string_view(value);
         return *this;
     }
@@ -153,8 +148,7 @@ public:
     }
 
     template <typename traits_type, typename allocator_type>
-    friend constexpr bool operator==(
-        borrowed_text left, const std::basic_string<char, traits_type, allocator_type>& right) noexcept {
+    friend constexpr bool operator==(borrowed_text left, const std::basic_string<char, traits_type, allocator_type>& right) noexcept {
         return left.value_ == std::string_view(right);
     }
 
@@ -174,20 +168,16 @@ class borrowed_span final {
 public:
     constexpr borrowed_span() noexcept = default;
 
-    constexpr borrowed_span(std::span<const element_type> values) noexcept
-        : values_(values) {}
+    constexpr borrowed_span(std::span<const element_type> values) noexcept :
+        values_(values) {}
 
-    constexpr borrowed_span(std::span<element_type> values) noexcept
-        : values_(values) {}
+    constexpr borrowed_span(std::span<element_type> values) noexcept :
+        values_(values) {}
 
     template <typename range_type>
-        requires(!std::same_as<std::remove_cvref_t<range_type>, borrowed_span>) &&
-                (!std::same_as<std::remove_cvref_t<range_type>, std::span<const element_type>>) &&
-                (!std::same_as<std::remove_cvref_t<range_type>, std::span<element_type>>) &&
-                std::is_lvalue_reference_v<range_type&&> && std::ranges::contiguous_range<range_type> &&
-                std::same_as<std::remove_cv_t<std::ranges::range_value_t<range_type>>, element_type>
-    constexpr borrowed_span(range_type&& values) noexcept
-        : values_(std::ranges::data(values), std::ranges::size(values)) {}
+        requires(!std::same_as<std::remove_cvref_t<range_type>, borrowed_span>) && (!std::same_as<std::remove_cvref_t<range_type>, std::span<const element_type>>) && (!std::same_as<std::remove_cvref_t<range_type>, std::span<element_type>>) && std::is_lvalue_reference_v<range_type&&> && std::ranges::contiguous_range<range_type> && std::same_as<std::remove_cv_t<std::ranges::range_value_t<range_type>>, element_type>
+    constexpr borrowed_span(range_type&& values) noexcept :
+        values_(std::ranges::data(values), std::ranges::size(values)) {}
 
     template <detail::http_temporary_owning_range<element_type> range_type>
     borrowed_span(range_type&&) = delete;
@@ -205,11 +195,7 @@ public:
     }
 
     template <typename range_type>
-        requires(!std::same_as<std::remove_cvref_t<range_type>, borrowed_span>) &&
-                (!std::same_as<std::remove_cvref_t<range_type>, std::span<const element_type>>) &&
-                (!std::same_as<std::remove_cvref_t<range_type>, std::span<element_type>>) &&
-                std::is_lvalue_reference_v<range_type&&> && std::ranges::contiguous_range<range_type> &&
-                std::same_as<std::remove_cv_t<std::ranges::range_value_t<range_type>>, element_type>
+        requires(!std::same_as<std::remove_cvref_t<range_type>, borrowed_span>) && (!std::same_as<std::remove_cvref_t<range_type>, std::span<const element_type>>) && (!std::same_as<std::remove_cvref_t<range_type>, std::span<element_type>>) && std::is_lvalue_reference_v<range_type&&> && std::ranges::contiguous_range<range_type> && std::same_as<std::remove_cv_t<std::ranges::range_value_t<range_type>>, element_type>
     constexpr borrowed_span& operator=(range_type&& values) noexcept {
         values_ = std::span<const element_type>(std::ranges::data(values), std::ranges::size(values));
         return *this;
@@ -287,8 +273,7 @@ inline constexpr std::size_t websocket_idle_read_bytes = 512;
 
 // Clear a temporary buffer, returning unusually large storage to the allocator
 // while retaining small allocations for repeated worker-local operations.
-inline void http_clear_string_retaining_small(
-    std::string& target, std::size_t retained_bytes = http_retained_string_bytes) noexcept {
+inline void http_clear_string_retaining_small(std::string& target, std::size_t retained_bytes = http_retained_string_bytes) noexcept {
     target.clear();
     if (target.capacity() <= retained_bytes) {
         return;
@@ -403,10 +388,8 @@ public:
     // checked before narrowing. There is no implicit conversion back to an
     // integer: unwrap value() only at a native or formatting boundary.
     template <std::integral integer_type>
-    constexpr port_number(integer_type value)
-        : value_(is_valid_value(value)
-                     ? static_cast<std::uint16_t>(value)
-                     : throw std::invalid_argument("port number must be in 0..65535")) {}
+    constexpr port_number(integer_type value) :
+        value_(is_valid_value(value) ? static_cast<std::uint16_t>(value) : throw std::invalid_argument("port number must be in 0..65535")) {}
 
     template <std::integral integer_type>
     [[nodiscard]] static constexpr bool is_valid_value(integer_type value) noexcept {
@@ -430,8 +413,8 @@ public:
 private:
     struct validated_tag_type {};
 
-    constexpr port_number(std::uint16_t value, validated_tag_type) noexcept
-        : value_(value) {}
+    constexpr port_number(std::uint16_t value, validated_tag_type) noexcept :
+        value_(value) {}
 
     std::uint16_t value_{0};
 };
@@ -466,8 +449,7 @@ public:
         return result;
     }
 
-    [[nodiscard]] static constexpr ip_address ipv6(
-        const std::array<std::uint8_t, 16>& bytes, std::uint32_t scope_id = 0) noexcept {
+    [[nodiscard]] static constexpr ip_address ipv6(const std::array<std::uint8_t, 16>& bytes, std::uint32_t scope_id = 0) noexcept {
         ip_address result;
         result.bytes_ = bytes;
         result.scope_id_ = scope_id;
@@ -494,10 +476,7 @@ public:
         return scope_id_;
     }
     [[nodiscard]] constexpr bool is_ipv4_mapped() const noexcept {
-        return family_ == ip_address_family::ipv6 && scope_id_ == 0 &&
-               bytes_[0] == 0 && bytes_[1] == 0 && bytes_[2] == 0 && bytes_[3] == 0 &&
-               bytes_[4] == 0 && bytes_[5] == 0 && bytes_[6] == 0 && bytes_[7] == 0 &&
-               bytes_[8] == 0 && bytes_[9] == 0 && bytes_[10] == 0xff && bytes_[11] == 0xff;
+        return family_ == ip_address_family::ipv6 && scope_id_ == 0 && bytes_[0] == 0 && bytes_[1] == 0 && bytes_[2] == 0 && bytes_[3] == 0 && bytes_[4] == 0 && bytes_[5] == 0 && bytes_[6] == 0 && bytes_[7] == 0 && bytes_[8] == 0 && bytes_[9] == 0 && bytes_[10] == 0xff && bytes_[11] == 0xff;
     }
 
     [[nodiscard]] constexpr ip_address normalized_ipv4() const noexcept {
@@ -526,9 +505,9 @@ private:
 class ip_endpoint final {
 public:
     constexpr ip_endpoint() noexcept = default;
-    constexpr ip_endpoint(ip_address address, std::uint16_t port) noexcept
-        : address_(address),
-          port_(port) {}
+    constexpr ip_endpoint(ip_address address, std::uint16_t port) noexcept :
+        address_(address),
+        port_(port) {}
 
     [[nodiscard]] constexpr ip_address address() const noexcept {
         return address_;
@@ -589,8 +568,7 @@ inline constexpr std::size_t http_max_unsigned_decimal_size = 20;
 // of `output` and returns that prefix. Writers that measured an exact slice
 // with http_unsigned_decimal_size() copy the result instead of formatting in
 // place, so no pointer past the slice is ever formed.
-[[nodiscard]] inline std::string_view http_format_unsigned(
-    std::span<char, http_max_unsigned_decimal_size> output, std::uint64_t value) noexcept {
+[[nodiscard]] inline std::string_view http_format_unsigned(std::span<char, http_max_unsigned_decimal_size> output, std::uint64_t value) noexcept {
     const auto end = std::to_chars(output.data(), output.data() + output.size(), value).ptr;
     return {output.data(), static_cast<std::size_t>(end - output.data())};
 }
@@ -598,8 +576,7 @@ inline constexpr std::size_t http_max_unsigned_decimal_size = 20;
 // Sign plus the 19 digits of the most negative std::int64_t.
 inline constexpr std::size_t http_max_signed_decimal_size = 20;
 
-[[nodiscard]] inline std::string_view http_format_signed(
-    std::span<char, http_max_signed_decimal_size> output, std::int64_t value) noexcept {
+[[nodiscard]] inline std::string_view http_format_signed(std::span<char, http_max_signed_decimal_size> output, std::int64_t value) noexcept {
     const auto end = std::to_chars(output.data(), output.data() + output.size(), value).ptr;
     return {output.data(), static_cast<std::size_t>(end - output.data())};
 }
@@ -618,8 +595,7 @@ inline void http_append_signed(std::string& output, std::int64_t value) {
 // thrown as std::logic_error if formatting fails. Integers go through
 // http_append_signed() / http_append_unsigned(), which cannot fail.
 template <typename number_type>
-void http_append_formatted_number(
-    std::string& output, number_type value, [[maybe_unused]] const char* error_message) {
+void http_append_formatted_number(std::string& output, number_type value, [[maybe_unused]] const char* error_message) {
     if constexpr (std::is_integral_v<number_type> && std::is_signed_v<number_type>) {
         http_append_signed(output, value);
     } else if constexpr (std::is_integral_v<number_type>) {
@@ -637,8 +613,7 @@ void http_append_formatted_number(
 // Floating-point variant that rejects NaN and infinities with
 // std::invalid_argument before touching `output`.
 template <typename number_type>
-void http_append_formatted_finite_number(std::string& output, number_type value,
-    const char* finite_error_message, const char* format_error_message) {
+void http_append_formatted_finite_number(std::string& output, number_type value, const char* finite_error_message, const char* format_error_message) {
     if (!std::isfinite(value)) {
         throw std::invalid_argument(finite_error_message);
     }
@@ -716,8 +691,7 @@ struct utf8_sequence final {
 namespace ruvia {
 namespace detail {
 
-[[nodiscard]] inline std::size_t http_forward_encoded_groups(
-    const void* output, const void* input, std::size_t groups) noexcept {
+[[nodiscard]] inline std::size_t http_forward_encoded_groups(const void* output, const void* input, std::size_t groups) noexcept {
     const auto output_address = reinterpret_cast<std::uintptr_t>(output);
     const auto input_address = reinterpret_cast<std::uintptr_t>(input);
     if (output_address >= input_address) {
@@ -779,8 +753,7 @@ constexpr char* http_encode_lower_hex(char* output, std::span<const unsigned cha
 
 // Text is encoded byte by byte, like its unsigned char representation.
 inline char* http_encode_lower_hex(char* output, std::string_view bytes) noexcept {
-    return http_encode_lower_hex(
-        output, std::span(reinterpret_cast<const unsigned char*>(bytes.data()), bytes.size()));
+    return http_encode_lower_hex(output, std::span(reinterpret_cast<const unsigned char*>(bytes.data()), bytes.size()));
 }
 
 // `bytes` may alias `output`, up to and including its terminating NUL at
@@ -799,8 +772,7 @@ inline void http_append_lower_hex(std::string& output, std::span<const unsigned 
     output.resize(start + bytes.size() * 2);
     // An aliased source ends at the latest at the old terminating NUL, index
     // start, which resize rewrote with the same NUL.
-    const auto source =
-        aliased ? std::span(reinterpret_cast<const unsigned char*>(output.data()) + offset, bytes.size()) : bytes;
+    const auto source = aliased ? std::span(reinterpret_cast<const unsigned char*>(output.data()) + offset, bytes.size()) : bytes;
     http_encode_lower_hex(output.data() + start, source);
 }
 
@@ -813,10 +785,8 @@ inline void http_append_lower_hex(std::string& output, std::string_view bytes) {
 namespace ruvia {
 
 // RFC 4648 section 4 (standard) and section 5 (URL-safe) alphabets.
-inline constexpr std::string_view http_base64_alphabet =
-    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-inline constexpr std::string_view http_base64_url_alphabet =
-    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+inline constexpr std::string_view http_base64_alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+inline constexpr std::string_view http_base64_url_alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
 
 enum class http_base64_charset : std::uint8_t {
     standard,  // RFC 4648 section 4: '+' and '/'
@@ -829,12 +799,10 @@ enum class http_base64_padding : std::uint8_t {
 };
 
 // Throws std::length_error when the output length cannot fit std::size_t.
-[[nodiscard]] constexpr std::size_t http_base64_encoded_size(
-    std::size_t input_size, http_base64_padding padding = http_base64_padding::required) {
+[[nodiscard]] constexpr std::size_t http_base64_encoded_size(std::size_t input_size, http_base64_padding padding = http_base64_padding::required) {
     const auto groups = input_size / 3;
     const auto remainder = input_size % 3;
-    const std::size_t tail =
-        remainder == 0 ? 0 : (padding == http_base64_padding::required ? 4 : remainder + 1);
+    const std::size_t tail = remainder == 0 ? 0 : (padding == http_base64_padding::required ? 4 : remainder + 1);
     if (groups > ((std::numeric_limits<std::size_t>::max)() - tail) / 4) {
         throw std::length_error("base64 output length is not representable");
     }
@@ -844,11 +812,8 @@ enum class http_base64_padding : std::uint8_t {
 // The single base64 encoder. `output` must have room for
 // http_base64_encoded_size(input.size(), padding) characters and may overlap
 // `input` anywhere, including in place.
-inline void http_base64_encode(char* output, std::span<const std::uint8_t> input,
-    http_base64_charset charset = http_base64_charset::standard,
-    http_base64_padding padding = http_base64_padding::required) noexcept {
-    const auto alphabet =
-        charset == http_base64_charset::url_safe ? http_base64_url_alphabet : http_base64_alphabet;
+inline void http_base64_encode(char* output, std::span<const std::uint8_t> input, http_base64_charset charset = http_base64_charset::standard, http_base64_padding padding = http_base64_padding::required) noexcept {
+    const auto alphabet = charset == http_base64_charset::url_safe ? http_base64_url_alphabet : http_base64_alphabet;
     const bool padded = padding == http_base64_padding::required;
     // Group k reads input[3k, 3k + 3) before writing output[4k, 4k + 4).
     const auto encode_group = [output, input, alphabet, padded](std::size_t group) noexcept {
@@ -933,8 +898,7 @@ inline void http_base64_encode(char* output, std::span<const std::uint8_t> input
 // characters; one starting inside them, after the first, would overwrite
 // unread input and is rejected with nullopt before any write. Length and
 // ownership policy belongs to the caller.
-[[nodiscard]] constexpr std::optional<std::size_t> http_base64_decode(std::string_view input,
-    std::span<std::uint8_t> output, http_base64_charset charset, http_base64_padding padding) noexcept {
+[[nodiscard]] constexpr std::optional<std::size_t> http_base64_decode(std::string_view input, std::span<std::uint8_t> output, http_base64_charset charset, http_base64_padding padding) noexcept {
     auto data = input;
     if (padding == http_base64_padding::required) {
         if (input.size() % 4 != 0) {
@@ -967,8 +931,7 @@ inline void http_base64_encode(char* output, std::span<const std::uint8_t> input
         }
     }
     const auto value_of = [charset](char c) noexcept {
-        return charset == http_base64_charset::url_safe ? http_base64_url_decode_char(c)
-                                                        : http_base64_decode_char(c);
+        return charset == http_base64_charset::url_safe ? http_base64_url_decode_char(c) : http_base64_decode_char(c);
     };
     std::size_t out = 0;
     std::size_t in = 0;
@@ -990,8 +953,7 @@ inline void http_base64_encode(char* output, std::span<const std::uint8_t> input
     const auto first = value_of(data[in]);
     const auto second = value_of(data[in + 1]);
     const auto third = remainder == 3 ? value_of(data[in + 2]) : 0;
-    if ((first | second | third) < 0 || (remainder == 2 && (second & 0x0F) != 0) ||
-        (remainder == 3 && (third & 0x03) != 0)) {
+    if ((first | second | third) < 0 || (remainder == 2 && (second & 0x0F) != 0) || (remainder == 3 && (third & 0x03) != 0)) {
         return std::nullopt;
     }
     output[out++] = static_cast<std::uint8_t>((first << 2) | (second >> 4));
@@ -1016,8 +978,12 @@ enum class url_decode_mode : std::uint8_t { percent,
     constexpr std::size_t scalar_prefix_size = 32;
     const auto prefix = value.substr(0, value.size() <= scalar_scan_limit ? value.size() : scalar_prefix_size);
     const bool encoded = mode == url_decode_mode::form
-                             ? std::ranges::any_of(prefix, [](char c) noexcept { return c == '%' || c == '+'; })
-                             : std::ranges::any_of(prefix, [](char c) noexcept { return c == '%'; });
+        ? std::ranges::any_of(prefix, [](char c) noexcept {
+        return c == '%' || c == '+';
+    })
+        : std::ranges::any_of(prefix, [](char c) noexcept {
+        return c == '%';
+    });
     if (encoded) {
         return true;
     }
@@ -1025,15 +991,13 @@ enum class url_decode_mode : std::uint8_t { percent,
         return false;
     }
     value.remove_prefix(prefix.size());
-    return (mode == url_decode_mode::form ? value.find_first_of("%+") : value.find('%')) !=
-           std::string_view::npos;
+    return (mode == url_decode_mode::form ? value.find_first_of("%+") : value.find('%')) != std::string_view::npos;
 }
 
 // Decodes the pct-encoded triplet starting at input[index] (RFC 3986 2.1):
 // '%' followed by two hex digits. Returns no value when the triplet is
 // truncated, does not start with '%', or contains a non-hex digit.
-[[nodiscard]] constexpr std::optional<unsigned char> http_try_decode_percent_byte(
-    std::string_view input, std::size_t index) noexcept {
+[[nodiscard]] constexpr std::optional<unsigned char> http_try_decode_percent_byte(std::string_view input, std::size_t index) noexcept {
     if (index >= input.size() || input.size() - index < 3 || input[index] != '%') {
         return std::nullopt;
     }
@@ -1070,8 +1034,7 @@ inline void http_append_percent_byte(std::string& output, unsigned char byte) {
 
 namespace detail {
 template <typename visitor_type>
-[[nodiscard]] bool dispatch_url_encoded_pair_visitor(
-    visitor_type& visitor, std::string_view name, std::string_view value) {
+[[nodiscard]] bool dispatch_url_encoded_pair_visitor(visitor_type& visitor, std::string_view name, std::string_view value) {
     if constexpr (requires {
                       { visitor(name, value) } -> std::convertible_to<bool>;
                   }) {
@@ -1106,8 +1069,7 @@ template <typename visitor_type>
 // keeps a '%' that does not start a valid escape as a literal byte. `input`
 // may alias `storage`. Keep its owner alive until the result is consumed;
 // owning-string temporaries are rejected regardless of their contents.
-[[nodiscard]] std::optional<std::string_view> decode_url_component(
-    borrowed_text text, std::string& storage, url_decode_mode mode = url_decode_mode::percent);
+[[nodiscard]] std::optional<std::string_view> decode_url_component(borrowed_text text, std::string& storage, url_decode_mode mode = url_decode_mode::percent);
 
 // Origin-form path identity, the one canonical form shared by route matching,
 // path-scoped middleware and fallbacks, and decoded route parameters. A path
@@ -1193,8 +1155,7 @@ template <typename visitor_type>
         if (!pair.empty()) {
             const auto equals = pair.find('=');
             const auto name = equals == std::string_view::npos ? pair : pair.substr(0, equals);
-            const auto value =
-                equals == std::string_view::npos ? std::string_view{} : pair.substr(equals + 1);
+            const auto value = equals == std::string_view::npos ? std::string_view{} : pair.substr(equals + 1);
             if (!detail::dispatch_url_encoded_pair_visitor(visitor_ref, name, value)) {
                 return false;
             }

@@ -68,10 +68,7 @@ int main() {
         auto& app = ruvia::app();
         app.load_dotenv();
         const example::environment env_value(&app.env());
-        app.server({.process_signal_handlers_ = ruvia::process_signal_handler_policy::install})
-            .listen({.address_ = "127.0.0.1", .http_ = 8092})
-            .redis({.config_ = example::redis_config(env_value)})
-            .run();
+        app.server({.process_signal_handlers_ = ruvia::process_signal_handler_policy::install}).listen({.address_ = "127.0.0.1", .http_ = 8092}).redis({.config_ = example::redis_config(env_value)}).run();
     } catch (...) {
         std::cerr << ruvia::exception_text(std::current_exception()) << '\n';
         return 1;

@@ -147,8 +147,7 @@ struct session_response final {
     std::string cookie_{};
 };
 
-[[nodiscard]] session_response request(asio::io_context& io, const asio::ip::tcp::endpoint& endpoint,
-    std::string_view target, std::string_view cookie = {}) {
+[[nodiscard]] session_response request(asio::io_context& io, const asio::ip::tcp::endpoint& endpoint, std::string_view target, std::string_view cookie = {}) {
     asio::ip::tcp::socket socket(io);
     socket.connect(endpoint);
     const std::string wire = "GET " + std::string(target) + " HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\nCookie: " + std::string(cookie) + "\r\n\r\n";
@@ -206,9 +205,7 @@ TEST(Ruvia, session_cookie_replaces_a_same_name_cookie_set_by_the_handler) {
             continue;
         }
         ++session_cookies;
-        expired = expired || (header.value().starts_with("ruvia_session=;") &&
-                                 header.value().find("; Expires=Thu, 01 Jan 1970 00:00:00 GMT") != std::string_view::npos &&
-                                 header.value().find("Max-Age") == std::string_view::npos);
+        expired = expired || (header.value().starts_with("ruvia_session=;") && header.value().find("; Expires=Thu, 01 Jan 1970 00:00:00 GMT") != std::string_view::npos && header.value().find("Max-Age") == std::string_view::npos);
     }
     EXPECT_EQ(session_cookies, std::size_t{1});
     EXPECT_TRUE(expired);
@@ -226,12 +223,7 @@ TEST(Ruvia, session_ids_isolate_prefixes_and_preserve_fixed_length_lifecycle) {
         store.emplace("sess:" + std::string(48, 'g'), "existing");
         return store;
     }());
-    ruvia::app()
-        .redis({.config_ = {.host_ = "127.0.0.1", .port_ = peer.port(), .tls_ = {.mode_ = ruvia::client_tls_mode::disabled}, .pool_size_per_worker_ = 1, .connect_timeout_ = std::chrono::seconds(2), .command_timeout_ = std::chrono::seconds(2)}})
-        .use_at<ruvia::session_middleware>({.prefix_ = "/session-ids/a"},
-            ruvia::session_config{.cookie_name_ = "sid_a", .key_prefix_ = "sess:"})
-        .use_at<ruvia::session_middleware>({.prefix_ = "/session-ids/b"},
-            ruvia::session_config{.cookie_name_ = "sid_b", .key_prefix_ = "sess:a"});
+    ruvia::app().redis({.config_ = {.host_ = "127.0.0.1", .port_ = peer.port(), .tls_ = {.mode_ = ruvia::client_tls_mode::disabled}, .pool_size_per_worker_ = 1, .connect_timeout_ = std::chrono::seconds(2), .command_timeout_ = std::chrono::seconds(2)}}).use_at<ruvia::session_middleware>({.prefix_ = "/session-ids/a"}, ruvia::session_config{.cookie_name_ = "sid_a", .key_prefix_ = "sess:"}).use_at<ruvia::session_middleware>({.prefix_ = "/session-ids/b"}, ruvia::session_config{.cookie_name_ = "sid_b", .key_prefix_ = "sess:a"});
     auto& io = ruvia::test::new_test_io_context();
     ruvia::test::http_server_fixture server(io);
     const auto request = [&](std::string_view path, std::string_view cookie = {}) {
@@ -247,8 +239,7 @@ TEST(Ruvia, session_ids_isolate_prefixes_and_preserve_fixed_length_lifecycle) {
     // These IDs have actual stored values. Rejection must hide the data and
     // leave it unchanged across both clear and regenerate, not merely avoid a
     // backend error. Uppercase and non-hex IDs still remain invalid at length 48.
-    for (const auto& id : {std::string(47, 'b'), std::string(49, 'b'), std::string(128, 'b'),
-             std::string(48, 'B'), std::string(48, 'g')}) {
+    for (const auto& id : {std::string(47, 'b'), std::string(49, 'b'), std::string(128, 'b'), std::string(48, 'B'), std::string(48, 'g')}) {
         const auto cookie = std::string("sid_a=") + id;
         expect("/session-ids/a/read", cookie, "empty");
         expect("/session-ids/a/clear", cookie, "clear");
@@ -264,8 +255,7 @@ TEST(Ruvia, session_ids_isolate_prefixes_and_preserve_fixed_length_lifecycle) {
         EXPECT_TRUE(created.cookie_.starts_with("sid_b="));
         EXPECT_EQ(created.cookie_.size(), std::size_t{6 + 48});
         const auto alias = "sid_a=a" + std::string(std::string_view(created.cookie_).substr(6));
-        const auto response = expect(std::string("/session-ids/a/") + action, alias,
-            std::string_view(action) == "read" ? "empty" : action);
+        const auto response = expect(std::string("/session-ids/a/") + action, alias, std::string_view(action) == "read" ? "empty" : action);
         if (std::string_view(action) != "clear") {
             EXPECT_TRUE(response.cookie_.empty());
         }

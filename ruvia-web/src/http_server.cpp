@@ -104,9 +104,9 @@ std::shared_ptr<owned_listen_configs> own_listen(input_type input) {
 struct owned_endpoint final {
     std::string address_;
     port_number port_;
-    explicit owned_endpoint(const listener_endpoint& endpoint)
-        : address_(endpoint.address_.view()),
-          port_(endpoint.port_) {}
+    explicit owned_endpoint(const listener_endpoint& endpoint) :
+        address_(endpoint.address_.view()),
+        port_(endpoint.port_) {}
     listener_endpoint view() const {
         return {.address_ = address_, .port_ = port_};
     }
@@ -114,10 +114,10 @@ struct owned_endpoint final {
 
 struct socket_owner final {
     native_socket socket_;
-    explicit socket_owner(native_socket socket) noexcept
-        : socket_(socket) {}
-    socket_owner(socket_owner&& other) noexcept
-        : socket_(std::exchange(other.socket_, invalid_native_socket)) {}
+    explicit socket_owner(native_socket socket) noexcept :
+        socket_(socket) {}
+    socket_owner(socket_owner&& other) noexcept :
+        socket_(std::exchange(other.socket_, invalid_native_socket)) {}
     socket_owner(const socket_owner&) = delete;
     ~socket_owner() {
         close_native_socket(socket_);
@@ -127,9 +127,9 @@ struct socket_owner final {
 struct owned_adopt_options final {
     std::vector<std::byte> prefix_{};
     std::optional<ip_endpoint> remote_;
-    explicit owned_adopt_options(adopt_options options)
-        : prefix_(options.prefix_.begin(), options.prefix_.end()),
-          remote_(options.remote_) {}
+    explicit owned_adopt_options(adopt_options options) :
+        prefix_(options.prefix_.begin(), options.prefix_.end()),
+        remote_(options.remote_) {}
     adopt_options view() const noexcept {
         return {.prefix_ = prefix_, .remote_ = remote_};
     }
@@ -142,28 +142,24 @@ struct listener_candidate final {
     std::vector<sessions> sessions_;
 };
 
-listener_candidate load_candidate(const std::vector<std::shared_ptr<owned_listen_configs>>& inputs,
-    bool external, server_config config, const std::shared_ptr<http_server_callbacks>& callbacks,
-    std::size_t count, std::chrono::steady_clock::time_point origin) {
+listener_candidate load_candidate(const std::vector<std::shared_ptr<owned_listen_configs>>& inputs, bool external, server_config config, const std::shared_ptr<http_server_callbacks>& callbacks, std::size_t count, std::chrono::steady_clock::time_point origin) {
     listener_candidate result;
     const auto options = standalone_options(config, *callbacks, count);
     for (const auto& input : inputs) {
-        for (auto& listener_config : input->configs_) {
-            if (!listener_config.dispatch_) {
+        for (auto& entry : input->configs_) {
+            if (!entry.dispatch_) {
                 if (static_cast<bool>(callbacks->connection_) == static_cast<bool>(callbacks->request_stream_)) {
                     throw std::invalid_argument("standalone listener requires an unambiguous callback or explicit dispatch");
                 }
-                listener_config.dispatch_ = callbacks->connection_ ? listener_dispatch::connection : listener_dispatch::request_stream;
+                entry.dispatch_ = callbacks->connection_ ? listener_dispatch::connection : listener_dispatch::request_stream;
             }
         }
         auto loaded = input->load();
         for (const auto& definition : loaded) {
-            if (!definition.connection_ && !definition.request_stream_ &&
-                !std::holds_alternative<http_server_listener_definition::redirect_http_to_https>(definition.transport_)) {
+            if (!definition.connection_ && !definition.request_stream_ && !std::holds_alternative<http_server_listener_definition::redirect_http_to_https>(definition.transport_)) {
                 throw std::invalid_argument("HTTP server requires request_stream or connection dispatch");
             }
-            if (external && (definition.http3_ || definition.inherited_sockets_ ||
-                                std::holds_alternative<http_server_listener_definition::redirect_http_to_https>(definition.transport_))) {
+            if (external && (definition.http3_ || definition.inherited_sockets_ || std::holds_alternative<http_server_listener_definition::redirect_http_to_https>(definition.transport_))) {
                 throw std::invalid_argument("an externally accepted service cannot own a listener or redirect");
             }
             ensure_new_listener_endpoints(result.definitions_, std::span<const http_server_listener_definition>(&definition, 1));
@@ -178,9 +174,7 @@ void prepare_sessions(listener_candidate& candidate, std::size_t count, bool obs
     for (auto& worker : candidate.sessions_) {
         worker.reserve(candidate.definitions_.size());
         for (const auto& definition : candidate.definitions_) {
-            worker.push_back(std::holds_alternative<http_server_listener_definition::tls>(definition.transport_)
-                                 ? prepare_http_server_session_config(definition, observe)
-                                 : prepared_http_server_session{});
+            worker.push_back(std::holds_alternative<http_server_listener_definition::tls>(definition.transport_) ? prepare_http_server_session_config(definition, observe) : prepared_http_server_session{});
         }
     }
 }
@@ -235,8 +229,8 @@ class http_server_state final : public std::enable_shared_from_this<http_server_
     };
     struct activity final {
         http_server_state& self_;
-        explicit activity(http_server_state& self)
-            : self_(self) {
+        explicit activity(http_server_state& self) :
+            self_(self) {
             ++self_.controls_;
         }
         ~activity() {
@@ -246,40 +240,32 @@ class http_server_state final : public std::enable_shared_from_this<http_server_
     };
 
 public:
-    http_server_state(event_loop loop, std::shared_ptr<http_server_callbacks> callbacks, server_config config,
-        std::size_t index = 0, std::size_t count = 1
+    http_server_state(event_loop loop, std::shared_ptr<http_server_callbacks> callbacks, server_config config, std::size_t index = 0, std::size_t count = 1
 #if defined(RUVIA_ENABLE_HTTP3)
         ,
         std::shared_ptr<http3_worker_directory> directory = {}
 #endif
-        )
-        : loop_(require_loop(std::move(loop))),
-          worker_(loop_.worker()),
-          callbacks_(std::move(callbacks)),
-          options_(standalone_options(config, *callbacks_, count)),
-          inbound_budget_(options_.server_.max_inbound_buffer_bytes_per_worker_),
-          controllers_(std::span<const controller_registrar>{}),
-          routes_(plan_, controllers_),
-          tasks_(worker_),
-          capabilities_(loop_.io_context(), worker_, {},
-              {.max_decoded_body_bytes_ = options_.server_.max_buffered_body_bytes_,
-                  .http_client_worker_ = options_.server_.http_client_worker_,
-                  .trusted_proxies_ = &options_.trusted_proxies_,
-                  .precompressed_static_files_ = options_.compression_.has_value(),
-                  .file_io_timeout_ = options_.server_.write_timeout_,
-                  .connection_failure_ = &options_.connection_failure_}),
-          connections_(loop_.io_context(), worker_, routes_, capabilities_, options_, token_, phase_, tasks_, {},
-              {.target_ = this, .invoke_ = &fail}, index
+        ) :
+        loop_(require_loop(std::move(loop))),
+        worker_(loop_.worker()),
+        callbacks_(std::move(callbacks)),
+        options_(standalone_options(config, *callbacks_, count)),
+        inbound_budget_(options_.server_.max_inbound_buffer_bytes_per_worker_),
+        controllers_(std::span<const controller_registrar>{}),
+        routes_(plan_, controllers_),
+        tasks_(worker_),
+        capabilities_(loop_.io_context(), worker_, {}, {.max_decoded_body_bytes_ = options_.server_.max_buffered_body_bytes_, .http_client_worker_ = options_.server_.http_client_worker_, .trusted_proxies_ = &options_.trusted_proxies_, .precompressed_static_files_ = options_.compression_.has_value(), .file_io_timeout_ = options_.server_.write_timeout_, .connection_failure_ = &options_.connection_failure_}),
+        connections_(loop_.io_context(), worker_, routes_, capabilities_, options_, token_, phase_, tasks_, {}, {.target_ = this, .invoke_ = &fail}, index
 #if defined(RUVIA_ENABLE_HTTP3)
-              ,
-              {.directory_ = directory.get(), .worker_index_ = index}
+            ,
+            {.directory_ = directory.get(), .worker_index_ = index}
 #endif
-              ),
-          services_(),
-          changed_(worker_)
+            ),
+        services_(),
+        changed_(worker_)
 #if defined(_WIN32)
-          ,
-          worker_index_(index)
+        ,
+        worker_index_(index)
 #endif
     {
         options_.inbound_budget_ = &inbound_budget_;
@@ -404,7 +390,9 @@ public:
             return;
         }
         try {
-            if (!loop_.defer_cleanup([self] { self->begin_close(); })) {
+            if (!loop_.defer_cleanup([self] {
+                self->begin_close();
+            })) {
                 if (io_started_.load(std::memory_order_acquire)) {
                     std::terminate();
                 }
@@ -502,15 +490,14 @@ private:
         bool posted = false;
         std::exception_ptr posting_failure;
         try {
-            posted = self->acceptor_->post_control(completion.make_command(
-                [self, callable = std::move(callable)](const auto& receipt) mutable {
-                    try {
-                        callable();
-                        receipt.complete();
-                    } catch (...) {
-                        receipt.complete(std::current_exception());
-                    }
-                }));
+            posted = self->acceptor_->post_control(completion.make_command([self, callable = std::move(callable)](const auto& receipt) mutable {
+                try {
+                    callable();
+                    receipt.complete();
+                } catch (...) {
+                    receipt.complete(std::current_exception());
+                }
+            }));
         } catch (...) {
             posting_failure = std::current_exception();
         }
@@ -567,22 +554,20 @@ private:
             if (!configured.active_) {
                 continue;
             }
-            self->connections_.prepare_listener(index, configured.http3_slot_, configured.definition_, configured.external_, std::move(prepared[offset])
 #if defined(RUVIA_ENABLE_HTTP3)
-                                                                                                                                 ,
-                self->directory_.get()
+            self->connections_.prepare_listener(index, configured.http3_slot_, configured.definition_, configured.external_, std::move(prepared[offset]), self->directory_.get());
+#else
+            self->connections_.prepare_listener(index, configured.http3_slot_, configured.definition_, configured.external_, std::move(prepared[offset]));
 #endif
-            );
 #if defined(_WIN32)
             if (!configured.external_ && (!self->grouped_ || self->worker_index_ == 0)) {
                 co_await on_acceptor(self, [self, index] {
                     auto& entry = self->services_[index];
-                    self->acceptor_->prepare_listener(index, entry.http3_slot_, entry.definition_
 #if defined(RUVIA_ENABLE_HTTP3)
-                        ,
-                        self->directory_.get()
+                    self->acceptor_->prepare_listener(index, entry.http3_slot_, entry.definition_, self->directory_.get());
+#else
+                    self->acceptor_->prepare_listener(index, entry.http3_slot_, entry.definition_);
 #endif
-                    );
                 });
             }
 #endif
@@ -590,8 +575,7 @@ private:
         }
         co_return;
     }
-    static task<void> open_range(std::shared_ptr<http_server_state> self, std::size_t first,
-        std::shared_ptr<prepared_listener_state> transaction = {}) {
+    static task<void> open_range(std::shared_ptr<http_server_state> self, std::size_t first, std::shared_ptr<prepared_listener_state> transaction = {}) {
 #if defined(_WIN32)
         runtime_control_completion completion(self->worker_);
         auto command = completion.make_command([self, first](const auto& receipt) noexcept {
@@ -634,7 +618,9 @@ private:
             self->services_[index].definition_.inherited_sockets_.reset();
 #if defined(_WIN32)
             if (self->acceptor_ && !self->services_[index].external_ && (!self->grouped_ || self->worker_index_ == 0)) {
-                co_await on_acceptor(self, [self, index, receipt] { self->acceptor_->discard_listener(index, receipt); });
+                co_await on_acceptor(self, [self, index, receipt] {
+                    self->acceptor_->discard_listener(index, receipt);
+                });
             }
 #endif
         }
@@ -717,8 +703,7 @@ private:
             std::rethrow_exception(failure);
         }
     }
-    static task<void> add_owned(std::shared_ptr<http_server_state> self, std::shared_ptr<owned_listen_configs> input, bool external,
-        std::shared_ptr<prepared_listener_state> transaction = {}) {
+    static task<void> add_owned(std::shared_ptr<http_server_state> self, std::shared_ptr<owned_listen_configs> input, bool external, std::shared_ptr<prepared_listener_state> transaction = {}) {
         self->require_current();
         auto lease = co_await self->gate_.acquire(self->worker_);
         self->require_open();
@@ -760,11 +745,9 @@ private:
         self->require_current();
         self->require_running();
         activity active(*self);
-        co_await connection_count::wait(self->connections_.listener_connections(service_endpoint(endpoint.view())),
-            self->worker_, std::move(options), self->token_);
+        co_await connection_count::wait(self->connections_.listener_connections(service_endpoint(endpoint.view())), self->worker_, std::move(options), self->token_);
     }
-    static task<void> replace_owned(std::shared_ptr<http_server_state> self, owned_endpoint endpoint,
-        std::shared_ptr<owned_listen_configs> replacement) {
+    static task<void> replace_owned(std::shared_ptr<http_server_state> self, owned_endpoint endpoint, std::shared_ptr<owned_listen_configs> replacement) {
         self->require_current();
         // Declared before the lease so a selector destructor can reenter control.
         std::shared_ptr<const http_server_tls_identities> retired;
@@ -960,8 +943,8 @@ private:
 
 class http_server_group_state final : public std::enable_shared_from_this<http_server_group_state> {
 public:
-    http_server_group_state(std::span<const event_loop> loops, http_server_callbacks_factory callbacks, server_config config)
-        : callbacks_factory_(std::move(callbacks)) {
+    http_server_group_state(std::span<const event_loop> loops, http_server_callbacks_factory callbacks, server_config config) :
+        callbacks_factory_(std::move(callbacks)) {
         if (!callbacks_factory_) {
             throw std::invalid_argument("HTTP server group requires a callback factory");
         }
@@ -983,12 +966,11 @@ public:
 #endif
         workers_.reserve(loops.size());
         for (std::size_t index = 0; index != loops.size(); ++index) {
-            auto worker = std::make_shared<http_server_state>(loops[index], std::make_shared<http_server_callbacks>(), config, index, loops.size()
 #if defined(RUVIA_ENABLE_HTTP3)
-                                                                                                                                          ,
-                directory_
+            auto worker = std::make_shared<http_server_state>(loops[index], std::make_shared<http_server_callbacks>(), config, index, loops.size(), directory_);
+#else
+            auto worker = std::make_shared<http_server_state>(loops[index], std::make_shared<http_server_callbacks>(), config, index, loops.size());
 #endif
-            );
             worker->grouped_ = true;
 #if defined(RUVIA_ENABLE_HTTP3)
             directory_->bind_worker(index, worker->worker_);
@@ -1001,9 +983,9 @@ public:
             directory_.get(),
 #endif
             worker_failure_sink{.target_ = this, .invoke_ = [](void* target, const std::exception_ptr& error) noexcept {
-                                    auto& self = *static_cast<http_server_group_state*>(target);
-                                    http_server_state::fail(self.workers_.front().get(), error);
-                                }});
+            auto& self = *static_cast<http_server_group_state*>(target);
+            http_server_state::fail(self.workers_.front().get(), error);
+        }});
         for (std::size_t index = 0; index != workers_.size(); ++index) {
             workers_[index]->acceptor_ = acceptor_;
             workers_[index]->connections_.bind_acceptor(*acceptor_);
@@ -1149,19 +1131,11 @@ private:
                     if (&state != workers_.front().get()) {
                         const auto& first = *workers_.front()->callbacks_;
                         const auto& current = *state.callbacks_;
-                        if (static_cast<bool>(first.connection_) != static_cast<bool>(current.connection_) ||
-                            static_cast<bool>(first.request_stream_) != static_cast<bool>(current.request_stream_) ||
-                            static_cast<bool>(first.access_) != static_cast<bool>(current.access_) ||
-                            static_cast<bool>(first.connection_failure_) != static_cast<bool>(current.connection_failure_) ||
-                            static_cast<bool>(first.tls_client_hello_) != static_cast<bool>(current.tls_client_hello_) ||
-                            static_cast<bool>(first.http2_input_) != static_cast<bool>(current.http2_input_) ||
+                        if (static_cast<bool>(first.connection_) != static_cast<bool>(current.connection_) || static_cast<bool>(first.request_stream_) != static_cast<bool>(current.request_stream_) || static_cast<bool>(first.access_) != static_cast<bool>(current.access_) || static_cast<bool>(first.connection_failure_) != static_cast<bool>(current.connection_failure_) || static_cast<bool>(first.tls_client_hello_) != static_cast<bool>(current.tls_client_hello_) || static_cast<bool>(first.http2_input_) != static_cast<bool>(current.http2_input_) ||
 #if defined(RUVIA_ENABLE_HTTP2)
-                            static_cast<bool>(first.http2_frame_) != static_cast<bool>(current.http2_frame_) ||
-                            static_cast<bool>(first.http2_headers_) != static_cast<bool>(current.http2_headers_) ||
+                            static_cast<bool>(first.http2_frame_) != static_cast<bool>(current.http2_frame_) || static_cast<bool>(first.http2_headers_) != static_cast<bool>(current.http2_headers_) ||
 #endif
-                            static_cast<bool>(first.connection_admission_) != static_cast<bool>(current.connection_admission_) ||
-                            static_cast<bool>(first.connection_open_) != static_cast<bool>(current.connection_open_) ||
-                            static_cast<bool>(first.connection_close_) != static_cast<bool>(current.connection_close_)) {
+                            static_cast<bool>(first.connection_admission_) != static_cast<bool>(current.connection_admission_) || static_cast<bool>(first.connection_open_) != static_cast<bool>(current.connection_open_) || static_cast<bool>(first.connection_close_) != static_cast<bool>(current.connection_close_)) {
                             throw std::invalid_argument("HTTP server group callbacks must have identical presence");
                         }
                     }
@@ -1185,15 +1159,14 @@ private:
         bool posted = false;
         std::exception_ptr posting_failure;
         try {
-            posted = worker->loop_.defer_cleanup(completion.make_command(
-                [worker, function = std::move(function)](const auto& receipt) mutable {
-                    try {
-                        function(*worker);
-                        receipt.complete();
-                    } catch (...) {
-                        receipt.complete(std::current_exception());
-                    }
-                }));
+            posted = worker->loop_.defer_cleanup(completion.make_command([worker, function = std::move(function)](const auto& receipt) mutable {
+                try {
+                    function(*worker);
+                    receipt.complete();
+                } catch (...) {
+                    receipt.complete(std::current_exception());
+                }
+            }));
         } catch (...) {
             posting_failure = std::current_exception();
         }
@@ -1214,29 +1187,28 @@ private:
         bool posted = false;
         std::exception_ptr posting_failure;
         try {
-            posted = worker->loop_.defer_cleanup(completion.make_command(
-                [worker, function = std::move(function)](const auto& receipt) mutable {
+            posted = worker->loop_.defer_cleanup(completion.make_command([worker, function = std::move(function)](const auto& receipt) mutable {
+                try {
+                    // Keep the callable address-stable until the task and
+                    // its completion callback have both been reclaimed.
+                    auto operation = std::make_shared<function_type>(std::move(function));
+                    auto finish = receipt;
+                    ++worker->controls_;
                     try {
-                        // Keep the callable address-stable until the task and
-                        // its completion callback have both been reclaimed.
-                        auto operation = std::make_shared<function_type>(std::move(function));
-                        auto finish = receipt;
-                        ++worker->controls_;
-                        try {
-                            ruvia::async_start((*operation)(worker), asio::bind_executor(worker->loop_.executor(), std::move(finish).bind([worker, operation](const auto& done, std::exception_ptr failure) {
-                                --worker->controls_;
-                                worker->changed_.notify();
-                                done.complete(failure);
-                            })));
-                        } catch (...) {
+                        ruvia::async_start((*operation)(worker), asio::bind_executor(worker->loop_.executor(), std::move(finish).bind([worker, operation](const auto& done, std::exception_ptr failure) {
                             --worker->controls_;
                             worker->changed_.notify();
-                            throw;
-                        }
+                            done.complete(failure);
+                        })));
                     } catch (...) {
-                        receipt.complete(std::current_exception());
+                        --worker->controls_;
+                        worker->changed_.notify();
+                        throw;
                     }
-                }));
+                } catch (...) {
+                    receipt.complete(std::current_exception());
+                }
+            }));
         } catch (...) {
             posting_failure = std::current_exception();
         }
@@ -1251,8 +1223,7 @@ private:
             throw std::logic_error("HTTP server group worker has retired");
         }
     }
-    static task<void> open_prepared(std::shared_ptr<http_server_group_state> self, worker_ref caller,
-        std::size_t first, std::shared_ptr<prepared_listener_state> transaction = {}) {
+    static task<void> open_prepared(std::shared_ptr<http_server_group_state> self, worker_ref caller, std::size_t first, std::shared_ptr<prepared_listener_state> transaction = {}) {
         runtime_control_completion completion(caller);
         std::vector<move_only_function<void()>> commands;
         commands.reserve(self->workers_.size());
@@ -1354,7 +1325,9 @@ private:
                 added->push_back(existing->definitions_[index].clone());
             }
             for (const auto& worker : self->workers_) {
-                co_await control(caller, worker, [added](http_server_state& state) { state.append(*added, false); });
+                co_await control(caller, worker, [added](http_server_state& state) {
+                    state.append(*added, false);
+                });
             }
             self->listener_slots_ = existing->definitions_.size();
 #if defined(_WIN32)
@@ -1386,8 +1359,7 @@ private:
             std::rethrow_exception(failure);
         }
     }
-    static task<void> add_owned(std::shared_ptr<http_server_group_state> self, worker_ref caller,
-        std::shared_ptr<owned_listen_configs> input, bool external, std::shared_ptr<prepared_listener_state> transaction = {}) {
+    static task<void> add_owned(std::shared_ptr<http_server_group_state> self, worker_ref caller, std::shared_ptr<owned_listen_configs> input, bool external, std::shared_ptr<prepared_listener_state> transaction = {}) {
         auto lease = co_await self->gate_.acquire(caller);
         self->require_open();
         if (!external) {
@@ -1466,7 +1438,9 @@ private:
             }
             for (const auto& worker : self->workers_) {
                 try {
-                    co_await async_control(caller, worker, [first](auto owner) { return http_server_state::discard_range(std::move(owner), first); });
+                    co_await async_control(caller, worker, [first](auto owner) {
+                        return http_server_state::discard_range(std::move(owner), first);
+                    });
                 } catch (...) {
                     self->close();
                 }
@@ -1488,7 +1462,9 @@ private:
         std::exception_ptr failure;
         try {
             for (const auto& worker : self->workers_) {
-                co_await control(caller, worker, [&endpoint, lifetime, options](http_server_state& state) { state.remove(endpoint.view(), lifetime, options); });
+                co_await control(caller, worker, [&endpoint, lifetime, options](http_server_state& state) {
+                    state.remove(endpoint.view(), lifetime, options);
+                });
             }
         } catch (...) {
             failure = std::current_exception();
@@ -1505,15 +1481,16 @@ private:
         self->require_running();
         for (const auto& worker : self->workers_) {
             bool closed = false;
-            co_await control(caller, worker, [&closed, id](http_server_state& state) { closed = state.close_connection(id); });
+            co_await control(caller, worker, [&closed, id](http_server_state& state) {
+                closed = state.close_connection(id);
+            });
             if (closed) {
                 co_return true;
             }
         }
         co_return false;
     }
-    static task<void> replace_owned(std::shared_ptr<http_server_group_state> self, worker_ref caller,
-        owned_endpoint endpoint, std::shared_ptr<owned_listen_configs> replacement) {
+    static task<void> replace_owned(std::shared_ptr<http_server_group_state> self, worker_ref caller, owned_endpoint endpoint, std::shared_ptr<owned_listen_configs> replacement) {
         struct target final {
             std::size_t slot_;
             std::shared_ptr<const http_server_tls_identities> retired_;
@@ -1534,11 +1511,10 @@ private:
                 targets.push_back({slot, policy->identities_});
             });
         }
-        auto identities = co_await prepare_work(caller, true,
-            [replacement] {
-                auto loaded = replacement->load();
-                return std::get<http_server_listener_definition::tls>(loaded.front().transport_).identities_;
-            });
+        auto identities = co_await prepare_work(caller, true, [replacement] {
+            auto loaded = replacement->load();
+            return std::get<http_server_listener_definition::tls>(loaded.front().transport_).identities_;
+        });
         self->require_running();
         for (std::size_t index = 0; index != self->workers_.size(); ++index) {
             co_await control(caller, self->workers_[index], [slot = targets[index].slot_, identities](http_server_state& state) {
@@ -1580,8 +1556,7 @@ private:
         co_return result;
     }
 #endif
-    static task<void> adopt_owned(std::shared_ptr<http_server_group_state> self, worker_ref caller,
-        std::size_t index, owned_endpoint endpoint, socket_owner socket, owned_adopt_options options) {
+    static task<void> adopt_owned(std::shared_ptr<http_server_group_state> self, worker_ref caller, std::size_t index, owned_endpoint endpoint, socket_owner socket, owned_adopt_options options) {
         auto lease = co_await self->gate_.acquire(caller);
         self->require_running();
         if (index >= self->workers_.size()) {
@@ -1591,8 +1566,7 @@ private:
             state.adopt(endpoint.view(), std::exchange(socket.socket_, invalid_native_socket), options.view());
         });
     }
-    static task<void> wait_connections_owned(std::shared_ptr<http_server_group_state> self, worker_ref caller,
-        owned_endpoint endpoint, operation_options options) {
+    static task<void> wait_connections_owned(std::shared_ptr<http_server_group_state> self, worker_ref caller, owned_endpoint endpoint, operation_options options) {
         operation_steps steps(options);
         std::vector<std::shared_ptr<connection_count>> counts;
         std::vector<stop_token> stops;
@@ -1720,8 +1694,8 @@ void fail_server_group(const std::weak_ptr<http_server_group_state>& group, cons
 
 namespace ruvia {
 
-prepared_listener::prepared_listener(std::shared_ptr<detail::prepared_listener_state> state) noexcept
-    : state_(std::move(state)) {}
+prepared_listener::prepared_listener(std::shared_ptr<detail::prepared_listener_state> state) noexcept :
+    state_(std::move(state)) {}
 prepared_listener::prepared_listener(prepared_listener&&) noexcept = default;
 prepared_listener& prepared_listener::operator=(prepared_listener&& other) noexcept {
     if (this != &other) {
@@ -1747,8 +1721,8 @@ bool prepared_listener::valid() const noexcept {
     return state_ != nullptr;
 }
 
-http_server::http_server(event_loop loop, http_server_callbacks callbacks, server_config config)
-    : state_(std::make_shared<detail::http_server_state>(std::move(loop), std::make_shared<http_server_callbacks>(std::move(callbacks)), config)) {
+http_server::http_server(event_loop loop, http_server_callbacks callbacks, server_config config) :
+    state_(std::make_shared<detail::http_server_state>(std::move(loop), std::make_shared<http_server_callbacks>(std::move(callbacks)), config)) {
     state_->bind_stop();
 }
 http_server::~http_server() {
@@ -1818,8 +1792,8 @@ const worker_ref& http_server::worker() const& noexcept {
     return state_->worker();
 }
 
-http_server_group::http_server_group(std::span<const event_loop> loops, http_server_callbacks_factory callbacks, server_config config)
-    : state_(std::make_shared<detail::http_server_group_state>(loops, std::move(callbacks), config)) {
+http_server_group::http_server_group(std::span<const event_loop> loops, http_server_callbacks_factory callbacks, server_config config) :
+    state_(std::make_shared<detail::http_server_group_state>(loops, std::move(callbacks), config)) {
     state_->bind_stop();
 }
 http_server_group::~http_server_group() {
@@ -1908,27 +1882,20 @@ int quic_resumption_context_index() noexcept {
 }
 
 int generate_quic_ticket(SSL* ssl, void*) noexcept {
-    const auto* context = static_cast<const std::array<unsigned char, 32>*>(
-        SSL_get_ex_data(ssl, quic_resumption_context_index()));
-    return context != nullptr &&
-           SSL_SESSION_set1_ticket_appdata(SSL_get0_session(ssl), context->data(), context->size()) == 1;
+    const auto* context = static_cast<const std::array<unsigned char, 32>*>(SSL_get_ex_data(ssl, quic_resumption_context_index()));
+    return context != nullptr && SSL_SESSION_set1_ticket_appdata(SSL_get0_session(ssl), context->data(), context->size()) == 1;
 }
 
-SSL_TICKET_RETURN decrypt_quic_ticket(SSL* ssl, SSL_SESSION* ticket,
-    const unsigned char*, std::size_t, SSL_TICKET_STATUS status, void*) noexcept {
+SSL_TICKET_RETURN decrypt_quic_ticket(SSL* ssl, SSL_SESSION* ticket, const unsigned char*, std::size_t, SSL_TICKET_STATUS status, void*) noexcept {
     if (status != SSL_TICKET_SUCCESS && status != SSL_TICKET_SUCCESS_RENEW) {
         return SSL_TICKET_RETURN_IGNORE_RENEW;
     }
-    const auto* context = static_cast<const std::array<unsigned char, 32>*>(
-        SSL_get_ex_data(ssl, quic_resumption_context_index()));
+    const auto* context = static_cast<const std::array<unsigned char, 32>*>(SSL_get_ex_data(ssl, quic_resumption_context_index()));
     void* remembered = nullptr;
     std::size_t remembered_size = 0;
     // RFC 9001 §4.6.1 and RFC 9114 §7.2.8: changed transport limits or
     // SETTINGS require a fresh handshake, not acceptance of stale 0-RTT.
-    if (context == nullptr || SSL_SESSION_get0_ticket_appdata(ticket, &remembered, &remembered_size) != 1 ||
-        !constant_time_bytes_equal(
-            std::string_view(static_cast<const char*>(remembered), remembered_size),
-            std::string_view(reinterpret_cast<const char*>(context->data()), context->size()))) {
+    if (context == nullptr || SSL_SESSION_get0_ticket_appdata(ticket, &remembered, &remembered_size) != 1 || !constant_time_bytes_equal(std::string_view(static_cast<const char*>(remembered), remembered_size), std::string_view(reinterpret_cast<const char*>(context->data()), context->size()))) {
         return SSL_TICKET_RETURN_IGNORE_RENEW;
     }
     return status == SSL_TICKET_SUCCESS ? SSL_TICKET_RETURN_USE : SSL_TICKET_RETURN_USE_RENEW;
@@ -1944,20 +1911,17 @@ int local_address_index() noexcept {
     return index;
 }
 
-bool select_handshake_certificate(SSL* ssl, http_server_session_config& session,
-    std::string_view server_name, int* alert) noexcept;
+bool select_handshake_certificate(SSL* ssl, http_server_session_config& session, std::string_view server_name, int* alert) noexcept;
 
 // OpenSSL reports each inbound handshake message once it is reassembled and
 // before it processes it, so a ClientHello reaches the observer before the
 // client hello, server_name and certificate callbacks run.
 void deliver_client_hello(int writing, int content_type, const void* bytes, std::size_t size, SSL* ssl) noexcept {
     // msg_type and the 3-byte length (RFC 9846 §4) precede every body.
-    if (writing != 0 || content_type != SSL3_RT_HANDSHAKE || size < 4 ||
-        *static_cast<const unsigned char*>(bytes) != SSL3_MT_CLIENT_HELLO) {
+    if (writing != 0 || content_type != SSL3_RT_HANDSHAKE || size < 4 || *static_cast<const unsigned char*>(bytes) != SSL3_MT_CLIENT_HELLO) {
         return;
     }
-    const auto* observation = static_cast<const tls_client_hello_observation*>(
-        SSL_get_ex_data(ssl, client_hello_observation_index()));
+    const auto* observation = static_cast<const tls_client_hello_observation*>(SSL_get_ex_data(ssl, client_hello_observation_index()));
     if (observation == nullptr || !observation->callback_) {
         return;
     }
@@ -1967,26 +1931,19 @@ void deliver_client_hello(int writing, int content_type, const void* bytes, std:
 }
 
 // TLS over TCP keeps the protocol policy's outgoing record count.
-void observe_tcp_messages(int writing, int version, int content_type, const void* bytes, std::size_t size,
-    SSL* ssl, void* argument) noexcept {
+void observe_tcp_messages(int writing, int version, int content_type, const void* bytes, std::size_t size, SSL* ssl, void* argument) noexcept {
     count_tls_records(writing, version, content_type, bytes, size, ssl, argument);
     deliver_client_hello(writing, content_type, bytes, size, ssl);
 }
 
 // QUIC protects its own packets (RFC 9001 §4): there are no TLS records to count.
-void observe_quic_messages(int writing, int, int content_type, const void* bytes, std::size_t size, SSL* ssl,
-    void*) noexcept {
+void observe_quic_messages(int writing, int, int content_type, const void* bytes, std::size_t size, SSL* ssl, void*) noexcept {
     deliver_client_hello(writing, content_type, bytes, size, ssl);
 }
 
-int select_tcp_alpn(SSL* ssl, std::span<const unsigned char> protocols,
-    const unsigned char** out, unsigned char* out_length,
-    const unsigned char* in, unsigned int in_length) noexcept {
+int select_tcp_alpn(SSL* ssl, std::span<const unsigned char> protocols, const unsigned char** out, unsigned char* out_length, const unsigned char* in, unsigned int in_length) noexcept {
     if (SSL_version(ssl) >= TLS1_2_VERSION) {
-        return SSL_select_next_proto(const_cast<unsigned char**>(out), out_length, protocols.data(),
-                   static_cast<unsigned int>(protocols.size()), in, in_length) == OPENSSL_NPN_NEGOTIATED
-                   ? SSL_TLSEXT_ERR_OK
-                   : SSL_TLSEXT_ERR_ALERT_FATAL;
+        return SSL_select_next_proto(const_cast<unsigned char**>(out), out_length, protocols.data(), static_cast<unsigned int>(protocols.size()), in, in_length) == OPENSSL_NPN_NEGOTIATED ? SSL_TLSEXT_ERR_OK : SSL_TLSEXT_ERR_ALERT_FATAL;
     }
     // RFC 9113 §9.2: h2 cannot be selected on TLS 1.1, even when a raw
     // connection listener explicitly lists it among its own protocols.
@@ -1997,8 +1954,7 @@ int select_tcp_alpn(SSL* ssl, std::span<const unsigned char> protocols,
         if (length == 2 && protocol[1] == 'h' && protocol[2] == '2') {
             continue;
         }
-        if (SSL_select_next_proto(const_cast<unsigned char**>(out), out_length, protocol,
-                static_cast<unsigned int>(length) + 1, in, in_length) == OPENSSL_NPN_NEGOTIATED) {
+        if (SSL_select_next_proto(const_cast<unsigned char**>(out), out_length, protocol, static_cast<unsigned int>(length) + 1, in, in_length) == OPENSSL_NPN_NEGOTIATED) {
             return SSL_TLSEXT_ERR_OK;
         }
     }
@@ -2007,20 +1963,16 @@ int select_tcp_alpn(SSL* ssl, std::span<const unsigned char> protocols,
 
 // Every HTTP version this server speaks over TLS on TCP, in preference order;
 // RFC 7301 §3.2 reserves the alert for offers naming none of them.
-int select_tcp_alpn_protocol(SSL* ssl, const unsigned char** out, unsigned char* out_length,
-    const unsigned char* in, unsigned int in_length, void*) noexcept {
-    static constexpr unsigned char protocols[] = {
-        2, 'h', '2', 8, 'h', 't', 't', 'p', '/', '1', '.', '1', 8, 'h', 't', 't', 'p', '/', '1', '.', '0'};
+int select_tcp_alpn_protocol(SSL* ssl, const unsigned char** out, unsigned char* out_length, const unsigned char* in, unsigned int in_length, void*) noexcept {
+    static constexpr unsigned char protocols[] = {2, 'h', '2', 8, 'h', 't', 't', 'p', '/', '1', '.', '1', 8, 'h', 't', 't', 'p', '/', '1', '.', '0'};
     return select_tcp_alpn(ssl, protocols, out, out_length, in, in_length);
 }
 
 // RFC 9114 §3.1: an HTTP/3 connection negotiates "h3", and RFC 9001 §8.1
 // requires the handshake to fail when ALPN agrees on nothing.
-int select_quic_alpn_protocol(SSL*, const unsigned char** out, unsigned char* out_length,
-    const unsigned char* in, unsigned int in_length, void*) noexcept {
+int select_quic_alpn_protocol(SSL*, const unsigned char** out, unsigned char* out_length, const unsigned char* in, unsigned int in_length, void*) noexcept {
     static constexpr unsigned char protocols[] = {2, 'h', '3'};
-    if (SSL_select_next_proto(const_cast<unsigned char**>(out), out_length, protocols,
-            static_cast<unsigned int>(sizeof(protocols)), in, in_length) == OPENSSL_NPN_NEGOTIATED) {
+    if (SSL_select_next_proto(const_cast<unsigned char**>(out), out_length, protocols, static_cast<unsigned int>(sizeof(protocols)), in, in_length) == OPENSSL_NPN_NEGOTIATED) {
         return SSL_TLSEXT_ERR_OK;
     }
     return SSL_TLSEXT_ERR_ALERT_FATAL;
@@ -2028,12 +1980,9 @@ int select_quic_alpn_protocol(SSL*, const unsigned char** out, unsigned char* ou
 
 // A connection-dispatch listener offers its own protocols (tls_config::alpn_),
 // still in server preference and failing an offer that names none of them.
-int select_connection_alpn_protocol(SSL* ssl, const unsigned char** out, unsigned char* out_length,
-    const unsigned char* in, unsigned int in_length, void* argument) noexcept {
+int select_connection_alpn_protocol(SSL* ssl, const unsigned char** out, unsigned char* out_length, const unsigned char* in, unsigned int in_length, void* argument) noexcept {
     const auto& protocols = *static_cast<const std::string*>(argument);
-    return select_tcp_alpn(ssl,
-        {reinterpret_cast<const unsigned char*>(protocols.data()), protocols.size()},
-        out, out_length, in, in_length);
+    return select_tcp_alpn(ssl, {reinterpret_cast<const unsigned char*>(protocols.data()), protocols.size()}, out, out_length, in, in_length);
 }
 
 // RFC 6066 §3: a session never resumes under a server_name other than the one
@@ -2053,8 +2002,7 @@ int bind_session_to_server_name(SSL* ssl, int* alert, void* argument) noexcept {
     if (SSL_client_hello_get0_ext(ssl, TLSEXT_TYPE_server_name, &extension, &extension_size) == 1) {
         // One non-empty host_name entry: any other ServerNameList shape fails
         // the handshake before OpenSSL could resume a session under it.
-        if (extension_size < 5 || static_cast<std::size_t>((extension[0] << 8) | extension[1]) != extension_size - 2 ||
-            extension[2] != TLSEXT_NAMETYPE_host_name) {
+        if (extension_size < 5 || static_cast<std::size_t>((extension[0] << 8) | extension[1]) != extension_size - 2 || extension[2] != TLSEXT_NAMETYPE_host_name) {
             *alert = SSL_AD_DECODE_ERROR;
             return SSL_CLIENT_HELLO_ERROR;
         }
@@ -2075,8 +2023,7 @@ int bind_session_to_server_name(SSL* ssl, int* alert, void* argument) noexcept {
                 name[i] = http_ascii_to_lower(extension[5 + i]);
             }
             unsigned int digest_size = 0;
-            if (EVP_Digest(name.data(), name_size, context.data(), &digest_size, EVP_sha256(), nullptr) != 1 ||
-                digest_size != context.size()) {
+            if (EVP_Digest(name.data(), name_size, context.data(), &digest_size, EVP_sha256(), nullptr) != 1 || digest_size != context.size()) {
                 *alert = SSL_AD_INTERNAL_ERROR;
                 return SSL_CLIENT_HELLO_ERROR;
             }
@@ -2102,16 +2049,14 @@ std::span<const std::byte> client_hello_list(SSL* ssl, unsigned int type, std::s
     if (size < prefix) {
         throw std::invalid_argument("malformed TLS selection extension");
     }
-    const auto length = prefix == 1 ? static_cast<std::size_t>(bytes[0])
-                                    : static_cast<std::size_t>((bytes[0] << 8) | bytes[1]);
+    const auto length = prefix == 1 ? static_cast<std::size_t>(bytes[0]) : static_cast<std::size_t>((bytes[0] << 8) | bytes[1]);
     if (length != size - prefix) {
         throw std::invalid_argument("malformed TLS selection extension length");
     }
     return {reinterpret_cast<const std::byte*>(bytes + prefix), length};
 }
 
-std::vector<std::uint16_t> decode_u16_list(
-    std::span<const std::byte> raw) {
+std::vector<std::uint16_t> decode_u16_list(std::span<const std::byte> raw) {
     if (raw.size() % 2U != 0U) {
         throw std::invalid_argument("malformed TLS uint16 extension list");
     }
@@ -2125,16 +2070,14 @@ std::vector<std::uint16_t> decode_u16_list(
     return decoded;
 }
 
-std::vector<std::string_view> decode_alpn_list(
-    std::span<const std::byte> raw) {
+std::vector<std::string_view> decode_alpn_list(std::span<const std::byte> raw) {
     std::vector<std::string_view> protocols;
     for (std::size_t pos = 0; pos < raw.size();) {
         const auto length = static_cast<std::size_t>(std::to_integer<unsigned int>(raw[pos]));
         if (length == 0U || pos + 1U + length > raw.size()) {
             throw std::invalid_argument("malformed TLS ALPN extension list");
         }
-        protocols.emplace_back(
-            reinterpret_cast<const char*>(raw.data() + pos + 1U), length);
+        protocols.emplace_back(reinterpret_cast<const char*>(raw.data() + pos + 1U), length);
         pos += 1U + length;
     }
     return protocols;
@@ -2148,13 +2091,10 @@ bool present_fixed_identity(SSL& ssl, const http_server_tls_identities::identity
     }
     const unsigned char* extension = nullptr;
     std::size_t size = 0;
-    if (identity.ocsp_response_.empty() ||
-        SSL_client_hello_get0_ext(&ssl, TLSEXT_TYPE_status_request, &extension, &size) != 1 ||
-        size == 0 || extension[0] != TLSEXT_STATUSTYPE_ocsp) {
+    if (identity.ocsp_response_.empty() || SSL_client_hello_get0_ext(&ssl, TLSEXT_TYPE_status_request, &extension, &size) != 1 || size == 0 || extension[0] != TLSEXT_STATUSTYPE_ocsp) {
         return true;
     }
-    auto* response = static_cast<unsigned char*>(OPENSSL_memdup(
-        identity.ocsp_response_.data(), identity.ocsp_response_.size()));
+    auto* response = static_cast<unsigned char*>(OPENSSL_memdup(identity.ocsp_response_.data(), identity.ocsp_response_.size()));
     if (response == nullptr) {
         return false;
     }
@@ -2167,15 +2107,12 @@ bool present_fixed_identity(SSL& ssl, const http_server_tls_identities::identity
 
 int staple_ocsp_response(SSL* ssl, void*) noexcept {
     const unsigned char* response = nullptr;
-    return SSL_get_tlsext_status_ocsp_resp(ssl, &response) > 0
-               ? SSL_TLSEXT_ERR_OK
-               : SSL_TLSEXT_ERR_NOACK;
+    return SSL_get_tlsext_status_ocsp_resp(ssl, &response) > 0 ? SSL_TLSEXT_ERR_OK : SSL_TLSEXT_ERR_NOACK;
 }
 
 // Runs before session lookup, so neither resumption nor missing SNI bypasses a
 // selector rejection. A HelloRetryRequest retains the first selected identity.
-bool select_handshake_certificate(SSL* ssl, http_server_session_config& session,
-    std::string_view server_name, int* alert) noexcept {
+bool select_handshake_certificate(SSL* ssl, http_server_session_config& session, std::string_view server_name, int* alert) noexcept {
     if (SSL_get_certificate(ssl) != nullptr) {
         return true;
     }
@@ -2192,37 +2129,18 @@ bool select_handshake_certificate(SSL* ssl, http_server_session_config& session,
             const auto snapshot = tls_certificate_store_access::snapshot(*identities.certificate_store_);
             std::optional<tls_certificate_id> selected = identities.default_certificate_;
             if (identities.select_certificate_) {
-                const auto* binding = static_cast<const tls_client_hello_observation*>(
-                    SSL_get_ex_data(ssl, client_hello_observation_index()));
+                const auto* binding = static_cast<const tls_client_hello_observation*>(SSL_get_ex_data(ssl, client_hello_observation_index()));
                 if (!binding || binding->fields_.connection_id_ == 0 || local == nullptr) {
                     throw std::logic_error("TLS certificate selector requires connection metadata");
                 }
                 const unsigned char* ciphers = nullptr;
                 const auto cipher_size = SSL_client_hello_get0_ciphers(ssl, &ciphers);
-                const auto cipher_suites = decode_u16_list(
-                    {reinterpret_cast<const std::byte*>(ciphers), cipher_size});
-                const auto signature_algorithms = decode_u16_list(
-                    client_hello_list(ssl, TLSEXT_TYPE_signature_algorithms, 2));
-                const auto supported_versions = decode_u16_list(
-                    client_hello_list(ssl, TLSEXT_TYPE_supported_versions, 1));
-                const auto supported_groups = decode_u16_list(
-                    client_hello_list(ssl, TLSEXT_TYPE_supported_groups, 2));
-                const auto alpn = decode_alpn_list(
-                    client_hello_list(ssl, TLSEXT_TYPE_application_layer_protocol_negotiation, 2));
-                const tls_certificate_selection input{
-                    .connection_id_ = binding->fields_.connection_id_,
-                    .remote_address_ = ip_address::parse(binding->fields_.remote_address_).value_or(ip_address{}),
-                    .remote_port_ = binding->fields_.remote_port_,
-                    .server_name_ = server_name,
-                    .local_address_ = local ? std::optional(to_ip_address(*local)) : std::nullopt,
-                    .local_port_ = binding->fields_.local_port_,
-                    .quic_ = binding->fields_.quic_,
-                    .legacy_version_ = static_cast<std::uint16_t>(SSL_client_hello_get0_legacy_version(ssl)),
-                    .cipher_suites_ = cipher_suites,
-                    .signature_algorithms_ = signature_algorithms,
-                    .supported_versions_ = supported_versions,
-                    .supported_groups_ = supported_groups,
-                    .alpn_ = alpn};
+                const auto cipher_suites = decode_u16_list({reinterpret_cast<const std::byte*>(ciphers), cipher_size});
+                const auto signature_algorithms = decode_u16_list(client_hello_list(ssl, TLSEXT_TYPE_signature_algorithms, 2));
+                const auto supported_versions = decode_u16_list(client_hello_list(ssl, TLSEXT_TYPE_supported_versions, 1));
+                const auto supported_groups = decode_u16_list(client_hello_list(ssl, TLSEXT_TYPE_supported_groups, 2));
+                const auto alpn = decode_alpn_list(client_hello_list(ssl, TLSEXT_TYPE_application_layer_protocol_negotiation, 2));
+                const tls_certificate_selection input{.connection_id_ = binding->fields_.connection_id_, .remote_address_ = ip_address::parse(binding->fields_.remote_address_).value_or(ip_address{}), .remote_port_ = binding->fields_.remote_port_, .server_name_ = server_name, .local_address_ = local ? std::optional(to_ip_address(*local)) : std::nullopt, .local_port_ = binding->fields_.local_port_, .quic_ = binding->fields_.quic_, .legacy_version_ = static_cast<std::uint16_t>(SSL_client_hello_get0_legacy_version(ssl)), .cipher_suites_ = cipher_suites, .signature_algorithms_ = signature_algorithms, .supported_versions_ = supported_versions, .supported_groups_ = supported_groups, .alpn_ = alpn};
                 selected = (*identities.select_certificate_)(input);
             }
             if (selected) {
@@ -2256,13 +2174,11 @@ void configure_family(http_server_session_config& session, tls_context_family fa
     auto* native = context_value.native_handle();
     if (quic) {
         // RFC 9001 §4.2: QUIC requires TLS 1.3.
-        if (SSL_CTX_set_min_proto_version(native, TLS1_3_VERSION) != 1 ||
-            SSL_CTX_set_max_proto_version(native, TLS1_3_VERSION) != 1) {
+        if (SSL_CTX_set_min_proto_version(native, TLS1_3_VERSION) != 1 || SSL_CTX_set_max_proto_version(native, TLS1_3_VERSION) != 1) {
             throw std::runtime_error("failed to restrict the QUIC TLS context to TLS 1.3");
         }
         SSL_CTX_set_alpn_select_cb(native, select_quic_alpn_protocol, nullptr);
-        if (SSL_CTX_set_max_early_data(native, early_data ? UINT32_MAX : 0) != 1 ||
-            SSL_CTX_set_session_ticket_cb(native, generate_quic_ticket, decrypt_quic_ticket, nullptr) != 1) {
+        if (SSL_CTX_set_max_early_data(native, early_data ? UINT32_MAX : 0) != 1 || SSL_CTX_set_session_ticket_cb(native, generate_quic_ticket, decrypt_quic_ticket, nullptr) != 1) {
             throw std::runtime_error("failed to configure QUIC session tickets");
         }
         if (early_data) {
@@ -2271,9 +2187,7 @@ void configure_family(http_server_session_config& session, tls_context_family fa
             SSL_CTX_set_options(native, SSL_OP_NO_ANTI_REPLAY);
         }
     } else {
-        context_value.set_options(asio::ssl::context::default_workarounds | asio::ssl::context::no_sslv2 |
-                                  asio::ssl::context::no_sslv3 | asio::ssl::context::no_tlsv1 |
-                                  asio::ssl::context::single_dh_use);
+        context_value.set_options(asio::ssl::context::default_workarounds | asio::ssl::context::no_sslv2 | asio::ssl::context::no_sslv3 | asio::ssl::context::no_tlsv1 | asio::ssl::context::single_dh_use);
         apply_tls_protocol_policy(*native, tls->max_outgoing_records_);
         if (session.connection_.has_value()) {
             SSL_CTX_set_alpn_select_cb(native, select_connection_alpn_protocol, &session.connection_->alpn_);
@@ -2301,9 +2215,7 @@ void configure_family(http_server_session_config& session, tls_context_family fa
 }  // namespace
 
 #if defined(RUVIA_ENABLE_HTTP3)
-void configure_http3_server_tls_session(SSL& tls, const http3_quic_connection& connection,
-    std::uint32_t version, const http3_connection_options& options, bool early_data,
-    std::array<unsigned char, 32>& resumption_context) {
+void configure_http3_server_tls_session(SSL& tls, const http3_quic_connection& connection, std::uint32_t version, const http3_connection_options& options, bool early_data, std::array<unsigned char, 32>& resumption_context) {
     // Only remembered limits (RFC 9000 §7.4.1): connection IDs and reset
     // tokens change for each connection and must not prevent legitimate
     // ticket resumption.
@@ -2312,26 +2224,18 @@ void configure_http3_server_tls_session(SSL& tls, const http3_quic_connection& c
     if (!parameter_bytes.has_value()) {
         throw std::runtime_error("failed to encode QUIC early transport parameters");
     }
-    const std::array<std::uint64_t, 7> values{version, options.max_field_section_size_,
-        options.qpack_max_dtable_capacity_, options.qpack_blocked_streams_,
-        static_cast<std::uint64_t>(options.enable_connect_protocol_),
-        static_cast<std::uint64_t>(options.enable_h3_datagram_), static_cast<std::uint64_t>(early_data)};
+    const std::array<std::uint64_t, 7> values{version, options.max_field_section_size_, options.qpack_max_dtable_capacity_, options.qpack_blocked_streams_, static_cast<std::uint64_t>(options.enable_connect_protocol_), static_cast<std::uint64_t>(options.enable_h3_datagram_), static_cast<std::uint64_t>(early_data)};
     std::array<unsigned char, values.size() * sizeof(std::uint64_t) + parameters.size()> encoded{};
     for (std::size_t i = 0; i < values.size(); ++i) {
         for (std::size_t byte = 0; byte < sizeof(std::uint64_t); ++byte) {
-            encoded[i * sizeof(std::uint64_t) + byte] =
-                static_cast<unsigned char>(values[i] >> (8 * (sizeof(std::uint64_t) - byte - 1)));
+            encoded[i * sizeof(std::uint64_t) + byte] = static_cast<unsigned char>(values[i] >> (8 * (sizeof(std::uint64_t) - byte - 1)));
         }
     }
     const auto encoded_size = values.size() * sizeof(std::uint64_t) + *parameter_bytes;
     std::memcpy(encoded.data() + values.size() * sizeof(std::uint64_t), parameters.data(), *parameter_bytes);
     unsigned int digest_size = 0;
     const auto index = quic_resumption_context_index();
-    if (index < 0 ||
-        EVP_Digest(encoded.data(), encoded_size, resumption_context.data(), &digest_size, EVP_sha256(), nullptr) != 1 ||
-        digest_size != resumption_context.size() ||
-        SSL_set_ex_data(&tls, index, &resumption_context) != 1 ||
-        SSL_set_quic_tls_early_data_enabled(&tls, early_data ? 1 : 0) != 1) {
+    if (index < 0 || EVP_Digest(encoded.data(), encoded_size, resumption_context.data(), &digest_size, EVP_sha256(), nullptr) != 1 || digest_size != resumption_context.size() || SSL_set_ex_data(&tls, index, &resumption_context) != 1 || SSL_set_quic_tls_early_data_enabled(&tls, early_data ? 1 : 0) != 1) {
         throw std::runtime_error("failed to bind QUIC TLS resumption settings");
     }
 }
@@ -2355,8 +2259,7 @@ void configure_http_server_tls_contexts(http_server_session_config& session, boo
     }
 }
 
-prepared_http_server_session prepare_http_server_session_config(
-    const http_server_listener_definition& definition, bool observe_client_hello) {
+prepared_http_server_session prepare_http_server_session_config(const http_server_listener_definition& definition, bool observe_client_hello) {
     auto session = std::make_unique<http_server_session_config>(definition);
     configure_http_server_tls_contexts(*session, observe_client_hello);
     return session;
@@ -2404,8 +2307,7 @@ void validate_ocsp_response(std::span<const std::byte> bytes) {
     ERR_clear_error();
     const auto* cursor = reinterpret_cast<const unsigned char*>(bytes.data());
     const auto* const end = cursor + bytes.size();
-    const std::unique_ptr<OCSP_RESPONSE, decltype(&OCSP_RESPONSE_free)> response(
-        d2i_OCSP_RESPONSE(nullptr, &cursor, static_cast<long>(bytes.size())), OCSP_RESPONSE_free);
+    const std::unique_ptr<OCSP_RESPONSE, decltype(&OCSP_RESPONSE_free)> response(d2i_OCSP_RESPONSE(nullptr, &cursor, static_cast<long>(bytes.size())), OCSP_RESPONSE_free);
     if (!response) {
         const auto error = ERR_peek_last_error();
         ERR_clear_error();
@@ -2421,8 +2323,7 @@ void validate_ocsp_response(std::span<const std::byte> bytes) {
     // d2i also accepts BER; require the canonical DER encoding we advertise.
     std::vector<std::byte> canonical(bytes.size());
     auto* output = reinterpret_cast<unsigned char*>(canonical.data());
-    if (i2d_OCSP_RESPONSE(response.get(), &output) != size ||
-        !std::equal(bytes.begin(), bytes.end(), canonical.begin())) {
+    if (i2d_OCSP_RESPONSE(response.get(), &output) != size || !std::equal(bytes.begin(), bytes.end(), canonical.begin())) {
         throw std::invalid_argument("TLS OCSP response must be a DER OCSPResponse");
     }
 }
@@ -2434,9 +2335,7 @@ struct tls_identity_source final {
     std::span<const std::byte> ocsp_response_;
 };
 
-[[nodiscard]] tls_identity_source make_tls_identity_source(
-    const tls_identity_config& identity,
-    std::span<const std::byte> ocsp_response = {}) {
+[[nodiscard]] tls_identity_source make_tls_identity_source(const tls_identity_config& identity, std::span<const std::byte> ocsp_response = {}) {
     validate_ocsp_response(ocsp_response);
     const bool files = !identity.certificate_chain_file_.empty() || !identity.private_key_file_.empty();
     const bool pem = !identity.certificate_chain_pem_.empty() || !identity.private_key_pem_.empty();
@@ -2445,17 +2344,12 @@ struct tls_identity_source final {
     }
     if (!pem) {
         // Both names are required: an empty one throws.
-        return {.location_ = make_tls_identity_files(identity),
-            .private_key_password_ = identity.private_key_password_,
-            .ocsp_response_ = ocsp_response};
+        return {.location_ = make_tls_identity_files(identity), .private_key_password_ = identity.private_key_password_, .ocsp_response_ = ocsp_response};
     }
     if (identity.certificate_chain_pem_.empty() || identity.private_key_pem_.empty()) {
         throw std::invalid_argument("in-memory TLS identity requires both certificate chain and private key PEM");
     }
-    return {.location_ = tls_identity_pem{.certificate_chain_ = identity.certificate_chain_pem_,
-                .private_key_ = identity.private_key_pem_},
-        .private_key_password_ = identity.private_key_password_,
-        .ocsp_response_ = ocsp_response};
+    return {.location_ = tls_identity_pem{.certificate_chain_ = identity.certificate_chain_pem_, .private_key_ = identity.private_key_pem_}, .private_key_password_ = identity.private_key_password_, .ocsp_response_ = ocsp_response};
 }
 
 [[nodiscard]] tls_certificate load_tls_identity(const tls_identity_source& source) {
@@ -2466,8 +2360,7 @@ struct tls_identity_source final {
     return tls_certificate::load_pem(pem.certificate_chain_, pem.private_key_, source.private_key_password_);
 }
 
-[[nodiscard]] http_server_tls_identities::identity load_fixed_tls_identity(
-    const tls_identity_source& source) {
+[[nodiscard]] http_server_tls_identities::identity load_fixed_tls_identity(const tls_identity_source& source) {
     return {load_tls_identity(source), source.ocsp_response_};
 }
 
@@ -2534,10 +2427,7 @@ private:
 tls_identity_plan::tls_identity_plan(const tls_config& config) {
     if (config.certificate_store_) {
         const auto& identity = config.identity_;
-        if (!identity.certificate_chain_file_.empty() || !identity.private_key_file_.empty() ||
-            !identity.certificate_chain_pem_.empty() || !identity.private_key_pem_.empty() ||
-            !identity.private_key_password_.empty() || !config.ocsp_response_.empty() ||
-            !config.sni_.empty() || !config.local_addresses_.empty()) {
+        if (!identity.certificate_chain_file_.empty() || !identity.private_key_file_.empty() || !identity.certificate_chain_pem_.empty() || !identity.private_key_pem_.empty() || !identity.private_key_password_.empty() || !config.ocsp_response_.empty() || !config.sni_.empty() || !config.local_addresses_.empty()) {
             throw std::invalid_argument("TLS certificate library cannot be combined with fixed identities");
         }
         if (!config.select_certificate_ && config.default_certificate_ == 0) {
@@ -2616,8 +2506,7 @@ std::shared_ptr<const http_server_tls_identities> tls_identity_plan::load() cons
     return identities;
 }
 
-[[nodiscard]] asio::ssl::verify_mode http_server_tls_verify_mode(
-    tls_client_certificate_requirement requirement) noexcept {
+[[nodiscard]] asio::ssl::verify_mode http_server_tls_verify_mode(tls_client_certificate_requirement requirement) noexcept {
     auto mode = asio::ssl::verify_peer;
     if (requirement == tls_client_certificate_requirement::required) {
         mode |= asio::ssl::verify_fail_if_no_peer_cert;
@@ -2631,8 +2520,7 @@ tls_certificate load_server_tls_certificate(const tls_identity_config& identity)
     return load_tls_identity(make_tls_identity_source(identity));
 }
 
-const http_server_tls_identities::identity& http_server_tls_identities::select(
-    std::string_view server_name, const asio::ip::address* local_address) const noexcept {
+const http_server_tls_identities::identity& http_server_tls_identities::select(std::string_view server_name, const asio::ip::address* local_address) const noexcept {
     if (!server_name.empty()) {
         for (const auto& named : exact_names_) {
             if (http_ascii_equals_ignore_case(named.name_, server_name)) {
@@ -2660,8 +2548,7 @@ const http_server_tls_identities::identity& http_server_tls_identities::select(
     return *primary_;
 }
 
-http_server_listener_definition::tls load_http_server_tls(
-    const tls_config& config) {
+http_server_listener_definition::tls load_http_server_tls(const tls_config& config) {
     validate_tls_record_limit(config.max_outgoing_records_);
     // Every setting is validated before any credential is read.
     const tls_identity_plan identities(config);
@@ -2694,8 +2581,7 @@ http_server_listener_definition::tls load_http_server_tls(
     return tls;
 }
 
-std::shared_ptr<const http_server_tls_identities> load_http_server_tls_identities(
-    const tls_config& config) {
+std::shared_ptr<const http_server_tls_identities> load_http_server_tls_identities(const tls_config& config) {
     return tls_identity_plan(config).load();
 }
 
@@ -2705,18 +2591,13 @@ void ensure_same_http_server_tls_policy(const http_server_listener_definition::t
     }
     const auto& client = config.client_certificates_;
     const auto& policy = current.client_certificates_;
-    const bool same = policy.has_value()
-                          ? client.requirement_ == policy->requirement_ && client.ca_file_.has_value() &&
-                                make_tls_file_name(*client.ca_file_) == policy->ca_file_
-                          : client.requirement_ == tls_client_certificate_requirement::optional &&
-                                !client.ca_file_.has_value();
+    const bool same = policy.has_value() ? client.requirement_ == policy->requirement_ && client.ca_file_.has_value() && make_tls_file_name(*client.ca_file_) == policy->ca_file_ : client.requirement_ == tls_client_certificate_requirement::optional && !client.ca_file_.has_value();
     if (!same) {
         throw std::invalid_argument("replacing TLS identities must keep the listener's client certificate policy");
     }
 }
 
-void configure_http_server_client_certificates(SSL_CTX& context_value,
-    const std::optional<http_server_listener_definition::tls_client_certificate_policy>& client_certificates) {
+void configure_http_server_client_certificates(SSL_CTX& context_value, const std::optional<http_server_listener_definition::tls_client_certificate_policy>& client_certificates) {
     if (!client_certificates.has_value()) {
         return;
     }
@@ -2728,8 +2609,7 @@ void configure_http_server_client_certificates(SSL_CTX& context_value,
     if (::SSL_CTX_set_session_id_context(&context_value, session_id_context, sizeof(session_id_context)) != 1) {
         throw_tls_credential_error("set_session_id_context");
     }
-    SSL_CTX_set_verify(&context_value,
-        static_cast<int>(http_server_tls_verify_mode(client_certificates->requirement_)), nullptr);
+    SSL_CTX_set_verify(&context_value, static_cast<int>(http_server_tls_verify_mode(client_certificates->requirement_)), nullptr);
 }
 
 }  // namespace ruvia::detail
@@ -2738,8 +2618,7 @@ namespace ruvia::detail {
 namespace {
 
 // The identity set is immutable and shared, not copied.
-http_server_listener_definition::tls clone_tls(
-    const http_server_listener_definition::tls& source_value) {
+http_server_listener_definition::tls clone_tls(const http_server_listener_definition::tls& source_value) {
     http_server_listener_definition::tls result_value(source_value.identities_);
     if (const auto& policy = source_value.client_certificates_; policy.has_value()) {
         result_value.client_certificates_.emplace(http_server_listener_definition::tls_client_certificate_policy{
@@ -2755,22 +2634,17 @@ http_server_listener_definition::tls clone_tls(
     return result_value;
 }
 
-http_server_listener_definition::transport_type clone_transport(
-    const http_server_listener_definition::transport_type& source_value) {
-    return std::visit(
-        []<typename transport_type>(
-            const transport_type& transport) -> http_server_listener_definition::transport_type {
-            if constexpr (std::is_same_v<transport_type, http_server_listener_definition::tls>) {
-                return clone_tls(transport);
-            } else {
-                return transport;
-            }
-        },
-        source_value);
+http_server_listener_definition::transport_type clone_transport(const http_server_listener_definition::transport_type& source_value) {
+    return std::visit([]<typename transport_type>(const transport_type& transport) -> http_server_listener_definition::transport_type {
+        if constexpr (std::is_same_v<transport_type, http_server_listener_definition::tls>) {
+            return clone_tls(transport);
+        } else {
+            return transport;
+        }
+    }, source_value);
 }
 
-std::optional<http_server_listener_definition::connection_dispatch> clone_connection_dispatch(
-    const std::optional<http_server_listener_definition::connection_dispatch>& source_value) {
+std::optional<http_server_listener_definition::connection_dispatch> clone_connection_dispatch(const std::optional<http_server_listener_definition::connection_dispatch>& source_value) {
     std::optional<http_server_listener_definition::connection_dispatch> result_value;
     if (source_value.has_value()) {
         result_value.emplace(source_value->alpn_);
@@ -2781,8 +2655,7 @@ std::optional<http_server_listener_definition::connection_dispatch> clone_connec
 }  // namespace
 
 http_server_listener_definition http_server_listener_definition::clone() const {
-    http_server_listener_definition result_value(
-        endpoint_, clone_transport(transport_), http3_);
+    http_server_listener_definition result_value(endpoint_, clone_transport(transport_), http3_);
     result_value.connection_ = clone_connection_dispatch(connection_);
     result_value.inherited_sockets_ = inherited_sockets_;
     result_value.ipv6_only_ = ipv6_only_;
@@ -2791,14 +2664,13 @@ http_server_listener_definition http_server_listener_definition::clone() const {
     return result_value;
 }
 
-http_server_session_config::http_server_session_config(
-    const http_server_listener_definition& definition)
-    : transport_(clone_transport(definition.transport_)),
-      ipv6_only_(definition.ipv6_only_),
-      proxy_protocol_(definition.proxy_protocol_),
-      http3_(definition.http3_),
-      connection_(clone_connection_dispatch(definition.connection_)),
-      request_stream_(definition.request_stream_) {
+http_server_session_config::http_server_session_config(const http_server_listener_definition& definition) :
+    transport_(clone_transport(definition.transport_)),
+    ipv6_only_(definition.ipv6_only_),
+    proxy_protocol_(definition.proxy_protocol_),
+    http3_(definition.http3_),
+    connection_(clone_connection_dispatch(definition.connection_)),
+    request_stream_(definition.request_stream_) {
     if (http3_.has_value()) {
         // RFC 7838 §3: alt-authority with an empty host names this origin's
         // host on the UDP port; "ma" bounds how long clients cache it.
@@ -2809,8 +2681,7 @@ http_server_session_config::http_server_session_config(
     }
 }
 
-void http_server_session_config::adopt_tls_identities(
-    std::shared_ptr<const http_server_tls_identities> identities) noexcept {
+void http_server_session_config::adopt_tls_identities(std::shared_ptr<const http_server_tls_identities> identities) noexcept {
     if (auto* tls = std::get_if<http_server_listener_definition::tls>(&transport_)) {
         tls->identities_.swap(identities);
     }
@@ -2850,8 +2721,7 @@ template <typename endpoint_type>
 [[nodiscard]] bool bound_to(native_socket socket, const endpoint_type& endpoint) {
     endpoint_type local;
     auto length = static_cast<socket_length>(local.capacity());
-    if (::getsockname(os_socket(socket), local.data(), &length) != 0 || length <= 0 ||
-        static_cast<std::size_t>(length) > local.capacity() || local.data()->sa_family != endpoint.data()->sa_family) {
+    if (::getsockname(os_socket(socket), local.data(), &length) != 0 || length <= 0 || static_cast<std::size_t>(length) > local.capacity() || local.data()->sa_family != endpoint.data()->sa_family) {
         return false;
     }
     local.resize(static_cast<std::size_t>(length));
@@ -2863,8 +2733,7 @@ template <typename endpoint_type>
 void mark_close_on_exec(native_socket socket) {
 #if defined(_WIN32)
     if (::SetHandleInformation(reinterpret_cast<HANDLE>(os_socket(socket)), HANDLE_FLAG_INHERIT, 0) == 0) {
-        throw std::system_error(static_cast<int>(::GetLastError()), asio::system_category(),
-            "failed to make an inherited listener socket non-inheritable");
+        throw std::system_error(static_cast<int>(::GetLastError()), asio::system_category(), "failed to make an inherited listener socket non-inheritable");
     }
 #else
     const int flags = ::fcntl(socket, F_GETFD);
@@ -2992,12 +2861,10 @@ void http_server_options::set_server(const server_config& config) {
     if (const auto& compression = config.compression_) {
         ensure_positive_size(compression->min_bytes_, "compression minimum size must be greater than zero");
         if (compression->sync_bytes_ < compression->min_bytes_) {
-            throw std::invalid_argument(
-                "compression synchronous size must not be smaller than the minimum size");
+            throw std::invalid_argument("compression synchronous size must not be smaller than the minimum size");
         }
         if (compression->max_bytes_ < compression->sync_bytes_) {
-            throw std::invalid_argument(
-                "compression maximum size must not be smaller than the synchronous size");
+            throw std::invalid_argument("compression maximum size must not be smaller than the synchronous size");
         }
     }
     std::optional<http_cors_policy> cors;
@@ -3024,8 +2891,7 @@ void http_server_options::set_trusted_proxies(const trusted_proxy_config& config
     trusted_proxies_ = http_client_ip_extractor(ip_config);
 }
 
-http_server_listener_definition validate_run_listener(const http_server_listener_definition& listener,
-    const http_server_options& options, std::chrono::steady_clock::time_point key_origin) {
+http_server_listener_definition validate_run_listener(const http_server_listener_definition& listener, const http_server_options& options, std::chrono::steady_clock::time_point key_origin) {
     const auto worker_count = options.server_.worker_count_;
     if (const auto* redirect = std::get_if<http_server_listener_definition::redirect_http_to_https>(&listener.transport_)) {
         detail::ensure_non_zero_port(redirect->https_port_, "HTTP-to-HTTPS redirect requires a fixed HTTPS listen port");
@@ -3039,8 +2905,7 @@ http_server_listener_definition validate_run_listener(const http_server_listener
                 break;
             case http_server_listener_definition::tls_tcp_mode::detect_plain_or_tls:
                 if (tls->plaintext_redirect_) {
-                    detail::ensure_non_zero_port(
-                        tls->plaintext_redirect_->https_port_, "HTTP-to-HTTPS redirect requires a fixed HTTPS listen port");
+                    detail::ensure_non_zero_port(tls->plaintext_redirect_->https_port_, "HTTP-to-HTTPS redirect requires a fixed HTTPS listen port");
                 }
                 break;
             default:
@@ -3059,9 +2924,7 @@ http_server_listener_definition validate_run_listener(const http_server_listener
     }
 #if !defined(_WIN32)
     // Worker i serves inherited socket i; listen() admitted one per service on Windows.
-    if (const auto& inherited = listener.inherited_sockets_; inherited != nullptr &&
-                                                             ((!inherited->tcp().empty() && inherited->tcp().size() != worker_count) ||
-                                                                 (!inherited->udp().empty() && inherited->udp().size() != worker_count))) {
+    if (const auto& inherited = listener.inherited_sockets_; inherited != nullptr && ((!inherited->tcp().empty() && inherited->tcp().size() != worker_count) || (!inherited->udp().empty() && inherited->udp().size() != worker_count))) {
         throw std::invalid_argument("inherited listener sockets must number one per worker");
     }
 #endif
@@ -3084,17 +2947,15 @@ http_server_listener_definition validate_run_listener(const http_server_listener
     return validated;
 }
 
-validated_http_server_configuration::validated_http_server_configuration(
-    std::span<const http_server_listener_definition> listeners, http_server_options&& options)
-    : listeners_(),
-      options_(std::move(options)),
-      // Every listener's key epochs start together, so all workers rotate them
-      // at the same instants.
-      tls_key_origin_(std::chrono::steady_clock::now()) {
+validated_http_server_configuration::validated_http_server_configuration(std::span<const http_server_listener_definition> listeners, http_server_options&& options) :
+    listeners_(),
+    options_(std::move(options)),
+    // Every listener's key epochs start together, so all workers rotate them
+    // at the same instants.
+    tls_key_origin_(std::chrono::steady_clock::now()) {
     listeners_.reserve(listeners.size());
     for (const auto& listener : listeners) {
-        listeners_.push_back(
-            validate_run_listener(listener, options_, tls_key_origin_));
+        listeners_.push_back(validate_run_listener(listener, options_, tls_key_origin_));
     }
 }
 
@@ -3111,41 +2972,26 @@ void validate_worker_queue_capacity(std::size_t capacity) {
 
 void validate_server_limits(const server_config& config) {
     detail::ensure_positive_size(config.worker_count_, "worker count must be greater than zero");
-    if (config.process_signal_handlers_ != process_signal_handler_policy::external_owner &&
-        config.process_signal_handlers_ != process_signal_handler_policy::install) {
+    if (config.process_signal_handlers_ != process_signal_handler_policy::external_owner && config.process_signal_handlers_ != process_signal_handler_policy::install) {
         throw std::invalid_argument("process signal handler policy is invalid");
     }
-    detail::ensure_positive_optional_durations("configured server timeouts must be greater than zero",
-        config.idle_timeout_, config.request_header_timeout_, config.request_body_timeout_,
-        config.write_timeout_);
-    detail::ensure_positive_duration(
-        config.connection_scan_interval_, "connection scan interval must be greater than 0");
+    detail::ensure_positive_optional_durations("configured server timeouts must be greater than zero", config.idle_timeout_, config.request_header_timeout_, config.request_body_timeout_, config.write_timeout_);
+    detail::ensure_positive_duration(config.connection_scan_interval_, "connection scan interval must be greater than 0");
     validate_worker_queue_capacity(config.worker_queue_capacity_);
     detail::ensure_positive_size(config.max_buffered_body_bytes_, "buffered body limit must be greater than 0");
-    detail::ensure_positive_optional_size(
-        config.max_stream_body_bytes_, "configured stream body limit must be greater than zero");
-    detail::ensure_positive_size(
-        config.max_websocket_message_bytes_, "websocket message limit must be greater than 0");
-    detail::ensure_positive_optional_size(
-        config.max_connections_per_worker_, "configured connection limit must be greater than zero");
-    detail::ensure_positive_optional_size(config.max_requests_per_connection_,
-        "configured requests-per-connection limit must be greater than zero");
-    detail::ensure_positive_size(config.max_inbound_buffer_bytes_per_worker_,
-        "worker inbound buffer budget must be greater than zero");
-    detail::ensure_positive_size(config.max_inbound_buffer_bytes_per_connection_,
-        "connection inbound buffer budget must be greater than zero");
-    detail::ensure_positive_optional_durations("completion deadlines must be greater than zero",
-        config.header_completion_timeout_, config.body_completion_timeout_);
-    detail::ensure_positive_size(config.http_client_worker_.result_budget_.max_retained_bytes_,
-        "HTTP client retained result byte budget must be greater than zero");
-    detail::ensure_positive_size(config.http_client_worker_.result_budget_.max_in_flight_bytes_,
-        "HTTP client in-flight response budget must be greater than zero");
-    detail::ensure_positive_size(config.http_client_worker_.max_concurrent_dns_refreshes_,
-        "HTTP client DNS refresh concurrency must be greater than zero");
+    detail::ensure_positive_optional_size(config.max_stream_body_bytes_, "configured stream body limit must be greater than zero");
+    detail::ensure_positive_size(config.max_websocket_message_bytes_, "websocket message limit must be greater than 0");
+    detail::ensure_positive_optional_size(config.max_connections_per_worker_, "configured connection limit must be greater than zero");
+    detail::ensure_positive_optional_size(config.max_requests_per_connection_, "configured requests-per-connection limit must be greater than zero");
+    detail::ensure_positive_size(config.max_inbound_buffer_bytes_per_worker_, "worker inbound buffer budget must be greater than zero");
+    detail::ensure_positive_size(config.max_inbound_buffer_bytes_per_connection_, "connection inbound buffer budget must be greater than zero");
+    detail::ensure_positive_optional_durations("completion deadlines must be greater than zero", config.header_completion_timeout_, config.body_completion_timeout_);
+    detail::ensure_positive_size(config.http_client_worker_.result_budget_.max_retained_bytes_, "HTTP client retained result byte budget must be greater than zero");
+    detail::ensure_positive_size(config.http_client_worker_.result_budget_.max_in_flight_bytes_, "HTTP client in-flight response budget must be greater than zero");
+    detail::ensure_positive_size(config.http_client_worker_.max_concurrent_dns_refreshes_, "HTTP client DNS refresh concurrency must be greater than zero");
 }
 
-[[nodiscard]] validated_http_server_configuration validate_http_server_configuration(
-    std::span<const http_server_listener_definition> listeners, http_server_options&& options) {
+[[nodiscard]] validated_http_server_configuration validate_http_server_configuration(std::span<const http_server_listener_definition> listeners, http_server_options&& options) {
     return validated_http_server_configuration(listeners, std::move(options));
 }
 
@@ -3164,15 +3010,12 @@ using snapshot_owner = std::unique_ptr<static_root>;
 
 }  // namespace
 
-document_root_publisher::document_root_publisher(const std::filesystem::path& root,
-    const static_root_config_storage& config, std::chrono::milliseconds interval,
-    static_root_precompression_options precompression, static_root_resident_options resident,
-    std::size_t worker_count)
-    : root_(root),
-      interval_(interval),
-      precompression_(precompression),
-      resident_(resident),
-      mailboxes_(worker_count) {
+document_root_publisher::document_root_publisher(const std::filesystem::path& root, const static_root_config_storage& config, std::chrono::milliseconds interval, static_root_precompression_options precompression, static_root_resident_options resident, std::size_t worker_count) :
+    root_(root),
+    interval_(interval),
+    precompression_(precompression),
+    resident_(resident),
+    mailboxes_(worker_count) {
     auto initial = static_root_access::make(root, config);
     static_root_access::install_resident_bodies(*initial, nullptr, resident_);
     static_root_access::install_precompressed_variants(*initial, nullptr, precompression_);
@@ -3208,19 +3051,16 @@ void document_root_publisher::publish(document_root_snapshot snapshot) {
     commit_publication(std::move(snapshot), publication);
 }
 
-void document_root_publisher::commit_publication(document_root_snapshot snapshot,
-    std::vector<publication_owner>& publication) noexcept {
+void document_root_publisher::commit_publication(document_root_snapshot snapshot, std::vector<publication_owner>& publication) noexcept {
     current_.swap(snapshot);
     for (std::size_t i = 0; i < mailboxes_.size(); ++i) {
-        publication_owner superseded(
-            mailboxes_[i].pending_.exchange(publication[i].release(), std::memory_order_acq_rel));
+        publication_owner superseded(mailboxes_[i].pending_.exchange(publication[i].release(), std::memory_order_acq_rel));
     }
     // Unread nodes are reclaimed by the next publish; adopted snapshots live
     // only as long as a worker's current generation or request leases need them.
 }
 
-task<void> document_root_publisher::refresh(
-    const worker_ref& worker, const http_server_worker_state& state, const stop_token& stop) {
+task<void> document_root_publisher::refresh(const worker_ref& worker, const http_server_worker_state& state, const stop_token& stop) {
     // Shared ownership lets the blocking jobs read the previous snapshot while
     // workers keep serving it, and lets resident bytes and precompression
     // reuse its unchanged file versions.
@@ -3230,10 +3070,8 @@ task<void> document_root_publisher::refresh(
         // The unchanged-snapshot comparison walks every entry, so it runs on
         // the pool with the rebuild; an unchanged root yields no candidate.
         auto rebuilt = co_await ruvia::run_blocking(worker, {.stop_token_ = stop}, [previous, root = root_] {
-            auto built = static_root_access::make(root,
-                static_root_access::copy_config(*previous));
-            if (static_root_access::fingerprint(*built) == static_root_access::fingerprint(*previous) &&
-                static_root_access::same_snapshot(*built, *previous)) {
+            auto built = static_root_access::make(root, static_root_access::copy_config(*previous));
+            if (static_root_access::fingerprint(*built) == static_root_access::fingerprint(*previous) && static_root_access::same_snapshot(*built, *previous)) {
                 built.reset();
             }
             return built;
@@ -3262,14 +3100,11 @@ task<void> document_root_publisher::refresh(
 
     if (precompression_.enabled() || resident_.enabled()) {
         try {
-            auto prepared = co_await ruvia::run_blocking(worker, {.stop_token_ = stop},
-                [candidate = std::move(candidate), previous, precompression = precompression_,
-                    resident = resident_]() mutable {
-                    static_root_access::install_resident_bodies(*candidate, previous.get(), resident);
-                    static_root_access::install_precompressed_variants(
-                        *candidate, previous.get(), precompression);
-                    return std::move(candidate);
-                });
+            auto prepared = co_await ruvia::run_blocking(worker, {.stop_token_ = stop}, [candidate = std::move(candidate), previous, precompression = precompression_, resident = resident_]() mutable {
+                static_root_access::install_resident_bodies(*candidate, previous.get(), resident);
+                static_root_access::install_precompressed_variants(*candidate, previous.get(), precompression);
+                return std::move(candidate);
+            });
             if (!prepared.completed()) {
                 if (prepared.failed()) {
                     record_failure(prepared.error());
@@ -3293,17 +3128,16 @@ task<void> document_root_publisher::refresh(
     }
 }
 
-static_root_runtime::static_root_runtime(http_server_options& options, const worker_ref& worker_value,
-    const http_server_worker_state& state_value)
-    : options_(options),
-      publisher_(options.document_root_.publisher()),
-      mailbox_(publisher_ == nullptr ? nullptr : &publisher_->register_worker()),
-      worker_(worker_value),
-      state_(state_value),
-      pending_(nullptr),
-      current_(nullptr),
-      retired_(),
-      refreshes_(publisher_ != nullptr && mailbox_ == publisher_->mailboxes_.data()) {
+static_root_runtime::static_root_runtime(http_server_options& options, const worker_ref& worker_value, const http_server_worker_state& state_value) :
+    options_(options),
+    publisher_(options.document_root_.publisher()),
+    mailbox_(publisher_ == nullptr ? nullptr : &publisher_->register_worker()),
+    worker_(worker_value),
+    state_(state_value),
+    pending_(nullptr),
+    current_(nullptr),
+    retired_(),
+    refreshes_(publisher_ != nullptr && mailbox_ == publisher_->mailboxes_.data()) {
     if (publisher_ != nullptr) {
         // Worker construction is serialized before startup; no publisher can
         // replace this shared_ptr while its initial reference is copied.
@@ -3315,8 +3149,7 @@ static_root_runtime::static_root_runtime(http_server_options& options, const wor
 static_root_runtime::~static_root_runtime() = default;
 
 void static_root_runtime::adopt_published() {
-    if (auto* published = mailbox_->pending_.exchange(nullptr, std::memory_order_acq_rel);
-        published != nullptr) {
+    if (auto* published = mailbox_->pending_.exchange(nullptr, std::memory_order_acq_rel); published != nullptr) {
         pending_.reset(published);
     }
     if (pending_ == nullptr) {
@@ -3351,7 +3184,9 @@ task<void> static_root_runtime::refresh(const stop_token& stop) {
             co_return;
         }
 
-        std::erase_if(retired_, [](const generation_owner& generation) { return !generation->leased(); });
+        std::erase_if(retired_, [](const generation_owner& generation) {
+            return !generation->leased();
+        });
 
         if (refreshes_) {
             co_await publisher_->refresh(worker_, state_, stop);
@@ -3373,90 +3208,98 @@ task<void> static_root_runtime::refresh(const stop_token& stop) {
 
 namespace ruvia::detail {
 
-web_worker_runtime::web_worker_runtime(const validated_http_server_configuration& configuration,
-    const route_table& routes_value, worker_capability_definitions capabilities, blocking_pool* pool,
-    std::size_t worker_index
+web_worker_runtime::web_worker_runtime(const validated_http_server_configuration& configuration, const route_table& routes_value, worker_capability_definitions capabilities, blocking_pool* pool, std::size_t worker_index
 #if defined(RUVIA_ENABLE_HTTP3)
     ,
     http3_worker_placement http3_placement
 #endif
-    )
-    : web_worker_runtime(configuration.listeners(), routes_value, capabilities, configuration.options(), pool,
-          worker_index
+    ) :
+    web_worker_runtime(configuration.listeners(), routes_value, capabilities, configuration.options(), pool, worker_index
 #if defined(RUVIA_ENABLE_HTTP3)
-          ,
-          http3_placement
+        ,
+        http3_placement
 #endif
-      ) {
+    ) {
 }
 
-web_worker_runtime::web_worker_runtime(std::span<const http_server_listener_definition> listeners,
-    const route_table& routes_value, worker_capability_definitions capabilities,
-    http_server_options validated_options, blocking_pool* pool, std::size_t worker_index
+web_worker_runtime::web_worker_runtime(std::span<const http_server_listener_definition> listeners, const route_table& routes_value, worker_capability_definitions capabilities, http_server_options validated_options, blocking_pool* pool, std::size_t worker_index
 #if defined(RUVIA_ENABLE_HTTP3)
     ,
     http3_worker_placement http3_placement
 #endif
-    )
-    : runtime_({.queue_capacity_ = validated_options.server_.worker_queue_capacity_,
-          .io_policy_ = ruvia::worker_io_policy::single_owner,
-          .blocking_pool_ = pool}),
-      io_context_(runtime_.io_context()),
-      finalize_signal_(runtime_.worker()),
-      routes_(routes_value),
-      inbound_budget_(validated_options.server_.max_inbound_buffer_bytes_per_worker_),
-      background_tasks_(runtime_.worker()),
-      options_(std::move(validated_options)),
-      static_roots_(options_, runtime_.worker(), worker_state_),
-      capabilities_(io_context_, runtime_.worker(), capabilities,
-          worker_capability_options{
-              .default_rate_limit_ = options_.default_rate_limit_per_worker_,
-              .route_rate_limits_ = routes_.has_route_rate_limit() ? route_rate_limit_presence::present
-                                                                   : route_rate_limit_presence::absent,
-              .rate_limit_capacity_ = options_.rate_limit_capacity_per_worker_,
-              .max_decoded_body_bytes_ = options_.server_.max_buffered_body_bytes_,
-              .http_client_worker_ = options_.server_.http_client_worker_,
-              .env_ = options_.env_,
-              .trusted_proxies_ =
-                  options_.trusted_proxies_.empty() ? nullptr : &options_.trusted_proxies_,
-              .precompressed_static_files_ = options_.compression_.has_value(),
-              .file_io_timeout_ = options_.server_.write_timeout_,
-              .connection_failure_ = &options_.connection_failure_,
-          }),
-      connections_(io_context_, runtime_.worker(), routes_, capabilities_, options_, stop_token_, worker_state_, background_tasks_, listeners,
-          worker_failure_sink{.target_ = &runtime_,
-              .invoke_ = [](void* target, const std::exception_ptr& failure) noexcept {
-                  (void)static_cast<ruvia::worker_runtime*>(target)->fail(failure);
-              }},
-          worker_index
+    ) :
+    runtime_({.queue_capacity_ = validated_options.server_.worker_queue_capacity_, .io_policy_ = ruvia::worker_io_policy::single_owner, .blocking_pool_ = pool}),
+    io_context_(runtime_.io_context()),
+    finalize_signal_(runtime_.worker()),
+    routes_(routes_value),
+    inbound_budget_(validated_options.server_.max_inbound_buffer_bytes_per_worker_),
+    background_tasks_(runtime_.worker()),
+    options_(std::move(validated_options)),
+    static_roots_(options_, runtime_.worker(), worker_state_),
+    capabilities_(io_context_, runtime_.worker(), capabilities,
+        worker_capability_options{
+            .default_rate_limit_ = options_.default_rate_limit_per_worker_,
+            .route_rate_limits_ = routes_.has_route_rate_limit() ? route_rate_limit_presence::present : route_rate_limit_presence::absent,
+            .rate_limit_capacity_ = options_.rate_limit_capacity_per_worker_,
+            .max_decoded_body_bytes_ = options_.server_.max_buffered_body_bytes_,
+            .http_client_worker_ = options_.server_.http_client_worker_,
+            .env_ = options_.env_,
+            .trusted_proxies_ = options_.trusted_proxies_.empty() ? nullptr : &options_.trusted_proxies_,
+            .precompressed_static_files_ = options_.compression_.has_value(),
+            .file_io_timeout_ = options_.server_.write_timeout_,
+            .connection_failure_ = &options_.connection_failure_,
+        }),
+    connections_(io_context_, runtime_.worker(), routes_, capabilities_, options_, stop_token_, worker_state_, background_tasks_, listeners,
+        worker_failure_sink{
+            .target_ = &runtime_,
+            .invoke_ =
+                [](void* target, const std::exception_ptr& failure) noexcept {
+                    (void)static_cast<ruvia::worker_runtime*>(target)->fail(failure);
+                }
+        },
+        worker_index
 #if defined(RUVIA_ENABLE_HTTP3)
-          ,
-          http3_placement
+        ,
+        http3_placement
 #endif
-          ),
-      web_worker_dispatch_(std::make_shared<web_worker_dispatch>(runtime_, capabilities_, background_tasks_, stop_token_)) {
+        ),
+    web_worker_dispatch_(std::make_shared<web_worker_dispatch>(runtime_, capabilities_, background_tasks_, stop_token_)) {
     options_.inbound_budget_ = &inbound_budget_;
     options_.codecs_ = &codecs_;
     runtime_.configure({
-        .startup_ = [this] {
-            worker_state_ = http_server_worker_state::running;
-            // Startup runs before the context does; the task starts in its first turn.
-            asio::post(io_context_, [this] {
-                ruvia::async_start(run_worker(), asio::bind_executor(io_context_, [this](std::exception_ptr failure) noexcept {
-                    if (failure) {
-                        (void)runtime_.fail(failure);
-                    }
-                }));
-            }); },
-        .serve_ = [this] { serve_on_context(); },
-        .stop_admission_ = [this] { stop_admission_on_context(); },
-        .finalize_ = [this] { finalize_on_context(); },
-        .failure_ = [this](std::exception_ptr failure) noexcept {
-            worker_failures_.fetch_add(1, std::memory_order_relaxed);
-            options_.failure_.notify(failure); },
+        .startup_ =
+            [this] {
+        worker_state_ = http_server_worker_state::running;
+        // Startup runs before the context does; the task starts in its first turn.
+        asio::post(io_context_, [this] {
+            ruvia::async_start(run_worker(), asio::bind_executor(io_context_, [this](std::exception_ptr failure) noexcept {
+                if (failure) {
+                    (void)runtime_.fail(failure);
+                }
+            }));
+        });
+    },
+        .serve_ =
+            [this] {
+        serve_on_context();
+    },
+        .stop_admission_ =
+            [this] {
+        stop_admission_on_context();
+    },
+        .finalize_ =
+            [this] {
+        finalize_on_context();
+    },
+        .failure_ =
+            [this](std::exception_ptr failure) noexcept {
+        worker_failures_.fetch_add(1, std::memory_order_relaxed);
+        options_.failure_.notify(failure);
+    },
         .shutdown_ = [this]() noexcept {
-            connections_.retire_tls();
-            worker_state_ = http_server_worker_state::stopped; },
+        connections_.retire_tls();
+        worker_state_ = http_server_worker_state::stopped;
+    },
     });
 }
 

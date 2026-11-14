@@ -71,8 +71,8 @@ public:
 
 private:
     friend class redis_search_mapping;
-    explicit redis_compiled_command(std::vector<std::string>&& arguments) noexcept
-        : arguments_(std::move(arguments)) {}
+    explicit redis_compiled_command(std::vector<std::string>&& arguments) noexcept :
+        arguments_(std::move(arguments)) {}
 
     std::vector<std::string> arguments_;
 };
@@ -145,8 +145,8 @@ public:
     }
 
 private:
-    explicit redis_block_wait(std::optional<timeout_duration> duration) noexcept
-        : duration_(duration) {}
+    explicit redis_block_wait(std::optional<timeout_duration> duration) noexcept :
+        duration_(duration) {}
 
     std::optional<timeout_duration> duration_;
 };
@@ -167,10 +167,8 @@ public:
     constexpr redis_positive_count() noexcept = default;
 
     template <std::integral integer_type>
-    constexpr redis_positive_count(integer_type value)
-        : value_(is_valid_value(value)
-                     ? static_cast<std::uint64_t>(value)
-                     : throw std::invalid_argument("Redis count must be in 1..9223372036854775807")) {}
+    constexpr redis_positive_count(integer_type value) :
+        value_(is_valid_value(value) ? static_cast<std::uint64_t>(value) : throw std::invalid_argument("Redis count must be in 1..9223372036854775807")) {}
 
     template <std::integral integer_type>
     [[nodiscard]] static constexpr bool is_valid_value(integer_type value) noexcept {
@@ -194,8 +192,8 @@ public:
 private:
     struct validated_tag_type {};
 
-    constexpr redis_positive_count(std::uint64_t value, validated_tag_type) noexcept
-        : value_(value) {}
+    constexpr redis_positive_count(std::uint64_t value, validated_tag_type) noexcept :
+        value_(value) {}
 
     std::uint64_t value_{1};
 };
@@ -206,8 +204,7 @@ static_assert(sizeof(redis_positive_count) == sizeof(std::uint64_t));
 struct redis_x_read_group_options final {
     std::optional<redis_positive_count> count_{};
     std::optional<redis_block_wait> block_{};
-    redis_x_read_group_acknowledgement_policy acknowledgement_{
-        redis_x_read_group_acknowledgement_policy::track_pending};
+    redis_x_read_group_acknowledgement_policy acknowledgement_{redis_x_read_group_acknowledgement_policy::track_pending};
 };
 
 enum class redis_set_condition : std::uint8_t {
@@ -241,11 +238,11 @@ private:
     struct keep_existing_type final {};
     using value_type = std::variant<std::chrono::milliseconds, keep_existing_type>;
 
-    explicit redis_set_expiration(std::chrono::milliseconds duration) noexcept
-        : value_(duration) {}
+    explicit redis_set_expiration(std::chrono::milliseconds duration) noexcept :
+        value_(duration) {}
 
-    explicit redis_set_expiration(keep_existing_type keep) noexcept
-        : value_(keep) {}
+    explicit redis_set_expiration(keep_existing_type keep) noexcept :
+        value_(keep) {}
 
     value_type value_;
 };
@@ -284,9 +281,9 @@ public:
 private:
     friend struct detail::redis_types_access;
 
-    redis_set_result(bool applied, std::optional<std::string> previous) noexcept
-        : applied_(applied),
-          previous_(std::move(previous)) {}
+    redis_set_result(bool applied, std::optional<std::string> previous) noexcept :
+        applied_(applied),
+        previous_(std::move(previous)) {}
     bool applied_{false};
     std::optional<std::string> previous_;
 };
@@ -298,8 +295,8 @@ public:
 private:
     friend struct detail::redis_types_access;
 
-    explicit constexpr redis_scan_cursor(std::uint64_t value) noexcept
-        : value_(value) {}
+    explicit constexpr redis_scan_cursor(std::uint64_t value) noexcept :
+        value_(value) {}
 
     std::uint64_t value_{0};
 };
@@ -323,10 +320,9 @@ public:
 private:
     friend struct detail::redis_types_access;
 
-    constexpr redis_ttl(
-        redis_ttl_state state_value, std::optional<std::chrono::milliseconds> remaining) noexcept
-        : state_(state_value),
-          remaining_(remaining) {}
+    constexpr redis_ttl(redis_ttl_state state_value, std::optional<std::chrono::milliseconds> remaining) noexcept :
+        state_(state_value),
+        remaining_(remaining) {}
 
     redis_ttl_state state_;
     std::optional<std::chrono::milliseconds> remaining_;
@@ -363,9 +359,9 @@ public:
 private:
     friend struct detail::redis_types_access;
 
-    redis_key_value(std::string&& key, std::string&& value) noexcept
-        : key_(std::move(key)),
-          value_(std::move(value)) {}
+    redis_key_value(std::string&& key, std::string&& value) noexcept :
+        key_(std::move(key)),
+        value_(std::move(value)) {}
 
     std::string key_;
     std::string value_;
@@ -390,9 +386,9 @@ public:
 private:
     friend struct detail::redis_types_access;
 
-    redis_scored_value(std::string&& value, double score) noexcept
-        : value_(std::move(value)),
-          score_(score) {}
+    redis_scored_value(std::string&& value, double score) noexcept :
+        value_(std::move(value)),
+        score_(score) {}
 
     std::string value_;
     double score_{0};
@@ -511,8 +507,8 @@ public:
 private:
     friend struct detail::redis_types_access;
 
-    explicit redis_stream_entry(std::string&& id) noexcept
-        : id_(std::move(id)) {}
+    explicit redis_stream_entry(std::string&& id) noexcept :
+        id_(std::move(id)) {}
 
     std::string id_;
     std::vector<redis_key_value> fields_;
@@ -538,8 +534,8 @@ public:
 private:
     friend struct detail::redis_types_access;
 
-    explicit redis_stream_read_result(std::string&& stream) noexcept
-        : stream_(std::move(stream)) {}
+    explicit redis_stream_read_result(std::string&& stream) noexcept :
+        stream_(std::move(stream)) {}
 
     std::string stream_;
     std::vector<redis_stream_entry> entries_;
@@ -572,8 +568,7 @@ class redis_pool;
 
 class redis_error final : public std::runtime_error {
 public:
-    enum class code_type : std::uint8_t {
-        not_configured,
+    enum class code_type : std::uint8_t { not_configured,
         connect_failed,
         auth_failed,
         protocol_error,
@@ -581,8 +576,7 @@ public:
         io_error,
         timeout,
         cancelled,
-        closing
-    };
+        closing };
 
     redis_error(code_type code, std::string_view message);
 
@@ -747,13 +741,9 @@ struct redis_owned_command final {
 [[nodiscard]] redis_owned_command make_owned_redis_command(std::string_view first, std::span<const std::string_view> rest = {});
 
 // Shared typed command layouts for direct execution, pipelines and transactions.
-[[nodiscard]] redis_owned_command make_redis_integer_command(std::string_view command,
-    std::string_view key, std::int64_t value);
-[[nodiscard]] redis_owned_command make_redis_range_command(std::string_view command,
-    std::string_view key, std::int64_t start, std::int64_t stop,
-    bool with_scores = false);
-[[nodiscard]] redis_owned_command make_redis_zadd_command(std::string_view key, double score,
-    std::string_view member);
+[[nodiscard]] redis_owned_command make_redis_integer_command(std::string_view command, std::string_view key, std::int64_t value);
+[[nodiscard]] redis_owned_command make_redis_range_command(std::string_view command, std::string_view key, std::int64_t start, std::int64_t stop, bool with_scores = false);
+[[nodiscard]] redis_owned_command make_redis_zadd_command(std::string_view key, double score, std::string_view member);
 struct redis_command_payload final {
     std::reference_wrapper<redis_pool> pool_;
     operation_options options_;
@@ -951,8 +941,7 @@ private:
     friend class ::ruvia::redis_session;
 
     // `io_metrics` is the request's counter block, or null outside a request.
-    redis_batch(redis_pool& pool, operation_options options,
-        operation_scope& scope, request_io_metrics* io_metrics) noexcept;
+    redis_batch(redis_pool& pool, operation_options options, operation_scope& scope, request_io_metrics* io_metrics) noexcept;
     void require_ready() const;
     [[nodiscard]] redis_command_payload consume();
     void expire() noexcept;
@@ -965,8 +954,7 @@ private:
         return append_owned(make_owned_redis_command(command_name, std::span<const std::string_view>(rest)));
     }
 
-    [[nodiscard]] static task<std::vector<redis_value>> execute_owned(
-        request_io_metrics* io_metrics, redis_command_payload payload);
+    [[nodiscard]] static task<std::vector<redis_value>> execute_owned(request_io_metrics* io_metrics, redis_command_payload payload);
     static void expire_capability(void* target) noexcept;
 
     redis_pool* pool_;
@@ -1004,11 +992,10 @@ public:
 
 private:
     friend struct detail::redis_types_access;
-    redis_pubsub_confirmation(redis_pubsub_confirmation_kind kind,
-        std::optional<std::string_view> name, std::int64_t subscription_count) noexcept
-        : kind_(kind),
-          name_(name),
-          subscription_count_(subscription_count) {}
+    redis_pubsub_confirmation(redis_pubsub_confirmation_kind kind, std::optional<std::string_view> name, std::int64_t subscription_count) noexcept :
+        kind_(kind),
+        name_(name),
+        subscription_count_(subscription_count) {}
 
     redis_pubsub_confirmation_kind kind_;
     std::optional<std::string_view> name_;
@@ -1031,11 +1018,10 @@ public:
 
 private:
     friend struct detail::redis_types_access;
-    redis_pubsub_message(std::string_view channel, std::optional<std::string_view> pattern,
-        std::string_view payload) noexcept
-        : channel_(channel),
-          pattern_(pattern),
-          payload_(payload) {}
+    redis_pubsub_message(std::string_view channel, std::optional<std::string_view> pattern, std::string_view payload) noexcept :
+        channel_(channel),
+        pattern_(pattern),
+        payload_(payload) {}
 
     std::string_view channel_;
     std::optional<std::string_view> pattern_;
@@ -1058,10 +1044,10 @@ public:
 
 private:
     friend struct detail::redis_types_access;
-    explicit redis_pubsub_event(redis_pubsub_confirmation value) noexcept
-        : value_(value) {}
-    explicit redis_pubsub_event(redis_pubsub_message value) noexcept
-        : value_(value) {}
+    explicit redis_pubsub_event(redis_pubsub_confirmation value) noexcept :
+        value_(value) {}
+    explicit redis_pubsub_event(redis_pubsub_message value) noexcept :
+        value_(value) {}
 
     std::variant<redis_pubsub_confirmation, redis_pubsub_message> value_;
 };
@@ -1168,14 +1154,12 @@ public:
 private:
     friend class redis_session;
 
-    redis_subscription(detail::redis_subscription_set& subscriptions, operation_scope& scope,
-        operation_options options);
+    redis_subscription(detail::redis_subscription_set& subscriptions, operation_scope& scope, operation_options options);
 
     static void expire_capability(void* target) noexcept;
     task<void> send(std::string_view command, std::span<const std::string_view> names, bool require_names);
 
-    std::unique_ptr<detail::redis_subscription_connection>
-        connection_;
+    std::unique_ptr<detail::redis_subscription_connection> connection_;
     // Declared after the connection so it unlinks before the connection closes.
     scoped_capability_registration registration_;
 };
@@ -1204,8 +1188,7 @@ public:
     // XREAD/XREADGROUP 在 STREAMS 前只接受 COUNT、BLOCK 及 XREADGROUP 的 CLAIM、NOACK；
     // 含 BLOCK 时走阻塞池，其他选项同步抛出 std::invalid_argument。
     [[nodiscard]] task<redis_value> command(std::span<const std::string_view> args) const;
-    task<redis_value> command(
-        std::initializer_list<std::string_view> args) const = delete;
+    task<redis_value> command(std::initializer_list<std::string_view> args) const = delete;
     // Takes ownership synchronously, before the returned cold task can suspend.
     [[nodiscard]] task<redis_value> command(redis_compiled_command command) const {
         if (command.arguments().empty()) {
@@ -1217,16 +1200,11 @@ public:
     [[nodiscard]] task<void> ping() const;
     [[nodiscard]] task<std::string> ping(std::string_view message) const;
     [[nodiscard]] task<std::optional<std::string>> get(std::string_view key) const;
-    [[nodiscard]] task<std::vector<std::optional<std::string>>> mget(
-        std::span<const std::string_view> keys) const;
-    task<std::vector<std::optional<std::string>>> mget(
-        std::initializer_list<std::string_view> keys) const = delete;
-    [[nodiscard]] task<redis_set_result> set(
-        std::string_view key, std::string_view value, redis_set_options options = {}) const;
-    [[nodiscard]] task<void> mset(
-        std::span<const std::pair<std::string_view, std::string_view>> items) const;
-    task<void> mset(
-        std::initializer_list<std::pair<std::string_view, std::string_view>> items) const = delete;
+    [[nodiscard]] task<std::vector<std::optional<std::string>>> mget(std::span<const std::string_view> keys) const;
+    task<std::vector<std::optional<std::string>>> mget(std::initializer_list<std::string_view> keys) const = delete;
+    [[nodiscard]] task<redis_set_result> set(std::string_view key, std::string_view value, redis_set_options options = {}) const;
+    [[nodiscard]] task<void> mset(std::span<const std::pair<std::string_view, std::string_view>> items) const;
+    task<void> mset(std::initializer_list<std::pair<std::string_view, std::string_view>> items) const = delete;
     [[nodiscard]] task<std::optional<std::string>> get_del(std::string_view key) const;
     [[nodiscard]] task<std::int64_t> append(std::string_view key, std::string_view value) const;
     [[nodiscard]] task<std::int64_t> strlen(std::string_view key) const;
@@ -1246,46 +1224,34 @@ public:
     [[nodiscard]] task<bool> rename_nx(std::string_view key, std::string_view new_key) const;
     [[nodiscard]] task<bool> expire(std::string_view key, std::chrono::seconds ttl) const;
     [[nodiscard]] task<bool> pexpire(std::string_view key, std::chrono::milliseconds ttl) const;
-    [[nodiscard]] task<bool> expire_at(
-        std::string_view key, std::chrono::system_clock::time_point expires_at) const;
+    [[nodiscard]] task<bool> expire_at(std::string_view key, std::chrono::system_clock::time_point expires_at) const;
     [[nodiscard]] task<bool> persist(std::string_view key) const;
     [[nodiscard]] task<redis_ttl> ttl(std::string_view key) const;
     [[nodiscard]] task<redis_ttl> pttl(std::string_view key) const;
     [[nodiscard]] task<std::int64_t> incr(std::string_view key) const;
-    [[nodiscard]] task<std::optional<std::string>> hget(
-        std::string_view key, std::string_view field) const;
-    [[nodiscard]] task<std::int64_t> hset(
-        std::string_view key, std::string_view field, std::string_view value) const;
-    [[nodiscard]] task<std::int64_t> hset(std::string_view key,
-        std::span<const std::pair<std::string_view, std::string_view>> fields) const;
-    task<std::int64_t> hset(std::string_view key,
-        std::initializer_list<std::pair<std::string_view, std::string_view>> fields_value) const = delete;
-    [[nodiscard]] task<std::vector<std::optional<std::string>>> hmget(
-        std::string_view key, std::span<const std::string_view> fields) const;
-    task<std::vector<std::optional<std::string>>> hmget(
-        std::string_view key, std::initializer_list<std::string_view> fields_value) const = delete;
+    [[nodiscard]] task<std::optional<std::string>> hget(std::string_view key, std::string_view field) const;
+    [[nodiscard]] task<std::int64_t> hset(std::string_view key, std::string_view field, std::string_view value) const;
+    [[nodiscard]] task<std::int64_t> hset(std::string_view key, std::span<const std::pair<std::string_view, std::string_view>> fields) const;
+    task<std::int64_t> hset(std::string_view key, std::initializer_list<std::pair<std::string_view, std::string_view>> fields_value) const = delete;
+    [[nodiscard]] task<std::vector<std::optional<std::string>>> hmget(std::string_view key, std::span<const std::string_view> fields) const;
+    task<std::vector<std::optional<std::string>>> hmget(std::string_view key, std::initializer_list<std::string_view> fields_value) const = delete;
     [[nodiscard]] task<std::vector<redis_key_value>> hget_all(std::string_view key) const;
     [[nodiscard]] task<std::int64_t> hdel(std::string_view key, std::string_view field) const;
     [[nodiscard]] task<bool> hexists(std::string_view key, std::string_view field) const;
     [[nodiscard]] task<std::int64_t> hlen(std::string_view key) const;
     [[nodiscard]] task<std::vector<std::string>> hkeys(std::string_view key) const;
     [[nodiscard]] task<std::vector<std::string>> hvals(std::string_view key) const;
-    [[nodiscard]] task<std::int64_t> hincr_by(
-        std::string_view key, std::string_view field, std::int64_t value) const;
+    [[nodiscard]] task<std::int64_t> hincr_by(std::string_view key, std::string_view field, std::int64_t value) const;
     [[nodiscard]] task<std::int64_t> lpush(std::string_view key, std::string_view value) const;
     [[nodiscard]] task<std::int64_t> rpush(std::string_view key, std::string_view value) const;
     [[nodiscard]] task<std::optional<std::string>> lpop(std::string_view key) const;
     [[nodiscard]] task<std::optional<std::string>> rpop(std::string_view key) const;
     [[nodiscard]] task<std::int64_t> llen(std::string_view key) const;
-    [[nodiscard]] task<std::vector<std::string>> lrange(
-        std::string_view key, std::int64_t start, std::int64_t stop) const;
-    [[nodiscard]] task<std::optional<std::string>> lindex(
-        std::string_view key, std::int64_t index) const;
-    [[nodiscard]] task<void> lset(
-        std::string_view key, std::int64_t index, std::string_view value) const;
+    [[nodiscard]] task<std::vector<std::string>> lrange(std::string_view key, std::int64_t start, std::int64_t stop) const;
+    [[nodiscard]] task<std::optional<std::string>> lindex(std::string_view key, std::int64_t index) const;
+    [[nodiscard]] task<void> lset(std::string_view key, std::int64_t index, std::string_view value) const;
     [[nodiscard]] task<void> ltrim(std::string_view key, std::int64_t start, std::int64_t stop) const;
-    [[nodiscard]] task<std::int64_t> lrem(
-        std::string_view key, std::int64_t count, std::string_view value) const;
+    [[nodiscard]] task<std::int64_t> lrem(std::string_view key, std::int64_t count, std::string_view value) const;
     [[nodiscard]] task<std::int64_t> sadd(std::string_view key, std::string_view member) const;
     [[nodiscard]] task<std::int64_t> srem(std::string_view key, std::string_view member) const;
     [[nodiscard]] task<std::vector<std::string>> smembers(std::string_view key) const;
@@ -1293,62 +1259,38 @@ public:
     [[nodiscard]] task<bool> sismember(std::string_view key, std::string_view member) const;
     [[nodiscard]] task<std::optional<std::string>> spop(std::string_view key) const;
     [[nodiscard]] task<std::optional<std::string>> srand_member(std::string_view key) const;
-    [[nodiscard]] task<std::vector<std::string>> sinter(
-        std::span<const std::string_view> keys) const;
-    task<std::vector<std::string>> sinter(
-        std::initializer_list<std::string_view> keys) const = delete;
-    [[nodiscard]] task<std::vector<std::string>> sunion(
-        std::span<const std::string_view> keys) const;
-    task<std::vector<std::string>> sunion(
-        std::initializer_list<std::string_view> keys) const = delete;
-    [[nodiscard]] task<std::vector<std::string>> sdiff(
-        std::span<const std::string_view> keys) const;
-    task<std::vector<std::string>> sdiff(
-        std::initializer_list<std::string_view> keys) const = delete;
-    [[nodiscard]] task<std::int64_t> zadd(
-        std::string_view key, double score, std::string_view member) const;
+    [[nodiscard]] task<std::vector<std::string>> sinter(std::span<const std::string_view> keys) const;
+    task<std::vector<std::string>> sinter(std::initializer_list<std::string_view> keys) const = delete;
+    [[nodiscard]] task<std::vector<std::string>> sunion(std::span<const std::string_view> keys) const;
+    task<std::vector<std::string>> sunion(std::initializer_list<std::string_view> keys) const = delete;
+    [[nodiscard]] task<std::vector<std::string>> sdiff(std::span<const std::string_view> keys) const;
+    task<std::vector<std::string>> sdiff(std::initializer_list<std::string_view> keys) const = delete;
+    [[nodiscard]] task<std::int64_t> zadd(std::string_view key, double score, std::string_view member) const;
     [[nodiscard]] task<std::int64_t> zrem(std::string_view key, std::string_view member) const;
-    [[nodiscard]] task<std::vector<std::string>> zrange(
-        std::string_view key, std::int64_t start, std::int64_t stop) const;
-    [[nodiscard]] task<std::vector<redis_scored_value>> zrange_with_scores(
-        std::string_view key, std::int64_t start, std::int64_t stop) const;
-    [[nodiscard]] task<std::optional<double>> zscore(
-        std::string_view key, std::string_view member) const;
+    [[nodiscard]] task<std::vector<std::string>> zrange(std::string_view key, std::int64_t start, std::int64_t stop) const;
+    [[nodiscard]] task<std::vector<redis_scored_value>> zrange_with_scores(std::string_view key, std::int64_t start, std::int64_t stop) const;
+    [[nodiscard]] task<std::optional<double>> zscore(std::string_view key, std::string_view member) const;
     [[nodiscard]] task<std::int64_t> zcard(std::string_view key) const;
     [[nodiscard]] task<std::int64_t> zcount(std::string_view key, double min, double max) const;
     [[nodiscard]] task<redis_scan_result> scan(redis_scan_options options = {}) const;
-    [[nodiscard]] task<redis_hash_scan_result> hscan(
-        std::string_view key, redis_scan_options options = {}) const;
-    [[nodiscard]] task<redis_scan_result> sscan(
-        std::string_view key, redis_scan_options options = {}) const;
-    [[nodiscard]] task<redis_z_scan_result> zscan(
-        std::string_view key, redis_scan_options options = {}) const;
-    [[nodiscard]] task<redis_value> eval(std::string_view script,
-        std::span<const std::string_view> keys = {},
-        std::span<const std::string_view> args = {}) const;
-    [[nodiscard]] task<redis_value> eval_sha(std::string_view sha1,
-        std::span<const std::string_view> keys = {},
-        std::span<const std::string_view> args = {}) const;
+    [[nodiscard]] task<redis_hash_scan_result> hscan(std::string_view key, redis_scan_options options = {}) const;
+    [[nodiscard]] task<redis_scan_result> sscan(std::string_view key, redis_scan_options options = {}) const;
+    [[nodiscard]] task<redis_z_scan_result> zscan(std::string_view key, redis_scan_options options = {}) const;
+    [[nodiscard]] task<redis_value> eval(std::string_view script, std::span<const std::string_view> keys = {}, std::span<const std::string_view> args = {}) const;
+    [[nodiscard]] task<redis_value> eval_sha(std::string_view sha1, std::span<const std::string_view> keys = {}, std::span<const std::string_view> args = {}) const;
     [[nodiscard]] task<std::string> script_load(std::string_view script) const;
-    [[nodiscard]] task<std::vector<bool>> script_exists(
-        std::span<const std::string_view> sha1s) const;
-    [[nodiscard]] task<std::optional<redis_key_value>> blpop(
-        std::string_view key, redis_block_wait wait) const {
+    [[nodiscard]] task<std::vector<bool>> script_exists(std::span<const std::string_view> sha1s) const;
+    [[nodiscard]] task<std::optional<redis_key_value>> blpop(std::string_view key, redis_block_wait wait) const {
         const std::string_view keys[]{key};
         return blpop(std::span<const std::string_view>(keys), wait);
     }
-    [[nodiscard]] task<std::optional<redis_key_value>> blpop(
-        std::span<const std::string_view> keys, redis_block_wait wait) const;
-    [[nodiscard]] task<std::optional<redis_key_value>> brpop(
-        std::string_view key, redis_block_wait wait) const {
+    [[nodiscard]] task<std::optional<redis_key_value>> blpop(std::span<const std::string_view> keys, redis_block_wait wait) const;
+    [[nodiscard]] task<std::optional<redis_key_value>> brpop(std::string_view key, redis_block_wait wait) const {
         const std::string_view keys[]{key};
         return brpop(std::span<const std::string_view>(keys), wait);
     }
-    [[nodiscard]] task<std::optional<redis_key_value>> brpop(
-        std::span<const std::string_view> keys, redis_block_wait wait) const;
-    [[nodiscard]] task<std::optional<redis_x_read_group_result>> xread_group(std::string_view group,
-        std::string_view consumer, std::span<const redis_stream_read_view> streams,
-        redis_x_read_group_options options = {}) const;
+    [[nodiscard]] task<std::optional<redis_key_value>> brpop(std::span<const std::string_view> keys, redis_block_wait wait) const;
+    [[nodiscard]] task<std::optional<redis_x_read_group_result>> xread_group(std::string_view group, std::string_view consumer, std::span<const redis_stream_read_view> streams, redis_x_read_group_options options = {}) const;
 
     // Multi-argument commands as ordinary arguments: mget(a, b, c) instead of a
     // hand-built array plus a span. Every span overload above clones its
@@ -1368,8 +1310,7 @@ public:
 
     template <typename... keys_type>
         requires detail::redis_argument_pack<keys_type...>
-    [[nodiscard]] task<std::vector<std::optional<std::string>>> mget(
-        keys_type&&... keys) const {
+    [[nodiscard]] task<std::vector<std::optional<std::string>>> mget(keys_type&&... keys) const {
         const std::string_view views[]{std::string_view(keys)...};
         return mget(std::span<const std::string_view>(views));
     }
@@ -1406,8 +1347,7 @@ public:
 
     template <typename... field_types>
         requires detail::redis_argument_pack<field_types...>
-    [[nodiscard]] task<std::vector<std::optional<std::string>>> hmget(
-        std::string_view key, field_types&&... fields) const {
+    [[nodiscard]] task<std::vector<std::optional<std::string>>> hmget(std::string_view key, field_types&&... fields) const {
         const std::string_view views[]{std::string_view(fields)...};
         return hmget(key, std::span<const std::string_view>(views));
     }
@@ -1474,8 +1414,7 @@ public:
     template <typename entity_type>
     [[nodiscard]] redis_repository<entity_type> repository() const;
     template <typename entity_type>
-    [[nodiscard]] redis_repository<entity_type> repository(
-        const redis_repository_config& config) const;
+    [[nodiscard]] redis_repository<entity_type> repository(const redis_repository_config& config) const;
 
 private:
     // Reassembles a flat alternating argument list into the pair sequence the
@@ -1502,30 +1441,24 @@ private:
     [[nodiscard]] task<redis_value> command_owned(std::vector<std::string>&& args) const;
     // ORM scripts run as EVALSHA; a NOSCRIPT reply loads the body through
     // EVAL within the same operation.
-    [[nodiscard]] task<redis_value> script_owned(
-        const detail::redis_orm_script& script, std::vector<std::string>&& args) const;
+    [[nodiscard]] task<redis_value> script_owned(const detail::redis_orm_script& script, std::vector<std::string>&& args) const;
 
     template <typename result_type, typename mapper_type>
-    [[nodiscard]] task<result_type> command_mapped(
-        std::vector<std::string>&& args, mapper_type mapper) const {
+    [[nodiscard]] task<result_type> command_mapped(std::vector<std::string>&& args, mapper_type mapper) const {
         registration_.require_active();
         return scoped(detail::map_redis_command<result_type>(command_owned(std::move(args)), std::move(mapper)));
     }
 
     template <typename result_type, typename mapper_type>
-    [[nodiscard]] task<result_type> script_mapped(const detail::redis_orm_script& script,
-        std::vector<std::string>&& args, mapper_type mapper) const {
+    [[nodiscard]] task<result_type> script_mapped(const detail::redis_orm_script& script, std::vector<std::string>&& args, mapper_type mapper) const {
         registration_.require_active();
-        return scoped(detail::map_redis_command<result_type>(
-            script_owned(script, std::move(args)), std::move(mapper)));
+        return scoped(detail::map_redis_command<result_type>(script_owned(script, std::move(args)), std::move(mapper)));
     }
 
     // `io_metrics` is the request's counter block, or null outside a request.
-    redis_session(detail::redis_client_runtime& runtime,
-        operation_scope& operation_scope, detail::request_io_metrics* io_metrics) noexcept;
+    redis_session(detail::redis_client_runtime& runtime, operation_scope& operation_scope, detail::request_io_metrics* io_metrics) noexcept;
     // A standalone client handle: no request, so no request I/O metrics.
-    redis_session(detail::redis_client_runtime& runtime,
-        operation_scope& operation_scope, operation_options options) noexcept;
+    redis_session(detail::redis_client_runtime& runtime, operation_scope& operation_scope, operation_options options) noexcept;
 
     template <typename t_type>
     [[nodiscard]] task<t_type> scoped(ruvia::task<t_type> task_value) const {
@@ -1533,30 +1466,23 @@ private:
     }
 
     // `reply_timeout` starts when the command is written (see redis_pool).
-    [[nodiscard]] task<redis_value> execute(detail::redis_pool& pool, detail::redis_owned_command&& command,
-        std::optional<timeout_duration> reply_timeout = std::nullopt) const;
+    [[nodiscard]] task<redis_value> execute(detail::redis_pool& pool, detail::redis_owned_command&& command, std::optional<timeout_duration> reply_timeout = std::nullopt) const;
 
     // One scoped pooled command whose reply `mapper` decodes in the handle's
     // memory domain, with the map_redis_command mapper contract.
     template <typename result_type, typename mapper_type>
-    [[nodiscard]] task<result_type> execute_mapped(detail::redis_pool& pool, detail::redis_owned_command&& command,
-        mapper_type mapper, std::optional<timeout_duration> reply_timeout = std::nullopt) const {
-        return scoped(detail::map_redis_command<result_type>(
-            execute(pool, std::move(command), reply_timeout), std::move(mapper)));
+    [[nodiscard]] task<result_type> execute_mapped(detail::redis_pool& pool, detail::redis_owned_command&& command, mapper_type mapper, std::optional<timeout_duration> reply_timeout = std::nullopt) const {
+        return scoped(detail::map_redis_command<result_type>(execute(pool, std::move(command), reply_timeout), std::move(mapper)));
     }
 
     template <typename result_type, typename mapper_type>
-    [[nodiscard]] task<result_type> mapped(
-        std::initializer_list<std::string_view> args, mapper_type mapper) const {
+    [[nodiscard]] task<result_type> mapped(std::initializer_list<std::string_view> args, mapper_type mapper) const {
         registration_.require_active();
-        return execute_mapped<result_type>(pool(),
-            detail::make_owned_redis_command(std::span<const std::string_view>(args.begin(), args.size())),
-            std::move(mapper));
+        return execute_mapped<result_type>(pool(), detail::make_owned_redis_command(std::span<const std::string_view>(args.begin(), args.size())), std::move(mapper));
     }
 
     friend class detail::worker_client_registry_view;
-    [[nodiscard]] redis_session bind_caller_scope(::ruvia::operation_scope& scope,
-        detail::request_io_metrics* io_metrics, const stop_token& stop_token_value) &&;
+    [[nodiscard]] redis_session bind_caller_scope(::ruvia::operation_scope& scope, detail::request_io_metrics* io_metrics, const stop_token& stop_token_value) &&;
     static void expire_capability(void* target) noexcept;
     [[nodiscard]] detail::redis_pool& pool() const noexcept;
     [[nodiscard]] detail::redis_pool& blocking_pool() const noexcept;
@@ -1634,17 +1560,13 @@ void throw_if_redis_error(const redis_value& value);
 // Redis hash fields support owning scalar values and one string/integer key.
 // Character types are text units, not numbers, so they are not Redis numbers.
 template <typename t_type>
-inline constexpr bool is_redis_entity_native_integer =
-    is_model_integer<std::remove_cvref_t<t_type>>;
+inline constexpr bool is_redis_entity_native_integer = is_model_integer<std::remove_cvref_t<t_type>>;
 
 template <typename t_type>
-inline constexpr bool is_redis_entity_native_float =
-    std::is_same_v<std::remove_cvref_t<t_type>, float> ||
-    std::is_same_v<std::remove_cvref_t<t_type>, double>;
+inline constexpr bool is_redis_entity_native_float = std::is_same_v<std::remove_cvref_t<t_type>, float> || std::is_same_v<std::remove_cvref_t<t_type>, double>;
 
 template <typename t_type>
-inline constexpr bool is_redis_entity_native_number =
-    is_redis_entity_native_integer<t_type> || is_redis_entity_native_float<t_type>;
+inline constexpr bool is_redis_entity_native_number = is_redis_entity_native_integer<t_type> || is_redis_entity_native_float<t_type>;
 
 // The one classification of Redis column value types: entity validation,
 // index validation, query compilation and writes all derive from it.
@@ -1689,10 +1611,7 @@ template <typename t_type>
 inline constexpr bool is_redis_entity_scalar = redis_column_value_kind<t_type>() != redis_column_kind::unsupported;
 
 template <typename t_type>
-inline constexpr bool is_redis_entity_primary_key_scalar =
-    redis_column_value_kind<t_type>() == redis_column_kind::text ||
-    redis_column_value_kind<t_type>() == redis_column_kind::signed_value ||
-    redis_column_value_kind<t_type>() == redis_column_kind::unsigned_value;
+inline constexpr bool is_redis_entity_primary_key_scalar = redis_column_value_kind<t_type>() == redis_column_kind::text || redis_column_value_kind<t_type>() == redis_column_kind::signed_value || redis_column_value_kind<t_type>() == redis_column_kind::unsigned_value;
 
 [[noreturn]] inline void throw_invalid_redis_scalar(std::string_view message) {
     throw redis_error(redis_error::code_type::protocol_error, message);
@@ -1702,36 +1621,29 @@ inline constexpr std::size_t redis_scalar_scratch_size = 128;
 using redis_scalar_scratch_type = std::array<char, redis_scalar_scratch_size>;
 
 template <typename t_type>
-[[nodiscard]] std::string_view encode_redis_number(
-    t_type value, std::span<char, redis_scalar_scratch_size> scratch) {
+[[nodiscard]] std::string_view encode_redis_number(t_type value, std::span<char, redis_scalar_scratch_size> scratch) {
     if constexpr (std::is_floating_point_v<t_type>) {
         if (!std::isfinite(value)) {
             throw_invalid_redis_scalar("non-finite Redis scalar");
         }
-        const auto result_value = std::to_chars(scratch.data(), scratch.data() + scratch.size(), value,
-            std::chars_format::general, std::numeric_limits<t_type>::max_digits10);
+        const auto result_value = std::to_chars(scratch.data(), scratch.data() + scratch.size(), value, std::chars_format::general, std::numeric_limits<t_type>::max_digits10);
         if (result_value.ec != std::errc{}) {
             throw_invalid_redis_scalar("failed to encode Redis scalar");
         }
         return {scratch.data(), static_cast<std::size_t>(result_value.ptr - scratch.data())};
     } else if constexpr (std::is_unsigned_v<t_type>) {
-        return http_format_unsigned(
-            std::span<char, http_max_unsigned_decimal_size>(scratch.data(), http_max_unsigned_decimal_size), value);
+        return http_format_unsigned(std::span<char, http_max_unsigned_decimal_size>(scratch.data(), http_max_unsigned_decimal_size), value);
     } else {
-        return http_format_signed(
-            std::span<char, http_max_signed_decimal_size>(scratch.data(), http_max_signed_decimal_size), value);
+        return http_format_signed(std::span<char, http_max_signed_decimal_size>(scratch.data(), http_max_signed_decimal_size), value);
     }
 }
 
 template <typename t_type>
-[[nodiscard]] std::string_view encode_redis_scalar(
-    const t_type& value, std::span<char, redis_scalar_scratch_size> scratch) {
+[[nodiscard]] std::string_view encode_redis_scalar(const t_type& value, std::span<char, redis_scalar_scratch_size> scratch) {
     using scalar_type = std::remove_cvref_t<t_type>;
     if constexpr (std::is_same_v<scalar_type, string>) {
         return value.view();
-    } else if constexpr (std::is_same_v<scalar_type, std::string> ||
-                         std::is_same_v<scalar_type, std::string> ||
-                         std::is_same_v<scalar_type, std::string_view>) {
+    } else if constexpr (std::is_same_v<scalar_type, std::string> || std::is_same_v<scalar_type, std::string> || std::is_same_v<scalar_type, std::string_view>) {
         return value;
     } else if constexpr (std::is_same_v<scalar_type, bool>) {
         return value ? std::string_view("1") : std::string_view("0");
@@ -1743,8 +1655,7 @@ template <typename t_type>
 }
 
 template <typename t_type>
-[[nodiscard]] t_type decode_redis_scalar(
-    std::string_view value) {
+[[nodiscard]] t_type decode_redis_scalar(std::string_view value) {
     using scalar_type = std::remove_cvref_t<t_type>;
     if constexpr (std::is_same_v<scalar_type, string>) {
         string result_value;
@@ -1774,8 +1685,7 @@ template <typename t_type>
 // Every ORM entity key is `redis_entity_key_root + lower-hex(prefix) + ':' + id`.
 inline constexpr std::string_view redis_entity_key_root = "ruvia:orm:";
 
-[[nodiscard]] inline std::string redis_entity_storage_prefix(
-    std::string_view prefix) {
+[[nodiscard]] inline std::string redis_entity_storage_prefix(std::string_view prefix) {
     std::string result;
     result.reserve(redis_entity_key_root.size() + prefix.size() * 2U + 1U);
     result.append(redis_entity_key_root);
@@ -1784,8 +1694,7 @@ inline constexpr std::string_view redis_entity_key_root = "ruvia:orm:";
     return result;
 }
 
-[[nodiscard]] inline std::string redis_entity_key(
-    std::string_view storage_prefix, std::string_view id) {
+[[nodiscard]] inline std::string redis_entity_key(std::string_view storage_prefix, std::string_view id) {
     if (id.empty()) {
         throw std::invalid_argument("Redis entity ID must not be empty");
     }
@@ -1796,15 +1705,12 @@ inline constexpr std::string_view redis_entity_key_root = "ruvia:orm:";
     return key;
 }
 
-[[nodiscard]] inline bool redis_entity_key_matches(
-    std::string_view storage_prefix, std::string_view id, std::string_view key) noexcept {
-    return !id.empty() && key.size() == storage_prefix.size() + id.size() &&
-           key.starts_with(storage_prefix) && key.substr(storage_prefix.size()) == id;
+[[nodiscard]] inline bool redis_entity_key_matches(std::string_view storage_prefix, std::string_view id, std::string_view key) noexcept {
+    return !id.empty() && key.size() == storage_prefix.size() + id.size() && key.starts_with(storage_prefix) && key.substr(storage_prefix.size()) == id;
 }
 
 template <typename entity_type>
-[[nodiscard]] std::optional<std::string_view> try_redis_entity_id(
-    const entity_type& entity, std::span<char, redis_scalar_scratch_size> scratch) {
+[[nodiscard]] std::optional<std::string_view> try_redis_entity_id(const entity_type& entity, std::span<char, redis_scalar_scratch_size> scratch) {
     std::optional<std::string_view> id;
     for_each_descriptor<typename entity_type::columns_type>([&]<typename column_type, std::size_t> {
         if constexpr (column_type::options.primary_key_) {
@@ -1820,8 +1726,7 @@ template <typename entity_type>
 }
 
 template <typename entity_type>
-[[nodiscard]] std::string_view redis_entity_id(
-    const entity_type& entity, std::span<char, redis_scalar_scratch_size> scratch) {
+[[nodiscard]] std::string_view redis_entity_id(const entity_type& entity, std::span<char, redis_scalar_scratch_size> scratch) {
     const auto id = try_redis_entity_id(entity, scratch);
     if (!id) {
         throw std::invalid_argument("Redis entity requires an ID");
@@ -1855,14 +1760,14 @@ class redis_literal final {
 public:
     redis_literal() noexcept = default;
     explicit redis_literal(std::nullptr_t) noexcept {}
-    explicit redis_literal(std::string_view value)
-        : storage_(std::in_place_type<std::string>, value) {}
-    explicit redis_literal(const char* value)
-        : redis_literal(value ? std::string_view(value) : throw std::invalid_argument("Redis predicate text must not be null")) {}
+    explicit redis_literal(std::string_view value) :
+        storage_(std::in_place_type<std::string>, value) {}
+    explicit redis_literal(const char* value) :
+        redis_literal(value ? std::string_view(value) : throw std::invalid_argument("Redis predicate text must not be null")) {}
     template <typename value_type>
         requires std::is_same_v<value_type, bool>
-    explicit redis_literal(value_type value)
-        : storage_(value) {}
+    explicit redis_literal(value_type value) :
+        storage_(value) {}
     template <typename value_type>
         requires is_model_integer<value_type>
     explicit redis_literal(value_type value) {
@@ -1881,8 +1786,8 @@ public:
             storage_.emplace<double>(checked_model_float<double>(value));
         }
     }
-    explicit redis_literal(const string& value)
-        : redis_literal(value.view()) {}
+    explicit redis_literal(const string& value) :
+        redis_literal(value.view()) {}
     redis_literal(redis_literal&&) noexcept = default;
     redis_literal& operator=(redis_literal&&) = delete;
     redis_literal(const redis_literal&) = default;
@@ -1915,9 +1820,7 @@ private:
 };
 
 template <typename value_type>
-concept redis_predicate_argument = requires(value_type&& value) {
-    redis_literal(std::forward<value_type>(value));
-};
+concept redis_predicate_argument = requires(value_type&& value) { redis_literal(std::forward<value_type>(value)); };
 
 // Only redis_field_reference creates leaves, and only redis_predicate combines
 // them, so the tree has exactly these shapes: a comparison or IN is a binary
@@ -1931,18 +1834,18 @@ struct redis_predicate_node final {
         list,
         logical_not };
 
-    explicit redis_predicate_node(kind_type kind) noexcept
-        : kind_(kind) {}
-    explicit redis_predicate_node(redis_literal&& value) noexcept
-        : kind_(kind_type::literal),
-          literal_(std::move(value)) {}
-    redis_predicate_node(const redis_predicate_node& other, std::size_t offset = 0)
-        : kind_(other.kind_),
-          binary_(other.binary_),
-          field_(other.field_),
-          entity_prefix_(other.entity_prefix_),
-          literal_(other.literal_),
-          operands_(other.operands_) {
+    explicit redis_predicate_node(kind_type kind) noexcept :
+        kind_(kind) {}
+    explicit redis_predicate_node(redis_literal&& value) noexcept :
+        kind_(kind_type::literal),
+        literal_(std::move(value)) {}
+    redis_predicate_node(const redis_predicate_node& other, std::size_t offset = 0) :
+        kind_(other.kind_),
+        binary_(other.binary_),
+        field_(other.field_),
+        entity_prefix_(other.entity_prefix_),
+        literal_(other.literal_),
+        operands_(other.operands_) {
         for (auto& operand : operands_) {
             operand += offset;
         }
@@ -1991,15 +1894,12 @@ struct redis_orm_script final {
 [[nodiscard]] const redis_orm_script& redis_orm_delete_script();
 
 // Both argument lists start with EVALSHA and the script digest.
-[[nodiscard]] redis_orm_arguments_type redis_orm_write_arguments(std::string_view storage_prefix, std::string_view id,
-    std::string_view mode, redis_write_options options, std::size_t extra_arguments);
-[[nodiscard]] redis_orm_arguments_type redis_orm_delete_arguments(
-    std::string_view storage_prefix, std::string_view id);
+[[nodiscard]] redis_orm_arguments_type redis_orm_write_arguments(std::string_view storage_prefix, std::string_view id, std::string_view mode, redis_write_options options, std::size_t extra_arguments);
+[[nodiscard]] redis_orm_arguments_type redis_orm_delete_arguments(std::string_view storage_prefix, std::string_view id);
 // Runs an EVALSHA argument list for `script`; a NOSCRIPT reply loads the body
 // through EVAL once within the same operation. `io_metrics` is the request's
 // counter block, or null outside a request.
-[[nodiscard]] task<redis_value> execute_redis_orm_script(redis_pool& pool, const redis_orm_script& script,
-    redis_orm_arguments_type args, request_io_metrics* io_metrics, operation_options options);
+[[nodiscard]] task<redis_value> execute_redis_orm_script(redis_pool& pool, const redis_orm_script& script, redis_orm_arguments_type args, request_io_metrics* io_metrics, operation_options options);
 [[nodiscard]] redis_write_result redis_orm_exec_result(redis_value&& reply);
 [[nodiscard]] redis_write_result redis_orm_delete_result(redis_value&& reply);
 void redis_orm_status_result(redis_value&& reply);
@@ -2019,8 +1919,7 @@ template <typename entity_type>
 inline constexpr auto redis_query_columns = [] {
     std::array<redis_column_info, std::tuple_size_v<typename entity_type::columns_type>> columns{};
     for_each_descriptor<typename entity_type::columns_type>([&]<typename column_type, std::size_t i> {
-        columns[i] = {column_type::name.view(), redis_column_value_kind<typename column_type::value_type>(),
-            column_type::options.primary_key_};
+        columns[i] = {column_type::name.view(), redis_column_value_kind<typename column_type::value_type>(), column_type::options.primary_key_};
     });
     return columns;
 }();
@@ -2067,8 +1966,7 @@ struct redis_mapping final {
 };
 
 // `columns` must be the entity's static descriptor table.
-[[nodiscard]] redis_mapping normalize_redis_mapping(std::span<const redis_column_info> columns,
-    std::string_view entity_prefix, const redis_repository_config& config);
+[[nodiscard]] redis_mapping normalize_redis_mapping(std::span<const redis_column_info> columns, std::string_view entity_prefix, const redis_repository_config& config);
 
 // A TAG value is kept in a shadow hash field. The leading x makes an empty
 // value distinct from a missing field, and hexadecimal encoding keeps every
@@ -2076,15 +1974,12 @@ struct redis_mapping final {
 [[nodiscard]] std::string encode_redis_tag(std::string_view value);
 
 // The canonical ID when the predicate is exactly `primary key == literal`.
-[[nodiscard]] std::optional<std::string_view> redis_primary_key(
-    const redis_mapping& mapping, const redis_predicate& predicate,
-    std::span<char, redis_scalar_scratch_size> scratch);
+[[nodiscard]] std::optional<std::string_view> redis_primary_key(const redis_mapping& mapping, const redis_predicate& predicate, std::span<char, redis_scalar_scratch_size> scratch);
 
 // Appends the write-script triples for one entity field: the value (or its
 // deletion when absent), its presence marker and, for TAG-encodable columns,
 // its TAG shadow. A value in a NUMERIC index must be exactly representable.
-void append_redis_entity_field(redis_orm_arguments_type& args, std::string_view field,
-    std::optional<std::string_view> value, bool numeric_index, bool tag_shadow);
+void append_redis_entity_field(redis_orm_arguments_type& args, std::string_view field, std::optional<std::string_view> value, bool numeric_index, bool tag_shadow);
 
 template <typename entity_type>
 entity_type decode_redis_entity(std::span<const redis_value> fields_value, std::string_view key, std::string_view storage_prefix) {
@@ -2122,8 +2017,7 @@ entity_type decode_redis_entity(std::span<const redis_value> fields_value, std::
     entity_type entity;
     for_each_descriptor<typename entity_type::columns_type>([&]<typename field_type, std::size_t index> {
         if (values[index].has_value()) {
-            entity.template set<field_type::name>(
-                decode_redis_scalar<typename field_type::value_type>(*values[index]));
+            entity.template set<field_type::name>(decode_redis_scalar<typename field_type::value_type>(*values[index]));
         } else if constexpr (field_type::options.nullable_) {
             entity.template set_null<field_type::name>();
         } else {
@@ -2155,16 +2049,14 @@ struct redis_map_one final {
         if (fields_value.empty()) {
             return std::nullopt;
         }
-        return decode_redis_entity<entity_type>(
-            fields_value, key_, std::string_view(key_).substr(0, storage_prefix_size_));
+        return decode_redis_entity<entity_type>(fields_value, key_, std::string_view(key_).substr(0, storage_prefix_size_));
     }
 };
 
 template <typename entity_type>
 struct redis_map_search final {
     std::string_view storage_prefix_;
-    std::pair<entity_rows<entity_type>, std::uint64_t> decode(
-        std::span<const redis_value> values) const {
+    std::pair<entity_rows<entity_type>, std::uint64_t> decode(std::span<const redis_value> values) const {
         if (values.empty() || values.size() % 2 != 1) {
             throw redis_error(redis_error::code_type::protocol_error, "invalid entity search reply");
         }
@@ -2185,8 +2077,7 @@ struct redis_map_search final {
         }
         return {std::move(rows), count};
     }
-    std::pair<entity_rows<entity_type>, std::uint64_t> operator()(
-        redis_value&& reply) const {
+    std::pair<entity_rows<entity_type>, std::uint64_t> operator()(redis_value&& reply) const {
         return decode(redis_value_array(reply));
     }
 };
@@ -2197,14 +2088,12 @@ struct redis_map_many final {
     // Set when the caller left `take_` unset: the reply must then hold every
     // match after this skip, or find() would silently truncate.
     std::optional<std::uint64_t> unpaged_skip_;
-    entity_rows<entity_type> operator()(
-        redis_value&& reply) const {
+    entity_rows<entity_type> operator()(redis_value&& reply) const {
         const auto values = redis_value_array(reply);
         const auto documents = values.size() / 2;
         auto [rows, count] = search_.decode(values);
         if (unpaged_skip_.has_value() && count > *unpaged_skip_ && count - *unpaged_skip_ > documents) {
-            throw redis_error(redis_error::code_type::command_error,
-                "redis find() matched more entities than one default page; set take_ to page the results");
+            throw redis_error(redis_error::code_type::command_error, "redis find() matched more entities than one default page; set take_ to page the results");
         }
         return std::move(rows);
     }
@@ -2344,8 +2233,7 @@ struct redis_column_options final {
 template <fixed_string field_name, typename t_type, redis_column_options options_type = {}>
 struct redis_column final {
     static_assert(detail::is_redis_entity_scalar<t_type>, "Redis columns require owning scalar values");
-    static_assert(!options_type.primary_key_ || (detail::is_redis_entity_primary_key_scalar<t_type> && !options_type.nullable_),
-        "Redis primary keys must be non-nullable strings or integers");
+    static_assert(!options_type.primary_key_ || (detail::is_redis_entity_primary_key_scalar<t_type> && !options_type.nullable_), "Redis primary keys must be non-nullable strings or integers");
     static constexpr auto name = field_name;
     using value_type = t_type;
     static constexpr auto options = options_type;
@@ -2365,10 +2253,8 @@ inline constexpr bool redis_columns = []<std::size_t... indices>(std::index_sequ
 // Column names are unique through entity_value_storage.
 template <fixed_string key_prefix, typename... columns>
 struct redis_entity_storage final {
-    static_assert((is_redis_column<columns>::value && ...),
-        "Redis entities require RUVIA_REDIS_COLUMN descriptors");
-    static_assert((std::size_t{columns::options.primary_key_} + ... + std::size_t{0}) == 1,
-        "Redis entities require exactly one primary key");
+    static_assert((is_redis_column<columns>::value && ...), "Redis entities require RUVIA_REDIS_COLUMN descriptors");
+    static_assert((std::size_t{columns::options.primary_key_} + ... + std::size_t{0}) == 1, "Redis entities require exactly one primary key");
     static constexpr auto prefix_value = key_prefix;
     using type = entity_value_storage<columns...>;
 };
@@ -2585,10 +2471,8 @@ class redis_search_mapping final {
 public:
     template <typename entity_type>
         requires detail::redis_entity_schema<entity_type>
-    [[nodiscard]] static redis_search_mapping create(
-        const redis_repository_config& config = {}) {
-        return redis_search_mapping(detail::normalize_redis_mapping(
-            detail::redis_query_columns<entity_type>, entity_type::prefix(), config));
+    [[nodiscard]] static redis_search_mapping create(const redis_repository_config& config = {}) {
+        return redis_search_mapping(detail::normalize_redis_mapping(detail::redis_query_columns<entity_type>, entity_type::prefix(), config));
     }
 
     redis_search_mapping(const redis_search_mapping& other);
@@ -2599,8 +2483,7 @@ public:
     // rows uses take_ or redis_find_default_take; first caps that page at one.
     // count validates all options but counts all matches, ignoring pagination.
     // Commands own all arguments in this mapping's resource.
-    [[nodiscard]] redis_compiled_command compile_find(
-        const redis_find_options& options = {}, redis_search_mode mode = redis_search_mode::rows) const;
+    [[nodiscard]] redis_compiled_command compile_find(const redis_find_options& options = {}, redis_search_mode mode = redis_search_mode::rows) const;
     [[nodiscard]] redis_compiled_command compile_create_index() const;
     // Drops only the index, never its documents.
     [[nodiscard]] redis_compiled_command compile_drop_index() const;
@@ -2608,8 +2491,8 @@ public:
 private:
     template <typename>
     friend class redis_repository;
-    explicit redis_search_mapping(detail::redis_mapping&& mapping) noexcept
-        : mapping_(std::move(mapping)) {}
+    explicit redis_search_mapping(detail::redis_mapping&& mapping) noexcept :
+        mapping_(std::move(mapping)) {}
     void swap(redis_search_mapping& other) noexcept;
     void require_valid() const;
 
@@ -2624,8 +2507,8 @@ struct redis_write_options final {
 
 class redis_write_result final {
 public:
-    explicit constexpr redis_write_result(std::uint64_t affected_entities) noexcept
-        : affected_entities_(affected_entities) {}
+    explicit constexpr redis_write_result(std::uint64_t affected_entities) noexcept :
+        affected_entities_(affected_entities) {}
     [[nodiscard]] constexpr std::uint64_t affected_entities() const noexcept {
         return affected_entities_;
     }
@@ -2645,43 +2528,35 @@ public:
     // A repository is tied to its worker operation scope. Moving it transfers
     // its value registration and PMR mapping; copying would create a second
     // owner with ambiguous mapping lifetime.
-    redis_repository(redis_repository&& other) noexcept
-        : session_(other.session_),
-          mapping_(std::move(other.mapping_)),
-          registration_(std::move(other.registration_), this) {
+    redis_repository(redis_repository&& other) noexcept :
+        session_(other.session_),
+        mapping_(std::move(other.mapping_)),
+        registration_(std::move(other.registration_), this) {
         // The source no longer has a registration. Destroy moved-from
         // PMR containers now: implementations may retain allocator-owned state.
         other.mapping_.reset();
     }
     redis_repository& operator=(redis_repository&&) = delete;
 
-    [[nodiscard]] task<redis_write_result> insert(
-        const entity_type& entity, redis_write_options options = {}) const {
+    [[nodiscard]] task<redis_write_result> insert(const entity_type& entity, redis_write_options options = {}) const {
         detail::redis_scalar_scratch_type id_scratch;
         return write(write_mode::insert, detail::redis_entity_id(entity, id_scratch), entity, options);
     }
 
-    [[nodiscard]] task<redis_write_result> upsert(
-        const entity_type& entity, redis_write_options options = {}) const {
+    [[nodiscard]] task<redis_write_result> upsert(const entity_type& entity, redis_write_options options = {}) const {
         detail::redis_scalar_scratch_type id_scratch;
         return write(write_mode::upsert, detail::redis_entity_id(entity, id_scratch), entity, options);
     }
 
-    [[nodiscard]] task<redis_write_result> update(
-        const redis_predicate& predicate, const entity_type& changes,
-        redis_write_options options = {}) const {
+    [[nodiscard]] task<redis_write_result> update(const redis_predicate& predicate, const entity_type& changes, redis_write_options options = {}) const {
         detail::redis_scalar_scratch_type id_scratch;
         const auto id = require_primary_key(predicate, id_scratch);
         return write(write_mode::update, id, changes, options);
     }
 
-    [[nodiscard]] task<entity_rows<entity_type>> find(
-        const redis_find_options& options = {}) const {
+    [[nodiscard]] task<entity_rows<entity_type>> find(const redis_find_options& options = {}) const {
         auto args = mapping_->compile_find(options).take_arguments();
-        detail::redis_map_many<entity_type> mapper{{mapping().storage_prefix_},
-            options.take_.has_value()
-                ? std::nullopt
-                : std::optional<std::uint64_t>(options.skip_ ? options.skip_->value() : 0U)};
+        detail::redis_map_many<entity_type> mapper{{mapping().storage_prefix_}, options.take_.has_value() ? std::nullopt : std::optional<std::uint64_t>(options.skip_ ? options.skip_->value() : 0U)};
         return session_.template command_mapped<entity_rows<entity_type>>(std::move(args), std::move(mapper));
     }
     template <std::same_as<redis_predicate> predicate_type>
@@ -2689,8 +2564,7 @@ public:
         return find(redis_find_options{.where_ = where});
     }
 
-    [[nodiscard]] task<std::optional<entity_type>> find_one(
-        const redis_find_options& options = {}) const {
+    [[nodiscard]] task<std::optional<entity_type>> find_one(const redis_find_options& options = {}) const {
         const bool plain = !options.order_.has_value() && !options.skip_ && !options.take_;
         if (plain) {
             detail::redis_scalar_scratch_type id_scratch;
@@ -2700,8 +2574,7 @@ public:
                 args.reserve(2);
                 args.emplace_back("HGETALL");
                 args.emplace_back(key);
-                detail::redis_map_one<entity_type> mapper{
-                    std::move(key), mapping().storage_prefix_.size()};
+                detail::redis_map_one<entity_type> mapper{std::move(key), mapping().storage_prefix_.size()};
                 return session_.template command_mapped<std::optional<entity_type>>(std::move(args), std::move(mapper));
             }
         }
@@ -2714,18 +2587,14 @@ public:
     [[nodiscard]] task<std::optional<entity_type>> find_one(const predicate_type& where) const {
         return find_one(redis_find_options{.where_ = where});
     }
-    [[nodiscard]] task<std::pair<entity_rows<entity_type>, std::uint64_t>> find_and_count(
-        const redis_find_options& options = {}) const {
+    [[nodiscard]] task<std::pair<entity_rows<entity_type>, std::uint64_t>> find_and_count(const redis_find_options& options = {}) const {
         auto args = mapping_->compile_find(options).take_arguments();
         detail::redis_map_search<entity_type> mapper{mapping().storage_prefix_};
-        return session_.template command_mapped<std::pair<entity_rows<entity_type>, std::uint64_t>>(
-            std::move(args), std::move(mapper));
+        return session_.template command_mapped<std::pair<entity_rows<entity_type>, std::uint64_t>>(std::move(args), std::move(mapper));
     }
 
-    [[nodiscard]] task<std::uint64_t> count(
-        const redis_find_options& options = {}) const {
-        return session_.template command_mapped<std::uint64_t>(
-            mapping_->compile_find(options, redis_search_mode::count).take_arguments(), detail::redis_orm_count_result);
+    [[nodiscard]] task<std::uint64_t> count(const redis_find_options& options = {}) const {
+        return session_.template command_mapped<std::uint64_t>(mapping_->compile_find(options, redis_search_mode::count).take_arguments(), detail::redis_orm_count_result);
     }
 
     template <std::same_as<redis_predicate> predicate_type>
@@ -2733,8 +2602,7 @@ public:
         return count(redis_find_options{.where_ = where});
     }
 
-    [[nodiscard]] task<bool> exists(
-        const redis_find_options& options = {}) const {
+    [[nodiscard]] task<bool> exists(const redis_find_options& options = {}) const {
         if (!options.order_.has_value() && !options.skip_ && !options.take_) {
             detail::redis_scalar_scratch_type id_scratch;
             if (const auto id = detail::redis_primary_key(mapping(), options.where_, id_scratch)) {
@@ -2742,9 +2610,7 @@ public:
                 return session_.exists(key);
             }
         }
-        return session_.template command_mapped<bool>(
-            mapping_->compile_find(options, redis_search_mode::count).take_arguments(),
-            detail::redis_orm_exists_result);
+        return session_.template command_mapped<bool>(mapping_->compile_find(options, redis_search_mode::count).take_arguments(), detail::redis_orm_exists_result);
     }
 
     template <std::same_as<redis_predicate> predicate_type>
@@ -2752,8 +2618,7 @@ public:
         return exists(redis_find_options{.where_ = where});
     }
 
-    [[nodiscard]] task<redis_write_result> delete_by(
-        const redis_predicate& predicate) const {
+    [[nodiscard]] task<redis_write_result> delete_by(const redis_predicate& predicate) const {
         detail::redis_scalar_scratch_type id_scratch;
         const auto id = require_primary_key(predicate, id_scratch);
         return delete_by_id(id);
@@ -2764,8 +2629,7 @@ public:
         return delete_by_id(detail::redis_entity_id(entity, id_scratch));
     }
 
-    [[nodiscard]] task<bool> expire(
-        const redis_predicate& predicate, std::chrono::seconds ttl) const {
+    [[nodiscard]] task<bool> expire(const redis_predicate& predicate, std::chrono::seconds ttl) const {
         detail::redis_scalar_scratch_type id_scratch;
         const auto id = require_primary_key(predicate, id_scratch);
         const auto key = detail::redis_entity_key(mapping().storage_prefix_, id);
@@ -2782,22 +2646,20 @@ public:
     // Explicit schema management. Repository acquisition never creates an
     // index, and an existing index is reported by Redis.
     [[nodiscard]] task<void> create_index() const {
-        return session_.template command_mapped<void>(
-            mapping_->compile_create_index().take_arguments(), detail::redis_orm_status_result);
+        return session_.template command_mapped<void>(mapping_->compile_create_index().take_arguments(), detail::redis_orm_status_result);
     }
 
     [[nodiscard]] task<void> drop_index() const {
-        return session_.template command_mapped<void>(
-            mapping_->compile_drop_index().take_arguments(), detail::redis_orm_status_result);
+        return session_.template command_mapped<void>(mapping_->compile_drop_index().take_arguments(), detail::redis_orm_status_result);
     }
 
 private:
     friend class redis_session;
 
-    explicit redis_repository(const redis_session& session_value, const redis_repository_config& config)
-        : session_(session_value),
-          mapping_(redis_search_mapping::create<entity_type>(config)),
-          registration_(session_value.registration_.scope(), this, &redis_repository::expire_capability) {}
+    explicit redis_repository(const redis_session& session_value, const redis_repository_config& config) :
+        session_(session_value),
+        mapping_(redis_search_mapping::create<entity_type>(config)),
+        registration_(session_value.registration_.scope(), this, &redis_repository::expire_capability) {}
 
     [[nodiscard]] const detail::redis_mapping& mapping() const {
         if (!mapping_) {
@@ -2811,20 +2673,16 @@ private:
         repository.mapping_.reset();
     }
 
-    [[nodiscard]] std::string_view require_primary_key(
-        const redis_predicate& predicate, std::span<char, detail::redis_scalar_scratch_size> scratch) const {
+    [[nodiscard]] std::string_view require_primary_key(const redis_predicate& predicate, std::span<char, detail::redis_scalar_scratch_size> scratch) const {
         const auto result_value = detail::redis_primary_key(mapping(), predicate, scratch);
         if (!result_value) {
-            throw std::invalid_argument(
-                "Redis repository operation requires an exact primary-key predicate");
+            throw std::invalid_argument("Redis repository operation requires an exact primary-key predicate");
         }
         return *result_value;
     }
 
-    [[nodiscard]] task<redis_write_result> delete_by_id(
-        std::string_view id) const {
-        return session_.template script_mapped<redis_write_result>(detail::redis_orm_delete_script(),
-            detail::redis_orm_delete_arguments(mapping().storage_prefix_, id), detail::redis_orm_delete_result);
+    [[nodiscard]] task<redis_write_result> delete_by_id(std::string_view id) const {
+        return session_.template script_mapped<redis_write_result>(detail::redis_orm_delete_script(), detail::redis_orm_delete_arguments(mapping().storage_prefix_, id), detail::redis_orm_delete_result);
     }
 
     enum class write_mode : std::uint8_t {
@@ -2846,9 +2704,7 @@ private:
         throw std::logic_error("invalid Redis write mode");
     }
 
-    [[nodiscard]] task<redis_write_result> write(
-        write_mode mode, std::string_view id, const entity_type& entity,
-        redis_write_options options) const {
+    [[nodiscard]] task<redis_write_result> write(write_mode mode, std::string_view id, const entity_type& entity, redis_write_options options) const {
         static constexpr std::size_t required = [] {
             std::size_t count = 0;
             detail::for_each_descriptor<typename entity_type::columns_type>([&]<typename column_type, std::size_t> {
@@ -2862,14 +2718,12 @@ private:
             std::size_t count = 0;
             detail::for_each_descriptor<typename entity_type::columns_type>([&]<typename column_type, std::size_t> {
                 constexpr auto value_kind = detail::redis_column_value_kind<typename column_type::value_type>();
-                constexpr bool tag_shadow =
-                    value_kind == detail::redis_column_kind::text || value_kind == detail::redis_column_kind::bool_value;
+                constexpr bool tag_shadow = value_kind == detail::redis_column_kind::text || value_kind == detail::redis_column_kind::bool_value;
                 count += tag_shadow ? 9U : 6U;
             });
             return count;
         }();
-        auto args = detail::redis_orm_write_arguments(
-            mapping().storage_prefix_, id, write_mode_token(mode), options, 1 + required + max_mutation_arguments);
+        auto args = detail::redis_orm_write_arguments(mapping().storage_prefix_, id, write_mode_token(mode), options, 1 + required + max_mutation_arguments);
         detail::redis_scalar_scratch_type scalar_scratch;
         args.emplace_back(detail::encode_redis_scalar(required, scalar_scratch));
         detail::for_each_descriptor<typename entity_type::columns_type>([&]<typename column_type, std::size_t> {
@@ -2881,13 +2735,11 @@ private:
         const auto& column_index_kinds = mapping().column_index_kinds_;
         detail::for_each_descriptor<typename entity_type::columns_type>([&]<typename column_type, std::size_t index> {
             constexpr auto value_kind = detail::redis_column_value_kind<typename column_type::value_type>();
-            constexpr bool tag_shadow =
-                value_kind == detail::redis_column_kind::text || value_kind == detail::redis_column_kind::bool_value;
+            constexpr bool tag_shadow = value_kind == detail::redis_column_kind::text || value_kind == detail::redis_column_kind::bool_value;
             const auto field = column_type::name.view();
             const bool numeric_index = !tag_shadow && column_index_kinds[index] == redis_index_kind::numeric;
             if constexpr (column_type::options.primary_key_) {
-                if (mode == write_mode::update && entity.template is_set<column_type::name>() &&
-                    detail::encode_redis_scalar(entity.template get<column_type::name>(), scalar_scratch) != id) {
+                if (mode == write_mode::update && entity.template is_set<column_type::name>() && detail::encode_redis_scalar(entity.template get<column_type::name>(), scalar_scratch) != id) {
                     throw std::invalid_argument("an entity update cannot change its ID");
                 }
                 detail::append_redis_entity_field(args, field, id, numeric_index, tag_shadow);
@@ -2901,8 +2753,7 @@ private:
             }
         });
 
-        return session_.template script_mapped<redis_write_result>(
-            detail::redis_orm_write_script(), std::move(args), detail::redis_orm_exec_result);
+        return session_.template script_mapped<redis_write_result>(detail::redis_orm_write_script(), std::move(args), detail::redis_orm_exec_result);
     }
 
     redis_session session_;

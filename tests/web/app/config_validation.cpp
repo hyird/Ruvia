@@ -56,12 +56,7 @@ bool throws_invalid(fn_type&& fn) {
 // files, and is never handed PEM text it would silently ignore.
 TEST(Ruvia, client_tls_rejects_in_memory_pem_identity) {
     EXPECT_TRUE(throws_invalid([] {
-        ruvia::app().client({.alias_ = "tls-pem-identity",
-            .base_url_ = "https://example.com",
-            .tls_ = {.identity_ = ruvia::tls_identity_config{.certificate_chain_file_ = "client.pem",
-                         .private_key_file_ = "client.key",
-                         .certificate_chain_pem_ = "pem",
-                         .private_key_pem_ = "pem"}}});
+        ruvia::app().client({.alias_ = "tls-pem-identity", .base_url_ = "https://example.com", .tls_ = {.identity_ = ruvia::tls_identity_config{.certificate_chain_file_ = "client.pem", .private_key_file_ = "client.key", .certificate_chain_pem_ = "pem", .private_key_pem_ = "pem"}}});
     }));
 }
 
@@ -101,15 +96,18 @@ TEST(Ruvia, app_document_root_rejects_invalid_static_options_at_configuration) {
     config.root_ = "public";
     config.static_options_.cache_control_ = " private";
 
-    EXPECT_TRUE(throws_invalid([&config] { ruvia::app().document_root(std::move(config)); }));
+    EXPECT_TRUE(throws_invalid([&config] {
+        ruvia::app().document_root(std::move(config));
+    }));
 }
 
 TEST(Ruvia, app_document_root_rejects_disabled_refresh) {
     ruvia::document_root_config disabled_refresh;
     disabled_refresh.root_ = "public";
     disabled_refresh.refresh_interval_ = std::chrono::milliseconds::zero();
-    EXPECT_TRUE(throws_invalid(
-        [&disabled_refresh] { ruvia::app().document_root(std::move(disabled_refresh)); }));
+    EXPECT_TRUE(throws_invalid([&disabled_refresh] {
+        ruvia::app().document_root(std::move(disabled_refresh));
+    }));
 }
 
 TEST(Ruvia, app_compression_rejects_invalid_thresholds_at_configuration) {
@@ -117,8 +115,7 @@ TEST(Ruvia, app_compression_rejects_invalid_thresholds_at_configuration) {
         ruvia::app().server({.compression_ = ruvia::compression_config{.min_bytes_ = 1024, .sync_bytes_ = 512}});
     }));
     EXPECT_TRUE(throws_invalid([] {
-        ruvia::app().server(
-            {.compression_ = ruvia::compression_config{.min_bytes_ = 1024, .sync_bytes_ = 2048, .max_bytes_ = 1024}});
+        ruvia::app().server({.compression_ = ruvia::compression_config{.min_bytes_ = 1024, .sync_bytes_ = 2048, .max_bytes_ = 1024}});
     }));
 }
 
@@ -156,8 +153,7 @@ private:
         // Exercise explicit downstream cancellation without a request-level timer.
         ruvia::stop_source stop;
         stop.request_stop();
-        const auto result_value = co_await ruvia::sleep_for(
-            c.worker(), std::chrono::hours(1), stop.token());
+        const auto result_value = co_await ruvia::sleep_for(c.worker(), std::chrono::hours(1), stop.token());
         if (result_value != ruvia::timer_sleep_result::stop_requested) {
             throw std::logic_error("explicit cancellation did not stop the operation");
         }
@@ -203,8 +199,7 @@ std::filesystem::path write_temp_env(const std::filesystem::path& directory, std
 
 TEST(Ruvia, dotenv_typed_lookup_does_not_hide_invalid_values) {
     const ruvia::test::scoped_temp_directory directory("ruvia_dotenv_typed");
-    const auto path = write_temp_env(directory.path(), "ruvia_dotenv_typed.env",
-        "PORT=8080\nBAD_PORT=not-a-port\nENABLED=maybe\nBAD_DOUBLE=nan\nBAD_INF=inf\n");
+    const auto path = write_temp_env(directory.path(), "ruvia_dotenv_typed.env", "PORT=8080\nBAD_PORT=not-a-port\nENABLED=maybe\nBAD_DOUBLE=nan\nBAD_INF=inf\n");
     ruvia::env env;
     env.load_dotenv(path);
 
@@ -232,8 +227,7 @@ TEST(Ruvia, dotenv_typed_lookup_does_not_hide_invalid_values) {
     try {
         (void)env.get<double>("BAD_DOUBLE");
     } catch (const std::invalid_argument& error) {
-        bad_double_threw =
-            (std::string_view(error.what()).find("BAD_DOUBLE") != std::string_view::npos);
+        bad_double_threw = (std::string_view(error.what()).find("BAD_DOUBLE") != std::string_view::npos);
     }
     EXPECT_TRUE(bad_double_threw);
 
@@ -260,16 +254,14 @@ TEST(Ruvia, dotenv_options_use_explicit_policies) {
     EXPECT_EQ(env.get("KEY").value_or(""), std::string_view("first"));
     EXPECT_EQ(env.get("NEW").value_or(""), std::string_view("value"));
 
-    env.load_dotenv(
-        second, {.existing_variables_ = ruvia::dotenv_existing_variable_policy::override});
+    env.load_dotenv(second, {.existing_variables_ = ruvia::dotenv_existing_variable_policy::override});
     EXPECT_EQ(env.get("KEY").value_or(""), std::string_view("second"));
 
     env.load_dotenv(missing);
 
     bool required_missing_threw = false;
     try {
-        env.load_dotenv(
-            missing, {.missing_file_ = ruvia::dotenv_missing_file_policy::require});
+        env.load_dotenv(missing, {.missing_file_ = ruvia::dotenv_missing_file_policy::require});
     } catch (const std::runtime_error&) {
         required_missing_threw = true;
     }
@@ -277,8 +269,7 @@ TEST(Ruvia, dotenv_options_use_explicit_policies) {
 
     bool invalid_existing_policy_threw = false;
     try {
-        env.load_dotenv(first,
-            {.existing_variables_ = static_cast<ruvia::dotenv_existing_variable_policy>(0xFF)});
+        env.load_dotenv(first, {.existing_variables_ = static_cast<ruvia::dotenv_existing_variable_policy>(0xFF)});
     } catch (const std::invalid_argument&) {
         invalid_existing_policy_threw = true;
     }
@@ -286,8 +277,7 @@ TEST(Ruvia, dotenv_options_use_explicit_policies) {
 
     bool invalid_missing_policy_threw = false;
     try {
-        env.load_dotenv(
-            first, {.missing_file_ = static_cast<ruvia::dotenv_missing_file_policy>(0xFF)});
+        env.load_dotenv(first, {.missing_file_ = static_cast<ruvia::dotenv_missing_file_policy>(0xFF)});
     } catch (const std::invalid_argument&) {
         invalid_missing_policy_threw = true;
     }
@@ -305,8 +295,7 @@ DOTENV_ESCAPE_SINGLE='\n\q'
     ruvia::env env;
     env.load_dotenv(path);
     EXPECT_EQ(env.get("DOTENV_ESCAPE_DEFINED").value_or(""), std::string_view("a\nb\rc\td\"e\\f"));
-    EXPECT_EQ(
-        env.get("DOTENV_ESCAPE_UNDEFINED").value_or(""), std::string_view(R"(\q\$x\'y\0 C:\Users)"));
+    EXPECT_EQ(env.get("DOTENV_ESCAPE_UNDEFINED").value_or(""), std::string_view(R"(\q\$x\'y\0 C:\Users)"));
     EXPECT_EQ(env.get("DOTENV_ESCAPE_TRAILING").value_or(""), std::string_view("end\\"));
     EXPECT_EQ(env.get("DOTENV_ESCAPE_SINGLE").value_or(""), std::string_view(R"(\n\q)"));
 }
@@ -314,8 +303,7 @@ DOTENV_ESCAPE_SINGLE='\n\q'
 TEST(Ruvia, dotenv_duplicate_name_in_one_file_is_rejected) {
     const ruvia::test::scoped_temp_directory directory("ruvia_dotenv_duplicate");
     const auto earlier = write_temp_env(directory.path(), "ruvia_dotenv_duplicate_earlier.env", "DOTENV_DUP=earlier\n");
-    const auto duplicate = write_temp_env(directory.path(), "ruvia_dotenv_duplicate.env",
-        "DOTENV_DUP_OTHER=kept\nDOTENV_DUP=first\n\n# comment\nexport DOTENV_DUP = second\n");
+    const auto duplicate = write_temp_env(directory.path(), "ruvia_dotenv_duplicate.env", "DOTENV_DUP_OTHER=kept\nDOTENV_DUP=first\n\n# comment\nexport DOTENV_DUP = second\n");
     const auto utf8_path = [](const std::filesystem::path& path) {
         const auto text = path.u8string();
         return std::string(reinterpret_cast<const char*>(text.data()), text.size());
@@ -338,16 +326,14 @@ TEST(Ruvia, dotenv_duplicate_name_in_one_file_is_rejected) {
     EXPECT_TRUE(!env.get("DOTENV_DUP_OTHER").has_value());
 
     env.load_dotenv(earlier);
-    EXPECT_EQ(
-        failure({.existing_variables_ = ruvia::dotenv_existing_variable_policy::override}), expected);
+    EXPECT_EQ(failure({.existing_variables_ = ruvia::dotenv_existing_variable_policy::override}), expected);
     EXPECT_EQ(env.get("DOTENV_DUP").value_or(""), std::string_view("earlier"));
     EXPECT_TRUE(!env.get("DOTENV_DUP_OTHER").has_value());
 }
 
 TEST(Ruvia, dotenv_errors_name_non_ascii_paths_in_utf8) {
     const ruvia::test::scoped_temp_directory temporary("ruvia-dotenv");
-    const auto directory = temporary.path() /
-                           std::filesystem::path(u8"\u914d\u7f6e-\u0442\u0435\u0441\u0442-\U0001F4C1");
+    const auto directory = temporary.path() / std::filesystem::path(u8"\u914d\u7f6e-\u0442\u0435\u0441\u0442-\U0001F4C1");
     std::filesystem::create_directory(directory);
     const auto missing = directory / "missing.env";
     const auto invalid = directory / "invalid.env";
@@ -369,8 +355,7 @@ TEST(Ruvia, dotenv_errors_name_non_ascii_paths_in_utf8) {
         return std::string{};
     };
 
-    EXPECT_EQ(failure(missing, {.missing_file_ = ruvia::dotenv_missing_file_policy::require}),
-        "dotenv file not found: " + utf8_path(missing));
+    EXPECT_EQ(failure(missing, {.missing_file_ = ruvia::dotenv_missing_file_policy::require}), "dotenv file not found: " + utf8_path(missing));
     EXPECT_TRUE(failure(invalid, {}).starts_with("invalid dotenv entry in " + utf8_path(invalid) + ":1: "));
 }
 
@@ -410,9 +395,7 @@ TEST(Ruvia, dotenv_invalid_utf8_rejects_all_entries_without_changing_prior_state
         ruvia::dotenv_existing_variable_policy::override,
     };
     for (const auto value : invalid_values) {
-        const auto invalid = write_temp_env(directory.path(), "ruvia_dotenv_utf8_invalid.env",
-            std::string("DOTENV_UTF8_ROLLBACK=changed\nDOTENV_UTF8_PARTIAL=not_committed\nDOTENV_UTF8_INVALID=") +
-                std::string(value) + '\n');
+        const auto invalid = write_temp_env(directory.path(), "ruvia_dotenv_utf8_invalid.env", std::string("DOTENV_UTF8_ROLLBACK=changed\nDOTENV_UTF8_PARTIAL=not_committed\nDOTENV_UTF8_INVALID=") + std::string(value) + '\n');
         for (const auto policy : policies) {
             EXPECT_THROW(env.load_dotenv(invalid, {.existing_variables_ = policy}), std::invalid_argument);
             EXPECT_EQ(env.get("DOTENV_UTF8_ROLLBACK").value_or(""), "original");
@@ -457,8 +440,8 @@ namespace {
 // Stamps a header so a response shows whether this middleware ran at all.
 class route_shapes_scope final {
 public:
-    explicit route_shapes_scope(std::string_view tag) noexcept
-        : tag_(tag) {}
+    explicit route_shapes_scope(std::string_view tag) noexcept :
+        tag_(tag) {}
 
     ruvia::task<void> invoke(ruvia::context& c, ruvia::next& next_value) {
         co_await next_value();
@@ -520,8 +503,7 @@ public:
     RUVIA_ROUTES_END
 
 private:
-    static ruvia::task<ruvia::http_response> labelled(
-        ruvia::context& c, std::string_view label, std::string_view first, std::string_view second = {}) {
+    static ruvia::task<ruvia::http_response> labelled(ruvia::context& c, std::string_view label, std::string_view first, std::string_view second = {}) {
         std::string body;
         body.append(label);
         body.push_back(':');
@@ -808,10 +790,8 @@ TEST(Ruvia, route_shapes_non_http_absolute_target_is_rejected) {
     // routes like this server; it is a 400 before any route or scope runs.
     ruvia::test_app app;
     app.use_at<route_shapes_scope>({.prefix_ = "/admin"}, "admin");
-    EXPECT_EQ(app.request(ruvia::test_request::get("x:admin/panel")).status(),
-        ruvia::http_status::bad_request);
-    EXPECT_EQ(app.request(ruvia::test_request::get("x:/admin/panel")).status(),
-        ruvia::http_status::bad_request);
+    EXPECT_EQ(app.request(ruvia::test_request::get("x:admin/panel")).status(), ruvia::http_status::bad_request);
+    EXPECT_EQ(app.request(ruvia::test_request::get("x:/admin/panel")).status(), ruvia::http_status::bad_request);
 }
 
 TEST(Ruvia, route_shapes_dot_segments_match_no_route) {
@@ -819,8 +799,7 @@ TEST(Ruvia, route_shapes_dot_segments_match_no_route) {
     // "/assets/private" although its raw segments sit outside that scope.
     ruvia::test_app app;
     app.use_at<route_shapes_scope>({.prefix_ = "/assets/private"}, "private");
-    for (const std::string_view path : {"/assets/public/../private/key", "/assets/public/%2E%2E/private/key",
-             "/assets/./private/key", "/admin/panel/.", "/assets/%2e"}) {
+    for (const std::string_view path : {"/assets/public/../private/key", "/assets/public/%2E%2E/private/key", "/assets/./private/key", "/admin/panel/.", "/assets/%2e"}) {
         EXPECT_EQ(app.request(ruvia::test_request::get(path)).status(), ruvia::http_status::not_found);
     }
     // Dots inside a segment are ordinary names.
@@ -863,8 +842,7 @@ TEST(Ruvia, route_shapes_error_responses_survive_an_unfinished_unmatched_chain) 
     // The 404 runs the unmatched chain, which never finalizes; it must still
     // yield a response rather than an exception escaping the server, and that
     // error response is not renegotiated into a 406 for the refused coding.
-    const auto response =
-        app.request(ruvia::test_request::get("/missing").header("Accept-Encoding", "*;q=0"));
+    const auto response = app.request(ruvia::test_request::get("/missing").header("Accept-Encoding", "*;q=0"));
     EXPECT_EQ(response.status(), ruvia::http_status::internal_server_error);
 }
 
@@ -891,9 +869,7 @@ TEST(Ruvia, route_shapes_encoded_spellings_select_the_literal_route_and_its_midd
     // capture an encoded spelling of a guarded literal route, neither a static
     // one nor a literal segment inside a dynamic one.
     ruvia::test_app app;
-    for (const std::string_view path : {"/equiv/users/admin", "/equiv/users/%61dmin", "/equiv/users/adm%69n",
-             "/equiv/users/%61%64%6D%69%6E", "/equiv/users/admin/x", "/equiv/users/%61dmin/x",
-             "/equiv/users/adm%69n/x"}) {
+    for (const std::string_view path : {"/equiv/users/admin", "/equiv/users/%61dmin", "/equiv/users/adm%69n", "/equiv/users/%61%64%6D%69%6E", "/equiv/users/admin/x", "/equiv/users/%61dmin/x", "/equiv/users/adm%69n/x"}) {
         EXPECT_EQ(app.request(ruvia::test_request::get(path)).status(), ruvia::http_status::forbidden);
     }
     // Other names still reach the parameter route, decoded.
@@ -927,8 +903,7 @@ TEST(Ruvia, route_shapes_encoded_colon_or_star_literal_is_not_a_parameter_or_wil
 TEST(Ruvia, route_shapes_allow_names_every_extension_method_of_a_resource) {
     // RFC 9110 15.5.6: Allow lists the resource's supported methods, however
     // many extension methods it has and however each route spelled the path.
-    const std::multiset<std::string_view> expected{
-        {"OPTIONS", "EXT-A", "EXT-B", "EXT-C", "EXT-D", "EXT-E", "EXT-F", "EXT-G", "EXT-H", "EXT-I", "EXT-J"}};
+    const std::multiset<std::string_view> expected{{"OPTIONS", "EXT-A", "EXT-B", "EXT-C", "EXT-D", "EXT-E", "EXT-F", "EXT-G", "EXT-H", "EXT-I", "EXT-J"}};
     ruvia::test_app app;
     const auto options = app.request(ruvia::test_request::options("/equiv/many"));
     EXPECT_EQ(options.status(), ruvia::http_status::no_content);
@@ -957,13 +932,7 @@ TEST(Ruvia, extension_routes_keep_method_and_canonical_path_identity) {
         std::string_view path_;
         std::string_view body_;
     };
-    constexpr route_case cases[] = {
-        {"A-INDEX", "/indexed/a%2fb", "user:-"},
-        {"Z-INDEX", "/indexed/a%2Fb", "guarded"},
-        {"Z-INDEX", "/indexed/a/b", "file:-"},
-        {"A-INDEX", "/indexed/a", "guarded"},
-        {"Z-INDEX", "/indexed/z", "guarded"},
-        {"A-INDEX-TAIL", "/indexed/m", "file:-"}};
+    constexpr route_case cases[] = {{"A-INDEX", "/indexed/a%2fb", "user:-"}, {"Z-INDEX", "/indexed/a%2Fb", "guarded"}, {"Z-INDEX", "/indexed/a/b", "file:-"}, {"A-INDEX", "/indexed/a", "guarded"}, {"Z-INDEX", "/indexed/z", "guarded"}, {"A-INDEX-TAIL", "/indexed/m", "file:-"}};
     ruvia::test_app app;
     for (const auto& item : cases) {
         SCOPED_TRACE(std::string(item.method_) + " " + std::string(item.path_));
@@ -979,15 +948,7 @@ TEST(Ruvia, extension_route_misses_distinguish_method_and_resource_identity) {
         std::string_view path_;
         ruvia::http_status_code status_;
     };
-    const miss_case cases[] = {
-        {"A-INDEX", "/0-indexed", ruvia::http_status::not_found},
-        {"A-INDEX", "/zz-indexed", ruvia::http_status::not_found},
-        {"A-INDEX", "/indexed/a%2fbb", ruvia::http_status::not_found},
-        {"A-INDEX", "/indexed/m", ruvia::http_status::method_not_allowed},
-        {"A-INDEX-", "/indexed/a", ruvia::http_status::not_implemented},
-        {"a-index", "/indexed/a", ruvia::http_status::not_implemented},
-        {"000-NOT-REGISTERED-INDEX", "/indexed/a", ruvia::http_status::not_implemented},
-        {"ZZZ-NOT-REGISTERED-INDEX", "/indexed/a", ruvia::http_status::not_implemented}};
+    const miss_case cases[] = {{"A-INDEX", "/0-indexed", ruvia::http_status::not_found}, {"A-INDEX", "/zz-indexed", ruvia::http_status::not_found}, {"A-INDEX", "/indexed/a%2fbb", ruvia::http_status::not_found}, {"A-INDEX", "/indexed/m", ruvia::http_status::method_not_allowed}, {"A-INDEX-", "/indexed/a", ruvia::http_status::not_implemented}, {"a-index", "/indexed/a", ruvia::http_status::not_implemented}, {"000-NOT-REGISTERED-INDEX", "/indexed/a", ruvia::http_status::not_implemented}, {"ZZZ-NOT-REGISTERED-INDEX", "/indexed/a", ruvia::http_status::not_implemented}};
     ruvia::test_app app;
     for (const auto& item : cases) {
         SCOPED_TRACE(std::string(item.method_) + " " + std::string(item.path_));
@@ -1003,16 +964,13 @@ TEST(Ruvia, extension_route_allow_groups_only_canonical_equivalent_paths) {
     ruvia::test_app app;
     const auto encoded = app.request(ruvia::test_request::options("/indexed/a%2Fb"));
     EXPECT_EQ(encoded.status(), ruvia::http_status::no_content);
-    EXPECT_EQ(allow_methods(encoded.header("Allow").value_or("")),
-        (std::multiset<std::string_view>{"OPTIONS", "A-INDEX", "Z-INDEX"}));
+    EXPECT_EQ(allow_methods(encoded.header("Allow").value_or("")), (std::multiset<std::string_view>{"OPTIONS", "A-INDEX", "Z-INDEX"}));
     const auto split = app.request(ruvia::test_request::method("A-INDEX", "/indexed/a/b"));
     EXPECT_EQ(split.status(), ruvia::http_status::method_not_allowed);
-    EXPECT_EQ(allow_methods(split.header("Allow").value_or("")),
-        (std::multiset<std::string_view>{"OPTIONS", "Z-INDEX"}));
+    EXPECT_EQ(allow_methods(split.header("Allow").value_or("")), (std::multiset<std::string_view>{"OPTIONS", "Z-INDEX"}));
     const auto plain = app.request(ruvia::test_request::options("/indexed/%61"));
     EXPECT_EQ(plain.status(), ruvia::http_status::no_content);
-    EXPECT_EQ(allow_methods(plain.header("Allow").value_or("")),
-        (std::multiset<std::string_view>{"OPTIONS", "A-INDEX"}));
+    EXPECT_EQ(allow_methods(plain.header("Allow").value_or("")), (std::multiset<std::string_view>{"OPTIONS", "A-INDEX"}));
 }
 
 namespace proxy_listener_test {
@@ -1023,7 +981,9 @@ struct runtime final {
     ruvia::blocking_pool pool_{{.thread_count_ = 1}};
     ruvia::event_loop_attachment attachment_{ruvia::attach_event_loop(io_, {.blocking_pool_ = &pool_})};
     ruvia::event_loop loop_{attachment_.loop()};
-    std::jthread thread_{[this] { attachment_.run(); }};
+    std::jthread thread_{[this] {
+        attachment_.run();
+    }};
     ~runtime() {
         attachment_.stop();
         thread_.join();
@@ -1059,8 +1019,7 @@ std::string proxy_v2(bool local, std::uint16_t port) {
     result.push_back(local ? '\x20' : '\x21');
     result.push_back('\x11');
     result.append("\0\x10", 2);  // IPv4 address block and a four-byte TLV.
-    const unsigned char address[]{198, 51, 100, 23, 127, 0, 0, 1, 0x12, 0x34,
-        static_cast<unsigned char>(port >> 8), static_cast<unsigned char>(port), 0xe0, 0, 1, 42};
+    const unsigned char address[]{198, 51, 100, 23, 127, 0, 0, 1, 0x12, 0x34, static_cast<unsigned char>(port >> 8), static_cast<unsigned char>(port), 0xe0, 0, 1, 42};
     result.append(reinterpret_cast<const char*>(address), sizeof(address));
     return result;
 }
@@ -1070,8 +1029,7 @@ ruvia::task<void> start(ruvia::http_server& server, ruvia::listen_config config)
     co_await server.start();
 }
 
-ruvia::task<void> adopt_read_prefix(ruvia::http_server& server, asio::ip::tcp::acceptor& acceptor,
-    std::size_t bytes, std::optional<ruvia::ip_endpoint> remote = {}) {
+ruvia::task<void> adopt_read_prefix(ruvia::http_server& server, asio::ip::tcp::acceptor& acceptor, std::size_t bytes, std::optional<ruvia::ip_endpoint> remote = {}) {
     auto accepted = co_await ruvia::async_asio<asio::ip::tcp::socket>([&](auto handler) {
         acceptor.async_accept(std::move(handler));
     });
@@ -1085,8 +1043,7 @@ ruvia::task<void> adopt_read_prefix(ruvia::http_server& server, asio::ip::tcp::a
     if (read.error_code()) {
         throw std::system_error(read.error_code());
     }
-    server.adopt({.address_ = "127.0.0.1", .port_ = acceptor.local_endpoint().port()}, accepted.result().release(),
-        {.prefix_ = prefix, .remote_ = remote});
+    server.adopt({.address_ = "127.0.0.1", .port_ = acceptor.local_endpoint().port()}, accepted.result().release(), {.prefix_ = prefix, .remote_ = remote});
     // The prefix owner dies before the session starts reading it.
 }
 }  // namespace proxy_listener_test
@@ -1099,14 +1056,14 @@ TEST(Ruvia, proxy_listener_requires_preface_and_uses_source_for_every_peer_fact)
     std::mutex mutex;
     std::vector<ruvia::ip_endpoint> admitted;
     std::vector<std::string> logged;
-    ruvia::http_server server(runtime.loop_, {.request_stream_ = &identify,
-                                                 .access_ = [&](const ruvia::access_log_record& record) noexcept {
-            std::lock_guard lock(mutex);
-            logged.emplace_back(record.remote_address().to_string()); },
-                                                 .connection_admission_ = [&](const ruvia::connection_event& event) noexcept {
-            std::lock_guard lock(mutex);
-            admitted.push_back(event.remote());
-            return true; }});
+    ruvia::http_server server(runtime.loop_, {.request_stream_ = &identify, .access_ = [&](const ruvia::access_log_record& record) noexcept {
+        std::lock_guard lock(mutex);
+        logged.emplace_back(record.remote_address().to_string());
+    }, .connection_admission_ = [&](const ruvia::connection_event& event) noexcept {
+        std::lock_guard lock(mutex);
+        admitted.push_back(event.remote());
+        return true;
+    }});
     const auto setup = [&]() -> ruvia::task<void> {
         ruvia::trusted_proxy_config trusted;
         trusted.cidrs_.emplace_back("203.0.113.0/24");
@@ -1115,8 +1072,7 @@ TEST(Ruvia, proxy_listener_requires_preface_and_uses_source_for_every_peer_fact)
     };
     runtime.loop_.start(setup()).get();
     const auto request = head(port.endpoint().port(), "X-Forwarded-For: 192.0.2.77\r\n");
-    auto response = ruvia::test::exchange(io, port.endpoint(),
-        "PROXY TCP4 203.0.113.9 127.0.0.1 4567 " + std::to_string(port.endpoint().port()) + "\r\n" + request);
+    auto response = ruvia::test::exchange(io, port.endpoint(), "PROXY TCP4 203.0.113.9 127.0.0.1 4567 " + std::to_string(port.endpoint().port()) + "\r\n" + request);
     EXPECT_NE(response.find("203.0.113.9:4567:192.0.2.77:trusted"), std::string::npos);
     response = ruvia::test::exchange(io, port.endpoint(), proxy_v2(false, port.endpoint().port()) + request);
     EXPECT_NE(response.find("198.51.100.23:4660:198.51.100.23:direct"), std::string::npos);
@@ -1144,8 +1100,7 @@ TEST(Ruvia, proxy_listener_bounds_header_completion_and_rejects_http3) {
     runtime runtime;
     asio::io_context io;
     ruvia::test::tcp_port_reservation port(io);
-    ruvia::http_server server(runtime.loop_, {.request_stream_ = &identify},
-        {.request_header_timeout_ = 40ms, .header_completion_timeout_ = 60ms});
+    ruvia::http_server server(runtime.loop_, {.request_stream_ = &identify}, {.request_header_timeout_ = 40ms, .header_completion_timeout_ = 60ms});
     runtime.loop_.start(start(server, {.address_ = "127.0.0.1", .http_ = port.endpoint().port(), .proxy_protocol_ = true})).get();
     asio::ip::tcp::socket peer(io);
     peer.connect(port.endpoint());
@@ -1158,10 +1113,7 @@ TEST(Ruvia, proxy_listener_bounds_header_completion_and_rejects_http3) {
     runtime.loop_.start(server.shutdown()).get();
 #if defined(RUVIA_ENABLE_HTTP3)
     ruvia::http_server invalid(runtime.loop_, {.request_stream_ = &identify});
-    EXPECT_THROW(runtime.loop_.start(start(invalid,
-                                         {.address_ = "127.0.0.1", .https_ = port.endpoint().port(), .http3_ = port.endpoint().port(), .proxy_protocol_ = true}))
-                     .get(),
-        std::invalid_argument);
+    EXPECT_THROW(runtime.loop_.start(start(invalid, {.address_ = "127.0.0.1", .https_ = port.endpoint().port(), .http3_ = port.endpoint().port(), .proxy_protocol_ = true})).get(), std::invalid_argument);
     runtime.loop_.start(invalid.shutdown()).get();
 #endif
 }
@@ -1186,8 +1138,7 @@ TEST(Ruvia, adopted_prefix_is_replayed_for_http_raw_and_tls_with_remote_override
         co_await tls_server.start();
     };
     runtime.loop_.start(setup()).get();
-    auto adopted = runtime.loop_.start(adopt_read_prefix(http_server, http, 11,
-        ruvia::ip_endpoint(*ruvia::ip_address::parse("192.0.2.123"), 444)));
+    auto adopted = runtime.loop_.start(adopt_read_prefix(http_server, http, 11, ruvia::ip_endpoint(*ruvia::ip_address::parse("192.0.2.123"), 444)));
     auto response = ruvia::test::exchange(io, http.local_endpoint(), head(http.local_endpoint().port()));
     std::move(adopted).get();
     EXPECT_NE(response.find("192.0.2.123:444:192.0.2.123:direct"), std::string::npos);
@@ -1243,8 +1194,9 @@ TEST(Ruvia, proxy_source_is_the_router_rate_limit_key) {
             co_return context.text("allowed");
         });
         routes->freeze();
-        server = std::make_unique<ruvia::http_server>(runtime.loop_, ruvia::http_server_callbacks{
-                                                                         .request_stream_ = [routes](ruvia::request_stream& stream) { return routes->dispatch(stream); }});
+        server = std::make_unique<ruvia::http_server>(runtime.loop_, ruvia::http_server_callbacks{.request_stream_ = [routes](ruvia::request_stream& stream) {
+            return routes->dispatch(stream);
+        }});
         co_await start(*server, {.address_ = "127.0.0.1", .http_ = port.endpoint().port(), .proxy_protocol_ = true});
     };
     runtime.loop_.start(setup()).get();

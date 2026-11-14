@@ -42,8 +42,7 @@ class mysql_library_env final {
 public:
     mysql_library_env() {
         if (mysql_library_init(0, nullptr, nullptr) != 0) {
-            throw db_error(db_error::code_type::connect_failed, db_driver::mariadb,
-                "failed to initialize the MariaDB client library");
+            throw db_error(db_error::code_type::connect_failed, db_driver::mariadb, "failed to initialize the MariaDB client library");
         }
     }
 
@@ -56,8 +55,7 @@ class mysql_thread_env final {
 public:
     mysql_thread_env() {
         if (mysql_thread_init() != 0) {
-            throw db_error(db_error::code_type::connect_failed, db_driver::mariadb,
-                "failed to initialize the MariaDB client thread");
+            throw db_error(db_error::code_type::connect_failed, db_driver::mariadb, "failed to initialize the MariaDB client thread");
         }
     }
 
@@ -75,16 +73,14 @@ void ensure_mysql_thread_initialized() {
 
 // libmariadb's own timeouts are whole seconds; a positive millisecond limit
 // rounds up so it never expires early.
-[[nodiscard]] bool set_mysql_timeout(
-    MYSQL& connection, mysql_option option, std::optional<timeout_duration> timeout) noexcept {
+[[nodiscard]] bool set_mysql_timeout(MYSQL& connection, mysql_option option, std::optional<timeout_duration> timeout) noexcept {
     if (!timeout.has_value()) {
         return true;
     }
     unsigned int seconds = 0;
     if (timeout->value().count() > 0) {
         const auto rounded = std::chrono::ceil<std::chrono::seconds>(timeout->value()).count();
-        seconds = std::in_range<unsigned int>(rounded) ? static_cast<unsigned int>(rounded)
-                                                       : std::numeric_limits<unsigned int>::max();
+        seconds = std::in_range<unsigned int>(rounded) ? static_cast<unsigned int>(rounded) : std::numeric_limits<unsigned int>::max();
     }
     return mysql_optionsv(&connection, option, &seconds) == 0;
 }
@@ -102,9 +98,7 @@ struct mysql_wait_deadline final {
     mysql_wait_deadline_source source_{mysql_wait_deadline_source::none};
 };
 
-[[nodiscard]] mysql_wait_deadline select_mysql_wait_deadline(
-    std::optional<std::chrono::steady_clock::time_point> operation_deadline_value,
-    std::optional<std::chrono::steady_clock::time_point> driver_deadline) noexcept {
+[[nodiscard]] mysql_wait_deadline select_mysql_wait_deadline(std::optional<std::chrono::steady_clock::time_point> operation_deadline_value, std::optional<std::chrono::steady_clock::time_point> driver_deadline) noexcept {
     if (operation_deadline_value && (!driver_deadline || *operation_deadline_value <= *driver_deadline)) {
         return {*operation_deadline_value, mysql_wait_deadline_source::operation};
     }
@@ -120,8 +114,7 @@ struct mysql_wait_deadline final {
         message.append(": ");
         message.append(error_code_text(error));
     }
-    return db_error(db_error::code_type::io_error, db_driver::mariadb, std::move(message),
-        error ? std::optional<std::int64_t>(error.value()) : std::nullopt);
+    return db_error(db_error::code_type::io_error, db_driver::mariadb, std::move(message), error ? std::optional<std::int64_t>(error.value()) : std::nullopt);
 }
 
 [[nodiscard]] db_slot_socket::native_socket_type mysql_native_socket(MYSQL& connection) noexcept {
@@ -140,12 +133,10 @@ struct mysql_wait_deadline final {
 // leaves its state unknown: the slot is closed here, before the pool sees a
 // statement_failed it would otherwise keep -- unless the caller knows the
 // exchange ended (`statement_only`).
-[[nodiscard]] db_error mysql_statement_error(
-    mariadb_pool& pool, std::size_t index, std::string_view operation, bool statement_only = false) {
+[[nodiscard]] db_error mysql_statement_error(mariadb_pool& pool, std::size_t index, std::string_view operation, bool statement_only = false) {
     auto& connection = *pool.slot(index).connection_;
     auto error = mysql_error(connection, operation, db_error::code_type::statement_failed);
-    if (error.code() == db_error::code_type::statement_failed && !statement_only &&
-        (mariadb_connection_failure(mysql_errno(&connection)) || mysql_more_results(&connection) != 0)) {
+    if (error.code() == db_error::code_type::statement_failed && !statement_only && (mariadb_connection_failure(mysql_errno(&connection)) || mysql_more_results(&connection) != 0)) {
         pool.close_slot(index);
     }
     return error;
@@ -225,8 +216,7 @@ struct mysql_wait final {
     return wanted;
 }
 
-[[nodiscard]] mysql_wait wait_for_mysql(
-    mariadb_pool& pool, std::size_t index, int status, const operation_deadline& deadline_value) {
+[[nodiscard]] mysql_wait wait_for_mysql(mariadb_pool& pool, std::size_t index, int status, const operation_deadline& deadline_value) {
     auto& connection = *pool.slot(index).connection_;
     const auto operation_deadline_value = deadline_value.deadline();
     if (operation_deadline_value && *operation_deadline_value <= std::chrono::steady_clock::now()) {
@@ -242,48 +232,37 @@ struct mysql_wait final {
     if (wanted == db_socket_readiness::none) {
         const auto selected_deadline = select_mysql_wait_deadline(operation_deadline_value, driver_deadline);
         if (!selected_deadline.deadline_) {
-            throw db_error(
-                db_error::code_type::io_error, db_driver::mariadb, "MariaDB requested an unsupported empty wait");
+            throw db_error(db_error::code_type::io_error, db_driver::mariadb, "MariaDB requested an unsupported empty wait");
         }
-        return mysql_wait{db_driver_socket_wait<mariadb_driver>{
-            pool, pool.sleep(index, selected_deadline.deadline_, deadline_value),
-            selected_deadline.source_ == mysql_wait_deadline_source::operation}};
+        return mysql_wait{db_driver_socket_wait<mariadb_driver>{pool, pool.sleep(index, selected_deadline.deadline_, deadline_value), selected_deadline.source_ == mysql_wait_deadline_source::operation}};
     }
 
     const auto native = mysql_native_socket(connection);
     if (native == db_slot_socket::invalid_socket) {
-        throw mysql_socket_error("MariaDB returned an invalid socket for an active wait",
-            std::make_error_code(std::errc::bad_file_descriptor));
+        throw mysql_socket_error("MariaDB returned an invalid socket for an active wait", std::make_error_code(std::errc::bad_file_descriptor));
     }
     // Native MariaDB options round to seconds; enforce the public millisecond
     // limit here, like the shared pipeline and PostgreSQL socket paths.
-    const auto selected_deadline = select_mysql_wait_deadline(
-        deadline_value.constrained_by(db_io_timeout(pool.config(), wanted)).deadline(), driver_deadline);
-    return mysql_wait{db_driver_socket_wait<mariadb_driver>{
-        pool, pool.wait_socket(index, native, wanted, selected_deadline.deadline_, deadline_value),
-        selected_deadline.source_ == mysql_wait_deadline_source::operation}};
+    const auto selected_deadline = select_mysql_wait_deadline(deadline_value.constrained_by(db_io_timeout(pool.config(), wanted)).deadline(), driver_deadline);
+    return mysql_wait{db_driver_socket_wait<mariadb_driver>{pool, pool.wait_socket(index, native, wanted, selected_deadline.deadline_, deadline_value), selected_deadline.source_ == mysql_wait_deadline_source::operation}};
 }
 
-task<int> exec_mysql_query(
-    mariadb_pool& pool, std::size_t index, std::string_view sql, const operation_deadline& deadline_value) {
+task<int> exec_mysql_query(mariadb_pool& pool, std::size_t index, std::string_view sql, const operation_deadline& deadline_value) {
     auto& connection = *pool.slot(index).connection_;
     int query_result = 0;
     int status = mysql_real_query_start(&query_result, &connection, sql.data(), static_cast<unsigned long>(sql.size()));
     while (status != 0) {
-        status = mysql_real_query_cont(
-            &query_result, &connection, co_await wait_for_mysql(pool, index, status, deadline_value));
+        status = mysql_real_query_cont(&query_result, &connection, co_await wait_for_mysql(pool, index, status, deadline_value));
     }
     co_return query_result;
 }
 // The session's client character set, read for a string parameter whose
 // escape depends on it (mariadb_escape_needs_charset()).
-task<const MARIADB_CHARSET_INFO*> query_mysql_charset(
-    mariadb_pool& pool, std::size_t index, const operation_deadline& deadline_value);
+task<const MARIADB_CHARSET_INFO*> query_mysql_charset(mariadb_pool& pool, std::size_t index, const operation_deadline& deadline_value);
 
 // Nothing else runs on the connection, so the session is current for an
 // interpolation that depends on it.
-task<void> run_mysql_statement(mariadb_pool& pool, std::size_t index, std::string_view sql,
-    const mariadb_statement_classification& classification, std::span<const db_value> params, const operation_deadline& deadline_value) {
+task<void> run_mysql_statement(mariadb_pool& pool, std::size_t index, std::string_view sql, const mariadb_statement_classification& classification, std::span<const db_value> params, const operation_deadline& deadline_value) {
     auto& connection = *pool.slot(index).connection_;
     auto& statements = pool.slot(index).session_.statements_;
     if (classification.names_session_tracking_) {
@@ -294,8 +273,7 @@ task<void> run_mysql_statement(mariadb_pool& pool, std::size_t index, std::strin
         const auto param_traits = inspect_mariadb_parameters(params);
         const MARIADB_CHARSET_INFO* charset = nullptr;
         if (mariadb_escape_needs_charset(connection, param_traits.has_ambiguous_backslash_)) {
-            charset = statements.client_utf8mb4() ? &mariadb_utf8mb4_charset()
-                                                  : co_await query_mysql_charset(pool, index, deadline_value);
+            charset = statements.client_utf8mb4() ? &mariadb_utf8mb4_charset() : co_await query_mysql_charset(pool, index, deadline_value);
         }
         interpolate_sql(connection, sql, params, interpolated_sql, charset);
         sql = interpolated_sql;
@@ -305,8 +283,7 @@ task<void> run_mysql_statement(mariadb_pool& pool, std::size_t index, std::strin
         statements.routine_called();
     }
     if (co_await exec_mysql_query(pool, index, sql, deadline_value) != 0) {
-        throw mysql_statement_error(pool, index, "mysql_real_query",
-            mysql_local_infile_refused(connection, classification.exclusive_));
+        throw mysql_statement_error(pool, index, "mysql_real_query", mysql_local_infile_refused(connection, classification.exclusive_));
     }
 }
 
@@ -315,14 +292,12 @@ task<MYSQL_RES*> store_mysql_result(mariadb_pool& pool, std::size_t index, const
     MYSQL_RES* result_value = nullptr;
     int status = mysql_store_result_start(&result_value, &connection);
     while (status != 0) {
-        status = mysql_store_result_cont(
-            &result_value, &connection, co_await wait_for_mysql(pool, index, status, deadline_value));
+        status = mysql_store_result_cont(&result_value, &connection, co_await wait_for_mysql(pool, index, status, deadline_value));
     }
     co_return result_value;
 }
 
-task<const MARIADB_CHARSET_INFO*> query_mysql_charset(
-    mariadb_pool& pool, std::size_t index, const operation_deadline& deadline_value) {
+task<const MARIADB_CHARSET_INFO*> query_mysql_charset(mariadb_pool& pool, std::size_t index, const operation_deadline& deadline_value) {
     if (co_await exec_mysql_query(pool, index, mariadb_charset_query, deadline_value) != 0) {
         throw mysql_statement_error(pool, index, "reading the MariaDB session character set");
     }
@@ -346,8 +321,7 @@ task<bool> finish_mysql_results(mariadb_pool& pool, std::size_t index, const ope
         int next_result = 0;
         int status = mysql_next_result_start(&next_result, &connection);
         while (status != 0) {
-            status = mysql_next_result_cont(
-                &next_result, &connection, co_await wait_for_mysql(pool, index, status, deadline_value));
+            status = mysql_next_result_cont(&next_result, &connection, co_await wait_for_mysql(pool, index, status, deadline_value));
         }
         if (next_result != 0) {
             throw mysql_statement_error(pool, index, "mysql_next_result");
@@ -394,12 +368,9 @@ void materialize_mysql_rows(db_rows& output, MYSQL_RES& raw_result) {
 // connection unusable, or results the server still has to send, leave the
 // connection out of step and fail it for every statement on it -- unless the
 // caller knows the exchange ended (`statement_only`).
-[[nodiscard]] std::exception_ptr mysql_pipelined_failure(
-    MYSQL& connection, std::string_view operation, bool statement_only = false) {
+[[nodiscard]] std::exception_ptr mysql_pipelined_failure(MYSQL& connection, std::string_view operation, bool statement_only = false) {
     auto error = mysql_error(connection, operation, db_error::code_type::statement_failed);
-    if (error.code() != db_error::code_type::statement_failed ||
-        (!statement_only &&
-            (mariadb_connection_failure(mysql_errno(&connection)) || mysql_more_results(&connection) != 0))) {
+    if (error.code() != db_error::code_type::statement_failed || (!statement_only && (mariadb_connection_failure(mysql_errno(&connection)) || mysql_more_results(&connection) != 0))) {
         throw error;
     }
     return std::make_exception_ptr(std::move(error));
@@ -424,18 +395,13 @@ void start_mysql_store(mariadb_pipeline_io::group_state& state_value, MYSQL& con
 
 // After a response of the head statement: its row set, its next result, or
 // its end.
-void continue_mysql_head(mariadb_pipeline_io::state_type& state, std::size_t index,
-    mariadb_pipeline_io::member_type& reader, MYSQL& connection);
+void continue_mysql_head(mariadb_pipeline_io::state_type& state, std::size_t index, mariadb_pipeline_io::member_type& reader, MYSQL& connection);
 
-[[nodiscard]] constexpr db_exec_result make_mysql_exec_result(
-    std::uint64_t affected_rows, std::uint64_t insert_id) noexcept {
-    return db_result_access::make_exec_result(
-        affected_rows, insert_id == 0 ? std::nullopt : std::optional<std::uint64_t>(insert_id));
+[[nodiscard]] constexpr db_exec_result make_mysql_exec_result(std::uint64_t affected_rows, std::uint64_t insert_id) noexcept {
+    return db_result_access::make_exec_result(affected_rows, insert_id == 0 ? std::nullopt : std::optional<std::uint64_t>(insert_id));
 }
 
-void populate_mysql_outcome(db_pipeline_outcome& outcome, const std::exception_ptr& failure, bool extra_row_set,
-    const std::exception_ptr& output_failure, bool returns_rows, bool returned_rows, std::uint64_t affected_rows,
-    std::uint64_t insert_id) {
+void populate_mysql_outcome(db_pipeline_outcome& outcome, const std::exception_ptr& failure, bool extra_row_set, const std::exception_ptr& output_failure, bool returns_rows, bool returned_rows, std::uint64_t affected_rows, std::uint64_t insert_id) {
     outcome.failure_ = mariadb_statement_failure(failure, extra_row_set, output_failure, returns_rows, returned_rows);
     if (outcome.failure_ == nullptr && !returns_rows) {
         outcome.affected_rows_ = affected_rows;
@@ -446,15 +412,13 @@ void populate_mysql_outcome(db_pipeline_outcome& outcome, const std::exception_p
 }
 // Hands the head statement's outcome on. Only its first result counts for
 // affected rows.
-void complete_mysql_head(
-    mariadb_pipeline_io::state_type& state, std::size_t index, mariadb_pipeline_io::member_type& reader) {
+void complete_mysql_head(mariadb_pipeline_io::state_type& state, std::size_t index, mariadb_pipeline_io::member_type& reader) {
     auto& group = state.group(index);
     auto& data = group.io_;
     auto& head = group.records_[group.head_];
     db_pipeline_outcome outcome;
     if (head.member_ != nullptr) {
-        populate_mysql_outcome(outcome, data.head_failure_, data.head_extra_row_set_, data.head_output_failure_,
-            head.returns_rows_, data.head_returned_rows_, data.head_affected_rows_, data.head_insert_id_);
+        populate_mysql_outcome(outcome, data.head_failure_, data.head_extra_row_set_, data.head_output_failure_, head.returns_rows_, data.head_returned_rows_, data.head_affected_rows_, data.head_insert_id_);
     }
     data.bytes_in_flight_ -= head.flight_.size_;
     --data.sent_;
@@ -470,8 +434,7 @@ void complete_mysql_head(
 // Hands the outcome of the head statement's prepared run on. A statement the
 // cache had to drop as stale runs once more outside a transaction; inside
 // one it fails, and the transaction's owner decides what follows.
-void complete_mysql_prepared_head(mariadb_pipeline_io::state_type& state, std::size_t index,
-    mariadb_pipeline_io::member_type& reader, MYSQL& connection) {
+void complete_mysql_prepared_head(mariadb_pipeline_io::state_type& state, std::size_t index, mariadb_pipeline_io::member_type& reader, MYSQL& connection) {
     auto& group = state.group(index);
     auto& data = group.io_;
     auto& head = group.records_[group.head_];
@@ -481,8 +444,7 @@ void complete_mysql_prepared_head(mariadb_pipeline_io::state_type& state, std::s
         if (run.stale_ && head.member_->may_retry_ && (connection.server_status & SERVER_STATUS_IN_TRANS) == 0) {
             outcome.retry_ = true;
         } else {
-            populate_mysql_outcome(outcome, run.failure_, run.extra_row_set_, run.output_failure_, head.returns_rows_,
-                run.returned_rows_, run.affected_rows_, run.insert_id_);
+            populate_mysql_outcome(outcome, run.failure_, run.extra_row_set_, run.output_failure_, head.returns_rows_, run.returned_rows_, run.affected_rows_, run.insert_id_);
         }
     }
     --data.sent_;
@@ -490,8 +452,7 @@ void complete_mysql_prepared_head(mariadb_pipeline_io::state_type& state, std::s
     state.complete_head(index, reader, std::move(outcome));
 }
 
-void continue_mysql_head(mariadb_pipeline_io::state_type& state, std::size_t index,
-    mariadb_pipeline_io::member_type& reader, MYSQL& connection) {
+void continue_mysql_head(mariadb_pipeline_io::state_type& state, std::size_t index, mariadb_pipeline_io::member_type& reader, MYSQL& connection) {
     auto& data = state.group(index).io_;
     if (mysql_field_count(&connection) != 0) {
         start_mysql_store(data, connection);
@@ -534,8 +495,7 @@ void take_mysql_row_set(mariadb_group& group, MYSQL_RES* stored) {
 }
 
 // Settles the operation exchange() or its start finished.
-void finish_mysql_operation(mariadb_pipeline_io::state_type& state, std::size_t index,
-    mariadb_pipeline_io::member_type& reader, MYSQL& connection) {
+void finish_mysql_operation(mariadb_pipeline_io::state_type& state, std::size_t index, mariadb_pipeline_io::member_type& reader, MYSQL& connection) {
     auto& group = state.group(index);
     auto& data = group.io_;
     const auto operation = std::exchange(data.operation_, mariadb_operation::none);
@@ -550,17 +510,14 @@ void finish_mysql_operation(mariadb_pipeline_io::state_type& state, std::size_t 
             data.bytes_in_flight_ += record.flight_.size_;
             ++data.sent_;
             const auto size_limit = std::numeric_limits<std::size_t>::max();
-            const auto amortized_bytes =
-                record.flight_.size_ <= size_limit / 4 ? record.flight_.size_ * 4 : size_limit;
-            http_clear_string_retaining_small(
-                data.send_buffer_, std::max(mariadb_pipeline_send_budget, amortized_bytes));
+            const auto amortized_bytes = record.flight_.size_ <= size_limit / 4 ? record.flight_.size_ * 4 : size_limit;
+            http_clear_string_retaining_small(data.send_buffer_, std::max(mariadb_pipeline_send_budget, amortized_bytes));
             return;
         }
         case mariadb_operation::read:
             if (data.result_ != 0) {
                 const auto& head = group.records_[group.head_];
-                data.head_failure_ = mysql_pipelined_failure(connection, "mysql_read_query_result",
-                    mysql_local_infile_refused(connection, head.flight_.exclusive_));
+                data.head_failure_ = mysql_pipelined_failure(connection, "mysql_read_query_result", mysql_local_infile_refused(connection, head.flight_.exclusive_));
                 complete_mysql_head(state, index, reader);
                 return;
             }
@@ -637,8 +594,7 @@ void finish_mysql_operation(mariadb_pipeline_io::state_type& state, std::size_t 
                     return;
                 }
             } else if (run.step_ == mariadb_prepared_run::step::rows) {
-                take_mariadb_prepared_rows(
-                    run, member == nullptr ? nullptr : member->rows_);
+                take_mariadb_prepared_rows(run, member == nullptr ? nullptr : member->rows_);
                 start_mysql_operation(data, mariadb_operation::prepared, resume_mariadb_prepared(connection, run, 0));
                 return;
             }
@@ -681,13 +637,11 @@ void mariadb_pipeline_io::group_state::reset() noexcept {
     head_extra_row_set_ = false;
 }
 
-mariadb_pipeline_io::statement_type mariadb_pipeline_io::prepare(
-    std::string_view sql, std::span<const db_value> params) {
+mariadb_pipeline_io::statement_type mariadb_pipeline_io::prepare(std::string_view sql, std::span<const db_value> params) {
     const auto classification = classify_mariadb_statement(sql);
     const auto param_traits = params.empty() ? mariadb_parameter_traits{} : inspect_mariadb_parameters(params);
     const bool deferred = !params.empty() && (classification.has_backslash_ || param_traits.has_backslash_);
-    return {sql, params, std::string(), classification, deferred,
-        param_traits.has_ambiguous_backslash_};
+    return {sql, params, std::string(), classification, deferred, param_traits.has_ambiguous_backslash_};
 }
 
 db_slot_socket::native_socket_type mariadb_pipeline_io::socket(pool_type& pool, std::size_t slot) {
@@ -705,8 +659,7 @@ void mariadb_pipeline_io::open(state_type&, std::size_t) {}
 // Interpolation happens here unless it depends on the session, which only the
 // responses before the statement settle; the command is sent by the reader
 // once the connection stands between two responses.
-bool mariadb_pipeline_io::queue(
-    state_type& state, std::size_t index, member_type&, statement_type& statement, flight_type& flight) {
+bool mariadb_pipeline_io::queue(state_type& state, std::size_t index, member_type&, statement_type& statement, flight_type& flight) {
     if (statement.classification_.names_session_tracking_) {
         state.pool().slot(index).session_.statements_.untrack();
     }
@@ -714,16 +667,12 @@ bool mariadb_pipeline_io::queue(
     std::string_view sql = statement.sql_;
     if (!statement.params_.empty() && !deferred) {
         if (statement.interpolated_.empty()) {
-            interpolate_sql(
-                *state.pool().slot(index).connection_, statement.sql_, statement.params_, statement.interpolated_);
+            interpolate_sql(*state.pool().slot(index).connection_, statement.sql_, statement.params_, statement.interpolated_);
         }
         sql = statement.interpolated_;
     }
     validate_mariadb_sql_length(sql.size());
-    flight = {deferred ? std::string_view{} : sql, statement.sql_, statement.params_,
-        (!statement.params_.empty() && !deferred) ? &statement.interpolated_ : nullptr, 0, false, deferred,
-        statement.classification_.exclusive_, statement.classification_.calls_routine_, false,
-        statement.ambiguous_backslash_};
+    flight = {deferred ? std::string_view{} : sql, statement.sql_, statement.params_, (!statement.params_.empty() && !deferred) ? &statement.interpolated_ : nullptr, 0, false, deferred, statement.classification_.exclusive_, statement.classification_.calls_routine_, false, statement.ambiguous_backslash_};
     return false;
 }
 
@@ -759,8 +708,7 @@ bool mariadb_pipeline_io::advance(state_type& state, std::size_t index, member_t
         // nothing follows an exclusive one on the wire.
         const auto& head = group.record(0);
         const bool behind_responses = data.sent_ != 0;
-        const bool may_send = !behind_responses || (!record.flight_.deferred_ && !record.flight_.exclusive_ &&
-                                                       !(head.flight_.exclusive_ && head.flight_.sent_));
+        const bool may_send = !behind_responses || (!record.flight_.deferred_ && !record.flight_.exclusive_ && !(head.flight_.exclusive_ && head.flight_.sent_));
         if (may_send) {
             auto& statements = slot.session_.statements_;
             // A prepared execution cannot share the connection, and it waits
@@ -780,15 +728,12 @@ bool mariadb_pipeline_io::advance(state_type& state, std::size_t index, member_t
                 record.flight_.sent_ = true;
                 ++data.sent_;
                 data.prepared_ = start_mariadb_prepared(statements, *found, record.flight_.params_);
-                start_mysql_operation(
-                    data, mariadb_operation::prepared, resume_mariadb_prepared(connection, data.prepared_, 0));
+                start_mysql_operation(data, mariadb_operation::prepared, resume_mariadb_prepared(connection, data.prepared_, 0));
                 return true;
             }
-            if (data.bytes_in_flight_ == 0 ||
-                data.bytes_in_flight_ + record.flight_.sql_.size() <= mariadb_pipeline_send_budget) {
+            if (data.bytes_in_flight_ == 0 || data.bytes_in_flight_ + record.flight_.sql_.size() <= mariadb_pipeline_send_budget) {
                 if (record.flight_.deferred_) {
-                    if (record.flight_.charset_ == nullptr &&
-                        mariadb_escape_needs_charset(connection, record.flight_.ambiguous_backslash_)) {
+                    if (record.flight_.charset_ == nullptr && mariadb_escape_needs_charset(connection, record.flight_.ambiguous_backslash_)) {
                         // Its escape depends on the session's client
                         // character set. Every response before it has been
                         // read, so a tracked session's report of it is
@@ -798,8 +743,7 @@ bool mariadb_pipeline_io::advance(state_type& state, std::size_t index, member_t
                             record.flight_.charset_ = &mariadb_utf8mb4_charset();
                         } else {
                             int result = 0;
-                            const int status = mysql_real_query_start(&result, &connection,
-                                mariadb_charset_query.data(), static_cast<unsigned long>(mariadb_charset_query.size()));
+                            const int status = mysql_real_query_start(&result, &connection, mariadb_charset_query.data(), static_cast<unsigned long>(mariadb_charset_query.size()));
                             data.result_ = result;
                             start_mysql_operation(data, mariadb_operation::charset_query, status);
                             return true;
@@ -808,8 +752,7 @@ bool mariadb_pipeline_io::advance(state_type& state, std::size_t index, member_t
                     // Every response before it has been read: the session
                     // libmariadb saw last is the one the server runs it in.
                     try {
-                        interpolate_sql(connection, record.flight_.statement_sql_, record.flight_.params_,
-                            data.send_buffer_, record.flight_.charset_);
+                        interpolate_sql(connection, record.flight_.statement_sql_, record.flight_.params_, data.send_buffer_, record.flight_.charset_);
                     } catch (...) {
                         // Its own failure; nothing was sent.
                         db_pipeline_outcome outcome;
@@ -828,8 +771,7 @@ bool mariadb_pipeline_io::advance(state_type& state, std::size_t index, member_t
                     statements.routine_called();
                 }
                 int sent = 0;
-                const int status = mysql_send_query_start(
-                    &sent, &connection, data.send_buffer_.data(), static_cast<unsigned long>(data.send_buffer_.size()));
+                const int status = mysql_send_query_start(&sent, &connection, data.send_buffer_.data(), static_cast<unsigned long>(data.send_buffer_.size()));
                 data.result_ = sent;
                 start_mysql_operation(data, mariadb_operation::send, status);
                 data.batched_ = true;
@@ -937,8 +879,7 @@ task<void> mariadb_driver::connect(pool_type& pool, std::size_t index, const ope
     const auto& config = pool.config();
     auto& slot = pool.slot(index);
     slot.session_.statements_.clear();
-    auto resolved_hosts =
-        make_mariadb_resolved_host_list(co_await pool.resolve_host(index, deadline_value));
+    auto resolved_hosts = make_mariadb_resolved_host_list(co_await pool.resolve_host(index, deadline_value));
 
     ensure_mysql_thread_initialized();
     slot.connection_ = mysql_init(nullptr);
@@ -963,9 +904,7 @@ task<void> mariadb_driver::connect(pool_type& pool, std::size_t index, const ope
     if (mysql_optionsv(&initialized, MYSQL_SET_CHARSET_NAME, "utf8mb4") != 0) {
         throw mysql_error(initialized, "configuring MariaDB utf8mb4", db_error::code_type::connect_failed);
     }
-    if (!set_mysql_timeout(initialized, MYSQL_OPT_CONNECT_TIMEOUT, config.connect_timeout_) ||
-        !set_mysql_timeout(initialized, MYSQL_OPT_READ_TIMEOUT, config.read_timeout_) ||
-        !set_mysql_timeout(initialized, MYSQL_OPT_WRITE_TIMEOUT, config.write_timeout_)) {
+    if (!set_mysql_timeout(initialized, MYSQL_OPT_CONNECT_TIMEOUT, config.connect_timeout_) || !set_mysql_timeout(initialized, MYSQL_OPT_READ_TIMEOUT, config.read_timeout_) || !set_mysql_timeout(initialized, MYSQL_OPT_WRITE_TIMEOUT, config.write_timeout_)) {
         throw mysql_error(initialized, "configuring MariaDB timeouts", db_error::code_type::connect_failed);
     }
     // The pool keeps one registered duplicate of the connection socket and
@@ -983,13 +922,15 @@ task<void> mariadb_driver::connect(pool_type& pool, std::size_t index, const ope
 
     const bool use_tls = config.tls_.mode_ == client_tls_mode::verify_identity;
     const my_bool enforce_tls = use_tls ? 1 : 0;
-    if (mysql_optionsv(&initialized, MYSQL_OPT_SSL_ENFORCE, &enforce_tls) != 0 ||
-        mysql_optionsv(&initialized, MYSQL_OPT_SSL_VERIFY_SERVER_CERT, &enforce_tls) != 0) {
+    if (mysql_optionsv(&initialized, MYSQL_OPT_SSL_ENFORCE, &enforce_tls) != 0 || mysql_optionsv(&initialized, MYSQL_OPT_SSL_VERIFY_SERVER_CERT, &enforce_tls) != 0) {
         throw mysql_error(initialized, "configuring MariaDB authenticated TLS", db_error::code_type::connect_failed);
     }
     if (use_tls) {
-        const char* tls_versions = config.tls_.minimum_version_ == tls_version::tls_1_3 ? "TLSv1.3" : config.tls_.minimum_version_ == tls_version::tls_1_2 ? "TLSv1.2,TLSv1.3"
-                                                                                                                                                           : "TLSv1.1,TLSv1.2,TLSv1.3";
+        const char* tls_versions = config.tls_.minimum_version_ == tls_version::tls_1_3
+            ? "TLSv1.3"
+            : config.tls_.minimum_version_ == tls_version::tls_1_2
+            ? "TLSv1.2,TLSv1.3"
+            : "TLSv1.1,TLSv1.2,TLSv1.3";
         if (mysql_optionsv(&initialized, MYSQL_OPT_TLS_VERSION, tls_versions) != 0) {
             throw mysql_error(initialized, "configuring MariaDB TLS versions", db_error::code_type::connect_failed);
         }
@@ -1014,16 +955,13 @@ task<void> mariadb_driver::connect(pool_type& pool, std::size_t index, const ope
     int status;
     {
         native_tls_context_scope tls_scope(use_tls ? config.host_ : std::string_view{}, config.tls_.max_outgoing_records_);
-        status = mysql_real_connect_start(&connected, &initialized, resolved_hosts.c_str(), config.username_.c_str(),
-            config.password_.c_str(), config.database_.empty() ? nullptr : config.database_.c_str(), config.port_,
-            nullptr, client_flags);
+        status = mysql_real_connect_start(&connected, &initialized, resolved_hosts.c_str(), config.username_.c_str(), config.password_.c_str(), config.database_.empty() ? nullptr : config.database_.c_str(), config.port_, nullptr, client_flags);
         tls_scope.rethrow_failure();
     }
     while (status != 0) {
         const auto ready = co_await wait_for_mysql(pool, index, status, deadline_value);
         native_tls_context_scope tls_scope(use_tls ? config.host_ : std::string_view{}, config.tls_.max_outgoing_records_);
-        status = mysql_real_connect_cont(
-            &connected, &initialized, ready);
+        status = mysql_real_connect_cont(&connected, &initialized, ready);
         tls_scope.rethrow_failure();
     }
     std::string(resolved_hosts).swap(resolved_hosts);
@@ -1072,8 +1010,7 @@ void mariadb_driver::close_connection(connection_type& connection) noexcept {
 
 bool mariadb_driver::reusable_connection(connection_type& connection) noexcept {
     unsigned int status = 0;
-    if (mysql_more_results(&connection) != 0 ||
-        mariadb_get_infov(&connection, MARIADB_CONNECTION_SERVER_STATUS, &status) != 0) {
+    if (mysql_more_results(&connection) != 0 || mariadb_get_infov(&connection, MARIADB_CONNECTION_SERVER_STATUS, &status) != 0) {
         return false;
     }
     return (status & SERVER_STATUS_IN_TRANS) == 0 && (status & SERVER_STATUS_AUTOCOMMIT) != 0;
@@ -1084,8 +1021,7 @@ bool mariadb_driver::reusable_connection(connection_type& connection) noexcept {
 // of the stream or a socket error retires the connection.
 bool mariadb_driver::idle_connection_alive(connection_type& connection) noexcept {
     const auto native = mysql_native_socket(connection);
-    return native != db_slot_socket::invalid_socket &&
-           peek_db_idle_socket(native) == db_idle_socket_status::quiet;
+    return native != db_slot_socket::invalid_socket && peek_db_idle_socket(native) == db_idle_socket_status::quiet;
 }
 
 namespace {
@@ -1093,8 +1029,7 @@ namespace {
 // A statement as text on a connection its caller holds exclusively: its
 // result, or what mariadb_statement_failure() makes of its responses.
 template <typename result_type>
-task<result_type> run_mysql_text(mariadb_pool& pool, std::size_t index, std::string_view sql,
-    const mariadb_statement_classification& classification, std::span<const db_value> params, const operation_deadline& deadline_value) {
+task<result_type> run_mysql_text(mariadb_pool& pool, std::size_t index, std::string_view sql, const mariadb_statement_classification& classification, std::span<const db_value> params, const operation_deadline& deadline_value) {
     constexpr bool returns_rows = std::is_same_v<result_type, db_rows>;
     co_await run_mysql_statement(pool, index, sql, classification, params, deadline_value);
     auto& connection = *pool.slot(index).connection_;
@@ -1116,8 +1051,7 @@ task<result_type> run_mysql_text(mariadb_pool& pool, std::size_t index, std::str
         }
     }
     const bool extra_row_set = co_await finish_mysql_results(pool, index, deadline_value);
-    if (auto failure =
-            mariadb_statement_failure(nullptr, extra_row_set, nullptr, returns_rows, raw_result != nullptr)) {
+    if (auto failure = mariadb_statement_failure(nullptr, extra_row_set, nullptr, returns_rows, raw_result != nullptr)) {
         std::rethrow_exception(failure);
     }
     if constexpr (returns_rows) {
@@ -1134,8 +1068,7 @@ task<result_type> run_mysql_text(mariadb_pool& pool, std::size_t index, std::str
 // outside a transaction; inside one it fails, and the transaction's owner
 // decides what follows.
 template <typename result_type>
-task<result_type> run_mysql_cached(mariadb_pool& pool, std::size_t index, std::string_view sql,
-    std::span<const db_value> params, const operation_deadline& deadline_value) {
+task<result_type> run_mysql_cached(mariadb_pool& pool, std::size_t index, std::string_view sql, std::span<const db_value> params, const operation_deadline& deadline_value) {
     constexpr bool returns_rows = std::is_same_v<result_type, db_rows>;
     auto& slot = pool.slot(index);
     auto& statements = slot.session_.statements_;
@@ -1158,8 +1091,7 @@ task<result_type> run_mysql_cached(mariadb_pool& pool, std::size_t index, std::s
             }
             int status = resume_mariadb_prepared(connection, run, 0);
             while (status != 0) {
-                status = resume_mariadb_prepared(
-                    connection, run, co_await wait_for_mysql(pool, index, status, deadline_value));
+                status = resume_mariadb_prepared(connection, run, co_await wait_for_mysql(pool, index, status, deadline_value));
             }
         }
         if (run.text_) {
@@ -1168,8 +1100,7 @@ task<result_type> run_mysql_cached(mariadb_pool& pool, std::size_t index, std::s
         if (run.stale_ && may_retry && (connection.server_status & SERVER_STATUS_IN_TRANS) == 0) {
             continue;
         }
-        if (auto failure = mariadb_statement_failure(
-                run.failure_, run.extra_row_set_, run.output_failure_, returns_rows, run.returned_rows_)) {
+        if (auto failure = mariadb_statement_failure(run.failure_, run.extra_row_set_, run.output_failure_, returns_rows, run.returned_rows_)) {
             std::rethrow_exception(failure);
         }
         if constexpr (returns_rows) {
@@ -1183,23 +1114,18 @@ task<result_type> run_mysql_cached(mariadb_pool& pool, std::size_t index, std::s
 
 }  // namespace
 
-task<db_rows> mariadb_driver::query(pool_type& pool, std::size_t index, std::string_view sql,
-    std::span<const db_value> params, const operation_deadline& deadline_value) {
+task<db_rows> mariadb_driver::query(pool_type& pool, std::size_t index, std::string_view sql, std::span<const db_value> params, const operation_deadline& deadline_value) {
     return run_mysql_cached<db_rows>(pool, index, sql, params, deadline_value);
 }
 
-task<db_exec_result> mariadb_driver::execute(pool_type& pool, std::size_t index, std::string_view sql,
-    std::span<const db_value> params, const operation_deadline& deadline_value) {
+task<db_exec_result> mariadb_driver::execute(pool_type& pool, std::size_t index, std::string_view sql, std::span<const db_value> params, const operation_deadline& deadline_value) {
     return run_mysql_cached<db_exec_result>(pool, index, sql, params, deadline_value);
 }
 
-task<db_stream_start> mariadb_driver::start_stream(pool_type& pool, std::size_t index, std::string_view sql,
-    std::span<const db_value> params, const operation_deadline& deadline_value) {
-    co_await run_mysql_statement(
-        pool, index, sql, classify_mariadb_statement(sql), params, deadline_value);
+task<db_stream_start> mariadb_driver::start_stream(pool_type& pool, std::size_t index, std::string_view sql, std::span<const db_value> params, const operation_deadline& deadline_value) {
+    co_await run_mysql_statement(pool, index, sql, classify_mariadb_statement(sql), params, deadline_value);
     auto& connection = *pool.slot(index).connection_;
-    std::unique_ptr<MYSQL_RES, decltype(&discard_unbuffered_result)> result(
-        mysql_use_result(&connection), &discard_unbuffered_result);
+    std::unique_ptr<MYSQL_RES, decltype(&discard_unbuffered_result)> result(mysql_use_result(&connection), &discard_unbuffered_result);
     if (result == nullptr) {
         if (mysql_field_count(&connection) != 0 || mysql_errno(&connection) != 0) {
             throw mysql_error(connection, "mysql_use_result", db_error::code_type::statement_failed);
@@ -1213,8 +1139,7 @@ task<db_stream_start> mariadb_driver::start_stream(pool_type& pool, std::size_t 
     const auto* fields_value = mysql_fetch_fields(result.get());
     start.column_names_.reserve(field_count);
     for (std::size_t i = 0; i < field_count; ++i) {
-        start.column_names_.emplace_back(
-            fields_value[i].name, static_cast<std::size_t>(fields_value[i].name_length));
+        start.column_names_.emplace_back(fields_value[i].name, static_cast<std::size_t>(fields_value[i].name_length));
     }
     start.result_ = result.release();
     co_return start;
@@ -1225,8 +1150,7 @@ namespace {
 // Reads an unbuffered result through its end and frees it, then the results
 // that may follow it; a further row set fails the stream as for any statement.
 // `result_value` is null once freed.
-task<void> finish_mysql_stream(
-    mariadb_pool& pool, std::size_t index, void*& result_value, const operation_deadline& deadline_value) {
+task<void> finish_mysql_stream(mariadb_pool& pool, std::size_t index, void*& result_value, const operation_deadline& deadline_value) {
     auto* raw_result = static_cast<MYSQL_RES*>(result_value);
     // The result-set terminator carries the final server status:
     // https://mariadb.com/docs/server/reference/clientserver-protocol/4-server-response-packets/eof_packet
@@ -1258,8 +1182,7 @@ task<void> finish_mysql_stream(
 
 }  // namespace
 
-task<db_stream_step> mariadb_driver::read_stream_row(pool_type& pool, std::size_t index, void*& result_value,
-    std::vector<db_field>& fields, std::vector<std::string>& column_names, const operation_deadline& deadline_value) {
+task<db_stream_step> mariadb_driver::read_stream_row(pool_type& pool, std::size_t index, void*& result_value, std::vector<db_field>& fields, std::vector<std::string>& column_names, const operation_deadline& deadline_value) {
     auto* raw_result = static_cast<MYSQL_RES*>(result_value);
     MYSQL_ROW row = nullptr;
     int status = mysql_fetch_row_start(&row, raw_result);
@@ -1278,14 +1201,12 @@ task<db_stream_step> mariadb_driver::read_stream_row(pool_type& pool, std::size_
     }
     const auto field_count = static_cast<std::size_t>(mysql_num_fields(raw_result));
     const auto* lengths = mysql_fetch_lengths(raw_result);
-    co_return db_result_access::materialize_stream_row(
-        fields, column_names, field_count, [&](std::size_t i) -> std::optional<std::string_view> {
-            return row[i] == nullptr ? std::nullopt : std::optional<std::string_view>(std::string_view(row[i], lengths[i]));
-        });
+    co_return db_result_access::materialize_stream_row(fields, column_names, field_count, [&](std::size_t i) -> std::optional<std::string_view> {
+        return row[i] == nullptr ? std::nullopt : std::optional<std::string_view>(std::string_view(row[i], lengths[i]));
+    });
 }
 
-task<void> mariadb_driver::close_stream(
-    pool_type& pool, std::size_t index, void*& result_value, const operation_deadline& deadline_value) {
+task<void> mariadb_driver::close_stream(pool_type& pool, std::size_t index, void*& result_value, const operation_deadline& deadline_value) {
     return finish_mysql_stream(pool, index, result_value, deadline_value);
 }
 
@@ -1350,12 +1271,10 @@ struct digits final {
 // significant digits.
 [[nodiscard]] digits significant(double magnitude, int limit) noexcept {
     std::array<char, 64> scratch{};
-    auto converted =
-        std::to_chars(scratch.data(), scratch.data() + scratch.size(), magnitude, std::chars_format::scientific);
+    auto converted = std::to_chars(scratch.data(), scratch.data() + scratch.size(), magnitude, std::chars_format::scientific);
     auto result = parse_scientific(scratch.data(), converted.ptr);
     if (result.length_ > limit) {
-        converted = std::to_chars(
-            scratch.data(), scratch.data() + scratch.size(), magnitude, std::chars_format::scientific, limit - 1);
+        converted = std::to_chars(scratch.data(), scratch.data() + scratch.size(), magnitude, std::chars_format::scientific, limit - 1);
         result = parse_scientific(scratch.data(), converted.ptr);
     }
     return result;
@@ -1444,8 +1363,7 @@ struct digits final {
 // my_fcvt(): exactly `decimals` digits after the point. dtoa keeps the
 // shortest digits that read back as the value when they fit, and pads them
 // with zeros; otherwise the value is correctly rounded.
-[[nodiscard]] std::size_t format_mariadb_fixed(
-    mariadb_text_buffer& buffer, double value, unsigned int decimals) noexcept {
+[[nodiscard]] std::size_t format_mariadb_fixed(mariadb_text_buffer& buffer, double value, unsigned int decimals) noexcept {
     namespace text = mariadb_text_detail;
     if (!std::isfinite(value)) {
         // As my_gcvt(), my_fcvt() writes dtoa's overflow as "0".
@@ -1473,16 +1391,14 @@ struct digits final {
             return static_cast<std::size_t>(out - buffer.data());
         }
     }
-    const auto converted = std::to_chars(
-        buffer.data(), buffer.data() + buffer.size(), value, std::chars_format::fixed, static_cast<int>(decimals));
+    const auto converted = std::to_chars(buffer.data(), buffer.data() + buffer.size(), value, std::chars_format::fixed, static_cast<int>(decimals));
     return static_cast<std::size_t>(converted.ptr - buffer.data());
 }
 
 // An integer as the text protocol sends it: a ZEROFILL column pads it with
 // zeros to the column's display width.
 template <typename integer_type>
-[[nodiscard]] std::size_t format_mariadb_integer(
-    mariadb_text_buffer& buffer, integer_type value, std::size_t zerofill_width) noexcept {
+[[nodiscard]] std::size_t format_mariadb_integer(mariadb_text_buffer& buffer, integer_type value, std::size_t zerofill_width) noexcept {
     std::array<char, 24> digits{};
     const auto converted = std::to_chars(digits.data(), digits.data() + digits.size(), value);
     const auto length = static_cast<std::size_t>(converted.ptr - digits.data());
@@ -1516,8 +1432,7 @@ enum class mariadb_temporal_kind : std::uint8_t { date,
 // "YYYY-MM-DD", "YYYY-MM-DD HH:MM:SS" or "[-]HH:MM:SS", with the column's
 // fractional digits. A column without a fixed number of them
 // (AUTO_SEC_PART_DIGITS) shows six when the value has a fraction, else none.
-[[nodiscard]] std::size_t format_mariadb_temporal(mariadb_text_buffer& buffer, const mariadb_temporal& value,
-    mariadb_temporal_kind kind, unsigned int decimals) noexcept {
+[[nodiscard]] std::size_t format_mariadb_temporal(mariadb_text_buffer& buffer, const mariadb_temporal& value, mariadb_temporal_kind kind, unsigned int decimals) noexcept {
     if (decimals > 6) {
         decimals = value.microsecond_ != 0 ? 6 : 0;
     }
@@ -1575,10 +1490,8 @@ static_assert(std::is_trivially_copyable_v<MYSQL_BIND>);
     return reinterpret_cast<MYSQL_BIND*>(storage.data());
 }
 
-[[nodiscard]] db_error statement_error(MYSQL_STMT& statement, std::string_view operation,
-    db_error::code_type code = db_error::code_type::statement_failed) {
-    return mariadb_error(operation, mysql_stmt_errno(&statement), mysql_stmt_sqlstate(&statement),
-        mysql_stmt_error(&statement), code);
+[[nodiscard]] db_error statement_error(MYSQL_STMT& statement, std::string_view operation, db_error::code_type code = db_error::code_type::statement_failed) {
+    return mariadb_error(operation, mysql_stmt_errno(&statement), mysql_stmt_sqlstate(&statement), mysql_stmt_error(&statement), code);
 }
 
 // A failure that leaves the connection out of step, as io_error: the
@@ -1611,8 +1524,7 @@ static_assert(std::is_trivially_copyable_v<MYSQL_BIND>);
             }
             return MYSQL_TYPE_LONGLONG;
         case db_value_type::unsigned_value:
-            if (param.unsigned_value() >
-                static_cast<std::uint64_t>((std::numeric_limits<long long>::max)())) {
+            if (param.unsigned_value() > static_cast<std::uint64_t>((std::numeric_limits<long long>::max)())) {
                 return std::nullopt;
             }
             return MYSQL_TYPE_LONGLONG;
@@ -1735,12 +1647,12 @@ void hear_session_status(void* data, status_type type, ...) {
 
 }  // namespace
 
-mariadb_statement_cache::mariadb_statement_cache()
-    : retired_(),
-      types_(),
-      binds_(),
-      values_(),
-      columns_() {}
+mariadb_statement_cache::mariadb_statement_cache() :
+    retired_(),
+    types_(),
+    binds_(),
+    values_(),
+    columns_() {}
 
 mariadb_statement_cache::~mariadb_statement_cache() {
     clear();
@@ -1749,8 +1661,7 @@ mariadb_statement_cache::~mariadb_statement_cache() {
 mariadb_statement& mariadb_statement_cache::entry(entry_ref statement) {
     auto* found = statements_.payload(statement);
     if (found == nullptr) {
-        throw db_error(
-            db_error::code_type::protocol_error, db_driver::mariadb, "MariaDB statement left the cache");
+        throw db_error(db_error::code_type::protocol_error, db_driver::mariadb, "MariaDB statement left the cache");
     }
     return *found;
 }
@@ -1785,7 +1696,9 @@ void mariadb_statement_cache::invalidate() {
         handles += statement.handle_ != nullptr ? 1 : 0;
     });
     reserve_retired(handles);
-    statements_.for_each([this](mariadb_statement& statement) { retire(std::exchange(statement.handle_, nullptr)); });
+    statements_.for_each([this](mariadb_statement& statement) {
+        retire(std::exchange(statement.handle_, nullptr));
+    });
     statements_.clear();
     refused_.fill(0);
     changed_ = false;
@@ -1835,8 +1748,7 @@ void mariadb_statement_cache::clear() noexcept {
 
 bool mariadb_statement_cache::observe(MYSQL& connection) {
     // libmariadb reads both arguments as void*.
-    return mysql_optionsv(&connection, MARIADB_OPT_STATUS_CALLBACK, reinterpret_cast<void*>(&hear_session_status),
-               static_cast<void*>(this)) == 0;
+    return mysql_optionsv(&connection, MARIADB_OPT_STATUS_CALLBACK, reinterpret_cast<void*>(&hear_session_status), static_cast<void*>(this)) == 0;
 }
 
 void mariadb_statement_cache::connected(bool tracked) noexcept {
@@ -1858,8 +1770,7 @@ bool mariadb_statement_cache::client_utf8mb4() const noexcept {
     return tracked_ && all_variables_ && !untracked_ && !verify_ && client_utf8mb4_;
 }
 
-std::optional<mariadb_statement_cache::entry_ref> mariadb_statement_cache::find(
-    std::string_view sql, std::span<const db_value> params, bool may_prepare) {
+std::optional<mariadb_statement_cache::entry_ref> mariadb_statement_cache::find(std::string_view sql, std::span<const db_value> params, bool may_prepare) {
     auto& cache = *this;
     if (cache.changed_) {
         cache.invalidate();
@@ -1879,8 +1790,7 @@ std::optional<mariadb_statement_cache::entry_ref> mariadb_statement_cache::find(
     }
     // A statement that may not run prepared is refused inside make() before it
     // could take the place of one that may.
-    const auto make = [&cache](std::string_view candidate_sql, std::span<const unsigned int>,
-                          std::size_t hash) -> std::optional<mariadb_statement> {
+    const auto make = [&cache](std::string_view candidate_sql, std::span<const unsigned int>, std::size_t hash) -> std::optional<mariadb_statement> {
         if (cache.refused(hash)) {
             return std::nullopt;
         }
@@ -1901,16 +1811,14 @@ std::optional<mariadb_statement_cache::entry_ref> mariadb_statement_cache::find(
     }
     const auto& statement = *cache.statements_.payload(*found.statement_);
     for (std::size_t index = 0; index < types.size() && index < 64; ++index) {
-        if (((statement.integer_params_ >> index) & 1U) != 0 &&
-            types[index] != static_cast<unsigned int>(MYSQL_TYPE_LONGLONG)) {
+        if (((statement.integer_params_ >> index) & 1U) != 0 && types[index] != static_cast<unsigned int>(MYSQL_TYPE_LONGLONG)) {
             return std::nullopt;
         }
     }
     return found.statement_;
 }
 
-std::exception_ptr mariadb_statement_failure(const std::exception_ptr& failure, bool extra_row_set,
-    const std::exception_ptr& output_failure, bool returns_rows, bool returned_rows) {
+std::exception_ptr mariadb_statement_failure(const std::exception_ptr& failure, bool extra_row_set, const std::exception_ptr& output_failure, bool returns_rows, bool returned_rows) {
     if (failure != nullptr) {
         return failure;
     }
@@ -1929,8 +1837,7 @@ std::exception_ptr mariadb_statement_failure(const std::exception_ptr& failure, 
     return nullptr;
 }
 
-mariadb_prepared_run start_mariadb_prepared(
-    mariadb_statement_cache& cache, mariadb_statement_cache::entry_ref statement, std::span<const db_value> params) noexcept {
+mariadb_prepared_run start_mariadb_prepared(mariadb_statement_cache& cache, mariadb_statement_cache::entry_ref statement, std::span<const db_value> params) noexcept {
     mariadb_prepared_run run;
     run.cache_ = &cache;
     run.handle_ = statement;
@@ -1949,8 +1856,7 @@ using run_step = mariadb_prepared_run::step;
 using cache_state = mariadb_statement_cache;
 
 // Binds the parameters find() accepted with the types it keyed them by.
-[[nodiscard]] std::exception_ptr bind_params(
-    cache_state& cache, MYSQL_STMT& statement, std::span<const db_value> params) {
+[[nodiscard]] std::exception_ptr bind_params(cache_state& cache, MYSQL_STMT& statement, std::span<const db_value> params) {
     if (mysql_stmt_param_count(&statement) != params.size()) {
         return std::make_exception_ptr(std::invalid_argument("SQL parameter count does not match placeholders"));
     }
@@ -2067,17 +1973,14 @@ MYSQL_BIND* bind_results(cache_state& cache, const MYSQL_FIELD* fields, std::siz
 }
 
 // The text the text protocol sends for the column's fetched value.
-[[nodiscard]] std::string_view column_text(
-    const MYSQL_FIELD& field, const MYSQL_BIND& bind, const mariadb_column& column, mariadb_text_buffer& buffer) {
+[[nodiscard]] std::string_view column_text(const MYSQL_FIELD& field, const MYSQL_BIND& bind, const mariadb_column& column, mariadb_text_buffer& buffer) {
     const auto zerofill = (field.flags & ZEROFILL_FLAG) != 0 ? static_cast<std::size_t>(field.length) : 0;
     std::size_t length = 0;
     switch (bind.buffer_type) {
         case MYSQL_TYPE_LONGLONG: {
             long long value = 0;
             std::memcpy(&value, bind.buffer, sizeof(value));
-            length = bind.is_unsigned != 0
-                         ? format_mariadb_integer(buffer, static_cast<unsigned long long>(value), zerofill)
-                         : format_mariadb_integer(buffer, value, zerofill);
+            length = bind.is_unsigned != 0 ? format_mariadb_integer(buffer, static_cast<unsigned long long>(value), zerofill) : format_mariadb_integer(buffer, value, zerofill);
             break;
         }
         case MYSQL_TYPE_FLOAT:
@@ -2090,9 +1993,7 @@ MYSQL_BIND* bind_results(cache_state& cache, const MYSQL_FIELD* fields, std::siz
             } else {
                 std::memcpy(&value, bind.buffer, sizeof(value));
             }
-            length = field.decimals >= mariadb_not_fixed_decimals
-                         ? format_mariadb_real(buffer, value, bind.buffer_type == MYSQL_TYPE_FLOAT)
-                         : format_mariadb_fixed(buffer, value, field.decimals);
+            length = field.decimals >= mariadb_not_fixed_decimals ? format_mariadb_real(buffer, value, bind.buffer_type == MYSQL_TYPE_FLOAT) : format_mariadb_fixed(buffer, value, field.decimals);
             if (zerofill > length) {
                 std::memmove(buffer.data() + (zerofill - length), buffer.data(), length);
                 std::memset(buffer.data(), '0', zerofill - length);
@@ -2106,11 +2007,8 @@ MYSQL_BIND* bind_results(cache_state& cache, const MYSQL_FIELD* fields, std::siz
         case MYSQL_TYPE_TIME: {
             MYSQL_TIME value{};
             std::memcpy(&value, bind.buffer, sizeof(value));
-            const mariadb_temporal parts{value.year, value.month, value.day, value.hour, value.minute, value.second,
-                value.second_part, value.neg != 0};
-            const auto kind = bind.buffer_type == MYSQL_TYPE_DATE   ? mariadb_temporal_kind::date
-                              : bind.buffer_type == MYSQL_TYPE_TIME ? mariadb_temporal_kind::time
-                                                                    : mariadb_temporal_kind::datetime;
+            const mariadb_temporal parts{value.year, value.month, value.day, value.hour, value.minute, value.second, value.second_part, value.neg != 0};
+            const auto kind = bind.buffer_type == MYSQL_TYPE_DATE ? mariadb_temporal_kind::date : (bind.buffer_type == MYSQL_TYPE_TIME ? mariadb_temporal_kind::time : mariadb_temporal_kind::datetime);
             length = format_mariadb_temporal(buffer, parts, kind, field.decimals);
             break;
         }
@@ -2153,8 +2051,7 @@ void materialize_rows(cache_state& cache, MYSQL_STMT& statement, db_rows& output
                 values.push_back(db_result_access::null_field());
                 continue;
             }
-            values.push_back(
-                db_result_access::owned_field(column_text(fields[index], binds[index], column, buffer)));
+            values.push_back(db_result_access::owned_field(column_text(fields[index], binds[index], column, buffer)));
         }
         db_result_access::append_row(output, row_start, field_count);
     }
@@ -2208,9 +2105,7 @@ int resume_mariadb_prepared(MYSQL& connection, mariadb_prepared_run& run, int re
         switch (run.step_) {
             case run_step::verifying: {
                 int failed = 0;
-                const int status = run.started_ ? mysql_real_query_cont(&failed, &connection, ready)
-                                                : mysql_real_query_start(&failed, &connection, tracking_query.data(),
-                                                      static_cast<unsigned long>(tracking_query.size()));
+                const int status = run.started_ ? mysql_real_query_cont(&failed, &connection, ready) : mysql_real_query_start(&failed, &connection, tracking_query.data(), static_cast<unsigned long>(tracking_query.size()));
                 run.started_ = true;
                 if (status != 0) {
                     return status;
@@ -2231,8 +2126,7 @@ int resume_mariadb_prepared(MYSQL& connection, mariadb_prepared_run& run, int re
             }
             case run_step::verified: {
                 MYSQL_RES* result = nullptr;
-                const int status = run.started_ ? mysql_store_result_cont(&result, &connection, ready)
-                                                : mysql_store_result_start(&result, &connection);
+                const int status = run.started_ ? mysql_store_result_cont(&result, &connection, ready) : mysql_store_result_start(&result, &connection);
                 run.started_ = true;
                 if (status != 0) {
                     return status;
@@ -2273,8 +2167,7 @@ int resume_mariadb_prepared(MYSQL& connection, mariadb_prepared_run& run, int re
                     run.closing_ = cache.retired_.back();
                 }
                 my_bool failed = 0;
-                const int status = run.started_ ? mysql_stmt_close_cont(&failed, run.closing_, ready)
-                                                : mysql_stmt_close_start(&failed, run.closing_);
+                const int status = run.started_ ? mysql_stmt_close_cont(&failed, run.closing_, ready) : mysql_stmt_close_start(&failed, run.closing_);
                 run.started_ = true;
                 if (status != 0) {
                     return status;
@@ -2305,9 +2198,7 @@ int resume_mariadb_prepared(MYSQL& connection, mariadb_prepared_run& run, int re
                 // prepare is suspended and the statement's caller has left.
                 const auto sql = cache.statements_.sql(run.handle_);
                 int failed = 0;
-                const int status = run.started_ ? mysql_stmt_prepare_cont(&failed, entry.handle_, ready)
-                                                : mysql_stmt_prepare_start(&failed, entry.handle_, sql.data(),
-                                                      static_cast<unsigned long>(sql.size()));
+                const int status = run.started_ ? mysql_stmt_prepare_cont(&failed, entry.handle_, ready) : mysql_stmt_prepare_start(&failed, entry.handle_, sql.data(), static_cast<unsigned long>(sql.size()));
                 run.started_ = true;
                 if (status != 0) {
                     return status;
@@ -2350,8 +2241,7 @@ int resume_mariadb_prepared(MYSQL& connection, mariadb_prepared_run& run, int re
                     run.step_ = run_step::executing;
                 }
                 int failed = 0;
-                const int status = run.started_ ? mysql_stmt_execute_cont(&failed, &statement, ready)
-                                                : mysql_stmt_execute_start(&failed, &statement);
+                const int status = run.started_ ? mysql_stmt_execute_cont(&failed, &statement, ready) : mysql_stmt_execute_start(&failed, &statement);
                 run.started_ = true;
                 if (status != 0) {
                     return status;
@@ -2364,8 +2254,7 @@ int resume_mariadb_prepared(MYSQL& connection, mariadb_prepared_run& run, int re
                         // The server prepared it anew, a table having
                         // changed, and ran it: its rows, of a shape the
                         // handle was not prepared for, are on their way.
-                        run.failure_ = std::make_exception_ptr(mariadb_error("mysql_stmt_execute", code,
-                            mysql_stmt_sqlstate(&statement),
+                        run.failure_ = std::make_exception_ptr(mariadb_error("mysql_stmt_execute", code, mysql_stmt_sqlstate(&statement),
                             "the statement's result changed shape since it was prepared; it is prepared anew on its "
                             "next use",
                             db_error::code_type::statement_failed));
@@ -2390,8 +2279,7 @@ int resume_mariadb_prepared(MYSQL& connection, mariadb_prepared_run& run, int re
                 run.insert_id_ = mysql_stmt_insert_id(&statement);
                 if (mysql_stmt_field_count(&statement) != 0) {
                     if (!readable_as_text(statement.fields, statement.field_count, true)) {
-                        run.failure_ = std::make_exception_ptr(db_error(db_error::code_type::statement_failed,
-                            db_driver::mariadb,
+                        run.failure_ = std::make_exception_ptr(db_error(db_error::code_type::statement_failed, db_driver::mariadb,
                             "MariaDB prepared statement result has a YEAR column whose text the binary protocol does "
                             "not tell; the statement runs as text from its next use"));
                         start_draining(cache, run, entry, true);
@@ -2409,8 +2297,7 @@ int resume_mariadb_prepared(MYSQL& connection, mariadb_prepared_run& run, int re
             case run_step::storing: {
                 auto& statement = *cache.entry(run.handle_).handle_;
                 int failed = 0;
-                const int status = run.started_ ? mysql_stmt_store_result_cont(&failed, &statement, ready)
-                                                : mysql_stmt_store_result_start(&failed, &statement);
+                const int status = run.started_ ? mysql_stmt_store_result_cont(&failed, &statement, ready) : mysql_stmt_store_result_start(&failed, &statement);
                 run.started_ = true;
                 if (status != 0) {
                     return status;
@@ -2438,8 +2325,7 @@ int resume_mariadb_prepared(MYSQL& connection, mariadb_prepared_run& run, int re
             case run_step::next_result: {
                 auto& statement = *cache.entry(run.handle_).handle_;
                 int result = 0;
-                const int status = run.started_ ? mysql_stmt_next_result_cont(&result, &statement, ready)
-                                                : mysql_stmt_next_result_start(&result, &statement);
+                const int status = run.started_ ? mysql_stmt_next_result_cont(&result, &statement, ready) : mysql_stmt_next_result_start(&result, &statement);
                 run.started_ = true;
                 if (status != 0) {
                     return status;
@@ -2474,8 +2360,7 @@ int resume_mariadb_prepared(MYSQL& connection, mariadb_prepared_run& run, int re
                 auto& entry = cache.entry(run.handle_);
                 auto& statement = *entry.handle_;
                 my_bool failed = 0;
-                const int status = run.started_ ? mysql_stmt_reset_cont(&failed, &statement, ready)
-                                                : mysql_stmt_reset_start(&failed, &statement);
+                const int status = run.started_ ? mysql_stmt_reset_cont(&failed, &statement, ready) : mysql_stmt_reset_start(&failed, &statement);
                 run.started_ = true;
                 if (status != 0) {
                     return status;
@@ -2496,8 +2381,7 @@ int resume_mariadb_prepared(MYSQL& connection, mariadb_prepared_run& run, int re
             case run_step::draining: {
                 auto& statement = *run.closing_;
                 my_bool failed = 0;
-                const int status = run.started_ ? mysql_stmt_free_result_cont(&failed, &statement, ready)
-                                                : mysql_stmt_free_result_start(&failed, &statement);
+                const int status = run.started_ ? mysql_stmt_free_result_cont(&failed, &statement, ready) : mysql_stmt_free_result_start(&failed, &statement);
                 run.started_ = true;
                 if (status != 0) {
                     return status;
@@ -2526,8 +2410,7 @@ namespace {
     // mysql_real_escape_string may expand every input byte to two output
     // bytes, and its input/output lengths are both unsigned long. Check both
     // bounds before doing the multiplication or passing the input to C.
-    if (value_size > (std::numeric_limits<unsigned long>::max)() / 2 ||
-        value_size > ((std::numeric_limits<std::size_t>::max)() - 2) / 2) {
+    if (value_size > (std::numeric_limits<unsigned long>::max)() / 2 || value_size > ((std::numeric_limits<std::size_t>::max)() - 2) / 2) {
         throw std::length_error("MariaDB string parameter is too large");
     }
     return value_size * 2 + 2;
@@ -2537,8 +2420,7 @@ namespace {
 // the byte before: one that follows a byte above 0x7F, which a multibyte
 // character set may read as a character's lead byte.
 [[nodiscard]] bool ambiguous_backslash(std::string_view value) noexcept {
-    for (auto backslash = value.find('\\'); backslash != std::string_view::npos;
-        backslash = value.find('\\', backslash + 1)) {
+    for (auto backslash = value.find('\\'); backslash != std::string_view::npos; backslash = value.find('\\', backslash + 1)) {
         if (backslash != 0 && static_cast<unsigned char>(value[backslash - 1]) > 0x7f) {
             return true;
         }
@@ -2553,10 +2435,8 @@ namespace {
 // backslash byte inside one is not escaped; without it, no backslash may
 // follow a byte above 0x7F (ambiguous_backslash()), and an ASCII byte never
 // joins the backslash put after it.
-void append_string_literal(std::string& output, std::string_view value, bool backslash_escapes,
-    const MARIADB_CHARSET_INFO* charset) {
-    const bool multibyte = backslash_escapes && charset != nullptr && charset->char_maxlen > 1 &&
-                           value.find('\\') != std::string_view::npos;
+void append_string_literal(std::string& output, std::string_view value, bool backslash_escapes, const MARIADB_CHARSET_INFO* charset) {
+    const bool multibyte = backslash_escapes && charset != nullptr && charset->char_maxlen > 1 && value.find('\\') != std::string_view::npos;
     output.push_back('\'');
     if (!multibyte) {
         const auto special = backslash_escapes ? std::string_view("'\\", 2) : std::string_view("'", 1);
@@ -2601,8 +2481,7 @@ void append_string_literal(std::string& output, std::string_view value, bool bac
     return 0;
 }
 
-void append_value_literal(
-    std::string& output, const db_value& value, bool backslash_escapes, const MARIADB_CHARSET_INFO* charset) {
+void append_value_literal(std::string& output, const db_value& value, bool backslash_escapes, const MARIADB_CHARSET_INFO* charset) {
     switch (value.type()) {
         case db_value_type::null:
             output.append("NULL");
@@ -2670,8 +2549,7 @@ struct sql_token final {
 
 [[nodiscard]] constexpr bool sql_word_byte(char character) noexcept {
     const auto byte = static_cast<unsigned char>(character);
-    return (byte >= 'a' && byte <= 'z') || (byte >= 'A' && byte <= 'Z') || (byte >= '0' && byte <= '9') ||
-           byte == '_' || byte == '$' || byte >= 0x80;
+    return (byte >= 'a' && byte <= 'z') || (byte >= 'A' && byte <= 'Z') || (byte >= '0' && byte <= '9') || byte == '_' || byte == '$' || byte >= 0x80;
 }
 
 [[nodiscard]] bool sql_keyword(std::string_view word, std::string_view keyword) noexcept {
@@ -2740,12 +2618,9 @@ struct sql_token final {
     using kind = sql_token::kind;
     if (before[0].kind_ == kind::word) {
         const auto word = before[0].text_;
-        return sql_keyword(word, "limit") || sql_keyword(word, "offset") || sql_keyword(word, "first") ||
-               sql_keyword(word, "next") || sql_keyword(word, "examined");
+        return sql_keyword(word, "limit") || sql_keyword(word, "offset") || sql_keyword(word, "first") || sql_keyword(word, "next") || sql_keyword(word, "examined");
     }
-    return before[0].kind_ == kind::comma &&
-           (before[1].kind_ == kind::placeholder || before[1].kind_ == kind::number) &&
-           before[2].kind_ == kind::word && sql_keyword(before[2].text_, "limit");
+    return before[0].kind_ == kind::comma && (before[1].kind_ == kind::placeholder || before[1].kind_ == kind::number) && before[2].kind_ == kind::word && sql_keyword(before[2].text_, "limit");
 }
 
 // The traits of `sql` read in one backslash mode; nullopt-like `placeholders`
@@ -2764,9 +2639,7 @@ struct sql_reading final {
     while (token.kind_ == kind::open) {
         token = next_sql_token(sql, index, backslash_escapes);
     }
-    if (token.kind_ == kind::hidden ||
-        (token.kind_ == kind::word && (sql_keyword(token.text_, "call") || sql_keyword(token.text_, "load") ||
-                                          sql_keyword(token.text_, "set") || sql_keyword(token.text_, "use")))) {
+    if (token.kind_ == kind::hidden || (token.kind_ == kind::word && (sql_keyword(token.text_, "call") || sql_keyword(token.text_, "load") || sql_keyword(token.text_, "set") || sql_keyword(token.text_, "use")))) {
         traits.preparable_ = false;
         return reading;
     }
@@ -2799,26 +2672,18 @@ void validate_mariadb_sql_length(std::size_t length) {
     }
 }
 
-db_error mariadb_error(std::string_view operation, unsigned int native_code, const char* sql_state,
-    const char* message, db_error::code_type error_code) {
+db_error mariadb_error(std::string_view operation, unsigned int native_code, const char* sql_state, const char* message, db_error::code_type error_code) {
     // A statement that failed because the connection did is an I/O failure,
     // not a statement the server rejected.
-    if (error_code == db_error::code_type::statement_failed &&
-        (native_code == CR_SERVER_GONE_ERROR || native_code == CR_SERVER_LOST || native_code == CR_ERR_NET_READ ||
-            native_code == CR_ERR_NET_WRITE || session_ended(native_code))) {
+    if (error_code == db_error::code_type::statement_failed && (native_code == CR_SERVER_GONE_ERROR || native_code == CR_SERVER_LOST || native_code == CR_ERR_NET_READ || native_code == CR_ERR_NET_WRITE || session_ended(native_code))) {
         error_code = db_error::code_type::io_error;
     }
-    const std::string_view state_view =
-        (sql_state != nullptr && sql_state[0] != '\0') ? std::string_view(sql_state) : std::string_view{};
-    const std::string_view message_view =
-        (message != nullptr && message[0] != '\0') ? std::string_view(message) : std::string_view{};
+    const std::string_view state_view = (sql_state != nullptr && sql_state[0] != '\0') ? std::string_view(sql_state) : std::string_view{};
+    const std::string_view message_view = (message != nullptr && message[0] != '\0') ? std::string_view(message) : std::string_view{};
     std::array<char, http_max_unsigned_decimal_size> digits;
-    const std::string_view code_view =
-        native_code != 0 ? http_format_unsigned(digits, static_cast<std::uint64_t>(native_code)) : std::string_view{};
+    const std::string_view code_view = native_code != 0 ? http_format_unsigned(digits, static_cast<std::uint64_t>(native_code)) : std::string_view{};
     std::string error;
-    error.reserve(operation.size() + 7U + (code_view.empty() ? 0U : 9U + code_view.size()) +
-                  (state_view.empty() ? 0U : 12U + state_view.size()) +
-                  (message_view.empty() ? 0U : 2U + message_view.size()));
+    error.reserve(operation.size() + 7U + (code_view.empty() ? 0U : 9U + code_view.size()) + (state_view.empty() ? 0U : 12U + state_view.size()) + (message_view.empty() ? 0U : 2U + message_view.size()));
     error.append(operation);
     error.append(" failed");
     if (!code_view.empty()) {
@@ -2835,22 +2700,18 @@ db_error mariadb_error(std::string_view operation, unsigned int native_code, con
         error.append(": ");
         error.append(message_view);
     }
-    return db_error(error_code, db_driver::mariadb, error,
-        native_code == 0 ? std::nullopt : std::optional<std::int64_t>(native_code),
-        sql_state == nullptr ? std::string_view{} : std::string_view(sql_state));
+    return db_error(error_code, db_driver::mariadb, error, native_code == 0 ? std::nullopt : std::optional<std::int64_t>(native_code), sql_state == nullptr ? std::string_view{} : std::string_view(sql_state));
 }
 
 db_error mysql_error(const st_mysql& connection, std::string_view operation, db_error::code_type error_code) {
     auto* mutable_connection = const_cast<st_mysql*>(&connection);
-    return mariadb_error(operation, mysql_errno(mutable_connection), mysql_sqlstate(mutable_connection),
-        mysql_error(mutable_connection), error_code);
+    return mariadb_error(operation, mysql_errno(mutable_connection), mysql_sqlstate(mutable_connection), mysql_error(mutable_connection), error_code);
 }
 
 bool mariadb_connection_failure(unsigned int native_code) noexcept {
     // libmariadb's own errors (the CR_ range and its extended CER_ range), and
     // a failure without a code, which has no known cause.
-    return native_code == 0 || (native_code >= CR_MIN_ERROR && native_code <= CR_MAX_ERROR) ||
-           (native_code >= CER_MIN_ERROR && native_code <= CER_MAX_ERROR) || session_ended(native_code);
+    return native_code == 0 || (native_code >= CR_MIN_ERROR && native_code <= CR_MAX_ERROR) || (native_code >= CER_MIN_ERROR && native_code <= CER_MAX_ERROR) || session_ended(native_code);
 }
 
 void free_stored_result(void* result_value) noexcept {
@@ -2864,8 +2725,7 @@ mariadb_parameter_traits inspect_mariadb_parameters(std::span<const db_value> pa
             continue;
         }
         const auto value = param.text();
-        for (auto backslash = value.find('\\'); backslash != std::string_view::npos;
-            backslash = value.find('\\', backslash + 1)) {
+        for (auto backslash = value.find('\\'); backslash != std::string_view::npos; backslash = value.find('\\', backslash + 1)) {
             result.has_backslash_ = true;
             if (backslash != 0 && static_cast<unsigned char>(value[backslash - 1]) > 0x7f) {
                 result.has_ambiguous_backslash_ = true;
@@ -2889,10 +2749,7 @@ const MARIADB_CHARSET_INFO& mariadb_queried_charset(MYSQL_RES& result) {
     const std::string name(row[0], lengths[0]);
     const auto* charset = mariadb_get_charset_by_name(name.c_str());
     if (charset == nullptr) {
-        throw std::invalid_argument(
-            (std::string("MariaDB session character set ").append(name).append(" is unknown to the client library, so a string parameter with a backslash "
-                                                                               "cannot be escaped for it"))
-                .c_str());
+        throw std::invalid_argument(std::string("MariaDB session character set ").append(name).append(" is unknown to the client library, so a string parameter with a backslash cannot be escaped for it").c_str());
     }
     return *charset;
 }
@@ -2903,8 +2760,7 @@ const MARIADB_CHARSET_INFO& mariadb_utf8mb4_charset() noexcept {
     return charset;
 }
 
-void interpolate_sql(st_mysql& connection, std::string_view sql, std::span<const db_value> params,
-    std::string& output, const MARIADB_CHARSET_INFO* charset) {
+void interpolate_sql(st_mysql& connection, std::string_view sql, std::span<const db_value> params, std::string& output, const MARIADB_CHARSET_INFO* charset) {
     validate_mariadb_sql_length(sql.size());
     const bool backslash_escapes = (connection.server_status & SERVER_STATUS_NO_BACKSLASH_ESCAPES) == 0;
     std::size_t size_hint = sql.size();
@@ -2927,8 +2783,7 @@ void interpolate_sql(st_mysql& connection, std::string_view sql, std::span<const
                 throw std::invalid_argument("MariaDB string parameter must not contain NUL bytes");
             }
             if (backslash_escapes && charset == nullptr && ambiguous_backslash(value)) {
-                throw std::logic_error(
-                    "MariaDB string parameter needs the session's character set to be escaped");
+                throw std::logic_error("MariaDB string parameter needs the session's character set to be escaped");
             }
         }
         const auto literal_size_hint = value_literal_size_hint(param);
@@ -2946,9 +2801,7 @@ void interpolate_sql(st_mysql& connection, std::string_view sql, std::span<const
 
     std::size_t offset = 0;
     for (std::size_t i = 0; i < params.size(); ++i) {
-        const auto placeholder = i < inline_placeholder_capacity
-                                     ? inline_placeholders[i]
-                                     : find_sql_syntax_byte(sql, '?', backslash_escapes, offset);
+        const auto placeholder = i < inline_placeholder_capacity ? inline_placeholders[i] : find_sql_syntax_byte(sql, '?', backslash_escapes, offset);
         output.append(sql.data() + offset, placeholder - offset);
         append_value_literal(output, params[i], backslash_escapes, charset);
         offset = placeholder + 1;
@@ -2990,9 +2843,7 @@ mariadb_statement_classification classify_mariadb_statement(std::string_view sql
             if (result.names_session_tracking_) {
                 break;
             }
-        } else if (ch == '_' && !result.names_session_tracking_ && i >= 7 &&
-                   sql.size() - (i - 7) >= tracking_name.size() &&
-                   http_ascii_equals_ignore_case(sql.substr(i - 7, tracking_name.size()), tracking_name)) {
+        } else if (ch == '_' && !result.names_session_tracking_ && i >= 7 && sql.size() - (i - 7) >= tracking_name.size() && http_ascii_equals_ignore_case(sql.substr(i - 7, tracking_name.size()), tracking_name)) {
             result.names_session_tracking_ = true;
             if (result.has_backslash_) {
                 break;

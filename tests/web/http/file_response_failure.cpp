@@ -156,11 +156,9 @@ TEST(Ruvia, file_failures_before_the_head_get_an_error_response_and_stalled_open
 
     auto& app = ruvia::app();
     static std::binary_semaphore started{0};
-    app.server({.worker_count_ = 1, .connection_scan_interval_ = 5ms, .write_timeout_ = write_timeout})
-        .blocking_pool({.thread_count_ = 1, .queue_capacity_ = 4})
-        .listen({.address_ = "127.0.0.1", .http_ = endpoint.port()})
-        .on_connection_failure(&record_failure)
-        .on_start([] { started.release(); });
+    app.server({.worker_count_ = 1, .connection_scan_interval_ = 5ms, .write_timeout_ = write_timeout}).blocking_pool({.thread_count_ = 1, .queue_capacity_ = 4}).listen({.address_ = "127.0.0.1", .http_ = endpoint.port()}).on_connection_failure(&record_failure).on_start([] {
+        started.release();
+    });
     ruvia::test::app_run runner(app);
     const bool ready = started.try_acquire_for(10s);
     EXPECT_TRUE(ready);
@@ -187,7 +185,9 @@ TEST(Ruvia, file_failures_before_the_head_get_an_error_response_and_stalled_open
         asio::ip::tcp::socket holder(io);
         holder.connect(endpoint);
         asio::write(holder, asio::buffer(get("/file-failure/hold-pool")));
-        ruvia::test::wait_until([] { return pool_held.load(); }, 5s);
+        ruvia::test::wait_until([] {
+            return pool_held.load();
+        }, 5s);
         for (const std::string_view target : {"/file-failure/file", "/file-failure/static"}) {
             const auto timeouts_before = reported_timeouts.load();
             asio::ip::tcp::socket socket(io);
@@ -199,7 +199,9 @@ TEST(Ruvia, file_failures_before_the_head_get_an_error_response_and_stalled_open
                 EXPECT_TRUE(wire->starts_with("HTTP/1.1 503 "));
                 EXPECT_TRUE(wire->find("file_read_unavailable") != std::string::npos);
             }
-            ruvia::test::wait_until([timeouts_before] { return reported_timeouts.load() > timeouts_before; }, 5s);
+            ruvia::test::wait_until([timeouts_before] {
+                return reported_timeouts.load() > timeouts_before;
+            }, 5s);
         }
         release_pool.store(true);
         const auto released = read_to_close(holder, 5s);
@@ -211,18 +213,18 @@ TEST(Ruvia, file_failures_before_the_head_get_an_error_response_and_stalled_open
             socket.connect(endpoint);
             asio::write(socket, asio::buffer(get("/file-failure/file")));
             const auto wire = read_to_close(socket, 5s);
-            EXPECT_TRUE(wire.has_value() && wire->starts_with("HTTP/1.1 200 ") &&
-                        wire->ends_with(std::string(4096, 'b')));
+            EXPECT_TRUE(wire.has_value() && wire->starts_with("HTTP/1.1 200 ") && wire->ends_with(std::string(4096, 'b')));
         }
         {
             asio::ip::tcp::socket socket(io);
             socket.connect(endpoint);
             asio::write(socket, asio::buffer(get("/file-failure/static")));
             const auto wire = read_to_close(socket, 5s);
-            EXPECT_TRUE(wire.has_value() && wire->starts_with("HTTP/1.1 200 ") &&
-                        wire->ends_with(std::string(4096, 's')));
+            EXPECT_TRUE(wire.has_value() && wire->starts_with("HTTP/1.1 200 ") && wire->ends_with(std::string(4096, 's')));
         }
-        ruvia::test::wait_until([&app] { return app.stats().active_connections_ == 0; }, 5s);
+        ruvia::test::wait_until([&app] {
+            return app.stats().active_connections_ == 0;
+        }, 5s);
     }
     release_pool.store(true);
     app.stop();
@@ -248,7 +250,9 @@ TEST(Ruvia, file_failures_before_the_head_get_an_error_response_and_stalled_open
                 EXPECT_TRUE(wire->starts_with("HTTP/1.1 503 "));
                 EXPECT_TRUE(wire->find("file_read_unavailable") != std::string::npos);
             }
-            ruvia::test::wait_until([missing_before] { return reported_missing_pools.load() > missing_before; }, 5s);
+            ruvia::test::wait_until([missing_before] {
+                return reported_missing_pools.load() > missing_before;
+            }, 5s);
         }
     }
     app.stop();

@@ -39,10 +39,8 @@ public:
     constexpr hpack_table_size() noexcept = default;
 
     template <std::integral integer_type>
-    constexpr hpack_table_size(integer_type value)
-        : value_(is_valid_value(value)
-                     ? static_cast<std::uint32_t>(value)
-                     : throw std::invalid_argument("HPACK dynamic table size must be in 0..4294967295")) {}
+    constexpr hpack_table_size(integer_type value) :
+        value_(is_valid_value(value) ? static_cast<std::uint32_t>(value) : throw std::invalid_argument("HPACK dynamic table size must be in 0..4294967295")) {}
 
     template <std::integral integer_type>
     [[nodiscard]] static constexpr bool is_valid_value(integer_type value) noexcept {
@@ -66,8 +64,8 @@ public:
 private:
     struct validated_tag_type {};
 
-    constexpr hpack_table_size(std::uint32_t value, validated_tag_type) noexcept
-        : value_(value) {}
+    constexpr hpack_table_size(std::uint32_t value, validated_tag_type) noexcept :
+        value_(value) {}
 
     std::uint32_t value_{0};
 };
@@ -122,8 +120,7 @@ public:
         // addressof(callback) directly would produce a function pointer when a
         // free function is supplied, which cannot be represented by void*.
         std::exception_ptr callback_failure;
-        auto invocation = [&callback_value, &callback_failure](
-                              std::string_view name, std::string_view value) {
+        auto invocation = [&callback_value, &callback_failure](std::string_view name, std::string_view value) {
             if (callback_failure) {
                 return true;
             }
@@ -138,10 +135,9 @@ public:
         };
         using invocation_type = decltype(invocation);
         try {
-            auto result_value = decode_with_callback(block, std::addressof(invocation),
-                [](void* target, std::string_view name, std::string_view value) {
-                    return std::invoke(*static_cast<invocation_type*>(target), name, value);
-                });
+            auto result_value = decode_with_callback(block, std::addressof(invocation), [](void* target, std::string_view name, std::string_view value) {
+                return std::invoke(*static_cast<invocation_type*>(target), name, value);
+            });
             if (callback_failure) {
                 std::rethrow_exception(callback_failure);
             }
@@ -158,8 +154,7 @@ public:
 
 private:
     using header_callback_type = bool (*)(void*, std::string_view, std::string_view);
-    [[nodiscard]] std::optional<hpack_decode_error> decode_with_callback(
-        std::string_view block, void* target, header_callback_type callback);
+    [[nodiscard]] std::optional<hpack_decode_error> decode_with_callback(std::string_view block, void* target, header_callback_type callback);
 
     std::unique_ptr<detail::hpack_decoder> impl_;
 };
@@ -174,8 +169,7 @@ public:
     // Names and values may borrow output. Aliasing inputs are owned before
     // appending can invalidate them. Allocation failure leaves the existing
     // output bytes unchanged.
-    static void encode_header(
-        std::string& output, std::string_view name, std::string_view value);
+    static void encode_header(std::string& output, std::string_view name, std::string_view value);
     static void encode_status(std::string& output, http_status_code status);
 };
 
@@ -188,8 +182,7 @@ inline constexpr std::size_t http2_frame_header_bytes = 9;
 inline constexpr std::uint32_t http2_default_max_frame_size = 16 * 1024;
 inline constexpr std::uint32_t http2_max_frame_size = 16 * 1024 * 1024 - 1;
 
-enum class http2_frame_type : std::uint8_t {
-    data = 0x0,
+enum class http2_frame_type : std::uint8_t { data = 0x0,
     headers = 0x1,
     priority = 0x2,
     rst_stream = 0x3,
@@ -201,10 +194,8 @@ enum class http2_frame_type : std::uint8_t {
     continuation = 0x9,
     alternative_service = 0xa,
     origin = 0xc,
-    priority_update = 0x10
-};
-enum class http2_error_code : std::uint32_t {
-    no_error = 0x0,
+    priority_update = 0x10 };
+enum class http2_error_code : std::uint32_t { no_error = 0x0,
     protocol_error = 0x1,
     internal_error = 0x2,
     flow_control_error = 0x3,
@@ -217,18 +208,15 @@ enum class http2_error_code : std::uint32_t {
     connect_error = 0xa,
     enhance_your_calm = 0xb,
     inadequate_security = 0xc,
-    http11_required = 0xd
-};
-enum class http2_setting_id : std::uint16_t {
-    header_table_size = 0x1,
+    http11_required = 0xd };
+enum class http2_setting_id : std::uint16_t { header_table_size = 0x1,
     enable_push = 0x2,
     max_concurrent_streams = 0x3,
     initial_window_size = 0x4,
     max_frame_size = 0x5,
     max_header_list_size = 0x6,
     enable_connect_protocol = 0x8,
-    no_rfc7540_priorities = 0x9
-};
+    no_rfc7540_priorities = 0x9 };
 
 struct http2_frame_header final {
     std::uint32_t length_{0};
@@ -238,8 +226,7 @@ struct http2_frame_header final {
 };
 
 // RFC 9113 section 4.1. The reserved stream-identifier bit is ignored.
-[[nodiscard]] inline constexpr std::optional<http2_frame_header> parse_http2_frame_header(
-    std::span<const char> bytes_value) noexcept {
+[[nodiscard]] inline constexpr std::optional<http2_frame_header> parse_http2_frame_header(std::span<const char> bytes_value) noexcept {
     if (bytes_value.size() < http2_frame_header_bytes) {
         return std::nullopt;
     }
@@ -254,8 +241,7 @@ struct http2_frame_header final {
     };
 }
 
-[[nodiscard]] inline constexpr bool encode_http2_frame_header(std::span<char> output, std::uint32_t length,
-    http2_frame_type type, std::uint8_t flags, std::uint32_t stream_id) noexcept {
+[[nodiscard]] inline constexpr bool encode_http2_frame_header(std::span<char> output, std::uint32_t length, http2_frame_type type, std::uint8_t flags, std::uint32_t stream_id) noexcept {
     if (output.size() < http2_frame_header_bytes || length > http2_max_frame_size || stream_id > 0x7fffffffU) {
         return false;
     }
@@ -281,17 +267,13 @@ enum class http2_cleartext_preface_probe : std::uint8_t {
 // Classify bytes that arrived on a cleartext listener before HTTP/1 parsing.
 // A matching or truncated client preface is prior-knowledge HTTP/2. A `PRI `
 // prefix that cannot become the preface is dropped. Anything else is HTTP/1.
-[[nodiscard]] inline http2_cleartext_preface_probe probe_http2_cleartext_preface(
-    std::string_view current) noexcept {
+[[nodiscard]] inline http2_cleartext_preface_probe probe_http2_cleartext_preface(std::string_view current) noexcept {
     if (current.empty()) {
         return http2_cleartext_preface_probe::http1;
     }
 
-    if (current.starts_with(::ruvia::http2_client_preface) ||
-        ::ruvia::http2_client_preface.starts_with(current)) {
-        return current.size() >= ::ruvia::http2_client_preface.size()
-                   ? http2_cleartext_preface_probe::complete_preface
-                   : http2_cleartext_preface_probe::need_more_preface;
+    if (current.starts_with(::ruvia::http2_client_preface) || ::ruvia::http2_client_preface.starts_with(current)) {
+        return current.size() >= ::ruvia::http2_client_preface.size() ? http2_cleartext_preface_probe::complete_preface : http2_cleartext_preface_probe::need_more_preface;
     }
 
     if (current.starts_with("PRI ")) {
@@ -475,8 +457,7 @@ enum class http2_stream_close_source : std::uint8_t {
 };
 
 [[nodiscard]] constexpr bool http2_is_valid_stream_close_source(http2_stream_close_source source_value) noexcept {
-    return source_value == http2_stream_close_source::local || source_value == http2_stream_close_source::peer ||
-           source_value == http2_stream_close_source::peer_goaway;
+    return source_value == http2_stream_close_source::local || source_value == http2_stream_close_source::peer || source_value == http2_stream_close_source::peer_goaway;
 }
 
 enum class http2_request_head_submit_error : std::uint8_t {
@@ -599,8 +580,7 @@ private:
     friend class http2_connection;
     friend class http2_message_body_chunk_event;
     friend class http2_tunnel_data_event;
-    http2_received_data_credit(detail::http2_connection_owner_endpoint* endpoint, std::uint32_t stream_id,
-        std::uint32_t bytes_value) noexcept;
+    http2_received_data_credit(detail::http2_connection_owner_endpoint* endpoint, std::uint32_t stream_id, std::uint32_t bytes_value) noexcept;
     detail::http2_connection_owner_endpoint* endpoint_{nullptr};
     std::uint32_t stream_id_{0};
     std::uint32_t bytes_{0};
@@ -615,18 +595,16 @@ public:
         return head_;
     }
     const http_client_response_head& head() const&& = delete;
-    [[nodiscard]] std::optional<http_client_request_content_signal> request_content_signal()
-        const noexcept {
+    [[nodiscard]] std::optional<http_client_request_content_signal> request_content_signal() const noexcept {
         return signal_;
     }
 
 private:
     friend class detail::http2_connection;
-    http2_informational_head_event(std::uint32_t stream_id, http_client_response_head head,
-        std::optional<http_client_request_content_signal> signal) noexcept
-        : stream_id_(stream_id),
-          head_(std::move(head)),
-          signal_(signal) {}
+    http2_informational_head_event(std::uint32_t stream_id, http_client_response_head head, std::optional<http_client_request_content_signal> signal) noexcept :
+        stream_id_(stream_id),
+        head_(std::move(head)),
+        signal_(signal) {}
     std::uint32_t stream_id_;
     http_client_response_head head_;
     std::optional<http_client_request_content_signal> signal_;
@@ -668,21 +646,16 @@ public:
     [[nodiscard]] http2_server_request_view request_view() const& noexcept RUVIA_LIFETIMEBOUND;
     http2_server_request_view request_view() const&& = delete;
     // Head fields borrow this lease; body borrows its caller-owned storage.
-    [[nodiscard]] http_request build_request(
-        borrowed_text body = {}) const& RUVIA_LIFETIMEBOUND;
-    http_request build_request(
-        borrowed_text body = {}) const&& = delete;
-    [[nodiscard]] http_server_expectation_plan expectation_plan(
-        http_unsupported_expectation_policy policy) const noexcept {
+    [[nodiscard]] http_request build_request(borrowed_text body = {}) const& RUVIA_LIFETIMEBOUND;
+    http_request build_request(borrowed_text body = {}) const&& = delete;
+    [[nodiscard]] http_server_expectation_plan expectation_plan(http_unsupported_expectation_policy policy) const noexcept {
         return expectations_.server_plan(content_, policy);
     }
 
 private:
     friend class http2_connection;
     friend class http2_event;
-    http2_request_head_event(detail::http2_connection_owner_endpoint* endpoint, std::uint32_t stream_id,
-        http_request_expectations expectations,
-        http_request_content_indication content, http2_server_request_snapshot snapshot) noexcept;
+    http2_request_head_event(detail::http2_connection_owner_endpoint* endpoint, std::uint32_t stream_id, http_request_expectations expectations, http_request_content_indication content, http2_server_request_snapshot snapshot) noexcept;
     std::uint32_t stream_id_;
     http2_server_request_snapshot snapshot_;
     http_request_expectations expectations_;
@@ -702,8 +675,7 @@ public:
     [[nodiscard]] http_client_response_head take_head() && noexcept {
         return std::move(head_);
     }
-    [[nodiscard]] std::optional<http_client_request_content_signal> request_content_signal()
-        const noexcept {
+    [[nodiscard]] std::optional<http_client_request_content_signal> request_content_signal() const noexcept {
         return signal_;
     }
     // The final response HEADERS carried END_STREAM: no content or tunnel DATA
@@ -715,12 +687,11 @@ public:
 
 private:
     friend class http2_event;
-    http2_response_head_event(std::uint32_t stream_id, http_client_response_head head,
-        std::optional<http_client_request_content_signal> signal, bool stream_ended) noexcept
-        : stream_id_(stream_id),
-          head_(std::move(head)),
-          signal_(signal),
-          stream_ended_(stream_ended) {}
+    http2_response_head_event(std::uint32_t stream_id, http_client_response_head head, std::optional<http_client_request_content_signal> signal, bool stream_ended) noexcept :
+        stream_id_(stream_id),
+        head_(std::move(head)),
+        signal_(signal),
+        stream_ended_(stream_ended) {}
     std::uint32_t stream_id_;
     http_client_response_head head_;
     std::optional<http_client_request_content_signal> signal_;
@@ -741,11 +712,10 @@ public:
 
 private:
     friend class http2_event;
-    http2_message_body_chunk_event(detail::http2_connection_owner_endpoint* endpoint,
-        std::uint32_t stream_id, std::string_view bytes_value, std::uint32_t credit) noexcept
-        : stream_id_(stream_id),
-          bytes_(bytes_value),
-          credit_(endpoint, stream_id, credit) {}
+    http2_message_body_chunk_event(detail::http2_connection_owner_endpoint* endpoint, std::uint32_t stream_id, std::string_view bytes_value, std::uint32_t credit) noexcept :
+        stream_id_(stream_id),
+        bytes_(bytes_value),
+        credit_(endpoint, stream_id, credit) {}
     std::uint32_t stream_id_;
     std::string_view bytes_;
     http2_received_data_credit credit_;
@@ -781,12 +751,10 @@ public:
 
 private:
     friend class http2_event;
-    http2_message_end_event(std::uint32_t stream_id,
-        std::vector<http_header> trailers,
-        http2_message_content_semantics content_semantics) noexcept
-        : stream_id_(stream_id),
-          trailers_(std::move(trailers)),
-          content_semantics_(content_semantics) {}
+    http2_message_end_event(std::uint32_t stream_id, std::vector<http_header> trailers, http2_message_content_semantics content_semantics) noexcept :
+        stream_id_(stream_id),
+        trailers_(std::move(trailers)),
+        content_semantics_(content_semantics) {}
     std::uint32_t stream_id_{0};
     std::vector<http_header> trailers_;
     http2_message_content_semantics content_semantics_{http2_message_content_semantics::content};
@@ -806,11 +774,10 @@ public:
 
 private:
     friend class http2_event;
-    http2_tunnel_data_event(detail::http2_connection_owner_endpoint* endpoint, std::uint32_t stream_id,
-        std::string_view bytes_value, std::uint32_t credit) noexcept
-        : stream_id_(stream_id),
-          bytes_(bytes_value),
-          credit_(endpoint, stream_id, credit) {}
+    http2_tunnel_data_event(detail::http2_connection_owner_endpoint* endpoint, std::uint32_t stream_id, std::string_view bytes_value, std::uint32_t credit) noexcept :
+        stream_id_(stream_id),
+        bytes_(bytes_value),
+        credit_(endpoint, stream_id, credit) {}
     std::uint32_t stream_id_;
     std::string_view bytes_;
     http2_received_data_credit credit_;
@@ -824,8 +791,8 @@ public:
 
 private:
     friend class detail::http2_connection;
-    explicit constexpr http2_tunnel_end_event(std::uint32_t stream_id) noexcept
-        : stream_id_(stream_id) {}
+    explicit constexpr http2_tunnel_end_event(std::uint32_t stream_id) noexcept :
+        stream_id_(stream_id) {}
     std::uint32_t stream_id_;
 };
 
@@ -843,11 +810,10 @@ public:
 
 private:
     friend class detail::http2_connection;
-    constexpr http2_stream_closed_event(
-        std::uint32_t stream_id, http2_stream_close_source source_value, http2_error_code error) noexcept
-        : stream_id_(stream_id),
-          source_(source_value),
-          error_(error) {}
+    constexpr http2_stream_closed_event(std::uint32_t stream_id, http2_stream_close_source source_value, http2_error_code error) noexcept :
+        stream_id_(stream_id),
+        source_(source_value),
+        error_(error) {}
     std::uint32_t stream_id_;
     http2_stream_close_source source_;
     http2_error_code error_;
@@ -866,8 +832,8 @@ public:
 
 private:
     friend class detail::http2_connection;
-    explicit constexpr http2_request_unprocessed_event(std::uint32_t stream_id) noexcept
-        : stream_id_(stream_id) {}
+    explicit constexpr http2_request_unprocessed_event(std::uint32_t stream_id) noexcept :
+        stream_id_(stream_id) {}
     std::uint32_t stream_id_;
 };
 
@@ -882,9 +848,9 @@ public:
 
 private:
     friend class detail::http2_connection;
-    constexpr http2_goaway_event(std::uint32_t last_stream_id, http2_error_code error) noexcept
-        : last_stream_id_(last_stream_id),
-          error_(error) {}
+    constexpr http2_goaway_event(std::uint32_t last_stream_id, http2_error_code error) noexcept :
+        last_stream_id_(last_stream_id),
+        error_(error) {}
     std::uint32_t last_stream_id_;
     http2_error_code error_;
 };
@@ -1002,37 +968,23 @@ public:
 private:
     friend class http2_connection;
     friend class detail::http2_connection_owner_endpoint;
-    using value_type = std::variant<http2_informational_head_event, http2_request_head_event,
-        http2_response_head_event, http2_message_body_chunk_event, http2_message_end_event,
-        http2_tunnel_data_event, http2_tunnel_end_event, http2_stream_closed_event,
-        http2_request_unprocessed_event, http2_goaway_event, http2_push_promise_event, http_priority_update,
-        http_origin_advertisement, http_alternative_service_advertisement, http2_received_settings,
-        http2_received_window_update, http2_received_priority>;
+    using value_type = std::variant<http2_informational_head_event, http2_request_head_event, http2_response_head_event, http2_message_body_chunk_event, http2_message_end_event, http2_tunnel_data_event, http2_tunnel_end_event, http2_stream_closed_event, http2_request_unprocessed_event, http2_goaway_event, http2_push_promise_event, http_priority_update, http_origin_advertisement, http_alternative_service_advertisement, http2_received_settings, http2_received_window_update, http2_received_priority>;
     template <typename event_type>
-    explicit http2_event(event_type event) noexcept
-        : value_(std::move(event)) {}
-    [[nodiscard]] static http2_event request_head(detail::http2_connection_owner_endpoint* endpoint,
-        std::uint32_t id, http_request_expectations expectations,
-        http_request_content_indication content, http2_server_request_snapshot snapshot) noexcept {
-        return http2_event(http2_request_head_event(
-            endpoint, id, expectations, content, snapshot));
+    explicit http2_event(event_type event) noexcept :
+        value_(std::move(event)) {}
+    [[nodiscard]] static http2_event request_head(detail::http2_connection_owner_endpoint* endpoint, std::uint32_t id, http_request_expectations expectations, http_request_content_indication content, http2_server_request_snapshot snapshot) noexcept {
+        return http2_event(http2_request_head_event(endpoint, id, expectations, content, snapshot));
     }
-    [[nodiscard]] static http2_event response_head(std::uint32_t id, http_client_response_head head,
-        std::optional<http_client_request_content_signal> signal, bool stream_ended) noexcept {
+    [[nodiscard]] static http2_event response_head(std::uint32_t id, http_client_response_head head, std::optional<http_client_request_content_signal> signal, bool stream_ended) noexcept {
         return http2_event(http2_response_head_event(id, std::move(head), signal, stream_ended));
     }
-    [[nodiscard]] static http2_event message_body_chunk(detail::http2_connection_owner_endpoint* endpoint,
-        std::uint32_t id, std::string_view bytes_value, std::uint32_t credit) noexcept {
+    [[nodiscard]] static http2_event message_body_chunk(detail::http2_connection_owner_endpoint* endpoint, std::uint32_t id, std::string_view bytes_value, std::uint32_t credit) noexcept {
         return http2_event(http2_message_body_chunk_event(endpoint, id, bytes_value, credit));
     }
-    [[nodiscard]] static http2_event message_end(std::uint32_t id,
-        std::vector<http_header> trailers,
-        http2_message_content_semantics content_semantics) noexcept {
-        return http2_event(
-            http2_message_end_event(id, std::move(trailers), content_semantics));
+    [[nodiscard]] static http2_event message_end(std::uint32_t id, std::vector<http_header> trailers, http2_message_content_semantics content_semantics) noexcept {
+        return http2_event(http2_message_end_event(id, std::move(trailers), content_semantics));
     }
-    [[nodiscard]] static http2_event tunnel_data(detail::http2_connection_owner_endpoint* endpoint,
-        std::uint32_t id, std::string_view bytes_value, std::uint32_t credit) noexcept {
+    [[nodiscard]] static http2_event tunnel_data(detail::http2_connection_owner_endpoint* endpoint, std::uint32_t id, std::string_view bytes_value, std::uint32_t credit) noexcept {
         return http2_event(http2_tunnel_data_event(endpoint, id, bytes_value, credit));
     }
     value_type value_;
@@ -1178,9 +1130,7 @@ public:
     // The cursor is committed before DATA observations. An observer may
     // submit or drain more output; those frames remain independent of this batch.
     // A client preface is treated as one indivisible segment.
-    [[nodiscard]] http2_output_batch_result take_output_batch(std::size_t max_bytes,
-        std::string& output, http2_data_output_observer_type observer = nullptr,
-        void* observer_context = nullptr);
+    [[nodiscard]] http2_output_batch_result take_output_batch(std::size_t max_bytes, std::string& output, http2_data_output_observer_type observer = nullptr, void* observer_context = nullptr);
     [[nodiscard]] bool wants_write() const noexcept;
 
     // Point-in-time client request-stream capacity. This does not reserve a
@@ -1190,12 +1140,9 @@ public:
 
     // Submitted fields are encoded/owned before returning; a successful submission
     // is leased to the owner until its terminal event or submit_reset().
-    [[nodiscard]] std::variant<std::uint32_t, http2_request_head_submit_error> submit_request_head(
-        const http2_regular_request_head_view& request);
-    [[nodiscard]] std::variant<std::uint32_t, http2_request_head_submit_error> submit_request_head(
-        const http2_connect_request_head_view& request);
-    [[nodiscard]] std::variant<std::uint32_t, http2_request_head_submit_error> submit_request_head(
-        const http2_extended_connect_request_head_view& request);
+    [[nodiscard]] std::variant<std::uint32_t, http2_request_head_submit_error> submit_request_head(const http2_regular_request_head_view& request);
+    [[nodiscard]] std::variant<std::uint32_t, http2_request_head_submit_error> submit_request_head(const http2_connect_request_head_view& request);
+    [[nodiscard]] std::variant<std::uint32_t, http2_request_head_submit_error> submit_request_head(const http2_extended_connect_request_head_view& request);
     // Serializes at most min(bytes.size(), max_payload_bytes, available send window).
     // Only the returned consumed_bytes_ advance Content-Length; no input view or
     // unconsumed suffix is retained. Retry the suffix after obtaining output credit
@@ -1210,8 +1157,7 @@ public:
     // both connection and stream send windows are positive; otherwise
     // it returns {0, backpressured} without changing anything, and the caller
     // retries once send_window_state() reports available window.
-    [[nodiscard]] http2_data_submit_result submit_data(std::uint32_t stream_id,
-        std::string_view bytes, http2_end_stream end_stream, std::size_t max_payload_bytes);
+    [[nodiscard]] http2_data_submit_result submit_data(std::uint32_t stream_id, std::string_view bytes, http2_end_stream end_stream, std::size_t max_payload_bytes);
     // Finish only after all source bytes were consumed. Trailer fields are encoded
     // before returning. Without trailers the END_STREAM rides an empty DATA frame
     // and returns backpressured, changing nothing, under the same window rule as
@@ -1220,21 +1166,17 @@ public:
     // section 6.5.1) or over the header list limit, returns invalid_message and
     // changes nothing; a stream whose request content is not open throws
     // std::logic_error.
-    [[nodiscard]] http2_finish_status finish_request(std::uint32_t stream_id,
-        std::span<const http_header_view> trailers = {});
-    [[nodiscard]] http2_request_content_release_status release_request_content(
-        std::uint32_t stream_id) noexcept;
+    [[nodiscard]] http2_finish_status finish_request(std::uint32_t stream_id, std::span<const http_header_view> trailers = {});
+    [[nodiscard]] http2_request_content_release_status release_request_content(std::uint32_t stream_id) noexcept;
     // Returns stream_limit without sending PUSH_PROMISE when the open pushed streams
     // already reach the peer's SETTINGS_MAX_CONCURRENT_STREAMS (RFC 9113 section
     // 8.4), including when it is 0. Reserved promises do not count (section 5.1.2);
     // a response head that later finds no slot gets peer_stream_limit_reached.
     // Commits a promise and returns the server request/storage lease used to
     // produce its response. Release or abandon it exactly like an incoming request.
-    [[nodiscard]] std::variant<http2_request_head_event, http2_push_submit_error> submit_push_request(
-        std::uint32_t associated_stream_id, http_push_request_view request);
+    [[nodiscard]] std::variant<http2_request_head_event, http2_push_submit_error> submit_push_request(std::uint32_t associated_stream_id, http_push_request_view request);
 
-    [[nodiscard]] http2_submit_status submit_interim_response_head(
-        std::uint32_t stream_id, const http_interim_response_head& response);
+    [[nodiscard]] http2_submit_status submit_interim_response_head(std::uint32_t stream_id, const http_interim_response_head& response);
     // Server CONNECT: DATA received before the accept/reject decision (RFC 9113
     // section 8.5; optimistic per RFC 9298 section 5 as updated by RFC 9931) is
     // published as tunnel_data events whose credit the owner holds until it consumes
@@ -1245,12 +1187,8 @@ public:
     // binds only the client). Unknown extension frame types on an established tunnel
     // are discarded (RFC 9113 section 5.5); ALTSVC and ORIGIN are ignored there too
     // (RFC 7838 section 4, RFC 8336 section 2.1).
-    [[nodiscard]] http2_submit_status submit_connect_response_head(
-        std::uint32_t stream_id, const http_response& response);
-    [[nodiscard]] std::variant<websocket_extended_connect_negotiation, http2_websocket_handshake_submit_error>
-    submit_websocket_handshake(std::uint32_t stream_id, const http_request& request,
-        const websocket_handshake_validation_result& validation,
-        websocket_server_handshake_options options = {});
+    [[nodiscard]] http2_submit_status submit_connect_response_head(std::uint32_t stream_id, const http_response& response);
+    [[nodiscard]] std::variant<websocket_extended_connect_negotiation, http2_websocket_handshake_submit_error> submit_websocket_handshake(std::uint32_t stream_id, const http_request& request, const websocket_handshake_validation_result& validation, websocket_server_handshake_options options = {});
     // Submit only the final buffered-response head. The committed plan tells the
     // caller whether/how much representation remains for DATA or file output.
     // Both final-head submissions reject connection-specific fields as
@@ -1259,28 +1197,22 @@ public:
     // HTTP/1 also replaces, and the HTTP/2 writer omits it.
     // Repeated Priority fields form one Structured Field dictionary. Valid
     // response parameters override the corresponding request scheduling values.
-    [[nodiscard]] std::variant<http_buffered_response_write_plan, http2_response_head_submit_error>
-    submit_response_head(std::uint32_t stream_id, const http_response& response,
-        http_buffered_response_write_plan write_plan);
+    [[nodiscard]] std::variant<http_buffered_response_write_plan, http2_response_head_submit_error> submit_response_head(std::uint32_t stream_id, const http_response& response, http_buffered_response_write_plan write_plan);
     // Submit a final generic response head and leave an eligible response body
     // open for subsequent submit_data() calls. Content-Length is not generated
     // automatically; an explicit value, when present, constrains the total
     // submitted DATA bytes.
-    [[nodiscard]] std::variant<http_response_stream_commit_plan, http2_response_head_submit_error>
-    submit_streaming_response_head(std::uint32_t stream_id, http_response response,
-        http_response_trailer_intent trailer_intent = http_response_trailer_intent::none);
+    [[nodiscard]] std::variant<http_response_stream_commit_plan, http2_response_head_submit_error> submit_streaming_response_head(std::uint32_t stream_id, http_response response, http_response_trailer_intent trailer_intent = http_response_trailer_intent::none);
     // Call after all body bytes have been consumed. Encodes trailers before returning;
     // field storage may then be released. Incomplete Content-Length returns
     // invalid_message. Without trailers it returns backpressured under the same
     // window rule as finish_request().
-    [[nodiscard]] http2_finish_status finish_response(
-        std::uint32_t stream_id, const http_response_trailer_section& trailers);
+    [[nodiscard]] http2_finish_status finish_response(std::uint32_t stream_id, const http_response_trailer_section& trailers);
     // ORIGIN and ALTSVC payloads are limited to the smaller of the peer's
     // SETTINGS_MAX_FRAME_SIZE and 16384 bytes (nghttp2's extension frame buffer);
     // larger ones return invalid_message.
     [[nodiscard]] http2_submit_status submit_origin_advertisement(std::span<const std::string_view> origins);
-    [[nodiscard]] http2_submit_status submit_alternative_service_advertisement(std::uint32_t stream_id,
-        std::string_view origin, std::string_view field_value);
+    [[nodiscard]] http2_submit_status submit_alternative_service_advertisement(std::uint32_t stream_id, std::string_view origin, std::string_view field_value);
     // Client only. Returns peer_capability_unavailable unless the server sent
     // SETTINGS_NO_RFC7540_PRIORITIES=1 (RFC 9218 section 2.1).
     [[nodiscard]] http2_submit_status submit_priority_update(std::uint32_t stream_id, http_priority_fields fields);
@@ -1309,13 +1241,11 @@ public:
     [[nodiscard]] std::size_t pending_data_output_bytes(std::uint32_t stream_id) const noexcept;
     // Read-only state used by a response writer to decide whether a send-window
     // wait can make progress. Missing/closed streams have no window snapshot.
-    [[nodiscard]] std::optional<http2_send_window_state> send_window_state(
-        std::uint32_t stream_id) const noexcept;
+    [[nodiscard]] std::optional<http2_send_window_state> send_window_state(std::uint32_t stream_id) const noexcept;
     // Missing streams are considered aborted, making the query safe during teardown.
     [[nodiscard]] bool stream_aborted(std::uint32_t stream_id) const noexcept;
     // Reports the protocol receive state without exposing internal stream storage.
-    [[nodiscard]] http2_stream_receive_status stream_receive_status(
-        std::uint32_t stream_id) const noexcept;
+    [[nodiscard]] http2_stream_receive_status stream_receive_status(std::uint32_t stream_id) const noexcept;
     // Consume the server request event only after every request-derived view has
     // expired. An event cannot be released through another connection.
     [[nodiscard]] http2_server_request_release_status release(http2_request_head_event&& request);
@@ -1351,9 +1281,7 @@ public:
     [[nodiscard]] std::optional<http2_error_code> connection_error() const noexcept;
 
 private:
-    friend websocket_handshake_validation_result validate_http2_websocket_handshake(
-        http2_connection&, std::uint32_t, const http_request&,
-        websocket_handshake_validation_options) noexcept;
+    friend websocket_handshake_validation_result validate_http2_websocket_handshake(http2_connection&, std::uint32_t, const http_request&, websocket_handshake_validation_options) noexcept;
     http2_connection(http2_role role, const http2_connection_options& options);
     struct impl_deleter_type final {
         void operator()(detail::http2_connection_owner_endpoint* value) const noexcept;
@@ -1363,18 +1291,12 @@ private:
 // Validates an RFC 8441 extended-CONNECT handshake against the decoded stream
 // state and its semantic request. The request and connection must remain alive
 // for the duration of the call.
-[[nodiscard]] websocket_handshake_validation_result validate_http2_websocket_handshake(
-    http2_connection& connection, std::uint32_t stream_id,
-    const http_request& request,
-    websocket_handshake_validation_options options = {}) noexcept;
+[[nodiscard]] websocket_handshake_validation_result validate_http2_websocket_handshake(http2_connection& connection, std::uint32_t stream_id, const http_request& request, websocket_handshake_validation_options options = {}) noexcept;
 
 // RFC 8441 Extended CONNECT with :protocol websocket: the negotiation's
 // Sec-WebSocket-* request fields followed by the application headers.
 // Validate the final head with validate_extended_connect_websocket_client_response().
-[[nodiscard]] std::variant<std::uint32_t, http2_request_head_submit_error> submit_http2_websocket_client_request(
-    http2_connection& connection, const websocket_client_negotiation& negotiation, std::string_view scheme,
-    std::string_view authority, std::string_view target, borrowed_http_headers headers = {},
-    http_request_field_source source = http_request_field_source::generated);
+[[nodiscard]] std::variant<std::uint32_t, http2_request_head_submit_error> submit_http2_websocket_client_request(http2_connection& connection, const websocket_client_negotiation& negotiation, std::string_view scheme, std::string_view authority, std::string_view target, borrowed_http_headers headers = {}, http_request_field_source source = http_request_field_source::generated);
 
 }  // namespace ruvia
 

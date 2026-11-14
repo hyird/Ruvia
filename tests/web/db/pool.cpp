@@ -39,9 +39,7 @@ namespace ruvia::test {
 
 // Runs one migration to completion on a fresh loop, whose blocking pool looks
 // a DNS host up, and returns its report or rethrows its failure.
-[[nodiscard]] inline db_migration_report run_db_migration(const db_config& config,
-    std::span<const db_migration> migrations, const db_migrator_options& options = {},
-    operation_options operation = {}) {
+[[nodiscard]] inline db_migration_report run_db_migration(const db_config& config, std::span<const db_migration> migrations, const db_migrator_options& options = {}, operation_options operation = {}) {
     blocking_pool host_lookups({.thread_count_ = 1});
     event_loop_pool loops({.loop_count_ = 1, .blocking_pool_ = &host_lookups});
     const db_migrator migrator(loops.loop(0), config, options);
@@ -90,8 +88,7 @@ TEST(Ruvia, db_pool_rejects_zero_capacity_at_configuration) {
 
 TEST(Ruvia, db_client_needs_a_loop_with_a_blocking_pool_to_look_up_a_dns_host) {
     for (const auto driver : database_drivers) {
-        const ruvia::db_config config{
-            .driver_ = driver, .host_ = "localhost", .tls_ = {.mode_ = ruvia::client_tls_mode::disabled}};
+        const ruvia::db_config config{.driver_ = driver, .host_ = "localhost", .tls_ = {.mode_ = ruvia::client_tls_mode::disabled}};
         bool rejected = false;
         {
             ruvia::event_loop_pool pool({.loop_count_ = 1});
@@ -117,8 +114,7 @@ TEST(Ruvia, db_client_needs_a_loop_with_a_blocking_pool_to_look_up_a_dns_host) {
 TEST(Ruvia, db_pool_opens_the_configured_number_of_connections) {
     using peer_type = ruvia::test::backend_startup_peer;
     for (const auto driver : database_drivers) {
-        peer_type peer(driver == ruvia::db_driver::postgresql ? peer_type::protocol::postgresql : peer_type::protocol::mariadb,
-            false, peer_type::after_startup::idle, std::vector<ruvia::test::backend_startup_peer::postgres_reply>(), 3);
+        peer_type peer(driver == ruvia::db_driver::postgresql ? peer_type::protocol::postgresql : peer_type::protocol::mariadb, false, peer_type::after_startup::idle, std::vector<ruvia::test::backend_startup_peer::postgres_reply>(), 3);
         auto config = peer.config();
         config.driver_ = driver;
         config.pool_size_per_worker_ = 3;
@@ -144,8 +140,7 @@ TEST(Ruvia, db_pool_opens_the_configured_number_of_connections) {
 TEST(Ruvia, db_pool_failed_startup_retires_already_connected_slots) {
     using peer_type = ruvia::test::backend_startup_peer;
     for (const auto driver : database_drivers) {
-        peer_type peer(driver == ruvia::db_driver::postgresql ? peer_type::protocol::postgresql : peer_type::protocol::mariadb,
-            false, peer_type::after_startup::idle, std::vector<ruvia::test::backend_startup_peer::postgres_reply>(), 2);
+        peer_type peer(driver == ruvia::db_driver::postgresql ? peer_type::protocol::postgresql : peer_type::protocol::mariadb, false, peer_type::after_startup::idle, std::vector<ruvia::test::backend_startup_peer::postgres_reply>(), 2);
         auto config = peer.config();
         config.driver_ = driver;
         config.pool_size_per_worker_ = 3;
@@ -204,8 +199,7 @@ TEST(Ruvia, db_pool_transaction_retirement_checks_server_state_before_reuse) {
                     try {
                         (void)co_await transaction.query("SELECT * FROM missing_table");
                     } catch (const db_error& error) {
-                        failed = error.code() == db_error::code_type::statement_failed &&
-                                 error.sql_state() == "42S02";
+                        failed = error.code() == db_error::code_type::statement_failed && error.sql_state() == "42S02";
                     }
                     EXPECT_TRUE(failed);
                 }
@@ -226,13 +220,7 @@ TEST(Ruvia, db_pool_transaction_retirement_checks_server_state_before_reuse) {
 TEST(Ruvia, db_pool_allows_parallel_transactions_and_reuses_released_connections) {
     using namespace ruvia;
     using peer_type = test::backend_startup_peer;
-    peer_type peer(peer_type::protocol::postgresql, false, peer_type::after_startup::idle,
-        std::vector<ruvia::test::backend_startup_peer::postgres_reply>({{.column_ = std::string(""), .command_ = std::string("BEGIN"), .status_ = 'T'},
-            {.column_ = std::string(""), .command_ = std::string("BEGIN"), .status_ = 'T'},
-            {.column_ = std::string(""), .command_ = std::string("ROLLBACK")},
-            {.rows_ = std::vector<std::string>({std::string("available")})},
-            {.column_ = std::string(""), .command_ = std::string("ROLLBACK")}}),
-        2);
+    peer_type peer(peer_type::protocol::postgresql, false, peer_type::after_startup::idle, std::vector<ruvia::test::backend_startup_peer::postgres_reply>({{.column_ = std::string(""), .command_ = std::string("BEGIN"), .status_ = 'T'}, {.column_ = std::string(""), .command_ = std::string("BEGIN"), .status_ = 'T'}, {.column_ = std::string(""), .command_ = std::string("ROLLBACK")}, {.rows_ = std::vector<std::string>({std::string("available")})}, {.column_ = std::string(""), .command_ = std::string("ROLLBACK")}}), 2);
     auto config = peer.config();
     config.pool_size_per_worker_ = 2;
     config.acquire_timeout_ = std::chrono::milliseconds(100);
@@ -283,10 +271,7 @@ TEST(Ruvia, db_pool_allows_parallel_transactions_and_reuses_released_connections
 TEST(Ruvia, db_pool_shutdown_wakes_waiters_while_all_connections_are_leased) {
     using namespace ruvia;
     using peer_type = test::backend_startup_peer;
-    peer_type peer(peer_type::protocol::postgresql, false, peer_type::after_startup::idle,
-        std::vector<ruvia::test::backend_startup_peer::postgres_reply>({{.column_ = std::string(""), .command_ = std::string("BEGIN"), .status_ = 'T'},
-            {.column_ = std::string(""), .command_ = std::string("BEGIN"), .status_ = 'T'}}),
-        2);
+    peer_type peer(peer_type::protocol::postgresql, false, peer_type::after_startup::idle, std::vector<ruvia::test::backend_startup_peer::postgres_reply>({{.column_ = std::string(""), .command_ = std::string("BEGIN"), .status_ = 'T'}, {.column_ = std::string(""), .command_ = std::string("BEGIN"), .status_ = 'T'}}), 2);
     auto config = peer.config();
     config.pool_size_per_worker_ = 2;
     auto& io = test::new_test_io_context();
@@ -340,7 +325,9 @@ struct migrator_loop final {
 
 TEST(Ruvia, scoped_operation_scope_tracks_cold_owner_operations) {
     ruvia::operation_scope operation_scope;
-    auto cold_task = []() -> ruvia::task<void> { co_return; }();
+    auto cold_task = []() -> ruvia::task<void> {
+        co_return;
+    }();
     {
         auto operation = ruvia::make_scoped_operation(operation_scope, std::move(cold_task));
         EXPECT_TRUE(operation_scope.has_pending_operations());
@@ -349,14 +336,10 @@ TEST(Ruvia, scoped_operation_scope_tracks_cold_owner_operations) {
 }
 
 TEST(Ruvia, db_error_carries_category_and_native_diagnostics) {
-    const ruvia::db_error timeout(ruvia::db_error::code_type::timeout,
-        ruvia::db_driver::mariadb, "timeout", 1205, "HY000");
-    const ruvia::db_error unique_violation(ruvia::db_error::code_type::statement_failed,
-        ruvia::db_driver::postgresql, "duplicate key", std::nullopt, "23505", "uq_jobs_key");
-    const ruvia::db_error cancelled(ruvia::db_error::code_type::cancelled,
-        ruvia::db_driver::postgresql, "cancelled");
-    const ruvia::db_error closing(ruvia::db_error::code_type::closing,
-        ruvia::db_driver::mariadb, "closing");
+    const ruvia::db_error timeout(ruvia::db_error::code_type::timeout, ruvia::db_driver::mariadb, "timeout", 1205, "HY000");
+    const ruvia::db_error unique_violation(ruvia::db_error::code_type::statement_failed, ruvia::db_driver::postgresql, "duplicate key", std::nullopt, "23505", "uq_jobs_key");
+    const ruvia::db_error cancelled(ruvia::db_error::code_type::cancelled, ruvia::db_driver::postgresql, "cancelled");
+    const ruvia::db_error closing(ruvia::db_error::code_type::closing, ruvia::db_driver::mariadb, "closing");
     EXPECT_TRUE(timeout.code() == ruvia::db_error::code_type::timeout);
     EXPECT_TRUE(timeout.driver() == ruvia::db_driver::mariadb);
     EXPECT_TRUE(timeout.native_code() == 1205);
@@ -375,12 +358,12 @@ TEST(Ruvia, db_error_carries_category_and_native_diagnostics) {
 TEST(Ruvia, db_config_rejects_non_positive_timeouts) {
     const migrator_loop loop;
     auto config = test_db_config();
-    for (const auto field : {&ruvia::db_config::connect_timeout_, &ruvia::db_config::read_timeout_,
-             &ruvia::db_config::write_timeout_, &ruvia::db_config::query_timeout_,
-             &ruvia::db_config::acquire_timeout_, &ruvia::db_config::transaction_timeout_}) {
+    for (const auto field : {&ruvia::db_config::connect_timeout_, &ruvia::db_config::read_timeout_, &ruvia::db_config::write_timeout_, &ruvia::db_config::query_timeout_, &ruvia::db_config::acquire_timeout_, &ruvia::db_config::transaction_timeout_}) {
         for (const auto invalid : {std::chrono::milliseconds(0), std::chrono::milliseconds(-1)}) {
             config.*field = invalid;
-            EXPECT_TRUE(throws_on([&] { ruvia::db_migrator migrator(loop.loop(), config); }));
+            EXPECT_TRUE(throws_on([&] {
+                ruvia::db_migrator migrator(loop.loop(), config);
+            }));
         }
         (config.*field).reset();
     }
@@ -391,7 +374,9 @@ TEST(Ruvia, db_migrator_rejects_non_positive_lock_timeouts) {
     ruvia::db_migrator_options options;
     for (const auto invalid : {std::chrono::milliseconds(0), std::chrono::milliseconds(-1)}) {
         options.lock_timeout_ = invalid;
-        EXPECT_TRUE(throws_on([&] { ruvia::db_migrator migrator(loop.loop(), test_db_config(), options); }));
+        EXPECT_TRUE(throws_on([&] {
+            ruvia::db_migrator migrator(loop.loop(), test_db_config(), options);
+        }));
     }
 }
 
@@ -406,8 +391,7 @@ TEST(Ruvia, db_migrator_validates_before_opening_connection) {
     try {
         (void)migrator.migrate(std::span<const ruvia::db_migration>(migrations));
     } catch (const std::invalid_argument& error) {
-        rejected = std::string_view(error.what()) ==
-                   "database migration ids must be unique, including case";
+        rejected = std::string_view(error.what()) == "database migration ids must be unique, including case";
     }
     EXPECT_TRUE(rejected);
 }
@@ -440,11 +424,7 @@ TEST(Ruvia, db_migrator_treats_mariadb_double_dash_at_end_of_sql_as_comment) {
 TEST(Ruvia, db_migrator_rejects_unrepresentable_postgresql_lock_timeout_before_connecting) {
     const migrator_loop loop;
     const auto config = ruvia::db_config{.driver_ = ruvia::db_driver::postgresql};
-    for (const auto timeout : {
-             ruvia::timeout_duration(std::chrono::duration<std::uint64_t, std::milli>{
-                 std::numeric_limits<std::uint64_t>::max()}),
-             ruvia::timeout_duration(std::chrono::milliseconds{
-                 std::int64_t{std::numeric_limits<std::int32_t>::max()} + 1})}) {
+    for (const auto timeout : {ruvia::timeout_duration(std::chrono::duration<std::uint64_t, std::milli>{std::numeric_limits<std::uint64_t>::max()}), ruvia::timeout_duration(std::chrono::milliseconds{std::int64_t{std::numeric_limits<std::int32_t>::max()} + 1})}) {
         const ruvia::db_migrator_options options{.lock_timeout_ = timeout};
         EXPECT_THROW((void)ruvia::db_migrator(loop.loop(), config, options), std::invalid_argument);
     }
@@ -485,7 +465,9 @@ TEST(Ruvia, db_migrator_validates_complete_configuration_before_allocating) {
             .table_ = table_name,
         };
 
-        EXPECT_TRUE(throws_on([&] { (void)ruvia::db_migrator(loop.loop(), config, options); }));
+        EXPECT_TRUE(throws_on([&] {
+            (void)ruvia::db_migrator(loop.loop(), config, options);
+        }));
     }
     {
         auto config = test_db_config();
@@ -495,7 +477,9 @@ TEST(Ruvia, db_migrator_validates_complete_configuration_before_allocating) {
             .table_ = "invalid-table-name",
         };
 
-        EXPECT_TRUE(throws_on([&] { (void)ruvia::db_migrator(loop.loop(), config, options); }));
+        EXPECT_TRUE(throws_on([&] {
+            (void)ruvia::db_migrator(loop.loop(), config, options);
+        }));
     }
 }
 
@@ -506,18 +490,21 @@ TEST(Ruvia, db_migrator_rejects_nul_bytes_in_credentials) {
         auto config = test_db_config();
         config.tls_.mode_ = ruvia::client_tls_mode::disabled;
         config.*field = "app\0suffix"s;
-        EXPECT_TRUE(throws_on([&] { (void)ruvia::db_migrator(loop.loop(), config, {}); }));
+        EXPECT_TRUE(throws_on([&] {
+            (void)ruvia::db_migrator(loop.loop(), config, {});
+        }));
     }
 }
 
 TEST(Ruvia, database_config_rejects_non_host_dns_inputs) {
     const migrator_loop loop;
-    for (const std::string_view host : {std::string_view("bad_name"), std::string_view("1.2.3.999"),
-             std::string_view("host..example"), std::string_view("-host.example")}) {
+    for (const std::string_view host : {std::string_view("bad_name"), std::string_view("1.2.3.999"), std::string_view("host..example"), std::string_view("-host.example")}) {
         auto config = test_db_config();
         config.host_ = host;
         config.tls_.mode_ = ruvia::client_tls_mode::disabled;
-        EXPECT_TRUE(throws_on([&] { (void)ruvia::db_migrator(loop.loop(), config, {}); }));
+        EXPECT_TRUE(throws_on([&] {
+            (void)ruvia::db_migrator(loop.loop(), config, {});
+        }));
     }
 }
 
@@ -551,9 +538,7 @@ TEST(Ruvia, db_expression_values_and_db_value_copies_own_parameter_text) {
     for (const bool through_expressions : {false, true}) {
         ruvia::db_query destination;
         ruvia::db_query expressions;
-        destination.select(through_expressions
-                               ? destination.import_expression(expressions.value(statement.params()[0]))
-                               : destination.value(statement.params()[0]));
+        destination.select(through_expressions ? destination.import_expression(expressions.value(statement.params()[0])) : destination.value(statement.params()[0]));
         const auto compiled = destination.compile(ruvia::db_driver::postgresql);
         ASSERT_EQ(compiled.params().size(), std::size_t{1});
         EXPECT_EQ(compiled.params()[0].text(), value);
@@ -597,8 +582,7 @@ ruvia::task<void> run_statement(ruvia::db_session& handle, statement_kind kind) 
 
 // `peer` answers "before" and then ends the session while the pool holds it
 // idle; it answers "after" on the next connection.
-void check_session_ended_while_idle(
-    ruvia::test::backend_startup_peer& peer, ruvia::db_driver driver) {
+void check_session_ended_while_idle(ruvia::test::backend_startup_peer& peer, ruvia::db_driver driver) {
     using namespace ruvia;
     auto config = peer.config();
     config.driver_ = driver;
@@ -649,16 +633,14 @@ TEST(Ruvia, db_connection_lost_mid_result_is_an_io_error) {
             auto& context_value = test::new_test_io_context();
             auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
             std::optional<db_error::code_type> code;
-            test::with_connected_db_client(attachment, db_config{.driver_ = driver},
-                test::backend_startup_peer::after_startup::drop_mid_result,
-                [&](db_client& client) -> task<void> {
-                    auto handle = client.db();
-                    try {
-                        co_await run_statement(handle, kind);
-                    } catch (const db_error& error) {
-                        code = error.code();
-                    }
-                });
+            test::with_connected_db_client(attachment, db_config{.driver_ = driver}, test::backend_startup_peer::after_startup::drop_mid_result, [&](db_client& client) -> task<void> {
+                auto handle = client.db();
+                try {
+                    co_await run_statement(handle, kind);
+                } catch (const db_error& error) {
+                    code = error.code();
+                }
+            });
             EXPECT_TRUE(code == db_error::code_type::io_error);
         }
     }
@@ -672,15 +654,13 @@ TEST(Ruvia, db_session_ended_while_idle_reconnects_before_the_next_statement) {
     using peer_type = ruvia::test::backend_startup_peer;
 #ifdef RUVIA_ENABLE_POSTGRESQL
     {
-        peer_type peer(peer_type::protocol::postgresql, false, peer_type::after_startup::reaccept,
-            std::vector<ruvia::test::backend_startup_peer::postgres_reply>({{.rows_ = std::vector<std::string>({std::string("before")}), .close_after_ = true}, {.rows_ = std::vector<std::string>({std::string("after")})}}));
+        peer_type peer(peer_type::protocol::postgresql, false, peer_type::after_startup::reaccept, std::vector<ruvia::test::backend_startup_peer::postgres_reply>({{.rows_ = std::vector<std::string>({std::string("before")}), .close_after_ = true}, {.rows_ = std::vector<std::string>({std::string("after")})}}));
         check_session_ended_while_idle(peer, ruvia::db_driver::postgresql);
     }
 #endif
 #ifdef RUVIA_ENABLE_MARIADB
     {
-        peer_type peer(std::vector<peer_type::maria_reply>({{.rows_ = std::vector<std::string>({std::string("before")}), .close_after_ = true}, {.rows_ = std::vector<std::string>({std::string("after")})}}),
-            peer_type::after_startup::reaccept);
+        peer_type peer(std::vector<peer_type::maria_reply>({{.rows_ = std::vector<std::string>({std::string("before")}), .close_after_ = true}, {.rows_ = std::vector<std::string>({std::string("after")})}}), peer_type::after_startup::reaccept);
         check_session_ended_while_idle(peer, ruvia::db_driver::mariadb);
     }
 #endif
@@ -692,10 +672,7 @@ TEST(Ruvia, db_session_ended_while_idle_reconnects_before_the_next_statement) {
 // kept it rather than reconnecting.
 TEST(Ruvia, db_rejected_statement_keeps_the_pooled_connection) {
     using namespace ruvia;
-    test::backend_startup_peer peer(test::backend_startup_peer::protocol::postgresql, false,
-        test::backend_startup_peer::after_startup::idle,
-        std::vector<ruvia::test::backend_startup_peer::postgres_reply>({{.error_ = std::string("duplicate key value violates unique constraint"), .sql_state_ = std::string("23505")},
-            {.rows_ = std::vector<std::string>({std::string("kept")})}}));
+    test::backend_startup_peer peer(test::backend_startup_peer::protocol::postgresql, false, test::backend_startup_peer::after_startup::idle, std::vector<ruvia::test::backend_startup_peer::postgres_reply>({{.error_ = std::string("duplicate key value violates unique constraint"), .sql_state_ = std::string("23505")}, {.rows_ = std::vector<std::string>({std::string("kept")})}}));
     auto& context_value = test::new_test_io_context();
     auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
     db_client client(attachment.loop(), peer.config());
@@ -723,12 +700,7 @@ TEST(Ruvia, db_rejected_statement_keeps_the_pooled_connection) {
 // pool rolls it back on the kept connection before the next caller gets it.
 TEST(Ruvia, db_rejected_transaction_statement_rolls_back_on_the_kept_connection) {
     using namespace ruvia;
-    test::backend_startup_peer peer(test::backend_startup_peer::protocol::postgresql, false,
-        test::backend_startup_peer::after_startup::idle,
-        std::vector<ruvia::test::backend_startup_peer::postgres_reply>({{.column_ = std::string(""), .command_ = std::string("BEGIN"), .status_ = 'T'},
-            {.status_ = 'E', .error_ = std::string("syntax error at or near \"SELEC\"")},
-            {.column_ = std::string(""), .command_ = std::string("ROLLBACK")},
-            {.rows_ = std::vector<std::string>({std::string("after")})}}));
+    test::backend_startup_peer peer(test::backend_startup_peer::protocol::postgresql, false, test::backend_startup_peer::after_startup::idle, std::vector<ruvia::test::backend_startup_peer::postgres_reply>({{.column_ = std::string(""), .command_ = std::string("BEGIN"), .status_ = 'T'}, {.status_ = 'E', .error_ = std::string("syntax error at or near \"SELEC\"")}, {.column_ = std::string(""), .command_ = std::string("ROLLBACK")}, {.rows_ = std::vector<std::string>({std::string("after")})}}));
     auto& context_value = test::new_test_io_context();
     auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
     db_client client(attachment.loop(), peer.config());
@@ -765,8 +737,7 @@ TEST(Ruvia, db_copy_result_fails_the_statement_and_closes_the_connection) {
     using direction = test::backend_startup_peer::postgres_copy_direction;
     for (const auto copy : {direction::input, direction::output}) {
         for (const auto kind : {statement_kind::query, statement_kind::execute}) {
-            test::backend_startup_peer peer(test::backend_startup_peer::protocol::postgresql, false,
-                test::backend_startup_peer::after_startup::reaccept, std::vector<ruvia::test::backend_startup_peer::postgres_reply>({{.copy_ = copy}, {.rows_ = std::vector<std::string>({std::string("fresh")})}}));
+            test::backend_startup_peer peer(test::backend_startup_peer::protocol::postgresql, false, test::backend_startup_peer::after_startup::reaccept, std::vector<ruvia::test::backend_startup_peer::postgres_reply>({{.copy_ = copy}, {.rows_ = std::vector<std::string>({std::string("fresh")})}}));
             auto& context_value = test::new_test_io_context();
             auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
             db_client client(attachment.loop(), peer.config());
@@ -817,10 +788,7 @@ using parameter_values = std::vector<std::optional<std::string>>;
 // separate statement.
 TEST(Ruvia, db_postgresql_repeated_statement_is_parsed_once_per_connection) {
     using namespace ruvia;
-    test::backend_startup_peer peer(test::backend_startup_peer::protocol::postgresql, false,
-        test::backend_startup_peer::after_startup::idle,
-        std::vector<ruvia::test::backend_startup_peer::postgres_reply>({{.rows_ = std::vector<std::string>({std::string("a")})}, {.rows_ = std::vector<std::string>({std::string("b")})}, {.rows_ = std::vector<std::string>({std::string("c")})}, {.rows_ = std::vector<std::string>({std::string("d")})}, {.rows_ = std::vector<std::string>({std::string("e")})},
-            {.rows_ = std::vector<std::string>({std::string("f")})}}));
+    test::backend_startup_peer peer(test::backend_startup_peer::protocol::postgresql, false, test::backend_startup_peer::after_startup::idle, std::vector<ruvia::test::backend_startup_peer::postgres_reply>({{.rows_ = std::vector<std::string>({std::string("a")})}, {.rows_ = std::vector<std::string>({std::string("b")})}, {.rows_ = std::vector<std::string>({std::string("c")})}, {.rows_ = std::vector<std::string>({std::string("d")})}, {.rows_ = std::vector<std::string>({std::string("e")})}, {.rows_ = std::vector<std::string>({std::string("f")})}}));
     auto& context_value = test::new_test_io_context();
     auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
     db_client client(attachment.loop(), peer.config());
@@ -860,13 +828,8 @@ TEST(Ruvia, db_postgresql_stale_cached_statement_is_retried) {
         std::string_view sql_state_;
         std::string_view routine_;
     };
-    for (const auto stale :
-        {stale_case{"0A000", "RevalidateCachedQuery"}, stale_case{"26000", "FetchPreparedStatement"}}) {
-        test::backend_startup_peer peer(test::backend_startup_peer::protocol::postgresql, false,
-            test::backend_startup_peer::after_startup::idle,
-            std::vector<ruvia::test::backend_startup_peer::postgres_reply>({{.rows_ = std::vector<std::string>({std::string("a")})}, {.rows_ = std::vector<std::string>({std::string("b")})},
-                {.error_ = std::string("stale statement"), .sql_state_ = std::string(stale.sql_state_), .routine_ = std::string(stale.routine_)},
-                {.rows_ = std::vector<std::string>({std::string("c")})}}));
+    for (const auto stale : {stale_case{"0A000", "RevalidateCachedQuery"}, stale_case{"26000", "FetchPreparedStatement"}}) {
+        test::backend_startup_peer peer(test::backend_startup_peer::protocol::postgresql, false, test::backend_startup_peer::after_startup::idle, std::vector<ruvia::test::backend_startup_peer::postgres_reply>({{.rows_ = std::vector<std::string>({std::string("a")})}, {.rows_ = std::vector<std::string>({std::string("b")})}, {.error_ = std::string("stale statement"), .sql_state_ = std::string(stale.sql_state_), .routine_ = std::string(stale.routine_)}, {.rows_ = std::vector<std::string>({std::string("c")})}}));
         auto& context_value = test::new_test_io_context();
         auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
         db_client client(attachment.loop(), peer.config());
@@ -888,12 +851,7 @@ TEST(Ruvia, db_postgresql_stale_cached_statement_is_retried) {
 // reaches the caller; the stale statement is parsed again on its next use.
 TEST(Ruvia, db_postgresql_stale_statement_in_transaction_fails_and_is_parsed_again) {
     using namespace ruvia;
-    test::backend_startup_peer peer(test::backend_startup_peer::protocol::postgresql, false,
-        test::backend_startup_peer::after_startup::idle,
-        std::vector<ruvia::test::backend_startup_peer::postgres_reply>({{.column_ = std::string(""), .command_ = std::string("BEGIN"), .status_ = 'T'}, {.rows_ = std::vector<std::string>({std::string("a")}), .status_ = 'T'},
-            {.rows_ = std::vector<std::string>({std::string("b")}), .status_ = 'T'},
-            {.status_ = 'E', .error_ = std::string("cached plan must not change result type"), .sql_state_ = std::string("0A000"), .routine_ = std::string("RevalidateCachedQuery")},
-            {.column_ = std::string(""), .command_ = std::string("ROLLBACK")}, {.rows_ = std::vector<std::string>({std::string("c")})}}));
+    test::backend_startup_peer peer(test::backend_startup_peer::protocol::postgresql, false, test::backend_startup_peer::after_startup::idle, std::vector<ruvia::test::backend_startup_peer::postgres_reply>({{.column_ = std::string(""), .command_ = std::string("BEGIN"), .status_ = 'T'}, {.rows_ = std::vector<std::string>({std::string("a")}), .status_ = 'T'}, {.rows_ = std::vector<std::string>({std::string("b")}), .status_ = 'T'}, {.status_ = 'E', .error_ = std::string("cached plan must not change result type"), .sql_state_ = std::string("0A000"), .routine_ = std::string("RevalidateCachedQuery")}, {.column_ = std::string(""), .command_ = std::string("ROLLBACK")}, {.rows_ = std::vector<std::string>({std::string("c")})}}));
     auto& context_value = test::new_test_io_context();
     auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
     db_client client(attachment.loop(), peer.config());
@@ -930,10 +888,7 @@ TEST(Ruvia, db_postgresql_stale_statement_in_transaction_fails_and_is_parsed_aga
 // its next use.
 TEST(Ruvia, db_postgresql_stale_sql_state_raised_by_the_statement_is_not_retried) {
     using namespace ruvia;
-    test::backend_startup_peer peer(test::backend_startup_peer::protocol::postgresql, false,
-        test::backend_startup_peer::after_startup::idle,
-        std::vector<ruvia::test::backend_startup_peer::postgres_reply>({{.rows_ = std::vector<std::string>({std::string("a")})}, {.rows_ = std::vector<std::string>({std::string("b")})},
-            {.error_ = std::string("not supported"), .sql_state_ = std::string("0A000"), .routine_ = std::string("ExecInitNode")}, {.rows_ = std::vector<std::string>({std::string("c")})}}));
+    test::backend_startup_peer peer(test::backend_startup_peer::protocol::postgresql, false, test::backend_startup_peer::after_startup::idle, std::vector<ruvia::test::backend_startup_peer::postgres_reply>({{.rows_ = std::vector<std::string>({std::string("a")})}, {.rows_ = std::vector<std::string>({std::string("b")})}, {.error_ = std::string("not supported"), .sql_state_ = std::string("0A000"), .routine_ = std::string("ExecInitNode")}, {.rows_ = std::vector<std::string>({std::string("c")})}}));
     auto& context_value = test::new_test_io_context();
     auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
     db_client client(attachment.loop(), peer.config());
@@ -961,22 +916,26 @@ namespace database_tls_tests {
 
 class handshake_peer final {
 public:
-    handshake_peer(asio::ssl::context& tls, bool maria)
-        : acceptor_(io_, {asio::ip::address_v4::loopback(), 0}),
-          stream_(io_, tls),
-          deadline_(io_, std::chrono::seconds(5)),
-          maria_(maria),
-          port_(acceptor_.local_endpoint().port()) {
+    handshake_peer(asio::ssl::context& tls, bool maria) :
+        acceptor_(io_, {asio::ip::address_v4::loopback(), 0}),
+        stream_(io_, tls),
+        deadline_(io_, std::chrono::seconds(5)),
+        maria_(maria),
+        port_(acceptor_.local_endpoint().port()) {
         deadline_.async_wait([this](const std::error_code& error) {
             if (!error) {
                 close();
             }
         });
         done_ = asio::co_spawn(io_, serve(), asio::use_future);
-        thread_ = std::thread([this] { io_.run(); });
+        thread_ = std::thread([this] {
+            io_.run();
+        });
     }
     ~handshake_peer() {
-        asio::post(io_, [this] { close(); });
+        asio::post(io_, [this] {
+            close();
+        });
         thread_.join();
     }
     [[nodiscard]] std::uint16_t port() const noexcept {
@@ -1057,18 +1016,14 @@ private:
     std::thread thread_;
 };
 
-bool sends_startup(ruvia::db_driver driver, const char* reference, const char* common_name,
-    const char* san, std::uint64_t record_limit = std::uint64_t{1} << 23, int version = 0,
-    bool elliptic_curve = false, bool mutual_tls = false, const char* cipher = nullptr,
-    ruvia::tls_version minimum = ruvia::tls_version::tls_1_1) {
+bool sends_startup(ruvia::db_driver driver, const char* reference, const char* common_name, const char* san, std::uint64_t record_limit = std::uint64_t{1} << 23, int version = 0, bool elliptic_curve = false, bool mutual_tls = false, const char* cipher = nullptr, ruvia::tls_version minimum = ruvia::tls_version::tls_1_1) {
     ruvia::test::tls_identity identity(common_name, san, elliptic_curve);
     auto* const context = identity.context_.native_handle();
     if (version != 0) {
         // Only the adversarial test peer relaxes OpenSSL's legacy-signature
         // policy. The database client must retain the production policy.
         SSL_CTX_set_security_level(context, 0);
-        if (SSL_CTX_set_min_proto_version(context, version) != 1 ||
-            SSL_CTX_set_max_proto_version(context, version) != 1) {
+        if (SSL_CTX_set_min_proto_version(context, version) != 1 || SSL_CTX_set_max_proto_version(context, version) != 1) {
             throw std::runtime_error("cannot pin database test peer TLS version");
         }
     }
@@ -1088,10 +1043,8 @@ bool sends_startup(ruvia::db_driver driver, const char* reference, const char* c
     if (mutual_tls) {
         // libpq rejects client private keys readable by group/other users;
         // the generic server identity fixture does not restrict its key file.
-        std::filesystem::permissions(identity.private_key_file(),
-            std::filesystem::perms::owner_read | std::filesystem::perms::owner_write);
-        config.tls_.identity_ = ruvia::tls_identity_config{
-            .certificate_chain_file_ = identity.ca_file_, .private_key_file_ = identity.private_key_file()};
+        std::filesystem::permissions(identity.private_key_file(), std::filesystem::perms::owner_read | std::filesystem::perms::owner_write);
+        config.tls_.identity_ = ruvia::tls_identity_config{.certificate_chain_file_ = identity.ca_file_, .private_key_file_ = identity.private_key_file()};
     }
     if (driver == ruvia::db_driver::postgresql) {
         config.tls_.server_name_ = reference;
@@ -1114,21 +1067,14 @@ void checks_protocol_floor(ruvia::db_driver driver) {
     constexpr auto limit = std::uint64_t{1} << 23;
     for (const bool elliptic_curve : {false, true}) {
         SCOPED_TRACE(elliptic_curve ? "ECDSA" : "RSA");
-        EXPECT_TRUE(sends_startup(driver, "127.0.0.1", "other.test", "IP:127.0.0.1",
-            limit, TLS1_1_VERSION, elliptic_curve));
-        EXPECT_FALSE(sends_startup(driver, "127.0.0.1", "127.0.0.1", "",
-            limit, TLS1_1_VERSION, elliptic_curve));
-        EXPECT_FALSE(sends_startup(driver, "127.0.0.1", "other.test", "IP:127.0.0.2",
-            limit, TLS1_1_VERSION, elliptic_curve));
-        EXPECT_FALSE(sends_startup(driver, "127.0.0.1", "other.test", "IP:127.0.0.1",
-            1, TLS1_1_VERSION, elliptic_curve));
-        EXPECT_FALSE(sends_startup(driver, "127.0.0.1", "other.test", "IP:127.0.0.1",
-            limit, TLS1_VERSION, elliptic_curve));
-        EXPECT_TRUE(sends_startup(driver, "127.0.0.1", "other.test", "IP:127.0.0.1",
-            limit, TLS1_1_VERSION, elliptic_curve, true));
+        EXPECT_TRUE(sends_startup(driver, "127.0.0.1", "other.test", "IP:127.0.0.1", limit, TLS1_1_VERSION, elliptic_curve));
+        EXPECT_FALSE(sends_startup(driver, "127.0.0.1", "127.0.0.1", "", limit, TLS1_1_VERSION, elliptic_curve));
+        EXPECT_FALSE(sends_startup(driver, "127.0.0.1", "other.test", "IP:127.0.0.2", limit, TLS1_1_VERSION, elliptic_curve));
+        EXPECT_FALSE(sends_startup(driver, "127.0.0.1", "other.test", "IP:127.0.0.1", 1, TLS1_1_VERSION, elliptic_curve));
+        EXPECT_FALSE(sends_startup(driver, "127.0.0.1", "other.test", "IP:127.0.0.1", limit, TLS1_VERSION, elliptic_curve));
+        EXPECT_TRUE(sends_startup(driver, "127.0.0.1", "other.test", "IP:127.0.0.1", limit, TLS1_1_VERSION, elliptic_curve, true));
         const auto* const cbc = elliptic_curve ? "ECDHE-ECDSA-AES128-SHA" : "ECDHE-RSA-AES128-SHA";
-        EXPECT_FALSE(sends_startup(driver, "127.0.0.1", "other.test", "IP:127.0.0.1",
-            limit, TLS1_2_VERSION, elliptic_curve, false, cbc));
+        EXPECT_FALSE(sends_startup(driver, "127.0.0.1", "other.test", "IP:127.0.0.1", limit, TLS1_2_VERSION, elliptic_curve, false, cbc));
     }
 }
 
@@ -1137,9 +1083,7 @@ void checks_configured_protocol_floor(ruvia::db_driver driver) {
         for (const int version : {TLS1_1_VERSION, TLS1_2_VERSION, TLS1_3_VERSION}) {
             SCOPED_TRACE(static_cast<int>(minimum));
             SCOPED_TRACE(version);
-            EXPECT_EQ(sends_startup(driver, "127.0.0.1", "other.test", "IP:127.0.0.1",
-                          std::uint64_t{1} << 23, version, false, false, nullptr, minimum),
-                version >= static_cast<int>(minimum));
+            EXPECT_EQ(sends_startup(driver, "127.0.0.1", "other.test", "IP:127.0.0.1", std::uint64_t{1} << 23, version, false, false, nullptr, minimum), version >= static_cast<int>(minimum));
         }
     }
 }
@@ -1194,9 +1138,7 @@ TEST(Ruvia, mariadb_configured_tls_minimum_blocks_authentication_on_older_tls) {
 #if defined(RUVIA_ENABLE_POSTGRESQL) || defined(RUVIA_ENABLE_MARIADB)
 namespace {
 
-void check_unverifiable_history(
-    ruvia::test::backend_startup_peer& peer, ruvia::db_driver driver,
-    std::span<const ruvia::db_migration> migrations) {
+void check_unverifiable_history(ruvia::test::backend_startup_peer& peer, ruvia::db_driver driver, std::span<const ruvia::db_migration> migrations) {
     auto config = peer.config();
     config.driver_ = driver;
     config.username_ = "test";
@@ -1224,8 +1166,7 @@ void check_unverifiable_history(
 // through `stop` (when given) and returns how the run ended. The peer never
 // answers the lock, so only the run's own operation can end it.
 template <typename lock_requested_type>
-[[nodiscard]] std::optional<ruvia::db_error::code_type> interrupted_migration(const ruvia::db_config& config,
-    ruvia::operation_options operation, ruvia::stop_source* stop, lock_requested_type lock_requested) {
+[[nodiscard]] std::optional<ruvia::db_error::code_type> interrupted_migration(const ruvia::db_config& config, ruvia::operation_options operation, ruvia::stop_source* stop, lock_requested_type lock_requested) {
     const std::array migrations{ruvia::db_migration({.id_ = "001", .sql_ = "CREATE TABLE t(id INT)"})};
     ruvia::event_loop_pool loops({.loop_count_ = 1});
     const ruvia::db_migrator migrator(loops.loop(0), config);
@@ -1259,8 +1200,7 @@ TEST(Ruvia, db_migrator_rejects_sql_with_embedded_nul) {
         const std::array<ruvia::db_migration, 1> bad_migrations{{
             ruvia::db_migration{{.id_ = "001", .sql_ = std::string("SELECT 1\0", 9)}},
         }};
-        (void)ruvia::test::run_db_migration(
-            ruvia::db_config{.driver_ = ruvia::db_driver::postgresql}, bad_migrations);
+        (void)ruvia::test::run_db_migration(ruvia::db_config{.driver_ = ruvia::db_driver::postgresql}, bad_migrations);
     } catch (const std::invalid_argument&) {
         nul_sql_rejected = true;
     }
@@ -1272,29 +1212,14 @@ TEST(Ruvia, db_migrator_rejects_unverifiable_postgresql_history) {
     using peer_type = ruvia::test::backend_startup_peer;
     const std::array migrations{ruvia::db_migration({.id_ = "001", .sql_ = "CREATE TABLE t(id INT)"})};
     for (const bool null : {false, true}) {
-        peer_type peer(peer_type::protocol::postgresql, false, peer_type::after_startup::idle,
-            std::vector<ruvia::test::backend_startup_peer::postgres_reply>({{.column_ = std::string(""), .command_ = std::string("SET")},
-                {.column_ = std::string("pg_advisory_lock"), .rows_ = std::vector<std::string>({std::string("")})},
-                {.column_ = std::string(""), .command_ = std::string("RESET")},
-                {.column_ = std::string(""), .command_ = std::string("CREATE TABLE")},
-                {.column_ = std::string("?column?"), .type_ = 23, .rows_ = std::vector<std::string>({std::string("1")})},
-                {.column_ = std::string("checksum"), .rows_ = std::vector<std::string>({std::string("")}), .null_rows_ = std::vector<bool>(1, null)},
-                {.column_ = std::string(""), .command_ = std::string("UPDATE 1")},
-                {.column_ = std::string("pg_advisory_unlock"), .type_ = 16, .rows_ = std::vector<std::string>({std::string("t")})}}));
+        peer_type peer(peer_type::protocol::postgresql, false, peer_type::after_startup::idle, std::vector<ruvia::test::backend_startup_peer::postgres_reply>({{.column_ = std::string(""), .command_ = std::string("SET")}, {.column_ = std::string("pg_advisory_lock"), .rows_ = std::vector<std::string>({std::string("")})}, {.column_ = std::string(""), .command_ = std::string("RESET")}, {.column_ = std::string(""), .command_ = std::string("CREATE TABLE")}, {.column_ = std::string("?column?"), .type_ = 23, .rows_ = std::vector<std::string>({std::string("1")})}, {.column_ = std::string("checksum"), .rows_ = std::vector<std::string>({std::string("")}), .null_rows_ = std::vector<bool>(1, null)}, {.column_ = std::string(""), .command_ = std::string("UPDATE 1")}, {.column_ = std::string("pg_advisory_unlock"), .type_ = 16, .rows_ = std::vector<std::string>({std::string("t")})}}));
         check_unverifiable_history(peer, ruvia::db_driver::postgresql, migrations);
     }
 }
 
 TEST(Ruvia, db_migrator_rejects_postgresql_history_without_a_digest_column) {
     using peer_type = ruvia::test::backend_startup_peer;
-    peer_type peer(peer_type::protocol::postgresql, false, peer_type::after_startup::idle,
-        std::vector<ruvia::test::backend_startup_peer::postgres_reply>({{.column_ = std::string(""), .command_ = std::string("SET")},
-            {.column_ = std::string("pg_advisory_lock"), .rows_ = std::vector<std::string>({std::string("")})},
-            {.column_ = std::string(""), .command_ = std::string("RESET")},
-            {.column_ = std::string(""), .command_ = std::string("CREATE TABLE")},
-            {.column_ = std::string("?column?"), .type_ = 23},
-            {.column_ = std::string(""), .command_ = std::string("ALTER TABLE")},
-            {.column_ = std::string("pg_advisory_unlock"), .type_ = 16, .rows_ = std::vector<std::string>({std::string("t")})}}));
+    peer_type peer(peer_type::protocol::postgresql, false, peer_type::after_startup::idle, std::vector<ruvia::test::backend_startup_peer::postgres_reply>({{.column_ = std::string(""), .command_ = std::string("SET")}, {.column_ = std::string("pg_advisory_lock"), .rows_ = std::vector<std::string>({std::string("")})}, {.column_ = std::string(""), .command_ = std::string("RESET")}, {.column_ = std::string(""), .command_ = std::string("CREATE TABLE")}, {.column_ = std::string("?column?"), .type_ = 23}, {.column_ = std::string(""), .command_ = std::string("ALTER TABLE")}, {.column_ = std::string("pg_advisory_unlock"), .type_ = 16, .rows_ = std::vector<std::string>({std::string("t")})}}));
     check_unverifiable_history(peer, ruvia::db_driver::postgresql, {});
 }
 
@@ -1304,18 +1229,11 @@ TEST(Ruvia, db_migrator_rejects_postgresql_history_without_a_digest_column) {
 // be written on a new session that never held the lock.
 TEST(Ruvia, db_migrator_fails_once_its_locked_session_is_lost) {
     using peer_type = ruvia::test::backend_startup_peer;
-    const std::array migrations{ruvia::db_migration(
-        {.id_ = "001", .sql_ = "BEGIN", .atomicity_ = ruvia::db_migration_atomicity::unwrapped})};
-    peer_type peer(std::vector<std::vector<peer_type::postgres_reply>>({std::vector<peer_type::postgres_reply>({{.column_ = "", .command_ = "SET"},
-                                                                            {.column_ = "pg_advisory_lock", .rows_ = {""}},
-                                                                            {.column_ = "", .command_ = "RESET"},
-                                                                            {.column_ = "", .command_ = "CREATE TABLE"},
-                                                                            {.column_ = "?column?", .type_ = 23, .rows_ = {"1"}},
-                                                                            {.column_ = "checksum"},
-                                                                            {.column_ = "", .command_ = "BEGIN", .status_ = 'T'}}),
-        std::vector<peer_type::postgres_reply>(  // A replacement session, which never took the lock.
-            {{.column_ = "", .command_ = "INSERT 0 1"},
-                {.column_ = "pg_advisory_unlock", .type_ = 16, .rows_ = {"t"}}})}));
+    const std::array migrations{ruvia::db_migration({.id_ = "001", .sql_ = "BEGIN", .atomicity_ = ruvia::db_migration_atomicity::unwrapped})};
+    peer_type peer(std::vector<std::vector<peer_type::postgres_reply>>(
+        {std::vector<peer_type::postgres_reply>({{.column_ = "", .command_ = "SET"}, {.column_ = "pg_advisory_lock", .rows_ = {""}}, {.column_ = "", .command_ = "RESET"}, {.column_ = "", .command_ = "CREATE TABLE"}, {.column_ = "?column?", .type_ = 23, .rows_ = {"1"}}, {.column_ = "checksum"}, {.column_ = "", .command_ = "BEGIN", .status_ = 'T'}}),
+            std::vector<peer_type::postgres_reply>(  // A replacement session, which never took the lock.
+                {{.column_ = "", .command_ = "INSERT 0 1"}, {.column_ = "pg_advisory_unlock", .type_ = 16, .rows_ = {"t"}}})}));
     auto config = peer.config();
     config.username_ = "test";
     config.query_timeout_ = std::chrono::seconds(2);
@@ -1332,9 +1250,7 @@ TEST(Ruvia, db_migrator_fails_once_its_locked_session_is_lost) {
 // The migrator looks a DNS host up on its loop's blocking pool: a name that
 // cannot resolve (RFC 6761 §6.4) fails the lookup, not the configuration.
 TEST(Ruvia, db_migrator_looks_up_a_dns_host_on_its_loop_pool) {
-    ruvia::db_config config{.driver_ = ruvia::db_driver::postgresql,
-        .host_ = "ruvia-migrator.invalid",
-        .tls_ = {.mode_ = ruvia::client_tls_mode::disabled}};
+    ruvia::db_config config{.driver_ = ruvia::db_driver::postgresql, .host_ = "ruvia-migrator.invalid", .tls_ = {.mode_ = ruvia::client_tls_mode::disabled}};
     config.connect_timeout_ = std::chrono::seconds(1);
     bool lookup_failed = false;
     try {
@@ -1347,17 +1263,8 @@ TEST(Ruvia, db_migrator_looks_up_a_dns_host_on_its_loop_pool) {
 
 TEST(Ruvia, db_migrator_applies_and_records_postgresql_migrations_on_the_callers_loop) {
     using peer_type = ruvia::test::backend_startup_peer;
-    const std::array migrations{ruvia::db_migration(
-        {.id_ = "001", .sql_ = "CREATE TABLE t(id INT)", .atomicity_ = ruvia::db_migration_atomicity::unwrapped})};
-    peer_type peer(std::vector<std::vector<peer_type::postgres_reply>>({std::vector<peer_type::postgres_reply>({{.column_ = "", .command_ = "SET"},
-        {.column_ = "pg_advisory_lock", .rows_ = {""}},
-        {.column_ = "", .command_ = "RESET"},
-        {.column_ = "", .command_ = "CREATE TABLE"},
-        {.column_ = "?column?", .type_ = 23, .rows_ = {"1"}},
-        {.column_ = "checksum"},
-        {.column_ = "", .command_ = "CREATE TABLE"},
-        {.column_ = "", .command_ = "INSERT 0 1"},
-        {.column_ = "pg_advisory_unlock", .type_ = 16, .rows_ = {"t"}}})}));
+    const std::array migrations{ruvia::db_migration({.id_ = "001", .sql_ = "CREATE TABLE t(id INT)", .atomicity_ = ruvia::db_migration_atomicity::unwrapped})};
+    peer_type peer(std::vector<std::vector<peer_type::postgres_reply>>({std::vector<peer_type::postgres_reply>({{.column_ = "", .command_ = "SET"}, {.column_ = "pg_advisory_lock", .rows_ = {""}}, {.column_ = "", .command_ = "RESET"}, {.column_ = "", .command_ = "CREATE TABLE"}, {.column_ = "?column?", .type_ = 23, .rows_ = {"1"}}, {.column_ = "checksum"}, {.column_ = "", .command_ = "CREATE TABLE"}, {.column_ = "", .command_ = "INSERT 0 1"}, {.column_ = "pg_advisory_unlock", .type_ = 16, .rows_ = {"t"}}})}));
     const auto report = ruvia::test::run_db_migration(scripted_config(peer, ruvia::db_driver::postgresql), migrations);
     ASSERT_EQ(report.applied().size(), std::size_t{1});
     EXPECT_EQ(report.applied()[0], "001");
@@ -1372,8 +1279,7 @@ TEST(Ruvia, db_migrator_postgresql_run_ends_on_cancellation_and_timeout) {
     using peer_type = ruvia::test::backend_startup_peer;
     for (const bool cancel : {true, false}) {
         SCOPED_TRACE(cancel ? "cancelled" : "timed out");
-        peer_type peer(std::vector<std::vector<peer_type::postgres_reply>>({std::vector<peer_type::postgres_reply>({{.column_ = "", .command_ = "SET"},
-            {.column_ = "pg_advisory_lock", .rows_ = {""}, .hold_ = 1}})}));
+        peer_type peer(std::vector<std::vector<peer_type::postgres_reply>>({std::vector<peer_type::postgres_reply>({{.column_ = "", .command_ = "SET"}, {.column_ = "pg_advisory_lock", .rows_ = {""}, .hold_ = 1}})}));
         ruvia::stop_source stop;
         const auto lock_requested = [&] {
             for (const auto& parse : peer.postgres_parses()) {
@@ -1384,8 +1290,7 @@ TEST(Ruvia, db_migrator_postgresql_run_ends_on_cancellation_and_timeout) {
             return false;
         };
         const auto started = std::chrono::steady_clock::now();
-        const auto code = cancel ? interrupted_migration(scripted_config(peer, ruvia::db_driver::postgresql), {.stop_token_ = stop.token()}, &stop, lock_requested)
-                                 : interrupted_migration(scripted_config(peer, ruvia::db_driver::postgresql), {.timeout_ = std::chrono::milliseconds(200)}, nullptr, lock_requested);
+        const auto code = cancel ? interrupted_migration(scripted_config(peer, ruvia::db_driver::postgresql), {.stop_token_ = stop.token()}, &stop, lock_requested) : interrupted_migration(scripted_config(peer, ruvia::db_driver::postgresql), {.timeout_ = std::chrono::milliseconds(200)}, nullptr, lock_requested);
         EXPECT_TRUE(code == (cancel ? ruvia::db_error::code_type::cancelled : ruvia::db_error::code_type::timeout));
         EXPECT_TRUE(std::chrono::steady_clock::now() - started < std::chrono::seconds(5));
         // Answering the held lock only reaches a connection the run closed.
@@ -1414,14 +1319,10 @@ TEST(Ruvia, db_migrator_rejects_a_stopped_token_and_non_positive_timeout_before_
 }
 
 TEST(Ruvia, db_migrator_requires_a_valid_loop_and_runs_only_on_it) {
-    EXPECT_THROW((void)ruvia::db_migrator(ruvia::event_loop{}, ruvia::db_config{.driver_ = ruvia::db_driver::postgresql}),
-        std::invalid_argument);
+    EXPECT_THROW((void)ruvia::db_migrator(ruvia::event_loop{}, ruvia::db_config{.driver_ = ruvia::db_driver::postgresql}), std::invalid_argument);
     ruvia::event_loop_pool without_lookups({.loop_count_ = 2});
-    EXPECT_THROW((void)ruvia::db_migrator(without_lookups.loop(0),
-                     ruvia::db_config{.driver_ = ruvia::db_driver::postgresql, .host_ = "db.example"}),
-        std::invalid_argument);
-    const ruvia::db_migrator migrator(without_lookups.loop(0),
-        ruvia::db_config{.driver_ = ruvia::db_driver::postgresql, .host_ = "127.0.0.1", .tls_ = {.mode_ = ruvia::client_tls_mode::disabled}});
+    EXPECT_THROW((void)ruvia::db_migrator(without_lookups.loop(0), ruvia::db_config{.driver_ = ruvia::db_driver::postgresql, .host_ = "db.example"}), std::invalid_argument);
+    const ruvia::db_migrator migrator(without_lookups.loop(0), ruvia::db_config{.driver_ = ruvia::db_driver::postgresql, .host_ = "127.0.0.1", .tls_ = {.mode_ = ruvia::client_tls_mode::disabled}});
     auto migration = migrator.migrate({});
     without_lookups.start();
     auto run = without_lookups.loop(1).start(std::move(migration));
@@ -1436,39 +1337,21 @@ TEST(Ruvia, db_migrator_rejects_unverifiable_mariadb_history) {
     using peer_type = ruvia::test::backend_startup_peer;
     const std::array migrations{ruvia::db_migration({.id_ = "001", .sql_ = "CREATE TABLE t(id INT)"})};
     for (const bool null : {false, true}) {
-        peer_type peer(std::vector<peer_type::maria_reply>({{.rows_ = std::vector<std::string>({std::string("1")})},
-                           {.column_ = std::string("")},
-                           {.rows_ = std::vector<std::string>({std::string("1")})},
-                           {.column_ = std::string("checksum"), .rows_ = std::vector<std::string>({std::string("")}), .null_rows_ = std::vector<bool>(1, null)},
-                           {.column_ = std::string(""), .affected_rows_ = 1},
-                           {.column_ = std::string("")}}),
-            peer_type::after_startup::idle);
+        peer_type peer(std::vector<peer_type::maria_reply>({{.rows_ = std::vector<std::string>({std::string("1")})}, {.column_ = std::string("")}, {.rows_ = std::vector<std::string>({std::string("1")})}, {.column_ = std::string("checksum"), .rows_ = std::vector<std::string>({std::string("")}), .null_rows_ = std::vector<bool>(1, null)}, {.column_ = std::string(""), .affected_rows_ = 1}, {.column_ = std::string("")}}), peer_type::after_startup::idle);
         check_unverifiable_history(peer, ruvia::db_driver::mariadb, migrations);
     }
 }
 
 TEST(Ruvia, db_migrator_rejects_mariadb_history_without_a_digest_column) {
     using peer_type = ruvia::test::backend_startup_peer;
-    peer_type peer(std::vector<peer_type::maria_reply>({{.rows_ = std::vector<std::string>({std::string("1")})},
-                       {.column_ = std::string("")},
-                       {},
-                       {.column_ = std::string("")},
-                       {.column_ = std::string("")}}),
-        peer_type::after_startup::idle);
+    peer_type peer(std::vector<peer_type::maria_reply>({{.rows_ = std::vector<std::string>({std::string("1")})}, {.column_ = std::string("")}, {}, {.column_ = std::string("")}, {.column_ = std::string("")}}), peer_type::after_startup::idle);
     check_unverifiable_history(peer, ruvia::db_driver::mariadb, {});
 }
 
 TEST(Ruvia, db_migrator_applies_and_records_mariadb_migrations_on_the_callers_loop) {
     using peer_type = ruvia::test::backend_startup_peer;
     const std::array migrations{ruvia::db_migration({.id_ = "001", .sql_ = "CREATE TABLE IF NOT EXISTS t(id INT)"})};
-    peer_type peer(std::vector<peer_type::maria_reply>({{.rows_ = {"1"}},
-                       {.column_ = ""},
-                       {.rows_ = {"1"}},
-                       {.column_ = "checksum"},
-                       {.column_ = ""},
-                       {.column_ = "", .affected_rows_ = 1},
-                       {.column_ = ""}}),
-        peer_type::after_startup::idle);
+    peer_type peer(std::vector<peer_type::maria_reply>({{.rows_ = {"1"}}, {.column_ = ""}, {.rows_ = {"1"}}, {.column_ = "checksum"}, {.column_ = ""}, {.column_ = "", .affected_rows_ = 1}, {.column_ = ""}}), peer_type::after_startup::idle);
     const auto report = ruvia::test::run_db_migration(scripted_config(peer, ruvia::db_driver::mariadb), migrations);
     ASSERT_EQ(report.applied().size(), std::size_t{1});
     EXPECT_EQ(report.applied()[0], "001");
@@ -1479,8 +1362,7 @@ TEST(Ruvia, db_migrator_mariadb_run_ends_on_cancellation_and_timeout) {
     using peer_type = ruvia::test::backend_startup_peer;
     for (const bool cancel : {true, false}) {
         SCOPED_TRACE(cancel ? "cancelled" : "timed out");
-        peer_type peer(std::vector<peer_type::maria_reply>({{.rows_ = {"1"}, .hold_ = 1}}),
-            peer_type::after_startup::idle);
+        peer_type peer(std::vector<peer_type::maria_reply>({{.rows_ = {"1"}, .hold_ = 1}}), peer_type::after_startup::idle);
         ruvia::stop_source stop;
         const auto lock_requested = [&] {
             for (const auto& command : peer.maria_commands()) {
@@ -1491,8 +1373,7 @@ TEST(Ruvia, db_migrator_mariadb_run_ends_on_cancellation_and_timeout) {
             return false;
         };
         const auto started = std::chrono::steady_clock::now();
-        const auto code = cancel ? interrupted_migration(scripted_config(peer, ruvia::db_driver::mariadb), {.stop_token_ = stop.token()}, &stop, lock_requested)
-                                 : interrupted_migration(scripted_config(peer, ruvia::db_driver::mariadb), {.timeout_ = std::chrono::milliseconds(200)}, nullptr, lock_requested);
+        const auto code = cancel ? interrupted_migration(scripted_config(peer, ruvia::db_driver::mariadb), {.stop_token_ = stop.token()}, &stop, lock_requested) : interrupted_migration(scripted_config(peer, ruvia::db_driver::mariadb), {.timeout_ = std::chrono::milliseconds(200)}, nullptr, lock_requested);
         EXPECT_TRUE(code == (cancel ? ruvia::db_error::code_type::cancelled : ruvia::db_error::code_type::timeout));
         EXPECT_TRUE(std::chrono::steady_clock::now() - started < std::chrono::seconds(5));
         // Answering the held lock only reaches a connection the run closed.

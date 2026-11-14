@@ -41,7 +41,6 @@
 #ifdef _WIN32
 #include <winsock2.h>
 
-#include <asio/ip/tcp.hpp>
 #else
 #include <asio/posix/stream_descriptor.hpp>
 #endif
@@ -92,8 +91,7 @@ public:
                 return;
             }
             context_ = EVP_MD_CTX_new();
-            if (context_ == nullptr || EVP_DigestInit_ex(context_, EVP_sha256(), nullptr) != 1 ||
-                (buffered_ != 0 && EVP_DigestUpdate(context_, buffer_.data(), buffered_) != 1)) {
+            if (context_ == nullptr || EVP_DigestInit_ex(context_, EVP_sha256(), nullptr) != 1 || (buffered_ != 0 && EVP_DigestUpdate(context_, buffer_.data(), buffered_) != 1)) {
                 throw_digest_failure();
             }
         }
@@ -165,24 +163,20 @@ struct prepared_db_statement final {
 // are encoded for the client library.
 void validate_db_sql_text(std::string_view sql);
 
-[[nodiscard]] prepared_db_statement prepare_db_statement(
-    std::string_view sql, std::span<const db_value> params);
+[[nodiscard]] prepared_db_statement prepare_db_statement(std::string_view sql, std::span<const db_value> params);
 
 // PostgreSQL NOTIFY as a pg_notify() call, so channel and payload travel as
 // bound parameters rather than as SQL text.
-[[nodiscard]] prepared_db_statement prepare_db_notify(
-    std::string_view channel, std::string_view payload);
+[[nodiscard]] prepared_db_statement prepare_db_notify(std::string_view channel, std::string_view payload);
 
 namespace detail {
 
-[[nodiscard]] inline db_value clone_db_value_for_resource(
-    const db_value& value) {
+[[nodiscard]] inline db_value clone_db_value_for_resource(const db_value& value) {
     switch (value.type()) {
         case db_value_type::null:
             return db_value(nullptr);
         case db_value_type::string:
-            return db_value_access::owned_string(
-                std::string(value.text()));
+            return db_value_access::owned_string(std::string(value.text()));
         case db_value_type::signed_value:
             return db_value(value.signed_value());
         case db_value_type::unsigned_value:
@@ -195,8 +189,7 @@ namespace detail {
     return db_value(nullptr);
 }
 
-[[nodiscard]] inline std::vector<db_value> clone_db_values(
-    std::span<const db_value> values) {
+[[nodiscard]] inline std::vector<db_value> clone_db_values(std::span<const db_value> values) {
     std::vector<db_value> output;
     output.reserve(values.size());
     for (const auto& value : values) {
@@ -243,25 +236,21 @@ struct db_query_step final {
 struct db_query_plan final {
     db_query_step first_;
     std::optional<db_query_step> second_;
-    [[nodiscard]] static db_query_plan prepare(
-        const db_query& query, const db_query* count, const db_query_backend& backend);
+    [[nodiscard]] static db_query_plan prepare(const db_query& query, const db_query* count, const db_query_backend& backend);
 };
 
 template <bool with_count>
 using db_query_result = std::conditional_t<with_count, std::pair<db_rows, db_rows>, db_rows>;
 
 template <bool with_count>
-[[nodiscard]] task<db_query_result<with_count>> execute_db_query_plan(
-    db_query_plan plan, db_query_backend backend, operation_options options);
+[[nodiscard]] task<db_query_result<with_count>> execute_db_query_plan(db_query_plan plan, db_query_backend backend, operation_options options);
 
 // Runs one statement on the backend without a cache. `options` is owned by the
 // awaiting frame, which must outlive the returned task; a pooled statement
 // takes it over, a transaction statement borrows it.
-[[nodiscard]] task<db_rows> query_db_backend(const db_query_backend& backend, std::string sql,
-    std::vector<db_value> params, operation_options& options);
+[[nodiscard]] task<db_rows> query_db_backend(const db_query_backend& backend, std::string sql, std::vector<db_value> params, operation_options& options);
 
-[[nodiscard]] inline operation_options db_remaining_options(
-    const operation_options& base, const operation_deadline& timeout) {
+[[nodiscard]] inline operation_options db_remaining_options(const operation_options& base, const operation_deadline& timeout) {
     auto result_value = base;
     result_value.timeout_ = timeout.timeout();
     return result_value;
@@ -348,8 +337,7 @@ inline void append_db_string_literal(std::string& output, std::string_view value
     }
     output.reserve(output.size() + 3U + value.size());
     output += "E'";
-    for (auto at = value.find_first_of("'\\"); at != std::string_view::npos;
-        at = value.find_first_of("'\\")) {
+    for (auto at = value.find_first_of("'\\"); at != std::string_view::npos; at = value.find_first_of("'\\")) {
         output.append(value.data(), at + 1);
         output.push_back(value[at]);
         value.remove_prefix(at + 1);
@@ -410,8 +398,7 @@ enum class db_sql_type_usage : std::uint8_t { column,
 void append_db_expression(std::string& output, db_expression expression, db_driver driver);
 
 template <typename contains_fn_type>
-[[nodiscard]] inline std::string_view select_db_dollar_delimiter(
-    std::array<char, 32>& delimiter_buf, contains_fn_type&& contains_delimiter) noexcept {
+[[nodiscard]] inline std::string_view select_db_dollar_delimiter(std::array<char, 32>& delimiter_buf, contains_fn_type&& contains_delimiter) noexcept {
     std::string_view delimiter = "$ruvia$";
     for (std::uint64_t suffix = 1; contains_delimiter(delimiter); ++suffix) {
         std::string_view("$ruvia").copy(delimiter_buf.data(), 6);
@@ -428,10 +415,9 @@ template <typename contains_fn_type>
 
 inline void append_db_dollar_body(std::string& output, std::string_view body) {
     std::array<char, 32> delimiter_buf;
-    const auto delimiter = select_db_dollar_delimiter(
-        delimiter_buf, [body](std::string_view candidate) noexcept {
-            return body.find(candidate) != std::string_view::npos;
-        });
+    const auto delimiter = select_db_dollar_delimiter(delimiter_buf, [body](std::string_view candidate) noexcept {
+        return body.find(candidate) != std::string_view::npos;
+    });
     output.reserve(output.size() + delimiter.size() * 2U + body.size());
     output.append(delimiter);
     output.append(body);
@@ -477,9 +463,7 @@ inline void append_db_perform_statement(std::string& output, db_expression expre
     append_db_expression(output, expression, db_driver::postgresql);
 }
 
-inline void append_db_type_name(std::string& output, db_data_type type,
-    std::string_view custom_name, std::size_t length, unsigned precision, unsigned scale,
-    bool array_value, db_driver driver, db_sql_type_usage usage = db_sql_type_usage::column) {
+inline void append_db_type_name(std::string& output, db_data_type type, std::string_view custom_name, std::size_t length, unsigned precision, unsigned scale, bool array_value, db_driver driver, db_sql_type_usage usage = db_sql_type_usage::column) {
     require_db_dialect(driver);
     const bool pg = driver == db_driver::postgresql;
     if ((array_value || !custom_name.empty()) && !pg) {
@@ -677,13 +661,13 @@ struct db_stored_type final {
     db_stored_type& operator=(const db_stored_type&) = default;
     db_stored_type(db_stored_type&&) noexcept = default;
     db_stored_type& operator=(db_stored_type&&) noexcept = default;
-    db_stored_type(const db_type_definition& source_value)
-        : data_type_(source_value.data_type_),
-          custom_name_(source_value.custom_name_),
-          length_(source_value.length_),
-          precision_(source_value.precision_),
-          scale_(source_value.scale_),
-          array_(source_value.array_) {}
+    db_stored_type(const db_type_definition& source_value) :
+        data_type_(source_value.data_type_),
+        custom_name_(source_value.custom_name_),
+        length_(source_value.length_),
+        precision_(source_value.precision_),
+        scale_(source_value.scale_),
+        array_(source_value.array_) {}
     db_data_type data_type_{db_data_type::inferred};
     std::string custom_name_;
     std::size_t length_{0};
@@ -697,37 +681,37 @@ struct db_stored_order final {
     db_nulls_order nulls_{db_nulls_order::default_value};
 };
 struct db_stored_named_argument final {
-    db_stored_named_argument(std::string_view name, std::size_t expression)
-        : name_(name),
-          expression_(expression) {}
+    db_stored_named_argument(std::string_view name, std::size_t expression) :
+        name_(name),
+        expression_(expression) {}
     std::string name_;
     std::size_t expression_;
 };
 
 struct db_query_node final {
-    db_query_node(db_node_kind kind)
-        : kind_(kind),
-          value_(nullptr) {}
-    db_query_node(db_node_kind kind, db_value&& value)
-        : kind_(kind),
-          value_(std::move(value)) {}
-    db_query_node(const db_query_node& source_value)
-        : kind_(source_value.kind_),
-          value_(db_value(source_value.value_)),
-          text_(source_value.text_),
-          qualifier_(source_value.qualifier_),
-          args_(source_value.args_),
-          orders_(source_value.orders_),
-          type_(source_value.type_),
-          binary_(source_value.binary_),
-          unary_(source_value.unary_),
-          date_part_(source_value.date_part_),
-          left_(source_value.left_),
-          right_(source_value.right_),
-          query_(source_value.query_),
-          flag_(source_value.flag_),
-          explicit_alias_(source_value.explicit_alias_),
-          frame_(source_value.frame_) {
+    db_query_node(db_node_kind kind) :
+        kind_(kind),
+        value_(nullptr) {}
+    db_query_node(db_node_kind kind, db_value&& value) :
+        kind_(kind),
+        value_(std::move(value)) {}
+    db_query_node(const db_query_node& source_value) :
+        kind_(source_value.kind_),
+        value_(db_value(source_value.value_)),
+        text_(source_value.text_),
+        qualifier_(source_value.qualifier_),
+        args_(source_value.args_),
+        orders_(source_value.orders_),
+        type_(source_value.type_),
+        binary_(source_value.binary_),
+        unary_(source_value.unary_),
+        date_part_(source_value.date_part_),
+        left_(source_value.left_),
+        right_(source_value.right_),
+        query_(source_value.query_),
+        flag_(source_value.flag_),
+        explicit_alias_(source_value.explicit_alias_),
+        frame_(source_value.frame_) {
         named_.reserve(source_value.named_.size());
         for (const auto& argument : source_value.named_) {
             named_.emplace_back(argument.name_, argument.expression_);
@@ -756,19 +740,17 @@ struct db_query_node final {
 // AND and OR are associative, so a left-deep chain of one of them (as built
 // by and_where/or_where or `p = std::move(p) && q`) is a single nesting level
 // for import and compilation. True when `child` continues `parent`'s chain.
-[[nodiscard]] inline bool continues_logical_chain(
-    const std::vector<db_query_node>& nodes, const db_query_node& parent, std::size_t child) noexcept {
-    if (parent.kind_ != db_node_kind::binary || child == no_db_node ||
-        (parent.binary_ != db_binary_operator::and_value && parent.binary_ != db_binary_operator::or_value)) {
+[[nodiscard]] inline bool continues_logical_chain(const std::vector<db_query_node>& nodes, const db_query_node& parent, std::size_t child) noexcept {
+    if (parent.kind_ != db_node_kind::binary || child == no_db_node || (parent.binary_ != db_binary_operator::and_value && parent.binary_ != db_binary_operator::or_value)) {
         return false;
     }
     const auto& node = nodes[child];
     return node.kind_ == db_node_kind::binary && node.binary_ == parent.binary_;
 }
 struct db_stored_source_column final {
-    db_stored_source_column(const db_source_column& source_value)
-        : name_(source_value.name_),
-          type_(source_value.type_) {}
+    db_stored_source_column(const db_source_column& source_value) :
+        name_(source_value.name_),
+        type_(source_value.type_) {}
     db_stored_source_column(const db_stored_source_column&) = default;
     db_stored_source_column& operator=(const db_stored_source_column&) = default;
     db_stored_source_column(db_stored_source_column&&) noexcept = default;
@@ -798,50 +780,48 @@ struct db_query_source final {
         return source_value.alias_ == name;
     }
     const std::string_view table = source_value.name_;
-    return table == name ||
-           (table.size() > name.size() && table.ends_with(name) && table[table.size() - name.size() - 1] == '.');
+    return table == name || (table.size() > name.size() && table.ends_with(name) && table[table.size() - name.size() - 1] == '.');
 }
 struct db_stored_join final {
-    db_stored_join(db_join_type type, db_query_source source_value, std::size_t on)
-        : type_(type),
-          source_(std::move(source_value)),
-          on_(on) {}
-    db_stored_join(const db_stored_join& source_value)
-        : type_(source_value.type_),
-          source_(source_value.source_),
-          on_(source_value.on_),
-          using_columns_(source_value.using_columns_) {}
+    db_stored_join(db_join_type type, db_query_source source_value, std::size_t on) :
+        type_(type),
+        source_(std::move(source_value)),
+        on_(on) {}
+    db_stored_join(const db_stored_join& source_value) :
+        type_(source_value.type_),
+        source_(source_value.source_),
+        on_(source_value.on_),
+        using_columns_(source_value.using_columns_) {}
     db_join_type type_;
     db_query_source source_;
     std::size_t on_{no_db_node};
     std::vector<std::string> using_columns_;
 };
 struct db_stored_assignment final {
-    db_stored_assignment(std::string_view column, std::size_t expression)
-        : column_(column),
-          expression_(expression) {}
+    db_stored_assignment(std::string_view column, std::size_t expression) :
+        column_(column),
+        expression_(expression) {}
     std::string column_;
     std::size_t expression_;
 };
 struct db_stored_cte final {
     template <class column_range>
-    db_stored_cte(std::string_view name, std::size_t query, bool recursive, db_materialization materialization,
-        const column_range& columns)
-        : name_(name),
-          query_(query),
-          recursive_(recursive),
-          materialization_(materialization) {
+    db_stored_cte(std::string_view name, std::size_t query, bool recursive, db_materialization materialization, const column_range& columns) :
+        name_(name),
+        query_(query),
+        recursive_(recursive),
+        materialization_(materialization) {
         columns_.reserve(std::ranges::size(columns));
         for (const auto& column : columns) {
             columns_.emplace_back(std::string_view(column));
         }
     }
-    db_stored_cte(const db_stored_cte& source_value)
-        : name_(source_value.name_),
-          query_(source_value.query_),
-          recursive_(source_value.recursive_),
-          materialization_(source_value.materialization_),
-          columns_(source_value.columns_) {}
+    db_stored_cte(const db_stored_cte& source_value) :
+        name_(source_value.name_),
+        query_(source_value.query_),
+        recursive_(source_value.recursive_),
+        materialization_(source_value.materialization_),
+        columns_(source_value.columns_) {}
     std::string name_;
     std::size_t query_;
     bool recursive_{false};
@@ -867,10 +847,10 @@ struct db_stored_conflict final {
     bool any_unique_key_{false};
 };
 struct db_stored_lock final {
-    db_stored_lock(const db_lock_options& source_value)
-        : mode_(source_value.mode_),
-          nowait_(source_value.nowait_),
-          skip_locked_(source_value.skip_locked_) {
+    db_stored_lock(const db_lock_options& source_value) :
+        mode_(source_value.mode_),
+        nowait_(source_value.nowait_),
+        skip_locked_(source_value.skip_locked_) {
         tables_.reserve(source_value.tables_.size());
         for (const auto& table : source_value.tables_) {
             tables_.emplace_back(table);
@@ -1000,9 +980,9 @@ struct db_slot_socket final {
     // no outstanding operation still borrows the awaiter.
     class readiness_awaiter final {
     public:
-        readiness_awaiter(db_slot_socket& socket, db_socket_readiness wanted) noexcept
-            : socket_(socket),
-              wanted_(wanted) {}
+        readiness_awaiter(db_slot_socket& socket, db_socket_readiness wanted) noexcept :
+            socket_(socket),
+            wanted_(wanted) {}
 
         [[nodiscard]] bool await_ready() const noexcept {
             return false;
@@ -1075,8 +1055,8 @@ public:
 private:
     friend validated_db_config_view validated_db_config(const db_config& config);
 
-    explicit validated_db_config_view(const db_config& config) noexcept
-        : config_(&config) {}
+    explicit validated_db_config_view(const db_config& config) noexcept :
+        config_(&config) {}
 
     const db_config* config_;
 };
@@ -1125,17 +1105,14 @@ inline void validate_db_config(const db_config& config) {
 
     validate_client_origin_host(config.host_, "database host must not be empty", "database host is invalid");
     // Both drivers pass these to C APIs as NUL-terminated strings.
-    for (const std::string_view value : {std::string_view{config.username_}, std::string_view{config.password_},
-             std::string_view{config.database_}}) {
+    for (const std::string_view value : {std::string_view{config.username_}, std::string_view{config.password_}, std::string_view{config.database_}}) {
         if (value.find('\0') != std::string_view::npos) {
             throw std::invalid_argument("database credentials must not contain NUL bytes");
         }
     }
     detail::ensure_non_zero_port(configured_db_port(config), "database port must not be zero");
     detail::ensure_positive_size(config.pool_size_per_worker_, "database pool size must be greater than zero");
-    detail::ensure_positive_optional_durations("configured database timeouts must be greater than zero",
-        config.connect_timeout_, config.read_timeout_, config.write_timeout_, config.query_timeout_,
-        config.acquire_timeout_, config.transaction_timeout_);
+    detail::ensure_positive_optional_durations("configured database timeouts must be greater than zero", config.connect_timeout_, config.read_timeout_, config.write_timeout_, config.query_timeout_, config.acquire_timeout_, config.transaction_timeout_);
 }
 
 [[nodiscard]] inline validated_db_config_view validated_db_config(const db_config& config) {
@@ -1149,11 +1126,11 @@ validated_db_config_view validated_db_config(const db_config&&) = delete;
 #ifdef RUVIA_ENABLE_REDIS
 struct db_cache_config_storage final {
     template <typename config_type>
-    db_cache_config_storage(const config_type& source_value)
-        : duration_(source_value.duration_),
-          always_enabled_(source_value.always_enabled_),
-          ignore_errors_(source_value.ignore_errors_),
-          key_prefix_(source_value.key_prefix_) {
+    db_cache_config_storage(const config_type& source_value) :
+        duration_(source_value.duration_),
+        always_enabled_(source_value.always_enabled_),
+        ignore_errors_(source_value.ignore_errors_),
+        key_prefix_(source_value.key_prefix_) {
         if (duration_.count() <= 0 || key_prefix_.empty()) {
             throw std::invalid_argument("database cache requires a positive duration and nonempty namespace");
         }
@@ -1168,15 +1145,15 @@ struct db_cache_config_storage final {
 // Worker/app-owned copy of the public startup configuration. Retained runtime
 // state is explicitly rebound to its owning PMR domain here.
 struct db_config_storage final {
-    db_config_storage(const db_config& source_value)
-        : db_config_storage(validated_db_config(source_value)) {}
+    db_config_storage(const db_config& source_value) :
+        db_config_storage(validated_db_config(source_value)) {}
 
-    db_config_storage(validated_db_config_view source_value)
-        : db_config_storage(validated_config_tag_type{}, source_value.get()) {}
+    db_config_storage(validated_db_config_view source_value) :
+        db_config_storage(validated_config_tag_type{}, source_value.get()) {}
 
     db_config_storage(db_config_storage&&) noexcept = default;
-    db_config_storage(const db_config_storage& source_value)
-        : db_config_storage(validated_config_tag_type{}, source_value) {}
+    db_config_storage(const db_config_storage& source_value) :
+        db_config_storage(validated_config_tag_type{}, source_value) {}
 
     db_driver driver_{db_driver::unspecified};
     std::string host_;
@@ -1213,40 +1190,38 @@ private:
     [[nodiscard]] static bool resolved_reconnect(const db_config_storage& source) noexcept {
         return source.reconnect_;
     }
-    [[nodiscard]] static client_tls_config_storage tls_storage(
-        const db_config& source) {
+    [[nodiscard]] static client_tls_config_storage tls_storage(const db_config& source) {
         return {source.tls_, client_tls_files::keep_paths};
     }
-    [[nodiscard]] static client_tls_config_storage tls_storage(
-        const db_config_storage& source) {
+    [[nodiscard]] static client_tls_config_storage tls_storage(const db_config_storage& source) {
         return {source.tls_};
     }
 
     template <typename source_type>
         requires(std::same_as<source_type, db_config> || std::same_as<source_type, db_config_storage>)
-    db_config_storage(validated_config_tag_type, const source_type& source_value)
-        : driver_(source_value.driver_),
-          host_(source_value.host_),
-          port_(resolved_port(source_value)),
-          username_(source_value.username_),
-          password_(source_value.password_),
-          tls_(tls_storage(source_value)),
-          database_(source_value.database_),
-          pool_size_per_worker_(source_value.pool_size_per_worker_),
-          connect_timeout_(source_value.connect_timeout_),
-          read_timeout_(source_value.read_timeout_),
-          write_timeout_(source_value.write_timeout_),
-          query_timeout_(source_value.query_timeout_),
-          acquire_timeout_(source_value.acquire_timeout_),
-          transaction_timeout_(source_value.transaction_timeout_),
-          reconnect_(resolved_reconnect(source_value)) {}
+    db_config_storage(validated_config_tag_type, const source_type& source_value) :
+        driver_(source_value.driver_),
+        host_(source_value.host_),
+        port_(resolved_port(source_value)),
+        username_(source_value.username_),
+        password_(source_value.password_),
+        tls_(tls_storage(source_value)),
+        database_(source_value.database_),
+        pool_size_per_worker_(source_value.pool_size_per_worker_),
+        connect_timeout_(source_value.connect_timeout_),
+        read_timeout_(source_value.read_timeout_),
+        write_timeout_(source_value.write_timeout_),
+        query_timeout_(source_value.query_timeout_),
+        acquire_timeout_(source_value.acquire_timeout_),
+        transaction_timeout_(source_value.transaction_timeout_),
+        reconnect_(resolved_reconnect(source_value)) {}
 };
 
 #ifdef RUVIA_ENABLE_REDIS
 struct db_query_cache_registration_storage final {
-    db_query_cache_registration_storage(const db_query_cache_registration& source_value)
-        : redis_alias_(source_value.redis_alias_),
-          policy_(source_value.policy_) {
+    db_query_cache_registration_storage(const db_query_cache_registration& source_value) :
+        redis_alias_(source_value.redis_alias_),
+        policy_(source_value.policy_) {
         validate_capability_alias(redis_alias_, "database query cache Redis alias must not be empty");
     }
     std::string redis_alias_;
@@ -1357,8 +1332,7 @@ class db_pipeline_member final {
 public:
     using state_type = db_pipeline_state<io_type>;
 
-    db_pipeline_member(
-        state_type& state, db_rows* rows, const stop_token& stop_token_value);
+    db_pipeline_member(state_type& state, db_rows* rows, const stop_token& stop_token_value);
     ~db_pipeline_member();
 
     db_pipeline_member(const db_pipeline_member&) = delete;
@@ -1628,8 +1602,8 @@ public:
         bool repeated_{false};
     };
 
-    db_statement_cache()
-        : entries_() {}
+    db_statement_cache() :
+        entries_() {}
 
     // Counts a use of the statement. A cached one is returned. One used
     // before is inserted when the caller `may_insert` it now, with the payload
@@ -1637,14 +1611,12 @@ public:
     // failed allocation leaves every entry intact. Otherwise the use is
     // remembered and nothing returned.
     template <typename factory_type>
-    [[nodiscard]] lookup find(
-        std::string_view sql, std::span<const unsigned int> types, bool may_insert, factory_type&& make) {
+    [[nodiscard]] lookup find(std::string_view sql, std::span<const unsigned int> types, bool may_insert, factory_type&& make) {
         const auto hash = key_hash(sql, types);
         ++clock_;
         const auto cached = entry_index_.find(hash, [&](std::size_t index) noexcept {
             const auto& existing = entries_[index];
-            return existing.generation_ != 0 && existing.hash_ == hash && existing.sql_ == sql &&
-                   std::ranges::equal(existing.types_, types);
+            return existing.generation_ != 0 && existing.hash_ == hash && existing.sql_ == sql && std::ranges::equal(existing.types_, types);
         });
         if (cached.has_value()) {
             auto& existing = entries_[*cached];
@@ -1667,8 +1639,7 @@ public:
         std::string key_sql(sql);
         std::vector<unsigned int> key_types(types.begin(), types.end());
         std::optional<payload_type> created_payload;
-        if constexpr (std::is_invocable_v<factory_type, std::string_view, std::span<const unsigned int>,
-                          std::size_t>) {
+        if constexpr (std::is_invocable_v<factory_type, std::string_view, std::span<const unsigned int>, std::size_t>) {
             created_payload = make(sql, types, hash);
             if (!created_payload.has_value()) {
                 return {std::nullopt, false, std::nullopt, hash, true};
@@ -1690,7 +1661,9 @@ public:
                 // Only a full table evicts a statement the server still holds.
                 const auto oldest = std::ranges::min_element(entries_, {}, &entry::last_use_);
                 index = static_cast<std::size_t>(oldest - entries_.begin());
-                entry_index_.erase(index, oldest->hash_, [this](std::size_t position) noexcept { return entries_[position].hash_; });
+                entry_index_.erase(index, oldest->hash_, [this](std::size_t position) noexcept {
+                    return entries_[position].hash_;
+                });
                 evicted.emplace(std::move(oldest->payload_));
             }
             auto& reused = entries_[index];
@@ -1701,8 +1674,7 @@ public:
             reused.generation_ = next_generation;
             reused.payload_ = std::move(*created_payload);
         } else {
-            entries_.push_back(
-                entry{std::move(key_sql), std::move(key_types), hash, clock_, next_generation, std::move(*created_payload)});
+            entries_.push_back(entry{std::move(key_sql), std::move(key_types), hash, clock_, next_generation, std::move(*created_payload)});
         }
         entry_index_.insert(index, hash);
         clear_first_use(*first_use_index, hash);
@@ -1734,7 +1706,9 @@ public:
             return std::nullopt;
         }
         const auto old_hash = found->hash_;
-        entry_index_.erase(statement.index_, old_hash, [this](std::size_t index) noexcept { return entries_[index].hash_; });
+        entry_index_.erase(statement.index_, old_hash, [this](std::size_t index) noexcept {
+            return entries_[index].hash_;
+        });
         found->generation_ = 0;
         if (use_again) {
             remember(old_hash);
@@ -1852,11 +1826,15 @@ private:
     };
 
     [[nodiscard]] std::optional<std::size_t> find_first_use(std::size_t hash) const noexcept {
-        return first_use_index_.find(hash, [&](std::size_t position) noexcept { return first_uses_[position] == hash; });
+        return first_use_index_.find(hash, [&](std::size_t position) noexcept {
+            return first_uses_[position] == hash;
+        });
     }
 
     void clear_first_use(std::size_t position, std::size_t hash) noexcept {
-        first_use_index_.erase(position, hash, [this](std::size_t stored) noexcept { return first_uses_[stored]; });
+        first_use_index_.erase(position, hash, [this](std::size_t stored) noexcept {
+            return first_uses_[stored];
+        });
         first_uses_[position] = 0;
     }
 
@@ -1866,7 +1844,9 @@ private:
         }
         const auto position = next_first_use_;
         if (first_uses_[position] != 0) {
-            first_use_index_.erase(position, first_uses_[position], [this](std::size_t stored) noexcept { return first_uses_[stored]; });
+            first_use_index_.erase(position, first_uses_[position], [this](std::size_t stored) noexcept {
+                return first_uses_[stored];
+            });
         }
         first_uses_[position] = hash;
         first_use_index_.insert(position, hash);
@@ -1895,10 +1875,8 @@ namespace ruvia::detail {
 // Builds the error for a failed driver call from what libmariadb reports for
 // it. A statement_failed whose cause ended the connection is reported as
 // io_error.
-[[nodiscard]] db_error mariadb_error(std::string_view operation, unsigned int native_code, const char* sql_state,
-    const char* message, db_error::code_type code);
-[[nodiscard]] db_error mysql_error(
-    const st_mysql& connection, std::string_view operation, db_error::code_type code);
+[[nodiscard]] db_error mariadb_error(std::string_view operation, unsigned int native_code, const char* sql_state, const char* message, db_error::code_type code);
+[[nodiscard]] db_error mysql_error(const st_mysql& connection, std::string_view operation, db_error::code_type code);
 
 // A failed command after which the connection cannot carry another one: the
 // client library failed or lost the exchange, or the server ended the session
@@ -1931,8 +1909,7 @@ inline constexpr std::string_view mariadb_charset_query = "SELECT @@character_se
 // mariadb_parameter_traits::has_backslash_); `charset` is needed only where
 // mariadb_escape_needs_charset() says so. A string parameter with a NUL byte is
 // refused: no SQL literal carries one.
-void interpolate_sql(st_mysql& connection, std::string_view sql, std::span<const db_value> params,
-    std::string& output, const ma_charset_info_st* charset = nullptr);
+void interpolate_sql(st_mysql& connection, std::string_view sql, std::span<const db_value> params, std::string& output, const ma_charset_info_st* charset = nullptr);
 
 // What a statement's text tells about how it may run.
 struct mariadb_statement_traits final {
@@ -1982,8 +1959,7 @@ struct mariadb_parameter_traits final {
 // character set right after an ASCII byte; right after another byte a
 // multibyte character set (GBK, Big5, SJIS) may read the two as one character
 // and leave the inserted backslash to escape what follows.
-[[nodiscard]] bool mariadb_escape_needs_charset(
-    const st_mysql& connection, bool has_ambiguous_backslash) noexcept;
+[[nodiscard]] bool mariadb_escape_needs_charset(const st_mysql& connection, bool has_ambiguous_backslash) noexcept;
 
 }  // namespace ruvia::detail
 
@@ -2208,8 +2184,7 @@ struct mariadb_prepared_run final {
 };
 
 // Starts a run for a statement find() returned.
-[[nodiscard]] mariadb_prepared_run start_mariadb_prepared(
-    mariadb_statement_cache& cache, mariadb_statement_cache::entry_ref statement, std::span<const db_value> params) noexcept;
+[[nodiscard]] mariadb_prepared_run start_mariadb_prepared(mariadb_statement_cache& cache, mariadb_statement_cache::entry_ref statement, std::span<const db_value> params) noexcept;
 // Continues a run with the readiness libmariadb waited for (0 to start the
 // current step); returns the next wait mask, or 0 when the caller goes on.
 // A failure that leaves the connection out of step is thrown.
@@ -2222,8 +2197,7 @@ void abandon_mariadb_prepared(mariadb_prepared_run& run) noexcept;
 // What a statement's responses amount to, whichever protocol ran it: its own
 // failure, a second row set, a failure to keep its rows, or a row set the
 // caller did (not) ask for; null when it succeeded.
-[[nodiscard]] std::exception_ptr mariadb_statement_failure(const std::exception_ptr& failure, bool extra_row_set,
-    const std::exception_ptr& output_failure, bool returns_rows, bool returned_rows);
+[[nodiscard]] std::exception_ptr mariadb_statement_failure(const std::exception_ptr& failure, bool extra_row_set, const std::exception_ptr& output_failure, bool returns_rows, bool returned_rows);
 
 }  // namespace ruvia::detail
 
@@ -2326,8 +2300,8 @@ struct mariadb_pipeline_io final {
     using flight_type = mariadb_flight;
 
     struct group_state final {
-        group_state()
-            : send_buffer_() {}
+        group_state() :
+            send_buffer_() {}
 
         // Frees a stored result nobody took; called whenever the group's
         // flights clear, which every group does before its slot goes away.
@@ -2376,8 +2350,7 @@ struct mariadb_pipeline_io final {
     [[nodiscard]] static statement_type prepare(std::string_view sql, std::span<const db_value> params);
     [[nodiscard]] static db_slot_socket::native_socket_type socket(pool_type& pool, std::size_t slot);
     static void open(state_type& state, std::size_t slot);
-    [[nodiscard]] static bool queue(
-        state_type& state, std::size_t slot, member_type& member, statement_type& statement, flight_type& flight);
+    [[nodiscard]] static bool queue(state_type& state, std::size_t slot, member_type& member, statement_type& statement, flight_type& flight);
     [[nodiscard]] static bool advance(state_type& state, std::size_t slot, member_type& reader);
     [[nodiscard]] static db_socket_readiness wanted(pool_type& pool, std::size_t slot) noexcept;
     static void exchange(state_type& state, std::size_t slot, db_socket_readiness ready);
@@ -2405,8 +2378,7 @@ struct pg_result;
 namespace ruvia::detail {
 // Builds the error for a failed libpq call or result. A statement_failed on a
 // connection libpq has marked bad is reported as io_error.
-[[nodiscard]] db_error postgresql_error(const pg_conn& connection, std::string_view operation,
-    db_error::code_type code, const pg_result* result = nullptr);
+[[nodiscard]] db_error postgresql_error(const pg_conn& connection, std::string_view operation, db_error::code_type code, const pg_result* result = nullptr);
 
 // Parameters are sent in text format. A double declares float8 so the server
 // never infers an integer type from an integral value; every other parameter
@@ -2469,8 +2441,7 @@ struct postgresql_params final {
 using postgresql_statement_name = std::array<char, 39>;
 using postgresql_statement_cache = db_statement_cache<postgresql_statement_name>;
 
-[[nodiscard]] postgresql_statement_name make_postgresql_statement_name(
-    std::string_view sql, std::span<const unsigned int> types);
+[[nodiscard]] postgresql_statement_name make_postgresql_statement_name(std::string_view sql, std::span<const unsigned int> types);
 
 template <typename driver_type>
 class db_pool;
@@ -2530,9 +2501,9 @@ struct postgresql_pipeline_io final {
 
     // The statement text, kept by its caller, and its encoded parameters.
     struct statement_type final {
-        statement_type(std::string_view sql, std::span<const db_value> params)
-            : sql_(sql),
-              encoded_(params) {}
+        statement_type(std::string_view sql, std::span<const db_value> params) :
+            sql_(sql),
+            encoded_(params) {}
 
         std::string_view sql_;
         postgresql_params encoded_;
@@ -2542,8 +2513,7 @@ struct postgresql_pipeline_io final {
     // The connection's socket for a wait; throws when it has none.
     [[nodiscard]] static db_slot_socket::native_socket_type socket(pool_type& pool, std::size_t slot);
     static void open(state_type& state, std::size_t slot);
-    [[nodiscard]] static bool queue(
-        state_type& state, std::size_t slot, member_type& member, statement_type& statement, flight_type& flight);
+    [[nodiscard]] static bool queue(state_type& state, std::size_t slot, member_type& member, statement_type& statement, flight_type& flight);
     [[nodiscard]] static bool advance(state_type& state, std::size_t slot, member_type& reader);
     [[nodiscard]] static db_socket_readiness wanted(pool_type& pool, std::size_t slot) noexcept;
     static void exchange(state_type& state, std::size_t slot, db_socket_readiness ready);
@@ -2572,16 +2542,14 @@ namespace ruvia::detail {
 
 using db_resolved_addresses_type = std::vector<std::string>;
 
-[[nodiscard]] db_resolved_addresses_type collect_db_resolved_addresses(
-    const client_resolve_result& results, db_driver driver);
+[[nodiscard]] db_resolved_addresses_type collect_db_resolved_addresses(const client_resolve_result& results, db_driver driver);
 
 // Connector/C accepts comma-separated hosts and performs failover only while
 // opening the transport. IPv6 literals in a multi-host list must be bracketed
 // so their colons are not parsed as a per-host port separator; a lone IPv6
 // literal remains unbracketed because Connector/C only invokes that list parser
 // when a comma is present.
-[[nodiscard]] std::string make_mariadb_resolved_host_list(
-    std::span<const std::string> addresses);
+[[nodiscard]] std::string make_mariadb_resolved_host_list(std::span<const std::string> addresses);
 
 struct postgresql_resolved_host_list final {
     std::string hosts_;
@@ -2591,8 +2559,7 @@ struct postgresql_resolved_host_list final {
 // libpq requires host and hostaddr lists to contain the same number of items.
 // Repeating the logical hostname preserves TLS/GSS/password-file identity while
 // the numeric hostaddr list suppresses libpq's blocking DNS lookup.
-[[nodiscard]] postgresql_resolved_host_list make_postgresql_resolved_host_list(
-    std::string_view logical_host, std::span<const std::string> addresses);
+[[nodiscard]] postgresql_resolved_host_list make_postgresql_resolved_host_list(std::string_view logical_host, std::span<const std::string> addresses);
 
 enum class db_deadline_kind : std::uint8_t {
     resolve,
@@ -2672,14 +2639,10 @@ struct mariadb_driver final {
     static void close_connection(connection_type& connection) noexcept;
     [[nodiscard]] static bool reusable_connection(connection_type& connection) noexcept;
     [[nodiscard]] static bool idle_connection_alive(connection_type& connection) noexcept;
-    static task<db_rows> query(pool_type& pool, std::size_t slot, std::string_view sql,
-        std::span<const db_value> params, const operation_deadline& deadline);
-    static task<db_exec_result> execute(pool_type& pool, std::size_t slot, std::string_view sql,
-        std::span<const db_value> params, const operation_deadline& deadline);
-    static task<db_stream_start> start_stream(pool_type& pool, std::size_t slot, std::string_view sql,
-        std::span<const db_value> params, const operation_deadline& deadline);
-    static task<db_stream_step> read_stream_row(pool_type& pool, std::size_t slot, void*& result,
-        std::vector<db_field>& fields, std::vector<std::string>& column_names, const operation_deadline& deadline);
+    static task<db_rows> query(pool_type& pool, std::size_t slot, std::string_view sql, std::span<const db_value> params, const operation_deadline& deadline);
+    static task<db_exec_result> execute(pool_type& pool, std::size_t slot, std::string_view sql, std::span<const db_value> params, const operation_deadline& deadline);
+    static task<db_stream_start> start_stream(pool_type& pool, std::size_t slot, std::string_view sql, std::span<const db_value> params, const operation_deadline& deadline);
+    static task<db_stream_step> read_stream_row(pool_type& pool, std::size_t slot, void*& result, std::vector<db_field>& fields, std::vector<std::string>& column_names, const operation_deadline& deadline);
     // Ends a stream before its rows ran out; on return the connection is idle.
     static task<void> close_stream(pool_type& pool, std::size_t slot, void*& result, const operation_deadline& deadline);
     static void discard_stream(void* result) noexcept;
@@ -2698,14 +2661,10 @@ struct postgresql_driver final {
     static void close_connection(connection_type& connection) noexcept;
     [[nodiscard]] static bool reusable_connection(connection_type& connection) noexcept;
     [[nodiscard]] static bool idle_connection_alive(connection_type& connection) noexcept;
-    static task<db_rows> query(pool_type& pool, std::size_t slot, std::string_view sql,
-        std::span<const db_value> params, const operation_deadline& deadline);
-    static task<db_exec_result> execute(pool_type& pool, std::size_t slot, std::string_view sql,
-        std::span<const db_value> params, const operation_deadline& deadline);
-    static task<db_stream_start> start_stream(pool_type& pool, std::size_t slot, std::string_view sql,
-        std::span<const db_value> params, const operation_deadline& deadline);
-    static task<db_stream_step> read_stream_row(pool_type& pool, std::size_t slot, void*& result,
-        std::vector<db_field>& fields, std::vector<std::string>& column_names, const operation_deadline& deadline);
+    static task<db_rows> query(pool_type& pool, std::size_t slot, std::string_view sql, std::span<const db_value> params, const operation_deadline& deadline);
+    static task<db_exec_result> execute(pool_type& pool, std::size_t slot, std::string_view sql, std::span<const db_value> params, const operation_deadline& deadline);
+    static task<db_stream_start> start_stream(pool_type& pool, std::size_t slot, std::string_view sql, std::span<const db_value> params, const operation_deadline& deadline);
+    static task<db_stream_step> read_stream_row(pool_type& pool, std::size_t slot, void*& result, std::vector<db_field>& fields, std::vector<std::string>& column_names, const operation_deadline& deadline);
     // Ends a stream before its rows ran out; on return the connection is idle
     // or closed.
     static task<void> close_stream(pool_type& pool, std::size_t slot, void*& result, const operation_deadline& deadline);
@@ -2717,9 +2676,9 @@ struct postgresql_driver final {
 // continuations and pipeline records address the slot, so it never moves.
 template <typename driver_type>
 struct db_slot final {
-    db_slot(asio::io_context& io_context, const worker_ref& worker)
-        : resolver_(worker),
-          wait_socket_(io_context) {}
+    db_slot(asio::io_context& io_context, const worker_ref& worker) :
+        resolver_(worker),
+        wait_socket_(io_context) {}
 
     ~db_slot() {
         if (wait_active_) {
@@ -2764,8 +2723,8 @@ struct db_slot final {
 template <typename driver_type>
 class db_slot_active_wait_guard final {
 public:
-    explicit db_slot_active_wait_guard(db_slot<driver_type>& slot) noexcept
-        : slot_(slot) {
+    explicit db_slot_active_wait_guard(db_slot<driver_type>& slot) noexcept :
+        slot_(slot) {
         if (slot_.wait_active_) {
             std::terminate();
         }
@@ -2818,25 +2777,17 @@ public:
     // whose deadline passes between operations has its connection closed by
     // the lease timer; its next operation fails with timeout and gives the
     // slot back.
-    task<db_rows> query(std::string sql, std::vector<db_value> params, operation_options options,
-        request_io_metrics* io_metrics = nullptr);
-    task<db_exec_result> execute(std::string sql, std::vector<db_value> params, operation_options options,
-        request_io_metrics* io_metrics = nullptr);
+    task<db_rows> query(std::string sql, std::vector<db_value> params, operation_options options, request_io_metrics* io_metrics = nullptr);
+    task<db_exec_result> execute(std::string sql, std::vector<db_value> params, operation_options options, request_io_metrics* io_metrics = nullptr);
     task<db_stream_result> stream(std::string sql, std::vector<db_value> params, operation_options options);
-    task<std::optional<db_row>> read_stream_row(std::size_t slot, std::vector<db_field>& fields,
-        std::vector<std::string>& column_names,
-        const operation_options& options);
+    task<std::optional<db_row>> read_stream_row(std::size_t slot, std::vector<db_field>& fields, std::vector<std::string>& column_names, const operation_options& options);
     task<void> close_stream(std::size_t slot, const operation_options& options);
     void abort_stream(std::size_t slot) noexcept;
-    task<db_rows> query_on_transaction_slot(std::size_t slot, std::string sql,
-        std::vector<db_value> params, const operation_options& options);
-    task<db_exec_result> execute_on_transaction_slot(std::size_t slot, std::string sql,
-        std::vector<db_value> params, const operation_options& options);
+    task<db_rows> query_on_transaction_slot(std::size_t slot, std::string sql, std::vector<db_value> params, const operation_options& options);
+    task<db_exec_result> execute_on_transaction_slot(std::size_t slot, std::string sql, std::vector<db_value> params, const operation_options& options);
     task<db_transaction> begin_transaction(operation_options operation_options_value, db_transaction_options transaction_options);
-    task<void> commit_transaction(
-        std::size_t slot, const operation_options& options);
-    task<void> rollback_transaction(
-        std::size_t slot, const operation_options& options);
+    task<void> commit_transaction(std::size_t slot, const operation_options& options);
+    task<void> rollback_transaction(std::size_t slot, const operation_options& options);
     void abort_transaction(std::size_t slot) noexcept;
 
     // Services for driver hooks.
@@ -2910,9 +2861,7 @@ public:
     // registration persists across waits.
     class slot_wait final {
     public:
-        slot_wait(db_pool& pool, std::size_t index, db_deadline_kind kind, db_slot_socket::native_socket_type native,
-            db_socket_readiness wanted, std::optional<std::chrono::steady_clock::time_point> wait_deadline,
-            const operation_deadline& operation_deadline_value) noexcept;
+        slot_wait(db_pool& pool, std::size_t index, db_deadline_kind kind, db_slot_socket::native_socket_type native, db_socket_readiness wanted, std::optional<std::chrono::steady_clock::time_point> wait_deadline, const operation_deadline& operation_deadline_value) noexcept;
         ~slot_wait();
 
         slot_wait(const slot_wait&) = delete;
@@ -2934,23 +2883,18 @@ public:
         bool borrowed_{false};
     };
 
-    [[nodiscard]] slot_wait wait_socket(std::size_t index, db_slot_socket::native_socket_type native,
-        db_socket_readiness wanted, std::optional<std::chrono::steady_clock::time_point> wait_deadline,
-        const operation_deadline& operation_deadline_value) noexcept {
+    [[nodiscard]] slot_wait wait_socket(std::size_t index, db_slot_socket::native_socket_type native, db_socket_readiness wanted, std::optional<std::chrono::steady_clock::time_point> wait_deadline, const operation_deadline& operation_deadline_value) noexcept {
         return slot_wait(*this, index, db_deadline_kind::socket, native, wanted, wait_deadline, operation_deadline_value);
     }
-    [[nodiscard]] slot_wait sleep(std::size_t index, std::optional<std::chrono::steady_clock::time_point> wait_deadline,
-        const operation_deadline& operation_deadline_value) noexcept {
-        return slot_wait(*this, index, db_deadline_kind::sleep, db_slot_socket::invalid_socket,
-            db_socket_readiness::none, wait_deadline, operation_deadline_value);
+    [[nodiscard]] slot_wait sleep(std::size_t index, std::optional<std::chrono::steady_clock::time_point> wait_deadline, const operation_deadline& operation_deadline_value) noexcept {
+        return slot_wait(*this, index, db_deadline_kind::sleep, db_slot_socket::invalid_socket, db_socket_readiness::none, wait_deadline, operation_deadline_value);
     }
     [[nodiscard]] db_error timed_out() const;
     [[nodiscard]] db_error closing_error() const;
 
 private:
     template <typename result_type>
-    using statement_hook_type = task<result_type> (*)(db_pool&, std::size_t, std::string_view,
-        std::span<const db_value>, const operation_deadline&);
+    using statement_hook_type = task<result_type> (*)(db_pool&, std::size_t, std::string_view, std::span<const db_value>, const operation_deadline&);
 
     // A caller waiting for a lease, listed in arrival order for the duration
     // of its acquire.
@@ -2976,10 +2920,10 @@ private:
     // lives for its co_await expression, so it adds no coroutine frame.
     class lease_acquire final {
     public:
-        lease_acquire(db_pool& pool, const operation_deadline& timeout, const stop_token& stop)
-            : pool_(pool),
-              waiting_(pool, stop),
-              acquire_(pool.leases_.acquire(timeout, pool.config_.acquire_timeout_, stop)) {}
+        lease_acquire(db_pool& pool, const operation_deadline& timeout, const stop_token& stop) :
+            pool_(pool),
+            waiting_(pool, stop),
+            acquire_(pool.leases_.acquire(timeout, pool.config_.acquire_timeout_, stop)) {}
         lease_acquire(const lease_acquire&) = delete;
         lease_acquire& operator=(const lease_acquire&) = delete;
 
@@ -3002,14 +2946,10 @@ private:
     };
 
     template <typename result_type>
-    task<result_type> run_on_transaction_slot(std::size_t index, std::string sql,
-        std::vector<db_value> params, const operation_options& options,
-        statement_hook_type<result_type> statement);
-    task<void> execute_control(std::size_t index, std::string_view sql,
-        const operation_deadline& timeout);
+    task<result_type> run_on_transaction_slot(std::size_t index, std::string sql, std::vector<db_value> params, const operation_options& options, statement_hook_type<result_type> statement);
+    task<void> execute_control(std::size_t index, std::string_view sql, const operation_deadline& timeout);
     task<void> finish_transaction(std::size_t index, std::string_view command, const operation_options& options);
-    task<void> retire_failed_transaction_slot(std::size_t index,
-        const operation_deadline& timeout, const std::exception_ptr& failure);
+    task<void> retire_failed_transaction_slot(std::size_t index, const operation_deadline& timeout, const std::exception_ptr& failure);
     task<void> open_slot(std::size_t index, const operation_deadline& timeout);
     // Starts the lease deadline of a transaction or stream on its fresh lease,
     // with its first operation running.
@@ -3022,8 +2962,7 @@ private:
     // and its caller retires the lease.
     void leave_lease_operation(std::size_t index);
     // The earlier of an operation's own deadline and its lease deadline.
-    [[nodiscard]] operation_deadline lease_operation_timeout(
-        std::size_t index, const operation_deadline& timeout) const noexcept;
+    [[nodiscard]] operation_deadline lease_operation_timeout(std::size_t index, const operation_deadline& timeout) const noexcept;
     // Lease timer expiry: closes an idle lease's connection, so the server
     // ends its transaction and releases its locks while the holder keeps the
     // lease.
@@ -3071,14 +3010,12 @@ extern template class db_pool<postgresql_driver>;
 template <typename visitor_type>
 decltype(auto) visit_db_pool([[maybe_unused]] const db_pool_ref_type& pool, [[maybe_unused]] visitor_type&& visitor) {
 #ifdef RUVIA_ENABLE_MARIADB
-    if (const auto* client = std::get_if<db_pool<mariadb_driver>*>(&pool);
-        client != nullptr && *client != nullptr) {
+    if (const auto* client = std::get_if<db_pool<mariadb_driver>*>(&pool); client != nullptr && *client != nullptr) {
         return std::forward<visitor_type>(visitor)(**client);
     }
 #endif
 #ifdef RUVIA_ENABLE_POSTGRESQL
-    if (const auto* client = std::get_if<db_pool<postgresql_driver>*>(&pool);
-        client != nullptr && *client != nullptr) {
+    if (const auto* client = std::get_if<db_pool<postgresql_driver>*>(&pool); client != nullptr && *client != nullptr) {
         return std::forward<visitor_type>(visitor)(**client);
     }
 #endif
@@ -3090,22 +3027,22 @@ decltype(auto) visit_db_pool([[maybe_unused]] const db_pool_ref_type& pool, [[ma
 template <typename visitor_type>
 void visit_db_pool_if_present([[maybe_unused]] const db_pool_ref_type& pool, [[maybe_unused]] visitor_type&& visitor) noexcept {
 #ifdef RUVIA_ENABLE_MARIADB
-    if (const auto* client = std::get_if<db_pool<mariadb_driver>*>(&pool);
-        client != nullptr && *client != nullptr) {
+    if (const auto* client = std::get_if<db_pool<mariadb_driver>*>(&pool); client != nullptr && *client != nullptr) {
         std::forward<visitor_type>(visitor)(**client);
         return;
     }
 #endif
 #ifdef RUVIA_ENABLE_POSTGRESQL
-    if (const auto* client = std::get_if<db_pool<postgresql_driver>*>(&pool);
-        client != nullptr && *client != nullptr) {
+    if (const auto* client = std::get_if<db_pool<postgresql_driver>*>(&pool); client != nullptr && *client != nullptr) {
         std::forward<visitor_type>(visitor)(**client);
     }
 #endif
 }
 
 [[nodiscard]] inline db_driver db_pool_driver(const db_pool_ref_type& pool) {
-    return visit_db_pool(pool, [](const auto& client) noexcept { return client.config().driver_; });
+    return visit_db_pool(pool, [](const auto& client) noexcept {
+        return client.config().driver_;
+    });
 }
 
 }  // namespace ruvia::detail
@@ -3113,14 +3050,12 @@ void visit_db_pool_if_present([[maybe_unused]] const db_pool_ref_type& pool, [[m
 namespace ruvia::detail {
 
 // Every result shape, so cache-id removal can name each entry of one id.
-inline constexpr std::array db_cache_shapes{
-    db_cache_shape::rows, db_cache_shape::one, db_cache_shape::exists, db_cache_shape::count};
+inline constexpr std::array db_cache_shapes{db_cache_shape::rows, db_cache_shape::one, db_cache_shape::exists, db_cache_shape::count};
 
 // The key part naming each result shape, indexed by its value. An id-keyed
 // entry stores the caller's id and this tag as separate key parts, so no user
 // id can spell another id's shape.
-inline constexpr std::array<std::string_view, db_cache_shapes.size()> db_cache_shape_tags{
-    "rows", "one", "exists", "count"};
+inline constexpr std::array<std::string_view, db_cache_shapes.size()> db_cache_shape_tags{"rows", "one", "exists", "count"};
 
 [[nodiscard]] constexpr std::string_view db_cache_shape_tag(db_cache_shape shape) noexcept {
     return db_cache_shape_tags[static_cast<std::size_t>(shape)];
@@ -3129,8 +3064,7 @@ inline constexpr std::array<std::string_view, db_cache_shapes.size()> db_cache_s
 // The key prefix of one alias's cache entries: everything that decides what a
 // cached result means (namespace, alias, driver, server, database, user and
 // TLS server name) digested into one key part.
-[[nodiscard]] std::string db_cache_prefix(std::string_view name_space, std::string_view alias,
-    const db_config_storage& config);
+[[nodiscard]] std::string db_cache_prefix(std::string_view name_space, std::string_view alias, const db_config_storage& config);
 
 [[nodiscard]] std::string encode_db_cache_rows(const db_rows& rows);
 [[nodiscard]] db_rows decode_db_cache_rows(std::string bytes_value);
@@ -3138,17 +3072,16 @@ inline constexpr std::array<std::string_view, db_cache_shapes.size()> db_cache_s
 // Append all result shapes for one id, sharing the id digest.
 void append_db_cache_id_keys(std::vector<std::string>& keys, std::string_view prefix, std::string_view id);
 // Keyed by id and shape when the query names an id, otherwise by its SQL and parameters.
-[[nodiscard]] std::string db_cache_key(std::string_view prefix, std::string_view id, db_cache_shape shape,
-    std::string_view sql, std::span<const db_value> params, db_driver driver);
+[[nodiscard]] std::string db_cache_key(std::string_view prefix, std::string_view id, db_cache_shape shape, std::string_view sql, std::span<const db_value> params, db_driver driver);
 
 // The deferred database statement behind a cached step. On a cache hit it is
 // destroyed without starting; on a miss it runs once on the plan's backend.
 class db_cache_query final {
 public:
-    db_cache_query(const db_query_backend& backend, std::string sql, std::vector<db_value> params) noexcept
-        : backend_(backend),
-          sql_(std::move(sql)),
-          params_(std::move(params)) {}
+    db_cache_query(const db_query_backend& backend, std::string sql, std::vector<db_value> params) noexcept :
+        backend_(backend),
+        sql_(std::move(sql)),
+        params_(std::move(params)) {}
 
     db_cache_query(const db_cache_query&) = delete;
     db_cache_query& operator=(const db_cache_query&) = delete;
@@ -3173,14 +3106,11 @@ public:
     db_query_cache_state(const redis_session& redis, const db_cache_config_storage& config, std::string prefix);
     ~db_query_cache_state();
     void close_now() noexcept;
-    [[nodiscard]] std::optional<std::string> key(
-        const db_query& query, const db_statement& statement, db_driver driver);
+    [[nodiscard]] std::optional<std::string> key(const db_query& query, const db_statement& statement, db_driver driver);
     // Serves the step from the cache, or runs `database` and stores its rows.
-    [[nodiscard]] task<db_rows> wrap(std::optional<std::chrono::milliseconds> duration, std::string key,
-        db_cache_query database, operation_options options, operation_deadline deadline);
+    [[nodiscard]] task<db_rows> wrap(std::optional<std::chrono::milliseconds> duration, std::string key, db_cache_query database, operation_options options, operation_deadline deadline);
     // `io_metrics` is the request's counter block, or null outside a request.
-    [[nodiscard]] task<void> remove(
-        std::span<const std::string_view> ids, request_io_metrics* io_metrics, operation_options options);
+    [[nodiscard]] task<void> remove(std::span<const std::string_view> ids, request_io_metrics* io_metrics, operation_options options);
     [[nodiscard]] task<void> clear(request_io_metrics* io_metrics, operation_options options);
 
 private:
@@ -3189,8 +3119,8 @@ private:
     // its encoded result, or for its end without one, and then look again.
     // Shared, so a waiter still reads it after the leader's frame is gone.
     struct fill final {
-        explicit fill(std::string_view key)
-            : key_(key) {}
+        explicit fill(std::string_view key) :
+            key_(key) {}
 
         std::string key_;
         // Requested once the fill ends, with or without a result.
@@ -3203,8 +3133,7 @@ private:
     class fill_lead;
 
     void require_open() const;
-    task<db_rows> query(std::string key, std::chrono::milliseconds duration, db_cache_query database,
-        operation_options options, operation_deadline deadline);
+    task<db_rows> query(std::string key, std::chrono::milliseconds duration, db_cache_query database, operation_options options, operation_deadline deadline);
     // Ends the fill if it is still the one listed for its key. Later misses
     // of that key no longer join it.
     void unlist_fill(const fill& ended) noexcept;
@@ -3246,14 +3175,10 @@ class db_query_cache_state;
 
 class db_registry final {
 public:
-    db_registry(asio::io_context& io_context, const worker_ref& worker_value,
-        const db_config& default_config);
-    db_registry(asio::io_context& io_context, const worker_ref& worker_value,
-        std::span<const db_definition> databases, redis_registry* redis = nullptr);
+    db_registry(asio::io_context& io_context, const worker_ref& worker_value, const db_config& default_config);
+    db_registry(asio::io_context& io_context, const worker_ref& worker_value, std::span<const db_definition> databases, redis_registry* redis = nullptr);
 #ifdef RUVIA_ENABLE_REDIS
-    db_registry(asio::io_context& io_context, const worker_ref& worker_value,
-        const db_config& config,
-        const redis_session& redis, const db_cache_config& policy);
+    db_registry(asio::io_context& io_context, const worker_ref& worker_value, const db_config& config, const redis_session& redis, const db_cache_config& policy);
 #endif
     ~db_registry();
 
@@ -3265,8 +3190,7 @@ public:
     [[nodiscard]] bool empty() const noexcept;
     // `io_metrics` is the request's counter block, or null outside a request.
     [[nodiscard]] db_session get(::ruvia::operation_scope& operation_scope, request_io_metrics* io_metrics) const;
-    [[nodiscard]] db_session get(
-        std::string_view alias, ::ruvia::operation_scope& operation_scope, request_io_metrics* io_metrics) const;
+    [[nodiscard]] db_session get(std::string_view alias, ::ruvia::operation_scope& operation_scope, request_io_metrics* io_metrics) const;
 
     template <typename driver_type>
     using pool_owner_ptr_type = std::unique_ptr<db_pool<driver_type>>;
@@ -3290,12 +3214,9 @@ private:
     };
 
 #ifdef RUVIA_ENABLE_REDIS
-    void attach_cache(std::size_t index, const worker_ref& worker_value,
-        const redis_session& redis, const db_cache_config_storage& policy,
-        const db_config_storage& config, std::string_view alias);
+    void attach_cache(std::size_t index, const worker_ref& worker_value, const redis_session& redis, const db_cache_config_storage& policy, const db_config_storage& config, std::string_view alias);
 #endif
-    [[nodiscard]] db_session session(
-        const entry_type& entry, ::ruvia::operation_scope& operation_scope, request_io_metrics* io_metrics) const;
+    [[nodiscard]] db_session session(const entry_type& entry, ::ruvia::operation_scope& operation_scope, request_io_metrics* io_metrics) const;
 
     std::vector<entry_type> entries_;
     named_capability_index alias_index_;
@@ -3340,8 +3261,7 @@ namespace ruvia::detail {
 
 // db_config's read and write timeouts bound waiting without socket progress in
 // that direction; waiting while output is pending waits to write.
-[[nodiscard]] inline std::optional<timeout_duration> db_io_timeout(
-    const db_config_storage& config, db_socket_readiness wanted) noexcept {
+[[nodiscard]] inline std::optional<timeout_duration> db_io_timeout(const db_config_storage& config, db_socket_readiness wanted) noexcept {
     return has_db_socket_readiness(wanted, db_socket_readiness::write) ? config.write_timeout_ : config.read_timeout_;
 }
 
@@ -3349,9 +3269,7 @@ namespace ruvia::detail {
 // or it was woken to be armed again.
 inline void check_db_socket_wait(const db_socket_wait_result& result, db_driver driver, std::string_view name) {
     if (result.error_ && result.error_ != asio::error::operation_aborted) {
-        throw db_error(db_error::code_type::io_error, driver,
-            std::string(name).append(" socket wait failed: ").append(error_code_text(result.error_)),
-            result.error_.value());
+        throw db_error(db_error::code_type::io_error, driver, std::string(name).append(" socket wait failed: ").append(error_code_text(result.error_)), result.error_.value());
     }
 }
 
@@ -3383,12 +3301,11 @@ struct db_driver_socket_wait final {
 };
 
 template <typename io_type>
-db_pipeline_member<io_type>::db_pipeline_member(
-    state_type& state, db_rows* rows, const stop_token& stop_token_value)
-    : state_(state),
-      rows_(rows),
-      stop_token_(stop_token_value),
-      cancellation_(state.cancellation_target(), cancellation_id_) {
+db_pipeline_member<io_type>::db_pipeline_member(state_type& state, db_rows* rows, const stop_token& stop_token_value) :
+    state_(state),
+    rows_(rows),
+    stop_token_(stop_token_value),
+    cancellation_(state.cancellation_target(), cancellation_id_) {
     cancellation_.arm(stop_token_);
     // Linked once binding cannot fail; a stop delivered while binding is seen
     // through stopped(). Newest first: a stop source runs its newest callback
@@ -3408,10 +3325,10 @@ db_pipeline_member<io_type>::~db_pipeline_member() {
 }
 
 template <typename io_type>
-db_pipeline_state<io_type>::db_pipeline_state(pool_type& pool, const worker_ref& worker_value)
-    : pool_(pool),
-      worker_(worker_value),
-      cancellation_target_(make_worker_cancellation_target(*this, worker_value)) {}
+db_pipeline_state<io_type>::db_pipeline_state(pool_type& pool, const worker_ref& worker_value) :
+    pool_(pool),
+    worker_(worker_value),
+    cancellation_target_(make_worker_cancellation_target(*this, worker_value)) {}
 
 template <typename io_type>
 db_pipeline_state<io_type>::~db_pipeline_state() {
@@ -3456,8 +3373,7 @@ std::optional<std::size_t> db_pipeline_state<io_type>::roomiest_group() const no
     for (std::size_t index = 0; index < pool_.config().pool_size_per_worker_; ++index) {
         const auto& candidate = group(index);
         const auto load = candidate.pending_ + candidate.reserved_;
-        if (candidate.members_ != 0 && !candidate.closing_ && !candidate.stalled() && pool_.slot(index).connected_ &&
-            load < lowest_load) {
+        if (candidate.members_ != 0 && !candidate.closing_ && !candidate.stalled() && pool_.slot(index).connected_ && load < lowest_load) {
             roomiest = index;
             lowest_load = load;
         }
@@ -3536,14 +3452,13 @@ void db_pipeline_state<io_type>::park(member_type& member, const operation_deadl
         }
         // A stopped timer queue arms nothing; the statement still leaves
         // through admission, its stop token or close().
-        (void)worker_.schedule_timer(
-            member.admission_timer_, *deadline_value, [this, &member](worker_timer_outcome outcome) noexcept {
-                if (outcome == worker_timer_outcome::expired && member.phase_ == db_pipeline_phase::parked) {
-                    unpark(member);
-                    member.phase_ = db_pipeline_phase::admitting;
-                    settle(member, db_pipeline_event::timed_out);
-                }
-            });
+        (void)worker_.schedule_timer(member.admission_timer_, *deadline_value, [this, &member](worker_timer_outcome outcome) noexcept {
+            if (outcome == worker_timer_outcome::expired && member.phase_ == db_pipeline_phase::parked) {
+                unpark(member);
+                member.phase_ = db_pipeline_phase::admitting;
+                settle(member, db_pipeline_event::timed_out);
+            }
+        });
     }
     member.previous_parked_ = parked_tail_;
     member.next_parked_ = nullptr;
@@ -3694,8 +3609,7 @@ void db_pipeline_state<io_type>::send(member_type& member, statement_type& state
     }
     // The waiting reader looks again when the driver asks for it, or when
     // this statement's deadline comes first.
-    const bool earlier = member.deadline_.has_value() &&
-                         (!sending.wait_deadline_.has_value() || *member.deadline_ < *sending.wait_deadline_);
+    const bool earlier = member.deadline_.has_value() && (!sending.wait_deadline_.has_value() || *member.deadline_ < *sending.wait_deadline_);
     if (wake || earlier) {
         slot.wait_socket_.cancel();
     }
@@ -3787,13 +3701,11 @@ bool db_pipeline_state<io_type>::read_buffered(member_type& reader) {
 }
 
 template <typename io_type>
-void db_pipeline_state<io_type>::expire_followers(
-    member_type& reader, std::chrono::steady_clock::time_point now) noexcept {
+void db_pipeline_state<io_type>::expire_followers(member_type& reader, std::chrono::steady_clock::time_point now) noexcept {
     auto& reading = group(reader.slot_);
     for (std::size_t offset = 0; offset < reading.pending_; ++offset) {
         auto* member = reading.record(offset).member_;
-        if (member != nullptr && member != &reader && member->event_ == db_pipeline_event::none &&
-            member->deadline_.has_value() && *member->deadline_ <= now) {
+        if (member != nullptr && member != &reader && member->event_ == db_pipeline_event::none && member->deadline_.has_value() && *member->deadline_ <= now) {
             abandon(*member);
             settle(*member, db_pipeline_event::timed_out);
         }
@@ -3801,14 +3713,12 @@ void db_pipeline_state<io_type>::expire_followers(
 }
 
 template <typename io_type>
-std::optional<std::chrono::steady_clock::time_point> db_pipeline_state<io_type>::earliest_deadline(
-    std::size_t slot) const noexcept {
+std::optional<std::chrono::steady_clock::time_point> db_pipeline_state<io_type>::earliest_deadline(std::size_t slot) const noexcept {
     const auto& reading = group(slot);
     std::optional<std::chrono::steady_clock::time_point> earliest;
     for (std::size_t offset = 0; offset < reading.pending_; ++offset) {
         const auto* member = reading.record(offset).member_;
-        if (member != nullptr && member->event_ == db_pipeline_event::none && member->deadline_.has_value() &&
-            (!earliest.has_value() || *member->deadline_ < *earliest)) {
+        if (member != nullptr && member->event_ == db_pipeline_event::none && member->deadline_.has_value() && (!earliest.has_value() || *member->deadline_ < *earliest)) {
             earliest = member->deadline_;
         }
     }
@@ -4012,9 +3922,9 @@ public:
     using pool_type = typename state_type::pool_type;
     using member_type = typename state_type::member_type;
 
-    db_pipeline_reader(pool_type& pool, member_type& member) noexcept
-        : pool_(pool),
-          member_(member) {}
+    db_pipeline_reader(pool_type& pool, member_type& member) noexcept :
+        pool_(pool),
+        member_(member) {}
 
     db_pipeline_reader(const db_pipeline_reader&) = delete;
     db_pipeline_reader& operator=(const db_pipeline_reader&) = delete;
@@ -4025,11 +3935,10 @@ public:
     // turn should go out with what it just sent.
     class socket_wait final {
     public:
-        explicit socket_wait(db_pipeline_reader& reader) noexcept
-            : reader_(reader) {}
-        socket_wait(db_pipeline_reader& reader, std::size_t slot, db_slot_socket::native_socket_type native,
-            db_socket_readiness wanted, std::optional<clock_type::time_point> deadline) noexcept
-            : reader_(reader) {
+        explicit socket_wait(db_pipeline_reader& reader) noexcept :
+            reader_(reader) {}
+        socket_wait(db_pipeline_reader& reader, std::size_t slot, db_slot_socket::native_socket_type native, db_socket_readiness wanted, std::optional<clock_type::time_point> deadline) noexcept :
+            reader_(reader) {
             wait_.emplace(reader.pool_, slot, db_deadline_kind::socket, native, wanted, deadline, reader.unbounded_);
         }
         socket_wait(const socket_wait&) = delete;
@@ -4103,8 +4012,7 @@ public:
             }
             io_deadline_.reset();
             if (const auto io_timeout = db_io_timeout(pool_.config(), wanted)) {
-                io_deadline_ = saturating_deadline(
-                    *group.stretch_start_, io_timeout->value());
+                io_deadline_ = saturating_deadline(*group.stretch_start_, io_timeout->value());
             }
             auto until = pool_.state().earliest_deadline(slot);
             if (io_deadline_.has_value() && (!until.has_value() || *io_deadline_ < *until)) {
@@ -4155,9 +4063,7 @@ private:
 // statement costs no coroutine frame beyond this one unless it connects. The
 // member's destructor gives back whatever it holds on every exit path.
 template <typename io_type, typename result_type>
-task<result_type> run_pipelined(typename db_pipeline_state<io_type>::pool_type& pool, std::string sql,
-    std::vector<db_value> params, operation_options options,
-    request_io_metrics* io_metrics) {
+task<result_type> run_pipelined(typename db_pipeline_state<io_type>::pool_type& pool, std::string sql, std::vector<db_value> params, operation_options options, request_io_metrics* io_metrics) {
     using member_type = db_pipeline_member<io_type>;
     constexpr bool returns_rows = std::is_same_v<result_type, db_rows>;
     scoped_request_io_timer timer(io_metrics, request_io_kind::db);

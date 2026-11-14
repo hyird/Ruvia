@@ -131,8 +131,7 @@ class pipelining_routes final {
 
 // Writes `requests`, then reads until the server closes; nullopt when it is
 // still open after 10 s.
-[[nodiscard]] std::optional<std::string> exchange_pipelined(
-    const asio::ip::tcp::endpoint& endpoint, std::string_view requests) {
+[[nodiscard]] std::optional<std::string> exchange_pipelined(const asio::ip::tcp::endpoint& endpoint, std::string_view requests) {
     auto& io = ruvia::test::new_test_io_context();
     asio::ip::tcp::socket socket(io);
     socket.connect(endpoint);
@@ -164,8 +163,7 @@ class pipelining_routes final {
 
 [[nodiscard]] std::size_t count_occurrences(std::string_view output, std::string_view marker) {
     std::size_t count = 0;
-    for (auto position = output.find(marker); position != std::string_view::npos;
-        position = output.find(marker, position + marker.size())) {
+    for (auto position = output.find(marker); position != std::string_view::npos; position = output.find(marker, position + marker.size())) {
         ++count;
     }
     return count;
@@ -205,10 +203,7 @@ TEST(Ruvia, pipelined_responses_of_every_kind_leave_in_request_order) {
     EXPECT_TRUE(response.has_value());
     const auto output = (response ? std::string_view(*response) : std::string_view{});
     EXPECT_TRUE(output.starts_with("HTTP/1.1 200 "));
-    EXPECT_TRUE(appear_in_order(output,
-        {"item-1", "item-2", "HTTP/1.1 200 ", "item-4", "large-end", "item-5", "streamed-chunk", "item-6",
-            "echo-body", "item-7", "HTTP/1.1 103 ", "hinted", "item-8", "file-body", "item-9", "HTTP/1.1 404 ",
-            "item-10"}));
+    EXPECT_TRUE(appear_in_order(output, {"item-1", "item-2", "HTTP/1.1 200 ", "item-4", "large-end", "item-5", "streamed-chunk", "item-6", "echo-body", "item-7", "HTTP/1.1 103 ", "hinted", "item-8", "file-body", "item-9", "HTTP/1.1 404 ", "item-10"}));
     // The HEAD response carries no body.
     EXPECT_TRUE(output.find("item-3") == std::string::npos);
     // Exactly one final response per request, plus the one interim head.
@@ -222,8 +217,7 @@ TEST(Ruvia, a_long_pipelined_burst_is_answered_completely_and_in_order) {
     constexpr std::size_t request_count = 400;
     std::string requests{};
     for (std::size_t index = 0; index < request_count; ++index) {
-        requests += get("/pipelining/item/" + std::string(std::to_string(index)),
-            index + 1 == request_count ? std::string_view("Connection: close\r\n") : std::string_view{});
+        requests += get("/pipelining/item/" + std::string(std::to_string(index)), index + 1 == request_count ? std::string_view("Connection: close\r\n") : std::string_view{});
     }
     const auto response = exchange_pipelined(server.endpoint(), requests);
     server.finish();
@@ -247,16 +241,13 @@ TEST(Ruvia, a_long_pipelined_burst_is_answered_completely_and_in_order) {
 TEST(Ruvia, a_long_interim_head_is_sent_whole_between_pipelined_responses) {
     auto& io = ruvia::test::new_test_io_context();
     ruvia::test::http_server_fixture server(io);
-    const auto response = exchange_pipelined(server.endpoint(),
-        get("/pipelining/item/before") + get("/pipelining/long-hint") +
-            get("/pipelining/item/after", "Connection: close\r\n"));
+    const auto response = exchange_pipelined(server.endpoint(), get("/pipelining/item/before") + get("/pipelining/long-hint") + get("/pipelining/item/after", "Connection: close\r\n"));
     server.finish();
 
     EXPECT_TRUE(response.has_value());
     const auto output = (response ? std::string_view(*response) : std::string_view{});
     const auto hint_field = "X-Hint: " + std::string(long_hint_value_bytes, 'h') + "\r\n";
-    EXPECT_TRUE(appear_in_order(
-        output, {"item-before", "HTTP/1.1 103 ", hint_field, "\r\n\r\n", "long-hinted", "item-after"}));
+    EXPECT_TRUE(appear_in_order(output, {"item-before", "HTTP/1.1 103 ", hint_field, "\r\n\r\n", "long-hinted", "item-after"}));
     EXPECT_EQ(count_occurrences(output, "HTTP/1.1 "), std::size_t{4});
 }
 
@@ -268,8 +259,7 @@ TEST(Ruvia, an_unserializable_pipelined_response_becomes_a_500_after_the_held_on
     auto& io = ruvia::test::new_test_io_context();
     ruvia::test::http_server_fixture server(io);
     const auto failures_before = ruvia::app().stats().connection_failures_;
-    const auto response = exchange_pipelined(server.endpoint(),
-        get("/pipelining/item/before") + get("/pipelining/too-many-fields") + get("/pipelining/item/after"));
+    const auto response = exchange_pipelined(server.endpoint(), get("/pipelining/item/before") + get("/pipelining/too-many-fields") + get("/pipelining/item/after"));
     server.finish();
 
     EXPECT_TRUE(response.has_value());
@@ -287,9 +277,7 @@ TEST(Ruvia, a_stream_route_that_consumed_its_request_body_keeps_the_connection) 
     // is served on the same connection.
     auto& io = ruvia::test::new_test_io_context();
     ruvia::test::http_server_fixture server(io);
-    const auto response = exchange_pipelined(server.endpoint(),
-        "GET /pipelining/stream-echo HTTP/1.1\r\nHost: localhost\r\nContent-Length: 4\r\n\r\nbody" +
-            get("/pipelining/item/after", "Connection: close\r\n"));
+    const auto response = exchange_pipelined(server.endpoint(), "GET /pipelining/stream-echo HTTP/1.1\r\nHost: localhost\r\nContent-Length: 4\r\n\r\nbody" + get("/pipelining/item/after", "Connection: close\r\n"));
     server.finish();
 
     EXPECT_TRUE(response.has_value());
@@ -311,8 +299,9 @@ TEST(Ruvia, held_pipelined_responses_are_sent_before_waiting_for_more_input) {
     asio::write(socket, asio::buffer(first));
     std::string output{};
     bool answered = false;
-    asio::async_read_until(socket, asio::dynamic_buffer(output), "item-second",
-        [&answered](const std::error_code& error, std::size_t) { answered = !error; });
+    asio::async_read_until(socket, asio::dynamic_buffer(output), "item-second", [&answered](const std::error_code& error, std::size_t) {
+        answered = !error;
+    });
     io.run_for(std::chrono::seconds(10));
     EXPECT_TRUE(answered);
     EXPECT_TRUE(appear_in_order(output, {"item-first", "item-second"}));
@@ -345,8 +334,7 @@ TEST(Ruvia, a_stalled_reader_does_not_block_other_connections_on_its_worker) {
     }
     asio::write(stalled, asio::buffer(stalled_requests));
 
-    const auto response =
-        exchange_pipelined(server.endpoint(), get("/pipelining/item/live", "Connection: close\r\n"));
+    const auto response = exchange_pipelined(server.endpoint(), get("/pipelining/item/live", "Connection: close\r\n"));
     EXPECT_TRUE(response.has_value());
     EXPECT_TRUE((response ? std::string_view(*response) : std::string_view{}).ends_with("item-live"));
 

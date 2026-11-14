@@ -33,20 +33,16 @@ class admin_auth_middleware final {
 public:
     ruvia::task<void> invoke(ruvia::context& c, ruvia::next& next_value) {
         if (c.req().header("X-Admin-Token").value_or("") != "secret") {
-            c.respond(c.error({.status_ = ruvia::http_status::unauthorized,
-                .code_ = "unauthorized",
-                .message_ = "missing admin token"}));
+            c.respond(c.error({.status_ = ruvia::http_status::unauthorized, .code_ = "unauthorized", .message_ = "missing admin token"}));
             co_return;
         }
         co_await next_value();
     }
 };
 
-RUVIA_MODEL(user_response, RUVIA_OPTIONAL_FIELD(id, ruvia::string),
-    RUVIA_OPTIONAL_FIELD(name, ruvia::string), RUVIA_OPTIONAL_FIELD(active, ruvia::bool_value));
+RUVIA_MODEL(user_response, RUVIA_OPTIONAL_FIELD(id, ruvia::string), RUVIA_OPTIONAL_FIELD(name, ruvia::string), RUVIA_OPTIONAL_FIELD(active, ruvia::bool_value));
 
-ruvia::task<ruvia::http_response> example_error_handler(
-    ruvia::context& c, ruvia::http_error_info error) {
+ruvia::task<ruvia::http_response> example_error_handler(ruvia::context& c, ruvia::http_error_info error) {
     co_return c.error(error);
 }
 
@@ -54,9 +50,7 @@ ruvia::task<ruvia::http_response> example_error_handler(
 // whole path segments ("/api" scopes "/api/x" but never "/apix"); requests
 // outside every prefix keep using the app-wide handlers above.
 ruvia::task<ruvia::http_response> api_not_found(ruvia::context& c) {
-    co_return c.error({.status_ = ruvia::http_status::not_found,
-        .code_ = "api_not_found",
-        .message_ = "no such API endpoint"});
+    co_return c.error({.status_ = ruvia::http_status::not_found, .code_ = "api_not_found", .message_ = "no such API endpoint"});
 }
 
 ruvia::task<ruvia::http_response> api_error(ruvia::context& c, ruvia::http_error_info error) {
@@ -94,9 +88,7 @@ private:
 
     ruvia::task<ruvia::http_response> user(ruvia::context& c) {
         user_response response;
-        response.set<"id">(c.req().param("id").value_or("unknown"))
-            .set<"name">("example-user")
-            .set<"active">(ruvia::bool_value{true});
+        response.set<"id">(c.req().param("id").value_or("unknown")).set<"name">("example-user").set<"active">(ruvia::bool_value{true});
         co_return c.json(response);
     }
 
@@ -115,8 +107,7 @@ private:
         body.append("\nuser-agent=");
         body.append(c.req().header("User-Agent").value_or(""));
         body.append("\npage=");
-        const std::uint32_t page =
-            std::max(std::uint32_t{1}, c.req().query<std::uint32_t>("page").value_or(1));
+        const std::uint32_t page = std::max(std::uint32_t{1}, c.req().query<std::uint32_t>("page").value_or(1));
         ruvia::http_append_unsigned(body, page);
         body.append("\nsession=");
         body.append(c.req().cookie("session").value_or(""));
@@ -152,9 +143,7 @@ private:
     }
 
     ruvia::task<ruvia::http_response> fail(ruvia::context&) {
-        throw ruvia::http_error({.status_ = ruvia::http_status::bad_request,
-            .code_ = "example_error",
-            .message_ = "the example handler threw an HttpError"});
+        throw ruvia::http_error({.status_ = ruvia::http_status::bad_request, .code_ = "example_error", .message_ = "the example handler threw an HttpError"});
     }
 
     ruvia::task<ruvia::http_response> health(ruvia::context& c) {

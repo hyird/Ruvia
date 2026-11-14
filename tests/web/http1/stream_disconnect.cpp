@@ -90,10 +90,8 @@ class routes final {
             co_return;
         }
         // 超大无符号等待不得窄化成负值后立即完成；客户端断开仍须唤醒它。
-        const auto huge = std::chrono::duration<std::uint64_t, std::milli>{
-            (std::numeric_limits<std::uint64_t>::max)()};
-        const auto result = mode == "writer" ? co_await writer.sleep(huge)
-                                             : co_await ruvia::sleep_for(c.worker(), 10s, token);
+        const auto huge = std::chrono::duration<std::uint64_t, std::milli>{(std::numeric_limits<std::uint64_t>::max)()};
+        const auto result = mode == "writer" ? co_await writer.sleep(huge) : co_await ruvia::sleep_for(c.worker(), 10s, token);
         if (result == ruvia::timer_sleep_result::stop_requested) {
             cancelled.fetch_add(1);
         }
@@ -108,8 +106,7 @@ class routes final {
             co_return;
         }
         co_await writer.write("pipeline-first");
-        if (co_await ruvia::sleep_for(c.worker(), 100ms, c.stop_token()) ==
-            ruvia::timer_sleep_result::stop_requested) {
+        if (co_await ruvia::sleep_for(c.worker(), 100ms, c.stop_token()) == ruvia::timer_sleep_result::stop_requested) {
             pipeline_cancelled.fetch_add(1);
         }
         co_await writer.write("pipeline-last");
@@ -122,8 +119,7 @@ class routes final {
             co_return;
         }
         co_await writer.write("wait-first");
-        if (co_await ruvia::sleep_for(c.worker(), 150ms, c.stop_token()) ==
-            ruvia::timer_sleep_result::stop_requested) {
+        if (co_await ruvia::sleep_for(c.worker(), 150ms, c.stop_token()) == ruvia::timer_sleep_result::stop_requested) {
             pipeline_cancelled.fetch_add(1);
         }
         co_await writer.write("wait-last");
@@ -147,8 +143,7 @@ class routes final {
             co_return;
         }
         co_await writer.write(received);
-        if (c.req().query("wait").has_value() &&
-            co_await ruvia::sleep_for(c.worker(), 10s, c.stop_token()) == ruvia::timer_sleep_result::stop_requested) {
+        if (c.req().query("wait").has_value() && co_await ruvia::sleep_for(c.worker(), 10s, c.stop_token()) == ruvia::timer_sleep_result::stop_requested) {
             body_cancelled.fetch_add(1);
         }
     }
@@ -243,11 +238,11 @@ std::string http2_request_without_reading(bool tunnel) {
 // 异步客户端给每次 I/O 设置独立截止时间，回归失败不会挂住测试进程。
 class peer final {
 public:
-    peer(asio::io_context& io, const asio::ip::tcp::endpoint& endpoint, bool tls)
-        : io_(io),
-          context_(asio::ssl::context::tls_client),
-          stream_(io, context_),
-          tls_(tls) {
+    peer(asio::io_context& io, const asio::ip::tcp::endpoint& endpoint, bool tls) :
+        io_(io),
+        context_(asio::ssl::context::tls_client),
+        stream_(io, context_),
+        tls_(tls) {
         context_.set_verify_mode(asio::ssl::verify_none);
         bool connected = false;
         asio::error_code connect_error;
@@ -352,8 +347,7 @@ public:
         }
         // The server may close first: answering with its close_notify, or,
         // having abandoned a lone request, without one.
-        if (error && error != asio::error::operation_aborted && error != asio::error::eof &&
-            error != asio::ssl::error::stream_truncated) {
+        if (error && error != asio::error::operation_aborted && error != asio::error::eof && error != asio::ssl::error::stream_truncated) {
             throw std::system_error(error);
         }
     }
@@ -414,8 +408,7 @@ private:
     bool tls_;
 };
 
-void check_pipeline_upload(asio::io_context& io,
-    const asio::ip::tcp::endpoint& endpoint, bool tls, std::size_t size, bool defer_body) {
+void check_pipeline_upload(asio::io_context& io, const asio::ip::tcp::endpoint& endpoint, bool tls, std::size_t size, bool defer_body) {
     peer client(io, endpoint, tls);
     client.send("GET /disconnect/pipeline HTTP/1.1\r\nHost: localhost\r\n\r\n");
     EXPECT_TRUE(client.read_until("pipeline-first").find("pipeline-first") != std::string::npos);
@@ -437,8 +430,7 @@ void check_pipeline_upload(asio::io_context& io,
     }
     output += client.read_until({}, 3s);
     if (!output.ends_with(payload)) {
-        std::cerr << "stream_disconnect pipeline: tls=" << tls << " size=" << size << " deferred=" << defer_body
-                  << " received=" << output.size() << " response=" << std::string_view(output).substr(0, 256) << '\n';
+        std::cerr << "stream_disconnect pipeline: tls=" << tls << " size=" << size << " deferred=" << defer_body << " received=" << output.size() << " response=" << std::string_view(output).substr(0, 256) << '\n';
     }
     EXPECT_TRUE(output.find("pipeline-last") != std::string::npos);
     EXPECT_TRUE(output.ends_with(payload));
@@ -449,16 +441,14 @@ void check_pipeline_upload(asio::io_context& io,
 // request direction. The stream in progress and every request received before
 // the FIN -- a streamed one idling on its stop included -- complete; then the
 // server closes without reading that end again as abandonment.
-void check_pipeline_half_close(asio::io_context& io,
-    const asio::ip::tcp::endpoint& endpoint, bool tls, bool trailing_buffered) {
+void check_pipeline_half_close(asio::io_context& io, const asio::ip::tcp::endpoint& endpoint, bool tls, bool trailing_buffered) {
     peer client(io, endpoint, tls);
     const auto cancelled_before = pipeline_cancelled.load();
     client.send("GET /disconnect/pipeline HTTP/1.1\r\nHost: localhost\r\n\r\n");
     EXPECT_TRUE(client.read_until("pipeline-first").find("pipeline-first") != std::string::npos);
     // The streamed request is either the last one before the FIN, with no byte
     // behind it, or followed by a buffered one.
-    client.send(std::string("GET /disconnect/pipeline-wait HTTP/1.1\r\nHost: localhost\r\n\r\n") +
-                (trailing_buffered ? "GET /disconnect/health HTTP/1.1\r\nHost: localhost\r\n\r\n" : ""));
+    client.send(std::string("GET /disconnect/pipeline-wait HTTP/1.1\r\nHost: localhost\r\n\r\n") + (trailing_buffered ? "GET /disconnect/health HTTP/1.1\r\nHost: localhost\r\n\r\n" : ""));
     // Under TLS the TLS engine then reports the end to every later read at
     // once, with no transport read: a pipelined stream must not re-read it.
     client.end_requests();
@@ -495,9 +485,7 @@ enum class pipeline_end { immediate,
 // and whenever the end arrives -- treats a clean end of the request direction
 // as a half-close: it completes, then the server closes. A TLS truncation
 // (TCP FIN without close_notify) still ends it as abandonment.
-void check_pipelined_stream_end(asio::io_context& io,
-    const asio::ip::tcp::endpoint& endpoint, bool tls, std::string_view leading_requests,
-    std::string_view leading_marker, pipeline_end end) {
+void check_pipelined_stream_end(asio::io_context& io, const asio::ip::tcp::endpoint& endpoint, bool tls, std::string_view leading_requests, std::string_view leading_marker, pipeline_end end) {
     peer client(io, endpoint, tls);
     const auto cancelled_before = pipeline_cancelled.load();
     client.send(std::string(leading_requests) + "GET /disconnect/pipeline-wait HTTP/1.1\r\nHost: localhost\r\n\r\n");
@@ -533,15 +521,16 @@ void check_pipelined_stream_end(asio::io_context& io,
 // A FIN (or close_notify) with no request before or behind the stream is the
 // client leaving (Go net/http, Pingora, nginx): the request stops and the
 // stream truncates.
-void check_single_stream_end(asio::io_context& io,
-    const asio::ip::tcp::endpoint& endpoint, bool tls) {
+void check_single_stream_end(asio::io_context& io, const asio::ip::tcp::endpoint& endpoint, bool tls) {
     peer client(io, endpoint, tls);
     const auto before = cancelled.load();
     const auto context_before = context_cancelled.load();
     client.send(request("token"));
     EXPECT_TRUE(client.read_until("data: first").find("data: first") != std::string::npos);
     client.end_requests();
-    ruvia::test::wait_until([&] { return cancelled.load() == before + 1; }, 2s);
+    ruvia::test::wait_until([&] {
+        return cancelled.load() == before + 1;
+    }, 2s);
     EXPECT_EQ(context_cancelled.load(), context_before + 1);
     EXPECT_TRUE(client.read_until("0\r\n\r\n", 500ms).find("0\r\n\r\n") == std::string::npos);
     client.close();
@@ -576,12 +565,13 @@ TEST(Ruvia, http1_stream_peer_close_stops_request_and_recycles_connections) {
     app.server({.worker_count_ = 2, .idle_timeout_ = 15s, .connection_scan_interval_ = 5ms, .write_timeout_ = 150ms})
         .listen({.address_ = "127.0.0.1", .http_ = plain_endpoint.port(), .https_ = tls_endpoint.port(), .tls_ = {.identity_ = {.certificate_chain_file_ = identity.ca_file_, .private_key_file_ = private_key}}})
         .on_error([](ruvia::context& c, ruvia::http_error_info error) -> ruvia::task<ruvia::http_response> {
-            errors.fetch_add(1);
-            std::cerr << "stream_disconnect error: " << error.code() << ": " << error.message() << '\n';
-            c.draft().status(error.status());
-            co_return c.text("unexpected-error");
-        })
-        .on_start([] { started.release(); });
+        errors.fetch_add(1);
+        std::cerr << "stream_disconnect error: " << error.code() << ": " << error.message() << '\n';
+        c.draft().status(error.status());
+        co_return c.text("unexpected-error");
+    }).on_start([] {
+        started.release();
+    });
     ruvia::test::app_run runner(app);
     std::exception_ptr client_failure;
     const bool ready = started.try_acquire_for(10s);
@@ -605,10 +595,14 @@ TEST(Ruvia, http1_stream_peer_close_stops_request_and_recycles_connections) {
                         EXPECT_TRUE(client.read_until("data: first").find("data: first") != std::string::npos);
                         const auto begin = clock_type::now();
                         client.close(kind.notify_, kind.reset_);
-                        ruvia::test::wait_until([&] { return cancelled.load() == before + 1; }, 2s);
+                        ruvia::test::wait_until([&] {
+                            return cancelled.load() == before + 1;
+                        }, 2s);
                         EXPECT_TRUE(clock_type::now() - begin < 2s);
                         EXPECT_EQ(context_cancelled.load(), context_before + 1);
-                        ruvia::test::wait_until([&] { return app.stats().active_connections_ == 0; }, 2s);
+                        ruvia::test::wait_until([&] {
+                            return app.stats().active_connections_ == 0;
+                        }, 2s);
                     }
                 }
                 peer body_client(io, endpoint, tls);
@@ -628,7 +622,9 @@ TEST(Ruvia, http1_stream_peer_close_stops_request_and_recycles_connections) {
                 EXPECT_TRUE(waiting_body_client.read_until("hello-world").find("hello-world") != std::string::npos);
                 const auto body_close_begin = clock_type::now();
                 waiting_body_client.close();
-                ruvia::test::wait_until([&] { return body_cancelled.load() == body_cancelled_before + 1; }, 2s);
+                ruvia::test::wait_until([&] {
+                    return body_cancelled.load() == body_cancelled_before + 1;
+                }, 2s);
                 EXPECT_TRUE(clock_type::now() - body_close_begin < 2s);
                 peer post_sse_client(io, endpoint, tls);
                 post_sse_client.send("POST /disconnect/post-sse HTTP/1.1\r\nHost: localhost\r\nContent-Length: 10\r\nConnection: close\r\n\r\n{\"id\":\"1\"}");
@@ -642,7 +638,9 @@ TEST(Ruvia, http1_stream_peer_close_stops_request_and_recycles_connections) {
                 const auto early_output = early_client.read_until({});
                 EXPECT_TRUE(early_output.find("hello-world") != std::string::npos);
                 EXPECT_TRUE(early_output.find("healthy") == std::string::npos);
-                ruvia::test::wait_until([&] { return app.stats().active_connections_ == 0; }, 2s);
+                ruvia::test::wait_until([&] {
+                    return app.stats().active_connections_ == 0;
+                }, 2s);
 
                 const auto pipeline_cancelled_before = pipeline_cancelled.load();
                 for (const std::size_t size : {std::size_t{31}, std::size_t{256 * 1024}}) {
@@ -664,43 +662,56 @@ TEST(Ruvia, http1_stream_peer_close_stops_request_and_recycles_connections) {
                 check_pipelined_stream_end(io, endpoint, tls, slow_request, "slow-done", pipeline_end::immediate);
                 check_pipelined_stream_end(io, endpoint, tls, two_buffered, "healthy", pipeline_end::immediate);
                 // [streamed, streamed] with the end after the first completed.
-                check_pipelined_stream_end(io, endpoint, tls,
-                    "GET /disconnect/pipeline HTTP/1.1\r\nHost: localhost\r\n\r\n", "pipeline-last",
-                    pipeline_end::after_last_started);
+                check_pipelined_stream_end(io, endpoint, tls, "GET /disconnect/pipeline HTTP/1.1\r\nHost: localhost\r\n\r\n", "pipeline-last", pipeline_end::after_last_started);
                 if (tls) {
                     check_pipelined_stream_end(io, endpoint, tls, slow_request, "slow-done", pipeline_end::truncated);
                 }
                 check_single_stream_end(io, endpoint, tls);
-                ruvia::test::wait_until([&] { return app.stats().active_connections_ == 0; }, 2s);
+                ruvia::test::wait_until([&] {
+                    return app.stats().active_connections_ == 0;
+                }, 2s);
                 for (const auto mode : {"write", "timeout"}) {
                     peer racing(io, endpoint, tls);
                     const auto writes_before = write_entered.load();
                     racing.send(request(mode));
                     EXPECT_TRUE(racing.read_until("data: first").find("data: first") != std::string::npos);
-                    ruvia::test::wait_until([&] { return write_entered.load() == writes_before + 1; }, 2s);
+                    ruvia::test::wait_until([&] {
+                        return write_entered.load() == writes_before + 1;
+                    }, 2s);
                     if (std::string_view(mode) == "timeout") {
-                        ruvia::test::wait_until([&] { return app.stats().active_connections_ == 0; }, 2s);
+                        ruvia::test::wait_until([&] {
+                            return app.stats().active_connections_ == 0;
+                        }, 2s);
                     }
                     racing.close(false, true);
-                    ruvia::test::wait_until([&] { return app.stats().active_connections_ == 0; }, 2s);
+                    ruvia::test::wait_until([&] {
+                        return app.stats().active_connections_ == 0;
+                    }, 2s);
                 }
                 // write_timeout_ bounds every write of an upgraded connection
                 // as well: a WebSocket without heartbeat or a CONNECT tunnel
                 // whose peer stops reading is closed once its write makes no
                 // progress, long before idle_timeout_.
-                for (const auto upgrade : {std::string_view("GET /disconnect/websocket-stall HTTP/1.1\r\nHost: localhost\r\n"
-                                                            "Connection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Version: 13\r\n"
-                                                            "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n"),
-                         std::string_view("CONNECT stall.test:443 HTTP/1.1\r\nHost: stall.test:443\r\n\r\n")}) {
+                for (const auto upgrade :
+                    {std::string_view("GET /disconnect/websocket-stall HTTP/1.1\r\nHost: localhost\r\n"
+                                      "Connection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Version: 13\r\n"
+                                      "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n"),
+                        std::string_view("CONNECT stall.test:443 HTTP/1.1\r\nHost: stall.test:443\r\n\r\n")}) {
                     peer stalled(io, endpoint, tls);
                     const auto writes_before = stalled_upgrade_writes.load();
                     const auto failures_before = stalled_upgrade_failures.load();
                     stalled.send(upgrade);
                     const auto head = stalled.read_until("\r\n\r\n");
                     EXPECT_TRUE(head.starts_with(upgrade.starts_with("GET") ? "HTTP/1.1 101 " : "HTTP/1.1 200 "));
-                    ruvia::test::wait_until([&] { return stalled_upgrade_writes.load() == writes_before + 1; }, 2s);
-                    ruvia::test::wait_until([&] { return app.stats().active_connections_ == 0; }, 5s);
-                    ruvia::test::wait_until([&] { return stalled_upgrade_failures.load() == failures_before + 1; }, 2s);
+                    ruvia::test::wait_until([&] {
+                        return stalled_upgrade_writes.load() == writes_before + 1;
+                    }, 2s);
+                    ruvia::test::wait_until([&] {
+                        return app.stats().active_connections_ == 0;
+                    }, 5s);
+                    ruvia::test::wait_until([&] {
+                        return stalled_upgrade_failures.load() == failures_before + 1;
+                    }, 2s);
                     stalled.close(false, true);
                 }
             }
@@ -714,11 +725,17 @@ TEST(Ruvia, http1_stream_peer_close_stops_request_and_recycles_connections) {
                 const auto failures_before = stalled_upgrade_failures.load();
                 stalled.send(http2_request_without_reading(tunnel));
                 if (tunnel) {
-                    ruvia::test::wait_until([&] { return stalled_upgrade_writes.load() == writes_before + 1; }, 2s);
+                    ruvia::test::wait_until([&] {
+                        return stalled_upgrade_writes.load() == writes_before + 1;
+                    }, 2s);
                 }
-                ruvia::test::wait_until([&] { return app.stats().active_connections_ == 0; }, 5s);
+                ruvia::test::wait_until([&] {
+                    return app.stats().active_connections_ == 0;
+                }, 5s);
                 if (tunnel) {
-                    ruvia::test::wait_until([&] { return stalled_upgrade_failures.load() == failures_before + 1; }, 2s);
+                    ruvia::test::wait_until([&] {
+                        return stalled_upgrade_failures.load() == failures_before + 1;
+                    }, 2s);
                 }
                 stalled.close(false, true);
             }
@@ -729,10 +746,14 @@ TEST(Ruvia, http1_stream_peer_close_stops_request_and_recycles_connections) {
             explicit_peer.send(request("explicit"));
             EXPECT_TRUE(explicit_peer.read_until("data: first").find("data: first") != std::string::npos);
             explicit_stop.request_stop();
-            ruvia::test::wait_until([&] { return cancelled.load() == explicit_before + 1; }, 2s);
+            ruvia::test::wait_until([&] {
+                return cancelled.load() == explicit_before + 1;
+            }, 2s);
             EXPECT_EQ(context_cancelled.load(), explicit_context_before);
             explicit_peer.close();
-            ruvia::test::wait_until([&] { return app.stats().active_connections_ == 0; }, 2s);
+            ruvia::test::wait_until([&] {
+                return app.stats().active_connections_ == 0;
+            }, 2s);
 
             const auto fd_baseline = fd_count();
             std::size_t fd_peak = fd_baseline, active_peak = 0;
@@ -754,7 +775,9 @@ TEST(Ruvia, http1_stream_peer_close_stops_request_and_recycles_connections) {
                 for (auto& client : clients) {
                     client->close();
                 }
-                ruvia::test::wait_until([&] { return app.stats().active_connections_ == 0; }, 2s);
+                ruvia::test::wait_until([&] {
+                    return app.stats().active_connections_ == 0;
+                }, 2s);
                 EXPECT_EQ(cancelled.load(), before + batch_size);
                 EXPECT_EQ(context_cancelled.load(), context_before + batch_size);
                 recycle_max = std::max(recycle_max, std::chrono::duration_cast<std::chrono::milliseconds>(clock_type::now() - begin));
@@ -768,13 +791,10 @@ TEST(Ruvia, http1_stream_peer_close_stops_request_and_recycles_connections) {
             recovery.send("GET /disconnect/health HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n");
             EXPECT_TRUE(recovery.read_until("healthy").find("healthy") != std::string::npos);
             recovery.close();
-            ruvia::test::wait_until([&] { return app.stats().active_connections_ == 0; }, 2s);
-            std::cout << "stream_disconnect metrics: total=" << batch_size * batches << " peak_active=" << active_peak
-                      << " fd_baseline=" << fd_baseline << " fd_peak=" << fd_peak << " fd_final=" << fd_final
-                      << " max_recycle_ms=" << recycle_max.count() << " errors=" << errors.load()
-                      << " connection_failures=" << app.stats().connection_failures_
-                      << " refused=" << app.stats().connections_refused_
-                      << " max_connections_per_worker=" << *ruvia::server_config{}.max_connections_per_worker_ << '\n';
+            ruvia::test::wait_until([&] {
+                return app.stats().active_connections_ == 0;
+            }, 2s);
+            std::cout << "stream_disconnect metrics: total=" << batch_size * batches << " peak_active=" << active_peak << " fd_baseline=" << fd_baseline << " fd_peak=" << fd_peak << " fd_final=" << fd_final << " max_recycle_ms=" << recycle_max.count() << " errors=" << errors.load() << " connection_failures=" << app.stats().connection_failures_ << " refused=" << app.stats().connections_refused_ << " max_connections_per_worker=" << *ruvia::server_config{}.max_connections_per_worker_ << '\n';
             EXPECT_EQ(app.stats().connections_refused_, std::size_t{0});
 
             // 在同一个有限等待上竞争 worker stop 和 peer EOF。
@@ -784,7 +804,9 @@ TEST(Ruvia, http1_stream_peer_close_stops_request_and_recycles_connections) {
             EXPECT_TRUE(stopping.read_until("data: first").find("data: first") != std::string::npos);
             app.stop();
             stopping.close();
-            ruvia::test::wait_until([&] { return finished.load() == before_stop + 1; }, 2s);
+            ruvia::test::wait_until([&] {
+                return finished.load() == before_stop + 1;
+            }, 2s);
         }
     } catch (...) {
         client_failure = std::current_exception();

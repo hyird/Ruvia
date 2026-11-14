@@ -71,15 +71,12 @@ private:
             }
             if (const auto* confirmation = event->confirmation()) {
                 const auto kind = confirmation->kind();
-                const bool subscribed = kind == ruvia::redis_pubsub_confirmation_kind::subscribed ||
-                                        kind == ruvia::redis_pubsub_confirmation_kind::pattern_subscribed;
-                co_await events_value.write({.data_ = confirmation->name().value_or(""),
-                    .event_ = subscribed ? "subscribed" : "unsubscribed"});
+                const bool subscribed = kind == ruvia::redis_pubsub_confirmation_kind::subscribed || kind == ruvia::redis_pubsub_confirmation_kind::pattern_subscribed;
+                co_await events_value.write({.data_ = confirmation->name().value_or(""), .event_ = subscribed ? "subscribed" : "unsubscribed"});
             } else if (const auto* message = event->message()) {
                 // The event borrows the subscription's reply storage only
                 // until the next read(); the SSE write copies it first.
-                co_await events_value.write({.data_ = message->payload(),
-                    .event_ = message->pattern() ? "pmessage" : "message"});
+                co_await events_value.write({.data_ = message->payload(), .event_ = message->pattern() ? "pmessage" : "message"});
             }
         }
     }
@@ -92,10 +89,7 @@ int main() {
         auto& app = ruvia::app();
         app.load_dotenv();
         const example::environment env_value(&app.env());
-        app.server({.process_signal_handlers_ = ruvia::process_signal_handler_policy::install})
-            .listen({.address_ = "127.0.0.1", .http_ = 8096})
-            .redis({.config_ = example::redis_config(env_value)})
-            .run();
+        app.server({.process_signal_handlers_ = ruvia::process_signal_handler_policy::install}).listen({.address_ = "127.0.0.1", .http_ = 8096}).redis({.config_ = example::redis_config(env_value)}).run();
     } catch (...) {
         std::cerr << ruvia::exception_text(std::current_exception()) << '\n';
         return 1;

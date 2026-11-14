@@ -72,8 +72,7 @@ public:
     [[nodiscard]] std::span<const http_header> headers() const&& = delete;
 
     // Case-insensitive lookup; the last repeated field wins.
-    [[nodiscard]] std::optional<std::string_view> header(
-        std::string_view name) const& noexcept RUVIA_LIFETIMEBOUND;
+    [[nodiscard]] std::optional<std::string_view> header(std::string_view name) const& noexcept RUVIA_LIFETIMEBOUND;
     std::optional<std::string_view> header(std::string_view name) const&& = delete;
 
     // Transfers the owned parsed fields to a consumer that retains the head's
@@ -85,10 +84,9 @@ public:
 private:
     friend struct detail::http_client_response_head_access;
 
-    http_client_response_head(
-        http_received_status status, http_protocol_version protocol_version) noexcept
-        : status_(status),
-          protocol_version_(protocol_version) {}
+    http_client_response_head(http_received_status status, http_protocol_version protocol_version) noexcept :
+        status_(status),
+        protocol_version_(protocol_version) {}
 
     http_received_status status_;
     http_protocol_version protocol_version_;
@@ -154,10 +152,10 @@ public:
     }
 
 private:
-    constexpr http_origin_view(http_scheme scheme, std::string_view host, std::uint16_t port) noexcept
-        : host_(host),
-          port_(port),
-          scheme_(scheme) {}
+    constexpr http_origin_view(http_scheme scheme, std::string_view host, std::uint16_t port) noexcept :
+        host_(host),
+        port_(port),
+        scheme_(scheme) {}
 
     std::string_view host_;
     std::uint16_t port_;
@@ -187,8 +185,8 @@ public:
 private:
     friend class http_client_request_content_view;
 
-    explicit constexpr http_client_request_bytes_view(std::string_view value) noexcept
-        : value_(value) {}
+    explicit constexpr http_client_request_bytes_view(std::string_view value) noexcept :
+        value_(value) {}
 
     std::string_view value_;
 };
@@ -205,26 +203,21 @@ public:
         return http_client_request_content_view(http_client_request_without_content());
     }
 
-    [[nodiscard]] static constexpr http_client_request_content_view bytes(
-        std::string_view value) noexcept {
+    [[nodiscard]] static constexpr http_client_request_content_view bytes(std::string_view value) noexcept {
         return http_client_request_content_view(http_client_request_bytes_view(value));
     }
 
-    [[nodiscard]] static http_client_request_content_view bytes(
-        std::span<const std::byte> value) noexcept {
+    [[nodiscard]] static http_client_request_content_view bytes(std::span<const std::byte> value) noexcept {
         return bytes(std::string_view(reinterpret_cast<const char*>(value.data()), value.size()));
     }
 
     template <typename traits_type, typename allocator_type>
-    static http_client_request_content_view bytes(
-        std::basic_string<char, traits_type, allocator_type>&&) = delete;
+    static http_client_request_content_view bytes(std::basic_string<char, traits_type, allocator_type>&&) = delete;
 
     template <typename traits_type, typename allocator_type>
-    static http_client_request_content_view bytes(
-        const std::basic_string<char, traits_type, allocator_type>&&) = delete;
+    static http_client_request_content_view bytes(const std::basic_string<char, traits_type, allocator_type>&&) = delete;
 
-    [[nodiscard]] constexpr const http_client_request_without_content* without_content()
-        const& noexcept RUVIA_LIFETIMEBOUND {
+    [[nodiscard]] constexpr const http_client_request_without_content* without_content() const& noexcept RUVIA_LIFETIMEBOUND {
         return std::get_if<http_client_request_without_content>(&content_);
     }
     const http_client_request_without_content* without_content() const&& = delete;
@@ -237,12 +230,11 @@ public:
 private:
     using content_type = std::variant<http_client_request_without_content, http_client_request_bytes_view>;
 
-    explicit constexpr http_client_request_content_view(
-        http_client_request_without_content content) noexcept
-        : content_(content) {}
+    explicit constexpr http_client_request_content_view(http_client_request_without_content content) noexcept :
+        content_(content) {}
 
-    explicit constexpr http_client_request_content_view(http_client_request_bytes_view content) noexcept
-        : content_(content) {}
+    explicit constexpr http_client_request_content_view(http_client_request_bytes_view content) noexcept :
+        content_(content) {}
 
     content_type content_;
 };
@@ -294,10 +286,8 @@ struct http_client_response_header_lookup final {
     std::string_view value_{};
 };
 
-[[nodiscard]] http_client_response_header_lookup lookup_unique_http_client_response_header(
-    const http_client_response_head& head RUVIA_LIFETIMEBOUND, std::string_view name) noexcept;
-[[nodiscard]] http_client_response_header_lookup lookup_unique_http_client_response_header(
-    const http_client_response_head&& head, std::string_view name) = delete;
+[[nodiscard]] http_client_response_header_lookup lookup_unique_http_client_response_header(const http_client_response_head& head RUVIA_LIFETIMEBOUND, std::string_view name) noexcept;
+[[nodiscard]] http_client_response_header_lookup lookup_unique_http_client_response_header(const http_client_response_head&& head, std::string_view name) = delete;
 
 enum class http_client_redirect_content_disposition : std::uint8_t {
     preserve,
@@ -324,24 +314,20 @@ public:
     }
     std::string_view method() const&& = delete;
 
-    [[nodiscard]] constexpr http_client_redirect_content_disposition content_disposition()
-        const noexcept {
+    [[nodiscard]] constexpr http_client_redirect_content_disposition content_disposition() const noexcept {
         return content_disposition_;
     }
 
 private:
-    friend http_client_redirect_request_plan plan_http_client_redirect_request(
-        const http_client_request_view&, http_client_redirect_request_plan_options);
+    friend http_client_redirect_request_plan plan_http_client_redirect_request(const http_client_request_view&, http_client_redirect_request_plan_options);
 
-    http_client_redirect_request_plan(
-        std::string_view method, http_client_redirect_content_disposition content_disposition);
+    http_client_redirect_request_plan(std::string_view method, http_client_redirect_content_disposition content_disposition);
 
     std::string method_;
     http_client_redirect_content_disposition content_disposition_;
 };
 
-[[nodiscard]] http_client_redirect_request_plan plan_http_client_redirect_request(
-    const http_client_request_view& request, http_client_redirect_request_plan_options options);
+[[nodiscard]] http_client_redirect_request_plan plan_http_client_redirect_request(const http_client_request_view& request, http_client_redirect_request_plan_options options);
 
 // This classification has no alternative-specific payload, so an enum is the
 // complete result rather than a status coupled to unrelated fields.
@@ -354,8 +340,7 @@ enum class http_client_origin_authority_status : std::uint8_t {
 // Compares effective ports and URI hosts. IPv6 literals compare by address,
 // independent of zero compression, leading zeros or an embedded IPv4 tail.
 // Other hosts retain URI case/percent-encoding equivalence; no DNS lookup.
-[[nodiscard]] http_client_origin_authority_status classify_http_client_origin_authority(
-    const http_origin_view& origin, std::string_view authority) noexcept;
+[[nodiscard]] http_client_origin_authority_status classify_http_client_origin_authority(const http_origin_view& origin, std::string_view authority) noexcept;
 
 enum class http_client_redirect_resolution_error : std::uint8_t {
     invalid_current_target,
@@ -414,16 +399,14 @@ public:
     http_origin_view origin() const&& = delete;
 
 private:
-    friend std::variant<http_client_resolved_redirect, http_client_redirect_resolution_error>
-    resolve_http_client_redirect_target(const http_origin_view&, http_client_redirect_target_options);
+    friend std::variant<http_client_resolved_redirect, http_client_redirect_resolution_error> resolve_http_client_redirect_target(const http_origin_view&, http_client_redirect_target_options);
 
-    http_client_resolved_redirect(http_scheme scheme, std::string host, std::uint16_t port,
-        std::string target, bool cross_origin) noexcept
-        : scheme_(scheme),
-          host_(std::move(host)),
-          port_(port),
-          target_(std::move(target)),
-          cross_origin_(cross_origin) {}
+    http_client_resolved_redirect(http_scheme scheme, std::string host, std::uint16_t port, std::string target, bool cross_origin) noexcept :
+        scheme_(scheme),
+        host_(std::move(host)),
+        port_(port),
+        target_(std::move(target)),
+        cross_origin_(cross_origin) {}
 
     http_scheme scheme_;
     std::string host_;
@@ -437,9 +420,7 @@ private:
 // classified by cross_origin(); the I/O owner applies its own cross-origin
 // policy (credential strip, TLS-downgrade refusal) on top of the classified
 // destination.
-[[nodiscard]] std::variant<http_client_resolved_redirect, http_client_redirect_resolution_error>
-resolve_http_client_redirect_target(
-    const http_origin_view& origin, http_client_redirect_target_options options);
+[[nodiscard]] std::variant<http_client_resolved_redirect, http_client_redirect_resolution_error> resolve_http_client_redirect_target(const http_origin_view& origin, http_client_redirect_target_options options);
 
 }  // namespace ruvia
 
@@ -475,19 +456,16 @@ private:
     friend struct detail::http1_client_request_prepare_result_access;
     friend struct detail::http1_client_exchange_state_access;
 
-    http1_client_exchange_state(http_known_method method, http1_close_policy close_policy,
-        detail::http1_client_initial_content_state content_state,
-        std::string offered_upgrade_protocols) noexcept
-        : offered_upgrade_protocols_(std::move(offered_upgrade_protocols)),
-          method_(method),
-          close_policy_(close_policy),
-          content_state_(content_state) {}
+    http1_client_exchange_state(http_known_method method, http1_close_policy close_policy, detail::http1_client_initial_content_state content_state, std::string offered_upgrade_protocols) noexcept :
+        offered_upgrade_protocols_(std::move(offered_upgrade_protocols)),
+        method_(method),
+        close_policy_(close_policy),
+        content_state_(content_state) {}
 
     std::string offered_upgrade_protocols_;
     http_known_method method_{http_known_method::unknown};
     http1_close_policy close_policy_{http1_close_policy::allow_reuse};
-    detail::http1_client_initial_content_state content_state_{
-        detail::http1_client_initial_content_state::complete};
+    detail::http1_client_initial_content_state content_state_{detail::http1_client_initial_content_state::complete};
 };
 
 }  // namespace ruvia
@@ -543,9 +521,9 @@ public:
 
 private:
     friend struct detail::http1_client_request_prepare_result_access;
-    http1_client_streaming_request_content(std::optional<std::uint64_t> length, bool gated) noexcept
-        : length_(length),
-          gated_(gated) {}
+    http1_client_streaming_request_content(std::optional<std::uint64_t> length, bool gated) noexcept :
+        length_(length),
+        gated_(gated) {}
     std::optional<std::uint64_t> length_;
     bool gated_;
 };
@@ -566,8 +544,8 @@ public:
 private:
     friend struct detail::http1_client_request_prepare_result_access;
 
-    explicit constexpr http1_client_immediate_request_content(std::string_view bytes_value) noexcept
-        : bytes_(bytes_value) {}
+    explicit constexpr http1_client_immediate_request_content(std::string_view bytes_value) noexcept :
+        bytes_(bytes_value) {}
 
     std::string_view bytes_;
 };
@@ -581,8 +559,8 @@ public:
 private:
     friend struct detail::http1_client_request_prepare_result_access;
 
-    explicit constexpr http1_client_continue_gated_request_content(std::string_view bytes_value) noexcept
-        : bytes_(bytes_value) {}
+    explicit constexpr http1_client_continue_gated_request_content(std::string_view bytes_value) noexcept :
+        bytes_(bytes_value) {}
 
     std::string_view bytes_;
 };
@@ -594,8 +572,7 @@ private:
 // Payload exists only on the two alternatives that actually send content.
 class http1_client_request_content_plan final {
 public:
-    [[nodiscard]] constexpr const http1_client_request_without_content* without_content()
-        const& noexcept {
+    [[nodiscard]] constexpr const http1_client_request_without_content* without_content() const& noexcept {
         return std::get_if<http1_client_request_without_content>(&content_);
     }
     const http1_client_request_without_content* without_content() const&& = delete;
@@ -605,8 +582,7 @@ public:
     }
     const http1_client_immediate_request_content* immediate() const&& = delete;
 
-    [[nodiscard]] constexpr const http1_client_continue_gated_request_content* continue_gated()
-        const& noexcept {
+    [[nodiscard]] constexpr const http1_client_continue_gated_request_content* continue_gated() const& noexcept {
         return std::get_if<http1_client_continue_gated_request_content>(&content_);
     }
     const http1_client_continue_gated_request_content* continue_gated() const&& = delete;
@@ -619,22 +595,18 @@ public:
 private:
     friend struct detail::http1_client_request_prepare_result_access;
 
-    explicit http1_client_request_content_plan(http1_client_streaming_request_content content) noexcept
-        : content_(content) {}
-    using content_type = std::variant<http1_client_request_without_content,
-        http1_client_immediate_request_content, http1_client_continue_gated_request_content, http1_client_streaming_request_content>;
+    explicit http1_client_request_content_plan(http1_client_streaming_request_content content) noexcept :
+        content_(content) {}
+    using content_type = std::variant<http1_client_request_without_content, http1_client_immediate_request_content, http1_client_continue_gated_request_content, http1_client_streaming_request_content>;
 
-    explicit constexpr http1_client_request_content_plan(
-        http1_client_request_without_content content) noexcept
-        : content_(content) {}
+    explicit constexpr http1_client_request_content_plan(http1_client_request_without_content content) noexcept :
+        content_(content) {}
 
-    explicit constexpr http1_client_request_content_plan(
-        http1_client_immediate_request_content content) noexcept
-        : content_(content) {}
+    explicit constexpr http1_client_request_content_plan(http1_client_immediate_request_content content) noexcept :
+        content_(content) {}
 
-    explicit constexpr http1_client_request_content_plan(
-        http1_client_continue_gated_request_content content) noexcept
-        : content_(content) {}
+    explicit constexpr http1_client_request_content_plan(http1_client_continue_gated_request_content content) noexcept :
+        content_(content) {}
 
     content_type content_;
 };
@@ -670,8 +642,7 @@ enum class http1_client_request_prepare_error : std::uint8_t {
     invalid_target_form,
 };
 
-[[nodiscard]] std::string_view http1_client_request_prepare_error_message(
-    http1_client_request_prepare_error error) noexcept;
+[[nodiscard]] std::string_view http1_client_request_prepare_error_message(http1_client_request_prepare_error error) noexcept;
 
 class http1_client_request_buffer_too_small final {
 public:
@@ -682,8 +653,8 @@ public:
 private:
     friend struct detail::http1_client_request_prepare_result_access;
 
-    explicit constexpr http1_client_request_buffer_too_small(std::size_t required_head_bytes) noexcept
-        : required_head_bytes_(required_head_bytes) {}
+    explicit constexpr http1_client_request_buffer_too_small(std::size_t required_head_bytes) noexcept :
+        required_head_bytes_(required_head_bytes) {}
 
     std::size_t required_head_bytes_;
 };
@@ -713,11 +684,10 @@ public:
 private:
     friend struct detail::http1_client_request_prepare_result_access;
 
-    prepared_http1_client_request(std::string_view head, http1_client_request_content_plan content_plan,
-        http1_client_exchange_state exchange_state) noexcept
-        : head_(head),
-          content_plan_(content_plan),
-          exchange_state_(std::move(exchange_state)) {}
+    prepared_http1_client_request(std::string_view head, http1_client_request_content_plan content_plan, http1_client_exchange_state exchange_state) noexcept :
+        head_(head),
+        content_plan_(content_plan),
+        exchange_state_(std::move(exchange_state)) {}
 
     std::string_view head_;
     http1_client_request_content_plan content_plan_;
@@ -742,42 +712,22 @@ class http1_client_request_writer final {
 public:
     http1_client_request_writer() noexcept = default;
 
-    [[nodiscard]] std::variant<prepared_http1_client_request, http1_client_request_buffer_too_small,
-        http1_client_request_prepare_error>
-    prepare(const http_origin_view& origin,
-        const http_client_request_view& request, std::span<char> head_buffer,
-        http1_client_request_wire_policy policy = {}) const;
+    [[nodiscard]] std::variant<prepared_http1_client_request, http1_client_request_buffer_too_small, http1_client_request_prepare_error> prepare(const http_origin_view& origin, const http_client_request_view& request, std::span<char> head_buffer, http1_client_request_wire_policy policy = {}) const;
 
     // RFC 9298 HTTP/1.1 GET Upgrade. Capsule-Protocol is validated; Upgrade and
     // Connection are driver-owned, and Host remains owned by the writer.
     // RFC 9931 section 6.3 forbids sending UDP payload before the server's
     // successful protocol-upgrade response in HTTP/1.x.
-    [[nodiscard]] std::variant<prepared_http1_client_request, http1_client_request_buffer_too_small,
-        http1_client_request_prepare_error>
-    prepare_connect_udp(const http_origin_view& origin,
-        borrowed_text target, std::span<const http_header_view> headers, std::span<char> head_buffer,
-        http1_client_request_wire_policy policy = {}) const;
+    [[nodiscard]] std::variant<prepared_http1_client_request, http1_client_request_buffer_too_small, http1_client_request_prepare_error> prepare_connect_udp(const http_origin_view& origin, borrowed_text target, std::span<const http_header_view> headers, std::span<char> head_buffer, http1_client_request_wire_policy policy = {}) const;
 
-    [[nodiscard]] std::variant<prepared_http1_client_request, http1_client_request_buffer_too_small,
-        http1_client_request_prepare_error>
-    prepare_streaming(const http_origin_view& origin,
-        const http1_client_request_head_view& request, std::span<char> head_buffer,
-        http1_client_request_wire_policy policy = {}) const;
+    [[nodiscard]] std::variant<prepared_http1_client_request, http1_client_request_buffer_too_small, http1_client_request_prepare_error> prepare_streaming(const http_origin_view& origin, const http1_client_request_head_view& request, std::span<char> head_buffer, http1_client_request_wire_policy policy = {}) const;
 
     // When forwarding untrusted TCP payload, RFC 9931 section 8 requires the
     // driver to wait for the successful tunnel plan before sending that payload,
     // unless close_after_response makes the request emit Connection: close.
-    [[nodiscard]] std::variant<prepared_http1_client_request, http1_client_request_buffer_too_small,
-        http1_client_request_prepare_error>
-    prepare_connect(const http_origin_view& tunnel_origin,
-        std::span<const http_header_view> headers, std::span<char> head_buffer,
-        http1_client_request_wire_policy policy = {}) const;
+    [[nodiscard]] std::variant<prepared_http1_client_request, http1_client_request_buffer_too_small, http1_client_request_prepare_error> prepare_connect(const http_origin_view& tunnel_origin, std::span<const http_header_view> headers, std::span<char> head_buffer, http1_client_request_wire_policy policy = {}) const;
 
-    [[nodiscard]] std::variant<prepared_http1_client_request, http1_client_request_buffer_too_small,
-        http1_client_request_prepare_error>
-    prepare_connect(borrowed_text authority,
-        std::span<const http_header_view> headers, std::span<char> head_buffer,
-        http1_client_request_wire_policy policy = {}) const;
+    [[nodiscard]] std::variant<prepared_http1_client_request, http1_client_request_buffer_too_small, http1_client_request_prepare_error> prepare_connect(borrowed_text authority, std::span<const http_header_view> headers, std::span<char> head_buffer, http1_client_request_wire_policy policy = {}) const;
 };
 
 }  // namespace ruvia
@@ -838,8 +788,7 @@ public:
     // Returns a view into buffer. Transmit it, then commit_finish(). Known-length
     // bodies return an empty view and still require a successful commit_finish().
     // Trailer names and values may borrow buffer. Failure leaves buffer unchanged.
-    [[nodiscard]] std::variant<std::string_view, http1_request_content_write_error> plan_finish(
-        std::span<char> buffer, std::span<const http_header_view> trailers = {}) noexcept;
+    [[nodiscard]] std::variant<std::string_view, http1_request_content_write_error> plan_finish(std::span<char> buffer, std::span<const http_header_view> trailers = {}) noexcept;
     void commit_finish();
     [[nodiscard]] bool finished() const noexcept {
         return finished_;
@@ -909,8 +858,8 @@ public:
 private:
     friend struct detail::http1_client_response_plan_access;
 
-    explicit constexpr http1_client_informational_response(http1_close_policy persistence) noexcept
-        : persistence_(persistence) {}
+    explicit constexpr http1_client_informational_response(http1_close_policy persistence) noexcept :
+        persistence_(persistence) {}
 
     http1_close_policy persistence_;
 };
@@ -924,8 +873,8 @@ public:
 private:
     friend struct detail::http1_client_response_plan_access;
 
-    explicit constexpr http1_client_response_without_content(http1_close_policy persistence) noexcept
-        : persistence_(persistence) {}
+    explicit constexpr http1_client_response_without_content(http1_close_policy persistence) noexcept :
+        persistence_(persistence) {}
 
     http1_close_policy persistence_;
 };
@@ -947,10 +896,9 @@ public:
 private:
     friend struct detail::http1_client_response_plan_access;
 
-    constexpr http1_client_known_length_response(
-        std::size_t content_length, http1_close_policy persistence) noexcept
-        : content_length_(content_length),
-          persistence_(persistence) {}
+    constexpr http1_client_known_length_response(std::size_t content_length, http1_close_policy persistence) noexcept :
+        content_length_(content_length),
+        persistence_(persistence) {}
 
     std::size_t content_length_;
     http1_close_policy persistence_;
@@ -972,10 +920,9 @@ public:
 private:
     friend struct detail::http1_client_response_plan_access;
 
-    http1_client_chunked_response(
-        http_transfer_codings transfer_codings, http1_close_policy persistence)
-        : transfer_codings_(std::move(transfer_codings)),
-          persistence_(persistence) {}
+    http1_client_chunked_response(http_transfer_codings transfer_codings, http1_close_policy persistence) :
+        transfer_codings_(std::move(transfer_codings)),
+        persistence_(persistence) {}
 
     http_transfer_codings transfer_codings_;
     http1_close_policy persistence_;
@@ -994,8 +941,8 @@ public:
 private:
     friend struct detail::http1_client_response_plan_access;
 
-    explicit http1_client_close_delimited_response(http_transfer_codings transfer_codings)
-        : transfer_codings_(std::move(transfer_codings)) {}
+    explicit http1_client_close_delimited_response(http_transfer_codings transfer_codings) :
+        transfer_codings_(std::move(transfer_codings)) {}
 
     http_transfer_codings transfer_codings_;
 };
@@ -1020,14 +967,12 @@ private:
 // it.
 class http1_client_response_plan final {
 public:
-    [[nodiscard]] constexpr const http1_client_informational_response* informational()
-        const& noexcept RUVIA_LIFETIMEBOUND {
+    [[nodiscard]] constexpr const http1_client_informational_response* informational() const& noexcept RUVIA_LIFETIMEBOUND {
         return std::get_if<http1_client_informational_response>(&state_);
     }
     const http1_client_informational_response* informational() const&& = delete;
 
-    [[nodiscard]] constexpr const http1_client_response_without_content* without_content()
-        const& noexcept RUVIA_LIFETIMEBOUND {
+    [[nodiscard]] constexpr const http1_client_response_without_content* without_content() const& noexcept RUVIA_LIFETIMEBOUND {
         return std::get_if<http1_client_response_without_content>(&state_);
     }
     const http1_client_response_without_content* without_content() const&& = delete;
@@ -1049,8 +994,7 @@ public:
     }
     const http1_client_chunked_response* chunked() const&& = delete;
 
-    [[nodiscard]] constexpr const http1_client_close_delimited_response* close_delimited()
-        const& noexcept RUVIA_LIFETIMEBOUND {
+    [[nodiscard]] constexpr const http1_client_close_delimited_response* close_delimited() const& noexcept RUVIA_LIFETIMEBOUND {
         return std::get_if<http1_client_close_delimited_response>(&state_);
     }
     const http1_client_close_delimited_response* close_delimited() const&& = delete;
@@ -1069,25 +1013,19 @@ public:
     // final response without that signal leaves the external writer responsible
     // for finishing the request before the connection can be reused (RFC 9110
     // section 7.5), even though this response-head parser is already terminal.
-    [[nodiscard]] constexpr std::optional<http_client_request_content_signal> request_content_signal()
-        const noexcept {
+    [[nodiscard]] constexpr std::optional<http_client_request_content_signal> request_content_signal() const noexcept {
         return request_content_signal_;
     }
 
 private:
     friend struct detail::http1_client_response_plan_access;
 
-    using state_type = std::variant<http1_client_informational_response, http1_client_response_without_content,
-        http1_client_known_length_response, http1_client_chunked_response,
-        http1_client_close_delimited_response, http1_client_connect_tunnel,
-        http1_client_protocol_upgrade>;
+    using state_type = std::variant<http1_client_informational_response, http1_client_response_without_content, http1_client_known_length_response, http1_client_chunked_response, http1_client_close_delimited_response, http1_client_connect_tunnel, http1_client_protocol_upgrade>;
 
-    http1_client_response_plan(state_type state_value,
-        std::optional<http_client_request_content_signal> request_content_signal,
-        bool discards_content = false)
-        : state_(std::move(state_value)),
-          request_content_signal_(request_content_signal),
-          discards_content_(discards_content) {}
+    http1_client_response_plan(state_type state_value, std::optional<http_client_request_content_signal> request_content_signal, bool discards_content = false) :
+        state_(std::move(state_value)),
+        request_content_signal_(request_content_signal),
+        discards_content_(discards_content) {}
 
     state_type state_;
     std::optional<http_client_request_content_signal> request_content_signal_;
@@ -1118,8 +1056,7 @@ enum class http1_client_response_parse_error : std::uint8_t {
     invalid_protocol_switch,
 };
 
-[[nodiscard]] std::string_view http1_client_response_parse_error_message(
-    http1_client_response_parse_error error) noexcept;
+[[nodiscard]] std::string_view http1_client_response_parse_error_message(http1_client_response_parse_error error) noexcept;
 
 class http1_client_response_need_more final {
 private:
@@ -1159,11 +1096,10 @@ public:
 private:
     friend struct detail::http1_client_response_parse_result_access;
 
-    http1_parsed_client_response_head(http_client_response_head head, http1_client_response_plan plan,
-        std::size_t consumed_bytes) noexcept
-        : head_(std::move(head)),
-          plan_(std::move(plan)),
-          consumed_bytes_(consumed_bytes) {}
+    http1_parsed_client_response_head(http_client_response_head head, http1_client_response_plan plan, std::size_t consumed_bytes) noexcept :
+        head_(std::move(head)),
+        plan_(std::move(plan)),
+        consumed_bytes_(consumed_bytes) {}
 
     http_client_response_head head_;
     http1_client_response_plan plan_;
@@ -1202,18 +1138,16 @@ public:
 private:
     friend struct detail::http1_client_response_parse_result_access;
 
-    explicit http1_client_response_parse_result(http1_client_response_need_more state_value) noexcept
-        : state_(state_value) {}
+    explicit http1_client_response_parse_result(http1_client_response_need_more state_value) noexcept :
+        state_(state_value) {}
 
-    explicit http1_client_response_parse_result(http1_parsed_client_response_head state_value) noexcept
-        : state_(std::move(state_value)) {}
+    explicit http1_client_response_parse_result(http1_parsed_client_response_head state_value) noexcept :
+        state_(std::move(state_value)) {}
 
-    explicit http1_client_response_parse_result(http1_client_response_parse_error state_value) noexcept
-        : state_(state_value) {}
+    explicit http1_client_response_parse_result(http1_client_response_parse_error state_value) noexcept :
+        state_(state_value) {}
 
-    std::variant<http1_client_response_need_more, http1_parsed_client_response_head,
-        http1_client_response_parse_error>
-        state_;
+    std::variant<http1_client_response_need_more, http1_parsed_client_response_head, http1_client_response_parse_error> state_;
 };
 
 static_assert(std::is_nothrow_move_constructible_v<http1_client_response_parse_result>);
@@ -1271,8 +1205,7 @@ public:
     [[nodiscard]] http1_client_response_parse_result parse(std::string_view buffer);
 
 private:
-    [[nodiscard]] static detail::http1_client_request_content_phase
-    initial_request_content_phase(const http1_client_exchange_state& state_value) noexcept;
+    [[nodiscard]] static detail::http1_client_request_content_phase initial_request_content_phase(const http1_client_exchange_state& state_value) noexcept;
 
     enum class phase_type : std::uint8_t {
         await_response,
@@ -1301,8 +1234,7 @@ enum class http1_client_response_body_error : unsigned char {
     incomplete_body,
 };
 
-[[nodiscard]] std::string_view http1_client_response_body_error_message(
-    http1_client_response_body_error error) noexcept;
+[[nodiscard]] std::string_view http1_client_response_body_error_message(http1_client_response_body_error error) noexcept;
 
 class http1_client_response_body_decoder final {
 public:
@@ -1314,8 +1246,8 @@ public:
 
     private:
         friend class http1_client_response_body_decoder;
-        explicit constexpr need_input_type(std::size_t consumed) noexcept
-            : consumed_(consumed) {}
+        explicit constexpr need_input_type(std::size_t consumed) noexcept :
+            consumed_(consumed) {}
         std::size_t consumed_;
     };
 
@@ -1331,9 +1263,9 @@ public:
 
     private:
         friend class http1_client_response_body_decoder;
-        constexpr output_view_type(std::size_t consumed, std::string_view bytes_value) noexcept
-            : consumed_(consumed),
-              bytes_(bytes_value) {}
+        constexpr output_view_type(std::size_t consumed, std::string_view bytes_value) noexcept :
+            consumed_(consumed),
+            bytes_(bytes_value) {}
         std::size_t consumed_;
         std::string_view bytes_;
     };
@@ -1350,9 +1282,9 @@ public:
 
     private:
         friend class http1_client_response_body_decoder;
-        constexpr validated_trailers_view_type(std::size_t consumed, std::span<const http_header> fields) noexcept
-            : consumed_(consumed),
-              fields_(fields) {}
+        constexpr validated_trailers_view_type(std::size_t consumed, std::span<const http_header> fields) noexcept :
+            consumed_(consumed),
+            fields_(fields) {}
         std::size_t consumed_;
         std::span<const http_header> fields_;
     };
@@ -1368,9 +1300,9 @@ public:
 
     private:
         friend class http1_client_response_body_decoder;
-        constexpr complete_type(std::size_t consumed, http1_close_policy persistence) noexcept
-            : consumed_(consumed),
-              persistence_(persistence) {}
+        constexpr complete_type(std::size_t consumed, http1_close_policy persistence) noexcept :
+            consumed_(consumed),
+            persistence_(persistence) {}
         std::size_t consumed_;
         http1_close_policy persistence_;
     };
@@ -1386,9 +1318,9 @@ public:
 
     private:
         friend class http1_client_response_body_decoder;
-        constexpr protocol_failure_type(std::size_t consumed, http1_client_response_body_error error) noexcept
-            : consumed_(consumed),
-              error_(error) {}
+        constexpr protocol_failure_type(std::size_t consumed, http1_client_response_body_error error) noexcept :
+            consumed_(consumed),
+            error_(error) {}
         std::size_t consumed_;
         http1_client_response_body_error error_;
     };
@@ -1401,8 +1333,8 @@ public:
 
     private:
         friend class http1_client_response_body_decoder;
-        explicit constexpr decoder_failure_type(std::size_t consumed) noexcept
-            : consumed_(consumed) {}
+        explicit constexpr decoder_failure_type(std::size_t consumed) noexcept :
+            consumed_(consumed) {}
         std::size_t consumed_;
     };
 
@@ -1424,11 +1356,10 @@ public:
 
     private:
         friend class http1_client_response_body_decoder;
-        using value_type = std::variant<need_input_type, output_view_type, validated_trailers_view_type, complete_type,
-            protocol_failure_type, decoder_failure_type>;
+        using value_type = std::variant<need_input_type, output_view_type, validated_trailers_view_type, complete_type, protocol_failure_type, decoder_failure_type>;
         template <typename t_type>
-        explicit result_type(t_type value) noexcept
-            : value_(std::move(value)) {}
+        explicit result_type(t_type value) noexcept :
+            value_(std::move(value)) {}
         value_type value_;
     };
 
@@ -1478,8 +1409,7 @@ private:
     [[nodiscard]] result_type step_fixed(std::string_view available, std::span<char> scratch, bool eof);
     [[nodiscard]] result_type step_close_delimited(std::string_view available, std::span<char> scratch, bool eof);
     [[nodiscard]] result_type step_chunked(std::string_view available, std::span<char> scratch, bool eof);
-    [[nodiscard]] std::optional<result_type> drain_pending_chunk(
-        std::string_view available, std::size_t& consumed, std::span<char> scratch, bool eof);
+    [[nodiscard]] std::optional<result_type> drain_pending_chunk(std::string_view available, std::size_t& consumed, std::span<char> scratch, bool eof);
     void consume_pending_delimiter(std::string_view available, std::size_t& consumed) noexcept;
     [[nodiscard]] result_type replay_terminal() const noexcept;
     [[nodiscard]] result_type need_input(std::size_t consumed = 0) const noexcept;
@@ -1492,8 +1422,7 @@ private:
     [[nodiscard]] result_type complete(std::size_t consumed);
     [[nodiscard]] result_type fail(http1_client_response_body_error error, std::size_t consumed = 0);
     [[nodiscard]] result_type decoder_failure(std::size_t consumed = 0);
-    [[nodiscard]] result_type drive_transfer(
-        std::string_view input, std::size_t wire_prefix, std::span<char> scratch);
+    [[nodiscard]] result_type drive_transfer(std::string_view input, std::size_t wire_prefix, std::span<char> scratch);
     [[nodiscard]] result_type finish_transfer(std::size_t consumed, std::span<char> scratch);
 
     using terminal_type = std::variant<complete_type, protocol_failure_type, decoder_failure_type>;

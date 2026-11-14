@@ -72,8 +72,7 @@ struct observation final {
     std::map<std::string, session_record, std::less<>> sessions_;
 
     void record(std::string_view path, const ruvia::websocket& websocket) {
-        sessions_.insert_or_assign(std::string(path),
-            session_record{websocket.termination(), websocket.bytes_received(), websocket.bytes_sent()});
+        sessions_.insert_or_assign(std::string(path), session_record{websocket.termination(), websocket.bytes_received(), websocket.bytes_sent()});
     }
     [[nodiscard]] session_record session(std::string_view path) const {
         const auto found = sessions_.find(path);
@@ -86,8 +85,8 @@ struct observation final {
 
 struct request_retirement final {
     observation& observed_;
-    explicit request_retirement(observation& observed)
-        : observed_(observed) {
+    explicit request_retirement(observation& observed) :
+        observed_(observed) {
         ++observed_.entered_;
     }
     ~request_retirement() {
@@ -95,8 +94,7 @@ struct request_retirement final {
     }
 };
 
-ruvia::task<void> expect_read_interrupted(
-    ruvia::task<std::optional<ruvia::websocket_message>> read, std::errc expected, bool& interrupted) {
+ruvia::task<void> expect_read_interrupted(ruvia::task<std::optional<ruvia::websocket_message>> read, std::errc expected, bool& interrupted) {
     try {
         (void)co_await std::move(read);
     } catch (const std::system_error& error) {
@@ -123,8 +121,7 @@ ruvia::task<void> close_under_pending_read(ruvia::websocket& websocket, const ru
     {
         ruvia::stop_source stop;
         ruvia::task_scope reads(worker);
-        reads.spawn(expect_read_interrupted(
-            websocket.read({.stop_token_ = stop.token()}), std::errc::operation_canceled, cancelled));
+        reads.spawn(expect_read_interrupted(websocket.read({.stop_token_ = stop.token()}), std::errc::operation_canceled, cancelled));
         stop.request_stop();
         co_await reads.join();
     }
@@ -220,8 +217,7 @@ ruvia::task<std::string> receive_fragmented(auto& peer, bool compressed, std::si
     }
     ruvia::websocket_deflate_codecs codecs;
     std::string inflated;
-    EXPECT_TRUE(codecs.inflate_message(payload, inflated, ruvia::protocol_byte_limit::unlimited()) ==
-                ruvia::websocket_inflate_result::ok);
+    EXPECT_TRUE(codecs.inflate_message(payload, inflated, ruvia::protocol_byte_limit::unlimited()) == ruvia::websocket_inflate_result::ok);
     co_return std::string(inflated);
 }
 
@@ -246,11 +242,7 @@ ruvia::task<void> serve(ruvia::request_stream& request, observation& observed) {
         co_await request.response().end();
         co_return;
     }
-    ruvia::websocket_route_config config{
-        .subprotocols_ = {"standalone.v1"},
-        .require_subprotocol_ = true,
-        .lifecycle_ = {.close_handshake_timeout_ = 40ms},
-        .deflate_ = {.context_takeover_ = true}};
+    ruvia::websocket_route_config config{.subprotocols_ = {"standalone.v1"}, .require_subprotocol_ = true, .lifecycle_ = {.close_handshake_timeout_ = 40ms}, .deflate_ = {.context_takeover_ = true}};
     if (path == "/heartbeat") {
         config.lifecycle_.heartbeat_ = {.ping_interval_ = 20ms, .pong_timeout_ = 40ms};
     }
@@ -423,14 +415,13 @@ std::string masked_frame(unsigned opcode, std::string_view payload, bool final =
 // server's actual frame bits, automatic Pong, and deadline transport retirement.
 class wire_peer final {
 public:
-    explicit wire_peer(asio::io_context& io)
-        : socket_(io) {}
+    explicit wire_peer(asio::io_context& io) :
+        socket_(io) {}
     ~wire_peer() {
         abort();
     }
 
-    ruvia::task<void> open(ruvia::http_client& client, const target& destination, std::string_view path,
-        bool prebuffer = false, bool invalid_version = false) {
+    ruvia::task<void> open(ruvia::http_client& client, const target& destination, std::string_view path, bool prebuffer = false, bool invalid_version = false) {
         if (destination.version_ != ruvia::http_protocol_version::http11) {
             if (invalid_version) {
                 throw std::logic_error("malformed extended CONNECT needs the raw wire fixture");
@@ -455,10 +446,7 @@ public:
         if (connected.error_code()) {
             throw std::system_error(connected.error_code());
         }
-        std::string head = "GET " + std::string(path) + " HTTP/1.1\r\nHost: " + destination.authority_ +
-                           "\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Version: " +
-                           (invalid_version ? "12" : "13") +
-                           "\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Protocol: standalone.v1\r\nSec-WebSocket-Extensions: permessage-deflate\r\n\r\n";
+        std::string head = "GET " + std::string(path) + " HTTP/1.1\r\nHost: " + destination.authority_ + "\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Version: " + (invalid_version ? "12" : "13") + "\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Protocol: standalone.v1\r\nSec-WebSocket-Extensions: permessage-deflate\r\n\r\n";
         if (prebuffer) {
             head += masked_frame(1, "prebuffered");
         }
@@ -611,17 +599,14 @@ void reject_invalid_extended_connect(const target& destination, const std::files
         const auto deadline = std::chrono::steady_clock::now() + 3s;
         for (;;) {
             const auto frame = ruvia::test::read_frame(stream, deadline);
-            if (frame.header_.type_ == static_cast<unsigned>(ruvia::http2_frame_type::settings) &&
-                (frame.header_.flags_ & 1U) == 0) {
+            if (frame.header_.type_ == static_cast<unsigned>(ruvia::http2_frame_type::settings) && (frame.header_.flags_ & 1U) == 0) {
                 break;
             }
         }
         wire.clear();
         ruvia::test::append_frame(wire, ruvia::http2_frame_type::settings, 1, 0, {});
         std::string block;
-        for (const auto& field : std::array<std::pair<std::string_view, std::string_view>, 7>{{{":method", "CONNECT"}, {":protocol", "websocket"}, {":scheme", "https"},
-                 {":authority", destination.authority_}, {":path", "/invalid-version"},
-                 {"sec-websocket-version", "12"}, {"sec-websocket-protocol", "standalone.v1"}}}) {
+        for (const auto& field : std::array<std::pair<std::string_view, std::string_view>, 7>{{{":method", "CONNECT"}, {":protocol", "websocket"}, {":scheme", "https"}, {":authority", destination.authority_}, {":path", "/invalid-version"}, {"sec-websocket-version", "12"}, {"sec-websocket-protocol", "standalone.v1"}}}) {
             ruvia::hpack_encoder::encode_header(block, field.first, field.second);
         }
         ruvia::test::append_frame(wire, ruvia::http2_frame_type::headers, 4, 1, block);
@@ -635,8 +620,7 @@ void reject_invalid_extended_connect(const target& destination, const std::files
                 continue;
             }
             const auto type = frame.header_.type_;
-            if (type != static_cast<unsigned>(ruvia::http2_frame_type::headers) &&
-                type != static_cast<unsigned>(ruvia::http2_frame_type::continuation)) {
+            if (type != static_cast<unsigned>(ruvia::http2_frame_type::headers) && type != static_cast<unsigned>(ruvia::http2_frame_type::continuation)) {
                 throw std::runtime_error("malformed HTTP/2 bootstrap did not receive response HEADERS");
             }
             if (type == static_cast<unsigned>(ruvia::http2_frame_type::headers)) {
@@ -680,10 +664,7 @@ void reject_invalid_extended_connect(const target& destination, const std::files
         const auto port = static_cast<std::uint16_t>(std::stoul(destination.authority_.substr(destination.authority_.rfind(':') + 1)));
         // The public client validates Sec-WebSocket-Version: 13 before sending.
         ruvia::test::http3_raw_request_client peer({asio::ip::address_v4::loopback(), port}, ca_file, "127.0.0.1", 3s);
-        const auto response = peer.request({{":method", "CONNECT"}, {":protocol", "websocket"}, {":scheme", "https"},
-                                               {":authority", destination.authority_}, {":path", "/invalid-version"},
-                                               {"sec-websocket-version", "12"}, {"sec-websocket-protocol", "standalone.v1"}},
-            false);
+        const auto response = peer.request({{":method", "CONNECT"}, {":protocol", "websocket"}, {":scheme", "https"}, {":authority", destination.authority_}, {":path", "/invalid-version"}, {"sec-websocket-version", "12"}, {"sec-websocket-protocol", "standalone.v1"}}, false);
         EXPECT_EQ(response.status_, 400);
         const auto version = response.header("sec-websocket-version");
         ASSERT_TRUE(version.has_value());
@@ -694,8 +675,7 @@ void reject_invalid_extended_connect(const target& destination, const std::files
     throw std::logic_error("malformed extended CONNECT needs HTTP/2 or HTTP/3");
 }
 
-ruvia::task<void> exercise(ruvia::http_client& client, const target& destination,
-    ruvia::http_server& server, observation& observed, asio::io_context& io, const std::filesystem::path& ca_file) {
+ruvia::task<void> exercise(ruvia::http_client& client, const target& destination, ruvia::http_server& server, observation& observed, asio::io_context& io, const std::filesystem::path& ca_file) {
     for (unsigned mode = 0; mode != 3; ++mode) {
         observed.scenario_ = "/limit";
         wire_peer peer(io);
@@ -1037,9 +1017,10 @@ ruvia::task<void> exercise(ruvia::http_client& client, const target& destination
             throw std::runtime_error("missing failed-handler Close");
         }
         EXPECT_EQ(close->opcode_, 8U);
-        EXPECT_EQ(close->payload_, std::string_view("\x03\xf3"
-                                                    "internal server error",
-                                       23));
+        EXPECT_EQ(close->payload_,
+            std::string_view("\x03\xf3"
+                             "internal server error",
+                23));
         co_await peer.write(masked_frame(8, std::string_view("\x03\xf3", 2)));
     }
     co_await await_retirement(server, observed);
@@ -1141,7 +1122,9 @@ void exercise_protocol(ruvia::http_client_versions protocol) {
     const ruvia::test::tls_identity identity("localhost", "DNS:localhost,IP:127.0.0.1");
     observation observed;
     const auto run = [&]() -> ruvia::task<void> {
-        ruvia::http_server server(attachment.loop(), {.request_stream_ = [&](ruvia::request_stream& request) {
+        ruvia::http_server server(attachment.loop(),
+            {.request_stream_ =
+                    [&](ruvia::request_stream& request) {
             return serve(request, observed);
         }},
             {.connection_scan_interval_ = 5ms});
@@ -1154,18 +1137,12 @@ void exercise_protocol(ruvia::http_client_versions protocol) {
         std::exception_ptr failure;
         try {
             co_await server.start();
-            std::vector<target> destinations{{"http://127.0.0.1:" + std::to_string(plain.endpoint().port()),
-                "127.0.0.1:" + std::to_string(plain.endpoint().port()), ruvia::http_client_versions{.http2_ = false},
-                ruvia::http_protocol_version::http11, plain.endpoint()}};
+            std::vector<target> destinations{{"http://127.0.0.1:" + std::to_string(plain.endpoint().port()), "127.0.0.1:" + std::to_string(plain.endpoint().port()), ruvia::http_client_versions{.http2_ = false}, ruvia::http_protocol_version::http11, plain.endpoint()}};
 #if defined(RUVIA_ENABLE_HTTP2)
-            destinations.push_back({"https://127.0.0.1:" + std::to_string(secure.endpoint().port()),
-                "127.0.0.1:" + std::to_string(secure.endpoint().port()), ruvia::http_client_versions{.http1_ = false},
-                ruvia::http_protocol_version::http2, secure.endpoint()});
+            destinations.push_back({"https://127.0.0.1:" + std::to_string(secure.endpoint().port()), "127.0.0.1:" + std::to_string(secure.endpoint().port()), ruvia::http_client_versions{.http1_ = false}, ruvia::http_protocol_version::http2, secure.endpoint()});
 #endif
 #if defined(RUVIA_ENABLE_HTTP3)
-            destinations.push_back({"https://127.0.0.1:" + std::to_string(udp.endpoint().port()),
-                "127.0.0.1:" + std::to_string(udp.endpoint().port()), ruvia::http_client_versions{.http1_ = false, .http2_ = false, .http3_ = true},
-                ruvia::http_protocol_version::http3, {}});
+            destinations.push_back({"https://127.0.0.1:" + std::to_string(udp.endpoint().port()), "127.0.0.1:" + std::to_string(udp.endpoint().port()), ruvia::http_client_versions{.http1_ = false, .http2_ = false, .http3_ = true}, ruvia::http_protocol_version::http3, {}});
 #endif
             for (const auto& destination : destinations) {
                 if (destination.versions_ != protocol) continue;
@@ -1197,11 +1174,9 @@ void exercise_protocol(ruvia::http_client_versions protocol) {
                             }
                             detail += "]";
                         } else if (const auto* system_error = dynamic_cast<const std::system_error*>(&error)) {
-                            detail += std::string(" [") + system_error->code().category().name() +
-                                      ":" + std::to_string(system_error->code().value()) + "]";
+                            detail += std::string(" [") + system_error->code().category().name() + ":" + std::to_string(system_error->code().value()) + "]";
                         }
-                        detail += " [entered=" + std::to_string(observed.entered_) +
-                                  ", retired=" + std::to_string(observed.retired_) + "]";
+                        detail += " [entered=" + std::to_string(observed.entered_) + ", retired=" + std::to_string(observed.retired_) + "]";
                         exchange_failure = std::make_exception_ptr(std::runtime_error(std::move(detail)));
                     } catch (...) {
                         exchange_failure = std::current_exception();

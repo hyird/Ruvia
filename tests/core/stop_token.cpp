@@ -46,8 +46,8 @@ struct callback_retirement_state final {
 };
 
 struct callback_payload final {
-    explicit callback_payload(callback_retirement_state& state) noexcept
-        : state_(state) {}
+    explicit callback_payload(callback_retirement_state& state) noexcept :
+        state_(state) {}
     ~callback_payload() {
         ++state_.payload_destructions_;
     }
@@ -58,14 +58,14 @@ struct callback_payload final {
 
 class reset_registration_when_source_retires final {
 public:
-    explicit reset_registration_when_source_retires(callback_retirement_state& state)
-        : state_(&state),
-          payload_(std::make_unique<callback_payload>(state)) {}
+    explicit reset_registration_when_source_retires(callback_retirement_state& state) :
+        state_(&state),
+        payload_(std::make_unique<callback_payload>(state)) {}
     reset_registration_when_source_retires(const reset_registration_when_source_retires&) = delete;
     reset_registration_when_source_retires& operator=(const reset_registration_when_source_retires&) = delete;
-    reset_registration_when_source_retires(reset_registration_when_source_retires&& other) noexcept
-        : state_(other.state_),
-          payload_(std::move(other.payload_)) {
+    reset_registration_when_source_retires(reset_registration_when_source_retires&& other) noexcept :
+        state_(other.state_),
+        payload_(std::move(other.payload_)) {
         if (std::exchange(state_->mark_next_move_, false)) {
             state_->marked_source_ = std::addressof(other);
         }
@@ -109,8 +109,7 @@ TEST(Ruvia, stop_registration_self_reset_retires_each_callback_target_once) {
     EXPECT_TRUE(nullptr != valid_fn);
     ruvia::stop_registration registration;
     stop_token_test::callback_retirement_state state{&registration};
-    source.token().register_callback(registration,
-        stop_token_test::reset_registration_when_source_retires(state));
+    source.token().register_callback(registration, stop_token_test::reset_registration_when_source_retires(state));
     state.mark_next_move_ = true;
     source.request_stop();
     const bool unregistered = !registration.registered();
@@ -138,14 +137,14 @@ struct reset_registration_move_state final {
 
 class reset_registration_on_move final {
 public:
-    explicit reset_registration_on_move(reset_registration_move_state& state_value) noexcept
-        : state_(&state_value) {}
+    explicit reset_registration_on_move(reset_registration_move_state& state_value) noexcept :
+        state_(&state_value) {}
 
     reset_registration_on_move(const reset_registration_on_move&) = delete;
     reset_registration_on_move& operator=(const reset_registration_on_move&) = delete;
 
-    reset_registration_on_move(reset_registration_on_move&& other) noexcept
-        : state_(other.state_) {
+    reset_registration_on_move(reset_registration_on_move&& other) noexcept :
+        state_(other.state_) {
         const int move = state_->moves_->fetch_add(1, std::memory_order_relaxed) + 1;
         if (move != state_->stop_on_move_) {
             return;
@@ -180,8 +179,9 @@ TEST(Ruvia, stop_token_registration_runs_once) {
     ruvia::stop_source source;
     std::atomic_int calls{0};
     ruvia::stop_registration registration;
-    source.token().register_callback(
-        registration, [&calls] { calls.fetch_add(1, std::memory_order_relaxed); });
+    source.token().register_callback(registration, [&calls] {
+        calls.fetch_add(1, std::memory_order_relaxed);
+    });
     EXPECT_TRUE(registration.registered());
     source.request_stop();
     source.request_stop();
@@ -192,7 +192,9 @@ TEST(Ruvia, stop_token_registration_can_be_reset) {
     ruvia::stop_source source;
     int calls = 0;
     ruvia::stop_registration registration;
-    source.token().register_callback(registration, [&calls] { ++calls; });
+    source.token().register_callback(registration, [&calls] {
+        ++calls;
+    });
     registration.reset();
     source.request_stop();
     EXPECT_EQ(calls, 0);
@@ -203,7 +205,9 @@ TEST(Ruvia, stop_token_registration_after_stop_runs_immediately) {
     source.request_stop();
     int calls = 0;
     ruvia::stop_registration registration;
-    source.token().register_callback(registration, [&calls] { ++calls; });
+    source.token().register_callback(registration, [&calls] {
+        ++calls;
+    });
     EXPECT_TRUE(!registration.registered());
     EXPECT_EQ(calls, 1);
 }
@@ -213,8 +217,12 @@ TEST(Ruvia, stop_token_registration_reuse_replaces_previous_callback) {
     int first_calls = 0;
     int second_calls = 0;
     ruvia::stop_registration registration;
-    source.token().register_callback(registration, [&first_calls] { ++first_calls; });
-    source.token().register_callback(registration, [&second_calls] { ++second_calls; });
+    source.token().register_callback(registration, [&first_calls] {
+        ++first_calls;
+    });
+    source.token().register_callback(registration, [&second_calls] {
+        ++second_calls;
+    });
     EXPECT_TRUE(registration.registered());
     source.request_stop();
     EXPECT_EQ(first_calls, 0);
@@ -223,9 +231,9 @@ TEST(Ruvia, stop_token_registration_reuse_replaces_previous_callback) {
 
 TEST(Ruvia, stop_token_replacement_preserves_entry_state_when_retirement_clears_token) {
     struct clear_token final {
-        clear_token(ruvia::stop_token& token, ruvia::stop_source* source) noexcept
-            : token_(token),
-              source_(source) {}
+        clear_token(ruvia::stop_token& token, ruvia::stop_source* source) noexcept :
+            token_(token),
+            source_(source) {}
         ~clear_token() {
             token_ = {};
             if (source_ != nullptr) {
@@ -243,7 +251,9 @@ TEST(Ruvia, stop_token_replacement_preserves_entry_state_when_retirement_clears_
         auto payload = std::make_unique<clear_token>(token, stop_during_retirement ? &source : nullptr);
         token.register_callback(registration, [owned = std::move(payload)] {});
 
-        token.register_callback(registration, [&calls] { ++calls; });
+        token.register_callback(registration, [&calls] {
+            ++calls;
+        });
         EXPECT_TRUE(!token.has_state());
         EXPECT_EQ(registration.registered(), !stop_during_retirement);
         EXPECT_EQ(calls, static_cast<int>(stop_during_retirement));
@@ -255,8 +265,8 @@ TEST(Ruvia, stop_token_replacement_preserves_entry_state_when_retirement_clears_
 
 TEST(Ruvia, stop_token_replacement_survives_token_destruction) {
     struct destroy_token final {
-        explicit destroy_token(std::unique_ptr<ruvia::stop_token>& owner) noexcept
-            : owner_(owner) {}
+        explicit destroy_token(std::unique_ptr<ruvia::stop_token>& owner) noexcept :
+            owner_(owner) {}
         ~destroy_token() {
             owner_.reset();
         }
@@ -269,7 +279,9 @@ TEST(Ruvia, stop_token_replacement_survives_token_destruction) {
     auto payload = std::make_unique<destroy_token>(token);
     token->register_callback(registration, [owned = std::move(payload)] {});
 
-    token->register_callback(registration, [&calls] { ++calls; });
+    token->register_callback(registration, [&calls] {
+        ++calls;
+    });
     EXPECT_TRUE(!token);
     EXPECT_TRUE(registration.registered());
     source.request_stop();
@@ -286,8 +298,7 @@ TEST(Ruvia, stop_token_registration_can_reset_during_synchronous_construction_ca
 
     ruvia::stop_group group{first.token(), second.token()};
     auto token = group.token();
-    reset_registration_move_state state_value{
-        &first, &registration, &moves, &calls, move_into_callback_state, nullptr, nullptr};
+    reset_registration_move_state state_value{&first, &registration, &moves, &calls, move_into_callback_state, nullptr, nullptr};
     token.register_callback(registration, reset_registration_on_move(state_value));
 
     EXPECT_TRUE(first.stop_requested());
@@ -316,8 +327,7 @@ TEST(Ruvia, stop_token_registration_can_reset_when_stop_races_with_callback_cons
 
     ruvia::stop_group group{first.token(), second.token()};
     auto token = group.token();
-    reset_registration_move_state state_value{&first, &registration, &moves, &calls, move_into_callback_state,
-        &registration_paused, &stop_completed};
+    reset_registration_move_state state_value{&first, &registration, &moves, &calls, move_into_callback_state, &registration_paused, &stop_completed};
     token.register_callback(registration, reset_registration_on_move(state_value));
     stopper.join();
 
@@ -344,7 +354,9 @@ TEST(Ruvia, combined_stop_registration_outlives_temporary_token) {
     ruvia::stop_source second;
     int calls = 0;
     ruvia::stop_group group{first.token(), second.token()};
-    auto registration = group.token().register_callback([&calls] { ++calls; });
+    auto registration = group.token().register_callback([&calls] {
+        ++calls;
+    });
     EXPECT_TRUE(registration.registered());
     second.request_stop();
     first.request_stop();
@@ -357,7 +369,9 @@ TEST(Ruvia, combined_stop_registration_reuses_storage_after_token_dies) {
     int calls = 0;
     ruvia::stop_registration registration;
     ruvia::stop_group group{first.token(), second.token()};
-    group.token().register_callback(registration, [&calls] { ++calls; });
+    group.token().register_callback(registration, [&calls] {
+        ++calls;
+    });
     EXPECT_TRUE(registration.registered());
     first.request_stop();
     second.request_stop();
@@ -373,7 +387,9 @@ TEST(Ruvia, stop_group_propagates_nested_sources) {
     auto nested = outer.token();
     int calls = 0;
     ruvia::stop_registration registration;
-    nested.register_callback(registration, [&calls] { ++calls; });
+    nested.register_callback(registration, [&calls] {
+        ++calls;
+    });
     third.request_stop();
     first.request_stop();
     EXPECT_TRUE(nested.stop_requested());
@@ -390,7 +406,9 @@ TEST(Ruvia, stop_group_supports_many_parents_and_merges_duplicate_notifications)
         tokens.back() = tokens.front();
         ruvia::stop_group group{tokens};
         int calls = 0;
-        auto registration = group.token().register_callback([&calls] { ++calls; });
+        auto registration = group.token().register_callback([&calls] {
+            ++calls;
+        });
         sources[selected].request_stop();
         EXPECT_EQ(calls, 1);
         for (auto& source : sources) {
@@ -426,7 +444,9 @@ TEST(Ruvia, combined_stop_token_observes_later_sources_after_earlier_source_dies
     EXPECT_TRUE(combined.stoppable());
     int calls = 0;
     ruvia::stop_registration registration;
-    combined.register_callback(registration, [&calls] { ++calls; });
+    combined.register_callback(registration, [&calls] {
+        ++calls;
+    });
     EXPECT_TRUE(registration.registered());
     second.request_stop();
     EXPECT_TRUE(combined.stop_requested());
@@ -436,11 +456,15 @@ TEST(Ruvia, combined_stop_token_observes_later_sources_after_earlier_source_dies
 TEST(Ruvia, stop_token_outlives_its_source_across_threads) {
     for (const bool request_stop : {false, true}) {
         std::optional<ruvia::stop_source> source;
-        std::thread([&] { source.emplace(); }).join();
+        std::thread([&] {
+            source.emplace();
+        }).join();
         auto token = source->token();
         int calls = 0;
         ruvia::stop_registration registration;
-        token.register_callback(registration, [&calls] { ++calls; });
+        token.register_callback(registration, [&calls] {
+            ++calls;
+        });
         if (request_stop) {
             source->request_stop();
         }
@@ -451,8 +475,7 @@ TEST(Ruvia, stop_token_outlives_its_source_across_threads) {
 
         bool retained_state_valid = false;
         std::thread([retained = std::move(token), &registration, &retained_state_valid, request_stop]() mutable {
-            retained_state_valid = retained.stop_requested() == request_stop &&
-                                   retained.stoppable() == request_stop;
+            retained_state_valid = retained.stop_requested() == request_stop && retained.stoppable() == request_stop;
             retained = {};
             // The registration now owns the last reference, on a thread other
             // than the already-exited thread that created the source.
@@ -477,7 +500,9 @@ TEST(Ruvia, stop_registration_reset_waits_for_callback_running_on_another_thread
         }
         returned.store(true, std::memory_order_release);
     });
-    std::thread stopper([&source] { source.request_stop(); });
+    std::thread stopper([&source] {
+        source.request_stop();
+    });
     while (!entered.load(std::memory_order_acquire)) {
         std::this_thread::yield();
     }
@@ -508,8 +533,9 @@ TEST(Ruvia, stop_registration_racing_with_stop_invokes_each_callback_once) {
     for (std::size_t index = 0; index < rounds; ++index) {
         gate.arrive_and_wait();
         ruvia::stop_registration registration;
-        sources[index].token().register_callback(
-            registration, [&, index] { calls[index].fetch_add(1, std::memory_order_relaxed); });
+        sources[index].token().register_callback(registration, [&, index] {
+            calls[index].fetch_add(1, std::memory_order_relaxed);
+        });
         gate.arrive_and_wait();
         registration.reset();
         sources[index].request_stop();
@@ -536,12 +562,12 @@ TEST(Ruvia, stop_token_registration_synchronous_race_leaves_registration_idle_an
     struct stop_on_move_without_reset final {
         state_type* state_{};
 
-        explicit stop_on_move_without_reset(state_type& state_value) noexcept
-            : state_(&state_value) {}
+        explicit stop_on_move_without_reset(state_type& state_value) noexcept :
+            state_(&state_value) {}
         stop_on_move_without_reset(const stop_on_move_without_reset&) = delete;
         stop_on_move_without_reset& operator=(const stop_on_move_without_reset&) = delete;
-        stop_on_move_without_reset(stop_on_move_without_reset&& other) noexcept
-            : state_(other.state_) {
+        stop_on_move_without_reset(stop_on_move_without_reset&& other) noexcept :
+            state_(other.state_) {
             if (state_->moves_->fetch_add(1, std::memory_order_relaxed) + 1 == move_into_callback_state) {
                 state_->source_->request_stop();
             }
@@ -552,8 +578,9 @@ TEST(Ruvia, stop_token_registration_synchronous_race_leaves_registration_idle_an
             state_->calls_->fetch_add(1, std::memory_order_relaxed);
             if (state_->reuse_source_ != nullptr) {
                 auto* calls_ptr = state_->calls_;
-                state_->reuse_source_->token().register_callback(
-                    *state_->registration_, [calls_ptr] { calls_ptr->fetch_add(10, std::memory_order_relaxed); });
+                state_->reuse_source_->token().register_callback(*state_->registration_, [calls_ptr] {
+                    calls_ptr->fetch_add(10, std::memory_order_relaxed);
+                });
             }
         }
     };
@@ -599,12 +626,12 @@ TEST(Ruvia, stop_token_registration_reset_pending_before_stop_already_requested_
     struct reset_then_stop_on_move final {
         state_type* state_{};
 
-        explicit reset_then_stop_on_move(state_type& state_value) noexcept
-            : state_(&state_value) {}
+        explicit reset_then_stop_on_move(state_type& state_value) noexcept :
+            state_(&state_value) {}
         reset_then_stop_on_move(const reset_then_stop_on_move&) = delete;
         reset_then_stop_on_move& operator=(const reset_then_stop_on_move&) = delete;
-        reset_then_stop_on_move(reset_then_stop_on_move&& other) noexcept
-            : state_(other.state_) {
+        reset_then_stop_on_move(reset_then_stop_on_move&& other) noexcept :
+            state_(other.state_) {
             if (state_->moves_->fetch_add(1, std::memory_order_relaxed) + 1 == move_into_callback_state) {
                 state_->registration_->reset();
                 state_->source_->request_stop();
@@ -660,7 +687,9 @@ TEST(Ruvia, stop_group_destruction_waits_for_cross_thread_downstream_callback) {
         }
         returned.store(true, std::memory_order_release);
     });
-    std::thread stopper([&] { first.request_stop(); });
+    std::thread stopper([&] {
+        first.request_stop();
+    });
     while (!entered.load(std::memory_order_acquire)) {
         std::this_thread::yield();
     }
@@ -678,11 +707,9 @@ TEST(Ruvia, stop_group_destruction_waits_for_cross_thread_downstream_callback) {
 TEST(Ruvia, operation_options_replace_cancellation_and_keep_tighter_timeout) {
     ruvia::stop_source base;
     ruvia::stop_source replacement;
-    const ruvia::operation_options original{
-        .timeout_ = std::chrono::milliseconds(20), .stop_token_ = base.token()};
+    const ruvia::operation_options original{.timeout_ = std::chrono::milliseconds(20), .stop_token_ = base.token()};
     auto inherited = ruvia::override_operation_options(original, {});
-    auto replaced = ruvia::override_operation_options(inherited,
-        {.timeout_ = std::chrono::milliseconds(50), .stop_token_ = replacement.token()});
+    auto replaced = ruvia::override_operation_options(inherited, {.timeout_ = std::chrono::milliseconds(50), .stop_token_ = replacement.token()});
     base.request_stop();
     EXPECT_TRUE(inherited.stop_token_.stop_requested());
     EXPECT_TRUE(!replaced.stop_token_.stop_requested());
@@ -774,9 +801,7 @@ TEST(Ruvia, ip_address_parsing_rejects_malformed_and_embedded_nul_input) {
 }
 
 TEST(Ruvia, ip_address_parsing_rejects_ports_brackets_and_partial_or_padded_ipv4) {
-    for (const std::string_view text : {"192.0.2.1:80", "[::1]:80", "[::1]", "192.0.2", "01.2.3.4", "192.0.2.256",
-             "192.0.2.1.", ".192.0.2.1", "192.0.2.1%1", "fe80::1%", "fe80::1%1%2", "::1 ", "1",
-             "::ffff:01.2.3.4", "::ffff:192.0.2", "fe80::1%12:80", "fe80::1%12 ", "fe80::1%1]:80"}) {
+    for (const std::string_view text : {"192.0.2.1:80", "[::1]:80", "[::1]", "192.0.2", "01.2.3.4", "192.0.2.256", "192.0.2.1.", ".192.0.2.1", "192.0.2.1%1", "fe80::1%", "fe80::1%1%2", "::1 ", "1", "::ffff:01.2.3.4", "::ffff:192.0.2", "fe80::1%12:80", "fe80::1%12 ", "fe80::1%1]:80"}) {
         EXPECT_TRUE(!ruvia::parse_ip_address(text).has_value());
     }
     EXPECT_TRUE(ruvia::parse_ip_address("0.0.0.0").has_value());
@@ -848,9 +873,7 @@ TEST(Ruvia, error_code_text_keeps_portable_category_messages) {
 }
 
 TEST(Ruvia, error_code_text_describes_system_codes_in_utf8) {
-    for (const auto& error : {std::error_code(1, std::system_category()),
-             std::error_code(0x7FFFFFF0, std::system_category()),
-             std::error_code(asio::error::connection_reset), std::error_code(asio::error::host_not_found)}) {
+    for (const auto& error : {std::error_code(1, std::system_category()), std::error_code(0x7FFFFFF0, std::system_category()), std::error_code(asio::error::connection_reset), std::error_code(asio::error::host_not_found)}) {
         const auto text = ruvia::error_code_text(error);
         EXPECT_TRUE(!text.empty());
         EXPECT_TRUE(is_utf8(text));
@@ -918,13 +941,11 @@ TEST(Ruvia, storage_survives_its_allocating_thread) {
     std::thread([&] {
         values->reserve(values->capacity() + 1);
         text->append(text->capacity() + 1, 't');
-        preserved_after_growth = text->find_first_not_of('s') == text_bytes &&
-                                 text->find_first_not_of('t', text_bytes) == std::string::npos;
+        preserved_after_growth = text->find_first_not_of('s') == text_bytes && text->find_first_not_of('t', text_bytes) == std::string::npos;
         for (std::size_t index = 0; index < values->size(); ++index) {
-            preserved_after_growth = preserved_after_growth &&
-                                     std::ranges::all_of((*values)[index].bytes_, [index](std::byte byte) {
-                                         return byte == static_cast<std::byte>(index + 1);
-                                     });
+            preserved_after_growth = preserved_after_growth && std::ranges::all_of((*values)[index].bytes_, [index](std::byte byte) {
+                return byte == static_cast<std::byte>(index + 1);
+            });
         }
         text.reset();
         values.reset();
@@ -935,12 +956,12 @@ TEST(Ruvia, storage_survives_its_allocating_thread) {
 namespace ruvia::test::asio_task_tests {
 
 struct alignas(4096) aligned_result final {
-    explicit aligned_result(int value)
-        : value_(std::make_unique<int>(value)),
-          addresses_aligned_(is_aligned(this)) {}
-    aligned_result(aligned_result&& other) noexcept
-        : value_(std::move(other.value_)),
-          addresses_aligned_(other.addresses_aligned_ && is_aligned(&other) && is_aligned(this)) {}
+    explicit aligned_result(int value) :
+        value_(std::make_unique<int>(value)),
+        addresses_aligned_(is_aligned(this)) {}
+    aligned_result(aligned_result&& other) noexcept :
+        value_(std::move(other.value_)),
+        addresses_aligned_(other.addresses_aligned_ && is_aligned(&other) && is_aligned(this)) {}
 
     std::unique_ptr<int> value_;
     bool addresses_aligned_;
@@ -953,8 +974,7 @@ private:
     }
 };
 
-ruvia::task<aligned_result> make_value(ruvia::worker_ref worker_value,
-    std::unique_ptr<aligned_result> result_value) {
+ruvia::task<aligned_result> make_value(ruvia::worker_ref worker_value, std::unique_ptr<aligned_result> result_value) {
     if (!worker_value.is_current()) {
         throw std::logic_error("task started outside its event loop");
     }
@@ -985,11 +1005,11 @@ template <typename t_type>
 struct counting_allocator {
     using value_type = t_type;
 
-    explicit counting_allocator(std::size_t& allocations) noexcept
-        : allocations_(&allocations) {}
+    explicit counting_allocator(std::size_t& allocations) noexcept :
+        allocations_(&allocations) {}
     template <typename other_type>
-    counting_allocator(const counting_allocator<other_type>& other) noexcept
-        : allocations_(other.allocations_) {}
+    counting_allocator(const counting_allocator<other_type>& other) noexcept :
+        allocations_(other.allocations_) {}
 
     [[nodiscard]] t_type* allocate(std::size_t count) {
         ++*allocations_;
@@ -1029,8 +1049,7 @@ TEST(Ruvia, AsioTaskLifecycle) {
     const auto worker_value = loop.worker();
     bool void_completed = false;
 
-    auto value = loop.start(ruvia::test::asio_task_tests::make_value(
-        worker_value, std::make_unique<ruvia::test::asio_task_tests::aligned_result>(42)));
+    auto value = loop.start(ruvia::test::asio_task_tests::make_value(worker_value, std::make_unique<ruvia::test::asio_task_tests::aligned_result>(42)));
     auto no_value = loop.start(ruvia::test::asio_task_tests::complete_void(worker_value, void_completed));
     auto failure = loop.start(ruvia::test::asio_task_tests::fail());
     std::promise<bool> same_loop_get_rejected;
@@ -1064,8 +1083,7 @@ TEST(Ruvia, AsioTaskLifecycle) {
     }
     loops.stop();
     loops.join();
-    valid = valid && result_value && result_value->addresses_aligned_ &&
-            result_value->value_ != nullptr && *result_value->value_ == 42;
+    valid = valid && result_value && result_value->addresses_aligned_ && result_value->value_ != nullptr && *result_value->value_ == 42;
     EXPECT_TRUE(valid);
 }
 
@@ -1090,18 +1108,14 @@ TEST(Ruvia, AsyncStartUsesHandlerExecutorAndAllocator) {
     std::size_t allocations = 0;
     std::optional<int> delivered;
     bool failure_delivered = false;
-    ruvia::async_start(ruvia::test::asio_task_tests::answer(),
-        asio::bind_allocator(ruvia::test::asio_task_tests::counting_allocator<int>(allocations),
-            asio::bind_executor(io_context.get_executor(),
-                [&delivered](ruvia::task_completion_result<int>&& result_value) {
-                    if (result_value.index() == 0) {
-                        delivered = std::get<0>(result_value);
-                    }
-                })));
-    ruvia::async_start(ruvia::test::asio_task_tests::fail(),
-        asio::bind_executor(io_context.get_executor(), [&failure_delivered](std::exception_ptr failure) {
-            failure_delivered = failure != nullptr;
-        }));
+    ruvia::async_start(ruvia::test::asio_task_tests::answer(), asio::bind_allocator(ruvia::test::asio_task_tests::counting_allocator<int>(allocations), asio::bind_executor(io_context.get_executor(), [&delivered](ruvia::task_completion_result<int>&& result_value) {
+        if (result_value.index() == 0) {
+            delivered = std::get<0>(result_value);
+        }
+    })));
+    ruvia::async_start(ruvia::test::asio_task_tests::fail(), asio::bind_executor(io_context.get_executor(), [&failure_delivered](std::exception_ptr failure) {
+        failure_delivered = failure != nullptr;
+    }));
     // Both tasks complete inline; delivery waits for the handler's executor.
     EXPECT_FALSE(delivered.has_value());
     EXPECT_FALSE(failure_delivered);

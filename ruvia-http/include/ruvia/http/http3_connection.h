@@ -69,23 +69,18 @@ public:
         return early_data_;
     }
     [[nodiscard]] http_request_content_indication content() const noexcept {
-        return stream_ended_ || declared_content_length_ == std::uint64_t{0}
-                   ? http_request_content_indication::no_content
-                   : http_request_content_indication::will_follow;
+        return stream_ended_ || declared_content_length_ == std::uint64_t{0} ? http_request_content_indication::no_content : http_request_content_indication::will_follow;
     }
     [[nodiscard]] std::optional<std::uint64_t> declared_content_length() const noexcept {
         return declared_content_length_;
     }
-    [[nodiscard]] http_server_expectation_plan expectation_plan(
-        http_unsupported_expectation_policy policy) const noexcept {
+    [[nodiscard]] http_server_expectation_plan expectation_plan(http_unsupported_expectation_policy policy) const noexcept {
         return expectations_.server_plan(content(), policy);
     }
 
     // Views in the request borrow this head; it must outlive the request.
-    [[nodiscard]] http_request build_request(
-        borrowed_text body = {}) const& RUVIA_LIFETIMEBOUND;
-    http_request build_request(
-        borrowed_text body = {}) const&& = delete;
+    [[nodiscard]] http_request build_request(borrowed_text body = {}) const& RUVIA_LIFETIMEBOUND;
+    http_request build_request(borrowed_text body = {}) const&& = delete;
 
 private:
     friend class http3_connection;
@@ -94,11 +89,9 @@ private:
         detail::http_field_kind kind_;
     };
 
-    http3_request_head(std::int64_t stream_id, std::vector<http_header> fields, bool stream_ended,
-        bool early_data);
+    http3_request_head(std::int64_t stream_id, std::vector<http_header> fields, bool stream_ended, bool early_data);
     // nullopt: the head is malformed (RFC 9114 §4.1.2).
-    [[nodiscard]] static std::optional<http3_request_head> try_create(std::int64_t stream_id,
-        std::vector<http_header> fields, bool stream_ended, bool early_data);
+    [[nodiscard]] static std::optional<http3_request_head> try_create(std::int64_t stream_id, std::vector<http_header> fields, bool stream_ended, bool early_data);
     [[nodiscard]] bool validate();
     [[nodiscard]] std::string_view field_value(std::uint32_t index) const noexcept;
 
@@ -122,9 +115,7 @@ private:
 };
 
 // RFC 9220 uses the extended CONNECT request in place of the HTTP/1 key exchange.
-[[nodiscard]] websocket_handshake_validation_result validate_http3_websocket_handshake(
-    const http3_request_head& head, const http_request& request,
-    websocket_handshake_validation_options options = {}) noexcept;
+[[nodiscard]] websocket_handshake_validation_result validate_http3_websocket_handshake(const http3_request_head& head, const http_request& request, websocket_handshake_validation_options options = {}) noexcept;
 
 }  // namespace ruvia
 
@@ -307,8 +298,7 @@ public:
 private:
     friend class http3_connection;
     friend class http3_data_event;
-    http3_received_data_credit(detail::http3_received_data_ledger* ledger, std::int64_t stream_id,
-        std::size_t bytes) noexcept;
+    http3_received_data_credit(detail::http3_received_data_ledger* ledger, std::int64_t stream_id, std::size_t bytes) noexcept;
     void swap(http3_received_data_credit& other) noexcept;
     detail::http3_received_data_ledger* ledger_{nullptr};
     std::int64_t stream_id_{-1};
@@ -333,8 +323,8 @@ public:
 
 private:
     friend class http3_connection;
-    explicit http3_request_head_event(http3_request_head head) noexcept
-        : head_(std::move(head)) {}
+    explicit http3_request_head_event(http3_request_head head) noexcept :
+        head_(std::move(head)) {}
     http3_request_head head_;
 };
 
@@ -362,8 +352,7 @@ public:
 
 private:
     friend class http3_connection;
-    http3_data_event(std::int64_t stream_id, std::string_view bytes,
-        bool own_bytes, http3_received_data_credit credit);
+    http3_data_event(std::int64_t stream_id, std::string_view bytes, bool own_bytes, http3_received_data_credit credit);
     std::int64_t stream_id_{-1};
     std::string_view bytes_;
     std::string owned_bytes_;
@@ -394,11 +383,10 @@ public:
 
 private:
     friend class http3_connection;
-    http3_informational_head_event(std::int64_t stream_id, http_client_response_head head,
-        std::optional<http_client_request_content_signal> signal) noexcept
-        : stream_id_(stream_id),
-          head_(std::move(head)),
-          signal_(signal) {}
+    http3_informational_head_event(std::int64_t stream_id, http_client_response_head head, std::optional<http_client_request_content_signal> signal) noexcept :
+        stream_id_(stream_id),
+        head_(std::move(head)),
+        signal_(signal) {}
     std::int64_t stream_id_;
     http_client_response_head head_;
     std::optional<http_client_request_content_signal> signal_;
@@ -433,12 +421,11 @@ public:
 
 private:
     friend class http3_connection;
-    http3_response_head_event(std::int64_t stream_id, http_client_response_head head,
-        std::optional<http_client_request_content_signal> signal, bool stream_ended) noexcept
-        : stream_id_(stream_id),
-          head_(std::move(head)),
-          signal_(signal),
-          stream_ended_(stream_ended) {}
+    http3_response_head_event(std::int64_t stream_id, http_client_response_head head, std::optional<http_client_request_content_signal> signal, bool stream_ended) noexcept :
+        stream_id_(stream_id),
+        head_(std::move(head)),
+        signal_(signal),
+        stream_ended_(stream_ended) {}
     std::int64_t stream_id_;
     http_client_response_head head_;
     std::optional<http_client_request_content_signal> signal_;
@@ -471,9 +458,9 @@ public:
 
 private:
     friend class http3_connection;
-    http3_message_end_event(std::int64_t stream_id, std::vector<http_header> trailers) noexcept
-        : stream_id_(stream_id),
-          trailers_(std::move(trailers)) {}
+    http3_message_end_event(std::int64_t stream_id, std::vector<http_header> trailers) noexcept :
+        stream_id_(stream_id),
+        trailers_(std::move(trailers)) {}
     std::int64_t stream_id_;
     std::vector<http_header> trailers_;
 };
@@ -508,12 +495,11 @@ public:
 
 private:
     friend class http3_connection;
-    constexpr http3_transport_action_event(std::int64_t stream_id, http3_transport_action action,
-        http3_error_code error, http3_transport_action_origin origin) noexcept
-        : stream_id_(stream_id),
-          action_(action),
-          error_(error),
-          origin_(origin) {}
+    constexpr http3_transport_action_event(std::int64_t stream_id, http3_transport_action action, http3_error_code error, http3_transport_action_origin origin) noexcept :
+        stream_id_(stream_id),
+        action_(action),
+        error_(error),
+        origin_(origin) {}
     std::int64_t stream_id_;
     http3_transport_action action_;
     http3_error_code error_;
@@ -537,9 +523,9 @@ public:
 
 private:
     friend class http3_connection;
-    constexpr http3_deferred_consume_event(std::int64_t stream_id, std::size_t bytes) noexcept
-        : stream_id_(stream_id),
-          bytes_(bytes) {}
+    constexpr http3_deferred_consume_event(std::int64_t stream_id, std::size_t bytes) noexcept :
+        stream_id_(stream_id),
+        bytes_(bytes) {}
     std::int64_t stream_id_;
     std::size_t bytes_;
 };
@@ -559,9 +545,9 @@ public:
 
 private:
     friend class http3_connection;
-    constexpr http3_stream_close_event(std::int64_t stream_id, std::optional<http3_error_code> error) noexcept
-        : stream_id_(stream_id),
-          error_(error) {}
+    constexpr http3_stream_close_event(std::int64_t stream_id, std::optional<http3_error_code> error) noexcept :
+        stream_id_(stream_id),
+        error_(error) {}
     std::int64_t stream_id_;
     std::optional<http3_error_code> error_;
 };
@@ -582,8 +568,8 @@ public:
 
 private:
     friend class http3_connection;
-    explicit constexpr http3_request_unprocessed_event(std::int64_t stream_id) noexcept
-        : stream_id_(stream_id) {}
+    explicit constexpr http3_request_unprocessed_event(std::int64_t stream_id) noexcept :
+        stream_id_(stream_id) {}
     std::int64_t stream_id_;
 };
 
@@ -599,8 +585,8 @@ public:
 
 private:
     friend class http3_connection;
-    explicit constexpr http3_goaway_event(std::optional<std::int64_t> id) noexcept
-        : id_(id) {}
+    explicit constexpr http3_goaway_event(std::optional<std::int64_t> id) noexcept :
+        id_(id) {}
     std::optional<std::int64_t> id_;
 };
 
@@ -624,9 +610,9 @@ public:
 
 private:
     friend class http3_connection;
-    http3_datagram_event(std::int64_t stream_id, std::string payload) noexcept
-        : stream_id_(stream_id),
-          payload_(std::move(payload)) {}
+    http3_datagram_event(std::int64_t stream_id, std::string payload) noexcept :
+        stream_id_(stream_id),
+        payload_(std::move(payload)) {}
     std::int64_t stream_id_;
     std::string payload_;
 };
@@ -711,13 +697,10 @@ public:
 
 private:
     friend class http3_connection;
-    using value_type = std::variant<http3_request_head_event, http3_informational_head_event,
-        http3_response_head_event, http3_data_event, http3_message_end_event, http3_transport_action_event,
-        http3_deferred_consume_event, http3_stream_close_event, http3_request_unprocessed_event,
-        http3_goaway_event, http3_datagram_event, http_origin_advertisement>;
+    using value_type = std::variant<http3_request_head_event, http3_informational_head_event, http3_response_head_event, http3_data_event, http3_message_end_event, http3_transport_action_event, http3_deferred_consume_event, http3_stream_close_event, http3_request_unprocessed_event, http3_goaway_event, http3_datagram_event, http_origin_advertisement>;
     template <typename event_type>
-    explicit http3_event(event_type event) noexcept
-        : value_(std::move(event)) {}
+    explicit http3_event(event_type event) noexcept :
+        value_(std::move(event)) {}
     value_type value_;
 };
 
@@ -860,10 +843,8 @@ struct http3_connection_options final {
 // After that no message event names the stream.
 class http3_connection final {
 public:
-    [[nodiscard]] static http3_connection client(
-        http3_connection_options options = {});
-    [[nodiscard]] static http3_connection server(
-        http3_connection_options options = {});
+    [[nodiscard]] static http3_connection client(http3_connection_options options = {});
+    [[nodiscard]] static http3_connection server(http3_connection_options options = {});
 
     ~http3_connection();
     http3_connection(const http3_connection&) = delete;
@@ -874,13 +855,10 @@ public:
     [[nodiscard]] http3_role role() const noexcept;
 
     // Bind three locally opened unidirectional QUIC streams exactly once.
-    [[nodiscard]] http3_transport_status bind_control_streams(
-        std::int64_t control_stream_id, std::int64_t qpack_encoder_stream_id,
-        std::int64_t qpack_decoder_stream_id);
+    [[nodiscard]] http3_transport_status bind_control_streams(std::int64_t control_stream_id, std::int64_t qpack_encoder_stream_id, std::int64_t qpack_decoder_stream_id);
 
     // ts_nanoseconds uses one monotonic clock and never decreases.
-    [[nodiscard]] http3_transport_result read_stream(std::int64_t stream_id,
-        std::span<const std::byte> bytes, bool fin, std::uint64_t ts_nanoseconds);
+    [[nodiscard]] http3_transport_result read_stream(std::int64_t stream_id, std::span<const std::byte> bytes, bool fin, std::uint64_t ts_nanoseconds);
     template <detail::http_temporary_owning_range<std::byte> bytes_type>
         requires(!std::same_as<std::remove_cvref_t<bytes_type>, borrowed_span<std::byte>>)
     http3_transport_result read_stream(std::int64_t, bytes_type&&, bool, std::uint64_t) = delete;
@@ -893,12 +871,9 @@ public:
     // nghttp3. The buffers remain valid through commit_output() and QUIC keeps
     // the underlying bytes alive until acknowledge_output().
     // QUIC reports exactly the accepted prefix through commit_output().
-    [[nodiscard]] http3_transport_result peek_output(
-        std::size_t max_bytes, http3_stream_output& output);
-    [[nodiscard]] http3_transport_status commit_output(
-        std::int64_t stream_id, std::size_t bytes) noexcept;
-    [[nodiscard]] http3_transport_status acknowledge_output(
-        std::int64_t stream_id, std::uint64_t bytes) noexcept;
+    [[nodiscard]] http3_transport_result peek_output(std::size_t max_bytes, http3_stream_output& output);
+    [[nodiscard]] http3_transport_status commit_output(std::int64_t stream_id, std::size_t bytes) noexcept;
+    [[nodiscard]] http3_transport_status acknowledge_output(std::int64_t stream_id, std::uint64_t bytes) noexcept;
     // Suspend scheduling a local send half when QUIC stream credit is
     // exhausted; unblock after QUIC grants credit. Neither changes credit,
     // commits bytes nor resumes an application body source.
@@ -917,10 +892,8 @@ public:
     // Both return closed after a connection error. A critical receive stream
     // termination can return protocol_error; connection_error() carries its
     // HTTP/3 error code.
-    [[nodiscard]] http3_transport_status shutdown_stream_read(
-        std::int64_t stream_id, std::optional<http3_error_code> peer_error = std::nullopt) noexcept;
-    [[nodiscard]] http3_transport_status shutdown_stream_write(
-        std::int64_t stream_id, std::optional<http3_error_code> peer_error = std::nullopt) noexcept;
+    [[nodiscard]] http3_transport_status shutdown_stream_read(std::int64_t stream_id, std::optional<http3_error_code> peer_error = std::nullopt) noexcept;
+    [[nodiscard]] http3_transport_status shutdown_stream_write(std::int64_t stream_id, std::optional<http3_error_code> peer_error = std::nullopt) noexcept;
     // Server only: absolute cumulative client-initiated bidirectional stream
     // limit granted by QUIC, not an increment or concurrent-stream count.
     // The transport supplies monotonically increasing limits; client is a no-op.
@@ -937,22 +910,17 @@ public:
     // RFC 9110). Extended CONNECT (RFC 9220) returns peer_settings_pending
     // before the peer SETTINGS (or 0-RTT remembered ones) are known and
     // peer_capability_unavailable when they do not enable it.
-    [[nodiscard]] http3_submit_status submit_request_head(std::int64_t stream_id,
-        const http3_regular_request_head_view& request);
-    [[nodiscard]] http3_submit_status submit_request_head(std::int64_t stream_id,
-        const http3_connect_request_head_view& request);
-    [[nodiscard]] http3_submit_status submit_request_head(std::int64_t stream_id,
-        const http3_extended_connect_request_head_view& request);
+    [[nodiscard]] http3_submit_status submit_request_head(std::int64_t stream_id, const http3_regular_request_head_view& request);
+    [[nodiscard]] http3_submit_status submit_request_head(std::int64_t stream_id, const http3_connect_request_head_view& request);
+    [[nodiscard]] http3_submit_status submit_request_head(std::int64_t stream_id, const http3_extended_connect_request_head_view& request);
     // Copies the prefix that fits the stream's output budget; empty input is
     // complete without effect. A stream whose head declared a content length
     // returns invalid_message for DATA beyond it before copying anything.
     // Submitting to a stream whose content is not open (no head, a head that
     // ended the stream, or content already finished) throws std::logic_error.
-    [[nodiscard]] http3_data_submit_result submit_data(
-        std::int64_t stream_id, std::span<const std::byte> bytes);
+    [[nodiscard]] http3_data_submit_result submit_data(std::int64_t stream_id, std::span<const std::byte> bytes);
     // DATA payload submitted on the stream and not yet acknowledged.
-    [[nodiscard]] std::size_t pending_output_bytes(
-        std::int64_t stream_id) const noexcept;
+    [[nodiscard]] std::size_t pending_output_bytes(std::int64_t stream_id) const noexcept;
     // 当前排队的 HEADERS/DATA/尾部已全部交给 QUIC；不表示对端已确认，
     // 也不表示之后不能继续提交正文。已移除的流返回 true。
     [[nodiscard]] bool output_flushed(std::int64_t stream_id) const noexcept;
@@ -966,8 +934,7 @@ public:
     // `trailers` is nonempty. Trailer fields must be valid fields a sender may
     // place in request trailers (RFC 9110 §6.5.1) within the field section
     // limits.
-    [[nodiscard]] http3_finish_status finish_request(std::int64_t stream_id,
-        std::span<const http_header_view> trailers = {});
+    [[nodiscard]] http3_finish_status finish_request(std::int64_t stream_id, std::span<const http_header_view> trailers = {});
 
     // Server response mapping (RFC 9114 §4.1-§4.3). The final head carries
     // :status, the response fields with lowercase names (§4.2), a generated
@@ -975,24 +942,18 @@ public:
     // derives; connection-specific fields are rejected. A head whose plan
     // sends content leaves the stream open for submit_data(), whose total
     // must equal the planned length before finish_stream().
-    [[nodiscard]] std::variant<http_buffered_response_write_plan, http3_response_head_error>
-    submit_response_head(std::int64_t stream_id, const http_response& response,
-        http_buffered_response_write_plan write_plan);
+    [[nodiscard]] std::variant<http_buffered_response_write_plan, http3_response_head_error> submit_response_head(std::int64_t stream_id, const http_response& response, http_buffered_response_write_plan write_plan);
     // Streaming final head: an application Content-Length becomes the exact
     // content total; otherwise the content is unbounded. A body-suppressed
     // response (HEAD request, 204, 304) ends the stream with its head; the
     // request method is the one the stream received.
-    [[nodiscard]] std::variant<http_response_stream_commit_plan, http3_response_head_error>
-    submit_streaming_response_head(std::int64_t stream_id, http_response head,
-        http_response_trailer_intent trailer_intent = http_response_trailer_intent::none);
+    [[nodiscard]] std::variant<http_response_stream_commit_plan, http3_response_head_error> submit_streaming_response_head(std::int64_t stream_id, http_response head, http_response_trailer_intent trailer_intent = http_response_trailer_intent::none);
     // A 1xx response before the final head (RFC 9114 §4.1). invalid_message:
     // the field section exceeds the local or peer field section limit.
-    [[nodiscard]] http3_submit_status submit_interim_response_head(
-        std::int64_t stream_id, const http_interim_response_head& response);
+    [[nodiscard]] http3_submit_status submit_interim_response_head(std::int64_t stream_id, const http_interim_response_head& response);
     // Ends a streaming response: an empty section ends the content, any other
     // section is sent as the trailing HEADERS frame. Rules as finish_stream().
-    [[nodiscard]] http3_finish_status finish_response(std::int64_t stream_id,
-        const http_response_trailer_section& trailers);
+    [[nodiscard]] http3_finish_status finish_response(std::int64_t stream_id, const http_response_trailer_section& trailers);
 
     // Accepts a CONNECT (RFC 9114 §4.4) or extended CONNECT (RFC 9220)
     // request with a 2xx head that frames no content (no Content-Length, no
@@ -1001,16 +962,12 @@ public:
     // finish_stream()). Any other answer takes submit_response_head().
     // invalid_state: the stream did not receive a CONNECT head or already
     // answered it; invalid_message: the head cannot accept a tunnel.
-    [[nodiscard]] http3_submit_status submit_connect_response_head(
-        std::int64_t stream_id, const http_response& response);
+    [[nodiscard]] http3_submit_status submit_connect_response_head(std::int64_t stream_id, const http_response& response);
     // Accepts an RFC 9220 WebSocket bootstrap that
     // validate_http3_websocket_handshake() accepted: the 200 head carries the
     // negotiated subprotocol and permessage-deflate parameters, and the
     // stream continues as a tunnel like submit_connect_response_head().
-    [[nodiscard]] std::variant<websocket_extended_connect_negotiation, http3_response_head_error>
-    submit_websocket_handshake(std::int64_t stream_id, const http_request& request,
-        const websocket_handshake_validation_result& validation,
-        websocket_server_handshake_options options = {});
+    [[nodiscard]] std::variant<websocket_extended_connect_negotiation, http3_response_head_error> submit_websocket_handshake(std::int64_t stream_id, const http_request& request, const websocket_handshake_validation_result& validation, websocket_server_handshake_options options = {});
 
     // One QUIC DATAGRAM frame payload (RFC 9221) carrying an HTTP/3 Datagram.
     // A datagram for a stream whose head was not decoded, or that closed, is
@@ -1027,20 +984,15 @@ public:
     [[nodiscard]] bool header_block_in_progress() const noexcept;
 
     // Server only: queues an RFC 9412 ORIGIN frame on the bound control stream.
-    [[nodiscard]] http3_submit_status submit_origin_advertisement(
-        std::span<const std::string_view> origins);
+    [[nodiscard]] http3_submit_status submit_origin_advertisement(std::span<const std::string_view> origins);
     // Client only: queues an RFC 9218 PRIORITY_UPDATE frame on the bound
     // control stream for an open client-initiated bidirectional request stream.
-    [[nodiscard]] http3_submit_status submit_priority_update(
-        std::int64_t stream_id, http_priority_fields fields);
+    [[nodiscard]] http3_submit_status submit_priority_update(std::int64_t stream_id, http_priority_fields fields);
     // Server only: the current RFC 9218 priority of an open request stream.
-    [[nodiscard]] std::optional<http_priority> stream_priority(
-        std::int64_t stream_id) const noexcept;
+    [[nodiscard]] std::optional<http_priority> stream_priority(std::int64_t stream_id) const noexcept;
     // Final retirement of a QUIC stream, with the application error codes of
     // the RESET_STREAM/STOP_SENDING that ended either half, if any.
-    [[nodiscard]] http3_transport_status close_stream(std::int64_t stream_id,
-        std::optional<http3_error_code> receive_error,
-        std::optional<http3_error_code> send_error) noexcept;
+    [[nodiscard]] http3_transport_status close_stream(std::int64_t stream_id, std::optional<http3_error_code> receive_error, std::optional<http3_error_code> send_error) noexcept;
     // Server graceful shutdown, RFC 9114 §5.2: begin_drain() sends the
     // shutdown-notice GOAWAY that still admits in-flight requests;
     // finish_drain(), at least one round trip later, sends the final GOAWAY
@@ -1062,8 +1014,7 @@ private:
     [[nodiscard]] bool events_pending() const noexcept;
     void rethrow_if_failed();
     class impl;
-    explicit http3_connection(http3_role role,
-        const http3_connection_options& options);
+    explicit http3_connection(http3_role role, const http3_connection_options& options);
     std::unique_ptr<impl> impl_;
 };
 
@@ -1071,10 +1022,7 @@ private:
 // stream: the negotiation's Sec-WebSocket-* request fields followed by the
 // application headers. Validate the final head with
 // validate_extended_connect_websocket_client_response().
-[[nodiscard]] http3_submit_status submit_http3_websocket_client_request(http3_connection& connection,
-    std::int64_t stream_id, const websocket_client_negotiation& negotiation, std::string_view scheme,
-    std::string_view authority, std::string_view target, borrowed_http_headers headers = {},
-    http_request_field_source source = http_request_field_source::generated);
+[[nodiscard]] http3_submit_status submit_http3_websocket_client_request(http3_connection& connection, std::int64_t stream_id, const websocket_client_negotiation& negotiation, std::string_view scheme, std::string_view authority, std::string_view target, borrowed_http_headers headers = {}, http_request_field_source source = http_request_field_source::generated);
 
 }  // namespace ruvia
 
@@ -1105,8 +1053,7 @@ struct http3_quic_result final {
     std::optional<http3_error_code> application_error_code_{};
 };
 
-using http3_quic_stateless_reset_token =
-    std::array<std::uint8_t, NGTCP2_STATELESS_RESET_TOKENLEN>;
+using http3_quic_stateless_reset_token = std::array<std::uint8_t, NGTCP2_STATELESS_RESET_TOKENLEN>;
 
 // The QUIC-TLS adapter (for example ngtcp2_crypto_ossl's ngtcp2_crypto_*_cb).
 // The connection installs these unchanged; they receive the connection's own
@@ -1216,10 +1163,8 @@ struct http3_quic_datagram final {
 // receive_datagram(), next_datagram() and handle_expiry().
 class http3_quic_connection final {
 public:
-    [[nodiscard]] static http3_quic_connection client(
-        const http3_quic_connection_options& options);
-    [[nodiscard]] static http3_quic_connection server(
-        const http3_quic_connection_options& options);
+    [[nodiscard]] static http3_quic_connection client(const http3_quic_connection_options& options);
+    [[nodiscard]] static http3_quic_connection server(const http3_quic_connection_options& options);
 
     ~http3_quic_connection();
     http3_quic_connection(const http3_quic_connection&) = delete;
@@ -1246,8 +1191,7 @@ public:
 
     // Restore authenticated transport parameters and peer SETTINGS from a
     // ticket before opening 0-RTT streams. TLS must enable early data too.
-    [[nodiscard]] http3_quic_status start_early_http3(
-        std::span<const std::byte> transport_parameters, http3_peer_settings settings);
+    [[nodiscard]] http3_quic_status start_early_http3(std::span<const std::byte> transport_parameters, http3_peer_settings settings);
     // On TLS early rejection, discard the rejected HTTP/3 streams before a
     // caller explicitly retries requests in 1-RTT; never replays requests.
     [[nodiscard]] http3_quic_status reject_early_data();
@@ -1260,8 +1204,7 @@ public:
     // ticket's resumption check must bind. Returns the encoded size, or
     // nullopt when a client has not received them yet or `output` is too
     // small.
-    [[nodiscard]] std::optional<std::size_t> encode_early_transport_parameters(
-        std::span<std::byte> output) const noexcept;
+    [[nodiscard]] std::optional<std::size_t> encode_early_transport_parameters(std::span<std::byte> output) const noexcept;
     // The path the connection currently sends on, after any validated
     // migration (RFC 9000 §9). The views borrow connection storage until the
     // next call that processes input, writes output or migrates.
@@ -1272,16 +1215,12 @@ public:
     [[nodiscard]] http3_quic_result migrate(const ngtcp2_path& path, ngtcp2_tstamp timestamp);
     // Payload follows the HTTP Datagram Quarter Stream ID. Owned and bounded;
     // invalid_state means unsupported/oversized, would_block means queue full.
-    [[nodiscard]] http3_quic_status submit_datagram(
-        std::int64_t stream_id, std::span<const std::byte> payload);
+    [[nodiscard]] http3_quic_status submit_datagram(std::int64_t stream_id, std::span<const std::byte> payload);
     [[nodiscard]] std::size_t max_datagram_payload_size(std::int64_t stream_id) const noexcept;
-    [[nodiscard]] http3_quic_result receive_datagram(const ngtcp2_path& path,
-        std::uint32_t ecn, std::span<const std::byte> bytes,
-        ngtcp2_tstamp timestamp);
+    [[nodiscard]] http3_quic_result receive_datagram(const ngtcp2_path& path, std::uint32_t ecn, std::span<const std::byte> bytes, ngtcp2_tstamp timestamp);
     // While the connection is open: the next packet, or would_block. After a
     // local close: the CONNECTION_CLOSE packet once, then closed.
-    [[nodiscard]] http3_quic_result next_datagram(std::size_t capacity,
-        ngtcp2_tstamp timestamp, http3_quic_datagram& output);
+    [[nodiscard]] http3_quic_result next_datagram(std::size_t capacity, ngtcp2_tstamp timestamp, http3_quic_datagram& output);
     [[nodiscard]] http3_quic_result handle_expiry(ngtcp2_tstamp timestamp);
     [[nodiscard]] ngtcp2_tstamp expiry() const noexcept;
 
@@ -1318,8 +1257,7 @@ public:
 
 private:
     class impl;
-    explicit http3_quic_connection(http3_role role,
-        const http3_quic_connection_options& options);
+    explicit http3_quic_connection(http3_role role, const http3_quic_connection_options& options);
     std::unique_ptr<impl> impl_;
 };
 
@@ -1328,11 +1266,7 @@ private:
 // is strictly smaller than the datagram that triggered it, RFC 9000 §10.3.3).
 // Returns the number of bytes written, or 0 when `output`, `max_packet_bytes`
 // or `random_bytes` cannot form a valid Stateless Reset.
-[[nodiscard]] std::size_t write_http3_quic_stateless_reset(
-    const http3_quic_stateless_reset_token& token,
-    std::span<const std::uint8_t> random_bytes,
-    std::span<std::byte> output,
-    std::size_t max_packet_bytes) noexcept;
+[[nodiscard]] std::size_t write_http3_quic_stateless_reset(const http3_quic_stateless_reset_token& token, std::span<const std::uint8_t> random_bytes, std::span<std::byte> output, std::size_t max_packet_bytes) noexcept;
 
 }  // namespace ruvia
 

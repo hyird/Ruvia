@@ -85,21 +85,20 @@ decltype(auto) with_static_context(const static_file_test_request& request, call
     using result_type = typename std::invoke_result_t<callback_type, ruvia::context&>::value_type;
     std::optional<std::conditional_t<std::is_void_v<result_type>, bool, result_type>> result;
     std::exception_ptr error;
-    static_cast<void>(ruvia::test::with_context(
-        request.request(), [&](ruvia::context& context_value) -> ruvia::task<void> {
-            try {
-                if constexpr (std::is_void_v<result_type>) {
-                    co_await callback(context_value);
-                    result.emplace(true);
-                } else {
-                    result.emplace(co_await callback(context_value));
-                }
-            } catch (...) {
-                error = std::current_exception();
+    static_cast<void>(ruvia::test::with_context(request.request(), [&](ruvia::context& context_value) -> ruvia::task<void> {
+        try {
+            if constexpr (std::is_void_v<result_type>) {
+                co_await callback(context_value);
+                result.emplace(true);
+            } else {
+                result.emplace(co_await callback(context_value));
             }
-            context_value.respond(context_value.text(""));
-            co_return;
-        }));
+        } catch (...) {
+            error = std::current_exception();
+        }
+        context_value.respond(context_value.text(""));
+        co_return;
+    }));
     if (error) {
         std::rethrow_exception(error);
     }
@@ -111,8 +110,7 @@ decltype(auto) with_static_context(const static_file_test_request& request, call
     }
 }
 
-[[nodiscard]] ruvia::http_status_code static_file_status(
-    const ruvia::static_root& root, std::string_view path) {
+[[nodiscard]] ruvia::http_status_code static_file_status(const ruvia::static_root& root, std::string_view path) {
     static_file_test_request request;
     return with_static_context(request, [&](ruvia::context& ctx) -> ruvia::task<ruvia::http_status_code> {
         try {
@@ -138,8 +136,7 @@ TEST(Ruvia, static_root_copies_public_mime_configuration_into_owned_storage) {
 
     {
         ruvia::static_root_options options;
-        options.file_types_ =
-            ruvia::static_file_type_policy{.kind_ = ruvia::static_file_type_policy::kind::all};
+        options.file_types_ = ruvia::static_file_type_policy{.kind_ = ruvia::static_file_type_policy::kind::all};
         options.mime_types_.push_back(ruvia::static_mime_type{
             .extension_ = ".custom-resource",
             .content_type_ = "application/x-custom-resource-type",
@@ -149,8 +146,7 @@ TEST(Ruvia, static_root_copies_public_mime_configuration_into_owned_storage) {
         static_file_test_request request;
         with_static_context(request, [&](ruvia::context& ctx) -> ruvia::task<void> {
             const auto response = co_await ctx.static_file(root, {.relative_path_ = "payload.custom-resource"});
-            EXPECT_EQ(response.header("Content-Type"),
-                std::string_view("application/x-custom-resource-type"));
+            EXPECT_EQ(response.header("Content-Type"), std::string_view("application/x-custom-resource-type"));
         });
     }
 }
@@ -163,9 +159,7 @@ TEST(Ruvia, static_root_serves_utf8_file_and_directory_urls) {
     const auto filename = fs::path(u8"\u6587\u6863-\U0001F4C4.txt");
     const auto directory = fs::path(u8"\u76EE\u5F55-\U0001F4C1");
     fs::create_directory(dir / directory);
-    for (const auto& [path, body] : std::array{
-             std::pair{dir / filename, std::string_view("unicode-file-body")},
-             std::pair{dir / directory / "index.html", std::string_view("unicode-index-body")}}) {
+    for (const auto& [path, body] : std::array{std::pair{dir / filename, std::string_view("unicode-file-body")}, std::pair{dir / directory / "index.html", std::string_view("unicode-index-body")}}) {
         std::ofstream output(path, std::ios::binary);
         output << body;
         if (!output) {
@@ -182,10 +176,8 @@ TEST(Ruvia, static_root_serves_utf8_file_and_directory_urls) {
     };
     // static_file takes the decoded path the encoded URL names.
     const case_value cases[]{
-        {"%E6%96%87%E6%A1%A3-%F0%9F%93%84.txt", "\xE6\x96\x87\xE6\xA1\xA3-\xF0\x9F\x93\x84.txt", "unicode-file-body",
-            "text/plain; charset=utf-8"},
-        {"%E7%9B%AE%E5%BD%95-%F0%9F%93%81/", "\xE7\x9B\xAE\xE5\xBD\x95-\xF0\x9F\x93\x81/", "unicode-index-body",
-            "text/html; charset=utf-8"},
+        {"%E6%96%87%E6%A1%A3-%F0%9F%93%84.txt", "\xE6\x96\x87\xE6\xA1\xA3-\xF0\x9F\x93\x84.txt", "unicode-file-body", "text/plain; charset=utf-8"},
+        {"%E7%9B%AE%E5%BD%95-%F0%9F%93%81/", "\xE7\x9B\xAE\xE5\xBD\x95-\xF0\x9F\x93\x81/", "unicode-index-body", "text/html; charset=utf-8"},
     };
     for (const auto& item : cases) {
         static_file_test_request request;
@@ -275,12 +267,8 @@ TEST(Ruvia, file_response_preserves_normal_status_before_evaluating_request_cond
         {ruvia::http_status::temporary_redirect, {"If-Match", "\"different\""}},
         {ruvia::http_status::created, {"Range", "bytes=0-1"}},
     };
-    ruvia::static_root root(dir,
-        {.file_types_ = ruvia::static_file_type_policy{.kind_ = ruvia::static_file_type_policy::kind::all}});
-    for (const auto& [indexed, item] : std::array{
-             std::pair{false, cases[0]}, std::pair{true, cases[0]},
-             std::pair{false, cases[1]}, std::pair{true, cases[1]},
-             std::pair{false, cases[2]}, std::pair{true, cases[2]}}) {
+    ruvia::static_root root(dir, {.file_types_ = ruvia::static_file_type_policy{.kind_ = ruvia::static_file_type_policy::kind::all}});
+    for (const auto& [indexed, item] : std::array{std::pair{false, cases[0]}, std::pair{true, cases[0]}, std::pair{false, cases[1]}, std::pair{true, cases[1]}, std::pair{false, cases[2]}, std::pair{true, cases[2]}}) {
         static_file_test_request request;
         request.add_header(item.condition_);
         with_static_context(request, [&](ruvia::context& context_value) -> ruvia::task<void> {
@@ -333,11 +321,9 @@ TEST(Ruvia, static_file_response_owns_path_after_handler_local_root_is_destroyed
         std::optional<ruvia::http_response> response;
         {
             ruvia::static_root_options options;
-            options.file_types_ =
-                ruvia::static_file_type_policy{.kind_ = ruvia::static_file_type_policy::kind::all};
+            options.file_types_ = ruvia::static_file_type_policy{.kind_ = ruvia::static_file_type_policy::kind::all};
             ruvia::static_root handler_local_root(dir, std::move(options));
-            response.emplace(co_await context_value.static_file(
-                handler_local_root, {.relative_path_ = "payload.txt", .content_type_ = "text/plain"}));
+            response.emplace(co_await context_value.static_file(handler_local_root, {.relative_path_ = "payload.txt", .content_type_ = "text/plain"}));
         }
 
         const auto file = response->file_body();
@@ -357,8 +343,7 @@ TEST(Ruvia, static_file_type_policy_has_closed_exact_alternatives) {
 
     bool empty_only_threw = false;
     try {
-        ruvia::static_root rejected_root(dir,
-            {.file_types_ = {.kind_ = ruvia::static_file_type_policy::kind::only}});
+        ruvia::static_root rejected_root(dir, {.file_types_ = {.kind_ = ruvia::static_file_type_policy::kind::only}});
     } catch (const std::invalid_argument&) {
         empty_only_threw = true;
     }
@@ -367,9 +352,7 @@ TEST(Ruvia, static_file_type_policy_has_closed_exact_alternatives) {
     for (const std::string_view invalid : {"", ".", "..", "a/b", "a\\b"}) {
         bool invalid_type_threw = false;
         try {
-            ruvia::static_root rejected_root(dir,
-                {.file_types_ = {.kind_ = ruvia::static_file_type_policy::kind::only,
-                     .extensions_ = {std::string(invalid)}}});
+            ruvia::static_root rejected_root(dir, {.file_types_ = {.kind_ = ruvia::static_file_type_policy::kind::only, .extensions_ = {std::string(invalid)}}});
         } catch (const std::invalid_argument&) {
             invalid_type_threw = true;
         }
@@ -381,15 +364,13 @@ TEST(Ruvia, static_file_type_policy_has_closed_exact_alternatives) {
     EXPECT_TRUE(static_file_status(default_root, "asset.custom") != ruvia::http_status::ok);
 
     ruvia::static_root_options all_options;
-    all_options.file_types_ =
-        ruvia::static_file_type_policy{.kind_ = ruvia::static_file_type_policy::kind::all};
+    all_options.file_types_ = ruvia::static_file_type_policy{.kind_ = ruvia::static_file_type_policy::kind::all};
     ruvia::static_root all_root(dir, std::move(all_options));
     EXPECT_TRUE(static_file_status(all_root, "index.html") == ruvia::http_status::ok);
     EXPECT_TRUE(static_file_status(all_root, "asset.custom") == ruvia::http_status::ok);
 
     ruvia::static_root_options only_options;
-    only_options.file_types_ = ruvia::static_file_type_policy{
-        .kind_ = ruvia::static_file_type_policy::kind::only, .extensions_ = {".CUSTOM"}};
+    only_options.file_types_ = ruvia::static_file_type_policy{.kind_ = ruvia::static_file_type_policy::kind::only, .extensions_ = {".CUSTOM"}};
     ruvia::static_root only_root(dir, std::move(only_options));
     EXPECT_TRUE(static_file_status(only_root, "index.html") != ruvia::http_status::ok);
     EXPECT_TRUE(static_file_status(only_root, "asset.custom") == ruvia::http_status::ok);
@@ -412,29 +393,26 @@ TEST(Ruvia, static_file_range_serving_status_and_content_range) {
         std::ofstream out(dir / "empty.txt", std::ios::binary | std::ios::trunc);
     }
     static_root_options options;
-    options.file_types_ =
-        ruvia::static_file_type_policy{.kind_ = ruvia::static_file_type_policy::kind::all};
+    options.file_types_ = ruvia::static_file_type_policy{.kind_ = ruvia::static_file_type_policy::kind::all};
     static_root root(dir, std::move(options));
 
-    const auto serve_method = [&root](std::string_view method, std::string_view path,
-                                  std::string_view range) {
+    const auto serve_method = [&root](std::string_view method, std::string_view path, std::string_view range) {
         static_file_test_request request;
         request.set_method(method);
         if (!range.empty()) {
             request.add_header(http_header_view{"Range", range});
         }
         return with_static_context(request, [&](ruvia::context& context_value) -> ruvia::task<std::pair<ruvia::http_status_code, std::string>> {
-            const auto response =
-                co_await context_value.static_file(root, {.relative_path_ = path, .content_type_ = "text/plain"});
-            co_return std::pair<ruvia::http_status_code, std::string>(
-                response.status(), std::string(response.header("Content-Range").value_or("")));
+            const auto response = co_await context_value.static_file(root, {.relative_path_ = path, .content_type_ = "text/plain"});
+            co_return std::pair<ruvia::http_status_code, std::string>(response.status(), std::string(response.header("Content-Range").value_or("")));
         });
     };
     const auto serve_file = [&serve_method](std::string_view path, std::string_view range) {
         return serve_method("GET", path, range);
     };
-    const auto serve = [&serve_file](
-                           std::string_view range) { return serve_file("data.txt", range); };
+    const auto serve = [&serve_file](std::string_view range) {
+        return serve_file("data.txt", range);
+    };
 
     // A valid single range -> 206 with the byte range echoed.
     const auto ok = serve("bytes=0-4");
@@ -495,8 +473,7 @@ TEST(Ruvia, static_file_takes_decoded_path_and_stays_traversal_safe) {
         out << "inner";
     }
     static_root_options options;
-    options.file_types_ =
-        ruvia::static_file_type_policy{.kind_ = ruvia::static_file_type_policy::kind::all};
+    options.file_types_ = ruvia::static_file_type_policy{.kind_ = ruvia::static_file_type_policy::kind::all};
     static_root root(dir, std::move(options));
 
     const auto serve = [&root](std::string_view path) {
@@ -505,8 +482,7 @@ TEST(Ruvia, static_file_takes_decoded_path_and_stays_traversal_safe) {
         return with_static_context(request, [&](ruvia::context& context_value) -> ruvia::task<ruvia::http_status_code> {
             ruvia::http_status_code status = ruvia::http_status::internal_server_error;
             try {
-                status = (co_await context_value.static_file(root, {.relative_path_ = path, .content_type_ = "text/plain"}))
-                             .status();
+                status = (co_await context_value.static_file(root, {.relative_path_ = path, .content_type_ = "text/plain"})).status();
             } catch (const ruvia::http_error& error) {
                 status = error.info().status();
             }
@@ -554,8 +530,7 @@ TEST(Ruvia, static_file_declares_vary_accept_encoding_but_context_file_does_not)
         out.write(content.data(), static_cast<std::streamsize>(content.size()));
     }
     static_root_options options;
-    options.file_types_ =
-        ruvia::static_file_type_policy{.kind_ = ruvia::static_file_type_policy::kind::all};
+    options.file_types_ = ruvia::static_file_type_policy{.kind_ = ruvia::static_file_type_policy::kind::all};
     static_root root(dir, std::move(options));
 
     static_file_test_request request;
@@ -566,11 +541,9 @@ TEST(Ruvia, static_file_declares_vary_accept_encoding_but_context_file_does_not)
         // variant to a capable client, so a shared cache keyed only on the URL must not
         // reuse this identity body for everyone (RFC 9110 12.5.5 / RFC 9111 4.1). The
         // identity body carries no Content-Encoding.
-        const auto served =
-            co_await context_value.static_file(root, {.relative_path_ = "app.js", .content_type_ = "text/javascript"});
+        const auto served = co_await context_value.static_file(root, {.relative_path_ = "app.js", .content_type_ = "text/javascript"});
         EXPECT_EQ(served.status(), ruvia::http_status::ok);
-        EXPECT_TRUE(
-            (served.header("Vary").value_or("").find("Accept-Encoding") != std::string_view::npos));
+        EXPECT_TRUE((served.header("Vary").value_or("").find("Accept-Encoding") != std::string_view::npos));
         EXPECT_TRUE(!served.header("Content-Encoding").has_value());
 
         // context::file serves a single path with no encoding negotiation, so it must
@@ -578,8 +551,7 @@ TEST(Ruvia, static_file_declares_vary_accept_encoding_but_context_file_does_not)
         const auto direct = co_await context_value.file({.path_ = file_path});
         EXPECT_EQ(direct.status(), ruvia::http_status::ok);
         EXPECT_TRUE(!direct.header("Vary").has_value());
-        EXPECT_EQ(direct.header("Content-Type").value_or(""),
-            std::string_view("text/javascript; charset=utf-8"));
+        EXPECT_EQ(direct.header("Content-Type").value_or(""), std::string_view("text/javascript; charset=utf-8"));
         // Every platform keeps the body file-backed for the pooled reader.
         EXPECT_TRUE(direct.file_body().has_value());
         if (direct.file_body()) {
@@ -616,15 +588,13 @@ TEST(Ruvia, context_file_serves_borrowed_utf8_text_paths) {
             }
         };
         const auto matches_borrowed_body = [](const ruvia::http_response& response) {
-            return response.file_body().has_value() &&
-                   response.file_body()->length() == std::string_view("borrowed").size();
+            return response.file_body().has_value() && response.file_body()->length() == std::string_view("borrowed").size();
         };
 
         const auto from_text = co_await context_value.file({.path_ = text});
         EXPECT_EQ(from_text.status(), ruvia::http_status::ok);
         EXPECT_TRUE(matches_borrowed_body(from_text));
-        EXPECT_EQ(from_text.header("Content-Type").value_or(""),
-            std::string_view("text/plain; charset=utf-8"));
+        EXPECT_EQ(from_text.header("Content-Type").value_or(""), std::string_view("text/plain; charset=utf-8"));
 
         const auto from_view = co_await context_value.file({.path_ = std::string_view(padded).substr(0, text.size())});
         EXPECT_EQ(from_view.status(), ruvia::http_status::ok);
@@ -656,9 +626,7 @@ TEST(Ruvia, context_file_serves_borrowed_utf8_text_paths) {
 // static_file() borrows its root until the returned task completes, so a
 // temporary root is rejected at compile time.
 template <typename root_type>
-concept static_file_accepts_root = requires(ruvia::context& context_value, root_type&& root) {
-    context_value.static_file(std::forward<root_type>(root), ruvia::static_file_response_options{});
-};
+concept static_file_accepts_root = requires(ruvia::context& context_value, root_type&& root) { context_value.static_file(std::forward<root_type>(root), ruvia::static_file_response_options{}); };
 static_assert(static_file_accepts_root<const ruvia::static_root&>);
 static_assert(!static_file_accepts_root<ruvia::static_root>);
 static_assert(!static_file_accepts_root<const ruvia::static_root>);
@@ -692,8 +660,7 @@ TEST(Ruvia, file_and_static_file_own_their_options_before_returning) {
             std::string root_type("text/x-owned-root");
             from_path.emplace(context_value.file({.path_ = path, .content_type_ = path_type}));
             from_text.emplace(context_value.file({.path_ = text, .content_type_ = text_type}));
-            from_root.emplace(
-                context_value.static_file(root, {.relative_path_ = relative, .content_type_ = root_type}));
+            from_root.emplace(context_value.static_file(root, {.relative_path_ = relative, .content_type_ = root_type}));
             // Overwrite every source before it is destroyed, so a task still
             // reading one would name a different file or type.
             path = dir / "missing.txt";
@@ -708,9 +675,7 @@ TEST(Ruvia, file_and_static_file_own_their_options_before_returning) {
         const auto root_response = co_await std::move(*from_root);
         const auto serves = [](const ruvia::http_response& response, std::string_view content_type) {
             const auto file = response.file_body();
-            return response.status() == ruvia::http_status::ok &&
-                   response.header("Content-Type").value_or("") == content_type && file.has_value() &&
-                   read_file_response_body(*file) == "owned-options";
+            return response.status() == ruvia::http_status::ok && response.header("Content-Type").value_or("") == content_type && file.has_value() && read_file_response_body(*file) == "owned-options";
         };
         EXPECT_TRUE(serves(path_response, "text/x-owned-path"));
         EXPECT_TRUE(serves(text_response, "text/x-owned-text"));
@@ -730,8 +695,7 @@ TEST(Ruvia, static_file_preserves_context_vary_when_adding_accept_encoding) {
         out << "console.log('ok');";
     }
     static_root_options options;
-    options.file_types_ =
-        ruvia::static_file_type_policy{.kind_ = ruvia::static_file_type_policy::kind::all};
+    options.file_types_ = ruvia::static_file_type_policy{.kind_ = ruvia::static_file_type_policy::kind::all};
     static_root root(dir, std::move(options));
 
     static_file_test_request request;
@@ -739,8 +703,7 @@ TEST(Ruvia, static_file_preserves_context_vary_when_adding_accept_encoding) {
     with_static_context(request, [&](ruvia::context& context_value) -> ruvia::task<void> {
         context_value.draft().header("Vary", "Origin");
 
-        const auto response =
-            co_await context_value.static_file(root, {.relative_path_ = "app.js", .content_type_ = "text/javascript"});
+        const auto response = co_await context_value.static_file(root, {.relative_path_ = "app.js", .content_type_ = "text/javascript"});
         const auto vary = response.header("Vary").value_or("");
         // context response metadata is applied after the file's base headers. It
         // must not erase the negotiation dimension, or a shared cache can reuse an
@@ -764,8 +727,7 @@ TEST(Ruvia, static_file_if_range_dates_do_not_authorize_partial_responses) {
         out.write(content.data(), static_cast<std::streamsize>(content.size()));
     }
     static_root_options options;
-    options.file_types_ =
-        ruvia::static_file_type_policy{.kind_ = ruvia::static_file_type_policy::kind::all};
+    options.file_types_ = ruvia::static_file_type_policy{.kind_ = ruvia::static_file_type_policy::kind::all};
     static_root root(dir, std::move(options));
 
     // Serve with a Range plus an optional If-Range; returns (status, Last-Modified).
@@ -777,10 +739,8 @@ TEST(Ruvia, static_file_if_range_dates_do_not_authorize_partial_responses) {
             request.add_header(http_header_view{"If-Range", *if_range});
         }
         return with_static_context(request, [&](ruvia::context& ctx) -> ruvia::task<std::pair<ruvia::http_status_code, std::string>> {
-            const auto response =
-                co_await ctx.static_file(root, {.relative_path_ = "data.txt", .content_type_ = "text/plain"});
-            co_return std::pair<ruvia::http_status_code, std::string>(
-                response.status(), std::string(response.header("Last-Modified").value_or("")));
+            const auto response = co_await ctx.static_file(root, {.relative_path_ = "data.txt", .content_type_ = "text/plain"});
+            co_return std::pair<ruvia::http_status_code, std::string>(response.status(), std::string(response.header("Last-Modified").value_or("")));
         });
     };
 
@@ -836,9 +796,7 @@ TEST(Ruvia, file_if_range_same_second_updates_require_an_etag) {
             }
             observation result{};
             (void)ruvia::test::with_context(request, [&](ruvia::context& context) -> ruvia::task<void> {
-                const auto response = use_static
-                                          ? co_await context.static_file(*root, {.relative_path_ = "data.txt"})
-                                          : co_await context.file({.path_ = path});
+                const auto response = use_static ? co_await context.static_file(*root, {.relative_path_ = "data.txt"}) : co_await context.file({.path_ = path});
                 result = observation{
                     response.status(),
                     std::string(response.header("Last-Modified").value_or("")),
@@ -907,11 +865,8 @@ TEST(Ruvia, file_partial_responses_to_if_range_omit_repeated_representation_fiel
             }
             observation result{};
             (void)ruvia::test::with_context(request, [&](ruvia::context& context) -> ruvia::task<void> {
-                const auto response = use_static ? co_await context.static_file(*root, {.relative_path_ = "data.txt"})
-                                                 : co_await context.file({.path_ = path, .content_type_ = "text/plain"});
-                result = observation{response.status(), copy(response.header("Content-Type")),
-                    copy(response.header("Last-Modified")), copy(response.header("ETag")),
-                    copy(response.header("Content-Range"))};
+                const auto response = use_static ? co_await context.static_file(*root, {.relative_path_ = "data.txt"}) : co_await context.file({.path_ = path, .content_type_ = "text/plain"});
+                result = observation{response.status(), copy(response.header("Content-Type")), copy(response.header("Last-Modified")), copy(response.header("ETag")), copy(response.header("Content-Range"))};
                 co_return;
             });
             return result;
@@ -967,9 +922,7 @@ TEST(Ruvia, static_file_historical_last_modified_supports_date_preconditions) {
             request.add_header(ruvia::http_header_view{"If-Modified-Since", *since});
         }
         return with_static_context(request, [&](ruvia::context& context_value) -> ruvia::task<std::pair<ruvia::http_status_code, std::string>> {
-            const auto response = snapshot
-                                      ? co_await context_value.static_file(root, {.relative_path_ = "data.txt", .content_type_ = "text/plain"})
-                                      : co_await context_value.file({.path_ = path, .content_type_ = "text/plain"});
+            const auto response = snapshot ? co_await context_value.static_file(root, {.relative_path_ = "data.txt", .content_type_ = "text/plain"}) : co_await context_value.file({.path_ = path, .content_type_ = "text/plain"});
             co_return std::pair(response.status(), std::string(response.header("Last-Modified").value_or("")));
         });
     };
@@ -1004,8 +957,7 @@ TEST(Ruvia, static_file_clamps_future_last_modified_and_rejects_it_for_if_range)
     EXPECT_TRUE(!ec);
 
     static_root_options options;
-    options.file_types_ =
-        ruvia::static_file_type_policy{.kind_ = ruvia::static_file_type_policy::kind::all};
+    options.file_types_ = ruvia::static_file_type_policy{.kind_ = ruvia::static_file_type_policy::kind::all};
     static_root root(dir, std::move(options));
 
     const auto serve = [&root](std::optional<std::string_view> if_range) {
@@ -1016,10 +968,8 @@ TEST(Ruvia, static_file_clamps_future_last_modified_and_rejects_it_for_if_range)
             request.add_header(http_header_view{"If-Range", *if_range});
         }
         return with_static_context(request, [&](ruvia::context& context_value) -> ruvia::task<std::pair<ruvia::http_status_code, std::string>> {
-            const auto response =
-                co_await context_value.static_file(root, {.relative_path_ = "data.txt", .content_type_ = "text/plain"});
-            co_return std::pair<ruvia::http_status_code, std::string>(
-                response.status(), std::string(response.header("Last-Modified").value_or("")));
+            const auto response = co_await context_value.static_file(root, {.relative_path_ = "data.txt", .content_type_ = "text/plain"});
+            co_return std::pair<ruvia::http_status_code, std::string>(response.status(), std::string(response.header("Last-Modified").value_or("")));
         });
     };
 
@@ -1054,11 +1004,9 @@ TEST(Ruvia, static_file_without_response_validators_still_enforces_preconditions
         out.write(content.data(), static_cast<std::streamsize>(content.size()));
     }
     static_root_options options;
-    options.file_types_ =
-        ruvia::static_file_type_policy{.kind_ = ruvia::static_file_type_policy::kind::all};
+    options.file_types_ = ruvia::static_file_type_policy{.kind_ = ruvia::static_file_type_policy::kind::all};
     options.range_requests_ = static_range_request_policy::honor;
-    options.response_validators_ =
-        static_response_validator_policy::omit;  // no ETag / Last-Modified on responses
+    options.response_validators_ = static_response_validator_policy::omit;  // no ETag / Last-Modified on responses
     static_root root(dir, std::move(options));
 
     const auto serve = [&root](std::string_view if_range) {
@@ -1069,8 +1017,7 @@ TEST(Ruvia, static_file_without_response_validators_still_enforces_preconditions
             request.add_header(http_header_view{"If-Range", if_range});
         }
         return with_static_context(request, [&](ruvia::context& ctx) -> ruvia::task<ruvia::http_status_code> {
-            co_return (co_await ctx.static_file(root, {.relative_path_ = "data.txt", .content_type_ = "text/plain"}))
-                .status();
+            co_return (co_await ctx.static_file(root, {.relative_path_ = "data.txt", .content_type_ = "text/plain"})).status();
         });
     };
 
@@ -1088,9 +1035,7 @@ TEST(Ruvia, static_file_without_response_validators_still_enforces_preconditions
         bool has_etag_;
         bool has_last_modified_;
     };
-    const auto serve_conditional = [&root](std::string_view method,
-                                       std::string_view name,
-                                       std::string_view value) {
+    const auto serve_conditional = [&root](std::string_view method, std::string_view name, std::string_view value) {
         static_file_test_request request;
         request.set_method(method);
         if (!name.empty()) {
@@ -1098,10 +1043,8 @@ TEST(Ruvia, static_file_without_response_validators_still_enforces_preconditions
         }
         return with_static_context(request, [&](ruvia::context& context_value) -> ruvia::task<conditional_result> {
             try {
-                const auto response =
-                    co_await context_value.static_file(root, {.relative_path_ = "data.txt", .content_type_ = "text/plain"});
-                co_return conditional_result{response.status(), response.header("ETag").has_value(),
-                    response.header("Last-Modified").has_value()};
+                const auto response = co_await context_value.static_file(root, {.relative_path_ = "data.txt", .content_type_ = "text/plain"});
+                co_return conditional_result{response.status(), response.header("ETag").has_value(), response.header("Last-Modified").has_value()};
             } catch (const ruvia::http_error& error) {
                 co_return conditional_result{error.info().status(), false, false};
             }
@@ -1117,25 +1060,15 @@ TEST(Ruvia, static_file_without_response_validators_still_enforces_preconditions
     // preconditions. Wildcard conditions test whether a current representation
     // exists and therefore require no ETag at all; date conditions use the
     // origin's file metadata even when Last-Modified is not emitted.
-    const auto get_existing =
-        serve_conditional("GET", "If-None-Match", "*");
+    const auto get_existing = serve_conditional("GET", "If-None-Match", "*");
     EXPECT_EQ(get_existing.status_, ruvia::http_status::not_modified);
     EXPECT_TRUE(!get_existing.has_etag_);
     EXPECT_TRUE(!get_existing.has_last_modified_);
-    EXPECT_EQ(
-        serve_conditional("POST", "If-None-Match", "*").status_,
-        ruvia::http_status::precondition_failed);
-    EXPECT_EQ(serve_conditional("POST", "If-Match", "*").status_,
-        ruvia::http_status::ok);
-    EXPECT_EQ(
-        serve_conditional("POST", "If-Match", "\"stale\"").status_,
-        ruvia::http_status::precondition_failed);
-    EXPECT_EQ(serve_conditional("POST", "If-Unmodified-Since", "Thu, 01 Jan 1970 00:00:00 GMT")
-                  .status_,
-        ruvia::http_status::precondition_failed);
-    EXPECT_EQ(serve_conditional("GET", "If-Modified-Since", "Fri, 31 Dec 9999 23:59:59 GMT")
-                  .status_,
-        ruvia::http_status::not_modified);
+    EXPECT_EQ(serve_conditional("POST", "If-None-Match", "*").status_, ruvia::http_status::precondition_failed);
+    EXPECT_EQ(serve_conditional("POST", "If-Match", "*").status_, ruvia::http_status::ok);
+    EXPECT_EQ(serve_conditional("POST", "If-Match", "\"stale\"").status_, ruvia::http_status::precondition_failed);
+    EXPECT_EQ(serve_conditional("POST", "If-Unmodified-Since", "Thu, 01 Jan 1970 00:00:00 GMT").status_, ruvia::http_status::precondition_failed);
+    EXPECT_EQ(serve_conditional("GET", "If-Modified-Since", "Fri, 31 Dec 9999 23:59:59 GMT").status_, ruvia::http_status::not_modified);
 }
 
 TEST(Ruvia, static_file_if_match_takes_precedence_over_if_unmodified_since) {
@@ -1152,16 +1085,14 @@ TEST(Ruvia, static_file_if_match_takes_precedence_over_if_unmodified_since) {
         out.write(content.data(), static_cast<std::streamsize>(content.size()));
     }
     static_root_options options;
-    options.file_types_ =
-        ruvia::static_file_type_policy{.kind_ = ruvia::static_file_type_policy::kind::all};
+    options.file_types_ = ruvia::static_file_type_policy{.kind_ = ruvia::static_file_type_policy::kind::all};
     static_root root(dir, std::move(options));
 
     struct header {
         std::string_view name_;
         std::string_view value_;
     };
-    const auto serve_method = [&root](
-                                  std::string_view method, std::initializer_list<header> headers) {
+    const auto serve_method = [&root](std::string_view method, std::initializer_list<header> headers) {
         static_file_test_request request;
         request.set_method(method);
         for (const auto& header : headers) {
@@ -1171,8 +1102,7 @@ TEST(Ruvia, static_file_if_match_takes_precedence_over_if_unmodified_since) {
             ruvia::http_status_code status = ruvia::http_status::internal_server_error;
             std::string etag{};
             try {
-                const auto response =
-                    co_await context_value.static_file(root, {.relative_path_ = "data.txt", .content_type_ = "text/plain"});
+                const auto response = co_await context_value.static_file(root, {.relative_path_ = "data.txt", .content_type_ = "text/plain"});
                 status = response.status();
                 etag.assign(response.header("ETag").value_or(""));
             } catch (const ruvia::http_error& error) {
@@ -1199,77 +1129,42 @@ TEST(Ruvia, static_file_if_match_takes_precedence_over_if_unmodified_since) {
     constexpr std::string_view old_date = "Thu, 01 Jan 1970 00:00:00 GMT";
 
     // If-Unmodified-Since alone (stale date) is a 412 precondition failure.
-    EXPECT_EQ(
-        serve({{"If-Unmodified-Since", old_date}}).first,
-        ruvia::http_status::precondition_failed);
+    EXPECT_EQ(serve({{"If-Unmodified-Since", old_date}}).first, ruvia::http_status::precondition_failed);
 
     // With a matching If-Match present, RFC 9110 §13.2.2 requires If-Unmodified-Since
     // to be ignored -- the strong validator matched, so serve 200 rather than 412.
-    EXPECT_EQ(
-        serve({{"If-Match", etag},
-                  {"If-Unmodified-Since", old_date}})
-            .first,
-        ruvia::http_status::ok);
+    EXPECT_EQ(serve({{"If-Match", etag}, {"If-Unmodified-Since", old_date}}).first, ruvia::http_status::ok);
 
     // Presence is distinct from a non-empty field value. The empty #entity-tag
     // list matches no current representation, so an empty If-Match fails rather
     // than being treated as if the field were absent.
-    EXPECT_EQ(serve({{"If-Match", ""}}).first,
-        ruvia::http_status::precondition_failed);
+    EXPECT_EQ(serve({{"If-Match", ""}}).first, ruvia::http_status::precondition_failed);
 
     constexpr std::string_view future_date = "Fri, 31 Dec 9999 23:59:59 GMT";
-    EXPECT_EQ(
-        serve({{"If-Modified-Since", future_date}}).first,
-        ruvia::http_status::not_modified);
+    EXPECT_EQ(serve({{"If-Modified-Since", future_date}}).first, ruvia::http_status::not_modified);
     // Even an empty If-None-Match is present and therefore takes precedence over
     // If-Modified-Since. Its empty list does not match, so the response is 200.
-    EXPECT_EQ(
-        serve({{"If-None-Match", ""},
-                  {"If-Modified-Since", future_date}})
-            .first,
-        ruvia::http_status::ok);
+    EXPECT_EQ(serve({{"If-None-Match", ""}, {"If-Modified-Since", future_date}}).first, ruvia::http_status::ok);
 
     // If-Match and If-None-Match are list fields. Repeated field lines are
     // equivalent to one comma-joined value, so a match on the first line must
     // not be lost when the known-header cache records the second line.
-    EXPECT_EQ(serve({{"If-Match", etag},
-                        {"If-Match", "\"stale\""}})
-                  .first,
-        ruvia::http_status::ok);
-    EXPECT_EQ(serve({{"If-None-Match", etag},
-                        {"If-None-Match", "\"stale\""}})
-                  .first,
-        ruvia::http_status::not_modified);
+    EXPECT_EQ(serve({{"If-Match", etag}, {"If-Match", "\"stale\""}}).first, ruvia::http_status::ok);
+    EXPECT_EQ(serve({{"If-None-Match", etag}, {"If-None-Match", "\"stale\""}}).first, ruvia::http_status::not_modified);
 
     // Preconditions protect unsafe methods too. A matching If-None-Match or a
     // stale If-Match / If-Unmodified-Since on POST must fail with 412 instead of
     // serving the file as an unconditional 200.
-    EXPECT_EQ(
-        serve_method("POST", {{"If-None-Match", etag}}).first,
-        ruvia::http_status::precondition_failed);
-    EXPECT_EQ(
-        serve_method("POST", {{"If-Match", "\"stale\""}}).first,
-        ruvia::http_status::precondition_failed);
-    EXPECT_EQ(serve_method("POST",
-                  {{"If-Unmodified-Since", old_date}})
-                  .first,
-        ruvia::http_status::precondition_failed);
-    EXPECT_EQ(serve_method("POST", {{"If-Match", etag}}).first,
-        ruvia::http_status::ok);
-    EXPECT_EQ(
-        serve_method("POST", {{"If-None-Match", "\"stale\""}})
-            .first,
-        ruvia::http_status::ok);
-    EXPECT_EQ(serve_method("POST",
-                  {{"If-Modified-Since", future_date}})
-                  .first,
-        ruvia::http_status::ok);
+    EXPECT_EQ(serve_method("POST", {{"If-None-Match", etag}}).first, ruvia::http_status::precondition_failed);
+    EXPECT_EQ(serve_method("POST", {{"If-Match", "\"stale\""}}).first, ruvia::http_status::precondition_failed);
+    EXPECT_EQ(serve_method("POST", {{"If-Unmodified-Since", old_date}}).first, ruvia::http_status::precondition_failed);
+    EXPECT_EQ(serve_method("POST", {{"If-Match", etag}}).first, ruvia::http_status::ok);
+    EXPECT_EQ(serve_method("POST", {{"If-None-Match", "\"stale\""}}).first, ruvia::http_status::ok);
+    EXPECT_EQ(serve_method("POST", {{"If-Modified-Since", future_date}}).first, ruvia::http_status::ok);
 
     // OPTIONS does not select or modify a representation, so RFC 9110 §13.2.1
     // requires these conditional fields to be ignored for that method.
-    EXPECT_EQ(
-        serve_method("OPTIONS", {{"If-Match", "\"stale\""}}).first,
-        ruvia::http_status::ok);
+    EXPECT_EQ(serve_method("OPTIONS", {{"If-Match", "\"stale\""}}).first, ruvia::http_status::ok);
 }
 
 TEST(Ruvia, static_file_conditional_request_serving) {
@@ -1286,22 +1181,18 @@ TEST(Ruvia, static_file_conditional_request_serving) {
         out.write(content.data(), static_cast<std::streamsize>(content.size()));
     }
     static_root_options options;
-    options.file_types_ =
-        ruvia::static_file_type_policy{.kind_ = ruvia::static_file_type_policy::kind::all};
+    options.file_types_ = ruvia::static_file_type_policy{.kind_ = ruvia::static_file_type_policy::kind::all};
     static_root root(dir, std::move(options));
 
-    const auto serve = [&root](std::string_view header_name,
-                           std::string_view header_value) {
+    const auto serve = [&root](std::string_view header_name, std::string_view header_value) {
         static_file_test_request request;
         request.set_method("GET");
         if (!header_name.empty()) {
             request.add_header(http_header_view{header_name, header_value});
         }
         return with_static_context(request, [&](ruvia::context& context_value) -> ruvia::task<std::pair<ruvia::http_status_code, std::string>> {
-            const auto response =
-                co_await context_value.static_file(root, {.relative_path_ = "data.txt", .content_type_ = "text/plain"});
-            co_return std::pair<ruvia::http_status_code, std::string>(
-                response.status(), std::string(response.header("ETag").value_or("")));
+            const auto response = co_await context_value.static_file(root, {.relative_path_ = "data.txt", .content_type_ = "text/plain"});
+            co_return std::pair<ruvia::http_status_code, std::string>(response.status(), std::string(response.header("ETag").value_or("")));
         });
     };
 
@@ -1312,12 +1203,8 @@ TEST(Ruvia, static_file_conditional_request_serving) {
     const std::string etag(plain.second);
 
     // If-None-Match with the current ETag -> 304; a stale one falls through to 200.
-    EXPECT_EQ(
-        serve("If-None-Match", etag).first,
-        ruvia::http_status::not_modified);
-    EXPECT_EQ(
-        serve("If-None-Match", "\"stale\"").first,
-        ruvia::http_status::ok);
+    EXPECT_EQ(serve("If-None-Match", etag).first, ruvia::http_status::not_modified);
+    EXPECT_EQ(serve("If-None-Match", "\"stale\"").first, ruvia::http_status::ok);
     // RFC 9110 15.4.5: the 304 keeps its validator but no representation-only
     // metadata such as Content-Type or Accept-Ranges.
     {
@@ -1325,8 +1212,7 @@ TEST(Ruvia, static_file_conditional_request_serving) {
         request.set_method("GET");
         request.add_header(http_header_view{"If-None-Match", etag});
         with_static_context(request, [&](ruvia::context& context_value) -> ruvia::task<void> {
-            const auto response =
-                co_await context_value.static_file(root, {.relative_path_ = "data.txt", .content_type_ = "text/plain"});
+            const auto response = co_await context_value.static_file(root, {.relative_path_ = "data.txt", .content_type_ = "text/plain"});
             EXPECT_EQ(response.status(), ruvia::http_status::not_modified);
             EXPECT_EQ(response.header("ETag").value_or(""), std::string_view(etag));
             EXPECT_TRUE(!response.header("Content-Type").has_value());
@@ -1339,10 +1225,7 @@ TEST(Ruvia, static_file_conditional_request_serving) {
     // value closes that tag immediately before the current ETag and must not let
     // the apparent suffix satisfy the condition.
     const std::string malformed_list = std::string("\"stale, ") + etag;
-    EXPECT_EQ(
-        serve("If-None-Match", malformed_list)
-            .first,
-        ruvia::http_status::ok);
+    EXPECT_EQ(serve("If-None-Match", malformed_list).first, ruvia::http_status::ok);
 
     // If-Match against a non-matching ETag is a 412 precondition failure (thrown).
     bool precondition = false;
@@ -1376,8 +1259,7 @@ TEST(Ruvia, static_root_rejects_empty_custom_mime_type) {
     }
 
     static_root_options options;
-    options.file_types_ =
-        ruvia::static_file_type_policy{.kind_ = ruvia::static_file_type_policy::kind::all};
+    options.file_types_ = ruvia::static_file_type_policy{.kind_ = ruvia::static_file_type_policy::kind::all};
     static_mime_type mime;
     mime.extension_ = ".custom";
     options.mime_types_.push_back(std::move(mime));
@@ -1413,33 +1295,28 @@ TEST(Ruvia, static_root_rejects_invalid_static_options_at_construction) {
 
     {
         static_root_options options;
-        options.file_types_ =
-            ruvia::static_file_type_policy{.kind_ = ruvia::static_file_type_policy::kind::all};
+        options.file_types_ = ruvia::static_file_type_policy{.kind_ = ruvia::static_file_type_policy::kind::all};
         options.cache_control_ = " private";
         rejects(std::move(options));
     }
     {
         static_root_options options;
-        options.file_types_ =
-            ruvia::static_file_type_policy{.kind_ = ruvia::static_file_type_policy::kind::all};
+        options.file_types_ = ruvia::static_file_type_policy{.kind_ = ruvia::static_file_type_policy::kind::all};
         options.default_content_type_ = "text plain";
         rejects(std::move(options));
     }
     {
         static_root_options options;
-        options.file_types_ =
-            ruvia::static_file_type_policy{.kind_ = ruvia::static_file_type_policy::kind::all};
+        options.file_types_ = ruvia::static_file_type_policy{.kind_ = ruvia::static_file_type_policy::kind::all};
         static_mime_type mime;
         mime.extension_ = ".custom";
         mime.content_type_ = "text plain";
         options.mime_types_.push_back(std::move(mime));
         rejects(std::move(options));
     }
-    for (const std::string_view invalid_extension :
-        {"", ".", "..", "nested/custom", "nested\\custom"}) {
+    for (const std::string_view invalid_extension : {"", ".", "..", "nested/custom", "nested\\custom"}) {
         static_root_options options;
-        options.file_types_ =
-            ruvia::static_file_type_policy{.kind_ = ruvia::static_file_type_policy::kind::all};
+        options.file_types_ = ruvia::static_file_type_policy{.kind_ = ruvia::static_file_type_policy::kind::all};
         static_mime_type mime;
         mime.extension_ = invalid_extension;
         mime.content_type_ = "text/plain";
@@ -1456,8 +1333,7 @@ TEST(Ruvia, static_root_rejects_invalid_static_options_at_construction) {
     }
     {
         static_root_options options;
-        options.file_types_ =
-            ruvia::static_file_type_policy{.kind_ = ruvia::static_file_type_policy::kind::all};
+        options.file_types_ = ruvia::static_file_type_policy{.kind_ = ruvia::static_file_type_policy::kind::all};
         options.dotfiles_ = std::bit_cast<ruvia::static_dotfile_policy>(std::uint8_t{42});
         rejects(std::move(options));
     }
@@ -1468,8 +1344,7 @@ TEST(Ruvia, static_root_rejects_invalid_static_options_at_construction) {
     }
     {
         static_root_options options;
-        options.response_validators_ =
-            std::bit_cast<ruvia::static_response_validator_policy>(std::uint8_t{42});
+        options.response_validators_ = std::bit_cast<ruvia::static_response_validator_policy>(std::uint8_t{42});
         rejects(std::move(options));
     }
 }
@@ -1488,8 +1363,7 @@ TEST(Ruvia, static_file_if_modified_since_serving) {
         out.write(content.data(), static_cast<std::streamsize>(content.size()));
     }
     static_root_options options;
-    options.file_types_ =
-        ruvia::static_file_type_policy{.kind_ = ruvia::static_file_type_policy::kind::all};
+    options.file_types_ = ruvia::static_file_type_policy{.kind_ = ruvia::static_file_type_policy::kind::all};
     static_root root(dir, std::move(options));
 
     const auto serve = [&root](std::string_view if_modified_since) {
@@ -1497,8 +1371,7 @@ TEST(Ruvia, static_file_if_modified_since_serving) {
         request.set_method("GET");
         request.add_header(http_header_view{"If-Modified-Since", if_modified_since});
         return with_static_context(request, [&](ruvia::context& context_value) -> ruvia::task<ruvia::http_status_code> {
-            co_return (co_await context_value.static_file(root, {.relative_path_ = "data.txt", .content_type_ = "text/plain"}))
-                .status();
+            co_return (co_await context_value.static_file(root, {.relative_path_ = "data.txt", .content_type_ = "text/plain"})).status();
         });
     };
 
@@ -1526,8 +1399,7 @@ TEST(Ruvia, static_file_directory_root_index_and_403) {
         request.set_method("GET");
         return with_static_context(request, [&](ruvia::context& context_value) -> ruvia::task<ruvia::http_status_code> {
             try {
-                co_return (co_await context_value.static_file(root, {.relative_path_ = "", .content_type_ = "text/html"}))
-                    .status();
+                co_return (co_await context_value.static_file(root, {.relative_path_ = "", .content_type_ = "text/html"})).status();
             } catch (const ruvia::http_error& error) {
                 co_return error.info().status();
             }
@@ -1538,8 +1410,7 @@ TEST(Ruvia, static_file_directory_root_index_and_403) {
     {
         static_root_options options;
         options.index_file_ = "";
-        options.file_types_ =
-            ruvia::static_file_type_policy{.kind_ = ruvia::static_file_type_policy::kind::all};
+        options.file_types_ = ruvia::static_file_type_policy{.kind_ = ruvia::static_file_type_policy::kind::all};
         static_root root(dir, std::move(options));
         EXPECT_EQ(serve_root(root), ruvia::http_status::forbidden);
     }
@@ -1550,8 +1421,7 @@ TEST(Ruvia, static_file_directory_root_index_and_403) {
         out << "<h1>i</h1>";
         out.close();
         static_root_options options;
-        options.file_types_ =
-            ruvia::static_file_type_policy{.kind_ = ruvia::static_file_type_policy::kind::all};
+        options.file_types_ = ruvia::static_file_type_policy{.kind_ = ruvia::static_file_type_policy::kind::all};
         options.index_file_ = "index.html";
         static_root root(dir, std::move(options));
         EXPECT_EQ(serve_root(root), ruvia::http_status::ok);
@@ -1583,15 +1453,14 @@ TEST(Ruvia, static_file_directory_indexes_survive_path_normalization_storage_gro
         for (const auto& [path, expected] : cases) {
             SCOPED_TRACE(path);
             static_file_test_request request;
-            const auto response = with_static_context(request,
-                [&](ruvia::context& ctx) -> ruvia::task<std::pair<ruvia::http_status_code, std::string>> {
-                    try {
-                        const auto result = co_await ctx.static_file(root, {.relative_path_ = path});
-                        co_return std::pair(result.status(), std::string(result.body_bytes()));
-                    } catch (const ruvia::http_error& error) {
-                        co_return std::pair(error.info().status(), std::string{});
-                    }
-                });
+            const auto response = with_static_context(request, [&](ruvia::context& ctx) -> ruvia::task<std::pair<ruvia::http_status_code, std::string>> {
+                try {
+                    const auto result = co_await ctx.static_file(root, {.relative_path_ = path});
+                    co_return std::pair(result.status(), std::string(result.body_bytes()));
+                } catch (const ruvia::http_error& error) {
+                    co_return std::pair(error.info().status(), std::string{});
+                }
+            });
             EXPECT_EQ(response.first, ruvia::http_status::ok);
             EXPECT_EQ(response.second, expected);
         }
@@ -1615,7 +1484,9 @@ TEST(Ruvia, file_response_rejects_a_fifo_without_blocking_the_worker) {
     bool rescued = false;
     std::thread rescuer([&] {
         std::unique_lock lock(mutex);
-        if (served_signal.wait_for(lock, std::chrono::seconds(5), [&served] { return served; })) {
+        if (served_signal.wait_for(lock, std::chrono::seconds(5), [&served] {
+            return served;
+        })) {
             return;
         }
         rescued = true;

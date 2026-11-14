@@ -30,8 +30,8 @@ namespace example {
 // ruvia::env is empty: it does not import the process environment automatically.
 class environment final {
 public:
-    explicit environment(const ruvia::env* dotenv = nullptr) noexcept
-        : dotenv_(dotenv) {}
+    explicit environment(const ruvia::env* dotenv = nullptr) noexcept :
+        dotenv_(dotenv) {}
 
     std::optional<std::string_view> get(std::string_view name) const {
         const std::string key(name);
@@ -90,9 +90,7 @@ namespace example {
 inline ruvia::client_tls_config backend_tls(std::string_view prefix, const environment& env = environment{}) {
     const std::string base(prefix);
     ruvia::client_tls_config config{
-        .mode_ = env.get<bool>(base + "_TLS").value_or(true)
-                     ? ruvia::client_tls_mode::verify_identity
-                     : ruvia::client_tls_mode::disabled,
+        .mode_ = env.get<bool>(base + "_TLS").value_or(true) ? ruvia::client_tls_mode::verify_identity : ruvia::client_tls_mode::disabled,
         .ca_file_ = env.path(base + "_CA"),
     };
     const auto certificate = env.path(base + "_CERT");
@@ -141,8 +139,7 @@ inline ruvia::db_config database_config(const environment& env, ruvia::db_driver
 
 // Startup bridge on the host thread: migrates on a short-lived loop, whose
 // blocking pool looks a DNS RUVIA_DB_HOST up, before the demo or app starts.
-inline ruvia::db_migration_report apply_migrations(
-    const ruvia::db_config& config, std::span<const ruvia::db_migration> migrations) {
+inline ruvia::db_migration_report apply_migrations(const ruvia::db_config& config, std::span<const ruvia::db_migration> migrations) {
     ruvia::blocking_pool host_lookups({.thread_count_ = 1});
     ruvia::event_loop_pool loops({.loop_count_ = 1, .blocking_pool_ = &host_lookups});
     const ruvia::db_migrator migrator(loops.loop(0), config);

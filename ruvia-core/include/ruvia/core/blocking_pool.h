@@ -65,8 +65,7 @@ enum class blocking_submit_status : std::uint8_t {
 };
 
 // A rejected submission returns the callable it did not run.
-using blocking_submit_result =
-    worker_delivery_result<move_only_function<void()>, blocking_submit_status, blocking_submit_status::accepted>;
+using blocking_submit_result = worker_delivery_result<move_only_function<void()>, blocking_submit_status, blocking_submit_status::accepted>;
 
 struct blocking_pool_stats final {
     // Tasks waiting for a free thread, and tasks a thread is running right now.
@@ -174,8 +173,7 @@ namespace detail {
 
 template <typename t_type>
 struct blocking_payload final {
-    using value_storage_type =
-        std::conditional_t<std::is_void_v<t_type>, std::monostate, std::optional<t_type>>;
+    using value_storage_type = std::conditional_t<std::is_void_v<t_type>, std::monostate, std::optional<t_type>>;
 
     blocking_status status_{blocking_status::completed};
     [[no_unique_address]] value_storage_type value_{};
@@ -191,8 +189,8 @@ struct blocking_payload final {
 template <typename t_type>
 class blocking_completion_guard final {
 public:
-    explicit blocking_completion_guard(one_shot_completion<blocking_payload<t_type>> completion) noexcept
-        : completion_(std::move(completion)) {}
+    explicit blocking_completion_guard(one_shot_completion<blocking_payload<t_type>> completion) noexcept :
+        completion_(std::move(completion)) {}
 
     blocking_completion_guard(const blocking_completion_guard&) = delete;
     blocking_completion_guard& operator=(const blocking_completion_guard&) = delete;
@@ -237,10 +235,10 @@ class blocking_result final {
 public:
     blocking_result(const blocking_result&) = delete;
     blocking_result& operator=(const blocking_result&) = delete;
-    blocking_result(blocking_result&& other) noexcept(
-        std::is_nothrow_move_constructible_v<detail::blocking_payload<t_type>>)
+    blocking_result(blocking_result&& other) noexcept(std::is_nothrow_move_constructible_v<detail::blocking_payload<t_type>>)
         requires std::is_move_constructible_v<detail::blocking_payload<t_type>>
-        : payload_(std::move(other.payload_)) {
+        :
+        payload_(std::move(other.payload_)) {
         if (payload_.error_ != nullptr) {
             other.payload_.error_ = payload_.error_;
         }
@@ -388,15 +386,13 @@ template <typename t_type>
 // to turn a rejection into an exception and to rethrow the callable's own
 // exception.
 template <typename fn_type>
-[[nodiscard]] auto run_blocking(worker_ref worker_value, operation_options options, fn_type fn)
-    -> task<blocking_result<std::invoke_result_t<fn_type&>>> {
+[[nodiscard]] auto run_blocking(worker_ref worker_value, operation_options options, fn_type fn) -> task<blocking_result<std::invoke_result_t<fn_type&>>> {
     using result_type = std::invoke_result_t<fn_type&>;
     using payload = detail::blocking_payload<result_type>;
     using outcome_type = blocking_result<result_type>;
     const operation_deadline deadline(options.timeout_);
     auto stop_token_value = std::move(options.stop_token_);
-    static_assert(std::is_void_v<result_type> || std::is_move_constructible_v<result_type>,
-        "a blocking callable's result travels back to the worker by move");
+    static_assert(std::is_void_v<result_type> || std::is_move_constructible_v<result_type>, "a blocking callable's result travels back to the worker by move");
 
     // Every outcome the wait would decide without the callable is decided
     // first, so a misplaced, cancelled, or expired call never occupies a pool
@@ -429,27 +425,23 @@ template <typename fn_type>
         co_return outcome_type::with_status(blocking_status::worker_stopping);
     }
     auto& [completion, receiver] = *channel;
-    const auto submitted =
-        pool->submit([guard = detail::blocking_completion_guard<result_type>(std::move(completion)),
-                         call = std::move(fn)]() mutable {
-            payload payload_value;
-            try {
-                if constexpr (std::is_void_v<result_type>) {
-                    call();
-                } else {
-                    payload_value.value_.emplace(call());
-                }
-            } catch (...) {
-                payload_value.error_ = std::current_exception();
+    const auto submitted = pool->submit([guard = detail::blocking_completion_guard<result_type>(std::move(completion)), call = std::move(fn)]() mutable {
+        payload payload_value;
+        try {
+            if constexpr (std::is_void_v<result_type>) {
+                call();
+            } else {
+                payload_value.value_.emplace(call());
             }
-            guard.answer(std::move(payload_value));
-        });
+        } catch (...) {
+            payload_value.error_ = std::current_exception();
+        }
+        guard.answer(std::move(payload_value));
+    });
     if (!submitted.accepted()) {
         // The returned closure is destroyed here; its guard answers the
         // one-shot with pool_stopped, which nobody awaits any more.
-        co_return outcome_type::with_status(submitted.status() == blocking_submit_status::queue_full
-                                                ? blocking_status::queue_full
-                                                : blocking_status::pool_stopped);
+        co_return outcome_type::with_status(submitted.status() == blocking_submit_status::queue_full ? blocking_status::queue_full : blocking_status::pool_stopped);
     }
 
     try {
@@ -477,8 +469,7 @@ template <typename fn_type>
 }
 
 template <typename fn_type>
-[[nodiscard]] auto run_blocking(worker_ref worker_value, fn_type fn)
-    -> task<blocking_result<std::invoke_result_t<fn_type&>>> {
+[[nodiscard]] auto run_blocking(worker_ref worker_value, fn_type fn) -> task<blocking_result<std::invoke_result_t<fn_type&>>> {
     return run_blocking(std::move(worker_value), operation_options{}, std::move(fn));
 }
 

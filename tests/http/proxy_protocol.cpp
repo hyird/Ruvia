@@ -205,9 +205,7 @@ TEST(Ruvia, proxy_protocol_v1_tcp6_yields_endpoints) {
 }
 
 TEST(Ruvia, proxy_protocol_v1_unknown_keeps_real_endpoints) {
-    for (const std::string_view input :
-        {std::string_view("PROXY UNKNOWN\r\n"), std::string_view("PROXY UNKNOWN ffff::1 ffff::2 65535 65535\r\n"),
-            std::string_view("PROXY UNKNOWN anything \x01 goes\r\n")}) {
+    for (const std::string_view input : {std::string_view("PROXY UNKNOWN\r\n"), std::string_view("PROXY UNKNOWN ffff::1 ffff::2 65535 65535\r\n"), std::string_view("PROXY UNKNOWN anything \x01 goes\r\n")}) {
         SCOPED_TRACE(std::string(input));
         proxy_protocol_parser parser;
         const auto& header = parse_whole(parser, input);
@@ -242,8 +240,7 @@ TEST(Ruvia, proxy_protocol_v2_proxy_inet6_datagram_yields_endpoints) {
 }
 
 TEST(Ruvia, proxy_protocol_v2_local_ignores_address_block) {
-    for (const auto& input : {v2_header(0x20, 0x00, ""), v2_header(0x20, 0x11, inet_block() + tlv(0x01, "h2")),
-             v2_header(0x20, 0x21, "short"), v2_header(0x20, 0x31, "")}) {
+    for (const auto& input : {v2_header(0x20, 0x00, ""), v2_header(0x20, 0x11, inet_block() + tlv(0x01, "h2")), v2_header(0x20, 0x21, "short"), v2_header(0x20, 0x31, "")}) {
         proxy_protocol_parser parser;
         const auto& header = parse_whole(parser, input);
         EXPECT_EQ(header.version(), proxy_protocol_version::v2);
@@ -470,9 +467,11 @@ TEST(Ruvia, proxy_protocol_v2_rejects_short_address_block) {
 }
 
 TEST(Ruvia, proxy_protocol_v2_rejects_tlv_overrun) {
-    expect_rejected(v2_header(0x21, 0x11, inet_block() + std::string("\x01\x00\x05"
-                                                                     "ab",
-                                                             5)));
+    expect_rejected(v2_header(0x21, 0x11,
+        inet_block() +
+            std::string("\x01\x00\x05"
+                        "ab",
+                5)));
     expect_rejected(v2_header(0x21, 0x11, inet_block() + std::string("\x01\x00", 2)));
     expect_rejected(v2_header(0x21, 0x11, inet_block() + tlv(0x01, "h2") + std::string("\x02", 1)));
 }
@@ -557,17 +556,7 @@ TEST(RuviaHttp, ip_address_formats_rfc5952_and_round_trips) {
         std::string_view input;
         std::string_view canonical;
     };
-    for (const auto& entry : std::array{
-             example{"0.0.0.0", "0.0.0.0"},
-             example{"255.255.255.255", "255.255.255.255"},
-             example{"0:0:0:0:0:0:0:0", "::"},
-             example{"0:0:0:0:0:0:0:1", "::1"},
-             example{"2001:0DB8:0000:0000:0001:0000:0000:0001", "2001:db8::1:0:0:1"},
-             example{"2001:db8:1:2:3:4:0:0", "2001:db8:1:2:3:4::"},
-             example{"2001:db8:0:1:2:3:4:5", "2001:db8:0:1:2:3:4:5"},
-             example{"ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff%4294967295", "ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff%4294967295"},
-             example{"::ffff:c000:201", "::ffff:192.0.2.1"},
-             example{"fe80::1%12", "fe80::1%12"}}) {
+    for (const auto& entry : std::array{example{"0.0.0.0", "0.0.0.0"}, example{"255.255.255.255", "255.255.255.255"}, example{"0:0:0:0:0:0:0:0", "::"}, example{"0:0:0:0:0:0:0:1", "::1"}, example{"2001:0DB8:0000:0000:0001:0000:0000:0001", "2001:db8::1:0:0:1"}, example{"2001:db8:1:2:3:4:0:0", "2001:db8:1:2:3:4::"}, example{"2001:db8:0:1:2:3:4:5", "2001:db8:0:1:2:3:4:5"}, example{"ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff%4294967295", "ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff%4294967295"}, example{"::ffff:c000:201", "::ffff:192.0.2.1"}, example{"fe80::1%12", "fe80::1%12"}}) {
         SCOPED_TRACE(entry.input);
         const auto address = ruvia::ip_address::parse(entry.input);
         ASSERT_TRUE(address.has_value());
@@ -591,10 +580,7 @@ TEST(RuviaHttp, ip_address_preserves_ipv6_family_scope_and_mapped_identity) {
 }
 
 TEST(RuviaHttp, ip_address_rejects_nonliteral_and_malformed_input) {
-    for (const std::string_view text : {"", "localhost", "1", "192.0.2", "01.2.3.4", "192.0.2.256",
-             "192.0.2.1:80", "192.0.2.1%1", "[::1]", "[::1]:80", " ::1", "::1 ",
-             "1::2::3", "1:2:3:4:5:6:7:8:9", "::ffff:01.2.3.4", "fe80::1%",
-             "fe80::1%eth0", "fe80::1%-1", "fe80::1%+1", "fe80::1%4294967296", "fe80::1%1%2"}) {
+    for (const std::string_view text : {"", "localhost", "1", "192.0.2", "01.2.3.4", "192.0.2.256", "192.0.2.1:80", "192.0.2.1%1", "[::1]", "[::1]:80", " ::1", "::1 ", "1::2::3", "1:2:3:4:5:6:7:8:9", "::ffff:01.2.3.4", "fe80::1%", "fe80::1%eth0", "fe80::1%-1", "fe80::1%+1", "fe80::1%4294967296", "fe80::1%1%2"}) {
         SCOPED_TRACE(text);
         EXPECT_FALSE(ruvia::ip_address::parse(text).has_value());
     }
@@ -619,9 +605,7 @@ TEST(Ruvia, port_number_rejects_wide_inputs_without_changing_an_existing_origin)
         }
         return false;
     };
-    const std::array<std::int64_t, 7> invalid{
-        std::numeric_limits<std::int64_t>::min(), -65093, -1,
-        65536, 65979, 131071, std::numeric_limits<std::int64_t>::max()};
+    const std::array<std::int64_t, 7> invalid{std::numeric_limits<std::int64_t>::min(), -65093, -1, 65536, 65979, 131071, std::numeric_limits<std::int64_t>::max()};
     for (const auto input : invalid) {
         EXPECT_TRUE(rejects(input));
         EXPECT_TRUE(!ruvia::port_number::try_from_value(input).has_value());
@@ -646,12 +630,7 @@ TEST(Ruvia, port_number_preserves_zero_maximum_and_scheme_default_authorities) {
         std::uint64_t input_;
         std::string_view authority_;
     };
-    for (const auto entry : std::array{
-             port_case{0, "[::1]:0"},
-             port_case{1, "[::1]:1"},
-             port_case{80, "[::1]:80"},
-             port_case{443, "[::1]"},
-             port_case{65535, "[::1]:65535"}}) {
+    for (const auto entry : std::array{port_case{0, "[::1]:0"}, port_case{1, "[::1]:1"}, port_case{80, "[::1]:80"}, port_case{443, "[::1]"}, port_case{65535, "[::1]:65535"}}) {
         const auto origin = ruvia::http_origin_view::https({.host_ = "[::1]", .port_ = entry.input_});
         EXPECT_EQ(ruvia::make_http_origin_authority(origin), entry.authority_);
     }
@@ -675,16 +654,18 @@ TEST(Ruvia, port_number_rejects_invalid_authority_defaults_before_origin_compari
         }
         return false;
     };
-    for (const auto source : std::array<std::int64_t, 7>{
-             std::numeric_limits<std::int64_t>::min(), -65093, -1,
-             65536, 65979, 131071, std::numeric_limits<std::int64_t>::max()}) {
-        EXPECT_TRUE(rejects([&] { (void)authority->effective_port(source); }));
+    for (const auto source : std::array<std::int64_t, 7>{std::numeric_limits<std::int64_t>::min(), -65093, -1, 65536, 65979, 131071, std::numeric_limits<std::int64_t>::max()}) {
+        EXPECT_TRUE(rejects([&] {
+            (void)authority->effective_port(source);
+        }));
         EXPECT_TRUE(rejects([&] {
             (void)ruvia::http_authorities_equal("example.test", "example.test:443", source);
         }));
     }
     const auto maximum = std::numeric_limits<std::uint64_t>::max();
-    EXPECT_TRUE(rejects([&] { (void)authority->effective_port(maximum); }));
+    EXPECT_TRUE(rejects([&] {
+        (void)authority->effective_port(maximum);
+    }));
     EXPECT_TRUE(rejects([&] {
         (void)ruvia::http_authorities_equal("example.test", "example.test:443", maximum);
     }));
@@ -735,7 +716,9 @@ TEST(Ruvia, io_buffer_publishes_only_committed_bytes) {
         buffer.commit(5);
         EXPECT_EQ(buffer.view(), "hello");
         EXPECT_TRUE(buffer.capacity() >= std::size_t{16});
-        EXPECT_TRUE(ruvia::test::throws_on([&] { buffer.commit(buffer.capacity()); }));
+        EXPECT_TRUE(ruvia::test::throws_on([&] {
+            buffer.commit(buffer.capacity());
+        }));
         EXPECT_EQ(buffer.view(), "hello");
     }
 }
@@ -751,7 +734,9 @@ TEST(Ruvia, io_buffer_grows_geometrically_and_keeps_readable_bytes) {
     const std::string large(100, 'x');
     buffer.append(large);
     EXPECT_EQ(buffer.view(), "abcd" + large);
-    EXPECT_TRUE(ruvia::test::throws_on([&] { (void)buffer.prepare(static_cast<std::size_t>(-1)); }));
+    EXPECT_TRUE(ruvia::test::throws_on([&] {
+        (void)buffer.prepare(static_cast<std::size_t>(-1));
+    }));
     EXPECT_EQ(buffer.view(), "abcd" + large);
 }
 
@@ -839,9 +824,7 @@ TEST(Ruvia, http_priority_structured_dictionary_types_duplicates_and_parameters)
     }
 }
 TEST(Ruvia, http_priority_byte_sequences_accept_optional_padding_and_validate_quartets) {
-    for (const auto value : {"u=2, i;bytes=:YQ=:", "u=2, i;bytes=:YQ==:", "u=2, i;bytes=:YQ:",
-             "u=2, i;bytes=:YWJj:", "u=2, i;bytes=:YWJ:", "u=2, i;bytes=:YWJ=:", "u=2, i;bytes=:YR==:",
-             "u=2, i, x=:YQ=:", "u=2, i, x=(:YQ=:)", "u=2, i;bytes=::"}) {
+    for (const auto value : {"u=2, i;bytes=:YQ=:", "u=2, i;bytes=:YQ==:", "u=2, i;bytes=:YQ:", "u=2, i;bytes=:YWJj:", "u=2, i;bytes=:YWJ:", "u=2, i;bytes=:YWJ=:", "u=2, i;bytes=:YR==:", "u=2, i, x=:YQ=:", "u=2, i, x=(:YQ=:)", "u=2, i;bytes=::"}) {
         const auto parsed_value = ruvia::parse_http_priority(value);
         EXPECT_TRUE((parsed_value.index() == 0));
         if ((parsed_value.index() == 0)) {
@@ -849,32 +832,24 @@ TEST(Ruvia, http_priority_byte_sequences_accept_optional_padding_and_validate_qu
             EXPECT_TRUE(std::get<0>(parsed_value).incremental_ == true);
         }
     }
-    for (const auto value : {"u=2, i;bytes=:Y:", "u=2, i;bytes=:Y=:", "u=2, i;bytes=:YWJj=:",
-             "u=2, i;bytes=:YWJ==:", "u=2, i;bytes=:YQ===:", "u=2, i;bytes=:Y=Q:",
-             "u=2, i;bytes=:YQ$:", "u=2, i;bytes=:YQ\n:", "u=2, i;bytes=:YQ"}) {
+    for (const auto value : {"u=2, i;bytes=:Y:", "u=2, i;bytes=:Y=:", "u=2, i;bytes=:YWJj=:", "u=2, i;bytes=:YWJ==:", "u=2, i;bytes=:YQ===:", "u=2, i;bytes=:Y=Q:", "u=2, i;bytes=:YQ$:", "u=2, i;bytes=:YQ\n:", "u=2, i;bytes=:YQ"}) {
         EXPECT_TRUE((ruvia::parse_http_priority(value).index() != 0));
     }
 }
 
 TEST(Ruvia, http_priority_repeated_headers_combine_members_and_replace_invalid_values) {
-    const std::array headers{ruvia::http_header_view{"Priority", "u=2, i"},
-        ruvia::http_header_view{"X-Other", "u=0"},
-        ruvia::http_header_view{"pRIORITY", "u=\"ignored\""}};
+    const std::array headers{ruvia::http_header_view{"Priority", "u=2, i"}, ruvia::http_header_view{"X-Other", "u=0"}, ruvia::http_header_view{"pRIORITY", "u=\"ignored\""}};
     const auto parsed_value = ruvia::parse_http_priority(headers);
     EXPECT_TRUE((parsed_value.index() == 0) && !std::get<0>(parsed_value).urgency_ && std::get<0>(parsed_value).incremental_ == true);
-    const std::array malformed{ruvia::http_header_view{"priority", "u=2"},
-        ruvia::http_header_view{"priority", "i=?2"}};
+    const std::array malformed{ruvia::http_header_view{"priority", "u=2"}, ruvia::http_header_view{"priority", "i=?2"}};
     EXPECT_TRUE((ruvia::parse_http_priority(malformed).index() != 0));
-    const std::array empty_repeated{ruvia::http_header_view{"priority", ""},
-        ruvia::http_header_view{"priority", "u=1"}};
+    const std::array empty_repeated{ruvia::http_header_view{"priority", ""}, ruvia::http_header_view{"priority", "u=1"}};
     EXPECT_TRUE((ruvia::parse_http_priority(empty_repeated).index() != 0));
     EXPECT_TRUE(std::get<0>(ruvia::parse_http_priority(std::span<const ruvia::http_header_view>{})).request_priority().urgency_ == 3);
 }
 
 TEST(Ruvia, http_priority_repeated_fields_match_their_comma_joined_dictionary) {
-    const std::array headers{ruvia::http_header_view{"Priority", "extra=\"alpha"},
-        ruvia::http_header_view{"X-Other", "ignored"},
-        ruvia::http_header_view{"priority", "beta\", u=1, i"}};
+    const std::array headers{ruvia::http_header_view{"Priority", "extra=\"alpha"}, ruvia::http_header_view{"X-Other", "ignored"}, ruvia::http_header_view{"priority", "beta\", u=1, i"}};
     const auto combined = ruvia::parse_http_priority("extra=\"alpha, beta\", u=1, i");
     EXPECT_TRUE((combined.index() == 0) && std::get<0>(combined).urgency_ == 1 && std::get<0>(combined).incremental_ == true);
     const auto parsed_value = ruvia::parse_http_priority(headers);
@@ -884,8 +859,7 @@ TEST(Ruvia, http_priority_repeated_fields_match_their_comma_joined_dictionary) {
         EXPECT_TRUE(std::get<0>(parsed_value).incremental_ == true);
     }
 
-    const std::array parameter_headers{ruvia::http_header_view{"priority", "i;note=\"a"},
-        ruvia::http_header_view{"priority", "b\", u=0"}};
+    const std::array parameter_headers{ruvia::http_header_view{"priority", "i;note=\"a"}, ruvia::http_header_view{"priority", "b\", u=0"}};
     const auto parameters = ruvia::parse_http_priority(parameter_headers);
     EXPECT_TRUE((parameters.index() == 0));
     if (parameters.index() == 0) {
@@ -895,14 +869,11 @@ TEST(Ruvia, http_priority_repeated_fields_match_their_comma_joined_dictionary) {
 }
 
 TEST(Ruvia, http_priority_repeated_fields_preserve_separators_and_empty_values) {
-    const std::array with_empty{ruvia::http_header_view{"Priority", "extra=\"alpha"},
-        ruvia::http_header_view{"priority", ""},
-        ruvia::http_header_view{"pRIORITY", "beta\", u=1, i"}};
+    const std::array with_empty{ruvia::http_header_view{"Priority", "extra=\"alpha"}, ruvia::http_header_view{"priority", ""}, ruvia::http_header_view{"pRIORITY", "beta\", u=1, i"}};
     const auto parsed_value = ruvia::parse_http_priority(with_empty);
     EXPECT_TRUE((parsed_value.index() == 0) && std::get<0>(parsed_value).urgency_ == 1 && std::get<0>(parsed_value).incremental_ == true);
 
-    const std::array tab_separated{ruvia::http_header_view{"priority", "u=0"},
-        ruvia::http_header_view{"priority", "\ti"}};
+    const std::array tab_separated{ruvia::http_header_view{"priority", "u=0"}, ruvia::http_header_view{"priority", "\ti"}};
     const auto tab = ruvia::parse_http_priority(tab_separated);
     EXPECT_TRUE((tab.index() == 0) && std::get<0>(tab).urgency_ == 0 && std::get<0>(tab).incremental_ == true);
 
@@ -915,8 +886,7 @@ TEST(Ruvia, http_priority_repeated_fields_preserve_separators_and_empty_values) 
         std::array<std::string_view, 2>{"x=\"a\\", "\"b\", u=1, i"},
     };
     for (const auto& values : fragments) {
-        const std::array headers{ruvia::http_header_view{"priority", values[0]},
-            ruvia::http_header_view{"priority", values[1]}};
+        const std::array headers{ruvia::http_header_view{"priority", values[0]}, ruvia::http_header_view{"priority", values[1]}};
         EXPECT_TRUE(ruvia::parse_http_priority(headers).index() != 0);
     }
 }
@@ -941,9 +911,7 @@ TEST(Ruvia, http_priority_rejects_wide_local_urgency_without_replacing_an_existi
         }
         return false;
     };
-    for (const auto input : std::array<std::int64_t, 7>{
-             std::numeric_limits<std::int64_t>::min(), -256, -1, 8,
-             256, 259, std::numeric_limits<std::int64_t>::max()}) {
+    for (const auto input : std::array<std::int64_t, 7>{std::numeric_limits<std::int64_t>::min(), -256, -1, 8, 256, 259, std::numeric_limits<std::int64_t>::max()}) {
         EXPECT_TRUE(rejects(input));
     }
     EXPECT_TRUE(rejects(std::numeric_limits<std::uint64_t>::max()));
@@ -1023,8 +991,7 @@ TEST(RuviaHttpPublicApi, cors_policy_preflight_and_response_rewrite) {
     });
     EXPECT_TRUE(preflight_ok.accepted());
 
-    const auto find_header = [](std::span<const ruvia::http_header> headers, std::string_view name)
-        -> std::optional<std::string_view> {
+    const auto find_header = [](std::span<const ruvia::http_header> headers, std::string_view name) -> std::optional<std::string_view> {
         for (const auto& field : headers) {
             if (ruvia::http_ascii_equals_ignore_case(field.name(), name)) {
                 return field.value();
@@ -1033,18 +1000,12 @@ TEST(RuviaHttpPublicApi, cors_policy_preflight_and_response_rewrite) {
         return std::nullopt;
     };
 
-    EXPECT_EQ(find_header(preflight_ok.headers(), "Access-Control-Allow-Origin"),
-        std::optional<std::string_view>("https://sub.trusted.example"));
-    EXPECT_EQ(find_header(preflight_ok.headers(), "Access-Control-Allow-Credentials"),
-        std::optional<std::string_view>("true"));
-    EXPECT_EQ(find_header(preflight_ok.headers(), "Access-Control-Allow-Methods"),
-        std::optional<std::string_view>("GET, POST"));
-    EXPECT_EQ(find_header(preflight_ok.headers(), "Access-Control-Allow-Headers"),
-        std::optional<std::string_view>("X-Custom-Auth, Content-Type"));
-    EXPECT_EQ(find_header(preflight_ok.headers(), "Access-Control-Max-Age"),
-        std::optional<std::string_view>("600"));
-    EXPECT_EQ(find_header(preflight_ok.headers(), "Vary"),
-        std::optional<std::string_view>("Origin, Access-Control-Request-Method"));
+    EXPECT_EQ(find_header(preflight_ok.headers(), "Access-Control-Allow-Origin"), std::optional<std::string_view>("https://sub.trusted.example"));
+    EXPECT_EQ(find_header(preflight_ok.headers(), "Access-Control-Allow-Credentials"), std::optional<std::string_view>("true"));
+    EXPECT_EQ(find_header(preflight_ok.headers(), "Access-Control-Allow-Methods"), std::optional<std::string_view>("GET, POST"));
+    EXPECT_EQ(find_header(preflight_ok.headers(), "Access-Control-Allow-Headers"), std::optional<std::string_view>("X-Custom-Auth, Content-Type"));
+    EXPECT_EQ(find_header(preflight_ok.headers(), "Access-Control-Max-Age"), std::optional<std::string_view>("600"));
+    EXPECT_EQ(find_header(preflight_ok.headers(), "Vary"), std::optional<std::string_view>("Origin, Access-Control-Request-Method"));
 
     // Disallowed header or method in preflight is rejected.
     const auto preflight_bad_header = policy.evaluate_preflight({
@@ -1064,25 +1025,19 @@ TEST(RuviaHttpPublicApi, cors_policy_preflight_and_response_rewrite) {
     response_headers.emplace_back("Access-Control-Allow-Methods", "DELETE");
     response_headers.emplace_back("Vary", "Accept-Encoding, Origin");
 
-    EXPECT_TRUE(
-        policy.rewrite_response_headers("https://app.example.com", response_headers));
-    EXPECT_EQ(find_header(response_headers, "Access-Control-Allow-Origin"),
-        std::optional<std::string_view>("https://app.example.com"));
-    EXPECT_EQ(find_header(response_headers, "Access-Control-Allow-Credentials"),
-        std::optional<std::string_view>("true"));
-    EXPECT_EQ(find_header(response_headers, "Access-Control-Expose-Headers"),
-        std::optional<std::string_view>("X-Request-Id, X-RateLimit-Remaining"));
+    EXPECT_TRUE(policy.rewrite_response_headers("https://app.example.com", response_headers));
+    EXPECT_EQ(find_header(response_headers, "Access-Control-Allow-Origin"), std::optional<std::string_view>("https://app.example.com"));
+    EXPECT_EQ(find_header(response_headers, "Access-Control-Allow-Credentials"), std::optional<std::string_view>("true"));
+    EXPECT_EQ(find_header(response_headers, "Access-Control-Expose-Headers"), std::optional<std::string_view>("X-Request-Id, X-RateLimit-Remaining"));
     EXPECT_FALSE(find_header(response_headers, "Access-Control-Allow-Methods").has_value());
-    EXPECT_EQ(find_header(response_headers, "Vary"),
-        std::optional<std::string_view>("Accept-Encoding, Origin"));
+    EXPECT_EQ(find_header(response_headers, "Vary"), std::optional<std::string_view>("Accept-Encoding, Origin"));
 
     // Server-side apply_response_headers emits Vary tokens before rejecting disallowed Origin/method/headers.
     {
         const std::array<ruvia::http_header_view, 1> bad_origin_headers{
             ruvia::http_header_view{"Origin", "https://untrusted.example"},
         };
-        const auto get_bad_origin =
-            ruvia::make_parsed_http_request("GET", "/resource", bad_origin_headers, {});
+        const auto get_bad_origin = ruvia::make_parsed_http_request("GET", "/resource", bad_origin_headers, {});
         ruvia::http_response get_resp;
         EXPECT_FALSE(policy.apply_response_headers(get_bad_origin, get_resp));
         EXPECT_FALSE(get_resp.header("Access-Control-Allow-Origin").has_value());
@@ -1093,13 +1048,11 @@ TEST(RuviaHttpPublicApi, cors_policy_preflight_and_response_rewrite) {
             ruvia::http_header_view{"Access-Control-Request-Method", "DELETE"},
             ruvia::http_header_view{"Access-Control-Request-Headers", "X-Forbidden"},
         };
-        const auto opts_bad =
-            ruvia::make_parsed_http_request("OPTIONS", "/resource", bad_options_headers, {});
+        const auto opts_bad = ruvia::make_parsed_http_request("OPTIONS", "/resource", bad_options_headers, {});
         ruvia::http_response opts_resp;
         EXPECT_FALSE(policy.apply_response_headers(opts_bad, opts_resp));
         EXPECT_FALSE(opts_resp.header("Access-Control-Allow-Origin").has_value());
-        EXPECT_EQ(opts_resp.header("Vary"),
-            std::optional<std::string_view>("Origin, Access-Control-Request-Method"));
+        EXPECT_EQ(opts_resp.header("Vary"), std::optional<std::string_view>("Origin, Access-Control-Request-Method"));
 
         ruvia::http_cors_policy reflecting_policy(ruvia::http_cors_policy_config{
             .allowed_origins_ = {"https://app.example.com"},
@@ -1107,9 +1060,7 @@ TEST(RuviaHttpPublicApi, cors_policy_preflight_and_response_rewrite) {
         });
         ruvia::http_response reflect_opts_resp;
         EXPECT_FALSE(reflecting_policy.apply_response_headers(opts_bad, reflect_opts_resp));
-        EXPECT_EQ(reflect_opts_resp.header("Vary"),
-            std::optional<std::string_view>(
-                "Origin, Access-Control-Request-Method, Access-Control-Request-Headers"));
+        EXPECT_EQ(reflect_opts_resp.header("Vary"), std::optional<std::string_view>("Origin, Access-Control-Request-Method, Access-Control-Request-Headers"));
     }
 
     // Vary and Connection use non-quoted comma-token scanning (unclosed quote does not hide later tokens).
@@ -1123,8 +1074,7 @@ TEST(RuviaHttpPublicApi, cors_policy_preflight_and_response_rewrite) {
         const auto parsed_vary = ruvia::parse_http_vary("\"unclosed, Accept-Encoding, *");
         EXPECT_TRUE(parsed_vary.is_wildcard());
 
-        const auto parsed_conn =
-            ruvia::parse_http_connection_nominated_fields("\"unclosed, close, X-Custom-Hop");
+        const auto parsed_conn = ruvia::parse_http_connection_nominated_fields("\"unclosed, close, X-Custom-Hop");
         EXPECT_TRUE(parsed_conn.has_close());
         EXPECT_TRUE(parsed_conn.contains("x-custom-hop"));
     }
@@ -1136,66 +1086,48 @@ TEST(RuviaHttpPublicApi, accept_encoding_candidate_order_and_transcoder) {
     const std::array br_first{ruvia::http_content_coding::brotli, ruvia::http_content_coding::gzip};
 
     // Equal qvalues resolve by the caller's candidate order.
-    EXPECT_EQ(ruvia::negotiate_http_content_coding("gzip, br", gzip_first),
-        std::optional(ruvia::http_content_coding::gzip));
-    EXPECT_EQ(ruvia::negotiate_http_content_coding("gzip, br", br_first),
-        std::optional(ruvia::http_content_coding::brotli));
+    EXPECT_EQ(ruvia::negotiate_http_content_coding("gzip, br", gzip_first), std::optional(ruvia::http_content_coding::gzip));
+    EXPECT_EQ(ruvia::negotiate_http_content_coding("gzip, br", br_first), std::optional(ruvia::http_content_coding::brotli));
 
     // Higher qvalue wins regardless of candidate order.
-    EXPECT_EQ(ruvia::negotiate_http_content_coding("gzip;q=0.5, br;q=0.9", gzip_first),
-        std::optional(ruvia::http_content_coding::brotli));
+    EXPECT_EQ(ruvia::negotiate_http_content_coding("gzip;q=0.5, br;q=0.9", gzip_first), std::optional(ruvia::http_content_coding::brotli));
 
     // Explicit identity weight beats lower compressed weight, while implicit identity stays fallback.
-    EXPECT_EQ(ruvia::negotiate_http_content_coding("gzip;q=0.5, identity;q=0.8", gzip_first),
-        std::optional(ruvia::http_content_coding::identity));
-    EXPECT_EQ(ruvia::negotiate_http_content_coding("gzip;q=0.5", gzip_first),
-        std::optional(ruvia::http_content_coding::gzip));
-    EXPECT_EQ(ruvia::negotiate_http_content_coding("zstd", gzip_first),
-        std::optional(ruvia::http_content_coding::identity));
-    EXPECT_EQ(ruvia::negotiate_http_content_coding("zstd, identity;q=0", gzip_first),
-        std::nullopt);
-    EXPECT_EQ(ruvia::negotiate_http_content_coding("*;q=0", gzip_first),
-        std::nullopt);
+    EXPECT_EQ(ruvia::negotiate_http_content_coding("gzip;q=0.5, identity;q=0.8", gzip_first), std::optional(ruvia::http_content_coding::identity));
+    EXPECT_EQ(ruvia::negotiate_http_content_coding("gzip;q=0.5", gzip_first), std::optional(ruvia::http_content_coding::gzip));
+    EXPECT_EQ(ruvia::negotiate_http_content_coding("zstd", gzip_first), std::optional(ruvia::http_content_coding::identity));
+    EXPECT_EQ(ruvia::negotiate_http_content_coding("zstd, identity;q=0", gzip_first), std::nullopt);
+    EXPECT_EQ(ruvia::negotiate_http_content_coding("*;q=0", gzip_first), std::nullopt);
 
     // Quote-aware Cache-Control: no-transform detection.
-    EXPECT_FALSE(ruvia::http_cache_control_has_no_transform(
-        "public, ext=\"a, no-transform, b\", max-age=60"));
-    EXPECT_TRUE(ruvia::http_cache_control_has_no_transform(
-        "public, ext=\"a, b\", no-transform, max-age=60"));
+    EXPECT_FALSE(ruvia::http_cache_control_has_no_transform("public, ext=\"a, no-transform, b\", max-age=60"));
+    EXPECT_TRUE(ruvia::http_cache_control_has_no_transform("public, ext=\"a, b\", no-transform, max-age=60"));
 
     // Multi-coding streaming transcoding (gzip + br -> zstd) with native codec memory cap.
     const std::string original(4096, 'R');
-    const std::array source_stack{
-        ruvia::http_content_coding::gzip, ruvia::http_content_coding::brotli};
-    const auto double_encoded = ruvia::encode_http_content(
-        source_stack, original, {.max_encoded_bytes_ = 65536});
+    const std::array source_stack{ruvia::http_content_coding::gzip, ruvia::http_content_coding::brotli};
+    const auto double_encoded = ruvia::encode_http_content(source_stack, original, {.max_encoded_bytes_ = 65536});
     ASSERT_TRUE(double_encoded.has_value());
 
-    ruvia::http_content_transcoder transcoder(source_stack, ruvia::http_content_coding::zstd,
-        {.max_decoded_bytes_ = 8192, .max_encoded_bytes_ = 8192, .max_memory_bytes_ = 8 * 1024 * 1024});
+    ruvia::http_content_transcoder transcoder(source_stack, ruvia::http_content_coding::zstd, {.max_decoded_bytes_ = 8192, .max_encoded_bytes_ = 8192, .max_memory_bytes_ = 8 * 1024 * 1024});
     std::string transcoded;
     for (std::size_t pos = 0; pos < double_encoded->size(); pos += 17) {
-        transcoder.write(
-            std::string_view(*double_encoded).substr(pos, 17), transcoded, false);
+        transcoder.write(std::string_view(*double_encoded).substr(pos, 17), transcoded, false);
     }
     transcoder.finish(transcoded);
 
-    const auto final_decoded = ruvia::decode_http_content(ruvia::http_content_coding::zstd,
-        transcoded, {.max_decoded_bytes_ = 8192});
+    const auto final_decoded = ruvia::decode_http_content(ruvia::http_content_coding::zstd, transcoded, {.max_decoded_bytes_ = 8192});
     ASSERT_TRUE(std::holds_alternative<std::string>(final_decoded));
     EXPECT_EQ(std::string_view(std::get<std::string>(final_decoded)), original);
 
     // Exhausted native codec memory cap throws std::bad_alloc.
-    EXPECT_THROW(
-        (void)ruvia::http_content_encoder(ruvia::http_content_coding::gzip, {.max_memory_bytes_ = 64}),
-        std::bad_alloc);
+    EXPECT_THROW((void)ruvia::http_content_encoder(ruvia::http_content_coding::gzip, {.max_memory_bytes_ = 64}), std::bad_alloc);
 }
 
 // Item 3: Strict Range mode, Content-Range parser, and http_byte_range_slicer
 TEST(RuviaHttpPublicApi, strict_byte_ranges_content_range_and_streaming_slicer) {
     // Strict ascending non-overlapping mode rejects out-of-order and overlapping ranges.
-    const auto strict_ok = ruvia::resolve_http_byte_range_set(
-        "bytes=0-4, 5-9, 20-29", 100, {.max_ranges_ = 32, .strict_order_ = true});
+    const auto strict_ok = ruvia::resolve_http_byte_range_set("bytes=0-4, 5-9, 20-29", 100, {.max_ranges_ = 32, .strict_order_ = true});
     EXPECT_FALSE(strict_ok.ignored());
     ASSERT_EQ(strict_ok.size(), 3U);
     EXPECT_EQ(strict_ok[0].offset(), 0U);
@@ -1203,12 +1135,10 @@ TEST(RuviaHttpPublicApi, strict_byte_ranges_content_range_and_streaming_slicer) 
     EXPECT_EQ(strict_ok[1].offset(), 5U);
     EXPECT_EQ(strict_ok[1].length(), 5U);
 
-    const auto strict_out_of_order = ruvia::resolve_http_byte_range_set(
-        "bytes=20-29, 0-4", 100, {.max_ranges_ = 32, .strict_order_ = true});
+    const auto strict_out_of_order = ruvia::resolve_http_byte_range_set("bytes=20-29, 0-4", 100, {.max_ranges_ = 32, .strict_order_ = true});
     EXPECT_TRUE(strict_out_of_order.ignored());
 
-    const auto strict_overlapping = ruvia::resolve_http_byte_range_set(
-        "bytes=0-10, 10-20", 100, {.max_ranges_ = 32, .strict_order_ = true});
+    const auto strict_overlapping = ruvia::resolve_http_byte_range_set("bytes=0-10, 10-20", 100, {.max_ranges_ = 32, .strict_order_ = true});
     EXPECT_TRUE(strict_overlapping.ignored());
 
     // Configurable max_ranges > 16 works.
@@ -1219,8 +1149,7 @@ TEST(RuviaHttpPublicApi, strict_byte_ranges_content_range_and_streaming_slicer) 
         }
         twenty_ranges += std::to_string(i * 2) + "-" + std::to_string(i * 2);
     }
-    const auto many = ruvia::resolve_http_byte_range_set(
-        twenty_ranges, 100, {.max_ranges_ = 24, .strict_order_ = true});
+    const auto many = ruvia::resolve_http_byte_range_set(twenty_ranges, 100, {.max_ranges_ = 24, .strict_order_ = true});
     EXPECT_FALSE(many.ignored());
     EXPECT_EQ(many.size(), 20U);
 
@@ -1238,21 +1167,17 @@ TEST(RuviaHttpPublicApi, strict_byte_ranges_content_range_and_streaming_slicer) 
     // Streaming slicer for multipart/byteranges (including offset-based feeding).
     constexpr std::string_view payload = "0123456789abcdefghijklmnopqrstuvwxyz";
     const auto ranges = ruvia::resolve_http_byte_range_set("bytes=2-5, 10-14, 30-35", payload.size());
-    const auto plan = ruvia::make_http_multipart_byte_range_plan(
-        ranges, payload.size(), "text/plain", "slice_boundary");
+    const auto plan = ruvia::make_http_multipart_byte_range_plan(ranges, payload.size(), "text/plain", "slice_boundary");
     std::string expected;
     for (const auto& seg : plan.segments()) {
         if (seg.kind_ == ruvia::http_multipart_byte_range_plan::segment_kind::metadata) {
             expected.append(plan.metadata().substr(seg.metadata_offset_, seg.metadata_length_));
         } else {
-            expected.append(payload.substr(
-                static_cast<std::size_t>(seg.file_offset_),
-                static_cast<std::size_t>(seg.file_length_)));
+            expected.append(payload.substr(static_cast<std::size_t>(seg.file_offset_), static_cast<std::size_t>(seg.file_length_)));
         }
     }
 
-    ruvia::http_byte_range_slicer slicer(
-        ranges, payload.size(), "text/plain", "slice_boundary");
+    ruvia::http_byte_range_slicer slicer(ranges, payload.size(), "text/plain", "slice_boundary");
     EXPECT_TRUE(slicer.multipart());
     EXPECT_EQ(slicer.content_length(), expected.size());
 
@@ -1275,8 +1200,7 @@ TEST(RuviaHttpPublicApi, trusted_proxy_client_ip_extractor) {
     config.trusted_proxies_.emplace_back("2001:db8:1::/48");
     config.forwarding_headers_.emplace_back("X-Forwarded-For");
     config.forwarding_headers_.emplace_back("Forwarded");
-    config.forwarding_headers_.emplace_back(
-        "X-Real-IP", ruvia::http_forwarded_header_kind::single_ip);
+    config.forwarding_headers_.emplace_back("X-Real-IP", ruvia::http_forwarded_header_kind::single_ip);
 
     const ruvia::http_client_ip_extractor extractor(config);
 
@@ -1327,15 +1251,13 @@ TEST(RuviaHttpPublicApi, hop_by_hop_fields_and_connection_nomination) {
     EXPECT_TRUE(ruvia::is_http_hop_by_hop_or_nominated_field("Upgrade", nominated, false));
     EXPECT_FALSE(ruvia::is_http_hop_by_hop_or_nominated_field("Upgrade", nominated, true));
 
-    EXPECT_EQ(nominated.rebuild_connection_field(true, true),
-        "Upgrade, x-custom-hop, x-second-hop");
+    EXPECT_EQ(nominated.rebuild_connection_field(true, true), "Upgrade, x-custom-hop, x-second-hop");
     EXPECT_EQ(nominated.rebuild_connection_field(true, false), "Upgrade");
 }
 
 // Item 6: RFC 9111 Shared Cache Primitives
 TEST(RuviaHttpPublicApi, rfc9111_shared_cache_primitives) {
-    const auto cc = ruvia::parse_cache_control(
-        "public, max-age=120, s-maxage=300, stale-while-revalidate=30, stale-if-error=600, must-revalidate");
+    const auto cc = ruvia::parse_cache_control("public, max-age=120, s-maxage=300, stale-while-revalidate=30, stale-if-error=600, must-revalidate");
     EXPECT_TRUE(cc.is_public());
     EXPECT_TRUE(cc.must_revalidate());
     EXPECT_EQ(cc.max_age(), std::optional<std::uint64_t>(120));
@@ -1428,20 +1350,12 @@ TEST(RuviaHttpPublicApi, rfc9111_shared_cache_primitives) {
 
 // Item 7: Proxy request target normalization, Max-Forwards, method semantics, and HTTP/1 wire estimation
 TEST(RuviaHttpPublicApi, proxy_target_max_forwards_method_semantics_and_wire_size) {
-    EXPECT_EQ(
-        ruvia::normalize_http_proxy_request_target("GET", "http://example.com:8080/a/b?x=1"),
-        "/a/b?x=1");
+    EXPECT_EQ(ruvia::normalize_http_proxy_request_target("GET", "http://example.com:8080/a/b?x=1"), "/a/b?x=1");
     EXPECT_EQ(ruvia::normalize_http_proxy_request_target("GET", "https://example.com"), "/");
-    EXPECT_EQ(
-        ruvia::normalize_http_proxy_request_target("GET", "https://example.com?foo=bar"),
-        "/?foo=bar");
-    EXPECT_EQ(
-        ruvia::normalize_http_proxy_request_target("OPTIONS", "http://example.com"), "*");
-    EXPECT_EQ(
-        ruvia::normalize_http_proxy_request_target("OPTIONS", "http://example.com?query"),
-        "/?query");
-    EXPECT_EQ(ruvia::normalize_http_proxy_request_target("GET", "/already/origin"),
-        "/already/origin");
+    EXPECT_EQ(ruvia::normalize_http_proxy_request_target("GET", "https://example.com?foo=bar"), "/?foo=bar");
+    EXPECT_EQ(ruvia::normalize_http_proxy_request_target("OPTIONS", "http://example.com"), "*");
+    EXPECT_EQ(ruvia::normalize_http_proxy_request_target("OPTIONS", "http://example.com?query"), "/?query");
+    EXPECT_EQ(ruvia::normalize_http_proxy_request_target("GET", "/already/origin"), "/already/origin");
 
     const std::array<ruvia::http_header_view, 1> mf_five{{{"Max-Forwards", "5"}}};
     const auto parsed_mf = ruvia::parse_http_max_forwards(mf_five);
@@ -1475,8 +1389,7 @@ TEST(RuviaHttpPublicApi, proxy_target_max_forwards_method_semantics_and_wire_siz
     }};
     // "HTTP/1.1 200 OK\r\n" (17) + "Content-Type: text/plain\r\n" (26) +
     // "Content-Length: 5\r\n" (19) + "\r\n" (2) = 64.
-    EXPECT_EQ(ruvia::estimate_http1_response_head_bytes(ruvia::http_status::ok, wire_headers),
-        64U);
+    EXPECT_EQ(ruvia::estimate_http1_response_head_bytes(ruvia::http_status::ok, wire_headers), 64U);
 }
 
 // Item 8: TLS ClientHello (JA3/JA4/PeetPrint) & HTTP/2 Akamai Fingerprint
@@ -1486,7 +1399,9 @@ TEST(RuviaHttpPublicApi, tls_client_hello_and_http2_akamai_fingerprints) {
     // supported_groups (GREASE + x25519 29 + secp256r1 23), ec_point_formats (0),
     // signature_algorithms (0x0403, 0x0804), and supported_versions (GREASE, 0x0304, 0x0303).
     std::vector<std::uint8_t> body;
-    const auto push_u8 = [&](std::uint8_t v) { body.push_back(v); };
+    const auto push_u8 = [&](std::uint8_t v) {
+        body.push_back(v);
+    };
     const auto push_u16 = [&](std::uint16_t v) {
         body.push_back(static_cast<std::uint8_t>((v >> 8U) & 0xffU));
         body.push_back(static_cast<std::uint8_t>(v & 0xffU));
@@ -1508,7 +1423,9 @@ TEST(RuviaHttpPublicApi, tls_client_hello_and_http2_akamai_fingerprints) {
     push_u8(0);
 
     std::vector<std::uint8_t> exts;
-    const auto ext_u8 = [&](std::uint8_t v) { exts.push_back(v); };
+    const auto ext_u8 = [&](std::uint8_t v) {
+        exts.push_back(v);
+    };
     const auto ext_u16 = [&](std::uint16_t v) {
         exts.push_back(static_cast<std::uint8_t>((v >> 8U) & 0xffU));
         exts.push_back(static_cast<std::uint8_t>(v & 0xffU));
@@ -1594,8 +1511,7 @@ TEST(RuviaHttpPublicApi, tls_client_hello_and_http2_akamai_fingerprints) {
     EXPECT_TRUE(tcp_ja4.starts_with("t13d0206h2_"));
     EXPECT_TRUE(quic_ja4.starts_with("q13d0206h2_"));
     EXPECT_EQ(tcp_ja4.substr(1), quic_ja4.substr(1));
-    EXPECT_EQ(parsed->peetprint(),
-        "772-771|4865-49199|0-10-11-13-16-43|29-23|0|h2-http/1.1|1027-2052");
+    EXPECT_EQ(parsed->peetprint(), "772-771|4865-49199|0-10-11-13-16-43|29-23|0|h2-http/1.1|1027-2052");
 
     // HTTP/2 Akamai fingerprint collector.
     ruvia::http2_akamai_fingerprint_collector collector;
@@ -1618,12 +1534,10 @@ TEST(RuviaHttpPublicApi, tls_client_hello_and_http2_akamai_fingerprints) {
     ruvia::http2_frame_metadata pri_frame{};
     pri_frame.type_ = ruvia::http2_frame_type::priority;
     pri_frame.stream_id_ = 3;
-    pri_frame.priority_ = ruvia::http2_received_priority{
-        .stream_id_ = 3, .stream_dependency_ = 0, .weight_ = 201, .exclusive_ = false};
+    pri_frame.priority_ = ruvia::http2_received_priority{.stream_id_ = 3, .stream_dependency_ = 0, .weight_ = 201, .exclusive_ = false};
     collector.observe_frame(pri_frame);
 
-    collector.observe_header(
-        {.stream_id_ = 1, .phase_ = ruvia::http2_header_observation_phase::begin});
+    collector.observe_header({.stream_id_ = 1, .phase_ = ruvia::http2_header_observation_phase::begin});
     for (const std::string_view pseudo : {":method", ":authority", ":scheme", ":path"}) {
         collector.observe_header({
             .stream_id_ = 1,
@@ -1638,13 +1552,11 @@ TEST(RuviaHttpPublicApi, tls_client_hello_and_http2_akamai_fingerprints) {
         .name_ = "user-agent",
         .value_ = "Ruvia",
     });
-    collector.observe_header(
-        {.stream_id_ = 1, .phase_ = ruvia::http2_header_observation_phase::end});
+    collector.observe_header({.stream_id_ = 1, .phase_ = ruvia::http2_header_observation_phase::end});
 
     EXPECT_TRUE(collector.complete());
     EXPECT_FALSE(collector.failed());
-    EXPECT_EQ(collector.fingerprint(),
-        "1:65536;2:0;4:6291456;6:262144|15663105|3:0:0:201|m,a,s,p");
+    EXPECT_EQ(collector.fingerprint(), "1:65536;2:0;4:6291456;6:262144|15663105|3:0:0:201|m,a,s,p");
 }
 
 TEST(RuviaHttpPublicApi, media_type_compressibility_worker_codecs_cookie_jar_etag_and_http3_fingerprint) {
@@ -1662,8 +1574,7 @@ TEST(RuviaHttpPublicApi, media_type_compressibility_worker_codecs_cookie_jar_eta
         std::string out;
         lease.encoder().write("streamed payload", out, true);
         lease.encoder().finish(out);
-        const auto decoded = ruvia::decode_http_content(
-            ruvia::http_content_coding::gzip, out, {.max_decoded_bytes_ = 4096});
+        const auto decoded = ruvia::decode_http_content(ruvia::http_content_coding::gzip, out, {.max_decoded_bytes_ = 4096});
         ASSERT_TRUE(std::holds_alternative<std::string>(decoded));
         EXPECT_EQ(std::get<std::string>(decoded), "streamed payload");
     }
@@ -1673,25 +1584,20 @@ TEST(RuviaHttpPublicApi, media_type_compressibility_worker_codecs_cookie_jar_eta
         std::string out;
         lease.encoder().write("reused encoder payload", out);
         lease.encoder().finish(out);
-        const auto decoded = ruvia::decode_http_content(
-            ruvia::http_content_coding::gzip, out, {.max_decoded_bytes_ = 4096});
+        const auto decoded = ruvia::decode_http_content(ruvia::http_content_coding::gzip, out, {.max_decoded_bytes_ = 4096});
         ASSERT_TRUE(std::holds_alternative<std::string>(decoded));
         EXPECT_EQ(std::get<std::string>(decoded), "reused encoder payload");
     }
 
     // 3. Sans-I/O http_cookie_jar
     const auto now = std::chrono::system_clock::now();
-    ruvia::http_cookie_jar jar(
-        ruvia::http_scheme::https, "sub.example.com",
-        {.max_cookies_ = 8, .max_cookie_bytes_ = 1024});
+    ruvia::http_cookie_jar jar(ruvia::http_scheme::https, "sub.example.com", {.max_cookies_ = 8, .max_cookie_bytes_ = 1024});
     jar.add_configured_cookie("static", "1");
     EXPECT_TRUE(jar.absorb_set_cookie("/app/login", "sid=abc; Path=/app; Secure; HttpOnly", now));
     EXPECT_TRUE(jar.absorb_set_cookie("/app/login", "__Host-token=xyz; Path=/; Secure", now));
     // __Host- with Domain must be rejected.
-    EXPECT_FALSE(
-        jar.absorb_set_cookie("/app/login", "__Host-bad=1; Domain=example.com; Path=/; Secure", now));
-    EXPECT_EQ(jar.cookie_header("/app/dashboard", true, now),
-        "sid=abc; static=1; __Host-token=xyz");
+    EXPECT_FALSE(jar.absorb_set_cookie("/app/login", "__Host-bad=1; Domain=example.com; Path=/; Secure", now));
+    EXPECT_EQ(jar.cookie_header("/app/dashboard", true, now), "sid=abc; static=1; __Host-token=xyz");
     EXPECT_EQ(jar.cookie_header("/other", true, now), "static=1; __Host-token=xyz");
     // Max-Age=0 deletes the stored cookie.
     EXPECT_TRUE(jar.absorb_set_cookie("/app/logout", "sid=deleted; Path=/app; Max-Age=0", now));
@@ -1743,8 +1649,7 @@ TEST(RuviaHttpPublicApi, media_type_compressibility_worker_codecs_cookie_jar_eta
 
 TEST(RuviaHttpPublicApi, targeted_cache_control_field_qualified_private_and_staged_transcoder) {
     // 1. RFC 9213 Targeted Cache-Control (Structured Field Dictionary & priority selection)
-    const auto cdn_cc = ruvia::parse_targeted_cache_control(
-        "max-age=60, max-age=300, stale-while-revalidate=45; param=1, no-store=?0, must-revalidate=?1");
+    const auto cdn_cc = ruvia::parse_targeted_cache_control("max-age=60, max-age=300, stale-while-revalidate=45; param=1, no-store=?0, must-revalidate=?1");
     ASSERT_TRUE(cdn_cc.has_value());
     EXPECT_EQ(cdn_cc->max_age(), std::optional<std::uint64_t>(300));
     EXPECT_EQ(cdn_cc->stale_while_revalidate(), std::optional<std::uint64_t>(45));
@@ -1773,8 +1678,7 @@ TEST(RuviaHttpPublicApi, targeted_cache_control_field_qualified_private_and_stag
     EXPECT_EQ(selected.control_.max_age(), std::optional<std::uint64_t>(600));
 
     // 2. RFC 9111 §5.2.2.7 private="field" & §5.2.2.3 no-cache="field" field-level stripping
-    const auto field_priv = ruvia::parse_cache_control(
-        "public, max-age=120, private=\"Set-Cookie, X-User-Secret\", no-cache=\"X-Auth-State\"");
+    const auto field_priv = ruvia::parse_cache_control("public, max-age=120, private=\"Set-Cookie, X-User-Secret\", no-cache=\"X-Auth-State\"");
     EXPECT_TRUE(field_priv.is_private());
     EXPECT_FALSE(field_priv.is_unqualified_private());
     EXPECT_TRUE(field_priv.is_field_qualified_private());
@@ -1800,8 +1704,7 @@ TEST(RuviaHttpPublicApi, targeted_cache_control_field_qualified_private_and_stag
     EXPECT_EQ(strip_headers[1].name(), "X-Public");
 
     // Unqualified private alongside field-qualified private forbids shared-cache storage.
-    const auto unqual_priv =
-        ruvia::parse_cache_control("private=\"Set-Cookie\", private");
+    const auto unqual_priv = ruvia::parse_cache_control("private=\"Set-Cookie\", private");
     EXPECT_TRUE(unqual_priv.is_unqualified_private());
     EXPECT_FALSE(unqual_priv.is_field_qualified_private());
     EXPECT_FALSE(ruvia::strip_http_cache_private_headers(strip_headers, unqual_priv));
@@ -1811,14 +1714,11 @@ TEST(RuviaHttpPublicApi, targeted_cache_control_field_qualified_private_and_stag
     for (int i = 0; i < 32; ++i) {
         payload.append("chunked-response-staging-compressible-line-0123456789\n");
     }
-    const auto gzipped = ruvia::encode_http_content(
-        ruvia::http_content_coding::gzip, payload, {.max_encoded_bytes_ = payload.size() + 128});
+    const auto gzipped = ruvia::encode_http_content(ruvia::http_content_coding::gzip, payload, {.max_encoded_bytes_ = payload.size() + 128});
     ASSERT_TRUE(gzipped.has_value());
 
     // Case A: Decoded size within [min_bytes, max_bytes] -> transcodes gzip to zstd.
-    ruvia::http_staged_content_transcoder staged(
-        ruvia::http_content_coding::gzip, ruvia::http_content_coding::zstd,
-        {.min_bytes_ = 100, .max_bytes_ = 4096});
+    ruvia::http_staged_content_transcoder staged(ruvia::http_content_coding::gzip, ruvia::http_content_coding::zstd, {.min_bytes_ = 100, .max_bytes_ = 4096});
     for (std::size_t pos = 0; pos < gzipped->size(); pos += 19) {
         EXPECT_TRUE(staged.write(std::string_view(*gzipped).substr(pos, 19)));
     }
@@ -1826,15 +1726,12 @@ TEST(RuviaHttpPublicApi, targeted_cache_control_field_qualified_private_and_stag
     EXPECT_TRUE(res_in_range.transformed());
     EXPECT_EQ(res_in_range.coding(), ruvia::http_content_coding::zstd);
     EXPECT_EQ(res_in_range.decoded_bytes(), payload.size());
-    const auto decoded_zstd = ruvia::decode_http_content(
-        ruvia::http_content_coding::zstd, res_in_range.bytes(), {.max_decoded_bytes_ = 8192});
+    const auto decoded_zstd = ruvia::decode_http_content(ruvia::http_content_coding::zstd, res_in_range.bytes(), {.max_decoded_bytes_ = 8192});
     ASSERT_TRUE(std::holds_alternative<std::string>(decoded_zstd));
     EXPECT_EQ(std::get<std::string>(decoded_zstd), payload);
 
     // Case B: Decoded size < min_bytes -> falls back to original untransformed stream!
-    ruvia::http_staged_content_transcoder too_small(
-        ruvia::http_content_coding::gzip, ruvia::http_content_coding::zstd,
-        {.min_bytes_ = payload.size() + 100, .max_bytes_ = 8192});
+    ruvia::http_staged_content_transcoder too_small(ruvia::http_content_coding::gzip, ruvia::http_content_coding::zstd, {.min_bytes_ = payload.size() + 100, .max_bytes_ = 8192});
     EXPECT_TRUE(too_small.write(*gzipped));
     auto res_small = too_small.finish();
     EXPECT_FALSE(res_small.transformed());
@@ -1842,9 +1739,7 @@ TEST(RuviaHttpPublicApi, targeted_cache_control_field_qualified_private_and_stag
     EXPECT_EQ(res_small.bytes(), *gzipped);
 
     // Case C: Decoded size > max_bytes -> spills into passthrough_output and falls back to original stream!
-    ruvia::http_staged_content_transcoder too_large(
-        ruvia::http_content_coding::gzip, ruvia::http_content_coding::zstd,
-        {.min_bytes_ = 16, .max_bytes_ = 256});
+    ruvia::http_staged_content_transcoder too_large(ruvia::http_content_coding::gzip, ruvia::http_content_coding::zstd, {.min_bytes_ = 16, .max_bytes_ = 256});
     std::string passthrough_stream;
     for (std::size_t pos = 0; pos < gzipped->size(); pos += 13) {
         (void)too_large.write(std::string_view(*gzipped).substr(pos, 13), passthrough_stream);

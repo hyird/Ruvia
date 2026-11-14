@@ -45,19 +45,14 @@ inline constexpr std::uint64_t fnv1a_prime = 1099511628211ULL;
 
 }  // namespace ruvia
 
-namespace ruvia {
-template <typename signature_type>
-class move_only_function;
-}  // namespace ruvia
-
 namespace ruvia::detail {
 template <typename t_type>
 class worker_wait_value final {
 public:
     template <typename u_type>
         requires std::constructible_from<t_type, u_type&&>
-    explicit worker_wait_value(u_type&& value) noexcept(std::is_nothrow_constructible_v<t_type, u_type&&>)
-        : value_(std::forward<u_type>(value)) {}
+    explicit worker_wait_value(u_type&& value) noexcept(std::is_nothrow_constructible_v<t_type, u_type&&>) :
+        value_(std::forward<u_type>(value)) {}
 
     t_type value_;
 };
@@ -98,9 +93,7 @@ public:
     worker_wait_result& operator=(worker_wait_result&&) = delete;
 
     [[nodiscard]] worker_wait_status status() const noexcept {
-        return std::holds_alternative<detail::worker_wait_value<t_type>>(result_)
-                   ? worker_wait_status::value
-                   : std::get<worker_wait_status>(result_);
+        return std::holds_alternative<detail::worker_wait_value<t_type>>(result_) ? worker_wait_status::value : std::get<worker_wait_status>(result_);
     }
 
     [[nodiscard]] bool has_value() const noexcept {
@@ -135,8 +128,7 @@ public:
 
     template <typename u_type>
         requires std::constructible_from<t_type, u_type&&>
-    [[nodiscard]] static worker_wait_result with_value(u_type&& value) noexcept(
-        std::is_nothrow_constructible_v<t_type, u_type&&>) {
+    [[nodiscard]] static worker_wait_result with_value(u_type&& value) noexcept(std::is_nothrow_constructible_v<t_type, u_type&&>) {
         return worker_wait_result(std::in_place_type<detail::worker_wait_value<t_type>>, std::forward<u_type>(value));
     }
 
@@ -152,12 +144,11 @@ private:
     using result_type = std::variant<detail::worker_wait_value<t_type>, worker_wait_status>;
 
     template <typename u_type>
-    explicit worker_wait_result(
-        std::in_place_type_t<detail::worker_wait_value<t_type>>, u_type&& value) noexcept(std::is_nothrow_constructible_v<t_type, u_type&&>)
-        : result_(std::in_place_type<detail::worker_wait_value<t_type>>, std::forward<u_type>(value)) {}
+    explicit worker_wait_result(std::in_place_type_t<detail::worker_wait_value<t_type>>, u_type&& value) noexcept(std::is_nothrow_constructible_v<t_type, u_type&&>) :
+        result_(std::in_place_type<detail::worker_wait_value<t_type>>, std::forward<u_type>(value)) {}
 
-    explicit worker_wait_result(worker_wait_status status) noexcept
-        : result_(status) {}
+    explicit worker_wait_result(worker_wait_status status) noexcept :
+        result_(status) {}
 
     result_type result_;
 };
@@ -175,9 +166,7 @@ class worker_delivery_result final {
 public:
     worker_delivery_result(const worker_delivery_result&) = delete;
     worker_delivery_result& operator=(const worker_delivery_result&) = delete;
-    worker_delivery_result(worker_delivery_result&&) noexcept(
-        std::is_nothrow_move_constructible_v<t_type> && std::is_nothrow_move_constructible_v<accepted_storage_type>) =
-        default;
+    worker_delivery_result(worker_delivery_result&&) noexcept(std::is_nothrow_move_constructible_v<t_type> && std::is_nothrow_move_constructible_v<accepted_storage_type>) = default;
     worker_delivery_result& operator=(worker_delivery_result&&) = delete;
 
     [[nodiscard]] status_type status() const noexcept {
@@ -239,7 +228,9 @@ public:
             std::optional<t_type>& rejected_;
             const int exceptions_{std::is_nothrow_move_constructible_v<t_type> ? 0 : std::uncaught_exceptions()};
             ~clear_rejected() {
-                if (std::is_nothrow_move_constructible_v<t_type> || std::uncaught_exceptions() == exceptions_) {
+                if constexpr (std::is_nothrow_move_constructible_v<t_type>) {
+                    rejected_.reset();
+                } else if (std::uncaught_exceptions() == exceptions_) {
                     rejected_.reset();
                 }
             }
@@ -257,18 +248,16 @@ public:
 private:
     friend struct detail::worker_delivery_access;
 
-    explicit worker_delivery_result(status_type status) noexcept
-        : status_(status) {}
+    explicit worker_delivery_result(status_type status) noexcept :
+        status_(status) {}
 
-    worker_delivery_result(status_type status, std::in_place_t, accepted_storage_type&& accepted_value) noexcept(
-        std::is_nothrow_move_constructible_v<accepted_storage_type>)
-        : status_(status),
-          accepted_(std::move(accepted_value)) {}
+    worker_delivery_result(status_type status, std::in_place_t, accepted_storage_type&& accepted_value) noexcept(std::is_nothrow_move_constructible_v<accepted_storage_type>) :
+        status_(status),
+        accepted_(std::move(accepted_value)) {}
 
-    worker_delivery_result(status_type status, t_type&& rejected) noexcept(
-        std::is_nothrow_move_constructible_v<t_type>)
-        : status_(status),
-          rejected_(std::move(rejected)) {}
+    worker_delivery_result(status_type status, t_type&& rejected) noexcept(std::is_nothrow_move_constructible_v<t_type>) :
+        status_(status),
+        rejected_(std::move(rejected)) {}
 
     [[nodiscard]] accepted_storage_type& require_accepted() {
         if (status_ != accepted_status || !accepted_) {
@@ -279,9 +268,7 @@ private:
 
     status_type status_;
     std::optional<t_type> rejected_;
-    [[no_unique_address]] std::conditional_t<std::is_void_v<accepted_type>, std::monostate,
-        std::optional<accepted_storage_type>>
-        accepted_;
+    [[no_unique_address]] std::conditional_t<std::is_void_v<accepted_type>, std::monostate, std::optional<accepted_storage_type>> accepted_;
 };
 
 namespace detail {
@@ -295,10 +282,8 @@ struct worker_delivery_access final {
     }
 
     template <typename result_type, typename accepted_value_type>
-    [[nodiscard]] static result_type accept(accepted_value_type&& accepted_value) noexcept(
-        std::is_nothrow_move_constructible_v<std::remove_cvref_t<accepted_value_type>>) {
-        return result_type(
-            accepted_status_of<result_type>(), std::in_place, std::forward<accepted_value_type>(accepted_value));
+    [[nodiscard]] static result_type accept(accepted_value_type&& accepted_value) noexcept(std::is_nothrow_move_constructible_v<std::remove_cvref_t<accepted_value_type>>) {
+        return result_type(accepted_status_of<result_type>(), std::in_place, std::forward<accepted_value_type>(accepted_value));
     }
 
     template <typename result_type, typename status_type, typename rejected_type>
@@ -348,8 +333,7 @@ enum class post_status : std::uint8_t {
 };
 
 template <typename signature_type = void()>
-using post_outcome =
-    worker_delivery_result<move_only_function<signature_type>, post_status, post_status::accepted>;
+using post_outcome = worker_delivery_result<move_only_function<signature_type>, post_status, post_status::accepted>;
 using post_result_type = post_outcome<void()>;
 
 class blocking_pool;
@@ -372,12 +356,11 @@ struct worker_shutdown_operations_type final {
 // worker_stopping_complete() noexcept`, run in the second pass after every
 // registered owner has seen the first.
 template <typename owner_type>
-concept worker_shutdown_observer =
-    requires(owner_type& owner) {
-        { owner.worker_stopping() } noexcept;
-    } || requires(owner_type& owner) {
-        { owner.worker_stopping_complete() } noexcept;
-    };
+concept worker_shutdown_observer = requires(owner_type& owner) {
+    { owner.worker_stopping() } noexcept;
+} || requires(owner_type& owner) {
+    { owner.worker_stopping_complete() } noexcept;
+};
 
 namespace detail {
 
@@ -387,7 +370,9 @@ template <typename owner_type>
     if constexpr (requires(owner_type& owner) {
                       { owner.worker_stopping() } noexcept;
                   }) {
-        operations.stopping_ = [](void* owner) noexcept { static_cast<owner_type*>(owner)->worker_stopping(); };
+        operations.stopping_ = [](void* owner) noexcept {
+            static_cast<owner_type*>(owner)->worker_stopping();
+        };
     }
     if constexpr (requires(owner_type& owner) {
                       { owner.worker_stopping_complete() } noexcept;
@@ -400,8 +385,7 @@ template <typename owner_type>
 }
 
 template <typename owner_type>
-inline constexpr worker_shutdown_operations_type worker_shutdown_operations =
-    make_worker_shutdown_operations<owner_type>();
+inline constexpr worker_shutdown_operations_type worker_shutdown_operations = make_worker_shutdown_operations<owner_type>();
 
 }  // namespace detail
 
@@ -465,12 +449,8 @@ public:
     // timer queue has stopped; callers that resume work from the completion
     // must handle it. Rescheduling a still-pending registration throws
     // std::logic_error.
-    worker_timer_schedule_status schedule_timer(worker_timer_registration& registration,
-        std::chrono::steady_clock::time_point deadline,
-        move_only_function<void(worker_timer_outcome)> completion) const&;
-    worker_timer_schedule_status schedule_timer(worker_timer_registration&,
-        std::chrono::steady_clock::time_point,
-        move_only_function<void(worker_timer_outcome)>) const&& = delete;
+    worker_timer_schedule_status schedule_timer(worker_timer_registration& registration, std::chrono::steady_clock::time_point deadline, move_only_function<void(worker_timer_outcome)> completion) const&;
+    worker_timer_schedule_status schedule_timer(worker_timer_registration&, std::chrono::steady_clock::time_point, move_only_function<void(worker_timer_outcome)>) const&& = delete;
 
     // Reserves bounded admission before synchronously invoking the factory, so
     // ownership transfers only after admission. Keeps the selected endpoint
@@ -484,12 +464,12 @@ public:
     // untouched payload in the result. An empty worker_ref refuses with
     // worker_stopping.
     template <typename payload_type, typename wrap_type>
-        requires std::invocable<wrap_type&, payload_type&&> &&
-                 std::convertible_to<std::invoke_result_t<wrap_type&, payload_type&&>, move_only_function<void()>>
-    [[nodiscard]] worker_delivery_result<payload_type, post_status, post_status::accepted> post_payload(
-        payload_type payload, wrap_type wrap) const {
+        requires std::invocable<wrap_type&, payload_type&&> && std::convertible_to<std::invoke_result_t<wrap_type&, payload_type&&>, move_only_function<void()>>
+    [[nodiscard]] worker_delivery_result<payload_type, post_status, post_status::accepted> post_payload(payload_type payload, wrap_type wrap) const {
         using result_type = worker_delivery_result<payload_type, post_status, post_status::accepted>;
-        const auto status = post_factory([&]() -> move_only_function<void()> { return wrap(std::move(payload)); });
+        const auto status = post_factory([&]() -> move_only_function<void()> {
+            return wrap(std::move(payload));
+        });
         if (status != post_status::accepted) {
             return detail::worker_delivery_access::reject<result_type>(status, std::move(payload));
         }
@@ -545,20 +525,17 @@ public:
     // std::invalid_argument.
     template <typename owner_type>
         requires worker_shutdown_observer<owner_type>
-    [[nodiscard]] worker_registration_status register_shutdown(
-        const std::shared_ptr<owner_type>& owner, worker_shutdown_registration owner_type::* registration) const {
+    [[nodiscard]] worker_registration_status register_shutdown(const std::shared_ptr<owner_type>& owner, worker_shutdown_registration owner_type::* registration) const {
         if (owner == nullptr || registration == nullptr) {
             throw std::invalid_argument("worker shutdown registration requires an owner member");
         }
-        return link_shutdown((*owner).*registration, std::weak_ptr<void>(owner),
-            detail::worker_shutdown_operations<owner_type>);
+        return link_shutdown((*owner).*registration, std::weak_ptr<void>(owner), detail::worker_shutdown_operations<owner_type>);
     }
 
 private:
     explicit worker_ref(std::shared_ptr<detail::worker_dispatcher> dispatcher) noexcept;
     [[nodiscard]] post_result_type post_task(move_only_function<void()> task) const;
-    [[nodiscard]] worker_registration_status link_shutdown(worker_shutdown_registration& registration,
-        std::weak_ptr<void> owner, const detail::worker_shutdown_operations_type& operations) const;
+    [[nodiscard]] worker_registration_status link_shutdown(worker_shutdown_registration& registration, std::weak_ptr<void> owner, const detail::worker_shutdown_operations_type& operations) const;
 
     // Owns the stable dispatcher endpoint, not the worker's io_context.
     // The worker detaches that endpoint before destroying its execution context.
@@ -569,12 +546,9 @@ private:
 namespace detail {
 
 struct worker_ref_access {
-    [[nodiscard]] static worker_ref make(
-        const std::shared_ptr<worker_dispatcher>& dispatcher) noexcept;
-    static void defer_or_terminate(
-        const worker_ref& worker, move_only_function<void()> task) noexcept;
-    static void when_shutdown_notifications_complete(
-        const worker_ref& worker, move_only_function<void()> callback);
+    [[nodiscard]] static worker_ref make(const std::shared_ptr<worker_dispatcher>& dispatcher) noexcept;
+    static void defer_or_terminate(const worker_ref& worker, move_only_function<void()> task) noexcept;
+    static void when_shutdown_notifications_complete(const worker_ref& worker, move_only_function<void()> callback);
     static void when_idle(const worker_ref& worker, move_only_function<void()> callback);
     static void wait_for_reservations(const worker_ref& worker) noexcept;
     [[nodiscard]] static bool timers_stopping(const worker_ref& worker) noexcept;

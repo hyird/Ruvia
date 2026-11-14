@@ -28,8 +28,7 @@ TEST(Ruvia, db_public_parameters_preserve_types_and_own_compiled_text) {
     const auto statement = [] {
         db_query query;
         const std::string text(128, 'x');
-        query.select({query.value(text), query.value(-42),
-            query.value((std::numeric_limits<std::uint64_t>::max)()), query.value(1.25), query.value(true)});
+        query.select({query.value(text), query.value(-42), query.value((std::numeric_limits<std::uint64_t>::max)()), query.value(1.25), query.value(true)});
         return query.compile(db_driver::postgresql);
     }();
     const db_value null_value(nullptr);
@@ -58,16 +57,19 @@ TEST(Ruvia, db_query_sql_expression_import_preserves_syntax_and_parameter_bindin
         db_query target;
         {
             db_query source_value;
-            auto expression = source_value.sql({"jsonb_set(", ", '{label}', to_jsonb(", "::text))"},
-                {source_value.column("payload"), source_value.value("x'); DELETE FROM device; --")});
+            auto expression = source_value.sql({"jsonb_set(", ", '{label}', to_jsonb(", "::text))"}, {source_value.column("payload"), source_value.value("x'); DELETE FROM device; --")});
             target.update("device").set("payload", target.import_expression(expression));
             target.returning({target.column("id")});
         }
         auto statement = target.compile(db_driver::postgresql);
         EXPECT_EQ(statement.sql(), "UPDATE \"device\" SET \"payload\" = (jsonb_set(\"payload\", '{label}', to_jsonb($1::text))) RETURNING \"id\"");
         EXPECT_EQ(statement.params().size(), std::size_t{1});
-        EXPECT_TRUE(testing::throws_on([&] { (void)target.sql({"one"}, {target.value(1)}); }));
-        EXPECT_TRUE(testing::throws_on([&] { (void)target.sql(std::string_view("x\0y", 3)); }));
+        EXPECT_TRUE(testing::throws_on([&] {
+            (void)target.sql({"one"}, {target.value(1)});
+        }));
+        EXPECT_TRUE(testing::throws_on([&] {
+            (void)target.sql(std::string_view("x\0y", 3));
+        }));
     }
 }
 
@@ -82,7 +84,9 @@ TEST(Ruvia, db_query_batch_set_rejects_partial_updates_and_keeps_last_duplicate)
         db_query query;
         query.update("accounts").set("balance", query.value(100));
         query.where(query.binary(query.column("id"), op_type::equal, query.value(7)));
-        const auto original = compile_sql([&] { return query.compile(driver, db_parameter_mode::literal); });
+        const auto original = compile_sql([&] {
+            return query.compile(driver, db_parameter_mode::literal);
+        });
         bool rejected = false;
         try {
             query.set({{"balance", db_expr::value(0)}, {"", db_expr::value(1)}});
@@ -90,27 +94,39 @@ TEST(Ruvia, db_query_batch_set_rejects_partial_updates_and_keeps_last_duplicate)
             rejected = true;
         }
         EXPECT_TRUE(rejected);
-        EXPECT_EQ(compile_sql([&] { return query.compile(driver, db_parameter_mode::literal); }), original);
+        EXPECT_EQ(compile_sql([&] {
+            return query.compile(driver, db_parameter_mode::literal);
+        }),
+            original);
         query.set({{"balance", db_expr::value(1)}, {"revision", db_expr::value(2)}, {"balance", db_expr::value(3)}});
         const auto committed = query.compile(driver, db_parameter_mode::literal);
-        EXPECT_EQ(committed.sql(), driver == db_driver::postgresql
-                                       ? "UPDATE \"accounts\" SET \"balance\" = 3, \"revision\" = 2 WHERE (\"id\" = 7)"
-                                       : "UPDATE `accounts` SET `balance` = 3, `revision` = 2 WHERE (`id` = 7)");
+        EXPECT_EQ(committed.sql(), driver == db_driver::postgresql ? "UPDATE \"accounts\" SET \"balance\" = 3, \"revision\" = 2 WHERE (\"id\" = 7)" : "UPDATE `accounts` SET `balance` = 3, `revision` = 2 WHERE (`id` = 7)");
     }
 }
 
 TEST(Ruvia, db_query_insert_target_cannot_reinterpret_rows_and_rejected_batches_preserve_them) {
     db_query query;
     query.insert_into("pairs", {"a"}).values({query.value(11)});
-    const auto original = compile_sql([&] { return query.compile(db_driver::postgresql, db_parameter_mode::literal); });
-    EXPECT_TRUE(testing::throws_on([&] { query.insert_into("pairs", {"b"}); }));
+    const auto original = compile_sql([&] {
+        return query.compile(db_driver::postgresql, db_parameter_mode::literal);
+    });
+    EXPECT_TRUE(testing::throws_on([&] {
+        query.insert_into("pairs", {"b"});
+    }));
     const std::array<std::string_view, 1> columns{"b"};
     const std::array values{query.value(22)};
-    EXPECT_TRUE(testing::throws_on([&] { query.insert_rows(columns, values, 2); }));
+    EXPECT_TRUE(testing::throws_on([&] {
+        query.insert_rows(columns, values, 2);
+    }));
     db_query source;
     source.select(source.value(9));
-    EXPECT_TRUE(testing::throws_on([&] { query.insert_from(source); }));
-    EXPECT_EQ(compile_sql([&] { return query.compile(db_driver::postgresql, db_parameter_mode::literal); }), original);
+    EXPECT_TRUE(testing::throws_on([&] {
+        query.insert_from(source);
+    }));
+    EXPECT_EQ(compile_sql([&] {
+        return query.compile(db_driver::postgresql, db_parameter_mode::literal);
+    }),
+        original);
     query.insert_rows(columns, values, 1);
     const auto committed = query.compile(db_driver::postgresql, db_parameter_mode::literal);
     EXPECT_EQ(committed.sql(), "INSERT INTO \"pairs\" (\"a\", \"b\") VALUES (11, DEFAULT), (DEFAULT, 22)");
@@ -219,15 +235,15 @@ TEST(Ruvia, db_query_postgresql_casts_bound_values_only_where_nothing_types_them
     // a reused string parameter keeps the numeric type its first use gave it.
     db_query reuse;
     const auto amount = reuse.value("1.5");
-    const std::array reuse_projections{reuse.binary(reuse.value(1), op_type::concat, reuse.value(2)),
-        reuse.cast(amount, db_type_definition{.data_type_ = db_data_type::numeric}),
-        reuse.unary(db_unary_operator::negate, amount)};
+    const std::array reuse_projections{reuse.binary(reuse.value(1), op_type::concat, reuse.value(2)), reuse.cast(amount, db_type_definition{.data_type_ = db_data_type::numeric}), reuse.unary(db_unary_operator::negate, amount)};
     reuse.select(reuse_projections).from("items");
     const auto reuse_statement = reuse.compile(db_driver::postgresql);
     EXPECT_EQ(reuse_statement.sql(), "SELECT ($1 || $2), CAST($3 AS DECIMAL), (- $3) FROM \"items\"");
     db_query maria_cast;
     maria_cast.select(maria_cast.cast(maria_cast.value("1.5"), db_type_definition{.data_type_ = db_data_type::numeric}));
-    EXPECT_TRUE(testing::throws_on([&] { (void)maria_cast.compile(db_driver::mariadb); }));
+    EXPECT_TRUE(testing::throws_on([&] {
+        (void)maria_cast.compile(db_driver::mariadb);
+    }));
     db_query maria_time;
     maria_time.select(maria_time.cast(maria_time.value("2026-01-01 00:00:00.5"), db_type_definition{.data_type_ = db_data_type::timestamp}));
     const auto maria_time_statement = maria_time.compile(db_driver::mariadb);
@@ -235,8 +251,7 @@ TEST(Ruvia, db_query_postgresql_casts_bound_values_only_where_nothing_types_them
     // Unsigned values span beyond bigint, so their category is numeric:
     // COALESCE over UINT64_MAX must not narrow it to int8.
     db_query wide;
-    wide.select(wide.coalesce({wide.value(std::numeric_limits<std::uint64_t>::max()), wide.value(std::uint64_t{1})}))
-        .from("items");
+    wide.select(wide.coalesce({wide.value(std::numeric_limits<std::uint64_t>::max()), wide.value(std::uint64_t{1})})).from("items");
     const auto wide_statement = wide.compile(db_driver::postgresql);
     EXPECT_EQ(wide_statement.sql(), "SELECT COALESCE($1::numeric, $2::numeric) FROM \"items\"");
     EXPECT_EQ(wide_statement.params().size(), std::size_t{2});
@@ -254,17 +269,14 @@ TEST(Ruvia, db_query_literal_doubles_keep_the_bound_double_type) {
     // Bound doubles are float8/DOUBLE; a literal 2 would make "qty / 2" integer
     // division and a literal 2.5 is exact NUMERIC/DECIMAL in both dialects.
     db_query query;
-    query.select({query.binary(query.column("qty"), op_type::divide, query.value(2.0)),
-                     query.value(2.5), query.value(-0.5), query.value(1e20)})
-        .from("items");
+    query.select({query.binary(query.column("qty"), op_type::divide, query.value(2.0)), query.value(2.5), query.value(-0.5), query.value(1e20)}).from("items");
     const auto postgres = query.compile(db_driver::postgresql, db_parameter_mode::literal);
     EXPECT_EQ(postgres.sql(),
         "SELECT (\"qty\" / CAST('2' AS DOUBLE PRECISION)), CAST('2.5' AS DOUBLE PRECISION), "
         "CAST('-0.5' AS DOUBLE PRECISION), CAST('1e+20' AS DOUBLE PRECISION) FROM \"items\"");
     const auto maria = query.compile(db_driver::mariadb, db_parameter_mode::literal);
     EXPECT_EQ(maria.sql(), "SELECT (`qty` / 2e0), 2.5e0, -0.5e0, 1e+20 FROM `items`");
-    EXPECT_EQ(db_query::render_expression(query.unary(db_unary_operator::negate, query.value(-2.0)), db_driver::mariadb),
-        "(- -2e0)");
+    EXPECT_EQ(db_query::render_expression(query.unary(db_unary_operator::negate, query.value(-2.0)), db_driver::mariadb), "(- -2e0)");
 }
 
 TEST(Ruvia, db_value_rejects_finite_floating_overflow_before_query_construction) {
@@ -281,9 +293,7 @@ TEST(Ruvia, db_value_rejects_finite_floating_overflow_before_query_construction)
     }
     const auto maximum = std::numeric_limits<double>::max();
     db_query converted;
-    converted.select({converted.value(db_value(1.5L)),
-        converted.value(db_value(static_cast<long double>(maximum))),
-        converted.value(db_value(-static_cast<long double>(maximum)))});
+    converted.select({converted.value(db_value(1.5L)), converted.value(db_value(static_cast<long double>(maximum))), converted.value(db_value(-static_cast<long double>(maximum)))});
     db_query reference;
     reference.select({reference.value(1.5), reference.value(maximum), reference.value(-maximum)});
     for (const auto driver : {db_driver::postgresql, db_driver::mariadb}) {
@@ -310,17 +320,13 @@ TEST(Ruvia, db_query_postgresql_bitwise_parameters_use_integer_overloads) {
         const auto operand = query.value(item.value_);
         const auto mask = query.value(std::uint64_t{1});
         const auto inverted = query.unary(db_unary_operator::bit_not, operand);
-        query.select({query.binary(operand, op_type::bit_and, mask),
-            query.binary(operand, op_type::bit_or, mask),
-            query.binary(operand, op_type::bit_xor, mask),
-            inverted});
+        query.select({query.binary(operand, op_type::bit_and, mask), query.binary(operand, op_type::bit_or, mask), query.binary(operand, op_type::bit_xor, mask), inverted});
         const auto statement = query.compile(db_driver::postgresql);
         EXPECT_EQ(statement.sql(), "SELECT ($1::int8 & $2::int8), ($1::int8 | $2::int8), ($1::int8 # $2::int8), (~ $1::int8)");
         EXPECT_EQ(statement.params().size(), std::size_t{2});
         const auto literal = query.compile(db_driver::postgresql, db_parameter_mode::literal);
         const auto operand_literal = "(" + std::string(item.literal_) + ")::int8";
-        const auto literal_sql = std::string("SELECT (") + operand_literal + std::string(" & (1)::int8), (") + operand_literal +
-                                 std::string(" | (1)::int8), (") + operand_literal + std::string(" # (1)::int8), (~ ") + operand_literal + ")";
+        const auto literal_sql = std::string("SELECT (") + operand_literal + std::string(" & (1)::int8), (") + operand_literal + std::string(" | (1)::int8), (") + operand_literal + std::string(" # (1)::int8), (~ ") + operand_literal + ")";
         EXPECT_EQ(literal.sql(), std::string_view(literal_sql));
         EXPECT_TRUE(literal.params().empty());
         const auto inverted_sql = std::string("(~ ") + operand_literal + ")";
@@ -341,8 +347,7 @@ TEST(Ruvia, db_query_collate_validates_qualified_collation_names) {
     }
     db_query query;
     const auto collated = query.collate(query.column("name"), "pg_catalog.C");
-    EXPECT_EQ(db_query::render_expression(collated, db_driver::postgresql),
-        std::string_view(R"(("name" COLLATE "pg_catalog"."C"))"));
+    EXPECT_EQ(db_query::render_expression(collated, db_driver::postgresql), std::string_view(R"(("name" COLLATE "pg_catalog"."C"))"));
 }
 
 TEST(Ruvia, db_query_postgresql_bitwise_parameters_reject_unsigned_overflow_in_both_modes) {
@@ -399,9 +404,7 @@ TEST(Ruvia, db_query_postgresql_reuses_one_parameter_across_numeric_and_bitwise_
         const auto unary = query.unary(db_unary_operator::bit_not, value);
         query.select(numeric_first ? std::array{numeric, binary, unary} : std::array{binary, unary, numeric});
         const auto statement = query.compile(db_driver::postgresql);
-        EXPECT_EQ(statement.sql(), numeric_first
-                                       ? "SELECT COALESCE($1::numeric, $1::numeric), ($1::int8 & $1::int8), (~ $1::int8)"
-                                       : "SELECT ($1::int8 & $1::int8), (~ $1::int8), COALESCE($1::numeric, $1::numeric)");
+        EXPECT_EQ(statement.sql(), numeric_first ? "SELECT COALESCE($1::numeric, $1::numeric), ($1::int8 & $1::int8), (~ $1::int8)" : "SELECT ($1::int8 & $1::int8), (~ $1::int8), COALESCE($1::numeric, $1::numeric)");
         EXPECT_EQ(statement.params().size(), std::size_t{1});
     }
 }
@@ -411,14 +414,9 @@ TEST(Ruvia, db_query_postgresql_bitwise_values_keep_column_and_explicit_cast_con
     const auto value = query.value(std::numeric_limits<std::uint64_t>::max());
     const auto flags = query.column("flags");
     const auto cast = query.cast(value, db_type_definition{.custom_name_ = "app_flags"});
-    query.select({query.binary(flags, op_type::bit_and, value),
-                     query.binary(value, op_type::bit_or, flags),
-                     query.binary(cast, op_type::bit_xor, value),
-                     query.unary(db_unary_operator::bit_not, cast)})
-        .from("items");
+    query.select({query.binary(flags, op_type::bit_and, value), query.binary(value, op_type::bit_or, flags), query.binary(cast, op_type::bit_xor, value), query.unary(db_unary_operator::bit_not, cast)}).from("items");
     const auto statement = query.compile(db_driver::postgresql);
-    EXPECT_EQ(statement.sql(),
-        "SELECT (\"flags\" & $1), ($1 | \"flags\"), (CAST($1 AS \"app_flags\") # $1), (~ CAST($1 AS \"app_flags\")) FROM \"items\"");
+    EXPECT_EQ(statement.sql(), "SELECT (\"flags\" & $1), ($1 | \"flags\"), (CAST($1 AS \"app_flags\") # $1), (~ CAST($1 AS \"app_flags\")) FROM \"items\"");
     EXPECT_EQ(statement.params().size(), std::size_t{1});
     const auto literal = query.compile(db_driver::postgresql, db_parameter_mode::literal);
     EXPECT_EQ(literal.sql(),
@@ -441,8 +439,7 @@ TEST(Ruvia, db_value_borrows_string_lvalues) {
 TEST(Ruvia, db_query_null_comparisons_and_empty_membership_have_defined_semantics) {
     db_query query;
     const auto id = query.column("id");
-    const std::array projections{query.binary(id, op_type::equal, query.null_value()), query.binary(query.null_value(), op_type::not_equal, id),
-        query.binary(id, op_type::in, query.list({})), query.binary(id, op_type::not_in, query.list({}))};
+    const std::array projections{query.binary(id, op_type::equal, query.null_value()), query.binary(query.null_value(), op_type::not_equal, id), query.binary(id, op_type::in, query.list({})), query.binary(id, op_type::not_in, query.list({}))};
     query.select(projections).from("devices");
     const auto statement = query.compile(db_driver::postgresql);
     EXPECT_EQ(statement.sql(), "SELECT (\"id\" IS NULL), (\"id\" IS NOT NULL), FALSE, TRUE FROM \"devices\"");
@@ -452,17 +449,14 @@ TEST(Ruvia, db_query_null_comparisons_and_empty_membership_have_defined_semantic
 TEST(Ruvia, db_query_null_comparisons_share_unary_parameter_typing) {
     const auto value = db_expr::value(7);
     const auto null = db_expr::null();
-    const std::array predicates{
-        value == nullptr, null == value, value != nullptr, null != value,
-        value.is_null(), value.is_not_null()};
+    const std::array predicates{value == nullptr, null == value, value != nullptr, null != value, value.is_null(), value.is_not_null()};
     for (const auto driver : {db_driver::postgresql, db_driver::mariadb}) {
         for (const auto mode : {db_parameter_mode::bound, db_parameter_mode::literal}) {
             for (std::size_t i = 0; i < predicates.size(); ++i) {
                 const bool negate = i == 2 || i == 3 || i == 5;
                 const auto op = negate ? db_binary_operator::not_equal : db_binary_operator::equal;
                 db_query expected;
-                expected.select(expected.unary(negate ? db_unary_operator::is_not_null : db_unary_operator::is_null,
-                    expected.value(7)));
+                expected.select(expected.unary(negate ? db_unary_operator::is_not_null : db_unary_operator::is_null, expected.value(7)));
                 const auto reference = expected.compile(driver, mode);
                 db_query owned;
                 owned.select(predicates[i].expression(owned));
@@ -472,9 +466,7 @@ TEST(Ruvia, db_query_null_comparisons_share_unary_parameter_typing) {
                 db_query direct;
                 const auto operand = direct.value(7);
                 const auto null_value = direct.null_value();
-                direct.select(i == 1 || i == 3
-                                  ? direct.binary(null_value, op, operand)
-                                  : direct.binary(operand, op, null_value));
+                direct.select(i == 1 || i == 3 ? direct.binary(null_value, op, operand) : direct.binary(operand, op, null_value));
                 const auto direct_statement = direct.compile(driver, mode);
                 EXPECT_EQ(direct_statement.sql(), reference.sql());
                 EXPECT_EQ(direct_statement.params().size(), reference.params().size());
@@ -511,11 +503,8 @@ TEST(Ruvia, db_query_expression_helpers_render_postgresql_and_reject_empty_input
     const auto right = query.column("right");
     const auto values = query.array({query.value(1), query.value(2)});
     const std::array ordered_by{db_order_term{query.column("score"), db_order_direction::desc}};
-    const auto ordered = query.within_group(
-        query.aggregate("percentile_cont", {query.value(0.5)}),
-        ordered_by);
-    const auto branches = std::array{
-        db_case_branch{query.binary(left, op_type::greater, query.value(0)), query.value("positive")}};
+    const auto ordered = query.within_group(query.aggregate("percentile_cont", {query.value(0.5)}), ordered_by);
+    const auto branches = std::array{db_case_branch{query.binary(left, op_type::greater, query.value(0)), query.value("positive")}};
     const std::array<db_expression, 12> projections{
         query.coalesce({query.null_value(), left}),
         query.null_if(left, right),
@@ -533,29 +522,41 @@ TEST(Ruvia, db_query_expression_helpers_render_postgresql_and_reject_empty_input
     query.select(projections).from("metrics");
 
     const auto statement = query.compile(db_driver::postgresql);
-    EXPECT_EQ(statement.sql(),
-        "SELECT COALESCE(NULL, \"left\"), NULLIF(\"left\", \"right\"), GREATEST(\"left\", \"right\"), LEAST(\"left\", \"right\"), ROW(\"left\", \"right\"), ANY(ARRAY[$1, $2]), ALL(ARRAY[$1, $2]), CASE WHEN (\"left\" > $3) THEN $4 ELSE $5 END, \"percentile_cont\"($6) WITHIN GROUP (ORDER BY \"score\" DESC), EXTRACT(YEAR FROM \"created_at\"), (\"tags\")[$7], (\"name\" COLLATE \"C\") FROM \"metrics\"");
+    EXPECT_EQ(statement.sql(), "SELECT COALESCE(NULL, \"left\"), NULLIF(\"left\", \"right\"), GREATEST(\"left\", \"right\"), LEAST(\"left\", \"right\"), ROW(\"left\", \"right\"), ANY(ARRAY[$1, $2]), ALL(ARRAY[$1, $2]), CASE WHEN (\"left\" > $3) THEN $4 ELSE $5 END, \"percentile_cont\"($6) WITHIN GROUP (ORDER BY \"score\" DESC), EXTRACT(YEAR FROM \"created_at\"), (\"tags\")[$7], (\"name\" COLLATE \"C\") FROM \"metrics\"");
     EXPECT_EQ(statement.params().size(), std::size_t{7});
 
     db_query maria_array;
     const auto array_value = maria_array.array({maria_array.value(1)});
     maria_array.select(maria_array.any(array_value)).from("metrics");
-    EXPECT_TRUE(testing::throws_on([&] { (void)maria_array.compile(db_driver::mariadb); }));
+    EXPECT_TRUE(testing::throws_on([&] {
+        (void)maria_array.compile(db_driver::mariadb);
+    }));
 
     db_query maria_within_group;
     const auto aggregate = maria_within_group.aggregate("percentile_cont", {maria_within_group.value(0.5)});
     const std::array maria_order{db_order_term{maria_within_group.column("score"), db_order_direction::asc}};
-    maria_within_group.select(maria_within_group.within_group(aggregate, maria_order))
-        .from("metrics");
-    EXPECT_TRUE(testing::throws_on([&] { (void)maria_within_group.compile(db_driver::mariadb); }));
+    maria_within_group.select(maria_within_group.within_group(aggregate, maria_order)).from("metrics");
+    EXPECT_TRUE(testing::throws_on([&] {
+        (void)maria_within_group.compile(db_driver::mariadb);
+    }));
 
-    EXPECT_TRUE(testing::throws_on([&] { (void)query.coalesce({}); }));
-    EXPECT_TRUE(testing::throws_on([&] { (void)query.greatest({}); }));
-    EXPECT_TRUE(testing::throws_on([&] { (void)query.least({}); }));
-    EXPECT_TRUE(testing::throws_on([&] { (void)query.within_group(left, {}); }));
+    EXPECT_TRUE(testing::throws_on([&] {
+        (void)query.coalesce({});
+    }));
+    EXPECT_TRUE(testing::throws_on([&] {
+        (void)query.greatest({});
+    }));
+    EXPECT_TRUE(testing::throws_on([&] {
+        (void)query.least({});
+    }));
+    EXPECT_TRUE(testing::throws_on([&] {
+        (void)query.within_group(left, {});
+    }));
     db_query empty_tuple;
     empty_tuple.select(empty_tuple.tuple({})).from("metrics");
-    EXPECT_TRUE(testing::throws_on([&] { (void)empty_tuple.compile(db_driver::postgresql); }));
+    EXPECT_TRUE(testing::throws_on([&] {
+        (void)empty_tuple.compile(db_driver::postgresql);
+    }));
 }
 
 TEST(Ruvia, db_query_native_functions_and_identifier_quoting_are_dialect_safe) {
@@ -570,8 +571,7 @@ TEST(Ruvia, db_query_native_functions_and_identifier_quoting_are_dialect_safe) {
     query.select({count, sum, row_number, scalar}).from("sales", "s");
 
     const auto postgres = query.compile(db_driver::postgresql);
-    EXPECT_EQ(postgres.sql(),
-        "SELECT \"count\"(*), \"sum\"(\"s\".\"amount\"), \"row_number\"() OVER (ORDER BY \"s\".\"id\" ASC), \"lower\"(\"s\".\"name\") FROM \"sales\" AS \"s\"");
+    EXPECT_EQ(postgres.sql(), "SELECT \"count\"(*), \"sum\"(\"s\".\"amount\"), \"row_number\"() OVER (ORDER BY \"s\".\"id\" ASC), \"lower\"(\"s\".\"name\") FROM \"sales\" AS \"s\"");
 
     const auto maria = query.compile(db_driver::mariadb);
     EXPECT_TRUE(maria.sql().find("count(*)") != std::string_view::npos);
@@ -592,13 +592,19 @@ TEST(Ruvia, db_query_native_functions_and_identifier_quoting_are_dialect_safe) {
     EXPECT_TRUE(safe_maria.sql().find("`tenant`.`schema`.`name\"; DROP TABLE users --`") != std::string_view::npos);
     EXPECT_TRUE(safe_maria.sql().find("`pkg`.`weird\"function`") != std::string_view::npos);
     EXPECT_TRUE(safe_maria.sql().find("`weird``fn--`") != std::string_view::npos);
-    EXPECT_TRUE(testing::throws_on([&] { (void)identifiers.column(std::string_view("bad\0name", 8)); }));
+    EXPECT_TRUE(testing::throws_on([&] {
+        (void)identifiers.column(std::string_view("bad\0name", 8));
+    }));
 
     const std::string overlong(65, 'x');
     db_query overlong_query;
     overlong_query.select(overlong_query.call(overlong)).from("events");
-    EXPECT_TRUE(testing::throws_on([&] { (void)overlong_query.compile(db_driver::postgresql); }));
-    EXPECT_TRUE(testing::throws_on([&] { (void)overlong_query.compile(db_driver::mariadb); }));
+    EXPECT_TRUE(testing::throws_on([&] {
+        (void)overlong_query.compile(db_driver::postgresql);
+    }));
+    EXPECT_TRUE(testing::throws_on([&] {
+        (void)overlong_query.compile(db_driver::mariadb);
+    }));
 
     // MariaDB counts characters, PostgreSQL counts bytes: 64 two-byte "é"
     // fit MariaDB but not PostgreSQL's 63 bytes.
@@ -610,13 +616,19 @@ TEST(Ruvia, db_query_native_functions_and_identifier_quoting_are_dialect_safe) {
     accented_query.select(accented_query.call(accented)).from("events");
     const auto accented_statement = accented_query.compile(db_driver::mariadb);
     EXPECT_TRUE(accented_statement.sql().find(accented) != std::string_view::npos);
-    EXPECT_TRUE(testing::throws_on([&] { (void)accented_query.compile(db_driver::postgresql); }));
+    EXPECT_TRUE(testing::throws_on([&] {
+        (void)accented_query.compile(db_driver::postgresql);
+    }));
     db_query too_many_characters;
     too_many_characters.select(too_many_characters.call(accented + "x")).from("events");
-    EXPECT_TRUE(testing::throws_on([&] { (void)too_many_characters.compile(db_driver::mariadb); }));
+    EXPECT_TRUE(testing::throws_on([&] {
+        (void)too_many_characters.compile(db_driver::mariadb);
+    }));
     db_query ill_formed;
     ill_formed.select(ill_formed.call("bad\xC3name")).from("events");
-    EXPECT_TRUE(testing::throws_on([&] { (void)ill_formed.compile(db_driver::mariadb); }));
+    EXPECT_TRUE(testing::throws_on([&] {
+        (void)ill_formed.compile(db_driver::mariadb);
+    }));
 }
 
 TEST(Ruvia, db_query_dml_sources_distinct_and_query_joins_compile) {
@@ -626,31 +638,27 @@ TEST(Ruvia, db_query_dml_sources_distinct_and_query_joins_compile) {
     db_query insert;
     insert.insert_into("archive", {"id", "name"}).insert_from(source).returning({insert.column("id")});
     const auto inserted = insert.compile(db_driver::postgresql);
-    EXPECT_EQ(inserted.sql(),
-        "INSERT INTO \"archive\" (\"id\", \"name\") SELECT \"s\".\"id\", \"s\".\"name\" FROM \"source\" AS \"s\" RETURNING \"id\"");
+    EXPECT_EQ(inserted.sql(), "INSERT INTO \"archive\" (\"id\", \"name\") SELECT \"s\".\"id\", \"s\".\"name\" FROM \"source\" AS \"s\" RETURNING \"id\"");
 
     db_query update;
     update.update("target", "t").set("name", update.value("changed"));
     update.update_from("source", "s").where(update.binary(update.column("id", "t"), op_type::equal, update.column("id", "s")));
     const auto updated = update.compile(db_driver::postgresql);
-    EXPECT_EQ(updated.sql(),
-        "UPDATE \"target\" AS \"t\" SET \"name\" = $1 FROM \"source\" AS \"s\" WHERE (\"t\".\"id\" = \"s\".\"id\")");
+    EXPECT_EQ(updated.sql(), "UPDATE \"target\" AS \"t\" SET \"name\" = $1 FROM \"source\" AS \"s\" WHERE (\"t\".\"id\" = \"s\".\"id\")");
 
     db_query removed;
     removed.delete_from("target", "t").delete_using("source", "s");
     removed.where(removed.binary(removed.column("id", "t"), op_type::equal, removed.column("id", "s")));
     const auto deleted = removed.compile(db_driver::postgresql);
-    EXPECT_EQ(deleted.sql(),
-        "DELETE FROM \"target\" AS \"t\" USING \"source\" AS \"s\" WHERE (\"t\".\"id\" = \"s\".\"id\")");
+    EXPECT_EQ(deleted.sql(), "DELETE FROM \"target\" AS \"t\" USING \"source\" AS \"s\" WHERE (\"t\".\"id\" = \"s\".\"id\")");
 
     db_query distinct;
-    distinct.select({distinct.column("account_id"), distinct.column("id")})
-        .distinct_on({distinct.column("account_id")})
-        .from("events");
+    distinct.select({distinct.column("account_id"), distinct.column("id")}).distinct_on({distinct.column("account_id")}).from("events");
     const auto distinct_statement = distinct.compile(db_driver::postgresql);
-    EXPECT_EQ(distinct_statement.sql(),
-        "SELECT DISTINCT ON (\"account_id\") \"account_id\", \"id\" FROM \"events\"");
-    EXPECT_TRUE(testing::throws_on([&] { (void)distinct.compile(db_driver::mariadb); }));
+    EXPECT_EQ(distinct_statement.sql(), "SELECT DISTINCT ON (\"account_id\") \"account_id\", \"id\" FROM \"events\"");
+    EXPECT_TRUE(testing::throws_on([&] {
+        (void)distinct.compile(db_driver::mariadb);
+    }));
 
     db_query joined;
     joined.select(joined.star("base")).from("base", "base");
@@ -659,18 +667,14 @@ TEST(Ruvia, db_query_dml_sources_distinct_and_query_joins_compile) {
     const std::array<std::string_view, 1> using_columns{"id"};
     joined.join(db_join_type::inner, "same_ids", {}, "same_ids", using_columns);
     const auto joined_statement = joined.compile(db_driver::postgresql);
-    EXPECT_EQ(joined_statement.sql(),
-        "SELECT \"base\".* FROM \"base\" AS \"base\" LEFT JOIN (SELECT \"s\".\"id\", \"s\".\"name\" FROM \"source\" AS \"s\") AS \"derived\" ON (\"base\".\"id\" = \"derived\".\"id\") INNER JOIN \"same_ids\" AS \"same_ids\" USING (\"id\")");
+    EXPECT_EQ(joined_statement.sql(), "SELECT \"base\".* FROM \"base\" AS \"base\" LEFT JOIN (SELECT \"s\".\"id\", \"s\".\"name\" FROM \"source\" AS \"s\") AS \"derived\" ON (\"base\".\"id\" = \"derived\".\"id\") INNER JOIN \"same_ids\" AS \"same_ids\" USING (\"id\")");
 
     db_query function_source;
     const auto function = function_source.call("jsonb_each", {function_source.column("payload")});
     const db_source_column function_columns[]{{.name_ = "key"}, {.name_ = "value"}};
-    function_source.select(function_source.star("kv"))
-        .from_function(function, "kv",
-            {.lateral_ = true, .with_ordinality_ = true, .columns_ = function_columns});
+    function_source.select(function_source.star("kv")).from_function(function, "kv", {.lateral_ = true, .with_ordinality_ = true, .columns_ = function_columns});
     const auto function_statement = function_source.compile(db_driver::postgresql);
-    EXPECT_TRUE(function_statement.sql().find(
-                    "FROM LATERAL \"jsonb_each\"(\"payload\") WITH ORDINALITY AS \"kv\" (\"key\", \"value\")") != std::string_view::npos);
+    EXPECT_TRUE(function_statement.sql().find("FROM LATERAL \"jsonb_each\"(\"payload\") WITH ORDINALITY AS \"kv\" (\"key\", \"value\")") != std::string_view::npos);
 }
 
 TEST(Ruvia, db_query_bulk_upsert_conditions_and_returning) {
@@ -719,7 +723,9 @@ TEST(Ruvia, db_query_mariadb_returning_on_insert_and_delete_but_not_update) {
     updated.returning(updated_columns);
     const auto updated_postgres = updated.compile(db_driver::postgresql);
     EXPECT_TRUE(updated_postgres.returns_rows());
-    EXPECT_TRUE(testing::throws_on([&] { (void)updated.compile(db_driver::mariadb); }));
+    EXPECT_TRUE(testing::throws_on([&] {
+        (void)updated.compile(db_driver::mariadb);
+    }));
 }
 
 TEST(Ruvia, db_query_set_operations_preserve_grouping_and_nested_limits) {
@@ -741,36 +747,56 @@ TEST(Ruvia, db_query_mariadb_uses_its_own_placeholders_and_null_ordering) {
     const auto statement = query.compile(db_driver::mariadb);
     EXPECT_EQ(statement.sql(), "SELECT CONCAT(`name`, ?) FROM `user` ORDER BY (`name` IS NULL) ASC, `name` ASC LIMIT 18446744073709551615 OFFSET ?");
     query.where(query.binary(name, op_type::i_like, query.value(db_value("needle"))));
-    EXPECT_TRUE(testing::throws_on([&] { (void)query.compile(db_driver::mariadb); }));
+    EXPECT_TRUE(testing::throws_on([&] {
+        (void)query.compile(db_driver::mariadb);
+    }));
 }
 
 TEST(Ruvia, db_query_rejects_foreign_expressions_and_incompatible_clauses) {
     db_query first, second;
     auto foreign = first.column("id");
-    EXPECT_TRUE(testing::throws_on([&] { second.where(foreign); }));
+    EXPECT_TRUE(testing::throws_on([&] {
+        second.where(foreign);
+    }));
     second.where(second.import_expression(foreign)).insert_into("device");
-    EXPECT_TRUE(testing::throws_on([&] { (void)second.compile(db_driver::postgresql); }));
+    EXPECT_TRUE(testing::throws_on([&] {
+        (void)second.compile(db_driver::postgresql);
+    }));
     db_query invalid_join;
     invalid_join.from("one").join(db_join_type::left, "two");
-    EXPECT_TRUE(testing::throws_on([&] { (void)invalid_join.compile(db_driver::postgresql); }));
+    EXPECT_TRUE(testing::throws_on([&] {
+        (void)invalid_join.compile(db_driver::postgresql);
+    }));
 }
 
 TEST(Ruvia, db_query_data_modifications_require_top_level_or_cte_placement) {
     db_query removed;
     removed.delete_from("device").returning({removed.column("id")});
     db_query query;
-    EXPECT_TRUE(testing::throws_on([&] { (void)query.subquery(removed); }));
-    EXPECT_TRUE(testing::throws_on([&] { query.from(removed, "removed"); }));
-    EXPECT_TRUE(testing::throws_on([&] { query.join(db_join_type::cross, removed, {}, "removed"); }));
+    EXPECT_TRUE(testing::throws_on([&] {
+        (void)query.subquery(removed);
+    }));
+    EXPECT_TRUE(testing::throws_on([&] {
+        query.from(removed, "removed");
+    }));
+    EXPECT_TRUE(testing::throws_on([&] {
+        query.join(db_join_type::cross, removed, {}, "removed");
+    }));
     db_query insert;
     insert.insert_into("archive", {"id"});
-    EXPECT_TRUE(testing::throws_on([&] { insert.insert_from(removed); }));
+    EXPECT_TRUE(testing::throws_on([&] {
+        insert.insert_from(removed);
+    }));
     query.with("removed", removed).from("removed");
     EXPECT_EQ(query.compile(db_driver::postgresql).returns_rows(), true);
     db_query nested;
-    EXPECT_TRUE(testing::throws_on([&] { nested.from(query, "nested"); }));
+    EXPECT_TRUE(testing::throws_on([&] {
+        nested.from(query, "nested");
+    }));
     nested.with("nested", query).from("nested");
-    EXPECT_TRUE(testing::throws_on([&] { (void)nested.compile(db_driver::postgresql); }));
+    EXPECT_TRUE(testing::throws_on([&] {
+        (void)nested.compile(db_driver::postgresql);
+    }));
 }
 
 TEST(Ruvia, db_query_set_operands_cannot_hide_write_ctes_from_subquery_admission) {
@@ -827,12 +853,9 @@ TEST(Ruvia, db_predicate_composes_typed_fields_and_literal_parameters) {
     EXPECT_EQ(statement.sql(), "SELECT * FROM \"device\" WHERE ((\"device\".\"id\" >= $1) AND (\"device\".\"name\" = $2))");
 }
 
-RUVIA_DB_ENTITY(tagged_type, "tagged", db_column<"id", std::int64_t>,
-    db_column<"tags", std::vector<std::string>>)
-RUVIA_DB_ENTITY(uuids_type, "uuid_tags",
-    db_column<"tags", std::vector<std::string>, db_column_options{.data_type_ = db_data_type::uuid}>)
-RUVIA_DB_ENTITY(codes_type, "codes",
-    db_column<"values", std::vector<std::string>, db_column_options{.data_type_ = db_data_type::varchar, .length_ = 32}>)
+RUVIA_DB_ENTITY(tagged_type, "tagged", db_column<"id", std::int64_t>, db_column<"tags", std::vector<std::string>>)
+RUVIA_DB_ENTITY(uuids_type, "uuid_tags", db_column<"tags", std::vector<std::string>, db_column_options{.data_type_ = db_data_type::uuid}>)
+RUVIA_DB_ENTITY(codes_type, "codes", db_column<"values", std::vector<std::string>, db_column_options{.data_type_ = db_data_type::varchar, .length_ = 32}>)
 
 TEST(Ruvia, db_predicate_between_and_array_operators_bind_owned_typed_values) {
     std::array<std::string, 2> input{std::string(200, 'a'), std::string("zone-b")};
@@ -842,7 +865,9 @@ TEST(Ruvia, db_predicate_between_and_array_operators_bind_owned_typed_values) {
     query.from("tagged").where(condition.expression(query));
     const auto statement = query.compile(db_driver::postgresql);
     EXPECT_EQ(statement.sql(), "SELECT * FROM \"tagged\" WHERE ((\"tagged\".\"id\" BETWEEN $1 AND $2) AND (\"tagged\".\"tags\" @> CAST(ARRAY[$3, $4] AS TEXT[])))");
-    EXPECT_TRUE(testing::throws_on([&] { (void)query.compile(db_driver::mariadb); }));
+    EXPECT_TRUE(testing::throws_on([&] {
+        (void)query.compile(db_driver::mariadb);
+    }));
 
     db_query contained;
     auto subset = tagged_type::column<"tags">().array_contained_by<std::string_view>({});
@@ -941,16 +966,14 @@ TEST(Ruvia, db_query_binary_operator_families_cover_postgresql_and_mariadb_diale
         query.select(query.binary(query.column("lhs"), item.op_, query.column("rhs"))).from("cq_operator_matrix");
         const auto postgres = query.compile(db_driver::postgresql);
         EXPECT_TRUE(postgres.sql().find(item.token_) != std::string_view::npos);
-        EXPECT_TRUE(testing::throws_on([&] { (void)query.compile(db_driver::mariadb); }));
+        EXPECT_TRUE(testing::throws_on([&] {
+            (void)query.compile(db_driver::mariadb);
+        }));
     }
 
     db_query nulls;
     const auto id = nulls.column("id");
-    nulls.select({nulls.binary(id, op_type::equal, nulls.null_value()),
-                     nulls.binary(nulls.null_value(), op_type::not_equal, id),
-                     nulls.binary(id, op_type::in, nulls.list({})),
-                     nulls.binary(id, op_type::not_in, nulls.list({}))})
-        .from("cq_operator_matrix");
+    nulls.select({nulls.binary(id, op_type::equal, nulls.null_value()), nulls.binary(nulls.null_value(), op_type::not_equal, id), nulls.binary(id, op_type::in, nulls.list({})), nulls.binary(id, op_type::not_in, nulls.list({}))}).from("cq_operator_matrix");
     const auto null_statement = nulls.compile(db_driver::postgresql);
     EXPECT_TRUE(null_statement.sql().find(" IS NULL") != std::string_view::npos);
     EXPECT_TRUE(null_statement.sql().find(" IS NOT NULL") != std::string_view::npos);
@@ -959,7 +982,9 @@ TEST(Ruvia, db_query_binary_operator_families_cover_postgresql_and_mariadb_diale
 
     db_query invalid_in;
     invalid_in.select(invalid_in.binary(invalid_in.column("id"), op_type::in, invalid_in.value(1))).from("cq_operator_matrix");
-    EXPECT_TRUE(testing::throws_on([&] { (void)invalid_in.compile(db_driver::postgresql); }));
+    EXPECT_TRUE(testing::throws_on([&] {
+        (void)invalid_in.compile(db_driver::postgresql);
+    }));
 }
 
 TEST(Ruvia, db_query_unary_operators_and_parameter_modes_cover_all_semantics) {
@@ -1000,8 +1025,12 @@ TEST(Ruvia, db_query_unary_operators_and_parameter_modes_cover_all_semantics) {
     EXPECT_EQ(db_query::render_expression(literal_value, db_driver::postgresql), "E'O''Reilly'");
 
     db_query invalid;
-    EXPECT_TRUE(testing::throws_on([&] { (void)invalid.unary(db_unary_operator::not_value, {}); }));
-    EXPECT_TRUE(testing::throws_on([&] { (void)invalid.binary({}, op_type::equal, invalid.value(1)); }));
+    EXPECT_TRUE(testing::throws_on([&] {
+        (void)invalid.unary(db_unary_operator::not_value, {});
+    }));
+    EXPECT_TRUE(testing::throws_on([&] {
+        (void)invalid.binary({}, op_type::equal, invalid.value(1));
+    }));
 }
 
 TEST(Ruvia, db_query_unary_minus_and_bit_not_keep_negative_literals_out_of_comments) {
@@ -1012,13 +1041,11 @@ TEST(Ruvia, db_query_unary_minus_and_bit_not_keep_negative_literals_out_of_comme
         const auto negated_sql = db_query::render_expression(negated, driver);
         EXPECT_EQ(negated_sql, "(- -5)");
         EXPECT_TRUE(negated_sql.find("--") == std::string_view::npos);
-        EXPECT_EQ(db_query::render_expression(inverted, driver),
-            driver == db_driver::postgresql ? "(~ (-5)::int8)" : "(~ -5)");
+        EXPECT_EQ(db_query::render_expression(inverted, driver), driver == db_driver::postgresql ? "(~ (-5)::int8)" : "(~ -5)");
     }
 }
 
-RUVIA_DB_ENTITY(cq_device_type, "cq_device", db_column<"id", std::int64_t>, db_column<"name", std::string>,
-    db_column<"tags", std::vector<std::string>>)
+RUVIA_DB_ENTITY(cq_device_type, "cq_device", db_column<"id", std::int64_t>, db_column<"name", std::string>, db_column<"tags", std::vector<std::string>>)
 
 TEST(Ruvia, db_predicate_public_overloads_cover_comparisons_membership_nulls_and_aliases) {
     using tagged_type = cq_device_type;
@@ -1045,9 +1072,15 @@ TEST(Ruvia, db_predicate_public_overloads_cover_comparisons_membership_nulls_and
     EXPECT_TRUE(like.sql().find(" LIKE ") != std::string_view::npos);
     const auto ilike = compile(tagged_type::column<"name">().ilike("a%"), db_driver::postgresql);
     EXPECT_TRUE(ilike.sql().find(" ILIKE ") != std::string_view::npos);
-    EXPECT_TRUE(testing::throws_on([&] { (void)compile(tagged_type::column<"name">().ilike("a%"), db_driver::mariadb); }));
-    EXPECT_TRUE(compile_sql([&] { return compile(tagged_type::column<"id">().is_null(), db_driver::postgresql); }).find(" IS NULL") != std::string_view::npos);
-    EXPECT_TRUE(compile_sql([&] { return compile(tagged_type::column<"id">().is_not_null(), db_driver::postgresql); }).find(" IS NOT NULL") != std::string_view::npos);
+    EXPECT_TRUE(testing::throws_on([&] {
+        (void)compile(tagged_type::column<"name">().ilike("a%"), db_driver::mariadb);
+    }));
+    EXPECT_TRUE(compile_sql([&] {
+        return compile(tagged_type::column<"id">().is_null(), db_driver::postgresql);
+    }).find(" IS NULL") != std::string_view::npos);
+    EXPECT_TRUE(compile_sql([&] {
+        return compile(tagged_type::column<"id">().is_not_null(), db_driver::postgresql);
+    }).find(" IS NOT NULL") != std::string_view::npos);
 
     const std::array ids{1, 2, 3};
     const auto in_span = compile(tagged_type::column<"id">().in(std::span<const int>(ids)), db_driver::postgresql);
@@ -1067,7 +1100,9 @@ TEST(Ruvia, db_predicate_public_overloads_cover_comparisons_membership_nulls_and
     EXPECT_TRUE(contained.sql().find(" <@ CAST(ARRAY[$1, $2]") != std::string_view::npos);
     const auto overlap = compile(tagged_type::column<"tags">().array_overlap({"two"}), db_driver::postgresql);
     EXPECT_TRUE(overlap.sql().find(" && CAST(ARRAY[$1]") != std::string_view::npos);
-    EXPECT_TRUE(testing::throws_on([&] { (void)compile(tagged_type::column<"tags">().array_contains({"one"}), db_driver::mariadb); }));
+    EXPECT_TRUE(testing::throws_on([&] {
+        (void)compile(tagged_type::column<"tags">().array_contains({"one"}), db_driver::mariadb);
+    }));
 
     auto combined = (tagged_type::column<"id">() == 1) || !(tagged_type::column<"name">().like("%x%"));
     const auto combined_statement = compile(std::move(combined), db_driver::postgresql);
@@ -1090,9 +1125,15 @@ TEST(Ruvia, db_predicate_public_overloads_cover_comparisons_membership_nulls_and
     EXPECT_TRUE(!reassigned.empty());
     db_predicate empty_and;
     db_predicate empty_or;
-    EXPECT_TRUE(testing::throws_on([&] { (void)(std::move(empty_and) && (tagged_type::column<"id">() == 1)); }));
-    EXPECT_TRUE(testing::throws_on([&] { (void)(std::move(empty_or) || (tagged_type::column<"id">() == 1)); }));
-    EXPECT_TRUE(testing::throws_on([&] { (void)!std::move(empty); }));
+    EXPECT_TRUE(testing::throws_on([&] {
+        (void)(std::move(empty_and) && (tagged_type::column<"id">() == 1));
+    }));
+    EXPECT_TRUE(testing::throws_on([&] {
+        (void)(std::move(empty_or) || (tagged_type::column<"id">() == 1));
+    }));
+    EXPECT_TRUE(testing::throws_on([&] {
+        (void)!std::move(empty);
+    }));
 }
 
 TEST(Ruvia, db_predicate_moves_keep_expression_with_its_owner) {
@@ -1115,12 +1156,13 @@ TEST(Ruvia, db_predicate_moves_keep_expression_with_its_owner) {
         db_query query;
         EXPECT_TRUE(source.empty());
         EXPECT_TRUE(source.expression(query).empty());
-        EXPECT_TRUE(testing::throws_on([&] { (void)!std::move(source); }));
+        EXPECT_TRUE(testing::throws_on([&] {
+            (void)!std::move(source);
+        }));
         source = entity_type::column<"id">() == 1;
         query.from("device").where(source.expression(query));
         const auto statement = query.compile(db_driver::postgresql);
-        EXPECT_EQ(statement.sql(),
-            "SELECT * FROM \"device\" WHERE (\"device\".\"id\" = $1)");
+        EXPECT_EQ(statement.sql(), "SELECT * FROM \"device\" WHERE (\"device\".\"id\" = $1)");
     }
 }
 
@@ -1128,21 +1170,7 @@ TEST(Ruvia, db_query_clause_source_and_join_methods_cover_state_and_dialect_rule
     db_query query;
     const auto id = query.column("id", "e");
     const auto kind = query.column("kind", "e");
-    query.select(query.star("e"))
-        .add_select(query.alias(query.column("id", "e"), "selected_id"))
-        .from("cq_events", "e")
-        .where(query.binary(id, op_type::greater, query.value(0)))
-        .and_where(query.binary(kind, op_type::not_equal, query.value("archived")))
-        .or_where(query.binary(id, op_type::equal, query.value(99)))
-        .group_by({id})
-        .add_group_by(kind)
-        .having(query.binary(query.aggregate("count", {query.star()}), op_type::greater, query.value(0)))
-        .and_having(query.binary(kind, op_type::like, query.value("%live%")))
-        .order_by(id, db_order_direction::desc, db_nulls_order::first)
-        .add_order_by(kind, db_order_direction::asc, db_nulls_order::last)
-        .limit(10)
-        .offset(2)
-        .distinct();
+    query.select(query.star("e")).add_select(query.alias(query.column("id", "e"), "selected_id")).from("cq_events", "e").where(query.binary(id, op_type::greater, query.value(0))).and_where(query.binary(kind, op_type::not_equal, query.value("archived"))).or_where(query.binary(id, op_type::equal, query.value(99))).group_by({id}).add_group_by(kind).having(query.binary(query.aggregate("count", {query.star()}), op_type::greater, query.value(0))).and_having(query.binary(kind, op_type::like, query.value("%live%"))).order_by(id, db_order_direction::desc, db_nulls_order::first).add_order_by(kind, db_order_direction::asc, db_nulls_order::last).limit(10).offset(2).distinct();
     EXPECT_TRUE(query.has_where());
     EXPECT_TRUE(query.has_grouping());
     const auto statement = query.compile(db_driver::postgresql);
@@ -1161,13 +1189,15 @@ TEST(Ruvia, db_query_clause_source_and_join_methods_cover_state_and_dialect_rule
     EXPECT_TRUE(cleared.sql().find(" OFFSET ") == std::string_view::npos);
     EXPECT_TRUE(cleared.sql().find("DISTINCT") == std::string_view::npos);
     query.limit(7).offset(3);
-    for (const auto invalid : {std::numeric_limits<std::int64_t>::min(),
-             std::numeric_limits<std::int64_t>::min() + 5, std::int64_t{-1}}) {
-        EXPECT_TRUE(testing::throws_on([&] { query.limit(invalid); }));
-        EXPECT_TRUE(testing::throws_on([&] { query.offset(invalid); }));
+    for (const auto invalid : {std::numeric_limits<std::int64_t>::min(), std::numeric_limits<std::int64_t>::min() + 5, std::int64_t{-1}}) {
+        EXPECT_TRUE(testing::throws_on([&] {
+            query.limit(invalid);
+        }));
+        EXPECT_TRUE(testing::throws_on([&] {
+            query.offset(invalid);
+        }));
     }
-    for (const auto above_bigint : {static_cast<std::uint64_t>((std::numeric_limits<std::int64_t>::max)()) + 1,
-             (std::numeric_limits<std::uint64_t>::max)()}) {
+    for (const auto above_bigint : {static_cast<std::uint64_t>((std::numeric_limits<std::int64_t>::max)()) + 1, (std::numeric_limits<std::uint64_t>::max)()}) {
         db_query pg_limit = query.clone();
         pg_limit.limit(above_bigint);
         EXPECT_THROW((void)pg_limit.compile(db_driver::postgresql), std::invalid_argument);
@@ -1192,22 +1222,27 @@ TEST(Ruvia, db_query_clause_source_and_join_methods_cover_state_and_dialect_rule
 
     db_query record_source;
     const auto record_function = record_source.call("jsonb_to_record", {record_source.value(R"({"id":1})")});
-    const db_source_column record_columns[]{{.name_ = "id", .type_ = {.data_type_ = db_data_type::integer}},
-        {.name_ = "name", .type_ = {.data_type_ = db_data_type::varchar, .length_ = 8}}};
-    record_source.select(record_source.star("r"))
-        .from_function(record_function, "r",
-            {.columns_ = record_columns});
+    const db_source_column record_columns[]{{.name_ = "id", .type_ = {.data_type_ = db_data_type::integer}}, {.name_ = "name", .type_ = {.data_type_ = db_data_type::varchar, .length_ = 8}}};
+    record_source.select(record_source.star("r")).from_function(record_function, "r", {.columns_ = record_columns});
     const auto record_statement = record_source.compile(db_driver::postgresql);
     EXPECT_TRUE(record_statement.sql().find("AS \"r\" (\"id\" INTEGER, \"name\" VARCHAR(8))") != std::string_view::npos);
-    EXPECT_TRUE(testing::throws_on([&] { (void)record_source.compile(db_driver::mariadb); }));
+    EXPECT_TRUE(testing::throws_on([&] {
+        (void)record_source.compile(db_driver::mariadb);
+    }));
 
     db_query lateral;
     lateral.select(lateral.star("d")).from(derived, "d", {.lateral_ = true});
-    EXPECT_TRUE(compile_sql([&] { return lateral.compile(db_driver::postgresql); }).find("FROM LATERAL") != std::string_view::npos);
-    EXPECT_TRUE(testing::throws_on([&] { (void)lateral.compile(db_driver::mariadb); }));
+    EXPECT_TRUE(compile_sql([&] {
+        return lateral.compile(db_driver::postgresql);
+    }).find("FROM LATERAL") != std::string_view::npos);
+    EXPECT_TRUE(testing::throws_on([&] {
+        (void)lateral.compile(db_driver::mariadb);
+    }));
     db_query bad_ordinality;
     bad_ordinality.select(bad_ordinality.star("d")).from(derived, "d", {.with_ordinality_ = true});
-    EXPECT_TRUE(testing::throws_on([&] { (void)bad_ordinality.compile(db_driver::postgresql); }));
+    EXPECT_TRUE(testing::throws_on([&] {
+        (void)bad_ordinality.compile(db_driver::postgresql);
+    }));
 
     const std::array joins{
         std::pair{db_join_type::inner, std::string_view(" INNER JOIN ")},
@@ -1223,7 +1258,9 @@ TEST(Ruvia, db_query_clause_source_and_join_methods_cover_state_and_dialect_rule
         const auto postgres = joined.compile(db_driver::postgresql);
         EXPECT_TRUE(postgres.sql().find(token) != std::string_view::npos);
         if (type == db_join_type::full) {
-            EXPECT_TRUE(testing::throws_on([&] { (void)joined.compile(db_driver::mariadb); }));
+            EXPECT_TRUE(testing::throws_on([&] {
+                (void)joined.compile(db_driver::mariadb);
+            }));
         } else {
             const auto maria = joined.compile(db_driver::mariadb);
             EXPECT_TRUE(maria.sql().find(token) != std::string_view::npos);
@@ -1231,9 +1268,13 @@ TEST(Ruvia, db_query_clause_source_and_join_methods_cover_state_and_dialect_rule
     }
     db_query cross;
     cross.select(cross.star("a")).from("cq_a", "a").join(db_join_type::cross, "cq_b", {}, "b");
-    EXPECT_TRUE(compile_sql([&] { return cross.compile(db_driver::postgresql); }).find(" CROSS JOIN ") != std::string_view::npos);
+    EXPECT_TRUE(compile_sql([&] {
+        return cross.compile(db_driver::postgresql);
+    }).find(" CROSS JOIN ") != std::string_view::npos);
     cross.join(db_join_type::cross, "cq_c", cross.column("id"), "c");
-    EXPECT_TRUE(testing::throws_on([&] { (void)cross.compile(db_driver::postgresql); }));
+    EXPECT_TRUE(testing::throws_on([&] {
+        (void)cross.compile(db_driver::postgresql);
+    }));
 }
 
 TEST(Ruvia, db_query_dml_and_conflict_overloads_cover_postgresql_and_mariadb) {
@@ -1250,24 +1291,32 @@ TEST(Ruvia, db_query_dml_and_conflict_overloads_cover_postgresql_and_mariadb) {
     defaults.insert_into("cq_devices");
     const auto default_pg = defaults.compile(db_driver::postgresql);
     EXPECT_TRUE(default_pg.sql().find("DEFAULT VALUES") != std::string_view::npos);
-    EXPECT_TRUE(compile_sql([&] { return defaults.compile(db_driver::mariadb); }).find("() VALUES ()") != std::string_view::npos);
+    EXPECT_TRUE(compile_sql([&] {
+        return defaults.compile(db_driver::mariadb);
+    }).find("() VALUES ()") != std::string_view::npos);
 
     db_query source;
     source.select({source.column("id"), source.column("name")}).from("cq_source");
     db_query insert_from;
     insert_from.insert_into("cq_devices", {"id", "name"}).insert_from(source);
-    EXPECT_TRUE(compile_sql([&] { return insert_from.compile(db_driver::postgresql); }).find("SELECT \"id\", \"name\"") != std::string_view::npos);
+    EXPECT_TRUE(compile_sql([&] {
+        return insert_from.compile(db_driver::postgresql);
+    }).find("SELECT \"id\", \"name\"") != std::string_view::npos);
 
     db_query do_nothing;
     do_nothing.insert_into("cq_devices", {"id", "name"}).values({do_nothing.value(1), do_nothing.value("x")});
     const borrowed_text conflict_columns[]{"id"};
     do_nothing.on_conflict({.columns_ = conflict_columns, .do_nothing_ = true});
-    EXPECT_TRUE(compile_sql([&] { return do_nothing.compile(db_driver::postgresql); }).find("ON CONFLICT (\"id\") DO NOTHING") != std::string_view::npos);
+    EXPECT_TRUE(compile_sql([&] {
+        return do_nothing.compile(db_driver::postgresql);
+    }).find("ON CONFLICT (\"id\") DO NOTHING") != std::string_view::npos);
 
     db_query constraint;
     constraint.insert_into("cq_devices", {"id", "name"}).values({constraint.value(1), constraint.value("x")});
     constraint.on_conflict({.constraint_ = "cq_devices_pkey", .do_nothing_ = true});
-    EXPECT_TRUE(compile_sql([&] { return constraint.compile(db_driver::postgresql); }).find("ON CONSTRAINT \"cq_devices_pkey\" DO NOTHING") != std::string_view::npos);
+    EXPECT_TRUE(compile_sql([&] {
+        return constraint.compile(db_driver::postgresql);
+    }).find("ON CONSTRAINT \"cq_devices_pkey\" DO NOTHING") != std::string_view::npos);
 
     db_query targeted;
     targeted.insert_into("cq_devices", {"id", "name"}).values({targeted.value(1), targeted.value("x")});
@@ -1277,8 +1326,7 @@ TEST(Ruvia, db_query_dml_and_conflict_overloads_cover_postgresql_and_mariadb) {
     const auto targeted_statement = targeted.compile(db_driver::postgresql);
     EXPECT_TRUE(targeted_statement.sql().find("ON CONFLICT (\"id\") WHERE (\"active\" = $3) DO UPDATE SET") != std::string_view::npos);
     EXPECT_TRUE(targeted_statement.sql().find("WHERE (\"name\" <> ") != std::string_view::npos);
-    EXPECT_TRUE(targeted_statement.sql().find("excluded.\"name\")") != std::string_view::npos ||
-                targeted_statement.sql().find("\"excluded\".\"name\")") != std::string_view::npos);
+    EXPECT_TRUE(targeted_statement.sql().find("excluded.\"name\")") != std::string_view::npos || targeted_statement.sql().find("\"excluded\".\"name\")") != std::string_view::npos);
 
     db_query maria_upsert;
     maria_upsert.insert_into("cq_devices", {"id", "name"}).values({maria_upsert.value(1), maria_upsert.value("x")});
@@ -1287,11 +1335,15 @@ TEST(Ruvia, db_query_dml_and_conflict_overloads_cover_postgresql_and_mariadb) {
     const auto maria_statement = maria_upsert.compile(db_driver::mariadb);
     EXPECT_TRUE(maria_statement.sql().find("ON DUPLICATE KEY UPDATE \"name\"") == std::string_view::npos);
     EXPECT_TRUE(maria_statement.sql().find("ON DUPLICATE KEY UPDATE `name` = VALUES(`name`)") != std::string_view::npos);
-    EXPECT_TRUE(testing::throws_on([&] { (void)maria_upsert.compile(db_driver::postgresql); }));
+    EXPECT_TRUE(testing::throws_on([&] {
+        (void)maria_upsert.compile(db_driver::postgresql);
+    }));
     db_query invalid_conflict;
     invalid_conflict.insert_into("cq_devices", {"id"}).values({invalid_conflict.value(1)});
     invalid_conflict.on_conflict({.columns_ = conflict_columns, .constraint_ = "other", .do_nothing_ = true});
-    EXPECT_TRUE(testing::throws_on([&] { (void)invalid_conflict.compile(db_driver::postgresql); }));
+    EXPECT_TRUE(testing::throws_on([&] {
+        (void)invalid_conflict.compile(db_driver::postgresql);
+    }));
 
     db_query update;
     update.update("cq_devices", "d").set("name", update.value("updated"));
@@ -1299,15 +1351,21 @@ TEST(Ruvia, db_query_dml_and_conflict_overloads_cover_postgresql_and_mariadb) {
     db_query update_from;
     update_from.select(update_from.column("id")).from("cq_source");
     update.update_from(update_from, "s").where(update.binary(update.column("id", "d"), op_type::equal, update.column("id", "s")));
-    EXPECT_TRUE(compile_sql([&] { return update.compile(db_driver::postgresql); }).find("FROM (SELECT \"id\" FROM \"cq_source\") AS \"s\"") != std::string_view::npos);
+    EXPECT_TRUE(compile_sql([&] {
+        return update.compile(db_driver::postgresql);
+    }).find("FROM (SELECT \"id\" FROM \"cq_source\") AS \"s\"") != std::string_view::npos);
 
     db_query remove;
     remove.delete_from("cq_devices", "d");
     db_query delete_source;
     delete_source.select(delete_source.column("id")).from("cq_source");
     remove.delete_using(delete_source, "s").where(remove.binary(remove.column("id", "d"), op_type::equal, remove.column("id", "s")));
-    EXPECT_TRUE(compile_sql([&] { return remove.compile(db_driver::postgresql); }).find("USING (SELECT \"id\" FROM \"cq_source\") AS \"s\"") != std::string_view::npos);
-    EXPECT_TRUE(testing::throws_on([&] { (void)remove.compile(db_driver::mariadb); }));
+    EXPECT_TRUE(compile_sql([&] {
+        return remove.compile(db_driver::postgresql);
+    }).find("USING (SELECT \"id\" FROM \"cq_source\") AS \"s\"") != std::string_view::npos);
+    EXPECT_TRUE(testing::throws_on([&] {
+        (void)remove.compile(db_driver::mariadb);
+    }));
 
     db_query returning;
     returning.insert_into("cq_devices", {"id"}).values({returning.value(1)}).returning({returning.column("id")});
@@ -1335,40 +1393,58 @@ TEST(Ruvia, db_query_lock_cte_and_set_operation_enumerations_cover_supported_and
         const auto postgres = query.compile(db_driver::postgresql);
         EXPECT_TRUE(postgres.sql().find(item.postgres_token_) != std::string_view::npos);
         if (item.maria_token_.empty()) {
-            EXPECT_TRUE(testing::throws_on([&] { (void)query.compile(db_driver::mariadb); }));
+            EXPECT_TRUE(testing::throws_on([&] {
+                (void)query.compile(db_driver::mariadb);
+            }));
         } else {
-            EXPECT_TRUE(compile_sql([&] { return query.compile(db_driver::mariadb); }).find(item.maria_token_) != std::string_view::npos);
+            EXPECT_TRUE(compile_sql([&] {
+                return query.compile(db_driver::mariadb);
+            }).find(item.maria_token_) != std::string_view::npos);
         }
     }
     db_query scoped_lock;
     const borrowed_text lock_tables[]{"d"};
     scoped_lock.select(scoped_lock.star("d")).from("cq_devices", "d").lock({.mode_ = db_row_lock::update, .nowait_ = true, .tables_ = lock_tables});
-    EXPECT_TRUE(compile_sql([&] { return scoped_lock.compile(db_driver::postgresql); }).find("FOR UPDATE OF \"d\" NOWAIT") != std::string_view::npos);
+    EXPECT_TRUE(compile_sql([&] {
+        return scoped_lock.compile(db_driver::postgresql);
+    }).find("FOR UPDATE OF \"d\" NOWAIT") != std::string_view::npos);
     db_query skip_locked;
     skip_locked.select(skip_locked.star()).from("cq_devices").lock({.skip_locked_ = true});
-    EXPECT_TRUE(compile_sql([&] { return skip_locked.compile(db_driver::postgresql); }).find("FOR UPDATE SKIP LOCKED") != std::string_view::npos);
-    EXPECT_TRUE(compile_sql([&] { return skip_locked.compile(db_driver::mariadb); }).find("FOR UPDATE SKIP LOCKED") != std::string_view::npos);
+    EXPECT_TRUE(compile_sql([&] {
+        return skip_locked.compile(db_driver::postgresql);
+    }).find("FOR UPDATE SKIP LOCKED") != std::string_view::npos);
+    EXPECT_TRUE(compile_sql([&] {
+        return skip_locked.compile(db_driver::mariadb);
+    }).find("FOR UPDATE SKIP LOCKED") != std::string_view::npos);
     db_query cleared;
     cleared.select(cleared.star()).from("cq_devices").lock({}).clear_lock();
-    EXPECT_TRUE(compile_sql([&] { return cleared.compile(db_driver::postgresql); }).find(" FOR ") == std::string_view::npos);
-    EXPECT_TRUE(testing::throws_on([&] { cleared.lock({.nowait_ = true, .skip_locked_ = true}); }));
+    EXPECT_TRUE(compile_sql([&] {
+        return cleared.compile(db_driver::postgresql);
+    }).find(" FOR ") == std::string_view::npos);
+    EXPECT_TRUE(testing::throws_on([&] {
+        cleared.lock({.nowait_ = true, .skip_locked_ = true});
+    }));
     db_query shared_skip;
     shared_skip.select(shared_skip.star()).from("cq_devices").lock({.mode_ = db_row_lock::share, .skip_locked_ = true});
-    EXPECT_TRUE(testing::throws_on([&] { (void)shared_skip.compile(db_driver::mariadb); }));
+    EXPECT_TRUE(testing::throws_on([&] {
+        (void)shared_skip.compile(db_driver::mariadb);
+    }));
 
     db_query cte_body;
     cte_body.select(cte_body.value(1)).from("cq_seed");
     db_query recursive;
     const borrowed_text cte_columns[]{"n"};
-    recursive.with("numbers", cte_body, {.recursive_ = true, .materialization_ = db_materialization::not_materialized, .columns_ = cte_columns})
-        .select(recursive.column("n"))
-        .from("numbers");
+    recursive.with("numbers", cte_body, {.recursive_ = true, .materialization_ = db_materialization::not_materialized, .columns_ = cte_columns}).select(recursive.column("n")).from("numbers");
     const auto recursive_statement = recursive.compile(db_driver::postgresql);
     EXPECT_TRUE(recursive_statement.sql().find("WITH RECURSIVE \"numbers\" (\"n\") AS NOT MATERIALIZED") != std::string_view::npos);
-    EXPECT_TRUE(testing::throws_on([&] { (void)recursive.compile(db_driver::mariadb); }));
+    EXPECT_TRUE(testing::throws_on([&] {
+        (void)recursive.compile(db_driver::mariadb);
+    }));
     db_query duplicate_cte;
     duplicate_cte.with("one", cte_body);
-    EXPECT_TRUE(testing::throws_on([&] { duplicate_cte.with("one", cte_body); }));
+    EXPECT_TRUE(testing::throws_on([&] {
+        duplicate_cte.with("one", cte_body);
+    }));
 
     struct set_case final {
         db_set_operation operation_;
@@ -1389,11 +1465,17 @@ TEST(Ruvia, db_query_lock_cte_and_set_operation_enumerations_cover_supported_and
         db_query second;
         second.select(second.value(2));
         first.combine(item.operation_, second);
-        EXPECT_TRUE(compile_sql([&] { return first.compile(db_driver::postgresql); }).find(item.postgres_token_) != std::string_view::npos);
+        EXPECT_TRUE(compile_sql([&] {
+            return first.compile(db_driver::postgresql);
+        }).find(item.postgres_token_) != std::string_view::npos);
         if (item.maria_supported_) {
-            EXPECT_TRUE(compile_sql([&] { return first.compile(db_driver::mariadb); }).find(item.postgres_token_) != std::string_view::npos);
+            EXPECT_TRUE(compile_sql([&] {
+                return first.compile(db_driver::mariadb);
+            }).find(item.postgres_token_) != std::string_view::npos);
         } else {
-            EXPECT_TRUE(testing::throws_on([&] { (void)first.compile(db_driver::mariadb); }));
+            EXPECT_TRUE(testing::throws_on([&] {
+                (void)first.compile(db_driver::mariadb);
+            }));
         }
     }
 }
@@ -1402,19 +1484,18 @@ TEST(Ruvia, db_query_window_frame_and_date_part_enumerations_cover_each_value) {
     const std::array frames{db_window_frame::rows, db_window_frame::range, db_window_frame::groups};
     for (const auto frame : frames) {
         db_query query;
-        query.select(query.over(query.call("row_number"),
-                         {.frame_ = db_window_frame_options{.kind_ = frame,
-                              .start_ = {db_frame_boundary::unbounded_preceding, 0},
-                              .end_ = {db_frame_boundary::current_row, 0}}}))
-            .from("cq_window");
+        query.select(query.over(query.call("row_number"), {.frame_ = db_window_frame_options{.kind_ = frame, .start_ = {db_frame_boundary::unbounded_preceding, 0}, .end_ = {db_frame_boundary::current_row, 0}}})).from("cq_window");
         const auto postgres = query.compile(db_driver::postgresql);
-        const auto token = frame == db_window_frame::rows ? "ROWS" : frame == db_window_frame::range ? "RANGE"
-                                                                                                     : "GROUPS";
+        const auto token = frame == db_window_frame::rows ? "ROWS" : (frame == db_window_frame::range ? "RANGE" : "GROUPS");
         EXPECT_TRUE(postgres.sql().find(token) != std::string_view::npos);
         if (frame == db_window_frame::groups) {
-            EXPECT_TRUE(testing::throws_on([&] { (void)query.compile(db_driver::mariadb); }));
+            EXPECT_TRUE(testing::throws_on([&] {
+                (void)query.compile(db_driver::mariadb);
+            }));
         } else {
-            EXPECT_TRUE(compile_sql([&] { return query.compile(db_driver::mariadb); }).find(token) != std::string_view::npos);
+            EXPECT_TRUE(compile_sql([&] {
+                return query.compile(db_driver::mariadb);
+            }).find(token) != std::string_view::npos);
         }
     }
 
@@ -1429,35 +1510,31 @@ TEST(Ruvia, db_query_window_frame_and_date_part_enumerations_cover_each_value) {
         db_query query;
         const auto end = boundary == db_frame_boundary::unbounded_following ? boundary : db_frame_boundary::unbounded_following;
         const auto start = boundary == db_frame_boundary::unbounded_following ? db_frame_boundary::current_row : boundary;
-        const auto start_value = start == db_frame_boundary::preceding ? 2U : start == db_frame_boundary::following ? 3U
-                                                                                                                    : 0U;
-        const auto end_value = end == db_frame_boundary::preceding ? 2U : end == db_frame_boundary::following ? 3U
-                                                                                                              : 0U;
-        query.select(query.over(query.call("row_number"),
-                         {.frame_ = db_window_frame_options{.kind_ = db_window_frame::rows,
-                              .start_ = {start, start_value},
-                              .end_ = {end, end_value}}}))
-            .from("cq_window");
-        EXPECT_TRUE(compile_sql([&] { return query.compile(db_driver::postgresql); }).find(token) != std::string_view::npos);
+        const auto start_value = start == db_frame_boundary::preceding ? 2U : (start == db_frame_boundary::following ? 3U : 0U);
+        const auto end_value = end == db_frame_boundary::preceding ? 2U : (end == db_frame_boundary::following ? 3U : 0U);
+        query.select(query.over(query.call("row_number"), {.frame_ = db_window_frame_options{.kind_ = db_window_frame::rows, .start_ = {start, start_value}, .end_ = {end, end_value}}})).from("cq_window");
+        EXPECT_TRUE(compile_sql([&] {
+            return query.compile(db_driver::postgresql);
+        }).find(token) != std::string_view::npos);
     }
     db_query invalid_boundary;
-    invalid_boundary.select(invalid_boundary.over(invalid_boundary.call("row_number"),
-                                {.frame_ = db_window_frame_options{.start_ = {db_frame_boundary::current_row, 1}}}))
-        .from("cq_window");
-    EXPECT_TRUE(testing::throws_on([&] { (void)invalid_boundary.compile(db_driver::postgresql); }));
+    invalid_boundary.select(invalid_boundary.over(invalid_boundary.call("row_number"), {.frame_ = db_window_frame_options{.start_ = {db_frame_boundary::current_row, 1}}})).from("cq_window");
+    EXPECT_TRUE(testing::throws_on([&] {
+        (void)invalid_boundary.compile(db_driver::postgresql);
+    }));
     for (const auto invalid : {std::numeric_limits<std::int64_t>::min(), std::int64_t{-1}}) {
-        EXPECT_TRUE(testing::throws_on([&] { (void)db_window_boundary{db_frame_boundary::preceding, invalid}; }));
+        EXPECT_TRUE(testing::throws_on([&] {
+            (void)db_window_boundary{db_frame_boundary::preceding, invalid};
+        }));
     }
     EXPECT_TRUE(testing::throws_on([&] {
-        (void)db_window_boundary{
-            db_frame_boundary::following, static_cast<std::uint64_t>((std::numeric_limits<std::int64_t>::max)()) + 1};
+        (void)db_window_boundary{db_frame_boundary::following, static_cast<std::uint64_t>((std::numeric_limits<std::int64_t>::max)()) + 1};
     }));
     db_query reversed;
-    reversed.select(reversed.over(reversed.call("row_number"),
-                        {.frame_ = db_window_frame_options{.start_ = {db_frame_boundary::following, 0},
-                             .end_ = {db_frame_boundary::preceding, 0}}}))
-        .from("cq_window");
-    EXPECT_TRUE(testing::throws_on([&] { (void)reversed.compile(db_driver::postgresql); }));
+    reversed.select(reversed.over(reversed.call("row_number"), {.frame_ = db_window_frame_options{.start_ = {db_frame_boundary::following, 0}, .end_ = {db_frame_boundary::preceding, 0}}})).from("cq_window");
+    EXPECT_TRUE(testing::throws_on([&] {
+        (void)reversed.compile(db_driver::postgresql);
+    }));
 
     struct date_case final {
         db_date_part part_;
@@ -1480,11 +1557,17 @@ TEST(Ruvia, db_query_window_frame_and_date_part_enumerations_cover_each_value) {
     for (const auto& item : dates) {
         db_query query;
         query.select(query.extract(item.part_, query.column("created_at"))).from("cq_window");
-        EXPECT_TRUE(compile_sql([&] { return query.compile(db_driver::postgresql); }).find(item.token_) != std::string_view::npos);
+        EXPECT_TRUE(compile_sql([&] {
+            return query.compile(db_driver::postgresql);
+        }).find(item.token_) != std::string_view::npos);
         if (item.maria_supported_) {
-            EXPECT_TRUE(compile_sql([&] { return query.compile(db_driver::mariadb); }).find(item.token_) != std::string_view::npos);
+            EXPECT_TRUE(compile_sql([&] {
+                return query.compile(db_driver::mariadb);
+            }).find(item.token_) != std::string_view::npos);
         } else {
-            EXPECT_TRUE(testing::throws_on([&] { (void)query.compile(db_driver::mariadb); }));
+            EXPECT_TRUE(testing::throws_on([&] {
+                (void)query.compile(db_driver::mariadb);
+            }));
         }
     }
 }
@@ -1495,9 +1578,16 @@ TEST(Ruvia, db_query_expression_ownership_import_subquery_cast_and_cache_methods
     db_query target;
     const auto remapped = target.import_expression(qualified, "source", "target");
     target.select(remapped).from("cq_devices", "target");
-    EXPECT_EQ(compile_sql([&] { return target.compile(db_driver::postgresql); }), "SELECT \"target\".\"id\" FROM \"cq_devices\" AS \"target\"");
-    EXPECT_TRUE(testing::throws_on([&] { (void)target.import_expression(qualified, "source", {}); }));
-    EXPECT_TRUE(testing::throws_on([&] { (void)target.import_expression({}, "source", "target"); }));
+    EXPECT_EQ(compile_sql([&] {
+        return target.compile(db_driver::postgresql);
+    }),
+        "SELECT \"target\".\"id\" FROM \"cq_devices\" AS \"target\"");
+    EXPECT_TRUE(testing::throws_on([&] {
+        (void)target.import_expression(qualified, "source", {});
+    }));
+    EXPECT_TRUE(testing::throws_on([&] {
+        (void)target.import_expression({}, "source", "target");
+    }));
 
     db_query child;
     child.select(child.value(1)).from("cq_devices");
@@ -1510,7 +1600,9 @@ TEST(Ruvia, db_query_expression_ownership_import_subquery_cast_and_cache_methods
     EXPECT_TRUE(nested_statement.sql().find("(SELECT $2 FROM \"cq_devices\")") != std::string_view::npos);
     db_query dml;
     dml.delete_from("cq_devices").returning({dml.column("id")});
-    EXPECT_TRUE(testing::throws_on([&] { (void)nested.subquery(dml); }));
+    EXPECT_TRUE(testing::throws_on([&] {
+        (void)nested.subquery(dml);
+    }));
 
     db_query typed;
     const auto number = typed.cast(typed.value(1), db_data_type::integer);
@@ -1521,14 +1613,22 @@ TEST(Ruvia, db_query_expression_ownership_import_subquery_cast_and_cache_methods
     EXPECT_TRUE(typed_pg.sql().find("CAST($2 AS VARCHAR(8))") != std::string_view::npos);
     db_query named_type;
     named_type.select(named_type.cast(named_type.value(1), db_type_definition{.custom_name_ = "cq_custom_type"})).from("cq_devices");
-    EXPECT_TRUE(compile_sql([&] { return named_type.compile(db_driver::postgresql); }).find("CAST($1 AS \"cq_custom_type\")") != std::string_view::npos);
-    EXPECT_TRUE(testing::throws_on([&] { (void)named_type.compile(db_driver::mariadb); }));
+    EXPECT_TRUE(compile_sql([&] {
+        return named_type.compile(db_driver::postgresql);
+    }).find("CAST($1 AS \"cq_custom_type\")") != std::string_view::npos);
+    EXPECT_TRUE(testing::throws_on([&] {
+        (void)named_type.compile(db_driver::mariadb);
+    }));
 
     db_query named;
     const std::array<db_named_argument, 1> named_arguments{{db_named_argument{"precision", named.value(2)}}};
     named.select(named.call("round", {}, named_arguments)).from("cq_devices");
-    EXPECT_TRUE(compile_sql([&] { return named.compile(db_driver::postgresql); }).find("\"precision\" => $1") != std::string_view::npos);
-    EXPECT_TRUE(testing::throws_on([&] { (void)named.compile(db_driver::mariadb); }));
+    EXPECT_TRUE(compile_sql([&] {
+        return named.compile(db_driver::postgresql);
+    }).find("\"precision\" => $1") != std::string_view::npos);
+    EXPECT_TRUE(testing::throws_on([&] {
+        (void)named.compile(db_driver::mariadb);
+    }));
     EXPECT_TRUE(testing::throws_on([&] {
         const std::array<db_named_argument, 2> duplicate{{db_named_argument{"x", named.value(1)}, db_named_argument{"x", named.value(2)}}};
         (void)named.call("round", {}, duplicate);
@@ -1542,19 +1642,31 @@ TEST(Ruvia, db_query_expression_ownership_import_subquery_cast_and_cache_methods
     state.select(state.value(1)).from("cq_devices");
     const auto state_statement = state.compile(db_driver::postgresql);
     EXPECT_TRUE(state_statement.params().size() == std::size_t{1});
-    EXPECT_TRUE(testing::throws_on([&] { state.cache("bad", std::chrono::milliseconds(0)); }));
-    EXPECT_TRUE(testing::throws_on([&] { state.cache("bad", std::chrono::milliseconds(-1)); }));
+    EXPECT_TRUE(testing::throws_on([&] {
+        state.cache("bad", std::chrono::milliseconds(0));
+    }));
+    EXPECT_TRUE(testing::throws_on([&] {
+        state.cache("bad", std::chrono::milliseconds(-1));
+    }));
 
     auto clone = state.clone();
-    const auto clone_sql = compile_sql([&] { return clone.compile(db_driver::postgresql); });
-    const auto state_sql = compile_sql([&] { return state.compile(db_driver::postgresql); });
+    const auto clone_sql = compile_sql([&] {
+        return clone.compile(db_driver::postgresql);
+    });
+    const auto state_sql = compile_sql([&] {
+        return state.compile(db_driver::postgresql);
+    });
     EXPECT_EQ(clone_sql, state_sql);
     db_query moved = std::move(clone);
-    EXPECT_TRUE(testing::throws_on([&] { (void)clone.returns_rows(); }));
+    EXPECT_TRUE(testing::throws_on([&] {
+        (void)clone.returns_rows();
+    }));
     db_query assigned;
     assigned = std::move(moved);
     EXPECT_TRUE(assigned.returns_rows());
-    EXPECT_TRUE(testing::throws_on([&] { (void)moved.returns_rows(); }));
+    EXPECT_TRUE(testing::throws_on([&] {
+        (void)moved.returns_rows();
+    }));
 
     db_query values;
     values.values({values.value(1), values.value(2)});
@@ -1566,8 +1678,7 @@ TEST(Ruvia, db_query_expression_ownership_import_subquery_cast_and_cache_methods
     EXPECT_TRUE(dml_insert.returns_rows());
 }
 
-RUVIA_DB_ENTITY(char_codes_type, "char_codes",
-    db_column<"values", std::vector<std::string>, db_column_options{.data_type_ = db_data_type::char_value, .length_ = 8}>)
+RUVIA_DB_ENTITY(char_codes_type, "char_codes", db_column<"values", std::vector<std::string>, db_column_options{.data_type_ = db_data_type::char_value, .length_ = 8}>)
 
 TEST(Ruvia, db_query_char_cast_and_array_predicate_render_for_supported_dialects) {
     db_query casts;
@@ -1593,7 +1704,9 @@ TEST(Ruvia, db_query_char_cast_and_array_predicate_render_for_supported_dialects
     array.from("char_codes").where(contains.expression(array));
     const auto array_statement = array.compile(db_driver::postgresql);
     EXPECT_TRUE(array_statement.sql().find("AS CHAR(8)[]") != std::string_view::npos);
-    EXPECT_TRUE(testing::throws_on([&] { (void)array.compile(db_driver::mariadb); }));
+    EXPECT_TRUE(testing::throws_on([&] {
+        (void)array.compile(db_driver::mariadb);
+    }));
 }
 
 TEST(Ruvia, db_query_span_overloads_cover_expression_and_statement_builders) {
@@ -1623,7 +1736,9 @@ TEST(Ruvia, db_query_span_overloads_cover_expression_and_statement_builders) {
     distinct.select(distinct_left);
     const std::array<db_expression, 1> distinct_expressions{distinct.column("left")};
     distinct.distinct_on(std::span<const db_expression>(distinct_expressions)).from("cq_span");
-    EXPECT_TRUE(compile_sql([&] { return distinct.compile(db_driver::postgresql); }).find("DISTINCT ON") != std::string_view::npos);
+    EXPECT_TRUE(compile_sql([&] {
+        return distinct.compile(db_driver::postgresql);
+    }).find("DISTINCT ON") != std::string_view::npos);
 
     db_query dml;
     const std::array<std::string_view, 1> columns{"value"};
@@ -1642,21 +1757,22 @@ TEST(Ruvia, db_query_span_overloads_cover_expression_and_statement_builders) {
 
 TEST(Ruvia, db_query_import_expression_rewrites_correlated_subquery_qualifiers) {
     db_query sub;
-    sub.select(sub.value(1))
-        .from("orders", "o")
-        .where(sub.binary(sub.column("user_id", "o"), db_binary_operator::equal, sub.column("id", "users")));
+    sub.select(sub.value(1)).from("orders", "o").where(sub.binary(sub.column("user_id", "o"), db_binary_operator::equal, sub.column("id", "users")));
     db_query builder;
     const auto exists_expr = builder.exists(sub);
     builder.select(exists_expr);
-    const auto original = compile_sql([&] { return builder.compile(db_driver::postgresql); });
+    const auto original = compile_sql([&] {
+        return builder.compile(db_driver::postgresql);
+    });
 
     db_query main_query;
-    main_query.select(main_query.column("id", "u"))
-        .from("users", "u")
-        .where(main_query.import_expression(exists_expr, "users", "u"));
+    main_query.select(main_query.column("id", "u")).from("users", "u").where(main_query.import_expression(exists_expr, "users", "u"));
     const auto compiled = main_query.compile(db_driver::postgresql);
     EXPECT_EQ(compiled.sql(), "SELECT \"u\".\"id\" FROM \"users\" AS \"u\" WHERE EXISTS (SELECT $1 FROM \"orders\" AS \"o\" WHERE (\"o\".\"user_id\" = \"u\".\"id\"))");
-    EXPECT_EQ(compile_sql([&] { return builder.compile(db_driver::postgresql); }), original);
+    EXPECT_EQ(compile_sql([&] {
+        return builder.compile(db_driver::postgresql);
+    }),
+        original);
 }
 
 TEST(Ruvia, db_query_import_expression_preserves_schema_qualified_local_bindings) {
@@ -1665,17 +1781,13 @@ TEST(Ruvia, db_query_import_expression_preserves_schema_qualified_local_bindings
         main_query.select(main_query.column("id", "u")).from("users", "u");
         {
             db_query sub;
-            sub.select(sub.value(1))
-                .from("public.users")
-                .where(sub.binary(sub.column("id", qualifier), op_type::equal, sub.value(10)));
+            sub.select(sub.value(1)).from("public.users").where(sub.binary(sub.column("id", qualifier), op_type::equal, sub.value(10)));
             db_query builder;
             const auto expression = builder.exists(sub);
             main_query.where(main_query.import_expression(expression, qualifier, "u"));
         }
         const auto compiled = main_query.compile(db_driver::postgresql);
-        const std::string expected(qualifier == "users"
-                                       ? "SELECT \"u\".\"id\" FROM \"users\" AS \"u\" WHERE EXISTS (SELECT $1 FROM \"public\".\"users\" WHERE (\"users\".\"id\" = $2))"
-                                       : "SELECT \"u\".\"id\" FROM \"users\" AS \"u\" WHERE EXISTS (SELECT $1 FROM \"public\".\"users\" WHERE (\"public\".\"users\".\"id\" = $2))");
+        const std::string expected(qualifier == "users" ? "SELECT \"u\".\"id\" FROM \"users\" AS \"u\" WHERE EXISTS (SELECT $1 FROM \"public\".\"users\" WHERE (\"users\".\"id\" = $2))" : "SELECT \"u\".\"id\" FROM \"users\" AS \"u\" WHERE EXISTS (SELECT $1 FROM \"public\".\"users\" WHERE (\"public\".\"users\".\"id\" = $2))");
         EXPECT_EQ(compiled.sql(), expected);
         EXPECT_EQ(compiled.params().size(), std::size_t{2});
     }
@@ -1683,13 +1795,13 @@ TEST(Ruvia, db_query_import_expression_preserves_schema_qualified_local_bindings
 
 TEST(Ruvia, db_query_import_expression_rejects_captured_correlated_references_only) {
     db_query sub;
-    sub.select(sub.value(1))
-        .from("orders", "u")
-        .where(sub.binary(sub.column("user_id", "u"), op_type::equal, sub.column("id", "users")));
+    sub.select(sub.value(1)).from("orders", "u").where(sub.binary(sub.column("user_id", "u"), op_type::equal, sub.column("id", "users")));
     db_query builder;
     const auto expression = builder.exists(sub);
     builder.select(expression);
-    const auto original = compile_sql([&] { return builder.compile(db_driver::postgresql); });
+    const auto original = compile_sql([&] {
+        return builder.compile(db_driver::postgresql);
+    });
     db_query main_query;
     main_query.select(main_query.column("id", "u")).from("users", "u");
     bool rejected = false;
@@ -1699,29 +1811,32 @@ TEST(Ruvia, db_query_import_expression_rejects_captured_correlated_references_on
         rejected = true;
     }
     EXPECT_TRUE(rejected);
-    EXPECT_EQ(compile_sql([&] { return builder.compile(db_driver::postgresql); }), original);
+    EXPECT_EQ(compile_sql([&] {
+        return builder.compile(db_driver::postgresql);
+    }),
+        original);
 
     // The abandoned correlated predicate still exists in the builder's storage,
     // but does not appear in the imported query and must not cause a rejection.
     sub.where(sub.binary(sub.column("user_id", "u"), op_type::equal, sub.value(7)));
     main_query.where(main_query.import_expression(builder.exists(sub), "users", "u"));
-    EXPECT_EQ(compile_sql([&] { return main_query.compile(db_driver::postgresql); }),
+    EXPECT_EQ(compile_sql([&] {
+        return main_query.compile(db_driver::postgresql);
+    }),
         "SELECT \"u\".\"id\" FROM \"users\" AS \"u\" WHERE EXISTS (SELECT $1 FROM \"orders\" AS \"u\" WHERE (\"u\".\"user_id\" = $2))");
 }
 
 TEST(Ruvia, db_query_import_expression_preserves_nested_source_shadowing) {
     db_query inner;
-    inner.select(inner.value(1))
-        .from("orders", "u")
-        .where(inner.binary(inner.column("user_id", "u"), op_type::equal, inner.column("id", "users")));
+    inner.select(inner.value(1)).from("orders", "u").where(inner.binary(inner.column("user_id", "u"), op_type::equal, inner.column("id", "users")));
     db_query middle;
     middle.select(middle.column("id", "users")).from("public.users").where(middle.exists(inner));
     db_query builder;
     db_query main_query;
-    main_query.select(main_query.column("id", "u"))
-        .from("users", "u")
-        .where(main_query.import_expression(builder.exists(middle), "users", "u"));
-    EXPECT_EQ(compile_sql([&] { return main_query.compile(db_driver::postgresql); }),
+    main_query.select(main_query.column("id", "u")).from("users", "u").where(main_query.import_expression(builder.exists(middle), "users", "u"));
+    EXPECT_EQ(compile_sql([&] {
+        return main_query.compile(db_driver::postgresql);
+    }),
         "SELECT \"u\".\"id\" FROM \"users\" AS \"u\" WHERE EXISTS (SELECT \"users\".\"id\" FROM \"public\".\"users\" WHERE EXISTS (SELECT $1 FROM \"orders\" AS \"u\" WHERE (\"u\".\"user_id\" = \"users\".\"id\")))");
 }
 
@@ -1732,10 +1847,10 @@ TEST(Ruvia, db_query_import_expression_maps_nested_correlations_without_crossing
     middle.select(middle.column("id", "users")).from("orders", "o").where(middle.exists(inner));
     db_query builder;
     db_query main_query;
-    main_query.select(main_query.column("id", "u"))
-        .from("users", "u")
-        .where(main_query.import_expression(builder.exists(middle), "users", "u"));
-    EXPECT_EQ(compile_sql([&] { return main_query.compile(db_driver::postgresql); }),
+    main_query.select(main_query.column("id", "u")).from("users", "u").where(main_query.import_expression(builder.exists(middle), "users", "u"));
+    EXPECT_EQ(compile_sql([&] {
+        return main_query.compile(db_driver::postgresql);
+    }),
         "SELECT \"u\".\"id\" FROM \"users\" AS \"u\" WHERE EXISTS (SELECT \"u\".\"id\" FROM \"orders\" AS \"o\" WHERE EXISTS (SELECT \"users\".\"id\" FROM \"public\".\"users\"))");
 }
 
@@ -1770,13 +1885,12 @@ TEST(Ruvia, db_query_import_expression_keeps_set_operand_scopes_independent) {
         sub.combine(db_set_operation::union_all, branch);
         db_query builder;
         db_query main_query;
-        main_query.select(main_query.column("id", "u"))
-            .from("users", "u")
-            .where(main_query.import_expression(builder.exists(sub), "users", "u"));
-        const std::string expected(qualifier == "users"
-                                       ? "SELECT \"u\".\"id\" FROM \"users\" AS \"u\" WHERE EXISTS ((SELECT \"users\".\"id\" FROM \"public\".\"users\") UNION ALL (SELECT \"u\".\"id\" FROM \"orders\" AS \"o\"))"
-                                       : "SELECT \"u\".\"id\" FROM \"users\" AS \"u\" WHERE EXISTS ((SELECT \"u\".\"id\" FROM \"orders\" AS \"u\") UNION ALL (SELECT \"u\".\"id\" FROM \"orders\" AS \"o\"))");
-        EXPECT_EQ(compile_sql([&] { return main_query.compile(db_driver::postgresql); }), expected);
+        main_query.select(main_query.column("id", "u")).from("users", "u").where(main_query.import_expression(builder.exists(sub), "users", "u"));
+        const std::string expected(qualifier == "users" ? "SELECT \"u\".\"id\" FROM \"users\" AS \"u\" WHERE EXISTS ((SELECT \"users\".\"id\" FROM \"public\".\"users\") UNION ALL (SELECT \"u\".\"id\" FROM \"orders\" AS \"o\"))" : "SELECT \"u\".\"id\" FROM \"users\" AS \"u\" WHERE EXISTS ((SELECT \"u\".\"id\" FROM \"orders\" AS \"u\") UNION ALL (SELECT \"u\".\"id\" FROM \"orders\" AS \"o\"))");
+        EXPECT_EQ(compile_sql([&] {
+            return main_query.compile(db_driver::postgresql);
+        }),
+            expected);
     }
 }
 
@@ -1787,25 +1901,22 @@ TEST(Ruvia, db_query_import_expression_keeps_cte_body_scopes_independent) {
     sub.with("matched", cte).select(sub.column("id", "users")).from("public.users");
     db_query builder;
     db_query main_query;
-    main_query.select(main_query.column("id", "u"))
-        .from("users", "u")
-        .where(main_query.import_expression(builder.exists(sub), "users", "u"));
-    EXPECT_EQ(compile_sql([&] { return main_query.compile(db_driver::postgresql); }),
+    main_query.select(main_query.column("id", "u")).from("users", "u").where(main_query.import_expression(builder.exists(sub), "users", "u"));
+    EXPECT_EQ(compile_sql([&] {
+        return main_query.compile(db_driver::postgresql);
+    }),
         "SELECT \"u\".\"id\" FROM \"users\" AS \"u\" WHERE EXISTS (WITH \"matched\" AS (SELECT \"u\".\"id\" FROM \"orders\" AS \"o\") SELECT \"users\".\"id\" FROM \"public\".\"users\")");
 }
 
 TEST(Ruvia, db_query_import_expression_preserves_schema_qualified_join_bindings) {
     db_query sub;
-    sub.select(sub.column("id", "users"))
-        .from("orders", "o")
-        .join(db_join_type::inner, "public.users",
-            sub.binary(sub.column("user_id", "o"), op_type::equal, sub.column("id", "users")));
+    sub.select(sub.column("id", "users")).from("orders", "o").join(db_join_type::inner, "public.users", sub.binary(sub.column("user_id", "o"), op_type::equal, sub.column("id", "users")));
     db_query builder;
     db_query main_query;
-    main_query.select(main_query.column("id", "u"))
-        .from("users", "u")
-        .where(main_query.import_expression(builder.exists(sub), "users", "u"));
-    EXPECT_EQ(compile_sql([&] { return main_query.compile(db_driver::postgresql); }),
+    main_query.select(main_query.column("id", "u")).from("users", "u").where(main_query.import_expression(builder.exists(sub), "users", "u"));
+    EXPECT_EQ(compile_sql([&] {
+        return main_query.compile(db_driver::postgresql);
+    }),
         "SELECT \"u\".\"id\" FROM \"users\" AS \"u\" WHERE EXISTS (SELECT \"users\".\"id\" FROM \"orders\" AS \"o\" INNER JOIN \"public\".\"users\" ON (\"o\".\"user_id\" = \"users\".\"id\"))");
 }
 
@@ -1838,23 +1949,18 @@ TEST(Ruvia, db_query_import_expression_rewrites_deep_correlated_references) {
     middle.select(middle.column("id", "o")).from("orders", "o").where(middle.exists(inner));
     db_query builder;
     db_query main_query;
-    main_query.select(main_query.column("id", "u"))
-        .from("users", "u")
-        .where(main_query.import_expression(builder.exists(middle), "users", "u"));
-    EXPECT_EQ(compile_sql([&] { return main_query.compile(db_driver::postgresql); }),
+    main_query.select(main_query.column("id", "u")).from("users", "u").where(main_query.import_expression(builder.exists(middle), "users", "u"));
+    EXPECT_EQ(compile_sql([&] {
+        return main_query.compile(db_driver::postgresql);
+    }),
         "SELECT \"u\".\"id\" FROM \"users\" AS \"u\" WHERE EXISTS (SELECT \"o\".\"id\" FROM \"orders\" AS \"o\" WHERE EXISTS (SELECT \"u\".\"id\" FROM \"items\" AS \"i\"))");
 }
 
 TEST(Ruvia, db_query_at_time_zone_and_using_join_render_and_validate) {
     db_query query;
     const auto local_ts = query.at_time_zone(query.column("created_at", "e"), "Asia/Shanghai");
-    const auto offset_ts = query.at_time_zone(
-        query.column("created_at", "e"),
-        query.cast(query.value("08:00:00"), db_data_type::interval));
-    query.select({local_ts, offset_ts})
-        .from("events", "e")
-        .join(db_join_type::left, "hourly_totals", {}, "h", {"hour"})
-        .group_by({local_ts, offset_ts});
+    const auto offset_ts = query.at_time_zone(query.column("created_at", "e"), query.cast(query.value("08:00:00"), db_data_type::interval));
+    query.select({local_ts, offset_ts}).from("events", "e").join(db_join_type::left, "hourly_totals", {}, "h", {"hour"}).group_by({local_ts, offset_ts});
     const auto statement = query.compile(db_driver::postgresql);
     EXPECT_EQ(statement.sql(),
         "SELECT (\"e\".\"created_at\" AT TIME ZONE $1::text), (\"e\".\"created_at\" AT TIME ZONE CAST($2 AS INTERVAL)) "
@@ -1864,20 +1970,13 @@ TEST(Ruvia, db_query_at_time_zone_and_using_join_render_and_validate) {
 
     const auto literal = query.compile(db_driver::postgresql, db_parameter_mode::literal);
     EXPECT_TRUE(literal.sql().find("(\"e\".\"created_at\" AT TIME ZONE E'Asia/Shanghai')") != std::string_view::npos);
-    EXPECT_TRUE(testing::throws_on([&] { (void)query.compile(db_driver::mariadb); }));
+    EXPECT_TRUE(testing::throws_on([&] {
+        (void)query.compile(db_driver::mariadb);
+    }));
 }
 
-RUVIA_DB_ENTITY(user_entity, "users",
-    db_column<"id", std::string, db_column_options{.data_type_ = db_data_type::uuid, .primary_key_ = true}>,
-    db_column<"department_id", std::string, db_column_options{.data_type_ = db_data_type::uuid, .nullable_ = true}>,
-    db_column<"nickname", std::string, db_column_options{.nullable_ = true}>,
-    db_column<"active", bool>,
-    db_column<"revision", std::int64_t>,
-    db_column<"config", std::string, db_column_options{.data_type_ = db_data_type::jsonb}>,
-    db_column<"updated_at", std::string, db_column_options{.data_type_ = db_data_type::timestamp_tz}>)
-RUVIA_DB_ENTITY(dept_entity, "departments",
-    db_column<"id", std::string, db_column_options{.data_type_ = db_data_type::uuid, .primary_key_ = true}>,
-    db_column<"name", std::string>)
+RUVIA_DB_ENTITY(user_entity, "users", db_column<"id", std::string, db_column_options{.data_type_ = db_data_type::uuid, .primary_key_ = true}>, db_column<"department_id", std::string, db_column_options{.data_type_ = db_data_type::uuid, .nullable_ = true}>, db_column<"nickname", std::string, db_column_options{.nullable_ = true}>, db_column<"active", bool>, db_column<"revision", std::int64_t>, db_column<"config", std::string, db_column_options{.data_type_ = db_data_type::jsonb}>, db_column<"updated_at", std::string, db_column_options{.data_type_ = db_data_type::timestamp_tz}>)
+RUVIA_DB_ENTITY(dept_entity, "departments", db_column<"id", std::string, db_column_options{.data_type_ = db_data_type::uuid, .primary_key_ = true}>, db_column<"name", std::string>)
 
 TEST(Ruvia, db_field_reference_and_predicate_cover_aliases_columns_json_and_owned_assignments) {
     static_assert(user_entity::column_name<"department_id">() == "department_id");
@@ -1887,33 +1986,20 @@ TEST(Ruvia, db_field_reference_and_predicate_cover_aliases_columns_json_and_owne
 
     db_predicate dynamic_where;
     EXPECT_TRUE(dynamic_where.empty());
-    dynamic_where.and_where(user_entity::column<"department_id">("u") == dept_entity::column<"id">("d"))
-        .and_where(user_entity::column<"revision">("u").is_distinct_from(0))
-        .and_where(user_entity::column<"nickname">("u").not_like("tmp%"))
-        .and_where(user_entity::column<"nickname">("u").not_ilike("bot%"))
-        .and_where(user_entity::column<"nickname">("u").regex("^[a-z]+$"))
-        .and_where(user_entity::column<"nickname">("u").iregex("^[a-z0-9]+$"))
-        .and_where(user_entity::column<"revision">("u").not_between(10, 20))
-        .and_where(user_entity::column<"revision">("u").not_in({11, 12}))
-        .and_where(user_entity::column<"active">("u").is_true())
-        .and_where(user_entity::column<"config">("u").json_contains("{\"enabled\":true}"))
-        .and_where(user_entity::column<"config">("u").json_has_key("mode"))
-        .and_where(user_entity::column<"config">("u").json_has_any_key({"a", "b"}))
-        .and_where(user_entity::column<"config">("u").json_has_all_keys({"c", "d"}))
-        .and_where(user_entity::column<"config">("u").json_text_equals("env", "prod"))
-        .and_where(user_entity::column<"config">("u").json_path_text_equals({"limits", "tier"}, "gold"));
+    dynamic_where.and_where(user_entity::column<"department_id">("u") == dept_entity::column<"id">("d")).and_where(user_entity::column<"revision">("u").is_distinct_from(0)).and_where(user_entity::column<"nickname">("u").not_like("tmp%")).and_where(user_entity::column<"nickname">("u").not_ilike("bot%")).and_where(user_entity::column<"nickname">("u").regex("^[a-z]+$")).and_where(user_entity::column<"nickname">("u").iregex("^[a-z0-9]+$")).and_where(user_entity::column<"revision">("u").not_between(10, 20)).and_where(user_entity::column<"revision">("u").not_in({11, 12})).and_where(user_entity::column<"active">("u").is_true()).and_where(user_entity::column<"config">("u").json_contains("{\"enabled\":true}")).and_where(user_entity::column<"config">("u").json_has_key("mode")).and_where(user_entity::column<"config">("u").json_has_any_key({"a", "b"})).and_where(user_entity::column<"config">("u").json_has_all_keys({"c", "d"})).and_where(user_entity::column<"config">("u").json_text_equals("env", "prod")).and_where(user_entity::column<"config">("u").json_path_text_equals({"limits", "tier"}, "gold"));
 
     db_query sub;
     sub.select(sub.column("id")).from("departments");
     dynamic_where.or_where(user_entity::column<"department_id">("u").in(sub) && db_predicate::exists(sub) && db_predicate::not_exists(sub));
 
     db_query query;
-    query.select({
-                     user_entity::column<"id">("u").select().expression(query),
-                     dept_entity::column<"name">("d").as("dept_name").expression(query),
-                     user_entity::column<"nickname">("u").coalesce("anon").expression(query),
-                     user_entity::column<"department_id">("u").coalesce_text("").expression(query),
-                 })
+    query
+        .select({
+            user_entity::column<"id">("u").select().expression(query),
+            dept_entity::column<"name">("d").as("dept_name").expression(query),
+            user_entity::column<"nickname">("u").coalesce("anon").expression(query),
+            user_entity::column<"department_id">("u").coalesce_text("").expression(query),
+        })
         .from("users", "u")
         .where(dynamic_where.expression(query));
     const auto compiled = query.compile(db_driver::postgresql);
@@ -1949,29 +2035,13 @@ TEST(Ruvia, db_field_reference_and_predicate_cover_aliases_columns_json_and_owne
         "\"revision\" = (\"users\".\"revision\" + $4), \"updated_at\" = \"now\"() WHERE \"users\".\"id\"");
 }
 
-RUVIA_DB_ENTITY(alert_entity, "alert_state",
-    db_column<"device_id", std::string, db_column_options{.data_type_ = db_data_type::uuid, .primary_key_ = true}>,
-    db_column<"observed_at_ms", std::int64_t>,
-    db_column<"message_id", std::string, db_column_options{.data_type_ = db_data_type::uuid}>,
-    db_column<"data", std::string, db_column_options{.data_type_ = db_data_type::jsonb}>,
-    db_column<"previous_data", std::string, db_column_options{.data_type_ = db_data_type::jsonb}>,
-    db_column<"tags", std::vector<std::string>>)
+RUVIA_DB_ENTITY(alert_entity, "alert_state", db_column<"device_id", std::string, db_column_options{.data_type_ = db_data_type::uuid, .primary_key_ = true}>, db_column<"observed_at_ms", std::int64_t>, db_column<"message_id", std::string, db_column_options{.data_type_ = db_data_type::uuid}>, db_column<"data", std::string, db_column_options{.data_type_ = db_data_type::jsonb}>, db_column<"previous_data", std::string, db_column_options{.data_type_ = db_data_type::jsonb}>, db_column<"tags", std::vector<std::string>>)
 
 TEST(Ruvia, db_expr_and_db_tuple_compose_without_external_query) {
-    const auto newer_tuple =
-        db_tuple{alert_entity::column<"observed_at_ms">().excluded_expr(), alert_entity::column<"message_id">().excluded_expr()} >
-        db_tuple{alert_entity::column<"observed_at_ms">(), alert_entity::column<"message_id">()};
-    const auto prev_expr = db_expr::case_when(
-        {{newer_tuple, alert_entity::column<"data">()}},
-        alert_entity::column<"previous_data">());
-    const auto json_patched = db_expr::jsonb_set(
-        alert_entity::column<"data">(),
-        {"meta", "updated"},
-        db_expr::jsonb_build_object({db_expr::value("at"), db_expr::now(), db_expr::value("first_tag"), alert_entity::column<"tags">().to_expr()[1]}));
-    const auto filtered_agg = db_expr::jsonb_agg(
-        alert_entity::column<"device_id">().to_expr().cast(db_data_type::text),
-        {alert_entity::column<"observed_at_ms">().to_expr().desc()})
-                                  .filter(alert_entity::column<"observed_at_ms">() > 0);
+    const auto newer_tuple = db_tuple{alert_entity::column<"observed_at_ms">().excluded_expr(), alert_entity::column<"message_id">().excluded_expr()} > db_tuple{alert_entity::column<"observed_at_ms">(), alert_entity::column<"message_id">()};
+    const auto prev_expr = db_expr::case_when({{newer_tuple, alert_entity::column<"data">()}}, alert_entity::column<"previous_data">());
+    const auto json_patched = db_expr::jsonb_set(alert_entity::column<"data">(), {"meta", "updated"}, db_expr::jsonb_build_object({db_expr::value("at"), db_expr::now(), db_expr::value("first_tag"), alert_entity::column<"tags">().to_expr()[1]}));
+    const auto filtered_agg = db_expr::jsonb_agg(alert_entity::column<"device_id">().to_expr().cast(db_data_type::text), {alert_entity::column<"observed_at_ms">().to_expr().desc()}).filter(alert_entity::column<"observed_at_ms">() > 0);
     const db_expr window_partitions[]{alert_entity::column<"device_id">()};
     const db_order_term window_order[]{alert_entity::column<"observed_at_ms">().to_expr().asc()};
     const auto windowed = db_expr::call("lag", {alert_entity::column<"observed_at_ms">()})
@@ -1979,21 +2049,20 @@ TEST(Ruvia, db_expr_and_db_tuple_compose_without_external_query) {
                                   .partition_by_ = window_partitions,
                                   .order_by_ = window_order,
                               });
-    const auto bracket_where =
-        ((alert_entity::column<"observed_at_ms">() > 100) &&
-            ((alert_entity::column<"device_id">() == "a") || (alert_entity::column<"device_id">() == "b"))) &&
+    const auto bracket_where = ((alert_entity::column<"observed_at_ms">() > 100) && ((alert_entity::column<"device_id">() == "a") || (alert_entity::column<"device_id">() == "b"))) &&
         db_tuple{alert_entity::column<"device_id">(), alert_entity::column<"message_id">()}.in({
             db_tuple{db_expr::value("a"), db_expr::value("m1")},
             db_tuple{db_expr::value("b"), db_expr::value("m2")},
         });
 
     db_query query;
-    query.select({
-                     query.alias(prev_expr.expression(query), "prev"),
-                     query.alias(json_patched.expression(query), "patched"),
-                     query.alias(filtered_agg.expression(query), "devices"),
-                     query.alias(windowed.expression(query), "prev_ms"),
-                 })
+    query
+        .select({
+            query.alias(prev_expr.expression(query), "prev"),
+            query.alias(json_patched.expression(query), "patched"),
+            query.alias(filtered_agg.expression(query), "devices"),
+            query.alias(windowed.expression(query), "prev_ms"),
+        })
         .from("alert_state")
         .where(bracket_where.expression(query));
     const auto compiled = query.compile(db_driver::postgresql);
@@ -2020,23 +2089,22 @@ TEST(Ruvia, db_expr_from_expression_outlives_source_query_and_maps_table_qualifi
         }
 
         db_query target;
-        target.select({
-                          owned_expr.expression(target, {}, "u"),
-                          aliased_expr.expression(target, "u", "ignored"),
-                      })
+        target
+            .select({
+                owned_expr.expression(target, {}, "u"),
+                aliased_expr.expression(target, "u", "ignored"),
+            })
             .from("users", "u")
             .where(owned_pred.expression(target, "users", "u"));
         const auto compiled = target.compile(db_driver::postgresql);
-        EXPECT_EQ(compiled.sql(),
-            R"(SELECT "u"."nickname", "u"."nickname" FROM "users" AS "u" WHERE ("u"."nickname" = $1))");
+        EXPECT_EQ(compiled.sql(), R"(SELECT "u"."nickname", "u"."nickname" FROM "users" AS "u" WHERE ("u"."nickname" = $1))");
         EXPECT_EQ(compiled.params().size(), std::size_t{1});
 
         const auto combined = owned_expr.concat("_suffix");
         db_query combined_target;
         combined_target.select(combined.expression(combined_target, {}, "u")).from("users", "u");
         const auto combined_compiled = combined_target.compile(db_driver::postgresql);
-        EXPECT_EQ(combined_compiled.sql(),
-            R"(SELECT ("u"."nickname" || $1) FROM "users" AS "u")");
+        EXPECT_EQ(combined_compiled.sql(), R"(SELECT ("u"."nickname" || $1) FROM "users" AS "u")");
 
         owned_expr = {};
         aliased_expr = {};
@@ -2054,8 +2122,7 @@ TEST(Ruvia, db_query_self_import_and_tuple_empty_in_and_predicate_self_merge) {
         const auto imported = query.import_expression(expression, "src", "dst");
         query.select(imported).from("items", "dst");
         const auto compiled = query.compile(db_driver::postgresql);
-        EXPECT_EQ(
-            compiled.sql(), R"(SELECT ("dst"."id" = "other"."id") FROM "items" AS "dst")");
+        EXPECT_EQ(compiled.sql(), R"(SELECT ("dst"."id" = "other"."id") FROM "items" AS "dst")");
     }
     {
         db_tuple tuple{db_expr::value(1)};
@@ -2077,14 +2144,11 @@ TEST(Ruvia, db_query_self_import_and_tuple_empty_in_and_predicate_self_merge) {
         db_query query;
         query.select(query.value(1)).from("items").where(pred.expression(query));
         const auto compiled = query.compile(db_driver::postgresql);
-        EXPECT_EQ(compiled.sql(),
-            R"(SELECT $1 FROM "items" WHERE ((("id" = $2) AND ("id" = $3)) OR (("id" = $4) AND ("id" = $5))))");
+        EXPECT_EQ(compiled.sql(), R"(SELECT $1 FROM "items" WHERE ((("id" = $2) AND ("id" = $3)) OR (("id" = $4) AND ("id" = $5))))");
     }
 }
 
-RUVIA_DB_PROJECTION(projection_schema_check,
-    db_column<"id", std::int64_t>,
-    db_column<"label", std::string>)
+RUVIA_DB_PROJECTION(projection_schema_check, db_column<"id", std::int64_t>, db_column<"label", std::string>)
 
 TEST(Ruvia, db_query_clear_and_bitwise_and_projection_schema) {
     static_assert(projection_schema_check::column_index<"id">() == 0);
@@ -2093,11 +2157,7 @@ TEST(Ruvia, db_query_clear_and_bitwise_and_projection_schema) {
     static_assert(projection_schema_check::column_name<"label">() == "label");
     const auto bit_expr = ((db_expr::column("flags") & 3) | 4) ^ 1;
     db_query query;
-    query.select(bit_expr.expression(query))
-        .from("items")
-        .where(query.binary(query.column("id"), db_binary_operator::equal, query.value(1)))
-        .group_by({query.column("id")})
-        .having(query.binary(query.column("id"), db_binary_operator::greater, query.value(0)));
+    query.select(bit_expr.expression(query)).from("items").where(query.binary(query.column("id"), db_binary_operator::equal, query.value(1))).group_by({query.column("id")}).having(query.binary(query.column("id"), db_binary_operator::greater, query.value(0)));
     EXPECT_TRUE(query.has_where());
     query.clear_where().clear_having();
     EXPECT_TRUE(!query.has_where());
@@ -2161,12 +2221,16 @@ TEST(Ruvia, db_expr_stored_table_never_rebinds_a_foreign_table_to_the_caller_ali
     for (const auto* expression : {&owned, &borrowed}) {
         db_query users;
         users.select(users.star("u")).from("users", "u").where(expression->expression(users, "users", "u"));
-        EXPECT_EQ(compile_sql([&] { return users.compile(db_driver::postgresql); }),
+        EXPECT_EQ(compile_sql([&] {
+            return users.compile(db_driver::postgresql);
+        }),
             R"(SELECT "u".* FROM "users" AS "u" WHERE ("orders"."tenant_id" = $1))");
         // Without a caller table, the stored table names the source.
         db_query orders;
         orders.select(orders.star("o")).from("orders", "o").where(expression->expression(orders, {}, "o"));
-        EXPECT_EQ(compile_sql([&] { return orders.compile(db_driver::postgresql); }),
+        EXPECT_EQ(compile_sql([&] {
+            return orders.compile(db_driver::postgresql);
+        }),
             R"(SELECT "o".* FROM "orders" AS "o" WHERE ("o"."tenant_id" = $1))");
     }
 }
@@ -2174,24 +2238,38 @@ TEST(Ruvia, db_expr_stored_table_never_rebinds_a_foreign_table_to_the_caller_ali
 TEST(Ruvia, db_query_statement_kind_change_rejects_clauses_that_would_widen_the_target) {
     db_query query;
     query.from("users", "u").where(query.binary(query.column("id", "u"), op_type::equal, query.value(1)));
-    EXPECT_TRUE(testing::throws_on([&] { query.delete_from("users"); }));
-    EXPECT_TRUE(testing::throws_on([&] { query.update("users"); }));
-    EXPECT_TRUE(testing::throws_on([&] { query.insert_into("users"); }));
-    EXPECT_EQ(compile_sql([&] { return query.compile(db_driver::postgresql); }),
+    EXPECT_TRUE(testing::throws_on([&] {
+        query.delete_from("users");
+    }));
+    EXPECT_TRUE(testing::throws_on([&] {
+        query.update("users");
+    }));
+    EXPECT_TRUE(testing::throws_on([&] {
+        query.insert_into("users");
+    }));
+    EXPECT_EQ(compile_sql([&] {
+        return query.compile(db_driver::postgresql);
+    }),
         R"(SELECT * FROM "users" AS "u" WHERE ("u"."id" = $1))");
 
     db_query projected;
     projected.select(projected.value(1));
-    EXPECT_TRUE(testing::throws_on([&] { projected.update("users"); }));
+    EXPECT_TRUE(testing::throws_on([&] {
+        projected.update("users");
+    }));
 
     // WHERE carries over; re-targeting the same kind and the explicit USING
     // spelling stay available.
     db_query filtered;
     filtered.where(filtered.binary(filtered.column("id", "a"), op_type::equal, filtered.value(1))).delete_from("users");
     filtered.delete_from("accounts", "a").delete_using("users", "u");
-    EXPECT_EQ(compile_sql([&] { return filtered.compile(db_driver::postgresql); }),
+    EXPECT_EQ(compile_sql([&] {
+        return filtered.compile(db_driver::postgresql);
+    }),
         R"(DELETE FROM "accounts" AS "a" USING "users" AS "u" WHERE ("a"."id" = $1))");
-    EXPECT_TRUE(testing::throws_on([&] { filtered.update("accounts"); }));
+    EXPECT_TRUE(testing::throws_on([&] {
+        filtered.update("accounts");
+    }));
 }
 
 static_assert(!std::is_constructible_v<db_expr, db_expression, std::string>);
@@ -2209,18 +2287,29 @@ TEST(Ruvia, db_query_raw_sql_keeps_comment_tokens_and_positional_parameters_out)
 
     db_query positional;
     positional.select(positional.sql({"$1 + ", ""}, {positional.value(1)}));
-    EXPECT_TRUE(testing::throws_on([&] { (void)positional.compile(db_driver::postgresql); }));
+    EXPECT_TRUE(testing::throws_on([&] {
+        (void)positional.compile(db_driver::postgresql);
+    }));
     db_query trailing;
     trailing.select(trailing.sql({"", " = $2"}, {trailing.value(1)}));
-    EXPECT_TRUE(testing::throws_on([&] { (void)trailing.compile(db_driver::postgresql); }));
+    EXPECT_TRUE(testing::throws_on([&] {
+        (void)trailing.compile(db_driver::postgresql);
+    }));
     // Literal output (SQL function bodies) and MariaDB do not number `$n`.
-    EXPECT_EQ(compile_sql([&] { return positional.compile(db_driver::postgresql, db_parameter_mode::literal); }),
+    EXPECT_EQ(compile_sql([&] {
+        return positional.compile(db_driver::postgresql, db_parameter_mode::literal);
+    }),
         "SELECT ($1 + 1)");
-    EXPECT_EQ(compile_sql([&] { return positional.compile(db_driver::mariadb); }), "SELECT ($1 + ?)");
+    EXPECT_EQ(compile_sql([&] {
+        return positional.compile(db_driver::mariadb);
+    }),
+        "SELECT ($1 + ?)");
     // A `$` that continues an identifier is not a parameter.
     db_query identifier;
     identifier.select(identifier.sql("price$1")).from("items");
-    EXPECT_EQ(compile_sql([&] { return identifier.compile(db_driver::postgresql); }),
+    EXPECT_EQ(compile_sql([&] {
+        return identifier.compile(db_driver::postgresql);
+    }),
         R"(SELECT (price$1) FROM "items")");
 }
 
@@ -2229,20 +2318,40 @@ TEST(Ruvia, db_query_rejects_dotted_aliases_cte_names_and_lock_targets) {
     db_query body;
     body.select(body.value(1));
     const borrowed_text dotted_tables[]{"u.v"};
-    EXPECT_TRUE(testing::throws_on([&] { query.from("users", "u.v"); }));
-    EXPECT_TRUE(testing::throws_on([&] { query.from(body, "s.t"); }));
-    EXPECT_TRUE(testing::throws_on([&] { query.join(db_join_type::cross, "accounts", {}, "a.b"); }));
-    EXPECT_TRUE(testing::throws_on([&] { query.join(db_join_type::cross, body, {}, "a.b"); }));
-    EXPECT_TRUE(testing::throws_on([&] { query.with("w.x", body); }));
-    EXPECT_TRUE(testing::throws_on([&] { query.lock({.tables_ = dotted_tables}); }));
-    EXPECT_TRUE(testing::throws_on([&] { db_query().update("users", "u.v"); }));
-    EXPECT_TRUE(testing::throws_on([&] { db_query().delete_from("users", "u.v"); }));
-    EXPECT_TRUE(testing::throws_on([&] { db_query().insert_into("users", {}, "u.v"); }));
+    EXPECT_TRUE(testing::throws_on([&] {
+        query.from("users", "u.v");
+    }));
+    EXPECT_TRUE(testing::throws_on([&] {
+        query.from(body, "s.t");
+    }));
+    EXPECT_TRUE(testing::throws_on([&] {
+        query.join(db_join_type::cross, "accounts", {}, "a.b");
+    }));
+    EXPECT_TRUE(testing::throws_on([&] {
+        query.join(db_join_type::cross, body, {}, "a.b");
+    }));
+    EXPECT_TRUE(testing::throws_on([&] {
+        query.with("w.x", body);
+    }));
+    EXPECT_TRUE(testing::throws_on([&] {
+        query.lock({.tables_ = dotted_tables});
+    }));
+    EXPECT_TRUE(testing::throws_on([&] {
+        db_query().update("users", "u.v");
+    }));
+    EXPECT_TRUE(testing::throws_on([&] {
+        db_query().delete_from("users", "u.v");
+    }));
+    EXPECT_TRUE(testing::throws_on([&] {
+        db_query().insert_into("users", {}, "u.v");
+    }));
 
     // Schema-qualified tables keep working with single-identifier aliases.
     const borrowed_text lock_tables[]{"u"};
     query.from("app.users", "u").lock({.tables_ = lock_tables});
-    EXPECT_EQ(compile_sql([&] { return query.compile(db_driver::postgresql); }),
+    EXPECT_EQ(compile_sql([&] {
+        return query.compile(db_driver::postgresql);
+    }),
         R"(SELECT * FROM "app"."users" AS "u" FOR UPDATE OF "u")");
 }
 
@@ -2265,7 +2374,9 @@ TEST(Ruvia, db_query_and_or_chains_are_one_nesting_level) {
     EXPECT_TRUE(owned_statement.sql().ends_with(R"( AND ("id" <> $300)))"));
 
     built.select(built.star()).from("items");
-    EXPECT_EQ(compile_sql([&] { return built.clone().compile(db_driver::postgresql); }),
+    EXPECT_EQ(compile_sql([&] {
+        return built.clone().compile(db_driver::postgresql);
+    }),
         std::string(owned_statement.sql()));
 
     // Importing with a qualifier mapping walks the chain inside a correlated subquery too.
@@ -2273,7 +2384,9 @@ TEST(Ruvia, db_query_and_or_chains_are_one_nesting_level) {
     const auto exists = source.exists(correlated);
     db_query target;
     target.select(target.star()).from("items", "dst").where(target.import_expression(exists, "src", "dst"));
-    const auto target_sql = compile_sql([&] { return target.compile(db_driver::postgresql); });
+    const auto target_sql = compile_sql([&] {
+        return target.compile(db_driver::postgresql);
+    });
     EXPECT_TRUE(target_sql.find(R"(WHERE EXISTS (SELECT $1 FROM "events" AS "e" WHERE (("dst"."owner" <> $2) AND ("dst"."owner" <> $3) AND )") != std::string::npos);
     EXPECT_TRUE(target_sql.find(R"("src")") == std::string::npos);
 }
@@ -2287,15 +2400,24 @@ TEST(Ruvia, db_query_rvalue_composition_matches_copying_and_consumes_the_argumen
     db_query copied;
     const auto copied_source = make_source();
     copied.select(copied.star()).from(copied_source, "s").where(copied.exists(copied_source));
-    const auto expected = compile_sql([&] { return copied.compile(db_driver::postgresql); });
+    const auto expected = compile_sql([&] {
+        return copied.compile(db_driver::postgresql);
+    });
 
     db_query moved;
     auto adopted = make_source();
     auto foreign = make_source();
     moved.select(moved.star()).from(std::move(adopted), "s").where(moved.exists(std::move(foreign)));
-    EXPECT_EQ(compile_sql([&] { return moved.compile(db_driver::postgresql); }), expected);
-    EXPECT_TRUE(testing::throws_on([&] { (void)adopted.compile(db_driver::postgresql); }));
-    EXPECT_TRUE(testing::throws_on([&] { (void)foreign.compile(db_driver::postgresql); }));
+    EXPECT_EQ(compile_sql([&] {
+        return moved.compile(db_driver::postgresql);
+    }),
+        expected);
+    EXPECT_TRUE(testing::throws_on([&] {
+        (void)adopted.compile(db_driver::postgresql);
+    }));
+    EXPECT_TRUE(testing::throws_on([&] {
+        (void)foreign.compile(db_driver::postgresql);
+    }));
 }
 
 enum class query_composition { scalar,
@@ -2347,9 +2469,7 @@ std::optional<db_expression> compose_query(db_query& target, query_type&& source
 }
 
 TEST(Ruvia, db_query_rvalue_and_self_composition_preserve_snapshots) {
-    for (const auto operation : {query_composition::scalar, query_composition::exists,
-             query_composition::source, query_composition::join, query_composition::insert,
-             query_composition::cte, query_composition::combine}) {
+    for (const auto operation : {query_composition::scalar, query_composition::exists, query_composition::source, query_composition::join, query_composition::insert, query_composition::cte, query_composition::combine}) {
         SCOPED_TRACE(static_cast<int>(operation));
         auto target = composition_target(operation);
         db_query source;
@@ -2370,9 +2490,7 @@ TEST(Ruvia, db_query_rvalue_and_self_composition_preserve_snapshots) {
         }),
             expected_sql);
     }
-    for (const auto operation : {query_composition::scalar, query_composition::exists,
-             query_composition::source, query_composition::join,
-             query_composition::cte, query_composition::combine}) {
+    for (const auto operation : {query_composition::scalar, query_composition::exists, query_composition::source, query_composition::join, query_composition::cte, query_composition::combine}) {
         SCOPED_TRACE(static_cast<int>(operation));
         auto query = composition_target(operation);
         auto expected = query.clone();
@@ -2438,8 +2556,7 @@ TEST(Ruvia, db_query_limit_and_offset_above_int64_max_throw_on_postgresql_and_co
     db_query both;
     both.from("device").limit(above_int64_max).offset(uint64_max);
     const auto maria_literal = both.compile(db_driver::mariadb, db_parameter_mode::literal);
-    EXPECT_EQ(maria_literal.sql(),
-        "SELECT * FROM `device` LIMIT 9223372036854775808 OFFSET 18446744073709551615");
+    EXPECT_EQ(maria_literal.sql(), "SELECT * FROM `device` LIMIT 9223372036854775808 OFFSET 18446744073709551615");
     EXPECT_EQ(maria_literal.sql().find('-'), std::string_view::npos);
 }
 

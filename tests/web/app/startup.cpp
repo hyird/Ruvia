@@ -57,8 +57,8 @@ struct startup_state final {
 };
 
 struct worker_state final {
-    explicit worker_state(std::shared_ptr<startup_state> owner_value)
-        : state_(std::move(owner_value)) {
+    explicit worker_state(std::shared_ptr<startup_state> owner_value) :
+        state_(std::move(owner_value)) {
         state_->live_workers_.fetch_add(1);
     }
     ~worker_state() {
@@ -112,10 +112,10 @@ public:
 // Startup hooks may block independently of application::stop().
 class startup_run final {
 public:
-    explicit startup_run(ruvia::application& app, startup_state& state_value)
-        : app_(app),
-          state_(state_value),
-          run_(app) {}
+    explicit startup_run(ruvia::application& app, startup_state& state_value) :
+        app_(app),
+        state_(state_value),
+        run_(app) {}
 
     ~startup_run() {
         if (!joined_) {
@@ -156,8 +156,7 @@ std::string read_response(asio::ip::tcp::socket& socket) {
         asio::error_code error;
         const auto size = socket.read_some(asio::buffer(buffer), error);
         response.append(buffer.data(), size);
-        if (response.find("initialized") != std::string::npos ||
-            (error && error != asio::error::would_block && error != asio::error::try_again)) {
+        if (response.find("initialized") != std::string::npos || (error && error != asio::error::would_block && error != asio::error::try_again)) {
             break;
         }
         std::this_thread::sleep_for(1ms);
@@ -165,18 +164,15 @@ std::string read_response(asio::ip::tcp::socket& socket) {
     return response;
 }
 
-bool forwarded_connection_matches(asio::io_context& io, const asio::ip::tcp::endpoint& endpoint,
-    std::string_view forwarding, std::string_view expected) {
+bool forwarded_connection_matches(asio::io_context& io, const asio::ip::tcp::endpoint& endpoint, std::string_view forwarding, std::string_view expected) {
     asio::ip::tcp::socket socket(io);
     socket.connect(endpoint);
-    const std::string request = "GET /connection HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n" +
-                                std::string(forwarding) + "\r\n";
+    const std::string request = "GET /connection HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n" + std::string(forwarding) + "\r\n";
     asio::write(socket, asio::buffer(request));
     socket.non_blocking(true);
     const auto response = read_response(socket);
     const auto body_start = response.find("\r\n\r\n");
-    return response.starts_with("HTTP/1.1 200 ") && body_start != std::string::npos &&
-           std::string_view(response).substr(body_start + 4) == expected;
+    return response.starts_with("HTTP/1.1 200 ") && body_start != std::string::npos && std::string_view(response).substr(body_start + 4) == expected;
 }
 
 // The listener's ticket keys are shared by every worker, so each resumption
@@ -245,14 +241,12 @@ bool tls_close_sends_close_notify(asio::io_context& io, const asio::ip::tcp::end
     }
     asio::error_code end;
     const auto response = read_to_end(stream, end);
-    return response.starts_with("HTTP/1.1 404 ") && end == asio::error::eof &&
-           (SSL_get_shutdown(stream.native_handle()) & SSL_RECEIVED_SHUTDOWN) != 0;
+    return response.starts_with("HTTP/1.1 404 ") && end == asio::error::eof && (SSL_get_shutdown(stream.native_handle()) & SSL_RECEIVED_SHUTDOWN) != 0;
 }
 
 [[nodiscard]] std::size_t count_occurrences(std::string_view text, std::string_view marker) {
     std::size_t count = 0;
-    for (auto position = text.find(marker); position != std::string_view::npos;
-        position = text.find(marker, position + marker.size())) {
+    for (auto position = text.find(marker); position != std::string_view::npos; position = text.find(marker, position + marker.size())) {
         ++count;
     }
     return count;
@@ -262,8 +256,7 @@ bool tls_close_sends_close_notify(asio::io_context& io, const asio::ip::tcp::end
 // heads larger than that wait's first read arrive in one TLS record, so most
 // of their plaintext is already decrypted inside the engine; both are still
 // answered, and so is a request sent after the connection went idle.
-bool tls_keep_alive_serves_decrypted_and_later_requests(
-    asio::io_context& io, const asio::ip::tcp::endpoint& endpoint) {
+bool tls_keep_alive_serves_decrypted_and_later_requests(asio::io_context& io, const asio::ip::tcp::endpoint& endpoint) {
     asio::ssl::context client(asio::ssl::context::tls_client);
     client.set_verify_mode(asio::ssl::verify_none);
     asio::ssl::stream<asio::ip::tcp::socket> stream(io, client);
@@ -313,14 +306,12 @@ bool rejected_expect_upload_closes_without_body(asio::io_context& io, const asio
     }
     asio::error_code end;
     const auto response = read_to_end(socket, end);
-    return response.starts_with("HTTP/1.1 413 ") && response.find("\r\n\r\n") != std::string::npos &&
-           response.find("HTTP/1.1 100 ") == std::string::npos && end == asio::error::eof;
+    return response.starts_with("HTTP/1.1 413 ") && response.find("\r\n\r\n") != std::string::npos && response.find("HTTP/1.1 100 ") == std::string::npos && end == asio::error::eof;
 }
 
 // A TLS peer that drops TCP without close_notify ends the server websocket
 // read side exactly like an orderly close instead of failing the read.
-bool tls_websocket_truncation_ends_read(
-    asio::io_context& io, const asio::ip::tcp::endpoint& endpoint, const startup_state& state_value) {
+bool tls_websocket_truncation_ends_read(asio::io_context& io, const asio::ip::tcp::endpoint& endpoint, const startup_state& state_value) {
     asio::ssl::context client(asio::ssl::context::tls_client);
     client.set_verify_mode(asio::ssl::verify_none);
     asio::ssl::stream<asio::ip::tcp::socket> stream(io, client);
@@ -357,12 +348,10 @@ bool tls_websocket_truncation_ends_read(
     }
     stream.next_layer().shutdown(asio::ip::tcp::socket::shutdown_send, error);
     const auto deadline_value = std::chrono::steady_clock::now() + 3s;
-    while (!state_value.websocket_end_.load() && !state_value.websocket_failed_.load() &&
-           std::chrono::steady_clock::now() < deadline_value) {
+    while (!state_value.websocket_end_.load() && !state_value.websocket_failed_.load() && std::chrono::steady_clock::now() < deadline_value) {
         std::this_thread::sleep_for(1ms);
     }
-    return state_value.websocket_message_.load() && state_value.websocket_end_.load() &&
-           !state_value.websocket_failed_.load();
+    return state_value.websocket_message_.load() && state_value.websocket_end_.load() && !state_value.websocket_failed_.load();
 }
 
 }  // namespace startup_test
@@ -397,8 +386,7 @@ TEST(Ruvia, app_trusted_proxy_config_accepts_ipv6_prefix_lengths) {
 // brackets, padding, partial IPv4 or invalid IPv6 zones.
 TEST(Ruvia, app_trusted_proxy_config_accepts_only_strict_ip_literals) {
     auto& app = ruvia::app();
-    for (const std::string_view literal : {"192.0.2.1", "0.0.0.0", "255.255.255.255",
-             "2001:0db8:1234:5678:90ab:cdef:1234:5678", "fe80::1%12", "::ffff:192.0.2.1"}) {
+    for (const std::string_view literal : {"192.0.2.1", "0.0.0.0", "255.255.255.255", "2001:0db8:1234:5678:90ab:cdef:1234:5678", "fe80::1%12", "::ffff:192.0.2.1"}) {
         bool accepted = true;
         try {
             app.trusted_proxies({.cidrs_ = {std::string(literal)}});
@@ -407,18 +395,7 @@ TEST(Ruvia, app_trusted_proxy_config_accepts_only_strict_ip_literals) {
         }
         EXPECT_TRUE(accepted);
     }
-    for (const std::string_view literal : {std::string_view{}, std::string_view("not an address"),
-             std::string_view("192.0.2.1\0suffix", 16), std::string_view("192.0.2.1suffix"),
-             std::string_view("192.0.2.1:80"), std::string_view("[::1]:80"), std::string_view("[::1]"),
-             std::string_view("192.0.2"), std::string_view("01.2.3.4"), std::string_view("192.0.2.256"),
-             std::string_view("192.0.2.1."), std::string_view(".192.0.2.1"), std::string_view("192.0.2.1%1"),
-             std::string_view("fe80::1%"), std::string_view("fe80::1%1%2"), std::string_view("::1 "),
-             std::string_view("1"), std::string_view("::ffff:01.2.3.4"), std::string_view("::ffff:192.0.2"),
-             std::string_view("fe80::1%12:80"), std::string_view("fe80::1%12 "), std::string_view("fe80::1%1]:80"),
-             std::string_view("fe80::1%0"), std::string_view("fe80::1%01"), std::string_view("fe80::1%-1"),
-             std::string_view("fe80::1%+1"), std::string_view("fe80::1%12abc"), std::string_view("fe80::1%4294967296"),
-             std::string_view("fe80::1%99999999999999999999"),
-             std::string_view("fe80::1%nonexistent_ruvia_zone_id")}) {
+    for (const std::string_view literal : {std::string_view{}, std::string_view("not an address"), std::string_view("192.0.2.1\0suffix", 16), std::string_view("192.0.2.1suffix"), std::string_view("192.0.2.1:80"), std::string_view("[::1]:80"), std::string_view("[::1]"), std::string_view("192.0.2"), std::string_view("01.2.3.4"), std::string_view("192.0.2.256"), std::string_view("192.0.2.1."), std::string_view(".192.0.2.1"), std::string_view("192.0.2.1%1"), std::string_view("fe80::1%"), std::string_view("fe80::1%1%2"), std::string_view("::1 "), std::string_view("1"), std::string_view("::ffff:01.2.3.4"), std::string_view("::ffff:192.0.2"), std::string_view("fe80::1%12:80"), std::string_view("fe80::1%12 "), std::string_view("fe80::1%1]:80"), std::string_view("fe80::1%0"), std::string_view("fe80::1%01"), std::string_view("fe80::1%-1"), std::string_view("fe80::1%+1"), std::string_view("fe80::1%12abc"), std::string_view("fe80::1%4294967296"), std::string_view("fe80::1%99999999999999999999"), std::string_view("fe80::1%nonexistent_ruvia_zone_id")}) {
         bool rejected = false;
         try {
             app.trusted_proxies({.cidrs_ = {std::string(literal)}});
@@ -437,18 +414,14 @@ TEST(Ruvia, app_startup_barrier_orders_hooks_and_rolls_back) {
     const auto private_key = identity.private_key_file();
     auto state_value = std::make_shared<startup_state>();
     auto& app = ruvia::app();
-    app.server({.worker_count_ = 2, .worker_queue_capacity_ = 16, .max_connections_per_worker_ = 4})
-        .trusted_proxies({.cidrs_ = {"::ffff:127.0.0.0/104"}, .trust_x_forwarded_proto_ = true})
-        .blocking_pool(nullptr)
-        .use_worker_state<worker_state>([state_value] {
-            if (state_value->outcome_ == startup_outcome::stop_during_worker_startup &&
-                !state_value->worker_startup_blocked_.exchange(true)) {
-                // Hold one worker inside startup while the lifecycle caller waits for it.
-                state_value->hook_entered_.release();
-                state_value->release_hook_.acquire();
-            }
-            return state_value;
-        });
+    app.server({.worker_count_ = 2, .worker_queue_capacity_ = 16, .max_connections_per_worker_ = 4}).trusted_proxies({.cidrs_ = {"::ffff:127.0.0.0/104"}, .trust_x_forwarded_proto_ = true}).blocking_pool(nullptr).use_worker_state<worker_state>([state_value] {
+        if (state_value->outcome_ == startup_outcome::stop_during_worker_startup && !state_value->worker_startup_blocked_.exchange(true)) {
+            // Hold one worker inside startup while the lifecycle caller waits for it.
+            state_value->hook_entered_.release();
+            state_value->release_hook_.acquire();
+        }
+        return state_value;
+    });
 
     // Separate configurations cannot claim one endpoint; sharing HTTP and
     // HTTPS is explicit within a single listen_config.
@@ -471,8 +444,7 @@ TEST(Ruvia, app_startup_barrier_orders_hooks_and_rolls_back) {
         // The server intentionally uses SO_REUSEADDR on Windows. Only an
         // exclusive external listener makes this conflict deterministic.
         const BOOL exclusive = TRUE;
-        if (::setsockopt(occupied.native_handle(), SOL_SOCKET, SO_EXCLUSIVEADDRUSE,
-                reinterpret_cast<const char*>(&exclusive), sizeof(exclusive)) != 0) {
+        if (::setsockopt(occupied.native_handle(), SOL_SOCKET, SO_EXCLUSIVEADDRUSE, reinterpret_cast<const char*>(&exclusive), sizeof(exclusive)) != 0) {
             throw std::system_error(::WSAGetLastError(), asio::system_category());
         }
 #endif
@@ -481,10 +453,7 @@ TEST(Ruvia, app_startup_barrier_orders_hooks_and_rolls_back) {
         ruvia::test::tcp_port_reservation reservation(io);
         const auto available_endpoint = reservation.endpoint();
         const auto occupied_port = occupied.local_endpoint().port();
-        app.listen({.address_ = "127.0.0.1",
-            .http_ = occupy_http ? occupied_port : available_endpoint.port(),
-            .https_ = occupy_http ? available_endpoint.port() : occupied_port,
-            .tls_ = {.identity_ = {.certificate_chain_file_ = identity.ca_file_, .private_key_file_ = private_key}}});
+        app.listen({.address_ = "127.0.0.1", .http_ = occupy_http ? occupied_port : available_endpoint.port(), .https_ = occupy_http ? available_endpoint.port() : occupied_port, .tls_ = {.identity_ = {.certificate_chain_file_ = identity.ca_file_, .private_key_file_ = private_key}}});
         auto failed_run = std::async(std::launch::async, [&app] {
             try {
                 app.run();
@@ -524,8 +493,7 @@ TEST(Ruvia, app_startup_barrier_orders_hooks_and_rolls_back) {
             };
             auto result_value = std::make_shared<job_result>();
             const auto posted = worker.post([state_value, result_value](ruvia::web_worker_context& context_value) -> ruvia::task<void> {
-                result_value->valid_ = context_value.worker().is_current() &&
-                                       context_value.worker_state<worker_state>().state_ == state_value;
+                result_value->valid_ = context_value.worker().is_current() && context_value.worker_state<worker_state>().state_ == state_value;
                 result_value->completed_.release();
                 co_return;
             });
@@ -568,8 +536,7 @@ TEST(Ruvia, app_startup_barrier_orders_hooks_and_rolls_back) {
         state_value->stop_thread_ = std::this_thread::get_id();
     });
 
-    for (const auto outcome : {startup_outcome::fail, startup_outcome::stop_during_worker_startup,
-             startup_outcome::stop_in_hook, startup_outcome::stop_from_caller, startup_outcome::serve}) {
+    for (const auto outcome : {startup_outcome::fail, startup_outcome::stop_during_worker_startup, startup_outcome::stop_in_hook, startup_outcome::stop_from_caller, startup_outcome::serve}) {
         state_value->outcome_ = outcome;
         state_value->initialized_.store(false);
         state_value->startup_job_cancelled_.store(false);
@@ -641,34 +608,21 @@ TEST(Ruvia, app_startup_barrier_orders_hooks_and_rolls_back) {
             // (RFC 9112 §9.6); the peer's close then releases server capacity.
             socket.close();
             const auto close_deadline = std::chrono::steady_clock::now() + 1s;
-            while (app.stats().active_connections_ != 0 &&
-                   std::chrono::steady_clock::now() < close_deadline) {
+            while (app.stats().active_connections_ != 0 && std::chrono::steady_clock::now() < close_deadline) {
                 std::this_thread::sleep_for(1ms);
             }
             EXPECT_EQ(app.stats().active_connections_, std::size_t{0});
             EXPECT_TRUE(forwarded_connection_matches(io, endpoint, "", "127.0.0.1:direct:http"));
-            EXPECT_TRUE(forwarded_connection_matches(io, endpoint,
-                "X-Forwarded-For: 198.51.100.7, 127.3.4.5\r\nX-Forwarded-Proto: https, http\r\n",
-                "198.51.100.7:proxy:https"));
-            EXPECT_TRUE(forwarded_connection_matches(io, endpoint,
-                "X-Forwarded-For: 192.0.2.1, 128.3.4.5\r\nX-Forwarded-Proto: https, http\r\n",
-                "128.3.4.5:proxy:http"));
+            EXPECT_TRUE(forwarded_connection_matches(io, endpoint, "X-Forwarded-For: 198.51.100.7, 127.3.4.5\r\nX-Forwarded-Proto: https, http\r\n", "198.51.100.7:proxy:https"));
+            EXPECT_TRUE(forwarded_connection_matches(io, endpoint, "X-Forwarded-For: 192.0.2.1, 128.3.4.5\r\nX-Forwarded-Proto: https, http\r\n", "128.3.4.5:proxy:http"));
             // RFC 7239: the rightmost untrusted element is the client hop even
             // when it names no address; a client-written `for` left of it is
             // never believed, and the trusted hop's proto still applies.
-            EXPECT_TRUE(forwarded_connection_matches(io, endpoint,
-                "Forwarded: for=203.0.113.9\r\nForwarded: proto=https\r\n", "127.0.0.1:proxy:https"));
-            EXPECT_TRUE(forwarded_connection_matches(io, endpoint,
-                "Forwarded: for=203.0.113.9, for=unknown;proto=https\r\n", "127.0.0.1:proxy:https"));
-            EXPECT_TRUE(forwarded_connection_matches(io, endpoint,
-                "Forwarded: for=203.0.113.9;proto=http, for=_hidden;proto=https, for=127.0.0.2\r\n",
-                "127.0.0.2:proxy:https"));
-            EXPECT_TRUE(forwarded_connection_matches(io, endpoint,
-                "Forwarded: for=192.0.2.1;proto=https, for=\"[2001:db8::1]:4711\";proto=http, for=127.0.0.2\r\n",
-                "2001:db8::1:proxy:http"));
-            EXPECT_TRUE(forwarded_connection_matches(io, endpoint,
-                "X-Forwarded-For: 198.51.100.7, unknown, 127.3.4.5\r\nX-Forwarded-Proto: http, https, http\r\n",
-                "127.3.4.5:proxy:https"));
+            EXPECT_TRUE(forwarded_connection_matches(io, endpoint, "Forwarded: for=203.0.113.9\r\nForwarded: proto=https\r\n", "127.0.0.1:proxy:https"));
+            EXPECT_TRUE(forwarded_connection_matches(io, endpoint, "Forwarded: for=203.0.113.9, for=unknown;proto=https\r\n", "127.0.0.1:proxy:https"));
+            EXPECT_TRUE(forwarded_connection_matches(io, endpoint, "Forwarded: for=203.0.113.9;proto=http, for=_hidden;proto=https, for=127.0.0.2\r\n", "127.0.0.2:proxy:https"));
+            EXPECT_TRUE(forwarded_connection_matches(io, endpoint, "Forwarded: for=192.0.2.1;proto=https, for=\"[2001:db8::1]:4711\";proto=http, for=127.0.0.2\r\n", "2001:db8::1:proxy:http"));
+            EXPECT_TRUE(forwarded_connection_matches(io, endpoint, "X-Forwarded-For: 198.51.100.7, unknown, 127.3.4.5\r\nX-Forwarded-Proto: http, https, http\r\n", "127.3.4.5:proxy:https"));
             // Optional client-certificate verification must not turn session
             // resumption into a fatal handshake error, and every resumption
             // succeeds whichever of the two workers accepts it.
@@ -714,7 +668,9 @@ TEST(Ruvia, app_startup_barrier_orders_hooks_and_rolls_back) {
         const auto endpoint = reservation.endpoint();
         app.listen({.address_ = "127.0.0.1", .http_ = endpoint.port()});
         app.stop();
-        auto latched = std::async(std::launch::async, [&app] { app.run(); });
+        auto latched = std::async(std::launch::async, [&app] {
+            app.run();
+        });
         const bool returned = latched.wait_for(3s) == std::future_status::ready;
         EXPECT_TRUE(returned);
         if (!returned) {

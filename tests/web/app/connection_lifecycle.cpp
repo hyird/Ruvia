@@ -42,9 +42,7 @@ namespace connection_lifecycle_test {
 using namespace std::chrono_literals;
 
 template <typename value_type>
-concept endpoint_address_borrowable = requires(value_type&& value) {
-    std::forward<value_type>(value).address();
-};
+concept endpoint_address_borrowable = requires(value_type&& value) { std::forward<value_type>(value).address(); };
 template <typename value_type>
 concept connection_endpoints_borrowable = requires(value_type&& value) {
     std::forward<value_type>(value).local();
@@ -61,8 +59,12 @@ struct loops final {
     ruvia::event_loop_attachment first_attachment_{ruvia::attach_event_loop(first_, {.blocking_pool_ = &pool_})};
     ruvia::event_loop_attachment second_attachment_{ruvia::attach_event_loop(second_, {.blocking_pool_ = &pool_})};
     std::array<ruvia::event_loop, 2> handles_{first_attachment_.loop(), second_attachment_.loop()};
-    std::jthread first_thread_{[this] { first_attachment_.run(); }};
-    std::jthread second_thread_{[this] { second_attachment_.run(); }};
+    std::jthread first_thread_{[this] {
+        first_attachment_.run();
+    }};
+    std::jthread second_thread_{[this] {
+        second_attachment_.run();
+    }};
     ~loops() {
         first_attachment_.stop();
         second_attachment_.stop();
@@ -76,8 +78,7 @@ ruvia::listen_config raw(std::uint16_t port) {
     return {.address_ = "127.0.0.1", .http_ = port, .dispatch_ = ruvia::listener_dispatch::connection};
 }
 
-ruvia::listen_config secure(std::string address, std::uint16_t tcp,
-    const ruvia::test::tls_identity& identity, std::uint16_t udp = 0) {
+ruvia::listen_config secure(ruvia::borrowed_text address, std::uint16_t tcp, const ruvia::test::tls_identity& identity, std::uint16_t udp = 0) {
     ruvia::listen_config result{.address_ = address, .https_ = tcp, .tls_ = {.identity_ = {.certificate_chain_file_ = identity.ca_file_, .private_key_file_ = identity.private_key_file()}}, .dispatch_ = ruvia::listener_dispatch::request_stream};
 #if defined(RUVIA_ENABLE_HTTP3)
     if (udp != 0) {
@@ -106,8 +107,8 @@ bool closed(asio::ip::tcp::socket& socket) {
 
 struct payload final {
     std::atomic<unsigned>& destroyed_;
-    explicit payload(std::atomic<unsigned>& destroyed)
-        : destroyed_(destroyed) {}
+    explicit payload(std::atomic<unsigned>& destroyed) :
+        destroyed_(destroyed) {}
     ~payload() {
         ++destroyed_;
     }
@@ -123,20 +124,32 @@ TEST(Ruvia, connection_admission_rejects_before_tcp_tls_or_quic_handshake) {
     ruvia::test::tcp_port_reservation plain(io), tls(io);
     const ruvia::test::tls_identity identity("localhost", "DNS:localhost,IP:127.0.0.1");
     std::atomic<unsigned> admissions{}, quic_admissions{}, opens{}, closes{}, hellos{}, handlers{};
-    ruvia::http_server_group server(runtime.handles_, [&](const ruvia::worker_ref&) { return ruvia::http_server_callbacks{.request_stream_ = [&](ruvia::request_stream&) -> ruvia::task<void> { ++handlers; co_return; },
-                                                                                          .connection_ = [&](ruvia::server_connection&) -> ruvia::task<void> { ++handlers; co_return; },
-                                                                                          .tls_client_hello_ = [&](const ruvia::tls_client_hello_record&) noexcept { ++hellos; },
-                                                                                          .connection_admission_ = [&](const ruvia::connection_event& event) noexcept {
+    ruvia::http_server_group server(runtime.handles_, [&](const ruvia::worker_ref&) {
+        return ruvia::http_server_callbacks{.request_stream_ = [&](ruvia::request_stream&) -> ruvia::task<void> {
+            ++handlers;
+            co_return;
+        }, .connection_ = [&](ruvia::server_connection&) -> ruvia::task<void> {
+            ++handlers;
+            co_return;
+        }, .tls_client_hello_ = [&](const ruvia::tls_client_hello_record&) noexcept {
+            ++hellos;
+        }, .connection_admission_ = [&](const ruvia::connection_event& event) noexcept {
             EXPECT_NE(event.connection_id(), 0u);
             EXPECT_EQ(event.local().address(), *ruvia::ip_address::parse("127.0.0.1"));
             EXPECT_EQ(event.remote().address(), *ruvia::ip_address::parse("127.0.0.1"));
             EXPECT_NE(event.remote().port(), 0);
             ++admissions;
-            if (event.quic()){ ++quic_admissions;
-}
-            return false; },
-                                                                                          .connection_open_ = [&](const ruvia::connection_event&) -> std::shared_ptr<void> { ++opens; return {}; },
-                                                                                          .connection_close_ = [&](const ruvia::connection_event&, const std::shared_ptr<void>&, const ruvia::connection_close_info&) noexcept { ++closes; }}; });
+            if (event.quic()) {
+                ++quic_admissions;
+            }
+            return false;
+        }, .connection_open_ = [&](const ruvia::connection_event&) -> std::shared_ptr<void> {
+            ++opens;
+            return {};
+        }, .connection_close_ = [&](const ruvia::connection_event&, const std::shared_ptr<void>&, const ruvia::connection_close_info&) noexcept {
+            ++closes;
+        }};
+    });
     server.listen(raw(plain.endpoint().port()));
     std::uint16_t udp_port{};
 #if defined(RUVIA_ENABLE_HTTP3)
@@ -156,9 +169,7 @@ TEST(Ruvia, connection_admission_rejects_before_tcp_tls_or_quic_handshake) {
     encrypted.handshake(asio::ssl::stream_base::client, handshake_error);
     EXPECT_TRUE(handshake_error);
 #if defined(RUVIA_ENABLE_HTTP3)
-    EXPECT_THROW((ruvia::test::http3_test_client({asio::ip::address_v4::loopback(), udp_port},
-                     identity.ca_file_, "localhost", 300ms)),
-        std::runtime_error);
+    EXPECT_THROW((ruvia::test::http3_test_client({asio::ip::address_v4::loopback(), udp_port}, identity.ca_file_, "localhost", 300ms)), std::runtime_error);
     EXPECT_GT(quic_admissions.load(), 0u);
 #endif
     runtime.handles_[0].start(server.shutdown(runtime.handles_[0].worker())).get();
@@ -179,31 +190,33 @@ TEST(Ruvia, connection_registry_closes_adopted_and_accepted_ids_and_retains_owne
     std::counting_semaphore<> entered{0}, ended{0};
     std::shared_ptr<void> retained;
     std::atomic<bool> throw_open{};
-    ruvia::http_server_group server(runtime.handles_, [&](const ruvia::worker_ref&) { return ruvia::http_server_callbacks{.connection_ = [&](ruvia::server_connection& connection) -> ruvia::task<void> {
-                                                                                                                              EXPECT_EQ(connection.local().address().to_string(), "127.0.0.1");
-                                                                                                                              EXPECT_NE(connection.local().port(), 0);
-                                                                                                                              EXPECT_NE(connection.connection_state(), nullptr);
-                                                                                                                              retained = connection.connection_state();
-                                                                                                                              active_id = connection.connection_id();
-                                                                                                                              entered.release();
-                                                                                                                              try {
-                                                                                                                                  (void)co_await connection.read();
-                                                                                                                              } catch (const std::system_error&) {
-                                                                                                                              }
-                                                                                                                          },
-                                                                                          .connection_failure_ = [&](const ruvia::connection_failure_record&) noexcept { ++failures; },
-                                                                                          .connection_open_ = [&](const ruvia::connection_event&) -> std::shared_ptr<void> {
-                                                                                              ++open_count;
-                                                                                              if (throw_open.load()) {
-                                                                                                  throw std::runtime_error("open factory failed");
-                                                                                              }
-                                                                                              return std::make_shared<payload>(destroyed);
-                                                                                          },
-                                                                                          .connection_close_ = [&](const ruvia::connection_event& event, const std::shared_ptr<void>& state, const ruvia::connection_close_info&) noexcept {
+    ruvia::http_server_group server(runtime.handles_, [&](const ruvia::worker_ref&) {
+        return ruvia::http_server_callbacks{.connection_ = [&](ruvia::server_connection& connection) -> ruvia::task<void> {
+            EXPECT_EQ(connection.local().address().to_string(), "127.0.0.1");
+            EXPECT_NE(connection.local().port(), 0);
+            EXPECT_NE(connection.connection_state(), nullptr);
+            retained = connection.connection_state();
+            active_id = connection.connection_id();
+            entered.release();
+            try {
+                (void)co_await connection.read();
+            } catch (const std::system_error&) {
+            }
+        }, .connection_failure_ = [&](const ruvia::connection_failure_record&) noexcept {
+            ++failures;
+        }, .connection_open_ = [&](const ruvia::connection_event&) -> std::shared_ptr<void> {
+            ++open_count;
+            if (throw_open.load()) {
+                throw std::runtime_error("open factory failed");
+            }
+            return std::make_shared<payload>(destroyed);
+        }, .connection_close_ = [&](const ruvia::connection_event& event, const std::shared_ptr<void>& state, const ruvia::connection_close_info&) noexcept {
             EXPECT_NE(event.connection_id(), 0u);
             EXPECT_EQ(state == nullptr, throw_open.load());
             ++close_count;
-            ended.release(); }}; });
+            ended.release();
+        }};
+    });
     server.listen(raw(listening.endpoint().port()));
     runtime.handles_[0].start(server.add_connection_service(runtime.handles_[0].worker(), raw(adoptor.local_endpoint().port()))).get();
     runtime.handles_[0].start(server.start(runtime.handles_[0].worker())).get();
@@ -248,28 +261,33 @@ TEST(Ruvia, single_owner_connection_close_event_can_reenter_retired_id_control) 
     std::binary_semaphore opened{0}, ended{0};
     ruvia::http_server* owner{};
     ruvia::http_server server(runtime.handles_[0], {.connection_ = [&](ruvia::server_connection& connection) -> ruvia::task<void> {
-                                                        EXPECT_NE(connection.connection_state(), nullptr);
-                                                        opened.release();
-                                                        try {
-                                                            (void)co_await connection.read();
-                                                        } catch (const std::system_error&) {
-                                                        }
-                                                    },
-                                                       .connection_open_ = [&](const ruvia::connection_event& event) -> std::shared_ptr<void> {
-                                                           id = event.connection_id();
-                                                           return std::make_shared<int>(42);
-                                                       },
-                                                       .connection_close_ = [&](const ruvia::connection_event& event, const std::shared_ptr<void>& state, const ruvia::connection_close_info&) noexcept {
-            EXPECT_FALSE(owner->close_connection(event.connection_id()));
-            EXPECT_EQ(*std::static_pointer_cast<int>(state), 42);
-            ended.release(); }});
+        EXPECT_NE(connection.connection_state(), nullptr);
+        opened.release();
+        try {
+            (void)co_await connection.read();
+        } catch (const std::system_error&) {
+        }
+    }, .connection_open_ = [&](const ruvia::connection_event& event) -> std::shared_ptr<void> {
+        id = event.connection_id();
+        return std::make_shared<int>(42);
+    }, .connection_close_ = [&](const ruvia::connection_event& event, const std::shared_ptr<void>& state, const ruvia::connection_close_info&) noexcept {
+        EXPECT_FALSE(owner->close_connection(event.connection_id()));
+        EXPECT_EQ(*std::static_pointer_cast<int>(state), 42);
+        ended.release();
+    }});
     owner = &server;
-    const auto start = [&]() -> ruvia::task<void> { server.listen(raw(port.endpoint().port())); co_await server.start(); };
+    const auto start = [&]() -> ruvia::task<void> {
+        server.listen(raw(port.endpoint().port()));
+        co_await server.start();
+    };
     runtime.handles_[0].start(start()).get();
     asio::ip::tcp::socket peer(io);
     peer.connect(port.endpoint());
     ASSERT_TRUE(opened.try_acquire_for(5s));
-    const auto close = [&]() -> ruvia::task<void> { EXPECT_TRUE(server.close_connection(id.load())); co_return; };
+    const auto close = [&]() -> ruvia::task<void> {
+        EXPECT_TRUE(server.close_connection(id.load()));
+        co_return;
+    };
     runtime.handles_[0].start(close()).get();
     EXPECT_TRUE(closed(peer));
     ASSERT_TRUE(ended.try_acquire_for(5s));
@@ -292,22 +310,27 @@ TEST(Ruvia, quic_wildcard_connections_report_destination_and_reply_from_that_add
         const auto tcp_port = tcp_picker.local_endpoint().port();
         tcp_picker.close();
         std::atomic<unsigned> admitted{}, opened{}, closed_count{};
-        ruvia::http_server_group server(runtime.handles_, [&](const ruvia::worker_ref&) { return ruvia::http_server_callbacks{.request_stream_ = [&](ruvia::request_stream& stream) -> ruvia::task<void> {
-                                                                                                                                  EXPECT_EQ(stream.conn().local().port(), udp_port);
-                                                                                                                                  EXPECT_EQ(*std::static_pointer_cast<int>(stream.connection_state()), 7);
-                                                                                                                                  if (co_await stream.response().commit() == ruvia::stream_commit_result::body) {
-                                                                                                                                      co_await stream.response().write(stream.conn().local().address().to_string());
-                                                                                                                                      co_await stream.response().end();
-                                                                                                                                  }
-                                                                                                                              },
-                                                                                              .connection_admission_ = [&](const ruvia::connection_event& event) noexcept {
+        ruvia::http_server_group server(runtime.handles_, [&](const ruvia::worker_ref&) {
+            return ruvia::http_server_callbacks{.request_stream_ = [&](ruvia::request_stream& stream) -> ruvia::task<void> {
+                EXPECT_EQ(stream.conn().local().port(), udp_port);
+                EXPECT_EQ(*std::static_pointer_cast<int>(stream.connection_state()), 7);
+                if (co_await stream.response().commit() == ruvia::stream_commit_result::body) {
+                    co_await stream.response().write(stream.conn().local().address().to_string());
+                    co_await stream.response().end();
+                }
+            }, .connection_admission_ = [&](const ruvia::connection_event& event) noexcept {
                 EXPECT_TRUE(event.quic());
                 EXPECT_FALSE(event.local().address() == ruvia::ip_address{});
                 EXPECT_EQ(event.local().port(), udp_port);
                 ++admitted;
-                return true; },
-                                                                                              .connection_open_ = [&](const ruvia::connection_event&) -> std::shared_ptr<void> { ++opened; return std::make_shared<int>(7); },
-                                                                                              .connection_close_ = [&](const ruvia::connection_event&, const std::shared_ptr<void>&, const ruvia::connection_close_info&) noexcept { ++closed_count; }}; });
+                return true;
+            }, .connection_open_ = [&](const ruvia::connection_event&) -> std::shared_ptr<void> {
+                ++opened;
+                return std::make_shared<int>(7);
+            }, .connection_close_ = [&](const ruvia::connection_event&, const std::shared_ptr<void>&, const ruvia::connection_close_info&) noexcept {
+                ++closed_count;
+            }};
+        });
         server.listen(secure(v6 ? "::" : "0.0.0.0", tcp_port, identity, udp_port));
         runtime.handles_[0].start(server.start(runtime.handles_[0].worker())).get();
         const std::vector<std::string> destinations = v6 ? std::vector<std::string>{"::1"} : std::vector<std::string>{"127.0.0.1", "127.0.0.2"};
@@ -337,14 +360,19 @@ TEST(Ruvia, accepted_tls_handshake_failure_and_shutdown_each_close_once) {
     const ruvia::test::tls_identity identity("localhost", "DNS:localhost");
     std::atomic<unsigned> opens{}, closes{};
     std::counting_semaphore<> opened{0}, ended{0};
-    ruvia::http_server_group server(runtime.handles_, [&](const ruvia::worker_ref&) { return ruvia::http_server_callbacks{.request_stream_ = [](ruvia::request_stream&) -> ruvia::task<void> { co_return; },
-                                                                                          .connection_open_ = [&](const ruvia::connection_event&) -> std::shared_ptr<void> {
-                                                                                              ++opens;
-                                                                                              opened.release();
-                                                                                              return {};
-                                                                                          },
-                                                                                          .connection_close_ = [&](const ruvia::connection_event&, const std::shared_ptr<void>& state, const ruvia::connection_close_info&) noexcept {
-            EXPECT_EQ(state, nullptr); ++closes; ended.release(); }}; });
+    ruvia::http_server_group server(runtime.handles_, [&](const ruvia::worker_ref&) {
+        return ruvia::http_server_callbacks{.request_stream_ = [](ruvia::request_stream&) -> ruvia::task<void> {
+            co_return;
+        }, .connection_open_ = [&](const ruvia::connection_event&) -> std::shared_ptr<void> {
+            ++opens;
+            opened.release();
+            return {};
+        }, .connection_close_ = [&](const ruvia::connection_event&, const std::shared_ptr<void>& state, const ruvia::connection_close_info&) noexcept {
+            EXPECT_EQ(state, nullptr);
+            ++closes;
+            ended.release();
+        }};
+    });
     server.listen(secure("127.0.0.1", port.endpoint().port(), identity));
     runtime.handles_[0].start(server.start(runtime.handles_[0].worker())).get();
     asio::ip::tcp::socket malformed(io);
@@ -371,22 +399,28 @@ TEST(Ruvia, request_stream_abort_connection_wakes_every_http2_body_reader) {
     ruvia::test::tcp_port_reservation port(io);
     std::counting_semaphore<> entered{0}, left{0};
     std::atomic<unsigned> opens{}, closes{}, failures{};
-    ruvia::http_server_group server(runtime.handles_, [&](const ruvia::worker_ref&) { return ruvia::http_server_callbacks{.request_stream_ = [&](ruvia::request_stream& stream) -> ruvia::task<void> {
-                                                                                                                              EXPECT_EQ(stream.conn().local().port(), port.endpoint().port());
-                                                                                                                              if (stream.request().path() == "/abort") {
-                                                                                                                                  stream.abort_connection();
-                                                                                                                                  co_return;
-                                                                                                                              }
-                                                                                                                              entered.release();
-                                                                                                                              try {
-                                                                                                                                  (void)co_await stream.body().text();
-                                                                                                                              } catch (const std::system_error&) {
-                                                                                                                              }
-                                                                                                                              left.release();
-                                                                                                                          },
-                                                                                          .connection_failure_ = [&](const ruvia::connection_failure_record&) noexcept { ++failures; },
-                                                                                          .connection_open_ = [&](const ruvia::connection_event&) -> std::shared_ptr<void> { ++opens; return {}; },
-                                                                                          .connection_close_ = [&](const ruvia::connection_event&, const std::shared_ptr<void>&, const ruvia::connection_close_info&) noexcept { ++closes; }}; });
+    ruvia::http_server_group server(runtime.handles_, [&](const ruvia::worker_ref&) {
+        return ruvia::http_server_callbacks{.request_stream_ = [&](ruvia::request_stream& stream) -> ruvia::task<void> {
+            EXPECT_EQ(stream.conn().local().port(), port.endpoint().port());
+            if (stream.request().path() == "/abort") {
+                stream.abort_connection();
+                co_return;
+            }
+            entered.release();
+            try {
+                (void)co_await stream.body().text();
+            } catch (const std::system_error&) {
+            }
+            left.release();
+        }, .connection_failure_ = [&](const ruvia::connection_failure_record&) noexcept {
+            ++failures;
+        }, .connection_open_ = [&](const ruvia::connection_event&) -> std::shared_ptr<void> {
+            ++opens;
+            return {};
+        }, .connection_close_ = [&](const ruvia::connection_event&, const std::shared_ptr<void>&, const ruvia::connection_close_info&) noexcept {
+            ++closes;
+        }};
+    });
     server.listen({.address_ = "127.0.0.1", .http_ = port.endpoint().port(), .dispatch_ = ruvia::listener_dispatch::request_stream});
     runtime.handles_[0].start(server.start(runtime.handles_[0].worker())).get();
     asio::ip::tcp::socket peer(io);
@@ -424,22 +458,28 @@ TEST(Ruvia, request_stream_abort_connection_wakes_every_http3_body_reader) {
     const ruvia::test::tls_identity identity("localhost", "DNS:localhost");
     std::counting_semaphore<> entered{0}, left{0};
     std::atomic<unsigned> opens{}, closes{}, failures{};
-    ruvia::http_server_group server(runtime.handles_, [&](const ruvia::worker_ref&) { return ruvia::http_server_callbacks{.request_stream_ = [&](ruvia::request_stream& stream) -> ruvia::task<void> {
-                                                                                                                              EXPECT_EQ(stream.conn().local().port(), udp_port);
-                                                                                                                              if (stream.request().path() == "/abort") {
-                                                                                                                                  stream.abort_connection();
-                                                                                                                                  co_return;
-                                                                                                                              }
-                                                                                                                              entered.release();
-                                                                                                                              try {
-                                                                                                                                  (void)co_await stream.body().text();
-                                                                                                                              } catch (const std::system_error&) {
-                                                                                                                              }
-                                                                                                                              left.release();
-                                                                                                                          },
-                                                                                          .connection_failure_ = [&](const ruvia::connection_failure_record&) noexcept { ++failures; },
-                                                                                          .connection_open_ = [&](const ruvia::connection_event&) -> std::shared_ptr<void> { ++opens; return {}; },
-                                                                                          .connection_close_ = [&](const ruvia::connection_event&, const std::shared_ptr<void>&, const ruvia::connection_close_info&) noexcept { ++closes; }}; });
+    ruvia::http_server_group server(runtime.handles_, [&](const ruvia::worker_ref&) {
+        return ruvia::http_server_callbacks{.request_stream_ = [&](ruvia::request_stream& stream) -> ruvia::task<void> {
+            EXPECT_EQ(stream.conn().local().port(), udp_port);
+            if (stream.request().path() == "/abort") {
+                stream.abort_connection();
+                co_return;
+            }
+            entered.release();
+            try {
+                (void)co_await stream.body().text();
+            } catch (const std::system_error&) {
+            }
+            left.release();
+        }, .connection_failure_ = [&](const ruvia::connection_failure_record&) noexcept {
+            ++failures;
+        }, .connection_open_ = [&](const ruvia::connection_event&) -> std::shared_ptr<void> {
+            ++opens;
+            return {};
+        }, .connection_close_ = [&](const ruvia::connection_event&, const std::shared_ptr<void>&, const ruvia::connection_close_info&) noexcept {
+            ++closes;
+        }};
+    });
     server.listen(secure("127.0.0.1", tcp.endpoint().port(), identity, udp_port));
     runtime.handles_[0].start(server.start(runtime.handles_[0].worker())).get();
     ruvia::test::http3_test_client client({asio::ip::address_v4::loopback(), udp_port}, identity.ca_file_, "localhost", 5s);
@@ -452,10 +492,11 @@ TEST(Ruvia, request_stream_abort_connection_wakes_every_http3_body_reader) {
             ++active;
         }
         return active == 2;
-    },
-        5s));
+    }, 5s));
     (void)client.start_request("GET", "/abort");
-    EXPECT_TRUE(client.wait_until([&] { return client.closed(); }, 5s));
+    EXPECT_TRUE(client.wait_until([&] {
+        return client.closed();
+    }, 5s));
     EXPECT_TRUE(left.try_acquire_for(5s));
     EXPECT_TRUE(left.try_acquire_for(5s));
     runtime.handles_[0].start(server.shutdown(runtime.handles_[0].worker())).get();
@@ -475,8 +516,7 @@ public:
     RUVIA_ROUTES_END
     ruvia::task<ruvia::http_response> info(ruvia::context& context) {
         const auto state = std::static_pointer_cast<int>(context.connection_state());
-        co_return context.text(std::string(context.conn().local().address().to_string()) + ":" +
-                               std::to_string(context.conn().local().port()) + ":" + std::to_string(state ? *state : 0));
+        co_return context.text(std::string(context.conn().local().address().to_string()) + ":" + std::to_string(context.conn().local().port()) + ":" + std::to_string(state ? *state : 0));
     }
     ruvia::task<ruvia::http_response> virtual_request(ruvia::context& context) {
         const auto response = co_await context.dispatch({.method_ = "GET", .target_ = "/lifecycle/info"});
@@ -501,19 +541,23 @@ TEST(Ruvia, application_hooks_connection_id_control_context_abort_and_virtual_lo
     app.server({.worker_count_ = 2})
         .listen({.address_ = "127.0.0.1", .http_ = port.endpoint().port()})
         .on_start(nullptr)
-        .on_start([&] { ready.release(); })
-        .on_connection_admission([&](const ruvia::connection_event&) noexcept { ++admissions; return true; })
+        .on_start([&] {
+        ready.release();
+    })
+        .on_connection_admission([&](const ruvia::connection_event&) noexcept {
+        ++admissions;
+        return true;
+    })
         .on_connection_open([&](const ruvia::connection_event& event) -> std::shared_ptr<void> {
-            id = event.connection_id();
-            ++opens;
-            opened.release();
-            return std::make_shared<int>(19);
-        })
-        .on_connection_close([&](const ruvia::connection_event&, const std::shared_ptr<void>& state, const ruvia::connection_close_info&) noexcept {
-            EXPECT_EQ(*std::static_pointer_cast<int>(state), 19);
-            ++closes;
-            ended.release();
-        });
+        id = event.connection_id();
+        ++opens;
+        opened.release();
+        return std::make_shared<int>(19);
+    }).on_connection_close([&](const ruvia::connection_event&, const std::shared_ptr<void>& state, const ruvia::connection_close_info&) noexcept {
+        EXPECT_EQ(*std::static_pointer_cast<int>(state), 19);
+        ++closes;
+        ended.release();
+    });
     ruvia::test::app_run runner(app);
     ASSERT_TRUE(ready.try_acquire_for(10s));
     asio::ip::tcp::socket pending(io);
@@ -557,21 +601,24 @@ TEST(Ruvia, request_stream_abort_connection_prevents_pipelining_and_preserves_ca
         asio::io_context io;
         ruvia::test::tcp_port_reservation port(io);
         std::atomic<unsigned> dispatched{}, closes{}, failures{};
-        ruvia::http_server_group server(runtime.handles_, [&](const ruvia::worker_ref&) { return ruvia::http_server_callbacks{.request_stream_ = [&](ruvia::request_stream& stream) -> ruvia::task<void> {
-                                                                                                                                  ++dispatched;
-                                                                                                                                  EXPECT_EQ(stream.connection_state(), nullptr);
-                                                                                                                                  EXPECT_EQ(stream.conn().local().address().to_string(), "127.0.0.1");
-                                                                                                                                  EXPECT_EQ(stream.conn().local().port(), port.endpoint().port());
-                                                                                                                                  stream.abort_connection();
-                                                                                                                                  if (fail) {
-                                                                                                                                      throw std::runtime_error("callback failed after abort");
-                                                                                                                                  }
-                                                                                                                                  co_return;
-                                                                                                                              },
-                                                                                              .connection_failure_ = [&](const ruvia::connection_failure_record&) noexcept { ++failures; },
-                                                                                              .connection_close_ = [&](const ruvia::connection_event&, const std::shared_ptr<void>& state, const ruvia::connection_close_info&) noexcept {
-            EXPECT_EQ(state, nullptr);
-            ++closes; }}; });
+        ruvia::http_server_group server(runtime.handles_, [&](const ruvia::worker_ref&) {
+            return ruvia::http_server_callbacks{.request_stream_ = [&](ruvia::request_stream& stream) -> ruvia::task<void> {
+                ++dispatched;
+                EXPECT_EQ(stream.connection_state(), nullptr);
+                EXPECT_EQ(stream.conn().local().address().to_string(), "127.0.0.1");
+                EXPECT_EQ(stream.conn().local().port(), port.endpoint().port());
+                stream.abort_connection();
+                if (fail) {
+                    throw std::runtime_error("callback failed after abort");
+                }
+                co_return;
+            }, .connection_failure_ = [&](const ruvia::connection_failure_record&) noexcept {
+                ++failures;
+            }, .connection_close_ = [&](const ruvia::connection_event&, const std::shared_ptr<void>& state, const ruvia::connection_close_info&) noexcept {
+                EXPECT_EQ(state, nullptr);
+                ++closes;
+            }};
+        });
         server.listen({.address_ = "127.0.0.1", .http_ = port.endpoint().port(), .dispatch_ = ruvia::listener_dispatch::request_stream});
         runtime.handles_[0].start(server.start(runtime.handles_[0].worker())).get();
         asio::ip::tcp::socket peer(io);
@@ -594,23 +641,22 @@ TEST(Ruvia, group_cold_shutdown_joins_connection_callbacks_after_facade_destruct
     ruvia::test::tcp_port_reservation port(io);
     std::binary_semaphore entered{0};
     std::atomic<unsigned> opens{}, closes{}, destroyed{};
-    auto server = std::make_unique<ruvia::http_server_group>(runtime.handles_,
-        [&](const ruvia::worker_ref&) { return ruvia::http_server_callbacks{
-                                            .connection_ = [&](ruvia::server_connection& connection) -> ruvia::task<void> {
-                                                EXPECT_NE(connection.connection_state(), nullptr);
-                                                entered.release();
-                                                try {
-                                                    (void)co_await connection.read();
-                                                } catch (const std::system_error&) {
-                                                }
-                                            },
-                                            .connection_open_ = [&](const ruvia::connection_event&) -> std::shared_ptr<void> {
-                                                ++opens;
-                                                return std::make_shared<payload>(destroyed);
-                                            },
-                                            .connection_close_ = [&](const ruvia::connection_event&, const std::shared_ptr<void>& state, const ruvia::connection_close_info&) noexcept {
-                EXPECT_NE(state, nullptr);
-                ++closes; }}; });
+    auto server = std::make_unique<ruvia::http_server_group>(runtime.handles_, [&](const ruvia::worker_ref&) {
+        return ruvia::http_server_callbacks{.connection_ = [&](ruvia::server_connection& connection) -> ruvia::task<void> {
+            EXPECT_NE(connection.connection_state(), nullptr);
+            entered.release();
+            try {
+                (void)co_await connection.read();
+            } catch (const std::system_error&) {
+            }
+        }, .connection_open_ = [&](const ruvia::connection_event&) -> std::shared_ptr<void> {
+            ++opens;
+            return std::make_shared<payload>(destroyed);
+        }, .connection_close_ = [&](const ruvia::connection_event&, const std::shared_ptr<void>& state, const ruvia::connection_close_info&) noexcept {
+            EXPECT_NE(state, nullptr);
+            ++closes;
+        }};
+    });
     server->listen(raw(port.endpoint().port()));
     runtime.handles_[0].start(server->start(runtime.handles_[0].worker())).get();
     asio::ip::tcp::socket peer(io);

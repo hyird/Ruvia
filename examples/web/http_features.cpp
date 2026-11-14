@@ -45,9 +45,7 @@ private:
         co_await c.inform(ruvia::http_interim_response_head(ruvia::http_status::early_hints, hints));
         c.draft().priority({.urgency_ = 2, .incremental_ = true});
         const auto protocol = c.req().protocol_version();
-        if ((protocol == ruvia::http_protocol_version::http2 ||
-                protocol == ruvia::http_protocol_version::http3) &&
-            connection.tls()) {
+        if ((protocol == ruvia::http_protocol_version::http2 || protocol == ruvia::http_protocol_version::http3) && connection.tls()) {
             // Advertisements never change the client's trusted origin.
             const std::array<std::string_view, 1> origins{"https://localhost:8444"};
             c.advertise_origins(origins);
@@ -142,11 +140,7 @@ int main() {
                 .private_key_file_ = std::filesystem::path(*key),
             };
         }
-        app.server({.worker_count_ = 2,
-                       .process_signal_handlers_ = ruvia::process_signal_handler_policy::install,
-                       .compression_ = ruvia::compression_config{.min_bytes_ = 16}})
-            .listen(std::move(listener_value))
-            .run();
+        app.server({.worker_count_ = 2, .process_signal_handlers_ = ruvia::process_signal_handler_policy::install, .compression_ = ruvia::compression_config{.min_bytes_ = 16}}).listen(std::move(listener_value)).run();
     } catch (...) {
         std::cerr << ruvia::exception_text(std::current_exception()) << '\n';
         return 1;

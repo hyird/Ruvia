@@ -26,10 +26,7 @@
 #include "ruvia/core/worker_ref.h"
 
 #ifdef _WIN32
-#include <array>
 #include <charconv>
-#include <limits>
-
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif
@@ -49,18 +46,18 @@
 namespace ruvia {
 
 struct task_scope::node_type {
-    node_type(task_scope& owner_value, task<void> child_value)
-        : scope_(owner_value),
-          task_(std::move(child_value)) {}
+    node_type(task_scope& owner_value, task<void> child_value) :
+        scope_(owner_value),
+        task_(std::move(child_value)) {}
 
     task_scope& scope_;
     task<void> task_;
 };
 
 struct task_scope::retiring_guard final {
-    explicit retiring_guard(task_scope& scope) noexcept
-        : scope_(&scope),
-          previous_(scope.retiring_) {
+    explicit retiring_guard(task_scope& scope) noexcept :
+        scope_(&scope),
+        previous_(scope.retiring_) {
         scope.retiring_ = this;
     }
 
@@ -75,10 +72,8 @@ struct task_scope::retiring_guard final {
     bool destroyed_{false};
 };
 
-task_scope::task_scope(const worker_ref& worker_value)
-    : worker_(worker_value.valid()
-                  ? worker_value
-                  : throw std::invalid_argument("task scope requires a valid worker")) {}
+task_scope::task_scope(const worker_ref& worker_value) :
+    worker_(worker_value.valid() ? worker_value : throw std::invalid_argument("task scope requires a valid worker")) {}
 
 task_scope::~task_scope() {
     if (active_ != 0 || std::holds_alternative<task_scope_joining_type>(lifecycle_)) {
@@ -99,8 +94,7 @@ void task_scope::spawn(task<void> task_value) & {
         throw std::logic_error("task scope spawn must run on its bound worker");
     }
     const auto join_started = [this] {
-        return std::holds_alternative<task_scope_joining_type>(lifecycle_) ||
-               std::holds_alternative<task_scope_joined_type>(lifecycle_);
+        return std::holds_alternative<task_scope_joining_type>(lifecycle_) || std::holds_alternative<task_scope_joined_type>(lifecycle_);
     };
     if (join_started()) {
         throw std::logic_error("cannot spawn a task after task scope join started");
@@ -157,8 +151,8 @@ task_scope::join_operation task_scope::join() & {
 
 // Only a cold operation may move; a started one has handed its continuation
 // to the scope.
-task_scope::join_operation::join_operation(join_operation&& other) noexcept
-    : scope_(std::exchange(other.scope_, nullptr)) {
+task_scope::join_operation::join_operation(join_operation&& other) noexcept :
+    scope_(std::exchange(other.scope_, nullptr)) {
     if (other.started_) {
         std::terminate();
     }
@@ -171,8 +165,7 @@ bool task_scope::join_operation::await_ready() {
     if (!scope_->worker_.is_current()) {
         throw std::logic_error("task scope join must run on its bound worker");
     }
-    if (std::holds_alternative<task_scope_joining_type>(scope_->lifecycle_) ||
-        std::holds_alternative<task_scope_joined_type>(scope_->lifecycle_)) {
+    if (std::holds_alternative<task_scope_joining_type>(scope_->lifecycle_) || std::holds_alternative<task_scope_joined_type>(scope_->lifecycle_)) {
         throw std::logic_error("task scope can only be joined once");
     }
     started_ = true;
@@ -210,8 +203,9 @@ void task_scope::resume_join_if_idle() noexcept {
 
 void task_scope::child_complete(void* raw) noexcept {
     auto* node_value = static_cast<node_type*>(raw);
-    detail::worker_ref_access::defer_or_terminate(
-        node_value->scope_.worker_, [node_value] { node_value->scope_.finish(node_value); });
+    detail::worker_ref_access::defer_or_terminate(node_value->scope_.worker_, [node_value] {
+        node_value->scope_.finish(node_value);
+    });
 }
 
 void task_scope::finish(node_type* node_value) noexcept {
@@ -301,8 +295,7 @@ bool stop_state::link(stop_callback_node& node, std::atomic<stop_registration_ph
     }
     node.linked_ = true;
     auto expected = stop_registration_phase::registering;
-    if (!phase.compare_exchange_strong(expected, stop_registration_phase::registered,
-            std::memory_order_acq_rel, std::memory_order_acquire)) {
+    if (!phase.compare_exchange_strong(expected, stop_registration_phase::registered, std::memory_order_acq_rel, std::memory_order_acquire)) {
         node.linked_ = false;
         if (expected != stop_registration_phase::reset_pending) {
             std::terminate();
@@ -356,8 +349,8 @@ void stop_state::unlink(stop_callback_node& node) noexcept {
 // Request deadlines create a source per request on every worker. The mimalloc
 // resource has no shared pooling layer and outlives every observer, including
 // tokens retired after the allocating worker has exited.
-stop_source::stop_source()
-    : state_(detail::stop_state::create()) {}
+stop_source::stop_source() :
+    state_(detail::stop_state::create()) {}
 
 namespace {
 
@@ -389,8 +382,8 @@ namespace {
 
 }  // namespace
 
-stop_group::stop_group(std::span<const stop_token> parents)
-    : extra_parents_(extra_parent_count(parents)) {
+stop_group::stop_group(std::span<const stop_token> parents) :
+    extra_parents_(extra_parent_count(parents)) {
     // Capture the state, never this: downstream callbacks may destroy the
     // group, including the parent registration currently invoking us.
     const auto register_parent = [this](const stop_token& parent, stop_registration& registration) {
@@ -459,8 +452,7 @@ struct operation_scope::drain_guard final {
         auto* scope = registration_.scope_;
         // Keep the drain registered while capability callbacks run: a join
         // started by one of them must not publish retirement prematurely.
-        if (scope->head_ == &registration_ && registration_.next_ == nullptr &&
-            scope->join_continuation_ == nullptr) {
+        if (scope->head_ == &registration_ && registration_.next_ == nullptr && scope->join_continuation_ == nullptr) {
             scope->expire_capabilities();
         }
         registration_.phase_ = detail::scoped_operation_registration::phase::expired;
@@ -473,8 +465,8 @@ struct operation_scope::drain_guard final {
 };
 
 struct operation_scope::join_awaiter final {
-    explicit join_awaiter(operation_scope& scope) noexcept
-        : owner_(scope) {}
+    explicit join_awaiter(operation_scope& scope) noexcept :
+        owner_(scope) {}
 
     [[nodiscard]] bool await_ready() const noexcept {
         return owner_.head_ == nullptr;
@@ -498,9 +490,7 @@ void operation_scope::close() noexcept {
         return;
     }
     for (auto* operation = head_; operation != nullptr; operation = operation->next_) {
-        if (operation->phase_ == detail::scoped_operation_registration::phase::running ||
-            operation->phase_ == detail::scoped_operation_registration::phase::completing ||
-            (active_ && operation->phase_ == detail::scoped_operation_registration::phase::retiring)) {
+        if (operation->phase_ == detail::scoped_operation_registration::phase::running || operation->phase_ == detail::scoped_operation_registration::phase::completing || (active_ && operation->phase_ == detail::scoped_operation_registration::phase::retiring)) {
             std::terminate();
         }
     }
@@ -580,34 +570,31 @@ void operation_scope::check_worker() const noexcept {
     }
 }
 
-scoped_capability_registration::scoped_capability_registration(
-    operation_scope& scope, void* target, void (*cleanup)(void*) noexcept) noexcept
-    : target_(target),
-      cleanup_(cleanup),
-      active_(scope.active()) {
+scoped_capability_registration::scoped_capability_registration(operation_scope& scope, void* target, void (*cleanup)(void*) noexcept) noexcept :
+    target_(target),
+    cleanup_(cleanup),
+    active_(scope.active()) {
     if (active_) {
         link(scope);
     }
 }
 
-scoped_capability_registration::scoped_capability_registration(
-    const scoped_capability_registration& other, void* target) noexcept
-    : target_(target),
-      cleanup_(other.cleanup_),
-      active_(other.active_) {
+scoped_capability_registration::scoped_capability_registration(const scoped_capability_registration& other, void* target) noexcept :
+    target_(target),
+    cleanup_(other.cleanup_),
+    active_(other.active_) {
     if (active_ && other.scope_ != nullptr) {
         link(*other.scope_);
     }
 }
 
-scoped_capability_registration::scoped_capability_registration(
-    scoped_capability_registration&& other, void* target) noexcept
-    : scope_(other.scope_),
-      previous_(other.previous_),
-      next_(other.next_),
-      target_(target),
-      cleanup_(other.cleanup_),
-      active_(other.active_) {
+scoped_capability_registration::scoped_capability_registration(scoped_capability_registration&& other, void* target) noexcept :
+    scope_(other.scope_),
+    previous_(other.previous_),
+    next_(other.next_),
+    target_(target),
+    cleanup_(other.cleanup_),
+    active_(other.active_) {
     if (scope_ != nullptr) {
         if (previous_ != nullptr) {
             previous_->next_ = this;
@@ -641,8 +628,7 @@ operation_scope& scoped_capability_registration::scope() const {
     return *scope_;
 }
 
-void scoped_capability_registration::bind(
-    operation_scope& scope, void* target, void (*cleanup)(void*) noexcept) noexcept {
+void scoped_capability_registration::bind(operation_scope& scope, void* target, void (*cleanup)(void*) noexcept) noexcept {
     if (scope_ != nullptr || active_) {
         std::terminate();
     }
@@ -717,8 +703,7 @@ void operation_scope::unlink(detail::scoped_operation_registration& operation) n
 
 namespace detail {
 
-scoped_operation_registration::scoped_operation_registration(
-    scoped_operation_registration&& other, void* new_frame_target) noexcept {
+scoped_operation_registration::scoped_operation_registration(scoped_operation_registration&& other, void* new_frame_target) noexcept {
     if (other.phase_ == phase::running || other.phase_ == phase::retiring) {
         std::terminate();
     }
@@ -754,8 +739,7 @@ scoped_operation_registration::~scoped_operation_registration() {
     }
 }
 
-void scoped_operation_registration::bind(operation_scope& scope, void* target,
-    void (*retire_cold)(void*) noexcept) noexcept {
+void scoped_operation_registration::bind(operation_scope& scope, void* target, void (*retire_cold)(void*) noexcept) noexcept {
     if (phase_ != phase::unscoped || retire_cold == nullptr || retire_cold_ != nullptr) {
         std::terminate();
     }
@@ -860,9 +844,7 @@ namespace {
 [[nodiscard]] std::string windows_system_message(int value) {
     std::array<wchar_t, 1024> buffer;
     // MAX_WIDTH_MASK folds the message's line breaks into spaces.
-    auto length = ::FormatMessageW(
-        FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS | FORMAT_MESSAGE_MAX_WIDTH_MASK, nullptr,
-        static_cast<DWORD>(value), 0, buffer.data(), static_cast<DWORD>(buffer.size()), nullptr);
+    auto length = ::FormatMessageW(FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS | FORMAT_MESSAGE_MAX_WIDTH_MASK, nullptr, static_cast<DWORD>(value), 0, buffer.data(), static_cast<DWORD>(buffer.size()), nullptr);
     while (length > 0 && is_message_trailing_space(buffer[length - 1])) {
         --length;
     }
@@ -968,8 +950,7 @@ void write_text(std::string_view text) noexcept {
     std::fwrite(text.data(), 1, text.size(), stderr);
 }
 
-void write_line(std::string_view context_value, std::string_view what, std::size_t occurrences,
-    std::size_t suppressed) noexcept {
+void write_line(std::string_view context_value, std::string_view what, std::size_t occurrences, std::size_t suppressed) noexcept {
     char occurrences_text[32] = "";
     if (occurrences > 1) {
         std::snprintf(occurrences_text, sizeof(occurrences_text), " (x%zu)", occurrences);
@@ -1023,8 +1004,7 @@ std::string system_error_text(const std::system_error& error) {
 #endif
     return error.what();
 }
-void report_unhandled_failure(
-    std::string_view context_value, std::exception_ptr exception, std::size_t occurrences) noexcept {
+void report_unhandled_failure(std::string_view context_value, std::exception_ptr exception, std::size_t occurrences) noexcept {
     if (exception == nullptr) {
         return;
     }
@@ -1071,8 +1051,7 @@ bool equivalent_failures(const std::exception_ptr& left, const std::exception_pt
         try {
             std::rethrow_exception(right);
         } catch (const std::exception& right_error) {
-            equivalent = typeid(left_error) == typeid(right_error) &&
-                         std::string_view(left_error.what()) == std::string_view(right_error.what());
+            equivalent = typeid(left_error) == typeid(right_error) && std::string_view(left_error.what()) == std::string_view(right_error.what());
         } catch (...) {
         }
     } catch (...) {

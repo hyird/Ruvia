@@ -47,8 +47,8 @@ public:
 
 class scoped_header_middleware final {
 public:
-    explicit scoped_header_middleware(std::string_view value)
-        : value_(value) {}
+    explicit scoped_header_middleware(std::string_view value) :
+        value_(value) {}
 
     ruvia::task<void> invoke(ruvia::context& c, ruvia::next& next_value) {
         co_await next_value();
@@ -83,8 +83,7 @@ int main() {
         // registration and materialized separately on each worker.
         app.use_at<scoped_header_middleware>({.prefix_ = "/runtime"}, "configured");
 
-        const auto http_port = env_value.get<std::uint16_t>("RUVIA_HTTP_PORT")
-                                   .value_or(env_value.get<std::uint16_t>("RUVIA_PORT").value_or(8087));
+        const auto http_port = env_value.get<std::uint16_t>("RUVIA_HTTP_PORT").value_or(env_value.get<std::uint16_t>("RUVIA_PORT").value_or(8087));
         std::optional<ruvia::compression_config> compression;
         if (env_value.get<bool>("RUVIA_GZIP").value_or(false)) {
             compression.emplace();
@@ -134,21 +133,17 @@ int main() {
             };
             if (const auto client_ca = env_value.path("RUVIA_TLS_CLIENT_CA")) {
                 listener_value.tls_.client_certificates_.ca_file_ = *client_ca;
-                listener_value.tls_.client_certificates_.requirement_ =
-                    env_value.get<bool>("RUVIA_REQUIRE_CLIENT_CERT").value_or(false)
-                        ? ruvia::tls_client_certificate_requirement::required
-                        : ruvia::tls_client_certificate_requirement::optional;
+                listener_value.tls_.client_certificates_.requirement_ = env_value.get<bool>("RUVIA_REQUIRE_CLIENT_CERT").value_or(false) ? ruvia::tls_client_certificate_requirement::required : ruvia::tls_client_certificate_requirement::optional;
             }
             if (const auto host = env_value.get("RUVIA_SNI_HOST")) {
                 // Each SNI entry has its own certificate/key. The default listener
                 // certificate remains the fallback for other server names.
                 listener_value.tls_.sni_.push_back({
                     .host_ = std::string(*host),
-                    .identity_ =
-                        {
-                            .certificate_chain_file_ = env_value.path("RUVIA_SNI_CERT").value_or(std::filesystem::path{}),
-                            .private_key_file_ = env_value.path("RUVIA_SNI_KEY").value_or(std::filesystem::path{}),
-                        },
+                    .identity_ = {
+                        .certificate_chain_file_ = env_value.path("RUVIA_SNI_CERT").value_or(std::filesystem::path{}),
+                        .private_key_file_ = env_value.path("RUVIA_SNI_KEY").value_or(std::filesystem::path{}),
+                    },
                 });
             }
             app.listen(std::move(listener_value));

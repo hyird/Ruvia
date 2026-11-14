@@ -25,8 +25,7 @@ public:
     // datagrams_ declares the Capsule Protocol (Capsule-Protocol: ?1 on the
     // 2xx, and the tunnel's udp()/datagrams()/capsules() facades); connect-udp
     // implies it, so here it only documents the route's protocol.
-    const ruvia::http_tunnel_route_config options{
-        .peer_transport_fin_timeout_ = std::chrono::seconds(2), .datagrams_ = true};
+    const ruvia::http_tunnel_route_config options{.peer_transport_fin_timeout_ = std::chrono::seconds(2), .datagrams_ = true};
     RUVIA_CONNECT("echo.example:443", bytes);
     RUVIA_CONNECT_PROTOCOL("connect-udp", "/udp/:host/:port", udp, options);
     RUVIA_ROUTES_END
@@ -79,17 +78,15 @@ int main() {
                 .private_key_file_ = std::filesystem::path(*key),
             };
         }
-        app.server({.worker_count_ = 2,
-                       .process_signal_handlers_ = ruvia::process_signal_handler_policy::install})
+        app.server({.worker_count_ = 2, .process_signal_handlers_ = ruvia::process_signal_handler_policy::install})
             .listen(std::move(listener_value))
             .on_connection_failure([](const ruvia::connection_failure_record& record) noexcept {
-                try {
-                    std::cerr << "tunnel connection failed: " << ruvia::exception_text(record.exception()) << '\n';
-                } catch (...) {
-                    std::cerr << "tunnel connection failed\n";
-                }
-            })
-            .run();
+            try {
+                std::cerr << "tunnel connection failed: " << ruvia::exception_text(record.exception()) << '\n';
+            } catch (...) {
+                std::cerr << "tunnel connection failed\n";
+            }
+        }).run();
     } catch (...) {
         std::cerr << ruvia::exception_text(std::current_exception()) << '\n';
         return 1;

@@ -52,8 +52,7 @@ void release_redis_source_storage(container_type& source) noexcept {
     source.swap(empty);
 }
 
-void encode_and_release_redis_source(
-    std::string& write_buffer, redis_owned_command& source, bool) {
+void encode_and_release_redis_source(std::string& write_buffer, redis_owned_command& source, bool) {
     if (source.wire_.empty()) {
         throw std::invalid_argument("redis command must not be empty");
     }
@@ -61,12 +60,10 @@ void encode_and_release_redis_source(
     release_redis_source_storage(source.wire_);
 }
 
-void encode_and_release_redis_source(std::string& write_buffer,
-    std::vector<redis_owned_command>& source, bool wrap_transaction) {
+void encode_and_release_redis_source(std::string& write_buffer, std::vector<redis_owned_command>& source, bool wrap_transaction) {
     constexpr std::string_view multi_command = "*1\r\n$5\r\nMULTI\r\n";
     constexpr std::string_view exec_command = "*1\r\n$4\r\nEXEC\r\n";
-    std::size_t serialized_bytes =
-        wrap_transaction ? multi_command.size() + exec_command.size() : 0U;
+    std::size_t serialized_bytes = wrap_transaction ? multi_command.size() + exec_command.size() : 0U;
     for (const auto& command : source) {
         if (command.wire_.empty()) {
             throw std::invalid_argument("redis command must not be empty");
@@ -89,26 +86,22 @@ void encode_and_release_redis_source(std::string& write_buffer,
     release_redis_source_storage(source);
 }
 
-void encode_and_release_redis_source(
-    std::string& write_buffer, std::vector<std::string>& source, bool) {
+void encode_and_release_redis_source(std::string& write_buffer, std::vector<std::string>& source, bool) {
     append_resp_command(write_buffer, source);
     release_redis_source_storage(source);
 }
 
-void encode_and_release_redis_source(
-    std::string& write_buffer, redis_command_args_view source, bool) {
+void encode_and_release_redis_source(std::string& write_buffer, redis_command_args_view source, bool) {
     append_resp_command(write_buffer, source.args_);
 }
 
 }  // namespace
 
-redis_pool::redis_pool(asio::io_context& io_context, const redis_config_storage& config,
-    asio::ssl::context& tls_context, std::optional<timeout_duration> command_timeout,
-    std::size_t pool_size, const worker_ref& worker_value)
-    : config_(config),
-      command_timeout_(command_timeout),
-      slots_(*this, pool_size, require_redis_worker(worker_value)),
-      connections_() {
+redis_pool::redis_pool(asio::io_context& io_context, const redis_config_storage& config, asio::ssl::context& tls_context, std::optional<timeout_duration> command_timeout, std::size_t pool_size, const worker_ref& worker_value) :
+    config_(config),
+    command_timeout_(command_timeout),
+    slots_(*this, pool_size, require_redis_worker(worker_value)),
+    connections_() {
     connections_.reserve(pool_size);
     for (std::size_t i = 0; i < pool_size; ++i) {
         connections_.push_back(std::make_unique<redis_connection>(io_context, tls_context, slots_.worker(), config_, wire_counters_));
@@ -168,18 +161,12 @@ void redis_pool::slot_policy::cancel_slot(redis_pool& pool, std::size_t slot) no
     pool.connections_[slot]->abort(client_abort_reason::cancelled);
 }
 
-task<redis_value> redis_pool::execute_owned(redis_owned_command command, operation_options options,
-    std::optional<timeout_duration> reply_timeout, request_io_metrics* io_metrics,
-    std::optional<operation_deadline> deadline) {
-    return execute_commands<redis_value>(
-        std::move(command), std::move(options), reply_timeout, deadline, io_metrics);
+task<redis_value> redis_pool::execute_owned(redis_owned_command command, operation_options options, std::optional<timeout_duration> reply_timeout, request_io_metrics* io_metrics, std::optional<operation_deadline> deadline) {
+    return execute_commands<redis_value>(std::move(command), std::move(options), reply_timeout, deadline, io_metrics);
 }
 
-task<redis_value> redis_pool::execute_owned(std::vector<std::string> args, operation_options options,
-    std::optional<timeout_duration> reply_timeout, request_io_metrics* io_metrics,
-    std::optional<operation_deadline> deadline) {
-    return execute_commands<redis_value>(
-        std::move(args), std::move(options), reply_timeout, deadline, io_metrics);
+task<redis_value> redis_pool::execute_owned(std::vector<std::string> args, operation_options options, std::optional<timeout_duration> reply_timeout, request_io_metrics* io_metrics, std::optional<operation_deadline> deadline) {
+    return execute_commands<redis_value>(std::move(args), std::move(options), reply_timeout, deadline, io_metrics);
 }
 
 task<redis_value> redis_pool::execute_borrowed(redis_command_args_view args, operation_options options, operation_deadline deadline) {
@@ -190,9 +177,7 @@ task<redis_value> redis_pool::execute_borrowed(redis_command_args_view args, ope
 // single command and a pipeline. Borrowed sources remain owned by their
 // enclosing caller; owned commands can be released after encoding.
 template <typename result_type, typename command_source_type>
-task<result_type> redis_pool::execute_commands(command_source_type source, operation_options options,
-    std::optional<timeout_duration> reply_timeout,
-    std::optional<operation_deadline> deadline, request_io_metrics* io_metrics, bool wrap_transaction) {
+task<result_type> redis_pool::execute_commands(command_source_type source, operation_options options, std::optional<timeout_duration> reply_timeout, std::optional<operation_deadline> deadline, request_io_metrics* io_metrics, bool wrap_transaction) {
     scoped_request_io_timer timer(io_metrics, request_io_kind::redis);
     constexpr bool single_reply = std::is_same_v<result_type, redis_value>;
     const auto reply_count = [&]() -> std::size_t {
@@ -244,10 +229,8 @@ task<result_type> redis_pool::execute_commands(command_source_type source, opera
     }
 }
 
-task<std::vector<redis_value>> redis_pool::execute_pipeline(
-    std::vector<redis_owned_command> commands, operation_options options, bool wrap_transaction) {
-    return execute_commands<std::vector<redis_value>>(
-        std::move(commands), std::move(options), std::nullopt, std::nullopt, nullptr, wrap_transaction);
+task<std::vector<redis_value>> redis_pool::execute_pipeline(std::vector<redis_owned_command> commands, operation_options options, bool wrap_transaction) {
+    return execute_commands<std::vector<redis_value>>(std::move(commands), std::move(options), std::nullopt, std::nullopt, nullptr, wrap_transaction);
 }
 
 }  // namespace ruvia::detail
@@ -257,11 +240,7 @@ namespace {
 
 // Redis has no ALPN identifier, so the TLS handshake offers none.
 [[nodiscard]] client_tcp_endpoint redis_endpoint(const redis_config_storage& config) noexcept {
-    return {.host_ = config.host_,
-        .port_ = config.port_,
-        .tls_ = config.tls_.mode_ == client_tls_mode::disabled ? nullptr : &config.tls_,
-        .tcp_ = config.tcp_,
-        .alpn_ = {}};
+    return {.host_ = config.host_, .port_ = config.port_, .tls_ = config.tls_.mode_ == client_tls_mode::disabled ? nullptr : &config.tls_, .tcp_ = config.tcp_, .alpn_ = {}};
 }
 
 [[noreturn]] void throw_redis_abort(client_abort_reason reason, std::string_view timeout_message) {
@@ -284,8 +263,7 @@ namespace {
         case client_transport_status::resolve_failed:
             throw redis_error(redis_error::code_type::connect_failed, "redis resolve failed: " + error_code_text(result.error_));
         case client_transport_status::tls_failed:
-            throw redis_error(
-                redis_error::code_type::connect_failed, "redis TLS handshake failed: " + error_code_text(result.error_));
+            throw redis_error(redis_error::code_type::connect_failed, "redis TLS handshake failed: " + error_code_text(result.error_));
         case client_transport_status::ok:
         case client_transport_status::eof:
         case client_transport_status::connect_failed:
@@ -313,11 +291,10 @@ void redis_reader_deleter::operator()(redisReader* reader_value) const noexcept 
     }
 }
 
-redis_connection::redis_connection(asio::io_context& io_context, asio::ssl::context& tls_context,
-    const worker_ref& worker_value, const redis_config_storage& config, client_wire_counters& counters)
-    : config_(config),
-      transport_(io_context, tls_context, worker_value, redis_endpoint(config), counters),
-      write_buffer_() {}
+redis_connection::redis_connection(asio::io_context& io_context, asio::ssl::context& tls_context, const worker_ref& worker_value, const redis_config_storage& config, client_wire_counters& counters) :
+    config_(config),
+    transport_(io_context, tls_context, worker_value, redis_endpoint(config), counters),
+    write_buffer_() {}
 
 redis_connection::~redis_connection() = default;
 
@@ -345,8 +322,7 @@ void redis_connection::throw_if_aborted() const {
 
 void redis_connection::ensure_reader() {
     if (reply_builder_ == nullptr) {
-        reply_builder_ =
-            std::make_unique<redis_reply_builder>(config_.max_reply_bytes_, config_.max_array_depth_);
+        reply_builder_ = std::make_unique<redis_reply_builder>(config_.max_reply_bytes_, config_.max_array_depth_);
     }
     if (reader_ == nullptr) {
         reader_.reset(reply_builder_->create_reader());
@@ -375,8 +351,7 @@ task<void> redis_connection::write_request(const operation_deadline& timeout, re
     }
 }
 
-task<redis_value> redis_connection::read_reply(const operation_deadline& timeout,
-    std::chrono::steady_clock::time_point* input_time) {
+task<redis_value> redis_connection::read_reply(const operation_deadline& timeout, std::chrono::steady_clock::time_point* input_time) {
     if (!connected_) {
         throw redis_error(redis_error::code_type::io_error, "redis connection is closed");
     }
@@ -400,10 +375,8 @@ task<redis_value> redis_connection::read_reply(const operation_deadline& timeout
         // still belong to it and must also stay within the limit.
         if (config_.max_reply_bytes_.has_value()) {
             const auto limit = *config_.max_reply_bytes_;
-            if (consumed > limit || reply_bytes_ > limit - consumed ||
-                (!reply && unread_after >= limit - (reply_bytes_ + consumed))) {
-                throw redis_error(
-                    redis_error::code_type::protocol_error, "redis reply exceeds configured limit");
+            if (consumed > limit || reply_bytes_ > limit - consumed || (!reply && unread_after >= limit - (reply_bytes_ + consumed))) {
+                throw redis_error(redis_error::code_type::protocol_error, "redis reply exceeds configured limit");
             }
         }
         reply_bytes_ += consumed;
@@ -411,8 +384,7 @@ task<redis_value> redis_connection::read_reply(const operation_deadline& timeout
             // hiredis normally frees an oversized empty buffer only on the
             // next feed. Release it now, without touching pipelined bytes or
             // changing the successful reply if the shrink allocation fails.
-            if (reader_->len == reader_->pos && reader_->maxbuf != 0 &&
-                sdsalloc(reader_->buf) > reader_->maxbuf) {
+            if (reader_->len == reader_->pos && reader_->maxbuf != 0 && sdsalloc(reader_->buf) > reader_->maxbuf) {
                 sdsclear(reader_->buf);
                 reader_->len = reader_->pos = 0;
                 if (auto* compacted = sdsRemoveFreeSpace(reader_->buf)) {
@@ -428,8 +400,7 @@ task<redis_value> redis_connection::read_reply(const operation_deadline& timeout
             const auto unread = reader_->len - reader_->pos;
             read_capacity = std::min(read_capacity, *config_.max_reply_bytes_ - reply_bytes_ - unread);
         }
-        const auto received = co_await transport_.read_some(
-            std::span<char>(read_buffer_.data(), read_capacity), timeout);
+        const auto received = co_await transport_.read_some(std::span<char>(read_buffer_.data(), read_capacity), timeout);
         // A cancellation or shutdown closed the connection and released its
         // reader; report it before touching the reader again. A close without
         // an owner reason (a failed concurrent write) can still deliver a read
@@ -445,14 +416,12 @@ task<redis_value> redis_connection::read_reply(const operation_deadline& timeout
             *input_time = std::chrono::steady_clock::now();
         }
         if (redisReaderFeed(reader_.get(), read_buffer_.data(), received.bytes_) != REDIS_OK) {
-            throw redis_error(
-                redis_error::code_type::protocol_error, hiredis_reader_error(*reader_));
+            throw redis_error(redis_error::code_type::protocol_error, hiredis_reader_error(*reader_));
         }
     }
 }
 
-task<void> redis_connection::connect(const operation_deadline* operation_timeout_value,
-    std::optional<timeout_duration> command_timeout) {
+task<void> redis_connection::connect(const operation_deadline* operation_timeout_value, std::optional<timeout_duration> command_timeout) {
     if (connected_) {
         // A peer that closed the idle connection or sent unsolicited bytes
         // would desynchronize the next reply; reconnect instead.
@@ -462,9 +431,7 @@ task<void> redis_connection::connect(const operation_deadline* operation_timeout
         }
         close();
     }
-    const auto deadline_value = operation_timeout_value != nullptr
-                                    ? operation_timeout_value->constrained_by(config_.connect_timeout_)
-                                    : operation_deadline(config_.connect_timeout_);
+    const auto deadline_value = operation_timeout_value != nullptr ? operation_timeout_value->constrained_by(config_.connect_timeout_) : operation_deadline(config_.connect_timeout_);
     try {
         // An expired deadline of the retired connection must not abort this one.
         transport_.reset_abort();
@@ -482,8 +449,7 @@ task<void> redis_connection::connect(const operation_deadline* operation_timeout
     }
 }
 
-task<void> redis_connection::authenticate(const operation_deadline& connect_timeout,
-    std::optional<timeout_duration> command_timeout) {
+task<void> redis_connection::authenticate(const operation_deadline& connect_timeout, std::optional<timeout_duration> command_timeout) {
     const auto deadline_value = connect_timeout.constrained_by(command_timeout);
     // An ACL user must authenticate by name even without a password (a
     // nopass user accepts any); skipping AUTH would connect as "default".
@@ -491,10 +457,8 @@ task<void> redis_connection::authenticate(const operation_deadline& connect_time
         const std::string_view password(config_.password_);
         const std::array<std::string_view, 3> user_args{"AUTH", std::string_view(config_.username_), password};
         const std::array<std::string_view, 2> password_args{"AUTH", password};
-        const auto auth_args = config_.username_.empty() ? std::span<const std::string_view>(password_args)
-                                                         : std::span<const std::string_view>(user_args);
-        const auto reply =
-            co_await exchange_control_command(auth_args, deadline_value, redis_request_content::credential);
+        const auto auth_args = config_.username_.empty() ? std::span<const std::string_view>(password_args) : std::span<const std::string_view>(user_args);
+        const auto reply = co_await exchange_control_command(auth_args, deadline_value, redis_request_content::credential);
         if (reply.kind() == redis_value::kind_type::error) {
             throw redis_error(redis_error::code_type::auth_failed, reply.error());
         }
@@ -502,8 +466,7 @@ task<void> redis_connection::authenticate(const operation_deadline& connect_time
 
     if (config_.database_ != 0) {
         std::array<char, http_max_unsigned_decimal_size> database_digits;
-        const std::array<std::string_view, 2> args{
-            "SELECT", http_format_unsigned(database_digits, config_.database_)};
+        const std::array<std::string_view, 2> args{"SELECT", http_format_unsigned(database_digits, config_.database_)};
         const auto reply = co_await exchange_control_command(args, deadline_value, redis_request_content::ordinary);
         if (reply.kind() == redis_value::kind_type::error) {
             throw redis_error(redis_error::code_type::command_error, reply.error());
@@ -511,8 +474,7 @@ task<void> redis_connection::authenticate(const operation_deadline& connect_time
     }
 }
 
-task<redis_value> redis_connection::exchange_control_command(
-    std::span<const std::string_view> args, operation_deadline deadline, redis_request_content content) {
+task<redis_value> redis_connection::exchange_control_command(std::span<const std::string_view> args, operation_deadline deadline, redis_request_content content) {
     write_buffer_.clear();
     append_resp_command(write_buffer_, args);
     co_await write_request(deadline, content);
@@ -622,8 +584,7 @@ void serialize_resp_command(std::string& output, std::span<const std::string> ar
     serialize_resp_command_impl(output, args);
 }
 
-void serialize_resp_command(
-    std::string& output, std::string_view first, std::span<const std::string_view> rest) {
+void serialize_resp_command(std::string& output, std::string_view first, std::span<const std::string_view> rest) {
     if (rest.size() == std::numeric_limits<std::size_t>::max()) {
         throw std::length_error("redis RESP command is too large");
     }
@@ -642,8 +603,7 @@ void append_resp_command(std::string& output, std::span<const std::string> args)
     append_resp_command_impl(output, args);
 }
 
-void append_resp_command(
-    std::string& output, std::string_view first, std::span<const std::string_view> rest) {
+void append_resp_command(std::string& output, std::string_view first, std::span<const std::string_view> rest) {
     const auto serialized_size = resp_command_serialized_size(first, rest);
     if (serialized_size > std::numeric_limits<std::size_t>::max() - output.size()) {
         throw std::length_error("redis RESP output is too large");
@@ -660,8 +620,7 @@ std::size_t resp_command_serialized_size(std::span<const std::string> args) {
     return resp_serialized_size(args);
 }
 
-std::size_t resp_command_serialized_size(
-    std::string_view first, std::span<const std::string_view> rest) {
+std::size_t resp_command_serialized_size(std::string_view first, std::span<const std::string_view> rest) {
     if (rest.size() == std::numeric_limits<std::size_t>::max()) {
         throw std::length_error("redis RESP command is too large");
     }
@@ -687,11 +646,11 @@ redisReplyObjectFunctions redis_reply_builder::functions_{
     &redis_reply_builder::free_object,
 };
 
-redis_reply_builder::redis_reply_builder(std::optional<std::size_t> max_reply_bytes, std::size_t max_depth) noexcept
-    : max_reply_bytes_(max_reply_bytes),
-      maximum_elements_(max_reply_bytes.has_value() ? *max_reply_bytes / 3 : std::numeric_limits<std::size_t>::max()),
-      remaining_elements_(maximum_elements_),
-      max_depth_(max_depth) {}
+redis_reply_builder::redis_reply_builder(std::optional<std::size_t> max_reply_bytes, std::size_t max_depth) noexcept :
+    max_reply_bytes_(max_reply_bytes),
+    maximum_elements_(max_reply_bytes.has_value() ? *max_reply_bytes / 3 : std::numeric_limits<std::size_t>::max()),
+    remaining_elements_(maximum_elements_),
+    max_depth_(max_depth) {}
 
 redisReader* redis_reply_builder::create_reader() {
     auto* reader_value = redisReaderCreateWithFunctions(&functions_);
@@ -703,8 +662,7 @@ redisReader* redis_reply_builder::create_reader() {
         // Rejects an oversized array header before any element arrives.
         // Every element requires at least three RESP bytes (e.g. "+\r\n").
         const auto elements = std::max<std::size_t>(1, *max_reply_bytes_ / 3);
-        reader_value->maxelements = static_cast<long long>(
-            std::min(elements, static_cast<std::size_t>(REDIS_READER_MAX_ARRAY_ELEMENTS)));
+        reader_value->maxelements = static_cast<long long>(std::min(elements, static_cast<std::size_t>(REDIS_READER_MAX_ARRAY_ELEMENTS)));
     }
     reader_ = reader_value;
     return reader_value;
@@ -761,9 +719,7 @@ template <typename factory_type>
 void* redis_reply_builder::place(const redisReadTask* task_value, factory_type&& factory) noexcept {
     try {
         if (task_value->parent != nullptr) {
-            auto* parent = task_value->parent->parent == nullptr
-                               ? &static_cast<root_slot*>(task_value->parent->obj)->value_
-                               : static_cast<redis_value*>(task_value->parent->obj);
+            auto* parent = task_value->parent->parent == nullptr ? &static_cast<root_slot*>(task_value->parent->obj)->value_ : static_cast<redis_value*>(task_value->parent->obj);
             auto& siblings = redis_types_access::elements(*parent);
             siblings.push_back(factory());
             return &siblings.back();
@@ -785,8 +741,7 @@ void* redis_reply_builder::create_string(const redisReadTask* task_value, char* 
         text.remove_prefix(4);
     }
     return builder.place(task_value, [&] {
-        return task_value->type == REDIS_REPLY_ERROR ? redis_types_access::error_value(text)
-                                                     : redis_types_access::string_value(text);
+        return task_value->type == REDIS_REPLY_ERROR ? redis_types_access::error_value(text) : redis_types_access::string_value(text);
     });
 }
 
@@ -807,7 +762,9 @@ void* redis_reply_builder::create_array(const redisReadTask* task_value, std::si
     // announcing more elements grows the array as they actually arrive.
     const auto buffered = builder.reader_->len - builder.reader_->pos;
     const auto capacity = std::min(elements, buffered / 3);
-    auto* node = builder.place(task_value, [&] { return redis_types_access::array_value(capacity); });
+    auto* node = builder.place(task_value, [&] {
+        return redis_types_access::array_value(capacity);
+    });
     if (node != nullptr) {
         builder.remaining_elements_ -= elements;
     }
@@ -830,12 +787,16 @@ void* redis_reply_builder::create_double(const redisReadTask* task_value, double
 
 void* redis_reply_builder::create_nil(const redisReadTask* task_value) noexcept {
     auto& builder = builder_of(task_value);
-    return builder.place(task_value, [&] { return redis_types_access::null_value(); });
+    return builder.place(task_value, [&] {
+        return redis_types_access::null_value();
+    });
 }
 
 void* redis_reply_builder::create_bool(const redisReadTask* task_value, int value) noexcept {
     auto& builder = builder_of(task_value);
-    return builder.place(task_value, [&] { return redis_types_access::integer_value(value == 0 ? 0 : 1); });
+    return builder.place(task_value, [&] {
+        return redis_types_access::integer_value(value == 0 ? 0 : 1);
+    });
 }
 
 void redis_reply_builder::free_object(void* reply) noexcept {
@@ -966,8 +927,7 @@ std::vector<bool> parse_redis_bool_array(redis_value&& value) {
     return output;
 }
 
-std::vector<std::optional<std::string>> parse_redis_optional_string_array(
-    redis_value&& value) {
+std::vector<std::optional<std::string>> parse_redis_optional_string_array(redis_value&& value) {
     const auto items = redis_value_array(value);
     std::vector<std::optional<std::string>> output;
     output.reserve(items.size());
@@ -985,14 +945,11 @@ std::optional<double> parse_redis_optional_double(redis_value&& value, std::stri
     return parse_redis_double(redis_value_string(value), context_value);
 }
 
-redis_set_result parse_redis_set_reply(
-    redis_value&& value, const redis_set_options& options) {
+redis_set_result parse_redis_set_reply(redis_value&& value, const redis_set_options& options) {
     throw_if_redis_error(value);
     const auto returns_previous = redis_set_returns_previous(options.previous_value_);
     if (value.null()) {
-        const bool applied =
-            returns_previous &&
-            (!options.condition_.has_value() || *options.condition_ == redis_set_condition::if_absent);
+        const bool applied = returns_previous && (!options.condition_.has_value() || *options.condition_ == redis_set_condition::if_absent);
         return redis_types_access::set_result(applied);
     }
     if (!returns_previous) {
@@ -1001,8 +958,7 @@ redis_set_result parse_redis_set_reply(
         }
         return redis_types_access::set_result(true);
     }
-    const bool applied =
-        !options.condition_.has_value() || *options.condition_ != redis_set_condition::if_absent;
+    const bool applied = !options.condition_.has_value() || *options.condition_ != redis_set_condition::if_absent;
     return redis_types_access::set_result(applied, take_redis_string(std::move(value)));
 }
 
@@ -1049,8 +1005,7 @@ double parse_redis_double(std::string_view value, std::string_view context_value
     return *output;
 }
 
-std::vector<redis_key_value> parse_redis_key_value_array(
-    redis_value&& value, std::string_view context_value) {
+std::vector<redis_key_value> parse_redis_key_value_array(redis_value&& value, std::string_view context_value) {
     const auto values = redis_value_array(value);
     if (values.size() % 2 != 0) {
         throw redis_error(redis_error::code_type::protocol_error, context_value);
@@ -1058,15 +1013,12 @@ std::vector<redis_key_value> parse_redis_key_value_array(
     std::vector<redis_key_value> result;
     result.reserve(values.size() / 2);
     for (std::size_t i = 0; i < values.size(); i += 2) {
-        result.push_back(redis_types_access::key_value(
-            take_redis_string(std::move(values[i])),
-            take_redis_string(std::move(values[i + 1]))));
+        result.push_back(redis_types_access::key_value(take_redis_string(std::move(values[i])), take_redis_string(std::move(values[i + 1]))));
     }
     return result;
 }
 
-std::vector<redis_scored_value> parse_redis_scored_array(
-    redis_value&& value) {
+std::vector<redis_scored_value> parse_redis_scored_array(redis_value&& value) {
     const auto values = redis_value_array(value);
     if (values.size() % 2 != 0) {
         throw redis_error(redis_error::code_type::protocol_error, "unexpected redis scored array reply");
@@ -1075,15 +1027,12 @@ std::vector<redis_scored_value> parse_redis_scored_array(
     result.reserve(values.size() / 2);
     for (std::size_t i = 0; i < values.size(); i += 2) {
         const auto score_text = redis_value_string(values[i + 1]);
-        result.push_back(redis_types_access::scored_value(
-            take_redis_string(std::move(values[i])),
-            parse_redis_double(score_text, "invalid redis score")));
+        result.push_back(redis_types_access::scored_value(take_redis_string(std::move(values[i])), parse_redis_double(score_text, "invalid redis score")));
     }
     return result;
 }
 
-std::vector<std::string> parse_redis_string_array(
-    redis_value&& value) {
+std::vector<std::string> parse_redis_string_array(redis_value&& value) {
     const auto items = redis_value_array(value);
     std::vector<std::string> output;
     output.reserve(items.size());
@@ -1098,8 +1047,7 @@ namespace {
 // SCAN-family replies share one envelope: [cursor, payload]. The payload is
 // handed to the matching array parser.
 template <typename result_type, typename payload_parser_type>
-[[nodiscard]] result_type parse_redis_scan_envelope(redis_value&& value, result_type result_value,
-    std::string_view context_value, payload_parser_type parse_payload) {
+[[nodiscard]] result_type parse_redis_scan_envelope(redis_value&& value, result_type result_value, std::string_view context_value, payload_parser_type parse_payload) {
     const auto root = redis_value_array(value);
     if (root.size() != 2) {
         throw redis_error(redis_error::code_type::protocol_error, context_value);
@@ -1112,29 +1060,24 @@ template <typename result_type, typename payload_parser_type>
 }  // namespace
 
 redis_scan_result parse_redis_scan_result(redis_value&& value) {
-    return parse_redis_scan_envelope(std::move(value), redis_types_access::scan_result(), "unexpected redis scan reply",
-        [](redis_scan_result& result_value, redis_value&& payload) {
-            redis_types_access::values(result_value) = parse_redis_string_array(std::move(payload));
-        });
-}
-
-redis_hash_scan_result parse_redis_hash_scan_result(
-    redis_value&& value) {
-    return parse_redis_scan_envelope(std::move(value), redis_types_access::hash_scan_result(), "unexpected redis hscan reply", [](redis_hash_scan_result& result_value, redis_value&& payload) {
-        redis_types_access::entries(result_value) =
-            parse_redis_key_value_array(std::move(payload), "unexpected redis hscan entry count");
+    return parse_redis_scan_envelope(std::move(value), redis_types_access::scan_result(), "unexpected redis scan reply", [](redis_scan_result& result_value, redis_value&& payload) {
+        redis_types_access::values(result_value) = parse_redis_string_array(std::move(payload));
     });
 }
 
-redis_z_scan_result parse_redis_z_scan_result(
-    redis_value&& value) {
+redis_hash_scan_result parse_redis_hash_scan_result(redis_value&& value) {
+    return parse_redis_scan_envelope(std::move(value), redis_types_access::hash_scan_result(), "unexpected redis hscan reply", [](redis_hash_scan_result& result_value, redis_value&& payload) {
+        redis_types_access::entries(result_value) = parse_redis_key_value_array(std::move(payload), "unexpected redis hscan entry count");
+    });
+}
+
+redis_z_scan_result parse_redis_z_scan_result(redis_value&& value) {
     return parse_redis_scan_envelope(std::move(value), redis_types_access::z_scan_result(), "unexpected redis zscan reply", [](redis_z_scan_result& result_value, redis_value&& payload) {
         redis_types_access::entries(result_value) = parse_redis_scored_array(std::move(payload));
     });
 }
 
-std::optional<redis_key_value> parse_redis_blocking_pop_reply(
-    redis_value&& value) {
+std::optional<redis_key_value> parse_redis_blocking_pop_reply(redis_value&& value) {
     throw_if_redis_error(value);
     if (value.null()) {
         return std::nullopt;
@@ -1143,13 +1086,10 @@ std::optional<redis_key_value> parse_redis_blocking_pop_reply(
     if (items.size() != 2) {
         throw redis_error(redis_error::code_type::protocol_error, "unexpected redis blocking pop reply");
     }
-    return redis_types_access::key_value(
-        take_redis_string(std::move(items[0])),
-        take_redis_string(std::move(items[1])));
+    return redis_types_access::key_value(take_redis_string(std::move(items[0])), take_redis_string(std::move(items[1])));
 }
 
-std::optional<redis_x_read_group_result> parse_redis_x_read_group_reply(
-    redis_value&& value) {
+std::optional<redis_x_read_group_result> parse_redis_x_read_group_reply(redis_value&& value) {
     throw_if_redis_error(value);
     if (value.null()) {
         return std::nullopt;
@@ -1162,24 +1102,20 @@ std::optional<redis_x_read_group_result> parse_redis_x_read_group_reply(
     for (auto& stream_value : stream_values) {
         const auto stream_parts = redis_value_array(stream_value);
         if (stream_parts.size() != 2) {
-            throw redis_error(
-                redis_error::code_type::protocol_error, "unexpected redis xreadgroup stream reply");
+            throw redis_error(redis_error::code_type::protocol_error, "unexpected redis xreadgroup stream reply");
         }
-        auto stream =
-            redis_types_access::stream_read_result(take_redis_string(std::move(stream_parts[0])));
+        auto stream = redis_types_access::stream_read_result(take_redis_string(std::move(stream_parts[0])));
         const auto entry_values = redis_value_array(stream_parts[1]);
         auto& entries = redis_types_access::entries(stream);
         entries.reserve(entry_values.size());
         for (auto& entry_value : entry_values) {
             const auto entry_parts = redis_value_array(entry_value);
             if (entry_parts.size() != 2) {
-                throw redis_error(
-                    redis_error::code_type::protocol_error, "unexpected redis xreadgroup entry reply");
+                throw redis_error(redis_error::code_type::protocol_error, "unexpected redis xreadgroup entry reply");
             }
             auto parsed_entry = redis_types_access::stream_entry(take_redis_string(std::move(entry_parts[0])));
             if (!entry_parts[1].null()) {
-                redis_types_access::fields(parsed_entry) = parse_redis_key_value_array(
-                    std::move(entry_parts[1]), "unexpected redis xreadgroup field reply");
+                redis_types_access::fields(parsed_entry) = parse_redis_key_value_array(std::move(entry_parts[1]), "unexpected redis xreadgroup field reply");
             }
             entries.emplace_back(std::move(parsed_entry));
         }
@@ -1204,8 +1140,7 @@ redis_pubsub_event parse_redis_pubsub_event(const redis_value& value) {
     };
     if (items.size() == 3) {
         if (kind == "message") {
-            return redis_types_access::pubsub_message(
-                redis_value_string(items[1]), std::nullopt, redis_value_string(items[2]));
+            return redis_types_access::pubsub_message(redis_value_string(items[1]), std::nullopt, redis_value_string(items[2]));
         }
         const bool pattern = kind == "psubscribe" || kind == "punsubscribe";
         const bool subscribed = kind == "subscribe" || kind == "psubscribe";
@@ -1213,19 +1148,13 @@ redis_pubsub_event parse_redis_pubsub_event(const redis_value& value) {
             throw redis_error(redis_error::code_type::protocol_error, malformed);
         }
         const auto name = optional_name(items[1]);
-        const auto confirmation_kind = pattern
-                                           ? (subscribed ? redis_pubsub_confirmation_kind::pattern_subscribed
-                                                         : redis_pubsub_confirmation_kind::pattern_unsubscribed)
-                                           : (subscribed ? redis_pubsub_confirmation_kind::subscribed
-                                                         : redis_pubsub_confirmation_kind::unsubscribed);
-        return redis_types_access::pubsub_confirmation(
-            confirmation_kind, name, redis_value_integer(items[2]));
+        const auto confirmation_kind = pattern ? (subscribed ? redis_pubsub_confirmation_kind::pattern_subscribed : redis_pubsub_confirmation_kind::pattern_unsubscribed) : (subscribed ? redis_pubsub_confirmation_kind::subscribed : redis_pubsub_confirmation_kind::unsubscribed);
+        return redis_types_access::pubsub_confirmation(confirmation_kind, name, redis_value_integer(items[2]));
     }
     if (kind != "pmessage") {
         throw redis_error(redis_error::code_type::protocol_error, malformed);
     }
-    return redis_types_access::pubsub_message(redis_value_string(items[2]),
-        redis_value_string(items[1]), redis_value_string(items[3]));
+    return redis_types_access::pubsub_message(redis_value_string(items[2]), redis_value_string(items[1]), redis_value_string(items[3]));
 }
 
 // RESP2 answers PING on a subscribed connection with the push-shaped
@@ -1240,9 +1169,7 @@ bool is_redis_subscription_pong(const redis_value& value) {
         return false;
     }
     const auto items = value.array();
-    return items.size() == 2 && items[0].kind() == redis_value::kind_type::string &&
-           http_ascii_equals_ignore_case(items[0].string(), "pong") &&
-           items[1].kind() == redis_value::kind_type::string && items[1].string().empty();
+    return items.size() == 2 && items[0].kind() == redis_value::kind_type::string && http_ascii_equals_ignore_case(items[0].string(), "pong") && items[1].kind() == redis_value::kind_type::string && items[1].string().empty();
 }
 
 }  // namespace ruvia::detail
@@ -1254,8 +1181,7 @@ namespace ruvia::detail {
 // allowed. Returns whether the command needs the blocking pool; a blocking
 // command throws when `allow_blocking` is false. An XREAD/XREADGROUP option
 // this classifier does not know throws instead of being guessed non-blocking.
-[[nodiscard]] bool validate_redis_pooled_command(
-    std::span<const std::string_view> args, bool allow_blocking, bool allow_barrier = false);
+[[nodiscard]] bool validate_redis_pooled_command(std::span<const std::string_view> args, bool allow_blocking, bool allow_barrier = false);
 
 // A wait the server may hold open indefinitely (a blocking command, a barrier,
 // a subscription) must be bounded by its owner: a stop token or a finite
@@ -1280,8 +1206,7 @@ enum class redis_stream_read_kind : bool { read,
 // https://redis.io/docs/latest/commands/xreadgroup/
 // A token outside this grammar may change how the server waits, so it is
 // rejected rather than routed as non-blocking.
-[[nodiscard]] bool stream_read_options_block(
-    std::span<const std::string_view> args, std::size_t first_option, redis_stream_read_kind kind) {
+[[nodiscard]] bool stream_read_options_block(std::span<const std::string_view> args, std::size_t first_option, redis_stream_read_kind kind) {
     const bool group = kind == redis_stream_read_kind::read_group;
     bool blocking = false;
     for (std::size_t i = first_option; i < args.size();) {
@@ -1331,27 +1256,22 @@ bool validate_redis_pooled_command(std::span<const std::string_view> args, bool 
     // client's other pooled connections: https://redis.io/docs/latest/commands/wait/
     if (is_redis_token(command, "WAIT") || is_redis_token(command, "WAITAOF")) {
         if (!allow_barrier) {
-            throw std::invalid_argument(
-                "redis WAIT and WAITAOF require a non-transaction pipeline containing the writes");
+            throw std::invalid_argument("redis WAIT and WAITAOF require a non-transaction pipeline containing the writes");
         }
         return true;
     }
     const auto reject_stateful = [] {
-        throw std::invalid_argument(
-            "stateful redis commands are not allowed through pooled command()");
+        throw std::invalid_argument("stateful redis commands are not allowed through pooled command()");
     };
     bool blocking = false;
     switch (command.size()) {
         case 4:
-            if (is_redis_token(command, "AUTH") || is_redis_token(command, "EXEC") ||
-                is_redis_token(command, "QUIT") || is_redis_token(command, "SYNC")) {
+            if (is_redis_token(command, "AUTH") || is_redis_token(command, "EXEC") || is_redis_token(command, "QUIT") || is_redis_token(command, "SYNC")) {
                 reject_stateful();
             }
             break;
         case 5:
-            if (is_redis_token(command, "HELLO") || is_redis_token(command, "MULTI") ||
-                is_redis_token(command, "PSYNC") || is_redis_token(command, "RESET") ||
-                is_redis_token(command, "WATCH")) {
+            if (is_redis_token(command, "HELLO") || is_redis_token(command, "MULTI") || is_redis_token(command, "PSYNC") || is_redis_token(command, "RESET") || is_redis_token(command, "WATCH")) {
                 reject_stateful();
             }
             if (is_redis_token(command, "BLPOP") || is_redis_token(command, "BRPOP")) {
@@ -1361,16 +1281,13 @@ bool validate_redis_pooled_command(std::span<const std::string_view> args, bool 
             }
             break;
         case 6:
-            if (is_redis_token(command, "ASKING") || is_redis_token(command, "CLIENT") ||
-                is_redis_token(command, "SELECT")) {
+            if (is_redis_token(command, "ASKING") || is_redis_token(command, "CLIENT") || is_redis_token(command, "SELECT")) {
                 reject_stateful();
             }
-            blocking = is_redis_token(command, "BLMOVE") || is_redis_token(command, "BLMPOP") ||
-                       is_redis_token(command, "BZMPOP");
+            blocking = is_redis_token(command, "BLMOVE") || is_redis_token(command, "BLMPOP") || is_redis_token(command, "BZMPOP");
             break;
         case 7:
-            if (is_redis_token(command, "DISCARD") || is_redis_token(command, "MONITOR") ||
-                is_redis_token(command, "UNWATCH")) {
+            if (is_redis_token(command, "DISCARD") || is_redis_token(command, "MONITOR") || is_redis_token(command, "UNWATCH")) {
                 reject_stateful();
             }
             break;
@@ -1409,8 +1326,7 @@ bool validate_redis_pooled_command(std::span<const std::string_view> args, bool 
             return false;
     }
     if (blocking && !allow_blocking) {
-        throw std::invalid_argument(
-            "blocking redis command is not allowed in a pipeline or transaction");
+        throw std::invalid_argument("blocking redis command is not allowed in a pipeline or transaction");
     }
     return blocking;
 }
@@ -1433,8 +1349,7 @@ void require_positive_redis_ttl(duration_type ttl, const char* message) {
     }
 }
 
-[[nodiscard]] detail::redis_owned_command make_redis_scan_command(std::string_view command,
-    std::optional<std::string_view> key, const redis_scan_options& options) {
+[[nodiscard]] detail::redis_owned_command make_redis_scan_command(std::string_view command, std::optional<std::string_view> key, const redis_scan_options& options) {
     std::array<char, http_max_unsigned_decimal_size> cursor_scratch{};
     std::array<char, http_max_unsigned_decimal_size> count_scratch{};
     std::array<std::string_view, 7> args{};
@@ -1443,8 +1358,7 @@ void require_positive_redis_ttl(duration_type ttl, const char* message) {
     if (key.has_value()) {
         args[count++] = *key;
     }
-    args[count++] = http_format_unsigned(
-        cursor_scratch, options.cursor_.has_value() ? detail::redis_types_access::cursor_value(*options.cursor_) : 0);
+    args[count++] = http_format_unsigned(cursor_scratch, options.cursor_.has_value() ? detail::redis_types_access::cursor_value(*options.cursor_) : 0);
     if (options.match_.has_value()) {
         args[count++] = "MATCH";
         args[count++] = *options.match_;
@@ -1459,8 +1373,7 @@ void require_positive_redis_ttl(duration_type ttl, const char* message) {
 // The server-side wait starts when the command is written, so the reply
 // deadline is armed at write time: slot acquisition and a lazy connect must not
 // consume the block window. The grace covers the reply's network latency.
-[[nodiscard]] std::optional<timeout_duration> redis_block_reply_timeout(
-    const operation_options& options, redis_block_wait wait) {
+[[nodiscard]] std::optional<timeout_duration> redis_block_reply_timeout(const operation_options& options, redis_block_wait wait) {
     if (const auto duration = wait.duration(); duration.has_value()) {
         constexpr auto grace = std::chrono::seconds(1);
         if (*duration > std::chrono::milliseconds::max() - grace) {
@@ -1474,29 +1387,26 @@ void require_positive_redis_ttl(duration_type ttl, const char* message) {
 
 }  // namespace
 
-redis_session::redis_session(detail::redis_client_runtime& runtime,
-    ::ruvia::operation_scope& operation_scope, detail::request_io_metrics* io_metrics) noexcept
-    : runtime_(&runtime),
-      io_metrics_(io_metrics),
-      registration_(operation_scope, this, &redis_session::expire_capability) {}
+redis_session::redis_session(detail::redis_client_runtime& runtime, ::ruvia::operation_scope& operation_scope, detail::request_io_metrics* io_metrics) noexcept :
+    runtime_(&runtime),
+    io_metrics_(io_metrics),
+    registration_(operation_scope, this, &redis_session::expire_capability) {}
 
-redis_session::redis_session(detail::redis_client_runtime& runtime,
-    ::ruvia::operation_scope& operation_scope, operation_options options) noexcept
-    : runtime_(&runtime),
-      operation_options_(std::move(options)),
-      registration_(operation_scope, this, &redis_session::expire_capability) {}
+redis_session::redis_session(detail::redis_client_runtime& runtime, ::ruvia::operation_scope& operation_scope, operation_options options) noexcept :
+    runtime_(&runtime),
+    operation_options_(std::move(options)),
+    registration_(operation_scope, this, &redis_session::expire_capability) {}
 
-redis_session::redis_session(const redis_session& other) noexcept
-    : runtime_(other.runtime_),
-      io_metrics_(other.io_metrics_),
-      operation_options_(other.operation_options_),
-      registration_(other.registration_, this) {}
+redis_session::redis_session(const redis_session& other) noexcept :
+    runtime_(other.runtime_),
+    io_metrics_(other.io_metrics_),
+    operation_options_(other.operation_options_),
+    registration_(other.registration_, this) {}
 
 redis_session redis_session::with_options(operation_options options) const {
     registration_.require_active();
     redis_session configured(*this);
-    configured.operation_options_ =
-        override_operation_options(operation_options_, std::move(options));
+    configured.operation_options_ = override_operation_options(operation_options_, std::move(options));
     return configured;
 }
 
@@ -1513,8 +1423,7 @@ detail::redis_pool& redis_session::blocking_pool() const noexcept {
     return runtime_->blocking();
 }
 
-task<redis_value> redis_session::execute(detail::redis_pool& pool_value, detail::redis_owned_command&& command,
-    std::optional<timeout_duration> reply_timeout) const {
+task<redis_value> redis_session::execute(detail::redis_pool& pool_value, detail::redis_owned_command&& command, std::optional<timeout_duration> reply_timeout) const {
     return pool_value.execute_owned(std::move(command), operation_options_, reply_timeout, io_metrics_);
 }
 
@@ -1529,23 +1438,19 @@ task<redis_value> redis_session::command(std::span<const std::string_view> args)
     registration_.require_active();
     const bool blocking = detail::validate_redis_pooled_command(args, true);
     if (blocking) {
-        detail::require_bounded_redis_wait(
-            operation_options_, "raw blocking redis command requires a stop_token or finite operation timeout");
+        detail::require_bounded_redis_wait(operation_options_, "raw blocking redis command requires a stop_token or finite operation timeout");
     }
     return scoped(execute(blocking ? blocking_pool() : pool(), detail::make_owned_redis_command(args)));
 }
 
 task<redis_value> redis_session::command_owned(std::vector<std::string>&& args) const {
     registration_.require_active();
-    return pool().execute_owned(std::vector<std::string>(args.begin(), args.end()),
-        operation_options_, std::nullopt, io_metrics_);
+    return pool().execute_owned(std::vector<std::string>(args.begin(), args.end()), operation_options_, std::nullopt, io_metrics_);
 }
 
-task<redis_value> redis_session::script_owned(
-    const detail::redis_orm_script& script, std::vector<std::string>&& args) const {
+task<redis_value> redis_session::script_owned(const detail::redis_orm_script& script, std::vector<std::string>&& args) const {
     registration_.require_active();
-    return detail::execute_redis_orm_script(
-        pool(), script, std::move(args), io_metrics_, operation_options_);
+    return detail::execute_redis_orm_script(pool(), script, std::move(args), io_metrics_, operation_options_);
 }
 
 task<void> redis_session::ping() const {
@@ -1560,25 +1465,20 @@ task<std::optional<std::string>> redis_session::get(std::string_view key) const 
     return mapped<std::optional<std::string>>({"GET", key}, detail::parse_redis_optional_string);
 }
 
-task<std::vector<std::optional<std::string>>> redis_session::mget(
-    std::span<const std::string_view> keys) const {
+task<std::vector<std::optional<std::string>>> redis_session::mget(std::span<const std::string_view> keys) const {
     registration_.require_active();
-    return execute_mapped<std::vector<std::optional<std::string>>>(
-        pool(), detail::redis_command_with_keys("MGET", keys), detail::parse_redis_optional_string_array);
+    return execute_mapped<std::vector<std::optional<std::string>>>(pool(), detail::redis_command_with_keys("MGET", keys), detail::parse_redis_optional_string_array);
 }
 
-task<redis_set_result> redis_session::set(
-    std::string_view key, std::string_view value, redis_set_options options) const {
+task<redis_set_result> redis_session::set(std::string_view key, std::string_view value, redis_set_options options) const {
     registration_.require_active();
     auto command = detail::redis_set_args(key, value, options);
-    return execute_mapped<redis_set_result>(pool(), std::move(command),
-        [options = std::move(options)](redis_value&& reply) {
-            return detail::parse_redis_set_reply(std::move(reply), options);
-        });
+    return execute_mapped<redis_set_result>(pool(), std::move(command), [options = std::move(options)](redis_value&& reply) {
+        return detail::parse_redis_set_reply(std::move(reply), options);
+    });
 }
 
-task<void> redis_session::mset(
-    std::span<const std::pair<std::string_view, std::string_view>> items) const {
+task<void> redis_session::mset(std::span<const std::pair<std::string_view, std::string_view>> items) const {
     registration_.require_active();
     return execute_mapped<void>(pool(), detail::redis_mset_args(items), detail::parse_redis_ok);
 }
@@ -1587,8 +1487,7 @@ task<std::optional<std::string>> redis_session::get_del(std::string_view key) co
     return mapped<std::optional<std::string>>({"GETDEL", key}, detail::parse_redis_optional_string);
 }
 
-task<std::int64_t> redis_session::append(
-    std::string_view key, std::string_view value) const {
+task<std::int64_t> redis_session::append(std::string_view key, std::string_view value) const {
     return mapped<std::int64_t>({"APPEND", key, value}, detail::parse_redis_integer);
 }
 
@@ -1598,8 +1497,7 @@ task<std::int64_t> redis_session::strlen(std::string_view key) const {
 
 task<std::int64_t> redis_session::incr_by(std::string_view key, std::int64_t value) const {
     registration_.require_active();
-    return execute_mapped<std::int64_t>(
-        pool(), detail::make_redis_integer_command("INCRBY", key, value), detail::parse_redis_integer);
+    return execute_mapped<std::int64_t>(pool(), detail::make_redis_integer_command("INCRBY", key, value), detail::parse_redis_integer);
 }
 
 task<std::int64_t> redis_session::decr(std::string_view key) const {
@@ -1608,8 +1506,7 @@ task<std::int64_t> redis_session::decr(std::string_view key) const {
 
 task<std::int64_t> redis_session::decr_by(std::string_view key, std::int64_t value) const {
     registration_.require_active();
-    return execute_mapped<std::int64_t>(
-        pool(), detail::make_redis_integer_command("DECRBY", key, value), detail::parse_redis_integer);
+    return execute_mapped<std::int64_t>(pool(), detail::make_redis_integer_command("DECRBY", key, value), detail::parse_redis_integer);
 }
 
 task<std::int64_t> redis_session::del(std::string_view key) const {
@@ -1618,8 +1515,7 @@ task<std::int64_t> redis_session::del(std::string_view key) const {
 
 task<std::int64_t> redis_session::del(std::span<const std::string_view> keys) const {
     registration_.require_active();
-    return execute_mapped<std::int64_t>(
-        pool(), detail::redis_command_with_keys("DEL", keys), detail::parse_redis_integer);
+    return execute_mapped<std::int64_t>(pool(), detail::redis_command_with_keys("DEL", keys), detail::parse_redis_integer);
 }
 
 task<std::int64_t> redis_session::unlink(std::string_view key) const {
@@ -1628,8 +1524,7 @@ task<std::int64_t> redis_session::unlink(std::string_view key) const {
 
 task<std::int64_t> redis_session::unlink(std::span<const std::string_view> keys) const {
     registration_.require_active();
-    return execute_mapped<std::int64_t>(
-        pool(), detail::redis_command_with_keys("UNLINK", keys), detail::parse_redis_integer);
+    return execute_mapped<std::int64_t>(pool(), detail::redis_command_with_keys("UNLINK", keys), detail::parse_redis_integer);
 }
 
 task<bool> redis_session::exists(std::string_view key) const {
@@ -1655,24 +1550,19 @@ task<bool> redis_session::rename_nx(std::string_view key, std::string_view new_k
 task<bool> redis_session::expire(std::string_view key, std::chrono::seconds ttl) const {
     registration_.require_active();
     require_positive_redis_ttl(ttl, "redis expire TTL must be greater than zero");
-    return execute_mapped<bool>(
-        pool(), detail::make_redis_integer_command("EXPIRE", key, ttl.count()), detail::parse_redis_integer_bool);
+    return execute_mapped<bool>(pool(), detail::make_redis_integer_command("EXPIRE", key, ttl.count()), detail::parse_redis_integer_bool);
 }
 
 task<bool> redis_session::pexpire(std::string_view key, std::chrono::milliseconds ttl) const {
     registration_.require_active();
     require_positive_redis_ttl(ttl, "redis pexpire TTL must be greater than zero");
-    return execute_mapped<bool>(
-        pool(), detail::make_redis_integer_command("PEXPIRE", key, ttl.count()), detail::parse_redis_integer_bool);
+    return execute_mapped<bool>(pool(), detail::make_redis_integer_command("PEXPIRE", key, ttl.count()), detail::parse_redis_integer_bool);
 }
 
-task<bool> redis_session::expire_at(
-    std::string_view key, std::chrono::system_clock::time_point expires_at) const {
+task<bool> redis_session::expire_at(std::string_view key, std::chrono::system_clock::time_point expires_at) const {
     registration_.require_active();
-    const auto expires_ms =
-        std::chrono::ceil<std::chrono::milliseconds>(expires_at.time_since_epoch()).count();
-    return execute_mapped<bool>(
-        pool(), detail::make_redis_integer_command("PEXPIREAT", key, expires_ms), detail::parse_redis_integer_bool);
+    const auto expires_ms = std::chrono::ceil<std::chrono::milliseconds>(expires_at.time_since_epoch()).count();
+    return execute_mapped<bool>(pool(), detail::make_redis_integer_command("PEXPIREAT", key, expires_ms), detail::parse_redis_integer_bool);
 }
 
 task<bool> redis_session::persist(std::string_view key) const {
@@ -1680,53 +1570,46 @@ task<bool> redis_session::persist(std::string_view key) const {
 }
 
 task<redis_ttl> redis_session::ttl(std::string_view key) const {
-    return mapped<redis_ttl>({"TTL", key},
-        [](redis_value&& reply) { return detail::parse_redis_ttl(std::move(reply), true); });
+    return mapped<redis_ttl>({"TTL", key}, [](redis_value&& reply) {
+        return detail::parse_redis_ttl(std::move(reply), true);
+    });
 }
 
 task<redis_ttl> redis_session::pttl(std::string_view key) const {
-    return mapped<redis_ttl>({"PTTL", key},
-        [](redis_value&& reply) { return detail::parse_redis_ttl(std::move(reply), false); });
+    return mapped<redis_ttl>({"PTTL", key}, [](redis_value&& reply) {
+        return detail::parse_redis_ttl(std::move(reply), false);
+    });
 }
 
 task<std::int64_t> redis_session::incr(std::string_view key) const {
     return mapped<std::int64_t>({"INCR", key}, detail::parse_redis_integer);
 }
 
-task<std::optional<std::string>> redis_session::hget(
-    std::string_view key, std::string_view field) const {
+task<std::optional<std::string>> redis_session::hget(std::string_view key, std::string_view field) const {
     return mapped<std::optional<std::string>>({"HGET", key, field}, detail::parse_redis_optional_string);
 }
 
-task<std::int64_t> redis_session::hset(
-    std::string_view key, std::string_view field, std::string_view value) const {
+task<std::int64_t> redis_session::hset(std::string_view key, std::string_view field, std::string_view value) const {
     return mapped<std::int64_t>({"HSET", key, field, value}, detail::parse_redis_integer);
 }
 
-task<std::int64_t> redis_session::hset(std::string_view key,
-    std::span<const std::pair<std::string_view, std::string_view>> fields_value) const {
+task<std::int64_t> redis_session::hset(std::string_view key, std::span<const std::pair<std::string_view, std::string_view>> fields_value) const {
     registration_.require_active();
-    return execute_mapped<std::int64_t>(
-        pool(), detail::redis_hset_fields_args(key, fields_value), detail::parse_redis_integer);
+    return execute_mapped<std::int64_t>(pool(), detail::redis_hset_fields_args(key, fields_value), detail::parse_redis_integer);
 }
 
-task<std::vector<std::optional<std::string>>> redis_session::hmget(
-    std::string_view key, std::span<const std::string_view> fields_value) const {
+task<std::vector<std::optional<std::string>>> redis_session::hmget(std::string_view key, std::span<const std::string_view> fields_value) const {
     registration_.require_active();
-    return execute_mapped<std::vector<std::optional<std::string>>>(
-        pool(), detail::redis_command_with_key_fields("HMGET", key, fields_value),
-        detail::parse_redis_optional_string_array);
+    return execute_mapped<std::vector<std::optional<std::string>>>(pool(), detail::redis_command_with_key_fields("HMGET", key, fields_value), detail::parse_redis_optional_string_array);
 }
 
 task<std::vector<redis_key_value>> redis_session::hget_all(std::string_view key) const {
-    return mapped<std::vector<redis_key_value>>({"HGETALL", key},
-        [](redis_value&& reply) {
-            return detail::parse_redis_key_value_array(std::move(reply), "unexpected redis hgetall reply");
-        });
+    return mapped<std::vector<redis_key_value>>({"HGETALL", key}, [](redis_value&& reply) {
+        return detail::parse_redis_key_value_array(std::move(reply), "unexpected redis hgetall reply");
+    });
 }
 
-task<std::int64_t> redis_session::hdel(
-    std::string_view key, std::string_view field) const {
+task<std::int64_t> redis_session::hdel(std::string_view key, std::string_view field) const {
     return mapped<std::int64_t>({"HDEL", key, field}, detail::parse_redis_integer);
 }
 
@@ -1746,20 +1629,16 @@ task<std::vector<std::string>> redis_session::hvals(std::string_view key) const 
     return mapped<std::vector<std::string>>({"HVALS", key}, detail::parse_redis_string_array);
 }
 
-task<std::int64_t> redis_session::hincr_by(
-    std::string_view key, std::string_view field, std::int64_t value) const {
+task<std::int64_t> redis_session::hincr_by(std::string_view key, std::string_view field, std::int64_t value) const {
     std::array<char, detail::redis_int_scratch_size> value_scratch{};
-    return mapped<std::int64_t>(
-        {"HINCRBY", key, field, detail::format_redis_int(value_scratch, value)}, detail::parse_redis_integer);
+    return mapped<std::int64_t>({"HINCRBY", key, field, detail::format_redis_int(value_scratch, value)}, detail::parse_redis_integer);
 }
 
-task<std::int64_t> redis_session::lpush(
-    std::string_view key, std::string_view value) const {
+task<std::int64_t> redis_session::lpush(std::string_view key, std::string_view value) const {
     return mapped<std::int64_t>({"LPUSH", key, value}, detail::parse_redis_integer);
 }
 
-task<std::int64_t> redis_session::rpush(
-    std::string_view key, std::string_view value) const {
+task<std::int64_t> redis_session::rpush(std::string_view key, std::string_view value) const {
     return mapped<std::int64_t>({"RPUSH", key, value}, detail::parse_redis_integer);
 }
 
@@ -1775,52 +1654,40 @@ task<std::int64_t> redis_session::llen(std::string_view key) const {
     return mapped<std::int64_t>({"LLEN", key}, detail::parse_redis_integer);
 }
 
-task<std::vector<std::string>> redis_session::lrange(
-    std::string_view key, std::int64_t start, std::int64_t stop) const {
+task<std::vector<std::string>> redis_session::lrange(std::string_view key, std::int64_t start, std::int64_t stop) const {
     registration_.require_active();
-    return execute_mapped<std::vector<std::string>>(
-        pool(), detail::make_redis_range_command("LRANGE", key, start, stop), detail::parse_redis_string_array);
+    return execute_mapped<std::vector<std::string>>(pool(), detail::make_redis_range_command("LRANGE", key, start, stop), detail::parse_redis_string_array);
 }
 
-task<std::optional<std::string>> redis_session::lindex(
-    std::string_view key, std::int64_t index) const {
+task<std::optional<std::string>> redis_session::lindex(std::string_view key, std::int64_t index) const {
     registration_.require_active();
-    return execute_mapped<std::optional<std::string>>(
-        pool(), detail::make_redis_integer_command("LINDEX", key, index), detail::parse_redis_optional_string);
+    return execute_mapped<std::optional<std::string>>(pool(), detail::make_redis_integer_command("LINDEX", key, index), detail::parse_redis_optional_string);
 }
 
-task<void> redis_session::lset(
-    std::string_view key, std::int64_t index, std::string_view value) const {
+task<void> redis_session::lset(std::string_view key, std::int64_t index, std::string_view value) const {
     std::array<char, detail::redis_int_scratch_size> index_scratch{};
     return mapped<void>({"LSET", key, detail::format_redis_int(index_scratch, index), value}, detail::parse_redis_ok);
 }
 
-task<void> redis_session::ltrim(
-    std::string_view key, std::int64_t start, std::int64_t stop) const {
+task<void> redis_session::ltrim(std::string_view key, std::int64_t start, std::int64_t stop) const {
     registration_.require_active();
-    return execute_mapped<void>(
-        pool(), detail::make_redis_range_command("LTRIM", key, start, stop), detail::parse_redis_ok);
+    return execute_mapped<void>(pool(), detail::make_redis_range_command("LTRIM", key, start, stop), detail::parse_redis_ok);
 }
 
-task<std::int64_t> redis_session::lrem(
-    std::string_view key, std::int64_t count, std::string_view value) const {
+task<std::int64_t> redis_session::lrem(std::string_view key, std::int64_t count, std::string_view value) const {
     std::array<char, detail::redis_int_scratch_size> count_scratch{};
-    return mapped<std::int64_t>(
-        {"LREM", key, detail::format_redis_int(count_scratch, count), value}, detail::parse_redis_integer);
+    return mapped<std::int64_t>({"LREM", key, detail::format_redis_int(count_scratch, count), value}, detail::parse_redis_integer);
 }
 
-task<std::int64_t> redis_session::sadd(
-    std::string_view key, std::string_view member) const {
+task<std::int64_t> redis_session::sadd(std::string_view key, std::string_view member) const {
     return mapped<std::int64_t>({"SADD", key, member}, detail::parse_redis_integer);
 }
 
-task<std::int64_t> redis_session::srem(
-    std::string_view key, std::string_view member) const {
+task<std::int64_t> redis_session::srem(std::string_view key, std::string_view member) const {
     return mapped<std::int64_t>({"SREM", key, member}, detail::parse_redis_integer);
 }
 
-task<std::vector<std::string>> redis_session::smembers(
-    std::string_view key) const {
+task<std::vector<std::string>> redis_session::smembers(std::string_view key) const {
     return mapped<std::vector<std::string>>({"SMEMBERS", key}, detail::parse_redis_string_array);
 }
 
@@ -1836,72 +1703,56 @@ task<std::optional<std::string>> redis_session::spop(std::string_view key) const
     return mapped<std::optional<std::string>>({"SPOP", key}, detail::parse_redis_optional_string);
 }
 
-task<std::optional<std::string>> redis_session::srand_member(
-    std::string_view key) const {
+task<std::optional<std::string>> redis_session::srand_member(std::string_view key) const {
     return mapped<std::optional<std::string>>({"SRANDMEMBER", key}, detail::parse_redis_optional_string);
 }
 
-task<std::vector<std::string>> redis_session::sinter(
-    std::span<const std::string_view> keys) const {
+task<std::vector<std::string>> redis_session::sinter(std::span<const std::string_view> keys) const {
     registration_.require_active();
-    return execute_mapped<std::vector<std::string>>(
-        pool(), detail::redis_command_with_keys("SINTER", keys), detail::parse_redis_string_array);
+    return execute_mapped<std::vector<std::string>>(pool(), detail::redis_command_with_keys("SINTER", keys), detail::parse_redis_string_array);
 }
 
-task<std::vector<std::string>> redis_session::sunion(
-    std::span<const std::string_view> keys) const {
+task<std::vector<std::string>> redis_session::sunion(std::span<const std::string_view> keys) const {
     registration_.require_active();
-    return execute_mapped<std::vector<std::string>>(
-        pool(), detail::redis_command_with_keys("SUNION", keys), detail::parse_redis_string_array);
+    return execute_mapped<std::vector<std::string>>(pool(), detail::redis_command_with_keys("SUNION", keys), detail::parse_redis_string_array);
 }
 
-task<std::vector<std::string>> redis_session::sdiff(
-    std::span<const std::string_view> keys) const {
+task<std::vector<std::string>> redis_session::sdiff(std::span<const std::string_view> keys) const {
     registration_.require_active();
-    return execute_mapped<std::vector<std::string>>(
-        pool(), detail::redis_command_with_keys("SDIFF", keys), detail::parse_redis_string_array);
+    return execute_mapped<std::vector<std::string>>(pool(), detail::redis_command_with_keys("SDIFF", keys), detail::parse_redis_string_array);
 }
 
-task<std::int64_t> redis_session::zadd(
-    std::string_view key, double score, std::string_view member) const {
+task<std::int64_t> redis_session::zadd(std::string_view key, double score, std::string_view member) const {
     registration_.require_active();
-    return execute_mapped<std::int64_t>(
-        pool(), detail::make_redis_zadd_command(key, score, member), detail::parse_redis_integer);
+    return execute_mapped<std::int64_t>(pool(), detail::make_redis_zadd_command(key, score, member), detail::parse_redis_integer);
 }
 
-task<std::int64_t> redis_session::zrem(
-    std::string_view key, std::string_view member) const {
+task<std::int64_t> redis_session::zrem(std::string_view key, std::string_view member) const {
     return mapped<std::int64_t>({"ZREM", key, member}, detail::parse_redis_integer);
 }
 
-task<std::vector<std::string>> redis_session::zrange(
-    std::string_view key, std::int64_t start, std::int64_t stop) const {
+task<std::vector<std::string>> redis_session::zrange(std::string_view key, std::int64_t start, std::int64_t stop) const {
     registration_.require_active();
-    return execute_mapped<std::vector<std::string>>(
-        pool(), detail::make_redis_range_command("ZRANGE", key, start, stop), detail::parse_redis_string_array);
+    return execute_mapped<std::vector<std::string>>(pool(), detail::make_redis_range_command("ZRANGE", key, start, stop), detail::parse_redis_string_array);
 }
 
-task<std::vector<redis_scored_value>> redis_session::zrange_with_scores(
-    std::string_view key, std::int64_t start, std::int64_t stop) const {
+task<std::vector<redis_scored_value>> redis_session::zrange_with_scores(std::string_view key, std::int64_t start, std::int64_t stop) const {
     registration_.require_active();
     auto command = detail::make_redis_range_command("ZRANGE", key, start, stop, true);
     return execute_mapped<std::vector<redis_scored_value>>(pool(), std::move(command), detail::parse_redis_scored_array);
 }
 
-task<std::optional<double>> redis_session::zscore(
-    std::string_view key, std::string_view member) const {
-    return mapped<std::optional<double>>({"ZSCORE", key, member},
-        [](redis_value&& reply) {
-            return detail::parse_redis_optional_double(std::move(reply), "invalid redis zscore reply");
-        });
+task<std::optional<double>> redis_session::zscore(std::string_view key, std::string_view member) const {
+    return mapped<std::optional<double>>({"ZSCORE", key, member}, [](redis_value&& reply) {
+        return detail::parse_redis_optional_double(std::move(reply), "invalid redis zscore reply");
+    });
 }
 
 task<std::int64_t> redis_session::zcard(std::string_view key) const {
     return mapped<std::int64_t>({"ZCARD", key}, detail::parse_redis_integer);
 }
 
-task<std::int64_t> redis_session::zcount(
-    std::string_view key, double min_value, double max_value) const {
+task<std::int64_t> redis_session::zcount(std::string_view key, double min_value, double max_value) const {
     registration_.require_active();
     std::array<char, detail::redis_score_scratch_size> min_scratch{};
     std::array<char, detail::redis_score_scratch_size> max_scratch{};
@@ -1916,39 +1767,30 @@ task<std::int64_t> redis_session::zcount(
 
 task<redis_scan_result> redis_session::scan(redis_scan_options options) const {
     registration_.require_active();
-    return execute_mapped<redis_scan_result>(
-        pool(), make_redis_scan_command("SCAN", std::nullopt, options), detail::parse_redis_scan_result);
+    return execute_mapped<redis_scan_result>(pool(), make_redis_scan_command("SCAN", std::nullopt, options), detail::parse_redis_scan_result);
 }
 
-task<redis_hash_scan_result> redis_session::hscan(
-    std::string_view key, redis_scan_options options) const {
+task<redis_hash_scan_result> redis_session::hscan(std::string_view key, redis_scan_options options) const {
     registration_.require_active();
-    return execute_mapped<redis_hash_scan_result>(
-        pool(), make_redis_scan_command("HSCAN", key, options), detail::parse_redis_hash_scan_result);
+    return execute_mapped<redis_hash_scan_result>(pool(), make_redis_scan_command("HSCAN", key, options), detail::parse_redis_hash_scan_result);
 }
 
-task<redis_scan_result> redis_session::sscan(
-    std::string_view key, redis_scan_options options) const {
+task<redis_scan_result> redis_session::sscan(std::string_view key, redis_scan_options options) const {
     registration_.require_active();
-    return execute_mapped<redis_scan_result>(
-        pool(), make_redis_scan_command("SSCAN", key, options), detail::parse_redis_scan_result);
+    return execute_mapped<redis_scan_result>(pool(), make_redis_scan_command("SSCAN", key, options), detail::parse_redis_scan_result);
 }
 
-task<redis_z_scan_result> redis_session::zscan(
-    std::string_view key, redis_scan_options options) const {
+task<redis_z_scan_result> redis_session::zscan(std::string_view key, redis_scan_options options) const {
     registration_.require_active();
-    return execute_mapped<redis_z_scan_result>(
-        pool(), make_redis_scan_command("ZSCAN", key, options), detail::parse_redis_z_scan_result);
+    return execute_mapped<redis_z_scan_result>(pool(), make_redis_scan_command("ZSCAN", key, options), detail::parse_redis_z_scan_result);
 }
 
-task<redis_value> redis_session::eval(std::string_view script,
-    std::span<const std::string_view> keys, std::span<const std::string_view> args) const {
+task<redis_value> redis_session::eval(std::string_view script, std::span<const std::string_view> keys, std::span<const std::string_view> args) const {
     registration_.require_active();
     return scoped(execute(pool(), detail::redis_eval_args("EVAL", script, keys, args)));
 }
 
-task<redis_value> redis_session::eval_sha(std::string_view sha1,
-    std::span<const std::string_view> keys, std::span<const std::string_view> args) const {
+task<redis_value> redis_session::eval_sha(std::string_view sha1, std::span<const std::string_view> keys, std::span<const std::string_view> args) const {
     registration_.require_active();
     return scoped(execute(pool(), detail::redis_eval_args("EVALSHA", sha1, keys, args)));
 }
@@ -1957,34 +1799,24 @@ task<std::string> redis_session::script_load(std::string_view script) const {
     return mapped<std::string>({"SCRIPT", "LOAD", script}, detail::take_redis_string);
 }
 
-task<std::vector<bool>> redis_session::script_exists(
-    std::span<const std::string_view> sha1s) const {
+task<std::vector<bool>> redis_session::script_exists(std::span<const std::string_view> sha1s) const {
     registration_.require_active();
-    return execute_mapped<std::vector<bool>>(
-        pool(), detail::redis_command_with_key_fields("SCRIPT", "EXISTS", sha1s), detail::parse_redis_bool_array);
+    return execute_mapped<std::vector<bool>>(pool(), detail::redis_command_with_key_fields("SCRIPT", "EXISTS", sha1s), detail::parse_redis_bool_array);
 }
 
-task<std::optional<redis_key_value>> redis_session::blpop(
-    std::span<const std::string_view> keys, redis_block_wait wait) const {
+task<std::optional<redis_key_value>> redis_session::blpop(std::span<const std::string_view> keys, redis_block_wait wait) const {
     registration_.require_active();
     const auto reply_timeout = redis_block_reply_timeout(operation_options_, wait);
-    return execute_mapped<std::optional<redis_key_value>>(blocking_pool(),
-        detail::redis_blocking_pop_args("BLPOP", keys, wait), detail::parse_redis_blocking_pop_reply,
-        reply_timeout);
+    return execute_mapped<std::optional<redis_key_value>>(blocking_pool(), detail::redis_blocking_pop_args("BLPOP", keys, wait), detail::parse_redis_blocking_pop_reply, reply_timeout);
 }
 
-task<std::optional<redis_key_value>> redis_session::brpop(
-    std::span<const std::string_view> keys, redis_block_wait wait) const {
+task<std::optional<redis_key_value>> redis_session::brpop(std::span<const std::string_view> keys, redis_block_wait wait) const {
     registration_.require_active();
     const auto reply_timeout = redis_block_reply_timeout(operation_options_, wait);
-    return execute_mapped<std::optional<redis_key_value>>(blocking_pool(),
-        detail::redis_blocking_pop_args("BRPOP", keys, wait), detail::parse_redis_blocking_pop_reply,
-        reply_timeout);
+    return execute_mapped<std::optional<redis_key_value>>(blocking_pool(), detail::redis_blocking_pop_args("BRPOP", keys, wait), detail::parse_redis_blocking_pop_reply, reply_timeout);
 }
 
-task<std::optional<redis_x_read_group_result>> redis_session::xread_group(
-    std::string_view group, std::string_view consumer, std::span<const redis_stream_read_view> streams,
-    redis_x_read_group_options options) const {
+task<std::optional<redis_x_read_group_result>> redis_session::xread_group(std::string_view group, std::string_view consumer, std::span<const redis_stream_read_view> streams, redis_x_read_group_options options) const {
     registration_.require_active();
     auto args = detail::redis_x_read_group_args(group, consumer, streams, options);
     auto* selected_pool = &pool();
@@ -1993,8 +1825,7 @@ task<std::optional<redis_x_read_group_result>> redis_session::xread_group(
         selected_pool = &blocking_pool();
         reply_timeout = redis_block_reply_timeout(operation_options_, *options.block_);
     }
-    return execute_mapped<std::optional<redis_x_read_group_result>>(
-        *selected_pool, std::move(args), detail::parse_redis_x_read_group_reply, reply_timeout);
+    return execute_mapped<std::optional<redis_x_read_group_result>>(*selected_pool, std::move(args), detail::parse_redis_x_read_group_reply, reply_timeout);
 }
 
 redis_pipeline redis_session::pipeline() const {
@@ -2013,29 +1844,27 @@ task<std::int64_t> redis_session::publish(std::string_view channel, std::string_
 
 redis_subscription redis_session::subscription() const {
     registration_.require_active();
-    detail::require_bounded_redis_wait(
-        operation_options_, "redis subscription requires a stop_token or finite operation timeout");
+    detail::require_bounded_redis_wait(operation_options_, "redis subscription requires a stop_token or finite operation timeout");
     return redis_subscription(runtime_->subscriptions(), registration_.scope(), operation_options_);
 }
 
 namespace detail {
 
 template <redis_batch_mode mode>
-redis_batch<mode>::redis_batch(redis_pool& pool, operation_options options,
-    operation_scope& scope, request_io_metrics* io_metrics) noexcept
-    : pool_(&pool),
-      options_(std::move(options)),
-      commands_(),
-      io_metrics_(io_metrics),
-      registration_(scope, this, &redis_batch::expire_capability) {}
+redis_batch<mode>::redis_batch(redis_pool& pool, operation_options options, operation_scope& scope, request_io_metrics* io_metrics) noexcept :
+    pool_(&pool),
+    options_(std::move(options)),
+    commands_(),
+    io_metrics_(io_metrics),
+    registration_(scope, this, &redis_batch::expire_capability) {}
 
 template <redis_batch_mode mode>
-redis_batch<mode>::redis_batch(redis_batch&& other) noexcept
-    : pool_(std::exchange(other.pool_, nullptr)),
-      options_(std::move(other.options_)),
-      commands_(std::move(other.commands_)),
-      io_metrics_(other.io_metrics_),
-      registration_(std::move(other.registration_), this) {}
+redis_batch<mode>::redis_batch(redis_batch&& other) noexcept :
+    pool_(std::exchange(other.pool_, nullptr)),
+    options_(std::move(other.options_)),
+    commands_(std::move(other.commands_)),
+    io_metrics_(other.io_metrics_),
+    registration_(std::move(other.registration_), this) {}
 
 template <redis_batch_mode mode>
 void redis_batch<mode>::require_ready() const {
@@ -2083,15 +1912,12 @@ redis_batch<mode>& redis_batch<mode>::append_owned(redis_owned_command command) 
 }
 
 template <redis_batch_mode mode>
-task<std::vector<redis_value>> redis_batch<mode>::execute_owned(
-    request_io_metrics* io_metrics, redis_command_payload payload_value) {
+task<std::vector<redis_value>> redis_batch<mode>::execute_owned(request_io_metrics* io_metrics, redis_command_payload payload_value) {
     scoped_request_io_timer timer(io_metrics, request_io_kind::redis);
     if constexpr (mode == redis_batch_mode::pipeline) {
-        co_return co_await payload_value.pool_.get().execute_pipeline(
-            std::move(payload_value.commands_), std::move(payload_value.options_));
+        co_return co_await payload_value.pool_.get().execute_pipeline(std::move(payload_value.commands_), std::move(payload_value.options_));
     } else {
-        auto replies = co_await payload_value.pool_.get().execute_pipeline(
-            std::move(payload_value.commands_), std::move(payload_value.options_), true);
+        auto replies = co_await payload_value.pool_.get().execute_pipeline(std::move(payload_value.commands_), std::move(payload_value.options_), true);
         if (replies.empty()) {
             throw redis_error(redis_error::code_type::protocol_error, "redis transaction returned no replies");
         }
@@ -2120,12 +1946,10 @@ template class redis_batch<redis_batch_mode::transaction>;
 
 }  // namespace detail
 
-redis_session redis_session::bind_caller_scope(::ruvia::operation_scope& scope,
-    detail::request_io_metrics* io_metrics, const stop_token& stop_token_value) && {
+redis_session redis_session::bind_caller_scope(::ruvia::operation_scope& scope, detail::request_io_metrics* io_metrics, const stop_token& stop_token_value) && {
     registration_.require_active();
     redis_session bound(*runtime_, scope, io_metrics);
-    bound.operation_options_ = override_operation_options(
-        operation_options_, operation_options{.timeout_ = std::nullopt, .stop_token_ = stop_token_value});
+    bound.operation_options_ = override_operation_options(operation_options_, operation_options{.timeout_ = std::nullopt, .stop_token_ = stop_token_value});
     return bound;
 }
 
@@ -2183,8 +2007,7 @@ public:
     explicit redis_orm_script_digest(std::string_view body) {
         std::array<unsigned char, EVP_MAX_MD_SIZE> digest{};
         std::size_t digest_size = 0;
-        if (EVP_Q_digest(nullptr, "SHA1", nullptr, body.data(), body.size(), digest.data(), &digest_size) != 1 ||
-            digest_size * 2 != sha1_.size()) {
+        if (EVP_Q_digest(nullptr, "SHA1", nullptr, body.data(), body.size(), digest.data(), &digest_size) != 1 || digest_size * 2 != sha1_.size()) {
             throw std::runtime_error("redis entity script digest could not be computed");
         }
         http_encode_lower_hex(sha1_.data(), std::span<const unsigned char>(digest.data(), digest_size));
@@ -2218,8 +2041,7 @@ const redis_orm_script& redis_orm_delete_script() {
     return digest.script();
 }
 
-redis_orm_arguments_type redis_orm_write_arguments(std::string_view storage_prefix, std::string_view id,
-    std::string_view mode, redis_write_options options, std::size_t extra_arguments) {
+redis_orm_arguments_type redis_orm_write_arguments(std::string_view storage_prefix, std::string_view id, std::string_view mode, redis_write_options options, std::size_t extra_arguments) {
     if (options.ttl_ && (options.persist_ || options.ttl_->count() <= 0 || options.ttl_->count() > 9007199254740991LL)) {
         throw std::invalid_argument("entity TTL must be positive, at most 2^53-1 milliseconds, and cannot combine with persist");
     }
@@ -2228,8 +2050,7 @@ redis_orm_arguments_type redis_orm_write_arguments(std::string_view storage_pref
     append_redis_orm_script_call(args, redis_orm_write_script());
     args.push_back(redis_entity_key(storage_prefix, id));
     args.emplace_back(mode);
-    args.emplace_back(options.ttl_ ? "expire" : options.persist_ ? "persist"
-                                                                 : "keep");
+    args.emplace_back(options.ttl_ ? "expire" : (options.persist_ ? "persist" : "keep"));
     if (options.ttl_) {
         http_append_signed(args.emplace_back(), static_cast<std::int64_t>(options.ttl_->count()));
     } else {
@@ -2238,8 +2059,7 @@ redis_orm_arguments_type redis_orm_write_arguments(std::string_view storage_pref
     return args;
 }
 
-redis_orm_arguments_type redis_orm_delete_arguments(
-    std::string_view storage_prefix, std::string_view id) {
+redis_orm_arguments_type redis_orm_delete_arguments(std::string_view storage_prefix, std::string_view id) {
     redis_orm_arguments_type args;
     args.reserve(4);
     append_redis_orm_script_call(args, redis_orm_delete_script());
@@ -2247,8 +2067,7 @@ redis_orm_arguments_type redis_orm_delete_arguments(
     return args;
 }
 
-task<redis_value> execute_redis_orm_script(redis_pool& pool, const redis_orm_script& script,
-    redis_orm_arguments_type args, request_io_metrics* io_metrics, operation_options options) {
+task<redis_value> execute_redis_orm_script(redis_pool& pool, const redis_orm_script& script, redis_orm_arguments_type args, request_io_metrics* io_metrics, operation_options options) {
     scoped_request_io_timer timer(io_metrics, request_io_kind::redis);
     const operation_deadline deadline(options.timeout_);
     {
@@ -2275,8 +2094,7 @@ redis_write_result redis_orm_exec_result(redis_value&& reply) {
         case 2:
             return redis_write_result(1);
         default:
-            throw redis_error(redis_error::code_type::protocol_error,
-                "invalid entity write affected-row reply");
+            throw redis_error(redis_error::code_type::protocol_error, "invalid entity write affected-row reply");
     }
 }
 
@@ -2285,8 +2103,7 @@ redis_write_result redis_orm_delete_result(redis_value&& reply) {
     if (value == 0 || value == 1) {
         return redis_write_result(static_cast<std::uint64_t>(value));
     }
-    throw redis_error(redis_error::code_type::protocol_error,
-        "invalid entity delete affected-row reply");
+    throw redis_error(redis_error::code_type::protocol_error, "invalid entity delete affected-row reply");
 }
 
 void redis_orm_status_result(redis_value&& reply) {
@@ -2328,8 +2145,7 @@ namespace {
     return context_value;
 }
 
-void validate_redis_registry(
-    const worker_ref& worker_value, std::span<const redis_definition_type> redis) {
+void validate_redis_registry(const worker_ref& worker_value, std::span<const redis_definition_type> redis) {
     if (!worker_value.valid()) {
         throw std::invalid_argument("redis registry requires a valid worker");
     }
@@ -2338,16 +2154,14 @@ void validate_redis_registry(
 
 }  // namespace
 
-redis_registry::redis_registry(asio::io_context& io_context,
-    std::span<const redis_definition_type> redis, worker_ref worker_value)
-    : runtimes_(),
-      alias_index_() {
+redis_registry::redis_registry(asio::io_context& io_context, std::span<const redis_definition_type> redis, worker_ref worker_value) :
+    runtimes_(),
+    alias_index_() {
     validate_redis_registry(worker_value, redis);
     alias_index_.build(redis);
     runtimes_.reserve(redis.size());
     for (const auto& definition : redis) {
-        runtimes_.push_back(std::make_unique<redis_client_runtime>(io_context, worker_value,
-            redis_config_storage(definition.config_)));
+        runtimes_.push_back(std::make_unique<redis_client_runtime>(io_context, worker_value, redis_config_storage(definition.config_)));
     }
 }
 
@@ -2378,8 +2192,7 @@ redis_session redis_registry::get(::ruvia::operation_scope& operation_scope, req
     return runtimes_[*default_pool_index]->session(operation_scope, io_metrics);
 }
 
-redis_session redis_registry::get(
-    std::string_view alias, ::ruvia::operation_scope& operation_scope, request_io_metrics* io_metrics) const {
+redis_session redis_registry::get(std::string_view alias, ::ruvia::operation_scope& operation_scope, request_io_metrics* io_metrics) const {
     const auto match = alias_index_.find(alias);
     if (match.has_value()) {
         return runtimes_[*match]->session(operation_scope, io_metrics);
@@ -2387,18 +2200,15 @@ redis_session redis_registry::get(
     throw redis_error(redis_error::code_type::not_configured, "redis is not configured");
 }
 
-redis_client_runtime::redis_client_runtime(asio::io_context& io_context, const worker_ref& worker_value,
-    redis_config_storage config)
-    : config_(std::move(config)),
-      worker_(worker_value),
-      tls_context_(make_redis_tls_context(config_.tls_)),
-      general_(io_context, config_, tls_context_, config_.command_timeout_,
-          config_.pool_size_per_worker_, worker_),
-      // Blocking waits have their own deadlines; ordinary command timeouts
-      // must not interrupt a finite long wait or an explicitly cancelled wait.
-      blocking_(io_context, config_, tls_context_, std::nullopt,
-          config_.blocking_pool_size_per_worker_, worker_),
-      subscriptions_(io_context, tls_context_, config_, worker_) {}
+redis_client_runtime::redis_client_runtime(asio::io_context& io_context, const worker_ref& worker_value, redis_config_storage config) :
+    config_(std::move(config)),
+    worker_(worker_value),
+    tls_context_(make_redis_tls_context(config_.tls_)),
+    general_(io_context, config_, tls_context_, config_.command_timeout_, config_.pool_size_per_worker_, worker_),
+    // Blocking waits have their own deadlines; ordinary command timeouts
+    // must not interrupt a finite long wait or an explicitly cancelled wait.
+    blocking_(io_context, config_, tls_context_, std::nullopt, config_.blocking_pool_size_per_worker_, worker_),
+    subscriptions_(io_context, tls_context_, config_, worker_) {}
 
 redis_client_runtime::~redis_client_runtime() = default;
 
@@ -2461,11 +2271,11 @@ private:
     // Retires scopes before backend storage and its allocator are destroyed.
     client_lifecycle<redis_client_state> lifecycle_;
 };
-redis_client_state::redis_client_state(event_loop loop, const redis_config& config)
-    : loop_(client_lifecycle<redis_client_state>::require_loop(std::move(loop))),
-      worker_(loop_.worker()),
-      runtime_(loop_.io_context(), worker_, redis_config_storage(config)),
-      lifecycle_(*this, loop_, worker_) {}
+redis_client_state::redis_client_state(event_loop loop, const redis_config& config) :
+    loop_(client_lifecycle<redis_client_state>::require_loop(std::move(loop))),
+    worker_(loop_.worker()),
+    runtime_(loop_.io_context(), worker_, redis_config_storage(config)),
+    lifecycle_(*this, loop_, worker_) {}
 
 void redis_client_state::throw_not_ready() {
     throw std::logic_error("redis client is not connected");
@@ -2484,8 +2294,8 @@ redis_session redis_client_state::redis() {
 
 namespace ruvia {
 
-redis_client::redis_client(event_loop loop, const redis_config& config)
-    : state_(std::make_shared<detail::redis_client_state>(std::move(loop), config)) {
+redis_client::redis_client(event_loop loop, const redis_config& config) :
+    state_(std::make_shared<detail::redis_client_state>(std::move(loop), config)) {
     state_->bind_stop();
 }
 
@@ -2517,9 +2327,9 @@ const worker_ref& redis_client::worker() const& noexcept {
 
 namespace ruvia {
 
-redis_error::redis_error(code_type code, std::string_view message)
-    : std::runtime_error(std::string(message)),
-      code_(code) {}
+redis_error::redis_error(code_type code, std::string_view message) :
+    std::runtime_error(std::string(message)),
+    code_(code) {}
 
 redis_error::code_type redis_error::code() const noexcept {
     return code_;
@@ -2635,8 +2445,7 @@ namespace {
     }
 }
 
-[[nodiscard]] redis_owned_command encode_redis_pair_command(std::string_view command, std::optional<std::string_view> key,
-    std::span<const std::pair<std::string_view, std::string_view>> pairs, const char* empty_message) {
+[[nodiscard]] redis_owned_command encode_redis_pair_command(std::string_view command, std::optional<std::string_view> key, std::span<const std::pair<std::string_view, std::string_view>> pairs, const char* empty_message) {
     if (pairs.empty()) {
         throw std::invalid_argument(empty_message);
     }
@@ -2653,8 +2462,7 @@ namespace {
 }
 }  // namespace
 
-redis_owned_command make_owned_redis_command(
-    std::span<const std::string_view> args) {
+redis_owned_command make_owned_redis_command(std::span<const std::string_view> args) {
     redis_owned_command command{std::string()};
     append_resp_command(command.wire_, args);
     return command;
@@ -2666,20 +2474,16 @@ redis_owned_command make_owned_redis_command(std::string_view first, std::span<c
     return command;
 }
 
-redis_owned_command make_owned_redis_command(
-    std::initializer_list<std::string_view> args) {
+redis_owned_command make_owned_redis_command(std::initializer_list<std::string_view> args) {
     return make_owned_redis_command(std::span<const std::string_view>(args.begin(), args.size()));
 }
 
-redis_owned_command make_redis_integer_command(std::string_view command,
-    std::string_view key, std::int64_t value) {
+redis_owned_command make_redis_integer_command(std::string_view command, std::string_view key, std::int64_t value) {
     std::array<char, redis_int_scratch_size> value_scratch{};
     return make_owned_redis_command({command, key, format_redis_int(value_scratch, value)});
 }
 
-redis_owned_command make_redis_range_command(std::string_view command,
-    std::string_view key, std::int64_t start, std::int64_t stop,
-    bool with_scores) {
+redis_owned_command make_redis_range_command(std::string_view command, std::string_view key, std::int64_t start, std::int64_t stop, bool with_scores) {
     std::array<char, redis_int_scratch_size> start_scratch{};
     std::array<char, redis_int_scratch_size> stop_scratch{};
     const std::string_view args[]{
@@ -2692,8 +2496,7 @@ redis_owned_command make_redis_range_command(std::string_view command,
     return make_owned_redis_command(std::span<const std::string_view>(args, with_scores ? 5U : 4U));
 }
 
-redis_owned_command make_redis_zadd_command(std::string_view key, double score,
-    std::string_view member) {
+redis_owned_command make_redis_zadd_command(std::string_view key, double score, std::string_view member) {
     std::array<char, redis_score_scratch_size> score_scratch{};
     return make_owned_redis_command({"ZADD", key, format_redis_score(score_scratch, score), member});
 }
@@ -2709,21 +2512,18 @@ bool redis_set_returns_previous(redis_set_previous_value_policy policy) {
     }
 }
 
-redis_owned_command redis_command_with_keys(std::string_view command,
-    std::span<const std::string_view> keys) {
+redis_owned_command redis_command_with_keys(std::string_view command, std::span<const std::string_view> keys) {
     if (keys.empty()) {
         throw std::invalid_argument("redis command requires at least one key");
     }
     return make_owned_redis_command(command, keys);
 }
 
-redis_owned_command redis_mset_args(
-    std::span<const std::pair<std::string_view, std::string_view>> items) {
+redis_owned_command redis_mset_args(std::span<const std::pair<std::string_view, std::string_view>> items) {
     return encode_redis_pair_command("MSET", std::nullopt, items, "redis mset requires at least one item");
 }
 
-redis_owned_command redis_set_args(std::string_view key, std::string_view value,
-    const redis_set_options& options) {
+redis_owned_command redis_set_args(std::string_view key, std::string_view value, const redis_set_options& options) {
     std::string_view condition_token;
     if (options.condition_) {
         switch (*options.condition_) {
@@ -2741,9 +2541,7 @@ redis_owned_command redis_set_args(std::string_view key, std::string_view value,
     const auto* duration = options.expiration_ ? options.expiration_->duration() : nullptr;
     const bool keeps_existing = options.expiration_ && options.expiration_->keeps_existing();
     std::array<char, redis_int_scratch_size> duration_scratch{};
-    const std::string_view duration_text =
-        duration != nullptr ? format_redis_int(duration_scratch, static_cast<std::int64_t>(duration->count()))
-                            : std::string_view();
+    const std::string_view duration_text = duration != nullptr ? format_redis_int(duration_scratch, static_cast<std::int64_t>(duration->count())) : std::string_view();
     return encode_redis_command([&](const auto& emit) {
         emit("SET");
         emit(key);
@@ -2764,13 +2562,11 @@ redis_owned_command redis_set_args(std::string_view key, std::string_view value,
     });
 }
 
-redis_owned_command redis_hset_fields_args(std::string_view key,
-    std::span<const std::pair<std::string_view, std::string_view>> fields_value) {
+redis_owned_command redis_hset_fields_args(std::string_view key, std::span<const std::pair<std::string_view, std::string_view>> fields_value) {
     return encode_redis_pair_command("HSET", key, fields_value, "redis hset requires at least one field");
 }
 
-redis_owned_command redis_command_with_key_fields(std::string_view command,
-    std::string_view key, std::span<const std::string_view> fields_value) {
+redis_owned_command redis_command_with_key_fields(std::string_view command, std::string_view key, std::span<const std::string_view> fields_value) {
     if (fields_value.empty()) {
         throw std::invalid_argument("redis command requires at least one field");
     }
@@ -2783,8 +2579,7 @@ redis_owned_command redis_command_with_key_fields(std::string_view command,
     });
 }
 
-redis_owned_command redis_eval_args(std::string_view command, std::string_view script,
-    std::span<const std::string_view> keys, std::span<const std::string_view> argv) {
+redis_owned_command redis_eval_args(std::string_view command, std::string_view script, std::span<const std::string_view> keys, std::span<const std::string_view> argv) {
     std::array<char, http_max_unsigned_decimal_size> key_count_scratch{};
     const auto key_count = http_format_unsigned(key_count_scratch, keys.size());
     return encode_redis_command([&](const auto& emit) {
@@ -2800,8 +2595,7 @@ redis_owned_command redis_eval_args(std::string_view command, std::string_view s
     });
 }
 
-redis_owned_command redis_blocking_pop_args(std::string_view command,
-    std::span<const std::string_view> keys, redis_block_wait wait) {
+redis_owned_command redis_blocking_pop_args(std::string_view command, std::span<const std::string_view> keys, redis_block_wait wait) {
     if (keys.empty()) {
         throw std::invalid_argument("redis blocking pop requires at least one key");
     }
@@ -2810,9 +2604,7 @@ redis_owned_command redis_blocking_pop_args(std::string_view command,
     std::string_view timeout_text = "0";
     if (const auto duration = wait.duration(); duration.has_value()) {
         const auto milliseconds = duration->count();
-        const auto seconds_text = format_redis_int(
-            std::span<char, redis_int_scratch_size>(timeout_scratch.data(), redis_int_scratch_size),
-            milliseconds / 1000);
+        const auto seconds_text = format_redis_int(std::span<char, redis_int_scratch_size>(timeout_scratch.data(), redis_int_scratch_size), milliseconds / 1000);
         auto len = seconds_text.size();
         const auto remainder = milliseconds % 1000;
         if (remainder != 0) {
@@ -2832,9 +2624,7 @@ redis_owned_command redis_blocking_pop_args(std::string_view command,
     });
 }
 
-redis_owned_command redis_x_read_group_args(std::string_view group,
-    std::string_view consumer, std::span<const redis_stream_read_view> streams,
-    const redis_x_read_group_options& options) {
+redis_owned_command redis_x_read_group_args(std::string_view group, std::string_view consumer, std::span<const redis_stream_read_view> streams, const redis_x_read_group_options& options) {
     if (group.empty() || consumer.empty()) {
         throw std::invalid_argument("redis xreadgroup requires a group and consumer");
     }
@@ -2895,13 +2685,13 @@ constexpr std::string_view redis_ping_request = "*1\r\n$4\r\nPING\r\n";
 
 }  // namespace
 
-redis_subscription_connection::redis_subscription_connection(redis_subscription_set& owner, operation_options options)
-    : owner_(owner),
-      options_(std::move(options)),
-      connection_(owner.io_context_, owner.tls_context_, owner.worker_, owner.config_, owner.wire_counters_),
-      current_reply_(redis_types_access::null_value()),
-      ping_written_(owner.worker_),
-      cancellation_(owner.cancellation_target_, cancellation_id_) {
+redis_subscription_connection::redis_subscription_connection(redis_subscription_set& owner, operation_options options) :
+    owner_(owner),
+    options_(std::move(options)),
+    connection_(owner.io_context_, owner.tls_context_, owner.worker_, owner.config_, owner.wire_counters_),
+    current_reply_(redis_types_access::null_value()),
+    ping_written_(owner.worker_),
+    cancellation_(owner.cancellation_target_, cancellation_id_) {
     owner_.link(*this);
     if (owner_.closing_) {
         closed_ = true;
@@ -2995,8 +2785,7 @@ task<std::optional<redis_pubsub_event>> redis_subscription_connection::read(oper
     }
     std::optional<operation_interrupt> read_stop;
     try {
-        read_stop.emplace(read_stops_, owner_.worker_, operation_options{.stop_token_ = operation.stop_token_}, this,
-            &redis_subscription_connection::cancel_read, "redis subscription read");
+        read_stop.emplace(read_stops_, owner_.worker_, operation_options{.stop_token_ = operation.stop_token_}, this, &redis_subscription_connection::cancel_read, "redis subscription read");
     } catch (const std::system_error&) {
         // An already-stopped token: nothing was read, the subscription stays open.
         throw redis_error(redis_error::code_type::cancelled, "redis subscription read cancelled");
@@ -3179,13 +2968,12 @@ task<void> redis_subscription_connection::write_ping(operation_deadline timeout)
     ping_written_.notify();
 }
 
-redis_subscription_set::redis_subscription_set(asio::io_context& io_context, asio::ssl::context& tls_context,
-    const redis_config_storage& config, const worker_ref& worker_value)
-    : io_context_(io_context),
-      tls_context_(tls_context),
-      config_(config),
-      worker_(worker_value),
-      cancellation_target_(make_worker_cancellation_target(*this, worker_)) {
+redis_subscription_set::redis_subscription_set(asio::io_context& io_context, asio::ssl::context& tls_context, const redis_config_storage& config, const worker_ref& worker_value) :
+    io_context_(io_context),
+    tls_context_(tls_context),
+    config_(config),
+    worker_(worker_value),
+    cancellation_target_(make_worker_cancellation_target(*this, worker_)) {
     if (!worker_.valid()) {
         throw std::invalid_argument("redis subscriptions require a valid worker");
     }
@@ -3247,10 +3035,9 @@ void redis_subscription_set::unlink(redis_subscription_connection& connection) n
 
 namespace ruvia {
 
-redis_subscription::redis_subscription(detail::redis_subscription_set& subscriptions, operation_scope& scope,
-    operation_options options)
-    : connection_(subscriptions.open(std::move(options))),
-      registration_(scope, this, &redis_subscription::expire_capability) {}
+redis_subscription::redis_subscription(detail::redis_subscription_set& subscriptions, operation_scope& scope, operation_options options) :
+    connection_(subscriptions.open(std::move(options))),
+    registration_(scope, this, &redis_subscription::expire_capability) {}
 
 redis_subscription::~redis_subscription() = default;
 
@@ -3258,14 +3045,12 @@ void redis_subscription::expire_capability(void* target) noexcept {
     static_cast<redis_subscription*>(target)->connection_->abort(detail::client_abort_reason::closing);
 }
 
-task<void> redis_subscription::send(
-    std::string_view command, std::span<const std::string_view> names, bool require_names) {
+task<void> redis_subscription::send(std::string_view command, std::span<const std::string_view> names, bool require_names) {
     registration_.require_active();
     if (require_names && names.empty()) {
         throw std::invalid_argument("redis subscription requires at least one channel or pattern");
     }
-    return make_scoped_operation(registration_.scope(),
-        connection_->send(detail::make_owned_redis_command(command, names)));
+    return make_scoped_operation(registration_.scope(), connection_->send(detail::make_owned_redis_command(command, names)));
 }
 
 task<void> redis_subscription::subscribe(std::span<const std::string_view> channels) & {
@@ -3314,8 +3099,7 @@ constexpr std::string_view present_shadow = "__ruvia_present_";
 using node_kind = redis_predicate_node::kind_type;
 
 [[noreturn]] void throw_inexact_redis_number() {
-    throw std::invalid_argument(
-        "numeric search values must be finite and within the exact integer range of Redis Search");
+    throw std::invalid_argument("numeric search values must be finite and within the exact integer range of Redis Search");
 }
 
 void require_redis_exact_number(double value) {
@@ -3329,8 +3113,7 @@ void require_redis_exact_number(double value) {
         return false;
     }
     for (const unsigned char ch : value) {
-        if (!(ch == '_' || (ch >= 'a' && ch <= 'z') ||
-                (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9'))) {
+        if (!(ch == '_' || (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9'))) {
             return false;
         }
     }
@@ -3338,10 +3121,7 @@ void require_redis_exact_number(double value) {
 }
 
 [[nodiscard]] bool is_numeric_column_kind(redis_column_kind kind) noexcept {
-    return kind == redis_column_kind::signed_value ||
-           kind == redis_column_kind::unsigned_value ||
-           kind == redis_column_kind::float32 ||
-           kind == redis_column_kind::float64;
+    return kind == redis_column_kind::signed_value || kind == redis_column_kind::unsigned_value || kind == redis_column_kind::float32 || kind == redis_column_kind::float64;
 }
 
 void require_index_fits_column(redis_index_kind index_kind, redis_column_kind column_kind) {
@@ -3379,8 +3159,7 @@ void require_index_fits_column(redis_index_kind index_kind, redis_column_kind co
 // marker. Index columns are safe identifiers (normalize_redis_mapping), and
 // queries only name shadows of index columns; entity writes use the declared
 // column names as they are.
-[[nodiscard]] std::string shadow_field(
-    std::string_view shadow, std::string_view field) {
+[[nodiscard]] std::string shadow_field(std::string_view shadow, std::string_view field) {
     std::string result_value;
     result_value.reserve(shadow.size() + field.size());
     result_value.append(shadow);
@@ -3388,8 +3167,7 @@ void require_index_fits_column(redis_index_kind index_kind, redis_column_kind co
     return result_value;
 }
 
-[[nodiscard]] const redis_column_info& find_column_info(
-    std::span<const redis_column_info> columns, std::string_view name) {
+[[nodiscard]] const redis_column_info& find_column_info(std::span<const redis_column_info> columns, std::string_view name) {
     const auto column = std::ranges::find(columns, name, &redis_column_info::name_);
     if (column == columns.end()) {
         throw std::invalid_argument("unknown Redis query column");
@@ -3409,8 +3187,7 @@ void validate_entity_prefix(std::string_view entity_prefix, std::string_view tab
 // The optional exclusive marker '(' precedes the number in the same buffer.
 using redis_numeric_bound_buffer = std::array<char, redis_scalar_scratch_size + 1>;
 
-[[nodiscard]] std::string_view format_canonical_numeric(redis_numeric_bound_buffer& buffer,
-    const redis_literal& value, redis_column_kind column_kind, bool exclusive = false) {
+[[nodiscard]] std::string_view format_canonical_numeric(redis_numeric_bound_buffer& buffer, const redis_literal& value, redis_column_kind column_kind, bool exclusive = false) {
     const std::span<char, redis_scalar_scratch_size> scratch(buffer.data() + 1, redis_scalar_scratch_size);
     std::string_view number;
     switch (value.kind()) {
@@ -3425,9 +3202,7 @@ using redis_numeric_bound_buffer = std::array<char, redis_scalar_scratch_size + 
         case redis_literal_kind::float32: {
             const float real = value.float32_value();
             require_redis_exact_number(real);
-            number = column_kind == redis_column_kind::float32
-                         ? encode_redis_number(real, scratch)
-                         : encode_redis_number(static_cast<double>(real), scratch);
+            number = column_kind == redis_column_kind::float32 ? encode_redis_number(real, scratch) : encode_redis_number(static_cast<double>(real), scratch);
             break;
         }
         case redis_literal_kind::real: {
@@ -3449,8 +3224,7 @@ using redis_numeric_bound_buffer = std::array<char, redis_scalar_scratch_size + 
 }
 
 // TAG indexes only cover text and boolean columns.
-[[nodiscard]] std::string_view raw_tag_value(
-    const redis_literal& value, redis_column_kind column_kind) {
+[[nodiscard]] std::string_view raw_tag_value(const redis_literal& value, redis_column_kind column_kind) {
     if (value.kind() == redis_literal_kind::string && column_kind == redis_column_kind::text) {
         return value.text();
     }
@@ -3461,9 +3235,7 @@ using redis_numeric_bound_buffer = std::array<char, redis_scalar_scratch_size + 
 }
 
 // Primary keys are text or integer columns (is_redis_entity_primary_key_scalar).
-[[nodiscard]] std::string_view canonical_primary_key(
-    const redis_literal& value, redis_column_kind column_kind,
-    std::span<char, redis_scalar_scratch_size> scratch) {
+[[nodiscard]] std::string_view canonical_primary_key(const redis_literal& value, redis_column_kind column_kind, std::span<char, redis_scalar_scratch_size> scratch) {
     if (column_kind == redis_column_kind::text) {
         if (value.kind() != redis_literal_kind::string) {
             throw std::invalid_argument("Redis TEXT predicate requires a string value");
@@ -3484,12 +3256,8 @@ using redis_numeric_bound_buffer = std::array<char, redis_scalar_scratch_size + 
             return encode_redis_number(value.unsigned_value(), scratch);
         case redis_literal_kind::float32:
         case redis_literal_kind::real: {
-            const double number = value.kind() == redis_literal_kind::float32
-                                      ? static_cast<double>(value.float32_value())
-                                      : value.real_value();
-            if (!std::isfinite(number) || std::trunc(number) != number ||
-                std::fabs(number) > redis_max_exact_integer ||
-                (column_kind == redis_column_kind::unsigned_value && number < 0.0)) {
+            const double number = value.kind() == redis_literal_kind::float32 ? static_cast<double>(value.float32_value()) : value.real_value();
+            if (!std::isfinite(number) || std::trunc(number) != number || std::fabs(number) > redis_max_exact_integer || (column_kind == redis_column_kind::unsigned_value && number < 0.0)) {
                 throw std::invalid_argument("Redis integer primary key is invalid");
             }
             return encode_redis_number(static_cast<std::int64_t>(number), scratch);
@@ -3514,8 +3282,7 @@ struct redis_column_comparison final {
     const redis_predicate_node& operand_;
 };
 
-[[nodiscard]] redis_column_comparison column_comparison(const redis_mapping& mapping,
-    std::span<const redis_predicate_node> nodes, const redis_predicate_node& node) {
+[[nodiscard]] redis_column_comparison column_comparison(const redis_mapping& mapping, std::span<const redis_predicate_node> nodes, const redis_predicate_node& node) {
     if (node.operands_.size() < 2U || nodes[node.operands_[0]].kind_ != node_kind::field) {
         throw std::logic_error("invalid Redis predicate expression");
     }
@@ -3525,8 +3292,7 @@ struct redis_column_comparison final {
 }
 
 // `@shadow_field:{value}`
-void append_shadow_tag_term(
-    std::string& output, std::string_view shadow, std::string_view field, std::string_view value) {
+void append_shadow_tag_term(std::string& output, std::string_view shadow, std::string_view field, std::string_view value) {
     output.reserve(output.size() + 4U + shadow.size() + field.size() + value.size());
     output.push_back('@');
     output.append(shadow);
@@ -3537,8 +3303,7 @@ void append_shadow_tag_term(
 }
 
 // `@field:{x<hex>}`
-void append_encoded_tag_term(
-    std::string& output, std::string_view field, std::string_view raw_value) {
+void append_encoded_tag_term(std::string& output, std::string_view field, std::string_view raw_value) {
     output.reserve(output.size() + 5U + field.size() + raw_value.size() * 2U);
     output.push_back('@');
     output.append(field);
@@ -3548,8 +3313,7 @@ void append_encoded_tag_term(
 }
 
 // `@field:[low high]`; a bound prefixed with '(' is exclusive.
-void append_numeric_range(
-    std::string& output, std::string_view field, std::string_view low, std::string_view high) {
+void append_numeric_range(std::string& output, std::string_view field, std::string_view low, std::string_view high) {
     output.reserve(output.size() + 5U + field.size() + low.size() + high.size());
     output.push_back('@');
     output.append(field);
@@ -3567,8 +3331,7 @@ void append_presence(std::string& output, std::string_view field) {
 }
 
 // `field IS NULL` / `field IS NOT NULL` through the presence shadow.
-void append_null_comparison(std::string& output, std::string_view field,
-    redis_binary_operator operation, const char* unsupported) {
+void append_null_comparison(std::string& output, std::string_view field, redis_binary_operator operation, const char* unsupported) {
     if (operation == redis_binary_operator::equal) {
         output.push_back('-');
         append_presence(output, field);
@@ -3579,8 +3342,7 @@ void append_null_comparison(std::string& output, std::string_view field,
     }
 }
 
-void append_tag_comparison(std::string& output, std::string_view field, const redis_literal& value,
-    redis_column_kind column_kind, redis_binary_operator operation) {
+void append_tag_comparison(std::string& output, std::string_view field, const redis_literal& value, redis_column_kind column_kind, redis_binary_operator operation) {
     if (value.kind() == redis_literal_kind::null) {
         append_null_comparison(output, field, operation, "unsupported NULL TAG comparison");
         return;
@@ -3591,8 +3353,7 @@ void append_tag_comparison(std::string& output, std::string_view field, const re
             append_encoded_tag_term(output, field, raw);
             return;
         case redis_binary_operator::not_equal:
-            output.reserve(
-                output.size() + 14U + present_shadow.size() + field.size() * 2U + raw.size() * 2U);
+            output.reserve(output.size() + 14U + present_shadow.size() + field.size() * 2U + raw.size() * 2U);
             output.push_back('(');
             append_presence(output, field);
             output.append(" -");
@@ -3604,8 +3365,7 @@ void append_tag_comparison(std::string& output, std::string_view field, const re
     }
 }
 
-void append_numeric_comparison(std::string& output, std::string_view field, const redis_literal& value,
-    redis_column_kind column_kind, redis_binary_operator operation) {
+void append_numeric_comparison(std::string& output, std::string_view field, const redis_literal& value, redis_column_kind column_kind, redis_binary_operator operation) {
     if (value.kind() == redis_literal_kind::null) {
         append_null_comparison(output, field, operation, "unsupported NULL NUMERIC comparison");
         return;
@@ -3655,8 +3415,8 @@ void append_numeric_comparison(std::string& output, std::string_view field, cons
 // Compiles one predicate tree against one repository mapping.
 class redis_query_compiler final {
 public:
-    redis_query_compiler(const redis_mapping& mapping) noexcept
-        : mapping_(mapping) {}
+    redis_query_compiler(const redis_mapping& mapping) noexcept :
+        mapping_(mapping) {}
 
     void append_predicate(std::string& output, const redis_predicate_storage& predicate) const {
         append_expression(output, predicate.nodes_, predicate.nodes_[predicate.root_], 0U);
@@ -3680,8 +3440,7 @@ public:
 private:
     using nodes_type = std::span<const redis_predicate_node>;
 
-    void append_expression(std::string& output, nodes_type nodes, const redis_predicate_node& node,
-        std::size_t depth) const {
+    void append_expression(std::string& output, nodes_type nodes, const redis_predicate_node& node, std::size_t depth) const {
         constexpr std::size_t max_depth = 64U;
         if (depth > max_depth) {
             throw std::invalid_argument("Redis predicate nesting is too deep");
@@ -3725,8 +3484,7 @@ private:
         const auto comparison = column_comparison(mapping_, nodes, node);
         const auto field = comparison.column_.name_;
         const auto& value = comparison.operand_.literal_;
-        if (comparison.column_.primary_key_ && comparison.column_.kind_ == redis_column_kind::text &&
-            value.kind() == redis_literal_kind::string && value.text().empty()) {
+        if (comparison.column_.primary_key_ && comparison.column_.kind_ == redis_column_kind::text && value.kind() == redis_literal_kind::string && value.text().empty()) {
             throw std::invalid_argument("Redis primary key cannot be empty");
         }
         switch (index_kind(mapping_, field)) {
@@ -3740,8 +3498,7 @@ private:
                 break;
         }
         // A TEXT index only answers presence tests.
-        if (value.kind() == redis_literal_kind::null &&
-            (node.binary_ == redis_binary_operator::equal || node.binary_ == redis_binary_operator::not_equal)) {
+        if (value.kind() == redis_literal_kind::null && (node.binary_ == redis_binary_operator::equal || node.binary_ == redis_binary_operator::not_equal)) {
             append_null_comparison(output, field, node.binary_, {});
             return;
         }
@@ -3779,17 +3536,14 @@ private:
             if (value.kind() == redis_literal_kind::null) {
                 throw std::invalid_argument("Redis IN list requires non-null literal values");
             }
-            if (comparison.column_.primary_key_ && comparison.column_.kind_ == redis_column_kind::text &&
-                value.kind() == redis_literal_kind::string && value.text().empty()) {
+            if (comparison.column_.primary_key_ && comparison.column_.kind_ == redis_column_kind::text && value.kind() == redis_literal_kind::string && value.text().empty()) {
                 throw std::invalid_argument("Redis primary key cannot be empty");
             }
             if (kind == redis_index_kind::tag) {
-                append_encoded_tag_term(
-                    output, field, raw_tag_value(value, comparison.column_.kind_));
+                append_encoded_tag_term(output, field, raw_tag_value(value, comparison.column_.kind_));
             } else {
                 redis_numeric_bound_buffer number_buffer;
-                const auto number =
-                    format_canonical_numeric(number_buffer, value, comparison.column_.kind_);
+                const auto number = format_canonical_numeric(number_buffer, value, comparison.column_.kind_);
                 append_numeric_range(output, field, number, number);
             }
         }
@@ -3807,8 +3561,7 @@ private:
         const auto field = comparison.column_.name_;
         const auto& lower = comparison.operand_.literal_;
         const auto& upper = nodes[node.operands_[2]].literal_;
-        if (index_kind(mapping_, field) != redis_index_kind::numeric ||
-            lower.kind() == redis_literal_kind::null || upper.kind() == redis_literal_kind::null) {
+        if (index_kind(mapping_, field) != redis_index_kind::numeric || lower.kind() == redis_literal_kind::null || upper.kind() == redis_literal_kind::null) {
             throw std::invalid_argument("Redis BETWEEN requires a NUMERIC indexed column");
         }
         redis_numeric_bound_buffer low_buffer;
@@ -3825,8 +3578,7 @@ private:
 // enforces the exact range RediSearch can index.
 void require_exact_numeric_text(std::string_view value) {
     double number = 0.0;
-    const auto parsed_value = std::from_chars(value.data(), value.data() + value.size(), number,
-        std::chars_format::general);
+    const auto parsed_value = std::from_chars(value.data(), value.data() + value.size(), number, std::chars_format::general);
     if (parsed_value.ec != std::errc{} || parsed_value.ptr != value.data() + value.size()) {
         throw_inexact_redis_number();
     }
@@ -3849,8 +3601,7 @@ void append_delete(redis_orm_arguments_type& args, field_type&& field) {
 
 }  // namespace
 
-redis_mapping normalize_redis_mapping(std::span<const redis_column_info> columns, std::string_view entity_prefix,
-    const redis_repository_config& config) {
+redis_mapping normalize_redis_mapping(std::span<const redis_column_info> columns, std::string_view entity_prefix, const redis_repository_config& config) {
     const std::string_view prefix = config.prefix_.empty() ? entity_prefix : std::string_view(config.prefix_);
     if (prefix.empty()) {
         throw std::invalid_argument("Redis entity prefix cannot be empty");
@@ -3863,9 +3614,7 @@ redis_mapping normalize_redis_mapping(std::span<const redis_column_info> columns
             throw std::invalid_argument("Redis entity column uses reserved __ruvia_ namespace");
         }
     }
-    redis_mapping result_value{columns, std::string(entity_prefix), std::string(prefix),
-        redis_entity_storage_prefix(prefix), std::vector<redis_index_definition>{},
-        std::vector<redis_index_kind>(columns.size(), redis_index_kind::none)};
+    redis_mapping result_value{columns, std::string(entity_prefix), std::string(prefix), redis_entity_storage_prefix(prefix), std::vector<redis_index_definition>{}, std::vector<redis_index_kind>(columns.size(), redis_index_kind::none)};
     result_value.indexes_.reserve(config.indexes_.size());
     for (const auto& index : config.indexes_) {
         const std::string_view field = index.column_;
@@ -3900,11 +3649,8 @@ std::string encode_redis_tag(std::string_view value) {
 
 namespace ruvia {
 
-redis_search_mapping::redis_search_mapping(const redis_search_mapping& other)
-    : mapping_{other.mapping_.columns_, std::string(other.mapping_.entity_prefix_),
-          std::string(other.mapping_.prefix_), std::string(other.mapping_.storage_prefix_),
-          std::vector<detail::redis_index_definition>{},
-          std::vector<redis_index_kind>(other.mapping_.column_index_kinds_)} {
+redis_search_mapping::redis_search_mapping(const redis_search_mapping& other) :
+    mapping_{other.mapping_.columns_, std::string(other.mapping_.entity_prefix_), std::string(other.mapping_.prefix_), std::string(other.mapping_.storage_prefix_), std::vector<detail::redis_index_definition>{}, std::vector<redis_index_kind>(other.mapping_.column_index_kinds_)} {
     mapping_.indexes_.reserve(other.mapping_.indexes_.size());
     for (const auto& index : other.mapping_.indexes_) {
         mapping_.indexes_.push_back({std::string(index.column_), index.kind_, index.sortable_});
@@ -3941,8 +3687,7 @@ void redis_search_mapping::require_valid() const {
     }
 }
 
-redis_compiled_command redis_search_mapping::compile_find(
-    const redis_find_options& options, redis_search_mode mode) const {
+redis_compiled_command redis_search_mapping::compile_find(const redis_find_options& options, redis_search_mode mode) const {
     require_valid();
     const auto& mapping = mapping_;
     const detail::redis_query_compiler compiler(mapping);
@@ -4085,9 +3830,7 @@ redis_compiled_command redis_search_mapping::compile_drop_index() const {
 
 namespace ruvia::detail {
 
-std::optional<std::string_view> redis_primary_key(
-    const redis_mapping& mapping, const redis_predicate& predicate,
-    std::span<char, redis_scalar_scratch_size> scratch) {
+std::optional<std::string_view> redis_primary_key(const redis_mapping& mapping, const redis_predicate& predicate, std::span<char, redis_scalar_scratch_size> scratch) {
     const auto* storage = redis_predicate_access::storage(predicate);
     if (storage == nullptr) {
         return std::nullopt;
@@ -4111,8 +3854,7 @@ std::optional<std::string_view> redis_primary_key(
     return result_value;
 }
 
-void append_redis_entity_field(redis_orm_arguments_type& args, std::string_view field,
-    std::optional<std::string_view> value, bool numeric_index, bool tag_shadow_value) {
+void append_redis_entity_field(redis_orm_arguments_type& args, std::string_view field, std::optional<std::string_view> value, bool numeric_index, bool tag_shadow_value) {
     if (!value) {
         append_delete(args, field);
         append_delete(args, shadow_field(present_shadow, field));

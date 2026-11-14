@@ -30,19 +30,16 @@ namespace {
 constexpr std::uint8_t end_stream_flag = 0x1;
 constexpr std::uint8_t end_headers_flag = 0x4;
 
-void append_frame(std::string& wire, std::uint8_t type, std::uint8_t flags,
-    std::uint32_t stream_id, std::string_view payload) {
+void append_frame(std::string& wire, std::uint8_t type, std::uint8_t flags, std::uint32_t stream_id, std::string_view payload) {
     std::array<char, ruvia::http2_frame_header_bytes> header{};
-    if (!ruvia::encode_http2_frame_header(header, static_cast<std::uint32_t>(payload.size()),
-            static_cast<ruvia::http2_frame_type>(type), flags, stream_id)) {
+    if (!ruvia::encode_http2_frame_header(header, static_cast<std::uint32_t>(payload.size()), static_cast<ruvia::http2_frame_type>(type), flags, stream_id)) {
         throw std::logic_error("invalid test HTTP/2 frame");
     }
     wire.append(header.data(), header.size());
     wire.append(payload);
 }
 
-void append_frame(std::string& wire, ruvia::http2_frame_type type, std::uint8_t flags,
-    std::uint32_t stream_id, std::string_view payload = {}) {
+void append_frame(std::string& wire, ruvia::http2_frame_type type, std::uint8_t flags, std::uint32_t stream_id, std::string_view payload = {}) {
     append_frame(wire, static_cast<std::uint8_t>(type), flags, stream_id, payload);
 }
 
@@ -276,8 +273,7 @@ TEST(Ruvia, http2_connect_data_after_rejection_is_discarded_with_credit) {
     auto head = std::move(*head_event->request_head());
     ruvia::http_response rejected;
     rejected.status(ruvia::http_status::forbidden);
-    const auto submitted = server.submit_response_head(
-        1, rejected, ruvia::plan_buffered_http_response_write(ruvia::http_known_method::connect, rejected));
+    const auto submitted = server.submit_response_head(1, rejected, ruvia::plan_buffered_http_response_write(ruvia::http_known_method::connect, rejected));
     EXPECT_TRUE(std::holds_alternative<ruvia::http_buffered_response_write_plan>(submitted));
     (void)take_frames(server);
 
@@ -443,8 +439,7 @@ TEST(Ruvia, http2_server_graceful_drain_bounds_streams_opened_before_ping_ack) {
             return;
         }
         ruvia::http_response response;
-        const auto submitted = server.submit_response_head(stream_id, response,
-            ruvia::plan_buffered_http_response_write(ruvia::http_known_method::get, response));
+        const auto submitted = server.submit_response_head(stream_id, response, ruvia::plan_buffered_http_response_write(ruvia::http_known_method::get, response));
         EXPECT_TRUE(std::holds_alternative<ruvia::http_buffered_response_write_plan>(submitted));
         (void)server.release(std::move(*head));
         const auto frames = take_frames(server);
@@ -678,8 +673,7 @@ TEST(Ruvia, http2_websocket_connect_accepts_zero_content_length_and_early_data_w
         auto wire = opening_wire();
         auto block = connect_block("websocket");
         append_frame(wire, ruvia::http2_frame_type::headers, end_headers_flag, 1, block);
-        append_frame(wire, ruvia::http2_frame_type::data, end_stream_flag, 1,
-            std::string_view("\x88\x82\x00\x00\x00\x00\x03\xe8", 8));
+        append_frame(wire, ruvia::http2_frame_type::data, end_stream_flag, 1, std::string_view("\x88\x82\x00\x00\x00\x00\x03\xe8", 8));
         EXPECT_TRUE(server.feed(wire) == ruvia::http2_feed_result::accepted);
         std::optional<ruvia::http2_request_head_event> head;
         bool saw_data = false;
@@ -710,8 +704,7 @@ TEST(Ruvia, http2_websocket_connect_accepts_zero_content_length_and_early_data_w
         auto wire = opening_wire();
         auto block = connect_block("websocket");
         append_frame(wire, ruvia::http2_frame_type::headers, end_headers_flag, 1, block);
-        append_frame(wire, ruvia::http2_frame_type::data, 0, 1,
-            std::string_view("\x88\x82\x00\x00\x00\x00\x03\xe8", 8));
+        append_frame(wire, ruvia::http2_frame_type::data, 0, 1, std::string_view("\x88\x82\x00\x00\x00\x00\x03\xe8", 8));
         append_frame(wire, ruvia::http2_frame_type::data, end_stream_flag, 1, std::string_view{});
         EXPECT_TRUE(server.feed(wire) == ruvia::http2_feed_result::accepted);
         std::optional<ruvia::http2_request_head_event> head;
@@ -789,24 +782,21 @@ void prepare_alias_output(std::string& output, bool grow) {
     }
 }
 
-void check_encoded_field(std::string_view output, std::string_view prefix,
-    std::string_view expected_name, std::string_view expected_value) {
+void check_encoded_field(std::string_view output, std::string_view prefix, std::string_view expected_name, std::string_view expected_value) {
     EXPECT_EQ(output.substr(0, prefix.size()), prefix);
     ruvia::hpack_decoder decoder;
     std::size_t fields = 0;
-    const auto result = decoder.decode(output.substr(prefix.size()),
-        [&](std::string_view name, std::string_view value) {
-            ++fields;
-            EXPECT_EQ(name, expected_name);
-            EXPECT_EQ(value, expected_value);
-            return true;
-        });
+    const auto result = decoder.decode(output.substr(prefix.size()), [&](std::string_view name, std::string_view value) {
+        ++fields;
+        EXPECT_EQ(name, expected_name);
+        EXPECT_EQ(value, expected_value);
+        return true;
+    });
     EXPECT_TRUE(!result.has_value());
     EXPECT_EQ(fields, std::size_t{1});
 }
 
-void check_newest(ruvia::hpack_decoder& decoder,
-    std::uint32_t index, std::string_view expected_name, std::string_view expected_value) {
+void check_newest(ruvia::hpack_decoder& decoder, std::uint32_t index, std::string_view expected_name, std::string_view expected_value) {
     std::size_t fields = 0;
     const auto result = decoder.decode(indexed_field(index), [&](std::string_view name, std::string_view value) {
         EXPECT_EQ(name, expected_name);
@@ -838,9 +828,7 @@ TEST(Ruvia, hpack_public_encoder_accepts_fields_borrowed_from_output) {
         static_name,
         sensitive_name };
     for (const bool grow : {false, true}) {
-        for (const auto kind : {alias_kind::name, alias_kind::value, alias_kind::disjoint,
-                 alias_kind::overlapping, alias_kind::identical, alias_kind::static_name,
-                 alias_kind::sensitive_name}) {
+        for (const auto kind : {alias_kind::name, alias_kind::value, alias_kind::disjoint, alias_kind::overlapping, alias_kind::identical, alias_kind::static_name, alias_kind::sensitive_name}) {
             {
                 std::string output;
                 prepare_alias_output(output, grow);
@@ -899,8 +887,7 @@ TEST(Ruvia, hpack_public_encoder_never_indexes_sensitive_fields) {
 }
 
 TEST(Ruvia, hpack_public_table_size_rejects_out_of_range_integers_and_excess_updates) {
-    for (const auto invalid : {std::numeric_limits<std::int64_t>::min(), std::int64_t{-1},
-             static_cast<std::int64_t>((std::numeric_limits<std::uint32_t>::max)()) + 1}) {
+    for (const auto invalid : {std::numeric_limits<std::int64_t>::min(), std::int64_t{-1}, static_cast<std::int64_t>((std::numeric_limits<std::uint32_t>::max)()) + 1}) {
         EXPECT_TRUE(!ruvia::hpack_table_size::try_from_value(invalid).has_value());
         ruvia::hpack_decoder decoder;
         bool rejected_limit = false;
@@ -915,9 +902,13 @@ TEST(Ruvia, hpack_public_table_size_rejects_out_of_range_integers_and_excess_upd
 
     ruvia::hpack_decoder decoder;
     decoder.set_max_dynamic_table_size(64);
-    EXPECT_TRUE(!decoder.decode(table_size_update(64), [](auto, auto) { return true; }).has_value());
-    EXPECT_TRUE(decoder.decode(table_size_update(65), [](auto, auto) { return true; }) ==
-                ruvia::hpack_decode_error::compression_error);
+    EXPECT_TRUE(!decoder
+            .decode(table_size_update(64), [](auto, auto) {
+        return true;
+    }).has_value());
+    EXPECT_TRUE(decoder.decode(table_size_update(65), [](auto, auto) {
+        return true;
+    }) == ruvia::hpack_decode_error::compression_error);
     EXPECT_TRUE(decoder_is_poisoned(decoder));
 }
 
@@ -926,7 +917,10 @@ TEST(Ruvia, hpack_public_lowered_capacity_requires_a_leading_update) {
     // must begin with a dynamic table size update.
     for (const bool signaled : {false, true}) {
         ruvia::hpack_decoder decoder;
-        EXPECT_TRUE(!decoder.decode(indexed_literal("a", "b"), [](auto, auto) { return true; }).has_value());
+        EXPECT_TRUE(!decoder
+                .decode(indexed_literal("a", "b"), [](auto, auto) {
+            return true;
+        }).has_value());
         decoder.set_max_dynamic_table_size(0);
         std::string block = signaled ? table_size_update(0) : std::string();
         block.push_back(static_cast<char>(0x82));
@@ -938,8 +932,9 @@ TEST(Ruvia, hpack_public_lowered_capacity_requires_a_leading_update) {
         if (signaled) {
             EXPECT_TRUE(!result.has_value());
             EXPECT_EQ(fields, std::size_t{1});
-            EXPECT_TRUE(decoder.decode(indexed_field(62), [](auto, auto) { return true; }) ==
-                        ruvia::hpack_decode_error::compression_error);
+            EXPECT_TRUE(decoder.decode(indexed_field(62), [](auto, auto) {
+                return true;
+            }) == ruvia::hpack_decode_error::compression_error);
         } else {
             EXPECT_TRUE(result == ruvia::hpack_decode_error::compression_error);
             EXPECT_EQ(fields, std::size_t{0});
@@ -962,7 +957,10 @@ TEST(Ruvia, hpack_public_dynamic_entries_own_fields_after_input_changes) {
         ruvia::hpack_decoder decoder;
         {
             std::string block = indexed_literal(std::string(24, 'n'), std::string(24, 'v'));
-            EXPECT_TRUE(!decoder.decode(block, [](auto, auto) { return true; }).has_value());
+            EXPECT_TRUE(!decoder
+                    .decode(block, [](auto, auto) {
+                return true;
+            }).has_value());
             block.assign(block.size(), '#');
         }
         {
@@ -970,18 +968,20 @@ TEST(Ruvia, hpack_public_dynamic_entries_own_fields_after_input_changes) {
             std::string block;
             ruvia::hpack_encoder::encode_header(block, std::string(24, 'a'), std::string(25, 'b'));
             block[0] = static_cast<char>(0x40);
-            EXPECT_TRUE(!decoder.decode(std::string_view(block), [](auto, auto) { return true; }).has_value());
+            EXPECT_TRUE(!decoder
+                    .decode(std::string_view(block), [](auto, auto) {
+                return true;
+            }).has_value());
             std::fill(block.begin(), block.end(), '#');
         }
         check_newest(decoder, 62, std::string(24, 'a'), std::string(25, 'b'));
         check_newest(decoder, 63, std::string(24, 'n'), std::string(24, 'v'));
         // RFC 7541 Appendix C.4.1: ":authority: www.example.com" as a Huffman literal.
-        constexpr std::string_view huffman_authority(
-            "\x41\x8c\xf1\xe3\xc2\xe5\xf2\x3a\x6b\xa0\xab\x90\xf4\xff", 14);
-        EXPECT_TRUE(!decoder.decode(huffman_authority, [](std::string_view name, std::string_view value) {
-                                return name == ":authority" && value == "www.example.com";
-                            })
-                .has_value());
+        constexpr std::string_view huffman_authority("\x41\x8c\xf1\xe3\xc2\xe5\xf2\x3a\x6b\xa0\xab\x90\xf4\xff", 14);
+        EXPECT_TRUE(!decoder
+                .decode(huffman_authority, [](std::string_view name, std::string_view value) {
+            return name == ":authority" && value == "www.example.com";
+        }).has_value());
     }
 }
 
@@ -989,7 +989,10 @@ TEST(Ruvia, hpack_public_empty_and_one_sided_fields_are_indexable) {
     ruvia::hpack_decoder decoder;
     const std::string long_bytes(49, 'x');
     const std::string block = indexed_literal("", "") + indexed_literal("", long_bytes) + indexed_literal(long_bytes, "");
-    EXPECT_TRUE(!decoder.decode(block, [](auto, auto) { return true; }).has_value());
+    EXPECT_TRUE(!decoder
+            .decode(block, [](auto, auto) {
+        return true;
+    }).has_value());
     check_newest(decoder, 62, long_bytes, "");
     check_newest(decoder, 63, "", long_bytes);
     check_newest(decoder, 64, "", "");
@@ -997,12 +1000,18 @@ TEST(Ruvia, hpack_public_empty_and_one_sided_fields_are_indexable) {
 
 TEST(Ruvia, hpack_public_dynamic_entries_remain_indexable_across_evictions) {
     ruvia::hpack_decoder decoder;
-    EXPECT_TRUE(!decoder.decode(table_size_update(120), [](auto, auto) { return true; }).has_value());
+    EXPECT_TRUE(!decoder
+            .decode(table_size_update(120), [](auto, auto) {
+        return true;
+    }).has_value());
     const std::string name(40, 'n');
     const std::string value(40, 'v');
     const std::string insertion = indexed_literal(name, value);
     for (std::size_t i = 0; i < 200; ++i) {
-        EXPECT_TRUE(!decoder.decode(insertion, [](auto, auto) { return true; }).has_value());
+        EXPECT_TRUE(!decoder
+                .decode(insertion, [](auto, auto) {
+            return true;
+        }).has_value());
         check_newest(decoder, 62, name, value);
     }
 }
@@ -1012,7 +1021,10 @@ TEST(Ruvia, hpack_public_leading_capacity_updates_apply_in_wire_order) {
     for (const auto& updates : sequences) {
         ruvia::hpack_decoder decoder;
         const std::string seed_value(64, 's');
-        EXPECT_TRUE(!decoder.decode(indexed_literal("x-seed", seed_value), [](auto, auto) { return true; }).has_value());
+        EXPECT_TRUE(!decoder
+                .decode(indexed_literal("x-seed", seed_value), [](auto, auto) {
+            return true;
+        }).has_value());
         std::string block;
         for (const auto size : updates) {
             block += table_size_update(size);
@@ -1029,25 +1041,32 @@ TEST(Ruvia, hpack_public_leading_capacity_updates_apply_in_wire_order) {
         EXPECT_EQ(fields, std::size_t{1});
         check_newest(decoder, 62, "x", "fresh");
         // Restoring capacity cannot restore an entry evicted at an intermediate minimum.
-        EXPECT_TRUE(decoder.decode(indexed_field(63), [](auto, auto) { return true; }) ==
-                    ruvia::hpack_decode_error::compression_error);
+        EXPECT_TRUE(decoder.decode(indexed_field(63), [](auto, auto) {
+            return true;
+        }) == ruvia::hpack_decode_error::compression_error);
     }
 }
 
 TEST(Ruvia, hpack_public_capacity_updates_reject_excess_and_late_positions) {
     for (const bool late : {false, true}) {
         ruvia::hpack_decoder decoder;
-        EXPECT_TRUE(!decoder.decode(indexed_literal("x-seed", "kept"), [](auto, auto) { return true; }).has_value());
+        EXPECT_TRUE(!decoder
+                .decode(indexed_literal("x-seed", "kept"), [](auto, auto) {
+            return true;
+        }).has_value());
         const std::string invalid = late ? indexed_field(62) + table_size_update(0) : table_size_update(4097);
-        EXPECT_TRUE(decoder.decode(invalid, [](auto, auto) { return true; }) ==
-                    ruvia::hpack_decode_error::compression_error);
+        EXPECT_TRUE(decoder.decode(invalid, [](auto, auto) {
+            return true;
+        }) == ruvia::hpack_decode_error::compression_error);
         EXPECT_TRUE(decoder_is_poisoned(decoder));
     }
 }
 
 TEST(Ruvia, hpack_public_callback_rejection_keeps_dynamic_table_consistent) {
     ruvia::hpack_decoder decoder;
-    const auto rejected = decoder.decode(indexed_literal("a", "b"), [](auto, auto) { return false; });
+    const auto rejected = decoder.decode(indexed_literal("a", "b"), [](auto, auto) {
+        return false;
+    });
     EXPECT_TRUE(rejected == ruvia::hpack_decode_error::callback_rejected);
     check_newest(decoder, 62, "a", "b");
 }
@@ -1055,11 +1074,15 @@ TEST(Ruvia, hpack_public_callback_rejection_keeps_dynamic_table_consistent) {
 TEST(Ruvia, hpack_public_compression_error_poisons_the_decoder) {
     for (const std::string_view failing : {std::string_view("\x80", 1), std::string_view("\x40\x05\x61", 3)}) {
         ruvia::hpack_decoder decoder;
-        EXPECT_TRUE(!decoder.decode(indexed_literal("a", "b"), [](auto, auto) { return true; }).has_value());
+        EXPECT_TRUE(!decoder
+                .decode(indexed_literal("a", "b"), [](auto, auto) {
+            return true;
+        }).has_value());
         std::string block = indexed_literal("c", "d");
         block.append(failing);
-        EXPECT_TRUE(decoder.decode(block, [](auto, auto) { return true; }) ==
-                    ruvia::hpack_decode_error::compression_error);
+        EXPECT_TRUE(decoder.decode(block, [](auto, auto) {
+            return true;
+        }) == ruvia::hpack_decode_error::compression_error);
         EXPECT_TRUE(decoder_is_poisoned(decoder));
     }
 }
@@ -1068,7 +1091,10 @@ TEST(Ruvia, hpack_public_long_dynamic_name_and_value_are_preserved) {
     ruvia::hpack_decoder decoder;
     const std::string name(300, 'n');
     const std::string value(300, 'v');
-    EXPECT_TRUE(!decoder.decode(indexed_literal(name, value), [](auto, auto) { return true; }).has_value());
+    EXPECT_TRUE(!decoder
+            .decode(indexed_literal(name, value), [](auto, auto) {
+        return true;
+    }).has_value());
     check_newest(decoder, 62, name, value);
 }
 
@@ -1078,11 +1104,13 @@ TEST(Ruvia, hpack_public_eviction_preserves_relative_indices) {
     std::string initial = table_size_update(1150);
     for (int i = 0; i < 36; ++i) {
         const char value = static_cast<char>('A' + i);
-        initial += indexed_literal(i % 2 == 0 ? std::string_view("a") : std::string_view(long_name),
-            std::string_view(&value, 1));
+        initial += indexed_literal(i % 2 == 0 ? std::string_view("a") : std::string_view(long_name), std::string_view(&value, 1));
     }
     initial.push_back(static_cast<char>(0x82));
-    EXPECT_TRUE(!decoder.decode(initial, [](auto, auto) { return true; }).has_value());
+    EXPECT_TRUE(!decoder
+            .decode(initial, [](auto, auto) {
+        return true;
+    }).has_value());
     std::string indices;
     for (std::uint32_t index = 62; index < 82; ++index) {
         indices += indexed_field(index);
@@ -1097,13 +1125,19 @@ TEST(Ruvia, hpack_public_eviction_preserves_relative_indices) {
     EXPECT_TRUE(!result.has_value());
     EXPECT_EQ(expected, 15);
     // An indexed name survives the eviction its own insertion causes.
-    EXPECT_TRUE(!decoder.decode(std::string_view("\x7e\x01z", 3), [](auto, auto) { return true; }).has_value());
+    EXPECT_TRUE(!decoder
+            .decode(std::string_view("\x7e\x01z", 3), [](auto, auto) {
+        return true;
+    }).has_value());
     check_newest(decoder, 62, long_name, "z");
 }
 
 TEST(Ruvia, hpack_public_decoder_move_preserves_dynamic_entries) {
     ruvia::hpack_decoder source_value;
-    EXPECT_TRUE(!source_value.decode(indexed_literal("a", "b"), [](auto, auto) { return true; }).has_value());
+    EXPECT_TRUE(!source_value
+            .decode(indexed_literal("a", "b"), [](auto, auto) {
+        return true;
+    }).has_value());
     ruvia::hpack_decoder moved(std::move(source_value));
     ruvia::hpack_decoder destination;
     destination = std::move(moved);
@@ -1141,7 +1175,9 @@ TEST(Ruvia, hpack_public_callback_cannot_replace_the_active_block_or_its_capacit
                 if (resize) {
                     decoder.set_max_dynamic_table_size(0);
                 } else {
-                    (void)decoder.decode({}, [](auto, auto) { return true; });
+                    (void)decoder.decode({}, [](auto, auto) {
+                        return true;
+                    });
                 }
             } catch (const std::logic_error&) {
                 ++rejected;
@@ -1149,13 +1185,13 @@ TEST(Ruvia, hpack_public_callback_cannot_replace_the_active_block_or_its_capacit
             EXPECT_EQ(name, "a");
             EXPECT_EQ(value, "b");
             std::size_t independent_fields = 0;
-            EXPECT_TRUE(!independent.decode(std::string_view("\x82", 1), [&](auto inner_name, auto inner_value) {
-                                        ++independent_fields;
-                                        EXPECT_EQ(inner_name, ":method");
-                                        EXPECT_EQ(inner_value, "GET");
-                                        return true;
-                                    })
-                    .has_value());
+            EXPECT_TRUE(!independent
+                    .decode(std::string_view("\x82", 1), [&](auto inner_name, auto inner_value) {
+                ++independent_fields;
+                EXPECT_EQ(inner_name, ":method");
+                EXPECT_EQ(inner_value, "GET");
+                return true;
+            }).has_value());
             EXPECT_EQ(independent_fields, std::size_t{1});
             return true;
         });
@@ -1170,7 +1206,9 @@ TEST(Ruvia, hpack_public_callback_state_error_is_rethrown_after_the_block) {
     for (const bool resize : {false, true}) {
         for (const bool malformed : {false, true}) {
             ruvia::hpack_decoder decoder;
-            const auto accept = [](auto, auto) { return true; };
+            const auto accept = [](auto, auto) {
+                return true;
+            };
             EXPECT_TRUE(!decoder.decode(indexed_literal("s", "t"), accept).has_value());
             std::string block = indexed_literal("a", "b") + indexed_literal("c", "d");
             if (malformed) {
@@ -1211,13 +1249,12 @@ TEST(Ruvia, hpack_encoder_uses_canonical_wire_indices_for_every_static_entry) {
         std::string encoded;
         std::string name;
         std::size_t fields_value = 0;
-        const auto decoded = decoder.decode(std::string_view(&wire_byte, 1),
-            [&](std::string_view field_name, std::string_view value) {
-                ++fields_value;
-                name.assign(field_name);
-                ruvia::hpack_encoder::encode_header(encoded, field_name, value);
-                return true;
-            });
+        const auto decoded = decoder.decode(std::string_view(&wire_byte, 1), [&](std::string_view field_name, std::string_view value) {
+            ++fields_value;
+            name.assign(field_name);
+            ruvia::hpack_encoder::encode_header(encoded, field_name, value);
+            return true;
+        });
         EXPECT_TRUE(!decoded.has_value());
         EXPECT_EQ(fields_value, std::size_t{1});
         // Credentials are never indexed (RFC 7541 section 7.1.3), so their
@@ -1259,8 +1296,7 @@ void append_body(std::string& wire, std::size_t bytes) {
     const std::string chunk(16384, 'x');
     while (bytes != 0) {
         const auto count = std::min(bytes, chunk.size());
-        append_frame(wire, ruvia::http2_frame_type::data, 0, 1,
-            std::string_view(chunk).substr(0, count));
+        append_frame(wire, ruvia::http2_frame_type::data, 0, 1, std::string_view(chunk).substr(0, count));
         bytes -= count;
     }
 }
@@ -1274,8 +1310,7 @@ TEST(Ruvia, http2_public_receive_credit_restores_exact_window) {
     auto client = ruvia::http2_connection::client({});
     const auto receive_window = advertised_receive_window(ruvia::test::drain_output(client));
     EXPECT_TRUE(receive_window != 0);
-    const auto submitted = client.submit_request_head(
-        ruvia::http2_regular_request_head_view{.authority_ = "example.test"});
+    const auto submitted = client.submit_request_head(ruvia::http2_regular_request_head_view{.authority_ = "example.test"});
     EXPECT_TRUE(std::holds_alternative<std::uint32_t>(submitted));
     (void)ruvia::test::drain_output(client);
 
@@ -1541,8 +1576,7 @@ TEST(Ruvia, http2_locally_synthesized_push_has_no_received_pseudo_header_order) 
     relay.transfer(client, server);
     relay.transfer(server, client);
     relay.transfer(client, server);
-    EXPECT_TRUE(std::holds_alternative<std::uint32_t>(client.submit_request_head(
-        ruvia::http2_regular_request_head_view{.authority_ = "example.test"})));
+    EXPECT_TRUE(std::holds_alternative<std::uint32_t>(client.submit_request_head(ruvia::http2_regular_request_head_view{.authority_ = "example.test"})));
     relay.transfer(client, server);
     auto parent = take_request_head(server);
     EXPECT_TRUE(parent.has_value());
@@ -1589,9 +1623,7 @@ TEST(Ruvia, http2_request_path_rejects_empty_and_defers_scheme_validation_to_fin
 namespace http2_receive_metadata_test {
 
 template <typename value_type>
-concept settings_borrowable = requires(value_type&& value) {
-    std::forward<value_type>(value).settings();
-};
+concept settings_borrowable = requires(value_type&& value) { std::forward<value_type>(value).settings(); };
 static_assert(settings_borrowable<const ruvia::http2_frame_metadata&>);
 static_assert(!settings_borrowable<ruvia::http2_frame_metadata>);
 
@@ -1671,8 +1703,7 @@ private:
             record.kind_ = received_kind::request_head;
             record.stream_id_ = request->stream_id();
             const auto view = request->request_view();
-            record.request_matches_ = view.method_ == "GET" && view.scheme_ == "https" &&
-                                      view.authority_ == "example.test" && view.path_ == "/metadata";
+            record.request_matches_ = view.method_ == "GET" && view.scheme_ == "https" && view.authority_ == "example.test" && view.path_ == "/metadata";
             record.pseudo_count_ = view.pseudo_header_order_.size();
             if (record.pseudo_count_ > record.pseudo_order_.size()) {
                 overflow_ = true;
@@ -1687,15 +1718,12 @@ private:
 };
 
 void append_setting(std::string& payload, std::uint16_t id, std::uint32_t value) {
-    const std::array<char, 6> entry{static_cast<char>(id >> 8), static_cast<char>(id),
-        static_cast<char>(value >> 24), static_cast<char>(value >> 16),
-        static_cast<char>(value >> 8), static_cast<char>(value)};
+    const std::array<char, 6> entry{static_cast<char>(id >> 8), static_cast<char>(id), static_cast<char>(value >> 24), static_cast<char>(value >> 16), static_cast<char>(value >> 8), static_cast<char>(value)};
     payload.append(entry.data(), entry.size());
 }
 
 std::string window_payload(std::uint32_t increment) {
-    const std::array<char, 4> bytes{static_cast<char>(increment >> 24), static_cast<char>(increment >> 16),
-        static_cast<char>(increment >> 8), static_cast<char>(increment)};
+    const std::array<char, 4> bytes{static_cast<char>(increment >> 24), static_cast<char>(increment >> 16), static_cast<char>(increment >> 8), static_cast<char>(increment)};
     return std::string(bytes.data(), bytes.size());
 }
 
@@ -1725,8 +1753,7 @@ using namespace http2_receive_metadata_test;
 
 TEST(Ruvia, http2_receive_frame_metadata_off_produces_no_metadata_events) {
     for (const auto role : {ruvia::http2_role::server, ruvia::http2_role::client}) {
-        auto connection = role == ruvia::http2_role::server ? ruvia::http2_connection::server()
-                                                            : ruvia::http2_connection::client();
+        auto connection = role == ruvia::http2_role::server ? ruvia::http2_connection::server() : ruvia::http2_connection::client();
         std::string settings;
         append_setting(settings, 3, 13);
         append_setting(settings, 0xfefe, 1);
@@ -1762,8 +1789,7 @@ TEST(Ruvia, http2_receive_frame_metadata_off_produces_no_metadata_events) {
 TEST(Ruvia, http2_receive_settings_fold_known_duplicates_and_keep_unknown_entries) {
     for (const auto role : {ruvia::http2_role::server, ruvia::http2_role::client}) {
         const ruvia::http2_connection_options options{.receive_frame_metadata_ = true};
-        auto connection = role == ruvia::http2_role::server ? ruvia::http2_connection::server(options)
-                                                            : ruvia::http2_connection::client(options);
+        auto connection = role == ruvia::http2_role::server ? ruvia::http2_connection::server(options) : ruvia::http2_connection::client(options);
         std::string payload;
         append_setting(payload, 0xfefe, 0xabcdef01);
         append_setting(payload, 3, 13);
@@ -1832,9 +1858,7 @@ TEST(Ruvia, http2_receive_byte_fragments_publish_only_complete_frames) {
         const auto status = server.feed(std::string_view(wire).substr(index, 1));
         EXPECT_TRUE(status == ruvia::http2_feed_result::accepted);
         log.drain(server);
-        const auto expected = static_cast<std::size_t>(index + 1 >= settings_end) +
-                              static_cast<std::size_t>(index + 1 >= first_window_end) +
-                              static_cast<std::size_t>(index + 1 == wire.size());
+        const auto expected = static_cast<std::size_t>(index + 1 >= settings_end) + static_cast<std::size_t>(index + 1 >= first_window_end) + static_cast<std::size_t>(index + 1 == wire.size());
         EXPECT_EQ(log.count_, expected);
     }
     EXPECT_TRUE(log.records_[0].kind_ == received_kind::settings);
@@ -1873,8 +1897,7 @@ TEST(Ruvia, http2_receive_padded_headers_priority_precedes_continued_request_and
         log.drain(server);
         EXPECT_EQ(log.count_, 5u);
         EXPECT_TRUE(!log.overflow_);
-        const std::array kinds{received_kind::settings, received_kind::window_update, received_kind::priority,
-            received_kind::request_head, received_kind::window_update};
+        const std::array kinds{received_kind::settings, received_kind::window_update, received_kind::priority, received_kind::request_head, received_kind::window_update};
         for (std::size_t index = 0; index != kinds.size(); ++index) {
             EXPECT_TRUE(log.records_[index].kind_ == kinds[index]);
         }
@@ -1887,8 +1910,7 @@ TEST(Ruvia, http2_receive_padded_headers_priority_precedes_continued_request_and
         EXPECT_TRUE(request.request_matches_);
         EXPECT_EQ(request.stream_id_, 1u);
         EXPECT_EQ(request.pseudo_count_, 4u);
-        const std::array expected{ruvia::http2_request_pseudo_header::method, ruvia::http2_request_pseudo_header::scheme,
-            ruvia::http2_request_pseudo_header::authority, ruvia::http2_request_pseudo_header::path};
+        const std::array expected{ruvia::http2_request_pseudo_header::method, ruvia::http2_request_pseudo_header::scheme, ruvia::http2_request_pseudo_header::authority, ruvia::http2_request_pseudo_header::path};
         for (std::size_t index = 0; index != expected.size(); ++index) {
             EXPECT_TRUE(request.pseudo_order_[index] == expected[index]);
         }
@@ -1942,9 +1964,7 @@ TEST(Ruvia, http2_receive_rejected_connection_window_and_malformed_priority_are_
         log.drain(server);
         EXPECT_EQ(log.count_, 1u);
         EXPECT_TRUE(log.records_[0].kind_ == received_kind::settings);
-        EXPECT_TRUE(server.connection_error() == (type == ruvia::http2_frame_type::window_update
-                                                         ? ruvia::http2_error_code::protocol_error
-                                                         : ruvia::http2_error_code::frame_size_error));
+        EXPECT_TRUE(server.connection_error() == (type == ruvia::http2_frame_type::window_update ? ruvia::http2_error_code::protocol_error : ruvia::http2_error_code::frame_size_error));
     }
 }
 
@@ -2030,8 +2050,7 @@ struct wire_observation_log final {
                 ++log.ends_;
                 break;
             case ruvia::http2_header_observation_phase::field:
-                log.fields_.push_back({metadata.first_frame_observation_sequence_, metadata.frame_observation_sequence_,
-                    metadata.field_index_, std::string(metadata.name_), std::string(metadata.value_)});
+                log.fields_.push_back({metadata.first_frame_observation_sequence_, metadata.frame_observation_sequence_, metadata.field_index_, std::string(metadata.name_), std::string(metadata.value_)});
                 break;
         }
     }
@@ -2042,9 +2061,7 @@ using namespace http2_receive_metadata_test;
 TEST(Ruvia, http2_wire_observers_preserve_raw_settings_priority_and_fragmented_hpack) {
     for (const auto fragment : {std::size_t{1}, std::size_t{7}, std::size_t{4096}}) {
         wire_observation_log observed;
-        auto server = ruvia::http2_connection::server({.frame_observer_ = &wire_observation_log::frame,
-            .header_observer_ = &wire_observation_log::header,
-            .observer_context_ = &observed});
+        auto server = ruvia::http2_connection::server({.frame_observer_ = &wire_observation_log::frame, .header_observer_ = &wire_observation_log::header, .observer_context_ = &observed});
         std::string settings;
         append_setting(settings, 3, 17);
         append_setting(settings, 0xfafa, 123);
@@ -2064,12 +2081,10 @@ TEST(Ruvia, http2_wire_observers_preserve_raw_settings_priority_and_fragmented_h
         append_frame(wire, ruvia::http2_frame_type::headers, 0x29, 1, payload);
         append_frame(wire, ruvia::http2_frame_type::continuation, 0x4, 1, block.substr(6));
         // A second block uses that dynamic-table entry in a different order.
-        append_frame(wire, ruvia::http2_frame_type::headers, 0x5, 3,
-            std::string_view("\xbe\x84\x87\x82", 4));
+        append_frame(wire, ruvia::http2_frame_type::headers, 0x5, 3, std::string_view("\xbe\x84\x87\x82", 4));
         received_log requests;
         for (std::size_t cursor = 0; cursor < wire.size(); cursor += fragment) {
-            EXPECT_TRUE(server.feed(std::string_view(wire).substr(cursor, fragment)) ==
-                        ruvia::http2_feed_result::accepted);
+            EXPECT_TRUE(server.feed(std::string_view(wire).substr(cursor, fragment)) == ruvia::http2_feed_result::accepted);
             requests.drain(server);
         }
         ASSERT_EQ(observed.frames_.size(), 6u);
@@ -2117,10 +2132,7 @@ TEST(Ruvia, http2_header_observer_sees_extended_connect_order_before_semantic_re
         wire_observation_log observed;
         auto server = ruvia::http2_connection::server({.header_observer_ = &wire_observation_log::header, .observer_context_ = &observed});
         std::string block;
-        for (const auto& field : std::array{
-                 std::pair{":protocol", "websocket"}, std::pair{":path", "/chat"},
-                 std::pair{":scheme", "https"}, std::pair{":authority", "example.test:443"},
-                 std::pair{":method", "CONNECT"}}) {
+        for (const auto& field : std::array{std::pair{":protocol", "websocket"}, std::pair{":path", "/chat"}, std::pair{":scheme", "https"}, std::pair{":authority", "example.test:443"}, std::pair{":method", "CONNECT"}}) {
             ruvia::hpack_encoder::encode_header(block, field.first, field.second);
         }
         if (malformed) {
@@ -2153,14 +2165,9 @@ TEST(Ruvia, http2_header_observer_sees_extended_connect_order_before_semantic_re
 TEST(Ruvia, http2_frame_observer_includes_unknown_extensions_without_advertisement_semantics) {
     for (const auto role : {ruvia::http2_role::server, ruvia::http2_role::client}) {
         wire_observation_log observed;
-        const ruvia::http2_connection_options options{
-            .frame_observer_ = &wire_observation_log::frame, .observer_context_ = &observed};
-        auto connection = role == ruvia::http2_role::server
-                              ? ruvia::http2_connection::server(options)
-                              : ruvia::http2_connection::client(options);
-        std::string wire = role == ruvia::http2_role::server
-                               ? std::string(ruvia::http2_client_preface)
-                               : std::string{};
+        const ruvia::http2_connection_options options{.frame_observer_ = &wire_observation_log::frame, .observer_context_ = &observed};
+        auto connection = role == ruvia::http2_role::server ? ruvia::http2_connection::server(options) : ruvia::http2_connection::client(options);
+        std::string wire = role == ruvia::http2_role::server ? std::string(ruvia::http2_client_preface) : std::string{};
         append_frame(wire, ruvia::http2_frame_type::settings, 0, 0);
         append_frame(wire, static_cast<ruvia::http2_frame_type>(0xee), 0, 0, "unknown");
         // ORIGIN is not enabled, and servers never process ALTSVC. These
@@ -2200,9 +2207,7 @@ TEST(Ruvia, http2_frame_observer_preserves_enabled_origin_and_alternative_servic
     for (const bool observe : {false, true}) {
         for (const auto fragment : {std::size_t{1}, std::size_t{4096}}) {
             wire_observation_log observed;
-            auto client = ruvia::http2_connection::client({.receive_origin_advertisements_ = true,
-                .frame_observer_ = observe ? &wire_observation_log::frame : nullptr,
-                .observer_context_ = &observed});
+            auto client = ruvia::http2_connection::client({.receive_origin_advertisements_ = true, .frame_observer_ = observe ? &wire_observation_log::frame : nullptr, .observer_context_ = &observed});
             const std::array<std::string_view, 1> origins{"https://example.test"};
             auto origin_frame = ruvia::encode_http2_origin_frame(origins);
             auto alternative_frame = ruvia::encode_http2_alternative_service_frame(0, origins[0], "h3=\":443\"");
@@ -2218,8 +2223,7 @@ TEST(Ruvia, http2_frame_observer_preserves_enabled_origin_and_alternative_servic
             std::size_t origin_count = 0;
             std::size_t alternative_count = 0;
             for (std::size_t cursor = 0; cursor < wire.size(); cursor += fragment) {
-                ASSERT_TRUE(client.feed(std::string_view(wire).substr(cursor, fragment)) ==
-                            ruvia::http2_feed_result::accepted);
+                ASSERT_TRUE(client.feed(std::string_view(wire).substr(cursor, fragment)) == ruvia::http2_feed_result::accepted);
                 while (auto event = client.next_event()) {
                     if (const auto* origin = event->origin_advertisement()) {
                         ++origin_count;

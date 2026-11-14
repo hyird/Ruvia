@@ -106,8 +106,7 @@ namespace ruvia::detail {
 // early-outs on the first differing byte, so the time taken does not leak how
 // far an attacker-supplied value matched the expected one. Unequal lengths are
 // reported immediately; that is not secret since these values are fixed-length.
-[[nodiscard]] inline bool constant_time_bytes_equal(
-    std::string_view left, std::string_view right) noexcept {
+[[nodiscard]] inline bool constant_time_bytes_equal(std::string_view left, std::string_view right) noexcept {
     if (left.size() != right.size()) {
         return false;
     }
@@ -125,8 +124,8 @@ class inline_http_header_views final {
 public:
     template <typename fields_type>
         requires requires(const fields_type& fields) { fields.size(); }
-    explicit inline_http_header_views(const fields_type& fields)
-        : inline_http_header_views(fields.size()) {
+    explicit inline_http_header_views(const fields_type& fields) :
+        inline_http_header_views(fields.size()) {
         for (const auto& field : fields) {
             push_back(http_header_view{field.name(), field.value()});
         }
@@ -218,8 +217,8 @@ private:
 template <std::size_t inline_capacity>
 class inline_text_buffer final {
 public:
-    explicit inline_text_buffer(std::size_t reserve_hint = 0)
-        : reserve_hint_(reserve_hint) {}
+    explicit inline_text_buffer(std::size_t reserve_hint = 0) :
+        reserve_hint_(reserve_hint) {}
 
     inline_text_buffer(const inline_text_buffer&) = delete;
     inline_text_buffer& operator=(const inline_text_buffer&) = delete;
@@ -311,19 +310,14 @@ inline constexpr std::size_t hmac_max_input_size = static_cast<std::size_t>((std
 // of `output`. Returns false when key or message exceeds hmac_max_input_size,
 // `output` is too small, or OpenSSL fails; callers check the sizes first to
 // report them in their own terms.
-[[nodiscard]] inline bool compute_hmac(
-    hmac_digest digest, std::string_view key, std::string_view message, std::span<std::uint8_t> output) noexcept {
+[[nodiscard]] inline bool compute_hmac(hmac_digest digest, std::string_view key, std::string_view message, std::span<std::uint8_t> output) noexcept {
     const auto* const digest_name = openssl_digest_name(digest);
     const auto digest_size = hmac_digest_size(digest);
-    if (digest_name == nullptr || key.size() > hmac_max_input_size || message.size() > hmac_max_input_size ||
-        output.size() < digest_size) {
+    if (digest_name == nullptr || key.size() > hmac_max_input_size || message.size() > hmac_max_input_size || output.size() < digest_size) {
         return false;
     }
     std::size_t mac_size = 0;
-    return EVP_Q_mac(nullptr, "HMAC", nullptr, digest_name, nullptr, key.data(), key.size(),
-               reinterpret_cast<const unsigned char*>(message.data()), message.size(),
-               reinterpret_cast<unsigned char*>(output.data()), output.size(), &mac_size) != nullptr &&
-           mac_size == digest_size;
+    return EVP_Q_mac(nullptr, "HMAC", nullptr, digest_name, nullptr, key.data(), key.size(), reinterpret_cast<const unsigned char*>(message.data()), message.size(), reinterpret_cast<unsigned char*>(output.data()), output.size(), &mac_size) != nullptr && mac_size == digest_size;
 }
 }  // namespace ruvia::detail
 
@@ -339,13 +333,11 @@ static_assert(cookie_signature_size == http_base64_encoded_size(hmac_digest_size
 // Throws std::invalid_argument on an empty secret and std::length_error when
 // the secret or length-framed message cannot be represented by OpenSSL's HMAC
 // length parameters.
-inline void write_cookie_signature(
-    char* output, std::string_view secret, std::string_view name, std::string_view value) {
+inline void write_cookie_signature(char* output, std::string_view secret, std::string_view name, std::string_view value) {
     if (secret.empty()) {
         throw std::invalid_argument("signed cookie secret must not be empty");
     }
-    constexpr auto max_cookie_name_bytes =
-        static_cast<std::size_t>((std::numeric_limits<std::uint32_t>::max)());
+    constexpr auto max_cookie_name_bytes = static_cast<std::size_t>((std::numeric_limits<std::uint32_t>::max)());
     if (secret.size() > hmac_max_input_size) {
         throw std::length_error("signed cookie secret is too large");
     }
@@ -363,12 +355,10 @@ inline void write_cookie_signature(
     };
     // Assemble lenPrefix||name||value for the one-shot HMAC. Inline storage keeps
     // signing a typical cookie allocation-free.
-    if (name.size() > hmac_max_input_size - name_len_bytes.size() ||
-        value.size() > hmac_max_input_size - name_len_bytes.size() - name.size()) {
+    if (name.size() > hmac_max_input_size - name_len_bytes.size() || value.size() > hmac_max_input_size - name_len_bytes.size() - name.size()) {
         throw std::length_error("signed cookie message is too large for HMAC");
     }
-    const inline_text_concat<512> message(
-        {std::string_view(name_len_bytes.data(), name_len_bytes.size()), name, value});
+    const inline_text_concat<512> message({std::string_view(name_len_bytes.data(), name_len_bytes.size()), name, value});
 
     std::array<std::uint8_t, hmac_digest_size(hmac_digest::sha256)> digest;
     if (!compute_hmac(hmac_digest::sha256, secret, message.view(), digest)) {
@@ -382,8 +372,7 @@ namespace ruvia::detail {
 
 using ::ruvia::rate_limit_key_buffer_bytes;
 
-[[nodiscard]] inline std::string_view format_ipv4_octets(
-    const std::uint8_t* bytes_value, std::span<char, 15> buffer) noexcept {
+[[nodiscard]] inline std::string_view format_ipv4_octets(const std::uint8_t* bytes_value, std::span<char, 15> buffer) noexcept {
     char* cursor_value = buffer.data();
     char* const end = buffer.data() + buffer.size();
     for (std::size_t i = 0; i < 4; ++i) {
@@ -395,8 +384,7 @@ using ::ruvia::rate_limit_key_buffer_bytes;
     return std::string_view(buffer.data(), static_cast<std::size_t>(cursor_value - buffer.data()));
 }
 
-[[nodiscard]] inline std::string_view rate_limit_key_for(
-    const ip_address& address, std::span<char, rate_limit_key_buffer_bytes> buffer) noexcept {
+[[nodiscard]] inline std::string_view rate_limit_key_for(const ip_address& address, std::span<char, rate_limit_key_buffer_bytes> buffer) noexcept {
     if (address.family() == ip_address_family::ipv4) {
         return format_ipv4_octets(address.bytes().data(), std::span<char, 15>(buffer.data(), 15));
     }
@@ -408,11 +396,8 @@ using ::ruvia::rate_limit_key_buffer_bytes;
         buffer[3] = '/';
         http_encode_lower_hex(buffer.data() + 4, std::span<const unsigned char>(raw.data(), 16));
         buffer[36] = '/';
-        const auto end = std::to_chars(
-            buffer.data() + 37, buffer.data() + rate_limit_key_buffer_bytes, address.scope_id())
-                             .ptr;
-        return std::string_view(
-            buffer.data(), static_cast<std::size_t>(end - buffer.data()));
+        const auto end = std::to_chars(buffer.data() + 37, buffer.data() + rate_limit_key_buffer_bytes, address.scope_id()).ptr;
+        return std::string_view(buffer.data(), static_cast<std::size_t>(end - buffer.data()));
     }
     if (address.is_ipv4_mapped()) {
         return format_ipv4_octets(raw.data() + 12, std::span<char, 15>(buffer.data(), 15));
@@ -424,13 +409,11 @@ using ::ruvia::rate_limit_key_buffer_bytes;
     return std::string_view(buffer.data(), 19);
 }
 
-[[nodiscard]] inline std::string_view rate_limit_key_for(
-    const ip_address& address, char (&buffer)[rate_limit_key_buffer_bytes]) noexcept {
+[[nodiscard]] inline std::string_view rate_limit_key_for(const ip_address& address, char (&buffer)[rate_limit_key_buffer_bytes]) noexcept {
     return rate_limit_key_for(address, std::span<char, rate_limit_key_buffer_bytes>(buffer));
 }
 
-[[nodiscard]] inline std::string_view rate_limit_key_for(
-    std::string_view remote_address, std::span<char, rate_limit_key_buffer_bytes> buffer) noexcept {
+[[nodiscard]] inline std::string_view rate_limit_key_for(std::string_view remote_address, std::span<char, rate_limit_key_buffer_bytes> buffer) noexcept {
     const auto parsed = ip_address::parse(remote_address);
     if (!parsed.has_value()) {
         return remote_address;
@@ -438,8 +421,7 @@ using ::ruvia::rate_limit_key_buffer_bytes;
     return rate_limit_key_for(*parsed, buffer);
 }
 
-[[nodiscard]] inline std::string_view rate_limit_key_for(
-    std::string_view remote_address, char (&buffer)[rate_limit_key_buffer_bytes]) noexcept {
+[[nodiscard]] inline std::string_view rate_limit_key_for(std::string_view remote_address, char (&buffer)[rate_limit_key_buffer_bytes]) noexcept {
     return rate_limit_key_for(remote_address, std::span<char, rate_limit_key_buffer_bytes>(buffer));
 }
 
@@ -451,11 +433,10 @@ namespace ruvia::detail {
 // signed millisecond count once a window nears milliseconds::max().
 class rate_limit_rejection final {
 public:
-    constexpr rate_limit_rejection(
-        std::uint64_t retry_after_ms, std::uint64_t reset_after_ms, std::size_t max_requests) noexcept
-        : retry_after_ms_(retry_after_ms),
-          reset_after_ms_(reset_after_ms),
-          max_requests_(max_requests) {}
+    constexpr rate_limit_rejection(std::uint64_t retry_after_ms, std::uint64_t reset_after_ms, std::size_t max_requests) noexcept :
+        retry_after_ms_(retry_after_ms),
+        reset_after_ms_(reset_after_ms),
+        max_requests_(max_requests) {}
 
     // For a key the table holds, the earliest delay after which the refusing
     // rule's estimate admits it again. Refusals leave the estimate unchanged,
@@ -542,8 +523,7 @@ void validate_rate_limit_config(const rate_limit_config& config);
 // counting.
 class rate_limiter final {
 public:
-    rate_limiter(std::optional<rate_limit_rule> default_rule_per_worker,
-        route_rate_limit_presence route_rules, std::size_t capacity_value);
+    rate_limiter(std::optional<rate_limit_rule> default_rule_per_worker, route_rate_limit_presence route_rules, std::size_t capacity_value);
 
     rate_limiter(const rate_limiter&) = delete;
     rate_limiter& operator=(const rate_limiter&) = delete;
@@ -562,23 +542,17 @@ public:
     // Every decision takes the instant it is made for as a value, so the table
     // itself never reads a clock. Instants must not run backwards per key; an
     // earlier one counts as the start of the key's current window.
-    [[nodiscard]] std::optional<rate_limit_rejection> allow_default(
-        std::string_view remote_address, std::chrono::steady_clock::time_point now) noexcept;
+    [[nodiscard]] std::optional<rate_limit_rejection> allow_default(std::string_view remote_address, std::chrono::steady_clock::time_point now) noexcept;
 
     // `rule_declaration` identifies the rule's declaration (its worker-local
     // middleware instance), distinct for every declaration on the route.
-    [[nodiscard]] std::optional<rate_limit_rejection> allow_route(std::uintptr_t route_scope,
-        const void* rule_declaration, std::string_view remote_address, const rate_limit_rule& rule,
-        std::chrono::steady_clock::time_point now) noexcept;
+    [[nodiscard]] std::optional<rate_limit_rejection> allow_route(std::uintptr_t route_scope, const void* rule_declaration, std::string_view remote_address, const rate_limit_rule& rule, std::chrono::steady_clock::time_point now) noexcept;
 
-    [[nodiscard]] rate_limit_decision decide_default(
-        std::string_view key, std::chrono::steady_clock::time_point now) noexcept;
-    [[nodiscard]] rate_limit_decision decide_rule(rate_limit_scope scope, std::string_view key,
-        const rate_limit_rule& rule, std::chrono::steady_clock::time_point now) noexcept;
+    [[nodiscard]] rate_limit_decision decide_default(std::string_view key, std::chrono::steady_clock::time_point now) noexcept;
+    [[nodiscard]] rate_limit_decision decide_rule(rate_limit_scope scope, std::string_view key, const rate_limit_rule& rule, std::chrono::steady_clock::time_point now) noexcept;
 
 private:
-    [[nodiscard]] std::optional<rate_limit_rejection> allow(rate_limit_scope scope, std::string_view key,
-        const rate_limit_rule& rule, std::chrono::steady_clock::time_point now) noexcept;
+    [[nodiscard]] std::optional<rate_limit_rejection> allow(rate_limit_scope scope, std::string_view key, const rate_limit_rule& rule, std::chrono::steady_clock::time_point now) noexcept;
     std::optional<rate_limit_rule> default_rule_per_worker_;
     std::vector<rate_limit_slot> slots_;
     rate_limit_hash_key hash_key_{};
@@ -591,13 +565,11 @@ namespace ruvia::detail {
 // The instant a request's rate-limit decisions are made for: the arrival its
 // owner recorded (test_app supplies one), else a steady-clock reading taken
 // only once a rule is actually consulted.
-[[nodiscard]] inline std::chrono::steady_clock::time_point rate_limit_instant(
-    const std::optional<std::chrono::steady_clock::time_point>& arrival) noexcept {
+[[nodiscard]] inline std::chrono::steady_clock::time_point rate_limit_instant(const std::optional<std::chrono::steady_clock::time_point>& arrival) noexcept {
     return arrival.has_value() ? *arrival : std::chrono::steady_clock::now();
 }
 
-[[nodiscard]] inline std::optional<rate_limit_rejection> decide_request_rate_limit(rate_limiter* limiter,
-    const ip_address& client_address, const std::optional<std::chrono::steady_clock::time_point>& arrival) noexcept {
+[[nodiscard]] inline std::optional<rate_limit_rejection> decide_request_rate_limit(rate_limiter* limiter, const ip_address& client_address, const std::optional<std::chrono::steady_clock::time_point>& arrival) noexcept {
     if (limiter == nullptr || !limiter->has_default_rule()) {
         return std::nullopt;
     }
@@ -610,8 +582,8 @@ namespace ruvia::detail {
 // application error handler, followed by the rejection headers.
 class rate_limit_rejected final : public std::exception {
 public:
-    explicit rate_limit_rejected(rate_limit_rejection rejection) noexcept
-        : rejection_(rejection) {}
+    explicit rate_limit_rejected(rate_limit_rejection rejection) noexcept :
+        rejection_(rejection) {}
 
     [[nodiscard]] const char* what() const noexcept override {
         return "rate limit exceeded";
@@ -666,8 +638,7 @@ inline constexpr char tls_cipher_suites[] =
 // The policy's SSL_CTX message callback, which enforces the outgoing record
 // limit. A context that installs its own message callback must forward every
 // message to it first.
-void count_tls_records(int writing, int version, int content_type, const void* bytes, std::size_t size,
-    SSL* ssl, void* argument) noexcept;
+void count_tls_records(int writing, int version, int content_type, const void* bytes, std::size_t size, SSL* ssl, void* argument) noexcept;
 
 // 原生数据库驱动自己创建 SSL_CTX。作用域只包围一次同步 start/cont/poll 调用，
 // 不跨协程挂起：构造通知只安装回调和自有元数据，不驱动未初始化的 SSL 对象。
@@ -696,8 +667,7 @@ private:
 namespace ruvia::detail {
 
 [[nodiscard]] inline bool is_ascii_dns_alnum(unsigned char byte) noexcept {
-    return (byte >= '0' && byte <= '9') || (byte >= 'A' && byte <= 'Z') ||
-           (byte >= 'a' && byte <= 'z');
+    return (byte >= '0' && byte <= '9') || (byte >= 'A' && byte <= 'Z') || (byte >= 'a' && byte <= 'z');
 }
 
 [[nodiscard]] inline bool is_ascii_dns_digit(unsigned char byte) noexcept {
@@ -849,8 +819,8 @@ public:
     // `certificate` is the leaf the handshake selected and installed on its
     // SSL (SSL_get_certificate), borrowed for the connection's lifetime;
     // null fails every check closed.
-    explicit tls_served_certificate(X509* certificate) noexcept
-        : certificate_(certificate) {}
+    explicit tls_served_certificate(X509* certificate) noexcept :
+        certificate_(certificate) {}
 
     tls_served_certificate(const tls_served_certificate&) = delete;
     tls_served_certificate& operator=(const tls_served_certificate&) = delete;
@@ -901,14 +871,12 @@ public:
     // password is only borrowed while the key is decrypted; an empty password
     // uses the noninteractive default. Throws on unreadable, invalid or
     // mismatched files.
-    [[nodiscard]] static tls_certificate load(const char* certificate_chain_file,
-        const char* private_key_file, std::string_view private_key_password);
+    [[nodiscard]] static tls_certificate load(const char* certificate_chain_file, const char* private_key_file, std::string_view private_key_password);
     // The same identity from PEM text in memory: the leaf certificate
     // followed by its chain, and the (possibly encrypted) private key. The
     // text is read in place, never copied; the password is borrowed as by
     // load(). Throws on invalid or mismatched PEM.
-    [[nodiscard]] static tls_certificate load_pem(std::string_view certificate_chain,
-        std::string_view private_key, std::string_view private_key_password);
+    [[nodiscard]] static tls_certificate load_pem(std::string_view certificate_chain, std::string_view private_key, std::string_view private_key_password);
 
     tls_certificate(const tls_certificate& other);
     tls_certificate(tls_certificate&& other) noexcept;
@@ -958,8 +926,8 @@ public:
 
 private:
     // Adopts the caller's reference.
-    explicit tls_trust_store(X509_STORE* store) noexcept
-        : store_(store) {}
+    explicit tls_trust_store(X509_STORE* store) noexcept :
+        store_(store) {}
 
     X509_STORE* store_{};
 };
@@ -1012,10 +980,8 @@ struct tls_identity_files final {
 }
 
 // Reads and parses the files once; throws on unreadable, invalid or mismatched files.
-[[nodiscard]] inline tls_certificate load_tls_certificate(
-    const tls_identity_files& files, std::string_view private_key_password) {
-    return tls_certificate::load(tls_file_name_c_str(files.certificate_chain_file_),
-        tls_file_name_c_str(files.private_key_file_), private_key_password);
+[[nodiscard]] inline tls_certificate load_tls_certificate(const tls_identity_files& files, std::string_view private_key_password) {
+    return tls_certificate::load(tls_file_name_c_str(files.certificate_chain_file_), tls_file_name_c_str(files.private_key_file_), private_key_password);
 }
 [[nodiscard]] inline tls_trust_store load_tls_trust_store(const tls_file_name& ca_file) {
     return tls_trust_store::load_file(tls_file_name_c_str(ca_file));
@@ -1065,8 +1031,7 @@ private:
 };
 
 struct tls_certificate_store_access final {
-    [[nodiscard]] static std::shared_ptr<const tls_certificate_snapshot> snapshot(
-        const tls_certificate_store& store) noexcept;
+    [[nodiscard]] static std::shared_ptr<const tls_certificate_snapshot> snapshot(const tls_certificate_store& store) noexcept;
 };
 
 // Same validated loader used by fixed listener identities and incremental IDs.
@@ -1079,8 +1044,8 @@ namespace ruvia::detail {
 // A failed claim leaves the lane untouched; the caller supplies its domain error.
 class operation_lane_lease final {
 public:
-    explicit operation_lane_lease(bool& active) noexcept
-        : active_(active ? nullptr : &active) {
+    explicit operation_lane_lease(bool& active) noexcept :
+        active_(active ? nullptr : &active) {
         if (active_ != nullptr) {
             *active_ = true;
         }
@@ -1088,8 +1053,8 @@ public:
 
     operation_lane_lease(const operation_lane_lease&) = delete;
     operation_lane_lease& operator=(const operation_lane_lease&) = delete;
-    operation_lane_lease(operation_lane_lease&& other) noexcept
-        : active_(std::exchange(other.active_, nullptr)) {}
+    operation_lane_lease(operation_lane_lease&& other) noexcept :
+        active_(std::exchange(other.active_, nullptr)) {}
     operation_lane_lease& operator=(operation_lane_lease&&) = delete;
 
     ~operation_lane_lease() noexcept {
@@ -1134,19 +1099,16 @@ class scoped_request_io_timer final {
 public:
     // `metrics` is the request's counter block, or null outside a request
     // (worker callbacks, standalone clients); null disables timing.
-    scoped_request_io_timer(request_io_metrics* metrics, request_io_kind kind) noexcept
-        : metrics_(metrics),
-          kind_(kind),
-          started_at_(metrics_ != nullptr ? std::chrono::steady_clock::now()
-                                          : std::chrono::steady_clock::time_point{}) {}
+    scoped_request_io_timer(request_io_metrics* metrics, request_io_kind kind) noexcept :
+        metrics_(metrics),
+        kind_(kind),
+        started_at_(metrics_ != nullptr ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{}) {}
 
     ~scoped_request_io_timer() {
         if (metrics_ == nullptr) {
             return;
         }
-        const auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(
-            std::chrono::steady_clock::now() - started_at_)
-                                 .count();
+        const auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - started_at_).count();
         const auto micros = elapsed < 0 ? std::uint64_t{0} : static_cast<std::uint64_t>(elapsed);
         if (kind_ == request_io_kind::db) {
             ++metrics_->db_count_;
@@ -1191,8 +1153,7 @@ struct named_capability_definition final {
 // Replaces the definition registered under replacement.alias_ in place, so
 // existing aliases preserve registration order, or appends a new alias.
 template <typename definition_type>
-void upsert_named_capability_definition(
-    std::vector<definition_type>& definitions, definition_type&& replacement) {
+void upsert_named_capability_definition(std::vector<definition_type>& definitions, definition_type&& replacement) {
     const std::string_view alias = replacement.alias_;
     for (auto& definition : definitions) {
         if (std::string_view(definition.alias_) == alias) {
@@ -1207,19 +1168,16 @@ void upsert_named_capability_definition(
 // Validates and normalizes the replacement before mutating retained application
 // state; the new definition takes one owned copy of the name and configuration.
 template <typename definition_type, typename source_config_type>
-void upsert_named_capability_definition(std::vector<definition_type>& definitions,
-    std::string_view alias, const source_config_type& source_config, const char* empty_message) {
+void upsert_named_capability_definition(std::vector<definition_type>& definitions, std::string_view alias, const source_config_type& source_config, const char* empty_message) {
     validate_capability_alias(alias, empty_message);
-    upsert_named_capability_definition(definitions,
-        definition_type{std::string(alias), typename definition_type::config_storage_type(source_config)});
+    upsert_named_capability_definition(definitions, definition_type{std::string(alias), typename definition_type::config_storage_type(source_config)});
 }
 
 // Validates the complete startup alias set without allocating. Capability
 // owners call this before constructing pools, so an invalid later definition
 // cannot leave a partially built worker capability graph behind.
 template <typename entries_type>
-void validate_capability_aliases(
-    const entries_type& entries, const char* empty_message, const char* duplicate_message) {
+void validate_capability_aliases(const entries_type& entries, const char* empty_message, const char* duplicate_message) {
     for (std::size_t index = 0; index < entries.size(); ++index) {
         const std::string_view alias = entries[index].alias_;
         validate_capability_alias(alias, empty_message);
@@ -1239,18 +1197,20 @@ class named_capability_index final {
 public:
     named_capability_index() = default;
     void build(std::initializer_list<std::string_view> aliases) {
-        build_aliases(aliases, [](std::string_view alias) noexcept { return alias; });
+        build_aliases(aliases, [](std::string_view alias) noexcept {
+            return alias;
+        });
     }
 
     template <typename entries_type>
     void build(const entries_type& entries) {
-        build_aliases(
-            entries, [](const auto& entry_value) noexcept -> std::string_view { return entry_value.alias_; });
+        build_aliases(entries, [](const auto& entry_value) noexcept -> std::string_view {
+            return entry_value.alias_;
+        });
     }
 
     [[nodiscard]] std::optional<std::size_t> find(std::string_view alias) const noexcept {
-        const auto match =
-            std::ranges::lower_bound(aliases_, alias, {}, &named_capability_index::alias_view);
+        const auto match = std::ranges::lower_bound(aliases_, alias, {}, &named_capability_index::alias_view);
         if (match == aliases_.end() || match->alias_ != alias) {
             return std::nullopt;
         }
@@ -1302,8 +1262,8 @@ namespace ruvia::detail {
 // cancels early: borrowed command state cannot retire before every receipt.
 class runtime_control_completion final {
     struct state final {
-        explicit state(worker_ref caller)
-            : caller_(std::move(caller)) {}
+        explicit state(worker_ref caller) :
+            caller_(std::move(caller)) {}
         ~state() {
             if (failure_ && !observed_) {
                 report_unhandled_failure("runtime control", failure_);
@@ -1336,9 +1296,9 @@ public:
         }
 
     private:
-        receipt(std::shared_ptr<state> state_value, std::shared_ptr<void> lifetime) noexcept
-            : state_(std::move(state_value)),
-              lifetime_(std::move(lifetime)) {}
+        receipt(std::shared_ptr<state> state_value, std::shared_ptr<void> lifetime) noexcept :
+            state_(std::move(state_value)),
+            lifetime_(std::move(lifetime)) {}
         std::shared_ptr<state> state_;
         std::shared_ptr<void> lifetime_;
         friend class runtime_control_completion;
@@ -1350,9 +1310,9 @@ public:
     template <typename function_type>
     class command final {
     public:
-        command(receipt completion, function_type function)
-            : completion_(std::move(completion)),
-              function_(std::move(function)) {}
+        command(receipt completion, function_type function) :
+            completion_(std::move(completion)),
+            function_(std::move(function)) {}
         command(const command&) = delete;
         command& operator=(const command&) = delete;
         command(command&&) = default;
@@ -1402,26 +1362,26 @@ public:
         }
 
     private:
-        explicit wait_operation(std::shared_ptr<state> value) noexcept
-            : state_(std::move(value)) {}
+        explicit wait_operation(std::shared_ptr<state> value) noexcept :
+            state_(std::move(value)) {}
         std::shared_ptr<state> state_;
         bool started_{};
         bool resumed_{};
         friend class runtime_control_completion;
     };
-    explicit runtime_control_completion(worker_ref caller)
-        : state_(std::make_shared<state>(std::move(caller))),
-          lifetime_(state_.get(), [value = state_](void*) noexcept {
-              std::coroutine_handle<> continuation;
-              {
-                  std::lock_guard lock(value->mutex_);
-                  value->released_ = true;
-                  continuation = std::exchange(value->continuation_, {});
-              }
-              if (continuation) {
-                  value->caller_.defer_resume(continuation);
-              }
-          }) {}
+    explicit runtime_control_completion(worker_ref caller) :
+        state_(std::make_shared<state>(std::move(caller))),
+        lifetime_(state_.get(), [value = state_](void*) noexcept {
+            std::coroutine_handle<> continuation;
+            {
+                std::lock_guard lock(value->mutex_);
+                value->released_ = true;
+                continuation = std::exchange(value->continuation_, {});
+            }
+            if (continuation) {
+                value->caller_.defer_resume(continuation);
+            }
+        }) {}
     runtime_control_completion(const runtime_control_completion&) = delete;
     runtime_control_completion& operator=(const runtime_control_completion&) = delete;
     [[nodiscard]] receipt make_receipt() const {
@@ -1475,8 +1435,8 @@ public:
     public:
         lease(const lease&) = delete;
         lease& operator=(const lease&) = delete;
-        lease(lease&& other) noexcept
-            : gate_(std::exchange(other.gate_, nullptr)) {}
+        lease(lease&& other) noexcept :
+            gate_(std::exchange(other.gate_, nullptr)) {}
         lease& operator=(lease&&) = delete;
         ~lease() {
             if (gate_) {
@@ -1485,8 +1445,8 @@ public:
         }
 
     private:
-        explicit lease(runtime_control_gate& gate) noexcept
-            : gate_(&gate) {}
+        explicit lease(runtime_control_gate& gate) noexcept :
+            gate_(&gate) {}
         runtime_control_gate* gate_;
         friend class acquire_operation;
     };
@@ -1534,9 +1494,9 @@ public:
         }
 
     private:
-        acquire_operation(runtime_control_gate& gate, worker_ref caller) noexcept
-            : gate_(gate),
-              caller_(std::move(caller)) {}
+        acquire_operation(runtime_control_gate& gate, worker_ref caller) noexcept :
+            gate_(gate),
+            caller_(std::move(caller)) {}
         runtime_control_gate& gate_;
         worker_ref caller_;
         acquire_operation* next_{};
@@ -1619,12 +1579,12 @@ public:
     using deadline_kind_type = typename policy_type::deadline_kind_type;
     using cancellation_target_type = worker_cancellation_target<slot_pool>;
 
-    slot_pool(owner_type& owner_value, std::size_t slot_count, const worker_ref& worker_value)
-        : owner_(owner_value),
-          worker_(worker_value),
-          slots_(slot_count),
-          scheduler_(slot_count, worker_),
-          cancellation_target_(make_worker_cancellation_target(*this, worker_)) {}
+    slot_pool(owner_type& owner_value, std::size_t slot_count, const worker_ref& worker_value) :
+        owner_(owner_value),
+        worker_(worker_value),
+        slots_(slot_count),
+        scheduler_(slot_count, worker_),
+        cancellation_target_(make_worker_cancellation_target(*this, worker_)) {}
 
     slot_pool(owner_type&, std::size_t, worker_ref&&) = delete;
 
@@ -1643,9 +1603,9 @@ public:
 
     class acquire_awaiter final {
     public:
-        acquire_awaiter(owner_type& owner, pool_lease_acquire acquire) noexcept
-            : owner_(owner),
-              acquire_(std::move(acquire)) {}
+        acquire_awaiter(owner_type& owner, pool_lease_acquire acquire) noexcept :
+            owner_(owner),
+            acquire_(std::move(acquire)) {}
         acquire_awaiter(const acquire_awaiter&) = delete;
         acquire_awaiter& operator=(const acquire_awaiter&) = delete;
         acquire_awaiter(acquire_awaiter&&) noexcept = default;
@@ -1673,10 +1633,8 @@ public:
 
     // The common free-slot path completes directly in the caller's frame.
     // Saturated pools use the same scheduler, timeout and cancellation path.
-    [[nodiscard]] acquire_awaiter acquire(const operation_deadline& timeout,
-        std::optional<timeout_duration> acquire_timeout, stop_token stop_token_value) {
-        return acquire_awaiter(owner_, scheduler_.acquire({.timeout_ = timeout.constrained_by(acquire_timeout).timeout(),
-                                           .stop_token_ = std::move(stop_token_value)}));
+    [[nodiscard]] acquire_awaiter acquire(const operation_deadline& timeout, std::optional<timeout_duration> acquire_timeout, stop_token stop_token_value) {
+        return acquire_awaiter(owner_, scheduler_.acquire({.timeout_ = timeout.constrained_by(acquire_timeout).timeout(), .stop_token_ = std::move(stop_token_value)}));
     }
 
     // Leases a free slot without waiting; nullopt while every slot is leased
@@ -1730,9 +1688,9 @@ public:
     // and release ends.
     class lease_guard final {
     public:
-        lease_guard(slot_pool& pool, std::size_t slot) noexcept
-            : pool_(pool),
-              slot_(slot) {}
+        lease_guard(slot_pool& pool, std::size_t slot) noexcept :
+            pool_(pool),
+            slot_(slot) {}
         lease_guard(const lease_guard&) = delete;
         lease_guard& operator=(const lease_guard&) = delete;
         ~lease_guard() {
@@ -1753,8 +1711,8 @@ public:
     // when its stop arrives later.
     class cancellation_guard final {
     public:
-        cancellation_guard(slot_pool& pool, std::size_t slot, const stop_token& stop_token_value)
-            : registration_(pool.cancellation_target_, pool.slots_[slot].cancellation_id_) {
+        cancellation_guard(slot_pool& pool, std::size_t slot, const stop_token& stop_token_value) :
+            registration_(pool.cancellation_target_, pool.slots_[slot].cancellation_id_) {
             pool.reset_abort(slot);
             registration_.arm(stop_token_value);
         }
@@ -1812,8 +1770,7 @@ public:
     // Replaces the slot's absolute deadline. An absent deadline leaves the
     // slot unarmed; an expired one returns false so the caller reports its own
     // timeout. A scheduling failure rolls the slot back before propagating.
-    [[nodiscard]] bool arm_deadline(
-        std::size_t slot, std::optional<std::chrono::steady_clock::time_point> deadline, deadline_kind_type kind) {
+    [[nodiscard]] bool arm_deadline(std::size_t slot, std::optional<std::chrono::steady_clock::time_point> deadline, deadline_kind_type kind) {
         auto& state = slots_[slot];
         (void)clear_deadline(slot);
         if (!deadline.has_value()) {
@@ -1825,16 +1782,15 @@ public:
         const auto deadline_value = *deadline;
         state.deadline_.arm(deadline_value, kind);
         try {
-            (void)worker_.schedule_timer(state.deadline_timer_, deadline_value,
-                [this, slot](worker_timer_outcome outcome) noexcept {
-                    if (outcome != worker_timer_outcome::expired) {
-                        return;
-                    }
-                    const auto expired = slots_[slot].deadline_.expire(std::chrono::steady_clock::now());
-                    if (expired.has_value()) {
-                        policy_type::expire_slot(owner_, slot, *expired);
-                    }
-                });
+            (void)worker_.schedule_timer(state.deadline_timer_, deadline_value, [this, slot](worker_timer_outcome outcome) noexcept {
+                if (outcome != worker_timer_outcome::expired) {
+                    return;
+                }
+                const auto expired = slots_[slot].deadline_.expire(std::chrono::steady_clock::now());
+                if (expired.has_value()) {
+                    policy_type::expire_slot(owner_, slot, *expired);
+                }
+            });
         } catch (...) {
             state.deadline_timer_.cancel();
             state.deadline_.reset();
@@ -1873,9 +1829,9 @@ private:
     // nor copyable, and pending timers address their slot by index.
     class slot_array final {
     public:
-        explicit slot_array(std::size_t slot_count)
-            : data_(std::make_unique<slot_state[]>(slot_count)),
-              size_(slot_count) {}
+        explicit slot_array(std::size_t slot_count) :
+            data_(std::make_unique<slot_state[]>(slot_count)),
+            size_(slot_count) {}
         slot_array(const slot_array&) = delete;
         slot_array& operator=(const slot_array&) = delete;
 
@@ -1951,12 +1907,11 @@ class operation_interrupt final {
 public:
     using interrupt_type = void (*)(void*) noexcept;
 
-    operation_interrupt(operation_interrupt_source& source, const worker_ref& worker_value,
-        const operation_options& options, void* target, interrupt_type interrupt, const char* operation_name)
-        : source_(source),
-          target_(target),
-          interrupt_(interrupt),
-          operation_name_(operation_name) {
+    operation_interrupt(operation_interrupt_source& source, const worker_ref& worker_value, const operation_options& options, void* target, interrupt_type interrupt, const char* operation_name) :
+        source_(source),
+        target_(target),
+        interrupt_(interrupt),
+        operation_name_(operation_name) {
         if (options.stop_token_.stop_requested()) {
             throw_cause(operation_interrupt_cause::cancelled, operation_name_);
         }
@@ -1964,12 +1919,11 @@ public:
             source_.target_ = make_worker_cancellation_target(source_, worker_value);
         }
         if (options.timeout_.has_value()) {
-            (void)worker_value.schedule_timer(timer_, options.timeout_->deadline_from(std::chrono::steady_clock::now()),
-                [this](worker_timer_outcome outcome) noexcept {
-                    if (outcome == worker_timer_outcome::expired) {
-                        fire(operation_interrupt_cause::timed_out);
-                    }
-                });
+            (void)worker_value.schedule_timer(timer_, options.timeout_->deadline_from(std::chrono::steady_clock::now()), [this](worker_timer_outcome outcome) noexcept {
+                if (outcome == worker_timer_outcome::expired) {
+                    fire(operation_interrupt_cause::timed_out);
+                }
+            });
         }
         // Linked before arming: a stop requested meanwhile is delivered inline.
         next_ = source_.running_;
@@ -2011,10 +1965,7 @@ public:
     }
 
     [[noreturn]] static void throw_cause(operation_interrupt_cause cause, const char* operation_name) {
-        throw std::system_error(std::make_error_code(cause == operation_interrupt_cause::timed_out
-                                                         ? std::errc::timed_out
-                                                         : std::errc::operation_canceled),
-            operation_name);
+        throw std::system_error(std::make_error_code(cause == operation_interrupt_cause::timed_out ? std::errc::timed_out : std::errc::operation_canceled), operation_name);
     }
 
 private:
@@ -2063,9 +2014,9 @@ inline void operation_interrupt_source::cancel_operation_by_id(std::uint64_t id)
 // as this operation's own.
 class operation_steps final {
 public:
-    explicit operation_steps(operation_options operation) noexcept
-        : deadline_(operation.timeout_),
-          stop_(std::move(operation.stop_token_)) {}
+    explicit operation_steps(operation_options operation) noexcept :
+        deadline_(operation.timeout_),
+        stop_(std::move(operation.stop_token_)) {}
 
     // The time left and the same stop token for the next step; std::nullopt
     // once the deadline has passed.
@@ -2092,8 +2043,7 @@ public:
 
     // Whether `error` is a step interrupted by this operation's deadline or stop token.
     [[nodiscard]] bool interrupted(const std::system_error& error) const noexcept {
-        return (error.code() == std::errc::timed_out && interrupted_by(operation_interrupt_cause::timed_out)) ||
-               (error.code() == std::errc::operation_canceled && interrupted_by(operation_interrupt_cause::cancelled));
+        return (error.code() == std::errc::timed_out && interrupted_by(operation_interrupt_cause::timed_out)) || (error.code() == std::errc::operation_canceled && interrupted_by(operation_interrupt_cause::cancelled));
     }
 
 private:
@@ -2130,8 +2080,7 @@ inline void ensure_positive_size(std::size_t value, const char* message) {
     }
 }
 
-inline void ensure_positive_optional_size(
-    const std::optional<std::size_t>& value, const char* message) {
+inline void ensure_positive_optional_size(const std::optional<std::size_t>& value, const char* message) {
     if (value.has_value() && *value == 0) {
         throw std::invalid_argument(message);
     }
@@ -2143,8 +2092,7 @@ inline void ensure_non_zero_port(std::uint16_t port, const char* message) {
     }
 }
 
-inline void ensure_non_zero_optional_port(
-    const std::optional<port_number>& port, const char* message) {
+inline void ensure_non_zero_optional_port(const std::optional<port_number>& port, const char* message) {
     if (port.has_value()) {
         ensure_non_zero_port(port->value(), message);
     }
@@ -2162,23 +2110,20 @@ inline void ensure_positive_duration(timeout_duration value, const char* message
 }
 
 template <typename rep_type, typename period_type>
-void ensure_positive_optional_duration(
-    const std::optional<std::chrono::duration<rep_type, period_type>>& value, const char* message) {
+void ensure_positive_optional_duration(const std::optional<std::chrono::duration<rep_type, period_type>>& value, const char* message) {
     if (value.has_value() && value->count() <= 0) {
         throw std::invalid_argument(message);
     }
 }
 
-inline void ensure_positive_optional_duration(
-    const std::optional<timeout_duration>& value, const char* message) {
+inline void ensure_positive_optional_duration(const std::optional<timeout_duration>& value, const char* message) {
     if (value.has_value()) {
         ensure_positive_duration(*value, message);
     }
 }
 
 template <typename first_duration_type, typename... rest_durations_type>
-void ensure_positive_optional_durations(
-    const char* message, const first_duration_type& first, const rest_durations_type&... rest) {
+void ensure_positive_optional_durations(const char* message, const first_duration_type& first, const rest_durations_type&... rest) {
     ensure_positive_optional_duration(first, message);
     (ensure_positive_optional_duration(rest, message), ...);
 }
@@ -2193,9 +2138,7 @@ class connection_lifecycle;
 // WebSocket liveness, tunnel drain). Values are comparable only with each
 // other, never with wall-clock time.
 [[nodiscard]] inline std::int64_t steady_now_ms() noexcept {
-    return std::chrono::duration_cast<std::chrono::milliseconds>(
-        std::chrono::steady_clock::now().time_since_epoch())
-        .count();
+    return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
 }
 
 // Worker-owned connection activity tracking options, copied from the server
@@ -2229,10 +2172,10 @@ public:
     using action_type = void (*)(void*) noexcept;
 
     constexpr connection_transport() noexcept = default;
-    constexpr connection_transport(void* target, action_type close_action, action_type cancel_action) noexcept
-        : target_(target),
-          close_(close_action),
-          cancel_(cancel_action) {}
+    constexpr connection_transport(void* target, action_type close_action, action_type cancel_action) noexcept :
+        target_(target),
+        close_(close_action),
+        cancel_(cancel_action) {}
 
     [[nodiscard]] static connection_transport tcp(asio::ip::tcp::socket& socket) noexcept;
     [[nodiscard]] bool valid() const noexcept {
@@ -2361,13 +2304,13 @@ public:
         // phase's deadlines, and drain's view of the request, as they were.
         class phase_scope final {
         public:
-            explicit phase_scope(entry& entry_value) noexcept
-                : entry_(entry_value),
-                  phase_started_ms_(entry_value.phase_started_ms_),
-                  phase_(entry_value.phase_),
-                  reading_request_head_(entry_value.reading_request_head_) {}
-            phase_scope(entry& entry_value, phase next_phase) noexcept
-                : phase_scope(entry_value) {
+            explicit phase_scope(entry& entry_value) noexcept :
+                entry_(entry_value),
+                phase_started_ms_(entry_value.phase_started_ms_),
+                phase_(entry_value.phase_),
+                reading_request_head_(entry_value.reading_request_head_) {}
+            phase_scope(entry& entry_value, phase next_phase) noexcept :
+                phase_scope(entry_value) {
                 entry_.set_phase(next_phase);
             }
             ~phase_scope();
@@ -2401,8 +2344,7 @@ public:
         // `drain` is optional: a connection whose read or idle phase times
         // out is asked once through it to end gracefully, instead of being
         // closed.
-        void register_periodic_check(periodic_check_registration& registration, void* target,
-            periodic_check_type tick, drain_check_type drain = nullptr) noexcept;
+        void register_periodic_check(periodic_check_registration& registration, void* target, periodic_check_type tick, drain_check_type drain = nullptr) noexcept;
 
     private:
         friend class connection_scanner;
@@ -2422,8 +2364,7 @@ public:
         // connection awaiting its next request head, or a multiplexed session
         // without a stream. Such a connection may give up its slot.
         [[nodiscard]] bool reusable() const noexcept {
-            return !close_requested_ &&
-                   ((reading_request_head_ && phase_ == phase::idle) || phase_ == phase::awaiting_stream);
+            return !close_requested_ && ((reading_request_head_ && phase_ == phase::idle) || phase_ == phase::awaiting_stream);
         }
         // Links the entry at the newest end of the scanner's reusable list
         // when it became reusable, unlinks it when it stopped being so.
@@ -2499,8 +2440,8 @@ private:
 // than the time to drain the whole write.
 class connection_write_progress final {
 public:
-    explicit connection_write_progress(connection_scanner::entry& entry) noexcept
-        : entry_(&entry) {}
+    explicit connection_write_progress(connection_scanner::entry& entry) noexcept :
+        entry_(&entry) {}
 
     [[nodiscard]] std::size_t operator()(const std::error_code& error, std::size_t bytes_transferred) const noexcept {
         if (bytes_transferred != 0) {
@@ -2547,8 +2488,8 @@ struct connection_scanner::impl_type final {
     static void request_close(entry& entry, std::int64_t deadline_ms) noexcept;
     static void record_close_request(entry& entry, std::int64_t deadline_ms) noexcept;
     struct timer_state_type final {
-        explicit timer_state_type(impl_type* owner_value) noexcept
-            : owner_(owner_value) {}
+        explicit timer_state_type(impl_type* owner_value) noexcept :
+            owner_(owner_value) {}
         std::mutex mutex_;
         impl_type* owner_;
     };
@@ -2593,8 +2534,8 @@ class inbound_buffer_reservation;
 // outlive every connection account.
 class inbound_buffer_budget final {
 public:
-    explicit inbound_buffer_budget(std::size_t limit)
-        : limit_(limit) {
+    explicit inbound_buffer_budget(std::size_t limit) :
+        limit_(limit) {
         if (limit_ == 0) {
             throw std::invalid_argument("inbound buffer budget requires a positive limit");
         }
@@ -2618,9 +2559,9 @@ private:
 // reservation must be returned before this owner is destroyed.
 class inbound_buffer_account final {
 public:
-    inbound_buffer_account(inbound_buffer_budget& worker, std::size_t limit)
-        : worker_(worker),
-          limit_(limit) {
+    inbound_buffer_account(inbound_buffer_budget& worker, std::size_t limit) :
+        worker_(worker),
+        limit_(limit) {
         if (limit_ == 0) {
             throw std::invalid_argument("inbound buffer resource requires a positive limit");
         }
@@ -2664,10 +2605,10 @@ private:
 class inbound_buffer_reservation final {
 public:
     constexpr inbound_buffer_reservation() noexcept = default;
-    explicit constexpr inbound_buffer_reservation(inbound_buffer_account* account) noexcept
-        : account_(account) {}
-    inbound_buffer_reservation(inbound_buffer_account& account, std::size_t bytes_value)
-        : account_(&account) {
+    explicit constexpr inbound_buffer_reservation(inbound_buffer_account* account) noexcept :
+        account_(account) {}
+    inbound_buffer_reservation(inbound_buffer_account& account, std::size_t bytes_value) :
+        account_(&account) {
         if (bytes_value != 0) {
             account_->charge_bytes(bytes_value);
             bytes_ = bytes_value;
@@ -2680,9 +2621,9 @@ public:
     inbound_buffer_reservation(const inbound_buffer_reservation&) = delete;
     inbound_buffer_reservation& operator=(const inbound_buffer_reservation&) = delete;
 
-    inbound_buffer_reservation(inbound_buffer_reservation&& other) noexcept
-        : account_(std::exchange(other.account_, nullptr)),
-          bytes_(std::exchange(other.bytes_, 0)) {}
+    inbound_buffer_reservation(inbound_buffer_reservation&& other) noexcept :
+        account_(std::exchange(other.account_, nullptr)),
+        bytes_(std::exchange(other.bytes_, 0)) {}
 
     inbound_buffer_reservation& operator=(inbound_buffer_reservation&& other) noexcept {
         if (this != &other) {
@@ -2751,8 +2692,7 @@ inline inbound_buffer_reservation inbound_buffer_account::reserve(std::size_t by
     return value.capacity() > sso_capacity ? value.capacity() : 0;
 }
 
-inline void inbound_reserve(
-    std::string& target, inbound_buffer_reservation& reservation, std::size_t capacity) {
+inline void inbound_reserve(std::string& target, inbound_buffer_reservation& reservation, std::size_t capacity) {
     if (capacity <= target.capacity()) {
         return;
     }
@@ -2769,8 +2709,7 @@ inline void inbound_reserve(
     reservation.resize_to(inbound_string_heap_bytes(target));
 }
 
-inline void inbound_resize(
-    std::string& target, inbound_buffer_reservation& reservation, std::size_t new_size) {
+inline void inbound_resize(std::string& target, inbound_buffer_reservation& reservation, std::size_t new_size) {
     if (new_size > target.capacity()) {
         static const std::size_t sso_capacity = std::string{}.capacity();
         if (new_size > sso_capacity) {
@@ -2789,8 +2728,7 @@ inline void inbound_resize(
     }
 }
 
-inline void inbound_append(
-    std::string& target, inbound_buffer_reservation& reservation, std::string_view data) {
+inline void inbound_append(std::string& target, inbound_buffer_reservation& reservation, std::string_view data) {
     if (data.empty()) {
         return;
     }
@@ -2799,17 +2737,14 @@ inline void inbound_append(
     }
     const auto needed = target.size() + data.size();
     if (needed > target.capacity()) {
-        const auto doubled =
-            target.capacity() > target.max_size() / 2 ? target.max_size() : target.capacity() * 2;
+        const auto doubled = target.capacity() > target.max_size() / 2 ? target.max_size() : target.capacity() * 2;
         inbound_reserve(target, reservation, (std::max)(needed, doubled));
     }
     target.append(data.data(), data.size());
     reservation.resize_to(inbound_string_heap_bytes(target));
 }
 
-inline void inbound_clear_retaining_small(std::string& target,
-    inbound_buffer_reservation& reservation,
-    std::size_t retained_bytes = http_retained_string_bytes) noexcept {
+inline void inbound_clear_retaining_small(std::string& target, inbound_buffer_reservation& reservation, std::size_t retained_bytes = http_retained_string_bytes) noexcept {
     http_clear_string_retaining_small(target, retained_bytes);
     reservation.shrink_to(inbound_string_heap_bytes(target));
 }
@@ -2819,14 +2754,12 @@ inline void inbound_discard(std::string& target, inbound_buffer_reservation& res
     reservation.clear();
 }
 
-[[nodiscard]] inline std::span<char> inbound_prepare(
-    http_io_buffer& buffer, inbound_buffer_reservation& reservation, std::size_t bytes) {
+[[nodiscard]] inline std::span<char> inbound_prepare(http_io_buffer& buffer, inbound_buffer_reservation& reservation, std::size_t bytes) {
     const auto spare = buffer.prepare_spare();
     if (spare.size() >= bytes) {
         return spare.first(bytes);
     }
-    constexpr std::size_t max_bytes =
-        static_cast<std::size_t>((std::numeric_limits<std::ptrdiff_t>::max)());
+    constexpr std::size_t max_bytes = static_cast<std::size_t>((std::numeric_limits<std::ptrdiff_t>::max)());
     if (bytes > max_bytes - buffer.size()) {
         throw std::length_error("http_io_buffer size exceeds the addressable range");
     }
@@ -2845,8 +2778,7 @@ inline void inbound_discard(std::string& target, inbound_buffer_reservation& res
     }
 }
 
-inline void inbound_reserve(
-    http_io_buffer& buffer, inbound_buffer_reservation& reservation, std::size_t capacity) {
+inline void inbound_reserve(http_io_buffer& buffer, inbound_buffer_reservation& reservation, std::size_t capacity) {
     if (capacity <= buffer.capacity()) {
         return;
     }
@@ -2860,15 +2792,13 @@ inline void inbound_reserve(
     reservation.resize_to(buffer.capacity());
 }
 
-inline void inbound_append(
-    http_io_buffer& buffer, inbound_buffer_reservation& reservation, std::string_view bytes) {
+inline void inbound_append(http_io_buffer& buffer, inbound_buffer_reservation& reservation, std::string_view bytes) {
     if (bytes.empty()) {
         return;
     }
     const auto spare = buffer.prepare_spare();
     if (spare.size() < bytes.size()) {
-        constexpr std::size_t max_bytes =
-            static_cast<std::size_t>((std::numeric_limits<std::ptrdiff_t>::max)());
+        constexpr std::size_t max_bytes = static_cast<std::size_t>((std::numeric_limits<std::ptrdiff_t>::max)());
         if (bytes.size() > max_bytes - buffer.size()) {
             throw std::length_error("http_io_buffer size exceeds the addressable range");
         }
@@ -2887,8 +2817,7 @@ inline void inbound_append(
     }
 }
 
-inline void inbound_shrink_to(
-    http_io_buffer& buffer, inbound_buffer_reservation& reservation, std::size_t bytes) {
+inline void inbound_shrink_to(http_io_buffer& buffer, inbound_buffer_reservation& reservation, std::size_t bytes) {
     buffer.shrink_to(bytes);
     reservation.shrink_to(buffer.capacity());
 }
@@ -2910,11 +2839,8 @@ namespace ruvia::detail {
 
 // http_error_info borrows its fields. The caller's http_protocol_error lvalue
 // must outlive any suspension of the error handler that reads this view.
-[[nodiscard]] inline http_error_info copy_http_protocol_error_info(
-    const http_protocol_error& error RUVIA_LIFETIMEBOUND) noexcept {
-    return http_error_info({.status_ = error.status(),
-        .code_ = error.code(),
-        .message_ = std::string_view(error.what())});
+[[nodiscard]] inline http_error_info copy_http_protocol_error_info(const http_protocol_error& error RUVIA_LIFETIMEBOUND) noexcept {
+    return http_error_info({.status_ = error.status(), .code_ = error.code(), .message_ = std::string_view(error.what())});
 }
 http_error_info copy_http_protocol_error_info(const http_protocol_error&&) = delete;
 
@@ -2946,8 +2872,8 @@ namespace ruvia::detail {
 // as a std::system_error.
 class inbound_transport_error final : public std::system_error {
 public:
-    inbound_transport_error(std::error_code code, const char* what_arg)
-        : std::system_error(code, what_arg) {}
+    inbound_transport_error(std::error_code code, const char* what_arg) :
+        std::system_error(code, what_arg) {}
 };
 
 // Errors with which an inbound connection ends without any fault on this side:
@@ -2959,12 +2885,7 @@ public:
 // (stop, drain, or a timeout). Only this server closes an inbound socket, so
 // these codes cannot come from anything else on the inbound transport.
 [[nodiscard]] inline bool is_inbound_connection_end(const std::error_code& error) noexcept {
-    return is_stream_read_end(error) || error == asio::error::connection_reset ||
-           error == asio::error::connection_aborted || error == asio::error::broken_pipe ||
-           error == asio::error::operation_aborted || error == std::errc::operation_canceled ||
-           error == asio::error::bad_descriptor || error == asio::error::timed_out ||
-           error == asio::error::not_connected ||
-           error == asio::error::shut_down;
+    return is_stream_read_end(error) || error == asio::error::connection_reset || error == asio::error::connection_aborted || error == asio::error::broken_pipe || error == asio::error::operation_aborted || error == std::errc::operation_canceled || error == asio::error::bad_descriptor || error == asio::error::timed_out || error == asio::error::not_connected || error == asio::error::shut_down;
 }
 
 }  // namespace ruvia::detail
@@ -3001,11 +2922,9 @@ inline constexpr std::uint64_t windows_file_time_ticks_per_second = UINT64_C(100
 [[nodiscard]] inline std::time_t unix_seconds_from_windows_file_time_ticks(std::uint64_t ticks) noexcept {
     if (ticks < windows_to_unix_epoch100ns) {
         const auto before_epoch = windows_to_unix_epoch100ns - ticks;
-        return -static_cast<std::time_t>(before_epoch / windows_file_time_ticks_per_second) -
-               static_cast<std::time_t>(before_epoch % windows_file_time_ticks_per_second != 0);
+        return -static_cast<std::time_t>(before_epoch / windows_file_time_ticks_per_second) - static_cast<std::time_t>(before_epoch % windows_file_time_ticks_per_second != 0);
     }
-    return static_cast<std::time_t>(
-        (ticks - windows_to_unix_epoch100ns) / windows_file_time_ticks_per_second);
+    return static_cast<std::time_t>((ticks - windows_to_unix_epoch100ns) / windows_file_time_ticks_per_second);
 }
 
 #if defined(__unix__)
@@ -3013,8 +2932,8 @@ using native_file_type = int;
 
 class native_file_descriptor final {
 public:
-    explicit native_file_descriptor(int fd = -1) noexcept
-        : fd_(fd) {}
+    explicit native_file_descriptor(int fd = -1) noexcept :
+        fd_(fd) {}
 
     ~native_file_descriptor() {
         reset();
@@ -3023,8 +2942,8 @@ public:
     native_file_descriptor(const native_file_descriptor&) = delete;
     native_file_descriptor& operator=(const native_file_descriptor&) = delete;
 
-    native_file_descriptor(native_file_descriptor&& other) noexcept
-        : fd_(std::exchange(other.fd_, -1)) {}
+    native_file_descriptor(native_file_descriptor&& other) noexcept :
+        fd_(std::exchange(other.fd_, -1)) {}
 
     native_file_descriptor& operator=(native_file_descriptor&& other) noexcept {
         if (this != &other) {
@@ -3061,8 +2980,7 @@ private:
     return std::error_code(errno, std::system_category());
 }
 
-[[nodiscard]] inline response_file_snapshot snapshot_native_file_handle(
-    int fd, std::error_code& ec) noexcept {
+[[nodiscard]] inline response_file_snapshot snapshot_native_file_handle(int fd, std::error_code& ec) noexcept {
     struct stat status{};
     if (::fstat(fd, &status) != 0) {
         ec = last_native_file_error();
@@ -3076,15 +2994,9 @@ private:
     const auto modified_nanoseconds = status.st_mtim.tv_nsec;
     const auto changed_seconds = status.st_ctim.tv_sec;
     const auto changed_nanoseconds = status.st_ctim.tv_nsec;
-    const std::array<std::uint64_t, 4> words{static_cast<std::uint64_t>(status.st_dev),
-        static_cast<std::uint64_t>(status.st_ino), static_cast<std::uint64_t>(changed_seconds),
-        static_cast<std::uint64_t>(changed_nanoseconds)};
+    const std::array<std::uint64_t, 4> words{static_cast<std::uint64_t>(status.st_dev), static_cast<std::uint64_t>(status.st_ino), static_cast<std::uint64_t>(changed_seconds), static_cast<std::uint64_t>(changed_nanoseconds)};
     ec = {};
-    return response_file_snapshot{http_response_file_identity::checked(words),
-        static_cast<std::uint64_t>(status.st_size),
-        static_cast<std::uint64_t>(modified_seconds) * UINT64_C(1000000000) +
-            static_cast<std::uint64_t>(modified_nanoseconds),
-        static_cast<std::time_t>(modified_seconds)};
+    return response_file_snapshot{http_response_file_identity::checked(words), static_cast<std::uint64_t>(status.st_size), static_cast<std::uint64_t>(modified_seconds) * UINT64_C(1000000000) + static_cast<std::uint64_t>(modified_nanoseconds), static_cast<std::time_t>(modified_seconds)};
 }
 
 // O_NONBLOCK keeps a FIFO (or another special file swapped in for a regular
@@ -3094,8 +3006,7 @@ inline constexpr int native_file_open_flags = O_RDONLY | O_CLOEXEC | O_NONBLOCK;
 
 // The one open of a file by path; every response, index and read handle
 // starts here.
-[[nodiscard]] inline native_file_descriptor open_native_file(
-    const http_native_path_char_type* path, std::error_code& ec) noexcept {
+[[nodiscard]] inline native_file_descriptor open_native_file(const http_native_path_char_type* path, std::error_code& ec) noexcept {
     native_file_descriptor input(::open(path, native_file_open_flags));
     ec = input ? std::error_code{} : last_native_file_error();
     return input;
@@ -3110,15 +3021,13 @@ inline void release_response_file_handle(http_response_file_descriptor::native_t
 }
 
 [[nodiscard]] inline http_response_file_descriptor adopt_response_file_handle(native_file_descriptor input) noexcept {
-    return http_response_file_descriptor(
-        static_cast<http_response_file_descriptor::native_type>(input.release()), &release_response_file_handle);
+    return http_response_file_descriptor(static_cast<http_response_file_descriptor::native_type>(input.release()), &release_response_file_handle);
 }
 
 // An independent handle to the same open file, so a read state that outlives
 // the response (an abandoned pool read) never borrows the response's handle.
 // Reads are positional, so the shared file offset is never relied on.
-[[nodiscard]] inline native_file_descriptor duplicate_native_file(
-    const http_response_file_descriptor& handle, std::error_code& ec) noexcept {
+[[nodiscard]] inline native_file_descriptor duplicate_native_file(const http_response_file_descriptor& handle, std::error_code& ec) noexcept {
     native_file_descriptor duplicate(::fcntl(borrowed_native_file(handle), F_DUPFD_CLOEXEC, 0));
     ec = duplicate ? std::error_code{} : last_native_file_error();
     return duplicate;
@@ -3132,8 +3041,7 @@ inline constexpr int native_directory_open_flags = O_RDONLY | O_DIRECTORY | O_CL
 
 // A directory handle that later opens resolve entries against, so a request
 // walks only the path below it instead of the whole absolute path.
-[[nodiscard]] inline native_file_descriptor open_native_directory(
-    const http_native_path_char_type* path, std::error_code& ec) noexcept {
+[[nodiscard]] inline native_file_descriptor open_native_directory(const http_native_path_char_type* path, std::error_code& ec) noexcept {
     native_file_descriptor directory(::open(path, native_directory_open_flags));
     ec = directory ? std::error_code{} : last_native_file_error();
     return directory;
@@ -3147,8 +3055,7 @@ struct native_directory_identity final {
     friend bool operator==(const native_directory_identity&, const native_directory_identity&) = default;
 };
 
-[[nodiscard]] inline native_directory_identity native_directory_identity_of(
-    const struct stat& status, std::error_code& ec) noexcept {
+[[nodiscard]] inline native_directory_identity native_directory_identity_of(const struct stat& status, std::error_code& ec) noexcept {
     if (!S_ISDIR(status.st_mode)) {
         ec = std::make_error_code(std::errc::not_a_directory);
         return {};
@@ -3157,8 +3064,7 @@ struct native_directory_identity final {
     return {static_cast<std::uint64_t>(status.st_dev), static_cast<std::uint64_t>(status.st_ino)};
 }
 
-[[nodiscard]] inline native_directory_identity native_directory_handle_identity(
-    int directory, std::error_code& ec) noexcept {
+[[nodiscard]] inline native_directory_identity native_directory_handle_identity(int directory, std::error_code& ec) noexcept {
     struct stat status{};
     if (::fstat(directory, &status) != 0) {
         ec = last_native_file_error();
@@ -3167,8 +3073,7 @@ struct native_directory_identity final {
     return native_directory_identity_of(status, ec);
 }
 
-[[nodiscard]] inline native_directory_identity native_directory_path_identity(
-    const http_native_path_char_type* path, std::error_code& ec) noexcept {
+[[nodiscard]] inline native_directory_identity native_directory_path_identity(const http_native_path_char_type* path, std::error_code& ec) noexcept {
     struct stat status{};
     if (::stat(path, &status) != 0) {
         ec = last_native_file_error();
@@ -3179,8 +3084,7 @@ struct native_directory_identity final {
 
 // Opens `relative` ('/'-separated, as an index records it) below `directory`
 // one component at a time, refusing a symlink, "." or ".." in any component.
-[[nodiscard]] inline native_file_descriptor open_native_file_beneath_by_components(
-    int directory, std::string_view relative, std::error_code& ec) noexcept {
+[[nodiscard]] inline native_file_descriptor open_native_file_beneath_by_components(int directory, std::string_view relative, std::error_code& ec) noexcept {
     // NAME_MAX of every supported filesystem; a longer component cannot exist.
     constexpr std::size_t max_component_bytes = 255;
     std::array<char, max_component_bytes + 1> component{};
@@ -3238,13 +3142,10 @@ inline std::atomic<bool> native_openat2_available{true};
 // symlink, so a path that now resolves through one was swapped after it was
 // indexed and is refused. The handle is not validated here: the caller
 // snapshots it (index) or checks it against the indexed identity (response).
-[[nodiscard]] inline native_file_descriptor open_native_file_beneath(
-    int directory, const http_native_path_char_type* relative, std::error_code& ec) noexcept {
+[[nodiscard]] inline native_file_descriptor open_native_file_beneath(int directory, const http_native_path_char_type* relative, std::error_code& ec) noexcept {
 #if defined(__linux__) && defined(SYS_openat2)
     if (native_openat2_available.load(std::memory_order_relaxed)) {
-        const native_open_how how{.flags_ = static_cast<std::uint64_t>(native_file_open_flags | O_NOFOLLOW),
-            .mode_ = 0,
-            .resolve_ = native_resolve_beneath | native_resolve_no_symlinks | native_resolve_no_magiclinks};
+        const native_open_how how{.flags_ = static_cast<std::uint64_t>(native_file_open_flags | O_NOFOLLOW), .mode_ = 0, .resolve_ = native_resolve_beneath | native_resolve_no_symlinks | native_resolve_no_magiclinks};
         const auto opened = ::syscall(SYS_openat2, directory, relative, &how, sizeof(how));
         if (opened >= 0) {
             ec = {};
@@ -3266,8 +3167,7 @@ inline std::atomic<bool> native_openat2_available{true};
 // Reads exactly `size` bytes at `offset` without moving the descriptor's file
 // position, so a handle shared by several ranges needs no seek. A file that
 // ends early is shorter than the snapshot it was framed from: it changed.
-[[nodiscard]] inline std::error_code read_native_file_at(
-    int fd, std::uint64_t offset, char* output, std::size_t size) noexcept {
+[[nodiscard]] inline std::error_code read_native_file_at(int fd, std::uint64_t offset, char* output, std::size_t size) noexcept {
     while (size != 0) {
         const auto count = ::pread(fd, output, size, static_cast<off_t>(offset));
         if (count < 0) {
@@ -3289,8 +3189,7 @@ inline std::atomic<bool> native_openat2_available{true};
 #if defined(__linux__)
 // Reads only bytes already in the page cache (RWF_NOWAIT), never waiting for
 // the disk; 0 when none are. A kernel without RWF_NOWAIT clears `supported`.
-[[nodiscard]] inline std::size_t read_native_file_cached(
-    int fd, std::uint64_t offset, char* output, std::size_t size, bool& supported) noexcept {
+[[nodiscard]] inline std::size_t read_native_file_cached(int fd, std::uint64_t offset, char* output, std::size_t size, bool& supported) noexcept {
 #if defined(SYS_preadv2) && defined(RWF_NOWAIT)
     if (!supported || offset > static_cast<std::uint64_t>((std::numeric_limits<off_t>::max)())) {
         return 0;
@@ -3326,8 +3225,8 @@ using native_file_type = HANDLE;
 
 class native_file_descriptor final {
 public:
-    explicit native_file_descriptor(HANDLE handle = INVALID_HANDLE_VALUE) noexcept
-        : handle_(handle) {}
+    explicit native_file_descriptor(HANDLE handle = INVALID_HANDLE_VALUE) noexcept :
+        handle_(handle) {}
 
     ~native_file_descriptor() {
         reset();
@@ -3336,8 +3235,8 @@ public:
     native_file_descriptor(const native_file_descriptor&) = delete;
     native_file_descriptor& operator=(const native_file_descriptor&) = delete;
 
-    native_file_descriptor(native_file_descriptor&& other) noexcept
-        : handle_(std::exchange(other.handle_, INVALID_HANDLE_VALUE)) {}
+    native_file_descriptor(native_file_descriptor&& other) noexcept :
+        handle_(std::exchange(other.handle_, INVALID_HANDLE_VALUE)) {}
 
     native_file_descriptor& operator=(native_file_descriptor&& other) noexcept {
         if (this != &other) {
@@ -3382,15 +3281,11 @@ private:
     return unix_seconds_from_windows_file_time_ticks(windows_file_time_token(value));
 }
 
-[[nodiscard]] inline response_file_snapshot snapshot_native_file_handle(
-    HANDLE handle, std::error_code& ec) noexcept {
+[[nodiscard]] inline response_file_snapshot snapshot_native_file_handle(HANDLE handle, std::error_code& ec) noexcept {
     FILE_ID_INFO id{};
     FILE_STANDARD_INFO standard{};
     FILE_BASIC_INFO basic{};
-    if (::GetFileInformationByHandleEx(handle, FileIdInfo, &id, sizeof(id)) == 0 ||
-        ::GetFileInformationByHandleEx(handle, FileStandardInfo, &standard, sizeof(standard)) ==
-            0 ||
-        ::GetFileInformationByHandleEx(handle, FileBasicInfo, &basic, sizeof(basic)) == 0) {
+    if (::GetFileInformationByHandleEx(handle, FileIdInfo, &id, sizeof(id)) == 0 || ::GetFileInformationByHandleEx(handle, FileStandardInfo, &standard, sizeof(standard)) == 0 || ::GetFileInformationByHandleEx(handle, FileBasicInfo, &basic, sizeof(basic)) == 0) {
         ec = last_native_file_error();
         return {};
     }
@@ -3403,12 +3298,9 @@ private:
     static_assert(sizeof(id.FileId.Identifier) == 16);
     std::memcpy(&file_id_low, id.FileId.Identifier, sizeof(file_id_low));
     std::memcpy(&file_id_high, id.FileId.Identifier + sizeof(file_id_low), sizeof(file_id_high));
-    const std::array<std::uint64_t, 4> words{static_cast<std::uint64_t>(id.VolumeSerialNumber),
-        file_id_low, file_id_high, windows_file_time_token(basic.ChangeTime)};
+    const std::array<std::uint64_t, 4> words{static_cast<std::uint64_t>(id.VolumeSerialNumber), file_id_low, file_id_high, windows_file_time_token(basic.ChangeTime)};
     ec = {};
-    return response_file_snapshot{http_response_file_identity::checked(words),
-        static_cast<std::uint64_t>(standard.EndOfFile.QuadPart),
-        windows_file_time_token(basic.LastWriteTime), windows_file_time_seconds(basic.LastWriteTime)};
+    return response_file_snapshot{http_response_file_identity::checked(words), static_cast<std::uint64_t>(standard.EndOfFile.QuadPart), windows_file_time_token(basic.LastWriteTime), windows_file_time_seconds(basic.LastWriteTime)};
 }
 
 // FILE_SHARE_DELETE lets a served file be renamed or replaced while a handle
@@ -3418,10 +3310,8 @@ inline constexpr DWORD native_file_open_flags = FILE_ATTRIBUTE_NORMAL | FILE_FLA
 
 // The one open of a file by path; every response, index and read handle
 // starts here.
-[[nodiscard]] inline native_file_descriptor open_native_file(
-    const http_native_path_char_type* path, std::error_code& ec) noexcept {
-    native_file_descriptor input(::CreateFileW(
-        path, GENERIC_READ, native_file_share_mode, nullptr, OPEN_EXISTING, native_file_open_flags, nullptr));
+[[nodiscard]] inline native_file_descriptor open_native_file(const http_native_path_char_type* path, std::error_code& ec) noexcept {
+    native_file_descriptor input(::CreateFileW(path, GENERIC_READ, native_file_share_mode, nullptr, OPEN_EXISTING, native_file_open_flags, nullptr));
     ec = input ? std::error_code{} : last_native_file_error();
     return input;
 }
@@ -3435,18 +3325,15 @@ inline void release_response_file_handle(http_response_file_descriptor::native_t
 }
 
 [[nodiscard]] inline http_response_file_descriptor adopt_response_file_handle(native_file_descriptor input) noexcept {
-    return http_response_file_descriptor(
-        reinterpret_cast<http_response_file_descriptor::native_type>(input.release()), &release_response_file_handle);
+    return http_response_file_descriptor(reinterpret_cast<http_response_file_descriptor::native_type>(input.release()), &release_response_file_handle);
 }
 
 // An independent handle to the same open file, so a read state that outlives
 // the response (an abandoned pool read) never borrows the response's handle.
 // Reads carry their offset, so the shared file pointer is never relied on.
-[[nodiscard]] inline native_file_descriptor duplicate_native_file(
-    const http_response_file_descriptor& handle, std::error_code& ec) noexcept {
+[[nodiscard]] inline native_file_descriptor duplicate_native_file(const http_response_file_descriptor& handle, std::error_code& ec) noexcept {
     HANDLE duplicate = nullptr;
-    if (::DuplicateHandle(::GetCurrentProcess(), borrowed_native_file(handle), ::GetCurrentProcess(), &duplicate, 0,
-            FALSE, DUPLICATE_SAME_ACCESS) == 0) {
+    if (::DuplicateHandle(::GetCurrentProcess(), borrowed_native_file(handle), ::GetCurrentProcess(), &duplicate, 0, FALSE, DUPLICATE_SAME_ACCESS) == 0) {
         ec = last_native_file_error();
         return native_file_descriptor();
     }
@@ -3458,19 +3345,16 @@ inline void release_response_file_handle(http_response_file_descriptor::native_t
 // OVERLAPPED offset and completes inline, so ranges sharing a handle need no
 // seek. A file that ends early is shorter than the snapshot it was framed
 // from: it changed.
-[[nodiscard]] inline std::error_code read_native_file_at(
-    HANDLE handle, std::uint64_t offset, char* output, std::size_t size) noexcept {
+[[nodiscard]] inline std::error_code read_native_file_at(HANDLE handle, std::uint64_t offset, char* output, std::size_t size) noexcept {
     while (size != 0) {
         OVERLAPPED position{};
         position.Offset = static_cast<DWORD>(offset & UINT64_C(0xffffffff));
         position.OffsetHigh = static_cast<DWORD>(offset >> 32);
-        const auto requested = static_cast<DWORD>(
-            std::min<std::size_t>(size, static_cast<std::size_t>(UINT32_C(0x7fffffff))));
+        const auto requested = static_cast<DWORD>(std::min<std::size_t>(size, static_cast<std::size_t>(UINT32_C(0x7fffffff))));
         DWORD count = 0;
         if (::ReadFile(handle, output, requested, &count, &position) == 0) {
             const auto error = ::GetLastError();
-            return error == ERROR_HANDLE_EOF ? std::make_error_code(std::errc::state_not_recoverable)
-                                             : std::error_code(static_cast<int>(error), std::system_category());
+            return error == ERROR_HANDLE_EOF ? std::make_error_code(std::errc::state_not_recoverable) : std::error_code(static_cast<int>(error), std::system_category());
         }
         if (count == 0) {
             return std::make_error_code(std::errc::state_not_recoverable);
@@ -3484,8 +3368,7 @@ inline void release_response_file_handle(http_response_file_descriptor::native_t
 #endif
 
 // Opens `path` once and snapshots the handle it opened.
-[[nodiscard]] inline opened_response_file open_response_file(
-    const http_native_path_char_type* path, std::error_code& ec) noexcept {
+[[nodiscard]] inline opened_response_file open_response_file(const http_native_path_char_type* path, std::error_code& ec) noexcept {
     auto input = open_native_file(path, ec);
     if (ec) {
         return {};
@@ -3501,8 +3384,7 @@ inline void release_response_file_handle(http_response_file_descriptor::native_t
 // `size`. A file rewritten in place keeps its handle valid, so a handle opened
 // at framing must be checked again before its bytes are sent under the framed
 // validators; state_not_recoverable when it no longer matches.
-[[nodiscard]] inline std::error_code validate_native_file(
-    native_file_type input, http_response_file_identity identity, std::uint64_t size) noexcept {
+[[nodiscard]] inline std::error_code validate_native_file(native_file_type input, http_response_file_identity identity, std::uint64_t size) noexcept {
     if (!identity.requires_validation()) {
         return {};
     }
@@ -3517,8 +3399,7 @@ inline void release_response_file_handle(http_response_file_descriptor::native_t
     return {};
 }
 
-[[nodiscard]] inline std::error_code validate_native_file(
-    native_file_type input, http_response_file_view file) noexcept {
+[[nodiscard]] inline std::error_code validate_native_file(native_file_type input, http_response_file_view file) noexcept {
     return validate_native_file(input, file.identity(), file.size());
 }
 
@@ -3549,8 +3430,8 @@ namespace ruvia::detail {
 // least-loaded worker).
 class connection_count final {
 public:
-    explicit connection_count(connection_count* parent = nullptr) noexcept
-        : parent_(parent) {}
+    explicit connection_count(connection_count* parent = nullptr) noexcept :
+        parent_(parent) {}
     connection_count(const connection_count&) = delete;
     connection_count& operator=(const connection_count&) = delete;
 
@@ -3584,7 +3465,9 @@ public:
             for (auto& weak : ready) {
                 if (auto state = weak.lock()) {
                     state->closed_.store(true, std::memory_order_release);
-                    detail::worker_ref_access::defer_or_terminate(state->worker_, [state] { state->changed_.notify(); });
+                    detail::worker_ref_access::defer_or_terminate(state->worker_, [state] {
+                        state->changed_.notify();
+                    });
                 }
             }
         }
@@ -3599,7 +3482,9 @@ public:
         options.stop_token_ = stops.token();
         auto state = std::make_shared<wait_state>(caller);
         operation_interrupt_source source;
-        operation_interrupt interrupt(source, caller, options, state.get(), [](void* target) noexcept { static_cast<wait_state*>(target)->changed_.notify(); }, "wait_connections_closed");
+        operation_interrupt interrupt(source, caller, options, state.get(), [](void* target) noexcept {
+            static_cast<wait_state*>(target)->changed_.notify();
+        }, "wait_connections_closed");
         {
             std::lock_guard lock(count->mutex_);
             if (count->active() != 0) {
@@ -3630,9 +3515,9 @@ public:
 private:
     std::atomic<std::size_t> active_{};
     struct wait_state final {
-        explicit wait_state(worker_ref worker)
-            : worker_(std::move(worker)),
-              changed_(worker_) {}
+        explicit wait_state(worker_ref worker) :
+            worker_(std::move(worker)),
+            changed_(worker_) {}
         worker_ref worker_;
         worker_signal changed_;
         std::atomic<bool> closed_{false};
@@ -3647,16 +3532,16 @@ private:
 // through accepted_connection_lease, a QUIC connection directly.
 class connection_slot final {
 public:
-    explicit connection_slot(connection_count& count) noexcept
-        : count_(&count) {
+    explicit connection_slot(connection_count& count) noexcept :
+        count_(&count) {
         count_->acquire();
     }
 
     connection_slot(const connection_slot&) = delete;
     connection_slot& operator=(const connection_slot&) = delete;
 
-    connection_slot(connection_slot&& other) noexcept
-        : count_(std::exchange(other.count_, nullptr)) {}
+    connection_slot(connection_slot&& other) noexcept :
+        count_(std::exchange(other.count_, nullptr)) {}
 
     connection_slot& operator=(connection_slot&&) = delete;
 
@@ -3741,9 +3626,7 @@ inline void assign_peer_address(std::string& output, const asio::ip::address& ad
             const auto bytes = v6.to_bytes();
             std::array<char, 64> ipv6_buffer;
             asio::error_code ec;
-            const char* formatted = asio::detail::socket_ops::inet_ntop(
-                ASIO_OS_DEF(AF_INET6), bytes.data(), ipv6_buffer.data(),
-                ipv6_buffer.size(), v6.scope_id(), ec);
+            const char* formatted = asio::detail::socket_ops::inet_ntop(ASIO_OS_DEF(AF_INET6), bytes.data(), ipv6_buffer.data(), ipv6_buffer.size(), v6.scope_id(), ec);
             if (formatted == nullptr) {
                 asio::detail::throw_error(ec);
             }
@@ -3769,21 +3652,14 @@ enum class accept_error_action : std::uint8_t { retry,
 // Peer disappearance and readiness races are normal accept outcomes. Resource
 // and network failures leave the listener usable but must remain observable.
 [[nodiscard]] inline accept_error_action classify_accept_error(const std::error_code& error) noexcept {
-    if (error == asio::error::connection_aborted || error == asio::error::connection_reset ||
-        error == asio::error::eof || error == asio::error::try_again ||
-        error == asio::error::would_block || error == asio::error::interrupted
+    if (error == asio::error::connection_aborted || error == asio::error::connection_reset || error == asio::error::eof || error == asio::error::try_again || error == asio::error::would_block || error == asio::error::interrupted
 #if defined(_WIN32)
         || (error.category() == asio::system_category() && error.value() == ERROR_NETNAME_DELETED)
 #endif
     ) {
         return accept_error_action::retry;
     }
-    if (error == asio::error::no_descriptors || error == asio::error::no_buffer_space ||
-        error == asio::error::no_memory || error == std::errc::too_many_files_open_in_system ||
-        error == std::errc::protocol_error || error == asio::error::network_down ||
-        error == asio::error::network_unreachable || error == asio::error::host_unreachable ||
-        error == asio::error::no_protocol_option || error == asio::error::operation_not_supported ||
-        error == asio::error::no_permission || error == asio::error::timed_out) {
+    if (error == asio::error::no_descriptors || error == asio::error::no_buffer_space || error == asio::error::no_memory || error == std::errc::too_many_files_open_in_system || error == std::errc::protocol_error || error == asio::error::network_down || error == asio::error::network_unreachable || error == asio::error::host_unreachable || error == asio::error::no_protocol_option || error == asio::error::operation_not_supported || error == asio::error::no_permission || error == asio::error::timed_out) {
         return accept_error_action::report_and_retry;
     }
 #if defined(EHOSTDOWN) && defined(ENONET)
@@ -3816,8 +3692,7 @@ inline void validate_client_tcp_config(const client_tcp_config& config) {
 }
 
 // Returns the error of the first enabled policy that cannot be applied.
-[[nodiscard]] inline std::error_code apply_tcp_socket_policies(
-    asio::ip::tcp::socket& socket, const client_tcp_config& config) noexcept {
+[[nodiscard]] inline std::error_code apply_tcp_socket_policies(asio::ip::tcp::socket& socket, const client_tcp_config& config) noexcept {
     std::error_code error;
     if (config.no_delay_ == tcp_no_delay_policy::enable) {
         socket.set_option(asio::ip::tcp::no_delay(true), error);
@@ -3851,16 +3726,14 @@ private:
 
 class connection_lifecycle final {
 public:
-    connection_lifecycle(connection_registry& registry, const void* listener, connection_event event,
-        connection_open_callback_ref opened, connection_close_callback_ref closed, std::uint32_t interface_index = 0,
-        connection_transport transport = {})
-        : registry_(&registry),
-          listener_(listener),
-          event_(std::move(event)),
-          closed_(closed),
-          transport_(transport),
-          bound_(transport.valid()),
-          interface_index_(interface_index) {
+    connection_lifecycle(connection_registry& registry, const void* listener, connection_event event, connection_open_callback_ref opened, connection_close_callback_ref closed, std::uint32_t interface_index = 0, connection_transport transport = {}) :
+        registry_(&registry),
+        listener_(listener),
+        event_(std::move(event)),
+        closed_(closed),
+        transport_(transport),
+        bound_(transport.valid()),
+        interface_index_(interface_index) {
         next_ = registry.head_;
         if (next_ != nullptr) {
             next_->prev_ = this;
@@ -3894,20 +3767,20 @@ public:
     connection_lifecycle(const connection_lifecycle&) = delete;
     connection_lifecycle& operator=(const connection_lifecycle&) = delete;
     connection_lifecycle& operator=(connection_lifecycle&&) = delete;
-    connection_lifecycle(connection_lifecycle&& other) noexcept
-        : registry_(std::exchange(other.registry_, nullptr)),
-          listener_(other.listener_),
-          prev_(other.prev_),
-          next_(other.next_),
-          event_(other.event_),
-          closed_(other.closed_),
-          state_(std::move(other.state_)),
-          info_(other.info_),
-          transport_(other.transport_),
-          aborted_(other.aborted_),
-          bound_(other.bound_),
-          interface_index_(other.interface_index_),
-          local_text_(other.local_text_) {
+    connection_lifecycle(connection_lifecycle&& other) noexcept :
+        registry_(std::exchange(other.registry_, nullptr)),
+        listener_(other.listener_),
+        prev_(other.prev_),
+        next_(other.next_),
+        event_(other.event_),
+        closed_(other.closed_),
+        state_(std::move(other.state_)),
+        info_(other.info_),
+        transport_(other.transport_),
+        aborted_(other.aborted_),
+        bound_(other.bound_),
+        interface_index_(other.interface_index_),
+        local_text_(other.local_text_) {
         if (registry_ != nullptr) {
             if (prev_ != nullptr) {
                 prev_->next_ = this;
@@ -3957,8 +3830,7 @@ public:
     }
     void set_reason(connection_close_reason reason) noexcept {
         // Keep the initiating cause when teardown subsequently cancels I/O.
-        if (info_.reason_ == connection_close_reason::normal ||
-            (info_.reason_ == connection_close_reason::peer_eof && reason != connection_close_reason::normal)) {
+        if (info_.reason_ == connection_close_reason::normal || (info_.reason_ == connection_close_reason::peer_eof && reason != connection_close_reason::normal)) {
             info_.reason_ = reason;
         }
     }
@@ -3972,16 +3844,14 @@ public:
         add_bytes(info_.requests_, 1);
     }
     void note_error(const std::error_code& error) noexcept {
-        if (!error || error == asio::error::would_block || error == asio::error::try_again ||
-            error == asio::error::interrupted) {
+        if (!error || error == asio::error::would_block || error == asio::error::try_again || error == asio::error::interrupted) {
             return;
         }
         if (is_stream_read_end(error)) {
             set_reason(connection_close_reason::peer_eof);
         } else if (error == asio::error::timed_out || error == std::errc::timed_out) {
             set_reason(connection_close_reason::timeout);
-        } else if (error == asio::error::operation_aborted || error == std::errc::operation_canceled ||
-                   error == asio::error::bad_descriptor) {
+        } else if (error == asio::error::operation_aborted || error == std::errc::operation_canceled || error == asio::error::bad_descriptor) {
             set_reason(connection_close_reason::cancelled);
         } else if (error == std::errc::protocol_error || error.category() == asio::error::get_ssl_category()) {
             set_reason(connection_close_reason::protocol_error);
@@ -4036,13 +3906,11 @@ private:
         asio::error_code error;
         if (address.is_v4()) {
             const auto bytes = address.to_v4().to_bytes();
-            (void)asio::detail::socket_ops::inet_ntop(ASIO_OS_DEF(AF_INET), bytes.data(),
-                local_text_.data(), local_text_.size(), 0, error);
+            (void)asio::detail::socket_ops::inet_ntop(ASIO_OS_DEF(AF_INET), bytes.data(), local_text_.data(), local_text_.size(), 0, error);
         } else {
             const auto v6 = address.to_v6();
             const auto bytes = v6.to_bytes();
-            (void)asio::detail::socket_ops::inet_ntop(ASIO_OS_DEF(AF_INET6), bytes.data(),
-                local_text_.data(), local_text_.size(), v6.scope_id(), error);
+            (void)asio::detail::socket_ops::inet_ntop(ASIO_OS_DEF(AF_INET6), bytes.data(), local_text_.data(), local_text_.size(), v6.scope_id(), error);
         }
     }
     connection_registry* registry_;
@@ -4092,11 +3960,10 @@ public:
     using executor_type = asio::ip::tcp::socket::executor_type;
     using lowest_layer_type = asio::ip::tcp::socket;
 
-    explicit inbound_socket_stream(asio::ip::tcp::socket& socket, std::span<const std::byte> prefix = {},
-        connection_lifecycle* lifecycle = nullptr) noexcept
-        : socket_(socket),
-          prefix_(prefix),
-          lifecycle_(lifecycle) {}
+    explicit inbound_socket_stream(asio::ip::tcp::socket& socket, std::span<const std::byte> prefix = {}, connection_lifecycle* lifecycle = nullptr) noexcept :
+        socket_(socket),
+        prefix_(prefix),
+        lifecycle_(lifecycle) {}
 
     executor_type get_executor() noexcept {
         return socket_.get_executor();
@@ -4143,8 +4010,7 @@ public:
     template <typename buffers_type, typename handler_type>
     void async_read_some(const buffers_type& buffers, handler_type&& handler) {
         if (prefix_.empty()) {
-            socket_.async_read_some(buffers, completion<std::decay_t<handler_type>, false>{
-                                                 std::forward<handler_type>(handler), socket_.get_executor(), lifecycle_});
+            socket_.async_read_some(buffers, completion<std::decay_t<handler_type>, false>{std::forward<handler_type>(handler), socket_.get_executor(), lifecycle_});
             return;
         }
         const auto bytes = consume_prefix(buffers);
@@ -4155,8 +4021,7 @@ public:
 
     template <typename buffers_type, typename handler_type>
     void async_write_some(const buffers_type& buffers, handler_type&& handler) {
-        socket_.async_write_some(buffers, completion<std::decay_t<handler_type>, true>{
-                                              std::forward<handler_type>(handler), socket_.get_executor(), lifecycle_});
+        socket_.async_write_some(buffers, completion<std::decay_t<handler_type>, true>{std::forward<handler_type>(handler), socket_.get_executor(), lifecycle_});
     }
 
 private:
@@ -4216,8 +4081,8 @@ public:
     using executor_type = asio::ip::tcp::socket::executor_type;
     using lowest_layer_type = asio::ip::tcp::socket;
 
-    explicit tls_socket_transport(inbound_socket_stream& socket) noexcept
-        : socket_(socket) {}
+    explicit tls_socket_transport(inbound_socket_stream& socket) noexcept :
+        socket_(socket) {}
 
     [[nodiscard]] executor_type get_executor() noexcept {
         return socket_.get_executor();
@@ -4238,8 +4103,7 @@ public:
 
     template <typename buffers_type, typename handler_type>
     auto async_write_some(const buffers_type& buffers, handler_type&& handler) {
-        return socket_.async_write_some(buffers,
-            asio::bind_cancellation_slot(asio::cancellation_slot{}, std::forward<handler_type>(handler)));
+        return socket_.async_write_some(buffers, asio::bind_cancellation_slot(asio::cancellation_slot{}, std::forward<handler_type>(handler)));
     }
 
 private:
@@ -4280,14 +4144,12 @@ inline void shutdown_http_connection_send(asio::ip::tcp::socket& socket) noexcep
 // The caller closes TCP after completion and must not start this operation
 // once the worker is stopping; scanner close_all, a fixed deadline and the
 // worker scanner bound it. The task borrows its arguments until completion.
-[[nodiscard]] task<void> linger_http_connection(
-    asio::ip::tcp::socket& socket, connection_scanner& scanner, const worker_ref& worker_value);
+[[nodiscard]] task<void> linger_http_connection(asio::ip::tcp::socket& socket, connection_scanner& scanner, const worker_ref& worker_value);
 
 // Sends TLS close_notify for a non-aborted session without waiting for the
 // peer's alert, then lingers like linger_http_connection() when `mode` is
 // http_connection_close::linger. Same bounds and caller duties as above.
-[[nodiscard]] task<void> close_http_connection_gracefully(server_tls_stream& stream,
-    http_connection_close mode, connection_scanner& scanner, const worker_ref& worker_value);
+[[nodiscard]] task<void> close_http_connection_gracefully(server_tls_stream& stream, http_connection_close mode, connection_scanner& scanner, const worker_ref& worker_value);
 
 }  // namespace ruvia::detail
 
@@ -4353,9 +4215,9 @@ public:
     const std::exception_ptr& fault() const&& = delete;
 
 private:
-    response_file_failure(bool unavailable, std::exception_ptr fault) noexcept
-        : fault_(std::move(fault)),
-          unavailable_(unavailable) {}
+    response_file_failure(bool unavailable, std::exception_ptr fault) noexcept :
+        fault_(std::move(fault)),
+        unavailable_(unavailable) {}
 
     std::exception_ptr fault_;
     bool unavailable_;
@@ -4392,9 +4254,9 @@ public:
     }
 
 private:
-    constexpr response_body_chunk(kind_type kind, std::string_view bytes) noexcept
-        : bytes_(bytes),
-          kind_(kind) {}
+    constexpr response_body_chunk(kind_type kind, std::string_view bytes) noexcept :
+        bytes_(bytes),
+        kind_(kind) {}
 
     std::string_view bytes_;
     kind_type kind_;
@@ -4515,8 +4377,7 @@ struct http_response_file_write_result final {
 // the snapshot, and the final byte waits for that check, so a file that
 // changes while it is sent never completes its framed length. Touches
 // `progress` after every transfer.
-task<http_response_file_write_result> write_http_response_file(asio::ip::tcp::socket& socket,
-    std::string_view head, native_file_type input, http_response_file_view file, connection_scanner::entry& progress);
+task<http_response_file_write_result> write_http_response_file(asio::ip::tcp::socket& socket, std::string_view head, native_file_type input, http_response_file_view file, connection_scanner::entry& progress);
 #endif
 
 }  // namespace ruvia::detail
@@ -4524,8 +4385,7 @@ task<http_response_file_write_result> write_http_response_file(asio::ip::tcp::so
 namespace ruvia::detail {
 
 #if defined(_WIN32)
-inline task<http_response_file_write_result> write_http_response_file(asio::ip::tcp::socket& socket,
-    std::string_view head, native_file_type input, http_response_file_view file, connection_scanner::entry& progress) {
+inline task<http_response_file_write_result> write_http_response_file(asio::ip::tcp::socket& socket, std::string_view head, native_file_type input, http_response_file_view file, connection_scanner::entry& progress) {
     http_response_file_write_result result;
     // A null OVERLAPPED would make every TransmitFile call synchronous until
     // the peer drained the whole range, blocking this worker's event loop
@@ -4549,20 +4409,18 @@ inline task<http_response_file_write_result> write_http_response_file(asio::ip::
         TRANSMIT_FILE_BUFFERS buffers{};
         buffers.Head = const_cast<char*>(head.data());
         buffers.HeadLength = static_cast<DWORD>(head.size());
-        const auto transmit_completion = co_await ruvia::async_asio<std::size_t>(
-            [&socket, &buffers, input, offset, next_send = static_cast<DWORD>(next_send)](auto handler) {
-                asio::windows::overlapped_ptr operation(socket.get_executor(), std::move(handler));
-                operation.get()->Offset = static_cast<DWORD>(offset & UINT64_C(0xffffffff));
-                operation.get()->OffsetHigh = static_cast<DWORD>(offset >> 32);
-                const auto transmitted = ::TransmitFile(socket.native_handle(), next_send == 0 ? nullptr : input,
-                    next_send, 0, operation.get(), buffers.HeadLength == 0 ? nullptr : &buffers, 0);
-                const int socket_error = transmitted != FALSE ? 0 : ::WSAGetLastError();
-                if (transmitted != FALSE || socket_error == WSA_IO_PENDING) {
-                    static_cast<void>(operation.release());
-                    return;
-                }
-                operation.complete(std::error_code(socket_error, std::system_category()), 0);
-            });
+        const auto transmit_completion = co_await ruvia::async_asio<std::size_t>([&socket, &buffers, input, offset, next_send = static_cast<DWORD>(next_send)](auto handler) {
+            asio::windows::overlapped_ptr operation(socket.get_executor(), std::move(handler));
+            operation.get()->Offset = static_cast<DWORD>(offset & UINT64_C(0xffffffff));
+            operation.get()->OffsetHigh = static_cast<DWORD>(offset >> 32);
+            const auto transmitted = ::TransmitFile(socket.native_handle(), next_send == 0 ? nullptr : input, next_send, 0, operation.get(), buffers.HeadLength == 0 ? nullptr : &buffers, 0);
+            const int socket_error = transmitted != FALSE ? 0 : ::WSAGetLastError();
+            if (transmitted != FALSE || socket_error == WSA_IO_PENDING) {
+                static_cast<void>(operation.release());
+                return;
+            }
+            operation.complete(std::error_code(socket_error, std::system_category()), 0);
+        });
         // A failed completion still reports the prefix it transferred, which
         // may cover the head: the response is committed once the head left.
         const auto sent = static_cast<std::uint64_t>(transmit_completion.result());
@@ -4607,9 +4465,7 @@ struct http1_buffered_response_write_result final {
 };
 
 // `bytes_transferred` is the composed async-write prefix accepted before `error`.
-[[nodiscard]] inline http1_buffered_response_write_result classify_http1_buffered_response_write(
-    const http1_buffered_response_plan& plan, std::size_t response_head_bytes, std::error_code error,
-    std::size_t bytes_transferred) noexcept {
+[[nodiscard]] inline http1_buffered_response_write_result classify_http1_buffered_response_write(const http1_buffered_response_plan& plan, std::size_t response_head_bytes, std::error_code error, std::size_t bytes_transferred) noexcept {
     if (response_head_bytes == 0 || bytes_transferred < response_head_bytes) {
         return {};
     }
@@ -4659,10 +4515,7 @@ inline void enable_plain_tcp_sync_write(asio::ip::tcp::socket& socket) noexcept 
 // the write completed or hit a hard error (outcome in ec/bytes_written), and
 // false when the remainder must go through async_write.
 template <typename socket_type, typename const_buffer_sequence_type>
-[[nodiscard]] inline bool try_plain_tcp_sync_write(socket_type& socket,
-    const const_buffer_sequence_type& buffers, std::size_t total_bytes,
-    asio::socket_base::message_flags flags, std::error_code& ec,
-    std::size_t& bytes_written) noexcept {
+[[nodiscard]] inline bool try_plain_tcp_sync_write(socket_type& socket, const const_buffer_sequence_type& buffers, std::size_t total_bytes, asio::socket_base::message_flags flags, std::error_code& ec, std::size_t& bytes_written) noexcept {
     ec.clear();
     bytes_written = 0;
     if (!socket.non_blocking()) {
@@ -4672,8 +4525,7 @@ template <typename socket_type, typename const_buffer_sequence_type>
     if (!ec) {
         return bytes_written == total_bytes;
     }
-    if (ec == asio::error::would_block || ec == asio::error::try_again ||
-        ec == asio::error::interrupted) {
+    if (ec == asio::error::would_block || ec == asio::error::try_again || ec == asio::error::interrupted) {
         ec.clear();
         return false;
     }
@@ -4684,8 +4536,7 @@ template <typename socket_type, typename const_buffer_sequence_type>
 // gather write of the same parts is equivalent on the wire, so failing to
 // allocate only selects that fallback: false leaves `output` unchanged. The
 // reservation is the only allocation; the appends then fit.
-[[nodiscard]] inline bool try_coalesce_tls_frame(
-    http_response_head_buffer& output, std::initializer_list<std::string_view> parts) noexcept {
+[[nodiscard]] inline bool try_coalesce_tls_frame(http_response_head_buffer& output, std::initializer_list<std::string_view> parts) noexcept {
     std::size_t total = 0;
     for (const auto part : parts) {
         total += part.size();
@@ -4711,11 +4562,9 @@ struct connection_write_outcome final {
 // Initiates the async_write of what follows the first `written` bytes of
 // `head` then `body`. Every partial transfer touches `progress`.
 template <typename stream_type, typename handler_type>
-void async_write_after(stream_type& stream, std::string_view head, std::string_view body, std::size_t written,
-    connection_scanner::entry& progress, handler_type&& handler) {
+void async_write_after(stream_type& stream, std::string_view head, std::string_view body, std::size_t written, connection_scanner::entry& progress, handler_type&& handler) {
     if (written >= head.size()) {
-        asio::async_write(stream, asio::buffer(body.substr(written - head.size())), connection_write_progress(progress),
-            std::forward<handler_type>(handler));
+        asio::async_write(stream, asio::buffer(body.substr(written - head.size())), connection_write_progress(progress), std::forward<handler_type>(handler));
         return;
     }
     const std::array<asio::const_buffer, 2> remaining{asio::buffer(head.substr(written)), asio::buffer(body)};
@@ -4730,12 +4579,11 @@ void async_write_after(stream_type& stream, std::string_view head, std::string_v
 template <typename stream_type>
 class connection_gather_write final {
 public:
-    connection_gather_write(stream_type& stream, std::string_view head, std::string_view body,
-        connection_scanner::entry& progress) noexcept
-        : stream_(&stream),
-          head_(head),
-          body_(body),
-          progress_(&progress) {}
+    connection_gather_write(stream_type& stream, std::string_view head, std::string_view body, connection_scanner::entry& progress) noexcept :
+        stream_(&stream),
+        head_(head),
+        body_(body),
+        progress_(&progress) {}
 
     connection_gather_write(const connection_gather_write&) = delete;
     connection_gather_write& operator=(const connection_gather_write&) = delete;
@@ -4743,8 +4591,7 @@ public:
     [[nodiscard]] bool await_ready() noexcept {
         if constexpr (std::is_same_v<std::remove_cvref_t<stream_type>, inbound_socket_stream>) {
             const std::array<asio::const_buffer, 2> buffers{asio::buffer(head_), asio::buffer(body_)};
-            const bool settled = try_plain_tcp_sync_write(
-                *stream_, buffers, head_.size() + body_.size(), 0, written_.error_, written_.bytes_);
+            const bool settled = try_plain_tcp_sync_write(*stream_, buffers, head_.size() + body_.size(), 0, written_.error_, written_.bytes_);
             if (written_.bytes_ != 0) {
                 progress_->note_write_progress();
             }
@@ -4773,8 +4620,7 @@ private:
 
         template <typename handler_type>
         void operator()(handler_type&& handler) const {
-            async_write_after(*owner_->stream_, owner_->head_, owner_->body_, owner_->written_.bytes_,
-                *owner_->progress_, std::forward<handler_type>(handler));
+            async_write_after(*owner_->stream_, owner_->head_, owner_->body_, owner_->written_.bytes_, *owner_->progress_, std::forward<handler_type>(handler));
         }
     };
 
@@ -4804,9 +4650,7 @@ struct http1_response_write_start final {
 // response wholly in the output below the limit is held back instead of
 // written. File bodies are never coalesced or held; the caller writes any
 // held-back output first, then continues with http1_file_response_body.
-[[nodiscard]] inline http1_response_write_start start_response_write(http_response_head_buffer& output,
-    const http_response& response, const http1_buffered_response_plan& response_plan, std::size_t hold_limit,
-    bool coalesce_for_tls = false) {
+[[nodiscard]] inline http1_response_write_start start_response_write(http_response_head_buffer& output, const http_response& response, const http1_buffered_response_plan& response_plan, std::size_t hold_limit, bool coalesce_for_tls = false) {
     append_http1_response_head(response, output, response_plan.head_plan());
     http1_response_write_start start;
     start.head_bytes_ = output.view().size();
@@ -4820,9 +4664,7 @@ struct http1_response_write_start final {
         if (can_hold || (coalesce_for_tls && output.can_append_on_stack(body.size()))) {
             output.append(body);
             body = {};
-        } else if (coalesce_for_tls && start.head_bytes_ <= response_head_retained_heap_bytes &&
-                   body.size() <= response_head_retained_heap_bytes - start.head_bytes_ &&
-                   try_coalesce_tls_frame(output, {body})) {
+        } else if (coalesce_for_tls && start.head_bytes_ <= response_head_retained_heap_bytes && body.size() <= response_head_retained_heap_bytes - start.head_bytes_ && try_coalesce_tls_frame(output, {body})) {
             body = {};
         }
     }
@@ -4842,11 +4684,11 @@ template <typename stream_type>
 class http1_file_response_body final {
 public:
     // `response` is borrowed until finish() completes.
-    http1_file_response_body(const http_response& response, const response_file_io& file_io)
-        : source_(response, file_io)
+    http1_file_response_body(const http_response& response, const response_file_io& file_io) :
+        source_(response, file_io)
 #if defined(_WIN32)
-          ,
-          transmit_file_(transmit_candidate(response))
+        ,
+        transmit_file_(transmit_candidate(response))
 #endif
     {
     }
@@ -4866,8 +4708,7 @@ public:
         if (transmit_file_) {
             // The framing handle stays valid across an in-place rewrite, which
             // must fail before any byte is sent.
-            if (const auto error =
-                    validate_native_file(borrowed_native_file(*transmit_file_->opened_file()), *transmit_file_)) {
+            if (const auto error = validate_native_file(borrowed_native_file(*transmit_file_->opened_file()), *transmit_file_)) {
                 transmit_failure_.emplace(response_file_failure::read_failed(error));
                 co_return false;
             }
@@ -4879,24 +4720,19 @@ public:
         co_return first_.kind() != response_body_chunk::kind_type::failed;
     }
 
-    [[nodiscard]] task<http1_buffered_response_write_result> finish(stream_type& stream,
-        http_response_head_buffer& head, const http1_buffered_response_plan& response_plan,
-        const http1_response_write_start& start, connection_scanner::entry& progress) {
+    [[nodiscard]] task<http1_buffered_response_write_result> finish(stream_type& stream, http_response_head_buffer& head, const http1_buffered_response_plan& response_plan, const http1_response_write_start& start, connection_scanner::entry& progress) {
         const auto response_head_bytes = start.head_bytes_;
 #if defined(_WIN32)
         if constexpr (std::is_same_v<std::remove_cvref_t<stream_type>, inbound_socket_stream>) {
             if (transmit_) {
-                const auto written = co_await write_http_response_file(stream.lowest_layer(), head.view(),
-                    borrowed_native_file(*transmit_file_->opened_file()), *transmit_file_, progress);
-                co_return classify_http1_buffered_response_write(response_plan, response_head_bytes,
-                    written.error_, written.head_written_ ? response_head_bytes : 0);
+                const auto written = co_await write_http_response_file(stream.lowest_layer(), head.view(), borrowed_native_file(*transmit_file_->opened_file()), *transmit_file_, progress);
+                co_return classify_http1_buffered_response_write(response_plan, response_head_bytes, written.error_, written.head_written_ ? response_head_bytes : 0);
             }
         }
 #endif
         const auto first_written = co_await connection_gather_write(stream, head.view(), first_.bytes(), progress);
         if (first_written.error_ || !response_plan.send_body()) {
-            co_return classify_http1_buffered_response_write(
-                response_plan, response_head_bytes, first_written.error_, first_written.bytes_);
+            co_return classify_http1_buffered_response_write(response_plan, response_head_bytes, first_written.error_, first_written.bytes_);
         }
         if (first_.kind() == response_body_chunk::kind_type::end) {
             co_return classify_http1_buffered_response_write(response_plan, response_head_bytes, {}, response_head_bytes);
@@ -4907,13 +4743,11 @@ public:
                 co_return classify_http1_buffered_response_write(response_plan, response_head_bytes, {}, response_head_bytes);
             }
             if (chunk.kind() == response_body_chunk::kind_type::failed) {
-                co_return classify_http1_buffered_response_write(response_plan, response_head_bytes,
-                    std::make_error_code(std::errc::io_error), response_head_bytes);
+                co_return classify_http1_buffered_response_write(response_plan, response_head_bytes, std::make_error_code(std::errc::io_error), response_head_bytes);
             }
             progress.note_write_progress();
             if (const auto written = co_await connection_gather_write(stream, chunk.bytes(), {}, progress); written.error_) {
-                co_return classify_http1_buffered_response_write(
-                    response_plan, response_head_bytes, written.error_, response_head_bytes);
+                co_return classify_http1_buffered_response_write(response_plan, response_head_bytes, written.error_, response_head_bytes);
             }
         }
     }
@@ -4934,8 +4768,7 @@ public:
 private:
 #if defined(_WIN32)
     // The single range a kernel transfer may send from the response's handle.
-    [[nodiscard]] static std::optional<http_response_file_view> transmit_candidate(
-        [[maybe_unused]] const http_response& response) noexcept {
+    [[nodiscard]] static std::optional<http_response_file_view> transmit_candidate([[maybe_unused]] const http_response& response) noexcept {
         if constexpr (std::is_same_v<std::remove_cvref_t<stream_type>, inbound_socket_stream>) {
             if (!response.has_multipart_file_body()) {
                 const auto file = response.file_body();

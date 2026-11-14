@@ -105,20 +105,16 @@ TEST(Ruvia, nonrouted_listeners_ignore_conflicts_and_unused_controller_and_middl
     controller_constructions = 0;
     middleware_constructions = 0;
     reject_controller = true;
-    app.server({.worker_count_ = 2})
-        .use<unused_middleware>()
-        .on_connection(&serve_connection)
-        .on_request_stream(&serve_request)
-        .on_start(nullptr)
-        .on_start([] { started.release(); });
+    app.server({.worker_count_ = 2}).use<unused_middleware>().on_connection(&serve_connection).on_request_stream(&serve_request).on_start(nullptr).on_start([] {
+        started.release();
+    });
     for (const auto dispatch : {ruvia::listener_dispatch::connection, ruvia::listener_dispatch::request_stream}) {
         ruvia::test::tcp_port_reservation reservation(io);
         const auto endpoint = reservation.endpoint();
         app.listen({.address_ = "127.0.0.1", .http_ = endpoint.port(), .dispatch_ = dispatch});
         ruvia::test::app_run run(app);
         ASSERT_TRUE(started.try_acquire_for(10s));
-        const auto response = ruvia::test::exchange(io, endpoint,
-            "GET /conflict/1 HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n");
+        const auto response = ruvia::test::exchange(io, endpoint, "GET /conflict/1 HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n");
         EXPECT_TRUE(response.starts_with("HTTP/1.1 200 "));
         EXPECT_NE(response.find(dispatch == ruvia::listener_dispatch::connection ? "connection" : "request-stream"), response.npos);
         app.stop();
@@ -150,11 +146,9 @@ TEST(Ruvia, adding_first_routed_listener_rejects_conflicts_without_interrupting_
     ruvia::test::tcp_port_reservation routed(io);
     reject_controller = false;
     auto& app = ruvia::app();
-    app.server({.worker_count_ = 2})
-        .listen({.address_ = "127.0.0.1", .http_ = raw.endpoint().port(), .dispatch_ = ruvia::listener_dispatch::connection})
-        .on_connection(&serve_connection)
-        .on_start(nullptr)
-        .on_start([] { started.release(); });
+    app.server({.worker_count_ = 2}).listen({.address_ = "127.0.0.1", .http_ = raw.endpoint().port(), .dispatch_ = ruvia::listener_dispatch::connection}).on_connection(&serve_connection).on_start(nullptr).on_start([] {
+        started.release();
+    });
     ruvia::test::app_run run(app);
     ASSERT_TRUE(started.try_acquire_for(10s));
     ruvia::test::wait_until([&app] {
@@ -165,12 +159,9 @@ TEST(Ruvia, adding_first_routed_listener_rejects_conflicts_without_interrupting_
         } catch (const std::logic_error&) {
         }
         return false;
-    },
-        10s);
+    }, 10s);
     EXPECT_THROW(control_loop().start(app.add_listener(control_loop().worker(), {.address_ = "127.0.0.1", .http_ = routed.endpoint().port()})).get(), std::invalid_argument);
-    EXPECT_TRUE(ruvia::test::exchange(io, raw.endpoint(),
-        "GET /still-serving HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
-            .ends_with("connection"));
+    EXPECT_TRUE(ruvia::test::exchange(io, raw.endpoint(), "GET /still-serving HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n").ends_with("connection"));
     app.stop();
     run.join();
 }

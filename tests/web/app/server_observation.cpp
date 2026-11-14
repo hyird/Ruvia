@@ -76,9 +76,7 @@ public:
     void add(const ruvia::tls_client_hello_record& hello) {
         const auto message = hello.message();
         std::lock_guard lock(mutex_);
-        client_hellos_.push_back({hello.connection_id(), std::string(hello.local().address().to_string()), hello.local().port(),
-            std::string(hello.remote().address().to_string()), hello.remote().port(), hello.quic(),
-            std::string(reinterpret_cast<const char*>(message.data()), message.size())});
+        client_hellos_.push_back({hello.connection_id(), std::string(hello.local().address().to_string()), hello.local().port(), std::string(hello.remote().address().to_string()), hello.remote().port(), hello.quic(), std::string(reinterpret_cast<const char*>(message.data()), message.size())});
     }
 
     void add(const ruvia::http2_input_record& input) {
@@ -162,16 +160,12 @@ std::binary_semaphore& started() {
     if (message.size() < 4 || static_cast<unsigned char>(message[0]) != 1) {
         return false;
     }
-    const auto length = (std::size_t{static_cast<unsigned char>(message[1])} << 16) |
-                        (std::size_t{static_cast<unsigned char>(message[2])} << 8) |
-                        std::size_t{static_cast<unsigned char>(message[3])};
+    const auto length = (std::size_t{static_cast<unsigned char>(message[1])} << 16) | (std::size_t{static_cast<unsigned char>(message[2])} << 8) | std::size_t{static_cast<unsigned char>(message[3])};
     return length == message.size() - 4;
 }
 
-void capture_sent_client_hello(
-    int writing, int, int content_type, const void* bytes, std::size_t size, SSL*, void* argument) {
-    if (writing != 0 && content_type == SSL3_RT_HANDSHAKE && size >= 4 &&
-        *static_cast<const unsigned char*>(bytes) == SSL3_MT_CLIENT_HELLO) {
+void capture_sent_client_hello(int writing, int, int content_type, const void* bytes, std::size_t size, SSL*, void* argument) {
+    if (writing != 0 && content_type == SSL3_RT_HANDSHAKE && size >= 4 && *static_cast<const unsigned char*>(bytes) == SSL3_MT_CLIENT_HELLO) {
         static_cast<std::vector<std::string>*>(argument)->emplace_back(static_cast<const char*>(bytes), size);
     }
 }
@@ -194,9 +188,7 @@ tls_exchange https_connection_id(asio::io_context& io, const asio::ip::tcp::endp
     SSL_set_msg_callback(stream.native_handle(), capture_sent_client_hello);
     SSL_set_msg_callback_arg(stream.native_handle(), &client_hellos);
     static constexpr unsigned char alpn[] = {8, 'h', 't', 't', 'p', '/', '1', '.', '1'};
-    if (SSL_set_alpn_protos(stream.native_handle(), alpn, sizeof(alpn)) != 0 ||
-        SSL_set_tlsext_host_name(stream.native_handle(), "localhost") != 1 ||
-        (groups != nullptr && SSL_set1_groups_list(stream.native_handle(), groups) != 1)) {
+    if (SSL_set_alpn_protos(stream.native_handle(), alpn, sizeof(alpn)) != 0 || SSL_set_tlsext_host_name(stream.native_handle(), "localhost") != 1 || (groups != nullptr && SSL_set1_groups_list(stream.native_handle(), groups) != 1)) {
         throw std::runtime_error("cannot configure the TLS test client");
     }
     stream.next_layer().connect(endpoint);
@@ -241,8 +233,7 @@ std::uint64_t http2_connection_id(stream_type& stream, std::string_view opening)
     std::string body;
     for (;;) {
         const auto frame = ruvia::test::read_frame(stream);
-        if (frame.header_.type_ == static_cast<std::uint8_t>(ruvia::http2_frame_type::data) &&
-            frame.header_.stream_id_ == 1) {
+        if (frame.header_.type_ == static_cast<std::uint8_t>(ruvia::http2_frame_type::data) && frame.header_.stream_id_ == 1) {
             body += frame.payload_;
             if ((frame.header_.flags_ & 0x1) != 0) {
                 return parse_connection_id(body);
@@ -269,8 +260,7 @@ http2_exchange tls_http2_connection_id(asio::io_context& io, const asio::ip::tcp
     client.set_verify_mode(asio::ssl::verify_none);
     asio::ssl::stream<asio::ip::tcp::socket> stream(io, client);
     static constexpr unsigned char alpn[] = {2, 'h', '2'};
-    if (SSL_set_alpn_protos(stream.native_handle(), alpn, sizeof(alpn)) != 0 ||
-        SSL_set_tlsext_host_name(stream.native_handle(), "localhost") != 1) {
+    if (SSL_set_alpn_protos(stream.native_handle(), alpn, sizeof(alpn)) != 0 || SSL_set_tlsext_host_name(stream.native_handle(), "localhost") != 1) {
         throw std::runtime_error("cannot configure the h2 test client");
     }
     stream.next_layer().connect(endpoint);
@@ -315,8 +305,7 @@ TEST(Ruvia, server_observers_see_client_hellos_and_http2_input_by_connection_id)
         .address_ = "127.0.0.1",
         .http_ = http_endpoint.port(),
         .https_ = https_endpoint.port(),
-        .tls_ = {.identity_ = {.certificate_chain_file_ = identity.ca_file_,
-                     .private_key_file_ = identity.private_key_file()}},
+        .tls_ = {.identity_ = {.certificate_chain_file_ = identity.ca_file_, .private_key_file_ = identity.private_key_file()}},
     };
 #if defined(RUVIA_ENABLE_HTTP3)
     ruvia::test::udp_port_reservation udp_reservation(io);
@@ -327,12 +316,20 @@ TEST(Ruvia, server_observers_see_client_hellos_and_http2_input_by_connection_id)
     auto& app = ruvia::app();
     app.server({.worker_count_ = 2})
         .listen(listener)
-        .on_start([] { started().release(); })
-        .on_tls_client_hello([](const ruvia::tls_client_hello_record& hello) noexcept { records().add(hello); })
-        .on_http2_input([](const ruvia::http2_input_record& input) noexcept { records().add(input); });
+        .on_start([] {
+        started().release();
+    })
+        .on_tls_client_hello([](const ruvia::tls_client_hello_record& hello) noexcept {
+        records().add(hello);
+    }).on_http2_input([](const ruvia::http2_input_record& input) noexcept {
+        records().add(input);
+    });
 #if defined(RUVIA_ENABLE_HTTP3)
-    app.on_http3_frame([](const ruvia::http3_frame_record& frame) noexcept { records().add(frame); })
-        .on_http3_field([](const ruvia::http3_field_record& field) noexcept { records().add(field); });
+    app.on_http3_frame([](const ruvia::http3_frame_record& frame) noexcept {
+        records().add(frame);
+    }).on_http3_field([](const ruvia::http3_field_record& field) noexcept {
+        records().add(field);
+    });
 #endif
 
     std::set<std::uint64_t> connection_ids;
@@ -360,8 +357,7 @@ TEST(Ruvia, server_observers_see_client_hellos_and_http2_input_by_connection_id)
         }
 
 #if defined(RUVIA_ENABLE_HTTP2)
-        for (const auto& exchange :
-            {cleartext_http2_connection_id(io, http_endpoint), tls_http2_connection_id(io, https_endpoint)}) {
+        for (const auto& exchange : {cleartext_http2_connection_id(io, http_endpoint), tls_http2_connection_id(io, https_endpoint)}) {
             EXPECT_TRUE(connection_ids.insert(exchange.connection_id_).second);
             const auto input = records().http2_input(exchange.connection_id_);
             EXPECT_TRUE(input.starts_with(ruvia::http2_client_preface));

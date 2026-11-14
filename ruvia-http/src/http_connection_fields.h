@@ -51,9 +51,7 @@ namespace ruvia::detail {
 // refused and remembered by budget_exceeded().
 class http_c_library_memory final {
 public:
-    explicit http_c_library_memory(
-        std::size_t native_budget = (std::numeric_limits<std::size_t>::max)(),
-        bool throw_on_budget_exceeded = false) noexcept;
+    explicit http_c_library_memory(std::size_t native_budget = (std::numeric_limits<std::size_t>::max)(), bool throw_on_budget_exceeded = false) noexcept;
     http_c_library_memory(const http_c_library_memory&) = delete;
     http_c_library_memory& operator=(const http_c_library_memory&) = delete;
     void rethrow_if_failed() const;
@@ -130,8 +128,7 @@ namespace ruvia::detail {
     }
     const auto left_address = reinterpret_cast<std::uintptr_t>(left.data());
     const auto right_address = reinterpret_cast<std::uintptr_t>(right.data());
-    return left_address >= right_address ? left_address - right_address < right.size()
-                                         : right_address - left_address < left.size();
+    return left_address >= right_address ? left_address - right_address < right.size() : right_address - left_address < left.size();
 }
 
 // Whether `text` views bytes `storage` owns, its terminator included: growing or
@@ -154,13 +151,16 @@ struct quic_varint final {
 };
 
 [[nodiscard]] constexpr std::size_t quic_varint_size(std::uint64_t value) noexcept {
-    return value < (std::uint64_t{1} << 6) ? 1 : value < (std::uint64_t{1} << 14) ? 2
-                                             : value < (std::uint64_t{1} << 30)   ? 4
-                                                                                  : 8;
+    return value < (std::uint64_t{1} << 6)
+        ? 1
+        : value < (std::uint64_t{1} << 14)
+        ? 2
+        : value < (std::uint64_t{1} << 30)
+        ? 4
+        : 8;
 }
 
-[[nodiscard]] inline std::variant<quic_varint, http_capsule_codec_error> decode_quic_varint(
-    std::span<const char> input) noexcept {
+[[nodiscard]] inline std::variant<quic_varint, http_capsule_codec_error> decode_quic_varint(std::span<const char> input) noexcept {
     if (input.empty()) {
         return http_capsule_codec_error::need_more_data;
     }
@@ -176,8 +176,7 @@ struct quic_varint final {
     return quic_varint{value, size};
 }
 
-[[nodiscard]] inline std::variant<std::size_t, http_capsule_codec_error> encode_quic_varint(
-    std::span<char> output, std::uint64_t value) noexcept {
+[[nodiscard]] inline std::variant<std::size_t, http_capsule_codec_error> encode_quic_varint(std::span<char> output, std::uint64_t value) noexcept {
     if (value > quic_varint_max) {
         return http_capsule_codec_error::value_out_of_range;
     }
@@ -189,9 +188,13 @@ struct quic_varint final {
         output[i - 1] = static_cast<char>(value & 0xff);
         value >>= 8;
     }
-    const unsigned tag = size == 1 ? 0 : size == 2 ? 0x40
-                                     : size == 4   ? 0x80
-                                                   : 0xc0;
+    const unsigned tag = size == 1
+        ? 0
+        : size == 2
+        ? 0x40
+        : size == 4
+        ? 0x80
+        : 0xc0;
     output[0] = static_cast<char>(static_cast<unsigned char>(output[0]) | tag);
     return size;
 }
@@ -207,8 +210,8 @@ namespace ruvia::detail {
 // first and guarantees capacity; constant-size appends inline to stores.
 class http_raw_wire_sink final {
 public:
-    explicit http_raw_wire_sink(char* output) noexcept
-        : out_(output) {}
+    explicit http_raw_wire_sink(char* output) noexcept :
+        out_(output) {}
 
     void append(std::string_view value) noexcept {
         // A default-constructed empty string_view may carry a null data pointer.
@@ -244,8 +247,8 @@ private:
 // Growing sink appending to a string.
 class http_string_wire_sink final {
 public:
-    explicit http_string_wire_sink(std::string& output) noexcept
-        : out_(&output) {}
+    explicit http_string_wire_sink(std::string& output) noexcept :
+        out_(&output) {}
 
     void append(std::string_view value) {
         out_->append(value);
@@ -293,15 +296,13 @@ void emit_http1_field_line(sink_type& sink, std::string_view name, std::string_v
 // Whether any borrowed input of a field-section write overlaps `output`: the
 // field descriptor array itself, every field name and value, and `texts`
 // (start-line pieces such as a method, target or host).
-[[nodiscard]] inline bool http_wire_inputs_overlap(std::string_view output,
-    std::span<const http_header_view> fields, std::initializer_list<std::string_view> texts = {}) noexcept {
+[[nodiscard]] inline bool http_wire_inputs_overlap(std::string_view output, std::span<const http_header_view> fields, std::initializer_list<std::string_view> texts = {}) noexcept {
     for (const auto text : texts) {
         if (http_text_overlaps(text, output)) {
             return true;
         }
     }
-    if (http_text_overlaps(
-            std::string_view(reinterpret_cast<const char*>(fields.data()), fields.size_bytes()), output)) {
+    if (http_text_overlaps(std::string_view(reinterpret_cast<const char*>(fields.data()), fields.size_bytes()), output)) {
         return true;
     }
     for (const auto& field : fields) {
@@ -358,13 +359,11 @@ namespace ruvia::detail {
 struct http_content_coding_field_result_access final {
     using sequence_type = http_content_coding_field_result::content_coding_sequence;
 
-    [[nodiscard]] static constexpr http_content_coding_field_result coding(
-        sequence_type values) noexcept {
+    [[nodiscard]] static constexpr http_content_coding_field_result coding(sequence_type values) noexcept {
         return http_content_coding_field_result(values);
     }
 
-    [[nodiscard]] static constexpr http_content_coding_field_result unsupported(
-        bool depth_exceeded = false) noexcept {
+    [[nodiscard]] static constexpr http_content_coding_field_result unsupported(bool depth_exceeded = false) noexcept {
         return http_content_coding_field_result(http_unsupported_content_coding(depth_exceeded));
     }
 
@@ -376,8 +375,7 @@ struct http_content_coding_field_result_access final {
 // Shared token walk for decoding and outbound acceptance. The caller decides
 // whether an unknown extension requires a decoder or only a quality check.
 template <typename visitor_type>
-[[nodiscard]] inline http_field_list_parse_status visit_http_content_coding_field(
-    std::string_view value, http_field_list_role role, visitor_type&& visitor) {
+[[nodiscard]] inline http_field_list_parse_status visit_http_content_coding_field(std::string_view value, http_field_list_role role, visitor_type&& visitor) {
     return http_visit_token_list(value, role, [&visitor](std::string_view token) {
         return visitor(token, http_content_coding_from_token(token));
     });
@@ -402,12 +400,10 @@ private:
 
 // Validate list grammar without selecting decoders. Recipients/forwarders may
 // retain empty members, but every nonempty member must still be a coding token.
-[[nodiscard]] bool is_valid_http_content_encoding_field_value(
-    std::string_view value, http_field_list_role role) noexcept;
+[[nodiscard]] bool is_valid_http_content_encoding_field_value(std::string_view value, http_field_list_role role) noexcept;
 
 template <typename headers_type>
-[[nodiscard]] inline http_content_coding_field_result http_content_coding_from_headers(
-    const headers_type& headers) noexcept {
+[[nodiscard]] inline http_content_coding_field_result http_content_coding_from_headers(const headers_type& headers) noexcept {
     http_content_coding_field_parser parser;
     for (const auto& header : headers) {
         if (http_ascii_equals_ignore_case(header.name(), "Content-Encoding")) {
@@ -446,9 +442,9 @@ template <typename codec_type, typename... args_type>
 template <typename codec_type>
 class codec_reset_guard final {
 public:
-    explicit codec_reset_guard(codec_type*& slot) noexcept
-        : slot_(slot),
-          uncaught_exceptions_(std::uncaught_exceptions()) {}
+    explicit codec_reset_guard(codec_type*& slot) noexcept :
+        slot_(slot),
+        uncaught_exceptions_(std::uncaught_exceptions()) {}
     codec_reset_guard(const codec_reset_guard&) = delete;
     codec_reset_guard& operator=(const codec_reset_guard&) = delete;
 
@@ -481,8 +477,7 @@ public:
         auto status = http_content_length_parse_status::ok;
         bool saw_value = false;
         auto parsed_value = value_;
-        http_visit_comma_separated_quoted_field_items(field_value, [&parsed_value, &status, &saw_value](
-                                                                       std::string_view item) noexcept {
+        http_visit_comma_separated_quoted_field_items(field_value, [&parsed_value, &status, &saw_value](std::string_view item) noexcept {
             status = accumulate(item, parsed_value);
             saw_value = true;
             return status == http_content_length_parse_status::ok;
@@ -510,8 +505,7 @@ public:
     }
 
 private:
-    [[nodiscard]] static http_content_length_parse_status accumulate(
-        std::string_view item, std::optional<std::uint64_t>& value) noexcept {
+    [[nodiscard]] static http_content_length_parse_status accumulate(std::string_view item, std::optional<std::uint64_t>& value) noexcept {
         if (item.empty()) {
             return http_content_length_parse_status::invalid;
         }
@@ -548,8 +542,7 @@ class zstd_encoder_stream;
 
 // Append decoder output while enforcing the ceiling; false means the ceiling
 // would be exceeded and the decode must fail.
-[[nodiscard]] inline bool append_decoded_bytes(
-    std::string& output, const char* bytes_value, std::size_t size, std::size_t max_decoded_bytes) {
+[[nodiscard]] inline bool append_decoded_bytes(std::string& output, const char* bytes_value, std::size_t size, std::size_t max_decoded_bytes) {
     if (output.size() > max_decoded_bytes || size > max_decoded_bytes - output.size()) {
         return false;
     }
@@ -558,9 +551,7 @@ class zstd_encoder_stream;
 }
 
 template <typename stream_type, typename operation_type>
-[[nodiscard]] inline std::optional<std::string> encode_whole_content_with_stream(
-    stream_type& encoder, operation_type finish_operation, std::string_view input,
-    std::size_t max_encoded_bytes) {
+[[nodiscard]] inline std::optional<std::string> encode_whole_content_with_stream(stream_type& encoder, operation_type finish_operation, std::string_view input, std::size_t max_encoded_bytes) {
     std::string output;
     if (!encoder.encode(input, output, finish_operation, max_encoded_bytes)) {
         return std::nullopt;
@@ -569,45 +560,31 @@ template <typename stream_type, typename operation_type>
 }
 
 template <typename stream_type, typename operation_type, typename... arg_types>
-[[nodiscard]] inline std::optional<std::string> encode_whole_content(
-    const char* init_error, operation_type finish_operation, std::string_view input,
-    std::size_t max_encoded_bytes, arg_types&&... args) {
+[[nodiscard]] inline std::optional<std::string> encode_whole_content(const char* init_error, operation_type finish_operation, std::string_view input, std::size_t max_encoded_bytes, arg_types&&... args) {
     stream_type encoder(std::forward<arg_types>(args)...);
     if (!encoder.initialized()) {
         throw http_content_codec_error(init_error);
     }
-    return encode_whole_content_with_stream(
-        encoder, finish_operation, input, max_encoded_bytes);
+    return encode_whole_content_with_stream(encoder, finish_operation, input, max_encoded_bytes);
 }
 
-[[nodiscard]] std::variant<std::string, http_content_decode_error> decode_gzip_content(
-    std::string_view input, std::size_t max_decoded_bytes);
-[[nodiscard]] std::variant<std::string, http_content_decode_error> decode_deflate_content(
-    std::string_view input, std::size_t max_decoded_bytes);
-[[nodiscard]] std::variant<std::string, http_content_decode_error> decode_brotli_content(
-    std::string_view input, std::size_t max_decoded_bytes);
-[[nodiscard]] std::variant<std::string, http_content_decode_error> decode_zstd_content(
-    std::string_view input, std::size_t max_decoded_bytes);
+[[nodiscard]] std::variant<std::string, http_content_decode_error> decode_gzip_content(std::string_view input, std::size_t max_decoded_bytes);
+[[nodiscard]] std::variant<std::string, http_content_decode_error> decode_deflate_content(std::string_view input, std::size_t max_decoded_bytes);
+[[nodiscard]] std::variant<std::string, http_content_decode_error> decode_brotli_content(std::string_view input, std::size_t max_decoded_bytes);
+[[nodiscard]] std::variant<std::string, http_content_decode_error> decode_zstd_content(std::string_view input, std::size_t max_decoded_bytes);
 
-[[nodiscard]] std::optional<std::string> encode_gzip_content(
-    std::string_view input, std::size_t max_encoded_bytes);
-[[nodiscard]] std::optional<std::string> encode_deflate_content(
-    std::string_view input, std::size_t max_encoded_bytes);
-[[nodiscard]] std::optional<std::string> encode_brotli_content(
-    std::string_view input, std::size_t max_encoded_bytes);
-[[nodiscard]] std::optional<std::string> encode_zstd_content(
-    std::string_view input, std::size_t max_encoded_bytes);
+[[nodiscard]] std::optional<std::string> encode_gzip_content(std::string_view input, std::size_t max_encoded_bytes);
+[[nodiscard]] std::optional<std::string> encode_deflate_content(std::string_view input, std::size_t max_encoded_bytes);
+[[nodiscard]] std::optional<std::string> encode_brotli_content(std::string_view input, std::size_t max_encoded_bytes);
+[[nodiscard]] std::optional<std::string> encode_zstd_content(std::string_view input, std::size_t max_encoded_bytes);
 
 // A whole-buffer encode, one finishing pass of the stream's single encode
 // loop, over caller-owned codec state that is freshly initialized or reset.
 // Every path leaves the state consumed (finished or mid-stream), so an owner
 // that reuses it resets it afterwards.
-[[nodiscard]] std::optional<std::string> encode_zlib_content(zlib_deflate_stream& deflater,
-    std::string_view input, std::size_t max_encoded_bytes);
-[[nodiscard]] std::optional<std::string> encode_brotli_content(brotli_encoder_stream& encoder,
-    std::string_view input, std::size_t max_encoded_bytes);
-[[nodiscard]] std::optional<std::string> encode_zstd_content(zstd_encoder_stream& encoder,
-    std::string_view input, std::size_t max_encoded_bytes);
+[[nodiscard]] std::optional<std::string> encode_zlib_content(zlib_deflate_stream& deflater, std::string_view input, std::size_t max_encoded_bytes);
+[[nodiscard]] std::optional<std::string> encode_brotli_content(brotli_encoder_stream& encoder, std::string_view input, std::size_t max_encoded_bytes);
+[[nodiscard]] std::optional<std::string> encode_zstd_content(zstd_encoder_stream& encoder, std::string_view input, std::size_t max_encoded_bytes);
 }  // namespace ruvia::detail
 
 // zlib inflate/deflate state with tracked working memory, including the LZ77
@@ -645,8 +622,7 @@ inline void zlib_refill_input(z_stream& stream, std::string_view input, std::siz
     if (stream.avail_in != 0 || supplied == input.size()) {
         return;
     }
-    const auto count = static_cast<uInt>(
-        std::min<std::size_t>(input.size() - supplied, (std::numeric_limits<uInt>::max)()));
+    const auto count = static_cast<uInt>(std::min<std::size_t>(input.size() - supplied, (std::numeric_limits<uInt>::max)()));
     stream.next_in = reinterpret_cast<Bytef*>(const_cast<char*>(input.data() + supplied));
     stream.avail_in = count;
     supplied += count;
@@ -657,8 +633,8 @@ inline void zlib_refill_input(z_stream& stream, std::string_view input, std::siz
 // call ends, including by exception.
 class zlib_borrow_scope final {
 public:
-    explicit zlib_borrow_scope(z_stream& stream) noexcept
-        : stream_(stream) {}
+    explicit zlib_borrow_scope(z_stream& stream) noexcept :
+        stream_(stream) {}
     ~zlib_borrow_scope() {
         stream_.next_in = nullptr;
         stream_.avail_in = 0;
@@ -674,9 +650,7 @@ private:
 
 class zlib_inflate_stream final {
 public:
-    explicit zlib_inflate_stream(
-        int window_bits,
-        std::size_t max_memory_bytes = (std::numeric_limits<std::size_t>::max)());
+    explicit zlib_inflate_stream(int window_bits, std::size_t max_memory_bytes = (std::numeric_limits<std::size_t>::max)());
     ~zlib_inflate_stream();
     zlib_inflate_stream(const zlib_inflate_stream&) = delete;
     zlib_inflate_stream& operator=(const zlib_inflate_stream&) = delete;
@@ -699,13 +673,9 @@ private:
 
 class zlib_deflate_stream final {
 public:
-    zlib_deflate_stream(
-        int level, int window_bits, int mem_level, int strategy,
-        std::size_t max_memory_bytes = (std::numeric_limits<std::size_t>::max)());
+    zlib_deflate_stream(int level, int window_bits, int mem_level, int strategy, std::size_t max_memory_bytes = (std::numeric_limits<std::size_t>::max)());
     // The gzip or deflate content-coding stream with zlib's default parameters.
-    explicit zlib_deflate_stream(
-        zlib_content_format format,
-        std::size_t max_memory_bytes = (std::numeric_limits<std::size_t>::max)());
+    explicit zlib_deflate_stream(zlib_content_format format, std::size_t max_memory_bytes = (std::numeric_limits<std::size_t>::max)());
     ~zlib_deflate_stream();
     zlib_deflate_stream(const zlib_deflate_stream&) = delete;
     zlib_deflate_stream& operator=(const zlib_deflate_stream&) = delete;
@@ -725,8 +695,7 @@ public:
     // Z_SYNC_FLUSH or Z_FINISH) into output. False means output would exceed
     // `max_encoded_bytes` in total; no byte past that cap is appended. After
     // false or an exception, the owner must reset or discard this stream.
-    [[nodiscard]] bool encode(std::string_view input, std::string& output, int flush,
-        std::size_t max_encoded_bytes);
+    [[nodiscard]] bool encode(std::string_view input, std::string& output, int flush, std::size_t max_encoded_bytes);
 
 private:
     http_c_library_memory allocation_;
@@ -739,8 +708,7 @@ private:
 
 namespace ruvia::detail {
 
-[[nodiscard]] inline bool http_parse_transfer_coding_syntax(
-    std::string_view item, std::string_view& coding, bool& has_parameters) noexcept {
+[[nodiscard]] inline bool http_parse_transfer_coding_syntax(std::string_view item, std::string_view& coding, bool& has_parameters) noexcept {
     const auto first_semicolon = http_find_unquoted_delimiter(item, 0, ';');
     coding = http_trim_ows(item.substr(0, first_semicolon));
     if (!is_valid_http_header_name(coding)) {
@@ -767,8 +735,8 @@ public:
 private:
     friend class http_transfer_encoding_value;
 
-    explicit http_non_chunked_transfer_encoding(http_transfer_codings transfer_codings)
-        : transfer_codings_(std::move(transfer_codings)) {}
+    explicit http_non_chunked_transfer_encoding(http_transfer_codings transfer_codings) :
+        transfer_codings_(std::move(transfer_codings)) {}
 
     http_transfer_codings transfer_codings_;
 };
@@ -782,8 +750,8 @@ public:
 private:
     friend class http_transfer_encoding_value;
 
-    explicit http_final_chunked_transfer_encoding(http_transfer_codings transfer_codings)
-        : transfer_codings_(std::move(transfer_codings)) {}
+    explicit http_final_chunked_transfer_encoding(http_transfer_codings transfer_codings) :
+        transfer_codings_(std::move(transfer_codings)) {}
 
     http_transfer_codings transfer_codings_;
 };
@@ -805,21 +773,19 @@ private:
 
     using value_type = std::variant<http_non_chunked_transfer_encoding, http_final_chunked_transfer_encoding>;
 
-    [[nodiscard]] static http_transfer_encoding_value make_non_chunked(
-        http_transfer_codings transfer_codings) {
+    [[nodiscard]] static http_transfer_encoding_value make_non_chunked(http_transfer_codings transfer_codings) {
         return http_transfer_encoding_value(http_non_chunked_transfer_encoding(std::move(transfer_codings)));
     }
 
-    [[nodiscard]] static http_transfer_encoding_value make_final_chunked(
-        http_transfer_codings transfer_codings) {
+    [[nodiscard]] static http_transfer_encoding_value make_final_chunked(http_transfer_codings transfer_codings) {
         return http_transfer_encoding_value(http_final_chunked_transfer_encoding(std::move(transfer_codings)));
     }
 
-    explicit http_transfer_encoding_value(http_non_chunked_transfer_encoding value)
-        : value_(std::move(value)) {}
+    explicit http_transfer_encoding_value(http_non_chunked_transfer_encoding value) :
+        value_(std::move(value)) {}
 
-    explicit http_transfer_encoding_value(http_final_chunked_transfer_encoding value)
-        : value_(std::move(value)) {}
+    explicit http_transfer_encoding_value(http_final_chunked_transfer_encoding value) :
+        value_(std::move(value)) {}
 
     value_type value_;
 };
@@ -845,53 +811,49 @@ public:
         }
         bool unsupported = unsupported_;
         bool malformed = false;
-        http_visit_comma_separated_quoted_field_items(field_value,
-            [&next_codings, &final_chunked, &unsupported, &malformed](std::string_view item) {
-                if (item.empty()) {
-                    return true;
-                }
-                std::string_view coding;
-                bool has_parameters = false;
-                if (final_chunked || !http_parse_transfer_coding_syntax(item, coding, has_parameters)) {
+        http_visit_comma_separated_quoted_field_items(field_value, [&next_codings, &final_chunked, &unsupported, &malformed](std::string_view item) {
+            if (item.empty()) {
+                return true;
+            }
+            std::string_view coding;
+            bool has_parameters = false;
+            if (final_chunked || !http_parse_transfer_coding_syntax(item, coding, has_parameters)) {
+                malformed = true;
+                return false;
+            }
+            if (http_ascii_equals_ignore_case(coding, "chunked")) {
+                if (has_parameters) {
                     malformed = true;
                     return false;
                 }
-                if (http_ascii_equals_ignore_case(coding, "chunked")) {
-                    if (has_parameters) {
-                        malformed = true;
-                        return false;
-                    }
-                    final_chunked = true;
-                    return true;
-                }
-                const bool gzip = http_is_gzip_coding_token(coding);
-                const bool deflate = http_ascii_equals_ignore_case(coding, "deflate");
-                if (gzip || deflate) {
-                    if (has_parameters) {
-                        malformed = true;
-                        return false;
-                    }
-                    if (next_codings.size() == max_transfer_codings) {
-                        unsupported = true;
-                        return true;
-                    }
-                    next_codings.push_back(gzip ? http_transfer_coding::gzip
-                                                : http_transfer_coding::deflate);
-                    return true;
-                }
-                unsupported = true;
+                final_chunked = true;
                 return true;
-            });
+            }
+            const bool gzip = http_is_gzip_coding_token(coding);
+            const bool deflate = http_ascii_equals_ignore_case(coding, "deflate");
+            if (gzip || deflate) {
+                if (has_parameters) {
+                    malformed = true;
+                    return false;
+                }
+                if (next_codings.size() == max_transfer_codings) {
+                    unsupported = true;
+                    return true;
+                }
+                next_codings.push_back(gzip ? http_transfer_coding::gzip : http_transfer_coding::deflate);
+                return true;
+            }
+            unsupported = true;
+            return true;
+        });
         if (malformed) {
             return http_transfer_encoding_parse_status::malformed;
         }
-        auto next_value = final_chunked ? http_transfer_encoding_value::make_final_chunked(std::move(next_codings))
-                                        : http_transfer_encoding_value::make_non_chunked(std::move(next_codings));
+        auto next_value = final_chunked ? http_transfer_encoding_value::make_final_chunked(std::move(next_codings)) : http_transfer_encoding_value::make_non_chunked(std::move(next_codings));
         // The coding list is inline, so publication cannot fail.
         value_.emplace(std::move(next_value));
         unsupported_ = unsupported;
-        return unsupported_ ? http_transfer_encoding_parse_status::unsupported
-                            : http_transfer_encoding_parse_status::ok;
+        return unsupported_ ? http_transfer_encoding_parse_status::unsupported : http_transfer_encoding_parse_status::ok;
     }
 
     [[nodiscard]] const std::optional<http_transfer_encoding_value>& value() const noexcept {
@@ -921,10 +883,10 @@ public:
 
     http_header_descriptor_storage(const http_header_descriptor_storage&) = delete;
     http_header_descriptor_storage& operator=(const http_header_descriptor_storage&) = delete;
-    http_header_descriptor_storage(http_header_descriptor_storage&& other) noexcept
-        : overflow_(std::exchange(other.overflow_, nullptr)),
-          size_(std::exchange(other.size_, 0)),
-          capacity_(std::exchange(other.capacity_, inline_capacity)) {
+    http_header_descriptor_storage(http_header_descriptor_storage&& other) noexcept :
+        overflow_(std::exchange(other.overflow_, nullptr)),
+        size_(std::exchange(other.size_, 0)),
+        capacity_(std::exchange(other.capacity_, inline_capacity)) {
         if (overflow_ == nullptr) {
             std::copy_n(other.inline_.data(), size_, inline_.data());
         }
@@ -1010,8 +972,7 @@ namespace ruvia::detail {
 // The one Extended CONNECT WebSocket bootstrap field list for HTTP/2 (RFC
 // 8441) and HTTP/3 (RFC 9220): the negotiation's Sec-WebSocket-* request
 // fields, then the application headers. The descriptors borrow both.
-[[nodiscard]] inline http_header_descriptor_storage<http_header_view> stage_websocket_extended_connect_fields(
-    const websocket_client_negotiation& negotiation, std::span<const http_header_view> headers) {
+[[nodiscard]] inline http_header_descriptor_storage<http_header_view> stage_websocket_extended_connect_fields(const websocket_client_negotiation& negotiation, std::span<const http_header_view> headers) {
     const auto negotiation_fields = negotiation.request_fields();
     http_header_descriptor_storage<http_header_view> staged;
     staged.reserve(negotiation_fields.size() + headers.size());
@@ -1048,8 +1009,7 @@ namespace ruvia::detail {
 // RFC 3986 section 2.3 unreserved. Percent-encoding one of these octets is
 // equivalent to spelling it literally, which host comparison relies on.
 [[nodiscard]] inline constexpr bool is_unreserved_byte(unsigned char byte) noexcept {
-    return (byte >= '0' && byte <= '9') || is_uri_alpha(byte) ||
-           byte == '-' || byte == '.' || byte == '_' || byte == '~';
+    return (byte >= '0' && byte <= '9') || is_uri_alpha(byte) || byte == '-' || byte == '.' || byte == '_' || byte == '~';
 }
 
 // Literal pchar bytes. The caller validates percent-encoded triplets separately.
@@ -1060,16 +1020,14 @@ namespace ruvia::detail {
 // Split RFC 3986 host [ ":" port ] (host may be an IP-literal in brackets)
 // without validating either part. False when brackets are unbalanced, text
 // follows "]" without ":", or the port contains another ":".
-[[nodiscard]] bool split_uri_host_port(
-    std::string_view value, std::string_view& host, std::string_view& port, bool& has_port) noexcept;
+[[nodiscard]] bool split_uri_host_port(std::string_view value, std::string_view& host, std::string_view& port, bool& has_port) noexcept;
 
 // Parse a decimal port, rejecting anything that does not fit 16 bits.
 [[nodiscard]] std::variant<std::uint16_t, std::errc> parse_port_value(std::string_view value) noexcept;
 
 // Validate a percent-encoded component: unreserved / sub-delims / pct-encoded,
 // plus ':' and '@', with '/' and '?' admitted only where the component allows them.
-[[nodiscard]] bool is_valid_uri_component(
-    std::string_view value, bool allow_slash, bool allow_question) noexcept;
+[[nodiscard]] bool is_valid_uri_component(std::string_view value, bool allow_slash, bool allow_question) noexcept;
 
 // Address octets/groups in wire order; no allocation or platform IP parser.
 // IPv6 and IPvFuture literals are supplied without surrounding brackets.
@@ -1110,8 +1068,7 @@ struct request_target_view {
 // Strict origin-form starts with '/'. Asterisk-form is a separate target form
 // and is exposed explicitly so callers cannot lose its OPTIONS-only contract.
 [[nodiscard]] bool is_valid_origin_form_target(std::string_view target) noexcept;
-[[nodiscard]] bool is_valid_origin_or_asterisk_form_target(
-    http_known_method method, std::string_view target) noexcept;
+[[nodiscard]] bool is_valid_origin_or_asterisk_form_target(http_known_method method, std::string_view target) noexcept;
 
 // Host field syntax. An empty field is valid when the target URI has no
 // authority (RFC 9112 section 3.2); callers that require a usable HTTP origin
@@ -1122,26 +1079,22 @@ struct request_target_view {
 // reverted RFC 6874), while IPvFuture remains valid.
 [[nodiscard]] bool is_valid_http_host(std::string_view value) noexcept;
 [[nodiscard]] bool http_uri_host_equals(std::string_view left, std::string_view right) noexcept;
-[[nodiscard]] bool parse_request_target(
-    http_known_method method, std::string_view target, request_target_view& output) noexcept;
+[[nodiscard]] bool parse_request_target(http_known_method method, std::string_view target, request_target_view& output) noexcept;
 template <http_temporary_owning_char_string target_type>
 bool parse_request_target(http_known_method, target_type&&, request_target_view&) = delete;
-[[nodiscard]] bool authority_matches_host(
-    std::string_view authority, std::string_view host, std::uint16_t default_port) noexcept;
+[[nodiscard]] bool authority_matches_host(std::string_view authority, std::string_view host, std::uint16_t default_port) noexcept;
 
 }  // namespace ruvia::detail
 
 namespace ruvia::detail {
 
 // IMF-fixdate month names (RFC 9110 section 5.6.7), in calendar order.
-inline constexpr std::array<std::string_view, 12> http_month_names{
-    "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"};
+inline constexpr std::array<std::string_view, 12> http_month_names{"Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"};
 
 // Seconds since the epoch for UTC civil fields, or no value for an invalid
 // calendar date, out-of-range clock fields or a time_t overflow. A second of 60
 // is accepted as the leap second and counts into the following minute.
-[[nodiscard]] std::optional<std::time_t> http_civil_to_time_t(
-    int year, int month, int day, int hour, int minute, int second) noexcept;
+[[nodiscard]] std::optional<std::time_t> http_civil_to_time_t(int year, int month, int day, int hour, int minute, int second) noexcept;
 
 // Full "Date: <value>\r\n" line for the current second, for HTTP/1 text response
 // heads. Empty when the clock reports failure (-1) or a date outside the
@@ -1156,8 +1109,7 @@ namespace ruvia::detail {
 
 // One identity for wire classification, cached lookup and descriptor tags.
 // Other has no cache slot; the remaining identities map to compact slots.
-enum class http_field_kind : std::uint8_t {
-    other,
+enum class http_field_kind : std::uint8_t { other,
     accept,
     accept_encoding,
     access_control_request_headers,
@@ -1189,20 +1141,16 @@ enum class http_field_kind : std::uint8_t {
     sec_websocket_extensions,
     te,
     trailer,
-    proxy_authorization
-};
+    proxy_authorization };
 
-inline constexpr std::size_t http_field_kind_count =
-    static_cast<std::uint8_t>(http_field_kind::proxy_authorization) + 1;
+inline constexpr std::size_t http_field_kind_count = static_cast<std::uint8_t>(http_field_kind::proxy_authorization) + 1;
 
-[[nodiscard]] inline constexpr std::size_t http_field_kind_known_slot(
-    http_field_kind kind) noexcept {
+[[nodiscard]] inline constexpr std::size_t http_field_kind_known_slot(http_field_kind kind) noexcept {
     const auto index = static_cast<std::size_t>(kind);
     return index == 0 ? http_field_kind_count : index - 1;
 }
 
-[[nodiscard]] inline constexpr std::uint32_t singleton_request_header_bit(
-    http_field_kind kind) noexcept {
+[[nodiscard]] inline constexpr std::uint32_t singleton_request_header_bit(http_field_kind kind) noexcept {
     switch (kind) {
         case http_field_kind::access_control_request_method:
         case http_field_kind::authorization:
@@ -1255,14 +1203,12 @@ struct http_field_classification final {
 
 namespace ruvia::detail {
 struct http_structured_item {
-    enum class kind_type {
-        other,
+    enum class kind_type { other,
         integer,
         boolean,
         token,
         string,
-        inner_list
-    } kind_{kind_type::other};
+        inner_list } kind_{kind_type::other};
     std::int64_t integer_{0};
     bool boolean_{false};
     std::string_view text_{};
@@ -1287,11 +1233,10 @@ struct http_structured_text_input {
 template <typename iterator_type>
 class http_structured_header_input final {
 public:
-    http_structured_header_input(
-        iterator_type first, iterator_type last, std::string_view field_name) noexcept
-        : next_(first),
-          last_(last),
-          field_name_(field_name) {
+    http_structured_header_input(iterator_type first, iterator_type last, std::string_view field_name) noexcept :
+        next_(first),
+        last_(last),
+        field_name_(field_name) {
         (void)select_next(remaining_);
         normalize();
     }
@@ -1569,14 +1514,7 @@ inline constexpr std::uint32_t response_header_proxy_connection = 1U << 25;
 }
 
 [[nodiscard]] inline bool response_header_append_forbidden(std::uint32_t bit) noexcept {
-    return bit == response_header_content_length || bit == response_header_content_type ||
-           bit == response_header_date || bit == response_header_server ||
-           bit == response_header_transfer_encoding || bit == response_header_allow ||
-           bit == response_header_access_control_allow_origin ||
-           bit == response_header_access_control_allow_credentials ||
-           bit == response_header_access_control_max_age || bit == response_header_accept_ranges ||
-           bit == response_header_content_range || bit == response_header_etag ||
-           bit == response_header_last_modified || bit == response_header_location;
+    return bit == response_header_content_length || bit == response_header_content_type || bit == response_header_date || bit == response_header_server || bit == response_header_transfer_encoding || bit == response_header_allow || bit == response_header_access_control_allow_origin || bit == response_header_access_control_allow_credentials || bit == response_header_access_control_max_age || bit == response_header_accept_ranges || bit == response_header_content_range || bit == response_header_etag || bit == response_header_last_modified || bit == response_header_location;
 }
 
 [[nodiscard]] std::uint32_t classify_response_header_name(std::string_view name) noexcept;
@@ -1585,10 +1523,7 @@ inline constexpr std::uint32_t response_header_proxy_connection = 1U << 25;
 // never-indexed literal so an intermediary never places them in a shared dynamic table.
 [[nodiscard]] inline bool http_field_never_indexed(std::string_view name) noexcept {
     const auto field = classify_http_field_name(name);
-    return field.kind_ == http_field_kind::authorization ||
-           field.kind_ == http_field_kind::proxy_authorization ||
-           field.kind_ == http_field_kind::cookie ||
-           field.response_bit_ == response_header_set_cookie;
+    return field.kind_ == http_field_kind::authorization || field.kind_ == http_field_kind::proxy_authorization || field.kind_ == http_field_kind::cookie || field.response_bit_ == response_header_set_cookie;
 }
 
 [[nodiscard]] std::string_view response_known_header_lowercase_name(std::uint32_t known_bit) noexcept;
@@ -1600,17 +1535,16 @@ inline constexpr std::uint32_t response_header_proxy_connection = 1U << 25;
 namespace ruvia::detail {
 
 // Case-insensitive field-name set membership (RFC 9110 section 5.1).
-[[nodiscard]] inline bool http_field_name_in(
-    std::string_view name, std::span<const std::string_view> fields) noexcept {
-    return std::ranges::any_of(
-        fields, [name](std::string_view field) noexcept { return http_ascii_equals_ignore_case(name, field); });
+[[nodiscard]] inline bool http_field_name_in(std::string_view name, std::span<const std::string_view> fields) noexcept {
+    return std::ranges::any_of(fields, [name](std::string_view field) noexcept {
+        return http_ascii_equals_ignore_case(name, field);
+    });
 }
 
 // A successful CONNECT or extended-CONNECT tunnel carries no representation
 // (RFC 9110 section 9.3.6, RFC 9298 section 3): its head must not declare
 // framing or representation metadata.
-inline constexpr std::array<std::string_view, 5> http_connect_forbidden_fields{
-    "content-length", "transfer-encoding", "content-type", "content-encoding", "trailer"};
+inline constexpr std::array<std::string_view, 5> http_connect_forbidden_fields{"content-length", "transfer-encoding", "content-type", "content-encoding", "trailer"};
 
 // HTTP/2 applies the connection-specific field ban. Decoded-name
 // lowercase validation and the request-only TE value exception belong to the
@@ -1620,8 +1554,7 @@ inline constexpr std::array<std::string_view, 5> http_connect_forbidden_fields{
         case 7:
             return http_ascii_equals_ignore_case(name, "upgrade");
         case 10:
-            return http_ascii_equals_ignore_case(name, "connection") ||
-                   http_ascii_equals_ignore_case(name, "keep-alive");
+            return http_ascii_equals_ignore_case(name, "connection") || http_ascii_equals_ignore_case(name, "keep-alive");
         case 16:
             return http_ascii_equals_ignore_case(name, "proxy-connection");
         case 17:
@@ -1640,12 +1573,10 @@ inline constexpr std::string_view http_connection_field_name = "Connection";
 inline constexpr std::string_view http_connection_upgrade_option = "Upgrade";
 inline constexpr std::string_view http_connection_keep_alive_option = "keep-alive";
 
-enum class http_connection_option : std::uint8_t {
-    close = 1U << 0,
+enum class http_connection_option : std::uint8_t { close = 1U << 0,
     keep_alive = 1U << 1,
     upgrade = 1U << 2,
-    te = 1U << 3
-};
+    te = 1U << 3 };
 
 // A sender must not send an option naming a field intended for all recipients
 // of the content (RFC 9110 section 7.6.1), nor one naming a field that frames
@@ -1657,8 +1588,7 @@ enum class http_connection_option : std::uint8_t {
 // are not tokens and already fail the list grammar. The recipient list
 // (http_connection_option_names_protected_field) rejects the framing and Host
 // nominations.
-[[nodiscard]] inline bool http_connection_option_conflicts_with_managed_field(
-    std::string_view option) noexcept {
+[[nodiscard]] inline bool http_connection_option_conflicts_with_managed_field(std::string_view option) noexcept {
     const auto field = classify_http_field_name(option);
     switch (field.kind_) {
         case http_field_kind::other:
@@ -1702,8 +1632,7 @@ enum class http_connection_option : std::uint8_t {
             return true;
     }
     const auto known_bit = field.response_bit_;
-    return (known_bit & ~(response_header_connection | response_header_upgrade |
-                            response_header_keep_alive | response_header_proxy_connection)) != 0;
+    return (known_bit & ~(response_header_connection | response_header_upgrade | response_header_keep_alive | response_header_proxy_connection)) != 0;
 }
 
 // Who parses a Connection field: its sender, or the recipient of a request or
@@ -1722,8 +1651,7 @@ enum class http_connection_field_role : std::uint8_t {
 // - a request also: Host.
 // End-to-end fields such as Authorization, Cookie, Origin, or Set-Cookie
 // remain prohibited for senders, not 400-rejected on receipt.
-[[nodiscard]] inline bool http_connection_option_names_protected_field(
-    std::string_view option, http_connection_field_role recipient) noexcept {
+[[nodiscard]] inline bool http_connection_option_names_protected_field(std::string_view option, http_connection_field_role recipient) noexcept {
     switch (classify_http_field(option)) {
         case http_field_kind::content_length:
         case http_field_kind::transfer_encoding:
@@ -1745,31 +1673,26 @@ enum class http_connection_field_role : std::uint8_t {
 // malformed for a sender and ignored by a recipient (RFC 9110 section 5.6.1).
 class http_connection_options final {
 public:
-    [[nodiscard]] http_field_list_parse_status parse_field(
-        std::string_view field_value, http_connection_field_role role) noexcept {
+    [[nodiscard]] http_field_list_parse_status parse_field(std::string_view field_value, http_connection_field_role role) noexcept {
         auto parsed_bits = state_;
         // An explicitly present but empty Connection field is useless and cannot
         // be safely extended by a later generated option; the strict writer
         // contract therefore rejects it as well as any empty member.
-        const auto status = http_visit_token_list(field_value,
-            role == http_connection_field_role::sender ? http_field_list_role::sender : http_field_list_role::recipient,
-            [&parsed_bits, role](std::string_view option) noexcept {
-                if (role == http_connection_field_role::sender
-                        ? http_connection_option_conflicts_with_managed_field(option)
-                        : http_connection_option_names_protected_field(option, role)) {
-                    return false;
-                }
-                if (http_ascii_equals_ignore_case(option, "close")) {
-                    parsed_bits |= bit(http_connection_option::close);
-                } else if (http_ascii_equals_ignore_case(option, http_connection_keep_alive_option)) {
-                    parsed_bits |= bit(http_connection_option::keep_alive);
-                } else if (http_ascii_equals_ignore_case(option, http_connection_upgrade_option)) {
-                    parsed_bits |= bit(http_connection_option::upgrade);
-                } else if (http_ascii_equals_ignore_case(option, "TE")) {
-                    parsed_bits |= bit(http_connection_option::te);
-                }
-                return true;
-            });
+        const auto status = http_visit_token_list(field_value, role == http_connection_field_role::sender ? http_field_list_role::sender : http_field_list_role::recipient, [&parsed_bits, role](std::string_view option) noexcept {
+            if (role == http_connection_field_role::sender ? http_connection_option_conflicts_with_managed_field(option) : http_connection_option_names_protected_field(option, role)) {
+                return false;
+            }
+            if (http_ascii_equals_ignore_case(option, "close")) {
+                parsed_bits |= bit(http_connection_option::close);
+            } else if (http_ascii_equals_ignore_case(option, http_connection_keep_alive_option)) {
+                parsed_bits |= bit(http_connection_option::keep_alive);
+            } else if (http_ascii_equals_ignore_case(option, http_connection_upgrade_option)) {
+                parsed_bits |= bit(http_connection_option::upgrade);
+            } else if (http_ascii_equals_ignore_case(option, "TE")) {
+                parsed_bits |= bit(http_connection_option::te);
+            }
+            return true;
+        });
         if (status == http_field_list_parse_status::ok) {
             state_ = static_cast<std::uint8_t>(parsed_bits | field_present_bit);
         }
@@ -1821,15 +1744,11 @@ struct http_upgrade_protocol final {
     std::string_view version_;
 };
 
-[[nodiscard]] inline bool http_parse_upgrade_protocol(
-    std::string_view value, http_upgrade_protocol& output) noexcept {
+[[nodiscard]] inline bool http_parse_upgrade_protocol(std::string_view value, http_upgrade_protocol& output) noexcept {
     const auto slash = value.find('/');
     const auto name = slash == std::string_view::npos ? value : value.substr(0, slash);
-    const auto version =
-        slash == std::string_view::npos ? std::string_view{} : value.substr(slash + 1);
-    if (!is_valid_http_header_name(name) ||
-        (slash != std::string_view::npos &&
-            (!is_valid_http_header_name(version) || (version.find('/') != std::string_view::npos)))) {
+    const auto version = slash == std::string_view::npos ? std::string_view{} : value.substr(slash + 1);
+    if (!is_valid_http_header_name(name) || (slash != std::string_view::npos && (!is_valid_http_header_name(version) || (version.find('/') != std::string_view::npos)))) {
         return false;
     }
     output = http_upgrade_protocol{.name_ = name, .version_ = version};
@@ -1839,8 +1758,7 @@ struct http_upgrade_protocol final {
 template <http_temporary_owning_char_string value_type>
 bool http_parse_upgrade_protocol(value_type&&, http_upgrade_protocol&) = delete;
 
-[[nodiscard]] inline bool http_upgrade_protocol_equals(
-    const http_upgrade_protocol& left, const http_upgrade_protocol& right) noexcept {
+[[nodiscard]] inline bool http_upgrade_protocol_equals(const http_upgrade_protocol& left, const http_upgrade_protocol& right) noexcept {
     // RFC 9110 section 7.8: protocol-name is case-insensitive, while an
     // optional protocol-version remains an exact token.
     return http_ascii_equals_ignore_case(left.name_, right.name_) && left.version_ == right.version_;
@@ -1856,27 +1774,26 @@ enum class http_upgrade_field_state : std::uint8_t {
 
 class http_upgrade_protocols final {
 public:
-    [[nodiscard]] http_field_list_parse_status parse_field(
-        std::string_view field_value, http_field_list_role role) noexcept {
-        return parse_field(field_value, role, [](const http_upgrade_protocol&) noexcept { return true; });
+    [[nodiscard]] http_field_list_parse_status parse_field(std::string_view field_value, http_field_list_role role) noexcept {
+        return parse_field(field_value, role, [](const http_upgrade_protocol&) noexcept {
+            return true;
+        });
     }
 
     template <typename visitor_type>
-    [[nodiscard]] http_field_list_parse_status parse_field(
-        std::string_view field_value, http_field_list_role role, visitor_type&& visitor) noexcept {
+    [[nodiscard]] http_field_list_parse_status parse_field(std::string_view field_value, http_field_list_role role, visitor_type&& visitor) noexcept {
         bool parsed_protocol = false;
-        const auto status = http_visit_list_members(field_value, role,
-            [&parsed_protocol, &visitor](std::string_view member) noexcept {
-                http_upgrade_protocol protocol;
-                if (!http_parse_upgrade_protocol(member, protocol)) {
-                    return http_field_list_parse_status::malformed;
-                }
-                if (!visitor(protocol)) {
-                    return http_field_list_parse_status::rejected;
-                }
-                parsed_protocol = true;
-                return http_field_list_parse_status::ok;
-            });
+        const auto status = http_visit_list_members(field_value, role, [&parsed_protocol, &visitor](std::string_view member) noexcept {
+            http_upgrade_protocol protocol;
+            if (!http_parse_upgrade_protocol(member, protocol)) {
+                return http_field_list_parse_status::malformed;
+            }
+            if (!visitor(protocol)) {
+                return http_field_list_parse_status::rejected;
+            }
+            parsed_protocol = true;
+            return http_field_list_parse_status::ok;
+        });
         if (status != http_field_list_parse_status::ok) {
             return status;
         }
@@ -1913,20 +1830,12 @@ enum class http_response_control_field_status : std::uint8_t {
 // Sender control-field grammar shared by insertion and final head analysis.
 // Keep the parsed state across repeated lines, but do not check the Upgrade
 // association until construction of all Connection fields has finished.
-[[nodiscard]] inline http_response_control_field_status parse_http_response_control_field(
-    http_field_kind kind, std::string_view value,
-    http_connection_options& connection_options, http_upgrade_protocols& upgrade_protocols) noexcept {
+[[nodiscard]] inline http_response_control_field_status parse_http_response_control_field(http_field_kind kind, std::string_view value, http_connection_options& connection_options, http_upgrade_protocols& upgrade_protocols) noexcept {
     switch (kind) {
         case http_field_kind::connection:
-            return connection_options.parse_field(value, http_connection_field_role::sender) ==
-                           http_field_list_parse_status::ok
-                       ? http_response_control_field_status::ok
-                       : http_response_control_field_status::invalid_connection;
+            return connection_options.parse_field(value, http_connection_field_role::sender) == http_field_list_parse_status::ok ? http_response_control_field_status::ok : http_response_control_field_status::invalid_connection;
         case http_field_kind::upgrade:
-            return upgrade_protocols.parse_field(value, http_field_list_role::sender) ==
-                           http_field_list_parse_status::ok
-                       ? http_response_control_field_status::ok
-                       : http_response_control_field_status::invalid_upgrade;
+            return upgrade_protocols.parse_field(value, http_field_list_role::sender) == http_field_list_parse_status::ok ? http_response_control_field_status::ok : http_response_control_field_status::invalid_upgrade;
         case http_field_kind::te:
             return http_response_control_field_status::te_forbidden;
         default:
@@ -1934,8 +1843,7 @@ enum class http_response_control_field_status : std::uint8_t {
     }
 }
 
-[[nodiscard]] inline bool http_response_upgrade_pair_valid(
-    const http_connection_options& connection_options, const http_upgrade_protocols& upgrade_protocols) noexcept {
+[[nodiscard]] inline bool http_response_upgrade_pair_valid(const http_connection_options& connection_options, const http_upgrade_protocols& upgrade_protocols) noexcept {
     return !upgrade_protocols.has_field() || connection_options.upgrade();
 }
 
@@ -1987,8 +1895,7 @@ namespace ruvia::detail {
         return 1000;
     }
     auto weight = http_trim_ows(value.substr(semicolon + 1));
-    if (weight.size() < 3 || http_ascii_to_lower(static_cast<unsigned char>(weight[0])) != 'q' ||
-        weight[1] != '=') {
+    if (weight.size() < 3 || http_ascii_to_lower(static_cast<unsigned char>(weight[0])) != 'q' || weight[1] != '=') {
         return 0;
     }
     const auto qvalue = weight.substr(2);
@@ -2013,8 +1920,7 @@ enum class response_field_status : std::uint8_t {
 // type cannot be combined into a list (RFC 9110 section 5.3).
 class response_field_state final {
 private:
-    friend response_field_status validate_response_field(http_field_kind kind, std::string_view value,
-        response_field_state& state) noexcept;
+    friend response_field_status validate_response_field(http_field_kind kind, std::string_view value, response_field_state& state) noexcept;
 
     bool content_type_seen_{false};
 };
@@ -2023,8 +1929,7 @@ private:
 // and retain protocol-specific framing, connection, and forbidden-field rules.
 // A fresh state also validates one value before an http_response setter commits
 // its replacement; the setter owns the separate append/replace policy.
-[[nodiscard]] response_field_status validate_response_field(http_field_kind kind, std::string_view value,
-    response_field_state& state) noexcept;
+[[nodiscard]] response_field_status validate_response_field(http_field_kind kind, std::string_view value, response_field_state& state) noexcept;
 
 [[nodiscard]] bool is_forbidden_response_trailer_name(std::string_view name) noexcept;
 
@@ -2048,9 +1953,7 @@ enum class http_interim_response_header_validation_status : std::uint8_t {
 class http_interim_response_sender_validator final {
 public:
     // kind_out receives the field identity of an accepted line.
-    [[nodiscard]] http_interim_response_header_validation_status validate(
-        std::string_view name, std::string_view value,
-        http_field_kind* kind_out = nullptr) noexcept {
+    [[nodiscard]] http_interim_response_header_validation_status validate(std::string_view name, std::string_view value, http_field_kind* kind_out = nullptr) noexcept {
         if (!is_valid_http_header_name(name) || !is_valid_http_header_value(value)) {
             return http_interim_response_header_validation_status::invalid_header;
         }
@@ -2076,8 +1979,7 @@ public:
             case response_field_status::repeated_singleton:
                 return http_interim_response_header_validation_status::repeated_singleton;
         }
-        if (known_bit != 0 && known_bit != response_header_content_type && (known_bits_ & known_bit) != 0 &&
-            response_header_append_forbidden(known_bit)) {
+        if (known_bit != 0 && known_bit != response_header_content_type && (known_bits_ & known_bit) != 0 && response_header_append_forbidden(known_bit)) {
             return http_interim_response_header_validation_status::repeated_singleton;
         }
         known_bits_ |= known_bit;
@@ -2114,13 +2016,11 @@ std::string_view http_trim_weak_etag_prefix(value_type&&) = delete;
     return !value.empty() && value.front() == '"';
 }
 
-[[nodiscard]] inline bool http_strong_etag_equals(
-    std::string_view left, std::string_view right) noexcept {
+[[nodiscard]] inline bool http_strong_etag_equals(std::string_view left, std::string_view right) noexcept {
     return !http_is_weak_etag(left) && !http_is_weak_etag(right) && left == right;
 }
 
-[[nodiscard]] inline bool http_weak_etag_equals(
-    std::string_view left, std::string_view right) noexcept {
+[[nodiscard]] inline bool http_weak_etag_equals(std::string_view left, std::string_view right) noexcept {
     return http_trim_weak_etag_prefix(left) == http_trim_weak_etag_prefix(right);
 }
 
@@ -2129,8 +2029,7 @@ struct http_etag_list_match_result final {
     bool matched_;
 };
 
-[[nodiscard]] inline http_etag_list_match_result http_parse_etag_list_matches(
-    std::string_view values, std::string_view expected, bool strong) noexcept {
+[[nodiscard]] inline http_etag_list_match_result http_parse_etag_list_matches(std::string_view values, std::string_view expected, bool strong) noexcept {
     bool matched = false;
     std::size_t offset = 0;
 
@@ -2162,8 +2061,7 @@ struct http_etag_list_match_result final {
         }
         ++offset;
         const auto entity_tag = values.substr(begin, offset - begin);
-        matched = matched || (strong ? http_strong_etag_equals(entity_tag, expected)
-                                     : http_weak_etag_equals(entity_tag, expected));
+        matched = matched || (strong ? http_strong_etag_equals(entity_tag, expected) : http_weak_etag_equals(entity_tag, expected));
 
         while (offset < values.size() && is_http_ows_char(values[offset])) {
             ++offset;
@@ -2185,8 +2083,7 @@ namespace ruvia::detail {
     return http_is_gzip_coding_token(coding) || http_ascii_equals_ignore_case(coding, "deflate");
 }
 
-[[nodiscard]] inline bool is_valid_http_te_field_item(
-    std::string_view item, http_field_list_role role) noexcept {
+[[nodiscard]] inline bool is_valid_http_te_field_item(std::string_view item, http_field_list_role role) noexcept {
     const auto first_semicolon = http_find_unquoted_delimiter(item, 0, ';');
     const auto coding = http_trim_ows(item.substr(0, first_semicolon));
     if (!is_valid_http_header_name(coding)) {
@@ -2197,8 +2094,7 @@ namespace ruvia::detail {
     }
     // RFC 9112 section 7.4: a client MUST NOT list chunked in TE. That binds
     // the sender; a recipient treats it as an always-acceptable coding.
-    if (role == http_field_list_role::sender &&
-        !http_is_client_supported_te_transfer_coding(coding)) {
+    if (role == http_field_list_role::sender && !http_is_client_supported_te_transfer_coding(coding)) {
         return false;
     }
 
@@ -2207,30 +2103,27 @@ namespace ruvia::detail {
     // value. Recipients accept extension parameters; clients advertise only
     // the codings they can decode, with an optional weight.
     bool quality_seen = false;
-    return http_all_parameters(item.substr(first_semicolon),
-        [&quality_seen, role](std::string_view parameter) noexcept {
-            const auto equals = parameter.find('=');
-            if (equals == std::string_view::npos) {
+    return http_all_parameters(item.substr(first_semicolon), [&quality_seen, role](std::string_view parameter) noexcept {
+        const auto equals = parameter.find('=');
+        if (equals == std::string_view::npos) {
+            return false;
+        }
+        const auto raw_name = parameter.substr(0, equals);
+        const auto raw_value = parameter.substr(equals + 1);
+        const auto name = http_trim_ows(raw_name);
+        const auto value = http_trim_ows(raw_value);
+        if (http_ascii_equals_ignore_case(name, "q")) {
+            if (quality_seen || raw_name != name || raw_value != value || http_parse_quality_value(value) < 0) {
                 return false;
             }
-            const auto raw_name = parameter.substr(0, equals);
-            const auto raw_value = parameter.substr(equals + 1);
-            const auto name = http_trim_ows(raw_name);
-            const auto value = http_trim_ows(raw_value);
-            if (http_ascii_equals_ignore_case(name, "q")) {
-                if (quality_seen || raw_name != name || raw_value != value ||
-                    http_parse_quality_value(value) < 0) {
-                    return false;
-                }
-                quality_seen = true;
-                return true;
-            }
-            return role == http_field_list_role::recipient && is_valid_http_transfer_parameter(parameter);
-        });
+            quality_seen = true;
+            return true;
+        }
+        return role == http_field_list_role::recipient && is_valid_http_transfer_parameter(parameter);
+    });
 }
 
-[[nodiscard]] inline bool is_valid_http_te_field_value(
-    std::string_view value, http_field_list_role role) noexcept {
+[[nodiscard]] inline bool is_valid_http_te_field_value(std::string_view value, http_field_list_role role) noexcept {
     // RFC 9112 section 7.4 explicitly permits an empty TE field. It advertises
     // no optional transfer coding; chunked remains implicitly acceptable.
     if (http_trim_ows(value).empty()) {
@@ -2239,8 +2132,7 @@ namespace ruvia::detail {
 
     // A client generating TE is held to the sender's no-empty-member rule.
     return http_visit_list_members(value, role, [role](std::string_view item) noexcept {
-        return is_valid_http_te_field_item(item, role) ? http_field_list_parse_status::ok
-                                                       : http_field_list_parse_status::malformed;
+        return is_valid_http_te_field_item(item, role) ? http_field_list_parse_status::ok : http_field_list_parse_status::malformed;
     }) == http_field_list_parse_status::ok;
 }
 
@@ -2250,13 +2142,11 @@ namespace ruvia::detail {
 // 2.1); list members are OWS-trimmed (RFC 9110 section 5.6.1). Recipients
 // ignore empty members and accept empty lists (RFC 9110 section 10.1.4).
 // This sender API requires a nonempty list without empty members.
-[[nodiscard]] inline bool is_valid_binary_http_te_field_value(
-    std::string_view value, http_field_list_role role) noexcept {
+[[nodiscard]] inline bool is_valid_binary_http_te_field_value(std::string_view value, http_field_list_role role) noexcept {
     bool has_member = false;
     const auto status = http_visit_list_members(value, role, [&has_member](std::string_view member) noexcept {
         has_member = true;
-        return http_ascii_equals_ignore_case(member, "trailers") ? http_field_list_parse_status::ok
-                                                                 : http_field_list_parse_status::malformed;
+        return http_ascii_equals_ignore_case(member, "trailers") ? http_field_list_parse_status::ok : http_field_list_parse_status::malformed;
     });
     return status == http_field_list_parse_status::ok && (role == http_field_list_role::recipient || has_member);
 }
@@ -2332,52 +2222,42 @@ inline constexpr auto binary_field_name_char_table = [] {
 
 // http(s) target URIs carry a mandatory, non-empty authority with Host
 // syntax; other schemes may carry any RFC 3986 authority.
-[[nodiscard]] inline bool is_valid_binary_request_authority(
-    std::string_view scheme, std::string_view authority) noexcept {
+[[nodiscard]] inline bool is_valid_binary_request_authority(std::string_view scheme, std::string_view authority) noexcept {
     if (is_http_request_scheme(scheme)) {
         return !authority.empty() && is_valid_host_header(authority);
     }
     return is_valid_uri_authority(authority);
 }
 
-[[nodiscard]] inline bool binary_regular_request_requires_authority(
-    std::string_view scheme, std::string_view path) noexcept {
+[[nodiscard]] inline bool binary_regular_request_requires_authority(std::string_view scheme, std::string_view path) noexcept {
     return path != "*" && is_http_request_scheme(scheme);
 }
 
 // HTTP(S) already uses Host syntax; other schemes can contain URI userinfo.
-[[nodiscard]] inline bool binary_request_synthesizes_host(bool has_host, bool has_authority,
-    std::string_view scheme, std::string_view authority) noexcept {
-    return !has_host && has_authority &&
-           (is_http_request_scheme(scheme) || is_valid_host_header(authority));
+[[nodiscard]] inline bool binary_request_synthesizes_host(bool has_host, bool has_authority, std::string_view scheme, std::string_view authority) noexcept {
+    return !has_host && has_authority && (is_http_request_scheme(scheme) || is_valid_host_header(authority));
 }
 
 // RFC 8441 §4 / RFC 9220 §3: websocket extended CONNECT requires an HTTP(S) URI
 // scheme; other extended protocols retain the full RFC 3986 space.
-[[nodiscard]] inline bool is_valid_extended_connect_scheme(
-    std::string_view protocol, std::string_view scheme) noexcept {
+[[nodiscard]] inline bool is_valid_extended_connect_scheme(std::string_view protocol, std::string_view scheme) noexcept {
     return !http_ascii_equals_ignore_case(protocol, "websocket") || is_http_request_scheme(scheme);
 }
 
-[[nodiscard]] inline bool validate_binary_request_authority_and_host(
-    std::string_view scheme, std::string_view path, bool has_authority, std::string_view authority,
-    bool has_host, std::string_view host) noexcept {
+[[nodiscard]] inline bool validate_binary_request_authority_and_host(std::string_view scheme, std::string_view path, bool has_authority, std::string_view authority, bool has_host, std::string_view host) noexcept {
     if (has_authority && !is_valid_binary_request_authority(scheme, authority)) {
         return false;
     }
-    if (!has_authority && binary_regular_request_requires_authority(scheme, path) &&
-        (!has_host || !is_valid_binary_request_authority(scheme, host))) {
+    if (!has_authority && binary_regular_request_requires_authority(scheme, path) && (!has_host || !is_valid_binary_request_authority(scheme, host))) {
         return false;
     }
-    return !has_authority || !has_host ||
-           authority_matches_host(authority, host, http_uri_scheme_default_port(scheme));
+    return !has_authority || !has_host || authority_matches_host(authority, host, http_uri_scheme_default_port(scheme));
 }
 
 // Joins split binary (RFC 9113 §8.2.3, RFC 9114 §4.2.1) Cookie crumbs with "; "
 // within max_http_header_bytes. When `first_crumb` is non-empty and `joined` is
 // still empty, `first_crumb` is materialized before appending the second crumb.
-[[nodiscard]] inline bool append_binary_cookie_crumb(std::string& joined,
-    std::string_view value, bool has_existing_cookie, std::string_view first_crumb = {}) {
+[[nodiscard]] inline bool append_binary_cookie_crumb(std::string& joined, std::string_view value, bool has_existing_cookie, std::string_view first_crumb = {}) {
     if (value.empty()) {
         return true;
     }
@@ -2391,8 +2271,7 @@ inline constexpr auto binary_field_name_char_table = [] {
     }
     constexpr std::string_view cookie_separator = "; ";
     const auto prefix_bytes = joined.empty() ? first_crumb.size() : joined.size();
-    if (prefix_bytes > max_http_header_bytes - cookie_separator.size() ||
-        value.size() > max_http_header_bytes - cookie_separator.size() - prefix_bytes) {
+    if (prefix_bytes > max_http_header_bytes - cookie_separator.size() || value.size() > max_http_header_bytes - cookie_separator.size() - prefix_bytes) {
         return false;
     }
     reserve_geometric(joined, prefix_bytes + cookie_separator.size() + value.size());
@@ -2427,16 +2306,15 @@ enum class request_field_status : std::uint8_t {
 // TE rules apply. One instance spans exactly one request header section.
 class request_field_state final {
 public:
-    explicit request_field_state(request_field_framing framing) noexcept
-        : framing_(framing) {}
+    explicit request_field_state(request_field_framing framing) noexcept :
+        framing_(framing) {}
 
     // True once a field that may occur only once (Host and every
     // singleton_request_header_bit() kind) has been validated.
     [[nodiscard]] bool seen(http_field_kind kind) const noexcept;
 
 private:
-    friend request_field_status validate_request_field(http_field_kind kind, std::string_view value,
-        http_field_list_role role, request_field_state& state, http_request_field_source source) noexcept;
+    friend request_field_status validate_request_field(http_field_kind kind, std::string_view value, http_field_list_role role, request_field_state& state, http_request_field_source source) noexcept;
 
     std::uint32_t seen_{0};
     request_field_framing framing_;
@@ -2449,12 +2327,9 @@ private:
 // framing state (Content-Length values on receipt, Transfer-Encoding,
 // Connection, Upgrade), Host/:authority agreement, cookie joining, and parsing
 // accepted Expect members.
-[[nodiscard]] request_field_status validate_request_field(http_field_kind kind, std::string_view value,
-    http_field_list_role role, request_field_state& state,
-    http_request_field_source source = http_request_field_source::generated) noexcept;
+[[nodiscard]] request_field_status validate_request_field(http_field_kind kind, std::string_view value, http_field_list_role role, request_field_state& state, http_request_field_source source = http_request_field_source::generated) noexcept;
 
-[[nodiscard]] bool is_protocol_managed_request_field(
-    http_field_kind kind, std::string_view name) noexcept;
+[[nodiscard]] bool is_protocol_managed_request_field(http_field_kind kind, std::string_view name) noexcept;
 }  // namespace ruvia::detail
 
 namespace ruvia::detail {
@@ -2472,27 +2347,21 @@ struct http_request_access final {
         return slot < cached_header_slots ? slot : cached_header_slots;
     }
 
-    [[nodiscard]] static std::string_view known_header(
-        const http_request& request, http_field_kind name) noexcept {
+    [[nodiscard]] static std::string_view known_header(const http_request& request, http_field_kind name) noexcept {
         const auto slot = known_header_slot(name);
         if (slot >= cached_header_slots) {
             return {};
         }
         const auto index = request.cached_headers_[slot];
-        return index != 0 && index <= request.headers_.size()
-                   ? request.headers_[index - 1].value()
-                   : std::string_view{};
+        return index != 0 && index <= request.headers_.size() ? request.headers_[index - 1].value() : std::string_view{};
     }
 
-    [[nodiscard]] static bool has_known_header(
-        const http_request& request, http_field_kind name) noexcept {
+    [[nodiscard]] static bool has_known_header(const http_request& request, http_field_kind name) noexcept {
         const auto slot = known_header_slot(name);
-        return slot < cached_header_slots && request.cached_headers_[slot] != 0 &&
-               request.cached_headers_[slot] <= request.headers_.size();
+        return slot < cached_header_slots && request.cached_headers_[slot] != 0 && request.cached_headers_[slot] <= request.headers_.size();
     }
 
-    [[nodiscard]] static bool has_repeated_known_header(
-        const http_request& request, http_field_kind name) noexcept {
+    [[nodiscard]] static bool has_repeated_known_header(const http_request& request, http_field_kind name) noexcept {
         const auto slot = known_header_slot(name);
         return slot < cached_header_slots && request.headers_.has_repeated_known_slot(slot);
     }
@@ -2501,8 +2370,7 @@ struct http_request_access final {
     // returns false as soon as the visitor does. A non-repeated field is served
     // from the cache; repeated fields scan only up to the cached last line.
     template <typename visitor_type>
-    static bool visit_known_headers(
-        const http_request& request, http_field_kind name, visitor_type&& visitor) {
+    static bool visit_known_headers(const http_request& request, http_field_kind name, visitor_type&& visitor) {
         const auto slot = known_header_slot(name);
         if (slot >= cached_header_slots) {
             return true;
@@ -2556,8 +2424,7 @@ struct http_request_access final {
         request.query_string_ = query_string;
     }
 
-    static void set_protocol_version(
-        http_request& request, http_protocol_version protocol_version) noexcept {
+    static void set_protocol_version(http_request& request, http_protocol_version protocol_version) noexcept {
         request.protocol_version_ = protocol_version;
     }
 
@@ -2569,14 +2436,12 @@ struct http_request_access final {
         request.headers_.reserve(count);
     }
 
-    static bool add_header(
-        http_request& request, http_header_view header_value, http_field_kind kind) {
+    static bool add_header(http_request& request, http_header_view header_value, http_field_kind kind) {
         if (request.headers_.size() == (std::numeric_limits<std::uint16_t>::max)()) {
             return false;
         }
         const auto known_slot = known_header_slot(kind);
-        request.headers_.append(
-            header_value, known_slot < cached_header_slots ? kind : http_field_kind::other);
+        request.headers_.append(header_value, known_slot < cached_header_slots ? kind : http_field_kind::other);
         if (known_slot < cached_header_slots) {
             if (request.cached_headers_[known_slot] != 0) {
                 request.headers_.mark_repeated_known_slot(known_slot);
@@ -2586,8 +2451,7 @@ struct http_request_access final {
         return true;
     }
 
-    [[nodiscard]] static http_field_kind header_kind(
-        const http_request& request, std::size_t index) noexcept {
+    [[nodiscard]] static http_field_kind header_kind(const http_request& request, std::size_t index) noexcept {
         return request.headers_.kind_at(index);
     }
 
@@ -2617,9 +2481,7 @@ struct binary_request_materialization_spec final {
 };
 
 template <typename header_accessor_type>
-[[nodiscard]] inline http_request materialize_binary_http_request(
-    const binary_request_materialization_spec& spec,
-    header_accessor_type&& header_at) {
+[[nodiscard]] inline http_request materialize_binary_http_request(const binary_request_materialization_spec& spec, header_accessor_type&& header_at) {
     auto request = http_request_access::make();
     if (spec.method_.empty()) {
         throw std::logic_error(spec.failure_message_);
@@ -2651,10 +2513,8 @@ template <typename header_accessor_type>
 
     // A non-HTTP target can carry an authority that is not legal Host syntax;
     // never manufacture an invalid regular field from that distinct grammar.
-    const bool synthesize_host = binary_request_synthesizes_host(
-        spec.has_host_, spec.has_authority_, spec.scheme_, spec.authority_);
-    const auto header_count = spec.regular_header_count_ + static_cast<std::size_t>(synthesize_host) +
-                              static_cast<std::size_t>(spec.has_cookie_);
+    const bool synthesize_host = binary_request_synthesizes_host(spec.has_host_, spec.has_authority_, spec.scheme_, spec.authority_);
+    const auto header_count = spec.regular_header_count_ + static_cast<std::size_t>(synthesize_host) + static_cast<std::size_t>(spec.has_cookie_);
     if (header_count > (std::numeric_limits<std::uint16_t>::max)()) {
         throw std::logic_error(spec.failure_message_);
     }
@@ -2665,14 +2525,10 @@ template <typename header_accessor_type>
             throw std::logic_error(spec.failure_message_);
         }
     }
-    if (synthesize_host &&
-        !http_request_access::add_header(
-            request, http_header_view{"host", spec.authority_}, http_field_kind::host)) {
+    if (synthesize_host && !http_request_access::add_header(request, http_header_view{"host", spec.authority_}, http_field_kind::host)) {
         throw std::logic_error(spec.failure_message_);
     }
-    if (spec.has_cookie_ &&
-        !http_request_access::add_header(
-            request, http_header_view{"cookie", spec.cookie_}, http_field_kind::cookie)) {
+    if (spec.has_cookie_ && !http_request_access::add_header(request, http_header_view{"cookie", spec.cookie_}, http_field_kind::cookie)) {
         throw std::logic_error(spec.failure_message_);
     }
     return request;
@@ -2695,27 +2551,22 @@ using websocket_accept_key_type = std::array<char, 28>;
 // size_t arithmetic used by the incremental implementation.
 void encode_websocket_accept(websocket_accept_key_type& output, std::string_view key);
 
-[[nodiscard]] bool append_websocket_extension_list(
-    std::string_view value, bool& has_extension) noexcept;
-[[nodiscard]] std::string_view choose_websocket_subprotocol(
-    const websocket_subprotocol_set& offered,
-    std::span<const std::string_view> supported) noexcept;
-[[nodiscard]] std::string_view choose_websocket_subprotocol(
-    const http_request& request, std::span<const std::string_view> supported) noexcept;
+[[nodiscard]] bool append_websocket_extension_list(std::string_view value, bool& has_extension) noexcept;
+[[nodiscard]] std::string_view choose_websocket_subprotocol(const websocket_subprotocol_set& offered, std::span<const std::string_view> supported) noexcept;
+[[nodiscard]] std::string_view choose_websocket_subprotocol(const http_request& request, std::span<const std::string_view> supported) noexcept;
 
 // Request-side Sec-WebSocket-* field checks. A recipient (server) skips a
 // repeated offered subprotocol; a sender (client) must offer unique ones
 // (RFC 6455 section 4.1).
 class websocket_request_header_validator final {
 public:
-    explicit websocket_request_header_validator(http_field_list_role role) noexcept
-        : role_(role) {}
+    explicit websocket_request_header_validator(http_field_list_role role) noexcept :
+        role_(role) {}
 
     [[nodiscard]] bool observe_header(http_field_kind kind, std::string_view value) noexcept;
     [[nodiscard]] bool offers_valid() const noexcept;
     [[nodiscard]] bool client_offers_valid() const noexcept;
-    [[nodiscard]] websocket_handshake_validation_result finish(
-        websocket_handshake_validation_options options = {}) const noexcept;
+    [[nodiscard]] websocket_handshake_validation_result finish(websocket_handshake_validation_options options = {}) const noexcept;
 
 private:
     websocket_subprotocol_set protocols_{};
@@ -2728,8 +2579,7 @@ private:
     bool has_extension_{false};
 };
 
-[[nodiscard]] websocket_handshake_validation_result validate_extended_connect_websocket_headers(
-    const http_request& request, websocket_handshake_validation_options options = {}) noexcept;
+[[nodiscard]] websocket_handshake_validation_result validate_extended_connect_websocket_headers(const http_request& request, websocket_handshake_validation_options options = {}) noexcept;
 }  // namespace detail
 }  // namespace ruvia
 
@@ -2752,8 +2602,7 @@ enum class websocket_protocol_failure : std::uint16_t {
     message_too_large = 1009,
 };
 
-[[nodiscard]] constexpr std::uint16_t websocket_protocol_failure_close_code(
-    websocket_protocol_failure failure) noexcept {
+[[nodiscard]] constexpr std::uint16_t websocket_protocol_failure_close_code(websocket_protocol_failure failure) noexcept {
     return static_cast<std::uint16_t>(failure);
 }
 
@@ -2784,13 +2633,12 @@ public:
     }
 
 private:
-    friend std::optional<websocket_frame_start> decode_websocket_frame_start(
-        unsigned char, unsigned char, bool, bool) noexcept;
+    friend std::optional<websocket_frame_start> decode_websocket_frame_start(unsigned char, unsigned char, bool, bool) noexcept;
 
-    constexpr websocket_frame_start(websocket_frame_kind kind, bool final, bool compressed) noexcept
-        : kind_(kind),
-          final_(final),
-          compressed_(compressed) {}
+    constexpr websocket_frame_start(websocket_frame_kind kind, bool final, bool compressed) noexcept :
+        kind_(kind),
+        final_(final),
+        compressed_(compressed) {}
 
     websocket_frame_kind kind_;
     bool final_;
@@ -2808,28 +2656,23 @@ private:
 // allow_rsv1 enables the RSV1 (compressed) bit when permessage-deflate is
 // negotiated; it is valid only on the first frame of a data message, never on a
 // continuation or control frame (RFC 7692 §6.1). RSV2/RSV3 are always rejected.
-[[nodiscard]] inline std::optional<websocket_frame_start> decode_websocket_frame_start(
-    unsigned char first, unsigned char second, bool allow_rsv1, bool expect_masked) noexcept {
+[[nodiscard]] inline std::optional<websocket_frame_start> decode_websocket_frame_start(unsigned char first, unsigned char second, bool allow_rsv1, bool expect_masked) noexcept {
     const auto raw_opcode = static_cast<std::uint8_t>(first & 0x0FU);
     const bool rsv1 = (first & 0x40U) != 0;
-    if ((first & 0x30U) != 0 || ((second & 0x80U) != 0) != expect_masked ||
-        is_invalid_websocket_raw_opcode(raw_opcode)) {
+    if ((first & 0x30U) != 0 || ((second & 0x80U) != 0) != expect_masked || is_invalid_websocket_raw_opcode(raw_opcode)) {
         return std::nullopt;
     }
     if (rsv1 && (!allow_rsv1 || raw_opcode == 0 || raw_opcode >= 0x8)) {
         return std::nullopt;
     }
-    return websocket_frame_start(
-        static_cast<websocket_frame_kind>(raw_opcode), (first & 0x80U) != 0, rsv1);
+    return websocket_frame_start(static_cast<websocket_frame_kind>(raw_opcode), (first & 0x80U) != 0, rsv1);
 }
 
-[[nodiscard]] inline bool is_invalid_websocket_control_frame(
-    const websocket_frame_start& frame, std::uint64_t payload_size) noexcept {
+[[nodiscard]] inline bool is_invalid_websocket_control_frame(const websocket_frame_start& frame, std::uint64_t payload_size) noexcept {
     return is_websocket_control_frame_kind(frame.kind()) && (!frame.final() || payload_size > 125);
 }
 
-[[nodiscard]] inline bool websocket_frame_length_exceeds_limit(
-    std::uint64_t payload_size, protocol_byte_limit message_limit) noexcept {
+[[nodiscard]] inline bool websocket_frame_length_exceeds_limit(std::uint64_t payload_size, protocol_byte_limit message_limit) noexcept {
     if (payload_size > static_cast<std::uint64_t>((std::numeric_limits<std::size_t>::max)())) {
         return true;
     }
@@ -2842,20 +2685,15 @@ private:
 // limit to control frames would reject a legal Ping/Pong, or a Close carrying a
 // reason phrase, once max_message_bytes_ drops below 125 -- silently breaking the
 // close handshake and keepalive on a small-message configuration.
-[[nodiscard]] inline bool websocket_frame_exceeds_message_limit(
-    websocket_frame_kind kind, std::uint64_t payload_size, protocol_byte_limit message_limit) noexcept {
-    return !is_websocket_control_frame_kind(kind) &&
-           websocket_frame_length_exceeds_limit(payload_size, message_limit);
+[[nodiscard]] inline bool websocket_frame_exceeds_message_limit(websocket_frame_kind kind, std::uint64_t payload_size, protocol_byte_limit message_limit) noexcept {
+    return !is_websocket_control_frame_kind(kind) && websocket_frame_length_exceeds_limit(payload_size, message_limit);
 }
 
 [[nodiscard]] inline std::uint16_t read_websocket_uint16(const char* data) noexcept {
-    return static_cast<std::uint16_t>(
-        (static_cast<std::uint16_t>(static_cast<unsigned char>(data[0])) << 8) |
-        static_cast<unsigned char>(data[1]));
+    return static_cast<std::uint16_t>((static_cast<std::uint16_t>(static_cast<unsigned char>(data[0])) << 8) | static_cast<unsigned char>(data[1]));
 }
 
-[[nodiscard]] constexpr std::variant<std::uint64_t, websocket_protocol_failure> read_websocket_uint64(
-    std::span<const char, 8> data) noexcept {
+[[nodiscard]] constexpr std::variant<std::uint64_t, websocket_protocol_failure> read_websocket_uint64(std::span<const char, 8> data) noexcept {
     if ((static_cast<unsigned char>(data[0]) & 0x80U) != 0) {
         return websocket_protocol_failure::protocol_error;
     }
@@ -2867,8 +2705,7 @@ private:
 }
 
 // `opcode_bits` is 0 for a continuation frame (RFC 6455 section 5.4).
-[[nodiscard]] inline std::size_t encode_websocket_frame_header(websocket_frame_header_type& header_value,
-    std::uint8_t opcode_bits, bool final, std::size_t payload_size, bool rsv1, bool masked) noexcept {
+[[nodiscard]] inline std::size_t encode_websocket_frame_header(websocket_frame_header_type& header_value, std::uint8_t opcode_bits, bool final, std::size_t payload_size, bool rsv1, bool masked) noexcept {
     std::size_t header_size = 0;
     header_value[header_size++] = static_cast<char>((final ? 0x80U : 0U) | (rsv1 ? 0x40U : 0U) | opcode_bits);
     if (payload_size <= 125) {
@@ -2891,8 +2728,7 @@ private:
 // The key is replicated into wider words loaded and stored through memcpy, which
 // is valid at any alignment and aliasing and keeps the byte order intact on any
 // endianness; the tail shorter than a word is masked bytewise.
-inline void decode_masked_websocket_payload(
-    char* payload_value, std::size_t payload_size, const char* mask) noexcept {
+inline void decode_masked_websocket_payload(char* payload_value, std::size_t payload_size, const char* mask) noexcept {
     std::array<char, 8> key_bytes;
     std::memcpy(key_bytes.data(), mask, 4);
     std::memcpy(key_bytes.data() + 4, mask, 4);
@@ -2941,8 +2777,7 @@ namespace ruvia::detail {
 // the raw-DEFLATE blocks to `out`. At the message end the trailing
 // 0x00 0x00 0xFF 0xFF flush marker is removed (RFC 7692 §7.2.1); earlier
 // fragments keep it, which the receiver inflates as an empty stored block.
-[[nodiscard]] inline bool websocket_deflate_message(zlib_deflate_stream& deflater, std::string_view input,
-    std::string& out, bool message_end = true) {
+[[nodiscard]] inline bool websocket_deflate_message(zlib_deflate_stream& deflater, std::string_view input, std::string& out, bool message_end = true) {
     std::optional<std::string> owned_input;
     if (http_text_aliases_string(input, out)) {
         input = owned_input.emplace(input);
@@ -2968,8 +2803,7 @@ namespace ruvia::detail {
         if (stream.avail_out != 0 && stream.avail_in == 0 && supplied == input.size()) {
             break;
         }
-        if (produced == 0 && stream.avail_in == before_input &&
-            !(stream.avail_in == 0 && supplied < input.size())) {
+        if (produced == 0 && stream.avail_in == before_input && !(stream.avail_in == 0 && supplied < input.size())) {
             return false;
         }
     }
@@ -2987,8 +2821,7 @@ namespace ruvia::detail {
 
 // One inflate pass over `data`; the message limit covers everything appended
 // to `out` since `start`.
-[[nodiscard]] inline websocket_inflate_result websocket_inflate_chunk(zlib_inflate_stream& inflater, const char* data,
-    std::size_t size, std::string& out, std::size_t start, protocol_byte_limit message_limit) {
+[[nodiscard]] inline websocket_inflate_result websocket_inflate_chunk(zlib_inflate_stream& inflater, const char* data, std::size_t size, std::string& out, std::size_t start, protocol_byte_limit message_limit) {
     auto& stream = inflater.native();
     const zlib_borrow_scope borrow(stream);
     stream.avail_in = 0;
@@ -3018,8 +2851,7 @@ namespace ruvia::detail {
         if (stream.avail_out != 0 && stream.avail_in == 0 && supplied == size) {
             break;
         }
-        if (produced == 0 && stream.avail_in == before_input &&
-            !(stream.avail_in == 0 && supplied < size)) {
+        if (produced == 0 && stream.avail_in == before_input && !(stream.avail_in == 0 && supplied < size)) {
             return websocket_inflate_result::error;
         }
     }
@@ -3030,22 +2862,17 @@ namespace ruvia::detail {
 // the sender stripped, then raw-inflates into `out`, bounded by one explicit
 // message limit across the appended bytes to defuse decompression bombs
 // (RFC 7692 §7.2.2).
-[[nodiscard]] inline websocket_inflate_result websocket_inflate_message(zlib_inflate_stream& inflater,
-    std::string_view input, std::string& out, protocol_byte_limit message_limit) {
+[[nodiscard]] inline websocket_inflate_result websocket_inflate_message(zlib_inflate_stream& inflater, std::string_view input, std::string& out, protocol_byte_limit message_limit) {
     static constexpr unsigned char flush_marker[4] = {0x00, 0x00, 0xFF, 0xFF};
     std::optional<std::string> owned_input;
     if (http_text_aliases_string(input, out)) {
         input = owned_input.emplace(input);
     }
     const auto start = out.size();
-    if (const auto result_value = websocket_inflate_chunk(
-            inflater, input.data(), input.size(), out, start, message_limit);
-        result_value != websocket_inflate_result::ok) {
+    if (const auto result_value = websocket_inflate_chunk(inflater, input.data(), input.size(), out, start, message_limit); result_value != websocket_inflate_result::ok) {
         return result_value;
     }
-    if (const auto result_value = websocket_inflate_chunk(inflater,
-            reinterpret_cast<const char*>(flush_marker), sizeof(flush_marker), out, start, message_limit);
-        result_value != websocket_inflate_result::ok) {
+    if (const auto result_value = websocket_inflate_chunk(inflater, reinterpret_cast<const char*>(flush_marker), sizeof(flush_marker), out, start, message_limit); result_value != websocket_inflate_result::ok) {
         return result_value;
     }
     // zlib reports bit 128 only at a complete DEFLATE block boundary.
@@ -3066,15 +2893,13 @@ namespace ruvia::detail {
 // deflater (validate_websocket_deflater_config) and windows (8-15).
 class websocket_deflate final {
 public:
-    websocket_deflate(websocket_deflate_codecs* shared,
-        websocket_deflater_config deflater, bool send_takeover, bool receive_takeover, int send_window,
-        int receive_window) noexcept
-        : shared_(shared),
-          deflater_config_(deflater),
-          send_window_(send_window),
-          receive_window_(receive_window),
-          send_takeover_(send_takeover),
-          receive_takeover_(receive_takeover) {}
+    websocket_deflate(websocket_deflate_codecs* shared, websocket_deflater_config deflater, bool send_takeover, bool receive_takeover, int send_window, int receive_window) noexcept :
+        shared_(shared),
+        deflater_config_(deflater),
+        send_window_(send_window),
+        receive_window_(receive_window),
+        send_takeover_(send_takeover),
+        receive_takeover_(receive_takeover) {}
 
     websocket_deflate(const websocket_deflate&) = delete;
     websocket_deflate& operator=(const websocket_deflate&) = delete;
@@ -3087,9 +2912,7 @@ public:
             return shared_->deflate_message(input, out, deflater_config_.compression_level_, send_window_);
         }
         if (deflater_ == nullptr) {
-            deflater_ = std::make_unique<zlib_deflate_stream>(
-                deflater_config_.compression_level_, websocket_deflate_zlib_window_bits(send_window_),
-                deflater_config_.mem_level_, websocket_deflate_zlib_strategy(send_window_));
+            deflater_ = std::make_unique<zlib_deflate_stream>(deflater_config_.compression_level_, websocket_deflate_zlib_window_bits(send_window_), deflater_config_.mem_level_, websocket_deflate_zlib_strategy(send_window_));
             if (!deflater_->initialized()) {
                 deflater_.reset();
                 return false;
@@ -3106,9 +2929,7 @@ public:
     // dictionary at its first fragment unless context takeover applies.
     bool compress_fragment(std::string_view input, bool first, bool final, std::string& out) {
         if (deflater_ == nullptr) {
-            deflater_ = std::make_unique<zlib_deflate_stream>(
-                deflater_config_.compression_level_, websocket_deflate_zlib_window_bits(send_window_),
-                deflater_config_.mem_level_, websocket_deflate_zlib_strategy(send_window_));
+            deflater_ = std::make_unique<zlib_deflate_stream>(deflater_config_.compression_level_, websocket_deflate_zlib_window_bits(send_window_), deflater_config_.mem_level_, websocket_deflate_zlib_strategy(send_window_));
             if (!deflater_->initialized()) {
                 deflater_.reset();
                 return false;
@@ -3119,8 +2940,7 @@ public:
         return websocket_deflate_message(*deflater_, input, out, final);
     }
 
-    websocket_inflate_result decompress(
-        std::string_view input, std::string& out, protocol_byte_limit message_limit) {
+    websocket_inflate_result decompress(std::string_view input, std::string& out, protocol_byte_limit message_limit) {
         if (!receive_takeover_ && shared_ != nullptr) {
             // The shared inflater has a 15-bit window, which also inflates
             // every smaller negotiated window.
@@ -3161,8 +2981,7 @@ private:
 
 // Decode RFC 7692 window parameters (8 through 15), including quoted tokens.
 // The negotiated send and receive bounds are independent of takeover policy.
-[[nodiscard]] inline std::optional<int> websocket_deflate_window_bits(
-    std::string_view value) noexcept {
+[[nodiscard]] inline std::optional<int> websocket_deflate_window_bits(std::string_view value) noexcept {
     value = http_trim_ows(value);
     int parsed_value = 0;
     std::size_t digits = 0;
@@ -3218,8 +3037,7 @@ struct permessage_deflate_params final {
 // at most once and carries a value exactly where RFC 7692 defines one (an
 // undefined or malformed parameter cannot be negotiated). Returns nullopt for
 // another extension or a malformed element; role policy is left to callers.
-[[nodiscard]] inline std::optional<permessage_deflate_params> parse_permessage_deflate_params(
-    std::string_view element) noexcept {
+[[nodiscard]] inline std::optional<permessage_deflate_params> parse_permessage_deflate_params(std::string_view element) noexcept {
     const auto name = http_header_token_before_parameters(element);
     if (!http_ascii_equals_ignore_case(name, "permessage-deflate")) {
         return std::nullopt;
@@ -3230,8 +3048,7 @@ struct permessage_deflate_params final {
         const auto equals = parameter.find('=');
         const bool has_value = equals != std::string_view::npos;
         const auto parameter_name = http_trim_ows(parameter.substr(0, equals));
-        const auto parameter_value =
-            has_value ? http_trim_ows(parameter.substr(equals + 1)) : std::string_view{};
+        const auto parameter_value = has_value ? http_trim_ows(parameter.substr(equals + 1)) : std::string_view{};
 
         switch (parameter_name.size()) {
             case 22:
@@ -3281,8 +3098,7 @@ struct permessage_deflate_params final {
 
 // Server role: an offered client_max_window_bits, with or without a value, is
 // accepted but never echoed in the response.
-[[nodiscard]] inline std::optional<websocket_compression> websocket_parse_deflate_offer(
-    std::string_view offer, bool context_takeover) noexcept {
+[[nodiscard]] inline std::optional<websocket_compression> websocket_parse_deflate_offer(std::string_view offer, bool context_takeover) noexcept {
     const auto params = parse_permessage_deflate_params(offer);
     if (!params.has_value()) {
         return std::nullopt;
@@ -3295,8 +3111,7 @@ struct permessage_deflate_params final {
     return accepted;
 }
 
-[[nodiscard]] inline websocket_compression websocket_scan_deflate_offers(
-    std::string_view offers, bool context_takeover) noexcept {
+[[nodiscard]] inline websocket_compression websocket_scan_deflate_offers(std::string_view offers, bool context_takeover) noexcept {
     std::optional<websocket_compression> accepted;
     http_visit_comma_separated_quoted_field_items(offers, [&accepted, context_takeover](std::string_view offer) noexcept {
         if (offer.empty()) {
@@ -3308,8 +3123,7 @@ struct permessage_deflate_params final {
     return accepted.value_or((websocket_compression{}));
 }
 
-[[nodiscard]] inline websocket_compression websocket_negotiate_permessage_deflate(
-    const http_request& request, websocket_deflate_config config) {
+[[nodiscard]] inline websocket_compression websocket_negotiate_permessage_deflate(const http_request& request, websocket_deflate_config config) {
     validate_websocket_deflater_config(config.deflater_);
     if (!config.enabled_) {
         return (websocket_compression{});
@@ -3320,17 +3134,15 @@ struct permessage_deflate_params final {
     // extension list while honoring the first acceptable permessage-deflate offer.
     bool has_extension = false;
     websocket_compression negotiated{};
-    const bool valid = http_request_access::visit_known_headers(request,
-        http_field_kind::sec_websocket_extensions,
-        [&has_extension, &negotiated, &config](std::string_view value) noexcept {
-            if (!append_websocket_extension_list(value, has_extension)) {
-                return false;
-            }
-            if (!negotiated.enabled_) {
-                negotiated = websocket_scan_deflate_offers(value, config.context_takeover_);
-            }
-            return true;
-        });
+    const bool valid = http_request_access::visit_known_headers(request, http_field_kind::sec_websocket_extensions, [&has_extension, &negotiated, &config](std::string_view value) noexcept {
+        if (!append_websocket_extension_list(value, has_extension)) {
+            return false;
+        }
+        if (!negotiated.enabled_) {
+            negotiated = websocket_scan_deflate_offers(value, config.context_takeover_);
+        }
+        return true;
+    });
     return valid && has_extension ? negotiated : (websocket_compression{});
 }
 
@@ -3379,11 +3191,9 @@ public:
     }
 
 private:
-    friend websocket_server_negotiation make_websocket_server_negotiation(
-        const http_request&, const websocket_server_handshake_options&);
+    friend websocket_server_negotiation make_websocket_server_negotiation(const http_request&, const websocket_server_handshake_options&);
 
-    websocket_server_negotiation(std::string_view subprotocol, websocket_compression compression,
-        std::span<const http_header_view> response_headers_value);
+    websocket_server_negotiation(std::string_view subprotocol, websocket_compression compression, std::span<const http_header_view> response_headers_value);
 
     std::string subprotocol_;
     websocket_compression compression_;
@@ -3392,15 +3202,13 @@ private:
 };
 
 // Copies the selected subprotocol and response fields.
-[[nodiscard]] websocket_server_negotiation make_websocket_server_negotiation(
-    const http_request& request, const websocket_server_handshake_options& options);
+[[nodiscard]] websocket_server_negotiation make_websocket_server_negotiation(const http_request& request, const websocket_server_handshake_options& options);
 
 }  // namespace ruvia::detail
 
 namespace ruvia::detail {
 
-[[nodiscard]] constexpr http_response_content_semantics classify_http_response_content_semantics(
-    http_known_method request_method, http_status_code status_code) noexcept {
+[[nodiscard]] constexpr http_response_content_semantics classify_http_response_content_semantics(http_known_method request_method, http_status_code status_code) noexcept {
     if (status_code == http_status::switching_protocols) {
         return http_response_content_semantics::protocol_switch;
     }
@@ -3410,8 +3218,7 @@ namespace ruvia::detail {
     if (request_method == http_known_method::connect && status_code.is_successful()) {
         return http_response_content_semantics::connect_tunnel;
     }
-    if (request_method == http_known_method::head || status_code == http_status::no_content ||
-        status_code == http_status::not_modified) {
+    if (request_method == http_known_method::head || status_code == http_status::no_content || status_code == http_status::not_modified) {
         return http_response_content_semantics::without_content;
     }
     return http_response_content_semantics::with_content;
@@ -3434,21 +3241,18 @@ struct http_response_header_state_access final {
         return headers.known_header_bits_;
     }
 
-    [[nodiscard]] static const http_response_header* known_header(
-        const http_response_headers& headers, std::uint32_t bit) noexcept {
+    [[nodiscard]] static const http_response_header* known_header(const http_response_headers& headers, std::uint32_t bit) noexcept {
         return headers.find_header_for_read({}, bit);
     }
 
-    [[nodiscard]] static std::string_view known_header_value(
-        const http_response_headers& headers, std::uint32_t bit) noexcept {
+    [[nodiscard]] static std::string_view known_header_value(const http_response_headers& headers, std::uint32_t bit) noexcept {
         const auto* const header_value = known_header(headers, bit);
         return header_value == nullptr ? std::string_view{} : header_value->value();
     }
 };
 
 struct http_response_header_access final {
-    [[nodiscard]] static constexpr http_response_header make(const char* bytes_value, std::uint32_t name_size,
-        std::uint32_t value_size, std::uint32_t known_bit, bool owned) noexcept {
+    [[nodiscard]] static constexpr http_response_header make(const char* bytes_value, std::uint32_t name_size, std::uint32_t value_size, std::uint32_t known_bit, bool owned) noexcept {
         http_response_header header_value{};
         header_value.bytes_ = bytes_value;
         header_value.name_size_ = name_size;
@@ -3488,13 +3292,11 @@ struct http_response_header_access final {
     return http_response_header_state_access::known_bits(response.headers());
 }
 
-[[nodiscard]] inline bool response_has_known_header(
-    const http_response_headers& headers, std::uint32_t bit) noexcept {
+[[nodiscard]] inline bool response_has_known_header(const http_response_headers& headers, std::uint32_t bit) noexcept {
     return (http_response_header_state_access::known_bits(headers) & bit) != 0;
 }
 
-[[nodiscard]] inline bool response_has_known_header(
-    const http_response& response, std::uint32_t bit) noexcept {
+[[nodiscard]] inline bool response_has_known_header(const http_response& response, std::uint32_t bit) noexcept {
     return response_has_known_header(response.headers(), bit);
 }
 
@@ -3508,8 +3310,7 @@ namespace ruvia::detail {
 // truncating either field would make the response header view disagree with
 // the allocation and could turn a large application value into malformed wire
 // bytes or an out-of-bounds read during emission.
-[[nodiscard]] inline constexpr bool response_header_storage_size_fits(
-    std::size_t name_size, std::size_t value_size) noexcept {
+[[nodiscard]] inline constexpr bool response_header_storage_size_fits(std::size_t name_size, std::size_t value_size) noexcept {
     constexpr auto max_size = static_cast<std::size_t>((std::numeric_limits<std::uint32_t>::max)());
     return name_size <= max_size && value_size <= max_size && value_size <= max_size - name_size;
 }
@@ -3522,25 +3323,20 @@ inline void validate_response_header_storage_size(std::size_t name_size, std::si
 
 // The one field-identity rule: known fields match by bit, unknown fields by
 // case-insensitive name among unknown fields only.
-[[nodiscard]] inline bool response_header_matches(
-    const http_response_header& header_value, std::string_view key, std::uint32_t known_bit) noexcept {
+[[nodiscard]] inline bool response_header_matches(const http_response_header& header_value, std::string_view key, std::uint32_t known_bit) noexcept {
     const auto header_known_bit = http_response_header_access::known_bit(header_value);
-    return known_bit != 0 ? header_known_bit == known_bit
-                          : header_known_bit == 0 && http_ascii_equals_ignore_case(header_value.name(), key);
+    return known_bit != 0 ? header_known_bit == known_bit : header_known_bit == 0 && http_ascii_equals_ignore_case(header_value.name(), key);
 }
 
-[[nodiscard]] inline bool response_header_storage_overlaps(
-    const http_response_header& header_value, std::string_view value) noexcept {
+[[nodiscard]] inline bool response_header_storage_overlaps(const http_response_header& header_value, std::string_view value) noexcept {
     const auto name = header_value.name();
     if (name.data() == nullptr) {
         return false;
     }
-    return http_text_overlaps(
-        {name.data(), name.size() + header_value.value().size()}, value);
+    return http_text_overlaps({name.data(), name.size() + header_value.value().size()}, value);
 }
 
-[[nodiscard]] inline bool response_header_views_contiguous(
-    std::string_view name, std::string_view value) noexcept {
+[[nodiscard]] inline bool response_header_views_contiguous(std::string_view name, std::string_view value) noexcept {
     if (name.data() == nullptr) {
         return false;
     }
@@ -3550,26 +3346,22 @@ inline void validate_response_header_storage_size(std::size_t name_size, std::si
     if (value.data() == nullptr) {
         return false;
     }
-    return reinterpret_cast<std::uintptr_t>(value.data()) ==
-           reinterpret_cast<std::uintptr_t>(name.data() + name.size());
+    return reinterpret_cast<std::uintptr_t>(value.data()) == reinterpret_cast<std::uintptr_t>(name.data() + name.size());
 }
 
 }  // namespace ruvia::detail
 
 namespace ruvia::detail {
 
-enum class http_binary_final_response_control_plan_error : std::uint8_t {
-    invalid_status,
+enum class http_binary_final_response_control_plan_error : std::uint8_t { invalid_status,
     upgrade_unavailable,
-    connection_specific_field_forbidden
-};
+    connection_specific_field_forbidden };
 
 class http1_final_response_control;
 
 [[nodiscard]] http1_final_response_control http1_final_response_control_plan(const http_response& response);
 
-[[nodiscard]] std::optional<http_binary_final_response_control_plan_error> http_binary_final_response_control_plan(
-    const http_response& response) noexcept;
+[[nodiscard]] std::optional<http_binary_final_response_control_plan_error> http_binary_final_response_control_plan(const http_response& response) noexcept;
 // The protocol writer alone frames a response (RFC 9112 section 6.1, RFC 9113
 // section 8.2.2), so an application Transfer-Encoding is accepted only as a
 // hint that names exactly the single `chunked` coding, which every writer
@@ -3579,10 +3371,7 @@ class http1_final_response_control;
     if (!response_has_known_header(response, response_header_transfer_encoding)) {
         return true;
     }
-    return http_ascii_equals_ignore_case(
-        http_trim_ows(http_response_header_state_access::known_header_value(
-            response.headers(), response_header_transfer_encoding)),
-        "chunked");
+    return http_ascii_equals_ignore_case(http_trim_ows(http_response_header_state_access::known_header_value(response.headers(), response_header_transfer_encoding)), "chunked");
 }
 
 class http1_final_response_control final {
@@ -3598,10 +3387,9 @@ public:
 private:
     friend http1_final_response_control http1_final_response_control_plan(const http_response&);
 
-    http1_final_response_control(
-        http_connection_options connection_options, http_upgrade_protocols upgrade_protocols) noexcept
-        : connection_options_(connection_options),
-          upgrade_protocols_(upgrade_protocols) {}
+    http1_final_response_control(http_connection_options connection_options, http_upgrade_protocols upgrade_protocols) noexcept :
+        connection_options_(connection_options),
+        upgrade_protocols_(upgrade_protocols) {}
 
     http_connection_options connection_options_;
     http_upgrade_protocols upgrade_protocols_;
@@ -3622,19 +3410,16 @@ private:
 
     http_connection_options connection_options;
     http_upgrade_protocols upgrade_protocols;
-    if (response_has_known_header(
-            response, response_header_connection | response_header_upgrade)) {
+    if (response_has_known_header(response, response_header_connection | response_header_upgrade)) {
         for (const auto& header : response.headers()) {
             switch (http_response_header_access::known_bit(header)) {
                 case response_header_connection:
-                    if (connection_options.parse_field(header.value(), http_connection_field_role::sender) !=
-                        http_field_list_parse_status::ok) {
+                    if (connection_options.parse_field(header.value(), http_connection_field_role::sender) != http_field_list_parse_status::ok) {
                         throw http1_response_head_error("invalid HTTP Connection header");
                     }
                     break;
                 case response_header_upgrade:
-                    if (upgrade_protocols.parse_field(header.value(), http_field_list_role::sender) !=
-                        http_field_list_parse_status::ok) {
+                    if (upgrade_protocols.parse_field(header.value(), http_field_list_role::sender) != http_field_list_parse_status::ok) {
                         throw http1_response_head_error("invalid HTTP Upgrade header");
                     }
                     break;
@@ -3655,8 +3440,7 @@ private:
 // RFC 9113 section 8.2.2 and RFC 9114 section 4.2 require rejection rather than
 // silent filtering. A replaceable Transfer-Encoding hint is not application
 // metadata but writer-owned framing, so both encoders omit it.
-[[nodiscard]] inline std::optional<http_binary_final_response_control_plan_error>
-http_binary_final_response_control_plan(const http_response& response) noexcept {
+[[nodiscard]] inline std::optional<http_binary_final_response_control_plan_error> http_binary_final_response_control_plan(const http_response& response) noexcept {
     const auto status_code = response.status();
     if (!status_code.is_final()) {
         return http_binary_final_response_control_plan_error::invalid_status;
@@ -3664,10 +3448,7 @@ http_binary_final_response_control_plan(const http_response& response) noexcept 
     if (status_code == http_status::upgrade_required) {
         return http_binary_final_response_control_plan_error::upgrade_unavailable;
     }
-    if (response_has_known_header(response,
-            response_header_connection | response_header_upgrade | response_header_keep_alive |
-                response_header_proxy_connection) ||
-        !response_transfer_encoding_replaceable(response)) {
+    if (response_has_known_header(response, response_header_connection | response_header_upgrade | response_header_keep_alive | response_header_proxy_connection) || !response_transfer_encoding_replaceable(response)) {
         return http_binary_final_response_control_plan_error::connection_specific_field_forbidden;
     }
     return std::nullopt;
@@ -3681,12 +3462,10 @@ http_binary_final_response_control_plan(const http_response& response) noexcept 
 
 namespace ruvia::detail {
 
-enum class http_framed_response_head_plan_error : std::uint8_t {
-    invalid_content_length,
+enum class http_framed_response_head_plan_error : std::uint8_t { invalid_content_length,
     connect_tunnel_required,
     response_status_mismatch,
-    response_representation_mismatch
-};
+    response_representation_mismatch };
 
 class http_framed_response_head_plan final {
 public:
@@ -3696,39 +3475,31 @@ public:
 
     // The normalized Content-Length field to encode, if any.
     [[nodiscard]] std::optional<std::uint64_t> content_length() const noexcept {
-        return content_length_mode_ == content_length_mode_type::omit
-                   ? std::nullopt
-                   : std::optional<std::uint64_t>(content_length_);
+        return content_length_mode_ == content_length_mode_type::omit ? std::nullopt : std::optional<std::uint64_t>(content_length_);
     }
 
     // Only an application-declared streaming length constrains subsequent DATA.
     // Framework-generated buffered lengths are already bound to their response
     // representation and therefore do not create a streaming accounting limit.
     [[nodiscard]] std::optional<std::uint64_t> streaming_content_length() const noexcept {
-        return content_length_mode_ == content_length_mode_type::explicit_value
-                   ? std::optional<std::uint64_t>(content_length_)
-                   : std::nullopt;
+        return content_length_mode_ == content_length_mode_type::explicit_value ? std::optional<std::uint64_t>(content_length_) : std::nullopt;
     }
 
-    [[nodiscard]] static http_framed_response_head_plan canonical(
-        http_response_body_plan body_plan, std::uint64_t value) noexcept {
+    [[nodiscard]] static http_framed_response_head_plan canonical(http_response_body_plan body_plan, std::uint64_t value) noexcept {
         return http_framed_response_head_plan(body_plan, content_length_mode_type::canonical, value);
     }
 
-    [[nodiscard]] static std::variant<http_framed_response_head_plan, http_framed_response_head_plan_error>
-    preserve_explicit(http_response_body_plan body_plan, const http_response& response) noexcept {
+    [[nodiscard]] static std::variant<http_framed_response_head_plan, http_framed_response_head_plan_error> preserve_explicit(http_response_body_plan body_plan, const http_response& response) noexcept {
         if (!response_has_known_header(response, response_header_content_length)) {
             return omit(body_plan);
         }
 
-        const auto value = http_response_header_state_access::known_header_value(
-            response.headers(), response_header_content_length);
+        const auto value = http_response_header_state_access::known_header_value(response.headers(), response_header_content_length);
         http_content_length_state state;
         if (state.parse_field(value) != http_content_length_parse_status::ok) {
             return http_framed_response_head_plan_error::invalid_content_length;
         }
-        return http_framed_response_head_plan(
-            body_plan, content_length_mode_type::explicit_value, *state.value());
+        return http_framed_response_head_plan(body_plan, content_length_mode_type::explicit_value, *state.value());
     }
 
     [[nodiscard]] static http_framed_response_head_plan omit(http_response_body_plan body_plan) noexcept {
@@ -3742,11 +3513,10 @@ private:
         explicit_value,
     };
 
-    http_framed_response_head_plan(http_response_body_plan body_plan,
-        content_length_mode_type content_length_mode, std::uint64_t content_length = 0) noexcept
-        : body_plan_(body_plan),
-          content_length_mode_(content_length_mode),
-          content_length_(content_length) {}
+    http_framed_response_head_plan(http_response_body_plan body_plan, content_length_mode_type content_length_mode, std::uint64_t content_length = 0) noexcept :
+        body_plan_(body_plan),
+        content_length_mode_(content_length_mode),
+        content_length_(content_length) {}
 
     http_response_body_plan body_plan_;
     content_length_mode_type content_length_mode_;
@@ -3756,12 +3526,9 @@ private:
 static_assert(std::is_trivially_copyable_v<http_framed_response_head_plan>);
 static_assert(sizeof(http_framed_response_head_plan) <= 24);
 
-using http_framed_response_head_plan_result =
-    std::variant<http_framed_response_head_plan, http_framed_response_head_plan_error>;
+using http_framed_response_head_plan_result = std::variant<http_framed_response_head_plan, http_framed_response_head_plan_error>;
 
-[[nodiscard]] inline http_framed_response_head_plan_result http_framed_buffered_response_head_plan(
-    const http_response_body_plan& body_plan, std::uint64_t content_length,
-    const http_response& response) noexcept {
+[[nodiscard]] inline http_framed_response_head_plan_result http_framed_buffered_response_head_plan(const http_response_body_plan& body_plan, std::uint64_t content_length, const http_response& response) noexcept {
     if (body_plan.response_status() != response.status()) {
         return http_framed_response_head_plan_error::response_status_mismatch;
     }
@@ -3770,15 +3537,11 @@ using http_framed_response_head_plan_result =
     }
     // An empty suppressed HEAD body describes the GET representation only
     // through its declared Content-Length, if any (RFC 9110 section 8.6).
-    if (body_plan.body_suppressed() && body_plan.status_allows_body() &&
-        body_plan.explicit_content_length_allowed() && content_length == 0 &&
-        (response.has_head_metadata_body() ||
-            response_has_known_header(response, response_header_content_length))) {
+    if (body_plan.body_suppressed() && body_plan.status_allows_body() && body_plan.explicit_content_length_allowed() && content_length == 0 && (response.has_head_metadata_body() || response_has_known_header(response, response_header_content_length))) {
         return http_framed_response_head_plan::preserve_explicit(body_plan, response);
     }
     if (body_plan.auto_content_length_allowed()) {
-        return http_framed_response_head_plan::canonical(
-            body_plan, body_plan.status_allows_body() ? content_length : 0);
+        return http_framed_response_head_plan::canonical(body_plan, body_plan.status_allows_body() ? content_length : 0);
     }
     if (body_plan.explicit_content_length_allowed()) {
         return http_framed_response_head_plan::preserve_explicit(body_plan, response);
@@ -3786,14 +3549,11 @@ using http_framed_response_head_plan_result =
     return http_framed_response_head_plan::omit(body_plan);
 }
 
-[[nodiscard]] inline http_framed_response_head_plan_result http_framed_buffered_response_head_plan(
-    const http_buffered_response_write_plan& write_plan, const http_response& response) noexcept {
-    return http_framed_buffered_response_head_plan(
-        write_plan.body_plan(), write_plan.content_length(), response);
+[[nodiscard]] inline http_framed_response_head_plan_result http_framed_buffered_response_head_plan(const http_buffered_response_write_plan& write_plan, const http_response& response) noexcept {
+    return http_framed_buffered_response_head_plan(write_plan.body_plan(), write_plan.content_length(), response);
 }
 
-[[nodiscard]] inline http_framed_response_head_plan_result http_framed_streaming_response_head_plan(
-    const http_response_body_plan& body_plan, const http_response& response) noexcept {
+[[nodiscard]] inline http_framed_response_head_plan_result http_framed_streaming_response_head_plan(const http_response_body_plan& body_plan, const http_response& response) noexcept {
     if (body_plan.response_status() != response.status()) {
         return http_framed_response_head_plan_error::response_status_mismatch;
     }
@@ -3808,8 +3568,7 @@ using http_framed_response_head_plan_result =
 
 // A successful CONNECT opens a tunnel and carries no Content-Length (RFC 9110
 // §9.3.6); any other outcome must take the generic final-response path.
-[[nodiscard]] inline http_framed_response_head_plan_result http_framed_connect_response_head_plan(
-    const http_response_body_plan& body_plan) noexcept {
+[[nodiscard]] inline http_framed_response_head_plan_result http_framed_connect_response_head_plan(const http_response_body_plan& body_plan) noexcept {
     if (body_plan.content_semantics() == ::ruvia::http_response_content_semantics::connect_tunnel) {
         return http_framed_response_head_plan::omit(body_plan);
     }
@@ -3827,14 +3586,13 @@ namespace ruvia::detail {
 // Rejected additions leave the accumulated size unchanged.
 class binary_field_section_size final {
 public:
-    explicit constexpr binary_field_section_size(std::uint64_t limit) noexcept
-        : limit_(limit) {}
+    explicit constexpr binary_field_section_size(std::uint64_t limit) noexcept :
+        limit_(limit) {}
 
     [[nodiscard]] bool add(std::string_view name, std::string_view value) noexcept {
         constexpr std::uint64_t field_metadata_bytes = 32;
         const auto remaining = limit_ - bytes_;
-        if (remaining < field_metadata_bytes || name.size() > remaining - field_metadata_bytes ||
-            value.size() > remaining - field_metadata_bytes - name.size()) {
+        if (remaining < field_metadata_bytes || name.size() > remaining - field_metadata_bytes || value.size() > remaining - field_metadata_bytes - name.size()) {
             return false;
         }
         bytes_ += name.size() + value.size() + field_metadata_bytes;
@@ -3853,8 +3611,7 @@ namespace ruvia::detail {
 // Borrow unchanged names; request writable storage only at the first uppercase
 // byte. The provider must keep the input alive and return name.size() bytes.
 template <typename prepare_type>
-[[nodiscard]] inline std::string_view http_lower_header_name(
-    std::string_view name, const prepare_type& prepare) {
+[[nodiscard]] inline std::string_view http_lower_header_name(std::string_view name, const prepare_type& prepare) {
     for (std::size_t i = 0; i < name.size(); ++i) {
         const auto byte = static_cast<unsigned char>(name[i]);
         if (byte < 'A' || byte > 'Z') {
@@ -3879,11 +3636,8 @@ namespace ruvia::detail {
 inline constexpr std::size_t http_origin_length_prefix_bytes = 2;
 inline constexpr std::size_t http_max_prefixed_origin_length = 0xffff;
 
-[[nodiscard]] inline bool reserve_http_prefixed_origin(
-    std::size_t& remaining, std::string_view origin) noexcept {
-    if (origin.size() > http_max_prefixed_origin_length ||
-        remaining < http_origin_length_prefix_bytes ||
-        origin.size() > remaining - http_origin_length_prefix_bytes) {
+[[nodiscard]] inline bool reserve_http_prefixed_origin(std::size_t& remaining, std::string_view origin) noexcept {
+    if (origin.size() > http_max_prefixed_origin_length || remaining < http_origin_length_prefix_bytes || origin.size() > remaining - http_origin_length_prefix_bytes) {
         return false;
     }
     remaining -= http_origin_length_prefix_bytes + origin.size();
@@ -3900,8 +3654,7 @@ inline char* write_http_prefixed_origin(char* out, std::string_view origin) noex
 }
 
 // Shared RFC 8336 §2 / RFC 9412 §2 ORIGIN payload validator and serializer.
-[[nodiscard]] inline std::variant<std::size_t, http_connection_advertisement_error>
-http_origin_payload_size(std::span<const std::string_view> origins, std::size_t payload_limit) {
+[[nodiscard]] inline std::variant<std::size_t, http_connection_advertisement_error> http_origin_payload_size(std::span<const std::string_view> origins, std::size_t payload_limit) {
     std::size_t remaining = payload_limit;
     for (const auto origin : origins) {
         if (!is_valid_http_serialized_origin(origin)) {
@@ -3914,8 +3667,7 @@ http_origin_payload_size(std::span<const std::string_view> origins, std::size_t 
     return payload_limit - remaining;
 }
 
-inline void write_http_origin_payload(
-    std::span<char> payload, std::span<const std::string_view> origins) noexcept {
+inline void write_http_origin_payload(std::span<char> payload, std::span<const std::string_view> origins) noexcept {
     auto* out = payload.data();
     for (const auto origin : origins) {
         out = write_http_prefixed_origin(out, origin);
@@ -3938,19 +3690,17 @@ public:
 private:
     friend class http_local_content_state;
 
-    explicit constexpr http_local_content_known_length(std::uint64_t declared_length) noexcept
-        : declared_length_(declared_length) {}
+    explicit constexpr http_local_content_known_length(std::uint64_t declared_length) noexcept :
+        declared_length_(declared_length) {}
 
     std::uint64_t declared_length_;
 };
 
-enum class http_local_content_check : std::uint8_t {
-    accepted,
+enum class http_local_content_check : std::uint8_t { accepted,
     not_started,
     forbidden,
     length_exceeded,
-    length_incomplete
-};
+    length_incomplete };
 
 class http_local_content_state final {
     enum class phase_type : std::uint8_t { unset,
@@ -3995,8 +3745,7 @@ public:
     // Transactional preflight for one submit_data input. No counters change here.
     // A terminal known-length submission must complete the declared length exactly;
     // callers can retry a rejected input with a corrected terminal flag or size.
-    [[nodiscard]] http_local_content_check check_accept(
-        std::size_t bytes_value, bool terminal) const noexcept {
+    [[nodiscard]] http_local_content_check check_accept(std::size_t bytes_value, bool terminal) const noexcept {
         if (unset() != nullptr) {
             return http_local_content_check::not_started;
         }
@@ -4031,8 +3780,7 @@ public:
             return false;
         }
         const auto* known_length_content = known_length();
-        return known_length_content == nullptr ||
-               accepted_bytes_ == known_length_content->declared_length();
+        return known_length_content == nullptr || accepted_bytes_ == known_length_content->declared_length();
     }
 
 private:
@@ -4056,94 +3804,67 @@ private:
 
 namespace ruvia::detail {
 
-[[nodiscard]] inline bool http_binary_is_valid_outbound_regular_header(
-    std::string_view name, std::string_view value) noexcept {
-    return is_valid_http_header_name(name) && is_valid_http_header_value(value) &&
-           !is_forbidden_http_binary_connection_field(name);
+[[nodiscard]] inline bool http_binary_is_valid_outbound_regular_header(std::string_view name, std::string_view value) noexcept {
+    return is_valid_http_header_name(name) && is_valid_http_header_value(value) && !is_forbidden_http_binary_connection_field(name);
 }
 
 // Cross-field constraints only. Decoded :path syntax is already checked;
 // senders combine this predicate with the origin-form grammar below.
-[[nodiscard]] inline bool http_binary_request_path_matches_method_and_scheme(
-    http_known_method method, std::string_view scheme, std::string_view path) noexcept {
+[[nodiscard]] inline bool http_binary_request_path_matches_method_and_scheme(http_known_method method, std::string_view scheme, std::string_view path) noexcept {
     if (path.empty()) {
         return !is_http_request_scheme(scheme);
     }
     return path != "*" || method == http_known_method::options;
 }
 
-[[nodiscard]] inline bool http_binary_is_valid_regular_request_path(
-    http_known_method method, std::string_view scheme, std::string_view path) noexcept {
-    return http_binary_request_path_matches_method_and_scheme(method, scheme, path) &&
-           (path.empty() || path == "*" || is_valid_origin_form_target(path));
+[[nodiscard]] inline bool http_binary_is_valid_regular_request_path(http_known_method method, std::string_view scheme, std::string_view path) noexcept {
+    return http_binary_request_path_matches_method_and_scheme(method, scheme, path) && (path.empty() || path == "*" || is_valid_origin_form_target(path));
 }
 
-[[nodiscard]] inline bool http_binary_is_valid_extended_connect_path(
-    std::string_view scheme, std::string_view path) noexcept {
-    return http_binary_request_path_matches_method_and_scheme(http_known_method::connect, scheme, path) &&
-           (path.empty() || is_valid_origin_form_target(path));
+[[nodiscard]] inline bool http_binary_is_valid_extended_connect_path(std::string_view scheme, std::string_view path) noexcept {
+    return http_binary_request_path_matches_method_and_scheme(http_known_method::connect, scheme, path) && (path.empty() || is_valid_origin_form_target(path));
 }
 
-[[nodiscard]] inline bool http_binary_is_valid_outbound_method(
-    std::string_view method, http_known_method known_method) noexcept {
+[[nodiscard]] inline bool http_binary_is_valid_outbound_method(std::string_view method, http_known_method known_method) noexcept {
     if (known_method == http_known_method::connect) {
         return false;
     }
     return known_method != http_known_method::unknown || is_valid_http_method_token(method);
 }
 
-[[nodiscard]] inline bool http_binary_are_valid_outbound_request_headers(std::optional<std::string_view> authority,
-    std::uint16_t default_port, std::span<const http_header_view> headers, bool allow_host,
-    bool allow_trailers, binary_field_section_size& section_size, request_field_state& fields,
-    http_request_field_source source, bool websocket_connect = false) noexcept {
+[[nodiscard]] inline bool http_binary_are_valid_outbound_request_headers(std::optional<std::string_view> authority, std::uint16_t default_port, std::span<const http_header_view> headers, bool allow_host, bool allow_trailers, binary_field_section_size& section_size, request_field_state& fields, http_request_field_source source, bool websocket_connect = false) noexcept {
     if (!is_valid_http_request_field_source(source)) {
         return false;
     }
     websocket_request_header_validator websocket_headers(http_field_list_role::sender);
     for (std::size_t i = 0; i < headers.size(); ++i) {
         const auto& header = headers[i];
-        if (!http_binary_is_valid_outbound_regular_header(header.name(), header.value()) ||
-            !section_size.add(header.name(), header.value())) {
+        if (!http_binary_is_valid_outbound_regular_header(header.name(), header.value()) || !section_size.add(header.name(), header.value())) {
             return false;
         }
         const auto kind = classify_http_field(header.name());
-        if ((!allow_trailers && (kind == http_field_kind::trailer || kind == http_field_kind::te)) ||
-            (!allow_host && kind == http_field_kind::host)) {
+        if ((!allow_trailers && (kind == http_field_kind::trailer || kind == http_field_kind::te)) || (!allow_host && kind == http_field_kind::host)) {
             return false;
         }
         // Content-Length and Expect belong exclusively to the typed request
         // content and expectation plans; the validator refuses raw fields.
-        if (validate_request_field(kind, header.value(), http_field_list_role::sender, fields, source) !=
-            request_field_status::ok) {
+        if (validate_request_field(kind, header.value(), http_field_list_role::sender, fields, source) != request_field_status::ok) {
             return false;
         }
-        if (kind == http_field_kind::host && authority.has_value() &&
-            !authority_matches_host(*authority, header.value(), default_port)) {
+        if (kind == http_field_kind::host && authority.has_value() && !authority_matches_host(*authority, header.value(), default_port)) {
             return false;
         }
         // Host is already refused for websocket extended CONNECT by the outbound field
         // check (:authority is the sole target authority there).
-        if (websocket_connect &&
-            (kind == http_field_kind::sec_websocket_key ||
-                (kind == http_field_kind::other &&
-                    http_ascii_equals_ignore_case(header.name(), "sec-websocket-accept")) ||
-                !websocket_headers.observe_header(kind, header.value()))) {
+        if (websocket_connect && (kind == http_field_kind::sec_websocket_key || (kind == http_field_kind::other && http_ascii_equals_ignore_case(header.name(), "sec-websocket-accept")) || !websocket_headers.observe_header(kind, header.value()))) {
             return false;
         }
     }
     return !websocket_connect || websocket_headers.client_offers_valid();
 }
 
-[[nodiscard]] inline bool http_binary_is_valid_outbound_regular_request_head(std::string_view method,
-    http_known_method known_method, std::string_view scheme, std::uint16_t default_port,
-    std::optional<std::string_view> authority, std::string_view path,
-    std::span<const http_header_view> headers,
-    http_request_content_indication content_indication, std::string_view content_length_value,
-    http_client_request_expectation expectation, http_request_field_source source, std::uint64_t limit) noexcept {
-    if (!http_binary_is_valid_outbound_method(method, known_method) || !is_valid_uri_scheme(scheme) ||
-        (authority.has_value() && !is_valid_binary_request_authority(scheme, *authority)) ||
-        !http_binary_is_valid_regular_request_path(known_method, scheme, path) ||
-        (!authority.has_value() && binary_regular_request_requires_authority(scheme, path))) {
+[[nodiscard]] inline bool http_binary_is_valid_outbound_regular_request_head(std::string_view method, http_known_method known_method, std::string_view scheme, std::uint16_t default_port, std::optional<std::string_view> authority, std::string_view path, std::span<const http_header_view> headers, http_request_content_indication content_indication, std::string_view content_length_value, http_client_request_expectation expectation, http_request_field_source source, std::uint64_t limit) noexcept {
+    if (!http_binary_is_valid_outbound_method(method, known_method) || !is_valid_uri_scheme(scheme) || (authority.has_value() && !is_valid_binary_request_authority(scheme, *authority)) || !http_binary_is_valid_regular_request_path(known_method, scheme, path) || (!authority.has_value() && binary_regular_request_requires_authority(scheme, path))) {
         return false;
     }
     // An asterisk-form target carries no authority information; binary senders
@@ -4162,11 +3883,7 @@ namespace ruvia::detail {
         default:
             return false;
     }
-    if (!http_client_expectation_is_valid(expect_continue, content_indication) ||
-        !section_size.add(":method", method) || !section_size.add(":scheme", scheme) ||
-        (authority.has_value() && !section_size.add(":authority", *authority)) ||
-        !section_size.add(":path", path) ||
-        (expect_continue && !section_size.add("expect", http_continue_expectation_token))) {
+    if (!http_client_expectation_is_valid(expect_continue, content_indication) || !section_size.add(":method", method) || !section_size.add(":scheme", scheme) || (authority.has_value() && !section_size.add(":authority", *authority)) || !section_size.add(":path", path) || (expect_continue && !section_size.add("expect", http_continue_expectation_token))) {
         return false;
     }
     request_field_state fields{request_field_framing::binary};
@@ -4183,10 +3900,7 @@ namespace ruvia::detail {
     }
     const auto content_semantics = classify_http_request_content_semantics(method);
     // RFC 9110 section 9.3.7 applies the Content-Type requirement to generation.
-    return content_semantics != http_request_content_semantics::forbidden &&
-           (source == http_request_field_source::forwarded ||
-               content_semantics != http_request_content_semantics::content_type_required ||
-               fields.seen(http_field_kind::content_type));
+    return content_semantics != http_request_content_semantics::forbidden && (source == http_request_field_source::forwarded || content_semantics != http_request_content_semantics::content_type_required || fields.seen(http_field_kind::content_type));
 }
 
 }  // namespace ruvia::detail
@@ -4199,8 +3913,7 @@ namespace ruvia::detail {
 // outlive submission. Each sink applies http_field_never_indexed to every field.
 // Validation and size preflight complete before any sink mutation.
 template <typename sink_type>
-inline void append_http_binary_response_field(sink_type& fields, std::string_view name,
-    std::string_view value, std::uint32_t known_bit) {
+inline void append_http_binary_response_field(sink_type& fields, std::string_view name, std::string_view value, std::uint32_t known_bit) {
     const auto known_name = response_known_header_lowercase_name(known_bit);
     if (known_name.empty()) {
         fields.add_lowercase(name, value);
@@ -4209,8 +3922,7 @@ inline void append_http_binary_response_field(sink_type& fields, std::string_vie
     }
 }
 
-[[nodiscard]] inline bool validate_http_binary_interim_response_fields(
-    const http_interim_response_head& response, std::uint64_t limit) noexcept {
+[[nodiscard]] inline bool validate_http_binary_interim_response_fields(const http_interim_response_head& response, std::uint64_t limit) noexcept {
     const auto headers = response.headers();
     const auto status_token = http_status_code_token(response.status());
     binary_field_section_size section_size(limit);
@@ -4221,8 +3933,7 @@ inline void append_http_binary_response_field(sink_type& fields, std::string_vie
     for (std::size_t i = 0; i < headers.size(); ++i) {
         const auto name = headers[i].name();
         const auto value = headers[i].value();
-        if (validator.validate(name, value) != http_interim_response_header_validation_status::ok ||
-            is_forbidden_http_binary_response_field(name) || !section_size.add(name, value)) {
+        if (validator.validate(name, value) != http_interim_response_header_validation_status::ok || is_forbidden_http_binary_response_field(name) || !section_size.add(name, value)) {
             return false;
         }
     }
@@ -4230,8 +3941,7 @@ inline void append_http_binary_response_field(sink_type& fields, std::string_vie
 }
 
 template <typename sink_type>
-[[nodiscard]] inline bool append_http_binary_interim_response_fields(
-    sink_type& fields, const http_interim_response_head& response, std::uint64_t limit) {
+[[nodiscard]] inline bool append_http_binary_interim_response_fields(sink_type& fields, const http_interim_response_head& response, std::uint64_t limit) {
     if (!validate_http_binary_interim_response_fields(response, limit)) {
         return false;
     }
@@ -4241,15 +3951,13 @@ template <typename sink_type>
     fields.reserve(headers.size() + 1);
     fields.add_owned_value(":status", http_status_code_token_view(status_token));
     for (std::size_t i = 0; i < headers.size(); ++i) {
-        append_http_binary_response_field(fields, headers[i].name(), headers[i].value(),
-            classify_response_header_name(headers[i].name()));
+        append_http_binary_response_field(fields, headers[i].name(), headers[i].value(), classify_response_header_name(headers[i].name()));
     }
     return true;
 }
 
 template <typename sink_type>
-[[nodiscard]] inline bool append_http_binary_response_fields(sink_type& fields,
-    const http_response& response, const http_framed_response_head_plan& plan, std::uint64_t limit) {
+[[nodiscard]] inline bool append_http_binary_response_fields(sink_type& fields, const http_response& response, const http_framed_response_head_plan& plan, std::uint64_t limit) {
     // The owning header block already enforces syntax, sender metadata grammar
     // and singleton rules. Only binary framing and section limits remain here.
     const auto known_bits = response_known_header_bits(response);
@@ -4310,13 +4018,11 @@ template <typename sink_type>
     if (!response.status().is_successful() || body.size() != 0 || body.file().has_value()) {
         return false;
     }
-    return !response_has_known_header(
-        response, response_header_content_length | response_header_transfer_encoding);
+    return !response_has_known_header(response, response_header_content_length | response_header_transfer_encoding);
 }
 
 template <typename sink_type>
-[[nodiscard]] inline bool append_http_binary_websocket_response_fields(
-    sink_type& fields, const websocket_server_negotiation& negotiation, std::uint64_t limit) {
+[[nodiscard]] inline bool append_http_binary_websocket_response_fields(sink_type& fields, const websocket_server_negotiation& negotiation, std::uint64_t limit) {
     // Negotiation fields are already lowercase and validated by their owner.
     const auto response_fields = negotiation.response_headers();
     const bool has_date = std::ranges::any_of(response_fields, [](const http_header& field) {
@@ -4326,10 +4032,7 @@ template <typename sink_type>
     const auto subprotocol = negotiation.subprotocol();
     const auto extensions = negotiation.extensions();
     binary_field_section_size section_size(limit);
-    if (!section_size.add(":status", "200") ||
-        (!date.empty() && !section_size.add("date", date)) ||
-        (!subprotocol.empty() && !section_size.add("sec-websocket-protocol", subprotocol)) ||
-        (!extensions.empty() && !section_size.add("sec-websocket-extensions", extensions))) {
+    if (!section_size.add(":status", "200") || (!date.empty() && !section_size.add("date", date)) || (!subprotocol.empty() && !section_size.add("sec-websocket-protocol", subprotocol)) || (!extensions.empty() && !section_size.add("sec-websocket-extensions", extensions))) {
         return false;
     }
     for (const auto& field : response_fields) {
@@ -4418,8 +4121,7 @@ enum class field_line_folding_policy { mime,
 
 // A fold always starts with CRLF followed by SP/HTAB. Leave bare CR/LF and
 // ordinary field separators visible to the protocol's field validator.
-[[nodiscard]] inline std::size_t find_field_line_fold(
-    std::string_view input, std::size_t start = 0) noexcept {
+[[nodiscard]] inline std::size_t find_field_line_fold(std::string_view input, std::size_t start = 0) noexcept {
     auto position = input.find("\r\n", start);
     while (position != std::string_view::npos) {
         if (position + 2 < input.size() && is_http_ows_char(input[position + 2])) {
@@ -4434,8 +4136,7 @@ enum class field_line_folding_policy { mime,
 // every use of the resulting views; input must not borrow that storage.
 // MIME removes only CRLF. HTTP replaces the complete obs-fold, including its
 // adjacent OWS/RWS, with SP before field values are interpreted (RFC 9112 5.2).
-inline void copy_unfolded_field_lines(std::string_view input, std::size_t first_fold,
-    field_line_folding_policy policy, std::string& storage) {
+inline void copy_unfolded_field_lines(std::string_view input, std::size_t first_fold, field_line_folding_policy policy, std::string& storage) {
     storage.clear();
     storage.reserve(input.size());
     std::size_t segment_begin = 0;
@@ -4467,8 +4168,7 @@ namespace ruvia::detail {
 // Scan one complete RFC 9112 section 5 field line, including its CRLF.
 // The caller excludes the final empty line and unfolds response obs-fold first.
 // Views borrow buffer; only a successful scan advances cursor_value.
-[[nodiscard]] inline std::optional<http_header_view> scan_http1_field_line(
-    std::string_view buffer, std::size_t& cursor_value) noexcept {
+[[nodiscard]] inline std::optional<http_header_view> scan_http1_field_line(std::string_view buffer, std::size_t& cursor_value) noexcept {
     const auto name_start = cursor_value;
     auto position = cursor_value + http_token_prefix_size(buffer.substr(cursor_value));
     if (position == name_start || position >= buffer.size() || buffer[position] != ':') {
@@ -4516,8 +4216,7 @@ struct parsed_request_header_slot {
 using known_request_header_index_type = std::int16_t;
 // parse_http_header_block stops at max_http_header_fields, so every field index
 // fits the index type and the request's descriptor block.
-static_assert(max_http_header_fields <=
-              static_cast<std::size_t>((std::numeric_limits<known_request_header_index_type>::max)()));
+static_assert(max_http_header_fields <= static_cast<std::size_t>((std::numeric_limits<known_request_header_index_type>::max)()));
 
 struct parsed_request_header_block {
     parsed_request_header_block() noexcept = default;
@@ -4534,8 +4233,7 @@ struct parsed_request_header_block {
     http_request_expectations expectations_;
 };
 
-[[nodiscard]] std::size_t find_http_header_end(
-    std::string_view buffer, std::size_t search_offset) noexcept;
+[[nodiscard]] std::size_t find_http_header_end(std::string_view buffer, std::size_t search_offset) noexcept;
 // True if an LF at or after search_offset (and within max_http_header_bytes)
 // is not preceded by CR. Within a field section such a line can never end the
 // CRLF-delimited head; the caller passes the end of the accepted request-line
@@ -4545,25 +4243,21 @@ struct parsed_request_header_block {
 // before the request-line. Leading CRLF or bare LF lines are skipped; they count
 // toward max_http_header_bytes, which bounds how many are ignored. The scan
 // resumes after `skipped` bytes already classified by an earlier call.
-[[nodiscard]] std::size_t http_request_leading_empty_line_bytes(
-    std::string_view buffer, std::size_t skipped) noexcept;
+[[nodiscard]] std::size_t http_request_leading_empty_line_bytes(std::string_view buffer, std::size_t skipped) noexcept;
 // find_http_header_end for a request head: the returned end is measured from
 // the start of buffer and includes the ignored leading empty lines, whose
 // count `leading_bytes` carries in (from an earlier call) and out.
-[[nodiscard]] std::size_t find_http_request_head_end(
-    std::string_view buffer, std::size_t& leading_bytes, std::size_t search_offset) noexcept;
+[[nodiscard]] std::size_t find_http_request_head_end(std::string_view buffer, std::size_t& leading_bytes, std::size_t search_offset) noexcept;
 // Classifies the request-line of a still incomplete head: a request-line error
 // once the first line after the leading empty lines is CRLF-terminated, or as
 // soon as its first byte cannot start a method token. Bytes before
 // search_offset were classified by an earlier call. An accepted line sets
 // request_line_end to the offset just past its CRLF; nullopt without it means
 // more input is needed.
-[[nodiscard]] std::optional<http_parse_error> classify_http_request_line_prefix(std::string_view buffer,
-    std::size_t leading_bytes, std::size_t search_offset, std::size_t& request_line_end) noexcept;
+[[nodiscard]] std::optional<http_parse_error> classify_http_request_line_prefix(std::string_view buffer, std::size_t leading_bytes, std::size_t search_offset, std::size_t& request_line_end) noexcept;
 // header_bytes is the find_http_request_head_end result; the request-line is
 // parsed after the leading_bytes ignored leading empty lines.
-[[nodiscard]] std::optional<http_parse_error> parse_http_header_block(std::string_view buffer,
-    std::size_t leading_bytes, std::size_t header_bytes, parsed_request_header_block& block);
+[[nodiscard]] std::optional<http_parse_error> parse_http_header_block(std::string_view buffer, std::size_t leading_bytes, std::size_t header_bytes, parsed_request_header_block& block);
 
 }  // namespace ruvia::detail
 
@@ -4577,8 +4271,7 @@ enum class http1_version_parse_result : std::uint8_t { invalid,
 // HTTP-version = "HTTP/" DIGIT "." DIGIT (RFC 9112 section 2.3). A higher
 // HTTP/1 minor version is processed as HTTP/1.1 (RFC 9110 section 6.2).
 [[nodiscard]] inline http1_version_parse_result parse_http1_version(std::string_view version) noexcept {
-    if (version.size() != 8 || !version.starts_with("HTTP/") || version[5] < '0' || version[5] > '9' ||
-        version[6] != '.' || version[7] < '0' || version[7] > '9') {
+    if (version.size() != 8 || !version.starts_with("HTTP/") || version[5] < '0' || version[5] > '9' || version[6] != '.' || version[7] < '0' || version[7] > '9') {
         return http1_version_parse_result::invalid;
     }
     if (version[5] != '1') {
@@ -4591,8 +4284,7 @@ enum class http1_version_parse_result : std::uint8_t { invalid,
 // retain their own error enum. Unsupported transfer codings are recorded by
 // the accumulator for the caller's whole-section policy, not rejected here.
 template <typename error_type>
-[[nodiscard]] std::optional<error_type> parse_http1_content_length_field(
-    std::string_view value, http_content_length_state& state) noexcept {
+[[nodiscard]] std::optional<error_type> parse_http1_content_length_field(std::string_view value, http_content_length_state& state) noexcept {
     switch (state.parse_field(value)) {
         case http_content_length_parse_status::ok:
             return std::nullopt;
@@ -4605,8 +4297,7 @@ template <typename error_type>
 }
 
 template <typename error_type>
-[[nodiscard]] std::optional<error_type> parse_http1_transfer_encoding_field(
-    std::string_view value, http_transfer_encoding_state& state) {
+[[nodiscard]] std::optional<error_type> parse_http1_transfer_encoding_field(std::string_view value, http_transfer_encoding_state& state) {
     if (state.parse_field(value) == http_transfer_encoding_parse_status::malformed) {
         return error_type::invalid_transfer_encoding;
     }
@@ -4623,13 +4314,11 @@ template <typename error_type>
 namespace ruvia::detail {
 
 struct http_client_response_head_access final {
-    [[nodiscard]] static http_client_response_head make(
-        http_received_status status, http_protocol_version protocol_version) noexcept {
+    [[nodiscard]] static http_client_response_head make(http_received_status status, http_protocol_version protocol_version) noexcept {
         return http_client_response_head(status, protocol_version);
     }
 
-    [[nodiscard]] static std::vector<http_header>& headers(
-        http_client_response_head& head) noexcept {
+    [[nodiscard]] static std::vector<http_header>& headers(http_client_response_head& head) noexcept {
         return head.headers_;
     }
     static void content_length(http_client_response_head& head, std::optional<std::uint64_t> value) noexcept {
@@ -4638,30 +4327,25 @@ struct http_client_response_head_access final {
 };
 
 struct http1_client_exchange_state_access final {
-    [[nodiscard]] static constexpr http_known_method method(
-        const http1_client_exchange_state& state_value) noexcept {
+    [[nodiscard]] static constexpr http_known_method method(const http1_client_exchange_state& state_value) noexcept {
         return state_value.method_;
     }
 
-    [[nodiscard]] static constexpr http1_close_policy close_policy(
-        const http1_client_exchange_state& state_value) noexcept {
+    [[nodiscard]] static constexpr http1_close_policy close_policy(const http1_client_exchange_state& state_value) noexcept {
         return state_value.close_policy_;
     }
 
-    [[nodiscard]] static constexpr http1_client_initial_content_state content_state(
-        const http1_client_exchange_state& state_value) noexcept {
+    [[nodiscard]] static constexpr http1_client_initial_content_state content_state(const http1_client_exchange_state& state_value) noexcept {
         return state_value.content_state_;
     }
 
-    [[nodiscard]] static std::string_view offered_upgrade_protocols(
-        const http1_client_exchange_state& state_value) noexcept {
+    [[nodiscard]] static std::string_view offered_upgrade_protocols(const http1_client_exchange_state& state_value) noexcept {
         return state_value.offered_upgrade_protocols_;
     }
 };
 
 struct http1_client_parsed_response_head final {
-    explicit http1_client_parsed_response_head(
-        const http1_client_parsed_status_line& status_line) noexcept;
+    explicit http1_client_parsed_response_head(const http1_client_parsed_status_line& status_line) noexcept;
 
     http_received_status received_status_;
     // The status the response is processed as (received_status_.status()).
@@ -4677,27 +4361,19 @@ struct http1_client_parsed_response_head final {
     http_header_descriptor_storage<http_header_view> headers_;
 };
 
-using http1_client_status_line_parse_result_type =
-    std::variant<http1_client_parsed_status_line, http1_client_response_parse_error>;
-using http1_client_response_head_parse_result_type =
-    std::variant<http1_client_parsed_response_head, http1_client_response_parse_error>;
-using http1_client_response_planning_result_type =
-    std::variant<http1_client_response_plan, http1_client_response_parse_error>;
+using http1_client_status_line_parse_result_type = std::variant<http1_client_parsed_status_line, http1_client_response_parse_error>;
+using http1_client_response_head_parse_result_type = std::variant<http1_client_parsed_response_head, http1_client_response_parse_error>;
+using http1_client_response_planning_result_type = std::variant<http1_client_response_plan, http1_client_response_parse_error>;
 
 // Parse a status line, excluding its CRLF.
-[[nodiscard]] http1_client_status_line_parse_result_type parse_http1_client_status_line(
-    std::string_view status_line) noexcept;
+[[nodiscard]] http1_client_status_line_parse_result_type parse_http1_client_status_line(std::string_view status_line) noexcept;
 
 // Parse the field lines following a validated status line, each retaining its
 // CRLF but excluding the final empty line. Response obs-fold has already been
 // unfolded.
-[[nodiscard]] http1_client_response_head_parse_result_type parse_http1_client_response_head_fields(
-    const http1_client_parsed_status_line& status_line, std::string_view field_section,
-    const http1_client_exchange_state& exchange_state);
+[[nodiscard]] http1_client_response_head_parse_result_type parse_http1_client_response_head_fields(const http1_client_parsed_status_line& status_line, std::string_view field_section, const http1_client_exchange_state& exchange_state);
 
 // Decide the response plan a parsed head implies for this request.
-[[nodiscard]] http1_client_response_planning_result_type plan_http1_client_response(
-    const http1_client_exchange_state& exchange_state, const http1_client_parsed_response_head& response,
-    http1_client_request_content_phase request_content_phase, bool interim_faulty_framing = false);
+[[nodiscard]] http1_client_response_planning_result_type plan_http1_client_response(const http1_client_exchange_state& exchange_state, const http1_client_parsed_response_head& response, http1_client_request_content_phase request_content_phase, bool interim_faulty_framing = false);
 
 }  // namespace ruvia::detail

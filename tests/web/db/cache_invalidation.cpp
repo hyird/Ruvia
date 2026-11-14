@@ -76,11 +76,15 @@ constexpr std::string_view cache_entry_magic = "RUVIAQC";
 // handshake. All connections run on one thread, so the map needs no lock.
 class redis_store_peer final {
 public:
-    redis_store_peer()
-        : acceptor_(io_, {asio::ip::address_v4::loopback(), 0}),
-          work_(asio::make_work_guard(io_)),
-          thread_([this] { io_.run(); }) {
-        asio::co_spawn(io_, accept_connections(), [this](std::exception_ptr failure) { record_failure(failure); });
+    redis_store_peer() :
+        acceptor_(io_, {asio::ip::address_v4::loopback(), 0}),
+        work_(asio::make_work_guard(io_)),
+        thread_([this] {
+            io_.run();
+        }) {
+        asio::co_spawn(io_, accept_connections(), [this](std::exception_ptr failure) {
+            record_failure(failure);
+        });
     }
 
     redis_store_peer(const redis_store_peer&) = delete;
@@ -148,9 +152,7 @@ private:
     }
 
     [[nodiscard]] bool closed(const std::error_code& error) const noexcept {
-        return error == asio::error::eof || error == asio::error::connection_reset ||
-               error == asio::error::connection_aborted ||
-               (closing_ && (error == asio::error::operation_aborted || error == asio::error::bad_descriptor));
+        return error == asio::error::eof || error == asio::error::connection_reset || error == asio::error::connection_aborted || (closing_ && (error == asio::error::operation_aborted || error == asio::error::bad_descriptor));
     }
 
     asio::awaitable<void> accept_connections() {
@@ -159,7 +161,9 @@ private:
                 auto socket = std::make_shared<socket_type>(io_);
                 co_await acceptor_.async_accept(*socket, asio::use_awaitable);
                 sockets_.push_back(socket);
-                asio::co_spawn(io_, serve(socket), [this](std::exception_ptr failure) { record_failure(failure); });
+                asio::co_spawn(io_, serve(socket), [this](std::exception_ptr failure) {
+                    record_failure(failure);
+                });
             }
         } catch (const std::system_error& error) {
             if (!closed(error.code())) {
@@ -190,8 +194,7 @@ private:
             }
             const auto length = static_cast<std::size_t>(std::stoull(std::string(std::string_view(length_line).substr(1))));
             if (buffer.size() < length + 2) {
-                co_await asio::async_read(socket, asio::dynamic_buffer(buffer),
-                    asio::transfer_exactly(length + 2 - buffer.size()), asio::use_awaitable);
+                co_await asio::async_read(socket, asio::dynamic_buffer(buffer), asio::transfer_exactly(length + 2 - buffer.size()), asio::use_awaitable);
             }
             if (buffer.compare(length, 2, "\r\n") != 0) {
                 throw std::runtime_error("invalid RESP bulk ending");
@@ -233,8 +236,7 @@ private:
             }
             return ":" + std::string(std::to_string(removed)) + "\r\n";
         }
-        if (name == "SCAN" && arguments.size() == 6 && arguments[1] == "0" &&
-            arguments[2] == "MATCH" && arguments[3].ends_with('*') && arguments[4] == "COUNT") {
+        if (name == "SCAN" && arguments.size() == 6 && arguments[1] == "0" && arguments[2] == "MATCH" && arguments[3].ends_with('*') && arguments[4] == "COUNT") {
             const auto prefix = std::string_view(arguments[3]).substr(0, arguments[3].size() - 1);
             std::string values{};
             std::size_t count = 0;
@@ -284,8 +286,7 @@ private:
 
 // Every read names the same cache id; each result shape stores its own entry.
 ruvia::task<std::string> read_one(const ruvia::db_session& handle) {
-    const auto row =
-        co_await handle.repository<record>().query_builder().cache(cache_id, cache_lifetime).get_one();
+    const auto row = co_await handle.repository<record>().query_builder().cache(cache_id, cache_lifetime).get_one();
     co_return row ? std::string(std::string_view(row->get<"v">())) : std::string("missing");
 }
 
@@ -298,8 +299,7 @@ ruvia::task<std::uint64_t> read_count(const ruvia::db_session& handle) {
 }
 
 ruvia::task<std::vector<std::string>> read_many(const ruvia::db_session& handle, std::string_view id = cache_id) {
-    const auto rows =
-        co_await handle.repository<record>().query_builder().cache(id, cache_lifetime).get_many();
+    const auto rows = co_await handle.repository<record>().query_builder().cache(id, cache_lifetime).get_many();
     std::vector<std::string> values{};
     for (std::size_t index = 0; index < rows.size(); ++index) {
         values.emplace_back(std::string_view(rows[index].get<"v">()));
@@ -361,14 +361,10 @@ ruvia::task<void> wait_until(const ruvia::worker_ref& worker, predicate_type rea
 // caches through it, on one event loop; both shut down before a failure is
 // reported.
 template <typename scenario_type>
-void run_with_query_cache(redis_store_peer& redis_peer, const ruvia::db_config& database_config,
-    scenario_type& scenario, std::optional<std::size_t> max_reply_bytes = ruvia::redis_config{}.max_reply_bytes_) {
+void run_with_query_cache(redis_store_peer& redis_peer, const ruvia::db_config& database_config, scenario_type& scenario, std::optional<std::size_t> max_reply_bytes = ruvia::redis_config{}.max_reply_bytes_) {
     auto& io = ruvia::test::new_test_io_context();
     auto attachment = ruvia::attach_event_loop(io);
-    ruvia::redis_config redis_config{.host_ = "127.0.0.1",
-        .port_ = redis_peer.port(),
-        .tls_ = {.mode_ = ruvia::client_tls_mode::disabled},
-        .pool_size_per_worker_ = 1};
+    ruvia::redis_config redis_config{.host_ = "127.0.0.1", .port_ = redis_peer.port(), .tls_ = {.mode_ = ruvia::client_tls_mode::disabled}, .pool_size_per_worker_ = 1};
     redis_config.max_reply_bytes_ = max_reply_bytes;
     auto exercise = [&]() -> ruvia::task<void> {
         ruvia::redis_client redis(attachment.loop(), redis_config);
@@ -410,8 +406,7 @@ TEST(Ruvia, db_query_result_cache_remove_invalidates_repository_result_shapes) {
     // The database answers the statements the cache lets through, in order. A
     // read served from the cache consumes no reply, so a stale entry shows up
     // as the previous value and an unexpected database read as the next one.
-    ruvia::test::backend_startup_peer database_peer(ruvia::test::backend_startup_peer::protocol::postgresql, false,
-        ruvia::test::backend_startup_peer::after_startup::idle,
+    ruvia::test::backend_startup_peer database_peer(ruvia::test::backend_startup_peer::protocol::postgresql, false, ruvia::test::backend_startup_peer::after_startup::idle,
         std::vector<ruvia::test::backend_startup_peer::postgres_reply>({
             {.rows_ = std::vector<std::string>({std::string("one"), std::string("two"), std::string("three")})},
             {.rows_ = std::vector<std::string>({std::string("alpha")})},
@@ -426,10 +421,7 @@ TEST(Ruvia, db_query_result_cache_remove_invalidates_repository_result_shapes) {
         }));
     auto& io = ruvia::test::new_test_io_context();
     auto attachment = ruvia::attach_event_loop(io);
-    const ruvia::redis_config redis_config{.host_ = "127.0.0.1",
-        .port_ = redis_peer.port(),
-        .tls_ = {.mode_ = ruvia::client_tls_mode::disabled},
-        .pool_size_per_worker_ = 1};
+    const ruvia::redis_config redis_config{.host_ = "127.0.0.1", .port_ = redis_peer.port(), .tls_ = {.mode_ = ruvia::client_tls_mode::disabled}, .pool_size_per_worker_ = 1};
     auto exercise = [&]() -> ruvia::task<void> {
         ruvia::redis_client redis(attachment.loop(), redis_config);
         std::exception_ptr failure;
@@ -513,14 +505,10 @@ TEST(Ruvia, db_query_result_cache_remove_invalidates_repository_result_shapes) {
 
 TEST(Ruvia, db_query_result_cache_distinguishes_sql_parameter_values) {
     redis_store_peer redis_peer;
-    ruvia::test::backend_startup_peer database_peer(ruvia::test::backend_startup_peer::protocol::postgresql, false,
-        ruvia::test::backend_startup_peer::after_startup::idle, std::vector<ruvia::test::backend_startup_peer::postgres_reply>({{.rows_ = std::vector<std::string>({std::string("first")})}, {.rows_ = std::vector<std::string>({std::string("second")})}}));
+    ruvia::test::backend_startup_peer database_peer(ruvia::test::backend_startup_peer::protocol::postgresql, false, ruvia::test::backend_startup_peer::after_startup::idle, std::vector<ruvia::test::backend_startup_peer::postgres_reply>({{.rows_ = std::vector<std::string>({std::string("first")})}, {.rows_ = std::vector<std::string>({std::string("second")})}}));
     auto& io = ruvia::test::new_test_io_context();
     auto attachment = ruvia::attach_event_loop(io);
-    const ruvia::redis_config redis_config{.host_ = "127.0.0.1",
-        .port_ = redis_peer.port(),
-        .tls_ = {.mode_ = ruvia::client_tls_mode::disabled},
-        .pool_size_per_worker_ = 1};
+    const ruvia::redis_config redis_config{.host_ = "127.0.0.1", .port_ = redis_peer.port(), .tls_ = {.mode_ = ruvia::client_tls_mode::disabled}, .pool_size_per_worker_ = 1};
     auto exercise = [&]() -> ruvia::task<void> {
         ruvia::redis_client redis(attachment.loop(), redis_config);
         std::exception_ptr failure;
@@ -568,14 +556,10 @@ TEST(Ruvia, db_query_result_cache_preserves_empty_and_zero_column_results) {
     const auto column_count_offset = row_count_offset + 8;
     empty.append(16, '\0');
     redis_peer.poison_reads(empty);
-    ruvia::test::backend_startup_peer database_peer(ruvia::test::backend_startup_peer::protocol::postgresql, false,
-        ruvia::test::backend_startup_peer::after_startup::idle, std::vector<ruvia::test::backend_startup_peer::postgres_reply>());
+    ruvia::test::backend_startup_peer database_peer(ruvia::test::backend_startup_peer::protocol::postgresql, false, ruvia::test::backend_startup_peer::after_startup::idle, std::vector<ruvia::test::backend_startup_peer::postgres_reply>());
     auto& io = ruvia::test::new_test_io_context();
     auto attachment = ruvia::attach_event_loop(io);
-    const ruvia::redis_config redis_config{.host_ = "127.0.0.1",
-        .port_ = redis_peer.port(),
-        .tls_ = {.mode_ = ruvia::client_tls_mode::disabled},
-        .pool_size_per_worker_ = 1};
+    const ruvia::redis_config redis_config{.host_ = "127.0.0.1", .port_ = redis_peer.port(), .tls_ = {.mode_ = ruvia::client_tls_mode::disabled}, .pool_size_per_worker_ = 1};
     auto exercise = [&]() -> ruvia::task<void> {
         ruvia::redis_client redis(attachment.loop(), redis_config);
         std::exception_ptr failure;
@@ -638,22 +622,17 @@ TEST(Ruvia, db_query_result_cache_rejects_corrupt_zero_column_entries) {
     corrupt.append(8, '\xff');
     corrupt.append(8, '\0');
     redis_peer.poison_reads(std::move(corrupt));
-    ruvia::test::backend_startup_peer database_peer(ruvia::test::backend_startup_peer::protocol::postgresql, false,
-        ruvia::test::backend_startup_peer::after_startup::idle, std::vector<ruvia::test::backend_startup_peer::postgres_reply>({{.rows_ = std::vector<std::string>({std::string("fresh")})}}));
+    ruvia::test::backend_startup_peer database_peer(ruvia::test::backend_startup_peer::protocol::postgresql, false, ruvia::test::backend_startup_peer::after_startup::idle, std::vector<ruvia::test::backend_startup_peer::postgres_reply>({{.rows_ = std::vector<std::string>({std::string("fresh")})}}));
     auto& io = ruvia::test::new_test_io_context();
     auto attachment = ruvia::attach_event_loop(io);
-    const ruvia::redis_config redis_config{.host_ = "127.0.0.1",
-        .port_ = redis_peer.port(),
-        .tls_ = {.mode_ = ruvia::client_tls_mode::disabled},
-        .pool_size_per_worker_ = 1};
+    const ruvia::redis_config redis_config{.host_ = "127.0.0.1", .port_ = redis_peer.port(), .tls_ = {.mode_ = ruvia::client_tls_mode::disabled}, .pool_size_per_worker_ = 1};
     auto exercise = [&]() -> ruvia::task<void> {
         ruvia::redis_client redis(attachment.loop(), redis_config);
         std::exception_ptr failure;
         try {
             co_await redis.connect();
             const auto store = redis.redis();
-            ruvia::db_client database(
-                attachment.loop(), database_peer.config(), store, ruvia::db_cache_config{.ignore_errors_ = true});
+            ruvia::db_client database(attachment.loop(), database_peer.config(), store, ruvia::db_cache_config{.ignore_errors_ = true});
             try {
                 co_await database.connect();
                 const std::vector<std::string> fresh({std::string("fresh")});
@@ -683,15 +662,10 @@ TEST(Ruvia, db_query_result_cache_rejects_corrupt_zero_column_entries) {
 
 TEST(Ruvia, db_client_shutdown_cancels_inflight_cache_without_closing_borrowed_redis) {
     redis_store_peer redis_peer;
-    ruvia::test::backend_startup_peer database_peer(
-        ruvia::test::backend_startup_peer::protocol::postgresql, false,
-        ruvia::test::backend_startup_peer::after_startup::idle);
+    ruvia::test::backend_startup_peer database_peer(ruvia::test::backend_startup_peer::protocol::postgresql, false, ruvia::test::backend_startup_peer::after_startup::idle);
     auto& io = ruvia::test::new_test_io_context();
     auto attachment = ruvia::attach_event_loop(io);
-    const ruvia::redis_config redis_config{.host_ = "127.0.0.1",
-        .port_ = redis_peer.port(),
-        .tls_ = {.mode_ = ruvia::client_tls_mode::disabled},
-        .pool_size_per_worker_ = 1};
+    const ruvia::redis_config redis_config{.host_ = "127.0.0.1", .port_ = redis_peer.port(), .tls_ = {.mode_ = ruvia::client_tls_mode::disabled}, .pool_size_per_worker_ = 1};
     auto exercise = [&]() -> ruvia::task<void> {
         ruvia::redis_client redis(attachment.loop(), redis_config);
         std::exception_ptr failure;
@@ -700,13 +674,14 @@ TEST(Ruvia, db_client_shutdown_cancels_inflight_cache_without_closing_borrowed_r
             ruvia::db_client database(attachment.loop(), database_peer.config(), redis.redis(), ruvia::db_cache_config{});
             try {
                 co_await database.connect();
-                redis_peer.stall_next_read([&database] { database.close(); });
+                redis_peer.stall_next_read([&database] {
+                    database.close();
+                });
                 bool cancelled = false;
                 try {
                     (void)co_await read_sql_cached(database.db(), "cancel-cache");
                 } catch (const ruvia::redis_error& error) {
-                    cancelled = error.code() == ruvia::redis_error::code_type::cancelled ||
-                                error.code() == ruvia::redis_error::code_type::closing;
+                    cancelled = error.code() == ruvia::redis_error::code_type::cancelled || error.code() == ruvia::redis_error::code_type::closing;
                 }
                 EXPECT_TRUE(cancelled);
             } catch (...) {
@@ -742,8 +717,7 @@ TEST(Ruvia, db_query_result_cache_skips_entries_beyond_the_redis_reply_limit) {
     redis_store_peer redis_peer;
     const std::string large(512, 'x');
     const std::string larger(513, 'y');
-    peer_type database_peer(peer_type::protocol::postgresql, false, peer_type::after_startup::idle,
-        std::vector<ruvia::test::backend_startup_peer::postgres_reply>({{.rows_ = std::vector<std::string>({std::string(large)})}, {.rows_ = std::vector<std::string>({std::string(larger)})}, {.rows_ = std::vector<std::string>({std::string("small")})}}));
+    peer_type database_peer(peer_type::protocol::postgresql, false, peer_type::after_startup::idle, std::vector<ruvia::test::backend_startup_peer::postgres_reply>({{.rows_ = std::vector<std::string>({std::string(large)})}, {.rows_ = std::vector<std::string>({std::string(larger)})}, {.rows_ = std::vector<std::string>({std::string("small")})}}));
     auto scenario = [&](ruvia::db_client& database, const ruvia::redis_session&) -> ruvia::task<void> {
         const auto handle = database.db().with_options({.timeout_ = std::chrono::seconds(5)});
         EXPECT_EQ(co_await read_sql_cached(handle, "large"), large);
@@ -761,8 +735,7 @@ TEST(Ruvia, db_query_result_cache_skips_entries_beyond_the_redis_reply_limit) {
 TEST(Ruvia, db_query_result_cache_coalesces_concurrent_misses_of_one_key) {
     using peer_type = ruvia::test::backend_startup_peer;
     redis_store_peer redis_peer;
-    peer_type database_peer(peer_type::protocol::postgresql, false, peer_type::after_startup::idle,
-        std::vector<ruvia::test::backend_startup_peer::postgres_reply>({{.rows_ = std::vector<std::string>({std::string("first")}), .deferred_ = true}}));
+    peer_type database_peer(peer_type::protocol::postgresql, false, peer_type::after_startup::idle, std::vector<ruvia::test::backend_startup_peer::postgres_reply>({{.rows_ = std::vector<std::string>({std::string("first")}), .deferred_ = true}}));
     std::array<query_cache_test::read_outcome, 3> outcomes;
     auto scenario = [&](ruvia::db_client& database, const ruvia::redis_session& store) -> ruvia::task<void> {
         const auto handle = database.db().with_options({.timeout_ = std::chrono::seconds(5)});
@@ -770,8 +743,9 @@ TEST(Ruvia, db_query_result_cache_coalesces_concurrent_misses_of_one_key) {
         for (auto& outcome : outcomes) {
             readers.spawn(query_cache_test::read_sql_into(handle, "same", outcome));
         }
-        co_await query_cache_test::wait_until(
-            database.worker(), [&] { return database_peer.postgres_parses().size() == 1; });
+        co_await query_cache_test::wait_until(database.worker(), [&] {
+            return database_peer.postgres_parses().size() == 1;
+        });
         // Redis answers in order on its one connection: once this reply is in,
         // every reader has seen its miss.
         (void)co_await store.get("barrier");
@@ -793,22 +767,23 @@ TEST(Ruvia, db_query_result_cache_coalesces_concurrent_misses_of_one_key) {
 TEST(Ruvia, db_query_result_cache_waiter_takes_over_from_a_cancelled_leader) {
     using peer_type = ruvia::test::backend_startup_peer;
     redis_store_peer redis_peer;
-    peer_type database_peer(peer_type::protocol::postgresql, false, peer_type::after_startup::reaccept,
-        std::vector<ruvia::test::backend_startup_peer::postgres_reply>({{.rows_ = std::vector<std::string>({std::string("abandoned")}), .deferred_ = true}, {.rows_ = std::vector<std::string>({std::string("taken over")})}}));
+    peer_type database_peer(peer_type::protocol::postgresql, false, peer_type::after_startup::reaccept, std::vector<ruvia::test::backend_startup_peer::postgres_reply>({{.rows_ = std::vector<std::string>({std::string("abandoned")}), .deferred_ = true}, {.rows_ = std::vector<std::string>({std::string("taken over")})}}));
     query_cache_test::read_outcome leader;
     query_cache_test::read_outcome waiter;
     auto scenario = [&](ruvia::db_client& database, const ruvia::redis_session& store) -> ruvia::task<void> {
         const auto handle = database.db().with_options({.timeout_ = std::chrono::seconds(5)});
         ruvia::stop_source stop;
         ruvia::task_scope readers(database.worker());
-        readers.spawn(query_cache_test::read_sql_into(
-            handle.with_options({.timeout_ = std::chrono::seconds(5), .stop_token_ = stop.token()}), "same", leader));
+        readers.spawn(query_cache_test::read_sql_into(handle.with_options({.timeout_ = std::chrono::seconds(5), .stop_token_ = stop.token()}), "same", leader));
         readers.spawn(query_cache_test::read_sql_into(handle, "same", waiter));
-        co_await query_cache_test::wait_until(
-            database.worker(), [&] { return database_peer.postgres_parses().size() == 1; });
+        co_await query_cache_test::wait_until(database.worker(), [&] {
+            return database_peer.postgres_parses().size() == 1;
+        });
         (void)co_await store.get("barrier");
         stop.request_stop();
-        co_await query_cache_test::wait_until(database.worker(), [&] { return leader.done_; });
+        co_await query_cache_test::wait_until(database.worker(), [&] {
+            return leader.done_;
+        });
         database_peer.release_replies();
         co_await readers.join();
     };
@@ -825,8 +800,7 @@ TEST(Ruvia, db_query_result_cache_waiter_takes_over_from_a_cancelled_leader) {
 TEST(Ruvia, db_query_result_cache_waiter_is_bounded_by_its_own_timeout) {
     using peer_type = ruvia::test::backend_startup_peer;
     redis_store_peer redis_peer;
-    peer_type database_peer(peer_type::protocol::postgresql, false, peer_type::after_startup::idle,
-        std::vector<ruvia::test::backend_startup_peer::postgres_reply>({{.rows_ = std::vector<std::string>({std::string("first")}), .deferred_ = true}}));
+    peer_type database_peer(peer_type::protocol::postgresql, false, peer_type::after_startup::idle, std::vector<ruvia::test::backend_startup_peer::postgres_reply>({{.rows_ = std::vector<std::string>({std::string("first")}), .deferred_ = true}}));
     query_cache_test::read_outcome leader;
     query_cache_test::read_outcome waiter;
     bool waiter_finished_first = false;
@@ -834,9 +808,10 @@ TEST(Ruvia, db_query_result_cache_waiter_is_bounded_by_its_own_timeout) {
         const auto handle = database.db().with_options({.timeout_ = std::chrono::seconds(5)});
         ruvia::task_scope readers(database.worker());
         readers.spawn(query_cache_test::read_sql_into(handle, "same", leader));
-        readers.spawn(query_cache_test::read_sql_into(
-            handle.with_options({.timeout_ = std::chrono::milliseconds(100)}), "same", waiter));
-        co_await query_cache_test::wait_until(database.worker(), [&] { return waiter.done_; });
+        readers.spawn(query_cache_test::read_sql_into(handle.with_options({.timeout_ = std::chrono::milliseconds(100)}), "same", waiter));
+        co_await query_cache_test::wait_until(database.worker(), [&] {
+            return waiter.done_;
+        });
         waiter_finished_first = !leader.done_;
         database_peer.release_replies();
         co_await readers.join();
@@ -855,16 +830,16 @@ TEST(Ruvia, db_query_result_cache_waiter_is_bounded_by_its_own_timeout) {
 TEST(Ruvia, db_query_result_cache_remove_detaches_inflight_fills) {
     using peer_type = ruvia::test::backend_startup_peer;
     redis_store_peer redis_peer;
-    peer_type database_peer(peer_type::protocol::postgresql, false, peer_type::after_startup::idle,
-        std::vector<ruvia::test::backend_startup_peer::postgres_reply>({{.rows_ = std::vector<std::string>({std::string("stale")}), .deferred_ = true}, {.rows_ = std::vector<std::string>({std::string("fresh")})}}));
+    peer_type database_peer(peer_type::protocol::postgresql, false, peer_type::after_startup::idle, std::vector<ruvia::test::backend_startup_peer::postgres_reply>({{.rows_ = std::vector<std::string>({std::string("stale")}), .deferred_ = true}, {.rows_ = std::vector<std::string>({std::string("fresh")})}}));
     query_cache_test::read_outcome before;
     query_cache_test::read_outcome after;
     auto scenario = [&](ruvia::db_client& database, const ruvia::redis_session& store) -> ruvia::task<void> {
         const auto handle = database.db().with_options({.timeout_ = std::chrono::seconds(5)});
         ruvia::task_scope readers(database.worker());
         readers.spawn(query_cache_test::read_many_into(handle, before));
-        co_await query_cache_test::wait_until(
-            database.worker(), [&] { return database_peer.postgres_parses().size() == 1; });
+        co_await query_cache_test::wait_until(database.worker(), [&] {
+            return database_peer.postgres_parses().size() == 1;
+        });
         co_await handle.query_result_cache().remove(cache_id);
         readers.spawn(query_cache_test::read_many_into(handle, after));
         (void)co_await store.get("barrier");
@@ -891,11 +866,7 @@ using ruvia::db_table_definition;
 using ruvia::db_table_option;
 using ruvia::test::throws_on;
 
-RUVIA_DB_ENTITY(enum_entity_type, "enum_events",
-    ruvia::db_column<"state", std::string,
-        ruvia::db_column_options{.enum_name_ = ruvia::fixed_string{"app.event_state"}, .default_expression_ = ruvia::fixed_string{"'pending'::app.event_state"}}>,
-    ruvia::db_column<"created_at", std::string,
-        ruvia::db_column_options{.data_type_ = db_data_type::timestamp_tz, .default_expression_ = ruvia::fixed_string{"now()"}}>)
+RUVIA_DB_ENTITY(enum_entity_type, "enum_events", ruvia::db_column<"state", std::string, ruvia::db_column_options{.enum_name_ = ruvia::fixed_string{"app.event_state"}, .default_expression_ = ruvia::fixed_string{"'pending'::app.event_state"}}>, ruvia::db_column<"created_at", std::string, ruvia::db_column_options{.data_type_ = db_data_type::timestamp_tz, .default_expression_ = ruvia::fixed_string{"now()"}}>)
 
 TEST(Ruvia, db_schema_entity_named_enum_and_default_expressions) {
     db_schema schema({.driver_ = db_driver::postgresql});
@@ -904,22 +875,17 @@ TEST(Ruvia, db_schema_entity_named_enum_and_default_expressions) {
     EXPECT_TRUE(migrations[0].sql().find("\"state\" \"app\".\"event_state\" NOT NULL DEFAULT ('pending'::app.event_state)") != std::string_view::npos);
     EXPECT_TRUE(migrations[0].sql().find("DEFAULT (now())") != std::string_view::npos);
     db_schema maria({.driver_ = db_driver::mariadb});
-    EXPECT_TRUE(throws_on([&] { maria.create_table<enum_entity_type>(); }));
+    EXPECT_TRUE(throws_on([&] {
+        maria.create_table<enum_entity_type>();
+    }));
     ruvia::db_query defaults;
-    EXPECT_TRUE(throws_on([&] { schema.create_table<enum_entity_type>({.defaults_ = {{"state", defaults.value("ready")}}}); }));
+    EXPECT_TRUE(throws_on([&] {
+        schema.create_table<enum_entity_type>({.defaults_ = {{"state", defaults.value("ready")}}});
+    }));
 }
 
-RUVIA_DB_ENTITY(schema_target_type, "schema_targets", ruvia::db_column<"id", std::int64_t, ruvia::db_column_options{.primary_key_ = true}>,
-    ruvia::db_column<"tenant_id", std::int64_t, ruvia::db_column_options{.primary_key_ = true}>)
-RUVIA_DB_ENTITY(schema_owner_type, "schema_owners",
-    ruvia::db_column<"id", std::int64_t, ruvia::db_column_options{.primary_key_ = true}>,
-    ruvia::db_column<"parent_id", std::int64_t>, ruvia::db_column<"parent_tenant_id", std::int64_t>,
-    ruvia::db_column<"peer_id", std::int64_t>,
-    ruvia::db_many_to_one<"parent", schema_target_type, ruvia::db_join_column<"parent_id", "id">,
-        ruvia::db_join_column<"parent_tenant_id", "tenant_id">>,
-    ruvia::db_one_to_one<"peer", schema_target_type, ruvia::db_join_column<"peer_id", "id">>,
-    ruvia::db_one_to_many<"children", schema_target_type, "parent">,
-    ruvia::db_many_to_many<"labels", schema_target_type, ruvia::db_join_table<"owner_labels", ruvia::db_join_columns<ruvia::db_join_column<"owner_id", "id">>, ruvia::db_join_columns<ruvia::db_join_column<"label_id", "id">, ruvia::db_join_column<"label_tenant_id", "tenant_id">>>>)
+RUVIA_DB_ENTITY(schema_target_type, "schema_targets", ruvia::db_column<"id", std::int64_t, ruvia::db_column_options{.primary_key_ = true}>, ruvia::db_column<"tenant_id", std::int64_t, ruvia::db_column_options{.primary_key_ = true}>)
+RUVIA_DB_ENTITY(schema_owner_type, "schema_owners", ruvia::db_column<"id", std::int64_t, ruvia::db_column_options{.primary_key_ = true}>, ruvia::db_column<"parent_id", std::int64_t>, ruvia::db_column<"parent_tenant_id", std::int64_t>, ruvia::db_column<"peer_id", std::int64_t>, ruvia::db_many_to_one<"parent", schema_target_type, ruvia::db_join_column<"parent_id", "id">, ruvia::db_join_column<"parent_tenant_id", "tenant_id">>, ruvia::db_one_to_one<"peer", schema_target_type, ruvia::db_join_column<"peer_id", "id">>, ruvia::db_one_to_many<"children", schema_target_type, "parent">, ruvia::db_many_to_many<"labels", schema_target_type, ruvia::db_join_table<"owner_labels", ruvia::db_join_columns<ruvia::db_join_column<"owner_id", "id">>, ruvia::db_join_columns<ruvia::db_join_column<"label_id", "id">, ruvia::db_join_column<"label_tenant_id", "tenant_id">>>>)
 
 TEST(Ruvia, db_schema_create_table_composite_foreign_key_and_nullable_default) {
     db_schema schema({.driver_ = db_driver::postgresql});
@@ -955,7 +921,9 @@ TEST(Ruvia, db_schema_postgresql_batch_is_atomic_and_unwrapped_isolated) {
     db_schema invalid({.driver_ = db_driver::postgresql});
     invalid.create_schema("one");
     invalid.create_index({.name_ = "idx", .table_ = "t", .keys_ = {{.column_ = "x"}}, .concurrently_ = true});
-    EXPECT_TRUE(throws_on([&] { (void)invalid.compile("004_invalid"); }));
+    EXPECT_TRUE(throws_on([&] {
+        (void)invalid.compile("004_invalid");
+    }));
 }
 
 TEST(Ruvia, db_schema_enum_and_postgresql_only_operations_reject_mariadb) {
@@ -970,12 +938,12 @@ TEST(Ruvia, db_schema_enum_and_postgresql_only_operations_reject_mariadb) {
     EXPECT_TRUE(added[0].atomicity() == ruvia::db_migration_atomicity::unwrapped);
 
     db_schema maria({.driver_ = db_driver::mariadb});
-    EXPECT_TRUE(throws_on([&] { maria.create_enum("status", values); }));
+    EXPECT_TRUE(throws_on([&] {
+        maria.create_enum("status", values);
+    }));
 }
 
-RUVIA_DB_ENTITY(app_events_entity_type, "app.events",
-    ruvia::db_column<"id", std::int64_t, ruvia::db_column_options{.primary_key_ = true, .generated_ = true}>,
-    ruvia::db_column<"payloads", std::vector<std::string>, ruvia::db_column_options{.data_type_ = db_data_type::jsonb}>)
+RUVIA_DB_ENTITY(app_events_entity_type, "app.events", ruvia::db_column<"id", std::int64_t, ruvia::db_column_options{.primary_key_ = true, .generated_ = true}>, ruvia::db_column<"payloads", std::vector<std::string>, ruvia::db_column_options{.data_type_ = db_data_type::jsonb}>)
 
 TEST(Ruvia, db_schema_entity_metadata_preserves_explicit_array_element_types) {
     using entity_type = app_events_entity_type;
@@ -985,9 +953,7 @@ TEST(Ruvia, db_schema_entity_metadata_preserves_explicit_array_element_types) {
     EXPECT_EQ(migrations[0].sql(), "CREATE TABLE \"app\".\"events\" (\"id\" BIGINT GENERATED BY DEFAULT AS IDENTITY NOT NULL, \"payloads\" JSONB[] NOT NULL, CONSTRAINT \"events_pkey\" PRIMARY KEY (\"id\"))");
 }
 
-RUVIA_DB_ENTITY(char_records_entity_type, "char_records",
-    ruvia::db_column<"code", std::string, ruvia::db_column_options{.data_type_ = db_data_type::char_value, .length_ = 64}>,
-    ruvia::db_column<"codes", std::vector<std::string>, ruvia::db_column_options{.data_type_ = db_data_type::char_value, .length_ = 8}>)
+RUVIA_DB_ENTITY(char_records_entity_type, "char_records", ruvia::db_column<"code", std::string, ruvia::db_column_options{.data_type_ = db_data_type::char_value, .length_ = 64}>, ruvia::db_column<"codes", std::vector<std::string>, ruvia::db_column_options{.data_type_ = db_data_type::char_value, .length_ = 8}>)
 
 TEST(Ruvia, db_schema_char_entity_and_column_operations_render_with_dialect_limits) {
     using entity_type = char_records_entity_type;
@@ -1036,33 +1002,26 @@ TEST(Ruvia, db_schema_char_entity_and_column_operations_render_with_dialect_limi
     EXPECT_TRUE(timestamps.compile("timestamps")[0].sql().find("`at` DATETIME(6)") != std::string_view::npos);
 }
 
-RUVIA_DB_ENTITY(computed_events_entity_type, "computed_events",
-    ruvia::db_column<"first_name", ruvia::string>,
-    ruvia::db_column<"last_name", ruvia::string>,
-    ruvia::db_column<"display_name", ruvia::string,
-        ruvia::db_column_options{.generated_type_ = db_generated_type::stored}>)
-RUVIA_DB_ENTITY(maria_computed_entity_type, "maria_computed",
-    ruvia::db_column<"value", std::int64_t>,
-    ruvia::db_column<"double_value", std::int64_t,
-        ruvia::db_column_options{.generated_type_ = db_generated_type::virtual_value, .nullable_ = true}>)
+RUVIA_DB_ENTITY(computed_events_entity_type, "computed_events", ruvia::db_column<"first_name", ruvia::string>, ruvia::db_column<"last_name", ruvia::string>, ruvia::db_column<"display_name", ruvia::string, ruvia::db_column_options{.generated_type_ = db_generated_type::stored}>)
+RUVIA_DB_ENTITY(maria_computed_entity_type, "maria_computed", ruvia::db_column<"value", std::int64_t>, ruvia::db_column<"double_value", std::int64_t, ruvia::db_column_options{.generated_type_ = db_generated_type::virtual_value, .nullable_ = true}>)
 
 TEST(Ruvia, db_schema_entity_computed_columns_render_and_validate) {
     using entity_type = computed_events_entity_type;
     ruvia::db_query expression;
-    auto generated = expression.binary(expression.column("first_name"), ruvia::db_binary_operator::concat,
-        expression.column("last_name"));
+    auto generated = expression.binary(expression.column("first_name"), ruvia::db_binary_operator::concat, expression.column("last_name"));
     db_schema schema({.driver_ = db_driver::postgresql});
     schema.create_table<entity_type>({.generated_columns_ = {{.column_ = "display_name", .expression_ = generated}}});
     const auto migrations = schema.compile("computed");
     const auto sql = migrations[0].sql();
     EXPECT_TRUE(sql.find("\"display_name\" TEXT GENERATED ALWAYS AS") != std::string_view::npos);
     EXPECT_TRUE(sql.find(" STORED") != std::string_view::npos);
-    EXPECT_TRUE(throws_on([&] { schema.create_table<entity_type>(); }));
+    EXPECT_TRUE(throws_on([&] {
+        schema.create_table<entity_type>();
+    }));
 
     using maria_entity_type = maria_computed_entity_type;
     ruvia::db_query maria_expression;
-    auto doubled = maria_expression.binary(maria_expression.column("value"), ruvia::db_binary_operator::multiply,
-        maria_expression.value(2));
+    auto doubled = maria_expression.binary(maria_expression.column("value"), ruvia::db_binary_operator::multiply, maria_expression.value(2));
     db_schema maria({.driver_ = db_driver::mariadb});
     maria.create_table<maria_entity_type>({.generated_columns_ = {{.column_ = "double_value", .expression_ = doubled}}});
     EXPECT_TRUE(maria.compile("maria_computed")[0].sql().find(" VIRTUAL") != std::string_view::npos);
@@ -1075,10 +1034,7 @@ TEST(Ruvia, db_schema_entity_computed_columns_render_and_validate) {
     }));
 }
 
-RUVIA_DB_ENTITY(invalid_computed_type, "invalid_computed",
-    ruvia::db_column<"value", std::int64_t>,
-    ruvia::db_column<"total", std::int64_t,
-        ruvia::db_column_options{.generated_type_ = db_generated_type::stored}>)
+RUVIA_DB_ENTITY(invalid_computed_type, "invalid_computed", ruvia::db_column<"value", std::int64_t>, ruvia::db_column<"total", std::int64_t, ruvia::db_column_options{.generated_type_ = db_generated_type::stored}>)
 
 namespace db_schema_column_option_test {
 
@@ -1134,15 +1090,11 @@ TEST(Ruvia, db_schema_computed_columns_reject_invalid_metadata_and_conflicts) {
     }));
     EXPECT_TRUE(throws_on([&] {
         db_schema schema({.driver_ = db_driver::postgresql});
-        schema.create_table<computed_type>({.defaults_ = {{.column_ = "total", .value_ = expression}},
-            .generated_columns_ = {{.column_ = "total", .expression_ = expression}}});
+        schema.create_table<computed_type>({.defaults_ = {{.column_ = "total", .value_ = expression}}, .generated_columns_ = {{.column_ = "total", .expression_ = expression}}});
     }));
 }
 
-RUVIA_DB_ENTITY(computed_keys_entity_type, "computed_keys",
-    ruvia::db_column<"source", std::int64_t>,
-    ruvia::db_column<"computed", std::int64_t,
-        ruvia::db_column_options{.primary_key_ = true, .generated_type_ = db_generated_type::stored}>)
+RUVIA_DB_ENTITY(computed_keys_entity_type, "computed_keys", ruvia::db_column<"source", std::int64_t>, ruvia::db_column<"computed", std::int64_t, ruvia::db_column_options{.primary_key_ = true, .generated_type_ = db_generated_type::stored}>)
 
 TEST(Ruvia, db_schema_mariadb_computed_columns_reject_table_primary_keys) {
     using entity_type = computed_keys_entity_type;
@@ -1157,7 +1109,9 @@ TEST(Ruvia, db_schema_mariadb_computed_columns_reject_table_primary_keys) {
         if (composite) {
             table_value.constraints_[0].columns_.push_back("source");
         }
-        EXPECT_TRUE(throws_on([&] { schema.create_table(table_value); }));
+        EXPECT_TRUE(throws_on([&] {
+            schema.create_table(table_value);
+        }));
     }
 }
 
@@ -1245,17 +1199,27 @@ TEST(Ruvia, db_schema_single_perform_and_control_flow_have_complete_blocks) {
     EXPECT_TRUE(migrations[0].sql().find("DO $ruvia1$ BEGIN PERFORM") == 0);
     ruvia::db_procedure body;
     body.begin_if(query.value(true));
-    EXPECT_TRUE(throws_on([&] { (void)body.body(); }));
+    EXPECT_TRUE(throws_on([&] {
+        (void)body.body();
+    }));
     body.end_if();
-    EXPECT_TRUE(throws_on([&] { body.otherwise(); }));
+    EXPECT_TRUE(throws_on([&] {
+        body.otherwise();
+    }));
     db_schema maria({.driver_ = db_driver::mariadb});
-    EXPECT_TRUE(throws_on([&] { maria.validate_constraint("t", "fk"); }));
+    EXPECT_TRUE(throws_on([&] {
+        maria.validate_constraint("t", "fk");
+    }));
     ruvia::db_query removed;
     removed.delete_from("t").returning({removed.column("id")});
-    EXPECT_TRUE(throws_on([&] { schema.create_view("v", removed); }));
+    EXPECT_TRUE(throws_on([&] {
+        schema.create_view("v", removed);
+    }));
     ruvia::db_query read;
     read.with("removed", removed).from("removed");
-    EXPECT_TRUE(throws_on([&] { schema.create_view("v", read); }));
+    EXPECT_TRUE(throws_on([&] {
+        schema.create_view("v", read);
+    }));
 }
 
 TEST(Ruvia, db_schema_ddl_operations_and_table_options_render_for_both_drivers) {
@@ -1263,23 +1227,11 @@ TEST(Ruvia, db_schema_ddl_operations_and_table_options_render_for_both_drivers) 
     const auto pg_default = pg_expressions.value("pending");
     db_schema pg({.driver_ = db_driver::postgresql});
     pg.create_schema("cs_pg", true);
-    pg.create_table({.name_ = "cs_pg.records",
-        .columns_ = {{.name_ = "id",
-                         .type_ = {.data_type_ = db_data_type::big_int},
-                         .identity_ = ruvia::db_identity::always},
-            {.name_ = "name",
-                .type_ = {.data_type_ = db_data_type::varchar, .length_ = 32},
-                .nullable_ = true,
-                .unique_ = true},
-            {.name_ = "state", .type_ = {.data_type_ = db_data_type::text}, .default_value_ = pg_default}},
-        .if_not_exists_ = true,
-        .unlogged_ = true});
+    pg.create_table({.name_ = "cs_pg.records", .columns_ = {{.name_ = "id", .type_ = {.data_type_ = db_data_type::big_int}, .identity_ = ruvia::db_identity::always}, {.name_ = "name", .type_ = {.data_type_ = db_data_type::varchar, .length_ = 32}, .nullable_ = true, .unique_ = true}, {.name_ = "state", .type_ = {.data_type_ = db_data_type::text}, .default_value_ = pg_default}}, .if_not_exists_ = true, .unlogged_ = true});
     pg.rename_table("cs_pg.records", "records_renamed");
-    pg.add_column("cs_pg.records_renamed",
-        {.name_ = "created_at", .type_ = {.data_type_ = db_data_type::timestamp_tz}, .nullable_ = true}, true);
+    pg.add_column("cs_pg.records_renamed", {.name_ = "created_at", .type_ = {.data_type_ = db_data_type::timestamp_tz}, .nullable_ = true}, true);
     pg.rename_column("cs_pg.records_renamed", "created_at", "created_on");
-    pg.alter_column_type("cs_pg.records_renamed", "state", {.data_type_ = db_data_type::varchar, .length_ = 64},
-        pg_expressions.column("state"));
+    pg.alter_column_type("cs_pg.records_renamed", "state", {.data_type_ = db_data_type::varchar, .length_ = 64}, pg_expressions.column("state"));
     pg.set_column_nullable("cs_pg.records_renamed", "state", true);
     pg.set_column_nullable("cs_pg.records_renamed", "state", false);
     pg.set_column_default("cs_pg.records_renamed", "state", pg_expressions.value("ready"));
@@ -1301,28 +1253,28 @@ TEST(Ruvia, db_schema_ddl_operations_and_table_options_render_for_both_drivers) 
     ruvia::db_query maria_expressions;
     db_schema maria({.driver_ = db_driver::mariadb});
     maria.create_schema("cs_maria", true);
-    maria.create_table({.name_ = "cs_maria.records",
-        .columns_ = {{.name_ = "id",
-                         .type_ = {.data_type_ = db_data_type::big_int},
-                         .identity_ = ruvia::db_identity::by_default},
-            {.name_ = "state",
-                .type_ = {.data_type_ = db_data_type::varchar, .length_ = 32},
-                .nullable_ = true,
-                .default_value_ = maria_expressions.value("ready")}},
-        .if_not_exists_ = true});
+    maria.create_table({.name_ = "cs_maria.records", .columns_ = {{.name_ = "id", .type_ = {.data_type_ = db_data_type::big_int}, .identity_ = ruvia::db_identity::by_default}, {.name_ = "state", .type_ = {.data_type_ = db_data_type::varchar, .length_ = 32}, .nullable_ = true, .default_value_ = maria_expressions.value("ready")}}, .if_not_exists_ = true});
     maria.add_column("cs_maria.records", {.name_ = "note", .type_ = {.data_type_ = db_data_type::text}, .nullable_ = true}, true);
     maria.rename_column("cs_maria.records", "note", "memo");
     maria.set_column_default("cs_maria.records", "memo", maria_expressions.value("n/a"));
     maria.drop_column_default("cs_maria.records", "memo");
-    EXPECT_TRUE(throws_on([&] { maria.drop_column("cs_maria.records", "memo", ruvia::db_drop_behavior::cascade, true); }));
+    EXPECT_TRUE(throws_on([&] {
+        maria.drop_column("cs_maria.records", "memo", ruvia::db_drop_behavior::cascade, true);
+    }));
     maria.drop_column("cs_maria.records", "memo", ruvia::db_drop_behavior::restrict, true);
     maria.add_constraint("cs_maria.records", {.name_ = "records_state_unique", .kind_ = ruvia::db_constraint_kind::unique, .columns_ = {"state"}});
-    EXPECT_TRUE(throws_on([&] { maria.drop_constraint("cs_maria.records", "records_state_unique", ruvia::db_drop_behavior::cascade, true); }));
+    EXPECT_TRUE(throws_on([&] {
+        maria.drop_constraint("cs_maria.records", "records_state_unique", ruvia::db_drop_behavior::cascade, true);
+    }));
     maria.drop_constraint("cs_maria.records", "records_state_unique", ruvia::db_drop_behavior::restrict, true);
     maria.rename_table("cs_maria.records", "records_renamed");
-    EXPECT_TRUE(throws_on([&] { maria.drop_table("cs_maria.records_renamed", ruvia::db_drop_behavior::cascade, true); }));
+    EXPECT_TRUE(throws_on([&] {
+        maria.drop_table("cs_maria.records_renamed", ruvia::db_drop_behavior::cascade, true);
+    }));
     maria.drop_table("cs_maria.records_renamed", ruvia::db_drop_behavior::restrict, true);
-    EXPECT_TRUE(throws_on([&] { maria.drop_schema("cs_maria", ruvia::db_drop_behavior::cascade, true); }));
+    EXPECT_TRUE(throws_on([&] {
+        maria.drop_schema("cs_maria", ruvia::db_drop_behavior::cascade, true);
+    }));
     maria.drop_schema("cs_maria", ruvia::db_drop_behavior::restrict, true);
     const auto maria_migrations = maria.compile("cs_maria_ops");
     EXPECT_EQ(maria_migrations.size(), std::size_t{12});
@@ -1338,31 +1290,17 @@ TEST(Ruvia, db_schema_ddl_operations_and_table_options_render_for_both_drivers) 
     EXPECT_TRUE(throws_on([&] {
         maria.alter_column_type("cs_maria.records", "state", {.data_type_ = db_data_type::text});
     }));
-    EXPECT_TRUE(throws_on([&] { maria.set_column_nullable("cs_maria.records", "state", true); }));
+    EXPECT_TRUE(throws_on([&] {
+        maria.set_column_nullable("cs_maria.records", "state", true);
+    }));
 }
 
 TEST(Ruvia, db_schema_constraints_cover_actions_deferred_not_valid_and_rejections) {
     ruvia::db_query expressions;
     db_schema pg({.driver_ = db_driver::postgresql});
-    pg.add_constraint("cs_child",
-        {.name_ = "child_fk",
-            .kind_ = ruvia::db_constraint_kind::foreign_key,
-            .columns_ = {"parent_id"},
-            .referenced_table_ = "cs_parent",
-            .referenced_columns_ = {"id"},
-            .on_delete_ = ruvia::db_referential_action::set_null,
-            .on_update_ = ruvia::db_referential_action::set_default,
-            .deferrable_ = true,
-            .initially_deferred_ = true,
-            .not_valid_ = true});
-    pg.add_constraint("cs_child",
-        {.name_ = "child_unique", .kind_ = ruvia::db_constraint_kind::unique, .columns_ = {"parent_id"}, .deferrable_ = true});
-    pg.add_constraint("cs_child",
-        {.name_ = "child_check",
-            .kind_ = ruvia::db_constraint_kind::check,
-            .not_valid_ = true,
-            .check_ = expressions.binary(expressions.column("amount"), ruvia::db_binary_operator::greater_equal,
-                expressions.value(0))});
+    pg.add_constraint("cs_child", {.name_ = "child_fk", .kind_ = ruvia::db_constraint_kind::foreign_key, .columns_ = {"parent_id"}, .referenced_table_ = "cs_parent", .referenced_columns_ = {"id"}, .on_delete_ = ruvia::db_referential_action::set_null, .on_update_ = ruvia::db_referential_action::set_default, .deferrable_ = true, .initially_deferred_ = true, .not_valid_ = true});
+    pg.add_constraint("cs_child", {.name_ = "child_unique", .kind_ = ruvia::db_constraint_kind::unique, .columns_ = {"parent_id"}, .deferrable_ = true});
+    pg.add_constraint("cs_child", {.name_ = "child_check", .kind_ = ruvia::db_constraint_kind::check, .not_valid_ = true, .check_ = expressions.binary(expressions.column("amount"), ruvia::db_binary_operator::greater_equal, expressions.value(0))});
     pg.validate_constraint("cs_child", "child_fk");
     const auto migrations = pg.compile("cs_constraints");
     EXPECT_EQ(migrations.size(), std::size_t{1});
@@ -1372,10 +1310,10 @@ TEST(Ruvia, db_schema_constraints_cover_actions_deferred_not_valid_and_rejection
     EXPECT_TRUE(sql.find("CONSTRAINT \"child_check\" CHECK ((\"amount\" >= 0)) NOT VALID") != std::string_view::npos);
     EXPECT_TRUE(sql.find("VALIDATE CONSTRAINT \"child_fk\"") != std::string_view::npos);
 
-    db_table_definition invalid_table{.name_ = "cs_invalid",
-        .columns_ = {{.name_ = "id", .type_ = {.data_type_ = db_data_type::big_int}}},
-        .constraints_ = {{.name_ = "bad", .kind_ = ruvia::db_constraint_kind::unique, .columns_ = {"id"}, .not_valid_ = true}}};
-    EXPECT_TRUE(throws_on([&] { pg.create_table(invalid_table); }));
+    db_table_definition invalid_table{.name_ = "cs_invalid", .columns_ = {{.name_ = "id", .type_ = {.data_type_ = db_data_type::big_int}}}, .constraints_ = {{.name_ = "bad", .kind_ = ruvia::db_constraint_kind::unique, .columns_ = {"id"}, .not_valid_ = true}}};
+    EXPECT_TRUE(throws_on([&] {
+        pg.create_table(invalid_table);
+    }));
     EXPECT_TRUE(throws_on([&] {
         pg.add_constraint("cs_child", {.name_ = "bad", .kind_ = ruvia::db_constraint_kind::unique, .columns_ = {"id"}, .initially_deferred_ = true});
     }));
@@ -1402,10 +1340,14 @@ TEST(Ruvia, db_schema_constraints_cover_actions_deferred_not_valid_and_rejection
 }
 
 TEST(Ruvia, db_schema_constructor_table_flags_and_compile_boundaries_are_checked) {
-    EXPECT_TRUE(throws_on([&] { db_schema invalid({}); }));
+    EXPECT_TRUE(throws_on([&] {
+        db_schema invalid({});
+    }));
     db_schema empty({.driver_ = db_driver::postgresql});
     EXPECT_TRUE(empty.compile("cs_empty").empty());
-    EXPECT_TRUE(throws_on([&] { (void)empty.compile(""); }));
+    EXPECT_TRUE(throws_on([&] {
+        (void)empty.compile("");
+    }));
 
     db_schema pg({.driver_ = db_driver::postgresql});
     pg.create_table({.name_ = "cs_temp_pg", .columns_ = {{.name_ = "id", .type_ = {.data_type_ = db_data_type::integer}}}, .temporary_ = true});
@@ -1438,8 +1380,7 @@ TEST(Ruvia, db_schema_index_variants_and_dialect_rejections) {
     EXPECT_TRUE(pg_migrations[0].sql().find("\"name\" \"text_ops\" DESC NULLS LAST, (\"lower_name\")") != std::string_view::npos);
     EXPECT_TRUE(pg_migrations[0].sql().find("INCLUDE (\"id\") WHERE (\"active\" = TRUE)") != std::string_view::npos);
 
-    for (const auto method : {ruvia::db_index_method::hash, ruvia::db_index_method::gin, ruvia::db_index_method::gist,
-             ruvia::db_index_method::sp_gist, ruvia::db_index_method::brin}) {
+    for (const auto method : {ruvia::db_index_method::hash, ruvia::db_index_method::gin, ruvia::db_index_method::gist, ruvia::db_index_method::sp_gist, ruvia::db_index_method::brin}) {
         db_schema method_schema({.driver_ = db_driver::postgresql});
         method_schema.create_index({.name_ = "cs_method", .table_ = "cs_records", .keys_ = {{.column_ = "name"}}, .method_ = method});
         EXPECT_TRUE(method_schema.compile("cs_method")[0].sql().find("USING ") != std::string_view::npos);
@@ -1472,7 +1413,9 @@ TEST(Ruvia, db_schema_index_variants_and_dialect_rejections) {
     EXPECT_TRUE(throws_on([&] {
         maria.create_index({.name_ = "bad", .table_ = "t", .keys_ = {{.column_ = "id"}}, .include_ = {"extra"}});
     }));
-    EXPECT_TRUE(throws_on([&] { maria.drop_index("idx"); }));
+    EXPECT_TRUE(throws_on([&] {
+        maria.drop_index("idx");
+    }));
 }
 
 TEST(Ruvia, db_schema_views_enums_extensions_and_commands_cover_dialect_boundaries) {
@@ -1507,22 +1450,44 @@ TEST(Ruvia, db_schema_views_enums_extensions_and_commands_cover_dialect_boundari
 
     db_schema maria({.driver_ = db_driver::mariadb});
     maria.create_view("cs_view", query);
-    EXPECT_TRUE(throws_on([&] { maria.drop_view("cs_view", false, ruvia::db_drop_behavior::cascade, true); }));
+    EXPECT_TRUE(throws_on([&] {
+        maria.drop_view("cs_view", false, ruvia::db_drop_behavior::cascade, true);
+    }));
     maria.drop_view("cs_view", false, ruvia::db_drop_behavior::restrict, true);
     maria.execute(command);
     EXPECT_TRUE(maria.compile("cs_objects").size() == std::size_t{3});
-    EXPECT_TRUE(throws_on([&] { maria.create_enum("status", values); }));
-    EXPECT_TRUE(throws_on([&] { maria.add_enum_value("status", "x"); }));
-    EXPECT_TRUE(throws_on([&] { maria.drop_enum("status"); }));
-    EXPECT_TRUE(throws_on([&] { maria.create_extension("hstore"); }));
-    EXPECT_TRUE(throws_on([&] { maria.create_view("mat", query, false, true); }));
-    EXPECT_TRUE(throws_on([&] { maria.drop_view("mat", true); }));
-    EXPECT_TRUE(throws_on([&] { pg.create_view("bad", command); }));
-    EXPECT_TRUE(throws_on([&] { pg.create_view("bad", query, true, true); }));
-    EXPECT_TRUE(throws_on([&] { pg.create_enum("empty", {}); }));
+    EXPECT_TRUE(throws_on([&] {
+        maria.create_enum("status", values);
+    }));
+    EXPECT_TRUE(throws_on([&] {
+        maria.add_enum_value("status", "x");
+    }));
+    EXPECT_TRUE(throws_on([&] {
+        maria.drop_enum("status");
+    }));
+    EXPECT_TRUE(throws_on([&] {
+        maria.create_extension("hstore");
+    }));
+    EXPECT_TRUE(throws_on([&] {
+        maria.create_view("mat", query, false, true);
+    }));
+    EXPECT_TRUE(throws_on([&] {
+        maria.drop_view("mat", true);
+    }));
+    EXPECT_TRUE(throws_on([&] {
+        pg.create_view("bad", command);
+    }));
+    EXPECT_TRUE(throws_on([&] {
+        pg.create_view("bad", query, true, true);
+    }));
+    EXPECT_TRUE(throws_on([&] {
+        pg.create_enum("empty", {});
+    }));
     ruvia::db_query returned;
     returned.delete_from("cs_records").returning({returned.column("id")});
-    EXPECT_TRUE(throws_on([&] { pg.execute(returned); }));
+    EXPECT_TRUE(throws_on([&] {
+        pg.execute(returned);
+    }));
 }
 
 TEST(Ruvia, db_schema_trigger_variants_cover_events_timing_when_arguments_and_rejections) {
@@ -1549,18 +1514,40 @@ TEST(Ruvia, db_schema_trigger_variants_cover_events_timing_when_arguments_and_re
     EXPECT_TRUE(sql.find("DROP TRIGGER IF EXISTS \"cs_after_update\" ON \"cs_records\"") != std::string_view::npos);
     EXPECT_TRUE(sql.find("DROP FUNCTION IF EXISTS \"cs_trigger_fn\"() CASCADE") != std::string_view::npos);
 
-    EXPECT_TRUE(throws_on([&] { pg.create_trigger({.name_ = "bad", .table_ = "t", .function_ = "f"}); }));
-    EXPECT_TRUE(throws_on([&] { pg.create_trigger({.name_ = "bad", .table_ = "t", .function_ = "f", .events_ = {ruvia::db_trigger_event::insert, ruvia::db_trigger_event::insert}}); }));
-    EXPECT_TRUE(throws_on([&] { pg.create_trigger({.name_ = "bad", .table_ = "t", .function_ = "f", .events_ = {ruvia::db_trigger_event::insert}, .update_columns_ = {"x"}}); }));
-    EXPECT_TRUE(throws_on([&] { pg.create_trigger({.name_ = "bad", .table_ = "t", .function_ = "f", .events_ = {ruvia::db_trigger_event::truncate}}); }));
-    EXPECT_TRUE(throws_on([&] { pg.create_trigger({.name_ = "bad", .table_ = "t", .function_ = "f", .timing_ = ruvia::db_trigger_timing::instead_of, .events_ = {ruvia::db_trigger_event::insert}, .for_each_row_ = false}); }));
-    EXPECT_TRUE(throws_on([&] { pg.create_trigger({.name_ = "bad", .table_ = "t", .function_ = "f", .timing_ = ruvia::db_trigger_timing::instead_of, .events_ = {ruvia::db_trigger_event::insert}, .when_ = when}); }));
+    EXPECT_TRUE(throws_on([&] {
+        pg.create_trigger({.name_ = "bad", .table_ = "t", .function_ = "f"});
+    }));
+    EXPECT_TRUE(throws_on([&] {
+        pg.create_trigger({.name_ = "bad", .table_ = "t", .function_ = "f", .events_ = {ruvia::db_trigger_event::insert, ruvia::db_trigger_event::insert}});
+    }));
+    EXPECT_TRUE(throws_on([&] {
+        pg.create_trigger({.name_ = "bad", .table_ = "t", .function_ = "f", .events_ = {ruvia::db_trigger_event::insert}, .update_columns_ = {"x"}});
+    }));
+    EXPECT_TRUE(throws_on([&] {
+        pg.create_trigger({.name_ = "bad", .table_ = "t", .function_ = "f", .events_ = {ruvia::db_trigger_event::truncate}});
+    }));
+    EXPECT_TRUE(throws_on([&] {
+        pg.create_trigger({.name_ = "bad", .table_ = "t", .function_ = "f", .timing_ = ruvia::db_trigger_timing::instead_of, .events_ = {ruvia::db_trigger_event::insert}, .for_each_row_ = false});
+    }));
+    EXPECT_TRUE(throws_on([&] {
+        pg.create_trigger({.name_ = "bad", .table_ = "t", .function_ = "f", .timing_ = ruvia::db_trigger_timing::instead_of, .events_ = {ruvia::db_trigger_event::insert}, .when_ = when});
+    }));
     db_schema maria({.driver_ = db_driver::mariadb});
-    EXPECT_TRUE(throws_on([&] { maria.create_trigger_function("f", procedure); }));
-    EXPECT_TRUE(throws_on([&] { maria.create_trigger({.name_ = "f", .table_ = "t", .function_ = "f", .events_ = {ruvia::db_trigger_event::insert}}); }));
-    EXPECT_TRUE(throws_on([&] { maria.drop_trigger("t", "f"); }));
-    EXPECT_TRUE(throws_on([&] { maria.perform(expressions.value(true)); }));
-    EXPECT_TRUE(throws_on([&] { maria.run(procedure); }));
+    EXPECT_TRUE(throws_on([&] {
+        maria.create_trigger_function("f", procedure);
+    }));
+    EXPECT_TRUE(throws_on([&] {
+        maria.create_trigger({.name_ = "f", .table_ = "t", .function_ = "f", .events_ = {ruvia::db_trigger_event::insert}});
+    }));
+    EXPECT_TRUE(throws_on([&] {
+        maria.drop_trigger("t", "f");
+    }));
+    EXPECT_TRUE(throws_on([&] {
+        maria.perform(expressions.value(true));
+    }));
+    EXPECT_TRUE(throws_on([&] {
+        maria.run(procedure);
+    }));
 }
 
 TEST(Ruvia, db_schema_timescale_options_cover_direct_settings_and_rejections) {
@@ -1583,23 +1570,45 @@ TEST(Ruvia, db_schema_timescale_options_cover_direct_settings_and_rejections) {
     EXPECT_TRUE(sql.find("\"timescaledb\".\"compress\" = false") != std::string_view::npos);
     EXPECT_TRUE(sql.find("\"remove_compression_policy\"(E'\"cs_events\"', \"if_exists\" => TRUE)") != std::string_view::npos);
     EXPECT_TRUE(sql.find("\"remove_retention_policy\"(E'\"cs_events\"', \"if_exists\" => TRUE)") != std::string_view::npos);
-    EXPECT_TRUE(throws_on([&] { pg.set_table_options("cs_events", std::span<const db_table_option>()); }));
+    EXPECT_TRUE(throws_on([&] {
+        pg.set_table_options("cs_events", std::span<const db_table_option>());
+    }));
     const std::array duplicate_options{db_table_option{"fillfactor", std::int64_t{80}}, db_table_option{"fillfactor", std::int64_t{90}}};
     EXPECT_TRUE(throws_on([&] {
         pg.set_table_options("cs_events", duplicate_options);
     }));
-    EXPECT_TRUE(throws_on([&] { pg.set_compression("cs_events", {.enabled_ = false, .segment_by_ = {"device_id"}}); }));
+    EXPECT_TRUE(throws_on([&] {
+        pg.set_compression("cs_events", {.enabled_ = false, .segment_by_ = {"device_id"}});
+    }));
     db_schema maria({.driver_ = db_driver::mariadb});
     const std::array maria_options{db_table_option{"x", true}};
-    EXPECT_TRUE(throws_on([&] { maria.set_table_options("t", maria_options); }));
-    EXPECT_TRUE(throws_on([&] { maria.set_database_option("d", "x", "y"); }));
-    EXPECT_TRUE(throws_on([&] { maria.create_hypertable({.table_ = "t", .time_column_ = "ts"}); }));
-    EXPECT_TRUE(throws_on([&] { maria.set_chunk_time_interval("t", interval); }));
-    EXPECT_TRUE(throws_on([&] { maria.set_compression("t", {}); }));
-    EXPECT_TRUE(throws_on([&] { maria.add_compression_policy("t", interval); }));
-    EXPECT_TRUE(throws_on([&] { maria.remove_compression_policy("t"); }));
-    EXPECT_TRUE(throws_on([&] { maria.add_retention_policy("t", interval); }));
-    EXPECT_TRUE(throws_on([&] { maria.remove_retention_policy("t"); }));
+    EXPECT_TRUE(throws_on([&] {
+        maria.set_table_options("t", maria_options);
+    }));
+    EXPECT_TRUE(throws_on([&] {
+        maria.set_database_option("d", "x", "y");
+    }));
+    EXPECT_TRUE(throws_on([&] {
+        maria.create_hypertable({.table_ = "t", .time_column_ = "ts"});
+    }));
+    EXPECT_TRUE(throws_on([&] {
+        maria.set_chunk_time_interval("t", interval);
+    }));
+    EXPECT_TRUE(throws_on([&] {
+        maria.set_compression("t", {});
+    }));
+    EXPECT_TRUE(throws_on([&] {
+        maria.add_compression_policy("t", interval);
+    }));
+    EXPECT_TRUE(throws_on([&] {
+        maria.remove_compression_policy("t");
+    }));
+    EXPECT_TRUE(throws_on([&] {
+        maria.add_retention_policy("t", interval);
+    }));
+    EXPECT_TRUE(throws_on([&] {
+        maria.remove_retention_policy("t");
+    }));
 }
 
 TEST(Ruvia, db_procedure_public_helpers_render_and_validate) {
@@ -1644,11 +1653,17 @@ TEST(Ruvia, db_procedure_public_helpers_render_and_validate) {
     EXPECT_TRUE(applied.body().find("CREATE SCHEMA \"cs_nested\";") != std::string_view::npos);
     db_schema non_transactional({.driver_ = db_driver::postgresql});
     non_transactional.create_index({.name_ = "cs_idx", .table_ = "cs_records", .keys_ = {{.column_ = "id"}}, .concurrently_ = true});
-    EXPECT_TRUE(throws_on([&] { applied.apply(non_transactional); }));
+    EXPECT_TRUE(throws_on([&] {
+        applied.apply(non_transactional);
+    }));
     db_schema maria({.driver_ = db_driver::mariadb});
-    EXPECT_TRUE(throws_on([&] { applied.apply(maria); }));
+    EXPECT_TRUE(throws_on([&] {
+        applied.apply(maria);
+    }));
 
-    EXPECT_TRUE(throws_on([&] { procedure.declare_record("counter"); }));
+    EXPECT_TRUE(throws_on([&] {
+        procedure.declare_record("counter");
+    }));
     EXPECT_TRUE(throws_on([&] {
         ruvia::db_procedure invalid;
         invalid.execute(select);
@@ -1692,9 +1707,7 @@ TEST(Ruvia, db_procedure_public_helpers_render_and_validate) {
     }));
 }
 
-RUVIA_DB_ENTITY(devices_read_only_entity, "devices",
-    ruvia::db_column<"id", std::int64_t, ruvia::db_column_options{.primary_key_ = true}>,
-    ruvia::db_column<"protocol_address", std::string, ruvia::db_column_options{.read_only_ = true}>)
+RUVIA_DB_ENTITY(devices_read_only_entity, "devices", ruvia::db_column<"id", std::int64_t, ruvia::db_column_options{.primary_key_ = true}>, ruvia::db_column<"protocol_address", std::string, ruvia::db_column_options{.read_only_ = true}>)
 
 TEST(Ruvia, db_schema_trigger_transition_tables_and_read_only_columns_render_and_validate) {
     using read_only_entity = devices_read_only_entity;
@@ -1714,10 +1727,9 @@ TEST(Ruvia, db_schema_trigger_transition_tables_and_read_only_columns_render_and
     const auto migrations = schema.compile("transition_trigger");
     EXPECT_EQ(migrations.size(), std::size_t{1});
     EXPECT_TRUE(migrations[0].sql().find("\"protocol_address\" TEXT NOT NULL") != std::string_view::npos);
-    EXPECT_TRUE(migrations[0].sql().find(
-                    "CREATE TRIGGER \"devices_live_update\" AFTER UPDATE ON \"devices\" "
-                    "REFERENCING OLD TABLE AS \"old_rows\" NEW TABLE AS \"new_rows\" "
-                    "FOR EACH STATEMENT EXECUTE FUNCTION \"publish_query_change\"(E'device')") != std::string_view::npos);
+    EXPECT_TRUE(migrations[0].sql().find("CREATE TRIGGER \"devices_live_update\" AFTER UPDATE ON \"devices\" "
+                                         "REFERENCING OLD TABLE AS \"old_rows\" NEW TABLE AS \"new_rows\" "
+                                         "FOR EACH STATEMENT EXECUTE FUNCTION \"publish_query_change\"(E'device')") != std::string_view::npos);
 
     EXPECT_TRUE(throws_on([&] {
         db_schema invalid({.driver_ = db_driver::postgresql});
@@ -1774,7 +1786,9 @@ TEST(Ruvia, db_schema_trigger_transition_tables_and_read_only_columns_render_and
 // are rejected instead of rendering a default clause.
 TEST(Ruvia, db_schema_rejects_unknown_enum_values_instead_of_defaulting) {
     db_schema pg({.driver_ = db_driver::postgresql});
-    EXPECT_TRUE(throws_on([&] { pg.drop_table("cs_records", static_cast<ruvia::db_drop_behavior>(7)); }));
+    EXPECT_TRUE(throws_on([&] {
+        pg.drop_table("cs_records", static_cast<ruvia::db_drop_behavior>(7));
+    }));
     EXPECT_TRUE(throws_on([&] {
         pg.add_constraint("cs_child", {.name_ = "child_fk", .kind_ = ruvia::db_constraint_kind::foreign_key, .columns_ = {"parent_id"}, .referenced_table_ = "cs_parent", .referenced_columns_ = {"id"}, .on_delete_ = static_cast<ruvia::db_referential_action>(9)});
     }));
@@ -1783,12 +1797,7 @@ TEST(Ruvia, db_schema_rejects_unknown_enum_values_instead_of_defaulting) {
     }));
 }
 
-RUVIA_DB_ENTITY(versioned_articles_entity, "versioned_articles",
-    ruvia::db_column<"id", std::int64_t, ruvia::db_column_options{.primary_key_ = true}>,
-    ruvia::db_column<"revision", std::int64_t, ruvia::db_column_options{.version_ = true}>,
-    ruvia::db_column<"created_at", std::string, ruvia::db_column_options{.data_type_ = db_data_type::timestamp_tz, .create_date_ = true}>,
-    ruvia::db_column<"updated_at", std::string, ruvia::db_column_options{.data_type_ = db_data_type::timestamp_tz, .update_date_ = true}>,
-    ruvia::db_column<"deleted_at", std::string, ruvia::db_column_options{.data_type_ = db_data_type::timestamp_tz, .delete_date_ = true}>)
+RUVIA_DB_ENTITY(versioned_articles_entity, "versioned_articles", ruvia::db_column<"id", std::int64_t, ruvia::db_column_options{.primary_key_ = true}>, ruvia::db_column<"revision", std::int64_t, ruvia::db_column_options{.version_ = true}>, ruvia::db_column<"created_at", std::string, ruvia::db_column_options{.data_type_ = db_data_type::timestamp_tz, .create_date_ = true}>, ruvia::db_column<"updated_at", std::string, ruvia::db_column_options{.data_type_ = db_data_type::timestamp_tz, .update_date_ = true}>, ruvia::db_column<"deleted_at", std::string, ruvia::db_column_options{.data_type_ = db_data_type::timestamp_tz, .delete_date_ = true}>)
 
 TEST(Ruvia, db_schema_and_procedure_functions_loops_dynamic_sql_and_table_locks) {
     using versioned_entity = versioned_articles_entity;
@@ -1818,8 +1827,7 @@ TEST(Ruvia, db_schema_and_procedure_functions_loops_dynamic_sql_and_table_locks)
     proc.lock_table("versioned_articles", ruvia::db_table_lock_mode::share);
     proc.begin_for_query("rec", loop_query);
     proc.begin_foreach("op", expressions.array({expressions.value("INSERT"), expressions.value("UPDATE")}));
-    proc.execute_dynamic(
-        expressions.call("format", {expressions.value("SELECT %L, %L"), expressions.column("id", "rec"), expressions.column("op")}));
+    proc.execute_dynamic(expressions.call("format", {expressions.value("SELECT %L, %L"), expressions.column("id", "rec"), expressions.column("op")}));
     proc.end_loop();
     proc.end_loop();
     schema.run(proc);

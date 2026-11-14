@@ -37,8 +37,7 @@ namespace ruvia::test {
 // exit; deque never invalidates references to existing elements, so the returned
 // reference stays valid for the test's lifetime.
 inline asio::io_context& new_test_io_context() {
-    static std::deque<asio::io_context>& registry =
-        *new std::deque<asio::io_context>();
+    static std::deque<asio::io_context>& registry = *new std::deque<asio::io_context>();
     return registry.emplace_back();
 }
 
@@ -85,8 +84,7 @@ namespace ruvia::test {
 // Start roots on their handle's owner and drain every root. The roots use
 // their own stop sources when exercising cancellation.
 template <std::size_t Count>
-task<void> join_worker_tasks(const worker_ref& worker,
-    std::array<task<void>, Count> tasks) {
+task<void> join_worker_tasks(const worker_ref& worker, std::array<task<void>, Count> tasks) {
     task_scope scope(worker);
     std::exception_ptr failure;
     try {
@@ -105,8 +103,7 @@ task<void> join_worker_tasks(const worker_ref& worker,
 // The root task holds the loop's retirement open, so a test may stop the
 // attachment while its roots still run; the loop retires once they joined.
 template <std::size_t Count>
-task<void> join_worker_tasks_then_stop(event_loop_attachment& attachment, const worker_ref& worker,
-    std::array<task<void>, Count> tasks, bool& joined) {
+task<void> join_worker_tasks_then_stop(event_loop_attachment& attachment, const worker_ref& worker, std::array<task<void>, Count> tasks, bool& joined) {
     std::exception_ptr failure;
     try {
         co_await join_worker_tasks(worker, std::move(tasks));
@@ -126,8 +123,7 @@ template <typename... Tasks>
 void run_worker_tasks(event_loop_attachment& attachment, Tasks&&... tasks) {
     bool joined = false;
     const auto loop = attachment.loop();
-    auto root = loop.start(join_worker_tasks_then_stop(attachment, loop.worker(),
-        std::array<task<void>, sizeof...(Tasks)>{std::forward<Tasks>(tasks)...}, joined));
+    auto root = loop.start(join_worker_tasks_then_stop(attachment, loop.worker(), std::array<task<void>, sizeof...(Tasks)>{std::forward<Tasks>(tasks)...}, joined));
     attachment.run();
     if (!joined) {
         throw std::logic_error("worker owner stopped before root tasks joined");

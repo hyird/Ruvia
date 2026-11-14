@@ -60,8 +60,7 @@ TEST(Ruvia, http_content_coding_field_mapping_is_protocol_generic) {
     check_coding("  br ", http_content_coding::brotli);
     check_coding("zstd", http_content_coding::zstd);
     check_coding("deflate", http_content_coding::deflate);
-    for (const std::string_view value : {std::string_view(""), std::string_view("identity"),
-             std::string_view("IDENTITY, identity")}) {
+    for (const std::string_view value : {std::string_view(""), std::string_view("identity"), std::string_view("IDENTITY, identity")}) {
         const auto empty = parse_http_content_coding(value);
         EXPECT_TRUE(empty.invalid() == nullptr);
         EXPECT_TRUE(empty.unsupported() == nullptr);
@@ -134,24 +133,21 @@ TEST(Ruvia, http_content_coding_field_bounds_the_coding_stack) {
     }
     EXPECT_TRUE(oversized.codings().empty());
 
-    const auto oversized_with_unknown = parse_http_content_coding(
-        "gzip, gzip, gzip, gzip, gzip, gzip, gzip, gzip, gzip, x-custom");
+    const auto oversized_with_unknown = parse_http_content_coding("gzip, gzip, gzip, gzip, gzip, gzip, gzip, gzip, gzip, x-custom");
     EXPECT_TRUE(oversized_with_unknown.invalid() == nullptr);
     EXPECT_TRUE(oversized_with_unknown.unsupported() != nullptr);
     if (oversized_with_unknown.unsupported() != nullptr) {
         EXPECT_TRUE(oversized_with_unknown.unsupported()->depth_exceeded());
     }
 
-    const auto oversized_unknown_only =
-        parse_http_content_coding("x1, x2, x3, x4, x5, x6, x7, x8, x9");
+    const auto oversized_unknown_only = parse_http_content_coding("x1, x2, x3, x4, x5, x6, x7, x8, x9");
     EXPECT_TRUE(oversized_unknown_only.invalid() == nullptr);
     EXPECT_TRUE(oversized_unknown_only.unsupported() != nullptr);
     if (oversized_unknown_only.unsupported() != nullptr) {
         EXPECT_TRUE(oversized_unknown_only.unsupported()->depth_exceeded());
     }
 
-    const auto eight_known_plus_unknown = parse_http_content_coding(
-        "gzip, gzip, gzip, gzip, gzip, gzip, gzip, gzip, x-custom");
+    const auto eight_known_plus_unknown = parse_http_content_coding("gzip, gzip, gzip, gzip, gzip, gzip, gzip, gzip, x-custom");
     EXPECT_TRUE(eight_known_plus_unknown.invalid() == nullptr);
     EXPECT_TRUE(eight_known_plus_unknown.unsupported() != nullptr);
     if (eight_known_plus_unknown.unsupported() != nullptr) {
@@ -177,12 +173,10 @@ TEST(Ruvia, http_content_coding_field_bounds_the_coding_stack) {
 
 TEST(Ruvia, http_deflate_content_uses_the_rfc9110_zlib_wrapper) {
     const std::string input(4096, 'd');
-    auto encoded = encode_http_content(
-        http_content_coding::deflate, input, {.max_encoded_bytes_ = input.size()});
+    auto encoded = encode_http_content(http_content_coding::deflate, input, {.max_encoded_bytes_ = input.size()});
     EXPECT_TRUE(encoded.has_value());
     if (encoded.has_value()) {
-        auto decoded = decode_http_content(std::array{http_content_coding::deflate}, *encoded,
-            {.max_decoded_bytes_ = input.size()});
+        auto decoded = decode_http_content(std::array{http_content_coding::deflate}, *encoded, {.max_decoded_bytes_ = input.size()});
         EXPECT_TRUE(std::holds_alternative<std::string>(decoded));
         if (const auto* output = std::get_if<std::string>(&decoded)) {
             EXPECT_EQ(std::string_view(*output), input);
@@ -194,11 +188,9 @@ TEST(Ruvia, http_zstd_content_rejects_window_above_rfc9659_limit) {
     const std::string plain(9 * 1024 * 1024, 'w');
     const std::string encoded = zstd_compress_with_window(plain, 24);
     EXPECT_TRUE(!encoded.empty());
-    EXPECT_TRUE(decode_error(http_content_coding::zstd, encoded, plain.size()) ==
-                http_content_decode_error::invalid_content);
+    EXPECT_TRUE(decode_error(http_content_coding::zstd, encoded, plain.size()) == http_content_decode_error::invalid_content);
 
-    auto conformant = encode_http_content(http_content_coding::zstd, plain,
-        {.max_encoded_bytes_ = plain.size()});
+    auto conformant = encode_http_content(http_content_coding::zstd, plain, {.max_encoded_bytes_ = plain.size()});
     EXPECT_TRUE(conformant.has_value());
     if (conformant.has_value()) {
         EXPECT_EQ(decoded(http_content_coding::zstd, *conformant, plain.size()), plain);
@@ -207,10 +199,8 @@ TEST(Ruvia, http_zstd_content_rejects_window_above_rfc9659_limit) {
 
 TEST(Ruvia, http_content_encode_enforces_exact_cap_without_partial_output) {
     const std::string input(2048, 'e');
-    for (const auto coding :
-        {http_content_coding::gzip, http_content_coding::deflate, http_content_coding::brotli, http_content_coding::zstd}) {
-        const auto full = encode_http_content(coding, input,
-            {.max_encoded_bytes_ = input.size()});
+    for (const auto coding : {http_content_coding::gzip, http_content_coding::deflate, http_content_coding::brotli, http_content_coding::zstd}) {
+        const auto full = encode_http_content(coding, input, {.max_encoded_bytes_ = input.size()});
         EXPECT_TRUE(full.has_value());
         if (!full.has_value()) {
             continue;
@@ -218,36 +208,31 @@ TEST(Ruvia, http_content_encode_enforces_exact_cap_without_partial_output) {
         const auto encoded_size = full->size();
         EXPECT_TRUE(encoded_size > 1);
 
-        const auto exact = encode_http_content(coding, input,
-            {.max_encoded_bytes_ = encoded_size});
+        const auto exact = encode_http_content(coding, input, {.max_encoded_bytes_ = encoded_size});
         EXPECT_TRUE(exact.has_value());
         if (exact.has_value()) {
             EXPECT_EQ(exact->size(), encoded_size);
         }
 
-        const auto too_small = encode_http_content(coding, input,
-            {.max_encoded_bytes_ = encoded_size - 1});
+        const auto too_small = encode_http_content(coding, input, {.max_encoded_bytes_ = encoded_size - 1});
         EXPECT_TRUE(!too_small.has_value());
         EXPECT_TRUE(!encode_http_content(coding, {}, {.max_encoded_bytes_ = 0}).has_value());
         EXPECT_TRUE(!encode_http_content(coding, input, {.max_encoded_bytes_ = 0}).has_value());
     }
 
-    const auto identity = encode_http_content(http_content_coding::identity, "identity",
-        {.max_encoded_bytes_ = 8});
+    const auto identity = encode_http_content(http_content_coding::identity, "identity", {.max_encoded_bytes_ = 8});
     EXPECT_TRUE(identity.has_value());
     if (identity.has_value()) {
         EXPECT_EQ(std::string_view(*identity), std::string_view("identity"));
     }
-    const auto identity_too_large = encode_http_content(http_content_coding::identity, "identity",
-        {.max_encoded_bytes_ = 0});
+    const auto identity_too_large = encode_http_content(http_content_coding::identity, "identity", {.max_encoded_bytes_ = 0});
     EXPECT_TRUE(!identity_too_large.has_value());
     const auto empty_identity = encode_http_content(http_content_coding::identity, {}, {.max_encoded_bytes_ = 0});
     EXPECT_TRUE(empty_identity.has_value() && empty_identity->empty());
 }
 
 TEST(Ruvia, http_content_encode_round_trips_across_output_block_boundaries) {
-    for (const std::size_t size : {std::size_t{0}, std::size_t{8191}, std::size_t{8192},
-             std::size_t{8193}, std::size_t{65537}, std::size_t{(4u << 20) + 1}}) {
+    for (const std::size_t size : {std::size_t{0}, std::size_t{8191}, std::size_t{8192}, std::size_t{8193}, std::size_t{65537}, std::size_t{(4u << 20) + 1}}) {
         std::string input;
         input.reserve(size);
         std::uint32_t state_value = 0x12345678;
@@ -288,8 +273,7 @@ TEST(Ruvia, http_content_encoder_round_trips_incremental_chunks) {
         "each encoder's pending output and finalization state. ";
     const std::string repeated = input + input + input + input + input;
 
-    for (const auto coding : {http_content_coding::identity, http_content_coding::gzip,
-             http_content_coding::brotli, http_content_coding::zstd}) {
+    for (const auto coding : {http_content_coding::identity, http_content_coding::gzip, http_content_coding::brotli, http_content_coding::zstd}) {
         std::string encoded;
         std::string chunk;
         http_content_encoder encoder(coding);
@@ -308,8 +292,7 @@ TEST(Ruvia, http_content_encoder_round_trips_incremental_chunks) {
 }
 
 TEST(Ruvia, http_content_encoder_rejects_writes_after_finish) {
-    for (const auto coding : {http_content_coding::identity, http_content_coding::gzip,
-             http_content_coding::brotli, http_content_coding::zstd}) {
+    for (const auto coding : {http_content_coding::identity, http_content_coding::gzip, http_content_coding::brotli, http_content_coding::zstd}) {
         http_content_encoder encoder(coding);
         std::string output;
         encoder.write("body", output);
@@ -332,8 +315,7 @@ TEST(Ruvia, http_content_encoder_rejects_writes_after_finish) {
 TEST(Ruvia, http_content_encoder_flushes_each_incremental_chunk) {
     const std::string input(4096, 's');
 
-    for (const auto coding :
-        {http_content_coding::gzip, http_content_coding::brotli, http_content_coding::zstd}) {
+    for (const auto coding : {http_content_coding::gzip, http_content_coding::brotli, http_content_coding::zstd}) {
         std::string encoded;
         std::string chunk;
         http_content_encoder encoder(coding);
@@ -352,8 +334,7 @@ TEST(Ruvia, http_content_encoder_flushes_each_incremental_chunk) {
 }
 
 TEST(Ruvia, http_content_encoder_accepts_empty_flushes_between_chunks) {
-    for (const auto coding : {http_content_coding::identity, http_content_coding::gzip,
-             http_content_coding::deflate, http_content_coding::brotli, http_content_coding::zstd}) {
+    for (const auto coding : {http_content_coding::identity, http_content_coding::gzip, http_content_coding::deflate, http_content_coding::brotli, http_content_coding::zstd}) {
         std::string encoded;
         http_content_encoder encoder(coding);
         encoder.write({}, encoded, true);
@@ -372,8 +353,7 @@ TEST(Ruvia, http_content_encoder_accepts_empty_flushes_between_chunks) {
 TEST(Ruvia, http_brotli_decode_checks_limits_and_complete_stream_after_output_blocks) {
     const std::string input(65537, 'b');
     const auto encoded = brotli_compress(input);
-    for (const std::size_t cap : {std::size_t{0}, std::size_t{1}, std::size_t{16383},
-             std::size_t{16384}, std::size_t{65536}}) {
+    for (const std::size_t cap : {std::size_t{0}, std::size_t{1}, std::size_t{16383}, std::size_t{16384}, std::size_t{65536}}) {
         EXPECT_EQ(decode_error(http_content_coding::brotli, encoded, cap), http_content_decode_error::decoded_size_exceeded);
     }
     EXPECT_EQ(decoded(http_content_coding::brotli, encoded, input.size()), input);
@@ -382,15 +362,12 @@ TEST(Ruvia, http_brotli_decode_checks_limits_and_complete_stream_after_output_bl
 }
 
 TEST(Ruvia, http_content_decode_accepts_empty_encoded_input_as_empty_content) {
-    for (const auto coding : {http_content_coding::identity, http_content_coding::gzip,
-             http_content_coding::deflate, http_content_coding::brotli, http_content_coding::zstd}) {
+    for (const auto coding : {http_content_coding::identity, http_content_coding::gzip, http_content_coding::deflate, http_content_coding::brotli, http_content_coding::zstd}) {
         EXPECT_EQ(decoded(coding, {}, 0), std::string{});
     }
 
-    constexpr std::array codings{http_content_coding::gzip, http_content_coding::brotli,
-        http_content_coding::zstd};
-    auto stacked = decode_http_content(
-        codings, {}, {.max_decoded_bytes_ = 0});
+    constexpr std::array codings{http_content_coding::gzip, http_content_coding::brotli, http_content_coding::zstd};
+    auto stacked = decode_http_content(codings, {}, {.max_decoded_bytes_ = 0});
     EXPECT_TRUE(std::holds_alternative<std::string>(stacked));
     if (const auto* content = std::get_if<std::string>(&stacked)) {
         EXPECT_TRUE(content->empty());
@@ -407,15 +384,13 @@ TEST(Ruvia, http_content_decode_zero_cap_allows_only_empty_content) {
         {http_content_coding::zstd, zstd_compress({})},
     };
     for (const auto& test : empty_cases) {
-        auto result_value = decode_http_content(std::array{test.coding_}, test.encoded_,
-            {.max_decoded_bytes_ = 0});
+        auto result_value = decode_http_content(std::array{test.coding_}, test.encoded_, {.max_decoded_bytes_ = 0});
         EXPECT_TRUE(std::holds_alternative<std::string>(result_value));
         if (const auto* content = std::get_if<std::string>(&result_value)) {
             EXPECT_TRUE(content->empty());
         }
     }
-    EXPECT_TRUE(decode_error(http_content_coding::gzip, gzip_compress("x"), 0) ==
-                http_content_decode_error::decoded_size_exceeded);
+    EXPECT_TRUE(decode_error(http_content_coding::gzip, gzip_compress("x"), 0) == http_content_decode_error::decoded_size_exceeded);
 }
 
 TEST(Ruvia, zstd_decode_full_frame_succeeds) {
@@ -435,15 +410,12 @@ TEST(Ruvia, zstd_decode_truncated_frame_rejected) {
 }
 
 TEST(Ruvia, response_coding_sets_and_selection_snapshots_distinguish_every_supported_coding) {
-    constexpr ruvia::http_content_coding codings[]{ruvia::http_content_coding::identity,
-        ruvia::http_content_coding::gzip, ruvia::http_content_coding::deflate,
-        ruvia::http_content_coding::brotli, ruvia::http_content_coding::zstd};
+    constexpr ruvia::http_content_coding codings[]{ruvia::http_content_coding::identity, ruvia::http_content_coding::gzip, ruvia::http_content_coding::deflate, ruvia::http_content_coding::brotli, ruvia::http_content_coding::zstd};
     for (const auto coding : codings) {
         auto candidates = ruvia::http_response_coding_candidates::empty();
         candidates.include(coding);
         ruvia::http_response_coding_qualities qualities;
-        const std::string field = std::string(ruvia::http_content_coding_token(coding)) +
-                                  ";q=1,*;q=0" + (coding == ruvia::http_content_coding::identity ? "" : ",identity;q=0");
+        const std::string field = std::string(ruvia::http_content_coding_token(coding)) + ";q=1,*;q=0" + (coding == ruvia::http_content_coding::identity ? "" : ",identity;q=0");
         qualities.update(field);
         const auto selected = ruvia::http_response_coding_selection::select(qualities, candidates);
         EXPECT_TRUE(selected.acceptable());
@@ -592,8 +564,7 @@ TEST(Ruvia, response_coding_selection_end_to_end) {
 
     auto gzip_only = http_response_coding_candidates::empty();
     gzip_only.include(http_content_coding::gzip);
-    const auto absent_header_gzip =
-        http_response_coding_selection::select(http_response_coding_qualities{}, gzip_only);
+    const auto absent_header_gzip = http_response_coding_selection::select(http_response_coding_qualities{}, gzip_only);
     EXPECT_TRUE(absent_header_gzip.acceptable());
     EXPECT_TRUE(absent_header_gzip.coding() == http_content_coding::gzip);
     EXPECT_TRUE(absent_header_gzip.accepts(http_content_coding::gzip));
@@ -740,12 +711,8 @@ TEST(Ruvia, response_custom_coding_distinguishes_missing_and_empty_preferences) 
     EXPECT_TRUE(ruvia::http_accepts_encoding(empty.state_.request(), "identity"));
     ruvia::http_response response;
     response.header("Content-Encoding", "custom");
-    EXPECT_EQ(ruvia::evaluate_http_response_content_coding(
-                  ruvia::http_response_coding_selection_for(missing.state_.request()), response, &missing.state_.request()),
-        ruvia::http_response_content_coding_status::accepted);
-    EXPECT_EQ(ruvia::evaluate_http_response_content_coding(
-                  ruvia::http_response_coding_selection_for(empty.state_.request()), response, &empty.state_.request()),
-        ruvia::http_response_content_coding_status::not_acceptable);
+    EXPECT_EQ(ruvia::evaluate_http_response_content_coding(ruvia::http_response_coding_selection_for(missing.state_.request()), response, &missing.state_.request()), ruvia::http_response_content_coding_status::accepted);
+    EXPECT_EQ(ruvia::evaluate_http_response_content_coding(ruvia::http_response_coding_selection_for(empty.state_.request()), response, &empty.state_.request()), ruvia::http_response_content_coding_status::not_acceptable);
 }
 
 TEST(Ruvia, response_custom_coding_explicit_quality_overrides_wildcard_across_lines) {
@@ -760,42 +727,33 @@ TEST(Ruvia, response_custom_coding_explicit_quality_overrides_wildcard_across_li
     EXPECT_FALSE(selection.accepts("compress", parsed.state_.request()));
     ruvia::http_response response;
     response.header("Content-Encoding", "gzip, CUSTOM");
-    EXPECT_EQ(ruvia::evaluate_http_response_content_coding(selection, response, &parsed.state_.request()),
-        ruvia::http_response_content_coding_status::accepted);
+    EXPECT_EQ(ruvia::evaluate_http_response_content_coding(selection, response, &parsed.state_.request()), ruvia::http_response_content_coding_status::accepted);
     response.header("Content-Encoding", "compress", {.mode_ = ruvia::http_response_header_mode::append});
-    EXPECT_EQ(ruvia::evaluate_http_response_content_coding(selection, response, &parsed.state_.request()),
-        ruvia::http_response_content_coding_status::not_acceptable);
+    EXPECT_EQ(ruvia::evaluate_http_response_content_coding(selection, response, &parsed.state_.request()), ruvia::http_response_content_coding_status::not_acceptable);
 }
 
 TEST(Ruvia, response_coding_stack_checks_every_known_and_custom_member_without_common_case_allocation) {
-    const auto parsed = ruvia::test::parse_http1_request_message(
-        "GET / HTTP/1.1\r\nHost: x\r\nAccept-Encoding: gzip, custom, other, br;q=0\r\n\r\n");
+    const auto parsed = ruvia::test::parse_http1_request_message("GET / HTTP/1.1\r\nHost: x\r\nAccept-Encoding: gzip, custom, other, br;q=0\r\n\r\n");
     ASSERT_TRUE(parsed.complete());
     const auto selection = ruvia::http_response_coding_selection_for(parsed.state_.request());
     ruvia::http_response response;
-    EXPECT_EQ(ruvia::evaluate_http_response_content_coding(selection, response, &parsed.state_.request()),
-        ruvia::http_response_content_coding_status::absent);
+    EXPECT_EQ(ruvia::evaluate_http_response_content_coding(selection, response, &parsed.state_.request()), ruvia::http_response_content_coding_status::absent);
     response.header("Content-Encoding", "gzip, CUSTOM, other, custom");
-    EXPECT_EQ(ruvia::evaluate_http_response_content_coding(selection, response, &parsed.state_.request()),
-        ruvia::http_response_content_coding_status::accepted);
+    EXPECT_EQ(ruvia::evaluate_http_response_content_coding(selection, response, &parsed.state_.request()), ruvia::http_response_content_coding_status::accepted);
     response.header("Content-Encoding", "br", {.mode_ = ruvia::http_response_header_mode::append});
-    EXPECT_EQ(ruvia::evaluate_http_response_content_coding(selection, response, &parsed.state_.request()),
-        ruvia::http_response_content_coding_status::not_acceptable);
+    EXPECT_EQ(ruvia::evaluate_http_response_content_coding(selection, response, &parsed.state_.request()), ruvia::http_response_content_coding_status::not_acceptable);
     EXPECT_THROW(response.header("Content-Encoding", "gzip;param=value"), std::invalid_argument);
 }
 
 TEST(Ruvia, response_coding_extension_stack_is_not_limited_by_decoder_depth) {
-    const auto parsed = ruvia::test::parse_http1_request_message(
-        "GET / HTTP/1.1\r\nHost: x\r\nAccept-Encoding: *, ninth;q=0\r\n\r\n");
+    const auto parsed = ruvia::test::parse_http1_request_message("GET / HTTP/1.1\r\nHost: x\r\nAccept-Encoding: *, ninth;q=0\r\n\r\n");
     ASSERT_TRUE(parsed.complete());
     const auto selection = ruvia::http_response_coding_selection_for(parsed.state_.request());
     ruvia::http_response response;
     response.header("Content-Encoding", "first, second, third, fourth, fifth, sixth, seventh, eighth, ninth");
-    EXPECT_EQ(ruvia::evaluate_http_response_content_coding(selection, response, &parsed.state_.request()),
-        ruvia::http_response_content_coding_status::not_acceptable);
+    EXPECT_EQ(ruvia::evaluate_http_response_content_coding(selection, response, &parsed.state_.request()), ruvia::http_response_content_coding_status::not_acceptable);
     response.header("Content-Encoding", "first, second, third, fourth, fifth, sixth, seventh, eighth, tenth");
-    EXPECT_EQ(ruvia::evaluate_http_response_content_coding(selection, response, &parsed.state_.request()),
-        ruvia::http_response_content_coding_status::accepted);
+    EXPECT_EQ(ruvia::evaluate_http_response_content_coding(selection, response, &parsed.state_.request()), ruvia::http_response_content_coding_status::accepted);
 }
 
 using ruvia::decode_http_content;
@@ -805,8 +763,7 @@ using ruvia::http_content_encode_context;
 
 namespace {
 
-constexpr std::array compressing_codings{http_content_coding::gzip, http_content_coding::deflate,
-    http_content_coding::brotli, http_content_coding::zstd};
+constexpr std::array compressing_codings{http_content_coding::gzip, http_content_coding::deflate, http_content_coding::brotli, http_content_coding::zstd};
 
 // Compressible but not trivially repetitive, so encoders emit several output
 // blocks for the larger sizes.
@@ -825,8 +782,7 @@ constexpr std::array compressing_codings{http_content_coding::gzip, http_content
     return result_value.has_value() ? std::move(*result_value) : std::string();
 }
 
-[[nodiscard]] std::optional<std::string> encode_with(http_content_encode_context& context,
-    std::string_view input, std::size_t cap) {
+[[nodiscard]] std::optional<std::string> encode_with(http_content_encode_context& context, std::string_view input, std::size_t cap) {
     auto result_value = context.encode(input, {.max_encoded_bytes_ = cap});
     if (!result_value.has_value()) {
         return std::nullopt;
@@ -837,8 +793,7 @@ constexpr std::array compressing_codings{http_content_coding::gzip, http_content
 }  // namespace
 
 TEST(Ruvia, http_content_encode_context_reuse_matches_one_shot_bytes) {
-    constexpr std::array sizes{std::size_t{0}, std::size_t{1}, std::size_t{1000}, std::size_t{8192},
-        std::size_t{70'000}, std::size_t{300'000}};
+    constexpr std::array sizes{std::size_t{0}, std::size_t{1}, std::size_t{1000}, std::size_t{8192}, std::size_t{70'000}, std::size_t{300'000}};
     for (const auto coding : compressing_codings) {
         http_content_encode_context context(coding);
         EXPECT_TRUE(context.coding() == coding);
@@ -851,8 +806,7 @@ TEST(Ruvia, http_content_encode_context_reuse_matches_one_shot_bytes) {
                 const auto actual = encode_with(context, input, input.size() + 1024);
                 EXPECT_TRUE(actual.has_value());
                 EXPECT_TRUE(actual.value_or(std::string()) == expected);
-                const auto decoded = decode_http_content(
-                    std::array{coding}, actual.value_or(std::string()), {.max_decoded_bytes_ = size});
+                const auto decoded = decode_http_content(std::array{coding}, actual.value_or(std::string()), {.max_decoded_bytes_ = size});
                 EXPECT_TRUE(std::holds_alternative<std::string>(decoded));
                 if (const auto* content = std::get_if<std::string>(&decoded)) {
                     EXPECT_TRUE(std::string_view(*content) == input);
@@ -890,9 +844,7 @@ void check_encoder_alias(ruvia::http_content_coding coding) {
             EXPECT_EQ(std::string_view(output).substr(input_offset, input.size()), std::string_view(input));
             EXPECT_EQ(std::string_view(output).substr(padding_offset, prefix_size - padding_offset), std::string(prefix_size - padding_offset, '#'));
 
-            const auto decoded = ruvia::decode_http_content(std::array{coding},
-                std::string_view(output).substr(prefix_size),
-                {.max_decoded_bytes_ = input.size()});
+            const auto decoded = ruvia::decode_http_content(std::array{coding}, std::string_view(output).substr(prefix_size), {.max_decoded_bytes_ = input.size()});
             EXPECT_TRUE(std::holds_alternative<std::string>(decoded));
             if (const auto* content = std::get_if<std::string>(&decoded)) {
                 EXPECT_EQ(std::string_view(*content), std::string_view(input));
@@ -931,13 +883,10 @@ TEST(Ruvia, response_content_encoding_folds_header_lines_in_application_order) {
     EXPECT_TRUE(missing.unsupported() == nullptr);
 
     response.header("Content-Encoding", "gzip");
-    response.header("Content-Encoding", "deflate",
-        {.mode_ = ruvia::http_response_header_mode::append});
-    response.header("Content-Encoding", "br",
-        {.mode_ = ruvia::http_response_header_mode::append});
+    response.header("Content-Encoding", "deflate", {.mode_ = ruvia::http_response_header_mode::append});
+    response.header("Content-Encoding", "br", {.mode_ = ruvia::http_response_header_mode::append});
     const auto stacked = ruvia::parse_http_content_coding_headers(response.headers());
-    constexpr std::array expected{ruvia::http_content_coding::gzip,
-        ruvia::http_content_coding::deflate, ruvia::http_content_coding::brotli};
+    constexpr std::array expected{ruvia::http_content_coding::gzip, ruvia::http_content_coding::deflate, ruvia::http_content_coding::brotli};
     EXPECT_TRUE(stacked.invalid() == nullptr);
     EXPECT_TRUE(stacked.unsupported() == nullptr);
     EXPECT_EQ(stacked.codings().size(), expected.size());
@@ -953,12 +902,9 @@ TEST(Ruvia, content_encoding_field_lines_fold_in_order_ignoring_other_fields) {
     EXPECT_TRUE(missing.invalid() == nullptr);
     EXPECT_TRUE(missing.unsupported() == nullptr);
 
-    const std::array lines{ruvia::http_header("Content-Encoding", "gzip"),
-        ruvia::http_header("Content-Type", "text/plain"), ruvia::http_header("content-encoding", "deflate"),
-        ruvia::http_header("Content-Encoding", "br")};
+    const std::array lines{ruvia::http_header("Content-Encoding", "gzip"), ruvia::http_header("Content-Type", "text/plain"), ruvia::http_header("content-encoding", "deflate"), ruvia::http_header("Content-Encoding", "br")};
     const auto stacked = ruvia::parse_http_content_coding_headers(lines);
-    constexpr std::array expected{ruvia::http_content_coding::gzip,
-        ruvia::http_content_coding::deflate, ruvia::http_content_coding::brotli};
+    constexpr std::array expected{ruvia::http_content_coding::gzip, ruvia::http_content_coding::deflate, ruvia::http_content_coding::brotli};
     EXPECT_TRUE(stacked.invalid() == nullptr);
     EXPECT_TRUE(stacked.unsupported() == nullptr);
     EXPECT_EQ(stacked.codings().size(), expected.size());
@@ -1132,8 +1078,7 @@ TEST(Ruvia, cookie_domain_requires_dns_subdomain_syntax) {
 }
 
 TEST(Ruvia, cookie_validation_rejects_injection_and_bad_options) {
-    const auto rejects_cookie = [](std::string_view name, std::string_view value,
-                                    const ruvia::cookie_options& options) {
+    const auto rejects_cookie = [](std::string_view name, std::string_view value, const ruvia::cookie_options& options) {
         try {
             (void)ruvia::set_cookie_plan(name, value, options);
             return false;
@@ -1363,8 +1308,7 @@ TEST(Ruvia, cookie_request_pair_snapshots_only_overlapping_inputs) {
             output.resize(expected.size());
             const std::string_view borrowed(output.data(), aliased.size());
 
-            (void)ruvia::write_cookie_request_pair(output.data(),
-                alias_name ? borrowed : independent, alias_name ? independent : borrowed);
+            (void)ruvia::write_cookie_request_pair(output.data(), alias_name ? borrowed : independent, alias_name ? independent : borrowed);
 
             EXPECT_EQ(output, expected);
         }
@@ -1409,8 +1353,7 @@ TEST(Ruvia, cookie_plan_serialization_emits_fields_without_attributes) {
 TEST(Ruvia, cookie_plan_serialization_formats_exact_max_age_widths_and_prefixed_fields) {
     constexpr std::int64_t ages[]{1, 9, 10, 99, 100, 999, 1000, ruvia::max_cookie_age_seconds};
     for (const auto age : ages) {
-        const ruvia::cookie_options options{
-            .path_ = "/", .max_age_ = std::chrono::seconds{age}, .prefix_ = ruvia::cookie_prefix::host, .secure_ = ruvia::cookie_attribute_policy::emit};
+        const ruvia::cookie_options options{.path_ = "/", .max_age_ = std::chrono::seconds{age}, .prefix_ = ruvia::cookie_prefix::host, .secure_ = ruvia::cookie_attribute_policy::emit};
         const ruvia::set_cookie_plan plan("sid", "value", options);
         std::string wire(plan.size(), '\0');
         plan.write(wire.data());
@@ -1429,9 +1372,7 @@ TEST(Ruvia, cookie_plan_serialization_formats_exact_max_age_widths_and_prefixed_
 
 TEST(Ruvia, cookie_plan_serialization_writes_zero_max_age_as_deletion_expires) {
     // max-age-av = "Max-Age=" non-zero-digit *DIGIT (RFC 6265 section 4.1.1).
-    const ruvia::cookie_options options{.path_ = "/",
-        .expires_ = std::chrono::system_clock::time_point{std::chrono::hours{24 * 365 * 40}},
-        .max_age_ = std::chrono::seconds{0}};
+    const ruvia::cookie_options options{.path_ = "/", .expires_ = std::chrono::system_clock::time_point{std::chrono::hours{24 * 365 * 40}}, .max_age_ = std::chrono::seconds{0}};
     const ruvia::set_cookie_plan plan("sid", "", options);
     std::string wire(plan.size(), '\0');
     plan.write(wire.data());
@@ -1579,10 +1520,9 @@ TEST(Ruvia, url_uri_paths_equivalent_and_ordered_by_canonical_form) {
 
 TEST(Ruvia, url_visit_pairs_count) {
     std::vector<std::pair<std::string, std::string>> pairs;
-    (void)ruvia::visit_url_encoded_pairs(
-        "x=1&y=2&z=3", [&](std::string_view n, std::string_view v) {
-            pairs.emplace_back(std::string(n), std::string(v));
-        });
+    (void)ruvia::visit_url_encoded_pairs("x=1&y=2&z=3", [&](std::string_view n, std::string_view v) {
+        pairs.emplace_back(std::string(n), std::string(v));
+    });
     EXPECT_EQ(pairs.size(), std::size_t(3));
     if (pairs.size() == 3) {
         EXPECT_EQ(pairs[0].first, std::string("x"));
@@ -1592,10 +1532,9 @@ TEST(Ruvia, url_visit_pairs_count) {
 
 TEST(Ruvia, url_visit_pairs_stops_early) {
     std::size_t visited = 0;
-    const bool completed = ruvia::visit_url_encoded_pairs("a=1&b=2&c=3",
-        [&visited](std::string_view, std::string_view) {
-            return ++visited < 2;
-        });
+    const bool completed = ruvia::visit_url_encoded_pairs("a=1&b=2&c=3", [&visited](std::string_view, std::string_view) {
+        return ++visited < 2;
+    });
     EXPECT_TRUE(!completed);
     EXPECT_EQ(visited, std::size_t(2));
 }
@@ -1603,10 +1542,9 @@ TEST(Ruvia, url_visit_pairs_stops_early) {
 TEST(Ruvia, url_visit_pairs_skips_empty_segments) {
     std::vector<std::pair<std::string, std::string>> pairs;
     // Leading, doubled, and trailing '&' produce empty segments that must NOT yield ("","") pairs.
-    (void)ruvia::visit_url_encoded_pairs(
-        "&a=1&&b=2&", [&](std::string_view n, std::string_view v) {
-            pairs.emplace_back(std::string(n), std::string(v));
-        });
+    (void)ruvia::visit_url_encoded_pairs("&a=1&&b=2&", [&](std::string_view n, std::string_view v) {
+        pairs.emplace_back(std::string(n), std::string(v));
+    });
     EXPECT_EQ(pairs.size(), std::size_t(2));
     if (pairs.size() == 2) {
         EXPECT_EQ(pairs[0].first, std::string("a"));
@@ -1661,8 +1599,7 @@ TEST(Ruvia, no_encoding_means_decode_borrows_the_input) {
     // Callers size their decoded-storage reservations with has_url_encoding:
     // a component it reports unencoded is returned as the input itself.
     std::string storage;
-    for (const std::string_view value : {std::string_view(""), std::string_view("plain"),
-             std::string_view("a/b?c=d"), std::string_view("no-plus")}) {
+    for (const std::string_view value : {std::string_view(""), std::string_view("plain"), std::string_view("a/b?c=d"), std::string_view("no-plus")}) {
         for (const auto mode : {mode_type::percent, mode_type::form}) {
             EXPECT_TRUE(!has_url_encoding(value, mode));
             const auto decoded = decode_url_component(value, storage, mode);
@@ -1695,8 +1632,7 @@ TEST(Ruvia, hex_encode_accepts_output_overlapping_input) {
         for (auto output_start = input_start - expected.size(); output_start <= input_start + size; ++output_start) {
             std::array<char, 48> buffer{};
             input.copy(buffer.data() + input_start, size);
-            const auto* const end =
-                ruvia::http_encode_lower_hex(buffer.data() + output_start, std::string_view(buffer.data() + input_start, size));
+            const auto* const end = ruvia::http_encode_lower_hex(buffer.data() + output_start, std::string_view(buffer.data() + input_start, size));
             EXPECT_EQ(end, buffer.data() + output_start + expected.size());
             EXPECT_EQ(std::string(buffer.data() + output_start, expected.size()), expected);
         }
@@ -1707,8 +1643,9 @@ TEST(Ruvia, hex_append_accepts_input_aliasing_the_output) {
     std::string whole("\x01\xab");
     whole.shrink_to_fit();
     ruvia::http_append_lower_hex(whole, std::string_view(whole));
-    EXPECT_EQ(std::string_view(whole), std::string_view("\x01\xab"
-                                                        "01ab"));
+    EXPECT_EQ(std::string_view(whole),
+        std::string_view("\x01\xab"
+                         "01ab"));
 
     // A long prefix forces reallocation while the source is a strict subrange.
     std::string part(std::string(64, 'z') + "\xff");
@@ -1736,9 +1673,7 @@ namespace {
 
 std::string encode(std::string_view input, ruvia::http_base64_padding padding = ruvia::http_base64_padding::required) {
     std::string output(ruvia::http_base64_encoded_size(input.size(), padding), '\0');
-    ruvia::http_base64_encode(output.data(),
-        std::span<const std::uint8_t>(reinterpret_cast<const std::uint8_t*>(input.data()), input.size()),
-        ruvia::http_base64_charset::standard, padding);
+    ruvia::http_base64_encode(output.data(), std::span<const std::uint8_t>(reinterpret_cast<const std::uint8_t*>(input.data()), input.size()), ruvia::http_base64_charset::standard, padding);
     return output;
 }
 
@@ -1765,9 +1700,7 @@ TEST(Ruvia, http_base64_encode_accepts_output_overlapping_input) {
             for (auto output_start = input_start - expected.size(); output_start <= input_start + size; ++output_start) {
                 std::array<char, 48> buffer{};
                 input.copy(buffer.data() + input_start, size);
-                ruvia::http_base64_encode(buffer.data() + output_start,
-                    std::span(reinterpret_cast<const std::uint8_t*>(buffer.data()) + input_start, size),
-                    ruvia::http_base64_charset::standard, padding);
+                ruvia::http_base64_encode(buffer.data() + output_start, std::span(reinterpret_cast<const std::uint8_t*>(buffer.data()) + input_start, size), ruvia::http_base64_charset::standard, padding);
                 EXPECT_EQ(std::string(buffer.data() + output_start, expected.size()), expected);
             }
         }
@@ -1862,10 +1795,8 @@ TEST(Ruvia, http_ascii_equals_ignore_case_folds_only_letters) {
     EXPECT_TRUE(!http_ascii_equals_ignore_case("[", "{"));
     EXPECT_TRUE(!http_ascii_equals_ignore_case("@", "`"));
 
-    EXPECT_TRUE(http_ascii_equals_ignore_case(
-        std::string_view("\xC3\xA9", 2), std::string_view("\xC3\xA9", 2)));
-    EXPECT_TRUE(!http_ascii_equals_ignore_case(
-        std::string_view("\xC3\xA9", 2), std::string_view("\xC3\x89", 2)));
+    EXPECT_TRUE(http_ascii_equals_ignore_case(std::string_view("\xC3\xA9", 2), std::string_view("\xC3\xA9", 2)));
+    EXPECT_TRUE(!http_ascii_equals_ignore_case(std::string_view("\xC3\xA9", 2), std::string_view("\xC3\x89", 2)));
 }
 
 TEST(Ruvia, number_format_decimal_width_and_string_output) {
@@ -1885,8 +1816,7 @@ TEST(Ruvia, number_format_rejects_nonfinite_without_modifying_output) {
     std::string output("prefix");
     bool rejected = false;
     try {
-        ruvia::http_append_formatted_finite_number(output, std::numeric_limits<double>::infinity(),
-            "nonfinite", "format failure");
+        ruvia::http_append_formatted_finite_number(output, std::numeric_limits<double>::infinity(), "nonfinite", "format failure");
     } catch (const std::invalid_argument&) {
         rejected = true;
     }

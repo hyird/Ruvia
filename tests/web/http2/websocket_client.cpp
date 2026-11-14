@@ -38,14 +38,14 @@ void exercise_client(bool reset_peer, bool secure = false) {
     if (secure) {
         identity.emplace("localhost");
         SSL_CTX_set_alpn_select_cb(identity->context_.native_handle(), [](SSL*, const unsigned char** selected, unsigned char* selected_size, const unsigned char* offered, unsigned int offered_size, void*) {
-                static constexpr unsigned char protocols[]{2, 'h', '2'};
-                unsigned char* protocol = nullptr;
-                if (SSL_select_next_proto(&protocol, selected_size, protocols, sizeof(protocols),
-                        offered, offered_size) != OPENSSL_NPN_NEGOTIATED) {
-                    return SSL_TLSEXT_ERR_ALERT_FATAL;
-                }
-                *selected = protocol;
-                return SSL_TLSEXT_ERR_OK; }, nullptr);
+            static constexpr unsigned char protocols[]{2, 'h', '2'};
+            unsigned char* protocol = nullptr;
+            if (SSL_select_next_proto(&protocol, selected_size, protocols, sizeof(protocols), offered, offered_size) != OPENSSL_NPN_NEGOTIATED) {
+                return SSL_TLSEXT_ERR_ALERT_FATAL;
+            }
+            *selected = protocol;
+            return SSL_TLSEXT_ERR_OK;
+        }, nullptr);
     }
     std::exception_ptr peer_failure;
     bool saw_extended_connect = false;
@@ -66,8 +66,7 @@ void exercise_client(bool reset_peer, bool secure = false) {
             while (!outbound.empty()) {
                 const auto count = std::min<std::size_t>(outbound.size(), 16384);
                 const auto result_value = connection.submit_data(1, std::string_view(outbound.data(), count), ruvia::http2_end_stream::keep_open, count);
-                EXPECT_TRUE(result_value.status_ == ruvia::http2_data_submit_status::complete ||
-                            result_value.status_ == ruvia::http2_data_submit_status::backpressured);
+                EXPECT_TRUE(result_value.status_ == ruvia::http2_data_submit_status::complete || result_value.status_ == ruvia::http2_data_submit_status::backpressured);
                 outbound.erase(0, result_value.consumed_bytes_);
                 if (result_value.status_ != ruvia::http2_data_submit_status::complete) {
                     break;
@@ -96,8 +95,7 @@ void exercise_client(bool reset_peer, bool secure = false) {
                         const auto built_request = request->build_request();
                         EXPECT_TRUE(built_request.header("x-client") == "unified");
                         const auto request_view = request->request_view();
-                        saw_extended_connect = request_view.method_ == "CONNECT" &&
-                                               request_view.protocol_ == "websocket";
+                        saw_extended_connect = request_view.method_ == "CONNECT" && request_view.protocol_ == "websocket";
                         const auto validation = ruvia::validate_http2_websocket_handshake(connection, request->stream_id(), built_request);
                         const auto submitted = connection.submit_websocket_handshake(request->stream_id(), built_request, validation, {.deflate_ = {.enabled_ = true}});
                         const auto* negotiated = std::get_if<ruvia::websocket_extended_connect_negotiation>(&submitted);
@@ -153,17 +151,14 @@ void exercise_client(bool reset_peer, bool secure = false) {
             co_await serve_stream(socket);
         }
     };
-    asio::co_spawn(io, serve(), [&](std::exception_ptr failure) { peer_failure = failure; });
+    asio::co_spawn(io, serve(), [&](std::exception_ptr failure) {
+        peer_failure = failure;
+    });
     bool reset_observed = false;
     const auto run = [&]() -> ruvia::task<void> {
         const std::array<ruvia::http_header_view, 1> headers{{{"X-Client", "unified"}}};
-        const std::string base_url(std::string(secure ? "https://127.0.0.1:" : "http://127.0.0.1:") +
-                                   std::string(std::to_string(peer.local_endpoint().port())));
-        ruvia::http_client_config config{
-            .base_url_ = base_url,
-            .write_timeout_ = std::chrono::milliseconds(2000),
-            .read_timeout_ = std::chrono::milliseconds(2000),
-            .versions_ = ruvia::http_client_versions{.http1_ = false}};
+        const std::string base_url(std::string(secure ? "https://127.0.0.1:" : "http://127.0.0.1:") + std::string(std::to_string(peer.local_endpoint().port())));
+        ruvia::http_client_config config{.base_url_ = base_url, .write_timeout_ = std::chrono::milliseconds(2000), .read_timeout_ = std::chrono::milliseconds(2000), .versions_ = ruvia::http_client_versions{.http1_ = false}};
         if (identity) {
             config.tls_.ca_file_ = identity->ca_file_;
             config.tls_.server_name_ = "localhost";
@@ -281,22 +276,19 @@ void exercise_closing_peer(closing_peer behavior) {
             if (!received_close) {
                 continue;
             }
-            if (behavior != closing_peer::no_close && behavior != closing_peer::no_close_after_end &&
-                behavior != closing_peer::end_without_close) {
+            if (behavior != closing_peer::no_close && behavior != closing_peer::no_close_after_end && behavior != closing_peer::end_without_close) {
                 const auto close = websocket->output_plan();
                 EXPECT_TRUE(!close.bytes().empty());
                 EXPECT_TRUE(connection.submit_data(1, close.bytes(), ruvia::http2_end_stream::keep_open, 65535).status_ == ruvia::http2_data_submit_status::complete);
                 (void)websocket->consume_output(close.bytes().size());
             }
-            if (behavior == closing_peer::clean_release || behavior == closing_peer::end_without_close ||
-                behavior == closing_peer::no_close_after_end || behavior == closing_peer::error_after_end) {
+            if (behavior == closing_peer::clean_release || behavior == closing_peer::end_without_close || behavior == closing_peer::no_close_after_end || behavior == closing_peer::error_after_end) {
                 EXPECT_TRUE(connection.submit_data(1, {}, ruvia::http2_end_stream::end_stream, 65535).status_ == ruvia::http2_data_submit_status::complete);
             }
             // Publish the DATA/END_STREAM before releasing the real server lease.
             // Its half-open retirement emits NO_ERROR, in the same socket write.
             ruvia::test::drain_output(connection, output);
-            if (behavior == closing_peer::clean_release || behavior == closing_peer::no_close ||
-                behavior == closing_peer::no_close_after_end) {
+            if (behavior == closing_peer::clean_release || behavior == closing_peer::no_close || behavior == closing_peer::no_close_after_end) {
                 if (behavior == closing_peer::no_close) {
                     EXPECT_TRUE(connection.submit_reset(1, ruvia::http2_error_code::no_error) == ruvia::http2_submit_status::accepted);
                 }
@@ -320,10 +312,7 @@ void exercise_closing_peer(closing_peer behavior) {
                     if (header_value->type_ == static_cast<std::uint8_t>(ruvia::http2_frame_type::rst_stream)) {
                         EXPECT_EQ(header_value->length_, std::uint32_t{4});
                         const auto* code = output.data() + offset + ruvia::http2_frame_header_bytes;
-                        const auto error = (std::uint32_t(static_cast<unsigned char>(code[0])) << 24) |
-                                           (std::uint32_t(static_cast<unsigned char>(code[1])) << 16) |
-                                           (std::uint32_t(static_cast<unsigned char>(code[2])) << 8) |
-                                           std::uint32_t(static_cast<unsigned char>(code[3]));
+                        const auto error = (std::uint32_t(static_cast<unsigned char>(code[0])) << 24) | (std::uint32_t(static_cast<unsigned char>(code[1])) << 16) | (std::uint32_t(static_cast<unsigned char>(code[2])) << 8) | std::uint32_t(static_cast<unsigned char>(code[3]));
                         reset_error = static_cast<ruvia::http2_error_code>(error);
                     }
                 }
@@ -333,13 +322,14 @@ void exercise_closing_peer(closing_peer behavior) {
             co_return;
         }
     };
-    asio::co_spawn(io, serve(), [&](std::exception_ptr failure) { peer_failure = failure; });
+    asio::co_spawn(io, serve(), [&](std::exception_ptr failure) {
+        peer_failure = failure;
+    });
     bool protocol_error = false;
     bool close_completed = false;
     const auto run = [&]() -> ruvia::task<void> {
         const std::string base_url("http://127.0.0.1:" + std::string(std::to_string(peer.local_endpoint().port())));
-        ruvia::http_client client(attachment.loop(), {.base_url_ = base_url,
-                                                         .versions_ = ruvia::http_client_versions{.http1_ = false}});
+        ruvia::http_client client(attachment.loop(), {.base_url_ = base_url, .versions_ = ruvia::http_client_versions{.http1_ = false}});
         std::exception_ptr failure;
         try {
             auto websocket = co_await client.client().websocket("/").connect();
@@ -448,8 +438,7 @@ void exercise_handshake_end(handshake_end mode) {
                         std::string block;
                         ruvia::hpack_encoder::encode_status(block, ruvia::http_status::ok);
                         std::array<char, ruvia::http2_frame_header_bytes> header{};
-                        EXPECT_TRUE(ruvia::encode_http2_frame_header(header, static_cast<std::uint32_t>(block.size()),
-                            ruvia::http2_frame_type::headers, 0x5, head->stream_id()));
+                        EXPECT_TRUE(ruvia::encode_http2_frame_header(header, static_cast<std::uint32_t>(block.size()), ruvia::http2_frame_type::headers, 0x5, head->stream_id()));
                         output.append(header.data(), header.size());
                         output.append(block);
                         co_await asio::async_write(socket, asio::buffer(output), asio::use_awaitable);
@@ -462,11 +451,8 @@ void exercise_handshake_end(handshake_end mode) {
                         ruvia::websocket_connection websocket(websocket_input);
                         EXPECT_TRUE(websocket.submit_close(ruvia::websocket_close_status::normal_closure, "bye") == ruvia::websocket_close_submit_status::accepted);
                         const auto close = websocket.output_plan();
-                        const auto end_flag = mode == handshake_end::close_without_end_stream
-                                                  ? ruvia::http2_end_stream::keep_open
-                                                  : ruvia::http2_end_stream::end_stream;
-                        EXPECT_TRUE(connection.submit_data(head->stream_id(), close.bytes(), end_flag, 65535).status_ ==
-                                    ruvia::http2_data_submit_status::complete);
+                        const auto end_flag = mode == handshake_end::close_without_end_stream ? ruvia::http2_end_stream::keep_open : ruvia::http2_end_stream::end_stream;
+                        EXPECT_TRUE(connection.submit_data(head->stream_id(), close.bytes(), end_flag, 65535).status_ == ruvia::http2_data_submit_status::complete);
                     }
                     request.emplace(std::move(*head));
                 }
@@ -485,18 +471,13 @@ void exercise_handshake_end(handshake_end mode) {
     std::optional<std::error_code> connect_error;
     const auto run = [&]() -> ruvia::task<void> {
         const std::string base_url("http://127.0.0.1:" + std::string(std::to_string(peer.local_endpoint().port())));
-        ruvia::http_client client(attachment.loop(), {.base_url_ = base_url,
-                                                         .versions_ = ruvia::http_client_versions{.http1_ = false}});
+        ruvia::http_client client(attachment.loop(), {.base_url_ = base_url, .versions_ = ruvia::http_client_versions{.http1_ = false}});
         std::exception_ptr failure;
         try {
             auto websocket = co_await client.client().websocket("/").lifecycle({.close_handshake_timeout_ = std::chrono::milliseconds(50)}).connect();
             connected = true;
             auto& client_handle = websocket;
-            closed_by_peer = !(co_await client_handle.read()) &&
-                             client_handle.peer_close_code() == std::uint16_t{1000} &&
-                             client_handle.peer_close_reason() == std::string_view("bye") &&
-                             websocket.peer_close_code() == std::uint16_t{1000} &&
-                             websocket.peer_close_reason() == std::string_view("bye");
+            closed_by_peer = !(co_await client_handle.read()) && client_handle.peer_close_code() == std::uint16_t{1000} && client_handle.peer_close_reason() == std::string_view("bye") && websocket.peer_close_code() == std::uint16_t{1000} && websocket.peer_close_reason() == std::string_view("bye");
         } catch (const ruvia::http_client_error& error) {
             connect_error = error.code();
         } catch (...) {

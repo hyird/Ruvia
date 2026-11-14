@@ -106,8 +106,8 @@ private:
     friend class http_transfer_coding_decode_result;
     friend class detail::transfer_coding_decoder;
     friend class http_transfer_coding_stack_decoder;
-    explicit constexpr http_transfer_coding_decode_need_input(std::size_t consumed_bytes) noexcept
-        : consumed_bytes_(consumed_bytes) {}
+    explicit constexpr http_transfer_coding_decode_need_input(std::size_t consumed_bytes) noexcept :
+        consumed_bytes_(consumed_bytes) {}
     std::size_t consumed_bytes_;
 };
 
@@ -125,9 +125,9 @@ private:
     friend class http_transfer_coding_decode_result;
     friend class detail::transfer_coding_decoder;
     friend class http_transfer_coding_stack_decoder;
-    constexpr http_transfer_coding_decode_output_view(std::size_t consumed_bytes, std::string_view bytes_value) noexcept
-        : consumed_bytes_(consumed_bytes),
-          bytes_(bytes_value) {}
+    constexpr http_transfer_coding_decode_output_view(std::size_t consumed_bytes, std::string_view bytes_value) noexcept :
+        consumed_bytes_(consumed_bytes),
+        bytes_(bytes_value) {}
     std::size_t consumed_bytes_;
     std::string_view bytes_;
 };
@@ -142,8 +142,8 @@ private:
     friend class http_transfer_coding_decode_result;
     friend class detail::transfer_coding_decoder;
     friend class http_transfer_coding_stack_decoder;
-    explicit constexpr http_transfer_coding_decode_complete(std::size_t consumed_bytes) noexcept
-        : consumed_bytes_(consumed_bytes) {}
+    explicit constexpr http_transfer_coding_decode_complete(std::size_t consumed_bytes) noexcept :
+        consumed_bytes_(consumed_bytes) {}
     std::size_t consumed_bytes_;
 };
 
@@ -160,9 +160,9 @@ private:
     friend class http_transfer_coding_decode_result;
     friend class detail::transfer_coding_decoder;
     friend class http_transfer_coding_stack_decoder;
-    constexpr http_transfer_coding_decode_failure(std::size_t consumed_bytes, http_transfer_coding_decode_error error) noexcept
-        : consumed_bytes_(consumed_bytes),
-          error_(error) {}
+    constexpr http_transfer_coding_decode_failure(std::size_t consumed_bytes, http_transfer_coding_decode_error error) noexcept :
+        consumed_bytes_(consumed_bytes),
+        error_(error) {}
     std::size_t consumed_bytes_;
     http_transfer_coding_decode_error error_;
 };
@@ -177,15 +177,17 @@ private:
     friend class http_transfer_coding_decode_result;
     friend class detail::transfer_coding_decoder;
     friend class http_transfer_coding_stack_decoder;
-    explicit constexpr http_transfer_coding_decoder_failure(std::size_t consumed_bytes) noexcept
-        : consumed_bytes_(consumed_bytes) {}
+    explicit constexpr http_transfer_coding_decoder_failure(std::size_t consumed_bytes) noexcept :
+        consumed_bytes_(consumed_bytes) {}
     std::size_t consumed_bytes_;
 };
 
 class http_transfer_coding_decode_result final {
 public:
     [[nodiscard]] std::size_t consumed_bytes() const noexcept {
-        return std::visit([](const auto& result_value) { return result_value.consumed_bytes(); }, value_);
+        return std::visit([](const auto& result_value) {
+            return result_value.consumed_bytes();
+        }, value_);
     }
     [[nodiscard]] const http_transfer_coding_decode_need_input* need_input() const& noexcept RUVIA_LIFETIMEBOUND {
         return std::get_if<http_transfer_coding_decode_need_input>(&value_);
@@ -213,8 +215,8 @@ private:
     friend class http_transfer_coding_stack_decoder;
     using value_type = std::variant<http_transfer_coding_decode_need_input, http_transfer_coding_decode_output_view, http_transfer_coding_decode_complete, http_transfer_coding_decode_failure, http_transfer_coding_decoder_failure>;
     template <typename result_type>
-    explicit http_transfer_coding_decode_result(result_type result_value) noexcept
-        : value_(std::move(result_value)) {}
+    explicit http_transfer_coding_decode_result(result_type result_value) noexcept :
+        value_(std::move(result_value)) {}
     value_type value_;
 };
 
@@ -230,15 +232,13 @@ private:
 // retain the exact wire consumption even when a layer fails; failure is terminal.
 class http_transfer_coding_stack_decoder final {
 public:
-    http_transfer_coding_stack_decoder(
-        std::span<const http_transfer_coding> codings, protocol_byte_limit decoded_limit);
+    http_transfer_coding_stack_decoder(std::span<const http_transfer_coding> codings, protocol_byte_limit decoded_limit);
     ~http_transfer_coding_stack_decoder();
     http_transfer_coding_stack_decoder(const http_transfer_coding_stack_decoder&) = delete;
     http_transfer_coding_stack_decoder& operator=(const http_transfer_coding_stack_decoder&) = delete;
     http_transfer_coding_stack_decoder(http_transfer_coding_stack_decoder&&) = delete;
     http_transfer_coding_stack_decoder& operator=(http_transfer_coding_stack_decoder&&) = delete;
-    [[nodiscard]] http_transfer_coding_decode_result decode(
-        std::string_view input, std::span<char> output) noexcept;
+    [[nodiscard]] http_transfer_coding_decode_result decode(std::string_view input, std::span<char> output) noexcept;
     [[nodiscard]] http_transfer_coding_decode_result finish_input() noexcept;
 
 private:
@@ -293,64 +293,47 @@ enum class http_request_body_failure : std::uint8_t {
     buffer_limit,
 };
 
-[[nodiscard]] inline http_protocol_error http_request_body_protocol_error(
-    http_request_body_failure failure) noexcept {
+[[nodiscard]] inline http_protocol_error http_request_body_protocol_error(http_request_body_failure failure) noexcept {
     switch (failure) {
         case http_request_body_failure::too_large:
-            return http_protocol_error(
-                http_status::content_too_large, "request_body_too_large", "request body is too large");
+            return http_protocol_error(http_status::content_too_large, "request_body_too_large", "request body is too large");
         case http_request_body_failure::incomplete:
-            return http_protocol_error(
-                http_status::bad_request, "incomplete_request_body", "incomplete request body");
+            return http_protocol_error(http_status::bad_request, "incomplete_request_body", "incomplete request body");
         case http_request_body_failure::buffer_limit:
-            return http_protocol_error(http_status::service_unavailable, "inbound_buffer_limit",
-                "inbound buffer capacity exhausted");
+            return http_protocol_error(http_status::service_unavailable, "inbound_buffer_limit", "inbound buffer capacity exhausted");
     }
     return http_protocol_error(http_status::bad_request, "invalid_request_body", "invalid request body");
 }
 
-[[nodiscard]] inline http_protocol_error http_request_transfer_coding_error(
-    http_transfer_coding_decode_error error) noexcept {
+[[nodiscard]] inline http_protocol_error http_request_transfer_coding_error(http_transfer_coding_decode_error error) noexcept {
     switch (error) {
         case http_transfer_coding_decode_error::invalid_content:
-            return http_protocol_error(http_status::bad_request, "invalid_transfer_coding_body",
-                "invalid transfer-coding body");
+            return http_protocol_error(http_status::bad_request, "invalid_transfer_coding_body", "invalid transfer-coding body");
         case http_transfer_coding_decode_error::decoded_size_exceeded:
             return http_request_body_protocol_error(http_request_body_failure::too_large);
     }
-    return http_protocol_error(
-        http_status::bad_request, "invalid_transfer_coding_body", "invalid transfer-coding body");
+    return http_protocol_error(http_status::bad_request, "invalid_transfer_coding_body", "invalid transfer-coding body");
 }
 
 // Status for a request body whose Content-Encoding could not be decoded.
-[[nodiscard]] inline http_protocol_error http_request_content_decode_error(
-    http_content_decode_error error) noexcept {
+[[nodiscard]] inline http_protocol_error http_request_content_decode_error(http_content_decode_error error) noexcept {
     switch (error) {
         case http_content_decode_error::unsupported_coding:
-            return http_protocol_error(http_status::unsupported_media_type,
-                "unsupported_content_coding", "request Content-Encoding is not supported");
+            return http_protocol_error(http_status::unsupported_media_type, "unsupported_content_coding", "request Content-Encoding is not supported");
         case http_content_decode_error::invalid_content:
-            return http_protocol_error(
-                http_status::bad_request, "invalid_content_coding", "failed to decode request body");
+            return http_protocol_error(http_status::bad_request, "invalid_content_coding", "failed to decode request body");
         case http_content_decode_error::decoded_size_exceeded:
             return http_request_body_protocol_error(http_request_body_failure::too_large);
     }
-    return http_protocol_error(
-        http_status::bad_request, "invalid_content_coding", "failed to decode request body");
+    return http_protocol_error(http_status::bad_request, "invalid_content_coding", "failed to decode request body");
 }
 
-[[nodiscard]] inline std::optional<http_request_body_failure> http_request_body_size_failure(
-    std::size_t size, protocol_byte_limit limit) noexcept {
-    return limit.exceeds(size)
-               ? std::optional<http_request_body_failure>(http_request_body_failure::too_large)
-               : std::nullopt;
+[[nodiscard]] inline std::optional<http_request_body_failure> http_request_body_size_failure(std::size_t size, protocol_byte_limit limit) noexcept {
+    return limit.exceeds(size) ? std::optional<http_request_body_failure>(http_request_body_failure::too_large) : std::nullopt;
 }
 
-[[nodiscard]] inline std::optional<http_request_body_failure> http_request_body_addition_failure(
-    std::size_t current_size, std::size_t additional_size, protocol_byte_limit limit) noexcept {
-    return limit.addition_exceeds(current_size, additional_size)
-               ? std::optional<http_request_body_failure>(http_request_body_failure::too_large)
-               : std::nullopt;
+[[nodiscard]] inline std::optional<http_request_body_failure> http_request_body_addition_failure(std::size_t current_size, std::size_t additional_size, protocol_byte_limit limit) noexcept {
+    return limit.addition_exceeds(current_size, additional_size) ? std::optional<http_request_body_failure>(http_request_body_failure::too_large) : std::nullopt;
 }
 
 }  // namespace ruvia
@@ -370,8 +353,8 @@ public:
 
 private:
     friend class http1_chunk_decode_result;
-    explicit constexpr http1_chunk_decode_need_more(std::size_t consumed_bytes) noexcept
-        : consumed_bytes_(consumed_bytes) {}
+    explicit constexpr http1_chunk_decode_need_more(std::size_t consumed_bytes) noexcept :
+        consumed_bytes_(consumed_bytes) {}
     std::size_t consumed_bytes_;
 };
 
@@ -387,9 +370,9 @@ public:
 
 private:
     friend class http1_chunk_decode_result;
-    constexpr http1_chunk_decode_body_chunk_view(std::size_t consumed_bytes, std::string_view bytes_value) noexcept
-        : consumed_bytes_(consumed_bytes),
-          bytes_(bytes_value) {}
+    constexpr http1_chunk_decode_body_chunk_view(std::size_t consumed_bytes, std::string_view bytes_value) noexcept :
+        consumed_bytes_(consumed_bytes),
+        bytes_(bytes_value) {}
     std::size_t consumed_bytes_;
     std::string_view bytes_;
 };
@@ -409,10 +392,9 @@ public:
 
 private:
     friend class http1_chunk_decode_result;
-    explicit constexpr http1_chunk_decode_complete_view(
-        std::size_t consumed_bytes, std::span<const http_header> trailers) noexcept
-        : consumed_bytes_(consumed_bytes),
-          trailers_(trailers) {}
+    explicit constexpr http1_chunk_decode_complete_view(std::size_t consumed_bytes, std::span<const http_header> trailers) noexcept :
+        consumed_bytes_(consumed_bytes),
+        trailers_(trailers) {}
     std::size_t consumed_bytes_;
     std::span<const http_header> trailers_;
 };
@@ -428,10 +410,9 @@ public:
 
 private:
     friend class http1_chunk_decode_result;
-    constexpr http1_chunk_decode_failure(
-        std::size_t consumed_bytes, http1_chunk_decode_error error) noexcept
-        : consumed_bytes_(consumed_bytes),
-          error_(error) {}
+    constexpr http1_chunk_decode_failure(std::size_t consumed_bytes, http1_chunk_decode_error error) noexcept :
+        consumed_bytes_(consumed_bytes),
+        error_(error) {}
     std::size_t consumed_bytes_;
     http1_chunk_decode_error error_;
 };
@@ -439,7 +420,9 @@ private:
 class http1_chunk_decode_result final {
 public:
     [[nodiscard]] std::size_t consumed_bytes() const noexcept {
-        return std::visit([](const auto& result_value) { return result_value.consumed_bytes(); }, value_);
+        return std::visit([](const auto& result_value) {
+            return result_value.consumed_bytes();
+        }, value_);
     }
     [[nodiscard]] const http1_chunk_decode_need_more* need_more() const& noexcept {
         return std::get_if<http1_chunk_decode_need_more>(&value_);
@@ -460,18 +443,14 @@ public:
 
 private:
     friend class http1_chunked_body_decoder;
-    using value_type = std::variant<http1_chunk_decode_need_more, http1_chunk_decode_body_chunk_view,
-        http1_chunk_decode_complete_view, http1_chunk_decode_failure>;
+    using value_type = std::variant<http1_chunk_decode_need_more, http1_chunk_decode_body_chunk_view, http1_chunk_decode_complete_view, http1_chunk_decode_failure>;
     template <typename result_type>
-    explicit http1_chunk_decode_result(result_type result_value) noexcept
-        : value_(std::move(result_value)) {}
+    explicit http1_chunk_decode_result(result_type result_value) noexcept :
+        value_(std::move(result_value)) {}
     [[nodiscard]] static http1_chunk_decode_result make_need_more(std::size_t consumed_bytes) noexcept;
-    [[nodiscard]] static http1_chunk_decode_result make_body_chunk(
-        std::size_t consumed_bytes, std::string_view bytes) noexcept;
-    [[nodiscard]] static http1_chunk_decode_result make_complete(
-        std::size_t consumed_bytes, std::span<const http_header> trailers = {}) noexcept;
-    [[nodiscard]] static http1_chunk_decode_result make_failure(
-        std::size_t consumed_bytes, http1_chunk_decode_error error) noexcept;
+    [[nodiscard]] static http1_chunk_decode_result make_body_chunk(std::size_t consumed_bytes, std::string_view bytes) noexcept;
+    [[nodiscard]] static http1_chunk_decode_result make_complete(std::size_t consumed_bytes, std::span<const http_header> trailers = {}) noexcept;
+    [[nodiscard]] static http1_chunk_decode_result make_failure(std::size_t consumed_bytes, http1_chunk_decode_error error) noexcept;
     value_type value_;
 };
 
@@ -570,20 +549,16 @@ private:
     std::vector<http_header> trailers_;
 };
 
-[[nodiscard]] inline http_protocol_error http_request_chunk_decode_error(
-    http1_chunk_decode_error error) noexcept {
+[[nodiscard]] inline http_protocol_error http_request_chunk_decode_error(http1_chunk_decode_error error) noexcept {
     switch (error) {
         case http1_chunk_decode_error::invalid_framing:
-            return http_protocol_error(
-                http_status::bad_request, "invalid_chunked_body", "invalid chunked request body");
+            return http_protocol_error(http_status::bad_request, "invalid_chunked_body", "invalid chunked request body");
         case http1_chunk_decode_error::body_limit_exceeded:
             return http_request_body_protocol_error(http_request_body_failure::too_large);
         case http1_chunk_decode_error::framing_limit_exceeded:
-            return http_protocol_error(http_status::content_too_large, "chunked_framing_too_large",
-                "request body framing is too large");
+            return http_protocol_error(http_status::content_too_large, "chunked_framing_too_large", "request body framing is too large");
     }
-    return http_protocol_error(
-        http_status::bad_request, "invalid_chunked_body", "invalid chunked request body");
+    return http_protocol_error(http_status::bad_request, "invalid_chunked_body", "invalid chunked request body");
 }
 
 }  // namespace ruvia
@@ -613,8 +588,8 @@ public:
 private:
     friend class http1_request_body_plan;
 
-    explicit constexpr http1_known_length_request_body(std::size_t content_length) noexcept
-        : content_length_(content_length) {}
+    explicit constexpr http1_known_length_request_body(std::size_t content_length) noexcept :
+        content_length_(content_length) {}
 
     std::size_t content_length_;
 };
@@ -629,8 +604,8 @@ public:
 private:
     friend class http1_request_body_plan;
 
-    explicit http1_chunked_request_body(http_transfer_codings transfer_codings)
-        : transfer_codings_(std::move(transfer_codings)) {}
+    explicit http1_chunked_request_body(http_transfer_codings transfer_codings) :
+        transfer_codings_(std::move(transfer_codings)) {}
 
     http_transfer_codings transfer_codings_;
 };
@@ -668,41 +643,34 @@ public:
     // The consumption a response must record when the runtime never read the
     // request body: incomplete only if there is anything to read.
     [[nodiscard]] constexpr http1_request_body_consumption consumption_if_unread() const noexcept {
-        return requires_consumption() ? http1_request_body_consumption::incomplete
-                                      : http1_request_body_consumption::complete;
+        return requires_consumption() ? http1_request_body_consumption::incomplete : http1_request_body_consumption::complete;
     }
 
     [[nodiscard]] http_request_expectations expectations() const noexcept {
         return expectations_;
     }
 
-    [[nodiscard]] http_server_expectation_plan expectation_plan(
-        http_unsupported_expectation_policy unsupported_policy) const noexcept {
-        return expectations_.server_plan(requires_consumption()
-                                             ? http_request_content_indication::will_follow
-                                             : http_request_content_indication::no_content,
-            unsupported_policy);
+    [[nodiscard]] http_server_expectation_plan expectation_plan(http_unsupported_expectation_policy unsupported_policy) const noexcept {
+        return expectations_.server_plan(requires_consumption() ? http_request_content_indication::will_follow : http_request_content_indication::no_content, unsupported_policy);
     }
 
 private:
     friend class http1_server_request_parse_state;
 
-    using framing_type =
-        std::variant<http1_request_without_body, http1_known_length_request_body, http1_chunked_request_body>;
+    using framing_type = std::variant<http1_request_without_body, http1_known_length_request_body, http1_chunked_request_body>;
 
-    explicit http1_request_body_plan(http_request_expectations expectations) noexcept
-        : http1_request_body_plan(framing_type(http1_request_without_body()), expectations) {}
+    explicit http1_request_body_plan(http_request_expectations expectations) noexcept :
+        http1_request_body_plan(framing_type(http1_request_without_body()), expectations) {}
 
-    http1_request_body_plan(std::size_t content_length, http_request_expectations expectations) noexcept
-        : http1_request_body_plan(framing_type(http1_known_length_request_body(content_length)), expectations) {}
+    http1_request_body_plan(std::size_t content_length, http_request_expectations expectations) noexcept :
+        http1_request_body_plan(framing_type(http1_known_length_request_body(content_length)), expectations) {}
 
-    http1_request_body_plan(
-        http_transfer_codings transfer_codings, http_request_expectations expectations)
-        : http1_request_body_plan(framing_type(http1_chunked_request_body(std::move(transfer_codings))), expectations) {}
+    http1_request_body_plan(http_transfer_codings transfer_codings, http_request_expectations expectations) :
+        http1_request_body_plan(framing_type(http1_chunked_request_body(std::move(transfer_codings))), expectations) {}
 
-    http1_request_body_plan(framing_type framing, http_request_expectations expectations)
-        : framing_(std::move(framing)),
-          expectations_(expectations) {}
+    http1_request_body_plan(framing_type framing, http_request_expectations expectations) :
+        framing_(std::move(framing)),
+        expectations_(expectations) {}
 
     framing_type framing_;
     http_request_expectations expectations_;
@@ -753,31 +721,25 @@ private:
     friend constexpr http1_request_connection_plan plan_http10_request_connection(bool, bool) noexcept;
     friend constexpr http1_request_connection_plan plan_http11_request_connection(bool) noexcept;
 
-    constexpr http1_request_connection_plan(http_protocol_version version,
-        http1_close_policy disposition, bool tunnel_request) noexcept
-        : version_(version),
-          disposition_(disposition),
-          tunnel_request_(tunnel_request) {}
+    constexpr http1_request_connection_plan(http_protocol_version version, http1_close_policy disposition, bool tunnel_request) noexcept :
+        version_(version),
+        disposition_(disposition),
+        tunnel_request_(tunnel_request) {}
 
     http_protocol_version version_;
     http1_close_policy disposition_;
     bool tunnel_request_;
 };
 
-[[nodiscard]] inline constexpr http1_request_connection_plan plan_http10_request_connection(
-    bool close, bool keep_alive) noexcept {
-    return {http_protocol_version::http10,
-        !close && keep_alive ? http1_close_policy::allow_reuse : http1_close_policy::close_after_response, false};
+[[nodiscard]] inline constexpr http1_request_connection_plan plan_http10_request_connection(bool close, bool keep_alive) noexcept {
+    return {http_protocol_version::http10, !close && keep_alive ? http1_close_policy::allow_reuse : http1_close_policy::close_after_response, false};
 }
 
-[[nodiscard]] inline constexpr http1_request_connection_plan plan_http11_request_connection(
-    bool close) noexcept {
-    return {http_protocol_version::http11,
-        close ? http1_close_policy::close_after_response : http1_close_policy::allow_reuse, false};
+[[nodiscard]] inline constexpr http1_request_connection_plan plan_http11_request_connection(bool close) noexcept {
+    return {http_protocol_version::http11, close ? http1_close_policy::close_after_response : http1_close_policy::allow_reuse, false};
 }
 
-[[nodiscard]] inline constexpr http1_request_connection_plan apply_request_body_consumption(
-    http1_request_connection_plan plan, http1_request_body_consumption consumption) noexcept {
+[[nodiscard]] inline constexpr http1_request_connection_plan apply_request_body_consumption(http1_request_connection_plan plan, http1_request_body_consumption consumption) noexcept {
     return consumption == http1_request_body_consumption::complete ? plan : plan.require_close();
 }
 
@@ -796,8 +758,7 @@ enum class http1_server_request_parse_failure_source : std::uint8_t { request_li
 // and is answered with 400 (RFC 9112 sections 2.2 and 3). Otherwise input is
 // dropped once its first line is CRLF-terminated, or at once when its first
 // byte cannot begin a method token.
-[[nodiscard]] bool should_drop_invalid_cleartext_http1_input(
-    std::string_view buffer, http1_server_request_parse_failure_source source_value) noexcept;
+[[nodiscard]] bool should_drop_invalid_cleartext_http1_input(std::string_view buffer, http1_server_request_parse_failure_source source_value) noexcept;
 
 class http1_server_need_request_head final {
 private:
@@ -819,8 +780,8 @@ public:
 private:
     friend class http1_server_request_parse_state;
 
-    explicit constexpr http1_server_request_head_ready(std::size_t header_bytes) noexcept
-        : header_bytes_(header_bytes) {
+    explicit constexpr http1_server_request_head_ready(std::size_t header_bytes) noexcept :
+        header_bytes_(header_bytes) {
         if (header_bytes_ == 0) {
             std::terminate();
         }
@@ -836,17 +797,14 @@ public:
     }
 
     [[nodiscard]] constexpr http1_server_request_parse_failure_source source() const noexcept {
-        return error_ == http_parse_error::invalid_request_line ||
-                       error_ == http_parse_error::unsupported_http_version
-                   ? http1_server_request_parse_failure_source::request_line
-                   : http1_server_request_parse_failure_source::message;
+        return error_ == http_parse_error::invalid_request_line || error_ == http_parse_error::unsupported_http_version ? http1_server_request_parse_failure_source::request_line : http1_server_request_parse_failure_source::message;
     }
 
 private:
     friend class http1_server_request_parse_state;
 
-    explicit constexpr http1_server_request_parse_failure(http_parse_error error) noexcept
-        : error_(error) {}
+    explicit constexpr http1_server_request_parse_failure(http_parse_error error) noexcept :
+        error_(error) {}
 
     http_parse_error error_;
 };
@@ -906,8 +864,7 @@ private:
     // The compact request owns its descriptor block across parse attempts.
     // Only this small progress value changes, so scan/head/error metadata
     // exists solely in the alternative where it is meaningful.
-    using progress = std::variant<http1_server_need_request_head, http1_server_request_head_ready,
-        http1_server_request_parse_failure>;
+    using progress = std::variant<http1_server_need_request_head, http1_server_request_head_ready, http1_server_request_parse_failure>;
 
     progress progress_{http1_server_need_request_head{}};
 };
@@ -1028,8 +985,8 @@ public:
 private:
     friend class http1_response_head_plan;
 
-    explicit constexpr http1_buffered_response_head(std::uint64_t content_length) noexcept
-        : content_length_(content_length) {}
+    explicit constexpr http1_buffered_response_head(std::uint64_t content_length) noexcept :
+        content_length_(content_length) {}
 
     std::uint64_t content_length_{0};
 };
@@ -1069,12 +1026,10 @@ public:
     }
     [[nodiscard]] constexpr const http1_chunked_response_stream_head* chunked_stream() const&& = delete;
 
-    [[nodiscard]] constexpr const http1_close_delimited_response_stream_head* close_delimited_stream()
-        const& noexcept {
+    [[nodiscard]] constexpr const http1_close_delimited_response_stream_head* close_delimited_stream() const& noexcept {
         return std::get_if<http1_close_delimited_response_stream_head>(&framing_);
     }
-    [[nodiscard]] constexpr const http1_close_delimited_response_stream_head* close_delimited_stream()
-        const&& = delete;
+    [[nodiscard]] constexpr const http1_close_delimited_response_stream_head* close_delimited_stream() const&& = delete;
 
     [[nodiscard]] constexpr http_response_body_plan body_plan() const noexcept {
         return body_plan_;
@@ -1085,15 +1040,11 @@ public:
     }
 
 private:
-    friend http1_buffered_response_plan get_http1_buffered_response_plan(
-        http_buffered_response_write_plan, http1_request_connection_plan) noexcept;
-    friend constexpr http1_response_head_plan http1_chunked_response_stream_head_plan(
-        http_response_body_plan, http1_request_connection_plan) noexcept;
-    friend constexpr http1_response_head_plan http1_close_delimited_response_stream_head_plan(
-        http_response_body_plan, http1_request_connection_plan) noexcept;
+    friend http1_buffered_response_plan get_http1_buffered_response_plan(http_buffered_response_write_plan, http1_request_connection_plan) noexcept;
+    friend constexpr http1_response_head_plan http1_chunked_response_stream_head_plan(http_response_body_plan, http1_request_connection_plan) noexcept;
+    friend constexpr http1_response_head_plan http1_close_delimited_response_stream_head_plan(http_response_body_plan, http1_request_connection_plan) noexcept;
 
-    using framing_type = std::variant<http1_buffered_response_head,
-        http1_chunked_response_stream_head, http1_close_delimited_response_stream_head>;
+    using framing_type = std::variant<http1_buffered_response_head, http1_chunked_response_stream_head, http1_close_delimited_response_stream_head>;
 
     [[nodiscard]] static constexpr framing_type buffered_framing(std::uint64_t content_length) noexcept {
         return framing_type(http1_buffered_response_head(content_length));
@@ -1107,27 +1058,22 @@ private:
         return framing_type(http1_close_delimited_response_stream_head());
     }
 
-    constexpr http1_response_head_plan(http_response_body_plan body_plan,
-        http_protocol_version protocol_version, framing_type framing) noexcept
-        : body_plan_(body_plan),
-          protocol_version_(protocol_version),
-          framing_(framing) {}
+    constexpr http1_response_head_plan(http_response_body_plan body_plan, http_protocol_version protocol_version, framing_type framing) noexcept :
+        body_plan_(body_plan),
+        protocol_version_(protocol_version),
+        framing_(framing) {}
 
     http_response_body_plan body_plan_;
     http_protocol_version protocol_version_;
     framing_type framing_;
 };
 
-[[nodiscard]] constexpr http1_response_head_plan http1_chunked_response_stream_head_plan(
-    http_response_body_plan body_plan, http1_request_connection_plan connection_plan) noexcept {
-    return http1_response_head_plan(
-        body_plan, connection_plan.protocol_version(), http1_response_head_plan::chunked_stream_framing());
+[[nodiscard]] constexpr http1_response_head_plan http1_chunked_response_stream_head_plan(http_response_body_plan body_plan, http1_request_connection_plan connection_plan) noexcept {
+    return http1_response_head_plan(body_plan, connection_plan.protocol_version(), http1_response_head_plan::chunked_stream_framing());
 }
 
-[[nodiscard]] constexpr http1_response_head_plan http1_close_delimited_response_stream_head_plan(
-    http_response_body_plan body_plan, http1_request_connection_plan connection_plan) noexcept {
-    return http1_response_head_plan(body_plan, connection_plan.protocol_version(),
-        http1_response_head_plan::close_delimited_stream_framing());
+[[nodiscard]] constexpr http1_response_head_plan http1_close_delimited_response_stream_head_plan(http_response_body_plan body_plan, http1_request_connection_plan connection_plan) noexcept {
+    return http1_response_head_plan(body_plan, connection_plan.protocol_version(), http1_response_head_plan::close_delimited_stream_framing());
 }
 
 // The runtime writes one inseparable HTTP/1 buffered response contract. The
@@ -1157,11 +1103,10 @@ public:
     [[nodiscard]] constexpr const http1_response_head_plan& head_plan() const&& = delete;
 
 private:
-    friend http1_buffered_response_plan get_http1_buffered_response_plan(
-        http_buffered_response_write_plan, http1_request_connection_plan) noexcept;
+    friend http1_buffered_response_plan get_http1_buffered_response_plan(http_buffered_response_write_plan, http1_request_connection_plan) noexcept;
 
-    explicit constexpr http1_buffered_response_plan(http1_response_head_plan head_plan) noexcept
-        : head_plan_(head_plan) {}
+    explicit constexpr http1_buffered_response_plan(http1_response_head_plan head_plan) noexcept :
+        head_plan_(head_plan) {}
 
     http1_response_head_plan head_plan_;
 };
@@ -1169,11 +1114,8 @@ private:
 static_assert(std::is_trivially_copyable_v<http1_buffered_response_plan>);
 static_assert(sizeof(http1_buffered_response_plan) == sizeof(http1_response_head_plan));
 
-[[nodiscard]] inline http1_buffered_response_plan get_http1_buffered_response_plan(
-    http_buffered_response_write_plan write_plan, http1_request_connection_plan connection_plan) noexcept {
-    return http1_buffered_response_plan(
-        http1_response_head_plan(write_plan.body_plan(), connection_plan.protocol_version(),
-            http1_response_head_plan::buffered_framing(write_plan.content_length())));
+[[nodiscard]] inline http1_buffered_response_plan get_http1_buffered_response_plan(http_buffered_response_write_plan write_plan, http1_request_connection_plan connection_plan) noexcept {
+    return http1_buffered_response_plan(http1_response_head_plan(write_plan.body_plan(), connection_plan.protocol_version(), http1_response_head_plan::buffered_framing(write_plan.content_length())));
 }
 
 }  // namespace ruvia
@@ -1205,10 +1147,9 @@ public:
     }
 
 private:
-    friend http_response_trailer_section validate_http_response_trailers(
-        std::span<const http_header_view>);
-    explicit http_response_trailer_section(std::span<const http_header_view> fields_value) noexcept
-        : fields_(fields_value) {}
+    friend http_response_trailer_section validate_http_response_trailers(std::span<const http_header_view>);
+    explicit http_response_trailer_section(std::span<const http_header_view> fields_value) noexcept :
+        fields_(fields_value) {}
 
     std::span<const http_header_view> fields_;
 };
@@ -1222,24 +1163,19 @@ private:
 // http1_response_head_error. The plan owns framing: an application
 // Transfer-Encoding is accepted only as exactly `chunked` (OWS and ASCII case
 // aside) and is replaced by the plan's framing; any other value throws.
-void append_http1_response_head(
-    const http_response& response, http_response_head_buffer& head,
-    const http1_response_head_plan& plan);
+void append_http1_response_head(const http_response& response, http_response_head_buffer& head, const http1_response_head_plan& plan);
 
 // Append only field lines; chunk delimiters belong to the caller. Inputs may
 // alias output. Allocation failure leaves the existing output bytes unchanged.
-void append_http1_response_trailers(
-    std::string& output, const http_response_trailer_section& trailers);
+void append_http1_response_trailers(std::string& output, const http_response_trailer_section& trailers);
 
 // Validate a complete response trailer section and return a borrowed proof for
 // synchronous protocol submission. The input storage must outlive its use.
-[[nodiscard]] http_response_trailer_section validate_http_response_trailers(
-    std::span<const http_header_view> trailers);
+[[nodiscard]] http_response_trailer_section validate_http_response_trailers(std::span<const http_header_view> trailers);
 
 template <detail::http_temporary_owning_range<http_header_view> headers_type>
 http_response_trailer_section validate_http_response_trailers(headers_type&&) = delete;
-http_response_trailer_section validate_http_response_trailers(
-    std::initializer_list<http_header_view>) = delete;
+http_response_trailer_section validate_http_response_trailers(std::initializer_list<http_header_view>) = delete;
 
 }  // namespace ruvia
 
@@ -1282,11 +1218,10 @@ public:
     }
 
 private:
-    friend std::variant<class prepared_http1_interim_response, http1_interim_response_buffer_too_small>
-    prepare_http1_interim_response_head(const http_interim_response_head&, std::span<char>);
+    friend std::variant<class prepared_http1_interim_response, http1_interim_response_buffer_too_small> prepare_http1_interim_response_head(const http_interim_response_head&, std::span<char>);
 
-    explicit constexpr http1_interim_response_buffer_too_small(std::size_t required_head_bytes) noexcept
-        : required_head_bytes_(required_head_bytes) {}
+    explicit constexpr http1_interim_response_buffer_too_small(std::size_t required_head_bytes) noexcept :
+        required_head_bytes_(required_head_bytes) {}
 
     std::size_t required_head_bytes_;
 };
@@ -1300,19 +1235,16 @@ public:
         return head_;
     }
 
-    [[nodiscard]] constexpr http1_interim_connection_disposition connection_disposition()
-        const noexcept {
+    [[nodiscard]] constexpr http1_interim_connection_disposition connection_disposition() const noexcept {
         return connection_disposition_;
     }
 
 private:
-    friend std::variant<prepared_http1_interim_response, http1_interim_response_buffer_too_small>
-    prepare_http1_interim_response_head(const http_interim_response_head&, std::span<char>);
+    friend std::variant<prepared_http1_interim_response, http1_interim_response_buffer_too_small> prepare_http1_interim_response_head(const http_interim_response_head&, std::span<char>);
 
-    constexpr prepared_http1_interim_response(
-        std::string_view head, http1_interim_connection_disposition connection_disposition) noexcept
-        : head_(head),
-          connection_disposition_(connection_disposition) {}
+    constexpr prepared_http1_interim_response(std::string_view head, http1_interim_connection_disposition connection_disposition) noexcept :
+        head_(head),
+        connection_disposition_(connection_disposition) {}
 
     std::string_view head_;
     http1_interim_connection_disposition connection_disposition_;
@@ -1323,8 +1255,7 @@ private:
 // output buffer, throwing http1_response_head_error for a head it cannot send.
 // No Server or Date field is injected: the encoded fields are exactly those
 // represented by http_interim_response_head.
-[[nodiscard]] std::variant<prepared_http1_interim_response, http1_interim_response_buffer_too_small>
-prepare_http1_interim_response_head(const http_interim_response_head& response, std::span<char> head_buffer);
+[[nodiscard]] std::variant<prepared_http1_interim_response, http1_interim_response_buffer_too_small> prepare_http1_interim_response_head(const http_interim_response_head& response, std::span<char> head_buffer);
 
 }  // namespace ruvia
 
@@ -1354,8 +1285,7 @@ enum class http_response_trailer_intent : std::uint8_t { none,
 // Whether a validated trailer section commits the response to sending trailers.
 // An empty section is not "no decision": it is the decision to send none, which
 // the head must state before any body byte goes out.
-[[nodiscard]] inline http_response_trailer_intent response_trailer_intent(
-    const http_response_trailer_section& section) noexcept {
+[[nodiscard]] inline http_response_trailer_intent response_trailer_intent(const http_response_trailer_section& section) noexcept {
     return section.empty() ? http_response_trailer_intent::none : http_response_trailer_intent::present;
 }
 
@@ -1383,15 +1313,11 @@ public:
     // HTTP/2 and HTTP/3 carry them in a trailing field section. A body-suppressed
     // response (HEAD / 304) ends at its initial head and discards trailers.
     [[nodiscard]] bool trailers_available() const noexcept {
-        return !body_plan_.body_suppressed() &&
-               (framing_ == http_response_stream_framing::http1_chunked ||
-                   framing_ == http_response_stream_framing::http2_frames ||
-                   framing_ == http_response_stream_framing::http3_frames);
+        return !body_plan_.body_suppressed() && (framing_ == http_response_stream_framing::http1_chunked || framing_ == http_response_stream_framing::http2_frames || framing_ == http_response_stream_framing::http3_frames);
     }
 
     [[nodiscard]] http_response_stream_head_disposition head_disposition() const noexcept {
-        return body_plan_.body_suppressed() ? http_response_stream_head_disposition::message_ended
-                                            : http_response_stream_head_disposition::body_open;
+        return body_plan_.body_suppressed() ? http_response_stream_head_disposition::message_ended : http_response_stream_head_disposition::body_open;
     }
 
     // A status that can never carry content (1xx/204/205/304) has no message
@@ -1406,26 +1332,21 @@ public:
     }
 
 private:
-    friend http_response_stream_commit_plan plan_http_response_stream_commit(
-        http_response_stream_framing, http_known_method, http_status_code, http_response_trailer_intent) noexcept;
+    friend http_response_stream_commit_plan plan_http_response_stream_commit(http_response_stream_framing, http_known_method, http_status_code, http_response_trailer_intent) noexcept;
 
-    http_response_stream_commit_plan(http_response_stream_framing framing, http_response_body_plan body_plan,
-        bool trailer_intent_present) noexcept
-        : framing_(framing),
-          body_plan_(body_plan),
-          trailer_intent_present_(trailer_intent_present) {}
+    http_response_stream_commit_plan(http_response_stream_framing framing, http_response_body_plan body_plan, bool trailer_intent_present) noexcept :
+        framing_(framing),
+        body_plan_(body_plan),
+        trailer_intent_present_(trailer_intent_present) {}
 
     http_response_stream_framing framing_{http_response_stream_framing::http1_chunked};
     http_response_body_plan body_plan_;
     bool trailer_intent_present_{false};
 };
 
-[[nodiscard]] inline http_response_stream_commit_plan plan_http_response_stream_commit(
-    http_response_stream_framing framing, http_known_method request_method, http_status_code response_status,
-    http_response_trailer_intent trailer_intent) noexcept {
+[[nodiscard]] inline http_response_stream_commit_plan plan_http_response_stream_commit(http_response_stream_framing framing, http_known_method request_method, http_status_code response_status, http_response_trailer_intent trailer_intent) noexcept {
     const auto body_plan = plan_http_response_body(request_method, response_status);
-    return http_response_stream_commit_plan(framing, body_plan,
-        trailer_intent == http_response_trailer_intent::present);
+    return http_response_stream_commit_plan(framing, body_plan, trailer_intent == http_response_trailer_intent::present);
 }
 
 // Preparation normalizes the initial response metadata to the supplied commit
@@ -1449,12 +1370,11 @@ public:
     [[nodiscard]] const http_response_stream_commit_plan& commit_plan() const&& = delete;
 
 private:
-    friend http_response_stream_head prepare_http_response_stream_head(
-        http_response, http_response_stream_commit_plan);
+    friend http_response_stream_head prepare_http_response_stream_head(http_response, http_response_stream_commit_plan);
 
-    http_response_stream_head(http_response response, http_response_stream_commit_plan commit_plan)
-        : response_(std::move(response)),
-          commit_plan_(commit_plan) {}
+    http_response_stream_head(http_response response, http_response_stream_commit_plan commit_plan) :
+        response_(std::move(response)),
+        commit_plan_(commit_plan) {}
 
     http_response response_;
     http_response_stream_commit_plan commit_plan_;
@@ -1465,8 +1385,7 @@ private:
 // own framing. Any other value throws http1_response_head_error for an HTTP/1
 // framing and std::invalid_argument for HTTP/2 or HTTP/3 before the response
 // changes.
-[[nodiscard]] http_response_stream_head prepare_http_response_stream_head(
-    http_response response, http_response_stream_commit_plan commit_plan);
+[[nodiscard]] http_response_stream_head prepare_http_response_stream_head(http_response response, http_response_stream_commit_plan commit_plan);
 }  // namespace ruvia
 
 namespace ruvia {
@@ -1490,16 +1409,13 @@ public:
     }
 
 private:
-    friend http1_response_stream_plan http1_plan_response_stream(
-        const http1_server_request_parse_state&, http1_close_policy, http1_request_body_consumption) noexcept;
+    friend http1_response_stream_plan http1_plan_response_stream(const http1_server_request_parse_state&, http1_close_policy, http1_request_body_consumption) noexcept;
 
-    http1_response_stream_plan(http_response_stream_framing framing,
-        http1_request_connection_plan request_connection_plan, http1_close_policy close_policy,
-        http_known_method request_method) noexcept
-        : framing_(framing),
-          request_connection_plan_(request_connection_plan),
-          close_policy_(close_policy),
-          request_method_(request_method) {}
+    http1_response_stream_plan(http_response_stream_framing framing, http1_request_connection_plan request_connection_plan, http1_close_policy close_policy, http_known_method request_method) noexcept :
+        framing_(framing),
+        request_connection_plan_(request_connection_plan),
+        close_policy_(close_policy),
+        request_method_(request_method) {}
 
     http_response_stream_framing framing_;
     http1_request_connection_plan request_connection_plan_;
@@ -1516,38 +1432,27 @@ private:
 // the complete request body before streaming passes `complete`; the parser's
 // body plan still describes the original request framing, so planning for an
 // unread body passes `body_plan_.consumption_if_unread()`.
-[[nodiscard]] inline http1_response_stream_plan http1_plan_response_stream(
-    const http1_server_request_parse_state& parsed_value, http1_close_policy close_policy,
-    http1_request_body_consumption consumption) noexcept {
-    const auto framing = parsed_value.request().protocol_version() == http_protocol_version::http11
-                             ? http_response_stream_framing::http1_chunked
-                             : http_response_stream_framing::http1_close_delimited;
-    return http1_response_stream_plan(framing,
-        apply_request_body_consumption(parsed_value.connection_plan(), consumption), close_policy,
-        parsed_value.request().known_method());
+[[nodiscard]] inline http1_response_stream_plan http1_plan_response_stream(const http1_server_request_parse_state& parsed_value, http1_close_policy close_policy, http1_request_body_consumption consumption) noexcept {
+    const auto framing = parsed_value.request().protocol_version() == http_protocol_version::http11 ? http_response_stream_framing::http1_chunked : http_response_stream_framing::http1_close_delimited;
+    return http1_response_stream_plan(framing, apply_request_body_consumption(parsed_value.connection_plan(), consumption), close_policy, parsed_value.request().known_method());
 }
 
 enum class http1_connection_close_field_policy : std::uint8_t { close_only,
     preserve_upgrade };
 
-inline void http1_mark_connection_close(http_response& response,
-    http1_connection_close_field_policy field_policy = http1_connection_close_field_policy::close_only) {
+inline void http1_mark_connection_close(http_response& response, http1_connection_close_field_policy field_policy = http1_connection_close_field_policy::close_only) {
     // A runtime close verdict dominates keep-alive. Collapse repeated fields
     // after the socket lifecycle is decided, while preserving the Upgrade
     // option required by any retained Upgrade field and any custom hop-by-hop
     // field names declared in Connection (RFC 9110 section 7.6.1).
-    const std::string_view base =
-        field_policy == http1_connection_close_field_policy::preserve_upgrade ? "close, Upgrade"
-                                                                              : "close";
+    const std::string_view base = field_policy == http1_connection_close_field_policy::preserve_upgrade ? "close, Upgrade" : "close";
     std::string merged;
     for (const auto& header : response.headers()) {
         if (!http_ascii_equals_ignore_case(header.name(), "Connection")) {
             continue;
         }
         detail::http_visit_comma_separated_quoted(header.value(), [&merged, base](std::string_view option) {
-            if (!http_ascii_equals_ignore_case(option, "close") &&
-                !http_ascii_equals_ignore_case(option, "keep-alive") &&
-                !http_ascii_equals_ignore_case(option, "Upgrade")) {
+            if (!http_ascii_equals_ignore_case(option, "close") && !http_ascii_equals_ignore_case(option, "keep-alive") && !http_ascii_equals_ignore_case(option, "Upgrade")) {
                 if (merged.empty()) {
                     merged.assign(base);
                 }
@@ -1573,8 +1478,7 @@ class prepared_http1_response_stream;
 // head serialization; a head this endpoint cannot send (for example a 426
 // without an Upgrade protocol, or a Transfer-Encoding other than exactly
 // `chunked`) throws http1_response_head_error before the response changes.
-[[nodiscard]] http1_request_connection_plan http1_commit_final_response(
-    http_response& response, http1_request_connection_plan plan);
+[[nodiscard]] http1_request_connection_plan http1_commit_final_response(http_response& response, http1_request_connection_plan plan);
 
 // Commit-time result. This object combines request/version/runtime constraints with
 // the response method/status and Connection options, then binds the exact header
@@ -1606,29 +1510,24 @@ public:
     }
 
 private:
-    friend prepared_http1_response_stream prepare_http1_response_stream_head(
-        http_response, const http1_response_stream_plan&, http_response_trailer_intent);
+    friend prepared_http1_response_stream prepare_http1_response_stream_head(http_response, const http1_response_stream_plan&, http_response_trailer_intent);
 
-    prepared_http1_response_stream(http_response_stream_head head, http1_response_head_plan response_head_plan,
-        http1_request_connection_plan connection_plan) noexcept
-        : head_(std::move(head)),
-          response_head_plan_(response_head_plan),
-          connection_plan_(connection_plan) {}
+    prepared_http1_response_stream(http_response_stream_head head, http1_response_head_plan response_head_plan, http1_request_connection_plan connection_plan) noexcept :
+        head_(std::move(head)),
+        response_head_plan_(response_head_plan),
+        connection_plan_(connection_plan) {}
 
     http_response_stream_head head_;
     http1_response_head_plan response_head_plan_;
     http1_request_connection_plan connection_plan_;
 };
 
-[[nodiscard]] prepared_http1_response_stream prepare_http1_response_stream_head(
-    http_response response, const http1_response_stream_plan& plan,
-    http_response_trailer_intent trailer_intent = http_response_trailer_intent::none);
+[[nodiscard]] prepared_http1_response_stream prepare_http1_response_stream_head(http_response response, const http1_response_stream_plan& plan, http_response_trailer_intent trailer_intent = http_response_trailer_intent::none);
 
 // The successful head ends HTTP framing and transfers the connection to a
 // duplex byte stream. Payload belongs to that stream, not to an HTTP response.
 // A 2xx head with content or framing fields throws http1_response_head_error.
-[[nodiscard]] http1_response_head_plan prepare_http1_connect_response_head(
-    const http_response& response, http_protocol_version version);
+[[nodiscard]] http1_response_head_plan prepare_http1_connect_response_head(const http_response& response, http_protocol_version version);
 
 // RFC 9110 §7.8: whether an HTTP/1.1 `request` asks to switch protocols -- an
 // Upgrade field offering at least one protocol, sent with the Upgrade
@@ -1643,8 +1542,7 @@ private:
 // connection option added when missing. A request that offers no upgrade, a
 // protocol it did not offer, content or framing fields throw
 // http1_response_head_error before `response` changes.
-[[nodiscard]] http1_response_head_plan prepare_http1_upgrade_response_head(
-    http_response& response, const http_request& request);
+[[nodiscard]] http1_response_head_plan prepare_http1_upgrade_response_head(http_response& response, const http_request& request);
 
 }  // namespace ruvia
 
@@ -1679,10 +1577,8 @@ enum class http_connect_udp_error : std::uint8_t {
 };
 // RFC 9298's default URI template. IPv6 hosts have no brackets or zone ID;
 // all reserved bytes are percent-encoded during template expansion.
-[[nodiscard]] std::variant<std::string, http_connect_udp_error> encode_http_connect_udp_path(
-    http_connect_udp_target_view target);
-[[nodiscard]] std::variant<http_connect_udp_target, http_connect_udp_error> parse_http_connect_udp_path(
-    std::string_view path);
+[[nodiscard]] std::variant<std::string, http_connect_udp_error> encode_http_connect_udp_path(http_connect_udp_target_view target);
+[[nodiscard]] std::variant<http_connect_udp_target, http_connect_udp_error> parse_http_connect_udp_path(std::string_view path);
 
 struct http_connect_udp_request_view final {
     // HTTP/1.1 Upgrade versus HTTP/2 Extended CONNECT.
@@ -1701,12 +1597,9 @@ struct http_connect_udp_request_view final {
 // Sender check for a CONNECT-UDP request this endpoint emits: the recipient
 // rules plus exactly one Capsule-Protocol: ?1 field (RFC 9297 section 3.4
 // SHOULD, kept mandatory for Ruvia senders on HTTP/1.1 and HTTP/2).
-[[nodiscard]] std::optional<http_connect_udp_error> validate_http_connect_udp_request_to_send(
-    http_connect_udp_request_view request) noexcept;
-[[nodiscard]] std::optional<http_connect_udp_error> validate_http_connect_udp_response(
-    http_protocol_version version, std::uint16_t status, std::span<const http_header_view> headers) noexcept;
-[[nodiscard]] std::optional<http_connect_udp_error> validate_http_connect_udp_response(
-    http_protocol_version version, std::uint16_t status, std::span<const http_header> headers) noexcept;
+[[nodiscard]] std::optional<http_connect_udp_error> validate_http_connect_udp_request_to_send(http_connect_udp_request_view request) noexcept;
+[[nodiscard]] std::optional<http_connect_udp_error> validate_http_connect_udp_response(http_protocol_version version, std::uint16_t status, std::span<const http_header_view> headers) noexcept;
+[[nodiscard]] std::optional<http_connect_udp_error> validate_http_connect_udp_response(http_protocol_version version, std::uint16_t status, std::span<const http_header> headers) noexcept;
 // Classifies the HTTP/1 Upgrade token; full validation remains mandatory.
 [[nodiscard]] bool is_http_connect_udp_upgrade_request(const http_request& request) noexcept;
 [[nodiscard]] std::optional<http_connect_udp_error> validate_http_connect_udp_request(const http_request& request) noexcept;
@@ -1782,47 +1675,33 @@ enum class http_capsule_retention : std::uint8_t {
 class http_capsule_decoder final {
 public:
     explicit http_capsule_decoder(http_capsule_config config = {});
-    [[nodiscard]] http_capsule_status feed(std::span<const char> input, bool fin, http_capsule_callback_type callback,
-        void* context, http_capsule_retention retention = http_capsule_retention::all);
+    [[nodiscard]] http_capsule_status feed(std::span<const char> input, bool fin, http_capsule_callback_type callback, void* context, http_capsule_retention retention = http_capsule_retention::all);
     template <typename visitor_type>
         requires std::invocable<visitor_type&, http_capsule_event>
-    [[nodiscard]] http_capsule_status feed(std::span<const char> input, bool fin,
-        visitor_type&& visitor,
-        http_capsule_retention retention = http_capsule_retention::all) {
+    [[nodiscard]] http_capsule_status feed(std::span<const char> input, bool fin, visitor_type&& visitor, http_capsule_retention retention = http_capsule_retention::all) {
         auto& target = visitor;
-        return feed(
-            input, fin,
-            +[](void* context, http_capsule_event event) {
-                (*static_cast<std::remove_reference_t<visitor_type>*>(context))(event);
-            },
-            std::addressof(target), retention);
+        return feed(input, fin, +[](void* context, http_capsule_event event) {
+            (*static_cast<std::remove_reference_t<visitor_type>*>(context))(event);
+        }, std::addressof(target), retention);
     }
     // Stops at the first complete kept capsule. The unconsumed suffix stays with
     // the caller; FIN is committed only after all input is consumed. This permits
     // pull-based adapters without buffering a queue of complete capsules.
-    [[nodiscard]] http_capsule_feed_result feed_one(std::span<const char> input, bool fin,
-        http_capsule_callback_type callback, void* context,
-        http_capsule_retention retention = http_capsule_retention::all);
+    [[nodiscard]] http_capsule_feed_result feed_one(std::span<const char> input, bool fin, http_capsule_callback_type callback, void* context, http_capsule_retention retention = http_capsule_retention::all);
     template <typename visitor_type>
         requires std::invocable<visitor_type&, http_capsule_event>
-    [[nodiscard]] http_capsule_feed_result feed_one(std::span<const char> input, bool fin,
-        visitor_type&& visitor,
-        http_capsule_retention retention = http_capsule_retention::all) {
+    [[nodiscard]] http_capsule_feed_result feed_one(std::span<const char> input, bool fin, visitor_type&& visitor, http_capsule_retention retention = http_capsule_retention::all) {
         auto& target = visitor;
-        return feed_one(
-            input, fin,
-            +[](void* context, http_capsule_event event) {
-                (*static_cast<std::remove_reference_t<visitor_type>*>(context))(event);
-            },
-            std::addressof(target), retention);
+        return feed_one(input, fin, +[](void* context, http_capsule_event event) {
+            (*static_cast<std::remove_reference_t<visitor_type>*>(context))(event);
+        }, std::addressof(target), retention);
     }
 
 private:
     enum class payload_mode : std::uint8_t { deliver,
         skip,
         context_id };
-    [[nodiscard]] http_capsule_feed_result feed_impl(std::span<const char> input, bool fin,
-        http_capsule_callback_type callback, void* context, bool one, http_capsule_retention retention);
+    [[nodiscard]] http_capsule_feed_result feed_impl(std::span<const char> input, bool fin, http_capsule_callback_type callback, void* context, bool one, http_capsule_retention retention);
     http_capsule_config config_;
     std::array<char, 16> header_{};
     std::array<char, 8> context_id_{};
@@ -1871,28 +1750,23 @@ public:
     void close_receive() noexcept {
         receive_open_ = false;
     }
-    [[nodiscard]] std::variant<http_datagram_write_plan, http_datagram_error> prepare_datagram(
-        std::span<const char> payload) const noexcept;
+    [[nodiscard]] std::variant<http_datagram_write_plan, http_datagram_error> prepare_datagram(std::span<const char> payload) const noexcept;
     template <detail::http_temporary_owning_range<char> payload_type>
     std::variant<http_datagram_write_plan, http_datagram_error> prepare_datagram(payload_type&&) const noexcept = delete;
-    [[nodiscard]] std::optional<std::span<const char>> receive_datagram(
-        std::span<const char> input) const noexcept;
+    [[nodiscard]] std::optional<std::span<const char>> receive_datagram(std::span<const char> input) const noexcept;
     template <detail::http_temporary_owning_range<char> input_type>
     std::optional<std::span<const char>> receive_datagram(input_type&&) const noexcept = delete;
-    [[nodiscard]] std::variant<http_datagram_write_plan, http_datagram_error> prepare_udp_datagram(
-        std::span<const char> payload) const noexcept;
+    [[nodiscard]] std::variant<http_datagram_write_plan, http_datagram_error> prepare_udp_datagram(std::span<const char> payload) const noexcept;
     template <detail::http_temporary_owning_range<char> payload_type>
     std::variant<http_datagram_write_plan, http_datagram_error> prepare_udp_datagram(payload_type&&) const noexcept = delete;
     // Capsule input is the complete DATAGRAM capsule value, excluding type/length.
     // Empty optional means silently dropped.
-    [[nodiscard]] std::variant<std::optional<http_udp_datagram_view>, http_datagram_error> receive_udp_datagram(
-        std::span<const char> input) const noexcept;
+    [[nodiscard]] std::variant<std::optional<http_udp_datagram_view>, http_datagram_error> receive_udp_datagram(std::span<const char> input) const noexcept;
     template <detail::http_temporary_owning_range<char> input_type>
     std::variant<std::optional<http_udp_datagram_view>, http_datagram_error> receive_udp_datagram(input_type&&) const noexcept = delete;
 
 private:
-    [[nodiscard]] static std::variant<http_datagram_write_plan, http_datagram_error> plan_datagram_capsule(
-        std::span<const char> payload, std::string_view context_prefix) noexcept;
+    [[nodiscard]] static std::variant<http_datagram_write_plan, http_datagram_error> plan_datagram_capsule(std::span<const char> payload, std::string_view context_prefix) noexcept;
 
     bool send_open_{true};
     bool receive_open_{true};

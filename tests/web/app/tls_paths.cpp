@@ -53,9 +53,7 @@ public:
     ruvia::task<ruvia::http_response> peer_identity(ruvia::context& context) {
         const auto connection = context.conn();
         const auto subject = connection.tls()->client_certificate_subject();
-        co_return context.text(!subject           ? std::string_view("absent")
-                               : subject->empty() ? std::string_view("present-empty")
-                                                  : *subject);
+        co_return context.text(!subject ? std::string_view("absent") : (subject->empty() ? std::string_view("present-empty") : *subject));
     }
 
     // Commits the response, then fails before the body is complete.
@@ -72,8 +70,8 @@ public:
 // Cyrillic and a character outside the Basic Multilingual Plane.
 class non_ascii_directory final {
 public:
-    non_ascii_directory()
-        : directory_("ruvia-tls-\xe8\xaf\x81\xe4\xb9\xa6-\xd1\x82\xd0\xb5\xd1\x81\xd1\x82-\xf0\x9f\x94\x92") {}
+    non_ascii_directory() :
+        directory_("ruvia-tls-\xe8\xaf\x81\xe4\xb9\xa6-\xd1\x82\xd0\xb5\xd1\x81\xd1\x82-\xf0\x9f\x94\x92") {}
 
     non_ascii_directory(const non_ascii_directory&) = delete;
     non_ascii_directory& operator=(const non_ascii_directory&) = delete;
@@ -97,8 +95,7 @@ void write_file(const std::filesystem::path& path, std::string_view bytes) {
 
 std::string encrypted_private_key(ruvia::test::tls_identity& identity, std::string_view password) {
     const std::unique_ptr<BIO, decltype(&BIO_free)> output(BIO_new(BIO_s_mem()), BIO_free);
-    if (!output || ruvia::test::write_tls_private_key(output.get(),
-                       SSL_CTX_get0_privatekey(identity.context_.native_handle()), password, true) != 1) {
+    if (!output || ruvia::test::write_tls_private_key(output.get(), SSL_CTX_get0_privatekey(identity.context_.native_handle()), password, true) != 1) {
         throw std::runtime_error("cannot encrypt TLS test private key");
     }
     char* data = nullptr;
@@ -112,55 +109,32 @@ std::string encrypted_private_key(ruvia::test::tls_identity& identity, std::stri
 // A verified identity may have no Subject attributes (RFC 5280 section 4.1.2.6).
 // A separate, conforming CA avoids relying on direct trust of an empty-subject
 // leaf. The existing named test identity remains separately trusted.
-asio::ssl::context empty_subject_client(ruvia::test::tls_identity& issuer,
-    const std::filesystem::path& trust_bundle) {
+asio::ssl::context empty_subject_client(ruvia::test::tls_identity& issuer, const std::filesystem::path& trust_bundle) {
     auto* const key = SSL_CTX_get0_privatekey(issuer.context_.native_handle());
     const auto authority = std::unique_ptr<X509, decltype(&X509_free)>(X509_new(), X509_free);
     const auto authority_name = std::unique_ptr<X509_NAME, decltype(&X509_NAME_free)>(X509_NAME_new(), X509_NAME_free);
-    if (!authority || !authority_name || X509_set_version(authority.get(), 2) != 1 ||
-        ASN1_INTEGER_set(X509_get_serialNumber(authority.get()), 3) != 1 ||
-        !X509_gmtime_adj(X509_getm_notBefore(authority.get()), -60) ||
-        !X509_gmtime_adj(X509_getm_notAfter(authority.get()), 86400) ||
-        X509_set_pubkey(authority.get(), key) != 1 ||
-        X509_NAME_add_entry_by_txt(authority_name.get(), "CN", MBSTRING_ASC,
-            reinterpret_cast<const unsigned char*>("empty-subject-client-ca"), -1, -1, 0) != 1 ||
-        X509_set_subject_name(authority.get(), authority_name.get()) != 1 ||
-        X509_set_issuer_name(authority.get(), authority_name.get()) != 1) {
+    if (!authority || !authority_name || X509_set_version(authority.get(), 2) != 1 || ASN1_INTEGER_set(X509_get_serialNumber(authority.get()), 3) != 1 || !X509_gmtime_adj(X509_getm_notBefore(authority.get()), -60) || !X509_gmtime_adj(X509_getm_notAfter(authority.get()), 86400) || X509_set_pubkey(authority.get(), key) != 1 || X509_NAME_add_entry_by_txt(authority_name.get(), "CN", MBSTRING_ASC, reinterpret_cast<const unsigned char*>("empty-subject-client-ca"), -1, -1, 0) != 1 || X509_set_subject_name(authority.get(), authority_name.get()) != 1 || X509_set_issuer_name(authority.get(), authority_name.get()) != 1) {
         throw std::runtime_error("cannot create empty-subject client CA");
     }
     X509V3_CTX authority_context{};
     X509V3_set_ctx(&authority_context, authority.get(), authority.get(), nullptr, nullptr, 0);
-    const auto constraints = std::unique_ptr<X509_EXTENSION, decltype(&X509_EXTENSION_free)>(
-        X509V3_EXT_nconf_nid(nullptr, &authority_context, NID_basic_constraints, "critical,CA:TRUE"),
-        X509_EXTENSION_free);
-    if (!constraints || X509_add_ext(authority.get(), constraints.get(), -1) != 1 ||
-        ruvia::test::sign_tls_certificate(authority.get(), key) <= 0) {
+    const auto constraints = std::unique_ptr<X509_EXTENSION, decltype(&X509_EXTENSION_free)>(X509V3_EXT_nconf_nid(nullptr, &authority_context, NID_basic_constraints, "critical,CA:TRUE"), X509_EXTENSION_free);
+    if (!constraints || X509_add_ext(authority.get(), constraints.get(), -1) != 1 || ruvia::test::sign_tls_certificate(authority.get(), key) <= 0) {
         throw std::runtime_error("cannot sign empty-subject client CA");
     }
     const auto certificate = std::unique_ptr<X509, decltype(&X509_free)>(X509_new(), X509_free);
     const auto subject = std::unique_ptr<X509_NAME, decltype(&X509_NAME_free)>(X509_NAME_new(), X509_NAME_free);
-    if (!certificate || !subject || X509_set_version(certificate.get(), 2) != 1 ||
-        ASN1_INTEGER_set(X509_get_serialNumber(certificate.get()), 2) != 1 ||
-        !X509_gmtime_adj(X509_getm_notBefore(certificate.get()), -60) ||
-        !X509_gmtime_adj(X509_getm_notAfter(certificate.get()), 86400) ||
-        X509_set_pubkey(certificate.get(), key) != 1 ||
-        X509_set_subject_name(certificate.get(), subject.get()) != 1 ||
-        X509_set_issuer_name(certificate.get(), authority_name.get()) != 1) {
+    if (!certificate || !subject || X509_set_version(certificate.get(), 2) != 1 || ASN1_INTEGER_set(X509_get_serialNumber(certificate.get()), 2) != 1 || !X509_gmtime_adj(X509_getm_notBefore(certificate.get()), -60) || !X509_gmtime_adj(X509_getm_notAfter(certificate.get()), 86400) || X509_set_pubkey(certificate.get(), key) != 1 || X509_set_subject_name(certificate.get(), subject.get()) != 1 || X509_set_issuer_name(certificate.get(), authority_name.get()) != 1) {
         throw std::runtime_error("cannot create empty-subject client identity");
     }
     X509V3_CTX extension_context{};
     X509V3_set_ctx(&extension_context, authority.get(), certificate.get(), nullptr, nullptr, 0);
-    const auto alternative_name = std::unique_ptr<X509_EXTENSION, decltype(&X509_EXTENSION_free)>(
-        X509V3_EXT_nconf_nid(nullptr, &extension_context, NID_subject_alt_name,
-            "critical,URI:urn:ruvia:test:client"),
-        X509_EXTENSION_free);
-    if (!alternative_name || X509_add_ext(certificate.get(), alternative_name.get(), -1) != 1 ||
-        ruvia::test::sign_tls_certificate(certificate.get(), key) <= 0) {
+    const auto alternative_name = std::unique_ptr<X509_EXTENSION, decltype(&X509_EXTENSION_free)>(X509V3_EXT_nconf_nid(nullptr, &extension_context, NID_subject_alt_name, "critical,URI:urn:ruvia:test:client"), X509_EXTENSION_free);
+    if (!alternative_name || X509_add_ext(certificate.get(), alternative_name.get(), -1) != 1 || ruvia::test::sign_tls_certificate(certificate.get(), key) <= 0) {
         throw std::runtime_error("cannot sign empty-subject client identity");
     }
     asio::ssl::context client(asio::ssl::context::tls_client);
-    if (SSL_CTX_use_certificate(client.native_handle(), certificate.get()) != 1 ||
-        SSL_CTX_use_PrivateKey(client.native_handle(), key) != 1) {
+    if (SSL_CTX_use_certificate(client.native_handle(), certificate.get()) != 1 || SSL_CTX_use_PrivateKey(client.native_handle(), key) != 1) {
         throw std::runtime_error("cannot load empty-subject client identity");
     }
     const auto encoded = std::unique_ptr<BIO, decltype(&BIO_free)>(BIO_new(BIO_s_mem()), BIO_free);
@@ -192,8 +166,7 @@ void configure_client_version(asio::ssl::context& context, int version) {
     if (version == 0) {
         return;
     }
-    if (SSL_CTX_set_min_proto_version(context.native_handle(), version) != 1 ||
-        SSL_CTX_set_max_proto_version(context.native_handle(), version) != 1) {
+    if (SSL_CTX_set_min_proto_version(context.native_handle(), version) != 1 || SSL_CTX_set_max_proto_version(context.native_handle(), version) != 1) {
         throw std::runtime_error("cannot configure the TLS test client version");
     }
     if (version <= TLS1_1_VERSION) {
@@ -203,21 +176,16 @@ void configure_client_version(asio::ssl::context& context, int version) {
 
 // Verifies the server chain against the test CA; `host` is both the SNI name
 // and, when `verify_host` is set, the name the certificate must match.
-std::string https_get(asio::io_context& io, const asio::ip::tcp::endpoint& endpoint,
-    const std::filesystem::path& ca_file, const char* host, bool verify_host,
-    std::string_view target = "/tls", SSL_CTX* client_identity = nullptr, int version = 0) {
+std::string https_get(asio::io_context& io, const asio::ip::tcp::endpoint& endpoint, const std::filesystem::path& ca_file, const char* host, bool verify_host, std::string_view target = "/tls", SSL_CTX* client_identity = nullptr, int version = 0) {
     asio::ssl::context client(asio::ssl::context::tls_client);
     client.load_verify_file(ca_file.string());
     client.set_verify_mode(asio::ssl::verify_peer);
     configure_client_version(client, version);
     asio::ssl::stream<asio::ip::tcp::socket> stream(io, client);
-    if (client_identity != nullptr &&
-        (SSL_use_certificate(stream.native_handle(), SSL_CTX_get0_certificate(client_identity)) != 1 ||
-            SSL_use_PrivateKey(stream.native_handle(), SSL_CTX_get0_privatekey(client_identity)) != 1)) {
+    if (client_identity != nullptr && (SSL_use_certificate(stream.native_handle(), SSL_CTX_get0_certificate(client_identity)) != 1 || SSL_use_PrivateKey(stream.native_handle(), SSL_CTX_get0_privatekey(client_identity)) != 1)) {
         throw std::runtime_error("cannot present TLS test client identity");
     }
-    if (SSL_set_tlsext_host_name(stream.native_handle(), host) != 1 ||
-        (verify_host && SSL_set1_host(stream.native_handle(), host) != 1)) {
+    if (SSL_set_tlsext_host_name(stream.native_handle(), host) != 1 || (verify_host && SSL_set1_host(stream.native_handle(), host) != 1)) {
         return std::string{};
     }
     asio::error_code error;
@@ -240,8 +208,7 @@ std::string https_get(asio::io_context& io, const asio::ip::tcp::endpoint& endpo
 
 bool serves_secure_body(const std::string& response, std::string_view expected = "secure") {
     const auto body_start = response.find("\r\n\r\n");
-    return response.starts_with("HTTP/1.1 200 ") && body_start != std::string::npos &&
-           std::string_view(response).substr(body_start + 4) == expected;
+    return response.starts_with("HTTP/1.1 200 ") && body_start != std::string::npos && std::string_view(response).substr(body_start + 4) == expected;
 }
 
 // RFC 9112 §9.8: an HTTP/1.0 response body is delimited by the close, so a
@@ -269,8 +236,7 @@ bool truncated_close_delimited_stream_lacks_close_notify(asio::io_context& io, c
         const auto size = stream.read_some(asio::buffer(buffer), error);
         response.append(buffer.data(), size);
     }
-    return response.starts_with("HTTP/1.1 200 ") && response.ends_with("\r\n\r\npartial") &&
-           error == asio::ssl::error::stream_truncated;
+    return response.starts_with("HTTP/1.1 200 ") && response.ends_with("\r\n\r\npartial") && error == asio::ssl::error::stream_truncated;
 }
 
 struct alpn_handshake final {
@@ -280,14 +246,12 @@ struct alpn_handshake final {
 
 // Handshakes offering `protocols` (ALPN wire format) and reports the protocol
 // the server selected.
-alpn_handshake negotiate_alpn(asio::io_context& io, const asio::ip::tcp::endpoint& endpoint,
-    std::string_view protocols, int version = 0) {
+alpn_handshake negotiate_alpn(asio::io_context& io, const asio::ip::tcp::endpoint& endpoint, std::string_view protocols, int version = 0) {
     asio::ssl::context client(asio::ssl::context::tls_client);
     client.set_verify_mode(asio::ssl::verify_none);
     configure_client_version(client, version);
     asio::ssl::stream<asio::ip::tcp::socket> stream(io, client);
-    if (SSL_set_alpn_protos(stream.native_handle(), reinterpret_cast<const unsigned char*>(protocols.data()),
-            static_cast<unsigned int>(protocols.size())) != 0) {
+    if (SSL_set_alpn_protos(stream.native_handle(), reinterpret_cast<const unsigned char*>(protocols.data()), static_cast<unsigned int>(protocols.size())) != 0) {
         throw std::runtime_error("cannot offer ALPN protocols");
     }
     alpn_handshake result;
@@ -307,8 +271,7 @@ alpn_handshake negotiate_alpn(asio::io_context& io, const asio::ip::tcp::endpoin
 // RFC 7301 §3.2: a client offering no protocol the server speaks gets a fatal
 // no_application_protocol alert rather than a connection without ALPN.
 bool refuses_with_no_application_protocol(const alpn_handshake& handshake) {
-    return handshake.error_.category() == asio::error::get_ssl_category() &&
-           ERR_GET_REASON(static_cast<unsigned long>(handshake.error_.value())) == SSL_R_TLSV1_ALERT_NO_APPLICATION_PROTOCOL;
+    return handshake.error_.category() == asio::error::get_ssl_category() && ERR_GET_REASON(static_cast<unsigned long>(handshake.error_.value())) == SSL_R_TLSV1_ALERT_NO_APPLICATION_PROTOCOL;
 }
 
 bool bounded_tls_connection_ends(asio::io_context& io, const asio::ip::tcp::endpoint& endpoint, int version) {
@@ -327,8 +290,7 @@ bool bounded_tls_connection_ends(asio::io_context& io, const asio::ip::tcp::endp
     }
     unsigned completed = 0;
     for (; completed != 64; ++completed) {
-        if (version == TLS1_3_VERSION && completed % 4 == 0 &&
-            SSL_key_update(stream.native_handle(), SSL_KEY_UPDATE_REQUESTED) != 1) {
+        if (version == TLS1_3_VERSION && completed % 4 == 0 && SSL_key_update(stream.native_handle(), SSL_KEY_UPDATE_REQUESTED) != 1) {
             return false;
         }
         error.clear();
@@ -339,8 +301,10 @@ bool bounded_tls_connection_ends(asio::io_context& io, const asio::ip::tcp::endp
         }
         bool done = false;
         std::string response{};
-        asio::async_read_until(stream, asio::dynamic_buffer(response), "\r\n\r\nsecure",
-            [&](const std::error_code& result, std::size_t) { error = result; done = true; });
+        asio::async_read_until(stream, asio::dynamic_buffer(response), "\r\n\r\nsecure", [&](const std::error_code& result, std::size_t) {
+            error = result;
+            done = true;
+        });
         io.restart();
         io.run_for(1s);
         if (!done) {
@@ -368,8 +332,7 @@ asio::ssl::context cipher_client(const char* cipher_suites, int version) {
 }
 
 // The suite selected from the client's offer; empty when the handshake fails.
-std::string selected_cipher(asio::io_context& io, const asio::ip::tcp::endpoint& endpoint,
-    const char* offer, int version = TLS1_2_VERSION, const char* host = "localhost") {
+std::string selected_cipher(asio::io_context& io, const asio::ip::tcp::endpoint& endpoint, const char* offer, int version = TLS1_2_VERSION, const char* host = "localhost") {
     auto client = cipher_client(offer, version);
     asio::ssl::stream<asio::ip::tcp::socket> stream(io, client);
     if (SSL_set_tlsext_host_name(stream.native_handle(), host) != 1) {
@@ -387,16 +350,14 @@ std::string selected_cipher(asio::io_context& io, const asio::ip::tcp::endpoint&
 }
 
 // 在指定 TLS 版本下建立会话，再以第二个 SNI 尝试恢复。
-bool resumes_tls_session_under(asio::io_context& io, const asio::ip::tcp::endpoint& endpoint,
-    int version, const char* first, const char* second) {
+bool resumes_tls_session_under(asio::io_context& io, const asio::ip::tcp::endpoint& endpoint, int version, const char* first, const char* second) {
     asio::ssl::context client(asio::ssl::context::tls_client);
     client.set_verify_mode(asio::ssl::verify_none);
     configure_client_version(client, version);
     std::unique_ptr<SSL_SESSION, decltype(&SSL_SESSION_free)> session(nullptr, SSL_SESSION_free);
     for (const char* name : {first, second}) {
         asio::ssl::stream<asio::ip::tcp::socket> stream(io, client);
-        if (SSL_set_tlsext_host_name(stream.native_handle(), name) != 1 ||
-            (session && SSL_set_session(stream.native_handle(), session.get()) != 1)) {
+        if (SSL_set_tlsext_host_name(stream.native_handle(), name) != 1 || (session && SSL_set_session(stream.native_handle(), session.get()) != 1)) {
             throw std::runtime_error("cannot prepare the TLS resumption client");
         }
         asio::error_code error;
@@ -470,16 +431,16 @@ TEST(Ruvia, https_serves_credentials_from_non_ascii_paths_across_runs) {
         return ruvia::listen_config{
             .address_ = "127.0.0.1",
             .https_ = endpoint.port(),
-            .tls_ =
-                {
-                    .identity_ =
-                        {
-                            .certificate_chain_file_ = std::move(chain),
-                            .private_key_file_ = private_key,
-                            .private_key_password_ = std::string(key_password),
-                        },
-                    .client_certificates_ = {.ca_file_ = client_ca},
-                    .sni_ = {
+            .tls_ = {
+                .identity_ =
+                    {
+                        .certificate_chain_file_ = std::move(chain),
+                        .private_key_file_ = private_key,
+                        .private_key_password_ = std::string(key_password),
+                    },
+                .client_certificates_ = {.ca_file_ = client_ca},
+                .sni_ =
+                    {
                         {
                             .host_ = "sni.test",
                             .identity_ =
@@ -498,14 +459,18 @@ TEST(Ruvia, https_serves_credentials_from_non_ascii_paths_across_runs) {
                                 },
                         },
                     },
-                    .max_outgoing_records_ = 32,
-                },
+                .max_outgoing_records_ = 32,
+            },
         };
     };
     // Invalid credentials never replace the application's staged listeners.
     app.server({.worker_count_ = 1});
-    EXPECT_TRUE(throws_system_error([&] { app.listen(listener("wrong password", certificate)); }));
-    EXPECT_TRUE(throws_system_error([&] { app.listen(listener(password, directory.file(u8"\u7f3a\u5931.pem"))); }));
+    EXPECT_TRUE(throws_system_error([&] {
+        app.listen(listener("wrong password", certificate));
+    }));
+    EXPECT_TRUE(throws_system_error([&] {
+        app.listen(listener(password, directory.file(u8"\u7f3a\u5931.pem")));
+    }));
 
     static std::binary_semaphore started{0};
     app.server({.worker_count_ = 1}).listen(listener(password, certificate)).on_start([] {
@@ -518,32 +483,22 @@ TEST(Ruvia, https_serves_credentials_from_non_ascii_paths_across_runs) {
         if (ready) {
             EXPECT_TRUE(serves_secure_body(https_get(io, endpoint, identity.ca_file_, "localhost", true)));
             EXPECT_TRUE(serves_secure_body(https_get(io, endpoint, identity.ca_file_, "sni.test", false)));
-            EXPECT_TRUE(serves_secure_body(https_get(io, endpoint, identity.ca_file_, "localhost", true,
-                "/tls", nullptr, TLS1_1_VERSION)));
-            EXPECT_TRUE(serves_secure_body(https_get(io, endpoint, elliptic_identity.ca_file_, "ecdsa.test", true,
-                "/tls", nullptr, TLS1_1_VERSION)));
+            EXPECT_TRUE(serves_secure_body(https_get(io, endpoint, identity.ca_file_, "localhost", true, "/tls", nullptr, TLS1_1_VERSION)));
+            EXPECT_TRUE(serves_secure_body(https_get(io, endpoint, elliptic_identity.ca_file_, "ecdsa.test", true, "/tls", nullptr, TLS1_1_VERSION)));
             EXPECT_TRUE(selected_cipher(io, endpoint, "ECDHE-RSA-AES128-SHA", TLS1_VERSION).empty());
             for (const char* cipher : {"ECDHE-RSA-AES128-SHA", "ECDHE-RSA-AES256-SHA"}) {
-                EXPECT_EQ(selected_cipher(io, endpoint, cipher, TLS1_1_VERSION),
-                    std::string(cipher));
+                EXPECT_EQ(selected_cipher(io, endpoint, cipher, TLS1_1_VERSION), std::string(cipher));
             }
             for (const char* cipher : {"ECDHE-ECDSA-AES128-SHA", "ECDHE-ECDSA-AES256-SHA"}) {
-                EXPECT_EQ(selected_cipher(io, endpoint, cipher, TLS1_1_VERSION, "ecdsa.test"),
-                    std::string(cipher));
+                EXPECT_EQ(selected_cipher(io, endpoint, cipher, TLS1_1_VERSION, "ecdsa.test"), std::string(cipher));
             }
             const auto legacy_alpn = negotiate_alpn(io, endpoint, "\x02h2\x08http/1.1", TLS1_1_VERSION);
             EXPECT_FALSE(legacy_alpn.error_);
             EXPECT_EQ(legacy_alpn.selected_, std::string("http/1.1"));
             EXPECT_TRUE(refuses_with_no_application_protocol(negotiate_alpn(io, endpoint, "\x02h2", TLS1_1_VERSION)));
-            EXPECT_TRUE(serves_secure_body(https_get(io, endpoint, identity.ca_file_, "localhost", true,
-                                               "/tls-peer"),
-                "absent"));
-            EXPECT_TRUE(serves_secure_body(https_get(io, endpoint, identity.ca_file_, "localhost", true,
-                                               "/tls-peer", identity.context_.native_handle()),
-                "CN=localhost"));
-            EXPECT_TRUE(serves_secure_body(https_get(io, endpoint, identity.ca_file_, "localhost", true,
-                                               "/tls-peer", empty_client.native_handle()),
-                "present-empty"));
+            EXPECT_TRUE(serves_secure_body(https_get(io, endpoint, identity.ca_file_, "localhost", true, "/tls-peer"), "absent"));
+            EXPECT_TRUE(serves_secure_body(https_get(io, endpoint, identity.ca_file_, "localhost", true, "/tls-peer", identity.context_.native_handle()), "CN=localhost"));
+            EXPECT_TRUE(serves_secure_body(https_get(io, endpoint, identity.ca_file_, "localhost", true, "/tls-peer", empty_client.native_handle()), "present-empty"));
             EXPECT_TRUE(refuses_with_no_application_protocol(negotiate_alpn(io, endpoint, "\x04h2xx")));
             EXPECT_EQ(negotiate_alpn(io, endpoint, "\x02h2").selected_, std::string("h2"));
             const auto negotiated = negotiate_alpn(io, endpoint, "\x02h2\x08http/1.1");
@@ -555,12 +510,9 @@ TEST(Ruvia, https_serves_credentials_from_non_ascii_paths_across_runs) {
             EXPECT_TRUE(selected_cipher(io, endpoint, "AES128-SHA").empty());
             EXPECT_TRUE(selected_cipher(io, endpoint, "ECDHE-RSA-AES128-SHA").empty());
             EXPECT_TRUE(selected_cipher(io, endpoint, "ECDHE-ECDSA-AES128-SHA", TLS1_2_VERSION, "ecdsa.test").empty());
-            EXPECT_EQ(selected_cipher(io, endpoint, "AES128-SHA:ECDHE-RSA-AES128-GCM-SHA256"),
-                std::string("ECDHE-RSA-AES128-GCM-SHA256"));
-            EXPECT_EQ(selected_cipher(io, endpoint, "ECDHE-RSA-AES128-SHA:ECDHE-RSA-AES128-GCM-SHA256"),
-                std::string("ECDHE-RSA-AES128-GCM-SHA256"));
-            EXPECT_EQ(selected_cipher(io, endpoint, "ECDHE-RSA-AES256-GCM-SHA384:ECDHE-RSA-AES128-GCM-SHA256"),
-                std::string("ECDHE-RSA-AES128-GCM-SHA256"));
+            EXPECT_EQ(selected_cipher(io, endpoint, "AES128-SHA:ECDHE-RSA-AES128-GCM-SHA256"), std::string("ECDHE-RSA-AES128-GCM-SHA256"));
+            EXPECT_EQ(selected_cipher(io, endpoint, "ECDHE-RSA-AES128-SHA:ECDHE-RSA-AES128-GCM-SHA256"), std::string("ECDHE-RSA-AES128-GCM-SHA256"));
+            EXPECT_EQ(selected_cipher(io, endpoint, "ECDHE-RSA-AES256-GCM-SHA384:ECDHE-RSA-AES128-GCM-SHA256"), std::string("ECDHE-RSA-AES128-GCM-SHA256"));
             for (const int version : {TLS1_1_VERSION, TLS1_2_VERSION, TLS1_3_VERSION}) {
                 EXPECT_TRUE(bounded_tls_connection_ends(io, endpoint, version));
                 EXPECT_TRUE(resumes_tls_session_under(io, endpoint, version, "localhost", "localhost"));

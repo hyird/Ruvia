@@ -48,22 +48,23 @@ bool throws_invalid(fn_type&& fn) {
     }
 }
 
-ruvia::tls_config tls_config(std::filesystem::path certificate_chain_file,
-    std::filesystem::path private_key_file, std::string_view private_key_password = {}) {
-    return {.identity_ = {
-                .certificate_chain_file_ = std::move(certificate_chain_file),
-                .private_key_file_ = std::move(private_key_file),
-                .private_key_password_ = std::string(private_key_password),
-            }};
+ruvia::tls_config tls_config(std::filesystem::path certificate_chain_file, std::filesystem::path private_key_file, std::string_view private_key_password = {}) {
+    return {
+        .identity_ = {
+            .certificate_chain_file_ = std::move(certificate_chain_file),
+            .private_key_file_ = std::move(private_key_file),
+            .private_key_password_ = std::string(private_key_password),
+        }
+    };
 }
 
 class querying_callback_target final {
 public:
-    explicit querying_callback_target(int& destroyed) noexcept
-        : destroyed_(&destroyed) {}
+    explicit querying_callback_target(int& destroyed) noexcept :
+        destroyed_(&destroyed) {}
 
-    querying_callback_target(querying_callback_target&& other) noexcept
-        : destroyed_(std::exchange(other.destroyed_, nullptr)) {
+    querying_callback_target(querying_callback_target&& other) noexcept :
+        destroyed_(std::exchange(other.destroyed_, nullptr)) {
         (void)ruvia::app().workers();
     }
 
@@ -86,11 +87,11 @@ private:
 // stop which the next run() of the shared server fixture would consume.
 class reentrant_hook_target final {
 public:
-    explicit reentrant_hook_target(int& destroyed) noexcept
-        : destroyed_(&destroyed) {}
+    explicit reentrant_hook_target(int& destroyed) noexcept :
+        destroyed_(&destroyed) {}
 
-    reentrant_hook_target(reentrant_hook_target&& other) noexcept
-        : destroyed_(std::exchange(other.destroyed_, nullptr)) {}
+    reentrant_hook_target(reentrant_hook_target&& other) noexcept :
+        destroyed_(std::exchange(other.destroyed_, nullptr)) {}
 
     ~reentrant_hook_target() {
         if (destroyed_ != nullptr) {
@@ -154,22 +155,32 @@ TEST(Ruvia, clearing_hooks_and_fallbacks_retires_targets_outside_configuration_l
 }
 
 TEST(Ruvia, listener_config_rejects_invalid_listener_and_tls_states_at_construction) {
-    EXPECT_TRUE(throws_invalid([] { ruvia::app().listen({}); }));
-    EXPECT_TRUE(throws_invalid([] { ruvia::app().listen({.address_ = {}, .http_ = 8080}); }));
-    EXPECT_TRUE(throws_invalid([] { ruvia::app().listen({.address_ = "localhost", .http_ = 8080}); }));
+    EXPECT_TRUE(throws_invalid([] {
+        ruvia::app().listen({});
+    }));
+    EXPECT_TRUE(throws_invalid([] {
+        ruvia::app().listen({.address_ = {}, .http_ = 8080});
+    }));
+    EXPECT_TRUE(throws_invalid([] {
+        ruvia::app().listen({.address_ = "localhost", .http_ = 8080});
+    }));
     EXPECT_TRUE(throws_invalid([] {
         const std::string bad_address("127.0.0.1\0bad", 13);
         ruvia::app().listen({.address_ = bad_address, .http_ = 8080});
     }));
-    EXPECT_TRUE(throws_invalid([] { ruvia::app().listen({.address_ = "127.0.0.1", .http_ = 0}); }));
+    EXPECT_TRUE(throws_invalid([] {
+        ruvia::app().listen({.address_ = "127.0.0.1", .http_ = 0});
+    }));
     // Matching ports are supported, but still require a real TLS identity.
-    EXPECT_TRUE(throws_invalid(
-        [] { ruvia::app().listen({.address_ = "127.0.0.1", .http_ = 8080, .https_ = 8080}); }));
+    EXPECT_TRUE(throws_invalid([] {
+        ruvia::app().listen({.address_ = "127.0.0.1", .http_ = 8080, .https_ = 8080});
+    }));
     EXPECT_TRUE(throws_invalid([] {
         ruvia::app().listen({.address_ = "127.0.0.1", .http_ = 8080, .auto_https_redirect_ = true});
     }));
-    EXPECT_TRUE(
-        throws_invalid([] { ruvia::app().listen({.address_ = "127.0.0.1", .https_ = 8443}); }));
+    EXPECT_TRUE(throws_invalid([] {
+        ruvia::app().listen({.address_ = "127.0.0.1", .https_ = 8443});
+    }));
     EXPECT_TRUE(throws_invalid([] {
         ruvia::app().listen({
             .address_ = "127.0.0.1",
@@ -188,41 +199,36 @@ TEST(Ruvia, listener_config_rejects_invalid_listener_and_tls_states_at_construct
         ruvia::app().listen({
             .address_ = "127.0.0.1",
             .https_ = 8443,
-            .tls_ =
-                {
-                    .identity_ = {.certificate_chain_file_ = "cert.pem", .private_key_file_ = "key.pem"},
-                    .client_certificates_ =
-                        {
-                            .requirement_ = ruvia::tls_client_certificate_requirement::required,
-                        },
+            .tls_ = {
+                .identity_ = {.certificate_chain_file_ = "cert.pem", .private_key_file_ = "key.pem"},
+                .client_certificates_ = {
+                    .requirement_ = ruvia::tls_client_certificate_requirement::required,
                 },
+            },
         });
     }));
     EXPECT_TRUE(throws_invalid([] {
         ruvia::app().listen({
             .address_ = "127.0.0.1",
             .https_ = 8443,
-            .tls_ =
-                {
-                    .identity_ = {.certificate_chain_file_ = "cert.pem", .private_key_file_ = "key.pem"},
-                    .max_outgoing_records_ = 0,
-                },
+            .tls_ = {
+                .identity_ = {.certificate_chain_file_ = "cert.pem", .private_key_file_ = "key.pem"},
+                .max_outgoing_records_ = 0,
+            },
         });
     }));
     EXPECT_TRUE(throws_invalid([] {
         ruvia::app().listen({
             .address_ = "127.0.0.1",
             .https_ = 8443,
-            .tls_ =
-                {
-                    .identity_ = {.certificate_chain_file_ = "cert.pem", .private_key_file_ = "key.pem"},
-                    .max_outgoing_records_ = (std::uint64_t{1} << 23) + 1,
-                },
+            .tls_ = {
+                .identity_ = {.certificate_chain_file_ = "cert.pem", .private_key_file_ = "key.pem"},
+                .max_outgoing_records_ = (std::uint64_t{1} << 23) + 1,
+            },
         });
     }));
     EXPECT_TRUE(throws_invalid([] {
-        ruvia::app().server(
-            {.process_signal_handlers_ = static_cast<ruvia::process_signal_handler_policy>(0xFF)});
+        ruvia::app().server({.process_signal_handlers_ = static_cast<ruvia::process_signal_handler_policy>(0xFF)});
     }));
 }
 
@@ -232,11 +238,10 @@ TEST(Ruvia, tls_config_rejects_empty_or_duplicate_sni_identity) {
             ruvia::app().listen({
                 .address_ = "127.0.0.1",
                 .https_ = 8443,
-                .tls_ =
-                    {
-                        .identity_ = {.certificate_chain_file_ = "cert.pem", .private_key_file_ = "key.pem"},
-                        .sni_ = std::vector<ruvia::tls_sni_config>(sni),
-                    },
+                .tls_ = {
+                    .identity_ = {.certificate_chain_file_ = "cert.pem", .private_key_file_ = "key.pem"},
+                    .sni_ = std::vector<ruvia::tls_sni_config>(sni),
+                },
             });
         });
     };
@@ -246,8 +251,7 @@ TEST(Ruvia, tls_config_rejects_empty_or_duplicate_sni_identity) {
     EXPECT_TRUE(rejects({{.host_ = "127.0.0.1", .identity_ = other}}));
     EXPECT_TRUE(rejects({
         {.host_ = "Example.com", .identity_ = other},
-        {.host_ = "example.COM",
-            .identity_ = {.certificate_chain_file_ = "third.pem", .private_key_file_ = "third.key"}},
+        {.host_ = "example.COM", .identity_ = {.certificate_chain_file_ = "third.pem", .private_key_file_ = "third.key"}},
     }));
 }
 
@@ -256,17 +260,17 @@ TEST(Ruvia, tls_config_rejects_invalid_or_duplicate_sni_wildcards) {
         ruvia::app().listen({
             .address_ = "127.0.0.1",
             .https_ = 8443,
-            .tls_ =
-                {
-                    .identity_ = {.certificate_chain_file_ = "cert.pem", .private_key_file_ = "key.pem"},
-                    .sni_ = std::move(sni),
-                },
+            .tls_ = {
+                .identity_ = {.certificate_chain_file_ = "cert.pem", .private_key_file_ = "key.pem"},
+                .sni_ = std::move(sni),
+            },
         });
     };
     const ruvia::tls_identity_config other{.certificate_chain_file_ = "other.pem", .private_key_file_ = "other.key"};
-    for (const char* host : {"*", "*.", "**.example.com", "*.*.example.com", "a.*.example.com", "*example.com",
-             "w*.example.com", "*.example.com.", "*.127.0.0.1"}) {
-        EXPECT_TRUE(throws_invalid([&] { listen_with({{.host_ = host, .identity_ = other}}); })) << host;
+    for (const char* host : {"*", "*.", "**.example.com", "*.*.example.com", "a.*.example.com", "*example.com", "w*.example.com", "*.example.com.", "*.127.0.0.1"}) {
+        EXPECT_TRUE(throws_invalid([&] {
+            listen_with({{.host_ = host, .identity_ = other}});
+        })) << host;
     }
     EXPECT_TRUE(throws_invalid([&] {
         listen_with({{.host_ = "*.Example.com", .identity_ = other}, {.host_ = "*.example.COM", .identity_ = other}});
@@ -279,11 +283,12 @@ TEST(Ruvia, tls_config_rejects_ambiguous_identity_sources_and_local_addresses) {
     const auto listen_with = [](ruvia::tls_config tls) {
         ruvia::app().listen({.address_ = "127.0.0.1", .https_ = 8443, .tls_ = std::move(tls)});
     };
-    const auto rejects = [&](ruvia::tls_config tls) { return throws_invalid([&] { listen_with(std::move(tls)); }); };
-    EXPECT_TRUE(rejects({.identity_ = {.certificate_chain_file_ = "cert.pem",
-                             .private_key_file_ = "key.pem",
-                             .certificate_chain_pem_ = "pem",
-                             .private_key_pem_ = "pem"}}));
+    const auto rejects = [&](ruvia::tls_config tls) {
+        return throws_invalid([&] {
+            listen_with(std::move(tls));
+        });
+    };
+    EXPECT_TRUE(rejects({.identity_ = {.certificate_chain_file_ = "cert.pem", .private_key_file_ = "key.pem", .certificate_chain_pem_ = "pem", .private_key_pem_ = "pem"}}));
     EXPECT_TRUE(rejects({.identity_ = {.certificate_chain_file_ = "cert.pem", .private_key_pem_ = "pem"}}));
     EXPECT_TRUE(rejects({.identity_ = {.certificate_chain_pem_ = "pem"}}));
     EXPECT_TRUE(rejects({.identity_ = {.private_key_pem_ = "pem"}}));
@@ -296,17 +301,13 @@ TEST(Ruvia, tls_config_rejects_ambiguous_identity_sources_and_local_addresses) {
         EXPECT_TRUE(rejects_local({{.address_ = address, .identity_ = files}})) << address;
     }
     EXPECT_TRUE(rejects_local({{.address_ = "127.0.0.2"}}));
-    EXPECT_TRUE(rejects_local(
-        {{.address_ = "127.0.0.2", .identity_ = files}, {.address_ = "::ffff:127.0.0.2", .identity_ = files}}));
+    EXPECT_TRUE(rejects_local({{.address_ = "127.0.0.2", .identity_ = files}, {.address_ = "::ffff:127.0.0.2", .identity_ = files}}));
     // TLS settings require an HTTPS port.
     EXPECT_TRUE(throws_invalid([] {
-        ruvia::app().listen({.address_ = "127.0.0.1",
-            .http_ = 8080,
-            .tls_ = {.identity_ = {.certificate_chain_pem_ = "pem", .private_key_pem_ = "pem"}}});
+        ruvia::app().listen({.address_ = "127.0.0.1", .http_ = 8080, .tls_ = {.identity_ = {.certificate_chain_pem_ = "pem", .private_key_pem_ = "pem"}}});
     }));
     EXPECT_TRUE(throws_invalid([&] {
-        ruvia::app().listen(
-            {.address_ = "127.0.0.1", .http_ = 8080, .tls_ = {.local_addresses_ = {{.address_ = "127.0.0.2", .identity_ = files}}}});
+        ruvia::app().listen({.address_ = "127.0.0.1", .http_ = 8080, .tls_ = {.local_addresses_ = {{.address_ = "127.0.0.2", .identity_ = files}}}});
     }));
 }
 
@@ -330,11 +331,10 @@ TEST(Ruvia, self_contained_app_callbacks_release_owned_state) {
         {
             // A move-only callable registers; moving the owner transfers the
             // captured state instead of releasing it.
-            ruvia::access_log_callback callback_value(
-                [state_value, guard = std::make_unique<int>(2)](const ruvia::access_log_record&) noexcept {
-                    (void)state_value;
-                    (void)guard;
-                });
+            ruvia::access_log_callback callback_value([state_value, guard = std::make_unique<int>(2)](const ruvia::access_log_record&) noexcept {
+                (void)state_value;
+                (void)guard;
+            });
             moved.emplace(std::move(callback_value));
         }
         state_value.reset();
@@ -347,8 +347,9 @@ TEST(Ruvia, self_contained_app_callbacks_release_owned_state) {
     {
         auto state_value = std::make_shared<int>(1);
         failure_state = state_value;
-        ruvia::connection_failure_callback callback_value(
-            [state_value](const ruvia::connection_failure_record&) noexcept { (void)state_value; });
+        ruvia::connection_failure_callback callback_value([state_value](const ruvia::connection_failure_record&) noexcept {
+            (void)state_value;
+        });
         state_value.reset();
         EXPECT_TRUE(!failure_state.expired());
     }
@@ -358,11 +359,10 @@ TEST(Ruvia, self_contained_app_callbacks_release_owned_state) {
     {
         auto state_value = std::make_shared<int>(1);
         error_state = state_value;
-        ruvia::http_error_handler callback_value(
-            [state_value](ruvia::context&, ruvia::http_error_info) -> ruvia::task<ruvia::http_response> {
-                (void)state_value;
-                co_return ruvia::http_response{};
-            });
+        ruvia::http_error_handler callback_value([state_value](ruvia::context&, ruvia::http_error_info) -> ruvia::task<ruvia::http_response> {
+            (void)state_value;
+            co_return ruvia::http_response{};
+        });
         state_value.reset();
         EXPECT_TRUE(!error_state.expired());
     }
@@ -372,11 +372,10 @@ TEST(Ruvia, self_contained_app_callbacks_release_owned_state) {
     {
         auto state_value = std::make_shared<int>(1);
         not_found_state = state_value;
-        ruvia::http_not_found_handler callback_value(
-            [state_value](ruvia::context&) -> ruvia::task<ruvia::http_response> {
-                (void)state_value;
-                co_return ruvia::http_response{};
-            });
+        ruvia::http_not_found_handler callback_value([state_value](ruvia::context&) -> ruvia::task<ruvia::http_response> {
+            (void)state_value;
+            co_return ruvia::http_response{};
+        });
         state_value.reset();
         EXPECT_TRUE(!not_found_state.expired());
     }
@@ -409,8 +408,7 @@ TEST(Ruvia, noexcept_app_callback_retires_owner_before_target_destruction) {
         }
         delete value;
     };
-    callback = [guard = std::unique_ptr<int, decltype(release)>(new int{0}, release)](
-                   const ruvia::access_log_record&) noexcept {};
+    callback = [guard = std::unique_ptr<int, decltype(release)>(new int{0}, release)](const ruvia::access_log_record&) noexcept {};
     callback = nullptr;
     EXPECT_TRUE(!callback);
     EXPECT_TRUE(owner_was_empty);
@@ -433,13 +431,21 @@ TEST(Ruvia, application_multi_listen_and_null_handler_validation) {
         {.address_ = "127.0.0.1", .http_ = 8081},
     });
 
-    EXPECT_TRUE(throws_invalid([&] { app.on_start(ruvia::app_hook{}); }));
-    EXPECT_TRUE(throws_invalid([&] { app.on_stop(ruvia::app_hook{}); }));
+    EXPECT_TRUE(throws_invalid([&] {
+        app.on_start(ruvia::app_hook{});
+    }));
+    EXPECT_TRUE(throws_invalid([&] {
+        app.on_stop(ruvia::app_hook{});
+    }));
     app.on_start([] {}).on_start(nullptr);
     app.on_stop([] {}).on_stop(nullptr);
 
-    EXPECT_TRUE(throws_invalid([&] { app.on_error(ruvia::http_error_handler{nullptr}); }));
-    EXPECT_TRUE(throws_invalid([&] { app.on_not_found(ruvia::http_not_found_handler{nullptr}); }));
+    EXPECT_TRUE(throws_invalid([&] {
+        app.on_error(ruvia::http_error_handler{nullptr});
+    }));
+    EXPECT_TRUE(throws_invalid([&] {
+        app.on_not_found(ruvia::http_not_found_handler{nullptr});
+    }));
     app.on_error([](ruvia::context& c, ruvia::http_error_info info) -> ruvia::task<ruvia::http_response> {
         co_return c.error(info);
     });
@@ -486,8 +492,8 @@ struct middleware_lifetime_observation final {
 
 class lifetime_middleware final {
 public:
-    lifetime_middleware(std::shared_ptr<middleware_lifetime_observation> observation, bool fail)
-        : observation_(std::move(observation)) {
+    lifetime_middleware(std::shared_ptr<middleware_lifetime_observation> observation, bool fail) :
+        observation_(std::move(observation)) {
         if (fail) {
             throw std::runtime_error("middleware construction failed");
         }
@@ -550,8 +556,7 @@ public:
     RUVIA_GET("/answered", one, response_middleware);
     // Unparameterized and parameterized entries in ONE list: both are types, so
     // the typename pack takes them together and a bare name needs no braces.
-    RUVIA_POST("/mixed", mixed, configured_by_type<2>, plain_middleware, ruvia::body_limit<32>,
-        ruvia::rate_limit<10, 1000>);
+    RUVIA_POST("/mixed", mixed, configured_by_type<2>, plain_middleware, ruvia::body_limit<32>, ruvia::rate_limit<10, 1000>);
     RUVIA_ROUTES_END
 private:
     ruvia::task<ruvia::http_response> one(ruvia::context& c) {
@@ -606,8 +611,7 @@ TEST(Ruvia, route_middleware_carries_its_configuration_in_the_type) {
     // its argument list -- but pasting __VA_ARGS__ back into the template
     // argument list rejoins them, which is why no wrapper type is needed.
     const auto two = app.request(ruvia::test_request::get("/route-config/two"));
-    EXPECT_EQ(
-        two.header("X-Config-Pair").value_or(std::string_view{}), std::string_view("ok"));
+    EXPECT_EQ(two.header("X-Config-Pair").value_or(std::string_view{}), std::string_view("ok"));
 }
 
 TEST(Ruvia, route_rate_limit_is_configured_without_a_generated_type) {
@@ -621,15 +625,13 @@ TEST(Ruvia, route_rate_limit_is_configured_without_a_generated_type) {
     }
     const auto rejected = app.request(ruvia::test_request::get("/route-config/limited"));
     EXPECT_EQ(rejected.status(), ruvia::http_status::too_many_requests);
-    EXPECT_EQ(
-        rejected.header("X-RateLimit-Limit").value_or(std::string_view{}), std::string_view("10"));
+    EXPECT_EQ(rejected.header("X-RateLimit-Limit").value_or(std::string_view{}), std::string_view("10"));
 }
 
 TEST(Ruvia, route_rate_limit_rejection_reaches_the_error_handler) {
     ruvia::test_app app;
     int calls = 0;
-    app.on_error([counter = &calls](ruvia::context& c,
-                     ruvia::http_error_info error) -> ruvia::task<ruvia::http_response> {
+    app.on_error([counter = &calls](ruvia::context& c, ruvia::http_error_info error) -> ruvia::task<ruvia::http_response> {
         ++*counter;
         c.draft().status(error.status());
         co_return c.text(error.code());
@@ -643,8 +645,7 @@ TEST(Ruvia, route_rate_limit_rejection_reaches_the_error_handler) {
     EXPECT_EQ(rejected.status(), ruvia::http_status::too_many_requests);
     EXPECT_EQ(rejected.body(), std::string_view("too_many_requests"));
     EXPECT_TRUE(rejected.header("Retry-After").has_value());
-    EXPECT_EQ(
-        rejected.header("X-RateLimit-Limit").value_or(std::string_view{}), std::string_view("10"));
+    EXPECT_EQ(rejected.header("X-RateLimit-Limit").value_or(std::string_view{}), std::string_view("10"));
 }
 
 TEST(Ruvia, stacked_route_rate_limits_count_each_declaration_once_per_request) {
@@ -658,8 +659,7 @@ TEST(Ruvia, stacked_route_rate_limits_count_each_declaration_once_per_request) {
         }
         const auto rejected = app.request(ruvia::test_request::get(target));
         EXPECT_EQ(rejected.status(), ruvia::http_status::too_many_requests);
-        EXPECT_EQ(
-            rejected.header("X-RateLimit-Limit").value_or(std::string_view{}), std::string_view("4"));
+        EXPECT_EQ(rejected.header("X-RateLimit-Limit").value_or(std::string_view{}), std::string_view("4"));
     }
 }
 
@@ -667,29 +667,25 @@ TEST(Ruvia, route_body_limit_is_declared_through_the_type) {
     ruvia::test_app app;
 
     // Within the route's ceiling.
-    const auto small =
-        app.request(ruvia::test_request::post("/route-config/small").body("0123456789"));
+    const auto small = app.request(ruvia::test_request::post("/route-config/small").body("0123456789"));
     EXPECT_EQ(small.status(), ruvia::http_status::ok);
     EXPECT_EQ(small.body(), std::string_view("0123456789"));
 
     // A sibling route without the declaration keeps the app-wide ceiling, so
     // the same body that the limited route would reject is fine here.
     const auto oversize_for_route = std::string(64, 'x');
-    const auto unlimited =
-        app.request(ruvia::test_request::post("/route-config/default").body(oversize_for_route));
+    const auto unlimited = app.request(ruvia::test_request::post("/route-config/default").body(oversize_for_route));
     EXPECT_EQ(unlimited.status(), ruvia::http_status::ok);
     EXPECT_EQ(unlimited.body().size(), std::size_t{64});
 
-    const auto rejected =
-        app.request(ruvia::test_request::post("/route-config/small").body(oversize_for_route));
+    const auto rejected = app.request(ruvia::test_request::post("/route-config/small").body(oversize_for_route));
     EXPECT_EQ(rejected.status(), ruvia::http_status::content_too_large);
 }
 
 TEST(Ruvia, route_body_limit_bounds_the_decoded_representation) {
     ruvia::test_app app;
     const std::string plain(4096, 'x');
-    auto encoded = ruvia::encode_http_content(
-        ruvia::http_content_coding::gzip, plain, {.max_encoded_bytes_ = 64});
+    auto encoded = ruvia::encode_http_content(ruvia::http_content_coding::gzip, plain, {.max_encoded_bytes_ = 64});
     EXPECT_TRUE(encoded.has_value());
     if (!encoded.has_value()) {
         return;
@@ -697,22 +693,17 @@ TEST(Ruvia, route_body_limit_bounds_the_decoded_representation) {
 
     // The compressed body fits the route's ceiling on the wire, but the
     // route reads the decoded representation, which is far larger.
-    const auto rejected = app.request(ruvia::test_request::post("/route-config/small-decoded")
-            .header("Content-Encoding", "gzip")
-            .body(*encoded));
+    const auto rejected = app.request(ruvia::test_request::post("/route-config/small-decoded").header("Content-Encoding", "gzip").body(*encoded));
     EXPECT_EQ(rejected.status(), ruvia::http_status::content_too_large);
 
     // A sibling without the declaration decodes up to the app-wide ceiling.
-    const auto accepted = app.request(ruvia::test_request::post("/route-config/default")
-            .header("Content-Encoding", "gzip")
-            .body(*encoded));
+    const auto accepted = app.request(ruvia::test_request::post("/route-config/default").header("Content-Encoding", "gzip").body(*encoded));
     EXPECT_EQ(accepted.status(), ruvia::http_status::ok);
     EXPECT_EQ(accepted.body(), std::string_view(plain));
 }
 
 TEST(Ruvia, app_rejects_route_only_body_limit_middleware) {
-    static_assert(!ruvia::middleware<ruvia::body_limit<16>> && ruvia::route_policy<ruvia::body_limit<16>> &&
-                  !ruvia::middleware<ruvia::stream_body> && ruvia::route_policy<ruvia::stream_body>);
+    static_assert(!ruvia::middleware<ruvia::body_limit<16>> && ruvia::route_policy<ruvia::body_limit<16>> && !ruvia::middleware<ruvia::stream_body> && ruvia::route_policy<ruvia::stream_body>);
     ruvia::test_app app;
     bool body_limit_rejected = false;
     try {
@@ -730,8 +721,7 @@ TEST(Ruvia, route_middleware_list_mixes_bare_and_parameterized_types) {
     EXPECT_EQ(response.body(), std::string_view("mixed"));
     // The bare entry ran alongside the parameterized ones.
     EXPECT_EQ(response.header("X-Plain").value_or(std::string_view{}), std::string_view("on"));
-    EXPECT_EQ(
-        response.header("X-Config").value_or(std::string_view{}), std::string_view("two"));
+    EXPECT_EQ(response.header("X-Config").value_or(std::string_view{}), std::string_view("two"));
 }
 
 TEST(Ruvia, route_middleware_returning_a_response_answers_without_the_handler) {
@@ -809,8 +799,12 @@ TEST(Ruvia, app_wide_route_declarations_are_rejected_instead_of_ignored) {
         }
         return false;
     };
-    EXPECT_TRUE(rejects([&app] { app.use<invalid_app_body_limit_middleware>(); }));
-    EXPECT_TRUE(rejects([&app] { app.use_at<invalid_app_body_limit_middleware>({.prefix_ = "/route-config"}); }));
+    EXPECT_TRUE(rejects([&app] {
+        app.use<invalid_app_body_limit_middleware>();
+    }));
+    EXPECT_TRUE(rejects([&app] {
+        app.use_at<invalid_app_body_limit_middleware>({.prefix_ = "/route-config"});
+    }));
 
     const auto response = app.request(ruvia::test_request::post("/route-config/default").body(std::string(64, 'x')));
     EXPECT_EQ(response.status(), ruvia::http_status::ok);
@@ -827,8 +821,12 @@ struct runtime final {
     ruvia::event_loop_attachment first_{ruvia::attach_event_loop(first_io_, {.blocking_pool_ = &pool_})};
     ruvia::event_loop_attachment second_{ruvia::attach_event_loop(second_io_, {.blocking_pool_ = &pool_})};
     std::array<ruvia::event_loop, 2> loops_{first_.loop(), second_.loop()};
-    std::jthread first_thread_{[this] { first_.run(); }};
-    std::jthread second_thread_{[this] { second_.run(); }};
+    std::jthread first_thread_{[this] {
+        first_.run();
+    }};
+    std::jthread second_thread_{[this] {
+        second_.run();
+    }};
     ~runtime() {
         first_.stop();
         second_.stop();
@@ -843,35 +841,21 @@ struct issued_identity final {
     std::filesystem::path certificate_file_;
     std::filesystem::path private_key_file_;
 
-    issued_identity(ruvia::test::tls_identity& issuer, const char* common_name, long serial)
-        : issuer_certificate_(SSL_CTX_get0_certificate(issuer.context_.native_handle())),
-          issuer_key_(SSL_CTX_get0_privatekey(issuer.context_.native_handle())) {
+    issued_identity(ruvia::test::tls_identity& issuer, const char* common_name, long serial) :
+        issuer_certificate_(SSL_CTX_get0_certificate(issuer.context_.native_handle())),
+        issuer_key_(SSL_CTX_get0_privatekey(issuer.context_.native_handle())) {
         std::filesystem::permissions(directory_.path(), std::filesystem::perms::owner_all);
-        std::unique_ptr<EVP_PKEY, decltype(&EVP_PKEY_free)> key(
-            EVP_PKEY_Q_keygen(nullptr, nullptr, "EC", "prime256v1"), EVP_PKEY_free);
+        std::unique_ptr<EVP_PKEY, decltype(&EVP_PKEY_free)> key(EVP_PKEY_Q_keygen(nullptr, nullptr, "EC", "prime256v1"), EVP_PKEY_free);
         certificate_.reset(X509_new_ex(nullptr, nullptr));
         const std::unique_ptr<X509_NAME, decltype(&X509_NAME_free)> subject(X509_NAME_new(), X509_NAME_free);
-        if (!key || !certificate_ || !subject ||
-            X509_set_version(certificate_.get(), 2) != 1 ||
-            ASN1_INTEGER_set(X509_get_serialNumber(certificate_.get()), serial) != 1 ||
-            !X509_gmtime_adj(X509_getm_notBefore(certificate_.get()), -60) ||
-            !X509_gmtime_adj(X509_getm_notAfter(certificate_.get()), 86400) ||
-            X509_set_pubkey(certificate_.get(), key.get()) != 1 ||
-            X509_NAME_add_entry_by_txt(subject.get(), "CN", MBSTRING_ASC,
-                reinterpret_cast<const unsigned char*>(common_name), -1, -1, 0) != 1 ||
-            X509_set_subject_name(certificate_.get(), subject.get()) != 1 ||
-            X509_set_issuer_name(certificate_.get(), X509_get_subject_name(issuer_certificate_)) != 1 ||
-            ruvia::test::sign_tls_certificate(certificate_.get(), issuer_key_) <= 0) {
+        if (!key || !certificate_ || !subject || X509_set_version(certificate_.get(), 2) != 1 || ASN1_INTEGER_set(X509_get_serialNumber(certificate_.get()), serial) != 1 || !X509_gmtime_adj(X509_getm_notBefore(certificate_.get()), -60) || !X509_gmtime_adj(X509_getm_notAfter(certificate_.get()), 86400) || X509_set_pubkey(certificate_.get(), key.get()) != 1 || X509_NAME_add_entry_by_txt(subject.get(), "CN", MBSTRING_ASC, reinterpret_cast<const unsigned char*>(common_name), -1, -1, 0) != 1 || X509_set_subject_name(certificate_.get(), subject.get()) != 1 || X509_set_issuer_name(certificate_.get(), X509_get_subject_name(issuer_certificate_)) != 1 || ruvia::test::sign_tls_certificate(certificate_.get(), issuer_key_) <= 0) {
             throw std::runtime_error("cannot generate OCSP leaf identity");
         }
         certificate_file_ = directory_.path() / "cert.pem";
         private_key_file_ = directory_.path() / "key.pem";
-        const std::unique_ptr<BIO, decltype(&BIO_free)> cert_out(
-            BIO_new_file(certificate_file_.string().c_str(), "w"), BIO_free);
-        const std::unique_ptr<BIO, decltype(&BIO_free)> key_out(
-            BIO_new_file(private_key_file_.string().c_str(), "w"), BIO_free);
-        if (!cert_out || PEM_write_bio_X509(cert_out.get(), certificate_.get()) != 1 ||
-            !key_out || ruvia::test::write_tls_private_key(key_out.get(), key.get()) != 1) {
+        const std::unique_ptr<BIO, decltype(&BIO_free)> cert_out(BIO_new_file(certificate_file_.string().c_str(), "w"), BIO_free);
+        const std::unique_ptr<BIO, decltype(&BIO_free)> key_out(BIO_new_file(private_key_file_.string().c_str(), "w"), BIO_free);
+        if (!cert_out || PEM_write_bio_X509(cert_out.get(), certificate_.get()) != 1 || !key_out || ruvia::test::write_tls_private_key(key_out.get(), key.get()) != 1) {
             throw std::runtime_error("cannot write OCSP leaf identity");
         }
     }
@@ -883,19 +867,14 @@ ruvia::tls_identity_config files(const issued_identity& identity) {
 
 // A real issuer-signed BasicOCSPResponse, with a nonce distinguishing renewals.
 std::vector<std::byte> response(const issued_identity& identity, unsigned char nonce) {
-    const std::unique_ptr<OCSP_CERTID, decltype(&OCSP_CERTID_free)> id(
-        OCSP_cert_to_id(EVP_sha256(), identity.certificate_.get(), identity.issuer_certificate_), OCSP_CERTID_free);
+    const std::unique_ptr<OCSP_CERTID, decltype(&OCSP_CERTID_free)> id(OCSP_cert_to_id(EVP_sha256(), identity.certificate_.get(), identity.issuer_certificate_), OCSP_CERTID_free);
     const std::unique_ptr<OCSP_BASICRESP, decltype(&OCSP_BASICRESP_free)> basic(OCSP_BASICRESP_new(), OCSP_BASICRESP_free);
     const std::unique_ptr<ASN1_TIME, decltype(&ASN1_TIME_free)> current(X509_gmtime_adj(nullptr, -60), ASN1_TIME_free);
     const std::unique_ptr<ASN1_TIME, decltype(&ASN1_TIME_free)> next(X509_gmtime_adj(nullptr, 3600), ASN1_TIME_free);
-    if (!id || !basic || !current || !next ||
-        !OCSP_basic_add1_status(basic.get(), id.get(), V_OCSP_CERTSTATUS_GOOD, 0, nullptr, current.get(), next.get()) ||
-        OCSP_basic_add1_nonce(basic.get(), &nonce, 1) != 1 ||
-        OCSP_basic_sign(basic.get(), identity.issuer_certificate_, identity.issuer_key_, EVP_sha256(), nullptr, 0) != 1) {
+    if (!id || !basic || !current || !next || !OCSP_basic_add1_status(basic.get(), id.get(), V_OCSP_CERTSTATUS_GOOD, 0, nullptr, current.get(), next.get()) || OCSP_basic_add1_nonce(basic.get(), &nonce, 1) != 1 || OCSP_basic_sign(basic.get(), identity.issuer_certificate_, identity.issuer_key_, EVP_sha256(), nullptr, 0) != 1) {
         throw std::runtime_error("cannot sign OCSP test response");
     }
-    const std::unique_ptr<OCSP_RESPONSE, decltype(&OCSP_RESPONSE_free)> encoded(
-        OCSP_response_create(OCSP_RESPONSE_STATUS_SUCCESSFUL, basic.get()), OCSP_RESPONSE_free);
+    const std::unique_ptr<OCSP_RESPONSE, decltype(&OCSP_RESPONSE_free)> encoded(OCSP_response_create(OCSP_RESPONSE_STATUS_SUCCESSFUL, basic.get()), OCSP_RESPONSE_free);
     const int size = encoded ? i2d_OCSP_RESPONSE(encoded.get(), nullptr) : -1;
     if (size <= 0) {
         throw std::runtime_error("cannot encode OCSP test response");
@@ -932,17 +911,14 @@ void client_io(asio::ip::tcp::socket& socket, initiation_type&& initiate) {
     }
 }
 
-std::unique_ptr<tls_stream> connect(asio::io_context& io, int version,
-    const asio::ip::tcp::endpoint& endpoint, const char* name, bool request_status = true) {
+std::unique_ptr<tls_stream> connect(asio::io_context& io, int version, const asio::ip::tcp::endpoint& endpoint, const char* name, bool request_status = true) {
     asio::ssl::context client(asio::ssl::context::tls_client);
     client.set_verify_mode(asio::ssl::verify_none);
-    if (SSL_CTX_set_min_proto_version(client.native_handle(), version) != 1 ||
-        SSL_CTX_set_max_proto_version(client.native_handle(), version) != 1) {
+    if (SSL_CTX_set_min_proto_version(client.native_handle(), version) != 1 || SSL_CTX_set_max_proto_version(client.native_handle(), version) != 1) {
         throw std::runtime_error("cannot configure OCSP test TLS version");
     }
     auto stream = std::make_unique<tls_stream>(io, client);
-    if ((name && SSL_set_tlsext_host_name(stream->native_handle(), name) != 1) ||
-        (request_status && SSL_set_tlsext_status_type(stream->native_handle(), TLSEXT_STATUSTYPE_ocsp) != 1)) {
+    if ((name && SSL_set_tlsext_host_name(stream->native_handle(), name) != 1) || (request_status && SSL_set_tlsext_status_type(stream->native_handle(), TLSEXT_STATUSTYPE_ocsp) != 1)) {
         throw std::runtime_error("cannot request OCSP status");
     }
     client_io(stream->next_layer(), [&](auto completion) {
@@ -964,8 +940,7 @@ std::vector<std::byte> received(SSL* ssl) {
     return {begin, begin + size};
 }
 
-void expect_status(SSL* ssl, const issued_identity& identity,
-    const std::vector<std::byte>& expected) {
+void expect_status(SSL* ssl, const issued_identity& identity, const std::vector<std::byte>& expected) {
     const auto bytes = received(ssl);
     ASSERT_EQ(bytes, expected);
     const std::unique_ptr<X509, decltype(&X509_free)> peer(SSL_get1_peer_certificate(ssl), X509_free);
@@ -975,19 +950,16 @@ void expect_status(SSL* ssl, const issued_identity& identity,
         return;
     }
     const auto* cursor = reinterpret_cast<const unsigned char*>(bytes.data());
-    const std::unique_ptr<OCSP_RESPONSE, decltype(&OCSP_RESPONSE_free)> parsed(
-        d2i_OCSP_RESPONSE(nullptr, &cursor, static_cast<long>(bytes.size())), OCSP_RESPONSE_free);
+    const std::unique_ptr<OCSP_RESPONSE, decltype(&OCSP_RESPONSE_free)> parsed(d2i_OCSP_RESPONSE(nullptr, &cursor, static_cast<long>(bytes.size())), OCSP_RESPONSE_free);
     ASSERT_NE(parsed, nullptr);
     ASSERT_EQ(OCSP_response_status(parsed.get()), OCSP_RESPONSE_STATUS_SUCCESSFUL);
-    const std::unique_ptr<OCSP_BASICRESP, decltype(&OCSP_BASICRESP_free)> basic(
-        OCSP_response_get1_basic(parsed.get()), OCSP_BASICRESP_free);
+    const std::unique_ptr<OCSP_BASICRESP, decltype(&OCSP_BASICRESP_free)> basic(OCSP_response_get1_basic(parsed.get()), OCSP_BASICRESP_free);
     const std::unique_ptr<X509_STORE, decltype(&X509_STORE_free)> trust(X509_STORE_new(), X509_STORE_free);
     ASSERT_NE(basic, nullptr);
     ASSERT_NE(trust, nullptr);
     ASSERT_EQ(X509_STORE_add_cert(trust.get(), identity.issuer_certificate_), 1);
     EXPECT_EQ(OCSP_basic_verify(basic.get(), nullptr, trust.get(), 0), 1);
-    const std::unique_ptr<OCSP_CERTID, decltype(&OCSP_CERTID_free)> id(
-        OCSP_cert_to_id(EVP_sha256(), peer.get(), identity.issuer_certificate_), OCSP_CERTID_free);
+    const std::unique_ptr<OCSP_CERTID, decltype(&OCSP_CERTID_free)> id(OCSP_cert_to_id(EVP_sha256(), peer.get(), identity.issuer_certificate_), OCSP_CERTID_free);
     ASSERT_NE(id, nullptr);
     int status = -1, reason = -1;
     ASN1_GENERALIZEDTIME *revoked = nullptr, *current = nullptr, *next = nullptr;
@@ -1011,13 +983,7 @@ TEST(Ruvia, ocsp_stapling_selects_identity_and_replaces_certificate_status_pairs
     const asio::ip::tcp::endpoint second(asio::ip::make_address("127.0.0.2"), port);
     const ruvia::listener_endpoint listener{.address_ = "0.0.0.0", .port_ = port};
     const auto configuration = [&](bool renewed) {
-        return ruvia::tls_config{
-            .identity_ = files(renewed ? renewed_primary : primary),
-            .ocsp_response_ = response(renewed ? renewed_primary : primary, renewed ? 11 : 1),
-            .sni_ = {{.host_ = "api.example.test", .identity_ = files(renewed ? renewed_exact : exact), .ocsp_response_ = response(renewed ? renewed_exact : exact, renewed ? 12 : 2)},
-                {.host_ = "*.example.test", .identity_ = files(wildcard), .ocsp_response_ = response(wildcard, renewed ? 13 : 3)},
-                {.host_ = "empty.example.test", .identity_ = files(exact)}},
-            .local_addresses_ = {{.address_ = "127.0.0.2", .identity_ = files(local), .ocsp_response_ = response(local, renewed ? 14 : 4)}}};
+        return ruvia::tls_config{.identity_ = files(renewed ? renewed_primary : primary), .ocsp_response_ = response(renewed ? renewed_primary : primary, renewed ? 11 : 1), .sni_ = {{.host_ = "api.example.test", .identity_ = files(renewed ? renewed_exact : exact), .ocsp_response_ = response(renewed ? renewed_exact : exact, renewed ? 12 : 2)}, {.host_ = "*.example.test", .identity_ = files(wildcard), .ocsp_response_ = response(wildcard, renewed ? 13 : 3)}, {.host_ = "empty.example.test", .identity_ = files(exact)}}, .local_addresses_ = {{.address_ = "127.0.0.2", .identity_ = files(local), .ocsp_response_ = response(local, renewed ? 14 : 4)}}};
     };
     ruvia::http_server_group server(runtime.loops_, [](const ruvia::worker_ref&) {
         return ruvia::http_server_callbacks{.request_stream_ = [](ruvia::request_stream& stream) -> ruvia::task<void> {
@@ -1052,15 +1018,11 @@ TEST(Ruvia, ocsp_stapling_selects_identity_and_replaces_certificate_status_pairs
 
     // Reject broken primary/SNI/address DER atomically, including trailing
     // bytes and BER encodings accepted by OpenSSL's permissive d2i parser.
-    const std::array<std::vector<std::byte>, 3> invalid{
-        std::vector<std::byte>{std::byte{0}},
-        std::vector<std::byte>{std::byte{0x30}, std::byte{3}, std::byte{0x0a}, std::byte{1}, std::byte{3}, std::byte{0}},
-        std::vector<std::byte>{std::byte{0x30}, std::byte{0x81}, std::byte{3}, std::byte{0x0a}, std::byte{1}, std::byte{3}}};
+    const std::array<std::vector<std::byte>, 3> invalid{std::vector<std::byte>{std::byte{0}}, std::vector<std::byte>{std::byte{0x30}, std::byte{3}, std::byte{0x0a}, std::byte{1}, std::byte{3}, std::byte{0}}, std::vector<std::byte>{std::byte{0x30}, std::byte{0x81}, std::byte{3}, std::byte{0x0a}, std::byte{1}, std::byte{3}}};
     for (const auto& bytes : invalid) {
         for (int entry = 0; entry != 3; ++entry) {
             auto rejected = replacement;
-            auto& target = entry == 0 ? rejected.ocsp_response_ : entry == 1 ? rejected.sni_[0].ocsp_response_
-                                                                             : rejected.local_addresses_[0].ocsp_response_;
+            auto& target = entry == 0 ? rejected.ocsp_response_ : (entry == 1 ? rejected.sni_[0].ocsp_response_ : rejected.local_addresses_[0].ocsp_response_);
             target = bytes;
             EXPECT_THROW(caller.start(server.replace_tls_identities(caller.worker(), listener, std::move(rejected))).get(), std::invalid_argument);
         }

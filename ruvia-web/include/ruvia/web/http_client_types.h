@@ -103,8 +103,7 @@ public:
     // incoming copy, including on failure. Discarding a cold task cleanses its
     // retained copy; any detached preparation owns and cleanses its own input
     // and never publishes. These operations have no per-call timeout/token.
-    [[nodiscard]] task<void> insert_or_assign(
-        worker_ref caller, tls_certificate_id id, tls_identity_config identity);
+    [[nodiscard]] task<void> insert_or_assign(worker_ref caller, tls_certificate_id id, tls_identity_config identity);
     // Returns false for an absent ID without submitting blocking work.
     [[nodiscard]] task<bool> erase(worker_ref caller, tls_certificate_id id);
     [[nodiscard]] bool contains(tls_certificate_id id) const noexcept;
@@ -323,9 +322,9 @@ public:
     }
 
 private:
-    explicit http_client_timeout_override(std::optional<timeout_duration> duration) noexcept
-        : duration_(duration),
-          overridden_(true) {}
+    explicit http_client_timeout_override(std::optional<timeout_duration> duration) noexcept :
+        duration_(duration),
+        overridden_(true) {}
     std::optional<timeout_duration> duration_;
     bool overridden_{false};
 };
@@ -371,15 +370,13 @@ struct http_client_request_options final {
     std::optional<http_client_versions> versions_;
 };
 
-enum class http_client_response_framing : std::uint8_t {
-    none,
+enum class http_client_response_framing : std::uint8_t { none,
     fixed_length,
     chunked,
     close_delimited,
     stream,
     tunnel,
-    protocol_upgrade
-};
+    protocol_upgrade };
 
 struct http_client_connection_info final {
     // 物理连接身份，不是槽位。重新拨号产生新 id，旧 id 不能关闭新连接。
@@ -395,22 +392,18 @@ struct http_client_connection_info final {
 // following a redirect response. Views are valid for the duration of the callback.
 class http_client_redirect_hop final {
 public:
-    http_client_redirect_hop(std::size_t hop_index, http_origin_view source_origin,
-        std::string_view source_target, std::string_view source_url,
-        const http_client_connection_info& connection_info, http_status_code status,
-        std::string_view location, http_origin_view target_origin,
-        std::string_view target, std::string_view target_url, bool cross_origin) noexcept
-        : hop_index_(hop_index),
-          source_origin_(source_origin),
-          source_target_(source_target),
-          source_url_(source_url),
-          connection_info_(&connection_info),
-          status_(status),
-          location_(location),
-          target_origin_(target_origin),
-          target_(target),
-          target_url_(target_url),
-          cross_origin_(cross_origin) {}
+    http_client_redirect_hop(std::size_t hop_index, http_origin_view source_origin, std::string_view source_target, std::string_view source_url, const http_client_connection_info& connection_info, http_status_code status, std::string_view location, http_origin_view target_origin, std::string_view target, std::string_view target_url, bool cross_origin) noexcept :
+        hop_index_(hop_index),
+        source_origin_(source_origin),
+        source_target_(source_target),
+        source_url_(source_url),
+        connection_info_(&connection_info),
+        status_(status),
+        location_(location),
+        target_origin_(target_origin),
+        target_(target),
+        target_url_(target_url),
+        cross_origin_(cross_origin) {}
 
     [[nodiscard]] constexpr std::size_t hop_index() const noexcept {
         return hop_index_;
@@ -461,17 +454,16 @@ private:
 };
 
 using http_client_redirect_observer = move_only_function<bool(const http_client_redirect_hop&)>;
-using http_client_async_redirect_observer =
-    move_only_function<task<bool>(const http_client_redirect_hop&, stop_token)>;
+using http_client_async_redirect_observer = move_only_function<task<bool>(const http_client_redirect_hop&, stop_token)>;
 
 struct http_client_endpoint_address final {
     http_client_endpoint_address() noexcept = default;
-    constexpr http_client_endpoint_address(ip_address ip, port_number port) noexcept
-        : ip_(ip),
-          port_(port) {}
-    http_client_endpoint_address(std::string_view ip, port_number port)
-        : ip_(parse_ip(ip)),
-          port_(port) {}
+    constexpr http_client_endpoint_address(ip_address ip, port_number port) noexcept :
+        ip_(ip),
+        port_(port) {}
+    http_client_endpoint_address(std::string_view ip, port_number port) :
+        ip_(parse_ip(ip)),
+        port_(port) {}
 
     ip_address ip_{};
     port_number port_{};
@@ -680,21 +672,18 @@ enum class http_client_errc : std::uint8_t {
 // std::errc::operation_canceled for an interrupted operation.
 class http_client_error final : public std::system_error {
 public:
-    http_client_error(std::error_code code, std::string_view message,
-        std::optional<http_status_code> status = std::nullopt,
-        const http_client_connection_info* connection = nullptr, bool request_written = true,
-        std::size_t redirect_hops = 0)
-        : std::system_error(code, std::string(message)),
-          status_(status),
-          redirect_hops_(redirect_hops),
-          request_written_(request_written) {
+    http_client_error(std::error_code code, std::string_view message, std::optional<http_status_code> status = std::nullopt, const http_client_connection_info* connection = nullptr, bool request_written = true, std::size_t redirect_hops = 0) :
+        std::system_error(code, std::string(message)),
+        status_(status),
+        redirect_hops_(redirect_hops),
+        request_written_(request_written) {
         capture_connection(connection);
     }
-    http_client_error(const http_client_error& other)
-        : std::system_error(other),
-          status_(other.status_),
-          redirect_hops_(other.redirect_hops_),
-          request_written_(other.request_written_) {
+    http_client_error(const http_client_error& other) :
+        std::system_error(other),
+        status_(other.status_),
+        redirect_hops_(other.redirect_hops_),
+        request_written_(other.request_written_) {
         capture_connection(other.connection_info());
     }
     http_client_error(http_client_error&&) noexcept = default;

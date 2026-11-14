@@ -90,19 +90,15 @@ int main() {
     const auto note = app.request(ruvia::test_request::get("/notes/7"));
     expect(note.status() == ruvia::http_status::ok, "GET /notes/7 is 200");
     expect(note.body() == "note 7 self=/notes/7", "url_for builds the note link");
-    expect(
-        note.header("X-Audited").value_or("") == "yes", "global middleware stamped the response");
+    expect(note.header("X-Audited").value_or("") == "yes", "global middleware stamped the response");
 
     // Model bodies keep their production status split: 415 for the wrong
     // media type, 400 for a malformed body of the right type.
-    const auto created =
-        app.request(ruvia::test_request::post("/notes").json(R"({"text":"remember"})"));
+    const auto created = app.request(ruvia::test_request::post("/notes").json(R"({"text":"remember"})"));
     expect(created.status() == ruvia::http_status::created, "valid JSON is 201");
     expect(created.body() == "remember", "created body echoes the model field");
-    const auto wrong_type =
-        app.request(ruvia::test_request::post("/notes").body("text", "text/plain"));
-    expect(
-        wrong_type.status() == ruvia::http_status::unsupported_media_type, "wrong media type is 415");
+    const auto wrong_type = app.request(ruvia::test_request::post("/notes").body("text", "text/plain"));
+    expect(wrong_type.status() == ruvia::http_status::unsupported_media_type, "wrong media type is 415");
 
     // Worker state persisted across the requests above.
     const auto stats = app.request(ruvia::test_request::get("/notes"));

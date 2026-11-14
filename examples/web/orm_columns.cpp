@@ -23,11 +23,7 @@
 namespace {
 using namespace ruvia;
 
-RUVIA_DB_ENTITY(line_item, "orm_column_line_item",
-    RUVIA_DB_COLUMN(id, std::int64_t, db_column_options{.primary_key_ = true}),
-    RUVIA_DB_COLUMN(quantity, std::int64_t),
-    RUVIA_DB_COLUMN(unit_price, std::int64_t),
-    RUVIA_DB_COLUMN(total, std::int64_t, db_column_options{.generated_type_ = db_generated_type::stored}))
+RUVIA_DB_ENTITY(line_item, "orm_column_line_item", RUVIA_DB_COLUMN(id, std::int64_t, db_column_options{.primary_key_ = true}), RUVIA_DB_COLUMN(quantity, std::int64_t), RUVIA_DB_COLUMN(unit_price, std::int64_t), RUVIA_DB_COLUMN(total, std::int64_t, db_column_options{.generated_type_ = db_generated_type::stored}))
 
 void require(bool condition, std::string_view message) {
     if (!condition) {
@@ -38,9 +34,7 @@ void require(bool condition, std::string_view message) {
 auto migrations() {
     db_query expressions;
     db_schema schema({.driver_ = db_driver::postgresql});
-    schema.create_table<line_item>({.generated_columns_ = {{"total", expressions.binary(
-                                                                         expressions.column("quantity"), db_binary_operator::multiply,
-                                                                         expressions.column("unit_price"))}}});
+    schema.create_table<line_item>({.generated_columns_ = {{"total", expressions.binary(expressions.column("quantity"), db_binary_operator::multiply, expressions.column("unit_price"))}}});
     return schema.compile("orm_columns_001");
 }
 
@@ -70,15 +64,13 @@ task<void> demonstrate(db_client& db, db_client& concurrent) {
     const auto retained = co_await items.find_one({.where_ = line_item::column<"id">() == 1});
     require(retained && retained->get<"total">() == 35, "computed UPSERT value differs");
 
-    auto snapshot = co_await session.begin_transaction({.isolation_ = db_transaction_isolation::repeatable_read,
-        .access_mode_ = db_transaction_access_mode::read_only});
+    auto snapshot = co_await session.begin_transaction({.isolation_ = db_transaction_isolation::repeatable_read, .access_mode_ = db_transaction_access_mode::read_only});
     auto snapshot_items = snapshot.repository<line_item>();
     const auto before = co_await snapshot_items.find_one({.where_ = line_item::column<"id">() == 1});
     changes.set<"quantity">(6);
     co_await concurrent.db().repository<line_item>().update(line_item::column<"id">() == 1, changes);
     const auto after = co_await snapshot_items.find_one({.where_ = line_item::column<"id">() == 1});
-    require(before && after && before->get<"total">() == 35 && after->get<"total">() == 35,
-        "repeatable-read snapshot changed after another connection committed");
+    require(before && after && before->get<"total">() == 35 && after->get<"total">() == 35, "repeatable-read snapshot changed after another connection committed");
 
     bool rejected = false;
     try {

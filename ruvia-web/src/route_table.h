@@ -110,10 +110,9 @@ public:
 private:
     friend class route_endpoint;
 
-    buffered_route_endpoint(route_handler::invoke_type invoke,
-        detail::request_body_mode request_body_mode_value) noexcept
-        : invoke_(invoke),
-          request_body_mode_(request_body_mode_value) {}
+    buffered_route_endpoint(route_handler::invoke_type invoke, detail::request_body_mode request_body_mode_value) noexcept :
+        invoke_(invoke),
+        request_body_mode_(request_body_mode_value) {}
 
     route_handler::invoke_type invoke_;
     detail::request_body_mode request_body_mode_;
@@ -132,10 +131,9 @@ public:
 private:
     friend class route_endpoint;
 
-    explicit response_stream_route_endpoint(route_stream_handler::invoke_type invoke,
-        detail::request_body_mode request_body_mode_value = detail::request_body_mode::buffered) noexcept
-        : invoke_(invoke),
-          request_body_mode_(request_body_mode_value) {}
+    explicit response_stream_route_endpoint(route_stream_handler::invoke_type invoke, detail::request_body_mode request_body_mode_value = detail::request_body_mode::buffered) noexcept :
+        invoke_(invoke),
+        request_body_mode_(request_body_mode_value) {}
 
     route_stream_handler::invoke_type invoke_;
     detail::request_body_mode request_body_mode_;
@@ -155,11 +153,10 @@ public:
 
 private:
     friend class route_endpoint;
-    tunnel_route_endpoint(route_stream_handler::invoke_type invoke,
-        std::string_view protocol, http_tunnel_route_config config)
-        : invoke_(invoke),
-          protocol_(protocol),
-          config_(config) {}
+    tunnel_route_endpoint(route_stream_handler::invoke_type invoke, std::string_view protocol, http_tunnel_route_config config) :
+        invoke_(invoke),
+        protocol_(protocol),
+        config_(config) {}
     route_stream_handler::invoke_type invoke_;
     std::string protocol_;
     http_tunnel_route_config config_;
@@ -194,13 +191,12 @@ public:
 private:
     friend class route_endpoint;
 
-    websocket_route_endpoint(route_stream_handler::invoke_type invoke,
-        const websocket_route_config& options)
-        : invoke_(invoke),
-          require_subprotocol_(options.require_subprotocol_),
-          lifecycle_(options.lifecycle_),
-          deflate_(options.deflate_),
-          max_message_bytes_(options.max_message_bytes_) {
+    websocket_route_endpoint(route_stream_handler::invoke_type invoke, const websocket_route_config& options) :
+        invoke_(invoke),
+        require_subprotocol_(options.require_subprotocol_),
+        lifecycle_(options.lifecycle_),
+        deflate_(options.deflate_),
+        max_message_bytes_(options.max_message_bytes_) {
         if (!options.subprotocols_.empty()) {
             std::size_t total_bytes = 0;
             for (const auto& subprotocol : options.subprotocols_) {
@@ -210,10 +206,8 @@ private:
             subprotocols_.reserve(options.subprotocols_.size());
             for (const auto& subprotocol : options.subprotocols_) {
                 const auto offset = subprotocol_storage_.size();
-                subprotocol_storage_.insert(
-                    subprotocol_storage_.end(), subprotocol.begin(), subprotocol.end());
-                subprotocols_.emplace_back(
-                    subprotocol_storage_.data() + offset, subprotocol.size());
+                subprotocol_storage_.insert(subprotocol_storage_.end(), subprotocol.begin(), subprotocol.end());
+                subprotocols_.emplace_back(subprotocol_storage_.data() + offset, subprotocol.size());
             }
         }
     }
@@ -240,14 +234,11 @@ public:
     // Handlers come from the controller macros' bind()/bind_stream(), which
     // always supply an invoker; body modes and stream kinds are the builder's
     // own enumerators.
-    [[nodiscard]] static route_endpoint buffered(route_handler::invoke_type invoke,
-        request_body_mode request_body_mode_value) {
+    [[nodiscard]] static route_endpoint buffered(route_handler::invoke_type invoke, request_body_mode request_body_mode_value) {
         return route_endpoint(buffered_route_endpoint(invoke, request_body_mode_value));
     }
 
-    [[nodiscard]] static route_endpoint response_stream(
-        route_stream_handler::invoke_type invoke,
-        request_body_mode request_body_mode_value = request_body_mode::buffered) {
+    [[nodiscard]] static route_endpoint response_stream(route_stream_handler::invoke_type invoke, request_body_mode request_body_mode_value = request_body_mode::buffered) {
         return route_endpoint(response_stream_route_endpoint(invoke, request_body_mode_value));
     }
 
@@ -257,19 +248,16 @@ public:
         ruvia::websocket_subprotocol_set subprotocols;
         for (const auto& subprotocol : options.subprotocols_) {
             if (!subprotocols.append(subprotocol)) {
-                throw std::invalid_argument(
-                    "websocket subprotocols must contain at most 64 unique HTTP tokens");
+                throw std::invalid_argument("websocket subprotocols must contain at most 64 unique HTTP tokens");
             }
         }
         if (options.require_subprotocol_ && options.subprotocols_.empty()) {
             throw std::invalid_argument("a websocket route requiring a subprotocol must list subprotocols");
         }
-        return route_endpoint(
-            websocket_route_endpoint(invoke, options));
+        return route_endpoint(websocket_route_endpoint(invoke, options));
     }
 
-    [[nodiscard]] static http_tunnel_route_config validate_tunnel_config(
-        bool upgrade_protocol, bool udp, http_tunnel_route_config config) {
+    [[nodiscard]] static http_tunnel_route_config validate_tunnel_config(bool upgrade_protocol, bool udp, http_tunnel_route_config config) {
         if (udp) {
             config.datagrams_ = true;
         }
@@ -287,8 +275,7 @@ public:
             throw std::invalid_argument("CONNECT protocol must be an HTTP token");
         }
         config = validate_tunnel_config(!protocol.empty(), protocol == "connect-udp", config);
-        return route_endpoint(
-            tunnel_route_endpoint(invoke, protocol, config));
+        return route_endpoint(tunnel_route_endpoint(invoke, protocol, config));
     }
 
     [[nodiscard]] const tunnel_route_endpoint* tunnel() const& noexcept {
@@ -336,12 +323,11 @@ public:
     }
 
 private:
-    using value_type =
-        std::variant<buffered_route_endpoint, response_stream_route_endpoint, websocket_route_endpoint, tunnel_route_endpoint>;
+    using value_type = std::variant<buffered_route_endpoint, response_stream_route_endpoint, websocket_route_endpoint, tunnel_route_endpoint>;
 
     template <typename endpoint_type>
-    explicit route_endpoint(endpoint_type endpoint) noexcept
-        : value_(std::move(endpoint)) {}
+    explicit route_endpoint(endpoint_type endpoint) noexcept :
+        value_(std::move(endpoint)) {}
 
     value_type value_;
 };
@@ -366,15 +352,15 @@ public:
         std::size_t max_request_body_bytes_{0};
     };
 
-    route_entry(init_type init)
-        : index_(init.index_),
-          controller_(init.controller_),
-          method_(init.method_),
-          method_token_(init.method_token_),
-          path_(init.path_),
-          endpoint_(std::move(init.endpoint_)),
-          dynamic_(init.dynamic_),
-          max_request_body_bytes_(init.max_request_body_bytes_) {}
+    route_entry(init_type init) :
+        index_(init.index_),
+        controller_(init.controller_),
+        method_(init.method_),
+        method_token_(init.method_token_),
+        path_(init.path_),
+        endpoint_(std::move(init.endpoint_)),
+        dynamic_(init.dynamic_),
+        max_request_body_bytes_(init.max_request_body_bytes_) {}
     route_entry(const route_entry&) = delete;
     route_entry& operator=(const route_entry&) = delete;
     route_entry(route_entry&&) noexcept = default;
@@ -464,22 +450,22 @@ class route_table;
 // middleware instances to it (route_table), by route and frame index.
 class compiled_route_plan final {
 public:
-    compiled_route_plan()
-        : routes_(),
-          middleware_instances_(),
-          middleware_frame_instances_(),
-          middleware_scopes_(),
-          param_names_(),
-          extension_route_indices_(),
-          extension_paths_(),
-          extension_methods_(),
-          connect_route_indices_(),
-          connect_protocols_(),
-          static_slots_(),
-          dynamic_node_arena_(),
-          url_patterns_(),
-          prefix_error_handlers_(),
-          prefix_not_found_handlers_() {}
+    compiled_route_plan() :
+        routes_(),
+        middleware_instances_(),
+        middleware_frame_instances_(),
+        middleware_scopes_(),
+        param_names_(),
+        extension_route_indices_(),
+        extension_paths_(),
+        extension_methods_(),
+        connect_route_indices_(),
+        connect_protocols_(),
+        static_slots_(),
+        dynamic_node_arena_(),
+        url_patterns_(),
+        prefix_error_handlers_(),
+        prefix_not_found_handlers_() {}
 
     compiled_route_plan(const compiled_route_plan&) = delete;
     compiled_route_plan& operator=(const compiled_route_plan&) = delete;
@@ -511,8 +497,8 @@ private:
     };
 
     struct dynamic_node_type final {
-        dynamic_node_type()
-            : static_children_() {}
+        dynamic_node_type() :
+            static_children_() {}
 
         std::vector<dynamic_static_child_type> static_children_;
         dynamic_node_type* param_child_{nullptr};
@@ -521,8 +507,8 @@ private:
     };
 
     struct connect_protocol_index_type final {
-        explicit connect_protocol_index_type(std::string_view value)
-            : protocol_(value) {}
+        explicit connect_protocol_index_type(std::string_view value) :
+            protocol_(value) {}
         std::string protocol_;
         dynamic_node_type root_;
     };
@@ -530,10 +516,9 @@ private:
     // Normalized prefix, deepest first: selection is a first-match scan.
     template <typename handler_type>
     struct prefix_handler_type final {
-        prefix_handler_type(std::string_view prefix_value,
-            handler_type handler_value)
-            : prefix_(prefix_value),
-              handler_(handler_value) {}
+        prefix_handler_type(std::string_view prefix_value, handler_type handler_value) :
+            prefix_(prefix_value),
+            handler_(handler_value) {}
 
         std::string prefix_;
         handler_type handler_{nullptr};
@@ -580,8 +565,7 @@ private:
     bool has_route_rate_limit_{false};
 };
 
-using compiled_route_plan_ptr_type =
-    std::unique_ptr<compiled_route_plan>;
+using compiled_route_plan_ptr_type = std::unique_ptr<compiled_route_plan>;
 
 }  // namespace ruvia::detail
 
@@ -598,8 +582,8 @@ class route_match final {
 public:
     constexpr route_match() noexcept = default;
 
-    constexpr route_match(const route_match& other) noexcept
-        : param_count_(other.param_count_) {
+    constexpr route_match(const route_match& other) noexcept :
+        param_count_(other.param_count_) {
         for (std::size_t i = 0; i < param_count_; ++i) {
             param_values_[i] = other.param_values_[i];
         }
@@ -672,10 +656,9 @@ public:
 private:
     friend class route_resolution;
 
-    constexpr route_method_not_allowed(
-        std::uint32_t allowed_methods, std::span<const std::string_view> extension_methods) noexcept
-        : allowed_methods_(allowed_methods),
-          extension_methods_(extension_methods) {}
+    constexpr route_method_not_allowed(std::uint32_t allowed_methods, std::span<const std::string_view> extension_methods) noexcept :
+        allowed_methods_(allowed_methods),
+        extension_methods_(extension_methods) {}
 
     std::uint32_t allowed_methods_;
     std::span<const std::string_view> extension_methods_;
@@ -704,14 +687,14 @@ public:
 private:
     friend class route_resolution;
 
-    resolved_route(const route_entry& route, void* handler_target) noexcept
-        : route_(&route),
-          handler_target_(handler_target) {}
+    resolved_route(const route_entry& route, void* handler_target) noexcept :
+        route_(&route),
+        handler_target_(handler_target) {}
 
-    resolved_route(const route_entry& route, void* handler_target, const route_match& match) noexcept
-        : route_(&route),
-          handler_target_(handler_target),
-          match_(match) {}
+    resolved_route(const route_entry& route, void* handler_target, const route_match& match) noexcept :
+        route_(&route),
+        handler_target_(handler_target),
+        match_(match) {}
 
     const route_entry* route_;
     void* handler_target_;
@@ -720,16 +703,14 @@ private:
 
 class route_resolution final {
 public:
-    route_resolution() noexcept
-        : value_(route_not_found{}) {}
+    route_resolution() noexcept :
+        value_(route_not_found{}) {}
 
-    [[nodiscard]] static route_resolution resolved(
-        const route_entry& route, void* handler_target) noexcept {
+    [[nodiscard]] static route_resolution resolved(const route_entry& route, void* handler_target) noexcept {
         return route_resolution(resolved_route(route, handler_target));
     }
 
-    [[nodiscard]] static route_resolution resolved(
-        const route_entry& route, void* handler_target, const route_match& match) noexcept {
+    [[nodiscard]] static route_resolution resolved(const route_entry& route, void* handler_target, const route_match& match) noexcept {
         return route_resolution(resolved_route(route, handler_target, match));
     }
 
@@ -737,8 +718,7 @@ public:
     // that has extension-method routes. A non-empty `extension_methods` alone
     // still makes the resource exist, so an extension-only path answers 405
     // with an Allow built from its tokens instead of collapsing to 404.
-    [[nodiscard]] static route_resolution method_not_allowed(
-        std::uint32_t allowed_methods, std::span<const std::string_view> extension_methods) noexcept {
+    [[nodiscard]] static route_resolution method_not_allowed(std::uint32_t allowed_methods, std::span<const std::string_view> extension_methods) noexcept {
         if (allowed_methods == 0 && extension_methods.empty()) {
             return route_resolution();
         }
@@ -768,8 +748,8 @@ private:
     using value_type = std::variant<route_not_found, route_method_not_allowed, resolved_route, route_rejected>;
 
     template <typename alternative_type>
-    explicit route_resolution(alternative_type alternative) noexcept
-        : value_(std::move(alternative)) {}
+    explicit route_resolution(alternative_type alternative) noexcept :
+        value_(std::move(alternative)) {}
 
     value_type value_;
 };
@@ -861,10 +841,7 @@ public:
     // is configured, or the worker's configured(generation) lease otherwise.
     // The caller owns response and keeps it alive until dispatch completes;
     // successful completion assigns the selected final response directly.
-    task<void> dispatch_buffered_response(const http_request& request,
-        const route_resolution& resolution, document_root_binding document_root,
-        const context_services& services, static_file_selection_mode static_file_mode,
-        http_response& response) const;
+    task<void> dispatch_buffered_response(const http_request& request, const route_resolution& resolution, document_root_binding document_root, const context_services& services, static_file_selection_mode static_file_mode, http_response& response) const;
     // The one matched-route invocation every transport awaits: builds the
     // context in this frame, runs the route chain, applies the response policy
     // for routes without middleware, finalizes a failure, and falls back to the
@@ -874,31 +851,21 @@ public:
     // without surfacing it gets that failure instead. Returns whether the
     // response accounts for that failure. The context dies before this
     // returns, so body completion and the request arena outlive it.
-    [[nodiscard]] task<bool> dispatch_resolved_route(const http_request& request,
-        const resolved_route& resolved, const context_services& services,
-        const std::optional<http_request_body_failure>* body_failure, http_response& response) const;
-    task<http_response> handle_error(const http_request& request,
-        http_error_info error, const context_services& services) const;
-    task<http_response> handle_exception(const http_request& request,
-        std::exception_ptr exception, const context_services& services) const;
+    [[nodiscard]] task<bool> dispatch_resolved_route(const http_request& request, const resolved_route& resolved, const context_services& services, const std::optional<http_request_body_failure>* body_failure, http_response& response) const;
+    task<http_response> handle_error(const http_request& request, http_error_info error, const context_services& services) const;
+    task<http_response> handle_exception(const http_request& request, std::exception_ptr exception, const context_services& services) const;
     // Absence means the bound output handled the request; a value is the one
     // buffered response produced before a response-stream commit.
-    task<std::optional<http_response>> dispatch_response_stream(const http_request& request,
-        const resolved_route& route, response_stream_writer& response_stream,
-        const context_services& services) const;
+    task<std::optional<http_response>> dispatch_response_stream(const http_request& request, const resolved_route& route, response_stream_writer& response_stream, const context_services& services) const;
     // A CONNECT tunnel or WebSocket upgrade: `handler` is the terminal that
     // commits the upgrade. Absence means the terminal took the request.
-    task<std::optional<http_response>> dispatch_upgrade(const http_request& request,
-        const resolved_route& route, const route_stream_handler& handler,
-        const context_services& services) const;
+    task<std::optional<http_response>> dispatch_upgrade(const http_request& request, const resolved_route& route, const route_stream_handler& handler, const context_services& services) const;
     // The not-found handler that applies to `path`: the tightest prefix scope
     // covering it, else the plan-wide one; null when neither is configured.
     [[nodiscard]] http_not_found_handler_ref not_found_handler_for(std::string_view path) const noexcept;
     // Reuses the transport's already-bound context and response writer.
-    task<std::optional<http_response>> dispatch_bound_stream(const resolved_route& resolved,
-        context& context_value, route_stream_handler handler) const;
-    task<http_response> dispatch_bound_buffered(const resolved_route& resolved, context& context_value,
-        const std::optional<http_request_body_failure>* body_failure = nullptr) const;
+    task<std::optional<http_response>> dispatch_bound_stream(const resolved_route& resolved, context& context_value, route_stream_handler handler) const;
+    task<http_response> dispatch_bound_buffered(const resolved_route& resolved, context& context_value, const std::optional<http_request_body_failure>* body_failure = nullptr) const;
 
 private:
     friend class router;
@@ -909,15 +876,13 @@ private:
     // If finalization fails, destroy the context before the request-only fallback.
     [[nodiscard]] task<http_response> finalize_failure(context& context, std::exception_ptr exception) const;
 
-    [[nodiscard]] route_resolution resolve(
-        http_known_method method, std::string_view path) const noexcept;
+    [[nodiscard]] route_resolution resolve(http_known_method method, std::string_view path) const noexcept;
     [[nodiscard]] route_resolution resolve_connect(std::string_view protocol, std::string_view target) const noexcept;
     // Extension-method routing, kept off every enum-indexed structure. The
     // request's exact token is compared against a small cold list, which costs
     // a known-method request nothing: the HTTP/1 driver only reaches it when
     // classify_http_method() returned unknown.
-    [[nodiscard]] route_resolution resolve_extension_method(
-        std::string_view method_token, std::string_view path) const noexcept;
+    [[nodiscard]] route_resolution resolve_extension_method(std::string_view method_token, std::string_view path) const noexcept;
     // Distinct tokens of the extension routes on `path`, precomputed in the
     // plan; empty when none is registered there.
     [[nodiscard]] std::span<const std::string_view> extension_methods_for(std::string_view path) const noexcept;
@@ -933,49 +898,33 @@ private:
     [[nodiscard]] static bool is_routable_method(http_known_method method) noexcept;
     [[nodiscard]] static bool supports_head_fallback(const route_entry& route) noexcept;
     [[nodiscard]] static std::uint64_t path_hash(std::string_view path) noexcept;
-    [[nodiscard]] static std::uint64_t route_hash(
-        http_known_method method, std::uint64_t hash) noexcept;
-    [[nodiscard]] static std::size_t find_dynamic_node(
-        const dynamic_node_type& node, std::string_view path, route_match& match) noexcept;
-    [[nodiscard]] static std::size_t find_dynamic_node_no_params(
-        const dynamic_node_type& node, std::string_view path) noexcept;
-    [[nodiscard]] static const dynamic_static_child_type* find_dynamic_static_child(
-        const dynamic_node_type& node, std::string_view segment) noexcept;
+    [[nodiscard]] static std::uint64_t route_hash(http_known_method method, std::uint64_t hash) noexcept;
+    [[nodiscard]] static std::size_t find_dynamic_node(const dynamic_node_type& node, std::string_view path, route_match& match) noexcept;
+    [[nodiscard]] static std::size_t find_dynamic_node_no_params(const dynamic_node_type& node, std::string_view path) noexcept;
+    [[nodiscard]] static const dynamic_static_child_type* find_dynamic_static_child(const dynamic_node_type& node, std::string_view segment) noexcept;
 
-    [[nodiscard]] const route_entry* find_static_route(
-        http_known_method method, std::string_view path, std::uint64_t hash) const noexcept;
-    [[nodiscard]] const route_entry* find_dynamic_route(
-        http_known_method method, std::string_view path, route_match& match) const noexcept;
-    [[nodiscard]] std::uint32_t allowed_methods(std::string_view path, std::uint64_t hash,
-        std::uint32_t excluded_mask = 0, std::uint32_t initial_mask = 0) const noexcept;
+    [[nodiscard]] const route_entry* find_static_route(http_known_method method, std::string_view path, std::uint64_t hash) const noexcept;
+    [[nodiscard]] const route_entry* find_dynamic_route(http_known_method method, std::string_view path, route_match& match) const noexcept;
+    [[nodiscard]] std::uint32_t allowed_methods(std::string_view path, std::uint64_t hash, std::uint32_t excluded_mask = 0, std::uint32_t initial_mask = 0) const noexcept;
     // The handler is copied into the coroutine frame: callers may pass one
     // bound from the resolved route as a temporary.
-    [[nodiscard]] task<std::optional<http_response>> dispatch_stream_route(const http_request& request,
-        const resolved_route& route, route_stream_handler handler,
-        const context_services& services, response_stream_writer* response_stream = nullptr) const;
+    [[nodiscard]] task<std::optional<http_response>> dispatch_stream_route(const http_request& request, const resolved_route& route, route_stream_handler handler, const context_services& services, response_stream_writer* response_stream = nullptr) const;
 
     // A route's own frames and, only when some are conditional, their scopes.
     [[nodiscard]] middleware_chain route_chain(const route_entry& route) const noexcept;
     // Runs `frames` around `terminal`, whose response becomes the result; the
     // completion check shared by matched buffered routes and the unmatched
     // chain.
-    [[nodiscard]] task<http_response> respond_through_chain(
-        middleware_chain chain, context& context, route_handler terminal) const;
+    [[nodiscard]] task<http_response> respond_through_chain(middleware_chain chain, context& context, route_handler terminal) const;
     // Runs the unmatched-request middleware chain around `terminal`, which
     // produces the 404/405/501 response. Falls straight through to the terminal
     // when nothing declared itself for unmatched requests.
     [[nodiscard]] task<http_response> run_unmatched_chain(context& context, route_handler terminal) const;
-    [[nodiscard]] static task<void> contain_failure(
-        const route_table& table, context& context, std::exception_ptr exception);
-    [[nodiscard]] task<http_response> handle_not_found(
-        const http_request& request, const context_services& services) const;
-    [[nodiscard]] task<http_response> handle_exception(
-        context& context, std::exception_ptr exception) const;
-    [[nodiscard]] task<http_response> handle_exception(context& context, std::exception_ptr exception,
-        http_error_handler_ref error_handler) const;
-    [[nodiscard]] task<http_response> handle_exception(const http_request& request,
-        std::exception_ptr exception, const context_services& services,
-        http_error_handler_ref error_handler) const;
+    [[nodiscard]] static task<void> contain_failure(const route_table& table, context& context, std::exception_ptr exception);
+    [[nodiscard]] task<http_response> handle_not_found(const http_request& request, const context_services& services) const;
+    [[nodiscard]] task<http_response> handle_exception(context& context, std::exception_ptr exception) const;
+    [[nodiscard]] task<http_response> handle_exception(context& context, std::exception_ptr exception, http_error_handler_ref error_handler) const;
+    [[nodiscard]] task<http_response> handle_exception(const http_request& request, std::exception_ptr exception, const context_services& services, http_error_handler_ref error_handler) const;
 
     [[nodiscard]] http_error_handler_ref error_handler_for(std::string_view path) const noexcept;
     explicit route_table(const compiled_route_plan& plan);
@@ -994,12 +943,10 @@ private:
 
 namespace ruvia {
 
-[[nodiscard]] inline context make_route_context(const http_request& request,
-    const detail::resolved_route& resolved, const detail::context_services& services) {
+[[nodiscard]] inline context make_route_context(const http_request& request, const detail::resolved_route& resolved, const detail::context_services& services) {
     const auto& route = resolved.route();
     const auto values = resolved.match().values();
-    return detail::context_access::make(request, route.path(), route.param_names().data(),
-        values.data(), values.size(), reinterpret_cast<std::uintptr_t>(&route), services);
+    return detail::context_access::make(request, route.path(), route.param_names().data(), values.data(), values.size(), reinterpret_cast<std::uintptr_t>(&route), services);
 }
 
 }  // namespace ruvia
@@ -1012,9 +959,7 @@ class app_configuration;
 // `controllers` (one per registrar, registrar order) declares its routes, then
 // `configuration` applies the app-wide fallbacks and middleware. Route
 // conflicts and invalid registrations throw here, before any worker starts.
-[[nodiscard]] compiled_route_plan_ptr_type compile_route_plan(
-    std::span<const controller_registrar> registrars, const controller_store& controllers,
-    const app_configuration& configuration);
+[[nodiscard]] compiled_route_plan_ptr_type compile_route_plan(std::span<const controller_registrar> registrars, const controller_store& controllers, const app_configuration& configuration);
 
 // Startup builder shared by controller declarations and owned public routes.
 class router final {
@@ -1038,21 +983,14 @@ public:
     void set_global_middlewares(std::span<const controller_middleware_descriptor> descriptors);
 
     // Runs every registrar against its controller instance, in slot order.
-    void declare_controllers(
-        std::span<const controller_registrar> registrars, const controller_store& controllers);
+    void declare_controllers(std::span<const controller_registrar> registrars, const controller_store& controllers);
     // The single registration path. `handler_target` must be the instance of
     // the controller currently declaring its routes. `method_token` is non-empty
     // only for an extension method, with `method` unknown.
-    void register_endpoint(http_known_method method, std::string_view method_token, std::string_view path,
-        route_endpoint endpoint, void* handler_target,
-        std::span<const controller_middleware_descriptor> controller_middlewares,
-        std::span<const controller_middleware_descriptor> route_middlewares);
+    void register_endpoint(http_known_method method, std::string_view method_token, std::string_view path, route_endpoint endpoint, void* handler_target, std::span<const controller_middleware_descriptor> controller_middlewares, std::span<const controller_middleware_descriptor> route_middlewares);
     // Explicit, owned handler slots use the same registration and compilation
     // path without a controller declaration in progress.
-    void register_owned_endpoint(std::size_t slot, http_known_method method, std::string_view method_token,
-        std::string_view path, route_endpoint endpoint,
-        std::span<const controller_middleware_descriptor> controller_middlewares,
-        std::span<const controller_middleware_descriptor> route_middlewares);
+    void register_owned_endpoint(std::size_t slot, http_known_method method, std::string_view method_token, std::string_view path, route_endpoint endpoint, std::span<const controller_middleware_descriptor> controller_middlewares, std::span<const controller_middleware_descriptor> route_middlewares);
 
     [[nodiscard]] compiled_route_plan_ptr_type compile();
 
@@ -1064,12 +1002,9 @@ private:
         std::size_t count_{0};
     };
 
-    void validate_route_target(http_known_method method, std::string_view method_token, std::string_view path,
-        const route_endpoint& endpoint) const;
+    void validate_route_target(http_known_method method, std::string_view method_token, std::string_view path, const route_endpoint& endpoint) const;
     void validate_no_dynamic_route_conflict() const;
-    [[nodiscard]] std::size_t append_route_middlewares(
-        std::span<const controller_middleware_descriptor> controller_middlewares,
-        std::span<const controller_middleware_descriptor> route_middlewares);
+    [[nodiscard]] std::size_t append_route_middlewares(std::span<const controller_middleware_descriptor> controller_middlewares, std::span<const controller_middleware_descriptor> route_middlewares);
     void build_middleware_frames();
     void build_static_index();
     void build_static_method_mask();
@@ -1103,11 +1038,10 @@ class route_table;
 // server-owned borrows that cannot be absent or rebound.
 class http2_sans_io_session_context final {
 public:
-    http2_sans_io_session_context(context_services services, const http_server_options& options,
-        connection_scanner::entry& scanner_entry)
-        : services_(std::move(services)),
-          options_(options),
-          scanner_entry_(scanner_entry) {}
+    http2_sans_io_session_context(context_services services, const http_server_options& options, connection_scanner::entry& scanner_entry) :
+        services_(std::move(services)),
+        options_(options),
+        scanner_entry_(scanner_entry) {}
 
     [[nodiscard]] const http_server_options& options() const& noexcept RUVIA_LIFETIMEBOUND {
         return options_;
@@ -1135,13 +1069,9 @@ private:
 // from instantiating the complete session coroutine again. The result is
 // notify when the peer ended its input cleanly, linger when the session ended
 // with GOAWAY (a completed drain or a connection error), otherwise abort.
-[[nodiscard]] task<http_connection_close> run_http2_sans_io_session(inbound_socket_stream& stream,
-    const route_table& routes_value, http2_sans_io_session_context session_value,
-    std::string_view initial_bytes = {});
+[[nodiscard]] task<http_connection_close> run_http2_sans_io_session(inbound_socket_stream& stream, const route_table& routes_value, http2_sans_io_session_context session_value, std::string_view initial_bytes = {});
 
-[[nodiscard]] task<http_connection_close> run_http2_sans_io_session(server_tls_stream& stream,
-    const route_table& routes_value, http2_sans_io_session_context session_value,
-    std::string_view initial_bytes = {});
+[[nodiscard]] task<http_connection_close> run_http2_sans_io_session(server_tls_stream& stream, const route_table& routes_value, http2_sans_io_session_context session_value, std::string_view initial_bytes = {});
 
 }  // namespace ruvia::detail
 
@@ -1186,8 +1116,7 @@ struct http_request_admission_input final {
 };
 
 // Effective request-body ceiling. A route may only tighten the deployment limit.
-[[nodiscard]] protocol_byte_limit http_request_body_limit(const route_resolution& resolution,
-    request_body_mode mode, const http_request_admission_policy& policy) noexcept;
+[[nodiscard]] protocol_byte_limit http_request_body_limit(const route_resolution& resolution, request_body_mode mode, const http_request_admission_policy& policy) noexcept;
 
 // A server-layer rejection decided before any handler ran. The diagnostic is
 // borrowed from static storage or the request arena.
@@ -1210,9 +1139,9 @@ public:
     const rate_limit_rejection* rate_limit() const&& = delete;
 
 private:
-    constexpr http_request_rejection(http_error_info error, std::optional<rate_limit_rejection> rate_limit) noexcept
-        : error_(error),
-          rate_limit_(rate_limit) {}
+    constexpr http_request_rejection(http_error_info error, std::optional<rate_limit_rejection> rate_limit) noexcept :
+        error_(error),
+        rate_limit_(rate_limit) {}
 
     http_error_info error_;
     std::optional<rate_limit_rejection> rate_limit_;
@@ -1248,13 +1177,12 @@ private:
         std::optional<buffered_response_recovery_step> pending_step_;
     };
 
-    explicit http_response_preparation(prepared_application_response ready) noexcept
-        : state_(ready) {}
-    explicit http_response_preparation(http_response_coding_policy policy) noexcept
-        : state_(deferred_type{policy, {}, std::nullopt}) {}
-    http_response_preparation(http_response_coding_policy policy, buffered_response_recovery recovery,
-        buffered_response_recovery_step pending_step) noexcept
-        : state_(deferred_type{policy, recovery, pending_step}) {}
+    explicit http_response_preparation(prepared_application_response ready) noexcept :
+        state_(ready) {}
+    explicit http_response_preparation(http_response_coding_policy policy) noexcept :
+        state_(deferred_type{policy, {}, std::nullopt}) {}
+    http_response_preparation(http_response_coding_policy policy, buffered_response_recovery recovery, buffered_response_recovery_step pending_step) noexcept :
+        state_(deferred_type{policy, recovery, pending_step}) {}
 
     std::variant<prepared_application_response, deferred_type> state_;
 };
@@ -1264,14 +1192,12 @@ private:
 // the access-log record of the committed status.
 class http_response_tail final {
 public:
-    http_response_tail(const http_request& request, http_response_coding_policy coding_policy,
-        ip_address remote_address, ip_address client_address,
-        std::chrono::steady_clock::time_point start) noexcept
-        : request_(&request),
-          coding_policy_(coding_policy),
-          remote_address_(remote_address),
-          client_address_(client_address),
-          start_(start) {}
+    http_response_tail(const http_request& request, http_response_coding_policy coding_policy, ip_address remote_address, ip_address client_address, std::chrono::steady_clock::time_point start) noexcept :
+        request_(&request),
+        coding_policy_(coding_policy),
+        remote_address_(remote_address),
+        client_address_(client_address),
+        start_(start) {}
 
     [[nodiscard]] const http_response_coding_policy& coding_policy() const& noexcept RUVIA_LIFETIMEBOUND {
         return coding_policy_;
@@ -1306,16 +1232,13 @@ public:
     // All arguments borrow the current request owner through completion. Only
     // an uncommitted response may enter. The common response (no blocking-pool
     // encode, no recovery) completes here without a coroutine frame.
-    [[nodiscard]] http_response_preparation prepare(
-        http_response& response, const http_server_options& options, const worker_ref& worker) const;
+    [[nodiscard]] http_response_preparation prepare(http_response& response, const http_server_options& options, const worker_ref& worker) const;
 
     // Completes a preparation whose ready() is null, with the arguments given
     // to prepare(). The application error handler runs at most once here.
-    [[nodiscard]] task<prepared_application_response> finish_prepare(const http_response_preparation& preparation,
-        http_response& response, const http_server_options& options, const route_table& routes, const context_services& services) const;
+    [[nodiscard]] task<prepared_application_response> finish_prepare(const http_response_preparation& preparation, http_response& response, const http_server_options& options, const route_table& routes, const context_services& services) const;
 
-    [[nodiscard]] task<prepared_application_response> prepare_or_finish(http_response& response,
-        const http_server_options& options, const worker_ref& worker, const route_table& routes, const context_services& services) const {
+    [[nodiscard]] task<prepared_application_response> prepare_or_finish(http_response& response, const http_server_options& options, const worker_ref& worker, const route_table& routes, const context_services& services) const {
         const auto first = prepare(response, options, worker);
         if (const auto* ready = first.ready()) {
             co_return *ready;
@@ -1323,9 +1246,7 @@ public:
         co_return co_await finish_prepare(first, response, options, routes, services);
     }
 
-    [[nodiscard]] task<prepared_application_response> prepare_or_finish(http_response& response,
-        const http_server_options& options, const route_table& routes,
-        const context_services& services) const {
+    [[nodiscard]] task<prepared_application_response> prepare_or_finish(http_response& response, const http_server_options& options, const route_table& routes, const context_services& services) const {
         return prepare_or_finish(response, options, services.worker(), routes, services);
     }
 
@@ -1336,8 +1257,7 @@ public:
     // Keeps the record of a pipelined response held back for a coalesced
     // write whose head completes at output offset `head_end`; the log reports
     // it once that write commits the head. A no-op without an access log.
-    void defer_access(const access_log_sink& access_log, http1_deferred_access_log& deferred, std::size_t head_end,
-        http_status_code status) const;
+    void defer_access(const access_log_sink& access_log, http1_deferred_access_log& deferred, std::size_t head_end, http_status_code status) const;
 
 private:
     const http_request* request_;
@@ -1393,8 +1313,7 @@ public:
     }
 
     [[nodiscard]] static_file_selection_mode static_file_mode() const noexcept {
-        return services_.precompressed_static_files() ? static_file_selection_mode::precompressed
-                                                      : static_file_selection_mode::identity_only;
+        return services_.precompressed_static_files() ? static_file_selection_mode::precompressed : static_file_selection_mode::identity_only;
     }
 
     [[nodiscard]] http_response_tail& tail() & noexcept RUVIA_LIFETIMEBOUND {
@@ -1402,14 +1321,14 @@ public:
     }
     http_response_tail& tail() && = delete;
 
-    http_request_admission(const http_request_admission& other) noexcept
-        : tail_(other.tail_),
-          services_(other.services_),
-          rejection_(other.rejection_),
-          resolved_(other.resolved_),
-          body_limit_(other.body_limit_),
-          endpoint_(other.endpoint_),
-          udp_tunnel_(other.udp_tunnel_) {
+    http_request_admission(const http_request_admission& other) noexcept :
+        tail_(other.tail_),
+        services_(other.services_),
+        rejection_(other.rejection_),
+        resolved_(other.resolved_),
+        body_limit_(other.body_limit_),
+        endpoint_(other.endpoint_),
+        udp_tunnel_(other.udp_tunnel_) {
         if (services_.io_metrics() == &other.tail_.io_metrics()) {
             services_.bind_io_metrics(&tail_.io_metrics());
         }
@@ -1431,14 +1350,14 @@ public:
         return *this;
     }
 
-    http_request_admission(http_request_admission&& other) noexcept
-        : tail_(std::move(other.tail_)),
-          services_(other.services_),
-          rejection_(std::move(other.rejection_)),
-          resolved_(other.resolved_),
-          body_limit_(other.body_limit_),
-          endpoint_(other.endpoint_),
-          udp_tunnel_(other.udp_tunnel_) {
+    http_request_admission(http_request_admission&& other) noexcept :
+        tail_(std::move(other.tail_)),
+        services_(other.services_),
+        rejection_(std::move(other.rejection_)),
+        resolved_(other.resolved_),
+        body_limit_(other.body_limit_),
+        endpoint_(other.endpoint_),
+        udp_tunnel_(other.udp_tunnel_) {
         if (services_.io_metrics() == &other.tail_.io_metrics()) {
             services_.bind_io_metrics(&tail_.io_metrics());
         }
@@ -1461,12 +1380,11 @@ public:
     }
 
 private:
-    friend http_request_admission admit_http_request(const http_request_admission_input& input,
-        const http_request_admission_policy& policy, const context_services& services);
+    friend http_request_admission admit_http_request(const http_request_admission_input& input, const http_request_admission_policy& policy, const context_services& services);
 
-    http_request_admission(http_response_tail tail, const context_services& services) noexcept
-        : tail_(tail),
-          services_(services) {
+    http_request_admission(http_response_tail tail, const context_services& services) noexcept :
+        tail_(tail),
+        services_(services) {
         if (services_.io_metrics() == nullptr) {
             services_.bind_io_metrics(&tail_.io_metrics());
         }
@@ -1484,14 +1402,11 @@ private:
 // connection's request services (stop token, interim output, trailers, ...).
 // Admission borrows the input only during this synchronous call and owns its
 // request-local service view; binding it never changes the connection's view.
-[[nodiscard]] http_request_admission admit_http_request(const http_request_admission_input& input,
-    const http_request_admission_policy& policy, const context_services& services);
+[[nodiscard]] http_request_admission admit_http_request(const http_request_admission_input& input, const http_request_admission_policy& policy, const context_services& services);
 
 // Admits a buffered in-memory request and dispatches it through the route
 // table or the rejection handler.
-[[nodiscard]] task<http_request_admission> admit_and_dispatch_buffered_request(const route_table& routes,
-    const http_request_admission_input& input, const http_request_admission_policy& policy,
-    const context_services& services, http_response& response);
+[[nodiscard]] task<http_request_admission> admit_and_dispatch_buffered_request(const route_table& routes, const http_request_admission_input& input, const http_request_admission_policy& policy, const context_services& services, http_response& response);
 
 }  // namespace ruvia::detail
 
@@ -1530,8 +1445,7 @@ task<void> response_stream_end_thunk(void* target, std::span<const http_header_v
 }
 
 template <typename sink>
-task<timer_sleep_result> response_stream_sleep_thunk(
-    void* target, std::chrono::milliseconds duration, const stop_token& stop_token_value) {
+task<timer_sleep_result> response_stream_sleep_thunk(void* target, std::chrono::milliseconds duration, const stop_token& stop_token_value) {
     return static_cast<sink*>(target)->sleep(duration, stop_token_value);
 }
 
@@ -1557,10 +1471,7 @@ bool response_stream_committed_thunk(void* target) noexcept {
 
 template <typename sink>
 [[nodiscard]] response_stream_writer make_response_stream_writer(sink& sink_value) noexcept {
-    return streaming_access::make_response_stream_writer(&sink_value, sink_value.output_interrupts(), &response_stream_commit_thunk<sink>, &response_stream_write_thunk<sink>,
-        &response_stream_end_thunk<sink>, &response_stream_sleep_thunk<sink>,
-        &response_stream_bind_context_thunk<sink>, &response_stream_release_context_thunk<sink>,
-        &response_stream_committed_thunk<sink>, &response_stream_aborted_thunk<sink>);
+    return streaming_access::make_response_stream_writer(&sink_value, sink_value.output_interrupts(), &response_stream_commit_thunk<sink>, &response_stream_write_thunk<sink>, &response_stream_end_thunk<sink>, &response_stream_sleep_thunk<sink>, &response_stream_bind_context_thunk<sink>, &response_stream_release_context_thunk<sink>, &response_stream_committed_thunk<sink>, &response_stream_aborted_thunk<sink>);
 }
 
 class response_stream_completed final {
@@ -1572,8 +1483,8 @@ public:
 private:
     friend class response_stream_dispatch_result;
 
-    explicit constexpr response_stream_completed(http_status_code status) noexcept
-        : status_(status) {}
+    explicit constexpr response_stream_completed(http_status_code status) noexcept :
+        status_(status) {}
 
     http_status_code status_;
 };
@@ -1592,8 +1503,8 @@ public:
 
 private:
     friend class response_stream_dispatch_result;
-    explicit constexpr response_stream_aborted_after_commit(http_status_code status) noexcept
-        : status_(status) {}
+    explicit constexpr response_stream_aborted_after_commit(http_status_code status) noexcept :
+        status_(status) {}
     http_status_code status_;
 };
 
@@ -1615,9 +1526,9 @@ public:
 private:
     friend class response_stream_dispatch_result;
 
-    response_stream_failed_after_commit(http_status_code status, std::exception_ptr exception) noexcept
-        : status_(status),
-          exception_(std::move(exception)) {}
+    response_stream_failed_after_commit(http_status_code status, std::exception_ptr exception) noexcept :
+        status_(status),
+        exception_(std::move(exception)) {}
 
     http_status_code status_;
     std::exception_ptr exception_;
@@ -1632,8 +1543,8 @@ public:
 private:
     friend class response_stream_dispatch_result;
 
-    explicit response_stream_route_response(http_response response) noexcept
-        : response_(std::move(response)) {}
+    explicit response_stream_route_response(http_response response) noexcept :
+        response_(std::move(response)) {}
 
     http_response response_;
 };
@@ -1647,8 +1558,8 @@ public:
 private:
     friend class response_stream_dispatch_result;
 
-    explicit response_stream_recovered_failure(http_response response) noexcept
-        : response_(std::move(response)) {}
+    explicit response_stream_recovered_failure(http_response response) noexcept :
+        response_(std::move(response)) {}
 
     http_response response_;
 };
@@ -1658,8 +1569,7 @@ private:
 // No separate outcome discriminator is needed.
 class response_stream_dispatch_result final {
 public:
-    [[nodiscard]] static response_stream_dispatch_result make_completed(
-        http_status_code status) noexcept {
+    [[nodiscard]] static response_stream_dispatch_result make_completed(http_status_code status) noexcept {
         return response_stream_dispatch_result(response_stream_completed(status));
     }
 
@@ -1671,19 +1581,15 @@ public:
         return response_stream_dispatch_result(response_stream_aborted_after_commit(status));
     }
 
-    [[nodiscard]] static response_stream_dispatch_result make_failed_after_commit(
-        http_status_code status, std::exception_ptr exception) noexcept {
-        return response_stream_dispatch_result(
-            response_stream_failed_after_commit(status, std::move(exception)));
+    [[nodiscard]] static response_stream_dispatch_result make_failed_after_commit(http_status_code status, std::exception_ptr exception) noexcept {
+        return response_stream_dispatch_result(response_stream_failed_after_commit(status, std::move(exception)));
     }
 
-    [[nodiscard]] static response_stream_dispatch_result make_route_response(
-        http_response response) noexcept {
+    [[nodiscard]] static response_stream_dispatch_result make_route_response(http_response response) noexcept {
         return response_stream_dispatch_result(response_stream_route_response(std::move(response)));
     }
 
-    [[nodiscard]] static response_stream_dispatch_result make_recovered_failure(
-        http_response response) noexcept {
+    [[nodiscard]] static response_stream_dispatch_result make_recovered_failure(http_response response) noexcept {
         return response_stream_dispatch_result(response_stream_recovered_failure(std::move(response)));
     }
 
@@ -1731,13 +1637,11 @@ public:
     }
 
 private:
-    using value_type = std::variant<response_stream_completed, response_stream_aborted_before_commit,
-        response_stream_aborted_after_commit, response_stream_failed_after_commit,
-        response_stream_route_response, response_stream_recovered_failure>;
+    using value_type = std::variant<response_stream_completed, response_stream_aborted_before_commit, response_stream_aborted_after_commit, response_stream_failed_after_commit, response_stream_route_response, response_stream_recovered_failure>;
 
     template <typename alternative_type>
-    explicit response_stream_dispatch_result(alternative_type alternative) noexcept
-        : value_(std::move(alternative)) {}
+    explicit response_stream_dispatch_result(alternative_type alternative) noexcept :
+        value_(std::move(alternative)) {}
 
     value_type value_;
 };
@@ -1757,28 +1661,23 @@ struct response_stream_no_peer_abort final {
 // Drives a response-stream route over an already-constructed sink. Connection
 // persistence remains a transport concern when a buffered response is returned.
 template <typename sink, typename peer_aborted_type = response_stream_no_peer_abort>
-task<response_stream_dispatch_result> dispatch_response_stream_with(sink& sink_value, const route_table& routes_value,
-    const http_request& request, const resolved_route& route,
-    const context_services& services, peer_aborted_type peer_aborted = {}) {
+task<response_stream_dispatch_result> dispatch_response_stream_with(sink& sink_value, const route_table& routes_value, const http_request& request, const resolved_route& route, const context_services& services, peer_aborted_type peer_aborted = {}) {
     auto response_stream = make_response_stream_writer(sink_value);
 
     std::exception_ptr exception;
     try {
-        auto result_value = co_await routes_value.dispatch_response_stream(
-            request, route, response_stream, services);
+        auto result_value = co_await routes_value.dispatch_response_stream(request, route, response_stream, services);
         if (services.connection_aborted() || services.request_reset() || peer_aborted()) {
             if (!sink_value.committed()) {
                 co_return response_stream_dispatch_result::make_aborted_before_commit();
             }
-            co_return response_stream_dispatch_result::make_aborted_after_commit(
-                committed_response_stream_status(sink_value));
+            co_return response_stream_dispatch_result::make_aborted_after_commit(committed_response_stream_status(sink_value));
         }
         if (!result_value.has_value()) {
             if (!sink_value.committed()) {
                 throw std::logic_error("handled response stream has no committed protocol plan");
             }
-            co_return response_stream_dispatch_result::make_completed(
-                committed_response_stream_status(sink_value));
+            co_return response_stream_dispatch_result::make_completed(committed_response_stream_status(sink_value));
         }
         if (sink_value.committed()) {
             throw std::logic_error("buffered stream result followed a committed response head");
@@ -1789,18 +1688,14 @@ task<response_stream_dispatch_result> dispatch_response_stream_with(sink& sink_v
             if (!sink_value.committed()) {
                 co_return response_stream_dispatch_result::make_aborted_before_commit();
             }
-            co_return response_stream_dispatch_result::make_aborted_after_commit(
-                committed_response_stream_status(sink_value));
+            co_return response_stream_dispatch_result::make_aborted_after_commit(committed_response_stream_status(sink_value));
         }
         exception = std::current_exception();
     } catch (...) {
         exception = std::current_exception();
     }
     if (services.connection_aborted() || services.request_reset()) {
-        auto result = sink_value.committed()
-                          ? response_stream_dispatch_result::make_aborted_after_commit(
-                                committed_response_stream_status(sink_value))
-                          : response_stream_dispatch_result::make_aborted_before_commit();
+        auto result = sink_value.committed() ? response_stream_dispatch_result::make_aborted_after_commit(committed_response_stream_status(sink_value)) : response_stream_dispatch_result::make_aborted_before_commit();
         // The transport is already closed, but a real callback failure still
         // belongs to its configured outlet. Snapshot before invoking user code.
         const auto failure = services.connection_failure();
@@ -1813,8 +1708,7 @@ task<response_stream_dispatch_result> dispatch_response_stream_with(sink& sink_v
         // Past the point of no return: the status cannot be changed and no
         // error body can be appended, so the exception is handed to the
         // transport rather than dropped with the connection.
-        co_return response_stream_dispatch_result::make_failed_after_commit(
-            committed_response_stream_status(sink_value), std::move(exception));
+        co_return response_stream_dispatch_result::make_failed_after_commit(committed_response_stream_status(sink_value), std::move(exception));
     }
     auto response = co_await routes_value.handle_exception(request, exception, services);
     co_return response_stream_dispatch_result::make_recovered_failure(std::move(response));
@@ -1848,8 +1742,7 @@ class route_entry;
 // upgrade route built. `accept` commits the success head and establishes the
 // tunnel; a refusal writes through the protocol's ordinary response stream,
 // which the upgrade driver must bind before dispatching this context.
-[[nodiscard]] task<void> serve_request_stream_tunnel(context& context_value, const request_stream_tunnel_accept& accept,
-    const request_stream_websocket_accept* accept_websocket = nullptr);
+[[nodiscard]] task<void> serve_request_stream_tunnel(context& context_value, const request_stream_tunnel_accept& accept, const request_stream_websocket_accept* accept_websocket = nullptr);
 
 }  // namespace ruvia::detail
 
@@ -1864,15 +1757,12 @@ namespace ruvia::detail {
 // follows. Any other status is written alone. `head` is the complete encoded
 // final head; it must stay valid until the returned task completes.
 template <typename stream_type>
-[[nodiscard]] task<std::error_code> write_http1_upgrade_response_head(stream_type& stream,
-    const http_request_expectations& expectations, http_status_code status, std::string_view head,
-    connection_scanner::entry& scanner_entry) {
+[[nodiscard]] task<std::error_code> write_http1_upgrade_response_head(stream_type& stream, const http_request_expectations& expectations, http_status_code status, std::string_view head, connection_scanner::entry& scanner_entry) {
     constexpr std::size_t continue_head_capacity = 64;
     std::array<char, continue_head_capacity> continue_bytes;
     std::string_view continue_head;
     if (status == http_status::switching_protocols && expectations.continue_before_switching_protocols()) {
-        const auto prepared = prepare_http1_interim_response_head(
-            http_interim_response_head(http_status::continue_value), std::span<char>(continue_bytes));
+        const auto prepared = prepare_http1_interim_response_head(http_interim_response_head(http_status::continue_value), std::span<char>(continue_bytes));
         const auto* prepared_head = std::get_if<prepared_http1_interim_response>(&prepared);
         if (prepared_head == nullptr) {
             throw std::logic_error("cannot prepare HTTP/1 100 Continue head");
@@ -1890,8 +1780,7 @@ template <typename stream_type>
 // The context retains header storage through handshake construction. The
 // protocol plan copies the views before this temporary pointer table is freed.
 [[nodiscard]] inline inline_http_header_views<> websocket_response_headers(context& context_value) {
-    return inline_http_header_views<>(
-        context_access::handshake_headers(context_value));
+    return inline_http_header_views<>(context_access::handshake_headers(context_value));
 }
 
 // Flush the exact HTTP-owned 101 handshake prepared by the route. Negotiation is
@@ -1899,14 +1788,12 @@ template <typename stream_type>
 // The shared HTTP/1 upgrade-head writer applies the request `expectations`
 // (100 Continue before 101, RFC 9110 section 7.8).
 template <typename stream_type>
-task<std::error_code> write_websocket_handshake(stream_type& stream,
-    const websocket_server_handshake& handshake, const http_request_expectations& expectations, connection_scanner::entry& scanner_entry) {
+task<std::error_code> write_websocket_handshake(stream_type& stream, const websocket_server_handshake& handshake, const http_request_expectations& expectations, connection_scanner::entry& scanner_entry) {
     http_response_head_buffer head;
     handshake.for_each_response_part([&](std::string_view part) {
         head.append(part);
     });
-    co_return co_await write_http1_upgrade_response_head(
-        stream, expectations, http_status::switching_protocols, head.view(), scanner_entry);
+    co_return co_await write_http1_upgrade_response_head(stream, expectations, http_status::switching_protocols, head.view(), scanner_entry);
 }
 
 }  // namespace ruvia::detail
@@ -1920,9 +1807,7 @@ task<std::error_code> write_websocket_handshake(stream_type& stream,
 
 namespace ruvia::detail {
 
-[[nodiscard]] inline websocket_connection_options make_websocket_session_connection_options(
-    const http_server_options& options, websocket_compression negotiated,
-    const websocket_deflate_config& deflate, protocol_byte_limit receive_limit) noexcept {
+[[nodiscard]] inline websocket_connection_options make_websocket_session_connection_options(const http_server_options& options, websocket_compression negotiated, const websocket_deflate_config& deflate, protocol_byte_limit receive_limit) noexcept {
     // Directions without context takeover borrow the worker's codecs, which
     // outlive every connection, so they allocate no codec state here.
     return websocket_connection_options{
@@ -1934,8 +1819,7 @@ namespace ruvia::detail {
 }
 
 // Selects the refusal response the server sends after the callback returns.
-[[nodiscard]] inline websocket_rejection reject_request_stream_websocket(
-    context& context_value, const websocket_handshake_failure& failure) {
+[[nodiscard]] inline websocket_rejection reject_request_stream_websocket(context& context_value, const websocket_handshake_failure& failure) {
     const auto error = failure.protocol_error();
     auto response = context_value.error(copy_http_protocol_error_info(error));
     failure.apply_required_response_headers(response);
@@ -1955,8 +1839,7 @@ struct websocket_accept_access final {
 
 // `datagrams` is the route's http_tunnel_route_config::datagrams_, which
 // CONNECT-UDP (`udp`) always sets.
-[[nodiscard]] inline http_response prepare_tunnel_upgrade_response_head(
-    context& context_value, http_protocol_version version, bool udp, bool datagrams) {
+[[nodiscard]] inline http_response prepare_tunnel_upgrade_response_head(context& context_value, http_protocol_version version, bool udp, bool datagrams) {
     auto head_response = context_access::streaming_head(context_value);
     if (udp) {
         auto negotiated = prepare_http_connect_udp_response(std::move(head_response), version);
@@ -1980,10 +1863,7 @@ struct websocket_accept_access final {
 // Returns a buffered response only when the application answered without
 // upgrading; an established or abandoned upgrade returns std::nullopt.
 template <typename session_type, typename establish_type, typename finish_type>
-[[nodiscard]] task<std::optional<http_response>> run_http_upgrade_route(
-    const route_table& routes, const http_request& request, const resolved_route& resolved,
-    const context_services& services, std::optional<session_type>& session, establish_type& establish,
-    finish_type& finish) {
+[[nodiscard]] task<std::optional<http_response>> run_http_upgrade_route(const route_table& routes, const http_request& request, const resolved_route& resolved, const context_services& services, std::optional<session_type>& session, establish_type& establish, finish_type& finish) {
     const auto terminal = callback_access::bind<task<void>(context&)>(establish);
     std::optional<http_response> buffered;
     std::exception_ptr failure;
@@ -2008,10 +1888,9 @@ public:
     static constexpr bool native_stream = websocket_session_connection<stream_type>::native_stream;
     using stream_argument_type = typename websocket_session_connection<stream_type>::stream_argument_type;
 
-    websocket_upgrade_commit(stream_argument_type stream, websocket_compression compression,
-        std::string_view subprotocol)
-        : stream_(hold_stream(std::forward<stream_argument_type>(stream))),
-          compression_(compression) {
+    websocket_upgrade_commit(stream_argument_type stream, websocket_compression compression, std::string_view subprotocol) :
+        stream_(hold_stream(std::forward<stream_argument_type>(stream))),
+        compression_(compression) {
         try {
             subprotocol_.assign(subprotocol);
         } catch (...) {
@@ -2087,8 +1966,8 @@ struct tunnel_upgrade_session_operation final {
     http_tunnel_route_config config_{endpoint_.config()};
     std::optional<websocket_session_connection<transport_type>> websocket_session_{};
     struct websocket_borrow final {
-        explicit websocket_borrow(websocket_session_connection<transport_type>& connection)
-            : value_(make_websocket_facade(connection)) {}
+        explicit websocket_borrow(websocket_session_connection<transport_type>& connection) :
+            value_(make_websocket_facade(connection)) {}
         websocket value_;
     };
     std::optional<websocket_borrow> websocket_{};
@@ -2096,8 +1975,7 @@ struct tunnel_upgrade_session_operation final {
     // Commits the upgrade head the context's draft describes and opens the
     // session over the transport that head hands over.
     [[nodiscard]] task<void> establish(context& context_value) {
-        auto head_response = prepare_tunnel_upgrade_response_head(
-            context_value, request_.protocol_version(), udp_, config_.datagrams_);
+        auto head_response = prepare_tunnel_upgrade_response_head(context_value, request_.protocol_version(), udp_, config_.datagrams_);
         std::optional<transport_type> transport;
         if constexpr (requires { commit_upgrade_(context_value, head_response).operator co_await(); }) {
             transport.emplace(co_await commit_upgrade_(context_value, head_response));
@@ -2105,8 +1983,7 @@ struct tunnel_upgrade_session_operation final {
             transport.emplace(commit_upgrade_(context_value, head_response));
         }
         try {
-            session_.emplace(std::move(*transport), services_.worker(), &inbound_,
-                config_.datagrams_, pending_);
+            session_.emplace(std::move(*transport), services_.worker(), &inbound_, config_.datagrams_, pending_);
         } catch (...) {
             transport->abort();
             throw;
@@ -2117,15 +1994,13 @@ struct tunnel_upgrade_session_operation final {
     }
 
     [[nodiscard]] task<http_tunnel*> accept_request_stream_tunnel(context& context_value, http_tunnel_route_config config) {
-        config_ = route_endpoint::validate_tunnel_config(
-            !request_.protocol().empty() || request_.known_method() != http_known_method::connect, udp_, config);
+        config_ = route_endpoint::validate_tunnel_config(!request_.protocol().empty() || request_.known_method() != http_known_method::connect, udp_, config);
         co_await establish(context_value);
         scanner_entry_.enter_long_lived();
         co_return &session_->tunnel();
     }
 
-    [[nodiscard]] task<websocket_accept_result> accept_request_stream_websocket(
-        context& context_value, const websocket_route_endpoint& websocket_endpoint) {
+    [[nodiscard]] task<websocket_accept_result> accept_request_stream_websocket(context& context_value, const websocket_route_endpoint& websocket_endpoint) {
         const auto headers = websocket_response_headers(context_value);
         auto attempt = co_await commit_websocket_(context_value, websocket_endpoint, headers);
         if (const auto* rejection = std::get_if<websocket_rejection>(&attempt)) {
@@ -2133,13 +2008,7 @@ struct tunnel_upgrade_session_operation final {
         }
         auto* committed = std::get_if<websocket_upgrade_commit<transport_type>>(&attempt);
         try {
-            websocket_session_.emplace(committed->release_stream(), services_.worker(), scanner_entry_,
-                websocket_endpoint.lifecycle(),
-                protocol_byte_limit::limited(options_.server_.max_websocket_message_bytes_),
-                pending_,
-                make_websocket_session_connection_options(options_, committed->compression(), websocket_endpoint.deflate(),
-                    websocket_endpoint.message_limit(options_.server_.max_websocket_message_bytes_)),
-                committed->release_subprotocol(), &inbound_);
+            websocket_session_.emplace(committed->release_stream(), services_.worker(), scanner_entry_, websocket_endpoint.lifecycle(), protocol_byte_limit::limited(options_.server_.max_websocket_message_bytes_), pending_, make_websocket_session_connection_options(options_, committed->compression(), websocket_endpoint.deflate(), websocket_endpoint.message_limit(options_.server_.max_websocket_message_bytes_)), committed->release_subprotocol(), &inbound_);
         } catch (...) {
             committed->abort();
             throw;
@@ -2158,8 +2027,7 @@ struct tunnel_upgrade_session_operation final {
             auto accept_websocket = [this, &context_value](const websocket_route_endpoint& endpoint) {
                 return accept_request_stream_websocket(context_value, endpoint);
             };
-            const auto websocket_accept_ref =
-                callback_access::bind<task<websocket_accept_result>(const websocket_route_endpoint&)>(accept_websocket);
+            const auto websocket_accept_ref = callback_access::bind<task<websocket_accept_result>(const websocket_route_endpoint&)>(accept_websocket);
             std::exception_ptr failure;
             try {
                 co_await serve_request_stream_tunnel(context_value, accept_ref, &websocket_accept_ref);
@@ -2170,30 +2038,23 @@ struct tunnel_upgrade_session_operation final {
             // exactly as the route handler's stack facade does.
             websocket_.reset();
             if (websocket_session_) {
-                co_await finish_websocket_session(*websocket_session_, failure,
-                    options_.connection_failure_, services_.remote_address());
+                co_await finish_websocket_session(*websocket_session_, failure, options_.connection_failure_, services_.remote_address());
             } else if (failure) {
                 std::rethrow_exception(failure);
             }
             co_return;
         }
         co_await establish(context_value);
-        co_await invoke_tunnel_handler(
-            *session_, scanner_entry_, resolved_.stream_handler(), context_value);
+        co_await invoke_tunnel_handler(*session_, scanner_entry_, resolved_.stream_handler(), context_value);
     }
 
     [[nodiscard]] task<void> operator()(session_type& session_value, std::exception_ptr failure) const {
-        return finish_tunnel_session(session_value, std::move(failure),
-            options_.connection_failure_, services_.remote_address(),
-            scanner_entry_, config_.peer_transport_fin_timeout_);
+        return finish_tunnel_session(session_value, std::move(failure), options_.connection_failure_, services_.remote_address(), scanner_entry_, config_.peer_transport_fin_timeout_);
     }
 };
 
 template <typename transport_type, typename commit_upgrade_type, typename commit_websocket_type>
-[[nodiscard]] task<std::optional<http_response>> execute_tunnel_upgrade_session(
-    const route_table& routes, const http_request& request, const resolved_route& resolved, const context_services& services, const http_server_options& options,
-    connection_scanner::entry& scanner_entry, inbound_buffer_account& inbound, bool udp,
-    std::string_view pending, commit_upgrade_type commit_upgrade, commit_websocket_type commit_websocket) {
+[[nodiscard]] task<std::optional<http_response>> execute_tunnel_upgrade_session(const route_table& routes, const http_request& request, const resolved_route& resolved, const context_services& services, const http_server_options& options, connection_scanner::entry& scanner_entry, inbound_buffer_account& inbound, bool udp, std::string_view pending, commit_upgrade_type commit_upgrade, commit_websocket_type commit_websocket) {
     const auto& endpoint = *resolved.route().endpoint().tunnel();
     using operation_type = tunnel_upgrade_session_operation<transport_type, commit_upgrade_type, commit_websocket_type>;
     std::optional<typename operation_type::session_type> session;
@@ -2211,8 +2072,7 @@ template <typename transport_type, typename commit_upgrade_type, typename commit
         .commit_websocket_ = commit_websocket,
         .session_ = session,
     };
-    co_return co_await run_http_upgrade_route(
-        routes, request, resolved, services, session, operation, operation);
+    co_return co_await run_http_upgrade_route(routes, request, resolved, services, session, operation, operation);
 }
 
 template <typename stream_type, typename commit_upgrade_type>
@@ -2238,33 +2098,21 @@ struct websocket_upgrade_session_operation final {
             committed.emplace(commit_upgrade_(context_value, response_headers_value));
         }
         try {
-            session_.emplace(committed->release_stream(), services_.worker(), scanner_entry_,
-                websocket_endpoint_.lifecycle(),
-                protocol_byte_limit::limited(options_.server_.max_websocket_message_bytes_),
-                pending_frames_,
-                make_websocket_session_connection_options(
-                    options_, committed->compression(), websocket_endpoint_.deflate(),
-                    websocket_endpoint_.message_limit(options_.server_.max_websocket_message_bytes_)),
-                committed->release_subprotocol(), &inbound_);
+            session_.emplace(committed->release_stream(), services_.worker(), scanner_entry_, websocket_endpoint_.lifecycle(), protocol_byte_limit::limited(options_.server_.max_websocket_message_bytes_), pending_frames_, make_websocket_session_connection_options(options_, committed->compression(), websocket_endpoint_.deflate(), websocket_endpoint_.message_limit(options_.server_.max_websocket_message_bytes_)), committed->release_subprotocol(), &inbound_);
         } catch (...) {
             committed->abort();
             throw;
         }
-        co_await invoke_websocket_handler(
-            *session_, scanner_entry_, resolved_.stream_handler(), context_value);
+        co_await invoke_websocket_handler(*session_, scanner_entry_, resolved_.stream_handler(), context_value);
     }
 
     [[nodiscard]] task<void> operator()(session_type& session_value, std::exception_ptr failure) const {
-        return finish_websocket_session(session_value, std::move(failure),
-            options_.connection_failure_, services_.remote_address());
+        return finish_websocket_session(session_value, std::move(failure), options_.connection_failure_, services_.remote_address());
     }
 };
 
 template <typename stream_type, typename commit_upgrade_type>
-[[nodiscard]] task<std::optional<http_response>> execute_websocket_upgrade_session(
-    const route_table& routes, const http_request& request, const resolved_route& resolved, const context_services& services, const http_server_options& options,
-    connection_scanner::entry& scanner_entry, inbound_buffer_account& inbound,
-    std::string_view pending_frames, commit_upgrade_type commit_upgrade) {
+[[nodiscard]] task<std::optional<http_response>> execute_websocket_upgrade_session(const route_table& routes, const http_request& request, const resolved_route& resolved, const context_services& services, const http_server_options& options, connection_scanner::entry& scanner_entry, inbound_buffer_account& inbound, std::string_view pending_frames, commit_upgrade_type commit_upgrade) {
     const auto& websocket_endpoint = *resolved.route().endpoint().websocket();
     using operation_type = websocket_upgrade_session_operation<stream_type, commit_upgrade_type>;
     std::optional<typename operation_type::session_type> session;
@@ -2279,8 +2127,7 @@ template <typename stream_type, typename commit_upgrade_type>
         .commit_upgrade_ = commit_upgrade,
         .session_ = session,
     };
-    co_return co_await run_http_upgrade_route(
-        routes, request, resolved, services, session, operation, operation);
+    co_return co_await run_http_upgrade_route(routes, request, resolved, services, session, operation, operation);
 }
 
 }  // namespace ruvia::detail
@@ -2302,8 +2149,7 @@ public:
     }
 
     [[nodiscard]] bool aborted() const noexcept {
-        return std::holds_alternative<aborted_before_commit_type>(state_) ||
-               std::holds_alternative<aborted_after_commit_type>(state_);
+        return std::holds_alternative<aborted_before_commit_type>(state_) || std::holds_alternative<aborted_after_commit_type>(state_);
     }
 
     [[nodiscard]] const http_response_stream_commit_plan* commit_plan() const& noexcept {
@@ -2421,22 +2267,22 @@ private:
     struct detached_type final {};
 
     struct bound_type final {
-        explicit bound_type(context* bound_context) noexcept
-            : context_(bound_context) {}
+        explicit bound_type(context* bound_context) noexcept :
+            context_(bound_context) {}
 
         context* context_;
     };
 
     struct body_open_type final {
-        explicit body_open_type(http_response_stream_commit_plan commit_plan) noexcept
-            : plan_(commit_plan) {}
+        explicit body_open_type(http_response_stream_commit_plan commit_plan) noexcept :
+            plan_(commit_plan) {}
 
         http_response_stream_commit_plan plan_;
     };
 
     struct ended_type final {
-        explicit ended_type(http_response_stream_commit_plan commit_plan) noexcept
-            : plan_(commit_plan) {}
+        explicit ended_type(http_response_stream_commit_plan commit_plan) noexcept :
+            plan_(commit_plan) {}
 
         http_response_stream_commit_plan plan_;
     };
@@ -2444,14 +2290,13 @@ private:
     struct aborted_before_commit_type final {};
 
     struct aborted_after_commit_type final {
-        explicit aborted_after_commit_type(http_response_stream_commit_plan commit_plan) noexcept
-            : plan_(commit_plan) {}
+        explicit aborted_after_commit_type(http_response_stream_commit_plan commit_plan) noexcept :
+            plan_(commit_plan) {}
 
         http_response_stream_commit_plan plan_;
     };
 
-    using state_type = std::variant<unbound_type, bound_type, detached_type, body_open_type, ended_type,
-        aborted_before_commit_type, aborted_after_commit_type>;
+    using state_type = std::variant<unbound_type, bound_type, detached_type, body_open_type, ended_type, aborted_before_commit_type, aborted_after_commit_type>;
 
     state_type state_;
 };
@@ -2475,13 +2320,11 @@ public:
 
     // `compression` is the server's compression policy, or nullptr when the
     // server compresses nothing.
-    http_streaming_response_compression(worker_codecs& codecs,
-        http_response_coding_selection selection, const compression_config* compression) noexcept
-        : codecs_(codecs),
-          selection_(selection),
-          compression_(compression) {}
-    http_streaming_response_compression(worker_codecs&&,
-        http_response_coding_selection, const compression_config*) = delete;
+    http_streaming_response_compression(worker_codecs& codecs, http_response_coding_selection selection, const compression_config* compression) noexcept :
+        codecs_(codecs),
+        selection_(selection),
+        compression_(compression) {}
+    http_streaming_response_compression(worker_codecs&&, http_response_coding_selection, const compression_config*) = delete;
 
     http_streaming_response_compression(const http_streaming_response_compression&) = delete;
     http_streaming_response_compression& operator=(const http_streaming_response_compression&) = delete;
@@ -2497,10 +2340,7 @@ public:
             throw std::logic_error("streaming response compression is already prepared");
         }
         const auto request_method = request.known_method();
-        const auto decision = prepare_response_compression(selection_, request_method, response,
-            http_response_compression_source::stream,
-            compression_ != nullptr ? http_response_coding_availability::identity_and_compression
-                                    : http_response_coding_availability::identity_only);
+        const auto decision = prepare_response_compression(selection_, request_method, response, http_response_compression_source::stream, compression_ != nullptr ? http_response_coding_availability::identity_and_compression : http_response_coding_availability::identity_only);
         if (decision != http_response_compression_decision::encode || !stream_length_allows_encoding(response)) {
             if (http_response_coding_fallback_forbidden(selection_, request_method, response, &request)) {
                 throw http_error(http_not_acceptable_coding_error());
@@ -2605,8 +2445,8 @@ private:
     struct failed_type final {};
 
     struct active_type final {
-        explicit active_type(stream_encoder_lease lease) noexcept
-            : lease_(std::move(lease)) {}
+        explicit active_type(stream_encoder_lease lease) noexcept :
+            lease_(std::move(lease)) {}
 
         stream_encoder_lease lease_;
     };
@@ -2658,8 +2498,7 @@ namespace ruvia::detail {
 
 // Inactivity belongs to the connection; request bodies and output waits have
 // independent per-stream deadlines.
-[[nodiscard]] inline connection_scanner::phase multiplexed_inactivity_phase(bool peer_settings_received,
-    bool header_block_in_progress, bool stream_active, bool tunnel_active) noexcept {
+[[nodiscard]] inline connection_scanner::phase multiplexed_inactivity_phase(bool peer_settings_received, bool header_block_in_progress, bool stream_active, bool tunnel_active) noexcept {
     if (!peer_settings_received || header_block_in_progress) {
         return connection_scanner::phase::reading_initial;
     }
@@ -2682,12 +2521,8 @@ public:
     void close() noexcept {
         open_ = false;
     }
-    [[nodiscard]] bool overdue(std::int64_t now_ms,
-        const std::optional<timeout_duration>& inactivity,
-        const std::optional<timeout_duration>& completion) const noexcept {
-        return open_ &&
-               ((inactivity.has_value() && now_ms - progress_ms_ >= inactivity->value().count()) ||
-                   (completion.has_value() && now_ms - opened_ms_ >= completion->value().count()));
+    [[nodiscard]] bool overdue(std::int64_t now_ms, const std::optional<timeout_duration>& inactivity, const std::optional<timeout_duration>& completion) const noexcept {
+        return open_ && ((inactivity.has_value() && now_ms - progress_ms_ >= inactivity->value().count()) || (completion.has_value() && now_ms - opened_ms_ >= completion->value().count()));
     }
 
 private:
@@ -2717,16 +2552,14 @@ public:
     }
 
     template <typename duration_type, typename expired_type, typename failure_type>
-    void arm(const worker_ref& worker_value, duration_type bound,
-        expired_type on_expired, failure_type on_failure) noexcept {
+    void arm(const worker_ref& worker_value, duration_type bound, expired_type on_expired, failure_type on_failure) noexcept {
         try {
-            const auto status = worker_value.schedule_timer(timer_,
-                deadline_after(bound), [on_expired](worker_timer_outcome outcome) {
-                    // Cancellation belongs to worker shutdown, which closes the session.
-                    if (outcome == worker_timer_outcome::expired) {
-                        on_expired();
-                    }
-                });
+            const auto status = worker_value.schedule_timer(timer_, deadline_after(bound), [on_expired](worker_timer_outcome outcome) {
+                // Cancellation belongs to worker shutdown, which closes the session.
+                if (outcome == worker_timer_outcome::expired) {
+                    on_expired();
+                }
+            });
             if (status == worker_timer_schedule_status::worker_stopping) {
                 on_expired();
             }
@@ -2793,8 +2626,8 @@ class multiplexed_stream_signal final {
 public:
     class output_wait_guard final {
     public:
-        explicit output_wait_guard(multiplexed_stream_signal& signal) noexcept
-            : signal_(signal) {
+        explicit output_wait_guard(multiplexed_stream_signal& signal) noexcept :
+            signal_(signal) {
             signal_.set_waiting_output(true);
         }
         ~output_wait_guard() noexcept {
@@ -2807,9 +2640,9 @@ public:
         multiplexed_stream_signal& signal_;
     };
 
-    multiplexed_stream_signal(const worker_ref& worker_value, multiplexed_session_termination& termination)
-        : signal_(worker_value),
-          termination_(termination) {}
+    multiplexed_stream_signal(const worker_ref& worker_value, multiplexed_session_termination& termination) :
+        signal_(worker_value),
+        termination_(termination) {}
     multiplexed_stream_signal(worker_ref&&, multiplexed_session_termination&) = delete;
 
     void wake() noexcept {
@@ -2913,8 +2746,8 @@ class multiplexed_file_read_limiter final {
 public:
     class slot final {
     public:
-        slot(slot&& other) noexcept
-            : owner_(std::exchange(other.owner_, nullptr)) {}
+        slot(slot&& other) noexcept :
+            owner_(std::exchange(other.owner_, nullptr)) {}
         ~slot() noexcept {
             if (owner_ != nullptr) {
                 auto* const owner = std::exchange(owner_, nullptr);
@@ -2930,16 +2763,15 @@ public:
     private:
         friend class multiplexed_file_read_limiter;
 
-        explicit slot(multiplexed_file_read_limiter& owner) noexcept
-            : owner_(&owner) {}
+        explicit slot(multiplexed_file_read_limiter& owner) noexcept :
+            owner_(&owner) {}
 
         multiplexed_file_read_limiter* owner_;
     };
 
-    explicit multiplexed_file_read_limiter(
-        const worker_ref& worker_value, std::size_t max_slots = multiplexed_file_read_slots) noexcept
-        : released_(worker_value),
-          max_slots_(max_slots) {}
+    explicit multiplexed_file_read_limiter(const worker_ref& worker_value, std::size_t max_slots = multiplexed_file_read_slots) noexcept :
+        released_(worker_value),
+        max_slots_(max_slots) {}
     multiplexed_file_read_limiter(worker_ref&&, std::size_t = multiplexed_file_read_slots) = delete;
     multiplexed_file_read_limiter(const multiplexed_file_read_limiter&) = delete;
     multiplexed_file_read_limiter& operator=(const multiplexed_file_read_limiter&) = delete;
@@ -2958,9 +2790,7 @@ public:
     }
 
     template <typename stream_ended_predicate>
-    [[nodiscard]] task<std::optional<multiplexed_buffered_response_write_result>> open_file_body(
-        std::optional<response_file_source>& source, const http_response& response,
-        const response_file_io& file_io, stream_ended_predicate stream_ended) {
+    [[nodiscard]] task<std::optional<multiplexed_buffered_response_write_result>> open_file_body(std::optional<response_file_source>& source, const http_response& response, const response_file_io& file_io, stream_ended_predicate stream_ended) {
         source.emplace(response, file_io);
         bool opened = false;
         {
@@ -3036,8 +2866,9 @@ public:
         }
         if (compression_.active()) {
             try {
-                co_await compression_.write(
-                    chunk, [this](std::string_view encoded) { return write_encoded(encoded); });
+                co_await compression_.write(chunk, [this](std::string_view encoded) {
+                    return write_encoded(encoded);
+                });
             } catch (...) {
                 state_.mark_aborted();
                 throw;
@@ -3069,8 +2900,7 @@ public:
             throw inbound_transport_error(signal_.terminal_error(), derived_type::sleep_terminated_error_message);
         }
         if (derived().stream_aborted()) {
-            throw inbound_transport_error(
-                std::make_error_code(std::errc::connection_reset), derived_type::sleep_reset_error_message);
+            throw inbound_transport_error(std::make_error_code(std::errc::connection_reset), derived_type::sleep_reset_error_message);
         }
         co_return result;
     }
@@ -3122,14 +2952,12 @@ public:
     }
 
 protected:
-    multiplexed_response_stream_sink_base(stream_type& stream, multiplexed_stream_signal& signal, http_known_method request_method, worker_codecs& codecs,
-        http_response_coding_selection response_coding, const compression_config* compression,
-        const http_cors_policy* cors) noexcept
-        : stream_(stream),
-          signal_(signal),
-          request_method_(request_method),
-          cors_(cors),
-          compression_(codecs, response_coding, compression) {}
+    multiplexed_response_stream_sink_base(stream_type& stream, multiplexed_stream_signal& signal, http_known_method request_method, worker_codecs& codecs, http_response_coding_selection response_coding, const compression_config* compression, const http_cors_policy* cors) noexcept :
+        stream_(stream),
+        signal_(signal),
+        request_method_(request_method),
+        cors_(cors),
+        compression_(codecs, response_coding, compression) {}
 
     void throw_if_terminated() const {
         if (signal_.terminated()) {
@@ -3176,8 +3004,7 @@ private:
             auto response = co_await context_access::commit_streaming_head(state_.bound_context());
             validate_response_stream_status(context_access::request(state_.bound_context()), response);
             if (cors_ != nullptr) {
-                (void)cors_->apply_response_headers(
-                    context_access::request(state_.bound_context()), response);
+                (void)cors_->apply_response_headers(context_access::request(state_.bound_context()), response);
             }
             throw_if_terminated();
             throw_if_body_failed();
@@ -3210,8 +3037,7 @@ public:
     // An interrupted read leaves queued chunks and flow-control credit for the
     // next read.
     [[nodiscard]] task<std::optional<std::span<const std::byte>>> read(operation_options operation = {}) {
-        operation_interrupt interrupt(interrupts_, signal_.worker(), operation, &signal_, &wake_signal,
-            "request body read");
+        operation_interrupt interrupt(interrupts_, signal_.worker(), operation, &signal_, &wake_signal, "request body read");
         throw_if_body_failed();
         if (auto* continue_output = std::exchange(continue_output_, nullptr)) {
             co_await continue_output->send_continue();
@@ -3223,8 +3049,7 @@ public:
                 throw inbound_transport_error(signal_.terminal_error(), derived_type::terminated_error_message);
             }
             if (signal_.stopped() || derived().stream_aborted()) {
-                throw inbound_transport_error(
-                    std::make_error_code(std::errc::connection_reset), derived_type::reset_error_message);
+                throw inbound_transport_error(std::make_error_code(std::errc::connection_reset), derived_type::reset_error_message);
             }
             const auto chunk = derived().pop_chunk();
             if (!chunk.empty()) {
@@ -3238,10 +3063,9 @@ public:
     }
 
 protected:
-    multiplexed_request_body_reader_base(
-        multiplexed_stream_signal& signal, http_interim_response_output* continue_output) noexcept
-        : signal_(signal),
-          continue_output_(continue_output) {}
+    multiplexed_request_body_reader_base(multiplexed_stream_signal& signal, http_interim_response_output* continue_output) noexcept :
+        signal_(signal),
+        continue_output_(continue_output) {}
 
     multiplexed_stream_signal& signal_;
     http_interim_response_output* continue_output_;
@@ -3298,16 +3122,18 @@ public:
     }
 
 protected:
-    explicit multiplexed_tunnel_transport_base(multiplexed_stream_signal& signal) noexcept
-        : signal_(signal) {}
+    explicit multiplexed_tunnel_transport_base(multiplexed_stream_signal& signal) noexcept :
+        signal_(signal) {}
 
     // While assigned, a cancellation emitted on the slot wakes this stream's waits.
     class wake_assignment final {
     public:
-        wake_assignment(multiplexed_stream_signal& signal, asio::cancellation_slot slot)
-            : slot_(slot) {
+        wake_assignment(multiplexed_stream_signal& signal, asio::cancellation_slot slot) :
+            slot_(slot) {
             if (slot_.is_connected()) {
-                slot_.assign([&signal](asio::cancellation_type) noexcept { signal.wake(); });
+                slot_.assign([&signal](asio::cancellation_type) noexcept {
+                    signal.wake();
+                });
             }
         }
         ~wake_assignment() {
@@ -3335,37 +3161,30 @@ private:
 
 // `request_stream`: the connection's listener is a request stream one, whose
 // every request streams its body (a CONNECT is a tunnel request).
-[[nodiscard]] inline std::pair<route_resolution, request_body_mode> resolve_multiplexed_stream_route(
-    const route_table& routes, bool request_stream, std::string_view method_token, std::string_view target_path,
-    std::string_view authority, std::string_view protocol) noexcept {
+[[nodiscard]] inline std::pair<route_resolution, request_body_mode> resolve_multiplexed_stream_route(const route_table& routes, bool request_stream, std::string_view method_token, std::string_view target_path, std::string_view authority, std::string_view protocol) noexcept {
     const auto method = classify_http_method(method_token);
     if (request_stream) {
         return {resolve_request_stream_route(method == http_known_method::connect), request_body_mode::stream};
     }
     const auto path = target_path.substr(0, target_path.find('?'));
-    const auto extended_protocol = http_ascii_equals_ignore_case(protocol, "websocket")
-                                       ? std::string_view("websocket")
-                                       : protocol;
-    auto resolution = routes.resolve(route_request_view{
-        method, method_token, path, authority, extended_protocol});
+    const auto extended_protocol = http_ascii_equals_ignore_case(protocol, "websocket") ? std::string_view("websocket") : protocol;
+    auto resolution = routes.resolve(route_request_view{method, method_token, path, authority, extended_protocol});
     auto body_mode = request_body_mode::buffered;
     if (const auto* resolved = resolution.resolved()) {
         body_mode = resolved->route().endpoint().request_body_mode();
-        if ((method == http_known_method::connect && resolved->route().endpoint().websocket() != nullptr) ||
-            resolved->route().endpoint().tunnel() != nullptr) {
+        if ((method == http_known_method::connect && resolved->route().endpoint().websocket() != nullptr) || resolved->route().endpoint().tunnel() != nullptr) {
             body_mode = request_body_mode::stream;
         }
     }
     return {std::move(resolution), body_mode};
 }
 
-[[nodiscard]] inline task<http_response> respond_http_request_body_failure(const route_table& routes,
-    const http_request& request, http_request_body_failure failure,
-    const context_services& services, http_response_tail& tail) {
+[[nodiscard]] inline task<http_response> respond_http_request_body_failure(const route_table& routes, const http_request& request, http_request_body_failure failure, const context_services& services, http_response_tail& tail) {
     tail.disable_response_coding();
-    return respond_http_request_rejection(routes, request,
-        http_request_rejection::error(
-            [&] { const auto err = http_request_body_protocol_error(failure); return http_error_info({.status_ = err.status(), .code_ = err.code(), .message_ = std::string_view(err.what())}); }()),
+    return respond_http_request_rejection(routes, request, http_request_rejection::error([&] {
+        const auto err = http_request_body_protocol_error(failure);
+        return http_error_info({.status_ = err.status(), .code_ = err.code(), .message_ = std::string_view(err.what())});
+    }()),
         services);
 }
 
@@ -3373,11 +3192,7 @@ private:
 // stream already terminated (peer abort before commit or committed head), or
 // false when `response` holds a buffered route/recovered response to finish.
 template <typename reset_type>
-[[nodiscard]] inline bool complete_multiplexed_response_stream_dispatch(
-    response_stream_dispatch_result& result_value, bool request_body_failed,
-    const http_server_options& options, std::string_view remote_address,
-    http_response_tail& tail, http_response& response, bool& body_failure_handled,
-    reset_type&& reset_stream) {
+[[nodiscard]] inline bool complete_multiplexed_response_stream_dispatch(response_stream_dispatch_result& result_value, bool request_body_failed, const http_server_options& options, std::string_view remote_address, http_response_tail& tail, http_response& response, bool& body_failure_handled, reset_type&& reset_stream) {
     if (result_value.aborted_before_commit() != nullptr) {
         return true;
     }
@@ -3405,23 +3220,15 @@ template <typename reset_type>
 }
 
 template <typename stream_id_type, typename writer_type, typename reset_type>
-[[nodiscard]] task<void> finish_multiplexed_buffered_response(stream_id_type stream_id,
-    const std::optional<http_request_body_failure>& body_failure, bool body_failure_handled,
-    http_response& response, const http_request& request, const route_table& routes, const context_services& request_services,
-    const http_server_options& options, std::string_view remote_address,
-    http_response_tail& tail, writer_type& writer, reset_type reset_stream) {
+[[nodiscard]] task<void> finish_multiplexed_buffered_response(stream_id_type stream_id, const std::optional<http_request_body_failure>& body_failure, bool body_failure_handled, http_response& response, const http_request& request, const route_table& routes, const context_services& request_services, const http_server_options& options, std::string_view remote_address, http_response_tail& tail, writer_type& writer, reset_type reset_stream) {
     if (body_failure.has_value() && !body_failure_handled) {
         body_failure_handled = true;
-        response = co_await respond_http_request_body_failure(
-            routes, request, *body_failure, request_services, tail);
+        response = co_await respond_http_request_body_failure(routes, request, *body_failure, request_services, tail);
     }
-    auto preparation = co_await tail.prepare_or_finish(
-        response, options, routes, request_services);
+    auto preparation = co_await tail.prepare_or_finish(response, options, routes, request_services);
     if (body_failure.has_value() && !body_failure_handled) {
-        response = co_await respond_http_request_body_failure(
-            routes, request, *body_failure, request_services, tail);
-        preparation = co_await tail.prepare_or_finish(
-            response, options, routes, request_services);
+        response = co_await respond_http_request_body_failure(routes, request, *body_failure, request_services, tail);
+        preparation = co_await tail.prepare_or_finish(response, options, routes, request_services);
     }
     if (request_services.get_stop_token().stop_requested()) {
         reset_stream(true);
@@ -3433,10 +3240,8 @@ template <typename stream_id_type, typename writer_type, typename reset_type>
         // response instead of a reset.
         options.connection_failure_.invoke(remote_address, written.file_failure_->fault());
         tail.disable_response_coding();
-        response = co_await routes.handle_exception(
-            request, written.file_failure_->response_error(), request_services);
-        preparation = co_await tail.prepare_or_finish(
-            response, options, routes, request_services);
+        response = co_await routes.handle_exception(request, written.file_failure_->response_error(), request_services);
+        preparation = co_await tail.prepare_or_finish(response, options, routes, request_services);
         written = co_await writer.write(stream_id, response, preparation.write_plan_);
         if (written.file_failure_ && !written.committed_status_) {
             reset_stream(false);
@@ -3483,15 +3288,11 @@ inline constexpr std::uint32_t http3_cid_mix_prime_1 = 0x85ebca6bu;
 inline constexpr std::uint32_t http3_cid_mix_prime_2 = 0xc2b2ae35u;
 
 [[nodiscard]] constexpr std::uint16_t read_http3_be16(const std::uint8_t* bytes) noexcept {
-    return static_cast<std::uint16_t>((static_cast<std::uint16_t>(bytes[0]) << 8) |
-                                      static_cast<std::uint16_t>(bytes[1]));
+    return static_cast<std::uint16_t>((static_cast<std::uint16_t>(bytes[0]) << 8) | static_cast<std::uint16_t>(bytes[1]));
 }
 
 [[nodiscard]] constexpr std::uint32_t read_http3_be32(const std::uint8_t* bytes) noexcept {
-    return (static_cast<std::uint32_t>(bytes[0]) << 24) |
-           (static_cast<std::uint32_t>(bytes[1]) << 16) |
-           (static_cast<std::uint32_t>(bytes[2]) << 8) |
-           static_cast<std::uint32_t>(bytes[3]);
+    return (static_cast<std::uint32_t>(bytes[0]) << 24) | (static_cast<std::uint32_t>(bytes[1]) << 16) | (static_cast<std::uint32_t>(bytes[2]) << 8) | static_cast<std::uint32_t>(bytes[3]);
 }
 
 // A connection ID as a map key: up to NGTCP2_MAX_CIDLEN bytes.
@@ -3521,25 +3322,21 @@ struct http3_cid_key_hash final {
 
 // Fills `cid` with a fresh ID owned by `worker_index`. False when the CSPRNG
 // failed.
-[[nodiscard]] bool make_http3_connection_id(
-    const http3_secret& secret, std::size_t worker_index, ngtcp2_cid& cid) noexcept;
+[[nodiscard]] bool make_http3_connection_id(const http3_secret& secret, std::size_t worker_index, ngtcp2_cid& cid) noexcept;
 
 // The worker a destination connection ID names, or nullopt when it is not an
 // ID of this listener (wrong length, bad tag) or names no running worker.
-[[nodiscard]] std::optional<std::size_t> http3_connection_id_owner(
-    const http3_secret& secret, std::span<const std::uint8_t> cid, std::size_t worker_count) noexcept;
+[[nodiscard]] std::optional<std::size_t> http3_connection_id_owner(const http3_secret& secret, std::span<const std::uint8_t> cid, std::size_t worker_count) noexcept;
 // The worker that opens the connection whose client Initial carries the
 // client-chosen destination ID `cid`: a hash of it keyed by the listener
 // secret. Retransmissions of that Initial carry the same ID, so they reach
 // the same worker without per-connection acceptor state, and a client that
 // does not know the secret cannot choose its worker.
-[[nodiscard]] std::size_t http3_initial_worker(
-    const http3_secret& secret, std::span<const std::uint8_t> cid, std::size_t worker_count) noexcept;
+[[nodiscard]] std::size_t http3_initial_worker(const http3_secret& secret, std::span<const std::uint8_t> cid, std::size_t worker_count) noexcept;
 
 // The stateless reset token of `cid` (RFC 9000 §10.3.2), derived from the
 // listener secret so every worker computes the same token.
-[[nodiscard]] bool make_http3_stateless_reset_token(
-    const http3_secret& secret, const ngtcp2_cid& cid, http3_quic_stateless_reset_token& token) noexcept;
+[[nodiscard]] bool make_http3_stateless_reset_token(const http3_secret& secret, const ngtcp2_cid& cid, http3_quic_stateless_reset_token& token) noexcept;
 
 }  // namespace ruvia::detail
 
@@ -3553,9 +3350,23 @@ inline constexpr std::size_t http3_max_udp_payload_bytes = 65527;
 // errors of earlier sends (Windows reports them on later receives) and
 // truncation. The socket keeps receiving.
 [[nodiscard]] inline bool http3_ignorable_receive_error(const std::error_code& error) noexcept {
-    return error == asio::error::connection_refused || error == asio::error::connection_reset ||
-           error == asio::error::message_size || error == asio::error::network_unreachable ||
-           error == asio::error::host_unreachable;
+#if defined(_WIN32)
+    if (error.category() == asio::error::get_system_category()) {
+        switch (error.value()) {
+            case ERROR_PORT_UNREACHABLE:
+            case ERROR_HOST_UNREACHABLE:
+            case ERROR_NETWORK_UNREACHABLE:
+            case ERROR_CONNECTION_REFUSED:
+            case ERROR_NETNAME_DELETED:
+            case ERROR_MORE_DATA:
+            case WSAENETRESET:
+                return true;
+            default:
+                break;
+        }
+    }
+#endif
+    return error == asio::error::connection_refused || error == asio::error::connection_reset || error == asio::error::message_size || error == asio::error::network_unreachable || error == asio::error::host_unreachable;
 }
 
 }  // namespace ruvia::detail
@@ -3606,8 +3417,8 @@ public:
         }
         return http3_in_flight_token(&count);
     }
-    http3_in_flight_token(http3_in_flight_token&& other) noexcept
-        : count_(std::exchange(other.count_, nullptr)) {}
+    http3_in_flight_token(http3_in_flight_token&& other) noexcept :
+        count_(std::exchange(other.count_, nullptr)) {}
     http3_in_flight_token(const http3_in_flight_token&) = delete;
     http3_in_flight_token& operator=(const http3_in_flight_token&) = delete;
     http3_in_flight_token& operator=(http3_in_flight_token&&) = delete;
@@ -3622,8 +3433,8 @@ public:
     }
 
 private:
-    explicit http3_in_flight_token(std::atomic<std::size_t>* count) noexcept
-        : count_(count) {}
+    explicit http3_in_flight_token(std::atomic<std::size_t>* count) noexcept :
+        count_(count) {}
 
     std::atomic<std::size_t>* count_;
 };
@@ -3657,9 +3468,7 @@ public:
 
     // Worker-local endpoint registrations share packet routing across removed
     // and re-added listeners bound to the same UDP endpoint.
-    void register_endpoint(std::size_t worker_index, http3_endpoint& endpoint,
-        const asio::ip::udp::endpoint& local, std::shared_ptr<const http3_secret> secret,
-        std::size_t listener_index);
+    void register_endpoint(std::size_t worker_index, http3_endpoint& endpoint, const asio::ip::udp::endpoint& local, std::shared_ptr<const http3_secret> secret, std::size_t listener_index);
     void unregister_endpoint(std::size_t worker_index, http3_endpoint& endpoint) noexcept;
     [[nodiscard]] std::span<const http3_endpoint_registration> endpoints(std::size_t worker_index) const noexcept {
         return slots_[worker_index]->endpoints_;
@@ -3671,18 +3480,13 @@ public:
     // sockets, in that order already, when it holds them -- and attaches
     // SO_ATTACH_REUSEPORT_CBPF on Linux; each call assigns `worker_index`'s
     // socket to `socket`.
-    void open_listener_socket(std::size_t worker_index, std::size_t listener_index,
-        const asio::ip::udp::endpoint& configured_endpoint, const http3_secret& secret,
-        inherited_listener_sockets* inherited, asio::ip::udp::socket& socket, std::optional<bool> ipv6_only);
+    void open_listener_socket(std::size_t worker_index, std::size_t listener_index, const asio::ip::udp::endpoint& configured_endpoint, const http3_secret& secret, inherited_listener_sockets* inherited, asio::ip::udp::socket& socket, std::optional<bool> ipv6_only);
     // Closes the sockets of `listener_index` no worker claimed, for a listener
     // whose addition was rolled back.
     void close_unclaimed_listener_sockets(std::size_t listener_index) noexcept;
 #endif
     // Any thread. False when the datagram was dropped.
-    [[nodiscard]] bool hand_off(std::size_t owner, std::size_t listener_index,
-        std::span<const std::byte> bytes, const asio::ip::udp::endpoint& remote,
-        const asio::ip::udp::endpoint& local, std::uint32_t interface_index,
-        std::uint32_t ecn = 0) noexcept;
+    [[nodiscard]] bool hand_off(std::size_t owner, std::size_t listener_index, std::span<const std::byte> bytes, const asio::ip::udp::endpoint& remote, const asio::ip::udp::endpoint& local, std::uint32_t interface_index, std::uint32_t ecn = 0) noexcept;
 
 private:
     struct slot final {
@@ -3763,8 +3567,7 @@ public:
     // `listener_index` names this listener's endpoint on every worker (and in
     // the Windows acceptor), for datagrams handed between them. Its receive
     // loop and connections run in `tasks`, its listener's scope.
-    http3_endpoint(const http3_worker_services& services, http_server_session_config& session,
-        asio::ip::udp::endpoint endpoint, std::size_t listener_index, task_scope& tasks, connection_count& listener_connections);
+    http3_endpoint(const http3_worker_services& services, http_server_session_config& session, asio::ip::udp::endpoint endpoint, std::size_t listener_index, task_scope& tasks, connection_count& listener_connections);
     ~http3_endpoint();
     http3_endpoint(const http3_endpoint&) = delete;
     http3_endpoint& operator=(const http3_endpoint&) = delete;
@@ -3808,8 +3611,7 @@ public:
     // socket's send buffer is full (then wait with wait_writable()); on
     // Windows the datagram is queued to the acceptor, or lost when that
     // bounded queue is full (no_buffer_space).
-    [[nodiscard]] std::error_code send(const asio::ip::udp::endpoint& remote, std::span<const std::byte> bytes,
-        const asio::ip::udp::endpoint& local, std::uint32_t interface_index) noexcept;
+    [[nodiscard]] std::error_code send(const asio::ip::udp::endpoint& remote, std::span<const std::byte> bytes, const asio::ip::udp::endpoint& local, std::uint32_t interface_index) noexcept;
 #if !defined(_WIN32)
     // Completes once the socket can send again, or with the error that ended
     // waiting (the socket closed).
@@ -3827,18 +3629,12 @@ private:
     worker_signal activated_;
 #endif
     task<void> serve(session_pointer session);
-    void receive(std::span<const std::byte> bytes, const asio::ip::udp::endpoint& remote,
-        const asio::ip::udp::endpoint& local, std::uint32_t interface_index) noexcept;
-    void accept(std::span<const std::byte> bytes, const asio::ip::udp::endpoint& remote,
-        const asio::ip::udp::endpoint& local, std::uint32_t interface_index) noexcept;
-    void send_version_negotiation(const ngtcp2_version_cid& header, const asio::ip::udp::endpoint& remote,
-        const asio::ip::udp::endpoint& local, std::uint32_t interface_index) noexcept;
-    void send_retry(const ngtcp2_pkt_hd& header, const asio::ip::udp::endpoint& remote,
-        std::size_t max_packet_bytes, const asio::ip::udp::endpoint& local, std::uint32_t interface_index) noexcept;
-    void send_stateless_connection_close(const ngtcp2_pkt_hd& header, const asio::ip::udp::endpoint& remote,
-        std::uint64_t error_code, const asio::ip::udp::endpoint& local, std::uint32_t interface_index) noexcept;
-    void send_stateless_reset(std::span<const std::uint8_t> destination_cid, std::size_t trigger_bytes,
-        const asio::ip::udp::endpoint& remote, const asio::ip::udp::endpoint& local, std::uint32_t interface_index) noexcept;
+    void receive(std::span<const std::byte> bytes, const asio::ip::udp::endpoint& remote, const asio::ip::udp::endpoint& local, std::uint32_t interface_index) noexcept;
+    void accept(std::span<const std::byte> bytes, const asio::ip::udp::endpoint& remote, const asio::ip::udp::endpoint& local, std::uint32_t interface_index) noexcept;
+    void send_version_negotiation(const ngtcp2_version_cid& header, const asio::ip::udp::endpoint& remote, const asio::ip::udp::endpoint& local, std::uint32_t interface_index) noexcept;
+    void send_retry(const ngtcp2_pkt_hd& header, const asio::ip::udp::endpoint& remote, std::size_t max_packet_bytes, const asio::ip::udp::endpoint& local, std::uint32_t interface_index) noexcept;
+    void send_stateless_connection_close(const ngtcp2_pkt_hd& header, const asio::ip::udp::endpoint& remote, std::uint64_t error_code, const asio::ip::udp::endpoint& local, std::uint32_t interface_index) noexcept;
+    void send_stateless_reset(std::span<const std::uint8_t> destination_cid, std::size_t trigger_bytes, const asio::ip::udp::endpoint& remote, const asio::ip::udp::endpoint& local, std::uint32_t interface_index) noexcept;
     [[nodiscard]] bool consume_stateless_reset_budget() noexcept;
     // A retiring endpoint whose last connection ended.
     void release_after_last_connection() noexcept;
@@ -3874,8 +3670,8 @@ namespace ruvia::detail {
 // Resumes the coroutine on a later turn of its worker, letting other
 // connections run between bursts of one connection's output.
 struct worker_turn final {
-    explicit worker_turn(const worker_ref& worker_value) noexcept
-        : worker_(worker_value) {}
+    explicit worker_turn(const worker_ref& worker_value) noexcept :
+        worker_(worker_value) {}
     worker_turn(worker_ref&&) = delete;
     const worker_turn* operator&() const = delete;
     worker_turn* operator&() = delete;
@@ -3929,10 +3725,7 @@ inline void fill_random(std::uint8_t* destination, std::size_t size, const ngtcp
 }
 
 [[nodiscard]] inline ngtcp2_tstamp http3_quic_now() noexcept {
-    return static_cast<ngtcp2_tstamp>(
-        std::chrono::duration_cast<std::chrono::nanoseconds>(
-            std::chrono::steady_clock::now().time_since_epoch())
-            .count());
+    return static_cast<ngtcp2_tstamp>(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count());
 }
 
 [[nodiscard]] inline ngtcp2_duration http3_quic_duration(timeout_duration value) noexcept {
@@ -3949,17 +3742,14 @@ inline void fill_random(std::uint8_t* destination, std::size_t size, const ngtcp
     if (timestamp >= static_cast<ngtcp2_tstamp>((std::numeric_limits<nanoseconds::rep>::max)())) {
         return (std::chrono::steady_clock::time_point::max)();
     }
-    return std::chrono::steady_clock::time_point(
-        std::chrono::ceil<std::chrono::steady_clock::duration>(nanoseconds(static_cast<nanoseconds::rep>(timestamp))));
+    return std::chrono::steady_clock::time_point(std::chrono::ceil<std::chrono::steady_clock::duration>(nanoseconds(static_cast<nanoseconds::rep>(timestamp))));
 }
 
 [[nodiscard]] inline std::chrono::nanoseconds http3_quic_nanoseconds(ngtcp2_duration duration) noexcept {
-    return std::chrono::nanoseconds(
-        static_cast<std::int64_t>((std::min)(duration, static_cast<ngtcp2_duration>(INT64_MAX))));
+    return std::chrono::nanoseconds(static_cast<std::int64_t>((std::min)(duration, static_cast<ngtcp2_duration>(INT64_MAX))));
 }
 
-[[nodiscard]] inline ngtcp2_path http3_quic_path(
-    asio::ip::udp::endpoint& local, asio::ip::udp::endpoint& remote) noexcept {
+[[nodiscard]] inline ngtcp2_path http3_quic_path(asio::ip::udp::endpoint& local, asio::ip::udp::endpoint& remote) noexcept {
     return {
         .local = {local.data(), static_cast<ngtcp2_socklen>(local.size())},
         .remote = {remote.data(), static_cast<ngtcp2_socklen>(remote.size())},
@@ -3967,8 +3757,7 @@ inline void fill_random(std::uint8_t* destination, std::size_t size, const ngtcp
     };
 }
 
-[[nodiscard]] inline std::optional<asio::ip::udp::endpoint> http3_udp_endpoint(
-    const ngtcp2_addr& address) noexcept {
+[[nodiscard]] inline std::optional<asio::ip::udp::endpoint> http3_udp_endpoint(const ngtcp2_addr& address) noexcept {
     asio::ip::udp::endpoint endpoint;
     if (address.addr == nullptr || address.addrlen == 0 || address.addrlen > endpoint.capacity()) {
         return std::nullopt;
@@ -4003,13 +3792,12 @@ struct http3_tunnel_chunk final {
 
 class http3_stream final {
 public:
-    http3_stream(http3_request_head head, route_resolution resolution, request_body_mode body_mode,
-        inbound_buffer_account* inbound = nullptr) noexcept
-        : head_(std::move(head)),
-          resolution_(std::move(resolution)),
-          body_mode_(body_mode),
-          body_reservation_(inbound),
-          active_reservation_(inbound) {}
+    http3_stream(http3_request_head head, route_resolution resolution, request_body_mode body_mode, inbound_buffer_account* inbound = nullptr) noexcept :
+        head_(std::move(head)),
+        resolution_(std::move(resolution)),
+        body_mode_(body_mode),
+        body_reservation_(inbound),
+        active_reservation_(inbound) {}
 
     http3_stream(const http3_stream&) = delete;
     http3_stream& operator=(const http3_stream&) = delete;
@@ -4053,8 +3841,7 @@ public:
     }
 
     void store_datagram(std::string_view payload, std::size_t byte_limit) {
-        if ((datagrams_ && datagrams_->size() >= 64) || datagram_bytes_ > byte_limit ||
-            payload.size() > byte_limit - datagram_bytes_) {
+        if ((datagrams_ && datagrams_->size() >= 64) || datagram_bytes_ > byte_limit || payload.size() > byte_limit - datagram_bytes_) {
             return;  // RFC 9221 permits loss; never backpressure reliable DATA.
         }
         try {
@@ -4089,13 +3876,11 @@ public:
     // Buffered body: the whole content, borrowed by the request at dispatch;
     // its credit returns as it is stored. Streaming body and tunnel: the bytes
     // queued for the reader, holding their credit until it takes them.
-    [[nodiscard]] http3_body_store_status store(std::string_view data, http3_received_data_credit&& credit,
-        protocol_byte_limit total_limit, std::size_t backlog_limit) {
+    [[nodiscard]] http3_body_store_status store(std::string_view data, http3_received_data_credit&& credit, protocol_byte_limit total_limit, std::size_t backlog_limit) {
         if (http_request_body_addition_failure(received_bytes_, data.size(), total_limit).has_value()) {
             return http3_body_store_status::too_large;
         }
-        if (body_mode_ == request_body_mode::stream &&
-            (body_.size() > backlog_limit || data.size() > backlog_limit - body_.size())) {
+        if (body_mode_ == request_body_mode::stream && (body_.size() > backlog_limit || data.size() > backlog_limit - body_.size())) {
             return http3_body_store_status::backlog_overflow;
         }
         try {
@@ -4182,9 +3967,7 @@ public:
     // The request body is still open and went `inactivity` without DATA, or
     // `completion` since it opened (request_body_timeout_ and
     // body_completion_timeout_).
-    [[nodiscard]] bool request_body_overdue(std::int64_t now_ms,
-        const std::optional<timeout_duration>& inactivity,
-        const std::optional<timeout_duration>& completion) const noexcept {
+    [[nodiscard]] bool request_body_overdue(std::int64_t now_ms, const std::optional<timeout_duration>& inactivity, const std::optional<timeout_duration>& completion) const noexcept {
         return request_body_deadline_.overdue(now_ms, inactivity, completion);
     }
 
@@ -4221,8 +4004,7 @@ public:
         return closed_;
     }
 
-    [[nodiscard]] multiplexed_stream_signal* begin_dispatch(
-        const worker_ref& worker_value, multiplexed_session_termination& termination) {
+    [[nodiscard]] multiplexed_stream_signal* begin_dispatch(const worker_ref& worker_value, multiplexed_session_termination& termination) {
         if (signal_ || handler_done_) {
             return nullptr;
         }
@@ -4305,8 +4087,7 @@ enum class http3_data_write_status : std::uint8_t {
 // budget at a time (http3_connection::submit_data): when the budget is
 // spent it waits for the peer's acknowledgements, timed by the session
 // against write_timeout_. A Content-Length overrun throws std::length_error.
-[[nodiscard]] task<http3_data_write_status> write_http3_stream_data(
-    http3_session& session, std::int64_t stream_id, multiplexed_stream_signal& signal, std::string_view bytes);
+[[nodiscard]] task<http3_data_write_status> write_http3_stream_data(http3_session& session, std::int64_t stream_id, multiplexed_stream_signal& signal, std::string_view bytes);
 
 // Writes a buffered or file response on one request stream: the head with its
 // write plan's Content-Length, then the content within the stream's output
@@ -4323,13 +4104,10 @@ public:
     http3_buffered_response_writer(http3_buffered_response_writer&&) = delete;
     http3_buffered_response_writer& operator=(http3_buffered_response_writer&&) = delete;
 
-    [[nodiscard]] task<multiplexed_buffered_response_write_result> write(std::int64_t stream_id,
-        const http_response& response, http_buffered_response_write_plan write_plan);
+    [[nodiscard]] task<multiplexed_buffered_response_write_result> write(std::int64_t stream_id, const http_response& response, http_buffered_response_write_plan write_plan);
 
 private:
-    [[nodiscard]] task<multiplexed_buffered_response_write_result> write_file_body(
-        std::int64_t stream_id, multiplexed_stream_signal& signal, response_file_source& source,
-        http_status_code committed_status);
+    [[nodiscard]] task<multiplexed_buffered_response_write_result> write_file_body(std::int64_t stream_id, multiplexed_stream_signal& signal, response_file_source& source, http_status_code committed_status);
     [[nodiscard]] bool stream_ended(std::int64_t stream_id) noexcept;
 
     http3_session& session_;
@@ -4374,10 +4152,7 @@ public:
     // Accepts the connection the client Initial `initial` opens (RFC 9000
     // §7.2): a server connection ID owned by this worker, the client's chosen
     // ID as original_destination_connection_id.
-    http3_session(http3_endpoint& endpoint, connection_slot slot, const ngtcp2_pkt_hd& initial,
-        const asio::ip::udp::endpoint& remote, const ngtcp2_cid& original_dcid,
-        std::optional<ngtcp2_cid> retry_scid, std::span<const std::uint8_t> retry_token,
-        connection_lifecycle lifecycle);
+    http3_session(http3_endpoint& endpoint, connection_slot slot, const ngtcp2_pkt_hd& initial, const asio::ip::udp::endpoint& remote, const ngtcp2_cid& original_dcid, std::optional<ngtcp2_cid> retry_scid, std::span<const std::uint8_t> retry_token, connection_lifecycle lifecycle);
     ~http3_session();
 
     http3_session(const http3_session&) = delete;
@@ -4386,8 +4161,7 @@ public:
     http3_session& operator=(http3_session&&) = delete;
 
     // One datagram for this connection, from `remote`.
-    void receive(std::span<const std::byte> datagram, const asio::ip::udp::endpoint& remote,
-        const asio::ip::udp::endpoint& local, std::uint32_t interface_index) noexcept;
+    void receive(std::span<const std::byte> datagram, const asio::ip::udp::endpoint& remote, const asio::ip::udp::endpoint& local, std::uint32_t interface_index) noexcept;
     [[nodiscard]] task<void> run();
     // Ends the connection now: CONNECTION_CLOSE(H3_NO_ERROR), streams
     // cancelled, no closing period. The scanner's close action.
@@ -4423,8 +4197,7 @@ private:
     };
 
     static ngtcp2_conn* native_connection(ngtcp2_crypto_conn_ref* reference) noexcept;
-    static int new_connection_id(ngtcp2_conn*, ngtcp2_cid* cid, ngtcp2_stateless_reset_token* token,
-        std::size_t size, void* user_data) noexcept;
+    static int new_connection_id(ngtcp2_conn*, ngtcp2_cid* cid, ngtcp2_stateless_reset_token* token, std::size_t size, void* user_data) noexcept;
     static int remove_connection_id(ngtcp2_conn*, const ngtcp2_cid* cid, void* user_data) noexcept;
 
     [[nodiscard]] static ngtcp2_tstamp now() noexcept;
@@ -4600,9 +4373,7 @@ public:
 
     // Keeps the record of a response whose head completes at output offset
     // `head_end`. Duration is measured when the record is reported.
-    void defer(std::size_t head_end, const http_request& request, ip_address client_address,
-        std::chrono::steady_clock::time_point start, http_status_code status,
-        const request_io_metrics& io_metrics = {});
+    void defer(std::size_t head_end, const http_request& request, ip_address client_address, std::chrono::steady_clock::time_point start, http_status_code status, const request_io_metrics& io_metrics = {});
     // Reports every kept response whose head lies within the first `written`
     // output bytes (in output order), then forgets all of them.
     void complete(const access_log_sink& access_log, ip_address remote_address, std::size_t written) noexcept;
@@ -4649,20 +4420,19 @@ struct connection_work_set final {
 // and releases the count second.
 class accepted_connection_lease final {
 public:
-    accepted_connection_lease(asio::ip::tcp::socket socket, connection_count& count,
-        connection_lifecycle lifecycle) noexcept
-        : slot_(count),
-          socket_(std::move(socket)),
-          lifecycle_(std::move(lifecycle)) {
+    accepted_connection_lease(asio::ip::tcp::socket socket, connection_count& count, connection_lifecycle lifecycle) noexcept :
+        slot_(count),
+        socket_(std::move(socket)),
+        lifecycle_(std::move(lifecycle)) {
         lifecycle_.bind_transport(connection_transport::tcp(socket_));
     }
 
     accepted_connection_lease(const accepted_connection_lease&) = delete;
     accepted_connection_lease& operator=(const accepted_connection_lease&) = delete;
-    accepted_connection_lease(accepted_connection_lease&& other) noexcept
-        : slot_(std::move(other.slot_)),
-          socket_(std::move(other.socket_)),
-          lifecycle_(std::move(other.lifecycle_)) {
+    accepted_connection_lease(accepted_connection_lease&& other) noexcept :
+        slot_(std::move(other.slot_)),
+        socket_(std::move(other.socket_)),
+        lifecycle_(std::move(other.lifecycle_)) {
         lifecycle_.bind_transport(connection_transport::tcp(socket_));
     }
     accepted_connection_lease& operator=(accepted_connection_lease&&) = delete;
@@ -4714,8 +4484,8 @@ public:
 private:
     friend class http1_session_request_completion;
 
-    explicit constexpr http1_request_buffer_compaction(std::size_t consumed_bytes) noexcept
-        : consumed_bytes_(consumed_bytes) {}
+    explicit constexpr http1_request_buffer_compaction(std::size_t consumed_bytes) noexcept :
+        consumed_bytes_(consumed_bytes) {}
 
     std::size_t consumed_bytes_;
 };
@@ -4735,8 +4505,8 @@ public:
 private:
     friend class http1_session_request_completion;
 
-    explicit constexpr http1_request_buffer_pipeline_restore(std::string_view pipeline) noexcept
-        : pipeline_(pipeline) {}
+    explicit constexpr http1_request_buffer_pipeline_restore(std::string_view pipeline) noexcept :
+        pipeline_(pipeline) {}
 
     std::string_view pipeline_;
 };
@@ -4753,22 +4523,19 @@ public:
     }
     [[nodiscard]] constexpr const http1_request_buffer_compaction* compaction() const&& = delete;
 
-    [[nodiscard]] constexpr const http1_request_buffer_pipeline_restore* pipeline_restore()
-        const& noexcept {
+    [[nodiscard]] constexpr const http1_request_buffer_pipeline_restore* pipeline_restore() const& noexcept {
         return std::get_if<http1_request_buffer_pipeline_restore>(&value_);
     }
-    [[nodiscard]] constexpr const http1_request_buffer_pipeline_restore* pipeline_restore() const&& =
-        delete;
+    [[nodiscard]] constexpr const http1_request_buffer_pipeline_restore* pipeline_restore() const&& = delete;
 
 private:
     friend class http1_session_request_completion;
 
-    using value_type = std::variant<http1_request_buffer_discarded, http1_request_buffer_compaction,
-        http1_request_buffer_pipeline_restore>;
+    using value_type = std::variant<http1_request_buffer_discarded, http1_request_buffer_compaction, http1_request_buffer_pipeline_restore>;
 
     template <typename alternative_type>
-    explicit constexpr http1_request_buffer_completion(alternative_type alternative) noexcept
-        : value_(std::move(alternative)) {}
+    explicit constexpr http1_request_buffer_completion(alternative_type alternative) noexcept :
+        value_(std::move(alternative)) {}
 
     value_type value_;
 };
@@ -4799,9 +4566,9 @@ public:
 private:
     friend class http1_session_request_completion;
 
-    constexpr http1_committed_stream_response(http_status_code status, bool truncated) noexcept
-        : status_(status),
-          truncated_(truncated) {}
+    constexpr http1_committed_stream_response(http_status_code status, bool truncated) noexcept :
+        status_(status),
+        truncated_(truncated) {}
 
     http_status_code status_;
     bool truncated_;
@@ -4819,8 +4586,8 @@ public:
 private:
     friend class http1_session_request_completion;
 
-    explicit http1_rejected_final_response(::ruvia::http1_response_head_error error) noexcept
-        : error_(std::move(error)) {}
+    explicit http1_rejected_final_response(::ruvia::http1_response_head_error error) noexcept :
+        error_(std::move(error)) {}
 
     ::ruvia::http1_response_head_error error_;
 };
@@ -4830,56 +4597,41 @@ private:
 // session never reconstructs them from an optional status plus scalar flags.
 class http1_session_request_completion final {
 public:
-    [[nodiscard]] static http1_session_request_completion make_buffered_closing(
-        http1_request_connection_plan connection_plan) noexcept {
+    [[nodiscard]] static http1_session_request_completion make_buffered_closing(http1_request_connection_plan connection_plan) noexcept {
         if (connection_plan.disposition() != http1_close_policy::close_after_response) {
             std::terminate();
         }
-        return http1_session_request_completion(http1_buffered_response_ready{}, connection_plan,
-            http1_request_buffer_completion(http1_request_buffer_discarded{}));
+        return http1_session_request_completion(http1_buffered_response_ready{}, connection_plan, http1_request_buffer_completion(http1_request_buffer_discarded{}));
     }
 
-    [[nodiscard]] static http1_session_request_completion make_buffered_unrestored(
-        http1_request_connection_plan connection_plan, std::size_t consumed_bytes) noexcept {
-        return http1_session_request_completion(http1_buffered_response_ready{}, connection_plan,
-            unshifted_buffer_completion(connection_plan, consumed_bytes));
+    [[nodiscard]] static http1_session_request_completion make_buffered_unrestored(http1_request_connection_plan connection_plan, std::size_t consumed_bytes) noexcept {
+        return http1_session_request_completion(http1_buffered_response_ready{}, connection_plan, unshifted_buffer_completion(connection_plan, consumed_bytes));
     }
 
-    [[nodiscard]] static http1_session_request_completion make_buffered_pipeline_restore(
-        http1_request_connection_plan connection_plan, borrowed_text pipeline) noexcept {
+    [[nodiscard]] static http1_session_request_completion make_buffered_pipeline_restore(http1_request_connection_plan connection_plan, borrowed_text pipeline) noexcept {
         if (connection_plan.disposition() != http1_close_policy::allow_reuse) {
             std::terminate();
         }
-        return http1_session_request_completion(http1_buffered_response_ready{}, connection_plan,
-            http1_request_buffer_completion(http1_request_buffer_pipeline_restore(pipeline.view())));
+        return http1_session_request_completion(http1_buffered_response_ready{}, connection_plan, http1_request_buffer_completion(http1_request_buffer_pipeline_restore(pipeline.view())));
     }
 
-    [[nodiscard]] static http1_session_request_completion make_committed_stream(
-        http1_request_connection_plan connection_plan, http_status_code status,
-        std::size_t consumed_bytes) noexcept {
-        return http1_session_request_completion(http1_committed_stream_response(status, false), connection_plan,
-            unshifted_buffer_completion(connection_plan, consumed_bytes));
+    [[nodiscard]] static http1_session_request_completion make_committed_stream(http1_request_connection_plan connection_plan, http_status_code status, std::size_t consumed_bytes) noexcept {
+        return http1_session_request_completion(http1_committed_stream_response(status, false), connection_plan, unshifted_buffer_completion(connection_plan, consumed_bytes));
     }
 
-    [[nodiscard]] static http1_session_request_completion make_committed_stream_pipeline_restore(
-        http1_request_connection_plan connection_plan, http_status_code status, borrowed_text pipeline) noexcept {
+    [[nodiscard]] static http1_session_request_completion make_committed_stream_pipeline_restore(http1_request_connection_plan connection_plan, http_status_code status, borrowed_text pipeline) noexcept {
         if (connection_plan.disposition() != http1_close_policy::allow_reuse) {
             std::terminate();
         }
-        return http1_session_request_completion(http1_committed_stream_response(status, false), connection_plan,
-            http1_request_buffer_completion(http1_request_buffer_pipeline_restore(pipeline.view())));
+        return http1_session_request_completion(http1_committed_stream_response(status, false), connection_plan, http1_request_buffer_completion(http1_request_buffer_pipeline_restore(pipeline.view())));
     }
 
-    [[nodiscard]] static http1_session_request_completion make_truncated_stream(
-        http1_request_connection_plan connection_plan, http_status_code status) noexcept {
-        return http1_session_request_completion(http1_committed_stream_response(status, true),
-            connection_plan.require_close(), http1_request_buffer_completion(http1_request_buffer_discarded{}));
+    [[nodiscard]] static http1_session_request_completion make_truncated_stream(http1_request_connection_plan connection_plan, http_status_code status) noexcept {
+        return http1_session_request_completion(http1_committed_stream_response(status, true), connection_plan.require_close(), http1_request_buffer_completion(http1_request_buffer_discarded{}));
     }
 
-    [[nodiscard]] static http1_session_request_completion make_rejected_final_response(
-        http1_request_connection_plan connection_plan, ::ruvia::http1_response_head_error error) noexcept {
-        return http1_session_request_completion(http1_rejected_final_response(std::move(error)),
-            connection_plan.require_close(), http1_request_buffer_completion(http1_request_buffer_discarded{}));
+    [[nodiscard]] static http1_session_request_completion make_rejected_final_response(http1_request_connection_plan connection_plan, ::ruvia::http1_response_head_error error) noexcept {
+        return http1_session_request_completion(http1_rejected_final_response(std::move(error)), connection_plan.require_close(), http1_request_buffer_completion(http1_request_buffer_discarded{}));
     }
 
     [[nodiscard]] constexpr const http1_buffered_response_ready* buffered_response() const& noexcept {
@@ -4910,8 +4662,7 @@ public:
     // representation preparation (for example a forbidden identity fallback).
     // Rebind the final response plan without losing the exact read-buffer
     // cleanup alternative already established by request-body dispatch.
-    [[nodiscard]] http1_session_request_completion with_buffered_connection_plan(
-        http1_request_connection_plan connection_plan) const& noexcept {
+    [[nodiscard]] http1_session_request_completion with_buffered_connection_plan(http1_request_connection_plan connection_plan) const& noexcept {
         if (std::get_if<http1_buffered_response_ready>(&value_) == nullptr) {
             std::terminate();
         }
@@ -4931,11 +4682,9 @@ public:
     }
 
 private:
-    using value_type = std::variant<http1_buffered_response_ready, http1_committed_stream_response,
-        http1_rejected_final_response>;
+    using value_type = std::variant<http1_buffered_response_ready, http1_committed_stream_response, http1_rejected_final_response>;
 
-    [[nodiscard]] static http1_request_buffer_completion unshifted_buffer_completion(
-        http1_request_connection_plan connection_plan, std::size_t consumed_bytes) noexcept {
+    [[nodiscard]] static http1_request_buffer_completion unshifted_buffer_completion(http1_request_connection_plan connection_plan, std::size_t consumed_bytes) noexcept {
         if (connection_plan.disposition() == http1_close_policy::close_after_response) {
             return http1_request_buffer_completion(http1_request_buffer_discarded{});
         }
@@ -4943,11 +4692,10 @@ private:
     }
 
     template <typename alternative_type>
-    http1_session_request_completion(alternative_type alternative, http1_request_connection_plan connection_plan,
-        http1_request_buffer_completion buffer_completion) noexcept
-        : value_(std::move(alternative)),
-          connection_plan_(connection_plan),
-          buffer_completion_(std::move(buffer_completion)) {}
+    http1_session_request_completion(alternative_type alternative, http1_request_connection_plan connection_plan, http1_request_buffer_completion buffer_completion) noexcept :
+        value_(std::move(alternative)),
+        connection_plan_(connection_plan),
+        buffer_completion_(std::move(buffer_completion)) {}
 
     value_type value_;
     http1_request_connection_plan connection_plan_;
@@ -5009,11 +4757,7 @@ struct listener_socket_duplicates final {
 // session configuration destroyed -- once every task it owns has ended.
 class worker_connections final {
 public:
-    worker_connections(asio::io_context& io, const worker_ref& worker_value,
-        const route_table& routes_value, worker_capabilities& capabilities,
-        http_server_options& options, const stop_token& stop_token_value,
-        http_server_worker_state& state_value, task_scope& tasks,
-        std::span<const http_server_listener_definition> listeners, worker_failure_sink failure, std::size_t worker_index
+    worker_connections(asio::io_context& io, const worker_ref& worker_value, const route_table& routes_value, worker_capabilities& capabilities, http_server_options& options, const stop_token& stop_token_value, http_server_worker_state& state_value, task_scope& tasks, std::span<const http_server_listener_definition> listeners, worker_failure_sink failure, std::size_t worker_index
 #if defined(RUVIA_ENABLE_HTTP3)
         ,
         http3_worker_placement http3_placement
@@ -5030,23 +4774,18 @@ public:
     // Worker thread: listener `listener_index` -- TLS over TCP and its
     // HTTP/3 service alike -- selects every later handshake's identity from
     // `identities`.
-    void adopt_tls_identities(
-        std::size_t listener_index, std::shared_ptr<const http_server_tls_identities> identities) noexcept;
+    void adopt_tls_identities(std::size_t listener_index, std::shared_ptr<const http_server_tls_identities> identities) noexcept;
     // Worker thread, the controls of application::add_listener(): prepares
     // `definition` in slot `index` as prepare() would -- TLS contexts, bound
     // or adopted sockets, the HTTP/3 endpoint in slot `http3_index` -- without
     // admitting, or throws with the slot left empty.
-    void prepare_listener(std::size_t index, std::optional<std::size_t> http3_index,
-        const http_server_listener_definition& definition,
-        bool externally_accepted = false
+    void prepare_listener(std::size_t index, std::optional<std::size_t> http3_index, const http_server_listener_definition& definition, bool externally_accepted = false
 #if defined(RUVIA_ENABLE_HTTP3)
         ,
         http3_worker_directory* directory = nullptr
 #endif
     );
-    void prepare_listener(std::size_t index, std::optional<std::size_t> http3_index,
-        const http_server_listener_definition& definition, bool externally_accepted,
-        prepared_http_server_session session
+    void prepare_listener(std::size_t index, std::optional<std::size_t> http3_index, const http_server_listener_definition& definition, bool externally_accepted, prepared_http_server_session session
 #if defined(RUVIA_ENABLE_HTTP3)
         ,
         http3_worker_directory* directory = nullptr
@@ -5090,19 +4829,17 @@ public:
 
 private:
     struct listener final {
-        listener(asio::io_context& io, const worker_ref& worker_value,
-            const http_server_listener_definition& definition,
-            prepared_http_server_session session = {})
-            : session_owner_(std::move(session)),
-              session_(session_owner_ ? *session_owner_ : inline_session_.emplace(definition)),
-              endpoint_(definition.endpoint_),
-              tasks_(worker_value),
-              retired_(worker_value),
-              activated_(worker_value)
+        listener(asio::io_context& io, const worker_ref& worker_value, const http_server_listener_definition& definition, prepared_http_server_session session = {}) :
+            session_owner_(std::move(session)),
+            session_(session_owner_ ? *session_owner_ : inline_session_.emplace(definition)),
+            endpoint_(definition.endpoint_),
+            tasks_(worker_value),
+            retired_(worker_value),
+            activated_(worker_value)
 #if !defined(_WIN32)
-              ,
-              socket_(io),
-              inherited_(definition.inherited_sockets_)
+            ,
+            socket_(io),
+            inherited_(definition.inherited_sockets_)
 #endif
         {
 #if defined(_WIN32)
@@ -5161,18 +4898,13 @@ private:
     void report_accept_failure(std::exception_ptr failure, bool fatal) noexcept;
     task<void> rotate_tls_ticket_keys();
     void accept_socket(std::size_t index, tcp_socket_type socket, adopt_options options = {});
-    task<void> prepare_connection(std::size_t index, tcp_socket_type socket,
-        std::vector<std::byte> prefix, std::optional<ip_endpoint> remote);
-    void admit_socket(std::size_t index, tcp_socket_type socket, std::optional<ip_endpoint> remote,
-        std::vector<std::byte> prefix, std::size_t bytes_read = 0);
+    task<void> prepare_connection(std::size_t index, tcp_socket_type socket, std::vector<std::byte> prefix, std::optional<ip_endpoint> remote);
+    void admit_socket(std::size_t index, tcp_socket_type socket, std::optional<ip_endpoint> remote, std::vector<std::byte> prefix, std::size_t bytes_read = 0);
     // `remote` is the peer accept_socket() read before the socket moved into
     // the lease; absent when the socket no longer knew its peer.
-    task<void> run_session(http_server_session_config& listener, accepted_connection_lease connection,
-        std::optional<asio::ip::tcp::endpoint> remote, std::uint64_t connection_id, std::vector<std::byte> prefix);
-    task<void> run_tls_session(http_server_session_config& listener, accepted_connection_lease connection,
-        std::optional<asio::ip::tcp::endpoint> remote, std::uint64_t connection_id, std::vector<std::byte> prefix);
-    void report_session_failure(
-        tcp_socket_type& socket, std::string_view remote_address, std::exception_ptr failure) noexcept;
+    task<void> run_session(http_server_session_config& listener, accepted_connection_lease connection, std::optional<asio::ip::tcp::endpoint> remote, std::uint64_t connection_id, std::vector<std::byte> prefix);
+    task<void> run_tls_session(http_server_session_config& listener, accepted_connection_lease connection, std::optional<asio::ip::tcp::endpoint> remote, std::uint64_t connection_id, std::vector<std::byte> prefix);
+    void report_session_failure(tcp_socket_type& socket, std::string_view remote_address, std::exception_ptr failure) noexcept;
     template <typename stream_type>
     task<http_connection_close> run_stream(http_server_session_config& listener_value, stream_type& stream, tcp_socket_type& socket, context_services services);
 #if defined(RUVIA_ENABLE_HTTP2)
@@ -5185,8 +4917,7 @@ private:
     template <typename stream_type>
     task<void> serve_connection(stream_type& stream, tcp_socket_type& socket, server_connection_fields fields);
     template <typename stream_type>
-    task<std::variant<http1_serve_handoff, http_connection_close>> serve_requests(
-        http1_connection_session<stream_type>& session, connection_work_set& work_set);
+    task<std::variant<http1_serve_handoff, http_connection_close>> serve_requests(http1_connection_session<stream_type>& session, connection_work_set& work_set);
     asio::io_context& io_;
     const worker_ref& worker_;
     const route_table& routes_;
@@ -5206,9 +4937,9 @@ private:
     // Caller-thread statistics and the Windows acceptor's balancing read it.
     connection_count connection_count_;
     struct listener_gauge final {
-        listener_gauge(const asio::ip::tcp::endpoint& endpoint, connection_count& total)
-            : endpoint_(endpoint),
-              count_(&total) {}
+        listener_gauge(const asio::ip::tcp::endpoint& endpoint, connection_count& total) :
+            endpoint_(endpoint),
+            count_(&total) {}
         asio::ip::tcp::endpoint endpoint_;
         connection_count count_;
         std::atomic<bool> serving_{false};
@@ -5277,11 +5008,8 @@ struct worker_capability_options final {
 // the server worker and test_app. Both run on the owning worker.
 class worker_capabilities final {
 public:
-    worker_capabilities(asio::io_context& io_context, const worker_ref& worker_value,
-        worker_capability_definitions definitions,
-        worker_capability_options options);
-    worker_capabilities(asio::io_context&, worker_ref&&,
-        worker_capability_definitions, worker_capability_options) = delete;
+    worker_capabilities(asio::io_context& io_context, const worker_ref& worker_value, worker_capability_definitions definitions, worker_capability_options options);
+    worker_capabilities(asio::io_context&, worker_ref&&, worker_capability_definitions, worker_capability_options) = delete;
 
     worker_capabilities(const worker_capabilities&) = delete;
     worker_capabilities& operator=(const worker_capabilities&) = delete;
@@ -5471,8 +5199,8 @@ private:
 struct app_runtime_graph;
 
 struct app_document_root_config final {
-    explicit app_document_root_config(static_root_config_storage configured_static_options)
-        : static_options_(std::move(configured_static_options)) {}
+    explicit app_document_root_config(static_root_config_storage configured_static_options) :
+        static_options_(std::move(configured_static_options)) {}
 
     http_native_path_string_type root_;
     static_root_config_storage static_options_;
@@ -5536,8 +5264,7 @@ inline void ensure_app_not_running(bool running, const char* message) {
 }
 
 template <typename configure_type>
-application& mutate_stopped_app(
-    application& app, app_state& state_value, const char* running_message, configure_type&& configure) {
+application& mutate_stopped_app(application& app, app_state& state_value, const char* running_message, configure_type&& configure) {
     std::lock_guard lock(state_value.mutex_);
     ensure_app_not_running(state_value.lifecycle_.active(), running_message);
     std::forward<configure_type>(configure)(state_value);
@@ -5563,8 +5290,7 @@ struct env_state final {
     bool loaded_{false};
 };
 
-[[nodiscard]] std::vector<env_variable> read_dotenv_entries(
-    std::istream& input, const std::filesystem::path& path);
+[[nodiscard]] std::vector<env_variable> read_dotenv_entries(std::istream& input, const std::filesystem::path& path);
 [[nodiscard]] std::filesystem::path dotenv_executable_directory();
 // prefix followed by path in UTF-8. path::string() narrows a Windows wide path
 // through the ANSI code page, which throws or yields non-UTF-8 error text.
@@ -5590,8 +5316,7 @@ class web_worker_dispatch final {
 public:
     using job_type = move_only_function<ruvia::task<void>(web_worker_context&)>;
 
-    web_worker_dispatch(ruvia::worker_runtime& runtime,
-        worker_capabilities& capabilities, task_scope& jobs, const stop_token& stop_token_value);
+    web_worker_dispatch(ruvia::worker_runtime& runtime, worker_capabilities& capabilities, task_scope& jobs, const stop_token& stop_token_value);
 
     web_worker_dispatch(const web_worker_dispatch&) = delete;
     web_worker_dispatch& operator=(const web_worker_dispatch&) = delete;
@@ -5645,9 +5370,7 @@ struct http_server_options;
 class document_root_publisher final {
 public:
     // Builds the initial snapshot; a failure here fails application startup.
-    document_root_publisher(const std::filesystem::path& root, const static_root_config_storage& config,
-        std::chrono::milliseconds interval, static_root_precompression_options precompression,
-        static_root_resident_options resident, std::size_t worker_count);
+    document_root_publisher(const std::filesystem::path& root, const static_root_config_storage& config, std::chrono::milliseconds interval, static_root_precompression_options precompression, static_root_resident_options resident, std::size_t worker_count);
     ~document_root_publisher();
 
     document_root_publisher(const document_root_publisher&) = delete;
@@ -5668,14 +5391,12 @@ public:
 
     // One rebuild pass on the refresher. A changed tree is published; a
     // failed pass is counted and the last complete snapshot stays published.
-    [[nodiscard]] task<void> refresh(
-        const worker_ref& worker, const http_server_worker_state& state, const stop_token& stop = {});
+    [[nodiscard]] task<void> refresh(const worker_ref& worker, const http_server_worker_state& state, const stop_token& stop = {});
 
 private:
     friend class static_root_runtime;
 
-    using publication_owner =
-        std::unique_ptr<document_root_snapshot>;
+    using publication_owner = std::unique_ptr<document_root_snapshot>;
 
     struct mailbox final {
         ~mailbox();
@@ -5693,8 +5414,7 @@ private:
     [[nodiscard]] mailbox& register_worker() noexcept;
 
     void publish(document_root_snapshot snapshot);
-    void commit_publication(document_root_snapshot snapshot,
-        std::vector<publication_owner>& publication) noexcept;
+    void commit_publication(document_root_snapshot snapshot, std::vector<publication_owner>& publication) noexcept;
 
     // The configured path, not the snapshot's canonical one: a refresh must
     // re-resolve symlinks so a retargeted root (atomic deploy) is followed.
@@ -5715,8 +5435,7 @@ private:
 // worker joins refresh() before teardown.
 class static_root_runtime final {
 public:
-    static_root_runtime(http_server_options& options, const worker_ref& worker_value,
-        const http_server_worker_state& state_value);
+    static_root_runtime(http_server_options& options, const worker_ref& worker_value, const http_server_worker_state& state_value);
     ~static_root_runtime();
     static_root_runtime(const static_root_runtime&) = delete;
     static_root_runtime& operator=(const static_root_runtime&) = delete;
@@ -5731,8 +5450,7 @@ public:
     [[nodiscard]] task<void> refresh(const stop_token& stop = {});
 
 private:
-    using generation_owner =
-        std::unique_ptr<document_root_generation>;
+    using generation_owner = std::unique_ptr<document_root_generation>;
 
     void adopt_published();
 
@@ -5767,8 +5485,7 @@ public:
     // every offload and client host lookup; null when the application
     // disabled it. It must outlive the worker. `worker_index` is this
     // worker's position among the application's workers.
-    web_worker_runtime(const validated_http_server_configuration& configuration, const route_table& routes_value,
-        worker_capability_definitions capabilities, blocking_pool* pool, std::size_t worker_index
+    web_worker_runtime(const validated_http_server_configuration& configuration, const route_table& routes_value, worker_capability_definitions capabilities, blocking_pool* pool, std::size_t worker_index
 #if defined(RUVIA_ENABLE_HTTP3)
         ,
         http3_worker_placement http3_placement
@@ -5799,26 +5516,23 @@ public:
     // Owner thread only, from a control posted to runtime(): listener
     // `listener_index` -- TLS over TCP and its HTTP/3 service alike --
     // selects every later handshake's identity from `identities`.
-    void adopt_tls_identities(
-        std::size_t listener_index, std::shared_ptr<const http_server_tls_identities> identities) noexcept {
+    void adopt_tls_identities(std::size_t listener_index, std::shared_ptr<const http_server_tls_identities> identities) noexcept {
         connections_.adopt_tls_identities(listener_index, std::move(identities));
     }
     // Owner thread only, from controls posted to runtime(): the listener
     // transactions of application::add_listener() and remove_listener()
     // (see worker_connections).
-    void prepare_listener(std::size_t index, std::optional<std::size_t> http3_index,
-        const http_server_listener_definition& definition, prepared_http_server_session session
+    void prepare_listener(std::size_t index, std::optional<std::size_t> http3_index, const http_server_listener_definition& definition, prepared_http_server_session session
 #if defined(RUVIA_ENABLE_HTTP3)
         ,
         http3_worker_directory* directory
 #endif
     ) {
-        connections_.prepare_listener(index, http3_index, definition, false, std::move(session)
 #if defined(RUVIA_ENABLE_HTTP3)
-                                                                                 ,
-            directory
+        connections_.prepare_listener(index, http3_index, definition, false, std::move(session), directory);
+#else
+        connections_.prepare_listener(index, http3_index, definition, false, std::move(session));
 #endif
-        );
     }
     void open_listener(std::size_t index) noexcept {
         connections_.open_listener(index);
@@ -5845,9 +5559,7 @@ public:
 #endif
 
 private:
-    web_worker_runtime(std::span<const http_server_listener_definition> listeners,
-        const route_table& routes_value, worker_capability_definitions capabilities,
-        http_server_options validated_options, blocking_pool* pool, std::size_t worker_index
+    web_worker_runtime(std::span<const http_server_listener_definition> listeners, const route_table& routes_value, worker_capability_definitions capabilities, http_server_options validated_options, blocking_pool* pool, std::size_t worker_index
 #if defined(RUVIA_ENABLE_HTTP3)
         ,
         http3_worker_placement http3_placement
@@ -5893,12 +5605,10 @@ private:
 namespace ruvia::detail {
 
 struct app_worker_slot final {
-    app_worker_slot(controller_store configured_controllers,
-        std::unique_ptr<route_table> configured_routes,
-        std::unique_ptr<web_worker_runtime> configured_runtime)
-        : controllers_(std::move(configured_controllers)),
-          routes_(std::move(configured_routes)),
-          runtime_(std::move(configured_runtime)) {}
+    app_worker_slot(controller_store configured_controllers, std::unique_ptr<route_table> configured_routes, std::unique_ptr<web_worker_runtime> configured_runtime) :
+        controllers_(std::move(configured_controllers)),
+        routes_(std::move(configured_routes)),
+        runtime_(std::move(configured_runtime)) {}
 
     app_worker_slot(app_worker_slot&&) noexcept = default;
     app_worker_slot& operator=(app_worker_slot&&) noexcept = default;

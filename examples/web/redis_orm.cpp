@@ -21,10 +21,7 @@
 
 #include "backend_config.h"
 
-RUVIA_REDIS_ENTITY(cached_user, "users",
-    RUVIA_REDIS_COLUMN(id, ruvia::string, ruvia::redis_column_options{.primary_key_ = true}),
-    RUVIA_REDIS_COLUMN(name, ruvia::string),
-    RUVIA_REDIS_COLUMN(age, std::uint32_t));
+RUVIA_REDIS_ENTITY(cached_user, "users", RUVIA_REDIS_COLUMN(id, ruvia::string, ruvia::redis_column_options{.primary_key_ = true}), RUVIA_REDIS_COLUMN(name, ruvia::string), RUVIA_REDIS_COLUMN(age, std::uint32_t));
 
 const ruvia::redis_repository_config user_redis_config{
     .prefix_ = "ruvia:example:users",
@@ -33,20 +30,11 @@ const ruvia::redis_repository_config user_redis_config{
         {.column_ = "age", .kind_ = ruvia::redis_index_kind::numeric},
     },
 };
-RUVIA_MODEL(create_cached_user,
-    RUVIA_REQUIRED_FIELD(id, ruvia::string, RUVIA_MIN(1, "id is required"),
-        RUVIA_MAX(64, "id is too long")),
-    RUVIA_REQUIRED_FIELD(name, ruvia::string, RUVIA_MIN(1, "name is required"),
-        RUVIA_MAX(120, "name is too long")),
-    RUVIA_REQUIRED_FIELD(age, ruvia::uint32, RUVIA_MAX(130, "age is too large")));
+RUVIA_MODEL(create_cached_user, RUVIA_REQUIRED_FIELD(id, ruvia::string, RUVIA_MIN(1, "id is required"), RUVIA_MAX(64, "id is too long")), RUVIA_REQUIRED_FIELD(name, ruvia::string, RUVIA_MIN(1, "name is required"), RUVIA_MAX(120, "name is too long")), RUVIA_REQUIRED_FIELD(age, ruvia::uint32, RUVIA_MAX(130, "age is too large")));
 
-RUVIA_MODEL(cached_user_response,
-    RUVIA_REQUIRED_FIELD(id, ruvia::string),
-    RUVIA_REQUIRED_FIELD(name, ruvia::string),
-    RUVIA_REQUIRED_FIELD(age, ruvia::uint32));
+RUVIA_MODEL(cached_user_response, RUVIA_REQUIRED_FIELD(id, ruvia::string), RUVIA_REQUIRED_FIELD(name, ruvia::string), RUVIA_REQUIRED_FIELD(age, ruvia::uint32));
 
-RUVIA_MODEL(cached_users_response,
-    RUVIA_REQUIRED_FIELD(users, ruvia::array<cached_user_response>));
+RUVIA_MODEL(cached_users_response, RUVIA_REQUIRED_FIELD(users, ruvia::array<cached_user_response>));
 
 class cached_user_controller final {
 public:
@@ -89,10 +77,7 @@ private:
         co_return c.json(response);
     }
     ruvia::task<ruvia::http_response> adults(ruvia::context& c) {
-        const ruvia::redis_find_options find_options{
-            .where_ = cached_user::column<"age">() >= 18,
-            .order_ = {{.column_ = "name", .direction_ = ruvia::redis_order_direction::asc}},
-            .take_ = 20};
+        const ruvia::redis_find_options find_options{.where_ = cached_user::column<"age">() >= 18, .order_ = {{.column_ = "name", .direction_ = ruvia::redis_order_direction::asc}}, .take_ = 20};
         auto users = co_await c.redis().repository<cached_user>(user_redis_config).find(find_options);
         cached_users_response response;
         auto& output = response.ensure<"users">();
@@ -116,38 +101,37 @@ int main(int argc, char** argv) {
             .listen({.address_ = "127.0.0.1", .http_ = 8091})
             .server({.worker_count_ = 1, .process_signal_handlers_ = ruvia::process_signal_handler_policy::install})
             .on_start([create_index, &failed] {
-                if (!create_index) {
-                    return;
+            if (!create_index) {
+                return;
+            }
+            const auto workers = ruvia::app().workers();
+            std::promise<void> completion;
+            auto result_value = completion.get_future();
+            const auto posted = workers.front().post([completion = std::move(completion)](ruvia::web_worker_context& worker_value) mutable -> ruvia::task<void> {
+                try {
+                    co_await worker_value.redis().repository<cached_user>(user_redis_config).create_index();
+                    completion.set_value();
+                } catch (...) {
+                    completion.set_exception(std::current_exception());
                 }
-                const auto workers = ruvia::app().workers();
-                std::promise<void> completion;
-                auto result_value = completion.get_future();
-                const auto posted = workers.front().post([completion = std::move(completion)](ruvia::web_worker_context& worker_value) mutable -> ruvia::task<void> {
-                    try {
-                        co_await worker_value.redis().repository<cached_user>(user_redis_config).create_index();
-                        completion.set_value();
-                    } catch (...) {
-                        completion.set_exception(std::current_exception());
-                    }
-                });
-                if (posted != ruvia::post_status::accepted) {
+            });
+            if (posted != ruvia::post_status::accepted) {
+                failed = true;
+            } else {
+                // Only the lifecycle caller blocks. Workers are ready before
+                // on_start; request admission stays closed until this returns.
+                // Abandoning an unstarted job destroys its promise and wakes get().
+                try {
+                    result_value.get();
+                    std::cout << "Redis user index created.\n";
+                } catch (...) {
+                    std::cerr << ruvia::exception_text(std::current_exception()) << '\n';
                     failed = true;
-                } else {
-                    // Only the lifecycle caller blocks. Workers are ready before
-                    // on_start; request admission stays closed until this returns.
-                    // Abandoning an unstarted job destroys its promise and wakes get().
-                    try {
-                        result_value.get();
-                        std::cout << "Redis user index created.\n";
-                    } catch (...) {
-                        std::cerr << ruvia::exception_text(std::current_exception()) << '\n';
-                        failed = true;
-                    }
                 }
-                // --create-index is a one-shot operation, never a serving mode.
-                ruvia::app().stop();
-            })
-            .run();
+            }
+            // --create-index is a one-shot operation, never a serving mode.
+            ruvia::app().stop();
+        }).run();
         return failed ? 1 : 0;
     } catch (...) {
         std::cerr << ruvia::exception_text(std::current_exception()) << '\n';

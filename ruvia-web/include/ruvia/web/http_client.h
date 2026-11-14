@@ -68,8 +68,8 @@ public:
 
 private:
     friend class detail::http_client_response_state;
-    explicit http_client_informational_response(http_status_code status) noexcept
-        : status_(status) {}
+    explicit http_client_informational_response(http_status_code status) noexcept :
+        status_(status) {}
     http_status_code status_;
     std::vector<http_header> headers_;
 };
@@ -104,8 +104,7 @@ public:
 private:
     friend class detail::http_client_response_state;
 
-    http_client_response_bytes(
-        std::size_t reserve_bytes, detail::http_client_result_budget_lease&& lease_value);
+    http_client_response_bytes(std::size_t reserve_bytes, detail::http_client_result_budget_lease&& lease_value);
     http_client_response_bytes() noexcept = default;
     void append(std::span<const std::byte> bytes) noexcept;
     void release() noexcept;
@@ -160,10 +159,8 @@ public:
     // Collects the unread remainder of this same stream. max_bytes is a caller
     // bound in addition to the origin's transport bound. An interrupted
     // collection keeps the bytes received so far for the next body operation.
-    [[nodiscard]] task<http_client_response_bytes> read_all(
-        std::size_t max_bytes = default_max_buffered_body_bytes, operation_options operation = {}) &;
-    task<http_client_response_bytes> read_all(
-        std::size_t = default_max_buffered_body_bytes, operation_options = {}) && = delete;
+    [[nodiscard]] task<http_client_response_bytes> read_all(std::size_t max_bytes = default_max_buffered_body_bytes, operation_options operation = {}) &;
+    task<http_client_response_bytes> read_all(std::size_t = default_max_buffered_body_bytes, operation_options = {}) && = delete;
 
     // 以自然背压转发当前上游正文；调用者必须先对 output 执行 commit()，
     // 只有 body 结果才启动转发，completed 时不得消费/生产转发正文。
@@ -181,8 +178,8 @@ private:
 
     ~http_client_response_body() = default;
 
-    explicit http_client_response_body(detail::http_client_response_state* state_value) noexcept
-        : state_(state_value) {}
+    explicit http_client_response_body(detail::http_client_response_state* state_value) noexcept :
+        state_(state_value) {}
 
     detail::http_client_response_state* state_{nullptr};
 };
@@ -268,8 +265,7 @@ public:
 
 private:
     // The one forwarding chain of both pipe_to() destinations.
-    [[nodiscard]] task<void> pipe_to_destination(context_response_editor draft, response_stream_writer& writer,
-        ::ruvia::operation_scope& destination, operation_options operation);
+    [[nodiscard]] task<void> pipe_to_destination(context_response_editor draft, response_stream_writer& writer, ::ruvia::operation_scope& destination, operation_options operation);
     template <typename value_type>
     static task<value_type> decode_json(task<http_client_response_bytes> input) {
         auto owned = co_await std::move(input);
@@ -407,10 +403,10 @@ private:
     friend class detail::http_capsule_stream_state;
     friend class http_capsule_stream;
     friend class http_datagram_stream;
-    explicit http_client_tunnel_result(http_client_tunnel tunnel) noexcept
-        : value_(std::move(tunnel)) {}
-    explicit http_client_tunnel_result(http_client_response response) noexcept
-        : value_(std::move(response)) {}
+    explicit http_client_tunnel_result(http_client_tunnel tunnel) noexcept :
+        value_(std::move(tunnel)) {}
+    explicit http_client_tunnel_result(http_client_response response) noexcept :
+        value_(std::move(response)) {}
     std::variant<http_client_tunnel, http_client_response> value_;
 };
 
@@ -436,8 +432,8 @@ public:
 
 private:
     friend class detail::http_client_advertisement_queue;
-    explicit http_client_advertisement(detail::http_client_advertisement_state* state_value) noexcept
-        : state_(state_value) {}
+    explicit http_client_advertisement(detail::http_client_advertisement_state* state_value) noexcept :
+        state_(state_value) {}
     detail::http_client_advertisement_state* state_{};
 };
 
@@ -511,8 +507,8 @@ public:
 private:
     friend class http_client_exchange;
     friend class http_client_request;
-    explicit http_client_request_body_writer(detail::http_client_response_state* state_value) noexcept
-        : state_(state_value) {}
+    explicit http_client_request_body_writer(detail::http_client_response_state* state_value) noexcept :
+        state_(state_value) {}
     ~http_client_request_body_writer() = default;
     [[nodiscard]] task<void> write_owned(std::string&& bytes, operation_options operation);
     detail::http_client_response_state* state_;
@@ -577,10 +573,8 @@ public:
     // Non-destructive DNS resolution: resolves the client's dial host (or a
     // specified host) into a sorted, deduplicated IP address list without
     // retiring existing active connections or WebSockets.
-    [[nodiscard]] task<std::vector<ip_address>> resolve_dns(
-        operation_options options = {}) const;
-    [[nodiscard]] task<std::vector<ip_address>> resolve_dns(
-        std::string_view host, operation_options options = {}) const;
+    [[nodiscard]] task<std::vector<ip_address>> resolve_dns(operation_options options = {}) const;
+    [[nodiscard]] task<std::vector<ip_address>> resolve_dns(std::string_view host, operation_options options = {}) const;
     [[nodiscard]] bool close_connection(std::uint64_t id) const;
     [[nodiscard]] std::optional<http_client_advertisement> next_advertisement() const;
     [[nodiscard]] std::optional<http_client_push> next_push() const;
@@ -595,14 +589,10 @@ private:
     friend class http_client_request;
     friend class http_client_connect_request;
     friend class http_client_websocket_request;
-    [[nodiscard]] task<http_client_response> dispatch(const http_client_request_view& request, const http_client_request_options& options,
-        const std::shared_ptr<http_client_informational_callback>& informational) const;
-    [[nodiscard]] task<http_client_exchange> dispatch_upload(const http_client_request_view& head, http_client_upload_config upload, const http_client_request_options& options,
-        const std::shared_ptr<http_client_informational_callback>& informational) const;
-    [[nodiscard]] task<http_client_tunnel_result> dispatch_connect(const http_client_tunnel_request_view& head, http_client_tunnel_config config, const http_client_request_options& options,
-        const std::shared_ptr<http_client_informational_callback>& informational) const;
-    [[nodiscard]] task<http_client_tunnel_result> dispatch_udp(const http_client_udp_tunnel_request_view& head, http_client_tunnel_config config, const http_client_request_options& options,
-        const std::shared_ptr<http_client_informational_callback>& informational) const;
+    [[nodiscard]] task<http_client_response> dispatch(const http_client_request_view& request, const http_client_request_options& options, const std::shared_ptr<http_client_informational_callback>& informational) const;
+    [[nodiscard]] task<http_client_exchange> dispatch_upload(const http_client_request_view& head, http_client_upload_config upload, const http_client_request_options& options, const std::shared_ptr<http_client_informational_callback>& informational) const;
+    [[nodiscard]] task<http_client_tunnel_result> dispatch_connect(const http_client_tunnel_request_view& head, http_client_tunnel_config config, const http_client_request_options& options, const std::shared_ptr<http_client_informational_callback>& informational) const;
+    [[nodiscard]] task<http_client_tunnel_result> dispatch_udp(const http_client_udp_tunnel_request_view& head, http_client_tunnel_config config, const http_client_request_options& options, const std::shared_ptr<http_client_informational_callback>& informational) const;
     friend class detail::http_client_registry;
     friend class detail::http_client_state;
     friend class context;
@@ -610,8 +600,7 @@ private:
     friend class detail::worker_client_registry_view;
     http_client_ref(detail::http_client_pool& pool, ::ruvia::operation_scope& scope) noexcept;
     http_client_ref(detail::http_client_pool& pool, ::ruvia::operation_scope& scope, operation_options options) noexcept;
-    [[nodiscard]] http_client_ref bind_caller_scope(
-        ::ruvia::operation_scope& scope, const stop_token& host_stop) && noexcept;
+    [[nodiscard]] http_client_ref bind_caller_scope(::ruvia::operation_scope& scope, const stop_token& host_stop) && noexcept;
     static void expire_capability(void* target) noexcept;
 
     detail::http_client_pool* pool_{nullptr};
@@ -664,11 +653,8 @@ private:
     friend class detail::http_client_response_handoff;
     http_client_request(const http_client_ref& client, std::string_view method, std::string_view path);
     static task<http_client_response> send_owned(http_client_request request);
-    static task<http_client_exchange> upload_owned(
-        http_client_request request, http_client_upload_config config);
-    static task<http_client_response> follow_redirects(http_client_request request,
-        std::optional<http_client_response> initial_response, const operation_deadline& total,
-        bool upload_initial_hop);
+    static task<http_client_exchange> upload_owned(http_client_request request, http_client_upload_config config);
+    static task<http_client_response> follow_redirects(http_client_request request, std::optional<http_client_response> initial_response, const operation_deadline& total, bool upload_initial_hop);
     [[nodiscard]] std::vector<http_header_view> field_views() const;
     http_client_ref client_;
     std::string method_;
@@ -717,10 +703,8 @@ private:
 // 构造不创建线程；send() 按需建连。
 class http_client final {
 public:
-    http_client(event_loop loop, const http_client_config& config,
-        const http_client_worker_config& worker = {});
-    http_client(event_loop loop, std::span<const http_client_config> configs,
-        const http_client_worker_config& worker = {});
+    http_client(event_loop loop, const http_client_config& config, const http_client_worker_config& worker = {});
+    http_client(event_loop loop, std::span<const http_client_config> configs, const http_client_worker_config& worker = {});
     ~http_client();
 
     http_client(const http_client&) = delete;
@@ -765,10 +749,8 @@ private:
 
 // Standalone non-destructive asynchronous DNS resolution bound to a worker or
 // event loop. Returns a sorted, deduplicated list of numeric IP addresses.
-[[nodiscard]] task<std::vector<ip_address>> resolve_dns(
-    const worker_ref& worker, std::string_view host, operation_options options = {});
-[[nodiscard]] task<std::vector<ip_address>> resolve_dns(
-    event_loop loop, std::string_view host, operation_options options = {});
+[[nodiscard]] task<std::vector<ip_address>> resolve_dns(const worker_ref& worker, std::string_view host, operation_options options = {});
+[[nodiscard]] task<std::vector<ip_address>> resolve_dns(event_loop loop, std::string_view host, operation_options options = {});
 
 }  // namespace ruvia
 

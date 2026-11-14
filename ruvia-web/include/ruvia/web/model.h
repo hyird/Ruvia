@@ -27,7 +27,6 @@
 #include <vector>
 
 #include "ruvia/http/borrowed_text.h"
-#include "ruvia/http/http_header.h"
 #if defined(__SSE2__) || defined(_M_X64) || (defined(_M_IX86_FP) && _M_IX86_FP >= 2)
 #include <emmintrin.h>
 #define RUVIA_JSON_SCAN_SSE2 1
@@ -50,8 +49,7 @@ namespace ruvia::detail {
 // zero whatever its exponent; otherwise overflow or underflow is an error.
 template <std::floating_point t_type>
     requires std::same_as<t_type, std::remove_cv_t<t_type>>
-[[nodiscard]] std::optional<t_type> convert_decimal_number(
-    std::string_view validated, bool nonzero_significand) noexcept {
+[[nodiscard]] std::optional<t_type> convert_decimal_number(std::string_view validated, bool nonzero_significand) noexcept {
     if (!nonzero_significand) {
         return validated.starts_with('-') ? -t_type{0} : t_type{0};
     }
@@ -137,8 +135,7 @@ inline void skip_json_whitespace(std::string_view& input) noexcept {
     return true;
 }
 
-[[nodiscard]] inline bool consume_json_literal(
-    std::string_view& input, std::string_view literal) noexcept {
+[[nodiscard]] inline bool consume_json_literal(std::string_view& input, std::string_view literal) noexcept {
     skip_json_whitespace(input);
     if (!input.starts_with(literal)) {
         return false;
@@ -147,8 +144,7 @@ inline void skip_json_whitespace(std::string_view& input) noexcept {
     return true;
 }
 
-[[nodiscard]] inline std::size_t find_json_string_token_byte(
-    std::string_view input, std::size_t offset) noexcept {
+[[nodiscard]] inline std::size_t find_json_string_token_byte(std::string_view input, std::size_t offset) noexcept {
     if (offset >= input.size()) {
         return std::string_view::npos;
     }
@@ -163,8 +159,7 @@ inline void skip_json_whitespace(std::string_view& input) noexcept {
         const auto unsigned_bytes = _mm_xor_si128(bytes_value, sign_bit);
         auto special = _mm_or_si128(_mm_cmpeq_epi8(bytes_value, quote), _mm_cmpeq_epi8(bytes_value, backslash));
         special = _mm_or_si128(special, _mm_cmplt_epi8(unsigned_bytes, control_limit));
-        const auto mask =
-            static_cast<unsigned>(_mm_movemask_epi8(special)) | static_cast<unsigned>(_mm_movemask_epi8(bytes_value));
+        const auto mask = static_cast<unsigned>(_mm_movemask_epi8(special)) | static_cast<unsigned>(_mm_movemask_epi8(bytes_value));
         if (mask != 0) {
             return offset + std::countr_zero(mask);
         }
@@ -378,11 +373,10 @@ public:
 
 private:
     template <typename escaped_budget_type>
-    friend std::optional<json_string_token> parse_json_string(
-        std::string_view& input, std::string* decoded, escaped_budget_type&& consume_escaped_bytes);
-    json_string_token(std::string_view raw, json_string_encoding encoding) noexcept
-        : raw_(raw),
-          encoding_(encoding) {}
+    friend std::optional<json_string_token> parse_json_string(std::string_view& input, std::string* decoded, escaped_budget_type&& consume_escaped_bytes);
+    json_string_token(std::string_view raw, json_string_encoding encoding) noexcept :
+        raw_(raw),
+        encoding_(encoding) {}
 
     std::string_view raw_;
     json_string_encoding encoding_;
@@ -398,8 +392,7 @@ private:
 // so escaped input is neither rescanned nor copied before it is known to need
 // decoding. After a failed scan `decoded` holds unspecified contents.
 template <typename escaped_budget_type>
-[[nodiscard]] inline std::optional<json_string_token> parse_json_string(
-    std::string_view& input, std::string* decoded, escaped_budget_type&& consume_escaped_bytes) {
+[[nodiscard]] inline std::optional<json_string_token> parse_json_string(std::string_view& input, std::string* decoded, escaped_budget_type&& consume_escaped_bytes) {
     auto remaining = input;
     skip_json_whitespace(remaining);
     if (remaining.empty() || remaining.front() != '"') {
@@ -454,9 +447,7 @@ template <typename escaped_budget_type>
                     escape_length = 6;
                     if (is_json_high_surrogate(code_point)) {
                         std::uint32_t low = 0;
-                        if (i + 11 >= remaining.size() || remaining[i + 6] != '\\' ||
-                            remaining[i + 7] != 'u' || !read_json_hex4(remaining.substr(i + 8), low) ||
-                            !is_json_low_surrogate(low)) {
+                        if (i + 11 >= remaining.size() || remaining[i + 6] != '\\' || remaining[i + 7] != 'u' || !read_json_hex4(remaining.substr(i + 8), low) || !is_json_low_surrogate(low)) {
                             return std::nullopt;
                         }
                         code_point = 0x10000 + (((code_point - 0xD800) << 10) | (low - 0xDC00));
@@ -511,14 +502,14 @@ template <typename escaped_budget_type>
     return std::nullopt;
 }
 
-[[nodiscard]] inline std::optional<json_string_token> parse_json_string(
-    std::string_view& input, std::string* decoded = nullptr) {
-    return parse_json_string(input, decoded, [](std::size_t) noexcept { return true; });
+[[nodiscard]] inline std::optional<json_string_token> parse_json_string(std::string_view& input, std::string* decoded = nullptr) {
+    return parse_json_string(input, decoded, [](std::size_t) noexcept {
+        return true;
+    });
 }
 
 // The text of a string scanned by parse_json_string(input, &decoded).
-[[nodiscard]] inline std::string_view json_string_text(
-    const json_string_token& token, const std::string& decoded) noexcept {
+[[nodiscard]] inline std::string_view json_string_text(const json_string_token& token, const std::string& decoded) noexcept {
     return token.encoding() == json_string_encoding::literal ? token.raw() : std::string_view(decoded);
 }
 
@@ -678,8 +669,7 @@ template <typename visitor_type>
 // itself (see parse_json_string). input advances past '}' only when the whole
 // object is accepted; nested values visited by the caller belong at depth + 1.
 template <typename visitor_type, typename key_budget_type>
-[[nodiscard]] bool consume_json_object_members(std::string_view& input, std::size_t depth,
-    std::string* decoded_key, visitor_type&& visitor, key_budget_type&& consume_key_bytes) {
+[[nodiscard]] bool consume_json_object_members(std::string_view& input, std::size_t depth, std::string* decoded_key, visitor_type&& visitor, key_budget_type&& consume_key_bytes) {
     if (depth > max_json_depth) {
         return false;
     }
@@ -718,38 +708,33 @@ template <typename visitor_type, typename key_budget_type>
 }
 
 template <typename visitor_type>
-[[nodiscard]] bool consume_json_object_members(
-    std::string_view& input, std::size_t depth, std::string* decoded_key, visitor_type&& visitor) {
-    return consume_json_object_members(
-        input, depth, decoded_key, std::forward<visitor_type>(visitor), [](std::size_t) noexcept { return true; });
+[[nodiscard]] bool consume_json_object_members(std::string_view& input, std::size_t depth, std::string* decoded_key, visitor_type&& visitor) {
+    return consume_json_object_members(input, depth, decoded_key, std::forward<visitor_type>(visitor), [](std::size_t) noexcept {
+        return true;
+    });
 }
 
 [[nodiscard]] inline bool skip_json_value(std::string_view& input, std::size_t depth) noexcept;
 
 template <typename element_budget_type>
-[[nodiscard]] bool skip_json_value(std::string_view& input, std::size_t depth,
-    element_budget_type& consume_element) noexcept;
+[[nodiscard]] bool skip_json_value(std::string_view& input, std::size_t depth, element_budget_type& consume_element) noexcept;
 
 template <typename element_budget_type>
-[[nodiscard]] bool skip_json_array(std::string_view& input, std::size_t depth,
-    element_budget_type& consume_element) noexcept {
+[[nodiscard]] bool skip_json_array(std::string_view& input, std::size_t depth, element_budget_type& consume_element) noexcept {
     return consume_json_array_elements(input, depth, [depth, &consume_element](std::string_view& element) noexcept {
         return consume_element() && skip_json_value(element, depth + 1, consume_element);
     });
 }
 
 template <typename element_budget_type>
-[[nodiscard]] bool skip_json_object(std::string_view& input, std::size_t depth,
-    element_budget_type& consume_element) noexcept {
-    return consume_json_object_members(input, depth, nullptr,
-        [depth, &consume_element](const json_string_token&, std::string_view& value) noexcept {
-            return skip_json_value(value, depth + 1, consume_element);
-        });
+[[nodiscard]] bool skip_json_object(std::string_view& input, std::size_t depth, element_budget_type& consume_element) noexcept {
+    return consume_json_object_members(input, depth, nullptr, [depth, &consume_element](const json_string_token&, std::string_view& value) noexcept {
+        return skip_json_value(value, depth + 1, consume_element);
+    });
 }
 
 template <typename element_budget_type>
-[[nodiscard]] bool skip_json_value(std::string_view& input, std::size_t depth,
-    element_budget_type& consume_element) noexcept {
+[[nodiscard]] bool skip_json_value(std::string_view& input, std::size_t depth, element_budget_type& consume_element) noexcept {
     if (depth > max_json_depth) {
         return false;
     }
@@ -779,7 +764,9 @@ template <typename element_budget_type>
 }
 
 [[nodiscard]] inline bool skip_json_value(std::string_view& input, std::size_t depth) noexcept {
-    auto consume_element = []() noexcept { return true; };
+    auto consume_element = []() noexcept {
+        return true;
+    };
     return skip_json_value(input, depth, consume_element);
 }
 
@@ -794,31 +781,27 @@ enum class json_object_visit_result : unsigned char { complete,
 // that slice again. consume_key_allocation is charged with the raw size of
 // every escaped key before the visitor sees it.
 template <typename visitor_type, typename key_allocation_type>
-[[nodiscard]] bool consume_json_object_fields(std::string_view& input, std::size_t depth,
-    visitor_type&& visitor, key_allocation_type&& consume_key_allocation) {
+[[nodiscard]] bool consume_json_object_fields(std::string_view& input, std::size_t depth, visitor_type&& visitor, key_allocation_type&& consume_key_allocation) {
     auto& visitor_ref = visitor;
     std::string decoded_key;
     bool key_started = false;
-    return consume_json_object_members(
-        input, depth, &decoded_key,
-        [&](const json_string_token& key, std::string_view& value_input) {
-            key_started = false;
-            if (key.encoding() == json_string_encoding::escaped) {
-                return static_cast<bool>(visitor_ref(std::string_view(decoded_key), value_input));
-            }
-            return static_cast<bool>(visitor_ref(key.raw(), value_input));
-        },
-        [&](std::size_t bytes_value) noexcept {
-            const bool first = !std::exchange(key_started, true);
-            return consume_key_allocation(bytes_value, first);
-        });
+    return consume_json_object_members(input, depth, &decoded_key, [&](const json_string_token& key, std::string_view& value_input) {
+        key_started = false;
+        if (key.encoding() == json_string_encoding::escaped) {
+            return static_cast<bool>(visitor_ref(std::string_view(decoded_key), value_input));
+        }
+        return static_cast<bool>(visitor_ref(key.raw(), value_input));
+    }, [&](std::size_t bytes_value) noexcept {
+        const bool first = !std::exchange(key_started, true);
+        return consume_key_allocation(bytes_value, first);
+    });
 }
 
 template <typename visitor_type>
-[[nodiscard]] bool consume_json_object_fields(
-    std::string_view& input, std::size_t depth, visitor_type&& visitor) {
-    return consume_json_object_fields(input, depth,
-        std::forward<visitor_type>(visitor), [](std::size_t, bool) noexcept { return true; });
+[[nodiscard]] bool consume_json_object_fields(std::string_view& input, std::size_t depth, visitor_type&& visitor) {
+    return consume_json_object_fields(input, depth, std::forward<visitor_type>(visitor), [](std::size_t, bool) noexcept {
+        return true;
+    });
 }
 
 // Visits every field of one complete JSON object body as a raw value slice
@@ -826,21 +809,19 @@ template <typename visitor_type>
 // whole body honours max_json_depth. The visitor returns false to stop.
 template <typename visitor_type>
     requires std::predicate<visitor_type&, std::string_view, std::string_view>
-[[nodiscard]] json_object_visit_result visit_json_object_fields(
-    std::string_view body, visitor_type&& visitor) {
+[[nodiscard]] json_object_visit_result visit_json_object_fields(std::string_view body, visitor_type&& visitor) {
     auto input = body;
     auto& visitor_ref = visitor;
     bool stopped = false;
-    const bool consumed = consume_json_object_fields(input, 0,
-        [&visitor_ref, &stopped](std::string_view key, std::string_view& value_input) {
-            const auto value_start = value_input;
-            if (!skip_json_value(value_input, 1)) {
-                return false;
-            }
-            const auto value = value_start.substr(0, value_start.size() - value_input.size());
-            stopped = !visitor_ref(key, value);
-            return !stopped;
-        });
+    const bool consumed = consume_json_object_fields(input, 0, [&visitor_ref, &stopped](std::string_view key, std::string_view& value_input) {
+        const auto value_start = value_input;
+        if (!skip_json_value(value_input, 1)) {
+            return false;
+        }
+        const auto value = value_start.substr(0, value_start.size() - value_input.size());
+        stopped = !visitor_ref(key, value);
+        return !stopped;
+    });
     if (stopped) {
         return json_object_visit_result::stopped;
     }
@@ -865,9 +846,9 @@ public:
 
     request_name_value_list(const request_name_value_list&) = delete;
     request_name_value_list& operator=(const request_name_value_list&) = delete;
-    request_name_value_list(request_name_value_list&& other) noexcept
-        : owned_(std::move(other.owned_)),
-          case_insensitive_(other.case_insensitive_) {
+    request_name_value_list(request_name_value_list&& other) noexcept :
+        owned_(std::move(other.owned_)),
+        case_insensitive_(other.case_insensitive_) {
         items_ = owned_.empty() ? other.items_ : std::span<const http_header_view>(owned_);
         other.items_ = {};
     }
@@ -941,12 +922,12 @@ public:
 private:
     friend struct detail::request_name_value_list_access;
 
-    explicit request_name_value_list(bool case_insensitive = false) noexcept
-        : items_(owned_),
-          case_insensitive_(case_insensitive) {}
-    explicit request_name_value_list(std::span<const http_header_view> headers) noexcept
-        : items_(headers),
-          case_insensitive_(true) {}
+    explicit request_name_value_list(bool case_insensitive = false) noexcept :
+        items_(owned_),
+        case_insensitive_(case_insensitive) {}
+    explicit request_name_value_list(std::span<const http_header_view> headers) noexcept :
+        items_(headers),
+        case_insensitive_(true) {}
 
     [[nodiscard]] bool case_insensitive() const noexcept {
         return case_insensitive_;
@@ -978,8 +959,7 @@ struct request_name_value_list_access final {
     [[nodiscard]] static request_name_value_list make() noexcept {
         return request_name_value_list();
     }
-    [[nodiscard]] static request_name_value_list borrow_headers(
-        std::span<const http_header_view> headers) noexcept {
+    [[nodiscard]] static request_name_value_list borrow_headers(std::span<const http_header_view> headers) noexcept {
         return request_name_value_list(headers);
     }
 
@@ -987,8 +967,7 @@ struct request_name_value_list_access final {
         return list.case_insensitive();
     }
 
-    [[nodiscard]] static bool names_equal(const request_name_value_list& list,
-        std::string_view left, std::string_view right) noexcept {
+    [[nodiscard]] static bool names_equal(const request_name_value_list& list, std::string_view left, std::string_view right) noexcept {
         return list.names_equal(left, right);
     }
 
@@ -1013,13 +992,13 @@ namespace ruvia::detail {
 // value owns the common borrow/clone/transfer and strong publication rules.
 class model_text_storage final {
 public:
-    explicit model_text_storage(std::string_view borrowed = {}) noexcept
-        : value_(std::in_place_type<std::string_view>, borrowed) {}
+    explicit model_text_storage(std::string_view borrowed = {}) noexcept :
+        value_(std::in_place_type<std::string_view>, borrowed) {}
 
     model_text_storage(const model_text_storage&) = delete;
     model_text_storage& operator=(const model_text_storage&) = delete;
-    model_text_storage(model_text_storage&& other) noexcept
-        : value_(std::move(other.value_)) {
+    model_text_storage(model_text_storage&& other) noexcept :
+        value_(std::move(other.value_)) {
         other.assign_borrowed({});
     }
     model_text_storage& operator=(model_text_storage&&) = delete;
@@ -1071,8 +1050,8 @@ public:
     }
 
 private:
-    explicit model_text_storage(std::string&& owned) noexcept
-        : value_(std::in_place_type<std::string>, std::move(owned)) {}
+    explicit model_text_storage(std::string&& owned) noexcept :
+        value_(std::in_place_type<std::string>, std::move(owned)) {}
 
     std::variant<std::string_view, std::string> value_;
 };
@@ -1096,8 +1075,7 @@ template <typename bytes_type = ::ruvia::bytes>
         return std::nullopt;
     }
     std::vector<std::uint8_t> decoded(http_base64_decoded_size_bound(encoded.size()));
-    const auto decoded_size = http_base64_decode(
-        encoded, decoded, http_base64_charset::standard, http_base64_padding::required);
+    const auto decoded_size = http_base64_decode(encoded, decoded, http_base64_charset::standard, http_base64_padding::required);
     if (!decoded_size) {
         return std::nullopt;
     }
@@ -1114,10 +1092,7 @@ namespace ruvia {
 namespace detail {
 
 template <typename t_type>
-inline constexpr bool is_model_integer =
-    std::is_integral_v<t_type> && !std::is_same_v<t_type, bool> && !std::is_same_v<t_type, char> &&
-    !std::is_same_v<t_type, wchar_t> && !std::is_same_v<t_type, char8_t> &&
-    !std::is_same_v<t_type, char16_t> && !std::is_same_v<t_type, char32_t>;
+inline constexpr bool is_model_integer = std::is_integral_v<t_type> && !std::is_same_v<t_type, bool> && !std::is_same_v<t_type, char> && !std::is_same_v<t_type, wchar_t> && !std::is_same_v<t_type, char8_t> && !std::is_same_v<t_type, char16_t> && !std::is_same_v<t_type, char32_t>;
 
 template <typename target_type, typename input_type>
 [[nodiscard]] constexpr target_type checked_model_integer(input_type input) {
@@ -1128,8 +1103,7 @@ template <typename target_type, typename input_type>
 }
 
 template <typename target_type, std::floating_point input_type>
-[[nodiscard]] constexpr target_type checked_model_float(input_type input) noexcept(
-    (std::numeric_limits<input_type>::max)() <= (std::numeric_limits<target_type>::max)()) {
+[[nodiscard]] constexpr target_type checked_model_float(input_type input) noexcept((std::numeric_limits<input_type>::max)() <= (std::numeric_limits<target_type>::max)()) {
     constexpr auto source_max = (std::numeric_limits<input_type>::max)();
     constexpr auto target_max = (std::numeric_limits<target_type>::max)();
     if constexpr (source_max > target_max) {
@@ -1149,8 +1123,7 @@ enum class model_string_storage : std::uint8_t {
     owned,
 };
 
-[[nodiscard]] inline bool model_address_within(
-    const void* address, const void* begin, std::size_t bytes_value) noexcept {
+[[nodiscard]] inline bool model_address_within(const void* address, const void* begin, std::size_t bytes_value) noexcept {
     const auto value = reinterpret_cast<std::uintptr_t>(address);
     const auto first = reinterpret_cast<std::uintptr_t>(begin);
     return value >= first && value - first < bytes_value;
@@ -1167,9 +1140,7 @@ struct model_value_rebind_access final {
         if constexpr (requires { typename value_type::ruvia_model_schema_type; }) {
             return true;
         } else {
-            return requires(const value_type& source_value) {
-                source_value.rebind_for_model();
-            };
+            return requires(const value_type& source_value) { source_value.rebind_for_model(); };
         }
     }
 
@@ -1178,11 +1149,8 @@ struct model_value_rebind_access final {
         using value_type = std::remove_cvref_t<t_type>;
         if constexpr (requires { typename value_type::ruvia_model_schema_type; }) {
             return value_type(std::forward<t_type>(value).fields_.rebind());
-        } else if constexpr (requires(value_type& source_value) {
-                                 source_value.rebind_for_model();
-                             }) {
-            if constexpr (std::is_lvalue_reference_v<t_type&&> ||
-                          std::is_const_v<std::remove_reference_t<t_type>>) {
+        } else if constexpr (requires(value_type& source_value) { source_value.rebind_for_model(); }) {
+            if constexpr (std::is_lvalue_reference_v<t_type&&> || std::is_const_v<std::remove_reference_t<t_type>>) {
                 return value.rebind_for_model();
             } else {
                 return std::move(value).rebind_for_model();
@@ -1198,9 +1166,7 @@ struct model_value_rebind_access final {
         if constexpr (requires { typename value_type::ruvia_model_schema_type; }) {
             return true;
         } else {
-            return requires(const value_type& source_value, const void* address) {
-                source_value.owns_for_model(address);
-            };
+            return requires(const value_type& source_value, const void* address) { source_value.owns_for_model(address); };
         }
     }
 
@@ -1243,21 +1209,15 @@ struct model_value_construction final {
 // that aliases an existing element. The captured arguments are consumed inline.
 template <typename value_type, typename... argument_types>
 auto prepare_model_value(const void* destination, argument_types&&... arguments) {
-    if constexpr (sizeof...(argument_types) == 1 &&
-                  ((std::same_as<std::remove_cvref_t<argument_types>, value_type> &&
-                       !std::is_lvalue_reference_v<argument_types> &&
-                       !std::is_const_v<std::remove_reference_t<argument_types>>) &&
-                      ...)) {
+    if constexpr (sizeof...(argument_types) == 1 && ((std::same_as<std::remove_cvref_t<argument_types>, value_type> && !std::is_lvalue_reference_v<argument_types> && !std::is_const_v<std::remove_reference_t<argument_types>>) && ...)) {
         if ((model_value_rebind_access::contains(arguments, destination) || ...)) {
             throw_model_move_source_owns_destination();
         }
     }
     auto construct = [&arguments...]() -> value_type {
-        if constexpr (sizeof...(argument_types) == 1 &&
-                      (std::same_as<std::remove_cvref_t<argument_types>, value_type> && ...)) {
+        if constexpr (sizeof...(argument_types) == 1 && (std::same_as<std::remove_cvref_t<argument_types>, value_type> && ...)) {
             return [&]<typename input_type>(input_type&& value) -> value_type {
-                if constexpr (std::is_lvalue_reference_v<input_type&&> ||
-                              std::is_const_v<std::remove_reference_t<input_type>>) {
+                if constexpr (std::is_lvalue_reference_v<input_type&&> || std::is_const_v<std::remove_reference_t<input_type>>) {
                     return rebind_model_value(static_cast<const value_type&>(value));
                 } else {
                     return rebind_model_value(std::move(value));
@@ -1342,11 +1302,11 @@ private:
     friend struct detail::model_value_factory;
     friend struct detail::model_value_rebind_access;
 
-    string(detail::borrowed_model_token_tag, std::string_view value) noexcept
-        : storage_(value) {}
+    string(detail::borrowed_model_token_tag, std::string_view value) noexcept :
+        storage_(value) {}
 
-    explicit string(detail::model_text_storage&& storage) noexcept
-        : storage_(std::move(storage)) {}
+    explicit string(detail::model_text_storage&& storage) noexcept :
+        storage_(std::move(storage)) {}
 
     [[nodiscard]] string rebind_for_model() const& {
         return string(storage_.rebind());
@@ -1362,8 +1322,8 @@ private:
 struct bool_value final {
     bool value_{false};
     constexpr bool_value() noexcept = default;
-    constexpr bool_value(bool input) noexcept
-        : value_(input) {}
+    constexpr bool_value(bool input) noexcept :
+        value_(input) {}
     [[nodiscard]] constexpr operator bool() const noexcept {
         return value_;
     }
@@ -1376,12 +1336,12 @@ struct double_value;
 struct float_value final {
     float value_{0};
     constexpr float_value() noexcept = default;
-    constexpr float_value(float input) noexcept
-        : value_(input) {}
+    constexpr float_value(float input) noexcept :
+        value_(input) {}
     template <std::floating_point input_type>
         requires(!std::same_as<input_type, float>)
-    constexpr float_value(input_type input) noexcept(noexcept(detail::checked_model_float<float>(input)))
-        : value_(detail::checked_model_float<float>(input)) {}
+    constexpr float_value(input_type input) noexcept(noexcept(detail::checked_model_float<float>(input))) :
+        value_(detail::checked_model_float<float>(input)) {}
     constexpr float_value(const double_value& input);
     [[nodiscard]] constexpr operator float() const noexcept {
         return value_;
@@ -1391,19 +1351,19 @@ struct float_value final {
 struct double_value final {
     double value_{0};
     constexpr double_value() noexcept = default;
-    constexpr double_value(double input) noexcept
-        : value_(input) {}
+    constexpr double_value(double input) noexcept :
+        value_(input) {}
     template <std::floating_point input_type>
         requires(!std::same_as<input_type, double>)
-    constexpr double_value(input_type input) noexcept(noexcept(detail::checked_model_float<double>(input)))
-        : value_(detail::checked_model_float<double>(input)) {}
+    constexpr double_value(input_type input) noexcept(noexcept(detail::checked_model_float<double>(input))) :
+        value_(detail::checked_model_float<double>(input)) {}
     [[nodiscard]] constexpr operator double() const noexcept {
         return value_;
     }
 };
 
-constexpr float_value::float_value(const double_value& input)
-    : value_(detail::checked_model_float<float>(input.value_)) {}
+constexpr float_value::float_value(const double_value& input) :
+    value_(detail::checked_model_float<float>(input.value_)) {}
 
 // Accepts its exact integer type unchecked, other integers after a range
 // check, and rejects every non-integer type at compile time.
@@ -1411,13 +1371,12 @@ template <typename t_type>
 struct integer_value final {
     t_type value_{0};
     constexpr integer_value() noexcept = default;
-    constexpr integer_value(t_type input) noexcept
-        : value_(input) {}
+    constexpr integer_value(t_type input) noexcept :
+        value_(input) {}
     template <typename input_type>
-        requires(detail::is_model_integer<input_type> &&
-                 !std::is_same_v<std::remove_cv_t<input_type>, t_type>)
-    constexpr integer_value(input_type input)
-        : value_(detail::checked_model_integer<t_type>(input)) {}
+        requires(detail::is_model_integer<input_type> && !std::is_same_v<std::remove_cv_t<input_type>, t_type>)
+    constexpr integer_value(input_type input) :
+        value_(detail::checked_model_integer<t_type>(input)) {}
     template <typename input_type>
         requires(!detail::is_model_integer<input_type>)
     integer_value(input_type) = delete;
@@ -1439,14 +1398,14 @@ class bytes final {
 public:
     bytes() noexcept = default;
 
-    bytes(std::span<const std::uint8_t> value)
-        : items_(value.begin(), value.end()) {}
+    bytes(std::span<const std::uint8_t> value) :
+        items_(value.begin(), value.end()) {}
 
     bytes(const bytes&) = delete;
     bytes& operator=(const bytes&) = delete;
 
-    bytes(bytes&& other) noexcept
-        : items_(std::move(other.items_)) {
+    bytes(bytes&& other) noexcept :
+        items_(std::move(other.items_)) {
         other.items_.clear();
     }
 
@@ -1487,8 +1446,7 @@ public:
     }
 
     friend bool operator==(const bytes& left, const bytes& right) noexcept {
-        return left.size() == right.size() &&
-               std::equal(left.view().begin(), left.view().end(), right.view().begin());
+        return left.size() == right.size() && std::equal(left.view().begin(), left.view().end(), right.view().begin());
     }
 
 private:
@@ -1527,8 +1485,8 @@ public:
     array(const array&) = delete;
     array& operator=(const array&) = delete;
 
-    array(array&& other) noexcept
-        : items_(std::move(other.items_)) {
+    array(array&& other) noexcept :
+        items_(std::move(other.items_)) {
         other.items_.clear();
     }
 
@@ -1731,8 +1689,8 @@ public:
     boxed_array(const boxed_array&) = delete;
     boxed_array& operator=(const boxed_array&) = delete;
 
-    boxed_array(boxed_array&& other) noexcept
-        : items_(std::move(other.items_)) {
+    boxed_array(boxed_array&& other) noexcept :
+        items_(std::move(other.items_)) {
         other.items_.clear();
     }
 
@@ -1875,9 +1833,7 @@ private:
     template <bool const_value>
     class iterator_type final {
     public:
-        using inner_iterator_type = std::conditional_t<const_value,
-            typename std::vector<t_type*>::const_iterator,
-            typename std::vector<t_type*>::iterator>;
+        using inner_iterator_type = std::conditional_t<const_value, typename std::vector<t_type*>::const_iterator, typename std::vector<t_type*>::iterator>;
         using difference_type = typename inner_iterator_type::difference_type;
         using value_type = t_type;
         using reference = std::conditional_t<const_value, const t_type&, t_type&>;
@@ -1886,8 +1842,8 @@ private:
 
         iterator_type() noexcept = default;
 
-        explicit iterator_type(inner_iterator_type current) noexcept
-            : current_(current) {}
+        explicit iterator_type(inner_iterator_type current) noexcept :
+            current_(current) {}
 
         reference operator*() const noexcept {
             return **current_;
@@ -1991,13 +1947,11 @@ class json_value;
 
 namespace detail {
 
-enum class model_field_state : std::uint8_t {
-    missing,
+enum class model_field_state : std::uint8_t { missing,
     parsed,
     null,
     invalid_type,
-    duplicate
-};
+    duplicate };
 
 template <typename>
 inline constexpr bool always_false = false;
@@ -2064,12 +2018,10 @@ template <typename t_type>
 inline constexpr bool is_form_field = is_ruvia_string<t_type> || is_ruvia_scalar<t_type>;
 
 template <typename t_type>
-inline constexpr bool is_model =
-    requires { typename std::remove_cvref_t<t_type>::ruvia_model_schema_type; };
+inline constexpr bool is_model = requires { typename std::remove_cvref_t<t_type>::ruvia_model_schema_type; };
 
 template <typename t_type>
-inline constexpr bool model_field_value = is_ruvia_string<t_type> || is_ruvia_bytes<t_type> || is_ruvia_scalar<t_type> ||
-                                          is_ruvia_json_value<t_type> || is_ruvia_json_object<t_type> || is_model<t_type>;
+inline constexpr bool model_field_value = is_ruvia_string<t_type> || is_ruvia_bytes<t_type> || is_ruvia_scalar<t_type> || is_ruvia_json_value<t_type> || is_ruvia_json_object<t_type> || is_model<t_type>;
 
 template <typename value_type>
 inline constexpr bool model_field_value<array<value_type>> = model_field_value<std::remove_cvref_t<value_type>>;
@@ -2081,8 +2033,7 @@ template <typename t_type>
 inline constexpr bool is_model_field = model_field_value<std::remove_cvref_t<t_type>>;
 
 template <typename t_type>
-inline constexpr bool model_json_value =
-    is_ruvia_string<t_type> || is_ruvia_bytes<t_type> || is_ruvia_scalar<t_type> || is_model<t_type>;
+inline constexpr bool model_json_value = is_ruvia_string<t_type> || is_ruvia_bytes<t_type> || is_ruvia_scalar<t_type> || is_model<t_type>;
 
 template <typename value_type>
 inline constexpr bool model_json_value<array<value_type>> = model_json_value<std::remove_cvref_t<value_type>>;
@@ -2094,12 +2045,10 @@ template <typename t_type>
 inline constexpr bool is_model_json_value = model_json_value<std::remove_cvref_t<t_type>>;
 
 template <typename t_type>
-inline constexpr bool is_validation_number =
-    std::is_arithmetic_v<std::remove_cvref_t<t_type>> || is_ruvia_scalar<t_type>;
+inline constexpr bool is_validation_number = std::is_arithmetic_v<std::remove_cvref_t<t_type>> || is_ruvia_scalar<t_type>;
 
 template <typename integer_type, typename floating_type>
-[[nodiscard]] std::partial_ordering compare_validation_integer_floating(
-    integer_type integer, floating_type floating) noexcept {
+[[nodiscard]] std::partial_ordering compare_validation_integer_floating(integer_type integer, floating_type floating) noexcept {
     if (std::isnan(floating)) {
         return std::partial_ordering::unordered;
     }
@@ -2273,8 +2222,7 @@ struct pattern_class_member final {
     }
 }
 
-[[nodiscard]] constexpr bool consume_pattern_class_atom(std::string_view pattern, std::size_t end,
-    std::size_t& cursor, pattern_class_member& member) noexcept {
+[[nodiscard]] constexpr bool consume_pattern_class_atom(std::string_view pattern, std::size_t end, std::size_t& cursor, pattern_class_member& member) noexcept {
     if (cursor >= end) {
         return false;
     }
@@ -2296,17 +2244,14 @@ struct pattern_class_member final {
 
 // Decode escaped atoms before recognizing a range; a final '-' is a literal,
 // and only single literal atoms may be range endpoints.
-[[nodiscard]] constexpr bool consume_pattern_class_member(std::string_view pattern, std::size_t end,
-    std::size_t& cursor, pattern_class_member& member) noexcept {
+[[nodiscard]] constexpr bool consume_pattern_class_member(std::string_view pattern, std::size_t end, std::size_t& cursor, pattern_class_member& member) noexcept {
     if (!consume_pattern_class_atom(pattern, end, cursor, member)) {
         return false;
     }
     if (cursor + 1 < end && pattern[cursor] == '-') {
         ++cursor;
         pattern_class_member last;
-        if (!consume_pattern_class_atom(pattern, end, cursor, last) ||
-            member.kind_ != pattern_atom_kind::literal || last.kind_ != pattern_atom_kind::literal ||
-            member.first_ > last.first_) {
+        if (!consume_pattern_class_atom(pattern, end, cursor, last) || member.kind_ != pattern_atom_kind::literal || last.kind_ != pattern_atom_kind::literal || member.first_ > last.first_) {
             return false;
         }
         member.last_ = last.first_;
@@ -2341,8 +2286,7 @@ constexpr void insert_pattern_member(pattern_byte_set& bytes, const pattern_clas
 // Folds the class body in [begin, end) into `bytes`. Negation is applied by
 // the caller: a leading '[^' is stripped before the body, so any '^' here is an
 // ordinary member (e.g. "[^^]" excludes only the caret).
-[[nodiscard]] constexpr bool compile_pattern_class(std::string_view pattern, std::size_t begin,
-    std::size_t end, pattern_byte_set& bytes) noexcept {
+[[nodiscard]] constexpr bool compile_pattern_class(std::string_view pattern, std::size_t begin, std::size_t end, pattern_byte_set& bytes) noexcept {
     if (begin >= end) {
         return false;
     }
@@ -2359,8 +2303,7 @@ constexpr void insert_pattern_member(pattern_byte_set& bytes, const pattern_clas
 inline constexpr std::size_t max_pattern_bytes = 256;
 
 template <std::size_t capacity>
-[[nodiscard]] constexpr bool append_pattern_atom(std::string_view pattern, std::size_t end,
-    std::size_t& cursor_value, pattern_plan<capacity>& plan) noexcept {
+[[nodiscard]] constexpr bool append_pattern_atom(std::string_view pattern, std::size_t end, std::size_t& cursor_value, pattern_plan<capacity>& plan) noexcept {
     if (cursor_value >= end || plan.count_ >= capacity) {
         return false;
     }
@@ -2421,8 +2364,7 @@ template <std::size_t capacity>
 }
 
 template <std::size_t capacity>
-[[nodiscard]] constexpr pattern_plan<capacity> compile_pattern_plan(
-    std::string_view pattern) noexcept {
+[[nodiscard]] constexpr pattern_plan<capacity> compile_pattern_plan(std::string_view pattern) noexcept {
     pattern_plan<capacity> plan{};
     if (pattern.size() > max_pattern_bytes || pattern.size() < 2 || pattern.front() != '^' || pattern.back() != '$') {
         return plan;
@@ -2436,8 +2378,7 @@ template <std::size_t capacity>
             return {};
         }
 
-        if (cursor_value < pattern_end &&
-            (pattern[cursor_value] == '*' || pattern[cursor_value] == '+' || pattern[cursor_value] == '?')) {
+        if (cursor_value < pattern_end && (pattern[cursor_value] == '*' || pattern[cursor_value] == '+' || pattern[cursor_value] == '?')) {
             switch (pattern[cursor_value++]) {
                 case '*':
                     plan.atoms_[index].quantifier_ = pattern_quantifier::zero_or_more;
@@ -2460,8 +2401,7 @@ template <std::size_t capacity>
 
 template <fixed_string pattern>
 struct compiled_pattern_plan final {
-    static constexpr std::size_t capacity =
-        pattern.view().size() < max_pattern_bytes ? pattern.view().size() : max_pattern_bytes;
+    static constexpr std::size_t capacity = pattern.view().size() < max_pattern_bytes ? pattern.view().size() : max_pattern_bytes;
     static constexpr auto value = compile_pattern_plan<capacity>(pattern.view());
     static_assert(value.valid_,
         "RUVIA_PATTERN supports only anchored patterns using literals, '.', character classes, \\d, \\w, \\s, and '*', '+', '?'. "
@@ -2475,8 +2415,7 @@ struct compiled_pattern_plan final {
 inline constexpr std::size_t max_pattern_match_steps = 1'000'000;
 
 template <std::size_t capacity>
-[[nodiscard]] constexpr bool match_pattern_plan_from(const pattern_plan<capacity>& plan,
-    std::string_view value, std::size_t atom_index, std::size_t value_index, std::size_t& budget) noexcept {
+[[nodiscard]] constexpr bool match_pattern_plan_from(const pattern_plan<capacity>& plan, std::string_view value, std::size_t atom_index, std::size_t value_index, std::size_t& budget) noexcept {
     if (budget == 0) {
         return false;  // step budget exhausted -> bound catastrophic backtracking
     }
@@ -2486,10 +2425,7 @@ template <std::size_t capacity>
     }
 
     const auto& atom = plan.atoms_[atom_index];
-    const std::size_t min_count = atom.quantifier_ == pattern_quantifier::one ||
-                                          atom.quantifier_ == pattern_quantifier::one_or_more
-                                      ? 1
-                                      : 0;
+    const std::size_t min_count = atom.quantifier_ == pattern_quantifier::one || atom.quantifier_ == pattern_quantifier::one_or_more ? 1 : 0;
     // Bound the greedy scan at the most this quantifier can consume. one/zero_or_one
     // take at most one character, so scanning the whole matching run and discarding
     // all but one is wasted O(L) work -- and it is repeated at every backtrack
@@ -2498,10 +2434,7 @@ template <std::size_t capacity>
     // makes each fixed atom O(1), so per-call scan cost stays within the
     // budget-charged recursion; the variable quantifiers already spawn ~L recursions
     // for an L-char scan and so remain bounded.
-    const std::size_t scan_limit = atom.quantifier_ == pattern_quantifier::one ||
-                                           atom.quantifier_ == pattern_quantifier::zero_or_one
-                                       ? std::size_t{1}
-                                       : value.size();
+    const std::size_t scan_limit = atom.quantifier_ == pattern_quantifier::one || atom.quantifier_ == pattern_quantifier::zero_or_one ? std::size_t{1} : value.size();
     std::size_t max_count = 0;
     while (max_count < scan_limit && value_index + max_count < value.size()) {
         if (budget == 0) {
@@ -2541,15 +2474,13 @@ namespace ruvia::detail::model {
 
 template <auto bound, fixed_string error_message>
 struct min final {
-    static_assert(std::is_arithmetic_v<decltype(bound)> && !std::is_same_v<decltype(bound), bool>,
-        "RUVIA_MIN requires a numeric bound");
+    static_assert(std::is_arithmetic_v<decltype(bound)> && !std::is_same_v<decltype(bound), bool>, "RUVIA_MIN requires a numeric bound");
     using ruvia_validation_rule_marker_type = void;
 };
 
 template <auto bound, fixed_string error_message>
 struct max final {
-    static_assert(std::is_arithmetic_v<decltype(bound)> && !std::is_same_v<decltype(bound), bool>,
-        "RUVIA_MAX requires a numeric bound");
+    static_assert(std::is_arithmetic_v<decltype(bound)> && !std::is_same_v<decltype(bound), bool>, "RUVIA_MAX requires a numeric bound");
     using ruvia_validation_rule_marker_type = void;
 };
 
@@ -2619,14 +2550,11 @@ template <typename t_type>
 
 [[nodiscard]] inline bool is_email_like(std::string_view value) noexcept {
     const auto at = value.find('@');
-    if (at == std::string_view::npos || at == 0 || at + 1 >= value.size() ||
-        value.find('@', at + 1) != std::string_view::npos) {
+    if (at == std::string_view::npos || at == 0 || at + 1 >= value.size() || value.find('@', at + 1) != std::string_view::npos) {
         return false;
     }
     const auto domain = value.substr(at + 1);
-    if (domain.front() == '.' || domain.back() == '.' ||
-        domain.find('.') == std::string_view::npos ||
-        domain.find("..") != std::string_view::npos) {
+    if (domain.front() == '.' || domain.back() == '.' || domain.find('.') == std::string_view::npos || domain.find("..") != std::string_view::npos) {
         return false;
     }
     for (const char c : value) {
@@ -2645,8 +2573,7 @@ template <typename t_type>
 
 template <typename t_type>
 [[nodiscard]] bool is_empty_value(const t_type& value) noexcept {
-    if constexpr (detail::is_ruvia_string<t_type> || detail::is_ruvia_bytes<t_type> ||
-                  detail::is_ruvia_array<t_type> || detail::is_ruvia_boxed_array<t_type>) {
+    if constexpr (detail::is_ruvia_string<t_type> || detail::is_ruvia_bytes<t_type> || detail::is_ruvia_array<t_type> || detail::is_ruvia_boxed_array<t_type>) {
         return value.empty();
     } else {
         return false;
@@ -2680,8 +2607,7 @@ template <typename t_type>
 template <typename t_type>
 [[nodiscard]] constexpr bool model_has_size_rule() noexcept {
     using value_type = std::remove_cvref_t<t_type>;
-    return detail::is_ruvia_string<value_type> || detail::is_ruvia_bytes<value_type> ||
-           detail::is_ruvia_array<value_type> || detail::is_ruvia_boxed_array<value_type>;
+    return detail::is_ruvia_string<value_type> || detail::is_ruvia_bytes<value_type> || detail::is_ruvia_array<value_type> || detail::is_ruvia_boxed_array<value_type>;
 }
 
 template <typename t_type>
@@ -2701,14 +2627,14 @@ class model_path final {
 public:
     constexpr model_path() noexcept = default;
 
-    constexpr model_path(const model_path& parent, std::string_view field) noexcept
-        : parent_(&parent),
-          field_(field) {}
+    constexpr model_path(const model_path& parent, std::string_view field) noexcept :
+        parent_(&parent),
+        field_(field) {}
 
-    constexpr model_path(const model_path& parent, std::size_t index) noexcept
-        : parent_(&parent),
-          index_(index),
-          indexed_(true) {}
+    constexpr model_path(const model_path& parent, std::size_t index) noexcept :
+        parent_(&parent),
+        index_(index),
+        indexed_(true) {}
 
     model_path(const model_path&) = delete;
     model_path& operator=(const model_path&) = delete;
@@ -2778,8 +2704,8 @@ private:
 template <typename validator_type>
 class model_issue_sink final {
 public:
-    explicit model_issue_sink(validator_type& validator_value) noexcept
-        : validator_(validator_value) {}
+    explicit model_issue_sink(validator_type& validator_value) noexcept :
+        validator_(validator_value) {}
 
     void add(const model_path& path, std::string_view code, std::string_view message) {
         if (const auto single = path.single_field()) {
@@ -2852,45 +2778,39 @@ template <auto bound_type>
 template <auto bound_type, typename value_type, typename compare_type>
 [[nodiscard]] bool beyond_model_bound(const value_type& value, compare_type beyond) {
     if constexpr (model_has_size_rule<value_type>()) {
-        static_assert(valid_model_size_bound<bound_type>(),
-            "size rules require a nonnegative integral bound representable as size_t");
+        static_assert(valid_model_size_bound<bound_type>(), "size rules require a nonnegative integral bound representable as size_t");
         return beyond(model_size(value), bound_type);
     } else if constexpr (model_has_number_rule<value_type>()) {
         using number_type = detail::model_scalar_value_type<value_type>;
         if constexpr (std::is_integral_v<number_type>) {
-            static_assert(std::is_integral_v<decltype(bound_type)>,
-                "integer fields require an integral bound");
+            static_assert(std::is_integral_v<decltype(bound_type)>, "integer fields require an integral bound");
         }
         return beyond(value, bound_type);
     } else {
-        static_assert(detail::always_false<value_type>,
-            "RUVIA_MIN/MAX require a numeric, string, bytes, or array field");
+        static_assert(detail::always_false<value_type>, "RUVIA_MIN/MAX require a numeric, string, bytes, or array field");
     }
 }
 
 template <typename value_type, typename validator_type, auto bound_type, fixed_string message>
-void validate_rule(
-    const value_type& value, const model_path& path, validator_type& validator_value, const min<bound_type, message>&) {
+void validate_rule(const value_type& value, const model_path& path, validator_type& validator_value, const min<bound_type, message>&) {
     if (beyond_model_bound<bound_type>(value, [](const auto& left, const auto& right) {
-            return detail::validation_less(left, right);
-        })) {
+        return detail::validation_less(left, right);
+    })) {
         validator_value.add(path, "too_small", message.view());
     }
 }
 
 template <typename value_type, typename validator_type, auto bound_type, fixed_string message>
-void validate_rule(
-    const value_type& value, const model_path& path, validator_type& validator_value, const max<bound_type, message>&) {
+void validate_rule(const value_type& value, const model_path& path, validator_type& validator_value, const max<bound_type, message>&) {
     if (beyond_model_bound<bound_type>(value, [](const auto& left, const auto& right) {
-            return detail::validation_greater(left, right);
-        })) {
+        return detail::validation_greater(left, right);
+    })) {
         validator_value.add(path, "too_big", message.view());
     }
 }
 
 template <typename value_type, typename validator_type, fixed_string message, fixed_string... values>
-void validate_rule(const value_type& value, const model_path& path, validator_type& validator_value,
-    const one_of<message, values...>&) {
+void validate_rule(const value_type& value, const model_path& path, validator_type& validator_value, const one_of<message, values...>&) {
     const auto actual = model_string(value);
     if (!((actual == values.view()) || ...)) {
         validator_value.add(path, "one_of", message.view());
@@ -2898,16 +2818,14 @@ void validate_rule(const value_type& value, const model_path& path, validator_ty
 }
 
 template <typename value_type, typename validator_type, fixed_string message>
-void validate_rule(
-    const value_type& value, const model_path& path, validator_type& validator_value, const email<message>&) {
+void validate_rule(const value_type& value, const model_path& path, validator_type& validator_value, const email<message>&) {
     if (!is_email_like(model_string(value))) {
         validator_value.add(path, "email", message.view());
     }
 }
 
 template <typename value_type, typename validator_type, fixed_string pattern, fixed_string message>
-void validate_rule(const value_type& value, const model_path& path, validator_type& validator_value,
-    const pattern_rule<pattern, message>&) {
+void validate_rule(const value_type& value, const model_path& path, validator_type& validator_value, const pattern_rule<pattern, message>&) {
     const auto actual = model_string(value);
     if (!match_pattern_plan<pattern>(actual)) {
         validator_value.add(path, "pattern", message.view());
@@ -2915,8 +2833,7 @@ void validate_rule(const value_type& value, const model_path& path, validator_ty
 }
 
 template <typename value_type, typename validator_type, auto predicate, fixed_string message>
-void validate_rule(const value_type& value, const model_path& path, validator_type& validator_value,
-    const custom<predicate, message>&) {
+void validate_rule(const value_type& value, const model_path& path, validator_type& validator_value, const custom<predicate, message>&) {
     if (!predicate(value)) {
         validator_value.add(path, "custom", message.view());
     }
@@ -2932,8 +2849,7 @@ public:
     }
 
     template <typename value_type, typename validator_type>
-    void validate(model_field_state state_value, const std::optional<value_type>& value,
-        [[maybe_unused]] const model_path& path, [[maybe_unused]] validator_type& validator_value) const {
+    void validate(model_field_state state_value, const std::optional<value_type>& value, [[maybe_unused]] const model_path& path, [[maybe_unused]] validator_type& validator_value) const {
         if (state_value != model_field_state::parsed || !value) {
             return;
         }
@@ -2964,17 +2880,14 @@ struct model_access final {
 };
 
 template <typename model_type, typename... descriptor_types, typename visitor_type, std::size_t... indices>
-constexpr void visit_model_fields_impl(model_type& model, model_schema<descriptor_types...>, visitor_type&& visitor,
-    std::index_sequence<indices...>) {
+constexpr void visit_model_fields_impl(model_type& model, model_schema<descriptor_types...>, visitor_type&& visitor, std::index_sequence<indices...>) {
     auto& visitor_ref = visitor;
     (visitor_ref(descriptor_types{}, model_access::slot<indices>(model)), ...);
 }
 
 template <typename model_type, typename... descriptor_types, typename visitor_type>
-constexpr void visit_model_fields(
-    model_type& model, model_schema<descriptor_types...> schema, visitor_type&& visitor) {
-    visit_model_fields_impl(
-        model, schema, std::forward<visitor_type>(visitor), std::index_sequence_for<descriptor_types...>{});
+constexpr void visit_model_fields(model_type& model, model_schema<descriptor_types...> schema, visitor_type&& visitor) {
+    visit_model_fields_impl(model, schema, std::forward<visitor_type>(visitor), std::index_sequence_for<descriptor_types...>{});
 }
 
 }  // namespace ruvia::detail::model
@@ -2988,8 +2901,7 @@ struct model_validation_access final {
         model::visit_model_fields(model, model::model_access::schema<model_type>(), [&](const auto&, const auto& slot) {
             using slot_type = std::remove_cvref_t<decltype(slot)>;
             const auto state_value = slot.state();
-            if (state_value == model_field_state::duplicate || state_value == model_field_state::invalid_type ||
-                (slot_type::required && state_value == model_field_state::missing)) {
+            if (state_value == model_field_state::duplicate || state_value == model_field_state::invalid_type || (slot_type::required && state_value == model_field_state::missing)) {
                 valid = false;
                 return;
             }
@@ -3063,61 +2975,56 @@ struct model_validation_access final {
 
 private:
     template <typename model_type, typename sink_type>
-    static void validate_structure(
-        const model_type& model_value, const model::model_path& prefix, sink_type& sink) {
-        model::visit_model_fields(
-            model_value, model::model_access::schema<model_type>(), [&](const auto&, const auto& slot) {
-                using slot_type = std::remove_cvref_t<decltype(slot)>;
-                const model::model_path path(prefix, slot.wire_name());
+    static void validate_structure(const model_type& model_value, const model::model_path& prefix, sink_type& sink) {
+        model::visit_model_fields(model_value, model::model_access::schema<model_type>(), [&](const auto&, const auto& slot) {
+            using slot_type = std::remove_cvref_t<decltype(slot)>;
+            const model::model_path path(prefix, slot.wire_name());
 
-                switch (slot.state()) {
-                    case model_field_state::duplicate:
-                        sink.add(path, "duplicate", "is duplicated");
-                        return;
-                    case model_field_state::invalid_type:
-                        sink.add(path, "invalid_type", model::expected_type_name<typename slot_type::value_type>());
-                        return;
-                    case model_field_state::missing:
-                        if constexpr (slot_type::required) {
-                            sink.add(path, "required", "is required");
-                        }
-                        return;
-                    case model_field_state::null:
-                        return;
-                    case model_field_state::parsed:
-                        break;
-                }
+            switch (slot.state()) {
+                case model_field_state::duplicate:
+                    sink.add(path, "duplicate", "is duplicated");
+                    return;
+                case model_field_state::invalid_type:
+                    sink.add(path, "invalid_type", model::expected_type_name<typename slot_type::value_type>());
+                    return;
+                case model_field_state::missing:
+                    if constexpr (slot_type::required) {
+                        sink.add(path, "required", "is required");
+                    }
+                    return;
+                case model_field_state::null:
+                    return;
+                case model_field_state::parsed:
+                    break;
+            }
 
-                if constexpr (contains_model<typename slot_type::value_type>()) {
-                    validate_value_structure(*slot.value(), path, sink);
-                }
-            });
+            if constexpr (contains_model<typename slot_type::value_type>()) {
+                validate_value_structure(*slot.value(), path, sink);
+            }
+        });
     }
 
     template <typename model_type, typename sink_type>
-    static void validate_field_rules(
-        const model_type& model_value, const model::model_path& prefix, sink_type& sink) {
-        model::visit_model_fields(
-            model_value, model::model_access::schema<model_type>(), [&](const auto& descriptor, const auto& slot) {
-                using descriptor_type = std::remove_cvref_t<decltype(descriptor)>;
-                using value_type = typename descriptor_type::value_type;
-                if constexpr (descriptor_type::has_field_rules || contains_model<value_type>()) {
-                    const model::model_path path(prefix, slot.wire_name());
-                    if constexpr (descriptor_type::has_field_rules) {
-                        typename descriptor_type::rules_type{}.validate(slot.state(), slot.value(), path, sink);
-                    }
-                    if constexpr (contains_model<value_type>()) {
-                        if (slot.state() == model_field_state::parsed && slot.value()) {
-                            validate_nested_field_rules(*slot.value(), path, sink);
-                        }
+    static void validate_field_rules(const model_type& model_value, const model::model_path& prefix, sink_type& sink) {
+        model::visit_model_fields(model_value, model::model_access::schema<model_type>(), [&](const auto& descriptor, const auto& slot) {
+            using descriptor_type = std::remove_cvref_t<decltype(descriptor)>;
+            using value_type = typename descriptor_type::value_type;
+            if constexpr (descriptor_type::has_field_rules || contains_model<value_type>()) {
+                const model::model_path path(prefix, slot.wire_name());
+                if constexpr (descriptor_type::has_field_rules) {
+                    typename descriptor_type::rules_type{}.validate(slot.state(), slot.value(), path, sink);
+                }
+                if constexpr (contains_model<value_type>()) {
+                    if (slot.state() == model_field_state::parsed && slot.value()) {
+                        validate_nested_field_rules(*slot.value(), path, sink);
                     }
                 }
-            });
+            }
+        });
     }
 
     template <typename value_type, typename sink_type>
-    static void validate_value_structure(
-        const value_type& value, const model::model_path& path, sink_type& sink) {
+    static void validate_value_structure(const value_type& value, const model::model_path& path, sink_type& sink) {
         using t_type = std::remove_cvref_t<value_type>;
         if constexpr (is_model<t_type>) {
             validate_structure(value, path, sink);
@@ -3134,8 +3041,7 @@ private:
     }
 
     template <typename value_type, typename sink_type>
-    static void validate_nested_field_rules(
-        const value_type& value, const model::model_path& path, sink_type& sink) {
+    static void validate_nested_field_rules(const value_type& value, const model::model_path& path, sink_type& sink) {
         using t_type = std::remove_cvref_t<value_type>;
         if constexpr (is_model<t_type>) {
             validate_field_rules(value, path, sink);
@@ -3159,12 +3065,9 @@ namespace ruvia::detail::model {
 // Field options are type-level metadata, not per-model runtime objects.
 template <typename... option_types>
 class model_options final {
-    static_assert((is_model_option<option_types>() && ... && true),
-        "model field options must be RUVIA_DEFAULT, RUVIA_INITIAL, RUVIA_NULLABLE, RUVIA_OMIT_EMPTY, or RUVIA_EMIT_NULL");
-    static_assert(((is_default_rule<option_types>() ? 1 : 0) + ... + 0) <= 1,
-        "a model field may have at most one RUVIA_DEFAULT");
-    static_assert(((is_initial_rule<option_types>() ? 1 : 0) + ... + 0) <= 1,
-        "a model field may have at most one RUVIA_INITIAL");
+    static_assert((is_model_option<option_types>() && ... && true), "model field options must be RUVIA_DEFAULT, RUVIA_INITIAL, RUVIA_NULLABLE, RUVIA_OMIT_EMPTY, or RUVIA_EMIT_NULL");
+    static_assert(((is_default_rule<option_types>() ? 1 : 0) + ... + 0) <= 1, "a model field may have at most one RUVIA_DEFAULT");
+    static_assert(((is_initial_rule<option_types>() ? 1 : 0) + ... + 0) <= 1, "a model field may have at most one RUVIA_INITIAL");
 
 public:
     static constexpr bool nullable = (std::is_same_v<option_types, ::ruvia::detail::model::nullable> || ... || false);
@@ -3236,31 +3139,24 @@ void assign_field_value(std::optional<field_type>& target, value_type&& value) {
             }
         }();
         target.emplace(field);
-    } else if constexpr (detail::is_ruvia_string<field_type> &&
-                         std::is_same_v<std::remove_cvref_t<value_type>, std::string> &&
-                         std::is_rvalue_reference_v<value_type&&>) {
+    } else if constexpr (detail::is_ruvia_string<field_type> && std::is_same_v<std::remove_cvref_t<value_type>, std::string> && std::is_rvalue_reference_v<value_type&&>) {
         field_type field;
         field.assign_owned(std::forward<value_type>(value));
         target.emplace(std::move(field));
-    } else if constexpr (detail::is_ruvia_string<field_type> &&
-                         std::is_convertible_v<value_type&&, std::string_view> &&
-                         !std::is_same_v<std::remove_cvref_t<value_type>, field_type>) {
+    } else if constexpr (detail::is_ruvia_string<field_type> && std::is_convertible_v<value_type&&, std::string_view> && !std::is_same_v<std::remove_cvref_t<value_type>, field_type>) {
         field_type field;
         field.assign_owned(std::string_view(std::forward<value_type>(value)));
         target.emplace(std::move(field));
-    } else if constexpr (detail::is_ruvia_bytes<field_type> &&
-                         !std::is_same_v<std::remove_cvref_t<value_type>, field_type>) {
+    } else if constexpr (detail::is_ruvia_bytes<field_type> && !std::is_same_v<std::remove_cvref_t<value_type>, field_type>) {
         field_type field;
-        if constexpr (std::is_same_v<std::remove_cvref_t<value_type>, std::vector<std::uint8_t>> &&
-                      std::is_rvalue_reference_v<value_type&&>) {
+        if constexpr (std::is_same_v<std::remove_cvref_t<value_type>, std::vector<std::uint8_t>> && std::is_rvalue_reference_v<value_type&&>) {
             field.assign_owned(std::forward<value_type>(value));
         } else {
             field.assign_owned(std::span<const std::uint8_t>(std::forward<value_type>(value)));
         }
         target.emplace(std::move(field));
     } else {
-        if constexpr (!std::is_lvalue_reference_v<value_type&&> &&
-                      !std::is_const_v<std::remove_reference_t<value_type>>) {
+        if constexpr (!std::is_lvalue_reference_v<value_type&&> && !std::is_const_v<std::remove_reference_t<value_type>>) {
             // Consuming a source that owns this field would destroy the destination.
             if (model_value_rebind_access::owns(value, std::addressof(target))) {
                 throw_model_move_source_owns_destination();
@@ -3321,8 +3217,7 @@ class model_field final {
     static_assert(json_member_key_size<field_wire_name>() != 0, "Ruvia model wire names must be well-formed UTF-8");
     // A default never satisfies a required input field, so accepting one would
     // silently ignore it.
-    static_assert(!(is_required && options_type::has_default),
-        "RUVIA_DEFAULT applies only to a missing optional field; declare it with RUVIA_OPTIONAL_FIELD");
+    static_assert(!(is_required && options_type::has_default), "RUVIA_DEFAULT applies only to a missing optional field; declare it with RUVIA_OPTIONAL_FIELD");
 
 public:
     using value_type = field_value_type;
@@ -3521,12 +3416,10 @@ private:
 namespace ruvia::detail::model {
 
 template <typename t_type>
-using field_option_tuple_type =
-    std::conditional_t<is_model_option<t_type>(), std::tuple<t_type>, std::tuple<>>;
+using field_option_tuple_type = std::conditional_t<is_model_option<t_type>(), std::tuple<t_type>, std::tuple<>>;
 
 template <typename t_type>
-using field_rule_tuple_type =
-    std::conditional_t<is_validation_rule<t_type>(), std::tuple<t_type>, std::tuple<>>;
+using field_rule_tuple_type = std::conditional_t<is_validation_rule<t_type>(), std::tuple<t_type>, std::tuple<>>;
 
 template <typename tuple_type>
 struct tuple_model_options;
@@ -3544,8 +3437,7 @@ struct tuple_rules<std::tuple<ts_type...>> {
     using type = rules<ts_type...>;
 };
 
-template <fixed_string field_source_name, fixed_string field_wire_name, typename field_value_type, bool is_required,
-    typename... arg_types>
+template <fixed_string field_source_name, fixed_string field_wire_name, typename field_value_type, bool is_required, typename... arg_types>
 struct model_field_descriptor final {
     static_assert(((is_model_option<arg_types>() || is_validation_rule<arg_types>()) && ... && true),
         "RUVIA_REQUIRED_FIELD/RUVIA_OPTIONAL_FIELD accept model options (RUVIA_DEFAULT, "
@@ -3553,10 +3445,8 @@ struct model_field_descriptor final {
         "(RUVIA_MIN, RUVIA_EMAIL, ...)");
 
     using value_type = field_value_type;
-    using options_type = typename tuple_model_options<decltype(std::tuple_cat(std::tuple<>{},
-        std::declval<field_option_tuple_type<arg_types>>()...))>::type;
-    using rules_type = typename tuple_rules<decltype(std::tuple_cat(std::tuple<>{},
-        std::declval<field_rule_tuple_type<arg_types>>()...))>::type;
+    using options_type = typename tuple_model_options<decltype(std::tuple_cat(std::tuple<>{}, std::declval<field_option_tuple_type<arg_types>>()...))>::type;
+    using rules_type = typename tuple_rules<decltype(std::tuple_cat(std::tuple<>{}, std::declval<field_rule_tuple_type<arg_types>>()...))>::type;
     using field_type = model_field<field_value_type, is_required, options_type, field_wire_name>;
 
     static constexpr auto source_name = field_source_name;
@@ -3565,20 +3455,16 @@ struct model_field_descriptor final {
     static constexpr bool nullable = options_type::nullable;
     static constexpr bool has_field_rules = !std::is_same_v<rules_type, rules<>>;
 
-    static_assert(!has_field_rules ||
-                      !(detail::is_ruvia_json_value<field_value_type> || detail::is_ruvia_json_object<field_value_type>),
-        "json_value/json_object are dynamic content, not typed field validation schemas");
+    static_assert(!has_field_rules || !(detail::is_ruvia_json_value<field_value_type> || detail::is_ruvia_json_object<field_value_type>), "json_value/json_object are dynamic content, not typed field validation schemas");
 };
 template <typename... descriptor_types>
 consteval void validate_model_schema(model_schema<descriptor_types...>) {
-    static_assert((detail::is_model_field<typename descriptor_types::value_type> && ...),
-        "model fields must use Ruvia values or nested models");
+    static_assert((detail::is_model_field<typename descriptor_types::value_type> && ...), "model fields must use Ruvia values or nested models");
 }
 
 template <fixed_string field, typename... descriptor_types>
 [[nodiscard]] consteval std::size_t model_field_index() {
-    static_assert((std::size_t{field == descriptor_types::source_name} + ... + 0) == 1,
-        "unknown or duplicate Ruvia model field");
+    static_assert((std::size_t{field == descriptor_types::source_name} + ... + 0) == 1, "unknown or duplicate Ruvia model field");
     const std::array<std::string_view, sizeof...(descriptor_types)> names{descriptor_types::source_name.view()...};
     return fixed_name_index(names, field.view());
 }
@@ -3604,38 +3490,34 @@ template <typename... descriptor_types>
         return http_ascii_equals_ignore_case(left, right);
     });
 }
-template <std::size_t index, typename descriptor_type, typename... remaining_types, typename model_type,
-    typename visitor_type>
-[[nodiscard]] bool visit_model_field_by_wire_name_impl(model_type& model,
-    std::string_view wire_name, bool& visit_result, visitor_type& visitor) {
+template <std::size_t index, typename descriptor_type, typename... remaining_types, typename model_type, typename visitor_type>
+[[nodiscard]] bool visit_model_field_by_wire_name_impl(model_type& model, std::string_view wire_name, bool& visit_result, visitor_type& visitor) {
     if (wire_name == descriptor_type::wire_name.view()) {
         visit_result = visitor(model_access::slot<index>(model));
         return true;
     }
     if constexpr (sizeof...(remaining_types) > 0) {
-        return visit_model_field_by_wire_name_impl<index + 1, remaining_types...>(
-            model, wire_name, visit_result, visitor);
+        return visit_model_field_by_wire_name_impl<index + 1, remaining_types...>(model, wire_name, visit_result, visitor);
     } else {
         return false;
     }
 }
 
 template <typename model_type, typename... descriptor_types, typename visitor_type>
-[[nodiscard]] bool visit_model_field_by_wire_name(model_type& model, model_schema<descriptor_types...>,
-    std::string_view wire_name, bool& visit_result, visitor_type&& visitor) {
+[[nodiscard]] bool visit_model_field_by_wire_name(model_type& model, model_schema<descriptor_types...>, std::string_view wire_name, bool& visit_result, visitor_type&& visitor) {
     if constexpr (sizeof...(descriptor_types) == 0) {
         return false;
     } else {
         auto& visitor_ref = visitor;
-        return visit_model_field_by_wire_name_impl<0, descriptor_types...>(
-            model, wire_name, visit_result, visitor_ref);
+        return visit_model_field_by_wire_name_impl<0, descriptor_types...>(model, wire_name, visit_result, visitor_ref);
     }
 }
 
 template <typename model_type>
 void initialize_model(model_type& value) {
-    visit_model_fields(value, model_access::schema<model_type>(),
-        [](const auto&, auto& slot) { slot.apply_initial(); });
+    visit_model_fields(value, model_access::schema<model_type>(), [](const auto&, auto& slot) {
+        slot.apply_initial();
+    });
 }
 
 }  // namespace ruvia::detail::model
@@ -3700,8 +3582,7 @@ template <typename number_type>
     return parsed_value;
 }
 
-[[nodiscard]] inline std::string_view decode_form_value(
-    std::string_view input, form_value_encoding encoding, std::string& storage) {
+[[nodiscard]] inline std::string_view decode_form_value(std::string_view input, form_value_encoding encoding, std::string& storage) {
     if (encoding == form_value_encoding::decoded) {
         return input;
     }
@@ -3710,8 +3591,7 @@ template <typename number_type>
 
 template <typename t_type>
     requires is_form_field<t_type>
-[[nodiscard]] std::optional<t_type> parse_form_value(
-    std::string_view input, form_value_encoding encoding, model_string_storage string_storage) {
+[[nodiscard]] std::optional<t_type> parse_form_value(std::string_view input, form_value_encoding encoding, model_string_storage string_storage) {
     using field_type = std::remove_cvref_t<t_type>;
 
     if constexpr (is_ruvia_scalar<field_type>) {
@@ -3748,9 +3628,9 @@ template <typename t_type>
 // A parse-local, conservative representation budget.
 class json_parse_budget final {
 public:
-    explicit json_parse_budget(model_parse_options options = {}) noexcept
-        : elements_(options.max_array_elements_),
-          bytes_(options.max_representation_bytes_) {}
+    explicit json_parse_budget(model_parse_options options = {}) noexcept :
+        elements_(options.max_array_elements_),
+        bytes_(options.max_representation_bytes_) {}
 
     [[nodiscard]] bool consume_bytes(std::size_t bytes_value) noexcept {
         if (bytes_value > bytes_) {
@@ -3766,8 +3646,7 @@ public:
         return consume_owned_text_chunk(bytes, copies, true);
     }
 
-    [[nodiscard]] bool consume_owned_text_chunk(
-        std::size_t bytes, std::size_t copies, bool first_chunk) noexcept {
+    [[nodiscard]] bool consume_owned_text_chunk(std::size_t bytes, std::size_t copies, bool first_chunk) noexcept {
         const auto string_bytes = first_chunk ? sizeof(std::string) : std::size_t{0};
         if (bytes > (std::numeric_limits<std::size_t>::max() - string_bytes) / copies) {
             exhausted_ = true;
@@ -3797,7 +3676,9 @@ public:
     }
 
     [[nodiscard]] bool skip_value(std::string_view& input, std::size_t depth) noexcept {
-        auto consume = [this]() noexcept { return consume_element(); };
+        auto consume = [this]() noexcept {
+            return consume_element();
+        };
         return skip_json_value(input, depth, consume);
     }
 
@@ -3808,18 +3689,15 @@ private:
 };
 
 template <typename t_type>
-[[nodiscard]] std::optional<t_type> parse_json_value(std::string_view& input,
-    std::size_t depth, model_string_storage string_storage, json_parse_budget& budget);
+[[nodiscard]] std::optional<t_type> parse_json_value(std::string_view& input, std::size_t depth, model_string_storage string_storage, json_parse_budget& budget);
 
 // Defined with json_value/json_object in model.h.
 template <typename view_type>
-[[nodiscard]] std::optional<view_type> parse_json_view_value(std::string_view& input,
-    std::size_t depth, model_string_storage string_storage, bool require_object, json_parse_budget& budget);
+[[nodiscard]] std::optional<view_type> parse_json_view_value(std::string_view& input, std::size_t depth, model_string_storage string_storage, bool require_object, json_parse_budget& budget);
 
 struct model_parse_access final {
     template <typename model_type>
-    [[nodiscard]] static std::optional<model_type> parse_value(std::string_view& input,
-        std::size_t depth, model_string_storage string_storage, json_parse_budget& budget) {
+    [[nodiscard]] static std::optional<model_type> parse_value(std::string_view& input, std::size_t depth, model_string_storage string_storage, json_parse_budget& budget) {
         if (depth > max_json_depth) {
             return std::nullopt;
         }
@@ -3842,8 +3720,7 @@ struct model_parse_access final {
 
     template <typename model_type>
     [[nodiscard]] static std::optional<model_type> parse_form_owned(std::string_view body) {
-        auto value = parse_form<model_type>(
-            form_body_input{.body_ = body, .string_storage_ = model_string_storage::owned});
+        auto value = parse_form<model_type>(form_body_input{.body_ = body, .string_storage_ = model_string_storage::owned});
         if (!model_validation_access::structure_valid(value)) {
             return std::nullopt;
         }
@@ -3853,13 +3730,13 @@ struct model_parse_access final {
 private:
     template <typename model_type>
     static void apply_defaults(model_type& value) {
-        model::visit_model_fields(value, model::model_access::schema<model_type>(),
-            [](const auto&, auto& slot) { slot.apply_default(); });
+        model::visit_model_fields(value, model::model_access::schema<model_type>(), [](const auto&, auto& slot) {
+            slot.apply_default();
+        });
     }
 
     template <typename slot_type>
-    [[nodiscard]] static bool parse_json_field_slot(slot_type& slot, std::string_view& value_input,
-        std::size_t depth, model_string_storage string_storage, json_parse_budget& budget) {
+    [[nodiscard]] static bool parse_json_field_slot(slot_type& slot, std::string_view& value_input, std::size_t depth, model_string_storage string_storage, json_parse_budget& budget) {
         if (slot.is_present()) {
             slot.mark_duplicate();
             return budget.skip_value(value_input, depth + 1);
@@ -3877,9 +3754,7 @@ private:
             return true;
         }
         const auto element_checkpoint = budget.element_checkpoint();
-        if (auto parsed_value =
-                parse_json_value<value_type>(value_input, depth + 1, string_storage, budget);
-            parsed_value) {
+        if (auto parsed_value = parse_json_value<value_type>(value_input, depth + 1, string_storage, budget); parsed_value) {
             model_value_factory::emplace_parsed(slot, std::move(*parsed_value));
             return true;
         }
@@ -3898,23 +3773,17 @@ private:
     }
 
     template <typename model_type>
-    [[nodiscard]] static bool visit_json_field(model_type& value, std::string_view key,
-        std::string_view& value_input, std::size_t depth,
-        model_string_storage string_storage, json_parse_budget& budget) {
+    [[nodiscard]] static bool visit_json_field(model_type& value, std::string_view key, std::string_view& value_input, std::size_t depth, model_string_storage string_storage, json_parse_budget& budget) {
         bool field_result = true;
-        const bool matched = model::visit_model_field_by_wire_name(value,
-            model::model_access::schema<model_type>(), key, field_result,
-            [&](auto& slot) -> bool {
-                return parse_json_field_slot(slot, value_input, depth, string_storage, budget);
-            });
+        const bool matched = model::visit_model_field_by_wire_name(value, model::model_access::schema<model_type>(), key, field_result, [&](auto& slot) -> bool {
+            return parse_json_field_slot(slot, value_input, depth, string_storage, budget);
+        });
         return matched ? field_result : budget.skip_value(value_input, depth + 1);
     }
 
     template <typename model_type>
-    static bool materialize_json(model_type& value, std::string_view& input, std::size_t depth,
-        model_string_storage string_storage, json_parse_budget& budget) {
-        const auto visit_field = [&value, depth, string_storage, &budget](
-                                     std::string_view key, std::string_view& value_input) -> bool {
+    static bool materialize_json(model_type& value, std::string_view& input, std::size_t depth, model_string_storage string_storage, json_parse_budget& budget) {
+        const auto visit_field = [&value, depth, string_storage, &budget](std::string_view key, std::string_view& value_input) -> bool {
             return visit_json_field(value, key, value_input, depth, string_storage, budget);
         };
         const auto consume_key_allocation = [&budget](std::size_t bytes_value, bool first_chunk) noexcept {
@@ -3928,8 +3797,7 @@ private:
     }
 
     template <typename slot_type>
-    static void bind_form_field_slot(slot_type& slot, std::string_view field_value,
-        form_value_encoding encoding, model_string_storage string_storage) {
+    static void bind_form_field_slot(slot_type& slot, std::string_view field_value, form_value_encoding encoding, model_string_storage string_storage) {
         if (slot.is_present()) {
             slot.mark_duplicate();
             return;
@@ -3948,40 +3816,34 @@ private:
     }
 
     template <typename model_type>
-    static void bind_form_field(model_type& value, std::string_view key, std::string_view field_value,
-        form_value_encoding encoding, model_string_storage string_storage) {
+    static void bind_form_field(model_type& value, std::string_view key, std::string_view field_value, form_value_encoding encoding, model_string_storage string_storage) {
         bool field_result = true;
-        (void)model::visit_model_field_by_wire_name(value, model::model_access::schema<model_type>(),
-            key, field_result, [&](auto& slot) -> bool {
-                bind_form_field_slot(slot, field_value, encoding, string_storage);
-                return true;
-            });
+        (void)model::visit_model_field_by_wire_name(value, model::model_access::schema<model_type>(), key, field_result, [&](auto& slot) -> bool {
+            bind_form_field_slot(slot, field_value, encoding, string_storage);
+            return true;
+        });
     }
 
     // Case-insensitive sources (HTTP headers) bind the first field whose wire
     // name equals the name under the source's comparison.
     template <typename model_type>
-    static void bind_form_field_ignore_case(model_type& value, const request_name_value_list& fields_value,
-        std::string_view key, std::string_view field_value) {
+    static void bind_form_field_ignore_case(model_type& value, const request_name_value_list& fields_value, std::string_view key, std::string_view field_value) {
         bool matched = false;
-        model::visit_model_fields(value, model::model_access::schema<model_type>(),
-            [&](const auto&, auto& slot) {
-                if (matched || !request_name_value_list_access::names_equal(fields_value, key, slot.wire_name())) {
-                    return;
-                }
-                matched = true;
-                bind_form_field_slot(slot, field_value, form_value_encoding::decoded,
-                    model_string_storage::borrowed);
-            });
+        model::visit_model_fields(value, model::model_access::schema<model_type>(), [&](const auto&, auto& slot) {
+            if (matched || !request_name_value_list_access::names_equal(fields_value, key, slot.wire_name())) {
+                return;
+            }
+            matched = true;
+            bind_form_field_slot(slot, field_value, form_value_encoding::decoded, model_string_storage::borrowed);
+        });
     }
 
     template <typename model_type>
     static void materialize_form(model_type& value, const model_input& input) {
         if (const auto* body = std::get_if<form_body_input>(&input)) {
-            visit_form_body_fields(body->body_,
-                [&value, string_storage = body->string_storage_](std::string_view key, std::string_view field_value) {
-                    bind_form_field(value, key, field_value, form_value_encoding::url_encoded, string_storage);
-                });
+            visit_form_body_fields(body->body_, [&value, string_storage = body->string_storage_](std::string_view key, std::string_view field_value) {
+                bind_form_field(value, key, field_value, form_value_encoding::url_encoded, string_storage);
+            });
         } else {
             const request_name_value_list& fields_value = std::get<1>(input);
             const bool case_insensitive = request_name_value_list_access::case_insensitive(fields_value);
@@ -3989,8 +3851,7 @@ private:
                 if (case_insensitive) {
                     bind_form_field_ignore_case(value, fields_value, field.name(), field.value());
                 } else {
-                    bind_form_field(value, field.name(), field.value(), form_value_encoding::decoded,
-                        model_string_storage::borrowed);
+                    bind_form_field(value, field.name(), field.value(), form_value_encoding::decoded, model_string_storage::borrowed);
                 }
             }
         }
@@ -4020,31 +3881,28 @@ struct json_sequence_value_traits<boxed_array<element_type>> {
 };
 
 template <typename sequence_type>
-[[nodiscard]] std::optional<sequence_type> parse_json_sequence_value(std::string_view& input,
-    std::size_t depth, model_string_storage string_storage, json_parse_budget& budget) {
+[[nodiscard]] std::optional<sequence_type> parse_json_sequence_value(std::string_view& input, std::size_t depth, model_string_storage string_storage, json_parse_budget& budget) {
     using traits_type = json_sequence_value_traits<std::remove_cvref_t<sequence_type>>;
     using element_type = typename traits_type::value_type;
 
     sequence_type value;
-    const bool consumed = consume_json_array_elements(input, depth,
-        [&value, depth, string_storage, &budget](std::string_view& element_input) {
-            if (!budget.consume_element()) {
-                return false;
-            }
-            // Four element slots cover geometric vector allocations. Boxed
-            // values additionally own pointers.
-            constexpr auto element_bytes = 4 * (sizeof(element_type) + sizeof(element_type*));
-            if (!budget.consume_bytes(element_bytes)) {
-                return false;
-            }
-            auto element =
-                parse_json_value<element_type>(element_input, depth + 1, string_storage, budget);
-            if (!element.has_value()) {
-                return false;
-            }
-            traits_type::emplace(value, std::move(*element));
-            return true;
-        });
+    const bool consumed = consume_json_array_elements(input, depth, [&value, depth, string_storage, &budget](std::string_view& element_input) {
+        if (!budget.consume_element()) {
+            return false;
+        }
+        // Four element slots cover geometric vector allocations. Boxed
+        // values additionally own pointers.
+        constexpr auto element_bytes = 4 * (sizeof(element_type) + sizeof(element_type*));
+        if (!budget.consume_bytes(element_bytes)) {
+            return false;
+        }
+        auto element = parse_json_value<element_type>(element_input, depth + 1, string_storage, budget);
+        if (!element.has_value()) {
+            return false;
+        }
+        traits_type::emplace(value, std::move(*element));
+        return true;
+    });
     if (!consumed) {
         return std::nullopt;
     }
@@ -4053,8 +3911,7 @@ template <typename sequence_type>
 
 // Every branch commits `input` only when it returns a value.
 template <typename t_type>
-[[nodiscard]] std::optional<t_type> parse_json_value(std::string_view& input,
-    std::size_t depth, model_string_storage string_storage, json_parse_budget& budget) {
+[[nodiscard]] std::optional<t_type> parse_json_value(std::string_view& input, std::size_t depth, model_string_storage string_storage, json_parse_budget& budget) {
     using field_type = std::remove_cvref_t<t_type>;
     if (depth > max_json_depth || budget.exhausted()) {
         return std::nullopt;
@@ -4093,9 +3950,7 @@ template <typename t_type>
             const bool first = !std::exchange(started, true);
             return budget.consume_owned_text_chunk(chunk_bytes, 2, first);
         });
-        if (!token ||
-            (token->encoding() == json_string_encoding::literal &&
-                !budget.consume_owned_text(token->raw().size(), 2))) {
+        if (!token || (token->encoding() == json_string_encoding::literal && !budget.consume_owned_text(token->raw().size(), 2))) {
             return std::nullopt;
         }
         auto value = decode_model_binary(json_string_text(*token, decoded));
@@ -4105,8 +3960,7 @@ template <typename t_type>
         input = remaining;
         return value;
     } else if constexpr (is_ruvia_json_value<field_type> || is_ruvia_json_object<field_type>) {
-        return parse_json_view_value<field_type>(
-            input, depth, string_storage, is_ruvia_json_object<field_type>, budget);
+        return parse_json_view_value<field_type>(input, depth, string_storage, is_ruvia_json_object<field_type>, budget);
     } else if constexpr (is_ruvia_array<field_type> || is_ruvia_boxed_array<field_type>) {
         auto parsed_value = parse_json_sequence_value<field_type>(remaining, depth, string_storage, budget);
         if (!parsed_value.has_value()) {
@@ -4133,8 +3987,7 @@ template <typename t_type>
         input = remaining;
         return field_type(parsed_value);
     } else if constexpr (is_model<field_type>) {
-        auto nested =
-            model_parse_access::parse_value<field_type>(remaining, depth, string_storage, budget);
+        auto nested = model_parse_access::parse_value<field_type>(remaining, depth, string_storage, budget);
         if (!nested.has_value()) {
             return std::nullopt;
         }
@@ -4149,8 +4002,7 @@ template <typename t_type>
 // representation budget of `options`. Field structure inside the value is not
 // checked; see parse_json_document.
 template <typename t_type>
-[[nodiscard]] std::optional<t_type> parse_complete_json_value(std::string_view input,
-    model_string_storage string_storage, model_parse_options options = {}) {
+[[nodiscard]] std::optional<t_type> parse_complete_json_value(std::string_view input, model_string_storage string_storage, model_parse_options options = {}) {
     json_parse_budget budget(options);
     if (!budget.consume_bytes(sizeof(t_type))) {
         return std::nullopt;
@@ -4166,8 +4018,7 @@ template <typename t_type>
 // One complete typed JSON value, including structural checks inside arrays.
 // Borrowed reads are used by JSON views; standalone codecs request owned data.
 template <typename t_type>
-[[nodiscard]] std::optional<t_type> parse_json_document(std::string_view input,
-    model_string_storage string_storage, model_parse_options options = {}) {
+[[nodiscard]] std::optional<t_type> parse_json_document(std::string_view input, model_string_storage string_storage, model_parse_options options = {}) {
     auto value = parse_complete_json_value<t_type>(input, string_storage, options);
     if (!value || !model_validation_access::value_structure_valid(*value)) {
         return std::nullopt;
@@ -4178,8 +4029,7 @@ template <typename t_type>
 // Whether `body` is exactly one JSON value (an object when require_object),
 // with surrounding whitespace, within the limits of `options`. Dynamic tokens
 // validate their whole body this way and then borrow it unchanged.
-[[nodiscard]] inline bool is_complete_json_value(
-    std::string_view body, model_parse_options options, bool require_object) noexcept {
+[[nodiscard]] inline bool is_complete_json_value(std::string_view body, model_parse_options options, bool require_object) noexcept {
     json_parse_budget budget(options);
     skip_json_whitespace(body);
     if (require_object && (body.empty() || body.front() != '{')) {
@@ -4252,8 +4102,7 @@ template <typename value_type>
             return size;
         }
     } else {
-        static_assert(
-            always_false<t_type>, "JSON output must use Ruvia scalar types or RUVIA_MODEL");
+        static_assert(always_false<t_type>, "JSON output must use Ruvia scalar types or RUVIA_MODEL");
     }
 }
 
@@ -4305,8 +4154,7 @@ void append_json_value(std::string& output, const value_type& value) {
     } else if constexpr (is_ruvia_array<t_type> || is_ruvia_boxed_array<t_type>) {
         append_json_sequence(output, value);
     } else {
-        static_assert(
-            always_false<t_type>, "JSON output must use Ruvia scalar types or RUVIA_MODEL");
+        static_assert(always_false<t_type>, "JSON output must use Ruvia scalar types or RUVIA_MODEL");
     }
 }
 
@@ -4320,20 +4168,19 @@ enum class serialized_field_kind { value,
 template <typename model_type, typename visitor_type>
 void visit_serialized_fields(const model_type& value, visitor_type&& visitor) {
     bool first = true;
-    visit_model_fields(value, model_access::schema<model_type>(),
-        [&](const auto&, const auto& slot) {
-            const auto& field_value = slot.value();
-            serialized_field_kind kind;
-            if (field_value && !(slot.omit_empty() && is_empty_value(*field_value))) {
-                kind = serialized_field_kind::value;
-            } else if (!field_value && (slot.is_null() || slot.emit_null())) {
-                kind = serialized_field_kind::null;
-            } else {
-                return;
-            }
-            visitor(slot, kind, !first);
-            first = false;
-        });
+    visit_model_fields(value, model_access::schema<model_type>(), [&](const auto&, const auto& slot) {
+        const auto& field_value = slot.value();
+        serialized_field_kind kind;
+        if (field_value && !(slot.omit_empty() && is_empty_value(*field_value))) {
+            kind = serialized_field_kind::value;
+        } else if (!field_value && (slot.is_null() || slot.emit_null())) {
+            kind = serialized_field_kind::null;
+        } else {
+            return;
+        }
+        visitor(slot, kind, !first);
+        first = false;
+    });
 }
 
 }  // namespace model
@@ -4343,9 +4190,7 @@ std::size_t model_json_access::size_hint(const model_type& value) {
     std::size_t size = 2;
     model::visit_serialized_fields(value, [&size](const auto& slot, auto kind, bool comma) {
         size += slot.json_member_key(comma).size();
-        size += kind == model::serialized_field_kind::value
-                    ? json_size_hint_value(*slot.value())
-                    : 4;
+        size += kind == model::serialized_field_kind::value ? json_size_hint_value(*slot.value()) : 4;
     });
     return size;
 }
@@ -4371,21 +4216,18 @@ namespace ruvia::detail::model {
 template <typename... descriptor_types>
 class model_storage final {
 public:
-    static constexpr bool has_initial =
-        (descriptor_types::options_type::has_initial || ... || false);
+    static constexpr bool has_initial = (descriptor_types::options_type::has_initial || ... || false);
 
     model_storage() noexcept {
-        static_assert(unique_model_field_names<descriptor_types...>(),
-            "Ruvia model source field names must be unique");
-        static_assert(
-            unique_model_wire_names<descriptor_types...>(), "Ruvia model JSON field names must be unique");
+        static_assert(unique_model_field_names<descriptor_types...>(), "Ruvia model source field names must be unique");
+        static_assert(unique_model_wire_names<descriptor_types...>(), "Ruvia model JSON field names must be unique");
     }
 
     model_storage(const model_storage&) = delete;
     model_storage& operator=(const model_storage&) = delete;
 
-    model_storage(model_storage&& other) noexcept
-        : fields_(std::move(other.fields_)) {
+    model_storage(model_storage&& other) noexcept :
+        fields_(std::move(other.fields_)) {
         reset_moved_fields(other.fields_);
     }
 
@@ -4398,8 +4240,7 @@ public:
             return *this;
         }
         // Consuming a source that owns this model would destroy the destination.
-        if (::ruvia::detail::model_address_within(this, std::addressof(other), sizeof(model_storage)) ||
-            other.owns(this)) {
+        if (::ruvia::detail::model_address_within(this, std::addressof(other), sizeof(model_storage)) || other.owns(this)) {
             ::ruvia::detail::throw_model_move_source_owns_destination();
         }
 
@@ -4452,26 +4293,21 @@ public:
     }
 
     template <fixed_string field>
-        requires(std::tuple_element_t<model_field_index<field, descriptor_types...>(),
-            std::tuple<descriptor_types...>>::nullable)
+        requires(std::tuple_element_t<model_field_index<field, descriptor_types...>(), std::tuple<descriptor_types...>>::nullable)
     void set_null() & noexcept {
         constexpr auto index = model_field_index<field, descriptor_types...>();
         std::get<index>(fields_).set_null();
     }
 
     template <fixed_string field>
-        requires requires(typename std::tuple_element_t<model_field_index<field, descriptor_types...>(),
-            std::tuple<descriptor_types...>>::field_type& slot) {
-            slot.ensure();
-        }
+        requires requires(typename std::tuple_element_t<model_field_index<field, descriptor_types...>(), std::tuple<descriptor_types...>>::field_type& slot) { slot.ensure(); }
     [[nodiscard]] decltype(auto) ensure() & RUVIA_LIFETIMEBOUND {
         constexpr auto index = model_field_index<field, descriptor_types...>();
         return std::get<index>(fields_).ensure();
     }
 
     template <fixed_string field>
-        requires(!std::tuple_element_t<model_field_index<field, descriptor_types...>(),
-            std::tuple<descriptor_types...>>::required)
+        requires(!std::tuple_element_t<model_field_index<field, descriptor_types...>(), std::tuple<descriptor_types...>>::required)
     void reset() & noexcept {
         constexpr auto index = model_field_index<field, descriptor_types...>();
         std::get<index>(fields_).reset();
@@ -4503,16 +4339,16 @@ public:
     // Whether `address` lies in storage owned by these fields beyond their
     // inline tuple.
     [[nodiscard]] bool owns(const void* address) const noexcept {
-        return std::apply(
-            [address](const auto&... field) { return (field.owns(address) || ... || false); }, fields_);
+        return std::apply([address](const auto&... field) {
+            return (field.owns(address) || ... || false);
+        }, fields_);
     }
 
 private:
     using field_tuple = std::tuple<typename descriptor_types::field_type...>;
 
     template <std::size_t... indices>
-    [[nodiscard]] static field_tuple rebind_fields(
-        const field_tuple& source_value, std::index_sequence<indices...>) {
+    [[nodiscard]] static field_tuple rebind_fields(const field_tuple& source_value, std::index_sequence<indices...>) {
         return field_tuple{std::get<indices>(source_value).rebind()...};
     }
 
@@ -4542,27 +4378,25 @@ private:
 
 // The closure is a structural NTTP even when invoking its factory needs runtime
 // state. Let the compiler infer constexpr only for expressions that support it.
-#define RUVIA_DEFAULT(value) ::ruvia::detail::model::default_value<[]() { return value; }>
-#define RUVIA_INITIAL(value) ::ruvia::detail::model::initial<[]() { return value; }>
+#define RUVIA_DEFAULT(value)                     \
+    ::ruvia::detail::model::default_value<[]() { \
+        return value;                            \
+    }>
+#define RUVIA_INITIAL(value)               \
+    ::ruvia::detail::model::initial<[]() { \
+        return value;                      \
+    }>
 #define RUVIA_NULLABLE ::ruvia::detail::model::nullable
 #define RUVIA_OMIT_EMPTY ::ruvia::detail::model::omit_empty
 #define RUVIA_EMIT_NULL ::ruvia::detail::model::emit_null
 
-#define RUVIA_REQUIRED_FIELD(field, type, ...)                                    \
-    ::ruvia::detail::model::model_field_descriptor<::ruvia::fixed_string{#field}, \
-        ::ruvia::fixed_string{#field}, type, true __VA_OPT__(, ) __VA_ARGS__>
+#define RUVIA_REQUIRED_FIELD(field, type, ...) ::ruvia::detail::model::model_field_descriptor<::ruvia::fixed_string{#field}, ::ruvia::fixed_string{#field}, type, true __VA_OPT__(, ) __VA_ARGS__>
 
-#define RUVIA_REQUIRED_FIELD_NAME(wire_name, field, type, ...)                    \
-    ::ruvia::detail::model::model_field_descriptor<::ruvia::fixed_string{#field}, \
-        ::ruvia::fixed_string{wire_name}, type, true __VA_OPT__(, ) __VA_ARGS__>
+#define RUVIA_REQUIRED_FIELD_NAME(wire_name, field, type, ...) ::ruvia::detail::model::model_field_descriptor<::ruvia::fixed_string{#field}, ::ruvia::fixed_string{wire_name}, type, true __VA_OPT__(, ) __VA_ARGS__>
 
-#define RUVIA_OPTIONAL_FIELD(field, type, ...)                                    \
-    ::ruvia::detail::model::model_field_descriptor<::ruvia::fixed_string{#field}, \
-        ::ruvia::fixed_string{#field}, type, false __VA_OPT__(, ) __VA_ARGS__>
+#define RUVIA_OPTIONAL_FIELD(field, type, ...) ::ruvia::detail::model::model_field_descriptor<::ruvia::fixed_string{#field}, ::ruvia::fixed_string{#field}, type, false __VA_OPT__(, ) __VA_ARGS__>
 
-#define RUVIA_OPTIONAL_FIELD_NAME(wire_name, field, type, ...)                    \
-    ::ruvia::detail::model::model_field_descriptor<::ruvia::fixed_string{#field}, \
-        ::ruvia::fixed_string{wire_name}, type, false __VA_OPT__(, ) __VA_ARGS__>
+#define RUVIA_OPTIONAL_FIELD_NAME(wire_name, field, type, ...) ::ruvia::detail::model::model_field_descriptor<::ruvia::fixed_string{#field}, ::ruvia::fixed_string{wire_name}, type, false __VA_OPT__(, ) __VA_ARGS__>
 
 // Field descriptors are forwarded directly into a C++ variadic template. No
 // preprocessor argument counter or FOR_EACH expansion participates in model
@@ -4648,8 +4482,8 @@ private:
         explicit t_type(::ruvia::detail::model::empty_model_tag) noexcept {                                \
             ::ruvia::detail::model::validate_model_schema(typename model_type::ruvia_model_schema_type{}); \
         }                                                                                                  \
-        explicit t_type(storage_type&& fields) noexcept                                                    \
-            : fields_(std::move(fields)) {}                                                                \
+        explicit t_type(storage_type&& fields) noexcept :                                                  \
+            fields_(std::move(fields)) {}                                                                  \
         storage_type fields_;                                                                              \
     }
 
@@ -4693,12 +4527,12 @@ private:
     friend class json_object;
     friend class json_value;
 
-    explicit json_field_lookup(unique_lookup_status status) noexcept
-        : status_(status) {}
+    explicit json_field_lookup(unique_lookup_status status) noexcept :
+        status_(status) {}
 
-    explicit json_field_lookup(std::optional<t_type>&& value) noexcept(std::is_nothrow_move_constructible_v<t_type>)
-        : status_(unique_lookup_status::found),
-          value_(std::move(value)) {}
+    explicit json_field_lookup(std::optional<t_type>&& value) noexcept(std::is_nothrow_move_constructible_v<t_type>) :
+        status_(unique_lookup_status::found),
+        value_(std::move(value)) {}
 
     unique_lookup_status status_;
     std::optional<t_type> value_;
@@ -4724,8 +4558,8 @@ public:
     json_token_base(const json_token_base&) = delete;
     json_token_base& operator=(const json_token_base&) = delete;
 
-    json_token_base(json_token_base&& other) noexcept
-        : storage_(std::move(other.storage_)) {
+    json_token_base(json_token_base&& other) noexcept :
+        storage_(std::move(other.storage_)) {
         other.storage_.assign_borrowed(default_token.view());
     }
 
@@ -4757,17 +4591,15 @@ protected:
     friend struct model_value_factory;
     friend struct model_value_rebind_access;
     template <typename view_type>
-    friend std::optional<view_type> parse_json_view_value(
-        std::string_view&, std::size_t, model_string_storage, bool, json_parse_budget&);
+    friend std::optional<view_type> parse_json_view_value(std::string_view&, std::size_t, model_string_storage, bool, json_parse_budget&);
 
-    json_token_base(borrowed_model_token_tag, std::string_view body) noexcept
-        : storage_(body) {}
+    json_token_base(borrowed_model_token_tag, std::string_view body) noexcept :
+        storage_(body) {}
 
-    explicit json_token_base(model_text_storage&& storage) noexcept
-        : storage_(std::move(storage)) {}
+    explicit json_token_base(model_text_storage&& storage) noexcept :
+        storage_(std::move(storage)) {}
 
-    [[nodiscard]] static derived_type parse_token(
-        std::string_view body, model_parse_options options, bool require_object, const char* error_message) {
+    [[nodiscard]] static derived_type parse_token(std::string_view body, model_parse_options options, bool require_object, const char* error_message) {
         if (!is_complete_json_value(body, options, require_object)) {
             throw std::invalid_argument(error_message);
         }
@@ -4804,20 +4636,18 @@ public:
         boolean,
         null };
 
-    json_value() noexcept
-        : base_type(detail::borrowed_model_token_tag{}, "null") {}
+    json_value() noexcept :
+        base_type(detail::borrowed_model_token_tag{}, "null") {}
 
     [[nodiscard]] static json_value parse(std::string_view body, model_parse_options options = {}) {
         return parse_token(body, options, false, "invalid JSON value");
     }
 
     template <typename traits_type, typename allocator_type>
-    static json_value parse(
-        std::basic_string<char, traits_type, allocator_type>&&, model_parse_options = {}) = delete;
+    static json_value parse(std::basic_string<char, traits_type, allocator_type>&&, model_parse_options = {}) = delete;
 
     template <typename traits_type, typename allocator_type>
-    static json_value parse(
-        const std::basic_string<char, traits_type, allocator_type>&&, model_parse_options = {}) = delete;
+    static json_value parse(const std::basic_string<char, traits_type, allocator_type>&&, model_parse_options = {}) = delete;
 
     json_value(const json_value&) = delete;
     json_value& operator=(const json_value&) = delete;
@@ -4901,8 +4731,7 @@ private:
     friend struct detail::model_value_factory;
     friend struct detail::model_value_rebind_access;
     template <typename view_type>
-    friend std::optional<view_type> detail::parse_json_view_value(
-        std::string_view&, std::size_t, detail::model_string_storage, bool, detail::json_parse_budget&);
+    friend std::optional<view_type> detail::parse_json_view_value(std::string_view&, std::size_t, detail::model_string_storage, bool, detail::json_parse_budget&);
 
     using base_type::base_type;
 };
@@ -4913,20 +4742,18 @@ class json_object final : public detail::json_token_base<json_object, "{}"> {
     using base_type = detail::json_token_base<json_object, "{}">;
 
 public:
-    json_object() noexcept
-        : base_type(detail::borrowed_model_token_tag{}, "{}") {}
+    json_object() noexcept :
+        base_type(detail::borrowed_model_token_tag{}, "{}") {}
 
     [[nodiscard]] static json_object parse(std::string_view body, model_parse_options options = {}) {
         return parse_token(body, options, true, "invalid JSON object");
     }
 
     template <typename traits_type, typename allocator_type>
-    static json_object parse(
-        std::basic_string<char, traits_type, allocator_type>&&, model_parse_options = {}) = delete;
+    static json_object parse(std::basic_string<char, traits_type, allocator_type>&&, model_parse_options = {}) = delete;
 
     template <typename traits_type, typename allocator_type>
-    static json_object parse(
-        const std::basic_string<char, traits_type, allocator_type>&&, model_parse_options = {}) = delete;
+    static json_object parse(const std::basic_string<char, traits_type, allocator_type>&&, model_parse_options = {}) = delete;
 
     json_object(const json_object&) = delete;
     json_object& operator=(const json_object&) = delete;
@@ -4952,8 +4779,7 @@ private:
     friend struct detail::model_value_factory;
     friend struct detail::model_value_rebind_access;
     template <typename view_type>
-    friend std::optional<view_type> detail::parse_json_view_value(
-        std::string_view&, std::size_t, detail::model_string_storage, bool, detail::json_parse_budget&);
+    friend std::optional<view_type> detail::parse_json_view_value(std::string_view&, std::size_t, detail::model_string_storage, bool, detail::json_parse_budget&);
 
     using base_type::base_type;
 };
@@ -4965,14 +4791,13 @@ template <typename visitor_type>
     }
     auto input = view();
     if (!detail::consume_json_array_elements(input, 0, [&visitor](std::string_view& element_input) {
-            const auto start = element_input;
-            if (!detail::skip_json_value(element_input, 1)) {
-                return false;
-            }
-            json_value value(detail::borrowed_model_token_tag{},
-                start.substr(0, start.size() - element_input.size()));
-            return static_cast<bool>(visitor(value));
-        })) {
+        const auto start = element_input;
+        if (!detail::skip_json_value(element_input, 1)) {
+            return false;
+        }
+        json_value value(detail::borrowed_model_token_tag{}, start.substr(0, start.size() - element_input.size()));
+        return static_cast<bool>(visitor(value));
+    })) {
         return false;
     }
     detail::skip_json_whitespace(input);
@@ -4983,8 +4808,7 @@ namespace detail {
 
 template <typename derived_type, fixed_string default_token>
 template <typename visitor_type>
-[[nodiscard]] inline bool json_token_base<derived_type, default_token>::for_each_field(
-    visitor_type&& visitor) const {
+[[nodiscard]] inline bool json_token_base<derived_type, default_token>::for_each_field(visitor_type&& visitor) const {
     if constexpr (std::is_same_v<derived_type, json_value>) {
         if (!static_cast<const json_value*>(this)->is_object()) {
             return false;
@@ -5004,8 +4828,7 @@ template <typename visitor_type>
 namespace ruvia::detail {
 
 template <typename view_type>
-[[nodiscard]] std::optional<view_type> parse_json_view_value(std::string_view& input,
-    std::size_t depth, model_string_storage string_storage, bool require_object, json_parse_budget& budget) {
+[[nodiscard]] std::optional<view_type> parse_json_view_value(std::string_view& input, std::size_t depth, model_string_storage string_storage, bool require_object, json_parse_budget& budget) {
     auto remaining = input;
     skip_json_whitespace(remaining);
     if (require_object && (remaining.empty() || remaining.front() != '{')) {
@@ -5059,10 +4882,7 @@ enum class text_scalar_parse_error {
 };
 
 template <typename t_type>
-concept text_scalar = std::is_same_v<t_type, std::remove_cv_t<t_type>> &&
-                      (std::is_same_v<t_type, bool> || is_model_integer<t_type> ||
-                          std::is_floating_point_v<t_type> || std::is_same_v<t_type, std::string> ||
-                          std::is_same_v<t_type, string> || std::is_same_v<t_type, std::string_view>);
+concept text_scalar = std::is_same_v<t_type, std::remove_cv_t<t_type>> && (std::is_same_v<t_type, bool> || is_model_integer<t_type> || std::is_floating_point_v<t_type> || std::is_same_v<t_type, std::string> || std::is_same_v<t_type, string> || std::is_same_v<t_type, std::string_view>);
 
 // The one text-to-scalar syntax shared by database results and Redis replies:
 // boolean tokens 1/t/true/TRUE and 0/f/false/FALSE, strict decimal integers
@@ -5100,8 +4920,7 @@ template <text_scalar t_type>
     } else {
         const auto parsed = parse_integer<t_type>(text);
         if (const auto* error = std::get_if<integer_parse_error>(&parsed)) {
-            return *error == integer_parse_error::out_of_range ? text_scalar_parse_error::out_of_range
-                                                               : text_scalar_parse_error::invalid_format;
+            return *error == integer_parse_error::out_of_range ? text_scalar_parse_error::out_of_range : text_scalar_parse_error::invalid_format;
         }
         return result_type(std::in_place_index<0>, std::get<t_type>(parsed));
     }
@@ -5184,22 +5003,19 @@ consteval bool is_exact_element_range() noexcept {
     if constexpr (requires { typename decayed_type::value_type; }) {
         return std::is_same_v<typename decayed_type::value_type, element_type>;
     } else {
-        return std::is_same_v<
-            std::remove_cvref_t<decltype(*std::declval<range_type&>().begin())>, element_type>;
+        return std::is_same_v<std::remove_cvref_t<decltype(*std::declval<range_type&>().begin())>, element_type>;
     }
 }
 
 template <typename t_type, typename v_type>
 void assign_entity_value(t_type& out, v_type&& value) {
-    constexpr bool movable_rvalue =
-        !std::is_lvalue_reference_v<v_type> && !std::is_const_v<std::remove_reference_t<v_type>>;
+    constexpr bool movable_rvalue = !std::is_lvalue_reference_v<v_type> && !std::is_const_v<std::remove_reference_t<v_type>>;
     if constexpr (std::is_arithmetic_v<t_type> && is_ruvia_scalar<v_type>) {
         assign_entity_value(out, value.value_);
     } else if constexpr (is_model_integer<t_type> && std::is_arithmetic_v<std::remove_cvref_t<v_type>>) {
         // 整数输入先检查范围；浮点输入须由调用方显式选择整数转换策略。
         out = integer_value<t_type>(value).value_;
-    } else if constexpr (std::is_floating_point_v<t_type> &&
-                         std::is_arithmetic_v<std::remove_cvref_t<v_type>>) {
+    } else if constexpr (std::is_floating_point_v<t_type> && std::is_arithmetic_v<std::remove_cvref_t<v_type>>) {
         if constexpr (std::is_floating_point_v<std::remove_cvref_t<v_type>>) {
             out = checked_model_float<t_type>(value);
         } else {
@@ -5246,15 +5062,13 @@ void assign_entity_value(t_type& out, v_type&& value) {
             commit_entity_value(out, std::move(owned));
             return;
         }
-        if constexpr (std::is_arithmetic_v<element_type> &&
-                      is_exact_element_range<v_type, element_type>()) {
+        if constexpr (std::is_arithmetic_v<element_type> && is_exact_element_range<v_type, element_type>()) {
             t_type owned(value.begin(), value.end());
             commit_entity_value(out, std::move(owned));
         } else if constexpr (std::is_same_v<element_type, std::string>) {
             auto owned = entity_value_slot<t_type>::make_value();
             owned.reserve(value.size());
-            if constexpr (movable_rvalue &&
-                          std::is_same_v<std::remove_cvref_t<decltype(*value.begin())>, std::string>) {
+            if constexpr (movable_rvalue && std::is_same_v<std::remove_cvref_t<decltype(*value.begin())>, std::string>) {
                 for (auto& item : value) {
                     owned.emplace_back(std::move(item));
                 }
@@ -5384,8 +5198,8 @@ struct entity_storage_from_tuple<std::tuple<columns...>> {
 private:                                                           \
     template <typename>                                            \
     friend class ::ruvia::entity_rows;                             \
-    explicit owner(storage_type&& storage) noexcept                \
-        : member(std::move(storage)) {}                            \
+    explicit owner(storage_type&& storage) noexcept :              \
+        member(std::move(storage)) {}                              \
                                                                    \
 public:                                                            \
     owner() = default;                                             \
@@ -5454,10 +5268,8 @@ public:
     constexpr query_row_count() noexcept = default;
 
     template <std::integral integer_type>
-    constexpr query_row_count(integer_type value)
-        : value_(is_valid_value(value)
-                     ? static_cast<std::uint64_t>(value)
-                     : throw std::invalid_argument("query row count must be in 0..9223372036854775807")) {}
+    constexpr query_row_count(integer_type value) :
+        value_(is_valid_value(value) ? static_cast<std::uint64_t>(value) : throw std::invalid_argument("query row count must be in 0..9223372036854775807")) {}
 
     template <std::integral integer_type>
     [[nodiscard]] static constexpr bool is_valid_value(integer_type value) noexcept {
@@ -5481,8 +5293,8 @@ public:
 private:
     struct validated_tag_type {};
 
-    constexpr query_row_count(std::uint64_t value, validated_tag_type) noexcept
-        : value_(value) {}
+    constexpr query_row_count(std::uint64_t value, validated_tag_type) noexcept :
+        value_(value) {}
 
     std::uint64_t value_{0};
 };
@@ -5623,8 +5435,8 @@ public:
         return *this;
     }
 
-    validator(validator&& other) noexcept
-        : issues_(std::move(other.issues_)) {
+    validator(validator&& other) noexcept :
+        issues_(std::move(other.issues_)) {
         other.issues_.clear();
     }
 
@@ -5645,8 +5457,7 @@ public:
     validator& add(std::string_view, std::string_view, std::string_view) && = delete;
 
     template <typename optional_type>
-    validator& required(const optional_type& value, std::string_view field,
-        std::string_view message = "is required") & RUVIA_LIFETIMEBOUND {
+    validator& required(const optional_type& value, std::string_view field, std::string_view message = "is required") & RUVIA_LIFETIMEBOUND {
         if (!value) {
             add(field, "required", message);
         }
@@ -5656,32 +5467,27 @@ public:
     validator& required(const optional_type&, std::string_view, std::string_view = "is required") && = delete;
 
     template <typename optional_type>
-    validator& min_length(const optional_type& value, std::string_view field, std::size_t min_value,
-        std::string_view message = "is too short") & RUVIA_LIFETIMEBOUND {
+    validator& min_length(const optional_type& value, std::string_view field, std::size_t min_value, std::string_view message = "is too short") & RUVIA_LIFETIMEBOUND {
         if (value && detail::validation_string_view(*value).size() < min_value) {
             add(field, "too_small", message);
         }
         return *this;
     }
     template <typename optional_type>
-    validator& min_length(
-        const optional_type&, std::string_view, std::size_t, std::string_view = "is too short") && = delete;
+    validator& min_length(const optional_type&, std::string_view, std::size_t, std::string_view = "is too short") && = delete;
 
     template <typename optional_type>
-    validator& max_length(const optional_type& value, std::string_view field, std::size_t max_value,
-        std::string_view message = "is too long") & RUVIA_LIFETIMEBOUND {
+    validator& max_length(const optional_type& value, std::string_view field, std::size_t max_value, std::string_view message = "is too long") & RUVIA_LIFETIMEBOUND {
         if (value && detail::validation_string_view(*value).size() > max_value) {
             add(field, "too_big", message);
         }
         return *this;
     }
     template <typename optional_type>
-    validator& max_length(
-        const optional_type&, std::string_view, std::size_t, std::string_view = "is too long") && = delete;
+    validator& max_length(const optional_type&, std::string_view, std::size_t, std::string_view = "is too long") && = delete;
 
     template <typename optional_type, typename min_type, typename max_type>
-    validator& range(const optional_type& value, std::string_view field, min_type min_value, max_type max_value,
-        std::string_view message = "is out of range") & RUVIA_LIFETIMEBOUND {
+    validator& range(const optional_type& value, std::string_view field, min_type min_value, max_type max_value, std::string_view message = "is out of range") & RUVIA_LIFETIMEBOUND {
         if (value) {
             if (detail::validation_less(*value, min_value)) {
                 add(field, "too_small", message);
@@ -5692,13 +5498,10 @@ public:
         return *this;
     }
     template <typename optional_type, typename min_type, typename max_type>
-    validator& range(const optional_type&, std::string_view, min_type, max_type,
-        std::string_view = "is out of range") && = delete;
+    validator& range(const optional_type&, std::string_view, min_type, max_type, std::string_view = "is out of range") && = delete;
 
     template <typename optional_type>
-    validator& one_of(const optional_type& value, std::string_view field,
-        std::initializer_list<std::string_view> allowed,
-        std::string_view message = "is not allowed") & RUVIA_LIFETIMEBOUND {
+    validator& one_of(const optional_type& value, std::string_view field, std::initializer_list<std::string_view> allowed, std::string_view message = "is not allowed") & RUVIA_LIFETIMEBOUND {
         if (!value) {
             return *this;
         }
@@ -5714,8 +5517,7 @@ public:
         return *this;
     }
     template <typename optional_type>
-    validator& one_of(const optional_type&, std::string_view, std::initializer_list<std::string_view>,
-        std::string_view = "is not allowed") && = delete;
+    validator& one_of(const optional_type&, std::string_view, std::initializer_list<std::string_view>, std::string_view = "is not allowed") && = delete;
 
     [[nodiscard]] bool ok() const noexcept {
         return issues_.empty();
@@ -5732,10 +5534,7 @@ public:
 
     void throw_if_invalid(validation_failure_options options = {}) const& {
         if (!ok()) {
-            throw http_error({.status_ = options.status_,
-                .code_ = options.code_,
-                .message_ = options.message_,
-                .validation_issues_ = issues_});
+            throw http_error({.status_ = options.status_, .code_ = options.code_, .message_ = options.message_, .validation_issues_ = issues_});
         }
     }
 
@@ -5743,8 +5542,7 @@ public:
         if (!ok()) {
             auto moved_issues = std::move(issues_);
             issues_.clear();
-            throw http_error(
-                options.status_, options.code_.view(), options.message_.view(), {}, std::move(moved_issues));
+            throw http_error(options.status_, options.code_.view(), options.message_.view(), {}, std::move(moved_issues));
         }
     }
 
@@ -5776,8 +5574,7 @@ template <typename t_type>
 template <typename t_type>
     requires detail::is_model_json_value<t_type>
 [[nodiscard]] t_type from_json(std::string_view body, model_parse_options options = {}) {
-    auto parsed_value = detail::parse_json_document<t_type>(
-        body, detail::model_string_storage::owned, options);
+    auto parsed_value = detail::parse_json_document<t_type>(body, detail::model_string_storage::owned, options);
     if (!parsed_value) {
         throw std::invalid_argument("invalid JSON value");
     }
@@ -5813,17 +5610,16 @@ template <typename t_type>
     requires detail::is_model_field<t_type>
 [[nodiscard]] inline json_field_lookup<t_type> json_object::get(std::string_view field) const& {
     std::optional<std::string_view> match;
-    const auto visited = detail::visit_json_object_fields(view(),
-        [&match, field](std::string_view key, std::string_view value_view) {
-            if (key != field) {
-                return true;
-            }
-            if (match) {
-                return false;
-            }
-            match = value_view;
+    const auto visited = detail::visit_json_object_fields(view(), [&match, field](std::string_view key, std::string_view value_view) {
+        if (key != field) {
             return true;
-        });
+        }
+        if (match) {
+            return false;
+        }
+        match = value_view;
+        return true;
+    });
     switch (visited) {
         case detail::json_object_visit_result::stopped:
             return json_field_lookup<t_type>(unique_lookup_status::repeated);
@@ -5857,12 +5653,9 @@ template <typename t_type>
 // is its value; for a string field it is the UTF-8 BYTE length, not the
 // codepoint count -- a three-emoji string is 12 bytes -- so choose bounds with
 // multibyte input in mind (for example a minimum-length rule on free text).
-#define RUVIA_MIN(value, message) \
-    ::ruvia::detail::model::min<value, ::ruvia::fixed_string{message}>
-#define RUVIA_MAX(value, message) \
-    ::ruvia::detail::model::max<value, ::ruvia::fixed_string{message}>
-#define RUVIA_ONE_OF(message, ...) \
-    ::ruvia::detail::model::one_of<::ruvia::fixed_string{message}, __VA_ARGS__>
+#define RUVIA_MIN(value, message) ::ruvia::detail::model::min<value, ::ruvia::fixed_string{message}>
+#define RUVIA_MAX(value, message) ::ruvia::detail::model::max<value, ::ruvia::fixed_string{message}>
+#define RUVIA_ONE_OF(message, ...) ::ruvia::detail::model::one_of<::ruvia::fixed_string{message}, __VA_ARGS__>
 #define RUVIA_EMAIL(message) ::ruvia::detail::model::email<::ruvia::fixed_string{message}>
 // Pattern rules use anchored (^...$) byte patterns: literals, '.', positive
 // or negative character classes, literal ranges, \d/\w/\s, and '*', '+', '?'.
@@ -5871,10 +5664,8 @@ template <typename t_type>
 // Patterns are limited to 256 bytes and bounded matching work. Exceeding a
 // match limit fails validation. Use RUVIA_CUSTOM for matching syntax outside
 // this dialect.
-#define RUVIA_PATTERN(pattern, message) \
-    ::ruvia::detail::model::pattern_rule<pattern, ::ruvia::fixed_string{message}>
-#define RUVIA_CUSTOM(predicate, message) \
-    ::ruvia::detail::model::custom<predicate, ::ruvia::fixed_string{message}>
+#define RUVIA_PATTERN(pattern, message) ::ruvia::detail::model::pattern_rule<pattern, ::ruvia::fixed_string{message}>
+#define RUVIA_CUSTOM(predicate, message) ::ruvia::detail::model::custom<predicate, ::ruvia::fixed_string{message}>
 
 namespace ruvia {
 class context;
@@ -5887,15 +5678,13 @@ namespace detail {
 
 template <validation_target target>
     requires(target == validation_target::json || target == validation_target::form)
-inline constexpr std::string_view request_body_media_type =
-    target == validation_target::json ? "application/json" : "application/x-www-form-urlencoded";
+inline constexpr std::string_view request_body_media_type = target == validation_target::json ? "application/json" : "application/x-www-form-urlencoded";
 
 // Media-type parameters, including charset, do not select the request model.
 template <validation_target target>
     requires(target == validation_target::json || target == validation_target::form)
 [[nodiscard]] bool request_has_body_media_type(std::optional<std::string_view> content_type) {
-    return http_ascii_equals_ignore_case(
-        http_media_type_only(content_type.value_or(std::string_view{})), request_body_media_type<target>);
+    return http_ascii_equals_ignore_case(http_media_type_only(content_type.value_or(std::string_view{})), request_body_media_type<target>);
 }
 
 template <validation_target target>
@@ -5909,10 +5698,7 @@ template <validation_target target>
 }
 
 template <validation_target target, typename model_type>
-[[nodiscard]] model_type parse_and_validate_request_model(
-    std::conditional_t<target == validation_target::json || target == validation_target::form,
-        std::string_view, std::reference_wrapper<const request_name_value_list>>
-        input) {
+[[nodiscard]] model_type parse_and_validate_request_model(std::conditional_t<target == validation_target::json || target == validation_target::form, std::string_view, std::reference_wrapper<const request_name_value_list>> input) {
     auto model = [&] {
         if constexpr (target == validation_target::json) {
             auto parsed_value = parse_complete_json_value<model_type>(input, model_string_storage::borrowed);
@@ -5940,9 +5726,7 @@ template <validation_target target, typename body_type>
 class model_validation_middleware final {
 public:
     static_assert(is_model<body_type>, "request validation middleware requires a RUVIA_MODEL");
-    static_assert(target != validation_target::header ||
-                      model::unique_model_wire_names_ignore_ascii_case(model::model_access::schema<body_type>()),
-        "header_model field names must be unique ignoring ASCII case");
+    static_assert(target != validation_target::header || model::unique_model_wire_names_ignore_ascii_case(model::model_access::schema<body_type>()), "header_model field names must be unique ignoring ASCII case");
     using ruvia_validation_body_type = body_type;
 
     [[nodiscard]] task<void> invoke(context& c, next& next_value);

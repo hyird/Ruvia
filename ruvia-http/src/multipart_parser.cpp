@@ -8,11 +8,6 @@
 #include <utility>
 #include <variant>
 
-#include "ruvia/http/borrowed_text.h"
-#include "ruvia/http/http_content_coding.h"
-#include "ruvia/http/http_header.h"
-
-#include "http_connection_fields.h"
 // The MIME entity grammar multipart bodies are validated against (RFC 2045
 // sections 5.1 and 5.3): which characters form a token, what a field name, field
 // body, parameter and media type may contain, and the duplicate-parameter guard
@@ -82,8 +77,7 @@ namespace ruvia::detail {
     return http_is_quoted_string(value);
 }
 
-[[nodiscard]] inline bool http_parse_mime_parameter(std::string_view parameter, std::string_view& name,
-    std::string_view& value, bool strict_equals = true) noexcept {
+[[nodiscard]] inline bool http_parse_mime_parameter(std::string_view parameter, std::string_view& name, std::string_view& value, bool strict_equals = true) noexcept {
     const auto equals = parameter.find('=');
     if (parameter.empty() || equals == std::string_view::npos) {
         return false;
@@ -96,14 +90,11 @@ namespace ruvia::detail {
     // Top-level HTTP media-type parameters forbid OWS around '=' (RFC 9110
     // section 5.6.6). MIME body-part structured fields retain RFC 822's
     // separator whitespace and opt out while sharing the remaining checks.
-    return (!strict_equals || (name.size() == raw_name.size() && value.size() == raw_value.size())) &&
-           !name.empty() && std::ranges::all_of(name, http_mime_token_char) &&
-           http_valid_mime_parameter_value(value);
+    return (!strict_equals || (name.size() == raw_name.size() && value.size() == raw_value.size())) && !name.empty() && std::ranges::all_of(name, http_mime_token_char) && http_valid_mime_parameter_value(value);
 }
 
 template <http_temporary_owning_char_string parameter_type>
-bool http_parse_mime_parameter(
-    parameter_type&&, std::string_view&, std::string_view&, bool = true) = delete;
+bool http_parse_mime_parameter(parameter_type&&, std::string_view&, std::string_view&, bool = true) = delete;
 
 class http_mime_parameter_names final {
 public:
@@ -131,22 +122,19 @@ private:
     const auto parameters = http_find_unquoted_delimiter(value, 0, ';');
     const auto media_type = http_trim_ows(value.substr(0, parameters));
     const auto slash = media_type.find('/');
-    if (slash == std::string_view::npos ||
-        media_type.find('/', slash + 1) != std::string_view::npos) {
+    if (slash == std::string_view::npos || media_type.find('/', slash + 1) != std::string_view::npos) {
         return false;
     }
     const auto type = media_type.substr(0, slash);
     const auto subtype = media_type.substr(slash + 1);
-    if (type == "*" || subtype == "*" || !std::ranges::all_of(type, http_mime_token_char) ||
-        !std::ranges::all_of(subtype, http_mime_token_char) || type.empty() || subtype.empty()) {
+    if (type == "*" || subtype == "*" || !std::ranges::all_of(type, http_mime_token_char) || !std::ranges::all_of(subtype, http_mime_token_char) || type.empty() || subtype.empty()) {
         return false;
     }
     http_mime_parameter_names parameter_names;
     return http_all_parameters(value, [&parameter_names](std::string_view parameter) noexcept {
         std::string_view name;
         std::string_view parameter_value;
-        return http_parse_mime_parameter(parameter, name, parameter_value, false) &&
-               parameter_names.record(name);
+        return http_parse_mime_parameter(parameter, name, parameter_value, false) && parameter_names.record(name);
     });
 }
 
@@ -183,37 +171,27 @@ struct http_multipart_delimiter_result final {
         return {.kind_ = http_multipart_delimiter_kind::invalid};
     }
 
-    [[nodiscard]] static constexpr http_multipart_delimiter_result make_need_input(
-        std::size_t offset = 0) noexcept {
+    [[nodiscard]] static constexpr http_multipart_delimiter_result make_need_input(std::size_t offset = 0) noexcept {
         return {.kind_ = http_multipart_delimiter_kind::need_input, .offset_ = offset};
     }
 
-    [[nodiscard]] static constexpr http_multipart_delimiter_result make_part(
-        std::size_t offset, std::size_t line_bytes) noexcept {
-        return {.kind_ = http_multipart_delimiter_kind::part,
-            .offset_ = offset,
-            .line_bytes_ = line_bytes};
+    [[nodiscard]] static constexpr http_multipart_delimiter_result make_part(std::size_t offset, std::size_t line_bytes) noexcept {
+        return {.kind_ = http_multipart_delimiter_kind::part, .offset_ = offset, .line_bytes_ = line_bytes};
     }
 
-    [[nodiscard]] static constexpr http_multipart_delimiter_result make_close(
-        std::size_t offset, std::size_t line_bytes) noexcept {
-        return {.kind_ = http_multipart_delimiter_kind::close,
-            .offset_ = offset,
-            .line_bytes_ = line_bytes};
+    [[nodiscard]] static constexpr http_multipart_delimiter_result make_close(std::size_t offset, std::size_t line_bytes) noexcept {
+        return {.kind_ = http_multipart_delimiter_kind::close, .offset_ = offset, .line_bytes_ = line_bytes};
     }
 
     [[nodiscard]] constexpr http_multipart_delimiter_result rebased(std::size_t base) const noexcept {
-        if (kind_ == http_multipart_delimiter_kind::need_input ||
-            kind_ == http_multipart_delimiter_kind::part ||
-            kind_ == http_multipart_delimiter_kind::close) {
+        if (kind_ == http_multipart_delimiter_kind::need_input || kind_ == http_multipart_delimiter_kind::part || kind_ == http_multipart_delimiter_kind::close) {
             return {.kind_ = kind_, .offset_ = base + offset_, .line_bytes_ = line_bytes_};
         }
         return *this;
     }
 };
 
-[[nodiscard]] inline bool http_multipart_marker_prefix_matches(
-    std::string_view input, std::string_view boundary) noexcept {
+[[nodiscard]] inline bool http_multipart_marker_prefix_matches(std::string_view input, std::string_view boundary) noexcept {
     const auto expected_size = boundary.size() + 2;
     const auto compared = std::min(input.size(), expected_size);
     for (std::size_t index = 0; index < compared; ++index) {
@@ -229,25 +207,21 @@ struct http_multipart_delimiter_result final {
 // transport-padding is accepted after a regular delimiter or after the closing
 // "--". A closing delimiter ending exactly at the current buffer boundary is
 // complete only when the I/O owner has signalled end-of-input.
-[[nodiscard]] inline http_multipart_delimiter_result http_match_multipart_delimiter_line(
-    std::string_view input, const multipart_boundary& boundary, bool input_finished,
-    std::size_t& padding_cursor) noexcept {
+[[nodiscard]] inline http_multipart_delimiter_result http_match_multipart_delimiter_line(std::string_view input, const multipart_boundary& boundary, bool input_finished, std::size_t& padding_cursor) noexcept {
     const auto value = boundary.value();
     const auto marker_size = value.size() + 2;
     if (!http_multipart_marker_prefix_matches(input, value)) {
         return http_multipart_delimiter_result::make_no_match();
     }
     if (input.size() < marker_size) {
-        return input_finished ? http_multipart_delimiter_result::make_no_match()
-                              : http_multipart_delimiter_result::make_need_input();
+        return input_finished ? http_multipart_delimiter_result::make_no_match() : http_multipart_delimiter_result::make_need_input();
     }
 
     std::size_t cursor_value = marker_size;
     bool close = false;
     if (cursor_value < input.size() && input[cursor_value] == '-') {
         if (cursor_value + 1 >= input.size()) {
-            return input_finished ? http_multipart_delimiter_result::make_no_match()
-                                  : http_multipart_delimiter_result::make_need_input();
+            return input_finished ? http_multipart_delimiter_result::make_no_match() : http_multipart_delimiter_result::make_need_input();
         }
         if (input[cursor_value + 1] != '-') {
             return http_multipart_delimiter_result::make_invalid();
@@ -266,30 +240,24 @@ struct http_multipart_delimiter_result final {
         if (close && input_finished) {
             return http_multipart_delimiter_result::make_close(0, cursor_value);
         }
-        return input_finished ? http_multipart_delimiter_result::make_no_match()
-                              : http_multipart_delimiter_result::make_need_input();
+        return input_finished ? http_multipart_delimiter_result::make_no_match() : http_multipart_delimiter_result::make_need_input();
     }
     if (input[cursor_value] != '\r') {
         return http_multipart_delimiter_result::make_invalid();
     }
     if (cursor_value + 1 >= input.size()) {
-        return input_finished ? http_multipart_delimiter_result::make_no_match()
-                              : http_multipart_delimiter_result::make_need_input();
+        return input_finished ? http_multipart_delimiter_result::make_no_match() : http_multipart_delimiter_result::make_need_input();
     }
     if (input[cursor_value + 1] != '\n') {
         return http_multipart_delimiter_result::make_invalid();
     }
-    return close ? http_multipart_delimiter_result::make_close(0, cursor_value + 2)
-                 : http_multipart_delimiter_result::make_part(0, cursor_value + 2);
+    return close ? http_multipart_delimiter_result::make_close(0, cursor_value + 2) : http_multipart_delimiter_result::make_part(0, cursor_value + 2);
 }
 
 // Cursors belong to one retained input prefix and must be reset after consume.
 // Searches keep at most the three-byte delimiter prefix overlap; a candidate's
 // transport padding resumes at its last inspected byte.
-[[nodiscard]] inline http_multipart_delimiter_result http_find_multipart_delimiter_from_cursor(
-    std::string_view input, const multipart_boundary& boundary, bool input_finished,
-    bool check_leading_dash, std::size_t rebase_crlf_offset,
-    std::size_t& search_cursor, std::size_t& padding_cursor) noexcept {
+[[nodiscard]] inline http_multipart_delimiter_result http_find_multipart_delimiter_from_cursor(std::string_view input, const multipart_boundary& boundary, bool input_finished, bool check_leading_dash, std::size_t rebase_crlf_offset, std::size_t& search_cursor, std::size_t& padding_cursor) noexcept {
     if (check_leading_dash && search_cursor == 0 && !input.empty() && input.front() == '-') {
         auto match = http_match_multipart_delimiter_line(input, boundary, input_finished, padding_cursor);
         if (match.kind_ != http_multipart_delimiter_kind::no_match) {
@@ -297,10 +265,8 @@ struct http_multipart_delimiter_result final {
         }
         padding_cursor = 0;
     }
-    for (auto prefix = input.find("\r\n--", search_cursor); prefix != std::string_view::npos;
-        prefix = input.find("\r\n--", prefix + 1)) {
-        auto match = http_match_multipart_delimiter_line(
-            input.substr(prefix + 2), boundary, input_finished, padding_cursor);
+    for (auto prefix = input.find("\r\n--", search_cursor); prefix != std::string_view::npos; prefix = input.find("\r\n--", prefix + 1)) {
+        auto match = http_match_multipart_delimiter_line(input.substr(prefix + 2), boundary, input_finished, padding_cursor);
         if (match.kind_ == http_multipart_delimiter_kind::no_match) {
             padding_cursor = 0;
             continue;
@@ -312,11 +278,8 @@ struct http_multipart_delimiter_result final {
     return http_multipart_delimiter_result::make_no_match();
 }
 
-[[nodiscard]] inline http_multipart_delimiter_result http_find_initial_multipart_delimiter(
-    std::string_view input, const multipart_boundary& boundary, bool input_finished,
-    std::size_t& search_cursor, std::size_t& padding_cursor) noexcept {
-    auto match = http_find_multipart_delimiter_from_cursor(
-        input, boundary, input_finished, true, 2, search_cursor, padding_cursor);
+[[nodiscard]] inline http_multipart_delimiter_result http_find_initial_multipart_delimiter(std::string_view input, const multipart_boundary& boundary, bool input_finished, std::size_t& search_cursor, std::size_t& padding_cursor) noexcept {
+    auto match = http_find_multipart_delimiter_from_cursor(input, boundary, input_finished, true, 2, search_cursor, padding_cursor);
     if (match.kind_ != http_multipart_delimiter_kind::no_match) {
         return match;
     }
@@ -333,11 +296,8 @@ struct http_multipart_delimiter_result final {
 // may end right after its header block and the next delimiter's CRLF is the one
 // that closed the headers. Body lines cannot start with the dash-boundary, so at
 // the body start a delimiter line at offset 0 is a delimiter, not content.
-[[nodiscard]] inline http_multipart_delimiter_result http_find_multipart_body_delimiter(
-    std::string_view input, const multipart_boundary& boundary, bool input_finished, bool at_body_start,
-    std::size_t& search_cursor, std::size_t& padding_cursor) noexcept {
-    return http_find_multipart_delimiter_from_cursor(
-        input, boundary, input_finished, at_body_start, 0, search_cursor, padding_cursor);
+[[nodiscard]] inline http_multipart_delimiter_result http_find_multipart_body_delimiter(std::string_view input, const multipart_boundary& boundary, bool input_finished, bool at_body_start, std::size_t& search_cursor, std::size_t& padding_cursor) noexcept {
+    return http_find_multipart_delimiter_from_cursor(input, boundary, input_finished, at_body_start, 0, search_cursor, padding_cursor);
 }
 
 [[nodiscard]] inline bool http_is_form_data_disposition(std::string_view disposition) noexcept {
@@ -367,21 +327,17 @@ struct http_multipart_part_headers final {
     }
 };
 
-using http_multipart_part_header_parse_result =
-    std::variant<http_multipart_part_headers, multipart_parse_error>;
+using http_multipart_part_header_parse_result = std::variant<http_multipart_part_headers, multipart_parse_error>;
 
-[[nodiscard]] inline http_multipart_part_header_parse_result http_parse_multipart_part_headers(
-    std::string_view headers) noexcept {
+[[nodiscard]] inline http_multipart_part_header_parse_result http_parse_multipart_part_headers(std::string_view headers) noexcept {
     std::optional<std::string_view> disposition;
     std::optional<std::string_view> content_type;
     auto remaining_headers = headers;
     while (!remaining_headers.empty()) {
         const auto line_end = remaining_headers.find("\r\n");
-        const auto line = line_end == std::string_view::npos ? remaining_headers
-                                                             : remaining_headers.substr(0, line_end);
+        const auto line = line_end == std::string_view::npos ? remaining_headers : remaining_headers.substr(0, line_end);
         const auto colon = line.find(':');
-        if (colon == std::string_view::npos || !http_valid_mime_field_name(line.substr(0, colon)) ||
-            !is_valid_http_field_value_bytes(line.substr(colon + 1))) {
+        if (colon == std::string_view::npos || !http_valid_mime_field_name(line.substr(0, colon)) || !is_valid_http_field_value_bytes(line.substr(colon + 1))) {
             return multipart_parse_error::invalid_part_headers;
         }
         const auto key = line.substr(0, colon);
@@ -447,41 +403,30 @@ struct multipart_part_access final {
 
     // Unmodified fields borrow the caller-owned body; unfolded or escaped fields
     // own string storage.
-    [[nodiscard]] static multipart_part make_decoded(multipart_part::text_storage_type name,
-        multipart_part::text_storage_type filename,
-        multipart_part::text_storage_type content_type_value, std::string_view body,
-        bool filename_present) noexcept {
-        return multipart_part(std::move(name), std::move(filename),
-            std::move(content_type_value), body, filename_present);
+    [[nodiscard]] static multipart_part make_decoded(multipart_part::text_storage_type name, multipart_part::text_storage_type filename, multipart_part::text_storage_type content_type_value, std::string_view body, bool filename_present) noexcept {
+        return multipart_part(std::move(name), std::move(filename), std::move(content_type_value), body, filename_present);
     }
 
     template <http_temporary_owning_char_string body_type>
-    static multipart_part make_decoded(multipart_part::text_storage_type,
-        multipart_part::text_storage_type, multipart_part::text_storage_type, body_type&&, bool) = delete;
+    static multipart_part make_decoded(multipart_part::text_storage_type, multipart_part::text_storage_type, multipart_part::text_storage_type, body_type&&, bool) = delete;
 };
 
 struct multipart_stream_part_access final {
-    [[nodiscard]] static constexpr multipart_stream_part make(std::string_view name,
-        std::string_view filename, std::string_view content_type_value, std::string_view body,
-        multipart_chunk_phase phase, bool filename_present) noexcept {
+    [[nodiscard]] static constexpr multipart_stream_part make(std::string_view name, std::string_view filename, std::string_view content_type_value, std::string_view body, multipart_chunk_phase phase, bool filename_present) noexcept {
         return multipart_stream_part(name, filename, content_type_value, body, phase, filename_present);
     }
 
     template <http_temporary_owning_char_string name_type>
-    static multipart_stream_part make(name_type&&, std::string_view, std::string_view, std::string_view,
-        multipart_chunk_phase, bool) = delete;
+    static multipart_stream_part make(name_type&&, std::string_view, std::string_view, std::string_view, multipart_chunk_phase, bool) = delete;
 
     template <http_temporary_owning_char_string filename_type>
-    static multipart_stream_part make(std::string_view, filename_type&&, std::string_view,
-        std::string_view, multipart_chunk_phase, bool) = delete;
+    static multipart_stream_part make(std::string_view, filename_type&&, std::string_view, std::string_view, multipart_chunk_phase, bool) = delete;
 
     template <http_temporary_owning_char_string content_type>
-    static multipart_stream_part make(std::string_view, std::string_view, content_type&&,
-        std::string_view, multipart_chunk_phase, bool) = delete;
+    static multipart_stream_part make(std::string_view, std::string_view, content_type&&, std::string_view, multipart_chunk_phase, bool) = delete;
 
     template <http_temporary_owning_char_string body_type>
-    static multipart_stream_part make(std::string_view, std::string_view, std::string_view, body_type&&,
-        multipart_chunk_phase, bool) = delete;
+    static multipart_stream_part make(std::string_view, std::string_view, std::string_view, body_type&&, multipart_chunk_phase, bool) = delete;
 };
 
 }  // namespace ruvia::detail
@@ -492,8 +437,7 @@ namespace {
 
 // Decodes a validated boundary parameter (token or quoted-string) into
 // `decoded`; the boundary rule itself is checked by multipart_boundary.
-[[nodiscard]] std::optional<std::string_view> decode_multipart_boundary_parameter(
-    std::string_view parameter, std::array<char, 70>& decoded) noexcept {
+[[nodiscard]] std::optional<std::string_view> decode_multipart_boundary_parameter(std::string_view parameter, std::array<char, 70>& decoded) noexcept {
     std::size_t size = 0;
     if (parameter.empty() || parameter.front() != '"') {
         if (parameter.size() > decoded.size()) {
@@ -515,8 +459,7 @@ namespace {
 }  // namespace
 
 multipart_boundary_parse_result parse_multipart_boundary(std::string_view content_type_value) {
-    if (!http_ascii_equals_ignore_case(
-            detail::http_header_token_before_parameters(content_type_value), "multipart/form-data")) {
+    if (!http_ascii_equals_ignore_case(detail::http_header_token_before_parameters(content_type_value), "multipart/form-data")) {
         return multipart_boundary_parse_result::make_not_applicable();
     }
     std::optional<multipart_boundary> boundary;
@@ -533,8 +476,7 @@ multipart_boundary_parse_result parse_multipart_boundary(std::string_view conten
         }
         if (http_ascii_equals_ignore_case(key, "boundary")) {
             const auto decoded_value = decode_multipart_boundary_parameter(value, decoded);
-            boundary = decoded_value.has_value() ? multipart_boundary::try_create(*decoded_value)
-                                                 : std::nullopt;
+            boundary = decoded_value.has_value() ? multipart_boundary::try_create(*decoded_value) : std::nullopt;
             if (!boundary) {
                 return false;
             }
@@ -567,16 +509,14 @@ void append_mime_parameter_value(std::string& out, std::string_view value) {
     }
 }
 
-[[nodiscard]] std::string_view multipart_text_view(
-    const std::variant<std::string_view, std::string>& storage) noexcept {
+[[nodiscard]] std::string_view multipart_text_view(const std::variant<std::string_view, std::string>& storage) noexcept {
     if (const auto* borrowed = std::get_if<std::string_view>(&storage)) {
         return *borrowed;
     }
     return std::get<std::string>(storage);
 }
 
-std::string& emplace_owned_multipart_text(
-    std::variant<std::string_view, std::string>& storage) {
+std::string& emplace_owned_multipart_text(std::variant<std::string_view, std::string>& storage) {
     if (auto* owned = std::get_if<std::string>(&storage)) {
         owned->clear();
         return *owned;
@@ -587,38 +527,27 @@ std::string& emplace_owned_multipart_text(
 [[nodiscard]] http_protocol_error multipart_protocol_error(multipart_parse_error error) noexcept {
     switch (error) {
         case multipart_parse_error::incomplete_body:
-            return http_protocol_error(http_status::bad_request, "multipart_incomplete_body",
-                "incomplete multipart body");
+            return http_protocol_error(http_status::bad_request, "multipart_incomplete_body", "incomplete multipart body");
         case multipart_parse_error::invalid_delimiter:
-            return http_protocol_error(http_status::bad_request, "multipart_invalid_delimiter",
-                "invalid multipart delimiter");
+            return http_protocol_error(http_status::bad_request, "multipart_invalid_delimiter", "invalid multipart delimiter");
         case multipart_parse_error::preamble_too_large:
-            return http_protocol_error(http_status::content_too_large,
-                "multipart_preamble_too_large", "multipart preamble exceeds limit");
+            return http_protocol_error(http_status::content_too_large, "multipart_preamble_too_large", "multipart preamble exceeds limit");
         case multipart_parse_error::part_headers_too_large:
-            return http_protocol_error(http_status::content_too_large,
-                "multipart_part_headers_too_large", "multipart part headers exceed limit");
+            return http_protocol_error(http_status::content_too_large, "multipart_part_headers_too_large", "multipart part headers exceed limit");
         case multipart_parse_error::invalid_part_headers:
-            return http_protocol_error(http_status::bad_request, "multipart_invalid_part_headers",
-                "invalid multipart part headers");
+            return http_protocol_error(http_status::bad_request, "multipart_invalid_part_headers", "invalid multipart part headers");
         case multipart_parse_error::invalid_content_disposition:
-            return http_protocol_error(http_status::bad_request,
-                "multipart_invalid_content_disposition", "invalid multipart content disposition");
+            return http_protocol_error(http_status::bad_request, "multipart_invalid_content_disposition", "invalid multipart content disposition");
         case multipart_parse_error::missing_field_name:
-            return http_protocol_error(http_status::bad_request, "multipart_missing_field_name",
-                "invalid multipart field name");
+            return http_protocol_error(http_status::bad_request, "multipart_missing_field_name", "invalid multipart field name");
         case multipart_parse_error::delimiter_line_too_large:
-            return http_protocol_error(http_status::content_too_large,
-                "multipart_delimiter_line_too_large", "multipart delimiter line exceeds limit");
+            return http_protocol_error(http_status::content_too_large, "multipart_delimiter_line_too_large", "multipart delimiter line exceeds limit");
         case multipart_parse_error::too_many_parts:
-            return http_protocol_error(http_status::content_too_large, "multipart_too_many_parts",
-                "multipart part count exceeds limit");
+            return http_protocol_error(http_status::content_too_large, "multipart_too_many_parts", "multipart part count exceeds limit");
         case multipart_parse_error::metadata_too_large:
-            return http_protocol_error(http_status::content_too_large,
-                "multipart_metadata_too_large", "multipart metadata exceeds limit");
+            return http_protocol_error(http_status::content_too_large, "multipart_metadata_too_large", "multipart metadata exceeds limit");
     }
-    return http_protocol_error(
-        http_status::bad_request, "multipart_invalid_body", "invalid multipart body");
+    return http_protocol_error(http_status::bad_request, "multipart_invalid_body", "invalid multipart body");
 }
 
 }  // namespace
@@ -627,32 +556,26 @@ http_protocol_error multipart_poll_failure::protocol_error() const noexcept {
     return multipart_protocol_error(error_);
 }
 
-multipart_parser::multipart_parser(multipart_parse_options options)
-    : boundary_(std::move(options.boundary_)),
-      input_(std::in_place_type<http_io_buffer>),
-      remaining_parts_(options.max_parts_),
-      remaining_metadata_bytes_(options.max_metadata_bytes_) {}
+multipart_parser::multipart_parser(multipart_parse_options options) :
+    boundary_(std::move(options.boundary_)),
+    input_(std::in_place_type<http_io_buffer>),
+    remaining_parts_(options.max_parts_),
+    remaining_metadata_bytes_(options.max_metadata_bytes_) {}
 
-multipart_parser::multipart_parser(
-    std::string_view complete_body, multipart_parse_options options, complete_input_tag_type)
-    : boundary_(std::move(options.boundary_)),
-      input_(complete_body),
-      remaining_parts_(options.max_parts_),
-      remaining_metadata_bytes_(options.max_metadata_bytes_),
-      input_eof_(true) {}
+multipart_parser::multipart_parser(std::string_view complete_body, multipart_parse_options options, complete_input_tag_type) :
+    boundary_(std::move(options.boundary_)),
+    input_(complete_body),
+    remaining_parts_(options.max_parts_),
+    remaining_metadata_bytes_(options.max_metadata_bytes_),
+    input_eof_(true) {}
 
-std::vector<multipart_part> parse_multipart_body(
-    std::string_view body, multipart_parse_options options) {
+std::vector<multipart_part> parse_multipart_body(std::string_view body, multipart_parse_options options) {
     multipart_parser parser(body, std::move(options), multipart_parser::complete_input_tag_type{});
     std::vector<multipart_part> parts;
     for (;;) {
         auto result_value = parser.poll();
         if (const auto* part = result_value.part()) {
-            parts.push_back(detail::multipart_part_access::make_decoded(
-                std::exchange(parser.current_name_, std::string_view{}),
-                std::exchange(parser.current_filename_, std::string_view{}),
-                std::exchange(parser.current_content_type_, std::string_view{}), part->body(),
-                part->has_filename()));
+            parts.push_back(detail::multipart_part_access::make_decoded(std::exchange(parser.current_name_, std::string_view{}), std::exchange(parser.current_filename_, std::string_view{}), std::exchange(parser.current_content_type_, std::string_view{}), part->body(), part->has_filename()));
             continue;
         }
         if (result_value.done() != nullptr) {
@@ -679,8 +602,7 @@ void multipart_parser::consume(std::size_t bytes_value) noexcept {
         std::get<http_io_buffer>(input_).consume(bytes_value);
     }
     header_scan_offset_ = header_scan_offset_ >= bytes_value ? header_scan_offset_ - bytes_value : 0;
-    delimiter_scan_offset_ =
-        delimiter_scan_offset_ >= bytes_value ? delimiter_scan_offset_ - bytes_value : 0;
+    delimiter_scan_offset_ = delimiter_scan_offset_ >= bytes_value ? delimiter_scan_offset_ - bytes_value : 0;
 }
 
 void multipart_parser::reset_scan_cursors() noexcept {
@@ -699,8 +621,7 @@ void multipart_parser::compact_pending() {
 
 void multipart_parser::feed(std::string_view chunk) {
     auto* owned = std::get_if<http_io_buffer>(&input_);
-    if (owned == nullptr || input_eof_ || (state_.index() != 0) ||
-        std::get<0>(state_) == progress_state_type::done) {
+    if (owned == nullptr || input_eof_ || (state_.index() != 0) || std::get<0>(state_) == progress_state_type::done) {
         throw std::logic_error("multipart parser cannot accept input in a terminal state");
     }
     owned->append(chunk);
@@ -772,9 +693,7 @@ multipart_parser::step_result_type multipart_parser::process_boundary() {
     // is ignored. Skip it once, reusing the buffered parser's boundary finder so
     // the streaming and buffered paths accept exactly the same bodies.
     if (first_boundary_) {
-        const auto delimiter =
-            detail::http_find_initial_multipart_delimiter(buffer_view(), boundary_, input_eof_,
-                delimiter_scan_offset_, delimiter_padding_offset_);
+        const auto delimiter = detail::http_find_initial_multipart_delimiter(buffer_view(), boundary_, input_eof_, delimiter_scan_offset_, delimiter_padding_offset_);
         if (delimiter.kind_ == detail::http_multipart_delimiter_kind::invalid) {
             return multipart_parse_error::invalid_delimiter;
         }
@@ -816,17 +735,14 @@ multipart_parser::step_result_type multipart_parser::process_boundary() {
         reset_scan_cursors();
     }
 
-    const auto delimiter =
-        detail::http_match_multipart_delimiter_line(buffer_view(), boundary_, input_eof_,
-            delimiter_padding_offset_);
+    const auto delimiter = detail::http_match_multipart_delimiter_line(buffer_view(), boundary_, input_eof_, delimiter_padding_offset_);
     if (delimiter.kind_ == detail::http_multipart_delimiter_kind::need_input) {
         if (buffer_view().size() > max_multipart_delimiter_line_bytes) {
             return multipart_parse_error::delimiter_line_too_large;
         }
         return step_progress_type::need_input;
     }
-    if (delimiter.kind_ == detail::http_multipart_delimiter_kind::part ||
-        delimiter.kind_ == detail::http_multipart_delimiter_kind::close) {
+    if (delimiter.kind_ == detail::http_multipart_delimiter_kind::part || delimiter.kind_ == detail::http_multipart_delimiter_kind::close) {
         if (delimiter.line_bytes_ > max_multipart_delimiter_line_bytes) {
             return multipart_parse_error::delimiter_line_too_large;
         }
@@ -870,8 +786,7 @@ multipart_parser::step_result_type multipart_parser::process_headers() {
     const auto first_fold = detail::find_field_line_fold(headers);
     const bool unfolded = first_fold != std::string_view::npos;
     if (unfolded) {
-        detail::copy_unfolded_field_lines(
-            headers, first_fold, detail::field_line_folding_policy::mime, current_headers_);
+        detail::copy_unfolded_field_lines(headers, first_fold, detail::field_line_folding_policy::mime, current_headers_);
         headers = current_headers_;
     }
     const auto parsed_headers = detail::http_parse_multipart_part_headers(headers);
@@ -884,16 +799,14 @@ multipart_parser::step_result_type multipart_parser::process_headers() {
     if (borrowed_headers && part_headers->name().find('\\') == std::string_view::npos) {
         current_name_ = http_trim_quoted_field_value(part_headers->name());
     } else {
-        append_mime_parameter_value(
-            emplace_owned_multipart_text(current_name_), part_headers->name());
+        append_mime_parameter_value(emplace_owned_multipart_text(current_name_), part_headers->name());
     }
     has_current_filename_ = part_headers->has_filename();
     if (has_current_filename_ && !http_trim_quoted_field_value(part_headers->filename()).empty()) {
         if (borrowed_headers && part_headers->filename().find('\\') == std::string_view::npos) {
             current_filename_ = http_trim_quoted_field_value(part_headers->filename());
         } else {
-            append_mime_parameter_value(
-                emplace_owned_multipart_text(current_filename_), part_headers->filename());
+            append_mime_parameter_value(emplace_owned_multipart_text(current_filename_), part_headers->filename());
         }
     } else {
         current_filename_ = std::string_view{};
@@ -903,8 +816,7 @@ multipart_parser::step_result_type multipart_parser::process_headers() {
     } else if (borrowed_headers) {
         current_content_type_ = part_headers->content_type();
     } else {
-        emplace_owned_multipart_text(current_content_type_)
-            .assign(part_headers->content_type().data(), part_headers->content_type().size());
+        emplace_owned_multipart_text(current_content_type_).assign(part_headers->content_type().data(), part_headers->content_type().size());
     }
     --remaining_parts_;
     remaining_metadata_bytes_ -= headers_end + 4;
@@ -916,37 +828,27 @@ multipart_parser::step_result_type multipart_parser::process_headers() {
 }
 
 multipart_stream_part multipart_parser::make_part(std::string_view body, bool part_end) {
-    const auto phase =
-        next_chunk_is_first_ ? (part_end ? multipart_chunk_phase::complete : multipart_chunk_phase::first)
-                             : (part_end ? multipart_chunk_phase::last : multipart_chunk_phase::middle);
-    auto part = detail::multipart_stream_part_access::make(multipart_text_view(current_name_),
-        multipart_text_view(current_filename_), multipart_text_view(current_content_type_), body,
-        phase, has_current_filename_);
+    const auto phase = next_chunk_is_first_ ? (part_end ? multipart_chunk_phase::complete : multipart_chunk_phase::first) : (part_end ? multipart_chunk_phase::last : multipart_chunk_phase::middle);
+    auto part = detail::multipart_stream_part_access::make(multipart_text_view(current_name_), multipart_text_view(current_filename_), multipart_text_view(current_content_type_), body, phase, has_current_filename_);
     next_chunk_is_first_ = false;
     return part;
 }
 
 multipart_poll_result multipart_parser::read_body_chunk() {
     const auto buffer = buffer_view();
-    const auto delimiter =
-        detail::http_find_multipart_body_delimiter(buffer, boundary_, input_eof_, next_chunk_is_first_,
-            delimiter_scan_offset_, delimiter_padding_offset_);
+    const auto delimiter = detail::http_find_multipart_body_delimiter(buffer, boundary_, input_eof_, next_chunk_is_first_, delimiter_scan_offset_, delimiter_padding_offset_);
     if (delimiter.kind_ == detail::http_multipart_delimiter_kind::invalid) {
         return fail(multipart_parse_error::invalid_delimiter);
     }
-    if (delimiter.kind_ == detail::http_multipart_delimiter_kind::part ||
-        delimiter.kind_ == detail::http_multipart_delimiter_kind::close) {
+    if (delimiter.kind_ == detail::http_multipart_delimiter_kind::part || delimiter.kind_ == detail::http_multipart_delimiter_kind::close) {
         if (delimiter.line_bytes_ > max_multipart_delimiter_line_bytes) {
             return fail(multipart_parse_error::delimiter_line_too_large);
         }
-        const auto crlf_bytes =
-            buffer.substr(delimiter.offset_).starts_with("\r\n") ? std::size_t{2} : std::size_t{0};
+        const auto crlf_bytes = buffer.substr(delimiter.offset_).starts_with("\r\n") ? std::size_t{2} : std::size_t{0};
         auto part = make_part(buffer.substr(0, delimiter.offset_), true);
         pending_erase_bytes_ = delimiter.offset_ + crlf_bytes + delimiter.line_bytes_;
         reset_scan_cursors();
-        state_ = delimiter.kind_ == detail::http_multipart_delimiter_kind::part
-                     ? progress_state_type::headers
-                     : progress_state_type::done;
+        state_ = delimiter.kind_ == detail::http_multipart_delimiter_kind::part ? progress_state_type::headers : progress_state_type::done;
         return multipart_poll_result::make_part(part);
     }
     if (delimiter.kind_ == detail::http_multipart_delimiter_kind::need_input) {
@@ -982,11 +884,11 @@ constexpr std::size_t max_io_buffer_bytes = static_cast<std::size_t>((std::numer
 
 }  // namespace
 
-http_io_buffer::http_io_buffer(http_io_buffer&& other) noexcept
-    : storage_(std::exchange(other.storage_, nullptr)),
-      capacity_(std::exchange(other.capacity_, 0)),
-      begin_(std::exchange(other.begin_, 0)),
-      end_(std::exchange(other.end_, 0)) {}
+http_io_buffer::http_io_buffer(http_io_buffer&& other) noexcept :
+    storage_(std::exchange(other.storage_, nullptr)),
+    capacity_(std::exchange(other.capacity_, 0)),
+    begin_(std::exchange(other.begin_, 0)),
+    end_(std::exchange(other.end_, 0)) {}
 
 http_io_buffer::~http_io_buffer() {
     release();
@@ -1131,8 +1033,7 @@ namespace {
 
 constexpr std::size_t allocation_alignment = alignof(std::max_align_t);
 // The prefix keeps the payload max-aligned while recording the block size.
-constexpr std::size_t allocation_prefix_bytes =
-    ((sizeof(std::size_t) + allocation_alignment - 1) / allocation_alignment) * allocation_alignment;
+constexpr std::size_t allocation_prefix_bytes = ((sizeof(std::size_t) + allocation_alignment - 1) / allocation_alignment) * allocation_alignment;
 
 [[nodiscard]] std::byte* allocation_base(void* pointer) noexcept {
     return static_cast<std::byte*>(pointer) - allocation_prefix_bytes;
@@ -1146,10 +1047,9 @@ constexpr std::size_t allocation_prefix_bytes =
 
 }  // namespace
 
-http_c_library_memory::http_c_library_memory(
-    std::size_t native_budget, bool throw_on_budget_exceeded) noexcept
-    : native_budget_(native_budget),
-      throw_on_budget_exceeded_(throw_on_budget_exceeded) {}
+http_c_library_memory::http_c_library_memory(std::size_t native_budget, bool throw_on_budget_exceeded) noexcept :
+    native_budget_(native_budget),
+    throw_on_budget_exceeded_(throw_on_budget_exceeded) {}
 
 void http_c_library_memory::rethrow_if_failed() const {
     if (auto failure = std::exchange(failure_, nullptr)) {
@@ -1297,8 +1197,8 @@ void replace_ill_formed_utf8(std::string& value) {
 
 }  // namespace
 
-sse_parser::sse_parser(sse_parser_options options)
-    : event_limit_(options.event_limit_) {}
+sse_parser::sse_parser(sse_parser_options options) :
+    event_limit_(options.event_limit_) {}
 
 sse_parse_result sse_parser::parse(std::string_view input) & {
     if (state_ != sse_parser_state::active) {
@@ -1307,8 +1207,7 @@ sse_parse_result sse_parser::parse(std::string_view input) & {
     release_event_buffers();
     std::size_t position = 0;
     if (!bom_settled_) {
-        while (position < input.size() && bom_matched_ < sse_utf8_bom.size() &&
-               input[position] == sse_utf8_bom[bom_matched_]) {
+        while (position < input.size() && bom_matched_ < sse_utf8_bom.size() && input[position] == sse_utf8_bom[bom_matched_]) {
             ++bom_matched_;
             ++position;
         }
@@ -1352,9 +1251,7 @@ sse_parse_result sse_parser::parse(std::string_view input) & {
             skip_line_feed_ = rest[stop] == '\r';
             if (unnamed) {
                 if (dispatch()) {
-                    return {.consumed_bytes_ = position,
-                        .event_ = sse_event(event_type_.empty() ? sse_default_event_type : std::string_view(event_type_),
-                            data_, last_event_id_)};
+                    return {.consumed_bytes_ = position, .event_ = sse_event(event_type_.empty() ? sse_default_event_type : std::string_view(event_type_), data_, last_event_id_)};
                 }
                 continue;
             }
@@ -1428,11 +1325,15 @@ void sse_parser::append_name(std::string_view bytes) noexcept {
 
 void sse_parser::classify_field() noexcept {
     const std::string_view name(name_.data(), name_overflow_ ? 0 : name_size_);
-    field_ = name == "data"    ? field_kind::data
-             : name == "event" ? field_kind::event
-             : name == "id"    ? field_kind::id
-             : name == "retry" ? field_kind::retry
-                               : field_kind::ignored;
+    field_ = name == "data"
+        ? field_kind::data
+        : name == "event"
+        ? field_kind::event
+        : name == "id"
+        ? field_kind::id
+        : name == "retry"
+        ? field_kind::retry
+        : field_kind::ignored;
 }
 
 bool sse_parser::append_value(std::string_view bytes) {
@@ -1531,9 +1432,7 @@ void sse_parser::fail() noexcept {
 }
 
 std::string format_sse_message(const sse_message& message) {
-    if (message.event_.view().find_first_of("\r\n") != std::string_view::npos ||
-        (message.id_.has_value() &&
-            message.id_->view().find_first_of("\r\n") != std::string_view::npos)) {
+    if (message.event_.view().find_first_of("\r\n") != std::string_view::npos || (message.id_.has_value() && message.id_->view().find_first_of("\r\n") != std::string_view::npos)) {
         throw std::invalid_argument("SSE event and id must not contain CR or LF");
     }
     if (message.id_.has_value() && (message.id_->view().find('\0') != std::string_view::npos)) {
@@ -1543,9 +1442,7 @@ std::string format_sse_message(const sse_message& message) {
         throw std::invalid_argument("SSE retry delay must not be negative");
     }
     // An event stream is UTF-8 (WHATWG HTML, "Parsing an event stream").
-    if (!is_valid_utf8(message.event_.view()) ||
-        (message.id_.has_value() && !is_valid_utf8(message.id_->view())) ||
-        (message.data_.has_value() && !is_valid_utf8(message.data_->view()))) {
+    if (!is_valid_utf8(message.event_.view()) || (message.id_.has_value() && !is_valid_utf8(message.id_->view())) || (message.data_.has_value() && !is_valid_utf8(message.data_->view()))) {
         throw std::invalid_argument("SSE fields must be valid UTF-8");
     }
 
@@ -1573,8 +1470,7 @@ std::string format_sse_message(const sse_message& message) {
         add_size(1U);
     }
     if (message.retry_.has_value()) {
-        retry_digits = http_format_unsigned(
-            retry_buffer, static_cast<std::uint64_t>(message.retry_->count()));
+        retry_digits = http_format_unsigned(retry_buffer, static_cast<std::uint64_t>(message.retry_->count()));
         add_size(7U);
         add_size(retry_digits.size());
         add_size(1U);
@@ -1640,72 +1536,47 @@ struct http1_client_request_field_facts final {
     bool has_trailer_{false};
 };
 
-[[nodiscard]] bool analyze_http1_client_request_field(http_header_view header, detail::http_field_kind kind,
-    http1_client_request_field_facts& facts, http1_client_request_prepare_error& error,
-    http_request_field_source source = http_request_field_source::generated) noexcept;
+[[nodiscard]] bool analyze_http1_client_request_field(http_header_view header, detail::http_field_kind kind, http1_client_request_field_facts& facts, http1_client_request_prepare_error& error, http_request_field_source source = http_request_field_source::generated) noexcept;
 
-[[nodiscard]] bool finish_http1_client_request_fields(
-    const http1_client_request_field_facts& facts, http1_client_request_prepare_error& error) noexcept;
+[[nodiscard]] bool finish_http1_client_request_fields(const http1_client_request_field_facts& facts, http1_client_request_prepare_error& error) noexcept;
 
 // Validate every field and collect the facts the encoder needs. Returns false
 // with `error` set on the first field that cannot be sent.
-[[nodiscard]] bool analyze_http1_client_request_fields(std::span<const http_header_view> headers,
-    http1_client_request_field_facts& facts, http1_client_request_prepare_error& error,
-    http_request_field_source source) noexcept;
+[[nodiscard]] bool analyze_http1_client_request_fields(std::span<const http_header_view> headers, http1_client_request_field_facts& facts, http1_client_request_prepare_error& error, http_request_field_source source) noexcept;
 
 }  // namespace ruvia::detail
 
 namespace ruvia::detail {
 
 struct http1_client_request_prepare_result_access final {
-    using result_type = std::variant<prepared_http1_client_request, http1_client_request_buffer_too_small,
-        http1_client_request_prepare_error>;
+    using result_type = std::variant<prepared_http1_client_request, http1_client_request_buffer_too_small, http1_client_request_prepare_error>;
 
-    [[nodiscard]] static http1_client_exchange_state exchange_state(http_known_method method,
-        http1_close_policy close_policy, http1_client_initial_content_state content_state,
-        std::string offered_upgrade_protocols) noexcept {
-        return http1_client_exchange_state(
-            method, close_policy, content_state, std::move(offered_upgrade_protocols));
+    [[nodiscard]] static http1_client_exchange_state exchange_state(http_known_method method, http1_close_policy close_policy, http1_client_initial_content_state content_state, std::string offered_upgrade_protocols) noexcept {
+        return http1_client_exchange_state(method, close_policy, content_state, std::move(offered_upgrade_protocols));
     }
 
-    [[nodiscard]] static constexpr result_type buffer_too_small(
-        std::size_t required_head_bytes) noexcept {
+    [[nodiscard]] static constexpr result_type buffer_too_small(std::size_t required_head_bytes) noexcept {
         return result_type(http1_client_request_buffer_too_small(required_head_bytes));
     }
 
-    [[nodiscard]] static constexpr result_type failure(
-        http1_client_request_prepare_error error) noexcept {
+    [[nodiscard]] static constexpr result_type failure(http1_client_request_prepare_error error) noexcept {
         return result_type(error);
     }
 
-    [[nodiscard]] static result_type prepared_streaming_content(
-        std::string_view head, std::optional<std::uint64_t> length, bool gated,
-        http1_client_exchange_state state_value) noexcept {
-        return result_type(prepared_http1_client_request(head,
-            http1_client_request_content_plan(http1_client_streaming_request_content(length, gated)), std::move(state_value)));
+    [[nodiscard]] static result_type prepared_streaming_content(std::string_view head, std::optional<std::uint64_t> length, bool gated, http1_client_exchange_state state_value) noexcept {
+        return result_type(prepared_http1_client_request(head, http1_client_request_content_plan(http1_client_streaming_request_content(length, gated)), std::move(state_value)));
     }
 
-    [[nodiscard]] static result_type prepared_without_content(
-        std::string_view head, http1_client_exchange_state exchange_state) noexcept {
-        return result_type(prepared_http1_client_request(head,
-            http1_client_request_content_plan(http1_client_request_without_content()),
-            std::move(exchange_state)));
+    [[nodiscard]] static result_type prepared_without_content(std::string_view head, http1_client_exchange_state exchange_state) noexcept {
+        return result_type(prepared_http1_client_request(head, http1_client_request_content_plan(http1_client_request_without_content()), std::move(exchange_state)));
     }
 
-    [[nodiscard]] static result_type prepared_immediate_content(
-        std::string_view head, std::string_view content_bytes,
-        http1_client_exchange_state exchange_state) noexcept {
-        return result_type(prepared_http1_client_request(head,
-            http1_client_request_content_plan(http1_client_immediate_request_content(content_bytes)),
-            std::move(exchange_state)));
+    [[nodiscard]] static result_type prepared_immediate_content(std::string_view head, std::string_view content_bytes, http1_client_exchange_state exchange_state) noexcept {
+        return result_type(prepared_http1_client_request(head, http1_client_request_content_plan(http1_client_immediate_request_content(content_bytes)), std::move(exchange_state)));
     }
 
-    [[nodiscard]] static result_type prepared_continue_gated_content(
-        std::string_view head, std::string_view content_bytes,
-        http1_client_exchange_state exchange_state) noexcept {
-        return result_type(prepared_http1_client_request(head,
-            http1_client_request_content_plan(http1_client_continue_gated_request_content(content_bytes)),
-            std::move(exchange_state)));
+    [[nodiscard]] static result_type prepared_continue_gated_content(std::string_view head, std::string_view content_bytes, http1_client_exchange_state exchange_state) noexcept {
+        return result_type(prepared_http1_client_request(head, http1_client_request_content_plan(http1_client_continue_gated_request_content(content_bytes)), std::move(exchange_state)));
     }
 };
 
@@ -1794,8 +1665,7 @@ struct request_head_write_plan final {
     return false;
 }
 
-[[nodiscard]] bool is_valid_http_client_request_expectation(
-    http_client_request_expectation expectation) noexcept {
+[[nodiscard]] bool is_valid_http_client_request_expectation(http_client_request_expectation expectation) noexcept {
     switch (expectation) {
         case http_client_request_expectation::none:
         case http_client_request_expectation::continue_value:
@@ -1804,8 +1674,7 @@ struct request_head_write_plan final {
     return false;
 }
 
-[[nodiscard]] std::string own_offered_upgrade_protocols(
-    std::span<const http_header_view> headers, const detail::http1_client_request_field_facts& facts) {
+[[nodiscard]] std::string own_offered_upgrade_protocols(std::span<const http_header_view> headers, const detail::http1_client_request_field_facts& facts) {
     if (facts.upgrade_field_count_ == 0) {
         return {};
     }
@@ -1828,8 +1697,7 @@ struct request_head_write_plan final {
 
 // Every request line, CONNECT included, rejects these wire policies first.
 // CONNECT is always authority-form (RFC 9112 section 3.2.3).
-[[nodiscard]] std::optional<http1_client_request_prepare_error> validate_wire_policy(
-    http1_client_request_wire_policy policy, bool connect) noexcept {
+[[nodiscard]] std::optional<http1_client_request_prepare_error> validate_wire_policy(http1_client_request_wire_policy policy, bool connect) noexcept {
     if (!is_valid_http1_close_policy(policy.close_policy_)) {
         return http1_client_request_prepare_error::invalid_close_policy;
     }
@@ -1848,9 +1716,7 @@ struct request_head_write_plan final {
     return http1_client_request_prepare_error::invalid_target_form;
 }
 
-[[nodiscard]] std::optional<http1_client_request_prepare_error> validate_non_connect_request_line(
-    std::string_view method, std::string_view target, http1_client_request_wire_policy policy,
-    http_known_method& known_method) noexcept {
+[[nodiscard]] std::optional<http1_client_request_prepare_error> validate_non_connect_request_line(std::string_view method, std::string_view target, http1_client_request_wire_policy policy, http_known_method& known_method) noexcept {
     if (const auto error = validate_wire_policy(policy, false)) {
         return error;
     }
@@ -1867,26 +1733,20 @@ struct request_head_write_plan final {
     return std::nullopt;
 }
 
-[[nodiscard]] detail::http1_client_request_prepare_result_access::result_type prepare_request(const http_origin_view& origin,
-    std::string_view method, http_known_method known_method, std::string_view target,
-    std::span<const http_header_view> headers, http_client_request_content_view content,
-    std::span<char> head_buffer, http1_client_request_wire_policy policy,
-    const http1_client_request_head_view* streaming = nullptr,
-    std::span<const http_header_view> connect_udp_headers = {}) {
+[[nodiscard]] detail::http1_client_request_prepare_result_access::result_type prepare_request(const http_origin_view& origin, std::string_view method, http_known_method known_method, std::string_view target, std::span<const http_header_view> headers, http_client_request_content_view content, std::span<char> head_buffer, http1_client_request_wire_policy policy, const http1_client_request_head_view* streaming = nullptr, std::span<const http_header_view> connect_udp_headers = {}) {
     if (!detail::is_valid_http_request_field_source(policy.field_source_)) {
-        return detail::http1_client_request_prepare_result_access::failure(
-            http1_client_request_prepare_error::invalid_header);
+        return detail::http1_client_request_prepare_result_access::failure(http1_client_request_prepare_error::invalid_header);
     }
     const bool connect = known_method == http_known_method::connect;
     detail::http1_client_request_field_facts header_facts;
     http1_client_request_prepare_error error = http1_client_request_prepare_error::invalid_header;
     const auto* content_bytes = content.borrowed_bytes();
     const bool explicit_content = content_bytes != nullptr || streaming != nullptr;
-    const auto length = streaming       ? (streaming->content_length_
-                                                  ? std::optional<std::uint64_t>(streaming->content_length_->value())
-                                                  : std::nullopt)
-                        : content_bytes ? std::optional<std::uint64_t>(content_bytes->value().size())
-                                        : std::nullopt;
+    const auto length = streaming
+        ? (streaming->content_length_ ? std::optional<std::uint64_t>(streaming->content_length_->value()) : std::nullopt)
+        : content_bytes
+        ? std::optional<std::uint64_t>(content_bytes->value().size())
+        : std::nullopt;
     const bool chunked = streaming && !length;
     if (!detail::analyze_http1_client_request_fields(headers, header_facts, error, policy.field_source_)) {
         return detail::http1_client_request_prepare_result_access::failure(error);
@@ -1894,93 +1754,53 @@ struct request_head_write_plan final {
     // A sender that will generate trailer fields SHOULD declare them (RFC 9110
     // section 6.6.2); only chunked content has a trailer section.
     if (header_facts.has_trailer_ && !chunked) {
-        return detail::http1_client_request_prepare_result_access::failure(
-            http1_client_request_prepare_error::trailer_requires_chunked_content);
+        return detail::http1_client_request_prepare_result_access::failure(http1_client_request_prepare_error::trailer_requires_chunked_content);
     }
     const bool expect_continue = policy.expectation_ == http_client_request_expectation::continue_value;
-    const auto content_indication = explicit_content && (!length || *length != 0)
-                                        ? http_request_content_indication::will_follow
-                                        : http_request_content_indication::no_content;
+    const auto content_indication = explicit_content && (!length || *length != 0) ? http_request_content_indication::will_follow : http_request_content_indication::no_content;
     if (!http_client_expectation_is_valid(expect_continue, content_indication)) {
-        return detail::http1_client_request_prepare_result_access::failure(
-            http1_client_request_prepare_error::expectation_without_content);
+        return detail::http1_client_request_prepare_result_access::failure(http1_client_request_prepare_error::expectation_without_content);
     }
     if (content_indication == http_request_content_indication::will_follow) {
         const auto content_semantics = classify_http_request_content_semantics(method);
         if (content_semantics == http_request_content_semantics::forbidden) {
-            return detail::http1_client_request_prepare_result_access::failure(
-                http1_client_request_prepare_error::content_forbidden_for_method);
+            return detail::http1_client_request_prepare_result_access::failure(http1_client_request_prepare_error::content_forbidden_for_method);
         }
         // RFC 9110 section 9.3.7 requires the media description when generating
         // OPTIONS content, not when forwarding an already received request.
-        if (policy.field_source_ == http_request_field_source::generated &&
-            content_semantics == http_request_content_semantics::content_type_required &&
-            !header_facts.fields_.seen(detail::http_field_kind::content_type)) {
-            return detail::http1_client_request_prepare_result_access::failure(
-                http1_client_request_prepare_error::options_content_type_required);
+        if (policy.field_source_ == http_request_field_source::generated && content_semantics == http_request_content_semantics::content_type_required && !header_facts.fields_.seen(detail::http_field_kind::content_type)) {
+            return detail::http1_client_request_prepare_result_access::failure(http1_client_request_prepare_error::options_content_type_required);
         }
     }
 
-    const bool generate_connection_close =
-        policy.close_policy_ == http1_close_policy::close_after_response &&
-        !header_facts.connection_options_.close();
-    const auto effective_close_policy =
-        header_facts.connection_options_.close() || generate_connection_close
-            ? http1_close_policy::close_after_response
-            : http1_close_policy::allow_reuse;
+    const bool generate_connection_close = policy.close_policy_ == http1_close_policy::close_after_response && !header_facts.connection_options_.close();
+    const auto effective_close_policy = header_facts.connection_options_.close() || generate_connection_close ? http1_close_policy::close_after_response : http1_close_policy::allow_reuse;
 
     // Reuse each decimal token in measurement and emission. CONNECT uses the
     // same port token for both its authority target and generated Host field.
     std::array<char, http_max_unsigned_decimal_size> port_buffer;
-    const auto port_value = connect || origin.port() != (origin.scheme() == http_scheme::https ? std::uint16_t{443} : std::uint16_t{80})
-                                ? http_format_unsigned(port_buffer, origin.port())
-                                : std::string_view{};
+    const auto port_value = connect || origin.port() != (origin.scheme() == http_scheme::https ? std::uint16_t{443} : std::uint16_t{80}) ? http_format_unsigned(port_buffer, origin.port()) : std::string_view{};
     const auto authority_bytes = origin.host().size() + (port_value.empty() ? 0 : 1 + port_value.size());
     std::array<char, http_max_unsigned_decimal_size> content_length_buffer;
-    const auto content_length_value = explicit_content && !chunked
-                                          ? http_format_unsigned(content_length_buffer, *length)
-                                          : std::string_view{};
+    const auto content_length_value = explicit_content && !chunked ? http_format_unsigned(content_length_buffer, *length) : std::string_view{};
     // absolute-form names the origin as the generated Host does, so the two
     // authorities agree (RFC 9112 section 3.2); OPTIONS * keeps only the
     // authority, with an empty path (section 3.2.4).
     const auto absolute_scheme = connect || policy.target_form_ != http1_request_target_form::absolute
-                                     ? std::string_view{}
-                                 : origin.scheme() == http_scheme::https ? std::string_view{"https://"}
-                                                                         : std::string_view{"http://"};
+        ? std::string_view{}
+        : origin.scheme() == http_scheme::https
+        ? std::string_view{"https://"}
+        : std::string_view{"http://"};
     const auto emitted_target = !absolute_scheme.empty() && target == "*" ? std::string_view{} : target;
-    const std::size_t target_bytes =
-        connect ? authority_bytes
-                : (absolute_scheme.empty() ? 0 : absolute_scheme.size() + authority_bytes) + emitted_target.size();
+    const std::size_t target_bytes = connect ? authority_bytes : (absolute_scheme.empty() ? 0 : absolute_scheme.size() + authority_bytes) + emitted_target.size();
     // The caller's fields are already charged; add the request line and the
     // generated fields to the same section budget.
     auto head_budget = header_facts.section_;
-    if (!head_budget.add(method.size()) || !head_budget.add(1) || !head_budget.add(target_bytes) ||
-        !head_budget.add(http11_request_line_suffix.size()) ||
-        !head_budget.add(host_prefix.size()) || !head_budget.add(authority_bytes) ||
-        !head_budget.add(crlf.size()) || (chunked && !head_budget.add(chunked_header.size())) ||
-        (explicit_content && !chunked &&
-            (!head_budget.add(content_length_prefix.size()) ||
-                !head_budget.add(content_length_value.size()) || !head_budget.add(crlf.size()))) ||
-        (expect_continue &&
-            (!head_budget.add(expect_prefix.size()) ||
-                !head_budget.add(detail::http_continue_expectation_token.size()) ||
-                !head_budget.add(crlf.size()))) ||
-        (generate_connection_close && !head_budget.add(connection_close.size())) ||
-        !head_budget.add(crlf.size())) {
-        return detail::http1_client_request_prepare_result_access::failure(
-            http1_client_request_prepare_error::header_too_large);
+    if (!head_budget.add(method.size()) || !head_budget.add(1) || !head_budget.add(target_bytes) || !head_budget.add(http11_request_line_suffix.size()) || !head_budget.add(host_prefix.size()) || !head_budget.add(authority_bytes) || !head_budget.add(crlf.size()) || (chunked && !head_budget.add(chunked_header.size())) || (explicit_content && !chunked && (!head_budget.add(content_length_prefix.size()) || !head_budget.add(content_length_value.size()) || !head_budget.add(crlf.size()))) || (expect_continue && (!head_budget.add(expect_prefix.size()) || !head_budget.add(detail::http_continue_expectation_token.size()) || !head_budget.add(crlf.size()))) || (generate_connection_close && !head_budget.add(connection_close.size())) || !head_budget.add(crlf.size())) {
+        return detail::http1_client_request_prepare_result_access::failure(http1_client_request_prepare_error::header_too_large);
     }
-    if (!connect_udp_headers.empty() &&
-        validate_http_connect_udp_request_to_send({
-                                                      .version_ = http_protocol_version::http11,
-                                                      .method_ = "GET",
-                                                      .authority_ = origin.host(),
-                                                      .path_ = target,
-                                                      .headers_ = connect_udp_headers,
-                                                  })
-            .has_value()) {
-        return detail::http1_client_request_prepare_result_access::failure(
-            http1_client_request_prepare_error::invalid_header);
+    if (!connect_udp_headers.empty() && validate_http_connect_udp_request_to_send({.version_ = http_protocol_version::http11, .method_ = "GET", .authority_ = origin.host(), .path_ = target, .headers_ = connect_udp_headers}).has_value()) {
+        return detail::http1_client_request_prepare_result_access::failure(http1_client_request_prepare_error::invalid_header);
     }
     const auto head_bytes = head_budget.bytes();
     if (head_buffer.size() < head_bytes) {
@@ -1990,64 +1810,46 @@ struct request_head_write_plan final {
     // Upgrade is the only response-planning fact that cannot be reduced to a
     // fixed-size value. Own it before mutating the caller's output buffer so an
     // allocation failure leaves request preparation transactional.
-    auto offered_upgrade_protocols = header_facts.upgrade_protocols_.has_protocol()
-                                         ? own_offered_upgrade_protocols(headers, header_facts)
-                                         : std::string();
+    auto offered_upgrade_protocols = header_facts.upgrade_protocols_.has_protocol() ? own_offered_upgrade_protocols(headers, header_facts) : std::string();
 
-    const auto content_state = expect_continue
-                                   ? detail::http1_client_initial_content_state::awaiting_continue
-                                   : (explicit_content && (!length || *length != 0)
-                                             ? detail::http1_client_initial_content_state::pending
-                                             : detail::http1_client_initial_content_state::complete);
-    auto exchange_state = detail::http1_client_request_prepare_result_access::exchange_state(
-        known_method, effective_close_policy, content_state,
-        std::move(offered_upgrade_protocols));
-    const request_head_write_plan write_plan{origin.host(), port_value, method, absolute_scheme, emitted_target, headers, content_length_value,
-        connect, explicit_content, expect_continue, generate_connection_close};
+    const auto content_state = expect_continue ? detail::http1_client_initial_content_state::awaiting_continue : (explicit_content && (!length || *length != 0) ? detail::http1_client_initial_content_state::pending : detail::http1_client_initial_content_state::complete);
+    auto exchange_state = detail::http1_client_request_prepare_result_access::exchange_state(known_method, effective_close_policy, content_state, std::move(offered_upgrade_protocols));
+    const request_head_write_plan write_plan{origin.host(), port_value, method, absolute_scheme, emitted_target, headers, content_length_value, connect, explicit_content, expect_continue, generate_connection_close};
     const auto output = head_buffer.first(head_bytes);
     // Descriptors and every borrowed string are consumed before the output is
     // overwritten when the caller's request storage aliases the head buffer.
-    detail::write_http_wire(output,
-        detail::http_wire_inputs_overlap(std::string_view(output.data(), output.size()), headers,
-            {method, target, origin.host()}),
-        [&write_plan](char* destination) noexcept { return write_request_head(destination, write_plan); });
+    detail::write_http_wire(output, detail::http_wire_inputs_overlap(std::string_view(output.data(), output.size()), headers, {method, target, origin.host()}), [&write_plan](char* destination) noexcept {
+        return write_request_head(destination, write_plan);
+    });
     const auto head = std::string_view(head_buffer.data(), head_bytes);
     if (streaming) {
         return detail::http1_client_request_prepare_result_access::prepared_streaming_content(head, length, expect_continue, std::move(exchange_state));
     }
     if (!explicit_content) {
-        return detail::http1_client_request_prepare_result_access::prepared_without_content(
-            head, std::move(exchange_state));
+        return detail::http1_client_request_prepare_result_access::prepared_without_content(head, std::move(exchange_state));
     }
     if (expect_continue) {
-        return detail::http1_client_request_prepare_result_access::prepared_continue_gated_content(
-            head, content_bytes->value(), std::move(exchange_state));
+        return detail::http1_client_request_prepare_result_access::prepared_continue_gated_content(head, content_bytes->value(), std::move(exchange_state));
     }
-    return detail::http1_client_request_prepare_result_access::prepared_immediate_content(
-        head, content_bytes->value(), std::move(exchange_state));
+    return detail::http1_client_request_prepare_result_access::prepared_immediate_content(head, content_bytes->value(), std::move(exchange_state));
 }
 
 // The one CONNECT rule set behind both prepare_connect() entries: wire-policy
 // checks first, then the tunnel target (null when the caller's authority is
 // invalid; port 0 is never a tunnel target), emitted in authority-form.
-[[nodiscard]] detail::http1_client_request_prepare_result_access::result_type prepare_connect_request(
-    const http_origin_view* tunnel_origin, std::span<const http_header_view> headers, std::span<char> head_buffer,
-    http1_client_request_wire_policy policy) {
+[[nodiscard]] detail::http1_client_request_prepare_result_access::result_type prepare_connect_request(const http_origin_view* tunnel_origin, std::span<const http_header_view> headers, std::span<char> head_buffer, http1_client_request_wire_policy policy) {
     if (const auto error = validate_wire_policy(policy, true)) {
         return detail::http1_client_request_prepare_result_access::failure(*error);
     }
     if (tunnel_origin == nullptr || tunnel_origin->port() == 0) {
-        return detail::http1_client_request_prepare_result_access::failure(
-            http1_client_request_prepare_error::invalid_connect_origin);
+        return detail::http1_client_request_prepare_result_access::failure(http1_client_request_prepare_error::invalid_connect_origin);
     }
-    return prepare_request(*tunnel_origin, "CONNECT", http_known_method::connect, {}, headers,
-        http_client_request_content_view::none(), head_buffer, policy);
+    return prepare_request(*tunnel_origin, "CONNECT", http_known_method::connect, {}, headers, http_client_request_content_view::none(), head_buffer, policy);
 }
 
 }  // namespace
 
-std::string_view http1_client_request_prepare_error_message(
-    http1_client_request_prepare_error error) noexcept {
+std::string_view http1_client_request_prepare_error_message(http1_client_request_prepare_error error) noexcept {
     switch (error) {
         case http1_client_request_prepare_error::invalid_method:
             return "invalid HTTP/1 client request method";
@@ -2095,52 +1897,33 @@ std::string_view http1_client_request_prepare_error_message(
     return "invalid HTTP/1 client request";
 }
 
-std::variant<prepared_http1_client_request, http1_client_request_buffer_too_small,
-    http1_client_request_prepare_error>
-http1_client_request_writer::prepare(const http_origin_view& origin,
-    const http_client_request_view& request, std::span<char> head_buffer,
-    http1_client_request_wire_policy policy) const {
+std::variant<prepared_http1_client_request, http1_client_request_buffer_too_small, http1_client_request_prepare_error> http1_client_request_writer::prepare(const http_origin_view& origin, const http_client_request_view& request, std::span<char> head_buffer, http1_client_request_wire_policy policy) const {
     http_known_method known_method = http_known_method::unknown;
-    if (const auto error = validate_non_connect_request_line(
-            request.method_, request.target_, policy, known_method)) {
+    if (const auto error = validate_non_connect_request_line(request.method_, request.target_, policy, known_method)) {
         return detail::http1_client_request_prepare_result_access::failure(*error);
     }
-    return prepare_request(origin, request.method_, known_method, request.target_,
-        static_cast<std::span<const http_header_view>>(request.headers_), request.content_, head_buffer,
-        policy);
+    return prepare_request(origin, request.method_, known_method, request.target_, static_cast<std::span<const http_header_view>>(request.headers_), request.content_, head_buffer, policy);
 }
 
-std::variant<prepared_http1_client_request, http1_client_request_buffer_too_small,
-    http1_client_request_prepare_error>
-http1_client_request_writer::prepare_streaming(const http_origin_view& origin,
-    const http1_client_request_head_view& request, std::span<char> head_buffer,
-    http1_client_request_wire_policy policy) const {
+std::variant<prepared_http1_client_request, http1_client_request_buffer_too_small, http1_client_request_prepare_error> http1_client_request_writer::prepare_streaming(const http_origin_view& origin, const http1_client_request_head_view& request, std::span<char> head_buffer, http1_client_request_wire_policy policy) const {
     http_known_method known_method = http_known_method::unknown;
-    if (const auto error = validate_non_connect_request_line(
-            request.method_, request.target_, policy, known_method)) {
+    if (const auto error = validate_non_connect_request_line(request.method_, request.target_, policy, known_method)) {
         return detail::http1_client_request_prepare_result_access::failure(*error);
     }
-    return prepare_request(origin, request.method_, known_method, request.target_, request.headers_,
-        http_client_request_content_view::none(), head_buffer, policy, &request);
+    return prepare_request(origin, request.method_, known_method, request.target_, request.headers_, http_client_request_content_view::none(), head_buffer, policy, &request);
 }
 
-std::variant<prepared_http1_client_request, http1_client_request_buffer_too_small,
-    http1_client_request_prepare_error>
-http1_client_request_writer::prepare_connect_udp(const http_origin_view& origin,
-    borrowed_text target, std::span<const http_header_view> headers, std::span<char> head_buffer,
-    http1_client_request_wire_policy policy) const {
+std::variant<prepared_http1_client_request, http1_client_request_buffer_too_small, http1_client_request_prepare_error> http1_client_request_writer::prepare_connect_udp(const http_origin_view& origin, borrowed_text target, std::span<const http_header_view> headers, std::span<char> head_buffer, http1_client_request_wire_policy policy) const {
     http_known_method known_method = http_known_method::unknown;
     if (const auto error = validate_non_connect_request_line("GET", target.view(), policy, known_method)) {
         return detail::http1_client_request_prepare_result_access::failure(*error);
     }
     for (const auto& field : headers) {
         if (http_ascii_equals_ignore_case(field.name(), "connection")) {
-            return detail::http1_client_request_prepare_result_access::failure(
-                http1_client_request_prepare_error::invalid_connection);
+            return detail::http1_client_request_prepare_result_access::failure(http1_client_request_prepare_error::invalid_connection);
         }
         if (http_ascii_equals_ignore_case(field.name(), "upgrade")) {
-            return detail::http1_client_request_prepare_result_access::failure(
-                http1_client_request_prepare_error::invalid_upgrade);
+            return detail::http1_client_request_prepare_result_access::failure(http1_client_request_prepare_error::invalid_upgrade);
         }
     }
     detail::http_header_descriptor_storage<http_header_view> staged_fields;
@@ -2148,53 +1931,38 @@ http1_client_request_writer::prepare_connect_udp(const http_origin_view& origin,
     for (const auto& field : headers) {
         staged_fields.append(field);
     }
-    staged_fields.append(
-        http_header_view{detail::http_connection_field_name, detail::http_connection_upgrade_option});
+    staged_fields.append(http_header_view{detail::http_connection_field_name, detail::http_connection_upgrade_option});
     staged_fields.append(http_header_view{"Upgrade", "connect-udp"});
     staged_fields.append(http_header_view{"Host", origin.host()});
     const auto all_fields = staged_fields.view();
     const auto emitted_headers = all_fields.first(all_fields.size() - 1U);
-    return prepare_request(origin, "GET", known_method, target.view(), emitted_headers,
-        http_client_request_content_view::none(), head_buffer, policy, nullptr, all_fields);
+    return prepare_request(origin, "GET", known_method, target.view(), emitted_headers, http_client_request_content_view::none(), head_buffer, policy, nullptr, all_fields);
 }
 
-std::variant<prepared_http1_client_request, http1_client_request_buffer_too_small,
-    http1_client_request_prepare_error>
-http1_client_request_writer::prepare_connect(
-    const http_origin_view& tunnel_origin, std::span<const http_header_view> headers,
-    std::span<char> head_buffer, http1_client_request_wire_policy policy) const {
+std::variant<prepared_http1_client_request, http1_client_request_buffer_too_small, http1_client_request_prepare_error> http1_client_request_writer::prepare_connect(const http_origin_view& tunnel_origin, std::span<const http_header_view> headers, std::span<char> head_buffer, http1_client_request_wire_policy policy) const {
     return prepare_connect_request(&tunnel_origin, headers, head_buffer, policy);
 }
 
-std::variant<prepared_http1_client_request, http1_client_request_buffer_too_small,
-    http1_client_request_prepare_error>
-http1_client_request_writer::prepare_connect(borrowed_text authority,
-    std::span<const http_header_view> headers, std::span<char> head_buffer, http1_client_request_wire_policy policy) const {
+std::variant<prepared_http1_client_request, http1_client_request_buffer_too_small, http1_client_request_prepare_error> http1_client_request_writer::prepare_connect(borrowed_text authority, std::span<const http_header_view> headers, std::span<char> head_buffer, http1_client_request_wire_policy policy) const {
     // RFC 9110 section 9.3.6: the tunnel destination needs a non-empty port,
     // and port zero is rejected by prepare_connect_request.
     const auto parsed_value = parse_http_authority(authority);
     if (!parsed_value || parsed_value->port_kind() != http_authority_port_kind::value) {
         return prepare_connect_request(nullptr, headers, head_buffer, policy);
     }
-    const auto tunnel_origin =
-        http_origin_view::http({.host_ = parsed_value->host(), .port_ = *parsed_value->port()});
+    const auto tunnel_origin = http_origin_view::http({.host_ = parsed_value->host(), .port_ = *parsed_value->port()});
     return prepare_connect_request(&tunnel_origin, headers, head_buffer, policy);
 }
 
-http1_response_head_plan prepare_http1_connect_response_head(
-    const http_response& response, http_protocol_version version) {
-    if ((version != http_protocol_version::http10 && version != http_protocol_version::http11) ||
-        !response.status().is_successful() || response.file_body() || !response.body_bytes().empty()) {
+http1_response_head_plan prepare_http1_connect_response_head(const http_response& response, http_protocol_version version) {
+    if ((version != http_protocol_version::http10 && version != http_protocol_version::http11) || !response.status().is_successful() || response.file_body() || !response.body_bytes().empty()) {
         throw http1_response_head_error("invalid HTTP/1 CONNECT response head");
     }
-    if (detail::response_has_known_header(
-            response, detail::response_header_content_length | detail::response_header_transfer_encoding)) {
+    if (detail::response_has_known_header(response, detail::response_header_content_length | detail::response_header_transfer_encoding)) {
         throw http1_response_head_error("CONNECT response cannot contain message framing fields");
     }
     const auto body = plan_http_response_body(http_known_method::connect, response.status());
-    const auto connection = version == http_protocol_version::http10
-                                ? plan_http10_request_connection(true, false)
-                                : http1_request_connection_plan::http11_close();
+    const auto connection = version == http_protocol_version::http10 ? plan_http10_request_connection(true, false) : http1_request_connection_plan::http11_close();
     return http1_close_delimited_response_stream_head_plan(body, connection);
 }
 
@@ -2202,9 +1970,7 @@ http1_response_head_plan prepare_http1_connect_response_head(
 
 namespace ruvia::detail {
 
-bool analyze_http1_client_request_field(http_header_view header, detail::http_field_kind kind,
-    http1_client_request_field_facts& facts, http1_client_request_prepare_error& error,
-    http_request_field_source source) noexcept {
+bool analyze_http1_client_request_field(http_header_view header, detail::http_field_kind kind, http1_client_request_field_facts& facts, http1_client_request_prepare_error& error, http_request_field_source source) noexcept {
     const auto name = header.name();
     const auto value = header.value();
     if (!is_valid_http_header_name(name) || !is_valid_http_header_value(value)) {
@@ -2230,23 +1996,17 @@ bool analyze_http1_client_request_field(http_header_view header, detail::http_fi
             error = http1_client_request_prepare_error::invalid_header;
             return false;
         case detail::request_field_status::managed_by_sender:
-            error = kind == detail::http_field_kind::expect
-                        ? http1_client_request_prepare_error::expect_header_managed_by_writer
-                        : http1_client_request_prepare_error::content_length_managed_by_writer;
+            error = kind == detail::http_field_kind::expect ? http1_client_request_prepare_error::expect_header_managed_by_writer : http1_client_request_prepare_error::content_length_managed_by_writer;
             return false;
     }
     if (kind == detail::http_field_kind::connection) {
-        if (facts.connection_options_.parse_field(value, detail::http_connection_field_role::sender) !=
-            detail::http_field_list_parse_status::ok) {
+        if (facts.connection_options_.parse_field(value, detail::http_connection_field_role::sender) != detail::http_field_list_parse_status::ok) {
             error = http1_client_request_prepare_error::invalid_connection;
             return false;
         }
     } else if (kind == detail::http_field_kind::upgrade) {
-        const auto role = source == http_request_field_source::forwarded
-                              ? detail::http_field_list_role::recipient
-                              : detail::http_field_list_role::sender;
-        if (facts.upgrade_protocols_.parse_field(value, role) !=
-            detail::http_field_list_parse_status::ok) {
+        const auto role = source == http_request_field_source::forwarded ? detail::http_field_list_role::recipient : detail::http_field_list_role::sender;
+        if (facts.upgrade_protocols_.parse_field(value, role) != detail::http_field_list_parse_status::ok) {
             error = http1_client_request_prepare_error::invalid_upgrade;
             return false;
         }
@@ -2270,8 +2030,7 @@ bool analyze_http1_client_request_field(http_header_view header, detail::http_fi
     return true;
 }
 
-bool finish_http1_client_request_fields(
-    const http1_client_request_field_facts& facts, http1_client_request_prepare_error& error) noexcept {
+bool finish_http1_client_request_fields(const http1_client_request_field_facts& facts, http1_client_request_prepare_error& error) noexcept {
     if (facts.upgrade_protocols_.has_field() && !facts.connection_options_.upgrade()) {
         error = http1_client_request_prepare_error::upgrade_connection_option_required;
         return false;
@@ -2283,8 +2042,7 @@ bool finish_http1_client_request_fields(
     return true;
 }
 
-bool analyze_http1_client_request_fields(std::span<const http_header_view> headers, http1_client_request_field_facts& facts,
-    http1_client_request_prepare_error& error, http_request_field_source source) noexcept {
+bool analyze_http1_client_request_fields(std::span<const http_header_view> headers, http1_client_request_field_facts& facts, http1_client_request_prepare_error& error, http_request_field_source source) noexcept {
     for (const auto& header : headers) {
         if (!analyze_http1_client_request_field(header, detail::classify_http_field(header.name()), facts, error, source)) {
             return false;
@@ -2311,9 +2069,9 @@ namespace {
 }  // namespace
 
 using error_type = http1_request_content_write_error;
-http1_request_content_writer::http1_request_content_writer(const http1_client_streaming_request_content& plan) noexcept
-    : length_(plan.content_length()),
-      gated_(plan.continue_gated()) {}
+http1_request_content_writer::http1_request_content_writer(const http1_client_streaming_request_content& plan) noexcept :
+    length_(plan.content_length()),
+    gated_(plan.continue_gated()) {}
 void http1_request_content_writer::release_content() noexcept {
     gated_ = false;
 }
@@ -2381,8 +2139,7 @@ std::variant<std::string_view, error_type> http1_request_content_writer::plan_fi
     (void)section.add(http1_last_chunk_prefix.size());
     for (const auto& field : trailers) {
         if (const auto error = detail::charge_http_request_trailer_field(section, field.name(), field.value())) {
-            return *error == http_request_trailer_error::section_too_large ? error_type::header_too_large
-                                                                           : error_type::invalid_trailer;
+            return *error == http_request_trailer_error::section_too_large ? error_type::header_too_large : error_type::invalid_trailer;
         }
     }
     const auto required = length_ ? std::size_t{0} : section.bytes();
@@ -2391,9 +2148,9 @@ std::variant<std::string_view, error_type> http1_request_content_writer::plan_fi
     }
     if (!length_) {
         const auto output = buffer.first(required);
-        detail::write_http_wire(output,
-            detail::http_wire_inputs_overlap(std::string_view(output.data(), output.size()), trailers),
-            [trailers](char* destination) noexcept { return write_chunked_trailers(destination, trailers); });
+        detail::write_http_wire(output, detail::http_wire_inputs_overlap(std::string_view(output.data(), output.size()), trailers), [trailers](char* destination) noexcept {
+            return write_chunked_trailers(destination, trailers);
+        });
     }
     finishing_ = true;
     return required ? std::string_view(buffer.data(), required) : std::string_view{};
@@ -2421,8 +2178,7 @@ bool is_reserved_handshake_header(std::string_view name, detail::http_field_kind
         case detail::http_field_kind::sec_websocket_extensions:
             return true;
         case detail::http_field_kind::other:
-            return detail::is_protocol_managed_request_field(kind, name) ||
-                   http_ascii_equals_ignore_case(name, "sec-websocket-accept");
+            return detail::is_protocol_managed_request_field(kind, name) || http_ascii_equals_ignore_case(name, "sec-websocket-accept");
         default:
             return detail::is_protocol_managed_request_field(kind, name);
     }
@@ -2448,11 +2204,7 @@ void validate_http1_websocket_client_handshake_configuration(std::span<const htt
 
 namespace {
 template <typename header_type>
-std::variant<prepared_http1_client_request, http1_client_request_buffer_too_small,
-    http1_client_request_prepare_error>
-prepare_websocket_request(const http_origin_view& origin, std::string_view target,
-    std::span<const char, 24> encoded_key, const websocket_client_negotiation& negotiation,
-    std::span<const header_type> headers, std::span<char> head_buffer, http_request_field_source source) {
+std::variant<prepared_http1_client_request, http1_client_request_buffer_too_small, http1_client_request_prepare_error> prepare_websocket_request(const http_origin_view& origin, std::string_view target, std::span<const char, 24> encoded_key, const websocket_client_negotiation& negotiation, std::span<const header_type> headers, std::span<char> head_buffer, http_request_field_source source) {
     const auto negotiation_fields = negotiation.request_fields();
     detail::http_header_descriptor_storage<http_header_view> staged_headers;
     staged_headers.reserve(headers.size() + 3U + negotiation_fields.size());
@@ -2460,45 +2212,30 @@ prepare_websocket_request(const http_origin_view& origin, std::string_view targe
         staged_headers.append(http_header_view{header.name(), header.value()});
     }
     staged_headers.append(http_header_view{"Upgrade", "websocket"});
-    staged_headers.append(
-        http_header_view{detail::http_connection_field_name, detail::http_connection_upgrade_option});
-    staged_headers.append(
-        http_header_view{"Sec-WebSocket-Key", std::string_view(encoded_key.data(), encoded_key.size())});
+    staged_headers.append(http_header_view{detail::http_connection_field_name, detail::http_connection_upgrade_option});
+    staged_headers.append(http_header_view{"Sec-WebSocket-Key", std::string_view(encoded_key.data(), encoded_key.size())});
     for (const auto& field : negotiation_fields) {
         staged_headers.append(http_header_view{field.name(), field.value()});
     }
-    return http1_client_request_writer()
-        .prepare(origin, {.method_ = "GET", .target_ = target, .headers_ = staged_headers.view()}, head_buffer, {.field_source_ = source});
+    return http1_client_request_writer().prepare(origin, {.method_ = "GET", .target_ = target, .headers_ = staged_headers.view()}, head_buffer, {.field_source_ = source});
 }
 
 }  // namespace
 
-std::variant<prepared_http1_client_request, http1_client_request_buffer_too_small,
-    http1_client_request_prepare_error>
-prepare_http1_websocket_client_request(const http_origin_view& origin, std::string_view target,
-    std::span<const char, 24> encoded_key, const websocket_client_negotiation& negotiation,
-    std::span<const http_header> headers, std::span<char> head_buffer, http_request_field_source source) {
+std::variant<prepared_http1_client_request, http1_client_request_buffer_too_small, http1_client_request_prepare_error> prepare_http1_websocket_client_request(const http_origin_view& origin, std::string_view target, std::span<const char, 24> encoded_key, const websocket_client_negotiation& negotiation, std::span<const http_header> headers, std::span<char> head_buffer, http_request_field_source source) {
     return prepare_websocket_request(origin, target, encoded_key, negotiation, headers, head_buffer, source);
 }
 
-std::variant<prepared_http1_client_request, http1_client_request_buffer_too_small,
-    http1_client_request_prepare_error>
-prepare_http1_websocket_client_request(const http_origin_view& origin, std::string_view target,
-    std::span<const char, 24> encoded_key, const websocket_client_negotiation& negotiation,
-    std::span<const http_header_view> headers, std::span<char> head_buffer, http_request_field_source source) {
+std::variant<prepared_http1_client_request, http1_client_request_buffer_too_small, http1_client_request_prepare_error> prepare_http1_websocket_client_request(const http_origin_view& origin, std::string_view target, std::span<const char, 24> encoded_key, const websocket_client_negotiation& negotiation, std::span<const http_header_view> headers, std::span<char> head_buffer, http_request_field_source source) {
     return prepare_websocket_request(origin, target, encoded_key, negotiation, headers, head_buffer, source);
 }
 
-std::variant<websocket_client_negotiation_result_view, websocket_client_handshake_error>
-validate_http1_websocket_client_response(std::span<const char, 24> encoded_key,
-    const websocket_client_negotiation& negotiation, const http1_parsed_client_response_head& response) {
-    if (response.plan().protocol_upgrade() == nullptr ||
-        response.head().status() != http_status::switching_protocols) {
+std::variant<websocket_client_negotiation_result_view, websocket_client_handshake_error> validate_http1_websocket_client_response(std::span<const char, 24> encoded_key, const websocket_client_negotiation& negotiation, const http1_parsed_client_response_head& response) {
+    if (response.plan().protocol_upgrade() == nullptr || response.head().status() != http_status::switching_protocols) {
         return websocket_client_handshake_error::response_status;
     }
     detail::websocket_accept_key_type expected{};
-    detail::encode_websocket_accept(
-        expected, std::string_view(encoded_key.data(), encoded_key.size()));
+    detail::encode_websocket_accept(expected, std::string_view(encoded_key.data(), encoded_key.size()));
     std::size_t accepts = 0;
     bool accept_matches = false, has_upgrade = false, has_connection = false;
     for (const auto& header : response.head().headers()) {
@@ -2507,14 +2244,12 @@ validate_http1_websocket_client_response(std::span<const char, 24> encoded_key,
                 has_upgrade = has_upgrade || detail::http_has_token(header.value(), "websocket");
                 break;
             case detail::http_field_kind::connection:
-                has_connection = has_connection ||
-                                 detail::http_has_token(header.value(), detail::http_connection_upgrade_option);
+                has_connection = has_connection || detail::http_has_token(header.value(), detail::http_connection_upgrade_option);
                 break;
             case detail::http_field_kind::other:
                 if (http_ascii_equals_ignore_case(header.name(), "Sec-WebSocket-Accept")) {
                     ++accepts;
-                    accept_matches = http_trim_ows(header.value()) ==
-                                     std::string_view(expected.data(), expected.size());
+                    accept_matches = http_trim_ows(header.value()) == std::string_view(expected.data(), expected.size());
                 }
                 break;
             default:
@@ -2542,15 +2277,12 @@ struct http1_client_response_parse_result_access final {
         return http1_client_response_parse_result(http1_client_response_need_more());
     }
 
-    [[nodiscard]] static http1_client_response_parse_result failure(
-        http1_client_response_parse_error error) noexcept {
+    [[nodiscard]] static http1_client_response_parse_result failure(http1_client_response_parse_error error) noexcept {
         return http1_client_response_parse_result(error);
     }
 
-    [[nodiscard]] static http1_client_response_parse_result parsed(http_client_response_head head,
-        http1_client_response_plan plan, std::size_t consumed_bytes) noexcept {
-        return http1_client_response_parse_result(
-            http1_parsed_client_response_head(std::move(head), std::move(plan), consumed_bytes));
+    [[nodiscard]] static http1_client_response_parse_result parsed(http_client_response_head head, http1_client_response_plan plan, std::size_t consumed_bytes) noexcept {
+        return http1_client_response_parse_result(http1_parsed_client_response_head(std::move(head), std::move(plan), consumed_bytes));
     }
 };
 
@@ -2560,8 +2292,7 @@ namespace ruvia {
 
 namespace {
 
-[[nodiscard]] constexpr detail::http1_client_request_content_phase receive_continue(
-    detail::http1_client_request_content_phase phase) noexcept {
+[[nodiscard]] constexpr detail::http1_client_request_content_phase receive_continue(detail::http1_client_request_content_phase phase) noexcept {
     switch (phase) {
         case detail::http1_client_request_content_phase::awaiting_continue:
         case detail::http1_client_request_content_phase::content_released_awaiting_continue:
@@ -2579,8 +2310,7 @@ namespace {
 
 }  // namespace
 
-std::string_view http1_client_response_parse_error_message(
-    http1_client_response_parse_error error) noexcept {
+std::string_view http1_client_response_parse_error_message(http1_client_response_parse_error error) noexcept {
     switch (error) {
         case http1_client_response_parse_error::header_too_large:
             return "response header is too large";
@@ -2614,9 +2344,7 @@ std::string_view http1_client_response_parse_error_message(
     return "invalid HTTP/1 response";
 }
 
-detail::http1_client_request_content_phase
-http1_client_response_parser::initial_request_content_phase(
-    const http1_client_exchange_state& state_value) noexcept {
+detail::http1_client_request_content_phase http1_client_response_parser::initial_request_content_phase(const http1_client_exchange_state& state_value) noexcept {
     switch (detail::http1_client_exchange_state_access::content_state(state_value)) {
         case detail::http1_client_initial_content_state::complete:
             return detail::http1_client_request_content_phase::content_complete;
@@ -2628,10 +2356,9 @@ http1_client_response_parser::initial_request_content_phase(
     return detail::http1_client_request_content_phase::content_complete;
 }
 
-http1_client_response_parser::http1_client_response_parser(
-    http1_client_exchange_state exchange_state) noexcept
-    : exchange_state_(std::move(exchange_state)),
-      request_content_phase_(initial_request_content_phase(exchange_state_)) {}
+http1_client_response_parser::http1_client_response_parser(http1_client_exchange_state exchange_state) noexcept :
+    exchange_state_(std::move(exchange_state)),
+    request_content_phase_(initial_request_content_phase(exchange_state_)) {}
 
 http1_client_response_parse_result http1_client_response_parser::parse(std::string_view buffer) {
     if (phase_ != phase_type::await_response) {
@@ -2664,8 +2391,7 @@ http1_client_response_parse_result http1_client_response_parser::parse(std::stri
     if (header_bytes == std::string_view::npos) {
         // A field line ending in a bare LF can never complete the
         // CRLF-delimited head (RFC 9112 section 2.2).
-        if (status_line_ &&
-            detail::has_http_bare_line_feed(buffer, std::max(status_line_end_ + 2, header_scan_offset_))) {
+        if (status_line_ && detail::has_http_bare_line_feed(buffer, std::max(status_line_end_ + 2, header_scan_offset_))) {
             return fail(http1_client_response_parse_error::invalid_header);
         }
         if (buffer.size() >= max_http_header_bytes) {
@@ -2692,22 +2418,18 @@ http1_client_response_parse_result http1_client_response_parser::parse(std::stri
     std::optional<std::string> unfolded_fields;
     // The status line is not a field: its following whitespace cannot be
     // folded into the reason phrase. Only normalize within the field block.
-    if (const auto first_fold = detail::find_field_line_fold(field_section);
-        first_fold != std::string_view::npos) {
+    if (const auto first_fold = detail::find_field_line_fold(field_section); first_fold != std::string_view::npos) {
         unfolded_fields.emplace();
-        detail::copy_unfolded_field_lines(
-            field_section, first_fold, detail::field_line_folding_policy::http, *unfolded_fields);
+        detail::copy_unfolded_field_lines(field_section, first_fold, detail::field_line_folding_policy::http, *unfolded_fields);
         field_section = *unfolded_fields;
     }
-    auto parsed_head = detail::parse_http1_client_response_head_fields(
-        status_line, field_section, exchange_state_);
+    auto parsed_head = detail::parse_http1_client_response_head_fields(status_line, field_section, exchange_state_);
     if ((parsed_head.index() != 0)) {
         return fail(std::get<1>(parsed_head));
     }
     const auto& parsed_value = std::get<0>(parsed_head);
 
-    auto planning = detail::plan_http1_client_response(
-        exchange_state_, parsed_value, request_content_phase_, interim_faulty_framing_);
+    auto planning = detail::plan_http1_client_response(exchange_state_, parsed_value, request_content_phase_, interim_faulty_framing_);
     if ((planning.index() != 0)) {
         return fail(std::get<1>(planning));
     }
@@ -2716,8 +2438,7 @@ http1_client_response_parse_result http1_client_response_parser::parse(std::stri
     // No owning response head is observable until the entire head and framing
     // plan have validated. Field views borrow the input or unfolded_head until
     // they are copied below; neither failure nor allocation commits the exchange.
-    auto head = detail::http_client_response_head_access::make(
-        parsed_value.received_status_, parsed_value.protocol_version_);
+    auto head = detail::http_client_response_head_access::make(parsed_value.received_status_, parsed_value.protocol_version_);
     detail::http_client_response_head_access::content_length(head, parsed_value.content_length_.value());
     const auto parsed_headers = parsed_value.headers_.view();
     if (!parsed_headers.empty()) {
@@ -2728,11 +2449,8 @@ http1_client_response_parse_result http1_client_response_parser::parse(std::stri
         }
     }
 
-    auto result_value = detail::http1_client_response_parse_result_access::parsed(
-        std::move(head), std::move(plan), header_bytes);
-    if (parsed_value.status_code_.is_informational() &&
-        parsed_value.protocol_version_ == http_protocol_version::http10 &&
-        parsed_value.saw_transfer_encoding_) {
+    auto result_value = detail::http1_client_response_parse_result_access::parsed(std::move(head), std::move(plan), header_bytes);
+    if (parsed_value.status_code_.is_informational() && parsed_value.protocol_version_ == http_protocol_version::http10 && parsed_value.saw_transfer_encoding_) {
         interim_faulty_framing_ = true;
     }
     if (parsed_value.status_code_ == http_status::continue_value) {
@@ -2745,15 +2463,12 @@ http1_client_response_parse_result http1_client_response_parser::parse(std::stri
 }
 
 void http1_client_response_parser::release_request_content() noexcept {
-    if (phase_ == phase_type::await_response &&
-        request_content_phase_ == detail::http1_client_request_content_phase::awaiting_continue) {
-        request_content_phase_ =
-            detail::http1_client_request_content_phase::content_released_awaiting_continue;
+    if (phase_ == phase_type::await_response && request_content_phase_ == detail::http1_client_request_content_phase::awaiting_continue) {
+        request_content_phase_ = detail::http1_client_request_content_phase::content_released_awaiting_continue;
     }
 }
 
-http1_client_request_content_completion_status
-http1_client_response_parser::complete_request_content() noexcept {
+http1_client_request_content_completion_status http1_client_response_parser::complete_request_content() noexcept {
     if (phase_ != phase_type::await_response) {
         return http1_client_request_content_completion_status::exchange_terminal;
     }
@@ -2763,12 +2478,10 @@ http1_client_response_parser::complete_request_content() noexcept {
             return http1_client_request_content_completion_status::completed;
         case detail::http1_client_request_content_phase::awaiting_continue:
         case detail::http1_client_request_content_phase::content_released_awaiting_continue:
-            request_content_phase_ =
-                detail::http1_client_request_content_phase::content_complete_awaiting_continue;
+            request_content_phase_ = detail::http1_client_request_content_phase::content_complete_awaiting_continue;
             return http1_client_request_content_completion_status::completed;
         case detail::http1_client_request_content_phase::continue_received:
-            request_content_phase_ =
-                detail::http1_client_request_content_phase::continue_received_content_complete;
+            request_content_phase_ = detail::http1_client_request_content_phase::continue_received_content_complete;
             return http1_client_request_content_completion_status::completed;
         case detail::http1_client_request_content_phase::content_complete:
         case detail::http1_client_request_content_phase::content_complete_awaiting_continue:
@@ -2784,10 +2497,8 @@ namespace ruvia::detail {
 
 namespace {
 
-[[nodiscard]] bool request_offers_protocol(
-    const http1_client_exchange_state& exchange_state, const http_upgrade_protocol& selected) noexcept {
-    const auto offered_protocols =
-        http1_client_exchange_state_access::offered_upgrade_protocols(exchange_state);
+[[nodiscard]] bool request_offers_protocol(const http1_client_exchange_state& exchange_state, const http_upgrade_protocol& selected) noexcept {
+    const auto offered_protocols = http1_client_exchange_state_access::offered_upgrade_protocols(exchange_state);
     if (offered_protocols.empty()) {
         return false;
     }
@@ -2796,11 +2507,10 @@ namespace {
     // The writer already validated this offer. Forwarded Upgrade fields may
     // retain empty members (RFC 9110 sections 2.2 and 5.6.1); selecting a
     // response protocol must not reapply generation grammar to those bytes.
-    if (protocols.parse_field(offered_protocols, http_field_list_role::recipient,
-            [&selected, &offered](const http_upgrade_protocol& candidate_value) noexcept {
-                offered = offered || http_upgrade_protocol_equals(candidate_value, selected);
-                return true;
-            }) != http_field_list_parse_status::ok) {
+    if (protocols.parse_field(offered_protocols, http_field_list_role::recipient, [&selected, &offered](const http_upgrade_protocol& candidate_value) noexcept {
+        offered = offered || http_upgrade_protocol_equals(candidate_value, selected);
+        return true;
+    }) != http_field_list_parse_status::ok) {
         return false;
     }
     return protocols.has_protocol() && offered;
@@ -2838,23 +2548,18 @@ http1_client_status_line_parse_result_type parse_http1_client_status_line(std::s
         return http1_client_response_parse_error::invalid_reason_phrase;
     }
 
-    return http1_client_parsed_status_line{.received_status_ = *parsed_status,
-        .protocol_version_ = version == http1_version_parse_result::http10 ? http_protocol_version::http10 : http_protocol_version::http11};
+    return http1_client_parsed_status_line{.received_status_ = *parsed_status, .protocol_version_ = version == http1_version_parse_result::http10 ? http_protocol_version::http10 : http_protocol_version::http11};
 }
 
-http1_client_parsed_response_head::http1_client_parsed_response_head(
-    const http1_client_parsed_status_line& status_line) noexcept
-    : received_status_(status_line.received_status_),
-      status_code_(status_line.received_status_.status()),
-      protocol_version_(status_line.protocol_version_) {}
+http1_client_parsed_response_head::http1_client_parsed_response_head(const http1_client_parsed_status_line& status_line) noexcept :
+    received_status_(status_line.received_status_),
+    status_code_(status_line.received_status_.status()),
+    protocol_version_(status_line.protocol_version_) {}
 
-http1_client_response_head_parse_result_type parse_http1_client_response_head_fields(
-    const http1_client_parsed_status_line& status_line, std::string_view field_section,
-    const http1_client_exchange_state& exchange_state) {
+http1_client_response_head_parse_result_type parse_http1_client_response_head_fields(const http1_client_parsed_status_line& status_line, std::string_view field_section, const http1_client_exchange_state& exchange_state) {
     http1_client_parsed_response_head output(status_line);
 
-    const auto content_semantics = classify_http_response_content_semantics(
-        http1_client_exchange_state_access::method(exchange_state), output.status_code_);
+    const auto content_semantics = classify_http_response_content_semantics(http1_client_exchange_state_access::method(exchange_state), output.status_code_);
     // RFC 9112 section 6.3 rule 1 ends 1xx, 204, 304 and HEAD responses at the
     // header section whatever framing fields they carry, and rule 1 precedes
     // the rule 5 Content-Length check. A recipient therefore ignores their
@@ -2862,10 +2567,7 @@ http1_client_response_head_parse_result_type parse_http1_client_response_head_fi
     // still delimit exactly; HEAD and 304 Content-Length remains a retained
     // field describing the selected representation.
     const bool framing_fields_apply = content_semantics == http_response_content_semantics::with_content;
-    bool parse_length_metadata = content_semantics == http_response_content_semantics::without_content &&
-                                 output.status_code_ != http_status::no_content &&
-                                 (http1_client_exchange_state_access::method(exchange_state) == http_known_method::head ||
-                                     output.status_code_ == http_status::not_modified);
+    bool parse_length_metadata = content_semantics == http_response_content_semantics::without_content && output.status_code_ != http_status::no_content && (http1_client_exchange_state_access::method(exchange_state) == http_known_method::head || output.status_code_ == http_status::not_modified);
 
     std::size_t cursor_value = 0;
     while (cursor_value < field_section.size()) {
@@ -2899,8 +2601,7 @@ http1_client_response_head_parse_result_type parse_http1_client_response_head_fi
                 }
                 break;
             case http_field_kind::connection:
-                if (output.connection_options_.parse_field(value, http_connection_field_role::response_recipient) !=
-                    http_field_list_parse_status::ok) {
+                if (output.connection_options_.parse_field(value, http_connection_field_role::response_recipient) != http_field_list_parse_status::ok) {
                     return http1_client_response_parse_error::invalid_connection;
                 }
                 break;
@@ -2915,17 +2616,12 @@ http1_client_response_head_parse_result_type parse_http1_client_response_head_fi
                 }
                 break;
             case http_field_kind::upgrade:
-                if (output.upgrade_protocols_.parse_field(value, http_field_list_role::recipient,
-                        [&exchange_state, &output,
-                            check_offered = content_semantics ==
-                                            http_response_content_semantics::protocol_switch](
-                            const http_upgrade_protocol& selected) noexcept {
-                            if (check_offered && output.all_upgrade_protocols_offered_ &&
-                                !request_offers_protocol(exchange_state, selected)) {
-                                output.all_upgrade_protocols_offered_ = false;
-                            }
-                            return true;
-                        }) != http_field_list_parse_status::ok) {
+                if (output.upgrade_protocols_.parse_field(value, http_field_list_role::recipient, [&exchange_state, &output, check_offered = content_semantics == http_response_content_semantics::protocol_switch](const http_upgrade_protocol& selected) noexcept {
+                    if (check_offered && output.all_upgrade_protocols_offered_ && !request_offers_protocol(exchange_state, selected)) {
+                        output.all_upgrade_protocols_offered_ = false;
+                    }
+                    return true;
+                }) != http_field_list_parse_status::ok) {
                     return http1_client_response_parse_error::invalid_upgrade;
                 }
                 break;
@@ -2948,8 +2644,7 @@ http1_client_response_head_parse_result_type parse_http1_client_response_head_fi
 
 namespace ruvia {
 
-std::optional<std::string_view> http_client_response_head::header(
-    std::string_view name) const& noexcept {
+std::optional<std::string_view> http_client_response_head::header(std::string_view name) const& noexcept {
     return detail::find_last_http_header<http_header>(headers_, name);
 }
 
@@ -2963,42 +2658,23 @@ namespace ruvia::detail {
 
 namespace {
 
-[[nodiscard]] bool request_allows_protocol_switch(const http1_client_exchange_state& exchange_state,
-    const http1_client_parsed_response_head& response,
-    http1_client_request_content_phase request_content_phase,
-    bool interim_faulty_framing) noexcept {
-    const bool request_content_allows_switch =
-        request_content_phase == http1_client_request_content_phase::content_complete ||
-        request_content_phase == http1_client_request_content_phase::content_complete_awaiting_continue ||
-        request_content_phase == http1_client_request_content_phase::continue_received_content_complete;
-    if (interim_faulty_framing ||
-        http1_client_exchange_state_access::close_policy(exchange_state) ==
-            http1_close_policy::close_after_response ||
-        !request_content_allows_switch) {
+[[nodiscard]] bool request_allows_protocol_switch(const http1_client_exchange_state& exchange_state, const http1_client_parsed_response_head& response, http1_client_request_content_phase request_content_phase, bool interim_faulty_framing) noexcept {
+    const bool request_content_allows_switch = request_content_phase == http1_client_request_content_phase::content_complete || request_content_phase == http1_client_request_content_phase::content_complete_awaiting_continue || request_content_phase == http1_client_request_content_phase::continue_received_content_complete;
+    if (interim_faulty_framing || http1_client_exchange_state_access::close_policy(exchange_state) == http1_close_policy::close_after_response || !request_content_allows_switch) {
         return false;
     }
-    if (detail::http1_client_exchange_state_access::offered_upgrade_protocols(exchange_state).empty() ||
-        response.connection_options_.close() || !response.connection_options_.upgrade() ||
-        !response.upgrade_protocols_.has_protocol()) {
+    if (detail::http1_client_exchange_state_access::offered_upgrade_protocols(exchange_state).empty() || response.connection_options_.close() || !response.connection_options_.upgrade() || !response.upgrade_protocols_.has_protocol()) {
         return false;
     }
     return response.all_upgrade_protocols_offered_;
 }
 
-[[nodiscard]] std::optional<http_client_request_content_signal> resolve_request_content_signal(
-    http1_client_request_content_phase phase, http_status_code status_code,
-    bool response_will_close) noexcept {
-    if (response_will_close && (phase == http1_client_request_content_phase::awaiting_continue ||
-                                   phase == http1_client_request_content_phase::content_pending ||
-                                   phase == http1_client_request_content_phase::content_released_awaiting_continue ||
-                                   phase == http1_client_request_content_phase::continue_received)) {
+[[nodiscard]] std::optional<http_client_request_content_signal> resolve_request_content_signal(http1_client_request_content_phase phase, http_status_code status_code, bool response_will_close) noexcept {
+    if (response_will_close && (phase == http1_client_request_content_phase::awaiting_continue || phase == http1_client_request_content_phase::content_pending || phase == http1_client_request_content_phase::content_released_awaiting_continue || phase == http1_client_request_content_phase::continue_received)) {
         return http_client_request_content_signal::exchange_complete;
     }
     if (status_code == http_status::continue_value) {
-        return phase == http1_client_request_content_phase::awaiting_continue
-                   ? std::optional<http_client_request_content_signal>(
-                         http_client_request_content_signal::continue_value)
-                   : std::nullopt;
+        return phase == http1_client_request_content_phase::awaiting_continue ? std::optional<http_client_request_content_signal>(http_client_request_content_signal::continue_value) : std::nullopt;
     }
     if (status_code.is_final() && phase == http1_client_request_content_phase::awaiting_continue) {
         // A final response cancels content only while Expect still gates it.
@@ -3010,38 +2686,27 @@ namespace {
     return std::nullopt;
 }
 
-[[nodiscard]] http1_close_policy response_persistence(
-    const http1_client_parsed_response_head& response) noexcept {
+[[nodiscard]] http1_close_policy response_persistence(const http1_client_parsed_response_head& response) noexcept {
     // RFC 9112 section 6.1: an HTTP/1.0 message carrying Transfer-Encoding
     // has faulty framing and the connection closes after it, even when the
     // response ends at its header section and the field is otherwise ignored.
-    if (response.connection_options_.close() ||
-        (response.protocol_version_ == http_protocol_version::http10 && response.saw_transfer_encoding_)) {
+    if (response.connection_options_.close() || (response.protocol_version_ == http_protocol_version::http10 && response.saw_transfer_encoding_)) {
         return http1_close_policy::close_after_response;
     }
-    if (response.protocol_version_ == http_protocol_version::http11 ||
-        response.connection_options_.keep_alive()) {
+    if (response.protocol_version_ == http_protocol_version::http11 || response.connection_options_.keep_alive()) {
         return http1_close_policy::allow_reuse;
     }
     return http1_close_policy::close_after_response;
 }
 
-[[nodiscard]] http1_close_policy final_response_persistence(
-    const http1_client_exchange_state& exchange_state,
-    const http1_client_parsed_response_head& response,
-    http1_client_request_content_phase request_content_phase,
-    bool interim_faulty_framing) noexcept {
+[[nodiscard]] http1_close_policy final_response_persistence(const http1_client_exchange_state& exchange_state, const http1_client_parsed_response_head& response, http1_client_request_content_phase request_content_phase, bool interim_faulty_framing) noexcept {
     // A final response while Expect still gates the content cancels content
     // whose framing the request head already committed. The server may keep
     // reading it (RFC 9110 section 10.1.1), so the next request on this
     // connection would be consumed as that content.
     // A rejected CONNECT is not a reusable HTTP exchange: RFC 9931 section 8
     // requires the proxy to close it before interpreting any following request.
-    if (interim_faulty_framing ||
-        http1_client_exchange_state_access::method(exchange_state) == http_known_method::connect ||
-        http1_client_exchange_state_access::close_policy(exchange_state) ==
-            http1_close_policy::close_after_response ||
-        request_content_phase == http1_client_request_content_phase::awaiting_continue) {
+    if (interim_faulty_framing || http1_client_exchange_state_access::method(exchange_state) == http_known_method::connect || http1_client_exchange_state_access::close_policy(exchange_state) == http1_close_policy::close_after_response || request_content_phase == http1_client_request_content_phase::awaiting_continue) {
         return http1_close_policy::close_after_response;
     }
     return response_persistence(response);
@@ -3052,67 +2717,40 @@ namespace {
 struct http1_client_response_plan_access final {
     using request_content_signal_type = std::optional<http_client_request_content_signal>;
 
-    [[nodiscard]] static http1_client_response_plan informational(
-        http1_close_policy persistence, request_content_signal_type request_content_signal) noexcept {
-        return http1_client_response_plan(
-            http1_client_response_plan::state_type(http1_client_informational_response(persistence)),
-            request_content_signal);
+    [[nodiscard]] static http1_client_response_plan informational(http1_close_policy persistence, request_content_signal_type request_content_signal) noexcept {
+        return http1_client_response_plan(http1_client_response_plan::state_type(http1_client_informational_response(persistence)), request_content_signal);
     }
 
-    [[nodiscard]] static http1_client_response_plan without_content(
-        http1_close_policy persistence, request_content_signal_type request_content_signal) noexcept {
-        return http1_client_response_plan(
-            http1_client_response_plan::state_type(http1_client_response_without_content(persistence)),
-            request_content_signal);
+    [[nodiscard]] static http1_client_response_plan without_content(http1_close_policy persistence, request_content_signal_type request_content_signal) noexcept {
+        return http1_client_response_plan(http1_client_response_plan::state_type(http1_client_response_without_content(persistence)), request_content_signal);
     }
 
-    [[nodiscard]] static http1_client_response_plan known_length(std::size_t content_length,
-        http1_close_policy persistence, request_content_signal_type request_content_signal,
-        bool discards_content) noexcept {
-        return http1_client_response_plan(
-            http1_client_response_plan::state_type(
-                http1_client_known_length_response(content_length, persistence)),
-            request_content_signal, discards_content);
+    [[nodiscard]] static http1_client_response_plan known_length(std::size_t content_length, http1_close_policy persistence, request_content_signal_type request_content_signal, bool discards_content) noexcept {
+        return http1_client_response_plan(http1_client_response_plan::state_type(http1_client_known_length_response(content_length, persistence)), request_content_signal, discards_content);
     }
 
-    [[nodiscard]] static http1_client_response_plan chunked(http_transfer_codings transfer_codings,
-        http1_close_policy persistence, request_content_signal_type request_content_signal,
-        bool discards_content) {
-        return http1_client_response_plan(http1_client_response_plan::state_type(http1_client_chunked_response(
-                                              std::move(transfer_codings), persistence)),
-            request_content_signal, discards_content);
+    [[nodiscard]] static http1_client_response_plan chunked(http_transfer_codings transfer_codings, http1_close_policy persistence, request_content_signal_type request_content_signal, bool discards_content) {
+        return http1_client_response_plan(http1_client_response_plan::state_type(http1_client_chunked_response(std::move(transfer_codings), persistence)), request_content_signal, discards_content);
     }
 
-    [[nodiscard]] static http1_client_response_plan close_delimited(
-        http_transfer_codings transfer_codings, request_content_signal_type request_content_signal,
-        bool discards_content) {
-        return http1_client_response_plan(
-            http1_client_response_plan::state_type(http1_client_close_delimited_response(
-                std::move(transfer_codings))),
-            request_content_signal, discards_content);
+    [[nodiscard]] static http1_client_response_plan close_delimited(http_transfer_codings transfer_codings, request_content_signal_type request_content_signal, bool discards_content) {
+        return http1_client_response_plan(http1_client_response_plan::state_type(http1_client_close_delimited_response(std::move(transfer_codings))), request_content_signal, discards_content);
     }
 
     [[nodiscard]] static http1_client_response_plan connect_tunnel() noexcept {
-        return http1_client_response_plan(
-            http1_client_response_plan::state_type(http1_client_connect_tunnel()), std::nullopt);
+        return http1_client_response_plan(http1_client_response_plan::state_type(http1_client_connect_tunnel()), std::nullopt);
     }
 
     [[nodiscard]] static http1_client_response_plan protocol_upgrade() noexcept {
-        return http1_client_response_plan(
-            http1_client_response_plan::state_type(http1_client_protocol_upgrade()), std::nullopt);
+        return http1_client_response_plan(http1_client_response_plan::state_type(http1_client_protocol_upgrade()), std::nullopt);
     }
 };
 
-http1_client_response_planning_result_type plan_http1_client_response(
-    const http1_client_exchange_state& exchange_state, const http1_client_parsed_response_head& response,
-    http1_client_request_content_phase request_content_phase, bool interim_faulty_framing) {
-    const auto content_semantics = classify_http_response_content_semantics(
-        http1_client_exchange_state_access::method(exchange_state), response.status_code_);
+http1_client_response_planning_result_type plan_http1_client_response(const http1_client_exchange_state& exchange_state, const http1_client_parsed_response_head& response, http1_client_request_content_phase request_content_phase, bool interim_faulty_framing) {
+    const auto content_semantics = classify_http_response_content_semantics(http1_client_exchange_state_access::method(exchange_state), response.status_code_);
 
     if (content_semantics == http_response_content_semantics::protocol_switch) {
-        if (response.protocol_version_ != http_protocol_version::http11 ||
-            !request_allows_protocol_switch(
-                exchange_state, response, request_content_phase, interim_faulty_framing)) {
+        if (response.protocol_version_ != http_protocol_version::http11 || !request_allows_protocol_switch(exchange_state, response, request_content_phase, interim_faulty_framing)) {
             return http1_client_response_parse_error::invalid_protocol_switch;
         }
         return http1_client_response_plan_access::protocol_upgrade();
@@ -3121,8 +2759,7 @@ http1_client_response_planning_result_type plan_http1_client_response(
         // A 1xx never ends the exchange or cancels request content, so it cannot
         // close the connection either; the final response alone decides that
         // (RFC 9110 Section 15.2).
-        return http1_client_response_plan_access::informational(http1_close_policy::allow_reuse,
-            resolve_request_content_signal(request_content_phase, response.status_code_, false));
+        return http1_client_response_plan_access::informational(http1_close_policy::allow_reuse, resolve_request_content_signal(request_content_phase, response.status_code_, false));
     }
     if (content_semantics == http_response_content_semantics::connect_tunnel) {
         return http1_client_response_plan_access::connect_tunnel();
@@ -3131,14 +2768,11 @@ http1_client_response_planning_result_type plan_http1_client_response(
     // RFC 9110 section 15.3.6 forbids only generating 205 content. Its framing
     // is still authoritative, so delimited content is consumed and discarded
     // and the connection stays reusable.
-    const bool discards_content = response.status_code_ == http_status::reset_content &&
-                                  content_semantics == http_response_content_semantics::with_content;
+    const bool discards_content = response.status_code_ == http_status::reset_content && content_semantics == http_response_content_semantics::with_content;
     const auto content_length = response.content_length_.value();
 
-    const auto persistence = final_response_persistence(
-        exchange_state, response, request_content_phase, interim_faulty_framing);
-    const auto persistent_content_signal = resolve_request_content_signal(request_content_phase,
-        response.status_code_, persistence == http1_close_policy::close_after_response);
+    const auto persistence = final_response_persistence(exchange_state, response, request_content_phase, interim_faulty_framing);
+    const auto persistent_content_signal = resolve_request_content_signal(request_content_phase, response.status_code_, persistence == http1_close_policy::close_after_response);
     if (content_semantics == http_response_content_semantics::without_content) {
         return http1_client_response_plan_access::without_content(persistence, persistent_content_signal);
     }
@@ -3147,8 +2781,7 @@ http1_client_response_planning_result_type plan_http1_client_response(
     // RFC 9112 section 6.1: HTTP/1.0 Transfer-Encoding is faulty framing, so the
     // codings are ignored and the message falls back to Content-Length or close
     // delimiting while the connection closes after it.
-    const bool http10_faulty_framing = response.protocol_version_ == http_protocol_version::http10 &&
-                                       response.saw_transfer_encoding_;
+    const bool http10_faulty_framing = response.protocol_version_ == http_protocol_version::http10 && response.saw_transfer_encoding_;
     if (response.saw_transfer_encoding_ && !http10_faulty_framing) {
         if (content_length.has_value()) {
             return http1_client_response_parse_error::content_length_and_transfer_encoding;
@@ -3157,31 +2790,21 @@ http1_client_response_planning_result_type plan_http1_client_response(
             return http1_client_response_parse_error::invalid_transfer_encoding;
         }
         if (const auto* final_chunked = transfer_encoding->final_chunked()) {
-            return http1_client_response_plan_access::chunked(
-                final_chunked->transfer_codings(), persistence, persistent_content_signal,
-                discards_content);
+            return http1_client_response_plan_access::chunked(final_chunked->transfer_codings(), persistence, persistent_content_signal, discards_content);
         }
-        return http1_client_response_plan_access::close_delimited(
-            transfer_encoding->non_chunked()->transfer_codings(),
-            resolve_request_content_signal(request_content_phase, response.status_code_, true),
-            discards_content);
+        return http1_client_response_plan_access::close_delimited(transfer_encoding->non_chunked()->transfer_codings(), resolve_request_content_signal(request_content_phase, response.status_code_, true), discards_content);
     }
 
     if (content_length.has_value()) {
         if (*content_length > (std::numeric_limits<std::size_t>::max)()) {
             return http1_client_response_parse_error::invalid_content_length;
         }
-        return http1_client_response_plan_access::known_length(
-            static_cast<std::size_t>(*content_length), persistence, persistent_content_signal,
-            discards_content);
+        return http1_client_response_plan_access::known_length(static_cast<std::size_t>(*content_length), persistence, persistent_content_signal, discards_content);
     }
 
     // RFC 9112 section 6.3: a body-allowed response with no declared
     // length is delimited by server close and cannot return to a pool.
-    return http1_client_response_plan_access::close_delimited(
-        http_transfer_codings{},
-        resolve_request_content_signal(request_content_phase, response.status_code_, true),
-        discards_content);
+    return http1_client_response_plan_access::close_delimited(http_transfer_codings{}, resolve_request_content_signal(request_content_phase, response.status_code_, true), discards_content);
 }
 
 }  // namespace ruvia::detail

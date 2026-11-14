@@ -42,16 +42,7 @@ enum class integer_parse_error {
 
 namespace detail {
 template <typename t_type>
-concept parsed_integer =
-    std::integral<t_type> && !std::same_as<std::remove_cv_t<t_type>, bool> &&
-    !std::same_as<std::remove_cv_t<t_type>, char> &&
-    !std::same_as<std::remove_cv_t<t_type>, wchar_t> &&
-    !std::same_as<std::remove_cv_t<t_type>, char8_t> &&
-    !std::same_as<std::remove_cv_t<t_type>, char16_t> &&
-    !std::same_as<std::remove_cv_t<t_type>, char32_t> &&
-    requires(const char* first, const char* last, t_type& value) {
-        std::from_chars(first, last, value, 10);
-    };
+concept parsed_integer = std::integral<t_type> && !std::same_as<std::remove_cv_t<t_type>, bool> && !std::same_as<std::remove_cv_t<t_type>, char> && !std::same_as<std::remove_cv_t<t_type>, wchar_t> && !std::same_as<std::remove_cv_t<t_type>, char8_t> && !std::same_as<std::remove_cv_t<t_type>, char16_t> && !std::same_as<std::remove_cv_t<t_type>, char32_t> && requires(const char* first, const char* last, t_type& value) { std::from_chars(first, last, value, 10); };
 }  // namespace detail
 
 // Strict decimal input: no whitespace, leading '+', or trailing characters.
@@ -112,8 +103,7 @@ template <std::size_t n>
 fixed_string(const char (&)[n]) -> fixed_string<n>;
 
 template <std::size_t left_n, std::size_t right_n>
-[[nodiscard]] constexpr bool operator==(
-    const fixed_string<left_n>& left, const fixed_string<right_n>& right) noexcept {
+[[nodiscard]] constexpr bool operator==(const fixed_string<left_n>& left, const fixed_string<right_n>& right) noexcept {
     if constexpr (left_n != right_n) {
         return false;
     } else {
@@ -127,8 +117,7 @@ namespace detail {
 // (model fields, entity columns, database relations).
 
 // Position of `name` in `names`, or names.size() when it is absent.
-[[nodiscard]] consteval std::size_t fixed_name_index(
-    std::span<const std::string_view> names, std::string_view name) noexcept {
+[[nodiscard]] consteval std::size_t fixed_name_index(std::span<const std::string_view> names, std::string_view name) noexcept {
     for (std::size_t index = 0; index < names.size(); ++index) {
         if (names[index] == name) {
             return index;
@@ -139,8 +128,7 @@ namespace detail {
 
 // Whether no two entries of `names` are equal under `equal`.
 template <typename equal_type = std::equal_to<>>
-[[nodiscard]] consteval bool fixed_names_distinct(
-    std::span<const std::string_view> names, equal_type equal = {}) noexcept {
+[[nodiscard]] consteval bool fixed_names_distinct(std::span<const std::string_view> names, equal_type equal = {}) noexcept {
     for (std::size_t left = 0; left < names.size(); ++left) {
         for (std::size_t right = left + 1; right < names.size(); ++right) {
             if (equal(names[left], names[right])) {
@@ -165,9 +153,7 @@ public:
     constexpr callback_ref_view() noexcept = default;
     constexpr callback_ref_view(std::nullptr_t) noexcept {}
     // Select concrete pointer types so MSVC resolves the exception specification.
-    using invoke_type = std::conditional_t<is_noexcept,
-        result_type (*)(void*, args_types...) noexcept,
-        result_type (*)(void*, args_types...)>;
+    using invoke_type = std::conditional_t<is_noexcept, result_type (*)(void*, args_types...) noexcept, result_type (*)(void*, args_types...)>;
     [[nodiscard]] constexpr explicit operator bool() const noexcept {
         return invoke_ != nullptr;
     }
@@ -181,18 +167,16 @@ public:
 private:
     friend struct callback_access;
 
-    constexpr callback_ref_view(void* target, invoke_type invoke) noexcept
-        : target_(target),
-          invoke_(invoke) {}
+    constexpr callback_ref_view(void* target, invoke_type invoke) noexcept :
+        target_(target),
+        invoke_(invoke) {}
 
     template <typename callable_type>
-        requires(std::is_invocable_r_v<result_type, callable_type&, args_types...> &&
-                 (!is_noexcept || std::is_nothrow_invocable_r_v<result_type, callable_type&, args_types...>))
+        requires(std::is_invocable_r_v<result_type, callable_type&, args_types...> && (!is_noexcept || std::is_nothrow_invocable_r_v<result_type, callable_type&, args_types...>))
     [[nodiscard]] static constexpr callback_ref_view bind(callable_type& callable) noexcept {
-        return callback_ref_view(const_cast<void*>(static_cast<const void*>(std::addressof(callable))),
-            [](void* target, args_types... args) noexcept(is_noexcept) -> result_type {
-                return (*static_cast<callable_type*>(target))(std::forward<args_types>(args)...);
-            });
+        return callback_ref_view(const_cast<void*>(static_cast<const void*>(std::addressof(callable))), [](void* target, args_types... args) noexcept(is_noexcept) -> result_type {
+            return (*static_cast<callable_type*>(target))(std::forward<args_types>(args)...);
+        });
     }
 
     template <typename... invocation_args>
@@ -225,8 +209,7 @@ using callback_ref = typename callback_signature<signature_type>::template apply
 
 struct callback_access final {
     template <typename signature_type>
-    [[nodiscard]] static constexpr callback_ref<signature_type> make(
-        void* target, typename callback_ref<signature_type>::invoke_type invoke) noexcept {
+    [[nodiscard]] static constexpr callback_ref<signature_type> make(void* target, typename callback_ref<signature_type>::invoke_type invoke) noexcept {
         return callback_ref<signature_type>(target, invoke);
     }
 
@@ -300,8 +283,7 @@ struct validation_issue_access;
 [[nodiscard]] inline std::string_view bounded_validation_text(std::string_view value) noexcept {
     auto count = std::min(value.size(), max_validation_text_bytes);
     // Keep a UTF-8 prefix complete when the last code point crosses the bound.
-    while (count < value.size() && count > 0 &&
-           (static_cast<unsigned char>(value[count]) & 0xc0U) == 0x80U) {
+    while (count < value.size() && count > 0 && (static_cast<unsigned char>(value[count]) & 0xc0U) == 0x80U) {
         --count;
     }
     return value.substr(0, count);
@@ -342,10 +324,10 @@ private:
 
     void swap(validation_issue& other) noexcept;
 
-    explicit validation_issue(validation_issue_options options)
-        : field_(detail::bounded_validation_text(options.field_.view())),
-          code_(detail::bounded_validation_text(options.code_.view())),
-          message_(detail::bounded_validation_text(options.message_.view())) {}
+    explicit validation_issue(validation_issue_options options) :
+        field_(detail::bounded_validation_text(options.field_.view())),
+        code_(detail::bounded_validation_text(options.code_.view())),
+        message_(detail::bounded_validation_text(options.message_.view())) {}
 
     std::string field_;
     std::string code_;
@@ -368,12 +350,12 @@ struct http_error_info_options final {
 // this type belongs to ruvia-web.
 class http_error_info final {
 public:
-    constexpr explicit http_error_info(http_error_info_options options = {}) noexcept
-        : status_(options.status_),
-          status_text_(options.status_text_.view()),
-          code_(options.code_.view()),
-          message_(options.message_.view()),
-          validation_issues_(options.validation_issues_.view()) {}
+    constexpr explicit http_error_info(http_error_info_options options = {}) noexcept :
+        status_(options.status_),
+        status_text_(options.status_text_.view()),
+        code_(options.code_.view()),
+        message_(options.message_.view()),
+        validation_issues_(options.validation_issues_.view()) {}
 
     [[nodiscard]] constexpr http_status_code status() const noexcept {
         return status_;
@@ -442,8 +424,7 @@ public:
 
 private:
     friend class validator;
-    http_error(http_status_code status, std::string_view code, std::string_view message,
-        std::string_view status_text, std::vector<validation_issue>&& issues);
+    http_error(http_status_code status, std::string_view code, std::string_view message, std::string_view status_text, std::vector<validation_issue>&& issues);
     http_status_code status_{http_status::internal_server_error};
     std::string status_text_;
     std::string code_;
@@ -571,14 +552,12 @@ public:
     template <typename t_type>
     [[nodiscard]] const std::remove_cvref_t<t_type>* try_find(request_binding_kind kind) const noexcept {
         const auto* node_value = find_node<t_type>(kind);
-        return node_value == nullptr ? nullptr
-                                     : static_cast<const std::remove_cvref_t<t_type>*>(node_value->value_);
+        return node_value == nullptr ? nullptr : static_cast<const std::remove_cvref_t<t_type>*>(node_value->value_);
     }
 
     template <typename t_type>
     [[nodiscard]] const std::remove_cvref_t<t_type>& get_validated() const {
-        return find_required<t_type>(
-            request_binding_kind::validated_model, "validated request model is not available");
+        return find_required<t_type>(request_binding_kind::validated_model, "validated request model is not available");
     }
     template <typename t_type>
     [[nodiscard]] const std::remove_cvref_t<t_type>* try_get_state() const noexcept {
@@ -633,8 +612,7 @@ private:
     }
 
     template <typename t_type>
-    [[nodiscard]] const std::remove_cvref_t<t_type>& find_required(
-        request_binding_kind kind, const char* missing_message) const {
+    [[nodiscard]] const std::remove_cvref_t<t_type>& find_required(request_binding_kind kind, const char* missing_message) const {
         const auto* found = try_find<t_type>(kind);
         if (found == nullptr) {
             throw std::logic_error(missing_message);
@@ -646,10 +624,9 @@ private:
 };
 
 template <typename t_type>
-request_binding_guard<t_type>::request_binding_guard(
-    request_bindings& bindings, const t_type& value, request_binding_kind kind) noexcept
-    : bindings_(&bindings),
-      node_{type_key<t_type>(), &value, nullptr, kind} {
+request_binding_guard<t_type>::request_binding_guard(request_bindings& bindings, const t_type& value, request_binding_kind kind) noexcept :
+    bindings_(&bindings),
+    node_{type_key<t_type>(), &value, nullptr, kind} {
     bindings_->push(node_);
 }
 
@@ -670,12 +647,12 @@ public:
     worker_state_definition(const worker_state_definition&) = delete;
     worker_state_definition& operator=(const worker_state_definition&) = delete;
 
-    worker_state_definition(worker_state_definition&& other) noexcept
-        : type_key_(std::exchange(other.type_key_, nullptr)),
-          factory_(std::exchange(other.factory_, nullptr)),
-          destroy_factory_(std::exchange(other.destroy_factory_, nullptr)),
-          create_instance_(std::exchange(other.create_instance_, nullptr)),
-          destroy_instance_(std::exchange(other.destroy_instance_, nullptr)) {}
+    worker_state_definition(worker_state_definition&& other) noexcept :
+        type_key_(std::exchange(other.type_key_, nullptr)),
+        factory_(std::exchange(other.factory_, nullptr)),
+        destroy_factory_(std::exchange(other.destroy_factory_, nullptr)),
+        create_instance_(std::exchange(other.create_instance_, nullptr)),
+        destroy_instance_(std::exchange(other.destroy_instance_, nullptr)) {}
     worker_state_definition& operator=(worker_state_definition&&) = delete;
 
     ~worker_state_definition() {
@@ -689,10 +666,8 @@ public:
     template <typename t_type, typename factory_type>
     [[nodiscard]] static worker_state_definition make(factory_type&& factory) {
         using stored_type = std::decay_t<factory_type>;
-        static_assert(std::is_invocable_v<stored_type&>,
-            "worker state factory must be invocable with no arguments");
-        static_assert(std::is_constructible_v<t_type, std::invoke_result_t<stored_type&>>,
-            "worker state factory must return a value that constructs T");
+        static_assert(std::is_invocable_v<stored_type&>, "worker state factory must be invocable with no arguments");
+        static_assert(std::is_constructible_v<t_type, std::invoke_result_t<stored_type&>>, "worker state factory must return a value that constructs T");
         worker_state_definition definition;
         definition.type_key_ = detail::type_key<t_type>();
         definition.factory_ = new stored_type(std::forward<factory_type>(factory));
@@ -719,7 +694,9 @@ public:
         definition.type_key_ = detail::type_key<t_type>();
         definition.factory_ = std::addressof(instance);
         definition.destroy_factory_ = [](void*) noexcept {};
-        definition.create_instance_ = [](void* borrowed) -> void* { return borrowed; };
+        definition.create_instance_ = [](void* borrowed) -> void* {
+            return borrowed;
+        };
         definition.destroy_instance_ = [](void*) noexcept {};
         return definition;
     }
@@ -729,8 +706,7 @@ public:
     }
 
     [[nodiscard]] bool valid() const noexcept {
-        return type_key_ != nullptr && factory_ != nullptr && destroy_factory_ != nullptr &&
-               create_instance_ != nullptr && destroy_instance_ != nullptr;
+        return type_key_ != nullptr && factory_ != nullptr && destroy_factory_ != nullptr && create_instance_ != nullptr && destroy_instance_ != nullptr;
     }
 
 private:
@@ -751,8 +727,7 @@ private:
 
 // The single startup validation point for worker state recipes: the registry
 // only ever receives definitions that passed through here.
-inline void append_worker_state_definition(
-    std::vector<worker_state_definition>& definitions, worker_state_definition&& definition) {
+inline void append_worker_state_definition(std::vector<worker_state_definition>& definitions, worker_state_definition&& definition) {
     if (!definition.valid()) {
         throw std::invalid_argument("worker state definition is invalid");
     }
@@ -773,8 +748,8 @@ inline void append_worker_state_definition(
 class worker_state_registry final {
 public:
     // `definitions` were validated by append_worker_state_definition.
-    explicit worker_state_registry(std::span<const worker_state_definition> definitions) noexcept
-        : definitions_(definitions) {}
+    explicit worker_state_registry(std::span<const worker_state_definition> definitions) noexcept :
+        definitions_(definitions) {}
 
     worker_state_registry(const worker_state_registry&) = delete;
     worker_state_registry& operator=(const worker_state_registry&) = delete;
@@ -816,8 +791,7 @@ public:
     }
 
     [[nodiscard]] void* instance(const void* type_key) const noexcept {
-        const auto match = std::ranges::lower_bound(
-            type_index_, type_key, std::less<const void*>{}, &type_index_entry_type::type_key_);
+        const auto match = std::ranges::lower_bound(type_index_, type_key, std::less<const void*>{}, &type_index_entry_type::type_key_);
         if (match == type_index_.end() || match->type_key_ != type_key) {
             return nullptr;
         }
@@ -864,11 +838,10 @@ class worker_state_registry;
 // dispatcher or cancellation ownership is copied until an explicit offload.
 class worker_context_capabilities final {
 public:
-    worker_context_capabilities(const worker_ref& worker_value, const ruvia::stop_token& stop_token_value,
-        const worker_state_registry* worker_states) noexcept
-        : worker_(worker_value),
-          stop_token_(stop_token_value),
-          worker_states_(worker_states) {}
+    worker_context_capabilities(const worker_ref& worker_value, const ruvia::stop_token& stop_token_value, const worker_state_registry* worker_states) noexcept :
+        worker_(worker_value),
+        stop_token_(stop_token_value),
+        worker_states_(worker_states) {}
     worker_context_capabilities(worker_ref&&, const ruvia::stop_token&, const worker_state_registry*) = delete;
     worker_context_capabilities(const worker_ref&, ruvia::stop_token&&, const worker_state_registry*) = delete;
     worker_context_capabilities(worker_ref&&, ruvia::stop_token&&, const worker_state_registry*) = delete;
@@ -900,8 +873,7 @@ public:
     // result reports blocking_status::unavailable. A supplied stop token is
     // combined with this worker's cancellation token for the wait.
     template <typename callable_type>
-    [[nodiscard]] task<blocking_result<std::invoke_result_t<callable_type&>>> run_blocking(
-        callable_type callable, operation_options options) const {
+    [[nodiscard]] task<blocking_result<std::invoke_result_t<callable_type&>>> run_blocking(callable_type callable, operation_options options) const {
         if (!options.stop_token_.has_state()) {
             options.stop_token_ = stop_token_;
             return ruvia::run_blocking(worker_, std::move(options), std::move(callable));
@@ -911,8 +883,7 @@ public:
 
 private:
     template <typename callable_type>
-    [[nodiscard]] static task<blocking_result<std::invoke_result_t<callable_type&>>> run_blocking_combined(
-        worker_ref worker_value, ruvia::stop_token worker_token, operation_options options, callable_type callable) {
+    [[nodiscard]] static task<blocking_result<std::invoke_result_t<callable_type&>>> run_blocking_combined(worker_ref worker_value, ruvia::stop_token worker_token, operation_options options, callable_type callable) {
         const stop_group stop_owner(worker_token, options.stop_token_);
         options.stop_token_ = stop_owner.token();
         co_return co_await ruvia::run_blocking(std::move(worker_value), std::move(options), std::move(callable));
@@ -965,8 +936,7 @@ public:
     // is bound automatically and combined with options.stop_token_. With application::blocking_pool(nullptr) the
     // result reports blocking_status::unavailable.
     template <typename callable_type>
-    [[nodiscard]] task<blocking_result<std::invoke_result_t<callable_type&>>> run_blocking(
-        callable_type callable, operation_options options = {}) const {
+    [[nodiscard]] task<blocking_result<std::invoke_result_t<callable_type&>>> run_blocking(callable_type callable, operation_options options = {}) const {
         return capabilities_.run_blocking(std::move(callable), std::move(options));
     }
 
@@ -984,15 +954,10 @@ public:
 private:
     friend class detail::web_worker_dispatch;
 
-    web_worker_context(const worker_ref& worker_value,
-        const detail::worker_client_registry_view& client_registries,
-        const detail::worker_state_registry* worker_states, const ::ruvia::stop_token& stop_token_value) noexcept;
-    web_worker_context(worker_ref&&, const detail::worker_client_registry_view&,
-        const detail::worker_state_registry*, const ::ruvia::stop_token&) = delete;
-    web_worker_context(const worker_ref&, const detail::worker_client_registry_view&,
-        const detail::worker_state_registry*, ::ruvia::stop_token&&) = delete;
-    web_worker_context(worker_ref&&, const detail::worker_client_registry_view&,
-        const detail::worker_state_registry*, ::ruvia::stop_token&&) = delete;
+    web_worker_context(const worker_ref& worker_value, const detail::worker_client_registry_view& client_registries, const detail::worker_state_registry* worker_states, const ::ruvia::stop_token& stop_token_value) noexcept;
+    web_worker_context(worker_ref&&, const detail::worker_client_registry_view&, const detail::worker_state_registry*, const ::ruvia::stop_token&) = delete;
+    web_worker_context(const worker_ref&, const detail::worker_client_registry_view&, const detail::worker_state_registry*, ::ruvia::stop_token&&) = delete;
+    web_worker_context(worker_ref&&, const detail::worker_client_registry_view&, const detail::worker_state_registry*, ::ruvia::stop_token&&) = delete;
 
     // The server worker owns these values and joins every posted job before
     // retiring them. Contexts borrow them so starting a job does not copy
@@ -1026,9 +991,7 @@ public:
     [[nodiscard]] web_worker_stats stats() const noexcept;
 
     template <typename fn_type>
-        requires std::invocable<std::decay_t<fn_type>&, web_worker_context&> &&
-                 std::same_as<std::invoke_result_t<std::decay_t<fn_type>&, web_worker_context&>,
-                     task<void>>
+        requires std::invocable<std::decay_t<fn_type>&, web_worker_context&> && std::same_as<std::invoke_result_t<std::decay_t<fn_type>&, web_worker_context&>, task<void>>
     [[nodiscard]] web_worker_post_result post(fn_type&& fn) const {
         return post_task(move_only_function<task<void>(web_worker_context&)>(std::forward<fn_type>(fn)));
     }
@@ -1038,8 +1001,7 @@ private:
 
     web_worker_ref(std::shared_ptr<detail::web_worker_dispatch> dispatch) noexcept;
 
-    [[nodiscard]] web_worker_post_result post_task(
-        move_only_function<task<void>(web_worker_context&)> task) const;
+    [[nodiscard]] web_worker_post_result post_task(move_only_function<task<void>(web_worker_context&)> task) const;
 
     // The handle owns a stable terminal endpoint. Server shutdown closes it;
     // retaining a handle cannot retain the server or its io_context.
@@ -1126,8 +1088,7 @@ public:
                 return awaiter_.await_ready();
             }
 
-            [[nodiscard]] std::coroutine_handle<> await_suspend(
-                std::coroutine_handle<> continuation) noexcept {
+            [[nodiscard]] std::coroutine_handle<> await_suspend(std::coroutine_handle<> continuation) noexcept {
                 return awaiter_.await_suspend(continuation);
             }
 
@@ -1141,8 +1102,8 @@ public:
         private:
             friend class awaitable;
 
-            explicit awaiter(task<void>&& task_value)
-                : awaiter_(std::move(task_value).operator co_await()) {}
+            explicit awaiter(task<void>&& task_value) :
+                awaiter_(std::move(task_value).operator co_await()) {}
 
             decltype(std::declval<task<void>>().operator co_await()) awaiter_;
         };
@@ -1170,9 +1131,9 @@ public:
     private:
         friend class next;
 
-        constexpr awaitable(detail::next_state state_value, detail::next_invoke_type invoke) noexcept
-            : state_(state_value),
-              invoke_(invoke) {}
+        constexpr awaitable(detail::next_state state_value, detail::next_invoke_type invoke) noexcept :
+            state_(state_value),
+            invoke_(invoke) {}
 
         detail::next_state state_;
         detail::next_invoke_type invoke_{nullptr};
@@ -1198,9 +1159,9 @@ public:
 private:
     friend struct detail::next_access;
 
-    constexpr next(detail::next_state state_value, detail::next_invoke_type invoke) noexcept
-        : state_(state_value),
-          invoke_(invoke) {}
+    constexpr next(detail::next_state state_value, detail::next_invoke_type invoke) noexcept :
+        state_(state_value),
+        invoke_(invoke) {}
 
     detail::next_state state_;
     detail::next_invoke_type invoke_{nullptr};
@@ -1218,14 +1179,13 @@ private:
 // use<T>() call site needs router.h, controller.h, or testing.h.
 // This header stays free of context so app.h does not pull it in.
 template <typename middleware_type>
-concept middleware = std::is_class_v<middleware_type> && std::is_final_v<middleware_type> &&
-                     (requires { static_cast<task<void> (middleware_type::*)(context&, next&)>(&middleware_type::invoke); } || requires { static_cast<task<void> (middleware_type::*)(context&, next&) const>(&middleware_type::invoke); });
+concept middleware = std::is_class_v<middleware_type> && std::is_final_v<middleware_type> && (requires { static_cast<task<void> (middleware_type::*)(context&, next&)>(&middleware_type::invoke); } || requires { static_cast<task<void> (middleware_type::*)(context&, next&) const>(&middleware_type::invoke); });
 template <typename policy_type>
-concept route_policy =
-    std::is_class_v<policy_type> && std::is_final_v<policy_type> && !middleware<policy_type> &&
-    (requires {
-        { policy_type::ruvia_request_body_limit_bytes } -> std::convertible_to<std::size_t>; } || requires {
-            { policy_type::ruvia_stream_request_body } -> std::convertible_to<bool>; });
+concept route_policy = std::is_class_v<policy_type> && std::is_final_v<policy_type> && !middleware<policy_type> && (requires {
+    { policy_type::ruvia_request_body_limit_bytes } -> std::convertible_to<std::size_t>;
+} || requires {
+    { policy_type::ruvia_stream_request_body } -> std::convertible_to<bool>;
+});
 
 template <typename modifier_type>
 concept route_modifier = middleware<modifier_type> || route_policy<modifier_type>;
@@ -1319,19 +1279,16 @@ private:
     template <route_policy policy_type>
     friend constexpr controller_middleware_descriptor describe_route_policy() noexcept;
 
-    constexpr controller_middleware_descriptor(invoke_type invoke, create_type create, destroy_type destroy,
-        const void* args, const void* validated_model_type_key, bool uses_route_rate_limit,
-        bool runs_on_unmatched_requests, std::size_t request_body_limit,
-        bool stream_request_body = false) noexcept
-        : invoke_(invoke),
-          create_(create),
-          destroy_(destroy),
-          args_(args),
-          validated_model_type_key_(validated_model_type_key),
-          uses_route_rate_limit_(uses_route_rate_limit),
-          request_body_limit_(request_body_limit),
-          runs_on_unmatched_requests_(runs_on_unmatched_requests),
-          stream_request_body_(stream_request_body) {}
+    constexpr controller_middleware_descriptor(invoke_type invoke, create_type create, destroy_type destroy, const void* args, const void* validated_model_type_key, bool uses_route_rate_limit, bool runs_on_unmatched_requests, std::size_t request_body_limit, bool stream_request_body = false) noexcept :
+        invoke_(invoke),
+        create_(create),
+        destroy_(destroy),
+        args_(args),
+        validated_model_type_key_(validated_model_type_key),
+        uses_route_rate_limit_(uses_route_rate_limit),
+        request_body_limit_(request_body_limit),
+        runs_on_unmatched_requests_(runs_on_unmatched_requests),
+        stream_request_body_(stream_request_body) {}
     invoke_type invoke_{nullptr};
     create_type create_{nullptr};
     destroy_type destroy_{nullptr};
@@ -1353,17 +1310,17 @@ class owned_middleware_descriptor final {
 public:
     using release_args_type = void (*)(const void* args) noexcept;
 
-    owned_middleware_descriptor(controller_middleware_descriptor descriptor, release_args_type release_args) noexcept
-        : descriptor_(descriptor),
-          release_args_(release_args) {}
+    owned_middleware_descriptor(controller_middleware_descriptor descriptor, release_args_type release_args) noexcept :
+        descriptor_(descriptor),
+        release_args_(release_args) {}
 
     owned_middleware_descriptor(const owned_middleware_descriptor&) = delete;
     owned_middleware_descriptor& operator=(const owned_middleware_descriptor&) = delete;
 
-    owned_middleware_descriptor(owned_middleware_descriptor&& other) noexcept
-        : prefix_(std::move(other.prefix_)),
-          descriptor_(other.descriptor_.scoped_to(prefix_)),
-          release_args_(std::exchange(other.release_args_, nullptr)) {}
+    owned_middleware_descriptor(owned_middleware_descriptor&& other) noexcept :
+        prefix_(std::move(other.prefix_)),
+        descriptor_(other.descriptor_.scoped_to(prefix_)),
+        release_args_(std::exchange(other.release_args_, nullptr)) {}
     owned_middleware_descriptor& operator=(owned_middleware_descriptor&&) = delete;
 
     ~owned_middleware_descriptor() {
@@ -1396,15 +1353,11 @@ namespace ruvia::detail {
 
 template <middleware middleware_type>
 [[nodiscard]] task<void> invoke_middleware(void* target, context& context_value, next& next_value) {
-    if constexpr (requires {
-                      static_cast<task<void> (middleware_type::*)(context&, next&)>(&middleware_type::invoke);
-                  }) {
-        constexpr auto method =
-            static_cast<task<void> (middleware_type::*)(context&, next&)>(&middleware_type::invoke);
+    if constexpr (requires { static_cast<task<void> (middleware_type::*)(context&, next&)>(&middleware_type::invoke); }) {
+        constexpr auto method = static_cast<task<void> (middleware_type::*)(context&, next&)>(&middleware_type::invoke);
         return (static_cast<middleware_type*>(target)->*method)(context_value, next_value);
     } else {
-        constexpr auto method =
-            static_cast<task<void> (middleware_type::*)(context&, next&) const>(&middleware_type::invoke);
+        constexpr auto method = static_cast<task<void> (middleware_type::*)(context&, next&) const>(&middleware_type::invoke);
         return (static_cast<const middleware_type*>(target)->*method)(context_value, next_value);
     }
 }
@@ -1420,11 +1373,9 @@ template <typename middleware_type, typename args_type>
     if constexpr (std::tuple_size_v<args_type> == 0) {
         return static_cast<void*>(new middleware_type());
     } else {
-        return std::apply(
-            [](const auto&... values) {
-                return static_cast<void*>(new middleware_type(values...));
-            },
-            *static_cast<const args_type*>(args));
+        return std::apply([](const auto&... values) {
+            return static_cast<void*>(new middleware_type(values...));
+        }, *static_cast<const args_type*>(args));
     }
 }
 
@@ -1496,11 +1447,7 @@ template <typename middleware_type>
 // route properties, bound to the argument tuple (null when there is none).
 template <middleware middleware_type, typename args_type>
 [[nodiscard]] controller_middleware_descriptor describe_middleware(const void* args) noexcept {
-    return controller_middleware_descriptor(&invoke_middleware<middleware_type>,
-        &create_middleware<middleware_type, args_type>, &destroy_middleware<middleware_type>, args,
-        middleware_validated_model_type_key<middleware_type>(), middleware_uses_route_rate_limit<middleware_type>(),
-        middleware_runs_on_unmatched_requests<middleware_type>(), middleware_request_body_limit<middleware_type>(),
-        middleware_stream_request_body<middleware_type>());
+    return controller_middleware_descriptor(&invoke_middleware<middleware_type>, &create_middleware<middleware_type, args_type>, &destroy_middleware<middleware_type>, args, middleware_validated_model_type_key<middleware_type>(), middleware_uses_route_rate_limit<middleware_type>(), middleware_runs_on_unmatched_requests<middleware_type>(), middleware_request_body_limit<middleware_type>(), middleware_stream_request_body<middleware_type>());
 }
 
 // A default-constructed middleware, as controller and route middleware lists
@@ -1508,15 +1455,13 @@ template <middleware middleware_type, typename args_type>
 // route registration reruns on every route plan compile.
 template <middleware middleware_type>
 [[nodiscard]] controller_middleware_descriptor make_middleware_descriptor() noexcept {
-    static_assert(std::is_default_constructible_v<middleware_type>,
-        "middleware registered without arguments must be default constructible");
+    static_assert(std::is_default_constructible_v<middleware_type>, "middleware registered without arguments must be default constructible");
     return describe_middleware<middleware_type, std::tuple<>>(nullptr);
 }
 
 template <route_policy policy_type>
 [[nodiscard]] constexpr controller_middleware_descriptor describe_route_policy() noexcept {
-    return controller_middleware_descriptor(nullptr, nullptr, nullptr, nullptr, nullptr, false, false,
-        middleware_request_body_limit<policy_type>(), middleware_stream_request_body<policy_type>());
+    return controller_middleware_descriptor(nullptr, nullptr, nullptr, nullptr, nullptr, false, false, middleware_request_body_limit<policy_type>(), middleware_stream_request_body<policy_type>());
 }
 
 template <route_modifier modifier_type>
@@ -1545,8 +1490,7 @@ template <middleware middleware_type, typename... args_types>
     } else {
         using args_tuple_type = std::tuple<std::decay_t<args_types>...>;
         const auto* stored = new args_tuple_type(std::forward<args_types>(args)...);
-        return owned_middleware_descriptor(
-            describe_middleware<middleware_type, args_tuple_type>(stored), &release_middleware_args<args_tuple_type>);
+        return owned_middleware_descriptor(describe_middleware<middleware_type, args_tuple_type>(stored), &release_middleware_args<args_tuple_type>);
     }
 }
 
@@ -1621,13 +1565,11 @@ enum class security_header_conflict_policy : std::uint8_t {
 };
 
 struct security_headers_config final {
-    default_security_header_policy content_type_options_header_ =
-        default_security_header_policy::emit_default;
+    default_security_header_policy content_type_options_header_ = default_security_header_policy::emit_default;
     default_security_header_policy frame_options_header_ = default_security_header_policy::emit_default;
     // Emitted only for requests received over TLS. Plain HTTP responses must
     // never carry Strict-Transport-Security.
-    default_security_header_policy strict_transport_security_header_ =
-        default_security_header_policy::emit_default;
+    default_security_header_policy strict_transport_security_header_ = default_security_header_policy::emit_default;
     xss_protection_header_policy xss_protection_header_ = xss_protection_header_policy::emit_disabled;
 
     std::string content_security_policy_{"default-src 'self'"};
@@ -1722,10 +1664,8 @@ struct rate_limit_config final {
 // - IPv4 and IPv4-mapped IPv6 share the canonical dotted IPv4 host key;
 // - Unscoped IPv6 is grouped by its /64 network prefix ("v6/<16 hex>");
 // - Scoped IPv6 keys on its full 128-bit address and numeric scope ("v6s/<32 hex>/<scope>").
-[[nodiscard]] std::string_view format_rate_limit_address_key(
-    const ip_address& address, std::span<char, rate_limit_key_buffer_bytes> buffer) noexcept;
-[[nodiscard]] std::string_view format_rate_limit_address_key(
-    std::string_view address, std::span<char, rate_limit_key_buffer_bytes> buffer) noexcept;
+[[nodiscard]] std::string_view format_rate_limit_address_key(const ip_address& address, std::span<char, rate_limit_key_buffer_bytes> buffer) noexcept;
+[[nodiscard]] std::string_view format_rate_limit_address_key(std::string_view address, std::span<char, rate_limit_key_buffer_bytes> buffer) noexcept;
 
 struct rate_limit_decision final {
     bool allowed_{true};
@@ -1770,8 +1710,7 @@ void apply_rate_limit_headers(http_response& response, const rate_limit_decision
 class sliding_window_rate_limiter final {
 public:
     explicit sliding_window_rate_limiter(const rate_limit_config& config);
-    explicit sliding_window_rate_limiter(
-        std::size_t capacity_per_worker = default_rate_limit_capacity_per_worker);
+    explicit sliding_window_rate_limiter(std::size_t capacity_per_worker = default_rate_limit_capacity_per_worker);
     sliding_window_rate_limiter(const sliding_window_rate_limiter&) = delete;
     sliding_window_rate_limiter& operator=(const sliding_window_rate_limiter&) = delete;
     sliding_window_rate_limiter(sliding_window_rate_limiter&&) noexcept;
@@ -1781,17 +1720,11 @@ public:
     [[nodiscard]] bool has_default_rule() const noexcept;
     [[nodiscard]] std::size_t capacity() const noexcept;
 
-    [[nodiscard]] rate_limit_decision decide(std::string_view key,
-        std::chrono::steady_clock::time_point now = std::chrono::steady_clock::now()) noexcept;
-    [[nodiscard]] rate_limit_decision decide(const ip_address& address,
-        std::chrono::steady_clock::time_point now = std::chrono::steady_clock::now()) noexcept;
+    [[nodiscard]] rate_limit_decision decide(std::string_view key, std::chrono::steady_clock::time_point now = std::chrono::steady_clock::now()) noexcept;
+    [[nodiscard]] rate_limit_decision decide(const ip_address& address, std::chrono::steady_clock::time_point now = std::chrono::steady_clock::now()) noexcept;
 
-    [[nodiscard]] rate_limit_decision decide(std::string_view key, const rate_limit_rule& rule,
-        std::uintptr_t scope = 1,
-        std::chrono::steady_clock::time_point now = std::chrono::steady_clock::now()) noexcept;
-    [[nodiscard]] rate_limit_decision decide(const ip_address& address, const rate_limit_rule& rule,
-        std::uintptr_t scope = 1,
-        std::chrono::steady_clock::time_point now = std::chrono::steady_clock::now()) noexcept;
+    [[nodiscard]] rate_limit_decision decide(std::string_view key, const rate_limit_rule& rule, std::uintptr_t scope = 1, std::chrono::steady_clock::time_point now = std::chrono::steady_clock::now()) noexcept;
+    [[nodiscard]] rate_limit_decision decide(const ip_address& address, const rate_limit_rule& rule, std::uintptr_t scope = 1, std::chrono::steady_clock::time_point now = std::chrono::steady_clock::now()) noexcept;
 
 private:
     struct impl_type;
@@ -1826,8 +1759,7 @@ void enforce_route_rate_limit(context& context_value, const void* declaration, c
 // sliding-window estimate (see rate_limit_rule). A refused request is answered
 // like one the app-wide rule refuses: 429 through the application error
 // handler, with Retry-After and X-RateLimit-* fields.
-template <std::size_t max_requests, std::int64_t window_ms,
-    rate_limit_overflow_policy overflow_policy = rate_limit_overflow_policy::deny>
+template <std::size_t max_requests, std::int64_t window_ms, rate_limit_overflow_policy overflow_policy = rate_limit_overflow_policy::deny>
 class rate_limit final {
 public:
     static_assert(max_requests > 0, "route rate limit max requests must be greater than 0");
@@ -1885,8 +1817,8 @@ public:
     void regenerate();
 
 private:
-    explicit session(detail::context_session_state& state_value) noexcept
-        : state_(&state_value) {}
+    explicit session(detail::context_session_state& state_value) noexcept :
+        state_(&state_value) {}
 
     detail::context_session_state* state_;
     friend class context;

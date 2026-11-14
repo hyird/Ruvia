@@ -50,9 +50,6 @@
 #if defined(RUVIA_ENABLE_HTTP3)
 #include <ngtcp2/ngtcp2.h>
 #endif
-#if defined(RUVIA_ENABLE_HTTP3)
-#include "route_table.h"
-#endif
 
 #include <new>
 #include <optional>
@@ -107,22 +104,14 @@ void configure_listener_address(asio::ip::tcp::acceptor& socket) {
 #endif
 
 // The scanner also collects the worker's thread heap after an idle interval.
-[[nodiscard]] connection_scanner_options make_connection_scanner_options(
-    const http_server_options& options) noexcept {
+[[nodiscard]] connection_scanner_options make_connection_scanner_options(const http_server_options& options) noexcept {
     const auto& server = options.server_;
-    return connection_scanner_options{.scan_interval_ = server.connection_scan_interval_,
-        .idle_timeout_ = server.idle_timeout_,
-        .initial_read_timeout_ = server.request_header_timeout_,
-        .payload_read_timeout_ = server.request_body_timeout_,
-        .write_timeout_ = server.write_timeout_,
-        .initial_read_completion_timeout_ = server.header_completion_timeout_,
-        .payload_read_completion_timeout_ = server.body_completion_timeout_};
+    return connection_scanner_options{.scan_interval_ = server.connection_scan_interval_, .idle_timeout_ = server.idle_timeout_, .initial_read_timeout_ = server.request_header_timeout_, .payload_read_timeout_ = server.request_body_timeout_, .write_timeout_ = server.write_timeout_, .initial_read_completion_timeout_ = server.header_completion_timeout_, .payload_read_completion_timeout_ = server.body_completion_timeout_};
 }
 
 // Names the peer for the session's services and its failure report. Both stay
 // empty when the socket no longer knew its peer.
-void name_remote_endpoint(
-    const std::optional<asio::ip::tcp::endpoint>& remote, std::string& address, std::uint16_t& port) {
+void name_remote_endpoint(const std::optional<asio::ip::tcp::endpoint>& remote, std::string& address, std::uint16_t& port) {
     if (remote.has_value()) {
         assign_peer_address(address, remote->address());
         port = remote->port();
@@ -131,51 +120,34 @@ void name_remote_endpoint(
 
 }  // namespace
 
-worker_connections::worker_connections(asio::io_context& io, const worker_ref& worker_value,
-    const route_table& routes_value, worker_capabilities& capabilities,
-    http_server_options& options, const stop_token& stop_token_value, http_server_worker_state& state_value,
-    task_scope& tasks, std::span<const http_server_listener_definition> listeners, worker_failure_sink failure,
-    std::size_t worker_index
+worker_connections::worker_connections(asio::io_context& io, const worker_ref& worker_value, const route_table& routes_value, worker_capabilities& capabilities, http_server_options& options, const stop_token& stop_token_value, http_server_worker_state& state_value, task_scope& tasks, std::span<const http_server_listener_definition> listeners, worker_failure_sink failure, std::size_t worker_index
 #if defined(RUVIA_ENABLE_HTTP3)
     ,
     http3_worker_placement http3_placement
 #endif
-    )
-    : io_(io),
-      worker_(worker_value),
-      routes_(routes_value),
-      capabilities_(capabilities),
-      options_(options),
-      stop_token_(stop_token_value),
-      state_(state_value),
-      tasks_(tasks),
-      failure_(failure),
-      worker_index_(worker_index),
-      listeners_(),
-      scanner_(worker_value, make_connection_scanner_options(options))
+    ) :
+    io_(io),
+    worker_(worker_value),
+    routes_(routes_value),
+    capabilities_(capabilities),
+    options_(options),
+    stop_token_(stop_token_value),
+    state_(state_value),
+    tasks_(tasks),
+    failure_(failure),
+    worker_index_(worker_index),
+    listeners_(),
+    scanner_(worker_value, make_connection_scanner_options(options))
 #if defined(RUVIA_ENABLE_HTTP3)
-      ,
-      http3_placement_(http3_placement),
-      http3_services_{.io_ = io,
-          .worker_ = worker_value,
-          .routes_ = routes_value,
-          .capabilities_ = capabilities,
-          .options_ = options,
-          .scanner_ = scanner_,
-          .connection_count_ = connection_count_,
-          .connection_ids_ = connection_ids_,
-          .registry_ = registry_,
-          .stop_token_ = stop_token_value,
-          .state_ = state_value,
-          .refused_ = refused_,
-          .placement_ = http3_placement},
-      http3_endpoints_()
+    ,
+    http3_placement_(http3_placement),
+    http3_services_{.io_ = io, .worker_ = worker_value, .routes_ = routes_value, .capabilities_ = capabilities, .options_ = options, .scanner_ = scanner_, .connection_count_ = connection_count_, .connection_ids_ = connection_ids_, .registry_ = registry_, .stop_token_ = stop_token_value, .state_ = state_value, .refused_ = refused_, .placement_ = http3_placement},
+    http3_endpoints_()
 #endif
 {
     listeners_.reserve(listeners.size());
     for (const auto& configured : listeners) {
-        listeners_.push_back(
-            std::make_unique<listener>(io, worker_value, configured));
+        listeners_.push_back(std::make_unique<listener>(io, worker_value, configured));
         prepare_listener_gauge(listeners_.size() - 1, configured.endpoint_);
     }
 #if defined(RUVIA_ENABLE_HTTP3)
@@ -206,8 +178,8 @@ windows_acceptor::business_worker worker_connections::acceptor_target() noexcept
         .load_ = &connection_count_,
         .target_ = this,
         .adopt_ = [](void* target, std::size_t listener_index, windows_accepted_socket accepted) {
-            static_cast<worker_connections*>(target)->adopt_socket(listener_index, std::move(accepted));
-        },
+        static_cast<worker_connections*>(target)->adopt_socket(listener_index, std::move(accepted));
+    },
     };
 }
 
@@ -215,8 +187,7 @@ void worker_connections::adopt_socket(std::size_t listener_index, windows_accept
     assert(worker_.is_current());
     // A listener removed since the acceptor took the socket admits nothing:
     // the socket closes with `accepted`.
-    if (listener_index >= listeners_.size() || listeners_[listener_index] == nullptr ||
-        !listeners_[listener_index]->admitting_) {
+    if (listener_index >= listeners_.size() || listeners_[listener_index] == nullptr || !listeners_[listener_index]->admitting_) {
         return;
     }
     tcp_socket_type socket(io_);
@@ -259,8 +230,7 @@ void worker_connections::prepare_listener_resources(std::size_t index) {
     }
 #if !defined(_WIN32)
     auto& socket = configured.socket_;
-    const auto inherited =
-        configured.inherited_ != nullptr ? configured.inherited_->claim_tcp(worker_index_) : invalid_native_socket;
+    const auto inherited = configured.inherited_ != nullptr ? configured.inherited_->claim_tcp(worker_index_) : invalid_native_socket;
     if (inherited != invalid_native_socket) {
         // Checked to listen on this endpoint when it was handed over.
         std::error_code error;
@@ -306,10 +276,9 @@ void worker_connections::prepare_listener_resources(std::size_t index) {
 #endif
 #if defined(RUVIA_ENABLE_HTTP3)
     if (configured.http3_index_ && !http3_attached_) {
-        http3_placement_.directory_->attach(http3_placement_.worker_index_, this,
-            [](void* target, std::size_t listener_index, http3_handoff_datagram& datagram) noexcept {
-                static_cast<worker_connections*>(target)->receive_http3_handoff(listener_index, datagram);
-            });
+        http3_placement_.directory_->attach(http3_placement_.worker_index_, this, [](void* target, std::size_t listener_index, http3_handoff_datagram& datagram) noexcept {
+            static_cast<worker_connections*>(target)->receive_http3_handoff(listener_index, datagram);
+        });
         http3_attached_ = true;
     }
 #endif
@@ -331,8 +300,7 @@ void worker_connections::start_listener(std::size_t index) noexcept {
     }
 #endif
 }
-void worker_connections::prepare_listener(std::size_t index, [[maybe_unused]] std::optional<std::size_t> http3_index,
-    const http_server_listener_definition& definition, bool externally_accepted
+void worker_connections::prepare_listener(std::size_t index, [[maybe_unused]] std::optional<std::size_t> http3_index, const http_server_listener_definition& definition, bool externally_accepted
 #if defined(RUVIA_ENABLE_HTTP3)
     ,
     http3_worker_directory* directory
@@ -345,9 +313,7 @@ void worker_connections::prepare_listener(std::size_t index, [[maybe_unused]] st
 #endif
     );
 }
-void worker_connections::prepare_listener(std::size_t index, [[maybe_unused]] std::optional<std::size_t> http3_index,
-    const http_server_listener_definition& definition, bool externally_accepted,
-    prepared_http_server_session session
+void worker_connections::prepare_listener(std::size_t index, [[maybe_unused]] std::optional<std::size_t> http3_index, const http_server_listener_definition& definition, bool externally_accepted, prepared_http_server_session session
 #if defined(RUVIA_ENABLE_HTTP3)
     ,
     http3_worker_directory* directory
@@ -441,8 +407,7 @@ void worker_connections::remove_listener(std::size_t index, [[maybe_unused]] std
 #if !defined(_WIN32)
 listener_socket_duplicates worker_connections::duplicate_listener(std::size_t index) {
     assert(worker_.is_current());
-    if (index >= listeners_.size() || listeners_[index] == nullptr || !listeners_[index]->admitting_ ||
-        !listeners_[index]->socket_.is_open()) {
+    if (index >= listeners_.size() || listeners_[index] == nullptr || !listeners_[index]->admitting_ || !listeners_[index]->socket_.is_open()) {
         throw std::logic_error("the listener no longer accepts on this worker");
     }
     auto& configured = *listeners_[index];
@@ -541,8 +506,7 @@ void worker_connections::retire_tls() noexcept {
         }
     }
 }
-void worker_connections::adopt_tls_identities(
-    std::size_t listener_index, std::shared_ptr<const http_server_tls_identities> identities) noexcept {
+void worker_connections::adopt_tls_identities(std::size_t listener_index, std::shared_ptr<const http_server_tls_identities> identities) noexcept {
     assert(worker_.is_current());
     if (listener_index < listeners_.size() && listeners_[listener_index] != nullptr) {
         listeners_[listener_index]->session_.adopt_tls_identities(std::move(identities));
@@ -582,8 +546,7 @@ task<void> worker_connections::rotate_tls_ticket_keys() {
             }
             next = std::min(next, ring.next_rotation(now));
         }
-        if (next == std::chrono::steady_clock::time_point::max() ||
-            co_await sleep_until(worker_, next, stop_token_) == timer_sleep_result::stop_requested) {
+        if (next == std::chrono::steady_clock::time_point::max() || co_await sleep_until(worker_, next, stop_token_) == timer_sleep_result::stop_requested) {
             break;
         }
     }
@@ -622,9 +585,7 @@ http_server_stats worker_connections::stats() const {
         }
         const auto active = gauge->count_.active();
         if (gauge->serving_.load(std::memory_order_relaxed) || active != 0) {
-            result.listeners_.push_back({.address_ = to_ip_address(gauge->endpoint_.address()),
-                .port_ = gauge->endpoint_.port(),
-                .active_connections_ = active});
+            result.listeners_.push_back({.address_ = to_ip_address(gauge->endpoint_.address()), .port_ = gauge->endpoint_.port(), .active_connections_ = active});
         }
     }
     return result;
@@ -672,8 +633,7 @@ task<void> worker_connections::run_accept_loop(std::size_t index) {
             } catch (...) {
                 report_accept_failure(std::current_exception(), false);
             }
-            if (co_await sleep_for(worker_, std::chrono::milliseconds(25), stop_token_) ==
-                timer_sleep_result::stop_requested) {
+            if (co_await sleep_for(worker_, std::chrono::milliseconds(25), stop_token_) == timer_sleep_result::stop_requested) {
                 break;
             }
         }
@@ -702,8 +662,7 @@ void worker_connections::report_accept_failure(std::exception_ptr failure, bool 
 // carries none of the TLS stream, handshake and certificate state. Both keep
 // the remote address outside their try so the failure report can name the
 // peer; it stays empty if the failure happened before the address was resolved.
-task<void> worker_connections::run_session(http_server_session_config& listener_value,
-    accepted_connection_lease connection, std::optional<asio::ip::tcp::endpoint> remote, std::uint64_t connection_id, std::vector<std::byte> prefix) {
+task<void> worker_connections::run_session(http_server_session_config& listener_value, accepted_connection_lease connection, std::optional<asio::ip::tcp::endpoint> remote, std::uint64_t connection_id, std::vector<std::byte> prefix) {
     auto& socket = connection.socket();
     auto& lifecycle = connection.lifecycle();
     inbound_socket_stream input(socket, prefix, &lifecycle);
@@ -715,23 +674,11 @@ task<void> worker_connections::run_session(http_server_session_config& listener_
             co_return;
         }
         if (listener_value.connection_.has_value()) {
-            co_await serve_connection(input, socket,
-                server_connection_fields{.id_ = connection_id,
-                    .local_address_ = {},
-                    .local_port_ = 0,
-                    .remote_address_ = remote_address,
-                    .remote_port_ = remote_port,
-                    .tls_ = std::nullopt,
-                    .state_ = &lifecycle.state(),
-                    .lifecycle_ = &lifecycle});
+            co_await serve_connection(input, socket, server_connection_fields{.id_ = connection_id, .local_address_ = {}, .local_port_ = 0, .remote_address_ = remote_address, .remote_port_ = remote_port, .tls_ = std::nullopt, .state_ = &lifecycle.state(), .lifecycle_ = &lifecycle});
             ruvia::close_socket(socket);
             co_return;
         }
-        const auto close_mode = co_await run_stream(listener_value, input, socket,
-            capabilities_.make_context_services(stop_token_)
-                .with_plain_transport(connection_id, remote_address, remote_port)
-                .with_connection_lifecycle(lifecycle)
-                .with_request_stream(listener_value.request_stream_ ? options_.request_stream_ : request_stream_callback_ref{}));
+        const auto close_mode = co_await run_stream(listener_value, input, socket, capabilities_.make_context_services(stop_token_).with_plain_transport(connection_id, remote_address, remote_port).with_connection_lifecycle(lifecycle).with_request_stream(listener_value.request_stream_ ? options_.request_stream_ : request_stream_callback_ref{}));
         // Plain TCP has no close alert: only a lingering close differs from an
         // immediate one. A worker stop closes at once; scanner close_all
         // reaches a lingering close that is already running.
@@ -745,8 +692,7 @@ task<void> worker_connections::run_session(http_server_session_config& listener_
     }
 }
 
-task<void> worker_connections::run_tls_session(http_server_session_config& listener_value,
-    accepted_connection_lease connection, std::optional<asio::ip::tcp::endpoint> remote, std::uint64_t connection_id, std::vector<std::byte> prefix) {
+task<void> worker_connections::run_tls_session(http_server_session_config& listener_value, accepted_connection_lease connection, std::optional<asio::ip::tcp::endpoint> remote, std::uint64_t connection_id, std::vector<std::byte> prefix) {
     auto& socket = connection.socket();
     auto& lifecycle = connection.lifecycle();
     inbound_socket_stream input(socket, prefix, &lifecycle);
@@ -794,14 +740,7 @@ task<void> worker_connections::run_tls_session(http_server_session_config& liste
             if (!local_error) {
                 assign_peer_address(local_address_text, local_address);
             }
-            client_hello.emplace(tls_client_hello_observation{.callback_ = options_.tls_client_hello_,
-                .fields_ = {.connection_id_ = connection_id,
-                    .local_address_ = local_address_text,
-                    .local_port_ = local_error ? std::uint16_t{0} : local.port(),
-                    .remote_address_ = remote_address,
-                    .remote_port_ = remote_port,
-                    .quic_ = false,
-                    .message_ = {}}});
+            client_hello.emplace(tls_client_hello_observation{.callback_ = options_.tls_client_hello_, .fields_ = {.connection_id_ = connection_id, .local_address_ = local_address_text, .local_port_ = local_error ? std::uint16_t{0} : local.port(), .remote_address_ = remote_address, .remote_port_ = remote_port, .quic_ = false, .message_ = {}}});
         }
         server_tls_stream tls_stream(input, *listener_value.tls_context_);
         if (!local_error) {
@@ -829,32 +768,14 @@ task<void> worker_connections::run_tls_session(http_server_session_config& liste
         const auto alpn = tls_selected_alpn(native_tls);
         const auto server_name = tls_server_name(native_tls);
         if (listener_value.connection_.has_value()) {
-            co_await serve_connection(tls_stream, socket,
-                server_connection_fields{.id_ = connection_id,
-                    .local_address_ = {},
-                    .local_port_ = 0,
-                    .remote_address_ = remote_address,
-                    .remote_port_ = remote_port,
-                    .tls_ = server_connection_fields::tls_type{.client_certificate_subject_ = client_subject,
-                        .alpn_ = alpn,
-                        .server_name_ = server_name},
-                    .state_ = &lifecycle.state(),
-                    .lifecycle_ = &lifecycle});
+            co_await serve_connection(tls_stream, socket, server_connection_fields{.id_ = connection_id, .local_address_ = {}, .local_port_ = 0, .remote_address_ = remote_address, .remote_port_ = remote_port, .tls_ = server_connection_fields::tls_type{.client_certificate_subject_ = client_subject, .alpn_ = alpn, .server_name_ = server_name}, .state_ = &lifecycle.state(), .lifecycle_ = &lifecycle});
             ruvia::close_socket(socket);
             co_return;
         }
         tls_served_certificate served_certificate(SSL_get_certificate(&native_tls));
-        const auto services = capabilities_.make_context_services(stop_token_)
-                                  .with_tls_transport(connection_id, remote_address, client_subject, alpn, server_name,
-                                      remote_port, served_certificate)
-                                  .with_connection_lifecycle(lifecycle)
-                                  .with_alternative_service(listener_value.alternative_service_)
-                                  .with_request_stream(listener_value.request_stream_ ? options_.request_stream_
-                                                                                      : request_stream_callback_ref{});
+        const auto services = capabilities_.make_context_services(stop_token_).with_tls_transport(connection_id, remote_address, client_subject, alpn, server_name, remote_port, served_certificate).with_connection_lifecycle(lifecycle).with_alternative_service(listener_value.alternative_service_).with_request_stream(listener_value.request_stream_ ? options_.request_stream_ : request_stream_callback_ref{});
 #if defined(RUVIA_ENABLE_HTTP2)
-        const auto close_mode = alpn == "h2"
-                                    ? co_await run_http2(tls_stream, socket, services)
-                                    : co_await run_stream(listener_value, tls_stream, socket, services);
+        const auto close_mode = alpn == "h2" ? co_await run_http2(tls_stream, socket, services) : co_await run_stream(listener_value, tls_stream, socket, services);
 #else
         const auto close_mode = co_await run_stream(listener_value, tls_stream, socket, services);
 #endif
@@ -870,8 +791,7 @@ task<void> worker_connections::run_tls_session(http_server_session_config& liste
     }
 }
 
-void worker_connections::report_session_failure(
-    tcp_socket_type& socket, std::string_view remote_address, std::exception_ptr failure) noexcept {
+void worker_connections::report_session_failure(tcp_socket_type& socket, std::string_view remote_address, std::exception_ptr failure) noexcept {
     // Last-resort safety net: any exception that escapes the session
     // body (including bad_alloc, error-handler failures, or framework
     // bugs) must not reach tasks_, where a child failure stops the scope.
@@ -893,8 +813,7 @@ void worker_connections::adopt_connection(std::size_t index, native_socket nativ
         }
     } owner{native};
     tcp_socket_type socket(io_);
-    if (!worker_.is_current() || index >= listeners_.size() || listeners_[index] == nullptr ||
-        !listeners_[index]->admitting_ || !http_server_worker_running(state_)) {
+    if (!worker_.is_current() || index >= listeners_.size() || listeners_[index] == nullptr || !listeners_[index]->admitting_ || !http_server_worker_running(state_)) {
         throw std::logic_error("connection service is not accepting on this worker");
     }
     std::error_code error;
@@ -928,15 +847,16 @@ void worker_connections::accept_socket(std::size_t index, tcp_socket_type socket
     }
 }
 
-task<void> worker_connections::prepare_connection(std::size_t index, tcp_socket_type socket,
-    std::vector<std::byte> prefix, std::optional<ip_endpoint> remote) {
+task<void> worker_connections::prepare_connection(std::size_t index, tcp_socket_type socket, std::vector<std::byte> prefix, std::optional<ip_endpoint> remote) {
     try {
         operation_interrupt_source source;
         auto limit = options_.server_.header_completion_timeout_;
         if (const auto request = options_.server_.request_header_timeout_; request && (!limit || *request < *limit)) {
             limit = request;
         }
-        operation_interrupt interrupt(source, worker_, {.timeout_ = operation_timeout(limit.value_or(std::chrono::seconds(30))), .stop_token_ = stop_token_}, &socket, [](void* raw) noexcept { ruvia::close_socket(*static_cast<tcp_socket_type*>(raw)); }, "PROXY protocol header");
+        operation_interrupt interrupt(source, worker_, {.timeout_ = operation_timeout(limit.value_or(std::chrono::seconds(30))), .stop_token_ = stop_token_}, &socket, [](void* raw) noexcept {
+            ruvia::close_socket(*static_cast<tcp_socket_type*>(raw));
+        }, "PROXY protocol header");
         proxy_protocol_parser parser;
         std::array<std::byte, 1024> buffer;
         std::span<const std::byte> input = prefix;
@@ -975,8 +895,7 @@ task<void> worker_connections::prepare_connection(std::size_t index, tcp_socket_
     }
 }
 
-void worker_connections::admit_socket(std::size_t listener_index, tcp_socket_type socket,
-    std::optional<ip_endpoint> effective_remote, std::vector<std::byte> prefix, std::size_t bytes_read) {
+void worker_connections::admit_socket(std::size_t listener_index, tcp_socket_type socket, std::optional<ip_endpoint> effective_remote, std::vector<std::byte> prefix, std::size_t bytes_read) {
     assert(worker_.is_current());
     if (!http_server_worker_running(state_)) {
         return;
@@ -1000,30 +919,25 @@ void worker_connections::admit_socket(std::size_t listener_index, tcp_socket_typ
             return;
         }
         const auto connection_id = connection_ids_.next();
-        connection_event event(connection_id, {to_ip_address(local.address()), local.port()},
-            {to_ip_address(remote->address()), remote->port()}, false);
+        connection_event event(connection_id, {to_ip_address(local.address()), local.port()}, {to_ip_address(remote->address()), remote->port()}, false);
         if (options_.connection_admission_ && !options_.connection_admission_(event)) {
             refused_.fetch_add(1, std::memory_order_relaxed);
             return;
         }
         const auto& max_connections = options_.server_.max_connections_per_worker_;
         // Rejected peers must not evict an existing reusable connection.
-        if (max_connections.has_value() && connection_count_.active() >= *max_connections &&
-            !scanner_.evict_oldest_reusable()) {
+        if (max_connections.has_value() && connection_count_.active() >= *max_connections && !scanner_.evict_oldest_reusable()) {
             refused_.fetch_add(1, std::memory_order_relaxed);
             return;
         }
-        connection_lifecycle lifecycle(registry_, &listeners_[listener_index]->session_, std::move(event), options_.connection_open_, options_.connection_close_,
-            0, connection_transport::tcp(socket));
+        connection_lifecycle lifecycle(registry_, &listeners_[listener_index]->session_, std::move(event), options_.connection_open_, options_.connection_close_, 0, connection_transport::tcp(socket));
         lifecycle.note_read(bytes_read);
         accepted_connection_lease connection(std::move(socket), gauges_[listener_index]->count_, std::move(lifecycle));
         // The session borrows its listener, whose scope joins it before the
         // listener retires.
         auto& configured = *listeners_[listener_index];
         auto& listener_value = configured.session_;
-        configured.tasks_.spawn(listener_value.tls() != nullptr
-                                    ? run_tls_session(listener_value, std::move(connection), remote, connection_id, std::move(prefix))
-                                    : run_session(listener_value, std::move(connection), remote, connection_id, std::move(prefix)));
+        configured.tasks_.spawn(listener_value.tls() != nullptr ? run_tls_session(listener_value, std::move(connection), remote, connection_id, std::move(prefix)) : run_session(listener_value, std::move(connection), remote, connection_id, std::move(prefix)));
     } catch (...) {
         auto failure = std::current_exception();
         std::string remote_address;
@@ -1067,8 +981,7 @@ constexpr std::size_t minimum_queue_capacity = 64;
 template <typename socket_type>
 void claim_exclusive_address(socket_type& socket) {
     const BOOL enabled = TRUE;
-    if (::setsockopt(socket.native_handle(), SOL_SOCKET, SO_EXCLUSIVEADDRUSE, reinterpret_cast<const char*>(&enabled),
-            static_cast<int>(sizeof(enabled))) == SOCKET_ERROR) {
+    if (::setsockopt(socket.native_handle(), SOL_SOCKET, SO_EXCLUSIVEADDRUSE, reinterpret_cast<const char*>(&enabled), static_cast<int>(sizeof(enabled))) == SOCKET_ERROR) {
         throw std::system_error(last_socket_error(), "failed to enable listener SO_EXCLUSIVEADDRUSE");
     }
 }
@@ -1077,8 +990,7 @@ void claim_exclusive_address(socket_type& socket) {
     GUID identifier = WSAID_ACCEPTEX;
     LPFN_ACCEPTEX accept_ex = nullptr;
     DWORD bytes = 0;
-    if (::WSAIoctl(listener, SIO_GET_EXTENSION_FUNCTION_POINTER, &identifier, static_cast<DWORD>(sizeof(identifier)),
-            &accept_ex, static_cast<DWORD>(sizeof(accept_ex)), &bytes, nullptr, nullptr) == SOCKET_ERROR) {
+    if (::WSAIoctl(listener, SIO_GET_EXTENSION_FUNCTION_POINTER, &identifier, static_cast<DWORD>(sizeof(identifier)), &accept_ex, static_cast<DWORD>(sizeof(accept_ex)), &bytes, nullptr, nullptr) == SOCKET_ERROR) {
         throw std::system_error(last_socket_error(), "failed to resolve listener AcceptEx");
     }
     return accept_ex;
@@ -1089,8 +1001,7 @@ template <typename function_type>
 [[nodiscard]] function_type resolve_message_extension(SOCKET socket, GUID identifier) {
     function_type function = nullptr;
     DWORD bytes = 0;
-    if (::WSAIoctl(socket, SIO_GET_EXTENSION_FUNCTION_POINTER, &identifier, static_cast<DWORD>(sizeof(identifier)),
-            &function, static_cast<DWORD>(sizeof(function)), &bytes, nullptr, nullptr) == SOCKET_ERROR) {
+    if (::WSAIoctl(socket, SIO_GET_EXTENSION_FUNCTION_POINTER, &identifier, static_cast<DWORD>(sizeof(identifier)), &function, static_cast<DWORD>(sizeof(function)), &bytes, nullptr, nullptr) == SOCKET_ERROR) {
         throw std::system_error(last_socket_error(), "failed to resolve UDP message extension");
     }
     return function;
@@ -1100,8 +1011,7 @@ void enable_udp_packet_info(asio::ip::udp::socket& socket) {
     const DWORD enabled = 1;
     const auto native = socket.native_handle();
     const auto enable = [&](int level, int option) {
-        return ::setsockopt(native, level, option, reinterpret_cast<const char*>(&enabled),
-            static_cast<int>(sizeof(enabled)));
+        return ::setsockopt(native, level, option, reinterpret_cast<const char*>(&enabled), static_cast<int>(sizeof(enabled)));
     };
     if (socket.local_endpoint().protocol() == asio::ip::udp::v6()) {
         if (enable(IPPROTO_IPV6, IPV6_PKTINFO) == SOCKET_ERROR) {
@@ -1137,14 +1047,12 @@ struct udp_packet_destination final {
     std::uint32_t interface_index_;
 };
 
-[[nodiscard]] std::optional<udp_packet_destination> packet_destination(
-    WSAMSG& message, const asio::ip::udp::endpoint& remote, std::uint16_t port) {
+[[nodiscard]] std::optional<udp_packet_destination> packet_destination(WSAMSG& message, const asio::ip::udp::endpoint& remote, std::uint16_t port) {
     if ((message.dwFlags & MSG_CTRUNC) != 0) {
         return std::nullopt;
     }
     for (auto* header = WSA_CMSG_FIRSTHDR(&message); header != nullptr; header = WSA_CMSG_NXTHDR(&message, header)) {
-        if (header->cmsg_level == IPPROTO_IP && header->cmsg_type == IP_PKTINFO &&
-            header->cmsg_len >= WSA_CMSG_LEN(sizeof(IN_PKTINFO))) {
+        if (header->cmsg_level == IPPROTO_IP && header->cmsg_type == IP_PKTINFO && header->cmsg_len >= WSA_CMSG_LEN(sizeof(IN_PKTINFO))) {
             IN_PKTINFO info{};
             std::memcpy(&info, WSA_CMSG_DATA(header), sizeof(info));
             asio::ip::address_v4::bytes_type bytes{};
@@ -1155,8 +1063,7 @@ struct udp_packet_destination final {
             }
             return udp_packet_destination{{address, port}, info.ipi_ifindex};
         }
-        if (header->cmsg_level == IPPROTO_IPV6 && header->cmsg_type == IPV6_PKTINFO &&
-            header->cmsg_len >= WSA_CMSG_LEN(sizeof(IN6_PKTINFO))) {
+        if (header->cmsg_level == IPPROTO_IPV6 && header->cmsg_type == IPV6_PKTINFO && header->cmsg_len >= WSA_CMSG_LEN(sizeof(IN6_PKTINFO))) {
             IN6_PKTINFO info{};
             std::memcpy(&info, WSA_CMSG_DATA(header), sizeof(info));
             asio::ip::address_v6::bytes_type bytes{};
@@ -1175,8 +1082,7 @@ struct udp_packet_destination final {
 
 [[nodiscard]] std::size_t acceptor_queue_capacity(std::size_t worker_count) {
 #if defined(RUVIA_ENABLE_HTTP3)
-    constexpr auto max_workers =
-        ((std::numeric_limits<std::size_t>::max)() - minimum_queue_capacity) / http3_max_datagrams_in_flight;
+    constexpr auto max_workers = ((std::numeric_limits<std::size_t>::max)() - minimum_queue_capacity) / http3_max_datagrams_in_flight;
     if (worker_count > max_workers) {
         return (std::numeric_limits<std::size_t>::max)();
     }
@@ -1205,14 +1111,13 @@ struct windows_acceptor::worker_slot final {
 };
 
 struct windows_acceptor::tcp_listener final {
-    tcp_listener(asio::io_context& io, asio::ip::tcp::endpoint endpoint, std::size_t index,
-        std::optional<std::size_t> http3_index, std::shared_ptr<inherited_listener_sockets> inherited, std::optional<bool> ipv6_only)
-        : socket_(io),
-          endpoint_(endpoint),
-          ipv6_only_(ipv6_only),
-          index_(index),
-          http3_index_(http3_index),
-          inherited_(std::move(inherited)) {}
+    tcp_listener(asio::io_context& io, asio::ip::tcp::endpoint endpoint, std::size_t index, std::optional<std::size_t> http3_index, std::shared_ptr<inherited_listener_sockets> inherited, std::optional<bool> ipv6_only) :
+        socket_(io),
+        endpoint_(endpoint),
+        ipv6_only_(ipv6_only),
+        index_(index),
+        http3_index_(http3_index),
+        inherited_(std::move(inherited)) {}
 
     asio::ip::tcp::acceptor socket_;
     asio::ip::tcp::endpoint endpoint_;
@@ -1235,8 +1140,8 @@ struct windows_acceptor::tcp_listener final {
 
 #if defined(RUVIA_ENABLE_HTTP3)
 struct windows_acceptor::udp_transport final {
-    explicit udp_transport(asio::io_context& io)
-        : socket_(io) {}
+    explicit udp_transport(asio::io_context& io) :
+        socket_(io) {}
 
     asio::ip::udp::socket socket_;
     std::size_t listeners_{0};
@@ -1247,13 +1152,12 @@ struct windows_acceptor::udp_transport final {
 };
 
 struct windows_acceptor::udp_listener final {
-    udp_listener([[maybe_unused]] asio::io_context& io, asio::ip::udp::endpoint endpoint, std::shared_ptr<const http3_secret> secret,
-        std::size_t index, std::shared_ptr<inherited_listener_sockets> inherited, std::optional<bool> ipv6_only)
-        : endpoint_(endpoint),
-          ipv6_only_(ipv6_only),
-          secret_(std::move(secret)),
-          index_(index),
-          inherited_(std::move(inherited)) {}
+    udp_listener([[maybe_unused]] asio::io_context& io, asio::ip::udp::endpoint endpoint, std::shared_ptr<const http3_secret> secret, std::size_t index, std::shared_ptr<inherited_listener_sockets> inherited, std::optional<bool> ipv6_only) :
+        endpoint_(endpoint),
+        ipv6_only_(ipv6_only),
+        secret_(std::move(secret)),
+        index_(index),
+        inherited_(std::move(inherited)) {}
 
     ~udp_listener() {
         release_transport();
@@ -1284,24 +1188,22 @@ struct windows_acceptor::udp_listener final {
 };
 #endif
 
-windows_acceptor::windows_acceptor(std::span<const http_server_listener_definition> listeners,
-    std::size_t worker_count,
+windows_acceptor::windows_acceptor(std::span<const http_server_listener_definition> listeners, std::size_t worker_count,
 #if defined(RUVIA_ENABLE_HTTP3)
     http3_worker_directory* directory,
 #endif
-    worker_failure_sink failure)
-    : runtime_({.queue_capacity_ = acceptor_queue_capacity(worker_count),
-          .io_policy_ = worker_io_policy::single_owner}),
-      io_(runtime_.io_context()),
-      failure_sink_(failure),
-      finalize_signal_(runtime_.worker()),
-      tasks_(runtime_.worker()),
-      workers_(),
-      tcp_listeners_()
+    worker_failure_sink failure) :
+    runtime_({.queue_capacity_ = acceptor_queue_capacity(worker_count), .io_policy_ = worker_io_policy::single_owner}),
+    io_(runtime_.io_context()),
+    failure_sink_(failure),
+    finalize_signal_(runtime_.worker()),
+    tasks_(runtime_.worker()),
+    workers_(),
+    tcp_listeners_()
 #if defined(RUVIA_ENABLE_HTTP3)
-      ,
-      directory_(directory),
-      udp_listeners_()
+    ,
+    directory_(directory),
+    udp_listeners_()
 #endif
 {
     if (worker_count == 0) {
@@ -1327,41 +1229,55 @@ windows_acceptor::windows_acceptor(std::span<const http_server_listener_definiti
         tcp_listeners_.push_back(std::make_unique<tcp_listener>(io_, definition.endpoint_, index, http3_index, definition.inherited_sockets_, definition.ipv6_only_));
     }
     runtime_.configure({
-        .startup_ = [this] {
-            // Startup runs before the context does; the task starts in its first turn.
-            asio::post(io_, [this] {
-                ruvia::async_start(run(),
-                    asio::bind_executor(io_, [this](std::exception_ptr failure) noexcept {
-                                                     if (failure) {
-                                                         (void)runtime_.fail(failure);
-                                                     }
-                                                 }));
-            }); },
-        .serve_ = [this] { serve_on_context(); complete_phase(false); },
-        .stop_admission_ = [this] {
-            stopping_ = true;
-            close_admission();
-#if defined(RUVIA_ENABLE_HTTP3)
-            for (auto& listener : udp_listeners_) {
-                if (listener != nullptr && listener->transport_ != nullptr) {
-                    std::error_code ignored;
-                    listener->transport_->socket_.close(ignored);
+        .startup_ =
+            [this] {
+        // Startup runs before the context does; the task starts in its first turn.
+        asio::post(io_, [this] {
+            ruvia::async_start(run(), asio::bind_executor(io_, [this](std::exception_ptr failure) noexcept {
+                if (failure) {
+                    (void)runtime_.fail(failure);
                 }
+            }));
+        });
+    },
+        .serve_ =
+            [this] {
+        serve_on_context();
+        complete_phase(false);
+    },
+        .stop_admission_ =
+            [this] {
+        stopping_ = true;
+        close_admission();
+#if defined(RUVIA_ENABLE_HTTP3)
+        for (auto& listener : udp_listeners_) {
+            if (listener != nullptr && listener->transport_ != nullptr) {
+                std::error_code ignored;
+                listener->transport_->socket_.close(ignored);
             }
+        }
 #endif
-            runtime_.finalize(); },
-        .finalize_ = [this] { finalize_signal_.notify(); },
-        .failure_ = [this](std::exception_ptr failure) noexcept {
+        runtime_.finalize();
+    },
+        .finalize_ =
+            [this] {
+        finalize_signal_.notify();
+    },
+        .failure_ =
+            [this](std::exception_ptr failure) noexcept {
+        complete_phase(true, failure);
+        complete_phase(false, failure);
+        failure_sink_.notify(failure);
+    },
+        .shutdown_ = [this] {
+        try {
+            throw std::logic_error("HTTP server acceptor stopped before its phase completed");
+        } catch (...) {
+            const auto failure = std::current_exception();
             complete_phase(true, failure);
             complete_phase(false, failure);
-            failure_sink_.notify(failure); },
-        .shutdown_ = [this] {
-            try { throw std::logic_error("HTTP server acceptor stopped before its phase completed"); }
-            catch (...) {
-                const auto failure = std::current_exception();
-                complete_phase(true, failure);
-                complete_phase(false, failure);
-            } },
+        }
+    },
     });
 }
 
@@ -1372,8 +1288,7 @@ windows_acceptor::~windows_acceptor() {
 }
 
 void windows_acceptor::bind_worker(std::size_t index, business_worker target) {
-    if (index >= workers_.size() || !target.worker_.valid() || target.load_ == nullptr || target.target_ == nullptr ||
-        target.adopt_ == nullptr) {
+    if (index >= workers_.size() || !target.worker_.valid() || target.load_ == nullptr || target.target_ == nullptr || target.adopt_ == nullptr) {
         throw std::invalid_argument("invalid Windows acceptor worker");
     }
     workers_[index]->target_ = target;
@@ -1469,7 +1384,9 @@ task<void> windows_acceptor::join(worker_ref caller, asio::io_context& caller_io
             throw std::system_error(error, "failed to assign acceptor thread wait handle");
         }
         (void)native_owner.release();
-        const auto waited = co_await ruvia::async_asio([&thread](auto handler) { thread.async_wait(std::move(handler)); });
+        const auto waited = co_await ruvia::async_asio([&thread](auto handler) {
+            thread.async_wait(std::move(handler));
+        });
         if (waited.failed()) {
             throw std::system_error(waited.error_code(), "failed to await acceptor thread exit");
         }
@@ -1480,7 +1397,9 @@ task<void> windows_acceptor::join(worker_ref caller, asio::io_context& caller_io
 void windows_acceptor::stop_admission() noexcept {
     // A refused control means the acceptor is already stopping, which closes
     // admission itself.
-    (void)runtime_.post_control([this] { close_admission(); });
+    (void)runtime_.post_control([this] {
+        close_admission();
+    });
 }
 
 void windows_acceptor::request_stop() noexcept {
@@ -1560,8 +1479,7 @@ void windows_acceptor::open_tcp_listener(tcp_listener& listener) {
 void windows_acceptor::open_udp_listener(udp_listener& listener) {
     if (listener.inherited_ == nullptr || listener.inherited_->udp().empty()) {
         for (const auto& existing : udp_listeners_) {
-            if (existing != nullptr && existing->endpoint_ == listener.endpoint_ &&
-                existing->transport_ != nullptr && existing->transport_->socket_.is_open()) {
+            if (existing != nullptr && existing->endpoint_ == listener.endpoint_ && existing->transport_ != nullptr && existing->transport_->socket_.is_open()) {
                 if (listener.ipv6_only_ && existing->transport_->socket_.local_endpoint().address().is_v6()) {
                     asio::ip::v6_only value;
                     existing->transport_->socket_.get_option(value);
@@ -1578,8 +1496,7 @@ void windows_acceptor::open_udp_listener(udp_listener& listener) {
     }
     auto transport = std::make_shared<udp_transport>(io_);
     auto& socket = transport->socket_;
-    const auto inherited = listener.inherited_ != nullptr ? listener.inherited_->claim_udp()
-                                                          : std::vector<native_socket>();
+    const auto inherited = listener.inherited_ != nullptr ? listener.inherited_->claim_udp() : std::vector<native_socket>();
     listener.inherited_.reset();
     if (!inherited.empty()) {
         // listen() admitted exactly one, bound to this endpoint.
@@ -1649,8 +1566,7 @@ void windows_acceptor::start_listener(tcp_listener& listener) noexcept {
 #endif
 }
 
-void windows_acceptor::prepare_listener(std::size_t index, [[maybe_unused]] std::optional<std::size_t> http3_index,
-    const http_server_listener_definition& definition
+void windows_acceptor::prepare_listener(std::size_t index, [[maybe_unused]] std::optional<std::size_t> http3_index, const http_server_listener_definition& definition
 #if defined(RUVIA_ENABLE_HTTP3)
     ,
     http3_worker_directory* directory
@@ -1664,8 +1580,7 @@ void windows_acceptor::prepare_listener(std::size_t index, [[maybe_unused]] std:
     }
     auto tcp = std::make_unique<tcp_listener>(io_, definition.endpoint_, index, http3_index, definition.inherited_sockets_, definition.ipv6_only_);
 #if defined(RUVIA_ENABLE_HTTP3)
-    std::unique_ptr<udp_listener> udp(
-        nullptr, pmr_object_deleter<udp_listener>{});
+    std::unique_ptr<udp_listener> udp;
     if (http3_index.has_value()) {
         if (udp_listeners_.size() <= *http3_index) {
             udp_listeners_.resize(*http3_index + 1);
@@ -1773,8 +1688,7 @@ task<void> windows_acceptor::run_accepts(tcp_listener& listener) {
         while (admitting_ && listener.admitting_) {
             // Not associated with any completion port: the business worker
             // that adopts it binds it to its own.
-            windows_accepted_socket accepted(::WSASocketW(protocol.family(), protocol.type(), protocol.protocol(),
-                nullptr, 0, WSA_FLAG_OVERLAPPED | WSA_FLAG_NO_HANDLE_INHERIT));
+            windows_accepted_socket accepted(::WSASocketW(protocol.family(), protocol.type(), protocol.protocol(), nullptr, 0, WSA_FLAG_OVERLAPPED | WSA_FLAG_NO_HANDLE_INHERIT));
             std::error_code error;
             if (accepted.get() == INVALID_SOCKET) {
                 error = last_socket_error();
@@ -1782,8 +1696,7 @@ task<void> windows_acceptor::run_accepts(tcp_listener& listener) {
                 const auto completion = co_await ruvia::async_asio<std::size_t>([&](auto handler) {
                     asio::windows::overlapped_ptr native(io_, std::move(handler));
                     DWORD bytes = 0;
-                    const BOOL accepted_now = listener.accept_ex_(listener.socket_.native_handle(), accepted.get(),
-                        addresses.data(), 0, accept_address_bytes, accept_address_bytes, &bytes, native.get());
+                    const BOOL accepted_now = listener.accept_ex_(listener.socket_.native_handle(), accepted.get(), addresses.data(), 0, accept_address_bytes, accept_address_bytes, &bytes, native.get());
                     const int accept_error = accepted_now ? 0 : ::WSAGetLastError();
                     if (accepted_now || accept_error == ERROR_IO_PENDING) {
                         // Even a synchronous success posts its completion packet.
@@ -1802,8 +1715,7 @@ task<void> windows_acceptor::run_accepts(tcp_listener& listener) {
                 // Gives the socket the listener's properties (getpeername,
                 // shutdown); no completion port is involved.
                 const SOCKET listening = listener.socket_.native_handle();
-                if (::setsockopt(accepted.get(), SOL_SOCKET, SO_UPDATE_ACCEPT_CONTEXT,
-                        reinterpret_cast<const char*>(&listening), static_cast<int>(sizeof(listening))) == SOCKET_ERROR) {
+                if (::setsockopt(accepted.get(), SOL_SOCKET, SO_UPDATE_ACCEPT_CONTEXT, reinterpret_cast<const char*>(&listening), static_cast<int>(sizeof(listening))) == SOCKET_ERROR) {
                     error = last_socket_error();
                 } else {
                     dispatch(listener.index_, std::move(accepted));
@@ -1891,9 +1803,7 @@ task<void> windows_acceptor::run_receives(udp_listener& listener) {
     try {
         while (admitting_ && socket.is_open()) {
             asio::ip::udp::endpoint remote;
-            alignas(WSACMSGHDR) std::array<char,
-                WSA_CMSG_SPACE(sizeof(IN6_PKTINFO)) + WSA_CMSG_SPACE(sizeof(IN_PKTINFO))>
-                control{};
+            alignas(WSACMSGHDR) std::array<char, WSA_CMSG_SPACE(sizeof(IN6_PKTINFO)) + WSA_CMSG_SPACE(sizeof(IN_PKTINFO))> control{};
             WSABUF payload{};
             payload.buf = reinterpret_cast<char*>(buffer.data());
             payload.len = static_cast<ULONG>(buffer.size());
@@ -1907,8 +1817,7 @@ task<void> windows_acceptor::run_receives(udp_listener& listener) {
             const auto completion = co_await ruvia::async_asio<std::size_t>([&](auto handler) {
                 asio::windows::overlapped_ptr native(io_, std::move(handler));
                 DWORD received = 0;
-                const int result = transport->receive_message_(
-                    socket.native_handle(), &message, &received, native.get(), nullptr);
+                const int result = transport->receive_message_(socket.native_handle(), &message, &received, native.get(), nullptr);
                 const int error = result == 0 ? 0 : ::WSAGetLastError();
                 if (result == 0 || error == WSA_IO_PENDING) {
                     (void)native.release();
@@ -1929,8 +1838,7 @@ task<void> windows_acceptor::run_receives(udp_listener& listener) {
             remote.resize(static_cast<std::size_t>(message.namelen));
             const auto destination = packet_destination(message, remote, listener.endpoint_.port());
             if (destination) {
-                steer(listener, std::span<const std::byte>(buffer.data(), completion.result()),
-                    remote, destination->local_, destination->interface_index_);
+                steer(listener, std::span<const std::byte>(buffer.data(), completion.result()), remote, destination->local_, destination->interface_index_);
             }
         }
     } catch (...) {
@@ -1940,12 +1848,9 @@ task<void> windows_acceptor::run_receives(udp_listener& listener) {
     }
 }
 
-void windows_acceptor::steer(
-    const udp_listener& listener, std::span<const std::byte> bytes, const asio::ip::udp::endpoint& remote,
-    const asio::ip::udp::endpoint& local, std::uint32_t interface_index) noexcept {
+void windows_acceptor::steer(const udp_listener& listener, std::span<const std::byte> bytes, const asio::ip::udp::endpoint& remote, const asio::ip::udp::endpoint& local, std::uint32_t interface_index) noexcept {
     ngtcp2_version_cid header{};
-    const auto decoded = ngtcp2_pkt_decode_version_cid(
-        &header, reinterpret_cast<const std::uint8_t*>(bytes.data()), bytes.size(), http3_connection_id_length);
+    const auto decoded = ngtcp2_pkt_decode_version_cid(&header, reinterpret_cast<const std::uint8_t*>(bytes.data()), bytes.size(), http3_connection_id_length);
     if (decoded != 0 && decoded != NGTCP2_ERR_VERSION_NEGOTIATION) {
         return;
     }
@@ -1977,9 +1882,7 @@ void windows_acceptor::steer(
     (void)directory_->hand_off(*owner, listener_index, bytes, remote, local, interface_index);
 }
 
-bool windows_acceptor::transmit(std::size_t worker_index, std::size_t http3_listener_index,
-    const asio::ip::udp::endpoint& remote, std::span<const std::byte> bytes,
-    const asio::ip::udp::endpoint& local, std::uint32_t interface_index) noexcept {
+bool windows_acceptor::transmit(std::size_t worker_index, std::size_t http3_listener_index, const asio::ip::udp::endpoint& remote, std::span<const std::byte> bytes, const asio::ip::udp::endpoint& local, std::uint32_t interface_index) noexcept {
     auto token = http3_in_flight_token::reserve(workers_[worker_index]->egress_in_flight_);
     if (!token) {
         return false;
@@ -1987,8 +1890,7 @@ bool windows_acceptor::transmit(std::size_t worker_index, std::size_t http3_list
     try {
         const auto status = runtime_.worker().post_factory([&]() -> move_only_function<void()> {
             std::vector<std::byte> owned(bytes.begin(), bytes.end());
-            return [this, http3_listener_index, remote, local, interface_index, owned = std::move(owned),
-                       token = std::move(token)]() mutable noexcept {
+            return [this, http3_listener_index, remote, local, interface_index, owned = std::move(owned), token = std::move(token)]() mutable noexcept {
                 send_datagram(http3_listener_index, remote, owned, local, interface_index);
             };
         });
@@ -1998,9 +1900,7 @@ bool windows_acceptor::transmit(std::size_t worker_index, std::size_t http3_list
     }
 }
 
-void windows_acceptor::send_datagram(std::size_t http3_listener_index, const asio::ip::udp::endpoint& remote,
-    std::span<const std::byte> bytes, const asio::ip::udp::endpoint& local,
-    std::uint32_t interface_index) noexcept {
+void windows_acceptor::send_datagram(std::size_t http3_listener_index, const asio::ip::udp::endpoint& remote, std::span<const std::byte> bytes, const asio::ip::udp::endpoint& local, std::uint32_t interface_index) noexcept {
     // Errors (a full send buffer, a closed socket, an unreachable peer) lose
     // the datagram, as the network may; QUIC recovery handles the peer.
     if (const auto& listener = udp_listeners_[http3_listener_index]; listener != nullptr && listener->transport_ != nullptr) {
@@ -2020,8 +1920,7 @@ void windows_acceptor::send_datagram(std::size_t http3_listener_index, const asi
         message.dwBufferCount = 1;
         message.Control.buf = control.data();
         const auto source = local.address();
-        const bool ipv4 = remote.address().is_v4() ||
-                          (remote.address().is_v6() && remote.address().to_v6().is_v4_mapped());
+        const bool ipv4 = remote.address().is_v4() || (remote.address().is_v6() && remote.address().to_v6().is_v4_mapped());
         auto* header = reinterpret_cast<WSACMSGHDR*>(control.data());
         if (ipv4) {
             asio::ip::address_v4::bytes_type address{};
@@ -2048,9 +1947,7 @@ void windows_acceptor::send_datagram(std::size_t http3_listener_index, const asi
             IN6_PKTINFO info{};
             const auto address = source.to_v6().to_bytes();
             std::memcpy(&info.ipi6_addr, address.data(), address.size());
-            info.ipi6_ifindex = interface_index == 0
-                                    ? static_cast<ULONG>(source.to_v6().scope_id())
-                                    : interface_index;
+            info.ipi6_ifindex = interface_index == 0 ? static_cast<ULONG>(source.to_v6().scope_id()) : interface_index;
             message.Control.len = static_cast<ULONG>(WSA_CMSG_SPACE(sizeof(info)));
             header->cmsg_level = IPPROTO_IPV6;
             header->cmsg_type = IPV6_PKTINFO;
@@ -2143,16 +2040,13 @@ void connection_read_buffer::trim() {
 
 http1_deferred_access_log::http1_deferred_access_log() noexcept = default;
 
-void http1_deferred_access_log::defer(std::size_t head_end, const http_request& request,
-    ip_address client_address, std::chrono::steady_clock::time_point start,
-    http_status_code status, const request_io_metrics& io_metrics) {
+void http1_deferred_access_log::defer(std::size_t head_end, const http_request& request, ip_address client_address, std::chrono::steady_clock::time_point start, http_status_code status, const request_io_metrics& io_metrics) {
     const auto method = request.method();
     const auto path = request.path();
     const auto text_begin = text_.size();
     const auto required_text = text_begin + method.size() + path.size();
     if (required_text > text_.capacity()) {
-        text_.reserve(
-            std::max<std::size_t>(required_text, std::max<std::size_t>(256, text_.capacity() * 2)));
+        text_.reserve(std::max<std::size_t>(required_text, std::max<std::size_t>(256, text_.capacity() * 2)));
     }
     text_.append(method);
     text_.append(path);
@@ -2173,8 +2067,7 @@ void http1_deferred_access_log::defer(std::size_t head_end, const http_request& 
     });
 }
 
-void http1_deferred_access_log::complete(
-    const access_log_sink& access_log, ip_address remote_address, std::size_t written) noexcept {
+void http1_deferred_access_log::complete(const access_log_sink& access_log, ip_address remote_address, std::size_t written) noexcept {
     const std::string_view text = text_;
     for (const auto& entry : entries_) {
         if (entry.head_end_ > written) {
@@ -2230,16 +2123,14 @@ constexpr std::size_t linger_read_bytes = 4096;
 // owner closes TCP after the sequence completes either way.
 class graceful_close_bounds final {
 public:
-    graceful_close_bounds(asio::ip::tcp::socket& socket, connection_scanner& scanner,
-        const worker_ref& worker_value)
-        : guard_(scanner, entry_, connection_transport::tcp(socket)) {
+    graceful_close_bounds(asio::ip::tcp::socket& socket, connection_scanner& scanner, const worker_ref& worker_value) :
+        guard_(scanner, entry_, connection_transport::tcp(socket)) {
         entry_.set_phase(connection_scanner::phase::writing);
-        armed_ = worker_value.schedule_timer(timer_, deadline_after(graceful_close_time),
-                     [target = &socket](worker_timer_outcome outcome) {
-                         if (outcome == worker_timer_outcome::expired) {
-                             close_socket(*target);
-                         }
-                     }) == worker_timer_schedule_status::scheduled;
+        armed_ = worker_value.schedule_timer(timer_, deadline_after(graceful_close_time), [target = &socket](worker_timer_outcome outcome) {
+            if (outcome == worker_timer_outcome::expired) {
+                close_socket(*target);
+            }
+        }) == worker_timer_schedule_status::scheduled;
     }
 
     graceful_close_bounds(const graceful_close_bounds&) = delete;
@@ -2260,8 +2151,7 @@ private:
 
 // RFC 9112 §9.6: half-close, then read until the peer's end of input. Any
 // error -- including the bounds closing the socket -- ends the wait.
-task<void> close_gracefully(asio::ip::tcp::socket& socket, server_tls_stream* tls,
-    http_connection_close mode, connection_scanner& scanner, const worker_ref& worker_value) {
+task<void> close_gracefully(asio::ip::tcp::socket& socket, server_tls_stream* tls, http_connection_close mode, connection_scanner& scanner, const worker_ref& worker_value) {
     const graceful_close_bounds bounds(socket, scanner, worker_value);
     if (!bounds.armed() || !socket.is_open()) {
         co_return;
@@ -2301,13 +2191,11 @@ task<void> close_gracefully(asio::ip::tcp::socket& socket, server_tls_stream* tl
 
 }  // namespace
 
-task<void> linger_http_connection(
-    asio::ip::tcp::socket& socket, connection_scanner& scanner, const worker_ref& worker_value) {
+task<void> linger_http_connection(asio::ip::tcp::socket& socket, connection_scanner& scanner, const worker_ref& worker_value) {
     return close_gracefully(socket, nullptr, http_connection_close::linger, scanner, worker_value);
 }
 
-task<void> close_http_connection_gracefully(server_tls_stream& stream, http_connection_close mode,
-    connection_scanner& scanner, const worker_ref& worker_value) {
+task<void> close_http_connection_gracefully(server_tls_stream& stream, http_connection_close mode, connection_scanner& scanner, const worker_ref& worker_value) {
     return close_gracefully(stream.lowest_layer(), &stream, mode, scanner, worker_value);
 }
 
@@ -2320,8 +2208,7 @@ namespace {
 // A file removed, replaced or rewritten since its response was framed: a
 // deployment race the client sees as an error response, not a server fault.
 [[nodiscard]] bool is_file_changed_since_framing(std::error_code error) noexcept {
-    return error == std::errc::no_such_file_or_directory || error == std::errc::not_a_directory ||
-           error == std::errc::state_not_recoverable;
+    return error == std::errc::no_such_file_or_directory || error == std::errc::not_a_directory || error == std::errc::state_not_recoverable;
 }
 
 }  // namespace
@@ -2339,11 +2226,9 @@ response_file_failure response_file_failure::read_not_completed(blocking_status 
     // Overload and shutdown are not faults of this response.
     std::exception_ptr fault;
     if (status == blocking_status::unavailable) {
-        fault = std::make_exception_ptr(std::system_error(std::make_error_code(std::errc::operation_not_supported),
-            "file response needs a blocking pool"));
+        fault = std::make_exception_ptr(std::system_error(std::make_error_code(std::errc::operation_not_supported), "file response needs a blocking pool"));
     } else if (status == blocking_status::timed_out) {
-        fault = std::make_exception_ptr(
-            std::system_error(std::make_error_code(std::errc::timed_out), "file response I/O timed out"));
+        fault = std::make_exception_ptr(std::system_error(std::make_error_code(std::errc::timed_out), "file response I/O timed out"));
     }
     return response_file_failure(true, std::move(fault));
 }
@@ -2354,19 +2239,14 @@ response_file_failure response_file_failure::read_threw(std::exception_ptr excep
 
 std::exception_ptr response_file_failure::response_error() const {
     if (unavailable_) {
-        return std::make_exception_ptr(http_error({.status_ = ruvia::http_status::service_unavailable,
-            .code_ = "file_read_unavailable",
-            .message_ = "file could not be read in time"}));
+        return std::make_exception_ptr(http_error({.status_ = ruvia::http_status::service_unavailable, .code_ = "file_read_unavailable", .message_ = "file could not be read in time"}));
     }
-    return std::make_exception_ptr(http_error({.status_ = ruvia::http_status::internal_server_error,
-        .code_ = "file_read_failed",
-        .message_ = "file could not be read"}));
+    return std::make_exception_ptr(http_error({.status_ = ruvia::http_status::internal_server_error, .code_ = "file_read_failed", .message_ = "file could not be read"}));
 }
 
 char* response_file_source::read_buffer::data() & {
     if (data_ == nullptr) {
-        data_.reset(static_cast<char*>(
-            ::operator new(response_file_read_ahead_bytes, std::align_val_t{alignof(std::max_align_t)})));
+        data_.reset(static_cast<char*>(::operator new(response_file_read_ahead_bytes, std::align_val_t{alignof(std::max_align_t)})));
     }
     return data_.get();
 }
@@ -2383,16 +2263,15 @@ void response_file_source::read_buffer::buffer_deleter::operator()(char* bytes) 
 // synchronized process resource.
 response_file_source::read_state::read_state() = default;
 
-response_file_source::response_file_source(const http_response& response, response_file_io io)
-    : response_(response),
-      io_(std::move(io)),
-      segment_count_(response.body_segment_count()) {}
+response_file_source::response_file_source(const http_response& response, response_file_io io) :
+    response_(response),
+    io_(std::move(io)),
+    segment_count_(response.body_segment_count()) {}
 
 void response_file_source::select_file(http_response_file_view file) {
     // Multipart byte ranges name the same file view: keep its validated
     // handle and only reposition.
-    if (current_path_ != file.native_path_c_str() || state_.identity_ != file.identity() ||
-        state_.size_ != file.size()) {
+    if (current_path_ != file.native_path_c_str() || state_.identity_ != file.identity() || state_.size_ != file.size()) {
         current_path_ = file.native_path_c_str();
         state_.path_.assign(file.native_path_c_str());
         state_.size_ = file.size();
@@ -2424,8 +2303,7 @@ void response_file_source::read_ahead(read_state& state, std::size_t bytes, bool
     }
     const auto remaining = bytes - state.filled_;
     if (remaining != 0) {
-        state.error_ =
-            read_native_file_at(state.input_.get(), state.position_, state.buffer_.data() + state.filled_, remaining);
+        state.error_ = read_native_file_at(state.input_.get(), state.position_, state.buffer_.data() + state.filled_, remaining);
         if (state.error_) {
             return;
         }
@@ -2453,8 +2331,7 @@ task<bool> response_file_source::fill(std::size_t bytes, bool completes_range) {
     // A validated handle first takes what the page cache already holds; only
     // a remainder waits on the pool.
     if (bytes != 0 && state_.validated_) {
-        state_.filled_ = read_native_file_cached(
-            state_.input_.get(), state_.position_, state_.buffer_.data(), bytes, state_.cached_read_supported_);
+        state_.filled_ = read_native_file_cached(state_.input_.get(), state_.position_, state_.buffer_.data(), bytes, state_.cached_read_supported_);
         state_.position_ += state_.filled_;
         if (state_.filled_ == bytes) {
             if (completes_range) {
@@ -2464,11 +2341,10 @@ task<bool> response_file_source::fill(std::size_t bytes, bool completes_range) {
         }
     }
 #endif
-    auto result = co_await run_blocking(io_.worker_, {.timeout_ = io_.timeout_, .stop_token_ = io_.stop_},
-        [state = std::move(state_), bytes, completes_range]() mutable {
-            read_ahead(state, bytes, completes_range);
-            return std::move(state);
-        });
+    auto result = co_await run_blocking(io_.worker_, {.timeout_ = io_.timeout_, .stop_token_ = io_.stop_}, [state = std::move(state_), bytes, completes_range]() mutable {
+        read_ahead(state, bytes, completes_range);
+        return std::move(state);
+    });
     if (result.status() != blocking_status::completed) {
         // The state (handle and buffer) stayed with the abandoned operation.
         failure_.emplace(response_file_failure::read_not_completed(result.status()));
@@ -2501,15 +2377,13 @@ task<response_body_chunk> response_file_source::next(std::size_t max_bytes) {
     // A body that opens with in-memory bytes (a multipart boundary) still has
     // its first file range validated before anything is yielded. A body that
     // opens with a file validates it on the read that yields its first chunk.
-    if (!first_file_opened_ && next_segment_ < segment_count_ && !response_.body_segment(next_segment_).file_ &&
-        !(co_await open_first())) {
+    if (!first_file_opened_ && next_segment_ < segment_count_ && !response_.body_segment(next_segment_).file_ && !(co_await open_first())) {
         co_return response_body_chunk::failed();
     }
     first_file_opened_ = true;
     for (;;) {
         if (range_remaining_ != 0) {
-            const auto bytes = static_cast<std::size_t>(std::min<std::uint64_t>(
-                std::min(max_bytes, response_file_read_ahead_bytes), range_remaining_));
+            const auto bytes = static_cast<std::size_t>(std::min<std::uint64_t>(std::min(max_bytes, response_file_read_ahead_bytes), range_remaining_));
             if (!(co_await fill(bytes, bytes == range_remaining_))) {
                 co_return response_body_chunk::failed();
             }
@@ -2571,15 +2445,13 @@ namespace ruvia::detail {
 template <typename stream_type>
 class server_connection_session final {
 public:
-    server_connection_session(stream_type& stream, tls_tunnel_output* tls_output, connection_scanner::entry& entry,
-        inbound_buffer_account& inbound, const worker_ref& worker_value, const stop_token& stop_token_value,
-        const server_connection_fields& fields)
-        : transport_(stream, tls_output, &entry),
-          entry_(entry),
-          lifecycle_(fields.lifecycle_),
-          worker_(worker_value),
-          read_reservation_(&inbound),
-          facade_(fields, stop_token_value, worker_value, this, &read_thunk, &write_thunk, &finish_thunk, &abort_thunk) {}
+    server_connection_session(stream_type& stream, tls_tunnel_output* tls_output, connection_scanner::entry& entry, inbound_buffer_account& inbound, const worker_ref& worker_value, const stop_token& stop_token_value, const server_connection_fields& fields) :
+        transport_(stream, tls_output, &entry),
+        entry_(entry),
+        lifecycle_(fields.lifecycle_),
+        worker_(worker_value),
+        read_reservation_(&inbound),
+        facade_(fields, stop_token_value, worker_value, this, &read_thunk, &write_thunk, &finish_thunk, &abort_thunk) {}
     server_connection_session(const server_connection_session&) = delete;
     server_connection_session& operator=(const server_connection_session&) = delete;
 
@@ -2626,14 +2498,14 @@ private:
     }
     static task<std::optional<std::span<const std::byte>>> read_thunk(void* raw, operation_options operation) {
         auto& owner = *static_cast<server_connection_session*>(raw);
-        operation_interrupt interrupt(owner.interrupts_, owner.worker_, operation, &owner.read_cancellation_,
-            &wake_read, "server connection read");
+        operation_interrupt interrupt(owner.interrupts_, owner.worker_, operation, &owner.read_cancellation_, &wake_read, "server connection read");
         if (owner.receive_ended_) {
             co_return std::nullopt;
         }
         owner.read_buffer_.clear();
-        if (!(co_await owner.transport_.read_more(
-                owner.read_buffer_, [&interrupt] { interrupt.throw_if_interrupted(); }, owner.read_cancellation_.slot(), &owner.read_reservation_))) {
+        if (!(co_await owner.transport_.read_more(owner.read_buffer_, [&interrupt] {
+            interrupt.throw_if_interrupted();
+        }, owner.read_cancellation_.slot(), &owner.read_reservation_))) {
             owner.receive_ended_ = true;
             if (owner.lifecycle_ != nullptr) {
                 owner.lifecycle_->set_reason(connection_close_reason::peer_eof);
@@ -2679,15 +2551,12 @@ namespace {
 
 constexpr const char* connection_lane_in_progress = "server connection operation already in progress on this direction";
 
-task<std::optional<std::span<const std::byte>>> read_connection(void* target,
-    task<std::optional<std::span<const std::byte>>> (*read)(void*, operation_options), bool& read_active,
-    operation_options operation) {
+task<std::optional<std::span<const std::byte>>> read_connection(void* target, task<std::optional<std::span<const std::byte>>> (*read)(void*, operation_options), bool& read_active, operation_options operation) {
     auto lease = detail::claim_operation_lane(read_active, connection_lane_in_progress);
     co_return co_await read(target, std::move(operation));
 }
 
-task<void> write_connection(void* target, task<void> (*write)(void*, std::string_view, operation_options),
-    std::string bytes, bool& write_active, const bool& send_ended, operation_options operation) {
+task<void> write_connection(void* target, task<void> (*write)(void*, std::string_view, operation_options), std::string bytes, bool& write_active, const bool& send_ended, operation_options operation) {
     auto lease = detail::claim_operation_lane(write_active, connection_lane_in_progress);
     if (send_ended) {
         throw std::logic_error("server connection send direction has ended");
@@ -2695,8 +2564,7 @@ task<void> write_connection(void* target, task<void> (*write)(void*, std::string
     co_await write(target, bytes, std::move(operation));
 }
 
-task<void> finish_connection(void* target, task<void> (*finish_value)(void*, operation_options), bool& send_ended,
-    bool& write_active, operation_options operation) {
+task<void> finish_connection(void* target, task<void> (*finish_value)(void*, operation_options), bool& send_ended, bool& write_active, operation_options operation) {
     auto lease = detail::claim_operation_lane(write_active, connection_lane_in_progress);
     if (!send_ended) {
         co_await finish_value(target, std::move(operation));
@@ -2706,25 +2574,20 @@ task<void> finish_connection(void* target, task<void> (*finish_value)(void*, ope
 
 }  // namespace
 
-server_connection::server_connection(const detail::server_connection_fields& fields,
-    const ::ruvia::stop_token& stop_token_value, const worker_ref& worker_value, void* target, read_type read,
-    write_type write, finish_type finish_value, abort_type abort_value) noexcept
-    : worker_(worker_value),
-      target_(target),
-      read_(read),
-      write_(write),
-      finish_(finish_value),
-      abort_(abort_value),
-      id_(fields.id_),
-      local_(fields.lifecycle_ != nullptr ? fields.lifecycle_->local_endpoint()
-                                          : ip_endpoint(ip_address::parse(fields.local_address_).value_or(ip_address{}), fields.local_port_)),
-      remote_(fields.lifecycle_ != nullptr ? fields.lifecycle_->remote_endpoint()
-                                           : ip_endpoint(ip_address::parse(fields.remote_address_).value_or(ip_address{}), fields.remote_port_)),
-      stop_token_(stop_token_value),
-      state_(fields.state_) {
+server_connection::server_connection(const detail::server_connection_fields& fields, const ::ruvia::stop_token& stop_token_value, const worker_ref& worker_value, void* target, read_type read, write_type write, finish_type finish_value, abort_type abort_value) noexcept :
+    worker_(worker_value),
+    target_(target),
+    read_(read),
+    write_(write),
+    finish_(finish_value),
+    abort_(abort_value),
+    id_(fields.id_),
+    local_(fields.lifecycle_ != nullptr ? fields.lifecycle_->local_endpoint() : ip_endpoint(ip_address::parse(fields.local_address_).value_or(ip_address{}), fields.local_port_)),
+    remote_(fields.lifecycle_ != nullptr ? fields.lifecycle_->remote_endpoint() : ip_endpoint(ip_address::parse(fields.remote_address_).value_or(ip_address{}), fields.remote_port_)),
+    stop_token_(stop_token_value),
+    state_(fields.state_) {
     if (fields.tls_.has_value()) {
-        tls_.emplace(tls_connection_transport(
-            fields.tls_->client_certificate_subject_, fields.tls_->alpn_, fields.tls_->server_name_));
+        tls_.emplace(tls_connection_transport(fields.tls_->client_certificate_subject_, fields.tls_->alpn_, fields.tls_->server_name_));
     }
     operations_.bind_worker(worker_);
 }
@@ -2766,8 +2629,7 @@ task<void> server_connection::write_owned(std::string&& bytes, operation_options
 
 task<void> server_connection::finish(operation_options operation) & {
     require_active();
-    return ::ruvia::make_scoped_operation(
-        operations_, finish_connection(target_, finish_, send_ended_, write_active_, std::move(operation)));
+    return ::ruvia::make_scoped_operation(operations_, finish_connection(target_, finish_, send_ended_, write_active_, std::move(operation)));
 }
 
 void server_connection::abort() & noexcept {
@@ -2788,8 +2650,7 @@ namespace ruvia::detail {
 // writer outlives the session that writes through it and is joined on every
 // exit.
 template <typename stream_type>
-task<void> worker_connections::serve_connection(
-    stream_type& stream, tcp_socket_type& socket, server_connection_fields fields) {
+task<void> worker_connections::serve_connection(stream_type& stream, tcp_socket_type& socket, server_connection_fields fields) {
     // A stopping worker has already closed the connection.
     if (!http_server_worker_running(state_) || !socket.is_open()) {
         co_return;
@@ -2804,8 +2665,7 @@ task<void> worker_connections::serve_connection(
     connection_scanner::entry scanner_entry;
     scanner_entry.bind_lifecycle(fields.lifecycle_);
     connection_scanner::guard scanner_guard(scanner_, scanner_entry, connection_transport::tcp(socket));
-    inbound_buffer_account connection_buffers(
-        *options_.inbound_budget_, options_.server_.max_inbound_buffer_bytes_per_connection_);
+    inbound_buffer_account connection_buffers(*options_.inbound_budget_, options_.server_.max_inbound_buffer_bytes_per_connection_);
     std::optional<tls_tunnel_output> tls_output;
     if constexpr (requires { stream.next_layer(); }) {
         tls_output.emplace(*stream.native_handle(), socket, worker_, fields.lifecycle_);
@@ -2813,8 +2673,7 @@ task<void> worker_connections::serve_connection(
     }
     std::exception_ptr failure;
     {
-        server_connection_session<stream_type> session(stream, tls_output.has_value() ? &*tls_output : nullptr,
-            scanner_entry, connection_buffers, worker_, stop_token_, fields);
+        server_connection_session<stream_type> session(stream, tls_output.has_value() ? &*tls_output : nullptr, scanner_entry, connection_buffers, worker_, stop_token_, fields);
         try {
             co_await options_.connection_(session.connection());
         } catch (...) {
@@ -2850,19 +2709,15 @@ task<void> worker_connections::serve_connection(
     }
 }
 
-template task<void> worker_connections::serve_connection<inbound_socket_stream>(
-    inbound_socket_stream&, tcp_socket_type&, server_connection_fields);
-template task<void> worker_connections::serve_connection<server_tls_stream>(
-    server_tls_stream&, tcp_socket_type&, server_connection_fields);
+template task<void> worker_connections::serve_connection<inbound_socket_stream>(inbound_socket_stream&, tcp_socket_type&, server_connection_fields);
+template task<void> worker_connections::serve_connection<server_tls_stream>(server_tls_stream&, tcp_socket_type&, server_connection_fields);
 
 }  // namespace ruvia::detail
 
 namespace ruvia::detail {
 
 struct request_stream_access final {
-    [[nodiscard]] static request_stream make(context& context_value, response_stream_writer& response,
-        const request_stream_tunnel_accept* accept_tunnel,
-        const request_stream_websocket_accept* accept_websocket = nullptr) noexcept {
+    [[nodiscard]] static request_stream make(context& context_value, response_stream_writer& response, const request_stream_tunnel_accept* accept_tunnel, const request_stream_websocket_accept* accept_websocket = nullptr) noexcept {
         return request_stream(context_value, response, accept_tunnel, accept_websocket);
     }
 
@@ -2874,9 +2729,7 @@ struct request_stream_access final {
 namespace {
 
 // Runs the connection's callback; returns its failure, if any.
-task<std::exception_ptr> run_request_stream_callback(
-    context& context_value, response_stream_writer& response, const request_stream_tunnel_accept* accept_tunnel,
-    const request_stream_websocket_accept* accept_websocket = nullptr) {
+task<std::exception_ptr> run_request_stream_callback(context& context_value, response_stream_writer& response, const request_stream_tunnel_accept* accept_tunnel, const request_stream_websocket_accept* accept_websocket = nullptr) {
     const auto callback = context_access::services(context_value).request_stream();
     auto stream = request_stream_access::make(context_value, response, accept_tunnel, accept_websocket);
     std::exception_ptr failure;
@@ -2896,8 +2749,7 @@ task<std::exception_ptr> run_request_stream_callback(
 // callback that selected nothing is a fault. Unexpected failures reach the sink.
 // No application error handler takes part.
 void complete_request_stream(context& context_value, std::exception_ptr failure) {
-    if (context_access::services(context_value).connection_aborted() ||
-        context_access::services(context_value).request_reset()) {
+    if (context_access::services(context_value).connection_aborted() || context_access::services(context_value).request_reset()) {
         if (failure != nullptr) {
             std::rethrow_exception(failure);
         }
@@ -2917,9 +2769,7 @@ void complete_request_stream(context& context_value, std::exception_ptr failure)
     }
     auto answer = make_default_exception_response(failure);
     if (answer.unexpected_) {
-        context_access::services(context_value)
-            .connection_failure()
-            .invoke(context_access::services(context_value).remote_address(), failure);
+        context_access::services(context_value).connection_failure().invoke(context_access::services(context_value).remote_address(), failure);
     }
     context_access::set_response(context_value, std::move(answer.response_));
 }
@@ -2934,18 +2784,14 @@ task<void> serve_request_stream(void*, context& context_value) {
 [[nodiscard]] const route_entry& request_stream_response_route() noexcept {
     // Process-invariant and allocation-free: no route path, method token or
     // protocol to own.
-    static const route_entry route({.method_ = http_known_method::unknown,
-        .path_ = {},
-        .endpoint_ = route_endpoint::response_stream(&serve_request_stream, request_body_mode::stream)});
+    static const route_entry route({.method_ = http_known_method::unknown, .path_ = {}, .endpoint_ = route_endpoint::response_stream(&serve_request_stream, request_body_mode::stream)});
     return route;
 }
 
 [[nodiscard]] const route_entry& request_stream_tunnel_route() noexcept {
     // The tunnel upgrade runs serve_request_stream_tunnel() for this route
     // instead of its handler.
-    static const route_entry route({.method_ = http_known_method::unknown,
-        .path_ = {},
-        .endpoint_ = route_endpoint::tunnel(&serve_request_stream, {}, {})});
+    static const route_entry route({.method_ = http_known_method::unknown, .path_ = {}, .endpoint_ = route_endpoint::tunnel(&serve_request_stream, {}, {})});
     return route;
 }
 
@@ -2963,8 +2809,7 @@ bool http1_request_stream_tunnel(const http_request& request, bool content) noex
     return request.known_method() == http_known_method::connect || (!content && http1_request_offers_upgrade(request));
 }
 
-task<void> serve_request_stream_tunnel(context& context_value, const request_stream_tunnel_accept& accept,
-    const request_stream_websocket_accept* accept_websocket) {
+task<void> serve_request_stream_tunnel(context& context_value, const request_stream_tunnel_accept& accept, const request_stream_websocket_accept* accept_websocket) {
     auto failure = co_await run_request_stream_callback(context_value, context_value.stream(), &accept, accept_websocket);
     complete_request_stream(context_value, std::move(failure));
 }
@@ -3079,11 +2924,9 @@ task<http_response> request_stream::static_file(const static_root& root, static_
 }
 
 void request_stream::respond(http_response response) {
-    auto lease = detail::claim_operation_lane(detail::streaming_access::output_lane(response_),
-        "response stream output operation is already in progress");
+    auto lease = detail::claim_operation_lane(detail::streaming_access::output_lane(response_), "response stream output operation is already in progress");
     require_unselected_response();
-    if (tunnel_requested() && request().known_method() == http_known_method::connect &&
-        response.status().is_successful()) {
+    if (tunnel_requested() && request().known_method() == http_known_method::connect && response.status().is_successful()) {
         throw std::logic_error("a 2xx response to CONNECT establishes the tunnel; use accept_tunnel()");
     }
     if (response.status() == http_status::switching_protocols) {
@@ -3105,8 +2948,7 @@ task<http_tunnel*> request_stream::accept_tunnel(http_status_code status, http_t
 }
 
 task<http_tunnel*> request_stream::accept_tunnel_impl(http_status_code status, http_tunnel_route_config config) {
-    auto lease = detail::claim_operation_lane(detail::streaming_access::output_lane(response_),
-        "response stream output operation is already in progress");
+    auto lease = detail::claim_operation_lane(detail::streaming_access::output_lane(response_), "response stream output operation is already in progress");
     if (accept_tunnel_ == nullptr) {
         throw std::logic_error("accept_tunnel() requires a CONNECT or HTTP/1.1 Upgrade request");
     }
@@ -3133,8 +2975,7 @@ task<websocket_accept_result> request_stream::accept_websocket_impl(websocket_ro
 }
 
 task<websocket_accept_result> request_stream::accept_websocket_endpoint(const detail::websocket_route_endpoint& endpoint) {
-    auto lease = detail::claim_operation_lane(detail::streaming_access::output_lane(response_),
-        "response stream output operation is already in progress");
+    auto lease = detail::claim_operation_lane(detail::streaming_access::output_lane(response_), "response stream output operation is already in progress");
     if (accept_websocket_ == nullptr) {
         throw std::logic_error("accept_websocket() requires an Upgrade or extended CONNECT request");
     }
@@ -3143,10 +2984,7 @@ task<websocket_accept_result> request_stream::accept_websocket_endpoint(const de
 }
 
 void request_stream::require_unselected_response() const {
-    if (detail::context_access::services(context_).request_reset() ||
-        detail::context_access::services(context_).connection_aborted() ||
-        response_.committed() || detail::context_access::output_committed(context_) ||
-        detail::context_access::has_response(context_)) {
+    if (detail::context_access::services(context_).request_reset() || detail::context_access::services(context_).connection_aborted() || response_.committed() || detail::context_access::output_committed(context_) || detail::context_access::has_response(context_)) {
         throw std::logic_error("the request's response is already selected or committed");
     }
 }
@@ -3160,29 +2998,22 @@ void request_stream::require_unselected_response() const {
 namespace ruvia::detail {
 namespace {
 
-[[nodiscard]] protocol_byte_limit request_body_byte_limit(request_body_mode body_mode,
-    const std::optional<std::size_t>& max_stream_body_bytes, std::size_t max_buffered_body_bytes,
-    std::size_t route_limit) {
+[[nodiscard]] protocol_byte_limit request_body_byte_limit(request_body_mode body_mode, const std::optional<std::size_t>& max_stream_body_bytes, std::size_t max_buffered_body_bytes, std::size_t route_limit) {
     if (body_mode != request_body_mode::stream) {
-        const auto limit = route_limit != 0 && route_limit < max_buffered_body_bytes
-                               ? route_limit
-                               : max_buffered_body_bytes;
+        const auto limit = route_limit != 0 && route_limit < max_buffered_body_bytes ? route_limit : max_buffered_body_bytes;
         return protocol_byte_limit::limited(limit);
     }
     if (!max_stream_body_bytes.has_value()) {
-        return route_limit != 0 ? protocol_byte_limit::limited(route_limit)
-                                : protocol_byte_limit::unlimited();
+        return route_limit != 0 ? protocol_byte_limit::limited(route_limit) : protocol_byte_limit::unlimited();
     }
-    const auto limit =
-        route_limit != 0 && route_limit < *max_stream_body_bytes ? route_limit : *max_stream_body_bytes;
+    const auto limit = route_limit != 0 && route_limit < *max_stream_body_bytes ? route_limit : *max_stream_body_bytes;
     return protocol_byte_limit::limited(limit);
 }
 
 // RFC 9110 §7.4 against the transport connection's facts. A secured
 // connection without a recorded certificate cannot vouch for any host.
 [[nodiscard]] bool connection_carries_target(const http_request& request, const context_services& services) noexcept {
-    const auto origin = decide_http_target_origin(request,
-        {.secured_ = services.get_conn_info().tls() != nullptr, .trusted_gateway_ = services.peer_trusted()});
+    const auto origin = decide_http_target_origin(request, {.secured_ = services.get_conn_info().tls() != nullptr, .trusted_gateway_ = services.peer_trusted()});
     switch (origin.action()) {
         case http_target_origin_action::accept:
             return true;
@@ -3206,11 +3037,9 @@ http_request_admission_policy http_request_admission_policy::server(const http_s
     };
 }
 
-protocol_byte_limit http_request_body_limit(const route_resolution& resolution, request_body_mode mode,
-    const http_request_admission_policy& policy) noexcept {
+protocol_byte_limit http_request_body_limit(const route_resolution& resolution, request_body_mode mode, const http_request_admission_policy& policy) noexcept {
     const auto* resolved = resolution.resolved();
-    return request_body_byte_limit(mode, policy.max_stream_body_bytes_, policy.max_buffered_body_bytes_,
-        resolved != nullptr ? resolved->route().max_request_body_bytes() : 0);
+    return request_body_byte_limit(mode, policy.max_stream_body_bytes_, policy.max_buffered_body_bytes_, resolved != nullptr ? resolved->route().max_request_body_bytes() : 0);
 }
 
 http_request_rejection http_request_rejection::rate_limited(rate_limit_rejection rejection) noexcept {
@@ -3245,16 +3074,14 @@ void http_response_tail::record_access(const access_log_sink& access_log, http_s
     }));
 }
 
-void http_response_tail::defer_access(const access_log_sink& access_log, http1_deferred_access_log& deferred,
-    std::size_t head_end, http_status_code status) const {
+void http_response_tail::defer_access(const access_log_sink& access_log, http1_deferred_access_log& deferred, std::size_t head_end, http_status_code status) const {
     if (!access_log.callback_) {
         return;
     }
     deferred.defer(head_end, *request_, client_address_, start_, status, io_metrics_);
 }
 
-http_request_admission admit_http_request(const http_request_admission_input& input,
-    const http_request_admission_policy& policy, const context_services& services) {
+http_request_admission admit_http_request(const http_request_admission_input& input, const http_request_admission_policy& policy, const context_services& services) {
     const auto& request = input.request_;
     // The host's compression and CORS policies cover request stream responses
     // too; the application-wide rate limit belongs to the routes alone, and a
@@ -3272,8 +3099,7 @@ http_request_admission admit_http_request(const http_request_admission_input& in
     // would otherwise share the proxy's single key. Resolved once per request
     // and bound to the services every context of this request is created from.
     const auto* resolved = input.resolution_.resolved();
-    http_request_admission admission(
-        http_response_tail(request, coding_policy, {}, {}, input.start_), services);
+    http_request_admission admission(http_response_tail(request, coding_policy, {}, {}, input.start_), services);
     if (services.peer_trusted()) {
         admission.services_.bind_conn_info(services.resolve_conn_info(request));
     }
@@ -3291,8 +3117,7 @@ http_request_admission admit_http_request(const http_request_admission_input& in
     }
     admission.resolved_ = resolved;
     const auto* endpoint = resolved != nullptr ? &resolved->route().endpoint() : nullptr;
-    admission.body_limit_ = http_request_body_limit(input.resolution_,
-        endpoint != nullptr ? endpoint->request_body_mode() : request_body_mode::buffered, policy);
+    admission.body_limit_ = http_request_body_limit(input.resolution_, endpoint != nullptr ? endpoint->request_body_mode() : request_body_mode::buffered, policy);
 
     const auto reject = [&](http_request_rejection rejection) {
         admission.endpoint_ = http_request_endpoint::rejection;
@@ -3303,40 +3128,39 @@ http_request_admission admit_http_request(const http_request_admission_input& in
     // Before any expectation, limit or endpoint decision: a request this
     // connection cannot carry is not this server's to evaluate.
     if (policy.verify_target_origin_ && !connection_carries_target(request, services)) {
-        return reject(http_request_rejection::error(http_error_info(
-            {.status_ = http_status::misdirected_request, .message_ = "misdirected request"})));
+        return reject(http_request_rejection::error(http_error_info({.status_ = http_status::misdirected_request, .message_ = "misdirected request"})));
     }
 
     // Expect extensions are valid HTTP syntax. The protocol reports the
     // semantic fact; this product implements only 100-continue and chooses the
     // RFC 9110-permitted 417 before reading request content.
-    if (input.expectation_ != nullptr &&
-        *input.expectation_ == http_server_expectation_plan::reject_unsupported) {
-        return reject(http_request_rejection::error(
-            [&] { const auto err = http_unsupported_expectation_error(); return http_error_info({.status_ = err.status(), .code_ = err.code(), .message_ = std::string_view(err.what())}); }()));
+    if (input.expectation_ != nullptr && *input.expectation_ == http_server_expectation_plan::reject_unsupported) {
+        return reject(http_request_rejection::error([&] {
+            const auto err = http_unsupported_expectation_error();
+            return http_error_info({.status_ = err.status(), .code_ = err.code(), .message_ = std::string_view(err.what())});
+        }()));
     }
     if (policy.apply_rate_limit_ && !request_stream) {
-        if (const auto rejection = decide_request_rate_limit(
-                admission.services_.rate_limiter(), client_address, input.pinned_arrival_)) {
+        if (const auto rejection = decide_request_rate_limit(admission.services_.rate_limiter(), client_address, input.pinned_arrival_)) {
             return reject(http_request_rejection::rate_limited(*rejection));
         }
     }
     // Content already in hand (buffered bodies and subrequests) is held
     // to the same ceiling a streaming protocol enforces while reading.
     if (admission.body_limit_.exceeds(request.body_bytes().size())) {
-        return reject(http_request_rejection::error(
-            [&] { const auto err = http_request_body_protocol_error(http_request_body_failure::too_large); return http_error_info({.status_ = err.status(), .code_ = err.code(), .message_ = std::string_view(err.what())}); }()));
+        return reject(http_request_rejection::error([&] {
+            const auto err = http_request_body_protocol_error(http_request_body_failure::too_large);
+            return http_error_info({.status_ = err.status(), .code_ = err.code(), .message_ = std::string_view(err.what())});
+        }()));
     }
     if (endpoint == nullptr) {
         admission.endpoint_ = http_request_endpoint::buffered;
         return admission;
     }
     if (const auto* tunnel = endpoint->tunnel()) {
-        admission.udp_tunnel_ = tunnel->protocol() == "connect-udp" ||
-                                (request_stream && (request.protocol() == "connect-udp" || is_http_connect_udp_upgrade_request(request)));
+        admission.udp_tunnel_ = tunnel->protocol() == "connect-udp" || (request_stream && (request.protocol() == "connect-udp" || is_http_connect_udp_upgrade_request(request)));
         if (admission.udp_tunnel_ && validate_http_connect_udp_request(request).has_value()) {
-            return reject(http_request_rejection::error(http_error_info(
-                {.status_ = http_status::bad_request, .message_ = "invalid CONNECT-UDP request head"})));
+            return reject(http_request_rejection::error(http_error_info({.status_ = http_status::bad_request, .message_ = "invalid CONNECT-UDP request head"})));
         }
         admission.endpoint_ = http_request_endpoint::tunnel;
         return admission;
@@ -3351,24 +3175,18 @@ http_request_admission admit_http_request(const http_request_admission_input& in
         return admission;
     }
     const auto* buffered = endpoint->buffered();
-    admission.endpoint_ = buffered != nullptr && buffered->request_body_mode() == request_body_mode::stream
-                              ? http_request_endpoint::stream_body
-                              : http_request_endpoint::buffered;
+    admission.endpoint_ = buffered != nullptr && buffered->request_body_mode() == request_body_mode::stream ? http_request_endpoint::stream_body : http_request_endpoint::buffered;
     return admission;
 }
 
-task<http_request_admission> admit_and_dispatch_buffered_request(const route_table& routes,
-    const http_request_admission_input& input, const http_request_admission_policy& policy,
-    const context_services& services, http_response& response) {
+task<http_request_admission> admit_and_dispatch_buffered_request(const route_table& routes, const http_request_admission_input& input, const http_request_admission_policy& policy, const context_services& services, http_response& response) {
     auto admission = admit_http_request(input, policy, services);
     if (const auto* rejection = admission.rejection()) {
         // As in the server: a rejection does not inherit the coding promise.
         admission.tail().disable_response_coding();
-        response = co_await respond_http_request_rejection(
-            routes, input.request_, *rejection, admission.services());
+        response = co_await respond_http_request_rejection(routes, input.request_, *rejection, admission.services());
     } else {
-        co_await routes.dispatch_buffered_response(input.request_, input.resolution_,
-            document_root_binding::none(), admission.services(), admission.static_file_mode(), response);
+        co_await routes.dispatch_buffered_response(input.request_, input.resolution_, document_root_binding::none(), admission.services(), admission.static_file_mode(), response);
     }
     co_return admission;
 }
@@ -3381,8 +3199,7 @@ namespace {
 // the identity bytes; the encoder stops at this cap instead of finishing.
 // When the client refuses identity (RFC 9110 §12.5.3), any acceptable coding
 // beats a 406, so the cap is lifted.
-[[nodiscard]] http_content_encode_options compressed_body_options(
-    std::string_view plain, bool identity_accepted) noexcept {
+[[nodiscard]] http_content_encode_options compressed_body_options(std::string_view plain, bool identity_accepted) noexcept {
     if (!identity_accepted) {
         return {.max_encoded_bytes_ = (std::numeric_limits<std::size_t>::max)()};
     }
@@ -3393,8 +3210,7 @@ namespace {
 // stages every affected header before publishing the owned body, so a
 // request-resource failure leaves the identity response usable for the typed
 // 500 path instead of exposing a mixed body/metadata state.
-[[nodiscard]] http_response_compression_status commit_compressed_body(
-    http_response& response, http_content_coding coding, std::optional<std::string>&& encoding) {
+[[nodiscard]] http_response_compression_status commit_compressed_body(http_response& response, http_content_coding coding, std::optional<std::string>&& encoding) {
     if (!encoding.has_value()) {
         return http_response_compression_status::not_applicable;
     }
@@ -3406,8 +3222,7 @@ namespace {
     if (response.header("Content-Range").has_value()) {
         return true;
     }
-    if (const auto content_type = response.header("Content-Type");
-        !content_type.has_value() || !is_http_media_type_compressible(*content_type)) {
+    if (const auto content_type = response.header("Content-Type"); !content_type.has_value() || !is_http_media_type_compressible(*content_type)) {
         return true;
     }
     const bool has_cache_control = response.header("Cache-Control").has_value();
@@ -3416,8 +3231,7 @@ namespace {
         const auto name = header.name();
         switch (name.size()) {
             case 11U:
-                if (http_ascii_equals_ignore_case(name, "Repr-Digest") ||
-                    http_ascii_equals_ignore_case(name, "Content-MD5")) {
+                if (http_ascii_equals_ignore_case(name, "Repr-Digest") || http_ascii_equals_ignore_case(name, "Content-MD5")) {
                     return true;
                 }
                 break;
@@ -3454,8 +3268,7 @@ std::optional<std::uint64_t> declared_content_length(const http_response& respon
         }
         std::uint64_t parsed = 0;
         const auto [ptr, ec] = std::from_chars(item.data(), item.data() + item.size(), parsed);
-        if (ec != std::errc{} || ptr != item.data() + item.size() ||
-            (declared.has_value() && *declared != parsed)) {
+        if (ec != std::errc{} || ptr != item.data() + item.size() || (declared.has_value() && *declared != parsed)) {
             valid = false;
             return false;
         }
@@ -3465,12 +3278,10 @@ std::optional<std::uint64_t> declared_content_length(const http_response& respon
     return valid ? declared : std::nullopt;
 }
 
-bool declared_length_permits_encoding(const http_response_coding_selection& selection,
-    const compression_config& options, std::uint64_t declared) noexcept {
+bool declared_length_permits_encoding(const http_response_coding_selection& selection, const compression_config& options, std::uint64_t declared) noexcept {
     // min_bytes_ only says when encoding stops paying off; a client that
     // refuses identity is served a coding at any size instead of a 406.
-    return !(((declared == 0 || declared < options.min_bytes_) && selection.identity_accepted()) ||
-             declared > options.max_bytes_);
+    return !(((declared == 0 || declared < options.min_bytes_) && selection.identity_accepted()) || declared > options.max_bytes_);
 }
 
 namespace {
@@ -3480,11 +3291,8 @@ namespace {
 // length of nothing (RFC 9110 §8.6). Apply the coding GET would select, sized
 // by the declared Content-Length, and drop that length: the coded size is
 // unknown and §8.6 allows omitting it.
-[[nodiscard]] http_buffered_compression_step apply_head_content_encoding(
-    const http_response_coding_selection& selection, http_response& response,
-    const compression_config& options, std::optional<std::uint64_t> declared) {
-    const bool encode = declared.has_value() ? declared_length_permits_encoding(selection, options, *declared)
-                                             : !selection.identity_accepted();
+[[nodiscard]] http_buffered_compression_step apply_head_content_encoding(const http_response_coding_selection& selection, http_response& response, const compression_config& options, std::optional<std::uint64_t> declared) {
+    const bool encode = declared.has_value() ? declared_length_permits_encoding(selection, options, *declared) : !selection.identity_accepted();
     if (!encode) {
         return {http_response_compression_status::not_applicable, false};
     }
@@ -3494,10 +3302,7 @@ namespace {
 
 }  // namespace
 
-http_response_compression_decision prepare_response_compression(
-    const http_response_coding_selection& selection, http_known_method request_method,
-    http_response& response, http_response_compression_source source_value,
-    http_response_coding_availability availability) {
+http_response_compression_decision prepare_response_compression(const http_response_coding_selection& selection, http_known_method request_method, http_response& response, http_response_compression_source source_value, http_response_coding_availability availability) {
     // A file's bytes are served as the representation their validators and
     // HEAD response describe, whether the transport reads the file or the
     // context already carries them in memory.
@@ -3518,9 +3323,7 @@ http_response_compression_decision prepare_response_compression(
     // both of which include the content coding (RFC 9530 §1, §2, §3; legacy
     // Content-MD5 likewise covered the sent content). Encoding here would
     // leave them describing bytes that are not sent.
-    if (availability == http_response_coding_availability::identity_only ||
-        response.status() == http_status::partial_content ||
-        response_headers_skip_compression(response)) {
+    if (availability == http_response_coding_availability::identity_only || response.status() == http_status::partial_content || response_headers_skip_compression(response)) {
         return http_response_compression_decision::fixed_representation;
     }
 
@@ -3531,27 +3334,21 @@ http_response_compression_decision prepare_response_compression(
     return http_response_compression_decision::encode;
 }
 
-http_buffered_compression_step apply_response_compression(const http_response_coding_selection& selection,
-    http_known_method request_method, http_response& response, const compression_config& options,
-    worker_codecs& codecs, bool offload_available) {
+http_buffered_compression_step apply_response_compression(const http_response_coding_selection& selection, http_known_method request_method, http_response& response, const compression_config& options, worker_codecs& codecs, bool offload_available) {
     constexpr http_buffered_compression_step not_applicable{http_response_compression_status::not_applicable, false};
     const auto body = response.body_bytes();
 
-    const auto decision = prepare_response_compression(selection, request_method, response,
-        http_response_compression_source::buffered,
-        http_response_coding_availability::identity_and_compression);
+    const auto decision = prepare_response_compression(selection, request_method, response, http_response_compression_source::buffered, http_response_coding_availability::identity_and_compression);
     // Negotiation errors above still propagate; only encoding and publication
     // failures become a typed compression result.
     try {
-        if (decision == http_response_compression_decision::encode && request_method == http_known_method::head &&
-            body.empty() && (response.has_head_metadata_body() || response.header("Content-Length").has_value())) {
+        if (decision == http_response_compression_decision::encode && request_method == http_known_method::head && body.empty() && (response.has_head_metadata_body() || response.header("Content-Length").has_value())) {
             const auto declared = declared_content_length(response);
             if (declared != std::uint64_t{0}) {
                 return apply_head_content_encoding(selection, response, options, declared);
             }
         }
-        if (decision != http_response_compression_decision::encode ||
-            !declared_length_permits_encoding(selection, options, body.size())) {
+        if (decision != http_response_compression_decision::encode || !declared_length_permits_encoding(selection, options, body.size())) {
             return not_applicable;
         }
         // sync_bytes_ is the inline ceiling. Larger bodies encode on the blocking
@@ -3562,8 +3359,7 @@ http_buffered_compression_step apply_response_compression(const http_response_co
         }
 
         const auto coding = selection.coding();
-        auto encoding = codecs.encoder(coding).encode(
-            body, compressed_body_options(body, selection.identity_accepted()));
+        auto encoding = codecs.encoder(coding).encode(body, compressed_body_options(body, selection.identity_accepted()));
         return {commit_compressed_body(response, coding, std::move(encoding)), false};
     } catch (...) {
         ruvia::report_unhandled_failure("response compression", std::current_exception());
@@ -3571,17 +3367,14 @@ http_buffered_compression_step apply_response_compression(const http_response_co
     }
 }
 
-task<http_response_compression_status> compress_response_offloaded(http_response_coding_selection selection,
-    http_response& response, const worker_ref& worker_value, const stop_token& stop_token_value) {
+task<http_response_compression_status> compress_response_offloaded(http_response_coding_selection selection, http_response& response, const worker_ref& worker_value, const stop_token& stop_token_value) {
     try {
         const auto coding = selection.coding();
         const bool identity_accepted = selection.identity_accepted();
         std::string plain(response.body_bytes());
-        auto result_value = co_await run_blocking(worker_value, {.stop_token_ = stop_token_value},
-            [coding, identity_accepted, plain = std::move(plain)]() {
-                return encode_http_content(
-                    coding, plain, compressed_body_options(plain, identity_accepted));
-            });
+        auto result_value = co_await run_blocking(worker_value, {.stop_token_ = stop_token_value}, [coding, identity_accepted, plain = std::move(plain)]() {
+            return encode_http_content(coding, plain, compressed_body_options(plain, identity_accepted));
+        });
         if (result_value.failed()) {
             ruvia::report_unhandled_failure("response compression", result_value.error());
             co_return http_response_compression_status::failed;
@@ -3606,12 +3399,12 @@ task<http_response_compression_status> compress_response_offloaded(http_response
 namespace ruvia::detail {
 
 connection_transport connection_transport::tcp(asio::ip::tcp::socket& socket) noexcept {
-    return connection_transport(
-        &socket, [](void* target) noexcept { close_socket(*static_cast<asio::ip::tcp::socket*>(target)); },
-        [](void* target) noexcept {
-            std::error_code ignored;
-            static_cast<asio::ip::tcp::socket*>(target)->cancel(ignored);
-        });
+    return connection_transport(&socket, [](void* target) noexcept {
+        close_socket(*static_cast<asio::ip::tcp::socket*>(target));
+    }, [](void* target) noexcept {
+        std::error_code ignored;
+        static_cast<asio::ip::tcp::socket*>(target)->cancel(ignored);
+    });
 }
 namespace {
 
@@ -3622,8 +3415,7 @@ namespace {
     return worker_value;
 }
 
-[[nodiscard]] bool timeout_expired(
-    const std::optional<timeout_duration>& timeout, std::int64_t inactive_ms) noexcept {
+[[nodiscard]] bool timeout_expired(const std::optional<timeout_duration>& timeout, std::int64_t inactive_ms) noexcept {
     return timeout.has_value() && inactive_ms >= timeout->value().count();
 }
 
@@ -3634,9 +3426,7 @@ namespace {
 
 [[nodiscard]] std::int64_t activity_now_ms() noexcept {
     // 向上取整活动时间，避免毫秒截断让超时提前；扫描时钟仍向下取整。
-    return std::chrono::ceil<std::chrono::milliseconds>(
-        std::chrono::steady_clock::now().time_since_epoch())
-        .count();
+    return std::chrono::ceil<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
 }
 
 }  // namespace
@@ -3701,8 +3491,8 @@ connection_scanner::entry::phase_scope::~phase_scope() {
     entry_.reading_request_head_ = reading_request_head_;
     entry_.sync_reusable();
 }
-connection_scanner::entry::write_scope::write_scope(entry& entry_value) noexcept
-    : entry_(entry_value) {
+connection_scanner::entry::write_scope::write_scope(entry& entry_value) noexcept :
+    entry_(entry_value) {
     if (!entry_.write_pending()) {
         entry_.note_write_progress();
     }
@@ -3718,8 +3508,7 @@ void connection_scanner::entry::enter_long_lived() noexcept {
 std::int64_t connection_scanner::entry::last_active_ms() const noexcept {
     return last_active_ms_;
 }
-void connection_scanner::entry::register_periodic_check(periodic_check_registration& registration,
-    void* target, periodic_check_type tick, drain_check_type drain) noexcept {
+void connection_scanner::entry::register_periodic_check(periodic_check_registration& registration, void* target, periodic_check_type tick, drain_check_type drain) noexcept {
     registration.reset();
     registration.entry_ = this;
     registration.target_ = target;
@@ -3731,8 +3520,7 @@ void connection_scanner::entry::register_periodic_check(periodic_check_registrat
     }
     periodic_checks_ = &registration;
 }
-void connection_scanner::entry::remove_periodic_check(
-    periodic_check_registration& registration) noexcept {
+void connection_scanner::entry::remove_periodic_check(periodic_check_registration& registration) noexcept {
     if (registration.entry_ != this) {
         return;
     }
@@ -3803,21 +3591,19 @@ void connection_scanner::entry::notify_drain() noexcept {
         registration = next;
     }
 }
-connection_scanner::guard::guard(
-    connection_scanner& scanner, entry& entry_value, connection_transport transport_value)
-    : entry_(entry_value) {
+connection_scanner::guard::guard(connection_scanner& scanner, entry& entry_value, connection_transport transport_value) :
+    entry_(entry_value) {
     scanner.impl_->register_entry(entry_, transport_value);
 }
 connection_scanner::guard::~guard() {
     connection_scanner::detach_entry(entry_);
 }
-connection_scanner::impl_type::impl_type(
-    connection_scanner* owner_value, worker_ref worker_value, connection_scanner_options options)
-    : owner_(owner_value),
-      worker_(require_scanner_worker(std::move(worker_value))),
-      timer_state_(std::make_shared<timer_state_type>(this)),
-      options_(std::move(options)),
-      cached_now_ms_(steady_now_ms()) {
+connection_scanner::impl_type::impl_type(connection_scanner* owner_value, worker_ref worker_value, connection_scanner_options options) :
+    owner_(owner_value),
+    worker_(require_scanner_worker(std::move(worker_value))),
+    timer_state_(std::make_shared<timer_state_type>(this)),
+    options_(std::move(options)),
+    cached_now_ms_(steady_now_ms()) {
     sentinel_.prev_ = sentinel_.next_ = &sentinel_;
     reusable_sentinel_.reusable_prev_ = reusable_sentinel_.reusable_next_ = &reusable_sentinel_;
 }
@@ -3848,8 +3634,8 @@ bool connection_scanner::impl_type::retire() noexcept {
     return nested_in_scan;
 }
 
-connection_scanner::connection_scanner(worker_ref worker_value, connection_scanner_options options)
-    : impl_(std::make_unique<impl_type>(this, std::move(worker_value), std::move(options))) {}
+connection_scanner::connection_scanner(worker_ref worker_value, connection_scanner_options options) :
+    impl_(std::make_unique<impl_type>(this, std::move(worker_value), std::move(options))) {}
 connection_scanner::~connection_scanner() noexcept {
     if (impl_->retire()) {
         // The scan running further up this stack frees the impl.
@@ -4043,9 +3829,7 @@ bool connection_scanner::impl_type::active_since(const entry& entry_value, std::
     // exchange; neither has an upgraded one between messages, nor a
     // multiplexed session without a stream. Anything else (a handshake, an
     // admitted request, a response) is an exchange.
-    return entry_value.last_active_ms_ >= interval_start || entry_value.write_pending() ||
-           (!entry_value.reading_request_head_ && entry_value.phase_ != phase::long_lived &&
-               entry_value.phase_ != phase::awaiting_stream);
+    return entry_value.last_active_ms_ >= interval_start || entry_value.write_pending() || (!entry_value.reading_request_head_ && entry_value.phase_ != phase::long_lived && entry_value.phase_ != phase::awaiting_stream);
 }
 void connection_scanner::impl_type::expire(entry& entry_value) noexcept {
     if (entry_value.lifecycle_ != nullptr) {
@@ -4059,8 +3843,7 @@ void connection_scanner::impl_type::expire(entry& entry_value) noexcept {
         }
         // A stalled write cannot carry a graceful end (GOAWAY, close alert);
         // a write still progressing is followed by the drain's own output.
-        if (entry_value.phase_ != phase::writing && !write_stalled(entry_value, now) &&
-            entry_value.has_drain_check()) {
+        if (entry_value.phase_ != phase::writing && !write_stalled(entry_value, now) && entry_value.has_drain_check()) {
             // The callback may retire the entry; record the request first.
             record_close_request(entry_value, close_deadline_after(now, connection_close_grace));
             entry_value.notify_drain();
@@ -4099,11 +3882,9 @@ bool connection_scanner::impl_type::is_timed_out(const entry& entry_value, std::
     const auto phase_elapsed_ms = now - entry_value.phase_started_ms_;
     switch (entry_value.phase_) {
         case phase::reading_initial:
-            return timeout_expired(options_.initial_read_timeout_, inactive_ms) ||
-                   timeout_expired(options_.initial_read_completion_timeout_, phase_elapsed_ms);
+            return timeout_expired(options_.initial_read_timeout_, inactive_ms) || timeout_expired(options_.initial_read_completion_timeout_, phase_elapsed_ms);
         case phase::reading_payload:
-            return timeout_expired(options_.payload_read_timeout_, inactive_ms) ||
-                   timeout_expired(options_.payload_read_completion_timeout_, phase_elapsed_ms);
+            return timeout_expired(options_.payload_read_timeout_, inactive_ms) || timeout_expired(options_.payload_read_completion_timeout_, phase_elapsed_ms);
         case phase::writing:
         case phase::long_lived:
             return false;
@@ -4115,8 +3896,7 @@ bool connection_scanner::impl_type::is_timed_out(const entry& entry_value, std::
     }
 }
 bool connection_scanner::impl_type::write_stalled(const entry& entry_value, std::int64_t now) const noexcept {
-    return entry_value.write_pending() &&
-           timeout_expired(options_.write_timeout_, now - entry_value.write_progress_ms_);
+    return entry_value.write_pending() && timeout_expired(options_.write_timeout_, now - entry_value.write_progress_ms_);
 }
 
 }  // namespace ruvia::detail

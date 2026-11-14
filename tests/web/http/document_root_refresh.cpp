@@ -58,15 +58,13 @@ public:
         if (context_value.req().header("X-Hold-Root").has_value()) {
             held_request_started.store(true, std::memory_order_release);
             while (!release_held_request.load(std::memory_order_acquire)) {
-                if (co_await ruvia::sleep_for(context_value.worker(), std::chrono::milliseconds(1),
-                        context_value.stop_token()) == ruvia::timer_sleep_result::stop_requested) {
+                if (co_await ruvia::sleep_for(context_value.worker(), std::chrono::milliseconds(1), context_value.stop_token()) == ruvia::timer_sleep_result::stop_requested) {
                     co_return;
                 }
             }
         }
         co_await next_value();
-        context_value.edit_response().header(
-            "X-Document-Root-Worker", context_value.worker_state<root_worker_state>().label_);
+        context_value.edit_response().header("X-Document-Root-Worker", context_value.worker_state<root_worker_state>().label_);
     }
 };
 
@@ -153,8 +151,7 @@ template <typename fn_type>
 
         ruvia::document_root_config config;
         config.root_ = configured_root();
-        config.static_options_ =
-            {.file_types_ = {.kind_ = ruvia::static_file_type_policy::kind::all}};
+        config.static_options_ = {.file_types_ = {.kind_ = ruvia::static_file_type_policy::kind::all}};
         config.refresh_interval_ = refresh_interval;
         ruvia::app().use_worker_state<root_worker_state>().use<root_request_observation>();
         ruvia::app().document_root(std::move(config));
@@ -164,8 +161,7 @@ template <typename fn_type>
 }
 
 // Sends one request on a fresh connection and returns the complete response.
-[[nodiscard]] std::string exchange(
-    asio::io_context& io, const asio::ip::tcp::endpoint& endpoint, std::string_view target) {
+[[nodiscard]] std::string exchange(asio::io_context& io, const asio::ip::tcp::endpoint& endpoint, std::string_view target) {
     std::string request("GET ");
     request.append(target);
     request.append(" HTTP/1.1\r\nHost: a\r\nConnection: close\r\n\r\n");
@@ -174,9 +170,7 @@ template <typename fn_type>
 
 // Observe distinct workers rather than whichever one accepts first. Windows
 // routes fresh connections away from a worker that holds a long-lived request.
-[[nodiscard]] bool eventually_serves(
-    asio::io_context& io, const asio::ip::tcp::endpoint& endpoint, std::string_view body,
-    std::size_t required_workers = worker_count) {
+[[nodiscard]] bool eventually_serves(asio::io_context& io, const asio::ip::tcp::endpoint& endpoint, std::string_view body, std::size_t required_workers = worker_count) {
     std::set<std::string> observed_workers{};
     return retry_until_deadline([&] {
         const auto response = exchange(io, endpoint, "/version.txt");
@@ -234,8 +228,7 @@ TEST(Ruvia, document_root_refresh_keeps_old_requests_across_multiple_publication
 
     asio::ip::tcp::socket held(io);
     held.connect(server.endpoint());
-    constexpr std::string_view request =
-        "GET /version.txt HTTP/1.1\r\nHost: a\r\nX-Hold-Root: yes\r\nConnection: close\r\n\r\n";
+    constexpr std::string_view request = "GET /version.txt HTTP/1.1\r\nHost: a\r\nX-Hold-Root: yes\r\nConnection: close\r\n\r\n";
     asio::write(held, asio::buffer(request));
     EXPECT_TRUE(retry_until_deadline([] {
         return held_request_started.load(std::memory_order_acquire);
@@ -307,8 +300,7 @@ TEST(Ruvia, document_root_refresh_failures_count_once_per_application) {
         failures = refresh_failures() - failures_before;
         return failures != 0 && steady_clock::now() - removed_at >= 10 * refresh_interval;
     }));
-    const auto window_intervals =
-        static_cast<std::size_t>((steady_clock::now() - removed_at) / refresh_interval);
+    const auto window_intervals = static_cast<std::size_t>((steady_clock::now() - removed_at) / refresh_interval);
     EXPECT_TRUE(failures >= 1);
     EXPECT_TRUE(failures <= window_intervals + 1);
     // Configuring static_options_ without resident limits still keeps the

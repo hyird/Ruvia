@@ -119,12 +119,11 @@ std::string request_wire(bool exhaust_connection) {
     // In each case exactly one window reaches zero after the file. Keep the
     // stream window positive when testing the connection window, and vice versa.
     const std::string_view settings = exhaust_connection
-                                          ? std::string_view("\0\4\0\1\xff\xfe", 6)   // INITIAL_WINDOW_SIZE = 131070
-                                          : std::string_view("\0\4\0\0\xff\xff", 6);  // INITIAL_WINDOW_SIZE = 65535
+        ? std::string_view("\0\4\0\1\xff\xfe", 6)   // INITIAL_WINDOW_SIZE = 131070
+        : std::string_view("\0\4\0\0\xff\xff", 6);  // INITIAL_WINDOW_SIZE = 65535
     append_frame(wire, ruvia::http2_frame_type::settings, 0, 0, settings);
     if (!exhaust_connection) {
-        append_frame(wire, ruvia::http2_frame_type::window_update, 0, 0,
-            std::string_view("\0\0\xff\xff", 4));
+        append_frame(wire, ruvia::http2_frame_type::window_update, 0, 0, std::string_view("\0\0\xff\xff", 4));
     }
     std::string block;
     ruvia::hpack_encoder::encode_header(block, ":method", "GET");
@@ -201,8 +200,7 @@ void check_file_end(bool exhaust_connection) {
             bool credited = false;
             while (!ended) {
                 const auto frame = co_await read_frame(socket);
-                if (frame.header_.type_ == static_cast<std::uint8_t>(ruvia::http2_frame_type::settings) &&
-                    (frame.header_.flags_ & 0x1) == 0) {
+                if (frame.header_.type_ == static_cast<std::uint8_t>(ruvia::http2_frame_type::settings) && (frame.header_.flags_ & 0x1) == 0) {
                     std::string ack{};
                     append_frame(ack, ruvia::http2_frame_type::settings, 0x1, 0, {});
                     const auto acknowledged = co_await ruvia::async_asio<std::size_t>([&](auto handler) {
@@ -212,8 +210,7 @@ void check_file_end(bool exhaust_connection) {
                         throw std::system_error(acknowledged.error_code());
                     }
                 }
-                if (frame.header_.type_ == static_cast<std::uint8_t>(ruvia::http2_frame_type::goaway) ||
-                    frame.header_.type_ == static_cast<std::uint8_t>(ruvia::http2_frame_type::rst_stream)) {
+                if (frame.header_.type_ == static_cast<std::uint8_t>(ruvia::http2_frame_type::goaway) || frame.header_.type_ == static_cast<std::uint8_t>(ruvia::http2_frame_type::rst_stream)) {
                     throw std::runtime_error("HTTP/2 file response aborted");
                 }
                 if (frame.header_.stream_id_ != 1) {
@@ -248,8 +245,7 @@ void check_file_end(bool exhaust_connection) {
                 if (!ended && !credited && body.size() == file_size) {
                     credited = true;
                     std::string increment{};
-                    append_frame(increment, ruvia::http2_frame_type::window_update, 0, exhaust_connection ? 0 : 1,
-                        std::string_view("\0\0\0\1", 4));
+                    append_frame(increment, ruvia::http2_frame_type::window_update, 0, exhaust_connection ? 0 : 1, std::string_view("\0\0\0\1", 4));
                     const auto sent = co_await ruvia::async_asio<std::size_t>([&](auto handler) {
                         asio::async_write(socket, asio::buffer(increment), std::move(handler));
                     });
@@ -317,8 +313,7 @@ TEST(Ruvia, http2_buffered_response_resumes_after_stream_window_update) {
                 throw std::system_error(connected.error_code());
             }
             std::string wire(ruvia::http2_client_preface);
-            append_frame(wire, ruvia::http2_frame_type::settings, 0, 0,
-                std::string_view("\0\4\0\0\0\1", 6));
+            append_frame(wire, ruvia::http2_frame_type::settings, 0, 0, std::string_view("\0\4\0\0\0\1", 6));
             std::string block;
             ruvia::hpack_encoder::encode_header(block, ":method", "GET");
             ruvia::hpack_encoder::encode_header(block, ":scheme", "http");
@@ -335,12 +330,10 @@ TEST(Ruvia, http2_buffered_response_resumes_after_stream_window_update) {
             while (!ended) {
                 const auto frame = co_await read_frame(socket);
                 std::string reply;
-                if (frame.header_.type_ == static_cast<std::uint8_t>(ruvia::http2_frame_type::settings) &&
-                    (frame.header_.flags_ & 0x1) == 0) {
+                if (frame.header_.type_ == static_cast<std::uint8_t>(ruvia::http2_frame_type::settings) && (frame.header_.flags_ & 0x1) == 0) {
                     append_frame(reply, ruvia::http2_frame_type::settings, 0x1, 0, {});
                 }
-                if (frame.header_.type_ == static_cast<std::uint8_t>(ruvia::http2_frame_type::goaway) ||
-                    frame.header_.type_ == static_cast<std::uint8_t>(ruvia::http2_frame_type::rst_stream)) {
+                if (frame.header_.type_ == static_cast<std::uint8_t>(ruvia::http2_frame_type::goaway) || frame.header_.type_ == static_cast<std::uint8_t>(ruvia::http2_frame_type::rst_stream)) {
                     throw std::runtime_error("HTTP/2 buffered response aborted");
                 }
                 if (frame.header_.stream_id_ == 1) {
@@ -362,8 +355,7 @@ TEST(Ruvia, http2_buffered_response_resumes_after_stream_window_update) {
                             EXPECT_EQ(body, std::string_view("a"));
                             EXPECT_FALSE(ended);
                             credited = true;
-                            append_frame(reply, ruvia::http2_frame_type::window_update, 0, 1,
-                                std::string_view("\0\0\0\4", 4));
+                            append_frame(reply, ruvia::http2_frame_type::window_update, 0, 1, std::string_view("\0\0\0\4", 4));
                         }
                     }
                 }
@@ -449,8 +441,7 @@ TEST(Ruvia, http2_file_body_is_read_only_after_send_window_is_granted) {
             ruvia::hpack_decoder decoder;
             while (!reset) {
                 const auto frame = co_await read_frame(socket);
-                if (frame.header_.type_ == static_cast<std::uint8_t>(ruvia::http2_frame_type::settings) &&
-                    (frame.header_.flags_ & 0x1) == 0) {
+                if (frame.header_.type_ == static_cast<std::uint8_t>(ruvia::http2_frame_type::settings) && (frame.header_.flags_ & 0x1) == 0) {
                     std::string ack{};
                     append_frame(ack, ruvia::http2_frame_type::settings, 0x1, 0, {});
                     co_await send_bytes(ack);
@@ -531,8 +522,7 @@ TEST(Ruvia, http2_failed_file_writes_release_output_budget_slots) {
             // A 10-byte initial stream window splits the first multipart
             // boundary chunk (~80 bytes) across window updates, so DATA output
             // is in flight when the file range read fails and resets the stream.
-            http2_file_flow_control_test::append_frame(
-                wire, ruvia::http2_frame_type::settings, 0, 0, std::string_view("\0\4\0\0\0\x0a", 6));
+            http2_file_flow_control_test::append_frame(wire, ruvia::http2_frame_type::settings, 0, 0, std::string_view("\0\4\0\0\0\x0a", 6));
             const auto send_bytes = [&](std::string_view bytes) -> ruvia::task<void> {
                 const auto written = co_await ruvia::async_asio<std::size_t>([&](auto handler) {
                     asio::async_write(socket, asio::buffer(bytes), std::move(handler));
@@ -553,32 +543,26 @@ TEST(Ruvia, http2_failed_file_writes_release_output_budget_slots) {
                 ruvia::hpack_encoder::encode_header(block, ":path", "/http2-file-mutated");
                 ruvia::hpack_encoder::encode_header(block, "range", "bytes=0-3, 10-13");
                 std::string req{};
-                http2_file_flow_control_test::append_frame(
-                    req, ruvia::http2_frame_type::headers, 0x5, stream_id, block);
+                http2_file_flow_control_test::append_frame(req, ruvia::http2_frame_type::headers, 0x5, stream_id, block);
                 co_await send_bytes(req);
                 bool stream_done = false;
                 while (!stream_done) {
                     const auto frame = co_await http2_file_flow_control_test::read_frame(socket);
-                    if (frame.header_.type_ == static_cast<std::uint8_t>(ruvia::http2_frame_type::settings) &&
-                        (frame.header_.flags_ & 0x1) == 0) {
+                    if (frame.header_.type_ == static_cast<std::uint8_t>(ruvia::http2_frame_type::settings) && (frame.header_.flags_ & 0x1) == 0) {
                         std::string ack{};
-                        http2_file_flow_control_test::append_frame(
-                            ack, ruvia::http2_frame_type::settings, 0x1, 0, {});
+                        http2_file_flow_control_test::append_frame(ack, ruvia::http2_frame_type::settings, 0x1, 0, {});
                         co_await send_bytes(ack);
-                    } else if (frame.header_.stream_id_ == stream_id &&
-                               frame.header_.type_ == static_cast<std::uint8_t>(ruvia::http2_frame_type::headers)) {
-                        (void)decoder.decode(frame.payload_, [](std::string_view, std::string_view) { return true; });
+                    } else if (frame.header_.stream_id_ == stream_id && frame.header_.type_ == static_cast<std::uint8_t>(ruvia::http2_frame_type::headers)) {
+                        (void)decoder.decode(frame.payload_, [](std::string_view, std::string_view) {
+                            return true;
+                        });
                         std::ofstream output(http2_file_flow_control_test::file_path(), std::ios::binary | std::ios::trunc);
                         output << "x";
-                    } else if (frame.header_.stream_id_ == stream_id &&
-                               frame.header_.type_ == static_cast<std::uint8_t>(ruvia::http2_frame_type::data)) {
+                    } else if (frame.header_.stream_id_ == stream_id && frame.header_.type_ == static_cast<std::uint8_t>(ruvia::http2_frame_type::data)) {
                         std::string update{};
-                        http2_file_flow_control_test::append_frame(
-                            update, ruvia::http2_frame_type::window_update, 0, stream_id,
-                            std::string_view("\0\0\x10\0", 4));
+                        http2_file_flow_control_test::append_frame(update, ruvia::http2_frame_type::window_update, 0, stream_id, std::string_view("\0\0\x10\0", 4));
                         co_await send_bytes(update);
-                    } else if (frame.header_.stream_id_ == stream_id &&
-                               frame.header_.type_ == static_cast<std::uint8_t>(ruvia::http2_frame_type::rst_stream)) {
+                    } else if (frame.header_.stream_id_ == stream_id && frame.header_.type_ == static_cast<std::uint8_t>(ruvia::http2_frame_type::rst_stream)) {
                         ++resets_seen;
                         stream_done = true;
                     }
@@ -692,9 +676,7 @@ TEST(Ruvia, http2_empty_file_validation_precedes_end_stream_headers) {
                 ruvia::hpack_encoder::encode_header(block, ":method", "GET");
                 ruvia::hpack_encoder::encode_header(block, ":scheme", "http");
                 ruvia::hpack_encoder::encode_header(block, ":authority", "localhost");
-                ruvia::hpack_encoder::encode_header(block, ":path",
-                    stream_id == 9 ? "/http2-file-ok" : stream_id == 7 ? "/http2-empty-mutated"
-                                                                       : "/http2-indexed-empty");
+                ruvia::hpack_encoder::encode_header(block, ":path", stream_id == 9 ? "/http2-file-ok" : (stream_id == 7 ? "/http2-empty-mutated" : "/http2-indexed-empty"));
                 std::string request{};
                 append_frame(request, ruvia::http2_frame_type::headers, 0x5, stream_id, block);
                 co_await send_bytes(request);
@@ -705,8 +687,7 @@ TEST(Ruvia, http2_empty_file_validation_precedes_end_stream_headers) {
                 std::string body{};
                 while (!ended && !reset) {
                     const auto frame = co_await read_frame(socket);
-                    if (frame.header_.type_ == static_cast<std::uint8_t>(ruvia::http2_frame_type::settings) &&
-                        (frame.header_.flags_ & 0x1) == 0) {
+                    if (frame.header_.type_ == static_cast<std::uint8_t>(ruvia::http2_frame_type::settings) && (frame.header_.flags_ & 0x1) == 0) {
                         std::string ack{};
                         append_frame(ack, ruvia::http2_frame_type::settings, 0x1, 0, {});
                         co_await send_bytes(ack);
@@ -784,11 +765,11 @@ using ruvia::test::append_frame;
 // client retirement cannot be masked by a server request-lease destructor.
 class early_final_peer final {
 public:
-    early_final_peer(asio::io_context& io, const ruvia::worker_ref& worker, response_mode mode)
-        : acceptor_(io, {asio::ip::make_address("127.0.0.1"), 0}),
-          socket_(io),
-          done_(worker),
-          mode_(mode) {}
+    early_final_peer(asio::io_context& io, const ruvia::worker_ref& worker, response_mode mode) :
+        acceptor_(io, {asio::ip::make_address("127.0.0.1"), 0}),
+        socket_(io),
+        done_(worker),
+        mode_(mode) {}
     early_final_peer(asio::io_context&, ruvia::worker_ref&&, response_mode) = delete;
 
     std::uint16_t port() const {
@@ -834,8 +815,7 @@ private:
         if (std::string_view(preface.data(), preface.size()) != ruvia::http2_client_preface) {
             throw std::runtime_error("missing HTTP/2 client preface");
         }
-        if (mode_ == response_mode::connection_lost || mode_ == response_mode::connection_lost_upload ||
-            mode_ == response_mode::goaway_upload) {
+        if (mode_ == response_mode::connection_lost || mode_ == response_mode::connection_lost_upload || mode_ == response_mode::goaway_upload) {
             std::string wire{};
             const std::array<char, 6> no_streams{0, 3, 0, 0, 0, 0};
             append_frame(wire, ruvia::http2_frame_type::settings, 0, 0, {no_streams.data(), no_streams.size()});
@@ -928,8 +908,7 @@ private:
                     first_stream = header->stream_id_;
                     request_ended_ = (header->flags_ & 1U) != 0;
                     const std::array<char, 4> refused_stream{0, 0, 0, 7};
-                    append_frame(wire, ruvia::http2_frame_type::rst_stream, 0, first_stream,
-                        {refused_stream.data(), refused_stream.size()});
+                    append_frame(wire, ruvia::http2_frame_type::rst_stream, 0, first_stream, {refused_stream.data(), refused_stream.size()});
                     co_await asio::async_write(socket_, asio::buffer(wire), asio::use_awaitable);
                     continue;
                 }
@@ -949,21 +928,17 @@ private:
                         append_frame(wire, type, 4, first_stream, interim);
                     }
                 } else if (requests_ == 2) {
-                    if (method != "GET" || path != "/next" || header->stream_id_ != first_stream + 2 ||
-                        (!request_ended_ && !request_reset_ && mode_ != response_mode::reset)) {
+                    if (method != "GET" || path != "/next" || header->stream_id_ != first_stream + 2 || (!request_ended_ && !request_reset_ && mode_ != response_mode::reset)) {
                         throw std::runtime_error("previous request half was not retired on the reused connection");
                     }
                 } else {
                     throw std::runtime_error("unexpected extra request");
                 }
                 const bool rejected = requests_ == 1 && mode_ == response_mode::rejected;
-                const std::string_view body = requests_ == 2 || mode_ == response_mode::connection_lost ? "next" : rejected ? "no"
-                                                                                                                            : "ok";
+                const std::string_view body = requests_ == 2 || mode_ == response_mode::connection_lost ? "next" : (rejected ? "no" : "ok");
                 std::string fields;
-                const bool empty_final = requests_ == 1 &&
-                                         (mode_ == response_mode::buffered || mode_ == response_mode::streaming);
-                ruvia::hpack_encoder::encode_header(fields, ":status", empty_final ? "204" : rejected ? "413"
-                                                                                                      : "200");
+                const bool empty_final = requests_ == 1 && (mode_ == response_mode::buffered || mode_ == response_mode::streaming);
+                ruvia::hpack_encoder::encode_header(fields, ":status", empty_final ? "204" : (rejected ? "413" : "200"));
                 if (!empty_final) {
                     ruvia::hpack_encoder::encode_header(fields, "content-length", std::to_string(body.size()));
                 }
@@ -985,15 +960,9 @@ private:
                     append_frame(wire, ruvia::http2_frame_type::window_update, 0, first_stream, increment);
                 } else if (mode_ == response_mode::streaming && !payload.empty()) {
                     const auto increment_value = static_cast<std::uint32_t>(payload.size());
-                    const std::array<char, 4> increment{
-                        static_cast<char>((increment_value >> 24U) & 0x7fU),
-                        static_cast<char>((increment_value >> 16U) & 0xffU),
-                        static_cast<char>((increment_value >> 8U) & 0xffU),
-                        static_cast<char>(increment_value & 0xffU)};
-                    append_frame(wire, ruvia::http2_frame_type::window_update, 0, 0,
-                        {increment.data(), increment.size()});
-                    append_frame(wire, ruvia::http2_frame_type::window_update, 0, first_stream,
-                        {increment.data(), increment.size()});
+                    const std::array<char, 4> increment{static_cast<char>((increment_value >> 24U) & 0x7fU), static_cast<char>((increment_value >> 16U) & 0xffU), static_cast<char>((increment_value >> 8U) & 0xffU), static_cast<char>(increment_value & 0xffU)};
+                    append_frame(wire, ruvia::http2_frame_type::window_update, 0, 0, {increment.data(), increment.size()});
+                    append_frame(wire, ruvia::http2_frame_type::window_update, 0, first_stream, {increment.data(), increment.size()});
                 }
             } else if (header->stream_id_ == first_stream && type == ruvia::http2_frame_type::rst_stream) {
                 request_reset_ = true;
@@ -1001,11 +970,7 @@ private:
             if (!wire.empty()) {
                 co_await asio::async_write(socket_, asio::buffer(wire), asio::use_awaitable);
             }
-            if (requests_ == 2 || (requests_ == 1 && (mode_ == response_mode::disconnected ||
-                                                         mode_ == response_mode::connection_lost ||
-                                                         ((mode_ == response_mode::connection_lost_upload ||
-                                                              mode_ == response_mode::goaway_upload) &&
-                                                             request_ended_)))) {
+            if (requests_ == 2 || (requests_ == 1 && (mode_ == response_mode::disconnected || mode_ == response_mode::connection_lost || ((mode_ == response_mode::connection_lost_upload || mode_ == response_mode::goaway_upload) && request_ended_)))) {
                 co_return;
             }
         }
@@ -1023,12 +988,12 @@ private:
 
 class draining_peer final {
 public:
-    draining_peer(asio::io_context& io, const ruvia::worker_ref& worker)
-        : acceptor_(io, {asio::ip::make_address("127.0.0.1"), 0}),
-          socket_(io),
-          start_drain_(io),
-          ready_(worker),
-          done_(worker) {
+    draining_peer(asio::io_context& io, const ruvia::worker_ref& worker) :
+        acceptor_(io, {asio::ip::make_address("127.0.0.1"), 0}),
+        socket_(io),
+        start_drain_(io),
+        ready_(worker),
+        done_(worker) {
         start_drain_.expires_at(asio::steady_timer::time_point::max());
     }
     [[nodiscard]] std::uint16_t port() const {
@@ -1129,8 +1094,7 @@ private:
             if (static_cast<ruvia::http2_frame_type>(header->type_) == ruvia::http2_frame_type::headers) {
                 throw std::runtime_error("second request was submitted despite stream limit");
             }
-            if (static_cast<ruvia::http2_frame_type>(header->type_) == ruvia::http2_frame_type::ping &&
-                (header->flags_ & 1U) != 0) {
+            if (static_cast<ruvia::http2_frame_type>(header->type_) == ruvia::http2_frame_type::ping && (header->flags_ & 1U) != 0) {
                 draining_ = true;
                 ready_.notify();
                 break;
@@ -1161,10 +1125,7 @@ void exercise_abandon_during_drain() {
     std::exception_ptr failure;
     const auto run = [&]() -> ruvia::task<void> {
         const std::string client_url("http://127.0.0.1:" + std::string(std::to_string(peer.port())));
-        ruvia::http_client client(attachment.loop(), {.base_url_ = client_url,
-                                                         .connection_limits_ = {.max_open_ = 1},
-                                                         .request_timeout_ = std::chrono::seconds(5),
-                                                         .versions_ = ruvia::http_client_versions{.http1_ = false}});
+        ruvia::http_client client(attachment.loop(), {.base_url_ = client_url, .connection_limits_ = {.max_open_ = 1}, .request_timeout_ = std::chrono::seconds(5), .versions_ = ruvia::http_client_versions{.http1_ = false}});
         try {
             auto held = co_await client.client().get("/hold").send();
             EXPECT_TRUE(held.status() == ruvia::http_status::ok);
@@ -1219,10 +1180,7 @@ void exercise(response_mode mode) {
     std::exception_ptr failure;
     const auto run = [&]() -> ruvia::task<void> {
         const std::string client_url("http://127.0.0.1:" + std::string(std::to_string(peer.port())));
-        ruvia::http_client client(attachment.loop(), {.base_url_ = client_url,
-                                                         .connection_limits_ = {.max_open_ = 1},
-                                                         .request_timeout_ = std::chrono::seconds(2),
-                                                         .versions_ = ruvia::http_client_versions{.http1_ = false}});
+        ruvia::http_client client(attachment.loop(), {.base_url_ = client_url, .connection_limits_ = {.max_open_ = 1}, .request_timeout_ = std::chrono::seconds(2), .versions_ = ruvia::http_client_versions{.http1_ = false}});
         try {
             if (mode == response_mode::refused_always) {
                 bool rejected = false;
@@ -1297,8 +1255,7 @@ void exercise(response_mode mode) {
                 EXPECT_EQ(response.status().value(), mode == response_mode::rejected ? 413 : 200);
                 const auto bytes = co_await response.stream().read_all();
                 const auto body = bytes.bytes();
-                EXPECT_EQ(std::string_view(reinterpret_cast<const char*>(body.data()), body.size()),
-                    mode == response_mode::rejected ? "no" : "ok");
+                EXPECT_EQ(std::string_view(reinterpret_cast<const char*>(body.data()), body.size()), mode == response_mode::rejected ? "no" : "ok");
                 EXPECT_TRUE(response.stream().complete());
                 if (mode == response_mode::disconnected) {
                     // Start a write with no stream credit, then close the peer.
@@ -1338,21 +1295,15 @@ void exercise(response_mode mode) {
                     EXPECT_TRUE(cancelled);
                 }
             }
-            if (mode != response_mode::disconnected && mode != response_mode::connection_lost_upload &&
-                mode != response_mode::goaway_upload && mode != response_mode::refused_always) {
+            if (mode != response_mode::disconnected && mode != response_mode::connection_lost_upload && mode != response_mode::goaway_upload && mode != response_mode::refused_always) {
                 auto next = co_await client.client().get("/next").send();
                 const auto bytes = co_await next.stream().read_all();
                 const auto body = bytes.bytes();
                 EXPECT_EQ(std::string_view(reinterpret_cast<const char*>(body.data()), body.size()), "next");
                 co_await peer.join();
                 EXPECT_EQ(peer.requests_, mode == response_mode::connection_lost ? 1U : 2U);
-                if (mode == response_mode::ordinary || mode == response_mode::continued ||
-                    mode == response_mode::buffered || mode == response_mode::streaming) {
-                    const auto expected = mode == response_mode::buffered
-                                              ? std::string(65536, 'b')
-                                          : mode == response_mode::streaming
-                                              ? std::string(streaming_payload_bytes, 's')
-                                              : std::string("payload");
+                if (mode == response_mode::ordinary || mode == response_mode::continued || mode == response_mode::buffered || mode == response_mode::streaming) {
+                    const auto expected = mode == response_mode::buffered ? std::string(65536, 'b') : (mode == response_mode::streaming ? std::string(streaming_payload_bytes, 's') : std::string("payload"));
                     EXPECT_EQ(peer.received_, expected);
                     EXPECT_TRUE(peer.request_ended_);
                 } else if (mode == response_mode::refused || mode == response_mode::connection_lost) {

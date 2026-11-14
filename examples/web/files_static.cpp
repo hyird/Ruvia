@@ -53,8 +53,7 @@ private:
     }
 
     ruvia::task<ruvia::http_response> asset(ruvia::context& c) {
-        co_return co_await c.static_file(
-            *g_assets, {.relative_path_ = c.req().param("*").value_or("index.html")});
+        co_return co_await c.static_file(*g_assets, {.relative_path_ = c.req().param("*").value_or("index.html")});
     }
 };
 
@@ -65,8 +64,7 @@ int main() {
                 .cache_control_ = "public, max-age=3600",
                 .index_file_ = "index.html",
                 .mime_types_ = {{"txt", "text/plain; charset=utf-8"}},
-                .file_types_ = {.kind_ = ruvia::static_file_type_policy::kind::only,
-                    .extensions_ = {"html", "txt"}},
+                .file_types_ = {.kind_ = ruvia::static_file_type_policy::kind::only, .extensions_ = {"html", "txt"}},
                 .range_requests_ = ruvia::static_range_request_policy::honor,
                 .response_validators_ = ruvia::static_response_validator_policy::emit,
                 .dotfiles_ = ruvia::static_dotfile_policy::deny,
@@ -89,13 +87,7 @@ int main() {
         // The application blocking pool is enabled by default; file opens and
         // reads run on it.
 
-        ruvia::app()
-            .listen({.address_ = "0.0.0.0", .http_ = 8083})
-            .server({.worker_count_ = 2,
-                .process_signal_handlers_ = ruvia::process_signal_handler_policy::install,
-                .compression_ = ruvia::compression_config{}})
-            .document_root(std::move(document_root))
-            .run();
+        ruvia::app().listen({.address_ = "0.0.0.0", .http_ = 8083}).server({.worker_count_ = 2, .process_signal_handlers_ = ruvia::process_signal_handler_policy::install, .compression_ = ruvia::compression_config{}}).document_root(std::move(document_root)).run();
     } catch (...) {
         std::cerr << ruvia::exception_text(std::current_exception()) << '\n';
         return 1;

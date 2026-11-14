@@ -69,15 +69,12 @@ private:
             if (const auto authorization = c.req().header("authorization")) {
                 headers[header_count++] = {"authorization", *authorization};
             }
-            auto operation =
-                client
-                    .with_options({
-                        .timeout_ = std::chrono::seconds(5),
-                    })
-                    .post("/features/upload")
-                    .headers(std::span(headers).first(header_count))
-                    .body(incoming_body)
-                    .send();
+            auto operation = client
+                                 .with_options({.timeout_ = std::chrono::seconds(5)})
+                                 .post("/features/upload")
+                                 .headers(std::span(headers).first(header_count))
+                                 .body(incoming_body)
+                                 .send();
             auto response = co_await std::move(operation);
             c.draft().status(response.status());
             if (const auto content_type = response.header("content-type")) {
@@ -88,8 +85,7 @@ private:
             co_return c.body(body.bytes());
         } catch (const ruvia::http_client_error& error) {
             const auto failure = report_upstream_failure(error);
-            co_return c.error(
-                {.status_ = failure.status_, .code_ = "upstream_error", .message_ = failure.message_});
+            co_return c.error({.status_ = failure.status_, .code_ = "upstream_error", .message_ = failure.message_});
         }
     }
 
@@ -107,9 +103,7 @@ private:
         std::optional<ruvia::http_client_response> response;
         std::string_view error_body;
         try {
-            response.emplace(co_await client.get("/features/download")
-                    .headers(std::span(headers).first(header_count))
-                    .send());
+            response.emplace(co_await client.get("/features/download").headers(std::span(headers).first(header_count)).send());
         } catch (const ruvia::http_client_error& error) {
             const auto failure = report_upstream_failure(error);
             c.draft().status(failure.status_);
@@ -143,8 +137,7 @@ int main() {
         }
         base_url.push_back(':');
         ruvia::http_append_unsigned(base_url, env.get<std::uint16_t>("RUVIA_UPSTREAM_PORT").value_or(tls ? 8444 : 8093));
-        app
-            .listen({.address_ = "0.0.0.0", .http_ = 8099})
+        app.listen({.address_ = "0.0.0.0", .http_ = 8099})
             .server({.worker_count_ = 2, .process_signal_handlers_ = ruvia::process_signal_handler_policy::install})
             .client({
                 .base_url_ = base_url,

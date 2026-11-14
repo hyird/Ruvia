@@ -87,8 +87,8 @@ namespace ruvia::test {
 // server binds; that bind then fails loudly.
 class tcp_port_reservation final {
 public:
-    explicit tcp_port_reservation(asio::io_context& io)
-        : socket_(io) {
+    explicit tcp_port_reservation(asio::io_context& io) :
+        socket_(io) {
         socket_.open(asio::ip::tcp::v4());
 #if defined(_WIN32)
         for (;;) {
@@ -171,8 +171,8 @@ namespace ruvia::test {
 // server binds; that bind then fails loudly instead of sharing traffic.
 class udp_port_reservation final {
 public:
-    explicit udp_port_reservation(asio::io_context& io)
-        : socket_(io) {
+    explicit udp_port_reservation(asio::io_context& io) :
+        socket_(io) {
         socket_.open(asio::ip::udp::v4());
 #if defined(_WIN32)
         for (;;) {
@@ -237,28 +237,23 @@ private:
 namespace ruvia::test {
 
 inline int sign_tls_certificate(X509* certificate, EVP_PKEY* key) {
-    const auto context_value = std::unique_ptr<EVP_MD_CTX, decltype(&EVP_MD_CTX_free)>(
-        EVP_MD_CTX_new(), EVP_MD_CTX_free);
-    if (!context_value || EVP_DigestSignInit_ex(context_value.get(), nullptr, "SHA256", nullptr, nullptr,
-                              key, nullptr) != 1) {
+    const auto context_value = std::unique_ptr<EVP_MD_CTX, decltype(&EVP_MD_CTX_free)>(EVP_MD_CTX_new(), EVP_MD_CTX_free);
+    if (!context_value || EVP_DigestSignInit_ex(context_value.get(), nullptr, "SHA256", nullptr, nullptr, key, nullptr) != 1) {
         return 0;
     }
     return X509_sign_ctx(certificate, context_value.get());
 }
 
-inline int write_tls_private_key(BIO* output, const EVP_PKEY* key,
-    std::string_view password = {}, bool encrypted = false) {
+inline int write_tls_private_key(BIO* output, const EVP_PKEY* key, std::string_view password = {}, bool encrypted = false) {
     if (password.size() > static_cast<std::size_t>((std::numeric_limits<int>::max)())) {
         return 0;
     }
-    const auto cipher = std::unique_ptr<EVP_CIPHER, decltype(&EVP_CIPHER_free)>(
-        encrypted ? EVP_CIPHER_fetch(nullptr, "AES-256-CBC", nullptr) : nullptr, EVP_CIPHER_free);
+    const auto cipher = std::unique_ptr<EVP_CIPHER, decltype(&EVP_CIPHER_free)>(encrypted ? EVP_CIPHER_fetch(nullptr, "AES-256-CBC", nullptr) : nullptr, EVP_CIPHER_free);
     if (encrypted && !cipher) {
         return 0;
     }
     const auto* bytes_value = reinterpret_cast<const unsigned char*>(password.empty() ? "" : password.data());
-    return PEM_write_bio_PrivateKey_ex(output, key, cipher.get(), encrypted ? bytes_value : nullptr,
-        static_cast<int>(password.size()), nullptr, nullptr, nullptr, nullptr);
+    return PEM_write_bio_PrivateKey_ex(output, key, cipher.get(), encrypted ? bytes_value : nullptr, static_cast<int>(password.size()), nullptr, nullptr, nullptr, nullptr);
 }
 
 }  // namespace ruvia::test
@@ -270,44 +265,32 @@ class tls_identity final {
 
 public:
     // A self-signed identity whose subject CN and only DNS subjectAltName are `name`.
-    explicit tls_identity(const char* name)
-        : tls_identity(name, std::string("DNS:") + name) {}
+    explicit tls_identity(const char* name) :
+        tls_identity(name, std::string("DNS:") + name) {}
 
     // The subject CN is `common_name`; `subject_alt_name` uses OpenSSL's
     // configuration syntax (`DNS:w*.example.com`), and empty omits the extension.
-    tls_identity(const char* common_name, std::string_view subject_alt_name, bool elliptic_curve = false)
-        : context_(asio::ssl::context::tls_server) {
+    tls_identity(const char* common_name, std::string_view subject_alt_name, bool elliptic_curve = false) :
+        context_(asio::ssl::context::tls_server) {
         std::filesystem::permissions(directory_.path(), std::filesystem::perms::owner_all);
-        std::unique_ptr<EVP_PKEY, decltype(&EVP_PKEY_free)> key(elliptic_curve
-                                                                    ? EVP_PKEY_Q_keygen(nullptr, nullptr, "EC", "prime256v1")
-                                                                    : EVP_PKEY_Q_keygen(nullptr, nullptr, "RSA", std::size_t{2048}),
-            EVP_PKEY_free);
+        std::unique_ptr<EVP_PKEY, decltype(&EVP_PKEY_free)> key(elliptic_curve ? EVP_PKEY_Q_keygen(nullptr, nullptr, "EC", "prime256v1") : EVP_PKEY_Q_keygen(nullptr, nullptr, "RSA", std::size_t{2048}), EVP_PKEY_free);
         std::unique_ptr<X509, decltype(&X509_free)> certificate(X509_new_ex(nullptr, nullptr), X509_free);
-        if (!key || !certificate || X509_set_version(certificate.get(), 2) != 1 ||
-            ASN1_INTEGER_set(X509_get_serialNumber(certificate.get()), 1) != 1 ||
-            !X509_gmtime_adj(X509_getm_notBefore(certificate.get()), -60) ||
-            !X509_gmtime_adj(X509_getm_notAfter(certificate.get()), 86400) ||
-            X509_set_pubkey(certificate.get(), key.get()) != 1) {
+        if (!key || !certificate || X509_set_version(certificate.get(), 2) != 1 || ASN1_INTEGER_set(X509_get_serialNumber(certificate.get()), 1) != 1 || !X509_gmtime_adj(X509_getm_notBefore(certificate.get()), -60) || !X509_gmtime_adj(X509_getm_notAfter(certificate.get()), 86400) || X509_set_pubkey(certificate.get(), key.get()) != 1) {
             throw std::runtime_error("cannot generate TLS test identity");
         }
         const auto subject = std::unique_ptr<X509_NAME, decltype(&X509_NAME_free)>(X509_NAME_new(), X509_NAME_free);
-        if (!subject || X509_NAME_add_entry_by_txt(subject.get(), "CN", MBSTRING_ASC, reinterpret_cast<const unsigned char*>(common_name), -1, -1, 0) != 1 ||
-            X509_set_subject_name(certificate.get(), subject.get()) != 1 ||
-            X509_set_issuer_name(certificate.get(), subject.get()) != 1) {
+        if (!subject || X509_NAME_add_entry_by_txt(subject.get(), "CN", MBSTRING_ASC, reinterpret_cast<const unsigned char*>(common_name), -1, -1, 0) != 1 || X509_set_subject_name(certificate.get(), subject.get()) != 1 || X509_set_issuer_name(certificate.get(), subject.get()) != 1) {
             throw std::runtime_error("cannot name TLS test identity");
         }
         if (!subject_alt_name.empty()) {
             X509V3_CTX extension_context{};
             X509V3_set_ctx(&extension_context, certificate.get(), certificate.get(), nullptr, nullptr, 0);
-            std::unique_ptr<X509_EXTENSION, decltype(&X509_EXTENSION_free)> extension(
-                X509V3_EXT_nconf_nid(nullptr, &extension_context, NID_subject_alt_name, std::string(subject_alt_name).c_str()), X509_EXTENSION_free);
+            std::unique_ptr<X509_EXTENSION, decltype(&X509_EXTENSION_free)> extension(X509V3_EXT_nconf_nid(nullptr, &extension_context, NID_subject_alt_name, std::string(subject_alt_name).c_str()), X509_EXTENSION_free);
             if (!extension || X509_add_ext(certificate.get(), extension.get(), -1) != 1) {
                 throw std::runtime_error("cannot name TLS test identity");
             }
         }
-        if (ruvia::test::sign_tls_certificate(certificate.get(), key.get()) <= 0 ||
-            SSL_CTX_use_certificate(context_.native_handle(), certificate.get()) != 1 ||
-            SSL_CTX_use_PrivateKey(context_.native_handle(), key.get()) != 1) {
+        if (ruvia::test::sign_tls_certificate(certificate.get(), key.get()) <= 0 || SSL_CTX_use_certificate(context_.native_handle(), certificate.get()) != 1 || SSL_CTX_use_PrivateKey(context_.native_handle(), key.get()) != 1) {
             throw std::runtime_error("cannot sign TLS test identity");
         }
         ca_file_ = directory_.path() / "ca.pem";
@@ -338,16 +321,16 @@ namespace ruvia::test {
 // Startup hooks remain caller-owned: application retains them across runs.
 class app_run final {
 public:
-    explicit app_run(application& app)
-        : app_(app),
-          thread_([this] {
-              try {
-                  app_.run();
-              } catch (...) {
-                  std::lock_guard lock(mutex_);
-                  failure_ = std::current_exception();
-              }
-          }) {}
+    explicit app_run(application& app) :
+        app_(app),
+        thread_([this] {
+            try {
+                app_.run();
+            } catch (...) {
+                std::lock_guard lock(mutex_);
+                failure_ = std::current_exception();
+            }
+        }) {}
 
     app_run(const app_run&) = delete;
     app_run& operator=(const app_run&) = delete;
@@ -410,8 +393,7 @@ template <typename stream_type>
     return result;
 }
 
-[[nodiscard]] inline std::string exchange(asio::io_context& io,
-    const asio::ip::tcp::endpoint& endpoint, std::string_view request) {
+[[nodiscard]] inline std::string exchange(asio::io_context& io, const asio::ip::tcp::endpoint& endpoint, std::string_view request) {
     asio::ip::tcp::socket socket(io);
     socket.connect(endpoint);
     asio::write(socket, asio::buffer(request));
@@ -419,8 +401,7 @@ template <typename stream_type>
 }
 
 template <typename predicate_type, typename representation_type, typename period_type>
-inline void wait_until(predicate_type predicate,
-    std::chrono::duration<representation_type, period_type> timeout) {
+inline void wait_until(predicate_type predicate, std::chrono::duration<representation_type, period_type> timeout) {
     const auto deadline = std::chrono::steady_clock::now() + timeout;
     while (!predicate()) {
         if (std::chrono::steady_clock::now() >= deadline) {
@@ -438,9 +419,8 @@ class http_server_fixture final {
 public:
     // The application is shared by every case in the executable, so the first
     // fixture constructed fixes its server_config.
-    explicit http_server_fixture(asio::io_context& io,
-        server_config config = {.worker_count_ = 1, .connection_scan_interval_ = std::chrono::milliseconds(5)})
-        : runtime_(&shared_runtime(io, config)) {}
+    explicit http_server_fixture(asio::io_context& io, server_config config = {.worker_count_ = 1, .connection_scan_interval_ = std::chrono::milliseconds(5)}) :
+        runtime_(&shared_runtime(io, config)) {}
 
     [[nodiscard]] const asio::ip::tcp::endpoint& endpoint() const noexcept {
         return runtime_->endpoint();
@@ -455,10 +435,10 @@ public:
 private:
     class server_runtime final {
     public:
-        server_runtime(asio::io_context& io, const server_config& config)
-            : reservation_(io),
-              endpoint_(reservation_.endpoint()),
-              startup_(std::make_shared<startup_state>()) {
+        server_runtime(asio::io_context& io, const server_config& config) :
+            reservation_(io),
+            endpoint_(reservation_.endpoint()),
+            startup_(std::make_shared<startup_state>()) {
             app().server(config).listen({.address_ = "127.0.0.1", .http_ = endpoint_.port()}).on_start([startup = std::weak_ptr<startup_state>(startup_)] {
                 if (auto state = startup.lock()) {
                     state->ready_.set_value();
@@ -468,10 +448,8 @@ private:
             runner_ = std::make_unique<app_run>(app());
             try {
                 wait_until([&] {
-                    return ready.wait_for(std::chrono::seconds(0)) == std::future_status::ready ||
-                           runner_->failure() != nullptr;
-                },
-                    std::chrono::seconds(5));
+                    return ready.wait_for(std::chrono::seconds(0)) == std::future_status::ready || runner_->failure() != nullptr;
+                }, std::chrono::seconds(5));
                 rethrow_failure();
                 ready.get();
             } catch (...) {
@@ -488,8 +466,7 @@ private:
             wait_until([&] {
                 rethrow_failure();
                 return app().stats().active_connections_ == 0;
-            },
-                std::chrono::seconds(5));
+            }, std::chrono::seconds(5));
         }
 
     private:
@@ -526,8 +503,8 @@ class context_callback final {
 public:
     static constexpr bool ruvia_runs_on_unmatched_requests = true;
 
-    explicit context_callback(callback_type* callback) noexcept
-        : callback_(callback) {}
+    explicit context_callback(callback_type* callback) noexcept :
+        callback_(callback) {}
 
     ruvia::task<void> invoke(ruvia::context& context_value, ruvia::next&) {
         co_await (*callback_)(context_value);
@@ -538,8 +515,7 @@ private:
 };
 
 template <typename callback_type>
-[[nodiscard]] inline ruvia::dispatch_response with_context(
-    const ruvia::test_request& request, callback_type&& callback) {
+[[nodiscard]] inline ruvia::dispatch_response with_context(const ruvia::test_request& request, callback_type&& callback) {
     ruvia::test_app app;
     app.use<context_callback<std::remove_reference_t<callback_type>>>(&callback);
     return app.request(request);
@@ -553,13 +529,16 @@ namespace ruvia::test {
 // its own event loop. Expiry is not simulated: these cases do not test time.
 class redis_session_store_peer final {
 public:
-    explicit redis_session_store_peer(
-        std::map<std::string, std::string> store = std::map<std::string, std::string>())
-        : acceptor_(io_, {asio::ip::address_v4::loopback(), 0}),
-          work_(asio::make_work_guard(io_)),
-          store_(std::move(store)) {
-        asio::co_spawn(io_, accept(), [this](std::exception_ptr failure) { fail(failure); });
-        thread_ = std::thread([this] { io_.run(); });
+    explicit redis_session_store_peer(std::map<std::string, std::string> store = std::map<std::string, std::string>()) :
+        acceptor_(io_, {asio::ip::address_v4::loopback(), 0}),
+        work_(asio::make_work_guard(io_)),
+        store_(std::move(store)) {
+        asio::co_spawn(io_, accept(), [this](std::exception_ptr failure) {
+            fail(failure);
+        });
+        thread_ = std::thread([this] {
+            io_.run();
+        });
     }
 
     ~redis_session_store_peer() {
@@ -593,9 +572,7 @@ private:
     }
 
     [[nodiscard]] bool closed(const std::error_code& error) const noexcept {
-        return error == asio::error::eof || error == asio::error::connection_reset ||
-               error == asio::error::connection_aborted ||
-               (closing_ && (error == asio::error::operation_aborted || error == asio::error::bad_descriptor));
+        return error == asio::error::eof || error == asio::error::connection_reset || error == asio::error::connection_aborted || (closing_ && (error == asio::error::operation_aborted || error == asio::error::bad_descriptor));
     }
 
     asio::awaitable<void> accept() {
@@ -604,7 +581,9 @@ private:
                 auto socket = std::make_shared<socket_type>(io_);
                 co_await acceptor_.async_accept(*socket, asio::use_awaitable);
                 sockets_.push_back(socket);
-                asio::co_spawn(io_, serve(socket), [this](std::exception_ptr failure) { fail(failure); });
+                asio::co_spawn(io_, serve(socket), [this](std::exception_ptr failure) {
+                    fail(failure);
+                });
             }
         } catch (const std::system_error& error) {
             if (!closed(error.code())) {
@@ -634,8 +613,7 @@ private:
             }
             const auto size = std::get<0>(ruvia::parse_integer<std::size_t>(std::string_view(bulk).substr(1)));
             if (buffer.size() < size + 2) {
-                co_await asio::async_read(socket, asio::dynamic_buffer(buffer),
-                    asio::transfer_exactly(size + 2 - buffer.size()), asio::use_awaitable);
+                co_await asio::async_read(socket, asio::dynamic_buffer(buffer), asio::transfer_exactly(size + 2 - buffer.size()), asio::use_awaitable);
             }
             args.emplace_back(buffer.data(), size);
             buffer.erase(0, size + 2);
@@ -701,11 +679,9 @@ private:
 
 namespace ruvia::test {
 
-inline void append_frame(std::string& wire, http2_frame_type type, std::uint8_t flags,
-    std::uint32_t stream_id, std::string_view payload) {
+inline void append_frame(std::string& wire, http2_frame_type type, std::uint8_t flags, std::uint32_t stream_id, std::string_view payload) {
     std::array<char, http2_frame_header_bytes> header{};
-    if (payload.size() > std::numeric_limits<std::uint32_t>::max() ||
-        !encode_http2_frame_header(header, static_cast<std::uint32_t>(payload.size()), type, flags, stream_id)) {
+    if (payload.size() > std::numeric_limits<std::uint32_t>::max() || !encode_http2_frame_header(header, static_cast<std::uint32_t>(payload.size()), type, flags, stream_id)) {
         throw std::logic_error("invalid HTTP/2 test frame");
     }
     wire.append(header.data(), header.size());
@@ -718,8 +694,7 @@ struct received_frame final {
 };
 
 template <typename stream_type>
-[[nodiscard]] inline received_frame read_frame(stream_type& stream,
-    std::optional<std::chrono::steady_clock::time_point> deadline = std::nullopt) {
+[[nodiscard]] inline received_frame read_frame(stream_type& stream, std::optional<std::chrono::steady_clock::time_point> deadline = std::nullopt) {
     auto& socket = stream.lowest_layer();
     const auto was_non_blocking = socket.non_blocking();
     struct restore_mode final {

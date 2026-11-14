@@ -50,8 +50,7 @@ inline constexpr std::size_t max_content_codings = 8;
 
 // RFC 9110 section 8.4.1.3 treats x-gzip as gzip. The token is already trimmed.
 [[nodiscard]] inline bool http_is_gzip_coding_token(std::string_view token) noexcept {
-    return http_ascii_equals_ignore_case(token, "gzip") ||
-           http_ascii_equals_ignore_case(token, "x-gzip");
+    return http_ascii_equals_ignore_case(token, "gzip") || http_ascii_equals_ignore_case(token, "x-gzip");
 }
 
 // Codings supported for incoming request bodies, as an Accept-Encoding field value.
@@ -62,8 +61,8 @@ inline constexpr std::size_t max_content_codings = 8;
 class http_unsupported_content_coding final {
 public:
     constexpr http_unsupported_content_coding() noexcept = default;
-    explicit constexpr http_unsupported_content_coding(bool depth_exceeded) noexcept
-        : depth_exceeded_(depth_exceeded) {}
+    explicit constexpr http_unsupported_content_coding(bool depth_exceeded) noexcept :
+        depth_exceeded_(depth_exceeded) {}
 
     [[nodiscard]] static constexpr http_status_code status() noexcept {
         return http_status::unsupported_media_type;
@@ -115,38 +114,31 @@ private:
         std::uint8_t size_{0};
     };
 
-    explicit constexpr http_content_coding_field_result(content_coding_sequence codings) noexcept
-        : value_(codings) {}
+    explicit constexpr http_content_coding_field_result(content_coding_sequence codings) noexcept :
+        value_(codings) {}
 
-    explicit constexpr http_content_coding_field_result(
-        http_unsupported_content_coding unsupported) noexcept
-        : value_(unsupported) {}
+    explicit constexpr http_content_coding_field_result(http_unsupported_content_coding unsupported) noexcept :
+        value_(unsupported) {}
 
-    explicit constexpr http_content_coding_field_result(http_invalid_content_coding_field invalid) noexcept
-        : value_(invalid) {}
+    explicit constexpr http_content_coding_field_result(http_invalid_content_coding_field invalid) noexcept :
+        value_(invalid) {}
 
-    std::variant<content_coding_sequence, http_unsupported_content_coding,
-        http_invalid_content_coding_field>
-        value_;
+    std::variant<content_coding_sequence, http_unsupported_content_coding, http_invalid_content_coding_field> value_;
 };
 
 // Parses one logical Content-Encoding field value using recipient list rules.
 // Empty list members are ignored; an empty value therefore means identity.
-[[nodiscard]] http_content_coding_field_result parse_http_content_coding(
-    std::string_view value) noexcept;
+[[nodiscard]] http_content_coding_field_result parse_http_content_coding(std::string_view value) noexcept;
 
 // Folds every Content-Encoding header line into one recipient-side decision.
 // Empty list members are ignored; no field or only empty members means identity.
-[[nodiscard]] http_content_coding_field_result parse_http_content_coding_headers(
-    std::span<const http_header> headers) noexcept;
-[[nodiscard]] http_content_coding_field_result parse_http_content_coding_headers(
-    const http_response_headers& headers) noexcept;
+[[nodiscard]] http_content_coding_field_result parse_http_content_coding_headers(std::span<const http_header> headers) noexcept;
+[[nodiscard]] http_content_coding_field_result parse_http_content_coding_headers(const http_response_headers& headers) noexcept;
 
 // Uses the parser's classified header descriptors without rescanning wire names.
 // Admission keeps Content-Encoding opaque. Inspect invalid()/unsupported()
 // before using codings(); an empty span in either error state is not identity.
-[[nodiscard]] http_content_coding_field_result request_content_coding(
-    const http_request& request) noexcept;
+[[nodiscard]] http_content_coding_field_result request_content_coding(const http_request& request) noexcept;
 
 // Allowlist compressibility policy for dynamic response compression and static
 // precompression: text/*, +json, +xml, and common text/font/wasm/icon media
@@ -173,14 +165,11 @@ struct http_content_encode_options final {
 // cap. nullopt means only that max_encoded_bytes_ would be exceeded; zero
 // permits only a zero-byte encoding. Codec failures throw
 // http_content_codec_error.
-[[nodiscard]] std::optional<std::string> encode_http_content(
-    http_content_coding coding, std::string_view input, http_content_encode_options options);
+[[nodiscard]] std::optional<std::string> encode_http_content(http_content_coding coding, std::string_view input, http_content_encode_options options);
 
 // Applies the listed codings in order. Each intermediate representation is
 // bounded by max_encoded_bytes and released before the next stage completes.
-[[nodiscard]] std::optional<std::string> encode_http_content(
-    std::span<const http_content_coding> codings, std::string_view input,
-    http_content_encode_options options);
+[[nodiscard]] std::optional<std::string> encode_http_content(std::span<const http_content_coding> codings, std::string_view input, http_content_encode_options options);
 
 // Reusable whole-buffer encoder for one coding, for an owner that encodes many
 // representations on one thread. The first encode() creates the codec state;
@@ -202,8 +191,7 @@ public:
         return coding_;
     }
 
-    [[nodiscard]] std::optional<std::string> encode(
-        std::string_view input, http_content_encode_options options);
+    [[nodiscard]] std::optional<std::string> encode(std::string_view input, http_content_encode_options options);
 
 private:
     struct impl_type;
@@ -212,11 +200,9 @@ private:
 };
 
 // Data errors only: a codec that cannot run throws http_content_codec_error.
-enum class http_content_decode_error : std::uint8_t {
-    unsupported_coding,
+enum class http_content_decode_error : std::uint8_t { unsupported_coding,
     invalid_content,
-    decoded_size_exceeded
-};
+    decoded_size_exceeded };
 
 struct http_content_decode_options final {
     std::size_t max_decoded_bytes_{};
@@ -227,8 +213,7 @@ struct http_content_decode_options final {
 // complete representation, and an identity representation over the cap is
 // rejected before allocating. An empty representation decodes to empty content
 // for every coding. Codec failures throw http_content_codec_error.
-[[nodiscard]] std::variant<std::string, http_content_decode_error> decode_http_content(
-    http_content_coding coding, std::string_view input, http_content_decode_options options);
+[[nodiscard]] std::variant<std::string, http_content_decode_error> decode_http_content(http_content_coding coding, std::string_view input, http_content_decode_options options);
 
 // Decodes the listed codings in reverse order. gzip members and zstd frames are
 // consumed through the end of their input; Brotli trailing bytes are rejected.
@@ -236,9 +221,7 @@ struct http_content_decode_options final {
 // decoded-size cap applies to every intermediate representation, and each one
 // is released before the next stage completes. Codec failures throw
 // http_content_codec_error.
-[[nodiscard]] std::variant<std::string, http_content_decode_error> decode_http_content(
-    std::span<const http_content_coding> codings, std::string_view input,
-    http_content_decode_options options);
+[[nodiscard]] std::variant<std::string, http_content_decode_error> decode_http_content(std::span<const http_content_coding> codings, std::string_view input, http_content_decode_options options);
 }  // namespace ruvia
 
 namespace ruvia {
@@ -265,8 +248,7 @@ struct http_content_encoder_options final {
 // which may allocate. A reset failure leaves the encoder failed.
 class http_content_encoder final {
 public:
-    explicit http_content_encoder(
-        http_content_coding coding, http_content_encoder_options options = {});
+    explicit http_content_encoder(http_content_coding coding, http_content_encoder_options options = {});
     ~http_content_encoder();
     http_content_encoder(const http_content_encoder&) = delete;
     http_content_encoder& operator=(const http_content_encoder&) = delete;
@@ -294,9 +276,9 @@ private:
 
 class http_content_transcode_error final : public http_content_codec_error {
 public:
-    http_content_transcode_error(http_content_decode_error error, const char* message)
-        : http_content_codec_error(message),
-          error_(error) {}
+    http_content_transcode_error(http_content_decode_error error, const char* message) :
+        http_content_codec_error(message),
+        error_(error) {}
 
     [[nodiscard]] constexpr http_content_decode_error decode_error() const noexcept {
         return error_;
@@ -317,10 +299,8 @@ struct http_content_transcoder_options final {
 // encodes into target_coding.
 class http_content_transcoder final {
 public:
-    http_content_transcoder(http_content_coding source_coding, http_content_coding target_coding,
-        http_content_transcoder_options options = {});
-    http_content_transcoder(std::span<const http_content_coding> source_codings,
-        http_content_coding target_coding, http_content_transcoder_options options = {});
+    http_content_transcoder(http_content_coding source_coding, http_content_coding target_coding, http_content_transcoder_options options = {});
+    http_content_transcoder(std::span<const http_content_coding> source_codings, http_content_coding target_coding, http_content_transcoder_options options = {});
     ~http_content_transcoder();
     http_content_transcoder(const http_content_transcoder&) = delete;
     http_content_transcoder& operator=(const http_content_transcoder&) = delete;
@@ -354,12 +334,11 @@ struct http_staged_transcode_options final {
 
 class http_staged_transcode_result final {
 public:
-    http_staged_transcode_result(bool transformed, http_content_coding coding,
-        std::size_t decoded_bytes, std::string bytes) noexcept
-        : bytes_(std::move(bytes)),
-          decoded_bytes_(decoded_bytes),
-          coding_(coding),
-          transformed_(transformed) {}
+    http_staged_transcode_result(bool transformed, http_content_coding coding, std::size_t decoded_bytes, std::string bytes) noexcept :
+        bytes_(std::move(bytes)),
+        decoded_bytes_(decoded_bytes),
+        coding_(coding),
+        transformed_(transformed) {}
 
     http_staged_transcode_result(const http_staged_transcode_result&) = default;
     http_staged_transcode_result(http_staged_transcode_result&&) noexcept = default;
@@ -400,10 +379,8 @@ private:
 // raw bytes directly into passthrough_output as soon as max_bytes_ is exceeded.
 class http_staged_content_transcoder final {
 public:
-    http_staged_content_transcoder(http_content_coding source_coding,
-        http_content_coding target_coding, http_staged_transcode_options options = {});
-    http_staged_content_transcoder(std::span<const http_content_coding> source_codings,
-        http_content_coding target_coding, http_staged_transcode_options options = {});
+    http_staged_content_transcoder(http_content_coding source_coding, http_content_coding target_coding, http_staged_transcode_options options = {});
+    http_staged_content_transcoder(std::span<const http_content_coding> source_codings, http_content_coding target_coding, http_staged_transcode_options options = {});
     ~http_staged_content_transcoder();
     http_staged_content_transcoder(const http_staged_content_transcoder&) = delete;
     http_staged_content_transcoder& operator=(const http_staged_content_transcoder&) = delete;
@@ -444,9 +421,9 @@ class http_stream_encoder_lease final {
 public:
     http_stream_encoder_lease(const http_stream_encoder_lease&) = delete;
     http_stream_encoder_lease& operator=(const http_stream_encoder_lease&) = delete;
-    http_stream_encoder_lease(http_stream_encoder_lease&& other) noexcept
-        : codecs_(std::exchange(other.codecs_, nullptr)),
-          encoder_(std::exchange(other.encoder_, nullptr)) {}
+    http_stream_encoder_lease(http_stream_encoder_lease&& other) noexcept :
+        codecs_(std::exchange(other.codecs_, nullptr)),
+        encoder_(std::exchange(other.encoder_, nullptr)) {}
     ~http_stream_encoder_lease() {
         release();
     }
@@ -461,9 +438,9 @@ public:
 private:
     friend class http_worker_codecs;
 
-    http_stream_encoder_lease(http_worker_codecs& codecs, http_content_encoder& encoder) noexcept
-        : codecs_(&codecs),
-          encoder_(&encoder) {}
+    http_stream_encoder_lease(http_worker_codecs& codecs, http_content_encoder& encoder) noexcept :
+        codecs_(&codecs),
+        encoder_(&encoder) {}
 
     void release() noexcept;
 
@@ -493,8 +470,8 @@ private:
     };
 
     struct coding_encoders_type final {
-        explicit coding_encoders_type(http_content_coding coding) noexcept
-            : buffered_(coding) {}
+        explicit coding_encoders_type(http_content_coding coding) noexcept :
+            buffered_(coding) {}
 
         http_content_encode_context buffered_;
         stream_encoder_pool_type streaming_;
@@ -556,8 +533,7 @@ enum class http_accept_token_match_mode : std::uint8_t {
 class http_accept_match final {
 public:
     void update_media_type(std::string_view field, std::string_view offered) noexcept;
-    void update_token(std::string_view field, std::string_view offered,
-        http_accept_token_match_mode mode) noexcept;
+    void update_token(std::string_view field, std::string_view offered, http_accept_token_match_mode mode) noexcept;
 
     [[nodiscard]] bool matched() const noexcept {
         return specificity_ >= 0 && quality_ > 0;
@@ -613,8 +589,7 @@ struct http_accepted_encoding_quality {
     }
 };
 
-[[nodiscard]] bool http_accepts_encoding(
-    std::string_view accept_encoding, std::string_view coding) noexcept;
+[[nodiscard]] bool http_accepts_encoding(std::string_view accept_encoding, std::string_view coding) noexcept;
 
 struct http_response_coding_qualities final {
     // A missing field and an explicitly empty field have different RFC 9110
@@ -682,10 +657,7 @@ public:
     }
 
     [[nodiscard]] static constexpr http_response_coding_candidates all() noexcept {
-        return http_response_coding_candidates(
-            bit(http_content_coding::identity) | bit(http_content_coding::gzip) |
-            bit(http_content_coding::deflate) | bit(http_content_coding::brotli) |
-            bit(http_content_coding::zstd));
+        return http_response_coding_candidates(bit(http_content_coding::identity) | bit(http_content_coding::gzip) | bit(http_content_coding::deflate) | bit(http_content_coding::brotli) | bit(http_content_coding::zstd));
     }
 
     constexpr http_response_coding_candidates& include(http_content_coding coding) noexcept {
@@ -698,8 +670,8 @@ public:
     }
 
 private:
-    explicit constexpr http_response_coding_candidates(std::uint8_t bits) noexcept
-        : bits_(bits) {}
+    explicit constexpr http_response_coding_candidates(std::uint8_t bits) noexcept :
+        bits_(bits) {}
 
     [[nodiscard]] static constexpr std::uint8_t bit(http_content_coding coding) noexcept {
         switch (coding) {
@@ -729,25 +701,18 @@ private:
 // it, and the snapshot still answers accepts() for a coding a handler applied.
 class http_response_coding_selection final {
 public:
-    [[nodiscard]] static http_response_coding_selection select(
-        const http_response_coding_qualities& qualities) noexcept;
-    [[nodiscard]] static http_response_coding_selection select(
-        const http_response_coding_qualities& qualities,
-        http_response_coding_candidates candidates) noexcept;
-    [[nodiscard]] static constexpr http_response_coding_selection select(
-        const http_response_coding_qualities& qualities,
-        std::span<const http_content_coding> candidates) noexcept;
+    [[nodiscard]] static http_response_coding_selection select(const http_response_coding_qualities& qualities) noexcept;
+    [[nodiscard]] static http_response_coding_selection select(const http_response_coding_qualities& qualities, http_response_coding_candidates candidates) noexcept;
+    [[nodiscard]] static constexpr http_response_coding_selection select(const http_response_coding_qualities& qualities, std::span<const http_content_coding> candidates) noexcept;
 
     // Ranks the same Accept-Encoding snapshot over the codings one
     // representation store actually holds (for example indexed precompressed
     // files), so that store never parses the request's fields again.
-    [[nodiscard]] constexpr http_response_coding_selection select(
-        http_response_coding_candidates candidates) const noexcept {
+    [[nodiscard]] constexpr http_response_coding_selection select(http_response_coding_candidates candidates) const noexcept {
         return rank(scores_, candidates, explicit_identity_);
     }
 
-    [[nodiscard]] constexpr http_response_coding_selection select(
-        std::span<const http_content_coding> candidates) const noexcept {
+    [[nodiscard]] constexpr http_response_coding_selection select(std::span<const http_content_coding> candidates) const noexcept {
         return rank_ordered(scores_, candidates, explicit_identity_);
     }
     // False when the client accepts none of the candidates.
@@ -782,30 +747,23 @@ private:
     // Client score per http_content_coding value; -1 marks an unacceptable coding.
     using scores_type = std::array<std::int16_t, 5>;
 
-    constexpr http_response_coding_selection(http_content_coding coding, bool acceptable,
-        scores_type scores, bool explicit_identity = false) noexcept
-        : scores_(scores),
-          coding_(coding),
-          acceptable_(acceptable),
-          explicit_identity_(explicit_identity) {}
+    constexpr http_response_coding_selection(http_content_coding coding, bool acceptable, scores_type scores, bool explicit_identity = false) noexcept :
+        scores_(scores),
+        coding_(coding),
+        acceptable_(acceptable),
+        explicit_identity_(explicit_identity) {}
 
-    [[nodiscard]] static constexpr scores_type make_scores(
-        const http_response_coding_qualities& qualities) noexcept {
+    [[nodiscard]] static constexpr scores_type make_scores(const http_response_coding_qualities& qualities) noexcept {
         scores_type scores{};
         for (std::size_t index = 0; index < scores.size(); ++index) {
-            scores[index] =
-                static_cast<std::int16_t>(qualities.score(static_cast<http_content_coding>(index)));
+            scores[index] = static_cast<std::int16_t>(qualities.score(static_cast<http_content_coding>(index)));
         }
         return scores;
     }
 
-    [[nodiscard]] static constexpr http_response_coding_selection rank(
-        scores_type scores, http_response_coding_candidates candidates,
-        bool explicit_identity = false) noexcept;
+    [[nodiscard]] static constexpr http_response_coding_selection rank(scores_type scores, http_response_coding_candidates candidates, bool explicit_identity = false) noexcept;
 
-    [[nodiscard]] static constexpr http_response_coding_selection rank_ordered(
-        scores_type scores, std::span<const http_content_coding> candidates,
-        bool explicit_identity) noexcept;
+    [[nodiscard]] static constexpr http_response_coding_selection rank_ordered(scores_type scores, std::span<const http_content_coding> candidates, bool explicit_identity) noexcept;
 
     scores_type scores_;
     http_content_coding coding_;
@@ -818,26 +776,19 @@ private:
 // client q-value wins; ties resolve by server preference br > zstd > gzip >
 // deflate > identity. A coding with q=0 or one the client never accepts is
 // excluded.
-inline http_response_coding_selection http_response_coding_selection::select(
-    const http_response_coding_qualities& qualities) noexcept {
+inline http_response_coding_selection http_response_coding_selection::select(const http_response_coding_qualities& qualities) noexcept {
     return select(qualities, http_response_coding_candidates::all());
 }
 
-inline http_response_coding_selection http_response_coding_selection::select(
-    const http_response_coding_qualities& qualities,
-    http_response_coding_candidates candidates) noexcept {
+inline http_response_coding_selection http_response_coding_selection::select(const http_response_coding_qualities& qualities, http_response_coding_candidates candidates) noexcept {
     return rank(make_scores(qualities), candidates, qualities.identity_.explicit_quality_ >= 0);
 }
 
-constexpr http_response_coding_selection http_response_coding_selection::select(
-    const http_response_coding_qualities& qualities,
-    std::span<const http_content_coding> candidates) noexcept {
-    return rank_ordered(
-        make_scores(qualities), candidates, qualities.identity_.explicit_quality_ >= 0);
+constexpr http_response_coding_selection http_response_coding_selection::select(const http_response_coding_qualities& qualities, std::span<const http_content_coding> candidates) noexcept {
+    return rank_ordered(make_scores(qualities), candidates, qualities.identity_.explicit_quality_ >= 0);
 }
 
-constexpr http_response_coding_selection http_response_coding_selection::rank(
-    scores_type scores, http_response_coding_candidates candidates, bool explicit_identity) noexcept {
+constexpr http_response_coding_selection http_response_coding_selection::rank(scores_type scores, http_response_coding_candidates candidates, bool explicit_identity) noexcept {
     constexpr http_content_coding preference[] = {
         http_content_coding::brotli,
         http_content_coding::zstd,
@@ -862,9 +813,7 @@ constexpr http_response_coding_selection http_response_coding_selection::rank(
     return http_response_coding_selection(best, found, scores, explicit_identity);
 }
 
-constexpr http_response_coding_selection http_response_coding_selection::rank_ordered(
-    scores_type scores, std::span<const http_content_coding> candidates,
-    bool explicit_identity) noexcept {
+constexpr http_response_coding_selection http_response_coding_selection::rank_ordered(scores_type scores, std::span<const http_content_coding> candidates, bool explicit_identity) noexcept {
     http_content_coding best = http_content_coding::identity;
     bool found = false;
     int best_score = -1;
@@ -881,16 +830,14 @@ constexpr http_response_coding_selection http_response_coding_selection::rank_or
         if (raw_score < 0) {
             continue;
         }
-        const int score =
-            (coding == http_content_coding::identity && !explicit_identity) ? 0 : raw_score;
+        const int score = (coding == http_content_coding::identity && !explicit_identity) ? 0 : raw_score;
         if (score > best_score) {
             best_score = score;
             best = coding;
             found = true;
         }
     }
-    const int identity_score =
-        scores[static_cast<std::size_t>(http_content_coding::identity)];
+    const int identity_score = scores[static_cast<std::size_t>(http_content_coding::identity)];
     if (!identity_in_candidates && identity_score >= 0) {
         if (!found || (explicit_identity && identity_score > best_score)) {
             best = http_content_coding::identity;
@@ -905,8 +852,7 @@ class http_response;
 
 // Custom-coding queries borrow the request only during the call; negotiation
 // snapshots never allocate storage for unknown extension tokens.
-[[nodiscard]] bool http_accepts_encoding(
-    const http_request& request, std::string_view coding) noexcept;
+[[nodiscard]] bool http_accepts_encoding(const http_request& request, std::string_view coding) noexcept;
 
 enum class http_response_content_coding_status : std::uint8_t {
     absent,
@@ -918,9 +864,7 @@ enum class http_response_content_coding_status : std::uint8_t {
 // Parses all Content-Encoding lines once and evaluates the required custom
 // codings together in one Accept-Encoding walk. Only stacks with more than
 // eight distinct extension codings require temporary storage.
-[[nodiscard]] http_response_content_coding_status evaluate_http_response_content_coding(
-    const http_response_coding_selection& selection, const http_response& response,
-    const http_request* request = nullptr);
+[[nodiscard]] http_response_content_coding_status evaluate_http_response_content_coding(const http_response_coding_selection& selection, const http_response& response, const http_request* request = nullptr);
 
 // Folds every Accept-Encoding field line of a received request into one
 // quality snapshot and selects among all producible codings. This is the one
@@ -930,27 +874,15 @@ enum class http_response_content_coding_status : std::uint8_t {
 // Selects a content coding from Accept-Encoding using the caller's ordered
 // candidate list for tie-breaking, comparing explicit/implicit identity weight
 // and returning std::nullopt when every candidate (and identity) is rejected.
-[[nodiscard]] http_response_coding_selection select_http_accept_encoding(
-    std::string_view accept_encoding, std::span<const http_content_coding> candidates) noexcept;
-[[nodiscard]] http_response_coding_selection select_http_accept_encoding(
-    std::span<const http_header> request_headers,
-    std::span<const http_content_coding> candidates) noexcept;
-[[nodiscard]] http_response_coding_selection select_http_accept_encoding(
-    std::span<const http_header_view> request_headers,
-    std::span<const http_content_coding> candidates) noexcept;
-[[nodiscard]] http_response_coding_selection select_http_accept_encoding(
-    const http_request& request, std::span<const http_content_coding> candidates) noexcept;
+[[nodiscard]] http_response_coding_selection select_http_accept_encoding(std::string_view accept_encoding, std::span<const http_content_coding> candidates) noexcept;
+[[nodiscard]] http_response_coding_selection select_http_accept_encoding(std::span<const http_header> request_headers, std::span<const http_content_coding> candidates) noexcept;
+[[nodiscard]] http_response_coding_selection select_http_accept_encoding(std::span<const http_header_view> request_headers, std::span<const http_content_coding> candidates) noexcept;
+[[nodiscard]] http_response_coding_selection select_http_accept_encoding(const http_request& request, std::span<const http_content_coding> candidates) noexcept;
 
-[[nodiscard]] std::optional<http_content_coding> negotiate_http_content_coding(
-    std::string_view accept_encoding, std::span<const http_content_coding> candidates) noexcept;
-[[nodiscard]] std::optional<http_content_coding> negotiate_http_content_coding(
-    std::span<const http_header> request_headers,
-    std::span<const http_content_coding> candidates) noexcept;
-[[nodiscard]] std::optional<http_content_coding> negotiate_http_content_coding(
-    std::span<const http_header_view> request_headers,
-    std::span<const http_content_coding> candidates) noexcept;
-[[nodiscard]] std::optional<http_content_coding> negotiate_http_content_coding(
-    const http_request& request, std::span<const http_content_coding> candidates) noexcept;
+[[nodiscard]] std::optional<http_content_coding> negotiate_http_content_coding(std::string_view accept_encoding, std::span<const http_content_coding> candidates) noexcept;
+[[nodiscard]] std::optional<http_content_coding> negotiate_http_content_coding(std::span<const http_header> request_headers, std::span<const http_content_coding> candidates) noexcept;
+[[nodiscard]] std::optional<http_content_coding> negotiate_http_content_coding(std::span<const http_header_view> request_headers, std::span<const http_content_coding> candidates) noexcept;
+[[nodiscard]] std::optional<http_content_coding> negotiate_http_content_coding(const http_request& request, std::span<const http_content_coding> candidates) noexcept;
 
 }  // namespace ruvia
 
@@ -1009,14 +941,12 @@ private:
     using text_storage_type = std::variant<std::string_view, std::string>;
     using content_type_storage_type = text_storage_type;
 
-    multipart_part(text_storage_type name, text_storage_type filename,
-        content_type_storage_type content_type_value, std::string_view body,
-        bool filename_present) noexcept
-        : name_(std::move(name)),
-          filename_(std::move(filename)),
-          content_type_(std::move(content_type_value)),
-          body_(body),
-          filename_present_(filename_present) {}
+    multipart_part(text_storage_type name, text_storage_type filename, content_type_storage_type content_type_value, std::string_view body, bool filename_present) noexcept :
+        name_(std::move(name)),
+        filename_(std::move(filename)),
+        content_type_(std::move(content_type_value)),
+        body_(body),
+        filename_present_(filename_present) {}
     text_storage_type name_;
     text_storage_type filename_;
     content_type_storage_type content_type_;
@@ -1038,8 +968,7 @@ public:
 
     // Validation-only entry for parsing paths that must report failure as a
     // value rather than drive control flow through the throwing constructor.
-    [[nodiscard]] static std::optional<multipart_boundary> try_create(
-        std::string_view value) noexcept {
+    [[nodiscard]] static std::optional<multipart_boundary> try_create(std::string_view value) noexcept {
         if (!valid(value)) {
             return std::nullopt;
         }
@@ -1059,18 +988,16 @@ private:
     static constexpr std::size_t max_size = 70;
 
     [[nodiscard]] static constexpr bool non_space_char(char value) noexcept {
-        return (value >= '0' && value <= '9') || (value >= 'A' && value <= 'Z') ||
-               (value >= 'a' && value <= 'z') || value == '\'' || value == '(' || value == ')' ||
-               value == '+' || value == '_' || value == ',' || value == '-' || value == '.' ||
-               value == '/' || value == ':' || value == '=' || value == '?';
+        return (value >= '0' && value <= '9') || (value >= 'A' && value <= 'Z') || (value >= 'a' && value <= 'z') || value == '\'' || value == '(' || value == ')' || value == '+' || value == '_' || value == ',' || value == '-' || value == '.' || value == '/' || value == ':' || value == '=' || value == '?';
     }
 
     [[nodiscard]] static constexpr bool valid(std::string_view value) noexcept {
         if (value.empty() || value.size() > max_size || value.back() == ' ') {
             return false;
         }
-        return std::ranges::all_of(
-            value, [](char byte) noexcept { return byte == ' ' || non_space_char(byte); });
+        return std::ranges::all_of(value, [](char byte) noexcept {
+            return byte == ' ' || non_space_char(byte);
+        });
     }
 
     constexpr void assign(std::string_view value) noexcept {
@@ -1101,8 +1028,7 @@ private:
 class multipart_boundary_parse_failure final {
 public:
     [[nodiscard]] http_protocol_error protocol_error() const noexcept {
-        return http_protocol_error(
-            http_status::bad_request, "multipart_invalid_boundary", "invalid multipart boundary");
+        return http_protocol_error(http_status::bad_request, "multipart_invalid_boundary", "invalid multipart boundary");
     }
 
 private:
@@ -1134,11 +1060,10 @@ public:
 private:
     friend multipart_boundary_parse_result parse_multipart_boundary(std::string_view);
 
-    using value_type = std::variant<multipart_boundary, multipart_boundary_not_applicable,
-        multipart_boundary_parse_failure>;
+    using value_type = std::variant<multipart_boundary, multipart_boundary_not_applicable, multipart_boundary_parse_failure>;
 
-    explicit multipart_boundary_parse_result(multipart_boundary boundary)
-        : value_(boundary) {}
+    explicit multipart_boundary_parse_result(multipart_boundary boundary) :
+        value_(boundary) {}
 
     [[nodiscard]] static constexpr multipart_boundary_parse_result make_not_applicable() noexcept {
         return multipart_boundary_parse_result(multipart_boundary_not_applicable());
@@ -1148,12 +1073,11 @@ private:
         return multipart_boundary_parse_result(multipart_boundary_parse_failure());
     }
 
-    explicit constexpr multipart_boundary_parse_result(
-        multipart_boundary_not_applicable not_applicable) noexcept
-        : value_(not_applicable) {}
+    explicit constexpr multipart_boundary_parse_result(multipart_boundary_not_applicable not_applicable) noexcept :
+        value_(not_applicable) {}
 
-    explicit constexpr multipart_boundary_parse_result(multipart_boundary_parse_failure failure) noexcept
-        : value_(failure) {}
+    explicit constexpr multipart_boundary_parse_result(multipart_boundary_parse_failure failure) noexcept :
+        value_(failure) {}
 
     value_type value_;
 };
@@ -1199,15 +1123,13 @@ public:
 private:
     friend struct detail::multipart_stream_part_access;
 
-    constexpr multipart_stream_part(std::string_view name, std::string_view filename,
-        std::string_view content_type_value, std::string_view body, multipart_chunk_phase phase,
-        bool filename_present) noexcept
-        : name_(name),
-          filename_(filename),
-          content_type_(content_type_value),
-          body_(body),
-          phase_(phase),
-          filename_present_(filename_present) {}
+    constexpr multipart_stream_part(std::string_view name, std::string_view filename, std::string_view content_type_value, std::string_view body, multipart_chunk_phase phase, bool filename_present) noexcept :
+        name_(name),
+        filename_(filename),
+        content_type_(content_type_value),
+        body_(body),
+        phase_(phase),
+        filename_present_(filename_present) {}
 
     std::string_view name_;
     std::string_view filename_;
@@ -1249,8 +1171,8 @@ public:
 private:
     friend class multipart_poll_result;
 
-    explicit constexpr multipart_poll_failure(multipart_parse_error error) noexcept
-        : error_(error) {}
+    explicit constexpr multipart_poll_failure(multipart_parse_error error) noexcept :
+        error_(error) {}
 
     multipart_parse_error error_;
 };
@@ -1285,20 +1207,19 @@ public:
 private:
     friend class multipart_parser;
 
-    using value_type = std::variant<multipart_poll_need_input, multipart_stream_part, multipart_poll_done,
-        multipart_poll_failure>;
+    using value_type = std::variant<multipart_poll_need_input, multipart_stream_part, multipart_poll_done, multipart_poll_failure>;
 
-    explicit constexpr multipart_poll_result(multipart_poll_need_input value) noexcept
-        : value_(value) {}
+    explicit constexpr multipart_poll_result(multipart_poll_need_input value) noexcept :
+        value_(value) {}
 
-    explicit constexpr multipart_poll_result(multipart_stream_part value) noexcept
-        : value_(value) {}
+    explicit constexpr multipart_poll_result(multipart_stream_part value) noexcept :
+        value_(value) {}
 
-    explicit constexpr multipart_poll_result(multipart_poll_done value) noexcept
-        : value_(value) {}
+    explicit constexpr multipart_poll_result(multipart_poll_done value) noexcept :
+        value_(value) {}
 
-    explicit constexpr multipart_poll_result(multipart_poll_failure value) noexcept
-        : value_(value) {}
+    explicit constexpr multipart_poll_result(multipart_poll_failure value) noexcept :
+        value_(value) {}
 
     [[nodiscard]] static constexpr multipart_poll_result make_need_input() noexcept {
         return multipart_poll_result(multipart_poll_need_input());
@@ -1312,8 +1233,7 @@ private:
         return multipart_poll_result(multipart_poll_done());
     }
 
-    [[nodiscard]] static constexpr multipart_poll_result make_failure(
-        multipart_parse_error error) noexcept {
+    [[nodiscard]] static constexpr multipart_poll_result make_failure(multipart_parse_error error) noexcept {
         return multipart_poll_result(multipart_poll_failure(error));
     }
 
@@ -1396,8 +1316,7 @@ private:
 // Parses a complete multipart/form-data body without I/O. Returned part bodies
 // borrow `body`. Names, filenames, and Content-Type values from unfolded header
 // blocks own string storage; unmodified header blocks keep borrowing `body`.
-[[nodiscard]] std::vector<multipart_part> parse_multipart_body(
-    std::string_view body, multipart_parse_options options);
+[[nodiscard]] std::vector<multipart_part> parse_multipart_body(std::string_view body, multipart_parse_options options);
 
 template <detail::http_temporary_owning_char_string body_type>
 std::vector<multipart_part> parse_multipart_body(body_type&&, multipart_parse_options) = delete;
@@ -1458,10 +1377,10 @@ public:
 private:
     friend class sse_parser;
 
-    constexpr sse_event(std::string_view type, std::string_view data, std::string_view last_event_id) noexcept
-        : type_(type),
-          data_(data),
-          last_event_id_(last_event_id) {}
+    constexpr sse_event(std::string_view type, std::string_view data, std::string_view last_event_id) noexcept :
+        type_(type),
+        data_(data),
+        last_event_id_(last_event_id) {}
 
     std::string_view type_;
     std::string_view data_;

@@ -54,8 +54,7 @@ using ruvia::security_header_conflict_policy;
 using ruvia::security_headers_config;
 using ruvia::xss_protection_header_policy;
 
-[[nodiscard]] ruvia::dispatch_response security_response(
-    const security_headers_config& options = {}, std::string_view existing_frame_options = {}) {
+[[nodiscard]] ruvia::dispatch_response security_response(const security_headers_config& options = {}, std::string_view existing_frame_options = {}) {
     auto callback = [&](ruvia::context& ctx) -> ruvia::task<void> {
         if (!existing_frame_options.empty()) {
             ctx.draft().header("X-Frame-Options", existing_frame_options);
@@ -86,12 +85,9 @@ TEST(Ruvia, security_headers_default_set) {
     // Modern guidance disables the legacy XSS auditor rather than enabling it.
     EXPECT_EQ(response.header("X-XSS-Protection"), std::string_view("0"));
     // Secure-by-default policy values ship out of the box.
-    EXPECT_EQ(
-        response.header("Content-Security-Policy"), std::string_view("default-src 'self'"));
-    EXPECT_EQ(
-        response.header("Referrer-Policy"), std::string_view("strict-origin-when-cross-origin"));
-    EXPECT_EQ(response.header("Permissions-Policy"),
-        std::string_view("geolocation=(), microphone=(), camera=()"));
+    EXPECT_EQ(response.header("Content-Security-Policy"), std::string_view("default-src 'self'"));
+    EXPECT_EQ(response.header("Referrer-Policy"), std::string_view("strict-origin-when-cross-origin"));
+    EXPECT_EQ(response.header("Permissions-Policy"), std::string_view("geolocation=(), microphone=(), camera=()"));
 }
 
 TEST(Ruvia, security_headers_xss_protection_header_policy_is_explicit) {
@@ -158,8 +154,7 @@ TEST(Ruvia, security_headers_emit_configured_policies) {
     options.referrer_policy_ = "no-referrer";
     const auto response = security_response(options);
 
-    EXPECT_EQ(
-        response.header("Content-Security-Policy"), std::string_view("default-src 'self'"));
+    EXPECT_EQ(response.header("Content-Security-Policy"), std::string_view("default-src 'self'"));
     EXPECT_EQ(response.header("Referrer-Policy"), std::string_view("no-referrer"));
 }
 
@@ -261,8 +256,8 @@ class csrf_test_middleware final {
 public:
     static constexpr bool ruvia_runs_on_unmatched_requests = true;
 
-    explicit csrf_test_middleware(ruvia::csrf_protection* middleware_value)
-        : middleware_(middleware_value) {}
+    explicit csrf_test_middleware(ruvia::csrf_protection* middleware_value) :
+        middleware_(middleware_value) {}
 
     ruvia::task<void> invoke(ruvia::context& ctx, ruvia::next& next_step) {
         co_await middleware_->invoke(ctx, next_step);
@@ -282,9 +277,7 @@ public:
     }
 };
 
-csrf_outcome run_csrf(ruvia::csrf_protection& csrf, std::string_view cookie_name,
-    std::string_view header_name, http_known_method method, bool with_cookie,
-    std::string_view cookie_token, bool with_header, std::string_view header_token) {
+csrf_outcome run_csrf(ruvia::csrf_protection& csrf, std::string_view cookie_name, std::string_view header_name, http_known_method method, bool with_cookie, std::string_view cookie_token, bool with_header, std::string_view header_token) {
     auto request = ruvia::test_request::method(ruvia::known_http_method_token(method), "/");
     if (with_cookie) {
         request.cookie(cookie_name, cookie_token);
@@ -305,11 +298,9 @@ csrf_outcome run_csrf(ruvia::csrf_protection& csrf, std::string_view cookie_name
     };
 }
 
-csrf_outcome run_csrf(http_known_method method, bool with_cookie, std::string_view cookie_token,
-    bool with_header, std::string_view header_token) {
+csrf_outcome run_csrf(http_known_method method, bool with_cookie, std::string_view cookie_token, bool with_header, std::string_view header_token) {
     ruvia::csrf_protection csrf;
-    return run_csrf(csrf, "XSRF-TOKEN", "X-XSRF-TOKEN", method, with_cookie, cookie_token, with_header,
-        header_token);
+    return run_csrf(csrf, "XSRF-TOKEN", "X-XSRF-TOKEN", method, with_cookie, cookie_token, with_header, header_token);
 }
 
 [[nodiscard]] std::string issued_token() {
@@ -337,8 +328,9 @@ TEST(Ruvia, csrf_token_is_48_lowercase_hex_chars) {
 }
 
 TEST(Ruvia, csrf_custom_names_validate_at_construction) {
-    EXPECT_TRUE(throws_invalid(
-        [] { (void)ruvia::csrf_protection({.cookie_name_ = "", .header_name_ = "X-XSRF-TOKEN"}); }));
+    EXPECT_TRUE(throws_invalid([] {
+        (void)ruvia::csrf_protection({.cookie_name_ = "", .header_name_ = "X-XSRF-TOKEN"});
+    }));
     EXPECT_TRUE(throws_invalid([] {
         (void)ruvia::csrf_protection({.cookie_name_ = "bad;name", .header_name_ = "X-XSRF-TOKEN"});
     }));
@@ -348,11 +340,7 @@ TEST(Ruvia, csrf_custom_names_validate_at_construction) {
 }
 
 TEST(Ruvia, csrf_rejects_safelisted_and_ambient_token_fields) {
-    for (const std::string_view name : {"Accept", "aCcEpT-LaNgUaGe", "Content-Language",
-             "CONTENT-TYPE", "Range", "Origin", "Host", "Content-Length", "Cookie",
-             "uSeR-aGeNt", "Sec-Fetch-Site", "sEc-Ch-Ua", "Proxy-Authorization",
-             "Access-Control-Request-Headers", "X-Forwarded-For", "Forwarded",
-             "X-Real-IP", "Save-Data", "DPR", "X-Requested-With"}) {
+    for (const std::string_view name : {"Accept", "aCcEpT-LaNgUaGe", "Content-Language", "CONTENT-TYPE", "Range", "Origin", "Host", "Content-Length", "Cookie", "uSeR-aGeNt", "Sec-Fetch-Site", "sEc-Ch-Ua", "Proxy-Authorization", "Access-Control-Request-Headers", "X-Forwarded-For", "Forwarded", "X-Real-IP", "Save-Data", "DPR", "X-Requested-With"}) {
         EXPECT_TRUE(throws_invalid([name] {
             (void)ruvia::csrf_protection({.header_name_ = std::string(name)});
         }));
@@ -388,13 +376,11 @@ TEST(Ruvia, csrf_middleware_owns_custom_names_after_source_destruction) {
         csrf = std::make_unique<ruvia::csrf_protection>(config);
     }
 
-    const auto safe =
-        run_csrf(*csrf, cookie_name, header_name, http_known_method::get, false, {}, false, {});
+    const auto safe = run_csrf(*csrf, cookie_name, header_name, http_known_method::get, false, {}, false, {});
     EXPECT_TRUE(safe.accepted_);
     EXPECT_TRUE(safe.reseeded_);
 
-    const auto unsafe = run_csrf(*csrf, cookie_name, header_name, http_known_method::post, true,
-        "abcdef123456", true, "abcdef123456");
+    const auto unsafe = run_csrf(*csrf, cookie_name, header_name, http_known_method::post, true, "abcdef123456", true, "abcdef123456");
     EXPECT_TRUE(unsafe.accepted_);
     EXPECT_EQ(unsafe.status_, std::uint16_t{200});
 }
@@ -413,8 +399,7 @@ TEST(Ruvia, csrf_unsafe_method_requires_matching_double_submit) {
     EXPECT_TRUE(ok.accepted_);
     EXPECT_EQ(ok.status_, std::uint16_t{200});
 
-    const auto mismatch =
-        run_csrf(http_known_method::post, true, "abcdef123456", true, "DIFFERENTtoken");
+    const auto mismatch = run_csrf(http_known_method::post, true, "abcdef123456", true, "DIFFERENTtoken");
     EXPECT_TRUE(!mismatch.accepted_);
     EXPECT_EQ(mismatch.status_, std::uint16_t{403});
 
@@ -452,8 +437,7 @@ TEST(Ruvia, csrf_safe_method_reseeds_absent_or_empty_cookie) {
 
 TEST(Ruvia, csrf_reseed_cookie_omits_secure_on_plaintext) {
     ruvia::csrf_protection csrf;
-    const auto issued = run_csrf(csrf, "XSRF-TOKEN", "X-XSRF-TOKEN", http_known_method::get, false, {},
-        false, {});
+    const auto issued = run_csrf(csrf, "XSRF-TOKEN", "X-XSRF-TOKEN", http_known_method::get, false, {}, false, {});
     EXPECT_TRUE(issued.reseeded_);
     EXPECT_TRUE(!set_cookie_has_secure(issued.set_cookie_));
 }
@@ -462,8 +446,7 @@ TEST(Ruvia, csrf_rejection_reaches_the_error_handler) {
     ruvia::csrf_protection csrf;
     ruvia::test_app app;
     std::string seen_code{};
-    app.on_error([seen = &seen_code](ruvia::context& c,
-                     ruvia::http_error_info error) -> ruvia::task<ruvia::http_response> {
+    app.on_error([seen = &seen_code](ruvia::context& c, ruvia::http_error_info error) -> ruvia::task<ruvia::http_response> {
         *seen = std::string(error.code());
         c.draft().status(error.status());
         co_return c.text("handled");
@@ -505,18 +488,15 @@ constexpr std::array<std::string_view, 4> held_addresses{"192.0.2.1", "192.0.2.2
 
 constexpr std::chrono::steady_clock::time_point window_origin{std::chrono::hours(1)};
 
-[[nodiscard]] ruvia::dispatch_response request_at(ruvia::test_app& app, std::string_view address,
-    std::chrono::steady_clock::duration offset, std::string_view target = "/rate-limit-table/ok") {
+[[nodiscard]] ruvia::dispatch_response request_at(ruvia::test_app& app, std::string_view address, std::chrono::steady_clock::duration offset, std::string_view target = "/rate-limit-table/ok") {
     return app.request(ruvia::test_request::get(target).remote(address).arrival(window_origin + offset));
 }
 
-[[nodiscard]] ruvia::http_status_code request_from(
-    ruvia::test_app& app, std::string_view address, std::chrono::steady_clock::duration offset = {}) {
+[[nodiscard]] ruvia::http_status_code request_from(ruvia::test_app& app, std::string_view address, std::chrono::steady_clock::duration offset = {}) {
     return request_at(app, address, offset).status();
 }
 
-[[nodiscard]] std::optional<std::uint64_t> header_number(
-    const ruvia::dispatch_response& response, std::string_view name) {
+[[nodiscard]] std::optional<std::uint64_t> header_number(const ruvia::dispatch_response& response, std::string_view name) {
     const auto text = response.header(name);
     std::uint64_t value = 0;
     if (!text.has_value() || text->empty()) {
@@ -530,15 +510,11 @@ constexpr std::chrono::steady_clock::time_point window_origin{std::chrono::hours
 }
 
 void configure_saturating_limit(ruvia::test_app& app, ruvia::rate_limit_overflow_policy overflow_policy) {
-    app.rate_limit(ruvia::rate_limit_config{
-        .rule_ = {.max_requests_ = 2, .window_ = std::chrono::minutes(10), .overflow_policy_ = overflow_policy},
-        .capacity_per_worker_ = held_addresses.size()});
+    app.rate_limit(ruvia::rate_limit_config{.rule_ = {.max_requests_ = 2, .window_ = std::chrono::minutes(10), .overflow_policy_ = overflow_policy}, .capacity_per_worker_ = held_addresses.size()});
 }
 
-void configure_window_limit(ruvia::test_app& app, std::size_t max_requests, std::chrono::milliseconds window,
-    std::size_t capacity = ruvia::default_rate_limit_capacity_per_worker) {
-    app.rate_limit(ruvia::rate_limit_config{
-        .rule_ = {.max_requests_ = max_requests, .window_ = window}, .capacity_per_worker_ = capacity});
+void configure_window_limit(ruvia::test_app& app, std::size_t max_requests, std::chrono::milliseconds window, std::size_t capacity = ruvia::default_rate_limit_capacity_per_worker) {
+    app.rate_limit(ruvia::rate_limit_config{.rule_ = {.max_requests_ = max_requests, .window_ = window}, .capacity_per_worker_ = capacity});
 }
 
 }  // namespace
@@ -744,8 +720,7 @@ using tcp = asio::ip::tcp;
 }
 
 [[nodiscard]] tcp::endpoint loopback_endpoint(bool v6, std::uint16_t port) {
-    return v6 ? tcp::endpoint(asio::ip::address_v6::loopback(), port)
-              : tcp::endpoint(asio::ip::address_v4::loopback(), port);
+    return v6 ? tcp::endpoint(asio::ip::address_v6::loopback(), port) : tcp::endpoint(asio::ip::address_v4::loopback(), port);
 }
 
 void open_acceptor(tcp::acceptor& acceptor, bool v6) {
@@ -760,12 +735,12 @@ void open_acceptor(tcp::acceptor& acceptor, bool v6) {
 // while the first attempt remains unresolved or refused.
 class opposite_family_peer final {
 public:
-    opposite_family_peer(asio::io_context& io, const ruvia::worker_ref& worker, bool first_is_v6)
-        : io_(io),
-          listening_(io),
-          unavailable_(io),
-          socket_(io),
-          done_(worker) {
+    opposite_family_peer(asio::io_context& io, const ruvia::worker_ref& worker, bool first_is_v6) :
+        io_(io),
+        listening_(io),
+        unavailable_(io),
+        socket_(io),
+        done_(worker) {
         const bool listening_is_v6 = !first_is_v6;
         std::vector<tcp::acceptor> skipped{};
         for (std::size_t attempt = 0;; ++attempt) {
@@ -825,8 +800,7 @@ private:
         co_await listening_.async_accept(socket_, asio::use_awaitable);
         asio::streambuf request;
         co_await asio::async_read_until(socket_, request, "\r\n\r\n", asio::use_awaitable);
-        constexpr std::string_view response =
-            "HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok";
+        constexpr std::string_view response = "HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok";
         co_await asio::async_write(socket_, asio::buffer(response), asio::use_awaitable);
     }
 
@@ -840,16 +814,10 @@ private:
     bool complete_{false};
 };
 
-[[nodiscard]] ruvia::task<void> exercise(ruvia::event_loop_attachment& attachment,
-    opposite_family_peer& peer, std::string_view host,
-    std::chrono::milliseconds connect_timeout) {
+[[nodiscard]] ruvia::task<void> exercise(ruvia::event_loop_attachment& attachment, opposite_family_peer& peer, std::string_view host, std::chrono::milliseconds connect_timeout) {
     const std::string authority = host.find(':') == std::string_view::npos ? std::string(host) : "[" + std::string(host) + "]";
     const std::string base_url = std::string("http://") + authority + std::move(std::string(":").append(std::to_string(peer.port())));
-    ruvia::http_client client(attachment.loop(),
-        {.base_url_ = base_url,
-            .connect_timeout_ = connect_timeout,
-            .request_timeout_ = 3s,
-            .versions_ = ruvia::http_client_versions{.http2_ = false}});
+    ruvia::http_client client(attachment.loop(), {.base_url_ = base_url, .connect_timeout_ = connect_timeout, .request_timeout_ = 3s, .versions_ = ruvia::http_client_versions{.http2_ = false}});
     std::exception_ptr failure;
     try {
         auto response = co_await client.client().get("/happy-eyeballs").send();
@@ -956,8 +924,7 @@ ruvia::task<void> hold_executor(ruvia::worker_ref worker, std::shared_ptr<held_q
     }
 }
 
-ruvia::task<void> send_query(ruvia::http_client& client, ruvia::stop_token stop,
-    std::optional<std::error_code>& code) {
+ruvia::task<void> send_query(ruvia::http_client& client, ruvia::stop_token stop, std::optional<std::error_code>& code) {
     try {
         auto response = co_await client.client().with_options({.stop_token_ = std::move(stop)}).get("/resolve").send();
         (void)co_await response.stream().read_all();
@@ -971,9 +938,7 @@ struct observation final {
     bool retired_before_release_{false};
 };
 
-ruvia::task<void> exercise(ruvia::event_loop loop, const ruvia::blocking_pool& lookups, stop_kind kind,
-    std::shared_ptr<held_queries> held, observation& observed, std::promise<void>& ready,
-    std::promise<void>& retired) {
+ruvia::task<void> exercise(ruvia::event_loop loop, const ruvia::blocking_pool& lookups, stop_kind kind, std::shared_ptr<held_queries> held, observation& observed, std::promise<void>& ready, std::promise<void>& retired) {
     auto worker = loop.worker();
     ruvia::task_scope occupied(worker);
     // 事件循环借用的单线程池被一个未释放的任务占住，名称查询确定性地排队等待，
@@ -1081,9 +1046,7 @@ TEST(Ruvia, host_lookup_timeout_cancel_and_shutdown_retire_before_system_work_fi
         lookups.join();
         std::move(root).get();
         EXPECT_TRUE(observed.retired_before_release_);
-        const auto expected = kind == stop_kind::timeout        ? std::make_error_code(std::errc::timed_out)
-                              : kind == stop_kind::cancellation ? std::make_error_code(std::errc::operation_canceled)
-                                                                : ruvia::make_error_code(ruvia::http_client_errc::closing);
+        const auto expected = kind == stop_kind::timeout ? std::make_error_code(std::errc::timed_out) : (kind == stop_kind::cancellation ? std::make_error_code(std::errc::operation_canceled) : ruvia::make_error_code(ruvia::http_client_errc::closing));
         EXPECT_TRUE(observed.code_ == expected);
     }
 }
@@ -1115,7 +1078,9 @@ ruvia::task<void> serve_client_connect(asio::ip::tcp::socket& stream, unsigned m
     std::string head{};
     char byte{};
     while (!head.ends_with("\r\n\r\n")) {
-        const auto read = co_await ruvia::async_asio<std::size_t>([&](auto h) { stream.async_read_some(asio::buffer(&byte, 1), std::move(h)); });
+        const auto read = co_await ruvia::async_asio<std::size_t>([&](auto h) {
+            stream.async_read_some(asio::buffer(&byte, 1), std::move(h));
+        });
         if (read.error_code()) {
             throw std::system_error(read.error_code());
         }
@@ -1168,7 +1133,9 @@ void exercise_client_connect(unsigned mode) {
         asio::ip::tcp::acceptor acceptor(io, {asio::ip::address_v4::loopback(), 0});
         ruvia::task_scope tasks(worker_value);
         const auto serve = [&]() -> ruvia::task<void> {
-            auto accepted = co_await ruvia::async_asio<asio::ip::tcp::socket>([&](auto h) { acceptor.async_accept(std::move(h)); });
+            auto accepted = co_await ruvia::async_asio<asio::ip::tcp::socket>([&](auto h) {
+                acceptor.async_accept(std::move(h));
+            });
             if (accepted.error_code()) {
                 throw std::system_error(accepted.error_code());
             }
@@ -1272,7 +1239,9 @@ ruvia::task<std::string> read_head(asio::ip::tcp::socket& stream) {
     std::string head{};
     char byte{};
     while (!head.ends_with("\r\n\r\n")) {
-        const auto read = co_await ruvia::async_asio<std::size_t>([&](auto h) { stream.async_read_some(asio::buffer(&byte, 1), std::move(h)); });
+        const auto read = co_await ruvia::async_asio<std::size_t>([&](auto h) {
+            stream.async_read_some(asio::buffer(&byte, 1), std::move(h));
+        });
         if (read.error_code()) {
             throw std::system_error(read.error_code());
         }
@@ -1307,7 +1276,9 @@ TEST(Ruvia, http1_client_rejected_keep_alive_connect_retires_the_proxy_connectio
         ruvia::task_scope tasks(worker_value);
         const auto serve = [&]() -> ruvia::task<void> {
             for (;;) {
-                auto accepted_socket = co_await ruvia::async_asio<asio::ip::tcp::socket>([&](auto h) { acceptor.async_accept(std::move(h)); });
+                auto accepted_socket = co_await ruvia::async_asio<asio::ip::tcp::socket>([&](auto h) {
+                    acceptor.async_accept(std::move(h));
+                });
                 if (accepted_socket.error_code() == asio::error::operation_aborted) {
                     co_return;
                 }
@@ -1320,8 +1291,7 @@ TEST(Ruvia, http1_client_rejected_keep_alive_connect_retires_the_proxy_connectio
                 ruvia::http1_server_request_parse_state parsed;
                 parsed.parse_head(head);
                 if (accepted == 1) {
-                    if (!parsed.head_ready() || parsed.request().method() != "CONNECT" ||
-                        parsed.request().target() != "target.test:443") {
+                    if (!parsed.head_ready() || parsed.request().method() != "CONNECT" || parsed.request().target() != "target.test:443") {
                         throw std::runtime_error("expected CONNECT on the first connection");
                     }
                     co_await write_all(socket, "HTTP/1.1 407 Proxy Authentication Required\r\nContent-Length: 6\r\nProxy-Authenticate: Basic realm=proxy\r\n\r\ndenied");
@@ -1405,18 +1375,15 @@ void populate_dotfile_root(const fs::path& dir) {
 
 [[nodiscard]] bool served(const ruvia::static_root& root, std::string_view path) {
     bool found = false;
-    static_cast<void>(ruvia::test::with_context(
-        ruvia::test_request::get("/"),
-        [&](ruvia::context& ctx) -> ruvia::task<void> {
-            try {
-                found =
-                    (co_await ctx.static_file(root, {.relative_path_ = path})).status() == ruvia::http_status::ok;
-            } catch (const ruvia::http_error&) {
-                found = false;
-            }
-            ctx.respond(ctx.text("ok"));
-            co_return;
-        }));
+    static_cast<void>(ruvia::test::with_context(ruvia::test_request::get("/"), [&](ruvia::context& ctx) -> ruvia::task<void> {
+        try {
+            found = (co_await ctx.static_file(root, {.relative_path_ = path})).status() == ruvia::http_status::ok;
+        } catch (const ruvia::http_error&) {
+            found = false;
+        }
+        ctx.respond(ctx.text("ok"));
+        co_return;
+    }));
     return found;
 }
 
@@ -1430,19 +1397,18 @@ struct served_body final {
 // transport or carries its bytes in memory.
 [[nodiscard]] served_body serve_body(const ruvia::static_root& root, std::string_view path) {
     served_body result;
-    static_cast<void>(ruvia::test::with_context(
-        ruvia::test_request::get("/"), [&](ruvia::context& ctx) -> ruvia::task<void> {
-            try {
-                const auto response = co_await ctx.static_file(root, {.relative_path_ = path});
-                result.status_ = response.status();
-                result.file_backed_ = response.file_body().has_value();
-                result.bytes_.assign(response.body_bytes());
-            } catch (const ruvia::http_error& error) {
-                result.status_ = error.info().status();
-            }
-            ctx.respond(ctx.text("ok"));
-            co_return;
-        }));
+    static_cast<void>(ruvia::test::with_context(ruvia::test_request::get("/"), [&](ruvia::context& ctx) -> ruvia::task<void> {
+        try {
+            const auto response = co_await ctx.static_file(root, {.relative_path_ = path});
+            result.status_ = response.status();
+            result.file_backed_ = response.file_body().has_value();
+            result.bytes_.assign(response.body_bytes());
+        } catch (const ruvia::http_error& error) {
+            result.status_ = error.info().status();
+        }
+        ctx.respond(ctx.text("ok"));
+        co_return;
+    }));
     return result;
 }
 
@@ -1467,8 +1433,7 @@ TEST(Ruvia, static_root_hides_dotfiles_even_under_all_policy) {
     populate_dotfile_root(dir);
     ruvia::static_root_options options;
     // The hidden-path default-deny must still keep secrets out of responses.
-    options.file_types_ =
-        ruvia::static_file_type_policy{.kind_ = ruvia::static_file_type_policy::kind::all};
+    options.file_types_ = ruvia::static_file_type_policy{.kind_ = ruvia::static_file_type_policy::kind::all};
     ruvia::static_root root(dir, std::move(options));
 
     EXPECT_TRUE(served(root, "app.js"));
@@ -1483,8 +1448,7 @@ TEST(Ruvia, static_root_serves_dotfiles_when_opted_in) {
     const auto& dir = directory.path();
     populate_dotfile_root(dir);
     ruvia::static_root_options options;
-    options.file_types_ =
-        ruvia::static_file_type_policy{.kind_ = ruvia::static_file_type_policy::kind::all};
+    options.file_types_ = ruvia::static_file_type_policy{.kind_ = ruvia::static_file_type_policy::kind::all};
     options.dotfiles_ = ruvia::static_dotfile_policy::serve;
     ruvia::static_root root(dir, std::move(options));
 
@@ -1507,16 +1471,15 @@ TEST(Ruvia, static_root_without_resident_opt_in_stays_file_backed_and_fails_clos
     // A HEAD has no body for the transport to check, so the identity check
     // runs while framing.
     bool head_failed = false;
-    static_cast<void>(ruvia::test::with_context(
-        ruvia::test_request::head("/"), [&](ruvia::context& ctx) -> ruvia::task<void> {
-            try {
-                static_cast<void>(co_await ctx.static_file(root, {.relative_path_ = "nested/page.txt"}));
-            } catch (const ruvia::http_error& error) {
-                head_failed = error.info().status() == ruvia::http_status::internal_server_error;
-            }
-            ctx.respond(ctx.text("ok"));
-            co_return;
-        }));
+    static_cast<void>(ruvia::test::with_context(ruvia::test_request::head("/"), [&](ruvia::context& ctx) -> ruvia::task<void> {
+        try {
+            static_cast<void>(co_await ctx.static_file(root, {.relative_path_ = "nested/page.txt"}));
+        } catch (const ruvia::http_error& error) {
+            head_failed = error.info().status() == ruvia::http_status::internal_server_error;
+        }
+        ctx.respond(ctx.text("ok"));
+        co_return;
+    }));
     EXPECT_TRUE(head_failed);
 }
 
@@ -1524,10 +1487,7 @@ TEST(Ruvia, static_root_resident_opt_in_serves_indexed_bytes_from_memory) {
     const ruvia::test::scoped_temp_directory directory("ruvia_static_resident");
     const auto& dir = directory.path();
     populate_resident_root(dir);
-    ruvia::static_root root(dir,
-        {.file_types_ = {.kind_ = ruvia::static_file_type_policy::kind::all},
-            .resident_max_bytes_ = 32,
-            .resident_budget_bytes_ = 1024});
+    ruvia::static_root root(dir, {.file_types_ = {.kind_ = ruvia::static_file_type_policy::kind::all}, .resident_max_bytes_ = 32, .resident_budget_bytes_ = 1024});
 
     // Rewrite and delete after indexing: resident files keep serving the
     // indexed bytes; the file over resident_max_bytes_ stays on disk.
@@ -1555,10 +1515,7 @@ TEST(Ruvia, static_root_resident_budget_bounds_the_kept_bytes) {
     populate_resident_root(dir);
     // Index order is large.txt, nested/page.txt, small.txt; only the first
     // eligible files that fit the budget stay resident.
-    ruvia::static_root root(dir,
-        {.file_types_ = {.kind_ = ruvia::static_file_type_policy::kind::all},
-            .resident_max_bytes_ = 32,
-            .resident_budget_bytes_ = 9});
+    ruvia::static_root root(dir, {.file_types_ = {.kind_ = ruvia::static_file_type_policy::kind::all}, .resident_max_bytes_ = 32, .resident_budget_bytes_ = 9});
     EXPECT_TRUE(!serve_body(root, "nested/page.txt").file_backed_);
     EXPECT_TRUE(serve_body(root, "small.txt").file_backed_);
 }

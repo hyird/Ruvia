@@ -2,42 +2,30 @@
 
 #include <algorithm>
 #include <array>
-#include <cstddef>
-#include <cstdint>
-#include <ctime>
-#include <filesystem>
-#include <memory>
-#include <optional>
-#include <stdexcept>
-#include <string>
-#include <string_view>
-#include <utility>
-#include <vector>
-
-#include "ruvia/core/worker_ref.h"
-#include "ruvia/http/borrowed_text.h"
-#include "ruvia/http/http_content_coding.h"
-#include "ruvia/http/http_header.h"
-#include "ruvia/http/http_response.h"
-#include "ruvia/web/http_server.h"
-#include "ruvia/web/middleware.h"
-#if defined(__unix__)
-#include "connection_lifecycle.h"
-#endif
-
 #include <atomic>
 #include <cassert>
 #include <chrono>
 #include <coroutine>
+#include <cstddef>
+#include <cstdint>
+#include <ctime>
 #include <exception>
+#include <filesystem>
 #include <functional>
 #include <limits>
+#include <memory>
 #include <mutex>
 #include <new>
+#include <optional>
 #include <span>
+#include <stdexcept>
+#include <string>
+#include <string_view>
 #include <system_error>
 #include <type_traits>
+#include <utility>
 #include <variant>
+#include <vector>
 
 #include <asio.hpp>
 #include <asio/bind_executor.hpp>
@@ -55,20 +43,23 @@
 #include "ruvia/core/stop_token.h"
 #include "ruvia/core/task.h"
 #include "ruvia/core/task_scope.h"
+#include "ruvia/core/worker_ref.h"
 #include "ruvia/core/worker_wait.h"
+#include "ruvia/http/borrowed_text.h"
 #include "ruvia/http/http_cache.h"
+#include "ruvia/http/http_content_coding.h"
+#include "ruvia/http/http_header.h"
 #include "ruvia/http/http_request.h"
+#include "ruvia/http/http_response.h"
 #include "ruvia/http/http_response_server.h"
 #include "ruvia/http/websocket_handshake.h"
 #include "ruvia/web/context.h"
 #include "ruvia/web/http_client_types.h"
+#include "ruvia/web/http_server.h"
+#include "ruvia/web/middleware.h"
 #include "ruvia/web/streaming.h"
 
 #include "connection_lifecycle.h"
-
-#if defined(RUVIA_ENABLE_HTTP3)
-#include <asio/ip/udp.hpp>
-#endif
 
 namespace ruvia::detail {
 
@@ -81,9 +72,7 @@ namespace ruvia::detail {
 }
 
 [[noreturn]] inline void throw_invalid_static_file_path() {
-    throw http_error({.status_ = ruvia::http_status::forbidden,
-        .code_ = "forbidden",
-        .message_ = "invalid static file path"});
+    throw http_error({.status_ = ruvia::http_status::forbidden, .code_ = "forbidden", .message_ = "invalid static file path"});
 }
 
 // Percent-decodes `input` in one pass into `output`, which holds at least
@@ -91,8 +80,7 @@ namespace ruvia::detail {
 // malformed escape; form mode maps '+' to a space and keeps a '%' that starts
 // no valid escape as a literal byte (WHATWG percent-decode). With
 // `reject_encoded_separators`, an escape revealing '/' or '\\' fails too.
-[[nodiscard]] inline std::optional<std::size_t> decode_url_bytes(
-    std::string_view input, char* output, url_decode_mode mode, bool reject_encoded_separators) noexcept {
+[[nodiscard]] inline std::optional<std::size_t> decode_url_bytes(std::string_view input, char* output, url_decode_mode mode, bool reject_encoded_separators) noexcept {
     std::size_t size = 0;
     for (std::size_t i = 0; i < input.size(); ++i) {
         char c = input[i];
@@ -120,8 +108,7 @@ namespace ruvia::detail {
 // split request paths on raw '/' only, so an escape revealing '/' or '\\'
 // would forge a segment boundary they never saw; that, like a malformed
 // escape, yields nullopt.
-[[nodiscard]] inline std::optional<std::string_view> decode_request_path(
-    std::string_view path, std::string& storage) {
+[[nodiscard]] inline std::optional<std::string_view> decode_request_path(std::string_view path, std::string& storage) {
     if (!has_url_encoding(path, url_decode_mode::percent)) {
         return path;
     }
@@ -143,8 +130,7 @@ namespace ruvia::detail {
 // every caller fails closed instead of resolving it. A final separator names
 // the directory itself and is dropped. The input is borrowed when it is
 // already canonical; only a '\\' separator rebuilds it in `storage`.
-[[nodiscard]] inline std::optional<std::string_view> try_normalize_static_relative_path(
-    std::string_view input, std::string& storage) {
+[[nodiscard]] inline std::optional<std::string_view> try_normalize_static_relative_path(std::string_view input, std::string& storage) {
     if (input.empty()) {
         return input;
     }
@@ -184,8 +170,7 @@ namespace ruvia::detail {
     return storage;
 }
 
-[[nodiscard]] inline std::string_view normalize_static_relative_path(
-    std::string_view input, std::string& storage) {
+[[nodiscard]] inline std::string_view normalize_static_relative_path(std::string_view input, std::string& storage) {
     const auto normalized = try_normalize_static_relative_path(input, storage);
     if (!normalized.has_value()) {
         throw_invalid_static_file_path();
@@ -225,16 +210,13 @@ struct static_root_config_storage final {
     static_dotfile_policy dotfiles_{static_dotfile_policy::deny};
 };
 
-[[nodiscard]] static_root_config_storage store_validated_static_root_config(
-    const static_root_options& source_value);
+[[nodiscard]] static_root_config_storage store_validated_static_root_config(const static_root_options& source_value);
 
 [[nodiscard]] bool is_valid_static_file_extension(std::string_view extension) noexcept;
 
-[[nodiscard]] bool file_type_allowed(
-    std::string_view extension, const static_root_config_storage& config);
+[[nodiscard]] bool file_type_allowed(std::string_view extension, const static_root_config_storage& config);
 
-[[nodiscard]] std::string content_type_for(std::string_view extension,
-    const static_root_config_storage& config);
+[[nodiscard]] std::string content_type_for(std::string_view extension, const static_root_config_storage& config);
 }  // namespace ruvia::detail
 
 namespace ruvia::detail {
@@ -323,8 +305,8 @@ struct static_root_state final {
     native_directory_identity root_identity_{};
 #endif
 
-    explicit static_root_state(static_root_config_storage configured_policy) noexcept
-        : config_(std::move(configured_policy)) {}
+    explicit static_root_state(static_root_config_storage configured_policy) noexcept :
+        config_(std::move(configured_policy)) {}
 
     static_root_state(const static_root_state&) = delete;
     static_root_state& operator=(const static_root_state&) = delete;
@@ -365,15 +347,13 @@ public:
 private:
     friend class static_root_entry_view;
 
-    static_root_memory_variant_view(http_content_coding content_coding, std::string_view bytes_value,
-        std::uint64_t modified_token, std::time_t modified_seconds, std::string_view etag,
-        std::string_view last_modified) noexcept
-        : content_coding_(content_coding),
-          bytes_(bytes_value),
-          modified_token_(modified_token),
-          modified_seconds_(modified_seconds),
-          etag_(etag),
-          last_modified_(last_modified) {}
+    static_root_memory_variant_view(http_content_coding content_coding, std::string_view bytes_value, std::uint64_t modified_token, std::time_t modified_seconds, std::string_view etag, std::string_view last_modified) noexcept :
+        content_coding_(content_coding),
+        bytes_(bytes_value),
+        modified_token_(modified_token),
+        modified_seconds_(modified_seconds),
+        etag_(etag),
+        last_modified_(last_modified) {}
 
     http_content_coding content_coding_;
     std::string_view bytes_;
@@ -433,16 +413,13 @@ public:
         return memory_variants_ != nullptr && !memory_variants_->empty();
     }
 
-    [[nodiscard]] std::optional<static_root_memory_variant_view> memory_variant(
-        http_content_coding coding) const noexcept {
+    [[nodiscard]] std::optional<static_root_memory_variant_view> memory_variant(http_content_coding coding) const noexcept {
         if (memory_variants_ == nullptr) {
             return std::nullopt;
         }
         for (const auto& variant : *memory_variants_) {
             if (variant.content_coding_ == coding) {
-                return static_root_memory_variant_view(variant.content_coding_, *variant.bytes_,
-                    variant.modified_token_, variant.modified_seconds_, variant.etag_,
-                    variant.last_modified_);
+                return static_root_memory_variant_view(variant.content_coding_, *variant.bytes_, variant.modified_token_, variant.modified_seconds_, variant.etag_, variant.last_modified_);
             }
         }
         return std::nullopt;
@@ -456,27 +433,21 @@ public:
 private:
     friend class static_root_access;
 
-    static_root_entry_view(const http_native_path_char_type* file_path, std::string_view content_type_value,
-        std::string_view cache_control_value, std::string_view etag, std::string_view last_modified,
-        std::uint64_t size, http_response_file_identity identity, std::uint64_t modified_token,
-        std::time_t modified_seconds, static_range_request_policy range_requests,
-        static_response_validator_policy response_validators, bool directly_servable,
-        const std::vector<static_root_memory_variant>* memory_variants,
-        const std::string* resident_bytes) noexcept
-        : file_path_(file_path),
-          content_type_(content_type_value),
-          cache_control_(cache_control_value),
-          etag_(etag),
-          last_modified_(last_modified),
-          size_(size),
-          identity_(identity),
-          modified_token_(modified_token),
-          modified_seconds_(modified_seconds),
-          range_requests_(range_requests),
-          response_validators_(response_validators),
-          directly_servable_(directly_servable),
-          memory_variants_(memory_variants),
-          resident_bytes_(resident_bytes) {}
+    static_root_entry_view(const http_native_path_char_type* file_path, std::string_view content_type_value, std::string_view cache_control_value, std::string_view etag, std::string_view last_modified, std::uint64_t size, http_response_file_identity identity, std::uint64_t modified_token, std::time_t modified_seconds, static_range_request_policy range_requests, static_response_validator_policy response_validators, bool directly_servable, const std::vector<static_root_memory_variant>* memory_variants, const std::string* resident_bytes) noexcept :
+        file_path_(file_path),
+        content_type_(content_type_value),
+        cache_control_(cache_control_value),
+        etag_(etag),
+        last_modified_(last_modified),
+        size_(size),
+        identity_(identity),
+        modified_token_(modified_token),
+        modified_seconds_(modified_seconds),
+        range_requests_(range_requests),
+        response_validators_(response_validators),
+        directly_servable_(directly_servable),
+        memory_variants_(memory_variants),
+        resident_bytes_(resident_bytes) {}
 
     const http_native_path_char_type* file_path_;
     std::string_view content_type_;
@@ -509,21 +480,18 @@ private:
     friend class static_root_access;
 
 #if defined(__unix__)
-    static_root_entry_open(std::shared_ptr<const native_file_descriptor> root_directory,
-        http_native_path_string_type open_path, http_response_file_identity identity, std::uint64_t size,
-        bool checked) noexcept
-        : root_directory_(std::move(root_directory)),
-          open_path_(std::move(open_path)),
-          identity_(identity),
-          size_(size),
-          checked_(checked) {}
+    static_root_entry_open(std::shared_ptr<const native_file_descriptor> root_directory, http_native_path_string_type open_path, http_response_file_identity identity, std::uint64_t size, bool checked) noexcept :
+        root_directory_(std::move(root_directory)),
+        open_path_(std::move(open_path)),
+        identity_(identity),
+        size_(size),
+        checked_(checked) {}
 #else
-    static_root_entry_open(http_native_path_string_type open_path, http_response_file_identity identity,
-        std::uint64_t size, bool checked) noexcept
-        : open_path_(std::move(open_path)),
-          identity_(identity),
-          size_(size),
-          checked_(checked) {}
+    static_root_entry_open(http_native_path_string_type open_path, http_response_file_identity identity, std::uint64_t size, bool checked) noexcept :
+        open_path_(std::move(open_path)),
+        identity_(identity),
+        size_(size),
+        checked_(checked) {}
 #endif
 
 #if defined(__unix__)
@@ -539,44 +507,33 @@ private:
 
 class static_root_access final {
 public:
-    [[nodiscard]] static std::unique_ptr<static_root> make(
-        const std::filesystem::path& root, const static_root_config_storage& config);
-    [[nodiscard]] static std::unique_ptr<static_root> make(
-        const std::filesystem::path& root, static_root_config_storage&& config);
+    [[nodiscard]] static std::unique_ptr<static_root> make(const std::filesystem::path& root, const static_root_config_storage& config);
+    [[nodiscard]] static std::unique_ptr<static_root> make(const std::filesystem::path& root, static_root_config_storage&& config);
     [[nodiscard]] static static_root_config_storage copy_config(const static_root& root);
     [[nodiscard]] static std::string_view index_file(const static_root& root) noexcept;
     [[nodiscard]] static bool has_directory_index(const static_root& root) noexcept;
     [[nodiscard]] static bool has_sidecars(const static_root& root) noexcept;
-    [[nodiscard]] static std::optional<static_root_entry_view> find(
-        const static_root& root, std::string_view relative_path) noexcept;
-    [[nodiscard]] static std::optional<static_root_entry_view> find_variant(
-        const static_root& root, std::string_view relative_path) noexcept;
-    [[nodiscard]] static bool is_indexed_directory(
-        const static_root& root, std::string_view relative_path) noexcept;
+    [[nodiscard]] static std::optional<static_root_entry_view> find(const static_root& root, std::string_view relative_path) noexcept;
+    [[nodiscard]] static std::optional<static_root_entry_view> find_variant(const static_root& root, std::string_view relative_path) noexcept;
+    [[nodiscard]] static bool is_indexed_directory(const static_root& root, std::string_view relative_path) noexcept;
     // Resolves a decoded relative file path the way a static file response
     // does: normalizes it, falls back to the directory index file, and leaves
     // the final relative path in `relative` (backed by `storage` when
     // rewritten). Throws the forbidden http_error for a path outside the root.
-    [[nodiscard]] static std::optional<static_root_entry_view> resolve(
-        const static_root& root, std::string_view& relative, std::string& storage);
-    [[nodiscard]] static std::optional<static_root_entry_view> try_resolve(
-        const static_root& root, std::string_view& relative, std::string& storage);
+    [[nodiscard]] static std::optional<static_root_entry_view> resolve(const static_root& root, std::string_view& relative, std::string& storage);
+    [[nodiscard]] static std::optional<static_root_entry_view> try_resolve(const static_root& root, std::string_view& relative, std::string& storage);
     [[nodiscard]] static std::uint64_t fingerprint(const static_root& root) noexcept;
-    [[nodiscard]] static bool same_snapshot(
-        const static_root& left, const static_root& right) noexcept;
-    static void install_precompressed_variants(static_root& root, const static_root* previous,
-        const static_root_precompression_options& options);
+    [[nodiscard]] static bool same_snapshot(const static_root& left, const static_root& right) noexcept;
+    static void install_precompressed_variants(static_root& root, const static_root* previous, const static_root_precompression_options& options);
     // Reads eligible files into the snapshot, reusing `previous`'s bytes for
     // entries whose indexed metadata is unchanged. A file that cannot be read
     // as indexed stays file-backed and keeps its identity check.
-    static void install_resident_bodies(static_root& root, const static_root* previous,
-        const static_root_resident_options& options);
+    static void install_resident_bodies(static_root& root, const static_root* previous, const static_root_resident_options& options);
     // The open of the entry's file for one response, run by the caller on the
     // blocking pool. `checked` also verifies the opened handle against the
     // indexed identity and size, for a response that sends none of its bytes
     // and so is never checked by the transport.
-    [[nodiscard]] static static_root_entry_open entry_open(
-        const static_root& root, const static_root_entry_view& entry, bool checked);
+    [[nodiscard]] static static_root_entry_open entry_open(const static_root& root, const static_root_entry_view& entry, bool checked);
 };
 }  // namespace ruvia::detail
 
@@ -588,8 +545,7 @@ inline constexpr std::size_t static_root_linear_lookup_limit = 8;
 // Looks a key up in an index vector sorted by `projection` (a string_view of
 // each entry): a short vector is scanned, a longer one binary-searched.
 template <typename entry_type, typename projection_type>
-[[nodiscard]] const entry_type* find_static_index_entry(
-    const std::vector<entry_type>& entries, std::string_view key, projection_type projection) noexcept {
+[[nodiscard]] const entry_type* find_static_index_entry(const std::vector<entry_type>& entries, std::string_view key, projection_type projection) noexcept {
     if (entries.size() <= static_root_linear_lookup_limit) {
         for (const auto& entry : entries) {
             if (projection(entry) == key) {
@@ -646,13 +602,11 @@ struct static_file_version final {
 
 // URL index keys and extension policy use UTF-8 on every platform rather than
 // the system narrow encoding of filesystem::path::generic_string<char>().
-[[nodiscard]] inline std::u8string static_file_utf8_path(
-    const std::filesystem::path& path) {
+[[nodiscard]] inline std::u8string static_file_utf8_path(const std::filesystem::path& path) {
     return path.generic_u8string();
 }
 
-[[nodiscard]] inline std::string static_file_utf8_string(
-    const std::filesystem::path& path) {
+[[nodiscard]] inline std::string static_file_utf8_string(const std::filesystem::path& path) {
     if constexpr (std::is_same_v<std::filesystem::path::value_type, char>) {
         return path.generic_string();
     } else {
@@ -661,8 +615,7 @@ struct static_file_version final {
     }
 }
 template <typename char_value_type>
-[[nodiscard]] inline std::basic_string_view<char_value_type> static_file_extension(
-    std::basic_string_view<char_value_type> path) noexcept {
+[[nodiscard]] inline std::basic_string_view<char_value_type> static_file_extension(std::basic_string_view<char_value_type> path) noexcept {
     for (std::size_t i = path.size(); i > 0; --i) {
         const auto c = path[i - 1];
         if (c == static_cast<char_value_type>('/') || c == static_cast<char_value_type>('\\')) {
@@ -675,8 +628,7 @@ template <typename char_value_type>
     return {};
 }
 
-[[nodiscard]] inline std::string lower_static_file_extension_from_utf8(
-    std::string_view utf8_path) {
+[[nodiscard]] inline std::string lower_static_file_extension_from_utf8(std::string_view utf8_path) {
     const auto source_value = static_file_extension(utf8_path);
     if (source_value.empty()) {
         return {};
@@ -692,8 +644,7 @@ template <typename char_value_type>
     }
     return extension;
 }
-[[nodiscard]] inline std::string_view guess_static_file_content_type_from_extension(
-    std::string_view lower_extension) noexcept {
+[[nodiscard]] inline std::string_view guess_static_file_content_type_from_extension(std::string_view lower_extension) noexcept {
     switch (lower_extension.size()) {
         case 3U:
             if (lower_extension == ".js") {
@@ -790,8 +741,7 @@ template <typename char_value_type>
 }
 
 template <typename char_value_type>
-[[nodiscard]] inline std::string_view guess_static_file_content_type_from_path_view(
-    std::basic_string_view<char_value_type> path) noexcept {
+[[nodiscard]] inline std::string_view guess_static_file_content_type_from_path_view(std::basic_string_view<char_value_type> path) noexcept {
     const auto extension = static_file_extension(path);
     std::array<char, 12> lower;
     if (extension.size() < 3U || extension.size() > lower.size()) {
@@ -808,8 +758,7 @@ template <typename char_value_type>
         }
         lower[i] = out;
     }
-    return guess_static_file_content_type_from_extension(
-        std::string_view(lower.data(), extension.size()));
+    return guess_static_file_content_type_from_extension(std::string_view(lower.data(), extension.size()));
 }
 
 // Strong validator for one file snapshot: a quoted 64-bit FNV-1a digest of the
@@ -819,9 +768,7 @@ template <typename char_value_type>
 // file index the identity words carry.
 inline constexpr std::size_t static_file_etag_size = 2U + 2U * sizeof(std::uint64_t);
 
-[[nodiscard]] inline std::array<char, static_file_etag_size> format_static_file_snapshot_etag(
-    std::uint64_t size, std::uint64_t modified_token, http_response_file_identity identity,
-    http_content_coding coding = http_content_coding::identity) noexcept {
+[[nodiscard]] inline std::array<char, static_file_etag_size> format_static_file_snapshot_etag(std::uint64_t size, std::uint64_t modified_token, http_response_file_identity identity, http_content_coding coding = http_content_coding::identity) noexcept {
     auto hash = fnv1a_accumulate_integer(fnv1a_offset_basis, size);
     hash = fnv1a_accumulate_integer(hash, modified_token);
     for (const auto word : identity.words()) {
@@ -841,9 +788,7 @@ inline constexpr std::size_t static_file_etag_size = 2U + 2U * sizeof(std::uint6
     return output;
 }
 
-[[nodiscard]] inline std::string make_static_file_snapshot_etag(
-    std::uint64_t size, std::uint64_t modified_token,
-    http_response_file_identity identity, http_content_coding coding = http_content_coding::identity) {
+[[nodiscard]] inline std::string make_static_file_snapshot_etag(std::uint64_t size, std::uint64_t modified_token, http_response_file_identity identity, http_content_coding coding = http_content_coding::identity) {
     const auto formatted = format_static_file_snapshot_etag(size, modified_token, identity, coding);
     return std::string(formatted.data(), formatted.size());
 }
@@ -852,8 +797,7 @@ inline constexpr std::size_t static_file_etag_size = 2U + 2U * sizeof(std::uint6
 
 namespace ruvia::detail {
 
-[[nodiscard]] inline bool static_file_extensions_equivalent(
-    std::string_view left, std::string_view right) noexcept {
+[[nodiscard]] inline bool static_file_extensions_equivalent(std::string_view left, std::string_view right) noexcept {
     if (left.starts_with('.')) {
         left.remove_prefix(1);
     }
@@ -890,21 +834,16 @@ inline void validate_static_root_options(const static_root_options& options) {
         default:
             throw std::invalid_argument("invalid static response validator policy");
     }
-    if (!ruvia::is_valid_http_header_value(options.cache_control_.view()) ||
-        (!options.default_content_type_.view().empty() &&
-            !ruvia::is_valid_http_content_type_field_value(options.default_content_type_.view()))) {
+    if (!ruvia::is_valid_http_header_value(options.cache_control_.view()) || (!options.default_content_type_.view().empty() && !ruvia::is_valid_http_content_type_field_value(options.default_content_type_.view()))) {
         throw std::invalid_argument("invalid static file header value");
     }
     for (std::size_t i = 0; i < options.mime_types_.size(); ++i) {
         const auto& mime = options.mime_types_[i];
-        if (!ruvia::detail::is_valid_static_file_extension(mime.extension_.view()) ||
-            mime.content_type_.view().empty() ||
-            !ruvia::is_valid_http_content_type_field_value(mime.content_type_.view())) {
+        if (!ruvia::detail::is_valid_static_file_extension(mime.extension_.view()) || mime.content_type_.view().empty() || !ruvia::is_valid_http_content_type_field_value(mime.content_type_.view())) {
             throw std::invalid_argument("invalid static file mime type");
         }
         for (std::size_t previous = 0; previous < i; ++previous) {
-            if (static_file_extensions_equivalent(
-                    options.mime_types_[previous].extension_.view(), mime.extension_.view())) {
+            if (static_file_extensions_equivalent(options.mime_types_[previous].extension_.view(), mime.extension_.view())) {
                 throw std::invalid_argument("duplicate static file mime extension");
             }
         }
@@ -930,8 +869,7 @@ inline void validate_static_root_options(const static_root_options& options) {
             throw std::invalid_argument("invalid static file type mode");
     }
     const auto index_file = options.index_file_.view();
-    if ((index_file.find('/') != std::string_view::npos) || (index_file.find('\\') != std::string_view::npos) || index_file == "." ||
-        index_file == "..") {
+    if ((index_file.find('/') != std::string_view::npos) || (index_file.find('\\') != std::string_view::npos) || index_file == "." || index_file == "..") {
         throw std::invalid_argument("invalid static file index name");
     }
 }
@@ -953,16 +891,14 @@ namespace ruvia {
 // accepts.
 class static_file_representation final {
 public:
-    static_file_representation(
-        detail::static_root_entry_view entry_value, http_content_coding content_coding) noexcept
-        : entry_(entry_value),
-          content_coding_(content_coding) {}
+    static_file_representation(detail::static_root_entry_view entry_value, http_content_coding content_coding) noexcept :
+        entry_(entry_value),
+        content_coding_(content_coding) {}
 
-    static_file_representation(detail::static_root_entry_view entry_value,
-        detail::static_root_memory_variant_view memory_variant, http_content_coding content_coding) noexcept
-        : entry_(entry_value),
-          memory_variant_(memory_variant),
-          content_coding_(content_coding) {}
+    static_file_representation(detail::static_root_entry_view entry_value, detail::static_root_memory_variant_view memory_variant, http_content_coding content_coding) noexcept :
+        entry_(entry_value),
+        memory_variant_(memory_variant),
+        content_coding_(content_coding) {}
 
     [[nodiscard]] const detail::static_root_entry_view& entry() const& noexcept RUVIA_LIFETIMEBOUND {
         return entry_;
@@ -990,10 +926,7 @@ private:
 // representation; the caller keeps the original Content-Type. Index lookups
 // only (no per-request filesystem stat). nullopt means no acceptable
 // representation exists.
-[[nodiscard]] std::optional<static_file_representation> select_static_file_representation(
-    const static_root& root, std::string_view relative,
-    const http_response_coding_selection& selection,
-    detail::static_root_entry_view identity);
+[[nodiscard]] std::optional<static_file_representation> select_static_file_representation(const static_root& root, std::string_view relative, const http_response_coding_selection& selection, detail::static_root_entry_view identity);
 
 }  // namespace ruvia
 
@@ -1040,21 +973,21 @@ public:
         ,
         redis_registry& redis
 #endif
-        ) noexcept
-        : http_clients_(&http_clients)
+        ) noexcept :
+        http_clients_(&http_clients)
 #ifdef RUVIA_ENABLE_DATABASE
-          ,
-          databases_(&databases)
+        ,
+        databases_(&databases)
 #endif
 #ifdef RUVIA_ENABLE_REDIS
-          ,
-          redis_(&redis)
+        ,
+        redis_(&redis)
 #endif
     {
     }
 
-    explicit constexpr worker_client_registry_view(const borrowed_clients& borrowed) noexcept
-        : borrowed_(&borrowed) {}
+    explicit constexpr worker_client_registry_view(const borrowed_clients& borrowed) noexcept :
+        borrowed_(&borrowed) {}
 
     [[nodiscard]] constexpr bool attached() const noexcept {
         return http_clients_ != nullptr || borrowed_ != nullptr;
@@ -1062,23 +995,17 @@ public:
 
     // `io_metrics` is the request's counter block, or null outside a request.
 #ifdef RUVIA_ENABLE_DATABASE
-    [[nodiscard]] db_session db(::ruvia::operation_scope& operation_scope, request_io_metrics* io_metrics,
-        const stop_token& stop_token) const;
-    [[nodiscard]] db_session db(std::string_view alias, ::ruvia::operation_scope& operation_scope,
-        request_io_metrics* io_metrics, const stop_token& stop_token) const;
+    [[nodiscard]] db_session db(::ruvia::operation_scope& operation_scope, request_io_metrics* io_metrics, const stop_token& stop_token) const;
+    [[nodiscard]] db_session db(std::string_view alias, ::ruvia::operation_scope& operation_scope, request_io_metrics* io_metrics, const stop_token& stop_token) const;
 #endif
 
 #ifdef RUVIA_ENABLE_REDIS
-    [[nodiscard]] redis_session redis(::ruvia::operation_scope& operation_scope, request_io_metrics* io_metrics,
-        const stop_token& stop_token) const;
-    [[nodiscard]] redis_session redis(std::string_view alias, ::ruvia::operation_scope& operation_scope,
-        request_io_metrics* io_metrics, const stop_token& stop_token) const;
+    [[nodiscard]] redis_session redis(::ruvia::operation_scope& operation_scope, request_io_metrics* io_metrics, const stop_token& stop_token) const;
+    [[nodiscard]] redis_session redis(std::string_view alias, ::ruvia::operation_scope& operation_scope, request_io_metrics* io_metrics, const stop_token& stop_token) const;
 #endif
 
-    [[nodiscard]] http_client_ref client(
-        ::ruvia::operation_scope& operation_scope, const stop_token& stop_token) const;
-    [[nodiscard]] http_client_ref client(std::string_view alias,
-        ::ruvia::operation_scope& operation_scope, const stop_token& stop_token) const;
+    [[nodiscard]] http_client_ref client(::ruvia::operation_scope& operation_scope, const stop_token& stop_token) const;
+    [[nodiscard]] http_client_ref client(std::string_view alias, ::ruvia::operation_scope& operation_scope, const stop_token& stop_token) const;
 
 private:
     explicit constexpr worker_client_registry_view(std::nullptr_t) noexcept {}
@@ -1129,8 +1056,8 @@ public:
 private:
     friend class context_request_body_source;
 
-    explicit constexpr context_lazy_request_body_source(request_body_loader& loader) noexcept
-        : loader_(&loader) {}
+    explicit constexpr context_lazy_request_body_source(request_body_loader& loader) noexcept :
+        loader_(&loader) {}
 
     request_body_loader* loader_;
 };
@@ -1144,19 +1071,18 @@ public:
 private:
     friend class context_request_body_source;
 
-    explicit constexpr context_streaming_request_body_source(body_reader& reader_value) noexcept
-        : reader_(&reader_value) {}
+    explicit constexpr context_streaming_request_body_source(body_reader& reader_value) noexcept :
+        reader_(&reader_value) {}
 
     body_reader* reader_;
 };
 
 class context_request_body_source final {
 public:
-    constexpr context_request_body_source() noexcept
-        : value_(context_buffered_request_body_source{}) {}
+    constexpr context_request_body_source() noexcept :
+        value_(context_buffered_request_body_source{}) {}
 
-    [[nodiscard]] static constexpr context_request_body_source lazy(
-        request_body_loader& loader) noexcept {
+    [[nodiscard]] static constexpr context_request_body_source lazy(request_body_loader& loader) noexcept {
         return context_request_body_source(context_lazy_request_body_source(loader));
     }
 
@@ -1175,12 +1101,11 @@ public:
     [[nodiscard]] constexpr const context_streaming_request_body_source* streaming() const&& = delete;
 
 private:
-    using value_type = std::variant<context_buffered_request_body_source, context_lazy_request_body_source,
-        context_streaming_request_body_source>;
+    using value_type = std::variant<context_buffered_request_body_source, context_lazy_request_body_source, context_streaming_request_body_source>;
 
     template <typename source>
-    explicit constexpr context_request_body_source(source source_value) noexcept
-        : value_(source_value) {}
+    explicit constexpr context_request_body_source(source source_value) noexcept :
+        value_(source_value) {}
 
     value_type value_;
 };
@@ -1205,8 +1130,8 @@ public:
 private:
     friend class context_response_output;
 
-    explicit constexpr context_response_stream_output(response_stream_writer& writer) noexcept
-        : writer_(&writer) {}
+    explicit constexpr context_response_stream_output(response_stream_writer& writer) noexcept :
+        writer_(&writer) {}
 
     response_stream_writer* writer_;
 };
@@ -1220,8 +1145,8 @@ public:
 private:
     friend class context_response_output;
 
-    explicit constexpr context_websocket_output(websocket& websocket_value) noexcept
-        : websocket_(&websocket_value) {}
+    explicit constexpr context_websocket_output(websocket& websocket_value) noexcept :
+        websocket_(&websocket_value) {}
 
     websocket* websocket_;
 };
@@ -1234,8 +1159,8 @@ public:
 
 private:
     friend class context_response_output;
-    explicit constexpr context_tunnel_output(http_tunnel& tunnel) noexcept
-        : tunnel_(&tunnel) {}
+    explicit constexpr context_tunnel_output(http_tunnel& tunnel) noexcept :
+        tunnel_(&tunnel) {}
     http_tunnel* tunnel_;
 };
 
@@ -1251,11 +1176,10 @@ private:
 
 class context_response_output final {
 public:
-    constexpr context_response_output() noexcept
-        : value_(context_buffered_response_output{}) {}
+    constexpr context_response_output() noexcept :
+        value_(context_buffered_response_output{}) {}
 
-    [[nodiscard]] static constexpr context_response_output response_stream(
-        response_stream_writer& writer) noexcept {
+    [[nodiscard]] static constexpr context_response_output response_stream(response_stream_writer& writer) noexcept {
         return context_response_output(context_response_stream_output(writer));
     }
 
@@ -1294,12 +1218,11 @@ public:
     [[nodiscard]] constexpr const context_websocket_output* get_websocket() const&& = delete;
 
 private:
-    using value_type = std::variant<context_buffered_response_output, context_response_stream_output,
-        context_websocket_output, context_tunnel_output, context_upgraded_response_output>;
+    using value_type = std::variant<context_buffered_response_output, context_response_stream_output, context_websocket_output, context_tunnel_output, context_upgraded_response_output>;
 
     template <typename output_type>
-    explicit constexpr context_response_output(output_type output) noexcept
-        : value_(output) {}
+    explicit constexpr context_response_output(output_type output) noexcept :
+        value_(output) {}
 
     value_type value_;
 };
@@ -1329,9 +1252,9 @@ class borrowed_clients;
 class http_push_output final {
 public:
     using submit_type = bool (*)(void*, http_push_request_view);
-    http_push_output(void* target, submit_type submit) noexcept
-        : target_(target),
-          submit_(submit) {}
+    http_push_output(void* target, submit_type submit) noexcept :
+        target_(target),
+        submit_(submit) {}
     // Header-list bounds are enforced by the HTTP/2 submit path.
     [[nodiscard]] bool push(http_push_request_view request) {
         return submit_(target_, request);
@@ -1347,11 +1270,10 @@ class http_connection_advertisement_output final {
 public:
     using origins_type = void (*)(void*, std::span<const std::string_view>);
     using alternative_service_type = void (*)(void*, std::string_view);
-    http_connection_advertisement_output(
-        void* target, origins_type origins, alternative_service_type service) noexcept
-        : target_(target),
-          origins_(origins),
-          service_(service) {}
+    http_connection_advertisement_output(void* target, origins_type origins, alternative_service_type service) noexcept :
+        target_(target),
+        origins_(origins),
+        service_(service) {}
     void advertise_origins(std::span<const std::string_view> origins);
     void advertise_alternative_service(std::string_view value);
 
@@ -1444,9 +1366,9 @@ class context_services final {
 public:
     context_services() = delete;
 
-    context_services(const context_worker_services& worker_services, const stop_token& stop_token_value)
-        : worker_services_(&worker_services),
-          request_services_{.stop_token_ = stop_token_value} {
+    context_services(const context_worker_services& worker_services, const stop_token& stop_token_value) :
+        worker_services_(&worker_services),
+        request_services_{.stop_token_ = stop_token_value} {
         if (!worker_services_->worker_.get().valid()) {
             throw std::invalid_argument("context services require a valid worker");
         }
@@ -1455,9 +1377,7 @@ public:
     context_services(const context_worker_services&, stop_token&&) = delete;
 
     [[nodiscard]] constexpr worker_client_registry_view client_registries() const noexcept {
-        return connection_services_.router_clients_ != nullptr
-                   ? worker_client_registry_view(*connection_services_.router_clients_)
-                   : worker_services_->clients_;
+        return connection_services_.router_clients_ != nullptr ? worker_client_registry_view(*connection_services_.router_clients_) : worker_services_->clients_;
     }
 
     // Either argument may be null to keep the worker's own capability.
@@ -1467,9 +1387,7 @@ public:
     }
 
     [[nodiscard]] detail::rate_limiter* rate_limiter() const noexcept {
-        return connection_services_.route_rate_limiter_ != nullptr
-                   ? connection_services_.route_rate_limiter_
-                   : worker_services_->rate_limiter_;
+        return connection_services_.route_rate_limiter_ != nullptr ? connection_services_.route_rate_limiter_ : worker_services_->rate_limiter_;
     }
 
     [[nodiscard]] const ruvia::env* env() const noexcept {
@@ -1496,9 +1414,7 @@ public:
     // worker-wide bound.
     [[nodiscard]] constexpr std::size_t max_decoded_request_body_bytes() const noexcept {
         const auto route_limit = request_services_.route_body_limit_;
-        return route_limit != 0 && route_limit < worker_services_->max_decoded_body_bytes_
-                   ? route_limit
-                   : worker_services_->max_decoded_body_bytes_;
+        return route_limit != 0 && route_limit < worker_services_->max_decoded_body_bytes_ ? route_limit : worker_services_->max_decoded_body_bytes_;
     }
 
     void bind_route_body_limit(std::size_t limit) noexcept {
@@ -1693,8 +1609,7 @@ public:
     }
 
     [[nodiscard]] const worker_state_registry* worker_states() const noexcept {
-        return connection_services_.router_states_ != nullptr ? connection_services_.router_states_
-                                                              : worker_services_->states_;
+        return connection_services_.router_states_ != nullptr ? connection_services_.router_states_ : worker_services_->states_;
     }
 
     [[nodiscard]] constexpr const conn_info& get_conn_info() const noexcept {
@@ -1767,43 +1682,33 @@ public:
     // Views borrow connection-owned storage and remain valid for every context
     // created while that connection is dispatched. `connection_id` is the
     // worker's conn_info::connection_id() for the connection, zero without one.
-    [[nodiscard]] context_services with_plain_transport(
-        std::uint64_t connection_id, std::string_view remote_address, std::uint16_t remote_port) const noexcept {
+    [[nodiscard]] context_services with_plain_transport(std::uint64_t connection_id, std::string_view remote_address, std::uint16_t remote_port) const noexcept {
         auto services = *this;
         services.connection_services_.info_ = conn_info::plain(connection_id, remote_address);
         services.connection_services_.info_.set_remote_port(remote_port);
-        services.connection_services_.peer_trusted_ =
-            trusts_peer(services.connection_services_.info_.remote_.address());
+        services.connection_services_.peer_trusted_ = trusts_peer(services.connection_services_.info_.remote_.address());
         services.connection_services_.served_certificate_ = nullptr;
         return services;
     }
 
     template <typename traits_type, typename allocator_type>
-    context_services with_plain_transport(
-        std::uint64_t, std::basic_string<char, traits_type, allocator_type>&&, std::uint16_t) const = delete;
+    context_services with_plain_transport(std::uint64_t, std::basic_string<char, traits_type, allocator_type>&&, std::uint16_t) const = delete;
 
     // `alpn` and `server_name` borrow the connection's SSL, which outlives it.
-    [[nodiscard]] context_services with_tls_transport(std::uint64_t connection_id, std::string_view remote_address,
-        std::optional<std::string_view> client_certificate_subject, std::string_view alpn, std::string_view server_name,
-        std::uint16_t remote_port, tls_served_certificate& served_certificate) const noexcept {
+    [[nodiscard]] context_services with_tls_transport(std::uint64_t connection_id, std::string_view remote_address, std::optional<std::string_view> client_certificate_subject, std::string_view alpn, std::string_view server_name, std::uint16_t remote_port, tls_served_certificate& served_certificate) const noexcept {
         auto services = *this;
-        services.connection_services_.info_ =
-            conn_info::tls(connection_id, remote_address, client_certificate_subject, alpn, server_name);
+        services.connection_services_.info_ = conn_info::tls(connection_id, remote_address, client_certificate_subject, alpn, server_name);
         services.connection_services_.info_.set_remote_port(remote_port);
-        services.connection_services_.peer_trusted_ =
-            trusts_peer(services.connection_services_.info_.remote_.address());
+        services.connection_services_.peer_trusted_ = trusts_peer(services.connection_services_.info_.remote_.address());
         services.connection_services_.served_certificate_ = &served_certificate;
         return services;
     }
 
     template <typename traits_type, typename allocator_type>
-    context_services with_tls_transport(std::uint64_t, std::basic_string<char, traits_type, allocator_type>&&,
-        std::optional<std::string_view>, std::string_view, std::string_view, std::uint16_t,
-        tls_served_certificate&) const = delete;
+    context_services with_tls_transport(std::uint64_t, std::basic_string<char, traits_type, allocator_type>&&, std::optional<std::string_view>, std::string_view, std::string_view, std::uint16_t, tls_served_certificate&) const = delete;
 
     template <typename traits_type, typename allocator_type>
-    context_services with_tls_transport(std::uint64_t, std::string_view, std::basic_string<char, traits_type, allocator_type>&&,
-        std::string_view, std::string_view, std::uint16_t, tls_served_certificate&) const = delete;
+    context_services with_tls_transport(std::uint64_t, std::string_view, std::basic_string<char, traits_type, allocator_type>&&, std::string_view, std::string_view, std::uint16_t, tls_served_certificate&) const = delete;
 
     [[nodiscard]] constexpr std::string_view alternative_service() const noexcept {
         return connection_services_.alternative_service_;
@@ -1832,8 +1737,7 @@ public:
 
 private:
     [[nodiscard]] bool trusts_peer(const ip_address& remote_address) const noexcept {
-        return worker_services_->trusted_proxies_ != nullptr &&
-               worker_services_->trusted_proxies_->is_trusted_proxy(remote_address);
+        return worker_services_->trusted_proxies_ != nullptr && worker_services_->trusted_proxies_->is_trusted_proxy(remote_address);
     }
 
     const context_worker_services* worker_services_;
@@ -1949,9 +1853,7 @@ private:
     const session_middleware* owner_{nullptr};
     phase_type phase_{phase_type::active};
     std::exception_ptr failure_;
-    std::variant<session_untouched, session_unrecognized, session_loaded, session_persist_new,
-        session_rotate, session_clear>
-        value_;
+    std::variant<session_untouched, session_unrecognized, session_loaded, session_persist_new, session_rotate, session_clear> value_;
 };
 
 }  // namespace ruvia::detail
@@ -2004,13 +1906,11 @@ inline constexpr std::string_view session_rotation_script =
     return true;
 }
 
-inline void set_session_cookie(http_response_headers& headers, std::string_view cookie_name,
-    std::string_view value, const cookie_options& options) {
+inline void set_session_cookie(http_response_headers& headers, std::string_view cookie_name, std::string_view value, const cookie_options& options) {
     headers.set_cookie(set_cookie_plan(cookie_name, value, options));
 }
 
-inline void append_session_cookie_header(
-    http_response_headers& headers, std::string_view cookie_name, std::string_view id, bool secure) {
+inline void append_session_cookie_header(http_response_headers& headers, std::string_view cookie_name, std::string_view id, bool secure) {
     set_session_cookie(headers, cookie_name, id,
         {
             .same_site_ = cookie_same_site::lax,
@@ -2019,8 +1919,7 @@ inline void append_session_cookie_header(
         });
 }
 
-inline void append_expired_session_cookie_header(
-    http_response_headers& headers, std::string_view cookie_name, bool secure) {
+inline void append_expired_session_cookie_header(http_response_headers& headers, std::string_view cookie_name, bool secure) {
     set_session_cookie(headers, cookie_name, "",
         {
             .same_site_ = cookie_same_site::lax,
@@ -2041,10 +1940,10 @@ public:
     using read_all_type = task<std::string_view> (*)(void*, operation_options);
     using discard_type = task<void> (*)(void*, operation_options);
 
-    constexpr request_body_loader(void* target, read_all_type read_all, discard_type discard) noexcept
-        : target_(target),
-          read_all_(read_all),
-          discard_(discard) {}
+    constexpr request_body_loader(void* target, read_all_type read_all, discard_type discard) noexcept :
+        target_(target),
+        read_all_(read_all),
+        discard_(discard) {}
 
     request_body_loader(const request_body_loader&) = delete;
     request_body_loader& operator=(const request_body_loader&) = delete;
@@ -2146,9 +2045,9 @@ template <typename reader_type>
 class body_reader_binding final {
 public:
     template <typename... args_type>
-    explicit body_reader_binding(args_type&&... args)
-        : reader_(std::forward<args_type>(args)...),
-          facade_(make_body_reader_facade(reader_)) {}
+    explicit body_reader_binding(args_type&&... args) :
+        reader_(std::forward<args_type>(args)...),
+        facade_(make_body_reader_facade(reader_)) {}
 
     body_reader_binding(const body_reader_binding&) = delete;
     body_reader_binding& operator=(const body_reader_binding&) = delete;
@@ -2179,17 +2078,16 @@ task<void> request_body_loader_discard_thunk(void* target, operation_options ope
 
 template <typename loader_type>
 [[nodiscard]] request_body_loader make_request_body_loader_facade(loader_type& loader) noexcept {
-    return request_body_loader(
-        &loader, &request_body_loader_read_all_thunk<loader_type>, &request_body_loader_discard_thunk<loader_type>);
+    return request_body_loader(&loader, &request_body_loader_read_all_thunk<loader_type>, &request_body_loader_discard_thunk<loader_type>);
 }
 
 template <typename loader_type>
 class request_body_loader_binding final {
 public:
     template <typename... args_type>
-    explicit request_body_loader_binding(args_type&&... args)
-        : loader_(std::forward<args_type>(args)...),
-          facade_(make_request_body_loader_facade(loader_)) {}
+    explicit request_body_loader_binding(args_type&&... args) :
+        loader_(std::forward<args_type>(args)...),
+        facade_(make_request_body_loader_facade(loader_)) {}
 
     request_body_loader_binding(const request_body_loader_binding&) = delete;
     request_body_loader_binding& operator=(const request_body_loader_binding&) = delete;
@@ -2224,13 +2122,12 @@ namespace ruvia::detail {
 class http_interim_response_output final {
 public:
     using write_type = task<void> (*)(void*, const http_interim_response_head&);
-    http_interim_response_output(void* target, write_type write) noexcept
-        : target_(target),
-          write_(write) {}
+    http_interim_response_output(void* target, write_type write) noexcept :
+        target_(target),
+        write_(write) {}
 
     // An interrupted inform() resets the request of `context_value`.
-    [[nodiscard]] task<void> inform(
-        const http_interim_response_head& response, operation_options operation, context& context_value);
+    [[nodiscard]] task<void> inform(const http_interim_response_head& response, operation_options operation, context& context_value);
     // Answers a 100-continue expectation before the body is read, on the same
     // lane as inform() so the two heads never interleave. A final response
     // that has started already answered the expectation, and RFC 9110 §15.2
@@ -2244,8 +2141,7 @@ public:
     }
 
 private:
-    [[nodiscard]] task<void> write_owned(
-        http_status_code status, std::vector<http_header> fields, operation_options operation, context& context_value);
+    [[nodiscard]] task<void> write_owned(http_status_code status, std::vector<http_header> fields, operation_options operation, context& context_value);
     void* target_;
     write_type write_;
     bool final_committed_{};
@@ -2301,8 +2197,7 @@ public:
         }
     }
 
-    [[nodiscard]] std::span<const std::string_view> values(
-        std::string_view name) const& noexcept RUVIA_LIFETIMEBOUND {
+    [[nodiscard]] std::span<const std::string_view> values(std::string_view name) const& noexcept RUVIA_LIFETIMEBOUND {
         const auto group = std::ranges::lower_bound(groups_, name, {}, &group_type::name_);
         if (group == groups_.end() || group->name_ != name) {
             return {};
@@ -2325,8 +2220,8 @@ private:
 // moves once published.
 class request_query_cache final {
 public:
-    request_query_cache() noexcept
-        : fields_(request_name_value_list_access::make()) {}
+    request_query_cache() noexcept :
+        fields_(request_name_value_list_access::make()) {}
 
     [[nodiscard]] std::string& decoded_bytes() noexcept {
         return decoded_bytes_;
@@ -2456,9 +2351,9 @@ struct aligned_storage_deleter final {
 // services value here before returning; no reference to the input survives.
 class context_request_storage final {
 public:
-    explicit context_request_storage(const context_services& service_view) noexcept
-        : services_(service_view),
-          decoded_body_reservation_(services_.inbound_buffers()) {}
+    explicit context_request_storage(const context_services& service_view) noexcept :
+        services_(service_view),
+        decoded_body_reservation_(services_.inbound_buffers()) {}
 
     context_request_storage(const context_request_storage&) = delete;
     context_request_storage& operator=(const context_request_storage&) = delete;
@@ -2516,16 +2411,15 @@ struct context_access final {
     // retain the output state, since a stream may have committed in that scope.
     class route_binding final {
     public:
-        route_binding(context& value, std::string_view path, std::span<const std::string_view> names,
-            std::span<const std::string_view> values, std::uintptr_t scope)
-            : context_(value),
-              services_(value.services()),
-              path_(value.route_path_),
-              names_(value.param_names_),
-              values_(value.param_values_),
-              count_(value.param_count_),
-              scope_(value.route_rate_limit_scope_),
-              worker_states_(value.capabilities_.worker_states()) {
+        route_binding(context& value, std::string_view path, std::span<const std::string_view> names, std::span<const std::string_view> values, std::uintptr_t scope) :
+            context_(value),
+            services_(value.services()),
+            path_(value.route_path_),
+            names_(value.param_names_),
+            values_(value.param_values_),
+            count_(value.param_count_),
+            scope_(value.route_rate_limit_scope_),
+            worker_states_(value.capabilities_.worker_states()) {
             value.route_path_ = path;
             value.param_names_ = names.data();
             value.param_values_ = values.data();
@@ -2563,21 +2457,15 @@ struct context_access final {
         const worker_state_registry* worker_states_;
     };
 
-    [[nodiscard]] static context make(
-        const http_request& request, const context_services& services) {
+    [[nodiscard]] static context make(const http_request& request, const context_services& services) {
         return context(request, services);
     }
 
-    [[nodiscard]] static context make(const http_request& request,
-        std::string_view route_path, const std::string_view* param_names,
-        const std::string_view* param_values, std::size_t param_count,
-        std::uintptr_t route_rate_limit_scope, const context_services& services) {
-        return context(request, route_path, param_names, param_values, param_count,
-            route_rate_limit_scope, services);
+    [[nodiscard]] static context make(const http_request& request, std::string_view route_path, const std::string_view* param_names, const std::string_view* param_values, std::size_t param_count, std::uintptr_t route_rate_limit_scope, const context_services& services) {
+        return context(request, route_path, param_names, param_values, param_count, route_rate_limit_scope, services);
     }
 
-    [[nodiscard]] static std::byte* allocate_request_storage(
-        context& context_value, std::size_t size, std::size_t alignment) {
+    [[nodiscard]] static std::byte* allocate_request_storage(context& context_value, std::size_t size, std::size_t alignment) {
         return context_value.request_storage().allocate_raw(size, alignment);
     }
 
@@ -2586,13 +2474,9 @@ struct context_access final {
     // is returned, so `relative` and `content_type_value` are read only by
     // this call; `root` and `base_entry` (a view into it) must outlive the
     // task, which opens a file-backed entry on the blocking pool.
-    [[nodiscard]] static task<http_response> static_file_resolved(
-        context& context_value, const static_root& root, std::string_view relative,
-        std::string_view content_type_value, static_root_entry_view base_entry,
-        static_file_selection_mode mode);
+    [[nodiscard]] static task<http_response> static_file_resolved(context& context_value, const static_root& root, std::string_view relative, std::string_view content_type_value, static_root_entry_view base_entry, static_file_selection_mode mode);
 
-    [[nodiscard]] static http_response make_static_json_response(
-        context& context_value, std::string_view json_body) {
+    [[nodiscard]] static http_response make_static_json_response(context& context_value, std::string_view json_body) {
         auto response = context_value.response_state().take_draft_or_new();
         if (!response.header("Content-Type")) {
             response.content_type(http_content_type::application_json);
@@ -2601,8 +2485,7 @@ struct context_access final {
         return response;
     }
 
-    [[nodiscard]] static http_response make_owned_json_response(
-        context& context_value, std::string& json_body) {
+    [[nodiscard]] static http_response make_owned_json_response(context& context_value, std::string& json_body) {
         return context_value.json_serialized(json_body);
     }
 
@@ -2614,8 +2497,7 @@ struct context_access final {
         return context_value.request_;
     }
 
-    [[nodiscard]] static const context_request_body_source& request_body_source(
-        const context& context_value) noexcept {
+    [[nodiscard]] static const context_request_body_source& request_body_source(const context& context_value) noexcept {
         return context_value.request_body_source();
     }
 
@@ -2627,8 +2509,7 @@ struct context_access final {
         return context_value.services();
     }
 
-    [[nodiscard]] static std::optional<std::string_view> decoded_body(
-        const context& context_value) noexcept {
+    [[nodiscard]] static std::optional<std::string_view> decoded_body(const context& context_value) noexcept {
         if (!context_value.body_decoded_) {
             return std::nullopt;
         }
@@ -2643,8 +2524,7 @@ struct context_access final {
         context_value.body_identity_ = true;
     }
 
-    [[nodiscard]] static std::string_view store_decoded_body(
-        const context& context_value, std::string&& decoded_content) {
+    [[nodiscard]] static std::string_view store_decoded_body(const context& context_value, std::string&& decoded_content) {
         auto& storage = context_value.request_storage();
         storage.decoded_body_reservation_.resize_to(inbound_string_heap_bytes(decoded_content));
         auto& decoded = context_value.decoded_body();
@@ -2658,8 +2538,7 @@ struct context_access final {
         return context_value.services().rate_limiter();
     }
 
-    [[nodiscard]] static const std::optional<std::chrono::steady_clock::time_point>& rate_limit_arrival(
-        context& context_value) noexcept {
+    [[nodiscard]] static const std::optional<std::chrono::steady_clock::time_point>& rate_limit_arrival(context& context_value) noexcept {
         return context_value.services().pinned_arrival();
     }
 
@@ -2696,8 +2575,7 @@ struct context_access final {
         return context_value.response_state().draft_status();
     }
 
-    static void apply_response_state(context& context_value, http_response& response,
-        std::optional<http_status_code> status_code) {
+    static void apply_response_state(context& context_value, http_response& response, std::optional<http_status_code> status_code) {
         context_value.apply_response_state(response, status_code);
     }
 
@@ -2746,8 +2624,7 @@ private:
         return previous;
     }
 
-    [[nodiscard]] static context_response_output bind_websocket(
-        context& context_value, websocket& websocket_value) noexcept {
+    [[nodiscard]] static context_response_output bind_websocket(context& context_value, websocket& websocket_value) noexcept {
         auto previous = context_value.response_output();
         context_value.response_output() = context_response_output::websocket_value(websocket_value);
         return previous;
@@ -2760,9 +2637,9 @@ private:
 
 class context_tunnel_binding final {
 public:
-    context_tunnel_binding(context& context_value, http_tunnel& tunnel) noexcept
-        : context_(context_value),
-          previous_(context_access::bind_tunnel(context_value, tunnel)) {}
+    context_tunnel_binding(context& context_value, http_tunnel& tunnel) noexcept :
+        context_(context_value),
+        previous_(context_access::bind_tunnel(context_value, tunnel)) {}
     context_tunnel_binding(const context_tunnel_binding&) = delete;
     context_tunnel_binding& operator=(const context_tunnel_binding&) = delete;
     ~context_tunnel_binding() {
@@ -2779,9 +2656,9 @@ private:
 // prevents onion middleware post-processing from observing a dangling facade.
 class context_websocket_binding final {
 public:
-    context_websocket_binding(context& context_value, websocket& websocket_value) noexcept
-        : context_(&context_value),
-          previous_(context_access::bind_websocket(context_value, websocket_value)) {}
+    context_websocket_binding(context& context_value, websocket& websocket_value) noexcept :
+        context_(&context_value),
+        previous_(context_access::bind_websocket(context_value, websocket_value)) {}
 
     context_websocket_binding(const context_websocket_binding&) = delete;
     context_websocket_binding& operator=(const context_websocket_binding&) = delete;
@@ -2806,8 +2683,7 @@ namespace ruvia::detail {
 // The default 404 answer for a request no route matched.
 [[nodiscard]] http_response make_route_not_found_response();
 
-[[nodiscard]] task<http_response> invoke_error_handler(
-    context& context_value, http_error_info error, http_error_handler_ref handler);
+[[nodiscard]] task<http_response> invoke_error_handler(context& context_value, http_error_info error, http_error_handler_ref handler);
 
 }  // namespace ruvia::detail
 
@@ -2822,8 +2698,8 @@ public:
     enum class read_type { decoded,
         streaming };
 
-    explicit unsupported_request_content_coding(read_type read) noexcept
-        : read_(read) {}
+    explicit unsupported_request_content_coding(read_type read) noexcept :
+        read_(read) {}
 
     [[nodiscard]] const char* what() const noexcept override {
         return "request Content-Encoding is not supported";
@@ -2872,9 +2748,9 @@ void adopt_inherited_udp_socket(native_socket socket, const asio::ip::udp::endpo
 // with the last owner.
 class inherited_listener_sockets final {
 public:
-    inherited_listener_sockets(std::vector<native_socket> tcp, std::vector<native_socket> udp) noexcept
-        : tcp_(std::move(tcp)),
-          udp_(std::move(udp)) {}
+    inherited_listener_sockets(std::vector<native_socket> tcp, std::vector<native_socket> udp) noexcept :
+        tcp_(std::move(tcp)),
+        udp_(std::move(udp)) {}
     ~inherited_listener_sockets();
 
     inherited_listener_sockets(const inherited_listener_sockets&) = delete;
@@ -2964,8 +2840,7 @@ public:
     [[nodiscard]] bool copy_to(std::chrono::steady_clock::time_point now, tls_session_ticket_key_set& target);
 
     // When the epoch containing `now` ends.
-    [[nodiscard]] std::chrono::steady_clock::time_point next_rotation(
-        std::chrono::steady_clock::time_point now) const noexcept;
+    [[nodiscard]] std::chrono::steady_clock::time_point next_rotation(std::chrono::steady_clock::time_point now) const noexcept;
 
 private:
     [[nodiscard]] std::uint64_t epoch_at(std::chrono::steady_clock::time_point now) const noexcept;
@@ -2997,8 +2872,7 @@ public:
 private:
     friend class tls_session_ticket_key_ring;
 
-    static int protect_ticket(SSL* ssl, unsigned char* key_name, unsigned char* iv, EVP_CIPHER_CTX* cipher,
-        EVP_MAC_CTX* mac, int encrypt) noexcept;
+    static int protect_ticket(SSL* ssl, unsigned char* key_name, unsigned char* iv, EVP_CIPHER_CTX* cipher, EVP_MAC_CTX* mac, int encrypt) noexcept;
 
     EVP_CIPHER* aes_256_cbc_;
     std::optional<tls_session_ticket_key> current_;
@@ -3013,16 +2887,16 @@ namespace ruvia::detail {
 struct http_server_tls_identities final {
     // Certificate and staple form one immutable selection.
     struct identity final {
-        identity(tls_certificate certificate, std::span<const std::byte> ocsp_response)
-            : certificate_(std::move(certificate)),
-              ocsp_response_(ocsp_response.begin(), ocsp_response.end()) {}
+        identity(tls_certificate certificate, std::span<const std::byte> ocsp_response) :
+            certificate_(std::move(certificate)),
+            ocsp_response_(ocsp_response.begin(), ocsp_response.end()) {}
         tls_certificate certificate_;
         std::vector<std::byte> ocsp_response_;
     };
     struct named_identity final {
-        named_identity(std::string_view name, identity value)
-            : name_(name),
-              value_(std::move(value)) {}
+        named_identity(std::string_view name, identity value) :
+            name_(name),
+            value_(std::move(value)) {}
         std::string name_;
         identity value_;
     };
@@ -3031,12 +2905,11 @@ struct http_server_tls_identities final {
         identity value_;
     };
 
-    http_server_tls_identities(identity primary)
-        : primary_(std::move(primary)) {}
+    http_server_tls_identities(identity primary) :
+        primary_(std::move(primary)) {}
     http_server_tls_identities() = default;
 
-    [[nodiscard]] const identity& select(
-        std::string_view server_name, const asio::ip::address* local_address) const noexcept;
+    [[nodiscard]] const identity& select(std::string_view server_name, const asio::ip::address* local_address) const noexcept;
 
     std::optional<identity> primary_;
     std::vector<named_identity> exact_names_;
@@ -3079,8 +2952,8 @@ struct http_server_listener_definition final {
     };
 
     struct tls final {
-        explicit tls(std::shared_ptr<const http_server_tls_identities> identities) noexcept
-            : identities_(std::move(identities)) {}
+        explicit tls(std::shared_ptr<const http_server_tls_identities> identities) noexcept :
+            identities_(std::move(identities)) {}
 
         // Never null. A worker's copy is the set its handshakes select from
         // now; only that worker replaces it, between handshakes.
@@ -3115,20 +2988,18 @@ struct http_server_listener_definition final {
     // default) in server preference, encoded as an RFC 7301 §3.1
     // ProtocolNameList without its length prefix; empty for a cleartext one.
     struct connection_dispatch final {
-        connection_dispatch(std::string_view alpn)
-            : alpn_(alpn) {}
+        connection_dispatch(std::string_view alpn) :
+            alpn_(alpn) {}
 
         std::string alpn_;
     };
 
     using transport_type = std::variant<plain_http, tls, redirect_http_to_https>;
 
-    http_server_listener_definition(asio::ip::tcp::endpoint configured_endpoint,
-        transport_type configured_transport = plain_http{},
-        std::optional<http3_service> configured_http3 = std::nullopt)
-        : endpoint_(std::move(configured_endpoint)),
-          transport_(std::move(configured_transport)),
-          http3_(std::move(configured_http3)) {}
+    http_server_listener_definition(asio::ip::tcp::endpoint configured_endpoint, transport_type configured_transport = plain_http{}, std::optional<http3_service> configured_http3 = std::nullopt) :
+        endpoint_(std::move(configured_endpoint)),
+        transport_(std::move(configured_transport)),
+        http3_(std::move(configured_http3)) {}
 
     [[nodiscard]] http_server_listener_definition clone() const;
 
@@ -3151,8 +3022,7 @@ struct http_server_listener_definition final {
 
 // Only validated configurations carry a key ring; an unvalidated definition
 // must never reach a serving TLS context.
-[[nodiscard]] inline tls_session_ticket_key_ring& tls_session_ticket_keys(
-    const http_server_listener_definition::tls& tls) {
+[[nodiscard]] inline tls_session_ticket_key_ring& tls_session_ticket_keys(const http_server_listener_definition::tls& tls) {
     if (tls.session_ticket_keys_ == nullptr) {
         throw std::logic_error("TLS listener session ticket keys were not generated");
     }
@@ -3175,12 +3045,10 @@ public:
 
     [[nodiscard]] bool accepts_plaintext() const noexcept {
         const auto* configured = tls();
-        return configured != nullptr &&
-               configured->tcp_mode_ == http_server_listener_definition::tls_tcp_mode::detect_plain_or_tls;
+        return configured != nullptr && configured->tcp_mode_ == http_server_listener_definition::tls_tcp_mode::detect_plain_or_tls;
     }
 
-    [[nodiscard]] const http_server_listener_definition::redirect_http_to_https* redirect()
-        const& noexcept {
+    [[nodiscard]] const http_server_listener_definition::redirect_http_to_https* redirect() const& noexcept {
         if (const auto* configured = tls(); configured != nullptr) {
             return configured->plaintext_redirect_ ? &*configured->plaintext_redirect_ : nullptr;
         }
@@ -3226,12 +3094,12 @@ namespace ruvia::detail {
 // boundary, retaining its serialization lease and rollback state.
 class prepared_listener_state final {
 public:
-    explicit prepared_listener_state(worker_ref caller)
-        : caller_(std::move(caller)),
-          ready_(caller_),
-          finished_(caller_),
-          ready_receipt_(ready_.make_receipt()),
-          finished_receipt_(finished_.make_receipt()) {}
+    explicit prepared_listener_state(worker_ref caller) :
+        caller_(std::move(caller)),
+        ready_(caller_),
+        finished_(caller_),
+        ready_receipt_(ready_.make_receipt()),
+        finished_receipt_(finished_.make_receipt()) {}
     ~prepared_listener_state() {
         if (decision_ == false) {
             (void)finished_.failure();
@@ -3269,7 +3137,9 @@ public:
         void operator&() const = delete;
     };
     task<void> checkpoint(stop_token stopping) {
-        auto registration = stopping.register_callback([this] { decide(false); });
+        auto registration = stopping.register_callback([this] {
+            decide(false);
+        });
         if (stopping.stop_requested()) {
             throw std::logic_error("prepared listener host is stopping");
         }
@@ -3313,7 +3183,9 @@ struct prepared_listener_access final {
         if (!state->caller_.is_current() || !state->caller_.accepting()) {
             throw std::logic_error("listener preparation must run on its live caller worker");
         }
-        async_start(std::move(operation), asio::bind_executor(state->caller_.executor(), [state](std::exception_ptr failure) { state->complete(std::move(failure)); }));
+        async_start(std::move(operation), asio::bind_executor(state->caller_.executor(), [state](std::exception_ptr failure) {
+            state->complete(std::move(failure));
+        }));
         co_await state->ready_.wait();
         if (auto failure = state->ready_.failure()) {
             co_await state->finished_.wait();
@@ -3347,10 +3219,10 @@ class owned_listen_configs final {
 public:
     explicit owned_listen_configs(listen_config config);
     explicit owned_listen_configs(std::span<const listen_config> configs);
-    owned_listen_configs(owned_listen_configs&& other) noexcept
-        : configs_(std::move(other.configs_)),
-          addresses_(std::move(other.addresses_)),
-          inherited_owned_(std::exchange(other.inherited_owned_, false)) {}
+    owned_listen_configs(owned_listen_configs&& other) noexcept :
+        configs_(std::move(other.configs_)),
+        addresses_(std::move(other.addresses_)),
+        inherited_owned_(std::exchange(other.inherited_owned_, false)) {}
     owned_listen_configs(const owned_listen_configs&) = delete;
     owned_listen_configs& operator=(const owned_listen_configs&) = delete;
     owned_listen_configs& operator=(owned_listen_configs&&) = delete;
@@ -3385,8 +3257,8 @@ using document_root_snapshot = std::shared_ptr<const static_root>;
 // the snapshot alive for requests that still borrow it.
 class document_root_generation final {
 public:
-    explicit document_root_generation(document_root_snapshot root) noexcept
-        : root_(std::move(root)) {}
+    explicit document_root_generation(document_root_snapshot root) noexcept :
+        root_(std::move(root)) {}
 
     ~document_root_generation() {
         if (leases_ != 0) {
@@ -3438,8 +3310,8 @@ public:
     document_root_binding(const document_root_binding&) = delete;
     document_root_binding& operator=(const document_root_binding&) = delete;
 
-    document_root_binding(document_root_binding&& other) noexcept
-        : generation_(std::exchange(other.generation_, nullptr)) {}
+    document_root_binding(document_root_binding&& other) noexcept :
+        generation_(std::exchange(other.generation_, nullptr)) {}
 
     document_root_binding& operator=(document_root_binding&& other) noexcept {
         if (this != &other) {
@@ -3454,8 +3326,8 @@ public:
     }
 
 private:
-    explicit document_root_binding(document_root_generation* generation) noexcept
-        : generation_(generation) {}
+    explicit document_root_binding(document_root_generation* generation) noexcept :
+        generation_(generation) {}
 
     void reset() noexcept {
         auto* const generation = std::exchange(generation_, nullptr);
@@ -3513,13 +3385,11 @@ namespace ruvia::detail {
 // narrowed through the ANSI code page. Passwords and PEM text are only
 // borrowed while their identity is parsed and are never copied; an empty
 // password uses the noninteractive default and terminal prompting is disabled.
-[[nodiscard]] http_server_listener_definition::tls load_http_server_tls(
-    const tls_config& config);
+[[nodiscard]] http_server_listener_definition::tls load_http_server_tls(const tls_config& config);
 
 // The identities of `config` alone, validated then parsed as by
 // load_http_server_tls(); for application::replace_tls_identities().
-[[nodiscard]] std::shared_ptr<const http_server_tls_identities> load_http_server_tls_identities(
-    const tls_config& config);
+[[nodiscard]] std::shared_ptr<const http_server_tls_identities> load_http_server_tls_identities(const tls_config& config);
 
 // Throws std::invalid_argument unless `config` keeps the client certificate
 // policy (the same CA path and requirement) and the outgoing record limit
@@ -3528,8 +3398,7 @@ void ensure_same_http_server_tls_policy(const http_server_listener_definition::t
 
 // Installs client-certificate verification into a worker's TLS context.
 // Never touches the file system.
-void configure_http_server_client_certificates(SSL_CTX& context_value,
-    const std::optional<http_server_listener_definition::tls_client_certificate_policy>& client_certificates);
+void configure_http_server_client_certificates(SSL_CTX& context_value, const std::optional<http_server_listener_definition::tls_client_certificate_policy>& client_certificates);
 
 }  // namespace ruvia::detail
 
@@ -3562,15 +3431,13 @@ struct access_log_record_access final {
 
     // Microseconds from `start` to now, clamped at zero.
     [[nodiscard]] static std::uint64_t duration_since(std::chrono::steady_clock::time_point start) noexcept {
-        const auto micros =
-            std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - start).count();
+        const auto micros = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - start).count();
         return micros < 0 ? 0 : static_cast<std::uint64_t>(micros);
     }
 };
 
 struct connection_failure_record_access final {
-    [[nodiscard]] static connection_failure_record make(
-        ip_address remote_address, std::exception_ptr exception) noexcept {
+    [[nodiscard]] static connection_failure_record make(ip_address remote_address, std::exception_ptr exception) noexcept {
         return connection_failure_record(remote_address, std::move(exception));
     }
 };
@@ -3579,32 +3446,26 @@ struct connection_failure_record_access final {
 struct server_observation_access final {
     using tls_client_hello_fields = tls_client_hello_record::fields_type;
 
-    [[nodiscard]] static tls_client_hello_record tls_client_hello(
-        const tls_client_hello_fields& fields) noexcept {
+    [[nodiscard]] static tls_client_hello_record tls_client_hello(const tls_client_hello_fields& fields) noexcept {
         return tls_client_hello_record(fields);
     }
 
-    [[nodiscard]] static constexpr http2_input_record http2_input(
-        std::uint64_t connection_id, std::span<const std::byte> bytes) noexcept {
+    [[nodiscard]] static constexpr http2_input_record http2_input(std::uint64_t connection_id, std::span<const std::byte> bytes) noexcept {
         return http2_input_record(connection_id, bytes);
     }
 #if defined(RUVIA_ENABLE_HTTP2)
-    [[nodiscard]] static constexpr http2_frame_record http2_frame(
-        std::uint64_t connection_id, const http2_frame_metadata& metadata) noexcept {
+    [[nodiscard]] static constexpr http2_frame_record http2_frame(std::uint64_t connection_id, const http2_frame_metadata& metadata) noexcept {
         return http2_frame_record(connection_id, metadata);
     }
-    [[nodiscard]] static constexpr http2_headers_record http2_headers(
-        std::uint64_t connection_id, const http2_header_metadata& metadata) noexcept {
+    [[nodiscard]] static constexpr http2_headers_record http2_headers(std::uint64_t connection_id, const http2_header_metadata& metadata) noexcept {
         return http2_headers_record(connection_id, metadata);
     }
 #endif
 #if defined(RUVIA_ENABLE_HTTP3)
-    [[nodiscard]] static constexpr http3_frame_record http3_frame(
-        std::uint64_t connection_id, const http3_frame_metadata& metadata) noexcept {
+    [[nodiscard]] static constexpr http3_frame_record http3_frame(std::uint64_t connection_id, const http3_frame_metadata& metadata) noexcept {
         return http3_frame_record(connection_id, metadata);
     }
-    [[nodiscard]] static constexpr http3_field_record http3_field(
-        std::uint64_t connection_id, const http3_field_metadata& metadata) noexcept {
+    [[nodiscard]] static constexpr http3_field_record http3_field(std::uint64_t connection_id, const http3_field_metadata& metadata) noexcept {
         return http3_field_record(connection_id, metadata);
     }
 #endif
@@ -3675,13 +3536,12 @@ struct http_server_options final {
         }
 
         [[nodiscard]] document_root_binding binding() const noexcept {
-            return current_ == nullptr ? document_root_binding::none()
-                                       : document_root_binding::configured(*current_);
+            return current_ == nullptr ? document_root_binding::none() : document_root_binding::configured(*current_);
         }
 
     private:
-        explicit document_root_state(document_root_publisher* publisher) noexcept
-            : publisher_(publisher) {}
+        explicit document_root_state(document_root_publisher* publisher) noexcept :
+            publisher_(publisher) {}
 
         document_root_publisher* publisher_{nullptr};
         document_root_generation* current_{nullptr};
@@ -3756,12 +3616,10 @@ namespace ruvia::detail {
 
 // Owns every inherited socket and cleanses every TLS secret, including when
 // configuration validation or allocation fails.
-[[nodiscard]] std::vector<http_server_listener_definition> load_server_listeners(
-    std::span<const listen_config> configs);
+[[nodiscard]] std::vector<http_server_listener_definition> load_server_listeners(std::span<const listen_config> configs);
 
 // Rejects collisions in their separate TCP and HTTP/3 UDP endpoint namespaces.
-void ensure_new_listener_endpoints(std::span<const http_server_listener_definition> existing,
-    std::span<const http_server_listener_definition> added);
+void ensure_new_listener_endpoints(std::span<const http_server_listener_definition> existing, std::span<const http_server_listener_definition> added);
 
 void validate_server_limits(const server_config& config);
 
@@ -3771,8 +3629,7 @@ void validate_server_limits(const server_config& config);
 // HTTP/3 its connection ID secret. Throws std::invalid_argument for a
 // listener the run cannot serve, including a connection or request_stream
 // listener whose application callback `options` lacks.
-[[nodiscard]] http_server_listener_definition validate_run_listener(const http_server_listener_definition& listener,
-    const http_server_options& options, std::chrono::steady_clock::time_point key_origin);
+[[nodiscard]] http_server_listener_definition validate_run_listener(const http_server_listener_definition& listener, const http_server_options& options, std::chrono::steady_clock::time_point key_origin);
 
 class validated_http_server_configuration final {
 public:
@@ -3798,19 +3655,16 @@ public:
     }
 
 private:
-    validated_http_server_configuration(
-        std::span<const http_server_listener_definition> listeners, http_server_options&& options);
+    validated_http_server_configuration(std::span<const http_server_listener_definition> listeners, http_server_options&& options);
 
-    friend validated_http_server_configuration validate_http_server_configuration(
-        std::span<const http_server_listener_definition> listeners, http_server_options&& options);
+    friend validated_http_server_configuration validate_http_server_configuration(std::span<const http_server_listener_definition> listeners, http_server_options&& options);
 
     std::vector<http_server_listener_definition> listeners_;
     http_server_options options_;
     std::chrono::steady_clock::time_point tls_key_origin_;
 };
 
-[[nodiscard]] validated_http_server_configuration validate_http_server_configuration(
-    std::span<const http_server_listener_definition> listeners, http_server_options&& options);
+[[nodiscard]] validated_http_server_configuration validate_http_server_configuration(std::span<const http_server_listener_definition> listeners, http_server_options&& options);
 
 }  // namespace ruvia::detail
 
@@ -3839,13 +3693,11 @@ namespace ruvia::detail {
 // branch is installed. A listener without TLS keeps no context.
 void configure_http_server_tls_contexts(http_server_session_config& session, bool observe_client_hello);
 
-using prepared_http_server_session =
-    std::unique_ptr<http_server_session_config>;
+using prepared_http_server_session = std::unique_ptr<http_server_session_config>;
 
 // Builds a stable-address candidate off the owner loop. Its contexts borrow
 // only its own fields; move the owning pointer, never the session itself.
-[[nodiscard]] prepared_http_server_session prepare_http_server_session_config(
-    const http_server_listener_definition& definition, bool observe_client_hello);
+[[nodiscard]] prepared_http_server_session prepare_http_server_session_config(const http_server_listener_definition& definition, bool observe_client_hello);
 
 // Attaches the local address a connection arrived at, which identity
 // selection matches against local-address identities. The caller keeps it
@@ -3873,9 +3725,7 @@ void observe_tls_client_hello(SSL& tls, const tls_client_hello_observation& obse
 // Called after binding the QUIC connection, before receiving its Initial.
 // `version` is the QUIC version of the client's first Initial. The caller
 // owns resumption_context for the entire SSL lifetime.
-void configure_http3_server_tls_session(SSL& tls, const http3_quic_connection& connection,
-    std::uint32_t version, const http3_connection_options& options, bool early_data,
-    std::array<unsigned char, 32>& resumption_context);
+void configure_http3_server_tls_session(SSL& tls, const http3_quic_connection& connection, std::uint32_t version, const http3_connection_options& options, bool early_data, std::array<unsigned char, 32>& resumption_context);
 #endif
 }  // namespace ruvia::detail
 
@@ -3893,10 +3743,10 @@ class http3_worker_directory;
 // binds it on adoption. Closes it unless released.
 class windows_accepted_socket final {
 public:
-    explicit windows_accepted_socket(SOCKET handle) noexcept
-        : handle_(handle) {}
-    windows_accepted_socket(windows_accepted_socket&& other) noexcept
-        : handle_(std::exchange(other.handle_, INVALID_SOCKET)) {}
+    explicit windows_accepted_socket(SOCKET handle) noexcept :
+        handle_(handle) {}
+    windows_accepted_socket(windows_accepted_socket&& other) noexcept :
+        handle_(std::exchange(other.handle_, INVALID_SOCKET)) {}
     windows_accepted_socket(const windows_accepted_socket&) = delete;
     windows_accepted_socket& operator=(const windows_accepted_socket&) = delete;
     windows_accepted_socket& operator=(windows_accepted_socket&&) = delete;
@@ -3999,8 +3849,7 @@ public:
     // adopts `definition`'s TCP socket in slot `index` and its HTTP/3 UDP
     // socket in slot `http3_index`, accepting nothing yet, or throws with
     // both slots left empty.
-    void prepare_listener(std::size_t index, std::optional<std::size_t> http3_index,
-        const http_server_listener_definition& definition
+    void prepare_listener(std::size_t index, std::optional<std::size_t> http3_index, const http_server_listener_definition& definition
 #if defined(RUVIA_ENABLE_HTTP3)
         ,
         http3_worker_directory* directory
@@ -4019,9 +3868,7 @@ public:
     // Business worker `worker_index`'s thread: queues one datagram for the
     // socket of HTTP/3 listener `http3_listener_index`. False when it was
     // dropped (the worker's bound is full or the acceptor stopped).
-    [[nodiscard]] bool transmit(std::size_t worker_index, std::size_t http3_listener_index,
-        const asio::ip::udp::endpoint& remote, std::span<const std::byte> bytes,
-        const asio::ip::udp::endpoint& local, std::uint32_t interface_index) noexcept;
+    [[nodiscard]] bool transmit(std::size_t worker_index, std::size_t http3_listener_index, const asio::ip::udp::endpoint& remote, std::span<const std::byte> bytes, const asio::ip::udp::endpoint& local, std::uint32_t interface_index) noexcept;
     // Any thread: one business worker's endpoint of a removed HTTP/3
     // listener served its last connection. The last worker releases this
     // listener's claim; the socket closes once no listener still needs it.
@@ -4053,12 +3900,8 @@ private:
     [[nodiscard]] std::size_t select_worker() noexcept;
 #if defined(RUVIA_ENABLE_HTTP3)
     task<void> run_receives(udp_listener& listener);
-    void steer(const udp_listener& listener, std::span<const std::byte> bytes,
-        const asio::ip::udp::endpoint& remote, const asio::ip::udp::endpoint& local,
-        std::uint32_t interface_index) noexcept;
-    void send_datagram(std::size_t http3_listener_index, const asio::ip::udp::endpoint& remote,
-        std::span<const std::byte> bytes, const asio::ip::udp::endpoint& local,
-        std::uint32_t interface_index) noexcept;
+    void steer(const udp_listener& listener, std::span<const std::byte> bytes, const asio::ip::udp::endpoint& remote, const asio::ip::udp::endpoint& local, std::uint32_t interface_index) noexcept;
+    void send_datagram(std::size_t http3_listener_index, const asio::ip::udp::endpoint& remote, std::span<const std::byte> bytes, const asio::ip::udp::endpoint& local, std::uint32_t interface_index) noexcept;
 #endif
 
     // Declared first: every socket below belongs to its io_context.
@@ -4129,9 +3972,7 @@ enum class http_response_compression_status : std::uint8_t {
 // codings a response can be sent with. Options rather than http_error_info so
 // a throw site can build an http_error from the same value.
 [[nodiscard]] constexpr http_error_info_options http_not_acceptable_coding_error() noexcept {
-    return {.status_ = http_status::not_acceptable,
-        .code_ = "not_acceptable",
-        .message_ = "no acceptable response content coding"};
+    return {.status_ = http_status::not_acceptable, .code_ = "not_acceptable", .message_ = "no acceptable response content coding"};
 }
 
 // Return true when the response cannot satisfy the client's coding policy:
@@ -4139,8 +3980,7 @@ enum class http_response_compression_status : std::uint8_t {
 // identity, or a handler supplied a pre-encoded representation the client
 // excluded. Bodyless statuses are representation-free and therefore never
 // need a content-coding fallback.
-[[nodiscard]] inline bool http_response_coding_fallback_forbidden(const http_response_coding_selection& selection,
-    http_known_method request_method, const http_response& response, const http_request* request = nullptr) {
+[[nodiscard]] inline bool http_response_coding_fallback_forbidden(const http_response_coding_selection& selection, http_known_method request_method, const http_response& response, const http_request* request = nullptr) {
     if (!plan_http_response_body(request_method, response.status()).status_allows_body()) {
         return false;
     }
@@ -4184,18 +4024,14 @@ struct http_buffered_compression_step final {
 // create a coroutine frame. The inline encoder is the worker's reusable one:
 // its state stays in worker and only the encoded body comes from the
 // response's resource.
-[[nodiscard]] http_buffered_compression_step apply_response_compression(
-    const http_response_coding_selection& selection, http_known_method request_method,
-    http_response& response, const compression_config& options, worker_codecs& codecs, bool offload_available);
+[[nodiscard]] http_buffered_compression_step apply_response_compression(const http_response_coding_selection& selection, http_known_method request_method, http_response& response, const compression_config& options, worker_codecs& codecs, bool offload_available);
 
 // Encodes the body flagged by apply_response_compression() on the worker's
 // bounded blocking pool with a codec of its own, since worker codecs never leave the
 // worker. Rejection by the pool is an intentional identity fallback;
 // encoder/commit failures remain typed failures so a client that forbids
 // identity receives a terminal error.
-[[nodiscard]] task<http_response_compression_status> compress_response_offloaded(
-    http_response_coding_selection selection, http_response& response, const worker_ref& worker_value,
-    const stop_token& stop_token_value = {});
+[[nodiscard]] task<http_response_compression_status> compress_response_offloaded(http_response_coding_selection selection, http_response& response, const worker_ref& worker_value, const stop_token& stop_token_value = {});
 
 // The single decimal Content-Length a handler declared, or nullopt.
 [[nodiscard]] std::optional<std::uint64_t> declared_content_length(const http_response& response) noexcept;
@@ -4204,17 +4040,13 @@ struct http_buffered_compression_step final {
 // HEAD metadata and streams whose head declares a length: below min_bytes_
 // (or empty) stays identity unless identity is refused, and above max_bytes_
 // always stays identity.
-[[nodiscard]] bool declared_length_permits_encoding(const http_response_coding_selection& selection,
-    const compression_config& options, std::uint64_t declared) noexcept;
+[[nodiscard]] bool declared_length_permits_encoding(const http_response_coding_selection& selection, const compression_config& options, std::uint64_t declared) noexcept;
 
 // Response compression policy. Fixed representations do not vary by coding,
 // except an application-encoded body, whose 200-or-406 outcome does; eligible
 // representations are annotated before deciding between identity and an
 // encoder. Encoder availability never changes Accept-Encoding parsing.
-[[nodiscard]] http_response_compression_decision prepare_response_compression(
-    const http_response_coding_selection& selection, http_known_method request_method,
-    http_response& response, http_response_compression_source source_value,
-    http_response_coding_availability availability);
+[[nodiscard]] http_response_compression_decision prepare_response_compression(const http_response_coding_selection& selection, http_known_method request_method, http_response& response, http_response_compression_source source_value, http_response_coding_availability availability);
 
 }  // namespace ruvia::detail
 
@@ -4238,8 +4070,7 @@ public:
     // response into a false 406. The selection's identity coding is then only
     // a placeholder that never becomes a silent identity fallback for a
     // response that actually has a body.
-    [[nodiscard]] static http_response_coding_policy selected(
-        http_response_coding_selection selection) noexcept {
+    [[nodiscard]] static http_response_coding_policy selected(http_response_coding_selection selection) noexcept {
         return http_response_coding_policy(selection);
     }
 
@@ -4249,11 +4080,11 @@ public:
     const http_response_coding_selection* selection() const&& = delete;
 
 private:
-    explicit http_response_coding_policy(http_response_coding_policy_disabled disabled) noexcept
-        : value_(disabled) {}
+    explicit http_response_coding_policy(http_response_coding_policy_disabled disabled) noexcept :
+        value_(disabled) {}
 
-    explicit http_response_coding_policy(http_response_coding_selection selection) noexcept
-        : value_(selection) {}
+    explicit http_response_coding_policy(http_response_coding_selection selection) noexcept :
+        value_(selection) {}
 
     using value_type = std::variant<http_response_coding_selection, http_response_coding_policy_disabled>;
     value_type value_;
@@ -4264,8 +4095,7 @@ private:
 // incompressible media, or an existing file body can leave the response as
 // identity. If the client explicitly excluded identity, that policy fallback
 // is a 406 outcome; an encoder failure is surfaced separately as a 500.
-[[nodiscard]] inline bool http_response_needs_not_acceptable(const http_response_coding_policy& policy,
-    const http_request& request, const http_response& response) noexcept {
+[[nodiscard]] inline bool http_response_needs_not_acceptable(const http_response_coding_policy& policy, const http_request& request, const http_response& response) noexcept {
     const auto* selection = policy.selection();
     if (selection == nullptr) {
         return false;
@@ -4273,22 +4103,14 @@ private:
     return http_response_coding_fallback_forbidden(*selection, request.known_method(), response, &request);
 }
 
-[[nodiscard]] inline std::optional<http_error_info> http_buffered_response_preparation_error(
-    const http_response_coding_policy& policy, const http_request& request,
-    const http_response& response, http_response_compression_status compression) noexcept {
+[[nodiscard]] inline std::optional<http_error_info> http_buffered_response_preparation_error(const http_response_coding_policy& policy, const http_request& request, const http_response& response, http_response_compression_status compression) noexcept {
     const auto* selection = policy.selection();
-    if (selection != nullptr && selection->coding() != http_content_coding::identity &&
-        !selection->identity_accepted() &&
-        plan_http_response_body(request.known_method(), response.status()).status_allows_body()) {
+    if (selection != nullptr && selection->coding() != http_content_coding::identity && !selection->identity_accepted() && plan_http_response_body(request.known_method(), response.status()).status_allows_body()) {
         if (compression == http_response_compression_status::failed) {
-            return http_error_info({.status_ = http_status::internal_server_error,
-                .code_ = "response_compression_failed",
-                .message_ = "response compression failed"});
+            return http_error_info({.status_ = http_status::internal_server_error, .code_ = "response_compression_failed", .message_ = "response compression failed"});
         }
         if (compression == http_response_compression_status::unavailable) {
-            return http_error_info({.status_ = http_status::service_unavailable,
-                .code_ = "blocking_pool_unavailable",
-                .message_ = "blocking pool cannot accept the operation"});
+            return http_error_info({.status_ = http_status::service_unavailable, .code_ = "blocking_pool_unavailable", .message_ = "blocking pool cannot accept the operation"});
         }
     }
     if (http_response_needs_not_acceptable(policy, request, response)) {
@@ -4318,9 +4140,7 @@ public:
         return stage_ != stage::application;
     }
 
-    [[nodiscard]] buffered_response_recovery_step advance(http_response_coding_policy& policy,
-        const http_request& request, const http_response& response,
-        http_response_compression_status compression) noexcept {
+    [[nodiscard]] buffered_response_recovery_step advance(http_response_coding_policy& policy, const http_request& request, const http_response& response, http_response_compression_status compression) noexcept {
         if (stage_ == stage::terminal) {
             return {};
         }
@@ -4362,8 +4182,7 @@ class connection_lifecycle;
 // once; flush() waits for that alert without consuming the peer's remaining data.
 class tls_tunnel_output final {
 public:
-    tls_tunnel_output(SSL& ssl, asio::ip::tcp::socket& socket, const worker_ref& worker_value,
-        connection_lifecycle* lifecycle = nullptr);
+    tls_tunnel_output(SSL& ssl, asio::ip::tcp::socket& socket, const worker_ref& worker_value, connection_lifecycle* lifecycle = nullptr);
     tls_tunnel_output(SSL&, asio::ip::tcp::socket&, worker_ref&&, connection_lifecycle* = nullptr) = delete;
     ~tls_tunnel_output();
     tls_tunnel_output(const tls_tunnel_output&) = delete;
@@ -4412,11 +4231,10 @@ public:
     // write runs its write stall clock, so write_timeout closes a tunnel
     // whose peer stopped reading while the reader stays long_lived. Null for
     // an owner that bounds its writes itself (the client's operation timeout).
-    http_socket_tunnel_transport(
-        stream_type& stream, tls_tunnel_output* tls_output, connection_scanner::entry* write_scanner_entry)
-        : stream_(stream),
-          tls_output_(tls_output),
-          write_scanner_entry_(write_scanner_entry) {
+    http_socket_tunnel_transport(stream_type& stream, tls_tunnel_output* tls_output, connection_scanner::entry* write_scanner_entry) :
+        stream_(stream),
+        tls_output_(tls_output),
+        write_scanner_entry_(write_scanner_entry) {
         if constexpr (requires { stream_.next_layer(); }) {
             if (tls_output_ == nullptr) {
                 throw std::logic_error("TLS tunnel requires its ciphertext writer");
@@ -4433,8 +4251,7 @@ public:
     // A cancellation emitted on `slot` ends only this transport read and
     // appends nothing, after which `check` may throw to abandon it.
     template <typename check_type>
-    [[nodiscard]] task<bool> read_more(std::string& bytes_value, check_type check, asio::cancellation_slot slot,
-        inbound_buffer_reservation* reservation = nullptr) {
+    [[nodiscard]] task<bool> read_more(std::string& bytes_value, check_type check, asio::cancellation_slot slot, inbound_buffer_reservation* reservation = nullptr) {
         constexpr std::size_t read_bytes = 4096;
         const auto old_size = bytes_value.size();
         if (reservation != nullptr) {
@@ -4443,8 +4260,7 @@ public:
             bytes_value.resize(old_size + read_bytes);
         }
         const auto result_value = co_await async_asio<std::size_t>([&](auto handler) {
-            stream_.async_read_some(asio::buffer(bytes_value.data() + old_size, read_bytes),
-                asio::bind_cancellation_slot(slot, std::move(handler)));
+            stream_.async_read_some(asio::buffer(bytes_value.data() + old_size, read_bytes), asio::bind_cancellation_slot(slot, std::move(handler)));
         });
         if (reservation != nullptr) {
             inbound_resize(bytes_value, *reservation, old_size + result_value.result());
@@ -4469,12 +4285,10 @@ public:
     // stream shields its record writes), after which `check` may throw to
     // abandon it.
     template <typename check_type>
-    [[nodiscard]] task<bool> read_more(http_io_buffer& bytes, check_type check, asio::cancellation_slot slot,
-        inbound_buffer_reservation* reservation = nullptr) {
+    [[nodiscard]] task<bool> read_more(http_io_buffer& bytes, check_type check, asio::cancellation_slot slot, inbound_buffer_reservation* reservation = nullptr) {
         const auto writable = reservation != nullptr ? inbound_prepare(bytes, *reservation, 4096) : bytes.prepare(4096);
         const auto result = co_await async_asio<std::size_t>([&](auto completion) {
-            stream_.async_read_some(asio::buffer(writable.data(), writable.size()),
-                asio::bind_cancellation_slot(slot, std::move(completion)));
+            stream_.async_read_some(asio::buffer(writable.data(), writable.size()), asio::bind_cancellation_slot(slot, std::move(completion)));
         });
         bytes.commit(result.result());
         if (is_stream_read_end(result.error_code())) {
@@ -4490,8 +4304,7 @@ public:
     }
     // `completed_bytes` receives the plaintext prefix accepted by the stream,
     // including progress reported with the terminal error.
-    [[nodiscard]] task<std::error_code> write_bytes(
-        std::string_view bytes_value, http_stream_end end, std::size_t* completed_bytes = nullptr) {
+    [[nodiscard]] task<std::error_code> write_bytes(std::string_view bytes_value, http_stream_end end, std::size_t* completed_bytes = nullptr) {
         if (completed_bytes != nullptr) {
             *completed_bytes = 0;
         }
@@ -4503,8 +4316,7 @@ public:
             if (!bytes_value.empty()) {
                 const auto result_value = co_await async_asio<std::size_t>([&](auto handler) {
                     if (write_scanner_entry_ != nullptr) {
-                        asio::async_write(stream_, asio::buffer(bytes_value),
-                            connection_write_progress(*write_scanner_entry_), std::move(handler));
+                        asio::async_write(stream_, asio::buffer(bytes_value), connection_write_progress(*write_scanner_entry_), std::move(handler));
                     } else {
                         asio::async_write(stream_, asio::buffer(bytes_value), std::move(handler));
                     }
@@ -4574,14 +4386,13 @@ namespace ruvia::detail {
 template <typename transport_type>
 class http_tunnel_session final {
 public:
-    http_tunnel_session(transport_type transport, const worker_ref& worker_value,
-        inbound_buffer_account* inbound, bool datagrams, std::string_view pending = {})
-        : transport_(std::move(transport)),
-          inbound_(inbound),
-          read_reservation_(inbound),
-          pending_reservation_(inbound),
-          delivered_reservation_(inbound),
-          facade_(inbound, worker_value, this, &read_thunk, &write_thunk, &finish_thunk, &abort_thunk, datagrams) {
+    http_tunnel_session(transport_type transport, const worker_ref& worker_value, inbound_buffer_account* inbound, bool datagrams, std::string_view pending = {}) :
+        transport_(std::move(transport)),
+        inbound_(inbound),
+        read_reservation_(inbound),
+        pending_reservation_(inbound),
+        delivered_reservation_(inbound),
+        facade_(inbound, worker_value, this, &read_thunk, &write_thunk, &finish_thunk, &abort_thunk, datagrams) {
         if (!pending.empty()) {
             inbound_append(pending_, pending_reservation_, pending);
         }
@@ -4647,8 +4458,7 @@ private:
     static task<std::optional<std::string>> read_thunk(void* raw, operation_options operation) {
         auto& owner_value = *static_cast<http_tunnel_session*>(raw);
         owner_value.delivered_reservation_.clear();
-        operation_interrupt interrupt(owner_value.interrupts_, owner_value.facade_.worker_, operation,
-            &owner_value.read_cancellation_, &wake_read, "HTTP tunnel read");
+        operation_interrupt interrupt(owner_value.interrupts_, owner_value.facade_.worker_, operation, &owner_value.read_cancellation_, &wake_read, "HTTP tunnel read");
         if (!owner_value.pending_.empty()) {
             owner_value.delivered_reservation_.swap(owner_value.pending_reservation_);
             co_return std::exchange(owner_value.pending_, std::string{});
@@ -4659,13 +4469,13 @@ private:
         owner_value.read_buffer_.clear();
         bool has_more = false;
         if constexpr (requires(transport_type& t, std::string& b, asio::cancellation_slot sl, inbound_buffer_reservation* r) { t.read_more(b, [] {}, sl, r); }) {
-            has_more = co_await owner_value.transport_.read_more(
-                owner_value.read_buffer_, [&interrupt] { interrupt.throw_if_interrupted(); },
-                owner_value.read_cancellation_.slot(), &owner_value.read_reservation_);
+            has_more = co_await owner_value.transport_.read_more(owner_value.read_buffer_, [&interrupt] {
+                interrupt.throw_if_interrupted();
+            }, owner_value.read_cancellation_.slot(), &owner_value.read_reservation_);
         } else {
-            has_more = co_await owner_value.transport_.read_more(
-                owner_value.read_buffer_, [&interrupt] { interrupt.throw_if_interrupted(); },
-                owner_value.read_cancellation_.slot());
+            has_more = co_await owner_value.transport_.read_more(owner_value.read_buffer_, [&interrupt] {
+                interrupt.throw_if_interrupted();
+            }, owner_value.read_cancellation_.slot());
         }
         if (!has_more) {
             owner_value.receive_ended_ = true;
@@ -4680,8 +4490,7 @@ private:
         if (owner_value.ended_) {
             throw std::logic_error("HTTP tunnel send direction has ended");
         }
-        operation_interrupt interrupt(owner_value.interrupts_, owner_value.facade_.worker_, operation, raw,
-            &abort_thunk_default, "HTTP tunnel write");
+        operation_interrupt interrupt(owner_value.interrupts_, owner_value.facade_.worker_, operation, raw, &abort_thunk_default, "HTTP tunnel write");
         const auto error = co_await owner_value.transport_.write_bytes(bytes_value, http_stream_end::keep_open);
         interrupt.throw_if_interrupted();
         if (error) {
@@ -4691,8 +4500,7 @@ private:
     static task<std::optional<http_tunnel_input>> read_datagram_thunk(void* raw, operation_options operation) {
         auto& owner_value = *static_cast<http_tunnel_session*>(raw);
         owner_value.delivered_reservation_.clear();
-        operation_interrupt interrupt(owner_value.interrupts_, owner_value.facade_.worker_, operation,
-            &owner_value.read_cancellation_, &wake_read, "HTTP tunnel read");
+        operation_interrupt interrupt(owner_value.interrupts_, owner_value.facade_.worker_, operation, &owner_value.read_cancellation_, &wake_read, "HTTP tunnel read");
         if (!owner_value.pending_.empty()) {
             owner_value.delivered_reservation_.swap(owner_value.pending_reservation_);
             co_return http_tunnel_input{std::exchange(owner_value.pending_, std::string{}), false};
@@ -4700,8 +4508,9 @@ private:
         if (owner_value.receive_ended_) {
             co_return std::nullopt;
         }
-        auto input = co_await owner_value.transport_.read_datagram(
-            [&interrupt] { interrupt.throw_if_interrupted(); }, owner_value.read_cancellation_.slot());
+        auto input = co_await owner_value.transport_.read_datagram([&interrupt] {
+            interrupt.throw_if_interrupted();
+        }, owner_value.read_cancellation_.slot());
         if (!input) {
             owner_value.receive_ended_ = true;
         }
@@ -4712,8 +4521,7 @@ private:
         if (owner_value.ended_) {
             throw std::logic_error("HTTP tunnel send direction has ended");
         }
-        operation_interrupt interrupt(owner_value.interrupts_, owner_value.facade_.worker_, operation, raw,
-            &abort_thunk_default, "HTTP tunnel write");
+        operation_interrupt interrupt(owner_value.interrupts_, owner_value.facade_.worker_, operation, raw, &abort_thunk_default, "HTTP tunnel write");
         try {
             const bool sent = co_await owner_value.transport_.write_datagram(bytes);
             interrupt.throw_if_interrupted();
@@ -4748,17 +4556,14 @@ private:
 };
 
 template <typename transport_type>
-[[nodiscard]] task<void> invoke_tunnel_handler(http_tunnel_session<transport_type>& session_value,
-    connection_scanner::entry& entry_value, const route_stream_handler& handler, context& context_value) {
+[[nodiscard]] task<void> invoke_tunnel_handler(http_tunnel_session<transport_type>& session_value, connection_scanner::entry& entry_value, const route_stream_handler& handler, context& context_value) {
     context_tunnel_binding binding(context_value, session_value.tunnel());
     entry_value.enter_long_lived();
     co_await handler(context_value);
 }
 
 template <typename transport_type>
-[[nodiscard]] task<void> finish_tunnel_session(http_tunnel_session<transport_type>& session_value,
-    std::exception_ptr failure, const connection_failure_sink& sink_value, std::string_view remote,
-    connection_scanner::entry& scanner, timeout_duration timeout) {
+[[nodiscard]] task<void> finish_tunnel_session(http_tunnel_session<transport_type>& session_value, std::exception_ptr failure, const connection_failure_sink& sink_value, std::string_view remote, connection_scanner::entry& scanner, timeout_duration timeout) {
     if (failure != nullptr) {
         session_value.abort();
     } else if (!session_value.aborted()) {
@@ -4803,15 +4608,13 @@ inline void validate_websocket_lifecycle_options(const websocket_lifecycle_optio
         }
         return;
     }
-    if (heartbeat.ping_interval_->value().count() <= 0 ||
-        (heartbeat.pong_timeout_.has_value() && heartbeat.pong_timeout_->value().count() <= 0)) {
+    if (heartbeat.ping_interval_->value().count() <= 0 || (heartbeat.pong_timeout_.has_value() && heartbeat.pong_timeout_->value().count() <= 0)) {
         throw std::invalid_argument("websocket heartbeat intervals must be greater than zero");
     }
 }
 
 // Validated options with an absent pong timeout defaulted to the ping interval.
-[[nodiscard]] inline websocket_lifecycle_options normalize_websocket_lifecycle_options(
-    websocket_lifecycle_options options) {
+[[nodiscard]] inline websocket_lifecycle_options normalize_websocket_lifecycle_options(websocket_lifecycle_options options) {
     validate_websocket_lifecycle_options(options);
     auto& heartbeat = options.heartbeat_;
     if (heartbeat.ping_interval_.has_value() && !heartbeat.pong_timeout_.has_value()) {
@@ -4845,8 +4648,7 @@ struct websocket_awaiting_peer_close final {
     std::int64_t started_at_ms_;
 };
 
-using websocket_liveness_state_type = std::variant<websocket_liveness_idle, websocket_sending_ping,
-    websocket_awaiting_pong, websocket_awaiting_peer_close>;
+using websocket_liveness_state_type = std::variant<websocket_liveness_idle, websocket_sending_ping, websocket_awaiting_pong, websocket_awaiting_peer_close>;
 
 [[nodiscard]] inline std::array<char, 8> websocket_heartbeat_payload(std::uint64_t challenge) noexcept {
     std::array<char, 8> payload_value{};
@@ -4856,8 +4658,7 @@ using websocket_liveness_state_type = std::variant<websocket_liveness_idle, webs
     return payload_value;
 }
 
-[[nodiscard]] inline bool websocket_heartbeat_pong_matches(
-    const websocket_liveness_state_type& state_value, std::string_view payload_value) noexcept {
+[[nodiscard]] inline bool websocket_heartbeat_pong_matches(const websocket_liveness_state_type& state_value, std::string_view payload_value) noexcept {
     std::uint64_t challenge;
     if (const auto* sending = std::get_if<websocket_sending_ping>(&state_value)) {
         challenge = sending->challenge_;
@@ -4874,17 +4675,14 @@ using websocket_liveness_state_type = std::variant<websocket_liveness_idle, webs
 // window when that becomes true (or at every tick while it is false) keeps a
 // Pong that was already buffered during a write from being timed out before
 // the reader's next poll gets to it.
-inline void restart_websocket_pong_window(
-    websocket_liveness_state_type& state_value, std::int64_t now) noexcept {
+inline void restart_websocket_pong_window(websocket_liveness_state_type& state_value, std::int64_t now) noexcept {
     if (const auto* pong = std::get_if<websocket_awaiting_pong>(&state_value)) {
         state_value = websocket_awaiting_pong{now, pong->challenge_};
     }
 }
 
-inline void resume_websocket_pong_deadline(const websocket_lifecycle_options& options,
-    websocket_liveness_state_type& state_value, bool pong_observable) noexcept {
-    if (const auto* pong = std::get_if<websocket_awaiting_pong>(&state_value);
-        pong != nullptr && pong_observable && options.heartbeat_.pong_timeout_.has_value()) {
+inline void resume_websocket_pong_deadline(const websocket_lifecycle_options& options, websocket_liveness_state_type& state_value, bool pong_observable) noexcept {
+    if (const auto* pong = std::get_if<websocket_awaiting_pong>(&state_value); pong != nullptr && pong_observable && options.heartbeat_.pong_timeout_.has_value()) {
         const auto now = steady_now_ms();
         if (now - pong->sent_at_ms_ >= options.heartbeat_.pong_timeout_->value().count()) {
             state_value = websocket_awaiting_pong{now, pong->challenge_};
@@ -4897,19 +4695,10 @@ inline void resume_websocket_pong_deadline(const websocket_lifecycle_options& op
 // Pong wait count; a peer that answered during a long write, or while no read
 // is pending, is not dead (RFC 6455 section 5.5.3 only asks the peer to answer
 // promptly). A write that stops making progress is still caught below.
-[[nodiscard]] inline websocket_liveness_decision evaluate_websocket_liveness(
-    const websocket_lifecycle_options& options, websocket_liveness_mode liveness_mode,
-    const websocket_liveness_state_type& state_value, bool write_active, bool pong_observable,
-    std::int64_t last_active_ms, std::int64_t now) noexcept {
+[[nodiscard]] inline websocket_liveness_decision evaluate_websocket_liveness(const websocket_lifecycle_options& options, websocket_liveness_mode liveness_mode, const websocket_liveness_state_type& state_value, bool write_active, bool pong_observable, std::int64_t last_active_ms, std::int64_t now) noexcept {
     if (liveness_mode != websocket_liveness_mode::open) {
         const auto* close = std::get_if<websocket_awaiting_peer_close>(&state_value);
-        return (liveness_mode == websocket_liveness_mode::awaiting_peer_close ||
-                   liveness_mode == websocket_liveness_mode::awaiting_peer_eof) &&
-                       close != nullptr &&
-                       options.close_handshake_timeout_.has_value() &&
-                       now - close->started_at_ms_ >= options.close_handshake_timeout_->value().count()
-                   ? websocket_liveness_decision::abort_transport
-                   : websocket_liveness_decision::idle;
+        return (liveness_mode == websocket_liveness_mode::awaiting_peer_close || liveness_mode == websocket_liveness_mode::awaiting_peer_eof) && close != nullptr && options.close_handshake_timeout_.has_value() && now - close->started_at_ms_ >= options.close_handshake_timeout_->value().count() ? websocket_liveness_decision::abort_transport : websocket_liveness_decision::idle;
     }
 
     if (!options.heartbeat_.ping_interval_.has_value()) {
@@ -4920,8 +4709,7 @@ inline void resume_websocket_pong_deadline(const websocket_lifecycle_options& op
     const auto pong_timeout = options.heartbeat_.pong_timeout_->value().count();
     const auto* pong = std::get_if<websocket_awaiting_pong>(&state_value);
     if (pong != nullptr && pong_observable) {
-        return now - pong->sent_at_ms_ >= pong_timeout ? websocket_liveness_decision::abort_transport
-                                                       : websocket_liveness_decision::idle;
+        return now - pong->sent_at_ms_ >= pong_timeout ? websocket_liveness_decision::abort_transport : websocket_liveness_decision::idle;
     }
     // A write that holds the lane (including a heartbeat Ping) blocks the next
     // Ping, so a peer that neither reads nor sends would never be probed. Give
@@ -4943,9 +4731,7 @@ inline void resume_websocket_pong_deadline(const websocket_lifecycle_options& op
 // A stalled writer's deadline is last activity + ping interval + pong timeout,
 // without overflowing that sum or restarting the pong portion on intermediate
 // timer ticks.
-[[nodiscard]] inline std::chrono::milliseconds websocket_heartbeat_delay(
-    const websocket_lifecycle_options& options, const websocket_liveness_state_type& state,
-    bool writing, std::int64_t last_active_ms, std::int64_t now) noexcept {
+[[nodiscard]] inline std::chrono::milliseconds websocket_heartbeat_delay(const websocket_lifecycle_options& options, const websocket_liveness_state_type& state, bool writing, std::int64_t last_active_ms, std::int64_t now) noexcept {
     const auto remaining = [now](std::int64_t started, std::int64_t budget) {
         const auto elapsed = std::max<std::int64_t>(0, now - started);
         return elapsed >= budget ? std::int64_t{0} : budget - elapsed;
@@ -4959,9 +4745,7 @@ inline void resume_websocket_pong_deadline(const websocket_lifecycle_options& op
             delay = elapsed - ping >= pong ? 0 : pong - (elapsed - ping);
         } else {
             const auto until_ping = ping - elapsed;
-            delay = pong > std::numeric_limits<std::int64_t>::max() - until_ping
-                        ? std::numeric_limits<std::int64_t>::max()
-                        : until_ping + pong;
+            delay = pong > std::numeric_limits<std::int64_t>::max() - until_ping ? std::numeric_limits<std::int64_t>::max() : until_ping + pong;
         }
     } else if (const auto* pong = std::get_if<websocket_awaiting_pong>(&state)) {
         delay = remaining(pong->sent_at_ms_, options.heartbeat_.pong_timeout_->value().count());
@@ -5000,8 +4784,8 @@ private:
 
 class websocket_write_lane final {
 public:
-    explicit websocket_write_lane(const worker_ref& worker_value)
-        : signal_(worker_value) {}
+    explicit websocket_write_lane(const worker_ref& worker_value) :
+        signal_(worker_value) {}
     websocket_write_lane(worker_ref&&) = delete;
 
     [[nodiscard]] bool write_in_progress() const noexcept {
@@ -5095,21 +4879,18 @@ public:
     using peer_close_reason_type = std::string_view (*)(void*) noexcept;
     using protocol_type = const websocket_connection& (*)(void*) noexcept;
 
-    websocket_state(const worker_ref& worker, void* target,
-        std::string_view subprotocol, read_type read, write_type write, close_type close,
-        abort_type abort, peer_close_code_type peer_close_code, peer_close_reason_type peer_close_reason,
-        protocol_type protocol) noexcept
-        : worker_storage_(worker),
-          worker_(&worker_storage_),
-          target_(target),
-          subprotocol_(subprotocol),
-          read_(read),
-          write_(write),
-          close_(close),
-          abort_(abort),
-          peer_close_code_(peer_close_code),
-          peer_close_reason_(peer_close_reason),
-          protocol_(protocol) {
+    websocket_state(const worker_ref& worker, void* target, std::string_view subprotocol, read_type read, write_type write, close_type close, abort_type abort, peer_close_code_type peer_close_code, peer_close_reason_type peer_close_reason, protocol_type protocol) noexcept :
+        worker_storage_(worker),
+        worker_(&worker_storage_),
+        target_(target),
+        subprotocol_(subprotocol),
+        read_(read),
+        write_(write),
+        close_(close),
+        abort_(abort),
+        peer_close_code_(peer_close_code),
+        peer_close_reason_(peer_close_reason),
+        protocol_(protocol) {
         operation_scope_.bind_worker(worker_storage_);
     }
     websocket_state(const websocket_state&) = delete;
@@ -5191,24 +4972,21 @@ public:
     static constexpr bool native_stream = requires(stream_type& stream) { stream.get_executor(); };
     using stream_argument_type = std::conditional_t<native_stream, stream_type&, stream_type>;
 
-    websocket_session_connection(stream_argument_type stream, const worker_ref& worker_value,
-        connection_scanner::entry& scanner_entry, websocket_lifecycle_options lifecycle_options,
-        protocol_byte_limit message_limit, std::string_view initial_bytes,
-        websocket_connection_options protocol_options, std::string&& subprotocol_value,
-        inbound_buffer_account* inbound = nullptr)
-        : stream_(std::forward<stream_argument_type>(stream)),
-          worker_(&worker_value),
-          scanner_entry_(scanner_entry),
-          lifecycle_options_(lifecycle_options),
-          buffer_reservation_(inbound),
-          protocol_(buffer_, [&] {
-              protocol_options.message_limit_ = message_limit;
-              return protocol_options;
-          }()),
-          subprotocol_(std::move(subprotocol_value)),
-          write_lane_(worker_value),
-          reader_done_signal_(worker_value),
-          background_tasks_(worker_value) {
+    websocket_session_connection(stream_argument_type stream, const worker_ref& worker_value, connection_scanner::entry& scanner_entry, websocket_lifecycle_options lifecycle_options, protocol_byte_limit message_limit, std::string_view initial_bytes, websocket_connection_options protocol_options, std::string&& subprotocol_value, inbound_buffer_account* inbound = nullptr) :
+        stream_(std::forward<stream_argument_type>(stream)),
+        worker_(&worker_value),
+        scanner_entry_(scanner_entry),
+        lifecycle_options_(lifecycle_options),
+        buffer_reservation_(inbound),
+        protocol_(buffer_,
+            [&] {
+                protocol_options.message_limit_ = message_limit;
+                return protocol_options;
+            }()),
+        subprotocol_(std::move(subprotocol_value)),
+        write_lane_(worker_value),
+        reader_done_signal_(worker_value),
+        background_tasks_(worker_value) {
         try {
             inbound_append(buffer_, buffer_reservation_, initial_bytes);
         } catch (...) {
@@ -5218,9 +4996,7 @@ public:
         scanner_entry_.register_periodic_check(periodic_check_, this, &websocket_session_connection::heartbeat_tick_thunk);
     }
 
-    websocket_session_connection(stream_argument_type, worker_ref&&, connection_scanner::entry&, websocket_lifecycle_options,
-        protocol_byte_limit, std::string_view, websocket_connection_options,
-        std::string&&, inbound_buffer_account* = nullptr) = delete;
+    websocket_session_connection(stream_argument_type, worker_ref&&, connection_scanner::entry&, websocket_lifecycle_options, protocol_byte_limit, std::string_view, websocket_connection_options, std::string&&, inbound_buffer_account* = nullptr) = delete;
     static void close_stream(stream_type& stream) noexcept {
         if constexpr (!native_stream) {
             stream.abort();
@@ -5249,8 +5025,7 @@ public:
     [[nodiscard]] task<std::optional<websocket_message>> read(operation_options options = {});
     // A cancelled or timed-out output operation aborts the session, since a
     // partly written frame cannot be withdrawn.
-    task<void> write(websocket_opcode opcode, std::string_view payload, bool compress, websocket_write_extent extent,
-        operation_options options);
+    task<void> write(websocket_opcode opcode, std::string_view payload, bool compress, websocket_write_extent extent, operation_options options);
     // Claims only the write lane. A read already pending observes the peer
     // Close and returns nullopt; otherwise close() reads until it arrives.
     task<void> close(::ruvia::websocket_close_options options = {}, operation_options operation = {});
@@ -5350,19 +5125,16 @@ private:
     // and only flag the interruption; the operation unwinds at its next wait.
     class operation_interrupt_registration final {
     public:
-        operation_interrupt_registration(
-            websocket_session_connection& connection, operation_lane lane, const operation_options& options) {
+        operation_interrupt_registration(websocket_session_connection& connection, operation_lane lane, const operation_options& options) {
             if (options.timeout_.has_value()) {
-                (void)connection.worker_->schedule_timer(timer_, options.timeout_->deadline_from(std::chrono::steady_clock::now()),
-                    [&connection, lane](worker_timer_outcome outcome) noexcept {
-                        if (outcome == worker_timer_outcome::expired) {
-                            connection.interrupt(lane, operation_interrupt::timed_out);
-                        }
-                    });
+                (void)connection.worker_->schedule_timer(timer_, options.timeout_->deadline_from(std::chrono::steady_clock::now()), [&connection, lane](worker_timer_outcome outcome) noexcept {
+                    if (outcome == worker_timer_outcome::expired) {
+                        connection.interrupt(lane, operation_interrupt::timed_out);
+                    }
+                });
             }
             if (options.stop_token_.stoppable()) {
-                cancellation_.emplace(connection.cancellation_target(),
-                    lane == operation_lane::read ? connection.read_operation_id_ : connection.write_operation_id_);
+                cancellation_.emplace(connection.cancellation_target(), lane == operation_lane::read ? connection.read_operation_id_ : connection.write_operation_id_);
                 cancellation_->arm(options.stop_token_);
             }
         }
@@ -5378,10 +5150,9 @@ private:
 
     class write_guard_type final {
     public:
-        explicit write_guard_type(websocket_session_connection& connection,
-            write_claim_type claim = write_claim_type::acquire, bool restart_pong = true)
-            : connection_(connection),
-              restart_pong_(restart_pong) {
+        explicit write_guard_type(websocket_session_connection& connection, write_claim_type claim = write_claim_type::acquire, bool restart_pong = true) :
+            connection_(connection),
+            restart_pong_(restart_pong) {
             if (claim == write_claim_type::acquire) {
                 if (connection_.write_lane_.write_in_progress()) {
                     throw std::logic_error("concurrent websocket writes are not supported");
@@ -5409,8 +5180,8 @@ private:
     };
     class write_operation_lease_type final {
     public:
-        explicit write_operation_lease_type(websocket_session_connection& connection)
-            : connection_(&connection) {
+        explicit write_operation_lease_type(websocket_session_connection& connection) :
+            connection_(&connection) {
             if (connection_->write_active_) {
                 connection_ = nullptr;
                 throw std::logic_error("concurrent websocket writes are not supported");
@@ -5420,8 +5191,8 @@ private:
 
         write_operation_lease_type(const write_operation_lease_type&) = delete;
         write_operation_lease_type& operator=(const write_operation_lease_type&) = delete;
-        write_operation_lease_type(write_operation_lease_type&& other) noexcept
-            : connection_(std::exchange(other.connection_, nullptr)) {}
+        write_operation_lease_type(write_operation_lease_type&& other) noexcept :
+            connection_(std::exchange(other.connection_, nullptr)) {}
         write_operation_lease_type& operator=(write_operation_lease_type&&) = delete;
 
         ~write_operation_lease_type() {
@@ -5446,14 +5217,11 @@ private:
     // could still copy or send.
     class borrowed_frame_guard_type final {
     public:
-        borrowed_frame_guard_type(websocket_session_connection& connection, websocket_opcode opcode,
-            std::string_view payload, bool compress, websocket_write_extent extent)
-            : connection_(&connection) {
-            const websocket_frame_options options{
-                .final_ = extent != websocket_write_extent::fragment, .compress_ = compress};
+        borrowed_frame_guard_type(websocket_session_connection& connection, websocket_opcode opcode, std::string_view payload, bool compress, websocket_write_extent extent) :
+            connection_(&connection) {
+            const websocket_frame_options options{.final_ = extent != websocket_write_extent::fragment, .compress_ = compress};
             const auto submit = [&](bool borrow) {
-                return borrow ? connection.protocol_.submit_frame(opcode, websocket_borrowed_payload(payload), options)
-                              : connection.protocol_.submit_frame(opcode, payload, options);
+                return borrow ? connection.protocol_.submit_frame(opcode, websocket_borrowed_payload(payload), options) : connection.protocol_.submit_frame(opcode, payload, options);
             };
             const auto status = [&] {
                 if constexpr (native_stream) {
@@ -5498,8 +5266,8 @@ private:
 
     class read_guard_type final {
     public:
-        explicit read_guard_type(websocket_session_connection& connection)
-            : connection_(&connection) {
+        explicit read_guard_type(websocket_session_connection& connection) :
+            connection_(&connection) {
             if (connection_->read_phase_ != read_phase_type::idle) {
                 connection_ = nullptr;
                 throw std::logic_error("concurrent websocket reads are not supported");
@@ -5509,8 +5277,8 @@ private:
 
         read_guard_type(const read_guard_type&) = delete;
         read_guard_type& operator=(const read_guard_type&) = delete;
-        read_guard_type(read_guard_type&& other) noexcept
-            : connection_(std::exchange(other.connection_, nullptr)) {}
+        read_guard_type(read_guard_type&& other) noexcept :
+            connection_(std::exchange(other.connection_, nullptr)) {}
         read_guard_type& operator=(read_guard_type&&) = delete;
 
         void start() {
@@ -5541,10 +5309,8 @@ private:
     [[nodiscard]] bool pong_observable() const noexcept;
     void heartbeat_tick(std::int64_t now) noexcept;
     task<std::optional<websocket_message>> read_owned(read_guard_type read_guard, operation_options options);
-    task<void> write_owned(websocket_opcode opcode, std::string_view payload, write_operation_lease_type write_lease,
-        bool compress, websocket_write_extent extent, operation_options options);
-    task<void> close_owned(::ruvia::websocket_close_options options, operation_options operation,
-        write_operation_lease_type write_lease);
+    task<void> write_owned(websocket_opcode opcode, std::string_view payload, write_operation_lease_type write_lease, bool compress, websocket_write_extent extent, operation_options options);
+    task<void> close_owned(::ruvia::websocket_close_options options, operation_options operation, write_operation_lease_type write_lease);
     task<void> write_heartbeat_ping();
     // Maps a rejected submit to its exception; false when the protocol is no
     // longer open and nothing was queued.
@@ -5648,16 +5414,12 @@ void websocket_session_connection<stream_type>::heartbeat_tick(std::int64_t now)
     if (!observable) {
         restart_websocket_pong_window(liveness_state_, now);
     }
-    switch (evaluate_websocket_liveness(lifecycle_options_, protocol_.liveness_mode(), liveness_state_,
-        write_lane_.write_in_progress(), observable, scanner_entry_.last_active_ms(), now)) {
+    switch (evaluate_websocket_liveness(lifecycle_options_, protocol_.liveness_mode(), liveness_state_, write_lane_.write_in_progress(), observable, scanner_entry_.last_active_ms(), now)) {
         case websocket_liveness_decision::idle:
             return;
         case websocket_liveness_decision::abort_transport:
             // A heartbeat or close timeout closes the connection.
-            abort_transport(protocol_.liveness_mode() == websocket_liveness_mode::awaiting_peer_eof
-                                ? protocol_.termination()
-                                : websocket_termination::timeout,
-                true);
+            abort_transport(protocol_.liveness_mode() == websocket_liveness_mode::awaiting_peer_eof ? protocol_.termination() : websocket_termination::timeout, true);
             return;
         case websocket_liveness_decision::send_ping:
             break;
@@ -5689,16 +5451,14 @@ task<void> websocket_session_connection<stream_type>::write_heartbeat_ping() {
         }
         const auto challenge = sending->challenge_;
         const auto payload_value = websocket_heartbeat_payload(challenge);
-        if (accept_submitted_frame(protocol_.submit_frame(
-                websocket_opcode::ping, std::string_view(payload_value.data(), payload_value.size())))) {
+        if (accept_submitted_frame(protocol_.submit_frame(websocket_opcode::ping, std::string_view(payload_value.data(), payload_value.size())))) {
             co_await flush_protocol_output_now();
         }
         // Ordinary I/O shares the scanner activity timestamp and may update it
         // while this coroutine is suspended. The Pong deadline belongs to this
         // completed heartbeat write, so use its own timestamp.
         const auto ping_sent_at_ms = steady_now_ms();
-        if (protocol_.liveness_mode() == websocket_liveness_mode::open &&
-            std::holds_alternative<websocket_sending_ping>(liveness_state_)) {
+        if (protocol_.liveness_mode() == websocket_liveness_mode::open && std::holds_alternative<websocket_sending_ping>(liveness_state_)) {
             liveness_state_ = websocket_awaiting_pong{ping_sent_at_ms, challenge};
         }
     } catch (...) {
@@ -5721,8 +5481,7 @@ task<std::optional<websocket_message>> websocket_session_connection<stream_type>
 }
 
 template <typename stream_type>
-const std::shared_ptr<typename websocket_session_connection<stream_type>::cancellation_target_type>&
-websocket_session_connection<stream_type>::cancellation_target() {
+const std::shared_ptr<typename websocket_session_connection<stream_type>::cancellation_target_type>& websocket_session_connection<stream_type>::cancellation_target() {
     if (!cancellation_target_) {
         cancellation_target_ = make_worker_cancellation_target(*this, *worker_);
     }
@@ -5745,9 +5504,7 @@ void websocket_session_connection<stream_type>::interrupt(operation_lane lane, o
         return;
     }
     write_interrupt_ = reason;
-    abort_transport(reason == operation_interrupt::timed_out ? websocket_termination::timeout
-                                                             : websocket_termination::aborted,
-        true);
+    abort_transport(reason == operation_interrupt::timed_out ? websocket_termination::timeout : websocket_termination::aborted, true);
 }
 
 template <typename stream_type>
@@ -5759,8 +5516,7 @@ void websocket_session_connection<stream_type>::throw_interrupted(operation_inte
 }
 
 template <typename stream_type>
-task<std::optional<websocket_message>> websocket_session_connection<stream_type>::read_owned(
-    read_guard_type read_guard_value, operation_options options) {
+task<std::optional<websocket_message>> websocket_session_connection<stream_type>::read_owned(read_guard_type read_guard_value, operation_options options) {
     require_current_worker();
     std::optional<operation_interrupt> interrupted;
     {
@@ -5770,7 +5526,9 @@ task<std::optional<websocket_message>> websocket_session_connection<stream_type>
             throw_interrupted(operation_interrupt::cancelled, "websocket read cancelled");
         }
         const operation_interrupt_registration interrupt_registration(*this, operation_lane::read, options);
-        const auto check_interrupt = [this] { throw_if_read_interrupted(); };
+        const auto check_interrupt = [this] {
+            throw_if_read_interrupted();
+        };
         try {
             for (;;) {
                 std::optional<websocket_event> event;
@@ -5791,9 +5549,7 @@ task<std::optional<websocket_message>> websocket_session_connection<stream_type>
                             if (const auto* close_event = event->close()) {
                                 record_peer_close(*close_event);
                             }
-                            liveness_state_ = event->close() != nullptr
-                                                  ? websocket_liveness_state_type(websocket_awaiting_peer_close{steady_now_ms()})
-                                                  : websocket_liveness_state_type(websocket_liveness_idle{});
+                            liveness_state_ = event->close() != nullptr ? websocket_liveness_state_type(websocket_awaiting_peer_close{steady_now_ms()}) : websocket_liveness_state_type(websocket_liveness_idle{});
                             write_guard.note_write();
                             co_await flush_protocol_output_now();
                         }
@@ -5855,8 +5611,9 @@ task<bool> websocket_session_connection<stream_type>::read_more() {
     throw_if_read_interrupted();
     if constexpr (!native_stream) {
         try {
-            const bool more = co_await stream_.read_more(
-                buffer_, [this] { throw_if_read_interrupted(); }, read_cancellation_.slot());
+            const bool more = co_await stream_.read_more(buffer_, [this] {
+                throw_if_read_interrupted();
+            }, read_cancellation_.slot());
             buffer_reservation_.resize_to(buffer_.capacity());
             co_return more;
         } catch (const inbound_transport_error&) {
@@ -5902,8 +5659,7 @@ task<bool> websocket_session_connection<stream_type>::read_more() {
         // Only this read is cancelled: a TLS stream shields its own record
         // writes from the slot, so the engine resumes cleanly on the next read.
         auto read_completion = co_await ruvia::async_asio<std::size_t>([this, read_space](auto handler) mutable {
-            stream_.async_read_some(asio::buffer(read_space),
-                asio::bind_cancellation_slot(read_cancellation_.slot(), std::move(handler)));
+            stream_.async_read_some(asio::buffer(read_space), asio::bind_cancellation_slot(read_cancellation_.slot(), std::move(handler)));
         });
         const auto ec = read_completion.error_code();
         const auto bytes_read = read_completion.result();
@@ -5931,16 +5687,13 @@ task<bool> websocket_session_connection<stream_type>::read_more() {
 }
 
 template <typename stream_type>
-task<void> websocket_session_connection<stream_type>::write(websocket_opcode opcode, std::string_view payload_value,
-    bool compress, websocket_write_extent extent, operation_options options) {
+task<void> websocket_session_connection<stream_type>::write(websocket_opcode opcode, std::string_view payload_value, bool compress, websocket_write_extent extent, operation_options options) {
     require_current_worker();
     return write_owned(opcode, payload_value, write_operation_lease_type(*this), compress, extent, std::move(options));
 }
 
 template <typename stream_type>
-task<void> websocket_session_connection<stream_type>::write_owned(websocket_opcode opcode,
-    std::string_view payload_value, write_operation_lease_type write_lease, bool compress, websocket_write_extent extent,
-    operation_options options) {
+task<void> websocket_session_connection<stream_type>::write_owned(websocket_opcode opcode, std::string_view payload_value, write_operation_lease_type write_lease, bool compress, websocket_write_extent extent, operation_options options) {
     require_current_worker();
     std::optional<operation_interrupt> interrupted;
     {
@@ -5953,7 +5706,9 @@ task<void> websocket_session_connection<stream_type>::write_owned(websocket_opco
         const operation_interrupt_registration interrupt_registration(*this, operation_lane::write, options);
         try {
             if (write_lane_.blocked_for_writer()) {
-                co_await write_lane_.wait_for_idle(false, [this] { throw_if_write_interrupted(); });
+                co_await write_lane_.wait_for_idle(false, [this] {
+                    throw_if_write_interrupted();
+                });
             }
             write_guard_type write_guard(*this);
             // The caller keeps the payload alive until this write completes, so an
@@ -5976,15 +5731,13 @@ task<void> websocket_session_connection<stream_type>::write_owned(websocket_opco
 }
 
 template <typename stream_type>
-task<void> websocket_session_connection<stream_type>::close(
-    ::ruvia::websocket_close_options options, operation_options operation) {
+task<void> websocket_session_connection<stream_type>::close(::ruvia::websocket_close_options options, operation_options operation) {
     require_current_worker();
     return close_owned(options, std::move(operation), write_operation_lease_type(*this));
 }
 
 template <typename stream_type>
-task<void> websocket_session_connection<stream_type>::close_owned(
-    ::ruvia::websocket_close_options options, operation_options operation, write_operation_lease_type write_lease) {
+task<void> websocket_session_connection<stream_type>::close_owned(::ruvia::websocket_close_options options, operation_options operation, write_operation_lease_type write_lease) {
     require_current_worker();
     std::optional<operation_interrupt> interrupted;
     bool handshake_timed_out = false;
@@ -5998,7 +5751,9 @@ task<void> websocket_session_connection<stream_type>::close_owned(
         const operation_interrupt_registration interrupt_registration(*this, operation_lane::write, operation);
         try {
             if (write_lane_.blocked_for_writer()) {
-                co_await write_lane_.wait_for_idle(false, [this] { throw_if_write_interrupted(); });
+                co_await write_lane_.wait_for_idle(false, [this] {
+                    throw_if_write_interrupted();
+                });
             }
             const auto reason = options.reason_.view();
             bool flush_output = false;
@@ -6035,8 +5790,7 @@ task<void> websocket_session_connection<stream_type>::close_owned(
             // suppresses application messages in this phase while still
             // validating frames and handling control traffic.
             const bool awaiting_peer_close = protocol_.liveness_mode() == websocket_liveness_mode::awaiting_peer_close;
-            while (protocol_.liveness_mode() == websocket_liveness_mode::awaiting_peer_close ||
-                   protocol_.liveness_mode() == websocket_liveness_mode::awaiting_peer_eof) {
+            while (protocol_.liveness_mode() == websocket_liveness_mode::awaiting_peer_close || protocol_.liveness_mode() == websocket_liveness_mode::awaiting_peer_eof) {
                 if (read_phase_ != read_phase_type::idle) {
                     co_await reader_done_signal_.wait();
                 } else {
@@ -6056,8 +5810,7 @@ task<void> websocket_session_connection<stream_type>::close_owned(
     }
     if (handshake_timed_out) {
         // The peer never answered: an inbound connection end, not a handler fault.
-        throw std::system_error(
-            std::make_error_code(std::errc::timed_out), "websocket close handshake timed out");
+        throw std::system_error(std::make_error_code(std::errc::timed_out), "websocket close handshake timed out");
     }
 }
 
@@ -6124,9 +5877,7 @@ auto websocket_session_connection<stream_type>::write_bytes(const websocket_outp
         return write_adapted(plan);
     } else {
         // One gathered write: pending protocol output, then a borrowed payload.
-        const std::array<asio::const_buffer, 2> buffers{
-            asio::buffer(plan.bytes().data(), plan.bytes().size()),
-            asio::buffer(plan.borrowed_bytes().data(), plan.borrowed_bytes().size())};
+        const std::array<asio::const_buffer, 2> buffers{asio::buffer(plan.bytes().data(), plan.bytes().size()), asio::buffer(plan.borrowed_bytes().data(), plan.borrowed_bytes().size())};
         return ruvia::async_asio([this, buffers](auto handler) mutable {
             // Partial progress refreshes heartbeat transport activity and the
             // write_timeout inactivity clock.
@@ -6139,8 +5890,7 @@ template <typename stream_type>
 task<std::error_code> websocket_session_connection<stream_type>::write_adapted(const websocket_output_plan& plan) {
     // The websocket protocol's transport disposition maps onto the stream end
     // at this one boundary; the multiplexed transports only speak http_stream_end.
-    const auto end = plan.disposition() == websocket_transport_disposition::end_transport ? http_stream_end::end
-                                                                                          : http_stream_end::keep_open;
+    const auto end = plan.disposition() == websocket_transport_disposition::end_transport ? http_stream_end::end : http_stream_end::keep_open;
     if (plan.borrowed_bytes().empty()) {
         co_return co_await stream_.write_bytes(plan.bytes(), end);
     }
@@ -6226,8 +5976,7 @@ template <typename connection_type>
 }
 
 template <typename connection_type>
-task<void> websocket_write_thunk(void* target, websocket_opcode opcode, std::string_view payload_value, bool compress,
-    websocket_write_extent extent, operation_options options) {
+task<void> websocket_write_thunk(void* target, websocket_opcode opcode, std::string_view payload_value, bool compress, websocket_write_extent extent, operation_options options) {
     return static_cast<connection_type*>(target)->write(opcode, payload_value, compress, extent, std::move(options));
 }
 
@@ -6258,12 +6007,7 @@ template <typename connection_type>
 
 template <typename connection_type>
 [[nodiscard]] websocket make_websocket_facade(connection_type& connection) {
-    auto state = std::make_shared<websocket_state>(connection.worker(), &connection, connection.subprotocol(),
-        &websocket_read_thunk<connection_type>, &websocket_write_thunk<connection_type>,
-        &websocket_close_thunk<connection_type>, &websocket_abort_thunk<connection_type>,
-        &websocket_peer_close_code_thunk<connection_type>,
-        &websocket_peer_close_reason_thunk<connection_type>,
-        &websocket_protocol_thunk<connection_type>);
+    auto state = std::make_shared<websocket_state>(connection.worker(), &connection, connection.subprotocol(), &websocket_read_thunk<connection_type>, &websocket_write_thunk<connection_type>, &websocket_close_thunk<connection_type>, &websocket_abort_thunk<connection_type>, &websocket_peer_close_code_thunk<connection_type>, &websocket_peer_close_reason_thunk<connection_type>, &websocket_protocol_thunk<connection_type>);
     connection.bind_facade(state);
     return websocket(std::move(state));
 }
@@ -6272,9 +6016,7 @@ template <typename connection_type>
 // onion middleware post-processing still belongs to the same websocket request
 // and must be able to turn its own failure into the session's 1011 outcome.
 template <typename stream_type>
-task<void> invoke_websocket_handler(websocket_session_connection<stream_type>& connection,
-    connection_scanner::entry& scanner_entry, const route_stream_handler& handler,
-    context& context_value) {
+task<void> invoke_websocket_handler(websocket_session_connection<stream_type>& connection, connection_scanner::entry& scanner_entry, const route_stream_handler& handler, context& context_value) {
     auto websocket_value = make_websocket_facade(connection);
     context_websocket_binding websocket_binding(context_value, websocket_value);
 
@@ -6293,9 +6035,7 @@ task<void> invoke_websocket_handler(websocket_session_connection<stream_type>& c
 // each: a peer that resets instead of answering the Close, or a close-handshake
 // timeout that aborted the transport, ends the connection normally.
 template <typename stream_type>
-task<void> finish_websocket_session(websocket_session_connection<stream_type>& connection,
-    std::exception_ptr exception, const connection_failure_sink& connection_failure,
-    std::string_view remote_address) {
+task<void> finish_websocket_session(websocket_session_connection<stream_type>& connection, std::exception_ptr exception, const connection_failure_sink& connection_failure, std::string_view remote_address) {
     connection_failure.invoke(remote_address, exception);
     try {
         if (exception != nullptr) {

@@ -4,10 +4,6 @@
 #include "ruvia/web/db/db_query.h"
 
 #include "connection_lifecycle.h"
-#include "db_pool.h"
-#ifdef RUVIA_ENABLE_REDIS
-#endif
-
 // The per-request database handle: it borrows a registry entry for the
 // operation's lifetime and hands each call to the pool.
 
@@ -39,20 +35,18 @@ task<void> discard_rows_task(task<db_rows> rows_task) {
 
 }  // namespace
 
-db_session::db_session(detail::db_pool_ref_type client,
-    ::ruvia::operation_scope& operation_scope, detail::request_io_metrics* io_metrics,
-    detail::db_query_cache_state* cache) noexcept
-    : cache_(cache),
-      client_(client),
-      io_metrics_(io_metrics),
-      registration_(operation_scope, this, &db_session::expire_capability) {}
+db_session::db_session(detail::db_pool_ref_type client, ::ruvia::operation_scope& operation_scope, detail::request_io_metrics* io_metrics, detail::db_query_cache_state* cache) noexcept :
+    cache_(cache),
+    client_(client),
+    io_metrics_(io_metrics),
+    registration_(operation_scope, this, &db_session::expire_capability) {}
 
-db_session::db_session(const db_session& other) noexcept
-    : cache_(other.cache_),
-      client_(other.client_),
-      io_metrics_(other.io_metrics_),
-      options_(other.options_),
-      registration_(other.registration_, this) {}
+db_session::db_session(const db_session& other) noexcept :
+    cache_(other.cache_),
+    client_(other.client_),
+    io_metrics_(other.io_metrics_),
+    options_(other.options_),
+    registration_(other.registration_, this) {}
 
 #ifdef RUVIA_ENABLE_REDIS
 db_query_result_cache db_session::query_result_cache() const {
@@ -109,8 +103,7 @@ task<db_rows> db_session::query_task(const db_query& query) const {
     }
 #endif
     auto options_copy = options_;
-    return detail::query_db_backend(
-        backend, std::move(plan.first_.sql_), std::move(plan.first_.params_), options_copy);
+    return detail::query_db_backend(backend, std::move(plan.first_.sql_), std::move(plan.first_.params_), options_copy);
 }
 
 task<std::pair<db_rows, db_rows>> db_session::query_and_count_task(const db_query& query, const db_query& count) const {
@@ -126,56 +119,42 @@ task<db_exec_result> db_session::execute_query(const db_query& query) const {
     if (statement.returns_rows()) {
         throw std::invalid_argument("execute requires a statement without returned rows");
     }
-    return ::ruvia::make_scoped_operation(registration_.scope(),
-        detail::visit_db_pool(client_, [&](auto& client) {
-            return client.execute(
-                std::move(statement.sql_), std::move(statement.params_), options_, io_metrics_);
-        }));
+    return ::ruvia::make_scoped_operation(registration_.scope(), detail::visit_db_pool(client_, [&](auto& client) {
+        return client.execute(std::move(statement.sql_), std::move(statement.params_), options_, io_metrics_);
+    }));
 }
 
 task<db_exec_result> db_session::execute_prepared(std::string sql) const {
     registration_.require_active();
-    return ::ruvia::make_scoped_operation(registration_.scope(),
-        detail::visit_db_pool(client_, [&](auto& client) {
-            return client.execute(
-                std::move(sql), std::vector<db_value>{}, options_, io_metrics_);
-        }));
+    return ::ruvia::make_scoped_operation(registration_.scope(), detail::visit_db_pool(client_, [&](auto& client) {
+        return client.execute(std::move(sql), std::vector<db_value>{}, options_, io_metrics_);
+    }));
 }
 
-task<db_rows> db_session::query(
-    std::string_view sql, std::span<const db_value> params) const {
+task<db_rows> db_session::query(std::string_view sql, std::span<const db_value> params) const {
     registration_.require_active();
     auto statement = prepare_db_statement(sql, params);
-    return ::ruvia::make_scoped_operation(registration_.scope(),
-        detail::visit_db_pool(client_, [&](auto& client) {
-            return client.query(
-                std::move(statement.sql_), std::move(statement.params_), options_, io_metrics_);
-        }));
+    return ::ruvia::make_scoped_operation(registration_.scope(), detail::visit_db_pool(client_, [&](auto& client) {
+        return client.query(std::move(statement.sql_), std::move(statement.params_), options_, io_metrics_);
+    }));
 }
 
-task<db_exec_result> db_session::execute(
-    std::string_view sql, std::span<const db_value> params) const {
+task<db_exec_result> db_session::execute(std::string_view sql, std::span<const db_value> params) const {
     registration_.require_active();
     auto statement = prepare_db_statement(sql, params);
-    return ::ruvia::make_scoped_operation(registration_.scope(),
-        detail::visit_db_pool(client_, [&](auto& client) {
-            return client.execute(
-                std::move(statement.sql_), std::move(statement.params_), options_, io_metrics_);
-        }));
+    return ::ruvia::make_scoped_operation(registration_.scope(), detail::visit_db_pool(client_, [&](auto& client) {
+        return client.execute(std::move(statement.sql_), std::move(statement.params_), options_, io_metrics_);
+    }));
 }
 
-task<db_stream_result> db_session::query_stream(
-    std::string_view sql, std::span<const db_value> params) const {
+task<db_stream_result> db_session::query_stream(std::string_view sql, std::span<const db_value> params) const {
     registration_.require_active();
     auto statement = prepare_db_statement(sql, params);
     auto& scope = registration_.scope();
-    return ::ruvia::make_scoped_operation(scope, query_stream_prepared(client_, std::move(statement.sql_),
-                                                     std::move(statement.params_), scope, io_metrics_, options_));
+    return ::ruvia::make_scoped_operation(scope, query_stream_prepared(client_, std::move(statement.sql_), std::move(statement.params_), scope, io_metrics_, options_));
 }
 
-task<db_stream_result> db_session::query_stream_prepared(detail::db_pool_ref_type client, std::string sql,
-    std::vector<db_value> params,
-    ::ruvia::operation_scope& operation_scope, detail::request_io_metrics* io_metrics, operation_options options) {
+task<db_stream_result> db_session::query_stream_prepared(detail::db_pool_ref_type client, std::string sql, std::vector<db_value> params, ::ruvia::operation_scope& operation_scope, detail::request_io_metrics* io_metrics, operation_options options) {
     detail::scoped_request_io_timer timer(io_metrics, detail::request_io_kind::db);
     auto result_value = co_await detail::visit_db_pool(client, [&](auto& pool) {
         return pool.stream(std::move(sql), std::move(params), std::move(options));
@@ -187,13 +166,10 @@ task<db_stream_result> db_session::query_stream_prepared(detail::db_pool_ref_typ
 task<db_transaction> db_session::begin_transaction(db_transaction_options options) const {
     registration_.require_active();
     auto& scope = registration_.scope();
-    return ::ruvia::make_scoped_operation(scope,
-        begin_transaction_prepared(query_backend(), scope, options_, std::move(options)));
+    return ::ruvia::make_scoped_operation(scope, begin_transaction_prepared(query_backend(), scope, options_, std::move(options)));
 }
 
-task<db_transaction> db_session::begin_transaction_prepared(detail::db_query_backend backend,
-    ::ruvia::operation_scope& operation_scope, operation_options operation_options_value,
-    db_transaction_options transaction_options) {
+task<db_transaction> db_session::begin_transaction_prepared(detail::db_query_backend backend, ::ruvia::operation_scope& operation_scope, operation_options operation_options_value, db_transaction_options transaction_options) {
     detail::scoped_request_io_timer timer(backend.io_metrics_, detail::request_io_kind::db);
     auto transaction = co_await detail::visit_db_pool(backend.pool_, [&](auto& pool) {
         return pool.begin_transaction(std::move(operation_options_value), std::move(transaction_options));
@@ -209,14 +185,12 @@ task<void> db_session::notify(std::string_view channel, std::string_view payload
     }
     auto statement = prepare_db_notify(channel, payload);
     auto& scope = registration_.scope();
-    return ::ruvia::make_scoped_operation(scope,
-        discard_rows_task(detail::visit_db_pool(client_, [&](auto& client) {
-            return client.query(std::move(statement.sql_), std::move(statement.params_), options_, io_metrics_);
-        })));
+    return ::ruvia::make_scoped_operation(scope, discard_rows_task(detail::visit_db_pool(client_, [&](auto& client) {
+        return client.query(std::move(statement.sql_), std::move(statement.params_), options_, io_metrics_);
+    })));
 }
 
-db_session db_session::bind_caller_scope(::ruvia::operation_scope& scope,
-    detail::request_io_metrics* io_metrics, const stop_token& stop_token_value) && {
+db_session db_session::bind_caller_scope(::ruvia::operation_scope& scope, detail::request_io_metrics* io_metrics, const stop_token& stop_token_value) && {
     registration_.require_active();
     db_session bound(client_, scope, io_metrics, cache_);
     bound.options_ = override_operation_options(options_, operation_options{.timeout_ = std::nullopt, .stop_token_ = stop_token_value});
@@ -231,8 +205,7 @@ class db_client_state final : public std::enable_shared_from_this<db_client_stat
 public:
     db_client_state(event_loop loop, const db_config& config);
 #ifdef RUVIA_ENABLE_REDIS
-    db_client_state(event_loop loop, const db_config& config, const redis_session& cache_store,
-        const db_cache_config& cache_policy);
+    db_client_state(event_loop loop, const db_config& config, const redis_session& cache_store, const db_cache_config& cache_policy);
 #endif
 
     db_client_state(const db_client_state&) = delete;
@@ -270,19 +243,18 @@ private:
     // Retires scopes before backend storage and its allocator are destroyed.
     client_lifecycle<db_client_state> lifecycle_;
 };
-db_client_state::db_client_state(event_loop loop, const db_config& config)
-    : loop_(client_lifecycle<db_client_state>::require_loop(std::move(loop))),
-      worker_(loop_.worker()),
-      databases_(loop_.io_context(), worker_, config),
-      lifecycle_(*this, loop_, worker_) {}
+db_client_state::db_client_state(event_loop loop, const db_config& config) :
+    loop_(client_lifecycle<db_client_state>::require_loop(std::move(loop))),
+    worker_(loop_.worker()),
+    databases_(loop_.io_context(), worker_, config),
+    lifecycle_(*this, loop_, worker_) {}
 
 #ifdef RUVIA_ENABLE_REDIS
-db_client_state::db_client_state(event_loop loop, const db_config& config,
-    const redis_session& cache_store, const db_cache_config& cache_policy)
-    : loop_(client_lifecycle<db_client_state>::require_loop(std::move(loop))),
-      worker_(loop_.worker()),
-      databases_(loop_.io_context(), worker_, config, cache_store, cache_policy),
-      lifecycle_(*this, loop_, worker_) {}
+db_client_state::db_client_state(event_loop loop, const db_config& config, const redis_session& cache_store, const db_cache_config& cache_policy) :
+    loop_(client_lifecycle<db_client_state>::require_loop(std::move(loop))),
+    worker_(loop_.worker()),
+    databases_(loop_.io_context(), worker_, config, cache_store, cache_policy),
+    lifecycle_(*this, loop_, worker_) {}
 #endif
 
 void db_client_state::throw_not_ready() {
@@ -298,15 +270,14 @@ db_session db_client_state::db() {
 
 namespace ruvia {
 
-db_client::db_client(event_loop loop, const db_config& config)
-    : state_(std::make_shared<detail::db_client_state>(std::move(loop), config)) {
+db_client::db_client(event_loop loop, const db_config& config) :
+    state_(std::make_shared<detail::db_client_state>(std::move(loop), config)) {
     state_->bind_stop();
 }
 
 #ifdef RUVIA_ENABLE_REDIS
-db_client::db_client(event_loop loop, const db_config& config,
-    const redis_session& cache_store, const db_cache_config& cache_policy)
-    : state_(std::make_shared<detail::db_client_state>(std::move(loop), config, cache_store, cache_policy)) {
+db_client::db_client(event_loop loop, const db_config& config, const redis_session& cache_store, const db_cache_config& cache_policy) :
+    state_(std::make_shared<detail::db_client_state>(std::move(loop), config, cache_store, cache_policy)) {
     state_->bind_stop();
 }
 #endif
@@ -344,38 +315,33 @@ namespace ruvia {
 namespace {
 
 [[nodiscard]] detail::db_pool_ref_type pool_ref(const detail::db_registry::pool_owner_type& owner_value) noexcept {
-    return std::visit(
-        [](const auto& value) {
-            return value == nullptr ? detail::db_pool_ref_type{} : detail::db_pool_ref_type{value.get()};
-        },
-        owner_value);
+    return std::visit([](const auto& value) {
+        return value == nullptr ? detail::db_pool_ref_type{} : detail::db_pool_ref_type{value.get()};
+    }, owner_value);
 }
 
 #ifdef RUVIA_ENABLE_REDIS
-[[nodiscard]] const detail::db_config_storage& pool_config(
-    const detail::db_registry::pool_owner_type& owner_value) noexcept {
-    return std::visit(
-        [](const auto& value) noexcept -> const detail::db_config_storage& { return value->config(); }, owner_value);
+[[nodiscard]] const detail::db_config_storage& pool_config(const detail::db_registry::pool_owner_type& owner_value) noexcept {
+    return std::visit([](const auto& value) noexcept -> const detail::db_config_storage& {
+        return value->config();
+    }, owner_value);
 }
 #endif
 
 }  // namespace
 
-detail::db_registry::db_registry(asio::io_context& io_context, const worker_ref& worker_value,
-    const db_config& default_config)
-    : entries_(),
-      alias_index_() {
+detail::db_registry::db_registry(asio::io_context& io_context, const worker_ref& worker_value, const db_config& default_config) :
+    entries_(),
+    alias_index_() {
     alias_index_.build({default_capability_alias});
     entries_.reserve(1);
     add(io_context, worker_value, db_config_storage(default_config));
 }
 
-detail::db_registry::db_registry(asio::io_context& io_context, const worker_ref& worker_value,
-    std::span<const detail::db_definition> databases, redis_registry* redis)
-    : entries_(),
-      alias_index_() {
-    detail::validate_capability_aliases(
-        databases, "database alias must not be empty", "duplicate database alias");
+detail::db_registry::db_registry(asio::io_context& io_context, const worker_ref& worker_value, std::span<const detail::db_definition> databases, redis_registry* redis) :
+    entries_(),
+    alias_index_() {
+    detail::validate_capability_aliases(databases, "database alias must not be empty", "duplicate database alias");
     alias_index_.build(databases);
     entries_.reserve(databases.size());
     for (const auto& definition : databases) {
@@ -386,8 +352,7 @@ detail::db_registry::db_registry(asio::io_context& io_context, const worker_ref&
                 throw std::invalid_argument("database query cache requires an existing Redis registry");
             }
             const auto store_value = redis->get(definition.query_cache_->redis_alias_, cache_scope_, nullptr);
-            attach_cache(entries_.size() - 1, worker_value, store_value, definition.query_cache_->policy_,
-                definition.config_, definition.alias_);
+            attach_cache(entries_.size() - 1, worker_value, store_value, definition.query_cache_->policy_, definition.config_, definition.alias_);
         }
 #else
         (void)redis;
@@ -396,17 +361,12 @@ detail::db_registry::db_registry(asio::io_context& io_context, const worker_ref&
 }
 
 #ifdef RUVIA_ENABLE_REDIS
-detail::db_registry::db_registry(asio::io_context& io_context, const worker_ref& worker_value,
-    const db_config& config,
-    const redis_session& redis, const db_cache_config& policy)
-    : db_registry(io_context, worker_value, config) {
-    attach_cache(0, worker_value, redis, db_cache_config_storage(policy),
-        pool_config(entries_[0].pool_), default_capability_alias);
+detail::db_registry::db_registry(asio::io_context& io_context, const worker_ref& worker_value, const db_config& config, const redis_session& redis, const db_cache_config& policy) :
+    db_registry(io_context, worker_value, config) {
+    attach_cache(0, worker_value, redis, db_cache_config_storage(policy), pool_config(entries_[0].pool_), default_capability_alias);
 }
 
-void detail::db_registry::attach_cache(std::size_t index, const worker_ref& worker_value,
-    const redis_session& redis, const db_cache_config_storage& policy,
-    const db_config_storage& config, std::string_view alias) {
+void detail::db_registry::attach_cache(std::size_t index, const worker_ref& worker_value, const redis_session& redis, const db_cache_config_storage& policy, const db_config_storage& config, std::string_view alias) {
     if (redis.worker().id() != worker_value.id()) {
         throw std::invalid_argument("database query cache Redis capability must belong to the same worker");
     }
@@ -417,11 +377,10 @@ void detail::db_registry::attach_cache(std::size_t index, const worker_ref& work
 
 detail::db_registry::~db_registry() = default;
 
-detail::db_registry::entry_type::entry_type(pool_owner_type pool) noexcept
-    : pool_(std::move(pool)) {}
+detail::db_registry::entry_type::entry_type(pool_owner_type pool) noexcept :
+    pool_(std::move(pool)) {}
 
-void detail::db_registry::add(
-    asio::io_context& io_context, const worker_ref& worker_value, db_config_storage config) {
+void detail::db_registry::add(asio::io_context& io_context, const worker_ref& worker_value, db_config_storage config) {
     require_client_host_lookup(config.host_, worker_value);
     pool_owner_type owner;
     switch (config.driver_) {
@@ -448,7 +407,9 @@ void detail::db_registry::add(
 
 task<void> detail::db_registry::connect() {
     for (auto& entry : entries_) {
-        co_await visit_db_pool(pool_ref(entry.pool_), [](auto& pool) { return pool.connect(); });
+        co_await visit_db_pool(pool_ref(entry.pool_), [](auto& pool) {
+            return pool.connect();
+        });
     }
 }
 
@@ -459,12 +420,13 @@ void detail::db_registry::close_now() noexcept {
             entry.cache_->close_now();
         }
 #endif
-        visit_db_pool_if_present(pool_ref(entry.pool_), [](auto& pool) noexcept { pool.close_now(); });
+        visit_db_pool_if_present(pool_ref(entry.pool_), [](auto& pool) noexcept {
+            pool.close_now();
+        });
     }
 }
 
-db_session detail::db_registry::session(
-    const entry_type& entry, ::ruvia::operation_scope& operation_scope, request_io_metrics* io_metrics) const {
+db_session detail::db_registry::session(const entry_type& entry, ::ruvia::operation_scope& operation_scope, request_io_metrics* io_metrics) const {
 #ifdef RUVIA_ENABLE_REDIS
     detail::db_query_cache_state* const cache = entry.cache_.get();
 #else
@@ -480,14 +442,12 @@ bool detail::db_registry::empty() const noexcept {
 db_session detail::db_registry::get(::ruvia::operation_scope& operation_scope, request_io_metrics* io_metrics) const {
     const auto default_pool_index = alias_index_.default_index();
     if (!default_pool_index.has_value()) {
-        throw db_error(
-            db_error::code_type::not_configured, std::nullopt, "default database is not configured");
+        throw db_error(db_error::code_type::not_configured, std::nullopt, "default database is not configured");
     }
     return session(entries_[*default_pool_index], operation_scope, io_metrics);
 }
 
-db_session detail::db_registry::get(
-    std::string_view alias, ::ruvia::operation_scope& operation_scope, request_io_metrics* io_metrics) const {
+db_session detail::db_registry::get(std::string_view alias, ::ruvia::operation_scope& operation_scope, request_io_metrics* io_metrics) const {
     const auto match = alias_index_.find(alias);
     if (match.has_value()) {
         return session(entries_[*match], operation_scope, io_metrics);
@@ -518,13 +478,8 @@ void validate_insert_columns(std::span<const db_column_info> entity_columns, std
     }
 }
 
-void apply_entity_upsert(db_query& query, std::span<const db_column_info> entity_columns,
-    std::span<db_assignment> updates, std::span<const std::string_view> inserted_columns,
-    const db_upsert_options& options, db_driver driver, std::string_view table, std::string_view qualifier,
-    std::string_view update_date, std::string_view version) {
-    if ((options.skip_update_if_no_values_changed_ || !options.index_predicate_.empty() ||
-            !options.update_where_.empty()) &&
-        driver != db_driver::postgresql) {
+void apply_entity_upsert(db_query& query, std::span<const db_column_info> entity_columns, std::span<db_assignment> updates, std::span<const std::string_view> inserted_columns, const db_upsert_options& options, db_driver driver, std::string_view table, std::string_view qualifier, std::string_view update_date, std::string_view version) {
+    if ((options.skip_update_if_no_values_changed_ || !options.index_predicate_.empty() || !options.update_where_.empty()) && driver != db_driver::postgresql) {
         throw std::invalid_argument("conditional repository upsert requires PostgreSQL");
     }
     for (const auto& name : options.conflict_paths_) {
@@ -557,21 +512,17 @@ void apply_entity_upsert(db_query& query, std::span<const db_column_info> entity
     if (!do_nothing) {
         for (const auto& column : entity_columns) {
             const auto name = column.name_;
-            const auto custom = std::ranges::find_if(options.update_expressions_,
-                [name](const auto& item) { return item.column_ == name; });
+            const auto custom = std::ranges::find_if(options.update_expressions_, [name](const auto& item) {
+                return item.column_ == name;
+            });
             bool selected = custom != options.update_expressions_.end();
             if (!selected) {
-                selected = options.update_columns_.empty()
-                               ? column.conflict_updatable_ && std::ranges::find(inserted_columns, name) != inserted_columns.end() &&
-                                     std::ranges::find(options.conflict_paths_, borrowed_text(name)) == options.conflict_paths_.end()
-                               : column.writable_ && std::ranges::find(options.update_columns_, borrowed_text(name)) != options.update_columns_.end();
+                selected = options.update_columns_.empty() ? column.conflict_updatable_ && std::ranges::find(inserted_columns, name) != inserted_columns.end() && std::ranges::find(options.conflict_paths_, borrowed_text(name)) == options.conflict_paths_.end() : column.writable_ && std::ranges::find(options.update_columns_, borrowed_text(name)) != options.update_columns_.end();
             }
             if (!selected) {
                 continue;
             }
-            const auto value = custom == options.update_expressions_.end()
-                                   ? query.excluded(name)
-                                   : custom->expression(query, table, alias);
+            const auto value = custom == options.update_expressions_.end() ? query.excluded(name) : custom->expression(query, table, alias);
             updates[update_count++] = {name, db_expr(value, {}, true)};
             if (options.skip_update_if_no_values_changed_) {
                 const auto changed = query.binary(query.column(name, qualifier), db_binary_operator::is_distinct_from, value);
@@ -581,10 +532,13 @@ void apply_entity_upsert(db_query& query, std::span<const db_column_info> entity
         if (update_count != 0) {
             const auto assigned_count = update_count;
             const auto assigned = [&](std::string_view name) {
-                return std::ranges::any_of(updates.first(assigned_count), [name](const auto& item) { return item.column_ == name; });
+                return std::ranges::any_of(updates.first(assigned_count), [name](const auto& item) {
+                    return item.column_ == name;
+                });
             };
-            append_lifecycle_assignments(query, qualifier, update_date, version, assigned,
-                [&](std::string_view name, db_expression value) { updates[update_count++] = {name, db_expr(value, {}, true)}; });
+            append_lifecycle_assignments(query, qualifier, update_date, version, assigned, [&](std::string_view name, db_expression value) {
+                updates[update_count++] = {name, db_expr(value, {}, true)};
+            });
         } else if (driver == db_driver::postgresql) {
             do_nothing = true;
         }
@@ -632,8 +586,9 @@ std::string db_relation_plan::normalize(std::string_view root_alias, std::string
 
 bool db_relation_plan::uses_source_name(const db_query& query, std::string_view name) {
     const auto& s = query.storage();
-    return (s.source_ && source_binds_name(*s.source_, name)) ||
-           std::ranges::any_of(s.joins_, [&](const auto& join) { return source_binds_name(join.source_, name); });
+    return (s.source_ && source_binds_name(*s.source_, name)) || std::ranges::any_of(s.joins_, [&](const auto& join) {
+        return source_binds_name(join.source_, name);
+    });
 }
 
 bool db_relation_plan::uses_projection_name(const db_query& query, std::string_view name) {
@@ -644,8 +599,7 @@ bool db_relation_plan::uses_projection_name(const db_query& query, std::string_v
     });
 }
 
-std::optional<db_query> db_relation_plan::prepare_entity_read(const db_query& query,
-    std::span<const std::string_view> primary_key, std::string_view root_alias, db_driver driver) {
+std::optional<db_query> db_relation_plan::prepare_entity_read(const db_query& query, std::span<const std::string_view> primary_key, std::string_view root_alias, db_driver driver) {
     const auto& s = query.storage();
     if (s.kind_ != db_query_kind::select || primary_key.empty()) {
         throw std::invalid_argument("relation loading requires an entity SELECT with a primary key");
@@ -744,20 +698,17 @@ std::optional<db_query> db_relation_plan::prepare_entity_read(const db_query& qu
         page.add_order_by(page.column(order_names[i], "__ruvia_ranked"), window_orders[i].direction_, window_orders[i].nulls_);
     }
     page.from(std::move(ranked), "__ruvia_ranked");
-    page.where(page.binary(page.column("__ruvia_page_rank", "__ruvia_ranked"),
-        db_binary_operator::equal, page.value(1)));
+    page.where(page.binary(page.column("__ruvia_page_rank", "__ruvia_ranked"), db_binary_operator::equal, page.value(1)));
     // Break ordering ties using the complete primary key, including composite keys.
     for (const auto& key : key_names) {
         page.add_order_by(page.column(key, "__ruvia_ranked"));
     }
-    page.limit(s.limit_ ? std::optional<query_row_count>(*s.limit_) : std::nullopt)
-        .offset(s.offset_ ? std::optional<query_row_count>(*s.offset_) : std::nullopt);
+    page.limit(s.limit_ ? std::optional<query_row_count>(*s.limit_) : std::nullopt).offset(s.offset_ ? std::optional<query_row_count>(*s.offset_) : std::nullopt);
     db_query included;
     const auto page_alias = root_alias == "__ruvia_page" ? "__ruvia_page_1" : "__ruvia_page";
     included.select(included.value(1)).from(std::move(page), page_alias);
     for (std::size_t i = 0; i < primary_key.size(); ++i) {
-        included.and_where(included.binary(included.column(key_names[i], page_alias),
-            db_binary_operator::equal, included.column(primary_key[i], root_alias)));
+        included.and_where(included.binary(included.column(key_names[i], page_alias), db_binary_operator::equal, included.column(primary_key[i], root_alias)));
     }
     result_value.limit(std::nullopt).offset(std::nullopt);
     result_value.and_where(result_value.exists(std::move(included)));
@@ -796,13 +747,14 @@ void db_relation_plan::conjunction(db_query& query, db_expression& predicate, db
     predicate = predicate.empty() ? term : query.binary(predicate, db_binary_operator::and_value, term);
 }
 
-db_projection apply_projection(db_query& query, std::span<const db_selection> selection,
-    std::string_view qualifier, bool returning, std::string_view root_table, const db_projection* previous) {
+db_projection apply_projection(db_query& query, std::span<const db_selection> selection, std::string_view qualifier, bool returning, std::string_view root_table, const db_projection* previous) {
     if (selection.empty()) {
         throw std::invalid_argument("projection requires at least one field");
     }
     db_projection result;
-    const auto named_count = static_cast<std::size_t>(std::ranges::count_if(selection, [](const auto& field) { return !field.is_wildcard(); }));
+    const auto named_count = static_cast<std::size_t>(std::ranges::count_if(selection, [](const auto& field) {
+        return !field.is_wildcard();
+    }));
     result.columns_.reserve((previous ? previous->columns_.size() : 0) + named_count);
     if (previous) {
         result.columns_ = previous->columns_;
@@ -821,9 +773,7 @@ db_projection apply_projection(db_query& query, std::span<const db_selection> se
             throw std::invalid_argument("projection requires unique nonempty field names");
         }
         result.columns_.emplace_back(field.column_);
-        auto expression = !field.has_expression()
-                              ? query.column(field.column_, qualifier)
-                              : field.expression(query, root_table, alias);
+        auto expression = !field.has_expression() ? query.column(field.column_, qualifier) : field.expression(query, root_table, alias);
         return query.alias(expression, field.column_);
     };
     const auto publish = [&](std::span<const db_expression> values) {
@@ -857,22 +807,24 @@ std::string format_truncate_table(std::string_view table, db_driver driver) {
 
 namespace ruvia {
 
-db_transaction::lease_type::lease_type(detail::db_pool_ref_type client, std::size_t slot, operation_options options) noexcept
-    : client_(client),
-      slot_(slot),
-      options_(std::move(options)) {}
+db_transaction::lease_type::lease_type(detail::db_pool_ref_type client, std::size_t slot, operation_options options) noexcept :
+    client_(client),
+    slot_(slot),
+    options_(std::move(options)) {}
 
 void db_transaction::lease_type::abort() noexcept {
-    detail::visit_db_pool_if_present(client_, [&](auto& client) noexcept { client.abort_transaction(slot_); });
+    detail::visit_db_pool_if_present(client_, [&](auto& client) noexcept {
+        client.abort_transaction(slot_);
+    });
 }
 
-db_transaction::db_transaction(detail::db_pool_ref_type client, std::size_t slot, operation_options options)
-    : state_(std::make_unique<operation_state_type>(lease_type{client, slot, std::move(options)})) {}
+db_transaction::db_transaction(detail::db_pool_ref_type client, std::size_t slot, operation_options options) :
+    state_(std::make_unique<operation_state_type>(lease_type{client, slot, std::move(options)})) {}
 
-db_transaction::db_transaction(db_transaction&& other) noexcept
-    : state_(std::move(other.state_)),
-      io_metrics_(other.io_metrics_),
-      registration_(std::move(other.registration_), this) {}
+db_transaction::db_transaction(db_transaction&& other) noexcept :
+    state_(std::move(other.state_)),
+    io_metrics_(other.io_metrics_),
+    registration_(std::move(other.registration_), this) {}
 
 db_transaction::~db_transaction() = default;
 
@@ -880,8 +832,7 @@ bool db_transaction::active() const noexcept {
     return state_ != nullptr && state_->active();
 }
 
-void db_transaction::bind_operation_scope(
-    ::ruvia::operation_scope& scope, detail::request_io_metrics* io_metrics) noexcept {
+void db_transaction::bind_operation_scope(::ruvia::operation_scope& scope, detail::request_io_metrics* io_metrics) noexcept {
     io_metrics_ = io_metrics;
     registration_.bind(scope, this, &db_transaction::expire_capability);
 }
@@ -920,16 +871,14 @@ task<std::pair<db_rows, db_rows>> db_transaction::query_and_count_task(const db_
 }
 
 template <bool with_count>
-task<detail::db_query_result<with_count>> db_transaction::query_plan_prepared(
-    detail::db_query_plan plan, detail::db_query_backend backend, operation_guard_type pending) {
+task<detail::db_query_result<with_count>> db_transaction::query_plan_prepared(detail::db_query_plan plan, detail::db_query_backend backend, operation_guard_type pending) {
     operation_guard_type operation(std::move(pending));
     operation.start();
     auto& lease_value = operation.lease();
     bool backend_failed = false;
     backend.backend_failed_ = &backend_failed;
     try {
-        auto result_value = co_await detail::execute_db_query_plan<with_count>(std::move(plan), backend,
-            lease_value.options_);
+        auto result_value = co_await detail::execute_db_query_plan<with_count>(std::move(plan), backend, lease_value.options_);
         operation.finish_active();
         co_return result_value;
     } catch (...) {
@@ -945,22 +894,18 @@ task<detail::db_query_result<with_count>> db_transaction::query_plan_prepared(
 template <typename result_type, bool exec_statement>
 task<result_type> db_transaction::run_statement(std::string sql, std::vector<db_value> params) {
     operation_guard_type operation(*state_);
-    return ::ruvia::make_scoped_operation(registration_.scope(),
-        statement_task<result_type, exec_statement>(
-            std::move(sql), std::move(params), io_metrics_, std::move(operation)));
+    return ::ruvia::make_scoped_operation(registration_.scope(), statement_task<result_type, exec_statement>(std::move(sql), std::move(params), io_metrics_, std::move(operation)));
 }
 
 template <typename result_type, bool exec_statement>
-task<result_type> db_transaction::statement_task(std::string sql, std::vector<db_value> params,
-    detail::request_io_metrics* io_metrics, operation_guard_type pending) {
+task<result_type> db_transaction::statement_task(std::string sql, std::vector<db_value> params, detail::request_io_metrics* io_metrics, operation_guard_type pending) {
     detail::scoped_request_io_timer timer(io_metrics, detail::request_io_kind::db);
     operation_guard_type operation(std::move(pending));
     operation.start();
     auto& lease_value = operation.lease();
     if constexpr (exec_statement) {
         auto result_value = co_await detail::visit_db_pool(lease_value.client_, [&](auto& client) {
-            return client.execute_on_transaction_slot(
-                lease_value.slot_, std::move(sql), std::move(params), lease_value.options_);
+            return client.execute_on_transaction_slot(lease_value.slot_, std::move(sql), std::move(params), lease_value.options_);
         });
         operation.finish_active();
         if constexpr (!std::is_void_v<result_type>) {
@@ -968,8 +913,7 @@ task<result_type> db_transaction::statement_task(std::string sql, std::vector<db
         }
     } else {
         auto rows = co_await detail::visit_db_pool(lease_value.client_, [&](auto& client) {
-            return client.query_on_transaction_slot(
-                lease_value.slot_, std::move(sql), std::move(params), lease_value.options_);
+            return client.query_on_transaction_slot(lease_value.slot_, std::move(sql), std::move(params), lease_value.options_);
         });
         if constexpr (std::is_same_v<result_type, bool>) {
             try {
@@ -999,9 +943,7 @@ task<void> db_transaction::finish_task(detail::request_io_metrics* io_metrics, o
     operation.start();
     auto& lease_value = operation.lease();
     co_await detail::visit_db_pool(lease_value.client_, [&](auto& client) {
-        return commit_lease
-                   ? client.commit_transaction(lease_value.slot_, lease_value.options_)
-                   : client.rollback_transaction(lease_value.slot_, lease_value.options_);
+        return commit_lease ? client.commit_transaction(lease_value.slot_, lease_value.options_) : client.rollback_transaction(lease_value.slot_, lease_value.options_);
     });
     operation.finish_closed();
 }
@@ -1021,15 +963,13 @@ task<db_exec_result> db_transaction::execute_prepared(std::string sql) {
     return run_statement<db_exec_result, true>(std::move(sql), std::vector<db_value>{});
 }
 
-task<db_rows> db_transaction::query(
-    std::string_view sql, std::span<const db_value> params) & {
+task<db_rows> db_transaction::query(std::string_view sql, std::span<const db_value> params) & {
     registration_.require_active();
     auto statement = prepare_db_statement(sql, params);
     return run_statement<db_rows, false>(std::move(statement.sql_), std::move(statement.params_));
 }
 
-task<db_exec_result> db_transaction::execute(
-    std::string_view sql, std::span<const db_value> params) & {
+task<db_exec_result> db_transaction::execute(std::string_view sql, std::span<const db_value> params) & {
     registration_.require_active();
     auto statement = prepare_db_statement(sql, params);
     return run_statement<db_exec_result, true>(std::move(statement.sql_), std::move(statement.params_));
@@ -1037,14 +977,12 @@ task<db_exec_result> db_transaction::execute(
 
 task<void> db_transaction::commit() & {
     registration_.require_active();
-    return ::ruvia::make_scoped_operation(
-        registration_.scope(), finish_task<true>(io_metrics_, operation_guard_type(*state_)));
+    return ::ruvia::make_scoped_operation(registration_.scope(), finish_task<true>(io_metrics_, operation_guard_type(*state_)));
 }
 
 task<void> db_transaction::rollback() & {
     registration_.require_active();
-    return ::ruvia::make_scoped_operation(
-        registration_.scope(), finish_task<false>(io_metrics_, operation_guard_type(*state_)));
+    return ::ruvia::make_scoped_operation(registration_.scope(), finish_task<false>(io_metrics_, operation_guard_type(*state_)));
 }
 
 task<void> db_transaction::savepoint(std::string_view name) & {
@@ -1131,8 +1069,7 @@ task<bool> db_transaction::try_advisory_lock(std::string_view key, std::int64_t 
     return query_bool_prepared("SELECT \"pg_try_advisory_xact_lock\"(\"hashtextextended\"($1::text, $2::bigint))", params);
 }
 
-task<void> db_transaction::declare_cursor(
-    std::string_view name, std::string_view sql, std::span<const db_value> params, bool scroll) & {
+task<void> db_transaction::declare_cursor(std::string_view name, std::string_view sql, std::span<const db_value> params, bool scroll) & {
     require_postgresql_transaction("declare_cursor");
     validate_db_sql_text(sql);
     detail::validate_db_identifier(name, db_driver::postgresql);
@@ -1189,14 +1126,12 @@ void validate_db_sql_text(std::string_view sql) {
     }
 }
 
-prepared_db_statement prepare_db_statement(
-    std::string_view sql, std::span<const db_value> params) {
+prepared_db_statement prepare_db_statement(std::string_view sql, std::span<const db_value> params) {
     validate_db_sql_text(sql);
     return prepared_db_statement{std::string(sql), detail::clone_db_values(params)};
 }
 
-prepared_db_statement prepare_db_notify(
-    std::string_view channel, std::string_view payload) {
+prepared_db_statement prepare_db_notify(std::string_view channel, std::string_view payload) {
     if (channel.empty()) {
         throw std::invalid_argument("database notify channel must not be empty");
     }
@@ -1218,16 +1153,14 @@ db_query_plan db_query_plan::prepare(const db_query& query, const db_query* coun
     const auto prepare_step = [&](const db_query& input) {
         auto statement = input.compile(driver);
         if (!statement.returns_rows()) {
-            throw std::invalid_argument(count ? "query and count require statements that return rows"
-                                              : "query requires a statement that returns rows");
+            throw std::invalid_argument(count ? "query and count require statements that return rows" : "query requires a statement that returns rows");
         }
 #ifdef RUVIA_ENABLE_REDIS
         std::optional<std::string> key;
         if (backend.cache_ != nullptr) {
             key = backend.cache_->key(input, statement, driver);
         }
-        return db_query_step{std::move(statement.sql_), std::move(statement.params_), std::move(key),
-            input.cache_duration()};
+        return db_query_step{std::move(statement.sql_), std::move(statement.params_), std::move(key), input.cache_duration()};
 #else
         return db_query_step{std::move(statement.sql_), std::move(statement.params_)};
 #endif
@@ -1239,12 +1172,10 @@ db_query_plan db_query_plan::prepare(const db_query& query, const db_query* coun
     return plan;
 }
 
-task<db_rows> query_db_backend(const db_query_backend& backend, std::string sql,
-    std::vector<db_value> params, operation_options& options) {
+task<db_rows> query_db_backend(const db_query_backend& backend, std::string sql, std::vector<db_value> params, operation_options& options) {
     return visit_db_pool(backend.pool_, [&](auto& pool) {
         if (backend.slot_.has_value()) {
-            return pool.query_on_transaction_slot(
-                *backend.slot_, std::move(sql), std::move(params), options);
+            return pool.query_on_transaction_slot(*backend.slot_, std::move(sql), std::move(params), options);
         }
         return pool.query(std::move(sql), std::move(params), std::move(options), backend.io_metrics_);
     });
@@ -1253,8 +1184,7 @@ task<db_rows> query_db_backend(const db_query_backend& backend, std::string sql,
 // One deadline and one execution chain for direct, cached, and mixed sequences.
 // A statement without a cache key goes straight to the pool.
 template <bool with_count>
-task<db_query_result<with_count>> execute_db_query_plan(
-    db_query_plan plan, db_query_backend backend, operation_options options) {
+task<db_query_result<with_count>> execute_db_query_plan(db_query_plan plan, db_query_backend backend, operation_options options) {
     const auto driver = db_pool_driver(backend.pool_);
     const operation_deadline deadline_value(options.timeout_);
     std::array<std::optional<db_rows>, with_count ? 2 : 1> results;
@@ -1268,18 +1198,13 @@ task<db_query_result<with_count>> execute_db_query_plan(
         if (backend.cache_ != nullptr && step.cache_key_.has_value()) {
             // The cache runs only on pooled backends; a transaction never
             // carries one.
-            results[index].emplace(co_await backend.cache_->wrap(step.cache_duration_,
-                std::move(*step.cache_key_),
-                db_cache_query(backend, std::move(step.sql_), std::move(step.params_)), std::move(step_options),
-                deadline_value));
+            results[index].emplace(co_await backend.cache_->wrap(step.cache_duration_, std::move(*step.cache_key_), db_cache_query(backend, std::move(step.sql_), std::move(step.params_)), std::move(step_options), deadline_value));
         } else
 #endif
         {
-            scoped_request_io_timer timer(
-                backend.slot_.has_value() ? backend.io_metrics_ : nullptr, request_io_kind::db);
+            scoped_request_io_timer timer(backend.slot_.has_value() ? backend.io_metrics_ : nullptr, request_io_kind::db);
             try {
-                results[index].emplace(co_await query_db_backend(
-                    backend, std::move(step.sql_), std::move(step.params_), step_options));
+                results[index].emplace(co_await query_db_backend(backend, std::move(step.sql_), std::move(step.params_), step_options));
             } catch (...) {
                 if (backend.backend_failed_ != nullptr) {
                     *backend.backend_failed_ = true;
@@ -1298,10 +1223,8 @@ task<db_query_result<with_count>> execute_db_query_plan(
     }
 }
 
-template task<db_query_result<false>> execute_db_query_plan<false>(
-    db_query_plan plan, db_query_backend backend, operation_options options);
-template task<db_query_result<true>> execute_db_query_plan<true>(
-    db_query_plan plan, db_query_backend backend, operation_options options);
+template task<db_query_result<false>> execute_db_query_plan<false>(db_query_plan plan, db_query_backend backend, operation_options options);
+template task<db_query_result<true>> execute_db_query_plan<true>(db_query_plan plan, db_query_backend backend, operation_options options);
 
 }  // namespace detail
 }  // namespace ruvia
@@ -1312,29 +1235,28 @@ template task<db_query_result<true>> execute_db_query_plan<true>(
 // connection exactly once.
 
 namespace ruvia {
-db_stream_result::lease_type::lease_type(detail::db_pool_ref_type client, std::size_t slot, operation_options options) noexcept
-    : client_(client),
-      slot_(slot),
-      options_(std::move(options)) {}
+db_stream_result::lease_type::lease_type(detail::db_pool_ref_type client, std::size_t slot, operation_options options) noexcept :
+    client_(client),
+    slot_(slot),
+    options_(std::move(options)) {}
 
 void db_stream_result::lease_type::abort() noexcept {
-    detail::visit_db_pool_if_present(client_, [&](auto& client) noexcept { client.abort_stream(slot_); });
+    detail::visit_db_pool_if_present(client_, [&](auto& client) noexcept {
+        client.abort_stream(slot_);
+    });
 }
 
-db_stream_result::state_type::state_type(
-    lease_type lease, std::vector<std::string> column_names) noexcept
-    : column_names_(std::move(column_names)),
-      operation_(std::move(lease)) {}
+db_stream_result::state_type::state_type(lease_type lease, std::vector<std::string> column_names) noexcept :
+    column_names_(std::move(column_names)),
+    operation_(std::move(lease)) {}
 
-db_stream_result::db_stream_result(detail::db_pool_ref_type client, std::size_t slot,
-    std::vector<std::string> column_names,
-    operation_options options)
-    : state_(std::make_unique<state_type>(lease_type{client, slot, std::move(options)}, std::move(column_names))) {}
+db_stream_result::db_stream_result(detail::db_pool_ref_type client, std::size_t slot, std::vector<std::string> column_names, operation_options options) :
+    state_(std::make_unique<state_type>(lease_type{client, slot, std::move(options)}, std::move(column_names))) {}
 
-db_stream_result::db_stream_result(db_stream_result&& other) noexcept
-    : state_(std::move(other.state_)),
-      io_metrics_(other.io_metrics_),
-      registration_(std::move(other.registration_), this) {}
+db_stream_result::db_stream_result(db_stream_result&& other) noexcept :
+    state_(std::move(other.state_)),
+    io_metrics_(other.io_metrics_),
+    registration_(std::move(other.registration_), this) {}
 
 db_stream_result::~db_stream_result() = default;
 
@@ -1344,12 +1266,10 @@ bool db_stream_result::active() const noexcept {
 
 std::span<const std::string> db_stream_result::column_names() const& {
     registration_.require_active();
-    return state_ != nullptr ? std::span<const std::string>(state_->column_names_)
-                             : std::span<const std::string>{};
+    return state_ != nullptr ? std::span<const std::string>(state_->column_names_) : std::span<const std::string>{};
 }
 
-void db_stream_result::bind_operation_scope(
-    ::ruvia::operation_scope& scope, detail::request_io_metrics* io_metrics) noexcept {
+void db_stream_result::bind_operation_scope(::ruvia::operation_scope& scope, detail::request_io_metrics* io_metrics) noexcept {
     io_metrics_ = io_metrics;
     registration_.bind(scope, this, &db_stream_result::expire_capability);
 }
@@ -1379,13 +1299,10 @@ template <typename guard_type>
 
 task<std::optional<db_row>> db_stream_result::read(operation_options operation) & {
     registration_.require_active();
-    return ::ruvia::make_scoped_operation(registration_.scope(),
-        read_task(io_metrics_, operation_guard_type(state_->operation_), state_->column_names_, std::move(operation)));
+    return ::ruvia::make_scoped_operation(registration_.scope(), read_task(io_metrics_, operation_guard_type(state_->operation_), state_->column_names_, std::move(operation)));
 }
 
-task<std::optional<db_row>> db_stream_result::read_task(
-    detail::request_io_metrics* io_metrics, operation_guard_type pending,
-    std::vector<std::string>& column_names, operation_options operation_value) {
+task<std::optional<db_row>> db_stream_result::read_task(detail::request_io_metrics* io_metrics, operation_guard_type pending, std::vector<std::string>& column_names, operation_options operation_value) {
     detail::scoped_request_io_timer timer(io_metrics, detail::request_io_kind::db);
     operation_guard_type operation(std::move(pending));
     operation.start();
@@ -1404,12 +1321,10 @@ task<std::optional<db_row>> db_stream_result::read_task(
 
 task<void> db_stream_result::close(operation_options operation) & {
     registration_.require_active();
-    return ::ruvia::make_scoped_operation(
-        registration_.scope(), close_task(io_metrics_, operation_guard_type(state_->operation_), std::move(operation)));
+    return ::ruvia::make_scoped_operation(registration_.scope(), close_task(io_metrics_, operation_guard_type(state_->operation_), std::move(operation)));
 }
 
-task<void> db_stream_result::close_task(
-    detail::request_io_metrics* io_metrics, operation_guard_type pending, operation_options operation_value) {
+task<void> db_stream_result::close_task(detail::request_io_metrics* io_metrics, operation_guard_type pending, operation_options operation_value) {
     detail::scoped_request_io_timer timer(io_metrics, detail::request_io_kind::db);
     operation_guard_type operation(std::move(pending));
     if (operation.finished()) {
@@ -1418,8 +1333,9 @@ task<void> db_stream_result::close_task(
     operation.start();
     auto effective = admit_stream_operation(operation, std::move(operation_value));
     auto& lease_value = operation.lease();
-    co_await detail::visit_db_pool(
-        lease_value.client_, [&](auto& client) { return client.close_stream(lease_value.slot_, effective); });
+    co_await detail::visit_db_pool(lease_value.client_, [&](auto& client) {
+        return client.close_stream(lease_value.slot_, effective);
+    });
     operation.finish_closed();
 }
 
@@ -1512,8 +1428,7 @@ std::string_view trigger_event_name(db_trigger_event event) {
     }
     throw std::invalid_argument("unknown trigger event");
 }
-std::string begin_alter_table(
-    db_driver driver, std::string_view table_value, std::size_t extra_reserve) {
+std::string begin_alter_table(db_driver driver, std::string_view table_value, std::size_t extra_reserve) {
     std::string sql;
     sql.reserve(extra_reserve + table_value.size());
     sql += "ALTER TABLE ";
@@ -1521,16 +1436,14 @@ std::string begin_alter_table(
     return sql;
 }
 
-std::string begin_alter_column(db_driver driver,
-    std::string_view table_value, std::string_view column_value, std::string_view clause, std::size_t extra_reserve) {
+std::string begin_alter_column(db_driver driver, std::string_view table_value, std::string_view column_value, std::string_view clause, std::size_t extra_reserve) {
     auto sql = begin_alter_table(driver, table_value, extra_reserve + column_value.size());
     sql += clause;
     append_db_identifier(sql, column_value, driver);
     return sql;
 }
 
-std::string begin_timescale_perform(db_driver driver,
-    std::string_view function, std::string_view table_value, std::size_t extra_reserve) {
+std::string begin_timescale_perform(db_driver driver, std::string_view function, std::string_view table_value, std::size_t extra_reserve) {
     std::string name;
     name.reserve(table_value.size() + 4U);
     append_db_qualified_identifier(name, table_value, driver);
@@ -1543,8 +1456,7 @@ std::string begin_timescale_perform(db_driver driver,
     return sql;
 }
 
-std::string make_drop_object_sql(db_driver driver,
-    std::string_view kind, std::string_view name, bool qualified, bool if_exists) {
+std::string make_drop_object_sql(db_driver driver, std::string_view kind, std::string_view name, bool qualified, bool if_exists) {
     std::string sql;
     sql.reserve(48U + name.size());
     sql += "DROP ";
@@ -1561,9 +1473,7 @@ std::string make_drop_object_sql(db_driver driver,
     return sql;
 }
 
-std::string make_add_timescale_policy_sql(db_driver driver,
-    std::string_view function, std::string_view table_value, std::string_view param_name, db_expression after,
-    bool if_not_exists) {
+std::string make_add_timescale_policy_sql(db_driver driver, std::string_view function, std::string_view table_value, std::string_view param_name, db_expression after, bool if_not_exists) {
     if (after.empty()) {
         throw std::invalid_argument("schema expression is required");
     }
@@ -1578,8 +1488,7 @@ std::string make_add_timescale_policy_sql(db_driver driver,
     return sql;
 }
 
-std::string make_remove_timescale_policy_sql(db_driver driver,
-    std::string_view function, std::string_view table_value, bool if_exists) {
+std::string make_remove_timescale_policy_sql(db_driver driver, std::string_view function, std::string_view table_value, bool if_exists) {
     auto sql = begin_timescale_perform(driver, function, table_value, 72U);
     sql += ", \"if_exists\" => ";
     sql += if_exists ? "TRUE" : "FALSE";
@@ -1588,8 +1497,8 @@ std::string make_remove_timescale_policy_sql(db_driver driver,
 }
 }  // namespace
 
-db_schema::db_schema(db_schema_options options)
-    : driver_(options.driver_) {
+db_schema::db_schema(db_schema_options options) :
+    driver_(options.driver_) {
     detail::require_db_dialect(driver_);
 }
 void db_schema::append(std::string sql, db_migration_atomicity a, bool procedural) {
@@ -1637,12 +1546,10 @@ void db_schema::append_expression(std::string& s, db_expression e) const {
     detail::append_db_expression(s, e, driver_);
 }
 void db_schema::append_type(std::string& s, const db_type_definition& t) const {
-    detail::append_db_type_name(s, t.data_type_, t.custom_name_, t.length_, t.precision_, t.scale_,
-        t.array_, driver_);
+    detail::append_db_type_name(s, t.data_type_, t.custom_name_, t.length_, t.precision_, t.scale_, t.array_, driver_);
 }
 void db_schema::append_column(std::string& s, const db_schema_column& c) const {
-    if (c.generated_type_ != db_generated_type::none && c.generated_type_ != db_generated_type::stored &&
-        c.generated_type_ != db_generated_type::virtual_value) {
+    if (c.generated_type_ != db_generated_type::none && c.generated_type_ != db_generated_type::stored && c.generated_type_ != db_generated_type::virtual_value) {
         throw std::invalid_argument("unsupported generated column storage mode");
     }
     if (c.name_.empty()) {
@@ -1677,8 +1584,7 @@ void db_schema::append_column(std::string& s, const db_schema_column& c) const {
         }
     }
     if (c.identity_ != db_identity::none) {
-        if (!c.default_value_.empty() || c.nullable_ || c.type_.array_ ||
-            (c.type_.data_type_ != db_data_type::small_int && c.type_.data_type_ != db_data_type::integer && c.type_.data_type_ != db_data_type::big_int)) {
+        if (!c.default_value_.empty() || c.nullable_ || c.type_.array_ || (c.type_.data_type_ != db_data_type::small_int && c.type_.data_type_ != db_data_type::integer && c.type_.data_type_ != db_data_type::big_int)) {
             throw std::invalid_argument("identity requires a non-null integer column without a default");
         }
         if (driver_ == db_driver::postgresql) {
@@ -1825,8 +1731,7 @@ void db_schema::create_table(const db_table_definition& t) {
         }
         if (driver_ == db_driver::mariadb && constraint.kind_ == db_constraint_kind::primary_key) {
             for (const auto& column : t.columns_) {
-                if (column.generated_type_ != db_generated_type::none &&
-                    std::ranges::find(constraint.columns_, column.name_) != constraint.columns_.end()) {
+                if (column.generated_type_ != db_generated_type::none && std::ranges::find(constraint.columns_, column.name_) != constraint.columns_.end()) {
                     throw std::invalid_argument("MariaDB generated columns cannot be primary keys");
                 }
             }
@@ -2177,8 +2082,7 @@ void db_schema::drop_trigger_function(std::string_view name, db_drop_behavior be
 }
 void db_schema::create_function(const db_function_definition& function) {
     require_postgresql();
-    if (function.name_.empty() || function.body_.empty() ||
-        function.body_.view().find('\0') != std::string_view::npos) {
+    if (function.name_.empty() || function.body_.empty() || function.body_.view().find('\0') != std::string_view::npos) {
         throw std::invalid_argument("function name and non-NUL body are required");
     }
     std::string sql;
@@ -2230,8 +2134,7 @@ void db_schema::create_function(const db_function_definition& function, const db
     copy.body_ = compiled.sql();
     create_function(copy);
 }
-void db_schema::drop_function(std::string_view name, std::span<const db_type_definition> parameter_types,
-    db_drop_behavior behavior, bool if_exists) {
+void db_schema::drop_function(std::string_view name, std::span<const db_type_definition> parameter_types, db_drop_behavior behavior, bool if_exists) {
     require_postgresql();
     std::string sql;
     sql.reserve(28U + name.size() + parameter_types.size() * 12U + (behavior == db_drop_behavior::cascade ? 8U : 0U));
@@ -2299,8 +2202,7 @@ void db_schema::create_trigger(const db_trigger_definition& trigger) {
         }
     }
     std::string sql;
-    sql.reserve(96U + trigger.name_.size() + trigger.table_.size() + trigger.function_.size() +
-                trigger.update_columns_.size() * 16U + trigger.arguments_.size() * 16U);
+    sql.reserve(96U + trigger.name_.size() + trigger.table_.size() + trigger.function_.size() + trigger.update_columns_.size() * 16U + trigger.arguments_.size() * 16U);
     sql += "CREATE TRIGGER ";
     append_db_identifier(sql, trigger.name_, driver_);
     sql += trigger_timing_clause(trigger.timing_);
@@ -2394,8 +2296,7 @@ void db_schema::set_table_options(std::string_view table_value, std::span<const 
             } else {
                 append_db_string_literal(sql, value, driver_);
             }
-        },
-            options[i].value_);
+        }, options[i].value_);
     }
     sql += ')';
     append(std::move(sql));
@@ -2415,8 +2316,7 @@ void db_schema::set_database_option(std::string_view database_value, std::string
 void db_schema::create_hypertable(const db_hypertable_options& options) {
     require_postgresql();
     // Validate names separately from the SQL text values consumed by Timescale.
-    auto sql = begin_timescale_perform(
-        driver_, "create_hypertable", options.table_, 160U + options.time_column_.size());
+    auto sql = begin_timescale_perform(driver_, "create_hypertable", options.table_, 160U + options.time_column_.size());
     detail::validate_db_identifier(options.time_column_, driver_);
     sql += ", \"by_range\"(";
     append_db_string_literal(sql, options.time_column_, driver_);
@@ -2481,25 +2381,19 @@ void db_schema::set_compression(std::string_view table_value, const db_compressi
 }
 void db_schema::add_compression_policy(std::string_view table_value, db_expression after, bool if_not_exists) {
     require_postgresql();
-    append(make_add_timescale_policy_sql(
-               driver_, "add_compression_policy", table_value, "compress_after", after, if_not_exists),
-        db_migration_atomicity::transactional, true);
+    append(make_add_timescale_policy_sql(driver_, "add_compression_policy", table_value, "compress_after", after, if_not_exists), db_migration_atomicity::transactional, true);
 }
 void db_schema::remove_compression_policy(std::string_view table_value, bool if_exists) {
     require_postgresql();
-    append(make_remove_timescale_policy_sql(driver_, "remove_compression_policy", table_value, if_exists),
-        db_migration_atomicity::transactional, true);
+    append(make_remove_timescale_policy_sql(driver_, "remove_compression_policy", table_value, if_exists), db_migration_atomicity::transactional, true);
 }
 void db_schema::add_retention_policy(std::string_view table_value, db_expression after, bool if_not_exists) {
     require_postgresql();
-    append(make_add_timescale_policy_sql(
-               driver_, "add_retention_policy", table_value, "drop_after", after, if_not_exists),
-        db_migration_atomicity::transactional, true);
+    append(make_add_timescale_policy_sql(driver_, "add_retention_policy", table_value, "drop_after", after, if_not_exists), db_migration_atomicity::transactional, true);
 }
 void db_schema::remove_retention_policy(std::string_view table_value, bool if_exists) {
     require_postgresql();
-    append(make_remove_timescale_policy_sql(driver_, "remove_retention_policy", table_value, if_exists),
-        db_migration_atomicity::transactional, true);
+    append(make_remove_timescale_policy_sql(driver_, "remove_retention_policy", table_value, if_exists), db_migration_atomicity::transactional, true);
 }
 std::vector<db_migration> db_schema::compile(std::string_view id) const {
     std::vector<db_migration> out;
@@ -2518,8 +2412,7 @@ std::vector<db_migration> db_schema::compile(std::string_view id) const {
         }
         if (statements_.size() == 1 && !statements_[0].procedural_) {
             out.reserve(1);
-            out.emplace_back(db_migration_options{
-                std::string(id), std::string(statements_[0].sql_), statements_[0].atomicity_});
+            out.emplace_back(db_migration_options{std::string(id), std::string(statements_[0].sql_), statements_[0].atomicity_});
         } else if (!statements_.empty()) {
             out.reserve(1);
             std::size_t body_size = 12U;
@@ -2527,12 +2420,11 @@ std::vector<db_migration> db_schema::compile(std::string_view id) const {
                 body_size += s.sql_.size() + 1U;
             }
             std::array<char, 32> delimiter_buf;
-            const auto delimiter = detail::select_db_dollar_delimiter(
-                delimiter_buf, [&](std::string_view candidate) noexcept {
-                    return std::ranges::any_of(statements_, [&](const auto& s) {
-                        return s.sql_.find(candidate) != std::string_view::npos;
-                    });
+            const auto delimiter = detail::select_db_dollar_delimiter(delimiter_buf, [&](std::string_view candidate) noexcept {
+                return std::ranges::any_of(statements_, [&](const auto& s) {
+                    return s.sql_.find(candidate) != std::string_view::npos;
                 });
+            });
             std::string sql;
             sql.reserve(3U + delimiter.size() * 2U + body_size);
             sql += "DO ";
@@ -2544,8 +2436,7 @@ std::vector<db_migration> db_schema::compile(std::string_view id) const {
             }
             sql.append(" END ");
             sql.append(delimiter);
-            out.emplace_back(db_migration_options{
-                std::string(id), std::move(sql), db_migration_atomicity::transactional});
+            out.emplace_back(db_migration_options{std::string(id), std::move(sql), db_migration_atomicity::transactional});
         }
     } else {
         out.reserve(statements_.size());
@@ -2557,8 +2448,7 @@ std::vector<db_migration> db_schema::compile(std::string_view id) const {
             numbered.append(id);
             numbered.push_back('_');
             numbered.append(suffix);
-            out.emplace_back(db_migration_options{
-                std::move(numbered), std::string(statements_[i].sql_), statements_[i].atomicity_});
+            out.emplace_back(db_migration_options{std::move(numbered), std::string(statements_[i].sql_), statements_[i].atomicity_});
         }
     }
     return out;
@@ -2570,15 +2460,17 @@ namespace ruvia {
 namespace {
 constexpr auto pg = db_driver::postgresql;
 void require_sql_state(std::string_view state_value) {
-    if (state_value.size() != 5 || state_value == "00000" || !std::ranges::all_of(state_value, [](char ch) { return (ch >= '0' && ch <= '9') || (ch >= 'A' && ch <= 'Z'); })) {
+    if (state_value.size() != 5 || state_value == "00000" || !std::ranges::all_of(state_value, [](char ch) {
+        return (ch >= '0' && ch <= '9') || (ch >= 'A' && ch <= 'Z');
+    })) {
         throw std::invalid_argument("SQLSTATE must have five uppercase alphanumeric characters and indicate failure");
     }
 }
 class procedure_append_guard final {
 public:
-    explicit procedure_append_guard(std::string& target, std::size_t extra_reserve = 48U)
-        : target_(target),
-          initial_size_(target.size()) {
+    explicit procedure_append_guard(std::string& target, std::size_t extra_reserve = 48U) :
+        target_(target),
+        initial_size_(target.size()) {
         if (target_.capacity() - initial_size_ < extra_reserve) {
             target_.reserve(initial_size_ + (std::max)(extra_reserve, std::size_t{64}));
         }
@@ -2609,7 +2501,9 @@ void db_procedure::append_expression(std::string& output, db_expression value) c
     detail::append_db_expression(output, value, pg);
 }
 void db_procedure::require_unique_variable(std::string_view name) const {
-    if (std::ranges::any_of(variables_, [&](const auto& existing) { return existing == name; })) {
+    if (std::ranges::any_of(variables_, [&](const auto& existing) {
+        return existing == name;
+    })) {
         throw std::invalid_argument("duplicate procedure variable");
     }
 }
@@ -2619,8 +2513,7 @@ void db_procedure::declare_variable(const db_variable_definition& variable) {
     detail::append_db_identifier(declarations_, variable.name_, pg);
     declarations_ += ' ';
     const auto& t = variable.type_;
-    detail::append_db_type_name(
-        declarations_, t.data_type_, t.custom_name_, t.length_, t.precision_, t.scale_, t.array_, pg);
+    detail::append_db_type_name(declarations_, t.data_type_, t.custom_name_, t.length_, t.precision_, t.scale_, t.array_, pg);
     if (!variable.default_value_.empty()) {
         declarations_ += " := ";
         append_expression(declarations_, variable.default_value_);
@@ -2749,8 +2642,7 @@ void db_procedure::catch_sql_state(std::string_view state_value) {
         throw std::invalid_argument("exception handler requires an open block");
     }
     require_sql_state(state_value);
-    const std::string_view prefix = blocks_.back() == block_type::begin ? "EXCEPTION\nWHEN SQLSTATE "
-                                                                        : "WHEN SQLSTATE ";
+    const std::string_view prefix = blocks_.back() == block_type::begin ? "EXCEPTION\nWHEN SQLSTATE " : "WHEN SQLSTATE ";
     procedure_append_guard guard(statements_, prefix.size() + 20U);
     statements_.append(prefix);
     detail::append_db_string_literal(statements_, state_value, pg);
@@ -2846,8 +2738,7 @@ std::string db_procedure::body() const {
     if (!blocks_.empty()) {
         throw std::invalid_argument("procedure has unclosed control-flow blocks");
     }
-    const std::string_view statements =
-        statements_.empty() ? std::string_view("NULL;\n") : std::string_view(statements_);
+    const std::string_view statements = statements_.empty() ? std::string_view("NULL;\n") : std::string_view(statements_);
     std::string result;
     result.reserve((!declarations_.empty() ? 8U + declarations_.size() : 0U) + 6U + statements.size() + 3U);
     if (!declarations_.empty()) {
@@ -2863,54 +2754,48 @@ std::string db_procedure::body() const {
 }  // namespace ruvia
 
 namespace ruvia {
-db_value::db_value(std::nullptr_t)
-    : storage_(std::monostate{}) {}
+db_value::db_value(std::nullptr_t) :
+    storage_(std::monostate{}) {}
 
-db_value::db_value(const char* value)
-    : storage_(value == nullptr ? storage_type(std::monostate{})
-                                : storage_type(std::in_place_type<borrowed_text>, value)) {}
+db_value::db_value(const char* value) :
+    storage_(value == nullptr ? storage_type(std::monostate{}) : storage_type(std::in_place_type<borrowed_text>, value)) {}
 
-db_value::db_value(std::string_view value)
-    : storage_(std::in_place_type<borrowed_text>, value) {}
+db_value::db_value(std::string_view value) :
+    storage_(std::in_place_type<borrowed_text>, value) {}
 
-db_value::db_value(std::in_place_type_t<std::string>, std::string value)
-    : storage_(std::in_place_type<std::string>, std::move(value)) {}
+db_value::db_value(std::in_place_type_t<std::string>, std::string value) :
+    storage_(std::in_place_type<std::string>, std::move(value)) {}
 
-db_value::db_value(const db_value& other)
-    : storage_(std::visit(
-          [](const auto& value) -> storage_type {
-              using value_type = std::remove_cvref_t<decltype(value)>;
-              if constexpr (std::is_same_v<value_type, std::string>) {
-                  return storage_type(std::in_place_type<value_type>, value, value.get_allocator());
-              } else {
-                  return storage_type(std::in_place_type<value_type>, value);
-              }
-          },
-          other.storage_)) {}
+db_value::db_value(const db_value& other) :
+    storage_(std::visit([](const auto& value) -> storage_type {
+        using value_type = std::remove_cvref_t<decltype(value)>;
+        if constexpr (std::is_same_v<value_type, std::string>) {
+            return storage_type(std::in_place_type<value_type>, value, value.get_allocator());
+        } else {
+            return storage_type(std::in_place_type<value_type>, value);
+        }
+    }, other.storage_)) {}
 
-db_value::db_value(bool value)
-    : storage_(std::in_place_type<bool>, value) {}
+db_value::db_value(bool value) :
+    storage_(std::in_place_type<bool>, value) {}
 
 db_value_type db_value::type() const noexcept {
-    return std::visit(
-        [](const auto& value) noexcept {
-            using value_type = std::remove_cvref_t<decltype(value)>;
-            if constexpr (std::is_same_v<value_type, std::monostate>) {
-                return db_value_type::null;
-            } else if constexpr (std::is_same_v<value_type, borrowed_text> ||
-                                 std::is_same_v<value_type, std::string>) {
-                return db_value_type::string;
-            } else if constexpr (std::is_same_v<value_type, std::int64_t>) {
-                return db_value_type::signed_value;
-            } else if constexpr (std::is_same_v<value_type, std::uint64_t>) {
-                return db_value_type::unsigned_value;
-            } else if constexpr (std::is_same_v<value_type, double>) {
-                return db_value_type::double_value;
-            } else {
-                return db_value_type::bool_value;
-            }
-        },
-        storage_);
+    return std::visit([](const auto& value) noexcept {
+        using value_type = std::remove_cvref_t<decltype(value)>;
+        if constexpr (std::is_same_v<value_type, std::monostate>) {
+            return db_value_type::null;
+        } else if constexpr (std::is_same_v<value_type, borrowed_text> || std::is_same_v<value_type, std::string>) {
+            return db_value_type::string;
+        } else if constexpr (std::is_same_v<value_type, std::int64_t>) {
+            return db_value_type::signed_value;
+        } else if constexpr (std::is_same_v<value_type, std::uint64_t>) {
+            return db_value_type::unsigned_value;
+        } else if constexpr (std::is_same_v<value_type, double>) {
+            return db_value_type::double_value;
+        } else {
+            return db_value_type::bool_value;
+        }
+    }, storage_);
 }
 
 std::string_view db_value::text() const& {
@@ -2940,18 +2825,18 @@ db_field::db_field() noexcept = default;
 
 db_field::db_field(std::nullptr_t) noexcept {}
 
-db_field::db_field(std::string_view value)
-    : storage_(std::in_place_type<std::string>, value) {}
+db_field::db_field(std::string_view value) :
+    storage_(std::in_place_type<std::string>, value) {}
 
-db_field::db_field(borrowed_tag_type, std::string_view value) noexcept
-    : storage_(std::in_place_type<borrowed_text>, value) {}
+db_field::db_field(borrowed_tag_type, std::string_view value) noexcept :
+    storage_(std::in_place_type<borrowed_text>, value) {}
 
 db_field db_field::borrowed(std::string_view value) noexcept {
     return db_field(borrowed_tag_type{}, value);
 }
 
-db_field::db_field(db_field&& other) noexcept
-    : storage_(std::move(other.storage_)) {
+db_field::db_field(db_field&& other) noexcept :
+    storage_(std::move(other.storage_)) {
     other.storage_.emplace<std::monostate>();
 }
 
@@ -2968,14 +2853,13 @@ std::optional<std::string_view> db_field::value() const& noexcept {
     return std::nullopt;
 }
 
-db_row::db_row(const db_field* fields_value, std::size_t size, const std::string* column_names,
-    std::size_t column_count) noexcept
-    : fields_(fields_value, size),
-      column_names_(column_names, column_count) {}
+db_row::db_row(const db_field* fields_value, std::size_t size, const std::string* column_names, std::size_t column_count) noexcept :
+    fields_(fields_value, size),
+    column_names_(column_names, column_count) {}
 
-db_row::db_row(db_row&& other) noexcept
-    : fields_(std::exchange(other.fields_, {})),
-      column_names_(std::exchange(other.column_names_, {})) {}
+db_row::db_row(db_row&& other) noexcept :
+    fields_(std::exchange(other.fields_, {})),
+    column_names_(std::exchange(other.column_names_, {})) {}
 
 db_row& db_row::operator=(db_row&& other) noexcept {
     if (this != &other) {
@@ -3032,11 +2916,11 @@ std::span<const std::string> db_row::column_names() const& noexcept {
 
 db_rows::db_rows() noexcept = default;
 
-db_rows::db_rows(db_rows&& other) noexcept
-    : rows_(std::move(other.rows_)),
-      fields_(std::move(other.fields_)),
-      column_names_(std::move(other.column_names_)),
-      raw_result_(other.raw_result_) {
+db_rows::db_rows(db_rows&& other) noexcept :
+    rows_(std::move(other.rows_)),
+    fields_(std::move(other.fields_)),
+    column_names_(std::move(other.column_names_)),
+    raw_result_(other.raw_result_) {
     other.raw_result_.template emplace<no_raw_result_type>();
 }
 

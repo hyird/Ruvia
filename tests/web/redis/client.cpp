@@ -57,20 +57,23 @@ bool throws_invalid_argument(fn_type&& fn) {
 
 TEST(Ruvia, redis_block_wait_saturates_before_narrowing_and_rounds_up) {
     using namespace std::chrono_literals;
-    const auto huge = std::chrono::duration<std::uint64_t, std::milli>{
-        (std::numeric_limits<std::uint64_t>::max)()};
+    const auto huge = std::chrono::duration<std::uint64_t, std::milli>{(std::numeric_limits<std::uint64_t>::max)()};
     const auto saturated = ruvia::redis_block_wait::for_duration(huge);
     EXPECT_TRUE(!saturated.infinite());
     EXPECT_TRUE(saturated.duration() == std::chrono::milliseconds::max());
-    EXPECT_TRUE(ruvia::redis_block_wait::for_duration(
-                    std::chrono::duration<std::uint64_t>{(std::numeric_limits<std::uint64_t>::max)()})
-                    .duration() == std::chrono::milliseconds::max());
+    EXPECT_TRUE(ruvia::redis_block_wait::for_duration(std::chrono::duration<std::uint64_t>{(std::numeric_limits<std::uint64_t>::max)()}).duration() == std::chrono::milliseconds::max());
     EXPECT_TRUE(ruvia::redis_block_wait::for_duration(1ns).duration() == 1ms);
     EXPECT_TRUE(ruvia::redis_block_wait::for_duration(1001us).duration() == 2ms);
     EXPECT_TRUE(ruvia::redis_block_wait::for_duration(2s).duration() == 2000ms);
-    EXPECT_TRUE(throws_invalid_argument([] { (void)ruvia::redis_block_wait::for_duration(0ms); }));
-    EXPECT_TRUE(throws_invalid_argument([] { (void)ruvia::redis_block_wait::for_duration(-1ns); }));
-    EXPECT_TRUE(throws_invalid_argument([] { (void)ruvia::redis_block_wait::for_duration(-1ms); }));
+    EXPECT_TRUE(throws_invalid_argument([] {
+        (void)ruvia::redis_block_wait::for_duration(0ms);
+    }));
+    EXPECT_TRUE(throws_invalid_argument([] {
+        (void)ruvia::redis_block_wait::for_duration(-1ns);
+    }));
+    EXPECT_TRUE(throws_invalid_argument([] {
+        (void)ruvia::redis_block_wait::for_duration(-1ms);
+    }));
     const auto infinite = ruvia::redis_block_wait::indefinitely();
     EXPECT_TRUE(infinite.infinite());
     EXPECT_TRUE(!infinite.duration().has_value());
@@ -80,8 +83,7 @@ TEST(Ruvia, redis_timeout_config_rejects_non_positive_inputs) {
     using namespace std::chrono_literals;
     auto& io_context = ruvia::test::new_test_io_context();
     auto worker = ruvia::attach_event_loop(io_context);
-    for (const auto field : {&ruvia::redis_config::connect_timeout_, &ruvia::redis_config::command_timeout_,
-             &ruvia::redis_config::acquire_timeout_, &ruvia::redis_config::subscription_ping_interval_}) {
+    for (const auto field : {&ruvia::redis_config::connect_timeout_, &ruvia::redis_config::command_timeout_, &ruvia::redis_config::acquire_timeout_, &ruvia::redis_config::subscription_ping_interval_}) {
         ruvia::redis_config config{.tls_ = {.mode_ = ruvia::client_tls_mode::disabled}};
         for (const auto invalid : {0ms, -1ms}) {
             config.*field = invalid;
@@ -121,17 +123,13 @@ TEST(Ruvia, redis_blocking_commands_ignore_the_ordinary_pool_timeout_and_honor_o
             EXPECT_TRUE(std::chrono::steady_clock::now() - started >= timeout);
         };
         co_await expect_timeout(bounded.blpop(keys, ruvia::redis_block_wait::for_duration(std::chrono::seconds(1))));
-        co_await expect_timeout(bounded.xread_group("workers", "consumer", streams,
-            {.block_ = ruvia::redis_block_wait::for_duration(std::chrono::milliseconds(10))}));
-        const auto huge_wait = ruvia::redis_block_wait::for_duration(
-            std::chrono::duration<std::uint64_t, std::milli>{(std::numeric_limits<std::uint64_t>::max)()});
+        co_await expect_timeout(bounded.xread_group("workers", "consumer", streams, {.block_ = ruvia::redis_block_wait::for_duration(std::chrono::milliseconds(10))}));
+        const auto huge_wait = ruvia::redis_block_wait::for_duration(std::chrono::duration<std::uint64_t, std::milli>{(std::numeric_limits<std::uint64_t>::max)()});
         co_await expect_timeout(bounded.blpop(keys, huge_wait));
         co_await expect_timeout(bounded.xread_group("workers", "consumer", streams, {.block_ = huge_wait}));
         co_await expect_timeout(bounded.command("BLPOP", "queue", "1"));
 
-        for (auto args : {std::initializer_list<std::string_view>{"SELECT", "1"},
-                 {"CLIENT", "REPLY", "OFF"}, {"HELLO", "3"}, {"ASKING"}, {"unsubscribe", "a", "b"},
-                 {"PUNSUBSCRIBE", "a"}, {"SUNSUBSCRIBE", "a"}}) {
+        for (auto args : {std::initializer_list<std::string_view>{"SELECT", "1"}, {"CLIENT", "REPLY", "OFF"}, {"HELLO", "3"}, {"ASKING"}, {"unsubscribe", "a", "b"}, {"PUNSUBSCRIBE", "a"}, {"SUNSUBSCRIBE", "a"}}) {
             bool rejected = false;
             try {
                 (void)co_await redis.command(std::span<const std::string_view>(args.begin(), args.size()));
@@ -141,18 +139,29 @@ TEST(Ruvia, redis_blocking_commands_ignore_the_ordinary_pool_timeout_and_honor_o
             EXPECT_TRUE(rejected);
         }
         for (auto word : {"WAIT", "wait", "WaItAoF"}) {
-            EXPECT_TRUE(throws_invalid_argument([&] { (void)bounded.command(word, "1", "1000"); }));
+            EXPECT_TRUE(throws_invalid_argument([&] {
+                (void)bounded.command(word, "1", "1000");
+            }));
             auto transaction = bounded.transaction();
-            EXPECT_TRUE(throws_invalid_argument([&] { transaction.command(word, "1", "1000"); }));
+            EXPECT_TRUE(throws_invalid_argument([&] {
+                transaction.command(word, "1", "1000");
+            }));
         }
         for (const auto invalid : {std::numeric_limits<std::int64_t>::min(), std::int64_t{-1}, std::int64_t{0}}) {
-            EXPECT_TRUE(throws_invalid_argument([&] { (void)redis.scan({.count_ = invalid}); }));
-            EXPECT_TRUE(throws_invalid_argument([&] { (void)redis.xread_group("workers", "consumer", streams, {.count_ = invalid}); }));
+            EXPECT_TRUE(throws_invalid_argument([&] {
+                (void)redis.scan({.count_ = invalid});
+            }));
+            EXPECT_TRUE(throws_invalid_argument([&] {
+                (void)redis.xread_group("workers", "consumer", streams, {.count_ = invalid});
+            }));
         }
-        for (const auto invalid : {static_cast<std::uint64_t>((std::numeric_limits<std::int64_t>::max)()) + 1,
-                 (std::numeric_limits<std::uint64_t>::max)()}) {
-            EXPECT_TRUE(throws_invalid_argument([&] { (void)redis.scan({.count_ = invalid}); }));
-            EXPECT_TRUE(throws_invalid_argument([&] { (void)redis.xread_group("workers", "consumer", streams, {.count_ = invalid}); }));
+        for (const auto invalid : {static_cast<std::uint64_t>((std::numeric_limits<std::int64_t>::max)()) + 1, (std::numeric_limits<std::uint64_t>::max)()}) {
+            EXPECT_TRUE(throws_invalid_argument([&] {
+                (void)redis.scan({.count_ = invalid});
+            }));
+            EXPECT_TRUE(throws_invalid_argument([&] {
+                (void)redis.xread_group("workers", "consumer", streams, {.count_ = invalid});
+            }));
         }
 
         // Standalone clients always inherit an owner stop token, so indefinite
@@ -172,8 +181,7 @@ TEST(Ruvia, redis_blocking_commands_ignore_the_ordinary_pool_timeout_and_honor_o
             }
             EXPECT_TRUE(rejected);
         };
-        co_await expect_cancelled(cancelled.xread_group(
-            "workers", "consumer", streams, {.block_ = ruvia::redis_block_wait::indefinitely()}));
+        co_await expect_cancelled(cancelled.xread_group("workers", "consumer", streams, {.block_ = ruvia::redis_block_wait::indefinitely()}));
         co_await expect_cancelled(cancelled.blpop(keys, ruvia::redis_block_wait::indefinitely()));
         co_await expect_cancelled(cancelled.blpop(keys, huge_wait));
         co_await expect_cancelled(cancelled.xread_group("workers", "consumer", streams, {.block_ = huge_wait}));
@@ -193,19 +201,20 @@ TEST(Ruvia, redis_stream_read_options_route_claim_as_blocking_and_reject_unknown
             pipeline.command("XREADGROUP", "GROUP", "g", "c", "CLAIM", "1000", "BLOCK", "0", "STREAMS", "s", ">");
         }));
         EXPECT_TRUE(throws_invalid_argument([&] {
-            pipeline.command("xreadgroup", "GROUP", "g", "c", "COUNT", "1", "claim", "5", "NOACK", "block", "10",
-                "STREAMS", "s", ">");
+            pipeline.command("xreadgroup", "GROUP", "g", "c", "COUNT", "1", "claim", "5", "NOACK", "block", "10", "STREAMS", "s", ">");
         }));
         pipeline.command("XREADGROUP", "GROUP", "g", "c", "CLAIM", "1000", "NOACK", "STREAMS", "s", ">");
         pipeline.command("XREAD", "COUNT", "1", "STREAMS", "s", "0");
         // An option outside the documented grammar is rejected rather than
         // guessed non-blocking; CLAIM and NOACK belong to XREADGROUP only.
-        for (auto args : {std::initializer_list<std::string_view>{"XREADGROUP", "GROUP", "g", "c", "LATER", "STREAMS", "s", ">"},
-                 {"XREAD", "CLAIM", "1000", "BLOCK", "0", "STREAMS", "s", "0"},
-                 {"XREAD", "NOACK", "STREAMS", "s", "0"}}) {
+        for (auto args : {std::initializer_list<std::string_view>{"XREADGROUP", "GROUP", "g", "c", "LATER", "STREAMS", "s", ">"}, {"XREAD", "CLAIM", "1000", "BLOCK", "0", "STREAMS", "s", "0"}, {"XREAD", "NOACK", "STREAMS", "s", "0"}}) {
             const std::span<const std::string_view> command(args.begin(), args.size());
-            EXPECT_TRUE(throws_invalid_argument([&] { (void)redis.command(command); }));
-            EXPECT_TRUE(throws_invalid_argument([&] { pipeline.command(command); }));
+            EXPECT_TRUE(throws_invalid_argument([&] {
+                (void)redis.command(command);
+            }));
+            EXPECT_TRUE(throws_invalid_argument([&] {
+                pipeline.command(command);
+            }));
         }
         co_return;
     });
@@ -228,37 +237,54 @@ TEST(Ruvia, redis_batch_builders_own_cold_payload_and_reject_reuse) {
             auto pipeline = handle.pipeline();
             pipeline.set(std::string(128, 'k'), std::string(128, 'v'));
             std::optional moved(std::move(pipeline));
-            EXPECT_TRUE(throws_logic_error([&] { pipeline.get("moved"); }));
+            EXPECT_TRUE(throws_logic_error([&] {
+                pipeline.get("moved");
+            }));
             auto cold = std::move(*moved).exec();
-            EXPECT_TRUE(throws_logic_error([&] { moved->incr_by("used", 1); }));
-            EXPECT_TRUE(throws_logic_error([&] { (void)std::move(*moved).exec(); }));
+            EXPECT_TRUE(throws_logic_error([&] {
+                moved->incr_by("used", 1);
+            }));
+            EXPECT_TRUE(throws_logic_error([&] {
+                (void)std::move(*moved).exec();
+            }));
             moved.reset();
         }
         {
             auto transaction = handle.transaction();
             transaction.set(std::string(128, 'k'), std::string(128, 'v'));
             std::optional moved(std::move(transaction));
-            EXPECT_TRUE(throws_logic_error([&] { transaction.get("moved"); }));
+            EXPECT_TRUE(throws_logic_error([&] {
+                transaction.get("moved");
+            }));
             auto cold = std::move(*moved).exec();
-            EXPECT_TRUE(throws_logic_error([&] { moved->incr_by("used", 1); }));
-            EXPECT_TRUE(throws_logic_error([&] { moved->zadd("used", 1, "member"); }));
+            EXPECT_TRUE(throws_logic_error([&] {
+                moved->incr_by("used", 1);
+            }));
+            EXPECT_TRUE(throws_logic_error([&] {
+                moved->zadd("used", 1, "member");
+            }));
             moved.reset();
         }
         {
             auto pipeline = handle.pipeline();
             auto transaction = handle.transaction();
-            for (auto word : {"WATCH", "UNWATCH", "MULTI", "EXEC", "SYNC", "PSYNC", "REPLCONF", "BLPOP",
-                     "UNSUBSCRIBE", "PUNSUBSCRIBE", "SUNSUBSCRIBE"}) {
-                EXPECT_TRUE(throws_invalid_argument([&] { pipeline.command(word, "key"); }));
-                EXPECT_TRUE(throws_invalid_argument([&] { transaction.command(word, "key"); }));
+            for (auto word : {"WATCH", "UNWATCH", "MULTI", "EXEC", "SYNC", "PSYNC", "REPLCONF", "BLPOP", "UNSUBSCRIBE", "PUNSUBSCRIBE", "SUNSUBSCRIBE"}) {
+                EXPECT_TRUE(throws_invalid_argument([&] {
+                    pipeline.command(word, "key");
+                }));
+                EXPECT_TRUE(throws_invalid_argument([&] {
+                    transaction.command(word, "key");
+                }));
             }
             // Infinite scores have a Redis spelling; NaN does not.
             pipeline.zadd("key", std::numeric_limits<double>::infinity(), "member");
             transaction.zadd("key", -std::numeric_limits<double>::infinity(), "member");
-            EXPECT_TRUE(throws_invalid_argument(
-                [&] { pipeline.zadd("key", std::numeric_limits<double>::quiet_NaN(), "member"); }));
-            EXPECT_TRUE(throws_invalid_argument(
-                [&] { transaction.zadd("key", std::numeric_limits<double>::quiet_NaN(), "member"); }));
+            EXPECT_TRUE(throws_invalid_argument([&] {
+                pipeline.zadd("key", std::numeric_limits<double>::quiet_NaN(), "member");
+            }));
+            EXPECT_TRUE(throws_invalid_argument([&] {
+                transaction.zadd("key", std::numeric_limits<double>::quiet_NaN(), "member");
+            }));
         }
         co_return;
     });
@@ -323,10 +349,18 @@ TEST(Ruvia, redis_multi_key_commands_reject_empty_key_spans_before_io) {
         auto redis = client.redis();
         const std::span<const std::string_view> no_keys;
 
-        EXPECT_TRUE(throws_invalid_argument([&] { (void)redis.mget(no_keys); }));
-        EXPECT_TRUE(throws_invalid_argument([&] { (void)redis.sinter(no_keys); }));
-        EXPECT_TRUE(throws_invalid_argument([&] { (void)redis.sunion(no_keys); }));
-        EXPECT_TRUE(throws_invalid_argument([&] { (void)redis.sdiff(no_keys); }));
+        EXPECT_TRUE(throws_invalid_argument([&] {
+            (void)redis.mget(no_keys);
+        }));
+        EXPECT_TRUE(throws_invalid_argument([&] {
+            (void)redis.sinter(no_keys);
+        }));
+        EXPECT_TRUE(throws_invalid_argument([&] {
+            (void)redis.sunion(no_keys);
+        }));
+        EXPECT_TRUE(throws_invalid_argument([&] {
+            (void)redis.sdiff(no_keys);
+        }));
         co_return;
     });
 }
@@ -335,10 +369,12 @@ TEST(Ruvia, redis_multi_key_commands_reject_empty_key_spans_before_io) {
 // canned reply and records the received arguments.
 class scripted_redis_peer final {
 public:
-    explicit scripted_redis_peer(std::vector<std::string> replies)
-        : replies_(std::move(replies)),
-          acceptor_(io_, {asio::ip::tcp::v4(), 0}),
-          thread_([this] { serve(); }) {}
+    explicit scripted_redis_peer(std::vector<std::string> replies) :
+        replies_(std::move(replies)),
+        acceptor_(io_, {asio::ip::tcp::v4(), 0}),
+        thread_([this] {
+            serve();
+        }) {}
 
     ~scripted_redis_peer() {
         join();
@@ -426,8 +462,7 @@ private:
 };
 
 template <typename result_type, typename check_type>
-void check_redis_result_rebinding(const result_type& original,
-    const result_type& seed, bool, check_type check) {
+void check_redis_result_rebinding(const result_type& original, const result_type& seed, bool, check_type check) {
     if constexpr (std::is_copy_constructible_v<result_type>) {
         auto input = original;
         auto destination = seed;
@@ -503,9 +538,7 @@ TEST(Ruvia, redis_typed_commands_preserve_arguments_across_direct_pipeline_and_t
         }
     });
     peer.join();
-    const std::vector<std::vector<std::string>> expected({std::vector<std::string>({std::string("INCRBY"), std::string(key), std::string("-9223372036854775808")}), std::vector<std::string>({std::string("DECRBY"), std::string(key), std::string("9223372036854775807")}),
-        std::vector<std::string>({std::string("LRANGE"), std::string(key), std::string("-9223372036854775808"), std::string("9223372036854775807")}), std::vector<std::string>({std::string("ZADD"), std::string(key), std::string("-inf"), std::string(member)}),
-        std::vector<std::string>({std::string("ZRANGE"), std::string(key), std::string("9223372036854775807"), std::string("-9223372036854775808")})});
+    const std::vector<std::vector<std::string>> expected({std::vector<std::string>({std::string("INCRBY"), std::string(key), std::string("-9223372036854775808")}), std::vector<std::string>({std::string("DECRBY"), std::string(key), std::string("9223372036854775807")}), std::vector<std::string>({std::string("LRANGE"), std::string(key), std::string("-9223372036854775808"), std::string("9223372036854775807")}), std::vector<std::string>({std::string("ZADD"), std::string(key), std::string("-inf"), std::string(member)}), std::vector<std::string>({std::string("ZRANGE"), std::string(key), std::string("9223372036854775807"), std::string("-9223372036854775808")})});
     auto all = decltype(expected)(expected);
     all.insert(all.end(), expected.begin(), expected.end());
     all.push_back(std::vector<std::string>({std::string("MULTI")}));
@@ -581,9 +614,7 @@ TEST(Ruvia, redis_composite_results_rebind_equivalent_resource_owners) {
     const std::string member_name(128, 'm');
     const auto bulk_field = redis_bulk_reply(field_name);
     const auto bulk_value = redis_bulk_reply(field_value);
-    const auto group_reply = "*2\r\n*2\r\n" + redis_bulk_reply(stream_name) +
-                             std::string("*2\r\n*2\r\n$3\r\n1-0\r\n*2\r\n") + bulk_field + bulk_value +
-                             "*2\r\n$3\r\n2-0\r\n$-1\r\n*2\r\n$4\r\nseed\r\n*1\r\n*2\r\n$3\r\n3-0\r\n*0\r\n";
+    const auto group_reply = "*2\r\n*2\r\n" + redis_bulk_reply(stream_name) + std::string("*2\r\n*2\r\n$3\r\n1-0\r\n*2\r\n") + bulk_field + bulk_value + "*2\r\n$3\r\n2-0\r\n$-1\r\n*2\r\n$4\r\nseed\r\n*1\r\n*2\r\n$3\r\n3-0\r\n*0\r\n";
     auto& io_context = ruvia::test::new_test_io_context();
     auto worker = ruvia::attach_event_loop(io_context);
     scripted_redis_peer peer(std::vector<std::string>({
@@ -658,18 +689,16 @@ TEST(Ruvia, redis_composite_results_rebind_equivalent_resource_owners) {
             check_redis_result_rebinding(stream.entries()[0], stream.entries()[1], allocator_move, check_entry);
             check_redis_result_rebinding(stream, grouped->streams()[1], allocator_move, check_stream);
             if (hashed.entries().size() == 1 && hash_seed.entries().size() == 1) {
-                check_redis_result_rebinding(hashed.entries()[0], hash_seed.entries()[0], allocator_move,
-                    [&](const ruvia::redis_key_value& kv) {
-                        EXPECT_EQ(kv.key(), std::string_view(field_name));
-                        EXPECT_EQ(kv.value(), std::string_view(field_value));
-                    });
+                check_redis_result_rebinding(hashed.entries()[0], hash_seed.entries()[0], allocator_move, [&](const ruvia::redis_key_value& kv) {
+                    EXPECT_EQ(kv.key(), std::string_view(field_name));
+                    EXPECT_EQ(kv.value(), std::string_view(field_value));
+                });
             }
             if (scored.entries().size() == 1 && score_seed.entries().size() == 1) {
-                check_redis_result_rebinding(scored.entries()[0], score_seed.entries()[0], allocator_move,
-                    [&](const ruvia::redis_scored_value& sv) {
-                        EXPECT_EQ(sv.value(), std::string_view(member_name));
-                        EXPECT_EQ(sv.score(), 1.5);
-                    });
+                check_redis_result_rebinding(scored.entries()[0], score_seed.entries()[0], allocator_move, [&](const ruvia::redis_scored_value& sv) {
+                    EXPECT_EQ(sv.value(), std::string_view(member_name));
+                    EXPECT_EQ(sv.score(), 1.5);
+                });
             }
         }
         static_assert(!std::is_copy_constructible_v<ruvia::redis_x_read_group_result>);
@@ -719,8 +748,7 @@ TEST(Ruvia, redis_composite_results_rebind_equivalent_resource_owners) {
 TEST(Ruvia, redis_string_array_replies_reject_nil_elements) {
     // LRANGE positions and set members are never nil; dropping one would
     // silently shorten or shift the result.
-    scripted_redis_peer peer(std::vector<std::string>({std::string("*3\r\n$1\r\na\r\n$-1\r\n$1\r\nc\r\n"), std::string("*1\r\n$-1\r\n"),
-        std::string("*2\r\n$1\r\n0\r\n*1\r\n$-1\r\n"), std::string("$1\r\nv\r\n")}));
+    scripted_redis_peer peer(std::vector<std::string>({std::string("*3\r\n$1\r\na\r\n$-1\r\n$1\r\nc\r\n"), std::string("*1\r\n$-1\r\n"), std::string("*2\r\n$1\r\n0\r\n*1\r\n$-1\r\n"), std::string("$1\r\nv\r\n")}));
     auto& io = ruvia::test::new_test_io_context();
     auto worker = ruvia::attach_event_loop(io);
     ruvia::redis_client client(worker.loop(), {.host_ = "127.0.0.1", .port_ = peer.port(), .tls_ = {.mode_ = ruvia::client_tls_mode::disabled}, .pool_size_per_worker_ = 1});
@@ -754,9 +782,7 @@ TEST(Ruvia, redis_set_result_copy_and_assignment_preserve_previous_value) {
     ruvia::redis_client client(worker.loop(), {.host_ = "127.0.0.1", .port_ = peer.port(), .tls_ = {.mode_ = ruvia::client_tls_mode::disabled}, .pool_size_per_worker_ = 1});
     ruvia::test::drive_backend_client(worker, client, [&](ruvia::redis_client& connected) -> ruvia::task<void> {
         auto redis = connected.redis();
-        const ruvia::redis_set_options return_previous{
-            .condition_ = ruvia::redis_set_condition::if_absent,
-            .previous_value_ = ruvia::redis_set_previous_value_policy::return_value};
+        const ruvia::redis_set_options return_previous{.condition_ = ruvia::redis_set_condition::if_absent, .previous_value_ = ruvia::redis_set_previous_value_policy::return_value};
         const auto with_text = co_await redis.set("key", "replacement", return_previous);
         const auto empty_text = co_await redis.set("key", "replacement", return_previous);
         const auto absent = co_await redis.set("key", "replacement", return_previous);
@@ -815,11 +841,7 @@ TEST(Ruvia, redis_typed_replies_retain_binary_payloads_and_recover_from_invalid_
     const auto stream = [&](const std::string& values) {
         return array({array({bulk_key, array({array({redis_bulk_reply("1-0"), values})})})});
     };
-    scripted_redis_peer peer(std::vector<std::string>({std::string(bulk_payload), std::string(bulk_payload), std::string(bulk_payload),
-        std::string(array({bulk_payload, "$-1\r\n", "$0\r\n\r\n"})), std::string(array({bulk_payload, bulk_key})),
-        std::string(fields), std::string(scored), std::string(scan(array({bulk_key, bulk_payload}))), std::string(scan(fields)), std::string(scan(scored)), std::string(stream(fields)),
-        std::string(array({bulk_payload, ":1\r\n"})), std::string(scan(array({bulk_key}))), std::string(stream(array({bulk_key}))),
-        std::string(bulk_payload), std::string(":1\r\n"), std::string("$-1\r\n")}));
+    scripted_redis_peer peer(std::vector<std::string>({std::string(bulk_payload), std::string(bulk_payload), std::string(bulk_payload), std::string(array({bulk_payload, "$-1\r\n", "$0\r\n\r\n"})), std::string(array({bulk_payload, bulk_key})), std::string(fields), std::string(scored), std::string(scan(array({bulk_key, bulk_payload}))), std::string(scan(fields)), std::string(scan(scored)), std::string(stream(fields)), std::string(array({bulk_payload, ":1\r\n"})), std::string(scan(array({bulk_key}))), std::string(stream(array({bulk_key}))), std::string(bulk_payload), std::string(":1\r\n"), std::string("$-1\r\n")}));
     auto& io = ruvia::test::new_test_io_context();
     auto worker = ruvia::attach_event_loop(io);
     ruvia::redis_client client(worker.loop(), {.host_ = "127.0.0.1", .port_ = peer.port(), .tls_ = {.mode_ = ruvia::client_tls_mode::disabled}, .pool_size_per_worker_ = 1});
@@ -924,13 +946,15 @@ enum class ping_policy : bool { answer,
 // PING is answered like Redis: ["pong", ""] while subscribed, +PONG otherwise.
 class pubsub_peer final {
 public:
-    explicit pubsub_peer(ping_policy ping = ping_policy::answer)
-        : ping_(ping),
-          acceptor_(io_, {asio::ip::tcp::v4(), 0}),
-          port_(acceptor_.local_endpoint().port()),
-          work_(asio::make_work_guard(io_)),
-          done_(asio::co_spawn(io_, accept_loop(), asio::use_future)),
-          thread_([this] { io_.run(); }) {}
+    explicit pubsub_peer(ping_policy ping = ping_policy::answer) :
+        ping_(ping),
+        acceptor_(io_, {asio::ip::tcp::v4(), 0}),
+        port_(acceptor_.local_endpoint().port()),
+        work_(asio::make_work_guard(io_)),
+        done_(asio::co_spawn(io_, accept_loop(), asio::use_future)),
+        thread_([this] {
+            io_.run();
+        }) {}
 
     ~pubsub_peer() {
         asio::post(io_, [this] {
@@ -958,8 +982,8 @@ public:
 
 private:
     struct session final {
-        explicit session(asio::io_context& io)
-            : socket_(io) {}
+        explicit session(asio::io_context& io) :
+            socket_(io) {}
 
         asio::ip::tcp::socket socket_;
         asio::streambuf buffer_;
@@ -984,8 +1008,7 @@ private:
             const auto size_line = co_await line(current);
             const auto size = static_cast<std::size_t>(std::stoul(std::string(std::string_view(size_line).substr(1))));
             if (current.buffer_.size() < size + 2) {
-                co_await asio::async_read(current.socket_, current.buffer_,
-                    asio::transfer_exactly(size + 2 - current.buffer_.size()), asio::use_awaitable);
+                co_await asio::async_read(current.socket_, current.buffer_, asio::transfer_exactly(size + 2 - current.buffer_.size()), asio::use_awaitable);
             }
             std::string arg(size, '\0');
             std::istream input(&current.buffer_);
@@ -1064,8 +1087,7 @@ private:
                             continue;
                         }
                         (pattern ? current->patterns_ : current->channels_).insert(name);
-                        reply += push(pattern ? "psubscribe" : "subscribe", name,
-                            current->channels_.size() + current->patterns_.size());
+                        reply += push(pattern ? "psubscribe" : "subscribe", name, current->channels_.size() + current->patterns_.size());
                         if (name == "close") {
                             close_after_reply = true;
                         }
@@ -1075,8 +1097,7 @@ private:
                     auto& names = pattern ? current->patterns_ : current->channels_;
                     const auto kind = pattern ? "punsubscribe" : "unsubscribe";
                     if (args.size() == 1 && names.empty()) {
-                        reply = "*3\r\n" + bulk(kind) + "$-1\r\n:" +
-                                std::string(std::to_string(current->channels_.size() + current->patterns_.size())) + "\r\n";
+                        reply = "*3\r\n" + bulk(kind) + "$-1\r\n:" + std::string(std::to_string(current->channels_.size() + current->patterns_.size())) + "\r\n";
                     } else if (args.size() == 1) {
                         while (!names.empty()) {
                             const auto name = *names.begin();
@@ -1094,9 +1115,7 @@ private:
                     if (ping_ == ping_policy::ignore) {
                         continue;
                     }
-                    reply = current->channels_.empty() && current->patterns_.empty()
-                                ? std::string("+PONG\r\n")
-                                : "*2\r\n" + bulk("pong") + bulk("");
+                    reply = current->channels_.empty() && current->patterns_.empty() ? std::string("+PONG\r\n") : "*2\r\n" + bulk("pong") + bulk("");
                 } else {
                     reply = "-ERR unknown command\r\n";
                 }
@@ -1197,8 +1216,7 @@ ruvia::task<void> check_events_arrive_in_wire_order(ruvia::redis_client& client)
     co_await client.shutdown();
 }
 
-ruvia::task<void> check_empty_names_keep_their_wire_identity(
-    ruvia::redis_client& client) {
+ruvia::task<void> check_empty_names_keep_their_wire_identity(ruvia::redis_client& client) {
     co_await client.connect();
     auto redis = client.redis();
     auto subscription = redis.subscription();
@@ -1250,9 +1268,7 @@ ruvia::task<void> check_empty_names_keep_their_wire_identity(
             event = co_await subscription.read();
             EXPECT_TRUE(event && event->confirmation());
             if (event && event->confirmation()) {
-                EXPECT_EQ(event->confirmation()->kind(), pattern
-                                                             ? ruvia::redis_pubsub_confirmation_kind::pattern_unsubscribed
-                                                             : ruvia::redis_pubsub_confirmation_kind::unsubscribed);
+                EXPECT_EQ(event->confirmation()->kind(), pattern ? ruvia::redis_pubsub_confirmation_kind::pattern_unsubscribed : ruvia::redis_pubsub_confirmation_kind::unsubscribed);
                 EXPECT_EQ(event->confirmation()->name().has_value(), remove_empty_name);
                 if (remove_empty_name) {
                     EXPECT_TRUE(event->confirmation()->name() == "");
@@ -1386,8 +1402,7 @@ ruvia::task<void> check_read_operation_options(ruvia::redis_client& client, bool
     co_await client.shutdown();
 }
 
-ruvia::task<void> check_stop_token_ends_the_stream(ruvia::redis_client& client, ruvia::stop_source& stop,
-    std::promise<void>& confirmed_promise) {
+ruvia::task<void> check_stop_token_ends_the_stream(ruvia::redis_client& client, ruvia::stop_source& stop, std::promise<void>& confirmed_promise) {
     co_await client.connect();
     auto subscription = client.redis().with_options({.stop_token_ = stop.token()}).subscription();
     const std::array<std::string_view, 1> channels{"silent"};
@@ -1435,8 +1450,7 @@ ruvia::task<void> check_abort_and_concurrent_reads(ruvia::redis_client& client) 
     co_await client.shutdown();
 }
 
-ruvia::task<void> check_client_close_ends_pending_read(ruvia::redis_client& client,
-    std::promise<void>& confirmed_promise) {
+ruvia::task<void> check_client_close_ends_pending_read(ruvia::redis_client& client, std::promise<void>& confirmed_promise) {
     co_await client.connect();
     auto subscription = client.redis().subscription();
     const std::array<std::string_view, 1> channels{"silent"};
@@ -1459,8 +1473,7 @@ constexpr auto probe_test_timeout = std::chrono::seconds(5);
     return config;
 }
 
-ruvia::task<void> check_silent_peer_fails_the_idle_probe(
-    ruvia::redis_client& client, const pubsub_peer& peer) {
+ruvia::task<void> check_silent_peer_fails_the_idle_probe(ruvia::redis_client& client, const pubsub_peer& peer) {
     co_await client.connect();
     auto subscription = client.redis().with_options({.timeout_ = probe_test_timeout}).subscription();
     const std::array<std::string_view, 1> channels{"silent"};
@@ -1494,14 +1507,12 @@ ruvia::task<void> read_late_message(ruvia::redis_subscription& subscription, std
     }
 }
 
-ruvia::task<void> publish_after_idle_intervals(
-    ruvia::redis_session redis, const ruvia::worker_ref& worker) {
+ruvia::task<void> publish_after_idle_intervals(ruvia::redis_session redis, const ruvia::worker_ref& worker) {
     (void)co_await ruvia::sleep_for(worker, 5 * idle_probe_interval);
     EXPECT_TRUE(co_await redis.publish("quiet", "late") == 1);
 }
 
-ruvia::task<void> check_answered_probes_keep_an_idle_subscription(
-    ruvia::redis_client& client, const pubsub_peer& peer) {
+ruvia::task<void> check_answered_probes_keep_an_idle_subscription(ruvia::redis_client& client, const pubsub_peer& peer) {
     co_await client.connect();
     auto subscription = client.redis().with_options({.timeout_ = probe_test_timeout}).subscription();
     co_await subscription.subscribe("quiet");
@@ -1519,8 +1530,7 @@ ruvia::task<void> check_answered_probes_keep_an_idle_subscription(
     co_await client.shutdown();
 }
 
-ruvia::task<void> check_unsubscribed_connection_consumes_plain_pong(
-    ruvia::redis_client& client, const pubsub_peer& peer) {
+ruvia::task<void> check_unsubscribed_connection_consumes_plain_pong(ruvia::redis_client& client, const pubsub_peer& peer) {
     co_await client.connect();
     const auto read_timeout = 4 * idle_probe_interval;
     auto subscription = client.redis().with_options({.timeout_ = read_timeout}).subscription();
@@ -1545,8 +1555,7 @@ ruvia::task<void> check_unsubscribed_connection_consumes_plain_pong(
     co_await client.shutdown();
 }
 
-ruvia::task<void> check_unanswered_command_stands_in_for_the_ping(
-    ruvia::redis_client& client, const pubsub_peer& peer) {
+ruvia::task<void> check_unanswered_command_stands_in_for_the_ping(ruvia::redis_client& client, const pubsub_peer& peer) {
     co_await client.connect();
     auto subscription = client.redis().with_options({.timeout_ = probe_test_timeout}).subscription();
     const std::array<std::string_view, 1> channels{"unanswered"};

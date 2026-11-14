@@ -69,8 +69,7 @@ int main(int argc, char** argv) {
             .base_url_ = tls ? "https://localhost:8444" : "http://localhost:8093",
             .read_timeout_ = std::chrono::seconds(5),
             .request_timeout_ = std::chrono::seconds(5),
-            .versions_ = protocol == "2" ? ruvia::http_client_versions{.http1_ = false}
-                                         : ruvia::http_client_versions{.http2_ = false},
+            .versions_ = protocol == "2" ? ruvia::http_client_versions{.http1_ = false} : ruvia::http_client_versions{.http2_ = false},
             .tls_ = {.ca_file_ = env.path("RUVIA_TLS_CA")},
         };
         // The loop looks "localhost" up on this pool instead of blocking in

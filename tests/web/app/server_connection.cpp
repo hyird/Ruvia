@@ -53,9 +53,7 @@ public:
     // What the request's TLS handshake negotiated.
     ruvia::task<ruvia::http_response> tls(ruvia::context& context) {
         const auto* transport = context.conn().tls();
-        co_return context.text(transport == nullptr
-                                   ? std::string("plain")
-                                   : std::string(transport->alpn()) + "|" + std::string(transport->server_name()));
+        co_return context.text(transport == nullptr ? std::string("plain") : std::string(transport->alpn()) + "|" + std::string(transport->server_name()));
     }
 };
 
@@ -254,23 +252,20 @@ TEST(Ruvia, connection_listeners_serve_byte_streams_beside_routes) {
     const auto raw_tls_endpoint = raw_tls_reservation.endpoint();
     const auto routes_endpoint = routes_reservation.endpoint();
     const auto routes_tls_endpoint = routes_tls_reservation.endpoint();
-    const ruvia::tls_identity_config server_identity{
-        .certificate_chain_file_ = identity.ca_file_, .private_key_file_ = identity.private_key_file()};
+    const ruvia::tls_identity_config server_identity{.certificate_chain_file_ = identity.ca_file_, .private_key_file_ = identity.private_key_file()};
     auto raw_listener = connection_listener(raw_endpoint);
     raw_listener.https_ = raw_tls_endpoint.port();
     raw_listener.tls_ = {.identity_ = server_identity, .alpn_ = {"echo/1", "h2"}};
-    const ruvia::listen_config routes_listener{.address_ = "127.0.0.1",
-        .http_ = routes_endpoint.port(),
-        .https_ = routes_tls_endpoint.port(),
-        .tls_ = {.identity_ = server_identity}};
+    const ruvia::listen_config routes_listener{.address_ = "127.0.0.1", .http_ = routes_endpoint.port(), .https_ = routes_tls_endpoint.port(), .tls_ = {.identity_ = server_identity}};
 
     observed().clear();
     auto& app = ruvia::app();
     app.server({.worker_count_ = 2})
         .listen({raw_listener, routes_listener})
         .on_start(nullptr)
-        .on_start([] { started().release(); })
-        .on_connection(&echo);
+        .on_start([] {
+        started().release();
+    }).on_connection(&echo);
 
     ruvia::test::app_run runner(app);
     ASSERT_TRUE(started().try_acquire_for(10s));
@@ -321,8 +316,7 @@ TEST(Ruvia, connection_listeners_serve_byte_streams_beside_routes) {
         EXPECT_TRUE(handshake_error);
     }
 
-    const auto pong = ruvia::test::exchange(
-        io, routes_endpoint, "GET /ping HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n");
+    const auto pong = ruvia::test::exchange(io, routes_endpoint, "GET /ping HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n");
     EXPECT_TRUE(pong.starts_with("HTTP/1.1 200 "));
     EXPECT_TRUE(pong.ends_with("pong"));
 
@@ -342,7 +336,9 @@ TEST(Ruvia, connection_listeners_serve_byte_streams_beside_routes) {
         EXPECT_TRUE(response.ends_with("http/1.1|localhost"));
     }
 
-    ruvia::test::wait_until([] { return observed().size() == 2; }, 10s);
+    ruvia::test::wait_until([] {
+        return observed().size() == 2;
+    }, 10s);
     app.stop();
     runner.join();
 
@@ -389,89 +385,88 @@ TEST(Ruvia, raw_connection_abort_cancels_outputs_without_reporting_faults) {
     const auto tls_endpoint = tls_reservation.endpoint();
     auto listener = connection_listener(plain_endpoint);
     listener.https_ = tls_endpoint.port();
-    listener.tls_.identity_ = {.certificate_chain_file_ = identity.ca_file_,
-        .private_key_file_ = identity.private_key_file()};
+    listener.tls_.identity_ = {.certificate_chain_file_ = identity.ca_file_, .private_key_file_ = identity.private_key_file()};
     auto& app = ruvia::app();
     app.server({.worker_count_ = 1})
         .listen(listener)
         .on_start(nullptr)
-        .on_start([] { started().release(); })
+        .on_start([] {
+        started().release();
+    })
         .on_connection([results](ruvia::server_connection& connection) -> ruvia::task<void> {
-            const auto input = co_await connection.read();
-            if (!input || input->empty()) {
-                throw std::runtime_error("missing abort command");
+        const auto input = co_await connection.read();
+        if (!input || input->empty()) {
+            throw std::runtime_error("missing abort command");
+        }
+        const auto command = std::to_integer<char>((*input)[0]);
+        if (command == 'f') {
+            connection.abort();
+            try {
+                (void)co_await connection.read();
+            } catch (const std::system_error&) {
+                ++results->closed_reads_;
             }
-            const auto command = std::to_integer<char>((*input)[0]);
-            if (command == 'f') {
-                connection.abort();
+            try {
+                co_await connection.write(bytes_of("closed"));
+            } catch (const std::system_error&) {
+                ++results->closed_writes_;
+            }
+            try {
+                co_await connection.finish();
+            } catch (const std::system_error&) {
+                ++results->canceled_finishes_;
+                throw;
+            }
+            co_return;
+        }
+        if (command == 'w' || command == 'n') {
+            ruvia::task_scope outputs(connection.worker());
+            bool completed = false;
+            const auto send = [&]() -> ruvia::task<void> {
                 try {
-                    (void)co_await connection.read();
+                    if (command == 'w') {
+                        const std::string payload(256 * 1024, 'x');
+                        co_await connection.write(bytes_of(payload));
+                    } else {
+                        co_await connection.finish();
+                    }
                 } catch (const std::system_error&) {
-                    ++results->closed_reads_;
-                }
-                try {
-                    co_await connection.write(bytes_of("closed"));
-                } catch (const std::system_error&) {
-                    ++results->closed_writes_;
-                }
-                try {
-                    co_await connection.finish();
-                } catch (const std::system_error&) {
-                    ++results->canceled_finishes_;
+                    completed = true;
+                    ++results->canceled_outputs_;
                     throw;
                 }
-                co_return;
-            }
-            if (command == 'w' || command == 'n') {
-                ruvia::task_scope outputs(connection.worker());
-                bool completed = false;
-                const auto send = [&]() -> ruvia::task<void> {
-                    try {
-                        if (command == 'w') {
-                            const std::string payload(256 * 1024, 'x');
-                            co_await connection.write(bytes_of(payload));
-                        } else {
-                            co_await connection.finish();
-                        }
-                    } catch (const std::system_error&) {
-                        completed = true;
-                        ++results->canceled_outputs_;
-                        throw;
-                    }
-                    completed = true;
-                };
-                outputs.spawn(send());
-                EXPECT_FALSE(completed);
-                connection.abort();
-                co_await outputs.join();
-                co_return;
-            }
+                completed = true;
+            };
+            outputs.spawn(send());
+            EXPECT_FALSE(completed);
             connection.abort();
-            if (command == 'c') {
-                throw std::system_error(std::make_error_code(std::errc::operation_canceled), "raw application cancelled");
-            }
-            throw std::runtime_error("raw application failed after abort");
-        })
-        .on_connection_failure([results](const ruvia::connection_failure_record& record) noexcept {
-            try {
-                std::rethrow_exception(record.exception());
-            } catch (const std::system_error& error) {
-                if (error.code() == std::errc::operation_canceled &&
-                    std::string_view(error.what()).starts_with("raw application cancelled")) {
-                    ++results->application_cancellations_;
-                } else {
-                    ++results->unexpected_failures_;
-                }
-            } catch (const std::runtime_error& error) {
-                if (std::string_view(error.what()) == "raw application failed after abort") {
-                    ++results->application_failures_;
-                } else {
-                    ++results->unexpected_failures_;
-                }
-            } catch (...) {
+            co_await outputs.join();
+            co_return;
+        }
+        connection.abort();
+        if (command == 'c') {
+            throw std::system_error(std::make_error_code(std::errc::operation_canceled), "raw application cancelled");
+        }
+        throw std::runtime_error("raw application failed after abort");
+    }).on_connection_failure([results](const ruvia::connection_failure_record& record) noexcept {
+        try {
+            std::rethrow_exception(record.exception());
+        } catch (const std::system_error& error) {
+            if (error.code() == std::errc::operation_canceled && std::string_view(error.what()).starts_with("raw application cancelled")) {
+                ++results->application_cancellations_;
+            } else {
                 ++results->unexpected_failures_;
             }
-        });
+        } catch (const std::runtime_error& error) {
+            if (std::string_view(error.what()) == "raw application failed after abort") {
+                ++results->application_failures_;
+            } else {
+                ++results->unexpected_failures_;
+            }
+        } catch (...) {
+            ++results->unexpected_failures_;
+        }
+    });
     ruvia::test::app_run runner(app);
     ASSERT_TRUE(started().try_acquire_for(10s));
     unsigned expected_faults = 0;
@@ -505,7 +500,9 @@ TEST(Ruvia, raw_connection_abort_cancels_outputs_without_reporting_faults) {
             if (command == 'a' || command == 'c') {
                 ++expected_faults;
             }
-            ruvia::test::wait_until([&app] { return app.stats().active_connections_ == 0; }, 10s);
+            ruvia::test::wait_until([&app] {
+                return app.stats().active_connections_ == 0;
+            }, 10s);
             EXPECT_EQ(app.stats().connection_failures_, expected_faults) << "TLS: " << tls << ", command: " << command;
         }
     }
@@ -532,8 +529,9 @@ TEST(Ruvia, connection_idle_timeout_closes_raw_connection) {
     app.server({.worker_count_ = 1, .idle_timeout_ = 300ms, .connection_scan_interval_ = 50ms})
         .listen(connection_listener(endpoint))
         .on_start(nullptr)
-        .on_start([] { started().release(); })
-        .on_connection(&wait_for_input);
+        .on_start([] {
+        started().release();
+    }).on_connection(&wait_for_input);
 
     ruvia::test::app_run runner(app);
     ASSERT_TRUE(started().try_acquire_for(10s));
@@ -545,7 +543,9 @@ TEST(Ruvia, connection_idle_timeout_closes_raw_connection) {
     const auto elapsed = std::chrono::steady_clock::now() - begin;
     EXPECT_GE(elapsed, 200ms);
     EXPECT_LT(elapsed, 5s);
-    ruvia::test::wait_until([] { return observed().size() == 1; }, 10s);
+    ruvia::test::wait_until([] {
+        return observed().size() == 1;
+    }, 10s);
     EXPECT_EQ(app.stats().connection_failures_, 0U);
     app.stop();
     runner.join();
@@ -566,13 +566,13 @@ TEST(Ruvia, stop_disconnects_raw_connections) {
     app.server({.worker_count_ = 2})
         .listen(connection_listener(endpoint))
         .on_start(nullptr)
-        .on_start([] { started().release(); })
-        .on_connection(&wait_for_input);
+        .on_start([] {
+        started().release();
+    }).on_connection(&wait_for_input);
 
     ruvia::test::app_run runner(app);
     ASSERT_TRUE(started().try_acquire_for(10s));
-    std::array<asio::ip::tcp::socket, 3> sockets{
-        asio::ip::tcp::socket(io), asio::ip::tcp::socket(io), asio::ip::tcp::socket(io)};
+    std::array<asio::ip::tcp::socket, 3> sockets{asio::ip::tcp::socket(io), asio::ip::tcp::socket(io), asio::ip::tcp::socket(io)};
     for (auto& socket : sockets) {
         socket.connect(endpoint);
         ASSERT_TRUE(handler_entered().try_acquire_for(10s));
@@ -601,7 +601,9 @@ TEST(Ruvia, raw_handler_failure_reaches_connection_failure_hook) {
     app.server({.worker_count_ = 1})
         .listen(connection_listener(endpoint))
         .on_start(nullptr)
-        .on_start([] { started().release(); })
+        .on_start([] {
+        started().release();
+    })
         .on_connection(&fail_after_first_read)
         .on_connection_failure(&record_failure);
 
@@ -611,7 +613,9 @@ TEST(Ruvia, raw_handler_failure_reaches_connection_failure_hook) {
     socket.connect(endpoint);
     asio::write(socket, asio::buffer(std::string_view("x")));
     EXPECT_EQ(read_until_closed(socket), "");
-    ruvia::test::wait_until([&app] { return app.stats().connection_failures_ == 1; }, 10s);
+    ruvia::test::wait_until([&app] {
+        return app.stats().connection_failures_ == 1;
+    }, 10s);
     app.stop();
     runner.join();
     app.on_connection_failure(nullptr);
@@ -630,35 +634,36 @@ TEST(Ruvia, raw_connection_return_expires_unstarted_read_write_and_finish) {
     app.server({.worker_count_ = 1})
         .listen(connection_listener(endpoint))
         .on_start(nullptr)
-        .on_start([] { started().release(); })
-        .on_connection([pending](ruvia::server_connection& connection) -> ruvia::task<void> {
-            if (!pending->read_) {
-                pending->read_.emplace(connection.read());
-                pending->write_.emplace(connection.write(bytes_of("must-not-be-sent")));
-                pending->finish_.emplace(connection.finish());
-                co_return;
-            }
-            unsigned expired = 0;
-            try {
-                (void)co_await std::move(*pending->read_);
-            } catch (const std::logic_error&) {
-                ++expired;
-            }
-            try {
-                co_await std::move(*pending->write_);
-            } catch (const std::logic_error&) {
-                ++expired;
-            }
-            try {
-                co_await std::move(*pending->finish_);
-            } catch (const std::logic_error&) {
-                ++expired;
-            }
-            pending->read_.reset();
-            pending->write_.reset();
-            pending->finish_.reset();
-            co_await connection.write(bytes_of(expired == 3 ? "expired" : "invalid"));
-        });
+        .on_start([] {
+        started().release();
+    }).on_connection([pending](ruvia::server_connection& connection) -> ruvia::task<void> {
+        if (!pending->read_) {
+            pending->read_.emplace(connection.read());
+            pending->write_.emplace(connection.write(bytes_of("must-not-be-sent")));
+            pending->finish_.emplace(connection.finish());
+            co_return;
+        }
+        unsigned expired = 0;
+        try {
+            (void)co_await std::move(*pending->read_);
+        } catch (const std::logic_error&) {
+            ++expired;
+        }
+        try {
+            co_await std::move(*pending->write_);
+        } catch (const std::logic_error&) {
+            ++expired;
+        }
+        try {
+            co_await std::move(*pending->finish_);
+        } catch (const std::logic_error&) {
+            ++expired;
+        }
+        pending->read_.reset();
+        pending->write_.reset();
+        pending->finish_.reset();
+        co_await connection.write(bytes_of(expired == 3 ? "expired" : "invalid"));
+    });
     ruvia::test::app_run runner(app);
     ASSERT_TRUE(started().try_acquire_for(10s));
     {
@@ -671,7 +676,9 @@ TEST(Ruvia, raw_connection_return_expires_unstarted_read_write_and_finish) {
         second.connect(endpoint);
         EXPECT_EQ(read_until_closed(second), "expired");
     }
-    ruvia::test::wait_until([&app] { return app.stats().active_connections_ == 0; }, 10s);
+    ruvia::test::wait_until([&app] {
+        return app.stats().active_connections_ == 0;
+    }, 10s);
     EXPECT_EQ(app.stats().connection_failures_, 0U);
     app.stop();
     runner.join();
@@ -686,8 +693,7 @@ TEST(Ruvia, connection_dispatch_configuration_is_validated) {
     const auto endpoint = reservation.endpoint();
     const auto tls_port = tls_reservation.endpoint().port();
     ruvia::test::tls_identity identity("localhost");
-    const ruvia::tls_config tls{.identity_ = {.certificate_chain_file_ = identity.ca_file_,
-                                    .private_key_file_ = identity.private_key_file()}};
+    const ruvia::tls_config tls{.identity_ = {.certificate_chain_file_ = identity.ca_file_, .private_key_file_ = identity.private_key_file()}};
     auto& app = ruvia::app();
     app.server({.worker_count_ = 1}).listen(connection_listener(endpoint)).on_start(nullptr).on_connection(nullptr);
     EXPECT_THROW(app.run(), std::invalid_argument);
@@ -714,9 +720,7 @@ TEST(Ruvia, connection_dispatch_configuration_is_validated) {
     cleartext_protocols.tls_.alpn_ = {"h2"};
     EXPECT_THROW(app.listen(cleartext_protocols), std::invalid_argument);
 
-    auto routes_protocols = ruvia::listen_config{.address_ = "127.0.0.1",
-        .https_ = endpoint.port(),
-        .tls_ = tls};
+    auto routes_protocols = ruvia::listen_config{.address_ = "127.0.0.1", .https_ = endpoint.port(), .tls_ = tls};
     routes_protocols.tls_.alpn_ = {"h2"};
     EXPECT_THROW(app.listen(routes_protocols), std::invalid_argument);
 }
@@ -746,8 +750,7 @@ TEST(Ruvia, raw_connection_operation_options_bound_each_wait) {
     const auto tls_endpoint = tls_reservation.endpoint();
     auto listener = connection_listener(plain_endpoint);
     listener.https_ = tls_endpoint.port();
-    listener.tls_.identity_ = {.certificate_chain_file_ = identity.ca_file_,
-        .private_key_file_ = identity.private_key_file()};
+    listener.tls_.identity_ = {.certificate_chain_file_ = identity.ca_file_, .private_key_file_ = identity.private_key_file()};
     const auto read_text = [](ruvia::server_connection& connection, std::size_t size) -> ruvia::task<std::string> {
         std::string received;
         while (received.size() < size) {
@@ -763,100 +766,101 @@ TEST(Ruvia, raw_connection_operation_options_bound_each_wait) {
     app.server({.worker_count_ = 1})
         .listen(listener)
         .on_start(nullptr)
-        .on_start([] { started().release(); })
-        .on_connection([results, read_text](ruvia::server_connection& connection) -> ruvia::task<void> {
-            const auto command = co_await read_text(connection, 1);
-            if (command == "r") {
-                try {
-                    (void)connection.read({.timeout_ = 0ms});
-                } catch (const std::invalid_argument&) {
-                    ++results->rejected_;
-                }
-                try {
-                    (void)connection.write(bytes_of("x"), {.timeout_ = -1ms});
-                } catch (const std::invalid_argument&) {
-                    ++results->rejected_;
-                }
-                try {
-                    (void)connection.finish({.timeout_ = 0ms});
-                } catch (const std::invalid_argument&) {
-                    ++results->rejected_;
-                }
-                try {
-                    (void)co_await connection.read({.timeout_ = 50ms});
-                } catch (const std::system_error& error) {
-                    if (error.code() == std::errc::timed_out) {
-                        ++results->read_timeouts_;
-                    }
-                }
-                co_await connection.write(bytes_of("1"));
-                EXPECT_EQ(co_await read_text(connection, 3), "abc");
-                ruvia::stop_source stop;
-                std::thread canceller([&stop] {
-                    std::this_thread::sleep_for(50ms);
-                    stop.request_stop();
-                });
-                try {
-                    (void)co_await connection.read({.stop_token_ = stop.token()});
-                } catch (const std::system_error& error) {
-                    if (error.code() == std::errc::operation_canceled) {
-                        ++results->read_cancellations_;
-                    }
-                }
-                canceller.join();
-                co_await connection.write(bytes_of("2"));
-                EXPECT_EQ(co_await read_text(connection, 3), "def");
-                try {
-                    co_await connection.write(bytes_of("must-not-be-sent"), {.stop_token_ = stop.token()});
-                } catch (const std::system_error& error) {
-                    if (error.code() == std::errc::operation_canceled) {
-                        ++results->prestopped_outputs_;
-                    }
-                }
-                try {
-                    co_await connection.finish({.stop_token_ = stop.token()});
-                } catch (const std::system_error& error) {
-                    if (error.code() == std::errc::operation_canceled) {
-                        ++results->prestopped_outputs_;
-                    }
-                }
-                co_await connection.write(bytes_of("3"));
-                co_await connection.finish();
-                ++results->handled_;
-                co_return;
-            }
-            // The peer reads nothing, so the write stalls once the socket
-            // buffers fill.
-            const std::string payload(64 * 1024 * 1024, 'x');
-            ruvia::stop_source stop;
-            std::optional<std::thread> canceller;
-            ruvia::operation_options operation{.timeout_ = 200ms};
-            if (command == "c") {
-                operation = {.stop_token_ = stop.token()};
-                canceller.emplace([&stop] {
-                    std::this_thread::sleep_for(200ms);
-                    stop.request_stop();
-                });
+        .on_start([] {
+        started().release();
+    }).on_connection([results, read_text](ruvia::server_connection& connection) -> ruvia::task<void> {
+        const auto command = co_await read_text(connection, 1);
+        if (command == "r") {
+            try {
+                (void)connection.read({.timeout_ = 0ms});
+            } catch (const std::invalid_argument&) {
+                ++results->rejected_;
             }
             try {
-                co_await connection.write(bytes_of(payload), operation);
+                (void)connection.write(bytes_of("x"), {.timeout_ = -1ms});
+            } catch (const std::invalid_argument&) {
+                ++results->rejected_;
+            }
+            try {
+                (void)connection.finish({.timeout_ = 0ms});
+            } catch (const std::invalid_argument&) {
+                ++results->rejected_;
+            }
+            try {
+                (void)co_await connection.read({.timeout_ = 50ms});
             } catch (const std::system_error& error) {
                 if (error.code() == std::errc::timed_out) {
-                    ++results->write_timeouts_;
-                } else if (error.code() == std::errc::operation_canceled) {
-                    ++results->write_cancellations_;
+                    ++results->read_timeouts_;
                 }
             }
-            if (canceller) {
-                canceller->join();
+            co_await connection.write(bytes_of("1"));
+            EXPECT_EQ(co_await read_text(connection, 3), "abc");
+            ruvia::stop_source stop;
+            std::thread canceller([&stop] {
+                std::this_thread::sleep_for(50ms);
+                stop.request_stop();
+            });
+            try {
+                (void)co_await connection.read({.stop_token_ = stop.token()});
+            } catch (const std::system_error& error) {
+                if (error.code() == std::errc::operation_canceled) {
+                    ++results->read_cancellations_;
+                }
+            }
+            canceller.join();
+            co_await connection.write(bytes_of("2"));
+            EXPECT_EQ(co_await read_text(connection, 3), "def");
+            try {
+                co_await connection.write(bytes_of("must-not-be-sent"), {.stop_token_ = stop.token()});
+            } catch (const std::system_error& error) {
+                if (error.code() == std::errc::operation_canceled) {
+                    ++results->prestopped_outputs_;
+                }
             }
             try {
-                co_await connection.write(bytes_of("after"));
-            } catch (const std::system_error&) {
-                ++results->aborted_after_write_;
+                co_await connection.finish({.stop_token_ = stop.token()});
+            } catch (const std::system_error& error) {
+                if (error.code() == std::errc::operation_canceled) {
+                    ++results->prestopped_outputs_;
+                }
             }
+            co_await connection.write(bytes_of("3"));
+            co_await connection.finish();
             ++results->handled_;
-        });
+            co_return;
+        }
+        // The peer reads nothing, so the write stalls once the socket
+        // buffers fill.
+        const std::string payload(64 * 1024 * 1024, 'x');
+        ruvia::stop_source stop;
+        std::optional<std::thread> canceller;
+        ruvia::operation_options operation{.timeout_ = 200ms};
+        if (command == "c") {
+            operation = {.stop_token_ = stop.token()};
+            canceller.emplace([&stop] {
+                std::this_thread::sleep_for(200ms);
+                stop.request_stop();
+            });
+        }
+        try {
+            co_await connection.write(bytes_of(payload), operation);
+        } catch (const std::system_error& error) {
+            if (error.code() == std::errc::timed_out) {
+                ++results->write_timeouts_;
+            } else if (error.code() == std::errc::operation_canceled) {
+                ++results->write_cancellations_;
+            }
+        }
+        if (canceller) {
+            canceller->join();
+        }
+        try {
+            co_await connection.write(bytes_of("after"));
+        } catch (const std::system_error&) {
+            ++results->aborted_after_write_;
+        }
+        ++results->handled_;
+    });
     ruvia::test::app_run runner(app);
     ASSERT_TRUE(started().try_acquire_for(10s));
     const auto read_exactly = [](auto& stream, std::size_t size) {
@@ -884,7 +888,9 @@ TEST(Ruvia, raw_connection_operation_options_bound_each_wait) {
     };
     const auto stalled_session = [&](auto& stream, char command, unsigned handled) {
         asio::write(stream, asio::buffer(&command, 1));
-        ruvia::test::wait_until([&] { return results->handled_.load() == handled; }, 10s);
+        ruvia::test::wait_until([&] {
+            return results->handled_.load() == handled;
+        }, 10s);
         (void)drain(stream);
     };
     unsigned handled = 0;
@@ -903,15 +909,23 @@ TEST(Ruvia, raw_connection_operation_options_bound_each_wait) {
                 session(socket);
             }
         };
-        open([&](auto& stream) { read_session(stream); });
+        open([&](auto& stream) {
+            read_session(stream);
+        });
         ++handled;
         for (const char command : {'w', 'c'}) {
             ++handled;
-            open([&](auto& stream) { stalled_session(stream, command, handled); });
+            open([&](auto& stream) {
+                stalled_session(stream, command, handled);
+            });
         }
-        ruvia::test::wait_until([&] { return results->handled_.load() == handled; }, 10s);
+        ruvia::test::wait_until([&] {
+            return results->handled_.load() == handled;
+        }, 10s);
     }
-    ruvia::test::wait_until([&app] { return app.stats().active_connections_ == 0; }, 10s);
+    ruvia::test::wait_until([&app] {
+        return app.stats().active_connections_ == 0;
+    }, 10s);
     EXPECT_EQ(app.stats().connection_failures_, 0U);
     app.stop();
     runner.join();

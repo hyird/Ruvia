@@ -62,8 +62,7 @@ public:
         return http_response_file_identity({}, false);
     }
 
-    [[nodiscard]] static constexpr http_response_file_identity checked(
-        std::array<std::uint64_t, 4> words) noexcept {
+    [[nodiscard]] static constexpr http_response_file_identity checked(std::array<std::uint64_t, 4> words) noexcept {
         return http_response_file_identity(words, true);
     }
 
@@ -75,13 +74,12 @@ public:
     }
     [[nodiscard]] constexpr const std::array<std::uint64_t, 4>& words() const&& = delete;
 
-    friend constexpr bool operator==(
-        const http_response_file_identity&, const http_response_file_identity&) noexcept = default;
+    friend constexpr bool operator==(const http_response_file_identity&, const http_response_file_identity&) noexcept = default;
 
 private:
-    constexpr http_response_file_identity(std::array<std::uint64_t, 4> words, bool checked) noexcept
-        : words_(words),
-          checked_(checked) {}
+    constexpr http_response_file_identity(std::array<std::uint64_t, 4> words, bool checked) noexcept :
+        words_(words),
+        checked_(checked) {}
 
     std::array<std::uint64_t, 4> words_{};
     bool checked_{false};
@@ -98,16 +96,16 @@ public:
     using release_type = void (*)(native_type) noexcept;
 
     constexpr http_response_file_descriptor() noexcept = default;
-    constexpr http_response_file_descriptor(native_type native_value, release_type release) noexcept
-        : native_(native_value),
-          release_(release) {}
+    constexpr http_response_file_descriptor(native_type native_value, release_type release) noexcept :
+        native_(native_value),
+        release_(release) {}
 
     http_response_file_descriptor(const http_response_file_descriptor&) = delete;
     http_response_file_descriptor& operator=(const http_response_file_descriptor&) = delete;
 
-    constexpr http_response_file_descriptor(http_response_file_descriptor&& other) noexcept
-        : native_(std::exchange(other.native_, native_type{})),
-          release_(std::exchange(other.release_, nullptr)) {}
+    constexpr http_response_file_descriptor(http_response_file_descriptor&& other) noexcept :
+        native_(std::exchange(other.native_, native_type{})),
+        release_(std::exchange(other.release_, nullptr)) {}
 
     http_response_file_descriptor& operator=(http_response_file_descriptor&& other) noexcept {
         if (this == &other) {
@@ -149,15 +147,13 @@ private:
 // it was obtained.
 class http_response_file_view final {
 public:
-    constexpr http_response_file_view(const http_native_path_char_type* native_path, std::uint64_t size,
-        std::uint64_t offset, std::uint64_t length, http_response_file_identity identity,
-        const http_response_file_descriptor* opened = nullptr) noexcept
-        : native_path_(native_path),
-          opened_(opened != nullptr && *opened ? opened : nullptr),
-          size_(size),
-          offset_(offset),
-          length_(length),
-          identity_(identity) {}
+    constexpr http_response_file_view(const http_native_path_char_type* native_path, std::uint64_t size, std::uint64_t offset, std::uint64_t length, http_response_file_identity identity, const http_response_file_descriptor* opened = nullptr) noexcept :
+        native_path_(native_path),
+        opened_(opened != nullptr && *opened ? opened : nullptr),
+        size_(size),
+        offset_(offset),
+        length_(length),
+        identity_(identity) {}
 
     [[nodiscard]] constexpr const http_native_path_char_type* native_path_c_str() const noexcept {
         return native_path_;
@@ -247,8 +243,7 @@ public:
         return count_;
     }
     [[nodiscard]] std::span<const range> ranges() const& noexcept RUVIA_LIFETIMEBOUND {
-        return overflow_.empty() ? std::span<const range>(ranges_.data(), count_)
-                                 : std::span<const range>(overflow_.data(), count_);
+        return overflow_.empty() ? std::span<const range>(ranges_.data(), count_) : std::span<const range>(overflow_.data(), count_);
     }
     std::span<const range> ranges() const&& = delete;
 
@@ -272,8 +267,7 @@ public:
     const range& operator[](std::size_t) const&& = delete;
 
 private:
-    friend http_byte_range_set resolve_http_byte_range_set(
-        std::string_view, http_content_length, http_byte_range_options);
+    friend http_byte_range_set resolve_http_byte_range_set(std::string_view, http_content_length, http_byte_range_options);
 
     range& mutable_at(std::size_t index) noexcept {
         return overflow_.empty() ? ranges_[index] : overflow_[index];
@@ -305,12 +299,9 @@ private:
     bool ignored_{true};
 };
 
-[[nodiscard]] http_byte_range_set resolve_http_byte_range_set(
-    std::string_view field_value, http_content_length representation_length_value,
-    http_byte_range_options options);
+[[nodiscard]] http_byte_range_set resolve_http_byte_range_set(std::string_view field_value, http_content_length representation_length_value, http_byte_range_options options);
 
-[[nodiscard]] inline http_byte_range_set resolve_http_byte_range_set(
-    std::string_view field_value, http_content_length representation_length_value) noexcept {
+[[nodiscard]] inline http_byte_range_set resolve_http_byte_range_set(std::string_view field_value, http_content_length representation_length_value) noexcept {
     return resolve_http_byte_range_set(field_value, representation_length_value, {});
 }
 
@@ -342,15 +333,10 @@ struct http_content_range final {
     friend constexpr bool operator==(const http_content_range&, const http_content_range&) noexcept = default;
 };
 
-[[nodiscard]] std::optional<http_content_range> parse_http_content_range(
-    std::string_view field_value) noexcept;
+[[nodiscard]] std::optional<http_content_range> parse_http_content_range(std::string_view field_value) noexcept;
 
-[[nodiscard]] std::optional<std::uint64_t> compute_http_byte_range_content_length(
-    std::span<const http_byte_range> ranges, http_content_length representation_length,
-    std::string_view media_type = {}, std::string_view boundary = {}) noexcept;
-[[nodiscard]] std::optional<std::uint64_t> compute_http_byte_range_content_length(
-    const http_byte_range_set& ranges, http_content_length representation_length,
-    std::string_view media_type = {}, std::string_view boundary = {}) noexcept;
+[[nodiscard]] std::optional<std::uint64_t> compute_http_byte_range_content_length(std::span<const http_byte_range> ranges, http_content_length representation_length, std::string_view media_type = {}, std::string_view boundary = {}) noexcept;
+[[nodiscard]] std::optional<std::uint64_t> compute_http_byte_range_content_length(const http_byte_range_set& ranges, http_content_length representation_length, std::string_view media_type = {}, std::string_view boundary = {}) noexcept;
 
 // Streaming byte-range slicer for single-range 206 bodies and multi-range
 // multipart/byteranges streams. Accepts sequential representation chunks (or
@@ -358,12 +344,8 @@ struct http_content_range final {
 // framed output bytes to the caller's buffer.
 class http_byte_range_slicer final {
 public:
-    http_byte_range_slicer(const http_byte_range_set& ranges,
-        http_content_length representation_length, std::string_view media_type = {},
-        std::string_view boundary = {});
-    http_byte_range_slicer(std::span<const http_byte_range> ranges,
-        http_content_length representation_length, std::string_view media_type = {},
-        std::string_view boundary = {});
+    http_byte_range_slicer(const http_byte_range_set& ranges, http_content_length representation_length, std::string_view media_type = {}, std::string_view boundary = {});
+    http_byte_range_slicer(std::span<const http_byte_range> ranges, http_content_length representation_length, std::string_view media_type = {}, std::string_view boundary = {});
 
     [[nodiscard]] bool multipart() const noexcept {
         return ranges_.size() > 1;
@@ -444,9 +426,7 @@ public:
     /// Ordered wire fragments, not multipart parts. Adjacent metadata may share a
     /// descriptor; consumers must not assume a fixed segment count per range.
     [[nodiscard]] std::span<const segment> segments() const& noexcept RUVIA_LIFETIMEBOUND {
-        return state_ == nullptr
-                   ? std::span<const segment>{}
-                   : std::span<const segment>(state_->segments_.data(), state_->segment_count_);
+        return state_ == nullptr ? std::span<const segment>{} : std::span<const segment>(state_->segments_.data(), state_->segment_count_);
     }
     [[nodiscard]] std::span<const segment> segments() const&& = delete;
     [[nodiscard]] std::uint64_t content_length() const noexcept {
@@ -455,8 +435,7 @@ public:
     [[nodiscard]] http_multipart_byte_range_plan clone() const;
 
 private:
-    friend http_multipart_byte_range_plan make_http_multipart_byte_range_plan(
-        const http_byte_range_set&, http_content_length, std::string_view, std::string_view);
+    friend http_multipart_byte_range_plan make_http_multipart_byte_range_plan(const http_byte_range_set&, http_content_length, std::string_view, std::string_view);
 
     struct storage final {
         static constexpr std::size_t max_segments = http_byte_range_set::capacity * 2 + 1;
@@ -470,8 +449,8 @@ private:
         std::uint64_t content_length_{};
     };
 
-    http_multipart_byte_range_plan()
-        : state_(std::make_unique<storage>()) {}
+    http_multipart_byte_range_plan() :
+        state_(std::make_unique<storage>()) {}
 
     std::unique_ptr<storage> state_;
 };
@@ -481,9 +460,7 @@ private:
 // slice of a content-coded representation is not itself a coded body, so
 // plan_http_representation_response() answers multiple ranges of a coded
 // representation with the full representation instead.
-[[nodiscard]] http_multipart_byte_range_plan make_http_multipart_byte_range_plan(
-    const http_byte_range_set& ranges, http_content_length representation_length,
-    std::string_view media_type, std::string_view boundary);
+[[nodiscard]] http_multipart_byte_range_plan make_http_multipart_byte_range_plan(const http_byte_range_set& ranges, http_content_length representation_length, std::string_view media_type, std::string_view boundary);
 
 }  // namespace ruvia
 
@@ -559,16 +536,14 @@ public:
     }
 
 private:
-    friend http_representation_response_plan plan_http_representation_response(
-        const http_request&, http_selected_representation_metadata,
-        http_representation_response_options);
+    friend http_representation_response_plan plan_http_representation_response(const http_request&, http_selected_representation_metadata, http_representation_response_options);
 
     using value_type = std::variant<full_type, not_modified_type, precondition_failed_type, range_unsatisfiable_type, partial_type, multipart_type>;
 
     template <typename alternative_type>
-    explicit http_representation_response_plan(alternative_type alternative, bool authorized_by_if_range = false) noexcept
-        : value_(alternative),
-          authorized_by_if_range_(authorized_by_if_range) {}
+    explicit http_representation_response_plan(alternative_type alternative, bool authorized_by_if_range = false) noexcept :
+        value_(alternative),
+        authorized_by_if_range_(authorized_by_if_range) {}
 
     value_type value_;
     bool authorized_by_if_range_{false};
@@ -580,9 +555,7 @@ private:
 // establish that it selects or modifies that representation; non-representation
 // extensions and extensions redefining conditional semantics are outside this API.
 // CONNECT, OPTIONS, and TRACE ignore conditions, as do ineligible normal statuses.
-[[nodiscard]] http_representation_response_plan plan_http_representation_response(
-    const http_request& request, http_selected_representation_metadata representation,
-    http_representation_response_options options = {});
+[[nodiscard]] http_representation_response_plan plan_http_representation_response(const http_request& request, http_selected_representation_metadata representation, http_representation_response_options options = {});
 
 }  // namespace ruvia
 
@@ -632,17 +605,15 @@ public:
 
 private:
     friend http_response_body_plan plan_http_response_body(http_known_method, http_status_code) noexcept;
-    constexpr http_response_body_plan(http_known_method method, http_status_code status, http_response_content_semantics semantics,
-        bool status_allows_body, bool body_suppressed, bool auto_content_length_allowed,
-        bool explicit_content_length_allowed, bool transfer_encoding_allowed) noexcept
-        : request_method_(method),
-          response_status_(status),
-          semantics_(semantics),
-          status_allows_body_(status_allows_body),
-          body_suppressed_(body_suppressed),
-          auto_content_length_allowed_(auto_content_length_allowed),
-          explicit_content_length_allowed_(explicit_content_length_allowed),
-          transfer_encoding_allowed_(transfer_encoding_allowed) {}
+    constexpr http_response_body_plan(http_known_method method, http_status_code status, http_response_content_semantics semantics, bool status_allows_body, bool body_suppressed, bool auto_content_length_allowed, bool explicit_content_length_allowed, bool transfer_encoding_allowed) noexcept :
+        request_method_(method),
+        response_status_(status),
+        semantics_(semantics),
+        status_allows_body_(status_allows_body),
+        body_suppressed_(body_suppressed),
+        auto_content_length_allowed_(auto_content_length_allowed),
+        explicit_content_length_allowed_(explicit_content_length_allowed),
+        transfer_encoding_allowed_(transfer_encoding_allowed) {}
 
     http_known_method request_method_;
     http_status_code response_status_;
@@ -654,15 +625,13 @@ private:
     bool transfer_encoding_allowed_;
 };
 
-[[nodiscard]] http_response_body_plan plan_http_response_body(
-    http_known_method request_method, http_status_code response_status) noexcept;
+[[nodiscard]] http_response_body_plan plan_http_response_body(http_known_method request_method, http_status_code response_status) noexcept;
 
 namespace detail {
 
 // A buffered response sends payload bytes only when its method/status permit a
 // body and the representation is non-empty.
-[[nodiscard]] constexpr bool http_buffered_response_sends_body(
-    const http_response_body_plan& body_plan, std::uint64_t content_length) noexcept {
+[[nodiscard]] constexpr bool http_buffered_response_sends_body(const http_response_body_plan& body_plan, std::uint64_t content_length) noexcept {
     return !body_plan.body_suppressed() && content_length != 0;
 }
 
@@ -703,18 +672,16 @@ public:
     [[nodiscard]] bool matches_response(const http_response& response) const noexcept;
 
 private:
-    friend http_buffered_response_write_plan plan_buffered_http_response_write(
-        http_known_method, const http_response&) noexcept;
-    http_buffered_response_write_plan(http_response_body_plan body_plan, std::uint64_t content_length) noexcept
-        : body_plan_(body_plan),
-          content_length_(content_length) {}
+    friend http_buffered_response_write_plan plan_buffered_http_response_write(http_known_method, const http_response&) noexcept;
+    http_buffered_response_write_plan(http_response_body_plan body_plan, std::uint64_t content_length) noexcept :
+        body_plan_(body_plan),
+        content_length_(content_length) {}
 
     http_response_body_plan body_plan_;
     std::uint64_t content_length_;
 };
 
-[[nodiscard]] http_buffered_response_write_plan plan_buffered_http_response_write(
-    http_known_method request_method, const http_response& response) noexcept;
+[[nodiscard]] http_buffered_response_write_plan plan_buffered_http_response_write(http_known_method request_method, const http_response& response) noexcept;
 
 class set_cookie_plan;
 
@@ -756,8 +723,7 @@ public:
     }
 
     [[nodiscard]] std::string_view value() const noexcept {
-        return bytes_ == nullptr ? std::string_view{}
-                                 : std::string_view(bytes_ + name_size_, value_size_);
+        return bytes_ == nullptr ? std::string_view{} : std::string_view(bytes_ + name_size_, value_size_);
     }
 
 private:
@@ -838,10 +804,8 @@ public:
     // Replace cookies with the same name, Domain/Path scope, and Partitioned
     // state; partitioned and unpartitioned cookies may coexist.
     void set_cookie(const set_cookie_plan& plan);
-    void allow_methods(
-        std::uint32_t method_mask, std::span<const std::string_view> extension_methods = {});
-    void content_range(
-        http_content_length offset, http_content_length length, http_content_length size);
+    void allow_methods(std::uint32_t method_mask, std::span<const std::string_view> extension_methods = {});
+    void content_range(http_content_length offset, http_content_length length, http_content_length size);
     void content_range_unsatisfied(http_content_length size);
     void add_vary_token(std::string_view token);
     void reserve(std::size_t count);
@@ -895,56 +859,37 @@ private:
     // Field rules and the known-header index.
     void record_known_header_index(std::uint32_t known_bit, std::size_t index) noexcept;
     void rebuild_known_header_index() noexcept;
-    [[nodiscard]] http_response_header* find_header_for_update(
-        std::string_view key, std::uint32_t known_bit) noexcept;
-    [[nodiscard]] const http_response_header* find_header_for_read(
-        std::string_view key, std::uint32_t known_bit) const noexcept;
+    [[nodiscard]] http_response_header* find_header_for_update(std::string_view key, std::uint32_t known_bit) noexcept;
+    [[nodiscard]] const http_response_header* find_header_for_read(std::string_view key, std::uint32_t known_bit) const noexcept;
     // Owns lookup, duplicate collapse, and index publication for every upsert.
     // Mutation receives the retained slot, or nullptr when it must append.
     template <typename Mutation>
     http_response_header& upsert_header(std::string_view key, std::uint32_t known_bit, Mutation&& mutate);
-    http_response_header& prepare_header_value_storage(
-        std::string_view key, std::size_t value_size, std::uint32_t known_bit);
+    http_response_header& prepare_header_value_storage(std::string_view key, std::size_t value_size, std::uint32_t known_bit);
     void set_header_validated(std::string_view key, std::string_view value, std::uint32_t known_bit, bool stable_view = false);
-    void append_header_validated(
-        std::string_view key, std::string_view value, std::uint32_t known_bit);
-    http_response_header& append_header_uninitialized_value(
-        std::string_view key, std::size_t value_size, std::uint32_t known_bit);
-    [[nodiscard]] http_response_header& collapse_response_headers(
-        http_response_header& retained, std::uint32_t known_bit) noexcept;
+    void append_header_validated(std::string_view key, std::string_view value, std::uint32_t known_bit);
+    http_response_header& append_header_uninitialized_value(std::string_view key, std::size_t value_size, std::uint32_t known_bit);
+    [[nodiscard]] http_response_header& collapse_response_headers(http_response_header& retained, std::uint32_t known_bit) noexcept;
     bool remove_header_validated(std::string_view key, std::uint32_t known_bit) noexcept;
     void upsert_set_cookie_header_validated(std::string_view value);
-    [[nodiscard]] http_response_header* find_set_cookie_header(std::string_view wire_prefix,
-        std::string_view cookie_name, bool has_path, std::string_view path,
-        std::string_view domain, bool partitioned) noexcept;
-    void erase_later_set_cookie_headers(http_response_header& retained,
-        std::string_view cookie_name, bool has_path, std::string_view path,
-        std::string_view domain, bool partitioned) noexcept;
+    [[nodiscard]] http_response_header* find_set_cookie_header(std::string_view wire_prefix, std::string_view cookie_name, bool has_path, std::string_view path, std::string_view domain, bool partitioned) noexcept;
+    void erase_later_set_cookie_headers(http_response_header& retained, std::string_view cookie_name, bool has_path, std::string_view path, std::string_view domain, bool partitioned) noexcept;
     // Descriptor storage.
     [[nodiscard]] http_response_header* inline_data() noexcept;
     [[nodiscard]] const http_response_header* inline_data() const noexcept;
     [[nodiscard]] http_response_header* data() noexcept;
     [[nodiscard]] const http_response_header* data() const noexcept;
-    [[nodiscard]] http_response_header make_owned_header(
-        std::string_view name, std::string_view value, std::uint32_t known_bit);
-    [[nodiscard]] http_response_header make_uninitialized_header(
-        std::string_view name, std::size_t value_size, std::uint32_t known_bit);
-    [[nodiscard]] static std::optional<http_response_header> make_static_header(
-        std::string_view name, std::string_view value, std::uint32_t known_bit) noexcept;
-    [[nodiscard]] std::optional<http_response_header> make_shared_header(
-        std::string_view name, std::string_view value, std::uint32_t known_bit, bool stable_view) const noexcept;
-    [[nodiscard]] bool try_assign_owned_in_place(http_response_header& header, std::string_view name,
-        std::string_view value, std::uint32_t known_bit) noexcept;
+    [[nodiscard]] http_response_header make_owned_header(std::string_view name, std::string_view value, std::uint32_t known_bit);
+    [[nodiscard]] http_response_header make_uninitialized_header(std::string_view name, std::size_t value_size, std::uint32_t known_bit);
+    [[nodiscard]] static std::optional<http_response_header> make_static_header(std::string_view name, std::string_view value, std::uint32_t known_bit) noexcept;
+    [[nodiscard]] std::optional<http_response_header> make_shared_header(std::string_view name, std::string_view value, std::uint32_t known_bit, bool stable_view) const noexcept;
+    [[nodiscard]] bool try_assign_owned_in_place(http_response_header& header, std::string_view name, std::string_view value, std::uint32_t known_bit) noexcept;
     [[nodiscard]] bool borrows_owned_header(std::string_view name, std::string_view value) const noexcept;
     http_response_header& append_header(http_response_header header);
-    http_response_header& add_uninitialized_value(
-        std::string_view name, std::size_t value_size, std::uint32_t known_bit);
-    http_response_header& add(
-        std::string_view name, std::string_view value, std::uint32_t known_bit, bool stable_view = false);
-    void assign(http_response_header& header, std::string_view name, std::string_view value,
-        std::uint32_t known_bit, bool stable_view = false);
-    http_response_header& assign_uninitialized_value(http_response_header& header, std::string_view name,
-        std::size_t value_size, std::uint32_t known_bit);
+    http_response_header& add_uninitialized_value(std::string_view name, std::size_t value_size, std::uint32_t known_bit);
+    http_response_header& add(std::string_view name, std::string_view value, std::uint32_t known_bit, bool stable_view = false);
+    void assign(http_response_header& header, std::string_view name, std::string_view value, std::uint32_t known_bit, bool stable_view = false);
+    http_response_header& assign_uninitialized_value(http_response_header& header, std::string_view name, std::size_t value_size, std::uint32_t known_bit);
     void release_header(http_response_header& header) noexcept;
     // Drops every header from new_end onward; the dropped headers must
     // already be released.
@@ -974,8 +919,8 @@ public:
 
 private:
     friend class http_response_body;
-    explicit constexpr http_empty_response_body(bool head_metadata_only = false) noexcept
-        : head_metadata_only_(head_metadata_only) {}
+    explicit constexpr http_empty_response_body(bool head_metadata_only = false) noexcept :
+        head_metadata_only_(head_metadata_only) {}
 
     bool head_metadata_only_{false};
 };
@@ -989,8 +934,8 @@ public:
 private:
     friend class http_response_body;
 
-    explicit constexpr http_static_response_bytes(std::string_view bytes_value) noexcept
-        : bytes_(bytes_value) {}
+    explicit constexpr http_static_response_bytes(std::string_view bytes_value) noexcept :
+        bytes_(bytes_value) {}
 
     std::string_view bytes_;
 };
@@ -1009,12 +954,12 @@ public:
 private:
     friend class http_response_body;
 
-    explicit http_owned_response_bytes(std::string_view bytes_value)
-        : bytes_(bytes_value) {}
+    explicit http_owned_response_bytes(std::string_view bytes_value) :
+        bytes_(bytes_value) {}
 
-    http_owned_response_bytes(std::string&& bytes_value, bool file_representation) noexcept
-        : bytes_(std::move(bytes_value)),
-          file_representation_(file_representation) {}
+    http_owned_response_bytes(std::string&& bytes_value, bool file_representation) noexcept :
+        bytes_(std::move(bytes_value)),
+        file_representation_(file_representation) {}
 
     std::string bytes_;
     bool file_representation_{false};
@@ -1034,21 +979,16 @@ public:
 private:
     friend class http_response_body;
 
-    http_owned_response_file(http_native_path_string_type&& native_path,
-        std::uint64_t size, std::uint64_t offset, std::uint64_t length,
-        http_response_file_identity identity, http_response_file_descriptor opened) noexcept
-        : native_path_(std::move(native_path)),
-          size_(size),
-          offset_(offset),
-          length_(length),
-          identity_(identity),
-          opened_(std::move(opened)) {}
+    http_owned_response_file(http_native_path_string_type&& native_path, std::uint64_t size, std::uint64_t offset, std::uint64_t length, http_response_file_identity identity, http_response_file_descriptor opened) noexcept :
+        native_path_(std::move(native_path)),
+        size_(size),
+        offset_(offset),
+        length_(length),
+        identity_(identity),
+        opened_(std::move(opened)) {}
 
-    http_owned_response_file(http_native_path_view_type file,
-        std::uint64_t size, std::uint64_t offset, std::uint64_t length,
-        http_response_file_identity identity, http_response_file_descriptor opened)
-        : http_owned_response_file(http_native_path_string_type(file), size, offset,
-              length, identity, std::move(opened)) {}
+    http_owned_response_file(http_native_path_view_type file, std::uint64_t size, std::uint64_t offset, std::uint64_t length, http_response_file_identity identity, http_response_file_descriptor opened) :
+        http_owned_response_file(http_native_path_string_type(file), size, offset, length, identity, std::move(opened)) {}
     http_native_path_string_type native_path_;
     std::uint64_t size_;
     std::uint64_t offset_;
@@ -1059,22 +999,19 @@ private:
 
 class http_multipart_response_body final {
 public:
-    http_multipart_response_body(http_native_path_view_type path,
-        std::uint64_t size, http_response_file_identity identity, http_multipart_byte_range_plan plan,
-        http_response_file_descriptor opened)
-        : native_path_(path),
-          plan_(std::move(plan)),
-          size_(size),
-          identity_(identity),
-          opened_(std::move(opened)) {
+    http_multipart_response_body(http_native_path_view_type path, std::uint64_t size, http_response_file_identity identity, http_multipart_byte_range_plan plan, http_response_file_descriptor opened) :
+        native_path_(path),
+        plan_(std::move(plan)),
+        size_(size),
+        identity_(identity),
+        opened_(std::move(opened)) {
         if (plan_.segments().empty()) {
             throw std::invalid_argument("multipart response plan must contain segments");
         }
         bool contains_file = false;
         for (const auto& segment : plan_.segments()) {
             if (segment.kind_ == http_multipart_byte_range_plan::segment_kind::file) {
-                if (segment.file_length_ == 0 || segment.file_offset_ > size_ ||
-                    segment.file_length_ > size_ - segment.file_offset_) {
+                if (segment.file_length_ == 0 || segment.file_offset_ > size_ || segment.file_length_ > size_ - segment.file_offset_) {
                     throw std::invalid_argument("multipart response file segment is out of range");
                 }
                 contains_file = true;
@@ -1093,8 +1030,7 @@ public:
         if (item.kind_ == http_multipart_byte_range_plan::segment_kind::metadata) {
             return {.bytes_ = plan_.metadata().substr(item.metadata_offset_, item.metadata_length_)};
         }
-        return {.file_ = http_response_file_view(native_path_.c_str(), size_, item.file_offset_,
-                    item.file_length_, identity_, &opened_)};
+        return {.file_ = http_response_file_view(native_path_.c_str(), size_, item.file_offset_, item.file_length_, identity_, &opened_)};
     }
     [[nodiscard]] std::uint64_t content_length() const noexcept {
         return plan_.content_length();
@@ -1106,14 +1042,12 @@ public:
 private:
     friend class http_response_body;
 
-    http_multipart_response_body(http_native_path_string_type&& native_path,
-        http_multipart_byte_range_plan&& plan, std::uint64_t size,
-        http_response_file_identity identity, http_response_file_descriptor opened) noexcept
-        : native_path_(std::move(native_path)),
-          plan_(std::move(plan)),
-          size_(size),
-          identity_(identity),
-          opened_(std::move(opened)) {}
+    http_multipart_response_body(http_native_path_string_type&& native_path, http_multipart_byte_range_plan&& plan, std::uint64_t size, http_response_file_identity identity, http_response_file_descriptor opened) noexcept :
+        native_path_(std::move(native_path)),
+        plan_(std::move(plan)),
+        size_(size),
+        identity_(identity),
+        opened_(std::move(opened)) {}
 
     http_native_path_string_type native_path_;
     http_multipart_byte_range_plan plan_;
@@ -1126,13 +1060,13 @@ private:
 // bytes()/file()/size() observations are derived from the active alternative.
 class http_response_body final {
 public:
-    http_response_body() noexcept
-        : value_(http_empty_response_body{}) {}
+    http_response_body() noexcept :
+        value_(http_empty_response_body{}) {}
 
     http_response_body(const http_response_body&) = delete;
     http_response_body& operator=(const http_response_body&) = delete;
-    http_response_body(http_response_body&& other) noexcept
-        : value_(std::move(other.value_)) {
+    http_response_body(http_response_body&& other) noexcept :
+        value_(std::move(other.value_)) {
         other.set_empty();
     }
     http_response_body& operator=(http_response_body&&) = delete;
@@ -1207,8 +1141,7 @@ private:
     friend class ::ruvia::http_response;
     friend struct http_response_body_access;
 
-    using value_type = std::variant<http_empty_response_body, http_static_response_bytes,
-        http_owned_response_bytes, http_owned_response_file, http_multipart_response_body>;
+    using value_type = std::variant<http_empty_response_body, http_static_response_bytes, http_owned_response_bytes, http_owned_response_file, http_multipart_response_body>;
     static_assert(std::is_nothrow_move_constructible_v<value_type>);
 
     template <typename body_type>
@@ -1258,18 +1191,13 @@ private:
         replace(std::move(body));
     }
 
-    void set_owned_file(http_native_path_view_type file,
-        std::uint64_t size, std::uint64_t offset, std::uint64_t length,
-        http_response_file_identity identity, http_response_file_descriptor opened) {
+    void set_owned_file(http_native_path_view_type file, std::uint64_t size, std::uint64_t offset, std::uint64_t length, http_response_file_identity identity, http_response_file_descriptor opened) {
         http_owned_response_file body(file, size, offset, length, identity, std::move(opened));
         replace(std::move(body));
     }
 
-    void set_multipart(http_native_path_view_type file,
-        std::uint64_t size, http_response_file_identity identity,
-        http_multipart_byte_range_plan plan, http_response_file_descriptor opened) {
-        http_multipart_response_body replacement(
-            file, size, identity, std::move(plan), std::move(opened));
+    void set_multipart(http_native_path_view_type file, std::uint64_t size, http_response_file_identity identity, http_multipart_byte_range_plan plan, http_response_file_descriptor opened) {
+        http_multipart_response_body replacement(file, size, identity, std::move(plan), std::move(opened));
         replace(std::move(replacement));
     }
 
@@ -1311,8 +1239,7 @@ public:
     // Format Allow from known-method bits followed by extension method values.
     // Extension methods must be nonempty HTTP tokens and may borrow current headers.
     // The resulting field is owned by this response; refresh views after mutation.
-    void allow_methods(
-        std::uint32_t method_mask, std::span<const std::string_view> extension_methods = {});
+    void allow_methods(std::uint32_t method_mask, std::span<const std::string_view> extension_methods = {});
     void remove_header(std::string_view key);
     void set_cookie(const set_cookie_plan& plan);
     // Copy the source's application headers with RFC-aware append and cookie semantics.
@@ -1357,14 +1284,9 @@ public:
     // runtime framed the response from; the body owns it and releases it on
     // destruction or replacement. Path and range validation precede body
     // replacement; a rejected call releases `opened`.
-    void file_body(http_native_path_view_type file, http_content_length size,
-        http_content_length offset, http_content_length length, http_response_file_identity identity,
-        http_response_file_descriptor opened = {});
-    void multipart_file_body(http_native_path_view_type file, http_content_length size,
-        http_response_file_identity identity, http_multipart_byte_range_plan&& plan,
-        http_response_file_descriptor opened = {});
-    void content_range(
-        http_content_length offset, http_content_length length, http_content_length size);
+    void file_body(http_native_path_view_type file, http_content_length size, http_content_length offset, http_content_length length, http_response_file_identity identity, http_response_file_descriptor opened = {});
+    void multipart_file_body(http_native_path_view_type file, http_content_length size, http_response_file_identity identity, http_multipart_byte_range_plan&& plan, http_response_file_descriptor opened = {});
+    void content_range(http_content_length offset, http_content_length length, http_content_length size);
     void content_range_unsatisfied(http_content_length size);
     void add_vary_token(std::string_view token);
     void reserve_headers(std::size_t count);
@@ -1376,8 +1298,7 @@ public:
     // Content-Length, the streaming form removes it. A failed replacement leaves
     // this response unchanged.
     void apply_content_encoding(std::string_view content_encoding);
-    void replace_body_with_content_encoding(
-        std::string&& value, std::string_view content_encoding);
+    void replace_body_with_content_encoding(std::string&& value, std::string_view content_encoding);
 
 private:
     friend std::variant<http_response, http_connect_udp_error> prepare_http_connect_udp_response(http_response, http_protocol_version);

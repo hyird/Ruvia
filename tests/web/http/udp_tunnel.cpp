@@ -44,10 +44,12 @@ struct retained_tunnel_results {
 
 const auto udp_observation = std::make_shared<udp_tunnel_observation>();
 [[maybe_unused]] const bool udp_state_registered = [] {
-    ruvia::app().use_worker_state<std::shared_ptr<udp_tunnel_observation>>(
-        [] { return udp_observation; });
-    ruvia::app().use_worker_state<retained_tunnel_results>(
-        [] { return retained_tunnel_results{}; });
+    ruvia::app().use_worker_state<std::shared_ptr<udp_tunnel_observation>>([] {
+        return udp_observation;
+    });
+    ruvia::app().use_worker_state<retained_tunnel_results>([] {
+        return retained_tunnel_results{};
+    });
     return true;
 }();
 
@@ -60,8 +62,7 @@ class udp_tunnel_routes final {
     RUVIA_GET("/udp-tunnel-retained", take_retained);
     RUVIA_CONNECT_PROTOCOL("connect-udp", "/udp-tunnel/:host/:port", dynamic);
     RUVIA_GET("/udp-tunnel-sibling", sibling);
-    const ruvia::websocket_route_config ws_config{
-        .subprotocols_ = {"chat.v2", "chat.v1"}, .require_subprotocol_ = true};
+    const ruvia::websocket_route_config ws_config{.subprotocols_ = {"chat.v2", "chat.v1"}, .require_subprotocol_ = true};
     RUVIA_GET_WS("/udp-tunnel-ws", ws_inspect, ws_config);
     RUVIA_ROUTES_END
 
@@ -130,17 +131,12 @@ class udp_tunnel_routes final {
     ruvia::task<ruvia::http_response> take_retained(ruvia::context& c) {
         auto& retained = c.worker_state<retained_tunnel_results>();
         if (retained.capsule_) {
-            auto response = c.text(retained.cold_operations_expired_ && retained.capsule_->type() == 42 &&
-                                           retained.capsule_->bytes().size() == retained.capsule_->text().size()
-                                       ? retained.capsule_->text()
-                                       : std::string_view("invalid-capsule-state"));
+            auto response = c.text(retained.cold_operations_expired_ && retained.capsule_->type() == 42 && retained.capsule_->bytes().size() == retained.capsule_->text().size() ? retained.capsule_->text() : std::string_view("invalid-capsule-state"));
             retained.capsule_.reset();
             co_return response;
         }
         if (retained.datagram_) {
-            auto response = c.text(retained.datagram_->bytes().size() == retained.datagram_->text().size()
-                                       ? retained.datagram_->text()
-                                       : std::string_view("invalid-datagram-state"));
+            auto response = c.text(retained.datagram_->bytes().size() == retained.datagram_->text().size() ? retained.datagram_->text() : std::string_view("invalid-datagram-state"));
             retained.datagram_.reset();
             co_return response;
         }
@@ -227,8 +223,7 @@ class udp_tunnel_routes final {
         while (auto message = co_await ws.read()) {
             co_await ws.send(std::move(*message));
         }
-        observation.ws_peer_close_matched_ =
-            ws.peer_close_code() == std::uint16_t{4001} && ws.peer_close_reason() == "client-done";
+        observation.ws_peer_close_matched_ = ws.peer_close_code() == std::uint16_t{4001} && ws.peer_close_reason() == "client-done";
     }
 };
 // A raw HTTP/1.1 peer: the response head and any input already read after it.
@@ -238,8 +233,7 @@ struct upgraded_connection {
     std::string input_{};
 };
 
-[[nodiscard]] upgraded_connection open_upgrade(
-    asio::io_context& io, const asio::ip::tcp::endpoint& endpoint, std::string_view target, std::string_view fields) {
+[[nodiscard]] upgraded_connection open_upgrade(asio::io_context& io, const asio::ip::tcp::endpoint& endpoint, std::string_view target, std::string_view fields) {
     upgraded_connection connection{asio::ip::tcp::socket(io)};
     connection.socket_.connect(endpoint);
     std::string request{"GET "};
@@ -251,8 +245,7 @@ struct upgraded_connection {
     return connection;
 }
 
-[[nodiscard]] upgraded_connection open_udp_tunnel(
-    asio::io_context& io, const asio::ip::tcp::endpoint& endpoint, std::string_view target) {
+[[nodiscard]] upgraded_connection open_udp_tunnel(asio::io_context& io, const asio::ip::tcp::endpoint& endpoint, std::string_view target) {
     return open_upgrade(io, endpoint, target, "Connection: Upgrade\r\nUpgrade: connect-udp\r\nCapsule-Protocol: ?1\r\n");
 }
 
@@ -344,8 +337,7 @@ struct server_frame {
 };
 
 [[nodiscard]] server_frame read_frame(upgraded_connection& connection) {
-    while (connection.input_.size() < 2 ||
-           connection.input_.size() < 2 + (static_cast<unsigned char>(connection.input_[1]) & 0x7f)) {
+    while (connection.input_.size() < 2 || connection.input_.size() < 2 + (static_cast<unsigned char>(connection.input_[1]) & 0x7f)) {
         std::array<char, 1024> input{};
         connection.input_.append(input.data(), connection.socket_.read_some(asio::buffer(input)));
     }
@@ -356,7 +348,9 @@ struct server_frame {
 }
 
 [[nodiscard]] bool eventually(const std::atomic<bool>& flag) {
-    ruvia::test::wait_until([&flag] { return flag.load(); }, std::chrono::seconds(5));
+    ruvia::test::wait_until([&flag] {
+        return flag.load();
+    }, std::chrono::seconds(5));
     return true;
 }
 }  // namespace udp_tunnel_test
@@ -376,8 +370,7 @@ TEST(Ruvia, http1_udp_tunnel_capsules_echo_preserve_siblings_and_owned_lifetime)
     {
         auto tunnel = open_udp_tunnel(io, server.endpoint(), "/.well-known/masque/udp/target.test/53/");
         EXPECT_TRUE(tunnel.head_.starts_with("HTTP/1.1 101 "));
-        EXPECT_TRUE(tunnel.head_.find("\r\ncapsule-protocol: ?1\r\n") != std::string::npos ||
-                    tunnel.head_.find("\r\nCapsule-Protocol: ?1\r\n") != std::string::npos);
+        EXPECT_TRUE(tunnel.head_.find("\r\ncapsule-protocol: ?1\r\n") != std::string::npos || tunnel.head_.find("\r\nCapsule-Protocol: ?1\r\n") != std::string::npos);
         for (const auto expected : {std::string_view("ready"), std::string_view("second-ready")}) {
             const auto ready = read_datagram(tunnel);
             EXPECT_TRUE(ready.has_value() && *ready == expected);
@@ -416,8 +409,8 @@ TEST(Ruvia, http1_udp_tunnel_upgrade_routes_only_normalized_tunnel_paths) {
         asio::ip::tcp::socket client(io);
         client.connect(server.endpoint());
         const auto request = std::string("GET ") + std::string(path) +
-                             " HTTP/1.1\r\nHost: localhost\r\nConnection: Upgrade, close\r\n"
-                             "Upgrade: connect-udp\r\nCapsule-Protocol: ?1\r\n\r\n";
+            " HTTP/1.1\r\nHost: localhost\r\nConnection: Upgrade, close\r\n"
+            "Upgrade: connect-udp\r\nCapsule-Protocol: ?1\r\n\r\n";
         asio::write(client, asio::buffer(request));
         std::string response{};
         std::array<char, 1024> input{};
@@ -485,9 +478,7 @@ TEST(Ruvia, server_capsule_and_udp_results_outlive_unread_input_and_connections)
     ruvia::test::http_server_fixture server(io);
     for (const bool capsule : {true, false}) {
         {
-            auto tunnel = open_udp_tunnel(io, server.endpoint(),
-                capsule ? "/.well-known/masque/udp/retained-capsule.test/53/"
-                        : "/.well-known/masque/udp/retained-datagram.test/53/");
+            auto tunnel = open_udp_tunnel(io, server.endpoint(), capsule ? "/.well-known/masque/udp/retained-capsule.test/53/" : "/.well-known/masque/udp/retained-datagram.test/53/");
             EXPECT_TRUE(tunnel.head_.starts_with("HTTP/1.1 101 "));
             // One transport write includes a second complete capsule. The
             // handler reads only the first, never advancing to EOF.

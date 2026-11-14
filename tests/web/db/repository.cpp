@@ -29,30 +29,16 @@
 namespace db_repository_test {
 using namespace ruvia;
 namespace testing = ::ruvia::test;
-RUVIA_DB_ENTITY(entity_type, "items", db_column<"id", std::int64_t, db_column_options{.primary_key_ = true}>,
-    db_column<"name", std::string>)
-RUVIA_DB_ENTITY(nullable_entity_type, "nullable_items",
-    db_column<"id", std::int64_t, db_column_options{.primary_key_ = true}>,
-    db_column<"name", std::string, db_column_options{.nullable_ = true}>)
-RUVIA_DB_ENTITY(computed_entity_type, "computed_items",
-    db_column<"id", std::int64_t, db_column_options{.primary_key_ = true}>,
-    db_column<"name", std::string>,
-    db_column<"name_length", std::int64_t, db_column_options{.generated_type_ = db_generated_type::stored}>)
-RUVIA_DB_ENTITY(composite_entity_type, "composite_items",
-    db_column<"tenant_id", std::int64_t, db_column_options{.primary_key_ = true}>,
-    db_column<"item_id", std::int64_t, db_column_options{.primary_key_ = true}>,
-    db_column<"name", std::string>,
-    db_column<"revision", std::int64_t>)
-RUVIA_DB_ENTITY(numeric_array_entity, "numeric_arrays",
-    db_column<"samples", std::vector<long double>, db_column_options{.data_type_ = db_data_type::numeric}>)
+RUVIA_DB_ENTITY(entity_type, "items", db_column<"id", std::int64_t, db_column_options{.primary_key_ = true}>, db_column<"name", std::string>)
+RUVIA_DB_ENTITY(nullable_entity_type, "nullable_items", db_column<"id", std::int64_t, db_column_options{.primary_key_ = true}>, db_column<"name", std::string, db_column_options{.nullable_ = true}>)
+RUVIA_DB_ENTITY(computed_entity_type, "computed_items", db_column<"id", std::int64_t, db_column_options{.primary_key_ = true}>, db_column<"name", std::string>, db_column<"name_length", std::int64_t, db_column_options{.generated_type_ = db_generated_type::stored}>)
+RUVIA_DB_ENTITY(composite_entity_type, "composite_items", db_column<"tenant_id", std::int64_t, db_column_options{.primary_key_ = true}>, db_column<"item_id", std::int64_t, db_column_options{.primary_key_ = true}>, db_column<"name", std::string>, db_column<"revision", std::int64_t>)
+RUVIA_DB_ENTITY(numeric_array_entity, "numeric_arrays", db_column<"samples", std::vector<long double>, db_column_options{.data_type_ = db_data_type::numeric}>)
 
 struct child;
 struct parent;
-RUVIA_DB_ENTITY(parent, "parents", db_column<"id", std::int64_t, db_column_options{.primary_key_ = true}>,
-    db_one_to_many<"children", child, "parent">)
-RUVIA_DB_ENTITY(child, "children", db_column<"id", std::int64_t, db_column_options{.primary_key_ = true}>,
-    db_column<"parent_id", std::int64_t>,
-    db_many_to_one<"parent", parent, db_join_column<"parent_id", "id">>)
+RUVIA_DB_ENTITY(parent, "parents", db_column<"id", std::int64_t, db_column_options{.primary_key_ = true}>, db_one_to_many<"children", child, "parent">)
+RUVIA_DB_ENTITY(child, "children", db_column<"id", std::int64_t, db_column_options{.primary_key_ = true}>, db_column<"parent_id", std::int64_t>, db_many_to_one<"parent", parent, db_join_column<"parent_id", "id">>)
 
 struct repository_runtime final {
     asio::io_context& context_ = test::new_test_io_context();
@@ -66,14 +52,8 @@ db_config database_config() {
 #endif
 }
 
-RUVIA_DB_PROJECTION(item_summary,
-    RUVIA_DB_COLUMN(id, std::int64_t),
-    RUVIA_DB_COLUMN(label, std::string),
-    RUVIA_DB_COLUMN(rank, std::int64_t))
-RUVIA_DB_PROJECTION(entity_with_rank,
-    RUVIA_DB_COLUMN(id, std::int64_t),
-    RUVIA_DB_COLUMN(name, std::string),
-    RUVIA_DB_COLUMN(rank, std::int64_t))
+RUVIA_DB_PROJECTION(item_summary, RUVIA_DB_COLUMN(id, std::int64_t), RUVIA_DB_COLUMN(label, std::string), RUVIA_DB_COLUMN(rank, std::int64_t))
+RUVIA_DB_PROJECTION(entity_with_rank, RUVIA_DB_COLUMN(id, std::int64_t), RUVIA_DB_COLUMN(name, std::string), RUVIA_DB_COLUMN(rank, std::int64_t))
 
 TEST(Ruvia, db_repository_projects_computed_dto_and_owns_expression_sources) {
     repository_runtime runtime;
@@ -95,14 +75,20 @@ TEST(Ruvia, db_repository_projects_computed_dto_and_owns_expression_sources) {
                 auto many = builder.get_many<item_summary>();
                 auto one = builder.get_one<item_summary>();
                 auto page = builder.get_many_and_count<item_summary>();
-                EXPECT_TRUE(testing::throws_on([&] { (void)builder.get_many(); }));
+                EXPECT_TRUE(testing::throws_on([&] {
+                    (void)builder.get_many();
+                }));
             }
         }
         auto partial = repository.query_builder();
         partial.select({{"name"}});
         auto result_value = partial.get_many();
-        EXPECT_TRUE(testing::throws_on([&] { partial.select({{"missing"}}); }));
-        EXPECT_TRUE(testing::throws_on([&] { partial.select({{"id"}, {"id"}}); }));
+        EXPECT_TRUE(testing::throws_on([&] {
+            partial.select({{"missing"}});
+        }));
+        EXPECT_TRUE(testing::throws_on([&] {
+            partial.select({{"id"}, {"id"}});
+        }));
         co_return;
     });
 }
@@ -114,10 +100,18 @@ TEST(Ruvia, db_repository_write_validation_and_cte_rules_are_entry_point_indepen
         const auto condition = entity_type::column<"id">() == 1;
         const entity_type empty_changes;
         auto builder = items.update_builder();
-        EXPECT_TRUE(testing::throws_on([&] { builder.set(empty_changes); }));
-        EXPECT_TRUE(testing::throws_on([&] { builder.set(std::span<const db_assignment>{}); }));
-        EXPECT_TRUE(testing::throws_on([&] { (void)items.update(condition, empty_changes); }));
-        EXPECT_TRUE(testing::throws_on([&] { (void)items.update(condition, std::span<const db_assignment>{}); }));
+        EXPECT_TRUE(testing::throws_on([&] {
+            builder.set(empty_changes);
+        }));
+        EXPECT_TRUE(testing::throws_on([&] {
+            builder.set(std::span<const db_assignment>{});
+        }));
+        EXPECT_TRUE(testing::throws_on([&] {
+            (void)items.update(condition, empty_changes);
+        }));
+        EXPECT_TRUE(testing::throws_on([&] {
+            (void)items.update(condition, std::span<const db_assignment>{});
+        }));
 
         auto parents = client.db().repository<parent>();
         auto hydrated = parents.query_builder("p");
@@ -128,9 +122,15 @@ TEST(Ruvia, db_repository_write_validation_and_cte_rules_are_entry_point_indepen
         mutation.where(parent::column<"id">() == 1).returning();
         auto nested = parents.query_builder("changed");
         nested.with("deleted", mutation).from_cte("deleted");
-        EXPECT_TRUE(testing::throws_on([&] { hydrated.with("mutation", mutation); }));
-        EXPECT_TRUE(testing::throws_on([&] { hydrated.with("mutation", mutation.query()); }));
-        EXPECT_TRUE(testing::throws_on([&] { hydrated.with("nested", nested); }));
+        EXPECT_TRUE(testing::throws_on([&] {
+            hydrated.with("mutation", mutation);
+        }));
+        EXPECT_TRUE(testing::throws_on([&] {
+            hydrated.with("mutation", mutation.query());
+        }));
+        EXPECT_TRUE(testing::throws_on([&] {
+            hydrated.with("nested", nested);
+        }));
         co_return;
     });
 }
@@ -153,9 +153,15 @@ TEST(Ruvia, db_repository_wildcard_projection_preserves_unknown_cte_columns_and_
         const auto maria = builder.query().compile(db_driver::mariadb);
         EXPECT_EQ(maria.sql(), "WITH `samples` AS (SELECT * FROM `measurements`) SELECT `samples`.*, ? AS `rank` FROM `samples` AS `samples`");
         EXPECT_EQ(maria.params().size(), std::size_t{1});
-        EXPECT_TRUE(testing::throws_on([&] { builder.add_select(db_expr::value(6), "rank"); }));
-        EXPECT_TRUE(testing::throws_on([&] { builder.select({db_selection{}}); }));
-        EXPECT_TRUE(testing::throws_on([&] { builder.select({db_expr::value(1).as("")}); }));
+        EXPECT_TRUE(testing::throws_on([&] {
+            builder.add_select(db_expr::value(6), "rank");
+        }));
+        EXPECT_TRUE(testing::throws_on([&] {
+            builder.select({db_selection{}});
+        }));
+        EXPECT_TRUE(testing::throws_on([&] {
+            builder.select({db_expr::value(1).as("")});
+        }));
         const auto unchanged = builder.query().compile(db_driver::postgresql);
         EXPECT_EQ(unchanged.sql(), postgres.sql());
 
@@ -165,11 +171,12 @@ TEST(Ruvia, db_repository_wildcard_projection_preserves_unknown_cte_columns_and_
         EXPECT_EQ(added.sql(), "SELECT \"s\".*, $1 AS \"rank\" FROM \"items\" AS \"s\"");
         appended.select({db_expr::value(1).as("rank")}).add_select({db_selection::star("s")});
         const auto appended_wildcard = appended.query().compile(db_driver::postgresql);
-        EXPECT_EQ(appended_wildcard.sql(),
-            "SELECT $1 AS \"rank\", \"s\".* FROM \"items\" AS \"s\"");
+        EXPECT_EQ(appended_wildcard.sql(), "SELECT $1 AS \"rank\", \"s\".* FROM \"items\" AS \"s\"");
         auto archive = repository.insert_builder();
         archive.insert_from({"id", "name"}, builder);
-        EXPECT_TRUE(testing::throws_on([&] { archive.insert_from({"id", "unknown"}, builder); }));
+        EXPECT_TRUE(testing::throws_on([&] {
+            archive.insert_from({"id", "unknown"}, builder);
+        }));
         const auto inserted = archive.query().compile(db_driver::postgresql);
         EXPECT_TRUE(inserted.sql().find("INSERT INTO \"items\" (\"id\", \"name\")") != std::string_view::npos);
         EXPECT_TRUE(inserted.sql().find("SELECT \"samples\".*, $1 AS \"rank\"") != std::string_view::npos);
@@ -181,14 +188,7 @@ TEST(Ruvia, db_repository_wildcard_projection_preserves_unknown_cte_columns_and_
 TEST(Ruvia, db_repository_scalar_results_own_text_across_reads_and_returning) {
     const std::string first(192, 'a');
     const std::string second(256, 'b');
-    test::backend_startup_peer peer(test::backend_startup_peer::protocol::postgresql, false,
-        test::backend_startup_peer::after_startup::idle,
-        std::vector<ruvia::test::backend_startup_peer::postgres_reply>({{.column_ = std::string("name"), .rows_ = std::vector<std::string>({std::string(first)})},
-            {.column_ = std::string("name"), .rows_ = std::vector<std::string>({std::string(first), std::string(second)})},
-            {.column_ = std::string("name"), .rows_ = std::vector<std::string>({std::string(second)}), .command_ = std::string("UPDATE 1")},
-            {.column_ = std::string("name"), .rows_ = std::vector<std::string>({std::string(second), std::string(first)}), .command_ = std::string("DELETE 2")},
-            {.column_ = std::string("name"), .rows_ = std::vector<std::string>({std::string("raw")})},
-            {.column_ = std::string("name"), .rows_ = std::vector<std::string>()}}));
+    test::backend_startup_peer peer(test::backend_startup_peer::protocol::postgresql, false, test::backend_startup_peer::after_startup::idle, std::vector<ruvia::test::backend_startup_peer::postgres_reply>({{.column_ = std::string("name"), .rows_ = std::vector<std::string>({std::string(first)})}, {.column_ = std::string("name"), .rows_ = std::vector<std::string>({std::string(first), std::string(second)})}, {.column_ = std::string("name"), .rows_ = std::vector<std::string>({std::string(second)}), .command_ = std::string("UPDATE 1")}, {.column_ = std::string("name"), .rows_ = std::vector<std::string>({std::string(second), std::string(first)}), .command_ = std::string("DELETE 2")}, {.column_ = std::string("name"), .rows_ = std::vector<std::string>({std::string("raw")})}, {.column_ = std::string("name"), .rows_ = std::vector<std::string>()}}));
     repository_runtime runtime;
     db_client client(runtime.attachment_.loop(), peer.config());
     test::drive_backend_client(runtime.attachment_, client, [&](db_client& connected) -> task<void> {
@@ -235,24 +235,13 @@ TEST(Ruvia, db_repository_scalar_results_own_text_across_reads_and_returning) {
 }
 
 using nullable_text_array = std::vector<std::optional<std::string>>;
-RUVIA_DB_ENTITY(array_entity, "array_items",
-    db_column<"id", std::int64_t, db_column_options{.primary_key_ = true}>,
-    db_column<"values", nullable_text_array>)
-RUVIA_DB_PROJECTION(array_projection,
-    db_column<"values", std::vector<std::optional<string>>>)
+RUVIA_DB_ENTITY(array_entity, "array_items", db_column<"id", std::int64_t, db_column_options{.primary_key_ = true}>, db_column<"values", nullable_text_array>)
+RUVIA_DB_PROJECTION(array_projection, db_column<"values", std::vector<std::optional<string>>>)
 
 TEST(Ruvia, db_repository_array_results_own_tokens_in_scalars_entities_and_projections) {
     const std::string long_text(256, 'x');
     const auto array_text = std::string("{\"") + long_text + "\",NULL,\"NULL\",\"comma,quote\\\"slash\\\\\",\"\"}";
-    test::backend_startup_peer peer(test::backend_startup_peer::protocol::postgresql, false,
-        test::backend_startup_peer::after_startup::idle,
-        std::vector<ruvia::test::backend_startup_peer::postgres_reply>({{.column_ = std::string("values"), .rows_ = std::vector<std::string>({std::string(array_text)})},
-            {.column_ = std::string("values"), .rows_ = std::vector<std::string>({std::string(array_text), std::string("{}")})},
-            {.column_ = std::string("values"), .rows_ = std::vector<std::string>({std::string(array_text)}), .command_ = std::string("UPDATE 1")},
-            {.column_ = std::string("values"), .rows_ = std::vector<std::string>({std::string(array_text), std::string("{}")}), .command_ = std::string("DELETE 2")},
-            {.column_ = std::string("values"), .rows_ = std::vector<std::string>({std::string(array_text)})},
-            {.column_ = std::string("values"), .rows_ = std::vector<std::string>({std::string(array_text)})},
-            {.column_ = std::string("values"), .rows_ = std::vector<std::string>({std::string(array_text)})}}));
+    test::backend_startup_peer peer(test::backend_startup_peer::protocol::postgresql, false, test::backend_startup_peer::after_startup::idle, std::vector<ruvia::test::backend_startup_peer::postgres_reply>({{.column_ = std::string("values"), .rows_ = std::vector<std::string>({std::string(array_text)})}, {.column_ = std::string("values"), .rows_ = std::vector<std::string>({std::string(array_text), std::string("{}")})}, {.column_ = std::string("values"), .rows_ = std::vector<std::string>({std::string(array_text)}), .command_ = std::string("UPDATE 1")}, {.column_ = std::string("values"), .rows_ = std::vector<std::string>({std::string(array_text), std::string("{}")}), .command_ = std::string("DELETE 2")}, {.column_ = std::string("values"), .rows_ = std::vector<std::string>({std::string(array_text)})}, {.column_ = std::string("values"), .rows_ = std::vector<std::string>({std::string(array_text)})}, {.column_ = std::string("values"), .rows_ = std::vector<std::string>({std::string(array_text)})}}));
     repository_runtime runtime;
     db_client client(runtime.attachment_.loop(), peer.config());
     test::drive_backend_client(runtime.attachment_, client, [&](db_client& connected) -> task<void> {
@@ -331,14 +320,7 @@ TEST(Ruvia, db_repository_array_results_own_tokens_in_scalars_entities_and_proje
 
 TEST(Ruvia, db_repository_wildcards_decode_result_names_and_reject_ambiguous_mapped_columns) {
     using reply = test::backend_startup_peer::postgres_reply;
-    test::backend_startup_peer peer(test::backend_startup_peer::protocol::postgresql, false,
-        test::backend_startup_peer::after_startup::idle,
-        std::vector<reply>({reply{.columns_ = std::vector<std::string>({"name", "rank", "unmapped"}), .values_ = std::vector<std::vector<std::string>>({std::vector<std::string>({"Ada", "7", "extra"})})},
-            reply{.columns_ = std::vector<std::string>({"name", "rank", "unmapped"}), .values_ = std::vector<std::vector<std::string>>({std::vector<std::string>({"Grace", "8", "raw"})})},
-            reply{.columns_ = std::vector<std::string>({"id", "name", "rank"}), .values_ = std::vector<std::vector<std::string>>({std::vector<std::string>({"9", "Linus", "6"})})},
-            reply{.columns_ = std::vector<std::string>({"name"}), .values_ = std::vector<std::vector<std::string>>({std::vector<std::string>({"missing rank"})})},
-            reply{.columns_ = std::vector<std::string>({"name", "name", "rank"}), .values_ = std::vector<std::vector<std::string>>({std::vector<std::string>({"first", "second", "7"})})},
-            reply{.columns_ = std::vector<std::string>({"name", "rank"})}}));
+    test::backend_startup_peer peer(test::backend_startup_peer::protocol::postgresql, false, test::backend_startup_peer::after_startup::idle, std::vector<reply>({reply{.columns_ = std::vector<std::string>({"name", "rank", "unmapped"}), .values_ = std::vector<std::vector<std::string>>({std::vector<std::string>({"Ada", "7", "extra"})})}, reply{.columns_ = std::vector<std::string>({"name", "rank", "unmapped"}), .values_ = std::vector<std::vector<std::string>>({std::vector<std::string>({"Grace", "8", "raw"})})}, reply{.columns_ = std::vector<std::string>({"id", "name", "rank"}), .values_ = std::vector<std::vector<std::string>>({std::vector<std::string>({"9", "Linus", "6"})})}, reply{.columns_ = std::vector<std::string>({"name"}), .values_ = std::vector<std::vector<std::string>>({std::vector<std::string>({"missing rank"})})}, reply{.columns_ = std::vector<std::string>({"name", "name", "rank"}), .values_ = std::vector<std::vector<std::string>>({std::vector<std::string>({"first", "second", "7"})})}, reply{.columns_ = std::vector<std::string>({"name", "rank"})}}));
     repository_runtime runtime;
     db_client client(runtime.attachment_.loop(), peer.config());
     test::drive_backend_client(runtime.attachment_, client, [&](db_client& connected) -> task<void> {
@@ -374,8 +356,7 @@ TEST(Ruvia, db_repository_wildcards_decode_result_names_and_reject_ambiguous_map
         }
         auto returned_operation = [&] {
             auto remove = repository.delete_builder("d");
-            remove.where(entity_type::column<"id">() == 9)
-                .returning({db_selection::star("d"), db_expr::value(6).as("rank")});
+            remove.where(entity_type::column<"id">() == 9).returning({db_selection::star("d"), db_expr::value(6).as("rank")});
             return remove.get_one<entity_with_rank>();
         }();
         const auto returned = co_await std::move(returned_operation);
@@ -404,11 +385,7 @@ TEST(Ruvia, db_repository_wildcards_decode_result_names_and_reject_ambiguous_map
 }
 
 TEST(Ruvia, db_repository_consumes_selected_projection_rows_and_owns_selection) {
-    test::backend_startup_peer peer(test::backend_startup_peer::protocol::postgresql, false,
-        test::backend_startup_peer::after_startup::idle,
-        std::vector<ruvia::test::backend_startup_peer::postgres_reply>({{.column_ = std::string("label"), .rows_ = std::vector<std::string>({std::string("Ada")})},
-            {.column_ = std::string("label"), .rows_ = std::vector<std::string>({std::string("Grace"), std::string("Linus")})},
-            {.column_ = std::string("label"), .rows_ = std::vector<std::string>()}}));
+    test::backend_startup_peer peer(test::backend_startup_peer::protocol::postgresql, false, test::backend_startup_peer::after_startup::idle, std::vector<ruvia::test::backend_startup_peer::postgres_reply>({{.column_ = std::string("label"), .rows_ = std::vector<std::string>({std::string("Ada")})}, {.column_ = std::string("label"), .rows_ = std::vector<std::string>({std::string("Grace"), std::string("Linus")})}, {.column_ = std::string("label"), .rows_ = std::vector<std::string>()}}));
     repository_runtime runtime;
     db_client client(runtime.attachment_.loop(), peer.config());
     test::drive_backend_client(runtime.attachment_, client, [&](db_client& connected) -> task<void> {
@@ -451,21 +428,23 @@ TEST(Ruvia, db_repository_consumes_selected_projection_rows_and_owns_selection) 
 }
 
 TEST(Ruvia, db_repository_add_select_maps_computed_dto_columns_and_rejects_duplicate_names) {
-    test::backend_startup_peer peer(test::backend_startup_peer::protocol::postgresql, false,
-        test::backend_startup_peer::after_startup::idle,
-        std::vector<ruvia::test::backend_startup_peer::postgres_reply>({{.column_ = std::string("id"), .rows_ = std::vector<std::string>({std::string("7")})},
-            {.column_ = std::string("id"), .rows_ = std::vector<std::string>()}}));
+    test::backend_startup_peer peer(test::backend_startup_peer::protocol::postgresql, false, test::backend_startup_peer::after_startup::idle, std::vector<ruvia::test::backend_startup_peer::postgres_reply>({{.column_ = std::string("id"), .rows_ = std::vector<std::string>({std::string("7")})}, {.column_ = std::string("id"), .rows_ = std::vector<std::string>()}}));
     repository_runtime runtime;
     db_client client(runtime.attachment_.loop(), peer.config());
     test::drive_backend_client(runtime.attachment_, client, [&](db_client& connected) -> task<void> {
         auto repository = connected.db().repository<entity_type>();
 
         auto explicit_qb = repository.query_builder("i");
-        explicit_qb.select({"id"})
-            .add_select(entity_type::column<"name">("i"), "label");
-        EXPECT_TRUE(testing::throws_on([&] { explicit_qb.add_select("id"); }));
-        EXPECT_TRUE(testing::throws_on([&] { explicit_qb.add_select(db_expr::value(1), "label"); }));
-        EXPECT_TRUE(testing::throws_on([&] { (void)explicit_qb.get_many(); }));
+        explicit_qb.select({"id"}).add_select(entity_type::column<"name">("i"), "label");
+        EXPECT_TRUE(testing::throws_on([&] {
+            explicit_qb.add_select("id");
+        }));
+        EXPECT_TRUE(testing::throws_on([&] {
+            explicit_qb.add_select(db_expr::value(1), "label");
+        }));
+        EXPECT_TRUE(testing::throws_on([&] {
+            (void)explicit_qb.get_many();
+        }));
         bool missing_label = false;
         try {
             (void)co_await explicit_qb.get_one<item_summary>();
@@ -475,19 +454,23 @@ TEST(Ruvia, db_repository_add_select_maps_computed_dto_columns_and_rejects_dupli
         EXPECT_TRUE(missing_label);
 
         auto default_qb = repository.query_builder("i");
-        EXPECT_TRUE(testing::throws_on([&] { default_qb.add_select("id"); }));
+        EXPECT_TRUE(testing::throws_on([&] {
+            default_qb.add_select("id");
+        }));
         default_qb.add_select(db_expr::value(5), "rank");
-        EXPECT_TRUE(testing::throws_on([&] { default_qb.add_select(db_expr::value(6), "rank"); }));
-        EXPECT_TRUE(testing::throws_on([&] { (void)default_qb.get_many(); }));
+        EXPECT_TRUE(testing::throws_on([&] {
+            default_qb.add_select(db_expr::value(6), "rank");
+        }));
+        EXPECT_TRUE(testing::throws_on([&] {
+            (void)default_qb.get_many();
+        }));
         const auto many = co_await default_qb.get_many<entity_with_rank>();
         EXPECT_TRUE(many.empty());
     });
 }
 
 TEST(Ruvia, db_repository_relation_query_reports_missing_mapped_columns_as_conversion_error) {
-    test::backend_startup_peer peer(test::backend_startup_peer::protocol::postgresql, false,
-        test::backend_startup_peer::after_startup::idle,
-        std::vector<ruvia::test::backend_startup_peer::postgres_reply>({{.column_ = std::string("id"), .rows_ = std::vector<std::string>({std::string("1")})}}));
+    test::backend_startup_peer peer(test::backend_startup_peer::protocol::postgresql, false, test::backend_startup_peer::after_startup::idle, std::vector<ruvia::test::backend_startup_peer::postgres_reply>({{.column_ = std::string("id"), .rows_ = std::vector<std::string>({std::string("1")})}}));
     repository_runtime runtime;
     db_client client(runtime.attachment_.loop(), peer.config());
     test::drive_backend_client(runtime.attachment_, client, [&](db_client& connected) -> task<void> {
@@ -508,14 +491,21 @@ TEST(Ruvia, db_repository_relation_joins_validate_source_and_target_aliases) {
     test::with_connected_db_client(runtime.attachment_, {.driver_ = db_driver::postgresql}, [&](db_client& client) -> task<void> {
         auto parents = client.db().repository<parent>();
         auto qb = parents.query_builder("p");
-        EXPECT_TRUE(testing::throws_on([&] { qb.left_join("bogus.children", "c"); }));
-        EXPECT_TRUE(testing::throws_on([&] { qb.inner_join("bogus.children", "c"); }));
-        EXPECT_TRUE(testing::throws_on([&] { qb.left_join("children", "p"); }));
+        EXPECT_TRUE(testing::throws_on([&] {
+            qb.left_join("bogus.children", "c");
+        }));
+        EXPECT_TRUE(testing::throws_on([&] {
+            qb.inner_join("bogus.children", "c");
+        }));
+        EXPECT_TRUE(testing::throws_on([&] {
+            qb.left_join("children", "p");
+        }));
         qb.left_join("p.children", "c");
-        EXPECT_TRUE(testing::throws_on([&] { qb.inner_join("children", "c"); }));
+        EXPECT_TRUE(testing::throws_on([&] {
+            qb.inner_join("children", "c");
+        }));
         const auto statement = qb.get_query_and_parameters();
-        EXPECT_EQ(statement.sql(),
-            R"(SELECT "p"."id" FROM "parents" AS "p" LEFT JOIN "children" AS "c" ON ("p"."id" = "c"."parent_id"))");
+        EXPECT_EQ(statement.sql(), R"(SELECT "p"."id" FROM "parents" AS "p" LEFT JOIN "children" AS "c" ON ("p"."id" = "c"."parent_id"))");
         co_return;
     });
 }
@@ -527,13 +517,17 @@ TEST(Ruvia, db_repository_relation_path_rejects_alias_and_relation_name_ambiguit
         qb.left_join_and_select("children", "c");
         qb.left_join_and_select("c.parent", "children");
         // "children" is both a root relation and the alias of children.parent.
-        EXPECT_TRUE(testing::throws_on([&] { qb.left_join_and_select("children.children", "grandchildren"); }));
+        EXPECT_TRUE(testing::throws_on([&] {
+            qb.left_join_and_select("children.children", "grandchildren");
+        }));
         // An alias that names no root relation still resolves through the alias.
         qb.left_join_and_select("c.parent.children", "siblings");
 
         // A root alias that also names a root relation is ambiguous too.
         auto shadowed = client.db().repository<parent>().query_builder("children");
-        EXPECT_TRUE(testing::throws_on([&] { shadowed.left_join_and_select("children.parent", "owner"); }));
+        EXPECT_TRUE(testing::throws_on([&] {
+            shadowed.left_join_and_select("children.parent", "owner");
+        }));
         co_return;
     });
 }
@@ -545,16 +539,14 @@ TEST(Ruvia, db_repository_update_builder_owns_complex_conditions_and_cross_table
         auto update = repository.update_builder("i");
         {
             db_query x;
-            update.update_from<entity_type>("incoming")
-                .set("name", x.column("name", "incoming"))
-                .where(x.binary(x.column("id", "i"), db_binary_operator::equal, x.column("id", "incoming")))
-                .and_where(x.binary(x.column("name", "i"), db_binary_operator::is_distinct_from, x.column("name", "incoming")))
-                .returning({{"id"}, {"label", x.column("name", "i")}});
+            update.update_from<entity_type>("incoming").set("name", x.column("name", "incoming")).where(x.binary(x.column("id", "i"), db_binary_operator::equal, x.column("id", "incoming"))).and_where(x.binary(x.column("name", "i"), db_binary_operator::is_distinct_from, x.column("name", "incoming"))).returning({{"id"}, {"label", x.column("name", "i")}});
         }
         const auto statement = update.get_query_and_parameters();
         EXPECT_EQ(statement.sql(), "UPDATE \"items\" AS \"i\" SET \"name\" = \"incoming\".\"name\" FROM \"items\" AS \"incoming\" WHERE ((\"i\".\"id\" = \"incoming\".\"id\") AND (\"i\".\"name\" IS DISTINCT FROM \"incoming\".\"name\")) RETURNING \"i\".\"id\" AS \"id\", \"i\".\"name\" AS \"label\"");
         auto mapped = update.get_many<item_summary>();
-        EXPECT_TRUE(testing::throws_on([&] { (void)update.execute(); }));
+        EXPECT_TRUE(testing::throws_on([&] {
+            (void)update.execute();
+        }));
         db_query x;
         entity_type patch;
         patch.set<"name">("next");
@@ -562,10 +554,14 @@ TEST(Ruvia, db_repository_update_builder_owns_complex_conditions_and_cross_table
         auto ordinary = repository.update(condition, patch);
         auto returned = repository.update_builder().set(patch).where(condition).returning().get_many();
         auto expression_update = repository.update(condition, {{"name", x.value("next")}});
-        EXPECT_TRUE(testing::throws_on([&] { (void)repository.update(db_expression{}, patch); }));
+        EXPECT_TRUE(testing::throws_on([&] {
+            (void)repository.update(db_expression{}, patch);
+        }));
         auto unbounded = repository.update_builder();
         unbounded.set(patch);
-        EXPECT_TRUE(testing::throws_on([&] { (void)unbounded.get_query_and_parameters(); }));
+        EXPECT_TRUE(testing::throws_on([&] {
+            (void)unbounded.get_query_and_parameters();
+        }));
         auto predicate = repository.update_builder("target");
         predicate.set(patch).where(entity_type::column<"id">() == 7);
         const auto predicate_statement = predicate.get_query_and_parameters();
@@ -607,22 +603,29 @@ TEST(Ruvia, db_repository_write_ctes_claim_and_persist_in_one_statement) {
                     auto candidates = repository.query_builder("c");
                     candidates.where(entity_type::column<"name">() == "pending").order_by("id").limit(10).set_lock({.mode_ = db_row_lock::update, .skip_locked_ = true});
                     auto claim = repository.update_builder("t");
-                    claim.update_from_cte("candidates", "c")
-                        .set("name", x.value(std::string(300, 'x')))
-                        .where(x.binary(x.column("id", "t"), db_binary_operator::equal, x.column("id", "c")))
-                        .returning();
+                    claim.update_from_cte("candidates", "c").set("name", x.value(std::string(300, 'x'))).where(x.binary(x.column("id", "t"), db_binary_operator::equal, x.column("id", "c"))).returning();
                     auto claimed = repository.query_builder("claimed");
                     claimed.from_cte("claimed");
                     insert.with("candidates", candidates).with("claimed", claim).insert_from({"id", "name"}, claimed).returning();
                     auto read = repository.query_builder("result");
                     read.with("candidates", candidates).with("claimed", claim).from_cte("claimed");
-                    EXPECT_TRUE(testing::throws_on([&] { (void)read.get_many_and_count(); }));
-                    EXPECT_TRUE(testing::throws_on([&] { (void)read.get_count(); }));
-                    EXPECT_TRUE(testing::throws_on([&] { (void)read.subquery(x); }));
+                    EXPECT_TRUE(testing::throws_on([&] {
+                        (void)read.get_many_and_count();
+                    }));
+                    EXPECT_TRUE(testing::throws_on([&] {
+                        (void)read.get_count();
+                    }));
+                    EXPECT_TRUE(testing::throws_on([&] {
+                        (void)read.subquery(x);
+                    }));
                     auto result_value = read.get_many();
                     auto invalid = archive.insert_builder();
-                    EXPECT_TRUE(testing::throws_on([&] { invalid.insert_from({"id"}, claimed); }));
-                    EXPECT_TRUE(testing::throws_on([&] { invalid.insert_from({"id", "unknown"}, claimed); }));
+                    EXPECT_TRUE(testing::throws_on([&] {
+                        invalid.insert_from({"id"}, claimed);
+                    }));
+                    EXPECT_TRUE(testing::throws_on([&] {
+                        invalid.insert_from({"id", "unknown"}, claimed);
+                    }));
                 }
                 const auto statement = insert.get_query_and_parameters();
                 EXPECT_TRUE(statement.sql().find("WITH \"candidates\" AS (SELECT") == 0);
@@ -649,9 +652,7 @@ TEST(Ruvia, db_repository_write_builder_cancelled_operations_release_input_snaps
                 auto operation = [&] {
                     db_query x;
                     auto update = repository.update_builder();
-                    update.set("name", x.value(std::string(400, 'v')))
-                        .where(x.binary(x.column("id"), db_binary_operator::is_distinct_from, x.value(1)))
-                        .returning();
+                    update.set("name", x.value(std::string(400, 'v'))).where(x.binary(x.column("id"), db_binary_operator::is_distinct_from, x.value(1))).returning();
                     auto outer = repository.query_builder("updated");
                     outer.with("updated", update).from_cte("updated");
                     return outer.get_many();
@@ -684,21 +685,18 @@ TEST(Ruvia, db_repository_imports_raw_correlated_query_joins_and_writer_paramete
             db_query source;
             source.select(source.column("id", "s")).from("samples", "s").where(source.binary(source.column("owner_id", "s"), db_binary_operator::equal, source.column("id", "i"))).and_where(source.binary(source.column("score", "s"), db_binary_operator::greater, source.value(3)));
             const db_source_column columns[]{{.name_ = "sample_id"}};
-            const auto on = (entity_type::column<"id">() == db_expr::column("sample_id", "matched")) &&
-                            (db_expr::column("sample_id", "matched") > 5);
+            const auto on = (entity_type::column<"id">() == db_expr::column("sample_id", "matched")) && (db_expr::column("sample_id", "matched") > 5);
             read.left_join(source, "matched", on, {.lateral_ = true, .columns_ = columns});
             const borrowed_text incoming_columns[]{"id"};
             write.with("incoming", cte, {.columns_ = incoming_columns});
             db_query writer_source;
             writer_source.select(writer_source.column("id", "s")).from("samples", "s").where(writer_source.binary(writer_source.column("owner_id", "s"), db_binary_operator::equal, writer_source.column("id", "n"))).and_where(writer_source.binary(writer_source.column("score", "s"), db_binary_operator::greater, writer_source.value(3)));
-            const auto writer_on = (db_expr::column("id", "n") == db_expr::column("sample_id", "matched")) &&
-                                   (db_expr::column("sample_id", "matched") > 5);
+            const auto writer_on = (db_expr::column("id", "n") == db_expr::column("sample_id", "matched")) && (db_expr::column("sample_id", "matched") > 5);
             write.join(db_join_type::inner, writer_source, "matched", writer_on, {.lateral_ = true, .columns_ = columns});
             source.where(source.value(false));
         }
         const auto statement = read.get_query_and_parameters();
-        EXPECT_EQ(statement.sql(),
-            "WITH \"bounds\" (\"floor\") AS (VALUES ($1)) SELECT \"i\".\"id\", \"i\".\"name\" FROM \"items\" AS \"i\" LEFT JOIN LATERAL (SELECT \"s\".\"id\" FROM \"samples\" AS \"s\" WHERE ((\"s\".\"owner_id\" = \"i\".\"id\") AND (\"s\".\"score\" > $2))) AS \"matched\" (\"sample_id\") ON ((\"i\".\"id\" = \"matched\".\"sample_id\") AND (\"matched\".\"sample_id\" > $3))");
+        EXPECT_EQ(statement.sql(), "WITH \"bounds\" (\"floor\") AS (VALUES ($1)) SELECT \"i\".\"id\", \"i\".\"name\" FROM \"items\" AS \"i\" LEFT JOIN LATERAL (SELECT \"s\".\"id\" FROM \"samples\" AS \"s\" WHERE ((\"s\".\"owner_id\" = \"i\".\"id\") AND (\"s\".\"score\" > $2))) AS \"matched\" (\"sample_id\") ON ((\"i\".\"id\" = \"matched\".\"sample_id\") AND (\"matched\".\"sample_id\" > $3))");
         EXPECT_EQ(statement.params().size(), std::size_t{3});
         const auto update = write.get_query_and_parameters();
         EXPECT_TRUE(update.sql().find("SET \"name\" = $2 FROM \"incoming\" AS \"n\" INNER JOIN LATERAL (SELECT") != std::string_view::npos);
@@ -706,19 +704,24 @@ TEST(Ruvia, db_repository_imports_raw_correlated_query_joins_and_writer_paramete
         EXPECT_TRUE(update.sql().find("\"matched\".\"sample_id\" > $4") != std::string_view::npos);
         EXPECT_TRUE(update.sql().find("WHERE (\"i\".\"id\" > $5)") != std::string_view::npos);
         EXPECT_EQ(update.params().size(), std::size_t{5});
-        EXPECT_TRUE(testing::throws_on([&] { (void)read.query().compile(db_driver::mariadb); }));
+        EXPECT_TRUE(testing::throws_on([&] {
+            (void)read.query().compile(db_driver::mariadb);
+        }));
 
         db_query plain;
         plain.select(plain.value(11));
         auto inner = repository.query_builder("root");
         inner.inner_join(plain, "v", entity_type::column<"id">() > 1);
         const auto inner_statement = inner.get_query_and_parameters();
-        EXPECT_EQ(inner_statement.sql(),
-            "SELECT \"root\".\"id\", \"root\".\"name\" FROM \"items\" AS \"root\" INNER JOIN (SELECT $1) AS \"v\" ON (\"root\".\"id\" > $2)");
-        EXPECT_TRUE(testing::throws_on([&] { inner.join(db_join_type::left, plain, ""); }));
+        EXPECT_EQ(inner_statement.sql(), "SELECT \"root\".\"id\", \"root\".\"name\" FROM \"items\" AS \"root\" INNER JOIN (SELECT $1) AS \"v\" ON (\"root\".\"id\" > $2)");
+        EXPECT_TRUE(testing::throws_on([&] {
+            inner.join(db_join_type::left, plain, "");
+        }));
         db_query dml;
         dml.delete_from("samples").returning({dml.column("id")});
-        EXPECT_TRUE(testing::throws_on([&] { inner.left_join(dml, "bad"); }));
+        EXPECT_TRUE(testing::throws_on([&] {
+            inner.left_join(dml, "bad");
+        }));
         co_return;
     });
 }
@@ -750,16 +753,21 @@ TEST(Ruvia, db_repository_public_query_views_compose_all_writes_into_owned_query
             outer.with("upserted", upsert.query());
 
             auto unbounded = repository.delete_builder();
-            EXPECT_TRUE(testing::throws_on([&] { outer.with("unsafe", unbounded.query()); }));
-            EXPECT_TRUE(testing::throws_on([&] { (void)entity_type::column<"id">().in(remove); }));
-            EXPECT_TRUE(testing::throws_on([&] { (void)entity_type::column<"id">().not_in(remove); }));
+            EXPECT_TRUE(testing::throws_on([&] {
+                outer.with("unsafe", unbounded.query());
+            }));
+            EXPECT_TRUE(testing::throws_on([&] {
+                (void)entity_type::column<"id">().in(remove);
+            }));
+            EXPECT_TRUE(testing::throws_on([&] {
+                (void)entity_type::column<"id">().not_in(remove);
+            }));
             db_values_builder alternatives({"id"});
             alternatives.row({db_expr::value(4)});
             db_query membership;
             membership.select(membership.star()).from("items").where((entity_type::column<"id">().in(alternatives) && entity_type::column<"id">().not_in(alternatives)).expression(membership));
             const auto values_membership = membership.compile(db_driver::postgresql);
-            EXPECT_EQ(values_membership.sql(),
-                "SELECT * FROM \"items\" WHERE ((\"items\".\"id\" IN (VALUES ($1))) AND (\"items\".\"id\" NOT IN (VALUES ($2))))");
+            EXPECT_EQ(values_membership.sql(), "SELECT * FROM \"items\" WHERE ((\"items\".\"id\" IN (VALUES ($1))) AND (\"items\".\"id\" NOT IN (VALUES ($2))))");
             EXPECT_EQ(values_membership.params().size(), std::size_t{2});
             auto ids = repository.query_builder("ids");
             ids.select({"id"}).where(entity_type::column<"id">() > 4);
@@ -870,7 +878,9 @@ TEST(Ruvia, db_repository_expression_writes_own_sources_and_validate_returning) 
                 };
                 auto upsert = repository.insert_builder(entity).on_conflict(options).returning().get_many();
                 auto direct_result = repository.update(where, {{"name", x.value("replacement")}});
-                EXPECT_TRUE(testing::throws_on([&] { (void)repository.update(where, {{"missing", x.value(1)}}); }));
+                EXPECT_TRUE(testing::throws_on([&] {
+                    (void)repository.update(where, {{"missing", x.value(1)}});
+                }));
                 auto repeated = repository.update(where, {{"id", x.value(1)}, {"id", x.value(2)}});
                 auto repeated_builder = repository.update_builder();
                 repeated_builder.set({{"id", x.value(1)}, {"id", x.value(2)}}).where(where);
@@ -878,7 +888,9 @@ TEST(Ruvia, db_repository_expression_writes_own_sources_and_validate_returning) 
                 EXPECT_TRUE(repeated_sql.sql().find("SET \"id\" = 2") != std::string_view::npos);
                 EXPECT_TRUE(repeated_sql.sql().find("SET \"id\" = 1") == std::string_view::npos);
                 options.update_expressions_ = duplicate_updates;
-                EXPECT_TRUE(testing::throws_on([&] { (void)repository.upsert(entity, options); }));
+                EXPECT_TRUE(testing::throws_on([&] {
+                    (void)repository.upsert(entity, options);
+                }));
             }
         }
         co_return;
@@ -911,20 +923,36 @@ TEST(Ruvia, db_repository_rejects_unbounded_writes_and_missing_primary_key) {
         auto repository = client.db().repository<entity_type>();
         entity_type changes;
         changes.set<"name">("new");
-        EXPECT_TRUE(testing::throws_on([&] { (void)repository.update({}, changes); }));
-        EXPECT_TRUE(testing::throws_on([&] { (void)repository.delete_by({}); }));
-        EXPECT_TRUE(testing::throws_on([&] { (void)repository.remove(changes); }));
+        EXPECT_TRUE(testing::throws_on([&] {
+            (void)repository.update({}, changes);
+        }));
+        EXPECT_TRUE(testing::throws_on([&] {
+            (void)repository.delete_by({});
+        }));
+        EXPECT_TRUE(testing::throws_on([&] {
+            (void)repository.remove(changes);
+        }));
         const db_find_order missing_order[]{{"missing"}};
-        EXPECT_TRUE(testing::throws_on([&] { (void)repository.find({.order_ = missing_order}); }));
-        EXPECT_TRUE(testing::throws_on([&] { (void)repository.increment({}, "id", 1); }));
-        EXPECT_TRUE(testing::throws_on([&] { (void)repository.increment(entity_type::column<"id">() == 1, "name", 1); }));
-        EXPECT_TRUE(testing::throws_on([&] { (void)repository.decrement(entity_type::column<"id">() == 1, "missing", 1); }));
+        EXPECT_TRUE(testing::throws_on([&] {
+            (void)repository.find({.order_ = missing_order});
+        }));
+        EXPECT_TRUE(testing::throws_on([&] {
+            (void)repository.increment({}, "id", 1);
+        }));
+        EXPECT_TRUE(testing::throws_on([&] {
+            (void)repository.increment(entity_type::column<"id">() == 1, "name", 1);
+        }));
+        EXPECT_TRUE(testing::throws_on([&] {
+            (void)repository.decrement(entity_type::column<"id">() == 1, "missing", 1);
+        }));
         std::array<entity_type, 2> batch;
         batch[0].set<"id">(1);
         batch[0].set<"name">("new");
         batch[1].set<"id">(2);
         const borrowed_text conflict_paths[]{"id"};
-        EXPECT_TRUE(testing::throws_on([&] { (void)repository.upsert(batch, {.conflict_paths_ = conflict_paths}); }));
+        EXPECT_TRUE(testing::throws_on([&] {
+            (void)repository.upsert(batch, {.conflict_paths_ = conflict_paths});
+        }));
         co_return;
     });
 }
@@ -936,10 +964,16 @@ TEST(Ruvia, db_repository_rejects_writes_that_only_target_computed_columns) {
         computed_entity_type changes;
         changes.set<"name_length">(3);
         auto predicate = computed_entity_type::column<"id">() == 1;
-        EXPECT_TRUE(testing::throws_on([&] { (void)repository.update(predicate, changes); }));
-        EXPECT_TRUE(testing::throws_on([&] { (void)repository.increment(predicate, "name_length", 1); }));
+        EXPECT_TRUE(testing::throws_on([&] {
+            (void)repository.update(predicate, changes);
+        }));
+        EXPECT_TRUE(testing::throws_on([&] {
+            (void)repository.increment(predicate, "name_length", 1);
+        }));
         const borrowed_text update_columns[]{"name_length"};
-        EXPECT_TRUE(testing::throws_on([&] { (void)repository.upsert(changes, {.update_columns_ = update_columns}); }));
+        EXPECT_TRUE(testing::throws_on([&] {
+            (void)repository.upsert(changes, {.update_columns_ = update_columns});
+        }));
 
         computed_entity_type input;
         input.set<"id">(1);
@@ -975,13 +1009,15 @@ TEST(Ruvia, db_repository_conditional_upsert_owns_options_and_releases_cold_stor
             for (int i = 0; i < 12; ++i) {
                 if (config.driver_ == db_driver::postgresql) {
                     {
-                        const auto operation = repository.upsert(input, {.conflict_paths_ = conflict_paths,
-                                                                            .skip_update_if_no_values_changed_ = true,
-                                                                            .index_predicate_ = entity_type::column<"name">().is_not_null()});
+                        const auto operation = repository.upsert(input, {.conflict_paths_ = conflict_paths, .skip_update_if_no_values_changed_ = true, .index_predicate_ = entity_type::column<"name">().is_not_null()});
                     }
                 } else {
-                    EXPECT_TRUE(testing::throws_on([&] { (void)repository.upsert(input, {.any_unique_key_ = true, .skip_update_if_no_values_changed_ = true}); }));
-                    EXPECT_TRUE(testing::throws_on([&] { (void)repository.upsert(input, {.any_unique_key_ = true, .index_predicate_ = entity_type::column<"name">().is_not_null()}); }));
+                    EXPECT_TRUE(testing::throws_on([&] {
+                        (void)repository.upsert(input, {.any_unique_key_ = true, .skip_update_if_no_values_changed_ = true});
+                    }));
+                    EXPECT_TRUE(testing::throws_on([&] {
+                        (void)repository.upsert(input, {.any_unique_key_ = true, .index_predicate_ = entity_type::column<"name">().is_not_null()});
+                    }));
                 }
             }
             auto keys = client.db().repository<key_only_type>();
@@ -997,7 +1033,9 @@ TEST(Ruvia, db_repository_conditional_upsert_owns_options_and_releases_cold_stor
                 if (config.driver_ == db_driver::postgresql) {
                     const auto operation = keys.upsert(key, options);
                 } else {
-                    EXPECT_TRUE(testing::throws_on([&] { (void)keys.upsert(key, options); }));
+                    EXPECT_TRUE(testing::throws_on([&] {
+                        (void)keys.upsert(key, options);
+                    }));
                 }
             }
             co_return;
@@ -1011,13 +1049,7 @@ TEST(Ruvia, db_repository_builder_orders_entity_fields_and_owns_predicates) {
     test::with_connected_db_client(runtime.attachment_, config, [&](db_client& client) -> task<void> {
         auto repository = client.db().repository<entity_type>();
         auto builder = repository.query_builder("i");
-        builder.where(entity_type::column<"id">() >= 1)
-            .and_where(entity_type::column<"name">().is_not_null())
-            .or_where(entity_type::column<"id">() == 2)
-            .order_by("name", db_order_direction::desc, db_nulls_order::last)
-            .add_order_by("id", db_order_direction::asc, db_nulls_order::first)
-            .offset(2)
-            .limit(3);
+        builder.where(entity_type::column<"id">() >= 1).and_where(entity_type::column<"name">().is_not_null()).or_where(entity_type::column<"id">() == 2).order_by("name", db_order_direction::desc, db_nulls_order::last).add_order_by("id", db_order_direction::asc, db_nulls_order::first).offset(2).limit(3);
         builder.cache("builder-page", std::chrono::seconds(5));
         const auto statement = builder.get_query_and_parameters();
         const auto sql = statement.sql();
@@ -1028,8 +1060,12 @@ TEST(Ruvia, db_repository_builder_orders_entity_fields_and_owns_predicates) {
             EXPECT_TRUE(sql.find("LIMIT ? OFFSET ?") != std::string_view::npos);
         }
         EXPECT_EQ(statement.params().size(), std::size_t{4});
-        EXPECT_TRUE(testing::throws_on([&] { builder.order_by("unknown"); }));
-        EXPECT_TRUE(testing::throws_on([&] { builder.add_order_by("unknown"); }));
+        EXPECT_TRUE(testing::throws_on([&] {
+            builder.order_by("unknown");
+        }));
+        EXPECT_TRUE(testing::throws_on([&] {
+            builder.add_order_by("unknown");
+        }));
         // Validation precedes mutation: rejected fields leave the valid plan intact.
         const auto after_rejected_order = builder.get_query_and_parameters();
         EXPECT_EQ(after_rejected_order.sql(), sql);
@@ -1102,7 +1138,9 @@ TEST(Ruvia, db_repository_write_inputs_cover_default_sparse_nullable_and_composi
         auto removed = composite.remove(key);
         composite_entity_type partial;
         partial.set<"tenant_id">(10);
-        EXPECT_TRUE(testing::throws_on([&] { (void)composite.remove(partial); }));
+        EXPECT_TRUE(testing::throws_on([&] {
+            (void)composite.remove(partial);
+        }));
         co_return;
     });
 }
@@ -1120,13 +1158,9 @@ TEST(Ruvia, db_repository_insert_batches_merge_columns_without_reinterpreting_ro
         auto reversed = repository.insert_builder(entities[1]);
         reversed.values(entities[0]);
         db_query expected_rows;
-        expected_rows.insert_into("items", {"id", "name"})
-            .values({expected_rows.value(17), expected_rows.default_value()})
-            .values({expected_rows.default_value(), expected_rows.value("second")});
+        expected_rows.insert_into("items", {"id", "name"}).values({expected_rows.value(17), expected_rows.default_value()}).values({expected_rows.default_value(), expected_rows.value("second")});
         db_query expected_reversed;
-        expected_reversed.insert_into("items", {"name", "id"})
-            .values({expected_reversed.value("second"), expected_reversed.default_value()})
-            .values({expected_reversed.default_value(), expected_reversed.value(17)});
+        expected_reversed.insert_into("items", {"name", "id"}).values({expected_reversed.value("second"), expected_reversed.default_value()}).values({expected_reversed.default_value(), expected_reversed.value(17)});
         for (const auto driver : {db_driver::postgresql, db_driver::mariadb}) {
             const auto expected = batch.query().compile(driver, db_parameter_mode::literal);
             const auto actual = appended.query().compile(driver, db_parameter_mode::literal);
@@ -1141,13 +1175,9 @@ TEST(Ruvia, db_repository_insert_batches_merge_columns_without_reinterpreting_ro
         }
         const borrowed_text keys[]{"id"};
         const auto driver = database_config().driver_;
-        reversed.on_conflict(driver == db_driver::postgresql
-                                 ? db_upsert_options{.conflict_paths_ = keys}
-                                 : db_upsert_options{.any_unique_key_ = true});
+        reversed.on_conflict(driver == db_driver::postgresql ? db_upsert_options{.conflict_paths_ = keys} : db_upsert_options{.any_unique_key_ = true});
         const auto upsert = reversed.get_query_and_parameters();
-        EXPECT_TRUE(upsert.sql().find(driver == db_driver::postgresql
-                                          ? "\"name\" = excluded.\"name\""
-                                          : "`name` = VALUES(`name`)") != std::string_view::npos);
+        EXPECT_TRUE(upsert.sql().find(driver == db_driver::postgresql ? "\"name\" = excluded.\"name\"" : "`name` = VALUES(`name`)") != std::string_view::npos);
         co_return;
     });
 }
@@ -1156,8 +1186,7 @@ TEST(Ruvia, db_repository_numeric_arrays_preserve_floating_precision_and_range) 
     repository_runtime runtime;
     test::with_connected_db_client(runtime.attachment_, database_config(), [&](db_client& client) -> task<void> {
         auto repository = client.db().repository<numeric_array_entity>();
-        for (const auto input : {std::nextafter(1.0L, 2.0L), std::numeric_limits<long double>::max(),
-                 std::numeric_limits<long double>::lowest()}) {
+        for (const auto input : {std::nextafter(1.0L, 2.0L), std::numeric_limits<long double>::max(), std::numeric_limits<long double>::lowest()}) {
             numeric_array_entity entity;
             entity.set<"samples">(std::vector<long double>({input}));
             auto builder = repository.insert_builder(entity);
@@ -1189,8 +1218,7 @@ TEST(Ruvia, db_repository_nonfinite_array_elements_preserve_prior_insert_rows) {
         entity.set<"samples">(std::vector<long double>({2.0L}));
         auto builder = repository.insert_builder(entity);
         const auto before = builder.query().compile(db_driver::postgresql, db_parameter_mode::literal);
-        for (const auto invalid : {std::numeric_limits<long double>::infinity(),
-                 -std::numeric_limits<long double>::infinity(), std::numeric_limits<long double>::quiet_NaN()}) {
+        for (const auto invalid : {std::numeric_limits<long double>::infinity(), -std::numeric_limits<long double>::infinity(), std::numeric_limits<long double>::quiet_NaN()}) {
             entity.set<"samples">(std::vector<long double>({1.0L, invalid}));
             EXPECT_THROW(builder.values(entity), std::invalid_argument);
             const auto after = builder.query().compile(db_driver::postgresql, db_parameter_mode::literal);
@@ -1209,28 +1237,29 @@ TEST(Ruvia, db_repository_insert_defaults_and_rejected_batches_preserve_existing
         auto appended = repository.insert_builder(entities[0]);
         for (const auto driver : {db_driver::postgresql, db_driver::mariadb}) {
             const auto before = appended.query().compile(driver, db_parameter_mode::literal);
-            EXPECT_EQ(before.sql(), driver == db_driver::postgresql
-                                        ? "INSERT INTO \"items\" DEFAULT VALUES"
-                                        : "INSERT INTO `items` () VALUES ()");
-            EXPECT_TRUE(testing::throws_on([&] { appended.values(std::span<const entity_type>{}); }));
-            EXPECT_TRUE(testing::throws_on([&] { appended.values(entities[2]); }));
+            EXPECT_EQ(before.sql(), driver == db_driver::postgresql ? "INSERT INTO \"items\" DEFAULT VALUES" : "INSERT INTO `items` () VALUES ()");
+            EXPECT_TRUE(testing::throws_on([&] {
+                appended.values(std::span<const entity_type>{});
+            }));
+            EXPECT_TRUE(testing::throws_on([&] {
+                appended.values(entities[2]);
+            }));
             const auto after = appended.query().compile(driver, db_parameter_mode::literal);
             EXPECT_EQ(after.sql(), before.sql());
         }
         appended.values(entities[1]).values(entities[2]);
         auto batch = repository.insert_builder(std::span<const entity_type>(entities));
         db_query expected_rows;
-        expected_rows.insert_into("items", {"name"})
-            .values({expected_rows.default_value()})
-            .values({expected_rows.value("explicit")})
-            .values({expected_rows.default_value()});
+        expected_rows.insert_into("items", {"name"}).values({expected_rows.default_value()}).values({expected_rows.value("explicit")}).values({expected_rows.default_value()});
         for (const auto driver : {db_driver::postgresql, db_driver::mariadb}) {
             const auto expected = batch.query().compile(driver, db_parameter_mode::literal);
             const auto before = appended.query().compile(driver, db_parameter_mode::literal);
             EXPECT_EQ(before.sql(), expected.sql());
             const auto positioned = expected_rows.compile(driver, db_parameter_mode::literal);
             EXPECT_EQ(before.sql(), positioned.sql());
-            EXPECT_TRUE(testing::throws_on([&] { appended.values(std::span<const entity_type>{}); }));
+            EXPECT_TRUE(testing::throws_on([&] {
+                appended.values(std::span<const entity_type>{});
+            }));
             const auto after = appended.query().compile(driver, db_parameter_mode::literal);
             EXPECT_EQ(after.sql(), before.sql());
             const auto parameterized = appended.query().compile(driver);
@@ -1258,11 +1287,21 @@ TEST(Ruvia, db_repository_insert_sources_cannot_replace_or_append_value_rows) {
             const auto before = values.query().compile(driver, db_parameter_mode::literal);
             const auto default_before = defaults.query().compile(driver, db_parameter_mode::literal);
             const auto selected_before = selected.query().compile(driver, db_parameter_mode::literal);
-            EXPECT_TRUE(testing::throws_on([&] { values.insert_from({"id"}, source); }));
-            EXPECT_TRUE(testing::throws_on([&] { values.insert_from({"name"}, raw_source); }));
-            EXPECT_TRUE(testing::throws_on([&] { defaults.insert_from({"id"}, raw_source); }));
-            EXPECT_TRUE(testing::throws_on([&] { selected.values(entity); }));
-            EXPECT_TRUE(testing::throws_on([&] { selected.values(entity_type{}); }));
+            EXPECT_TRUE(testing::throws_on([&] {
+                values.insert_from({"id"}, source);
+            }));
+            EXPECT_TRUE(testing::throws_on([&] {
+                values.insert_from({"name"}, raw_source);
+            }));
+            EXPECT_TRUE(testing::throws_on([&] {
+                defaults.insert_from({"id"}, raw_source);
+            }));
+            EXPECT_TRUE(testing::throws_on([&] {
+                selected.values(entity);
+            }));
+            EXPECT_TRUE(testing::throws_on([&] {
+                selected.values(entity_type{});
+            }));
             const auto after = values.query().compile(driver, db_parameter_mode::literal);
             const auto default_after = defaults.query().compile(driver, db_parameter_mode::literal);
             const auto selected_after = selected.query().compile(driver, db_parameter_mode::literal);
@@ -1272,13 +1311,9 @@ TEST(Ruvia, db_repository_insert_sources_cannot_replace_or_append_value_rows) {
         }
         const borrowed_text keys[]{"id"};
         const auto driver = database_config().driver_;
-        values.on_conflict(driver == db_driver::postgresql
-                               ? db_upsert_options{.conflict_paths_ = keys}
-                               : db_upsert_options{.any_unique_key_ = true});
+        values.on_conflict(driver == db_driver::postgresql ? db_upsert_options{.conflict_paths_ = keys} : db_upsert_options{.any_unique_key_ = true});
         const auto upsert = values.get_query_and_parameters();
-        EXPECT_TRUE(upsert.sql().find(driver == db_driver::postgresql
-                                          ? "\"name\" = excluded.\"name\""
-                                          : "`name` = VALUES(`name`)") != std::string_view::npos);
+        EXPECT_TRUE(upsert.sql().find(driver == db_driver::postgresql ? "\"name\" = excluded.\"name\"" : "`name` = VALUES(`name`)") != std::string_view::npos);
         co_return;
     });
 }
@@ -1303,7 +1338,9 @@ TEST(Ruvia, db_repository_batch_set_rejects_invalid_suffix_without_publishing_pr
                     {"id", db_expr::value(99)},
                     rejected,
                 };
-                EXPECT_TRUE(testing::throws_on([&] { update.set(std::span<const db_assignment>(assignments)); }));
+                EXPECT_TRUE(testing::throws_on([&] {
+                    update.set(std::span<const db_assignment>(assignments));
+                }));
                 const auto after = update.query().compile(driver, db_parameter_mode::literal);
                 const auto bound_after = update.query().compile(driver);
                 EXPECT_EQ(after.sql(), before.sql());
@@ -1421,7 +1458,9 @@ TEST(Ruvia, db_repository_save_compiles_returning_on_every_driver_but_update_ret
                 auto one = updated.get_one();
                 (void)one;
             } else {
-                EXPECT_TRUE(testing::throws_on([&] { (void)updated.get_one(); }));
+                EXPECT_TRUE(testing::throws_on([&] {
+                    (void)updated.get_one();
+                }));
             }
             co_return;
         });
@@ -1429,29 +1468,16 @@ TEST(Ruvia, db_repository_save_compiles_returning_on_every_driver_but_update_ret
 }
 
 #ifdef RUVIA_ENABLE_POSTGRESQL
-RUVIA_DB_ENTITY(role_entity, "roles",
-    db_column<"id", std::int64_t, db_column_options{.primary_key_ = true}>,
-    db_column<"name", std::string>)
-RUVIA_DB_ENTITY(user_role_entity, "user_roles",
-    db_column<"user_id", std::int64_t, db_column_options{.primary_key_ = true}>,
-    db_column<"role_id", std::int64_t, db_column_options{.primary_key_ = true}>)
-RUVIA_DB_ENTITY(trigger_populated_entity, "devices",
-    db_column<"id", std::int64_t, db_column_options{.primary_key_ = true}>,
-    db_column<"name", std::string, db_column_options{.nullable_ = true}>,
-    db_column<"revision", std::int64_t>,
-    db_column<"protocol_address", std::string, db_column_options{.read_only_ = true}>,
-    db_column<"updated_at", std::string>)
+RUVIA_DB_ENTITY(role_entity, "roles", db_column<"id", std::int64_t, db_column_options{.primary_key_ = true}>, db_column<"name", std::string>)
+RUVIA_DB_ENTITY(user_role_entity, "user_roles", db_column<"user_id", std::int64_t, db_column_options{.primary_key_ = true}>, db_column<"role_id", std::int64_t, db_column_options{.primary_key_ = true}>)
+RUVIA_DB_ENTITY(trigger_populated_entity, "devices", db_column<"id", std::int64_t, db_column_options{.primary_key_ = true}>, db_column<"name", std::string, db_column_options{.nullable_ = true}>, db_column<"revision", std::int64_t>, db_column<"protocol_address", std::string, db_column_options{.read_only_ = true}>, db_column<"updated_at", std::string>)
 
 TEST(Ruvia, db_repository_builders_support_typed_joins_assignments_upserts_delete_using_and_read_only_columns) {
     repository_runtime runtime;
     test::with_connected_db_client(runtime.attachment_, {.driver_ = db_driver::postgresql}, [&](db_client& client) -> task<void> {
         auto roles = client.db().repository<role_entity>();
         auto query = roles.query_builder("r");
-        query.join<user_role_entity>(db_join_type::inner, "ur", user_role_entity::column<"role_id">() == role_entity::column<"id">())
-            .where(user_role_entity::column<"user_id">("ur") == 42)
-            .distinct_on({"id"})
-            .order_by(role_entity::column<"id">())
-            .add_order_by(user_role_entity::column<"role_id">("ur"), db_order_direction::desc);
+        query.join<user_role_entity>(db_join_type::inner, "ur", user_role_entity::column<"role_id">() == role_entity::column<"id">()).where(user_role_entity::column<"user_id">("ur") == 42).distinct_on({"id"}).order_by(role_entity::column<"id">()).add_order_by(user_role_entity::column<"role_id">("ur"), db_order_direction::desc);
         const auto role_sql = query.get_query_and_parameters();
         EXPECT_EQ(role_sql.sql(),
             "SELECT DISTINCT ON (\"r\".\"id\") \"r\".\"id\", \"r\".\"name\" FROM \"roles\" AS \"r\" "
@@ -1459,11 +1485,7 @@ TEST(Ruvia, db_repository_builders_support_typed_joins_assignments_upserts_delet
             "WHERE (\"ur\".\"user_id\" = $1) ORDER BY \"r\".\"id\" ASC, \"ur\".\"role_id\" DESC");
 
         auto clean_grouped = roles.query_builder("r");
-        clean_grouped.select({{"id"}, role_entity::column<"name">().coalesce("fallback", "label")})
-            .group_by({"id"})
-            .add_group_by({role_entity::column<"name">()})
-            .having(role_entity::column<"id">() > 0)
-            .and_having(query.exists());
+        clean_grouped.select({{"id"}, role_entity::column<"name">().coalesce("fallback", "label")}).group_by({"id"}).add_group_by({role_entity::column<"name">()}).having(role_entity::column<"id">() > 0).and_having(query.exists());
         const auto grouped_sql = clean_grouped.get_query_and_parameters();
         EXPECT_TRUE(grouped_sql.sql().find("GROUP BY \"r\".\"id\", \"r\".\"name\" HAVING ((\"r\".\"id\" > $2) AND EXISTS (SELECT") != std::string_view::npos);
 
@@ -1518,14 +1540,7 @@ TEST(Ruvia, db_repository_builders_support_typed_joins_assignments_upserts_delet
         EXPECT_TRUE(pipeline_sql.sql().find("\"revision\" = (\"devices\".\"revision\" + $5)") != std::string_view::npos);
 
         auto update_builder = devices.update_builder("d");
-        update_builder.set("name", "renamed")
-            .set_null("name")
-            .increment("revision", 2)
-            .set_now("updated_at")
-            .update_from<role_entity>("r")
-            .join<user_role_entity>(db_join_type::inner, "ur", user_role_entity::column<"role_id">("ur") == role_entity::column<"id">("r"))
-            .where(trigger_populated_entity::column<"id">() == user_role_entity::column<"user_id">("ur"))
-            .returning({{"id"}});
+        update_builder.set("name", "renamed").set_null("name").increment("revision", 2).set_now("updated_at").update_from<role_entity>("r").join<user_role_entity>(db_join_type::inner, "ur", user_role_entity::column<"role_id">("ur") == role_entity::column<"id">("r")).where(trigger_populated_entity::column<"id">() == user_role_entity::column<"user_id">("ur")).returning({{"id"}});
         const auto update_sql = update_builder.get_query_and_parameters();
         EXPECT_EQ(update_sql.sql(),
             "UPDATE \"devices\" AS \"d\" SET \"name\" = NULL, \"revision\" = (\"d\".\"revision\" + $1), \"updated_at\" = \"now\"() "
@@ -1533,10 +1548,7 @@ TEST(Ruvia, db_repository_builders_support_typed_joins_assignments_upserts_delet
             "WHERE (\"d\".\"id\" = \"ur\".\"user_id\") RETURNING \"d\".\"id\" AS \"id\"");
 
         auto delete_builder = devices.delete_builder("d");
-        delete_builder.delete_using<role_entity>("r")
-            .join_cte(db_join_type::inner, "expired", "e", role_entity::column<"id">("r") == role_entity::column<"id">("e"))
-            .where(trigger_populated_entity::column<"id">() == role_entity::column<"id">("r"))
-            .returning({{"id"}});
+        delete_builder.delete_using<role_entity>("r").join_cte(db_join_type::inner, "expired", "e", role_entity::column<"id">("r") == role_entity::column<"id">("e")).where(trigger_populated_entity::column<"id">() == role_entity::column<"id">("r")).returning({{"id"}});
         const auto delete_sql = delete_builder.get_query_and_parameters();
         EXPECT_EQ(delete_sql.sql(),
             "DELETE FROM \"devices\" AS \"d\" USING \"roles\" AS \"r\" INNER JOIN \"expired\" AS \"e\" ON (\"r\".\"id\" = \"e\".\"id\") "
@@ -1556,13 +1568,7 @@ TEST(Ruvia, db_repository_builders_support_typed_joins_assignments_upserts_delet
     });
 }
 
-RUVIA_DB_ENTITY(soft_entity, "articles",
-    db_column<"id", std::int64_t, db_column_options{.primary_key_ = true}>,
-    db_column<"title", std::string>,
-    db_column<"views", std::int64_t>,
-    db_column<"revision", std::int64_t, db_column_options{.version_ = true}>,
-    db_column<"updated_at", std::string, db_column_options{.update_date_ = true}>,
-    db_column<"deleted_at", std::string, db_column_options{.delete_date_ = true}>)
+RUVIA_DB_ENTITY(soft_entity, "articles", db_column<"id", std::int64_t, db_column_options{.primary_key_ = true}>, db_column<"title", std::string>, db_column<"views", std::int64_t>, db_column<"revision", std::int64_t, db_column_options{.version_ = true}>, db_column<"updated_at", std::string, db_column_options{.update_date_ = true}>, db_column<"deleted_at", std::string, db_column_options{.delete_date_ = true}>)
 
 TEST(Ruvia, db_repository_typeorm_style_api_covers_soft_delete_save_aggregates_joins_and_raw_queries) {
     repository_runtime runtime;
@@ -1570,16 +1576,7 @@ TEST(Ruvia, db_repository_typeorm_style_api_covers_soft_delete_save_aggregates_j
         auto repo = client.db().repository<soft_entity>();
 
         auto active_qb = repo.query_builder("a");
-        active_qb.select({"id", "title"})
-            .add_select("views")
-            .add_select(db_expr::count(), "total_count")
-            .where(soft_entity::column<"views">() >= 10)
-            .and_where(soft_entity::column<"title">().ilike("%ruvia%") || (soft_entity::column<"id">() == 1))
-            .group_by({"id", "title", "views"})
-            .having(soft_entity::column<"views">() > 0)
-            .or_having(soft_entity::column<"id">() == 1)
-            .limit(20)
-            .offset(5);
+        active_qb.select({"id", "title"}).add_select("views").add_select(db_expr::count(), "total_count").where(soft_entity::column<"views">() >= 10).and_where(soft_entity::column<"title">().ilike("%ruvia%") || (soft_entity::column<"id">() == 1)).group_by({"id", "title", "views"}).having(soft_entity::column<"views">() > 0).or_having(soft_entity::column<"id">() == 1).limit(20).offset(5);
         const auto active_sql = active_qb.get_query_and_parameters();
         EXPECT_TRUE(active_sql.sql().find("SELECT \"a\".\"id\" AS \"id\", \"a\".\"title\" AS \"title\", \"a\".\"views\" AS \"views\", \"count\"(*) AS \"total_count\" FROM \"articles\" AS \"a\"") == 0);
         EXPECT_TRUE(active_sql.sql().find("(\"a\".\"deleted_at\" IS NULL)") != std::string_view::npos);
@@ -1595,9 +1592,7 @@ TEST(Ruvia, db_repository_typeorm_style_api_covers_soft_delete_save_aggregates_j
 
         auto parents = client.db().repository<parent>();
         auto rel_join = parents.query_builder("p");
-        rel_join.left_join("children", "c", child::column<"id">("c") > 0)
-            .add_select(db_expr::count(child::column<"id">("c")), "child_count")
-            .group_by({"id"});
+        rel_join.left_join("children", "c", child::column<"id">("c") > 0).add_select(db_expr::count(child::column<"id">("c")), "child_count").group_by({"id"});
         const auto rel_join_sql = rel_join.get_query_and_parameters();
         EXPECT_EQ(rel_join_sql.sql(),
             "SELECT \"p\".\"id\", \"count\"(\"c\".\"id\") AS \"child_count\" FROM \"parents\" AS \"p\" "
@@ -1607,10 +1602,7 @@ TEST(Ruvia, db_repository_typeorm_style_api_covers_soft_delete_save_aggregates_j
         db_values_builder incoming({"id", "title", "views"});
         incoming.row({db_expr::value(1), db_expr::value("Hello"), db_expr::value(10)});
         auto values_select = repo.query_builder("v");
-        values_select.with_deleted()
-            .with("incoming", incoming, db_materialization::materialized)
-            .from_cte("incoming")
-            .select({"id", "title", "views"});
+        values_select.with_deleted().with("incoming", incoming, db_materialization::materialized).from_cte("incoming").select({"id", "title", "views"});
         const auto values_sql = values_select.get_query_and_parameters();
         EXPECT_TRUE(values_sql.sql().find("WITH \"incoming\" (\"id\", \"title\", \"views\") AS MATERIALIZED (VALUES ($1, $2, $3))") == 0);
 
@@ -1621,8 +1613,7 @@ TEST(Ruvia, db_repository_typeorm_style_api_covers_soft_delete_save_aggregates_j
         auto ins_ignore = repo.insert_builder();
         ins_ignore.values(item).on_conflict({.do_nothing_ = true}).returning({"id"});
         const auto ins_ignore_sql = ins_ignore.get_query_and_parameters();
-        EXPECT_EQ(ins_ignore_sql.sql(),
-            "INSERT INTO \"articles\" (\"id\", \"title\", \"views\") VALUES ($1, $2, $3) ON CONFLICT DO NOTHING RETURNING \"articles\".\"id\" AS \"id\"");
+        EXPECT_EQ(ins_ignore_sql.sql(), "INSERT INTO \"articles\" (\"id\", \"title\", \"views\") VALUES ($1, $2, $3) ON CONFLICT DO NOTHING RETURNING \"articles\".\"id\" AS \"id\"");
 
         auto ins_update = repo.insert_builder();
         const borrowed_text conflict_paths[]{"id"};
@@ -1672,8 +1663,7 @@ TEST(Ruvia, db_repository_typeorm_style_api_covers_soft_delete_save_aggregates_j
 #ifdef RUVIA_ENABLE_POSTGRESQL
 TEST(Ruvia, db_postgresql_declares_float8_for_doubles_and_leaves_other_parameters_untyped) {
     using namespace ruvia;
-    test::backend_startup_peer peer(test::backend_startup_peer::protocol::postgresql, false,
-        test::backend_startup_peer::after_startup::idle, std::vector<ruvia::test::backend_startup_peer::postgres_reply>({{.rows_ = std::vector<std::string>({std::string("raw")})}, {.rows_ = std::vector<std::string>({std::string("compiled")})}}));
+    test::backend_startup_peer peer(test::backend_startup_peer::protocol::postgresql, false, test::backend_startup_peer::after_startup::idle, std::vector<ruvia::test::backend_startup_peer::postgres_reply>({{.rows_ = std::vector<std::string>({std::string("raw")})}, {.rows_ = std::vector<std::string>({std::string("compiled")})}}));
     auto& context = test::new_test_io_context();
     auto attachment = attach_event_loop(context, {.queue_capacity_ = 8});
     db_client client(attachment.loop(), peer.config());
@@ -1697,18 +1687,15 @@ TEST(Ruvia, db_postgresql_declares_float8_for_doubles_and_leaves_other_parameter
         EXPECT_TRUE((statements[0].parameter_types_ == std::vector<std::uint32_t>({0, 701, 0, 0})));
         EXPECT_TRUE(statements[1].sql_ == "SELECT \"json_build_object\"($1::text, $2::int8) FROM \"records\"");
         EXPECT_TRUE((statements[1].parameter_types_ == std::vector<std::uint32_t>({0, 0})));
-        EXPECT_TRUE((statements[0].parameter_values_ ==
-                     std::vector<std::optional<std::string>>({std::string("5"), std::string("5"), std::string("true"), std::string("text")})));
-        EXPECT_TRUE((statements[1].parameter_values_ ==
-                     std::vector<std::optional<std::string>>({std::string("k"), std::string("5")})));
+        EXPECT_TRUE((statements[0].parameter_values_ == std::vector<std::optional<std::string>>({std::string("5"), std::string("5"), std::string("true"), std::string("text")})));
+        EXPECT_TRUE((statements[1].parameter_values_ == std::vector<std::optional<std::string>>({std::string("k"), std::string("5")})));
     }
 }
 
 TEST(Ruvia, db_postgresql_owns_lazy_query_inputs_and_preserves_text_parameter_values) {
     using namespace ruvia;
     using peer_type = test::backend_startup_peer;
-    peer_type peer(peer_type::protocol::postgresql, false, peer_type::after_startup::idle,
-        std::vector<ruvia::test::backend_startup_peer::postgres_reply>({{.rows_ = std::vector<std::string>({std::string("first")})}, {.rows_ = std::vector<std::string>({std::string("second")})}}));
+    peer_type peer(peer_type::protocol::postgresql, false, peer_type::after_startup::idle, std::vector<ruvia::test::backend_startup_peer::postgres_reply>({{.rows_ = std::vector<std::string>({std::string("first")})}, {.rows_ = std::vector<std::string>({std::string("second")})}}));
     auto& io = test::new_test_io_context();
     auto attachment = attach_event_loop(io);
     db_client client(attachment.loop(), peer.config());
@@ -1717,9 +1704,7 @@ TEST(Ruvia, db_postgresql_owns_lazy_query_inputs_and_preserves_text_parameter_va
         auto operation = [&] {
             const std::array<char, 4> unterminated{'a', 'b', 'c', '!'};
             const std::string long_value(4096, 'x');
-            const std::array params{db_value{std::string_view(unterminated.data(), 3)}, db_value{long_value},
-                db_value{std::string_view{}}, db_value{nullptr}, db_value{false}, db_value{-7},
-                db_value{std::uint64_t{18446744073709551615ULL}}, db_value{1.5}};
+            const std::array params{db_value{std::string_view(unterminated.data(), 3)}, db_value{long_value}, db_value{std::string_view{}}, db_value{nullptr}, db_value{false}, db_value{-7}, db_value{std::uint64_t{18446744073709551615ULL}}, db_value{1.5}};
             return handle.query("SELECT $1, $2, $3, $4, $5, $6, $7, $8", params);
         }();
         (void)co_await std::move(operation);
@@ -1741,9 +1726,7 @@ TEST(Ruvia, db_postgresql_owns_lazy_query_inputs_and_preserves_text_parameter_va
     const auto statements = peer.postgres_parses();
     EXPECT_EQ(statements.size(), std::size_t{2});
     if (statements.size() == 2) {
-        EXPECT_TRUE((statements[0].parameter_values_ ==
-                     std::vector<std::optional<std::string>>({std::string("abc"), std::string(4096, 'x'), std::string(""), std::nullopt,
-                         std::string("false"), std::string("-7"), std::string("18446744073709551615"), std::string("1.5")})));
+        EXPECT_TRUE((statements[0].parameter_values_ == std::vector<std::optional<std::string>>({std::string("abc"), std::string(4096, 'x'), std::string(""), std::nullopt, std::string("false"), std::string("-7"), std::string("18446744073709551615"), std::string("1.5")})));
         EXPECT_TRUE((statements[1].parameter_values_ == std::vector<std::optional<std::string>>({std::string("next"), std::string("9")})));
     }
 }
@@ -1796,8 +1779,7 @@ TEST(Ruvia, db_repository_decodes_postgresql_array_bounds_in_element_order) {
         replies.push_back({.column_ = "values", .type_ = 1007, .rows_ = {value}});
     }
     replies.push_back({.column_ = "values", .type_ = 1007, .rows_ = {"{21,22}"}});
-    test::backend_startup_peer peer(test::backend_startup_peer::protocol::postgresql, false,
-        test::backend_startup_peer::after_startup::idle, std::move(replies));
+    test::backend_startup_peer peer(test::backend_startup_peer::protocol::postgresql, false, test::backend_startup_peer::after_startup::idle, std::move(replies));
     auto& context = test::new_test_io_context();
     auto attachment = attach_event_loop(context, {.queue_capacity_ = 8});
     db_client client(attachment.loop(), peer.config());
@@ -1839,8 +1821,7 @@ TEST(Ruvia, db_repository_bounds_declared_postgresql_array_length_by_arrived_tex
     std::vector<test::backend_startup_peer::postgres_reply> replies{};
     replies.push_back({.column_ = "values", .type_ = 1007, .rows_ = {"[0:2147483646]={7}"}});
     replies.push_back({.column_ = "values", .type_ = 1007, .rows_ = {"{21,22}"}});
-    test::backend_startup_peer peer(test::backend_startup_peer::protocol::postgresql, false,
-        test::backend_startup_peer::after_startup::idle, std::move(replies));
+    test::backend_startup_peer peer(test::backend_startup_peer::protocol::postgresql, false, test::backend_startup_peer::after_startup::idle, std::move(replies));
     auto& context = test::new_test_io_context();
     auto attachment = attach_event_loop(context, {.queue_capacity_ = 8});
     db_client client(attachment.loop(), peer.config());
@@ -1865,12 +1846,7 @@ TEST(Ruvia, db_repository_bounds_declared_postgresql_array_length_by_arrived_tex
 
 namespace db_repository_lifecycle_test {
 
-RUVIA_DB_ENTITY(versioned_entity, "articles",
-    ruvia::db_column<"id", std::int64_t, ruvia::db_column_options{.primary_key_ = true}>,
-    ruvia::db_column<"views", std::int64_t>,
-    ruvia::db_column<"revision", std::int64_t, ruvia::db_column_options{.version_ = true}>,
-    ruvia::db_column<"updated_at", std::string, ruvia::db_column_options{.update_date_ = true}>,
-    ruvia::db_column<"deleted_at", std::string, ruvia::db_column_options{.delete_date_ = true}>)
+RUVIA_DB_ENTITY(versioned_entity, "articles", ruvia::db_column<"id", std::int64_t, ruvia::db_column_options{.primary_key_ = true}>, ruvia::db_column<"views", std::int64_t>, ruvia::db_column<"revision", std::int64_t, ruvia::db_column_options{.version_ = true}>, ruvia::db_column<"updated_at", std::string, ruvia::db_column_options{.update_date_ = true}>, ruvia::db_column<"deleted_at", std::string, ruvia::db_column_options{.delete_date_ = true}>)
 
 // Every repository write that changes a row moves the version token and the
 // update date, unless the caller assigns that column itself.
@@ -1917,18 +1893,14 @@ TEST(Ruvia, db_repository_write_paths_stamp_version_and_update_date) {
 
 namespace db_repository_result_column_test {
 
-RUVIA_DB_ENTITY(named_entity, "named_records",
-    ruvia::db_column<"id", std::int64_t, ruvia::db_column_options{.primary_key_ = true}>,
-    ruvia::db_column<"name", std::string>)
+RUVIA_DB_ENTITY(named_entity, "named_records", ruvia::db_column<"id", std::int64_t, ruvia::db_column_options{.primary_key_ = true}>, ruvia::db_column<"name", std::string>)
 
 // A mapped column must resolve to exactly one result column in every
 // projection mode; a repeated name is ambiguous rather than "first wins".
 TEST(Ruvia, db_repository_rejects_repeated_mapped_result_columns_without_wildcards) {
     using namespace ruvia;
     using peer_type = test::backend_startup_peer;
-    peer_type peer(peer_type::protocol::postgresql, false, peer_type::after_startup::idle,
-        std::vector<ruvia::test::backend_startup_peer::postgres_reply>({{.columns_ = std::vector<std::string>({std::string("id"), std::string("name"), std::string("name")}), .values_ = std::vector<std::vector<std::string>>({std::vector<std::string>({std::string("1"), std::string("first"), std::string("second")})})},
-            {.columns_ = std::vector<std::string>({std::string("name"), std::string("id")}), .values_ = std::vector<std::vector<std::string>>({std::vector<std::string>({std::string("third"), std::string("3")})})}}));
+    peer_type peer(peer_type::protocol::postgresql, false, peer_type::after_startup::idle, std::vector<ruvia::test::backend_startup_peer::postgres_reply>({{.columns_ = std::vector<std::string>({std::string("id"), std::string("name"), std::string("name")}), .values_ = std::vector<std::vector<std::string>>({std::vector<std::string>({std::string("1"), std::string("first"), std::string("second")})})}, {.columns_ = std::vector<std::string>({std::string("name"), std::string("id")}), .values_ = std::vector<std::vector<std::string>>({std::vector<std::string>({std::string("third"), std::string("3")})})}}));
     auto& context = test::new_test_io_context();
     auto attachment = attach_event_loop(context, {.queue_capacity_ = 8});
     db_client client(attachment.loop(), peer.config());
@@ -1956,14 +1928,10 @@ TEST(Ruvia, db_repository_rejects_repeated_mapped_result_columns_without_wildcar
 namespace {
 
 template <typename columns_type>
-concept db_find_options_accepts_select = requires(columns_type&& columns) {
-    ruvia::db_find_options{.select_ = std::forward<columns_type>(columns)};
-};
+concept db_find_options_accepts_select = requires(columns_type&& columns) { ruvia::db_find_options{.select_ = std::forward<columns_type>(columns)}; };
 
 template <typename columns_type>
-concept db_upsert_options_accepts_conflict_paths = requires(columns_type&& columns) {
-    ruvia::db_upsert_options{.conflict_paths_ = std::forward<columns_type>(columns)};
-};
+concept db_upsert_options_accepts_conflict_paths = requires(columns_type&& columns) { ruvia::db_upsert_options{.conflict_paths_ = std::forward<columns_type>(columns)}; };
 
 static_assert(db_find_options_accepts_select<const std::vector<ruvia::borrowed_text>&>);
 static_assert(!db_find_options_accepts_select<std::vector<ruvia::borrowed_text>>);
@@ -1973,14 +1941,10 @@ static_assert(!db_upsert_options_accepts_conflict_paths<std::vector<ruvia::borro
 static_assert(!db_upsert_options_accepts_conflict_paths<std::array<ruvia::borrowed_text, 1>>);
 
 template <typename columns_type>
-concept db_conflict_options_accepts_columns = requires(columns_type&& columns) {
-    ruvia::db_conflict_options{.columns_ = std::forward<columns_type>(columns)};
-};
+concept db_conflict_options_accepts_columns = requires(columns_type&& columns) { ruvia::db_conflict_options{.columns_ = std::forward<columns_type>(columns)}; };
 
 template <typename partition_type>
-concept db_window_options_accepts_partition = requires(partition_type&& partitions) {
-    ruvia::db_window_options{.partition_by_ = std::forward<partition_type>(partitions)};
-};
+concept db_window_options_accepts_partition = requires(partition_type&& partitions) { ruvia::db_window_options{.partition_by_ = std::forward<partition_type>(partitions)}; };
 
 static_assert(db_conflict_options_accepts_columns<const std::vector<ruvia::borrowed_text>&>);
 static_assert(!db_conflict_options_accepts_columns<std::vector<ruvia::borrowed_text>>);

@@ -40,7 +40,9 @@ struct tunnel_observation {
 };
 const auto observation = std::make_shared<tunnel_observation>();
 [[maybe_unused]] const bool observation_registered = [] {
-    ruvia::app().use_worker_state<std::shared_ptr<tunnel_observation>>([] { return observation; });
+    ruvia::app().use_worker_state<std::shared_ptr<tunnel_observation>>([] {
+        return observation;
+    });
     return true;
 }();
 
@@ -349,8 +351,7 @@ TEST(Ruvia, http2_client_udp_tunnel_skips_dropped_capsules_and_resets_malformed_
                         ruvia::http_response accepted;
                         accepted.status(ruvia::http_status::ok);
                         accepted.header("capsule-protocol", "?1");
-                        EXPECT_TRUE(connection.submit_connect_response_head(head->stream_id(), accepted) ==
-                                    ruvia::http2_submit_status::accepted);
+                        EXPECT_TRUE(connection.submit_connect_response_head(head->stream_id(), accepted) == ruvia::http2_submit_status::accepted);
                         std::string capsules{};
                         capsules.append("\x17\x40\xc8", 3).append(200, 'u');
                         capsules.append("\x00\x40\xc9\x03", 4).append(200, 'c');
@@ -359,8 +360,7 @@ TEST(Ruvia, http2_client_udp_tunnel_skips_dropped_capsules_and_resets_malformed_
                             "after",
                             8);
                         capsules.append("\x00\x00", 2);
-                        EXPECT_TRUE(connection.submit_data(head->stream_id(), capsules, ruvia::http2_end_stream::keep_open, 65535).status_ ==
-                                    ruvia::http2_data_submit_status::complete);
+                        EXPECT_TRUE(connection.submit_data(head->stream_id(), capsules, ruvia::http2_end_stream::keep_open, 65535).status_ == ruvia::http2_data_submit_status::complete);
                         request.emplace(std::move(*head));
                     } else if (auto* closed = event->stream_closed()) {
                         if (closed->source() == ruvia::http2_stream_close_source::peer) {
@@ -377,7 +377,9 @@ TEST(Ruvia, http2_client_udp_tunnel_skips_dropped_capsules_and_resets_malformed_
         }
         request.reset();
     };
-    asio::co_spawn(io, serve(), [&](std::exception_ptr failure) { peer_failure = failure; });
+    asio::co_spawn(io, serve(), [&](std::exception_ptr failure) {
+        peer_failure = failure;
+    });
     std::string first{};
     bool malformed_rejected = false;
     std::exception_ptr failure;
@@ -464,8 +466,7 @@ TEST(Ruvia, http2_client_half_closed_tunnel_rejects_truncated_capsule_on_end_str
                             "\x00\x0a"
                             "ab",
                             4);
-                        (void)connection.submit_data(
-                            end->stream_id(), truncated, ruvia::http2_end_stream::end_stream, 65535);
+                        (void)connection.submit_data(end->stream_id(), truncated, ruvia::http2_end_stream::end_stream, 65535);
                     } else if (auto* data = event->tunnel_data()) {
                         (void)data->take_credit();
                     }
@@ -483,10 +484,7 @@ TEST(Ruvia, http2_client_half_closed_tunnel_rejects_truncated_capsule_on_end_str
 
     auto run = [&]() -> ruvia::task<void> {
         const std::string client_url("http://127.0.0.1:" + std::string(std::to_string(peer.local_endpoint().port())));
-        ruvia::http_client client(attachment.loop(), {.base_url_ = client_url,
-                                                         .connection_limits_ = {.max_open_ = 1},
-                                                         .request_timeout_ = std::chrono::seconds(5),
-                                                         .versions_ = ruvia::http_client_versions{.http1_ = false}});
+        ruvia::http_client client(attachment.loop(), {.base_url_ = client_url, .connection_limits_ = {.max_open_ = 1}, .request_timeout_ = std::chrono::seconds(5), .versions_ = ruvia::http_client_versions{.http1_ = false}});
         auto opened = co_await client.client().udp("/.well-known/masque/udp/target.test/53/").open();
         EXPECT_TRUE(opened.tunnel() != nullptr);
         auto udp = std::move(*opened.tunnel()).udp({.max_capsule_length_ = 100});
@@ -540,10 +538,10 @@ TEST(Ruvia, http2_client_stale_tunnel_malformed_abort_does_not_reset_reconnected
                         (void)conn1.submit_connect_response_head(head->stream_id(), accepted);
                         req1.emplace(std::move(*head));
                     } else if (auto* end = ev->tunnel_end()) {
-                        (void)conn1.submit_data(
-                            end->stream_id(), std::string_view("\x00\x0a"
-                                                               "ab",
-                                                  4),
+                        (void)conn1.submit_data(end->stream_id(),
+                            std::string_view("\x00\x0a"
+                                             "ab",
+                                4),
                             ruvia::http2_end_stream::end_stream, 65535);
                         sent_truncated = true;
                     }
@@ -598,10 +596,7 @@ TEST(Ruvia, http2_client_stale_tunnel_malformed_abort_does_not_reset_reconnected
     auto run = [&]() -> ruvia::task<void> {
         const auto& worker_value = attachment.loop().worker();
         const std::string client_url("http://127.0.0.1:" + std::string(std::to_string(peer.local_endpoint().port())));
-        ruvia::http_client client(attachment.loop(), {.base_url_ = client_url,
-                                                         .connection_limits_ = {.max_open_ = 1},
-                                                         .request_timeout_ = std::chrono::seconds(5),
-                                                         .versions_ = ruvia::http_client_versions{.http1_ = false}});
+        ruvia::http_client client(attachment.loop(), {.base_url_ = client_url, .connection_limits_ = {.max_open_ = 1}, .request_timeout_ = std::chrono::seconds(5), .versions_ = ruvia::http_client_versions{.http1_ = false}});
         auto opened1 = co_await client.client().udp("/.well-known/masque/udp/target.test/53/").open();
         EXPECT_TRUE(opened1.tunnel() != nullptr);
         auto udp1 = std::move(*opened1.tunnel()).udp({.max_capsule_length_ = 100});

@@ -44,8 +44,7 @@ void validate_postgresql_double_param(double value) {
     }
 }
 
-void populate_postgresql_column_names(
-    std::vector<std::string>& column_names, PGresult& result_value, std::size_t field_count) {
+void populate_postgresql_column_names(std::vector<std::string>& column_names, PGresult& result_value, std::size_t field_count) {
     for (std::size_t field = 0; field < field_count; ++field) {
         column_names.emplace_back(PQfname(&result_value, static_cast<int>(field)));
     }
@@ -57,8 +56,8 @@ void free_postgresql_result(void* result_value) noexcept {
 
 class postgresql_result_owner final {
 public:
-    explicit postgresql_result_owner(PGresult* result_value) noexcept
-        : result_(result_value) {}
+    explicit postgresql_result_owner(PGresult* result_value) noexcept :
+        result_(result_value) {}
 
     ~postgresql_result_owner() {
         reset();
@@ -106,30 +105,25 @@ void materialize_borrowed_result(db_rows& output, PGresult& result_value) {
                 fields_value.push_back(db_result_access::null_field());
                 continue;
             }
-            fields_value.push_back(db_result_access::borrowed_field(
-                std::string_view(PQgetvalue(&result_value, row_index, field_index),
-                    static_cast<std::size_t>(PQgetlength(&result_value, row_index, field_index)))));
+            fields_value.push_back(db_result_access::borrowed_field(std::string_view(PQgetvalue(&result_value, row_index, field_index), static_cast<std::size_t>(PQgetlength(&result_value, row_index, field_index)))));
         }
         db_result_access::append_row(output, row_start, field_count);
     }
 }
 
-[[nodiscard]] db_row materialize_stream_single_row(PGresult& result_value,
-    std::vector<db_field>& fields_value, std::vector<std::string>& column_names) {
+[[nodiscard]] db_row materialize_stream_single_row(PGresult& result_value, std::vector<db_field>& fields_value, std::vector<std::string>& column_names) {
     const auto field_count = static_cast<std::size_t>(PQnfields(&result_value));
     if (column_names.empty()) {
         column_names.reserve(field_count);
         populate_postgresql_column_names(column_names, result_value, field_count);
     }
-    return db_result_access::materialize_stream_row(
-        fields_value, column_names, field_count, [&](std::size_t field) -> std::optional<std::string_view> {
-            const auto field_index = static_cast<int>(field);
-            if (PQgetisnull(&result_value, 0, field_index) != 0) {
-                return std::nullopt;
-            }
-            return std::string_view(PQgetvalue(&result_value, 0, field_index),
-                static_cast<std::size_t>(PQgetlength(&result_value, 0, field_index)));
-        });
+    return db_result_access::materialize_stream_row(fields_value, column_names, field_count, [&](std::size_t field) -> std::optional<std::string_view> {
+        const auto field_index = static_cast<int>(field);
+        if (PQgetisnull(&result_value, 0, field_index) != 0) {
+            return std::nullopt;
+        }
+        return std::string_view(PQgetvalue(&result_value, 0, field_index), static_cast<std::size_t>(PQgetlength(&result_value, 0, field_index)));
+    });
 }
 
 [[nodiscard]] bool flush_postgresql(pg_conn& connection) {
@@ -156,14 +150,11 @@ void materialize_borrowed_result(db_rows& output, PGresult& result_value) {
 // the statement deadline and the I/O timeout of its direction. Expiry fails
 // the operation like its overall deadline does: libpq has no per-I/O timeout
 // to hand the wait back to.
-[[nodiscard]] db_driver_socket_wait<postgresql_driver> wait_for_postgresql(postgresql_pool& pool,
-    std::size_t index, db_socket_readiness wanted, const operation_deadline& deadline_value) {
+[[nodiscard]] db_driver_socket_wait<postgresql_driver> wait_for_postgresql(postgresql_pool& pool, std::size_t index, db_socket_readiness wanted, const operation_deadline& deadline_value) {
     if (deadline_value.expired()) {
         throw pool.timed_out();
     }
-    return db_driver_socket_wait<postgresql_driver>{pool,
-        pool.wait_socket(index, postgresql_pipeline_io::socket(pool, index), wanted,
-            deadline_value.constrained_by(db_io_timeout(pool.config(), wanted)).deadline(), deadline_value)};
+    return db_driver_socket_wait<postgresql_driver>{pool, pool.wait_socket(index, postgresql_pipeline_io::socket(pool, index), wanted, deadline_value.constrained_by(db_io_timeout(pool.config(), wanted)).deadline(), deadline_value)};
 }
 
 // Called only after PQflush() reports pending output: waits for read or write
@@ -171,8 +162,7 @@ void materialize_borrowed_result(db_rows& output, PGresult& result_value) {
 task<void> flush_output(postgresql_pool& pool, std::size_t index, const operation_deadline& deadline_value) {
     auto& connection = *pool.slot(index).connection_;
     do {
-        co_await wait_for_postgresql(
-            pool, index, db_socket_readiness::read | db_socket_readiness::write, deadline_value);
+        co_await wait_for_postgresql(pool, index, db_socket_readiness::read | db_socket_readiness::write, deadline_value);
     } while (exchange_postgresql_io(connection, true));
 }
 
@@ -193,15 +183,13 @@ task<void> wait_until_result_ready(postgresql_pool& pool, std::size_t index, con
 // parameters. Use a pipeline Sync even though the stream owns the connection:
 // advancing past the command resets libpq's single-row mode before reuse.
 // A non-pipeline stream followed by PQenterPipelineMode leaves that mode set.
-[[nodiscard]] bool send_stream_query(
-    postgresql_pool& pool, std::size_t index, std::string_view sql, std::span<const db_value> params) {
+[[nodiscard]] bool send_stream_query(postgresql_pool& pool, std::size_t index, std::string_view sql, std::span<const db_value> params) {
     auto* connection = pool.slot(index).connection_;
     const postgresql_params encoded(params);
     if (PQenterPipelineMode(connection) == 0) {
         throw postgresql_error(*connection, "PQenterPipelineMode", db_error::code_type::io_error);
     }
-    if (PQsendQueryParams(
-            connection, sql.data(), encoded.count(), encoded.types(), encoded.values(), nullptr, nullptr, 0) == 0) {
+    if (PQsendQueryParams(connection, sql.data(), encoded.count(), encoded.types(), encoded.values(), nullptr, nullptr, 0) == 0) {
         throw postgresql_error(*connection, "PQsendQueryParams", db_error::code_type::statement_failed);
     }
     if (PQsetSingleRowMode(connection) == 0) {
@@ -218,8 +206,7 @@ task<void> wait_until_result_ready(postgresql_pool& pool, std::size_t index, con
 // idle protocol state, so it is an I/O failure and the connection is closed,
 // which also discards its cache entries. The Close ahead of Parse lets a name
 // the server may still hold (a statement forgotten as stale) parse again.
-[[nodiscard]] postgresql_flight queue_cached_statement(pg_conn& connection,
-    postgresql_statement_cache& statements, std::string_view sql, const postgresql_params& encoded) {
+[[nodiscard]] postgresql_flight queue_cached_statement(pg_conn& connection, postgresql_statement_cache& statements, std::string_view sql, const postgresql_params& encoded) {
     const auto lookup = statements.find(sql, encoded.type_span(), true, &make_postgresql_statement_name);
     const auto count = encoded.count();
     const auto* values = encoded.values();
@@ -277,8 +264,7 @@ task<void> wait_until_result_ready(postgresql_pool& pool, std::size_t index, con
 [[nodiscard]] bool postgresql_stale_before_execution(const PGresult& result_value) noexcept {
     const auto state = postgresql_error_field(result_value, PG_DIAG_SQLSTATE);
     const auto routine = postgresql_error_field(result_value, PG_DIAG_SOURCE_FUNCTION);
-    return (state == "26000" && routine == "FetchPreparedStatement") ||
-           (state == "0A000" && routine == "RevalidateCachedQuery");
+    return (state == "26000" && routine == "FetchPreparedStatement") || (state == "0A000" && routine == "RevalidateCachedQuery");
 }
 
 [[nodiscard]] db_error postgresql_protocol_failure(std::string_view message) {
@@ -291,8 +277,7 @@ task<void> wait_until_result_ready(postgresql_pool& pool, std::size_t index, con
 // boundary (transport loss, COPY, an unexpected result) is thrown, and the
 // connection must close; an error the server reported for the flight is
 // recorded and the rest of the flight read up to its Sync.
-[[nodiscard]] bool consume_flight_result(pg_conn& connection, const postgresql_flight& flight,
-    postgresql_flight_results& results, PGresult* next_result, bool returns_rows, db_rows* output) {
+[[nodiscard]] bool consume_flight_result(pg_conn& connection, const postgresql_flight& flight, postgresql_flight_results& results, PGresult* next_result, bool returns_rows, db_rows* output) {
     const std::string_view operation = returns_rows ? "PostgreSQL query" : "PostgreSQL execute";
     postgresql_result_owner result_value(next_result);
     if (result_value.get() == nullptr) {
@@ -319,8 +304,7 @@ task<void> wait_until_result_ready(postgresql_pool& pool, std::size_t index, con
             results.statement_failed_ = results.command_ == flight.setup_commands_;
             results.stale_ = postgresql_stale_statement(*result_value);
             results.stale_before_execution_ = postgresql_stale_before_execution(*result_value);
-            results.failure_.emplace(
-                postgresql_error(connection, operation, db_error::code_type::statement_failed, result_value.get()));
+            results.failure_.emplace(postgresql_error(connection, operation, db_error::code_type::statement_failed, result_value.get()));
         }
         return false;
     }
@@ -331,8 +315,7 @@ task<void> wait_until_result_ready(postgresql_pool& pool, std::size_t index, con
         results.parsed_ = results.parsed_ || (flight.parses_ && results.command_ + 1 == flight.setup_commands_);
         return false;
     }
-    if (results.command_ != flight.setup_commands_ ||
-        (status != PGRES_TUPLES_OK && status != PGRES_COMMAND_OK && status != PGRES_EMPTY_QUERY)) {
+    if (results.command_ != flight.setup_commands_ || (status != PGRES_TUPLES_OK && status != PGRES_COMMAND_OK && status != PGRES_EMPTY_QUERY)) {
         throw postgresql_protocol_failure("PostgreSQL statement returned an unsupported result status");
     }
     if (status != PGRES_TUPLES_OK) {
@@ -372,9 +355,7 @@ enum class postgresql_flight_end : std::uint8_t {
 // it again. A stale statement that failed before running, outside a
 // transaction block, runs once more. The whole statement is read before a row
 // set is refused, so a shape mismatch leaves the connection idle.
-[[nodiscard]] postgresql_flight_end finish_flight(postgresql_statement_cache& statements,
-    const postgresql_flight& flight, const postgresql_flight_results& results, bool returns_rows, bool may_retry,
-    bool outside_transaction) noexcept {
+[[nodiscard]] postgresql_flight_end finish_flight(postgresql_statement_cache& statements, const postgresql_flight& flight, const postgresql_flight_results& results, bool returns_rows, bool may_retry, bool outside_transaction) noexcept {
     if (flight.parses_ && !results.parsed_) {
         (void)statements.forget(*flight.statement_, false);
     }
@@ -419,8 +400,7 @@ enum class postgresql_flight_end : std::uint8_t {
 // whole flight is read, so it is idle again whenever the statement itself
 // failed.
 template <typename result_type>
-task<result_type> run_cached_statement(postgresql_pool& pool, std::size_t index, std::string_view sql,
-    std::span<const db_value> params, const operation_deadline& deadline_value) {
+task<result_type> run_cached_statement(postgresql_pool& pool, std::size_t index, std::string_view sql, std::span<const db_value> params, const operation_deadline& deadline_value) {
     constexpr bool returns_rows = std::is_same_v<result_type, db_rows>;
     const postgresql_params encoded(params);
     auto* connection = pool.slot(index).connection_;
@@ -441,16 +421,14 @@ task<result_type> run_cached_statement(postgresql_pool& pool, std::size_t index,
                 co_await wait_for_postgresql(pool, index, db_socket_readiness::read, deadline_value);
                 (void)exchange_postgresql_io(*connection, false);
             }
-            if (consume_flight_result(
-                    *connection, flight, results, PQgetResult(connection), returns_rows, &output)) {
+            if (consume_flight_result(*connection, flight, results, PQgetResult(connection), returns_rows, &output)) {
                 break;
             }
         }
         if (PQexitPipelineMode(connection) == 0) {
             throw postgresql_error(*connection, "PQexitPipelineMode", db_error::code_type::protocol_error);
         }
-        const auto end = finish_flight(
-            statements, flight, results, returns_rows, may_retry, PQtransactionStatus(connection) == PQTRANS_IDLE);
+        const auto end = finish_flight(statements, flight, results, returns_rows, may_retry, PQtransactionStatus(connection) == PQTRANS_IDLE);
         if (end == postgresql_flight_end::retry) {
             continue;
         }
@@ -469,15 +447,12 @@ task<result_type> run_cached_statement(postgresql_pool& pool, std::size_t index,
 
 // The digest covers the SQL, a NUL that SQL never contains, and every type
 // OID as four big-endian bytes, so no two keys share an encoding.
-postgresql_statement_name make_postgresql_statement_name(
-    std::string_view sql, std::span<const unsigned int> types) {
+postgresql_statement_name make_postgresql_statement_name(std::string_view sql, std::span<const unsigned int> types) {
     db_sha256 key;
     key.update(sql);
     key.update(std::string_view("\0", 1));
     for (const auto type : types) {
-        const std::array<char, 4> encoded{static_cast<char>((type >> 24) & 0xffU),
-            static_cast<char>((type >> 16) & 0xffU), static_cast<char>((type >> 8) & 0xffU),
-            static_cast<char>(type & 0xffU)};
+        const std::array<char, 4> encoded{static_cast<char>((type >> 24) & 0xffU), static_cast<char>((type >> 16) & 0xffU), static_cast<char>((type >> 8) & 0xffU), static_cast<char>(type & 0xffU)};
         key.update({encoded.data(), encoded.size()});
     }
     const auto digest = key.finish();
@@ -489,24 +464,17 @@ postgresql_statement_name make_postgresql_statement_name(
     return name;
 }
 
-db_error postgresql_error(const pg_conn& connection, std::string_view operation,
-    db_error::code_type error_code, const pg_result* result_value) {
+db_error postgresql_error(const pg_conn& connection, std::string_view operation, db_error::code_type error_code, const pg_result* result_value) {
     // libpq marks the connection bad when the transport fails, and reports
     // that failure as a fatal result; it is an I/O failure, not a statement
     // the server rejected.
     if (error_code == db_error::code_type::statement_failed && PQstatus(&connection) == CONNECTION_BAD) {
         error_code = db_error::code_type::io_error;
     }
-    const char* state_value = result_value == nullptr
-                                  ? nullptr
-                                  : PQresultErrorField(const_cast<PGresult*>(result_value), PG_DIAG_SQLSTATE);
-    const char* constraint = result_value == nullptr ? nullptr
-                                                     : PQresultErrorField(const_cast<PGresult*>(result_value),
-                                                           PG_DIAG_CONSTRAINT_NAME);
-    const std::string_view state_view =
-        (state_value != nullptr && state_value[0] != '\0') ? std::string_view(state_value) : std::string_view{};
-    const char* message = result_value == nullptr ? PQerrorMessage(const_cast<PGconn*>(&connection))
-                                                  : PQresultErrorMessage(const_cast<PGresult*>(result_value));
+    const char* state_value = result_value == nullptr ? nullptr : PQresultErrorField(const_cast<PGresult*>(result_value), PG_DIAG_SQLSTATE);
+    const char* constraint = result_value == nullptr ? nullptr : PQresultErrorField(const_cast<PGresult*>(result_value), PG_DIAG_CONSTRAINT_NAME);
+    const std::string_view state_view = (state_value != nullptr && state_value[0] != '\0') ? std::string_view(state_value) : std::string_view{};
+    const char* message = result_value == nullptr ? PQerrorMessage(const_cast<PGconn*>(&connection)) : PQresultErrorMessage(const_cast<PGresult*>(result_value));
     std::string_view message_view{};
     if (message != nullptr && message[0] != '\0') {
         while (*message == ' ' || *message == '\r' || *message == '\n') {
@@ -518,8 +486,7 @@ db_error postgresql_error(const pg_conn& connection, std::string_view operation,
         }
     }
     std::string error;
-    error.reserve(operation.size() + 7U + (state_view.empty() ? 0U : 12U + state_view.size()) +
-                  (message_view.empty() ? 0U : 2U + message_view.size()));
+    error.reserve(operation.size() + 7U + (state_view.empty() ? 0U : 12U + state_view.size()) + (message_view.empty() ? 0U : 2U + message_view.size()));
     error.append(operation);
     error.append(" failed");
     if (!state_view.empty()) {
@@ -531,15 +498,14 @@ db_error postgresql_error(const pg_conn& connection, std::string_view operation,
         error.append(": ");
         error.append(message_view);
     }
-    return db_error(error_code, db_driver::postgresql, error, std::nullopt, state_view,
-        constraint == nullptr ? std::string_view{} : std::string_view(constraint));
+    return db_error(error_code, db_driver::postgresql, error, std::nullopt, state_view, constraint == nullptr ? std::string_view{} : std::string_view(constraint));
 }
 
-postgresql_params::postgresql_params(std::span<const db_value> params)
-    : count_(params.size()),
-      heap_encoded_(),
-      heap_values_(),
-      heap_types_() {
+postgresql_params::postgresql_params(std::span<const db_value> params) :
+    count_(params.size()),
+    heap_encoded_(),
+    heap_values_(),
+    heap_types_() {
     // libpq counts parameters in an int.
     if (!std::in_range<int>(params.size())) {
         throw std::invalid_argument("too many PostgreSQL query parameters");
@@ -553,8 +519,7 @@ postgresql_params::postgresql_params(std::span<const db_value> params)
         const auto type = param.type();
         if (type == db_value_type::string) {
             validate_postgresql_string_param(db_value_access::owned_text(param));
-        } else if (type == db_value_type::signed_value || type == db_value_type::unsigned_value ||
-                   type == db_value_type::double_value) {
+        } else if (type == db_value_type::signed_value || type == db_value_type::unsigned_value || type == db_value_type::double_value) {
             if (type == db_value_type::double_value) {
                 validate_postgresql_double_param(param.double_value());
             }
@@ -588,9 +553,7 @@ postgresql_params::postgresql_params(std::span<const db_value> params)
             case db_value_type::signed_value:
             case db_value_type::unsigned_value:
             case db_value_type::double_value: {
-                char* const slot = inline_numerics
-                                       ? inline_encoded_.data() + numeric_index * numeric_slot_size
-                                       : heap_encoded_[numeric_index].data();
+                char* const slot = inline_numerics ? inline_encoded_.data() + numeric_index * numeric_slot_size : heap_encoded_[numeric_index].data();
                 ++numeric_index;
                 std::to_chars_result formatted{};
                 if (type == db_value_type::signed_value) {
@@ -632,16 +595,14 @@ std::uint64_t postgresql_affected_rows(const pg_result& result_value) noexcept {
     return parsed_value.ec == std::errc{} && parsed_value.ptr == end ? value : 0;
 }
 
-postgresql_pipeline_io::statement_type postgresql_pipeline_io::prepare(
-    std::string_view sql, std::span<const db_value> params) {
+postgresql_pipeline_io::statement_type postgresql_pipeline_io::prepare(std::string_view sql, std::span<const db_value> params) {
     return {sql, params};
 }
 
 db_slot_socket::native_socket_type postgresql_pipeline_io::socket(pool_type& pool, std::size_t slot) {
     const auto native = PQsocket(pool.slot(slot).connection_);
     if (native < 0) {
-        throw db_error(
-            db_error::code_type::io_error, db_driver::postgresql, "PostgreSQL connection socket is unavailable");
+        throw db_error(db_error::code_type::io_error, db_driver::postgresql, "PostgreSQL connection socket is unavailable");
     }
     return static_cast<db_slot_socket::native_socket_type>(native);
 }
@@ -660,8 +621,7 @@ void postgresql_pipeline_io::open(state_type& state, std::size_t slot) {
 // flight and fails the connection. The waiting reader looks again when output
 // waits to be sent, or when sending read results into libpq (a full socket
 // makes libpq read while it writes).
-bool postgresql_pipeline_io::queue(
-    state_type& state, std::size_t index, member_type&, statement_type& statement, flight_type& flight) {
+bool postgresql_pipeline_io::queue(state_type& state, std::size_t index, member_type&, statement_type& statement, flight_type& flight) {
     auto& slot = state.pool().slot(index);
     auto* connection = slot.connection_;
     bool flush_pending = false;
@@ -689,8 +649,7 @@ bool postgresql_pipeline_io::advance(state_type& state, std::size_t index, membe
     auto& record = reading.records_[reading.head_];
     auto* member = record.member_;
     auto& results = reading.io_.head_results_;
-    if (!consume_flight_result(*connection, record.flight_, results, PQgetResult(connection), record.returns_rows_,
-            member == nullptr ? nullptr : member->rows_)) {
+    if (!consume_flight_result(*connection, record.flight_, results, PQgetResult(connection), record.returns_rows_, member == nullptr ? nullptr : member->rows_)) {
         return true;
     }
     // libpq reports a transaction status only once nothing follows in its
@@ -698,8 +657,7 @@ bool postgresql_pipeline_io::advance(state_type& state, std::size_t index, membe
     // runs inside a transaction block, so a status libpq cannot tell yet is
     // outside one.
     const auto status = PQtransactionStatus(connection);
-    const auto end = finish_flight(slot.session_.statements_, record.flight_, results, record.returns_rows_,
-        member != nullptr && member->may_retry_, status == PQTRANS_IDLE || status == PQTRANS_ACTIVE);
+    const auto end = finish_flight(slot.session_.statements_, record.flight_, results, record.returns_rows_, member != nullptr && member->may_retry_, status == PQTRANS_IDLE || status == PQTRANS_ACTIVE);
     db_pipeline_outcome outcome;
     if (end == postgresql_flight_end::retry) {
         outcome.retry_ = true;
@@ -714,8 +672,7 @@ bool postgresql_pipeline_io::advance(state_type& state, std::size_t index, membe
 }
 
 db_socket_readiness postgresql_pipeline_io::wanted(pool_type& pool, std::size_t slot) noexcept {
-    return pool.slot(slot).session_.pipeline_.io_.flush_pending_ ? db_socket_readiness::read | db_socket_readiness::write
-                                                                 : db_socket_readiness::read;
+    return pool.slot(slot).session_.pipeline_.io_.flush_pending_ ? db_socket_readiness::read | db_socket_readiness::write : db_socket_readiness::read;
 }
 
 void postgresql_pipeline_io::exchange(state_type& state, std::size_t index, db_socket_readiness) {
@@ -750,23 +707,13 @@ task<void> postgresql_driver::connect(pool_type& pool, std::size_t index, const 
     // SQL_ASCII). libpq accepts client_encoding as a connection keyword.
     const bool use_tls = config.tls_.mode_ == client_tls_mode::verify_identity;
     const auto& identity = config.tls_.identity_;
-    const char* const root_certificate =
-        !use_tls ? "" : (config.tls_.ca_file_.has_value() ? tls_file_name_c_str(*config.tls_.ca_file_) : "system");
+    const char* const root_certificate = !use_tls ? "" : (config.tls_.ca_file_.has_value() ? tls_file_name_c_str(*config.tls_.ca_file_) : "system");
     {
-        const auto resolved_hosts = make_postgresql_resolved_host_list(
-            tls_host, co_await pool.resolve_host(index, deadline_value));
+        const auto resolved_hosts = make_postgresql_resolved_host_list(tls_host, co_await pool.resolve_host(index, deadline_value));
         const auto port = format_db_port(config.port_);
-        const char* minimum_tls = config.tls_.minimum_version_ == tls_version::tls_1_3 ? "TLSv1.3" : config.tls_.minimum_version_ == tls_version::tls_1_2 ? "TLSv1.2"
-                                                                                                                                                          : "TLSv1.1";
-        const std::array<const char*, 14> keywords{"host", "hostaddr", "port", "user", "password", "dbname",
-            "client_encoding", "sslmode", "sslrootcert", "sslcert", "sslkey", "gssencmode", "ssl_min_protocol_version",
-            nullptr};
-        const std::array<const char*, 14> values{resolved_hosts.hosts_.c_str(), resolved_hosts.addresses_.c_str(),
-            port.data(), config.username_.c_str(), config.password_.c_str(), config.database_.c_str(), "UTF8",
-            use_tls ? "verify-full" : "disable", root_certificate,
-            identity.has_value() ? tls_file_name_c_str(identity->certificate_chain_file_) : "",
-            identity.has_value() ? tls_file_name_c_str(identity->private_key_file_) : "", "disable", minimum_tls,
-            nullptr};
+        const char* minimum_tls = config.tls_.minimum_version_ == tls_version::tls_1_3 ? "TLSv1.3" : (config.tls_.minimum_version_ == tls_version::tls_1_2 ? "TLSv1.2" : "TLSv1.1");
+        const std::array<const char*, 14> keywords{"host", "hostaddr", "port", "user", "password", "dbname", "client_encoding", "sslmode", "sslrootcert", "sslcert", "sslkey", "gssencmode", "ssl_min_protocol_version", nullptr};
+        const std::array<const char*, 14> values{resolved_hosts.hosts_.c_str(), resolved_hosts.addresses_.c_str(), port.data(), config.username_.c_str(), config.password_.c_str(), config.database_.c_str(), "UTF8", use_tls ? "verify-full" : "disable", root_certificate, identity.has_value() ? tls_file_name_c_str(identity->certificate_chain_file_) : "", identity.has_value() ? tls_file_name_c_str(identity->private_key_file_) : "", "disable", minimum_tls, nullptr};
         // PQconnectStartParams copies the parameter strings before returning.
         native_tls_context_scope tls_scope(use_tls ? tls_host : std::string_view{}, config.tls_.max_outgoing_records_);
         slot.connection_ = PQconnectStartParams(keywords.data(), values.data(), 0);
@@ -786,9 +733,7 @@ task<void> postgresql_driver::connect(pool_type& pool, std::size_t index, const 
     auto status = PGRES_POLLING_WRITING;
     while (status == PGRES_POLLING_READING || status == PGRES_POLLING_WRITING || status == PGRES_POLLING_ACTIVE) {
         if (status != PGRES_POLLING_ACTIVE) {
-            co_await wait_for_postgresql(pool, index,
-                status == PGRES_POLLING_READING ? db_socket_readiness::read : db_socket_readiness::write,
-                deadline_value);
+            co_await wait_for_postgresql(pool, index, status == PGRES_POLLING_READING ? db_socket_readiness::read : db_socket_readiness::write, deadline_value);
         }
         native_tls_context_scope tls_scope(use_tls ? tls_host : std::string_view{}, config.tls_.max_outgoing_records_);
         status = PQconnectPoll(slot.connection_);
@@ -834,20 +779,17 @@ bool postgresql_driver::idle_connection_alive(connection_type& connection) noexc
     return status == db_idle_socket_status::quiet;
 }
 
-task<db_rows> postgresql_driver::query(pool_type& pool, std::size_t index, std::string_view sql,
-    std::span<const db_value> params, const operation_deadline& deadline_value) {
+task<db_rows> postgresql_driver::query(pool_type& pool, std::size_t index, std::string_view sql, std::span<const db_value> params, const operation_deadline& deadline_value) {
     return run_cached_statement<db_rows>(pool, index, sql, params, deadline_value);
 }
 
-task<db_exec_result> postgresql_driver::execute(pool_type& pool, std::size_t index, std::string_view sql,
-    std::span<const db_value> params, const operation_deadline& deadline_value) {
+task<db_exec_result> postgresql_driver::execute(pool_type& pool, std::size_t index, std::string_view sql, std::span<const db_value> params, const operation_deadline& deadline_value) {
     return run_cached_statement<db_exec_result>(pool, index, sql, params, deadline_value);
 }
 
 // Retain the first libpq result so column metadata is available even for an
 // empty row set, without consuming or copying the first row.
-task<db_stream_start> postgresql_driver::start_stream(pool_type& pool, std::size_t index, std::string_view sql,
-    std::span<const db_value> params, const operation_deadline& deadline_value) {
+task<db_stream_start> postgresql_driver::start_stream(pool_type& pool, std::size_t index, std::string_view sql, std::span<const db_value> params, const operation_deadline& deadline_value) {
     if (send_stream_query(pool, index, sql, params)) {
         co_await flush_output(pool, index, deadline_value);
     }
@@ -867,8 +809,7 @@ task<db_stream_start> postgresql_driver::start_stream(pool_type& pool, std::size
     co_return result;
 }
 
-task<db_stream_step> postgresql_driver::read_stream_row(pool_type& pool, std::size_t index, void*& pending_result,
-    std::vector<db_field>& fields, std::vector<std::string>& column_names, const operation_deadline& deadline_value) {
+task<db_stream_step> postgresql_driver::read_stream_row(pool_type& pool, std::size_t index, void*& pending_result, std::vector<db_field>& fields, std::vector<std::string>& column_names, const operation_deadline& deadline_value) {
     auto* connection = pool.slot(index).connection_;
     postgresql_result_owner result_value(static_cast<PGresult*>(std::exchange(pending_result, nullptr)));
     if (result_value.get() == nullptr) {
@@ -883,8 +824,7 @@ task<db_stream_step> postgresql_driver::read_stream_row(pool_type& pool, std::si
         co_return materialize_stream_single_row(*result_value, fields, column_names);
     }
     if (status != PGRES_TUPLES_OK && status != PGRES_COMMAND_OK && status != PGRES_EMPTY_QUERY) {
-        throw postgresql_error(
-            *connection, "PostgreSQL stream", db_error::code_type::statement_failed, result_value.get());
+        throw postgresql_error(*connection, "PostgreSQL stream", db_error::code_type::statement_failed, result_value.get());
     }
     result_value.reset();
     co_await wait_until_result_ready(pool, index, deadline_value);

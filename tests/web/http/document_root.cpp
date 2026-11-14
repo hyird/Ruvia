@@ -74,8 +74,7 @@ void populate_document_root(const fs::path& dir) {
 }
 
 // Sends one request on a fresh connection and returns the complete response.
-[[nodiscard]] std::string exchange(asio::io_context& io, const asio::ip::tcp::endpoint& endpoint,
-    std::string_view target, std::string_view method = "GET") {
+[[nodiscard]] std::string exchange(asio::io_context& io, const asio::ip::tcp::endpoint& endpoint, std::string_view target, std::string_view method = "GET") {
     std::string request(method);
     request.append(" ");
     request.append(target);
@@ -95,8 +94,7 @@ TEST(Ruvia, document_root_never_serves_targets_rejected_by_routing) {
     populate_document_root(dir);
     ruvia::document_root_config config;
     config.root_ = dir;
-    config.static_options_.file_types_ =
-        ruvia::static_file_type_policy{.kind_ = ruvia::static_file_type_policy::kind::all};
+    config.static_options_.file_types_ = ruvia::static_file_type_policy{.kind_ = ruvia::static_file_type_policy::kind::all};
     ruvia::app().document_root(std::move(config));
 
     auto& io = ruvia::test::new_test_io_context();
@@ -110,16 +108,13 @@ TEST(Ruvia, document_root_never_serves_targets_rejected_by_routing) {
     // The guarded route owns its prefix, under every equivalent spelling
     // (RFC 3986 6.2.2.2): an encoded unreserved character reaches the same
     // route and its guard.
-    for (const std::string_view target : {"/private/file.txt", "/private/file.txt/", "/admin/panel/secret.txt",
-             "/%70rivate/file.txt", "/admin/%70anel/secret.txt"}) {
+    for (const std::string_view target : {"/private/file.txt", "/private/file.txt/", "/admin/panel/secret.txt", "/%70rivate/file.txt", "/admin/%70anel/secret.txt"}) {
         EXPECT_TRUE(has_status(exchange(io, server.endpoint(), target), "401"));
     }
 
     // Dot-segment and empty-segment ("//", trailing '/') spellings of guarded
     // routes must not fall back to the document root.
-    for (const std::string_view target :
-        {"/private/./file.txt", "/private/%2E/file.txt", "/private/%2e/file.txt", "/private/x/../file.txt",
-            "//private/file.txt", "/admin//panel/secret.txt", "//public.txt", "/public.txt/"}) {
+    for (const std::string_view target : {"/private/./file.txt", "/private/%2E/file.txt", "/private/%2e/file.txt", "/private/x/../file.txt", "//private/file.txt", "/admin//panel/secret.txt", "//public.txt", "/public.txt/"}) {
         const auto response = exchange(io, server.endpoint(), target);
         EXPECT_TRUE(has_status(response, "404"));
         EXPECT_TRUE(response.find("secret") == std::string::npos);

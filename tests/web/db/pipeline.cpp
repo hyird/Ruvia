@@ -37,8 +37,7 @@ TEST(Ruvia, db_postgresql_exhausted_stream_preserves_buffered_results_and_connec
         std::vector<peer_type::postgres_reply> replies{};
         // The buffered SQL is first uncached, then prepared, then a cache hit.
         for (int iteration = 0; iteration < 3; ++iteration) {
-            replies.push_back({.rows_ = empty ? std::vector<std::string>() : std::vector<std::string>({std::string("stream-a"), std::string("stream-b")}),
-                .command_ = empty ? "SELECT 0" : "SELECT 2"});
+            replies.push_back({.rows_ = empty ? std::vector<std::string>() : std::vector<std::string>({std::string("stream-a"), std::string("stream-b")}), .command_ = empty ? "SELECT 0" : "SELECT 2"});
             replies.push_back({.rows_ = {"buffered-a", "buffered-b"}, .command_ = "SELECT 2"});
         }
         peer_type peer(peer_type::protocol::postgresql, false, peer_type::after_startup::idle, std::move(replies));
@@ -81,8 +80,7 @@ TEST(Ruvia, db_postgresql_rejected_stream_transaction_does_not_reach_the_next_ow
     using pipeline_test::peer_type;
     constexpr std::string_view cached_sql = "SELECT current_setting('transaction_read_only') AS v WHERE $1::integer > 0";
     for (const bool next_is_transaction : {false, true}) {
-        std::vector<peer_type::postgres_reply> original({{.rows_ = std::vector<std::string>({std::string("off")})}, {.rows_ = std::vector<std::string>({std::string("off")})},
-            {.column_ = std::string(""), .command_ = std::string("BEGIN"), .status_ = 'T'}});
+        std::vector<peer_type::postgres_reply> original({{.rows_ = std::vector<std::string>({std::string("off")})}, {.rows_ = std::vector<std::string>({std::string("off")})}, {.column_ = std::string(""), .command_ = std::string("BEGIN"), .status_ = 'T'}});
         std::vector<peer_type::postgres_reply> replacement{};
         if (next_is_transaction) {
             const peer_type::postgres_reply begin{.column_ = "", .command_ = "BEGIN", .status_ = 'T'};
@@ -148,10 +146,7 @@ TEST(Ruvia, db_postgresql_rejected_idle_stream_preserves_cached_results_and_conn
     using namespace ruvia;
     using pipeline_test::peer_type;
     constexpr std::string_view cached_sql = "SELECT v FROM records WHERE id > $1";
-    peer_type peer(peer_type::protocol::postgresql, false, peer_type::after_startup::idle,
-        std::vector<ruvia::test::backend_startup_peer::postgres_reply>({{.rows_ = std::vector<std::string>({std::string("before")})}, {.rows_ = std::vector<std::string>({std::string("prepared")})},
-            {.column_ = std::string(""), .command_ = std::string("UPDATE 1")},
-            {.rows_ = std::vector<std::string>({std::string("after-a"), std::string("after-b")}), .command_ = std::string("SELECT 2")}}));
+    peer_type peer(peer_type::protocol::postgresql, false, peer_type::after_startup::idle, std::vector<ruvia::test::backend_startup_peer::postgres_reply>({{.rows_ = std::vector<std::string>({std::string("before")})}, {.rows_ = std::vector<std::string>({std::string("prepared")})}, {.column_ = std::string(""), .command_ = std::string("UPDATE 1")}, {.rows_ = std::vector<std::string>({std::string("after-a"), std::string("after-b")}), .command_ = std::string("SELECT 2")}}));
     auto& context = test::new_test_io_context();
     auto attachment = attach_event_loop(context, {.queue_capacity_ = 8});
     auto config = peer.config();
@@ -180,18 +175,13 @@ TEST(Ruvia, db_postgresql_rejected_idle_stream_preserves_cached_results_and_conn
         }
     });
     EXPECT_EQ(peer.startups(), std::size_t{1});
-    EXPECT_TRUE((pipeline_test::parsed_sql(peer) ==
-                 std::vector<std::string>({std::string(cached_sql), std::string(cached_sql), std::string("UPDATE records SET v = 'changed'")})));
+    EXPECT_TRUE((pipeline_test::parsed_sql(peer) == std::vector<std::string>({std::string(cached_sql), std::string(cached_sql), std::string("UPDATE records SET v = 'changed'")})));
 }
 
 TEST(Ruvia, db_postgresql_exhausted_stream_allows_concurrent_pipeline_reuse) {
     using namespace ruvia;
     using pipeline_test::peer_type;
-    peer_type peer(peer_type::protocol::postgresql, false, peer_type::after_startup::idle,
-        std::vector<ruvia::test::backend_startup_peer::postgres_reply>({{.rows_ = std::vector<std::string>({std::string("stream")})},
-            {.rows_ = std::vector<std::string>({std::string("first")}), .batch_ = 3},
-            {.rows_ = std::vector<std::string>({std::string("second")})},
-            {.column_ = std::string(""), .command_ = std::string("UPDATE 2")}}));
+    peer_type peer(peer_type::protocol::postgresql, false, peer_type::after_startup::idle, std::vector<ruvia::test::backend_startup_peer::postgres_reply>({{.rows_ = std::vector<std::string>({std::string("stream")})}, {.rows_ = std::vector<std::string>({std::string("first")}), .batch_ = 3}, {.rows_ = std::vector<std::string>({std::string("second")})}, {.column_ = std::string(""), .command_ = std::string("UPDATE 2")}}));
     auto& context = test::new_test_io_context();
     auto attachment = attach_event_loop(context, {.queue_capacity_ = 8});
     auto config = peer.config();
@@ -225,9 +215,7 @@ TEST(Ruvia, db_postgresql_exhausted_stream_allows_concurrent_pipeline_reuse) {
 TEST(Ruvia, db_postgresql_concurrent_statements_are_pipelined_on_one_connection) {
     using namespace ruvia;
     using pipeline_test::peer_type;
-    peer_type peer(peer_type::protocol::postgresql, false, peer_type::after_startup::idle,
-        std::vector<ruvia::test::backend_startup_peer::postgres_reply>({{.rows_ = std::vector<std::string>({std::string("a")}), .batch_ = 4}, {.rows_ = std::vector<std::string>({std::string("b")})}, {.column_ = std::string(""), .command_ = std::string("UPDATE 3")},
-            {.rows_ = std::vector<std::string>({std::string("d")})}}));
+    peer_type peer(peer_type::protocol::postgresql, false, peer_type::after_startup::idle, std::vector<ruvia::test::backend_startup_peer::postgres_reply>({{.rows_ = std::vector<std::string>({std::string("a")}), .batch_ = 4}, {.rows_ = std::vector<std::string>({std::string("b")})}, {.column_ = std::string(""), .command_ = std::string("UPDATE 3")}, {.rows_ = std::vector<std::string>({std::string("d")})}}));
     auto& context_value = test::new_test_io_context();
     auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
     db_client client(attachment.loop(), peer.config());
@@ -249,8 +237,7 @@ TEST(Ruvia, db_postgresql_concurrent_statements_are_pipelined_on_one_connection)
     EXPECT_TRUE(outcomes[1].value_ == "b");
     EXPECT_EQ(outcomes[2].affected_rows_, std::uint64_t{3});
     EXPECT_TRUE(outcomes[3].value_ == "d");
-    EXPECT_TRUE((pipeline_test::parsed_sql(peer) ==
-                 std::vector<std::string>({std::string("SELECT v FROM a"), std::string("SELECT v FROM b"), std::string("UPDATE c SET v = 1"), std::string("SELECT v FROM d")})));
+    EXPECT_TRUE((pipeline_test::parsed_sql(peer) == std::vector<std::string>({std::string("SELECT v FROM a"), std::string("SELECT v FROM b"), std::string("UPDATE c SET v = 1"), std::string("SELECT v FROM d")})));
     EXPECT_EQ(peer.startups(), std::size_t{1});
 }
 
@@ -259,9 +246,7 @@ TEST(Ruvia, db_postgresql_concurrent_statements_are_pipelined_on_one_connection)
 TEST(Ruvia, db_postgresql_failed_pipelined_statement_does_not_fail_the_others) {
     using namespace ruvia;
     using pipeline_test::peer_type;
-    peer_type peer(peer_type::protocol::postgresql, false, peer_type::after_startup::idle,
-        std::vector<ruvia::test::backend_startup_peer::postgres_reply>({{.rows_ = std::vector<std::string>({std::string("a")}), .batch_ = 3}, {.error_ = std::string("duplicate key value violates unique constraint"), .sql_state_ = std::string("23505")},
-            {.rows_ = std::vector<std::string>({std::string("c")})}, {.rows_ = std::vector<std::string>({std::string("d")})}}));
+    peer_type peer(peer_type::protocol::postgresql, false, peer_type::after_startup::idle, std::vector<ruvia::test::backend_startup_peer::postgres_reply>({{.rows_ = std::vector<std::string>({std::string("a")}), .batch_ = 3}, {.error_ = std::string("duplicate key value violates unique constraint"), .sql_state_ = std::string("23505")}, {.rows_ = std::vector<std::string>({std::string("c")})}, {.rows_ = std::vector<std::string>({std::string("d")})}}));
     auto& context_value = test::new_test_io_context();
     auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
     db_client client(attachment.loop(), peer.config());
@@ -295,9 +280,7 @@ TEST(Ruvia, db_postgresql_abandoned_pipelined_statement_does_not_affect_the_othe
     constexpr std::array<std::string_view, 3> values{"a", "b", "c"};
     for (const std::size_t abandoned_index : {std::size_t{0}, std::size_t{1}}) {
         for (const bool cancel : {true, false}) {
-            peer_type peer(peer_type::protocol::postgresql, false, peer_type::after_startup::idle,
-                std::vector<ruvia::test::backend_startup_peer::postgres_reply>({{.rows_ = std::vector<std::string>({std::string("a")}), .deferred_ = true, .batch_ = 3}, {.rows_ = std::vector<std::string>({std::string("b")})}, {.rows_ = std::vector<std::string>({std::string("c")})},
-                    {.rows_ = std::vector<std::string>({std::string("d")})}}));
+            peer_type peer(peer_type::protocol::postgresql, false, peer_type::after_startup::idle, std::vector<ruvia::test::backend_startup_peer::postgres_reply>({{.rows_ = std::vector<std::string>({std::string("a")}), .deferred_ = true, .batch_ = 3}, {.rows_ = std::vector<std::string>({std::string("b")})}, {.rows_ = std::vector<std::string>({std::string("c")})}, {.rows_ = std::vector<std::string>({std::string("d")})}}));
             auto& context_value = test::new_test_io_context();
             auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
             db_client client(attachment.loop(), peer.config());
@@ -305,8 +288,7 @@ TEST(Ruvia, db_postgresql_abandoned_pipelined_statement_does_not_affect_the_othe
             test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
                 const auto handle = connected.db();
                 stop_source stop;
-                const auto abandoning = cancel ? handle.with_options({.stop_token_ = stop.token()})
-                                               : handle.with_options({.timeout_ = std::chrono::milliseconds(100)});
+                const auto abandoning = cancel ? handle.with_options({.stop_token_ = stop.token()}) : handle.with_options({.timeout_ = std::chrono::milliseconds(100)});
                 task_scope others(connected.worker());
                 task_scope abandoned(connected.worker());
                 for (std::size_t index = 0; index < sql.size(); ++index) {
@@ -325,8 +307,7 @@ TEST(Ruvia, db_postgresql_abandoned_pipelined_statement_does_not_affect_the_othe
             });
             for (std::size_t index = 0; index < sql.size(); ++index) {
                 if (index == abandoned_index) {
-                    EXPECT_TRUE(outcomes[index].error_ ==
-                                (cancel ? db_error::code_type::cancelled : db_error::code_type::timeout));
+                    EXPECT_TRUE(outcomes[index].error_ == (cancel ? db_error::code_type::cancelled : db_error::code_type::timeout));
                     EXPECT_TRUE(outcomes[index].value_.empty());
                 } else {
                     EXPECT_TRUE(outcomes[index].value_ == values[index]);
@@ -343,8 +324,7 @@ TEST(Ruvia, db_postgresql_abandoned_pipelined_statement_does_not_affect_the_othe
 TEST(Ruvia, db_postgresql_connection_is_closed_when_every_pipelined_statement_is_abandoned) {
     using namespace ruvia;
     using pipeline_test::peer_type;
-    peer_type peer(peer_type::protocol::postgresql, false, peer_type::after_startup::reaccept,
-        std::vector<ruvia::test::backend_startup_peer::postgres_reply>({{.rows_ = std::vector<std::string>({std::string("a")}), .deferred_ = true, .batch_ = 2}, {.rows_ = std::vector<std::string>({std::string("b")})}, {.rows_ = std::vector<std::string>({std::string("c")})}}));
+    peer_type peer(peer_type::protocol::postgresql, false, peer_type::after_startup::reaccept, std::vector<ruvia::test::backend_startup_peer::postgres_reply>({{.rows_ = std::vector<std::string>({std::string("a")}), .deferred_ = true, .batch_ = 2}, {.rows_ = std::vector<std::string>({std::string("b")})}, {.rows_ = std::vector<std::string>({std::string("c")})}}));
     auto& context_value = test::new_test_io_context();
     auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
     db_client client(attachment.loop(), peer.config());
@@ -373,9 +353,7 @@ TEST(Ruvia, db_postgresql_connection_is_closed_when_every_pipelined_statement_is
 TEST(Ruvia, db_postgresql_waiting_transaction_is_not_starved_by_pipelined_statements) {
     using namespace ruvia;
     using pipeline_test::peer_type;
-    peer_type peer(peer_type::protocol::postgresql, false, peer_type::after_startup::idle,
-        std::vector<ruvia::test::backend_startup_peer::postgres_reply>({{.rows_ = std::vector<std::string>({std::string("a")}), .deferred_ = true}, {.column_ = std::string(""), .command_ = std::string("BEGIN"), .status_ = 'T'},
-            {.column_ = std::string(""), .command_ = std::string("COMMIT")}, {.rows_ = std::vector<std::string>({std::string("b")})}, {.rows_ = std::vector<std::string>({std::string("c")})}, {.rows_ = std::vector<std::string>({std::string("d")})}}));
+    peer_type peer(peer_type::protocol::postgresql, false, peer_type::after_startup::idle, std::vector<ruvia::test::backend_startup_peer::postgres_reply>({{.rows_ = std::vector<std::string>({std::string("a")}), .deferred_ = true}, {.column_ = std::string(""), .command_ = std::string("BEGIN"), .status_ = 'T'}, {.column_ = std::string(""), .command_ = std::string("COMMIT")}, {.rows_ = std::vector<std::string>({std::string("b")})}, {.rows_ = std::vector<std::string>({std::string("c")})}, {.rows_ = std::vector<std::string>({std::string("d")})}}));
     auto& context_value = test::new_test_io_context();
     auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
     db_client client(attachment.loop(), peer.config());
@@ -396,8 +374,7 @@ TEST(Ruvia, db_postgresql_waiting_transaction_is_not_starved_by_pipelined_statem
     EXPECT_TRUE(outcomes[1].value_ == "b");
     EXPECT_TRUE(outcomes[2].value_ == "c");
     EXPECT_TRUE(outcomes[3].value_ == "d");
-    EXPECT_TRUE((pipeline_test::parsed_sql(peer) ==
-                 std::vector<std::string>({std::string("SELECT v FROM a"), std::string("BEGIN"), std::string("COMMIT"), std::string("SELECT v FROM b"), std::string("SELECT v FROM c"), std::string("SELECT v FROM d")})));
+    EXPECT_TRUE((pipeline_test::parsed_sql(peer) == std::vector<std::string>({std::string("SELECT v FROM a"), std::string("BEGIN"), std::string("COMMIT"), std::string("SELECT v FROM b"), std::string("SELECT v FROM c"), std::string("SELECT v FROM d")})));
 }
 
 // Statements and transactions keep their arrival order: statements that
@@ -409,9 +386,7 @@ TEST(Ruvia, db_postgresql_statements_keep_their_order_against_later_transactions
     using pipeline_test::peer_type;
     const peer_type::postgres_reply begin{.column_ = "", .command_ = "BEGIN", .status_ = 'T'};
     const peer_type::postgres_reply commit{.column_ = "", .command_ = "COMMIT"};
-    peer_type peer(peer_type::protocol::postgresql, false, peer_type::after_startup::idle,
-        std::vector<ruvia::test::backend_startup_peer::postgres_reply>({{.rows_ = std::vector<std::string>({std::string("a")}), .deferred_ = true}, begin, commit, {.rows_ = std::vector<std::string>({std::string("b")})}, {.rows_ = std::vector<std::string>({std::string("c")})}, begin, commit,
-            begin, commit}));
+    peer_type peer(peer_type::protocol::postgresql, false, peer_type::after_startup::idle, std::vector<ruvia::test::backend_startup_peer::postgres_reply>({{.rows_ = std::vector<std::string>({std::string("a")}), .deferred_ = true}, begin, commit, {.rows_ = std::vector<std::string>({std::string("b")})}, {.rows_ = std::vector<std::string>({std::string("c")})}, begin, commit, begin, commit}));
     auto& context_value = test::new_test_io_context();
     auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
     db_client client(attachment.loop(), peer.config());
@@ -436,8 +411,7 @@ TEST(Ruvia, db_postgresql_statements_keep_their_order_against_later_transactions
     }
     // The second transaction parses BEGIN and COMMIT as named statements; the
     // third only binds them.
-    EXPECT_TRUE((pipeline_test::parsed_sql(peer) ==
-                 std::vector<std::string>({std::string("SELECT v FROM a"), std::string("BEGIN"), std::string("COMMIT"), std::string("SELECT v FROM b"), std::string("SELECT v FROM c"), std::string("BEGIN"), std::string("COMMIT")})));
+    EXPECT_TRUE((pipeline_test::parsed_sql(peer) == std::vector<std::string>({std::string("SELECT v FROM a"), std::string("BEGIN"), std::string("COMMIT"), std::string("SELECT v FROM b"), std::string("SELECT v FROM c"), std::string("BEGIN"), std::string("COMMIT")})));
     EXPECT_EQ(peer.startups(), std::size_t{1});
 }
 
@@ -481,9 +455,7 @@ TEST(Ruvia, db_postgresql_lost_connection_fails_every_pipelined_statement) {
 TEST(Ruvia, db_postgresql_protocol_failure_fails_the_pipelined_statements_after_it) {
     using namespace ruvia;
     using pipeline_test::peer_type;
-    peer_type peer(peer_type::protocol::postgresql, false, peer_type::after_startup::reaccept,
-        std::vector<ruvia::test::backend_startup_peer::postgres_reply>({{.rows_ = std::vector<std::string>({std::string("a")}), .batch_ = 3}, {.copy_ = peer_type::postgres_copy_direction::input}, {.rows_ = std::vector<std::string>({std::string("c")})},
-            {.rows_ = std::vector<std::string>({std::string("d")})}}));
+    peer_type peer(peer_type::protocol::postgresql, false, peer_type::after_startup::reaccept, std::vector<ruvia::test::backend_startup_peer::postgres_reply>({{.rows_ = std::vector<std::string>({std::string("a")}), .batch_ = 3}, {.copy_ = peer_type::postgres_copy_direction::input}, {.rows_ = std::vector<std::string>({std::string("c")})}, {.rows_ = std::vector<std::string>({std::string("d")})}}));
     auto& context_value = test::new_test_io_context();
     auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
     db_client client(attachment.loop(), peer.config());
@@ -587,10 +559,7 @@ TEST(Ruvia, db_postgresql_stale_pipelined_statement_is_retried_behind_the_others
     using namespace ruvia;
     using pipeline_test::peer_type;
     constexpr std::string_view cached_sql = "SELECT v FROM records WHERE id = $1";
-    peer_type peer(peer_type::protocol::postgresql, false, peer_type::after_startup::idle,
-        std::vector<ruvia::test::backend_startup_peer::postgres_reply>({{.rows_ = std::vector<std::string>({std::string("a")})}, {.rows_ = std::vector<std::string>({std::string("b")})},
-            {.error_ = std::string("prepared statement does not exist"), .sql_state_ = std::string("26000"), .routine_ = std::string("FetchPreparedStatement"), .batch_ = 2},
-            {.rows_ = std::vector<std::string>({std::string("d")})}, {.rows_ = std::vector<std::string>({std::string("e")})}}));
+    peer_type peer(peer_type::protocol::postgresql, false, peer_type::after_startup::idle, std::vector<ruvia::test::backend_startup_peer::postgres_reply>({{.rows_ = std::vector<std::string>({std::string("a")})}, {.rows_ = std::vector<std::string>({std::string("b")})}, {.error_ = std::string("prepared statement does not exist"), .sql_state_ = std::string("26000"), .routine_ = std::string("FetchPreparedStatement"), .batch_ = 2}, {.rows_ = std::vector<std::string>({std::string("d")})}, {.rows_ = std::vector<std::string>({std::string("e")})}}));
     auto& context_value = test::new_test_io_context();
     auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
     db_client client(attachment.loop(), peer.config());
@@ -621,10 +590,7 @@ TEST(Ruvia, db_postgresql_failed_parse_makes_later_binds_of_its_name_run_again) 
     using namespace ruvia;
     using pipeline_test::peer_type;
     constexpr std::string_view cached_sql = "SELECT v FROM records WHERE id = $1";
-    peer_type peer(peer_type::protocol::postgresql, false, peer_type::after_startup::idle,
-        std::vector<ruvia::test::backend_startup_peer::postgres_reply>({{.rows_ = std::vector<std::string>({std::string("a")})},
-            {.error_ = std::string("relation \"records\" does not exist"), .sql_state_ = std::string("42P01"), .batch_ = 2, .parse_fails_ = true},
-            {}, {.rows_ = std::vector<std::string>({std::string("c")})}}));
+    peer_type peer(peer_type::protocol::postgresql, false, peer_type::after_startup::idle, std::vector<ruvia::test::backend_startup_peer::postgres_reply>({{.rows_ = std::vector<std::string>({std::string("a")})}, {.error_ = std::string("relation \"records\" does not exist"), .sql_state_ = std::string("42P01"), .batch_ = 2, .parse_fails_ = true}, {}, {.rows_ = std::vector<std::string>({std::string("c")})}}));
     auto& context_value = test::new_test_io_context();
     auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
     db_client client(attachment.loop(), peer.config());
@@ -654,8 +620,7 @@ TEST(Ruvia, db_postgresql_close_ends_pipelined_statements_in_every_phase) {
     using namespace ruvia;
     using pipeline_test::peer_type;
     constexpr std::size_t statement_count = 40;
-    peer_type peer(peer_type::protocol::postgresql, false, peer_type::after_startup::idle,
-        std::vector<ruvia::test::backend_startup_peer::postgres_reply>({{.rows_ = std::vector<std::string>({std::string("x")}), .deferred_ = true}}));
+    peer_type peer(peer_type::protocol::postgresql, false, peer_type::after_startup::idle, std::vector<ruvia::test::backend_startup_peer::postgres_reply>({{.rows_ = std::vector<std::string>({std::string("x")}), .deferred_ = true}}));
     auto& context_value = test::new_test_io_context();
     auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
     db_client client(attachment.loop(), peer.config());
@@ -679,8 +644,7 @@ TEST(Ruvia, db_postgresql_close_ends_pipelined_statements_in_every_phase) {
 TEST(Ruvia, db_postgresql_read_timeout_fails_every_pipelined_statement) {
     using namespace ruvia;
     using pipeline_test::peer_type;
-    peer_type peer(peer_type::protocol::postgresql, false, peer_type::after_startup::reaccept,
-        std::vector<ruvia::test::backend_startup_peer::postgres_reply>({{.rows_ = std::vector<std::string>({std::string("a")}), .deferred_ = true, .batch_ = 3}, {.rows_ = std::vector<std::string>({std::string("b")})}, {.rows_ = std::vector<std::string>({std::string("c")})}, {.rows_ = std::vector<std::string>({std::string("d")})}}));
+    peer_type peer(peer_type::protocol::postgresql, false, peer_type::after_startup::reaccept, std::vector<ruvia::test::backend_startup_peer::postgres_reply>({{.rows_ = std::vector<std::string>({std::string("a")}), .deferred_ = true, .batch_ = 3}, {.rows_ = std::vector<std::string>({std::string("b")})}, {.rows_ = std::vector<std::string>({std::string("c")})}, {.rows_ = std::vector<std::string>({std::string("d")})}}));
     auto config = peer.config();
     config.read_timeout_ = std::chrono::milliseconds(100);
     auto& context_value = test::new_test_io_context();
@@ -710,8 +674,7 @@ TEST(Ruvia, db_postgresql_read_timeout_fails_every_pipelined_statement) {
 TEST(Ruvia, db_postgresql_cancelled_waiting_transaction_lets_later_statements_join) {
     using namespace ruvia;
     using pipeline_test::peer_type;
-    peer_type peer(peer_type::protocol::postgresql, false, peer_type::after_startup::idle,
-        std::vector<ruvia::test::backend_startup_peer::postgres_reply>({{.rows_ = std::vector<std::string>({std::string("a")}), .deferred_ = true}, {.rows_ = std::vector<std::string>({std::string("b")})}, {.rows_ = std::vector<std::string>({std::string("c")})}}));
+    peer_type peer(peer_type::protocol::postgresql, false, peer_type::after_startup::idle, std::vector<ruvia::test::backend_startup_peer::postgres_reply>({{.rows_ = std::vector<std::string>({std::string("a")}), .deferred_ = true}, {.rows_ = std::vector<std::string>({std::string("b")})}, {.rows_ = std::vector<std::string>({std::string("c")})}}));
     auto& context_value = test::new_test_io_context();
     auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
     db_client client(attachment.loop(), peer.config());
@@ -732,8 +695,7 @@ TEST(Ruvia, db_postgresql_cancelled_waiting_transaction_lets_later_statements_jo
     EXPECT_TRUE(outcomes[1].value_ == "b");
     EXPECT_TRUE(outcomes[2].value_ == "c");
     EXPECT_TRUE(outcomes[3].error_ == db_error::code_type::cancelled);
-    EXPECT_TRUE((pipeline_test::parsed_sql(peer) ==
-                 std::vector<std::string>({std::string("SELECT v FROM a"), std::string("SELECT v FROM b"), std::string("SELECT v FROM c")})));
+    EXPECT_TRUE((pipeline_test::parsed_sql(peer) == std::vector<std::string>({std::string("SELECT v FROM a"), std::string("SELECT v FROM b"), std::string("SELECT v FROM c")})));
 }
 
 // A statement waiting behind a transaction that is cancelled leaves its place;
@@ -741,9 +703,7 @@ TEST(Ruvia, db_postgresql_cancelled_waiting_transaction_lets_later_statements_jo
 TEST(Ruvia, db_postgresql_cancelled_statement_waiting_behind_a_transaction_leaves_its_place) {
     using namespace ruvia;
     using pipeline_test::peer_type;
-    peer_type peer(peer_type::protocol::postgresql, false, peer_type::after_startup::idle,
-        std::vector<ruvia::test::backend_startup_peer::postgres_reply>({{.rows_ = std::vector<std::string>({std::string("a")}), .deferred_ = true}, {.column_ = std::string(""), .command_ = std::string("BEGIN"), .status_ = 'T'},
-            {.column_ = std::string(""), .command_ = std::string("COMMIT")}, {.rows_ = std::vector<std::string>({std::string("c")})}}));
+    peer_type peer(peer_type::protocol::postgresql, false, peer_type::after_startup::idle, std::vector<ruvia::test::backend_startup_peer::postgres_reply>({{.rows_ = std::vector<std::string>({std::string("a")}), .deferred_ = true}, {.column_ = std::string(""), .command_ = std::string("BEGIN"), .status_ = 'T'}, {.column_ = std::string(""), .command_ = std::string("COMMIT")}, {.rows_ = std::vector<std::string>({std::string("c")})}}));
     auto& context_value = test::new_test_io_context();
     auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
     db_client client(attachment.loop(), peer.config());
@@ -764,8 +724,7 @@ TEST(Ruvia, db_postgresql_cancelled_statement_waiting_behind_a_transaction_leave
     EXPECT_TRUE(outcomes[1].error_ == db_error::code_type::cancelled);
     EXPECT_TRUE(outcomes[2].value_ == "c");
     EXPECT_TRUE(outcomes[3].value_ == "committed");
-    EXPECT_TRUE((pipeline_test::parsed_sql(peer) ==
-                 std::vector<std::string>({std::string("SELECT v FROM a"), std::string("BEGIN"), std::string("COMMIT"), std::string("SELECT v FROM c")})));
+    EXPECT_TRUE((pipeline_test::parsed_sql(peer) == std::vector<std::string>({std::string("SELECT v FROM a"), std::string("BEGIN"), std::string("COMMIT"), std::string("SELECT v FROM c")})));
 }
 
 // Two connections, each with a statement held in flight. A transaction gets
@@ -777,9 +736,7 @@ TEST(Ruvia, db_postgresql_served_transaction_lets_a_later_statement_join_the_oth
     using pipeline_test::peer_type;
     // Connections are scripted in accept order; whichever statement each one
     // carries answers "first".
-    peer_type peer(std::vector<std::vector<ruvia::test::backend_startup_peer::postgres_reply>>({std::vector<ruvia::test::backend_startup_peer::postgres_reply>({{.rows_ = std::vector<std::string>({std::string("first")}), .hold_ = 1}, {.column_ = std::string(""), .command_ = std::string("BEGIN"), .status_ = 'T'},
-                                                                                                    {.column_ = std::string(""), .command_ = std::string("COMMIT")}, {.rows_ = std::vector<std::string>({std::string("on the first connection")})}}),
-        std::vector<ruvia::test::backend_startup_peer::postgres_reply>({{.rows_ = std::vector<std::string>({std::string("first")}), .hold_ = 2}, {.rows_ = std::vector<std::string>({std::string("on the second connection")})}})}));
+    peer_type peer(std::vector<std::vector<ruvia::test::backend_startup_peer::postgres_reply>>({std::vector<ruvia::test::backend_startup_peer::postgres_reply>({{.rows_ = std::vector<std::string>({std::string("first")}), .hold_ = 1}, {.column_ = std::string(""), .command_ = std::string("BEGIN"), .status_ = 'T'}, {.column_ = std::string(""), .command_ = std::string("COMMIT")}, {.rows_ = std::vector<std::string>({std::string("on the first connection")})}}), std::vector<ruvia::test::backend_startup_peer::postgres_reply>({{.rows_ = std::vector<std::string>({std::string("first")}), .hold_ = 2}, {.rows_ = std::vector<std::string>({std::string("on the second connection")})}})}));
     auto config = peer.config();
     config.pool_size_per_worker_ = 2;
     auto& context_value = test::new_test_io_context();
@@ -812,8 +769,7 @@ TEST(Ruvia, db_postgresql_served_transaction_lets_a_later_statement_join_the_oth
 TEST(Ruvia, db_postgresql_statement_is_not_sent_behind_an_abandoned_one) {
     using namespace ruvia;
     using pipeline_test::peer_type;
-    peer_type peer(peer_type::protocol::postgresql, false, peer_type::after_startup::idle,
-        std::vector<ruvia::test::backend_startup_peer::postgres_reply>({{.rows_ = std::vector<std::string>({std::string("a")}), .deferred_ = true, .batch_ = 2}, {.rows_ = std::vector<std::string>({std::string("b")})}, {.rows_ = std::vector<std::string>({std::string("d")})}}));
+    peer_type peer(peer_type::protocol::postgresql, false, peer_type::after_startup::idle, std::vector<ruvia::test::backend_startup_peer::postgres_reply>({{.rows_ = std::vector<std::string>({std::string("a")}), .deferred_ = true, .batch_ = 2}, {.rows_ = std::vector<std::string>({std::string("b")})}, {.rows_ = std::vector<std::string>({std::string("d")})}}));
     auto& context_value = test::new_test_io_context();
     auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
     db_client client(attachment.loop(), peer.config());
@@ -838,8 +794,7 @@ TEST(Ruvia, db_postgresql_statement_is_not_sent_behind_an_abandoned_one) {
     EXPECT_TRUE(outcomes[2].error_ == db_error::code_type::timeout);
     EXPECT_TRUE(outcomes[3].value_ == "d");
     // The statement that timed out waiting was never sent.
-    EXPECT_TRUE((pipeline_test::parsed_sql(peer) ==
-                 std::vector<std::string>({std::string("SELECT v FROM a"), std::string("SELECT v FROM b"), std::string("SELECT v FROM d")})));
+    EXPECT_TRUE((pipeline_test::parsed_sql(peer) == std::vector<std::string>({std::string("SELECT v FROM a"), std::string("SELECT v FROM b"), std::string("SELECT v FROM d")})));
     EXPECT_EQ(peer.startups(), std::size_t{1});
 }
 
@@ -849,8 +804,7 @@ TEST(Ruvia, db_postgresql_statement_is_not_sent_behind_an_abandoned_one) {
 TEST(Ruvia, db_postgresql_connection_left_inside_a_transaction_block_is_closed) {
     using namespace ruvia;
     using pipeline_test::peer_type;
-    peer_type peer(peer_type::protocol::postgresql, false, peer_type::after_startup::reaccept,
-        std::vector<ruvia::test::backend_startup_peer::postgres_reply>({{.column_ = std::string(""), .command_ = std::string("BEGIN"), .status_ = 'T'}, {.rows_ = std::vector<std::string>({std::string("fresh")})}}));
+    peer_type peer(peer_type::protocol::postgresql, false, peer_type::after_startup::reaccept, std::vector<ruvia::test::backend_startup_peer::postgres_reply>({{.column_ = std::string(""), .command_ = std::string("BEGIN"), .status_ = 'T'}, {.rows_ = std::vector<std::string>({std::string("fresh")})}}));
     auto& context_value = test::new_test_io_context();
     auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
     db_client client(attachment.loop(), peer.config());
@@ -874,9 +828,7 @@ TEST(Ruvia, db_postgresql_connection_released_after_a_waiting_transaction_stops_
     using pipeline_test::peer_type;
     // The held transaction's connection is closed when it is abandoned, so
     // the rest run on a second connection.
-    peer_type peer(peer_type::protocol::postgresql, false, peer_type::after_startup::reaccept,
-        std::vector<ruvia::test::backend_startup_peer::postgres_reply>({{.column_ = std::string(""), .command_ = std::string("BEGIN"), .status_ = 'T'}, {.rows_ = std::vector<std::string>({std::string("s")})},
-            {.column_ = std::string(""), .command_ = std::string("BEGIN"), .status_ = 'T'}, {.column_ = std::string(""), .command_ = std::string("COMMIT")}}));
+    peer_type peer(peer_type::protocol::postgresql, false, peer_type::after_startup::reaccept, std::vector<ruvia::test::backend_startup_peer::postgres_reply>({{.column_ = std::string(""), .command_ = std::string("BEGIN"), .status_ = 'T'}, {.rows_ = std::vector<std::string>({std::string("s")})}, {.column_ = std::string(""), .command_ = std::string("BEGIN"), .status_ = 'T'}, {.column_ = std::string(""), .command_ = std::string("COMMIT")}}));
     auto& context_value = test::new_test_io_context();
     auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
     db_client client(attachment.loop(), peer.config());
@@ -898,8 +850,7 @@ TEST(Ruvia, db_postgresql_connection_released_after_a_waiting_transaction_stops_
     EXPECT_TRUE(outcomes[0].value_ == "s");
     EXPECT_TRUE(outcomes[1].value_ == "committed");
     EXPECT_TRUE(outcomes[2].error_ == db_error::code_type::cancelled);
-    EXPECT_TRUE((pipeline_test::parsed_sql(peer) ==
-                 std::vector<std::string>({std::string("BEGIN"), std::string("SELECT v FROM s"), std::string("BEGIN"), std::string("COMMIT")})));
+    EXPECT_TRUE((pipeline_test::parsed_sql(peer) == std::vector<std::string>({std::string("BEGIN"), std::string("SELECT v FROM s"), std::string("BEGIN"), std::string("COMMIT")})));
     EXPECT_EQ(peer.startups(), std::size_t{2});
 }
 #endif

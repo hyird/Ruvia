@@ -41,9 +41,9 @@ struct observations final {
 };
 
 struct worker_state final {
-    explicit worker_state(std::shared_ptr<observations> observed)
-        : observed_(std::move(observed)),
-          owner_(std::this_thread::get_id()) {
+    explicit worker_state(std::shared_ptr<observations> observed) :
+        observed_(std::move(observed)),
+        owner_(std::this_thread::get_id()) {
         ++observed_->live_;
     }
     worker_state(worker_state&&) noexcept = default;
@@ -96,8 +96,7 @@ std::string_view header(std::string_view head, std::string_view name) {
         const auto end = head.find("\r\n");
         const auto line = head.substr(0, end);
         const auto colon = line.find(':');
-        if (colon != std::string_view::npos &&
-            ruvia::http_ascii_equals_ignore_case(line.substr(0, colon), name)) {
+        if (colon != std::string_view::npos && ruvia::http_ascii_equals_ignore_case(line.substr(0, colon), name)) {
             auto value = line.substr(colon + 1);
             while (!value.empty() && (value.front() == ' ' || value.front() == '\t')) {
                 value.remove_prefix(1);
@@ -141,8 +140,7 @@ std::string exchange(stream_type& stream, std::string_view expected) {
                 throw std::runtime_error("missing response content length");
             }
             if (response.size() >= head_end + 4 + length) {
-                if (!response.starts_with("HTTP/1.1 200 ") ||
-                    std::string_view(response).substr(head_end + 4) != expected) {
+                if (!response.starts_with("HTTP/1.1 200 ") || std::string_view(response).substr(head_end + 4) != expected) {
                     throw std::runtime_error("incorrect affinity echo response");
                 }
                 const auto worker = header(head, "X-Connection-Worker");
@@ -175,8 +173,12 @@ TEST(Ruvia, app_multi_listener_tcp_tls_preserves_connection_worker_and_joins_pen
     using namespace accept_ownership_test;
     auto observed = std::make_shared<observations>();
     auto& app = ruvia::app();
-    app.use_worker_state<worker_state>([observed] { return worker_state(observed); });
-    app.on_start([observed] { observed->started_.release(); });
+    app.use_worker_state<worker_state>([observed] {
+        return worker_state(observed);
+    });
+    app.on_start([observed] {
+        observed->started_.release();
+    });
     ruvia::test::tls_identity identity("localhost");
     const auto key = identity.private_key_file();
     asio::io_context io;

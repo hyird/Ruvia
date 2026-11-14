@@ -34,28 +34,15 @@
 
 namespace {
 
-RUVIA_DB_ENTITY(entity, "users",
-    ruvia::db_column<ruvia::fixed_string{"id"}, int>,
-    ruvia::db_column<ruvia::fixed_string{"name"}, std::string,
-        ruvia::db_column_options{.nullable_ = true}>)
+RUVIA_DB_ENTITY(entity, "users", ruvia::db_column<ruvia::fixed_string{"id"}, int>, ruvia::db_column<ruvia::fixed_string{"name"}, std::string, ruvia::db_column_options{.nullable_ = true}>)
 
-RUVIA_DB_ENTITY(owned_type, "owned", ruvia::db_column<"text", ruvia::string>,
-    ruvia::db_column<"values", std::vector<std::optional<std::string>>>)
+RUVIA_DB_ENTITY(owned_type, "owned", ruvia::db_column<"text", ruvia::string>, ruvia::db_column<"values", std::vector<std::optional<std::string>>>)
 
-RUVIA_DB_ENTITY(string_array_entity, "string_arrays",
-    ruvia::db_column<"values", std::vector<std::string>>)
+RUVIA_DB_ENTITY(string_array_entity, "string_arrays", ruvia::db_column<"values", std::vector<std::string>>)
 
-RUVIA_DB_ENTITY(owned_container_entity, "owned_containers",
-    ruvia::db_column<"text", std::string>,
-    ruvia::db_column<"values", std::vector<std::string>>)
+RUVIA_DB_ENTITY(owned_container_entity, "owned_containers", ruvia::db_column<"text", std::string>, ruvia::db_column<"values", std::vector<std::string>>)
 
-RUVIA_DB_ENTITY(numeric_input_entity, "numeric_input",
-    ruvia::db_column<"signed_value", std::int32_t, ruvia::db_column_options{.nullable_ = true}>,
-    ruvia::db_column<"unsigned_value", std::uint32_t, ruvia::db_column_options{.nullable_ = true}>,
-    ruvia::db_column<"real_value", float, ruvia::db_column_options{.nullable_ = true}>,
-    ruvia::db_column<"values", std::vector<std::int32_t>>,
-    ruvia::db_column<"optional_values", std::vector<std::optional<std::int32_t>>>,
-    ruvia::db_column<"real_values", std::vector<float>>)
+RUVIA_DB_ENTITY(numeric_input_entity, "numeric_input", ruvia::db_column<"signed_value", std::int32_t, ruvia::db_column_options{.nullable_ = true}>, ruvia::db_column<"unsigned_value", std::uint32_t, ruvia::db_column_options{.nullable_ = true}>, ruvia::db_column<"real_value", float, ruvia::db_column_options{.nullable_ = true}>, ruvia::db_column<"values", std::vector<std::int32_t>>, ruvia::db_column<"optional_values", std::vector<std::optional<std::int32_t>>>, ruvia::db_column<"real_values", std::vector<float>>)
 
 TEST(Ruvia, db_entity_tracks_unset_null_and_value_states) {
     entity entity;
@@ -93,15 +80,33 @@ TEST(Ruvia, db_entity_numeric_overflow_preserves_value_null_and_unset) {
             }
             EXPECT_TRUE(rejected);
         };
-        check_rejected([&] { value.set<"signed_value">(above_signed); });
-        check_rejected([&] { value.set<"signed_value">(below_signed); });
-        check_rejected([&] { value.set<"signed_value">((std::numeric_limits<std::uint64_t>::max)()); });
-        check_rejected([&] { value.set<"signed_value">(ruvia::int64{above_signed}); });
-        check_rejected([&] { value.set<"unsigned_value">(-1); });
-        check_rejected([&] { value.set<"unsigned_value">(above_unsigned); });
-        check_rejected([&] { value.set<"real_value">((std::numeric_limits<double>::max)()); });
-        check_rejected([&] { value.set<"real_value">(-(std::numeric_limits<double>::max)()); });
-        check_rejected([&] { value.set<"real_value">(ruvia::double_value{(std::numeric_limits<double>::max)()}); });
+        check_rejected([&] {
+            value.set<"signed_value">(above_signed);
+        });
+        check_rejected([&] {
+            value.set<"signed_value">(below_signed);
+        });
+        check_rejected([&] {
+            value.set<"signed_value">((std::numeric_limits<std::uint64_t>::max)());
+        });
+        check_rejected([&] {
+            value.set<"signed_value">(ruvia::int64{above_signed});
+        });
+        check_rejected([&] {
+            value.set<"unsigned_value">(-1);
+        });
+        check_rejected([&] {
+            value.set<"unsigned_value">(above_unsigned);
+        });
+        check_rejected([&] {
+            value.set<"real_value">((std::numeric_limits<double>::max)());
+        });
+        check_rejected([&] {
+            value.set<"real_value">(-(std::numeric_limits<double>::max)());
+        });
+        check_rejected([&] {
+            value.set<"real_value">(ruvia::double_value{(std::numeric_limits<double>::max)()});
+        });
         EXPECT_EQ(value.is_set<"signed_value">(), state != 0);
         EXPECT_EQ(value.is_set<"unsigned_value">(), state != 0);
         EXPECT_EQ(value.is_set<"real_value">(), state != 0);
@@ -131,11 +136,15 @@ TEST(Ruvia, db_entity_numeric_arrays_reject_late_overflow_without_partial_replac
         }
         EXPECT_TRUE(rejected);
     };
-    check_rejected([&] { value.set<"values">(std::vector<std::int64_t>({42, above_signed})); });
+    check_rejected([&] {
+        value.set<"values">(std::vector<std::int64_t>({42, above_signed}));
+    });
     check_rejected([&] {
         value.set<"optional_values">(std::vector<std::optional<std::int64_t>>({42, std::nullopt, above_signed}));
     });
-    check_rejected([&] { value.set<"real_values">(std::vector<double>({0.5, (std::numeric_limits<double>::max)()})); });
+    check_rejected([&] {
+        value.set<"real_values">(std::vector<double>({0.5, (std::numeric_limits<double>::max)()}));
+    });
     EXPECT_EQ(value.get<"values">().size(), std::size_t{2});
     EXPECT_EQ(value.get<"values">()[0], 11);
     EXPECT_EQ(value.get<"values">()[1], 12);
@@ -191,11 +200,7 @@ TEST(Ruvia, db_entity_set_owns_nested_values_and_supports_reset) {
 }  // namespace
 
 #ifdef RUVIA_ENABLE_POSTGRESQL
-RUVIA_DB_ENTITY(numeric_decode_entity, "numeric_decode",
-    ruvia::db_column<"id", std::int64_t, ruvia::db_column_options{.primary_key_ = true}>,
-    ruvia::db_column<"ratio", double>,
-    ruvia::db_column<"ratios", std::vector<double>>,
-    ruvia::db_column<"counts", std::vector<std::int64_t>>)
+RUVIA_DB_ENTITY(numeric_decode_entity, "numeric_decode", ruvia::db_column<"id", std::int64_t, ruvia::db_column_options{.primary_key_ = true}>, ruvia::db_column<"ratio", double>, ruvia::db_column<"ratios", std::vector<double>>, ruvia::db_column<"counts", std::vector<std::int64_t>>)
 
 TEST(Ruvia, db_field_and_array_decoding_reject_nonfinite_floats_and_prioritize_format_errors) {
     using namespace ruvia;
@@ -211,8 +216,7 @@ TEST(Ruvia, db_field_and_array_decoding_reject_nonfinite_floats_and_prioritize_f
         {.column_ = std::string("counts"), .type_ = 1016, .rows_ = std::vector<std::string>({std::string("{999999999999999999999abc}")})},
         {.column_ = std::string("counts"), .type_ = 1016, .rows_ = std::vector<std::string>({std::string("{999999999999999999999}")})},
     });
-    test::backend_startup_peer peer(test::backend_startup_peer::protocol::postgresql, false,
-        test::backend_startup_peer::after_startup::idle, std::move(replies));
+    test::backend_startup_peer peer(test::backend_startup_peer::protocol::postgresql, false, test::backend_startup_peer::after_startup::idle, std::move(replies));
     auto& context = test::new_test_io_context();
     auto attachment = attach_event_loop(context, {.queue_capacity_ = 8});
     db_client client(attachment.loop(), peer.config());
@@ -348,8 +352,7 @@ TEST(Ruvia, db_public_mapping_owns_values_and_rejects_missing_or_ambiguous_colum
             }
             EXPECT_TRUE(rejected);
         }
-        for (const auto expected : {db_conversion_error::code_type::missing_column,
-                 db_conversion_error::code_type::invalid_format}) {
+        for (const auto expected : {db_conversion_error::code_type::missing_column, db_conversion_error::code_type::invalid_format}) {
             const auto rows = co_await handle.query("SELECT * FROM invalid_mapping");
             bool rejected = false;
             try {
@@ -385,13 +388,11 @@ TEST(Ruvia, db_transaction_options_support_cold_cancellation_and_reject_invalid_
             auto exercise = [&]() -> task<void> {
                 for (int iteration = 0; iteration < 8; ++iteration) {
                     {
-                        const auto cold = handle.begin_transaction({.isolation_ = db_transaction_isolation::serializable,
-                            .access_mode_ = db_transaction_access_mode::read_only});
+                        const auto cold = handle.begin_transaction({.isolation_ = db_transaction_isolation::serializable, .access_mode_ = db_transaction_access_mode::read_only});
                     }
                     bool observed_cancellation = false;
                     bool observed_invalid = false;
-                    db_transaction_options options{.isolation_ = db_transaction_isolation::repeatable_read,
-                        .access_mode_ = db_transaction_access_mode::read_only};
+                    db_transaction_options options{.isolation_ = db_transaction_isolation::repeatable_read, .access_mode_ = db_transaction_access_mode::read_only};
                     auto operation = cancelled.begin_transaction(options);
                     options.isolation_ = static_cast<db_transaction_isolation>(255);
                     try {
@@ -423,18 +424,15 @@ namespace db_transaction_operation_test {
 RUVIA_DB_ENTITY(text_entity, "records", ruvia::db_column<"v", std::string>)
 
 struct queued_transaction_operations final {
-    explicit queued_transaction_operations(ruvia::db_transaction& transaction)
-        : commit_(transaction.commit()),
-          rollback_(transaction.rollback()),
-          query_(transaction.query("SELECT v FROM records")),
-          execute_(transaction.execute("UPDATE records SET v = 'raw'")),
-          compiled_query_(transaction.repository<text_entity>().query_builder().get_raw_many()),
-          compiled_execute_(transaction.repository<text_entity>()
-                  .delete_builder()
-                  .where(text_entity::column<"v">().is_not_null())
-                  .execute()),
-          mapped_(transaction.repository<text_entity>().find()),
-          page_(transaction.repository<text_entity>().find_and_count()) {}
+    explicit queued_transaction_operations(ruvia::db_transaction& transaction) :
+        commit_(transaction.commit()),
+        rollback_(transaction.rollback()),
+        query_(transaction.query("SELECT v FROM records")),
+        execute_(transaction.execute("UPDATE records SET v = 'raw'")),
+        compiled_query_(transaction.repository<text_entity>().query_builder().get_raw_many()),
+        compiled_execute_(transaction.repository<text_entity>().delete_builder().where(text_entity::column<"v">().is_not_null()).execute()),
+        mapped_(transaction.repository<text_entity>().find()),
+        page_(transaction.repository<text_entity>().find_and_count()) {}
 
     ruvia::task<void> commit_;
     ruvia::task<void> rollback_;
@@ -447,9 +445,9 @@ struct queued_transaction_operations final {
 };
 
 struct queued_stream_operations final {
-    explicit queued_stream_operations(ruvia::db_stream_result& stream)
-        : close_(stream.close()),
-          read_(stream.read()) {}
+    explicit queued_stream_operations(ruvia::db_stream_result& stream) :
+        close_(stream.close()),
+        read_(stream.read()) {}
 
     ruvia::task<void> close_;
     ruvia::task<std::optional<ruvia::db_row>> read_;
@@ -457,18 +455,7 @@ struct queued_stream_operations final {
 
 TEST(Ruvia, db_transaction_can_prepare_cold_operations_while_a_statement_is_running) {
     using namespace ruvia;
-    test::backend_startup_peer peer(test::backend_startup_peer::protocol::postgresql, false,
-        test::backend_startup_peer::after_startup::idle,
-        std::vector<ruvia::test::backend_startup_peer::postgres_reply>({{.column_ = std::string(""), .command_ = std::string("BEGIN"), .status_ = 'T'},
-            {.rows_ = std::vector<std::string>({std::string("first")}), .status_ = 'T', .deferred_ = true},
-            {.rows_ = std::vector<std::string>({std::string("raw")}), .status_ = 'T'},
-            {.column_ = std::string(""), .command_ = std::string("UPDATE 2"), .status_ = 'T'},
-            {.rows_ = std::vector<std::string>({std::string("compiled")}), .status_ = 'T'},
-            {.column_ = std::string(""), .command_ = std::string("DELETE 4"), .status_ = 'T'},
-            {.rows_ = std::vector<std::string>({std::string("mapped")}), .status_ = 'T'},
-            {.rows_ = std::vector<std::string>({std::string("counted")}), .status_ = 'T'},
-            {.column_ = std::string("count"), .rows_ = std::vector<std::string>({std::string("1")}), .status_ = 'T'},
-            {.column_ = std::string(""), .command_ = std::string("COMMIT")}}));
+    test::backend_startup_peer peer(test::backend_startup_peer::protocol::postgresql, false, test::backend_startup_peer::after_startup::idle, std::vector<ruvia::test::backend_startup_peer::postgres_reply>({{.column_ = std::string(""), .command_ = std::string("BEGIN"), .status_ = 'T'}, {.rows_ = std::vector<std::string>({std::string("first")}), .status_ = 'T', .deferred_ = true}, {.rows_ = std::vector<std::string>({std::string("raw")}), .status_ = 'T'}, {.column_ = std::string(""), .command_ = std::string("UPDATE 2"), .status_ = 'T'}, {.rows_ = std::vector<std::string>({std::string("compiled")}), .status_ = 'T'}, {.column_ = std::string(""), .command_ = std::string("DELETE 4"), .status_ = 'T'}, {.rows_ = std::vector<std::string>({std::string("mapped")}), .status_ = 'T'}, {.rows_ = std::vector<std::string>({std::string("counted")}), .status_ = 'T'}, {.column_ = std::string("count"), .rows_ = std::vector<std::string>({std::string("1")}), .status_ = 'T'}, {.column_ = std::string(""), .command_ = std::string("COMMIT")}}));
     auto& context = test::new_test_io_context();
     auto attachment = attach_event_loop(context, {.queue_capacity_ = 8});
     db_client client(attachment.loop(), peer.config());
@@ -550,12 +537,7 @@ TEST(Ruvia, db_transaction_can_prepare_cold_operations_while_a_statement_is_runn
 
 TEST(Ruvia, db_stream_cold_reads_and_close_wait_for_the_started_read_to_finish) {
     using namespace ruvia;
-    test::backend_startup_peer peer(test::backend_startup_peer::protocol::postgresql, false,
-        test::backend_startup_peer::after_startup::idle,
-        std::vector<ruvia::test::backend_startup_peer::postgres_reply>({{.rows_ = {"prefetched", "first", "second"},
-            .command_ = "SELECT 3",
-            .deferred_ = true,
-            .first_row_before_hold_ = true}}));
+    test::backend_startup_peer peer(test::backend_startup_peer::protocol::postgresql, false, test::backend_startup_peer::after_startup::idle, std::vector<ruvia::test::backend_startup_peer::postgres_reply>({{.rows_ = {"prefetched", "first", "second"}, .command_ = "SELECT 3", .deferred_ = true, .first_row_before_hold_ = true}}));
     auto& context = test::new_test_io_context();
     auto attachment = attach_event_loop(context, {.queue_capacity_ = 8});
     db_client client(attachment.loop(), peer.config());
@@ -604,9 +586,7 @@ TEST(Ruvia, db_stream_cold_reads_and_close_wait_for_the_started_read_to_finish) 
 
 TEST(Ruvia, db_stream_close_after_exhaustion_is_idempotent) {
     using namespace ruvia;
-    test::backend_startup_peer peer(test::backend_startup_peer::protocol::postgresql, false,
-        test::backend_startup_peer::after_startup::idle,
-        std::vector<ruvia::test::backend_startup_peer::postgres_reply>({{.rows_ = std::vector<std::string>({std::string("only")}), .command_ = std::string("SELECT 1")}}));
+    test::backend_startup_peer peer(test::backend_startup_peer::protocol::postgresql, false, test::backend_startup_peer::after_startup::idle, std::vector<ruvia::test::backend_startup_peer::postgres_reply>({{.rows_ = std::vector<std::string>({std::string("only")}), .command_ = std::string("SELECT 1")}}));
     auto& context = test::new_test_io_context();
     auto attachment = attach_event_loop(context, {.queue_capacity_ = 8});
     db_client client(attachment.loop(), peer.config());
@@ -628,12 +608,7 @@ TEST(Ruvia, db_stream_read_takes_its_own_operation_options) {
     using namespace ruvia;
     for (const bool cancel : {false, true}) {
         SCOPED_TRACE(cancel ? "cancelled" : "timed out");
-        test::backend_startup_peer peer(test::backend_startup_peer::protocol::postgresql, false,
-            test::backend_startup_peer::after_startup::idle,
-            std::vector<ruvia::test::backend_startup_peer::postgres_reply>({{.rows_ = {"first", "withheld"},
-                .command_ = "SELECT 2",
-                .deferred_ = true,
-                .first_row_before_hold_ = true}}));
+        test::backend_startup_peer peer(test::backend_startup_peer::protocol::postgresql, false, test::backend_startup_peer::after_startup::idle, std::vector<ruvia::test::backend_startup_peer::postgres_reply>({{.rows_ = {"first", "withheld"}, .command_ = "SELECT 2", .deferred_ = true, .first_row_before_hold_ = true}}));
         auto& context = test::new_test_io_context();
         auto attachment = attach_event_loop(context, {.queue_capacity_ = 8});
         db_client client(attachment.loop(), peer.config());
@@ -675,19 +650,15 @@ TEST(Ruvia, db_stream_read_takes_its_own_operation_options) {
 
 TEST(Ruvia, db_transaction_savepoint_commands_quote_identifiers_and_keep_transaction_active) {
     using namespace ruvia;
-    test::backend_startup_peer peer(test::backend_startup_peer::protocol::postgresql, false,
-        test::backend_startup_peer::after_startup::idle,
-        std::vector<ruvia::test::backend_startup_peer::postgres_reply>({{.column_ = std::string(""), .command_ = std::string("BEGIN"), .status_ = 'T'},
-            {.column_ = std::string(""), .command_ = std::string("SAVEPOINT"), .status_ = 'T'},
-            {.column_ = std::string(""), .command_ = std::string("ROLLBACK"), .status_ = 'T'},
-            {.column_ = std::string(""), .command_ = std::string("RELEASE"), .status_ = 'T'},
-            {.column_ = std::string(""), .command_ = std::string("COMMIT")}}));
+    test::backend_startup_peer peer(test::backend_startup_peer::protocol::postgresql, false, test::backend_startup_peer::after_startup::idle, std::vector<ruvia::test::backend_startup_peer::postgres_reply>({{.column_ = std::string(""), .command_ = std::string("BEGIN"), .status_ = 'T'}, {.column_ = std::string(""), .command_ = std::string("SAVEPOINT"), .status_ = 'T'}, {.column_ = std::string(""), .command_ = std::string("ROLLBACK"), .status_ = 'T'}, {.column_ = std::string(""), .command_ = std::string("RELEASE"), .status_ = 'T'}, {.column_ = std::string(""), .command_ = std::string("COMMIT")}}));
     auto& context = test::new_test_io_context();
     auto attachment = attach_event_loop(context, {.queue_capacity_ = 8});
     db_client client(attachment.loop(), peer.config());
     test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
         auto transaction = co_await connected.db().begin_transaction();
-        EXPECT_TRUE(ruvia::test::throws_on([&] { (void)transaction.savepoint(""); }));
+        EXPECT_TRUE(ruvia::test::throws_on([&] {
+            (void)transaction.savepoint("");
+        }));
         co_await transaction.savepoint("stage_1");
         EXPECT_TRUE(transaction.active());
         co_await transaction.rollback_to_savepoint("stage_1");
@@ -708,18 +679,7 @@ TEST(Ruvia, db_transaction_savepoint_commands_quote_identifiers_and_keep_transac
 
 TEST(Ruvia, db_transaction_advisory_locks_notify_and_cursors_execute_in_order) {
     using namespace ruvia;
-    test::backend_startup_peer peer(test::backend_startup_peer::protocol::postgresql, false,
-        test::backend_startup_peer::after_startup::idle,
-        std::vector<ruvia::test::backend_startup_peer::postgres_reply>({{.column_ = std::string(""), .command_ = std::string("BEGIN"), .status_ = 'T'},
-            {.rows_ = std::vector<std::string>({std::string("")}), .status_ = 'T'},
-            {.rows_ = std::vector<std::string>({std::string("")}), .status_ = 'T'},
-            {.rows_ = std::vector<std::string>({std::string("")}), .status_ = 'T'},
-            {.rows_ = std::vector<std::string>({std::string("t")}), .status_ = 'T'},
-            {.rows_ = std::vector<std::string>({std::string("")}), .status_ = 'T'},
-            {.column_ = std::string(""), .command_ = std::string("DECLARE CURSOR"), .status_ = 'T'},
-            {.column_ = std::string("v"), .rows_ = std::vector<std::string>({std::string("chunk-1"), std::string("chunk-2")}), .status_ = 'T'},
-            {.column_ = std::string(""), .command_ = std::string("CLOSE CURSOR"), .status_ = 'T'},
-            {.column_ = std::string(""), .command_ = std::string("COMMIT")}}));
+    test::backend_startup_peer peer(test::backend_startup_peer::protocol::postgresql, false, test::backend_startup_peer::after_startup::idle, std::vector<ruvia::test::backend_startup_peer::postgres_reply>({{.column_ = std::string(""), .command_ = std::string("BEGIN"), .status_ = 'T'}, {.rows_ = std::vector<std::string>({std::string("")}), .status_ = 'T'}, {.rows_ = std::vector<std::string>({std::string("")}), .status_ = 'T'}, {.rows_ = std::vector<std::string>({std::string("")}), .status_ = 'T'}, {.rows_ = std::vector<std::string>({std::string("t")}), .status_ = 'T'}, {.rows_ = std::vector<std::string>({std::string("")}), .status_ = 'T'}, {.column_ = std::string(""), .command_ = std::string("DECLARE CURSOR"), .status_ = 'T'}, {.column_ = std::string("v"), .rows_ = std::vector<std::string>({std::string("chunk-1"), std::string("chunk-2")}), .status_ = 'T'}, {.column_ = std::string(""), .command_ = std::string("CLOSE CURSOR"), .status_ = 'T'}, {.column_ = std::string(""), .command_ = std::string("COMMIT")}}));
     auto& context = test::new_test_io_context();
     auto attachment = attach_event_loop(context, {.queue_capacity_ = 8});
     db_client client(attachment.loop(), peer.config());
@@ -753,13 +713,7 @@ TEST(Ruvia, db_transaction_advisory_locks_notify_and_cursors_execute_in_order) {
 
 TEST(Ruvia, db_transaction_scalar_decode_failure_releases_slot_for_next_transaction) {
     using namespace ruvia;
-    test::backend_startup_peer peer(test::backend_startup_peer::protocol::postgresql, false,
-        test::backend_startup_peer::after_startup::reaccept,
-        std::vector<ruvia::test::backend_startup_peer::postgres_reply>({{.column_ = std::string(""), .command_ = std::string("BEGIN"), .status_ = 'T'},
-            {.rows_ = std::vector<std::string>({std::string("invalid-bool")}), .status_ = 'T'},
-            {.column_ = std::string(""), .command_ = std::string("BEGIN"), .status_ = 'T'},
-            {.rows_ = std::vector<std::string>({std::string("t")}), .status_ = 'T'},
-            {.column_ = std::string(""), .command_ = std::string("COMMIT")}}));
+    test::backend_startup_peer peer(test::backend_startup_peer::protocol::postgresql, false, test::backend_startup_peer::after_startup::reaccept, std::vector<ruvia::test::backend_startup_peer::postgres_reply>({{.column_ = std::string(""), .command_ = std::string("BEGIN"), .status_ = 'T'}, {.rows_ = std::vector<std::string>({std::string("invalid-bool")}), .status_ = 'T'}, {.column_ = std::string(""), .command_ = std::string("BEGIN"), .status_ = 'T'}, {.rows_ = std::vector<std::string>({std::string("t")}), .status_ = 'T'}, {.column_ = std::string(""), .command_ = std::string("COMMIT")}}));
     auto& context = test::new_test_io_context();
     auto attachment = attach_event_loop(context, {.queue_capacity_ = 8});
     auto config = peer.config();
@@ -832,8 +786,7 @@ enum class step {
                     break;
             }
         }
-        return std::make_unique<peer_type>(
-            peer_type::protocol::postgresql, false, peer_type::after_startup::idle, std::move(replies));
+        return std::make_unique<peer_type>(peer_type::protocol::postgresql, false, peer_type::after_startup::idle, std::move(replies));
     }
     // MariaDB status 3: autocommit with a transaction open.
     std::vector<peer_type::maria_reply> replies{};
@@ -862,24 +815,28 @@ enum class step {
 [[nodiscard]] bool sent_statement(peer_type& peer, ruvia::db_driver driver, std::string_view sql) {
     if (driver == ruvia::db_driver::postgresql) {
         const auto parses = peer.postgres_parses();
-        return std::ranges::any_of(parses, [&](const auto& parse) { return parse.sql_ == sql; });
+        return std::ranges::any_of(parses, [&](const auto& parse) {
+            return parse.sql_ == sql;
+        });
     }
     const auto commands = peer.maria_commands();
-    return std::ranges::any_of(
-        commands, [&](const std::string& command) { return command.find(sql) != std::string::npos; });
+    return std::ranges::any_of(commands, [&](const std::string& command) {
+        return command.find(sql) != std::string::npos;
+    });
 }
 
 // Waits for the peer's sessions to end on a blocking-pool thread, so the
 // worker keeps running the timers and closes under test meanwhile. The peer
 // outlives the wait: drive_client() joins the pool before returning.
 ruvia::task<void> await_disconnects(const ruvia::worker_ref& worker, peer_type& peer) {
-    auto waited = co_await ruvia::run_blocking(worker, [target = &peer] { target->wait_for_disconnects(); });
+    auto waited = co_await ruvia::run_blocking(worker, [target = &peer] {
+        target->wait_for_disconnects();
+    });
     waited.value();
 }
 
 template <typename callback_type>
-void drive_client(peer_type& peer, ruvia::db_driver driver,
-    std::optional<ruvia::timeout_duration> transaction_timeout, callback_type&& callback) {
+void drive_client(peer_type& peer, ruvia::db_driver driver, std::optional<ruvia::timeout_duration> transaction_timeout, callback_type&& callback) {
     auto config = peer.config();
     config.driver_ = driver;
     config.transaction_timeout_ = transaction_timeout;

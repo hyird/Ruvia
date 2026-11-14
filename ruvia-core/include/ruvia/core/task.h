@@ -28,8 +28,7 @@ namespace detail {
 class scoped_operation_registration final {
 public:
     scoped_operation_registration() noexcept = default;
-    scoped_operation_registration(
-        scoped_operation_registration&& other, void* new_frame_target) noexcept;
+    scoped_operation_registration(scoped_operation_registration&& other, void* new_frame_target) noexcept;
     ~scoped_operation_registration();
 
     scoped_operation_registration(const scoped_operation_registration&) = delete;
@@ -145,8 +144,7 @@ struct task_final_awaiter final {
     }
 
     template <typename promise_type>
-    [[nodiscard]] std::coroutine_handle<> await_suspend(
-        std::coroutine_handle<promise_type> coroutine) const noexcept {
+    [[nodiscard]] std::coroutine_handle<> await_suspend(std::coroutine_handle<promise_type> coroutine) const noexcept {
         return coroutine.promise().control_.finish();
     }
 
@@ -200,8 +198,7 @@ public:
     }
 
 private:
-    using completed_type = std::conditional_t<std::is_void_v<result_type>,
-        task_promise_completed, task_promise_value<result_type>>;
+    using completed_type = std::conditional_t<std::is_void_v<result_type>, task_promise_completed, task_promise_value<result_type>>;
     std::variant<task_promise_pending, completed_type, task_promise_failure> state_;
 };
 
@@ -314,9 +311,9 @@ public:
     task(const task&) = delete;
     task& operator=(const task&) = delete;
 
-    task(task&& other) noexcept
-        : coroutine_(std::exchange(other.coroutine_, {})),
-          registration_(std::move(other.registration_), std::addressof(coroutine_)) {}
+    task(task&& other) noexcept :
+        coroutine_(std::exchange(other.coroutine_, {})),
+        registration_(std::move(other.registration_), std::addressof(coroutine_)) {}
     task& operator=(task&&) = delete;
 
     ~task() {
@@ -346,8 +343,8 @@ private:
     template <typename u_type>
     friend task<u_type> make_scoped_operation(operation_scope&, task<u_type>);
 
-    explicit task(coroutine_type coroutine) noexcept
-        : coroutine_(coroutine) {}
+    explicit task(coroutine_type coroutine) noexcept :
+        coroutine_(coroutine) {}
 
     void prepare_direct_start() const {
         if (registration_.scoped()) {
@@ -439,8 +436,7 @@ public:
         return task_.coroutine_.done();
     }
 
-    [[nodiscard]] std::coroutine_handle<> await_suspend(
-        std::coroutine_handle<> continuation) noexcept {
+    [[nodiscard]] std::coroutine_handle<> await_suspend(std::coroutine_handle<> continuation) noexcept {
         task_.coroutine_.promise().control_.set_continuation(continuation);
         task_.coroutine_.promise().control_.mark_started();
         return task_.coroutine_;
@@ -460,8 +456,8 @@ public:
 private:
     friend class task<t_type>;
 
-    explicit task_awaiter(task<t_type>&& task_value)
-        : task_(take_ready_to_start(std::move(task_value))) {
+    explicit task_awaiter(task<t_type>&& task_value) :
+        task_(take_ready_to_start(std::move(task_value))) {
         // Enter running only after the final owner has received the cold task;
         // optional return-value elision must not decide whether a move is legal.
         if (task_.registration_.scoped()) {

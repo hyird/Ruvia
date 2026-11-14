@@ -31,45 +31,46 @@ namespace ruvia {
 namespace detail {
 
 template <typename result_type, typename fn_type, typename... args_type>
-concept move_only_function_target =
-    (std::is_void_v<result_type> &&
-        std::same_as<std::invoke_result_t<std::decay_t<fn_type>&, args_type...>, void>) ||
-    (!std::is_void_v<result_type> &&
-        std::is_invocable_r_v<result_type, std::decay_t<fn_type>&, args_type...> &&
-        (!std::is_reference_v<result_type> ||
-            (std::is_reference_v<std::invoke_result_t<std::decay_t<fn_type>&, args_type...>> &&
-                std::is_convertible_v<
-                    std::add_pointer_t<std::remove_reference_t<std::invoke_result_t<std::decay_t<fn_type>&, args_type...>>>,
-                    std::add_pointer_t<std::remove_reference_t<result_type>>>)));
+concept move_only_function_target = (std::is_void_v<result_type> && std::same_as<std::invoke_result_t<std::decay_t<fn_type>&, args_type...>, void>) || (!std::is_void_v<result_type> && std::is_invocable_r_v<result_type, std::decay_t<fn_type>&, args_type...> && (!std::is_reference_v<result_type> || (std::is_reference_v<std::invoke_result_t<std::decay_t<fn_type>&, args_type...>> && std::is_convertible_v<std::add_pointer_t<std::remove_reference_t<std::invoke_result_t<std::decay_t<fn_type>&, args_type...>>>, std::add_pointer_t<std::remove_reference_t<result_type>>>)));
+
+template <typename signature_type>
+struct function_signature;
+
+template <typename result_type, typename... args_type>
+struct function_signature<result_type(args_type...)> final {
+    using plain_type = result_type(args_type...);
+    using invoke_type = result_type (*)(void*, args_type&&...);
+    static constexpr bool is_noexcept = false;
+};
+
+template <typename result_type, typename... args_type>
+struct function_signature<result_type(args_type...) noexcept> final {
+    using plain_type = result_type(args_type...);
+    using invoke_type = result_type (*)(void*, args_type&&...) noexcept;
+    static constexpr bool is_noexcept = true;
+};
 
 }  // namespace detail
 
-template <typename signature_type>
+template <typename signature_type, typename plain_signature = typename detail::function_signature<signature_type>::plain_type>
 class move_only_function;
 
 namespace detail {
-
 inline constexpr std::size_t move_only_function_inline_size = 3 * sizeof(void*);
 inline constexpr std::size_t move_only_function_inline_alignment = alignof(std::max_align_t);
 
 template <typename stored_type>
-inline constexpr bool move_only_function_fits_inline =
-    sizeof(stored_type) <= move_only_function_inline_size &&
-    alignof(stored_type) <= move_only_function_inline_alignment &&
-    std::is_nothrow_move_constructible_v<stored_type>;
+inline constexpr bool move_only_function_fits_inline = sizeof(stored_type) <= move_only_function_inline_size && alignof(stored_type) <= move_only_function_inline_alignment && std::is_nothrow_move_constructible_v<stored_type>;
 
 template <typename signature_type, typename fn_type>
-inline constexpr bool move_only_function_borrow_safe_input =
-    !std::same_as<std::remove_cvref_t<fn_type>, move_only_function<signature_type>> &&
-    move_only_function_fits_inline<std::decay_t<fn_type>> &&
-    std::is_trivially_constructible_v<std::decay_t<fn_type>, fn_type&&> &&
-    std::is_trivially_move_constructible_v<std::decay_t<fn_type>> &&
-    std::is_trivially_destructible_v<std::decay_t<fn_type>>;
+inline constexpr bool move_only_function_borrow_safe_input = !std::same_as<std::remove_cvref_t<fn_type>, move_only_function<signature_type>> && move_only_function_fits_inline<std::decay_t<fn_type>> && std::is_trivially_constructible_v<std::decay_t<fn_type>, fn_type&&> && std::is_trivially_move_constructible_v<std::decay_t<fn_type>> && std::is_trivially_destructible_v<std::decay_t<fn_type>>;
 
 }  // namespace detail
 
-template <typename result_type, bool is_noexcept, typename... args_type>
-class move_only_function<result_type(args_type...) noexcept(is_noexcept)> final {
+template <typename signature_type, typename result_type, typename... args_type>
+class move_only_function<signature_type, result_type(args_type...)> final {
+    static constexpr bool is_noexcept = detail::function_signature<signature_type>::is_noexcept;
+
 public:
     move_only_function() noexcept = default;
     move_only_function(std::nullptr_t) noexcept {}
@@ -78,9 +79,7 @@ public:
     // 不从返回值或转换临时量生成引用。自定义转换须由显式返回引用的 lambda
     // 完成；目标负责被引用对象的寿命。值签名仍允许正常隐式结果转换。
     template <typename fn_type>
-        requires(!std::same_as<std::remove_cvref_t<fn_type>, move_only_function>) &&
-                detail::move_only_function_target<result_type, fn_type, args_type...> &&
-                (!is_noexcept || std::is_nothrow_invocable_r_v<result_type, std::decay_t<fn_type>&, args_type...>)
+        requires(!std::same_as<std::remove_cvref_t<fn_type>, move_only_function>) && detail::move_only_function_target<result_type, fn_type, args_type...> && (!is_noexcept || std::is_nothrow_invocable_r_v<result_type, std::decay_t<fn_type>&, args_type...>)
     move_only_function(fn_type&& fn) {
         using stored_type = std::decay_t<fn_type>;
         if constexpr (std::is_pointer_v<std::remove_reference_t<fn_type>> || std::is_member_pointer_v<std::remove_reference_t<fn_type>>) {
@@ -156,8 +155,10 @@ private:
     // construction: the operation tables below are const static aggregates, and
     // MSVC reports C4268 when such an object is zero-filled by a compiler
     // generated default constructor. Aggregate initialization is unaffected.
+    using invoke_type = typename detail::function_signature<signature_type>::invoke_type;
+
     struct operations final {
-        result_type (*invoke_)(void*, args_type&&...) noexcept(is_noexcept) = nullptr;
+        invoke_type invoke_ = nullptr;
         void (*destroy_)(void*) noexcept = nullptr;
         void (*move_)(void*, void*) noexcept = nullptr;
     };
@@ -185,8 +186,7 @@ private:
     }
 
     template <typename stored_type>
-    static inline constexpr operations inline_operations{
-        &invoke<stored_type>, &destroy_inline<stored_type>, &move_inline<stored_type>};
+    static inline constexpr operations inline_operations{&invoke<stored_type>, &destroy_inline<stored_type>, &move_inline<stored_type>};
 
     // move_from() relocates only inline storage; heap targets keep their pointer.
     template <typename stored_type>
@@ -220,8 +220,7 @@ private:
         operations_ = operations_value;
     }
 
-    alignas(detail::move_only_function_inline_alignment)
-        std::byte storage_[detail::move_only_function_inline_size];
+    alignas(detail::move_only_function_inline_alignment) std::byte storage_[detail::move_only_function_inline_size];
     void* object_{nullptr};
     const operations* operations_{nullptr};
 };
@@ -235,13 +234,10 @@ namespace ruvia {
 // upward and saturating at both bounds. Other conversions use long double;
 // NaN maps to zero, infinities saturate.
 template <typename target_type = std::chrono::steady_clock::duration, typename rep_type, typename period_type>
-[[nodiscard]] constexpr target_type saturating_duration_cast(
-    std::chrono::duration<rep_type, period_type> value) noexcept {
+[[nodiscard]] constexpr target_type saturating_duration_cast(std::chrono::duration<rep_type, period_type> value) noexcept {
     static_assert(std::is_integral_v<typename target_type::rep> && std::is_signed_v<typename target_type::rep>);
     using factor = std::ratio_divide<period_type, typename target_type::period>;
-    if constexpr (std::is_integral_v<rep_type> &&
-                  std::numeric_limits<rep_type>::digits <= std::numeric_limits<std::uintmax_t>::digits &&
-                  (factor::num == 1 || factor::den == 1)) {
+    if constexpr (std::is_integral_v<rep_type> && std::numeric_limits<rep_type>::digits <= std::numeric_limits<std::uintmax_t>::digits && (factor::num == 1 || factor::den == 1)) {
         using count_type = std::conditional_t<std::is_signed_v<rep_type>, std::intmax_t, std::uintmax_t>;
         const auto raw = static_cast<count_type>(value.count());
         auto count = raw / factor::den;
@@ -260,16 +256,13 @@ template <typename target_type = std::chrono::steady_clock::duration, typename r
             return target_type::min();
         }
         return target_type(static_cast<typename target_type::rep>(count) * factor::num);
-    } else if constexpr (std::is_integral_v<rep_type> &&
-                         std::numeric_limits<rep_type>::digits <= std::numeric_limits<std::uintmax_t>::digits) {
+    } else if constexpr (std::is_integral_v<rep_type> && std::numeric_limits<rep_type>::digits <= std::numeric_limits<std::uintmax_t>::digits) {
         using count_type = std::conditional_t<std::is_signed_v<rep_type>, std::intmax_t, std::uintmax_t>;
         using target_rep = typename target_type::rep;
         const bool negative = std::cmp_less(static_cast<count_type>(value.count()), 0);
         const auto raw = static_cast<std::uintmax_t>(value.count());
         const auto magnitude = negative ? std::uintmax_t{0} - raw : raw;
-        const auto limit = negative
-                               ? std::uintmax_t{0} - static_cast<std::uintmax_t>(target_type::min().count())
-                               : static_cast<std::uintmax_t>(target_type::max().count());
+        const auto limit = negative ? std::uintmax_t{0} - static_cast<std::uintmax_t>(target_type::min().count()) : static_cast<std::uintmax_t>(target_type::max().count());
         constexpr auto numerator = static_cast<std::uintmax_t>(factor::num);
         constexpr auto denominator = static_cast<std::uintmax_t>(factor::den);
         const auto whole = magnitude / denominator;
@@ -343,12 +336,12 @@ public:
     constexpr timeout_duration() noexcept = default;
 
     template <std::integral rep_type, typename period_type>
-    constexpr timeout_duration(std::chrono::duration<rep_type, period_type> value) noexcept
-        : value_(saturating_duration_cast<std::chrono::milliseconds>(value)) {}
+    constexpr timeout_duration(std::chrono::duration<rep_type, period_type> value) noexcept :
+        value_(saturating_duration_cast<std::chrono::milliseconds>(value)) {}
 
     template <std::integral count_type>
-    explicit constexpr timeout_duration(count_type milliseconds) noexcept
-        : timeout_duration(std::chrono::duration<count_type, std::milli>(milliseconds)) {}
+    explicit constexpr timeout_duration(count_type milliseconds) noexcept :
+        timeout_duration(std::chrono::duration<count_type, std::milli>(milliseconds)) {}
 
     [[nodiscard]] constexpr std::chrono::milliseconds value() const noexcept {
         return value_;
@@ -357,15 +350,13 @@ public:
     // Mixed comparisons must unwrap explicitly: rounding elapsed time here
     // could otherwise make a positive fractional millisecond expire early.
     template <typename left_type, typename right_type>
-        requires std::same_as<std::remove_cvref_t<left_type>, timeout_duration> &&
-                 std::same_as<std::remove_cvref_t<right_type>, timeout_duration>
+        requires std::same_as<std::remove_cvref_t<left_type>, timeout_duration> && std::same_as<std::remove_cvref_t<right_type>, timeout_duration>
     friend constexpr auto operator<=>(left_type&& left, right_type&& right) noexcept {
         return left.value_ <=> right.value_;
     }
 
     template <typename left_type, typename right_type>
-        requires std::same_as<std::remove_cvref_t<left_type>, timeout_duration> &&
-                 std::same_as<std::remove_cvref_t<right_type>, timeout_duration>
+        requires std::same_as<std::remove_cvref_t<left_type>, timeout_duration> && std::same_as<std::remove_cvref_t<right_type>, timeout_duration>
     friend constexpr bool operator==(left_type&& left, right_type&& right) noexcept {
         return left.value_ == right.value_;
     }
@@ -375,8 +366,7 @@ private:
 };
 
 template <typename rep_type, typename period_type>
-[[nodiscard]] inline std::chrono::steady_clock::time_point saturating_deadline(
-    std::chrono::steady_clock::time_point now, std::chrono::duration<rep_type, period_type> value) noexcept {
+[[nodiscard]] inline std::chrono::steady_clock::time_point saturating_deadline(std::chrono::steady_clock::time_point now, std::chrono::duration<rep_type, period_type> value) noexcept {
     const auto delay = saturating_duration_cast(value);
     if (delay <= std::chrono::steady_clock::duration::zero()) {
         return now;
@@ -391,8 +381,7 @@ template <typename rep_type, typename period_type>
 // Non-positive delays map to zero; positive delays round up to whole
 // milliseconds and saturate at the representable maximum.
 template <typename rep_type, typename period_type>
-[[nodiscard]] constexpr std::chrono::milliseconds ceil_milliseconds(
-    std::chrono::duration<rep_type, period_type> value) noexcept {
+[[nodiscard]] constexpr std::chrono::milliseconds ceil_milliseconds(std::chrono::duration<rep_type, period_type> value) noexcept {
     if (value <= std::chrono::duration<rep_type, period_type>::zero()) {
         return std::chrono::milliseconds::zero();
     }
@@ -400,8 +389,7 @@ template <typename rep_type, typename period_type>
 }
 
 template <typename rep_type, typename period_type>
-[[nodiscard]] inline std::chrono::steady_clock::time_point deadline_after(
-    std::chrono::duration<rep_type, period_type> delay) noexcept {
+[[nodiscard]] inline std::chrono::steady_clock::time_point deadline_after(std::chrono::duration<rep_type, period_type> delay) noexcept {
     return saturating_deadline(std::chrono::steady_clock::now(), delay);
 }
 
@@ -427,11 +415,10 @@ private:
     // Borrows the dispatcher kept alive by the awaiter's stable worker_ref.
     // Stop callback teardown synchronizes the borrow; cancellation dispatch owns
     // any continuation it posts.
-    worker_timer_cancellation(
-        detail::worker_dispatcher& dispatcher, std::size_t slot, std::uint64_t generation) noexcept
-        : dispatcher_(&dispatcher),
-          slot_(slot),
-          generation_(generation) {}
+    worker_timer_cancellation(detail::worker_dispatcher& dispatcher, std::size_t slot, std::uint64_t generation) noexcept :
+        dispatcher_(&dispatcher),
+        slot_(slot),
+        generation_(generation) {}
 
     detail::worker_dispatcher* dispatcher_{nullptr};
     std::size_t slot_{0};
@@ -492,8 +479,7 @@ public:
 
 private:
     void unregister(bool notify) noexcept;
-    void bind(detail::worker_dispatcher& dispatcher, std::size_t slot, std::uint64_t generation,
-        const detail::timer_slot& slot_state) noexcept;
+    void bind(detail::worker_dispatcher& dispatcher, std::size_t slot, std::uint64_t generation, const detail::timer_slot& slot_state) noexcept;
     void release() noexcept;
     [[nodiscard]] bool pending() const noexcept;
 
@@ -537,8 +523,8 @@ class stop_state_ref final {
 public:
     stop_state_ref() noexcept = default;
     stop_state_ref(const stop_state_ref& other) noexcept;
-    stop_state_ref(stop_state_ref&& other) noexcept
-        : state_(std::exchange(other.state_, nullptr)) {}
+    stop_state_ref(stop_state_ref&& other) noexcept :
+        state_(std::exchange(other.state_, nullptr)) {}
     stop_state_ref& operator=(stop_state_ref other) noexcept {
         std::swap(state_, other.state_);
         return *this;
@@ -559,8 +545,8 @@ private:
     friend class stop_state;
 
     // Adopts a reference the caller already holds.
-    explicit stop_state_ref(stop_state* adopted) noexcept
-        : state_(adopted) {}
+    explicit stop_state_ref(stop_state* adopted) noexcept :
+        state_(adopted) {}
 
     stop_state* state_{nullptr};
 };
@@ -631,8 +617,8 @@ private:
     std::atomic<std::uint32_t> run_epoch_{0};
 };
 
-inline stop_state_ref::stop_state_ref(const stop_state_ref& other) noexcept
-    : state_(other.state_) {
+inline stop_state_ref::stop_state_ref(const stop_state_ref& other) noexcept :
+    state_(other.state_) {
     if (state_ != nullptr) {
         state_->retain();
     }
@@ -649,9 +635,9 @@ inline stop_state_ref::~stop_state_ref() {
 // return before destroying the stored callback.
 class stop_callback_node final {
 public:
-    stop_callback_node(const stop_state_ref& state_value, move_only_function<void()> callback_value) noexcept
-        : state_(state_value),
-          callback_(std::move(callback_value)) {}
+    stop_callback_node(const stop_state_ref& state_value, move_only_function<void()> callback_value) noexcept :
+        state_(state_value),
+        callback_(std::move(callback_value)) {}
     ~stop_callback_node() {
         if (linked_) {
             state_->unlink(*this);
@@ -715,19 +701,16 @@ public:
     void reset() noexcept {
         auto phase = phase_.load(std::memory_order_acquire);
         for (;;) {
-            if (phase == registration_phase_type::idle || phase == registration_phase_type::reset_pending ||
-                phase == registration_phase_type::resetting) {
+            if (phase == registration_phase_type::idle || phase == registration_phase_type::reset_pending || phase == registration_phase_type::resetting) {
                 return;
             }
             if (phase == registration_phase_type::registering) {
-                if (phase_.compare_exchange_weak(phase, registration_phase_type::reset_pending,
-                        std::memory_order_acq_rel, std::memory_order_acquire)) {
+                if (phase_.compare_exchange_weak(phase, registration_phase_type::reset_pending, std::memory_order_acq_rel, std::memory_order_acquire)) {
                     return;
                 }
                 continue;
             }
-            if (phase_.compare_exchange_weak(phase, registration_phase_type::resetting,
-                    std::memory_order_acq_rel, std::memory_order_acquire)) {
+            if (phase_.compare_exchange_weak(phase, registration_phase_type::resetting, std::memory_order_acq_rel, std::memory_order_acquire)) {
                 clear_registration();
                 phase_.store(registration_phase_type::idle, std::memory_order_release);
                 return;
@@ -758,8 +741,7 @@ private:
         }
 
         auto expected = registration_phase_type::idle;
-        if (!phase_.compare_exchange_strong(expected, registration_phase_type::registering,
-                std::memory_order_acq_rel, std::memory_order_acquire)) {
+        if (!phase_.compare_exchange_strong(expected, registration_phase_type::registering, std::memory_order_acq_rel, std::memory_order_acquire)) {
             std::terminate();
         }
         callback_.emplace(state, std::move(callback_value));
@@ -768,8 +750,7 @@ private:
         }
         auto callback = callback_->take();
         callback_.reset();
-        const auto previous_phase =
-            phase_.exchange(registration_phase_type::idle, std::memory_order_acq_rel);
+        const auto previous_phase = phase_.exchange(registration_phase_type::idle, std::memory_order_acq_rel);
         if (previous_phase != registration_phase_type::reset_pending) {
             detail::stop_callback_node::invoke(std::move(callback));
         }
@@ -832,8 +813,8 @@ private:
     friend class stop_source;
     friend class stop_group;
 
-    explicit stop_token(detail::stop_state_ref state_value) noexcept
-        : state_(std::move(state_value)) {}
+    explicit stop_token(detail::stop_state_ref state_value) noexcept :
+        state_(std::move(state_value)) {}
 
     detail::stop_state_ref state_;
 };
@@ -881,10 +862,10 @@ private:
 class stop_group final {
 public:
     explicit stop_group(std::span<const stop_token> parents);
-    stop_group(std::initializer_list<stop_token> parents)
-        : stop_group(std::span<const stop_token>(parents.begin(), parents.size())) {}
-    stop_group(const stop_token& first, const stop_token& second)
-        : stop_group(std::span<const stop_token>(std::array<stop_token, 2>{first, second})) {}
+    stop_group(std::initializer_list<stop_token> parents) :
+        stop_group(std::span<const stop_token>(parents.begin(), parents.size())) {}
+    stop_group(const stop_token& first, const stop_token& second) :
+        stop_group(std::span<const stop_token>(std::array<stop_token, 2>{first, second})) {}
     ~stop_group() = default;
 
     stop_group(const stop_group&) = delete;
@@ -920,18 +901,17 @@ public:
     // Implicit so `{.timeout_ = 5s}` stays writable. Rounds up to whole
     // milliseconds and saturates, so a positive input is at least 1 ms.
     template <std::integral rep_type, typename period_type>
-    operation_timeout(std::chrono::duration<rep_type, period_type> value)
-        : value_(require_positive(saturating_duration_cast<std::chrono::milliseconds>(value), value.count() > 0)) {}
+    operation_timeout(std::chrono::duration<rep_type, period_type> value) :
+        value_(require_positive(saturating_duration_cast<std::chrono::milliseconds>(value), value.count() > 0)) {}
 
-    operation_timeout(timeout_duration value)
-        : value_(require_positive(value.value(), value.value().count() > 0)) {}
+    operation_timeout(timeout_duration value) :
+        value_(require_positive(value.value(), value.value().count() > 0)) {}
 
-    explicit operation_timeout(clock_type::time_point deadline) noexcept
-        : value_(deadline) {}
+    explicit operation_timeout(clock_type::time_point deadline) noexcept :
+        value_(deadline) {}
 
     template <std::integral rep_type, typename period_type>
-    [[nodiscard]] static std::optional<operation_timeout> try_create(
-        std::chrono::duration<rep_type, period_type> value) noexcept {
+    [[nodiscard]] static std::optional<operation_timeout> try_create(std::chrono::duration<rep_type, period_type> value) noexcept {
         if (value.count() <= 0) {
             return std::nullopt;
         }
@@ -974,8 +954,8 @@ public:
 private:
     struct relative_tag final {};
 
-    operation_timeout(relative_tag, std::chrono::milliseconds value) noexcept
-        : value_(value) {}
+    operation_timeout(relative_tag, std::chrono::milliseconds value) noexcept :
+        value_(value) {}
 
     [[nodiscard]] static std::chrono::milliseconds require_positive(std::chrono::milliseconds value, bool positive) {
         if (!positive) {
@@ -1005,8 +985,7 @@ struct operation_options final {
 // relative limits keep the shorter, two deadlines keep the earlier, and a
 // mixed pair resolves the relative limit against the merge time and keeps the
 // earlier deadline.
-[[nodiscard]] inline operation_options override_operation_options(
-    const operation_options& base, operation_options overrides) {
+[[nodiscard]] inline operation_options override_operation_options(const operation_options& base, operation_options overrides) {
     operation_options merged = base;
     if (overrides.timeout_.has_value()) {
         if (!merged.timeout_.has_value()) {
@@ -1056,8 +1035,8 @@ public:
         }
     }
 
-    explicit operation_deadline(clock_type::time_point deadline) noexcept
-        : deadline_(deadline) {}
+    explicit operation_deadline(clock_type::time_point deadline) noexcept :
+        deadline_(deadline) {}
 
     [[nodiscard]] std::optional<clock_type::time_point> deadline() const noexcept {
         return deadline_;
@@ -1155,17 +1134,17 @@ private:
     struct inactive final {};
 
     struct active final {
-        active(clock_type::time_point armed_deadline, kind_type armed_kind) noexcept
-            : deadline_(armed_deadline),
-              kind_(std::move(armed_kind)) {}
+        active(clock_type::time_point armed_deadline, kind_type armed_kind) noexcept :
+            deadline_(armed_deadline),
+            kind_(std::move(armed_kind)) {}
 
         clock_type::time_point deadline_;
         kind_type kind_;
     };
 
     struct expired_state final {
-        explicit expired_state(kind_type expired_kind) noexcept
-            : kind_(std::move(expired_kind)) {}
+        explicit expired_state(kind_type expired_kind) noexcept :
+            kind_(std::move(expired_kind)) {}
 
         kind_type kind_;
     };

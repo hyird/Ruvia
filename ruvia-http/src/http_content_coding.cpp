@@ -97,24 +97,23 @@ void http_content_coding_field_parser::update(std::string_view value) noexcept {
         return;
     }
     // Content-Encoding members are tokens (RFC 9110 section 8.4.1).
-    invalid_ = visit_http_content_coding_field(value, http_field_list_role::recipient,
-                   [this](std::string_view, std::optional<http_content_coding> coding) noexcept {
-                       if (coding.has_value() && *coding == http_content_coding::identity) {
-                           return true;
-                       }
-                       if (codings_.size_ == max_content_codings) {
-                           // Keep scanning: later malformed members still invalidate the field.
-                           depth_exceeded_ = true;
-                       } else if (coding.has_value()) {
-                           codings_.values_[codings_.size_++] = *coding;
-                       } else {
-                           ++codings_.size_;
-                       }
-                       if (!coding.has_value()) {
-                           unknown_coding_ = true;
-                       }
-                       return true;
-                   }) != http_field_list_parse_status::ok;
+    invalid_ = visit_http_content_coding_field(value, http_field_list_role::recipient, [this](std::string_view, std::optional<http_content_coding> coding) noexcept {
+        if (coding.has_value() && *coding == http_content_coding::identity) {
+            return true;
+        }
+        if (codings_.size_ == max_content_codings) {
+            // Keep scanning: later malformed members still invalidate the field.
+            depth_exceeded_ = true;
+        } else if (coding.has_value()) {
+            codings_.values_[codings_.size_++] = *coding;
+        } else {
+            ++codings_.size_;
+        }
+        if (!coding.has_value()) {
+            unknown_coding_ = true;
+        }
+        return true;
+    }) != http_field_list_parse_status::ok;
 }
 
 http_content_coding_field_result http_content_coding_field_parser::finish() const noexcept {
@@ -131,31 +130,28 @@ http_content_coding_field_result http_content_coding_field_parser::finish() cons
 }
 
 bool is_valid_http_content_encoding_field_value(std::string_view value, http_field_list_role role) noexcept {
-    return http_visit_token_list(value, role, [](std::string_view) noexcept { return true; }) ==
-           http_field_list_parse_status::ok;
+    return http_visit_token_list(value, role, [](std::string_view) noexcept {
+        return true;
+    }) == http_field_list_parse_status::ok;
 }
 
 }  // namespace ruvia::detail
 
 namespace ruvia {
 
-http_content_coding_field_result parse_http_content_coding(
-    std::string_view value) noexcept {
+http_content_coding_field_result parse_http_content_coding(std::string_view value) noexcept {
     detail::http_content_coding_field_parser parser;
     parser.update(value);
     return parser.finish();
 }
 
-http_content_coding_field_result parse_http_content_coding_headers(
-    std::span<const http_header> headers) noexcept {
+http_content_coding_field_result parse_http_content_coding_headers(std::span<const http_header> headers) noexcept {
     return detail::http_content_coding_from_headers(headers);
 }
 
-http_content_coding_field_result parse_http_content_coding_headers(
-    const http_response_headers& headers) noexcept {
+http_content_coding_field_result parse_http_content_coding_headers(const http_response_headers& headers) noexcept {
     detail::http_content_coding_field_parser parser;
-    const auto* const first = detail::http_response_header_state_access::known_header(
-        headers, detail::response_header_content_encoding);
+    const auto* const first = detail::http_response_header_state_access::known_header(headers, detail::response_header_content_encoding);
     if (first == nullptr) {
         return parser.finish();
     }
@@ -164,8 +160,7 @@ http_content_coding_field_result parse_http_content_coding_headers(
         return parser.finish();
     }
     for (const auto& header : headers) {
-        if (detail::http_response_header_access::known_bit(header) ==
-            detail::response_header_content_encoding) {
+        if (detail::http_response_header_access::known_bit(header) == detail::response_header_content_encoding) {
             parser.update(header.value());
         }
     }
@@ -174,18 +169,16 @@ http_content_coding_field_result parse_http_content_coding_headers(
 
 http_content_coding_field_result request_content_coding(const http_request& request) noexcept {
     detail::http_content_coding_field_parser parser;
-    (void)detail::http_request_access::visit_known_headers(
-        request, detail::http_field_kind::content_encoding, [&parser](std::string_view value) noexcept {
-            parser.update(value);
-            return true;
-        });
+    (void)detail::http_request_access::visit_known_headers(request, detail::http_field_kind::content_encoding, [&parser](std::string_view value) noexcept {
+        parser.update(value);
+        return true;
+    });
     return parser.finish();
 }
 
 namespace {
 
-[[nodiscard]] std::variant<std::string, http_content_decode_error> decode_content_stage(
-    http_content_coding coding, std::string_view input, http_content_decode_options options) {
+[[nodiscard]] std::variant<std::string, http_content_decode_error> decode_content_stage(http_content_coding coding, std::string_view input, http_content_decode_options options) {
     // A zero-length coded representation carries no content: user agents treat
     // it as empty rather than as a truncated coding stream. An out-of-range coding
     // has no token and stays unsupported even for empty input.
@@ -210,8 +203,7 @@ namespace {
 
 }  // namespace
 
-std::optional<std::string> encode_http_content(
-    http_content_coding coding, std::string_view input, http_content_encode_options options) {
+std::optional<std::string> encode_http_content(http_content_coding coding, std::string_view input, http_content_encode_options options) {
     switch (coding) {
         case http_content_coding::brotli:
             return detail::encode_brotli_content(input, options.max_encoded_bytes_);
@@ -230,9 +222,7 @@ std::optional<std::string> encode_http_content(
     throw http_content_codec_error("unsupported content coding");
 }
 
-std::optional<std::string> encode_http_content(
-    std::span<const http_content_coding> codings, std::string_view input,
-    http_content_encode_options options) {
+std::optional<std::string> encode_http_content(std::span<const http_content_coding> codings, std::string_view input, http_content_encode_options options) {
     // Nothing is allocated until a stage produces content.
     std::optional<std::string> current;
     for (const auto coding : codings) {
@@ -253,14 +243,11 @@ std::optional<std::string> encode_http_content(
     return encode_http_content(http_content_coding::identity, input, options);
 }
 
-std::variant<std::string, http_content_decode_error> decode_http_content(
-    http_content_coding coding, std::string_view input, http_content_decode_options options) {
+std::variant<std::string, http_content_decode_error> decode_http_content(http_content_coding coding, std::string_view input, http_content_decode_options options) {
     return decode_http_content(std::span<const http_content_coding>(&coding, 1), input, options);
 }
 
-std::variant<std::string, http_content_decode_error> decode_http_content(
-    std::span<const http_content_coding> codings, std::string_view input,
-    http_content_decode_options options) {
+std::variant<std::string, http_content_decode_error> decode_http_content(std::span<const http_content_coding> codings, std::string_view input, http_content_decode_options options) {
     // Nothing is allocated until a stage produces content, so an oversized
     // identity body is rejected before any allocation.
     std::optional<std::string> current;
@@ -289,8 +276,7 @@ std::variant<std::string, http_content_decode_error> decode_http_content(
 namespace {
 
 [[nodiscard]] bool is_compress_coding_token(std::string_view token) noexcept {
-    return http_ascii_equals_ignore_case(token, "compress") ||
-           http_ascii_equals_ignore_case(token, "x-compress");
+    return http_ascii_equals_ignore_case(token, "compress") || http_ascii_equals_ignore_case(token, "x-compress");
 }
 
 [[nodiscard]] int& explicit_quality(http_response_coding_qualities& qualities, http_content_coding coding) noexcept {
@@ -321,21 +307,17 @@ void visit_accept_encoding_members(std::string_view accept_encoding, visitor_typ
 
 }  // namespace
 
-void http_accepted_encoding_quality::update(
-    std::string_view accept_encoding, std::string_view coding) noexcept {
+void http_accepted_encoding_quality::update(std::string_view accept_encoding, std::string_view coding) noexcept {
     const bool gzip_coding = http_is_gzip_coding_token(coding);
     const bool compress_coding = is_compress_coding_token(coding);
-    visit_accept_encoding_members(accept_encoding,
-        [coding, gzip_coding, compress_coding, this](std::string_view token, int weight) noexcept {
-            const bool explicit_match = gzip_coding       ? http_is_gzip_coding_token(token)
-                                        : compress_coding ? is_compress_coding_token(token)
-                                                          : http_ascii_equals_ignore_case(token, coding);
-            if (explicit_match) {
-                explicit_quality_ = std::max(explicit_quality_, weight);
-            } else if (token == "*") {
-                wildcard_quality_ = std::max(wildcard_quality_, weight);
-            }
-        });
+    visit_accept_encoding_members(accept_encoding, [coding, gzip_coding, compress_coding, this](std::string_view token, int weight) noexcept {
+        const bool explicit_match = gzip_coding ? http_is_gzip_coding_token(token) : (compress_coding ? is_compress_coding_token(token) : http_ascii_equals_ignore_case(token, coding));
+        if (explicit_match) {
+            explicit_quality_ = std::max(explicit_quality_, weight);
+        } else if (token == "*") {
+            wildcard_quality_ = std::max(wildcard_quality_, weight);
+        }
+    });
 }
 
 bool http_accepts_encoding(std::string_view accept_encoding, std::string_view coding) noexcept {
@@ -365,12 +347,11 @@ void http_response_coding_qualities::update(std::string_view accept_encoding) no
 bool http_accepts_encoding(const http_request& request, std::string_view coding) noexcept {
     http_accepted_encoding_quality quality;
     bool present = false;
-    (void)detail::http_request_access::visit_known_headers(
-        request, detail::http_field_kind::accept_encoding, [&](std::string_view value) noexcept {
-            present = true;
-            quality.update(value, coding);
-            return true;
-        });
+    (void)detail::http_request_access::visit_known_headers(request, detail::http_field_kind::accept_encoding, [&](std::string_view value) noexcept {
+        present = true;
+        quality.update(value, coding);
+        return true;
+    });
     return !present || quality.accepts(http_ascii_equals_ignore_case(coding, "identity"));
 }
 
@@ -381,14 +362,11 @@ bool http_response_coding_selection::accepts(std::string_view coding, const http
     return http_accepts_encoding(request, coding);
 }
 
-http_response_content_coding_status evaluate_http_response_content_coding(
-    const http_response_coding_selection& selection, const http_response& response,
-    const http_request* request) {
+http_response_content_coding_status evaluate_http_response_content_coding(const http_response_coding_selection& selection, const http_response& response, const http_request* request) {
     if (!detail::response_has_known_header(response, detail::response_header_content_encoding)) {
         return http_response_content_coding_status::absent;
     }
-    const bool evaluate_extensions = request != nullptr &&
-                                     detail::http_request_access::has_known_header(*request, detail::http_field_kind::accept_encoding);
+    const bool evaluate_extensions = request != nullptr && detail::http_request_access::has_known_header(*request, detail::http_field_kind::accept_encoding);
     struct extension_quality final {
         std::string_view token_;
         http_accepted_encoding_quality quality_;
@@ -403,8 +381,7 @@ http_response_content_coding_status evaluate_http_response_content_coding(
     bool invalid = false;
     const auto remember_extension = [&](std::string_view token) {
         for (const auto& extension : extensions()) {
-            if (http_ascii_equals_ignore_case(extension.token_, token) ||
-                (is_compress_coding_token(extension.token_) && is_compress_coding_token(token))) {
+            if (http_ascii_equals_ignore_case(extension.token_, token) || (is_compress_coding_token(extension.token_) && is_compress_coding_token(token))) {
                 return;
             }
         }
@@ -422,15 +399,14 @@ http_response_content_coding_status evaluate_http_response_content_coding(
         if (detail::http_response_header_access::known_bit(header) != detail::response_header_content_encoding) {
             continue;
         }
-        const auto status = detail::visit_http_content_coding_field(header.value(), detail::http_field_list_role::recipient,
-            [&](std::string_view token, std::optional<http_content_coding> coding) {
-                if (coding.has_value()) {
-                    accepted = accepted && selection.accepts(*coding);
-                } else if (evaluate_extensions) {
-                    remember_extension(token);
-                }
-                return true;
-            });
+        const auto status = detail::visit_http_content_coding_field(header.value(), detail::http_field_list_role::recipient, [&](std::string_view token, std::optional<http_content_coding> coding) {
+            if (coding.has_value()) {
+                accepted = accepted && selection.accepts(*coding);
+            } else if (evaluate_extensions) {
+                remember_extension(token);
+            }
+            return true;
+        });
         invalid = invalid || status != detail::http_field_list_parse_status::ok;
     }
     if (invalid) {
@@ -441,22 +417,20 @@ http_response_content_coding_status evaluate_http_response_content_coding(
     }
     if (!extensions().empty()) {
         bool field_present = false;
-        (void)detail::http_request_access::visit_known_headers(
-            *request, detail::http_field_kind::accept_encoding, [&](std::string_view value) noexcept {
-                field_present = true;
-                visit_accept_encoding_members(value, [&](std::string_view token, int weight) noexcept {
-                    for (auto& extension : extensions()) {
-                        const bool matches = http_ascii_equals_ignore_case(extension.token_, token) ||
-                                             (is_compress_coding_token(extension.token_) && is_compress_coding_token(token));
-                        if (matches) {
-                            extension.quality_.explicit_quality_ = std::max(extension.quality_.explicit_quality_, weight);
-                        } else if (token == "*") {
-                            extension.quality_.wildcard_quality_ = std::max(extension.quality_.wildcard_quality_, weight);
-                        }
+        (void)detail::http_request_access::visit_known_headers(*request, detail::http_field_kind::accept_encoding, [&](std::string_view value) noexcept {
+            field_present = true;
+            visit_accept_encoding_members(value, [&](std::string_view token, int weight) noexcept {
+                for (auto& extension : extensions()) {
+                    const bool matches = http_ascii_equals_ignore_case(extension.token_, token) || (is_compress_coding_token(extension.token_) && is_compress_coding_token(token));
+                    if (matches) {
+                        extension.quality_.explicit_quality_ = std::max(extension.quality_.explicit_quality_, weight);
+                    } else if (token == "*") {
+                        extension.quality_.wildcard_quality_ = std::max(extension.quality_.wildcard_quality_, weight);
                     }
-                });
-                return true;
+                }
             });
+            return true;
+        });
         if (field_present) {
             for (const auto& extension : extensions()) {
                 if (!extension.quality_.accepts()) {
@@ -468,16 +442,13 @@ http_response_content_coding_status evaluate_http_response_content_coding(
     return http_response_content_coding_status::accepted;
 }
 
-http_response_coding_selection select_http_accept_encoding(
-    std::string_view accept_encoding, std::span<const http_content_coding> candidates) noexcept {
+http_response_coding_selection select_http_accept_encoding(std::string_view accept_encoding, std::span<const http_content_coding> candidates) noexcept {
     http_response_coding_qualities qualities;
     qualities.update(accept_encoding);
     return http_response_coding_selection::select(qualities, candidates);
 }
 
-http_response_coding_selection select_http_accept_encoding(
-    std::span<const http_header> request_headers,
-    std::span<const http_content_coding> candidates) noexcept {
+http_response_coding_selection select_http_accept_encoding(std::span<const http_header> request_headers, std::span<const http_content_coding> candidates) noexcept {
     http_response_coding_qualities qualities;
     for (const auto& header : request_headers) {
         if (http_ascii_equals_ignore_case(header.name(), "Accept-Encoding")) {
@@ -487,9 +458,7 @@ http_response_coding_selection select_http_accept_encoding(
     return http_response_coding_selection::select(qualities, candidates);
 }
 
-http_response_coding_selection select_http_accept_encoding(
-    std::span<const http_header_view> request_headers,
-    std::span<const http_content_coding> candidates) noexcept {
+http_response_coding_selection select_http_accept_encoding(std::span<const http_header_view> request_headers, std::span<const http_content_coding> candidates) noexcept {
     http_response_coding_qualities qualities;
     for (const auto& header : request_headers) {
         if (http_ascii_equals_ignore_case(header.name(), "Accept-Encoding")) {
@@ -499,33 +468,26 @@ http_response_coding_selection select_http_accept_encoding(
     return http_response_coding_selection::select(qualities, candidates);
 }
 
-http_response_coding_selection select_http_accept_encoding(
-    const http_request& request, std::span<const http_content_coding> candidates) noexcept {
+http_response_coding_selection select_http_accept_encoding(const http_request& request, std::span<const http_content_coding> candidates) noexcept {
     return http_response_coding_selection_for(request).select(candidates);
 }
 
-std::optional<http_content_coding> negotiate_http_content_coding(
-    std::string_view accept_encoding, std::span<const http_content_coding> candidates) noexcept {
+std::optional<http_content_coding> negotiate_http_content_coding(std::string_view accept_encoding, std::span<const http_content_coding> candidates) noexcept {
     const auto selection = select_http_accept_encoding(accept_encoding, candidates);
     return selection.acceptable() ? std::optional(selection.coding()) : std::nullopt;
 }
 
-std::optional<http_content_coding> negotiate_http_content_coding(
-    std::span<const http_header> request_headers,
-    std::span<const http_content_coding> candidates) noexcept {
+std::optional<http_content_coding> negotiate_http_content_coding(std::span<const http_header> request_headers, std::span<const http_content_coding> candidates) noexcept {
     const auto selection = select_http_accept_encoding(request_headers, candidates);
     return selection.acceptable() ? std::optional(selection.coding()) : std::nullopt;
 }
 
-std::optional<http_content_coding> negotiate_http_content_coding(
-    std::span<const http_header_view> request_headers,
-    std::span<const http_content_coding> candidates) noexcept {
+std::optional<http_content_coding> negotiate_http_content_coding(std::span<const http_header_view> request_headers, std::span<const http_content_coding> candidates) noexcept {
     const auto selection = select_http_accept_encoding(request_headers, candidates);
     return selection.acceptable() ? std::optional(selection.coding()) : std::nullopt;
 }
 
-std::optional<http_content_coding> negotiate_http_content_coding(
-    const http_request& request, std::span<const http_content_coding> candidates) noexcept {
+std::optional<http_content_coding> negotiate_http_content_coding(const http_request& request, std::span<const http_content_coding> candidates) noexcept {
     const auto selection = select_http_accept_encoding(request, candidates);
     return selection.acceptable() ? std::optional(selection.coding()) : std::nullopt;
 }
@@ -536,13 +498,10 @@ bool is_http_media_type_compressible(std::string_view content_type_value) noexce
         return false;
     }
     const auto starts_with = [&](std::string_view prefix) noexcept {
-        return media_type.size() >= prefix.size() &&
-               http_ascii_equals_ignore_case(media_type.substr(0, prefix.size()), prefix);
+        return media_type.size() >= prefix.size() && http_ascii_equals_ignore_case(media_type.substr(0, prefix.size()), prefix);
     };
     const auto ends_with = [&](std::string_view suffix) noexcept {
-        return media_type.size() >= suffix.size() &&
-               http_ascii_equals_ignore_case(
-                   media_type.substr(media_type.size() - suffix.size()), suffix);
+        return media_type.size() >= suffix.size() && http_ascii_equals_ignore_case(media_type.substr(media_type.size() - suffix.size()), suffix);
     };
     if (ends_with("zip")) {
         return false;
@@ -603,9 +562,9 @@ voidpf zlib_allocate(voidpf opaque, uInt items, uInt size) noexcept {
 
 }  // namespace
 
-zlib_inflate_stream::zlib_inflate_stream(int window_bits, std::size_t max_memory_bytes)
-    : allocation_(max_memory_bytes, max_memory_bytes != (std::numeric_limits<std::size_t>::max)()),
-      stream_(make_zlib_stream(allocation_)) {
+zlib_inflate_stream::zlib_inflate_stream(int window_bits, std::size_t max_memory_bytes) :
+    allocation_(max_memory_bytes, max_memory_bytes != (std::numeric_limits<std::size_t>::max)()),
+    stream_(make_zlib_stream(allocation_)) {
     if (inflateInit2(&stream_, window_bits) != Z_OK) {
         allocation_.rethrow_if_failed();
     }
@@ -622,19 +581,16 @@ bool zlib_inflate_stream::reset() noexcept {
     return initialized() && inflateReset(&stream_) == Z_OK;
 }
 
-zlib_deflate_stream::zlib_deflate_stream(
-    int level, int window_bits, int mem_level, int strategy, std::size_t max_memory_bytes)
-    : allocation_(max_memory_bytes, max_memory_bytes != (std::numeric_limits<std::size_t>::max)()),
-      stream_(make_zlib_stream(allocation_)) {
+zlib_deflate_stream::zlib_deflate_stream(int level, int window_bits, int mem_level, int strategy, std::size_t max_memory_bytes) :
+    allocation_(max_memory_bytes, max_memory_bytes != (std::numeric_limits<std::size_t>::max)()),
+    stream_(make_zlib_stream(allocation_)) {
     if (deflateInit2(&stream_, level, Z_DEFLATED, window_bits, mem_level, strategy) != Z_OK) {
         allocation_.rethrow_if_failed();
     }
 }
 
-zlib_deflate_stream::zlib_deflate_stream(zlib_content_format format, std::size_t max_memory_bytes)
-    : zlib_deflate_stream(Z_DEFAULT_COMPRESSION,
-          format == zlib_content_format::gzip ? zlib_gzip_window_bits : zlib_deflate_window_bits,
-          zlib_default_mem_level, Z_DEFAULT_STRATEGY, max_memory_bytes) {}
+zlib_deflate_stream::zlib_deflate_stream(zlib_content_format format, std::size_t max_memory_bytes) :
+    zlib_deflate_stream(Z_DEFAULT_COMPRESSION, format == zlib_content_format::gzip ? zlib_gzip_window_bits : zlib_deflate_window_bits, zlib_default_mem_level, Z_DEFAULT_STRATEGY, max_memory_bytes) {}
 
 zlib_deflate_stream::~zlib_deflate_stream() {
     if (initialized()) {
@@ -647,8 +603,7 @@ bool zlib_deflate_stream::reset() noexcept {
     return initialized() && deflateReset(&stream_) == Z_OK;
 }
 
-bool zlib_deflate_stream::encode(std::string_view input, std::string& output, int flush,
-    std::size_t max_encoded_bytes) {
+bool zlib_deflate_stream::encode(std::string_view input, std::string& output, int flush, std::size_t max_encoded_bytes) {
     if (output.size() > max_encoded_bytes) {
         return false;
     }
@@ -686,8 +641,7 @@ bool zlib_deflate_stream::encode(std::string_view input, std::string& output, in
             return false;
         }
         output.append(buffer.data(), produced);
-        if (status == Z_STREAM_END ||
-            (operation != Z_FINISH && input_consumed && stream_.avail_out != 0)) {
+        if (status == Z_STREAM_END || (operation != Z_FINISH && input_consumed && stream_.avail_out != 0)) {
             return true;
         }
         if (probing) {
@@ -705,9 +659,7 @@ bool zlib_deflate_stream::encode(std::string_view input, std::string& output, in
 
 namespace ruvia::detail {
 
-static std::variant<std::string, http_content_decode_error> decode_zlib_content(std::string_view input,
-    std::size_t max_decoded_bytes, int window_bits,
-    bool allow_concatenated_members) {
+static std::variant<std::string, http_content_decode_error> decode_zlib_content(std::string_view input, std::size_t max_decoded_bytes, int window_bits, bool allow_concatenated_members) {
     std::string output;
     zlib_inflate_stream inflater(window_bits);
     if (!inflater.initialized()) {
@@ -769,30 +721,23 @@ static std::variant<std::string, http_content_decode_error> decode_zlib_content(
     }
 }
 
-std::optional<std::string> encode_zlib_content(zlib_deflate_stream& deflater,
-    std::string_view input, std::size_t max_encoded_bytes) {
+std::optional<std::string> encode_zlib_content(zlib_deflate_stream& deflater, std::string_view input, std::size_t max_encoded_bytes) {
     return encode_whole_content_with_stream(deflater, Z_FINISH, input, max_encoded_bytes);
 }
-std::variant<std::string, http_content_decode_error> decode_gzip_content(
-    std::string_view input, std::size_t max_decoded_bytes) {
+std::variant<std::string, http_content_decode_error> decode_gzip_content(std::string_view input, std::size_t max_decoded_bytes) {
     return decode_zlib_content(input, max_decoded_bytes, zlib_gzip_window_bits, true);
 }
 
-std::variant<std::string, http_content_decode_error> decode_deflate_content(
-    std::string_view input, std::size_t max_decoded_bytes) {
+std::variant<std::string, http_content_decode_error> decode_deflate_content(std::string_view input, std::size_t max_decoded_bytes) {
     return decode_zlib_content(input, max_decoded_bytes, zlib_deflate_window_bits, false);
 }
 
-std::optional<std::string> encode_gzip_content(
-    std::string_view input, std::size_t max_encoded_bytes) {
-    return encode_whole_content<zlib_deflate_stream>(
-        "zlib encoder initialization failed", Z_FINISH, input, max_encoded_bytes, zlib_content_format::gzip);
+std::optional<std::string> encode_gzip_content(std::string_view input, std::size_t max_encoded_bytes) {
+    return encode_whole_content<zlib_deflate_stream>("zlib encoder initialization failed", Z_FINISH, input, max_encoded_bytes, zlib_content_format::gzip);
 }
 
-std::optional<std::string> encode_deflate_content(
-    std::string_view input, std::size_t max_encoded_bytes) {
-    return encode_whole_content<zlib_deflate_stream>("zlib encoder initialization failed", Z_FINISH, input,
-        max_encoded_bytes, zlib_content_format::deflate);
+std::optional<std::string> encode_deflate_content(std::string_view input, std::size_t max_encoded_bytes) {
+    return encode_whole_content<zlib_deflate_stream>("zlib encoder initialization failed", Z_FINISH, input, max_encoded_bytes, zlib_content_format::deflate);
 }
 
 }  // namespace ruvia::detail
@@ -814,9 +759,7 @@ namespace ruvia::detail {
 // failure.
 class brotli_decoder_stream final {
 public:
-    explicit brotli_decoder_stream(
-        std::size_t max_decoded_bytes,
-        std::size_t max_memory_bytes = (std::numeric_limits<std::size_t>::max)());
+    explicit brotli_decoder_stream(std::size_t max_decoded_bytes, std::size_t max_memory_bytes = (std::numeric_limits<std::size_t>::max)());
     ~brotli_decoder_stream();
     brotli_decoder_stream(const brotli_decoder_stream&) = delete;
     brotli_decoder_stream& operator=(const brotli_decoder_stream&) = delete;
@@ -848,9 +791,7 @@ inline constexpr int brotli_stream_window_bits = 19;
 // Encoder at quality 5, shared by whole-buffer and streaming HTTP content coding.
 class brotli_encoder_stream final {
 public:
-    explicit brotli_encoder_stream(
-        int window_bits,
-        std::size_t max_memory_bytes = (std::numeric_limits<std::size_t>::max)());
+    explicit brotli_encoder_stream(int window_bits, std::size_t max_memory_bytes = (std::numeric_limits<std::size_t>::max)());
     ~brotli_encoder_stream();
     brotli_encoder_stream(const brotli_encoder_stream&) = delete;
     brotli_encoder_stream& operator=(const brotli_encoder_stream&) = delete;
@@ -861,8 +802,7 @@ public:
     // Consumes the input and drains the requested operation into output. False
     // means the total output budget was exceeded before appending a block.
     // After false or an exception, the owner must discard/rebuild this stream.
-    [[nodiscard]] bool encode(std::string_view input, std::string& output,
-        BrotliEncoderOperation operation, std::size_t max_encoded_bytes);
+    [[nodiscard]] bool encode(std::string_view input, std::string& output, BrotliEncoderOperation operation, std::size_t max_encoded_bytes);
 
 private:
     http_c_library_memory allocation_;
@@ -915,13 +855,9 @@ inline constexpr std::size_t brotli_decoder_table_allowance = 3U * 1024U * 1024U
 }
 }  // namespace
 
-brotli_decoder_stream::brotli_decoder_stream(
-    std::size_t max_decoded_bytes, std::size_t max_memory_bytes)
-    : allocation_(
-          (std::min)(brotli_decoder_native_budget(max_decoded_bytes), max_memory_bytes),
-          max_memory_bytes < brotli_decoder_native_budget(max_decoded_bytes)),
-      state_(BrotliDecoderCreateInstance(
-          &http_c_library_memory::allocate_opaque_first, &http_c_library_memory::deallocate_opaque_first, &allocation_)) {
+brotli_decoder_stream::brotli_decoder_stream(std::size_t max_decoded_bytes, std::size_t max_memory_bytes) :
+    allocation_((std::min)(brotli_decoder_native_budget(max_decoded_bytes), max_memory_bytes), max_memory_bytes < brotli_decoder_native_budget(max_decoded_bytes)),
+    state_(BrotliDecoderCreateInstance(&http_c_library_memory::allocate_opaque_first, &http_c_library_memory::deallocate_opaque_first, &allocation_)) {
     if (state_ == nullptr) {
         allocation_.rethrow_if_failed();
     }
@@ -933,13 +869,10 @@ brotli_decoder_stream::~brotli_decoder_stream() {
     }
 }
 
-brotli_encoder_stream::brotli_encoder_stream(int window_bits, std::size_t max_memory_bytes)
-    : allocation_(max_memory_bytes, max_memory_bytes != (std::numeric_limits<std::size_t>::max)()),
-      state_(BrotliEncoderCreateInstance(
-          &http_c_library_memory::allocate_opaque_first, &http_c_library_memory::deallocate_opaque_first, &allocation_)) {
-    if (state_ != nullptr &&
-        (BrotliEncoderSetParameter(state_, BROTLI_PARAM_QUALITY, http_brotli_quality) != BROTLI_TRUE ||
-            BrotliEncoderSetParameter(state_, BROTLI_PARAM_LGWIN, static_cast<std::uint32_t>(window_bits)) != BROTLI_TRUE)) {
+brotli_encoder_stream::brotli_encoder_stream(int window_bits, std::size_t max_memory_bytes) :
+    allocation_(max_memory_bytes, max_memory_bytes != (std::numeric_limits<std::size_t>::max)()),
+    state_(BrotliEncoderCreateInstance(&http_c_library_memory::allocate_opaque_first, &http_c_library_memory::deallocate_opaque_first, &allocation_)) {
+    if (state_ != nullptr && (BrotliEncoderSetParameter(state_, BROTLI_PARAM_QUALITY, http_brotli_quality) != BROTLI_TRUE || BrotliEncoderSetParameter(state_, BROTLI_PARAM_LGWIN, static_cast<std::uint32_t>(window_bits)) != BROTLI_TRUE)) {
         BrotliEncoderDestroyInstance(state_);
         state_ = nullptr;
     }
@@ -954,15 +887,13 @@ brotli_encoder_stream::~brotli_encoder_stream() {
     }
 }
 
-bool brotli_encoder_stream::encode(std::string_view input, std::string& output,
-    BrotliEncoderOperation operation, std::size_t max_encoded_bytes) {
+bool brotli_encoder_stream::encode(std::string_view input, std::string& output, BrotliEncoderOperation operation, std::size_t max_encoded_bytes) {
     std::size_t available_input = input.size();
     const auto* next_input = reinterpret_cast<const std::uint8_t*>(input.data());
     for (;;) {
         const auto before_input = available_input;
         std::size_t available_output = 0;
-        const auto compressed = BrotliEncoderCompressStream(state_, operation,
-            &available_input, &next_input, &available_output, nullptr, nullptr);
+        const auto compressed = BrotliEncoderCompressStream(state_, operation, &available_input, &next_input, &available_output, nullptr, nullptr);
         allocation_.rethrow_if_failed();
         if (compressed != BROTLI_TRUE) {
             throw http_content_codec_error("brotli encoding failed");
@@ -990,8 +921,7 @@ bool brotli_encoder_stream::encode(std::string_view input, std::string& output,
     }
 }
 
-std::variant<std::string, http_content_decode_error> decode_brotli_content(
-    std::string_view input, std::size_t max_decoded_bytes) {
+std::variant<std::string, http_content_decode_error> decode_brotli_content(std::string_view input, std::size_t max_decoded_bytes) {
     std::string output;
     brotli_decoder_stream decoder(max_decoded_bytes);
     if (!decoder.initialized()) {
@@ -1004,16 +934,14 @@ std::variant<std::string, http_content_decode_error> decode_brotli_content(
     for (;;) {
         const auto before_input = available_input;
         std::size_t available_output = 0;
-        const auto result_value = BrotliDecoderDecompressStream(
-            state_value, &available_input, &next_input, &available_output, nullptr, nullptr);
+        const auto result_value = BrotliDecoderDecompressStream(state_value, &available_input, &next_input, &available_output, nullptr, nullptr);
         bool produced_output = false;
         // The ring buffer can expose more than one contiguous block. Consume
         // each borrow before the next decoder call invalidates it.
         while (BrotliDecoderHasMoreOutput(state_value) == BROTLI_TRUE) {
             std::size_t produced = 0;
             const auto* bytes_value = BrotliDecoderTakeOutput(state_value, &produced);
-            if (!append_decoded_bytes(
-                    output, reinterpret_cast<const char*>(bytes_value), produced, max_decoded_bytes)) {
+            if (!append_decoded_bytes(output, reinterpret_cast<const char*>(bytes_value), produced, max_decoded_bytes)) {
                 return http_content_decode_error::decoded_size_exceeded;
             }
             produced_output = produced_output || produced != 0;
@@ -1039,24 +967,18 @@ std::variant<std::string, http_content_decode_error> decode_brotli_content(
             return http_content_decode_error::invalid_content;
         }
         const bool progressed = produced_output || available_input != before_input;
-        if (!progressed ||
-            (result_value == BROTLI_DECODER_RESULT_NEEDS_MORE_INPUT && available_input == 0)) {
+        if (!progressed || (result_value == BROTLI_DECODER_RESULT_NEEDS_MORE_INPUT && available_input == 0)) {
             return http_content_decode_error::invalid_content;
         }
     }
 }
 
-std::optional<std::string> encode_brotli_content(
-    brotli_encoder_stream& encoder, std::string_view input,
-    std::size_t max_encoded_bytes) {
-    return encode_whole_content_with_stream(
-        encoder, BROTLI_OPERATION_FINISH, input, max_encoded_bytes);
+std::optional<std::string> encode_brotli_content(brotli_encoder_stream& encoder, std::string_view input, std::size_t max_encoded_bytes) {
+    return encode_whole_content_with_stream(encoder, BROTLI_OPERATION_FINISH, input, max_encoded_bytes);
 }
 
-std::optional<std::string> encode_brotli_content(
-    std::string_view input, std::size_t max_encoded_bytes) {
-    return encode_whole_content<brotli_encoder_stream>("brotli encoder initialization failed",
-        BROTLI_OPERATION_FINISH, input, max_encoded_bytes, brotli_whole_buffer_window_bits);
+std::optional<std::string> encode_brotli_content(std::string_view input, std::size_t max_encoded_bytes) {
+    return encode_whole_content<brotli_encoder_stream>("brotli encoder initialization failed", BROTLI_OPERATION_FINISH, input, max_encoded_bytes, brotli_whole_buffer_window_bits);
 }
 
 }  // namespace ruvia::detail
@@ -1074,8 +996,7 @@ namespace ruvia::detail {
 
 class zstd_decoder_stream final {
 public:
-    explicit zstd_decoder_stream(
-        std::size_t max_memory_bytes = (std::numeric_limits<std::size_t>::max)());
+    explicit zstd_decoder_stream(std::size_t max_memory_bytes = (std::numeric_limits<std::size_t>::max)());
     ~zstd_decoder_stream();
     zstd_decoder_stream(const zstd_decoder_stream&) = delete;
     zstd_decoder_stream& operator=(const zstd_decoder_stream&) = delete;
@@ -1101,8 +1022,7 @@ private:
 // false means the owner must destroy it.
 class zstd_encoder_stream final {
 public:
-    explicit zstd_encoder_stream(
-        std::size_t max_memory_bytes = (std::numeric_limits<std::size_t>::max)());
+    explicit zstd_encoder_stream(std::size_t max_memory_bytes = (std::numeric_limits<std::size_t>::max)());
     ~zstd_encoder_stream();
     zstd_encoder_stream(const zstd_encoder_stream&) = delete;
     zstd_encoder_stream& operator=(const zstd_encoder_stream&) = delete;
@@ -1119,8 +1039,7 @@ public:
     // means output would exceed `max_encoded_bytes` in total; no byte past
     // that cap is appended. After false or an exception, the owner must reset
     // or discard this stream.
-    [[nodiscard]] bool encode(std::string_view input, std::string& output,
-        ZSTD_EndDirective operation, std::size_t max_encoded_bytes);
+    [[nodiscard]] bool encode(std::string_view input, std::string& output, ZSTD_EndDirective operation, std::size_t max_encoded_bytes);
 
 private:
     http_c_library_memory allocation_;
@@ -1144,13 +1063,10 @@ inline constexpr int http_zstd_window_log_max = 23;
 
 }  // namespace
 
-zstd_decoder_stream::zstd_decoder_stream(std::size_t max_memory_bytes)
-    : allocation_(max_memory_bytes, max_memory_bytes != (std::numeric_limits<std::size_t>::max)()),
-      stream_(ZSTD_createDStream_advanced(ZSTD_customMem{
-          &http_c_library_memory::allocate_opaque_first, &http_c_library_memory::deallocate_opaque_first, &allocation_})) {
-    if (stream_ != nullptr &&
-        (ZSTD_isError(ZSTD_initDStream(stream_)) != 0 ||
-            ZSTD_isError(ZSTD_DCtx_setParameter(stream_, ZSTD_d_windowLogMax, http_zstd_window_log_max)) != 0)) {
+zstd_decoder_stream::zstd_decoder_stream(std::size_t max_memory_bytes) :
+    allocation_(max_memory_bytes, max_memory_bytes != (std::numeric_limits<std::size_t>::max)()),
+    stream_(ZSTD_createDStream_advanced(ZSTD_customMem{&http_c_library_memory::allocate_opaque_first, &http_c_library_memory::deallocate_opaque_first, &allocation_})) {
+    if (stream_ != nullptr && (ZSTD_isError(ZSTD_initDStream(stream_)) != 0 || ZSTD_isError(ZSTD_DCtx_setParameter(stream_, ZSTD_d_windowLogMax, http_zstd_window_log_max)) != 0)) {
         (void)ZSTD_freeDStream(stream_);
         stream_ = nullptr;
     }
@@ -1165,20 +1081,14 @@ zstd_decoder_stream::~zstd_decoder_stream() {
     }
 }
 
-zstd_encoder_stream::zstd_encoder_stream(std::size_t max_memory_bytes)
-    : allocation_(max_memory_bytes, max_memory_bytes != (std::numeric_limits<std::size_t>::max)()),
-      context_(ZSTD_createCCtx_advanced(ZSTD_customMem{
-          &http_c_library_memory::allocate_opaque_first, &http_c_library_memory::deallocate_opaque_first, &allocation_})) {
+zstd_encoder_stream::zstd_encoder_stream(std::size_t max_memory_bytes) :
+    allocation_(max_memory_bytes, max_memory_bytes != (std::numeric_limits<std::size_t>::max)()),
+    context_(ZSTD_createCCtx_advanced(ZSTD_customMem{&http_c_library_memory::allocate_opaque_first, &http_c_library_memory::deallocate_opaque_first, &allocation_})) {
     // The level picks its own window (and adapts it to a known source size).
     // RFC 9659's 8 MiB is only a ceiling; pinning it would also fix the
     // streaming input buffer at the window size for every pooled encoder.
-    const bool window_exceeds_http_limit =
-        ZSTD_getCParams(ZSTD_CLEVEL_DEFAULT, ZSTD_CONTENTSIZE_UNKNOWN, 0).windowLog >
-        static_cast<unsigned>(http_zstd_window_log_max);
-    if (context_ != nullptr &&
-        (ZSTD_isError(ZSTD_CCtx_setParameter(context_, ZSTD_c_compressionLevel, ZSTD_CLEVEL_DEFAULT)) != 0 ||
-            (window_exceeds_http_limit &&
-                ZSTD_isError(ZSTD_CCtx_setParameter(context_, ZSTD_c_windowLog, http_zstd_window_log_max)) != 0))) {
+    const bool window_exceeds_http_limit = ZSTD_getCParams(ZSTD_CLEVEL_DEFAULT, ZSTD_CONTENTSIZE_UNKNOWN, 0).windowLog > static_cast<unsigned>(http_zstd_window_log_max);
+    if (context_ != nullptr && (ZSTD_isError(ZSTD_CCtx_setParameter(context_, ZSTD_c_compressionLevel, ZSTD_CLEVEL_DEFAULT)) != 0 || (window_exceeds_http_limit && ZSTD_isError(ZSTD_CCtx_setParameter(context_, ZSTD_c_windowLog, http_zstd_window_log_max)) != 0))) {
         (void)ZSTD_freeCCtx(context_);
         context_ = nullptr;
     }
@@ -1198,8 +1108,7 @@ bool zstd_encoder_stream::reset() noexcept {
     return context_ != nullptr && ZSTD_isError(ZSTD_CCtx_reset(context_, ZSTD_reset_session_only)) == 0;
 }
 
-bool zstd_encoder_stream::encode(std::string_view input, std::string& output,
-    ZSTD_EndDirective operation, std::size_t max_encoded_bytes) {
+bool zstd_encoder_stream::encode(std::string_view input, std::string& output, ZSTD_EndDirective operation, std::size_t max_encoded_bytes) {
     if (output.size() > max_encoded_bytes) {
         return false;
     }
@@ -1235,8 +1144,7 @@ bool zstd_encoder_stream::encode(std::string_view input, std::string& output,
     }
 }
 
-std::variant<std::string, http_content_decode_error> decode_zstd_content(
-    std::string_view input, std::size_t max_decoded_bytes) {
+std::variant<std::string, http_content_decode_error> decode_zstd_content(std::string_view input, std::size_t max_decoded_bytes) {
     std::string output;
     zstd_decoder_stream decoder;
     if (!decoder.initialized()) {
@@ -1271,16 +1179,12 @@ std::variant<std::string, http_content_decode_error> decode_zstd_content(
     }
 }
 
-std::optional<std::string> encode_zstd_content(
-    zstd_encoder_stream& encoder, std::string_view input,
-    std::size_t max_encoded_bytes) {
+std::optional<std::string> encode_zstd_content(zstd_encoder_stream& encoder, std::string_view input, std::size_t max_encoded_bytes) {
     return encode_whole_content_with_stream(encoder, ZSTD_e_end, input, max_encoded_bytes);
 }
 
-std::optional<std::string> encode_zstd_content(
-    std::string_view input, std::size_t max_encoded_bytes) {
-    return encode_whole_content<zstd_encoder_stream>(
-        "zstd encoder initialization failed", ZSTD_e_end, input, max_encoded_bytes);
+std::optional<std::string> encode_zstd_content(std::string_view input, std::size_t max_encoded_bytes) {
+    return encode_whole_content<zstd_encoder_stream>("zstd encoder initialization failed", ZSTD_e_end, input, max_encoded_bytes);
 }
 
 }  // namespace ruvia::detail
@@ -1291,19 +1195,14 @@ namespace {
 
 using encoder_stream = std::variant<detail::zlib_deflate_stream, detail::brotli_encoder_stream, detail::zstd_encoder_stream>;
 
-void emplace_encoder_stream(std::optional<encoder_stream>& target, http_content_coding coding,
-    std::size_t max_memory_bytes) {
+void emplace_encoder_stream(std::optional<encoder_stream>& target, http_content_coding coding, std::size_t max_memory_bytes) {
     switch (coding) {
         case http_content_coding::gzip:
         case http_content_coding::deflate:
-            target.emplace(std::in_place_type<detail::zlib_deflate_stream>,
-                coding == http_content_coding::gzip ? detail::zlib_content_format::gzip
-                                                    : detail::zlib_content_format::deflate,
-                max_memory_bytes);
+            target.emplace(std::in_place_type<detail::zlib_deflate_stream>, coding == http_content_coding::gzip ? detail::zlib_content_format::gzip : detail::zlib_content_format::deflate, max_memory_bytes);
             return;
         case http_content_coding::brotli:
-            target.emplace(std::in_place_type<detail::brotli_encoder_stream>,
-                detail::brotli_stream_window_bits, max_memory_bytes);
+            target.emplace(std::in_place_type<detail::brotli_encoder_stream>, detail::brotli_stream_window_bits, max_memory_bytes);
             return;
         case http_content_coding::zstd:
             target.emplace(std::in_place_type<detail::zstd_encoder_stream>, max_memory_bytes);
@@ -1326,24 +1225,18 @@ void emplace_encoder_stream(std::optional<encoder_stream>& target, http_content_
     return "failed to initialize Zstd content encoder";
 }
 
-[[nodiscard]] bool encode_stream(detail::zlib_deflate_stream& deflater, std::string_view input,
-    std::string& output, bool flush, bool finish_value, std::size_t max_encoded_bytes) {
-    const int operation = finish_value ? Z_FINISH : flush ? Z_SYNC_FLUSH
-                                                          : Z_NO_FLUSH;
+[[nodiscard]] bool encode_stream(detail::zlib_deflate_stream& deflater, std::string_view input, std::string& output, bool flush, bool finish_value, std::size_t max_encoded_bytes) {
+    const int operation = finish_value ? Z_FINISH : (flush ? Z_SYNC_FLUSH : Z_NO_FLUSH);
     return deflater.encode(input, output, operation, max_encoded_bytes);
 }
 
-[[nodiscard]] bool encode_stream(detail::brotli_encoder_stream& encoder, std::string_view input,
-    std::string& output, bool flush, bool finish_value, std::size_t max_encoded_bytes) {
-    const auto operation = finish_value ? BROTLI_OPERATION_FINISH : flush ? BROTLI_OPERATION_FLUSH
-                                                                          : BROTLI_OPERATION_PROCESS;
+[[nodiscard]] bool encode_stream(detail::brotli_encoder_stream& encoder, std::string_view input, std::string& output, bool flush, bool finish_value, std::size_t max_encoded_bytes) {
+    const auto operation = finish_value ? BROTLI_OPERATION_FINISH : (flush ? BROTLI_OPERATION_FLUSH : BROTLI_OPERATION_PROCESS);
     return encoder.encode(input, output, operation, max_encoded_bytes);
 }
 
-[[nodiscard]] bool encode_stream(detail::zstd_encoder_stream& encoder, std::string_view input,
-    std::string& output, bool flush, bool finish_value, std::size_t max_encoded_bytes) {
-    const auto operation = finish_value ? ZSTD_e_end : flush ? ZSTD_e_flush
-                                                             : ZSTD_e_continue;
+[[nodiscard]] bool encode_stream(detail::zstd_encoder_stream& encoder, std::string_view input, std::string& output, bool flush, bool finish_value, std::size_t max_encoded_bytes) {
+    const auto operation = finish_value ? ZSTD_e_end : (flush ? ZSTD_e_flush : ZSTD_e_continue);
     return encoder.encode(input, output, operation, max_encoded_bytes);
 }
 
@@ -1353,19 +1246,17 @@ void emplace_encoder_stream(std::optional<encoder_stream>& target, http_content_
 // unwinds through the stream destructor, including an exception captured at
 // the C ABI.
 struct http_content_encoder::impl_type final {
-    impl_type(http_content_coding coding, http_content_encoder_options options)
-        : max_encoded_bytes_(options.max_encoded_bytes_),
-          max_memory_bytes_(options.max_memory_bytes_),
-          coding_(coding) {
+    impl_type(http_content_coding coding, http_content_encoder_options options) :
+        max_encoded_bytes_(options.max_encoded_bytes_),
+        max_memory_bytes_(options.max_memory_bytes_),
+        coding_(coding) {
         if (coding_ != http_content_coding::identity) {
             emplace_encoder_stream(stream_, coding_, max_memory_bytes_);
-            std::visit(
-                [](const auto& stream) {
-                    if (!stream.initialized()) {
-                        throw http_content_codec_error(initialization_failure(stream));
-                    }
-                },
-                *stream_);
+            std::visit([](const auto& stream) {
+                if (!stream.initialized()) {
+                    throw http_content_codec_error(initialization_failure(stream));
+                }
+            }, *stream_);
         }
     }
 
@@ -1382,14 +1273,10 @@ struct http_content_encoder::impl_type final {
             return;
         }
         const auto remaining = max_encoded_bytes_ - produced_bytes_;
-        const auto output_cap = remaining > (std::numeric_limits<std::size_t>::max)() - before_size
-                                    ? (std::numeric_limits<std::size_t>::max)()
-                                    : before_size + remaining;
-        const bool ok = std::visit(
-            [&](auto& stream) {
-                return encode_stream(stream, input, output, flush, finish_value, output_cap);
-            },
-            *stream_);
+        const auto output_cap = remaining > (std::numeric_limits<std::size_t>::max)() - before_size ? (std::numeric_limits<std::size_t>::max)() : before_size + remaining;
+        const bool ok = std::visit([&](auto& stream) {
+            return encode_stream(stream, input, output, flush, finish_value, output_cap);
+        }, *stream_);
         if (!ok) {
             throw http_content_codec_error("encoded HTTP content size exceeded limit");
         }
@@ -1413,8 +1300,7 @@ struct http_content_encoder::impl_type final {
                 throw http_content_codec_error("failed to reset Zstd content encoder");
             }
         } else {
-            const auto& rebuilt = stream_->emplace<detail::brotli_encoder_stream>(
-                detail::brotli_stream_window_bits, max_memory_bytes_);
+            const auto& rebuilt = stream_->emplace<detail::brotli_encoder_stream>(detail::brotli_stream_window_bits, max_memory_bytes_);
             if (!rebuilt.initialized()) {
                 throw http_content_codec_error(initialization_failure(rebuilt));
             }
@@ -1428,12 +1314,9 @@ struct http_content_encoder::impl_type final {
     http_content_coding coding_;
 };
 
-http_content_encoder::http_content_encoder(
-    http_content_coding coding, http_content_encoder_options options)
-    : coding_(coding) {
-    if (coding_ != http_content_coding::identity ||
-        options.max_encoded_bytes_ != (std::numeric_limits<std::size_t>::max)() ||
-        options.max_memory_bytes_ != (std::numeric_limits<std::size_t>::max)()) {
+http_content_encoder::http_content_encoder(http_content_coding coding, http_content_encoder_options options) :
+    coding_(coding) {
+    if (coding_ != http_content_coding::identity || options.max_encoded_bytes_ != (std::numeric_limits<std::size_t>::max)() || options.max_memory_bytes_ != (std::numeric_limits<std::size_t>::max)()) {
         if (http_content_coding_token(coding_).empty()) {
             throw std::invalid_argument("unsupported HTTP content coding");
         }
@@ -1505,24 +1388,26 @@ void http_content_encoder::reset() {
 struct http_content_encode_context::impl_type final {
     using stream_type = std::variant<detail::zlib_deflate_stream, detail::zstd_encoder_stream>;
 
-    explicit impl_type(http_content_coding coding)
-        : stream_(make_stream(coding)) {}
+    explicit impl_type(http_content_coding coding) :
+        stream_(make_stream(coding)) {}
 
     [[nodiscard]] bool initialized() const noexcept {
-        return std::visit([](const auto& stream) { return stream.initialized(); }, stream_);
+        return std::visit([](const auto& stream) {
+            return stream.initialized();
+        }, stream_);
     }
 
     [[nodiscard]] bool reset() noexcept {
-        return std::visit([](auto& stream) { return stream.reset(); }, stream_);
+        return std::visit([](auto& stream) {
+            return stream.reset();
+        }, stream_);
     }
 
-    [[nodiscard]] std::optional<std::string> encode(
-        std::string_view input, http_content_encode_options options) {
+    [[nodiscard]] std::optional<std::string> encode(std::string_view input, http_content_encode_options options) {
         if (auto* deflater = std::get_if<detail::zlib_deflate_stream>(&stream_)) {
             return detail::encode_zlib_content(*deflater, input, options.max_encoded_bytes_);
         }
-        return detail::encode_zstd_content(
-            std::get<detail::zstd_encoder_stream>(stream_), input, options.max_encoded_bytes_);
+        return detail::encode_zstd_content(std::get<detail::zstd_encoder_stream>(stream_), input, options.max_encoded_bytes_);
     }
 
     stream_type stream_;
@@ -1532,22 +1417,18 @@ private:
         if (coding == http_content_coding::zstd) {
             return stream_type(std::in_place_type<detail::zstd_encoder_stream>);
         }
-        return stream_type(std::in_place_type<detail::zlib_deflate_stream>,
-            coding == http_content_coding::gzip ? detail::zlib_content_format::gzip
-                                                : detail::zlib_content_format::deflate);
+        return stream_type(std::in_place_type<detail::zlib_deflate_stream>, coding == http_content_coding::gzip ? detail::zlib_content_format::gzip : detail::zlib_content_format::deflate);
     }
 };
 
-http_content_encode_context::http_content_encode_context(
-    http_content_coding coding) noexcept
-    : coding_(coding) {}
+http_content_encode_context::http_content_encode_context(http_content_coding coding) noexcept :
+    coding_(coding) {}
 
 http_content_encode_context::~http_content_encode_context() {
     delete impl_;
 }
 
-std::optional<std::string> http_content_encode_context::encode(
-    std::string_view input, http_content_encode_options options) {
+std::optional<std::string> http_content_encode_context::encode(std::string_view input, http_content_encode_options options) {
     switch (coding_) {
         case http_content_coding::gzip:
         case http_content_coding::deflate:
@@ -1576,10 +1457,9 @@ namespace {
 
 class streaming_decode_stage final {
 public:
-    streaming_decode_stage(http_content_coding coding,
-        std::size_t max_decoded_bytes, std::size_t max_memory_bytes)
-        : coding_(coding),
-          max_decoded_bytes_(max_decoded_bytes) {
+    streaming_decode_stage(http_content_coding coding, std::size_t max_decoded_bytes, std::size_t max_memory_bytes) :
+        coding_(coding),
+        max_decoded_bytes_(max_decoded_bytes) {
         emplace_decoder_stream(coding, max_decoded_bytes, max_memory_bytes);
     }
     streaming_decode_stage(const streaming_decode_stage&) = delete;
@@ -1601,46 +1481,36 @@ public:
 
     void finish() const {
         if (saw_input_ && !at_frame_end_) {
-            throw http_content_transcode_error(
-                http_content_decode_error::invalid_content, "truncated compressed HTTP content");
+            throw http_content_transcode_error(http_content_decode_error::invalid_content, "truncated compressed HTTP content");
         }
     }
 
 private:
-    using decoder_variant = std::variant<detail::zlib_inflate_stream, detail::brotli_decoder_stream,
-        detail::zstd_decoder_stream>;
+    using decoder_variant = std::variant<detail::zlib_inflate_stream, detail::brotli_decoder_stream, detail::zstd_decoder_stream>;
 
-    void emplace_decoder_stream(http_content_coding coding,
-        std::size_t max_decoded_bytes, std::size_t max_memory_bytes) {
+    void emplace_decoder_stream(http_content_coding coding, std::size_t max_decoded_bytes, std::size_t max_memory_bytes) {
         switch (coding) {
             case http_content_coding::gzip:
             case http_content_coding::deflate: {
-                auto& var = stream_.emplace(std::in_place_type<detail::zlib_inflate_stream>,
-                    coding == http_content_coding::gzip ? detail::zlib_gzip_window_bits
-                                                        : detail::zlib_deflate_window_bits,
-                    max_memory_bytes);
+                auto& var = stream_.emplace(std::in_place_type<detail::zlib_inflate_stream>, coding == http_content_coding::gzip ? detail::zlib_gzip_window_bits : detail::zlib_deflate_window_bits, max_memory_bytes);
                 if (!std::get<detail::zlib_inflate_stream>(var).initialized()) {
                     throw http_content_codec_error("failed to initialize zlib content decoder");
                 }
                 return;
             }
             case http_content_coding::brotli: {
-                auto& var = stream_.emplace(std::in_place_type<detail::brotli_decoder_stream>,
-                    max_decoded_bytes, max_memory_bytes);
+                auto& var = stream_.emplace(std::in_place_type<detail::brotli_decoder_stream>, max_decoded_bytes, max_memory_bytes);
                 const auto& decoder = std::get<detail::brotli_decoder_stream>(var);
                 if (!decoder.initialized()) {
                     if (decoder.native_budget_exceeded()) {
-                        throw http_content_transcode_error(
-                            http_content_decode_error::decoded_size_exceeded,
-                            "Brotli decoder memory budget exceeded");
+                        throw http_content_transcode_error(http_content_decode_error::decoded_size_exceeded, "Brotli decoder memory budget exceeded");
                     }
                     throw http_content_codec_error("failed to initialize Brotli content decoder");
                 }
                 return;
             }
             case http_content_coding::zstd: {
-                auto& var =
-                    stream_.emplace(std::in_place_type<detail::zstd_decoder_stream>, max_memory_bytes);
+                auto& var = stream_.emplace(std::in_place_type<detail::zstd_decoder_stream>, max_memory_bytes);
                 if (!std::get<detail::zstd_decoder_stream>(var).initialized()) {
                     throw http_content_codec_error("failed to initialize Zstd content decoder");
                 }
@@ -1654,25 +1524,20 @@ private:
 
     void append_checked(std::string& output, const char* data, std::size_t size) {
         if (size > max_decoded_bytes_ - decoded_bytes_) {
-            throw http_content_transcode_error(
-                http_content_decode_error::decoded_size_exceeded,
-                "decoded HTTP content size exceeded limit");
+            throw http_content_transcode_error(http_content_decode_error::decoded_size_exceeded, "decoded HTTP content size exceeded limit");
         }
         output.append(data, size);
         decoded_bytes_ += size;
     }
 
-    void write_zlib(
-        detail::zlib_inflate_stream& inflater, std::string_view input, std::string& output) {
+    void write_zlib(detail::zlib_inflate_stream& inflater, std::string_view input, std::string& output) {
         const bool allow_concatenated = coding_ == http_content_coding::gzip;
-        const int window_bits =
-            allow_concatenated ? detail::zlib_gzip_window_bits : detail::zlib_deflate_window_bits;
+        const int window_bits = allow_concatenated ? detail::zlib_gzip_window_bits : detail::zlib_deflate_window_bits;
         auto& stream = inflater.native();
         const detail::zlib_borrow_scope borrow(stream);
         if (at_frame_end_) {
             if (!allow_concatenated) {
-                throw http_content_transcode_error(http_content_decode_error::invalid_content,
-                    "trailing bytes after deflate stream");
+                throw http_content_transcode_error(http_content_decode_error::invalid_content, "trailing bytes after deflate stream");
             }
             if (inflateReset2(&stream, window_bits) != Z_OK) {
                 throw http_content_codec_error("failed to reset zlib content decoder");
@@ -1701,8 +1566,7 @@ private:
                     return;
                 }
                 if (!allow_concatenated) {
-                    throw http_content_transcode_error(http_content_decode_error::invalid_content,
-                        "trailing bytes after deflate stream");
+                    throw http_content_transcode_error(http_content_decode_error::invalid_content, "trailing bytes after deflate stream");
                 }
                 auto* const next_input = stream.next_in;
                 const auto available_input = stream.avail_in;
@@ -1718,8 +1582,7 @@ private:
                 throw http_content_codec_error("zlib decoder ran out of memory");
             }
             if (status != Z_OK && status != Z_BUF_ERROR) {
-                throw http_content_transcode_error(
-                    http_content_decode_error::invalid_content, "invalid zlib compressed content");
+                throw http_content_transcode_error(http_content_decode_error::invalid_content, "invalid zlib compressed content");
             }
             const bool progressed = produced != 0 || stream.avail_in != before_input;
             if (!progressed) {
@@ -1729,17 +1592,14 @@ private:
                 if (stream.avail_in == 0 && supplied == input.size()) {
                     return;
                 }
-                throw http_content_transcode_error(
-                    http_content_decode_error::invalid_content, "invalid zlib compressed content");
+                throw http_content_transcode_error(http_content_decode_error::invalid_content, "invalid zlib compressed content");
             }
         }
     }
 
-    void write_brotli(
-        detail::brotli_decoder_stream& decoder, std::string_view input, std::string& output) {
+    void write_brotli(detail::brotli_decoder_stream& decoder, std::string_view input, std::string& output) {
         if (at_frame_end_) {
-            throw http_content_transcode_error(
-                http_content_decode_error::invalid_content, "trailing bytes after Brotli stream");
+            throw http_content_transcode_error(http_content_decode_error::invalid_content, "trailing bytes after Brotli stream");
         }
         auto* const state_value = decoder.native();
         const auto* next_input = reinterpret_cast<const std::uint8_t*>(input.data());
@@ -1747,8 +1607,7 @@ private:
         for (;;) {
             const auto before_input = available_input;
             std::size_t available_output = 0;
-            const auto result_value = BrotliDecoderDecompressStream(
-                state_value, &available_input, &next_input, &available_output, nullptr, nullptr);
+            const auto result_value = BrotliDecoderDecompressStream(state_value, &available_input, &next_input, &available_output, nullptr, nullptr);
             bool produced_output = false;
             while (BrotliDecoderHasMoreOutput(state_value) == BROTLI_TRUE) {
                 std::size_t produced = 0;
@@ -1760,34 +1619,28 @@ private:
             }
             if (result_value == BROTLI_DECODER_RESULT_SUCCESS) {
                 if (available_input != 0) {
-                    throw http_content_transcode_error(http_content_decode_error::invalid_content,
-                        "trailing bytes after Brotli stream");
+                    throw http_content_transcode_error(http_content_decode_error::invalid_content, "trailing bytes after Brotli stream");
                 }
                 at_frame_end_ = true;
                 return;
             }
             if (result_value == BROTLI_DECODER_RESULT_ERROR) {
                 if (decoder.native_budget_exceeded()) {
-                    throw http_content_transcode_error(
-                        http_content_decode_error::decoded_size_exceeded,
-                        "Brotli decoder memory budget exceeded");
+                    throw http_content_transcode_error(http_content_decode_error::decoded_size_exceeded, "Brotli decoder memory budget exceeded");
                 }
                 decoder.rethrow_allocation_failure();
-                throw http_content_transcode_error(http_content_decode_error::invalid_content,
-                    "invalid Brotli compressed content");
+                throw http_content_transcode_error(http_content_decode_error::invalid_content, "invalid Brotli compressed content");
             }
             if (result_value == BROTLI_DECODER_RESULT_NEEDS_MORE_INPUT && available_input == 0) {
                 return;
             }
             if (!produced_output && available_input == before_input) {
-                throw http_content_transcode_error(http_content_decode_error::invalid_content,
-                    "invalid Brotli compressed content");
+                throw http_content_transcode_error(http_content_decode_error::invalid_content, "invalid Brotli compressed content");
             }
         }
     }
 
-    void write_zstd(
-        detail::zstd_decoder_stream& decoder, std::string_view input, std::string& output) {
+    void write_zstd(detail::zstd_decoder_stream& decoder, std::string_view input, std::string& output) {
         auto* const stream = decoder.native();
         ZSTD_inBuffer in{input.data(), input.size(), 0};
         std::array<char, 16384> buffer;
@@ -1798,8 +1651,7 @@ private:
             const auto result_value = ZSTD_decompressStream(stream, &out, &in);
             if (ZSTD_isError(result_value) != 0) {
                 decoder.rethrow_allocation_failure();
-                throw http_content_transcode_error(
-                    http_content_decode_error::invalid_content, "invalid Zstd compressed content");
+                throw http_content_transcode_error(http_content_decode_error::invalid_content, "invalid Zstd compressed content");
             }
             if (out.pos != 0) {
                 append_checked(output, buffer.data(), out.pos);
@@ -1816,8 +1668,7 @@ private:
                 return;
             }
             if (out.pos == 0 && in.pos == before_input) {
-                throw http_content_transcode_error(
-                    http_content_decode_error::invalid_content, "invalid Zstd compressed content");
+                throw http_content_transcode_error(http_content_decode_error::invalid_content, "invalid Zstd compressed content");
             }
         }
     }
@@ -1835,14 +1686,10 @@ private:
 struct http_content_transcoder::impl_type final {
     using stage_ptr = std::unique_ptr<streaming_decode_stage>;
 
-    impl_type(std::span<const http_content_coding> source_codings,
-        http_content_coding target_coding, http_content_transcoder_options options)
-        : options_(options),
-          target_coding_(target_coding),
-          encoder_(target_coding,
-              http_content_encoder_options{
-                  .max_encoded_bytes_ = options.max_encoded_bytes_,
-                  .max_memory_bytes_ = options.max_memory_bytes_}) {
+    impl_type(std::span<const http_content_coding> source_codings, http_content_coding target_coding, http_content_transcoder_options options) :
+        options_(options),
+        target_coding_(target_coding),
+        encoder_(target_coding, http_content_encoder_options{.max_encoded_bytes_ = options.max_encoded_bytes_, .max_memory_bytes_ = options.max_memory_bytes_}) {
         if (http_content_coding_token(target_coding).empty()) {
             throw std::invalid_argument("unsupported target HTTP content coding");
         }
@@ -1861,8 +1708,7 @@ struct http_content_transcoder::impl_type final {
         stages_.clear();
         stages_.reserve(source_codings_.size());
         for (const auto coding : source_codings_) {
-            stages_.push_back(std::make_unique<streaming_decode_stage>(
-                coding, options_.max_decoded_bytes_, options_.max_memory_bytes_));
+            stages_.push_back(std::make_unique<streaming_decode_stage>(coding, options_.max_decoded_bytes_, options_.max_memory_bytes_));
         }
         identity_decoded_bytes_ = 0;
     }
@@ -1870,17 +1716,13 @@ struct http_content_transcoder::impl_type final {
     void write(std::string_view input, std::string& output, bool flush) {
         if (stages_.empty()) {
             if (input.size() > options_.max_decoded_bytes_ - identity_decoded_bytes_) {
-                throw http_content_transcode_error(
-                    http_content_decode_error::decoded_size_exceeded,
-                    "decoded HTTP content size exceeded limit");
+                throw http_content_transcode_error(http_content_decode_error::decoded_size_exceeded, "decoded HTTP content size exceeded limit");
             }
             identity_decoded_bytes_ += input.size();
             encoder_.write(input, output, flush);
             return;
         }
-        if (stages_.size() == 1 && target_coding_ == http_content_coding::identity &&
-            options_.max_encoded_bytes_ == (std::numeric_limits<std::size_t>::max)() &&
-            !detail::http_text_aliases_string(input, output)) {
+        if (stages_.size() == 1 && target_coding_ == http_content_coding::identity && options_.max_encoded_bytes_ == (std::numeric_limits<std::size_t>::max)() && !detail::http_text_aliases_string(input, output)) {
             stages_.front()->write(input, output);
             return;
         }
@@ -1922,23 +1764,18 @@ struct http_content_transcoder::impl_type final {
     http_content_encoder encoder_;
 };
 
-http_content_transcoder::http_content_transcoder(http_content_coding source_coding,
-    http_content_coding target_coding, http_content_transcoder_options options)
-    : http_content_transcoder(
-          std::span<const http_content_coding>(&source_coding, 1), target_coding, options) {}
+http_content_transcoder::http_content_transcoder(http_content_coding source_coding, http_content_coding target_coding, http_content_transcoder_options options) :
+    http_content_transcoder(std::span<const http_content_coding>(&source_coding, 1), target_coding, options) {}
 
-http_content_transcoder::http_content_transcoder(
-    std::span<const http_content_coding> source_codings, http_content_coding target_coding,
-    http_content_transcoder_options options)
-    : target_coding_(target_coding),
-      impl_(new impl_type(source_codings, target_coding, options)) {}
+http_content_transcoder::http_content_transcoder(std::span<const http_content_coding> source_codings, http_content_coding target_coding, http_content_transcoder_options options) :
+    target_coding_(target_coding),
+    impl_(new impl_type(source_codings, target_coding, options)) {}
 
 http_content_transcoder::~http_content_transcoder() {
     delete impl_;
 }
 
-void http_content_transcoder::write(
-    std::string_view input, std::string& output, bool flush) {
+void http_content_transcoder::write(std::string_view input, std::string& output, bool flush) {
     if (phase_ != phase::active) {
         throw std::logic_error("HTTP content transcoder is no longer writable");
     }
@@ -1977,16 +1814,14 @@ void http_content_transcoder::reset() {
 }
 
 struct http_staged_content_transcoder::impl_type final {
-    impl_type(std::span<const http_content_coding> source_codings,
-        http_content_coding target_coding, http_staged_transcode_options options)
-        : min_bytes_(options.min_bytes_),
-          max_bytes_(options.max_bytes_),
-          max_memory_bytes_(options.max_memory_bytes_),
-          target_coding_(target_coding),
-          require_smaller_(options.require_smaller_than_source_) {
+    impl_type(std::span<const http_content_coding> source_codings, http_content_coding target_coding, http_staged_transcode_options options) :
+        min_bytes_(options.min_bytes_),
+        max_bytes_(options.max_bytes_),
+        max_memory_bytes_(options.max_memory_bytes_),
+        target_coding_(target_coding),
+        require_smaller_(options.require_smaller_than_source_) {
         if (min_bytes_ > max_bytes_) {
-            throw std::invalid_argument(
-                "staged transcoder minimum size must not exceed maximum size");
+            throw std::invalid_argument("staged transcoder minimum size must not exceed maximum size");
         }
         if (http_content_coding_token(target_coding_).empty()) {
             throw std::invalid_argument("unsupported HTTP target content coding");
@@ -2000,8 +1835,7 @@ struct http_staged_content_transcoder::impl_type final {
             }
         }
         if (!source_codings_.empty() && max_bytes_ > 0) {
-            const std::size_t decode_cap =
-                max_bytes_ == (std::numeric_limits<std::size_t>::max)() ? max_bytes_ : max_bytes_ + 1U;
+            const std::size_t decode_cap = max_bytes_ == (std::numeric_limits<std::size_t>::max)() ? max_bytes_ : max_bytes_ + 1U;
             decoder_.emplace(source_codings_, http_content_coding::identity,
                 http_content_transcoder_options{
                     .max_decoded_bytes_ = decode_cap,
@@ -2084,11 +1918,9 @@ struct http_staged_content_transcoder::impl_type final {
     }
 
     http_staged_transcode_result finish() {
-        const http_content_coding fallback_coding =
-            source_codings_.empty() ? http_content_coding::identity : source_codings_.back();
+        const http_content_coding fallback_coding = source_codings_.empty() ? http_content_coding::identity : source_codings_.back();
         if (passthrough_) {
-            return http_staged_transcode_result(
-                false, fallback_coding, decoded_bytes_, std::move(staged_raw_));
+            return http_staged_transcode_result(false, fallback_coding, decoded_bytes_, std::move(staged_raw_));
         }
         if (!source_codings_.empty()) {
             try {
@@ -2096,14 +1928,12 @@ struct http_staged_content_transcoder::impl_type final {
                 decoded_bytes_ = staged_decoded_.size();
                 if (decoded_bytes_ > max_bytes_) {
                     switch_to_passthrough();
-                    return http_staged_transcode_result(
-                        false, fallback_coding, decoded_bytes_, std::move(staged_raw_));
+                    return http_staged_transcode_result(false, fallback_coding, decoded_bytes_, std::move(staged_raw_));
                 }
             } catch (const http_content_transcode_error& err) {
                 if (err.decode_error() == http_content_decode_error::decoded_size_exceeded) {
                     switch_to_passthrough();
-                    return http_staged_transcode_result(
-                        false, fallback_coding, decoded_bytes_, std::move(staged_raw_));
+                    return http_staged_transcode_result(false, fallback_coding, decoded_bytes_, std::move(staged_raw_));
                 }
                 throw;
             }
@@ -2111,22 +1941,15 @@ struct http_staged_content_transcoder::impl_type final {
             decoded_bytes_ = staged_raw_.size();
         }
 
-        const std::string_view plain_view =
-            source_codings_.empty() ? std::string_view(staged_raw_) : std::string_view(staged_decoded_);
-        if (plain_view.size() < min_bytes_ || plain_view.size() > max_bytes_ ||
-            (source_codings_.empty() && target_coding_ == http_content_coding::identity)) {
-            return http_staged_transcode_result(
-                false, fallback_coding, plain_view.size(), std::move(staged_raw_));
+        const std::string_view plain_view = source_codings_.empty() ? std::string_view(staged_raw_) : std::string_view(staged_decoded_);
+        if (plain_view.size() < min_bytes_ || plain_view.size() > max_bytes_ || (source_codings_.empty() && target_coding_ == http_content_coding::identity)) {
+            return http_staged_transcode_result(false, fallback_coding, plain_view.size(), std::move(staged_raw_));
         }
         if (target_coding_ == http_content_coding::identity) {
-            return http_staged_transcode_result(true, http_content_coding::identity,
-                plain_view.size(), std::move(staged_decoded_));
+            return http_staged_transcode_result(true, http_content_coding::identity, plain_view.size(), std::move(staged_decoded_));
         }
 
-        const std::size_t max_encoded =
-            require_smaller_
-                ? (staged_raw_.empty() ? 0U : staged_raw_.size() - 1U)
-                : (std::numeric_limits<std::size_t>::max)();
+        const std::size_t max_encoded = require_smaller_ ? (staged_raw_.empty() ? 0U : staged_raw_.size() - 1U) : (std::numeric_limits<std::size_t>::max)();
         std::optional<std::string> encoded;
         if (max_memory_bytes_ == (std::numeric_limits<std::size_t>::max)()) {
             encoded = encode_http_content(target_coding_, plain_view,
@@ -2137,11 +1960,7 @@ struct http_staged_content_transcoder::impl_type final {
             switch (target_coding_) {
                 case http_content_coding::gzip:
                 case http_content_coding::deflate: {
-                    detail::zlib_deflate_stream deflater(
-                        target_coding_ == http_content_coding::gzip
-                            ? detail::zlib_content_format::gzip
-                            : detail::zlib_content_format::deflate,
-                        max_memory_bytes_);
+                    detail::zlib_deflate_stream deflater(target_coding_ == http_content_coding::gzip ? detail::zlib_content_format::gzip : detail::zlib_content_format::deflate, max_memory_bytes_);
                     if (!deflater.initialized()) {
                         throw http_content_codec_error("zlib encoder initialization failed");
                     }
@@ -2149,8 +1968,7 @@ struct http_staged_content_transcoder::impl_type final {
                     break;
                 }
                 case http_content_coding::brotli: {
-                    detail::brotli_encoder_stream encoder(
-                        detail::brotli_whole_buffer_window_bits, max_memory_bytes_);
+                    detail::brotli_encoder_stream encoder(detail::brotli_whole_buffer_window_bits, max_memory_bytes_);
                     if (!encoder.initialized()) {
                         throw http_content_codec_error("brotli encoder initialization failed");
                     }
@@ -2170,11 +1988,9 @@ struct http_staged_content_transcoder::impl_type final {
             }
         }
         if (!encoded.has_value()) {
-            return http_staged_transcode_result(
-                false, fallback_coding, plain_view.size(), std::move(staged_raw_));
+            return http_staged_transcode_result(false, fallback_coding, plain_view.size(), std::move(staged_raw_));
         }
-        return http_staged_transcode_result(
-            true, target_coding_, plain_view.size(), std::move(*encoded));
+        return http_staged_transcode_result(true, target_coding_, plain_view.size(), std::move(*encoded));
     }
 
     void reset() {
@@ -2183,8 +1999,7 @@ struct http_staged_content_transcoder::impl_type final {
         decoded_bytes_ = 0;
         passthrough_ = false;
         if (!source_codings_.empty() && max_bytes_ > 0) {
-            const std::size_t decode_cap =
-                max_bytes_ == (std::numeric_limits<std::size_t>::max)() ? max_bytes_ : max_bytes_ + 1U;
+            const std::size_t decode_cap = max_bytes_ == (std::numeric_limits<std::size_t>::max)() ? max_bytes_ : max_bytes_ + 1U;
             if (decoder_.has_value()) {
                 decoder_->reset();
             } else {
@@ -2212,17 +2027,12 @@ struct http_staged_content_transcoder::impl_type final {
     bool passthrough_{false};
 };
 
-http_staged_content_transcoder::http_staged_content_transcoder(
-    http_content_coding source_coding, http_content_coding target_coding,
-    http_staged_transcode_options options)
-    : http_staged_content_transcoder(
-          std::span<const http_content_coding>(&source_coding, 1), target_coding, options) {}
+http_staged_content_transcoder::http_staged_content_transcoder(http_content_coding source_coding, http_content_coding target_coding, http_staged_transcode_options options) :
+    http_staged_content_transcoder(std::span<const http_content_coding>(&source_coding, 1), target_coding, options) {}
 
-http_staged_content_transcoder::http_staged_content_transcoder(
-    std::span<const http_content_coding> source_codings, http_content_coding target_coding,
-    http_staged_transcode_options options)
-    : target_coding_(target_coding),
-      impl_(new impl_type(source_codings, target_coding, options)) {}
+http_staged_content_transcoder::http_staged_content_transcoder(std::span<const http_content_coding> source_codings, http_content_coding target_coding, http_staged_transcode_options options) :
+    target_coding_(target_coding),
+    impl_(new impl_type(source_codings, target_coding, options)) {}
 
 http_staged_content_transcoder::~http_staged_content_transcoder() {
     delete impl_;
@@ -2252,8 +2062,7 @@ bool http_staged_content_transcoder::write(std::string_view input) {
     }
 }
 
-bool http_staged_content_transcoder::write(
-    std::string_view input, std::string& passthrough_output) {
+bool http_staged_content_transcoder::write(std::string_view input, std::string& passthrough_output) {
     if (phase_ != phase::active) {
         throw std::logic_error("HTTP staged content transcoder is no longer writable");
     }
@@ -2293,11 +2102,11 @@ void http_staged_content_transcoder::reset() {
     phase_ = phase::active;
 }
 
-http_worker_codecs::http_worker_codecs() noexcept
-    : gzip_(http_content_coding::gzip),
-      deflate_(http_content_coding::deflate),
-      brotli_(http_content_coding::brotli),
-      zstd_(http_content_coding::zstd) {}
+http_worker_codecs::http_worker_codecs() noexcept :
+    gzip_(http_content_coding::gzip),
+    deflate_(http_content_coding::deflate),
+    brotli_(http_content_coding::brotli),
+    zstd_(http_content_coding::zstd) {}
 
 http_worker_codecs::~http_worker_codecs() {
     for (auto* pool : {&gzip_.streaming_, &deflate_.streaming_, &brotli_.streaming_, &zstd_.streaming_}) {

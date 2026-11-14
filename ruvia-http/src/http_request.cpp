@@ -54,8 +54,7 @@ std::optional<std::string_view> http_request::header(std::string_view name) cons
 
     for (std::size_t i = headers_.size(); i > 0; --i) {
         const auto index = i - 1;
-        if (headers_.kind_at(index) == detail::http_field_kind::other &&
-            http_ascii_equals_ignore_case(headers_[index].name(), name)) {
+        if (headers_.kind_at(index) == detail::http_field_kind::other && http_ascii_equals_ignore_case(headers_[index].name(), name)) {
             return headers_[index].value();
         }
     }
@@ -63,16 +62,14 @@ std::optional<std::string_view> http_request::header(std::string_view name) cons
     return std::nullopt;
 }
 
-std::optional<std::string_view> http_request::last_raw_query_value(
-    std::string_view raw_name) const noexcept {
+std::optional<std::string_view> http_request::last_raw_query_value(std::string_view raw_name) const noexcept {
     std::optional<std::string_view> result;
-    (void)visit_url_encoded_pairs(
-        query_string_, [&](std::string_view name, std::string_view value) noexcept {
-            if (name == raw_name) {
-                result = value;
-            }
-            return true;
-        });
+    (void)visit_url_encoded_pairs(query_string_, [&](std::string_view name, std::string_view value) noexcept {
+        if (name == raw_name) {
+            result = value;
+        }
+        return true;
+    });
     return result;
 }
 
@@ -91,17 +88,14 @@ std::optional<std::string_view> http_request::cookie(std::string_view name) cons
         });
         return result;
     };
-    const auto last_cookie =
-        detail::http_request_access::known_header(*this, detail::http_field_kind::cookie);
+    const auto last_cookie = detail::http_request_access::known_header(*this, detail::http_field_kind::cookie);
     if (auto value = find_in(last_cookie)) {
         return value;
     }
-    if (!detail::http_request_access::has_repeated_known_header(
-            *this, detail::http_field_kind::cookie)) {
+    if (!detail::http_request_access::has_repeated_known_header(*this, detail::http_field_kind::cookie)) {
         return std::nullopt;
     }
-    const auto last_cookie_index =
-        cached_headers_[detail::http_field_kind_known_slot(detail::http_field_kind::cookie)];
+    const auto last_cookie_index = cached_headers_[detail::http_field_kind_known_slot(detail::http_field_kind::cookie)];
     // The one-based cache points to the last Cookie field; only earlier fields can contribute.
     for (std::size_t i = last_cookie_index - 1; i > 0; --i) {
         const auto index = i - 1;
@@ -118,11 +112,10 @@ std::optional<std::string_view> http_request::cookie(std::string_view name) cons
 http_response_coding_selection http_response_coding_selection_for(const http_request& request) noexcept {
     http_response_coding_qualities qualities;
     // Every field line contributes: RFC 9110 section 5.3 combines repeated list fields.
-    (void)detail::http_request_access::visit_known_headers(
-        request, detail::http_field_kind::accept_encoding, [&qualities](std::string_view value) noexcept {
-            qualities.update(value);
-            return true;
-        });
+    (void)detail::http_request_access::visit_known_headers(request, detail::http_field_kind::accept_encoding, [&qualities](std::string_view value) noexcept {
+        qualities.update(value);
+        return true;
+    });
     return http_response_coding_selection::select(qualities);
 }
 }  // namespace ruvia
@@ -131,9 +124,7 @@ namespace ruvia {
 namespace {
 
 template <typename field_type>
-[[nodiscard]] std::optional<http_request_trailer_error> append_trailer_fields(
-    std::vector<http_header>& retained, http_field_section_budget& retained_budget,
-    std::span<const field_type> fields) {
+[[nodiscard]] std::optional<http_request_trailer_error> append_trailer_fields(std::vector<http_header>& retained, http_field_section_budget& retained_budget, std::span<const field_type> fields) {
     auto budget = retained_budget;
     for (const auto& field : fields) {
         if (const auto error = detail::charge_http_request_trailer_field(budget, field.name(), field.value())) {
@@ -178,8 +169,7 @@ std::optional<http_request_trailer_error> http_request_trailers::append_received
     for (const auto& field : fields) {
         const auto name = field.name();
         const auto value = field.value();
-        if (name.empty() || name.front() == ':' || !detail::is_valid_binary_field_name(name) ||
-            !is_valid_http_header_value(value)) {
+        if (name.empty() || name.front() == ':' || !detail::is_valid_binary_field_name(name) || !is_valid_http_header_value(value)) {
             return http_request_trailer_error::invalid_field;
         }
         if (!budget.add_field(name, value)) {
@@ -223,8 +213,7 @@ namespace {
     // An absolute domain name names the same host as its relative spelling.
     const bool trailing_dot = host.size() > 1 && host.back() == '.';
     const auto name = trailing_dot ? host.substr(0, host.size() - 1) : host;
-    if (!detail::is_valid_dns_domain_name(name) ||
-        (trailing_dot && detail::parse_ipv4_address(name).has_value())) {
+    if (!detail::is_valid_dns_domain_name(name) || (trailing_dot && detail::parse_ipv4_address(name).has_value())) {
         return http_target_origin::misdirected();
     }
     return decoded ? http_target_origin::decoded_dns_name(name) : http_target_origin::dns_name(name);
@@ -261,8 +250,7 @@ namespace {
     bool decoded_any = false;
     for (std::size_t i = 0; i < host.size();) {
         if (host[i] == '%') {
-            if (const auto byte = http_try_decode_percent_byte(host, i);
-                byte.has_value() && detail::is_unreserved_byte(*byte)) {
+            if (const auto byte = http_try_decode_percent_byte(host, i); byte.has_value() && detail::is_unreserved_byte(*byte)) {
                 if (size == decoded.size()) {
                     return http_target_origin::misdirected();
                 }
@@ -285,16 +273,13 @@ namespace {
 
 }  // namespace
 
-http_target_origin decide_http_target_origin(
-    const http_request& request, http_target_origin_connection connection) noexcept {
+http_target_origin decide_http_target_origin(const http_request& request, http_target_origin_connection connection) noexcept {
     if (connection.trusted_gateway_) {
         return http_target_origin::accepted();
     }
     const auto form = request.target_form();
     const auto scheme = request.scheme();
-    if (form == http_request_target_form::authority ||
-        ((form == http_request_target_form::http2 || form == http_request_target_form::http3) &&
-            scheme.empty())) {
+    if (form == http_request_target_form::authority || ((form == http_request_target_form::http2 || form == http_request_target_form::http3) && scheme.empty())) {
         // A CONNECT tunnel target names a destination, not an "https" resource.
         return http_target_origin::accepted();
     }
@@ -305,9 +290,7 @@ http_target_origin decide_http_target_origin(
     if (!connection.secured_) {
         return http_target_origin::misdirected();
     }
-    const auto authority = !request.authority().empty()
-                               ? request.authority()
-                               : detail::http_request_access::known_header(request, detail::http_field_kind::host);
+    const auto authority = !request.authority().empty() ? request.authority() : detail::http_request_access::known_header(request, detail::http_field_kind::host);
     if (authority.empty()) {
         return http_target_origin::accepted();
     }
@@ -320,8 +303,7 @@ namespace ruvia {
 namespace detail {
 
 struct http_authority_view_access final {
-    [[nodiscard]] static constexpr http_authority_view make(
-        std::string_view host, http_authority_port_kind port_kind, std::uint16_t port = 0) noexcept {
+    [[nodiscard]] static constexpr http_authority_view make(std::string_view host, http_authority_port_kind port_kind, std::uint16_t port = 0) noexcept {
         return http_authority_view(host, port_kind, port);
     }
 };
@@ -390,42 +372,30 @@ bool http_authorities_equal(borrowed_text left, borrowed_text right, port_number
     return detail::authority_matches_host(left.view(), right.view(), default_port.value());
 }
 
-std::size_t estimate_http1_field_section_bytes(
-    const http_response_headers& fields, bool include_terminating_crlf) noexcept {
+std::size_t estimate_http1_field_section_bytes(const http_response_headers& fields, bool include_terminating_crlf) noexcept {
     return detail::estimate_http1_fields_bytes_impl(fields, include_terminating_crlf);
 }
 
-std::size_t estimate_http1_response_head_bytes(
-    http_status_code status, const http_response_headers& headers) noexcept {
+std::size_t estimate_http1_response_head_bytes(http_status_code status, const http_response_headers& headers) noexcept {
     const std::size_t status_line_bytes = 15U + http_reason_phrase(status).size();
-    return detail::saturating_add_size(
-        status_line_bytes, estimate_http1_field_section_bytes(headers, true));
+    return detail::saturating_add_size(status_line_bytes, estimate_http1_field_section_bytes(headers, true));
 }
 
-std::string normalize_http_proxy_request_target(
-    http_known_method method, std::string_view target) {
-    if (target.empty() || target.front() == '/' || target == "*" ||
-        method == http_known_method::connect) {
+std::string normalize_http_proxy_request_target(http_known_method method, std::string_view target) {
+    if (target.empty() || target.front() == '/' || target == "*" || method == http_known_method::connect) {
         return std::string(target);
     }
     const auto scheme_sep = target.find("://");
-    if (scheme_sep == std::string_view::npos ||
-        !detail::is_valid_uri_scheme(target.substr(0, scheme_sep))) {
+    if (scheme_sep == std::string_view::npos || !detail::is_valid_uri_scheme(target.substr(0, scheme_sep))) {
         return std::string(target);
     }
     const auto remainder = target.substr(scheme_sep + 3U);
     const auto query_pos = remainder.find('?');
-    const auto authority_and_path =
-        query_pos == std::string_view::npos ? remainder : remainder.substr(0, query_pos);
-    const auto query_suffix =
-        query_pos == std::string_view::npos ? std::string_view{} : remainder.substr(query_pos);
+    const auto authority_and_path = query_pos == std::string_view::npos ? remainder : remainder.substr(0, query_pos);
+    const auto query_suffix = query_pos == std::string_view::npos ? std::string_view{} : remainder.substr(query_pos);
     const auto slash_pos = authority_and_path.find('/');
-    const auto authority = slash_pos == std::string_view::npos
-                               ? authority_and_path
-                               : authority_and_path.substr(0, slash_pos);
-    const auto path = slash_pos == std::string_view::npos
-                          ? std::string_view{}
-                          : authority_and_path.substr(slash_pos);
+    const auto authority = slash_pos == std::string_view::npos ? authority_and_path : authority_and_path.substr(0, slash_pos);
+    const auto path = slash_pos == std::string_view::npos ? std::string_view{} : authority_and_path.substr(slash_pos);
     if (authority.empty()) {
         return std::string(target);
     }
@@ -446,8 +416,7 @@ std::string normalize_http_proxy_request_target(
     return result;
 }
 
-std::string normalize_http_proxy_request_target(
-    std::string_view method, std::string_view target) {
+std::string normalize_http_proxy_request_target(std::string_view method, std::string_view target) {
     return normalize_http_proxy_request_target(classify_http_method(method), target);
 }
 
@@ -477,8 +446,7 @@ std::string http_max_forwards_result::format_decremented() const {
     return std::string(http_format_unsigned(buffer, *next_val));
 }
 
-std::optional<std::uint64_t> parse_http_max_forwards_value(
-    std::string_view field_value, std::uint64_t max_saturation) noexcept {
+std::optional<std::uint64_t> parse_http_max_forwards_value(std::string_view field_value, std::uint64_t max_saturation) noexcept {
     const auto trimmed = http_trim_ows(field_value);
     if (trimmed.empty()) {
         return std::nullopt;
@@ -495,18 +463,15 @@ std::optional<std::uint64_t> parse_http_max_forwards_value(
     return (std::min)(value, max_saturation);
 }
 
-http_max_forwards_result parse_http_max_forwards(
-    std::string_view field_value, std::uint64_t max_saturation) noexcept {
+http_max_forwards_result parse_http_max_forwards(std::string_view field_value, std::uint64_t max_saturation) noexcept {
     const auto parsed = parse_http_max_forwards_value(field_value, max_saturation);
-    return parsed.has_value() ? http_max_forwards_result::valid(*parsed)
-                              : http_max_forwards_result::invalid();
+    return parsed.has_value() ? http_max_forwards_result::valid(*parsed) : http_max_forwards_result::invalid();
 }
 
 namespace {
 
 template <typename header_span_type>
-[[nodiscard]] http_max_forwards_result parse_max_forwards_from_headers(
-    header_span_type headers, std::uint64_t max_saturation) noexcept {
+[[nodiscard]] http_max_forwards_result parse_max_forwards_from_headers(header_span_type headers, std::uint64_t max_saturation) noexcept {
     std::string_view found_value{};
     std::size_t count = 0;
     for (const auto& field : headers) {
@@ -526,18 +491,15 @@ template <typename header_span_type>
 
 }  // namespace
 
-http_max_forwards_result parse_http_max_forwards(
-    std::span<const http_header> headers, std::uint64_t max_saturation) noexcept {
+http_max_forwards_result parse_http_max_forwards(std::span<const http_header> headers, std::uint64_t max_saturation) noexcept {
     return parse_max_forwards_from_headers(headers, max_saturation);
 }
 
-http_max_forwards_result parse_http_max_forwards(
-    std::span<const http_header_view> headers, std::uint64_t max_saturation) noexcept {
+http_max_forwards_result parse_http_max_forwards(std::span<const http_header_view> headers, std::uint64_t max_saturation) noexcept {
     return parse_max_forwards_from_headers(headers, max_saturation);
 }
 
-http_max_forwards_result parse_http_max_forwards(
-    const http_request& request, std::uint64_t max_saturation) noexcept {
+http_max_forwards_result parse_http_max_forwards(const http_request& request, std::uint64_t max_saturation) noexcept {
     return parse_max_forwards_from_headers(request.headers(), max_saturation);
 }
 }  // namespace ruvia
@@ -577,8 +539,7 @@ void remove_http_client_last_path_segment(std::string& path) noexcept {
 // `path` is always absolute: every caller builds it from a '/'-prefixed
 // reference path or base directory, so only the '/'-led dot-segment cases of
 // RFC 3986 section 5.2.4 can occur.
-void normalize_http_client_absolute_path(
-    std::string_view path, std::size_t extra_reserve, std::string& normalized) {
+void normalize_http_client_absolute_path(std::string_view path, std::size_t extra_reserve, std::string& normalized) {
     normalized.clear();
     normalized.reserve((path.empty() ? 1U : path.size()) + extra_reserve);
     if (!path.empty() && path.find("/.") == std::string_view::npos) {
@@ -603,8 +564,7 @@ void normalize_http_client_absolute_path(
             remove_http_client_last_path_segment(normalized);
         } else {
             const auto next_slash = remaining.find('/', 1);
-            const auto segment_bytes =
-                next_slash == std::string_view::npos ? remaining.size() : next_slash;
+            const auto segment_bytes = next_slash == std::string_view::npos ? remaining.size() : next_slash;
             normalized.append(remaining.substr(0, segment_bytes));
             remaining.remove_prefix(segment_bytes);
         }
@@ -620,16 +580,13 @@ void normalize_http_client_absolute_path(
 // false when the location's path or the merged product is not a valid target.
 // `reference` is the URI-reference with any scheme/authority prefix and the
 // fragment already removed.
-[[nodiscard]] bool resolve_http_client_redirect_path_and_query(bool has_authority,
-    std::string_view reference, std::string_view current_target, std::string& resolved) {
+[[nodiscard]] bool resolve_http_client_redirect_path_and_query(bool has_authority, std::string_view reference, std::string_view current_target, std::string& resolved) {
     const auto query_at = reference.find('?');
     const bool has_reference_query = query_at != std::string_view::npos;
     const auto reference_path = has_reference_query ? reference.substr(0, query_at) : reference;
-    const auto reference_query =
-        has_reference_query ? reference.substr(query_at + 1) : std::string_view{};
+    const auto reference_query = has_reference_query ? reference.substr(query_at + 1) : std::string_view{};
     // Dot-segment removal must not hide malformed bytes in discarded segments.
-    if (!detail::is_valid_uri_component(reference_path, true, false) ||
-        !detail::is_valid_uri_component(reference_query, true, true)) {
+    if (!detail::is_valid_uri_component(reference_path, true, false) || !detail::is_valid_uri_component(reference_query, true, true)) {
         return false;
     }
 
@@ -650,8 +607,7 @@ void normalize_http_client_absolute_path(
         const auto base_query_at = current_target.find('?');
         const bool has_base_query = base_query_at != std::string_view::npos;
         const auto base_path = has_base_query ? current_target.substr(0, base_query_at) : current_target;
-        const auto base_query =
-            has_base_query ? current_target.substr(base_query_at + 1) : std::string_view{};
+        const auto base_query = has_base_query ? current_target.substr(base_query_at + 1) : std::string_view{};
 
         if (reference_path.empty()) {
             merged_path = base_path;
@@ -669,8 +625,7 @@ void normalize_http_client_absolute_path(
             const auto total_path_size = prefix_size + reference_path.size();
             if (total_path_size <= inline_merged_path.size()) {
                 std::memcpy(inline_merged_path.data(), base_path.data(), prefix_size);
-                std::memcpy(inline_merged_path.data() + prefix_size, reference_path.data(),
-                    reference_path.size());
+                std::memcpy(inline_merged_path.data() + prefix_size, reference_path.data(), reference_path.size());
                 merged_path = std::string_view(inline_merged_path.data(), total_path_size);
             } else {
                 merged_path_storage.reserve(total_path_size);
@@ -707,8 +662,7 @@ struct http_client_redirect_authority final {
     bool same_origin_;
 };
 
-[[nodiscard]] std::optional<http_client_redirect_authority> parse_http_client_redirect_authority(
-    const http_origin_view& origin, http_scheme target_scheme, std::string_view authority) noexcept {
+[[nodiscard]] std::optional<http_client_redirect_authority> parse_http_client_redirect_authority(const http_origin_view& origin, http_scheme target_scheme, std::string_view authority) noexcept {
     if (authority.find('@') != std::string_view::npos) {
         return std::nullopt;
     }
@@ -720,8 +674,7 @@ struct http_client_redirect_authority final {
     return http_client_redirect_authority{
         .host_ = parsed_value->host(),
         .port_ = port,
-        .same_origin_ = target_scheme == origin.scheme() && port == origin.port() &&
-                        detail::http_uri_host_equals(parsed_value->host(), origin.host()),
+        .same_origin_ = target_scheme == origin.scheme() && port == origin.port() && detail::http_uri_host_equals(parsed_value->host(), origin.host()),
     };
 }
 
@@ -736,8 +689,7 @@ http_origin_view http_origin_view::http(http_origin_options options) {
 http_origin_view http_origin_view::https(http_origin_options options) {
     const auto host = options.host_.view();
     validate_origin_host(host);
-    return http_origin_view(
-        http_scheme::https, host, resolved_origin_port(http_scheme::https, options));
+    return http_origin_view(http_scheme::https, host, resolved_origin_port(http_scheme::https, options));
 }
 
 std::string make_http_origin_authority(const http_origin_view& origin) {
@@ -753,8 +705,7 @@ std::string make_http_origin_authority(const http_origin_view& origin) {
     return authority;
 }
 
-http_client_response_header_lookup lookup_unique_http_client_response_header(
-    const http_client_response_head& head, std::string_view name) noexcept {
+http_client_response_header_lookup lookup_unique_http_client_response_header(const http_client_response_head& head, std::string_view name) noexcept {
     std::string_view found;
     bool seen = false;
     for (const auto& header : head.headers()) {
@@ -773,46 +724,33 @@ http_client_response_header_lookup lookup_unique_http_client_response_header(
     return {.status_ = http_unique_header_status::found, .value_ = found};
 }
 
-http_client_redirect_request_plan::http_client_redirect_request_plan(
-    std::string_view method, http_client_redirect_content_disposition content_disposition)
-    : method_(method),
-      content_disposition_(content_disposition) {}
+http_client_redirect_request_plan::http_client_redirect_request_plan(std::string_view method, http_client_redirect_content_disposition content_disposition) :
+    method_(method),
+    content_disposition_(content_disposition) {}
 
-http_client_redirect_request_plan plan_http_client_redirect_request(
-    const http_client_request_view& request, http_client_redirect_request_plan_options options) {
+http_client_redirect_request_plan plan_http_client_redirect_request(const http_client_request_view& request, http_client_redirect_request_plan_options options) {
     if (options.status_ == http_status::see_other) {
-        return http_client_redirect_request_plan(
-            request.method_ == "HEAD" ? request.method_.view() : std::string_view("GET"),
-            http_client_redirect_content_disposition::drop);
+        return http_client_redirect_request_plan(request.method_ == "HEAD" ? request.method_.view() : std::string_view("GET"), http_client_redirect_content_disposition::drop);
     }
-    if ((options.status_ == http_status::moved_permanently ||
-            options.status_ == http_status::found) &&
-        request.method_ == "POST") {
-        return http_client_redirect_request_plan(
-            "GET", http_client_redirect_content_disposition::drop);
+    if ((options.status_ == http_status::moved_permanently || options.status_ == http_status::found) && request.method_ == "POST") {
+        return http_client_redirect_request_plan("GET", http_client_redirect_content_disposition::drop);
     }
-    return http_client_redirect_request_plan(
-        request.method_.view(), http_client_redirect_content_disposition::preserve);
+    return http_client_redirect_request_plan(request.method_.view(), http_client_redirect_content_disposition::preserve);
 }
 
-http_client_origin_authority_status classify_http_client_origin_authority(
-    const http_origin_view& origin, std::string_view authority) noexcept {
+http_client_origin_authority_status classify_http_client_origin_authority(const http_origin_view& origin, std::string_view authority) noexcept {
     const auto parsed_value = parse_http_client_redirect_authority(origin, origin.scheme(), authority);
     if (!parsed_value) {
         return http_client_origin_authority_status::invalid_authority;
     }
-    return parsed_value->same_origin_ ? http_client_origin_authority_status::same_origin
-                                      : http_client_origin_authority_status::different_origin;
+    return parsed_value->same_origin_ ? http_client_origin_authority_status::same_origin : http_client_origin_authority_status::different_origin;
 }
 
 http_origin_view http_client_resolved_redirect::origin() const& {
-    return scheme_ == http_scheme::https ? http_origin_view::https({.host_ = host(), .port_ = port_})
-                                         : http_origin_view::http({.host_ = host(), .port_ = port_});
+    return scheme_ == http_scheme::https ? http_origin_view::https({.host_ = host(), .port_ = port_}) : http_origin_view::http({.host_ = host(), .port_ = port_});
 }
 
-std::variant<http_client_resolved_redirect, http_client_redirect_resolution_error>
-resolve_http_client_redirect_target(
-    const http_origin_view& origin, http_client_redirect_target_options options) {
+std::variant<http_client_resolved_redirect, http_client_redirect_resolution_error> resolve_http_client_redirect_target(const http_origin_view& origin, http_client_redirect_target_options options) {
     const auto current_target = options.current_target_.view();
     auto location = options.location_.view();
     if (!is_valid_http_origin_form_target(current_target)) {
@@ -832,8 +770,7 @@ resolve_http_client_redirect_target(
     std::string_view reference = location;
     const auto colon = reference.find(':');
     const auto first_path_or_query = reference.find_first_of("/?");
-    if (colon != std::string_view::npos &&
-        (first_path_or_query == std::string_view::npos || colon < first_path_or_query)) {
+    if (colon != std::string_view::npos && (first_path_or_query == std::string_view::npos || colon < first_path_or_query)) {
         const auto scheme = reference.substr(0, colon);
         if (!detail::is_valid_uri_scheme(scheme)) {
             return http_client_redirect_resolution_error::invalid_location;
@@ -859,8 +796,7 @@ resolve_http_client_redirect_target(
     bool cross_origin = target_scheme != origin.scheme();
     if (has_authority) {
         const auto authority_end = reference.find_first_of("/?");
-        const auto authority =
-            authority_end == std::string_view::npos ? reference : reference.substr(0, authority_end);
+        const auto authority = authority_end == std::string_view::npos ? reference : reference.substr(0, authority_end);
         const auto parsed_value = parse_http_client_redirect_authority(origin, target_scheme, authority);
         if (!parsed_value) {
             return http_client_redirect_resolution_error::invalid_location;
@@ -868,19 +804,16 @@ resolve_http_client_redirect_target(
         resolved_host = parsed_value->host_;
         port = parsed_value->port_;
         cross_origin = !parsed_value->same_origin_;
-        reference = authority_end == std::string_view::npos ? std::string_view{}
-                                                            : reference.substr(authority_end);
+        reference = authority_end == std::string_view::npos ? std::string_view{} : reference.substr(authority_end);
     }
 
     std::string resolved;
-    if (!resolve_http_client_redirect_path_and_query(
-            has_authority, reference, current_target, resolved)) {
+    if (!resolve_http_client_redirect_path_and_query(has_authority, reference, current_target, resolved)) {
         return http_client_redirect_resolution_error::invalid_location;
     }
 
     std::string host(resolved_host.data(), resolved_host.size());
-    return http_client_resolved_redirect(
-        target_scheme, std::move(host), port, std::move(resolved), cross_origin);
+    return http_client_resolved_redirect(target_scheme, std::move(host), port, std::move(resolved), cross_origin);
 }
 
 }  // namespace ruvia
@@ -893,8 +826,7 @@ struct normalized_host_unit final {
     bool encoded_reserved_{false};
 };
 
-[[nodiscard]] bool next_normalized_host_unit(
-    std::string_view value, std::size_t& cursor_value, normalized_host_unit& output) noexcept {
+[[nodiscard]] bool next_normalized_host_unit(std::string_view value, std::size_t& cursor_value, normalized_host_unit& output) noexcept {
     if (cursor_value == value.size()) {
         return false;
     }
@@ -931,8 +863,7 @@ struct normalized_host_unit final {
 }
 
 // Splits origin-form = absolute-path [ "?" query ] and validates both parts.
-[[nodiscard]] bool split_origin_form_target(
-    std::string_view target, std::string_view& path, std::string_view& query) noexcept {
+[[nodiscard]] bool split_origin_form_target(std::string_view target, std::string_view& path, std::string_view& query) noexcept {
     if (target.empty() || target.front() != '/') {
         return false;
     }
@@ -947,8 +878,7 @@ struct normalized_host_unit final {
 bool is_valid_uri_authority(std::string_view value) noexcept {
     auto host_and_port = value;
     if (const auto delimiter = value.find('@'); delimiter != std::string_view::npos) {
-        if (!is_valid_uri_userinfo(value.substr(0, delimiter)) ||
-            value.find('@', delimiter + 1) != std::string_view::npos) {
+        if (!is_valid_uri_userinfo(value.substr(0, delimiter)) || value.find('@', delimiter + 1) != std::string_view::npos) {
             return false;
         }
         host_and_port = value.substr(delimiter + 1);
@@ -1034,8 +964,7 @@ bool http_uri_host_equals(std::string_view left, std::string_view right) noexcep
         if (!has_left || !has_right) {
             return has_left == has_right;
         }
-        if (left_unit.byte_ != right_unit.byte_ ||
-            left_unit.encoded_reserved_ != right_unit.encoded_reserved_) {
+        if (left_unit.byte_ != right_unit.byte_ || left_unit.encoded_reserved_ != right_unit.encoded_reserved_) {
             return false;
         }
     }
@@ -1055,8 +984,7 @@ bool is_valid_uri_scheme(std::string_view value) noexcept {
     }
     for (const auto c : value.substr(1)) {
         const auto byte = static_cast<unsigned char>(c);
-        if (!is_uri_alpha(byte) && !is_decimal_digit(c) && byte != '+' && byte != '-' &&
-            byte != '.') {
+        if (!is_uri_alpha(byte) && !is_decimal_digit(c) && byte != '+' && byte != '-' && byte != '.') {
             return false;
         }
     }
@@ -1065,8 +993,7 @@ bool is_valid_uri_scheme(std::string_view value) noexcept {
 
 namespace {
 
-[[nodiscard]] bool parse_absolute_target(
-    http_known_method method, std::string_view target, request_target_view& output) noexcept {
+[[nodiscard]] bool parse_absolute_target(http_known_method method, std::string_view target, request_target_view& output) noexcept {
     // RFC 9112 section 3.2.2 defines absolute-form as an absolute-URI, but
     // every caller is an origin server (or builds one of its requests). An
     // origin only serves http(s) resources (RFC 9110 sections 4.2.1-4.2.2),
@@ -1083,11 +1010,8 @@ namespace {
 
     const auto remainder = target.substr(scheme_end + 1);
     const auto query_separator = remainder.find('?');
-    const auto hierarchy =
-        query_separator == std::string_view::npos ? remainder : remainder.substr(0, query_separator);
-    const auto query = query_separator == std::string_view::npos
-                           ? std::string_view{}
-                           : remainder.substr(query_separator + 1);
+    const auto hierarchy = query_separator == std::string_view::npos ? remainder : remainder.substr(0, query_separator);
+    const auto query = query_separator == std::string_view::npos ? std::string_view{} : remainder.substr(query_separator + 1);
     // HTTP(S) URIs have a mandatory "//" authority.
     if (!hierarchy.starts_with("//") || !is_valid_uri_component(query, true, true)) {
         return false;
@@ -1095,11 +1019,8 @@ namespace {
 
     const auto authority_and_path = hierarchy.substr(2);
     const auto path_separator = authority_and_path.find('/');
-    const auto authority = path_separator == std::string_view::npos
-                               ? authority_and_path
-                               : authority_and_path.substr(0, path_separator);
-    const auto path = path_separator == std::string_view::npos ? std::string_view{}
-                                                               : authority_and_path.substr(path_separator);
+    const auto authority = path_separator == std::string_view::npos ? authority_and_path : authority_and_path.substr(0, path_separator);
+    const auto path = path_separator == std::string_view::npos ? std::string_view{} : authority_and_path.substr(path_separator);
     // The authority becomes the authoritative Host value, so it must be a
     // non-empty HTTP Host. Userinfo is rejected at this trust boundary (RFC
     // 9110 section 4.2.4) instead of being silently stripped.
@@ -1129,12 +1050,10 @@ namespace {
 
 }  // namespace
 
-bool authority_matches_host(
-    std::string_view authority, std::string_view host, std::uint16_t default_port) noexcept {
+bool authority_matches_host(std::string_view authority, std::string_view host, std::uint16_t default_port) noexcept {
     const auto authority_parts = parse_http_authority(authority);
     const auto host_parts = parse_http_authority(host);
-    if (!authority_parts || !host_parts ||
-        !http_uri_host_equals(authority_parts->host(), host_parts->host())) {
+    if (!authority_parts || !host_parts || !http_uri_host_equals(authority_parts->host(), host_parts->host())) {
         return false;
     }
     // With no known scheme default, an omitted/empty port has no numeric value.
@@ -1151,8 +1070,7 @@ bool authority_matches_host(
     return authority_parts->effective_port(default_port) == host_parts->effective_port(default_port);
 }
 
-bool parse_request_target(
-    http_known_method method, std::string_view target, request_target_view& output) noexcept {
+bool parse_request_target(http_known_method method, std::string_view target, request_target_view& output) noexcept {
     if (target == "*") {
         if (method != http_known_method::options) {
             return false;
@@ -1240,12 +1158,14 @@ using detail::parse_port_value;
         return true;
     }
     if (value.size() >= 2 && value.front() == '0' && (value[1] == 'x' || value[1] == 'X')) {
-        return std::ranges::all_of(
-            value.substr(2), [](char digit) noexcept { return http_decode_hex_nibble(digit) >= 0; });
+        return std::ranges::all_of(value.substr(2), [](char digit) noexcept {
+            return http_decode_hex_nibble(digit) >= 0;
+        });
     }
     if (value.size() >= 2 && value.front() == '0') {
-        return std::ranges::all_of(
-            value.substr(1), [](char digit) noexcept { return digit >= '0' && digit <= '7'; });
+        return std::ranges::all_of(value.substr(1), [](char digit) noexcept {
+            return digit >= '0' && digit <= '7';
+        });
     }
     return false;
 }
@@ -1255,8 +1175,7 @@ using detail::parse_port_value;
         domain.remove_suffix(1);
     }
     const auto separator = domain.rfind('.');
-    const auto last_label =
-        separator == std::string_view::npos ? domain : domain.substr(separator + 1);
+    const auto last_label = separator == std::string_view::npos ? domain : domain.substr(separator + 1);
     return is_serialized_origin_ipv4_number(last_label);
 }
 
@@ -1296,8 +1215,7 @@ using detail::parse_port_value;
     });
 }
 
-[[nodiscard]] std::size_t find_serialized_origin_ipv6_compression_index(
-    const std::array<std::uint16_t, 8>& pieces) noexcept {
+[[nodiscard]] std::size_t find_serialized_origin_ipv6_compression_index(const std::array<std::uint16_t, 8>& pieces) noexcept {
     constexpr std::size_t no_compression = 8;
     std::size_t longest_index = no_compression;
     std::size_t longest_size = 1;
@@ -1325,8 +1243,7 @@ using detail::parse_port_value;
     return longest_index;
 }
 
-[[nodiscard]] bool append_serialized_origin_ipv6_hex(
-    std::array<char, 39>& output, std::size_t& size, std::uint16_t value) noexcept {
+[[nodiscard]] bool append_serialized_origin_ipv6_hex(std::array<char, 39>& output, std::size_t& size, std::uint16_t value) noexcept {
     bool emitted = false;
     for (int shift = 12; shift >= 0; shift -= 4) {
         const auto nibble = static_cast<unsigned>((value >> shift) & 0xFU);
@@ -1342,8 +1259,7 @@ using detail::parse_port_value;
     return true;
 }
 
-[[nodiscard]] bool append_serialized_origin_ipv6_byte(
-    std::array<char, 39>& output, std::size_t& size, char byte) noexcept {
+[[nodiscard]] bool append_serialized_origin_ipv6_byte(std::array<char, 39>& output, std::size_t& size, char byte) noexcept {
     if (size == output.size()) {
         return false;
     }
@@ -1351,8 +1267,7 @@ using detail::parse_port_value;
     return true;
 }
 
-[[nodiscard]] bool is_canonical_serialized_origin_ipv6(
-    std::string_view literal, const std::array<std::uint16_t, 8>& pieces) noexcept {
+[[nodiscard]] bool is_canonical_serialized_origin_ipv6(std::string_view literal, const std::array<std::uint16_t, 8>& pieces) noexcept {
     std::array<char, 39> serialized{};
     std::size_t size = 0;
     const auto compression_index = find_serialized_origin_ipv6_compression_index(pieces);
@@ -1380,15 +1295,12 @@ using detail::parse_port_value;
         if (!append_serialized_origin_ipv6_hex(serialized, size, pieces[piece_index])) {
             return false;
         }
-        if (piece_index != pieces.size() - 1 &&
-            !append_serialized_origin_ipv6_byte(serialized, size, ':')) {
+        if (piece_index != pieces.size() - 1 && !append_serialized_origin_ipv6_byte(serialized, size, ':')) {
             return false;
         }
     }
 
-    return literal.size() == size &&
-           std::equal(serialized.begin(), serialized.begin() + static_cast<std::ptrdiff_t>(size),
-               literal.begin());
+    return literal.size() == size && std::equal(serialized.begin(), serialized.begin() + static_cast<std::ptrdiff_t>(size), literal.begin());
 }
 
 // The canonical re-serialization (lowercase, no leading zeros, longest-run
@@ -1408,8 +1320,7 @@ using detail::parse_port_value;
     return parse_port_value(value);
 }
 
-[[nodiscard]] std::optional<std::uint16_t> serialized_origin_default_port(
-    std::string_view scheme) noexcept {
+[[nodiscard]] std::optional<std::uint16_t> serialized_origin_default_port(std::string_view scheme) noexcept {
     if (scheme == "ftp") {
         return 21;
     }
@@ -1545,8 +1456,7 @@ struct uri_reference_layout final {
     return layout;
 }
 
-[[nodiscard]] bool uri_reference_keeps_literal(
-    unsigned char byte, std::size_t index, const uri_reference_layout& layout, bool& fragment_seen) noexcept {
+[[nodiscard]] bool uri_reference_keeps_literal(unsigned char byte, std::size_t index, const uri_reference_layout& layout, bool& fragment_seen) noexcept {
     switch (byte) {
         case '[':
         case ']':
@@ -1599,8 +1509,7 @@ std::string_view percent_encode_uri_reference(borrowed_text text, std::string& s
                 // Nonempty storage can be overwritten only when every possible
                 // triplet fits without another allocation. Empty storage rolls back
                 // by clearing; aliased input always needs independent storage.
-                const bool can_reuse = (initially_empty || reference.size() <= storage.capacity() / 3) &&
-                                       !detail::http_text_aliases_string(reference, storage);
+                const bool can_reuse = (initially_empty || reference.size() <= storage.capacity() / 3) && !detail::http_text_aliases_string(reference, storage);
                 encoded = can_reuse ? &storage : &staged;
                 if (reference.size() > encoded->max_size() - 2) {
                     throw std::length_error("URI reference exceeds string capacity");
@@ -1630,8 +1539,7 @@ std::string_view percent_encode_uri_reference(borrowed_text text, std::string& s
     return storage;
 }
 
-std::optional<std::string_view> decode_url_component(
-    borrowed_text text, std::string& storage, url_decode_mode mode) {
+std::optional<std::string_view> decode_url_component(borrowed_text text, std::string& storage, url_decode_mode mode) {
     const auto input = text.view();
     std::string staged;
     std::string* target = nullptr;
@@ -1661,9 +1569,7 @@ std::optional<std::string_view> decode_url_component(
             continue;
         }
         if (target == nullptr) {
-            const bool can_write_in_place =
-                (mode == url_decode_mode::form || storage.empty()) &&
-                !detail::http_text_aliases_string(input, storage);
+            const bool can_write_in_place = (mode == url_decode_mode::form || storage.empty()) && !detail::http_text_aliases_string(input, storage);
             target = can_write_in_place ? &storage : &staged;
             target->reserve(input.size() - advance);
             target->clear();
@@ -1721,8 +1627,7 @@ inline constexpr std::array<bool, 256> reg_name_char_table = [] {
     return reg_name_char_table[byte] || byte == ':';
 }
 
-[[nodiscard]] bool parse_ipv6_hex_group(std::string_view literal, std::size_t& offset,
-    std::uint16_t& group) noexcept {
+[[nodiscard]] bool parse_ipv6_hex_group(std::string_view literal, std::size_t& offset, std::uint16_t& group) noexcept {
     group = 0;
     std::size_t digits = 0;
     while (offset < literal.size() && digits < 4) {
@@ -1738,8 +1643,7 @@ inline constexpr std::array<bool, 256> reg_name_char_table = [] {
 }
 
 template <typename is_allowed_type>
-[[nodiscard]] bool is_valid_percent_encoded(
-    std::string_view value, is_allowed_type is_allowed) noexcept {
+[[nodiscard]] bool is_valid_percent_encoded(std::string_view value, is_allowed_type is_allowed) noexcept {
     for (std::size_t index = 0; index < value.size(); ++index) {
         const auto byte = static_cast<unsigned char>(value[index]);
         if (byte == '%') {
@@ -1766,8 +1670,7 @@ bool is_valid_uri_port(std::string_view value) noexcept {
     return std::ranges::all_of(value, is_decimal_digit);
 }
 
-bool split_uri_host_port(
-    std::string_view value, std::string_view& host, std::string_view& port, bool& has_port) noexcept {
+bool split_uri_host_port(std::string_view value, std::string_view& host, std::string_view& port, bool& has_port) noexcept {
     port = {};
     has_port = false;
     if (!value.empty() && value.front() == '[') {
@@ -1820,8 +1723,7 @@ std::variant<std::uint16_t, std::errc> parse_port_value(std::string_view value) 
     return parsed_value;
 }
 
-[[nodiscard]] bool is_valid_uri_component(
-    std::string_view value, bool allow_slash, bool allow_question) noexcept {
+[[nodiscard]] bool is_valid_uri_component(std::string_view value, bool allow_slash, bool allow_question) noexcept {
     return is_valid_percent_encoded(value, [allow_slash, allow_question](unsigned char byte) noexcept {
         return is_uri_pchar(byte) || (allow_slash && byte == '/') || (allow_question && byte == '?');
     });
@@ -1880,8 +1782,7 @@ std::optional<std::array<std::uint16_t, 8>> parse_ipv6_address(std::string_view 
         }
         const auto next_dot = literal.find('.', offset);
         const auto next_colon = literal.find(':', offset);
-        if (is_decimal_digit(literal[offset]) && next_dot != std::string_view::npos &&
-            (next_colon == std::string_view::npos || next_dot < next_colon)) {
+        if (is_decimal_digit(literal[offset]) && next_dot != std::string_view::npos && (next_colon == std::string_view::npos || next_dot < next_colon)) {
             const auto tail = parse_ipv4_address(literal.substr(offset));
             if (!tail || size > groups.size() - 2) {
                 return std::nullopt;
@@ -1954,10 +1855,9 @@ std::optional<std::array<std::uint16_t, 8>> parse_ipv6_address(std::string_view 
 }
 
 [[nodiscard]] bool is_valid_reg_name(std::string_view value) noexcept {
-    return !value.empty() &&
-           is_valid_percent_encoded(value, [](unsigned char byte) noexcept {
-               return reg_name_char_table[byte];
-           });
+    return !value.empty() && is_valid_percent_encoded(value, [](unsigned char byte) noexcept {
+        return reg_name_char_table[byte];
+    });
 }
 
 [[nodiscard]] bool is_valid_dns_domain_name(std::string_view name) noexcept {
@@ -1995,8 +1895,8 @@ namespace ruvia {
 // transfers every descriptor without allocation; unwinding releases the rest.
 class http_response_headers::descriptor_stage final {
 public:
-    explicit descriptor_stage(http_response_headers& owner_value) noexcept
-        : owner_(owner_value) {}
+    explicit descriptor_stage(http_response_headers& owner_value) noexcept :
+        owner_(owner_value) {}
     descriptor_stage(const descriptor_stage&) = delete;
     descriptor_stage& operator=(const descriptor_stage&) = delete;
 
@@ -2014,8 +1914,7 @@ public:
     }
 
     void stage_weak_etag(std::string_view strong_etag) {
-        auto prepared = owner_.make_uninitialized_header(
-            "ETag", strong_etag.size() + 2U, detail::response_header_etag);
+        auto prepared = owner_.make_uninitialized_header("ETag", strong_etag.size() + 2U, detail::response_header_etag);
         auto* const out = detail::http_response_header_access::value_begin(prepared);
         out[0] = 'W';
         out[1] = '/';
@@ -2029,8 +1928,7 @@ public:
         std::size_t missing_headers = 0;
         for (std::size_t slot = 0; slot < count_; ++slot) {
             const auto& prepared = prepared_[slot];
-            if (owner_.find_header_for_read(prepared.name(), detail::http_response_header_access::known_bit(prepared)) ==
-                nullptr) {
+            if (owner_.find_header_for_read(prepared.name(), detail::http_response_header_access::known_bit(prepared)) == nullptr) {
                 ++missing_headers;
             }
         }
@@ -2111,39 +2009,29 @@ std::uint64_t http_response_body_plan::buffered_representation_length(const http
 }
 
 bool http_buffered_response_write_plan::matches_response(const http_response& response) const noexcept {
-    return response.status() == body_plan_.response_status() &&
-           content_length_ == body_plan_.buffered_representation_length(response);
+    return response.status() == body_plan_.response_status() && content_length_ == body_plan_.buffered_representation_length(response);
 }
 
-http_buffered_response_write_plan plan_buffered_http_response_write(
-    http_known_method request_method, const http_response& response) noexcept {
+http_buffered_response_write_plan plan_buffered_http_response_write(http_known_method request_method, const http_response& response) noexcept {
     const auto body_plan = plan_http_response_body(request_method, response.status());
     return http_buffered_response_write_plan(body_plan, body_plan.buffered_representation_length(response));
 }
 
-http_response_body_plan plan_http_response_body(
-    http_known_method request_method, http_status_code response_status) noexcept {
-    const bool body_allowed = !response_status.is_informational() &&
-                              response_status != http_status::no_content &&
-                              response_status != http_status::reset_content &&
-                              response_status != http_status::not_modified;
+http_response_body_plan plan_http_response_body(http_known_method request_method, http_status_code response_status) noexcept {
+    const bool body_allowed = !response_status.is_informational() && response_status != http_status::no_content && response_status != http_status::reset_content && response_status != http_status::not_modified;
     const bool auto_content_length_allowed = body_allowed || response_status == http_status::reset_content;
     const bool explicit_content_length_allowed = body_allowed || response_status == http_status::not_modified;
     const auto semantics = detail::classify_http_response_content_semantics(request_method, response_status);
     const bool connect_tunnel = semantics == http_response_content_semantics::connect_tunnel;
-    return http_response_body_plan(request_method, response_status, semantics, body_allowed,
-        !body_allowed || semantics != http_response_content_semantics::with_content,
-        !connect_tunnel && auto_content_length_allowed,
-        !connect_tunnel && explicit_content_length_allowed,
-        !connect_tunnel && body_allowed);
+    return http_response_body_plan(request_method, response_status, semantics, body_allowed, !body_allowed || semantics != http_response_content_semantics::with_content, !connect_tunnel && auto_content_length_allowed, !connect_tunnel && explicit_content_length_allowed, !connect_tunnel && body_allowed);
 }
 
 http_response::http_response() noexcept = default;
 
-http_response::http_response(http_response&& other) noexcept
-    : status_code_(other.status_code_),
-      headers_(std::move(other.headers_)),
-      body_(std::move(other.body_)) {}
+http_response::http_response(http_response&& other) noexcept :
+    status_code_(other.status_code_),
+    headers_(std::move(other.headers_)),
+    body_(std::move(other.body_)) {}
 
 http_response& http_response::operator=(http_response&& other) noexcept {
     if (this == &other) {
@@ -2187,8 +2075,7 @@ void http_response::content_type(http_content_type type) {
     headers_.content_type(type);
 }
 
-void http_response::allow_methods(
-    std::uint32_t method_mask, std::span<const std::string_view> extension_methods) {
+void http_response::allow_methods(std::uint32_t method_mask, std::span<const std::string_view> extension_methods) {
     headers_.allow_methods(method_mask, extension_methods);
 }
 
@@ -2214,8 +2101,7 @@ void http_response::status(http_status_code status_code) {
     status_code_ = status_code;
 }
 
-void http_response::transfer_headers_from(
-    const http_response& source_value, http_response_header_transfer mode) {
+void http_response::transfer_headers_from(const http_response& source_value, http_response_header_transfer mode) {
     headers_.transfer_from(source_value.headers_, mode);
 }
 
@@ -2239,20 +2125,17 @@ void http_response::apply_content_encoding(std::string_view content_encoding) {
     apply_encoded_representation(content_encoding, nullptr);
 }
 
-void http_response::replace_body_with_content_encoding(
-    std::string&& value, std::string_view content_encoding) {
+void http_response::replace_body_with_content_encoding(std::string&& value, std::string_view content_encoding) {
     apply_encoded_representation(content_encoding, &value);
 }
 
-void http_response::apply_encoded_representation(
-    std::string_view content_encoding, std::string* body) {
+void http_response::apply_encoded_representation(std::string_view content_encoding, std::string* body) {
     detail::validate_response_header_storage_size(std::string_view("Content-Encoding").size(), content_encoding.size());
     // Coding-list parsing permits field-line OWS; publish normalized field
     // content so the same response can be emitted by HTTP/1 and HTTP/2.
     content_encoding = http_trim_ows(content_encoding);
     detail::response_field_state fields;
-    if (detail::validate_response_field(detail::http_field_kind::content_encoding, content_encoding,
-            fields) != detail::response_field_status::ok) {
+    if (detail::validate_response_field(detail::http_field_kind::content_encoding, content_encoding, fields) != detail::response_field_status::ok) {
         throw std::invalid_argument("invalid HTTP Content-Encoding header");
     }
     // RFC 9110 §8.8.3: the coded representation is not byte-identical to the
@@ -2269,8 +2152,7 @@ void http_response::apply_encoded_representation(
     }
     std::array<char, http_max_unsigned_decimal_size> length_digits;
     if (body != nullptr) {
-        update.stage("Content-Length", http_format_unsigned(length_digits, body->size()),
-            detail::response_header_content_length);
+        update.stage("Content-Length", http_format_unsigned(length_digits, body->size()), detail::response_header_content_length);
     }
     update.reserve();
     // Every descriptor and table slot exists before the body changes. set_owned
@@ -2293,9 +2175,7 @@ void http_response::apply_encoded_representation(
     update.publish();
 }
 
-void http_response::file_body(http_native_path_view_type file, http_content_length size,
-    http_content_length offset, http_content_length length, http_response_file_identity identity,
-    http_response_file_descriptor opened) {
+void http_response::file_body(http_native_path_view_type file, http_content_length size, http_content_length offset, http_content_length length, http_response_file_identity identity, http_response_file_descriptor opened) {
     if (file.empty()) {
         throw std::invalid_argument("file response path must not be empty");
     }
@@ -2303,22 +2183,17 @@ void http_response::file_body(http_native_path_view_type file, http_content_leng
         throw std::invalid_argument("file response byte range is outside the file");
     }
 
-    body_.set_owned_file(file, size.value(), offset.value(), length.value(),
-        identity, std::move(opened));
+    body_.set_owned_file(file, size.value(), offset.value(), length.value(), identity, std::move(opened));
 }
 
-void http_response::multipart_file_body(http_native_path_view_type file, http_content_length size,
-    http_response_file_identity identity, http_multipart_byte_range_plan&& plan,
-    http_response_file_descriptor opened) {
+void http_response::multipart_file_body(http_native_path_view_type file, http_content_length size, http_response_file_identity identity, http_multipart_byte_range_plan&& plan, http_response_file_descriptor opened) {
     if (file.empty()) {
         throw std::invalid_argument("file response path must not be empty");
     }
-    body_.set_multipart(
-        file, size.value(), identity, std::move(plan), std::move(opened));
+    body_.set_multipart(file, size.value(), identity, std::move(plan), std::move(opened));
 }
 
-void http_response::content_range(
-    http_content_length offset, http_content_length length, http_content_length size) {
+void http_response::content_range(http_content_length offset, http_content_length length, http_content_length size) {
     headers_.content_range(offset, length, size);
 }
 
@@ -2370,8 +2245,7 @@ void analyze_http1_fields(const http_interim_response_head& response, http1_inte
         if (status != detail::http_interim_response_header_validation_status::ok) {
             throw http1_response_head_error(common_validation_message(status));
         }
-        switch (detail::parse_http_response_control_field(
-            kind, value, facts.connection_options_, facts.upgrade_protocols_)) {
+        switch (detail::parse_http_response_control_field(kind, value, facts.connection_options_, facts.upgrade_protocols_)) {
             case detail::http_response_control_field_status::invalid_connection:
                 throw http1_response_head_error("invalid HTTP/1 interim response Connection field");
             case detail::http_response_control_field_status::invalid_upgrade:
@@ -2391,8 +2265,7 @@ void analyze_http1_fields(const http_interim_response_head& response, http1_inte
     }
 }
 
-[[nodiscard]] char* write_interim_response_head(
-    char* output, const http_interim_response_head& response, std::string_view reason_phrase) noexcept {
+[[nodiscard]] char* write_interim_response_head(char* output, const http_interim_response_head& response, std::string_view reason_phrase) noexcept {
     detail::http_raw_wire_sink sink(output);
     detail::emit_http1_status_line(sink, response.status(), reason_phrase);
     for (const auto& header : response.headers()) {
@@ -2404,19 +2277,15 @@ void analyze_http1_fields(const http_interim_response_head& response, http1_inte
 
 }  // namespace
 
-http_interim_response_head::http_interim_response_head(
-    http_status_code status_code, borrowed_http_headers headers)
-    : status_code_(status_code),
-      headers_(headers.view()) {
+http_interim_response_head::http_interim_response_head(http_status_code status_code, borrowed_http_headers headers) :
+    status_code_(status_code),
+    headers_(headers.view()) {
     if (!detail::http_interim_status_code_valid(status_code)) {
-        throw std::invalid_argument(status_code == http_status::switching_protocols
-                                        ? "Switching Protocols requires a dedicated protocol driver"
-                                        : "invalid interim HTTP status code");
+        throw std::invalid_argument(status_code == http_status::switching_protocols ? "Switching Protocols requires a dedicated protocol driver" : "invalid interim HTTP status code");
     }
 }
 
-std::variant<prepared_http1_interim_response, http1_interim_response_buffer_too_small>
-prepare_http1_interim_response_head(const http_interim_response_head& response, std::span<char> head_buffer) {
+std::variant<prepared_http1_interim_response, http1_interim_response_buffer_too_small> prepare_http1_interim_response_head(const http_interim_response_head& response, std::span<char> head_buffer) {
     const auto reason_phrase = http_reason_phrase(response.status());
     http1_interim_header_facts facts;
     analyze_http1_fields(response, facts);
@@ -2429,16 +2298,11 @@ prepare_http1_interim_response_head(const http_interim_response_head& response, 
     }
 
     const auto output = head_buffer.first(head_bytes);
-    detail::write_http_wire(output,
-        detail::http_wire_inputs_overlap(std::string_view(output.data(), output.size()), response.headers()),
-        [&](char* destination) noexcept {
-            return write_interim_response_head(destination, response, reason_phrase);
-        });
+    detail::write_http_wire(output, detail::http_wire_inputs_overlap(std::string_view(output.data(), output.size()), response.headers()), [&](char* destination) noexcept {
+        return write_interim_response_head(destination, response, reason_phrase);
+    });
 
-    return prepared_http1_interim_response(std::string_view(head_buffer.data(), head_bytes),
-        facts.connection_options_.close()
-            ? http1_interim_connection_disposition::close_after_interim_response
-            : http1_interim_connection_disposition::unchanged);
+    return prepared_http1_interim_response(std::string_view(head_buffer.data(), head_bytes), facts.connection_options_.close() ? http1_interim_connection_disposition::close_after_interim_response : http1_interim_connection_disposition::unchanged);
 }
 
 }  // namespace ruvia
@@ -2449,18 +2313,15 @@ const http_representation_response_plan::full_type* http_representation_response
     return std::get_if<full_type>(&value_);
 }
 
-const http_representation_response_plan::not_modified_type*
-http_representation_response_plan::not_modified() const& noexcept {
+const http_representation_response_plan::not_modified_type* http_representation_response_plan::not_modified() const& noexcept {
     return std::get_if<not_modified_type>(&value_);
 }
 
-const http_representation_response_plan::precondition_failed_type*
-http_representation_response_plan::precondition_failed() const& noexcept {
+const http_representation_response_plan::precondition_failed_type* http_representation_response_plan::precondition_failed() const& noexcept {
     return std::get_if<precondition_failed_type>(&value_);
 }
 
-const http_representation_response_plan::range_unsatisfiable_type*
-http_representation_response_plan::range_unsatisfiable() const& noexcept {
+const http_representation_response_plan::range_unsatisfiable_type* http_representation_response_plan::range_unsatisfiable() const& noexcept {
     return std::get_if<range_unsatisfiable_type>(&value_);
 }
 
@@ -2468,8 +2329,7 @@ const http_representation_response_plan::partial_type* http_representation_respo
     return std::get_if<partial_type>(&value_);
 }
 
-const http_representation_response_plan::multipart_type*
-http_representation_response_plan::multipart_ranges() const& noexcept {
+const http_representation_response_plan::multipart_type* http_representation_response_plan::multipart_ranges() const& noexcept {
     return std::get_if<multipart_type>(&value_);
 }
 
@@ -2489,9 +2349,7 @@ http_status_code http_representation_response_plan::status() const noexcept {
     return http_status::partial_content;
 }
 
-http_representation_response_plan plan_http_representation_response(
-    const http_request& request, http_selected_representation_metadata representation,
-    http_representation_response_options options) {
+http_representation_response_plan plan_http_representation_response(const http_request& request, http_selected_representation_metadata representation, http_representation_response_options options) {
     switch (options.range_policy_) {
         case http_range_request_policy::ignore:
         case http_range_request_policy::honor_byte_ranges:
@@ -2504,12 +2362,10 @@ http_representation_response_plan plan_http_representation_response(
         return http_representation_response_plan(http_representation_response_plan::full_type{options.normal_status_});
     };
     auto method = get_http_conditional_method_plan(request.known_method());
-    if (request.known_method() == http_known_method::unknown &&
-        !request.method().empty() && request.method() != "TRACE") {
+    if (request.known_method() == http_known_method::unknown && !request.method().empty() && request.method() != "TRACE") {
         method.evaluates_preconditions_ = true;
     }
-    if (!method.evaluates_preconditions_ ||
-        (!options.normal_status_.is_successful() && options.normal_status_ != http_status::precondition_failed)) {
+    if (!method.evaluates_preconditions_ || (!options.normal_status_.is_successful() && options.normal_status_ != http_status::precondition_failed)) {
         return make_full();
     }
 
@@ -2517,11 +2373,9 @@ http_representation_response_plan plan_http_representation_response(
     const auto etags = get_http_etag_preconditions(request, representation.etag_);
     if (etags.if_match_.present_) {
         if (!etags.if_match_.matches()) {
-            return http_representation_response_plan(
-                http_representation_response_plan::precondition_failed_type{});
+            return http_representation_response_plan(http_representation_response_plan::precondition_failed_type{});
         }
-    } else if (representation.last_modified_ && !headers.if_unmodified_since_.empty() &&
-               !http_date_unmodified(headers.if_unmodified_since_, *representation.last_modified_)) {
+    } else if (representation.last_modified_ && !headers.if_unmodified_since_.empty() && !http_date_unmodified(headers.if_unmodified_since_, *representation.last_modified_)) {
         return http_representation_response_plan(http_representation_response_plan::precondition_failed_type{});
     }
 
@@ -2532,20 +2386,15 @@ http_representation_response_plan plan_http_representation_response(
             }
             return http_representation_response_plan(http_representation_response_plan::precondition_failed_type{});
         }
-    } else if (method.evaluates_if_modified_since_ && representation.last_modified_ &&
-               !headers.if_modified_since_.empty() &&
-               http_date_not_modified(headers.if_modified_since_, *representation.last_modified_)) {
+    } else if (method.evaluates_if_modified_since_ && representation.last_modified_ && !headers.if_modified_since_.empty() && http_date_not_modified(headers.if_modified_since_, *representation.last_modified_)) {
         return http_representation_response_plan(http_representation_response_plan::not_modified_type{});
     }
 
-    if (options.normal_status_ != http_status::ok ||
-        !method.evaluates_range_ ||
-        options.range_policy_ != http_range_request_policy::honor_byte_ranges || headers.range_.empty()) {
+    if (options.normal_status_ != http_status::ok || !method.evaluates_range_ || options.range_policy_ != http_range_request_policy::honor_byte_ranges || headers.range_.empty()) {
         return make_full();
     }
 
-    if (headers.has_if_range_ && !http_if_range_allows(headers.if_range_, representation.etag_,
-                                     representation.last_modified_, representation.strong_date_validator_)) {
+    if (headers.has_if_range_ && !http_if_range_allows(headers.if_range_, representation.etag_, representation.last_modified_, representation.strong_date_validator_)) {
         return make_full();
     }
 
@@ -2554,8 +2403,7 @@ http_representation_response_plan plan_http_representation_response(
         return make_full();
     }
     if (ranges.unsatisfiable()) {
-        return http_representation_response_plan(
-            http_representation_response_plan::range_unsatisfiable_type{});
+        return http_representation_response_plan(http_representation_response_plan::range_unsatisfiable_type{});
     }
     if (ranges.size() == 1) {
         return http_representation_response_plan(ranges[0], headers.has_if_range_);
@@ -2570,8 +2418,7 @@ http_representation_response_plan plan_http_representation_response(
 
 namespace ruvia {
 
-[[nodiscard]] http_response_stream_head prepare_http_response_stream_head(
-    http_response response, http_response_stream_commit_plan commit_plan) {
+[[nodiscard]] http_response_stream_head prepare_http_response_stream_head(http_response response, http_response_stream_commit_plan commit_plan) {
     if (response.status() != commit_plan.response_status()) {
         throw std::invalid_argument("response stream commit plan status does not match response");
     }
@@ -2580,16 +2427,13 @@ namespace ruvia {
     }
     const auto framing = commit_plan.framing();
     if (!detail::response_transfer_encoding_replaceable(response)) {
-        if (framing == http_response_stream_framing::http2_frames ||
-            framing == http_response_stream_framing::http3_frames) {
+        if (framing == http_response_stream_framing::http2_frames || framing == http_response_stream_framing::http3_frames) {
             throw std::invalid_argument("HTTP/2 or HTTP/3 response cannot carry a Transfer-Encoding other than chunked");
         }
         throw http1_response_head_error("HTTP response Transfer-Encoding must be exactly chunked");
     }
     const auto body_plan = commit_plan.body_plan();
-    const bool writer_owns_http1_chunked = framing == http_response_stream_framing::http1_chunked &&
-                                           body_plan.transfer_encoding_allowed() &&
-                                           !body_plan.body_suppressed();
+    const bool writer_owns_http1_chunked = framing == http_response_stream_framing::http1_chunked && body_plan.transfer_encoding_allowed() && !body_plan.body_suppressed();
 
     // Keep the prepared response metadata consistent with the wire plan. The
     // framework's chunk writer is the only Transfer-Encoding producer, so the
@@ -2625,14 +2469,9 @@ namespace ruvia {
 
 namespace ruvia {
 
-http_multipart_byte_range_plan make_http_multipart_byte_range_plan(
-    const http_byte_range_set& ranges, http_content_length representation_length_value,
-    std::string_view media_type, std::string_view boundary) {
+http_multipart_byte_range_plan make_http_multipart_byte_range_plan(const http_byte_range_set& ranges, http_content_length representation_length_value, std::string_view media_type, std::string_view boundary) {
     const auto representation_length = representation_length_value.value();
-    if (ranges.ignored() || ranges.unsatisfiable() || ranges.size() < 2 ||
-        ranges.size() > http_byte_range_set::capacity || representation_length == 0 ||
-        !is_valid_http_content_type_field_value(media_type) ||
-        !multipart_boundary::try_create(boundary).has_value()) {
+    if (ranges.ignored() || ranges.unsatisfiable() || ranges.size() < 2 || ranges.size() > http_byte_range_set::capacity || representation_length == 0 || !is_valid_http_content_type_field_value(media_type) || !multipart_boundary::try_create(boundary).has_value()) {
         throw std::invalid_argument("invalid multipart byte-range plan input");
     }
 
@@ -2641,22 +2480,15 @@ http_multipart_byte_range_plan make_http_multipart_byte_range_plan(
     std::uint64_t total_content_length = metadata_size;
     for (std::size_t index = 0; index < ranges.size(); ++index) {
         const auto range = ranges[index];
-        if (range.length_ == 0 || range.offset_ > representation_length ||
-            range.length_ > representation_length - range.offset_) {
+        if (range.length_ == 0 || range.offset_ > representation_length || range.length_ > representation_length - range.offset_) {
             throw std::invalid_argument("multipart range is outside the representation");
         }
-        const auto part_metadata_size =
-            2U + boundary.size() + 16U + media_type.size() + 23U +
-            http_unsigned_decimal_size(range.offset_) + 1U +
-            http_unsigned_decimal_size(range.offset_ + range.length_ - 1) + 1U +
-            representation_digits + 6U;
+        const auto part_metadata_size = 2U + boundary.size() + 16U + media_type.size() + 23U + http_unsigned_decimal_size(range.offset_) + 1U + http_unsigned_decimal_size(range.offset_ + range.length_ - 1) + 1U + representation_digits + 6U;
         if (part_metadata_size > (std::numeric_limits<std::size_t>::max)() - metadata_size) {
             throw std::length_error("multipart response metadata size overflows size_t");
         }
         metadata_size += part_metadata_size;
-        if (total_content_length > (std::numeric_limits<std::uint64_t>::max)() - part_metadata_size ||
-            total_content_length + part_metadata_size >
-                (std::numeric_limits<std::uint64_t>::max)() - range.length_) {
+        if (total_content_length > (std::numeric_limits<std::uint64_t>::max)() - part_metadata_size || total_content_length + part_metadata_size > (std::numeric_limits<std::uint64_t>::max)() - range.length_) {
             throw std::length_error("multipart response content length overflows uint64_t");
         }
         total_content_length += part_metadata_size + range.length_;
@@ -2667,8 +2499,7 @@ http_multipart_byte_range_plan make_http_multipart_byte_range_plan(
     auto& metadata = storage.metadata_;
     static constexpr std::string_view content_type_prefix = "multipart/byteranges; boundary=";
     const bool boundary_is_token = http_token_prefix_size(boundary) == boundary.size();
-    storage.content_type_.reserve(
-        content_type_prefix.size() + boundary.size() + (boundary_is_token ? 0U : 2U));
+    storage.content_type_.reserve(content_type_prefix.size() + boundary.size() + (boundary_is_token ? 0U : 2U));
     storage.content_type_.append(content_type_prefix);
     if (!boundary_is_token) {
         storage.content_type_.push_back('"');
@@ -2682,14 +2513,12 @@ http_multipart_byte_range_plan make_http_multipart_byte_range_plan(
         const auto length = storage.metadata_.size() - offset;
         if (storage.segment_count_ != 0) {
             auto& previous = storage.segments_[storage.segment_count_ - 1];
-            if (previous.kind_ == http_multipart_byte_range_plan::segment_kind::metadata &&
-                previous.metadata_offset_ + previous.metadata_length_ == offset) {
+            if (previous.kind_ == http_multipart_byte_range_plan::segment_kind::metadata && previous.metadata_offset_ + previous.metadata_length_ == offset) {
                 previous.metadata_length_ = storage.metadata_.size() - previous.metadata_offset_;
                 return;
             }
         }
-        storage.segments_[storage.segment_count_++] = {
-            http_multipart_byte_range_plan::segment_kind::metadata, offset, length, 0, 0};
+        storage.segments_[storage.segment_count_++] = {http_multipart_byte_range_plan::segment_kind::metadata, offset, length, 0, 0};
     };
 
     for (std::size_t index = 0; index < ranges.size(); ++index) {
@@ -2708,8 +2537,7 @@ http_multipart_byte_range_plan make_http_multipart_byte_range_plan(
         metadata.append("\r\n\r\n");
         record_metadata(part_offset);
 
-        storage.segments_[storage.segment_count_++] = {
-            http_multipart_byte_range_plan::segment_kind::file, 0, 0, range.offset_, range.length_};
+        storage.segments_[storage.segment_count_++] = {http_multipart_byte_range_plan::segment_kind::file, 0, 0, range.offset_, range.length_};
         const auto separator_offset = metadata.size();
         metadata.append("\r\n");
         record_metadata(separator_offset);
@@ -2737,8 +2565,7 @@ http_multipart_byte_range_plan http_multipart_byte_range_plan::clone() const {
     return copy;
 }
 
-http_byte_range_set resolve_http_byte_range_set(std::string_view field_value,
-    http_content_length representation_length_value, http_byte_range_options options) {
+http_byte_range_set resolve_http_byte_range_set(std::string_view field_value, http_content_length representation_length_value, http_byte_range_options options) {
     const auto representation_length = representation_length_value.value();
     http_byte_range_set result;
     if (options.max_ranges_ == 0) {
@@ -2746,8 +2573,7 @@ http_byte_range_set resolve_http_byte_range_set(std::string_view field_value,
     }
     field_value = http_trim_ows(field_value);
     constexpr std::string_view unit = "bytes";
-    if (field_value.size() <= unit.size() || field_value[unit.size()] != '=' ||
-        !http_ascii_equals_ignore_case(field_value.substr(0, unit.size()), unit)) {
+    if (field_value.size() <= unit.size() || field_value[unit.size()] != '=' || !http_ascii_equals_ignore_case(field_value.substr(0, unit.size()), unit)) {
         return result;
     }
 
@@ -2755,8 +2581,7 @@ http_byte_range_set resolve_http_byte_range_set(std::string_view field_value,
         if (digits.empty()) {
             return false;
         }
-        const auto [end, error] =
-            std::from_chars(digits.data(), digits.data() + digits.size(), value);
+        const auto [end, error] = std::from_chars(digits.data(), digits.data() + digits.size(), value);
         if (end != digits.data() + digits.size()) {
             return false;
         }
@@ -2767,8 +2592,7 @@ http_byte_range_set resolve_http_byte_range_set(std::string_view field_value,
         return error == std::errc{};
     };
 
-    const bool strict = options.strict_order_ ||
-                        options.order_policy_ == http_byte_range_order_policy::strict_ascending_disjoint;
+    const bool strict = options.strict_order_ || options.order_policy_ == http_byte_range_order_policy::strict_ascending_disjoint;
     const auto add_range = [&](std::uint64_t offset, std::uint64_t length) -> bool {
         if (strict) {
             if (result.count_ > 0) {
@@ -2870,9 +2694,7 @@ http_byte_range_set resolve_http_byte_range_set(std::string_view field_value,
                 while (normalized_last.size() > 1 && normalized_last.front() == '0') {
                     normalized_last.remove_prefix(1);
                 }
-                if (normalized_first.size() > normalized_last.size() ||
-                    (normalized_first.size() == normalized_last.size() &&
-                        normalized_first > normalized_last)) {
+                if (normalized_first.size() > normalized_last.size() || (normalized_first.size() == normalized_last.size() && normalized_first > normalized_last)) {
                     return http_byte_range_set{};
                 }
             }
@@ -2880,8 +2702,7 @@ http_byte_range_set resolve_http_byte_range_set(std::string_view field_value,
         if (start >= representation_length) {
             continue;
         }
-        const auto clamped_end =
-            last.empty() ? representation_length - 1 : (std::min)(end, representation_length - 1);
+        const auto clamped_end = last.empty() ? representation_length - 1 : (std::min)(end, representation_length - 1);
         if (!add_range(start, clamped_end - start + 1)) {
             return http_byte_range_set{};
         }
@@ -2895,9 +2716,7 @@ http_byte_range_set resolve_http_byte_range_set(std::string_view field_value,
 std::optional<http_content_range> parse_http_content_range(std::string_view field_value) noexcept {
     field_value = http_trim_ows(field_value);
     constexpr std::string_view prefix = "bytes ";
-    if (field_value.size() <= prefix.size() ||
-        !http_ascii_equals_ignore_case(field_value.substr(0, 5), "bytes") ||
-        (field_value[5] != ' ' && field_value[5] != '\t')) {
+    if (field_value.size() <= prefix.size() || !http_ascii_equals_ignore_case(field_value.substr(0, 5), "bytes") || (field_value[5] != ' ' && field_value[5] != '\t')) {
         return std::nullopt;
     }
     const auto spec = http_trim_ows(field_value.substr(5));
@@ -2906,8 +2725,7 @@ std::optional<http_content_range> parse_http_content_range(std::string_view fiel
         return std::nullopt;
     }
     const auto slash = spec.find('/', dash + 1);
-    if (slash == std::string_view::npos || spec.find('/', slash + 1) != std::string_view::npos ||
-        spec.find('-', dash + 1) != std::string_view::npos) {
+    if (slash == std::string_view::npos || spec.find('/', slash + 1) != std::string_view::npos || spec.find('-', dash + 1) != std::string_view::npos) {
         return std::nullopt;
     }
     const auto parse_exact = [](std::string_view digits, std::uint64_t& out) noexcept {
@@ -2920,9 +2738,7 @@ std::optional<http_content_range> parse_http_content_range(std::string_view fiel
     std::uint64_t first = 0;
     std::uint64_t last = 0;
     std::uint64_t total = 0;
-    if (!parse_exact(spec.substr(0, dash), first) ||
-        !parse_exact(spec.substr(dash + 1, slash - dash - 1), last) ||
-        !parse_exact(spec.substr(slash + 1), total)) {
+    if (!parse_exact(spec.substr(0, dash), first) || !parse_exact(spec.substr(dash + 1, slash - dash - 1), last) || !parse_exact(spec.substr(slash + 1), total)) {
         return std::nullopt;
     }
     if (first > last || last >= total) {
@@ -2935,37 +2751,28 @@ std::optional<http_content_range> parse_http_content_range(std::string_view fiel
     };
 }
 
-std::optional<std::uint64_t> compute_http_byte_range_content_length(
-    std::span<const http_byte_range> ranges, http_content_length representation_length_value,
-    std::string_view media_type, std::string_view boundary) noexcept {
+std::optional<std::uint64_t> compute_http_byte_range_content_length(std::span<const http_byte_range> ranges, http_content_length representation_length_value, std::string_view media_type, std::string_view boundary) noexcept {
     const auto representation_length = representation_length_value.value();
     if (ranges.empty() || representation_length == 0) {
         return std::nullopt;
     }
     for (const auto& range : ranges) {
-        if (range.length_ == 0 || range.offset_ > representation_length ||
-            range.length_ > representation_length - range.offset_) {
+        if (range.length_ == 0 || range.offset_ > representation_length || range.length_ > representation_length - range.offset_) {
             return std::nullopt;
         }
     }
     if (ranges.size() == 1) {
         return ranges.front().length_;
     }
-    if (!is_valid_http_content_type_field_value(media_type) ||
-        !multipart_boundary::try_create(boundary).has_value()) {
+    if (!is_valid_http_content_type_field_value(media_type) || !multipart_boundary::try_create(boundary).has_value()) {
         return std::nullopt;
     }
     const auto representation_digits = http_unsigned_decimal_size(representation_length);
     std::uint64_t total = 2U + boundary.size() + 4U;
     for (const auto& range : ranges) {
-        const std::uint64_t part_metadata =
-            2U + boundary.size() + 16U + media_type.size() + 23U +
-            http_unsigned_decimal_size(range.offset_) + 1U +
-            http_unsigned_decimal_size(range.offset_ + range.length_ - 1) + 1U +
-            representation_digits + 6U;
+        const std::uint64_t part_metadata = 2U + boundary.size() + 16U + media_type.size() + 23U + http_unsigned_decimal_size(range.offset_) + 1U + http_unsigned_decimal_size(range.offset_ + range.length_ - 1) + 1U + representation_digits + 6U;
         constexpr auto max_u64 = (std::numeric_limits<std::uint64_t>::max)();
-        if (total > max_u64 - part_metadata ||
-            total + part_metadata > max_u64 - range.length_) {
+        if (total > max_u64 - part_metadata || total + part_metadata > max_u64 - range.length_) {
             return std::nullopt;
         }
         total += part_metadata + range.length_;
@@ -2973,46 +2780,35 @@ std::optional<std::uint64_t> compute_http_byte_range_content_length(
     return total;
 }
 
-std::optional<std::uint64_t> compute_http_byte_range_content_length(
-    const http_byte_range_set& ranges, http_content_length representation_length,
-    std::string_view media_type, std::string_view boundary) noexcept {
+std::optional<std::uint64_t> compute_http_byte_range_content_length(const http_byte_range_set& ranges, http_content_length representation_length, std::string_view media_type, std::string_view boundary) noexcept {
     if (ranges.ignored() || ranges.unsatisfiable()) {
         return std::nullopt;
     }
-    return compute_http_byte_range_content_length(
-        ranges.ranges(), representation_length, media_type, boundary);
+    return compute_http_byte_range_content_length(ranges.ranges(), representation_length, media_type, boundary);
 }
 
-http_byte_range_slicer::http_byte_range_slicer(const http_byte_range_set& ranges,
-    http_content_length representation_length, std::string_view media_type,
-    std::string_view boundary)
-    : http_byte_range_slicer(
-          ranges.ignored() ? std::span<const http_byte_range>{} : ranges.ranges(),
-          representation_length, media_type, boundary) {}
+http_byte_range_slicer::http_byte_range_slicer(const http_byte_range_set& ranges, http_content_length representation_length, std::string_view media_type, std::string_view boundary) :
+    http_byte_range_slicer(ranges.ignored() ? std::span<const http_byte_range>{} : ranges.ranges(), representation_length, media_type, boundary) {}
 
-http_byte_range_slicer::http_byte_range_slicer(std::span<const http_byte_range> ranges,
-    http_content_length representation_length_value, std::string_view media_type,
-    std::string_view boundary)
-    : ranges_(ranges.begin(), ranges.end()),
-      media_type_(media_type),
-      boundary_(boundary),
-      content_type_(),
-      content_range_(),
-      representation_length_(representation_length_value.value()) {
+http_byte_range_slicer::http_byte_range_slicer(std::span<const http_byte_range> ranges, http_content_length representation_length_value, std::string_view media_type, std::string_view boundary) :
+    ranges_(ranges.begin(), ranges.end()),
+    media_type_(media_type),
+    boundary_(boundary),
+    content_type_(),
+    content_range_(),
+    representation_length_(representation_length_value.value()) {
     if (ranges_.empty() || representation_length_ == 0) {
         throw std::invalid_argument("HTTP byte-range slicer requires at least one range");
     }
     for (std::size_t index = 0; index < ranges_.size(); ++index) {
         const auto range = ranges_[index];
-        if (range.length_ == 0 || range.offset_ > representation_length_ ||
-            range.length_ > representation_length_ - range.offset_) {
+        if (range.length_ == 0 || range.offset_ > representation_length_ || range.length_ > representation_length_ - range.offset_) {
             throw std::invalid_argument("HTTP byte range is outside representation");
         }
         if (index > 0) {
             const auto prev = ranges_[index - 1];
             if (range.offset_ < prev.offset_ + prev.length_) {
-                throw std::invalid_argument(
-                    "HTTP byte-range slicer requires ascending non-overlapping ranges");
+                throw std::invalid_argument("HTTP byte-range slicer requires ascending non-overlapping ranges");
             }
         }
     }
@@ -3031,20 +2827,17 @@ http_byte_range_slicer::http_byte_range_slicer(std::span<const http_byte_range> 
         content_length_ = single.length_;
         return;
     }
-    if (!is_valid_http_content_type_field_value(media_type) ||
-        !multipart_boundary::try_create(boundary).has_value()) {
+    if (!is_valid_http_content_type_field_value(media_type) || !multipart_boundary::try_create(boundary).has_value()) {
         throw std::invalid_argument("invalid multipart media type or boundary for byte-range slicer");
     }
-    const auto computed = compute_http_byte_range_content_length(
-        ranges_, representation_length_value, media_type, boundary);
+    const auto computed = compute_http_byte_range_content_length(ranges_, representation_length_value, media_type, boundary);
     if (!computed.has_value()) {
         throw std::length_error("multipart byte-range response content length overflows uint64_t");
     }
     content_length_ = *computed;
     static constexpr std::string_view content_type_prefix = "multipart/byteranges; boundary=";
     const bool boundary_is_token = http_token_prefix_size(boundary) == boundary.size();
-    content_type_.reserve(
-        content_type_prefix.size() + boundary.size() + (boundary_is_token ? 0U : 2U));
+    content_type_.reserve(content_type_prefix.size() + boundary.size() + (boundary_is_token ? 0U : 2U));
     content_type_.append(content_type_prefix);
     if (!boundary_is_token) {
         content_type_.push_back('"');
@@ -3055,8 +2848,7 @@ http_byte_range_slicer::http_byte_range_slicer(std::span<const http_byte_range> 
     }
 }
 
-void http_byte_range_slicer::emit_part_header(
-    std::size_t index, std::string& output) const {
+void http_byte_range_slicer::emit_part_header(std::size_t index, std::string& output) const {
     const auto range = ranges_[index];
     output.append("--");
     output.append(boundary_);
@@ -3075,10 +2867,8 @@ void http_byte_range_slicer::write(std::string_view chunk, std::string& output) 
     write(current_offset_, chunk, output);
 }
 
-void http_byte_range_slicer::write(
-    std::uint64_t chunk_offset, std::string_view chunk, std::string& output) {
-    if (chunk_offset < current_offset_ || chunk_offset > representation_length_ ||
-        chunk.size() > representation_length_ - chunk_offset) {
+void http_byte_range_slicer::write(std::uint64_t chunk_offset, std::string_view chunk, std::string& output) {
+    if (chunk_offset < current_offset_ || chunk_offset > representation_length_ || chunk.size() > representation_length_ - chunk_offset) {
         throw std::invalid_argument("HTTP byte-range slicer chunk offset is out of bounds");
     }
     if (complete_) {
@@ -3087,8 +2877,7 @@ void http_byte_range_slicer::write(
     }
     const auto needed_offset = ranges_[range_index_].offset_ + range_progress_;
     if (chunk_offset > needed_offset) {
-        throw std::invalid_argument(
-            "HTTP byte-range slicer chunk skipped over required range bytes");
+        throw std::invalid_argument("HTTP byte-range slicer chunk skipped over required range bytes");
     }
     const std::uint64_t chunk_end = chunk_offset + chunk.size();
     current_offset_ = chunk_end;
@@ -3108,8 +2897,7 @@ void http_byte_range_slicer::write(
         const std::size_t slice_start = static_cast<std::size_t>(next_needed - chunk_offset);
         const std::uint64_t remaining_in_range = range.length_ - range_progress_;
         const std::uint64_t available_in_chunk = chunk.size() - slice_start;
-        const auto copy_bytes =
-            static_cast<std::size_t>((std::min)(remaining_in_range, available_in_chunk));
+        const auto copy_bytes = static_cast<std::size_t>((std::min)(remaining_in_range, available_in_chunk));
         output.append(chunk.data() + slice_start, copy_bytes);
         range_progress_ += copy_bytes;
         if (range_progress_ == range.length_) {
@@ -3151,30 +2939,23 @@ void http_byte_range_slicer::reset(std::uint64_t start_offset) noexcept {
 namespace ruvia::detail {
 
 template <std::size_t n>
-[[nodiscard]] consteval http_response_header static_response_header(
-    std::string_view name, const char (&bytes_value)[n], std::uint32_t known_bit) {
+[[nodiscard]] consteval http_response_header static_response_header(std::string_view name, const char (&bytes_value)[n], std::uint32_t known_bit) {
     static_assert(n > 1 && response_header_storage_size_fits(0, n - 1));
-    if (name.empty() || name.size() > n - 1 || bytes_value[n - 1] != '\0' ||
-        !std::string_view(bytes_value, n - 1).starts_with(name)) {
+    if (name.empty() || name.size() > n - 1 || bytes_value[n - 1] != '\0' || !std::string_view(bytes_value, n - 1).starts_with(name)) {
         throw std::logic_error("invalid static response header storage");
     }
-    if (known_bit != 0 && known_bit != response_header_upgrade &&
-        response_known_header_slot(known_bit) == response_known_header_count) {
+    if (known_bit != 0 && known_bit != response_header_upgrade && response_known_header_slot(known_bit) == response_known_header_count) {
         throw std::logic_error("static response header requires one known header bit");
     }
-    return http_response_header_access::make(
-        bytes_value, static_cast<std::uint32_t>(name.size()),
-        static_cast<std::uint32_t>(n - 1 - name.size()), known_bit, false);
+    return http_response_header_access::make(bytes_value, static_cast<std::uint32_t>(name.size()), static_cast<std::uint32_t>(n - 1 - name.size()), known_bit, false);
 }
 
 template <std::size_t... sizes>
-[[nodiscard]] consteval auto static_response_headers(
-    std::string_view name, std::uint32_t known_bit, const char (&... bytes_values)[sizes]) {
+[[nodiscard]] consteval auto static_response_headers(std::string_view name, std::uint32_t known_bit, const char (&... bytes_values)[sizes]) {
     return std::array{static_response_header(name, bytes_values, known_bit)...};
 }
 
-[[nodiscard]] inline std::optional<http_response_header> find_static_response_header(
-    std::span<const http_response_header> headers, std::string_view value) noexcept {
+[[nodiscard]] inline std::optional<http_response_header> find_static_response_header(std::span<const http_response_header> headers, std::string_view value) noexcept {
     for (const auto& header_value : headers) {
         if (header_value.value() == value) {
             return header_value;
@@ -3183,35 +2964,7 @@ template <std::size_t... sizes>
     return std::nullopt;
 }
 
-inline constexpr auto content_type_headers = static_response_headers("Content-Type", response_header_content_type,
-    "Content-Typetext/plain; charset=UTF-8",
-    "Content-Typeapplication/json",
-    "Content-Typetext/html; charset=UTF-8",
-    "Content-Typetext/plain; charset=utf-8",
-    "Content-Typeapplication/json; charset=utf-8",
-    "Content-Typetext/html; charset=utf-8",
-    "Content-Typetext/css; charset=utf-8",
-    "Content-Typetext/javascript; charset=utf-8",
-    "Content-Typetext/event-stream",
-    "Content-Typeimage/png",
-    "Content-Typeimage/jpeg",
-    "Content-Typeimage/gif",
-    "Content-Typeimage/svg+xml",
-    "Content-Typeapplication/wasm",
-    "Content-Typeapplication/octet-stream",
-    "Content-Typeapplication/problem+json",
-    "Content-Typeimage/apng",
-    "Content-Typeimage/avif",
-    "Content-Typeimage/webp",
-    "Content-Typeimage/bmp",
-    "Content-Typeimage/vnd.microsoft.icon",
-    "Content-Typefont/woff",
-    "Content-Typefont/woff2",
-    "Content-Typefont/ttf",
-    "Content-Typefont/otf",
-    "Content-Typeapplication/vnd.ms-fontobject",
-    "Content-Typetext/xml; charset=utf-8",
-    "Content-Typeapplication/manifest+json; charset=utf-8");
+inline constexpr auto content_type_headers = static_response_headers("Content-Type", response_header_content_type, "Content-Typetext/plain; charset=UTF-8", "Content-Typeapplication/json", "Content-Typetext/html; charset=UTF-8", "Content-Typetext/plain; charset=utf-8", "Content-Typeapplication/json; charset=utf-8", "Content-Typetext/html; charset=utf-8", "Content-Typetext/css; charset=utf-8", "Content-Typetext/javascript; charset=utf-8", "Content-Typetext/event-stream", "Content-Typeimage/png", "Content-Typeimage/jpeg", "Content-Typeimage/gif", "Content-Typeimage/svg+xml", "Content-Typeapplication/wasm", "Content-Typeapplication/octet-stream", "Content-Typeapplication/problem+json", "Content-Typeimage/apng", "Content-Typeimage/avif", "Content-Typeimage/webp", "Content-Typeimage/bmp", "Content-Typeimage/vnd.microsoft.icon", "Content-Typefont/woff", "Content-Typefont/woff2", "Content-Typefont/ttf", "Content-Typefont/otf", "Content-Typeapplication/vnd.ms-fontobject", "Content-Typetext/xml; charset=utf-8", "Content-Typeapplication/manifest+json; charset=utf-8");
 
 [[nodiscard]] inline http_response_header static_content_type_header(http_content_type type) {
     switch (type) {
@@ -3225,59 +2978,48 @@ inline constexpr auto content_type_headers = static_response_headers("Content-Ty
     throw std::invalid_argument("invalid HTTP content type");
 }
 
-[[nodiscard]] inline std::optional<http_response_header> builtin_static_response_header(
-    std::uint32_t known_bit, std::string_view value) noexcept {
+[[nodiscard]] inline std::optional<http_response_header> builtin_static_response_header(std::uint32_t known_bit, std::string_view value) noexcept {
     switch (known_bit) {
         case response_header_content_type:
             return find_static_response_header(content_type_headers, value);
         case response_header_connection: {
-            static constexpr auto headers = static_response_headers("Connection", response_header_connection,
-                "Connectionclose", "Connectionkeep-alive", "ConnectionUpgrade");
+            static constexpr auto headers = static_response_headers("Connection", response_header_connection, "Connectionclose", "Connectionkeep-alive", "ConnectionUpgrade");
             return find_static_response_header(headers, value);
         }
         case response_header_accept_ranges: {
-            static constexpr auto headers = static_response_headers("Accept-Ranges", response_header_accept_ranges,
-                "Accept-Rangesbytes");
+            static constexpr auto headers = static_response_headers("Accept-Ranges", response_header_accept_ranges, "Accept-Rangesbytes");
             return find_static_response_header(headers, value);
         }
         case response_header_content_encoding: {
-            static constexpr auto headers = static_response_headers("Content-Encoding", response_header_content_encoding,
-                "Content-Encodinggzip", "Content-Encodingbr", "Content-Encodingzstd", "Content-Encodingdeflate");
+            static constexpr auto headers = static_response_headers("Content-Encoding", response_header_content_encoding, "Content-Encodinggzip", "Content-Encodingbr", "Content-Encodingzstd", "Content-Encodingdeflate");
             return find_static_response_header(headers, value);
         }
         case response_header_transfer_encoding: {
-            static constexpr auto headers = static_response_headers("Transfer-Encoding", response_header_transfer_encoding,
-                "Transfer-Encodingchunked");
+            static constexpr auto headers = static_response_headers("Transfer-Encoding", response_header_transfer_encoding, "Transfer-Encodingchunked");
             return find_static_response_header(headers, value);
         }
         case response_header_cache_control: {
-            static constexpr auto headers = static_response_headers("Cache-Control", response_header_cache_control,
-                "Cache-Controlno-store", "Cache-Controlno-cache", "Cache-Controlprivate");
+            static constexpr auto headers = static_response_headers("Cache-Control", response_header_cache_control, "Cache-Controlno-store", "Cache-Controlno-cache", "Cache-Controlprivate");
             return find_static_response_header(headers, value);
         }
         case response_header_vary: {
-            static constexpr auto headers = static_response_headers("Vary", response_header_vary,
-                "Vary*", "VaryAccept-Encoding", "VaryOrigin", "VaryAccess-Control-Request-Headers", "VaryAccess-Control-Request-Method");
+            static constexpr auto headers = static_response_headers("Vary", response_header_vary, "Vary*", "VaryAccept-Encoding", "VaryOrigin", "VaryAccess-Control-Request-Headers", "VaryAccess-Control-Request-Method");
             return find_static_response_header(headers, value);
         }
         case response_header_access_control_allow_origin: {
-            static constexpr auto headers = static_response_headers("Access-Control-Allow-Origin", response_header_access_control_allow_origin,
-                "Access-Control-Allow-Origin*");
+            static constexpr auto headers = static_response_headers("Access-Control-Allow-Origin", response_header_access_control_allow_origin, "Access-Control-Allow-Origin*");
             return find_static_response_header(headers, value);
         }
         case response_header_access_control_allow_credentials: {
-            static constexpr auto headers = static_response_headers("Access-Control-Allow-Credentials", response_header_access_control_allow_credentials,
-                "Access-Control-Allow-Credentialstrue");
+            static constexpr auto headers = static_response_headers("Access-Control-Allow-Credentials", response_header_access_control_allow_credentials, "Access-Control-Allow-Credentialstrue");
             return find_static_response_header(headers, value);
         }
         case response_header_access_control_allow_methods: {
-            static constexpr auto headers = static_response_headers("Access-Control-Allow-Methods", response_header_access_control_allow_methods,
-                "Access-Control-Allow-MethodsGET, HEAD, POST, PUT, PATCH, DELETE, OPTIONS");
+            static constexpr auto headers = static_response_headers("Access-Control-Allow-Methods", response_header_access_control_allow_methods, "Access-Control-Allow-MethodsGET, HEAD, POST, PUT, PATCH, DELETE, OPTIONS");
             return find_static_response_header(headers, value);
         }
         case response_header_upgrade: {
-            static constexpr auto headers = static_response_headers("Upgrade", response_header_upgrade,
-                "Upgradewebsocket", "Upgradeconnect-udp");
+            static constexpr auto headers = static_response_headers("Upgrade", response_header_upgrade, "Upgradewebsocket", "Upgradeconnect-udp");
             return find_static_response_header(headers, value);
         }
         default:
@@ -3285,8 +3027,7 @@ inline constexpr auto content_type_headers = static_response_headers("Content-Ty
     }
 }
 
-[[nodiscard]] inline std::optional<http_response_header> builtin_static_custom_response_header(
-    std::string_view name, std::string_view value) noexcept {
+[[nodiscard]] inline std::optional<http_response_header> builtin_static_custom_response_header(std::string_view name, std::string_view value) noexcept {
     switch (name.size()) {
         case std::string_view("Retry-After").size():
             if (name == "Retry-After") {
@@ -3296,18 +3037,15 @@ inline constexpr auto content_type_headers = static_response_headers("Content-Ty
             return std::nullopt;
         case std::string_view("X-Frame-Options").size():
             if (name == "X-Frame-Options") {
-                static constexpr auto headers = static_response_headers("X-Frame-Options", 0,
-                    "X-Frame-OptionsDENY", "X-Frame-OptionsSAMEORIGIN");
+                static constexpr auto headers = static_response_headers("X-Frame-Options", 0, "X-Frame-OptionsDENY", "X-Frame-OptionsSAMEORIGIN");
                 return find_static_response_header(headers, value);
             }
             if (name == "Referrer-Policy") {
-                static constexpr auto headers = static_response_headers("Referrer-Policy", 0,
-                    "Referrer-Policystrict-origin-when-cross-origin", "Referrer-Policyno-referrer");
+                static constexpr auto headers = static_response_headers("Referrer-Policy", 0, "Referrer-Policystrict-origin-when-cross-origin", "Referrer-Policyno-referrer");
                 return find_static_response_header(headers, value);
             }
             if (name == "Accept-Encoding") {
-                static constexpr auto headers = static_response_headers("Accept-Encoding", 0,
-                    "Accept-Encodinggzip, deflate, br, zstd", "Accept-Encodingidentity");
+                static constexpr auto headers = static_response_headers("Accept-Encoding", 0, "Accept-Encodinggzip, deflate, br, zstd", "Accept-Encodingidentity");
                 return find_static_response_header(headers, value);
             }
             return std::nullopt;
@@ -3329,8 +3067,7 @@ inline constexpr auto content_type_headers = static_response_headers("Content-Ty
             return std::nullopt;
         case std::string_view("Permissions-Policy").size():
             if (name == "Permissions-Policy") {
-                static constexpr auto headers = static_response_headers("Permissions-Policy", 0,
-                    "Permissions-Policygeolocation=(), microphone=(), camera=()");
+                static constexpr auto headers = static_response_headers("Permissions-Policy", 0, "Permissions-Policygeolocation=(), microphone=(), camera=()");
                 return find_static_response_header(headers, value);
             }
             return std::nullopt;
@@ -3348,15 +3085,13 @@ inline constexpr auto content_type_headers = static_response_headers("Content-Ty
             return std::nullopt;
         case std::string_view("Content-Security-Policy").size():
             if (name == "Content-Security-Policy") {
-                static constexpr auto headers = static_response_headers("Content-Security-Policy", 0,
-                    "Content-Security-Policydefault-src 'self'", "Content-Security-Policydefault-src 'none'");
+                static constexpr auto headers = static_response_headers("Content-Security-Policy", 0, "Content-Security-Policydefault-src 'self'", "Content-Security-Policydefault-src 'none'");
                 return find_static_response_header(headers, value);
             }
             return std::nullopt;
         case std::string_view("Strict-Transport-Security").size():
             if (name == "Strict-Transport-Security") {
-                static constexpr auto headers = static_response_headers("Strict-Transport-Security", 0,
-                    "Strict-Transport-Securitymax-age=31536000; includeSubDomains");
+                static constexpr auto headers = static_response_headers("Strict-Transport-Security", 0, "Strict-Transport-Securitymax-age=31536000; includeSubDomains");
                 return find_static_response_header(headers, value);
             }
             return std::nullopt;
@@ -3478,16 +3213,13 @@ void http_response_headers::move_from(http_response_headers&& other) noexcept {
 
 bool http_response_headers::borrows_owned_header(std::string_view name, std::string_view value) const noexcept {
     for (const auto& existing : *this) {
-        if (existing.owned_ &&
-            (detail::response_header_storage_overlaps(existing, name) ||
-                detail::response_header_storage_overlaps(existing, value))) {
+        if (existing.owned_ && (detail::response_header_storage_overlaps(existing, name) || detail::response_header_storage_overlaps(existing, value))) {
             return true;
         }
     }
     return false;
 }
-http_response_header http_response_headers::make_owned_header(
-    std::string_view name, std::string_view value, std::uint32_t known_bit) {
+http_response_header http_response_headers::make_owned_header(std::string_view name, std::string_view value, std::uint32_t known_bit) {
     detail::validate_response_header_storage_size(name.size(), value.size());
     const auto total = name.size() + value.size();
     char* bytes_value = nullptr;
@@ -3496,12 +3228,10 @@ http_response_header http_response_headers::make_owned_header(
         std::memcpy(bytes_value, name.data(), name.size());
         std::memcpy(bytes_value + name.size(), value.data(), value.size());
     }
-    return detail::http_response_header_access::make(bytes_value, static_cast<std::uint32_t>(name.size()),
-        static_cast<std::uint32_t>(value.size()), known_bit, true);
+    return detail::http_response_header_access::make(bytes_value, static_cast<std::uint32_t>(name.size()), static_cast<std::uint32_t>(value.size()), known_bit, true);
 }
 
-http_response_header http_response_headers::make_uninitialized_header(
-    std::string_view name, std::size_t value_size, std::uint32_t known_bit) {
+http_response_header http_response_headers::make_uninitialized_header(std::string_view name, std::size_t value_size, std::uint32_t known_bit) {
     detail::validate_response_header_storage_size(name.size(), value_size);
     const auto total = name.size() + value_size;
     char* bytes_value = nullptr;
@@ -3509,12 +3239,10 @@ http_response_header http_response_headers::make_uninitialized_header(
         bytes_value = new char[total];
         std::memcpy(bytes_value, name.data(), name.size());
     }
-    return detail::http_response_header_access::make(bytes_value, static_cast<std::uint32_t>(name.size()),
-        static_cast<std::uint32_t>(value_size), known_bit, true);
+    return detail::http_response_header_access::make(bytes_value, static_cast<std::uint32_t>(name.size()), static_cast<std::uint32_t>(value_size), known_bit, true);
 }
 
-std::optional<http_response_header> http_response_headers::make_static_header(
-    std::string_view name, std::string_view value, std::uint32_t known_bit) noexcept {
+std::optional<http_response_header> http_response_headers::make_static_header(std::string_view name, std::string_view value, std::uint32_t known_bit) noexcept {
     if (known_bit == 0) {
         return detail::builtin_static_custom_response_header(name, value);
     }
@@ -3525,17 +3253,12 @@ std::optional<http_response_header> http_response_headers::make_static_header(
     return header_value;
 }
 
-std::optional<http_response_header> http_response_headers::make_shared_header(
-    std::string_view name, std::string_view value, std::uint32_t known_bit, bool stable_view) const noexcept {
+std::optional<http_response_header> http_response_headers::make_shared_header(std::string_view name, std::string_view value, std::uint32_t known_bit, bool stable_view) const noexcept {
     if (const auto static_header = make_static_header(name, value, known_bit)) {
         return static_header;
     }
-    if (stable_view && !borrows_owned_header(name, value) &&
-        detail::response_header_views_contiguous(name, value) &&
-        detail::response_header_storage_size_fits(name.size(), value.size())) {
-        return detail::http_response_header_access::make(name.data(),
-            static_cast<std::uint32_t>(name.size()), static_cast<std::uint32_t>(value.size()),
-            known_bit, false);
+    if (stable_view && !borrows_owned_header(name, value) && detail::response_header_views_contiguous(name, value) && detail::response_header_storage_size_fits(name.size(), value.size())) {
+        return detail::http_response_header_access::make(name.data(), static_cast<std::uint32_t>(name.size()), static_cast<std::uint32_t>(value.size()), known_bit, false);
     }
     return std::nullopt;
 }
@@ -3584,23 +3307,19 @@ http_response_header& http_response_headers::append_header(http_response_header 
     }
 }
 
-http_response_header& http_response_headers::add(
-    std::string_view name, std::string_view value, std::uint32_t known_bit, bool stable_view) {
+http_response_header& http_response_headers::add(std::string_view name, std::string_view value, std::uint32_t known_bit, bool stable_view) {
     const auto shared_header = make_shared_header(name, value, known_bit, stable_view);
     return append_header(shared_header ? *shared_header : make_owned_header(name, value, known_bit));
 }
 
-http_response_header& http_response_headers::add_uninitialized_value(
-    std::string_view name, std::size_t value_size, std::uint32_t known_bit) {
+http_response_header& http_response_headers::add_uninitialized_value(std::string_view name, std::size_t value_size, std::uint32_t known_bit) {
     return append_header(make_uninitialized_header(name, value_size, known_bit));
 }
 
-http_response_header& http_response_headers::assign_uninitialized_value(http_response_header& header_value,
-    std::string_view name, std::size_t value_size, std::uint32_t known_bit) {
+http_response_header& http_response_headers::assign_uninitialized_value(http_response_header& header_value, std::string_view name, std::size_t value_size, std::uint32_t known_bit) {
     detail::validate_response_header_storage_size(name.size(), value_size);
     const auto total = name.size() + value_size;
-    if (header_value.owned_ && header_value.bytes_ != nullptr && !detail::response_header_storage_overlaps(header_value, name) &&
-        total == static_cast<std::size_t>(header_value.name_size_) + header_value.value_size_) {
+    if (header_value.owned_ && header_value.bytes_ != nullptr && !detail::response_header_storage_overlaps(header_value, name) && total == static_cast<std::size_t>(header_value.name_size_) + header_value.value_size_) {
         auto* const bytes_value = const_cast<char*>(header_value.bytes_);
         std::memcpy(bytes_value, name.data(), name.size());
         header_value.name_size_ = static_cast<std::uint32_t>(name.size());
@@ -3616,15 +3335,12 @@ http_response_header& http_response_headers::assign_uninitialized_value(http_res
     return header_value;
 }
 
-bool http_response_headers::try_assign_owned_in_place(http_response_header& header_value, std::string_view name,
-    std::string_view value, std::uint32_t known_bit) noexcept {
+bool http_response_headers::try_assign_owned_in_place(http_response_header& header_value, std::string_view name, std::string_view value, std::uint32_t known_bit) noexcept {
     if (!detail::response_header_storage_size_fits(name.size(), value.size())) {
         return false;
     }
     const auto total = name.size() + value.size();
-    if (!header_value.owned_ || header_value.bytes_ == nullptr || detail::response_header_storage_overlaps(header_value, name) ||
-        detail::response_header_storage_overlaps(header_value, value) ||
-        total != static_cast<std::size_t>(header_value.name_size_) + header_value.value_size_) {
+    if (!header_value.owned_ || header_value.bytes_ == nullptr || detail::response_header_storage_overlaps(header_value, name) || detail::response_header_storage_overlaps(header_value, value) || total != static_cast<std::size_t>(header_value.name_size_) + header_value.value_size_) {
         return false;
     }
     auto* const bytes_value = const_cast<char*>(header_value.bytes_);
@@ -3637,8 +3353,7 @@ bool http_response_headers::try_assign_owned_in_place(http_response_header& head
     return true;
 }
 
-void http_response_headers::assign(http_response_header& header_value, std::string_view name,
-    std::string_view value, std::uint32_t known_bit, bool stable_view) {
+void http_response_headers::assign(http_response_header& header_value, std::string_view name, std::string_view value, std::uint32_t known_bit, bool stable_view) {
     if (const auto shared_header = make_shared_header(name, value, known_bit, stable_view)) {
         release_header(header_value);
         header_value = *shared_header;
@@ -3656,8 +3371,7 @@ namespace {
 
 inline constexpr std::size_t allow_header_method_slots = static_cast<std::size_t>(http_known_method::unknown);
 
-void write_content_range_header_value(
-    http_response_header& header_value, std::uint64_t offset, std::uint64_t length, std::uint64_t size) {
+void write_content_range_header_value(http_response_header& header_value, std::uint64_t offset, std::uint64_t length, std::uint64_t size) {
     detail::http_raw_wire_sink sink(detail::http_response_header_access::value_begin(header_value));
     sink.append("bytes ");
     sink.append_unsigned(offset);
@@ -3679,8 +3393,7 @@ void write_content_range_unsatisfied_header_value(http_response_header& header_v
     }
 }
 
-[[nodiscard]] std::size_t allow_header_value_size(
-    std::uint32_t method_mask, std::span<const std::string_view> extension_methods) {
+[[nodiscard]] std::size_t allow_header_value_size(std::uint32_t method_mask, std::span<const std::string_view> extension_methods) {
     std::size_t size = 0;
     std::size_t count = 0;
     const auto add_method = [&](std::size_t token_size) {
@@ -3703,8 +3416,7 @@ void write_content_range_unsatisfied_header_value(http_response_header& header_v
     return size;
 }
 
-void write_allow_header_value(http_response_header& header_value, std::uint32_t method_mask,
-    std::span<const std::string_view> extension_methods) {
+void write_allow_header_value(http_response_header& header_value, std::uint32_t method_mask, std::span<const std::string_view> extension_methods) {
     detail::http_raw_wire_sink sink(detail::http_response_header_access::value_begin(header_value));
     bool first = true;
     for (std::size_t i = 0; i < allow_header_method_slots; ++i) {
@@ -3729,8 +3441,7 @@ void write_allow_header_value(http_response_header& header_value, std::uint32_t 
     }
 }
 
-[[nodiscard]] bool set_cookie_wire_name_matches(
-    std::string_view value, std::string_view wire_prefix, std::string_view cookie_name) noexcept {
+[[nodiscard]] bool set_cookie_wire_name_matches(std::string_view value, std::string_view wire_prefix, std::string_view cookie_name) noexcept {
     if (value.size() != wire_prefix.size() + cookie_name.size()) {
         return false;
     }
@@ -3740,22 +3451,14 @@ void write_allow_header_value(http_response_header& header_value, std::uint32_t 
     return value.substr(wire_prefix.size()) == cookie_name;
 }
 
-[[nodiscard]] bool set_cookie_value_matches_storage_key(std::string_view value,
-    std::string_view wire_prefix, std::string_view cookie_name, bool has_path, std::string_view path,
-    std::string_view domain, bool partitioned) noexcept {
+[[nodiscard]] bool set_cookie_value_matches_storage_key(std::string_view value, std::string_view wire_prefix, std::string_view cookie_name, bool has_path, std::string_view path, std::string_view domain, bool partitioned) noexcept {
     const auto parsed_value = parse_set_cookie(value);
-    return parsed_value.has_value() && is_valid_http_header_name(parsed_value->name()) &&
-           set_cookie_wire_name_matches(parsed_value->name(), wire_prefix, cookie_name) &&
-           !parsed_value->path().empty() == has_path &&
-           parsed_value->has(http_set_cookie_attribute::partitioned) == partitioned &&
-           (!has_path || parsed_value->path() == path) &&
-           http_ascii_equals_ignore_case(parsed_value->domain(), domain);
+    return parsed_value.has_value() && is_valid_http_header_name(parsed_value->name()) && set_cookie_wire_name_matches(parsed_value->name(), wire_prefix, cookie_name) && !parsed_value->path().empty() == has_path && parsed_value->has(http_set_cookie_attribute::partitioned) == partitioned && (!has_path || parsed_value->path() == path) && http_ascii_equals_ignore_case(parsed_value->domain(), domain);
 }
 
 }  // namespace
 
-void http_response_headers::allow_methods(
-    std::uint32_t method_mask, std::span<const std::string_view> extension_methods) {
+void http_response_headers::allow_methods(std::uint32_t method_mask, std::span<const std::string_view> extension_methods) {
     const auto value_size = allow_header_value_size(method_mask, extension_methods);
     for (const auto token : extension_methods) {
         if (!is_valid_http_method_token(token)) {
@@ -3770,8 +3473,7 @@ void http_response_headers::allow_methods(
                     return detail::response_header_storage_overlaps(*retained, token);
                 }
                 for (const auto& existing : *this) {
-                    if (detail::http_response_header_access::known_bit(existing) == detail::response_header_allow &&
-                        detail::response_header_storage_overlaps(existing, token)) {
+                    if (detail::http_response_header_access::known_bit(existing) == detail::response_header_allow && detail::response_header_storage_overlaps(existing, token)) {
                         return true;
                     }
                 }
@@ -3784,8 +3486,7 @@ void http_response_headers::allow_methods(
                 }
             }
             if (borrows_allow) {
-                auto prepared = make_uninitialized_header(
-                    "Allow", value_size, detail::response_header_allow);
+                auto prepared = make_uninitialized_header("Allow", value_size, detail::response_header_allow);
                 try {
                     write_allow_header_value(prepared, method_mask, extension_methods);
                 } catch (...) {
@@ -3797,13 +3498,11 @@ void http_response_headers::allow_methods(
             }
         }
     }
-    auto& header_value = prepare_header_value_storage(
-        "Allow", value_size, detail::response_header_allow);
+    auto& header_value = prepare_header_value_storage("Allow", value_size, detail::response_header_allow);
     write_allow_header_value(header_value, method_mask, extension_methods);
 }
 
-void http_response_headers::content_range(
-    http_content_length offset_value, http_content_length length_value, http_content_length size_value) {
+void http_response_headers::content_range(http_content_length offset_value, http_content_length length_value, http_content_length size_value) {
     const auto offset = offset_value.value();
     const auto length = length_value.value();
     const auto size = size_value.value();
@@ -3814,60 +3513,44 @@ void http_response_headers::content_range(
         throw std::logic_error("file response byte range is outside the representation");
     }
     const auto end_offset = offset + length - 1;
-    const auto value_size =
-        std::string_view("bytes ").size() + http_unsigned_decimal_size(offset) + 1 +
-        http_unsigned_decimal_size(end_offset) + 1 + http_unsigned_decimal_size(size);
-    auto& header_value =
-        prepare_header_value_storage("Content-Range", value_size, detail::response_header_content_range);
+    const auto value_size = std::string_view("bytes ").size() + http_unsigned_decimal_size(offset) + 1 + http_unsigned_decimal_size(end_offset) + 1 + http_unsigned_decimal_size(size);
+    auto& header_value = prepare_header_value_storage("Content-Range", value_size, detail::response_header_content_range);
     write_content_range_header_value(header_value, offset, length, size);
 }
 
 void http_response_headers::content_range_unsatisfied(http_content_length size_value) {
     const auto size = size_value.value();
-    const auto value_size =
-        std::string_view("bytes */").size() + http_unsigned_decimal_size(size);
-    auto& header_value =
-        prepare_header_value_storage("Content-Range", value_size, detail::response_header_content_range);
+    const auto value_size = std::string_view("bytes */").size() + http_unsigned_decimal_size(size);
+    auto& header_value = prepare_header_value_storage("Content-Range", value_size, detail::response_header_content_range);
     write_content_range_unsatisfied_header_value(header_value, size);
 }
 
 void http_response_headers::set_cookie(const set_cookie_plan& plan) {
-    auto* retained = find_set_cookie_header(
-        plan.wire_prefix(), plan.name(), !plan.path().empty(), plan.path(), plan.domain(), plan.partitioned_);
+    auto* retained = find_set_cookie_header(plan.wire_prefix(), plan.name(), !plan.path().empty(), plan.path(), plan.domain(), plan.partitioned_);
     if (retained == nullptr) {
-        auto& header_value = append_header_uninitialized_value(
-            "Set-Cookie", plan.size(), detail::response_header_set_cookie);
+        auto& header_value = append_header_uninitialized_value("Set-Cookie", plan.size(), detail::response_header_set_cookie);
         plan.write(detail::http_response_header_access::value_begin(header_value));
         return;
     }
 
-    const bool borrows_retained =
-        detail::response_header_storage_overlaps(*retained, plan.name_) ||
-        detail::response_header_storage_overlaps(*retained, plan.value_) ||
-        detail::response_header_storage_overlaps(*retained, plan.path_) ||
-        detail::response_header_storage_overlaps(*retained, plan.domain_);
+    const bool borrows_retained = detail::response_header_storage_overlaps(*retained, plan.name_) || detail::response_header_storage_overlaps(*retained, plan.value_) || detail::response_header_storage_overlaps(*retained, plan.path_) || detail::response_header_storage_overlaps(*retained, plan.domain_);
     set_cookie_plan::written_fields written;
     if (borrows_retained) {
-        auto prepared = make_uninitialized_header(
-            "Set-Cookie", plan.size(), detail::response_header_set_cookie);
+        auto prepared = make_uninitialized_header("Set-Cookie", plan.size(), detail::response_header_set_cookie);
         written = plan.write_fields(detail::http_response_header_access::value_begin(prepared));
         release_header(*retained);
         *retained = prepared;
     } else {
-        assign_uninitialized_value(
-            *retained, "Set-Cookie", plan.size(), detail::response_header_set_cookie);
+        assign_uninitialized_value(*retained, "Set-Cookie", plan.size(), detail::response_header_set_cookie);
         written = plan.write_fields(detail::http_response_header_access::value_begin(*retained));
     }
     detail::http_response_header_access::set_append(*retained);
-    erase_later_set_cookie_headers(*retained, written.wire_name_, !written.path_.empty(),
-        written.path_, written.domain_, plan.partitioned_);
+    erase_later_set_cookie_headers(*retained, written.wire_name_, !written.path_.empty(), written.path_, written.domain_, plan.partitioned_);
 }
 
 void http_response_headers::upsert_set_cookie_header_validated(std::string_view value) {
     const auto parsed_value = parse_set_cookie(value);
-    const auto cookie_name = parsed_value.has_value() && is_valid_http_header_name(parsed_value->name())
-                                 ? parsed_value->name()
-                                 : std::string_view{};
+    const auto cookie_name = parsed_value.has_value() && is_valid_http_header_name(parsed_value->name()) ? parsed_value->name() : std::string_view{};
     if (cookie_name.empty()) {
         append_header_validated("Set-Cookie", value, detail::response_header_set_cookie);
         return;
@@ -3885,39 +3568,28 @@ void http_response_headers::upsert_set_cookie_header_validated(std::string_view 
     const auto path_size = parsed_value->path().size();
     const auto domain_size = parsed_value->domain().size();
     const auto name_offset = static_cast<std::size_t>(cookie_name.data() - value.data());
-    const auto path_offset = parsed_value->path().empty() ? std::size_t{0}
-                                                          : static_cast<std::size_t>(parsed_value->path().data() - value.data());
-    const auto domain_offset = parsed_value->domain().empty() ? std::size_t{0}
-                                                              : static_cast<std::size_t>(parsed_value->domain().data() - value.data());
+    const auto path_offset = parsed_value->path().empty() ? std::size_t{0} : static_cast<std::size_t>(parsed_value->path().data() - value.data());
+    const auto domain_offset = parsed_value->domain().empty() ? std::size_t{0} : static_cast<std::size_t>(parsed_value->domain().data() - value.data());
     assign(*retained, "Set-Cookie", value, detail::response_header_set_cookie);
     detail::http_response_header_access::set_append(*retained);
     const auto copied_value = retained->value();
-    erase_later_set_cookie_headers(*retained, copied_value.substr(name_offset, name_size), has_path,
-        copied_value.substr(path_offset, path_size), copied_value.substr(domain_offset, domain_size), partitioned);
+    erase_later_set_cookie_headers(*retained, copied_value.substr(name_offset, name_size), has_path, copied_value.substr(path_offset, path_size), copied_value.substr(domain_offset, domain_size), partitioned);
 }
 
-http_response_header* http_response_headers::find_set_cookie_header(std::string_view wire_prefix,
-    std::string_view cookie_name, bool has_path, std::string_view path,
-    std::string_view domain, bool partitioned) noexcept {
+http_response_header* http_response_headers::find_set_cookie_header(std::string_view wire_prefix, std::string_view cookie_name, bool has_path, std::string_view path, std::string_view domain, bool partitioned) noexcept {
     for (auto* header = mutable_begin(); header != mutable_end(); ++header) {
-        if (detail::http_response_header_access::known_bit(*header) == detail::response_header_set_cookie &&
-            set_cookie_value_matches_storage_key(
-                header->value(), wire_prefix, cookie_name, has_path, path, domain, partitioned)) {
+        if (detail::http_response_header_access::known_bit(*header) == detail::response_header_set_cookie && set_cookie_value_matches_storage_key(header->value(), wire_prefix, cookie_name, has_path, path, domain, partitioned)) {
             return header;
         }
     }
     return nullptr;
 }
 
-void http_response_headers::erase_later_set_cookie_headers(http_response_header& retained,
-    std::string_view cookie_name, bool has_path, std::string_view path,
-    std::string_view domain, bool partitioned) noexcept {
+void http_response_headers::erase_later_set_cookie_headers(http_response_header& retained, std::string_view cookie_name, bool has_path, std::string_view path, std::string_view domain, bool partitioned) noexcept {
     auto* const end_value = mutable_end();
     auto* write = &retained + 1;
     for (auto* read = write; read != end_value; ++read) {
-        if (detail::http_response_header_access::known_bit(*read) == detail::response_header_set_cookie &&
-            set_cookie_value_matches_storage_key(
-                read->value(), {}, cookie_name, has_path, path, domain, partitioned)) {
+        if (detail::http_response_header_access::known_bit(*read) == detail::response_header_set_cookie && set_cookie_value_matches_storage_key(read->value(), {}, cookie_name, has_path, path, domain, partitioned)) {
             release_header(*read);
             continue;
         }
@@ -3994,9 +3666,7 @@ http_response_headers http_response_headers::clone(std::size_t additional_header
     for (const auto& header_value : *this) {
         // Static descriptors can be shared; owning descriptors must keep an
         // independent allocation so either block may be changed or destroyed.
-        auto descriptor = header_value.owned_
-                              ? copy.make_owned_header(header_value.name(), header_value.value(), header_value.known_bit_)
-                              : header_value;
+        auto descriptor = header_value.owned_ ? copy.make_owned_header(header_value.name(), header_value.value(), header_value.known_bit_) : header_value;
         descriptor.append_ = header_value.append_;
         (void)copy.append_prepared_header(descriptor);
     }
@@ -4017,8 +3687,7 @@ void http_response_headers::commit(http_response_headers&& staged) noexcept {
     std::construct_at(this, std::move(staged));
 }
 
-bool http_response_headers::try_append_disjoint(
-    const http_response_headers& source, http_response_header_transfer mode) {
+bool http_response_headers::try_append_disjoint(const http_response_headers& source, http_response_header_transfer mode) {
     if (&source == this) {
         return false;
     }
@@ -4033,8 +3702,7 @@ bool http_response_headers::try_append_disjoint(
         if (skips(known_bit)) {
             continue;
         }
-        if (known_bit != 0 ? (known_header_bits_ & known_bit) != 0
-                           : find_header_for_read(header_value.name(), 0) != nullptr) {
+        if (known_bit != 0 ? (known_header_bits_ & known_bit) != 0 : find_header_for_read(header_value.name(), 0) != nullptr) {
             return false;
         }
     }
@@ -4049,9 +3717,7 @@ bool http_response_headers::try_append_disjoint(
             }
             // Static descriptors are shared; owning descriptors get an
             // independent allocation, as in clone().
-            auto descriptor = header_value.owned_
-                                  ? make_owned_header(header_value.name(), header_value.value(), known_bit)
-                                  : header_value;
+            auto descriptor = header_value.owned_ ? make_owned_header(header_value.name(), header_value.value(), known_bit) : header_value;
             // Transferred cookies are appended occurrences, like the staged path.
             descriptor.append_ = header_value.append_ || known_bit == detail::response_header_set_cookie;
             (void)append_prepared_header(descriptor);
@@ -4073,8 +3739,7 @@ bool http_response_headers::try_append_disjoint(
     return true;
 }
 
-void http_response_headers::transfer_from(
-    const http_response_headers& source, http_response_header_transfer mode) {
+void http_response_headers::transfer_from(const http_response_headers& source, http_response_header_transfer mode) {
     switch (mode) {
         case http_response_header_transfer::merge:
         case http_response_header_transfer::assign:
@@ -4093,8 +3758,7 @@ void http_response_headers::transfer_from(
     bool removed_cookies = false;
     for (const auto& header_value : source) {
         const auto known_bit = detail::http_response_header_access::known_bit(header_value);
-        if (mode == http_response_header_transfer::assign &&
-            known_bit == detail::response_header_content_type) {
+        if (mode == http_response_header_transfer::assign && known_bit == detail::response_header_content_type) {
             continue;
         }
         const auto name = header_value.name();
@@ -4124,8 +3788,7 @@ void http_response_headers::transfer_from(
             const auto existing_count = [&] {
                 std::size_t count = 0;
                 const auto* const items = staged.data();
-                for (std::size_t index = 0, limit = std::min(original_size, staged.size());
-                    index < limit; ++index) {
+                for (std::size_t index = 0, limit = std::min(original_size, staged.size()); index < limit; ++index) {
                     if (matches_header(items[index])) {
                         ++count;
                     }
@@ -4163,23 +3826,18 @@ void http_response_headers::record_known_header_index(std::uint32_t known_bit, s
     }
     // A slot holds the first occurrence's index + 1; 0 (unset) and -1 (index
     // beyond int16) both fall back to a scan.
-    known_header_indexes_[slot] = index < static_cast<std::size_t>((std::numeric_limits<std::int16_t>::max)())
-                                      ? static_cast<std::int16_t>(index + 1)
-                                      : std::int16_t{-1};
+    known_header_indexes_[slot] = index < static_cast<std::size_t>((std::numeric_limits<std::int16_t>::max)()) ? static_cast<std::int16_t>(index + 1) : std::int16_t{-1};
 }
 
-http_response_header* http_response_headers::find_header_for_update(
-    std::string_view key, std::uint32_t known_bit) noexcept {
+http_response_header* http_response_headers::find_header_for_update(std::string_view key, std::uint32_t known_bit) noexcept {
     return const_cast<http_response_header*>(std::as_const(*this).find_header_for_read(key, known_bit));
 }
 
-const http_response_header* http_response_headers::find_header_for_read(
-    std::string_view key, std::uint32_t known_bit) const noexcept {
+const http_response_header* http_response_headers::find_header_for_read(std::string_view key, std::uint32_t known_bit) const noexcept {
     if (known_bit != 0 && (known_header_bits_ & known_bit) == 0) {
         return nullptr;
     }
-    if (const auto slot = detail::response_known_header_slot(known_bit);
-        slot < known_header_indexes_.size() && known_header_indexes_[slot] > 0) {
+    if (const auto slot = detail::response_known_header_slot(known_bit); slot < known_header_indexes_.size() && known_header_indexes_[slot] > 0) {
         return begin() + (known_header_indexes_[slot] - 1);
     }
     for (const auto& header_value : *this) {
@@ -4191,8 +3849,7 @@ const http_response_header* http_response_headers::find_header_for_read(
 }
 
 template <typename Mutation>
-http_response_header& http_response_headers::upsert_header(
-    std::string_view key, std::uint32_t known_bit, Mutation&& mutate) {
+http_response_header& http_response_headers::upsert_header(std::string_view key, std::uint32_t known_bit, Mutation&& mutate) {
     if (auto* const existing = find_header_for_update(key, known_bit)) {
         const bool was_appended = detail::http_response_header_access::append(*existing);
         auto& header_value = mutate(existing);
@@ -4204,18 +3861,14 @@ http_response_header& http_response_headers::upsert_header(
     return header_value;
 }
 
-http_response_header& http_response_headers::prepare_header_value_storage(
-    std::string_view key, std::size_t value_size, std::uint32_t known_bit) {
+http_response_header& http_response_headers::prepare_header_value_storage(std::string_view key, std::size_t value_size, std::uint32_t known_bit) {
     return upsert_header(key, known_bit, [&](http_response_header* existing) -> http_response_header& {
-        return existing != nullptr
-                   ? assign_uninitialized_value(*existing, key, value_size, known_bit)
-                   : add_uninitialized_value(key, value_size, known_bit);
+        return existing != nullptr ? assign_uninitialized_value(*existing, key, value_size, known_bit) : add_uninitialized_value(key, value_size, known_bit);
     });
 }
 
 std::optional<std::string_view> http_response_headers::header(std::string_view name) const& noexcept {
-    if (const auto* const found =
-            find_header_for_read(name, detail::classify_response_header_name(name))) {
+    if (const auto* const found = find_header_for_read(name, detail::classify_response_header_name(name))) {
         return found->value();
     }
     return std::nullopt;
@@ -4241,8 +3894,7 @@ void http_response_headers::content_type(http_content_type type) {
     publish_header(detail::static_content_type_header(type));
 }
 
-http_response_header& http_response_headers::replace_header(
-    http_response_header& existing, http_response_header prepared) noexcept {
+http_response_header& http_response_headers::replace_header(http_response_header& existing, http_response_header prepared) noexcept {
     const bool was_appended = detail::http_response_header_access::append(existing);
     release_header(existing);
     existing = prepared;
@@ -4260,8 +3912,7 @@ void http_response_headers::publish_header(http_response_header prepared) {
     });
 }
 
-void http_response_headers::header(
-    std::string_view key, std::string_view value, http_response_header_options options) {
+void http_response_headers::header(std::string_view key, std::string_view value, http_response_header_options options) {
     const auto known_bit = validate_response_header_field(key, value);
     if (response_header_mode_appends(options.mode_)) {
         if (detail::response_header_append_forbidden(known_bit)) {
@@ -4285,8 +3936,7 @@ void http_response_headers::remove_header(std::string_view key) {
     (void)remove_header_validated(key, detail::classify_response_header_name(key));
 }
 
-void http_response_headers::set_header_validated(
-    std::string_view key, std::string_view value, std::uint32_t known_bit, bool stable_view) {
+void http_response_headers::set_header_validated(std::string_view key, std::string_view value, std::uint32_t known_bit, bool stable_view) {
     (void)upsert_header(key, known_bit, [&](http_response_header* existing) -> http_response_header& {
         if (existing != nullptr) {
             assign(*existing, key, value, known_bit, stable_view);
@@ -4296,8 +3946,7 @@ void http_response_headers::set_header_validated(
     });
 }
 
-void http_response_headers::append_header_validated(
-    std::string_view key, std::string_view value, std::uint32_t known_bit) {
+void http_response_headers::append_header_validated(std::string_view key, std::string_view value, std::uint32_t known_bit) {
     auto& header_value = append_header_uninitialized_value(key, value.size(), known_bit);
     // Appending can move descriptors, but existing header byte blocks stay
     // stable, including any bytes borrowed by value.
@@ -4306,8 +3955,7 @@ void http_response_headers::append_header_validated(
     }
 }
 
-http_response_header& http_response_headers::append_header_uninitialized_value(
-    std::string_view key, std::size_t value_size, std::uint32_t known_bit) {
+http_response_header& http_response_headers::append_header_uninitialized_value(std::string_view key, std::size_t value_size, std::uint32_t known_bit) {
     detail::validate_response_header_storage_size(key.size(), value_size);
     if (detail::response_header_append_forbidden(known_bit)) {
         throw std::invalid_argument("HTTP response header cannot be appended");
@@ -4319,9 +3967,7 @@ http_response_header& http_response_headers::append_header_uninitialized_value(
     // owns bytes before it may allocate the backing table, and a failed append
     // must leave the existing block exactly as it was.
     const auto* const existing = find_header_for_read(key, known_bit);
-    const auto existing_index = existing == nullptr
-                                    ? std::optional<std::size_t>{}
-                                    : std::optional{static_cast<std::size_t>(existing - data())};
+    const auto existing_index = existing == nullptr ? std::optional<std::size_t>{} : std::optional{static_cast<std::size_t>(existing - data())};
     const auto index = size();
     auto& header_value = add_uninitialized_value(key, value_size, known_bit);
     if (existing_index) {
@@ -4337,8 +3983,7 @@ http_response_header& http_response_headers::append_header_uninitialized_value(
     return header_value;
 }
 
-http_response_header& http_response_headers::collapse_response_headers(
-    http_response_header& retained, std::uint32_t known_bit) noexcept {
+http_response_header& http_response_headers::collapse_response_headers(http_response_header& retained, std::uint32_t known_bit) noexcept {
     const auto key = retained.name();
     auto* const first = data();
     auto* const last = first + size();
@@ -4432,8 +4077,7 @@ void http_response_headers::add_vary_token(std::string_view token) {
                 return;
             }
             if (!wildcard_token && !http_trim_ows(value).empty()) {
-                if (value.size() > max_value_size - value_size ||
-                    max_value_size - value_size - value.size() < 2) {
+                if (value.size() > max_value_size - value_size || max_value_size - value_size - value.size() < 2) {
                     throw std::length_error("HTTP response header is too large");
                 }
                 value_size += value.size() + 2;

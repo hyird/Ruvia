@@ -13,7 +13,6 @@
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_response.h"
 
-#include "http_connection_fields.h"
 // Media-type syntax (RFC 9110 section 8.3.1): splitting a field value into
 // type/subtype and parameters, comparing parameter values across token and
 // quoted-string forms, and validating a Content-Type field. Matching a media
@@ -31,6 +30,7 @@
 #include "ruvia/http/http_response_server.h"
 
 #include "http_connection_fields.h"
+
 namespace ruvia::detail {
 
 struct http_media_type_parts final {
@@ -40,8 +40,7 @@ struct http_media_type_parts final {
 
 // Both values have already passed parameter syntax validation. Compare their
 // decoded bytes without materializing quoted strings.
-[[nodiscard]] inline bool http_media_parameter_value_equals(
-    std::string_view left, std::string_view right, bool ascii_case_insensitive = false) noexcept {
+[[nodiscard]] inline bool http_media_parameter_value_equals(std::string_view left, std::string_view right, bool ascii_case_insensitive = false) noexcept {
     if (left.front() != '"' && right.front() != '"') {
         return ascii_case_insensitive ? http_ascii_equals_ignore_case(left, right) : left == right;
     }
@@ -50,9 +49,9 @@ struct http_media_type_parts final {
         http_quoted_string_cursor quoted_cursor_;
         std::size_t position_{0};
 
-        explicit cursor(std::string_view value) noexcept
-            : value_(value),
-              quoted_cursor_(value) {}
+        explicit cursor(std::string_view value) noexcept :
+            value_(value),
+            quoted_cursor_(value) {}
 
         [[nodiscard]] bool next(unsigned char& out) noexcept {
             if (value_.front() == '"') {
@@ -167,24 +166,18 @@ struct http_media_type_parameters final {
         });
     }
 
-    [[nodiscard]] bool contains(std::string_view name, std::string_view value,
-        const http_media_type_parts& parts) const noexcept {
+    [[nodiscard]] bool contains(std::string_view name, std::string_view value, const http_media_type_parts& parts) const noexcept {
         const auto parameter_value = find(name);
         if (!parameter_value.has_value()) {
             return false;
         }
         // RFC 3676 section 4 defines these case-insensitive values only for text/plain.
-        const bool ascii_case_insensitive = http_ascii_equals_ignore_case(name, "charset") ||
-                                            ((http_ascii_equals_ignore_case(name, "format") ||
-                                                 http_ascii_equals_ignore_case(name, "delsp")) &&
-                                                http_ascii_equals_ignore_case(parts.type_, "text") &&
-                                                http_ascii_equals_ignore_case(parts.subtype_, "plain"));
+        const bool ascii_case_insensitive = http_ascii_equals_ignore_case(name, "charset") || ((http_ascii_equals_ignore_case(name, "format") || http_ascii_equals_ignore_case(name, "delsp")) && http_ascii_equals_ignore_case(parts.type_, "text") && http_ascii_equals_ignore_case(parts.subtype_, "plain"));
         return http_media_parameter_value_equals(*parameter_value, value, ascii_case_insensitive);
     }
 };
 
-[[nodiscard]] inline bool http_parse_media_type_parts(
-    std::string_view value, bool allow_wildcard, http_media_type_parts& parts) noexcept {
+[[nodiscard]] inline bool http_parse_media_type_parts(std::string_view value, bool allow_wildcard, http_media_type_parts& parts) noexcept {
     value = http_header_token_before_parameters(value);
     const auto slash = value.find('/');
     if (slash == std::string_view::npos) {
@@ -201,15 +194,13 @@ struct http_media_type_parameters final {
     if (type_wildcard && !subtype_wildcard) {
         return false;
     }
-    return (type_wildcard || is_valid_http_header_name(parts.type_)) &&
-           (subtype_wildcard || is_valid_http_header_name(parts.subtype_));
+    return (type_wildcard || is_valid_http_header_name(parts.type_)) && (subtype_wildcard || is_valid_http_header_name(parts.subtype_));
 }
 
 template <http_temporary_owning_char_string value_type>
 bool http_parse_media_type_parts(value_type&&, bool, http_media_type_parts&) = delete;
 
-[[nodiscard]] inline bool http_parse_media_type(std::string_view value, http_media_type_parts& parts,
-    http_media_type_parameters& parameters) noexcept {
+[[nodiscard]] inline bool http_parse_media_type(std::string_view value, http_media_type_parts& parts, http_media_type_parameters& parameters) noexcept {
     return http_parse_media_type_parts(value, false, parts) && parameters.parse(value);
 }
 
@@ -451,11 +442,9 @@ bool is_http_hop_by_hop_field_name(std::string_view field_name) noexcept {
         case 2U:
             return http_ascii_equals_ignore_case(field_name, "TE");
         case 7U:
-            return http_ascii_equals_ignore_case(field_name, "Trailer") ||
-                   http_ascii_equals_ignore_case(field_name, "Upgrade");
+            return http_ascii_equals_ignore_case(field_name, "Trailer") || http_ascii_equals_ignore_case(field_name, "Upgrade");
         case 10U:
-            return http_ascii_equals_ignore_case(field_name, "Connection") ||
-                   http_ascii_equals_ignore_case(field_name, "Keep-Alive");
+            return http_ascii_equals_ignore_case(field_name, "Connection") || http_ascii_equals_ignore_case(field_name, "Keep-Alive");
         case 16U:
             return http_ascii_equals_ignore_case(field_name, "Proxy-Connection");
         case 17U:
@@ -470,8 +459,7 @@ bool is_http_hop_by_hop_field_name(std::string_view field_name) noexcept {
 }
 
 bool is_http_standard_connection_option(std::string_view option) noexcept {
-    return (option.size() == 5U && http_ascii_equals_ignore_case(option, "close")) ||
-           is_http_hop_by_hop_field_name(option);
+    return (option.size() == 5U && http_ascii_equals_ignore_case(option, "close")) || is_http_hop_by_hop_field_name(option);
 }
 
 void http_connection_nominated_fields::update(std::string_view connection_field_value) {
@@ -524,8 +512,7 @@ std::vector<std::string> http_connection_nominated_fields::non_standard_options(
     return result;
 }
 
-std::string http_connection_nominated_fields::rebuild_connection_field(
-    bool retain_upgrade, bool include_non_standard) const {
+std::string http_connection_nominated_fields::rebuild_connection_field(bool retain_upgrade, bool include_non_standard) const {
     std::string output;
     if (retain_upgrade && has_upgrade_) {
         output.append("Upgrade");
@@ -544,23 +531,19 @@ std::string http_connection_nominated_fields::rebuild_connection_field(
     return output;
 }
 
-http_connection_nominated_fields parse_http_connection_nominated_fields(
-    std::string_view connection_field_value) {
+http_connection_nominated_fields parse_http_connection_nominated_fields(std::string_view connection_field_value) {
     http_connection_nominated_fields nominated;
     nominated.update(connection_field_value);
     return nominated;
 }
-bool is_http_hop_by_hop_or_nominated_field(std::string_view field_name,
-    const http_connection_nominated_fields& nominated, bool retain_upgrade) noexcept {
-    if (retain_upgrade && nominated.has_upgrade() &&
-        http_ascii_equals_ignore_case(field_name, "Upgrade")) {
+bool is_http_hop_by_hop_or_nominated_field(std::string_view field_name, const http_connection_nominated_fields& nominated, bool retain_upgrade) noexcept {
+    if (retain_upgrade && nominated.has_upgrade() && http_ascii_equals_ignore_case(field_name, "Upgrade")) {
         return false;
     }
     return is_http_hop_by_hop_field_name(field_name) || nominated.contains(field_name);
 }
 
-bool is_http_hop_by_hop_trailer_field(
-    std::string_view field_name, const http_connection_nominated_fields& nominated) noexcept {
+bool is_http_hop_by_hop_trailer_field(std::string_view field_name, const http_connection_nominated_fields& nominated) noexcept {
     return is_http_hop_by_hop_field_name(field_name) || nominated.contains(field_name);
 }
 
@@ -576,22 +559,10 @@ bool is_forbidden_http_response_trailer_field_name(std::string_view field_name) 
 namespace ruvia {
 
 http_conditional_headers get_http_conditional_headers(const http_request& request) noexcept {
-    return http_conditional_headers{
-        detail::http_request_access::has_repeated_known_header(
-            request, detail::http_field_kind::if_unmodified_since)
-            ? std::string_view{}
-            : detail::http_request_access::known_header(request, detail::http_field_kind::if_unmodified_since),
-        detail::http_request_access::has_repeated_known_header(
-            request, detail::http_field_kind::if_modified_since)
-            ? std::string_view{}
-            : detail::http_request_access::known_header(request, detail::http_field_kind::if_modified_since),
-        detail::http_request_access::known_header(request, detail::http_field_kind::range),
-        detail::http_request_access::known_header(request, detail::http_field_kind::if_range),
-        detail::http_request_access::has_known_header(request, detail::http_field_kind::if_range)};
+    return http_conditional_headers{detail::http_request_access::has_repeated_known_header(request, detail::http_field_kind::if_unmodified_since) ? std::string_view{} : detail::http_request_access::known_header(request, detail::http_field_kind::if_unmodified_since), detail::http_request_access::has_repeated_known_header(request, detail::http_field_kind::if_modified_since) ? std::string_view{} : detail::http_request_access::known_header(request, detail::http_field_kind::if_modified_since), detail::http_request_access::known_header(request, detail::http_field_kind::range), detail::http_request_access::known_header(request, detail::http_field_kind::if_range), detail::http_request_access::has_known_header(request, detail::http_field_kind::if_range)};
 }
 
-void http_etag_field_condition::update(
-    std::string_view value, std::string_view expected, bool strong) noexcept {
+void http_etag_field_condition::update(std::string_view value, std::string_view expected, bool strong) noexcept {
     const bool already_present = present_;
     present_ = true;
     const auto trimmed = http_trim_ows(value);
@@ -610,23 +581,20 @@ void http_etag_field_condition::update(
     matched_ = matched_ || result_value.matched_;
 }
 
-http_etag_preconditions get_http_etag_preconditions(
-    const http_request& request, std::string_view etag) noexcept {
+http_etag_preconditions get_http_etag_preconditions(const http_request& request, std::string_view etag) noexcept {
     http_etag_preconditions result;
     // Both conditions are RFC list fields. Multiple field lines are equivalent
     // to comma-joining their values (RFC 9110 §5.3), but the request keeps
     // zero-copy views into separate wire lines. Fold them line by line and
     // retain whole-list validity without allocating a joined string.
-    (void)detail::http_request_access::visit_known_headers(
-        request, detail::http_field_kind::if_match, [&result, etag](std::string_view value) noexcept {
-            result.if_match_.update(value, etag, true);
-            return true;
-        });
-    (void)detail::http_request_access::visit_known_headers(
-        request, detail::http_field_kind::if_none_match, [&result, etag](std::string_view value) noexcept {
-            result.if_none_match_.update(value, etag, false);
-            return true;
-        });
+    (void)detail::http_request_access::visit_known_headers(request, detail::http_field_kind::if_match, [&result, etag](std::string_view value) noexcept {
+        result.if_match_.update(value, etag, true);
+        return true;
+    });
+    (void)detail::http_request_access::visit_known_headers(request, detail::http_field_kind::if_none_match, [&result, etag](std::string_view value) noexcept {
+        result.if_none_match_.update(value, etag, false);
+        return true;
+    });
     return result;
 }
 
@@ -640,8 +608,7 @@ bool http_date_unmodified(std::string_view header_value, std::time_t modified_se
     return !date.has_value() || modified_seconds <= *date;
 }
 
-bool http_if_range_allows(std::string_view header_value, std::string_view etag,
-    std::optional<std::time_t> modified_seconds, bool date_validator_strong) noexcept {
+bool http_if_range_allows(std::string_view header_value, std::string_view etag, std::optional<std::time_t> modified_seconds, bool date_validator_strong) noexcept {
     if (header_value.empty()) {
         return false;
     }
@@ -685,8 +652,7 @@ bool http_strong_etag_equals(std::string_view left, std::string_view right) noex
 }
 
 bool http_weak_etag_equals(std::string_view left, std::string_view right) noexcept {
-    return is_valid_http_entity_tag(left) && is_valid_http_entity_tag(right) &&
-           detail::http_weak_etag_equals(left, right);
+    return is_valid_http_entity_tag(left) && is_valid_http_entity_tag(right) && detail::http_weak_etag_equals(left, right);
 }
 
 std::string weaken_http_etag(std::string_view etag) {
@@ -716,47 +682,37 @@ enum class http_accept_token_match : int {
 // equals it or extends it at a subtag boundary, so "en" matches "en-US" but
 // never "english". Only Accept-Language uses this; charsets match exactly or by
 // wildcard.
-[[nodiscard]] http_accept_token_match http_accept_token_matches(
-    std::string_view range, std::string_view offered, bool prefix_matching) noexcept {
+[[nodiscard]] http_accept_token_match http_accept_token_matches(std::string_view range, std::string_view offered, bool prefix_matching) noexcept {
     if (range == "*") {
         return http_accept_token_match::wildcard;
     }
     if (http_ascii_equals_ignore_case(range, offered)) {
         return http_accept_token_match::exact;
     }
-    if (prefix_matching && offered.size() > range.size() && offered[range.size()] == '-' &&
-        http_ascii_equals_ignore_case(range, offered.substr(0, range.size()))) {
+    if (prefix_matching && offered.size() > range.size() && offered[range.size()] == '-' && http_ascii_equals_ignore_case(range, offered.substr(0, range.size()))) {
         return http_accept_token_match::prefix;
     }
     return http_accept_token_match::none;
 }
 
-void http_accumulate_token_acceptance(std::string_view accept, std::string_view offered,
-    bool prefix_matching, int& best_specificity, int& best_quality) noexcept {
-    http_visit_comma_separated_quoted(accept,
-        [offered, prefix_matching, &best_specificity, &best_quality](std::string_view item) noexcept {
-            const auto range = http_header_token_before_parameters(item);
-            const auto match = http_accept_token_matches(range, offered, prefix_matching);
-            if (match == http_accept_token_match::none) {
-                return true;
-            }
-            const auto specificity = prefix_matching && match != http_accept_token_match::wildcard
-                                         ? static_cast<int>(std::min(range.size(),
-                                               static_cast<std::size_t>((std::numeric_limits<int>::max)())))
-                                         : static_cast<int>(match);
-            const auto quality = http_weight_parameter(item);
-            if (specificity > best_specificity ||
-                (specificity == best_specificity && quality > best_quality)) {
-                best_specificity = specificity;
-                best_quality = quality;
-            }
+void http_accumulate_token_acceptance(std::string_view accept, std::string_view offered, bool prefix_matching, int& best_specificity, int& best_quality) noexcept {
+    http_visit_comma_separated_quoted(accept, [offered, prefix_matching, &best_specificity, &best_quality](std::string_view item) noexcept {
+        const auto range = http_header_token_before_parameters(item);
+        const auto match = http_accept_token_matches(range, offered, prefix_matching);
+        if (match == http_accept_token_match::none) {
             return true;
-        });
+        }
+        const auto specificity = prefix_matching && match != http_accept_token_match::wildcard ? static_cast<int>(std::min(range.size(), static_cast<std::size_t>((std::numeric_limits<int>::max)()))) : static_cast<int>(match);
+        const auto quality = http_weight_parameter(item);
+        if (specificity > best_specificity || (specificity == best_specificity && quality > best_quality)) {
+            best_specificity = specificity;
+            best_quality = quality;
+        }
+        return true;
+    });
 }
 
-[[nodiscard]] int http_media_range_match_specificity(std::string_view range,
-    const http_media_type_parts& offered_parts, const http_media_type_parameters& offered_parameters,
-    std::size_t& parameter_count, int& quality) noexcept {
+[[nodiscard]] int http_media_range_match_specificity(std::string_view range, const http_media_type_parts& offered_parts, const http_media_type_parameters& offered_parameters, std::size_t& parameter_count, int& quality) noexcept {
     http_media_type_parts range_parts;
     if (!http_parse_media_type_parts(range, true, range_parts)) {
         return -1;
@@ -773,44 +729,39 @@ void http_accumulate_token_acceptance(std::string_view accept, std::string_view 
     }
     parameter_count = 0;
     if (!parameters.visit([&](std::string_view name, std::string_view value) noexcept {
-            if (http_ascii_equals_ignore_case(name, "q")) {
-                return true;
-            }
-            if (!offered_parameters.contains(name, value, offered_parts)) {
-                return false;
-            }
-            ++parameter_count;
+        if (http_ascii_equals_ignore_case(name, "q")) {
             return true;
-        })) {
+        }
+        if (!offered_parameters.contains(name, value, offered_parts)) {
+            return false;
+        }
+        ++parameter_count;
+        return true;
+    })) {
         return -1;
     }
     return range_parts.type_ == "*" ? 0 : (range_parts.subtype_ == "*" ? 1 : 2);
 }
 
-void http_accumulate_media_type_acceptance(std::string_view accept, std::string_view offered,
-    int& best_specificity, std::size_t& best_parameter_count, int& best_quality) noexcept {
+void http_accumulate_media_type_acceptance(std::string_view accept, std::string_view offered, int& best_specificity, std::size_t& best_parameter_count, int& best_quality) noexcept {
     http_media_type_parts offered_parts;
     http_media_type_parameters offered_parameters;
     if (!http_parse_media_type(offered, offered_parts, offered_parameters)) {
         return;
     }
-    http_visit_comma_separated_quoted(accept,
-        [offered_parts, &offered_parameters, &best_specificity, &best_parameter_count, &best_quality](std::string_view item) noexcept {
-            int quality = 1000;
-            std::size_t parameter_count = 0;
-            const auto specificity = http_media_range_match_specificity(item, offered_parts, offered_parameters, parameter_count, quality);
-            if (specificity >= 0) {
-                if (specificity > best_specificity ||
-                    (specificity == best_specificity &&
-                        (parameter_count > best_parameter_count ||
-                            (parameter_count == best_parameter_count && quality > best_quality)))) {
-                    best_specificity = specificity;
-                    best_parameter_count = parameter_count;
-                    best_quality = quality;
-                }
+    http_visit_comma_separated_quoted(accept, [offered_parts, &offered_parameters, &best_specificity, &best_parameter_count, &best_quality](std::string_view item) noexcept {
+        int quality = 1000;
+        std::size_t parameter_count = 0;
+        const auto specificity = http_media_range_match_specificity(item, offered_parts, offered_parameters, parameter_count, quality);
+        if (specificity >= 0) {
+            if (specificity > best_specificity || (specificity == best_specificity && (parameter_count > best_parameter_count || (parameter_count == best_parameter_count && quality > best_quality)))) {
+                best_specificity = specificity;
+                best_parameter_count = parameter_count;
+                best_quality = quality;
             }
-            return true;
-        });
+        }
+        return true;
+    });
 }
 
 }  // namespace
@@ -829,10 +780,8 @@ void http_accept_match::update_media_type(std::string_view field, std::string_vi
     detail::http_accumulate_media_type_acceptance(field, offered, specificity_, parameter_specificity_, quality_);
 }
 
-void http_accept_match::update_token(std::string_view field, std::string_view offered,
-    http_accept_token_match_mode mode) noexcept {
-    detail::http_accumulate_token_acceptance(
-        field, offered, mode == http_accept_token_match_mode::language_prefix, specificity_, quality_);
+void http_accept_match::update_token(std::string_view field, std::string_view offered, http_accept_token_match_mode mode) noexcept {
+    detail::http_accumulate_token_acceptance(field, offered, mode == http_accept_token_match_mode::language_prefix, specificity_, quality_);
 }
 
 }  // namespace ruvia
@@ -859,9 +808,7 @@ std::variant<std::monostate, http_priority_error> parse_priority_members(detail:
             return http_priority_error::invalid_syntax;
         }
         if (key == "u") {
-            fields_value.urgency_ = item.kind_ == item_type::kind_type::integer
-                                        ? http_priority_urgency::try_from_value(item.integer_)
-                                        : std::nullopt;
+            fields_value.urgency_ = item.kind_ == item_type::kind_type::integer ? http_priority_urgency::try_from_value(item.integer_) : std::nullopt;
         }
         if (key == "i") {
             fields_value.incremental_ = item.kind_ == item_type::kind_type::boolean ? std::optional(item.boolean_) : std::nullopt;
@@ -890,14 +837,9 @@ std::variant<http_priority_fields, http_priority_error> parse_http_priority(std:
     return fields;
 }
 namespace detail {
-std::variant<http_priority_fields, http_priority_error> parse_http_priority_headers(
-    http_header_range_view headers) noexcept {
+std::variant<http_priority_fields, http_priority_error> parse_http_priority_headers(http_header_range_view headers) noexcept {
     http_priority_fields fields;
-    if (auto parsed_value = parse_priority_members(
-            http_structured_parser{
-                http_structured_header_input{headers.begin(), headers.end(), "priority"}},
-            fields);
-        parsed_value.index() != 0) {
+    if (auto parsed_value = parse_priority_members(http_structured_parser{http_structured_header_input{headers.begin(), headers.end(), "priority"}}, fields); parsed_value.index() != 0) {
         return std::get<1>(parsed_value);
     }
     return fields;
@@ -939,9 +881,7 @@ std::variant<http_priority_update, http_priority_error> decode_http2_priority_up
         return http_priority_error::invalid_frame;
     }
     const auto* id_bytes = reinterpret_cast<const unsigned char*>(payload_value.data());
-    const auto id = ((static_cast<std::uint32_t>(id_bytes[0]) & 0x7fU) << 24) |
-                    (static_cast<std::uint32_t>(id_bytes[1]) << 16) |
-                    (static_cast<std::uint32_t>(id_bytes[2]) << 8) | static_cast<std::uint32_t>(id_bytes[3]);
+    const auto id = ((static_cast<std::uint32_t>(id_bytes[0]) & 0x7fU) << 24) | (static_cast<std::uint32_t>(id_bytes[1]) << 16) | (static_cast<std::uint32_t>(id_bytes[2]) << 8) | static_cast<std::uint32_t>(id_bytes[3]);
     if (!id) {
         return http_priority_error::invalid_value;
     }
@@ -963,8 +903,7 @@ std::variant<std::size_t, http_priority_error> encode_http2_priority_update(std:
     if (output.size() < 13 + std::get<0>(length)) {
         return http_priority_error::output_too_small;
     }
-    (void)encode_http2_frame_header(output.first(http2_frame_header_bytes),
-        static_cast<std::uint32_t>(4 + std::get<0>(length)), http2_frame_type::priority_update, 0, 0);
+    (void)encode_http2_frame_header(output.first(http2_frame_header_bytes), static_cast<std::uint32_t>(4 + std::get<0>(length)), http2_frame_type::priority_update, 0, 0);
     for (std::size_t index = 0; index < 4; ++index) {
         output[http2_frame_header_bytes + index] = static_cast<char>((id >> (24 - 8 * index)) & 0xffU);
     }
@@ -990,15 +929,13 @@ namespace {
 // Host is a once-only field (RFC 9112 section 3.2) without a cached singleton
 // bit; its kind index is below 32 like every singleton kind.
 [[nodiscard]] constexpr std::uint32_t once_only_bit(http_field_kind kind) noexcept {
-    return kind == http_field_kind::host ? 1U << static_cast<std::uint32_t>(kind)
-                                         : singleton_request_header_bit(kind);
+    return kind == http_field_kind::host ? 1U << static_cast<std::uint32_t>(kind) : singleton_request_header_bit(kind);
 }
 
 // RFC 9110 section 5.6.6 parameter: no whitespace around '='.
 [[nodiscard]] bool is_exact_http_parameter(std::string_view part) noexcept {
     const auto equals = part.find('=');
-    return equals != std::string_view::npos && is_valid_http_header_name(part.substr(0, equals)) &&
-           is_http_token_or_quoted_string(part.substr(equals + 1));
+    return equals != std::string_view::npos && is_valid_http_header_name(part.substr(0, equals)) && is_http_token_or_quoted_string(part.substr(equals + 1));
 }
 
 [[nodiscard]] bool http_expectation_item(std::string_view item) noexcept {
@@ -1028,22 +965,18 @@ namespace {
     }) == http_field_list_parse_status::ok;
 }
 
-[[nodiscard]] bool is_valid_te(
-    std::string_view value, http_field_list_role role, request_field_framing framing) noexcept {
+[[nodiscard]] bool is_valid_te(std::string_view value, http_field_list_role role, request_field_framing framing) noexcept {
     if (framing == request_field_framing::binary) {
         return is_valid_binary_http_te_field_value(value, role);
     }
     return is_valid_http_te_field_value(value, role);
 }
 
-[[nodiscard]] bool is_valid_value(http_field_kind kind, std::string_view value,
-    http_field_list_role role, request_field_framing framing, http_request_field_source source) noexcept {
+[[nodiscard]] bool is_valid_value(http_field_kind kind, std::string_view value, http_field_list_role role, request_field_framing framing, http_request_field_source source) noexcept {
     // RFC 9110 sections 2.2 and 5.6.1: forwarding is not generation. Reuse the
     // recipient value rules only for end-to-end application metadata. Ownership
     // and singleton checks below still use the actual sender role.
-    const auto application_role = source == http_request_field_source::forwarded
-                                      ? http_field_list_role::recipient
-                                      : role;
+    const auto application_role = source == http_request_field_source::forwarded ? http_field_list_role::recipient : role;
     switch (kind) {
         case http_field_kind::origin:
             return application_role == http_field_list_role::recipient || is_valid_http_origin_field_value(value);
@@ -1053,23 +986,19 @@ namespace {
             return application_role == http_field_list_role::recipient || is_valid_http_cors_request_header_names(value);
         case http_field_kind::content_type:
             // Recipients interpret media types at the application boundary.
-            return application_role == http_field_list_role::recipient ||
-                   is_valid_http_content_type_field_value(value);
+            return application_role == http_field_list_role::recipient || is_valid_http_content_type_field_value(value);
         case http_field_kind::content_encoding:
             // Admission leaves received metadata to the decoder. Forwarding
             // validates the recipient list grammar, not arbitrary nonempty text.
-            return role == http_field_list_role::recipient ||
-                   is_valid_http_content_encoding_field_value(value, application_role);
+            return role == http_field_list_role::recipient || is_valid_http_content_encoding_field_value(value, application_role);
         case http_field_kind::trailer:
             // The declaration neither frames content nor authorizes actual trailers.
-            return role == http_field_list_role::recipient ||
-                   is_valid_http_request_trailer_field_value(value, role);
+            return role == http_field_list_role::recipient || is_valid_http_request_trailer_field_value(value, role);
         case http_field_kind::te:
             return is_valid_te(value, role, framing);
         case http_field_kind::expect:
             // Binary field semantics feed the existing 417/ignore policy, not malformed-message rejection.
-            return framing == request_field_framing::binary ||
-                   is_valid_received_http_expect_field_value(value);
+            return framing == request_field_framing::binary || is_valid_received_http_expect_field_value(value);
         case http_field_kind::host:
             return is_valid_host_header(value);
         default:
@@ -1083,13 +1012,11 @@ bool request_field_state::seen(http_field_kind kind) const noexcept {
     return (seen_ & once_only_bit(kind)) != 0;
 }
 
-request_field_status validate_request_field(http_field_kind kind, std::string_view value,
-    http_field_list_role role, request_field_state& state, http_request_field_source source) noexcept {
+request_field_status validate_request_field(http_field_kind kind, std::string_view value, http_field_list_role role, request_field_state& state, http_request_field_source source) noexcept {
     if (!is_valid_http_request_field_source(source)) {
         return request_field_status::invalid;
     }
-    if (role == http_field_list_role::sender &&
-        (kind == http_field_kind::expect || kind == http_field_kind::content_length)) {
+    if (role == http_field_list_role::sender && (kind == http_field_kind::expect || kind == http_field_kind::content_length)) {
         return request_field_status::managed_by_sender;
     }
     if (!is_valid_value(kind, value, role, state.framing_, source)) {
@@ -1100,9 +1027,7 @@ request_field_status validate_request_field(http_field_kind kind, std::string_vi
     // A repeated User-Agent violates only the sender rule of RFC 9110 section
     // 5.3 and controls no framing, routing or access, so recipients keep its
     // lines. Senders still cannot generate these singleton fields more than once.
-    if (role == http_field_list_role::recipient &&
-        (kind == http_field_kind::if_modified_since ||
-            kind == http_field_kind::if_unmodified_since || kind == http_field_kind::user_agent)) {
+    if (role == http_field_list_role::recipient && (kind == http_field_kind::if_modified_since || kind == http_field_kind::if_unmodified_since || kind == http_field_kind::user_agent)) {
         return request_field_status::ok;
     }
     if (const auto bit = once_only_bit(kind); bit != 0) {
@@ -1152,8 +1077,7 @@ bool is_valid_http_request_application_field(std::string_view name, std::string_
     // TE 是唯一按 HTTP 版本区分的请求字段语义，已由托管字段边界排除。
     // 每次只检查一个字段；重复检测由调用方持有的字段集合负责。
     detail::request_field_state state(detail::request_field_framing::http1);
-    return detail::validate_request_field(kind, value, detail::http_field_list_role::sender, state) ==
-           detail::request_field_status::ok;
+    return detail::validate_request_field(kind, value, detail::http_field_list_role::sender, state) == detail::request_field_status::ok;
 }
 
 std::optional<std::string_view> http_field_name_list::next() noexcept {
@@ -1203,8 +1127,7 @@ bool is_valid_long_http_field_value_bytes(const char* data, std::size_t size) no
     return http_field_value_prefix_size({data, size}) == size;
 }
 
-bool is_forbidden_common_trailer_name(
-    std::string_view name, http_field_kind kind) noexcept {
+bool is_forbidden_common_trailer_name(std::string_view name, http_field_kind kind) noexcept {
     switch (kind) {
         case http_field_kind::host:
         case http_field_kind::content_length:
@@ -1245,13 +1168,11 @@ bool is_forbidden_common_trailer_name(
 
     switch (name.size()) {
         case 10:
-            return http_ascii_equals_ignore_case(name, "Keep-Alive") ||
-                   http_ascii_equals_ignore_case(name, "Set-Cookie");
+            return http_ascii_equals_ignore_case(name, "Keep-Alive") || http_ascii_equals_ignore_case(name, "Set-Cookie");
         case 12:
             return http_ascii_equals_ignore_case(name, "Max-Forwards");
         case 13:
-            return http_ascii_equals_ignore_case(name, "Cache-Control") ||
-                   http_ascii_equals_ignore_case(name, "Content-Range");
+            return http_ascii_equals_ignore_case(name, "Cache-Control") || http_ascii_equals_ignore_case(name, "Content-Range");
         case 16:
             return http_ascii_equals_ignore_case(name, "Proxy-Connection");
         case 18:
@@ -1266,10 +1187,7 @@ bool is_forbidden_http_request_trailer_name(std::string_view name) noexcept {
     if (is_forbidden_common_trailer_name(name, kind)) {
         return true;
     }
-    return kind == http_field_kind::access_control_request_headers ||
-           kind == http_field_kind::access_control_request_method ||
-           kind == http_field_kind::origin ||
-           http_ascii_equals_ignore_case(name, "Accept-Ranges");
+    return kind == http_field_kind::access_control_request_headers || kind == http_field_kind::access_control_request_method || kind == http_field_kind::origin || http_ascii_equals_ignore_case(name, "Accept-Ranges");
 }
 
 bool is_forbidden_response_trailer_name(std::string_view name) noexcept {
@@ -1278,8 +1196,7 @@ bool is_forbidden_response_trailer_name(std::string_view name) noexcept {
     // 8.8.3) and Accept-Ranges (section 14.3) from that set in trailers; every
     // other known field lacks trailer permission or controls framing,
     // representation handling, caching, routing, cookies, methods, or CORS.
-    if (const auto known = classify_response_header_name(name);
-        known != 0 && known != response_header_etag && known != response_header_accept_ranges) {
+    if (const auto known = classify_response_header_name(name); known != 0 && known != response_header_etag && known != response_header_accept_ranges) {
         return true;
     }
 
@@ -1294,17 +1211,13 @@ bool is_forbidden_response_trailer_name(std::string_view name) noexcept {
         case 6:
             return http_ascii_equals_ignore_case(name, "Pragma");
         case 7:
-            return http_ascii_equals_ignore_case(name, "Expires") ||
-                   http_ascii_equals_ignore_case(name, "Warning");
+            return http_ascii_equals_ignore_case(name, "Expires") || http_ascii_equals_ignore_case(name, "Warning");
         case 11:
             return http_ascii_equals_ignore_case(name, "Retry-After");
         case 15:
-            return http_ascii_equals_ignore_case(name, "X-Frame-Options") ||
-                   http_ascii_equals_ignore_case(name, "Referrer-Policy") ||
-                   http_ascii_equals_ignore_case(name, "Clear-Site-Data");
+            return http_ascii_equals_ignore_case(name, "X-Frame-Options") || http_ascii_equals_ignore_case(name, "Referrer-Policy") || http_ascii_equals_ignore_case(name, "Clear-Site-Data");
         case 16:
-            return http_ascii_equals_ignore_case(name, "X-XSS-Protection") ||
-                   http_ascii_equals_ignore_case(name, "WWW-Authenticate");
+            return http_ascii_equals_ignore_case(name, "X-XSS-Protection") || http_ascii_equals_ignore_case(name, "WWW-Authenticate");
         case 18:
             return http_ascii_equals_ignore_case(name, "Permissions-Policy");
         case 19:
@@ -1326,20 +1239,17 @@ bool is_forbidden_http_binary_response_field(std::string_view name) noexcept {
     return is_forbidden_http_binary_connection_field(name) || http_ascii_equals_ignore_case(name, "te");
 }
 
-[[nodiscard]] bool is_valid_http_response_trailer_field_value(
-    std::string_view value, http_field_list_role role) noexcept {
-    return is_valid_http_trailer_field_value(value, role,
-        [](std::string_view name) noexcept { return is_forbidden_response_trailer_name(name); });
+[[nodiscard]] bool is_valid_http_response_trailer_field_value(std::string_view value, http_field_list_role role) noexcept {
+    return is_valid_http_trailer_field_value(value, role, [](std::string_view name) noexcept {
+        return is_forbidden_response_trailer_name(name);
+    });
 }
 
-[[nodiscard]] bool response_trailer_field_valid(
-    std::string_view name, std::string_view value) noexcept {
-    return is_valid_http_header_name(name) && !is_forbidden_response_trailer_name(name) &&
-           is_valid_http_header_value(value);
+[[nodiscard]] bool response_trailer_field_valid(std::string_view name, std::string_view value) noexcept {
+    return is_valid_http_header_name(name) && !is_forbidden_response_trailer_name(name) && is_valid_http_header_value(value);
 }
 
-response_field_status validate_response_field(http_field_kind kind, std::string_view value,
-    response_field_state& state) noexcept {
+response_field_status validate_response_field(http_field_kind kind, std::string_view value, response_field_state& state) noexcept {
     switch (kind) {
         case http_field_kind::content_type:
             if (!is_valid_http_content_type_field_value(value)) {
@@ -1375,16 +1285,13 @@ bool is_valid_http_response_field(std::string_view name, std::string_view value)
         return false;
     }
     detail::response_field_state state;
-    return detail::validate_response_field(detail::classify_http_field(name), value, state) ==
-           detail::response_field_status::ok;
+    return detail::validate_response_field(detail::classify_http_field(name), value, state) == detail::response_field_status::ok;
 }
 
-http_response_trailer_section validate_http_response_trailers(
-    std::span<const http_header_view> trailers) {
+http_response_trailer_section validate_http_response_trailers(std::span<const http_header_view> trailers) {
     auto section_size = http_trailer_section_budget();
     for (const auto& trailer : trailers) {
-        if (!detail::response_trailer_field_valid(trailer.name(), trailer.value()) ||
-            !section_size.add_field(trailer.name(), trailer.value())) {
+        if (!detail::response_trailer_field_valid(trailer.name(), trailer.value()) || !section_size.add_field(trailer.name(), trailer.value())) {
             throw std::invalid_argument("invalid HTTP response trailer section");
         }
     }
@@ -1437,8 +1344,7 @@ namespace {
     return result_value;
 }
 
-[[nodiscard]] bool parse_nominated_field_list_arg(
-    std::string_view arg, auto&& add_field) noexcept {
+[[nodiscard]] bool parse_nominated_field_list_arg(std::string_view arg, auto&& add_field) noexcept {
     if (arg.empty()) {
         return false;
     }
@@ -1500,10 +1406,9 @@ void cache_control_field_parser::update(std::string_view value) noexcept {
                     } else if (detail::is_http_token_or_quoted_string(arg)) {
                         value_.set(cache_control_directive::private_value);
                         if (!value_.is_unqualified_private()) {
-                            const bool added = parse_nominated_field_list_arg(
-                                arg, [this](std::string_view field_name) noexcept {
-                                    return value_.private_fields_.add_lowercase(field_name);
-                                });
+                            const bool added = parse_nominated_field_list_arg(arg, [this](std::string_view field_name) noexcept {
+                                return value_.private_fields_.add_lowercase(field_name);
+                            });
                             if (!added) {
                                 value_.set(cache_control_directive::private_unqualified);
                                 value_.private_fields_.clear();
@@ -1523,10 +1428,9 @@ void cache_control_field_parser::update(std::string_view value) noexcept {
                     } else if (detail::is_http_token_or_quoted_string(arg)) {
                         value_.set(cache_control_directive::no_cache);
                         if (!value_.is_unqualified_no_cache()) {
-                            const bool added = parse_nominated_field_list_arg(
-                                arg, [this](std::string_view field_name) noexcept {
-                                    return value_.no_cache_fields_.add_lowercase(field_name);
-                                });
+                            const bool added = parse_nominated_field_list_arg(arg, [this](std::string_view field_name) noexcept {
+                                return value_.no_cache_fields_.add_lowercase(field_name);
+                            });
                             if (!added) {
                                 value_.set(cache_control_directive::no_cache_unqualified);
                                 value_.no_cache_fields_.clear();
@@ -1635,15 +1539,13 @@ bool cache_control::nominated_field_set::add_lowercase(std::string_view field_na
     if (contains(field_name)) {
         return true;
     }
-    if (count_ >= max_nominated_fields ||
-        field_name.size() > max_nominated_field_bytes - storage_used_) {
+    if (count_ >= max_nominated_fields || field_name.size() > max_nominated_field_bytes - storage_used_) {
         return false;
     }
     offsets_[count_] = storage_used_;
     lengths_[count_] = static_cast<std::uint8_t>(field_name.size());
     for (std::size_t i = 0; i < field_name.size(); ++i) {
-        storage_[storage_used_ + i] =
-            static_cast<char>(http_ascii_to_lower(static_cast<unsigned char>(field_name[i])));
+        storage_[storage_used_ + i] = static_cast<char>(http_ascii_to_lower(static_cast<unsigned char>(field_name[i])));
     }
     storage_used_ = static_cast<std::uint16_t>(storage_used_ + field_name.size());
     ++count_;
@@ -1697,18 +1599,14 @@ std::optional<cache_control> parse_targeted_cache_control_from_input(input_type 
                 result.clear_directive(dir);
             }
         };
-        const auto apply_delta_directive =
-            [&](std::optional<std::uint64_t>& target) noexcept {
-                if (item.kind_ == detail::http_structured_item::kind_type::integer &&
-                    item.integer_ >= 0) {
-                    target = static_cast<std::uint64_t>(item.integer_);
-                } else {
-                    target.reset();
-                }
-            };
-        const auto apply_qualified_directive = [&](cache_control_directive flag_dir,
-                                                   cache_control_directive unqual_dir,
-                                                   cache_control::nominated_field_set& fields) noexcept {
+        const auto apply_delta_directive = [&](std::optional<std::uint64_t>& target) noexcept {
+            if (item.kind_ == detail::http_structured_item::kind_type::integer && item.integer_ >= 0) {
+                target = static_cast<std::uint64_t>(item.integer_);
+            } else {
+                target.reset();
+            }
+        };
+        const auto apply_qualified_directive = [&](cache_control_directive flag_dir, cache_control_directive unqual_dir, cache_control::nominated_field_set& fields) noexcept {
             if (item.kind_ == detail::http_structured_item::kind_type::boolean) {
                 fields.clear();
                 if (item.boolean_) {
@@ -1718,15 +1616,13 @@ std::optional<cache_control> parse_targeted_cache_control_from_input(input_type 
                     result.clear_directive(flag_dir);
                     result.clear_directive(unqual_dir);
                 }
-            } else if (item.kind_ == detail::http_structured_item::kind_type::string ||
-                       item.kind_ == detail::http_structured_item::kind_type::token) {
+            } else if (item.kind_ == detail::http_structured_item::kind_type::string || item.kind_ == detail::http_structured_item::kind_type::token) {
                 fields.clear();
                 result.clear_directive(unqual_dir);
                 result.set(flag_dir);
                 std::array<char, 256> unescaped{};
                 std::string_view list_text = item.text_;
-                if (item.kind_ == detail::http_structured_item::kind_type::string &&
-                    item.has_escapes_) {
+                if (item.kind_ == detail::http_structured_item::kind_type::string && item.has_escapes_) {
                     std::size_t out_len = 0;
                     for (std::size_t i = 0; i < item.text_.size(); ++i) {
                         if (item.text_[i] == '\\' && i + 1U < item.text_.size()) {
@@ -1777,11 +1673,9 @@ std::optional<cache_control> parse_targeted_cache_control_from_input(input_type 
         } else if (key == "only-if-cached") {
             apply_bool_directive(cache_control_directive::only_if_cached);
         } else if (key == "private") {
-            apply_qualified_directive(cache_control_directive::private_value,
-                cache_control_directive::private_unqualified, result.private_fields_);
+            apply_qualified_directive(cache_control_directive::private_value, cache_control_directive::private_unqualified, result.private_fields_);
         } else if (key == "no-cache") {
-            apply_qualified_directive(cache_control_directive::no_cache,
-                cache_control_directive::no_cache_unqualified, result.no_cache_fields_);
+            apply_qualified_directive(cache_control_directive::no_cache, cache_control_directive::no_cache_unqualified, result.no_cache_fields_);
         } else if (key == "max-age") {
             apply_delta_directive(result.max_age_);
         } else if (key == "s-maxage") {
@@ -1796,8 +1690,7 @@ std::optional<cache_control> parse_targeted_cache_control_from_input(input_type 
             if (item.kind_ == detail::http_structured_item::kind_type::boolean && item.boolean_) {
                 result.set(cache_control_directive::max_stale_any);
                 result.max_stale_.reset();
-            } else if (item.kind_ == detail::http_structured_item::kind_type::integer &&
-                       item.integer_ >= 0) {
+            } else if (item.kind_ == detail::http_structured_item::kind_type::integer && item.integer_ >= 0) {
                 result.clear_directive(cache_control_directive::max_stale_any);
                 result.max_stale_ = static_cast<std::uint64_t>(item.integer_);
             } else {
@@ -1828,18 +1721,14 @@ std::optional<cache_control> parse_targeted_cache_control(std::string_view value
     return parse_targeted_cache_control_from_input(detail::http_structured_text_input{value});
 }
 
-std::optional<cache_control> detail::parse_targeted_cache_control_headers(
-    detail::http_header_range_view headers, std::string_view header_name) noexcept {
+std::optional<cache_control> detail::parse_targeted_cache_control_headers(detail::http_header_range_view headers, std::string_view header_name) noexcept {
     if (header_name.empty()) {
         return std::nullopt;
     }
-    return parse_targeted_cache_control_from_input(
-        detail::http_structured_header_input{headers.begin(), headers.end(), header_name});
+    return parse_targeted_cache_control_from_input(detail::http_structured_header_input{headers.begin(), headers.end(), header_name});
 }
 
-targeted_cache_control_selection detail::resolve_targeted_cache_control_headers(
-    detail::http_header_range_view headers,
-    std::span<const std::string_view> target_headers) noexcept {
+targeted_cache_control_selection detail::resolve_targeted_cache_control_headers(detail::http_header_range_view headers, std::span<const std::string_view> target_headers) noexcept {
     const auto has_cache_control = [&headers]() noexcept {
         for (const auto field : headers) {
             if (http_ascii_equals_ignore_case(field.name(), "Cache-Control")) {
@@ -1872,14 +1761,12 @@ targeted_cache_control_selection detail::resolve_targeted_cache_control_headers(
     }
     return {
         .control_ = parse_cache_control_headers(headers),
-        .selected_header_ = has_cache_control() ? std::string_view("Cache-Control")
-                                                : std::string_view{},
+        .selected_header_ = has_cache_control() ? std::string_view("Cache-Control") : std::string_view{},
         .targeted_ = false,
     };
 }
 
-bool strip_http_cache_private_headers(
-    std::vector<http_header>& headers, const cache_control& control) noexcept {
+bool strip_http_cache_private_headers(std::vector<http_header>& headers, const cache_control& control) noexcept {
     if (control.no_store() || control.is_unqualified_private()) {
         return false;
     }
@@ -1891,8 +1778,7 @@ bool strip_http_cache_private_headers(
     return true;
 }
 
-bool strip_http_cache_private_headers(
-    http_response_headers& headers, const cache_control& control) {
+bool strip_http_cache_private_headers(http_response_headers& headers, const cache_control& control) {
     if (control.no_store() || control.is_unqualified_private()) {
         return false;
     }
@@ -1903,8 +1789,7 @@ bool strip_http_cache_private_headers(
     return true;
 }
 
-bool strip_http_cache_private_headers(
-    http_response& response, const cache_control& control) {
+bool strip_http_cache_private_headers(http_response& response, const cache_control& control) {
     if (control.no_store() || control.is_unqualified_private()) {
         return false;
     }
@@ -1929,8 +1814,7 @@ bool strip_http_cache_private_headers(http_response& response) {
     return strip_http_cache_private_headers(response, parse_cache_control(response));
 }
 
-bool strip_http_cache_no_cache_headers(
-    std::vector<http_header>& headers, const cache_control& control) noexcept {
+bool strip_http_cache_no_cache_headers(std::vector<http_header>& headers, const cache_control& control) noexcept {
     if (control.no_store() || control.is_unqualified_no_cache()) {
         return false;
     }
@@ -1942,8 +1826,7 @@ bool strip_http_cache_no_cache_headers(
     return true;
 }
 
-bool strip_http_cache_no_cache_headers(
-    http_response_headers& headers, const cache_control& control) {
+bool strip_http_cache_no_cache_headers(http_response_headers& headers, const cache_control& control) {
     if (control.no_store() || control.is_unqualified_no_cache()) {
         return false;
     }
@@ -1954,8 +1837,7 @@ bool strip_http_cache_no_cache_headers(
     return true;
 }
 
-bool strip_http_cache_no_cache_headers(
-    http_response& response, const cache_control& control) {
+bool strip_http_cache_no_cache_headers(http_response& response, const cache_control& control) {
     if (control.no_store() || control.is_unqualified_no_cache()) {
         return false;
     }
@@ -1970,14 +1852,11 @@ bool strip_http_cache_no_cache_headers(
 
 namespace {
 
-void append_preserved_cache_control_directives(
-    std::string_view field_value, std::string& output) {
+void append_preserved_cache_control_directives(std::string_view field_value, std::string& output) {
     detail::http_visit_comma_separated_quoted(field_value, [&](std::string_view token) {
         const auto eq = token.find('=');
-        const auto name =
-            http_trim_ows(eq == std::string_view::npos ? token : token.substr(0, eq));
-        if (name.empty() || http_ascii_equals_ignore_case(name, "max-age") ||
-            http_ascii_equals_ignore_case(name, "s-maxage")) {
+        const auto name = http_trim_ows(eq == std::string_view::npos ? token : token.substr(0, eq));
+        if (name.empty() || http_ascii_equals_ignore_case(name, "max-age") || http_ascii_equals_ignore_case(name, "s-maxage")) {
             return true;
         }
         if (!output.empty()) {
@@ -1988,8 +1867,7 @@ void append_preserved_cache_control_directives(
     });
 }
 
-void finish_rewritten_cache_control_max_age(
-    std::string& output, std::uint64_t client_max_age) {
+void finish_rewritten_cache_control_max_age(std::string& output, std::uint64_t client_max_age) {
     if (!output.empty()) {
         output.append(", ");
     }
@@ -2017,21 +1895,17 @@ void finish_rewritten_cache_control_max_age(
 }
 
 template <typename target_headers_type>
-void merge_304_headers_impl(
-    target_headers_type& cached_headers, detail::http_header_range_view not_modified_headers) {
+void merge_304_headers_impl(target_headers_type& cached_headers, detail::http_header_range_view not_modified_headers) {
     const auto nominated = parse_http_connection_nominated_fields(not_modified_headers);
     std::vector<std::string_view> updated_names;
     for (const auto field : not_modified_headers) {
         const auto name = field.name();
-        if (!is_valid_http_header_name(name) || !is_valid_http_header_value(field.value()) ||
-            is_http_hop_by_hop_or_nominated_field(name, nominated) ||
-            is_http_304_forbidden_header(name)) {
+        if (!is_valid_http_header_name(name) || !is_valid_http_header_value(field.value()) || is_http_hop_by_hop_or_nominated_field(name, nominated) || is_http_304_forbidden_header(name)) {
             continue;
         }
-        const bool already_recorded =
-            std::ranges::any_of(updated_names, [name](std::string_view existing) noexcept {
-                return http_ascii_equals_ignore_case(existing, name);
-            });
+        const bool already_recorded = std::ranges::any_of(updated_names, [name](std::string_view existing) noexcept {
+            return http_ascii_equals_ignore_case(existing, name);
+        });
         if (!already_recorded) {
             updated_names.push_back(name);
         }
@@ -2052,22 +1926,15 @@ void merge_304_headers_impl(
     }
     for (const auto field : not_modified_headers) {
         const auto name = field.name();
-        const bool should_copy =
-            std::ranges::any_of(updated_names, [name](std::string_view updated) noexcept {
-                return http_ascii_equals_ignore_case(name, updated);
-            });
+        const bool should_copy = std::ranges::any_of(updated_names, [name](std::string_view updated) noexcept {
+            return http_ascii_equals_ignore_case(name, updated);
+        });
         if (!should_copy) {
             continue;
         }
         if constexpr (std::same_as<target_headers_type, http_response_headers>) {
-            if (cached_headers.header(name).has_value() &&
-                !http_ascii_equals_ignore_case(name, "Date") &&
-                !http_ascii_equals_ignore_case(name, "ETag") &&
-                !http_ascii_equals_ignore_case(name, "Expires") &&
-                !http_ascii_equals_ignore_case(name, "Content-Location") &&
-                !http_ascii_equals_ignore_case(name, "Last-Modified")) {
-                cached_headers.header(
-                    name, field.value(), {.mode_ = http_response_header_mode::append});
+            if (cached_headers.header(name).has_value() && !http_ascii_equals_ignore_case(name, "Date") && !http_ascii_equals_ignore_case(name, "ETag") && !http_ascii_equals_ignore_case(name, "Expires") && !http_ascii_equals_ignore_case(name, "Content-Location") && !http_ascii_equals_ignore_case(name, "Last-Modified")) {
+                cached_headers.header(name, field.value(), {.mode_ = http_response_header_mode::append});
             } else {
                 cached_headers.header(name, field.value());
             }
@@ -2078,16 +1945,14 @@ void merge_304_headers_impl(
 }
 }  // namespace
 
-std::string rewrite_http_cache_control_max_age(
-    std::string_view field_value, std::uint64_t client_max_age) {
+std::string rewrite_http_cache_control_max_age(std::string_view field_value, std::uint64_t client_max_age) {
     std::string output;
     append_preserved_cache_control_directives(field_value, output);
     finish_rewritten_cache_control_max_age(output, client_max_age);
     return output;
 }
 
-std::string detail::rewrite_http_cache_control_max_age_headers(
-    detail::http_header_range_view headers, std::uint64_t client_max_age) {
+std::string detail::rewrite_http_cache_control_max_age_headers(detail::http_header_range_view headers, std::uint64_t client_max_age) {
     std::string output;
     for (const auto field : headers) {
         if (http_ascii_equals_ignore_case(field.name(), "Cache-Control")) {
@@ -2098,18 +1963,15 @@ std::string detail::rewrite_http_cache_control_max_age_headers(
     return output;
 }
 
-void rewrite_http_response_cache_max_age(
-    std::vector<http_header>& response_headers, std::uint64_t client_max_age) {
+void rewrite_http_response_cache_max_age(std::vector<http_header>& response_headers, std::uint64_t client_max_age) {
     auto rewritten = rewrite_http_cache_control_max_age(response_headers, client_max_age);
     std::erase_if(response_headers, [](const http_header& field) noexcept {
-        return http_ascii_equals_ignore_case(field.name(), "Cache-Control") ||
-               http_ascii_equals_ignore_case(field.name(), "Expires");
+        return http_ascii_equals_ignore_case(field.name(), "Cache-Control") || http_ascii_equals_ignore_case(field.name(), "Expires");
     });
     response_headers.emplace_back("Cache-Control", rewritten);
 }
 
-void rewrite_http_response_cache_max_age(
-    http_response_headers& response_headers, std::uint64_t client_max_age) {
+void rewrite_http_response_cache_max_age(http_response_headers& response_headers, std::uint64_t client_max_age) {
     std::string output;
     for (const auto& field : response_headers) {
         if (http_ascii_equals_ignore_case(field.name(), "Cache-Control")) {
@@ -2121,8 +1983,7 @@ void rewrite_http_response_cache_max_age(
     response_headers.header("Cache-Control", output);
 }
 
-void rewrite_http_response_cache_max_age(
-    http_response& response, std::uint64_t client_max_age) {
+void rewrite_http_response_cache_max_age(http_response& response, std::uint64_t client_max_age) {
     auto staged = response.headers().clone(1);
     rewrite_http_response_cache_max_age(staged, client_max_age);
     response.commit_headers(std::move(staged));
@@ -2167,8 +2028,7 @@ http_vary_spec parse_http_vary(std::string_view field_value) {
     return spec;
 }
 
-std::optional<std::string> detail::format_http_vary_cache_key_headers(
-    const http_vary_spec& vary, detail::http_header_range_view request_headers) {
+std::optional<std::string> detail::format_http_vary_cache_key_headers(const http_vary_spec& vary, detail::http_header_range_view request_headers) {
     if (vary.is_wildcard()) {
         return std::nullopt;
     }
@@ -2204,9 +2064,7 @@ std::optional<std::uint64_t> parse_http_age(std::string_view field_value) noexce
     return parse_delta_seconds(trimmed);
 }
 
-std::uint64_t detail::compute_http_cache_age_headers(
-    detail::http_header_range_view response_headers, std::time_t request_time,
-    std::time_t response_time, std::time_t now) noexcept {
+std::uint64_t detail::compute_http_cache_age_headers(detail::http_header_range_view response_headers, std::time_t request_time, std::time_t response_time, std::time_t now) noexcept {
     std::optional<std::time_t> date_value;
     std::optional<std::uint64_t> age_value;
     for (const auto field : response_headers) {
@@ -2226,18 +2084,15 @@ bool is_http_304_forbidden_header(std::string_view field_name) noexcept {
         case 7U:
             return http_ascii_equals_ignore_case(field_name, "Trailer");
         case 11U:
-            return http_ascii_equals_ignore_case(field_name, "Content-MD5") ||
-                   http_ascii_equals_ignore_case(field_name, "Repr-Digest");
+            return http_ascii_equals_ignore_case(field_name, "Content-MD5") || http_ascii_equals_ignore_case(field_name, "Repr-Digest");
         case 12U:
             return http_ascii_equals_ignore_case(field_name, "Content-Type");
         case 13U:
             return http_ascii_equals_ignore_case(field_name, "Content-Range");
         case 14U:
-            return http_ascii_equals_ignore_case(field_name, "Content-Length") ||
-                   http_ascii_equals_ignore_case(field_name, "Content-Digest");
+            return http_ascii_equals_ignore_case(field_name, "Content-Length") || http_ascii_equals_ignore_case(field_name, "Content-Digest");
         case 16U:
-            return http_ascii_equals_ignore_case(field_name, "Content-Encoding") ||
-                   http_ascii_equals_ignore_case(field_name, "Content-Language");
+            return http_ascii_equals_ignore_case(field_name, "Content-Encoding") || http_ascii_equals_ignore_case(field_name, "Content-Language");
         case 17U:
             return http_ascii_equals_ignore_case(field_name, "Transfer-Encoding");
         case 19U:
@@ -2271,17 +2126,14 @@ void sanitize_http_304_response_headers(http_response& response) {
     response.commit_headers(std::move(staged));
 }
 
-void detail::merge_http_304_response_headers_into(
-    std::vector<http_header>& cached_headers, detail::http_header_range_view not_modified_headers) {
+void detail::merge_http_304_response_headers_into(std::vector<http_header>& cached_headers, detail::http_header_range_view not_modified_headers) {
     merge_304_headers_impl(cached_headers, not_modified_headers);
 }
 
-void detail::merge_http_304_response_headers_into(
-    http_response_headers& cached_headers, detail::http_header_range_view not_modified_headers) {
+void detail::merge_http_304_response_headers_into(http_response_headers& cached_headers, detail::http_header_range_view not_modified_headers) {
     merge_304_headers_impl(cached_headers, not_modified_headers);
 }
-void merge_http_304_response_headers(
-    http_response& cached_response, const http_response& not_modified_response) {
+void merge_http_304_response_headers(http_response& cached_response, const http_response& not_modified_response) {
     auto staged = cached_response.headers().clone(not_modified_response.headers().size());
     merge_http_304_response_headers(staged, not_modified_response.headers());
     cached_response.commit_headers(std::move(staged));
@@ -2318,21 +2170,16 @@ namespace ruvia::detail {
     return utc;
 }
 
-std::optional<std::time_t> http_civil_to_time_t(
-    int year, int month, int day, int hour, int minute, int second) noexcept {
-    if (year < static_cast<int>((std::chrono::year::min)()) || year > static_cast<int>((std::chrono::year::max)()) ||
-        month < 1 || month > 12 || day < 1 || day > 31 || hour < 0 || hour > 23 || minute < 0 || minute > 59 ||
-        second < 0 || second > 60) {
+std::optional<std::time_t> http_civil_to_time_t(int year, int month, int day, int hour, int minute, int second) noexcept {
+    if (year < static_cast<int>((std::chrono::year::min)()) || year > static_cast<int>((std::chrono::year::max)()) || month < 1 || month > 12 || day < 1 || day > 31 || hour < 0 || hour > 23 || minute < 0 || minute > 59 || second < 0 || second > 60) {
         return std::nullopt;
     }
-    const std::chrono::year_month_day date{std::chrono::year{year}, std::chrono::month{static_cast<unsigned>(month)},
-        std::chrono::day{static_cast<unsigned>(day)}};
+    const std::chrono::year_month_day date{std::chrono::year{year}, std::chrono::month{static_cast<unsigned>(month)}, std::chrono::day{static_cast<unsigned>(day)}};
     if (!date.ok()) {
         return std::nullopt;
     }
     const auto days_since_epoch = static_cast<std::int64_t>(std::chrono::sys_days{date}.time_since_epoch().count());
-    const auto total = days_since_epoch * 86400 + static_cast<std::int64_t>(hour) * 3600 +
-                       static_cast<std::int64_t>(minute) * 60 + static_cast<std::int64_t>(second);
+    const auto total = days_since_epoch * 86400 + static_cast<std::int64_t>(hour) * 3600 + static_cast<std::int64_t>(minute) * 60 + static_cast<std::int64_t>(second);
     if (!std::in_range<std::time_t>(total)) {
         return std::nullopt;
     }
@@ -2414,8 +2261,7 @@ constexpr std::array<std::string_view, 7> http_weekday_names{"Sun", "Mon", "Tue"
 }
 
 [[nodiscard]] bool is_long_weekday(std::string_view value) noexcept {
-    constexpr std::array<std::string_view, 7> weekdays{
-        "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"};
+    constexpr std::array<std::string_view, 7> weekdays{"Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"};
     return std::ranges::find(weekdays, value) != weekdays.end();
 }
 
@@ -2434,9 +2280,7 @@ constexpr std::array<std::string_view, 7> http_weekday_names{"Sun", "Mon", "Tue"
 }
 
 [[nodiscard]] std::optional<std::time_t> parse_imf_fixdate(std::string_view value) noexcept {
-    if (value.size() != http_imf_fixdate_size || !is_short_weekday(value.substr(0, 3)) || value[3] != ',' ||
-        value[4] != ' ' || value[7] != ' ' || value[11] != ' ' || value[16] != ' ' ||
-        value[19] != ':' || value[22] != ':' || value[25] != ' ' || value.substr(26, 3) != "GMT") {
+    if (value.size() != http_imf_fixdate_size || !is_short_weekday(value.substr(0, 3)) || value[3] != ',' || value[4] != ' ' || value[7] != ' ' || value[11] != ' ' || value[16] != ' ' || value[19] != ':' || value[22] != ':' || value[25] != ' ' || value.substr(26, 3) != "GMT") {
         return std::nullopt;
     }
     const auto day = parse_fixed_digits(value.substr(5, 2));
@@ -2452,9 +2296,7 @@ constexpr std::array<std::string_view, 7> http_weekday_names{"Sun", "Mon", "Tue"
 }
 
 [[nodiscard]] std::optional<std::time_t> parse_asctime_date(std::string_view value) noexcept {
-    if (value.size() != 24 || value[3] != ' ' || value[7] != ' ' || value[10] != ' ' ||
-        value[13] != ':' || value[16] != ':' || value[19] != ' ' ||
-        !is_short_weekday(value.substr(0, 3))) {
+    if (value.size() != 24 || value[3] != ' ' || value[7] != ' ' || value[10] != ' ' || value[13] != ':' || value[16] != ':' || value[19] != ' ' || !is_short_weekday(value.substr(0, 3))) {
         return std::nullopt;
     }
     const auto month = month_index(value.substr(4, 3));
@@ -2492,8 +2334,7 @@ constexpr std::array<std::string_view, 7> http_weekday_names{"Sun", "Mon", "Tue"
         return std::nullopt;
     }
     const auto body = value.substr(comma + 2);
-    if (body.size() != 22 || body[2] != '-' || body[6] != '-' || body[9] != ' ' ||
-        body[12] != ':' || body[15] != ':' || body[18] != ' ' || body.substr(19, 3) != "GMT") {
+    if (body.size() != 22 || body[2] != '-' || body[6] != '-' || body[9] != ' ' || body[12] != ':' || body[15] != ':' || body[18] != ' ' || body.substr(19, 3) != "GMT") {
         return std::nullopt;
     }
     const auto day = parse_fixed_digits(body.substr(0, 2));
@@ -2518,8 +2359,7 @@ constexpr std::array<std::string_view, 7> http_weekday_names{"Sun", "Mon", "Tue"
     // RFC 9110 section 5.6.7 applies the rolling 50-year pivot to the full
     // timestamp. Equal years alone do not establish that a date is in range.
     const std::array date_fields{month, *day, *hour, *minute, *second};
-    const std::array reference_fields{current_utc->tm_mon + 1, current_utc->tm_mday, current_utc->tm_hour,
-        current_utc->tm_min, current_utc->tm_sec};
+    const std::array reference_fields{current_utc->tm_mon + 1, current_utc->tm_mday, current_utc->tm_hour, current_utc->tm_min, current_utc->tm_sec};
     if (year == current_year + 50 && date_fields > reference_fields) {
         year -= 100;
     }

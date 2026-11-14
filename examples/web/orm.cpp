@@ -32,16 +32,9 @@
 namespace {
 using namespace ruvia;
 
-RUVIA_DB_ENTITY(device, "orm_demo_device",
-    RUVIA_DB_COLUMN(id, std::int64_t, db_column_options{.primary_key_ = true}),
-    RUVIA_DB_COLUMN(name, std::string),
-    RUVIA_DB_COLUMN(revision, std::int64_t, db_column_options{.default_expression_ = fixed_string{"1"}}),
-    RUVIA_DB_COLUMN(labels, std::vector<std::string>, db_column_options{.default_expression_ = fixed_string{"ARRAY[]::text[]"}}))
+RUVIA_DB_ENTITY(device, "orm_demo_device", RUVIA_DB_COLUMN(id, std::int64_t, db_column_options{.primary_key_ = true}), RUVIA_DB_COLUMN(name, std::string), RUVIA_DB_COLUMN(revision, std::int64_t, db_column_options{.default_expression_ = fixed_string{"1"}}), RUVIA_DB_COLUMN(labels, std::vector<std::string>, db_column_options{.default_expression_ = fixed_string{"ARRAY[]::text[]"}}))
 
-RUVIA_DB_PROJECTION(device_summary,
-    RUVIA_DB_COLUMN(id, std::int64_t),
-    RUVIA_DB_COLUMN(label, std::string),
-    RUVIA_DB_COLUMN(rank, std::int64_t))
+RUVIA_DB_PROJECTION(device_summary, RUVIA_DB_COLUMN(id, std::int64_t), RUVIA_DB_COLUMN(label, std::string), RUVIA_DB_COLUMN(rank, std::int64_t))
 
 auto migrations() {
     db_query expressions;
@@ -77,9 +70,7 @@ task<void> demonstrate(db_client& db) {
     co_await devices.upsert(input, upsert_options);
 
     const std::array<db_find_order, 1> find_order{{{"id", db_order_direction::asc}}};
-    const db_find_options find_options{.where_ = device::column<"id">().between(1, 100) && device::column<"name">().like("%station%") && device::column<"labels">().array_contains({"telemetry"}),
-        .order_ = find_order,
-        .take_ = 20};
+    const db_find_options find_options{.where_ = device::column<"id">().between(1, 100) && device::column<"name">().like("%station%") && device::column<"labels">().array_contains({"telemetry"}), .order_ = find_order, .take_ = 20};
     auto [found, total] = co_await devices.find_and_count(find_options);
     std::cout << "total=" << total << '\n';
     for (const auto& device : found) {
@@ -107,9 +98,7 @@ task<void> demonstrate(db_client& db) {
     db_query expressions;
     auto summary = devices.query_builder("d");
     const db_order_term summary_order[]{{expressions.column("id", "d")}};
-    summary.select({{"id"},
-        {"label", expressions.call("upper", {expressions.column("name", "d")})},
-        {"rank", expressions.over(expressions.call("row_number"), {.order_by_ = summary_order})}});
+    summary.select({{"id"}, {"label", expressions.call("upper", {expressions.column("name", "d")})}, {"rank", expressions.over(expressions.call("row_number"), {.order_by_ = summary_order})}});
     const auto summaries = co_await summary.get_many<device_summary>();
     for (const auto& item : summaries) {
         std::cout << item.get<"rank">() << ": " << item.get<"label">() << '\n';
@@ -131,10 +120,7 @@ task<void> demonstrate(db_client& db) {
     auto candidates = transactional.query_builder("candidate");
     candidates.where(device::column<"id">() == 1).limit(1).set_lock({.mode_ = db_row_lock::update, .skip_locked_ = true});
     auto claim = transactional.update_builder("target");
-    claim.update_from_cte("candidates", "candidate")
-        .set("name", "Claimed device")
-        .where(device::column<"id">("target") == device::column<"id">("candidate"))
-        .returning();
+    claim.update_from_cte("candidates", "candidate").set("name", "Claimed device").where(device::column<"id">("target") == device::column<"id">("candidate")).returning();
     auto claimed = transactional.query_builder("claimed");
     claimed.with("candidates", candidates).with("claimed", claim).from_cte("claimed");
     const auto claimed_devices = co_await claimed.get_many();
@@ -142,8 +128,7 @@ task<void> demonstrate(db_client& db) {
     const db_find_options transaction_page{.where_ = device::column<"id">() == 1, .skip_ = 10, .take_ = 1};
     auto [empty_page, transaction_total] = co_await transactional.find_and_count(transaction_page);
     std::cout << "empty page=" << empty_page.size() << ", transaction total=" << transaction_total << '\n';
-    const auto locked = co_await transactional.find_one({.where_ = device::column<"id">() == 1,
-        .lock_ = db_lock_options{.mode_ = db_row_lock::update, .skip_locked_ = true}});
+    const auto locked = co_await transactional.find_one({.where_ = device::column<"id">() == 1, .lock_ = db_lock_options{.mode_ = db_row_lock::update, .skip_locked_ = true}});
     if (locked) {
         co_await transactional.remove(*locked);
     }
@@ -181,8 +166,7 @@ task<void> run(const db_config& settings, event_loop_attachment& attachment, con
             redis = std::make_unique<redis_client>(attachment.loop(), config);
             co_await redis->connect();
             auto store_value = redis->redis();
-            db = std::make_unique<db_client>(attachment.loop(), settings, store_value,
-                db_cache_config{.key_prefix_ = "orm-demo"});
+            db = std::make_unique<db_client>(attachment.loop(), settings, store_value, db_cache_config{.key_prefix_ = "orm-demo"});
 #else
             (void)port;
             throw std::invalid_argument("ORM query caching requires Redis support");

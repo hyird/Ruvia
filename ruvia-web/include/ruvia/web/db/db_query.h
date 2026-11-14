@@ -173,9 +173,9 @@ private:
     friend class detail::db_owned_expression;
     friend class detail::db_query_compiler;
     friend class detail::db_relation_plan;
-    db_expression(const detail::db_query_storage* owner_value, std::size_t node_value) noexcept
-        : owner_(owner_value),
-          node_(node_value) {}
+    db_expression(const detail::db_query_storage* owner_value, std::size_t node_value) noexcept :
+        owner_(owner_value),
+        node_(node_value) {}
     const detail::db_query_storage* owner_{nullptr};
     std::size_t node_{0};
 };
@@ -259,92 +259,59 @@ public:
     [[nodiscard]] bool empty() const noexcept {
         return kind_ == leaf_kind::empty;
     }
-    [[nodiscard]] db_expression import_into(
-        db_query& target, std::string_view table = {}, std::string_view alias = {}) const;
+    [[nodiscard]] db_expression import_into(db_query& target, std::string_view table = {}, std::string_view alias = {}) const;
 
-    [[nodiscard]] static db_owned_expression from_borrowed(
-        db_expression expression, borrowed_text table = {}, bool aliased = false) noexcept;
-    [[nodiscard]] static db_owned_expression from_expression(
-        db_expression expression, std::string_view table = {}, bool aliased = false);
+    [[nodiscard]] static db_owned_expression from_borrowed(db_expression expression, borrowed_text table = {}, bool aliased = false) noexcept;
+    [[nodiscard]] static db_owned_expression from_expression(db_expression expression, std::string_view table = {}, bool aliased = false);
     [[nodiscard]] static db_owned_expression make_null() noexcept;
     [[nodiscard]] static db_owned_expression make_default() noexcept;
     [[nodiscard]] static db_owned_expression make_star(std::string_view table = {});
-    [[nodiscard]] static db_owned_expression make_column(
-        std::string_view name, std::string_view table = {}, bool explicit_alias = false);
-    [[nodiscard]] static db_owned_expression make_static_column(
-        std::string_view name, std::string_view table, std::string_view alias);
+    [[nodiscard]] static db_owned_expression make_column(std::string_view name, std::string_view table = {}, bool explicit_alias = false);
+    [[nodiscard]] static db_owned_expression make_static_column(std::string_view name, std::string_view table, std::string_view alias);
     [[nodiscard]] static db_owned_expression make_excluded(std::string_view name);
     [[nodiscard]] static db_owned_expression make_static_excluded(std::string_view name) noexcept;
     [[nodiscard]] static db_owned_expression make_value(const db_value& value);
-    [[nodiscard]] static db_owned_expression make_raw_sql(
-        std::span<const std::string_view> parts, std::span<const db_expr> args);
-    [[nodiscard]] static db_owned_expression make_call(
-        std::string_view function, std::span<const db_expr> args);
+    [[nodiscard]] static db_owned_expression make_raw_sql(std::span<const std::string_view> parts, std::span<const db_expr> args);
+    [[nodiscard]] static db_owned_expression make_call(std::string_view function, std::span<const db_expr> args);
     [[nodiscard]] static db_owned_expression make_coalesce(std::span<const db_expr> args);
-    [[nodiscard]] static db_owned_expression make_null_if(
-        const db_owned_expression& lhs, const db_owned_expression& rhs);
+    [[nodiscard]] static db_owned_expression make_null_if(const db_owned_expression& lhs, const db_owned_expression& rhs);
     [[nodiscard]] static db_owned_expression make_greatest(std::span<const db_expr> args);
     [[nodiscard]] static db_owned_expression make_least(std::span<const db_expr> args);
-    [[nodiscard]] static db_owned_expression make_case_when(
-        std::span<const db_case_branch> branches, const db_owned_expression& otherwise);
-    [[nodiscard]] static db_owned_expression make_jsonb_set(const db_owned_expression& target,
-        std::span<const std::string_view> path, const db_owned_expression& new_value, bool create_if_missing);
-    [[nodiscard]] static db_owned_expression make_json_path_op(
-        const db_owned_expression& target, db_binary_operator op, std::span<const std::string_view> path);
-    [[nodiscard]] static db_owned_expression make_aggregate(std::string_view function,
-        std::span<const db_expr> args, bool distinct, std::span<const db_order_term> order);
+    [[nodiscard]] static db_owned_expression make_case_when(std::span<const db_case_branch> branches, const db_owned_expression& otherwise);
+    [[nodiscard]] static db_owned_expression make_jsonb_set(const db_owned_expression& target, std::span<const std::string_view> path, const db_owned_expression& new_value, bool create_if_missing);
+    [[nodiscard]] static db_owned_expression make_json_path_op(const db_owned_expression& target, db_binary_operator op, std::span<const std::string_view> path);
+    [[nodiscard]] static db_owned_expression make_aggregate(std::string_view function, std::span<const db_expr> args, bool distinct, std::span<const db_order_term> order);
     [[nodiscard]] static db_owned_expression make_count_star();
-    [[nodiscard]] static db_owned_expression make_filter(
-        const db_owned_expression& aggregate, const db_owned_expression& predicate);
-    [[nodiscard]] static db_owned_expression make_over(
-        const db_owned_expression& function, const db_window_options& window);
-    [[nodiscard]] static db_owned_expression make_within_group(
-        const db_owned_expression& function, std::span<const db_order_term> order);
-    [[nodiscard]] static db_owned_expression make_cast(
-        const db_owned_expression& operand, const db_type_definition& type);
-    [[nodiscard]] static db_owned_expression make_at_time_zone(
-        const db_owned_expression& operand, const db_owned_expression& zone);
-    [[nodiscard]] static db_owned_expression make_extract(
-        db_date_part part, const db_owned_expression& operand);
-    [[nodiscard]] static db_owned_expression make_subscript(
-        const db_owned_expression& array, const db_owned_expression& index);
-    [[nodiscard]] static db_owned_expression make_collate(
-        const db_owned_expression& operand, std::string_view collation);
-    [[nodiscard]] static db_owned_expression make_binary(
-        const db_owned_expression& lhs, db_binary_operator op, const db_owned_expression& rhs);
-    [[nodiscard]] static db_owned_expression make_binary(
-        db_owned_expression&& lhs, db_binary_operator op, const db_owned_expression& rhs);
-    [[nodiscard]] static db_owned_expression make_unary(
-        db_unary_operator op, const db_owned_expression& operand);
-    [[nodiscard]] static db_owned_expression make_unary(
-        db_unary_operator op, db_owned_expression&& operand);
-    [[nodiscard]] static db_owned_expression make_between(const db_owned_expression& operand,
-        const db_value& lower, const db_value& upper, bool negate);
+    [[nodiscard]] static db_owned_expression make_filter(const db_owned_expression& aggregate, const db_owned_expression& predicate);
+    [[nodiscard]] static db_owned_expression make_over(const db_owned_expression& function, const db_window_options& window);
+    [[nodiscard]] static db_owned_expression make_within_group(const db_owned_expression& function, std::span<const db_order_term> order);
+    [[nodiscard]] static db_owned_expression make_cast(const db_owned_expression& operand, const db_type_definition& type);
+    [[nodiscard]] static db_owned_expression make_at_time_zone(const db_owned_expression& operand, const db_owned_expression& zone);
+    [[nodiscard]] static db_owned_expression make_extract(db_date_part part, const db_owned_expression& operand);
+    [[nodiscard]] static db_owned_expression make_subscript(const db_owned_expression& array, const db_owned_expression& index);
+    [[nodiscard]] static db_owned_expression make_collate(const db_owned_expression& operand, std::string_view collation);
+    [[nodiscard]] static db_owned_expression make_binary(const db_owned_expression& lhs, db_binary_operator op, const db_owned_expression& rhs);
+    [[nodiscard]] static db_owned_expression make_binary(db_owned_expression&& lhs, db_binary_operator op, const db_owned_expression& rhs);
+    [[nodiscard]] static db_owned_expression make_unary(db_unary_operator op, const db_owned_expression& operand);
+    [[nodiscard]] static db_owned_expression make_unary(db_unary_operator op, db_owned_expression&& operand);
+    [[nodiscard]] static db_owned_expression make_between(const db_owned_expression& operand, const db_value& lower, const db_value& upper, bool negate);
     [[nodiscard]] static db_owned_expression make_tuple(std::span<const db_expr> elements);
-    [[nodiscard]] static db_owned_expression make_in_list(const db_owned_expression& lhs,
-        db_binary_operator op, std::size_t count, const void* context,
-        db_value (*element_at)(const void* context, std::size_t index));
+    [[nodiscard]] static db_owned_expression make_in_list(const db_owned_expression& lhs, db_binary_operator op, std::size_t count, const void* context, db_value (*element_at)(const void* context, std::size_t index));
     template <typename t_type>
-    [[nodiscard]] static db_owned_expression make_in_list(
-        const db_owned_expression& lhs, db_binary_operator op, std::span<const t_type> values) {
-        return make_in_list(lhs, op, values.size(), values.data(),
-            [](const void* context, std::size_t index) -> db_value {
-                return make_immediate_db_parameter(static_cast<const t_type*>(context)[index]);
-            });
+    [[nodiscard]] static db_owned_expression make_in_list(const db_owned_expression& lhs, db_binary_operator op, std::span<const t_type> values) {
+        return make_in_list(lhs, op, values.size(), values.data(), [](const void* context, std::size_t index) -> db_value {
+            return make_immediate_db_parameter(static_cast<const t_type*>(context)[index]);
+        });
     }
-    [[nodiscard]] static db_owned_expression make_in_expr_list(
-        const db_owned_expression& lhs, db_binary_operator op, std::span<const db_tuple> values);
-    [[nodiscard]] static db_owned_expression make_in_subquery(
-        const db_owned_expression& lhs, db_binary_operator op, const db_query& subquery);
+    [[nodiscard]] static db_owned_expression make_in_expr_list(const db_owned_expression& lhs, db_binary_operator op, std::span<const db_tuple> values);
+    [[nodiscard]] static db_owned_expression make_in_subquery(const db_owned_expression& lhs, db_binary_operator op, const db_query& subquery);
     [[nodiscard]] static db_owned_expression make_exists(const db_query& subquery);
-    [[nodiscard]] static db_owned_expression make_array_op(const db_owned_expression& lhs,
-        db_binary_operator op, std::size_t count, const void* context,
-        db_value (*element_at)(const void* context, std::size_t index),
-        const db_type_definition& array_type);
+    [[nodiscard]] static db_owned_expression make_array_op(const db_owned_expression& lhs, db_binary_operator op, std::size_t count, const void* context, db_value (*element_at)(const void* context, std::size_t index), const db_type_definition& array_type);
     template <typename t_type>
-    [[nodiscard]] static db_owned_expression make_array_op(const db_owned_expression& lhs,
-        db_binary_operator op, std::span<const t_type> values, const db_type_definition& array_type) {
-        return make_array_op(lhs, op, values.size(), values.data(), [](const void* context, std::size_t index) -> db_value { return make_immediate_db_parameter(static_cast<const t_type*>(context)[index]); }, array_type);
+    [[nodiscard]] static db_owned_expression make_array_op(const db_owned_expression& lhs, db_binary_operator op, std::span<const t_type> values, const db_type_definition& array_type) {
+        return make_array_op(lhs, op, values.size(), values.data(), [](const void* context, std::size_t index) -> db_value {
+            return make_immediate_db_parameter(static_cast<const t_type*>(context)[index]);
+        }, array_type);
     }
 
 private:
@@ -352,10 +319,8 @@ private:
 
     [[nodiscard]] static tree_owner_type allocate_tree();
     [[nodiscard]] static db_owned_expression from_tree(tree_owner_type tree) noexcept;
-    [[nodiscard]] static db_owned_expression make_variadic(
-        db_node_kind kind, std::span<const db_expr> args, std::string_view function);
-    [[nodiscard]] static db_owned_expression make_two_operand_node(
-        db_node_kind kind, const db_owned_expression& lhs, const db_owned_expression& rhs);
+    [[nodiscard]] static db_owned_expression make_variadic(db_node_kind kind, std::span<const db_expr> args, std::string_view function);
+    [[nodiscard]] static db_owned_expression make_two_operand_node(db_node_kind kind, const db_owned_expression& lhs, const db_owned_expression& rhs);
     [[nodiscard]] std::size_t append_to_tree(db_expr_tree& target) const;
     leaf_kind kind_{leaf_kind::empty};
     bool aliased_{false};
@@ -363,8 +328,8 @@ private:
     std::string_view text_{};
     std::string_view table_{};
     union scalar_union {
-        constexpr scalar_union() noexcept
-            : signed_value_(0) {}
+        constexpr scalar_union() noexcept :
+            signed_value_(0) {}
         std::int64_t signed_value_;
         std::uint64_t unsigned_value_;
         double double_value_;
@@ -379,10 +344,10 @@ private:
 class db_predicate final {
 public:
     db_predicate() noexcept = default;
-    db_predicate(detail::db_owned_expression owned) noexcept
-        : owned_(std::move(owned)) {}
-    db_predicate(db_expression expression) noexcept
-        : owned_(detail::db_owned_expression::from_borrowed(expression, {}, true)) {}
+    db_predicate(detail::db_owned_expression owned) noexcept :
+        owned_(std::move(owned)) {}
+    db_predicate(db_expression expression) noexcept :
+        owned_(detail::db_owned_expression::from_borrowed(expression, {}, true)) {}
     db_predicate(const db_predicate&) = default;
     db_predicate& operator=(const db_predicate&) = default;
     db_predicate(db_predicate&&) noexcept = default;
@@ -400,8 +365,7 @@ public:
     [[nodiscard]] bool empty() const noexcept {
         return owned_.empty();
     }
-    [[nodiscard]] db_expression expression(
-        db_query& query, std::string_view table = {}, std::string_view alias = {}) const {
+    [[nodiscard]] db_expression expression(db_query& query, std::string_view table = {}, std::string_view alias = {}) const {
         return owned_.empty() ? db_expression{} : owned_.import_into(query, table, alias);
     }
     db_predicate& and_where(const db_predicate& other) {
@@ -411,8 +375,7 @@ public:
         if (empty()) {
             owned_ = other.owned_;
         } else {
-            owned_ = detail::db_owned_expression::make_binary(
-                std::move(owned_), db_binary_operator::and_value, other.owned_);
+            owned_ = detail::db_owned_expression::make_binary(std::move(owned_), db_binary_operator::and_value, other.owned_);
         }
         return *this;
     }
@@ -423,8 +386,7 @@ public:
         if (empty()) {
             owned_ = other.owned_;
         } else {
-            owned_ = detail::db_owned_expression::make_binary(
-                std::move(owned_), db_binary_operator::or_value, other.owned_);
+            owned_ = detail::db_owned_expression::make_binary(std::move(owned_), db_binary_operator::or_value, other.owned_);
         }
         return *this;
     }
@@ -438,8 +400,7 @@ public:
         if (value.empty()) {
             throw std::invalid_argument("cannot negate an empty database condition");
         }
-        return db_predicate(
-            detail::db_owned_expression::make_unary(db_unary_operator::not_value, std::move(value.owned_)));
+        return db_predicate(detail::db_owned_expression::make_unary(db_unary_operator::not_value, std::move(value.owned_)));
     }
 
 private:
@@ -450,8 +411,7 @@ private:
         if (left.empty() || right.empty()) {
             throw std::invalid_argument("cannot combine empty database conditions");
         }
-        return db_predicate(
-            detail::db_owned_expression::make_binary(std::move(left.owned_), op, right.owned_));
+        return db_predicate(detail::db_owned_expression::make_binary(std::move(left.owned_), op, right.owned_));
     }
     detail::db_owned_expression owned_{};
 };
@@ -459,23 +419,21 @@ private:
 class db_expr final {
 public:
     db_expr() noexcept = default;
-    db_expr(detail::db_owned_expression owned) noexcept
-        : owned_(std::move(owned)) {}
-    db_expr(db_expression expression, borrowed_text table = {}, bool aliased = false) noexcept
-        : owned_(detail::db_owned_expression::from_borrowed(expression, table, aliased)) {}
-    db_expr(const db_predicate& predicate)
-        : owned_(predicate.owned_) {}
-    db_expr(db_predicate&& predicate) noexcept
-        : owned_(std::move(predicate.owned_)) {}
+    db_expr(detail::db_owned_expression owned) noexcept :
+        owned_(std::move(owned)) {}
+    db_expr(db_expression expression, borrowed_text table = {}, bool aliased = false) noexcept :
+        owned_(detail::db_owned_expression::from_borrowed(expression, table, aliased)) {}
+    db_expr(const db_predicate& predicate) :
+        owned_(predicate.owned_) {}
+    db_expr(db_predicate&& predicate) noexcept :
+        owned_(std::move(predicate.owned_)) {}
 
-    [[nodiscard]] static db_expr from_expression(
-        db_expression expression, std::string_view table = {}, bool aliased = false) {
+    [[nodiscard]] static db_expr from_expression(db_expression expression, std::string_view table = {}, bool aliased = false) {
         return db_expr(detail::db_owned_expression::from_expression(expression, table, aliased));
     }
     template <detail::db_parameter v_type>
     [[nodiscard]] static db_expr value(v_type&& val) {
-        return db_expr(detail::db_owned_expression::make_value(
-            detail::make_immediate_db_parameter(std::forward<v_type>(val))));
+        return db_expr(detail::db_owned_expression::make_value(detail::make_immediate_db_parameter(std::forward<v_type>(val))));
     }
     [[nodiscard]] static db_expr null() noexcept {
         return db_expr(detail::db_owned_expression::make_null());
@@ -498,10 +456,8 @@ public:
     [[nodiscard]] static db_expr raw_sql(std::span<const std::string_view> parts, std::span<const db_expr> args) {
         return db_expr(detail::db_owned_expression::make_raw_sql(parts, args));
     }
-    [[nodiscard]] static db_expr raw_sql(
-        std::initializer_list<std::string_view> parts, std::initializer_list<db_expr> args) {
-        return raw_sql(std::span<const std::string_view>(parts.begin(), parts.size()),
-            std::span<const db_expr>(args.begin(), args.size()));
+    [[nodiscard]] static db_expr raw_sql(std::initializer_list<std::string_view> parts, std::initializer_list<db_expr> args) {
+        return raw_sql(std::span<const std::string_view>(parts.begin(), parts.size()), std::span<const db_expr>(args.begin(), args.size()));
     }
     [[nodiscard]] static db_expr now() {
         return call("now");
@@ -539,10 +495,8 @@ public:
     [[nodiscard]] static db_expr least(std::initializer_list<db_expr> args) {
         return least(std::span<const db_expr>(args.begin(), args.size()));
     }
-    [[nodiscard]] static inline db_expr case_when(
-        std::span<const db_case_branch> branches, const db_expr& otherwise = {});
-    [[nodiscard]] static inline db_expr case_when(
-        std::initializer_list<db_case_branch> branches, const db_expr& otherwise = {});
+    [[nodiscard]] static inline db_expr case_when(std::span<const db_case_branch> branches, const db_expr& otherwise = {});
+    [[nodiscard]] static inline db_expr case_when(std::initializer_list<db_case_branch> branches, const db_expr& otherwise = {});
 
     [[nodiscard]] static db_expr jsonb_build_object(std::span<const db_expr> args) {
         return call("jsonb_build_object", args);
@@ -556,23 +510,18 @@ public:
     [[nodiscard]] static db_expr jsonb_build_array(std::initializer_list<db_expr> args) {
         return call("jsonb_build_array", args);
     }
-    [[nodiscard]] static db_expr jsonb_set(const db_expr& target, std::span<const std::string_view> path,
-        const db_expr& new_value, bool create_if_missing = true) {
-        return db_expr(detail::db_owned_expression::make_jsonb_set(
-            target.owned_, path, new_value.owned_, create_if_missing));
+    [[nodiscard]] static db_expr jsonb_set(const db_expr& target, std::span<const std::string_view> path, const db_expr& new_value, bool create_if_missing = true) {
+        return db_expr(detail::db_owned_expression::make_jsonb_set(target.owned_, path, new_value.owned_, create_if_missing));
     }
-    [[nodiscard]] static db_expr jsonb_set(const db_expr& target, std::initializer_list<std::string_view> path,
-        const db_expr& new_value, bool create_if_missing = true) {
+    [[nodiscard]] static db_expr jsonb_set(const db_expr& target, std::initializer_list<std::string_view> path, const db_expr& new_value, bool create_if_missing = true) {
         return jsonb_set(target, std::span<const std::string_view>(path.begin(), path.size()), new_value, create_if_missing);
     }
     [[nodiscard]] static db_expr jsonb_strip_nulls(const db_expr& target) {
         return call("jsonb_strip_nulls", std::span<const db_expr>(&target, 1));
     }
 
-    [[nodiscard]] static inline db_expr aggregate(std::string_view function, std::span<const db_expr> args,
-        bool distinct = false, std::span<const db_order_term> order = {});
-    [[nodiscard]] static inline db_expr aggregate(std::string_view function, std::initializer_list<db_expr> args,
-        bool distinct = false, std::initializer_list<db_order_term> order = {});
+    [[nodiscard]] static inline db_expr aggregate(std::string_view function, std::span<const db_expr> args, bool distinct = false, std::span<const db_order_term> order = {});
+    [[nodiscard]] static inline db_expr aggregate(std::string_view function, std::initializer_list<db_expr> args, bool distinct = false, std::initializer_list<db_order_term> order = {});
     [[nodiscard]] static db_expr count() {
         return db_expr(detail::db_owned_expression::make_count_star());
     }
@@ -589,8 +538,7 @@ public:
     [[nodiscard]] bool empty() const noexcept {
         return owned_.empty();
     }
-    [[nodiscard]] db_expression expression(
-        db_query& target, std::string_view table = {}, std::string_view alias = {}) const {
+    [[nodiscard]] db_expression expression(db_query& target, std::string_view table = {}, std::string_view alias = {}) const {
         if (owned_.empty()) {
             throw std::invalid_argument("cannot evaluate an empty database expression");
         }
@@ -740,15 +688,11 @@ public:
     }
     template <detail::db_parameter lower_type, detail::db_parameter upper_type>
     [[nodiscard]] db_predicate between(lower_type&& lower, upper_type&& upper) const {
-        return db_predicate(detail::db_owned_expression::make_between(owned_,
-            detail::make_immediate_db_parameter(std::forward<lower_type>(lower)),
-            detail::make_immediate_db_parameter(std::forward<upper_type>(upper)), false));
+        return db_predicate(detail::db_owned_expression::make_between(owned_, detail::make_immediate_db_parameter(std::forward<lower_type>(lower)), detail::make_immediate_db_parameter(std::forward<upper_type>(upper)), false));
     }
     template <detail::db_parameter lower_type, detail::db_parameter upper_type>
     [[nodiscard]] db_predicate not_between(lower_type&& lower, upper_type&& upper) const {
-        return db_predicate(detail::db_owned_expression::make_between(owned_,
-            detail::make_immediate_db_parameter(std::forward<lower_type>(lower)),
-            detail::make_immediate_db_parameter(std::forward<upper_type>(upper)), true));
+        return db_predicate(detail::db_owned_expression::make_between(owned_, detail::make_immediate_db_parameter(std::forward<lower_type>(lower)), detail::make_immediate_db_parameter(std::forward<upper_type>(upper)), true));
     }
 
     [[nodiscard]] const detail::db_owned_expression& owned() const& noexcept RUVIA_LIFETIMEBOUND {
@@ -901,17 +845,17 @@ struct db_selection final {
     db_expr expression_{};
 
     db_selection() = default;
-    db_selection(const char* column)
-        : column_(column) {}
-    db_selection(std::string_view column)
-        : column_(column) {}
+    db_selection(const char* column) :
+        column_(column) {}
+    db_selection(std::string_view column) :
+        column_(column) {}
     template <typename traits_type, typename allocator_type>
     db_selection(std::basic_string<char, traits_type, allocator_type>&&) = delete;
     template <typename traits_type, typename allocator_type>
     db_selection(const std::basic_string<char, traits_type, allocator_type>&&) = delete;
-    db_selection(borrowed_text column, db_expr expression)
-        : column_(column),
-          expression_(std::move(expression)) {}
+    db_selection(borrowed_text column, db_expr expression) :
+        column_(column),
+        expression_(std::move(expression)) {}
     // A real SQL wildcard, not a named field. Its qualifier is owned.
     [[nodiscard]] static db_selection star(std::string_view table = {}) {
         db_selection result;
@@ -925,8 +869,7 @@ struct db_selection final {
     [[nodiscard]] bool has_expression() const noexcept {
         return !expression_.empty();
     }
-    [[nodiscard]] db_expression expression(
-        db_query& target, std::string_view table = {}, std::string_view alias = {}) const {
+    [[nodiscard]] db_expression expression(db_query& target, std::string_view table = {}, std::string_view alias = {}) const {
         return expression_.empty() ? db_expression{} : expression_.expression(target, table, alias);
     }
 
@@ -941,8 +884,7 @@ struct db_assignment final {
     [[nodiscard]] bool empty() const noexcept {
         return value_.empty();
     }
-    [[nodiscard]] db_expression expression(
-        db_query& target, std::string_view table = {}, std::string_view alias = {}) const {
+    [[nodiscard]] db_expression expression(db_query& target, std::string_view table = {}, std::string_view alias = {}) const {
         return value_.empty() ? db_expression{} : value_.expression(target, table, alias);
     }
 };
@@ -967,14 +909,11 @@ inline db_expr db_expr::case_when(std::span<const db_case_branch> branches, cons
 inline db_expr db_expr::case_when(std::initializer_list<db_case_branch> branches, const db_expr& otherwise) {
     return case_when(std::span<const db_case_branch>(branches.begin(), branches.size()), otherwise);
 }
-inline db_expr db_expr::aggregate(std::string_view function, std::span<const db_expr> args,
-    bool distinct, std::span<const db_order_term> order) {
+inline db_expr db_expr::aggregate(std::string_view function, std::span<const db_expr> args, bool distinct, std::span<const db_order_term> order) {
     return db_expr(detail::db_owned_expression::make_aggregate(function, args, distinct, order));
 }
-inline db_expr db_expr::aggregate(std::string_view function, std::initializer_list<db_expr> args,
-    bool distinct, std::initializer_list<db_order_term> order) {
-    return aggregate(function, std::span<const db_expr>(args.begin(), args.size()), distinct,
-        std::span<const db_order_term>(order.begin(), order.size()));
+inline db_expr db_expr::aggregate(std::string_view function, std::initializer_list<db_expr> args, bool distinct, std::initializer_list<db_order_term> order) {
+    return aggregate(function, std::span<const db_expr>(args.begin(), args.size()), distinct, std::span<const db_order_term>(order.begin(), order.size()));
 }
 inline db_expr db_expr::count(const db_expr& arg, bool distinct) {
     return aggregate("count", std::span<const db_expr>(&arg, 1), distinct);
@@ -1047,10 +986,10 @@ private:
     friend struct detail::db_query_plan;
     template <typename, typename>
     friend class db_query_builder;
-    db_statement(std::string sql, std::vector<db_value> params, bool rows)
-        : sql_(std::move(sql)),
-          params_(std::move(params)),
-          returns_rows_(rows) {}
+    db_statement(std::string sql, std::vector<db_value> params, bool rows) :
+        sql_(std::move(sql)),
+        params_(std::move(params)),
+        returns_rows_(rows) {}
     std::string sql_;
     std::vector<db_value> params_;
     bool returns_rows_{false};
@@ -1278,8 +1217,7 @@ public:
     // columns.size() * row_count and every expression must belong to this query.
     // One explicit default-only row is supported; multiple all-default rows
     // require at least one named column. A rejected batch preserves SQL semantics.
-    db_query& insert_rows(std::span<const std::string_view> columns,
-        std::span<const db_expression> values, std::size_t row_count);
+    db_query& insert_rows(std::span<const std::string_view> columns, std::span<const db_expression> values, std::size_t row_count);
     db_query& insert_from(const db_query& query);
     db_query& insert_from(db_query&& query);
     db_query& on_conflict(const db_conflict_options& conflict);
@@ -1309,8 +1247,7 @@ public:
     // statement needing more than 65535 parameters (the protocol's Int16
     // count) with std::length_error. In bound mode, raw SQL text must not
     // contain PostgreSQL positional parameters ($1); pass value() arguments.
-    [[nodiscard]] db_statement compile(db_driver driver,
-        db_parameter_mode mode = db_parameter_mode::bound) const;
+    [[nodiscard]] db_statement compile(db_driver driver, db_parameter_mode mode = db_parameter_mode::bound) const;
 
 private:
     friend class detail::db_owned_expression;
@@ -1336,8 +1273,7 @@ private:
     [[nodiscard]] std::string_view cache_id() const;
     [[nodiscard]] detail::db_cache_shape cache_shape() const;
     void copy_cache(const db_query& source, detail::db_cache_shape shape);
-    void with_columns(std::string_view name, const db_query& query, db_materialization materialization,
-        std::span<const std::string> columns);
+    void with_columns(std::string_view name, const db_query& query, db_materialization materialization, std::span<const std::string> columns);
 
     struct storage_deleter_type final {
         void operator()(detail::db_query_storage* storage) const noexcept;
@@ -1365,13 +1301,12 @@ private:
 
 class db_tuple final {
 public:
-    db_tuple(std::span<const db_expr> elements)
-        : owned_(detail::db_owned_expression::make_tuple(elements)) {}
-    db_tuple(std::initializer_list<db_expr> elements)
-        : db_tuple(std::span<const db_expr>(elements.begin(), elements.size())) {}
+    db_tuple(std::span<const db_expr> elements) :
+        owned_(detail::db_owned_expression::make_tuple(elements)) {}
+    db_tuple(std::initializer_list<db_expr> elements) :
+        db_tuple(std::span<const db_expr>(elements.begin(), elements.size())) {}
 
-    [[nodiscard]] db_expression expression(
-        db_query& target, std::string_view table = {}, std::string_view alias = {}) const {
+    [[nodiscard]] db_expression expression(db_query& target, std::string_view table = {}, std::string_view alias = {}) const {
         return owned_.import_into(target, table, alias);
     }
 
@@ -1646,13 +1581,7 @@ consteval bool is_conflict_updatable_db_column() noexcept {
 }
 template <typename c_type>
 consteval bool is_numeric_db_column() noexcept {
-    return !is_std_vector<typename c_type::value_type>::value &&
-           (c_type::data_type == db_data_type::small_int ||
-               c_type::data_type == db_data_type::integer ||
-               c_type::data_type == db_data_type::big_int ||
-               c_type::data_type == db_data_type::numeric ||
-               c_type::data_type == db_data_type::real ||
-               c_type::data_type == db_data_type::double_value);
+    return !is_std_vector<typename c_type::value_type>::value && (c_type::data_type == db_data_type::small_int || c_type::data_type == db_data_type::integer || c_type::data_type == db_data_type::big_int || c_type::data_type == db_data_type::numeric || c_type::data_type == db_data_type::real || c_type::data_type == db_data_type::double_value);
 }
 consteval bool is_integer_db_data_type(db_data_type type) noexcept {
     return type == db_data_type::small_int || type == db_data_type::integer || type == db_data_type::big_int;
@@ -1671,14 +1600,7 @@ consteval bool valid_db_column_options(const auto& options) noexcept {
     const int lifecycle_flags = int{options.create_date_} + int{options.update_date_} + int{options.delete_date_} + int{options.version_};
     // create_date_ only selects a schema default; the repository writes the other three.
     const bool repository_stamped = options.update_date_ || options.delete_date_ || options.version_;
-    return !(options.generated_ && computed) &&
-           !(options.read_only_ && (options.generated_ || computed)) &&
-           (options.enum_name_.view().empty() || options.data_type_ == db_data_type::inferred || options.data_type_ == db_data_type::array) &&
-           (!options.generated_ || (integer && !options.nullable_)) &&
-           (!options.version_ || (integer && !options.nullable_)) &&
-           (!options.primary_key_ || (!options.nullable_ && !options.delete_date_)) &&
-           lifecycle_flags <= 1 &&
-           (!repository_stamped || writable);
+    return !(options.generated_ && computed) && !(options.read_only_ && (options.generated_ || computed)) && (options.enum_name_.view().empty() || options.data_type_ == db_data_type::inferred || options.data_type_ == db_data_type::array) && (!options.generated_ || (integer && !options.nullable_)) && (!options.version_ || (integer && !options.nullable_)) && (!options.primary_key_ || (!options.nullable_ && !options.delete_date_)) && lifecycle_flags <= 1 && (!repository_stamped || writable);
 }
 
 // Table names may be schema-qualified; generated aliases and constraint names
@@ -1698,9 +1620,9 @@ struct db_relation_slot final {
     db_relation_slot() noexcept = default;
     db_relation_slot(const db_relation_slot&) = delete;
     db_relation_slot& operator=(const db_relation_slot&) = delete;
-    db_relation_slot(db_relation_slot&& other) noexcept
-        : state_(std::exchange(other.state_, state_type::unset)),
-          value_(std::move(other.value_)) {}
+    db_relation_slot(db_relation_slot&& other) noexcept :
+        state_(std::exchange(other.state_, state_type::unset)),
+        value_(std::move(other.value_)) {}
     db_relation_slot& operator=(db_relation_slot&&) = delete;
     state_type state_{state_type::unset};
     pointer value_;
@@ -1745,9 +1667,7 @@ struct db_column final {
         return opts;
     }
     static constexpr auto options = normalize_options(options_type);
-    static constexpr db_data_type data_type = options_type.data_type_ == db_data_type::inferred
-                                                  ? detail::db_entity_type_traits<t_type>::data_type
-                                                  : options_type.data_type_;
+    static constexpr db_data_type data_type = options_type.data_type_ == db_data_type::inferred ? detail::db_entity_type_traits<t_type>::data_type : options_type.data_type_;
 };
 
 template <typename t_type>
@@ -1769,8 +1689,7 @@ namespace detail {
 
 template <fixed_string table, typename... members_type>
 class db_entity_storage final {
-    static_assert(((is_db_column<members_type>::value || is_db_relation<members_type>::value) && ...),
-        "SQL entities require RUVIA_DB_COLUMN or SQL relation descriptors");
+    static_assert(((is_db_column<members_type>::value || is_db_relation<members_type>::value) && ...), "SQL entities require RUVIA_DB_COLUMN or SQL relation descriptors");
     using columns_tuple_type = tuple_filter_t<is_db_column, members_type...>;
     using relations_tuple_type = tuple_filter_t<is_db_relation, members_type...>;
     static_assert(unique_entity_columns<members_type...>(), "duplicate database entity member name");
@@ -1779,13 +1698,21 @@ class db_entity_storage final {
             return (std::size_t{predicate(cols::options)} + ... + std::size_t{0});
         }(static_cast<columns_tuple_type*>(nullptr));
     }
-    static_assert(count_lifecycle_columns([](const auto& opts) { return opts.create_date_; }) <= 1,
+    static_assert(count_lifecycle_columns([](const auto& opts) {
+        return opts.create_date_;
+    }) <= 1,
         "database entity may declare at most one create_date_ column");
-    static_assert(count_lifecycle_columns([](const auto& opts) { return opts.update_date_; }) <= 1,
+    static_assert(count_lifecycle_columns([](const auto& opts) {
+        return opts.update_date_;
+    }) <= 1,
         "database entity may declare at most one update_date_ column");
-    static_assert(count_lifecycle_columns([](const auto& opts) { return opts.delete_date_; }) <= 1,
+    static_assert(count_lifecycle_columns([](const auto& opts) {
+        return opts.delete_date_;
+    }) <= 1,
         "database entity may declare at most one delete_date_ column");
-    static_assert(count_lifecycle_columns([](const auto& opts) { return opts.version_; }) <= 1,
+    static_assert(count_lifecycle_columns([](const auto& opts) {
+        return opts.version_;
+    }) <= 1,
         "database entity may declare at most one version_ column");
     template <typename r_type>
     using relation_slot_type = db_relation_slot<typename r_type::target_entity_type, r_type::is_collection>;
@@ -1978,8 +1905,8 @@ class db_field_reference final {
     static constexpr bool is_numeric = detail::is_numeric_db_column<column_type>();
 
 public:
-    constexpr db_field_reference(borrowed_text alias = {}) noexcept
-        : alias_(alias) {}
+    constexpr db_field_reference(borrowed_text alias = {}) noexcept :
+        alias_(alias) {}
     constexpr db_field_reference(const db_field_reference&) noexcept = default;
     constexpr db_field_reference(db_field_reference&&) noexcept = default;
     constexpr db_field_reference& operator=(const db_field_reference&) noexcept = default;
@@ -2005,8 +1932,7 @@ public:
         return query.excluded(field_name.view());
     }
     [[nodiscard]] db_expr to_expr() const {
-        return db_expr(detail::db_owned_expression::make_static_column(
-            field_name.view(), e_type::table_name(), alias_));
+        return db_expr(detail::db_owned_expression::make_static_column(field_name.view(), e_type::table_name(), alias_));
     }
     [[nodiscard]] operator db_expr() const {
         return to_expr();
@@ -2185,9 +2111,7 @@ public:
     }
     [[nodiscard]] db_selection coalesce_text(std::string_view fallback = {}, borrowed_text alias_name = field_name.view()) const {
         auto col_expr = to_expr();
-        if constexpr (column_type::data_type != db_data_type::text &&
-                      column_type::data_type != db_data_type::varchar &&
-                      column_type::data_type != db_data_type::char_value) {
+        if constexpr (column_type::data_type != db_data_type::text && column_type::data_type != db_data_type::varchar && column_type::data_type != db_data_type::char_value) {
             col_expr = col_expr.cast(db_data_type::text);
         }
         return db_expr::coalesce({col_expr, db_expr::value(fallback)}).as(alias_name);
@@ -2227,14 +2151,8 @@ public:
         auto expr = db_expr::null_if(db_expr::value(value), db_expr::value(std::string_view{}));
         if constexpr (!column_type::options.enum_name_.view().empty()) {
             expr = expr.cast({.custom_name_ = column_type::options.enum_name_.view()});
-        } else if constexpr (column_type::data_type != db_data_type::inferred &&
-                             column_type::data_type != db_data_type::text &&
-                             column_type::data_type != db_data_type::varchar &&
-                             column_type::data_type != db_data_type::char_value) {
-            expr = expr.cast({.data_type_ = column_type::data_type,
-                .length_ = column_type::options.length_,
-                .precision_ = column_type::options.precision_,
-                .scale_ = column_type::options.scale_});
+        } else if constexpr (column_type::data_type != db_data_type::inferred && column_type::data_type != db_data_type::text && column_type::data_type != db_data_type::varchar && column_type::data_type != db_data_type::char_value) {
+            expr = expr.cast({.data_type_ = column_type::data_type, .length_ = column_type::options.length_, .precision_ = column_type::options.precision_, .scale_ = column_type::options.scale_});
         }
         return db_assignment{field_name.view(), std::move(expr)};
     }
@@ -2292,9 +2210,7 @@ private:
     db_predicate compare_array(db_binary_operator op, std::span<const t_type> values) const {
         static_assert(detail::is_std_vector<typename column_type::value_type>::value, "array predicates require an array column");
         using item_type = typename detail::is_std_vector<typename column_type::value_type>::value_type;
-        constexpr auto type = column_type::options.data_type_ == db_data_type::inferred || column_type::options.data_type_ == db_data_type::array
-                                  ? detail::db_entity_type_traits<item_type>::data_type
-                                  : column_type::options.data_type_;
+        constexpr auto type = column_type::options.data_type_ == db_data_type::inferred || column_type::options.data_type_ == db_data_type::array ? detail::db_entity_type_traits<item_type>::data_type : column_type::options.data_type_;
         const db_type_definition array_type{
             .data_type_ = type,
             .length_ = column_type::options.length_,
@@ -2393,9 +2309,7 @@ struct postgresql_array_text final {
         }
         // The server requires upper + 1 and the dimension length to fit int32.
         const auto length = std::int64_t{upper} - lower + 1;
-        if (length <= 0 || length > (std::numeric_limits<std::int32_t>::max)() ||
-            upper == (std::numeric_limits<std::int32_t>::max)() ||
-            upper_end + 1 == last || upper_end[1] != '=') {
+        if (length <= 0 || length > (std::numeric_limits<std::int32_t>::max)() || upper == (std::numeric_limits<std::int32_t>::max)() || upper_end + 1 == last || upper_end[1] != '=') {
             throw_invalid_postgresql_array();
         }
         elements = static_cast<std::size_t>(length);
@@ -2431,8 +2345,7 @@ void for_each_postgresql_array_element(std::string_view source, visitor_type&& v
     bool has_escapes = false;
     auto append = [&](std::size_t default_end) {
         const std::size_t end = quote_closed ? token_end : default_end;
-        if (quoted || escaped || (end == token_start && !quoted_token) ||
-            (array.elements_ && element_count >= *array.elements_)) {
+        if (quoted || escaped || (end == token_start && !quoted_token) || (array.elements_ && element_count >= *array.elements_)) {
             throw_invalid_postgresql_array();
         }
         std::string_view token;
@@ -2534,41 +2447,36 @@ void decode_db_field(const db_field& field, t_type& out) {
             throw_invalid_postgresql_array();
         }
         out.clear();
-        for_each_postgresql_array_element(
-            *source_value,
-            [&out](std::optional<std::string_view> element) {
-                if (!element) {
-                    if constexpr (is_optional<v_type>::value) {
-                        out.emplace_back(std::nullopt);
-                    } else {
-                        throw db_conversion_error(
-                            db_conversion_error::code_type::invalid_format, "NULL array element");
-                    }
+        for_each_postgresql_array_element(*source_value, [&out](std::optional<std::string_view> element) {
+            if (!element) {
+                if constexpr (is_optional<v_type>::value) {
+                    out.emplace_back(std::nullopt);
                 } else {
-                    out.push_back(decode_array_element<v_type>(*element));
+                    throw db_conversion_error(db_conversion_error::code_type::invalid_format, "NULL array element");
                 }
-            },
-            [&out](std::size_t count) { out.reserve(count); });
+            } else {
+                out.push_back(decode_array_element<v_type>(*element));
+            }
+        }, [&out](std::size_t count) {
+            out.reserve(count);
+        });
     } else if constexpr (std::is_same_v<u_type, std::string>) {
         if (auto value = field.as<std::string_view>()) {
             out.assign(*value);
         } else {
-            throw db_conversion_error(
-                db_conversion_error::code_type::unexpected_null, "NULL in non-nullable entity column");
+            throw db_conversion_error(db_conversion_error::code_type::unexpected_null, "NULL in non-nullable entity column");
         }
     } else if constexpr (std::is_same_v<u_type, string>) {
         if (auto value = field.as<std::string_view>()) {
             out.assign_owned(*value);
         } else {
-            throw db_conversion_error(
-                db_conversion_error::code_type::unexpected_null, "NULL in non-nullable entity column");
+            throw db_conversion_error(db_conversion_error::code_type::unexpected_null, "NULL in non-nullable entity column");
         }
     } else {
         if (auto value = field.as<u_type>()) {
             out = *value;
         } else {
-            throw db_conversion_error(
-                db_conversion_error::code_type::unexpected_null, "NULL in non-nullable entity column");
+            throw db_conversion_error(db_conversion_error::code_type::unexpected_null, "NULL in non-nullable entity column");
         }
     }
 }
@@ -2581,8 +2489,7 @@ void decode_entity_field(e_type& entity, const db_field& field) {
             entity.template set_null<c_type::name>();
             return;
         } else {
-            throw db_conversion_error(
-                db_conversion_error::code_type::unexpected_null, "NULL in non-nullable database entity column");
+            throw db_conversion_error(db_conversion_error::code_type::unexpected_null, "NULL in non-nullable database entity column");
         }
     }
     using value_type = typename c_type::value_type;
@@ -2601,8 +2508,7 @@ struct db_result_column_lookup final {
     std::size_t index_{0};
 };
 
-[[nodiscard]] inline db_result_column_lookup find_unique_db_result_column(
-    std::span<const std::string> names, std::string_view name) noexcept {
+[[nodiscard]] inline db_result_column_lookup find_unique_db_result_column(std::span<const std::string> names, std::string_view name) noexcept {
     db_result_column_lookup result;
     for (std::size_t index = 0; index < names.size(); ++index) {
         if (names[index] == name) {
@@ -2622,9 +2528,9 @@ class db_entity_row_decoder final {
     static constexpr auto missing_column = (std::numeric_limits<std::size_t>::max)();
 
 public:
-    explicit db_entity_row_decoder(const std::array<bool, column_count>& selected, bool wildcard = false)
-        : selected_(selected),
-          wildcard_(wildcard) {}
+    explicit db_entity_row_decoder(const std::array<bool, column_count>& selected, bool wildcard = false) :
+        selected_(selected),
+        wildcard_(wildcard) {}
 
     e_type decode(const db_row& row) {
         const auto names = row.column_names();
@@ -2646,8 +2552,7 @@ public:
                 }
                 const auto lookup = find_unique_db_result_column(names, column_type::name.view());
                 if (lookup.state_ == unique_lookup_status::repeated) {
-                    throw db_conversion_error(
-                        db_conversion_error::code_type::invalid_format, "database result has ambiguous mapped column names");
+                    throw db_conversion_error(db_conversion_error::code_type::invalid_format, "database result has ambiguous mapped column names");
                 }
                 indices_[i] = lookup.state_ == unique_lookup_status::found ? lookup.index_ : missing_column;
             });
@@ -2659,8 +2564,7 @@ public:
                 return;
             }
             if (indices_[i] == missing_column) {
-                throw db_conversion_error(
-                    db_conversion_error::code_type::missing_column, "database result has no such column");
+                throw db_conversion_error(db_conversion_error::code_type::missing_column, "database result has no such column");
             }
             decode_entity_field<e_type, column_type>(result, row[indices_[i]]);
         });
@@ -2707,8 +2611,7 @@ void append_entity_array_value(std::string& output, const t_type& value) {
                 output.push_back('\\');
                 output.push_back(ch);
                 ++escaped_end;
-            } while (escaped_end < remaining.size() &&
-                     (remaining[escaped_end] == '"' || remaining[escaped_end] == '\\' || remaining[escaped_end] == '\0'));
+            } while (escaped_end < remaining.size() && (remaining[escaped_end] == '"' || remaining[escaped_end] == '\\' || remaining[escaped_end] == '\0'));
             remaining.remove_prefix(escaped_end);
         }
         output.push_back('"');
