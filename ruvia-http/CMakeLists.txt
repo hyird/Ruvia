@@ -1,5 +1,6 @@
 set(ruvia_http_sources
     src/http_cache.cpp
+    src/http_c_library_memory.cpp
     src/http_client_protocol.cpp
     src/http_content_coding.cpp
     src/http_header.cpp

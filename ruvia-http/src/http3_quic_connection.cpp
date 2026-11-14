@@ -16,7 +16,7 @@
 #include <utility>
 #include <vector>
 
-#include "http_connection_fields.h"
+#include "http_c_library_memory.h"
 
 namespace ruvia {
 namespace {
