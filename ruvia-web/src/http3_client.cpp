@@ -25,6 +25,7 @@
 
 #include "borrowed_text.h"
 #include "connection_lifecycle.h"
+#include "crypto.h"
 #include "event_loop.h"
 #include "http3_quic_connection.h"
 #include "http_client_pool.h"

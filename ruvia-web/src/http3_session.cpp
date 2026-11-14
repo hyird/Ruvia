@@ -29,6 +29,7 @@
 
 #include "connection_lifecycle.h"
 #include "context_access.h"
+#include "crypto.h"
 #include "event_loop.h"
 #include "http1_server_response.h"
 #include "http3_quic_connection.h"

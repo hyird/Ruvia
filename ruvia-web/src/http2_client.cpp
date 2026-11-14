@@ -27,6 +27,7 @@
 #include "http_header.h"
 #include "http_request.h"
 #include "http_response.h"
+#include "inline_storage.h"
 #include "stop_token.h"
 #include "streaming.h"
 #include "task.h"

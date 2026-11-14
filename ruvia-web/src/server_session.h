@@ -48,6 +48,7 @@
 #include "context.h"
 #include "context_access.h"
 #include "controller.h"
+#include "crypto.h"
 #include "event_loop.h"
 #include "http1_server_response.h"
 #include "http_client_ip.h"

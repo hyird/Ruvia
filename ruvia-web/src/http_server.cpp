@@ -34,6 +34,7 @@
 #include "blocking_pool.h"
 #include "connection_lifecycle.h"
 #include "controller.h"
+#include "crypto.h"
 #include "event_loop.h"
 #include "http_header.h"
 #include "rate_limit.h"

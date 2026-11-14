@@ -20,8 +20,11 @@
 
 #include "borrowed_text.h"
 #include "connection_lifecycle.h"
+#include "crypto.h"
 #include "http_header.h"
+#include "inline_storage.h"
 #include "model.h"
+
 namespace ruvia {
 
 namespace detail {

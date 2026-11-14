@@ -70,6 +70,7 @@
 #include "http_request.h"
 #include "http_response.h"
 #include "http_server.h"
+#include "inline_storage.h"
 #include "middleware.h"
 #include "rate_limit.h"
 #include "streaming.h"

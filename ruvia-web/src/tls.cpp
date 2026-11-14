@@ -40,6 +40,7 @@
 #include "blocking_pool.h"
 #include "connection_lifecycle.h"
 #include "context_access.h"
+#include "crypto.h"
 #include "http_client_types.h"
 #include "http_header.h"
 #include "http_request.h"
