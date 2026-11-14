@@ -352,6 +352,10 @@ private:
 // invalidate those views.
 class websocket_event final {
 public:
+    websocket_event(const websocket_event&) = default;
+    websocket_event(websocket_event&&) noexcept = default;
+    websocket_event& operator=(const websocket_event&) = delete;
+    websocket_event& operator=(websocket_event&&) = delete;
     [[nodiscard]] websocket_event_kind kind() const noexcept {
         return static_cast<websocket_event_kind>(value_.index());
     }
@@ -411,6 +415,7 @@ private:
 namespace detail {
 class zlib_deflate_stream;
 class zlib_inflate_stream;
+class websocket_deflate;
 }  // namespace detail
 
 enum class websocket_inflate_result : std::uint8_t {
@@ -451,6 +456,9 @@ public:
     [[nodiscard]] websocket_inflate_result inflate_message(std::string_view payload, std::string& out, protocol_byte_limit message_limit);
 
 private:
+    // A connection inflates through the shared inflater under its receive
+    // storage budget.
+    friend class detail::websocket_deflate;
     static constexpr int min_window_bits = 8;
     static constexpr int max_window_bits = 15;
     static constexpr int compression_levels = 10;
@@ -486,6 +494,19 @@ private:
     borrowed_text bytes_;
 };
 
+// Charges the receive storage a connection holds beyond its input buffer --
+// the reassembly of a fragmented message and permessage-deflate output, each
+// up to the receive message limit -- so that its owner bounds them together
+// with its other inbound memory. resize_ receives the total bytes of that
+// storage: before it grows (the growth is refused when it returns false), and
+// after it grew or released memory (false after a growth discards the grown
+// storage). A refused growth fails the message as too large (Close 1009). The
+// callback must not throw and is called only inside next_event().
+struct websocket_receive_storage_budget final {
+    bool (*resize_)(void* context, std::size_t bytes) noexcept {nullptr};
+    void* context_{nullptr};
+};
+
 struct websocket_connection_options final {
     protocol_byte_limit message_limit_{protocol_byte_limit::limited(default_max_websocket_message_bytes)};
     // Additional receive-only ceiling, including message aggregation and inflation.
@@ -506,6 +527,8 @@ struct websocket_connection_options final {
     // Independent bound for feed() bytes awaiting next_event(). A rejected feed
     // consumes nothing; drain events or provide smaller chunks before retrying.
     std::size_t max_buffered_input_bytes_{default_max_websocket_message_bytes + 14};
+    // Unset leaves the receive storage uncharged.
+    websocket_receive_storage_budget receive_storage_{};
 };
 
 // Sans-I/O RFC 6455 driver for an already upgraded connection. Input arrives
@@ -552,6 +575,10 @@ public:
     [[nodiscard]] websocket_abort_disposition abort(websocket_termination cause = websocket_termination::aborted) noexcept;
     [[nodiscard]] websocket_liveness_mode liveness_mode() const noexcept;
     [[nodiscard]] websocket_termination termination() const noexcept;
+    // Input of a message is outstanding: a fragmented message is open, or
+    // bytes of a frame next_event() has not returned are buffered. Drivers time
+    // message completion with it.
+    [[nodiscard]] bool message_pending() const noexcept;
     // RFC 6455 wire bytes of whole frames: header, mask key and payload as
     // framed, so after permessage-deflate, data and control frames alike.
     // Received counts every frame next_event() parsed; sent counts the output

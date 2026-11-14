@@ -298,7 +298,7 @@ task<redis_value> redis_session::command(std::span<const std::string_view> args)
 
 task<redis_value> redis_session::command_owned(std::vector<std::string>&& args) const {
     registration_.require_active();
-    return pool().execute_owned(std::vector<std::string>(args.begin(), args.end()), operation_options_, std::nullopt, io_metrics_);
+    return pool().execute_owned(std::move(args), operation_options_, std::nullopt, io_metrics_);
 }
 
 task<redis_value> redis_session::script_owned(const detail::redis_orm_script& script, std::vector<std::string>&& args) const {

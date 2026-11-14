@@ -634,6 +634,11 @@ public:
     [[nodiscard]] bool aborted() const noexcept {
         return aborted_;
     }
+    // Counts the stream once toward the Rapid-Reset budget: false when the
+    // peer's other direction already did.
+    [[nodiscard]] bool note_peer_abandoned() noexcept {
+        return !std::exchange(peer_abandoned_, true);
+    }
 
     // The QUIC stream closed in both directions.
     void mark_closed() noexcept {
@@ -698,6 +703,7 @@ private:
     bool response_committed_{false};
     bool aborted_{false};
     bool closed_{false};
+    bool peer_abandoned_{false};
     bool handler_done_{false};
     bool dispatch_pending_{false};
     bool continue_pending_{false};
@@ -851,7 +857,7 @@ private:
     void on_datagram(const http3_datagram_event& event);
     void on_message_end(const http3_message_end_event& event);
     void on_stream_end(std::int64_t stream_id);
-    void on_stream_abort(std::int64_t stream_id) noexcept;
+    void on_stream_abort(const http3_transport_action_event& event) noexcept;
     void on_stream_close(const http3_stream_close_event& event) noexcept;
     void wake_output_waiters() noexcept;
 
@@ -920,6 +926,10 @@ private:
     http3_buffered_response_writer buffered_response_writer_;
     std::size_t active_handler_tasks_{0};
     std::size_t accepted_request_heads_{0};
+    // Rapid Reset (CVE-2023-44487), as HTTP/2 counts it: request streams the
+    // peer abandoned against responses this connection completed.
+    std::uint64_t peer_reset_streams_{0};
+    std::uint64_t completed_responses_{0};
     std::size_t tunnel_streams_{0};
     lifecycle_type lifecycle_{lifecycle_type::open};
     bool drain_begun_{false};

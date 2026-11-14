@@ -1201,6 +1201,11 @@ void http2_connection::emit_request_headers(http2_stream_state& stream) {
 // --- DATA ----------------------------------------------------------------------
 
 int http2_connection::on_data_chunk_recv(std::uint8_t, std::uint32_t stream_id, std::string_view data) {
+    // Chunks of one DATA frame each renew the owner's clock; the budget refund
+    // is per frame (on_frame_recv) so splitting a frame earns nothing.
+    if (!data.empty()) {
+        ++received_stream_progress_;
+    }
     auto* stream = streams_.find(stream_id);
     if (local_connection_state_.fatal_failure() != nullptr || stream == nullptr || stream->is_aborted()) {
         // DATA already in flight when this endpoint reset the stream still

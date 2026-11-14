@@ -559,6 +559,8 @@ private:
         tighten(lifecycle.heartbeat_.ping_interval_);
         tighten(lifecycle.heartbeat_.pong_timeout_);
         tighten(lifecycle.close_handshake_timeout_);
+        tighten(lifecycle.idle_timeout_);
+        tighten(lifecycle.message_completion_timeout_);
         return {.scan_interval_ = interval};
     }
     static bool mask_key(void*, websocket_mask_key_type& key) noexcept {

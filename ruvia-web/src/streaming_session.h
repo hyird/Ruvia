@@ -246,7 +246,8 @@ private:
 };
 
 // A tunnel over an HTTP/1 socket transport or one HTTP/2 or HTTP/3 stream. Received
-// chunks charge the connection's and worker's inbound buffer budgets.
+// chunks charge the connection's and worker's inbound buffer budgets. Every
+// read or write that moves tunnel bytes renews its idle clock.
 template <typename transport_type>
 class http_tunnel_session final {
 public:
@@ -279,6 +280,7 @@ public:
     [[nodiscard]] task<void> finish(operation_options operation = {}) {
         if (!ended_) {
             operation_interrupt interrupt(interrupts_, facade_.worker_, operation, this, &abort_thunk_default, "HTTP tunnel finish");
+            const write_activity activity(*this);
             const auto error = co_await transport_.write_bytes({}, http_stream_end::end);
             interrupt.throw_if_interrupted();
             if (error) {
@@ -289,6 +291,14 @@ public:
     }
     [[nodiscard]] bool aborted() const noexcept {
         return aborted_;
+    }
+    // Aborts the transport once no tunnel byte has moved for `timeout`; the
+    // scanner check stays registered until the session is destroyed.
+    void watch_idle(connection_scanner::entry& scanner, std::optional<timeout_duration> timeout) noexcept {
+        if (timeout.has_value()) {
+            idle_timeout_ms_ = timeout->value().count();
+            scanner.register_periodic_check(idle_check_, this, &idle_tick);
+        }
     }
     [[nodiscard]] task<void> drain() {
         delivered_reservation_.clear();
@@ -304,17 +314,44 @@ public:
     }
 
 private:
+    // A write in flight is not idle: the transport's write timeouts bound it.
+    // Its end renews the idle clock.
+    class write_activity final {
+    public:
+        explicit write_activity(http_tunnel_session& owner) noexcept :
+            owner_(owner) {
+            ++owner_.writes_in_flight_;
+        }
+        ~write_activity() {
+            --owner_.writes_in_flight_;
+            owner_.last_transfer_ms_ = steady_stamp_ms();
+        }
+        write_activity(const write_activity&) = delete;
+        write_activity& operator=(const write_activity&) = delete;
+
+    private:
+        http_tunnel_session& owner_;
+    };
+    static void idle_tick(void* raw, std::int64_t now) noexcept {
+        auto& self = *static_cast<http_tunnel_session*>(raw);
+        if (!self.aborted_ && self.writes_in_flight_ == 0 && now - self.last_transfer_ms_ >= self.idle_timeout_ms_) {
+            self.abort();
+        }
+    }
     [[nodiscard]] task<bool> read_some() {
         if (!pending_.empty()) {
             inbound_discard(pending_, pending_reservation_);
             co_return true;
         }
         read_buffer_.clear();
+        bool more = false;
         if constexpr (requires { transport_.read_more(read_buffer_, &read_reservation_); }) {
-            co_return co_await transport_.read_more(read_buffer_, &read_reservation_);
+            more = co_await transport_.read_more(read_buffer_, &read_reservation_);
         } else {
-            co_return co_await transport_.read_more(read_buffer_);
+            more = co_await transport_.read_more(read_buffer_);
         }
+        last_transfer_ms_ = steady_stamp_ms();
+        co_return more;
     }
     static void wake_read(void* raw) noexcept {
         static_cast<asio::cancellation_signal*>(raw)->emit(asio::cancellation_type::terminal);
@@ -341,6 +378,7 @@ private:
                 interrupt.throw_if_interrupted();
             }, owner_value.read_cancellation_.slot());
         }
+        owner_value.last_transfer_ms_ = steady_stamp_ms();
         if (!has_more) {
             owner_value.receive_ended_ = true;
             co_return std::nullopt;
@@ -355,6 +393,7 @@ private:
             throw std::logic_error("HTTP tunnel send direction has ended");
         }
         operation_interrupt interrupt(owner_value.interrupts_, owner_value.facade_.worker_, operation, raw, &abort_thunk_default, "HTTP tunnel write");
+        const write_activity activity(owner_value);
         const auto error = co_await owner_value.transport_.write_bytes(bytes_value, http_stream_end::keep_open);
         interrupt.throw_if_interrupted();
         if (error) {
@@ -375,6 +414,7 @@ private:
         auto input = co_await owner_value.transport_.read_datagram([&interrupt] {
             interrupt.throw_if_interrupted();
         }, owner_value.read_cancellation_.slot());
+        owner_value.last_transfer_ms_ = steady_stamp_ms();
         if (!input) {
             owner_value.receive_ended_ = true;
         }
@@ -386,6 +426,7 @@ private:
             throw std::logic_error("HTTP tunnel send direction has ended");
         }
         operation_interrupt interrupt(owner_value.interrupts_, owner_value.facade_.worker_, operation, raw, &abort_thunk_default, "HTTP tunnel write");
+        const write_activity activity(owner_value);
         try {
             const bool sent = co_await owner_value.transport_.write_datagram(bytes);
             interrupt.throw_if_interrupted();
@@ -414,9 +455,15 @@ private:
     bool ended_{false};
     bool receive_ended_{false};
     bool aborted_{false};
+    // Writes started and not yet finished; idleness counts none of them.
+    std::uint32_t writes_in_flight_{0};
+    std::int64_t last_transfer_ms_{steady_stamp_ms()};
+    std::int64_t idle_timeout_ms_{0};
     asio::cancellation_signal read_cancellation_;
     operation_interrupt_source interrupts_;
     http_tunnel facade_;
+    // Declared last so destruction unregisters before the state it reads.
+    connection_scanner::periodic_check_registration idle_check_;
 };
 
 template <typename transport_type>
@@ -459,8 +506,17 @@ template <typename transport_type>
 
 // The one lifecycle check of server routes and clients.
 inline void validate_websocket_lifecycle_options(const websocket_lifecycle_options& options) {
-    if (options.close_handshake_timeout_.has_value() && options.close_handshake_timeout_->value().count() <= 0) {
+    const auto positive = [](const std::optional<timeout_duration>& timeout) {
+        return !timeout.has_value() || timeout->value().count() > 0;
+    };
+    if (!positive(options.close_handshake_timeout_)) {
         throw std::invalid_argument("websocket close-handshake timeout must be greater than zero");
+    }
+    if (!positive(options.idle_timeout_)) {
+        throw std::invalid_argument("websocket idle timeout must be greater than zero");
+    }
+    if (!positive(options.message_completion_timeout_)) {
+        throw std::invalid_argument("websocket message completion timeout must be greater than zero");
     }
     const auto& heartbeat = options.heartbeat_;
     if (!heartbeat.ping_interval_.has_value()) {
@@ -830,9 +886,13 @@ public:
         scanner_entry_(scanner_entry),
         lifecycle_options_(lifecycle_options),
         buffer_reservation_(inbound),
+        receive_storage_reservation_(inbound),
         protocol_(buffer_,
             [&] {
                 protocol_options.message_limit_ = message_limit;
+                if (inbound != nullptr) {
+                    protocol_options.receive_storage_ = {.resize_ = &resize_receive_storage, .context_ = &receive_storage_reservation_};
+                }
                 return protocol_options;
             }()),
         subprotocol_(std::move(subprotocol_value)),
@@ -1139,6 +1199,7 @@ private:
             }
             connection_->read_phase_ = read_phase_type::active;
             connection_->resume_pong_window_on_read_start();
+            connection_->resume_message_clock();
         }
 
         ~read_guard_type() {
@@ -1147,6 +1208,7 @@ private:
                     std::terminate();
                 }
                 connection_->read_phase_ = read_phase_type::idle;
+                connection_->pause_message_clock();
                 connection_->read_interrupt_.reset();
                 connection_->reader_done_signal_.notify();
             }
@@ -1160,6 +1222,25 @@ private:
     void resume_pong_window_on_read_start() noexcept;
     [[nodiscard]] bool pong_observable() const noexcept;
     void heartbeat_tick(std::int64_t now) noexcept;
+    // While the session is open: no frame byte moved for idle_timeout_, or
+    // the message being received outlived message_completion_timeout_.
+    [[nodiscard]] bool transfer_deadline_lapsed(std::int64_t now) const noexcept;
+    // After each protocol poll of a read: arms the message clock at the first
+    // byte of a message and clears it once no message input is outstanding.
+    void track_message_completion() noexcept;
+    // The message clock runs only while a read is pending; between reads it
+    // keeps what remains of its budget.
+    void resume_message_clock() noexcept;
+    void pause_message_clock() noexcept;
+    // websocket_receive_storage_budget::resize_ over receive_storage_reservation_.
+    static bool resize_receive_storage(void* context, std::size_t bytes) noexcept {
+        try {
+            static_cast<inbound_buffer_reservation*>(context)->resize_to(bytes);
+            return true;
+        } catch (const inbound_buffer_limit_error&) {
+            return false;
+        }
+    }
     task<std::optional<websocket_message>> read_owned(read_guard_type read_guard, operation_options options);
     task<void> write_owned(websocket_opcode opcode, std::string_view payload, write_operation_lease_type write_lease, bool compress, websocket_write_extent extent, operation_options options);
     task<void> close_owned(::ruvia::websocket_close_options options, operation_options operation, write_operation_lease_type write_lease);
@@ -1213,6 +1294,9 @@ private:
     websocket_lifecycle_options lifecycle_options_{};
     http_io_buffer buffer_;
     inbound_buffer_reservation buffer_reservation_{};
+    // Fragment reassembly and inflate output inside protocol_, charged to the
+    // same connection and worker budgets as buffer_.
+    inbound_buffer_reservation receive_storage_reservation_{};
     websocket_connection protocol_;
     std::string subprotocol_;
     websocket_peer_close_info peer_close_{};
@@ -1235,6 +1319,12 @@ private:
     // websocket_idle_read_bytes: the next such read then waits in a buffer of
     // that size.
     bool small_frames_{true};
+    // When a frame byte was last read or written.
+    std::int64_t last_transfer_ms_{steady_stamp_ms()};
+    // The message clock: its deadline while a read is pending, or what remains
+    // of its budget while none is.
+    std::optional<std::int64_t> message_deadline_ms_;
+    std::optional<std::int64_t> message_remaining_ms_;
     task_scope background_tasks_;
     // Declared last so destruction unregisters before any callback target state
     // starts to disappear.
@@ -1262,6 +1352,10 @@ void websocket_session_connection<stream_type>::finish_write(bool restart_pong) 
 
 template <typename stream_type>
 void websocket_session_connection<stream_type>::heartbeat_tick(std::int64_t now) noexcept {
+    if (protocol_.liveness_mode() == websocket_liveness_mode::open && transfer_deadline_lapsed(now)) {
+        abort_transport(websocket_termination::timeout, true);
+        return;
+    }
     const bool observable = pong_observable();
     if (!observable) {
         restart_websocket_pong_window(liveness_state_, steady_stamp_ms());
@@ -1290,6 +1384,43 @@ void websocket_session_connection<stream_type>::heartbeat_tick(std::int64_t now)
         finish_write();
         fail_background(std::current_exception());
         return;
+    }
+}
+
+template <typename stream_type>
+bool websocket_session_connection<stream_type>::transfer_deadline_lapsed(std::int64_t now) const noexcept {
+    if (const auto& idle = lifecycle_options_.idle_timeout_; idle.has_value() && !write_lane_.write_in_progress() && now - last_transfer_ms_ >= idle->value().count()) {
+        return true;
+    }
+    return message_deadline_ms_.has_value() && now >= *message_deadline_ms_;
+}
+
+template <typename stream_type>
+void websocket_session_connection<stream_type>::track_message_completion() noexcept {
+    const auto& timeout = lifecycle_options_.message_completion_timeout_;
+    if (!timeout.has_value()) {
+        return;
+    }
+    if (!protocol_.message_pending()) {
+        message_deadline_ms_.reset();
+    } else if (!message_deadline_ms_.has_value()) {
+        message_deadline_ms_ = steady_deadline_ms(steady_stamp_ms(), timeout->value());
+    }
+}
+
+template <typename stream_type>
+void websocket_session_connection<stream_type>::resume_message_clock() noexcept {
+    if (message_remaining_ms_.has_value()) {
+        message_deadline_ms_ = steady_deadline_ms(steady_stamp_ms(), std::chrono::milliseconds(*message_remaining_ms_));
+        message_remaining_ms_.reset();
+    }
+}
+
+template <typename stream_type>
+void websocket_session_connection<stream_type>::pause_message_clock() noexcept {
+    if (message_deadline_ms_.has_value()) {
+        message_remaining_ms_ = (std::max)(std::int64_t{0}, *message_deadline_ms_ - steady_now_ms());
+        message_deadline_ms_.reset();
     }
 }
 
@@ -1392,7 +1523,10 @@ task<std::optional<websocket_message>> websocket_session_connection<stream_type>
                         co_await write_lane_.wait_for_idle(true, check_interrupt);
                     }
                     write_guard_type write_guard(*this, write_claim_type::acquire, false);
-                    event = protocol_.next_event();
+                    if (auto polled = protocol_.next_event()) {
+                        event.emplace(std::move(*polled));
+                    }
+                    track_message_completion();
                     if (event.has_value()) {
                         if (event->ping() != nullptr) {
                             write_guard.note_write();
@@ -1422,6 +1556,7 @@ task<std::optional<websocket_message>> websocket_session_connection<stream_type>
                         co_return std::nullopt;
                     }
                     scanner_entry_.touch();
+                    last_transfer_ms_ = steady_stamp_ms();
                     continue;
                 }
 
@@ -1795,6 +1930,7 @@ task<void> websocket_session_connection<stream_type>::flush_protocol_output_now(
             std::terminate();
         }
         scanner_entry_.touch();
+        last_transfer_ms_ = steady_stamp_ms();
         if (disposition == websocket_transport_disposition::end_transport) {
             protocol_.commit_transport_end();
             guard.connection_ = nullptr;

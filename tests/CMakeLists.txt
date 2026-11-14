@@ -184,6 +184,10 @@ if(RUVIA_BUILD_WEB)
     # Owns an application with small inbound budgets.
     ruvia_add_web_test(ruvia_inbound_memory_tests 60
         web/http1/inbound_memory.cpp)
+    # Owns an application with short tunnel and WebSocket deadlines and small
+    # inbound budgets.
+    ruvia_add_web_test(ruvia_streaming_bounds_tests 60
+        web/http1/streaming_bounds.cpp)
     # Owns a TLS application with a short write timeout, which must not time
     # the handler cases of the other server suites.
     ruvia_add_web_test(ruvia_interim_phase_timeout_tests 30

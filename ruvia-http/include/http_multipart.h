@@ -172,6 +172,11 @@ private:
 // its decoded boundary bytes.
 class multipart_boundary_parse_result final {
 public:
+    multipart_boundary_parse_result(const multipart_boundary_parse_result&) = default;
+    multipart_boundary_parse_result(multipart_boundary_parse_result&&) noexcept = default;
+    multipart_boundary_parse_result& operator=(const multipart_boundary_parse_result&) = delete;
+    multipart_boundary_parse_result& operator=(multipart_boundary_parse_result&&) = delete;
+
     [[nodiscard]] constexpr const multipart_boundary* boundary() const& noexcept RUVIA_LIFETIMEBOUND {
         return std::get_if<multipart_boundary>(&value_);
     }
@@ -300,6 +305,7 @@ public:
 
 private:
     friend class multipart_poll_result;
+    friend class multipart_body_parse_result;
 
     explicit constexpr multipart_poll_failure(multipart_parse_error error) noexcept :
         error_(error) {}
@@ -314,6 +320,11 @@ private:
 // feed(), finish_input(), or poll() call.
 class multipart_poll_result final {
 public:
+    multipart_poll_result(const multipart_poll_result&) = default;
+    multipart_poll_result(multipart_poll_result&&) noexcept = default;
+    multipart_poll_result& operator=(const multipart_poll_result&) = delete;
+    multipart_poll_result& operator=(multipart_poll_result&&) = delete;
+
     [[nodiscard]] constexpr const multipart_poll_need_input* need_input() const& noexcept RUVIA_LIFETIMEBOUND {
         return std::get_if<multipart_poll_need_input>(&value_);
     }
@@ -370,6 +381,43 @@ private:
     value_type value_;
 };
 
+// One-shot multipart parsing yields either every part or the first protocol
+// failure; malformed or over-limit peer bytes are values, not exceptions.
+class multipart_body_parse_result final {
+public:
+    multipart_body_parse_result(const multipart_body_parse_result&) = default;
+    multipart_body_parse_result(multipart_body_parse_result&&) noexcept = default;
+    multipart_body_parse_result& operator=(const multipart_body_parse_result&) = delete;
+    multipart_body_parse_result& operator=(multipart_body_parse_result&&) = delete;
+
+    [[nodiscard]] const std::vector<multipart_part>* parts() const& noexcept RUVIA_LIFETIMEBOUND {
+        return std::get_if<std::vector<multipart_part>>(&value_);
+    }
+    const std::vector<multipart_part>* parts() const&& = delete;
+
+    [[nodiscard]] const multipart_poll_failure* failure() const& noexcept RUVIA_LIFETIMEBOUND {
+        return std::get_if<multipart_poll_failure>(&value_);
+    }
+    const multipart_poll_failure* failure() const&& = delete;
+
+    // Throws std::logic_error when the result holds a failure.
+    [[nodiscard]] std::vector<multipart_part> take_parts() &&;
+
+private:
+    friend multipart_body_parse_result parse_multipart_body(std::string_view, multipart_parse_options);
+
+    explicit multipart_body_parse_result(std::vector<multipart_part> parts) noexcept :
+        value_(std::in_place_type<std::vector<multipart_part>>, std::move(parts)) {}
+
+    explicit multipart_body_parse_result(multipart_poll_failure failure) noexcept :
+        value_(failure) {}
+
+    explicit multipart_body_parse_result(multipart_parse_error error) noexcept :
+        value_(multipart_poll_failure(error)) {}
+
+    std::variant<std::vector<multipart_part>, multipart_poll_failure> value_;
+};
+
 class multipart_parser final {
 public:
     explicit multipart_parser(multipart_parse_options options);
@@ -395,7 +443,7 @@ public:
 private:
     struct complete_input_tag_type final {};
 
-    friend std::vector<multipart_part> parse_multipart_body(std::string_view, multipart_parse_options);
+    friend multipart_body_parse_result parse_multipart_body(std::string_view, multipart_parse_options);
 
     multipart_parser(std::string_view complete_body, multipart_parse_options options, complete_input_tag_type);
 
@@ -446,8 +494,8 @@ private:
 // Parses a complete multipart/form-data body without I/O. Returned part bodies
 // borrow `body`. Names, filenames, and Content-Type values from unfolded header
 // blocks own string storage; unmodified header blocks keep borrowing `body`.
-[[nodiscard]] std::vector<multipart_part> parse_multipart_body(std::string_view body, multipart_parse_options options);
+[[nodiscard]] multipart_body_parse_result parse_multipart_body(std::string_view body, multipart_parse_options options);
 
 template <detail::http_temporary_owning_char_string body_type>
-std::vector<multipart_part> parse_multipart_body(body_type&&, multipart_parse_options) = delete;
+multipart_body_parse_result parse_multipart_body(body_type&&, multipart_parse_options) = delete;
 }  // namespace ruvia

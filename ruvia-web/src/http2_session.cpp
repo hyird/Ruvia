@@ -844,7 +844,11 @@ public:
     // with the session; their responses are not completed.
     void peer_input_ended() noexcept;
     void set_inactivity_phase() noexcept;
-    void touch_activity() noexcept;
+    // Feeds one socket read. Only input that advanced a stream, or input the
+    // preface or an unfinished header block still owes (bounded by the
+    // initial-read clocks), renews the inactivity clock: PING, SETTINGS,
+    // WINDOW_UPDATE or PRIORITY traffic alone cannot hold an idle connection.
+    [[nodiscard]] http2_feed_result feed_read(std::string_view bytes);
     // The connection's scanner entry: the reader times its phases, the
     // writer runs the entry's write stall clock around each socket write.
     [[nodiscard]] connection_scanner::entry& scanner_entry() const noexcept {
@@ -906,6 +910,10 @@ private:
     // A batch removed from protocol output still belongs to the socket writer.
     bool output_write_in_flight_{};
     bool has_pushed_streams_{};
+    // The phase last given to the scanner entry. Re-entering it would renew
+    // the inactivity clock (set_phase() is activity); only feed_read() decides
+    // which input does.
+    std::optional<connection_scanner::phase> inactivity_phase_;
     // Scanner tick (per-stream deadlines) and drain callback.
     connection_scanner::periodic_check_registration scanner_checks_;
     // Declared last: destroyed (and so unregistered) before the state its
@@ -1358,7 +1366,12 @@ void http2_sans_io_session_engine::peer_input_ended() noexcept {
 }
 
 void http2_sans_io_session_engine::set_inactivity_phase() noexcept {
-    session_.scanner_entry().set_phase(multiplexed_inactivity_phase(connection_.received_peer_settings(), connection_.header_block_in_progress(), stream_runtimes_.size() != 0 || active_handler_tasks_ != 0, stream_runtimes_.tunnel_count() != 0));
+    const auto next_phase = multiplexed_inactivity_phase(connection_.received_peer_settings(), connection_.header_block_in_progress(), stream_runtimes_.size() != 0 || active_handler_tasks_ != 0, stream_runtimes_.tunnel_count() != 0);
+    if (inactivity_phase_ == next_phase) {
+        return;
+    }
+    inactivity_phase_ = next_phase;
+    session_.scanner_entry().set_phase(next_phase);
 }
 
 void http2_sans_io_session_engine::expire_stream_deadlines(std::int64_t now_ms) noexcept {
@@ -1379,7 +1392,7 @@ void http2_sans_io_session_engine::expire_stream_deadlines(std::int64_t now_ms) 
                 return;
             }
             auto* signal = runtime.signal();
-            if (signal != nullptr && server.write_timeout_.has_value() && signal->output_wait_expired(now_ms, *server.write_timeout_)) {
+            if (signal != nullptr && signal->output_wait_expired(now_ms, server.write_timeout_, server.write_completion_timeout_)) {
                 overdue_stream = runtime.stream_id();
             }
         });
@@ -1401,8 +1414,14 @@ void http2_sans_io_session_engine::remove_stream_runtime(std::uint32_t stream_id
     }
 }
 
-void http2_sans_io_session_engine::touch_activity() noexcept {
-    session_.scanner_entry().touch();
+http2_feed_result http2_sans_io_session_engine::feed_read(std::string_view bytes_value) {
+    const bool initial = !connection_.received_peer_settings() || connection_.header_block_in_progress();
+    const auto progress = connection_.received_stream_progress();
+    const auto result_value = feed_and_drain(bytes_value);
+    if (initial || connection_.received_stream_progress() != progress) {
+        session_.scanner_entry().touch();
+    }
+    return result_value;
 }
 
 void http2_sans_io_session_engine::wake_writer() noexcept {
@@ -2147,8 +2166,7 @@ task<http_connection_close> run_http2_sans_io_session_impl(stream_type& stream, 
                     }
                     break;
                 }
-                engine.touch_activity();
-                const auto result_value = engine.feed_and_drain(std::string_view(read_buffer.data(), bytes_read));
+                const auto result_value = engine.feed_read(std::string_view(read_buffer.data(), bytes_read));
                 engine.wake_writer();
                 if (result_value == http2_feed_result::protocol_failure || engine.write_failed()) {
                     if (result_value == http2_feed_result::protocol_failure) {
@@ -2273,6 +2291,10 @@ http2_stream_data_submit_result submit_http2_stream_data(ruvia::http2_connection
 task<http2_stream_data_write_status> write_http2_stream_data(ruvia::http2_connection& connection, std::uint32_t stream_id, multiplexed_stream_signal* signal, worker_signal& write_signal, http2_data_output_budget& output_budget, std::string_view bytes, http2_end_stream end_stream, const bool* aborted) {
     // The caller owns the suffix until consumed. Each reservation covers only
     // encoded payload and remains charged through socket write completion.
+    std::optional<multiplexed_stream_signal::output_operation_guard> operation;
+    if (signal != nullptr) {
+        operation.emplace(*signal);
+    }
     for (;;) {
         if (aborted != nullptr && *aborted) {
             co_return http2_stream_data_write_status::local_aborted;

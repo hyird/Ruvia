@@ -89,6 +89,11 @@ public:
 // malformed field syntax. Codings are listed in the order they were applied.
 class http_content_coding_field_result final {
 public:
+    http_content_coding_field_result(const http_content_coding_field_result&) = default;
+    http_content_coding_field_result(http_content_coding_field_result&&) noexcept = default;
+    http_content_coding_field_result& operator=(const http_content_coding_field_result&) = delete;
+    http_content_coding_field_result& operator=(http_content_coding_field_result&&) = delete;
+
     [[nodiscard]] std::span<const http_content_coding> codings() const& noexcept RUVIA_LIFETIMEBOUND {
         if (const auto* codings = std::get_if<content_coding_sequence>(&value_)) {
             return std::span<const http_content_coding>(codings->values_.data(), codings->size_);
@@ -268,20 +273,6 @@ private:
     phase phase_{phase::active};
 };
 
-class http_content_transcode_error final : public http_content_codec_error {
-public:
-    http_content_transcode_error(http_content_decode_error error, const char* message) :
-        http_content_codec_error(message),
-        error_(error) {}
-
-    [[nodiscard]] constexpr http_content_decode_error decode_error() const noexcept {
-        return error_;
-    }
-
-private:
-    http_content_decode_error error_;
-};
-
 struct http_content_transcoder_options final {
     std::size_t max_decoded_bytes_{(std::numeric_limits<std::size_t>::max)()};
     std::size_t max_encoded_bytes_{(std::numeric_limits<std::size_t>::max)()};
@@ -291,6 +282,13 @@ struct http_content_transcoder_options final {
 // Streaming content transcoder (and multi-stage incremental decoder when
 // target_coding is identity). Decodes source_codings in reverse wire order and
 // encodes into target_coding.
+// write() and finish() return the representation's data error
+// (invalid_content or decoded_size_exceeded) as a value; the transcoder is then
+// failed, output keeps the bytes produced before the error, and only reset()
+// makes it usable again. Codec failures throw http_content_codec_error and
+// allocation exceptions keep their type; either also leaves it failed. Writing
+// after a failure or finish, or finishing a failed transcoder, throws
+// std::logic_error; finish() after success is a no-op.
 class http_content_transcoder final {
 public:
     http_content_transcoder(http_content_coding source_coding, http_content_coding target_coding, http_content_transcoder_options options = {});
@@ -305,8 +303,8 @@ public:
         return target_coding_;
     }
 
-    void write(std::string_view input, std::string& output, bool flush = false);
-    void finish(std::string& output);
+    [[nodiscard]] std::optional<http_content_decode_error> write(std::string_view input, std::string& output, bool flush = false);
+    [[nodiscard]] std::optional<http_content_decode_error> finish(std::string& output);
     void reset();
 
 private:
@@ -371,6 +369,9 @@ private:
 // into target_coding, otherwise falls back to the original untransformed stream.
 // The two-argument write(input, passthrough_output) overload spills staged
 // raw bytes directly into passthrough_output as soon as max_bytes_ is exceeded.
+// Exceeding max_bytes_ is the passthrough fallback, never an error; a source
+// representation that cannot be decoded is returned as invalid_content and
+// leaves the transcoder failed until reset().
 class http_staged_content_transcoder final {
 public:
     http_staged_content_transcoder(http_content_coding source_coding, http_content_coding target_coding, http_staged_transcode_options options = {});
@@ -388,12 +389,11 @@ public:
     [[nodiscard]] std::size_t staged_raw_bytes() const noexcept;
     [[nodiscard]] std::size_t decoded_bytes() const noexcept;
 
-    // Returns true while still staging within max_bytes_, or false once
-    // switched to passthrough fallback.
-    bool write(std::string_view input);
-    bool write(std::string_view input, std::string& passthrough_output);
+    // Staging versus fallback is reported by passthrough().
+    [[nodiscard]] std::optional<http_content_decode_error> write(std::string_view input);
+    [[nodiscard]] std::optional<http_content_decode_error> write(std::string_view input, std::string& passthrough_output);
 
-    [[nodiscard]] http_staged_transcode_result finish();
+    [[nodiscard]] std::variant<http_staged_transcode_result, http_content_decode_error> finish();
     void reset();
 
 private:

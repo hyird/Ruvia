@@ -12,6 +12,7 @@
 #include <new>
 #include <optional>
 #include <span>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -1290,7 +1291,9 @@ TEST(Ruvia, http2_public_received_peer_settings_reports_handshake_readiness) {
 
 TEST(Ruvia, http2_public_output_drain_enforces_undrained_control_frame_limits) {
     for (const auto type : {ruvia::http2_frame_type::ping, ruvia::http2_frame_type::settings}) {
-        auto client = ruvia::http2_connection::client();
+        // A budget above 2000 isolates the undrained-output bound from the
+        // non-progress frame budget.
+        auto client = ruvia::http2_connection::client({.max_non_progress_frames_ = 4000});
         std::string settings;
         append_peer_settings(settings);
         EXPECT_TRUE(client.feed(settings) == ruvia::http2_feed_result::accepted);
@@ -1525,6 +1528,162 @@ TEST(Ruvia, http2_public_submit_ping_keeps_one_liveness_probe_outstanding) {
     append_frame(invalid, ruvia::http2_frame_type::ping, 0, 1, "12345678");
     EXPECT_TRUE(server.feed(invalid) == ruvia::http2_feed_result::protocol_failure);
     EXPECT_TRUE(server.submit_ping() == ruvia::http2_submit_status::closed);
+}
+
+namespace {
+
+enum class non_progress_frame_kind : std::uint8_t {
+    empty_data,
+    window_update,
+    ping,
+    unsolicited_ping_ack,
+    settings,
+    priority,
+    priority_update,
+    unknown_extension,
+};
+
+// One received frame that cannot advance a stream; stream 1 is an open request.
+void append_non_progress_frame(std::string& wire, non_progress_frame_kind kind) {
+    switch (kind) {
+        case non_progress_frame_kind::empty_data:
+            append_frame(wire, ruvia::http2_frame_type::data, 0, 1, {});
+            return;
+        case non_progress_frame_kind::window_update:
+            append_frame(wire, ruvia::http2_frame_type::window_update, 0, 0, std::string_view("\x00\x00\x00\x01", 4));
+            return;
+        case non_progress_frame_kind::ping:
+            append_frame(wire, ruvia::http2_frame_type::ping, 0, 0, "keepaliv");
+            return;
+        case non_progress_frame_kind::unsolicited_ping_ack:
+            append_frame(wire, ruvia::http2_frame_type::ping, 0x1, 0, "notoursx");
+            return;
+        case non_progress_frame_kind::settings:
+            append_frame(wire, ruvia::http2_frame_type::settings, 0, 0, {});
+            return;
+        case non_progress_frame_kind::priority:
+            append_frame(wire, ruvia::http2_frame_type::priority, 0, 1, std::string_view("\x00\x00\x00\x00\x0f", 5));
+            return;
+        case non_progress_frame_kind::priority_update:
+            append_frame(wire, ruvia::http2_frame_type::priority_update, 0, 0, std::string_view("\x00\x00\x00\x01u=2", 7));
+            return;
+        case non_progress_frame_kind::unknown_extension:
+            append_frame(wire, static_cast<ruvia::http2_frame_type>(0xfa), 0, 0, "grease");
+            return;
+    }
+}
+
+// Feeds one frame, then drains events and output so neither the event queue
+// nor the undrained control-frame budget is involved.
+[[nodiscard]] ruvia::http2_feed_result feed_drained(ruvia::http2_connection& connection, std::string_view wire, std::string& output) {
+    const auto result = connection.feed(wire);
+    while (connection.next_event()) {
+    }
+    ruvia::test::drain_output(connection, output);
+    return result;
+}
+
+}  // namespace
+
+// nghttp2's glitch limiter has no clock here; a count of frames that advance
+// no stream ends a flood of them with GOAWAY(ENHANCE_YOUR_CALM).
+TEST(Ruvia, http2_public_non_progress_frame_floods_end_in_enhance_your_calm) {
+    for (const auto kind : {non_progress_frame_kind::empty_data, non_progress_frame_kind::window_update, non_progress_frame_kind::ping, non_progress_frame_kind::unsolicited_ping_ack, non_progress_frame_kind::settings, non_progress_frame_kind::priority, non_progress_frame_kind::priority_update, non_progress_frame_kind::unknown_extension}) {
+        SCOPED_TRACE(static_cast<int>(kind));
+        auto server = started_server();
+        std::string output;
+        std::string request;
+        append_open_get_request(request, 1);
+        ASSERT_EQ(server.feed(request), ruvia::http2_feed_result::accepted);
+        // Held so stream 1 stays open: a dropped request event abandons it, and
+        // frames for a stream nghttp2 retired never reach the budget.
+        auto head = server.next_event();
+        ASSERT_TRUE(head.has_value() && head->request_head() != nullptr);
+        ruvia::test::drain_output(server, output);
+        std::string frame;
+        append_non_progress_frame(frame, kind);
+        for (std::size_t count = 0; count != 1000; ++count) {
+            ASSERT_EQ(feed_drained(server, frame, output), ruvia::http2_feed_result::accepted);
+        }
+        EXPECT_FALSE(server.connection_error().has_value());
+        output.clear();
+        EXPECT_EQ(feed_drained(server, frame, output), ruvia::http2_feed_result::protocol_failure);
+        EXPECT_EQ(server.connection_error(), ruvia::http2_error_code::enhance_your_calm);
+        const auto goaways = goaway_frames(output);
+        ASSERT_EQ(goaways.size(), std::size_t{1});
+        EXPECT_EQ(goaways.front().error_code_, static_cast<std::uint32_t>(ruvia::http2_error_code::enhance_your_calm));
+    }
+}
+
+TEST(Ruvia, http2_public_stream_progress_refunds_non_progress_frame_budget) {
+    auto server = ruvia::http2_connection::server({.max_non_progress_frames_ = 20});
+    std::string output;
+    std::string handshake(ruvia::http2_client_preface);
+    append_peer_settings(handshake);
+    ASSERT_EQ(feed_drained(server, handshake, output), ruvia::http2_feed_result::accepted);
+    EXPECT_EQ(server.received_stream_progress(), 0U);
+
+    // Periodic keepalive PINGs and WINDOW_UPDATEs between completed exchanges
+    // stay within a budget they exceed many times over in total.
+    std::uint32_t stream_id = 1;
+    for (std::size_t round = 0; round != 200; ++round, stream_id += 2) {
+        std::string block;
+        ruvia::hpack_encoder::encode_header(block, ":method", "GET");
+        ruvia::hpack_encoder::encode_header(block, ":scheme", "https");
+        ruvia::hpack_encoder::encode_header(block, ":authority", "example.test");
+        ruvia::hpack_encoder::encode_header(block, ":path", "/");
+        std::string wire;
+        append_frame(wire, ruvia::http2_frame_type::headers, 0x5, stream_id, block);
+        for (std::size_t ping = 0; ping != 10; ++ping) {
+            append_non_progress_frame(wire, non_progress_frame_kind::ping);
+        }
+        append_non_progress_frame(wire, non_progress_frame_kind::window_update);
+        const auto progress = server.received_stream_progress();
+        ASSERT_EQ(server.feed(wire), ruvia::http2_feed_result::accepted);
+        EXPECT_GT(server.received_stream_progress(), progress);
+        auto event = server.next_event();
+        auto* head = event ? event->request_head() : nullptr;
+        ASSERT_NE(head, nullptr);
+        ruvia::http_response response;
+        response.static_body("ok");
+        ASSERT_EQ(submit_buffered_response(server, stream_id, response), ruvia::http2_submit_status::accepted);
+        EXPECT_EQ(server.release(std::move(*head)), ruvia::http2_server_request_release_status::released);
+        while (server.next_event()) {
+        }
+        ruvia::test::drain_output(server, output);
+    }
+    EXPECT_FALSE(server.connection_error().has_value());
+
+    // Frames that advance nothing never count as stream progress, and the
+    // budget alone ends a run of them.
+    const auto progress = server.received_stream_progress();
+    std::string frame;
+    append_non_progress_frame(frame, non_progress_frame_kind::ping);
+    for (std::size_t count = 0; count != 20; ++count) {
+        ASSERT_EQ(feed_drained(server, frame, output), ruvia::http2_feed_result::accepted);
+    }
+    EXPECT_EQ(server.received_stream_progress(), progress);
+    EXPECT_EQ(feed_drained(server, frame, output), ruvia::http2_feed_result::protocol_failure);
+    EXPECT_EQ(server.connection_error(), ruvia::http2_error_code::enhance_your_calm);
+}
+
+TEST(Ruvia, http2_public_own_ping_acks_are_free_and_zero_non_progress_budget_is_rejected) {
+    // The ACK of this endpoint's own PING answers a probe; it is not charged.
+    auto server = ruvia::http2_connection::server({.max_non_progress_frames_ = 1});
+    std::string output;
+    std::string handshake(ruvia::http2_client_preface);
+    append_peer_settings(handshake);
+    ASSERT_EQ(feed_drained(server, handshake, output), ruvia::http2_feed_result::accepted);
+    for (std::size_t round = 0; round != 5; ++round) {
+        ASSERT_EQ(server.submit_ping(), ruvia::http2_submit_status::accepted);
+        std::string ack;
+        append_frame(ack, ruvia::http2_frame_type::ping, 0x1, 0, ping_payload(ruvia::test::drain_output(server)));
+        ASSERT_EQ(feed_drained(server, ack, output), ruvia::http2_feed_result::accepted);
+    }
+    EXPECT_FALSE(server.connection_error().has_value());
+
+    EXPECT_THROW((void)ruvia::http2_connection::server({.max_non_progress_frames_ = 0}), std::invalid_argument);
+    EXPECT_THROW((void)ruvia::http2_connection::client({.max_non_progress_frames_ = 0}), std::invalid_argument);
 }
 
 TEST(Ruvia, http2_public_bounds_malformed_request_stream_resets_per_connection) {

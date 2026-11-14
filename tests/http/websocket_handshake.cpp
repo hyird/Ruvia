@@ -1033,19 +1033,19 @@ TEST(Ruvia, ws_public_compression_accepts_final_blocks_and_preserves_required_hi
         websocket_connection receiver(input, {.compression_ = (websocket_compression{.enabled_ = true, .server_no_context_takeover_ = no_takeover}), .role_ = websocket_connection_role::client, .mask_key_generator_ = &mask_source::generate, .mask_key_context_ = &mask});
         // RFC 7692 section 7.2.3.4: BFINAL=1, padding, then an empty block.
         input.append(std::string_view("\xc1\x08\xf3\x48\xcd\xc9\xc9\x07\x00\x00", 10));
-        auto event = receiver.next_event();
-        EXPECT_TRUE(event && event->message() && event->message()->payload() == "Hello");
+        const auto first = receiver.next_event();
+        EXPECT_TRUE(first && first->message() && first->message()->payload() == "Hello");
         // Two terminated streams within one message share their LZ77 history
         // even when context takeover between messages is disabled.
         input.append(std::string_view("\xc1\x0c\xf3\x48\xcd\xc9\xc9\x07\x00\xf3\x00\x11\x00\x00", 14));
-        event = receiver.next_event();
-        EXPECT_TRUE(event && event->message() && event->message()->payload() == "HelloHello");
+        const auto second = receiver.next_event();
+        EXPECT_TRUE(second && second->message() && second->message()->payload() == "HelloHello");
         input.append(std::string_view("\xc1\x01\x00", 3));
-        event = receiver.next_event();
-        EXPECT_TRUE(event && event->message() && event->message()->payload().empty());
+        const auto empty = receiver.next_event();
+        EXPECT_TRUE(empty && empty->message() && empty->message()->payload().empty());
         // This message refers back to the preceding message's dictionary.
         input.append(std::string_view("\xc1\x05\xf2\x00\x11\x00\x00", 7));
-        event = receiver.next_event();
+        const auto event = receiver.next_event();
         if (no_takeover) {
             EXPECT_TRUE(event && event->protocol_error() && event->protocol_error()->close_code() == 1002);
         } else {
@@ -1900,5 +1900,100 @@ TEST(Ruvia, ws_fragmented_deflate_enforces_uncompressed_message_limit) {
         const std::string_view view(incompressible);
         EXPECT_EQ(sender.submit_frame(websocket_opcode::binary, view.substr(0, 32), {.final_ = false, .compress_ = true}), websocket_frame_submit_status::accepted);
         EXPECT_EQ(sender.submit_frame(websocket_opcode::binary, view.substr(32, 32), {.final_ = true, .compress_ = true}), websocket_frame_submit_status::accepted);
+    }
+}
+
+namespace {
+// Grants receive storage up to limit_ bytes and records the charge.
+struct receive_budget final {
+    std::size_t limit_;
+    std::size_t held_{0};
+    static bool resize(void* context, std::size_t bytes) noexcept {
+        auto& self = *static_cast<receive_budget*>(context);
+        if (bytes > self.limit_) {
+            return false;
+        }
+        self.held_ = bytes;
+        return true;
+    }
+};
+}  // namespace
+
+TEST(Ruvia, ws_receive_storage_budget_bounds_reassembly_and_reports_pending_input) {
+    mask_source mask;
+    http_io_buffer sender_input;
+    auto sender = client(sender_input, mask);
+    receive_budget budget{.limit_ = 100000};
+    http_io_buffer input;
+    websocket_connection receiver(input, {.receive_storage_ = {.resize_ = &receive_budget::resize, .context_ = &budget}});
+    const std::string fragment(30000, 'f');
+    EXPECT_FALSE(receiver.message_pending());
+
+    // A partly received frame, then an open fragmented message, are pending.
+    EXPECT_EQ(sender.submit_frame(websocket_opcode::binary, fragment, {.final_ = false}), websocket_frame_submit_status::accepted);
+    const auto first = drain(sender);
+    input.append(std::string_view(first).substr(0, 10));
+    EXPECT_FALSE(receiver.next_event());
+    EXPECT_TRUE(receiver.message_pending());
+    input.append(std::string_view(first).substr(10));
+    EXPECT_FALSE(receiver.next_event());
+    EXPECT_TRUE(receiver.message_pending());
+    EXPECT_GE(budget.held_, fragment.size());
+
+    // Within the budget the message completes; the next poll releases its storage.
+    EXPECT_EQ(sender.submit_frame(websocket_opcode::binary, fragment), websocket_frame_submit_status::accepted);
+    input.append(drain(sender));
+    const auto message = receiver.next_event();
+    ASSERT_TRUE(message && message->message());
+    EXPECT_EQ(message->message()->payload(), fragment + fragment);
+    EXPECT_FALSE(receiver.message_pending());
+    EXPECT_FALSE(receiver.next_event());
+    EXPECT_EQ(budget.held_, std::size_t{0});
+
+    // Growing past the budget fails the message as too large (Close 1009),
+    // far below the receive message limit.
+    for (int index = 0; index != 2; ++index) {
+        EXPECT_EQ(sender.submit_frame(websocket_opcode::binary, fragment, {.final_ = false}), websocket_frame_submit_status::accepted);
+        input.append(drain(sender));
+        EXPECT_FALSE(receiver.next_event());
+    }
+    EXPECT_EQ(sender.submit_frame(websocket_opcode::binary, fragment, {.final_ = false}), websocket_frame_submit_status::accepted);
+    input.append(drain(sender));
+    const auto failure = receiver.next_event();
+    ASSERT_TRUE(failure && failure->protocol_error());
+    EXPECT_EQ(failure->protocol_error()->close_code(), 1009);
+    EXPECT_EQ(receiver.termination(), websocket_termination::message_too_large);
+    EXPECT_LE(budget.held_, budget.limit_);
+}
+
+TEST(Ruvia, ws_receive_storage_budget_bounds_inflated_messages) {
+    websocket_deflate_codecs codecs;
+    // The private inflater of a takeover direction, then the shared one.
+    for (const bool shared : {false, true}) {
+        const websocket_compression compression{.enabled_ = true, .client_no_context_takeover_ = shared};
+        mask_source mask;
+        http_io_buffer sender_input;
+        websocket_connection sender(sender_input, {.message_limit_ = protocol_byte_limit::unlimited(), .compression_ = compression, .role_ = websocket_connection_role::client, .mask_key_generator_ = &mask_source::generate, .mask_key_context_ = &mask});
+        receive_budget budget{.limit_ = 64 * 1024};
+        http_io_buffer input;
+        websocket_connection receiver(input, {.compression_ = compression, .shared_deflate_ = shared ? &codecs : nullptr, .receive_storage_ = {.resize_ = &receive_budget::resize, .context_ = &budget}});
+
+        const std::string small(20000, 'z');
+        EXPECT_EQ(sender.submit_frame(websocket_opcode::text, small), websocket_frame_submit_status::accepted);
+        input.append(drain(sender));
+        const auto message = receiver.next_event();
+        ASSERT_TRUE(message && message->message());
+        EXPECT_EQ(message->message()->payload(), small);
+        EXPECT_GE(budget.held_, small.size());
+
+        // A few hundred compressed bytes that inflate past the budget.
+        const std::string large(200000, 'z');
+        EXPECT_EQ(sender.submit_frame(websocket_opcode::text, large), websocket_frame_submit_status::accepted);
+        input.append(drain(sender));
+        const auto failure = receiver.next_event();
+        ASSERT_TRUE(failure && failure->protocol_error());
+        EXPECT_EQ(failure->protocol_error()->close_code(), 1009);
+        EXPECT_EQ(receiver.termination(), websocket_termination::message_too_large);
+        EXPECT_LE(budget.held_, budget.limit_);
     }
 }

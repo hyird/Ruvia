@@ -266,6 +266,9 @@ public:
         if (config.peer_transport_fin_timeout_.value() <= std::chrono::milliseconds::zero()) {
             throw std::invalid_argument("CONNECT peer transport FIN timeout must be greater than zero");
         }
+        if (config.idle_timeout_.has_value() && config.idle_timeout_->value() <= std::chrono::milliseconds::zero()) {
+            throw std::invalid_argument("CONNECT idle timeout must be greater than zero");
+        }
         return config;
     }
 
@@ -1958,6 +1961,7 @@ struct tunnel_upgrade_session_operation final {
             transport->abort();
             throw;
         }
+        session_->watch_idle(scanner_entry_, config_.idle_timeout_);
         // A synchronous commit leaves no co_await in this instantiation;
         // co_return keeps the body a coroutine for every transport.
         co_return;

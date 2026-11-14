@@ -72,8 +72,9 @@ inline task<http_response_file_write_result> write_http_response_file(asio::ip::
     // socket's IOCP instead and carries its file offset explicitly. Progress
     // is only observable when a call completes, so each call sends at most
     // one read-ahead slice, the same granularity at which the pooled reader
-    // renews write_timeout. The head rides in the first call's
-    // TRANSMIT_FILE_BUFFERS, saving a send and its completion.
+    // renews write_timeout and starts each write_completion_timeout. The head
+    // rides in the first call's TRANSMIT_FILE_BUFFERS, saving a send and its
+    // completion.
     constexpr std::uint64_t max_transmit_file_bytes = response_file_read_ahead_bytes;
     std::uint64_t offset = file.offset();
     std::uint64_t remaining = file.length();
@@ -118,7 +119,7 @@ inline task<http_response_file_write_result> write_http_response_file(asio::ip::
         }
         offset += file_sent;
         remaining -= file_sent;
-        progress.note_write_progress();
+        progress.begin_next_write();
         if (remaining != 0) {
             if (const auto changed = validate_native_file(input, file)) {
                 result.error_ = changed;
@@ -201,7 +202,9 @@ struct http1_response_write_start final {
 // handle. A missing, unreadable or changed file can then still be answered
 // with an error response. finish() writes the head start_response_write()
 // serialized into an otherwise empty `head`, with the first chunk in the same
-// send, then the rest of the body. Every partial transfer touches `progress`.
+// send, then the rest of the body. Every partial transfer touches `progress`;
+// each later chunk is a write operation of its own for
+// write_completion_timeout.
 template <typename stream_type>
 class http1_file_response_body final {
 public:
@@ -267,7 +270,7 @@ public:
             if (chunk.kind() == response_body_chunk::kind_type::failed) {
                 co_return classify_http1_buffered_response_write(response_plan, response_head_bytes, std::make_error_code(std::errc::io_error), response_head_bytes);
             }
-            progress.note_write_progress();
+            progress.begin_next_write();
             if (const auto written = co_await connection_gather_write(stream, chunk.bytes(), {}, progress); written.error_) {
                 co_return classify_http1_buffered_response_write(response_plan, response_head_bytes, written.error_, response_head_bytes);
             }

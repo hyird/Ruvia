@@ -611,6 +611,11 @@ private:
     http_datagram_stream stream_;
 };
 struct http_tunnel_route_config final {
+    // Aborts the tunnel's transport once no tunnel byte has been read or
+    // written for this long, measured by the connection scanner. A write in
+    // progress is not idle: the server write timeouts bound it. nullopt
+    // disables this guard; a set value must be positive.
+    std::optional<timeout_duration> idle_timeout_{std::chrono::minutes(5)};
     // Once the handler returns, bound flushing the local FIN and draining peer
     // input. A handler may half-close and continue reading without this deadline.
     timeout_duration peer_transport_fin_timeout_{5000};
@@ -727,6 +732,18 @@ struct websocket_lifecycle_options final {
     // transport is ended. The timeout starts when the Close is submitted, so it
     // also bounds writing the Close frame. nullopt disables this guard.
     std::optional<timeout_duration> close_handshake_timeout_{std::chrono::seconds(5)};
+    // While the session is open, aborts it (termination() timeout) once no
+    // frame byte has been read or written for this long; a write in progress
+    // is not idle. Heartbeat Pings and Pongs count, so a heartbeat whose
+    // interval is shorter keeps a responsive quiet peer connected. Peer bytes
+    // count only when a read takes them off the transport.
+    std::optional<timeout_duration> idle_timeout_{std::chrono::minutes(5)};
+    // Absolute bound on receiving one message, from its first received byte
+    // to its final fragment; neither Pings, Pongs nor further fragments extend
+    // it. It runs only while a read is pending, so a slow consumer is not
+    // charged for bytes it has not asked for. A lapse aborts the session
+    // (termination() timeout).
+    std::optional<timeout_duration> message_completion_timeout_{std::chrono::seconds(60)};
 };
 
 struct websocket_route_config final {

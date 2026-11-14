@@ -1432,4 +1432,33 @@ TEST(Ruvia, a_multi_worker_app_serves_http3_and_closes_it_on_stop) {
     }
     app.stop();
     capped.join();
+
+    // Rapid Reset (CVE-2023-44487), bounded as for HTTP/2: request streams the
+    // peer abandons may run 1000 ahead of the responses its connection
+    // completed; past that the connection closes with H3_EXCESSIVE_LOAD.
+    app.server({.worker_count_ = 4, .max_requests_per_connection_ = std::nullopt});
+    ruvia::test::app_run resetting(app);
+    EXPECT_TRUE(started.try_acquire_for(10s));
+    {
+        auto client = connect(port, identity);
+        EXPECT_EQ(client.request("GET", "/hello").status_, 200);
+        const auto abandon = [&client] {
+            const auto stream_id = client.start_streaming_request("POST", "/echo");
+            client.reset_request(stream_id, ruvia::http3_error_code::request_cancelled);
+        };
+        for (int round = 0; round != 1001; ++round) {
+            abandon();
+        }
+        // 1001 abandoned against one completed response is within the bound.
+        EXPECT_EQ(client.request("GET", "/hello").status_, 200);
+        for (int round = 0; round != 2 && !client.closed(); ++round) {
+            abandon();
+        }
+        EXPECT_TRUE(client.wait_until([&client] {
+            return client.closed();
+        }, client_timeout));
+        EXPECT_EQ(client.application_error(), std::optional(ruvia::http3_error_code::excessive_load));
+    }
+    app.stop();
+    resetting.join();
 }

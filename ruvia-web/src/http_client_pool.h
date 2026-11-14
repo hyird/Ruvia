@@ -2471,6 +2471,10 @@ public:
     // begin_close() queued its GOAWAY and the generation has not ended yet.
     [[nodiscard]] bool closing() const noexcept;
     [[nodiscard]] std::uint64_t generation() const noexcept;
+    // Successful transport reads of the reader, across generations. A stream
+    // compares it with its value when its head was submitted: no read since
+    // means the session never proved alive while the stream waited.
+    [[nodiscard]] std::uint64_t input_reads() const noexcept;
     // GOAWAY, an unprocessed request or exhausted stream IDs: no new streams.
     void mark_draining() noexcept;
     void wake_writer() noexcept;
@@ -2664,6 +2668,7 @@ private:
     worker_signal capacity_signal_;
     std::uint64_t generation_{0};
     std::size_t session_tasks_{0};
+    std::uint64_t input_reads_{0};
     // Request-stream capacity at the last publish_state().
     std::size_t request_capacity_{0};
     // When the reader last received bytes, while ping_interval_ is set.
@@ -2713,6 +2718,10 @@ public:
         std::size_t registry_index_{0};
         std::uint64_t request_id_{0};
         std::uint64_t cancellation_id_{0};
+        // The session's input_reads() when the head was submitted or the push
+        // promised. A stream timeout without a read since then evicts the
+        // session instead of only resetting the stream.
+        std::uint64_t input_mark_{0};
         std::uint32_t stream_id_{0};
         // Borrowed from the request or push driver while registered.
         const operation_deadline* timeout_{nullptr};
@@ -2828,6 +2837,9 @@ public:
     // Registers a stream whose timeout_ is set and arms its deadline timer.
     void register_http2_stream(http2_stream& stream);
     void remove_http2_stream(http2_stream& stream) noexcept;
+    // Ends a stream with RST_STREAM. A timeout of a stream whose head was
+    // submitted fails the whole session instead when the session read nothing
+    // since then (see http2_stream::input_mark_).
     void cancel_http2_stream(std::uint64_t request_id, client_abort_reason reason, http2_error_code error = http2_error_code::cancel) noexcept;
     [[nodiscard]] std::uint64_t next_http2_request_id() noexcept;
     void reprioritize(http_client_response_state& state_value, http_priority priority);

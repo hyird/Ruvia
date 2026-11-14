@@ -37,6 +37,7 @@
 #include "http3_server.h"
 #include "http_content_negotiation.h"
 #include "http_header.h"
+#include "http_protocol.h"
 #include "http_response.h"
 #include "multiplexed_session.h"
 #include "response_file.h"
@@ -385,7 +386,9 @@ http3_session::http3_session(http3_endpoint& endpoint, connection_slot slot, con
         .initial_path_ = path(remote_),
         .version_ = initial.version,
         .initial_timestamp_ = now(),
-        .handshake_timeout_ = handshake_timeout == 0 ? UINT64_MAX : handshake_timeout,
+        // With both request-head timeouts unset, the same product fallback as
+        // the TCP handshake and preface still bounds the QUIC handshake.
+        .handshake_timeout_ = handshake_timeout == 0 ? http3_quic_duration(timeout_duration(unconfigured_initial_read_deadline)) : handshake_timeout,
         // Zero disables the QUIC idle timeout, as an absent idle_timeout_
         // disables the HTTP one.
         .idle_timeout_ = http3_quic_duration(server.idle_timeout_),
@@ -600,7 +603,7 @@ void http3_session::dispatch_events() {
             // Either origin abandons the request: a peer RESET_STREAM or
             // STOP_SENDING, or the connection's own stream error (a malformed
             // trailer section, RFC 9114 §4.1.2), already sent.
-            on_stream_abort(action->stream_id());
+            on_stream_abort(*action);
         } else if (const auto* closed = event->stream_close()) {
             on_stream_close(*closed);
         }
@@ -799,8 +802,22 @@ void http3_session::on_stream_end(std::int64_t stream_id) {
     }
 }
 
-void http3_session::on_stream_abort(std::int64_t stream_id) noexcept {
-    if (auto* stream = find_stream(stream_id)) {
+void http3_session::on_stream_abort(const http3_transport_action_event& event) noexcept {
+    const auto stream_id = event.stream_id();
+    auto* stream = find_stream(stream_id);
+    // The peer abandons a request with RESET_STREAM, including one whose head
+    // never decoded; once the request ended it can only STOP_SENDING the
+    // response. A tracked stream counts once for both directions.
+    const bool abandons = event.action() == http3_transport_action::reset_stream || (stream != nullptr && stream->request_ended());
+    if (event.origin() == http3_transport_action_origin::peer && abandons && (stream == nullptr || stream->note_peer_abandoned())) {
+        ++peer_reset_streams_;
+        if (lifecycle_ == lifecycle_type::open && !connection_->closed() && peer_reset_streams_ > completed_responses_ + max_unprocessed_stream_resets) {
+            connection_lifecycle_.set_reason(connection_close_reason::protocol_error);
+            connection_->close(http3_error_code::excessive_load);
+            return;
+        }
+    }
+    if (stream != nullptr) {
         stream->mark_aborted();
         if (!stream->dispatched() || stream->handler_done()) {
             reset_stream(stream_id, http3_error_code::request_cancelled);
@@ -858,6 +875,9 @@ void http3_session::finish_stream_handler(std::int64_t stream_id) noexcept {
     if (stream == nullptr) {
         return;
     }
+    if (!stream->aborted()) {
+        ++completed_responses_;
+    }
     stream->mark_handler_done();
     if (stream->aborted() && lifecycle_ == lifecycle_type::open) {
         connection_->reset_stream(stream_id, http3_error_code::request_cancelled);
@@ -895,7 +915,7 @@ void http3_session::expire_stream_deadlines(std::int64_t now_ms) noexcept {
             continue;
         }
         auto* signal = stream.signal();
-        if (signal != nullptr && server.write_timeout_.has_value() && signal->output_wait_expired(now_ms, *server.write_timeout_)) {
+        if (signal != nullptr && signal->output_wait_expired(now_ms, server.write_timeout_, server.write_completion_timeout_)) {
             reset_stream(stream_id, http3_error_code::request_cancelled);
         }
     }
@@ -1483,6 +1503,7 @@ namespace {
 }  // namespace
 
 task<http3_data_write_status> write_http3_stream_data(http3_session& session, std::int64_t stream_id, multiplexed_stream_signal& signal, std::string_view bytes) {
+    const multiplexed_stream_signal::output_operation_guard operation(signal);
     while (!bytes.empty()) {
         if (signal.terminated()) {
             co_return http3_data_write_status::terminated;

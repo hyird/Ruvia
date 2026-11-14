@@ -28,10 +28,6 @@ constexpr std::uint8_t af_inet = 0x1;
 constexpr std::uint8_t af_inet6 = 0x2;
 constexpr std::uint8_t af_unix = 0x3;
 
-[[noreturn]] void reject(const char* reason) {
-    throw proxy_protocol_error(reason);
-}
-
 [[nodiscard]] constexpr std::uint8_t byte_value(std::byte value) noexcept {
     return static_cast<std::uint8_t>(value);
 }
@@ -137,8 +133,8 @@ proxy_protocol_parse_result proxy_protocol_parser::parse(std::span<const std::by
     try {
         return parse_bytes(input);
     } catch (...) {
-        // Fail closed: the caller cannot know how much of a rejected or
-        // unbufferable input was taken.
+        // Fail closed: the caller cannot know how much of an unbufferable
+        // input was taken.
         state_ = proxy_protocol_parser_state::failed;
         throw;
     }
@@ -161,6 +157,11 @@ void proxy_protocol_parser::reset() noexcept {
     state_ = proxy_protocol_parser_state::active;
 }
 
+void proxy_protocol_parser::reject(proxy_protocol_parse_error error) noexcept {
+    failure_ = error;
+    state_ = proxy_protocol_parser_state::failed;
+}
+
 proxy_protocol_parse_result proxy_protocol_parser::parse_bytes(std::span<const std::byte> input) {
     std::size_t position = 0;
     while (position < input.size() && state_ == proxy_protocol_parser_state::active) {
@@ -179,7 +180,10 @@ proxy_protocol_parse_result proxy_protocol_parser::parse_bytes(std::span<const s
                 break;
         }
     }
-    return {.complete_ = state_ == proxy_protocol_parser_state::finished, .consumed_bytes_ = position};
+    if (state_ == proxy_protocol_parser_state::failed) {
+        return proxy_protocol_parse_result(false, 0, failure_);
+    }
+    return proxy_protocol_parse_result(state_ == proxy_protocol_parser_state::finished, position, std::nullopt);
 }
 
 // The first byte selects the only signature it can begin ('P' or CR), so each
@@ -193,12 +197,14 @@ std::size_t proxy_protocol_parser::consume_signature(std::span<const std::byte> 
         } else if (value == v2_signature.front()) {
             header_.version_ = proxy_protocol_version::v2;
         } else {
-            reject("input does not begin a PROXY protocol signature");
+            reject(proxy_protocol_parse_error::invalid_signature);
+            return position;
         }
     } else {
         const auto expected = header_.version_ == proxy_protocol_version::v1 ? static_cast<std::uint8_t>(v1_signature[index]) : v2_signature[index];
         if (value != expected) {
-            reject("input does not begin a PROXY protocol signature");
+            reject(proxy_protocol_parse_error::invalid_signature);
+            return position;
         }
     }
     buffer_.push_back(input[position]);
@@ -218,7 +224,8 @@ std::size_t proxy_protocol_parser::consume_v1_line(std::span<const std::byte> in
     // whose LF did not arrive in the previous input.
     if (buffer_.back() == std::byte{'\r'}) {
         if (input[position] != std::byte{'\n'}) {
-            reject("PROXY protocol v1 CR is not followed by LF");
+            reject(proxy_protocol_parse_error::v1_invalid_line_ending);
+            return position;
         }
         buffer_.push_back(input[position]);
         finish_v1();
@@ -229,13 +236,14 @@ std::size_t proxy_protocol_parser::consume_v1_line(std::span<const std::byte> in
         return value == std::byte{'\r'} || value == std::byte{'\n'};
     });
     if (stop != chunk.end() && *stop == std::byte{'\n'}) {
-        reject("PROXY protocol v1 line ends in a bare LF");
+        reject(proxy_protocol_parse_error::v1_invalid_line_ending);
+        return position;
     }
     const auto taken = static_cast<std::size_t>(stop - chunk.begin()) + (stop == chunk.end() ? 0 : 1);
     buffer_.insert(buffer_.end(), chunk.begin(), chunk.begin() + static_cast<std::ptrdiff_t>(taken));
     // Full without CRLF, or a CR that leaves no room for its LF.
     if (buffer_.size() >= v1_max_line_bytes) {
-        reject("PROXY protocol v1 line exceeds 107 bytes");
+        reject(proxy_protocol_parse_error::v1_line_too_long);
     }
     return position + taken;
 }
@@ -247,7 +255,8 @@ std::size_t proxy_protocol_parser::consume_v2_fixed(std::span<const std::byte> i
             // Spec §2.2: the receiver must only accept version 2 and must drop
             // unassigned commands.
             if ((value >> 4) != 0x2) {
-                reject("PROXY protocol v2 version is not 2");
+                reject(proxy_protocol_parse_error::v2_unsupported_version);
+                return position;
             }
             switch (value & 0x0F) {
                 case 0x0:
@@ -257,13 +266,15 @@ std::size_t proxy_protocol_parser::consume_v2_fixed(std::span<const std::byte> i
                     header_.command_ = proxy_protocol_command::proxy;
                     break;
                 default:
-                    reject("PROXY protocol v2 command is unassigned");
+                    reject(proxy_protocol_parse_error::v2_unassigned_command);
+                    return position;
             }
             break;
         case 13:
             v2_family_ = static_cast<std::uint8_t>(value >> 4);
             if (v2_family_ > af_unix) {
-                reject("PROXY protocol v2 address family is unspecified");
+                reject(proxy_protocol_parse_error::v2_unassigned_address_family);
+                return position;
             }
             switch (value & 0x0F) {
                 case 0x0:
@@ -276,7 +287,8 @@ std::size_t proxy_protocol_parser::consume_v2_fixed(std::span<const std::byte> i
                     header_.transport_ = proxy_protocol_transport::datagram;
                     break;
                 default:
-                    reject("PROXY protocol v2 transport protocol is unspecified");
+                    reject(proxy_protocol_parse_error::v2_unassigned_transport);
+                    return position;
             }
             break;
         default:
@@ -288,10 +300,12 @@ std::size_t proxy_protocol_parser::consume_v2_fixed(std::span<const std::byte> i
     }
     const std::size_t length = load_big_endian_16(std::span<const std::byte>(buffer_).subspan(14, 2));
     if (length > max_v2_header_bytes_ - v2_fixed_bytes) {
-        reject("PROXY protocol v2 header exceeds the configured limit");
+        reject(proxy_protocol_parse_error::v2_header_too_large);
+        return position + 1;
     }
     if (header_.command_ == proxy_protocol_command::proxy && length < v2_address_block_bytes(v2_family_)) {
-        reject("PROXY protocol v2 length does not cover the address block");
+        reject(proxy_protocol_parse_error::v2_short_address_block);
+        return position + 1;
     }
     v2_header_size_ = v2_fixed_bytes + length;
     phase_ = parse_phase::v2_block;
@@ -327,22 +341,26 @@ void proxy_protocol_parser::finish_v1() {
     }
     const bool tcp4 = line.starts_with("TCP4 ");
     if (!tcp4 && !line.starts_with("TCP6 ")) {
-        reject("PROXY protocol v1 protocol is not TCP4, TCP6 or UNKNOWN");
+        reject(proxy_protocol_parse_error::v1_unsupported_protocol);
+        return;
     }
     const auto family = tcp4 ? ip_address_family::ipv4 : ip_address_family::ipv6;
     const auto fields = split_v1_fields(line.substr(5));
     if (!fields) {
-        reject("PROXY protocol v1 line does not have four single-space separated fields");
+        reject(proxy_protocol_parse_error::v1_invalid_fields);
+        return;
     }
     const auto source_address = parse_v1_address((*fields)[0], family);
     const auto destination_address = parse_v1_address((*fields)[1], family);
     if (!source_address || !destination_address) {
-        reject("PROXY protocol v1 address is not canonical text of the announced family");
+        reject(proxy_protocol_parse_error::v1_invalid_address);
+        return;
     }
     const auto source_port = parse_v1_port((*fields)[2]);
     const auto destination_port = parse_v1_port((*fields)[3]);
     if (!source_port || !destination_port) {
-        reject("PROXY protocol v1 port is not a decimal 0..65535 without heading zeroes");
+        reject(proxy_protocol_parse_error::v1_invalid_port);
+        return;
     }
     header_.transport_ = proxy_protocol_transport::stream;
     header_.source_ = ip_endpoint(*source_address, *source_port);
@@ -370,11 +388,13 @@ void proxy_protocol_parser::finish_v2() {
     auto rest = block.subspan(v2_address_block_bytes(v2_family_));
     while (!rest.empty()) {
         if (rest.size() < v2_tlv_header_bytes) {
-            reject("PROXY protocol v2 TLV header overruns the header");
+            reject(proxy_protocol_parse_error::v2_tlv_overrun);
+            return;
         }
         const std::size_t value_bytes = load_big_endian_16(rest.subspan(1, 2));
         if (value_bytes > rest.size() - v2_tlv_header_bytes) {
-            reject("PROXY protocol v2 TLV value overruns the header");
+            reject(proxy_protocol_parse_error::v2_tlv_overrun);
+            return;
         }
         tlvs_.push_back({.type_ = byte_value(rest[0]), .value_ = rest.subspan(v2_tlv_header_bytes, value_bytes)});
         rest = rest.subspan(v2_tlv_header_bytes + value_bytes);

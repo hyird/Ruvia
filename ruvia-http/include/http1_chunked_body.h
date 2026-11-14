@@ -181,6 +181,10 @@ private:
 
 class http1_chunk_decode_result final {
 public:
+    http1_chunk_decode_result(const http1_chunk_decode_result&) = default;
+    http1_chunk_decode_result(http1_chunk_decode_result&&) noexcept = default;
+    http1_chunk_decode_result& operator=(const http1_chunk_decode_result&) = delete;
+    http1_chunk_decode_result& operator=(http1_chunk_decode_result&&) = delete;
     [[nodiscard]] std::size_t consumed_bytes() const noexcept {
         return std::visit([](const auto& result_value) {
             return result_value.consumed_bytes();

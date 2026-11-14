@@ -167,6 +167,10 @@ std::uint64_t http2_client_session::generation() const noexcept {
     return generation_;
 }
 
+std::uint64_t http2_client_session::input_reads() const noexcept {
+    return input_reads_;
+}
+
 void http2_client_session::mark_draining() noexcept {
     draining_ = true;
     state_signal_.notify();
@@ -364,6 +368,7 @@ task<void> http2_client_session::run_reader(std::uint64_t generation) {
             if (generation_ != generation || failed_) {
                 co_return;
             }
+            ++input_reads_;
             if (ping_interval_) {
                 last_input_ = std::chrono::steady_clock::now();
             }
@@ -884,7 +889,19 @@ void http_client_connection::cancel_http2_stream(std::uint64_t request_id, clien
     }
     stream.error_ = http_client_abort_error(reason);
     stream.state_->request_informational_stop();
-    http2_.submit_reset(stream.stream_id_, error);
+    if (reason == client_abort_reason::timeout && stream.stream_id_ != 0 && http2_.running() && http2_.input_reads() == stream.input_mark_) {
+        // A timeout on a session that never proved alive evicts it: the peer
+        // sent nothing since this stream's head (or promise), so RST_STREAM
+        // alone would return a black-holed session to idle and every later
+        // request would time out on it too. Like a hyper or Go client
+        // dropping an unresponsive HTTP/2 connection, failing it ends its
+        // other streams at once with io_error, which a reused-session
+        // idempotent request retries on a new connection. A session that
+        // delivered any bytes meanwhile keeps multiplexing.
+        http2_.fail({.status_ = client_transport_status::io_failed, .error_ = std::make_error_code(std::errc::timed_out)});
+    } else {
+        http2_.submit_reset(stream.stream_id_, error);
+    }
     wake_http2_stream(stream);
 }
 
@@ -1060,6 +1077,7 @@ task<bool> http_client_connection::execute_http2(const http_client_request_stora
             if (const auto* accepted = std::get_if<std::uint32_t>(&submitted)) {
                 state_value.request_written_ = true;
                 stream.stream_id_ = *accepted;
+                stream.input_mark_ = http2_.input_reads();
                 state_value.stream_id_ = stream.stream_id_;
                 reused_session = http2_session_requests_ != 0;
                 capture_connection_info(state_value, reused_session);
@@ -1280,6 +1298,7 @@ void http_client_pool::accept_http2_push(http_client_connection& connection, con
         driver->stream_.request_target_ = request.path_;
         driver->stream_.request_id_ = state_value.request_id_;
         driver->stream_.stream_id_ = promise.promised_stream_id_;
+        driver->stream_.input_mark_ = connection.http2_.input_reads();
         connection.register_http2_stream(driver->stream_);
         driver->registered_ = true;
         ++active_pushes_;

@@ -16,8 +16,8 @@
 namespace {
 
 using ruvia::proxy_protocol_command;
-using ruvia::proxy_protocol_error;
 using ruvia::proxy_protocol_header;
+using ruvia::proxy_protocol_parse_error;
 using ruvia::proxy_protocol_parser;
 using ruvia::proxy_protocol_parser_options;
 using ruvia::proxy_protocol_parser_state;
@@ -109,31 +109,34 @@ void expect_v2_inet_with_tlvs(const proxy_protocol_header& header) {
 
 const proxy_protocol_header& parse_whole(proxy_protocol_parser& parser, std::string_view input) {
     const auto result = parser.parse(wire(input));
-    EXPECT_TRUE(result.complete_);
-    EXPECT_EQ(result.consumed_bytes_, input.size());
+    EXPECT_TRUE(result.complete());
+    EXPECT_FALSE(result.failure());
+    EXPECT_EQ(result.consumed_bytes(), input.size());
     EXPECT_EQ(parser.state(), proxy_protocol_parser_state::finished);
     return parser.header();
 }
 
-// Feeds `chunks` in order; the last one must be rejected.
-void expect_chunks_rejected(std::initializer_list<std::string_view> chunks, proxy_protocol_parser_options options = {}) {
+// Feeds `chunks` in order; the last one must be rejected with `error`.
+void expect_chunks_rejected(std::initializer_list<std::string_view> chunks, proxy_protocol_parse_error error, proxy_protocol_parser_options options = {}) {
     proxy_protocol_parser parser(options);
     std::size_t index = 0;
     for (const auto chunk : chunks) {
+        const auto result = parser.parse(wire(chunk));
+        EXPECT_FALSE(result.complete());
         if (++index < chunks.size()) {
-            const auto result = parser.parse(wire(chunk));
-            EXPECT_FALSE(result.complete_);
-            EXPECT_EQ(result.consumed_bytes_, chunk.size());
+            EXPECT_FALSE(result.failure());
+            EXPECT_EQ(result.consumed_bytes(), chunk.size());
             continue;
         }
-        EXPECT_THROW((void)parser.parse(wire(chunk)), proxy_protocol_error);
+        EXPECT_EQ(result.failure(), error);
+        EXPECT_EQ(result.consumed_bytes(), 0U);
     }
     EXPECT_EQ(parser.state(), proxy_protocol_parser_state::failed);
 }
 
-void expect_rejected(std::string_view input, proxy_protocol_parser_options options = {}) {
+void expect_rejected(std::string_view input, proxy_protocol_parse_error error, proxy_protocol_parser_options options = {}) {
     SCOPED_TRACE(std::string(input));
-    expect_chunks_rejected({input}, options);
+    expect_chunks_rejected({input}, error, options);
 }
 
 template <typename check_type>
@@ -142,14 +145,14 @@ void expect_every_split_point(std::string_view input, check_type check) {
         SCOPED_TRACE(split);
         proxy_protocol_parser parser;
         const auto first = parser.parse(wire(input.substr(0, split)));
-        EXPECT_EQ(first.consumed_bytes_, split);
+        EXPECT_EQ(first.consumed_bytes(), split);
         if (split < input.size()) {
-            EXPECT_FALSE(first.complete_);
+            EXPECT_FALSE(first.complete());
             const auto second = parser.parse(wire(input.substr(split)));
-            EXPECT_TRUE(second.complete_);
-            EXPECT_EQ(second.consumed_bytes_, input.size() - split);
+            EXPECT_TRUE(second.complete());
+            EXPECT_EQ(second.consumed_bytes(), input.size() - split);
         } else {
-            EXPECT_TRUE(first.complete_);
+            EXPECT_TRUE(first.complete());
         }
         ASSERT_EQ(parser.state(), proxy_protocol_parser_state::finished);
         check(parser.header());
@@ -161,8 +164,8 @@ void expect_byte_by_byte(std::string_view input, check_type check) {
     proxy_protocol_parser parser;
     for (std::size_t index = 0; index < input.size(); ++index) {
         const auto result = parser.parse(wire(input.substr(index, 1)));
-        EXPECT_EQ(result.consumed_bytes_, 1U);
-        EXPECT_EQ(result.complete_, index + 1 == input.size());
+        EXPECT_EQ(result.consumed_bytes(), 1U);
+        EXPECT_EQ(result.complete(), index + 1 == input.size());
     }
     ASSERT_EQ(parser.state(), proxy_protocol_parser_state::finished);
     check(parser.header());
@@ -283,27 +286,27 @@ TEST(Ruvia, proxy_protocol_consumed_bytes_exclude_payload) {
         proxy_protocol_parser parser;
         const auto input = std::string(v1_tcp4) + std::string(http_request_line);
         const auto result = parser.parse(wire(input));
-        EXPECT_TRUE(result.complete_);
-        EXPECT_EQ(result.consumed_bytes_, v1_tcp4.size());
+        EXPECT_TRUE(result.complete());
+        EXPECT_EQ(result.consumed_bytes(), v1_tcp4.size());
         expect_v1_tcp4(parser.header());
     }
     {
         // The CR of the CRLF ends one chunk; the LF and the payload follow.
         proxy_protocol_parser parser;
         const auto first = parser.parse(wire(v1_tcp4.substr(0, v1_tcp4.size() - 1)));
-        EXPECT_FALSE(first.complete_);
+        EXPECT_FALSE(first.complete());
         const auto rest = std::string("\n") + std::string(http_request_line);
         const auto second = parser.parse(wire(rest));
-        EXPECT_TRUE(second.complete_);
-        EXPECT_EQ(second.consumed_bytes_, 1U);
+        EXPECT_TRUE(second.complete());
+        EXPECT_EQ(second.consumed_bytes(), 1U);
     }
     {
         proxy_protocol_parser parser;
         const auto header = v2_inet_with_tlvs();
         const auto input = header + std::string(http_request_line);
         const auto result = parser.parse(wire(input));
-        EXPECT_TRUE(result.complete_);
-        EXPECT_EQ(result.consumed_bytes_, header.size());
+        EXPECT_TRUE(result.complete());
+        EXPECT_EQ(result.consumed_bytes(), header.size());
         expect_v2_inet_with_tlvs(parser.header());
     }
     {
@@ -311,25 +314,30 @@ TEST(Ruvia, proxy_protocol_consumed_bytes_exclude_payload) {
         proxy_protocol_parser parser;
         const auto input = v2_header(0x20, 0x00, "") + std::string(http_request_line);
         const auto result = parser.parse(wire(input));
-        EXPECT_TRUE(result.complete_);
-        EXPECT_EQ(result.consumed_bytes_, 16U);
+        EXPECT_TRUE(result.complete());
+        EXPECT_EQ(result.consumed_bytes(), 16U);
     }
 }
 
 TEST(Ruvia, proxy_protocol_rejects_invalid_signature_immediately) {
-    expect_rejected("G");
-    expect_rejected(std::string_view("\0", 1));
-    expect_rejected("PROXX");
-    expect_rejected("proxy ");
-    expect_rejected(std::string_view("\r\n\r\n\x01", 5));
-    expect_rejected(std::string_view("\r\n\r\n\0\r\nQUIT\r", 12));
-    expect_rejected(http_request_line);
+    for (const std::string_view input : {
+             std::string_view("G"),
+             std::string_view("\0", 1),
+             std::string_view("PROXX"),
+             std::string_view("proxy "),
+             std::string_view("\r\n\r\n\x01", 5),
+             std::string_view("\r\n\r\n\0\r\nQUIT\r", 12),
+             http_request_line,
+         }) {
+        expect_rejected(input, proxy_protocol_parse_error::invalid_signature);
+    }
     // A signature prefix is not rejected while it may still complete.
     for (const std::string_view prefix : {std::string_view("PROX"), std::string_view("\r\n\r\n\0\r\nQ", 8)}) {
         proxy_protocol_parser parser;
         const auto result = parser.parse(wire(prefix));
-        EXPECT_FALSE(result.complete_);
-        EXPECT_EQ(result.consumed_bytes_, prefix.size());
+        EXPECT_FALSE(result.complete());
+        EXPECT_FALSE(result.failure());
+        EXPECT_EQ(result.consumed_bytes(), prefix.size());
         EXPECT_EQ(parser.state(), proxy_protocol_parser_state::active);
     }
 }
@@ -341,11 +349,11 @@ TEST(Ruvia, proxy_protocol_v1_rejects_overlong_line) {
     proxy_protocol_parser parser;
     EXPECT_EQ(parse_whole(parser, longest).transport(), proxy_protocol_transport::unspecified);
 
-    expect_rejected(std::string(prefix) + std::string(107 - prefix.size() - 1, 'a') + "\r\n");
+    expect_rejected(std::string(prefix) + std::string(107 - prefix.size() - 1, 'a') + "\r\n", proxy_protocol_parse_error::v1_line_too_long);
     // 107 bytes without CRLF reject without waiting for more input.
-    expect_rejected(std::string(prefix) + std::string(107 - prefix.size(), 'a'));
+    expect_rejected(std::string(prefix) + std::string(107 - prefix.size(), 'a'), proxy_protocol_parse_error::v1_line_too_long);
     // A CR as the 107th byte leaves no room for its LF.
-    expect_rejected(std::string(prefix) + std::string(107 - prefix.size() - 1, 'a') + "\r");
+    expect_rejected(std::string(prefix) + std::string(107 - prefix.size() - 1, 'a') + "\r", proxy_protocol_parse_error::v1_line_too_long);
 }
 
 TEST(Ruvia, proxy_protocol_v1_rejects_bad_port) {
@@ -356,15 +364,15 @@ TEST(Ruvia, proxy_protocol_v1_rejects_bad_port) {
              std::string_view("PROXY TCP4 192.168.0.1 192.168.0.11 +1 443\r\n"),
              std::string_view("PROXY TCP4 192.168.0.1 192.168.0.11 http 443\r\n"),
              std::string_view("PROXY TCP4 192.168.0.1 192.168.0.11 56324 0x1BB\r\n"),
-             std::string_view("PROXY TCP4 192.168.0.1 192.168.0.11 56324\r\n"),
          }) {
-        expect_rejected(input);
+        expect_rejected(input, proxy_protocol_parse_error::v1_invalid_port);
     }
+    expect_rejected("PROXY TCP4 192.168.0.1 192.168.0.11 56324\r\n", proxy_protocol_parse_error::v1_invalid_fields);
 }
 
 TEST(Ruvia, proxy_protocol_v1_rejects_port_leading_zero) {
-    expect_rejected("PROXY TCP4 192.168.0.1 192.168.0.11 056324 443\r\n");
-    expect_rejected("PROXY TCP4 192.168.0.1 192.168.0.11 56324 00\r\n");
+    expect_rejected("PROXY TCP4 192.168.0.1 192.168.0.11 056324 443\r\n", proxy_protocol_parse_error::v1_invalid_port);
+    expect_rejected("PROXY TCP4 192.168.0.1 192.168.0.11 56324 00\r\n", proxy_protocol_parse_error::v1_invalid_port);
     proxy_protocol_parser parser;
     const auto& header = parse_whole(parser, "PROXY TCP4 192.168.0.1 192.168.0.11 0 0\r\n");
     EXPECT_EQ(header.source(), endpoint("192.168.0.1", 0));
@@ -382,16 +390,20 @@ TEST(Ruvia, proxy_protocol_v1_rejects_bad_address) {
              std::string_view("PROXY TCP4 256.0.0.1 192.168.0.11 1 2\r\n"),
              std::string_view("PROXY TCP4 localhost 192.168.0.11 1 2\r\n"),
          }) {
-        expect_rejected(input);
+        expect_rejected(input, proxy_protocol_parse_error::v1_invalid_address);
     }
 }
 
 TEST(Ruvia, proxy_protocol_v1_rejects_bare_line_endings) {
-    expect_rejected("PROXY TCP4 192.168.0.1 192.168.0.11 56324 443\n");
-    expect_rejected("PROXY UNKNOWN\n");
-    expect_rejected("PROXY TCP4 192.168.0.1 192.168.0.11 56324 443\rX");
-    expect_chunks_rejected({"PROXY TCP4 192.168.0.1 192.168.0.11 56324 443\r", "X"});
-    expect_rejected("PROXY UNKNOWN\r\r\n");
+    for (const std::string_view input : {
+             std::string_view("PROXY TCP4 192.168.0.1 192.168.0.11 56324 443\n"),
+             std::string_view("PROXY UNKNOWN\n"),
+             std::string_view("PROXY TCP4 192.168.0.1 192.168.0.11 56324 443\rX"),
+             std::string_view("PROXY UNKNOWN\r\r\n"),
+         }) {
+        expect_rejected(input, proxy_protocol_parse_error::v1_invalid_line_ending);
+    }
+    expect_chunks_rejected({"PROXY TCP4 192.168.0.1 192.168.0.11 56324 443\r", "X"}, proxy_protocol_parse_error::v1_invalid_line_ending);
 }
 
 TEST(Ruvia, proxy_protocol_v1_rejects_bad_syntax) {
@@ -400,37 +412,38 @@ TEST(Ruvia, proxy_protocol_v1_rejects_bad_syntax) {
              std::string_view("PROXY TCP4 192.168.0.1  192.168.0.11 56324 443\r\n"),
              std::string_view("PROXY TCP4 192.168.0.1 192.168.0.11 56324 443 \r\n"),
              std::string_view("PROXY TCP4 192.168.0.1 192.168.0.11 56324 443 1\r\n"),
+         }) {
+        expect_rejected(input, proxy_protocol_parse_error::v1_invalid_fields);
+    }
+    for (const std::string_view input : {
              std::string_view("PROXY TCP5 192.168.0.1 192.168.0.11 56324 443\r\n"),
              std::string_view("PROXY tcp4 192.168.0.1 192.168.0.11 56324 443\r\n"),
              std::string_view("PROXY TCP4\r\n"),
              std::string_view("PROXY UNKNOWNX\r\n"),
              std::string_view("PROXY \r\n"),
          }) {
-        expect_rejected(input);
+        expect_rejected(input, proxy_protocol_parse_error::v1_unsupported_protocol);
     }
 }
 
 TEST(Ruvia, proxy_protocol_v2_rejects_invalid_fixed_fields_immediately) {
     const auto signature = std::string("\r\n\r\n\0\r\nQUIT\n", 12);
     // Version nibble other than 2.
-    expect_rejected(signature + "\x11");
-    expect_rejected(signature + "\x31");
-    // Unassigned command.
-    expect_rejected(signature + "\x22");
-    expect_rejected(signature + "\x2F");
-    // Unspecified address family.
-    expect_rejected(signature + "\x21\x41");
-    expect_rejected(signature + "\x21\xF1");
-    // Unspecified transport protocol.
-    expect_rejected(signature + "\x21\x13");
-    expect_rejected(signature + "\x20\x0F");
+    expect_rejected(signature + "\x11", proxy_protocol_parse_error::v2_unsupported_version);
+    expect_rejected(signature + "\x31", proxy_protocol_parse_error::v2_unsupported_version);
+    expect_rejected(signature + "\x22", proxy_protocol_parse_error::v2_unassigned_command);
+    expect_rejected(signature + "\x2F", proxy_protocol_parse_error::v2_unassigned_command);
+    expect_rejected(signature + "\x21\x41", proxy_protocol_parse_error::v2_unassigned_address_family);
+    expect_rejected(signature + "\x21\xF1", proxy_protocol_parse_error::v2_unassigned_address_family);
+    expect_rejected(signature + "\x21\x13", proxy_protocol_parse_error::v2_unassigned_transport);
+    expect_rejected(signature + "\x20\x0F", proxy_protocol_parse_error::v2_unassigned_transport);
 }
 
 TEST(Ruvia, proxy_protocol_v2_rejects_over_limit_length) {
     const proxy_protocol_parser_options options{.max_v2_header_bytes_ = 64};
     // Rejected once the length field arrives, before any block byte.
-    expect_rejected(v2_header(0x21, 0x11, inet_block() + std::string(37, 'x')).substr(0, 16), options);
-    expect_rejected(v2_header(0x20, 0x00, std::string(0xFFFF, 'x')).substr(0, 16));
+    expect_rejected(v2_header(0x21, 0x11, inet_block() + std::string(37, 'x')).substr(0, 16), proxy_protocol_parse_error::v2_header_too_large, options);
+    expect_rejected(v2_header(0x20, 0x00, std::string(0xFFFF, 'x')).substr(0, 16), proxy_protocol_parse_error::v2_header_too_large);
 
     proxy_protocol_parser parser(options);
     const auto at_limit = v2_header(0x21, 0x11, inet_block() + tlv(0xE0, std::string(33, 'x')));
@@ -441,20 +454,21 @@ TEST(Ruvia, proxy_protocol_v2_rejects_over_limit_length) {
 }
 
 TEST(Ruvia, proxy_protocol_v2_rejects_short_address_block) {
-    expect_rejected(v2_header(0x21, 0x11, inet_block().substr(0, 11)).substr(0, 16));
-    expect_rejected(v2_header(0x21, 0x21, inet6_block().substr(0, 35)).substr(0, 16));
-    expect_rejected(v2_header(0x21, 0x31, std::string(215, '\0')).substr(0, 16));
-    expect_rejected(v2_header(0x21, 0x12, ""));
+    expect_rejected(v2_header(0x21, 0x11, inet_block().substr(0, 11)).substr(0, 16), proxy_protocol_parse_error::v2_short_address_block);
+    expect_rejected(v2_header(0x21, 0x21, inet6_block().substr(0, 35)).substr(0, 16), proxy_protocol_parse_error::v2_short_address_block);
+    expect_rejected(v2_header(0x21, 0x31, std::string(215, '\0')).substr(0, 16), proxy_protocol_parse_error::v2_short_address_block);
+    expect_rejected(v2_header(0x21, 0x12, ""), proxy_protocol_parse_error::v2_short_address_block);
 }
 
 TEST(Ruvia, proxy_protocol_v2_rejects_tlv_overrun) {
     expect_rejected(v2_header(0x21, 0x11,
-        inet_block() +
-            std::string("\x01\x00\x05"
-                        "ab",
-                5)));
-    expect_rejected(v2_header(0x21, 0x11, inet_block() + std::string("\x01\x00", 2)));
-    expect_rejected(v2_header(0x21, 0x11, inet_block() + tlv(0x01, "h2") + std::string("\x02", 1)));
+                        inet_block() +
+                            std::string("\x01\x00\x05"
+                                        "ab",
+                                5)),
+        proxy_protocol_parse_error::v2_tlv_overrun);
+    expect_rejected(v2_header(0x21, 0x11, inet_block() + std::string("\x01\x00", 2)), proxy_protocol_parse_error::v2_tlv_overrun);
+    expect_rejected(v2_header(0x21, 0x11, inet_block() + tlv(0x01, "h2") + std::string("\x02", 1)), proxy_protocol_parse_error::v2_tlv_overrun);
 }
 
 TEST(Ruvia, proxy_protocol_options_reject_small_v2_limit) {
@@ -471,7 +485,7 @@ TEST(Ruvia, proxy_protocol_parse_after_finished_or_failed_throws_logic_error) {
     EXPECT_EQ(parser.state(), proxy_protocol_parser_state::finished);
 
     proxy_protocol_parser failed;
-    EXPECT_THROW((void)failed.parse(wire("X")), proxy_protocol_error);
+    EXPECT_EQ(failed.parse(wire("X")).failure(), proxy_protocol_parse_error::invalid_signature);
     EXPECT_THROW((void)failed.parse(wire(v1_tcp4)), std::logic_error);
     EXPECT_THROW((void)failed.header(), std::logic_error);
     EXPECT_EQ(failed.state(), proxy_protocol_parser_state::failed);
@@ -486,7 +500,7 @@ TEST(Ruvia, proxy_protocol_reset_reuses_parser) {
     expect_v1_tcp4(parse_whole(parser, v1_tcp4));
 
     parser.reset();
-    EXPECT_THROW((void)parser.parse(wire("PROXY TCP4 1.2.3.4\n")), proxy_protocol_error);
+    EXPECT_EQ(parser.parse(wire("PROXY TCP4 1.2.3.4\n")).failure(), proxy_protocol_parse_error::v1_invalid_line_ending);
     parser.reset();
     expect_v2_inet_with_tlvs(parse_whole(parser, v2));
 

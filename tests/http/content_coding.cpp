@@ -1398,9 +1398,10 @@ TEST(RuviaHttpPublicApi, accept_encoding_candidate_order_and_transcoder) {
     ruvia::http_content_transcoder transcoder(source_stack, ruvia::http_content_coding::zstd, {.max_decoded_bytes_ = 8192, .max_encoded_bytes_ = 8192, .max_memory_bytes_ = 8 * 1024 * 1024});
     std::string transcoded;
     for (std::size_t pos = 0; pos < double_encoded->size(); pos += 17) {
-        transcoder.write(std::string_view(*double_encoded).substr(pos, 17), transcoded, false);
+        ASSERT_EQ(transcoder.write(std::string_view(*double_encoded).substr(pos, 17), transcoded, false), std::nullopt);
     }
-    transcoder.finish(transcoded);
+    ASSERT_EQ(transcoder.finish(transcoded), std::nullopt);
+    EXPECT_EQ(transcoder.finish(transcoded), std::nullopt);
 
     const auto final_decoded = ruvia::decode_http_content(ruvia::http_content_coding::zstd, transcoded, {.max_decoded_bytes_ = 8192});
     ASSERT_TRUE(std::holds_alternative<std::string>(final_decoded));
@@ -1408,6 +1409,66 @@ TEST(RuviaHttpPublicApi, accept_encoding_candidate_order_and_transcoder) {
 
     // Exhausted native codec memory cap throws std::bad_alloc.
     EXPECT_THROW((void)ruvia::http_content_encoder(ruvia::http_content_coding::gzip, {.max_memory_bytes_ = 64}), std::bad_alloc);
+}
+
+TEST(RuviaHttpPublicApi, transcoder_returns_peer_data_errors_as_values) {
+    const std::string original(4096, 'R');
+    const auto gzipped = ruvia::encode_http_content(ruvia::http_content_coding::gzip, original, {.max_encoded_bytes_ = 8192});
+    ASSERT_TRUE(gzipped.has_value());
+
+    // Corrupt input fails the transcoder until reset().
+    ruvia::http_content_transcoder corrupt(ruvia::http_content_coding::gzip, ruvia::http_content_coding::identity);
+    std::string output;
+    EXPECT_EQ(corrupt.write("definitely not a gzip member", output), std::optional(ruvia::http_content_decode_error::invalid_content));
+    EXPECT_THROW((void)corrupt.write(*gzipped, output), std::logic_error);
+    EXPECT_THROW((void)corrupt.finish(output), std::logic_error);
+    corrupt.reset();
+    output.clear();
+    ASSERT_EQ(corrupt.write(*gzipped, output), std::nullopt);
+    ASSERT_EQ(corrupt.finish(output), std::nullopt);
+    EXPECT_EQ(output, original);
+
+    // A stream that ends inside a gzip member is reported by finish().
+    ruvia::http_content_transcoder truncated(ruvia::http_content_coding::gzip, ruvia::http_content_coding::zstd);
+    output.clear();
+    ASSERT_EQ(truncated.write(std::string_view(*gzipped).substr(0, gzipped->size() / 2), output), std::nullopt);
+    EXPECT_EQ(truncated.finish(output), std::optional(ruvia::http_content_decode_error::invalid_content));
+    EXPECT_THROW((void)truncated.finish(output), std::logic_error);
+
+    // The decoded-size cap applies to coded and identity sources alike.
+    ruvia::http_content_transcoder oversized(ruvia::http_content_coding::gzip, ruvia::http_content_coding::identity, {.max_decoded_bytes_ = 100});
+    output.clear();
+    EXPECT_EQ(oversized.write(*gzipped, output), std::optional(ruvia::http_content_decode_error::decoded_size_exceeded));
+    EXPECT_THROW((void)oversized.write("", output), std::logic_error);
+
+    ruvia::http_content_transcoder oversized_identity(ruvia::http_content_coding::identity, ruvia::http_content_coding::gzip, {.max_decoded_bytes_ = 4});
+    output.clear();
+    EXPECT_EQ(oversized_identity.write("hello", output), std::optional(ruvia::http_content_decode_error::decoded_size_exceeded));
+
+    // Exceeding the staging window is a fallback; undecodable content is an error.
+    ruvia::http_staged_content_transcoder staged_corrupt(ruvia::http_content_coding::gzip, ruvia::http_content_coding::zstd);
+    EXPECT_EQ(staged_corrupt.write("definitely not a gzip member"), std::optional(ruvia::http_content_decode_error::invalid_content));
+    EXPECT_THROW((void)staged_corrupt.finish(), std::logic_error);
+
+    ruvia::http_staged_content_transcoder staged_truncated(ruvia::http_content_coding::gzip, ruvia::http_content_coding::zstd);
+    ASSERT_EQ(staged_truncated.write(std::string_view(*gzipped).substr(0, gzipped->size() / 2)), std::nullopt);
+    const auto truncated_result = staged_truncated.finish();
+    ASSERT_TRUE(std::holds_alternative<ruvia::http_content_decode_error>(truncated_result));
+    EXPECT_EQ(std::get<ruvia::http_content_decode_error>(truncated_result), ruvia::http_content_decode_error::invalid_content);
+
+    // The 4 KiB payload compresses far below max_bytes_, so only its decoded
+    // length leaves the staging window.
+    ruvia::http_staged_content_transcoder staged_oversized(ruvia::http_content_coding::gzip, ruvia::http_content_coding::zstd, {.max_bytes_ = 100});
+    ASSERT_LT(gzipped->size(), 100U);
+    const auto half = gzipped->size() / 2;
+    std::string passthrough_stream;
+    EXPECT_EQ(staged_oversized.write(std::string_view(*gzipped).substr(0, half), passthrough_stream), std::nullopt);
+    EXPECT_EQ(staged_oversized.write(std::string_view(*gzipped).substr(half), passthrough_stream), std::nullopt);
+    EXPECT_TRUE(staged_oversized.passthrough());
+    const auto oversized_result = staged_oversized.finish();
+    ASSERT_TRUE(std::holds_alternative<ruvia::http_staged_transcode_result>(oversized_result));
+    EXPECT_FALSE(std::get<ruvia::http_staged_transcode_result>(oversized_result).transformed());
+    EXPECT_EQ(passthrough_stream + std::string(std::get<ruvia::http_staged_transcode_result>(oversized_result).bytes()), *gzipped);
 }
 
 TEST(RuviaHttpPublicApi, media_type_compressibility_allowlist) {
@@ -1452,9 +1513,12 @@ TEST(RuviaHttpPublicApi, staged_transcoder_transforms_only_within_size_window) {
     // Case A: Decoded size within [min_bytes, max_bytes] -> transcodes gzip to zstd.
     ruvia::http_staged_content_transcoder staged(ruvia::http_content_coding::gzip, ruvia::http_content_coding::zstd, {.min_bytes_ = 100, .max_bytes_ = 4096});
     for (std::size_t pos = 0; pos < gzipped->size(); pos += 19) {
-        EXPECT_TRUE(staged.write(std::string_view(*gzipped).substr(pos, 19)));
+        EXPECT_EQ(staged.write(std::string_view(*gzipped).substr(pos, 19)), std::nullopt);
+        EXPECT_FALSE(staged.passthrough());
     }
-    auto res_in_range = staged.finish();
+    const auto finished_in_range = staged.finish();
+    ASSERT_TRUE(std::holds_alternative<ruvia::http_staged_transcode_result>(finished_in_range));
+    const auto& res_in_range = std::get<ruvia::http_staged_transcode_result>(finished_in_range);
     EXPECT_TRUE(res_in_range.transformed());
     EXPECT_EQ(res_in_range.coding(), ruvia::http_content_coding::zstd);
     EXPECT_EQ(res_in_range.decoded_bytes(), payload.size());
@@ -1464,8 +1528,11 @@ TEST(RuviaHttpPublicApi, staged_transcoder_transforms_only_within_size_window) {
 
     // Case B: Decoded size < min_bytes -> falls back to original untransformed stream!
     ruvia::http_staged_content_transcoder too_small(ruvia::http_content_coding::gzip, ruvia::http_content_coding::zstd, {.min_bytes_ = payload.size() + 100, .max_bytes_ = 8192});
-    EXPECT_TRUE(too_small.write(*gzipped));
-    auto res_small = too_small.finish();
+    EXPECT_EQ(too_small.write(*gzipped), std::nullopt);
+    EXPECT_FALSE(too_small.passthrough());
+    const auto finished_small = too_small.finish();
+    ASSERT_TRUE(std::holds_alternative<ruvia::http_staged_transcode_result>(finished_small));
+    const auto& res_small = std::get<ruvia::http_staged_transcode_result>(finished_small);
     EXPECT_FALSE(res_small.transformed());
     EXPECT_EQ(res_small.coding(), ruvia::http_content_coding::gzip);
     EXPECT_EQ(res_small.bytes(), *gzipped);
@@ -1474,10 +1541,12 @@ TEST(RuviaHttpPublicApi, staged_transcoder_transforms_only_within_size_window) {
     ruvia::http_staged_content_transcoder too_large(ruvia::http_content_coding::gzip, ruvia::http_content_coding::zstd, {.min_bytes_ = 16, .max_bytes_ = 256});
     std::string passthrough_stream;
     for (std::size_t pos = 0; pos < gzipped->size(); pos += 13) {
-        (void)too_large.write(std::string_view(*gzipped).substr(pos, 13), passthrough_stream);
+        EXPECT_EQ(too_large.write(std::string_view(*gzipped).substr(pos, 13), passthrough_stream), std::nullopt);
     }
     EXPECT_TRUE(too_large.passthrough());
-    auto res_large = too_large.finish();
+    const auto finished_large = too_large.finish();
+    ASSERT_TRUE(std::holds_alternative<ruvia::http_staged_transcode_result>(finished_large));
+    const auto& res_large = std::get<ruvia::http_staged_transcode_result>(finished_large);
     EXPECT_FALSE(res_large.transformed());
     EXPECT_EQ(passthrough_stream + std::string(res_large.bytes()), *gzipped);
 }

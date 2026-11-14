@@ -111,7 +111,11 @@ void configure_listener_address(asio::ip::tcp::acceptor& socket) {
 // The scanner also collects the worker's thread heap after an idle interval.
 [[nodiscard]] connection_scanner_options make_connection_scanner_options(const http_server_options& options) noexcept {
     const auto& server = options.server_;
-    return connection_scanner_options{.scan_interval_ = server.connection_scan_interval_, .idle_timeout_ = server.idle_timeout_, .initial_read_timeout_ = server.request_header_timeout_, .payload_read_timeout_ = server.request_body_timeout_, .write_timeout_ = server.write_timeout_, .initial_read_completion_timeout_ = server.header_completion_timeout_, .payload_read_completion_timeout_ = server.body_completion_timeout_};
+    connection_scanner_options scanner{.scan_interval_ = server.connection_scan_interval_, .idle_timeout_ = server.idle_timeout_, .initial_read_timeout_ = server.request_header_timeout_, .payload_read_timeout_ = server.request_body_timeout_, .write_timeout_ = server.write_timeout_, .initial_read_completion_timeout_ = server.header_completion_timeout_, .payload_read_completion_timeout_ = server.body_completion_timeout_, .write_completion_timeout_ = server.write_completion_timeout_};
+    if (!scanner.initial_read_timeout_ && !scanner.initial_read_completion_timeout_) {
+        scanner.initial_read_completion_timeout_ = unconfigured_initial_read_deadline;
+    }
+    return scanner;
 }
 
 // Names the peer for the session's services and its failure report. Both stay
@@ -859,7 +863,7 @@ task<void> worker_connections::prepare_connection(std::size_t index, tcp_socket_
         if (const auto request = options_.server_.request_header_timeout_; request && (!limit || *request < *limit)) {
             limit = request;
         }
-        operation_interrupt interrupt(source, worker_, {.timeout_ = operation_timeout(limit.value_or(std::chrono::seconds(30))), .stop_token_ = stop_token_}, &socket, [](void* raw) noexcept {
+        operation_interrupt interrupt(source, worker_, {.timeout_ = operation_timeout(limit.value_or(unconfigured_initial_read_deadline)), .stop_token_ = stop_token_}, &socket, [](void* raw) noexcept {
             ruvia::close_socket(*static_cast<tcp_socket_type*>(raw));
         }, "PROXY protocol header");
         proxy_protocol_parser parser;
@@ -868,15 +872,20 @@ task<void> worker_connections::prepare_connection(std::size_t index, tcp_socket_
         auto bytes_read = prefix.size();
         for (;;) {
             const auto parsed = parser.parse(input);
-            if (parsed.complete_) {
+            // A malformed preface, or a datagram transport on this TCP
+            // listener, is untrusted input: drop only this connection.
+            if (parsed.failure()) {
+                co_return;
+            }
+            if (parsed.complete()) {
                 const auto& header = parser.header();
                 if (header.transport() == proxy_protocol_transport::datagram) {
-                    throw proxy_protocol_error("a TCP listener requires a stream PROXY transport");
+                    co_return;
                 }
                 if (header.source()) {
                     remote = header.source();
                 }
-                std::vector<std::byte> remaining(input.begin() + parsed.consumed_bytes_, input.end());
+                std::vector<std::byte> remaining(input.begin() + parsed.consumed_bytes(), input.end());
                 interrupt.throw_if_interrupted();
                 admit_socket(index, std::move(socket), remote, std::move(remaining), bytes_read);
                 co_return;
@@ -891,8 +900,6 @@ task<void> worker_connections::prepare_connection(std::size_t index, tcp_socket_
             bytes_read += completion.result();
             input = std::span<const std::byte>(buffer.data(), completion.result());
         }
-    } catch (const proxy_protocol_error&) {
-        // Malformed mandatory prefaces are untrusted input, not host failures.
     } catch (const std::system_error&) {
         // EOF, timeout and shutdown close only this pending connection.
     } catch (...) {
@@ -3415,6 +3422,10 @@ void connection_scanner::entry::note_write_progress() noexcept {
         write_progress_ms_ = last_active_ms_;
     }
 }
+void connection_scanner::entry::begin_next_write() noexcept {
+    note_write_progress();
+    write_started_ms_ = write_progress_ms_;
+}
 void connection_scanner::entry::set_phase(phase next_phase) noexcept {
     if (scanner_ == nullptr) {
         return;
@@ -3426,6 +3437,7 @@ void connection_scanner::entry::set_phase(phase next_phase) noexcept {
     }
     if (write_started) {
         write_progress_ms_ = last_active_ms_;
+        write_started_ms_ = last_active_ms_;
     }
     phase_ = next_phase;
     // A head read that completed before its cancel took effect returns the
@@ -3455,7 +3467,7 @@ connection_scanner::entry::phase_scope::~phase_scope() {
 connection_scanner::entry::write_scope::write_scope(entry& entry_value) noexcept :
     entry_(entry_value) {
     if (!entry_.write_pending()) {
-        entry_.note_write_progress();
+        entry_.begin_next_write();
     }
     ++entry_.write_scopes_;
 }
@@ -3825,9 +3837,9 @@ void connection_scanner::impl_type::expire(entry& entry_value) noexcept {
             request_close(entry_value, steady_deadline_ms(now, options_.scan_interval_.value()));
             return;
         }
-        // A stalled write cannot carry a graceful end (GOAWAY, close alert);
-        // a write still progressing is followed by the drain's own output.
-        if (entry_value.phase_ != phase::writing && !write_stalled(entry_value, now) && entry_value.has_drain_check()) {
+        // An overdue write cannot carry a graceful end (GOAWAY, close alert);
+        // a write still within its limits is followed by the drain's own output.
+        if (entry_value.phase_ != phase::writing && !write_overdue(entry_value, now) && entry_value.has_drain_check()) {
             // The callback may retire the entry; record the request first.
             record_close_request(entry_value, steady_deadline_ms(now, connection_close_grace));
             entry_value.notify_drain();
@@ -3858,7 +3870,7 @@ bool connection_scanner::impl_type::is_timed_out(const entry& entry_value, std::
     if (entry_value.close_requested_) {
         return now >= entry_value.close_deadline_ms_;
     }
-    if (write_stalled(entry_value, now)) {
+    if (write_overdue(entry_value, now)) {
         return true;
     }
     // 活动时间独立采样，不能把配置的扫描间隔当成调度延迟的上界。
@@ -3879,8 +3891,8 @@ bool connection_scanner::impl_type::is_timed_out(const entry& entry_value, std::
             return timeout_expired(options_.idle_timeout_, inactive_ms);
     }
 }
-bool connection_scanner::impl_type::write_stalled(const entry& entry_value, std::int64_t now) const noexcept {
-    return entry_value.write_pending() && timeout_expired(options_.write_timeout_, now - entry_value.write_progress_ms_);
+bool connection_scanner::impl_type::write_overdue(const entry& entry_value, std::int64_t now) const noexcept {
+    return entry_value.write_pending() && (timeout_expired(options_.write_timeout_, now - entry_value.write_progress_ms_) || timeout_expired(options_.write_completion_timeout_, now - entry_value.write_started_ms_));
 }
 
 }  // namespace ruvia::detail

@@ -66,6 +66,30 @@ static_assert(http2_drain_ping_payload.size() == 8 && http2_liveness_ping_payloa
     return size == 0 ? std::string_view{} : std::string_view(reinterpret_cast<const char*>(data), size);
 }
 
+// Frame types that cannot advance a stream, judged from the header alone:
+// empty DATA without END_STREAM is charged here because nghttp2 completes a
+// zero-length frame only once later input arrives. Padding-only DATA is judged
+// once received, a PING ACK by whether it answers our PING, and RST_STREAM by
+// the Rapid-Reset budget. The first SETTINGS is the mandatory connection
+// preface (RFC 9113 section 3.4).
+[[nodiscard]] bool non_progress_frame_header(const nghttp2_frame_hd& header, bool received_peer_settings) noexcept {
+    switch (header.type) {
+        case NGHTTP2_DATA:
+            return header.length == 0 && (header.flags & NGHTTP2_FLAG_END_STREAM) == 0;
+        case NGHTTP2_HEADERS:
+        case NGHTTP2_PUSH_PROMISE:
+        case NGHTTP2_CONTINUATION:
+        case NGHTTP2_RST_STREAM:
+            return false;
+        case NGHTTP2_SETTINGS:
+            return (header.flags & NGHTTP2_FLAG_ACK) == 0 && received_peer_settings;
+        case NGHTTP2_PING:
+            return (header.flags & NGHTTP2_FLAG_ACK) == 0;
+        default:
+            return true;
+    }
+}
+
 }  // namespace
 
 // Static entry points registered with nghttp2. Each one is noexcept: an
@@ -170,15 +194,16 @@ nghttp2_ssize http2_connection::read_outbound_data(nghttp2_session*, std::int32_
     return static_cast<nghttp2_ssize>(copied);
 }
 
-http2_connection::http2_connection(http2_role role, bool enable_push, bool receive_origin_advertisements, bool receive_frame_metadata, http2_frame_observer_type frame_observer, http2_header_observer_type header_observer, void* observer_context) :
+http2_connection::http2_connection(http2_role role, const http2_connection_options& options) :
     memory_table_(make_c_library_mem_table<nghttp2_mem>(memory_)),
     role_(role) {
-    enable_push_ = role == http2_role::client && enable_push;
-    receive_origin_advertisements_ = role == http2_role::client && receive_origin_advertisements;
-    receive_frame_metadata_ = receive_frame_metadata;
-    frame_observer_ = frame_observer;
-    header_observer_ = header_observer;
-    observer_context_ = observer_context;
+    enable_push_ = role == http2_role::client && options.enable_push_;
+    receive_origin_advertisements_ = role == http2_role::client && options.receive_origin_advertisements_;
+    receive_frame_metadata_ = options.receive_frame_metadata_;
+    frame_observer_ = options.frame_observer_;
+    header_observer_ = options.header_observer_;
+    observer_context_ = options.observer_context_;
+    max_non_progress_frames_ = options.max_non_progress_frames_;
     create_session();
 }
 
@@ -236,20 +261,14 @@ void http2_connection::create_session() {
     constexpr auto unlimited = (std::numeric_limits<std::uint64_t>::max)();
     nghttp2_option_set_stream_reset_rate_limit(option.get(), unlimited, 0);
     nghttp2_option_set_glitch_rate_limit(option.get(), unlimited, 0);
-    if (role_ == http2_role::client) {
-        nghttp2_option_set_user_recv_extension_type(option.get(), static_cast<std::uint8_t>(http2_frame_type::alternative_service));
-        if (receive_origin_advertisements_) {
-            nghttp2_option_set_user_recv_extension_type(option.get(), static_cast<std::uint8_t>(http2_frame_type::origin));
-        }
-    }
     nghttp2_option_set_builtin_recv_extension_type(option.get(), NGHTTP2_PRIORITY_UPDATE);
-    // Unknown extensions remain semantically ignored, but use nghttp2's same
-    // framing callbacks when a wire observer needs their position.
-    if (frame_observer_ != nullptr) {
-        for (unsigned type = 0x0a; type <= 0xff; ++type) {
-            if (type != NGHTTP2_PRIORITY_UPDATE) {
-                nghttp2_option_set_user_recv_extension_type(option.get(), static_cast<std::uint8_t>(type));
-            }
+    // Every other extension type (ALTSVC and ORIGIN included) goes through the
+    // framing callbacks instead of being skipped unseen: on_begin_frame charges
+    // it to the non-progress budget and gives a wire observer its position.
+    // Unknown types remain semantically ignored (RFC 9113 section 5.5).
+    for (unsigned type = 0x0a; type <= 0xff; ++type) {
+        if (type != NGHTTP2_PRIORITY_UPDATE) {
+            nghttp2_option_set_user_recv_extension_type(option.get(), static_cast<std::uint8_t>(type));
         }
     }
 
@@ -547,6 +566,9 @@ int http2_connection::on_begin_frame(const nghttp2_frame_hd& header) {
             frame_observer_(observer_context_, observed_frame_);
         }
     }
+    if (non_progress_frame_header(header, received_peer_settings_)) {
+        charge_non_progress_frame();
+    }
     switch (header.type) {
         case NGHTTP2_HEADERS:
             if (role_ == http2_role::server && (header.stream_id & 1) != 0) {
@@ -593,16 +615,29 @@ int http2_connection::on_frame_recv(const nghttp2_frame& frame) {
         return 0;
     }
     switch (frame.hd.type) {
-        case NGHTTP2_DATA:
-            if ((frame.hd.flags & NGHTTP2_FLAG_END_STREAM) != 0) {
+        case NGHTTP2_DATA: {
+            const bool end_stream = (frame.hd.flags & NGHTTP2_FLAG_END_STREAM) != 0;
+            const auto content_bytes = frame.hd.length - frame.data.padlen;
+            if (content_bytes == 0 && !end_stream) {
+                if (frame.hd.length != 0) {
+                    charge_non_progress_frame();
+                }
+                break;
+            }
+            refund_non_progress_frames(content_bytes);
+            if (end_stream) {
+                ++received_stream_progress_;
                 if (auto* stream = streams_.find(frame.hd.stream_id); stream != nullptr && !stream->is_aborted()) {
                     finish_data_frame(*stream);
                 }
             }
             break;
+        }
         case NGHTTP2_HEADERS:
         case NGHTTP2_PUSH_PROMISE:
             header_block_in_progress_ = false;
+            ++received_stream_progress_;
+            refund_non_progress_frames(0);
             finish_header_block(frame);
             break;
         case NGHTTP2_RST_STREAM:
@@ -658,13 +693,30 @@ void http2_connection::on_ping_frame(const nghttp2_frame& frame) {
         return;
     }
     const auto payload = bytes_view(frame.ping.opaque_data, sizeof(frame.ping.opaque_data));
+    const auto* drain = local_connection_state_.graceful_drain();
     // The drain PING's ACK completes the round trip that in-flight stream
     // creation was given (RFC 9113 §6.8).
-    if (payload == http2_drain_ping_payload) {
+    if (payload == http2_drain_ping_payload && drain != nullptr && drain->awaiting_round_trip()) {
         finish_drain_round_trip();
-    } else if (payload == http2_liveness_ping_payload) {
+    } else if (payload == http2_liveness_ping_payload && liveness_ping_outstanding_) {
         liveness_ping_outstanding_ = false;
+    } else {
+        // An ACK that answers no outstanding PING of ours.
+        charge_non_progress_frame();
     }
+}
+
+void http2_connection::charge_non_progress_frame() {
+    if (non_progress_frames_ >= max_non_progress_frames_) {
+        fail_connection(http2_error_code::enhance_your_calm);
+        return;
+    }
+    ++non_progress_frames_;
+}
+
+void http2_connection::refund_non_progress_frames(std::size_t data_bytes) noexcept {
+    const auto refund = std::size_t{non_progress_frame_refund} + data_bytes / non_progress_refund_data_bytes;
+    non_progress_frames_ = refund >= non_progress_frames_ ? 0 : non_progress_frames_ - static_cast<std::uint32_t>(refund);
 }
 
 void http2_connection::on_goaway_frame(const nghttp2_frame& frame) {
@@ -825,7 +877,7 @@ void http2_connection::on_rst_stream_frame(const nghttp2_frame& frame) {
     // Rapid reset (CVE-2023-44487): a peer that keeps resetting streams far ahead
     // of the responses it lets complete is cut off.
     ++peer_reset_streams_;
-    if (static_cast<std::uint64_t>(peer_reset_streams_) > static_cast<std::uint64_t>(completed_responses_) + max_unprocessed_resets) {
+    if (peer_reset_streams_ > completed_responses_ + max_unprocessed_stream_resets) {
         fail_connection(http2_error_code::enhance_your_calm);
     }
 }
@@ -879,6 +931,9 @@ int http2_connection::before_frame_send(const nghttp2_frame& frame) {
 }
 
 int http2_connection::on_frame_send(const nghttp2_frame& frame) {
+    if (frame.hd.type == NGHTTP2_DATA || frame.hd.type == NGHTTP2_HEADERS) {
+        refund_non_progress_frames(frame.hd.type == NGHTTP2_DATA ? frame.hd.length : 0);
+    }
     // A GOAWAY carrying an error is nghttp2's own connection error (or ours,
     // already recorded); graceful drain GOAWAYs carry NO_ERROR.
     if (frame.hd.type == NGHTTP2_GOAWAY && frame.goaway.error_code != NGHTTP2_NO_ERROR && local_connection_state_.fatal_failure() == nullptr) {
@@ -1581,7 +1636,7 @@ namespace detail {
 class http2_connection_owner_endpoint final {
 public:
     http2_connection_owner_endpoint(http2_role role, const http2_connection_options& options) :
-        connection_(role, options.enable_push_, options.receive_origin_advertisements_, options.receive_frame_metadata_, options.frame_observer_, options.header_observer_, options.observer_context_) {}
+        connection_(role, options) {}
     http2_connection_owner_endpoint(const http2_connection_owner_endpoint&) = delete;
     http2_connection_owner_endpoint& operator=(const http2_connection_owner_endpoint&) = delete;
 
@@ -1782,6 +1837,10 @@ void http2_connection::impl_deleter_type::operator()(detail::http2_connection_ow
 }
 
 http2_connection::http2_connection(http2_role role, const http2_connection_options& options) {
+    // Even a peer's first WINDOW_UPDATE would end a connection without budget.
+    if (options.max_non_progress_frames_ == 0) {
+        throw std::invalid_argument("HTTP/2 non-progress frame budget must be positive");
+    }
     impl_.reset(new detail::http2_connection_owner_endpoint(role, options));
     impl_->connection_.begin_connection();
 }
@@ -1821,6 +1880,9 @@ bool http2_connection::header_block_in_progress() const noexcept {
 }
 bool http2_connection::received_peer_settings() const noexcept {
     return impl_->connection_.received_peer_settings();
+}
+std::uint64_t http2_connection::received_stream_progress() const noexcept {
+    return impl_->connection_.received_stream_progress();
 }
 http2_feed_result http2_connection::feed(std::string_view input) {
     auto& connection = impl_->connection_;

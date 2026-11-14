@@ -27,6 +27,10 @@ inline constexpr std::size_t default_max_buffered_body_bytes = std::size_t{16} *
 inline constexpr std::size_t default_max_websocket_message_bytes = std::size_t{16} * 1024 * 1024;
 // Bytes one SSE event may buffer while sse_parser assembles it.
 inline constexpr std::size_t default_max_sse_event_bytes = std::size_t{16} * 1024 * 1024;
+// Rapid Reset (CVE-2023-44487): how far a multiplexed peer's abandoned request
+// streams may run ahead of the responses its connection let complete before
+// the connection ends (HTTP/2 ENHANCE_YOUR_CALM, HTTP/3 H3_EXCESSIVE_LOAD).
+inline constexpr std::uint32_t max_unprocessed_stream_resets = 1000;
 
 // A protocol byte ceiling with no numeric sentinel: the default is unlimited,
 // while a configured limit is always strictly positive.

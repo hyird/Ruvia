@@ -999,6 +999,16 @@ struct http2_connection_options final {
     http2_frame_observer_type frame_observer_{nullptr};
     http2_header_observer_type header_observer_{nullptr};
     void* observer_context_{nullptr};
+    // Received frames that cannot advance a stream each cost one unit: PING and
+    // SETTINGS (non-ACK), a PING ACK answering nothing this endpoint sent,
+    // WINDOW_UPDATE, PRIORITY, PRIORITY_UPDATE, GOAWAY, empty DATA without
+    // END_STREAM, and every extension frame. Each completed received header
+    // block, received DATA carrying content or END_STREAM, and sent HEADERS or
+    // DATA frame refunds 16 units plus one per KiB of DATA payload, never below
+    // zero. A frame past this many outstanding units fails the connection with
+    // GOAWAY(ENHANCE_YOUR_CALM). Count-based like nghttp2's glitch burst, as the
+    // core has no clock. Zero throws std::invalid_argument from server()/client().
+    std::uint32_t max_non_progress_frames_{1000};
 };
 
 struct http2_regular_request_head_view final {
@@ -1081,10 +1091,13 @@ struct http2_extended_connect_request_head_view final {
 //   32 entries or a header block with more than 1024 CONTINUATION frames ends
 //   in GOAWAY(ENHANCE_YOUR_CALM).
 // - Closed streams are not remembered: frames for a stream nghttp2 already
-//   retired are ignored. A PUSH_PROMISE whose associated stream is gone has its
-//   promised stream reset with CANCEL, and one arriving after our GOAWAY is
-//   discarded. PRIORITY frames are read and dropped (RFC 9113 section 5.3.2
-//   deprecates them).
+//   retired, like a PRIORITY_UPDATE too long for nghttp2 to parse, are ignored
+//   before any callback, so they neither count toward
+//   max_non_progress_frames_ nor advance received_stream_progress(); the
+//   owner's inactivity clock bounds a flood of them. A PUSH_PROMISE whose
+//   associated stream is gone has its promised stream reset with CANCEL, and
+//   one arriving after our GOAWAY is discarded. PRIORITY frames are read and
+//   dropped (RFC 9113 section 5.3.2 deprecates them).
 class http2_connection final {
 public:
     [[nodiscard]] static http2_connection server(http2_connection_options options = {});
@@ -1102,6 +1115,11 @@ public:
     // Read-only observation for transport timeout decisions while a CONTINUATION
     // sequence is incomplete.
     [[nodiscard]] bool header_block_in_progress() const noexcept;
+    // Monotonic count of receive steps that advanced a stream: a completed
+    // header block, a DATA content chunk, or END_STREAM. Owners renew their
+    // inactivity clocks only when it changes, so frames the non-progress budget
+    // counts cannot keep an otherwise idle connection open.
+    [[nodiscard]] std::uint64_t received_stream_progress() const noexcept;
     [[nodiscard]] http2_feed_result feed(std::string_view input);
     template <detail::http_temporary_owning_char_string input_type>
     http2_feed_result feed(input_type&&) = delete;

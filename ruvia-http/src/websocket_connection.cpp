@@ -251,9 +251,90 @@ inline void decode_masked_websocket_payload(char* payload_value, std::size_t pay
     return true;
 }
 
+// The receive storage of one connection beyond its input buffer, charged to its
+// owner's websocket_receive_storage_budget before it grows and settled on the
+// capacity it actually holds. Without a budget it grows uncharged.
+class websocket_receive_storage final {
+public:
+    enum class slot : std::uint8_t {
+        reassembly,
+        inflate,
+    };
+
+    explicit websocket_receive_storage(websocket_receive_storage_budget budget) noexcept :
+        budget_(budget) {}
+
+    // Grows `target` geometrically to hold `needed` bytes, keeping its
+    // contents. false: the budget refused the growth, or the allocator's
+    // rounding exceeded the budget and the grown storage was discarded.
+    [[nodiscard]] bool reserve(slot owner, std::string& target, std::size_t needed) {
+        if (needed <= target.capacity()) {
+            return true;
+        }
+        const auto doubled = target.capacity() > target.max_size() / 2 ? target.max_size() : target.capacity() * 2;
+        const auto capacity = (std::max)(needed, doubled);
+        if (budget_.resize_ == nullptr) {
+            target.reserve(capacity);
+            return true;
+        }
+        if (!charge(held_total() - held(owner) + capacity)) {
+            return false;
+        }
+        try {
+            target.reserve(capacity);
+        } catch (...) {
+            settle(owner, target);
+            throw;
+        }
+        held(owner) = heap_bytes(target);
+        if (!charge(held_total())) {
+            std::string{}.swap(target);
+            settle(owner, target);
+            return false;
+        }
+        return true;
+    }
+
+    // Reports what `target` holds after it released storage.
+    void settle(slot owner, const std::string& target) noexcept {
+        if (budget_.resize_ == nullptr) {
+            return;
+        }
+        held(owner) = heap_bytes(target);
+        if (held_total() != charged_) {
+            // Shrinking never exceeds the budget.
+            static_cast<void>(budget_.resize_(budget_.context_, held_total()));
+            charged_ = held_total();
+        }
+    }
+
+private:
+    [[nodiscard]] static std::size_t heap_bytes(const std::string& value) noexcept {
+        static const std::size_t sso_capacity = std::string{}.capacity();
+        return value.capacity() > sso_capacity ? value.capacity() : 0;
+    }
+    [[nodiscard]] std::size_t& held(slot owner) noexcept {
+        return held_[static_cast<std::size_t>(owner)];
+    }
+    [[nodiscard]] std::size_t held_total() const noexcept {
+        return held_[0] + held_[1];
+    }
+    [[nodiscard]] bool charge(std::size_t total) noexcept {
+        if (!budget_.resize_(budget_.context_, total)) {
+            return false;
+        }
+        charged_ = total;
+        return true;
+    }
+
+    websocket_receive_storage_budget budget_;
+    std::array<std::size_t, 2> held_{};
+    std::size_t charged_{0};
+};
+
 // One inflate pass over `data`; the message limit covers everything appended
-// to `out` since `start`.
-[[nodiscard]] inline websocket_inflate_result websocket_inflate_chunk(zlib_inflate_stream& inflater, const char* data, std::size_t size, std::string& out, std::size_t start, protocol_byte_limit message_limit) {
+// to `out` since `start`. A null `storage` grows `out` uncharged.
+[[nodiscard]] inline websocket_inflate_result websocket_inflate_chunk(zlib_inflate_stream& inflater, const char* data, std::size_t size, std::string& out, std::size_t start, protocol_byte_limit message_limit, websocket_receive_storage* storage) {
     auto& stream = inflater.native();
     const zlib_borrow_scope borrow(stream);
     stream.avail_in = 0;
@@ -271,6 +352,9 @@ inline void decode_masked_websocket_payload(char* payload_value, std::size_t pay
         }
         const auto produced = sizeof(buffer) - stream.avail_out;
         if (message_limit.addition_exceeds(out.size() - start, produced)) {
+            return websocket_inflate_result::too_large;
+        }
+        if (storage != nullptr && !storage->reserve(websocket_receive_storage::slot::inflate, out, out.size() + produced)) {
             return websocket_inflate_result::too_large;
         }
         out.append(buffer, produced);
@@ -294,17 +378,17 @@ inline void decode_masked_websocket_payload(char* payload_value, std::size_t pay
 // the sender stripped, then raw-inflates into `out`, bounded by one explicit
 // message limit across the appended bytes to defuse decompression bombs
 // (RFC 7692 §7.2.2).
-[[nodiscard]] inline websocket_inflate_result websocket_inflate_message(zlib_inflate_stream& inflater, std::string_view input, std::string& out, protocol_byte_limit message_limit) {
+[[nodiscard]] inline websocket_inflate_result websocket_inflate_message(zlib_inflate_stream& inflater, std::string_view input, std::string& out, protocol_byte_limit message_limit, websocket_receive_storage* storage) {
     static constexpr unsigned char flush_marker[4] = {0x00, 0x00, 0xFF, 0xFF};
     std::optional<std::string> owned_input;
     if (http_text_aliases_string(input, out)) {
         input = owned_input.emplace(input);
     }
     const auto start = out.size();
-    if (const auto result_value = websocket_inflate_chunk(inflater, input.data(), input.size(), out, start, message_limit); result_value != websocket_inflate_result::ok) {
+    if (const auto result_value = websocket_inflate_chunk(inflater, input.data(), input.size(), out, start, message_limit, storage); result_value != websocket_inflate_result::ok) {
         return result_value;
     }
-    if (const auto result_value = websocket_inflate_chunk(inflater, reinterpret_cast<const char*>(flush_marker), sizeof(flush_marker), out, start, message_limit); result_value != websocket_inflate_result::ok) {
+    if (const auto result_value = websocket_inflate_chunk(inflater, reinterpret_cast<const char*>(flush_marker), sizeof(flush_marker), out, start, message_limit, storage); result_value != websocket_inflate_result::ok) {
         return result_value;
     }
     // zlib reports bit 128 only at a complete DEFLATE block boundary.
@@ -368,11 +452,16 @@ public:
         return websocket_deflate_message(*deflater_, input, out, final);
     }
 
-    websocket_inflate_result decompress(std::string_view input, std::string& out, protocol_byte_limit message_limit) {
+    websocket_inflate_result decompress(std::string_view input, std::string& out, protocol_byte_limit message_limit, websocket_receive_storage& storage) {
         if (!receive_takeover_ && shared_ != nullptr) {
             // The shared inflater has a 15-bit window, which also inflates
             // every smaller negotiated window.
-            return shared_->inflate_message(input, out, message_limit);
+            auto* codec = acquire_codec(shared_->inflater_, -websocket_deflate_codecs::max_window_bits);
+            if (codec == nullptr) {
+                return websocket_inflate_result::error;
+            }
+            const codec_reset_guard reset_guard(shared_->inflater_);
+            return websocket_inflate_message(*codec, input, out, message_limit, &storage);
         }
         if (inflater_ == nullptr) {
             inflater_ = std::make_unique<zlib_inflate_stream>(-receive_window_);
@@ -383,7 +472,7 @@ public:
         } else if (!receive_takeover_ && !inflater_->reset()) {
             return websocket_inflate_result::error;
         }
-        return websocket_inflate_message(*inflater_, input, out, message_limit);
+        return websocket_inflate_message(*inflater_, input, out, message_limit, &storage);
     }
 
     // A trial that is not sent must not enter the peer's future dictionary.
@@ -882,13 +971,18 @@ public:
     // delivered message keeps only a bounded scratch, so streams of small
     // fragmented messages do not allocate per message and large ones are not
     // pinned to the connection.
-    void release_completed() noexcept {
+    void release_completed(websocket_receive_storage& storage) noexcept {
         if (std::holds_alternative<websocket_inbound_idle>(state_)) {
             http_clear_string_retaining_small(message_, websocket_retained_buffer_bytes);
+            storage.settle(websocket_receive_storage::slot::reassembly, message_);
         }
     }
 
-    [[nodiscard]] websocket_inbound_result accept(const websocket_frame_view& frame, protocol_byte_limit message_limit) {
+    [[nodiscard]] bool fragmented() const noexcept {
+        return std::holds_alternative<websocket_inbound_fragmented>(state_);
+    }
+
+    [[nodiscard]] websocket_inbound_result accept(const websocket_frame_view& frame, protocol_byte_limit message_limit, websocket_receive_storage& storage) {
         if (is_websocket_control_frame_kind(frame.kind())) {
             const auto opcode = static_cast<websocket_opcode>(frame.kind());
             return websocket_inbound_result::make_control_frame(opcode, frame.payload());
@@ -898,7 +992,7 @@ public:
             if (fragmented == nullptr) {
                 return websocket_inbound_result::make_failure(websocket_protocol_failure::protocol_error);
             }
-            if (message_limit.addition_exceeds(message_.size(), frame.payload().size())) {
+            if (message_limit.addition_exceeds(message_.size(), frame.payload().size()) || !storage.reserve(websocket_receive_storage::slot::reassembly, message_, message_.size() + frame.payload().size())) {
                 return websocket_inbound_result::make_failure(websocket_protocol_failure::message_too_large);
             }
             message_.append(frame.payload().data(), frame.payload().size());
@@ -932,6 +1026,9 @@ public:
                     return websocket_inbound_result::make_failure(websocket_protocol_failure::invalid_payload_data);
                 }
                 return websocket_inbound_result::make_message(message, websocket_inbound_content_encoding::identity);
+            }
+            if (!storage.reserve(websocket_receive_storage::slot::reassembly, message_, frame.payload().size())) {
+                return websocket_inbound_result::make_failure(websocket_protocol_failure::message_too_large);
             }
             message_.assign(frame.payload().data(), frame.payload().size());
             state_.template emplace<websocket_inbound_fragmented>(opcode, frame.compressed() ? websocket_inbound_content_encoding::per_message_deflate : websocket_inbound_content_encoding::identity);
@@ -1066,6 +1163,7 @@ public:
         max_buffered_input_bytes_(options.max_buffered_input_bytes_),
         message_limit_(options.message_limit_),
         receive_message_limit_(options.receive_message_limit_.read_ceiling() < options.message_limit_.read_ceiling() ? options.receive_message_limit_ : options.message_limit_),
+        receive_storage_(options.receive_storage_),
         role_(options.role_),
         mask_key_generator_(options.mask_key_generator_),
         mask_key_context_(options.mask_key_context_) {
@@ -1328,6 +1426,7 @@ public:
     std::string_view borrowed_output_;
 
     detail::websocket_inbound_assembler assembler_;
+    detail::websocket_receive_storage receive_storage_;
 
     std::optional<detail::websocket_deflate> deflate_;
     std::string inbound_inflated_;
@@ -1380,10 +1479,11 @@ websocket_feed_status websocket_connection::feed(std::string_view input) {
 std::optional<websocket_event> websocket_connection::next_event() & {
     using close_phase_type = impl_type::close_phase_type;
     try {
-        impl_->assembler_.release_completed();
+        impl_->assembler_.release_completed(impl_->receive_storage_);
         // The last delivered message expires now. Its size is peer-controlled up
         // to the message limit, so only a bounded buffer stays for the next one.
         http_clear_string_retaining_small(impl_->inbound_inflated_, websocket_retained_buffer_bytes);
+        impl_->receive_storage_.settle(detail::websocket_receive_storage::slot::inflate, impl_->inbound_inflated_);
         impl_->needed_input_bytes_ = 0;
         if (impl_->close_phase_ == close_phase_type::final_output_queued || impl_->close_phase_ == close_phase_type::transport_end_ready || impl_->close_phase_ == close_phase_type::closed) {
             return websocket_event::make_transport_end();
@@ -1416,7 +1516,7 @@ std::optional<websocket_event> websocket_connection::next_event() & {
 
             impl_->bytes_received_ = saturating_add<std::uint64_t>(impl_->bytes_received_, impl_->pending_consume_);
             const auto& frame = *read.frame();
-            const auto inbound = impl_->assembler_.accept(frame, impl_->receive_message_limit_);
+            const auto inbound = impl_->assembler_.accept(frame, impl_->receive_message_limit_, impl_->receive_storage_);
             if (const auto* failure = inbound.failure()) {
                 return protocol_failure_event(failure->error());
             }
@@ -1456,7 +1556,7 @@ std::optional<websocket_event> websocket_connection::next_event() & {
             const auto& message = inbound_message.message();
             if (inbound_message.content_encoding() == detail::websocket_inbound_content_encoding::identity) {
                 if (impl_->close_phase_ != close_phase_type::open) {
-                    impl_->assembler_.release_completed();
+                    impl_->assembler_.release_completed(impl_->receive_storage_);
                     continue;
                 }
                 return websocket_event::message(message.opcode(), message.payload());
@@ -1469,7 +1569,7 @@ std::optional<websocket_event> websocket_connection::next_event() & {
             // the concatenation, and would charge its decompression-bomb limit for both.
             impl_->inbound_inflated_.clear();
             // Only a negotiated deflate admits RSV1, so a compressed message implies deflate_.
-            const auto inflate_result = impl_->deflate_->decompress(message.payload(), impl_->inbound_inflated_, impl_->receive_message_limit_);
+            const auto inflate_result = impl_->deflate_->decompress(message.payload(), impl_->inbound_inflated_, impl_->receive_message_limit_, impl_->receive_storage_);
             if (inflate_result == websocket_inflate_result::too_large) {
                 return protocol_failure_event(detail::websocket_protocol_failure::message_too_large);
             }
@@ -1481,8 +1581,9 @@ std::optional<websocket_event> websocket_connection::next_event() & {
                 return protocol_failure_event(detail::websocket_protocol_failure::invalid_payload_data);
             }
             if (impl_->close_phase_ != close_phase_type::open) {
-                impl_->assembler_.release_completed();
+                impl_->assembler_.release_completed(impl_->receive_storage_);
                 http_clear_string_retaining_small(impl_->inbound_inflated_, websocket_retained_buffer_bytes);
+                impl_->receive_storage_.settle(detail::websocket_receive_storage::slot::inflate, impl_->inbound_inflated_);
                 continue;
             }
             return websocket_event::message(message.opcode(), view);
@@ -1502,6 +1603,10 @@ std::optional<websocket_event> websocket_connection::next_event() & {
 
 std::size_t websocket_connection::needed_input_bytes() const noexcept {
     return impl_->needed_input_bytes_;
+}
+
+bool websocket_connection::message_pending() const noexcept {
+    return impl_->assembler_.fragmented() || impl_->pending_input_bytes() != 0;
 }
 
 websocket_output_plan websocket_connection::output_plan() const& noexcept {
@@ -1656,7 +1761,7 @@ websocket_inflate_result websocket_deflate_codecs::inflate_message(std::string_v
         return websocket_inflate_result::error;
     }
     const detail::codec_reset_guard reset_guard(inflater_);
-    return detail::websocket_inflate_message(*codec, payload, out, message_limit);
+    return detail::websocket_inflate_message(*codec, payload, out, message_limit, nullptr);
 }
 
 }  // namespace ruvia

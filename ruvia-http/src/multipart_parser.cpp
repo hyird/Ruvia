@@ -560,7 +560,15 @@ multipart_parser::multipart_parser(std::string_view complete_body, multipart_par
     remaining_metadata_bytes_(options.max_metadata_bytes_),
     input_eof_(true) {}
 
-std::vector<multipart_part> parse_multipart_body(std::string_view body, multipart_parse_options options) {
+std::vector<multipart_part> multipart_body_parse_result::take_parts() && {
+    auto* parts = std::get_if<std::vector<multipart_part>>(&value_);
+    if (parts == nullptr) {
+        throw std::logic_error("multipart body parse result holds a failure");
+    }
+    return std::move(*parts);
+}
+
+multipart_body_parse_result parse_multipart_body(std::string_view body, multipart_parse_options options) {
     multipart_parser parser(body, std::move(options), multipart_parser::complete_input_tag_type{});
     std::vector<multipart_part> parts;
     for (;;) {
@@ -570,12 +578,12 @@ std::vector<multipart_part> parse_multipart_body(std::string_view body, multipar
             continue;
         }
         if (result_value.done() != nullptr) {
-            return parts;
+            return multipart_body_parse_result(std::move(parts));
         }
         if (const auto* failure = result_value.failure()) {
-            throw failure->protocol_error();
+            return multipart_body_parse_result(*failure);
         }
-        throw multipart_protocol_error(multipart_parse_error::incomplete_body);
+        return multipart_body_parse_result(multipart_parse_error::incomplete_body);
     }
 }
 

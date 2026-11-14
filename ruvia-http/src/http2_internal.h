@@ -30,6 +30,7 @@
 #include "http_c_library_memory.h"
 #include "http_connection_fields.h"
 #include "http_header.h"
+#include "http_protocol.h"
 #include "http_request.h"
 #include "http_response.h"
 #include "http_response_framing.h"
@@ -1072,7 +1073,7 @@ struct http2_extension_payload final {
 
 class http2_connection final {
 public:
-    explicit http2_connection(http2_role role = http2_role::server, bool enable_push = false, bool receive_origin_advertisements = false, bool receive_frame_metadata = false, http2_frame_observer_type frame_observer = nullptr, http2_header_observer_type header_observer = nullptr, void* observer_context = nullptr);
+    http2_connection(http2_role role, const http2_connection_options& options);
     ~http2_connection();
     http2_connection(const http2_connection&) = delete;
     http2_connection& operator=(const http2_connection&) = delete;
@@ -1175,6 +1176,9 @@ public:
     [[nodiscard]] bool received_peer_settings() const noexcept {
         return received_peer_settings_;
     }
+    [[nodiscard]] std::uint64_t received_stream_progress() const noexcept {
+        return received_stream_progress_;
+    }
 
     // A request/response built from a stream holds views into its decoded
     // storage, so the stream must outlive an in-flight handler. While pinned, a
@@ -1253,6 +1257,9 @@ private:
     void record_callback_failure() noexcept;
 
     int on_begin_frame(const nghttp2_frame_hd& header);
+    // The non-progress frame budget (http2_connection_options::max_non_progress_frames_).
+    void charge_non_progress_frame();
+    void refund_non_progress_frames(std::size_t data_bytes) noexcept;
     nghttp2_ssize receive_observed(std::string_view input);
     void observe_frame_payload(std::string_view input) noexcept;
     void observe_header(http2_header_observation_phase phase, std::string_view name = {}, std::string_view value = {}) noexcept;
@@ -1342,13 +1349,16 @@ private:
     // max_local_error_reset_streams.
     static constexpr std::uint32_t max_undrained_control_frames = 1000;
     static constexpr std::uint32_t max_peer_error_resets = 1024;
-    // Rapid reset (CVE-2023-44487): peer resets may run this far ahead of the
-    // responses this connection let complete.
-    static constexpr std::uint32_t max_unprocessed_resets = 1000;
     // Pingora's lifetime bound on malformed server request heads.
     static constexpr std::uint32_t max_malformed_request_streams = 32;
     // CONTINUATION frames following one HEADERS/PUSH_PROMISE (CVE-2024-27316).
     static constexpr std::size_t max_continuation_frames = 1024;
+    // Units one stream-advancing frame returns to the non-progress budget, plus
+    // one per KiB of its DATA payload: WINDOW_UPDATE traffic scales with the
+    // bytes delivered (Go x/net/http2 refreshes per 4 KiB, Envoy allows 10
+    // WINDOW_UPDATEs per DATA frame sent).
+    static constexpr std::uint32_t non_progress_frame_refund = 16;
+    static constexpr std::size_t non_progress_refund_data_bytes = 1024;
 
     // Owner/local resets do not count against peer-induced budgets.
     void submit_owner_reset(std::uint32_t stream_id, http2_error_code error);
@@ -1419,6 +1429,9 @@ private:
     std::uint64_t peer_reset_streams_{0};
     std::uint64_t completed_responses_{0};
     std::uint32_t undrained_control_frames_{0};
+    std::uint32_t max_non_progress_frames_{0};
+    std::uint32_t non_progress_frames_{0};
+    std::uint64_t received_stream_progress_{0};
     std::uint32_t peer_error_resets_{0};
 };
 

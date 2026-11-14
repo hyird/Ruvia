@@ -1010,6 +1010,77 @@ TEST(Ruvia, jwt_verify_rejects_signed_non_object_payload) {
     }, jwt_error::code_type::invalid_payload));
 }
 
+static_assert(!std::is_copy_constructible_v<ruvia::jwt_result>);
+static_assert(!std::is_copy_assignable_v<ruvia::jwt_result>);
+static_assert(!std::is_move_assignable_v<ruvia::jwt_result>);
+static_assert(std::is_nothrow_move_constructible_v<ruvia::jwt_result>);
+
+TEST(Ruvia, jwt_try_entries_return_token_failures_as_values) {
+    const auto try_verify = [](std::string_view token, jwt_verify_options options) {
+        options.token_ = token;
+        return ruvia::try_jwt_verify(options);
+    };
+    const auto expect_code = [](const ruvia::jwt_result& result, jwt_error::code_type expected) {
+        EXPECT_FALSE(result.has_value());
+        EXPECT_TRUE(result.error() == expected);
+        bool value_rejected = false;
+        try {
+            (void)result.value();
+        } catch (const std::logic_error&) {
+            value_rejected = true;
+        }
+        EXPECT_TRUE(value_rejected);
+    };
+
+    const auto malformed = try_verify("a.b.c.d", verify_options(secret));
+    expect_code(malformed, jwt_error::code_type::malformed_token);
+    expect_code(ruvia::try_jwt_decode_unverified({.token_ = "only.two"}), jwt_error::code_type::malformed_token);
+    expect_code(ruvia::try_jwt_decode_unverified({.token_ = "a.!!!.c"}), jwt_error::code_type::malformed_token);
+
+    const auto token = sign(sign_options(secret));
+    expect_code(try_verify(token, verify_options(other_secret)), jwt_error::code_type::signature_mismatch);
+
+    const auto expired = signed_token_with_payload(secret, R"({"sub":"user-1","exp":1})");
+    expect_code(try_verify(expired, verify_options(secret)), jwt_error::code_type::expired);
+
+    const auto header_payload = wire_base64url(R"({"sub":"user-1","exp":4102444800})");
+    const auto bad_header = wire_base64url(R"({"typ":"JWT"})") + "." + header_payload + ".sig";
+    expect_code(ruvia::try_jwt_decode_unverified({.token_ = bad_header}), jwt_error::code_type::invalid_header);
+
+    // The strict entries report the same codes by throwing jwt_error.
+    EXPECT_TRUE(throws_jwt_error([&] {
+        (void)verify_jwt("a.b.c.d", verify_options(secret));
+    }, jwt_error::code_type::malformed_token));
+    EXPECT_TRUE(throws_jwt_error([&] {
+        (void)verify_jwt(token, verify_options(other_secret));
+    }, jwt_error::code_type::signature_mismatch));
+    EXPECT_TRUE(throws_jwt_error([&] {
+        (void)verify_jwt(expired, verify_options(secret));
+    }, jwt_error::code_type::expired));
+
+    auto verified = try_verify(token, verify_options(secret));
+    ASSERT_TRUE(verified.has_value());
+    EXPECT_FALSE(verified.error().has_value());
+    EXPECT_EQ(verified.value().subject(), std::string_view("user-1"));
+    const auto payload_value = std::move(verified).take_value();
+    EXPECT_EQ(payload_value.issuer(), std::string_view("ruvia"));
+
+    const auto decoded = ruvia::try_jwt_decode_unverified({.token_ = token});
+    ASSERT_TRUE(decoded.has_value());
+    EXPECT_EQ(decoded.value().subject(), std::string_view("user-1"));
+
+    // Option misuse is a caller bug, not token data: it still throws.
+    auto negative_leeway = verify_options(secret);
+    negative_leeway.leeway_ = std::chrono::seconds{-1};
+    bool leeway_rejected = false;
+    try {
+        (void)try_verify(token, negative_leeway);
+    } catch (const std::invalid_argument&) {
+        leeway_rejected = true;
+    }
+    EXPECT_TRUE(leeway_rejected);
+}
+
 TEST(Ruvia, jwt_bearer_token_extraction) {
     EXPECT_TRUE(jwt_bearer_token("Bearer abc.def.ghi").value() == std::string_view("abc.def.ghi"));
     EXPECT_TRUE(jwt_bearer_token("Bearer    abc.def.ghi").value() == std::string_view("abc.def.ghi"));

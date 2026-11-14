@@ -50,6 +50,7 @@ public:
     RUVIA_GET("/held", held);
     RUVIA_GET("/stalled", stalled);
     RUVIA_GET("/brief", brief);
+    RUVIA_GET("/large", large);
     RUVIA_POST("/upload", upload);
     RUVIA_ROUTES_END
 
@@ -63,6 +64,9 @@ public:
     }
     ruvia::task<ruvia::http_response> brief(ruvia::context& context) {
         co_return context.text("brief");
+    }
+    ruvia::task<ruvia::http_response> large(ruvia::context& context) {
+        co_return context.text(std::string(std::size_t{64} * 1024, 'x'));
     }
     ruvia::task<ruvia::http_response> upload(ruvia::context& context) {
         const auto body = co_await context.req().text();
@@ -376,6 +380,30 @@ std::uint32_t reset_code(const std::vector<frame>& frames, std::uint32_t stream_
     }
     return code;
 }
+
+// Sends `traffic` every 50 ms -- frames the server neither answers nor counts
+// as stream progress -- until the server sends a frame `done` accepts.
+// Returns every frame received; fails after 3 s.
+template <typename predicate_type>
+std::vector<frame> trickle_until(peer& client, asio::ip::tcp::socket& socket, std::string_view traffic, predicate_type done) {
+    const auto deadline = std::chrono::steady_clock::now() + 3s;
+    std::vector<frame> seen{};
+    for (;;) {
+        if (std::chrono::steady_clock::now() >= deadline) {
+            throw std::runtime_error("HTTP/2 deadline did not fire under trickled traffic");
+        }
+        asio::write(socket, asio::buffer(traffic));
+        while (socket.available() != 0) {
+            auto value = client.next();
+            const bool finished = done(value);
+            seen.push_back(std::move(value));
+            if (finished) {
+                return seen;
+            }
+        }
+        std::this_thread::sleep_for(50ms);
+    }
+}
 }  // namespace http2_goaway_test
 
 TEST(Ruvia, http2_app_stop_closes_connection_without_goaway) {
@@ -480,6 +508,62 @@ TEST(Ruvia, http2_readiness_is_bounded_by_header_completion_timeout) {
     peer client(run.socket());
     expect_round_trip_start(client);
     expect_final_goaway_and_end(client, 0);
+    run.socket().close();
+    run.app().stop();
+    run.join();
+}
+
+// Received frames that advance no stream (here WINDOW_UPDATE) do not renew
+// the idle clock of a connection whose only stream has gone quiet.
+TEST(Ruvia, http2_idle_timeout_is_not_renewed_by_non_progress_frames) {
+    using namespace http2_goaway_test;
+    auto& state = observed();
+    state.cancelled_ = false;
+    silent_peer_run run({.worker_count_ = 1, .idle_timeout_ = 300ms, .connection_scan_interval_ = 5ms}, request(1, "/stalled"));
+    peer client(run.socket());
+    std::string update{};
+    append_frame(update, ruvia::http2_frame_type::window_update, 0, 0, std::string_view("\x00\x00\x00\x01", 4));
+    const auto frames = trickle_until(client, run.socket(), update, [](const frame& value) {
+        return is_frame(value, ruvia::http2_frame_type::goaway, 0);
+    });
+    EXPECT_EQ(uint32(frames.back().payload_) & 0x7fffffffU, 0x7fffffffU);
+    expect_final_goaway_and_end(client, 1);
+    run.socket().close();
+    ruvia::test::wait_until([&state] {
+        return state.cancelled_.load();
+    }, 3s);
+    run.app().stop();
+    run.join();
+}
+
+// write_completion_timeout_ bounds one stream write across its flow-control
+// waits: a peer granting one byte of window well within write_timeout_ still
+// gets the stream reset, while the connection keeps serving.
+TEST(Ruvia, http2_stream_write_is_bounded_by_write_completion_timeout) {
+    using namespace http2_goaway_test;
+    // SETTINGS_INITIAL_WINDOW_SIZE = 0.
+    silent_peer_run run({.worker_count_ = 1, .connection_scan_interval_ = 5ms, .write_timeout_ = 300ms, .write_completion_timeout_ = 600ms}, request(1, "/large"), std::string_view("\x00\x04\x00\x00\x00\x00", 6));
+    peer client(run.socket());
+    std::string grant{};
+    append_frame(grant, ruvia::http2_frame_type::window_update, 0, 1, std::string_view("\x00\x00\x00\x01", 4));
+    const auto frames = trickle_until(client, run.socket(), grant, [](const frame& value) {
+        return is_frame(value, ruvia::http2_frame_type::rst_stream, 1);
+    });
+    // RFC 9113 section 7: CANCEL.
+    EXPECT_EQ(reset_code(frames, 1), 8U);
+    std::size_t delivered = 0;
+    for (const auto& value : frames) {
+        if (is_frame(value, ruvia::http2_frame_type::data, 1)) {
+            delivered += value.payload_.size();
+        }
+    }
+    // Window updates did deliver content, each within write_timeout_.
+    EXPECT_GT(delivered, std::size_t{1});
+    std::string reopened{};
+    append_frame(reopened, ruvia::http2_frame_type::settings, 0, 0, std::string_view("\x00\x04\x00\x00\xff\xff", 6));
+    reopened.append(request(3, "/brief"));
+    asio::write(run.socket(), asio::buffer(reopened));
+    expect_stream_end(client, 3);
     run.socket().close();
     run.app().stop();
     run.join();

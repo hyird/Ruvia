@@ -825,6 +825,40 @@ TEST(Ruvia, context_signed_cookie_with_prefix_verifies_round_trip) {
     });
 }
 
+TEST(Ruvia, context_signed_cookie_rejects_a_repeated_name) {
+    std::string set_cookie{};
+    auto write_request = ruvia::test_request::get("/");
+    (void)ruvia::test::with_context(write_request, [&](ruvia::context& write_context) -> ruvia::task<void> {
+        write_context.draft().set_signed_cookie({.name_ = "session", .value_ = "user-1", .secret_ = "secret"});
+        const auto write_response = write_context.text("ok");
+        set_cookie = write_response.header("Set-Cookie").value_or(std::string_view{});
+        co_return;
+    });
+    const std::string_view line(set_cookie);
+    const std::string pair(line.substr(0, line.find(';')));
+
+    auto single_request = ruvia::test_request::get("/").header("Cookie", pair);
+    (void)ruvia::test::with_context(single_request, [&](ruvia::context& context_value) -> ruvia::task<void> {
+        EXPECT_EQ(context_value.req().signed_cookie({.name_ = "session", .secret_ = "secret"}), std::optional<std::string_view>("user-1"));
+        co_return;
+    });
+
+    // Even identical, individually valid occurrences are ambiguous about which
+    // one the signature vouches for.
+    auto same_field_request = ruvia::test_request::get("/").header("Cookie", pair + "; " + pair);
+    (void)ruvia::test::with_context(same_field_request, [&](ruvia::context& context_value) -> ruvia::task<void> {
+        EXPECT_FALSE(context_value.req().signed_cookie({.name_ = "session", .secret_ = "secret"}).has_value());
+        co_return;
+    });
+
+    // Last-wins lookup would have verified the trailing genuine occurrence.
+    auto split_fields_request = ruvia::test_request::get("/").header("Cookie", "session=forged").header("Cookie", pair);
+    (void)ruvia::test::with_context(split_fields_request, [&](ruvia::context& context_value) -> ruvia::task<void> {
+        EXPECT_FALSE(context_value.req().signed_cookie({.name_ = "session", .secret_ = "secret"}).has_value());
+        co_return;
+    });
+}
+
 TEST(Ruvia, context_delete_cookie_with_prefix_is_response_only) {
     auto request = ruvia::test_request::get("/").header("Cookie", "__Host-session=user-1");
 

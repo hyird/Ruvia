@@ -171,6 +171,10 @@ private:
 
 class http_transfer_coding_decode_result final {
 public:
+    http_transfer_coding_decode_result(const http_transfer_coding_decode_result&) = default;
+    http_transfer_coding_decode_result(http_transfer_coding_decode_result&&) noexcept = default;
+    http_transfer_coding_decode_result& operator=(const http_transfer_coding_decode_result&) = delete;
+    http_transfer_coding_decode_result& operator=(http_transfer_coding_decode_result&&) = delete;
     [[nodiscard]] std::size_t consumed_bytes() const noexcept {
         return std::visit([](const auto& result_value) {
             return result_value.consumed_bytes();

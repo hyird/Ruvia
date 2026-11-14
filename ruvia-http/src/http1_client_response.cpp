@@ -862,10 +862,8 @@ http1_client_response_body_decoder::result_type http1_client_response_body_decod
         return complete(consumed);
     }
     // Buffered output drains before framing EOF is committed to the decoder.
-    auto decoded = transfer_->decode({}, scratch);
-    if (decoded.need_input() != nullptr) {
-        decoded = transfer_->finish_input();
-    }
+    auto drained = transfer_->decode({}, scratch);
+    const auto decoded = drained.need_input() != nullptr ? transfer_->finish_input() : std::move(drained);
     if (const auto* output = decoded.output()) {
         return emit_transfer_output(consumed, output->bytes());
     }

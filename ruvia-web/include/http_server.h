@@ -235,9 +235,10 @@ struct server_config final {
     // An HTTP/2 connection with no stream is idle from the end of its last
     // stream (or its readiness): frames that open no stream and this side's
     // writes do not renew it, as with Pingora's h2_idle_timeout; it then
-    // drains with GOAWAY. Upgraded WebSockets use their route lifecycle
-    // heartbeat and close-handshake deadlines instead, even when heartbeat is
-    // disabled.
+    // drains with GOAWAY. Upgraded WebSockets and tunnels use their own
+    // deadlines instead: websocket_lifecycle_options (idle, message
+    // completion, heartbeat and close handshake) and
+    // http_tunnel_route_config::idle_timeout_.
     std::optional<timeout_duration> idle_timeout_{std::chrono::seconds(75)};
     // How often connection timeouts are checked. A timeout fires once at least
     // its duration has passed, and at most about two intervals later. A worker
@@ -251,7 +252,10 @@ struct server_config final {
     // body_completion_timeout_) is reset with RST_STREAM(CANCEL), leaving the
     // connection and its other streams untouched.
     std::optional<timeout_duration> request_body_timeout_{std::chrono::seconds(60)};
-    // Absolute phase deadlines: progress does not renew these limits.
+    // Absolute phase deadlines: progress does not renew these limits. With
+    // both request-head limits unset, the TLS or QUIC handshake, request head
+    // and HTTP/2 preface still end after a fixed 30 seconds, as does a PROXY
+    // header.
     std::optional<timeout_duration> header_completion_timeout_{std::chrono::seconds(30)};
     std::optional<timeout_duration> body_completion_timeout_{std::chrono::seconds(120)};
     // Inactivity of a connection write in progress: a buffered response, one
@@ -271,6 +275,16 @@ struct server_config final {
     // So is the open context::file() and context::static_file() wait on: its
     // task then throws a 503 file_read_unavailable http_error.
     std::optional<timeout_duration> write_timeout_{std::chrono::seconds(60)};
+    // Absolute deadline for one write operation, counted from its start and
+    // not renewed by progress, so a peer draining a byte per write_timeout_
+    // cannot hold a write open: one buffered response (head and in-memory
+    // body), one response-stream or upgrade write, one slice of a file body
+    // (at most 64 KiB after the head), one HTTP/2 / HTTP/3 transport write,
+    // or one HTTP/2 / HTTP/3 stream write across its flow-control waits (that
+    // stream is reset with CANCEL / H3_REQUEST_CANCELLED). The default gives
+    // a single 64 MiB write about 220 KiB/s; a larger in-memory body to a
+    // slower client needs a longer limit (or a response stream / file body).
+    std::optional<timeout_duration> write_completion_timeout_{std::chrono::minutes(5)};
     // Bounded by default so a connection flood cannot exhaust FDs or memory.
     // At the cap, a new connection takes the slot of the connection that has
     // been idle between requests longest -- an HTTP/1 keep-alive connection
@@ -1378,7 +1392,8 @@ public:
     // otherwise). Throws std::logic_error unless tunnel_requested(), or once a
     // response or tunnel was committed. The tunnel stays valid until the
     // callback returns; the server then ends its send direction and drains the
-    // peer's for up to http_tunnel_route_config::peer_transport_fin_timeout_.
+    // peer's for up to http_tunnel_route_config::peer_transport_fin_timeout_;
+    // config.idle_timeout_ aborts it once no tunnel byte moves for that long.
     // config.datagrams_ explicitly enables Capsule/HTTP Datagram semantics
     // for an upgrade protocol; plain CONNECT rejects it. CONNECT-UDP enables
     // them automatically and uses the protocol's existing handshake checks.

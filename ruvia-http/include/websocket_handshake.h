@@ -185,6 +185,11 @@ inline constexpr std::string_view websocket_switching_protocols_head_prefix = "H
 
 class websocket_handshake_validation_result final {
 public:
+    websocket_handshake_validation_result(const websocket_handshake_validation_result&) = default;
+    websocket_handshake_validation_result(websocket_handshake_validation_result&&) noexcept = default;
+    websocket_handshake_validation_result& operator=(const websocket_handshake_validation_result&) = delete;
+    websocket_handshake_validation_result& operator=(websocket_handshake_validation_result&&) = delete;
+
     [[nodiscard]] constexpr const websocket_handshake_accepted* accepted() const& noexcept RUVIA_LIFETIMEBOUND {
         return (value_.index() == 0) ? &std::get<0>(value_) : nullptr;
     }

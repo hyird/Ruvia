@@ -74,7 +74,7 @@ ruvia::task<ruvia::http_response> upload_stream(ruvia::context& c) {
 
 - **输出中断**：`commit()`、`write()`、`writeln()`、`end()` 的 `operation` 超时或停止中止本请求（HTTP/2、HTTP/3 以 `CANCEL` / `H3_REQUEST_CANCELLED` 重置流，HTTP/1 关闭连接；已写出部分无法撤回），抛 `std::system_error`（`timed_out` / `operation_canceled`）。
 - **启动前停止**：令牌在操作启动前已停止时直接抛 `operation_canceled`，不发出任何字节、不中止请求。
-- **时限叠加**：服务器 `write_timeout_` 继续生效，逐次超时只收紧；非正超时抛 `std::invalid_argument`。
+- **时限叠加**：服务器 `write_timeout_` 与 `write_completion_timeout_`（每次写入独立计时的绝对截止期）继续生效，逐次超时只收紧；非正超时抛 `std::invalid_argument`。
 - **HTTP/1 分帧**：提交时按最终响应头选择（与 Pingora 下游写法一致），HTTP/2、HTTP/3 始终以帧界定。
   - **定长**：响应自带合法 `Content-Length` 且无 `Transfer-Encoding` 时按定长原样写出，连接无需靠关闭界定（HTTP/1.0 请求带 keep-alive 时同样可复用，[RFC 9112 §6.3](https://www.rfc-editor.org/rfc/rfc9112.html#section-6.3)）；Trailer 被丢弃。
   - **超长与不足**：写入超出声明长度抛 `std::length_error` 且该块不写出；`end()` 时不足声明长度抛 `std::invalid_argument`。两者都中止本请求并在流结束后关闭连接（[RFC 9112 §8](https://www.rfc-editor.org/rfc/rfc9112.html#section-8)），与 HTTP/2 的同类错误一致。
@@ -207,6 +207,8 @@ inline const ruvia::websocket_route_config chat_ws_options{
             .pong_timeout_ = std::chrono::seconds(5),
         },
         .close_handshake_timeout_ = std::chrono::seconds(5),
+        .idle_timeout_ = std::chrono::minutes(5),
+        .message_completion_timeout_ = std::chrono::seconds(60),
     },
     .deflate_ = {
         .enabled_ = true,
@@ -241,7 +243,17 @@ private:
 ```
 
 - **心跳时序**：服务端与客户端复用心跳判定；Ping 完整写出后才开始 Pong 等待。
+- **生命周期时限**：`websocket_lifecycle_options` 的时限服务端路由、`accept_websocket()` 与客户端 `lifecycle()` 共用，由连接扫描器检查；设置值必须为正，否则配置时抛 `std::invalid_argument`；超时中止传输（不发 Close），`termination()` 记为 `timeout`。
+
+| 字段 | 默认 | 语义 |
+| --- | --- | --- |
+| `heartbeat_.ping_interval_` / `pong_timeout_` | `nullopt` | 空闲达 `ping_interval_` 后发 Ping；读取可观察 Pong 后等待 `pong_timeout_`（缺省取 Ping 间隔） |
+| `close_handshake_timeout_` | 5 s | 本端发出 Close 起等待对端 Close，含写出 Close 帧 |
+| `idle_timeout_` | 5 min | 会话打开期间连续这么久没有读到或写出任何帧字节即中止；写入进行中不算空闲（由服务器 `write_timeout_` / `write_completion_timeout_` 约束）。心跳 Ping/Pong 计为流量，长期静默的会话应配置短于它的心跳。对端字节只在读取把它取出传输时计入。默认值取 Envoy `stream_idle_timeout` 的 5 分钟 |
+| `message_completion_timeout_` | 60 s | 一条消息从收到首字节到 FIN 分片的绝对时限；Ping、Pong 与后续分片都不续期，防止对端一边应答心跳一边无限涓流同一条消息。只在有挂起 `read()` 时计时，读取之间保留剩余额度，慢速消费者不为未读取的字节被判超时 |
+
 - **单会话接收限额**：`max_message_bytes_` 默认为继承服务器上限，只能收紧 `server_config::max_websocket_message_bytes_`；帧声明、分片累计及解压后增长均受限。它不降低发送上限；挑战页可在 `accept_websocket(config)` 中单独配置，无须降低整个 ingress 的限额。
+- **入站内存预算**：服务端会话的读缓冲、分片重组缓冲与 `permessage-deflate` 解压输出在增长前计入连接级与 Worker 级入站预算（`server_config::max_inbound_buffer_bytes_per_connection_` / `_per_worker_`），按实际容量结算，消息交付后归还超出 16 KiB 保留量的部分。重组或解压增长超出预算时该消息按超限处理：发送 Close `1009`，`termination()` 为 `message_too_large`。Sans-I/O 驱动通过 `websocket_connection_options::receive_storage_`（`websocket_receive_storage_budget`）接入自有预算；`websocket_connection::message_pending()` 报告是否有未收完的消息，供驱动计时。
 
 ### 3.2 `ruvia::websocket` 与 `ruvia::websocket_message` API
 
@@ -284,7 +296,7 @@ private:
 | `protocol_error` | 对端帧或消息违反 RFC 6455（如未掩码、保留 opcode、非法分片或控制帧），本端已发 `1002` |
 | `invalid_payload_data` | 文本消息或 Close 原因不是 UTF-8，本端已发 `1007` |
 | `message_too_large` | 帧声明、分片累计或解压后超过接收上限，本端已发 `1009` |
-| `timeout` | 心跳 Pong、关闭握手或输出操作超时；客户端另含读取无活动超时（`read_timeout_`）。`read()` 的逐次超时不结束会话 |
+| `timeout` | 心跳 Pong、关闭握手、`idle_timeout_`、`message_completion_timeout_` 或输出操作超时；客户端另含读取无活动超时（`read_timeout_`）。`read()` 的逐次超时不结束会话 |
 | `aborted` | 本端 `abort()`、输出操作被取消、处理器结束拆除会话或本地故障 |
 | `io_error` | 传输读写失败，含连接或 HTTP/2、HTTP/3 流被重置；服务端 `write_timeout_` 由连接扫描器直接关闭套接字，同样记为 `io_error` |
 
@@ -331,6 +343,13 @@ HTTP/2 客户端在收到 2xx 前乐观发送的 `DATA`（RFC 9113 §8.5；RFC 9
 HTTP/3 使用相同路由及隧道门面；WebSocket 经 RFC 9220 Extended CONNECT，普通 CONNECT 经 RFC 9114 §4.4。`finish()` 仅关闭发送方向，接收方向继续读到对端结束；隧道流与同连接的其他请求独立。
 
 - **操作回收**：与[原始连接分发](web-guide.md#17-原始连接分发http_serverh)采用相同的在途操作与冷任务回收规则。
+- **隧道时限**：`http_tunnel_route_config` 字段（路由首参与 `request_stream::accept_tunnel(status, config)` 共用；HTTP/1.1、HTTP/2、HTTP/3 相同）：
+
+| 字段 | 默认 | 语义 |
+| --- | --- | --- |
+| `idle_timeout_` | 5 min | 连续这么久没有任何隧道读取或写出字节（含 Datagram 与 Capsule）即中止隧道传输，挂起的读写抛 `std::system_error`；写入进行中不算空闲，由服务器写超时约束；对端字节只在读取取出时计入。`nullopt` 关闭，设置值须为正，否则注册时抛 `std::invalid_argument`。默认值取 Envoy `stream_idle_timeout` 对升级流的 5 分钟 |
+| `peer_transport_fin_timeout_` | 5 s | 处理器返回后写出本端 FIN 并排空对端输入的时限，须为正 |
+| `datagrams_` | `false` | 声明 HTTP Datagram / Capsule 语义，见 4.2 |
 
 TLS 隧道把对端未发送 `close_notify` 就关闭 TCP 视为输入结束，`tunnel.read()` 返回 `std::nullopt`（与 Go `crypto/tls` 在记录边界接受截断的策略一致）；HTTP/1.1 响应体等有消息定界的读取路径仍把该情形作为传输错误上报。
 
@@ -506,6 +525,7 @@ WebSocket 握手错误仍抛 `http_client_error`；`handshake_rejected` 可通�
 - **总期限独立**：阶段覆盖不改变 `request_timeout_` 或宿主取消。总期限仍计入慢下游与 1xx 回调等待；代理若不需要整体时限，须在 origin 配置中显式设为 `nullopt`。读无活动预算在等待调用方消费正文时暂停。
 - **慢速上传**：最终响应头到达前，请求内容的写出进展同样重启读无活动预算：等待响应头的无活动期从最后一次双向进展起算，源站读完全部请求体后再应答不会被误判超时。
 - **隧道空闲**：CONNECT / Upgrade 隧道建立后不再受 `read_timeout_` 约束，只受 `http_client_tunnel_config::idle_timeout_`（默认 `nullopt` 不限）与总期限约束；任一方向的字节进展都重启它。
+- **HTTP/2 失活连接淘汰**：HTTP/2 流的读、写或总期限到期时，若该会话自此流请求头提交（推送流为 `PUSH_PROMISE`）以来未收到任何字节，视为对端失活（黑洞或半死连接），立即关闭并淘汰整条连接而不归还空闲；其上其他流随即以 `io_error` 失败（复用连接上的幂等请求按复用失败规则在新连接上重试一次），下一个请求新建连接。期间收到过任何字节的会话只以 `RST_STREAM(CANCEL)` 重置超时的流，继续复用。准入阶段（尚未提交请求头）的等待超时不影响连接，用户取消与丢弃响应体只重置该流。连接全空闲期间的失活检测仍由 `http2_ping_interval_`（默认 `nullopt` 不发送）承担。
 - **1xx 背压边界**：HTTP/2、HTTP/3 只背压当前响应，不阻塞其他流；回调异常终止该交换。回调不得反过来等待本交换，或依赖它释放池容量的操作。
 - **地址退役**：刷新失败保留旧快照；地址集合改变时关闭空闲连接和隧道，活动 HTTP/1 完成本次后关闭，HTTP/2、HTTP/3 停止接新流并排空。等待旧连接退役仍计入 acquire 预算。
 - **独立连接预算**：fresh 请求的独立连接同样计入 `max_open_`，用后关闭并回收。

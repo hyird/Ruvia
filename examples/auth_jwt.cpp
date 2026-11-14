@@ -9,9 +9,9 @@
 #include <chrono>
 #include <exception>
 #include <iostream>
-#include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
 
 #include "app.h"
 #include "controller.h"
@@ -66,13 +66,10 @@ public:
             co_return;
         }
 
-        // Only verification is guarded: next() must stay outside the catch, or a
-        // downstream handler's exception would be reported as an invalid token
-        // instead of reaching on_error.
-        std::optional<ruvia::jwt_payload> payload;
-        try {
-            payload.emplace(ruvia::jwt_verify(verify_options(*token)));
-        } catch (const ruvia::jwt_error&) {
+        // A rejected token is a routine value, not an exception, so a downstream
+        // handler's exception still reaches on_error unchanged.
+        auto verified = ruvia::try_jwt_verify(verify_options(*token));
+        if (!verified.has_value()) {
             // RFC 6750 3.1: a presented but unusable token is invalid_token.
             c.policy().header("WWW-Authenticate", R"(Bearer error="invalid_token")");
             c.respond(c.error({.status_ = ruvia::http_status::unauthorized, .code_ = "invalid_token", .message_ = "invalid bearer token"}));
@@ -82,7 +79,8 @@ public:
         // The payload and the value built from it stay owned by this coroutine
         // frame, which outlives the next() below -- that is what makes binding
         // by address safe and allocation-free.
-        const authenticated_user user_value{.subject_ = payload->subject()};
+        const auto payload = std::move(verified).take_value();
+        const authenticated_user user_value{.subject_ = payload.subject()};
         const auto binding = c.bind_request_state(user_value);
         co_await next_value();
     }

@@ -623,10 +623,11 @@ TEST(Ruvia, chunked_body_decoder_bounds_trailers_independently_of_input_segmenta
         const auto message_end = 3 + trailers.size();
         for (const auto split : {wire.size(), message_end - 1}) {
             http1_chunked_body_decoder decoder;
-            auto result = decoder.decode(std::string_view(wire).substr(0, split));
-            auto consumed = result.consumed_bytes();
-            if (result.need_more()) {
-                result = decoder.decode(std::string_view(wire).substr(consumed));
+            const auto first = decoder.decode(std::string_view(wire).substr(0, split));
+            auto consumed = first.consumed_bytes();
+            const bool resumed = first.need_more() != nullptr;
+            const auto result = resumed ? decoder.decode(std::string_view(wire).substr(consumed)) : first;
+            if (resumed) {
                 consumed += result.consumed_bytes();
             }
             if (excess == 0) {

@@ -12,6 +12,7 @@
 #include <string>
 #include <string_view>
 #include <utility>
+#include <variant>
 #include <vector>
 
 #include "borrowed_text.h"
@@ -192,11 +193,52 @@ private:
     std::vector<jwt_claim> claims_;
 };
 
+// The outcome of try_jwt_verify / try_jwt_decode_unverified. The category is
+// fixed at construction: a decoded payload, or the jwt_error code the
+// throwing entry reports for the same token.
+class jwt_result final {
+public:
+    jwt_result(const jwt_result&) = delete;
+    jwt_result& operator=(const jwt_result&) = delete;
+    jwt_result(jwt_result&&) noexcept = default;
+    jwt_result& operator=(jwt_result&&) = delete;
+
+    [[nodiscard]] bool has_value() const noexcept {
+        return std::holds_alternative<jwt_payload>(state_);
+    }
+    // nullopt when the result holds a payload.
+    [[nodiscard]] std::optional<jwt_error::code_type> error() const noexcept {
+        if (const auto* code = std::get_if<jwt_error::code_type>(&state_)) {
+            return *code;
+        }
+        return std::nullopt;
+    }
+    // Throws std::logic_error when the result holds an error.
+    [[nodiscard]] const jwt_payload& value() const& RUVIA_LIFETIMEBOUND;
+    const jwt_payload& value() const&& = delete;
+    [[nodiscard]] jwt_payload take_value() &&;
+
+private:
+    friend struct detail::jwt_payload_access;
+
+    explicit jwt_result(jwt_payload payload) noexcept :
+        state_(std::in_place_type<jwt_payload>, std::move(payload)) {}
+    explicit jwt_result(jwt_error::code_type code) noexcept :
+        state_(std::in_place_type<jwt_error::code_type>, code) {}
+
+    std::variant<jwt_payload, jwt_error::code_type> state_;
+};
+
+// Option misuse (negative leeway, invalid policy, a secret outside the RFC 7518
+// key bounds) and allocation failure throw from both entries. Token data
+// failures are returned by try_jwt_verify and thrown as jwt_error by jwt_verify.
 [[nodiscard]] std::string jwt_sign(const jwt_sign_options& options);
+[[nodiscard]] jwt_result try_jwt_verify(const jwt_verify_options& options);
 [[nodiscard]] jwt_payload jwt_verify(const jwt_verify_options& options);
 // Decodes and validates the three-part token structure, JOSE header (requiring
 // a non-empty "alg" string and rejecting duplicate keys / "crit" / "b64"), and
 // payload claims without verifying the signature or time-based claims.
+[[nodiscard]] jwt_result try_jwt_decode_unverified(const jwt_decode_unverified_options& options);
 [[nodiscard]] jwt_payload jwt_decode_unverified(const jwt_decode_unverified_options& options);
 // Returns the b64token of an "Authorization: Bearer <token>" field value
 // (RFC 6750 §2.1: 1*( ALPHA / DIGIT / "-" / "." / "_" / "~" / "+" / "/" )

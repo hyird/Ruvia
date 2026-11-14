@@ -31,7 +31,8 @@
 // (idle_timeout), not as a write. A response-stream handler likewise: only
 // its writes are timed as writes, and the wait between them is governed by
 // idle_timeout. This executable owns its application, so its short write
-// timeout cannot leak into other suites.
+// timeout cannot leak into other suites. A reader that keeps draining one
+// buffered response slowly is still bounded by write_completion_timeout.
 
 namespace interim_phase_timeout_test {
 
@@ -79,6 +80,24 @@ class interim_phase_routes final {
         }
         co_await c.stream().write(bytes);
         bulk_write_duration_ms.store(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - started).count(), std::memory_order_relaxed);
+    }
+};
+
+// Larger than any loopback socket buffering, so only a timeout can cut it.
+constexpr std::size_t completion_body_bytes = std::size_t{16} * 1024 * 1024;
+constexpr auto write_completion_timeout = 300ms;
+// Inactivity limit far beyond the whole exchange, so it cannot be what ends it.
+constexpr auto patient_write_timeout = 20s;
+// The reader trickles for several completion budgets before draining.
+constexpr auto trickle_period = 1500ms;
+
+class write_completion_routes final {
+    RUVIA_ROUTES_BEGIN(write_completion_routes)
+    RUVIA_GET("/write-completion/bulk", bulk);
+    RUVIA_ROUTES_END
+
+    ruvia::task<ruvia::http_response> bulk(ruvia::context& c) {
+        co_return c.text(std::string(completion_body_bytes, 'w'));
     }
 };
 
@@ -184,6 +203,52 @@ TEST(Ruvia, a_handler_after_its_interim_head_is_timed_as_a_handler_not_a_write) 
             "Accept-Encoding: identity;q=0, *;q=0\r\nConnection: close\r\n\r\n");
         EXPECT_TRUE(refused.starts_with("HTTP/1.1 406 "));
         EXPECT_TRUE(refused.ends_with("refused"));
+    }
+    app.stop();
+    runner.join();
+    EXPECT_TRUE(runner.failure() == nullptr);
+}
+
+// A peer that keeps reading, so write_timeout never lapses, still cannot hold
+// one buffered response write open: write_completion_timeout runs from the
+// start of the write and progress does not renew it.
+TEST(Ruvia, a_trickling_reader_cannot_hold_a_write_past_write_completion_timeout) {
+    auto& app = ruvia::app();
+    EXPECT_THROW(app.server({.write_completion_timeout_ = 0ms}), std::invalid_argument);
+
+    asio::io_context io;
+    ruvia::test::tcp_port_reservation reservation(io);
+    const auto endpoint = reservation.endpoint();
+    static std::binary_semaphore started{0};
+    app.server({.worker_count_ = 1, .connection_scan_interval_ = 5ms, .write_timeout_ = patient_write_timeout, .write_completion_timeout_ = write_completion_timeout})
+        .listen({.address_ = "127.0.0.1", .http_ = endpoint.port()})
+        .on_start([] {
+        started.release();
+    });
+    ruvia::test::app_run runner(app);
+    const bool ready = started.try_acquire_for(10s);
+    EXPECT_TRUE(ready);
+    if (ready) {
+        asio::ip::tcp::socket client(io);
+        client.open(endpoint.protocol());
+        client.set_option(asio::socket_base::receive_buffer_size(16 * 1024));
+        client.connect(endpoint);
+        asio::write(client, asio::buffer(std::string_view("GET /write-completion/bulk HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")));
+        std::string response{};
+        std::array<char, 4096> buffer;
+        asio::error_code error;
+        const auto requested = std::chrono::steady_clock::now();
+        while (!error && std::chrono::steady_clock::now() - requested < trickle_period) {
+            response.append(buffer.data(), client.read_some(asio::buffer(buffer), error));
+            std::this_thread::sleep_for(10ms);
+        }
+        while (!error) {
+            response.append(buffer.data(), client.read_some(asio::buffer(buffer), error));
+        }
+        const auto elapsed = std::chrono::steady_clock::now() - requested;
+        EXPECT_TRUE(response.starts_with("HTTP/1.1 200 "));
+        EXPECT_TRUE(response.size() < completion_body_bytes);
+        EXPECT_TRUE(elapsed < patient_write_timeout);
     }
     app.stop();
     runner.join();

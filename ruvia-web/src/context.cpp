@@ -1617,7 +1617,11 @@ task<std::span<const std::byte>> read_request_bytes(const context& context_value
 task<std::vector<multipart_part>> read_request_multipart(const context& context_value, operation_options operation) {
     const auto boundary = get_multipart_boundary(detail::context_access::request(context_value));
     const auto request_body = co_await read_request_text(context_value, std::move(operation));
-    co_return parse_multipart_body(request_body, {.boundary_ = boundary});
+    auto parsed = parse_multipart_body(request_body, {.boundary_ = boundary});
+    if (const auto* failure = parsed.failure()) {
+        throw failure->protocol_error();
+    }
+    co_return std::move(parsed).take_parts();
 }
 
 task<void> discard_request_body(const context& context_value, operation_options operation) {
@@ -1922,16 +1926,18 @@ task<std::span<const std::byte>> context_request::bytes(operation_options operat
 std::optional<std::string_view> context_request::signed_cookie(signed_cookie_lookup_options options) const {
     const auto name = options.name_.view();
     const auto secret = options.secret_.view();
-    const auto stored = cookie(name);
-    if (!stored.has_value() || stored->size() <= detail::cookie_signature_size) {
+    // A repeated name is ambiguous about which value was signed, so it fails
+    // verification instead of resolving one occurrence.
+    const auto stored = unique_cookie(name);
+    if (stored.status_ != unique_lookup_status::found || stored.value_.size() <= detail::cookie_signature_size) {
         return std::nullopt;
     }
-    const auto value_size = stored->size() - detail::cookie_signature_size - 1;
-    if ((*stored)[value_size] != '.') {
+    const auto value_size = stored.value_.size() - detail::cookie_signature_size - 1;
+    if (stored.value_[value_size] != '.') {
         return std::nullopt;
     }
-    const auto value = stored->substr(0, value_size);
-    const auto signature = stored->substr(value_size + 1);
+    const auto value = stored.value_.substr(0, value_size);
+    const auto signature = stored.value_.substr(value_size + 1);
     char expected[detail::cookie_signature_size];
     detail::write_cookie_signature(expected, secret, name, value);
     if (!detail::constant_time_bytes_equal(signature, std::string_view(expected, sizeof(expected)))) {

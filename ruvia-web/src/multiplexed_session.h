@@ -190,6 +190,26 @@ public:
         multiplexed_stream_signal& signal_;
     };
 
+    // Spans one write operation (one DATA or datagram submission call) across
+    // all of its output waits: write_completion_timeout_ bounds the call from
+    // its start, and progress between waits renews only the per-wait
+    // write_timeout_ clock. Operations do not nest.
+    class output_operation_guard final {
+    public:
+        explicit output_operation_guard(multiplexed_stream_signal& signal) noexcept :
+            signal_(signal) {
+            signal_.output_operation_started_ms_ = steady_stamp_ms();
+        }
+        ~output_operation_guard() noexcept {
+            signal_.output_operation_started_ms_.reset();
+        }
+        output_operation_guard(const output_operation_guard&) = delete;
+        output_operation_guard& operator=(const output_operation_guard&) = delete;
+
+    private:
+        multiplexed_stream_signal& signal_;
+    };
+
     multiplexed_stream_signal(const worker_ref& worker_value, multiplexed_session_termination& termination) :
         signal_(worker_value),
         termination_(termination) {}
@@ -236,7 +256,7 @@ public:
     multiplexed_session_termination& termination() && = delete;
 
     // Spans one whole wait for peer window / acknowledgements to free output
-    // capacity; the connection scanner times it against write_timeout_.
+    // capacity; the connection scanner times it with output_wait_expired().
     void set_waiting_output(bool waiting) noexcept {
         waiting_output_ = waiting;
         output_wait_observed_ms_.reset();
@@ -247,16 +267,19 @@ public:
         return waiting_output_;
     }
 
-    // True once per wait, when it has been observed for `timeout` in the
-    // scanner's clock. The first observation starts the clock.
-    [[nodiscard]] bool output_wait_expired(std::int64_t now_ms, timeout_duration timeout) noexcept {
+    // True once per wait, in the scanner's clock, when the wait has been
+    // observed for `inactivity` (write_timeout_) or its operation has run for
+    // `completion` (write_completion_timeout_). The first observation starts
+    // the wait clock; a wait outside any operation is its own operation.
+    [[nodiscard]] bool output_wait_expired(std::int64_t now_ms, const std::optional<timeout_duration>& inactivity, const std::optional<timeout_duration>& completion) noexcept {
         if (!waiting_output_ || output_wait_expired_) {
             return false;
         }
         if (!output_wait_observed_ms_.has_value()) {
             output_wait_observed_ms_ = now_ms;
         }
-        output_wait_expired_ = now_ms - *output_wait_observed_ms_ >= timeout.value().count();
+        const auto operation_started_ms = output_operation_started_ms_.value_or(*output_wait_observed_ms_);
+        output_wait_expired_ = (inactivity.has_value() && now_ms - *output_wait_observed_ms_ >= inactivity->value().count()) || (completion.has_value() && now_ms - operation_started_ms >= completion->value().count());
         return output_wait_expired_;
     }
 
@@ -277,6 +300,7 @@ private:
     bool waiting_output_{false};
     bool output_wait_expired_{false};
     std::optional<std::int64_t> output_wait_observed_ms_;
+    std::optional<std::int64_t> output_operation_started_ms_;
 };
 
 // Streams of one multiplexed connection that may open or read a file body on

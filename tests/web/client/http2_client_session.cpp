@@ -45,8 +45,6 @@ namespace {
 class http2_liveness_peer final {
 public:
     enum class mode_type : std::uint8_t {
-        // The first request never gets a response; later ones get "ok".
-        stall_first_request,
         answer,
         // The request is answered after the client sent two liveness PINGs.
         answer_after_pings,
@@ -130,7 +128,6 @@ private:
         std::string output;
         std::vector<ruvia::http2_request_head_event> stalled{};
         std::optional<ruvia::http2_request_head_event> pending;
-        std::size_t requests = 0;
         std::size_t pings = 0;
         bool silent = false;
         for (;;) {
@@ -169,15 +166,7 @@ private:
                     if (request == nullptr) {
                         continue;
                     }
-                    ++requests;
                     switch (mode_) {
-                        case mode_type::stall_first_request:
-                            if (requests == 1) {
-                                stalled.push_back(std::move(*request));
-                            } else {
-                                respond(connection, std::move(*request));
-                            }
-                            break;
                         case mode_type::answer:
                             respond(connection, std::move(*request));
                             break;
@@ -767,32 +756,114 @@ TEST(Ruvia, http_client_alpn_renegotiates_after_http2_disconnect_and_closes_on_m
     SSL_CTX_set_alpn_select_cb(identity.context_.native_handle(), nullptr, nullptr);
 }
 
-// The HTTP/2 read inactivity bound resets only the stalled stream: the next
-// request reuses the same session.
-TEST(Ruvia, http2_client_read_timeout_resets_the_stalled_stream_and_keeps_the_session) {
+// A stream timeout on a session that read nothing since the stream's head
+// evicts the session: the client closes the black-holed connection instead of
+// returning it to idle, and the next request opens a new one.
+TEST(Ruvia, http2_client_stream_timeout_evicts_a_silent_session) {
+    using namespace http_client_pool_test;
     auto& io = ruvia::test::new_test_io_context();
     test_worker worker(io);
-    http2_liveness_peer peer(io, worker.handle_, http2_liveness_peer::mode_type::stall_first_request);
-    peer.start();
-    const std::string config_url = std::move(std::string("http://127.0.0.1:").append(std::to_string(peer.port())));
-    auto config = local_http2_client_config(config_url);
-    config.read_timeout_ = std::chrono::milliseconds(100);
+    scripted_origin origin(io, worker.handle_);
+    unsigned connections = 0;
+    const auto script = [&]() -> asio::awaitable<void> {
+        {
+            tcp_origin_connection silent(origin, co_await origin.acceptor().async_accept(asio::use_awaitable));
+            ++connections;
+            (void)co_await silent.flush();
+            // A complete exchange settles the SETTINGS handshake first.
+            silent.respond(co_await silent.next_request(), "prime");
+            (void)co_await silent.flush();
+            // Then the peer never answers or writes again. Only the client's
+            // eviction ends this connection before the next one is served.
+            [[maybe_unused]] const auto held = co_await silent.next_request();
+            co_await silent.read_until_end();
+        }
+        tcp_origin_connection fresh(origin, co_await origin.acceptor().async_accept(asio::use_awaitable));
+        ++connections;
+        (void)co_await fresh.flush();
+        fresh.respond(co_await fresh.next_request(), "fresh");
+        (void)co_await fresh.flush();
+        co_await fresh.read_until_end();
+    };
+    origin.start(script());
+    const std::string config_url = std::move(std::string("http://127.0.0.1:").append(std::to_string(origin.port())));
+    auto config = http2_client_config(config_url);
+    config.read_timeout_ = std::chrono::milliseconds(200);
     ruvia::http_client client(worker.attachment_.loop(), config);
+    ruvia::task_scope requests(worker.handle_);
     auto operation = [&]() -> ruvia::task<void> {
-        const auto started = std::chrono::steady_clock::now();
-        std::optional<std::error_code> code;
+        co_await run_against(client, origin, requests, [&]() -> ruvia::task<void> {
+            auto prime = co_await client.client().get("/prime").send();
+            EXPECT_EQ(response_text(co_await prime.stream().read_all()), "prime");
+            const auto started = std::chrono::steady_clock::now();
+            std::optional<std::error_code> code;
+            try {
+                (void)co_await client.client().get("/silent").send();
+            } catch (const ruvia::http_client_error& error) {
+                code = error.code();
+            }
+            EXPECT_TRUE(code == std::make_error_code(std::errc::timed_out));
+            EXPECT_TRUE(std::chrono::steady_clock::now() - started < std::chrono::seconds(3));
+            auto fresh = co_await client.client().get("/fresh").send();
+            EXPECT_EQ(response_text(co_await fresh.stream().read_all()), "fresh");
+        });
+    };
+    run_operation(worker, io, operation);
+    EXPECT_EQ(connections, 2U);
+}
+
+// A stream timeout on a session that delivered bytes for another stream since
+// the timed-out stream's head resets only that stream: the next request
+// reuses the session.
+TEST(Ruvia, http2_client_stream_timeout_keeps_a_session_that_answers_other_streams) {
+    using namespace http_client_pool_test;
+    auto& io = ruvia::test::new_test_io_context();
+    test_worker worker(io);
+    scripted_origin origin(io, worker.handle_);
+    const auto script = [&]() -> asio::awaitable<void> {
+        // The only connection: a second one would never be served.
+        tcp_origin_connection only(origin, co_await origin.acceptor().async_accept(asio::use_awaitable));
+        (void)co_await only.flush();
+        [[maybe_unused]] const auto stalled = co_await only.next_request();
+        origin.advance();
+        only.respond(co_await only.next_request(), "answered");
+        (void)co_await only.flush();
+        only.respond(co_await only.next_request(), "after");
+        (void)co_await only.flush();
+        co_await only.read_until_end();
+    };
+    origin.start(script());
+    const std::string config_url = std::move(std::string("http://127.0.0.1:").append(std::to_string(origin.port())));
+    auto config = http2_client_config(config_url);
+    config.read_timeout_ = std::chrono::milliseconds(300);
+    ruvia::http_client client(worker.attachment_.loop(), config);
+    ruvia::task_scope requests(worker.handle_);
+    std::optional<std::error_code> stalled_code;
+    bool stalled_done = false;
+    ruvia::worker_signal done_signal(worker.handle_);
+    const auto send_stalled = [&]() -> ruvia::task<void> {
         try {
             (void)co_await client.client().get("/stall").send();
         } catch (const ruvia::http_client_error& error) {
-            code = error.code();
+            stalled_code = error.code();
         }
-        EXPECT_TRUE(code == std::make_error_code(std::errc::timed_out));
-        EXPECT_TRUE(std::chrono::steady_clock::now() - started < std::chrono::seconds(10));
-        // The peer accepts one connection only.
-        auto response = co_await client.client().get("/ok").send();
-        EXPECT_EQ(response_text(co_await response.stream().read_all()), "ok");
-        co_await client.shutdown();
-        co_await peer.wait();
+        stalled_done = true;
+        done_signal.notify();
+    };
+    auto operation = [&]() -> ruvia::task<void> {
+        co_await run_against(client, origin, requests, [&]() -> ruvia::task<void> {
+            requests.spawn(send_stalled());
+            // The stalled head reached the peer before the answered one.
+            co_await origin.reach(1);
+            auto answered = co_await client.client().get("/answer").send();
+            EXPECT_EQ(response_text(co_await answered.stream().read_all()), "answered");
+            while (!stalled_done) {
+                co_await done_signal.wait();
+            }
+            EXPECT_TRUE(stalled_code == std::make_error_code(std::errc::timed_out));
+            auto after = co_await client.client().get("/after").send();
+            EXPECT_EQ(response_text(co_await after.stream().read_all()), "after");
+        });
     };
     run_operation(worker, io, operation);
 }

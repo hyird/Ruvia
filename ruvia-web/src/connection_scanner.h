@@ -58,7 +58,16 @@ struct connection_scanner_options final {
     // Absolute phase deadlines, independent of successful I/O progress.
     std::optional<timeout_duration> initial_read_completion_timeout_{};
     std::optional<timeout_duration> payload_read_completion_timeout_{};
+    // Absolute deadline of one write operation, from its start; write
+    // progress does not renew it.
+    std::optional<timeout_duration> write_completion_timeout_{};
 };
+
+// Product limit: the absolute bound on reading a PROXY header, the TLS
+// handshake, a request head or the HTTP/2 preface when neither request-head
+// timeout is configured, so no configuration lets a silent or trickling peer
+// hold its slot indefinitely.
+inline constexpr std::chrono::seconds unconfigured_initial_read_deadline{30};
 
 // Product limit: a connection that a timeout asked to end through its drain
 // callback (an HTTP/2 GOAWAY drain, bounded by its own round-trip limit) has
@@ -156,10 +165,12 @@ public:
     // Writes have their own stall clock, independent of the phase that times
     // reads (downstream write_timeout bounds every write, as in Pingora): it
     // runs while the entry is in the `writing` phase or a write_scope is open,
-    // and only write progress renews it. write_timeout closes a connection
-    // whose clock lapses, whatever its phase, so a full-duplex reader (HTTP/2)
-    // that keeps the entry idle, reading or long_lived cannot hide a peer that
-    // stopped reading.
+    // and only write progress renews it. Beside it, each write operation has
+    // an absolute completion clock from its start that progress never renews,
+    // so a peer draining a byte per write_timeout still cannot hold a write.
+    // Either clock closes a connection whose limit lapses, whatever its
+    // phase, so a full-duplex reader (HTTP/2) that keeps the entry idle,
+    // reading or long_lived cannot hide a peer that stopped reading.
     // Destruction detaches the entry and its checks, including during a periodic
     // callback. Destroying the scanner detaches its entries and checks.
     class entry final {
@@ -180,6 +191,10 @@ public:
         // Records transport progress of a write: activity that also renews
         // the write stall clock.
         void note_write_progress() noexcept;
+        // Records progress of a write that continues as a new write
+        // operation (the next slice of a file body): renews the stall clock
+        // and restarts write_completion_timeout's.
+        void begin_next_write() noexcept;
         // Not for long_lived: an upgrade enters that phase via enter_long_lived().
         // Ends a request-head read started by read_request_head().
         void set_phase(phase next_phase) noexcept;
@@ -227,9 +242,9 @@ public:
             bool reading_request_head_;
         };
 
-        // Arms the write stall clock for one write without changing the
-        // phase, for a writer that runs beside the connection's reader. The
-        // clock starts when the outermost scope opens.
+        // Arms the write stall and completion clocks for one write without
+        // changing the phase, for a writer that runs beside the connection's
+        // reader. Both clocks start when the outermost scope opens.
         class write_scope final {
         public:
             explicit write_scope(entry& entry_value) noexcept;
@@ -283,6 +298,9 @@ public:
         // Last write progress, or the start of the write; the write stall
         // clock's reference while write_pending().
         std::int64_t write_progress_ms_{0};
+        // Start of the pending write operation; write_completion_timeout's
+        // reference while write_pending().
+        std::int64_t write_started_ms_{0};
         // Valid while close_requested_: when the scanner closes the socket.
         std::int64_t close_deadline_ms_{0};
         phase phase_{phase::idle};
@@ -384,8 +402,9 @@ struct connection_scanner::impl_type final {
     // active since `interval_start`.
     [[nodiscard]] bool scan(std::int64_t interval_start) noexcept;
     [[nodiscard]] bool is_timed_out(const entry& entry, std::int64_t now) const noexcept;
-    // A write is pending and has made no progress for write_timeout.
-    [[nodiscard]] bool write_stalled(const entry& entry, std::int64_t now) const noexcept;
+    // A write is pending and has made no progress for write_timeout, or has
+    // outlasted write_completion_timeout since it started.
+    [[nodiscard]] bool write_overdue(const entry& entry, std::int64_t now) const noexcept;
     [[nodiscard]] static bool active_since(const entry& entry, std::int64_t interval_start) noexcept;
     // Ends a timed-out connection: the first time gracefully when its owner
     // can (a pending request-head read, or a drain callback outside writing),

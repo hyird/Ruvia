@@ -576,22 +576,26 @@ std::string token = ruvia::jwt_sign({
     .claims_ = custom_claims,
 });
 
-// 2. 提取 Bearer Token 并验证签名与声明：
+// 2. 提取 Bearer Token 并验证签名与声明（请求路径使用不抛异常的 try 入口）：
 auto header_val = c.req().header("Authorization").value_or("");
 auto bearer = ruvia::jwt_bearer_token(header_val);
 if (bearer) {
-    ruvia::jwt_payload payload = ruvia::jwt_verify({
+    ruvia::jwt_result verified = ruvia::try_jwt_verify({
         .token_ = *bearer,
         .algorithm_ = ruvia::jwt_algorithm::hs256,
         .secret_ = secret_key_32_bytes_minimum,
         .issuer_ = "ruvia-auth",
         .audience_ = "ruvia-api",
     });
-    std::string_view user_id = payload.subject();
-    std::optional<std::string_view> role = payload.claim("role");
+    if (verified.has_value()) {
+        ruvia::jwt_payload payload = std::move(verified).take_value();
+        std::string_view user_id = payload.subject();
+        std::optional<std::string_view> role = payload.claim("role");
+    }
 }
 ```
 
+- 双入口：`try_jwt_verify` / `try_jwt_decode_unverified` 是线面容错入口，畸形、签名不符、过期等令牌数据错误以 `jwt_result` 值返回（`has_value()`、`error()` 给出 `jwt_error::code_type`、`value() const&` / `take_value() &&` 取载荷，持错误时取载荷抛 `std::logic_error`）；`jwt_result` 构造期固定类别，禁止拷贝与赋值。`jwt_verify` / `jwt_decode_unverified` 是其本地严格包装，对同一令牌抛出携带相同 `code()` 的 `jwt_error`。两种入口对选项误用（负 `leeway_`、非法策略、密钥长度不符 RFC 7518）抛 `std::invalid_argument` / `std::length_error`，内存分配失败照常抛异常。签名输入超过 HMAC 长度上限的令牌按 `malformed_token` 拒绝。
 - `jwt_bearer_token` 只返回符合 RFC 6750 `b64token` 语法（`ALPHA / DIGIT / - . _ ~ + /`，末尾可跟 `=`）的令牌；含空格、逗号等其他字符时返回 `std::nullopt`。
 - 自定义声明的值可以是任意 JSON 值（RFC 7519 §2）。载荷整体仍校验 JSON 语法与声明名唯一性；字符串值经 `claims()` / `claim(name)` 暴露，数字、布尔、`null`、数组与对象等非字符串自定义声明按 RFC 7519 §4 忽略，不导致令牌被拒绝。注册声明（`iss` / `sub` / `aud` / `jti` / `exp` / `nbf` / `iat`）类型不符时仍拒绝。
 - 时间声明遵循 [RFC 7519 §2 NumericDate](https://www.rfc-editor.org/rfc/rfc7519#section-2)。`expires_at()`、`not_before()`、`issued_at()` 返回借用的 `const jwt_numeric_date*`，`nullptr` 表示声明缺失。`text()` 保留完整十进制数字（包括小数和指数），`to_time_point()` 仅在宿主时钟能精确表示其范围与精度时返回时间点，否则返回 `nullopt`，不会饱和、舍入或把亚 tick 的非零值当作零。
