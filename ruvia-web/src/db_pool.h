@@ -33,6 +33,7 @@
 #include "db_query.h"
 #include "db_session.h"
 #include "http_client_pool.h"
+#include "slot_pool.h"
 #include "stop_token.h"
 #include "task.h"
 #include "worker_ref.h"
