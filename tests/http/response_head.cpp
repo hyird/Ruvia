@@ -917,7 +917,66 @@ TEST(Ruvia, http1_response_head_framing_is_an_exclusive_plan) {
     EXPECT_EQ(combined.content_length(), combined.head_plan().buffered()->content_length());
 }
 
-namespace {}  // namespace
+namespace {
+
+ruvia::prepared_http1_response_stream prepare_stream_for(std::string_view request_wire, http_response response, ruvia::http_response_trailer_intent trailers = ruvia::http_response_trailer_intent::none) {
+    ruvia::http1_server_request_parse_state parsed;
+    parsed.parse_head(request_wire, 0);
+    if (parsed.head_ready() == nullptr) {
+        throw std::logic_error("test request did not parse");
+    }
+    const auto plan = ruvia::http1_plan_response_stream(parsed, ruvia::http1_close_policy::allow_reuse, ruvia::http1_request_body_consumption::complete);
+    return ruvia::prepare_http1_response_stream_head(std::move(response), plan, trailers);
+}
+
+}  // namespace
+
+TEST(Ruvia, http1_stream_with_declared_content_length_is_length_delimited_and_reusable) {
+    http_response response;
+    response.header("Content-Length", "5");
+    auto prepared = prepare_stream_for("GET / HTTP/1.1\r\nHost: a\r\n\r\n", std::move(response), ruvia::http_response_trailer_intent::present);
+    const auto* length = prepared.response_head_plan().length_delimited_stream();
+    ASSERT_NE(length, nullptr);
+    EXPECT_EQ(length->content_length(), std::uint64_t{5});
+    EXPECT_EQ(prepared.commit_plan().framing(), ruvia::http_response_stream_framing::http1_length_delimited);
+    EXPECT_FALSE(prepared.commit_plan().trailers_available());
+    EXPECT_EQ(prepared.connection_plan().disposition(), ruvia::http1_close_policy::allow_reuse);
+    const auto wire = emit_head(prepared.response(), prepared.response_head_plan());
+    EXPECT_EQ(count_occurrences(wire, "Content-Length: 5\r\n"), std::size_t{1});
+    EXPECT_EQ(wire.find("Transfer-Encoding:"), std::string::npos);
+}
+
+TEST(Ruvia, http1_stream_transfer_encoding_hint_overrides_declared_content_length) {
+    http_response response;
+    response.header("Content-Length", "5");
+    response.header("Transfer-Encoding", "chunked");
+    auto prepared = prepare_stream_for("GET / HTTP/1.1\r\nHost: a\r\n\r\n", std::move(response));
+    EXPECT_NE(prepared.response_head_plan().chunked_stream(), nullptr);
+    EXPECT_EQ(prepared.response_head_plan().length_delimited_stream(), nullptr);
+    const auto wire = emit_head(prepared.response(), prepared.response_head_plan());
+    EXPECT_EQ(wire.find("Content-Length:"), std::string::npos);
+    EXPECT_NE(wire.find("Transfer-Encoding: chunked\r\n"), std::string::npos);
+}
+
+TEST(Ruvia, http10_keep_alive_stream_with_content_length_stays_reusable) {
+    http_response response;
+    response.header("Content-Length", "5");
+    auto prepared = prepare_stream_for("GET / HTTP/1.0\r\nHost: a\r\nConnection: keep-alive\r\n\r\n", std::move(response));
+    ASSERT_NE(prepared.response_head_plan().length_delimited_stream(), nullptr);
+    EXPECT_EQ(prepared.response_head_plan().close_delimited_stream(), nullptr);
+    EXPECT_EQ(prepared.connection_plan().disposition(), ruvia::http1_close_policy::allow_reuse);
+    const auto wire = emit_head(prepared.response(), prepared.response_head_plan());
+    EXPECT_NE(wire.find("Content-Length: 5\r\n"), std::string::npos);
+    EXPECT_EQ(wire.find("Transfer-Encoding:"), std::string::npos);
+}
+
+TEST(Ruvia, http1_head_stream_with_content_length_is_not_length_delimited) {
+    http_response response;
+    response.header("Content-Length", "5");
+    auto prepared = prepare_stream_for("HEAD / HTTP/1.1\r\nHost: a\r\n\r\n", std::move(response));
+    EXPECT_EQ(prepared.response_head_plan().length_delimited_stream(), nullptr);
+    EXPECT_NE(prepared.commit_plan().framing(), ruvia::http_response_stream_framing::http1_length_delimited);
+}
 
 TEST(Ruvia, response_commit_headers_leaves_staged_response_independent) {
     ruvia::http_response response;

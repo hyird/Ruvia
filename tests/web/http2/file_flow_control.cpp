@@ -31,10 +31,19 @@
 namespace http2_file_flow_control_test {
 
 constexpr std::size_t file_size = 65535;
+// Block-aligned: growing it by a byte only allocates past its old end, so the
+// client's mutation never waits for the filesystem to write the file back.
+// Truncating one can: btrfs starts writeback when a file truncated to zero is
+// closed, and the next truncation waits for it, for seconds on a busy disk.
+constexpr std::uintmax_t mutated_file_size = 64 * 1024;
 
 std::filesystem::path& file_path() {
     static std::filesystem::path path;
     return path;
+}
+
+[[nodiscard]] std::filesystem::path mutated_file_path(std::string_view name) {
+    return file_path().parent_path() / ("mutated-" + std::string(name) + ".bin");
 }
 
 [[nodiscard]] const std::filesystem::path& empty_directory() {
@@ -47,7 +56,7 @@ std::unique_ptr<ruvia::static_root> empty_root;
 class file_routes final {
     RUVIA_ROUTES_BEGIN(file_routes)
     RUVIA_GET("/http2-file-flow-control", file);
-    RUVIA_GET("/http2-file-mutated", mutated_file);
+    RUVIA_GET("/http2-file-mutated/:name", mutated_file);
     RUVIA_GET("/http2-file-ok", ok_text);
     RUVIA_GET("/http2-indexed-empty", indexed_empty);
     RUVIA_GET("/http2-empty-mutated", mutated_empty);
@@ -62,15 +71,11 @@ class file_routes final {
     }
 
     ruvia::task<ruvia::http_response> mutated_file(ruvia::context& context_value) {
-        {
-            std::ofstream output(file_path(), std::ios::binary | std::ios::trunc);
-            const std::string bytes(file_size, 'f');
-            output.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
-        }
-        // The client truncates the file once HEADERS arrive: the file was
+        // The client grows the file once HEADERS arrive: the file was
         // validated before them, and the multipart boundary DATA is submitted
         // before the file range read fails and resets the stream.
-        co_return co_await context_value.file({.path_ = file_path()});
+        const auto path = mutated_file_path(context_value.req().param("name").value_or(""));
+        co_return co_await context_value.file({.path_ = path});
     }
 
     ruvia::task<ruvia::http_response> mutated_empty(ruvia::context& context_value) {
@@ -492,7 +497,16 @@ TEST(Ruvia, http2_file_body_is_read_only_after_send_window_is_granted) {
 }
 
 TEST(Ruvia, http2_failed_file_writes_release_output_budget_slots) {
+    using http2_file_flow_control_test::mutated_file_path;
+    using http2_file_flow_control_test::mutated_file_size;
     const http2_file_flow_control_test::test_file file;
+    // One file per stream, written before any request: no file is rewritten
+    // while a stream runs.
+    for (std::uint32_t stream_id = 1; stream_id <= 9; stream_id += 2) {
+        std::ofstream output(mutated_file_path(std::to_string(stream_id)), std::ios::binary);
+        output << std::string(mutated_file_size, 'f');
+        ASSERT_TRUE(output.flush());
+    }
     auto& io = ruvia::test::new_test_io_context();
     auto attachment = ruvia::attach_event_loop(io);
     ruvia::test::http_server_fixture server(io);
@@ -539,7 +553,7 @@ TEST(Ruvia, http2_failed_file_writes_release_output_budget_slots) {
                 ruvia::hpack_encoder::encode_header(block, ":method", "GET");
                 ruvia::hpack_encoder::encode_header(block, ":scheme", "http");
                 ruvia::hpack_encoder::encode_header(block, ":authority", "localhost");
-                ruvia::hpack_encoder::encode_header(block, ":path", "/http2-file-mutated");
+                ruvia::hpack_encoder::encode_header(block, ":path", "/http2-file-mutated/" + std::to_string(stream_id));
                 ruvia::hpack_encoder::encode_header(block, "range", "bytes=0-3, 10-13");
                 std::string req{};
                 http2_file_flow_control_test::append_frame(req, ruvia::http2_frame_type::headers, 0x5, stream_id, block);
@@ -547,6 +561,11 @@ TEST(Ruvia, http2_failed_file_writes_release_output_budget_slots) {
                 bool stream_done = false;
                 while (!stream_done) {
                     const auto frame = co_await http2_file_flow_control_test::read_frame(socket);
+                    // A stream the failed read did not reset fails here, not at
+                    // the watchdog.
+                    if (frame.header_.stream_id_ == stream_id && (frame.header_.flags_ & 0x1) != 0 && (frame.header_.type_ == static_cast<std::uint8_t>(ruvia::http2_frame_type::headers) || frame.header_.type_ == static_cast<std::uint8_t>(ruvia::http2_frame_type::data))) {
+                        throw std::runtime_error("HTTP/2 file response ended without RST_STREAM");
+                    }
                     if (frame.header_.type_ == static_cast<std::uint8_t>(ruvia::http2_frame_type::settings) && (frame.header_.flags_ & 0x1) == 0) {
                         std::string ack{};
                         http2_file_flow_control_test::append_frame(ack, ruvia::http2_frame_type::settings, 0x1, 0, {});
@@ -555,8 +574,7 @@ TEST(Ruvia, http2_failed_file_writes_release_output_budget_slots) {
                         (void)decoder.decode(frame.payload_, [](std::string_view, std::string_view) {
                             return true;
                         });
-                        std::ofstream output(http2_file_flow_control_test::file_path(), std::ios::binary | std::ios::trunc);
-                        output << "x";
+                        std::filesystem::resize_file(mutated_file_path(std::to_string(stream_id)), mutated_file_size + 1);
                     } else if (frame.header_.stream_id_ == stream_id && frame.header_.type_ == static_cast<std::uint8_t>(ruvia::http2_frame_type::data)) {
                         std::string update{};
                         http2_file_flow_control_test::append_frame(update, ruvia::http2_frame_type::window_update, 0, stream_id, std::string_view("\0\0\x10\0", 4));

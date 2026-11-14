@@ -1642,6 +1642,10 @@ private:
             head_.reset();
             append_http1_response_head(stream_head.response(), head_, stream_head.response_head_plan());
             connection_plan_ = stream_head.connection_plan();
+            framing_ = stream_head.commit_plan().framing();
+            if (const auto* length = stream_head.response_head_plan().length_delimited_stream()) {
+                remaining_content_length_ = length->content_length();
+            }
             // Mark committed before the write; a partial header flush must never be
             // followed by the normal error-response path on the same socket.
             if (interim_output != nullptr) {
@@ -1704,7 +1708,17 @@ private:
 
         const http1_chunk_header chunk_header(chunk.size());
         std::array<asio::const_buffer, 3> buffers{};
-        if (plan_.framing() == http_response_stream_framing::http1_close_delimited) {
+        if (framing_ == http_response_stream_framing::http1_length_delimited) {
+            // The declared Content-Length delimits the message: raw bytes, and
+            // no byte past it (RFC 9112 §6.3). An overrun leaves the head's
+            // promise unkeepable, so the connection closes after the stream.
+            if (chunk.size() > remaining_content_length_) {
+                state_.mark_aborted();
+                throw std::length_error("HTTP/1 response exceeds Content-Length");
+            }
+            remaining_content_length_ -= chunk.size();
+            buffers[0] = asio::buffer(chunk);
+        } else if (framing_ == http_response_stream_framing::http1_close_delimited) {
             // No chunk framing: write the raw body bytes. The connection close
             // (forced once the stream ends) is what delimits the message.
             buffers[0] = asio::buffer(chunk);
@@ -1755,7 +1769,17 @@ private:
             compression_.release_output();
         }
         ensure_peer_writable();
-        if (plan_.framing() == http_response_stream_framing::http1_close_delimited) {
+        if (framing_ == http_response_stream_framing::http1_length_delimited) {
+            // A stream that ends short of its Content-Length is an incomplete
+            // message: the connection closes so the client sees it (RFC 9112 §8).
+            if (remaining_content_length_ != 0) {
+                state_.mark_aborted();
+                throw std::invalid_argument("HTTP/1 response ended before its declared Content-Length");
+            }
+            state_.mark_ended();
+            co_return;
+        }
+        if (framing_ == http_response_stream_framing::http1_close_delimited) {
             // No last-chunk terminator: the connection close delimits the body.
             state_.mark_ended();
             co_return;
@@ -1788,6 +1812,10 @@ private:
     const http_cors_policy* cors_;
     http1_response_stream_plan plan_;
     http1_response_stream_plan consumed_plan_;
+    // The committed head's framing, and the bytes its Content-Length still
+    // admits when that length delimits the stream.
+    http_response_stream_framing framing_{http_response_stream_framing::http1_chunked};
+    std::uint64_t remaining_content_length_{0};
     lazy_buffered_body<stream_type>& request_body_;
     http1_request_connection_plan connection_plan_;
     http_streaming_response_compression compression_;

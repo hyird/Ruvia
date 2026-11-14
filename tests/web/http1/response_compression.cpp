@@ -99,6 +99,7 @@ class response_compression_routes final {
     RUVIA_GET("/compression-stream-mixed", stream_mixed_coding);
     RUVIA_GET("/compression-stream-204", stream_no_content);
     RUVIA_GET("/compression-stream-304", stream_not_modified);
+    RUVIA_GET("/compression-stream-declared", stream_declared_length);
     RUVIA_GET("/compression-validators", validators);
     RUVIA_GET("/compression-media", media);
     RUVIA_ROUTES_END
@@ -181,6 +182,15 @@ class response_compression_routes final {
         }
         co_await writer.write(std::string_view(small_body));
         static_cast<void>(co_await writer.sleep(std::chrono::hours(1)));
+    }
+    ruvia::task<void> stream_declared_length(ruvia::context& context_value) {
+        context_value.draft().header("Content-Length", std::to_string(small_body.size()));
+        auto& writer = context_value.stream_text();
+        if (co_await writer.commit() == ruvia::stream_commit_result::completed) {
+            co_return;
+        }
+        co_await writer.write(std::string_view(small_body));
+        co_await writer.end();
     }
 
     ruvia::task<void> stream_custom_coding(ruvia::context& context_value) {
@@ -363,6 +373,21 @@ TEST(Ruvia, http1_streaming_head_preserves_coding_before_following_encoded_get) 
         }
     }
     server.finish();
+}
+
+// Compression removes the declared Content-Length, so a length-delimited
+// stream falls back to chunked framing of the encoded bytes.
+TEST(Ruvia, http1_compressed_stream_with_declared_length_falls_back_to_chunked) {
+    auto& io = ruvia::test::new_test_io_context();
+    ruvia::test::http_server_fixture server(io, compressing_server());
+    const auto response = fetch_response(server.endpoint(), get_request("/compression-stream-declared", "Accept-Encoding: gzip\r\n"));
+    server.finish();
+    ASSERT_TRUE(response.has_value());
+    const auto headers = head_fields(*response);
+    EXPECT_TRUE(response->starts_with("HTTP/1.1 200 "));
+    EXPECT_TRUE(has_field(headers, "content-encoding: gzip"));
+    EXPECT_TRUE(has_field(headers, "transfer-encoding: chunked"));
+    EXPECT_FALSE(has_field(headers, "content-length:"));
 }
 
 TEST(Ruvia, http1_compressed_stream_peer_reset_allows_following_response) {

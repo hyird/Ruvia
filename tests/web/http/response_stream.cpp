@@ -90,6 +90,7 @@ class stream_lane_routes final {
     RUVIA_GET("/server-uaf-head-stream", uaf_head_stream, ruvia::stream_body);
     RUVIA_POST("/server-stream-early-respond", never_stream, stream_early_respond_middleware);
     RUVIA_GET("/server-stream-plain", plain);
+    RUVIA_GET("/server-stream-length/:mode", length_stream);
     RUVIA_ROUTES_END
 
     ruvia::task<void> output(ruvia::context& context_value) {
@@ -199,6 +200,28 @@ class stream_lane_routes final {
 
     ruvia::task<ruvia::http_response> plain(ruvia::context& context_value) {
         co_return context_value.text("plain-ok");
+    }
+
+    // Declares Content-Length before commit; `exact` writes 10 bytes in two
+    // chunks, `over` declares 4 and writes 6, `short` declares 10 and ends
+    // after 3.
+    ruvia::task<void> length_stream(ruvia::context& context_value) {
+        const auto mode = context_value.req().param("mode").value_or("");
+        const std::string_view declared = mode == "over" ? "4" : "10";
+        context_value.draft().header("Content-Length", declared);
+        auto& writer = context_value.stream_text();
+        if (co_await writer.commit() == ruvia::stream_commit_result::completed) {
+            co_return;
+        }
+        if (mode == "exact") {
+            co_await writer.write("01234");
+            co_await writer.write("56789");
+        } else if (mode == "over") {
+            co_await writer.write("abcdef");
+        } else {
+            co_await writer.write("xyz");
+        }
+        co_await writer.end();
     }
 
     ruvia::task<void> uaf_head_stream(ruvia::context& context_value) {
@@ -476,6 +499,79 @@ TEST(Ruvia, response_stream_middleware_short_circuit_after_body_read_preserves_p
 
     EXPECT_TRUE(response.find("early:hello") != std::string::npos);
     EXPECT_TRUE(response.find("plain-ok") != std::string::npos);
+}
+
+namespace {
+
+// Writes `request` and returns every byte read until the server closes, or
+// nullopt when the connection is still open after 5 s.
+[[nodiscard]] std::optional<std::string> read_until_close(const asio::ip::tcp::endpoint& endpoint, std::string_view request) {
+    asio::io_context client_io;
+    asio::ip::tcp::socket socket(client_io);
+    socket.connect(endpoint);
+    asio::write(socket, asio::buffer(request));
+    std::string output{};
+    bool closed = false;
+    asio::async_read(socket, asio::dynamic_buffer(output), [&closed](const std::error_code&, std::size_t) {
+        closed = true;
+    });
+    client_io.run_for(std::chrono::seconds(5));
+    if (!closed) {
+        return std::nullopt;
+    }
+    return output;
+}
+
+}  // namespace
+
+TEST(Ruvia, response_stream_declared_length_is_sent_unchunked_and_keeps_connection) {
+    auto& io = ruvia::test::new_test_io_context();
+    ruvia::test::http_server_fixture server(io);
+    const auto response = read_until_close(server.endpoint(),
+        "GET /server-stream-length/exact HTTP/1.1\r\nHost: localhost\r\n\r\n"
+        "GET /server-stream-plain HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n");
+    server.finish();
+    ASSERT_TRUE(response.has_value());
+    const auto head_end = response->find("\r\n\r\n");
+    ASSERT_NE(head_end, std::string::npos);
+    const std::string_view head = std::string_view(*response).substr(0, head_end + 4);
+    EXPECT_TRUE(head.starts_with("HTTP/1.1 200 "));
+    EXPECT_NE(head.find("Content-Length: 10\r\n"), std::string_view::npos);
+    EXPECT_EQ(head.find("Transfer-Encoding"), std::string_view::npos);
+    EXPECT_EQ(head.find("Connection: close"), std::string_view::npos);
+    const std::string_view rest = std::string_view(*response).substr(head_end + 4);
+    EXPECT_TRUE(rest.starts_with("0123456789HTTP/1.1 200 "));
+    EXPECT_TRUE(rest.ends_with("plain-ok"));
+}
+
+TEST(Ruvia, response_stream_write_past_declared_length_closes_without_extra_bytes) {
+    auto& io = ruvia::test::new_test_io_context();
+    ruvia::test::http_server_fixture server(io);
+    const auto response = read_until_close(server.endpoint(),
+        "GET /server-stream-length/over HTTP/1.1\r\nHost: localhost\r\n\r\n"
+        "GET /server-stream-plain HTTP/1.1\r\nHost: localhost\r\n\r\n");
+    server.finish();
+    ASSERT_TRUE(response.has_value());
+    const auto head_end = response->find("\r\n\r\n");
+    ASSERT_NE(head_end, std::string::npos);
+    EXPECT_NE(response->substr(0, head_end).find("Content-Length: 4"), std::string::npos);
+    const auto body = response->substr(head_end + 4);
+    EXPECT_LE(body.size(), std::size_t{4});
+    EXPECT_TRUE(std::string_view("abcd").starts_with(body));
+}
+
+TEST(Ruvia, response_stream_ending_short_of_declared_length_closes_connection) {
+    auto& io = ruvia::test::new_test_io_context();
+    ruvia::test::http_server_fixture server(io);
+    const auto response = read_until_close(server.endpoint(),
+        "GET /server-stream-length/short HTTP/1.1\r\nHost: localhost\r\n\r\n"
+        "GET /server-stream-plain HTTP/1.1\r\nHost: localhost\r\n\r\n");
+    server.finish();
+    ASSERT_TRUE(response.has_value());
+    const auto head_end = response->find("\r\n\r\n");
+    ASSERT_NE(head_end, std::string::npos);
+    EXPECT_NE(response->substr(0, head_end).find("Content-Length: 10"), std::string::npos);
+    EXPECT_EQ(response->substr(head_end + 4), "xyz");
 }
 
 // File bodies are read on the blocking pool on every platform; Windows plain

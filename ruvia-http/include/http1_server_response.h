@@ -153,6 +153,24 @@ private:
     constexpr http1_close_delimited_response_stream_head() noexcept = default;
 };
 
+// The response's own Content-Length delimits the stream (RFC 9112 §6.3): the
+// runtime writes raw body bytes, rejects a write past the declared length and
+// closes the connection when the stream ends short of it (RFC 9112 §8).
+class http1_length_delimited_response_stream_head final {
+public:
+    [[nodiscard]] constexpr std::uint64_t content_length() const noexcept {
+        return content_length_;
+    }
+
+private:
+    friend class http1_response_head_plan;
+
+    explicit constexpr http1_length_delimited_response_stream_head(std::uint64_t content_length) noexcept :
+        content_length_(content_length) {}
+
+    std::uint64_t content_length_{0};
+};
+
 // Final HTTP/1 head framing is one exclusive protocol value. The body plan
 // keeps method/status content semantics attached to the exact wire-framing
 // alternative selected by the HTTP/1 planner.
@@ -173,6 +191,11 @@ public:
     }
     [[nodiscard]] constexpr const http1_close_delimited_response_stream_head* close_delimited_stream() const&& = delete;
 
+    [[nodiscard]] constexpr const http1_length_delimited_response_stream_head* length_delimited_stream() const& noexcept {
+        return std::get_if<http1_length_delimited_response_stream_head>(&framing_);
+    }
+    [[nodiscard]] constexpr const http1_length_delimited_response_stream_head* length_delimited_stream() const&& = delete;
+
     [[nodiscard]] constexpr http_response_body_plan body_plan() const noexcept {
         return body_plan_;
     }
@@ -185,8 +208,9 @@ private:
     friend http1_buffered_response_plan get_http1_buffered_response_plan(http_buffered_response_write_plan, http1_request_connection_plan) noexcept;
     friend constexpr http1_response_head_plan http1_chunked_response_stream_head_plan(http_response_body_plan, http1_request_connection_plan) noexcept;
     friend constexpr http1_response_head_plan http1_close_delimited_response_stream_head_plan(http_response_body_plan, http1_request_connection_plan) noexcept;
+    friend constexpr http1_response_head_plan http1_length_delimited_response_stream_head_plan(http_response_body_plan, http1_request_connection_plan, std::uint64_t) noexcept;
 
-    using framing_type = std::variant<http1_buffered_response_head, http1_chunked_response_stream_head, http1_close_delimited_response_stream_head>;
+    using framing_type = std::variant<http1_buffered_response_head, http1_chunked_response_stream_head, http1_close_delimited_response_stream_head, http1_length_delimited_response_stream_head>;
 
     [[nodiscard]] static constexpr framing_type buffered_framing(std::uint64_t content_length) noexcept {
         return framing_type(http1_buffered_response_head(content_length));
@@ -198,6 +222,10 @@ private:
 
     [[nodiscard]] static constexpr framing_type close_delimited_stream_framing() noexcept {
         return framing_type(http1_close_delimited_response_stream_head());
+    }
+
+    [[nodiscard]] static constexpr framing_type length_delimited_stream_framing(std::uint64_t content_length) noexcept {
+        return framing_type(http1_length_delimited_response_stream_head(content_length));
     }
 
     constexpr http1_response_head_plan(http_response_body_plan body_plan, http_protocol_version protocol_version, framing_type framing) noexcept :
@@ -216,6 +244,10 @@ private:
 
 [[nodiscard]] constexpr http1_response_head_plan http1_close_delimited_response_stream_head_plan(http_response_body_plan body_plan, http1_request_connection_plan connection_plan) noexcept {
     return http1_response_head_plan(body_plan, connection_plan.protocol_version(), http1_response_head_plan::close_delimited_stream_framing());
+}
+
+[[nodiscard]] constexpr http1_response_head_plan http1_length_delimited_response_stream_head_plan(http_response_body_plan body_plan, http1_request_connection_plan connection_plan, std::uint64_t content_length) noexcept {
+    return http1_response_head_plan(body_plan, connection_plan.protocol_version(), http1_response_head_plan::length_delimited_stream_framing(content_length));
 }
 
 // The runtime writes one inseparable HTTP/1 buffered response contract. The
@@ -388,6 +420,10 @@ enum class http_response_stream_framing : std::uint8_t {
     // the body is delimited by the connection close (RFC 9112 6.3), so it also
     // announces Connection: close and the session shuts the socket afterwards.
     http1_close_delimited,
+    // RFC 9112 6.3: a valid Content-Length the response itself declares, with
+    // no Transfer-Encoding, delimits the stream on HTTP/1.1 and HTTP/1.0 alike,
+    // so the connection stays reusable. Selected at head commit, never planned.
+    http1_length_delimited,
     http2_frames,
     // RFC 9114 §4.1: HTTP/3 delimits content with DATA frames and carries a
     // trailer section in a trailing HEADERS frame, exactly like HTTP/2.
@@ -638,6 +674,10 @@ private:
     http1_request_connection_plan connection_plan_;
 };
 
+// The response's own valid Content-Length, without a Transfer-Encoding hint
+// (which overrides it, RFC 9112 §6.3), selects http1_length_delimited for a
+// body-carrying response on either HTTP/1 version; otherwise the plan's chunked
+// or close-delimited framing applies and Content-Length is dropped.
 [[nodiscard]] prepared_http1_response_stream prepare_http1_response_stream_head(http_response response, const http1_response_stream_plan& plan, http_response_trailer_intent trailer_intent = http_response_trailer_intent::none);
 
 // The successful head ends HTTP framing and transfers the connection to a

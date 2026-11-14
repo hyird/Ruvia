@@ -316,17 +316,38 @@ http_response_stream_head prepare_http_response_stream_head(http_response respon
     return http_response_stream_head(std::move(response), commit_plan);
 }
 
+namespace {
+
+// The length a body-carrying stream declares for itself: a valid
+// Content-Length without a Transfer-Encoding, which overrides it (RFC 9112
+// §6.3). Body-suppressed and no-content responses keep their planned framing.
+[[nodiscard]] std::optional<std::uint64_t> declared_stream_content_length(const http_response& response, http_response_body_plan body_plan) noexcept {
+    if (body_plan.body_suppressed() || !body_plan.status_allows_body() || detail::response_has_known_header(response, detail::response_header_transfer_encoding)) {
+        return std::nullopt;
+    }
+    const auto field = response.header("Content-Length");
+    return field.has_value() ? http_parse_content_length(*field) : std::nullopt;
+}
+
+}  // namespace
+
 prepared_http1_response_stream prepare_http1_response_stream_head(http_response response, const http1_response_stream_plan& plan, http_response_trailer_intent trailer_intent) {
-    auto commit_plan = plan_http_response_stream_commit(plan.framing(), plan.request_method(), response.status(), trailer_intent);
+    const auto content_length = declared_stream_content_length(response, plan_http_response_body(plan.request_method(), response.status()));
+    const auto framing = content_length.has_value() ? http_response_stream_framing::http1_length_delimited : plan.framing();
+    auto commit_plan = plan_http_response_stream_commit(framing, plan.request_method(), response.status(), trailer_intent);
     const auto body_plan = commit_plan.body_plan();
     // HTTP/1.0 cannot delimit an open-ended response stream without closing the
-    // connection, but a response whose method/status forbids payload is already
-    // self-delimited. Make this decision at head commit, when the response status is
-    // finally known, instead of pessimistically baking close into the pre-commit plan.
-    const auto planned_connection = plan.request_connection_plan().disposition() == http1_close_policy::allow_reuse && plan.close_policy() == http1_close_policy::allow_reuse && (plan.framing() != http_response_stream_framing::http1_close_delimited || body_plan.body_suppressed()) ? plan.request_connection_plan() : plan.request_connection_plan().require_close();
+    // connection, but a declared length or a response whose method/status forbids
+    // payload is already self-delimited. Make this decision at head commit, when
+    // the response is finally known, instead of pessimistically baking close into
+    // the pre-commit plan.
+    const auto planned_connection = plan.request_connection_plan().disposition() == http1_close_policy::allow_reuse && plan.close_policy() == http1_close_policy::allow_reuse && (framing != http_response_stream_framing::http1_close_delimited || body_plan.body_suppressed()) ? plan.request_connection_plan() : plan.request_connection_plan().require_close();
     const auto connection_plan = http1_commit_final_response(response, planned_connection);
     auto head = prepare_http_response_stream_head(std::move(response), std::move(commit_plan));
-    const auto response_head_plan = plan.framing() == http_response_stream_framing::http1_chunked ? http1_chunked_response_stream_head_plan(head.commit_plan().body_plan(), connection_plan) : http1_close_delimited_response_stream_head_plan(head.commit_plan().body_plan(), connection_plan);
+    const auto head_body_plan = head.commit_plan().body_plan();
+    const auto response_head_plan = content_length.has_value()   ? http1_length_delimited_response_stream_head_plan(head_body_plan, connection_plan, *content_length)
+        : framing == http_response_stream_framing::http1_chunked ? http1_chunked_response_stream_head_plan(head_body_plan, connection_plan)
+                                                                 : http1_close_delimited_response_stream_head_plan(head_body_plan, connection_plan);
     return prepared_http1_response_stream(std::move(head), response_head_plan, connection_plan);
 }
 

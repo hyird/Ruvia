@@ -26,10 +26,13 @@
 #include "http1_client_request.h"
 #include "http1_client_response.h"
 #include "http1_server_response.h"
-#include "http2_connection.h"
 #include "http_content_coding.h"
 #include "http_header.h"
 #include "http_multipart.h"
+#if defined(RUVIA_ENABLE_HTTP2)
+#include "http2_connection.h"
+#endif
+
 namespace ruvia::test {
 #ifndef RUVIA_TEST_THROWS_ON_DEFINED
 #define RUVIA_TEST_THROWS_ON_DEFINED
