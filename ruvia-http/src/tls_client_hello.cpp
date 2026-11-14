@@ -1,3 +1,5 @@
+#include "tls_client_hello.h"
+
 #include <algorithm>
 #include <array>
 #include <cstddef>
@@ -8,9 +10,6 @@
 #include <string>
 #include <string_view>
 #include <vector>
-
-#include "borrowed_text.h"
-#include "http_request.h"
 
 namespace ruvia {
 namespace {

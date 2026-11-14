@@ -557,7 +557,7 @@ ruvia::task<void> serve(ruvia::event_loop loop, ruvia::stop_token stop) {
 - **有界接收**：v1 最多 107 字节，v2 整头最多 4096 字节；完成期限取已设 `request_header_timeout_`、`header_completion_timeout_` 的较小值，均关闭时仍以 30 秒为绝对上限，涓流不延期。
 - **唯一远端**：PROXY 源端点贯穿准入、连接事件、`conn_info`、访问日志、限流键与可信代理判定；v2 `LOCAL`、v1 `UNKNOWN` 及无 IP 源的头保留物理对端，socket 本地端点不变。HTTP/3 配置与 PROXY 策略互斥，配置时拒绝。
 - **外部嗅探**：`adopt_options::prefix_` 放回调用方已读的原始字节，调用返回前复制，优先于 socket 剩余字节交给 PROXY、TLS、HTTP/1、HTTP/2 或原始连接回调；`remote_` 可覆盖源端点，服务自身解析到的 PROXY 源仍优先。`http_server_group::adopt()` 的冷任务同样立即拥有输入；`application` 不新增接管入口。
-- **底层组合**：`"http_request.h"` 提供无 I/O 的单遍增量 `proxy_protocol_parser`；结果只消费头字节，后续字节交还下一协议，TLV 视图借用解析器。
+- **底层组合**：`"proxy_protocol.h"` 提供无 I/O 的单遍增量 `proxy_protocol_parser`；结果只消费头字节，后续字节交还下一协议，TLV 视图借用解析器。
 
 #### 多循环共享服务
 

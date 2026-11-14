@@ -45,6 +45,7 @@
 #include "event_loop.h"
 #include "http1_server_response.h"
 #include "http_cache.h"
+#include "http_client_ip.h"
 #include "http_client_types.h"
 #include "http_content_coding.h"
 #include "http_content_negotiation.h"

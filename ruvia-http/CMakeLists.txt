@@ -75,6 +75,7 @@ set(ruvia_http_headers
     include/http1_server_request.h
     include/http1_server_response.h
     include/http_cache.h
+    include/http_client_ip.h
     include/http_client_redirect.h
     include/http_connect_udp.h
     include/http_content_coding.h
@@ -88,6 +89,8 @@ set(ruvia_http_headers
     include/http_response.h
     include/http_server_sent_events.h
     include/http_transfer_coding.h
+    include/proxy_protocol.h
+    include/tls_client_hello.h
     include/websocket_connection.h
     include/websocket_handshake.h
 )

@@ -1,3 +1,5 @@
+#include "proxy_protocol.h"
+
 #include <algorithm>
 #include <array>
 #include <cstddef>
@@ -6,9 +8,6 @@
 #include <span>
 #include <stdexcept>
 #include <string_view>
-
-#include "borrowed_text.h"
-#include "http_request.h"
 
 namespace ruvia {
 namespace {
