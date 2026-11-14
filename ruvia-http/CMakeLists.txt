@@ -17,10 +17,12 @@ set(ruvia_http_sources
     src/http_header.cpp
     src/http_io_buffer.cpp
     src/http_request.cpp
+    src/http_request_target.cpp
     src/http_representation.cpp
     src/http_response.cpp
     src/http_response_headers.cpp
     src/http_transfer_coding.cpp
+    src/http_uri.cpp
     src/ip_address.cpp
     src/multipart_parser.cpp
     src/proxy_protocol.cpp
