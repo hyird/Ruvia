@@ -2155,14 +2155,6 @@ template <typename header_accessor_type>
     return request;
 }
 
-}  // namespace ruvia::detail
-
-namespace ruvia {
-
-class http_request;
-
-namespace detail {
-
 // The base64-encoded SHA-1 of the client key plus the RFC 6455 GUID, as it
 // appears in the Sec-websocket-Accept response field (always 28 bytes).
 using websocket_accept_key_type = std::array<char, 28>;
@@ -2201,15 +2193,6 @@ private:
 };
 
 [[nodiscard]] websocket_handshake_validation_result validate_extended_connect_websocket_headers(const http_request& request, websocket_handshake_validation_options options = {}) noexcept;
-}  // namespace detail
-}  // namespace ruvia
-
-// The RFC 6455 section 5.2 wire vocabulary: what a frame's first two bytes mean,
-// which opcode and length combinations are legal, and the byte-level encode and
-// unmask primitives. Everything here is a pure function of bytes -- no buffer
-// ownership, no message state.
-
-namespace ruvia::detail {
 
 // HTTP-version-independent result of one server-side websocket negotiation. HTTP/1
 // and RFC 8441 consume this same immutable value for their response head, and the
@@ -3205,146 +3188,6 @@ inline void copy_unfolded_field_lines(std::string_view input, std::size_t first_
     storage.append(input.substr(segment_begin));
 }
 
-// Scan one complete RFC 9112 section 5 field line, including its CRLF.
-// The caller excludes the final empty line and unfolds response obs-fold first.
-// Views borrow buffer; only a successful scan advances cursor_value.
-[[nodiscard]] inline std::optional<http_header_view> scan_http1_field_line(std::string_view buffer, std::size_t& cursor_value) noexcept {
-    const auto name_start = cursor_value;
-    auto position = cursor_value + http_token_prefix_size(buffer.substr(cursor_value));
-    if (position == name_start || position >= buffer.size() || buffer[position] != ':') {
-        return std::nullopt;
-    }
-    const auto name = buffer.substr(name_start, position - name_start);
-    ++position;
-    while (position < buffer.size() && is_http_ows_char(buffer[position])) {
-        ++position;
-    }
-    const auto value_start = position;
-    position += http_field_value_prefix_size(buffer.substr(position));
-    if (position + 1 >= buffer.size() || buffer[position] != '\r' || buffer[position + 1] != '\n') {
-        return std::nullopt;
-    }
-    // Leading OWS has already been skipped; trim only the trailing OWS.
-    auto value_end = position;
-    while (value_end > value_start && is_http_ows_char(buffer[value_end - 1])) {
-        --value_end;
-    }
-    cursor_value = position + 2;
-    return http_header_view{name, buffer.substr(value_start, value_end - value_start)};
-}
-
-// Request slots are assigned only when appended; unused inline slots need no
-// per-request zeroing. Offsets keep their borrowed bytes independent of moves.
-struct http_header_slice {
-    std::uint32_t offset_;
-    std::uint32_t length_;
-
-    [[nodiscard]] std::string_view bind(std::string_view buffer) const noexcept {
-        return buffer.substr(offset_, length_);
-    }
-
-    template <http_temporary_owning_char_string buffer_type>
-    std::string_view bind(buffer_type&&) const = delete;
-};
-
-struct parsed_request_header_slot {
-    http_header_slice name_;
-    http_header_slice value_;
-    http_field_kind kind_;
-};
-
-using known_request_header_index_type = std::int16_t;
-// parse_http_header_block stops at max_http_header_fields, so every field index
-// fits the index type and the request's descriptor block.
-static_assert(max_http_header_fields <= static_cast<std::size_t>((std::numeric_limits<known_request_header_index_type>::max)()));
-
-struct parsed_request_header_block {
-    parsed_request_header_block() noexcept = default;
-
-    http_header_slice method_;
-    http_header_slice target_;
-    http_protocol_version protocol_version_;
-    http_header_descriptor_storage<parsed_request_header_slot> headers_;
-    known_request_header_index_type host_header_index_{-1};
-    http_connection_options connection_options_;
-    http_content_length_state content_length_;
-    request_field_state fields_{request_field_framing::http1};
-    http_transfer_encoding_state transfer_encoding_;
-    http_request_expectations expectations_;
-};
-
-[[nodiscard]] std::size_t find_http_header_end(std::string_view buffer, std::size_t search_offset) noexcept;
-// True if an LF at or after search_offset (and within max_http_header_bytes)
-// is not preceded by CR. Within a field section such a line can never end the
-// CRLF-delimited head; the caller passes the end of the accepted request-line
-// or status-line, or a later offset whose earlier bytes were already scanned.
-[[nodiscard]] bool has_http_bare_line_feed(std::string_view buffer, std::size_t search_offset) noexcept;
-// RFC 9112 section 2.2: a server SHOULD ignore at least one empty line received
-// before the request-line. Leading CRLF or bare LF lines are skipped; they count
-// toward max_http_header_bytes, which bounds how many are ignored. The scan
-// resumes after `skipped` bytes already classified by an earlier call.
-[[nodiscard]] std::size_t http_request_leading_empty_line_bytes(std::string_view buffer, std::size_t skipped) noexcept;
-// find_http_header_end for a request head: the returned end is measured from
-// the start of buffer and includes the ignored leading empty lines, whose
-// count `leading_bytes` carries in (from an earlier call) and out.
-[[nodiscard]] std::size_t find_http_request_head_end(std::string_view buffer, std::size_t& leading_bytes, std::size_t search_offset) noexcept;
-// Classifies the request-line of a still incomplete head: a request-line error
-// once the first line after the leading empty lines is CRLF-terminated, or as
-// soon as its first byte cannot start a method token. Bytes before
-// search_offset were classified by an earlier call. An accepted line sets
-// request_line_end to the offset just past its CRLF; nullopt without it means
-// more input is needed.
-[[nodiscard]] std::optional<http_parse_error> classify_http_request_line_prefix(std::string_view buffer, std::size_t leading_bytes, std::size_t search_offset, std::size_t& request_line_end) noexcept;
-// header_bytes is the find_http_request_head_end result; the request-line is
-// parsed after the leading_bytes ignored leading empty lines.
-[[nodiscard]] std::optional<http_parse_error> parse_http_header_block(std::string_view buffer, std::size_t leading_bytes, std::size_t header_bytes, parsed_request_header_block& block);
-
-enum class http1_version_parse_result : std::uint8_t { invalid,
-    unsupported,
-    http10,
-    http11 };
-
-// HTTP-version = "HTTP/" DIGIT "." DIGIT (RFC 9112 section 2.3). A higher
-// HTTP/1 minor version is processed as HTTP/1.1 (RFC 9110 section 6.2).
-[[nodiscard]] inline http1_version_parse_result parse_http1_version(std::string_view version) noexcept {
-    if (version.size() != 8 || !version.starts_with("HTTP/") || version[5] < '0' || version[5] > '9' || version[6] != '.' || version[7] < '0' || version[7] > '9') {
-        return http1_version_parse_result::invalid;
-    }
-    if (version[5] != '1') {
-        return http1_version_parse_result::unsupported;
-    }
-    return version[7] == '0' ? http1_version_parse_result::http10 : http1_version_parse_result::http11;
-}
-
-// Callers decide whether a framing field applies before accumulating it and
-// retain their own error enum. Unsupported transfer codings are recorded by
-// the accumulator for the caller's whole-section policy, not rejected here.
-template <typename error_type>
-[[nodiscard]] std::optional<error_type> parse_http1_content_length_field(std::string_view value, http_content_length_state& state) noexcept {
-    switch (state.parse_field(value)) {
-        case http_content_length_parse_status::ok:
-            return std::nullopt;
-        case http_content_length_parse_status::invalid:
-            return error_type::invalid_content_length;
-        case http_content_length_parse_status::conflicting:
-            return error_type::conflicting_content_length;
-    }
-    return std::nullopt;
-}
-
-template <typename error_type>
-[[nodiscard]] std::optional<error_type> parse_http1_transfer_encoding_field(std::string_view value, http_transfer_encoding_state& state) {
-    if (state.parse_field(value) == http_transfer_encoding_parse_status::malformed) {
-        return error_type::invalid_transfer_encoding;
-    }
-    return std::nullopt;
-}
-
-// The two steps between an HTTP/1 client response head on the wire and the plan
-// the parser acts on: reading the status line and header fields into borrowed
-// values, then deciding from them (and the request that produced them) how the
-// body is framed and whether the connection survives.
-
 struct http_client_response_head_access final {
     [[nodiscard]] static http_client_response_head make(http_received_status status, http_protocol_version protocol_version) noexcept {
         return http_client_response_head(status, protocol_version);
@@ -3357,55 +3200,5 @@ struct http_client_response_head_access final {
         head.content_length_ = value;
     }
 };
-
-struct http1_client_exchange_state_access final {
-    [[nodiscard]] static constexpr http_known_method method(const http1_client_exchange_state& state_value) noexcept {
-        return state_value.method_;
-    }
-
-    [[nodiscard]] static constexpr http1_close_policy close_policy(const http1_client_exchange_state& state_value) noexcept {
-        return state_value.close_policy_;
-    }
-
-    [[nodiscard]] static constexpr http1_client_initial_content_state content_state(const http1_client_exchange_state& state_value) noexcept {
-        return state_value.content_state_;
-    }
-
-    [[nodiscard]] static std::string_view offered_upgrade_protocols(const http1_client_exchange_state& state_value) noexcept {
-        return state_value.offered_upgrade_protocols_;
-    }
-};
-
-struct http1_client_parsed_response_head final {
-    explicit http1_client_parsed_response_head(const http1_client_parsed_status_line& status_line) noexcept;
-
-    http_received_status received_status_;
-    // The status the response is processed as (received_status_.status()).
-    http_status_code status_code_;
-    http_protocol_version protocol_version_;
-    bool saw_transfer_encoding_{false};
-    bool all_upgrade_protocols_offered_{true};
-    http_connection_options connection_options_;
-    http_upgrade_protocols upgrade_protocols_;
-    http_content_length_state content_length_;
-    http_transfer_encoding_state transfer_encoding_;
-
-    http_header_descriptor_storage<http_header_view> headers_;
-};
-
-using http1_client_status_line_parse_result_type = std::variant<http1_client_parsed_status_line, http1_client_response_parse_error>;
-using http1_client_response_head_parse_result_type = std::variant<http1_client_parsed_response_head, http1_client_response_parse_error>;
-using http1_client_response_planning_result_type = std::variant<http1_client_response_plan, http1_client_response_parse_error>;
-
-// Parse a status line, excluding its CRLF.
-[[nodiscard]] http1_client_status_line_parse_result_type parse_http1_client_status_line(std::string_view status_line) noexcept;
-
-// Parse the field lines following a validated status line, each retaining its
-// CRLF but excluding the final empty line. Response obs-fold has already been
-// unfolded.
-[[nodiscard]] http1_client_response_head_parse_result_type parse_http1_client_response_head_fields(const http1_client_parsed_status_line& status_line, std::string_view field_section, const http1_client_exchange_state& exchange_state);
-
-// Decide the response plan a parsed head implies for this request.
-[[nodiscard]] http1_client_response_planning_result_type plan_http1_client_response(const http1_client_exchange_state& exchange_state, const http1_client_parsed_response_head& response, http1_client_request_content_phase request_content_phase, bool interim_faulty_framing = false);
 
 }  // namespace ruvia::detail

@@ -15,6 +15,7 @@
 
 #include "borrowed_text.h"
 #include "http1_client_request.h"
+#include "http1_head.h"
 #include "http1_server_response.h"
 #include "http_connection_fields.h"
 #include "http_header.h"
@@ -35,6 +36,61 @@ struct http1_client_response_parse_result_access final {
         return http1_client_response_parse_result(http1_parsed_client_response_head(std::move(head), std::move(plan), consumed_bytes));
     }
 };
+
+// The two steps between an HTTP/1 client response head on the wire and the plan
+// the parser acts on: reading the status line and header fields into borrowed
+// values, then deciding from them (and the request that produced them) how the
+// body is framed and whether the connection survives.
+
+struct http1_client_exchange_state_access final {
+    [[nodiscard]] static constexpr http_known_method method(const http1_client_exchange_state& state_value) noexcept {
+        return state_value.method_;
+    }
+
+    [[nodiscard]] static constexpr http1_close_policy close_policy(const http1_client_exchange_state& state_value) noexcept {
+        return state_value.close_policy_;
+    }
+
+    [[nodiscard]] static constexpr http1_client_initial_content_state content_state(const http1_client_exchange_state& state_value) noexcept {
+        return state_value.content_state_;
+    }
+
+    [[nodiscard]] static std::string_view offered_upgrade_protocols(const http1_client_exchange_state& state_value) noexcept {
+        return state_value.offered_upgrade_protocols_;
+    }
+};
+
+struct http1_client_parsed_response_head final {
+    explicit http1_client_parsed_response_head(const http1_client_parsed_status_line& status_line) noexcept;
+
+    http_received_status received_status_;
+    // The status the response is processed as (received_status_.status()).
+    http_status_code status_code_;
+    http_protocol_version protocol_version_;
+    bool saw_transfer_encoding_{false};
+    bool all_upgrade_protocols_offered_{true};
+    http_connection_options connection_options_;
+    http_upgrade_protocols upgrade_protocols_;
+    http_content_length_state content_length_;
+    http_transfer_encoding_state transfer_encoding_;
+
+    http_header_descriptor_storage<http_header_view> headers_;
+};
+
+using http1_client_status_line_parse_result_type = std::variant<http1_client_parsed_status_line, http1_client_response_parse_error>;
+using http1_client_response_head_parse_result_type = std::variant<http1_client_parsed_response_head, http1_client_response_parse_error>;
+using http1_client_response_planning_result_type = std::variant<http1_client_response_plan, http1_client_response_parse_error>;
+
+// Parse a status line, excluding its CRLF.
+[[nodiscard]] http1_client_status_line_parse_result_type parse_http1_client_status_line(std::string_view status_line) noexcept;
+
+// Parse the field lines following a validated status line, each retaining its
+// CRLF but excluding the final empty line. Response obs-fold has already been
+// unfolded.
+[[nodiscard]] http1_client_response_head_parse_result_type parse_http1_client_response_head_fields(const http1_client_parsed_status_line& status_line, std::string_view field_section, const http1_client_exchange_state& exchange_state);
+
+// Decide the response plan a parsed head implies for this request.
+[[nodiscard]] http1_client_response_planning_result_type plan_http1_client_response(const http1_client_exchange_state& exchange_state, const http1_client_parsed_response_head& response, http1_client_request_content_phase request_content_phase, bool interim_faulty_framing = false);
 
 }  // namespace ruvia::detail
 
