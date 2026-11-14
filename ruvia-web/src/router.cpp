@@ -30,6 +30,7 @@
 #include "http_header.h"
 #include "http_request.h"
 #include "http_server.h"
+#include "inbound_buffer.h"
 #include "middleware.h"
 #include "rate_limit.h"
 #include "route_table.h"

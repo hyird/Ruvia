@@ -33,6 +33,7 @@
 #include "event_loop.h"
 #include "http1_server_response.h"
 #include "http_header.h"
+#include "inbound_buffer.h"
 #include "middleware.h"
 #include "stop_token.h"
 #include "streaming.h"

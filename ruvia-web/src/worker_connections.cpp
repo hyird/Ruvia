@@ -62,6 +62,7 @@
 #include "http_request.h"
 #include "http_response.h"
 #include "http_server.h"
+#include "inbound_buffer.h"
 #include "middleware.h"
 #include "proxy_protocol.h"
 #include "rate_limit.h"

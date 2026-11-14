@@ -32,6 +32,7 @@
 #include "http_header.h"
 #include "http_multipart.h"
 #include "http_server_sent_events.h"
+#include "inbound_buffer.h"
 #include "inline_storage.h"
 #include "middleware.h"
 #include "route_table.h"

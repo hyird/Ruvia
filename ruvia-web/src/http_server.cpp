@@ -37,6 +37,7 @@
 #include "crypto.h"
 #include "event_loop.h"
 #include "http_header.h"
+#include "inbound_buffer.h"
 #include "rate_limit.h"
 #include "server_session.h"
 #include "stop_token.h"

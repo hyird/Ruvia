@@ -34,6 +34,7 @@
 #include "http_header.h"
 #include "http_request.h"
 #include "http_response.h"
+#include "inbound_buffer.h"
 #include "middleware.h"
 #include "response_file.h"
 #include "server_session.h"
