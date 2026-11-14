@@ -43,20 +43,19 @@
 #include <openssl/rand.h>
 #include <openssl/ssl.h>
 
-#include "ruvia/core/blocking_pool.h"
-#include "ruvia/core/event_loop.h"
-#include "ruvia/core/stop_token.h"
-#include "ruvia/core/task_scope.h"
-#include "ruvia/http/http3_connection.h"
-#include "ruvia/http/http_response.h"
-#include "ruvia/web/app.h"
-#include "ruvia/web/context.h"
-#include "ruvia/web/controller.h"
-#include "ruvia/web/http_client.h"
-#include "ruvia/web/streaming.h"
-
+#include "app.h"
+#include "blocking_pool.h"
+#include "context.h"
+#include "controller.h"
+#include "event_loop.h"
+#include "http3_connection.h"
 #include "http3_test_client.h"
+#include "http_client.h"
+#include "http_response.h"
 #include "http_server_fixture.h"
+#include "stop_token.h"
+#include "streaming.h"
+#include "task_scope.h"
 #include "test_exceptions.h"
 namespace {
 

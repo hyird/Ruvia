@@ -35,12 +35,11 @@
 #include <asio/use_future.hpp>
 #include <asio/write.hpp>
 
-#include "ruvia/core/event_loop.h"
-#include "ruvia/core/stop_token.h"
-#include "ruvia/core/task_scope.h"
-#include "ruvia/web/redis/redis.h"
-
 #include "backend_client_fixture.h"
+#include "event_loop.h"
+#include "redis.h"
+#include "stop_token.h"
+#include "task_scope.h"
 #include "worker_task_fixture.h"
 
 namespace redis_client_test {

@@ -18,12 +18,12 @@
 #include <system_error>
 #include <utility>
 
-#include "ruvia/http/borrowed_text.h"
-#include "ruvia/web/app.h"
-#include "ruvia/web/context.h"
-#include "ruvia/web/controller.h"
-#include "ruvia/web/middleware.h"
-#include "ruvia/web/streaming.h"
+#include "app.h"
+#include "borrowed_text.h"
+#include "context.h"
+#include "controller.h"
+#include "middleware.h"
+#include "streaming.h"
 
 RUVIA_MODEL(surface_json_message, RUVIA_OPTIONAL_FIELD(message, ruvia::string));
 

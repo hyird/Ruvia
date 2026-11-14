@@ -18,13 +18,12 @@
 #include <asio/read_until.hpp>
 #include <asio/write.hpp>
 
-#include "ruvia/web/app.h"
-#include "ruvia/web/context.h"
-#include "ruvia/web/controller.h"
-#include "ruvia/web/http_client.h"
-#include "ruvia/web/streaming.h"
-
+#include "app.h"
+#include "context.h"
+#include "controller.h"
+#include "http_client.h"
 #include "http_server_fixture.h"
+#include "streaming.h"
 #include "worker_task_fixture.h"
 // Inbound buffer budgets on the streamed request body and CONNECT tunnel
 // paths. This executable owns its application with small inbound budgets.

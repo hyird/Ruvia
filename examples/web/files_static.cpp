@@ -15,10 +15,10 @@
 #include <iostream>
 #include <memory>
 
-#include "ruvia/web/app.h"
-#include "ruvia/web/controller.h"
-#include "ruvia/web/http_server.h"
-#include "ruvia/web/middleware.h"
+#include "app.h"
+#include "controller.h"
+#include "http_server.h"
+#include "middleware.h"
 namespace {
 
 std::unique_ptr<ruvia::static_root> g_assets;

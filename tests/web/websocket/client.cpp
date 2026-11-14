@@ -32,14 +32,13 @@
 #include <openssl/rsa.h>
 #include <openssl/x509.h>
 
-#include "ruvia/core/event_loop.h"
-#include "ruvia/core/task_scope.h"
-#include "ruvia/http/http_request.h"
-#include "ruvia/http/http_response_server.h"
-#include "ruvia/http/websocket_handshake.h"
-#include "ruvia/web/http_client.h"
-
+#include "event_loop.h"
+#include "http_client.h"
+#include "http_request.h"
+#include "http_response_server.h"
 #include "http_server_fixture.h"
+#include "task_scope.h"
+#include "websocket_handshake.h"
 #include "worker_task_fixture.h"
 namespace websocket_client_test {
 

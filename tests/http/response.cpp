@@ -15,11 +15,10 @@
 #include <utility>
 #include <vector>
 
-#include "ruvia/http/http_header.h"
-#include "ruvia/http/http_request.h"
-#include "ruvia/http/http_response.h"
-#include "ruvia/http/http_response_server.h"
-
+#include "http_header.h"
+#include "http_request.h"
+#include "http_response.h"
+#include "http_response_server.h"
 #include "test_exceptions.h"
 
 namespace {

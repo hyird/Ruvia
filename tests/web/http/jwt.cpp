@@ -1,4 +1,4 @@
-#include "ruvia/web/jwt.h"
+#include "jwt.h"
 
 #include <gtest/gtest.h>
 

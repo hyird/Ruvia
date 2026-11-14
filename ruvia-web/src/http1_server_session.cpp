@@ -20,24 +20,23 @@
 #include <asio/write.hpp>
 #include <openssl/ssl.h>
 
-#include "ruvia/core/event_loop.h"
-#include "ruvia/core/stop_token.h"
-#include "ruvia/core/task.h"
-#include "ruvia/core/task_scope.h"
-#include "ruvia/http/borrowed_text.h"
-#include "ruvia/http/http2_connection.h"
-#include "ruvia/http/http_content_coding.h"
-#include "ruvia/http/http_header.h"
-#include "ruvia/http/http_request.h"
-#include "ruvia/http/http_response.h"
-#include "ruvia/http/http_response_server.h"
-#include "ruvia/web/context.h"
-#include "ruvia/web/middleware.h"
-#include "ruvia/web/streaming.h"
-
+#include "borrowed_text.h"
 #include "connection_lifecycle.h"
+#include "context.h"
 #include "context_access.h"
+#include "event_loop.h"
+#include "http2_connection.h"
+#include "http_content_coding.h"
+#include "http_header.h"
+#include "http_request.h"
+#include "http_response.h"
+#include "http_response_server.h"
+#include "middleware.h"
 #include "route_table.h"
+#include "stop_token.h"
+#include "streaming.h"
+#include "task.h"
+#include "task_scope.h"
 namespace ruvia::detail {
 
 // Connection-private ownership of the Web product's request-count policy.

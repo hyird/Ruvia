@@ -15,20 +15,19 @@
 #include <asio/ip/tcp.hpp>
 #include <asio/write.hpp>
 
-#include "ruvia/core/blocking_pool.h"
-#include "ruvia/core/event_loop.h"
-#include "ruvia/core/stop_token.h"
-#include "ruvia/core/task_scope.h"
-#include "ruvia/web/context.h"
-#include "ruvia/web/controller.h"
-#include "ruvia/web/http_client.h"
-#include "ruvia/web/http_server.h"
-#include "ruvia/web/middleware.h"
-#include "ruvia/web/streaming.h"
+#include "blocking_pool.h"
+#include "context.h"
+#include "controller.h"
+#include "event_loop.h"
+#include "http_client.h"
+#include "http_server.h"
+#include "middleware.h"
+#include "stop_token.h"
+#include "streaming.h"
+#include "task_scope.h"
 #ifdef RUVIA_ENABLE_REDIS
-#include "ruvia/web/redis/redis.h"
-
 #include "http_server_fixture.h"
+#include "redis.h"
 #endif
 
 #include "http_server_fixture.h"

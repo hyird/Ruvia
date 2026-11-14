@@ -15,14 +15,13 @@
 #include <string>
 #include <string_view>
 
-#include "ruvia/http/borrowed_text.h"
-#include "ruvia/web/app.h"
-#include "ruvia/web/controller.h"
-#include "ruvia/web/middleware.h"
-#include "ruvia/web/redis/redis.h"
-#include "ruvia/web/streaming.h"
-
+#include "app.h"
 #include "backend_config.h"
+#include "borrowed_text.h"
+#include "controller.h"
+#include "middleware.h"
+#include "redis.h"
+#include "streaming.h"
 
 namespace {
 

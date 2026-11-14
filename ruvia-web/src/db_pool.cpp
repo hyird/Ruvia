@@ -9,8 +9,8 @@
 #include <utility>
 #include <variant>
 
-#include "ruvia/core/event_loop.h"
-#include "ruvia/http/borrowed_text.h"
+#include "borrowed_text.h"
+#include "event_loop.h"
 
 #if !defined(_WIN32)
 #include <fcntl.h>
@@ -33,16 +33,15 @@
 #include <type_traits>
 #include <vector>
 
-#include "ruvia/core/stop_token.h"
-#include "ruvia/core/task_scope.h"
-#include "ruvia/http/http_header.h"
-#include "ruvia/web/db/db.h"
-#include "ruvia/web/db/db_session.h"
-#include "ruvia/web/redis/redis.h"
-
 #include "connection_lifecycle.h"
+#include "db.h"
+#include "db_session.h"
 #include "http_client_pool.h"
+#include "http_header.h"
+#include "redis.h"
 #include "redis_pool.h"
+#include "stop_token.h"
+#include "task_scope.h"
 
 namespace ruvia::detail {
 namespace {

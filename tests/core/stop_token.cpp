@@ -1,4 +1,4 @@
-#include "ruvia/core/stop_token.h"
+#include "stop_token.h"
 
 #include <gtest/gtest.h>
 
@@ -29,8 +29,8 @@
 #include <asio/error.hpp>
 #include <asio/io_context.hpp>
 
-#include "ruvia/core/event_loop.h"
-#include "ruvia/core/task.h"
+#include "event_loop.h"
+#include "task.h"
 
 namespace stop_token_test {
 

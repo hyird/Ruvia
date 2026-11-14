@@ -18,15 +18,14 @@
 
 #include <asio.hpp>
 
-#include "ruvia/core/event_loop.h"
-#include "ruvia/core/task_scope.h"
-#include "ruvia/http/http2_connection.h"
-#include "ruvia/web/context.h"
-#include "ruvia/web/controller.h"
-#include "ruvia/web/http_client.h"
-#include "ruvia/web/http_server.h"
-
+#include "context.h"
+#include "controller.h"
+#include "event_loop.h"
+#include "http2_connection.h"
+#include "http_client.h"
+#include "http_server.h"
 #include "http_server_fixture.h"
+#include "task_scope.h"
 #include "worker_task_fixture.h"
 
 namespace http2_file_flow_control_test {

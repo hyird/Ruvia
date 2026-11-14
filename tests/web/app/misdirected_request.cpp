@@ -22,11 +22,10 @@
 #include <asio/write.hpp>
 #include <openssl/ssl.h>
 
-#include "ruvia/http/http2_connection.h"
-#include "ruvia/web/app.h"
-#include "ruvia/web/context.h"
-#include "ruvia/web/controller.h"
-
+#include "app.h"
+#include "context.h"
+#include "controller.h"
+#include "http2_connection.h"
 #include "http_server_fixture.h"
 // RFC 9110 §7.4 / §15.5.20: an origin server rejects with 421 a request for
 // an "https" resource unless the connection is secured by a certificate valid

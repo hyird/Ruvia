@@ -40,14 +40,13 @@
 #include <asio/write.hpp>
 #include <openssl/evp.h>
 
-#include "ruvia/core/blocking_pool.h"
-#include "ruvia/core/event_loop.h"
-#include "ruvia/core/task.h"
-#include "ruvia/core/task_scope.h"
-#include "ruvia/web/redis/redis.h"
-
 #include "backend_client_fixture.h"
+#include "blocking_pool.h"
+#include "event_loop.h"
 #include "http_server_fixture.h"
+#include "redis.h"
+#include "task.h"
+#include "task_scope.h"
 #include "test_exceptions.h"
 #include "worker_task_fixture.h"
 

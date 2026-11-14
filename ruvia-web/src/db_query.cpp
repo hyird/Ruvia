@@ -1,4 +1,4 @@
-#include "ruvia/web/db/db_query.h"
+#include "db_query.h"
 
 #include <algorithm>
 #include <array>

@@ -1,4 +1,4 @@
-#include "ruvia/http/http_content_coding.h"
+#include "http_content_coding.h"
 
 #include <algorithm>
 #include <array>
@@ -10,11 +10,10 @@
 #include <utility>
 #include <vector>
 
-#include "ruvia/http/http_header.h"
-#include "ruvia/http/http_request.h"
-#include "ruvia/http/http_response.h"
-
 #include "http_connection_fields.h"
+#include "http_header.h"
+#include "http_request.h"
+#include "http_response.h"
 // The Content-Encoding field itself (RFC 9110 sections 8.4 and 5.6.1): the token
 // each coding is spelled with, the list-grammar accumulator across field lines,
 // and which codec a decode or encode of that coding runs on.

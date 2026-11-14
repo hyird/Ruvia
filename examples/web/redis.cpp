@@ -22,12 +22,11 @@
 #include <system_error>
 #include <utility>
 
-#include "ruvia/http/borrowed_text.h"
-#include "ruvia/web/app.h"
-#include "ruvia/web/controller.h"
-#include "ruvia/web/middleware.h"
-
+#include "app.h"
 #include "backend_config.h"
+#include "borrowed_text.h"
+#include "controller.h"
+#include "middleware.h"
 
 namespace {
 

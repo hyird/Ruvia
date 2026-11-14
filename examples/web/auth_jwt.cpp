@@ -13,10 +13,10 @@
 #include <string>
 #include <string_view>
 
-#include "ruvia/web/app.h"
-#include "ruvia/web/controller.h"
-#include "ruvia/web/jwt.h"
-#include "ruvia/web/middleware.h"
+#include "app.h"
+#include "controller.h"
+#include "jwt.h"
+#include "middleware.h"
 
 namespace {
 

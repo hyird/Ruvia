@@ -22,11 +22,10 @@
 #include <asio/ip/tcp.hpp>
 #include <asio/write.hpp>
 
-#include "ruvia/web/app.h"
-#include "ruvia/web/context.h"
-#include "ruvia/web/controller.h"
-#include "ruvia/web/http_server.h"
-
+#include "app.h"
+#include "context.h"
+#include "controller.h"
+#include "http_server.h"
 #include "http_server_fixture.h"
 #include "worker_task_fixture.h"
 // A file body that fails before its head is sent is answered with an error

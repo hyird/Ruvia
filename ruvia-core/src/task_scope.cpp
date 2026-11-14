@@ -1,4 +1,4 @@
-#include "ruvia/core/task_scope.h"
+#include "task_scope.h"
 
 #include <algorithm>
 #include <array>
@@ -20,10 +20,10 @@
 #include <utility>
 #include <variant>
 
-#include "ruvia/core/event_loop.h"
-#include "ruvia/core/stop_token.h"
-#include "ruvia/core/task.h"
-#include "ruvia/core/worker_ref.h"
+#include "event_loop.h"
+#include "stop_token.h"
+#include "task.h"
+#include "worker_ref.h"
 
 #ifdef _WIN32
 #include <charconv>

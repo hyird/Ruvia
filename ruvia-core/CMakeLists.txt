@@ -40,12 +40,12 @@ target_compile_definitions(ruvia-core PUBLIC
 ruvia_install_component(ruvia-core core)
 
 ruvia_install_public_headers(core
-    include/ruvia/core/blocking_pool.h
-    include/ruvia/core/event_loop.h
-    include/ruvia/core/stop_token.h
-    include/ruvia/core/task.h
-    include/ruvia/core/task_scope.h
-    include/ruvia/core/worker_ref.h
-    include/ruvia/core/worker_wait.h
+    include/blocking_pool.h
+    include/event_loop.h
+    include/stop_token.h
+    include/task.h
+    include/task_scope.h
+    include/worker_ref.h
+    include/worker_wait.h
 )
 

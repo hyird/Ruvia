@@ -26,13 +26,12 @@
 #include <asio/io_context.hpp>
 #include <asio/post.hpp>
 
-#include "ruvia/core/event_loop.h"
-#include "ruvia/core/stop_token.h"
-#include "ruvia/core/task.h"
-#include "ruvia/core/task_scope.h"
-#include "ruvia/core/worker_wait.h"
-
+#include "event_loop.h"
+#include "stop_token.h"
+#include "task.h"
+#include "task_scope.h"
 #include "worker_task_fixture.h"
+#include "worker_wait.h"
 
 namespace {
 

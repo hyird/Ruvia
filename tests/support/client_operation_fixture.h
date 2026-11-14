@@ -11,12 +11,12 @@
 #include <string_view>
 #include <utility>
 
-#include "ruvia/core/stop_token.h"
-#include "ruvia/core/task.h"
-#include "ruvia/core/task_scope.h"
-#include "ruvia/web/controller.h"
-#include "ruvia/web/http_client.h"
-#include "ruvia/web/streaming.h"
+#include "controller.h"
+#include "http_client.h"
+#include "stop_token.h"
+#include "streaming.h"
+#include "task.h"
+#include "task_scope.h"
 
 // Per-operation timeouts and stop tokens of the public outbound client, driven
 // against the application's own routes over each protocol's real transport.

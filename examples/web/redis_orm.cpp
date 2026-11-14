@@ -14,12 +14,11 @@
 #include <string_view>
 #include <utility>
 
-#include "ruvia/web/app.h"
-#include "ruvia/web/controller.h"
-#include "ruvia/web/middleware.h"
-#include "ruvia/web/redis/redis.h"
-
+#include "app.h"
 #include "backend_config.h"
+#include "controller.h"
+#include "middleware.h"
+#include "redis.h"
 
 RUVIA_REDIS_ENTITY(cached_user, "users", RUVIA_REDIS_COLUMN(id, ruvia::string, ruvia::redis_column_options{.primary_key_ = true}), RUVIA_REDIS_COLUMN(name, ruvia::string), RUVIA_REDIS_COLUMN(age, std::uint32_t));
 

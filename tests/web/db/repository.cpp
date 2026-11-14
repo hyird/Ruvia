@@ -17,13 +17,12 @@
 #include <utility>
 #include <vector>
 
-#include "ruvia/core/event_loop.h"
-#include "ruvia/core/stop_token.h"
-#include "ruvia/web/db/db.h"
-#include "ruvia/web/db/db_query.h"
-#include "ruvia/web/db/db_session.h"
-
 #include "backend_client_fixture.h"
+#include "db.h"
+#include "db_query.h"
+#include "db_session.h"
+#include "event_loop.h"
+#include "stop_token.h"
 #include "test_exceptions.h"
 #include "worker_task_fixture.h"
 namespace db_repository_test {

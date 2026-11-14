@@ -26,16 +26,15 @@
 #include <openssl/ssl.h>
 #include <openssl/x509.h>
 
-#include "ruvia/core/blocking_pool.h"
-#include "ruvia/core/event_loop.h"
-#include "ruvia/http/http_content_coding.h"
-#include "ruvia/web/app.h"
-#include "ruvia/web/context.h"
-#include "ruvia/web/controller.h"
-#include "ruvia/web/http_server.h"
-#include "ruvia/web/middleware.h"
-
+#include "app.h"
+#include "blocking_pool.h"
+#include "context.h"
+#include "controller.h"
+#include "event_loop.h"
+#include "http_content_coding.h"
+#include "http_server.h"
 #include "http_server_fixture.h"
+#include "middleware.h"
 namespace {
 
 template <typename fn_type>

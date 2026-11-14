@@ -38,15 +38,14 @@
 #include <asio/ssl.hpp>
 #include <openssl/ssl.h>
 
-#include "ruvia/core/event_loop.h"
-#include "ruvia/core/task_scope.h"
-#include "ruvia/core/worker_ref.h"
-#include "ruvia/http/http_request.h"
-#include "ruvia/web/http_server.h"
-
 #include "connection_lifecycle.h"
 #include "context_access.h"
+#include "event_loop.h"
+#include "http_request.h"
+#include "http_server.h"
 #include "route_table.h"
+#include "task_scope.h"
+#include "worker_ref.h"
 #if defined(RUVIA_ENABLE_HTTP3)
 #include <ngtcp2/ngtcp2.h>
 #endif
@@ -57,25 +56,24 @@
 
 #include <asio/cancellation_signal.hpp>
 
-#include "ruvia/core/blocking_pool.h"
-#include "ruvia/core/stop_token.h"
-#include "ruvia/core/task.h"
-#include "ruvia/http/http_cache.h"
-#include "ruvia/http/http_content_coding.h"
-#include "ruvia/http/http_header.h"
-#include "ruvia/http/http_response.h"
-#include "ruvia/http/http_response_server.h"
-#include "ruvia/web/http_client.h"
-#include "ruvia/web/middleware.h"
-#include "ruvia/web/streaming.h"
-
+#include "blocking_pool.h"
 #include "context_access.h"
+#include "http_cache.h"
+#include "http_client.h"
+#include "http_content_coding.h"
+#include "http_header.h"
+#include "http_response.h"
+#include "http_response_server.h"
+#include "middleware.h"
 #include "route_table.h"
+#include "stop_token.h"
+#include "streaming.h"
+#include "task.h"
 #ifdef RUVIA_ENABLE_DATABASE
-#include "ruvia/web/db/db_session.h"
+#include "db_session.h"
 #endif
 #ifdef RUVIA_ENABLE_REDIS
-#include "ruvia/web/redis/redis.h"
+#include "redis.h"
 #endif
 
 namespace ruvia::detail {

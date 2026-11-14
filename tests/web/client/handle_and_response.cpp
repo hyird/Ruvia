@@ -27,18 +27,17 @@
 #include <asio/write.hpp>
 #include <openssl/ssl.h>
 
-#include "ruvia/core/blocking_pool.h"
-#include "ruvia/core/event_loop.h"
-#include "ruvia/core/stop_token.h"
-#include "ruvia/core/task_scope.h"
-#include "ruvia/http/http_header.h"
-#include "ruvia/web/app.h"
-#include "ruvia/web/controller.h"
-#include "ruvia/web/http_client.h"
-#include "ruvia/web/model.h"
-#include "ruvia/web/streaming.h"
-
+#include "app.h"
+#include "blocking_pool.h"
+#include "controller.h"
+#include "event_loop.h"
+#include "http_client.h"
+#include "http_header.h"
 #include "http_server_fixture.h"
+#include "model.h"
+#include "stop_token.h"
+#include "streaming.h"
+#include "task_scope.h"
 #include "test_exceptions.h"
 #include "worker_task_fixture.h"
 

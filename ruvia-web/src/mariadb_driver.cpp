@@ -26,13 +26,12 @@
 #include <utility>
 #include <vector>
 
-#include "ruvia/core/event_loop.h"
-#include "ruvia/http/borrowed_text.h"
-#include "ruvia/http/http_header.h"
-#include "ruvia/web/db/db_session.h"
-
+#include "borrowed_text.h"
 #include "connection_lifecycle.h"
 #include "db_pool.h"
+#include "db_session.h"
+#include "event_loop.h"
+#include "http_header.h"
 namespace ruvia::detail {
 namespace {
 

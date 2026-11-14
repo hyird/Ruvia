@@ -15,10 +15,10 @@
 #include <string>
 #include <string_view>
 
-#include "ruvia/http/borrowed_text.h"
-#include "ruvia/web/app.h"
-#include "ruvia/web/controller.h"
-#include "ruvia/web/middleware.h"
+#include "app.h"
+#include "borrowed_text.h"
+#include "controller.h"
+#include "middleware.h"
 static bool has_ruvia_code_prefix(const ruvia::string& code) {
     return code.view().starts_with("CY-");
 }

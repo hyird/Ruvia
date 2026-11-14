@@ -21,14 +21,13 @@
 #include <variant>
 #include <vector>
 
-#include "ruvia/http/http3_connection.h"
-#include "ruvia/http/http_header.h"
-#include "ruvia/http/http_request.h"
-#include "ruvia/http/http_response.h"
-#include "ruvia/http/http_response_server.h"
-#include "ruvia/http/websocket_handshake.h"
-
+#include "http3_connection.h"
+#include "http_header.h"
+#include "http_request.h"
+#include "http_response.h"
+#include "http_response_server.h"
 #include "test_exceptions.h"
+#include "websocket_handshake.h"
 
 namespace ruvia::test {
 

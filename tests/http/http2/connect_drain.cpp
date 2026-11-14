@@ -19,10 +19,9 @@
 #include <variant>
 #include <vector>
 
-#include "ruvia/http/http2_connection.h"
-#include "ruvia/http/http_response.h"
-
 #include "content_decoding_fixture.h"
+#include "http2_connection.h"
+#include "http_response.h"
 #include "test_exceptions.h"
 
 namespace {

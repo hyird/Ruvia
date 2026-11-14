@@ -21,14 +21,13 @@
 #include <asio/socket_base.hpp>
 #include <asio/write.hpp>
 
-#include "ruvia/core/task_scope.h"
-#include "ruvia/web/app.h"
-#include "ruvia/web/context.h"
-#include "ruvia/web/controller.h"
-#include "ruvia/web/middleware.h"
-#include "ruvia/web/streaming.h"
-
+#include "app.h"
+#include "context.h"
+#include "controller.h"
 #include "http_server_fixture.h"
+#include "middleware.h"
+#include "streaming.h"
+#include "task_scope.h"
 namespace lifecycle_test {
 
 using namespace std::chrono_literals;

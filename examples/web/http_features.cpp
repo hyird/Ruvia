@@ -13,12 +13,11 @@
 #include <string>
 #include <string_view>
 
-#include "ruvia/web/app.h"
-#include "ruvia/web/controller.h"
-#include "ruvia/web/middleware.h"
-#include "ruvia/web/streaming.h"
-
+#include "app.h"
 #include "backend_config.h"
+#include "controller.h"
+#include "middleware.h"
+#include "streaming.h"
 namespace {
 
 class feature_controller final {

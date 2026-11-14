@@ -17,16 +17,15 @@
 #include <string_view>
 #include <vector>
 
-#include "ruvia/core/blocking_pool.h"
-#include "ruvia/core/event_loop.h"
-#include "ruvia/web/db/db.h"
-#include "ruvia/web/db/db_query.h"
-#include "ruvia/web/db/db_session.h"
-#include "ruvia/web/middleware.h"
-
 #include "backend_config.h"
+#include "blocking_pool.h"
+#include "db.h"
+#include "db_query.h"
+#include "db_session.h"
+#include "event_loop.h"
+#include "middleware.h"
 #ifdef RUVIA_ENABLE_REDIS
-#include "ruvia/web/redis/redis.h"
+#include "redis.h"
 #endif
 
 namespace {

@@ -17,8 +17,7 @@
 #include <type_traits>
 #include <utility>
 
-#include "ruvia/http/borrowed_text.h"
-
+#include "borrowed_text.h"
 #include "connection_lifecycle.h"
 #include "db_pool.h"
 namespace ruvia::detail {

@@ -20,13 +20,12 @@
 #include <asio/read.hpp>
 #include <asio/write.hpp>
 
-#include "ruvia/web/app.h"
-#include "ruvia/web/context.h"
-#include "ruvia/web/controller.h"
-#include "ruvia/web/http_server.h"
-#include "ruvia/web/streaming.h"
-
+#include "app.h"
+#include "context.h"
+#include "controller.h"
+#include "http_server.h"
 #include "http_server_fixture.h"
+#include "streaming.h"
 #include "worker_task_fixture.h"
 // Multiple client connections share one application rate-limit budget.
 // This executable owns its application, so its rate limit and short request

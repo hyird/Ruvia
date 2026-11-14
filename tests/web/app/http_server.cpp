@@ -1,4 +1,4 @@
-#include "ruvia/web/http_server.h"
+#include "http_server.h"
 
 #include <gtest/gtest.h>
 
@@ -23,15 +23,14 @@
 #include <asio/read.hpp>
 #include <asio/write.hpp>
 
-#include "ruvia/core/blocking_pool.h"
-#include "ruvia/core/event_loop.h"
-#include "ruvia/core/task_scope.h"
-#include "ruvia/web/controller.h"
-#include "ruvia/web/http_client.h"
-#include "ruvia/web/http_server.h"
-#include "ruvia/web/middleware.h"
-
+#include "blocking_pool.h"
+#include "controller.h"
+#include "event_loop.h"
+#include "http_client.h"
+#include "http_server.h"
 #include "http_server_fixture.h"
+#include "middleware.h"
+#include "task_scope.h"
 #include "worker_task_fixture.h"
 #ifndef _WIN32
 #include <fcntl.h>

@@ -14,13 +14,13 @@
 #include <type_traits>
 #include <utility>
 
-#include "ruvia/core/blocking_pool.h"
-#include "ruvia/core/event_loop.h"
-#include "ruvia/web/app.h"
-#include "ruvia/web/http_client_types.h"
+#include "app.h"
+#include "blocking_pool.h"
+#include "event_loop.h"
+#include "http_client_types.h"
 
 #ifdef RUVIA_ENABLE_DATABASE
-#include "ruvia/web/db/db.h"
+#include "db.h"
 #endif
 
 namespace example {

@@ -66,28 +66,28 @@ endif()
 ruvia_install_component(ruvia-web web)
 
 set(ruvia_web_headers
-    include/ruvia/web/app.h
-    include/ruvia/web/context.h
-    include/ruvia/web/controller.h
-    include/ruvia/web/http_client.h
-    include/ruvia/web/http_client_types.h
-    include/ruvia/web/http_server.h
-    include/ruvia/web/middleware.h
-    include/ruvia/web/model.h
-    include/ruvia/web/streaming.h
+    include/app.h
+    include/context.h
+    include/controller.h
+    include/http_client.h
+    include/http_client_types.h
+    include/http_server.h
+    include/middleware.h
+    include/model.h
+    include/streaming.h
 )
 if(RUVIA_ENABLE_MARIADB OR RUVIA_ENABLE_POSTGRESQL)
     list(APPEND ruvia_web_headers
-        include/ruvia/web/db/db.h
-        include/ruvia/web/db/db_query.h
-        include/ruvia/web/db/db_session.h
+        include/db.h
+        include/db_query.h
+        include/db_session.h
     )
 endif()
 if(RUVIA_ENABLE_REDIS)
-    list(APPEND ruvia_web_headers include/ruvia/web/redis/redis.h)
+    list(APPEND ruvia_web_headers include/redis.h)
 endif()
 if(RUVIA_ENABLE_JWT)
-    list(APPEND ruvia_web_headers include/ruvia/web/jwt.h)
+    list(APPEND ruvia_web_headers include/jwt.h)
 endif()
 ruvia_install_public_headers(web ${ruvia_web_headers})
 

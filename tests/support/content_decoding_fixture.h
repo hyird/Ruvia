@@ -23,11 +23,11 @@
 #include <utility>
 #include <variant>
 
-#include "ruvia/http/http2_connection.h"
-#include "ruvia/http/http_client.h"
-#include "ruvia/http/http_content_coding.h"
-#include "ruvia/http/http_header.h"
-#include "ruvia/http/http_response_server.h"
+#include "http2_connection.h"
+#include "http_client_protocol.h"
+#include "http_content_coding.h"
+#include "http_header.h"
+#include "http_response_server.h"
 namespace ruvia::test {
 
 using ruvia::decode_http_content;

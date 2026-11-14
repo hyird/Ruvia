@@ -28,12 +28,11 @@
 
 #include <gtest/gtest.h>
 
-#include "ruvia/http/http_cache.h"
-#include "ruvia/web/context.h"
-#include "ruvia/web/http_server.h"
-#include "ruvia/web/middleware.h"
-
+#include "context.h"
+#include "http_cache.h"
+#include "http_server.h"
 #include "http_server_fixture.h"
+#include "middleware.h"
 #include "worker_task_fixture.h"
 namespace static_file_test {
 

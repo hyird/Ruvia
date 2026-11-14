@@ -23,13 +23,12 @@
 #include <asio/socket_base.hpp>
 #include <asio/write.hpp>
 
-#include "ruvia/core/task_scope.h"
-#include "ruvia/http/http2_connection.h"
-#include "ruvia/web/app.h"
-#include "ruvia/web/context.h"
-#include "ruvia/web/controller.h"
-
+#include "app.h"
+#include "context.h"
+#include "controller.h"
+#include "http2_connection.h"
 #include "http_server_fixture.h"
+#include "task_scope.h"
 namespace http2_goaway_test {
 using namespace std::chrono_literals;
 

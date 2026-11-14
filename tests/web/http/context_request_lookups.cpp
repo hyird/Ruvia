@@ -7,8 +7,7 @@
 #include <utility>
 #include <vector>
 
-#include "ruvia/http/http_header.h"
-
+#include "http_header.h"
 #include "http_server_fixture.h"
 using ruvia::http_header_view;
 
@@ -26,24 +25,23 @@ using ruvia::http_header_view;
 #include <asio.hpp>
 #include <asio/io_context.hpp>
 
-#include "ruvia/core/event_loop.h"
-#include "ruvia/core/task.h"
-#include "ruvia/core/task_scope.h"
-#include "ruvia/http/http_header.h"
-#include "ruvia/http/http_response.h"
-#include "ruvia/web/app.h"
-#include "ruvia/web/context.h"
-#include "ruvia/web/controller.h"
-#include "ruvia/web/middleware.h"
-#include "ruvia/web/model.h"
-
+#include "app.h"
+#include "context.h"
+#include "controller.h"
+#include "event_loop.h"
+#include "http_header.h"
+#include "http_response.h"
+#include "middleware.h"
+#include "model.h"
+#include "task.h"
+#include "task_scope.h"
 #include "test_exceptions.h"
 #include "worker_task_fixture.h"
 #ifdef RUVIA_ENABLE_DATABASE
-#include "ruvia/web/db/db.h"
+#include "db.h"
 #endif
 #ifdef RUVIA_ENABLE_REDIS
-#include "ruvia/web/redis/redis.h"
+#include "redis.h"
 #endif
 
 namespace {

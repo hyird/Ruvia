@@ -10,9 +10,9 @@
 #include <string>
 #include <string_view>
 
-#include "ruvia/web/app.h"
-#include "ruvia/web/context.h"
-#include "ruvia/web/controller.h"
+#include "app.h"
+#include "context.h"
+#include "controller.h"
 namespace {
 
 class route_conflict_controller final {

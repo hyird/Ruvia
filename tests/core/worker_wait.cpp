@@ -1,4 +1,4 @@
-#include "ruvia/core/worker_wait.h"
+#include "worker_wait.h"
 
 #include <gtest/gtest.h>
 
@@ -23,13 +23,12 @@
 #include <asio/io_context.hpp>
 #include <asio/post.hpp>
 
-#include "ruvia/core/blocking_pool.h"
-#include "ruvia/core/event_loop.h"
-#include "ruvia/core/stop_token.h"
-#include "ruvia/core/task.h"
-#include "ruvia/core/task_scope.h"
-#include "ruvia/core/worker_ref.h"
-
+#include "blocking_pool.h"
+#include "event_loop.h"
+#include "stop_token.h"
+#include "task.h"
+#include "task_scope.h"
+#include "worker_ref.h"
 #include "worker_task_fixture.h"
 
 namespace ruvia::test::worker_wait_tests {

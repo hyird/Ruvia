@@ -22,20 +22,18 @@
 #include <asio/write.hpp>
 #include <openssl/ssl.h>
 
-#include "ruvia/http/http2_connection.h"
-#include "ruvia/http/http3_connection.h"
-#include "ruvia/http/http_request.h"
-#include "ruvia/web/app.h"
-#include "ruvia/web/context.h"
-#include "ruvia/web/controller.h"
-#include "ruvia/web/http_server.h"
-#include "ruvia/web/middleware.h"
-
+#include "app.h"
+#include "context.h"
+#include "controller.h"
+#include "http2_connection.h"
+#include "http3_connection.h"
+#include "http_request.h"
+#include "http_server.h"
 #include "http_server_fixture.h"
+#include "middleware.h"
 #if defined(RUVIA_ENABLE_HTTP2)
 
-#include "ruvia/http/http2_connection.h"
-
+#include "http2_connection.h"
 #include "http_server_fixture.h"
 #endif
 

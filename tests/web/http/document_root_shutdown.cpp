@@ -15,12 +15,11 @@
 #include <asio/ip/tcp.hpp>
 #include <asio/write.hpp>
 
-#include "ruvia/core/task_scope.h"
-#include "ruvia/web/app.h"
-#include "ruvia/web/context.h"
-#include "ruvia/web/middleware.h"
-
+#include "app.h"
+#include "context.h"
 #include "http_server_fixture.h"
+#include "middleware.h"
+#include "task_scope.h"
 #include "worker_task_fixture.h"
 namespace document_root_shutdown_test {
 

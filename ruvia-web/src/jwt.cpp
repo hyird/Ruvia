@@ -1,4 +1,4 @@
-#include "ruvia/web/jwt.h"
+#include "jwt.h"
 #ifdef RUVIA_ENABLE_JWT
 
 #include <algorithm>
@@ -18,11 +18,10 @@
 #include <utility>
 #include <vector>
 
-#include "ruvia/http/borrowed_text.h"
-#include "ruvia/http/http_header.h"
-#include "ruvia/web/model.h"
-
+#include "borrowed_text.h"
 #include "connection_lifecycle.h"
+#include "http_header.h"
+#include "model.h"
 namespace ruvia {
 
 namespace detail {

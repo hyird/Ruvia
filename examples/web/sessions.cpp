@@ -13,11 +13,10 @@
 #include <exception>
 #include <iostream>
 
-#include "ruvia/web/app.h"
-#include "ruvia/web/controller.h"
-#include "ruvia/web/middleware.h"
-
+#include "app.h"
 #include "backend_config.h"
+#include "controller.h"
+#include "middleware.h"
 
 namespace {
 

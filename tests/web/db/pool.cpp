@@ -23,16 +23,15 @@
 #include <asio.hpp>
 #include <asio/ssl.hpp>
 
-#include "ruvia/core/blocking_pool.h"
-#include "ruvia/core/event_loop.h"
-#include "ruvia/core/stop_token.h"
-#include "ruvia/core/task_scope.h"
-#include "ruvia/web/db/db.h"
-#include "ruvia/web/db/db_query.h"
-#include "ruvia/web/db/db_session.h"
-
 #include "backend_client_fixture.h"
+#include "blocking_pool.h"
+#include "db.h"
+#include "db_query.h"
+#include "db_session.h"
+#include "event_loop.h"
 #include "http_server_fixture.h"
+#include "stop_token.h"
+#include "task_scope.h"
 #include "test_exceptions.h"
 #include "worker_task_fixture.h"
 namespace ruvia::test {

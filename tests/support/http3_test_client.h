@@ -36,7 +36,7 @@
 #include <openssl/x509.h>
 #include <openssl/x509_vfy.h>
 
-#include "ruvia/http/http3_connection.h"
+#include "http3_connection.h"
 
 namespace ruvia::test {
 

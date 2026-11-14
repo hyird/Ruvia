@@ -18,30 +18,29 @@
 #include <variant>
 #include <vector>
 
-#include "ruvia/core/blocking_pool.h"
-#include "ruvia/core/event_loop.h"
-#include "ruvia/core/task_scope.h"
-#include "ruvia/core/worker_ref.h"
-#include "ruvia/http/borrowed_text.h"
-#include "ruvia/http/http_content_coding.h"
-#include "ruvia/http/http_header.h"
-#include "ruvia/http/http_request.h"
-#include "ruvia/http/http_response_server.h"
-#include "ruvia/web/controller.h"
-#include "ruvia/web/http_client.h"
-#include "ruvia/web/http_server.h"
-#include "ruvia/web/middleware.h"
-#include "ruvia/web/streaming.h"
-
+#include "blocking_pool.h"
+#include "borrowed_text.h"
 #include "connection_lifecycle.h"
 #include "context_access.h"
+#include "controller.h"
+#include "event_loop.h"
+#include "http_client.h"
+#include "http_content_coding.h"
+#include "http_header.h"
+#include "http_request.h"
+#include "http_response_server.h"
+#include "http_server.h"
+#include "middleware.h"
 #include "route_table.h"
+#include "streaming.h"
+#include "task_scope.h"
+#include "worker_ref.h"
 
 #ifdef RUVIA_ENABLE_DATABASE
-#include "ruvia/web/db/db_session.h"
+#include "db_session.h"
 #endif
 #ifdef RUVIA_ENABLE_REDIS
-#include "ruvia/web/redis/redis.h"
+#include "redis.h"
 #endif
 
 #include <chrono>
@@ -53,12 +52,12 @@
 #include <random>
 #include <type_traits>
 
-#include "ruvia/core/stop_token.h"
-#include "ruvia/core/task.h"
-#include "ruvia/http/http_cache.h"
-#include "ruvia/http/websocket_handshake.h"
-#include "ruvia/web/context.h"
-#include "ruvia/web/model.h"
+#include "context.h"
+#include "http_cache.h"
+#include "model.h"
+#include "stop_token.h"
+#include "task.h"
+#include "websocket_handshake.h"
 
 namespace ruvia::detail {
 

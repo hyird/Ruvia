@@ -11,13 +11,12 @@
 
 #include <asio.hpp>
 
-#include "ruvia/core/event_loop.h"
-#include "ruvia/core/task_scope.h"
-#include "ruvia/http/http_content_coding.h"
-#include "ruvia/web/http_client.h"
+#include "event_loop.h"
+#include "http_client.h"
+#include "http_content_coding.h"
+#include "task_scope.h"
 #ifdef RUVIA_ENABLE_HTTP2
-#include "ruvia/http/http2_connection.h"
-
+#include "http2_connection.h"
 #include "http_server_fixture.h"
 #endif
 
@@ -38,8 +37,7 @@
 #include <asio/use_awaitable.hpp>
 #include <asio/write.hpp>
 
-#include "ruvia/core/stop_token.h"
-
+#include "stop_token.h"
 #include "worker_task_fixture.h"
 
 namespace http_client_request_controls_test {

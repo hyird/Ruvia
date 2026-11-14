@@ -8,9 +8,8 @@
 #include <string_view>
 #include <utility>
 
-#include "ruvia/http/http_client.h"
-
 #include "content_decoding_fixture.h"
+#include "http_client_protocol.h"
 using namespace ruvia::test;
 
 #include <cstddef>
@@ -19,9 +18,8 @@ using namespace ruvia::test;
 #include <optional>
 #include <vector>
 
-#include "ruvia/http/http_content_coding.h"
-#include "ruvia/http/http_header.h"
-
+#include "http_content_coding.h"
+#include "http_header.h"
 #include "test_exceptions.h"
 
 namespace {

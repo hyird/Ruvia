@@ -15,7 +15,7 @@
 // then failed and the exception rethrown once nghttp2 has returned. Allocation
 // failure inside nghttp2 is likewise fatal for the connection.
 
-#include "ruvia/http/http2_connection.h"
+#include "http2_connection.h"
 
 #include <nghttp2/nghttp2.h>
 
@@ -39,15 +39,14 @@
 #include <variant>
 #include <vector>
 
-#include "ruvia/http/borrowed_text.h"
-#include "ruvia/http/http_client.h"
-#include "ruvia/http/http_header.h"
-#include "ruvia/http/http_request.h"
-#include "ruvia/http/http_response.h"
-#include "ruvia/http/http_response_server.h"
-#include "ruvia/http/websocket_handshake.h"
-
+#include "borrowed_text.h"
+#include "http_client_protocol.h"
 #include "http_connection_fields.h"
+#include "http_header.h"
+#include "http_request.h"
+#include "http_response.h"
+#include "http_response_server.h"
+#include "websocket_handshake.h"
 
 namespace ruvia::detail {
 

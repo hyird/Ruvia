@@ -16,11 +16,10 @@
 
 #include <asio/steady_timer.hpp>
 
-#include "ruvia/core/event_loop.h"
-#include "ruvia/core/task_scope.h"
-#include "ruvia/core/worker_ref.h"
-
+#include "event_loop.h"
+#include "task_scope.h"
 #include "test_exceptions.h"
+#include "worker_ref.h"
 
 namespace worker_runtime_test {
 

@@ -1,4 +1,4 @@
-#include "ruvia/core/blocking_pool.h"
+#include "blocking_pool.h"
 
 #include <gtest/gtest.h>
 
@@ -20,9 +20,8 @@
 #include <asio/io_context.hpp>
 #include <asio/post.hpp>
 
-#include "ruvia/core/event_loop.h"
-#include "ruvia/core/task_scope.h"
-
+#include "event_loop.h"
+#include "task_scope.h"
 #include "worker_task_fixture.h"
 
 namespace ruvia::test::blocking_pool_tests {

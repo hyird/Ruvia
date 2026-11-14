@@ -13,13 +13,12 @@
 #include <string_view>
 #include <utility>
 
-#include "ruvia/core/blocking_pool.h"
-#include "ruvia/core/event_loop.h"
-#include "ruvia/web/app.h"
-#include "ruvia/web/http_client.h"
-#include "ruvia/web/middleware.h"
-
+#include "app.h"
 #include "backend_config.h"
+#include "blocking_pool.h"
+#include "event_loop.h"
+#include "http_client.h"
+#include "middleware.h"
 namespace {
 
 ruvia::task<void> exchange(ruvia::event_loop loop, ruvia::http_client_config config) {

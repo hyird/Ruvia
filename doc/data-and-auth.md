@@ -11,14 +11,14 @@
 
 ## 1. SQL 数据库连接池、直接查询与事务
 
-聚合头文件：`"ruvia/web/db/db.h"`（或按需包含 `"ruvia/web/db/db_session.h"`、`"ruvia/web/db/db_query.h"`）。
+聚合头文件：`"db.h"`（或按需包含 `"db_session.h"`、`"db_query.h"`）。
 参考示例：[examples/web/database.cpp](../examples/web/database.cpp)、[examples/web/event_loop_data.cpp](../examples/web/event_loop_data.cpp)。
 
 ### 1.1 连接配置 `ruvia::db_config` 与注册
 
 ```cpp
-#include "ruvia/web/app.h"
-#include "ruvia/web/db/db.h"
+#include "app.h"
+#include "db.h"
 
 ruvia::db_config config{
     .driver_ = ruvia::db_driver::postgresql, // 或 ruvia::db_driver::mariadb
@@ -124,7 +124,7 @@ co_await stream.close();
 
 连接归还前统一检查事务状态，覆盖普通查询、流式查询被拒绝、读尽或关闭，以及显式事务提交、回滚和异常回滚。PostgreSQL 仍处于事务中的连接、MariaDB 仍有事务或已关闭 autocommit 的连接会被关闭，不会让下一调用方继承这些状态；例如 MariaDB 的 `completion_type=CHAIN` 可以使一次成功的 `COMMIT` / `ROLLBACK` 开启新事务，框架也不会复用该连接。此检查不恢复其他会话设置，结果形状错误也不撤销已经执行的 SQL。
 
-### 1.3 事务与保存点（`"ruvia/web/db/db_session.h"`）
+### 1.3 事务与保存点（`"db_session.h"`）
 
 `db_transaction` 独占一条数据库连接；若在析构或作用域退出前未调用 `co_await tx.commit()`，底层会自动回滚并回收连接：
 
@@ -150,7 +150,7 @@ PostgreSQL 事务还额外支持：
 - **咨询锁（Advisory Locks）**：`co_await tx.advisory_lock(key)` / `try_advisory_lock(key)`
 - **服务端游标**：`declare_cursor(name, sql, params, scroll)`、`fetch_cursor(name, count)`、`close_cursor(name)`
 
-### 1.4 启动期数据库迁移（`"ruvia/web/db/db.h"`）
+### 1.4 启动期数据库迁移（`"db.h"`）
 
 `ruvia::db_migrator(event_loop, config, options = {})` 与 `db_client` 一样绑定调用方事件循环；`co_await migrator.migrate(migrations, operation = {})` 在该循环上以独立连接执行有序迁移列表，并在迁移表（默认 `ruvia_schema_migrations`）中记录与核对每个版本 `id_` 的 SQL 校验摘要：
 
@@ -180,7 +180,7 @@ auto report = co_await migrator.migrate(migrations);
 
 ## 2. SQL 构建器、Schema DDL 与存储过程
 
-头文件：`"ruvia/web/db/db_query.h"`、`"ruvia/web/db/db.h"`。
+头文件：`"db_query.h"`、`"db.h"`。
 参考示例：[examples/web/sql_queries.cpp](../examples/web/sql_queries.cpp)。
 
 ### 2.1 `ruvia::db_query`（跨方言 SQL AST 构建器）
@@ -194,7 +194,7 @@ auto report = co_await migrator.migrate(migrations);
 `db_source_options`、`db_cte_options`、`db_lock_options`、`db_window_options`、`db_conflict_options` 中的集合字段为 `borrowed_span<T>`；Repository 的 `db_find_options`、`db_upsert_options` 同样使用 `borrowed_span<T>` 借用集合及元素中的文本。请使用具名 `const std::array`、C 数组或左值容器保存元素；独立保存 options 时，数组和文本 owner 必须存活到调用入口同步复制或导入完成。同步导入型 API 的 `initializer_list` 参数不持久保存裸视图，可继续直接传入列表。
 
 - **查询子句**：`select`、`add_select`、`distinct`、`distinct_on`、`from`、`from_function`、`join`、`where` / `and_where` / `or_where`、`group_by`、`having`、`order_by`、`limit`、`offset`、`lock`（`FOR UPDATE` / `FOR SHARE` + `NOWAIT` / `SKIP LOCKED`）、`with`（CTE / `RECURSIVE`）、`combine`（`UNION` / `INTERSECT` / `EXCEPT`）。
-  `limit`、`offset`、`db_window_boundary::offset_` 及 SQL / Redis Repository 的 `skip_`、`take_` 共用 `"ruvia/web/model.h"` 的 `query_row_count`（可选位置仍包在 `std::optional` 中）。合法整数可直接填入，构造前检查 `0..INT64_MAX`，负数或超范围抛出 `std::invalid_argument`，无异常探测用 `query_row_count::try_from_value()`；不隐式接受浮点或枚举，需要整数时用 `value()` 解包，不要预先转成无符号数。
+  `limit`、`offset`、`db_window_boundary::offset_` 及 SQL / Redis Repository 的 `skip_`、`take_` 共用 `"model.h"` 的 `query_row_count`（可选位置仍包在 `std::optional` 中）。合法整数可直接填入，构造前检查 `0..INT64_MAX`，负数或超范围抛出 `std::invalid_argument`，无异常探测用 `query_row_count::try_from_value()`；不隐式接受浮点或枚举，需要整数时用 `value()` 解包，不要预先转成无符号数。
 - **变更子句**：`insert_into`、`values`、`insert_from`、`on_conflict`（Upsert；MariaDB 仅支持 `.any_unique_key_` 的 `ON DUPLICATE KEY UPDATE`，`excluded(col)` 编译为 `VALUES(col)`）、`update`、`set`、`update_from`、`delete_from`、`delete_using`、`returning`（MariaDB 需 ≥ 10.5，支持 `INSERT ... RETURNING` 与 `DELETE ... RETURNING`，`UPDATE ... RETURNING` 仅 PostgreSQL；`db_repository::save()` 依赖此能力）。
 - **表达式**：`column`、`value`、`excluded`、`call`、`coalesce`、`null_if`、`greatest`、`least`、`case_when`、`cast`、`aggregate`、`filter`、`over`（窗口函数）、`exists`、`subquery`。
 - **写入分类**：`has_writes()` 只依据当前语句及仍有效的 CTE / 集合操作；被替换的来源和未发布的失败追加快照不计入。含写入 CTE 的集合操作不能作为 `from`、`join`、表达式子查询或 `insert_from` 的只读来源；入口拒绝时不挂入该子查询，写入须保留在顶层 CTE。`clone()` 只复制当前语句可达的节点与子查询，不携带被替换子句、退役来源与废弃节点。
@@ -226,13 +226,13 @@ auto report = co_await migrator.migrate(migrations);
 
 ## 3. 强类型关系型 ORM（`RUVIA_DB_ENTITY` 与 `db_repository`）
 
-头文件：`"ruvia/web/db/db_query.h"`、`"ruvia/web/db/db.h"`。
+头文件：`"db_query.h"`、`"db.h"`。
 参考示例：[examples/web/orm.cpp](../examples/web/orm.cpp)、[examples/web/orm_columns.cpp](../examples/web/orm_columns.cpp)、[examples/web/orm_relations.cpp](../examples/web/orm_relations.cpp)。
 
 ### 3.1 实体、生成列、关系与投影声明
 
 ```cpp
-#include "ruvia/web/db/db.h"
+#include "db.h"
 
 RUVIA_DB_ENTITY(device, "devices",
     RUVIA_DB_COLUMN(id, std::int64_t,
@@ -359,7 +359,7 @@ mixed.with("samples", samples).from_cte("samples")
 - 对包含通配项的 `insert_from(columns, builder)`，Builder 不伪造源宽度或列清单；目标列名照常校验，实际源/目标宽度是否匹配交由数据库检查。无通配项的显式投影保留既有宽度检查。
 - 关系预加载（`relations_` / `*_join_and_select`）解码结果形状错误时同样抛出 `db_conversion_error`：映射列缺失为 `missing_column`，重名列为 `invalid_format`，根主键或复合主键部分为 NULL 为 `unexpected_null`，to-one 关系返回多行或单实体查询返回多个根为 `unexpected_row_count`。
 
-### 3.5 独立字段与实体映射（`"ruvia/web/db/db_query.h"`）
+### 3.5 独立字段与实体映射（`"db_query.h"`）
 
 | 公开入口 | 结果与边界 |
 | --- | --- |
@@ -379,7 +379,7 @@ auto users = ruvia::decode_db_rows<user_projection>(raw);
 
 ## 4. Redis 客户端、Pub/Sub、Streams 与 RediSearch ORM
 
-聚合头文件：`"ruvia/web/redis/redis.h"`。
+聚合头文件：`"redis.h"`。
 参考示例：[examples/web/redis.cpp](../examples/web/redis.cpp)、[examples/web/redis_pubsub.cpp](../examples/web/redis_pubsub.cpp)、[examples/web/redis_streams.cpp](../examples/web/redis_streams.cpp)、[examples/web/redis_orm.cpp](../examples/web/redis_orm.cpp)。
 
 ### 4.1 连接池配置 `ruvia::redis_config`
@@ -400,7 +400,7 @@ ruvia::app()
 
 - 每个 worker 维护 `pool_size_per_worker_` 条常规命令连接，以及按需建立的 `blocking_pool_size_per_worker_` 条阻塞命令专用连接（供 `blpop`、`brpop`、`xread_group` 等阻塞操作自动使用，不阻塞常规命令池）。
 - 同样支持在独立 `event_loop` 上构造 `ruvia::redis_client client(loop, config)`，通过 `client.redis()` 获取 `redis_session`（规则见 [1.2](#12-直接查询编译期-sql-校验与流式游标db_session)）；`host_` 不是 IP 字面量时，事件循环须借用阻塞池执行 DNS 查询（见 1.1）。
-- **独立宿主借入**：`router::bind_redis(alias, client)` / `bind_database(alias, client)` 把同 worker 的独立客户端按别名借给该 router 分发的请求，`c.redis(alias)` / `c.db(alias)` 与 `session_middleware` 由此解析；约束见 [显式路由组合](web-guide.md#111-显式路由组合ruviawebrouterh)。
+- **独立宿主借入**：`router::bind_redis(alias, client)` / `bind_database(alias, client)` 把同 worker 的独立客户端按别名借给该 router 分发的请求，`c.redis(alias)` / `c.db(alias)` 与 `session_middleware` 由此解析；约束见 [显式路由组合](web-guide.md#111-显式路由组合controllerh)。
 - 每条连接复用回复解析根槽；嵌套值和字符串由返回结果独立持有，失败或取消时随未完成的回复一起回收。
 - **请求写缓冲**：传输结束后最多保留 `64 KiB` 容量，超限大块立即归还分配器。取消或异常同样等待传输借用结束后再清理，不提前释放在途 I/O 使用的存储。
 - 配置了 `username_` 或 `password_` 时，每条新连接先发送 `AUTH`；序列化后的 `AUTH` 请求写出后（无论成功与否）立即从连接保留的写缓冲中擦除，口令只保留在配置副本中供重连使用。
@@ -553,14 +553,14 @@ auto reply = co_await redis.command(std::move(command));
 
 ---
 
-## 5. JWT 认证（`"ruvia/web/jwt.h"`）
+## 5. JWT 认证（`"jwt.h"`）
 
 参考示例：[examples/web/auth_jwt.cpp](../examples/web/auth_jwt.cpp)。
 
 支持 `jwt_algorithm::hs256`、`hs384`、`hs512`。遵循 RFC 7518 密钥最小长度要求（HS256 至少 32 字节、HS384 至少 48 字节、HS512 至少 64 字节）：
 
 ```cpp
-#include "ruvia/web/jwt.h"
+#include "jwt.h"
 
 // 1. 签发 Token：
 inline constexpr std::array<ruvia::jwt_claim_view, 1> custom_claims{{

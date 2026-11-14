@@ -18,13 +18,12 @@
 #include <asio/read.hpp>
 #include <asio/write.hpp>
 
-#include "ruvia/core/task_scope.h"
-#include "ruvia/web/app.h"
-#include "ruvia/web/context.h"
-#include "ruvia/web/http_server.h"
-#include "ruvia/web/middleware.h"
-
+#include "app.h"
+#include "context.h"
+#include "http_server.h"
 #include "http_server_fixture.h"
+#include "middleware.h"
+#include "task_scope.h"
 #include "worker_task_fixture.h"
 // A multi-worker application serves a document root that changes while it
 // runs. This executable owns that application, so the root cannot leak into

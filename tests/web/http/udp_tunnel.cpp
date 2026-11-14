@@ -16,13 +16,12 @@
 
 #include <asio.hpp>
 
-#include "ruvia/core/task_scope.h"
-#include "ruvia/http/http_response_server.h"
-#include "ruvia/web/app.h"
-#include "ruvia/web/controller.h"
-#include "ruvia/web/streaming.h"
-
+#include "app.h"
+#include "controller.h"
+#include "http_response_server.h"
 #include "http_server_fixture.h"
+#include "streaming.h"
+#include "task_scope.h"
 #include "worker_task_fixture.h"
 namespace udp_tunnel_test {
 struct udp_tunnel_observation {

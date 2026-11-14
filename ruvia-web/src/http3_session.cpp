@@ -27,20 +27,19 @@
 #include <asio/ip/udp.hpp>
 #include <asio/socket_base.hpp>
 
-#include "ruvia/core/event_loop.h"
-#include "ruvia/core/stop_token.h"
-#include "ruvia/core/worker_ref.h"
-#include "ruvia/http/http3_connection.h"
-#include "ruvia/http/http_content_coding.h"
-#include "ruvia/http/http_header.h"
-#include "ruvia/http/http_response.h"
-#include "ruvia/http/http_response_server.h"
-#include "ruvia/http/websocket_handshake.h"
-#include "ruvia/web/streaming.h"
-
 #include "connection_lifecycle.h"
 #include "context_access.h"
+#include "event_loop.h"
+#include "http3_connection.h"
+#include "http_content_coding.h"
+#include "http_header.h"
+#include "http_response.h"
+#include "http_response_server.h"
 #include "route_table.h"
+#include "stop_token.h"
+#include "streaming.h"
+#include "websocket_handshake.h"
+#include "worker_ref.h"
 #if !defined(_WIN32)
 #include <fcntl.h>
 #include <netinet/in.h>
@@ -55,9 +54,8 @@
 
 #include <openssl/ssl.h>
 
-#include "ruvia/core/worker_wait.h"
-
 #include "http_client_pool.h"
+#include "worker_wait.h"
 
 namespace ruvia::detail {
 namespace {

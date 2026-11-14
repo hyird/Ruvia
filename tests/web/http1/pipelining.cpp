@@ -17,11 +17,10 @@
 #include <asio/read_until.hpp>
 #include <asio/write.hpp>
 
-#include "ruvia/web/context.h"
-#include "ruvia/web/controller.h"
-#include "ruvia/web/streaming.h"
-
+#include "context.h"
+#include "controller.h"
 #include "http_server_fixture.h"
+#include "streaming.h"
 #include "worker_task_fixture.h"
 // Pipelined HTTP/1.1 requests: the server may coalesce the responses of
 // requests already buffered behind each other, but every response still

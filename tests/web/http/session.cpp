@@ -27,16 +27,15 @@
 #include <asio/use_awaitable.hpp>
 #include <asio/write.hpp>
 
-#include "ruvia/web/app.h"
-#include "ruvia/web/context.h"
-#include "ruvia/web/controller.h"
-#include "ruvia/web/middleware.h"
-
+#include "app.h"
+#include "context.h"
+#include "controller.h"
 #include "http_server_fixture.h"
+#include "middleware.h"
 #include "worker_task_fixture.h"
 #ifdef RUVIA_ENABLE_REDIS
 
-#include "ruvia/web/redis/redis.h"
+#include "redis.h"
 TEST(Ruvia, session_middleware_rejects_invalid_config_before_use) {
     const auto rejected = [](const ruvia::session_config& config) {
         try {

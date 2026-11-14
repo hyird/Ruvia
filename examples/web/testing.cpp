@@ -10,8 +10,8 @@
 #include <string>
 #include <string_view>
 
-#include "ruvia/web/app.h"
-#include "ruvia/web/controller.h"
+#include "app.h"
+#include "controller.h"
 
 RUVIA_MODEL(note_request, RUVIA_OPTIONAL_FIELD(text, ruvia::string));
 

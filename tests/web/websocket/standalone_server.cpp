@@ -22,18 +22,16 @@
 #include <asio/ssl.hpp>
 #include <asio/write.hpp>
 
-#include "ruvia/core/blocking_pool.h"
-#include "ruvia/core/event_loop.h"
-#include "ruvia/core/stop_token.h"
-#include "ruvia/core/task_scope.h"
-#include "ruvia/http/websocket_handshake.h"
-#include "ruvia/web/http_client.h"
-#include "ruvia/web/http_server.h"
-
+#include "blocking_pool.h"
+#include "event_loop.h"
+#include "http_client.h"
+#include "http_server.h"
 #include "http_server_fixture.h"
+#include "stop_token.h"
+#include "task_scope.h"
+#include "websocket_handshake.h"
 #if defined(RUVIA_ENABLE_HTTP2)
-#include "ruvia/http/http2_connection.h"
-
+#include "http2_connection.h"
 #include "http_server_fixture.h"
 #endif
 #if defined(RUVIA_ENABLE_HTTP3)

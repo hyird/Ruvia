@@ -37,20 +37,19 @@
 #include <asio/write.hpp>
 #include <openssl/ssl.h>
 
-#include "ruvia/core/blocking_pool.h"
-#include "ruvia/core/event_loop.h"
-#include "ruvia/core/stop_token.h"
-#include "ruvia/core/task_scope.h"
-#include "ruvia/http/http_response_server.h"
-#include "ruvia/web/app.h"
-#include "ruvia/web/context.h"
-#include "ruvia/web/controller.h"
-#include "ruvia/web/http_client.h"
-#include "ruvia/web/streaming.h"
-
+#include "app.h"
+#include "blocking_pool.h"
 #include "client_operation_fixture.h"
+#include "context.h"
+#include "controller.h"
+#include "event_loop.h"
 #include "http3_test_client.h"
+#include "http_client.h"
+#include "http_response_server.h"
 #include "http_server_fixture.h"
+#include "stop_token.h"
+#include "streaming.h"
+#include "task_scope.h"
 // End to end over loopback UDP: a real application with an HTTPS listener and
 // an HTTP/3 service on the same port number, four workers, and an ngtcp2 +
 // nghttp3 client (http3_test_client.h).

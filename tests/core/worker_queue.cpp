@@ -10,8 +10,8 @@
 #include <asio/io_context.hpp>
 #include <asio/post.hpp>
 
-#include "ruvia/core/event_loop.h"
-#include "ruvia/core/worker_wait.h"
+#include "event_loop.h"
+#include "worker_wait.h"
 TEST(Ruvia, worker_queue_yields_to_io_context_between_batches) {
     struct reposting_task final {
         const ruvia::worker_ref* worker_;
@@ -155,10 +155,9 @@ TEST(Ruvia, worker_cancellation_registration_handles_precancel_and_exception_unw
 #include <asio/co_spawn.hpp>
 #include <asio/steady_timer.hpp>
 
-#include "ruvia/core/stop_token.h"
-#include "ruvia/core/task.h"
-#include "ruvia/core/worker_ref.h"
-
+#include "stop_token.h"
+#include "task.h"
+#include "worker_ref.h"
 #include "worker_task_fixture.h"
 
 namespace worker_resume_test {

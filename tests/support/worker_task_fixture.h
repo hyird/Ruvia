@@ -13,9 +13,9 @@
 
 #include <asio/io_context.hpp>
 
-#include "ruvia/core/event_loop.h"
-#include "ruvia/core/task.h"
-#include "ruvia/core/task_scope.h"
+#include "event_loop.h"
+#include "task.h"
+#include "task_scope.h"
 
 namespace ruvia::test {
 

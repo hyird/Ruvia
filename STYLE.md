@@ -17,7 +17,7 @@ Project headers use quotes. The C++ standard library and third-party headers
 use angle brackets:
 
 ```cpp
-#include "ruvia/core/task.h"
+#include "task.h"
 
 #include <algorithm>
 #include <string_view>
@@ -30,7 +30,7 @@ In a `.cpp` file, order groups as:
 1. The header that declares this translation unit, if it has one.
 2. C++ standard headers, then C system headers.
 3. Third-party headers (`asio/`, `openssl/`, …).
-4. Other `ruvia/` headers.
+4. Other project headers.
 
 clang-format regroups these blocks and sorts within each group. Do not insert
 blank lines by hand inside a group.

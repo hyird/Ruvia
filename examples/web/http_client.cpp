@@ -6,7 +6,7 @@
 // One configured pool per worker is reused across requests. The handle borrows
 // that pool and must not escape its worker; retained bytes have their own owner.
 
-#include "ruvia/web/http_client.h"
+#include "http_client.h"
 
 #include <array>
 #include <chrono>
@@ -18,13 +18,12 @@
 #include <string_view>
 #include <utility>
 
-#include "ruvia/http/borrowed_text.h"
-#include "ruvia/web/app.h"
-#include "ruvia/web/controller.h"
-#include "ruvia/web/middleware.h"
-#include "ruvia/web/streaming.h"
-
+#include "app.h"
 #include "backend_config.h"
+#include "borrowed_text.h"
+#include "controller.h"
+#include "middleware.h"
+#include "streaming.h"
 namespace {
 
 struct upstream_failure final {

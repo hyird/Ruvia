@@ -53,21 +53,21 @@
 #include <openssl/types.h>
 #include <openssl/x509.h>
 
-#include "ruvia/core/blocking_pool.h"
-#include "ruvia/core/event_loop.h"
-#include "ruvia/core/stop_token.h"
-#include "ruvia/core/task.h"
-#include "ruvia/core/task_scope.h"
-#include "ruvia/core/worker_ref.h"
-#include "ruvia/core/worker_wait.h"
-#include "ruvia/http/borrowed_text.h"
-#include "ruvia/http/http_header.h"
-#include "ruvia/http/http_request.h"
-#include "ruvia/http/http_response.h"
-#include "ruvia/http/http_response_server.h"
-#include "ruvia/web/http_client_types.h"
-#include "ruvia/web/http_server.h"
-#include "ruvia/web/middleware.h"
+#include "blocking_pool.h"
+#include "borrowed_text.h"
+#include "event_loop.h"
+#include "http_client_types.h"
+#include "http_header.h"
+#include "http_request.h"
+#include "http_response.h"
+#include "http_response_server.h"
+#include "http_server.h"
+#include "middleware.h"
+#include "stop_token.h"
+#include "task.h"
+#include "task_scope.h"
+#include "worker_ref.h"
+#include "worker_wait.h"
 
 #if defined(__unix__)
 #include <fcntl.h>

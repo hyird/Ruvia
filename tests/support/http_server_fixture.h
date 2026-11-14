@@ -53,11 +53,10 @@
 #include <openssl/x509.h>
 #include <openssl/x509v3.h>
 
-#include "ruvia/web/app.h"
-#include "ruvia/web/context.h"
-#include "ruvia/web/http_server.h"
-#include "ruvia/web/middleware.h"
-
+#include "app.h"
+#include "context.h"
+#include "http_server.h"
+#include "middleware.h"
 #include "worker_task_fixture.h"
 
 #if defined(_WIN32)
@@ -68,7 +67,7 @@
 #endif
 #include <optional>
 
-#include "ruvia/http/http2_connection.h"
+#include "http2_connection.h"
 
 namespace ruvia::test {
 

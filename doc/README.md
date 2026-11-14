@@ -18,13 +18,13 @@
 
 Ruvia 由三个独立的静态库组成，所有公开类型、函数与概念均位于顶层命名空间 `namespace ruvia`（HTTP 状态码常量与 WebSocket 关闭码常量分别位于嵌套命名空间 `namespace ruvia::http_status` 与 `namespace ruvia::websocket_close_status`）：
 
-| 库目录 | CMake Target | 头文件前缀 | 职责与边界 |
+| 库目录 | CMake Target | 公开头文件 | 职责与边界 |
 | --- | --- | --- | --- |
-| `ruvia-core` | `ruvia::core` | `"ruvia/core/..."` | 协程任务（`task<T>` / `root_task<T>`）、事件循环（`event_loop` / `event_loop_pool` / `event_loop_attachment`）、有界通道（`channel` / `one_shot`）、阻塞卸载池（`blocking_pool`）与 mimalloc 线程堆收集；仅公开依赖 standalone Asio 与 `Threads::Threads` |
-| `ruvia-http` | `ruvia::http` | `"ruvia/http/..."` | 独立 sans-I/O 协议实现：HTTP/1.0、HTTP/1.1、HTTP/2、HTTP/3、HPACK、QPACK、QUIC、WebSocket、内容压缩（gzip / deflate / br / zstd）、Multipart、SSE、RFC 9297 Datagram / Capsule 与 RFC 9298 `CONNECT-UDP`；HTTP/2 使用 nghttp2，HTTP/3 使用 nghttp3 与 ngtcp2 core，不依赖 `ruvia::core`、Asio、socket I/O 或 OpenSSL |
-| `ruvia-web` | `ruvia::web` | `"ruvia/web/..."` | Web 应用框架：服务器与路由、中间件、声明式 Model/校验、TLS/mTLS/SNI、出站 HTTP 客户端、SQL 数据库/ORM、Redis/RediSearch ORM 与 JWT；公开依赖 `ruvia::core` 与 `ruvia::http` |
+| `ruvia-core` | `ruvia::core` | `ruvia-core/include/*.h` | 协程任务（`task<T>` / `root_task<T>`）、事件循环（`event_loop` / `event_loop_pool` / `event_loop_attachment`）、有界通道（`channel` / `one_shot`）、阻塞卸载池（`blocking_pool`）与 mimalloc 线程堆收集；仅公开依赖 standalone Asio 与 `Threads::Threads` |
+| `ruvia-http` | `ruvia::http` | `ruvia-http/include/*.h` | 独立 sans-I/O 协议实现：HTTP/1.0、HTTP/1.1、HTTP/2、HTTP/3、HPACK、QPACK、QUIC、WebSocket、内容压缩（gzip / deflate / br / zstd）、Multipart、SSE、RFC 9297 Datagram / Capsule 与 RFC 9298 `CONNECT-UDP`；HTTP/2 使用 nghttp2，HTTP/3 使用 nghttp3 与 ngtcp2 core，不依赖 `ruvia::core`、Asio、socket I/O 或 OpenSSL |
+| `ruvia-web` | `ruvia::web` | `ruvia-web/include/*.h` | Web 应用框架：服务器与路由、中间件、声明式 Model/校验、TLS/mTLS/SNI、出站 HTTP 客户端、SQL 数据库/ORM、Redis/RediSearch ORM 与 JWT；公开依赖 `ruvia::core` 与 `ruvia::http` |
 
-> **头文件使用原则**：只包含 `include/ruvia/{core,http,web}/` 下的非 `detail` 公开头文件，不直接引用任何 `detail/` 子目录下的内部头文件。
+> **头文件使用原则**：只包含 `ruvia-{core,http,web}/include/` 下的非 `detail` 公开头文件，不直接引用任何 `detail/` 子目录下的内部头文件。
 
 从 `1.0.0` 起，同一主版本内保持非 `detail` 公开 API 的源码兼容，包括公开宏、配置类型、错误码及所有权和生命周期契约；新增能力以兼容方式加入，破坏性调整进入下一主版本。CMake 包兼容性在 `0.x` 要求主版本和次版本均相同，从 `1.x` 起要求主版本相同。此承诺适用于相同平台、工具链和功能开关组合；不承诺跨版本 ABI 兼容，升级后应重新编译下游程序。
 
@@ -45,10 +45,10 @@ Ruvia 由三个独立的静态库组成，所有公开类型、函数与概念�
 | `RUVIA_BUILD_TESTS` | `OFF` | — | 构建 `tests/` 测试套件 |
 | `RUVIA_ENABLE_HTTP2` | `ON` | `RUVIA_ENABLE_HTTP2` | 启用 nghttp2 会话与 HTTP/2 公开 API，可独立关闭 |
 | `RUVIA_ENABLE_HTTP3` | `ON` | `RUVIA_ENABLE_HTTP3` | 启用 nghttp3/ngtcp2 协议层与 Web QUIC TLS 接入，可独立关闭 |
-| `RUVIA_ENABLE_MARIADB` | `OFF` | `RUVIA_ENABLE_MARIADB`、`RUVIA_ENABLE_DATABASE` | 启用 MariaDB 驱动与 `"ruvia/web/db/..."` 公开头 |
-| `RUVIA_ENABLE_POSTGRESQL` | `OFF` | `RUVIA_ENABLE_POSTGRESQL`、`RUVIA_ENABLE_DATABASE` | 启用 PostgreSQL 驱动、ORM 与 `"ruvia/web/db/..."` 公开头 |
-| `RUVIA_ENABLE_REDIS` | `OFF` | `RUVIA_ENABLE_REDIS` | 启用 `"ruvia/web/redis/..."`、服务端 `session_middleware` 与数据库查询缓存 |
-| `RUVIA_ENABLE_JWT` | `OFF` | `RUVIA_ENABLE_JWT` | 启用 `"ruvia/web/jwt.h"` |
+| `RUVIA_ENABLE_MARIADB` | `OFF` | `RUVIA_ENABLE_MARIADB`、`RUVIA_ENABLE_DATABASE` | 启用 MariaDB 驱动与 `"db.h"` / `"db_query.h"` / `"db_session.h"` 公开头 |
+| `RUVIA_ENABLE_POSTGRESQL` | `OFF` | `RUVIA_ENABLE_POSTGRESQL`、`RUVIA_ENABLE_DATABASE` | 启用 PostgreSQL 驱动、ORM 与 `"db.h"` / `"db_query.h"` / `"db_session.h"` 公开头 |
+| `RUVIA_ENABLE_REDIS` | `OFF` | `RUVIA_ENABLE_REDIS` | 启用 `"redis.h"`、服务端 `session_middleware` 与数据库查询缓存 |
+| `RUVIA_ENABLE_JWT` | `OFF` | `RUVIA_ENABLE_JWT` | 启用 `"jwt.h"` |
 
 顶层构建在未指定 `CMAKE_TOOLCHAIN_FILE` 时从环境变量 `VCPKG_ROOT` 选择 vcpkg，并加载项目 triplet、按开关选择 manifest 特性。子项目由宿主提供工具链与依赖清单。未启用功能不编译对应源码，也不安装相应公开头文件。
 

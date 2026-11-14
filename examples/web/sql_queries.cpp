@@ -9,9 +9,9 @@
 #include <exception>
 #include <iostream>
 
-#include "ruvia/web/db/db.h"
-#include "ruvia/web/db/db_query.h"
-#include "ruvia/web/middleware.h"
+#include "db.h"
+#include "db_query.h"
+#include "middleware.h"
 namespace {
 
 void print_query(const ruvia::db_query& query, ruvia::db_driver driver) {

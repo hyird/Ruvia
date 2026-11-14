@@ -13,11 +13,10 @@
 #include <asio/read.hpp>
 #include <asio/write.hpp>
 
-#include "ruvia/web/app.h"
-#include "ruvia/web/context.h"
-#include "ruvia/web/controller.h"
-#include "ruvia/web/http_server.h"
-
+#include "app.h"
+#include "context.h"
+#include "controller.h"
+#include "http_server.h"
 #include "http_server_fixture.h"
 #include "worker_task_fixture.h"
 // A document root shares paths with a guarded wildcard route. This executable

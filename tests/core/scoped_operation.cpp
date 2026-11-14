@@ -9,9 +9,8 @@
 #include <string>
 #include <utility>
 
-#include "ruvia/core/event_loop.h"
-#include "ruvia/core/task_scope.h"
-
+#include "event_loop.h"
+#include "task_scope.h"
 #include "test_exceptions.h"
 
 namespace ruvia::test::scoped_operation_tests {

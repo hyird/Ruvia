@@ -1,4 +1,4 @@
-#include "ruvia/web/app.h"
+#include "app.h"
 
 #include <algorithm>
 #include <array>
@@ -19,31 +19,28 @@
 #include <asio/signal_set.hpp>
 #include <openssl/ssl.h>
 
-#include "ruvia/core/event_loop.h"
-#include "ruvia/core/stop_token.h"
-#include "ruvia/core/worker_ref.h"
-#include "ruvia/http/borrowed_text.h"
-#include "ruvia/http/http_content_coding.h"
-#include "ruvia/http/http_header.h"
-#include "ruvia/http/http_response.h"
-#include "ruvia/web/controller.h"
-#include "ruvia/web/http_client.h"
-#include "ruvia/web/http_server.h"
-#include "ruvia/web/middleware.h"
-
+#include "borrowed_text.h"
 #include "connection_lifecycle.h"
 #include "context_access.h"
+#include "controller.h"
+#include "event_loop.h"
+#include "http_client.h"
 #include "http_client_pool.h"
+#include "http_content_coding.h"
+#include "http_header.h"
+#include "http_response.h"
+#include "http_server.h"
+#include "middleware.h"
 #include "route_table.h"
+#include "stop_token.h"
+#include "worker_ref.h"
 
 #ifdef RUVIA_ENABLE_DATABASE
-#include "ruvia/web/db/db_session.h"
-
 #include "db_pool.h"
+#include "db_session.h"
 #endif
 #ifdef RUVIA_ENABLE_REDIS
-#include "ruvia/web/redis/redis.h"
-
+#include "redis.h"
 #include "redis_pool.h"
 #endif
 #ifdef _WIN32

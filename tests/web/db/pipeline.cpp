@@ -10,12 +10,11 @@
 #include <string_view>
 #include <vector>
 
-#include "ruvia/core/event_loop.h"
-#include "ruvia/core/stop_token.h"
-#include "ruvia/core/task_scope.h"
-#include "ruvia/web/db/db_session.h"
-
 #include "backend_client_fixture.h"
+#include "db_session.h"
+#include "event_loop.h"
+#include "stop_token.h"
+#include "task_scope.h"
 #include "worker_task_fixture.h"
 #ifdef RUVIA_ENABLE_POSTGRESQL
 namespace pipeline_test {

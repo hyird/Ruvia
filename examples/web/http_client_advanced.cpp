@@ -16,14 +16,13 @@
 #include <utility>
 #include <variant>
 
-#include "ruvia/core/blocking_pool.h"
-#include "ruvia/core/event_loop.h"
-#include "ruvia/http/http_client.h"
-#include "ruvia/web/app.h"
-#include "ruvia/web/http_client.h"
-#include "ruvia/web/middleware.h"
-
+#include "app.h"
 #include "backend_config.h"
+#include "blocking_pool.h"
+#include "event_loop.h"
+#include "http_client.h"
+#include "http_client_protocol.h"
+#include "middleware.h"
 namespace {
 
 ruvia::task<void> follow_redirect(const ruvia::http_client_ref& origin) {

@@ -32,21 +32,20 @@
 #include <asio/use_future.hpp>
 #include <asio/write.hpp>
 
-#include "ruvia/core/event_loop.h"
-#include "ruvia/core/task_scope.h"
-#include "ruvia/http/http_content_coding.h"
-#include "ruvia/http/http_header.h"
-#include "ruvia/http/http_response.h"
-#include "ruvia/http/http_response_server.h"
-#include "ruvia/web/app.h"
-#include "ruvia/web/context.h"
-#include "ruvia/web/controller.h"
-#include "ruvia/web/http_server.h"
-#include "ruvia/web/middleware.h"
-#include "ruvia/web/streaming.h"
-
+#include "app.h"
 #include "content_decoding_fixture.h"
+#include "context.h"
+#include "controller.h"
+#include "event_loop.h"
+#include "http_content_coding.h"
+#include "http_header.h"
+#include "http_response.h"
+#include "http_response_server.h"
+#include "http_server.h"
 #include "http_server_fixture.h"
+#include "middleware.h"
+#include "streaming.h"
+#include "task_scope.h"
 #include "worker_task_fixture.h"
 
 namespace response_stream_test {

@@ -9,9 +9,8 @@
 #include <string_view>
 #include <utility>
 
-#include "ruvia/http/http_content_coding.h"
-
 #include "content_decoding_fixture.h"
+#include "http_content_coding.h"
 #include "test_exceptions.h"
 
 using namespace ruvia::test;
@@ -27,10 +26,10 @@ using ruvia::http_content_encoder;
 #include <span>
 #include <vector>
 
-#include "ruvia/http/borrowed_text.h"
-#include "ruvia/http/http_cache.h"
-#include "ruvia/http/http_header.h"
-#include "ruvia/http/http_response.h"
+#include "borrowed_text.h"
+#include "http_cache.h"
+#include "http_header.h"
+#include "http_response.h"
 
 namespace {
 

@@ -1,4 +1,4 @@
-#include "ruvia/core/blocking_pool.h"
+#include "blocking_pool.h"
 
 #include <algorithm>
 #include <array>
@@ -29,10 +29,10 @@
 #include <asio/error.hpp>
 #include <asio/io_context.hpp>
 
-#include "ruvia/core/event_loop.h"
-#include "ruvia/core/stop_token.h"
-#include "ruvia/core/worker_ref.h"
-#include "ruvia/core/worker_wait.h"
+#include "event_loop.h"
+#include "stop_token.h"
+#include "worker_ref.h"
+#include "worker_wait.h"
 
 #ifdef _WIN32
 #ifndef WIN32_LEAN_AND_MEAN

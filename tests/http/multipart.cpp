@@ -9,9 +9,8 @@
 #include <string_view>
 #include <utility>
 
-#include "ruvia/http/http_content_coding.h"
-
 #include "content_decoding_fixture.h"
+#include "http_content_coding.h"
 #include "test_exceptions.h"
 
 TEST(Ruvia, multipart_boundary_value_enforces_rfc2046_grammar) {
@@ -756,9 +755,9 @@ TEST(Ruvia, multipart_unfolding_preserves_wire_limits_and_field_validation) {
 #include <variant>
 #include <vector>
 
-#include "ruvia/http/http_client.h"
-#include "ruvia/http/http_header.h"
-#include "ruvia/http/http_response_server.h"
+#include "http_client_protocol.h"
+#include "http_header.h"
+#include "http_response_server.h"
 namespace {
 
 using ruvia::http_parse_error;

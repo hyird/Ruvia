@@ -17,11 +17,10 @@
 #include <asio/write.hpp>
 #include <openssl/ssl.h>
 
-#include "ruvia/web/app.h"
-#include "ruvia/web/context.h"
-#include "ruvia/web/middleware.h"
-
+#include "app.h"
+#include "context.h"
 #include "http_server_fixture.h"
+#include "middleware.h"
 // A cleartext listener with auto_https_redirect_ answers every request with a
 // permanent redirect to the HTTPS service and closes. A client that accepts
 // no content coding cannot take the redirect's representation, so it gets a

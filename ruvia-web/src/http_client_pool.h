@@ -37,30 +37,29 @@
 #include <asio/ssl/stream.hpp>
 #include <openssl/types.h>
 
-#include "ruvia/core/event_loop.h"
-#include "ruvia/core/stop_token.h"
-#include "ruvia/core/task.h"
-#include "ruvia/core/task_scope.h"
-#include "ruvia/core/worker_ref.h"
-#include "ruvia/core/worker_wait.h"
-#include "ruvia/http/borrowed_text.h"
-#include "ruvia/http/http_cache.h"
-#include "ruvia/http/http_client.h"
-#include "ruvia/http/http_content_coding.h"
-#include "ruvia/http/http_header.h"
-#include "ruvia/http/http_request.h"
-#include "ruvia/http/http_response.h"
-#include "ruvia/http/websocket_handshake.h"
-#include "ruvia/web/http_client.h"
-#include "ruvia/web/http_client_types.h"
-
+#include "borrowed_text.h"
 #include "connection_lifecycle.h"
+#include "event_loop.h"
+#include "http_cache.h"
+#include "http_client.h"
+#include "http_client_protocol.h"
+#include "http_client_types.h"
+#include "http_content_coding.h"
+#include "http_header.h"
+#include "http_request.h"
+#include "http_response.h"
+#include "stop_token.h"
+#include "task.h"
+#include "task_scope.h"
+#include "websocket_handshake.h"
+#include "worker_ref.h"
+#include "worker_wait.h"
 
 #ifdef RUVIA_ENABLE_HTTP2
-#include "ruvia/http/http2_connection.h"
+#include "http2_connection.h"
 #endif
 #ifdef RUVIA_ENABLE_HTTP3
-#include "ruvia/http/http3_connection.h"
+#include "http3_connection.h"
 #endif
 
 namespace ruvia::detail {

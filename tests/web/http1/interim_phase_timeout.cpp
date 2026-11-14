@@ -19,13 +19,12 @@
 #include <asio/write.hpp>
 #include <openssl/ssl.h>
 
-#include "ruvia/core/task_scope.h"
-#include "ruvia/web/app.h"
-#include "ruvia/web/context.h"
-#include "ruvia/web/controller.h"
-#include "ruvia/web/streaming.h"
-
+#include "app.h"
+#include "context.h"
+#include "controller.h"
 #include "http_server_fixture.h"
+#include "streaming.h"
+#include "task_scope.h"
 // An interim head sent from a handler first writes the pipelined responses
 // held before it; over TLS that write always completes asynchronously. Once
 // it and the interim head are out, the handler is timed as a handler again

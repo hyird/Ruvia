@@ -22,15 +22,14 @@
 #include <asio/read_until.hpp>
 #include <asio/write.hpp>
 
-#include "ruvia/core/task_scope.h"
-#include "ruvia/web/app.h"
-#include "ruvia/web/context.h"
-#include "ruvia/web/controller.h"
-#include "ruvia/web/http_server.h"
-#include "ruvia/web/middleware.h"
-#include "ruvia/web/streaming.h"
-
+#include "app.h"
+#include "context.h"
+#include "controller.h"
+#include "http_server.h"
 #include "http_server_fixture.h"
+#include "middleware.h"
+#include "streaming.h"
+#include "task_scope.h"
 #include "worker_task_fixture.h"
 // Application-wide response policy (CORS, access log, session commit) on the
 // heads that do not pass through the buffered response tail: response streams

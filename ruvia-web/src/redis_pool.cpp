@@ -27,15 +27,14 @@
 #include <openssl/crypto.h>
 #include <openssl/evp.h>
 
-#include "ruvia/core/event_loop.h"
-#include "ruvia/core/stop_token.h"
-#include "ruvia/http/borrowed_text.h"
-#include "ruvia/http/http_header.h"
-#include "ruvia/web/model.h"
-#include "ruvia/web/redis/redis.h"
-
+#include "borrowed_text.h"
 #include "connection_lifecycle.h"
+#include "event_loop.h"
 #include "http_client_pool.h"
+#include "http_header.h"
+#include "model.h"
+#include "redis.h"
+#include "stop_token.h"
 namespace ruvia::detail {
 namespace {
 

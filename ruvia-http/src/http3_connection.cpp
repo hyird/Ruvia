@@ -1,4 +1,4 @@
-#include "ruvia/http/http3_connection.h"
+#include "http3_connection.h"
 
 #include <nghttp3/nghttp3.h>
 
@@ -21,11 +21,10 @@
 #include <variant>
 #include <vector>
 
-#include "ruvia/http/borrowed_text.h"
-#include "ruvia/http/http_header.h"
-#include "ruvia/http/http_request.h"
-
+#include "borrowed_text.h"
 #include "http_connection_fields.h"
+#include "http_header.h"
+#include "http_request.h"
 namespace ruvia::detail {
 
 // Dynamic ORIGIN frames share the control stream with nghttp3 output. The

@@ -7,11 +7,11 @@
 #include <string_view>
 #include <utility>
 
-#include "ruvia/http/http2_connection.h"
-#include "ruvia/http/http_cache.h"
-#include "ruvia/http/http_content_coding.h"
-#include "ruvia/http/http_header.h"
-#include "ruvia/http/http_response.h"
+#include "http2_connection.h"
+#include "http_cache.h"
+#include "http_content_coding.h"
+#include "http_header.h"
+#include "http_response.h"
 
 // Media-type syntax (RFC 9110 section 8.3.1): splitting a field value into
 // type/subtype and parameters, comparing parameter values across token and
@@ -25,11 +25,10 @@
 #include <stdexcept>
 #include <vector>
 
-#include "ruvia/http/borrowed_text.h"
-#include "ruvia/http/http_request.h"
-#include "ruvia/http/http_response_server.h"
-
+#include "borrowed_text.h"
 #include "http_connection_fields.h"
+#include "http_request.h"
+#include "http_response_server.h"
 
 namespace ruvia::detail {
 

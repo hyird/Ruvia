@@ -21,17 +21,16 @@
 
 #include <asio.hpp>
 
-#include "ruvia/core/event_loop.h"
-#include "ruvia/core/task_scope.h"
-#include "ruvia/http/http2_connection.h"
-#include "ruvia/http/http_header.h"
-#include "ruvia/web/app.h"
-#include "ruvia/web/context.h"
-#include "ruvia/web/controller.h"
-#include "ruvia/web/middleware.h"
-#include "ruvia/web/streaming.h"
-
+#include "app.h"
+#include "context.h"
+#include "controller.h"
+#include "event_loop.h"
+#include "http2_connection.h"
+#include "http_header.h"
 #include "http_server_fixture.h"
+#include "middleware.h"
+#include "streaming.h"
+#include "task_scope.h"
 #include "worker_task_fixture.h"
 namespace {
 struct connect_observation {

@@ -1,9 +1,8 @@
 #include <utility>
 
-#include "ruvia/web/db/db.h"
-#include "ruvia/web/db/db_query.h"
-
 #include "connection_lifecycle.h"
+#include "db.h"
+#include "db_query.h"
 // The per-request database handle: it borrows a registry entry for the
 // operation's lifetime and hands each call to the pool.
 
@@ -18,10 +17,9 @@
 #include <type_traits>
 #include <variant>
 
-#include "ruvia/core/event_loop.h"
-#include "ruvia/web/db/db_session.h"
-
 #include "db_pool.h"
+#include "db_session.h"
+#include "event_loop.h"
 #include "http_client_pool.h"
 #include "redis_pool.h"
 

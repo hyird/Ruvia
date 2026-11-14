@@ -26,27 +26,24 @@
 #include <asio/read_until.hpp>
 #include <asio/write.hpp>
 
-#include "ruvia/core/blocking_pool.h"
-#include "ruvia/core/event_loop.h"
-#include "ruvia/core/task_scope.h"
-#include "ruvia/http/http_header.h"
-#include "ruvia/web/app.h"
-#include "ruvia/web/context.h"
-#include "ruvia/web/controller.h"
-#include "ruvia/web/http_client.h"
-#include "ruvia/web/http_server.h"
-#include "ruvia/web/middleware.h"
-
+#include "app.h"
+#include "blocking_pool.h"
+#include "context.h"
+#include "controller.h"
+#include "event_loop.h"
+#include "http_client.h"
+#include "http_header.h"
+#include "http_server.h"
 #include "http_server_fixture.h"
+#include "middleware.h"
+#include "task_scope.h"
 #include "worker_task_fixture.h"
 #if defined(RUVIA_ENABLE_HTTP3)
-#include "ruvia/http/http3_connection.h"
-
+#include "http3_connection.h"
 #include "http3_test_client.h"
 #endif
 #if defined(RUVIA_ENABLE_HTTP2)
-#include "ruvia/http/http2_connection.h"
-
+#include "http2_connection.h"
 #include "http_server_fixture.h"
 #endif
 

@@ -19,17 +19,16 @@
 #include <variant>
 #include <vector>
 
-#include "ruvia/http/borrowed_text.h"
-#include "ruvia/http/http2_connection.h"
-#include "ruvia/http/http3_connection.h"
-#include "ruvia/http/http_cache.h"
-#include "ruvia/http/http_client.h"
-#include "ruvia/http/http_content_coding.h"
-#include "ruvia/http/http_header.h"
-#include "ruvia/http/http_request.h"
-#include "ruvia/http/http_response.h"
-#include "ruvia/http/http_response_server.h"
-
+#include "borrowed_text.h"
+#include "http2_connection.h"
+#include "http3_connection.h"
+#include "http_cache.h"
+#include "http_client_protocol.h"
+#include "http_content_coding.h"
+#include "http_header.h"
+#include "http_request.h"
+#include "http_response.h"
+#include "http_response_server.h"
 #include "test_exceptions.h"
 
 namespace {

@@ -11,8 +11,8 @@
 #include <string>
 #include <string_view>
 
-#include "ruvia/web/middleware.h"
-#include "ruvia/web/model.h"
+#include "middleware.h"
+#include "model.h"
 RUVIA_MODEL(import_record, RUVIA_REQUIRED_FIELD(name, ruvia::string), RUVIA_REQUIRED_FIELD(count, ruvia::int64), RUVIA_OPTIONAL_FIELD(ratio, ruvia::double_value), RUVIA_OPTIONAL_FIELD(enabled, ruvia::bool_value), RUVIA_OPTIONAL_FIELD(labels, ruvia::array<ruvia::string>), RUVIA_OPTIONAL_FIELD(metadata, ruvia::json_object));
 
 int main() {

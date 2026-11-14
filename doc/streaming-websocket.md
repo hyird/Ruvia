@@ -6,8 +6,8 @@
 
 ## 1. 流式请求体与流式响应 / SSE
 
-头文件：`"ruvia/web/streaming.h"`、`"ruvia/http/http_content_coding.h"`。
-不经路由、以同一组 `body_reader` / `response_stream_writer` 直接处理监听器请求的方式见 [web-guide 1.8 请求流分发](web-guide.md#18-请求流分发ruviawebrequest_streamh)；绑定调用方事件循环、接管外部已接受连接见 [1.9 独立入站宿主](web-guide.md#19-独立入站宿主ruviawebhttp_serverh)。
+头文件：`"streaming.h"`、`"http_content_coding.h"`。
+不经路由、以同一组 `body_reader` / `response_stream_writer` 直接处理监听器请求的方式见 [web-guide 1.8 请求流分发](web-guide.md#18-请求流分发http_serverh)；绑定调用方事件循环、接管外部已接受连接见 [1.9 独立入站宿主](web-guide.md#19-独立入站宿主http_serverh)。
 
 ### 1.1 流式消费请求体（`body_reader` 与 `multipart_reader`）
 
@@ -114,7 +114,7 @@ ruvia::task<void> stream_events(ruvia::context& c) {
 
 `sse_writer` 是可复制句柄，操作借用其响应流；`operation` 语义同 `response_stream_writer`。
 
-出站客户端读取 `text/event-stream` 响应时，把 `response.stream().read()` 读到的分块交给 `ruvia::sse_parser`（`"ruvia/http/http_content_coding.h"`）解析事件；其契约见 [SSE 解析](core-and-http.md#3-消息模型内容压缩编解码multipart-与-sse)。
+出站客户端读取 `text/event-stream` 响应时，把 `response.stream().read()` 读到的分块交给 `ruvia::sse_parser`（`"http_content_coding.h"`）解析事件；其契约见 [SSE 解析](core-and-http.md#3-消息模型内容压缩编解码multipart-与-sse)。
 
 #### 客户端断开即取消请求
 
@@ -132,9 +132,9 @@ ruvia::task<void> stream_events(ruvia::context& c) {
 
 ```cpp
 #include <string>
-#include "ruvia/core/worker_wait.h"
-#include "ruvia/web/context.h"
-#include "ruvia/web/streaming.h"
+#include "worker_wait.h"
+#include "context.h"
+#include "streaming.h"
 
 ruvia::task<void> stream_subscription(
     ruvia::context& c,
@@ -178,11 +178,11 @@ ruvia::task<void> stream_subscription(
 
 ## 3. WebSocket 服务端
 
-头文件：`"ruvia/web/streaming.h"`、`"ruvia/http/websocket_handshake.h"`。
+头文件：`"streaming.h"`、`"websocket_handshake.h"`。
 参考示例：[examples/web/websocket.cpp](../examples/web/websocket.cpp)。
 
 Ruvia WebSocket 服务端支持 HTTP/1.1 `Upgrade: websocket`、HTTP/2 Extended CONNECT（RFC 8441）与 HTTP/3 Extended CONNECT（RFC 9220）；后两者使用 `:protocol = websocket`，路由代码统一。
-不注册路由时，通过 [`request_stream::accept_websocket()`](web-guide.md#18-请求流分发ruviawebrequest_streamh) 显式协商并取得同一个 `websocket` 会话接口。
+不注册路由时，通过 [`request_stream::accept_websocket()`](web-guide.md#18-请求流分发http_serverh) 显式协商并取得同一个 `websocket` 会话接口。
 
 - **Extended CONNECT 字段**：HTTP/2 中的 `Sec-WebSocket-Key` / `Sec-WebSocket-Accept` 已被 `:protocol` 取代，按 [RFC 8441 §5](https://www.rfc-editor.org/rfc/rfc8441.html#section-5) 不做处理，既不校验也不拒绝。
 - **子协议提议**：接收方跳过 `Sec-WebSocket-Protocol` 提议中的重复子协议；唯一性是 RFC 6455 §4.1 对发送方客户端的要求。
@@ -191,7 +191,7 @@ Ruvia WebSocket 服务端支持 HTTP/1.1 `Upgrade: websocket`、HTTP/2 Extended 
 ### 3.1 路由注册与配置
 
 ```cpp
-#include "ruvia/web/streaming.h"
+#include "streaming.h"
 
 inline const ruvia::websocket_route_config chat_ws_options{
     .subprotocols_ = {"chat.v1", "json.v1"},
@@ -268,7 +268,7 @@ private:
 - **帧规则**：首帧携带 opcode，后续为续帧（opcode 0）；`permessage-deflate` 下 RSV1 只在首帧，整条消息是一条跨分片的 DEFLATE 流，每块以 sync flush 结尾，末块去掉 `00 00 FF FF`；文本跨分片校验 UTF-8，消息上限按整条消息累计；`bytes_sent()` 随每个分片累计。
 - **未完成中止**：写入器析构或 `abort()` 时消息未完成即中止会话（对端无法得知消息边界），记为 `aborted`；写入器借用 `websocket`，随其失效。
 
-`websocket_termination`（`"ruvia/http/websocket_handshake.h"`）由协议核心 `websocket_connection` 单点记录；后续 Close、EOF 或 `abort()` 不覆盖已记录原因：
+`websocket_termination`（`"websocket_handshake.h"`）由协议核心 `websocket_connection` 单点记录；后续 Close、EOF 或 `abort()` 不覆盖已记录原因：
 
 | 取值 | 触发 |
 | --- | --- |
@@ -301,9 +301,9 @@ private:
 
 ## 4. HTTP `CONNECT` 与 `CONNECT-UDP` 隧道
 
-头文件：`"ruvia/web/streaming.h"`。
+头文件：`"streaming.h"`。
 参考示例：[examples/web/tunnels.cpp](../examples/web/tunnels.cpp)。
-不经 HTTP、直接接管整条 TCP/TLS 连接字节流的监听器见 [web-guide 1.7 原始连接分发](web-guide.md#17-原始连接分发ruviawebserver_connectionh)；不经路由在回调中决定是否接受 CONNECT / HTTP/1.1 Upgrade 隧道见 [web-guide 1.8 请求流分发](web-guide.md#18-请求流分发ruviawebrequest_streamh)。
+不经 HTTP、直接接管整条 TCP/TLS 连接字节流的监听器见 [web-guide 1.7 原始连接分发](web-guide.md#17-原始连接分发http_serverh)；不经路由在回调中决定是否接受 CONNECT / HTTP/1.1 Upgrade 隧道见 [web-guide 1.8 请求流分发](web-guide.md#18-请求流分发http_serverh)。
 
 ### 4.1 服务端 `CONNECT` 字节流隧道
 
@@ -325,7 +325,7 @@ HTTP/2 客户端在收到 2xx 前乐观发送的 `DATA`（RFC 9113 §8.5；RFC 9
 
 HTTP/3 使用相同路由及隧道门面；WebSocket 经 RFC 9220 Extended CONNECT，普通 CONNECT 经 RFC 9114 §4.4。`finish()` 仅关闭发送方向，接收方向继续读到对端结束；隧道流与同连接的其他请求独立。
 
-- **操作回收**：与[原始连接分发](web-guide.md#17-原始连接分发ruviawebserver_connectionh)采用相同的在途操作与冷任务回收规则。
+- **操作回收**：与[原始连接分发](web-guide.md#17-原始连接分发http_serverh)采用相同的在途操作与冷任务回收规则。
 
 TLS 隧道把对端未发送 `close_notify` 就关闭 TCP 视为输入结束，`tunnel.read()` 返回 `std::nullopt`（与 Go `crypto/tls` 在记录边界接受截断的策略一致）；HTTP/1.1 响应体等有消息定界的读取路径仍把该情形作为传输错误上报。
 
@@ -374,7 +374,7 @@ HTTP/3 的畸形 Capsule 中止对应流并使用 `H3_MESSAGE_ERROR`；原生 HT
 
 ## 5. 出站 HTTP 客户端
 
-头文件：`"ruvia/web/http_client.h"`。具名 origin 各有独立连接池；`http_client(event_loop, ...)` 可直接用于其他项目，不要求 `application`、路由或 `context`。框架处理器通过 `c.client(alias)` 借用注册能力。
+头文件：`"http_client.h"`。具名 origin 各有独立连接池；`http_client(event_loop, ...)` 可直接用于其他项目，不要求 `application`、路由或 `context`。框架处理器通过 `c.client(alias)` 借用注册能力。
 
 ### 5.1 请求、响应与会话
 
@@ -415,7 +415,7 @@ co_return c.text(body.text());
 | `response.json<T>(max_bytes)` | 收集正文并按公开 Model JSON 契约解析 |
 | `response.stream().read()` / `.text()` | 拉取下一块正文；`nullopt` 表示 EOF，视图在下一次正文操作启动前有效 |
 | `response.pipe_to(c)` / `response.pipe_to(request_stream)` | 将上游响应转发给当前服务端响应；提交后的传输失败中止流，不伪造完整响应 |
-| `response.stream().pipe_to(writer)` | 只转发正文；调用方先设置响应元数据并 `commit()`，仅 `body` 结果允许转发。入站 Upgrade / CONNECT 拒绝同样支持流式输出，见[请求流分发](web-guide.md#18-请求流分发ruviawebrequest_streamh) |
+| `response.stream().pipe_to(writer)` | 只转发正文；调用方先设置响应元数据并 `commit()`，仅 `body` 结果允许转发。入站 Upgrade / CONNECT 拒绝同样支持流式输出，见[请求流分发](web-guide.md#18-请求流分发http_serverh) |
 | `response.reprioritize(http_priority)` | 对尚在传输中的 HTTP/2 或 HTTP/3 响应流发送 RFC 9218 `PRIORITY_UPDATE` 帧 |
 | `client.connect(authority).open()`、`client.udp(path).open()` | 打开字节隧道或 CONNECT-UDP；结果区分已建立的隧道与非 2xx HTTP 响应 |
 | `request.upgrade(config = {})` | 将带 `Connection: Upgrade`、`Upgrade` 字段的 HTTP/1.1 请求升级为原始字节隧道；非 101 保留为普通流式 HTTP 响应 |

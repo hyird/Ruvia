@@ -1,4 +1,4 @@
-#include "ruvia/core/task_scope.h"
+#include "task_scope.h"
 
 #include <chrono>
 #include <concepts>
@@ -21,9 +21,8 @@
 
 #include <asio/io_context.hpp>
 
-#include "ruvia/core/event_loop.h"
-#include "ruvia/core/stop_token.h"
-
+#include "event_loop.h"
+#include "stop_token.h"
 #include "worker_task_fixture.h"
 
 namespace ruvia::test::task_scope_tests {

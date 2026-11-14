@@ -27,17 +27,16 @@
 #include <openssl/evp.h>
 #include <openssl/sha.h>
 
-#include "ruvia/core/stop_token.h"
-#include "ruvia/core/task.h"
-#include "ruvia/core/worker_ref.h"
-#include "ruvia/core/worker_wait.h"
-#include "ruvia/http/borrowed_text.h"
-#include "ruvia/web/db/db.h"
-#include "ruvia/web/db/db_query.h"
-#include "ruvia/web/db/db_session.h"
-
+#include "borrowed_text.h"
 #include "connection_lifecycle.h"
+#include "db.h"
+#include "db_query.h"
+#include "db_session.h"
 #include "http_client_pool.h"
+#include "stop_token.h"
+#include "task.h"
+#include "worker_ref.h"
+#include "worker_wait.h"
 #ifdef _WIN32
 #include <winsock2.h>
 
@@ -51,10 +50,10 @@
 #include <asio/io_context.hpp>
 #include <asio/ip/tcp.hpp>
 
-#include "ruvia/core/event_loop.h"
+#include "event_loop.h"
 
 #ifdef RUVIA_ENABLE_REDIS
-#include "ruvia/web/redis/redis.h"
+#include "redis.h"
 #endif
 
 namespace ruvia::detail {

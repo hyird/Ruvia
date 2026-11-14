@@ -33,15 +33,14 @@
 #include <asio/write.hpp>
 #include <openssl/ssl.h>
 
-#include "ruvia/core/blocking_pool.h"
-#include "ruvia/core/event_loop.h"
-#include "ruvia/core/task_scope.h"
-#include "ruvia/http/http2_connection.h"
-#include "ruvia/http/http_response_server.h"
-#include "ruvia/web/http_client.h"
-
+#include "blocking_pool.h"
 #include "content_decoding_fixture.h"
+#include "event_loop.h"
+#include "http2_connection.h"
+#include "http_client.h"
+#include "http_response_server.h"
 #include "http_server_fixture.h"
+#include "task_scope.h"
 #include "worker_task_fixture.h"
 namespace origin_routing_tests {
 

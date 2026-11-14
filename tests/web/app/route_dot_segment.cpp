@@ -9,9 +9,9 @@
 #include <stdexcept>
 #include <string>
 
-#include "ruvia/web/app.h"
-#include "ruvia/web/context.h"
-#include "ruvia/web/controller.h"
+#include "app.h"
+#include "context.h"
+#include "controller.h"
 namespace {
 
 class route_dot_segment_controller final {

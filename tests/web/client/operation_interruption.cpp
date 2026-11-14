@@ -5,10 +5,9 @@
 #include <utility>
 #include <vector>
 
-#include "ruvia/core/event_loop.h"
-#include "ruvia/web/http_client.h"
-
 #include "client_operation_fixture.h"
+#include "event_loop.h"
+#include "http_client.h"
 #include "http_server_fixture.h"
 #include "worker_task_fixture.h"
 namespace client_operation_interruption_test {

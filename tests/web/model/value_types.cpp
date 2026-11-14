@@ -18,9 +18,8 @@
 #include <variant>
 #include <vector>
 
-#include "ruvia/web/middleware.h"
-#include "ruvia/web/model.h"
-
+#include "middleware.h"
+#include "model.h"
 #include "test_exceptions.h"
 
 namespace {

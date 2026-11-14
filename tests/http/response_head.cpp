@@ -15,13 +15,12 @@
 #include <string_view>
 #include <utility>
 
-#include "ruvia/http/http_cache.h"
-#include "ruvia/http/http_client.h"
-#include "ruvia/http/http_header.h"
-#include "ruvia/http/http_response.h"
-#include "ruvia/http/http_response_server.h"
-
 #include "content_decoding_fixture.h"
+#include "http_cache.h"
+#include "http_client_protocol.h"
+#include "http_header.h"
+#include "http_response.h"
+#include "http_response_server.h"
 #include "test_exceptions.h"
 
 namespace {

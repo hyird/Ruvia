@@ -47,11 +47,8 @@ IncludeCategories:
   - Regex: '^<'
     Priority: 2
     SortPriority: 2
-  - Regex: '^"ruvia/'
+  - Regex: '.*'
     Priority: 4
     SortPriority: 4
-  - Regex: '.*'
-    Priority: 5
-    SortPriority: 5
 FixNamespaceComments: true
 SpacesBeforeTrailingComments: 2

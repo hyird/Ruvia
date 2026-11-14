@@ -27,12 +27,11 @@
 #include <openssl/err.h>
 #include <openssl/ssl.h>
 
-#include "ruvia/web/app.h"
-#include "ruvia/web/context.h"
-#include "ruvia/web/controller.h"
-#include "ruvia/web/streaming.h"
-
+#include "app.h"
+#include "context.h"
+#include "controller.h"
 #include "http_server_fixture.h"
+#include "streaming.h"
 #include "worker_task_fixture.h"
 namespace tls_paths_test {
 

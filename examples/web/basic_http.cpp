@@ -17,10 +17,10 @@
 #include <system_error>
 #include <variant>
 
-#include "ruvia/http/borrowed_text.h"
-#include "ruvia/web/app.h"
-#include "ruvia/web/controller.h"
-#include "ruvia/web/middleware.h"
+#include "app.h"
+#include "borrowed_text.h"
+#include "controller.h"
+#include "middleware.h"
 class request_id_middleware final {
 public:
     ruvia::task<void> invoke(ruvia::context& c, ruvia::next& next_value) {

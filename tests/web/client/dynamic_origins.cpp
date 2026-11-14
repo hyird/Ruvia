@@ -31,15 +31,14 @@
 #include <asio/write.hpp>
 #include <openssl/ssl.h>
 
-#include "ruvia/core/blocking_pool.h"
-#include "ruvia/core/event_loop.h"
-#include "ruvia/core/stop_token.h"
-#include "ruvia/core/task_scope.h"
-#include "ruvia/http/http_header.h"
-#include "ruvia/web/http_client.h"
-#include "ruvia/web/http_client_types.h"
-
+#include "blocking_pool.h"
+#include "event_loop.h"
+#include "http_client.h"
+#include "http_client_types.h"
+#include "http_header.h"
 #include "http_server_fixture.h"
+#include "stop_token.h"
+#include "task_scope.h"
 #include "worker_task_fixture.h"
 
 namespace ruvia::test::dynamic_origin_tests {

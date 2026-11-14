@@ -23,14 +23,13 @@
 #include <asio/socket_base.hpp>
 #include <asio/write.hpp>
 
-#include "ruvia/http/http_content_coding.h"
-#include "ruvia/web/app.h"
-#include "ruvia/web/context.h"
-#include "ruvia/web/controller.h"
-#include "ruvia/web/http_server.h"
-#include "ruvia/web/streaming.h"
-
+#include "app.h"
+#include "context.h"
+#include "controller.h"
+#include "http_content_coding.h"
+#include "http_server.h"
 #include "http_server_fixture.h"
+#include "streaming.h"
 #include "worker_task_fixture.h"
 // Inline buffered-response compression on one worker, whose encoders are
 // reused across responses. This executable owns its application, so the

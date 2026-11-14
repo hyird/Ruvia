@@ -34,15 +34,14 @@
 #include <asio/use_awaitable.hpp>
 #include <asio/write.hpp>
 
-#include "ruvia/core/event_loop.h"
-#include "ruvia/core/task.h"
-#include "ruvia/core/task_scope.h"
-#include "ruvia/web/db/db.h"
-#include "ruvia/web/db/db_query.h"
-#include "ruvia/web/db/db_session.h"
-#include "ruvia/web/redis/redis.h"
-
 #include "backend_client_fixture.h"
+#include "db.h"
+#include "db_query.h"
+#include "db_session.h"
+#include "event_loop.h"
+#include "redis.h"
+#include "task.h"
+#include "task_scope.h"
 #include "worker_task_fixture.h"
 // Removing a query-result cache id must drop every result a repository builder
 // cached under that id, so the next get_one/get_exists/get_count reads the
@@ -58,8 +57,7 @@
 #include <string>
 #include <string_view>
 
-#include "ruvia/web/db/db.h"
-
+#include "db.h"
 #include "test_exceptions.h"
 
 namespace {

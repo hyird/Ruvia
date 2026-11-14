@@ -39,21 +39,20 @@
 #include <openssl/err.h>
 #include <openssl/ssl.h>
 
-#include "ruvia/core/blocking_pool.h"
-#include "ruvia/core/event_loop.h"
-#include "ruvia/core/task_scope.h"
-#include "ruvia/http/http2_connection.h"
-#include "ruvia/http/http_content_coding.h"
-#include "ruvia/http/http_header.h"
-#include "ruvia/http/http_request.h"
-#include "ruvia/http/http_response_server.h"
-#include "ruvia/web/http_client.h"
-#include "ruvia/web/http_client_types.h"
-#include "ruvia/web/model.h"
-#include "ruvia/web/streaming.h"
-
+#include "blocking_pool.h"
 #include "content_decoding_fixture.h"
+#include "event_loop.h"
+#include "http2_connection.h"
+#include "http_client.h"
+#include "http_client_types.h"
+#include "http_content_coding.h"
+#include "http_header.h"
+#include "http_request.h"
+#include "http_response_server.h"
 #include "http_server_fixture.h"
+#include "model.h"
+#include "streaming.h"
+#include "task_scope.h"
 #include "worker_task_fixture.h"
 namespace {
 class test_worker final {

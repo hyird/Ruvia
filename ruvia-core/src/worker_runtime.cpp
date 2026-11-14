@@ -29,10 +29,10 @@
 #include <asio/post.hpp>
 #include <asio/steady_timer.hpp>
 
-#include "ruvia/core/event_loop.h"
-#include "ruvia/core/stop_token.h"
-#include "ruvia/core/task_scope.h"
-#include "ruvia/core/worker_ref.h"
+#include "event_loop.h"
+#include "stop_token.h"
+#include "task_scope.h"
+#include "worker_ref.h"
 #if defined(_WIN32)
 #include <windows.h>
 #endif

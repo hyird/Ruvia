@@ -58,8 +58,8 @@ function(ruvia_install_component target component)
 endfunction()
 
 function(ruvia_assert_component_header_path component relative_path)
-    set(_ruvia_expected_header_root "include/ruvia/${component}")
-    if(NOT relative_path MATCHES "^${_ruvia_expected_header_root}(/|$)")
+    set(_ruvia_expected_header_root "include")
+    if(NOT relative_path MATCHES "^${_ruvia_expected_header_root}/[^/]+\\.h$")
         message(FATAL_ERROR
             "${component} cannot install a header outside ${_ruvia_expected_header_root}: ${relative_path}")
     endif()
@@ -80,13 +80,9 @@ endfunction()
 function(ruvia_install_public_headers component)
     foreach(_ruvia_header IN LISTS ARGN)
         ruvia_assert_component_header_path(${component} "${_ruvia_header}")
-        cmake_path(GET _ruvia_header PARENT_PATH _ruvia_header_dir)
-        file(RELATIVE_PATH _ruvia_header_install_subdir
-            "${CMAKE_CURRENT_SOURCE_DIR}/include"
-            "${CMAKE_CURRENT_SOURCE_DIR}/${_ruvia_header_dir}")
         install(
             FILES "${CMAKE_CURRENT_SOURCE_DIR}/${_ruvia_header}"
-            DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/${_ruvia_header_install_subdir}"
+            DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}"
             COMPONENT ${component}
         )
     endforeach()

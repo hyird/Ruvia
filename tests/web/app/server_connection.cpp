@@ -28,13 +28,12 @@
 #include <asio/write.hpp>
 #include <openssl/ssl.h>
 
-#include "ruvia/core/task_scope.h"
-#include "ruvia/web/app.h"
-#include "ruvia/web/context.h"
-#include "ruvia/web/controller.h"
-#include "ruvia/web/http_server.h"
-
+#include "app.h"
+#include "context.h"
+#include "controller.h"
+#include "http_server.h"
 #include "http_server_fixture.h"
+#include "task_scope.h"
 namespace server_connection_test {
 
 using namespace std::chrono_literals;

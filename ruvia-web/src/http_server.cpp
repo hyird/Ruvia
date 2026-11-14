@@ -1,4 +1,4 @@
-#include "ruvia/web/http_server.h"
+#include "http_server.h"
 
 #include <algorithm>
 #include <array>
@@ -36,18 +36,17 @@
 #include <openssl/ocsp.h>
 #include <openssl/ssl.h>
 
-#include "ruvia/core/blocking_pool.h"
-#include "ruvia/core/event_loop.h"
-#include "ruvia/core/stop_token.h"
-#include "ruvia/core/task_scope.h"
-#include "ruvia/http/http_header.h"
-#include "ruvia/web/controller.h"
-
+#include "blocking_pool.h"
 #include "connection_lifecycle.h"
+#include "controller.h"
+#include "event_loop.h"
+#include "http_header.h"
 #include "route_table.h"
+#include "stop_token.h"
+#include "task_scope.h"
 
 #if defined(RUVIA_ENABLE_HTTP3)
-#include "ruvia/http/http3_connection.h"
+#include "http3_connection.h"
 #endif
 #if defined(_WIN32)
 #include <windows.h>

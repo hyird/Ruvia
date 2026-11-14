@@ -16,12 +16,11 @@
 #include <type_traits>
 #include <utility>
 
-#include "ruvia/http/http_request.h"
-#include "ruvia/web/app.h"
-#include "ruvia/web/controller.h"
-#include "ruvia/web/middleware.h"
-#include "ruvia/web/model.h"
-
+#include "app.h"
+#include "controller.h"
+#include "http_request.h"
+#include "middleware.h"
+#include "model.h"
 #include "test_exceptions.h"
 
 namespace ruvia::test {

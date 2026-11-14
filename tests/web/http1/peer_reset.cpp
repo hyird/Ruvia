@@ -15,13 +15,12 @@
 #include <asio/ip/tcp.hpp>
 #include <asio/write.hpp>
 
-#include "ruvia/core/task_scope.h"
-#include "ruvia/web/app.h"
-#include "ruvia/web/context.h"
-#include "ruvia/web/controller.h"
-#include "ruvia/web/streaming.h"
-
+#include "app.h"
+#include "context.h"
+#include "controller.h"
 #include "http_server_fixture.h"
+#include "streaming.h"
+#include "task_scope.h"
 // A peer that resets its connection while a buffered handler is still running
 // makes that handler's own transport write -- an interim head, or the 100
 // Continue its body read sends -- fail. That is the connection ending, not the

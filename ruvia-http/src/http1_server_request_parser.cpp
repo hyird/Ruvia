@@ -18,15 +18,14 @@
 #include <utility>
 #include <variant>
 
-#include "ruvia/http/borrowed_text.h"
-#include "ruvia/http/http_client.h"
-#include "ruvia/http/http_header.h"
-#include "ruvia/http/http_request.h"
-#include "ruvia/http/http_response.h"
-#include "ruvia/http/http_response_server.h"
-#include "ruvia/http/websocket_handshake.h"
-
+#include "borrowed_text.h"
+#include "http_client_protocol.h"
 #include "http_connection_fields.h"
+#include "http_header.h"
+#include "http_request.h"
+#include "http_response.h"
+#include "http_response_server.h"
+#include "websocket_handshake.h"
 
 namespace ruvia {
 namespace {

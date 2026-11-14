@@ -38,12 +38,11 @@
 #include <openssl/ssl.h>
 #include <openssl/x509.h>
 
-#include "ruvia/core/blocking_pool.h"
-#include "ruvia/core/event_loop.h"
-#include "ruvia/web/app.h"
-#include "ruvia/web/context.h"
-#include "ruvia/web/controller.h"
-
+#include "app.h"
+#include "blocking_pool.h"
+#include "context.h"
+#include "controller.h"
+#include "event_loop.h"
 #include "http_server_fixture.h"
 #if defined(RUVIA_ENABLE_HTTP3)
 #include <asio/ip/udp.hpp>
