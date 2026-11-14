@@ -130,10 +130,6 @@ private:
     std::exception_ptr failure_;
 };
 
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
-
 inline constexpr std::size_t redis_int_scratch_size = 20;
 inline constexpr std::size_t redis_score_scratch_size = 64;
 
@@ -193,10 +189,6 @@ template <typename enumerate_type>
 [[nodiscard]] redis_owned_command redis_eval_args(std::string_view command, std::string_view script, std::span<const std::string_view> keys, std::span<const std::string_view> argv);
 [[nodiscard]] redis_owned_command redis_blocking_pop_args(std::string_view command, std::span<const std::string_view> keys, redis_block_wait wait);
 [[nodiscard]] redis_owned_command redis_x_read_group_args(std::string_view group, std::string_view consumer, std::span<const redis_stream_read_view> streams, const redis_x_read_group_options& options);
-
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
 
 struct redis_types_access final {
     [[nodiscard]] static redis_set_result set_result(bool applied, std::optional<std::string> previous = std::nullopt) {
@@ -358,10 +350,6 @@ void parse_redis_pong(redis_value&& value);
 // The reply to an argument-less PING on a subscription connection.
 [[nodiscard]] bool is_redis_subscription_pong(const redis_value& value);
 
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
-
 inline void validate_redis_config(const redis_config& config) {
     validate_client_tls_config(config.tls_);
     validate_client_origin_host(config.host_, "redis host must not be empty", "redis host is invalid");
@@ -449,12 +437,6 @@ private:
 
 using redis_definition_type = named_capability_definition<redis_config_storage>;
 
-}  // namespace ruvia::detail
-
-struct redisReader;
-
-namespace ruvia::detail {
-
 struct redis_reader_deleter {
     void operator()(redisReader* reader) const noexcept;
 };
@@ -539,10 +521,6 @@ private:
     bool connected_{false};
 };
 
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
-
 struct redis_command_args_view final {
     std::span<const std::string> args_;
 };
@@ -598,10 +576,6 @@ private:
     // Declared after the slot pool, whose worker every transport borrows.
     std::vector<connection_owner_type> connections_;
 };
-
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
 
 class redis_subscription_set;
 
@@ -746,10 +720,6 @@ private:
     redis_subscription_connection* head_{nullptr};
     bool closing_{false};
 };
-
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
 
 // The single backend owner used by standalone clients and application registrations.
 // Both pools and the Pub/Sub connections borrow this stable owner's normalized

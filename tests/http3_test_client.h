@@ -1049,10 +1049,6 @@ private:
     bool handshake_confirmed_{false};
 };
 
-}  // namespace ruvia::test
-
-namespace ruvia::test {
-
 // Blocking HTTP/3 client for malformed-request wire regressions. It drives
 // ngtcp2 and nghttp3 directly, so a request field section reaches the wire
 // verbatim: ruvia's public HTTP/3 API validates every request head and never

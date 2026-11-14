@@ -605,10 +605,6 @@ inline void append_db_type_name(std::string& output, db_data_type type, std::str
     }
 }
 
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
-
 constexpr std::size_t no_db_node = std::numeric_limits<std::size_t>::max();
 
 enum class db_node_kind : std::uint8_t {
@@ -908,10 +904,6 @@ public:
     }
 };
 
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
-
 // Readiness classes a database driver can wait for. A wait completes on the
 // first class that becomes ready.
 enum class db_socket_readiness : std::uint8_t {
@@ -1040,10 +1032,6 @@ enum class db_idle_socket_status : std::uint8_t {
 // drivers keep their socket non-blocking: libpq always, MariaDB through
 // set_db_socket_non_blocking().
 [[nodiscard]] db_idle_socket_status peek_db_idle_socket(db_slot_socket::native_socket_type driver_socket) noexcept;
-
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
 
 class validated_db_config_view final {
 public:
@@ -1237,8 +1225,6 @@ struct db_definition final {
 #endif
 };
 
-}  // namespace ruvia::detail
-
 // Pipelining of buffered statements outside transactions, shared by the
 // drivers whose protocol lets one connection carry several statements at
 // once. A statement joins a pipeline group: one leased connection that
@@ -1262,9 +1248,6 @@ struct db_definition final {
 // it for every statement sharing the connection after it; such statements
 // belong in a transaction. A group dissolving with its connection left inside
 // a transaction block closes that connection.
-
-namespace ruvia::detail {
-
 template <typename driver_type>
 class db_pool;
 template <typename io_type>
@@ -1559,10 +1542,6 @@ private:
     member_type* parked_tail_{nullptr};
     std::shared_ptr<cancellation_target_type> cancellation_target_;
 };
-
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
 
 // Names one entry of a db_statement_cache by position and generation, so
 // forgetting or replacing an entry never redirects another statement's handle
@@ -1962,7 +1941,6 @@ struct mariadb_parameter_traits final {
 
 }  // namespace ruvia::detail
 
-struct st_mysql;
 struct st_mysql_stmt;
 
 namespace ruvia::detail {
@@ -2198,11 +2176,6 @@ void abandon_mariadb_prepared(mariadb_prepared_run& run) noexcept;
 // caller did (not) ask for; null when it succeeded.
 [[nodiscard]] std::exception_ptr mariadb_statement_failure(const std::exception_ptr& failure, bool extra_row_set, const std::exception_ptr& output_failure, bool returns_rows, bool returned_rows);
 
-}  // namespace ruvia::detail
-
-struct st_mysql_res;
-struct ma_charset_info_st;
-
 // MariaDB's part of statement pipelining (db_pipeline.h). A group's
 // statements are sent as separate COM_QUERY commands (mysql_send_query) and
 // their responses read in order (mysql_read_query_result and
@@ -2237,11 +2210,6 @@ struct ma_charset_info_st;
 // it, so a prepared statement cannot share the wire with other flights, and
 // waiting for each response costs more than the server saves on parsing once
 // other statements compete for the worker. Those run as pipelined text.
-
-namespace ruvia::detail {
-
-template <typename driver_type>
-class db_pool;
 struct mariadb_driver;
 
 inline constexpr std::size_t mariadb_pipeline_send_budget = 64 * 1024;
@@ -2442,8 +2410,6 @@ using postgresql_statement_cache = db_statement_cache<postgresql_statement_name>
 
 [[nodiscard]] postgresql_statement_name make_postgresql_statement_name(std::string_view sql, std::span<const unsigned int> types);
 
-template <typename driver_type>
-class db_pool;
 struct postgresql_driver;
 
 // The commands of one buffered statement flight. A first use runs as the
@@ -2526,19 +2492,11 @@ struct postgresql_session final {
     db_pipeline_group<postgresql_pipeline_io> pipeline_;
 };
 
-}  // namespace ruvia::detail
-
-struct st_mysql;
-struct pg_conn;
-
 // One worker-local database pool, shared by every driver. The pool owns lease
 // scheduling, cancellation, deadlines, connection lifecycle, and the statement,
 // stream and transaction shapes; a driver supplies its connection type, the
 // protocol hooks that talk to its client library, and the state it keeps per
 // connection (session_type) and per pool (state_type).
-
-namespace ruvia::detail {
-
 using db_resolved_addresses_type = std::vector<std::string>;
 
 [[nodiscard]] db_resolved_addresses_type collect_db_resolved_addresses(const client_resolve_result& results, db_driver driver);
@@ -2588,9 +2546,6 @@ enum class db_stream_end : std::uint8_t {
 
 // One read of a stream: its next row, or how it ended.
 using db_stream_step = std::variant<db_row, db_stream_end>;
-
-template <typename driver_type>
-class db_pool;
 
 // The configured port as a NUL-terminated buffer, the form both asio's
 // resolver and libpq take it in.
@@ -3044,10 +2999,6 @@ void visit_db_pool_if_present([[maybe_unused]] const db_pool_ref_type& pool, [[m
     });
 }
 
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
-
 // Every result shape, so cache-id removal can name each entry of one id.
 inline constexpr std::array db_cache_shapes{db_cache_shape::rows, db_cache_shape::one, db_cache_shape::exists, db_cache_shape::count};
 
@@ -3167,10 +3118,6 @@ class redis_session;
 namespace ruvia::detail {
 
 class redis_registry;
-struct request_io_metrics;
-#ifdef RUVIA_ENABLE_REDIS
-class db_query_cache_state;
-#endif
 
 class db_registry final {
 public:

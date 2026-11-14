@@ -1108,9 +1108,6 @@ ruvia::task<void> exercise(ruvia::http_client& client, const target& destination
         EXPECT_EQ(failed.sent_, 4U);
     }
 }
-}  // namespace standalone_websocket_test
-
-namespace standalone_websocket_test {
 void exercise_protocol(ruvia::http_client_versions protocol) {
     asio::io_context io;
     ruvia::blocking_pool preparation({.thread_count_ = 1});

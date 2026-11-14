@@ -752,10 +752,6 @@ private:
 [[nodiscard]] task<std::vector<ip_address>> resolve_dns(const worker_ref& worker, std::string_view host, operation_options options = {});
 [[nodiscard]] task<std::vector<ip_address>> resolve_dns(event_loop loop, std::string_view host, operation_options options = {});
 
-}  // namespace ruvia
-
-namespace ruvia {
-
 // Every input is owned before connect() returns its cold operation. The builder
 // is consumed once; headers remain application fields, never handshake fields.
 class http_client_websocket_request final {

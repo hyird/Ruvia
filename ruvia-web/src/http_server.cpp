@@ -41,7 +41,7 @@
 #include "controller.h"
 #include "event_loop.h"
 #include "http_header.h"
-#include "route_table.h"
+#include "server_session.h"
 #include "stop_token.h"
 #include "task_scope.h"
 
@@ -2285,9 +2285,6 @@ void observe_tls_client_hello(SSL& tls, const tls_client_hello_observation& obse
     }
 }
 
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
 namespace {
 
 // In-memory PEM text of a tls_identity_config, borrowed while it is parsed.
@@ -2611,9 +2608,6 @@ void configure_http_server_client_certificates(SSL_CTX& context_value, const std
     SSL_CTX_set_verify(&context_value, static_cast<int>(http_server_tls_verify_mode(client_certificates->requirement_)), nullptr);
 }
 
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
 namespace {
 
 // The identity set is immutable and shared, not copied.
@@ -2686,9 +2680,6 @@ void http_server_session_config::adopt_tls_identities(std::shared_ptr<const http
     }
 }
 
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
 namespace {
 
 #if defined(_WIN32)
@@ -2814,10 +2805,6 @@ inherited_listener_sockets::~inherited_listener_sockets() {
         close_native_socket(socket);
     }
 }
-
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
 
 namespace {
 
@@ -2994,9 +2981,6 @@ void validate_server_limits(const server_config& config) {
     return validated_http_server_configuration(listeners, std::move(options));
 }
 
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
 namespace {
 
 using snapshot_owner = std::unique_ptr<static_root>;
@@ -3202,10 +3186,6 @@ task<void> static_root_runtime::refresh(const stop_token& stop) {
         }
     }
 }
-
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
 
 web_worker_runtime::web_worker_runtime(const validated_http_server_configuration& configuration, const route_table& routes_value, worker_capability_definitions capabilities, blocking_pool* pool, std::size_t worker_index
 #if defined(RUVIA_ENABLE_HTTP3)

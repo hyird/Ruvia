@@ -314,10 +314,6 @@ template <typename result_type = void, typename initiate_type>
     return asio_completion_awaiter<result_type, std::decay_t<initiate_type>>(std::forward<initiate_type>(initiate));
 }
 
-}  // namespace ruvia
-
-namespace ruvia {
-
 class event_loop;
 
 namespace detail {
@@ -584,12 +580,7 @@ private:
     friend class event_loop;
 };
 
-}  // namespace ruvia
-
-namespace ruvia {
-
 namespace detail {
-struct event_loop_state;
 class event_loop_stop_listener;
 template <typename t_type>
 struct root_task_launch_guard;
@@ -915,10 +906,6 @@ private:
 // retires only Ruvia-managed work and never cancels unrelated operations.
 [[nodiscard]] event_loop_attachment attach_event_loop(asio::io_context& io_context, event_loop_attachment_options options = {});
 
-}  // namespace ruvia
-
-namespace ruvia {
-
 class blocking_pool;
 
 struct event_loop_pool_options final {
@@ -959,11 +946,6 @@ private:
     std::shared_ptr<impl_type> impl_;
 };
 
-}  // namespace ruvia
-
-namespace ruvia {
-
-class event_loop;
 class worker_runtime;
 
 struct worker_notification_options final {
@@ -1052,9 +1034,6 @@ private:
     wait_operation wait_awaiter_;
 };
 
-}  // namespace ruvia
-
-namespace ruvia {
 namespace detail {
 
 template <typename t_type>
@@ -1084,10 +1063,6 @@ std::span<const std::byte> as_bytes(string_type&&) = delete;
 }
 template <detail::temporary_owning_byte_range range_type>
 std::string_view as_chars(range_type&&) = delete;
-
-}  // namespace ruvia
-
-namespace ruvia {
 
 // UTF-8 text describing an error code, for every Ruvia message that embeds one.
 // On Windows, message() of std::system_category() and asio::system_category()
@@ -1140,10 +1115,6 @@ void report_unhandled_failure(std::string_view context_value, std::exception_ptr
 // True for the same exception object, or for two std::exception objects of the
 // same dynamic type with the same what(): the same fault seen by several units.
 [[nodiscard]] bool equivalent_failures(const std::exception_ptr& left, const std::exception_ptr& right) noexcept;
-
-}  // namespace ruvia
-
-namespace ruvia {
 
 // Parse a complete textual IP address, rejecting embedded NUL bytes.
 [[nodiscard]] std::optional<asio::ip::address> parse_ip_address(std::string_view text);

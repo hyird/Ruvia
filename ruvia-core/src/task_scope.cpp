@@ -246,10 +246,6 @@ void task_scope::rethrow_failure() {
     }
 }
 
-}  // namespace ruvia
-
-namespace ruvia {
-
 namespace detail {
 
 stop_state_ref stop_state::create() {
@@ -435,10 +431,6 @@ stop_group::stop_group(std::span<const stop_token> parents) :
     register_parent(*first, parents_[0]);
     register_parent(*second, parents_[1]);
 }
-
-}  // namespace ruvia
-
-namespace ruvia {
 
 // Keeps a reentrant join from publishing retirement during frame/capability
 // cleanup. Its registration is a value, not a frame-owner base class.
@@ -823,10 +815,6 @@ void scoped_operation_registration::retire_frame() noexcept {
 }
 
 }  // namespace detail
-}  // namespace ruvia
-
-namespace ruvia {
-
 namespace {
 
 #ifdef _WIN32
@@ -1136,10 +1124,6 @@ void collect_thread_heap() noexcept {
     mi_collect(true);
 #endif
 }
-}  // namespace ruvia
-
-namespace ruvia {
-
 namespace {
 
 // The lexical shape is checked here because the platform parsers behind

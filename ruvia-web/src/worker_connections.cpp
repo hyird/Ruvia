@@ -38,14 +38,6 @@
 #include <asio/ssl.hpp>
 #include <openssl/ssl.h>
 
-#include "connection_lifecycle.h"
-#include "context_access.h"
-#include "event_loop.h"
-#include "http_request.h"
-#include "http_server.h"
-#include "route_table.h"
-#include "task_scope.h"
-#include "worker_ref.h"
 #if defined(RUVIA_ENABLE_HTTP3)
 #include <ngtcp2/ngtcp2.h>
 #endif
@@ -57,18 +49,24 @@
 #include <asio/cancellation_signal.hpp>
 
 #include "blocking_pool.h"
+#include "connection_lifecycle.h"
 #include "context_access.h"
+#include "event_loop.h"
 #include "http_cache.h"
 #include "http_client.h"
 #include "http_content_coding.h"
 #include "http_header.h"
+#include "http_request.h"
 #include "http_response.h"
 #include "http_response_server.h"
+#include "http_server.h"
 #include "middleware.h"
-#include "route_table.h"
+#include "server_session.h"
 #include "stop_token.h"
 #include "streaming.h"
 #include "task.h"
+#include "task_scope.h"
+#include "worker_ref.h"
 #ifdef RUVIA_ENABLE_DATABASE
 #include "db_session.h"
 #endif
@@ -2104,9 +2102,6 @@ std::unique_ptr<connection_work_set> make_connection_work_set() {
     return std::make_unique<connection_work_set>();
 }
 
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
 namespace {
 
 // Total time allowed for a graceful close: flushing TLS close_notify and
@@ -2196,10 +2191,6 @@ task<void> linger_http_connection(asio::ip::tcp::socket& socket, connection_scan
 task<void> close_http_connection_gracefully(server_tls_stream& stream, http_connection_close mode, connection_scanner& scanner, const worker_ref& worker_value) {
     return close_gracefully(stream.lowest_layer(), &stream, mode, scanner, worker_value);
 }
-
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
 
 namespace {
 
@@ -2430,10 +2421,6 @@ bool response_file_source::file_bytes_pending() const noexcept {
     }
     return false;
 }
-
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
 
 // The byte stream behind one server_connection: the accepted TCP socket, or
 // the TLS stream whose writes leave through `tls_output`. Reads land in one
@@ -2709,10 +2696,6 @@ task<void> worker_connections::serve_connection(stream_type& stream, tcp_socket_
 
 template task<void> worker_connections::serve_connection<inbound_socket_stream>(inbound_socket_stream&, tcp_socket_type&, server_connection_fields);
 template task<void> worker_connections::serve_connection<server_tls_stream>(server_tls_stream&, tcp_socket_type&, server_connection_fields);
-
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
 
 struct request_stream_access final {
     [[nodiscard]] static request_stream make(context& context_value, response_stream_writer& response, const request_stream_tunnel_accept* accept_tunnel, const request_stream_websocket_accept* accept_websocket = nullptr) noexcept {
@@ -3188,9 +3171,6 @@ task<http_request_admission> admit_and_dispatch_buffered_request(const route_tab
     }
     co_return admission;
 }
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
 namespace {
 
 // A coded representation is worth sending only when strictly smaller than
@@ -3391,10 +3371,6 @@ task<http_response_compression_status> compress_response_offloaded(http_response
         co_return http_response_compression_status::failed;
     }
 }
-
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
 
 connection_transport connection_transport::tcp(asio::ip::tcp::socket& socket) noexcept {
     return connection_transport(&socket, [](void* target) noexcept {

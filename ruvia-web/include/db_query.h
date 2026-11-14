@@ -1359,10 +1359,6 @@ private:
     detail::db_owned_expression owned_{};
 };
 
-}  // namespace ruvia
-
-namespace ruvia {
-
 namespace detail {
 template <typename e_type>
 struct db_entity_access;

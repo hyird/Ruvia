@@ -84,10 +84,6 @@ private:
     std::array<http_transfer_coding, max_transfer_codings> data_{};
     std::size_t size_{0};
 };
-}  // namespace ruvia
-
-namespace ruvia {
-
 enum class http_transfer_coding_decode_error : std::uint8_t {
     invalid_content,
     decoded_size_exceeded,
@@ -246,10 +242,6 @@ private:
     impl_type* impl_{nullptr};
 };
 
-}  // namespace ruvia
-
-namespace ruvia {
-
 inline constexpr std::string_view http1_chunk_data_terminator = "\r\n";
 inline constexpr std::string_view http1_last_chunk_prefix = "0\r\n";
 inline constexpr std::string_view http1_trailer_section_terminator = "\r\n";
@@ -279,10 +271,6 @@ private:
     std::array<char, sizeof(std::size_t) * 2 + 2> storage_;
     std::size_t offset_;
 };
-
-}  // namespace ruvia
-
-namespace ruvia {
 
 // A request-body failure detected by a server driver while enforcing the
 // HTTP-owned content contract. The driver supplies runtime byte limits and I/O
@@ -335,10 +323,6 @@ enum class http_request_body_failure : std::uint8_t {
 [[nodiscard]] inline std::optional<http_request_body_failure> http_request_body_addition_failure(std::size_t current_size, std::size_t additional_size, protocol_byte_limit limit) noexcept {
     return limit.addition_exceeds(current_size, additional_size) ? std::optional<http_request_body_failure>(http_request_body_failure::too_large) : std::nullopt;
 }
-
-}  // namespace ruvia
-
-namespace ruvia {
 
 enum class http1_chunk_decode_error : std::uint8_t {
     invalid_framing,
@@ -561,10 +545,6 @@ private:
     return http_protocol_error(http_status::bad_request, "invalid_chunked_body", "invalid chunked request body");
 }
 
-}  // namespace ruvia
-
-namespace ruvia {
-
 class http1_server_request_parse_state;
 
 // Whether the runtime consumed the complete request message before attempting
@@ -676,10 +656,6 @@ private:
     http_request_expectations expectations_;
 };
 
-}  // namespace ruvia
-
-namespace ruvia {
-
 // Whether a connection is reused after a completed HTTP/1 exchange. Both the
 // client request writer and the server response planner express the same wire
 // decision with this single shared policy: allow_reuse keeps the connection
@@ -742,10 +718,6 @@ private:
 [[nodiscard]] inline constexpr http1_request_connection_plan apply_request_body_consumption(http1_request_connection_plan plan, http1_request_body_consumption consumption) noexcept {
     return consumption == http1_request_body_consumption::complete ? plan : plan.require_close();
 }
-
-}  // namespace ruvia
-
-namespace ruvia {
 
 enum class http1_server_request_parse_failure_source : std::uint8_t { request_line,
     message };
@@ -869,10 +841,6 @@ private:
     progress progress_{http1_server_need_request_head{}};
 };
 
-}  // namespace ruvia
-
-namespace ruvia {
-
 // An HTTP/1 response head this endpoint cannot send: an interim, final,
 // CONNECT or CONNECT-UDP head that breaks a message rule (RFC 9110, RFC 9112)
 // or the head size bound. It reports an application or runtime bug, never a
@@ -881,10 +849,6 @@ class http1_response_head_error final : public std::invalid_argument {
 public:
     using std::invalid_argument::invalid_argument;
 };
-
-}  // namespace ruvia
-
-namespace ruvia {
 
 inline constexpr std::size_t response_head_stack_bytes = 512;
 inline constexpr std::size_t response_head_retained_heap_bytes = std::size_t{4} * 1024;
@@ -967,10 +931,6 @@ private:
     std::string heap_;
     std::variant<stack_state_type, heap_state_type> state_{stack_state_type{}};
 };
-
-}  // namespace ruvia
-
-namespace ruvia {
 
 class http1_response_head_plan;
 class http1_buffered_response_plan;
@@ -1118,13 +1078,8 @@ static_assert(sizeof(http1_buffered_response_plan) == sizeof(http1_response_head
     return http1_buffered_response_plan(http1_response_head_plan(write_plan.body_plan(), connection_plan.protocol_version(), http1_response_head_plan::buffered_framing(write_plan.content_length())));
 }
 
-}  // namespace ruvia
-
 // Stable, non-detail entry points for HTTP response serialization plans. The
 // plan implementations remain shared with the HTTP/1 and HTTP/2 protocol code.
-
-namespace ruvia {
-
 namespace detail {
 
 [[nodiscard]] bool is_forbidden_response_trailer_name(std::string_view name) noexcept;
@@ -1176,10 +1131,6 @@ void append_http1_response_trailers(std::string& output, const http_response_tra
 template <detail::http_temporary_owning_range<http_header_view> headers_type>
 http_response_trailer_section validate_http_response_trailers(headers_type&&) = delete;
 http_response_trailer_section validate_http_response_trailers(std::initializer_list<http_header_view>) = delete;
-
-}  // namespace ruvia
-
-namespace ruvia {
 
 // Immutable, bodyless response-head view for 1xx progress messages that precede
 // a final response. 101 is deliberately excluded: switching protocols transfers
@@ -1256,10 +1207,6 @@ private:
 // No Server or Date field is injected: the encoded fields are exactly those
 // represented by http_interim_response_head.
 [[nodiscard]] std::variant<prepared_http1_interim_response, http1_interim_response_buffer_too_small> prepare_http1_interim_response_head(const http_interim_response_head& response, std::span<char> head_buffer);
-
-}  // namespace ruvia
-
-namespace ruvia {
 
 enum class http_response_stream_framing : std::uint8_t {
     http1_chunked,
@@ -1386,10 +1333,6 @@ private:
 // framing and std::invalid_argument for HTTP/2 or HTTP/3 before the response
 // changes.
 [[nodiscard]] http_response_stream_head prepare_http_response_stream_head(http_response response, http_response_stream_commit_plan commit_plan);
-}  // namespace ruvia
-
-namespace ruvia {
-
 class http1_response_stream_plan final {
 public:
     [[nodiscard]] http_response_stream_framing framing() const noexcept {
@@ -1544,9 +1487,6 @@ private:
 // http1_response_head_error before `response` changes.
 [[nodiscard]] http1_response_head_plan prepare_http1_upgrade_response_head(http_response& response, const http_request& request);
 
-}  // namespace ruvia
-
-namespace ruvia {
 // Already-expanded proxy URI path, borrowed until open_udp_tunnel() returns.
 struct http_client_udp_tunnel_request_view final {
     borrowed_text target_{};
@@ -1611,9 +1551,6 @@ struct http_connect_udp_request_view final {
 // The HTTP/1 head plan of a response prepare_http_connect_udp_response()
 // produced; throws http1_response_head_error for any other response.
 [[nodiscard]] http1_response_head_plan prepare_http1_connect_udp_response_head(const http_response& response);
-}  // namespace ruvia
-
-namespace ruvia {
 enum class http_capsule_codec_error : std::uint8_t { need_more_data,
     value_out_of_range,
     output_too_small };

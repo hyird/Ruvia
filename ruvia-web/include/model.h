@@ -110,10 +110,6 @@ template <std::floating_point t_type = double>
     return convert_decimal_number<t_type>(text, saw_non_zero);
 }
 
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
-
 inline constexpr std::size_t max_json_depth = 64;
 
 inline void skip_json_whitespace(std::string_view& input) noexcept {
@@ -2468,10 +2464,6 @@ template <fixed_string pattern>
     return match_pattern_plan_from(compiled_pattern_plan<pattern>::value, value, 0, 0, budget);
 }
 
-}  // namespace ruvia::detail::model
-
-namespace ruvia::detail::model {
-
 template <auto bound, fixed_string error_message>
 struct min final {
     static_assert(std::is_arithmetic_v<decltype(bound)> && !std::is_same_v<decltype(bound), bool>, "RUVIA_MIN requires a numeric bound");
@@ -3411,10 +3403,6 @@ private:
     std::optional<field_value_type> value_;
 };
 
-}  // namespace ruvia::detail::model
-
-namespace ruvia::detail::model {
-
 template <typename t_type>
 using field_option_tuple_type = std::conditional_t<is_model_option<t_type>(), std::tuple<t_type>, std::tuple<>>;
 
@@ -3521,10 +3509,6 @@ void initialize_model(model_type& value) {
 }
 
 }  // namespace ruvia::detail::model
-
-namespace ruvia {
-class request_name_value_list;
-}  // namespace ruvia
 
 namespace ruvia::detail {
 
@@ -4926,10 +4910,6 @@ template <text_scalar t_type>
     }
 }
 
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
-
 // Shared owning value storage. Backend descriptors and relations stay with
 // their backend.
 template <typename t_type>
@@ -5386,10 +5366,6 @@ private:
     std::vector<entity_type> rows_;
 };
 
-}  // namespace ruvia
-
-namespace ruvia {
-
 enum class validation_target : std::uint8_t { json,
     form,
     query,
@@ -5647,8 +5623,6 @@ template <typename t_type>
     const json_object object(detail::borrowed_model_token_tag{}, view());
     return object.get<t_type>(field);
 }
-}  // namespace ruvia
-
 // RUVIA_MIN / RUVIA_MAX constrain a field's magnitude. For a number field this
 // is its value; for a string field it is the UTF-8 BYTE length, not the
 // codepoint count -- a three-emoji string is 12 bytes -- so choose bounds with
@@ -5666,8 +5640,6 @@ template <typename t_type>
 // this dialect.
 #define RUVIA_PATTERN(pattern, message) ::ruvia::detail::model::pattern_rule<pattern, ::ruvia::fixed_string{message}>
 #define RUVIA_CUSTOM(predicate, message) ::ruvia::detail::model::custom<predicate, ::ruvia::fixed_string{message}>
-
-namespace ruvia {
 class context;
 
 namespace detail {

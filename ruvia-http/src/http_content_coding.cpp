@@ -652,11 +652,7 @@ bool zlib_deflate_stream::encode(std::string_view input, std::string& output, in
     }
 }
 
-}  // namespace ruvia::detail
-
 // gzip (RFC 1952) and zlib-wrapped deflate through zlib, with tracked working memory.
-
-namespace ruvia::detail {
 
 static std::variant<std::string, http_content_decode_error> decode_zlib_content(std::string_view input, std::size_t max_decoded_bytes, int window_bits, bool allow_concatenated_members) {
     std::string output;
@@ -739,8 +735,6 @@ std::optional<std::string> encode_deflate_content(std::string_view input, std::s
     return encode_whole_content<zlib_deflate_stream>("zlib encoder initialization failed", Z_FINISH, input, max_encoded_bytes, zlib_content_format::deflate);
 }
 
-}  // namespace ruvia::detail
-
 // Brotli (RFC 7932) state with tracked working memory.
 // Brotli retains the allocator context as its opaque pointer, so these types are
 // pinned: owners embed them in storage whose address never changes.
@@ -748,8 +742,6 @@ std::optional<std::string> encode_deflate_content(std::string_view input, std::s
 // Construction rethrows an allocation failure captured during initialization.
 // Any other Brotli refusal leaves the stream uninitialized so each owner maps it
 // into its own error contract.
-
-namespace ruvia::detail {
 
 // Decoder whose native working memory is bounded by the caller's decoded-size
 // cap rather than by the window and metablock sizes the peer declares: a
@@ -807,10 +799,6 @@ private:
     http_c_library_memory allocation_;
     BrotliEncoderState* state_;
 };
-
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
 
 namespace {
 
@@ -980,8 +968,6 @@ std::optional<std::string> encode_brotli_content(std::string_view input, std::si
     return encode_whole_content<brotli_encoder_stream>("brotli encoder initialization failed", BROTLI_OPERATION_FINISH, input, max_encoded_bytes, brotli_whole_buffer_window_bits);
 }
 
-}  // namespace ruvia::detail
-
 // zstd (RFC 8878) state with tracked working memory and
 // whose window never exceeds the 8 MiB HTTP limit of RFC 9659. zstd
 // retains the allocator context as its opaque pointer, so these types are
@@ -990,8 +976,6 @@ std::optional<std::string> encode_brotli_content(std::string_view input, std::si
 // Construction rethrows an allocation failure captured during initialization.
 // Any other zstd refusal leaves the stream uninitialized so each owner maps it
 // into its own error contract.
-
-namespace ruvia::detail {
 
 class zstd_decoder_stream final {
 public:
@@ -1044,10 +1028,6 @@ private:
     http_c_library_memory allocation_;
     ZSTD_CCtx* context_;
 };
-
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
 
 namespace {
 

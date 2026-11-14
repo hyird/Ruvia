@@ -91,10 +91,6 @@ enum class http_request_content_semantics : std::uint8_t {
     return true;
 }
 
-}  // namespace ruvia
-
-namespace ruvia {
-
 // One outbound content contract for an HTTP/2 or HTTP/3 request head: it
 // determines both the generated Content-Length and whether the head ends the
 // request stream. Public callers and both protocol engines use this value.
@@ -183,10 +179,6 @@ private:
     value_type value_;
 };
 
-}  // namespace ruvia
-
-namespace ruvia {
-
 // Request fields the HTTP protocol layer generates or interprets itself when it
 // frames and transports a request: Host (RFC 9110 section 7.2), message framing
 // (Content-Length, Transfer-Encoding, Trailer; RFC 9110 sections 6.5 and 8.6),
@@ -204,10 +196,6 @@ namespace ruvia {
 // 这不是响应首部或接收方校验器。调用方负责字段间重复及完整消息约束；
 // 返回 true 不代表整个请求可发送，不保留输入或跨调用状态。
 [[nodiscard]] bool is_valid_http_request_application_field(std::string_view name, std::string_view value) noexcept;
-
-}  // namespace ruvia
-
-namespace ruvia {
 
 class http_response_headers;
 
@@ -510,10 +498,6 @@ static_assert(sizeof(http_request_expectations) <= 1);
 static_assert(std::is_trivially_copyable_v<http_server_expectation_plan>);
 static_assert(sizeof(http_server_expectation_plan) <= 2);
 
-}  // namespace ruvia
-
-namespace ruvia {
-
 class http_request;
 
 // Validates an HTTP origin-form request target without allocating. The same
@@ -655,12 +639,6 @@ private:
 [[nodiscard]] http_max_forwards_result parse_http_max_forwards(std::span<const http_header> headers, std::uint64_t max_saturation = (std::numeric_limits<std::uint64_t>::max)()) noexcept;
 [[nodiscard]] http_max_forwards_result parse_http_max_forwards(std::span<const http_header_view> headers, std::uint64_t max_saturation = (std::numeric_limits<std::uint64_t>::max)()) noexcept;
 [[nodiscard]] http_max_forwards_result parse_http_max_forwards(const http_request& request, std::uint64_t max_saturation = (std::numeric_limits<std::uint64_t>::max)()) noexcept;
-}  // namespace ruvia
-
-namespace ruvia {
-
-class http_request;
-
 // The connection facts RFC 9110 §7.4 weighs against a request's target URI.
 // The server runtime supplies them; the request alone cannot know them.
 struct http_target_origin_connection final {
@@ -801,10 +779,6 @@ private:
 // The port is not compared: certificates name hosts, not ports. Allocation free.
 [[nodiscard]] http_target_origin decide_http_target_origin(const http_request& request, http_target_origin_connection connection) noexcept;
 
-}  // namespace ruvia
-
-namespace ruvia {
-
 enum class http_request_target_form : std::uint8_t {
     origin,
     absolute,
@@ -816,11 +790,8 @@ enum class http_request_target_form : std::uint8_t {
     http3,
 };
 
-class http_request;
-
 namespace detail {
 
-enum class http_field_kind : std::uint8_t;
 struct http_request_access;
 
 // Owns field descriptors and the parser's http_field_kind for each field.
@@ -1074,10 +1045,6 @@ private:
 // throws the 431 header_too_large error. Body framing fields are intentionally
 // not interpreted because this API represents an already-parsed request.
 [[nodiscard]] http_request make_parsed_http_request(borrowed_text method, borrowed_text target, std::span<const http_header_view> headers, borrowed_span<std::byte> body = {});
-}  // namespace ruvia
-
-namespace ruvia {
-
 // HAProxy PROXY protocol, versions 1 and 2
 // (https://www.haproxy.org/download/2.9/doc/proxy-protocol.txt).
 
@@ -1243,10 +1210,6 @@ private:
     proxy_protocol_parser_state state_{proxy_protocol_parser_state::active};
 };
 
-}  // namespace ruvia
-
-namespace ruvia {
-
 enum class http_forwarded_header_kind : std::uint8_t {
     auto_detect,
     rfc7239_forwarded,
@@ -1356,9 +1319,6 @@ private:
     return extractor.resolve(peer_ip, request);
 }
 
-}  // namespace ruvia
-
-namespace ruvia {
 [[nodiscard]] constexpr bool is_tls_grease_value(std::uint16_t value) noexcept {
     return (value & 0x0f0fU) == 0x0a0aU && static_cast<unsigned int>(value >> 8U) == (value & 0xffU);
 }

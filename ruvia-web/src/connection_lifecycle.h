@@ -113,10 +113,6 @@ namespace ruvia::detail {
     return left.empty() || CRYPTO_memcmp(left.data(), right.data(), left.size()) == 0;
 }
 
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
-
 // Field views held inline up to `inline_capacity`, otherwise in one vector
 // sized up front; the chosen storage never changes after construction.
 template <std::size_t inline_capacity = 8>
@@ -169,10 +165,6 @@ private:
     std::vector<http_header_view> overflow_;
     std::size_t size_{0};
 };
-
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
 
 // Concatenates pieces into inline storage when they fit, otherwise into one
 // string sized up front. view() borrows this object, so it neither copies nor moves.
@@ -268,9 +260,6 @@ private:
     std::size_t reserve_hint_;
 };
 
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
 // The digests behind signed cookies (SHA-256) and JWT HS256/HS384/HS512.
 enum class hmac_digest : std::uint8_t {
     sha256,
@@ -319,9 +308,6 @@ inline constexpr std::size_t hmac_max_input_size = static_cast<std::size_t>((std
     std::size_t mac_size = 0;
     return EVP_Q_mac(nullptr, "HMAC", nullptr, digest_name, nullptr, key.data(), key.size(), reinterpret_cast<const unsigned char*>(message.data()), message.size(), reinterpret_cast<unsigned char*>(output.data()), output.size(), &mac_size) != nullptr && mac_size == digest_size;
 }
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
 
 // base64(HMAC-SHA256) — fixed width, standard alphabet with padding.
 inline constexpr std::size_t cookie_signature_size = 44;
@@ -366,9 +352,6 @@ inline void write_cookie_signature(char* output, std::string_view secret, std::s
     }
     http_base64_encode(output, std::span<const std::uint8_t>(digest));
 }
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
 
 using ::ruvia::rate_limit_key_buffer_bytes;
 
@@ -424,10 +407,6 @@ using ::ruvia::rate_limit_key_buffer_bytes;
 [[nodiscard]] inline std::string_view rate_limit_key_for(std::string_view remote_address, char (&buffer)[rate_limit_key_buffer_bytes]) noexcept {
     return rate_limit_key_for(remote_address, std::span<char, rate_limit_key_buffer_bytes>(buffer));
 }
-
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
 
 // Delays are unsigned milliseconds: Reset can reach two windows, beyond any
 // signed millisecond count once a window nears milliseconds::max().
@@ -558,10 +537,6 @@ private:
     rate_limit_hash_key hash_key_{};
 };
 
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
-
 // The instant a request's rate-limit decisions are made for: the arrival its
 // owner recorded (test_app supplies one), else a steady-clock reading taken
 // only once a rule is actually consulted.
@@ -603,10 +578,6 @@ private:
 // (RFC 6585 section 4, RFC 9110 section 10.2.3) and the X-RateLimit-* fields
 // naming the refusing rule.
 void apply_rate_limit_rejection_headers(http_response& response, const rate_limit_rejection& rejection);
-
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
 
 // The protocol policy of every client and server TLS context. Startup only.
 // - TLS 1.1 or newer, no TLS compression.
@@ -661,10 +632,6 @@ private:
     native_tls_context_scope* previous_;
     std::exception_ptr failure_;
 };
-
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
 
 [[nodiscard]] inline bool is_ascii_dns_alnum(unsigned char byte) noexcept {
     return (byte >= '0' && byte <= '9') || (byte >= 'A' && byte <= 'Z') || (byte >= 'a' && byte <= 'z');
@@ -721,12 +688,8 @@ namespace ruvia::detail {
     return !(saw_dot && labels == 4 && all_labels_numeric);
 }
 
-}  // namespace ruvia::detail
-
 // What a finished TLS handshake negotiated with the peer: the selected ALPN
 // protocol, the offered server_name and the verified peer certificate identity.
-
-namespace ruvia::detail {
 
 // The ALPN protocol the handshake selected; empty when none was negotiated.
 [[nodiscard]] inline std::string_view tls_selected_alpn(SSL& ssl) noexcept {
@@ -778,10 +741,6 @@ inline std::optional<std::string_view> extract_tls_client_certificate(SSL* ssl, 
     return std::string_view(out);
 }
 
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
-
 // Fills bytes from OpenSSL's CSPRNG. Returns false when the generator cannot
 // produce output; callers translate that into their own failure contract.
 [[nodiscard]] inline bool fill_random_bytes(std::span<unsigned char> bytes) noexcept {
@@ -799,10 +758,6 @@ inline constexpr std::size_t secure_token_size = 48;
     http_encode_lower_hex(buffer.data(), std::span<const unsigned char>(raw));
     return std::string_view(buffer.data(), buffer.size());
 }
-
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
 
 // The certificate one server TLS connection presented, answering RFC 9110
 // §7.4's question whether it is valid for a request's target host. RFC 9525
@@ -850,10 +805,6 @@ private:
     std::uint16_t key_used_{0};
     std::uint8_t cached_{0};
 };
-
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
 
 // Throws asio::system_error for the failed `operation` with the oldest queued
 // OpenSSL error, translated into the system or SSL category. Callers clear the
@@ -932,10 +883,6 @@ private:
     X509_STORE* store_{};
 };
 
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
-
 // A TLS file name in UTF-8, the encoding OpenSSL's file BIOs decode (on
 // Windows into a wide name for _wfopen). Converting through char8_t never
 // narrows a native wide path through the ANSI code page.
@@ -986,9 +933,6 @@ struct tls_identity_files final {
 [[nodiscard]] inline tls_trust_store load_tls_trust_store(const tls_file_name& ca_file) {
     return tls_trust_store::load_file(tls_file_name_c_str(ca_file));
 }
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
 
 class tls_certificate_snapshot final {
 public:
@@ -1037,10 +981,6 @@ struct tls_certificate_store_access final {
 // Same validated loader used by fixed listener identities and incremental IDs.
 [[nodiscard]] tls_certificate load_server_tls_certificate(const tls_identity_config& identity);
 
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
-
 // A failed claim leaves the lane untouched; the caller supplies its domain error.
 class operation_lane_lease final {
 public:
@@ -1078,10 +1018,6 @@ private:
     }
     return lease;
 }
-
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
 
 struct request_io_metrics final {
     std::uint64_t db_count_{0};
@@ -1127,10 +1063,6 @@ private:
     request_io_kind kind_{request_io_kind::db};
     std::chrono::steady_clock::time_point started_at_{};
 };
-
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
 
 inline constexpr std::string_view default_capability_alias = "default";
 
@@ -1253,10 +1185,6 @@ private:
     std::vector<indexed_alias_type> aliases_;
     std::optional<std::size_t> default_index_;
 };
-
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
 
 // Receipts cover execution AND destruction of posted controls. Waiting never
 // cancels early: borrowed command state cannot retire before every receipt.
@@ -1422,10 +1350,6 @@ private:
     bool waiting_{};
 };
 
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
-
 // Serializes admitted controls without holding a mutex across suspension.
 // The owning state must outlive every acquire and granted lease.
 class runtime_control_gate final {
@@ -1546,14 +1470,10 @@ private:
     bool active_{};
 };
 
-}  // namespace ruvia::detail
-
 // The connection-slot bookkeeping every pooled client shares: lease scheduling,
 // stop-token cancellation addressed by operation id, and one deadline timer per
 // slot. Only the error type and what an expiry or cancellation does to the
 // driver's connection differ, so those are the policy.
-
-namespace ruvia::detail {
 
 enum class pool_slot_abort_reason : std::uint8_t {
     none,
@@ -1863,10 +1783,6 @@ private:
     std::shared_ptr<cancellation_target_type> cancellation_target_;
 };
 
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
-
 class operation_interrupt;
 
 // Routes stop requests to the running operations of one I/O owner on its
@@ -2051,10 +1967,6 @@ private:
     stop_token stop_;
 };
 
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
-
 // A configured host whose port is a separate field: brackets and a lone colon
 // (host:port) are rejected; an unbracketed IPv6 literal has several colons.
 inline void ensure_config_host(std::string_view host, const char* empty_message, const char* invalid_message) {
@@ -2127,10 +2039,6 @@ void ensure_positive_optional_durations(const char* message, const first_duratio
     ensure_positive_optional_duration(first, message);
     (ensure_positive_optional_duration(rest, message), ...);
 }
-
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
 
 class connection_lifecycle;
 
@@ -2515,10 +2423,6 @@ struct connection_scanner::impl_type final {
     bool quiet_trimmed_{false};
 };
 
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
-
 class inbound_buffer_limit_error final : public std::bad_alloc {
 public:
     [[nodiscard]] const char* what() const noexcept override {
@@ -2822,10 +2726,6 @@ inline void inbound_shrink_to(http_io_buffer& buffer, inbound_buffer_reservation
     reservation.shrink_to(buffer.capacity());
 }
 
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
-
 inline constexpr std::size_t http_body_buffer_bytes = std::size_t{8} * 1024;
 // The smallest capacity a buffered known-length body grows to while it is read
 // straight into its own storage. It matches the WebSocket read window: a peer
@@ -2833,20 +2733,12 @@ inline constexpr std::size_t http_body_buffer_bytes = std::size_t{8} * 1024;
 // much before any body bytes arrive; beyond it capacity doubles from arrivals.
 inline constexpr std::size_t known_length_min_read_bytes = std::size_t{64} * 1024;
 
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
-
 // http_error_info borrows its fields. The caller's http_protocol_error lvalue
 // must outlive any suspension of the error handler that reads this view.
 [[nodiscard]] inline http_error_info copy_http_protocol_error_info(const http_protocol_error& error RUVIA_LIFETIMEBOUND) noexcept {
     return http_error_info({.status_ = error.status(), .code_ = error.code(), .message_ = std::string_view(error.what())});
 }
 http_error_info copy_http_protocol_error_info(const http_protocol_error&&) = delete;
-
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
 
 enum class http_stream_end : std::uint8_t { keep_open,
     end };
@@ -2859,10 +2751,6 @@ enum class http_stream_end : std::uint8_t { keep_open,
 [[nodiscard]] inline bool is_stream_read_end(const std::error_code& error) noexcept {
     return error == asio::error::eof || error == asio::ssl::error::stream_truncated;
 }
-
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
 
 // A failed I/O operation on the inbound connection's own transport: the socket
 // or TLS stream this server accepted. The type carries the failure's
@@ -2888,8 +2776,6 @@ public:
     return is_stream_read_end(error) || error == asio::error::connection_reset || error == asio::error::connection_aborted || error == asio::error::broken_pipe || error == asio::error::operation_aborted || error == std::errc::operation_canceled || error == asio::error::bad_descriptor || error == asio::error::timed_out || error == asio::error::not_connected || error == asio::error::shut_down;
 }
 
-}  // namespace ruvia::detail
-
 // Native file-open primitive for the web-layer server drivers. This performs real
 // OS file I/O (::open / ::CreateFileW with an owning fd/HANDLE), so it belongs in
 // ruvia-web, NOT in the pure sans-I/O ruvia-http protocol library. ruvia-http only
@@ -2897,8 +2783,6 @@ public:
 // Content-Length/Range, plus an opaque http_response_file_descriptor token whose
 // release function is supplied here; opening, reading and closing the file are
 // runtime driver concerns.
-
-namespace ruvia::detail {
 
 struct response_file_snapshot final {
     http_response_file_identity identity_{http_response_file_identity::unchecked()};
@@ -3403,10 +3287,6 @@ inline void release_response_file_handle(http_response_file_descriptor::native_t
     return validate_native_file(input, file.identity(), file.size());
 }
 
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
-
 // Owner-thread phase of one server worker:
 // - running: admits connections and requests;
 // - stopped: the core runtime stopped; every connection is closed now.
@@ -3420,10 +3300,6 @@ enum class http_server_worker_state : std::uint8_t {
 [[nodiscard]] inline bool http_server_worker_running(http_server_worker_state state_value) noexcept {
     return state_value == http_server_worker_state::running;
 }
-
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
 
 // One worker's admitted-connection gauge. Only the owning worker counts; any
 // thread reads it relaxed (stats(), and the Windows acceptor choosing the
@@ -3590,10 +3466,6 @@ private:
     inline static std::atomic<std::uint64_t> next_{1};
 };
 
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
-
 [[nodiscard]] inline ip_address to_ip_address(const asio::ip::address& address) noexcept {
     if (address.is_v4()) {
         return ip_address::ipv4(address.to_v4().to_bytes());
@@ -3641,10 +3513,6 @@ inline void assign_peer_address(std::string& output, const asio::ip::address& ad
     output.assign(formatted.data(), formatted.size());
 }
 
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
-
 enum class accept_error_action : std::uint8_t { retry,
     report_and_retry,
     fail };
@@ -3669,10 +3537,6 @@ enum class accept_error_action : std::uint8_t { retry,
 #endif
     return accept_error_action::fail;
 }
-
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
 
 inline void validate_client_tcp_config(const client_tcp_config& config) {
     switch (config.no_delay_) {
@@ -3705,12 +3569,6 @@ inline void validate_client_tcp_config(const client_tcp_config& config) {
     }
     return error;
 }
-
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
-
-class connection_lifecycle;
 
 // Intrusive, worker-affine registry. No lock is held while invoking user code
 // or releasing state. IDs are retired before close callbacks can reenter.
@@ -3949,10 +3807,6 @@ inline void connection_registry::close_listener(const void* listener) noexcept {
     }
 }
 
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
-
 // The caller owns the socket and the already-read prefix until all I/O joins.
 // Prefix delivery is asynchronous, like socket reads, and never reads a byte twice.
 class inbound_socket_stream final {
@@ -4069,10 +3923,6 @@ private:
     connection_lifecycle* lifecycle_;
 };
 
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
-
 // SSL 的读操作也可能发送 KeyUpdate 等控制记录。取消读允许保留已接收的
 // 密文字节，但不能截断已从 SSL BIO 取出的输出，否则后续复用会丢失记录。
 // 屏蔽单操作的写取消；socket 关闭和既有连接超时仍能终止底层写入。
@@ -4112,10 +3962,6 @@ private:
 
 using server_tls_stream = asio::ssl::stream<tls_socket_transport>;
 
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
-
 // How a TCP connection session ended, which decides how its socket closes.
 // A stopping worker closes every connection immediately, whatever its mode.
 enum class http_connection_close : std::uint8_t {
@@ -4151,8 +3997,6 @@ inline void shutdown_http_connection_send(asio::ip::tcp::socket& socket) noexcep
 // http_connection_close::linger. Same bounds and caller duties as above.
 [[nodiscard]] task<void> close_http_connection_gracefully(server_tls_stream& stream, http_connection_close mode, connection_scanner& scanner, const worker_ref& worker_value);
 
-}  // namespace ruvia::detail
-
 // The one reader for file response bodies (a whole file, a byte range, or
 // multipart/byteranges parts interleaved with in-memory boundaries) on every
 // transport. Only a single large range on Windows plain TCP leaves through a
@@ -4173,8 +4017,6 @@ inline void shutdown_http_connection_send(asio::ip::tcp::socket& socket) noexcep
 // file that changed while being sent. The first file range is validated
 // before anything is yielded, so a transport can answer a failure with an
 // error response while its head is still unsent.
-
-namespace ruvia::detail {
 
 // Bytes read per blocking round trip. Kept within the process resource's
 // pooled block range, so the buffer is recycled across responses.
@@ -4354,10 +4196,6 @@ private:
     bool first_file_opened_{false};
 };
 
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
-
 #if defined(_WIN32)
 // On Windows plain TCP a single file range longer than this leaves through an
 // overlapped TransmitFile from the response's own handle. Shorter ranges,
@@ -4379,10 +4217,6 @@ struct http_response_file_write_result final {
 // `progress` after every transfer.
 task<http_response_file_write_result> write_http_response_file(asio::ip::tcp::socket& socket, std::string_view head, native_file_type input, http_response_file_view file, connection_scanner::entry& progress);
 #endif
-
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
 
 #if defined(_WIN32)
 inline task<http_response_file_write_result> write_http_response_file(asio::ip::tcp::socket& socket, std::string_view head, native_file_type input, http_response_file_view file, connection_scanner::entry& progress) {
@@ -4452,10 +4286,6 @@ inline task<http_response_file_write_result> write_http_response_file(asio::ip::
     co_return result;
 }
 #endif
-
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
 
 // A write commits the final status only once the entire head is out; it
 // completes only when it also ends without error.

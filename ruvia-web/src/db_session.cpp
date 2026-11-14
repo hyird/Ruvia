@@ -1225,14 +1225,12 @@ template task<db_query_result<false>> execute_db_query_plan<false>(db_query_plan
 template task<db_query_result<true>> execute_db_query_plan<true>(db_query_plan plan, db_query_backend backend, operation_options options);
 
 }  // namespace detail
-}  // namespace ruvia
 
 // A streaming query result: the rows arrive one at a time from a pooled
 // connection the result holds for as long as it is active, and every exit --
 // exhaustion, explicit close, failure, or destruction -- must return that
 // connection exactly once.
 
-namespace ruvia {
 db_stream_result::lease_type::lease_type(detail::db_pool_ref_type client, std::size_t slot, operation_options options) noexcept :
     client_(client),
     slot_(slot),
@@ -1343,9 +1341,6 @@ void db_stream_result::reset() noexcept {
     }
 }
 
-}  // namespace ruvia
-
-namespace ruvia {
 namespace {
 using detail::append_db_identifier;
 using detail::append_db_qualified_identifier;
@@ -2452,9 +2447,6 @@ std::vector<db_migration> db_schema::compile(std::string_view id) const {
     return out;
 }
 
-}  // namespace ruvia
-
-namespace ruvia {
 namespace {
 constexpr auto pg = db_driver::postgresql;
 void require_sql_state(std::string_view state_value) {
@@ -2749,9 +2741,6 @@ std::string db_procedure::body() const {
     return result;
 }
 
-}  // namespace ruvia
-
-namespace ruvia {
 db_value::db_value(std::nullptr_t) :
     storage_(std::monostate{}) {}
 

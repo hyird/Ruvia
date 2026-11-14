@@ -1444,10 +1444,6 @@ set_cookie_plan::written_fields set_cookie_plan::write_fields(char* cursor_value
     return fields;
 }
 
-}  // namespace ruvia
-
-namespace ruvia {
-
 bool is_valid_cookie_value(std::string_view value) noexcept {
     // cookie-value = *cookie-octet / ( DQUOTE *cookie-octet DQUOTE ); the quotes
     // are part of the value (RFC 6265 section 4.1.1).
@@ -1800,9 +1796,6 @@ std::string http_cookie_jar::cookie_header(std::string_view request_target, bool
     return output;
 }
 
-}  // namespace ruvia
-
-namespace ruvia {
 namespace {
 
 std::pair<std::string_view, std::string_view> split_attribute(std::string_view value) noexcept {
@@ -2048,9 +2041,6 @@ std::optional<http_set_cookie_view> parse_set_cookie(std::string_view value) noe
     return result;
 }
 
-}  // namespace ruvia
-
-namespace ruvia {
 namespace {
 
 [[nodiscard]] bool is_valid_cors_origin_value(std::string_view origin) noexcept {

@@ -250,10 +250,6 @@ private:
     std::span<const element_type> values_{};
 };
 
-}  // namespace ruvia
-
-namespace ruvia {
-
 // Retention table: the most storage a reusable ruvia-http buffer keeps once it
 // is drained. Anything larger goes back to the allocator, so one large message
 // or head never stays pinned to an idle connection or worker, while buffers
@@ -373,10 +369,6 @@ private:
     std::size_t end_{0};
 };
 
-}  // namespace ruvia
-
-namespace ruvia {
-
 // A transport-neutral 16-bit port value shared by HTTP authorities and Web
 // endpoint configurations. Zero is representable; each consumer owns its
 // zero-port policy. Absence remains optional, distinct from an explicit zero.
@@ -421,10 +413,6 @@ private:
 
 static_assert(std::is_trivially_copyable_v<port_number>);
 static_assert(sizeof(port_number) == sizeof(std::uint16_t));
-
-}  // namespace ruvia
-
-namespace ruvia {
 
 enum class ip_address_family : std::uint8_t {
     ipv4,
@@ -548,10 +536,6 @@ private:
 
 static_assert(std::is_trivially_copyable_v<ip_cidr>);
 
-}  // namespace ruvia
-
-namespace ruvia {
-
 // Maximum decimal digits of a std::uint64_t (18446744073709551615).
 inline constexpr std::size_t http_max_unsigned_decimal_size = 20;
 
@@ -620,10 +604,6 @@ void http_append_formatted_finite_number(std::string& output, number_type value,
     http_append_formatted_number(output, value, format_error_message);
 }
 
-}  // namespace ruvia
-
-namespace ruvia {
-
 struct utf8_sequence final {
     // Bytes of the well-formed sequence, or of the maximal subpart (Unicode 3.9,
     // definition D93b) that precedes the first ill-formed byte; always >= 1.
@@ -686,9 +666,6 @@ struct utf8_sequence final {
     return true;
 }
 
-}  // namespace ruvia
-
-namespace ruvia {
 namespace detail {
 
 [[nodiscard]] inline std::size_t http_forward_encoded_groups(const void* output, const void* input, std::size_t groups) noexcept {
@@ -779,10 +756,6 @@ inline void http_append_lower_hex(std::string& output, std::span<const unsigned 
 inline void http_append_lower_hex(std::string& output, std::string_view bytes) {
     http_append_lower_hex(output, std::span(reinterpret_cast<const unsigned char*>(bytes.data()), bytes.size()));
 }
-
-}  // namespace ruvia
-
-namespace ruvia {
 
 // RFC 4648 section 4 (standard) and section 5 (URL-safe) alphabets.
 inline constexpr std::string_view http_base64_alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
@@ -962,10 +935,6 @@ inline void http_base64_encode(char* output, std::span<const std::uint8_t> input
     }
     return out;
 }
-
-}  // namespace ruvia
-
-namespace ruvia {
 
 enum class url_decode_mode : std::uint8_t { percent,
     form };

@@ -537,10 +537,6 @@ private:
     std::span<const std::string> column_names_{};
 };
 
-}  // namespace ruvia
-
-namespace ruvia {
-
 namespace detail {
 struct request_io_metrics;
 
@@ -1284,7 +1280,6 @@ class db_client_state;
 class db_query_cache_state;
 struct db_query_backend;
 struct db_query_plan;
-struct request_io_metrics;
 class worker_client_registry_view;
 
 // The outer scoped operation owns both the driver task and the mapped result.

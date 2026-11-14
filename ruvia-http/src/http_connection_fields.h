@@ -95,10 +95,6 @@ template <typename table_type>
     };
 }
 
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
-
 // Ensures capacity for `required` elements before a mutation that must not
 // reallocate. Growth at least doubles the current capacity because an exact
 // reserve(n) (libc++) would turn a sequence of small appends into quadratic copying.
@@ -116,10 +112,6 @@ void reserve_geometric(container_type& container, std::size_t required) {
     container.reserve((std::max)(required, doubled));
 }
 
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
-
 // Address intervals compare as unsigned integers: views into unrelated buffers
 // are unrelated pointers, and subtraction avoids forming an overflowing end.
 [[nodiscard]] inline bool http_text_overlaps(std::string_view left, std::string_view right) noexcept {
@@ -136,10 +128,6 @@ namespace ruvia::detail {
 [[nodiscard]] inline bool http_text_aliases_string(std::string_view text, const std::string& storage) noexcept {
     return http_text_overlaps(text, std::string_view(storage.data(), storage.capacity() + 1));
 }
-
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
 
 // RFC 9000 §16 variable-length integer, shared by the Capsule Protocol (RFC
 // 9297 §3.2) and HTTP/3 Datagram framing (RFC 9297 §2.1).
@@ -199,12 +187,8 @@ struct quic_varint final {
     return size;
 }
 
-}  // namespace ruvia::detail
-
 // The single HTTP/1 wire-emission toolkit: sinks, the field-line emitter, and
 // the overlap-safe writer used by every pre-measured head/trailer writer.
-
-namespace ruvia::detail {
 
 // Unchecked sink writing through a raw cursor. The caller measures the output
 // first and guarantees capacity; constant-size appends inline to stores.
@@ -407,13 +391,9 @@ template <typename headers_type>
     return parser.finish();
 }
 
-}  // namespace ruvia::detail
-
 // A reusable codec slot: native compression libraries keep pointers into
 // their stream, so the codec lives in one stable heap allocation.
 // `codec_type` provides initialized() and reset().
-
-namespace ruvia::detail {
 
 // The slot's codec, created on first use. A codec that failed to initialize is
 // not kept, so the next use retries; nullptr reports that failure.
@@ -512,8 +492,6 @@ private:
     std::optional<std::uint64_t> value_;
 };
 
-}  // namespace ruvia::detail
-
 // One compression library binding per coding, behind a uniform signature: decode
 // or encode a whole buffer, bounded by an
 // explicit output ceiling. Decode reports data errors as values; encode returns
@@ -521,8 +499,6 @@ private:
 // codec itself cannot run. Which coding a field asks for is decided elsewhere;
 // this is only the machinery each one runs on. decode_http_content maps an
 // empty representation to empty content before any decoder below runs.
-
-namespace ruvia::detail {
 
 class brotli_encoder_stream;
 class zlib_deflate_stream;
@@ -573,8 +549,6 @@ template <typename stream_type, typename operation_type, typename... arg_types>
 [[nodiscard]] std::optional<std::string> encode_zlib_content(zlib_deflate_stream& deflater, std::string_view input, std::size_t max_encoded_bytes);
 [[nodiscard]] std::optional<std::string> encode_brotli_content(brotli_encoder_stream& encoder, std::string_view input, std::size_t max_encoded_bytes);
 [[nodiscard]] std::optional<std::string> encode_zstd_content(zstd_encoder_stream& encoder, std::string_view input, std::size_t max_encoded_bytes);
-}  // namespace ruvia::detail
-
 // zlib inflate/deflate state with tracked working memory, including the LZ77
 // window. zlib keeps back-pointers to both the z_stream and the allocator
 // context, so these types are pinned: owners embed them in storage whose
@@ -588,8 +562,6 @@ template <typename stream_type, typename operation_type, typename... arg_types>
 // keeping its working memory, so the next unit of work produces the same bytes
 // as a new stream. false means the native state is unusable and the owner must
 // destroy the stream.
-
-namespace ruvia::detail {
 
 // zlib's own default; deflate memory is about (1 << (window_bits + 2)) +
 // (1 << (mem_level + 9)) bytes, plus the zlib >= 1.2.12 pending buffer.
@@ -850,10 +822,6 @@ private:
     bool unsupported_{false};
 };
 
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
-
 // Borrowed field descriptors stay inline until their reserved or appended count
 // needs heap overflow. Views are rebound after moves, never cached.
 template <typename field_type>
@@ -947,10 +915,6 @@ private:
     std::size_t capacity_{inline_capacity};
 };
 
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
-
 // The one Extended CONNECT WebSocket bootstrap field list for HTTP/2 (RFC
 // 8441) and HTTP/3 (RFC 9220): the negotiation's Sec-WebSocket-* request
 // fields, then the application headers. The descriptors borrow both.
@@ -967,14 +931,10 @@ namespace ruvia::detail {
     return staged;
 }
 
-}  // namespace ruvia::detail
-
 // RFC 3986 syntax, one level below any HTTP-specific rule: which byte sequences
 // form a legal URI component, userinfo, port, IPv4 / IPv6 / IPvFuture literal or
 // reg-name. Nothing here knows about request targets, Host fields or origins --
 // those rules live in http_request_target.h and http_serialized_origin.cpp.
-
-namespace ruvia::detail {
 
 [[nodiscard]] inline bool is_decimal_digit(char c) noexcept {
     return c >= '0' && c <= '9';
@@ -1019,10 +979,6 @@ namespace ruvia::detail {
 [[nodiscard]] bool is_valid_reg_name(std::string_view value) noexcept;
 [[nodiscard]] bool is_valid_dns_domain_name(std::string_view name) noexcept;
 
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
-
 struct request_target_view {
     std::string_view scheme_;
     std::string_view path_;
@@ -1066,10 +1022,6 @@ template <http_temporary_owning_char_string target_type>
 bool parse_request_target(http_known_method, target_type&&, request_target_view&) = delete;
 [[nodiscard]] bool authority_matches_host(std::string_view authority, std::string_view host, std::uint16_t default_port) noexcept;
 
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
-
 // IMF-fixdate month names (RFC 9110 section 5.6.7), in calendar order.
 inline constexpr std::array<std::string_view, 12> http_month_names{"Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"};
 
@@ -1085,10 +1037,6 @@ inline constexpr std::array<std::string_view, 12> http_month_names{"Jan", "Feb",
 
 // Bare date value (no field name, no CRLF) for HTTP/2 and HTTP/3 headers.
 [[nodiscard]] std::string_view cached_date_value() noexcept;
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
-
 // One identity for wire classification, cached lookup and descriptor tags.
 // Other has no cache slot; the remaining identities map to compact slots.
 enum class http_field_kind : std::uint8_t { other,
@@ -1181,9 +1129,6 @@ struct http_field_classification final {
 [[nodiscard]] http_field_classification classify_http_field_name(std::string_view name) noexcept;
 [[nodiscard]] http_field_kind classify_http_field(std::string_view name) noexcept;
 
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
 struct http_structured_item {
     enum class kind_type { other,
         integer,
@@ -1455,10 +1400,6 @@ struct http_structured_parser {
         return parameters();
     }
 };
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
-
 inline constexpr std::uint32_t response_header_content_length = 1U << 0;
 inline constexpr std::uint32_t response_header_content_encoding = 1U << 1;
 inline constexpr std::uint32_t response_header_content_type = 1U << 2;
@@ -1823,12 +1764,8 @@ enum class http_response_control_field_status : std::uint8_t {
     return !upgrade_protocols.has_field() || connection_options.upgrade();
 }
 
-}  // namespace ruvia::detail
-
 // Shared quality parsing (RFC 9110 section 12.4.2). Token fields use one
 // optional weight; media ranges extract q from their parameters.
-
-namespace ruvia::detail {
 
 [[nodiscard]] inline int http_parse_quality_value(std::string_view value) noexcept {
     value = http_trim_ows(value);
@@ -1882,10 +1819,6 @@ namespace ruvia::detail {
     return parsed_value < 0 ? 0 : parsed_value;
 }
 
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
-
 enum class response_field_status : std::uint8_t {
     ok,
     invalid,
@@ -1908,10 +1841,6 @@ private:
 [[nodiscard]] response_field_status validate_response_field(http_field_kind kind, std::string_view value, response_field_state& state) noexcept;
 
 [[nodiscard]] bool is_forbidden_response_trailer_name(std::string_view name) noexcept;
-
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
 
 enum class http_interim_response_header_validation_status : std::uint8_t {
     ok,
@@ -1969,10 +1898,6 @@ private:
     response_field_state fields_;
     std::uint32_t known_bits_{0};
 };
-
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
 
 [[nodiscard]] inline std::string_view http_trim_weak_etag_prefix(std::string_view value) noexcept {
     if (value.size() >= 2 && value[0] == 'W' && value[1] == '/') {
@@ -2120,10 +2045,6 @@ struct http_etag_list_match_result final {
     });
     return status == http_field_list_parse_status::ok && (role == http_field_list_role::recipient || has_member);
 }
-
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
 
 // The standardized Expect field member is defined once so parsers and writers
 // cannot drift on its wire spelling.
@@ -2300,10 +2221,6 @@ private:
 [[nodiscard]] request_field_status validate_request_field(http_field_kind kind, std::string_view value, http_field_list_role role, request_field_state& state, http_request_field_source source = http_request_field_source::generated) noexcept;
 
 [[nodiscard]] bool is_protocol_managed_request_field(http_field_kind kind, std::string_view name) noexcept;
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
-
 struct http_request_access final {
     static constexpr std::size_t cached_header_slots = http_request::cached_header_slots;
     static_assert(cached_header_slots == http_field_kind_count - 1);
@@ -2614,10 +2531,6 @@ private:
 // Copies the selected subprotocol and response fields.
 [[nodiscard]] websocket_server_negotiation make_websocket_server_negotiation(const http_request& request, const websocket_server_handshake_options& options);
 
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
-
 [[nodiscard]] constexpr http_response_content_semantics classify_http_response_content_semantics(http_known_method request_method, http_status_code status_code) noexcept {
     if (status_code == http_status::switching_protocols) {
         return http_response_content_semantics::protocol_switch;
@@ -2710,10 +2623,6 @@ struct http_response_header_access final {
     return response_has_known_header(response.headers(), bit);
 }
 
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
-
 // http_response_header stores both lengths in uint32_t and releases the one
 // name/value allocation using their sum. Never let a public or runtime helper
 // construct a descriptor whose wire/storage lengths cannot be represented;
@@ -2758,10 +2667,6 @@ inline void validate_response_header_storage_size(std::size_t name_size, std::si
     }
     return reinterpret_cast<std::uintptr_t>(value.data()) == reinterpret_cast<std::uintptr_t>(name.data() + name.size());
 }
-
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
 
 enum class http_binary_final_response_control_plan_error : std::uint8_t { invalid_status,
     upgrade_unavailable,
@@ -2864,13 +2769,9 @@ private:
     return std::nullopt;
 }
 
-}  // namespace ruvia::detail
-
 // Shared response Content-Length semantics. HTTP/1 adds its chunked and
 // close-delimited framing policy; HTTP/2 and HTTP/3 delimit content with DATA
 // frames but enforce the same normalized field value.
-
-namespace ruvia::detail {
 
 enum class http_framed_response_head_plan_error : std::uint8_t { invalid_content_length,
     connect_tunnel_required,
@@ -3008,10 +2909,6 @@ private:
     std::uint64_t bytes_{0};
 };
 
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
-
 // Borrow unchanged names; request writable storage only at the first uppercase
 // byte. The provider must keep the input alive and return name.size() bytes.
 template <typename prepare_type>
@@ -3032,10 +2929,6 @@ template <typename prepare_type>
     }
     return name;
 }
-
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
 
 inline constexpr std::size_t http_origin_length_prefix_bytes = 2;
 inline constexpr std::size_t http_max_prefixed_origin_length = 0xffff;
@@ -3077,10 +2970,6 @@ inline void write_http_origin_payload(std::span<char> payload, std::span<const s
         out = write_http_prefixed_origin(out, origin);
     }
 }
-
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
 
 // Local HTTP message content accounting is distinct from the peer-body accounting
 // stored on the same bidirectional stream. In particular, a server receives request
@@ -3204,10 +3093,6 @@ private:
     std::uint64_t accepted_bytes_{0};
 };
 
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
-
 [[nodiscard]] inline bool http_binary_is_valid_outbound_regular_header(std::string_view name, std::string_view value) noexcept {
     return is_valid_http_header_name(name) && is_valid_http_header_value(value) && !is_forbidden_http_binary_connection_field(name);
 }
@@ -3306,10 +3191,6 @@ namespace ruvia::detail {
     // RFC 9110 section 9.3.7 applies the Content-Type requirement to generation.
     return content_semantics != http_request_content_semantics::forbidden && (source == http_request_field_source::forwarded || content_semantics != http_request_content_semantics::content_type_required || fields.seen(http_field_kind::content_type));
 }
-
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
 
 // Sinks expose clear(), reserve(count), add(lowercase_name, borrowed_value),
 // add_lowercase(name, borrowed_value), and add_owned_value(lowercase_name, value).
@@ -3463,10 +3344,6 @@ template <typename sink_type>
     return true;
 }
 
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
-
 // The first input byte occupies the low byte, independent of native byte order.
 // The caller must provide at least eight readable bytes.
 [[nodiscard]] inline std::uint64_t load_http_field_value_word(const char* data) noexcept {
@@ -3516,10 +3393,6 @@ namespace ruvia::detail {
     return index;
 }
 
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
-
 enum class field_line_folding_policy { mime,
     http };
 
@@ -3564,10 +3437,6 @@ inline void copy_unfolded_field_lines(std::string_view input, std::size_t first_
     }
     storage.append(input.substr(segment_begin));
 }
-
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
 
 // Scan one complete RFC 9112 section 5 field line, including its CRLF.
 // The caller excludes the final empty line and unfolds response obs-fold first.
@@ -3663,10 +3532,6 @@ struct parsed_request_header_block {
 // parsed after the leading_bytes ignored leading empty lines.
 [[nodiscard]] std::optional<http_parse_error> parse_http_header_block(std::string_view buffer, std::size_t leading_bytes, std::size_t header_bytes, parsed_request_header_block& block);
 
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
-
 enum class http1_version_parse_result : std::uint8_t { invalid,
     unsupported,
     http10,
@@ -3708,14 +3573,10 @@ template <typename error_type>
     return std::nullopt;
 }
 
-}  // namespace ruvia::detail
-
 // The two steps between an HTTP/1 client response head on the wire and the plan
 // the parser acts on: reading the status line and header fields into borrowed
 // values, then deciding from them (and the request that produced them) how the
 // body is framed and whether the connection survives.
-
-namespace ruvia::detail {
 
 struct http_client_response_head_access final {
     [[nodiscard]] static http_client_response_head make(http_received_status status, http_protocol_version protocol_version) noexcept {

@@ -427,9 +427,6 @@ void detail::router::build_extension_index() {
     });
 }
 
-}  // namespace ruvia
-
-namespace ruvia {
 namespace {
 
 // How much of a route's request-path space one path-scoped middleware covers.
@@ -666,9 +663,6 @@ void detail::router::build_url_patterns() {
     patterns.erase(duplicates.begin(), duplicates.end());
 }
 
-}  // namespace ruvia
-
-namespace ruvia {
 namespace {
 
 struct dynamic_route_upper_bounds final {
@@ -844,12 +838,8 @@ void detail::router::insert_dynamic(compiled_route_plan::dynamic_node_type& root
     }
 }
 
-}  // namespace ruvia
-
 // Substitute parameters and percent-encode path values while preserving the
 // same segments used to build and resolve the registered route.
-
-namespace ruvia {
 
 namespace {
 
@@ -993,10 +983,6 @@ std::string detail::route_table::url_for(std::string_view pattern, std::span<con
     }
     return url;
 }
-
-}  // namespace ruvia
-
-namespace ruvia {
 
 detail::route_handler detail::resolved_route::handler() const noexcept {
     return callback_access::make<task<http_response>(context&)>(handler_target_, route_->endpoint().buffered()->invoke());
@@ -1400,13 +1386,9 @@ const detail::route_entry* detail::route_table::find_dynamic_route(http_known_me
     return &plan_->routes_[route_index];
 }
 
-}  // namespace ruvia
-
 // Choosing what answers a request: the matched route, a 405 with Allow, the
 // document-root fallback, or nothing -- and running a buffered handler once one
 // is chosen.
-
-namespace ruvia {
 
 namespace {
 
@@ -1604,13 +1586,9 @@ task<http_response> detail::route_table::dispatch_bound_buffered(const resolved_
     co_return co_await finalize_failure(context_value, exception);
 }
 
-}  // namespace ruvia
-
 // Turning a failed request into a response: the error a thrown exception really
 // carries, the metadata that survives onto the response, and the scoped error /
 // not-found handlers that get the last word.
-
-namespace ruvia {
 
 namespace {
 
@@ -1815,10 +1793,6 @@ detail::http_not_found_handler_ref detail::route_table::not_found_handler_for(st
     return handler != nullptr ? handler : plan_->not_found_handler_;
 }
 
-}  // namespace ruvia
-
-namespace ruvia {
-
 namespace detail {
 
 struct next_access final {
@@ -2008,13 +1982,9 @@ task<http_response> detail::route_table::finalize_failure(context& context_value
     co_return detail::context_access::release_response(context_value);
 }
 
-}  // namespace ruvia
-
 // Running a route that streams its response: binding the writer to the context
 // for the handler's lifetime, producing the head the HTTP/1 sink commits, and
 // unwinding when the handler throws after bytes are already on the wire.
-
-namespace ruvia {
 
 namespace {
 
@@ -2662,13 +2632,9 @@ task<void> ruvia::router::dispatch(request_stream& stream) & {
     return make_scoped_operation(stream.operation_scope_, detail::router_state::dispatch(state_, stream));
 }
 
-}  // namespace ruvia
-
 // The route-registration surface a controller sees. Each call builds the
 // endpoint its route kind runs and hands it, with the scope's prefix and
 // middlewares, to the router's single registration path.
-
-namespace ruvia {
 
 using namespace detail;
 

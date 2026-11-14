@@ -413,10 +413,6 @@ private:
     value_type value_;
 };
 
-}  // namespace ruvia
-
-namespace ruvia {
-
 namespace detail {
 class zlib_deflate_stream;
 class zlib_inflate_stream;
@@ -467,10 +463,6 @@ private:
     std::array<detail::zlib_deflate_stream*, static_cast<std::size_t>((max_window_bits - min_window_bits + 1) * compression_levels)> deflaters_{};
     detail::zlib_inflate_stream* inflater_{nullptr};
 };
-
-}  // namespace ruvia
-
-namespace ruvia {
 
 enum class websocket_feed_status : std::uint8_t { accepted,
     inactive,
@@ -912,9 +904,6 @@ private:
 // request or server-preference storage.
 [[nodiscard]] websocket_server_handshake make_websocket_server_handshake(const http_request& request, websocket_server_handshake_options options = {});
 
-}  // namespace ruvia
-
-namespace ruvia {
 struct websocket_client_negotiation_config_view final {
     borrowed_span<std::string_view> subprotocols_{};
     websocket_client_deflate_offer deflate_{};

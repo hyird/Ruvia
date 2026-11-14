@@ -144,9 +144,6 @@ private:
 // precompression: text/*, +json, +xml, and common text/font/wasm/icon media
 // types, excluding any type naming a zip container.
 [[nodiscard]] bool is_http_media_type_compressible(std::string_view content_type_value) noexcept;
-}  // namespace ruvia
-
-namespace ruvia {
 
 // A codec that could not run (for example its native state could not be
 // created or reset, or the library reported an internal error). It is an
@@ -222,10 +219,6 @@ struct http_content_decode_options final {
 // is released before the next stage completes. Codec failures throw
 // http_content_codec_error.
 [[nodiscard]] std::variant<std::string, http_content_decode_error> decode_http_content(std::span<const http_content_coding> codings, std::string_view input, http_content_decode_options options);
-}  // namespace ruvia
-
-namespace ruvia {
-
 struct http_content_encoder_options final {
     std::size_t max_encoded_bytes_{(std::numeric_limits<std::size_t>::max)()};
     std::size_t max_memory_bytes_{(std::numeric_limits<std::size_t>::max)()};
@@ -501,10 +494,6 @@ inline void http_stream_encoder_lease::discard() noexcept {
     }
 }
 
-}  // namespace ruvia
-
-namespace ruvia {
-
 // Returns the media type before any parameters. The view borrows the input;
 // owning string temporaries cannot be passed through borrowed_text.
 [[nodiscard]] std::string_view http_media_type_only(borrowed_text value) noexcept;
@@ -551,16 +540,9 @@ private:
     std::size_t parameter_specificity_{0};
 };
 
-}  // namespace ruvia
-
 // Accept-Encoding negotiation (RFC 9110 section 12.5.3): the per-coding weights a
 // request expresses, and the response coding the server picks from them.
 // gzip and its deprecated x-gzip spelling share one case-insensitive weight.
-
-namespace ruvia {
-
-class http_request;
-
 struct http_accepted_encoding_quality {
     int explicit_quality_{-1};
     int wildcard_quality_{-1};
@@ -883,10 +865,6 @@ enum class http_response_content_coding_status : std::uint8_t {
 [[nodiscard]] std::optional<http_content_coding> negotiate_http_content_coding(std::span<const http_header> request_headers, std::span<const http_content_coding> candidates) noexcept;
 [[nodiscard]] std::optional<http_content_coding> negotiate_http_content_coding(std::span<const http_header_view> request_headers, std::span<const http_content_coding> candidates) noexcept;
 [[nodiscard]] std::optional<http_content_coding> negotiate_http_content_coding(const http_request& request, std::span<const http_content_coding> candidates) noexcept;
-
-}  // namespace ruvia
-
-namespace ruvia {
 
 namespace detail {
 struct multipart_part_access;
@@ -1320,10 +1298,6 @@ private:
 
 template <detail::http_temporary_owning_char_string body_type>
 std::vector<multipart_part> parse_multipart_body(body_type&&, multipart_parse_options) = delete;
-
-}  // namespace ruvia
-
-namespace ruvia {
 
 struct sse_message final {
     // SSE messages may be retained before they are formatted. Keep their text

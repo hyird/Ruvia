@@ -1700,9 +1700,6 @@ std::optional<static_file_representation> select_static_file_representation(cons
     return std::nullopt;
 }
 
-}  // namespace ruvia
-
-namespace ruvia {
 namespace {
 
 [[nodiscard]] http_error_info normalize_http_error_info(http_error_info error) noexcept {
@@ -2057,10 +2054,6 @@ task<void> csrf_protection::invoke(context& c, next& next_value) {
     }
     co_await next_value();
 }
-
-}  // namespace ruvia
-
-namespace ruvia {
 
 namespace {
 

@@ -346,10 +346,6 @@ private:
     std::size_t cookie_bytes_{0};
 };
 
-}  // namespace ruvia
-
-namespace ruvia {
-
 enum class http_set_cookie_attribute : std::uint8_t {
     secure = 1U << 0,
     partitioned = 1U << 1,
@@ -435,10 +431,6 @@ private:
 template <detail::http_temporary_owning_char_string value_type>
 std::optional<http_set_cookie_view> parse_set_cookie(value_type&&) = delete;
 
-}  // namespace ruvia
-
-namespace ruvia {
-
 // Wire width of an RFC 9110 IMF-fixdate, e.g. "Sun, 06 Nov 1994 08:49:37 GMT".
 inline constexpr std::size_t http_imf_fixdate_size = 29;
 
@@ -450,12 +442,7 @@ inline constexpr std::size_t http_imf_fixdate_size = 29;
 // Expires, Last-Modified, If-Modified-Since. Returns std::nullopt if malformed.
 [[nodiscard]] std::optional<std::time_t> parse_http_date(std::string_view value) noexcept;
 
-}  // namespace ruvia
-
-namespace ruvia {
-
 class http_response;
-class http_response_headers;
 
 enum class cache_control_directive : std::uint16_t {
     no_store = 1U << 0,
@@ -842,10 +829,6 @@ void merge_http_304_response_headers(http_response_headers& cached_headers, cons
 }
 void merge_http_304_response_headers(http_response& cached_response, const http_response& not_modified_response);
 
-}  // namespace ruvia
-
-namespace ruvia {
-
 struct http_conditional_method_plan final {
     bool evaluates_preconditions_;
     bool uses_not_modified_response_;
@@ -929,9 +912,6 @@ struct http_etag_preconditions final {
 [[nodiscard]] bool http_strong_etag_equals(std::string_view left, std::string_view right) noexcept;
 [[nodiscard]] bool http_weak_etag_equals(std::string_view left, std::string_view right) noexcept;
 [[nodiscard]] std::string weaken_http_etag(std::string_view etag);
-}  // namespace ruvia
-
-namespace ruvia {
 
 // Case-insensitive set of field/option tokens parsed from one or more
 // Connection header lines (RFC 9110 section 7.6.1).
@@ -1006,10 +986,6 @@ template <http_header_field_source headers_type>
 
 [[nodiscard]] bool is_forbidden_http_request_trailer_field_name(std::string_view field_name) noexcept;
 [[nodiscard]] bool is_forbidden_http_response_trailer_field_name(std::string_view field_name) noexcept;
-
-}  // namespace ruvia
-
-namespace ruvia {
 
 struct http_cors_policy_config final {
     bool allow_any_origin_{false};

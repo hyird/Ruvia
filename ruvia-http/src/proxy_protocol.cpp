@@ -396,9 +396,6 @@ void proxy_protocol_parser::finish_v2() {
     state_ = proxy_protocol_parser_state::finished;
 }
 
-}  // namespace ruvia
-
-namespace ruvia {
 namespace {
 
 [[nodiscard]] std::optional<std::uint32_t> parse_zone(std::string_view text) noexcept {
@@ -584,10 +581,6 @@ bool ip_cidr::contains(std::string_view address_text) const noexcept {
     const auto parsed = ip_address::parse(address_text);
     return parsed.has_value() && contains(*parsed);
 }
-
-}  // namespace ruvia
-
-namespace ruvia {
 
 http_connect_udp_target::http_connect_udp_target(std::string host, port_number port) noexcept :
     host_(std::move(host)),
@@ -872,9 +865,6 @@ http1_response_head_plan prepare_http1_connect_udp_response_head(const http_resp
     }
     return http1_close_delimited_response_stream_head_plan(plan_http_response_body(http_known_method::get, response.status()), http1_request_connection_plan::http11_close());
 }
-}  // namespace ruvia
-
-namespace ruvia {
 namespace {
 // CONNECT-UDP context ID 0 (RFC 9298 section 5) as its one-byte variable-length integer.
 constexpr std::string_view udp_payload_context_id{"\0", 1};
@@ -1109,9 +1099,6 @@ std::variant<std::optional<http_udp_datagram_view>, http_datagram_error> http_da
     }
     return *udp;
 }
-}  // namespace ruvia
-
-namespace ruvia {
 namespace {
 
 [[nodiscard]] constexpr std::uint32_t rotl32(std::uint32_t value, unsigned int shift) noexcept {
@@ -1750,9 +1737,6 @@ std::optional<tls_client_hello_fingerprints> compute_tls_client_hello_fingerprin
     return parsed->fingerprints(quic);
 }
 
-}  // namespace ruvia
-
-namespace ruvia {
 namespace {
 
 // "[2001:db8::1]:443" -> "2001:db8::1"; "192.0.2.1:8080" -> "192.0.2.1".

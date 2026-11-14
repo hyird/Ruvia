@@ -94,8 +94,6 @@ private:
     std::optional<std::uint64_t> content_length_;
 };
 
-}  // namespace ruvia
-
 // Outbound HTTP client protocol models.
 //
 // OWNERSHIP: these are transport-free HTTP values. http_origin_view and
@@ -103,9 +101,6 @@ private:
 // parsed header storage. Response content remains owned by the
 // external sans-I/O driver that follows the framing plan. Socket/TLS
 // configuration, pools, redirect limits, and timeouts also belong there.
-
-namespace ruvia {
-
 // Transport-independent sender policy for RFC 9110's only standardized
 // request expectation. HTTP/1 and HTTP/2 writers both own generation of the
 // Expect field so callers cannot create a wire/state-machine mismatch.
@@ -264,17 +259,12 @@ struct http_client_tunnel_request_view final {
     borrowed_http_headers headers_{};
 };
 
-}  // namespace ruvia
-
 // Outbound HTTP redirect protocol helpers.
 //
 // These values contain no transport policy: redirect limits, cross-origin
 // authorization, connection selection, and retries remain owned by the external
 // I/O runtime. The helpers only classify HTTP response fields, apply the RFC
 // method/content rewrite rules, and resolve one HTTP(S) URI-reference.
-
-namespace ruvia {
-
 enum class http_unique_header_status : std::uint8_t {
     absent,
     found,
@@ -422,10 +412,6 @@ private:
 // destination.
 [[nodiscard]] std::variant<http_client_resolved_redirect, http_client_redirect_resolution_error> resolve_http_client_redirect_target(const http_origin_view& origin, http_client_redirect_target_options options);
 
-}  // namespace ruvia
-
-namespace ruvia {
-
 namespace detail {
 
 enum class http1_client_initial_content_state : std::uint8_t {
@@ -468,10 +454,6 @@ private:
     detail::http1_client_initial_content_state content_state_{detail::http1_client_initial_content_state::complete};
 };
 
-}  // namespace ruvia
-
-namespace ruvia {
-
 // Request-target form of a non-CONNECT request line (RFC 9112 section 3.2).
 // CONNECT always uses authority-form through prepare_connect().
 enum class http1_request_target_form : std::uint8_t {
@@ -495,12 +477,6 @@ struct http1_client_request_wire_policy final {
     http_request_field_source field_source_{http_request_field_source::generated};
     http1_request_target_form target_form_{http1_request_target_form::origin};
 };
-
-namespace detail {
-
-struct http1_client_request_prepare_result_access;
-
-}  // namespace detail
 
 struct http1_client_request_head_view final {
     borrowed_text method_{"GET"};
@@ -730,9 +706,6 @@ public:
     [[nodiscard]] std::variant<prepared_http1_client_request, http1_client_request_buffer_too_small, http1_client_request_prepare_error> prepare_connect(borrowed_text authority, std::span<const http_header_view> headers, std::span<char> head_buffer, http1_client_request_wire_policy policy = {}) const;
 };
 
-}  // namespace ruvia
-
-namespace ruvia {
 enum class http1_request_content_write_error : std::uint8_t {
     awaiting_continue,
     stopped,
@@ -803,10 +776,6 @@ private:
     std::size_t pending_{0};
     bool gated_{false}, stopped_{false}, writing_{false}, finishing_{false}, finished_{false};
 };
-}  // namespace ruvia
-
-namespace ruvia {
-
 namespace detail {
 
 struct http1_client_response_parse_result_access;
@@ -1224,10 +1193,6 @@ private:
     std::optional<detail::http1_client_parsed_status_line> status_line_;
     std::size_t status_line_end_{0};
 };
-}  // namespace ruvia
-
-namespace ruvia {
-
 enum class http1_client_response_body_error : unsigned char {
     invalid_framing,
     invalid_transfer_coding,

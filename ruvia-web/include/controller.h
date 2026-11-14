@@ -262,10 +262,6 @@ namespace ruvia::detail {
     return depth;
 }
 
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
-
 class router;
 
 template <typename callback_type>
@@ -338,13 +334,7 @@ private:
     std::vector<worker_state_definition> worker_states_;
 };
 
-}  // namespace ruvia::detail
-
 // Internal startup-time controller registration contracts.
-
-namespace ruvia::detail {
-
-class router;
 
 template <typename controller_type>
 class controller_registration_access;
@@ -524,10 +514,6 @@ template <typename controller_type>
 
     return add_controller_registrar({.create_ = &create_controller<controller_type>, .register_routes_ = &register_controller_routes<controller_type>});
 }
-
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
 
 template <typename member_type>
 struct context_task_result {

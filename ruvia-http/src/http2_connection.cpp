@@ -1371,10 +1371,6 @@ public:
     return stream.is_aborted() || (http2_remote_peer_half_closed(stream) && stream.local_send().end_stream_committed() != nullptr);
 }
 
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
-
 // The field section handed to one nghttp2 HEADERS/PUSH_PROMISE submission.
 // Entries either borrow caller text that outlives the submission or own a copy
 // (lowercased names, formatted values). nghttp2 copies every name and value
@@ -1493,10 +1489,6 @@ private:
     std::vector<entry_type> entries_;
     std::vector<nghttp2_nv> nv_;
 };
-
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
 
 // SETTINGS_MAX_HEADER_LIST_SIZE limits the decoded field section, not the
 // serialized HPACK block. Huffman coding can spend up to 30 bits per decoded
@@ -1683,10 +1675,6 @@ struct http2_header_decode_context final {
     return is_forbidden_http_request_trailer_name(name) || context_value.stream_.append_remote_trailer(name, value);
 }
 
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
-
 [[nodiscard]] inline bool http2_is_pending_websocket_connect(const http2_stream_state& stream) noexcept {
     const auto* pending = stream.tunnel().pending();
     return pending != nullptr && pending->form() == http2_connect_form::extended && stream.protocol_is_websocket();
@@ -1712,10 +1700,6 @@ namespace ruvia::detail {
     // Sec-WebSocket-Key and Sec-WebSocket-Accept are not processed here.
     return validate_extended_connect_websocket_headers(request, options);
 }
-
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
 
 // Queue records for the events whose public form the facade materializes from
 // stream storage or binds to its owner endpoint when the event is taken.
@@ -2780,10 +2764,6 @@ private:
     std::uint32_t undrained_control_frames_{0};
     std::uint32_t peer_error_resets_{0};
 };
-
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
 
 namespace {
 
@@ -5079,14 +5059,10 @@ std::variant<std::uint32_t, http2_push_submit_error> http2_connection::submit_pu
     return promised_id;
 }
 
-}  // namespace ruvia::detail
-
 // Inbound HEADERS, PUSH_PROMISE and DATA as nghttp2 delivers them: one field
 // block per on_begin_headers/on_header/on_frame_recv sequence, DATA payload in
 // chunks borrowed from the fed input. nghttp2 has already enforced framing,
 // stream states and flow control; this layer applies HTTP message semantics.
-
-namespace ruvia::detail {
 
 namespace {
 
@@ -6150,9 +6126,6 @@ std::variant<std::uint32_t, http2_request_head_submit_error> submit_http2_websoc
     });
 }
 
-}  // namespace ruvia
-
-namespace ruvia {
 namespace detail {
 
 class hpack_decoder final {

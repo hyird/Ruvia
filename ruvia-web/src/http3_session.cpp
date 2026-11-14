@@ -35,7 +35,7 @@
 #include "http_header.h"
 #include "http_response.h"
 #include "http_response_server.h"
-#include "route_table.h"
+#include "server_session.h"
 #include "stop_token.h"
 #include "streaming.h"
 #include "websocket_handshake.h"
@@ -1447,9 +1447,6 @@ void http3_session::finish_drain_if_ready() noexcept {
     }
 }
 
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
 namespace {
 
 [[nodiscard]] std::span<const std::byte> byte_view(std::string_view bytes) noexcept {
@@ -2240,9 +2237,6 @@ void http3_endpoint::send_stateless_reset(std::span<const std::uint8_t> destinat
     }
 }
 
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
 namespace {
 
 // Computes the 32-bit keyed digest of the 16 random bytes `cid[4..19]`. The
@@ -2333,9 +2327,6 @@ bool make_http3_stateless_reset_token(const http3_secret& secret, const ngtcp2_c
     return ngtcp2_crypto_generate_stateless_reset_token(token.data(), secret.data(), secret.size(), &cid) == 0;
 }
 
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
 #if !defined(_WIN32)
 namespace {
 

@@ -49,10 +49,6 @@ inline void http_assign_native_path(http_native_path_string_type& output, const 
     return http_make_path_from_native_path(path.c_str());
 }
 
-}  // namespace ruvia
-
-namespace ruvia {
-
 // Opaque runtime-supplied identity of the file whose metadata was used to
 // frame a response. HTTP transports this token; the runtime validates it after
 // opening the actual file handle.
@@ -194,10 +190,6 @@ struct http_response_body_segment_view final {
     std::string_view bytes_{};
     std::optional<http_response_file_view> file_{};
 };
-
-}  // namespace ruvia
-
-namespace ruvia {
 
 // A byte range already resolved against the selected representation.
 struct http_byte_range final {
@@ -389,10 +381,6 @@ private:
     bool complete_{false};
 };
 
-}  // namespace ruvia
-
-namespace ruvia {
-
 // Owns copied framing metadata and ordered file-slice descriptors. Observed
 // views borrow the plan. Construction and clone propagate allocation failures.
 class http_multipart_byte_range_plan final {
@@ -461,10 +449,6 @@ private:
 // plan_http_representation_response() answers multiple ranges of a coded
 // representation with the full representation instead.
 [[nodiscard]] http_multipart_byte_range_plan make_http_multipart_byte_range_plan(const http_byte_range_set& ranges, http_content_length representation_length, std::string_view media_type, std::string_view boundary);
-
-}  // namespace ruvia
-
-namespace ruvia {
 
 class http_request;
 
@@ -557,13 +541,8 @@ private:
 // CONNECT, OPTIONS, and TRACE ignore conditions, as do ineligible normal statuses.
 [[nodiscard]] http_representation_response_plan plan_http_representation_response(const http_request& request, http_selected_representation_metadata representation, http_representation_response_options options = {});
 
-}  // namespace ruvia
-
-namespace ruvia {
-
 enum class http_connect_udp_error : std::uint8_t;
 class http1_response_head_plan;
-class http_request;
 class http_response;
 class http_response_headers;
 

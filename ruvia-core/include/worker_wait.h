@@ -689,10 +689,6 @@ template <typename state_type, typename... arg_types>
     return state_value;
 }
 
-}  // namespace ruvia
-
-namespace ruvia {
-
 enum class one_shot_complete_status : std::uint8_t {
     completed,
     already_completed,
@@ -979,9 +975,6 @@ template <typename t_type>
     return std::pair(std::move(completion), one_shot_receiver<t_type>(std::move(state_value)));
 }
 
-}  // namespace ruvia
-
-namespace ruvia {
 class pool_lease_acquire;
 
 // Single-worker owner of pool slot leases and their asynchronous wait queue.
@@ -1069,10 +1062,6 @@ private:
     bool queued_{false};
     bool awaited_{false};
 };
-
-}  // namespace ruvia
-
-namespace ruvia {
 
 enum class channel_send_status : std::uint8_t {
     sent,

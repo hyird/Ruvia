@@ -316,10 +316,6 @@ private:
 
 }  // namespace detail
 
-}  // namespace ruvia
-
-namespace ruvia {
-
 using worker_id_type = std::uint64_t;
 
 [[nodiscard]] constexpr std::uint64_t worker_selection_hash(std::string_view key) noexcept {
@@ -559,10 +555,6 @@ struct worker_ref_access {
 
 }  // namespace detail
 
-}  // namespace ruvia
-
-namespace ruvia {
-
 enum class worker_runtime_state : std::uint8_t {
     ready,
     running,
@@ -570,7 +562,6 @@ enum class worker_runtime_state : std::uint8_t {
     stopped,
 };
 
-class blocking_pool;
 class event_loop;
 class worker_group;
 class worker_runtime_context;
@@ -726,12 +717,6 @@ private:
 
     std::unique_ptr<impl_type> impl_;
 };
-
-}  // namespace ruvia
-
-namespace ruvia {
-
-class worker_runtime;
 
 // Sequences a set of worker_runtime owners through one lifecycle:
 // - start(): launches every member and waits until all are ready;

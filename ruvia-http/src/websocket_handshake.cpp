@@ -311,10 +311,6 @@ inline void decode_masked_websocket_payload(char* payload_value, std::size_t pay
     return (inflater.native().data_type & 128) != 0 ? websocket_inflate_result::ok : websocket_inflate_result::error;
 }
 
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
-
 // RFC 7692 codec state of one connection. A direction negotiated without
 // context takeover starts every message from an empty dictionary, so it uses
 // the borrowed shared codec set when the owner supplies one and then holds no
@@ -577,14 +573,10 @@ struct permessage_deflate_params final {
     return valid && has_extension ? negotiated : (websocket_compression{});
 }
 
-}  // namespace ruvia::detail
-
 // The Close frame payload (RFC 6455 section 5.5.1): encoding the one an
 // endpoint sends (a validated status code followed by an optional UTF-8
 // reason, capped at the 125-byte control-frame limit) and checking the one a
 // peer sent.
-
-namespace ruvia::detail {
 
 enum class websocket_close_payload_encode_error : std::uint8_t {
     invalid_reason,
@@ -655,9 +647,6 @@ private:
 
 // The protocol failure a received Close payload commits, or nullopt when it is legal.
 [[nodiscard]] std::optional<websocket_protocol_failure> websocket_close_payload_failure(std::string_view payload_value) noexcept;
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
 
 websocket_encoded_close_payload::websocket_encoded_close_payload(websocket_close_code code, std::string_view reason) noexcept :
     size_(static_cast<std::uint8_t>(reason.size() + 2)) {
@@ -1809,10 +1798,6 @@ websocket_close_submit_status websocket_connection::submit_close(websocket_close
     return websocket_close_submit_status::accepted;
 }
 
-}  // namespace ruvia
-
-namespace ruvia {
-
 websocket_deflate_codecs::~websocket_deflate_codecs() {
     for (auto* codec : deflaters_) {
         delete codec;
@@ -2197,9 +2182,6 @@ void encode_websocket_accept(websocket_accept_key_type& output, std::string_view
     http_base64_encode(output.data(), std::span<const std::uint8_t>(digest));
 }
 
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
 namespace {
 
 // A Sec-WebSocket-Key is the canonical padded base64 of a 16-byte nonce
@@ -2292,9 +2274,6 @@ websocket_handshake_validation_result validate_websocket_handshake(const http_re
     return websocket_headers.finish(options);
 }
 
-}  // namespace ruvia
-
-namespace ruvia {
 namespace {
 using error_type = websocket_client_handshake_error;
 std::optional<websocket_compression> parse_response_extension(std::string_view text, const websocket_client_deflate_offer& deflate) {

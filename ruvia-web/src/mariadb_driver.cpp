@@ -1213,9 +1213,6 @@ void mariadb_driver::discard_stream(void* result) noexcept {
     discard_unbuffered_result(result);
 }
 
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
 namespace {
 
 // The text MariaDB's text protocol sends for values its binary protocol
@@ -2400,9 +2397,6 @@ int resume_mariadb_prepared(MYSQL& connection, mariadb_prepared_run& run, int re
     }
 }
 
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
 namespace {
 
 [[nodiscard]] std::size_t mariadb_string_literal_size_hint(std::size_t value_size) {

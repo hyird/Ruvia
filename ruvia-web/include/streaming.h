@@ -301,10 +301,6 @@ struct streaming_access final {
 
 }  // namespace detail
 
-}  // namespace ruvia
-
-namespace ruvia {
-
 class multipart_reader final {
 public:
     multipart_reader(body_reader& body_reader_value, multipart_parse_options options) :
@@ -377,10 +373,6 @@ private:
 
     [[nodiscard]] task<std::optional<multipart_stream_part>> read_task(operation_options operation);
 };
-
-}  // namespace ruvia
-
-namespace ruvia {
 
 namespace detail {
 class http_capsule_stream_state;
@@ -716,10 +708,6 @@ private:
     bool send_ended_{false};
     ::ruvia::operation_scope operations_;
 };
-}  // namespace ruvia
-
-namespace ruvia {
-
 struct websocket_heartbeat_config final {
     // Absence disables heartbeat. When ping is present and pong is absent,
     // pong defaults to the ping interval during configuration normalization.

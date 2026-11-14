@@ -254,10 +254,6 @@ struct tls_config final {
     tls_certificate_id default_certificate_{};
 };
 
-}  // namespace ruvia
-
-namespace ruvia {
-
 enum class tcp_no_delay_policy : std::uint8_t {
     system_default,
     enable,
@@ -274,10 +270,6 @@ struct client_tcp_config final {
     tcp_no_delay_policy no_delay_{tcp_no_delay_policy::enable};
     tcp_keep_alive_policy keep_alive_{tcp_keep_alive_policy::enable};
 };
-
-}  // namespace ruvia
-
-namespace ruvia {
 
 // The HTTP versions a request may use: at least one, each built into this
 // library (std::invalid_argument otherwise).

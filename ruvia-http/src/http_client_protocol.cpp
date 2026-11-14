@@ -363,10 +363,6 @@ struct http1_client_request_field_facts final {
 // with `error` set on the first field that cannot be sent.
 [[nodiscard]] bool analyze_http1_client_request_fields(std::span<const http_header_view> headers, http1_client_request_field_facts& facts, http1_client_request_prepare_error& error, http_request_field_source source) noexcept;
 
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
-
 struct http1_client_request_prepare_result_access final {
     using result_type = std::variant<prepared_http1_client_request, http1_client_request_buffer_too_small, http1_client_request_prepare_error>;
 
@@ -981,9 +977,6 @@ void http1_request_content_writer::commit_finish() {
     finishing_ = false;
     finished_ = true;
 }
-}  // namespace ruvia
-
-namespace ruvia {
 namespace {
 // The one application-header policy of the client handshake: the request
 // writer owns every protocol-managed field (Host, framing, Expect and the

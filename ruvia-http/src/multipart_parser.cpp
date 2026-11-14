@@ -137,13 +137,9 @@ private:
     });
 }
 
-}  // namespace ruvia::detail
-
 // The multipart state machine: find the next delimiter, read one part's header
 // block, then hand out that part's body in chunks -- driven entirely by what is
 // currently buffered, so a caller may feed the body in any pieces.
-
-namespace ruvia::detail {
 
 enum class http_multipart_delimiter_kind : std::uint8_t {
     no_match,
@@ -873,9 +869,6 @@ multipart_poll_result multipart_parser::read_body_chunk() {
     return multipart_poll_result::make_need_input();
 }
 
-}  // namespace ruvia
-
-namespace ruvia {
 namespace {
 
 // Keeps every offset and size representable as a pointer difference.

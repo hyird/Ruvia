@@ -341,9 +341,6 @@ void http_response::add_vary_token(std::string_view token) {
     headers_.add_vary_token(token);
 }
 
-}  // namespace ruvia
-
-namespace ruvia {
 namespace {
 
 constexpr std::string_view crlf = "\r\n";
@@ -440,10 +437,6 @@ std::variant<prepared_http1_interim_response, http1_interim_response_buffer_too_
 
     return prepared_http1_interim_response(std::string_view(head_buffer.data(), head_bytes), facts.connection_options_.close() ? http1_interim_connection_disposition::close_after_interim_response : http1_interim_connection_disposition::unchanged);
 }
-
-}  // namespace ruvia
-
-namespace ruvia {
 
 const http_representation_response_plan::full_type* http_representation_response_plan::full() const& noexcept {
     return std::get_if<full_type>(&value_);
@@ -550,10 +543,6 @@ http_representation_response_plan plan_http_representation_response(const http_r
     return http_representation_response_plan(ranges, headers.has_if_range_);
 }
 
-}  // namespace ruvia
-
-namespace ruvia {
-
 [[nodiscard]] http_response_stream_head prepare_http_response_stream_head(http_response response, http_response_stream_commit_plan commit_plan) {
     if (response.status() != commit_plan.response_status()) {
         throw std::invalid_argument("response stream commit plan status does not match response");
@@ -600,10 +589,6 @@ namespace ruvia {
 
     return http_response_stream_head(std::move(response), commit_plan);
 }
-
-}  // namespace ruvia
-
-namespace ruvia {
 
 http_multipart_byte_range_plan make_http_multipart_byte_range_plan(const http_byte_range_set& ranges, http_content_length representation_length_value, std::string_view media_type, std::string_view boundary) {
     const auto representation_length = representation_length_value.value();
@@ -1740,9 +1725,6 @@ void http_response_headers::erase_later_set_cookie_headers(http_response_header&
     }
 }
 
-}  // namespace ruvia
-
-namespace ruvia {
 namespace {
 
 // Every insertion path validates one field line completely, so a serialized

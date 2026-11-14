@@ -117,9 +117,6 @@ http_response_coding_selection http_response_coding_selection_for(const http_req
     });
     return http_response_coding_selection::select(qualities);
 }
-}  // namespace ruvia
-
-namespace ruvia {
 namespace {
 
 template <typename field_type>
@@ -200,9 +197,6 @@ std::optional<http_request_trailer_error> http_request_trailers::append_received
 std::optional<std::string_view> http_request_trailers::field(std::string_view name) const& noexcept {
     return detail::find_last_http_header<http_header>(fields_, name);
 }
-}  // namespace ruvia
-
-namespace ruvia {
 namespace {
 
 [[nodiscard]] http_target_origin classify_reg_name(std::string_view host, bool decoded) noexcept {
@@ -296,9 +290,6 @@ http_target_origin decide_http_target_origin(const http_request& request, http_t
     return certificate_check(authority);
 }
 
-}  // namespace ruvia
-
-namespace ruvia {
 namespace detail {
 
 struct http_authority_view_access final {
@@ -800,9 +791,6 @@ bool parse_request_target(http_known_method method, std::string_view target, req
     return parse_absolute_target(method, target, output);
 }
 
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
 std::uint16_t http_uri_scheme_default_port(std::string_view scheme) noexcept {
     if (http_ascii_equals_ignore_case(scheme, "https")) {
         return http_scheme_default_port(http_scheme::https);
@@ -1079,9 +1067,6 @@ bool is_valid_http_serialized_origin(std::string_view value) noexcept {
     return !default_port.has_value() || std::get<0>(port_value) != *default_port;
 }
 
-}  // namespace ruvia
-
-namespace ruvia {
 namespace {
 
 constexpr auto npos = std::string_view::npos;

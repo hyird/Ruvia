@@ -934,10 +934,6 @@ http1_response_head_plan prepare_http1_upgrade_response_head(http_response& resp
     return http1_close_delimited_response_stream_head_plan(plan_http_response_body(http_known_method::get, http_status::switching_protocols), http1_request_connection_plan::http11_close());
 }
 
-}  // namespace ruvia
-
-namespace ruvia {
-
 http_response_head_buffer::http_response_head_buffer(const http_response_head_buffer& other) :
     heap_(other.heap_) {}
 
@@ -1062,10 +1058,6 @@ bool http_response_head_buffer::can_append_on_stack(std::size_t size) const noex
     const auto* const stack_state = std::get_if<stack_state_type>(&state_);
     return stack_state != nullptr && size <= stack_.size() - stack_state->used_;
 }
-
-}  // namespace ruvia
-
-namespace ruvia {
 
 namespace {
 
@@ -1453,10 +1445,6 @@ http1_chunk_decode_result http1_chunked_body_decoder::fail(std::size_t consumed_
     state_ = error;
     return http1_chunk_decode_result::make_failure(consumed_bytes, error);
 }
-
-}  // namespace ruvia
-
-namespace ruvia {
 
 namespace detail {
 

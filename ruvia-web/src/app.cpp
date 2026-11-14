@@ -31,7 +31,7 @@
 #include "http_response.h"
 #include "http_server.h"
 #include "middleware.h"
-#include "route_table.h"
+#include "server_session.h"
 #include "stop_token.h"
 #include "worker_ref.h"
 
@@ -389,10 +389,6 @@ application& application::on_not_found(scoped_not_found_handler_options options)
         state_value.configuration_.on_not_found(prefix, std::move(handler));
     });
 }
-
-}  // namespace ruvia
-
-namespace ruvia {
 
 web_worker_context::web_worker_context(const worker_ref& worker_value, const detail::worker_client_registry_view& client_registries, const detail::worker_state_registry* worker_states, const ::ruvia::stop_token& stop_token_value) noexcept :
     capabilities_(worker_value, stop_token_value, worker_states),
@@ -855,9 +851,6 @@ dispatch_response test_app::request(const test_request& request) {
     return impl_->event_loop_.start(impl_->execute_request(request)).get();
 }
 
-}  // namespace ruvia
-
-namespace ruvia {
 namespace {
 
 void add_shutdown_signals(asio::signal_set& signals) {

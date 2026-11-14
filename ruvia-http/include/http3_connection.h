@@ -117,10 +117,6 @@ private:
 // RFC 9220 uses the extended CONNECT request in place of the HTTP/1 key exchange.
 [[nodiscard]] websocket_handshake_validation_result validate_http3_websocket_handshake(const http3_request_head& head, const http_request& request, websocket_handshake_validation_options options = {}) noexcept;
 
-}  // namespace ruvia
-
-namespace ruvia {
-class http3_connection;
 class http3_quic_connection;
 namespace detail {
 class http3_received_data_ledger;
@@ -1024,10 +1020,6 @@ private:
 // validate_extended_connect_websocket_client_response().
 [[nodiscard]] http3_submit_status submit_http3_websocket_client_request(http3_connection& connection, std::int64_t stream_id, const websocket_client_negotiation& negotiation, std::string_view scheme, std::string_view authority, std::string_view target, borrowed_http_headers headers = {}, http_request_field_source source = http_request_field_source::generated);
 
-}  // namespace ruvia
-
-namespace ruvia {
-
 enum class http3_quic_status : std::uint8_t {
     accepted,
     would_block,
@@ -1268,9 +1260,6 @@ private:
 // or `random_bytes` cannot form a valid Stateless Reset.
 [[nodiscard]] std::size_t write_http3_quic_stateless_reset(const http3_quic_stateless_reset_token& token, std::span<const std::uint8_t> random_bytes, std::span<std::byte> output, std::size_t max_packet_bytes) noexcept;
 
-}  // namespace ruvia
-
-namespace ruvia {
 struct http3_fingerprint_options final {
     std::size_t max_frames_{32};
     std::size_t max_bytes_{16384};

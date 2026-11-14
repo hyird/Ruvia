@@ -348,10 +348,6 @@ private:
     storage_owner_type storage_;
 };
 
-}  // namespace ruvia
-
-namespace ruvia {
-
 class db_schema;
 
 enum class db_table_lock_mode : std::uint8_t {
@@ -425,10 +421,6 @@ private:
     std::vector<std::string> variables_;
     std::vector<block_type> blocks_;
 };
-
-}  // namespace ruvia
-
-namespace ruvia {
 
 enum class db_identity : std::uint8_t { none,
     by_default,
@@ -849,10 +841,6 @@ void db_schema::create_relation_tables() {
         }
     });
 }
-
-}  // namespace ruvia
-
-namespace ruvia {
 
 template <typename entity_type, typename executor_type>
 class db_write_query_builder;

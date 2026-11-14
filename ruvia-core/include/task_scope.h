@@ -125,10 +125,6 @@ private:
     std::exception_ptr failure_{};
 };
 
-}  // namespace ruvia
-
-namespace ruvia {
-
 class scoped_capability_registration;
 class worker_ref;
 
@@ -238,10 +234,6 @@ template <typename t_type>
     task_value.bind_scope(scope);
     return task_value;
 }
-}  // namespace ruvia
-
-namespace ruvia {
-
 // Intrusive, allocation-free wake primitive for one worker. Every operation
 // which touches its waiter list is worker-affine; the worker_ref is therefore
 // the dispatch target and the affinity capability, not an optional fast path.
@@ -416,10 +408,6 @@ inline void worker_signal::resume_scheduled(awaiter_type* waiter, std::coroutine
     waiter->state_ = await_state_type::idle;
     continuation.resume();
 }
-
-}  // namespace ruvia
-
-namespace ruvia {
 
 enum class timer_sleep_result : std::uint8_t {
     elapsed,

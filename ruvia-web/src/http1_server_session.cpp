@@ -32,7 +32,7 @@
 #include "http_response.h"
 #include "http_response_server.h"
 #include "middleware.h"
-#include "route_table.h"
+#include "server_session.h"
 #include "stop_token.h"
 #include "streaming.h"
 #include "task.h"
@@ -114,10 +114,6 @@ private:
     const http_server_worker_state& worker_state_;
     bool request_input_ended_{false};
 };
-
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
 
 inline constexpr std::size_t chunked_encoded_buffer_bytes = max_http_header_bytes;
 
@@ -872,10 +868,6 @@ struct http1_route_dispatch final {
     bool request_pipelined_;
 };
 
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
-
 // Commits a framework response that ends the connection: a rejection, a
 // failed route, or a route response the connection cannot outlive. The
 // response is the framework's own (an error or exception handler's output):
@@ -909,10 +901,6 @@ template <typename make_completion_type>
         return http1_session_request_completion::make_buffered_closing(committed);
     });
 }
-
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
 
 template <typename stream_type>
 struct http_lazy_buffered_body_route_state final {
@@ -1010,10 +998,6 @@ template <typename stream_type>
     const auto connection_plan = apply_request_body_consumption(parsed_value.connection_plan(), body_bytes ? http1_request_body_consumption::complete : http1_request_body_consumption::incomplete);
     return finalize_buffered_route_response(response, connection_plan, request_sequence, request_head.header_bytes() + body_bytes.value_or(0));
 }
-
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
 
 // HTTP/1 流式响应的读侧终止检测：请求体完整消费后由 route 自动启动（同 Go
 // net/http background read）。单独到达的请求遇对端 FIN/RST 请求当前请求的 stop。
@@ -1680,10 +1664,6 @@ task<http1_session_request_completion> dispatch_http_response_stream_route(http1
     co_return http1_session_request_completion::make_committed_stream(connection_plan, *committed_status, request_bytes.size() - pipeline.read_buffer_suffix_bytes_);
 }
 
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
-
 // Serialized output still bounded by one coalesced write. A pipelined
 // connection holds small buffered responses back while their successors are
 // already buffered, then sends them with the response that ends the run.
@@ -1814,9 +1794,6 @@ private:
     connection_write_outcome written_;
 };
 
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
 // Reads more of a cleartext connection's first bytes, which so far match the
 // prior-knowledge client preface (RFC 9113 §3.4), under the request-header
 // deadlines. Returns false when the read ends the connection. Once the preface

@@ -232,9 +232,6 @@ task<std::vector<redis_value>> redis_pool::execute_pipeline(std::vector<redis_ow
     return execute_commands<std::vector<redis_value>>(std::move(commands), std::move(options), std::nullopt, std::nullopt, nullptr, wrap_transaction);
 }
 
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
 namespace {
 
 // Redis has no ALPN identifier, so the TLS handshake offers none.
@@ -480,9 +477,6 @@ task<redis_value> redis_connection::exchange_control_command(std::span<const std
     co_return co_await read_reply(deadline);
 }
 
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
 namespace {
 
 [[nodiscard]] std::size_t resp_decimal_size(std::size_t value) {
@@ -803,9 +797,6 @@ void redis_reply_builder::free_object(void* reply) noexcept {
     root->owner_->root_.reset();
 }
 
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
 namespace {
 
 [[nodiscard]] std::optional<redis_scan_cursor> parse_redis_cursor(std::string_view value) {
@@ -1171,10 +1162,6 @@ bool is_redis_subscription_pong(const redis_value& value) {
     return items.size() == 2 && items[0].kind() == redis_value::kind_type::string && http_ascii_equals_ignore_case(items[0].string(), "pong") && items[1].kind() == redis_value::kind_type::string && items[1].string().empty();
 }
 
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
-
 // Classifies a raw pooled command before it is encoded. Connection-stateful
 // commands are rejected; WAIT/WAITAOF are accepted only where a barrier is
 // allowed. Returns whether the command needs the blocking pool; a blocking
@@ -1187,9 +1174,6 @@ namespace ruvia::detail {
 // operation timeout. Throws std::invalid_argument with `message` otherwise.
 void require_bounded_redis_wait(const operation_options& options, const char* message);
 
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
 namespace {
 
 [[nodiscard]] bool is_redis_token(std::string_view value, std::string_view token) {
@@ -2131,9 +2115,6 @@ bool redis_orm_exists_result(redis_value&& reply) {
     return redis_orm_count_result(std::move(reply)) != 0;
 }
 
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
 namespace {
 
 [[nodiscard]] asio::ssl::context make_redis_tls_context(const client_tls_config_storage& config) {
@@ -2321,10 +2302,6 @@ task<void> redis_client::shutdown() & {
 const worker_ref& redis_client::worker() const& noexcept {
     return state_->worker();
 }
-
-}  // namespace ruvia
-
-namespace ruvia {
 
 redis_error::redis_error(code_type code, std::string_view message) :
     std::runtime_error(std::string(message)),
@@ -2674,9 +2651,6 @@ redis_owned_command redis_x_read_group_args(std::string_view group, std::string_
     });
 }
 
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
 namespace {
 
 // An argument-less PING, answered ["pong", ""] while subscribed.

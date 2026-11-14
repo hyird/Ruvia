@@ -133,10 +133,6 @@ private:
     bool stop_applied_{};
 };
 
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
-
 class external_context_attachment_service;
 struct event_loop_state;
 
@@ -368,18 +364,9 @@ inline event_loop_retirement::lease_token_type::~lease_token_type() {
     owner_->retirement_.finish();
 }
 
-}  // namespace ruvia::detail
-
 // The dispatcher's state, declared here because two translation units own parts
 // of it: worker_dispatcher.cpp runs the queue and the worker's lifecycle, while
 // worker_timers.cpp runs the timer heap that shares its mutex.
-
-namespace ruvia {
-class blocking_pool;
-}  // namespace ruvia
-
-namespace ruvia::detail {
-
 inline constexpr std::size_t no_timer_slot = static_cast<std::size_t>(-1);
 
 // One pending deadline in the heap. `slot` and `generation` identify the
@@ -1772,9 +1759,6 @@ bool worker_group::settle(bool reached, const char* phase) {
     return false;
 }
 
-}  // namespace ruvia
-
-namespace ruvia {
 namespace {
 
 std::size_t default_loop_count() noexcept {
@@ -1941,9 +1925,6 @@ event_loop event_loop_pool::loop_for(std::string_view key) const noexcept {
     return loop_for(worker_selection_hash(key));
 }
 
-}  // namespace ruvia
-
-namespace ruvia {
 namespace {
 
 // Routes through the loop while it is alive, or to the unhandled-failure
@@ -3306,14 +3287,9 @@ post_status worker_ref::post_factory(move_only_function<move_only_function<void(
     return dispatcher ? dispatcher->post_factory(std::move(factory)) : post_status::worker_stopping;
 }
 
-}  // namespace ruvia
-
 // The dispatcher's timer heap: registering a deadline, cancelling one from any
 // thread, re-arming the single asio timer, and firing everything due on the
 // worker.
-
-namespace ruvia {
-
 void worker_timer_cancellation::cancel() const noexcept {
     if (dispatcher_ != nullptr && generation_ != 0) {
         dispatcher_->request_timer_cancellation(slot_, generation_, true);

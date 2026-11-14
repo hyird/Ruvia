@@ -102,9 +102,6 @@ private:
     std::optional<stop_source> stop_;
 };
 
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
 inline constexpr std::chrono::milliseconds client_connection_attempt_delay{250};
 
 // Traverse RFC 6724 resolver order while alternating families (RFC 8305 §4).
@@ -224,10 +221,6 @@ private:
     bool cancelled_{false};
     worker_timer_registration delay_;
 };
-
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
 
 enum class client_phase : unsigned char { fresh,
     connecting,
@@ -488,10 +481,6 @@ private:
     ::ruvia::operation_scope operations_;
 };
 
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
-
 [[nodiscard]] inline bool is_client_ip_address(std::string_view host) noexcept {
     return ::ruvia::is_valid_http_ipv4_literal(host) || ::ruvia::is_valid_http_ipv6_literal(host);
 }
@@ -614,10 +603,6 @@ void configure_client_tls_context(SSL_CTX& context_value, const client_tls_confi
 [[nodiscard]] client_tls_setup_error prepare_client_tls_stream(SSL& ssl, std::string_view host, std::span<const unsigned char> protocols);
 // Carries a setup failure through transport results; message() names it.
 [[nodiscard]] std::error_code make_client_tls_setup_error_code(client_tls_setup_error error) noexcept;
-
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
 
 class client_tls_socket;
 
@@ -1064,10 +1049,6 @@ private:
     bool writing_{false};
 };
 
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
-
 [[nodiscard]] inline std::error_code http_client_abort_error(client_abort_reason reason) noexcept {
     switch (reason) {
         case client_abort_reason::timeout:
@@ -1176,10 +1157,6 @@ namespace ruvia::detail {
     }
     throw http_client_error(http_client_transport_error(result), error_code_text(result.error_));
 }
-
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
 
 class http_client_pool;
 class http_client_tunnel_state;
@@ -1342,10 +1319,6 @@ private:
     std::optional<http_client_route> route_;
 };
 
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
-
 class http_client_result_budget_domain final {
 public:
     explicit http_client_result_budget_domain(http_client_result_budget_config config);
@@ -1390,12 +1363,6 @@ private:
     std::size_t bytes_{0};
 };
 
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
-
-class http_client_pool;
-
 // Worker-affine bounds shared by every HTTP client alias of one owner (a
 // standalone http_client, or one application worker): idle connections across
 // aliases, ordered by one idle clock, and concurrent background DNS refreshes.
@@ -1439,11 +1406,6 @@ struct http_client_worker_services final {
 // Validates `config`; throws std::invalid_argument.
 [[nodiscard]] http_client_worker_services make_http_client_worker_services(const http_client_worker_config& config);
 
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
-struct http_client_config_storage;
-class http_client_request_storage;
 struct client_received_cookie;
 
 struct client_prepared_request_scratch final {
@@ -1524,12 +1486,6 @@ void accept_extended_connect_websocket_response(http_client_websocket_handshake&
 // during decoding.
 void finish_http_client_response_body(http_client_response_state& state_value, const operation_deadline& timeout, bool content_semantics_present, std::size_t max_decoded_bytes);
 
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
-
-class http_client_pool;
-class http_client_response_state;
 class http_client_result_budget_domain;
 
 // Response storage and in-flight budget accounting of one client pool, plus the
@@ -1644,10 +1600,6 @@ private:
     http_client_response_memory_domain* domain_{nullptr};
     std::size_t bytes_{0};
 };
-
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
 
 // The configured User-Agent (RFC 9110 section 10.1.5) of the HTTP client and
 // both WebSocket client protocols: sent when a request or handshake carries no
@@ -1961,7 +1913,6 @@ namespace ruvia::detail {
 
 struct http_client_route;
 
-class http_client_pool;
 class http_client_response_memory_domain;
 
 inline std::uint64_t next_nonzero_id(std::uint64_t& value) noexcept {
@@ -2457,16 +2408,6 @@ private:
     http_client_response_state& response_;
     worker_cancellation_registration<target_type> registration_;
 };
-
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
-
-class http_client_output_queue;
-class http_client_request_storage;
-class http_client_pool;
-class http_client_response_state;
-struct http_client_websocket_handshake;
 
 #ifdef RUVIA_ENABLE_HTTP2
 enum class http2_client_session_start_status : std::uint8_t {
@@ -3012,9 +2953,6 @@ private:
 
 #ifdef RUVIA_ENABLE_HTTP3
 namespace ruvia::detail {
-class http_client_pool;
-class http_client_request_storage;
-class http_client_response_state;
 
 // The QUIC endpoint and TLS identity of one HTTP/3 connection owner.
 struct http3_client_route final {
@@ -3136,15 +3074,7 @@ private:
     std::deque<http_client_advertisement> pending_;
     std::size_t dropped_{};
 };
-}  // namespace ruvia::detail
 
-namespace ruvia::detail {
-
-class http_client_connection;
-struct http_tunnel_input;
-class http_client_response_state;
-
-class http_client_pool;
 using http_client_cancellation_target = worker_cancellation_target<http_client_pool>;
 
 // The one retry rule of both wire protocols for a request that failed on a
@@ -3424,11 +3354,6 @@ class http1_request_content_writer;
 
 namespace ruvia::detail {
 
-class http_client_connection;
-class http_client_output_queue;
-class http_client_pool;
-class http_client_request_storage;
-class http_client_response_state;
 class tls_tunnel_output;
 
 // One serialized HTTP/1 exchange on a connected http_client_connection: the
@@ -3477,12 +3402,6 @@ private:
     // Last: destroyed first, so its expiry never sees a retiring exchange.
     worker_timer_registration inactivity_timer_;
 };
-
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
-
-class http_client_pool;
 
 // Every pool of one owner shares the owner's worker services (result budget
 // and worker limits): one per standalone client, one per application worker. Process-lifetime storage

@@ -171,10 +171,6 @@ std::optional<t_type> env::parse_arithmetic_value(std::string_view value) noexce
     return parsed_value;
 }
 
-}  // namespace ruvia
-
-namespace ruvia {
-
 namespace detail {
 
 struct app_state;
@@ -580,8 +576,6 @@ private:
 
 application& app();
 
-}  // namespace ruvia
-
 // In-memory testing facade for applications built on Ruvia -- the actix
 // test_request / Hono app.request() analog. test_app collects every controller
 // linked into the binary (the same macro registration path application::run() uses),
@@ -600,8 +594,6 @@ application& app();
 // Streaming/SSE/websocket routes and handlers that await worker-bound
 // services (db(), redis(), run_blocking()) need a running server; drive those
 // through a real loopback server instead.
-
-namespace ruvia {
 
 class test_app;
 

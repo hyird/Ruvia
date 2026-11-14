@@ -216,9 +216,6 @@ bool http_parse_media_type(value_type&&, http_media_type_parts&, http_media_type
 template <http_temporary_owning_char_string value_type>
 bool is_valid_http_content_type_field_value(value_type&&) = delete;
 
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
 namespace {
 
 struct http_field_definition final {
@@ -433,10 +430,6 @@ bool is_http_method_idempotent(std::string_view method) noexcept {
     return is_http_method_safe(method) || method == "PUT" || method == "DELETE";
 }
 
-}  // namespace ruvia
-
-namespace ruvia {
-
 bool is_http_hop_by_hop_field_name(std::string_view field_name) noexcept {
     switch (field_name.size()) {
         case 2U:
@@ -554,10 +547,6 @@ bool is_forbidden_http_request_trailer_field_name(std::string_view field_name) n
 bool is_forbidden_http_response_trailer_field_name(std::string_view field_name) noexcept {
     return detail::is_forbidden_response_trailer_name(field_name);
 }
-}  // namespace ruvia
-
-namespace ruvia {
-
 http_conditional_headers get_http_conditional_headers(const http_request& request) noexcept {
     return http_conditional_headers{detail::http_request_access::has_repeated_known_header(request, detail::http_field_kind::if_unmodified_since) ? std::string_view{} : detail::http_request_access::known_header(request, detail::http_field_kind::if_unmodified_since), detail::http_request_access::has_repeated_known_header(request, detail::http_field_kind::if_modified_since) ? std::string_view{} : detail::http_request_access::known_header(request, detail::http_field_kind::if_modified_since), detail::http_request_access::known_header(request, detail::http_field_kind::range), detail::http_request_access::known_header(request, detail::http_field_kind::if_range), detail::http_request_access::has_known_header(request, detail::http_field_kind::if_range)};
 }
@@ -784,9 +773,6 @@ void http_accept_match::update_token(std::string_view field, std::string_view of
     detail::http_accumulate_token_acceptance(field, offered, mode == http_accept_token_match_mode::language_prefix, specificity_, quality_);
 }
 
-}  // namespace ruvia
-
-namespace ruvia {
 namespace {
 using item_type = detail::http_structured_item;
 

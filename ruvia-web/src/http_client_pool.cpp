@@ -2111,9 +2111,6 @@ task<client_transport_result> client_tcp_transport::write(std::span<const asio::
     return write_buffers(buffers, timeout);
 }
 
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
 namespace {
 
 struct client_tls_preparation final {
@@ -2322,10 +2319,6 @@ std::error_code make_client_tls_setup_error_code(client_tls_setup_error error) n
     return {static_cast<int>(error), category};
 }
 
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
-
 client_happy_eyeballs::client_happy_eyeballs(const worker_ref& worker, const asio::ip::tcp::socket::executor_type& executor, const asio::ip::tcp::resolver::results_type& addresses) :
     worker_(worker),
     changed_(worker),
@@ -2483,9 +2476,6 @@ task<client_happy_eyeballs_result> client_happy_eyeballs::connect() & {
     }
 }
 
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
 struct client_host_resolver::query final {
     std::string host_;
     std::uint16_t port_;
@@ -2567,9 +2557,6 @@ void client_host_resolver::cancel() noexcept {
     }
 }
 
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
 namespace {
 
 [[nodiscard]] std::string owned_host(const tcp_client_config& config) {

@@ -306,12 +306,8 @@ public:
     std::uint64_t timestamp_{1};
 };
 
-}  // namespace ruvia::test
-
 // Raw HTTP/3 request and response stream bytes for codec tests that must
 // reach the receiving codec with field sections its peer API never sends.
-
-namespace ruvia::test {
 
 // RFC 9204 §4.1.1 prefixed integer.
 inline void append_qpack_integer(std::string& bytes, std::size_t value, unsigned prefix_bits, unsigned tag) {

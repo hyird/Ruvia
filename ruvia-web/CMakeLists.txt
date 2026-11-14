@@ -2,6 +2,7 @@ set(ruvia_web_sources
     src/app.cpp
     src/context.cpp
     src/http1_server_session.cpp
+    src/http_client.cpp
     src/http_client_exchange.cpp
     src/http_client_pool.cpp
     src/http_server.cpp

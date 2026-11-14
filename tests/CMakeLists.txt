@@ -91,6 +91,7 @@ if(RUVIA_BUILD_HTTP)
         list(APPEND _ruvia_http_unit_sources
             http/http2_connect_drain.cpp
             http/http2_connection.cpp
+            http/http2_flow_control.cpp
             http/http2_push.cpp
         )
     endif()
@@ -140,7 +141,7 @@ if(RUVIA_BUILD_WEB)
     ruvia_add_web_standalone_test(ruvia_router 60 web/app/router.cpp)
     ruvia_add_web_standalone_test(ruvia_http_server_group 180 web/app/http_server_group.cpp)
     ruvia_add_web_standalone_test(ruvia_connection_lifecycle 180 web/app/connection_lifecycle.cpp)
-    ruvia_add_web_standalone_test(ruvia_websocket_standalone_server 180 web/websocket/standalone_server.cpp)
+    ruvia_add_web_standalone_test(ruvia_websocket_standalone_server 180 web/app/websocket_server.cpp)
     ruvia_add_web_standalone_test(ruvia_app_listener_transactions 120 web/app/listener_transactions.cpp)
     ruvia_add_web_standalone_test(ruvia_route_dispatch_isolation 60 web/app/route_dispatch_isolation.cpp)
     # A conflicting route pair, like a route with an invalid CONNECT
@@ -219,10 +220,10 @@ if(RUVIA_BUILD_WEB)
     target_compile_definitions(ruvia_http_client_operation_tests PRIVATE RUVIA_TEST_CLIENT_OPERATIONS)
     if(RUVIA_ENABLE_HTTP3)
         # Exercises QUIC TLS together with real application listeners.
-        ruvia_add_web_standalone_test(ruvia_http3_quic_tests 60 web/http3/quic.cpp)
+        ruvia_add_web_standalone_test(ruvia_http3_quic_tests 60 web/http/http3_quic.cpp)
         # Owns a four-worker application serving HTTP/3 beside its HTTPS
         # listener, stopped gracefully at its end.
-        ruvia_add_web_standalone_test(ruvia_app_http3 60 web/http3/serving.cpp)
+        ruvia_add_web_standalone_test(ruvia_app_http3 60 web/app/http3_serving.cpp)
         target_compile_definitions(ruvia_app_http3 PRIVATE RUVIA_TEST_CLIENT_OPERATIONS)
     endif()
 
@@ -231,18 +232,19 @@ if(RUVIA_BUILD_WEB)
         web/app/config_validation.cpp
         web/app/server_options_validation.cpp
         web/app/testing_facade.cpp
+        web/client/connection_pool.cpp
         web/client/dynamic_origins.cpp
         web/client/origin_routing.cpp
         web/client/request_controls.cpp
-        web/http/client_response_body.cpp
+        web/client/response_body.cpp
+        web/client/websocket.cpp
         web/http/context_request_lookups.cpp
+        web/http/model_json.cpp
+        web/http/model_values.cpp
         web/http/response_stream.cpp
         web/http/security_headers.cpp
         web/http/static_file_serving.cpp
         web/http1/pipelining.cpp
-        web/model/json_codec.cpp
-        web/model/value_types.cpp
-        web/websocket/client.cpp
     )
     if(RUVIA_ENABLE_HTTP2)
         list(APPEND _ruvia_web_unit_sources
@@ -256,8 +258,8 @@ if(RUVIA_BUILD_WEB)
     endif()
     if(RUVIA_ENABLE_REDIS)
         list(APPEND _ruvia_web_unit_sources
-            web/redis/client.cpp
-            web/redis/repository.cpp
+            web/db/redis_client.cpp
+            web/db/redis_repository.cpp
         )
     endif()
     if(RUVIA_ENABLE_MARIADB OR RUVIA_ENABLE_POSTGRESQL)

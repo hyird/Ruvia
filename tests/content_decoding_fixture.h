@@ -222,10 +222,6 @@ inline std::optional<std::string> zstd_round_trip(std::string_view plain, std::s
     return std::move(*decoded);
 }
 
-}  // namespace ruvia::test
-
-namespace ruvia::test {
-
 // One-shot whole-message view of a buffered request over the public server
 // contract: parse_head frames the head, and the body plan drives either a
 // Content-Length slice or http1_chunked_body_decoder over the rest.
@@ -285,10 +281,6 @@ struct http1_request_message final {
         return message;
     }
 }
-
-}  // namespace ruvia::test
-
-namespace ruvia::test {
 
 using ruvia::http1_client_request_content_completion_status;
 using ruvia::http1_client_request_wire_policy;
@@ -410,10 +402,6 @@ inline http1_client_response_parse_error parse_failure_error(std::string_view me
     }
     return *failure;
 }
-
-}  // namespace ruvia::test
-
-namespace ruvia::test {
 
 // A multipart/form-data Content-Type whose boundary parameter is `value` as a
 // quoted-string, so every byte reaches the boundary rule unchanged.

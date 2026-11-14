@@ -907,10 +907,6 @@ template class db_pool<mariadb_driver>;
 template class db_pool<postgresql_driver>;
 #endif
 
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
-
 #if defined(_WIN32)
 db_slot_socket::db_slot_socket(asio::io_context& io_context) :
     socket_(io_context) {}
@@ -1724,9 +1720,6 @@ task<void> db_query_result_cache::clear() const {
     registration_.require_active();
     return make_scoped_operation(registration_.scope(), state_->clear(io_metrics_, options_));
 }
-}  // namespace ruvia
-
-namespace ruvia {
 namespace detail {
 namespace {
 // PostgreSQL's lock_timeout is an int32 millisecond setting. Keep the

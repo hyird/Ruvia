@@ -173,10 +173,6 @@ public:
     static void encode_status(std::string& output, http_status_code status);
 };
 
-}  // namespace ruvia
-
-namespace ruvia {
-
 inline constexpr std::string_view http2_client_preface = "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n";
 inline constexpr std::size_t http2_frame_header_bytes = 9;
 inline constexpr std::uint32_t http2_default_max_frame_size = 16 * 1024;
@@ -282,9 +278,6 @@ enum class http2_cleartext_preface_probe : std::uint8_t {
     return http2_cleartext_preface_probe::http1;
 }
 
-}  // namespace ruvia
-
-namespace ruvia {
 class http2_connection;
 namespace detail {
 class http2_connection;
@@ -479,10 +472,6 @@ enum class http2_response_head_submit_error : std::uint8_t {
 enum class http2_websocket_handshake_submit_error : std::uint8_t { closed,
     invalid_state };
 
-}  // namespace ruvia
-
-namespace ruvia {
-
 // A complete received frame, before its final payload fragment is processed.
 // observation_sequence_ starts at zero after the preface and counts frame
 // headers exposed by nghttp2, in wire order (including ACK, unknown extensions,
@@ -544,13 +533,7 @@ struct http2_header_metadata final {
 using http2_frame_observer_type = void (*)(void*, const http2_frame_metadata&) noexcept;
 using http2_header_observer_type = void (*)(void*, const http2_header_metadata&) noexcept;
 
-}  // namespace ruvia
-
-namespace ruvia {
-
-class http2_connection;
 namespace detail {
-class http2_connection;
 class http2_connection_owner_endpoint;
 }  // namespace detail
 
@@ -990,10 +973,6 @@ private:
     value_type value_;
 };
 
-}  // namespace ruvia
-
-namespace ruvia {
-
 enum class http2_server_request_release_status : std::uint8_t { released,
     closed };
 struct http2_connection_options final {
@@ -1298,9 +1277,6 @@ private:
 // Validate the final head with validate_extended_connect_websocket_client_response().
 [[nodiscard]] std::variant<std::uint32_t, http2_request_head_submit_error> submit_http2_websocket_client_request(http2_connection& connection, const websocket_client_negotiation& negotiation, std::string_view scheme, std::string_view authority, std::string_view target, borrowed_http_headers headers = {}, http_request_field_source source = http_request_field_source::generated);
 
-}  // namespace ruvia
-
-namespace ruvia {
 struct http2_akamai_fingerprint_options final {
     std::size_t max_frames_{32};
     std::size_t max_bytes_{16384};

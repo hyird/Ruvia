@@ -65,10 +65,6 @@ template <detail::parsed_integer t_type>
     return value;
 }
 
-}  // namespace ruvia
-
-namespace ruvia {
-
 template <std::size_t n>
 struct fixed_string {
     char value_[n]{};
@@ -268,11 +264,6 @@ using route_middleware = callback_ref<task<void>(context&, next&)>;
 
 }  // namespace detail
 
-}  // namespace ruvia
-
-namespace ruvia {
-
-class context;
 class validator;
 
 inline constexpr std::size_t max_validation_text_bytes = 1024;
@@ -634,10 +625,6 @@ template <typename t_type>
 request_binding_guard<t_type>::~request_binding_guard() noexcept {
     bindings_->pop(node_);
 }
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
-
 // Startup-registered recipe for one per-worker state type: the erased user
 // factory plus the instance create/destroy pair. The factory runs once inside
 // each worker's active identity window before that worker begins dispatching
@@ -828,12 +815,6 @@ private:
     bool initialized_{false};
 };
 
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
-
-class worker_state_registry;
-
 // A request and a posted job borrow the same worker-owned capabilities. No
 // dispatcher or cancellation ownership is copied until an explicit offload.
 class worker_context_capabilities final {
@@ -911,7 +892,6 @@ class redis_session;
 namespace detail {
 class web_worker_dispatch;
 class worker_client_registry_view;
-class worker_state_registry;
 }  // namespace detail
 class web_worker_context final {
 public:
@@ -1007,12 +987,6 @@ private:
     // retaining a handle cannot retain the server or its io_context.
     std::shared_ptr<detail::web_worker_dispatch> dispatch_;
 };
-
-}  // namespace ruvia
-
-namespace ruvia {
-
-class context;
 
 // Declared before body admission, not executed as middleware. Route and
 // controller ceilings can only tighten the server limit; the strictest wins.
@@ -1190,14 +1164,7 @@ concept route_policy = std::is_class_v<policy_type> && std::is_final_v<policy_ty
 template <typename modifier_type>
 concept route_modifier = middleware<modifier_type> || route_policy<modifier_type>;
 
-}  // namespace ruvia
-
 // Internal startup-time middleware descriptor.
-
-namespace ruvia {
-
-class context;
-
 namespace detail {
 
 class controller_middleware_descriptor;
@@ -1498,7 +1465,6 @@ template <middleware middleware_type, typename... args_types>
 
 namespace ruvia {
 
-class context;
 struct csrf_protection_config final {
     std::string cookie_name_{"XSRF-TOKEN"};
     // 必须为脚本主动提交 token 的自定义字段；构造时拒绝 CORS-safelisted、
@@ -1537,11 +1503,6 @@ private:
     std::string header_name_;
 };
 
-}  // namespace ruvia
-
-namespace ruvia {
-
-class context;
 struct security_header final {
     std::string name_{};
     std::string value_{};
@@ -1610,12 +1571,6 @@ private:
     std::string permissions_policy_;
     std::vector<http_header> custom_headers_;
 };
-
-}  // namespace ruvia
-
-namespace ruvia {
-
-class context;
 
 // Buffer capacity required by format_rate_limit_address_key ("v6s/" + 32 hex
 // digits + '/' + up to 10 scope digits).
@@ -1790,9 +1745,6 @@ struct session_access;
 }  // namespace ruvia::detail
 
 namespace ruvia {
-
-class context;
-class next;
 
 // A request-local capability bound by session_middleware. The handle borrows
 // context state and therefore cannot escape the request.

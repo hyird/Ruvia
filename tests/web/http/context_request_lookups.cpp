@@ -54,10 +54,6 @@ ruvia::test_request make_request(std::string_view target, const headers_type& he
     return request;
 }
 
-}  // namespace
-
-namespace {
-
 std::optional<std::string_view> negotiate_encoding(std::initializer_list<http_header_view> headers, std::initializer_list<std::string_view> supported) {
     auto request = make_request("/", headers);
     std::optional<std::string_view> chosen;

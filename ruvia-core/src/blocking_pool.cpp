@@ -215,10 +215,6 @@ private:
     bool prepared_{false};
 };
 
-}  // namespace ruvia
-
-namespace ruvia {
-
 namespace {
 
 [[nodiscard]] std::size_t resolve_thread_count(std::size_t requested) noexcept {
@@ -573,10 +569,6 @@ void blocking_pool::join() {
     const auto owner = impl_;
     owner->join();
 }
-
-}  // namespace ruvia
-
-namespace ruvia {
 
 class pool_lease_scheduler::impl_type final {
 public:

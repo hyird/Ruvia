@@ -225,10 +225,6 @@ private:
     const operations* operations_{nullptr};
 };
 
-}  // namespace ruvia
-
-namespace ruvia {
-
 // Converts directly from the original count domain to the requested tick type.
 // Integral counts up to uintmax_t width stay exact, rounding positive fractions
 // upward and saturating at both bounds. Other conversions use long double;
@@ -495,10 +491,6 @@ private:
 
     friend class detail::worker_dispatcher;
 };
-
-}  // namespace ruvia
-
-namespace ruvia {
 
 class stop_token;
 class stop_source;
@@ -884,10 +876,6 @@ private:
     std::vector<stop_registration> extra_parents_;
 };
 
-}  // namespace ruvia
-
-namespace ruvia {
-
 // The bound of one operation: either a positive relative limit that starts
 // when the operation starts, or an absolute steady-clock deadline, which may
 // already have passed. A value is valid by construction: the relative
@@ -967,10 +955,6 @@ private:
     std::variant<std::chrono::milliseconds, clock_type::time_point> value_;
 };
 
-}  // namespace ruvia
-
-namespace ruvia {
-
 // The single per-operation input of every cold wait and outbound operation.
 // timeout_ bounds the operation end to end: a relative limit starts when the
 // operation starts, an absolute deadline is used as given.
@@ -1012,10 +996,6 @@ struct operation_options final {
     }
     return merged;
 }
-
-}  // namespace ruvia
-
-namespace ruvia {
 
 // The resolved deadline of an operation that has started, shared across its
 // asynchronous phases. Phases that hand the remaining budget to a nested

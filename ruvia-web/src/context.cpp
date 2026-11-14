@@ -411,9 +411,6 @@ http_response make_readiness_response(context& context_value, readiness_response
     body.push_back('}');
     return detail::context_access::make_owned_json_response(context_value, body);
 }
-}  // namespace ruvia
-
-namespace ruvia {
 void context::advertise_origins(std::span<const std::string_view> origins) {
     if (services().connection_advertisements() == nullptr || conn().tls() == nullptr) {
         throw std::logic_error("ORIGIN requires an HTTPS connection with advertisement output");
@@ -808,9 +805,6 @@ conn_info detail::context_services::resolve_conn_info(const http_request& reques
     return resolved;
 }
 
-}  // namespace ruvia
-
-namespace ruvia {
 namespace {
 
 // Copies the file a borrowed path names into `output` in NUL-terminated
@@ -1376,10 +1370,6 @@ task<http_response> detail::context_access::static_file_resolved(context& contex
     }
     return serve_static_file(context_value, root, *served, base_entry, std::string(content_type_value));
 }
-
-}  // namespace ruvia
-
-namespace ruvia {
 
 namespace detail {
 
@@ -2335,9 +2325,6 @@ bool tls_served_certificate::check(const http_target_origin& origin) const noexc
     return X509_check_ip(certificate_, address.data(), address.size(), 0) == 1;
 }
 
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
 namespace {
 
 struct ssl_context_deleter final {

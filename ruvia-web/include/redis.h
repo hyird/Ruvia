@@ -685,21 +685,15 @@ private:
     std::vector<redis_value> array_;
 };
 
-}  // namespace ruvia
-
-namespace ruvia {
-
 class redis_session;
 
 namespace detail {
 class redis_client_runtime;
 class redis_client_state;
-class redis_pool;
 struct request_io_metrics;
 struct redis_orm_script;
 class redis_subscription_connection;
 class redis_subscription_set;
-struct redis_types_access;
 class worker_client_registry_view;
 
 // One textual argument the variadic Redis entry points accept. A span of
@@ -1538,15 +1532,11 @@ namespace ruvia {
 enum class redis_index_kind : std::uint8_t;
 class redis_predicate;
 struct redis_find_options;
-struct redis_repository_config;
 struct redis_write_options;
 class redis_write_result;
 }  // namespace ruvia
 
 namespace ruvia::detail {
-
-class redis_pool;
-struct request_io_metrics;
 
 // Typed reply accessors that enforce the redis_value kind. A reply's type is
 // chosen by the (untrusted) server, so a mismatch throws
@@ -2267,9 +2257,6 @@ concept redis_entity_schema = requires(const entity& value) {
     requires redis_columns<typename entity::columns_type>;
     { entity::prefix() } -> std::convertible_to<std::string_view>;
 };
-}  // namespace detail
-
-namespace detail {
 struct redis_predicate_access final {
     // Null for an empty predicate.
     static const redis_predicate_storage* storage(const redis_predicate& predicate) noexcept {
@@ -2384,10 +2371,6 @@ private:
     }
 };
 
-}  // namespace ruvia
-
-namespace ruvia {
-
 #define RUVIA_REDIS_COLUMN(name, value_type, ...) ::ruvia::redis_column<::ruvia::fixed_string{#name}, value_type __VA_OPT__(, ) __VA_ARGS__>
 
 // set<field>() 检查整数范围与有限浮点溢出；整数列不隐式接受浮点输入。
@@ -2410,10 +2393,6 @@ namespace ruvia {
         }                                                                                                              \
         RUVIA_DETAIL_ENTITY_VALUE_API(entity_)                                                                         \
     };
-
-}  // namespace ruvia
-
-namespace ruvia {
 
 enum class redis_order_direction : std::uint8_t {
     asc,

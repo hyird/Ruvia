@@ -402,10 +402,6 @@ namespace detail {
 
 }  // namespace detail
 
-}  // namespace ruvia
-
-namespace ruvia {
-
 inline constexpr std::size_t max_http_header_bytes = std::size_t{64} * 1024;
 // Field lines per HTTP/1 head or trailer section (the http_field_section_budget
 // rule), received and generated, beside the max_http_header_bytes byte cap. The
@@ -416,10 +412,6 @@ inline constexpr std::size_t default_max_buffered_body_bytes = std::size_t{16} *
 inline constexpr std::size_t default_max_websocket_message_bytes = std::size_t{16} * 1024 * 1024;
 // Bytes one SSE event may buffer while sse_parser assembles it.
 inline constexpr std::size_t default_max_sse_event_bytes = std::size_t{16} * 1024 * 1024;
-
-}  // namespace ruvia
-
-namespace ruvia {
 
 // A protocol byte ceiling with no numeric sentinel: the default is unlimited,
 // while a configured limit is always strictly positive.
@@ -470,10 +462,6 @@ private:
 
     std::optional<std::size_t> maximum_;
 };
-
-}  // namespace ruvia
-
-namespace ruvia {
 
 // An HTTP protocol primitive rejected input with a response status that a
 // server driver may map onto its own application error model. `code` is a
@@ -528,10 +516,6 @@ enum class http_parse_error : std::uint8_t { header_too_large,
 
 [[nodiscard]] http_protocol_error http_parse_protocol_error(http_parse_error error) noexcept;
 
-}  // namespace ruvia
-
-namespace ruvia {
-
 [[nodiscard]] constexpr unsigned char http_ascii_to_lower(unsigned char c) noexcept {
     return c >= 'A' && c <= 'Z' ? static_cast<unsigned char>(c + ('a' - 'A')) : c;
 }
@@ -548,15 +532,10 @@ namespace ruvia {
     return true;
 }
 
-}  // namespace ruvia
-
 // The single owner of HTTP field-line syntax (RFC 9110 section 5): token and
 // field-content byte classes and the normalized field name/value predicates.
 // Field-specific grammars build on these; field-line OWS belongs to wire
 // parsers, so normalized values never start or end with SP or HTAB.
-
-namespace ruvia {
-
 // OWS / BWS byte: SP or HTAB (RFC 9110 section 5.6.3).
 [[nodiscard]] constexpr bool is_http_ows_char(char c) noexcept {
     return c == ' ' || c == '\t';
@@ -1026,9 +1005,6 @@ enum class http_protocol_version : std::uint8_t {
     http3,
 };
 
-}  // namespace ruvia
-
-namespace ruvia {
 enum class http_scheme : std::uint8_t {
     http,
     https,
@@ -1059,10 +1035,6 @@ enum class http_known_method : std::uint8_t { get,
 // recognized even though it is intentionally not a routable fixed enum member.
 [[nodiscard]] bool is_http_method_safe(std::string_view method) noexcept;
 [[nodiscard]] bool is_http_method_idempotent(std::string_view method) noexcept;
-
-}  // namespace ruvia
-
-namespace ruvia {
 
 // An owned field returned by protocol parsers and events. The same value type
 // represents initial fields and trailers for requests and responses.
@@ -1319,10 +1291,6 @@ private:
 };
 }  // namespace detail
 
-}  // namespace ruvia
-
-namespace ruvia {
-
 // RFC 9218 section 4.1: urgency is 0..7, defaulting to 3. Local numeric
 // inputs are checked before narrowing. Peer fields instead use the tolerant
 // parser below, which ignores out-of-range values as required by section 4.
@@ -1404,10 +1372,6 @@ template <http_header_field_source headers_type>
 [[nodiscard]] std::variant<http_priority_update, http_priority_error> decode_http2_priority_update(std::span<const char> payload_value) noexcept;
 [[nodiscard]] std::variant<std::size_t, http_priority_error> encode_http2_priority_update(std::span<char> output, std::uint32_t stream_id, http_priority_fields fields_value) noexcept;
 
-}  // namespace ruvia
-
-namespace ruvia {
-
 struct http_push_request_view final {
     borrowed_text method_{"GET"};
     borrowed_text scheme_{"https"};
@@ -1446,9 +1410,6 @@ enum class http2_push_submit_error : std::uint8_t {
     invalid_request,
 };
 
-}  // namespace ruvia
-
-namespace ruvia {
 // Encoders validate limits before allocation and write into the final owned result.
 struct http_origin_advertisement final {
     std::vector<std::string> origins_;
