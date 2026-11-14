@@ -20,6 +20,7 @@
 #include "http_connection_fields.h"
 #include "http_header.h"
 #include "http_request.h"
+#include "http_uri_syntax.h"
 #include "http_wire_writer.h"
 #include "websocket_handshake.h"
 #include "websocket_negotiation.h"

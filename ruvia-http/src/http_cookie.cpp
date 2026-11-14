@@ -22,6 +22,7 @@
 #include "http_date.h"
 #include "http_header.h"
 #include "http_request.h"
+#include "http_uri_syntax.h"
 #include "http_wire_writer.h"
 
 namespace ruvia::detail {

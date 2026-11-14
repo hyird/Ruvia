@@ -26,6 +26,7 @@
 #include "http_cookie.h"
 #include "http_header.h"
 #include "http_response.h"
+#include "http_uri_syntax.h"
 
 namespace ruvia {
 http_request& http_request::operator=(http_request&& other) noexcept {

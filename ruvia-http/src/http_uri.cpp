@@ -14,6 +14,7 @@
 #include "borrowed_text.h"
 #include "http_connection_fields.h"
 #include "http_request.h"
+#include "http_uri_syntax.h"
 
 namespace ruvia {
 namespace {

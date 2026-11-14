@@ -15,6 +15,7 @@
 #include "http_header.h"
 #include "http_request.h"
 #include "http_response.h"
+#include "http_uri_syntax.h"
 #include "websocket_negotiation.h"
 
 // Message semantics shared by HTTP/2 and HTTP/3: binary field-section sizing,
@@ -22,6 +23,73 @@
 // response field generation, local content accounting, and the ORIGIN / ALTSVC
 // payload codecs. HTTP/1 translation units never include this header.
 namespace ruvia::detail {
+
+[[nodiscard]] inline bool is_http_request_scheme(std::string_view scheme) noexcept {
+    return http_ascii_equals_ignore_case(scheme, "http") || http_ascii_equals_ignore_case(scheme, "https");
+}
+
+// http(s) target URIs carry a mandatory, non-empty authority with Host
+// syntax; other schemes may carry any RFC 3986 authority.
+[[nodiscard]] inline bool is_valid_binary_request_authority(std::string_view scheme, std::string_view authority) noexcept {
+    if (is_http_request_scheme(scheme)) {
+        return !authority.empty() && is_valid_host_header(authority);
+    }
+    return is_valid_uri_authority(authority);
+}
+
+[[nodiscard]] inline bool binary_regular_request_requires_authority(std::string_view scheme, std::string_view path) noexcept {
+    return path != "*" && is_http_request_scheme(scheme);
+}
+
+// HTTP(S) already uses Host syntax; other schemes can contain URI userinfo.
+[[nodiscard]] inline bool binary_request_synthesizes_host(bool has_host, bool has_authority, std::string_view scheme, std::string_view authority) noexcept {
+    return !has_host && has_authority && (is_http_request_scheme(scheme) || is_valid_host_header(authority));
+}
+
+// RFC 8441 §4 / RFC 9220 §3: websocket extended CONNECT requires an HTTP(S) URI
+// scheme; other extended protocols retain the full RFC 3986 space.
+[[nodiscard]] inline bool is_valid_extended_connect_scheme(std::string_view protocol, std::string_view scheme) noexcept {
+    return !http_ascii_equals_ignore_case(protocol, "websocket") || is_http_request_scheme(scheme);
+}
+
+[[nodiscard]] inline bool validate_binary_request_authority_and_host(std::string_view scheme, std::string_view path, bool has_authority, std::string_view authority, bool has_host, std::string_view host) noexcept {
+    if (has_authority && !is_valid_binary_request_authority(scheme, authority)) {
+        return false;
+    }
+    if (!has_authority && binary_regular_request_requires_authority(scheme, path) && (!has_host || !is_valid_binary_request_authority(scheme, host))) {
+        return false;
+    }
+    return !has_authority || !has_host || authority_matches_host(authority, host, http_uri_scheme_default_port(scheme));
+}
+
+// Joins split binary (RFC 9113 §8.2.3, RFC 9114 §4.2.1) Cookie crumbs with "; "
+// within max_http_header_bytes. When `first_crumb` is non-empty and `joined` is
+// still empty, `first_crumb` is materialized before appending the second crumb.
+[[nodiscard]] inline bool append_binary_cookie_crumb(std::string& joined, std::string_view value, bool has_existing_cookie, std::string_view first_crumb = {}) {
+    if (value.empty()) {
+        return true;
+    }
+    if (value.size() > max_http_header_bytes) {
+        return false;
+    }
+    if (!has_existing_cookie) {
+        reserve_geometric(joined, value.size());
+        joined.append(value.data(), value.size());
+        return true;
+    }
+    constexpr std::string_view cookie_separator = "; ";
+    const auto prefix_bytes = joined.empty() ? first_crumb.size() : joined.size();
+    if (prefix_bytes > max_http_header_bytes - cookie_separator.size() || value.size() > max_http_header_bytes - cookie_separator.size() - prefix_bytes) {
+        return false;
+    }
+    reserve_geometric(joined, prefix_bytes + cookie_separator.size() + value.size());
+    if (joined.empty() && !first_crumb.empty()) {
+        joined.append(first_crumb.data(), first_crumb.size());
+    }
+    joined.append(cookie_separator.data(), cookie_separator.size());
+    joined.append(value.data(), value.size());
+    return true;
+}
 
 // The one Extended CONNECT WebSocket bootstrap field list for HTTP/2 (RFC
 // 8441) and HTTP/3 (RFC 9220): the negotiation's Sec-WebSocket-* request
