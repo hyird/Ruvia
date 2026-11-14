@@ -32,6 +32,7 @@
 #include "http_request.h"
 #include "http_response.h"
 #include "middleware.h"
+#include "response_file.h"
 #include "server_session.h"
 #include "stop_token.h"
 #include "streaming.h"

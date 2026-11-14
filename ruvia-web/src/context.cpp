@@ -48,6 +48,7 @@
 #include "middleware.h"
 #include "model.h"
 #include "redis.h"
+#include "response_file.h"
 #include "route_table.h"
 #include "stop_token.h"
 #include "streaming.h"

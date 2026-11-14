@@ -47,6 +47,7 @@
 #include "http_response.h"
 #include "http_server.h"
 #include "rate_limit.h"
+#include "response_file.h"
 #include "route_table.h"
 #include "stop_token.h"
 #include "streaming.h"

@@ -59,6 +59,7 @@
 #include "http_server.h"
 #include "middleware.h"
 #include "rate_limit.h"
+#include "response_file.h"
 #include "stop_token.h"
 #include "streaming.h"
 #include "task.h"
