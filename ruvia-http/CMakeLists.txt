@@ -20,6 +20,7 @@ set(ruvia_http_sources
     src/http_message.cpp
     src/http_priority.cpp
     src/http_protocol.cpp
+    src/http_range.cpp
     src/http_request.cpp
     src/http_request_target.cpp
     src/http_representation.cpp
@@ -94,8 +95,12 @@ set(ruvia_http_headers
     include/http_multipart.h
     include/http_priority.h
     include/http_protocol.h
+    include/http_range.h
+    include/http_representation.h
     include/http_request.h
     include/http_response.h
+    include/http_response_body.h
+    include/http_response_headers.h
     include/http_server_sent_events.h
     include/http_status.h
     include/http_transfer_coding.h
