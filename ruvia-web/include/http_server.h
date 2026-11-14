@@ -252,11 +252,11 @@ struct server_config final {
     // body_completion_timeout_) is reset with RST_STREAM(CANCEL), leaving the
     // connection and its other streams untouched.
     std::optional<timeout_duration> request_body_timeout_{std::chrono::seconds(60)};
-    // Absolute phase deadlines: progress does not renew these limits. With
-    // both request-head limits unset, the TLS or QUIC handshake, request head
-    // and HTTP/2 preface still end after a fixed 30 seconds, as does a PROXY
-    // header.
-    std::optional<timeout_duration> header_completion_timeout_{std::chrono::seconds(30)};
+    // Absolute phase deadlines: progress does not renew these limits. The
+    // connection's initial phase -- PROXY header, TLS or QUIC handshake,
+    // request head and HTTP/2 preface -- is always bounded, so this one has no
+    // "unset" (as Pingora always bounds the downstream handshake).
+    timeout_duration header_completion_timeout_{std::chrono::seconds(30)};
     std::optional<timeout_duration> body_completion_timeout_{std::chrono::seconds(120)};
     // Inactivity of a connection write in progress: a buffered response, one
     // write of a response stream, a WebSocket or CONNECT tunnel write, or
@@ -420,8 +420,8 @@ struct listen_config final {
     // retired server connection IDs, and CONNECT, RFC 9220 WebSocket and
     // RFC 9297/9298 CONNECT-UDP / HTTP Datagrams are supported. The server
     // limits apply per request stream as for HTTP/2: idle_timeout_ is also
-    // the QUIC max_idle_timeout, request_header_timeout_ and
-    // header_completion_timeout_ bound the handshake, and a request body or an
+    // the QUIC max_idle_timeout, header_completion_timeout_ bounds the
+    // handshake, and a request body or an
     // output wait (the peer not acknowledging) that outlasts its timeout
     // resets only that stream with H3_REQUEST_CANCELLED. A request cap or
     // connection timeout sends the shutdown-notice GOAWAY, the final GOAWAY
@@ -456,8 +456,8 @@ struct listen_config final {
     // header (HAProxy PROXY protocol v1 or v2); nothing is guessed, and a
     // connection without a valid header is closed before TLS or HTTP. The
     // Header limit: 4096 bytes (v1: 107 bytes). The absolute deadline is the
-    // minimum configured request_header_timeout_ / header_completion_timeout_;
-    // when both are disabled it is 30 s. A PROXY command's
+    // smaller of header_completion_timeout_ and a configured
+    // request_header_timeout_. A PROXY command's
     // source becomes the connection's remote endpoint for every consumer --
     // admission, open/close events, conn_info, access logs, rate limiting and
     // the trusted-proxy check; a LOCAL command, or an address family without

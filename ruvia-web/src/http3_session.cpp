@@ -366,7 +366,7 @@ http3_session::http3_session(http3_endpoint& endpoint, connection_slot slot, con
     const auto& server = services_.options_.server_;
     auto crypto_callbacks = make_http3_quic_crypto_callbacks();
     crypto_callbacks.recv_client_initial_ = ngtcp2_crypto_recv_client_initial_cb;
-    const auto handshake_timeout = http3_quic_duration(server.header_completion_timeout_.has_value() ? server.header_completion_timeout_ : server.request_header_timeout_);
+    const auto handshake_timeout = http3_quic_duration(server.header_completion_timeout_);
     const http3_connection_options http3_options{.max_concurrent_streams_ = static_cast<std::size_t>(http3_max_concurrent_requests), .max_stream_output_bytes_ = http3_stream_output_bytes, .enable_connect_protocol_ = true, .enable_h3_datagram_ = true, .frame_observer_ = services_.options_.http3_frame_ ? +[](void* target, const http3_frame_metadata& metadata) noexcept {
         const auto& self = *static_cast<http3_session*>(target);
         self.services_.options_.http3_frame_(server_observation_access::http3_frame(self.connection_id_, metadata));
@@ -386,9 +386,7 @@ http3_session::http3_session(http3_endpoint& endpoint, connection_slot slot, con
         .initial_path_ = path(remote_),
         .version_ = initial.version,
         .initial_timestamp_ = now(),
-        // With both request-head timeouts unset, the same product fallback as
-        // the TCP handshake and preface still bounds the QUIC handshake.
-        .handshake_timeout_ = handshake_timeout == 0 ? http3_quic_duration(timeout_duration(unconfigured_initial_read_deadline)) : handshake_timeout,
+        .handshake_timeout_ = handshake_timeout,
         // Zero disables the QUIC idle timeout, as an absent idle_timeout_
         // disables the HTTP one.
         .idle_timeout_ = http3_quic_duration(server.idle_timeout_),
@@ -2111,8 +2109,7 @@ void http3_endpoint::accept(std::span<const std::byte> bytes, const asio::ip::ud
             }
         } else {
             const auto& server = services_.options_.server_;
-            const auto timeout_ms = server.header_completion_timeout_.has_value() ? server.header_completion_timeout_ : server.request_header_timeout_;
-            const ngtcp2_duration token_lifetime = timeout_ms.has_value() ? (std::max)(http3_quic_duration(*timeout_ms), ngtcp2_duration{NGTCP2_MILLISECONDS}) : 10 * NGTCP2_SECONDS;
+            const ngtcp2_duration token_lifetime = (std::max)(http3_quic_duration(server.header_completion_timeout_), ngtcp2_duration{NGTCP2_MILLISECONDS});
             const auto timestamp = http3_quic_now();
             const int verified = ngtcp2_crypto_verify_retry_token2(&original_dcid, header.token, header.tokenlen, secret().data(), secret().size(), header.version, reinterpret_cast<const ngtcp2_sockaddr*>(remote.data()), static_cast<ngtcp2_socklen>(remote.size()), &header.dcid, token_lifetime, timestamp);
             if (verified != 0) {

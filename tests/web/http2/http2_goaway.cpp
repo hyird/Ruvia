@@ -536,6 +536,33 @@ TEST(Ruvia, http2_idle_timeout_is_not_renewed_by_non_progress_frames) {
     run.join();
 }
 
+// DATA on a retired stream is ignored (RFC 9113 section 5.1): it neither
+// reopens the stream nor renews the idle timer, so the connection is still
+// reclaimed by idle_timeout_.
+TEST(Ruvia, http2_idle_timeout_is_not_renewed_by_data_on_a_retired_stream) {
+    using namespace http2_goaway_test;
+    silent_peer_run run({.worker_count_ = 1, .idle_timeout_ = 300ms, .connection_scan_interval_ = 5ms}, request(1, "/brief"));
+    peer client(run.socket());
+    expect_stream_end(client, 1);
+    const auto retired = std::chrono::steady_clock::now();
+    const auto traffic = data_frame(1, {}, false) + data_frame(1, "x", false);
+    const auto frames = trickle_until(client, run.socket(), traffic, [](const frame& value) {
+        return is_frame(value, ruvia::http2_frame_type::goaway, 0);
+    });
+    EXPECT_LT(std::chrono::steady_clock::now() - retired, 2s);
+    for (const auto& value : frames) {
+        EXPECT_TRUE(!is_frame(value, ruvia::http2_frame_type::rst_stream, 1));
+    }
+    // The idle drain's first GOAWAY(2^31-1, NO_ERROR), not a STREAM_CLOSED
+    // connection error.
+    EXPECT_EQ(uint32(frames.back().payload_) & 0x7fffffffU, 0x7fffffffU);
+    EXPECT_EQ(uint32(std::string_view(frames.back().payload_).substr(4)), 0U);
+    expect_final_goaway_and_end(client, 1);
+    run.socket().close();
+    run.app().stop();
+    run.join();
+}
+
 // write_completion_timeout_ bounds one stream write across its flow-control
 // waits: a peer granting one byte of window well within write_timeout_ still
 // gets the stream reset, while the connection keeps serving.

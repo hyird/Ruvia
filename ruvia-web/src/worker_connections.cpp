@@ -112,9 +112,6 @@ void configure_listener_address(asio::ip::tcp::acceptor& socket) {
 [[nodiscard]] connection_scanner_options make_connection_scanner_options(const http_server_options& options) noexcept {
     const auto& server = options.server_;
     connection_scanner_options scanner{.scan_interval_ = server.connection_scan_interval_, .idle_timeout_ = server.idle_timeout_, .initial_read_timeout_ = server.request_header_timeout_, .payload_read_timeout_ = server.request_body_timeout_, .write_timeout_ = server.write_timeout_, .initial_read_completion_timeout_ = server.header_completion_timeout_, .payload_read_completion_timeout_ = server.body_completion_timeout_, .write_completion_timeout_ = server.write_completion_timeout_};
-    if (!scanner.initial_read_timeout_ && !scanner.initial_read_completion_timeout_) {
-        scanner.initial_read_completion_timeout_ = unconfigured_initial_read_deadline;
-    }
     return scanner;
 }
 
@@ -859,11 +856,10 @@ void worker_connections::accept_socket(std::size_t index, tcp_socket_type socket
 task<void> worker_connections::prepare_connection(std::size_t index, tcp_socket_type socket, std::vector<std::byte> prefix, std::optional<ip_endpoint> remote) {
     try {
         operation_interrupt_source source;
-        auto limit = options_.server_.header_completion_timeout_;
-        if (const auto request = options_.server_.request_header_timeout_; request && (!limit || *request < *limit)) {
-            limit = request;
-        }
-        operation_interrupt interrupt(source, worker_, {.timeout_ = operation_timeout(limit.value_or(unconfigured_initial_read_deadline)), .stop_token_ = stop_token_}, &socket, [](void* raw) noexcept {
+        const auto completion = options_.server_.header_completion_timeout_;
+        const auto request = options_.server_.request_header_timeout_;
+        const auto limit = request && request->value() < completion.value() ? *request : completion;
+        operation_interrupt interrupt(source, worker_, {.timeout_ = operation_timeout(limit), .stop_token_ = stop_token_}, &socket, [](void* raw) noexcept {
             ruvia::close_socket(*static_cast<tcp_socket_type*>(raw));
         }, "PROXY protocol header");
         proxy_protocol_parser parser;

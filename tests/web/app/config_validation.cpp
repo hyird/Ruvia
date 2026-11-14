@@ -118,6 +118,22 @@ TEST(Ruvia, app_compression_rejects_invalid_thresholds_at_configuration) {
     }));
 }
 
+// header_completion_timeout_ is a required deadline: the default bounds it at
+// 30 s, and a non-positive value is rejected at configuration.
+TEST(Ruvia, app_server_rejects_non_positive_header_completion_timeout) {
+    using namespace std::chrono_literals;
+    EXPECT_EQ(ruvia::server_config{}.header_completion_timeout_.value(), std::chrono::milliseconds(30s));
+    EXPECT_FALSE(throws_invalid([] {
+        ruvia::app().server({});
+    }));
+    EXPECT_TRUE(throws_invalid([] {
+        ruvia::app().server({.header_completion_timeout_ = 0ms});
+    }));
+    EXPECT_TRUE(throws_invalid([] {
+        ruvia::app().server({.header_completion_timeout_ = -1ms});
+    }));
+}
+
 namespace {
 
 class testing_memory_controller final {

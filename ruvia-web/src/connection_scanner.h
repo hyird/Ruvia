@@ -63,12 +63,6 @@ struct connection_scanner_options final {
     std::optional<timeout_duration> write_completion_timeout_{};
 };
 
-// Product limit: the absolute bound on reading a PROXY header, the TLS
-// handshake, a request head or the HTTP/2 preface when neither request-head
-// timeout is configured, so no configuration lets a silent or trickling peer
-// hold its slot indefinitely.
-inline constexpr std::chrono::seconds unconfigured_initial_read_deadline{30};
-
 // Product limit: a connection that a timeout asked to end through its drain
 // callback (an HTTP/2 GOAWAY drain, bounded by its own round-trip limit) has
 // this long to do so before the scanner closes its socket, whatever its
