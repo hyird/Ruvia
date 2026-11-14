@@ -493,7 +493,7 @@ task<void> http_interim_response_output::send_continue() {
         co_return;
     }
     auto lease = claim_operation_lane(output_active_, "interim response output is already active");
-    co_await write_(target_, http_interim_response_head(http_status::continue_value));
+    co_await write_(target_, http_interim_response_head(http_status::continue_));
 }
 }  // namespace ruvia::detail
 
@@ -984,9 +984,9 @@ inline constexpr std::size_t inline_request_decode_bytes = 64 * 1024;
         const auto coding_count = (std::min)(codings.size(), max_content_codings);
         std::copy_n(codings.data(), coding_count, owned_codings.data());
         std::string owned_raw(raw);
-        auto offloaded = co_await run_blocking(worker_value, {.stop_token_ = stop_token_value}, [owned_codings, coding_count, owned_raw = std::move(owned_raw), limit = options.max_decoded_bytes_]() {
+        auto offloaded = co_await run_blocking(worker_value, [owned_codings, coding_count, owned_raw = std::move(owned_raw), limit = options.max_decoded_bytes_]() {
             return decode_http_content(std::span<const http_content_coding>(owned_codings.data(), coding_count), owned_raw, {.max_decoded_bytes_ = limit});
-        });
+        }, {.stop_token_ = stop_token_value});
         // A codec failure on the pool is rethrown here; pool saturation or
         // shutdown throws blocking_operation_rejected (mapped to 503).
         co_return std::move(offloaded).take_value();

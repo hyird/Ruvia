@@ -131,7 +131,7 @@ public:
         const auto value = co_await c.req().text();
         (void)(co_await c.redis().set(key, value));
         ruvia::redis_set_options set_options;
-        set_options.previous_value_ = ruvia::redis_set_previous_value_policy::return_value;
+        set_options.previous_value_ = ruvia::redis_set_previous_value_policy::return_;
         auto previous = co_await c.redis().set(key, "fresh", set_options);
         ruvia::redis_set_options ttl_options;
         ttl_options.expiration_ = ruvia::redis_set_expiration::expires_after(std::chrono::seconds(60));
@@ -140,7 +140,7 @@ public:
         insert_options.condition_ = ruvia::redis_set_condition::if_absent;
         const auto inserted = co_await c.redis().set("ruvia:example:nx", "first", insert_options);
         ruvia::redis_set_options replace_options;
-        replace_options.previous_value_ = ruvia::redis_set_previous_value_policy::return_value;
+        replace_options.previous_value_ = ruvia::redis_set_previous_value_policy::return_;
         auto replaced = co_await c.redis().set(key, "replaced", replace_options);
         const auto appended = co_await c.redis().append(key, "+tail");
         const auto length = co_await c.redis().strlen(key);

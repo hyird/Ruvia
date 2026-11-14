@@ -92,7 +92,7 @@ struct opened_file_path final {
 // frees what it owns there.
 template <typename open_type>
 [[nodiscard]] task<blocking_result<std::invoke_result_t<open_type&>>> run_file_open(context& context_value, open_type open) {
-    return run_blocking(context_value.worker(), {.timeout_ = detail::context_access::services(context_value).file_io_timeout(), .stop_token_ = context_value.stop_token()}, std::move(open));
+    return run_blocking(context_value.worker(), std::move(open), {.timeout_ = detail::context_access::services(context_value).file_io_timeout(), .stop_token_ = context_value.stop_token()});
 }
 
 // The open's value. An open that never completed is answered as a file body

@@ -399,7 +399,7 @@ public:
 
     ruvia::task<ruvia::http_response> redirect(ruvia::context& c) {
         (void)co_await c.req().bytes();
-        c.draft().status(ruvia::http_status_code::from_value(c.req().query<std::uint16_t>("status").value_or(302)));
+        c.draft().status(ruvia::http_status_code(c.req().query<std::uint16_t>("status").value_or(302)));
         c.draft().header("location", c.req().query("location").value_or("/fluent/inspect"));
         co_return c.text("redirect");
     }
@@ -647,13 +647,13 @@ TEST(Ruvia, http_client_fluent_ownership_helpers_json_and_registered_redirects) 
                     }
                 }
                 EXPECT_EQ(links, std::size_t{2});
-                const auto contents = co_await piped.text();
+                const auto contents = co_await piped.bytes();
                 EXPECT_EQ(contents.text(), "firstsecond");
                 EXPECT_TRUE(piped.trailer("x-finished") == "yes");
                 auto bounded = co_await origin.get("/fluent/pipe-bounded").send();
                 EXPECT_TRUE(bounded.status() == ruvia::http_status::created);
                 EXPECT_TRUE(bounded.header("x-stream-source") == "retained");
-                const auto bounded_contents = co_await bounded.text();
+                const auto bounded_contents = co_await bounded.bytes();
                 EXPECT_EQ(bounded_contents.text(), "firstsecond");
                 EXPECT_TRUE(bounded.trailer("x-finished") == "yes");
             }
@@ -675,7 +675,7 @@ TEST(Ruvia, http_client_fluent_ownership_helpers_json_and_registered_redirects) 
                 {"POST", &ruvia::http_client_ref::post},
                 {"PUT", &ruvia::http_client_ref::put},
                 {"PATCH", &ruvia::http_client_ref::patch},
-                {"DELETE", &ruvia::http_client_ref::del},
+                {"DELETE", &ruvia::http_client_ref::delete_},
                 {"HEAD", &ruvia::http_client_ref::head},
                 {"OPTIONS", &ruvia::http_client_ref::options},
             }};
@@ -683,7 +683,7 @@ TEST(Ruvia, http_client_fluent_ownership_helpers_json_and_registered_redirects) 
                 auto result = co_await (origin.*make)("/fluent/inspect").send();
                 EXPECT_TRUE(result.ok());
                 EXPECT_TRUE(result.header("x-observed-method") == method);
-                auto body = co_await result.text();
+                auto body = co_await result.bytes();
                 if (method == "HEAD") {
                     EXPECT_TRUE(body.empty());
                 } else {
@@ -717,7 +717,7 @@ TEST(Ruvia, http_client_fluent_ownership_helpers_json_and_registered_redirects) 
                 auto result = co_await origin.get("/fluent/redirect").redirects(0).send();
                 EXPECT_TRUE(!result.ok());
                 EXPECT_TRUE(result.status() == ruvia::http_status::found);
-                auto text = co_await result.text();
+                auto text = co_await result.bytes();
                 EXPECT_EQ(text.text(), "redirect");
             }
             {
@@ -736,7 +736,7 @@ TEST(Ruvia, http_client_fluent_ownership_helpers_json_and_registered_redirects) 
                 auto result = co_await origin.get("/fluent/registered").query("mode", mode).redirects(0).send();
                 EXPECT_TRUE(!result.ok());
                 EXPECT_TRUE(result.status() == ruvia::http_status::found);
-                auto text = co_await result.text();
+                auto text = co_await result.bytes();
                 EXPECT_EQ(text.text(), "redirect");
             }
             for (const auto protocol : {
@@ -909,13 +909,13 @@ void fluent_client_tests::verify_standalone_origins(server& server) {
             {
                 auto result = co_await source.get("/fluent/redirect").query("location", std::string(server.targets().unregistered_) + "/fluent/inspect").send();
                 EXPECT_TRUE(result.status() == ruvia::http_status::found);
-                const auto text = co_await result.text();
+                const auto text = co_await result.bytes();
                 EXPECT_EQ(text.text(), "redirect");
             }
             {
                 auto result = co_await client.client("secure").get("/fluent/redirect").query("location", std::string(server.targets().destination_) + "/fluent/inspect").send();
                 EXPECT_TRUE(result.status() == ruvia::http_status::found);
-                const auto text = co_await result.text();
+                const auto text = co_await result.bytes();
                 EXPECT_EQ(text.text(), "redirect");
             }
             bool tls_rejected = false;

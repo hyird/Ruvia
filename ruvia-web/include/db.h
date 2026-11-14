@@ -38,7 +38,7 @@ class db_write_query_builder;
 struct db_find_order final {
     borrowed_text column_{};
     db_order_direction direction_{db_order_direction::asc};
-    db_nulls_order nulls_{db_nulls_order::default_value};
+    db_nulls_order nulls_{db_nulls_order::default_};
 };
 
 // span 及元素中的文本均为借用；repository 调用入口同步复制或导入。
@@ -405,16 +405,15 @@ private:
     template <typename entity_type>
     void resolve_columns(const db_row& row) {
         columns_.resize(plan_.column_count());
-        const auto names = row.column_names();
         const auto resolve = [&](std::string_view name) {
-            const auto lookup = find_unique_db_result_column(names, name);
-            if (lookup.state_ == unique_lookup_status::repeated) {
+            const auto lookup = row.find(name);
+            if (lookup.status_ == unique_lookup_status::repeated) {
                 throw db_conversion_error(db_conversion_error::code_type::invalid_format, "duplicate entity projection name in a relation query");
             }
-            if (lookup.state_ == unique_lookup_status::absent || lookup.index_ >= row.size()) {
+            if (lookup.status_ == unique_lookup_status::absent) {
                 throw db_conversion_error(db_conversion_error::code_type::missing_column, "relation query must select every mapped entity column");
             }
-            return lookup.index_;
+            return static_cast<std::size_t>(lookup.field_ - row.begin());
         };
         for_each_descriptor<typename entity_type::columns_type>([&]<typename column_type, std::size_t i> {
             columns_[i] = resolve(column_type::name.view());
@@ -1109,7 +1108,7 @@ public:
         query_.with(name, source_value, options);
         return *this;
     }
-    db_query_builder& with(std::string_view name, const db_values_builder& values, db_materialization materialization = db_materialization::default_value) {
+    db_query_builder& with(std::string_view name, const db_values_builder& values, db_materialization materialization = db_materialization::default_) {
         query_.with_columns(name, values.query(), materialization, values.columns());
         return *this;
     }
@@ -1208,11 +1207,11 @@ public:
         query_.or_having(predicate.expression(query_, entity_type::table_name(), alias_));
         return *this;
     }
-    db_query_builder& order_by(const db_expr& expression, db_order_direction direction = db_order_direction::asc, db_nulls_order nulls = db_nulls_order::default_value) {
+    db_query_builder& order_by(const db_expr& expression, db_order_direction direction = db_order_direction::asc, db_nulls_order nulls = db_nulls_order::default_) {
         query_.order_by(expression.expression(query_, entity_type::table_name(), alias_), direction, nulls);
         return *this;
     }
-    db_query_builder& add_order_by(const db_expr& expression, db_order_direction direction = db_order_direction::asc, db_nulls_order nulls = db_nulls_order::default_value) {
+    db_query_builder& add_order_by(const db_expr& expression, db_order_direction direction = db_order_direction::asc, db_nulls_order nulls = db_nulls_order::default_) {
         query_.add_order_by(expression.expression(query_, entity_type::table_name(), alias_), direction, nulls);
         return *this;
     }
@@ -1288,11 +1287,11 @@ public:
         query_.clear_where();
         return *this;
     }
-    db_query_builder& order_by(std::string_view column, db_order_direction direction = db_order_direction::asc, db_nulls_order nulls = db_nulls_order::default_value) {
+    db_query_builder& order_by(std::string_view column, db_order_direction direction = db_order_direction::asc, db_nulls_order nulls = db_nulls_order::default_) {
         query_.order_by(import_entity_column(column), direction, nulls);
         return *this;
     }
-    db_query_builder& add_order_by(std::string_view column, db_order_direction direction = db_order_direction::asc, db_nulls_order nulls = db_nulls_order::default_value) {
+    db_query_builder& add_order_by(std::string_view column, db_order_direction direction = db_order_direction::asc, db_nulls_order nulls = db_nulls_order::default_) {
         query_.add_order_by(import_entity_column(column), direction, nulls);
         return *this;
     }
@@ -1781,7 +1780,7 @@ public:
         query_.with(name, source_value, options);
         return *this;
     }
-    db_write_query_builder& with(std::string_view name, const db_values_builder& values, db_materialization materialization = db_materialization::default_value) {
+    db_write_query_builder& with(std::string_view name, const db_values_builder& values, db_materialization materialization = db_materialization::default_) {
         query_.with_columns(name, values.query(), materialization, values.columns());
         return *this;
     }

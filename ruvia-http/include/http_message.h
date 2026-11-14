@@ -23,7 +23,7 @@ enum class http_scheme : std::uint8_t {
 enum class http_known_method : std::uint8_t { get,
     post,
     put,
-    delete_value,
+    delete_,
     patch,
     head,
     options,

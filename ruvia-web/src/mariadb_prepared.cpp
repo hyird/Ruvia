@@ -339,14 +339,14 @@ static_assert(std::is_trivially_copyable_v<MYSQL_BIND>);
                 return std::nullopt;
             }
             return MYSQL_TYPE_LONGLONG;
-        case db_value_type::double_value: {
+        case db_value_type::double_: {
             const auto value = param.double_value();
             if (!std::isfinite(value) || std::signbit(value)) {
                 return std::nullopt;
             }
             return MYSQL_TYPE_DOUBLE;
         }
-        case db_value_type::bool_value:
+        case db_value_type::bool_:
             return MYSQL_TYPE_TINY;
     }
     return std::nullopt;
@@ -700,12 +700,12 @@ using cache_state = mariadb_statement_cache;
                 bind.buffer_type = MYSQL_TYPE_LONGLONG;
                 bind.buffer = &value.integer_;
                 break;
-            case db_value_type::double_value:
+            case db_value_type::double_:
                 value.real_ = param.double_value();
                 bind.buffer_type = MYSQL_TYPE_DOUBLE;
                 bind.buffer = &value.real_;
                 break;
-            case db_value_type::bool_value:
+            case db_value_type::bool_:
                 value.flag_ = param.bool_value() ? 1 : 0;
                 bind.buffer_type = MYSQL_TYPE_TINY;
                 bind.buffer = &value.flag_;

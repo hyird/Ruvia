@@ -74,7 +74,7 @@ ruvia::task<ruvia::http_client_response_bytes> exercise(ruvia::event_loop loop, 
             // HTTP/2 carries the same body and trailers in DATA and HEADERS.
             // A 100-continue expectation lets a peer reject the head first.
             std::cout << "upload\n";
-            auto exchange_value = co_await bounded.post("/features/upload").headers(headers).upload({.expectation_ = ruvia::http_client_request_expectation::continue_value, .max_chunk_bytes_ = 1024});
+            auto exchange_value = co_await bounded.post("/features/upload").headers(headers).upload({.expectation_ = ruvia::http_client_request_expectation::continue_, .max_chunk_bytes_ = 1024});
             co_await exchange_value.body().write("hello ");
             co_await exchange_value.body().write("world!");
             const std::array<ruvia::http_header_view, 1> trailers{{{"X-Upload-Complete", "yes"}}};

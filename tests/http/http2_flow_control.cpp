@@ -107,7 +107,7 @@ struct data_output_observations final {
 
 ruvia::http2_submit_status submit_buffered_response(ruvia::http2_connection& server, std::uint32_t stream_id, const ruvia::http_response& response) {
     std::variant<ruvia::http_buffered_response_write_plan, ruvia::http2_response_head_submit_error> head = ruvia::http2_response_head_submit_error::response_plan_mismatch;
-    for (const auto method : {ruvia::http_known_method::get, ruvia::http_known_method::post, ruvia::http_known_method::options, ruvia::http_known_method::head, ruvia::http_known_method::put, ruvia::http_known_method::delete_value, ruvia::http_known_method::patch, ruvia::http_known_method::connect, ruvia::http_known_method::unknown}) {
+    for (const auto method : {ruvia::http_known_method::get, ruvia::http_known_method::post, ruvia::http_known_method::options, ruvia::http_known_method::head, ruvia::http_known_method::put, ruvia::http_known_method::delete_, ruvia::http_known_method::patch, ruvia::http_known_method::connect, ruvia::http_known_method::unknown}) {
         head = server.submit_response_head(stream_id, response, ruvia::plan_buffered_http_response_write(method, response));
         const auto* error = std::get_if<ruvia::http2_response_head_submit_error>(&head);
         if (error == nullptr || *error != ruvia::http2_response_head_submit_error::response_plan_mismatch) {
@@ -936,7 +936,7 @@ TEST(Ruvia, http2_public_known_empty_requests_never_wait_for_continue_or_send_co
         for (const bool streaming : {false, true}) {
             auto client = ruvia::http2_connection::client({});
             std::string wire(ruvia::test::drain_output(client));
-            ruvia::http2_regular_request_head_view head{.method_ = method, .authority_ = "example.test", .content_ = streaming ? ruvia::http_request_content_plan::streaming(0) : ruvia::http_request_content_plan::known_length(0), .expectation_ = ruvia::http_client_request_expectation::continue_value};
+            ruvia::http2_regular_request_head_view head{.method_ = method, .authority_ = "example.test", .content_ = streaming ? ruvia::http_request_content_plan::streaming(0) : ruvia::http_request_content_plan::known_length(0), .expectation_ = ruvia::http_client_request_expectation::continue_};
             const auto rejected = client.submit_request_head(head);
             EXPECT_TRUE(std::holds_alternative<ruvia::http2_request_head_submit_error>(rejected) && std::get<ruvia::http2_request_head_submit_error>(rejected) == ruvia::http2_request_head_submit_error::invalid_message);
             EXPECT_TRUE(!client.wants_write());
@@ -1426,7 +1426,7 @@ TEST(Ruvia, http2_public_response_data_counts_only_consumed_bytes_toward_content
 TEST(Ruvia, http2_public_expectation_gate_does_not_consume_or_retain_data) {
     for (const bool timeout_release : {false, true}) {
         auto client = ruvia::http2_connection::client();
-        const auto request = client.submit_request_head(ruvia::http2_regular_request_head_view{.method_ = "POST", .authority_ = "example.test", .content_ = ruvia::http_request_content_plan::known_length(4), .expectation_ = ruvia::http_client_request_expectation::continue_value});
+        const auto request = client.submit_request_head(ruvia::http2_regular_request_head_view{.method_ = "POST", .authority_ = "example.test", .content_ = ruvia::http_request_content_plan::known_length(4), .expectation_ = ruvia::http_client_request_expectation::continue_});
         EXPECT_TRUE(std::holds_alternative<std::uint32_t>(request));
         if (!std::holds_alternative<std::uint32_t>(request)) {
             continue;

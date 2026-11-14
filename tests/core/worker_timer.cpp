@@ -992,11 +992,11 @@ TEST(Ruvia, operation_timeout_is_valid_by_construction) {
     EXPECT_EQ(relative.deadline_from(start), start + std::chrono::milliseconds(1));
     EXPECT_EQ(ruvia::operation_timeout(std::chrono::hours::max()).deadline_from(start), clock_type::time_point::max());
 
-    EXPECT_FALSE(ruvia::operation_timeout::try_create(std::chrono::milliseconds(0)).has_value());
-    EXPECT_FALSE(ruvia::operation_timeout::try_create(std::chrono::seconds(-3)).has_value());
-    EXPECT_FALSE(ruvia::operation_timeout::try_create(ruvia::timeout_duration{}).has_value());
-    EXPECT_EQ(ruvia::operation_timeout::try_create(std::chrono::microseconds(1500)), ruvia::operation_timeout(std::chrono::milliseconds(2)));
-    EXPECT_EQ(ruvia::operation_timeout::try_create(ruvia::timeout_duration(std::chrono::seconds(1))), ruvia::operation_timeout(std::chrono::seconds(1)));
+    EXPECT_FALSE(ruvia::operation_timeout::try_from_value(std::chrono::milliseconds(0)).has_value());
+    EXPECT_FALSE(ruvia::operation_timeout::try_from_value(std::chrono::seconds(-3)).has_value());
+    EXPECT_FALSE(ruvia::operation_timeout::try_from_value(ruvia::timeout_duration{}).has_value());
+    EXPECT_EQ(ruvia::operation_timeout::try_from_value(std::chrono::microseconds(1500)), ruvia::operation_timeout(std::chrono::milliseconds(2)));
+    EXPECT_EQ(ruvia::operation_timeout::try_from_value(ruvia::timeout_duration(std::chrono::seconds(1))), ruvia::operation_timeout(std::chrono::seconds(1)));
 }
 
 TEST(Ruvia, operation_timeout_overrides_only_tighten) {

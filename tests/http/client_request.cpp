@@ -106,7 +106,7 @@ TEST(Ruvia, http1_client_request_writer_emits_one_canonical_scatter_gather_plan)
     request.headers_ = headers;
     request.content_ = http_client_request_content_view::bytes("payload");
 
-    prepared_fixture fixture_value(http_origin_view::https({.host_ = "example.test"}), request, http1_client_request_wire_policy{.expectation_ = ruvia::http_client_request_expectation::continue_value});
+    prepared_fixture fixture_value(http_origin_view::https({.host_ = "example.test"}), request, http1_client_request_wire_policy{.expectation_ = ruvia::http_client_request_expectation::continue_});
     const auto* prepared = std::get_if<prepared_http1_client_request>(&fixture_value.result_);
     EXPECT_TRUE(prepared != nullptr);
     if (prepared == nullptr) {
@@ -390,7 +390,7 @@ TEST(Ruvia, http1_client_request_writer_enforces_expect_content_semantics) {
 
     http_client_request_view absent;
     absent.method_ = "POST";
-    prepared_fixture absent_fixture(http_origin_view::https({.host_ = "example.test"}), absent, http1_client_request_wire_policy{.expectation_ = ruvia::http_client_request_expectation::continue_value});
+    prepared_fixture absent_fixture(http_origin_view::https({.host_ = "example.test"}), absent, http1_client_request_wire_policy{.expectation_ = ruvia::http_client_request_expectation::continue_});
     const auto* absent_failure = std::get_if<http1_client_request_prepare_error>(&absent_fixture.result_);
     EXPECT_TRUE(absent_failure != nullptr);
     if (absent_failure != nullptr) {
@@ -399,7 +399,7 @@ TEST(Ruvia, http1_client_request_writer_enforces_expect_content_semantics) {
 
     http_client_request_view empty = absent;
     empty.content_ = http_client_request_content_view::bytes("");
-    prepared_fixture empty_fixture(http_origin_view::https({.host_ = "example.test"}), empty, http1_client_request_wire_policy{.expectation_ = ruvia::http_client_request_expectation::continue_value});
+    prepared_fixture empty_fixture(http_origin_view::https({.host_ = "example.test"}), empty, http1_client_request_wire_policy{.expectation_ = ruvia::http_client_request_expectation::continue_});
     const auto* empty_failure = std::get_if<http1_client_request_prepare_error>(&empty_fixture.result_);
     EXPECT_TRUE(empty_failure != nullptr);
     if (empty_failure != nullptr) {
@@ -409,7 +409,7 @@ TEST(Ruvia, http1_client_request_writer_enforces_expect_content_semantics) {
     http_client_request_view nonempty;
     nonempty.method_ = "POST";
     nonempty.content_ = http_client_request_content_view::bytes("x");
-    prepared_fixture fixture_value(http_origin_view::https({.host_ = "example.test"}), nonempty, http1_client_request_wire_policy{.expectation_ = ruvia::http_client_request_expectation::continue_value});
+    prepared_fixture fixture_value(http_origin_view::https({.host_ = "example.test"}), nonempty, http1_client_request_wire_policy{.expectation_ = ruvia::http_client_request_expectation::continue_});
     const auto* prepared = std::get_if<prepared_http1_client_request>(&fixture_value.result_);
     EXPECT_TRUE(prepared != nullptr);
     if (prepared != nullptr) {
@@ -421,7 +421,7 @@ TEST(Ruvia, http1_client_request_writer_enforces_expect_content_semantics) {
 TEST(Ruvia, http1_client_request_writer_rejects_invalid_wire_policy) {
     http_client_request_view request;
     const auto invalid_without_expectation = http1_client_request_wire_policy{.close_policy_ = static_cast<http1_close_policy>(0xFF)};
-    const auto invalid_expect_continue = http1_client_request_wire_policy{.close_policy_ = static_cast<http1_close_policy>(0xFF), .expectation_ = ruvia::http_client_request_expectation::continue_value};
+    const auto invalid_expect_continue = http1_client_request_wire_policy{.close_policy_ = static_cast<http1_close_policy>(0xFF), .expectation_ = ruvia::http_client_request_expectation::continue_};
     const auto invalid_expectation = http1_client_request_wire_policy{.expectation_ = static_cast<ruvia::http_client_request_expectation>(0xFF)};
     EXPECT_TRUE(prepare_error(request, invalid_without_expectation) == http1_client_request_prepare_error::invalid_close_policy);
     EXPECT_TRUE(prepare_error(request, invalid_expect_continue) == http1_client_request_prepare_error::invalid_close_policy);
@@ -1069,7 +1069,7 @@ TEST(Ruvia, http_client_redirect_status_set) {
     for (const ruvia::http_status_code status : {ruvia::http_status::moved_permanently, ruvia::http_status::found, ruvia::http_status::see_other, ruvia::http_status::temporary_redirect, ruvia::http_status::permanent_redirect}) {
         EXPECT_TRUE(is_http_redirect_status(status));
     }
-    for (const ruvia::http_status_code status : {ruvia::http_status::ok, ruvia::http_status::no_content, ruvia::http_status::multiple_choices, ruvia::http_status::not_modified, ruvia::http_status::use_proxy, ruvia::http_status_code::from_value(306), ruvia::http_status_code::from_value(399), ruvia::http_status::not_found}) {
+    for (const ruvia::http_status_code status : {ruvia::http_status::ok, ruvia::http_status::no_content, ruvia::http_status::multiple_choices, ruvia::http_status::not_modified, ruvia::http_status::use_proxy, ruvia::http_status_code(306), ruvia::http_status_code(399), ruvia::http_status::not_found}) {
         EXPECT_TRUE(!is_http_redirect_status(status));
     }
 }
@@ -1486,7 +1486,7 @@ TEST(Ruvia, http1_streaming_request_declares_trailer_only_for_chunked_content) {
 TEST(Ruvia, http1_streaming_request_known_length_and_continue_gate) {
     ruvia::http1_client_request_writer head_writer;
     std::array<char, 4096> head{};
-    auto prepared = head_writer.prepare_streaming(ruvia::http_origin_view::http({.host_ = "example.com"}), {.method_ = "PUT", .content_length_ = 3}, head, {.expectation_ = ruvia::http_client_request_expectation::continue_value});
+    auto prepared = head_writer.prepare_streaming(ruvia::http_origin_view::http({.host_ = "example.com"}), {.method_ = "PUT", .content_length_ = 3}, head, {.expectation_ = ruvia::http_client_request_expectation::continue_});
     const auto* prepared_req = std::get_if<ruvia::prepared_http1_client_request>(&prepared);
     EXPECT_TRUE(prepared_req != nullptr);
     EXPECT_TRUE((prepared_req->head().find("Content-Length: 3\r\n") != std::string_view::npos));

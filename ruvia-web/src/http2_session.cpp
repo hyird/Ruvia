@@ -1868,7 +1868,7 @@ void http2_sans_io_session_engine::on_message_head(http2_request_head_event& mes
     // unresolved or already-oversized request never reads the content and
     // answers with its final status alone (RFC 9110 §10.1.1).
     if (expectation_plan == http_server_expectation_plan::send_continue && resolved_route && !connect_request && !body_limit_exceeded && stream_runtime->body_mode() == request_body_mode::buffered) {
-        const auto status = connection_.submit_interim_response_head(stream_id, http_interim_response_head(ruvia::http_status::continue_value));
+        const auto status = connection_.submit_interim_response_head(stream_id, http_interim_response_head(ruvia::http_status::continue_));
         if (status == http2_submit_status::accepted) {
             wake_writer();
         } else {

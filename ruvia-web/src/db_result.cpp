@@ -1,8 +1,8 @@
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <span>
-#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <type_traits>
@@ -51,9 +51,9 @@ db_value_type db_value::type() const noexcept {
         } else if constexpr (std::is_same_v<value_type, std::uint64_t>) {
             return db_value_type::unsigned_value;
         } else if constexpr (std::is_same_v<value_type, double>) {
-            return db_value_type::double_value;
+            return db_value_type::double_;
         } else {
-            return db_value_type::bool_value;
+            return db_value_type::bool_;
         }
     }, storage_);
 }
@@ -141,24 +141,30 @@ const db_field& db_row::operator[](std::size_t index) const& noexcept {
     return fields_[index];
 }
 
-bool db_row::contains(std::string_view column) const noexcept {
-    return find(column) != nullptr;
-}
-
-const db_field* db_row::find(std::string_view column) const& noexcept {
-    for (std::size_t index = 0; index < column_names_.size(); ++index) {
-        if (column_names_[index] == column) {
-            return &fields_[index];
+db_field_lookup db_row::find(std::string_view column) const& noexcept {
+    db_field_lookup result;
+    const auto count = (std::min)(fields_.size(), column_names_.size());
+    for (std::size_t index = 0; index < count; ++index) {
+        if (column_names_[index] != column) {
+            continue;
         }
+        if (result.status_ == unique_lookup_status::found) {
+            return {unique_lookup_status::repeated, nullptr};
+        }
+        result = {unique_lookup_status::found, &fields_[index]};
     }
-    return nullptr;
+    return result;
 }
 
 const db_field& db_row::operator[](std::string_view column) const& {
-    if (const auto* field = find(column)) {
-        return *field;
+    const auto lookup = find(column);
+    if (lookup.status_ == unique_lookup_status::repeated) {
+        throw db_conversion_error(db_conversion_error::code_type::invalid_format, "database result has ambiguous column names");
     }
-    throw std::out_of_range("database result has no such column");
+    if (lookup.status_ == unique_lookup_status::absent) {
+        throw db_conversion_error(db_conversion_error::code_type::missing_column, "database result has no such column");
+    }
+    return *lookup.field_;
 }
 
 const db_field* db_row::begin() const& noexcept {

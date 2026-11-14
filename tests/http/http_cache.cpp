@@ -171,10 +171,10 @@ TEST(RuviaHttpPublicApi, cache_control_field_qualified_private_and_no_cache_stri
 
 TEST(Ruvia, parse_cache_control_flags_and_ages) {
     const auto cc = ruvia::parse_cache_control("public, max-age=60, s-maxage=120, stale-while-revalidate=30, immutable");
-    EXPECT_TRUE(cc.has(ruvia::cache_control_directive::public_value));
+    EXPECT_TRUE(cc.has(ruvia::cache_control_directive::public_));
     EXPECT_TRUE(!cc.has(ruvia::cache_control_directive::no_store));
     EXPECT_TRUE(cc.has(ruvia::cache_control_directive::immutable));
-    EXPECT_TRUE(!cc.has(static_cast<ruvia::cache_control_directive>(static_cast<std::uint16_t>(ruvia::cache_control_directive::public_value) | static_cast<std::uint16_t>(ruvia::cache_control_directive::immutable))));
+    EXPECT_TRUE(!cc.has(static_cast<ruvia::cache_control_directive>(static_cast<std::uint16_t>(ruvia::cache_control_directive::public_) | static_cast<std::uint16_t>(ruvia::cache_control_directive::immutable))));
     EXPECT_TRUE(cc.max_age().has_value());
     EXPECT_EQ(*cc.max_age(), std::uint64_t{60});
     EXPECT_EQ(*cc.s_maxage(), std::uint64_t{120});
@@ -213,7 +213,7 @@ TEST(Ruvia, parse_cache_control_request_freshness_uses_first_occurrence) {
 TEST(Ruvia, parse_cache_control_no_store_and_private) {
     const auto cc = ruvia::parse_cache_control("no-store, private, must-revalidate");
     EXPECT_TRUE(cc.has(ruvia::cache_control_directive::no_store));
-    EXPECT_TRUE(cc.has(ruvia::cache_control_directive::private_value));
+    EXPECT_TRUE(cc.has(ruvia::cache_control_directive::private_));
     EXPECT_TRUE(cc.has(ruvia::cache_control_directive::must_revalidate));
     EXPECT_TRUE(!cc.max_age().has_value());
 }
@@ -261,7 +261,7 @@ TEST(Ruvia, parse_cache_control_rejects_whitespace_around_equals) {
     EXPECT_TRUE(!cc.stale_while_revalidate().has_value());
     EXPECT_TRUE(!cc.stale_if_error().has_value());
     EXPECT_TRUE(!cc.has(ruvia::cache_control_directive::no_cache));
-    EXPECT_TRUE(!cc.has(ruvia::cache_control_directive::private_value));
+    EXPECT_TRUE(!cc.has(ruvia::cache_control_directive::private_));
 
     // OWS around comma separators remains valid list framing.
     const auto separated = ruvia::parse_cache_control(" max-age=60 \t,\t no-store ");
@@ -292,7 +292,7 @@ TEST(Ruvia, cache_control_field_parser_combines_repeated_lines) {
     parser.update(R"(extension="a, no-transform, b", no-transform, max-age=3600, s-maxage=7200)");
 
     const auto cc = parser.finish();
-    EXPECT_TRUE(cc.has(ruvia::cache_control_directive::public_value));
+    EXPECT_TRUE(cc.has(ruvia::cache_control_directive::public_));
     EXPECT_TRUE(cc.has(ruvia::cache_control_directive::no_transform));
     EXPECT_TRUE(!cc.max_age().has_value());
     EXPECT_EQ(cc.s_maxage().value_or(0), std::uint64_t{120});
@@ -308,9 +308,9 @@ TEST(Ruvia, parse_cache_control_delta_seconds_overflow_saturates) {
 
 TEST(Ruvia, parse_cache_control_does_not_split_quoted_extension_values) {
     const auto cc = ruvia::parse_cache_control("extension=\"a, public, max-age=999, b\", private");
-    EXPECT_TRUE(!cc.has(ruvia::cache_control_directive::public_value));
+    EXPECT_TRUE(!cc.has(ruvia::cache_control_directive::public_));
     EXPECT_TRUE(!cc.max_age().has_value());
-    EXPECT_TRUE(cc.has(ruvia::cache_control_directive::private_value));
+    EXPECT_TRUE(cc.has(ruvia::cache_control_directive::private_));
 
     // A quoted-pair keeps the escaped quote inside the extension value; its
     // commas likewise cannot introduce directives.
@@ -321,7 +321,7 @@ TEST(Ruvia, parse_cache_control_does_not_split_quoted_extension_values) {
     // An unterminated quoted value is malformed through the end of the field,
     // so a comma within it must not accidentally enable caching directives.
     const auto unterminated = ruvia::parse_cache_control("extension=\"a, public, max-age=3600");
-    EXPECT_TRUE(!unterminated.has(ruvia::cache_control_directive::public_value));
+    EXPECT_TRUE(!unterminated.has(ruvia::cache_control_directive::public_));
     EXPECT_TRUE(!unterminated.max_age().has_value());
 }
 
@@ -329,7 +329,7 @@ TEST(Ruvia, parse_cache_control_ignores_arguments_on_bare_directives) {
     const auto cc = ruvia::parse_cache_control(
         "public=ignored, no-store=ignored, must-revalidate=x, "
         "proxy-revalidate=\"x\", no-transform=ignored, immutable=");
-    EXPECT_TRUE(!cc.has(ruvia::cache_control_directive::public_value));
+    EXPECT_TRUE(!cc.has(ruvia::cache_control_directive::public_));
     EXPECT_TRUE(!cc.has(ruvia::cache_control_directive::no_store));
     EXPECT_TRUE(!cc.has(ruvia::cache_control_directive::must_revalidate));
     EXPECT_TRUE(!cc.has(ruvia::cache_control_directive::proxy_revalidate));
@@ -340,7 +340,7 @@ TEST(Ruvia, parse_cache_control_ignores_arguments_on_bare_directives) {
     // field-name list, so an argument does not invalidate the directive.
     const auto qualified = ruvia::parse_cache_control("no-cache=\"Set-Cookie\", private=\"Authorization\"");
     EXPECT_TRUE(qualified.has(ruvia::cache_control_directive::no_cache));
-    EXPECT_TRUE(qualified.has(ruvia::cache_control_directive::private_value));
+    EXPECT_TRUE(qualified.has(ruvia::cache_control_directive::private_));
 }
 
 TEST(Ruvia, format_http_vary_cache_key_distinguishes_absent_from_empty_header) {

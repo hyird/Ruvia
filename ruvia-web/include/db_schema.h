@@ -80,8 +80,8 @@ public:
     [[nodiscard]] std::string body() const;
 
 private:
-    enum class block_type : std::uint8_t { if_value,
-        else_value,
+    enum class block_type : std::uint8_t { if_,
+        else_,
         begin,
         exception,
         loop };
@@ -120,11 +120,11 @@ enum class db_trigger_timing : std::uint8_t { before,
     instead_of };
 enum class db_trigger_event : std::uint8_t { insert,
     update,
-    delete_value,
+    delete_,
     truncate };
 enum class db_function_language : std::uint8_t { plpgsql,
     sql };
-enum class db_function_volatility : std::uint8_t { volatile_value,
+enum class db_function_volatility : std::uint8_t { volatile_,
     stable,
     immutable };
 
@@ -140,7 +140,7 @@ struct db_function_definition final {
     db_type_definition return_type_{};
     bool returns_set_{false};
     db_function_language language_{db_function_language::plpgsql};
-    db_function_volatility volatility_{db_function_volatility::volatile_value};
+    db_function_volatility volatility_{db_function_volatility::volatile_};
     bool strict_{false};
     bool replace_{false};
     borrowed_text body_{};
@@ -199,7 +199,7 @@ struct db_index_key final {
     borrowed_text column_{};
     db_expression expression_{};
     db_order_direction order_{db_order_direction::asc};
-    db_nulls_order nulls_{db_nulls_order::default_value};
+    db_nulls_order nulls_{db_nulls_order::default_};
     borrowed_text operator_class_{};
 };
 
@@ -250,7 +250,7 @@ struct db_hypertable_options final {
 struct db_compression_order final {
     borrowed_text column_{};
     db_order_direction direction_{db_order_direction::asc};
-    db_nulls_order nulls_{db_nulls_order::default_value};
+    db_nulls_order nulls_{db_nulls_order::default_};
 };
 struct db_compression_options final {
     bool enabled_{true};

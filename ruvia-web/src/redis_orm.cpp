@@ -254,7 +254,7 @@ void require_redis_exact_number(double value) {
 void require_index_fits_column(redis_index_kind index_kind, redis_column_kind column_kind) {
     switch (index_kind) {
         case redis_index_kind::tag:
-            if (column_kind != redis_column_kind::text && column_kind != redis_column_kind::bool_value) {
+            if (column_kind != redis_column_kind::text && column_kind != redis_column_kind::bool_) {
                 throw std::invalid_argument("Redis TAG indexes require string or boolean columns");
             }
             return;
@@ -355,7 +355,7 @@ using redis_numeric_bound_buffer = std::array<char, redis_scalar_scratch_size + 
     if (value.kind() == redis_literal_kind::string && column_kind == redis_column_kind::text) {
         return value.text();
     }
-    if (value.kind() == redis_literal_kind::boolean && column_kind == redis_column_kind::bool_value) {
+    if (value.kind() == redis_literal_kind::boolean && column_kind == redis_column_kind::bool_) {
         return value.boolean_value() ? std::string_view("1") : std::string_view("0");
     }
     throw std::invalid_argument("Redis TAG predicate value type does not match column");

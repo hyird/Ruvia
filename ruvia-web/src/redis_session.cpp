@@ -690,10 +690,8 @@ redis_subscription redis_session::subscription() const {
     return redis_subscription(runtime_->subscriptions(), registration_.scope(), operation_options_);
 }
 
-namespace detail {
-
 template <redis_batch_mode mode>
-redis_batch<mode>::redis_batch(redis_pool& pool, operation_options options, operation_scope& scope, request_io_metrics* io_metrics) noexcept :
+redis_batch<mode>::redis_batch(detail::redis_pool& pool, operation_options options, operation_scope& scope, detail::request_io_metrics* io_metrics) noexcept :
     pool_(&pool),
     options_(std::move(options)),
     commands_(),
@@ -717,7 +715,7 @@ void redis_batch<mode>::require_ready() const {
 }
 
 template <redis_batch_mode mode>
-redis_command_payload redis_batch<mode>::consume() {
+detail::redis_command_payload redis_batch<mode>::consume() {
     require_ready();
     auto& pool = *std::exchange(pool_, nullptr);
     return {pool, std::move(options_), std::move(commands_)};
@@ -728,7 +726,7 @@ void redis_batch<mode>::expire() noexcept {
     pool_ = nullptr;
     options_ = {};
     io_metrics_ = nullptr;
-    std::vector<redis_owned_command> empty;
+    std::vector<detail::redis_owned_command> empty;
     commands_.swap(empty);
 }
 
@@ -740,22 +738,22 @@ void redis_batch<mode>::expire_capability(void* target) noexcept {
 template <redis_batch_mode mode>
 redis_batch<mode>& redis_batch<mode>::command(std::span<const std::string_view> args) {
     require_ready();
-    const bool barrier = validate_redis_pooled_command(args, false, mode == redis_batch_mode::pipeline);
+    const bool barrier = detail::validate_redis_pooled_command(args, false, mode == redis_batch_mode::pipeline);
     if (barrier) {
-        require_bounded_redis_wait(options_, "redis barrier pipeline requires a stop_token or finite operation timeout");
+        detail::require_bounded_redis_wait(options_, "redis barrier pipeline requires a stop_token or finite operation timeout");
     }
-    return append_owned(make_owned_redis_command(args));
+    return append_owned(detail::make_owned_redis_command(args));
 }
 
 template <redis_batch_mode mode>
-redis_batch<mode>& redis_batch<mode>::append_owned(redis_owned_command command) {
+redis_batch<mode>& redis_batch<mode>::append_owned(detail::redis_owned_command command) {
     commands_.push_back(std::move(command));
     return *this;
 }
 
 template <redis_batch_mode mode>
-task<std::vector<redis_value>> redis_batch<mode>::execute_owned(request_io_metrics* io_metrics, redis_command_payload payload_value) {
-    scoped_request_io_timer timer(io_metrics, request_io_kind::redis);
+task<std::vector<redis_value>> redis_batch<mode>::execute_owned(detail::request_io_metrics* io_metrics, detail::redis_command_payload payload_value) {
+    detail::scoped_request_io_timer timer(io_metrics, detail::request_io_kind::redis);
     if constexpr (mode == redis_batch_mode::pipeline) {
         co_return co_await payload_value.pool_.get().execute_pipeline(std::move(payload_value.commands_), std::move(payload_value.options_));
     } else {
@@ -764,7 +762,7 @@ task<std::vector<redis_value>> redis_batch<mode>::execute_owned(request_io_metri
             throw redis_error(redis_error::code_type::protocol_error, "redis transaction returned no replies");
         }
         for (std::size_t i = 0; i < replies.size(); ++i) {
-            throw_if_redis_transaction_reply_error(replies[i], i);
+            detail::throw_if_redis_transaction_reply_error(replies[i], i);
         }
         auto exec_reply = std::move(replies.back());
         if (exec_reply.kind() != redis_value::kind_type::array) {
@@ -772,7 +770,7 @@ task<std::vector<redis_value>> redis_batch<mode>::execute_owned(request_io_metri
         }
 
         // Every reply node lives in `resource`, so the EXEC elements move without copying.
-        co_return std::move(redis_types_access::elements(exec_reply));
+        co_return std::move(detail::redis_types_access::elements(exec_reply));
     }
 }
 
@@ -785,8 +783,6 @@ task<std::vector<redis_value>> redis_batch<mode>::exec() && {
 
 template class redis_batch<redis_batch_mode::pipeline>;
 template class redis_batch<redis_batch_mode::transaction>;
-
-}  // namespace detail
 
 redis_session redis_session::bind_caller_scope(::ruvia::operation_scope& scope, detail::request_io_metrics* io_metrics, const stop_token& stop_token_value) && {
     registration_.require_active();
@@ -871,7 +867,7 @@ bool redis_set_returns_previous(redis_set_previous_value_policy policy) {
     switch (policy) {
         case redis_set_previous_value_policy::discard:
             return false;
-        case redis_set_previous_value_policy::return_value:
+        case redis_set_previous_value_policy::return_:
             return true;
         default:
             throw std::invalid_argument("redis set previous value policy is invalid");

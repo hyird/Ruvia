@@ -986,7 +986,7 @@ TEST(Ruvia, http_method_parsing_is_exact_and_case_sensitive) {
     EXPECT_TRUE(classify_http_method("GET") == http_known_method::get);
     EXPECT_TRUE(classify_http_method("POST") == http_known_method::post);
     EXPECT_TRUE(classify_http_method("PUT") == http_known_method::put);
-    EXPECT_TRUE(classify_http_method("DELETE") == http_known_method::delete_value);
+    EXPECT_TRUE(classify_http_method("DELETE") == http_known_method::delete_);
     EXPECT_TRUE(classify_http_method("PATCH") == http_known_method::patch);
     EXPECT_TRUE(classify_http_method("HEAD") == http_known_method::head);
     EXPECT_TRUE(classify_http_method("OPTIONS") == http_known_method::options);
@@ -1026,7 +1026,7 @@ TEST(Ruvia, http_method_safety_and_idempotency_follow_wire_semantics) {
 }
 
 TEST(Ruvia, http_known_method_token_round_trips) {
-    const http_known_method methods[] = {http_known_method::get, http_known_method::post, http_known_method::put, http_known_method::delete_value, http_known_method::patch, http_known_method::head, http_known_method::options, http_known_method::connect};
+    const http_known_method methods[] = {http_known_method::get, http_known_method::post, http_known_method::put, http_known_method::delete_, http_known_method::patch, http_known_method::head, http_known_method::options, http_known_method::connect};
     for (const auto method : methods) {
         EXPECT_TRUE(classify_http_method(known_http_method_token(method)) == method);
     }

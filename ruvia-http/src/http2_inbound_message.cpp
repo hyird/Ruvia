@@ -355,8 +355,8 @@ bool http2_connection::finish_response_head(http2_stream_state& stream, header_b
             http_client_response_head_access::headers(head) = std::move(block.informational_fields_);
         }
         std::optional<http_client_request_content_signal> signal;
-        if (block.status_->status() == http_status::continue_value && stream.release_request_continue()) {
-            signal = http_client_request_content_signal::continue_value;
+        if (block.status_->status() == http_status::continue_ && stream.release_request_continue()) {
+            signal = http_client_request_content_signal::continue_;
         }
         publish_event(http2_event(http2_informational_head_event(stream.id(), std::move(head), signal)));
         return true;

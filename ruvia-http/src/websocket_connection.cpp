@@ -248,7 +248,7 @@ public:
     void fail(std::uint16_t code) {
         if (close_phase_ == close_phase_type::open) {
             // Every protocol failure code is a valid Close code, so encoding succeeds.
-            const auto payload_value = detail::encode_websocket_close_payload(websocket_close_code::from_value(code), {});
+            const auto payload_value = detail::encode_websocket_close_payload(websocket_close_code(code), {});
             append_frame(websocket_opcode::close, payload_value.encoded()->bytes());
             close_phase_ = close_phase_type::final_output_queued;
             return;

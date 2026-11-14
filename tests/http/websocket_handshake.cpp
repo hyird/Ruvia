@@ -977,7 +977,7 @@ std::string drain(websocket_connection& connection) {
 TEST(Ruvia, ws_public_close_code_rejects_wide_and_reserved_values_before_narrowing) {
     const auto rejects = [](auto input) {
         try {
-            (void)websocket_close_code::from_value(input);
+            (void)websocket_close_code(input);
         } catch (const std::invalid_argument&) {
             return true;
         }
@@ -1000,7 +1000,7 @@ TEST(Ruvia, ws_public_checked_close_codes_preserve_wire_value_and_role_rules) {
         auto sender = client(client_input, source);
         http_io_buffer server_input;
         websocket_connection receiver(server_input);
-        const auto code = websocket_close_code::from_value(input);
+        const auto code = websocket_close_code(input);
         EXPECT_TRUE(sender.submit_close(code, "checked") == websocket_close_submit_status::accepted);
         server_input.append(drain(sender));
         const auto event = receiver.next_event();
@@ -1010,7 +1010,7 @@ TEST(Ruvia, ws_public_checked_close_codes_preserve_wire_value_and_role_rules) {
 
     http_io_buffer server_input;
     websocket_connection sender(server_input);
-    EXPECT_TRUE(sender.submit_close(websocket_close_code::from_value(1010), {}) == websocket_close_submit_status::invalid_code);
+    EXPECT_TRUE(sender.submit_close(websocket_close_code(1010), {}) == websocket_close_submit_status::invalid_code);
     EXPECT_TRUE(sender.submit_frame(websocket_opcode::text, "still-open") == websocket_frame_submit_status::accepted);
     EXPECT_TRUE(sender.submit_close(websocket_close_status::normal_closure, std::string_view("\xff", 1)) == websocket_close_submit_status::invalid_reason);
     EXPECT_TRUE(sender.submit_close(websocket_close_status::normal_closure, std::string(124, 'x')) == websocket_close_submit_status::reason_too_large);

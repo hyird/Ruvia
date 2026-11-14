@@ -246,7 +246,7 @@ private:
 
 enum class redis_set_previous_value_policy : std::uint8_t {
     discard,
-    return_value,
+    return_,
 };
 
 struct redis_set_options final {
@@ -741,6 +741,8 @@ struct redis_command_payload final {
     std::vector<redis_owned_command> commands_;
 };
 
+}  // namespace detail
+
 enum class redis_batch_mode : std::uint8_t {
     pipeline,
     transaction,
@@ -761,7 +763,7 @@ public:
 
     // Every command owns its arguments before this call returns.
     template <typename... args_type>
-        requires redis_argument_pack<args_type...>
+        requires detail::redis_argument_pack<args_type...>
     redis_batch& command(args_type&&... args) {
         const std::string_view views[]{std::string_view(args)...};
         return command(std::span<const std::string_view>(views));
@@ -821,7 +823,7 @@ public:
 
     redis_batch& incr_by(std::string_view key, std::int64_t value) {
         require_ready();
-        return append_owned(make_redis_integer_command("INCRBY", key, value));
+        return append_owned(detail::make_redis_integer_command("INCRBY", key, value));
     }
 
     redis_batch& decr(std::string_view key) {
@@ -830,7 +832,7 @@ public:
 
     redis_batch& decr_by(std::string_view key, std::int64_t value) {
         require_ready();
-        return append_owned(make_redis_integer_command("DECRBY", key, value));
+        return append_owned(detail::make_redis_integer_command("DECRBY", key, value));
     }
 
     redis_batch& hget(std::string_view key, std::string_view field) {
@@ -879,7 +881,7 @@ public:
 
     redis_batch& lrange(std::string_view key, std::int64_t start, std::int64_t stop) {
         require_ready();
-        return append_owned(make_redis_range_command("LRANGE", key, start, stop));
+        return append_owned(detail::make_redis_range_command("LRANGE", key, start, stop));
     }
 
     redis_batch& sadd(std::string_view key, std::string_view member) {
@@ -900,7 +902,7 @@ public:
 
     redis_batch& zadd(std::string_view key, double score, std::string_view member) {
         require_ready();
-        return append_owned(make_redis_zadd_command(key, score, member));
+        return append_owned(detail::make_redis_zadd_command(key, score, member));
     }
 
     redis_batch& zrem(std::string_view key, std::string_view member) {
@@ -909,7 +911,7 @@ public:
 
     redis_batch& zrange(std::string_view key, std::int64_t start, std::int64_t stop) {
         require_ready();
-        return append_owned(make_redis_range_command("ZRANGE", key, start, stop));
+        return append_owned(detail::make_redis_range_command("ZRANGE", key, start, stop));
     }
 
     redis_batch& zscore(std::string_view key, std::string_view member) {
@@ -929,36 +931,34 @@ public:
     [[nodiscard]] task<std::vector<redis_value>> exec() &&;
 
 private:
-    friend class ::ruvia::redis_session;
+    friend class redis_session;
 
     // `io_metrics` is the request's counter block, or null outside a request.
-    redis_batch(redis_pool& pool, operation_options options, operation_scope& scope, request_io_metrics* io_metrics) noexcept;
+    redis_batch(detail::redis_pool& pool, operation_options options, operation_scope& scope, detail::request_io_metrics* io_metrics) noexcept;
     void require_ready() const;
-    [[nodiscard]] redis_command_payload consume();
+    [[nodiscard]] detail::redis_command_payload consume();
     void expire() noexcept;
-    redis_batch& append_owned(redis_owned_command command);
+    redis_batch& append_owned(detail::redis_owned_command command);
 
     template <typename... args_type>
     redis_batch& trusted(std::string_view command_name, args_type... args) {
         require_ready();
         const std::string_view rest[]{args...};
-        return append_owned(make_owned_redis_command(command_name, std::span<const std::string_view>(rest)));
+        return append_owned(detail::make_owned_redis_command(command_name, std::span<const std::string_view>(rest)));
     }
 
-    [[nodiscard]] static task<std::vector<redis_value>> execute_owned(request_io_metrics* io_metrics, redis_command_payload payload);
+    [[nodiscard]] static task<std::vector<redis_value>> execute_owned(detail::request_io_metrics* io_metrics, detail::redis_command_payload payload);
     static void expire_capability(void* target) noexcept;
 
-    redis_pool* pool_;
+    detail::redis_pool* pool_;
     operation_options options_;
-    std::vector<redis_owned_command> commands_;
-    request_io_metrics* io_metrics_;
+    std::vector<detail::redis_owned_command> commands_;
+    detail::request_io_metrics* io_metrics_;
     scoped_capability_registration registration_;
 };
 
-}  // namespace detail
-
-using redis_pipeline = detail::redis_batch<detail::redis_batch_mode::pipeline>;
-using redis_transaction = detail::redis_batch<detail::redis_batch_mode::transaction>;
+using redis_pipeline = redis_batch<redis_batch_mode::pipeline>;
+using redis_transaction = redis_batch<redis_batch_mode::transaction>;
 
 enum class redis_pubsub_confirmation_kind : std::uint8_t {
     subscribed,

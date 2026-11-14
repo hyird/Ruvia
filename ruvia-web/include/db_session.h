@@ -40,7 +40,7 @@ enum class db_driver : std::uint8_t {
 };
 
 enum class db_transaction_isolation : std::uint8_t {
-    default_value,
+    default_,
     read_uncommitted,
     read_committed,
     repeatable_read,
@@ -48,14 +48,14 @@ enum class db_transaction_isolation : std::uint8_t {
 };
 
 enum class db_transaction_access_mode : std::uint8_t {
-    default_value,
+    default_,
     read_write,
     read_only,
 };
 
 struct db_transaction_options final {
-    db_transaction_isolation isolation_{db_transaction_isolation::default_value};
-    db_transaction_access_mode access_mode_{db_transaction_access_mode::default_value};
+    db_transaction_isolation isolation_{db_transaction_isolation::default_};
+    db_transaction_access_mode access_mode_{db_transaction_access_mode::default_};
 };
 
 enum class db_data_type : unsigned char { inferred,
@@ -64,9 +64,9 @@ enum class db_data_type : unsigned char { inferred,
     integer,
     big_int,
     real,
-    double_value,
+    double_,
     text,
-    char_value,
+    char_,
     varchar,
     numeric,
     json,
@@ -280,8 +280,8 @@ enum class db_value_type : std::uint8_t { null,
     string,
     signed_value,
     unsigned_value,
-    double_value,
-    bool_value };
+    double_,
+    bool_ };
 
 class db_conversion_error final : public std::runtime_error {
 public:
@@ -504,6 +504,14 @@ private:
     storage_type storage_;
 };
 
+// Result of db_row::find(column). SQL permits repeated result names, so a
+// lookup never picks one of several columns. field_ is meaningful only when
+// status_ is found and borrows the row's field storage.
+struct db_field_lookup final {
+    unique_lookup_status status_{unique_lookup_status::absent};
+    const db_field* field_{nullptr};
+};
+
 class db_row final {
 public:
     db_row(db_row&& other) noexcept;
@@ -516,11 +524,12 @@ public:
     [[nodiscard]] std::size_t size() const noexcept;
     [[nodiscard]] const db_field& operator[](std::size_t index) const& noexcept RUVIA_LIFETIMEBOUND;
     [[nodiscard]] const db_field& operator[](std::size_t index) const&& = delete;
+    // Throws db_conversion_error: missing_column when absent, invalid_format
+    // when the result repeats the column name.
     [[nodiscard]] const db_field& operator[](std::string_view column) const& RUVIA_LIFETIMEBOUND;
     [[nodiscard]] const db_field& operator[](std::string_view column) const&& = delete;
-    [[nodiscard]] bool contains(std::string_view column) const noexcept;
-    [[nodiscard]] const db_field* find(std::string_view column) const& noexcept RUVIA_LIFETIMEBOUND;
-    [[nodiscard]] const db_field* find(std::string_view column) const&& = delete;
+    [[nodiscard]] db_field_lookup find(std::string_view column) const& noexcept RUVIA_LIFETIMEBOUND;
+    db_field_lookup find(std::string_view column) const&& = delete;
     [[nodiscard]] std::span<const std::string> column_names() const& noexcept RUVIA_LIFETIMEBOUND;
     [[nodiscard]] std::span<const std::string> column_names() const&& = delete;
     [[nodiscard]] const db_field* begin() const& noexcept RUVIA_LIFETIMEBOUND;

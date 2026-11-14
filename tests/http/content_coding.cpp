@@ -15,7 +15,6 @@
 #include "http_content_codec.h"
 #include "http_content_coding.h"
 #include "http_content_negotiation.h"
-#include "http_content_transcoder.h"
 
 using namespace ruvia::test;
 
@@ -420,7 +419,7 @@ TEST(Ruvia, response_coding_sets_and_selection_snapshots_distinguish_every_suppo
         ruvia::http_response_coding_qualities qualities;
         const std::string field = std::string(ruvia::http_content_coding_token(coding)) + ";q=1,*;q=0" + (coding == ruvia::http_content_coding::identity ? "" : ",identity;q=0");
         qualities.update(field);
-        const auto selected = ruvia::http_response_coding_selection::select(qualities, candidates);
+        const auto selected = ruvia::http_response_coding_selection::from_qualities(qualities, candidates);
         EXPECT_TRUE(selected.acceptable());
         EXPECT_TRUE(selected.coding() == coding);
         for (const auto other : codings) {
@@ -464,7 +463,7 @@ bool same_quality(const http_accepted_encoding_quality& a, const http_accepted_e
 http_response_coding_selection select_field(std::string_view header_value) {
     http_response_coding_qualities qualities;
     qualities.update(header_value);
-    return http_response_coding_selection::select(qualities);
+    return http_response_coding_selection::from_qualities(qualities);
 }
 
 }  // namespace
@@ -558,7 +557,7 @@ TEST(Ruvia, response_coding_selection_end_to_end) {
     EXPECT_TRUE(explicit_empty.accepts(http_content_coding::identity));
     EXPECT_TRUE(!explicit_empty.accepts(http_content_coding::gzip));
 
-    const auto no_header = http_response_coding_selection::select(http_response_coding_qualities{});
+    const auto no_header = http_response_coding_selection::from_qualities(http_response_coding_qualities{});
     EXPECT_TRUE(no_header.acceptable());
     EXPECT_TRUE(no_header.coding() == http_content_coding::identity);
     EXPECT_TRUE(no_header.identity_accepted());
@@ -567,7 +566,7 @@ TEST(Ruvia, response_coding_selection_end_to_end) {
 
     auto gzip_only = http_response_coding_candidates::empty();
     gzip_only.include(http_content_coding::gzip);
-    const auto absent_header_gzip = http_response_coding_selection::select(http_response_coding_qualities{}, gzip_only);
+    const auto absent_header_gzip = http_response_coding_selection::from_qualities(http_response_coding_qualities{}, gzip_only);
     EXPECT_TRUE(absent_header_gzip.acceptable());
     EXPECT_TRUE(absent_header_gzip.coding() == http_content_coding::gzip);
     EXPECT_TRUE(absent_header_gzip.accepts(http_content_coding::gzip));
@@ -576,7 +575,7 @@ TEST(Ruvia, response_coding_selection_end_to_end) {
     empty_header.update("");
     // An explicitly empty Accept-Encoding allows only an uncoded representation,
     // so a response policy with only gzip has no acceptable candidate.
-    const auto explicit_empty_gzip = http_response_coding_selection::select(empty_header, gzip_only);
+    const auto explicit_empty_gzip = http_response_coding_selection::from_qualities(empty_header, gzip_only);
     EXPECT_TRUE(!explicit_empty_gzip.acceptable());
 }
 
@@ -637,12 +636,12 @@ TEST(Ruvia, response_coding_selection_uses_only_available_representations) {
 
     auto gzip_only = http_response_coding_candidates::identity_only();
     gzip_only.include(http_content_coding::gzip);
-    const auto gzip_selection = http_response_coding_selection::select(qualities, gzip_only);
+    const auto gzip_selection = http_response_coding_selection::from_qualities(qualities, gzip_only);
     EXPECT_TRUE(gzip_selection.acceptable());
     EXPECT_TRUE(gzip_selection.coding() == http_content_coding::gzip);
 
     auto identity_only = http_response_coding_candidates::identity_only();
-    const auto identity_selection = http_response_coding_selection::select(qualities, identity_only);
+    const auto identity_selection = http_response_coding_selection::from_qualities(qualities, identity_only);
     EXPECT_TRUE(!identity_selection.acceptable());
 
     // A failed ranking keeps the client's snapshot: the same selection still
@@ -694,7 +693,7 @@ TEST(Ruvia, accepted_encoding_weights_do_not_allow_media_parameter_slots) {
         http_response_coding_qualities qualities;
         qualities.update("identity;q=0.5");
         qualities.update(item);
-        const auto selected = http_response_coding_selection::select(qualities);
+        const auto selected = http_response_coding_selection::from_qualities(qualities);
         EXPECT_TRUE(selected.acceptable());
         EXPECT_TRUE(selected.coding() == http_content_coding::identity);
         EXPECT_TRUE(!selected.accepts(http_content_coding::gzip));
@@ -1370,108 +1369,13 @@ TEST(Ruvia, number_format_signed_extremes) {
     EXPECT_EQ(output, "9223372036854775807");
 }
 
-TEST(RuviaHttpPublicApi, accept_encoding_candidate_order_and_transcoder) {
-    const std::array gzip_first{ruvia::http_content_coding::gzip, ruvia::http_content_coding::brotli};
-    const std::array br_first{ruvia::http_content_coding::brotli, ruvia::http_content_coding::gzip};
-
-    // Equal qvalues resolve by the caller's candidate order.
-    EXPECT_EQ(ruvia::negotiate_http_content_coding("gzip, br", gzip_first), std::optional(ruvia::http_content_coding::gzip));
-    EXPECT_EQ(ruvia::negotiate_http_content_coding("gzip, br", br_first), std::optional(ruvia::http_content_coding::brotli));
-
-    // Higher qvalue wins regardless of candidate order.
-    EXPECT_EQ(ruvia::negotiate_http_content_coding("gzip;q=0.5, br;q=0.9", gzip_first), std::optional(ruvia::http_content_coding::brotli));
-
-    // Explicit identity weight beats lower compressed weight, while implicit identity stays fallback.
-    EXPECT_EQ(ruvia::negotiate_http_content_coding("gzip;q=0.5, identity;q=0.8", gzip_first), std::optional(ruvia::http_content_coding::identity));
-    EXPECT_EQ(ruvia::negotiate_http_content_coding("gzip;q=0.5", gzip_first), std::optional(ruvia::http_content_coding::gzip));
-    EXPECT_EQ(ruvia::negotiate_http_content_coding("zstd", gzip_first), std::optional(ruvia::http_content_coding::identity));
-    EXPECT_EQ(ruvia::negotiate_http_content_coding("zstd, identity;q=0", gzip_first), std::nullopt);
-    EXPECT_EQ(ruvia::negotiate_http_content_coding("*;q=0", gzip_first), std::nullopt);
-
+TEST(RuviaHttpPublicApi, no_transform_detection_and_encoder_memory_cap) {
     // Quote-aware Cache-Control: no-transform detection.
     EXPECT_FALSE(ruvia::http_cache_control_has_no_transform("public, ext=\"a, no-transform, b\", max-age=60"));
     EXPECT_TRUE(ruvia::http_cache_control_has_no_transform("public, ext=\"a, b\", no-transform, max-age=60"));
 
-    // Multi-coding streaming transcoding (gzip + br -> zstd) with native codec memory cap.
-    const std::string original(4096, 'R');
-    const std::array source_stack{ruvia::http_content_coding::gzip, ruvia::http_content_coding::brotli};
-    const auto double_encoded = ruvia::encode_http_content(source_stack, original, {.max_encoded_bytes_ = 65536});
-    ASSERT_TRUE(double_encoded.has_value());
-
-    ruvia::http_content_transcoder transcoder(source_stack, ruvia::http_content_coding::zstd, {.max_decoded_bytes_ = 8192, .max_encoded_bytes_ = 8192, .max_memory_bytes_ = 8 * 1024 * 1024});
-    std::string transcoded;
-    for (std::size_t pos = 0; pos < double_encoded->size(); pos += 17) {
-        ASSERT_EQ(transcoder.write(std::string_view(*double_encoded).substr(pos, 17), transcoded, false), std::nullopt);
-    }
-    ASSERT_EQ(transcoder.finish(transcoded), std::nullopt);
-    EXPECT_EQ(transcoder.finish(transcoded), std::nullopt);
-
-    const auto final_decoded = ruvia::decode_http_content(ruvia::http_content_coding::zstd, transcoded, {.max_decoded_bytes_ = 8192});
-    ASSERT_TRUE(std::holds_alternative<std::string>(final_decoded));
-    EXPECT_EQ(std::string_view(std::get<std::string>(final_decoded)), original);
-
     // Exhausted native codec memory cap throws std::bad_alloc.
     EXPECT_THROW((void)ruvia::http_content_encoder(ruvia::http_content_coding::gzip, {.max_memory_bytes_ = 64}), std::bad_alloc);
-}
-
-TEST(RuviaHttpPublicApi, transcoder_returns_peer_data_errors_as_values) {
-    const std::string original(4096, 'R');
-    const auto gzipped = ruvia::encode_http_content(ruvia::http_content_coding::gzip, original, {.max_encoded_bytes_ = 8192});
-    ASSERT_TRUE(gzipped.has_value());
-
-    // Corrupt input fails the transcoder until reset().
-    ruvia::http_content_transcoder corrupt(ruvia::http_content_coding::gzip, ruvia::http_content_coding::identity);
-    std::string output;
-    EXPECT_EQ(corrupt.write("definitely not a gzip member", output), std::optional(ruvia::http_content_decode_error::invalid_content));
-    EXPECT_THROW((void)corrupt.write(*gzipped, output), std::logic_error);
-    EXPECT_THROW((void)corrupt.finish(output), std::logic_error);
-    corrupt.reset();
-    output.clear();
-    ASSERT_EQ(corrupt.write(*gzipped, output), std::nullopt);
-    ASSERT_EQ(corrupt.finish(output), std::nullopt);
-    EXPECT_EQ(output, original);
-
-    // A stream that ends inside a gzip member is reported by finish().
-    ruvia::http_content_transcoder truncated(ruvia::http_content_coding::gzip, ruvia::http_content_coding::zstd);
-    output.clear();
-    ASSERT_EQ(truncated.write(std::string_view(*gzipped).substr(0, gzipped->size() / 2), output), std::nullopt);
-    EXPECT_EQ(truncated.finish(output), std::optional(ruvia::http_content_decode_error::invalid_content));
-    EXPECT_THROW((void)truncated.finish(output), std::logic_error);
-
-    // The decoded-size cap applies to coded and identity sources alike.
-    ruvia::http_content_transcoder oversized(ruvia::http_content_coding::gzip, ruvia::http_content_coding::identity, {.max_decoded_bytes_ = 100});
-    output.clear();
-    EXPECT_EQ(oversized.write(*gzipped, output), std::optional(ruvia::http_content_decode_error::decoded_size_exceeded));
-    EXPECT_THROW((void)oversized.write("", output), std::logic_error);
-
-    ruvia::http_content_transcoder oversized_identity(ruvia::http_content_coding::identity, ruvia::http_content_coding::gzip, {.max_decoded_bytes_ = 4});
-    output.clear();
-    EXPECT_EQ(oversized_identity.write("hello", output), std::optional(ruvia::http_content_decode_error::decoded_size_exceeded));
-
-    // Exceeding the staging window is a fallback; undecodable content is an error.
-    ruvia::http_staged_content_transcoder staged_corrupt(ruvia::http_content_coding::gzip, ruvia::http_content_coding::zstd);
-    EXPECT_EQ(staged_corrupt.write("definitely not a gzip member"), std::optional(ruvia::http_content_decode_error::invalid_content));
-    EXPECT_THROW((void)staged_corrupt.finish(), std::logic_error);
-
-    ruvia::http_staged_content_transcoder staged_truncated(ruvia::http_content_coding::gzip, ruvia::http_content_coding::zstd);
-    ASSERT_EQ(staged_truncated.write(std::string_view(*gzipped).substr(0, gzipped->size() / 2)), std::nullopt);
-    const auto truncated_result = staged_truncated.finish();
-    ASSERT_TRUE(std::holds_alternative<ruvia::http_content_decode_error>(truncated_result));
-    EXPECT_EQ(std::get<ruvia::http_content_decode_error>(truncated_result), ruvia::http_content_decode_error::invalid_content);
-
-    // The 4 KiB payload compresses far below max_bytes_, so only its decoded
-    // length leaves the staging window.
-    ruvia::http_staged_content_transcoder staged_oversized(ruvia::http_content_coding::gzip, ruvia::http_content_coding::zstd, {.max_bytes_ = 100});
-    ASSERT_LT(gzipped->size(), 100U);
-    const auto half = gzipped->size() / 2;
-    std::string passthrough_stream;
-    EXPECT_EQ(staged_oversized.write(std::string_view(*gzipped).substr(0, half), passthrough_stream), std::nullopt);
-    EXPECT_EQ(staged_oversized.write(std::string_view(*gzipped).substr(half), passthrough_stream), std::nullopt);
-    EXPECT_TRUE(staged_oversized.passthrough());
-    const auto oversized_result = staged_oversized.finish();
-    ASSERT_TRUE(std::holds_alternative<ruvia::http_staged_transcode_result>(oversized_result));
-    EXPECT_FALSE(std::get<ruvia::http_staged_transcode_result>(oversized_result).transformed());
-    EXPECT_EQ(passthrough_stream + std::string(std::get<ruvia::http_staged_transcode_result>(oversized_result).bytes()), *gzipped);
 }
 
 TEST(RuviaHttpPublicApi, media_type_compressibility_allowlist) {
@@ -1503,55 +1407,6 @@ TEST(RuviaHttpPublicApi, worker_codecs_reuse_reset_stream_encoders) {
         ASSERT_TRUE(std::holds_alternative<std::string>(decoded));
         EXPECT_EQ(std::get<std::string>(decoded), "reused encoder payload");
     }
-}
-
-TEST(RuviaHttpPublicApi, staged_transcoder_transforms_only_within_size_window) {
-    std::string payload;
-    for (int i = 0; i < 32; ++i) {
-        payload.append("chunked-response-staging-compressible-line-0123456789\n");
-    }
-    const auto gzipped = ruvia::encode_http_content(ruvia::http_content_coding::gzip, payload, {.max_encoded_bytes_ = payload.size() + 128});
-    ASSERT_TRUE(gzipped.has_value());
-
-    // Case A: Decoded size within [min_bytes, max_bytes] -> transcodes gzip to zstd.
-    ruvia::http_staged_content_transcoder staged(ruvia::http_content_coding::gzip, ruvia::http_content_coding::zstd, {.min_bytes_ = 100, .max_bytes_ = 4096});
-    for (std::size_t pos = 0; pos < gzipped->size(); pos += 19) {
-        EXPECT_EQ(staged.write(std::string_view(*gzipped).substr(pos, 19)), std::nullopt);
-        EXPECT_FALSE(staged.passthrough());
-    }
-    const auto finished_in_range = staged.finish();
-    ASSERT_TRUE(std::holds_alternative<ruvia::http_staged_transcode_result>(finished_in_range));
-    const auto& res_in_range = std::get<ruvia::http_staged_transcode_result>(finished_in_range);
-    EXPECT_TRUE(res_in_range.transformed());
-    EXPECT_EQ(res_in_range.coding(), ruvia::http_content_coding::zstd);
-    EXPECT_EQ(res_in_range.decoded_bytes(), payload.size());
-    const auto decoded_zstd = ruvia::decode_http_content(ruvia::http_content_coding::zstd, res_in_range.bytes(), {.max_decoded_bytes_ = 8192});
-    ASSERT_TRUE(std::holds_alternative<std::string>(decoded_zstd));
-    EXPECT_EQ(std::get<std::string>(decoded_zstd), payload);
-
-    // Case B: Decoded size < min_bytes -> falls back to original untransformed stream!
-    ruvia::http_staged_content_transcoder too_small(ruvia::http_content_coding::gzip, ruvia::http_content_coding::zstd, {.min_bytes_ = payload.size() + 100, .max_bytes_ = 8192});
-    EXPECT_EQ(too_small.write(*gzipped), std::nullopt);
-    EXPECT_FALSE(too_small.passthrough());
-    const auto finished_small = too_small.finish();
-    ASSERT_TRUE(std::holds_alternative<ruvia::http_staged_transcode_result>(finished_small));
-    const auto& res_small = std::get<ruvia::http_staged_transcode_result>(finished_small);
-    EXPECT_FALSE(res_small.transformed());
-    EXPECT_EQ(res_small.coding(), ruvia::http_content_coding::gzip);
-    EXPECT_EQ(res_small.bytes(), *gzipped);
-
-    // Case C: Decoded size > max_bytes -> spills into passthrough_output and falls back to original stream!
-    ruvia::http_staged_content_transcoder too_large(ruvia::http_content_coding::gzip, ruvia::http_content_coding::zstd, {.min_bytes_ = 16, .max_bytes_ = 256});
-    std::string passthrough_stream;
-    for (std::size_t pos = 0; pos < gzipped->size(); pos += 13) {
-        EXPECT_EQ(too_large.write(std::string_view(*gzipped).substr(pos, 13), passthrough_stream), std::nullopt);
-    }
-    EXPECT_TRUE(too_large.passthrough());
-    const auto finished_large = too_large.finish();
-    ASSERT_TRUE(std::holds_alternative<ruvia::http_staged_transcode_result>(finished_large));
-    const auto& res_large = std::get<ruvia::http_staged_transcode_result>(finished_large);
-    EXPECT_FALSE(res_large.transformed());
-    EXPECT_EQ(passthrough_stream + std::string(res_large.bytes()), *gzipped);
 }
 
 TEST(Ruvia, request_body_failures_own_cross_runtime_http_errors) {

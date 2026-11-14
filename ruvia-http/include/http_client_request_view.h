@@ -17,7 +17,7 @@ namespace ruvia {
 // Expect field so callers cannot create a wire/state-machine mismatch.
 enum class http_client_request_expectation : std::uint8_t {
     none,
-    continue_value,
+    continue_,
 };
 
 // RFC 9110 section 2.2 distinguishes forwarding received fields from generating

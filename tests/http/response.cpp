@@ -569,10 +569,10 @@ TEST(Ruvia, response_status_is_version_neutral_code_only) {
     EXPECT_EQ(response.status(), ruvia::http_status::ok);
     response.status(ruvia::http_status::not_found);
     EXPECT_EQ(response.status(), ruvia::http_status::not_found);
-    response.status(ruvia::http_status_code::from_value(599));
-    EXPECT_EQ(response.status(), ruvia::http_status_code::from_value(599));
-    response.status(ruvia::http_status_code::from_value(299));
-    EXPECT_EQ(response.status(), ruvia::http_status_code::from_value(299));
+    response.status(ruvia::http_status_code(599));
+    EXPECT_EQ(response.status(), ruvia::http_status_code(599));
+    response.status(ruvia::http_status_code(299));
+    EXPECT_EQ(response.status(), ruvia::http_status_code(299));
 }
 
 TEST(Ruvia, response_header_distinguishes_missing_from_present_empty) {
@@ -588,16 +588,16 @@ TEST(Ruvia, response_header_distinguishes_missing_from_present_empty) {
 TEST(Ruvia, response_status_code_range_validated) {
     auto response = make_response();
     EXPECT_TRUE(throws_invalid([&] {
-        response.status(ruvia::http_status::continue_value);
+        response.status(ruvia::http_status::continue_);
     }));
     EXPECT_TRUE(throws_invalid([&] {
-        response.status(ruvia::http_status_code::from_value(199));
+        response.status(ruvia::http_status_code(199));
     }));
     EXPECT_TRUE(!throws_invalid([&] {
         response.status(ruvia::http_status::ok);
     }));  // lower boundary
     EXPECT_TRUE(!throws_invalid([&] {
-        response.status(ruvia::http_status_code::from_value(599));
+        response.status(ruvia::http_status_code(599));
     }));  // upper boundary
 }
 
@@ -618,7 +618,7 @@ TEST(Ruvia, interim_response_head_owns_the_non_switching_1xx_status_space) {
     EXPECT_EQ(early_hints.headers().size(), std::size_t{1});
     EXPECT_EQ(early_hints.headers()[0].name(), std::string_view("Link"));
 
-    for (const ruvia::http_status_code status : {ruvia::http_status::switching_protocols, ruvia::http_status::ok, ruvia::http_status_code::from_value(599)}) {
+    for (const ruvia::http_status_code status : {ruvia::http_status::switching_protocols, ruvia::http_status::ok, ruvia::http_status_code(599)}) {
         EXPECT_TRUE(throws_invalid([&] {
             (void)ruvia::http_interim_response_head(status);
         }));

@@ -468,7 +468,7 @@ multipart_boundary_parse_result parse_multipart_boundary(std::string_view conten
         }
         if (http_ascii_equals_ignore_case(key, "boundary")) {
             const auto decoded_value = decode_multipart_boundary_parameter(value, decoded);
-            boundary = decoded_value.has_value() ? multipart_boundary::try_create(*decoded_value) : std::nullopt;
+            boundary = decoded_value.has_value() ? multipart_boundary::try_from_value(*decoded_value) : std::nullopt;
             if (!boundary) {
                 return false;
             }
@@ -724,7 +724,7 @@ multipart_parser::step_result_type multipart_parser::consume_boundary() {
         first_boundary_ = false;
         if (delimiter.kind_ == detail::http_multipart_delimiter_kind::part) {
             state_ = progress_state_type::headers;
-            return step_progress_type::continue_value;
+            return step_progress_type::continue_;
         }
         state_ = progress_state_type::done;
         return step_progress_type::done;
@@ -750,7 +750,7 @@ multipart_parser::step_result_type multipart_parser::consume_boundary() {
         reset_scan_cursors();
         if (delimiter.kind_ == detail::http_multipart_delimiter_kind::part) {
             state_ = progress_state_type::headers;
-            return step_progress_type::continue_value;
+            return step_progress_type::continue_;
         }
         state_ = progress_state_type::done;
         return step_progress_type::done;
@@ -824,7 +824,7 @@ multipart_parser::step_result_type multipart_parser::consume_headers() {
     reset_scan_cursors();
     next_chunk_is_first_ = true;
     state_ = progress_state_type::body;
-    return step_progress_type::continue_value;
+    return step_progress_type::continue_;
 }
 
 multipart_stream_part multipart_parser::make_part(std::string_view body, bool part_end) {

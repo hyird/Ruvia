@@ -597,7 +597,7 @@ public:
         }
         informational_.push_back(std::move(head));
         informational_budget_ = budget;
-        if (upload_ && request_content_signal == http_client_request_content_signal::continue_value) {
+        if (upload_ && request_content_signal == http_client_request_content_signal::continue_) {
             upload_->content_released_ = true;
             upload_->output_.notify_data();
         }

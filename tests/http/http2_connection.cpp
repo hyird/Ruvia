@@ -187,7 +187,7 @@ struct data_output_observations final {
 
 ruvia::http2_submit_status submit_buffered_response(ruvia::http2_connection& server, std::uint32_t stream_id, const ruvia::http_response& response) {
     std::variant<ruvia::http_buffered_response_write_plan, ruvia::http2_response_head_submit_error> head = ruvia::http2_response_head_submit_error::response_plan_mismatch;
-    for (const auto method : {ruvia::http_known_method::get, ruvia::http_known_method::post, ruvia::http_known_method::options, ruvia::http_known_method::head, ruvia::http_known_method::put, ruvia::http_known_method::delete_value, ruvia::http_known_method::patch, ruvia::http_known_method::connect, ruvia::http_known_method::unknown}) {
+    for (const auto method : {ruvia::http_known_method::get, ruvia::http_known_method::post, ruvia::http_known_method::options, ruvia::http_known_method::head, ruvia::http_known_method::put, ruvia::http_known_method::delete_, ruvia::http_known_method::patch, ruvia::http_known_method::connect, ruvia::http_known_method::unknown}) {
         head = server.submit_response_head(stream_id, response, ruvia::plan_buffered_http_response_write(method, response));
         const auto* error = std::get_if<ruvia::http2_response_head_submit_error>(&head);
         if (error == nullptr || *error != ruvia::http2_response_head_submit_error::response_plan_mismatch) {
@@ -1856,7 +1856,7 @@ TEST(Ruvia, http2_public_response_submission_stops_after_connection_failure) {
             buffered.body("response");
             const auto plan = ruvia::plan_buffered_http_response_write(ruvia::http_known_method::post, buffered);
             ruvia::http_response streamed;
-            const ruvia::http_interim_response_head interim(ruvia::http_status::continue_value);
+            const ruvia::http_interim_response_head interim(ruvia::http_status::continue_);
             const std::array fields{ruvia::http_header_view{"x-final", "done"}};
             const auto trailers = ruvia::validate_http_response_trailers(fields);
             const auto built_request = head->build_request();

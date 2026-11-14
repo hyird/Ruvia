@@ -406,7 +406,7 @@ http_client_request http_client_ref::put(std::string_view path) const {
 http_client_request http_client_ref::patch(std::string_view path) const {
     return request("PATCH", path);
 }
-http_client_request http_client_ref::del(std::string_view path) const {
+http_client_request http_client_ref::delete_(std::string_view path) const {
     return request("DELETE", path);
 }
 http_client_request http_client_ref::head(std::string_view path) const {
@@ -739,7 +739,7 @@ task<http_client_exchange> http_client_request::upload(http_client_upload_config
         throw std::invalid_argument("streamed upload cannot also have a buffered body");
     }
     client_.registration_.require_active();
-    if (config.max_chunk_bytes_ == 0 || config.continue_timeout_.value() <= std::chrono::milliseconds::zero() || (config.expectation_ != http_client_request_expectation::none && config.expectation_ != http_client_request_expectation::continue_value)) {
+    if (config.max_chunk_bytes_ == 0 || config.continue_timeout_.value() <= std::chrono::milliseconds::zero() || (config.expectation_ != http_client_request_expectation::none && config.expectation_ != http_client_request_expectation::continue_)) {
         throw std::invalid_argument("streaming upload requires a bodyless head and valid upload policy");
     }
     consumed_ = true;
@@ -994,7 +994,7 @@ task<http_client_response> http_client_ref::dispatch(const http_client_request_v
 
 task<http_client_exchange> http_client_ref::dispatch_upload(const http_client_request_view& head, http_client_upload_config upload, const http_client_request_options& request_options, const std::shared_ptr<http_client_informational_callback>& informational) const {
     registration_.require_active();
-    if (head.content_.borrowed_bytes() != nullptr || upload.max_chunk_bytes_ == 0 || upload.continue_timeout_.value() <= std::chrono::milliseconds::zero() || (upload.expectation_ != http_client_request_expectation::none && upload.expectation_ != http_client_request_expectation::continue_value)) {
+    if (head.content_.borrowed_bytes() != nullptr || upload.max_chunk_bytes_ == 0 || upload.continue_timeout_.value() <= std::chrono::milliseconds::zero() || (upload.expectation_ != http_client_request_expectation::none && upload.expectation_ != http_client_request_expectation::continue_)) {
         throw std::invalid_argument("streaming upload requires a bodyless head and valid upload policy");
     }
     detail::http_client_request_storage request(head.method_.view(), head.target_.view(), head.headers_);

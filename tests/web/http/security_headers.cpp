@@ -917,7 +917,7 @@ struct held_queries final {
 };
 
 ruvia::task<void> hold_executor(ruvia::worker_ref worker, std::shared_ptr<held_queries> held) {
-    auto result = co_await ruvia::run_blocking(std::move(worker), {}, [held] {
+    auto result = co_await ruvia::run_blocking(std::move(worker), [held] {
         held->release_.acquire();
         ++held->finished_;
     });

@@ -770,7 +770,7 @@ db_expression db_owned_expression::import_into(db_query& target, std::string_vie
         }
         case leaf_kind::null_value:
             return target.null_value();
-        case leaf_kind::default_value:
+        case leaf_kind::default_:
             return target.default_value();
         case leaf_kind::star:
             return target.star();
@@ -784,9 +784,9 @@ db_expression db_owned_expression::import_into(db_query& target, std::string_vie
             return target.value(db_value(scalar_.signed_value_));
         case leaf_kind::unsigned_value:
             return target.value(db_value(scalar_.unsigned_value_));
-        case leaf_kind::double_value:
+        case leaf_kind::double_:
             return target.value(db_value(scalar_.double_value_));
-        case leaf_kind::bool_value:
+        case leaf_kind::bool_:
             return target.value(db_value(scalar_.bool_value_));
         case leaf_kind::tree: {
             auto& target_storage = target.storage();
@@ -845,8 +845,8 @@ std::size_t db_owned_expression::append_to_tree(db_expr_tree& target) const {
         }
         case leaf_kind::null_value:
             return push_tree_value(target, db_value(nullptr));
-        case leaf_kind::default_value:
-            return push_tree_node(target, db_query_node(db_node_kind::default_value));
+        case leaf_kind::default_:
+            return push_tree_node(target, db_query_node(db_node_kind::default_));
         case leaf_kind::star:
             return push_tree_node(target, db_query_node(db_node_kind::star));
         case leaf_kind::column: {
@@ -859,9 +859,9 @@ std::size_t db_owned_expression::append_to_tree(db_expr_tree& target) const {
             return push_tree_value(target, db_value(scalar_.signed_value_));
         case leaf_kind::unsigned_value:
             return push_tree_value(target, db_value(scalar_.unsigned_value_));
-        case leaf_kind::double_value:
+        case leaf_kind::double_:
             return push_tree_value(target, db_value(scalar_.double_value_));
-        case leaf_kind::bool_value:
+        case leaf_kind::bool_:
             return push_tree_value(target, db_value(scalar_.bool_value_));
         case leaf_kind::tree: {
             if (!aliased_ && !tree_->table_.empty() && target.table_.empty()) {
@@ -928,7 +928,7 @@ db_owned_expression db_owned_expression::make_null() noexcept {
 
 db_owned_expression db_owned_expression::make_default() noexcept {
     db_owned_expression result;
-    result.kind_ = leaf_kind::default_value;
+    result.kind_ = leaf_kind::default_;
     return result;
 }
 
@@ -988,12 +988,12 @@ db_owned_expression db_owned_expression::make_value(const db_value& value) {
             result.kind_ = leaf_kind::unsigned_value;
             result.scalar_.unsigned_value_ = value.unsigned_value();
             return result;
-        case db_value_type::double_value:
-            result.kind_ = leaf_kind::double_value;
+        case db_value_type::double_:
+            result.kind_ = leaf_kind::double_;
             result.scalar_.double_value_ = value.double_value();
             return result;
-        case db_value_type::bool_value:
-            result.kind_ = leaf_kind::bool_value;
+        case db_value_type::bool_:
+            result.kind_ = leaf_kind::bool_;
             result.scalar_.bool_value_ = value.bool_value();
             return result;
         case db_value_type::string: {
@@ -1486,7 +1486,7 @@ db_expression db_query::excluded(std::string_view column) {
     return push_node(detail::expression_nodes(storage()).named(db_node_kind::excluded, column));
 }
 db_expression db_query::default_value() {
-    return push_node(make_node(db_node_kind::default_value));
+    return push_node(make_node(db_node_kind::default_));
 }
 db_expression db_query::sql(std::span<const std::string_view> parts, std::span<const db_expression> args) {
     return push_node(detail::expression_nodes(storage()).sql(parts, args, [&](db_expression arg) {
@@ -1777,10 +1777,10 @@ db_query& db_query::where(db_expression predicate) {
     return *this;
 }
 db_query& db_query::and_where(db_expression predicate) {
-    return combine_clause_predicate(storage().predicate_, db_binary_operator::and_value, predicate);
+    return combine_clause_predicate(storage().predicate_, db_binary_operator::and_, predicate);
 }
 db_query& db_query::or_where(db_expression predicate) {
-    return combine_clause_predicate(storage().predicate_, db_binary_operator::or_value, predicate);
+    return combine_clause_predicate(storage().predicate_, db_binary_operator::or_, predicate);
 }
 db_query& db_query::clear_where() {
     storage().predicate_ = no_db_node;
@@ -1798,10 +1798,10 @@ db_query& db_query::having(db_expression predicate) {
     return *this;
 }
 db_query& db_query::and_having(db_expression predicate) {
-    return combine_clause_predicate(storage().having_, db_binary_operator::and_value, predicate);
+    return combine_clause_predicate(storage().having_, db_binary_operator::and_, predicate);
 }
 db_query& db_query::or_having(db_expression predicate) {
-    return combine_clause_predicate(storage().having_, db_binary_operator::or_value, predicate);
+    return combine_clause_predicate(storage().having_, db_binary_operator::or_, predicate);
 }
 db_query& db_query::clear_having() {
     storage().having_ = no_db_node;
@@ -2118,20 +2118,20 @@ db_query& db_query::delete_from(std::string_view table_value, std::string_view a
         detail::require_unqualified_name(alias);
     }
     auto& s = storage();
-    detail::require_statement_kind_change(s, db_query_kind::delete_value);
-    s.kind_ = db_query_kind::delete_value;
+    detail::require_statement_kind_change(s, db_query_kind::delete_);
+    s.kind_ = db_query_kind::delete_;
     s.target_ = table_value;
     s.target_alias_ = alias;
     return *this;
 }
 db_query& db_query::delete_using(std::string_view table_value, std::string_view alias) {
-    if (storage().kind_ != db_query_kind::delete_value) {
+    if (storage().kind_ != db_query_kind::delete_) {
         throw std::invalid_argument("DELETE USING requires a DELETE");
     }
     return from(table_value, alias);
 }
 db_query& db_query::delete_using(const db_query& query, std::string_view alias) {
-    if (storage().kind_ != db_query_kind::delete_value) {
+    if (storage().kind_ != db_query_kind::delete_) {
         throw std::invalid_argument("DELETE USING requires a DELETE");
     }
     return from(query, alias);

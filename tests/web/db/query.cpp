@@ -42,9 +42,9 @@ TEST(Ruvia, db_public_parameters_preserve_types_and_own_compiled_text) {
     EXPECT_EQ(parameters[1].signed_value(), -42);
     EXPECT_EQ(parameters[2].type(), db_value_type::unsigned_value);
     EXPECT_EQ(parameters[2].unsigned_value(), (std::numeric_limits<std::uint64_t>::max)());
-    EXPECT_EQ(parameters[3].type(), db_value_type::double_value);
+    EXPECT_EQ(parameters[3].type(), db_value_type::double_);
     EXPECT_EQ(parameters[3].double_value(), 1.25);
-    EXPECT_EQ(parameters[4].type(), db_value_type::bool_value);
+    EXPECT_EQ(parameters[4].type(), db_value_type::bool_);
     EXPECT_TRUE(parameters[4].bool_value());
     EXPECT_THROW((void)parameters[0].signed_value(), std::bad_variant_access);
     EXPECT_THROW((void)parameters[1].unsigned_value(), std::bad_variant_access);
@@ -209,7 +209,7 @@ TEST(Ruvia, db_query_postgresql_casts_bound_values_only_where_nothing_types_them
         query.call("concat_ws", {query.value(","), query.value(1)}),
         // Boolean predicates and logical operators type their operands.
         query.unary(db_unary_operator::is_true, query.value("true")),
-        query.binary(query.value(true), op_type::and_value, query.value(false)),
+        query.binary(query.value(true), op_type::and_, query.value(false)),
         // The null predicates accept every type, so nothing types the operand.
         query.unary(db_unary_operator::is_null, query.value(7)),
         // Comparing two bound values resolves as text.
@@ -902,8 +902,8 @@ TEST(Ruvia, db_query_binary_operator_families_cover_postgresql_and_mariadb_diale
         binary_case{op_type::less_equal, " <= ", " <= "},
         binary_case{op_type::greater, " > ", " > "},
         binary_case{op_type::greater_equal, " >= ", " >= "},
-        binary_case{op_type::and_value, " AND ", " AND "},
-        binary_case{op_type::or_value, " OR ", " OR "},
+        binary_case{op_type::and_, " AND ", " AND "},
+        binary_case{op_type::or_, " OR ", " OR "},
         binary_case{op_type::add, " + ", " + "},
         binary_case{op_type::subtract, " - ", " - "},
         binary_case{op_type::multiply, " * ", " * "},
@@ -993,7 +993,7 @@ TEST(Ruvia, db_query_unary_operators_and_parameter_modes_cover_all_semantics) {
         std::string_view token_;
     };
     const std::array cases{
-        unary_case{db_unary_operator::not_value, "NOT"},
+        unary_case{db_unary_operator::not_, "NOT"},
         unary_case{db_unary_operator::negate, "-"},
         unary_case{db_unary_operator::bit_not, "~"},
         unary_case{db_unary_operator::is_null, "IS NULL"},
@@ -1026,7 +1026,7 @@ TEST(Ruvia, db_query_unary_operators_and_parameter_modes_cover_all_semantics) {
 
     db_query invalid;
     EXPECT_TRUE(testing::throws_on([&] {
-        (void)invalid.unary(db_unary_operator::not_value, {});
+        (void)invalid.unary(db_unary_operator::not_, {});
     }));
     EXPECT_TRUE(testing::throws_on([&] {
         (void)invalid.binary({}, op_type::equal, invalid.value(1));
@@ -1452,7 +1452,7 @@ TEST(Ruvia, db_query_lock_cte_and_set_operation_enumerations_cover_supported_and
         bool maria_supported_;
     };
     const std::array set_cases{
-        set_case{db_set_operation::union_value, " UNION ", true},
+        set_case{db_set_operation::union_, " UNION ", true},
         set_case{db_set_operation::union_all, " UNION ALL ", true},
         set_case{db_set_operation::intersect, " INTERSECT ", true},
         set_case{db_set_operation::intersect_all, " INTERSECT ALL ", false},
@@ -1678,11 +1678,11 @@ TEST(Ruvia, db_query_expression_ownership_import_subquery_cast_and_cache_methods
     EXPECT_TRUE(dml_insert.returns_rows());
 }
 
-RUVIA_DB_ENTITY(char_codes_type, "char_codes", db_column<"values", std::vector<std::string>, db_column_options{.data_type_ = db_data_type::char_value, .length_ = 8}>)
+RUVIA_DB_ENTITY(char_codes_type, "char_codes", db_column<"values", std::vector<std::string>, db_column_options{.data_type_ = db_data_type::char_, .length_ = 8}>)
 
 TEST(Ruvia, db_query_char_cast_and_array_predicate_render_for_supported_dialects) {
     db_query casts;
-    casts.select(casts.cast(casts.value("x"), db_type_definition{.data_type_ = db_data_type::char_value, .length_ = 64})).from("char_records");
+    casts.select(casts.cast(casts.value("x"), db_type_definition{.data_type_ = db_data_type::char_, .length_ = 64})).from("char_records");
     const auto postgres = casts.compile(db_driver::postgresql);
     EXPECT_TRUE(postgres.sql().find("CAST($1 AS CHAR(64))") != std::string_view::npos);
 
@@ -1690,12 +1690,12 @@ TEST(Ruvia, db_query_char_cast_and_array_predicate_render_for_supported_dialects
     EXPECT_TRUE(maria.sql().find("CAST(? AS CHAR(64))") != std::string_view::npos);
 
     db_query long_maria_cast;
-    long_maria_cast.select(long_maria_cast.cast(long_maria_cast.value("x"), db_type_definition{.data_type_ = db_data_type::char_value, .length_ = 256})).from("char_records");
+    long_maria_cast.select(long_maria_cast.cast(long_maria_cast.value("x"), db_type_definition{.data_type_ = db_data_type::char_, .length_ = 256})).from("char_records");
     const auto long_maria_statement = long_maria_cast.compile(db_driver::mariadb);
     EXPECT_TRUE(long_maria_statement.sql().find("AS CHAR(256)") != std::string_view::npos);
     EXPECT_TRUE(testing::throws_on([&] {
         db_query invalid;
-        invalid.select(invalid.cast(invalid.value("x"), db_type_definition{.data_type_ = db_data_type::char_value, .length_ = 10485761})).from("char_records");
+        invalid.select(invalid.cast(invalid.value("x"), db_type_definition{.data_type_ = db_data_type::char_, .length_ = 10485761})).from("char_records");
         (void)invalid.compile(db_driver::postgresql);
     }));
 
@@ -1724,7 +1724,7 @@ TEST(Ruvia, db_query_span_overloads_cover_expression_and_statement_builders) {
     const auto array_value = query.array(std::span<const db_expression>(expressions));
     const std::array<db_case_branch, 1> branches{{{query.binary(left, db_binary_operator::equal, query.value(1)), right}}};
     const auto case_expression = query.case_when(std::span<const db_case_branch>(branches), query.value(0));
-    const std::array<db_order_term, 1> order{{{left, db_order_direction::asc, db_nulls_order::default_value}}};
+    const std::array<db_order_term, 1> order{{{left, db_order_direction::asc, db_nulls_order::default_}}};
     const auto within = query.within_group(aggregate, std::span<const db_order_term>(order));
     query.select(std::span<const db_expression>(expressions)).add_select(call).from("cq_span").group_by(std::span<const db_expression>(&left, 1)).add_group_by(right).having(query.unary(db_unary_operator::is_not_null, coalesced)).and_having(query.binary(greatest, db_binary_operator::greater, least)).order_by(left).add_order_by(right);
     const auto statement = query.compile(db_driver::postgresql);

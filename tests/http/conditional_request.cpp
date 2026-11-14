@@ -36,7 +36,7 @@ TEST(Ruvia, conditional_method_plan_follows_precondition_and_range_semantics) {
     EXPECT_TRUE(head.evaluates_if_modified_since_);
     EXPECT_TRUE(!head.evaluates_range_);
 
-    for (const auto method : {ruvia::http_known_method::post, ruvia::http_known_method::put, ruvia::http_known_method::delete_value, ruvia::http_known_method::patch}) {
+    for (const auto method : {ruvia::http_known_method::post, ruvia::http_known_method::put, ruvia::http_known_method::delete_, ruvia::http_known_method::patch}) {
         const auto plan = get_http_conditional_method_plan(method);
         EXPECT_TRUE(plan.evaluates_preconditions_);
         EXPECT_TRUE(!plan.uses_not_modified_response_);

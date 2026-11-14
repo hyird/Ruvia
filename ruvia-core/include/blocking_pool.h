@@ -388,7 +388,7 @@ template <typename t_type>
 // to turn a rejection into an exception and to rethrow the callable's own
 // exception.
 template <typename fn_type>
-[[nodiscard]] auto run_blocking(worker_ref worker_value, operation_options options, fn_type fn) -> task<blocking_result<std::invoke_result_t<fn_type&>>> {
+[[nodiscard]] auto run_blocking(worker_ref worker_value, fn_type fn, operation_options options = {}) -> task<blocking_result<std::invoke_result_t<fn_type&>>> {
     using result_type = std::invoke_result_t<fn_type&>;
     using payload = detail::blocking_payload<result_type>;
     using outcome_type = blocking_result<result_type>;
@@ -468,11 +468,6 @@ template <typename fn_type>
         // Payload delivery now moves the result on the receiving worker.
         co_return outcome_type::with_error(std::current_exception());
     }
-}
-
-template <typename fn_type>
-[[nodiscard]] auto run_blocking(worker_ref worker_value, fn_type fn) -> task<blocking_result<std::invoke_result_t<fn_type&>>> {
-    return run_blocking(std::move(worker_value), operation_options{}, std::move(fn));
 }
 
 }  // namespace ruvia

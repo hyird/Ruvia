@@ -123,7 +123,7 @@ public:
     RUVIA_GET("/cookies", cookies);
     RUVIA_GET("/signed-cookies", signed_cookies);
     RUVIA_ALL("/any", any_method);
-    RUVIA_ON((::ruvia::http_known_method::put, ::ruvia::http_known_method::delete_value), ("/on-item/:id", "/on-legacy/:id"), on_item);
+    RUVIA_ON((::ruvia::http_known_method::put, ::ruvia::http_known_method::delete_), ("/on-item/:id", "/on-legacy/:id"), on_item);
     RUVIA_GET("/manual/body", manual_body);
     RUVIA_PUT("/upload/:id", stream_put, ruvia::stream_body);
     RUVIA_PATCH("/upload/:id", stream_patch, ruvia::stream_body);

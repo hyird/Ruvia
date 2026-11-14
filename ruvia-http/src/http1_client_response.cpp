@@ -262,7 +262,7 @@ http1_client_response_parse_result http1_client_response_parser::parse(std::stri
     if (parsed_value.status_code_.is_informational() && parsed_value.protocol_version_ == http_protocol_version::http10 && parsed_value.saw_transfer_encoding_) {
         interim_faulty_framing_ = true;
     }
-    if (parsed_value.status_code_ == http_status::continue_value) {
+    if (parsed_value.status_code_ == http_status::continue_) {
         request_content_phase_ = receive_continue(request_content_phase_);
     }
     if (parsed_value.status_code_ == http_status::switching_protocols || parsed_value.status_code_.is_final()) {
@@ -474,8 +474,8 @@ namespace {
     if (response_will_close && (phase == http1_client_request_content_phase::awaiting_continue || phase == http1_client_request_content_phase::content_pending || phase == http1_client_request_content_phase::content_released_awaiting_continue || phase == http1_client_request_content_phase::continue_received)) {
         return http_client_request_content_signal::exchange_complete;
     }
-    if (status_code == http_status::continue_value) {
-        return phase == http1_client_request_content_phase::awaiting_continue ? std::optional<http_client_request_content_signal>(http_client_request_content_signal::continue_value) : std::nullopt;
+    if (status_code == http_status::continue_) {
+        return phase == http1_client_request_content_phase::awaiting_continue ? std::optional<http_client_request_content_signal>(http_client_request_content_signal::continue_) : std::nullopt;
     }
     if (status_code.is_final() && phase == http1_client_request_content_phase::awaiting_continue) {
         // A final response cancels content only while Expect still gates it.

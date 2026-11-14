@@ -363,6 +363,37 @@ TEST(Ruvia, db_public_mapping_owns_values_and_rejects_missing_or_ambiguous_colum
         }
     });
 }
+
+TEST(Ruvia, db_row_column_lookup_reports_absent_found_and_repeated) {
+    using peer_type = test::backend_startup_peer;
+    std::vector<peer_type::postgres_reply> replies;
+    replies.push_back({.columns_ = {"id", "id", "name"}, .values_ = {{"1", "2", "alice"}}});
+    peer_type peer(peer_type::protocol::postgresql, false, peer_type::after_startup::idle, std::move(replies));
+    auto& context = test::new_test_io_context();
+    auto attachment = attach_event_loop(context, {.queue_capacity_ = 8});
+    db_client client(attachment.loop(), peer.config());
+    test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
+        auto handle = connected.db();
+        const auto rows = co_await handle.query("SELECT id, id, name FROM users");
+        const auto& row = rows.front();
+        const auto found = row.find("name");
+        EXPECT_TRUE(found.status_ == unique_lookup_status::found);
+        EXPECT_TRUE(found.field_ == &row[2]);
+        EXPECT_TRUE(row["name"].as<std::string_view>() == "alice");
+        EXPECT_TRUE(row.find("id").status_ == unique_lookup_status::repeated);
+        EXPECT_TRUE(row.find("missing").status_ == unique_lookup_status::absent);
+        const auto code_of = [&](std::string_view column) -> std::optional<db_conversion_error::code_type> {
+            try {
+                (void)row[column];
+            } catch (const db_conversion_error& error) {
+                return error.code();
+            }
+            return std::nullopt;
+        };
+        EXPECT_TRUE(code_of("id") == db_conversion_error::code_type::invalid_format);
+        EXPECT_TRUE(code_of("missing") == db_conversion_error::code_type::missing_column);
+    });
+}
 }  // namespace
 #endif
 

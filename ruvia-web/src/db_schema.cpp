@@ -69,7 +69,7 @@ std::string_view function_language_name(db_function_language language) {
 }
 std::string_view function_volatility_clause(db_function_volatility volatility) {
     switch (volatility) {
-        case db_function_volatility::volatile_value:
+        case db_function_volatility::volatile_:
             return {};
         case db_function_volatility::stable:
             return " STABLE";
@@ -95,7 +95,7 @@ std::string_view trigger_event_name(db_trigger_event event) {
             return "INSERT";
         case db_trigger_event::update:
             return "UPDATE";
-        case db_trigger_event::delete_value:
+        case db_trigger_event::delete_:
             return "DELETE";
         case db_trigger_event::truncate:
             return "TRUNCATE";
@@ -570,7 +570,7 @@ void db_schema::create_index(const db_index_definition& i) {
         if (key.column_.empty() == key.expression_.empty()) {
             throw std::invalid_argument("an index key requires exactly one column or expression");
         }
-        if (driver_ != db_driver::postgresql && (!key.expression_.empty() || !key.operator_class_.empty() || key.nulls_ != db_nulls_order::default_value)) {
+        if (driver_ != db_driver::postgresql && (!key.expression_.empty() || !key.operator_class_.empty() || key.nulls_ != db_nulls_order::default_)) {
             throw std::invalid_argument("selected index key options require PostgreSQL");
         }
         if (!i.keys_[n].column_.empty()) {
@@ -865,7 +865,7 @@ void db_schema::create_trigger(const db_trigger_definition& trigger) {
             throw std::invalid_argument("trigger transition tables require an AFTER trigger for one event without UPDATE OF");
         }
         const auto event = trigger.events_.front();
-        if (!trigger.old_table_.empty() && event != db_trigger_event::update && event != db_trigger_event::delete_value) {
+        if (!trigger.old_table_.empty() && event != db_trigger_event::update && event != db_trigger_event::delete_) {
             throw std::invalid_argument("trigger OLD TABLE requires an UPDATE or DELETE event");
         }
         if (!trigger.new_table_.empty() && event != db_trigger_event::insert && event != db_trigger_event::update) {
@@ -1275,11 +1275,11 @@ void db_procedure::begin_if(db_expression condition) {
     statements_ += "IF ";
     append_expression(statements_, condition);
     statements_ += " THEN\n";
-    blocks_.push_back(block_type::if_value);
+    blocks_.push_back(block_type::if_);
     guard.commit();
 }
 void db_procedure::else_if(db_expression condition) {
-    if (blocks_.empty() || blocks_.back() != block_type::if_value) {
+    if (blocks_.empty() || blocks_.back() != block_type::if_) {
         throw std::invalid_argument("ELSEIF requires an open IF without ELSE");
     }
     procedure_append_guard guard(statements_, 48U);
@@ -1289,14 +1289,14 @@ void db_procedure::else_if(db_expression condition) {
     guard.commit();
 }
 void db_procedure::otherwise() {
-    if (blocks_.empty() || blocks_.back() != block_type::if_value) {
+    if (blocks_.empty() || blocks_.back() != block_type::if_) {
         throw std::invalid_argument("ELSE requires an open IF without ELSE");
     }
     statements_ += "ELSE\n";
-    blocks_.back() = block_type::else_value;
+    blocks_.back() = block_type::else_;
 }
 void db_procedure::end_if() {
-    if (blocks_.empty() || (blocks_.back() != block_type::if_value && blocks_.back() != block_type::else_value)) {
+    if (blocks_.empty() || (blocks_.back() != block_type::if_ && blocks_.back() != block_type::else_)) {
         throw std::invalid_argument("END IF requires an open IF");
     }
     statements_ += "END IF;\n";

@@ -1294,11 +1294,11 @@ TEST(Ruvia, http_client_final_after_continue_does_not_cancel_released_content) {
     ruvia::http_client_request_view request;
     request.method_ = "POST";
     request.content_ = ruvia::http_client_request_content_view::bytes("payload");
-    http1_client_response_parser parser = exchange_parser(ruvia::http_origin_view::https({.host_ = "example.test"}), request, http1_client_request_wire_policy{.expectation_ = ruvia::http_client_request_expectation::continue_value});
+    http1_client_response_parser parser = exchange_parser(ruvia::http_origin_view::https({.host_ = "example.test"}), request, http1_client_request_wire_policy{.expectation_ = ruvia::http_client_request_expectation::continue_});
     const auto continue_response = parser.parse("HTTP/1.1 100 Continue\r\n\r\n");
     EXPECT_TRUE(continue_response.parsed() != nullptr);
     if (continue_response.parsed() != nullptr) {
-        EXPECT_TRUE(continue_response.parsed()->plan().request_content_signal() == http_client_request_content_signal::continue_value);
+        EXPECT_TRUE(continue_response.parsed()->plan().request_content_signal() == http_client_request_content_signal::continue_);
     }
 
     const auto final_response = parser.parse("HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n");
@@ -1313,7 +1313,7 @@ TEST(Ruvia, http_client_closing_final_stops_unfinished_request_content) {
     ruvia::http_client_request_view request;
     request.method_ = "POST";
     request.content_ = ruvia::http_client_request_content_view::bytes("payload");
-    http1_client_response_parser parser = exchange_parser(ruvia::http_origin_view::https({.host_ = "example.test"}), request, http1_client_request_wire_policy{.expectation_ = ruvia::http_client_request_expectation::continue_value});
+    http1_client_response_parser parser = exchange_parser(ruvia::http_origin_view::https({.host_ = "example.test"}), request, http1_client_request_wire_policy{.expectation_ = ruvia::http_client_request_expectation::continue_});
     const auto continue_response = parser.parse("HTTP/1.1 100 Continue\r\n\r\n");
     EXPECT_TRUE(continue_response.parsed() != nullptr);
 
@@ -1406,7 +1406,7 @@ TEST(Ruvia, http_client_long_informational_sequence_preserves_continue_and_final
     ruvia::http_client_request_view request;
     request.method_ = "POST";
     request.content_ = ruvia::http_client_request_content_view::bytes("payload");
-    http1_client_response_parser parser = exchange_parser(ruvia::http_origin_view::https({.host_ = "example.test"}), request, http1_client_request_wire_policy{.expectation_ = ruvia::http_client_request_expectation::continue_value});
+    http1_client_response_parser parser = exchange_parser(ruvia::http_origin_view::https({.host_ = "example.test"}), request, http1_client_request_wire_policy{.expectation_ = ruvia::http_client_request_expectation::continue_});
     constexpr std::string_view early_hints = "HTTP/1.1 103 Early Hints\r\nLink: </asset>; rel=preload\r\n\r\n";
     for (std::size_t i = 0; i < 300; ++i) {
         const auto interim = parser.parse(early_hints);
@@ -1424,7 +1424,7 @@ TEST(Ruvia, http_client_long_informational_sequence_preserves_continue_and_final
     if (continue_response.parsed() == nullptr) {
         return;
     }
-    EXPECT_TRUE(continue_response.parsed()->plan().request_content_signal() == http_client_request_content_signal::continue_value);
+    EXPECT_TRUE(continue_response.parsed()->plan().request_content_signal() == http_client_request_content_signal::continue_);
     EXPECT_TRUE(parser.complete_request_content() == http1_client_request_content_completion_status::completed);
 
     constexpr std::string_view final_wire = "HTTP/1.1 200 OK\r\nContent-Length: 3\r\n\r\nabcNEXT";
@@ -1446,7 +1446,7 @@ TEST(Ruvia, http_client_expect_continue_is_one_stateful_exchange_contract) {
     request.method_ = "POST";
     request.content_ = ruvia::http_client_request_content_view::bytes("payload");
     std::array<char, 512> request_head;
-    auto prepared_result = ruvia::http1_client_request_writer().prepare(ruvia::http_origin_view::https({.host_ = "example.test"}), request, request_head, http1_client_request_wire_policy{.expectation_ = ruvia::http_client_request_expectation::continue_value});
+    auto prepared_result = ruvia::http1_client_request_writer().prepare(ruvia::http_origin_view::https({.host_ = "example.test"}), request, request_head, http1_client_request_wire_policy{.expectation_ = ruvia::http_client_request_expectation::continue_});
     auto* prepared = std::get_if<ruvia::prepared_http1_client_request>(&prepared_result);
     EXPECT_TRUE(prepared != nullptr);
     if (prepared == nullptr) {
@@ -1465,7 +1465,7 @@ TEST(Ruvia, http_client_expect_continue_is_one_stateful_exchange_contract) {
     auto continue_response = parser.parse("HTTP/1.1 100 Continue\r\n\r\n");
     EXPECT_TRUE(continue_response.parsed() != nullptr);
     if (continue_response.parsed() != nullptr) {
-        EXPECT_TRUE(continue_response.parsed()->plan().request_content_signal() == http_client_request_content_signal::continue_value);
+        EXPECT_TRUE(continue_response.parsed()->plan().request_content_signal() == http_client_request_content_signal::continue_);
     }
     const auto duplicate_continue = parser.parse("HTTP/1.1 100 Continue\r\n\r\n");
     EXPECT_TRUE(duplicate_continue.parsed() != nullptr);
@@ -1513,12 +1513,12 @@ TEST(Ruvia, http_client_closing_informational_response_keeps_exchange_open) {
     ruvia::http_client_request_view post_request;
     post_request.method_ = "POST";
     post_request.content_ = ruvia::http_client_request_content_view::bytes("payload");
-    const http1_client_request_wire_policy continue_policy{.expectation_ = ruvia::http_client_request_expectation::continue_value};
+    const http1_client_request_wire_policy continue_policy{.expectation_ = ruvia::http_client_request_expectation::continue_};
     http1_client_response_parser post_parser = exchange_parser(origin, post_request, continue_policy);
     const auto closing_continue = post_parser.parse("HTTP/1.1 100 Continue\r\nConnection: close\r\n\r\n");
     EXPECT_TRUE(closing_continue.parsed() != nullptr);
     if (closing_continue.parsed() != nullptr) {
-        EXPECT_TRUE(closing_continue.parsed()->plan().request_content_signal() == http_client_request_content_signal::continue_value);
+        EXPECT_TRUE(closing_continue.parsed()->plan().request_content_signal() == http_client_request_content_signal::continue_);
     }
 
     http1_client_response_parser closing_hints_parser = exchange_parser(origin, post_request, continue_policy);
@@ -1550,7 +1550,7 @@ TEST(Ruvia, http_client_expect_final_cancels_only_pending_request_content) {
     request.method_ = "POST";
     request.content_ = ruvia::http_client_request_content_view::bytes("payload");
     const auto origin = ruvia::http_origin_view::https({.host_ = "example.test"});
-    const http1_client_request_wire_policy continue_policy{.expectation_ = ruvia::http_client_request_expectation::continue_value};
+    const http1_client_request_wire_policy continue_policy{.expectation_ = ruvia::http_client_request_expectation::continue_};
 
     http1_client_response_parser parser = exchange_parser(origin, request, continue_policy);
     const auto final_response = parser.parse("HTTP/1.1 417 Expectation Failed\r\nContent-Length: 0\r\n\r\n");
@@ -1574,7 +1574,7 @@ TEST(Ruvia, http_client_expect_final_cancels_only_pending_request_content) {
 TEST(Ruvia, http_client_timeout_released_content_follows_final_response_persistence) {
     const ruvia::http1_client_request_head_view request{.method_ = "POST", .target_ = "/upload", .content_length_ = 6};
     for (const bool closing : {false, true}) {
-        http1_client_response_parser parser = exchange_parser(ruvia::http_origin_view::https({.host_ = "example.test"}), request, {.expectation_ = ruvia::http_client_request_expectation::continue_value});
+        http1_client_response_parser parser = exchange_parser(ruvia::http_origin_view::https({.host_ = "example.test"}), request, {.expectation_ = ruvia::http_client_request_expectation::continue_});
         parser.release_request_content();
         const auto response = parser.parse(closing ? "HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n" : "HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n");
         EXPECT_TRUE(response.parsed() != nullptr);
@@ -1603,7 +1603,7 @@ TEST(Ruvia, http_client_upgrade_accepts_omitted_continue_after_content_complete)
         "HTTP/1.1 101 Switching Protocols\r\n"
         "Connection: Upgrade\r\nUpgrade: websocket\r\n\r\n";
     const auto origin = ruvia::http_origin_view::https({.host_ = "example.test"});
-    const http1_client_request_wire_policy continue_policy{.expectation_ = ruvia::http_client_request_expectation::continue_value};
+    const http1_client_request_wire_policy continue_policy{.expectation_ = ruvia::http_client_request_expectation::continue_};
 
     http1_client_response_parser rejected_parser = exchange_parser(origin, request, continue_policy);
     const auto rejected = rejected_parser.parse(switching);
@@ -1818,7 +1818,7 @@ TEST(Ruvia, http_client_http10_informational_transfer_encoding_latches_faulty_fr
     post_request.method_ = "POST";
     post_request.target_ = "/upload";
     post_request.content_ = ruvia::http_client_request_content_view::bytes("hello");
-    http1_client_response_parser post_parser = exchange_parser(ruvia::http_origin_view::http({.host_ = "example.test"}), post_request, {.expectation_ = ruvia::http_client_request_expectation::continue_value});
+    http1_client_response_parser post_parser = exchange_parser(ruvia::http_origin_view::http({.host_ = "example.test"}), post_request, {.expectation_ = ruvia::http_client_request_expectation::continue_});
     const auto interim = post_parser.parse(
         "HTTP/1.0 100 Continue\r\n"
         "Transfer-Encoding: chunked\r\n\r\n");

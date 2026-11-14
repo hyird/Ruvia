@@ -79,9 +79,9 @@ bool is_mariadb_bare_function_name(std::string_view name) noexcept {
             return a.signed_value() == b.signed_value();
         case db_value_type::unsigned_value:
             return a.unsigned_value() == b.unsigned_value();
-        case db_value_type::double_value:
+        case db_value_type::double_:
             return a.double_value() == b.double_value();
-        case db_value_type::bool_value:
+        case db_value_type::bool_:
             return a.bool_value() == b.bool_value();
     }
     return false;
@@ -487,10 +487,10 @@ private:
                 // value exactly, independent of the bound value.
                 sql_ += "::numeric";
                 break;
-            case db_value_type::double_value:
+            case db_value_type::double_:
                 sql_ += "::float8";
                 break;
-            case db_value_type::bool_value:
+            case db_value_type::bool_:
                 sql_ += "::bool";
                 break;
             case db_value_type::string:
@@ -559,7 +559,7 @@ public:
                 }
                 output_.sql_ += " AS ";
                 switch (cte.materialization_) {
-                    case db_materialization::default_value:
+                    case db_materialization::default_:
                         break;
                     case db_materialization::materialized:
                         output_.require_pg("materialized CTE");
@@ -590,7 +590,7 @@ public:
         for (const auto& operation : s.set_operations_) {
             output_.sql_ += ')';
             switch (operation.operation_) {
-                case db_set_operation::union_value:
+                case db_set_operation::union_:
                     output_.sql_ += " UNION ";
                     break;
                 case db_set_operation::union_all:
@@ -755,7 +755,7 @@ private:
     }
     void orders(const db_query_storage& s, const std::vector<db_stored_order>& terms, std::size_t depth) {
         separated(terms, [&](const auto& term) {
-            if (!output_.pg() && term.nulls_ != db_nulls_order::default_value) {
+            if (!output_.pg() && term.nulls_ != db_nulls_order::default_) {
                 output_.sql_ += '(';
                 expr(s, term.expression_, depth);
                 output_.sql_ += " IS NULL)";
@@ -848,7 +848,7 @@ private:
         switch (n.kind_) {
             case db_node_kind::column:
             case db_node_kind::star:
-            case db_node_kind::default_value:
+            case db_node_kind::default_:
             case db_node_kind::excluded:
                 return false;
             case db_node_kind::value:
@@ -920,7 +920,7 @@ private:
             case db_node_kind::value:
                 output_.bound_node(s, index, cast);
                 break;
-            case db_node_kind::default_value:
+            case db_node_kind::default_:
                 output_.sql_ += "DEFAULT";
                 break;
             case db_node_kind::excluded:
@@ -1016,7 +1016,7 @@ private:
                 }
                 output_.sql_ += '(';
                 switch (n.unary_) {
-                    case db_unary_operator::not_value:
+                    case db_unary_operator::not_:
                         output_.sql_ += "NOT ";
                         child_value(n.left_);
                         break;
@@ -1236,7 +1236,7 @@ private:
         while (continues_logical_chain(s.nodes_, *spine.back(), spine.back()->left_) && grouped_node(s, spine.back()->left_) == spine.back()->left_) {
             spine.push_back(&s.nodes_[spine.back()->left_]);
         }
-        const std::string_view token = n.binary_ == db_binary_operator::and_value ? " AND " : " OR ";
+        const std::string_view token = n.binary_ == db_binary_operator::and_ ? " AND " : " OR ";
         output_.sql_ += '(';
         expr(s, spine.back()->left_, depth);
         for (auto link = spine.rbegin(); link != spine.rend(); ++link) {
@@ -1537,11 +1537,11 @@ private:
                 }
                 break;
             case db_query_kind::update:
-            case db_query_kind::delete_value:
+            case db_query_kind::delete_:
                 output_.sql_ += s.kind_ == db_query_kind::update ? "UPDATE " : "DELETE FROM ";
                 output_.qualified(s.target_);
                 if (!s.target_alias_.empty()) {
-                    if (!output_.pg() && s.kind_ == db_query_kind::delete_value) {
+                    if (!output_.pg() && s.kind_ == db_query_kind::delete_) {
                         output_.unsupported("DELETE target alias");
                     }
                     output_.sql_ += " AS ";

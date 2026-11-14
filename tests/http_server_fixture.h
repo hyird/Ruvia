@@ -838,7 +838,7 @@ inline void append(std::string& target, const std::optional<std::span<const std:
 // An upload write that cannot complete in time, or is stopped, aborts the
 // exchange: no further content is accepted and no response follows.
 [[nodiscard]] inline ruvia::task<void> check_upload_abort(ruvia::http_client_ref client, const ruvia::worker_ref& worker, bool cancel) {
-    auto exchange = co_await client.post("/operation/held-upload").upload({.expectation_ = ruvia::http_client_request_expectation::continue_value, .continue_timeout_ = 10s});
+    auto exchange = co_await client.post("/operation/held-upload").upload({.expectation_ = ruvia::http_client_request_expectation::continue_, .continue_timeout_ = 10s});
     ruvia::stop_source stop;
     ruvia::task_scope stopper(worker);
     ruvia::operation_options operation{.timeout_ = interruption};
@@ -863,7 +863,7 @@ inline void append(std::string& target, const std::optional<std::span<const std:
     EXPECT_TRUE(co_await failure_of(exchange.body().end({}, {.stop_token_ = stop.token()})) == cancelled);
     co_await exchange.body().end();
     auto response = co_await exchange.response();
-    const auto echoed = co_await response.text();
+    const auto echoed = co_await response.bytes();
     EXPECT_EQ(echoed.text(), "echo:kept");
 }
 
@@ -873,7 +873,7 @@ inline void append(std::string& target, const std::optional<std::span<const std:
     co_await exchange.body().end();
     EXPECT_TRUE(co_await failure_of(exchange.response({.timeout_ = interruption})) == timed_out);
     auto response = co_await exchange.response();
-    const auto text = co_await response.text();
+    const auto text = co_await response.bytes();
     EXPECT_EQ(text.text(), "late");
 }
 

@@ -238,7 +238,7 @@ TEST(Ruvia, http2_request_body_inbound_budget_exhaustion_answers_with_503) {
         for (const std::string_view path : {"/inbound-buffered", "/inbound-stream"}) {
             auto response = co_await client.client().post(path).body(payload).send();
             EXPECT_EQ(response.status(), ruvia::http_status::service_unavailable);
-            const auto body = co_await response.text();
+            const auto body = co_await response.bytes();
             EXPECT_NE(body.text().find("inbound_buffer_limit"), std::string_view::npos);
         }
         co_await client.shutdown();

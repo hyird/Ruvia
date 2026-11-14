@@ -243,25 +243,6 @@ void decode_entity_field(e_type& entity, const db_field& field) {
     }
 }
 
-// SQL permits repeated result names; a mapped column must name exactly one.
-struct db_result_column_lookup final {
-    unique_lookup_status state_{unique_lookup_status::absent};
-    std::size_t index_{0};
-};
-
-[[nodiscard]] inline db_result_column_lookup find_unique_db_result_column(std::span<const std::string> names, std::string_view name) noexcept {
-    db_result_column_lookup result;
-    for (std::size_t index = 0; index < names.size(); ++index) {
-        if (names[index] == name) {
-            if (result.state_ == unique_lookup_status::found) {
-                return {unique_lookup_status::repeated, index};
-            }
-            result = {unique_lookup_status::found, index};
-        }
-    }
-    return result;
-}
-
 template <typename e_type>
 class db_entity_row_decoder final {
     using columns_type = typename e_type::columns_type;
@@ -291,11 +272,12 @@ public:
                     indices_[i] = missing_column;
                     return;
                 }
-                const auto lookup = find_unique_db_result_column(names, column_type::name.view());
-                if (lookup.state_ == unique_lookup_status::repeated) {
+                // SQL permits repeated result names; a mapped column must name exactly one.
+                const auto lookup = row.find(column_type::name.view());
+                if (lookup.status_ == unique_lookup_status::repeated) {
                     throw db_conversion_error(db_conversion_error::code_type::invalid_format, "database result has ambiguous mapped column names");
                 }
-                indices_[i] = lookup.state_ == unique_lookup_status::found ? lookup.index_ : missing_column;
+                indices_[i] = lookup.status_ == unique_lookup_status::found ? static_cast<std::size_t>(lookup.field_ - row.begin()) : missing_column;
             });
             schema_ = names;
         }

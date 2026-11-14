@@ -412,7 +412,7 @@ TEST(Ruvia, response_head_emits_well_formed_normal) {
 
 TEST(Ruvia, response_head_extension_status_uses_an_empty_reason_phrase) {
     http_response response;
-    response.status(ruvia::http_status_code::from_value(299));
+    response.status(ruvia::http_status_code(299));
     const auto head = emit_buffered_head(response);
 
     // RFC 9112 section 4 keeps the SP before the optional reason-phrase.
@@ -843,7 +843,7 @@ TEST(Ruvia, response_write_plan_unifies_method_status_and_body_size) {
 }
 
 TEST(Ruvia, response_body_plan_classifies_protocol_response_states) {
-    const auto informational = ruvia::plan_http_response_body(ruvia::http_known_method::get, ruvia::http_status_code::from_value(199));
+    const auto informational = ruvia::plan_http_response_body(ruvia::http_known_method::get, ruvia::http_status_code(199));
     EXPECT_TRUE(informational.content_semantics() == ruvia::http_response_content_semantics::informational);
     EXPECT_TRUE(informational.body_suppressed());
     EXPECT_TRUE(!informational.status_allows_body());
@@ -863,7 +863,7 @@ TEST(Ruvia, response_body_plan_classifies_protocol_response_states) {
 }
 
 TEST(Ruvia, response_stream_plan_restricts_trailers_by_status_and_method) {
-    for (const auto status : {ruvia::http_status_code::from_value(199), ruvia::http_status::no_content, ruvia::http_status::not_modified}) {
+    for (const auto status : {ruvia::http_status_code(199), ruvia::http_status::no_content, ruvia::http_status::not_modified}) {
         const auto plan = ruvia::plan_http_response_stream_commit(ruvia::http_response_stream_framing::http1_chunked, ruvia::http_known_method::get, status, ruvia::http_response_trailer_intent::present);
         EXPECT_TRUE(!plan.trailer_intent_allowed());
     }
@@ -1276,7 +1276,7 @@ TEST(Ruvia, allow_header_lists_methods_in_canonical_order) {
 
     // A single method has no separator.
     auto one = make_response();
-    one.allow_methods(method_bit(http_known_method::delete_value));
+    one.allow_methods(method_bit(http_known_method::delete_));
     EXPECT_EQ(one.header("Allow").value_or(""), std::string_view("DELETE"));
 
     std::string extension = "PROPFIND";
@@ -1480,7 +1480,7 @@ TEST(Ruvia, http1_connect_head_transfers_to_tunnel_without_message_framing_for_e
     for (const auto version : {ruvia::http_protocol_version::http10, ruvia::http_protocol_version::http11}) {
         for (unsigned status = 200; status != 300; ++status) {
             ruvia::http_response response;
-            response.status(ruvia::http_status_code::from_value(status));
+            response.status(ruvia::http_status_code(status));
             response.header("x-tunnel", "established");
             const auto plan = ruvia::prepare_http1_connect_response_head(response, version);
             ruvia::http_response_head_buffer head;
@@ -1674,7 +1674,7 @@ using ruvia::prepared_http1_interim_response;
 
 TEST(Ruvia, http1_interim_response_writer_emits_exact_typed_head) {
     std::array<char, 64> buffer{};
-    const auto result_value = prepare_http1_interim_response_head(http_interim_response_head(ruvia::http_status::continue_value), buffer);
+    const auto result_value = prepare_http1_interim_response_head(http_interim_response_head(ruvia::http_status::continue_), buffer);
     const auto* const prepared = std::get_if<prepared_http1_interim_response>(&result_value);
     EXPECT_TRUE(prepared != nullptr);
     if (prepared != nullptr) {
@@ -1704,7 +1704,7 @@ TEST(Ruvia, http1_interim_response_writer_emits_exact_typed_head) {
 
 TEST(Ruvia, http1_interim_response_writer_preserves_required_status_line_space) {
     std::array<char, 32> buffer{};
-    const auto result_value = prepare_http1_interim_response_head(http_interim_response_head(ruvia::http_status_code::from_value(199)), buffer);
+    const auto result_value = prepare_http1_interim_response_head(http_interim_response_head(ruvia::http_status_code(199)), buffer);
     const auto* const prepared = std::get_if<prepared_http1_interim_response>(&result_value);
     EXPECT_TRUE(prepared != nullptr);
     if (prepared != nullptr) {
@@ -1732,7 +1732,7 @@ TEST(Ruvia, http1_interim_response_writer_closes_after_containing_response) {
 TEST(Ruvia, http1_interim_response_writer_buffer_too_small_is_transactional) {
     std::array<char, 8> buffer;
     buffer.fill('#');
-    const auto result_value = prepare_http1_interim_response_head(http_interim_response_head(ruvia::http_status::continue_value), buffer);
+    const auto result_value = prepare_http1_interim_response_head(http_interim_response_head(ruvia::http_status::continue_), buffer);
     const auto* const too_small = std::get_if<http1_interim_response_buffer_too_small>(&result_value);
     EXPECT_TRUE(too_small != nullptr);
     if (too_small != nullptr) {

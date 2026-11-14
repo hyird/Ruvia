@@ -44,12 +44,8 @@ enum class websocket_liveness_mode : std::uint8_t { open,
 class websocket_close_code final {
 public:
     template <std::integral integer_type>
-    [[nodiscard]] static constexpr websocket_close_code from_value(integer_type value) {
-        if (!is_valid_value(value)) {
-            throw std::invalid_argument("invalid WebSocket Close status code");
-        }
-        return websocket_close_code(static_cast<std::uint16_t>(value), validated_tag_type{});
-    }
+    explicit constexpr websocket_close_code(integer_type value) :
+        value_(is_valid_value(value) ? static_cast<std::uint16_t>(value) : throw std::invalid_argument("invalid WebSocket Close status code")) {}
 
     template <std::integral integer_type>
     [[nodiscard]] static constexpr std::optional<websocket_close_code> try_from_value(integer_type value) noexcept {
@@ -84,9 +80,9 @@ static_assert(std::is_trivially_copyable_v<websocket_close_code>);
 static_assert(sizeof(websocket_close_code) == sizeof(std::uint16_t));
 
 namespace websocket_close_status {
-inline constexpr auto normal_closure = websocket_close_code::from_value(1000);
-inline constexpr auto going_away = websocket_close_code::from_value(1001);
-inline constexpr auto internal_error = websocket_close_code::from_value(1011);
+inline constexpr auto normal_closure = websocket_close_code(1000);
+inline constexpr auto going_away = websocket_close_code(1001);
+inline constexpr auto internal_error = websocket_close_code(1011);
 }  // namespace websocket_close_status
 
 enum class websocket_opcode : std::uint8_t { text = 0x1,

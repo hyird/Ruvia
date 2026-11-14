@@ -86,7 +86,7 @@ void apply_entity_upsert(db_query& query, std::span<const db_column_info> entity
             updates[update_count++] = {name, db_expr(value, {}, true)};
             if (options.skip_update_if_no_values_changed_) {
                 const auto changed = query.binary(query.column(name, qualifier), db_binary_operator::is_distinct_from, value);
-                update_where = update_where.empty() ? changed : query.binary(update_where, db_binary_operator::or_value, changed);
+                update_where = update_where.empty() ? changed : query.binary(update_where, db_binary_operator::or_, changed);
             }
         }
         if (update_count != 0) {
@@ -105,7 +105,7 @@ void apply_entity_upsert(db_query& query, std::span<const db_column_info> entity
     }
     if (!options.update_where_.empty()) {
         const auto condition = options.update_where_.expression(query, table, alias);
-        update_where = update_where.empty() ? condition : query.binary(update_where, db_binary_operator::and_value, condition);
+        update_where = update_where.empty() ? condition : query.binary(update_where, db_binary_operator::and_, condition);
     }
     query.on_conflict({
         .columns_ = options.conflict_paths_,
@@ -228,7 +228,7 @@ std::optional<db_query> db_relation_plan::prepare_entity_read(const db_query& qu
     if (orders.empty()) {
         orders.reserve(window.args_.size());
         for (const auto key : window.args_) {
-            orders.push_back({key, db_order_direction::asc, db_nulls_order::default_value});
+            orders.push_back({key, db_order_direction::asc, db_nulls_order::default_});
         }
     }
     // Give the outer result the same stable tie order as its page.
@@ -304,7 +304,7 @@ std::string db_relation_plan::unique_projection(const db_query& query) {
 }
 
 void db_relation_plan::conjunction(db_query& query, db_expression& predicate, db_expression term) {
-    predicate = predicate.empty() ? term : query.binary(predicate, db_binary_operator::and_value, term);
+    predicate = predicate.empty() ? term : query.binary(predicate, db_binary_operator::and_, term);
 }
 
 db_projection apply_projection(db_query& query, std::span<const db_selection> selection, std::string_view qualifier, bool returning, std::string_view root_table, const db_projection* previous) {

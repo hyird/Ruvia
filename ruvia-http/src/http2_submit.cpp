@@ -559,7 +559,7 @@ std::variant<std::uint32_t, http2_request_head_submit_error> http2_connection::s
         }
         fields_.add(":path", path);
         fields_.add_lowercase_fields(headers);
-        if (expectation == http_client_request_expectation::continue_value) {
+        if (expectation == http_client_request_expectation::continue_) {
             fields_.add("expect", http_continue_expectation_token);
         }
         if (emit_length) {
@@ -576,7 +576,7 @@ std::variant<std::uint32_t, http2_request_head_submit_error> http2_connection::s
             (void)stream.commit_local_head_end_stream();
         } else {
             (void)stream.begin_local_request_content();
-            if (expectation == http_client_request_expectation::continue_value) {
+            if (expectation == http_client_request_expectation::continue_) {
                 stream.await_request_continue();
             }
         }

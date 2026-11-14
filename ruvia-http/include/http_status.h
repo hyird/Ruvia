@@ -17,12 +17,8 @@ class http_status_code final {
 public:
     // Validate the original integer before narrowing to the stored wire value.
     template <std::integral integer_type>
-    [[nodiscard]] static constexpr http_status_code from_value(integer_type value) {
-        if (!is_valid_value(value)) {
-            throw std::invalid_argument("HTTP status code must be in 100..599");
-        }
-        return http_status_code(static_cast<std::uint16_t>(value), validated_tag_type{});
-    }
+    explicit constexpr http_status_code(integer_type value) :
+        value_(is_valid_value(value) ? static_cast<std::uint16_t>(value) : throw std::invalid_argument("HTTP status code must be in 100..599")) {}
 
     template <std::integral integer_type>
     [[nodiscard]] static constexpr std::optional<http_status_code> try_from_value(integer_type value) noexcept {
@@ -85,75 +81,76 @@ static_assert(std::is_trivially_copyable_v<http_status_code>);
 static_assert(sizeof(http_status_code) == sizeof(std::uint16_t));
 
 // Stable RFC-assigned names are defined once here. Unknown extension codes and
-// temporary draft registrations remain available through from_value() and
-// try_from_value() without turning an unstable name into framework API.
+// temporary draft registrations remain available through the checked
+// constructor and try_from_value() without turning an unstable name into
+// framework API.
 namespace http_status {
 
-inline constexpr auto continue_value = http_status_code::from_value(100);
-inline constexpr auto switching_protocols = http_status_code::from_value(101);
-inline constexpr auto processing = http_status_code::from_value(102);
-inline constexpr auto early_hints = http_status_code::from_value(103);
+inline constexpr auto continue_ = http_status_code(100);
+inline constexpr auto switching_protocols = http_status_code(101);
+inline constexpr auto processing = http_status_code(102);
+inline constexpr auto early_hints = http_status_code(103);
 
-inline constexpr auto ok = http_status_code::from_value(200);
-inline constexpr auto created = http_status_code::from_value(201);
-inline constexpr auto accepted = http_status_code::from_value(202);
-inline constexpr auto non_authoritative_information = http_status_code::from_value(203);
-inline constexpr auto no_content = http_status_code::from_value(204);
-inline constexpr auto reset_content = http_status_code::from_value(205);
-inline constexpr auto partial_content = http_status_code::from_value(206);
-inline constexpr auto multi_status = http_status_code::from_value(207);
-inline constexpr auto already_reported = http_status_code::from_value(208);
-inline constexpr auto im_used = http_status_code::from_value(226);
+inline constexpr auto ok = http_status_code(200);
+inline constexpr auto created = http_status_code(201);
+inline constexpr auto accepted = http_status_code(202);
+inline constexpr auto non_authoritative_information = http_status_code(203);
+inline constexpr auto no_content = http_status_code(204);
+inline constexpr auto reset_content = http_status_code(205);
+inline constexpr auto partial_content = http_status_code(206);
+inline constexpr auto multi_status = http_status_code(207);
+inline constexpr auto already_reported = http_status_code(208);
+inline constexpr auto im_used = http_status_code(226);
 
-inline constexpr auto multiple_choices = http_status_code::from_value(300);
-inline constexpr auto moved_permanently = http_status_code::from_value(301);
-inline constexpr auto found = http_status_code::from_value(302);
-inline constexpr auto see_other = http_status_code::from_value(303);
-inline constexpr auto not_modified = http_status_code::from_value(304);
-inline constexpr auto use_proxy = http_status_code::from_value(305);
-inline constexpr auto temporary_redirect = http_status_code::from_value(307);
-inline constexpr auto permanent_redirect = http_status_code::from_value(308);
+inline constexpr auto multiple_choices = http_status_code(300);
+inline constexpr auto moved_permanently = http_status_code(301);
+inline constexpr auto found = http_status_code(302);
+inline constexpr auto see_other = http_status_code(303);
+inline constexpr auto not_modified = http_status_code(304);
+inline constexpr auto use_proxy = http_status_code(305);
+inline constexpr auto temporary_redirect = http_status_code(307);
+inline constexpr auto permanent_redirect = http_status_code(308);
 
-inline constexpr auto bad_request = http_status_code::from_value(400);
-inline constexpr auto unauthorized = http_status_code::from_value(401);
-inline constexpr auto payment_required = http_status_code::from_value(402);
-inline constexpr auto forbidden = http_status_code::from_value(403);
-inline constexpr auto not_found = http_status_code::from_value(404);
-inline constexpr auto method_not_allowed = http_status_code::from_value(405);
-inline constexpr auto not_acceptable = http_status_code::from_value(406);
-inline constexpr auto proxy_authentication_required = http_status_code::from_value(407);
-inline constexpr auto request_timeout = http_status_code::from_value(408);
-inline constexpr auto conflict = http_status_code::from_value(409);
-inline constexpr auto gone = http_status_code::from_value(410);
-inline constexpr auto length_required = http_status_code::from_value(411);
-inline constexpr auto precondition_failed = http_status_code::from_value(412);
-inline constexpr auto content_too_large = http_status_code::from_value(413);
-inline constexpr auto uri_too_long = http_status_code::from_value(414);
-inline constexpr auto unsupported_media_type = http_status_code::from_value(415);
-inline constexpr auto range_not_satisfiable = http_status_code::from_value(416);
-inline constexpr auto expectation_failed = http_status_code::from_value(417);
-inline constexpr auto misdirected_request = http_status_code::from_value(421);
-inline constexpr auto unprocessable_content = http_status_code::from_value(422);
-inline constexpr auto locked = http_status_code::from_value(423);
-inline constexpr auto failed_dependency = http_status_code::from_value(424);
-inline constexpr auto too_early = http_status_code::from_value(425);
-inline constexpr auto upgrade_required = http_status_code::from_value(426);
-inline constexpr auto precondition_required = http_status_code::from_value(428);
-inline constexpr auto too_many_requests = http_status_code::from_value(429);
-inline constexpr auto request_header_fields_too_large = http_status_code::from_value(431);
-inline constexpr auto unavailable_for_legal_reasons = http_status_code::from_value(451);
+inline constexpr auto bad_request = http_status_code(400);
+inline constexpr auto unauthorized = http_status_code(401);
+inline constexpr auto payment_required = http_status_code(402);
+inline constexpr auto forbidden = http_status_code(403);
+inline constexpr auto not_found = http_status_code(404);
+inline constexpr auto method_not_allowed = http_status_code(405);
+inline constexpr auto not_acceptable = http_status_code(406);
+inline constexpr auto proxy_authentication_required = http_status_code(407);
+inline constexpr auto request_timeout = http_status_code(408);
+inline constexpr auto conflict = http_status_code(409);
+inline constexpr auto gone = http_status_code(410);
+inline constexpr auto length_required = http_status_code(411);
+inline constexpr auto precondition_failed = http_status_code(412);
+inline constexpr auto content_too_large = http_status_code(413);
+inline constexpr auto uri_too_long = http_status_code(414);
+inline constexpr auto unsupported_media_type = http_status_code(415);
+inline constexpr auto range_not_satisfiable = http_status_code(416);
+inline constexpr auto expectation_failed = http_status_code(417);
+inline constexpr auto misdirected_request = http_status_code(421);
+inline constexpr auto unprocessable_content = http_status_code(422);
+inline constexpr auto locked = http_status_code(423);
+inline constexpr auto failed_dependency = http_status_code(424);
+inline constexpr auto too_early = http_status_code(425);
+inline constexpr auto upgrade_required = http_status_code(426);
+inline constexpr auto precondition_required = http_status_code(428);
+inline constexpr auto too_many_requests = http_status_code(429);
+inline constexpr auto request_header_fields_too_large = http_status_code(431);
+inline constexpr auto unavailable_for_legal_reasons = http_status_code(451);
 
-inline constexpr auto internal_server_error = http_status_code::from_value(500);
-inline constexpr auto not_implemented = http_status_code::from_value(501);
-inline constexpr auto bad_gateway = http_status_code::from_value(502);
-inline constexpr auto service_unavailable = http_status_code::from_value(503);
-inline constexpr auto gateway_timeout = http_status_code::from_value(504);
-inline constexpr auto http_version_not_supported = http_status_code::from_value(505);
-inline constexpr auto variant_also_negotiates = http_status_code::from_value(506);
-inline constexpr auto insufficient_storage = http_status_code::from_value(507);
-inline constexpr auto loop_detected = http_status_code::from_value(508);
-inline constexpr auto not_extended = http_status_code::from_value(510);
-inline constexpr auto network_authentication_required = http_status_code::from_value(511);
+inline constexpr auto internal_server_error = http_status_code(500);
+inline constexpr auto not_implemented = http_status_code(501);
+inline constexpr auto bad_gateway = http_status_code(502);
+inline constexpr auto service_unavailable = http_status_code(503);
+inline constexpr auto gateway_timeout = http_status_code(504);
+inline constexpr auto http_version_not_supported = http_status_code(505);
+inline constexpr auto variant_also_negotiates = http_status_code(506);
+inline constexpr auto insufficient_storage = http_status_code(507);
+inline constexpr auto loop_detected = http_status_code(508);
+inline constexpr auto not_extended = http_status_code(510);
+inline constexpr auto network_authentication_required = http_status_code(511);
 
 }  // namespace http_status
 
@@ -225,7 +222,7 @@ static_assert(std::is_trivially_copyable_v<http_received_status>);
 // extension, and unassigned codes deliberately get an empty phrase.
 [[nodiscard]] inline constexpr std::string_view http_reason_phrase(http_status_code status) noexcept {
     switch (status.value()) {
-        case http_status::continue_value.value():
+        case http_status::continue_.value():
             return "Continue";
         case http_status::switching_protocols.value():
             return "Switching Protocols";

@@ -236,7 +236,7 @@ public:
     RUVIA_GET("/hello", hello);
     RUVIA_GET("/a/:id/", slash_test);
     RUVIA_ALL(counted_all_path(), hello);
-    RUVIA_ON((::ruvia::http_known_method::put, ::ruvia::http_known_method::delete_value), (counted_on_path()), hello);
+    RUVIA_ON((::ruvia::http_known_method::put, ::ruvia::http_known_method::delete_), (counted_on_path()), hello);
     RUVIA_GET("/users/:id", user);
     RUVIA_GET("/empty//:id", user);
     RUVIA_GET("/slash-link", slash_link);
@@ -746,7 +746,7 @@ TEST(Ruvia, testing_facade_applies_app_level_configuration) {
     EXPECT_EQ(global_miss.body(), std::string_view("custom-miss"));
 
     // 405 keeps flowing through the production fallback path too.
-    const auto not_allowed = app.request(ruvia::test_request::delete_request("/t/hello"));
+    const auto not_allowed = app.request(ruvia::test_request::delete_("/t/hello"));
     EXPECT_TRUE(not_allowed.status() == ruvia::http_status::method_not_allowed);
 
     // The route table is sealed after the first request.

@@ -1132,7 +1132,7 @@ TEST(Ruvia, context_rejects_informational_and_non_http_final_statuses) {
     {
         bool threw = false;
         try {
-            (void)ruvia::http_status_code::from_value(600);
+            (void)ruvia::http_status_code(600);
         } catch (const std::invalid_argument&) {
             threw = true;
         }

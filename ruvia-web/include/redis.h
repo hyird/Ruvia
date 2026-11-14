@@ -64,7 +64,7 @@ inline constexpr bool is_redis_entity_native_number = is_redis_entity_native_int
 enum class redis_column_kind : std::uint8_t {
     unsupported,
     text,
-    bool_value,
+    bool_,
     signed_value,
     unsigned_value,
     float32,
@@ -90,7 +90,7 @@ consteval redis_column_kind redis_column_value_kind() {
     if constexpr (std::is_same_v<value_type, string> || std::is_same_v<value_type, std::string>) {
         return redis_column_kind::text;
     } else if constexpr (std::is_same_v<value_type, bool>) {
-        return redis_column_kind::bool_value;
+        return redis_column_kind::bool_;
     } else if constexpr (is_redis_entity_native_number<value_type>) {
         return redis_number_kind<value_type>();
     } else {
@@ -1175,7 +1175,7 @@ private:
             std::size_t count = 0;
             detail::for_each_descriptor<typename entity_type::columns_type>([&]<typename column_type, std::size_t> {
                 constexpr auto value_kind = detail::redis_column_value_kind<typename column_type::value_type>();
-                constexpr bool tag_shadow = value_kind == detail::redis_column_kind::text || value_kind == detail::redis_column_kind::bool_value;
+                constexpr bool tag_shadow = value_kind == detail::redis_column_kind::text || value_kind == detail::redis_column_kind::bool_;
                 count += tag_shadow ? 9U : 6U;
             });
             return count;
@@ -1192,7 +1192,7 @@ private:
         const auto& column_index_kinds = mapping().column_index_kinds_;
         detail::for_each_descriptor<typename entity_type::columns_type>([&]<typename column_type, std::size_t index> {
             constexpr auto value_kind = detail::redis_column_value_kind<typename column_type::value_type>();
-            constexpr bool tag_shadow = value_kind == detail::redis_column_kind::text || value_kind == detail::redis_column_kind::bool_value;
+            constexpr bool tag_shadow = value_kind == detail::redis_column_kind::text || value_kind == detail::redis_column_kind::bool_;
             const auto field = column_type::name.view();
             const bool numeric_index = !tag_shadow && column_index_kinds[index] == redis_index_kind::numeric;
             if constexpr (column_type::options.primary_key_) {

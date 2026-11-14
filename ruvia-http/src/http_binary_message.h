@@ -457,7 +457,7 @@ private:
     switch (expectation) {
         case http_client_request_expectation::none:
             break;
-        case http_client_request_expectation::continue_value:
+        case http_client_request_expectation::continue_:
             expect_continue = true;
             break;
         default:

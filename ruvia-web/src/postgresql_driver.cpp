@@ -541,8 +541,8 @@ postgresql_params::postgresql_params(std::span<const db_value> params) :
         const auto type = param.type();
         if (type == db_value_type::string) {
             validate_postgresql_string_param(db_value_access::owned_text(param));
-        } else if (type == db_value_type::signed_value || type == db_value_type::unsigned_value || type == db_value_type::double_value) {
-            if (type == db_value_type::double_value) {
+        } else if (type == db_value_type::signed_value || type == db_value_type::unsigned_value || type == db_value_type::double_) {
+            if (type == db_value_type::double_) {
                 validate_postgresql_double_param(param.double_value());
             }
             ++numeric_count;
@@ -561,7 +561,7 @@ postgresql_params::postgresql_params(std::span<const db_value> params) :
     for (std::size_t i = 0; i < params.size(); ++i) {
         const auto& param = params[i];
         const auto type = param.type();
-        const unsigned int oid = type == db_value_type::double_value ? postgresql_float8_oid : 0U;
+        const unsigned int oid = type == db_value_type::double_ ? postgresql_float8_oid : 0U;
         const char* text = nullptr;
         switch (type) {
             case db_value_type::null:
@@ -569,12 +569,12 @@ postgresql_params::postgresql_params(std::span<const db_value> params) :
             case db_value_type::string:
                 text = db_value_access::owned_text(param).c_str();
                 break;
-            case db_value_type::bool_value:
+            case db_value_type::bool_:
                 text = param.bool_value() ? "true" : "false";
                 break;
             case db_value_type::signed_value:
             case db_value_type::unsigned_value:
-            case db_value_type::double_value: {
+            case db_value_type::double_: {
                 char* const slot = inline_numerics ? inline_encoded_.data() + numeric_index * numeric_slot_size : heap_encoded_[numeric_index].data();
                 ++numeric_index;
                 std::to_chars_result formatted{};

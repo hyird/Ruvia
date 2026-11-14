@@ -408,18 +408,18 @@ public:
     void parse_field(std::string_view value) noexcept;
 
     [[nodiscard]] bool has_continue() const noexcept {
-        return (flags_ & continue_value) != 0;
+        return (flags_ & continue_flag) != 0;
     }
 
     [[nodiscard]] bool has_unsupported() const noexcept {
-        return (flags_ & unsupported) != 0;
+        return (flags_ & unsupported_flag) != 0;
     }
 
     // RFC 9110 requires an HTTP/1.0 recipient to ignore 100-continue. Preserve
     // the independent unsupported-member fact so the Web product can still apply
     // its chosen extension-support policy.
     void ignore_continue() noexcept {
-        flags_ &= static_cast<std::uint8_t>(~continue_value);
+        flags_ &= static_cast<std::uint8_t>(~continue_flag);
     }
 
     [[nodiscard]] http_server_expectation_plan server_plan(http_request_content_indication content, http_unsupported_expectation_policy unsupported_policy) const noexcept {
@@ -441,8 +441,8 @@ public:
     }
 
 private:
-    static constexpr std::uint8_t continue_value = 1U << 0;
-    static constexpr std::uint8_t unsupported = 1U << 1;
+    static constexpr std::uint8_t continue_flag = 1U << 0;
+    static constexpr std::uint8_t unsupported_flag = 1U << 1;
 
     std::uint8_t flags_{0};
 };

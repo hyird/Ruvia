@@ -154,10 +154,10 @@ inline void append_db_literal(std::string& output, const db_value& value, db_dri
         case db_value_type::unsigned_value:
             append_db_number(output, value.unsigned_value());
             return;
-        case db_value_type::double_value:
+        case db_value_type::double_:
             append_db_double_literal(output, value.double_value(), driver);
             return;
-        case db_value_type::bool_value:
+        case db_value_type::bool_:
             output += value.bool_value() ? "TRUE" : "FALSE";
             return;
     }
@@ -251,7 +251,7 @@ inline void append_db_type_name(std::string& output, db_data_type type, std::str
         }
         return;
     }
-    if (length != 0 && type != db_data_type::char_value && type != db_data_type::varchar) {
+    if (length != 0 && type != db_data_type::char_ && type != db_data_type::varchar) {
         throw std::invalid_argument("length requires CHAR or VARCHAR");
     }
     if ((precision != 0 || scale != 0) && type != db_data_type::numeric) {
@@ -261,7 +261,7 @@ inline void append_db_type_name(std::string& output, db_data_type type, std::str
         throw std::invalid_argument("invalid database numeric precision or scale");
     }
     const bool maria_cast = !pg && usage == db_sql_type_usage::cast;
-    if (type == db_data_type::char_value) {
+    if (type == db_data_type::char_) {
         if (length == 0) {
             throw std::invalid_argument("CHAR requires a positive length");
         }
@@ -288,13 +288,13 @@ inline void append_db_type_name(std::string& output, db_data_type type, std::str
         case db_data_type::real:
             output += maria_cast ? "DOUBLE" : "REAL";
             break;
-        case db_data_type::double_value:
+        case db_data_type::double_:
             output += pg ? "DOUBLE PRECISION" : "DOUBLE";
             break;
         case db_data_type::text:
             output += maria_cast ? "CHAR" : "TEXT";
             break;
-        case db_data_type::char_value:
+        case db_data_type::char_:
             output += "CHAR(";
             append_db_number(output, static_cast<std::uint64_t>(length));
             output.push_back(')');

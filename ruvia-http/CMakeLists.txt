@@ -17,7 +17,6 @@ set(ruvia_http_sources
     src/http_content_codec.cpp
     src/http_content_coding.cpp
     src/http_content_negotiation.cpp
-    src/http_content_transcoder.cpp
     src/http_cookie.cpp
     src/http_cookie_jar.cpp
     src/http_cors.cpp
@@ -118,7 +117,6 @@ set(ruvia_http_headers
     include/http_content_codec.h
     include/http_content_coding.h
     include/http_content_negotiation.h
-    include/http_content_transcoder.h
     include/http_cookie.h
     include/http_cookie_jar.h
     include/http_cors.h

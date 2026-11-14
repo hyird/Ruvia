@@ -267,10 +267,10 @@ std::string db_cache_key(std::string_view prefix, std::string_view id, db_cache_
             case db_value_type::unsigned_value:
                 input.update_u64_le(value.unsigned_value());
                 break;
-            case db_value_type::double_value:
+            case db_value_type::double_:
                 input.update_u64_le(std::bit_cast<std::uint64_t>(value.double_value()));
                 break;
-            case db_value_type::bool_value:
+            case db_value_type::bool_:
                 input.update_u64_le(value.bool_value());
                 break;
         }

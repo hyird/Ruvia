@@ -1270,7 +1270,7 @@ void exercise(response_mode mode) {
                 EXPECT_TRUE(exchange.body().complete());
             } else {
                 const bool expect = mode == response_mode::continued || mode == response_mode::rejected;
-                auto exchange = co_await client.client().request("POST", "/upload").upload({.content_length_ = 7, .expectation_ = expect ? ruvia::http_client_request_expectation::continue_value : ruvia::http_client_request_expectation::none});
+                auto exchange = co_await client.client().request("POST", "/upload").upload({.content_length_ = 7, .expectation_ = expect ? ruvia::http_client_request_expectation::continue_ : ruvia::http_client_request_expectation::none});
                 auto response = co_await exchange.response();
                 EXPECT_EQ(response.status().value(), mode == response_mode::rejected ? 413 : 200);
                 const auto bytes = co_await response.stream().read_all();

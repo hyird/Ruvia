@@ -31,7 +31,7 @@ http_known_method classify_http_method(std::string_view method) noexcept {
             break;
         case 6:
             if (method == "DELETE") {
-                return http_known_method::delete_value;
+                return http_known_method::delete_;
             }
             break;
         case 7:
@@ -56,7 +56,7 @@ std::string_view known_http_method_token(http_known_method method) noexcept {
             return "POST";
         case http_known_method::put:
             return "PUT";
-        case http_known_method::delete_value:
+        case http_known_method::delete_:
             return "DELETE";
         case http_known_method::patch:
             return "PATCH";

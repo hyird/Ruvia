@@ -70,7 +70,7 @@ private:
                 co_await ws.text("tick");
                 (void)co_await ruvia::sleep_for(c.worker(), std::chrono::seconds(1));
             }
-            co_await ws.close({.code_ = ruvia::websocket_close_code::from_value(4001), .reason_ = "subscription ended"});
+            co_await ws.close({.code_ = ruvia::websocket_close_code(4001), .reason_ = "subscription ended"});
         } catch (...) {
             failure = std::current_exception();
             ws.abort();

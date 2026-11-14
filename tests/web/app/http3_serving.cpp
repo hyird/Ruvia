@@ -480,14 +480,14 @@ ruvia::task<void> run_protocol_lane(ruvia::http_client_ref client, ruvia::http_p
             auto resp = co_await client.get("/hello").send();
             EXPECT_TRUE(resp.ok());
             EXPECT_TRUE(resp.protocol_version() == expected_version);
-            auto body = co_await resp.text();
+            auto body = co_await resp.bytes();
             EXPECT_EQ(body.text(), "hello over http/3");
         }
         {
             const std::string payload(4096 + static_cast<std::size_t>(lane * 256 + round * 17), static_cast<char>('A' + (lane + round) % 26));
             auto resp = co_await client.post("/echo").body(payload).send();
             EXPECT_TRUE(resp.ok());
-            auto echoed = co_await resp.text();
+            auto echoed = co_await resp.bytes();
             EXPECT_EQ(echoed.text(), payload);
         }
         {
@@ -505,7 +505,7 @@ ruvia::task<void> run_protocol_lane(ruvia::http_client_ref client, ruvia::http_p
         if (round == 0) {
             auto resp = co_await client.get("/file").send();
             EXPECT_TRUE(resp.ok());
-            auto body = co_await resp.text();
+            auto body = co_await resp.bytes();
             EXPECT_EQ(body.text().size(), expected_file.size());
             EXPECT_TRUE(body.text() == expected_file);
 
@@ -529,12 +529,12 @@ ruvia::task<void> run_protocol_lane(ruvia::http_client_ref client, ruvia::http_p
             if (expected_version != ruvia::http_protocol_version::http11) {
                 auto po_resp = co_await client.get("/push-and-origin").send();
                 EXPECT_TRUE(po_resp.ok());
-                auto po_body = co_await po_resp.text();
+                auto po_body = co_await po_resp.bytes();
                 EXPECT_EQ(po_body.text(), "origin-and-push");
                 while (auto pushed = client.next_push()) {
                     auto p_resp = co_await pushed->response();
                     EXPECT_TRUE(p_resp.ok());
-                    auto p_text = co_await p_resp.text();
+                    auto p_text = co_await p_resp.bytes();
                     EXPECT_EQ(p_text.text(), "hello over http/3");
                 }
             }
@@ -546,7 +546,7 @@ ruvia::task<void> run_protocol_lane(ruvia::http_client_ref client, ruvia::http_p
                 co_await abandoned.body().write("abandoned-chunk");
             }
             {
-                auto exchange = co_await client.post("/upload-trailer").header("trailer", "x-upload-checksum").upload({.expectation_ = ruvia::http_client_request_expectation::continue_value});
+                auto exchange = co_await client.post("/upload-trailer").header("trailer", "x-upload-checksum").upload({.expectation_ = ruvia::http_client_request_expectation::continue_});
                 co_await exchange.body().write("part-1:");
                 co_await exchange.body().write("part-2");
                 const std::array<ruvia::http_header_view, 1> req_trailers{{{"x-upload-checksum", "crc-ok"}}};
@@ -641,11 +641,11 @@ ruvia::task<void> run_cancellation_and_migration_lane(ruvia::worker_ref worker, 
 ruvia::task<void> run_negotiate_upgrade_lane(ruvia::http_client_ref client) {
     auto first = co_await client.get("/hello").send();
     EXPECT_TRUE(first.ok());
-    (void)co_await first.text();
+    (void)co_await first.bytes();
     auto second = co_await client.get("/hello").send();
     EXPECT_TRUE(second.ok());
     EXPECT_TRUE(second.protocol_version() == ruvia::http_protocol_version::http3);
-    auto text = co_await second.text();
+    auto text = co_await second.bytes();
     EXPECT_EQ(text.text(), "hello over http/3");
 }
 
@@ -655,7 +655,7 @@ ruvia::task<void> run_negotiate_tcp_lane(ruvia::http_client_ref client) {
         auto response = co_await client.get("/hello").send();
         EXPECT_TRUE(response.ok());
         EXPECT_TRUE(response.protocol_version() != ruvia::http_protocol_version::http3);
-        (void)co_await response.text();
+        (void)co_await response.bytes();
     }
 }
 
@@ -676,7 +676,7 @@ ruvia::task<void> exercise_independent_informational(ruvia::event_loop loop, ruv
     }});
     auto first = [&]() -> ruvia::task<void> {
         auto response = co_await request.send();
-        const auto text = co_await response.text();
+        const auto text = co_await response.bytes();
         EXPECT_EQ(text.text(), "hints complete");
         completed = true;
     };
@@ -692,7 +692,7 @@ ruvia::task<void> exercise_independent_informational(ruvia::event_loop loop, ruv
             (void)co_await ruvia::sleep_for(loop.worker(), 1ms);
         }
         auto independent = co_await client.get("/hello").send();
-        (void)co_await independent.text();
+        (void)co_await independent.bytes();
         EXPECT_FALSE(completed);
     } catch (...) {
         failure = std::current_exception();
@@ -737,14 +737,14 @@ ruvia::task<void> exercise_connection_controls(ruvia::event_loop loop, std::uint
         EXPECT_FALSE(first_info.reused_);
         EXPECT_GT(first_info.tls_duration_, std::chrono::steady_clock::duration::zero());
         stage = "first-body";
-        const auto first_text = co_await first.text();
+        const auto first_text = co_await first.bytes();
         EXPECT_EQ(first_text.text(), "localhost|");
         stage = "second-head";
         auto second = co_await client.get("/dial-authority").send();
         EXPECT_EQ(second.connection_info().id_, first_info.id_);
         EXPECT_TRUE(second.connection_info().reused_);
         stage = "second-body";
-        const auto second_text = co_await second.text();
+        const auto second_text = co_await second.bytes();
         EXPECT_EQ(second_text.text(), "localhost|logical=1");
         std::uint64_t last_fresh = 0;
         for (int attempt = 0; attempt != 2; ++attempt) {
@@ -755,19 +755,19 @@ ruvia::task<void> exercise_connection_controls(ruvia::event_loop loop, std::uint
             EXPECT_NE(fresh.connection_info().id_, last_fresh);
             last_fresh = fresh.connection_info().id_;
             stage = "fresh-body";
-            (void)co_await fresh.text();
+            (void)co_await fresh.bytes();
         }
         stage = "pooled-reuse";
         auto reused = co_await client.get("/hello").send();
         EXPECT_EQ(reused.connection_info().id_, first_info.id_);
-        (void)co_await reused.text();
+        (void)co_await reused.bytes();
         EXPECT_TRUE(client.close_connection(first_info.id_));
         EXPECT_FALSE(client.close_connection(first_info.id_));
         stage = "replace-closed-connection";
         auto replaced = co_await client.get("/hello").send();
         const auto replacement_id = replaced.connection_info().id_;
         EXPECT_NE(replacement_id, first_info.id_);
-        (void)co_await replaced.text();
+        (void)co_await replaced.bytes();
         if (protocol != ruvia::http_client_versions{.http2_ = false}) {
             stage = "independent-informational";
             co_await exercise_independent_informational(loop, client);
@@ -778,7 +778,7 @@ ruvia::task<void> exercise_connection_controls(ruvia::event_loop loop, std::uint
             for (int attempt = 0; attempt != 4; ++attempt) {
                 finish_attempt = attempt;
                 stage = "upload-open";
-                auto upload = co_await client.post("/upload-trailer").header("trailer", "x-upload-checksum").configure({.fresh_connection_ = attempt % 2 == 0}).upload({.expectation_ = ruvia::http_client_request_expectation::continue_value});
+                auto upload = co_await client.post("/upload-trailer").header("trailer", "x-upload-checksum").configure({.fresh_connection_ = attempt % 2 == 0}).upload({.expectation_ = ruvia::http_client_request_expectation::continue_});
                 stage = "upload-write";
                 co_await upload.body().write("last");
                 const std::array fields{ruvia::http_header_view("x-upload-checksum", "finish-race")};
@@ -787,7 +787,7 @@ ruvia::task<void> exercise_connection_controls(ruvia::event_loop loop, std::uint
                 stage = "upload-response";
                 auto response = co_await upload.response();
                 stage = "upload-response-body";
-                const auto text = co_await response.text();
+                const auto text = co_await response.bytes();
                 EXPECT_EQ(text.text(), "uploaded:4:finish-race");
                 EXPECT_EQ(response.trailer("x-response-trailer"), std::optional<std::string_view>{"verified"});
                 stage = "tunnel-open";
@@ -838,7 +838,7 @@ ruvia::task<void> exercise_connection_controls(ruvia::event_loop loop, std::uint
                 EXPECT_NE(updated.connection_info().id_, draining_id);
                 EXPECT_EQ(updated.connection_info().peer_ip_.to_string(), "127.0.0.1");
                 EXPECT_EQ(updated.connection_info().peer_port_, port);
-                (void)co_await updated.text();
+                (void)co_await updated.bytes();
             } catch (...) {
                 replacement_failure = std::current_exception();
             }
@@ -849,7 +849,7 @@ ruvia::task<void> exercise_connection_controls(ruvia::event_loop loop, std::uint
         stage = "dns-draining-body";
         std::exception_ptr drain_failure;
         try {
-            const auto streamed_text = co_await streaming.text();
+            const auto streamed_text = co_await streaming.bytes();
             std::string expected;
             for (int chunk = 0; chunk < stream_chunks; ++chunk) {
                 expected.append("chunk-");
@@ -959,11 +959,11 @@ ruvia::task<void> exercise_mixed_protocol_worker(ruvia::event_loop loop, std::si
             if (h2_owner) {
                 auto warm_h2 = co_await h2_owner->client().get("/hello").send();
                 EXPECT_TRUE(warm_h2.ok());
-                (void)co_await warm_h2.text();
+                (void)co_await warm_h2.bytes();
             }
             auto warm_h3 = co_await h3_owner.client().get("/hello").send();
             EXPECT_TRUE(warm_h3.ok());
-            (void)co_await warm_h3.text();
+            (void)co_await warm_h3.bytes();
         }
         ruvia::task_scope tasks(loop.worker());
         for (int lane = 0; lane < 2; ++lane) {
@@ -998,7 +998,7 @@ ruvia::task<void> run_goaway_reconnect_request(ruvia::http_client_ref client, ru
     auto resp = co_await client.get("/hello").send();
     EXPECT_TRUE(resp.ok());
     EXPECT_TRUE(resp.protocol_version() == expected_version);
-    auto text = co_await resp.text();
+    auto text = co_await resp.bytes();
     EXPECT_EQ(text.text(), "hello over http/3");
 }
 
@@ -1025,11 +1025,11 @@ ruvia::task<void> exercise_capped_goaway_worker(ruvia::event_loop loop, std::uin
             if (h2_owner) {
                 auto w2 = co_await h2_owner->client().get("/hello").send();
                 EXPECT_TRUE(w2.ok());
-                (void)co_await w2.text();
+                (void)co_await w2.bytes();
             }
             auto w3 = co_await h3_owner.client().get("/hello").send();
             EXPECT_TRUE(w3.ok());
-            (void)co_await w3.text();
+            (void)co_await w3.bytes();
         }
         for (int round = 0; round < 4; ++round) {
             ruvia::task_scope tasks(loop.worker());

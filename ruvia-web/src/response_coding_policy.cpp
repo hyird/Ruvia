@@ -185,9 +185,9 @@ task<http_response_compression_status> compress_response_offloaded(http_response
         const auto coding = selection.coding();
         const bool identity_accepted = selection.identity_accepted();
         std::string plain(response.body_bytes());
-        auto result_value = co_await run_blocking(worker_value, {.stop_token_ = stop_token_value}, [coding, identity_accepted, plain = std::move(plain)]() {
+        auto result_value = co_await run_blocking(worker_value, [coding, identity_accepted, plain = std::move(plain)]() {
             return encode_http_content(coding, plain, compressed_body_options(plain, identity_accepted));
-        });
+        }, {.stop_token_ = stop_token_value});
         if (result_value.failed()) {
             ruvia::report_unhandled_failure("response compression", result_value.error());
             co_return http_response_compression_status::failed;

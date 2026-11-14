@@ -391,7 +391,7 @@ template <typename stream_type>
     std::array<char, continue_head_capacity> continue_bytes;
     std::string_view continue_head;
     if (status == http_status::switching_protocols && expectations.continue_before_switching_protocols()) {
-        const auto prepared = prepare_http1_interim_response_head(http_interim_response_head(http_status::continue_value), std::span<char>(continue_bytes));
+        const auto prepared = prepare_http1_interim_response_head(http_interim_response_head(http_status::continue_), std::span<char>(continue_bytes));
         const auto* prepared_head = std::get_if<prepared_http1_interim_response>(&prepared);
         if (prepared_head == nullptr) {
             throw std::logic_error("cannot prepare HTTP/1 100 Continue head");

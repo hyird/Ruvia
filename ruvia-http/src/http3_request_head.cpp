@@ -30,7 +30,7 @@ http3_request_head::http3_request_head(std::int64_t stream_id, std::vector<http_
     stream_ended_(stream_ended),
     early_data_(early_data) {}
 
-std::optional<http3_request_head> http3_request_head::try_create(std::int64_t stream_id, std::vector<http_header> fields, bool stream_ended, bool early_data) {
+std::optional<http3_request_head> http3_request_head::try_parse(std::int64_t stream_id, std::vector<http_header> fields, bool stream_ended, bool early_data) {
     http3_request_head head(stream_id, std::move(fields), stream_ended, early_data);
     if (!head.validate()) {
         return std::nullopt;

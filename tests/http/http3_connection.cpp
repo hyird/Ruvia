@@ -2490,11 +2490,11 @@ TEST(Ruvia, http3_client_response_heads_carry_request_content_signals) {
         ruvia::test::http3_peers peers;
         ASSERT_TRUE(peers.bind());
         ruvia::test::http3_event_log request;
-        ASSERT_TRUE(peers.client_.submit_request_head(0, ruvia::http3_regular_request_head_view{.method_ = "POST", .authority_ = "example.test", .target_ = "/upload", .content_ = ruvia::http_request_content_plan::streaming(3), .expectation_ = ruvia::http_client_request_expectation::continue_value}) == ruvia::http3_submit_status::accepted);
+        ASSERT_TRUE(peers.client_.submit_request_head(0, ruvia::http3_regular_request_head_view{.method_ = "POST", .authority_ = "example.test", .target_ = "/upload", .content_ = ruvia::http_request_content_plan::streaming(3), .expectation_ = ruvia::http_client_request_expectation::continue_}) == ruvia::http3_submit_status::accepted);
         ASSERT_TRUE(peers.to_server(request));
         if (continue_first) {
-            ASSERT_EQ(peers.server_.submit_interim_response_head(0, ruvia::http_interim_response_head(ruvia::http_status::continue_value)), ruvia::http3_submit_status::accepted);
-            ASSERT_EQ(peers.server_.submit_interim_response_head(0, ruvia::http_interim_response_head(ruvia::http_status::continue_value)), ruvia::http3_submit_status::accepted);
+            ASSERT_EQ(peers.server_.submit_interim_response_head(0, ruvia::http_interim_response_head(ruvia::http_status::continue_)), ruvia::http3_submit_status::accepted);
+            ASSERT_EQ(peers.server_.submit_interim_response_head(0, ruvia::http_interim_response_head(ruvia::http_status::continue_)), ruvia::http3_submit_status::accepted);
         }
         ruvia::http_response response;
         response.status(ruvia::http_status::no_content);
@@ -2516,7 +2516,7 @@ TEST(Ruvia, http3_client_response_heads_carry_request_content_signals) {
         EXPECT_TRUE(final_ended);
         if (continue_first) {
             ASSERT_EQ(interim_signals.size(), std::size_t{2});
-            EXPECT_TRUE(interim_signals[0] == ruvia::http_client_request_content_signal::continue_value);
+            EXPECT_TRUE(interim_signals[0] == ruvia::http_client_request_content_signal::continue_);
             EXPECT_FALSE(interim_signals[1].has_value());
             EXPECT_FALSE(final_signal.has_value());
         } else {

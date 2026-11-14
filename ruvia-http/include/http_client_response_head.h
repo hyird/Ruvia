@@ -20,7 +20,7 @@ namespace ruvia {
 // A response-side signal for an external request-body writer. The same signal
 // is emitted by HTTP/1 response plans and HTTP/2 response events.
 enum class http_client_request_content_signal : std::uint8_t {
-    continue_value,
+    continue_,
     exchange_complete,
 };
 

@@ -155,10 +155,10 @@ task<bool> response_file_source::fill(std::size_t bytes, bool completes_range) {
         }
     }
 #endif
-    auto result = co_await run_blocking(io_.worker_, {.timeout_ = io_.timeout_, .stop_token_ = io_.stop_}, [state = std::move(state_), bytes, completes_range]() mutable {
+    auto result = co_await run_blocking(io_.worker_, [state = std::move(state_), bytes, completes_range]() mutable {
         read_ahead(state, bytes, completes_range);
         return std::move(state);
-    });
+    }, {.timeout_ = io_.timeout_, .stop_token_ = io_.stop_});
     if (result.status() != blocking_status::completed) {
         // The state (handle and buffer) stayed with the abandoned operation.
         failure_.emplace(response_file_failure::read_not_completed(result.status()));

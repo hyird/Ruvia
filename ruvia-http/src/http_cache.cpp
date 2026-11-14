@@ -93,7 +93,7 @@ void cache_control_field_parser::update(std::string_view value) noexcept {
         switch (name.size()) {
             case 6U:
                 if (!has_argument && http_ascii_equals_ignore_case(name, "public")) {
-                    value_.set(cache_control_directive::public_value);
+                    value_.set(cache_control_directive::public_);
                 }
                 break;
             case 7U:
@@ -104,11 +104,11 @@ void cache_control_field_parser::update(std::string_view value) noexcept {
                     }
                 } else if (http_ascii_equals_ignore_case(name, "private")) {
                     if (!has_argument) {
-                        value_.set(cache_control_directive::private_value);
+                        value_.set(cache_control_directive::private_);
                         value_.set(cache_control_directive::private_unqualified);
                         value_.private_fields_.clear();
                     } else if (detail::is_http_token_or_quoted_string(arg)) {
-                        value_.set(cache_control_directive::private_value);
+                        value_.set(cache_control_directive::private_);
                         if (!value_.is_unqualified_private()) {
                             const bool added = parse_nominated_field_list_arg(arg, [this](std::string_view field_name) noexcept {
                                 return value_.private_fields_.add_lowercase(field_name);
@@ -371,13 +371,13 @@ std::optional<cache_control> parse_targeted_cache_control_from_input(input_type 
         } else if (key == "proxy-revalidate") {
             apply_bool_directive(cache_control_directive::proxy_revalidate);
         } else if (key == "public") {
-            apply_bool_directive(cache_control_directive::public_value);
+            apply_bool_directive(cache_control_directive::public_);
         } else if (key == "immutable") {
             apply_bool_directive(cache_control_directive::immutable);
         } else if (key == "only-if-cached") {
             apply_bool_directive(cache_control_directive::only_if_cached);
         } else if (key == "private") {
-            apply_qualified_directive(cache_control_directive::private_value, cache_control_directive::private_unqualified, result.private_fields_);
+            apply_qualified_directive(cache_control_directive::private_, cache_control_directive::private_unqualified, result.private_fields_);
         } else if (key == "no-cache") {
             apply_qualified_directive(cache_control_directive::no_cache, cache_control_directive::no_cache_unqualified, result.no_cache_fields_);
         } else if (key == "max-age") {

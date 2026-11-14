@@ -781,7 +781,7 @@ TEST(Ruvia, redis_set_result_copy_and_assignment_preserve_previous_value) {
     ruvia::redis_client client(worker.loop(), {.host_ = "127.0.0.1", .port_ = peer.port(), .tls_ = {.mode_ = ruvia::client_tls_mode::disabled}, .pool_size_per_worker_ = 1});
     ruvia::test::drive_backend_client(worker, client, [&](ruvia::redis_client& connected) -> ruvia::task<void> {
         auto redis = connected.redis();
-        const ruvia::redis_set_options return_previous{.condition_ = ruvia::redis_set_condition::if_absent, .previous_value_ = ruvia::redis_set_previous_value_policy::return_value};
+        const ruvia::redis_set_options return_previous{.condition_ = ruvia::redis_set_condition::if_absent, .previous_value_ = ruvia::redis_set_previous_value_policy::return_};
         const auto with_text = co_await redis.set("key", "replacement", return_previous);
         const auto empty_text = co_await redis.set("key", "replacement", return_previous);
         const auto absent = co_await redis.set("key", "replacement", return_previous);
@@ -848,7 +848,7 @@ TEST(Ruvia, redis_typed_replies_retain_binary_payloads_and_recover_from_invalid_
         auto redis = connected.redis();
         const auto scalar = co_await redis.get(key);
         const auto status = co_await redis.ping(payload);
-        const auto previous = co_await redis.set(key, "new", {.previous_value_ = ruvia::redis_set_previous_value_policy::return_value});
+        const auto previous = co_await redis.set(key, "new", {.previous_value_ = ruvia::redis_set_previous_value_policy::return_});
         const std::array<std::string_view, 3> keys{key, "missing", "empty"};
         const auto optional_values = co_await redis.mget(keys);
         const auto list = co_await redis.lrange(key, 0, -1);

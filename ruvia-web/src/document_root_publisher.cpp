@@ -93,13 +93,13 @@ task<void> document_root_publisher::refresh(const worker_ref& worker, const http
     try {
         // The unchanged-snapshot comparison walks every entry, so it runs on
         // the pool with the rebuild; an unchanged root yields no candidate.
-        auto rebuilt = co_await ruvia::run_blocking(worker, {.stop_token_ = stop}, [previous, root = root_] {
+        auto rebuilt = co_await ruvia::run_blocking(worker, [previous, root = root_] {
             auto built = static_root_access::make(root, static_root_access::copy_config(*previous));
             if (static_root_access::fingerprint(*built) == static_root_access::fingerprint(*previous) && static_root_access::same_snapshot(*built, *previous)) {
                 built.reset();
             }
             return built;
-        });
+        }, {.stop_token_ = stop});
         if (!rebuilt.completed()) {
             // A refresh is transactional: keep serving the last complete
             // index, but expose filesystem/permission failures to metrics
@@ -124,11 +124,11 @@ task<void> document_root_publisher::refresh(const worker_ref& worker, const http
 
     if (precompression_.enabled() || resident_.enabled()) {
         try {
-            auto prepared = co_await ruvia::run_blocking(worker, {.stop_token_ = stop}, [candidate = std::move(candidate), previous, precompression = precompression_, resident = resident_]() mutable {
+            auto prepared = co_await ruvia::run_blocking(worker, [candidate = std::move(candidate), previous, precompression = precompression_, resident = resident_]() mutable {
                 static_root_access::install_resident_bodies(*candidate, previous.get(), resident);
                 static_root_access::install_precompressed_variants(*candidate, previous.get(), precompression);
                 return std::move(candidate);
-            });
+            }, {.stop_token_ = stop});
             if (!prepared.completed()) {
                 if (prepared.failed()) {
                     record_failure(prepared.error());

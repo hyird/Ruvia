@@ -305,7 +305,7 @@ private:
 - **计数时点**：接收方向计完整解析的帧，被拒绝的帧不计；发送方向计已成功交付传输的字节；两者单调饱和于 `std::uint64_t`。
 - **访问期限**：`websocket` 失效（请求处理结束）后访问器返回 `none` 与 `0`；需要会话最终值时在处理器内 `close()` 或读到 `std::nullopt` 后读取。
 
-`websocket_close_options::code_` 与 Sans-I/O `websocket_connection::submit_close()` 共用受检值类型 `websocket_close_code`，拒绝隐式整数转换。使用 `websocket_close_status::{normal_closure, going_away, internal_error}` 常量，或通过 `websocket_close_code::from_value(input)` 在原始整数宽度校验；非法值抛 `std::invalid_argument`，`try_from_value(input)` 返回 `nullopt`，拒绝时尚未进入关闭操作。不要先转换成 `uint16_t`：`66536`、`-64536` 不能截断成正常关闭 `1000`。可表示当前支持的 `1000..1003`、`1007..1014` 与 `3000..4999`，不允许本地哨兵码 `1005` / `1006` 或保留码上网；`1010` 仍只允许客户端主动发送（RFC 6455 §7.4.1）。接收事件的 `close_code()` 保留整数语义，包括未出示状态时的本地 `1005`，不能未经检查直接复用于发送。
+`websocket_close_options::code_` 与 Sans-I/O `websocket_connection::submit_close()` 共用受检值类型 `websocket_close_code`，拒绝隐式整数转换。使用 `websocket_close_status::{normal_closure, going_away, internal_error}` 常量，或通过 `websocket_close_code(input)`（`explicit`）在原始整数宽度校验；非法值抛 `std::invalid_argument`，`try_from_value(input)` 返回 `nullopt`，拒绝时尚未进入关闭操作。不要先转换成 `uint16_t`：`66536`、`-64536` 不能截断成正常关闭 `1000`。可表示当前支持的 `1000..1003`、`1007..1014` 与 `3000..4999`，不允许本地哨兵码 `1005` / `1006` 或保留码上网；`1010` 仍只允许客户端主动发送（RFC 6455 §7.4.1）。接收事件的 `close_code()` 保留整数语义，包括未出示状态时的本地 `1005`，不能未经检查直接复用于发送。
 
 `websocket_message` 方法：
 - `opcode()`（`websocket_opcode::text` 或 `binary`）
@@ -421,13 +421,13 @@ if (!response.ok()) {
     c.draft().status(ruvia::http_status::bad_gateway);
     co_return c.text("upstream failed");
 }
-auto body = co_await response.text();
+auto body = co_await response.bytes();
 co_return c.text(body.text());
 ```
 
 | 入口 | 契约 |
 | --- | --- |
-| `get/post/put/patch/del/head/options(path)`、`request(method, path)` | 返回拥有输入的请求构造器；配置的 `base_url_` 决定 origin |
+| `get/post/put/patch/delete_/head/options(path)`、`request(method, path)` | 返回拥有输入的请求构造器；配置的 `base_url_` 决定 origin |
 | `.query(name, value)`、`.header(name, value)`、`.headers(fields)` | 添加查询参数与请求字段 |
 | `.body(bytes)`、`.json(value)` | 设置拥有型请求体；JSON 使用同一套 Model 序列化契约 |
 | `.send()` | 消费构造器，返回惰性 `task<http_client_response>`；同一构造器不能重复发送 |
@@ -435,7 +435,7 @@ co_return c.text(body.text());
 | `response.ok()`、`status()`、`protocol_version()` | 查询 2xx 成功状态、HTTP 状态和实际协议版本 |
 | `response.framing()` / `content_length()` | 查询协议计划的正文分帧与已解析长度元数据；HEAD/304 可携带长度，HTTP/2、HTTP/3 的流分帧也可同时有长度，不等于解码后的字节数 |
 | `response.connection_info()` | 借用物理连接 ID、对端 IP/端口、复用标志及连接/TLS 阶段耗时；隧道结果同样提供连接信息 |
-| `response.text(max_bytes)`、`bytes(max_bytes)` | 收集尚未消费的正文；返回拥有型 `http_client_response_bytes`，以 `.text()` / `.bytes()` 借用内容 |
+| `response.bytes(max_bytes)` | 收集尚未消费的正文；返回拥有型 `http_client_response_bytes`，以 `.text()` / `.bytes()` 借用内容 |
 | `response.json<T>(max_bytes)` | 收集正文并按公开 Model JSON 契约解析 |
 | `response.stream().read()` / `.text()` | 拉取下一块正文；`nullopt` 表示 EOF，视图在下一次正文操作启动前有效 |
 | `response.pipe_to(c)` / `response.pipe_to(request_stream)` | 将上游响应转发给当前服务端响应；提交后的传输失败中止流，不伪造完整响应 |
@@ -446,7 +446,7 @@ co_return c.text(body.text());
 | `client.migrate(local_address, port)` | 对已有 HTTP/3 连接发起本地地址迁移，保留连接与流状态 |
 | `client.websocket(path).connect()` | 返回拥有型 `websocket`；与服务端共用同一个类型、消息写入器和会话状态机（见 [3.2](#32-ruviawebsocket-与-ruviawebsocket_message-api)） |
 
-`text()`、`bytes()`、`json<T>()` 与 `stream()` 消费同一条线性正文流，不缓存可重复读取的副本。结果收集同时受调用方 `max_bytes`、客户端响应上限和 worker 共享结果预算约束。Header/Trailer 视图借用响应对象；拥有型收集结果可独立保留。
+`bytes()`、`json<T>()` 与 `stream()` 消费同一条线性正文流，不缓存可重复读取的副本。结果收集同时受调用方 `max_bytes`、客户端响应上限和 worker 共享结果预算约束。Header/Trailer 视图借用响应对象；拥有型收集结果可独立保留。
 
 - **双向异常归属**：上传失败不追溯撤销已验证完整的响应；响应尚未完成时，导致交换失败的传输或解码异常仍由响应消费入口报告。
 
@@ -454,7 +454,7 @@ co_return c.text(body.text());
 
 | 入口 | 超时或取消时 |
 | --- | --- |
-| 正文 `read()` / `text()`、`read_all()` / `bytes()` / `text(max)` / `json<T>()`，隧道 `read()` / `text()` | 只结束本次等待，抛 `http_client_error`（标准 `errc::timed_out` / `operation_canceled`）；已缓冲正文与读通道保留，可继续读取 |
+| 正文 `read()` / `text()`、`read_all()` / `bytes()` / `json<T>()`，隧道 `read()` / `text()` | 只结束本次等待，抛 `http_client_error`（标准 `errc::timed_out` / `operation_canceled`）；已缓冲正文与读通道保留，可继续读取 |
 | `exchange.response()`、`push.response()` | 只结束本次等待响应头；随后可再次调用 `response()` |
 | 上传 `write()` / `end()`，隧道 `write()` / `finish()` | 中止该交换或隧道（已写出部分无法撤回），抛标准 `errc::timed_out` / `operation_canceled` |
 | `stream().pipe_to(writer)`、`pipe_to(c)` | 约束整次转发；中断抛标准 `errc::timed_out` / `operation_canceled`，已提交下游随异常中止 |

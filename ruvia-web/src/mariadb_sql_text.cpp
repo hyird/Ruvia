@@ -86,9 +86,9 @@ void append_string_literal(std::string& output, std::string_view value, bool bac
         case db_value_type::signed_value:
         case db_value_type::unsigned_value:
             return 32;
-        case db_value_type::double_value:
+        case db_value_type::double_:
             return 64;
-        case db_value_type::bool_value:
+        case db_value_type::bool_:
             return 1;
     }
     return 0;
@@ -108,10 +108,10 @@ void append_value_literal(std::string& output, const db_value& value, bool backs
         case db_value_type::unsigned_value:
             append_db_number(output, value.unsigned_value());
             break;
-        case db_value_type::double_value:
+        case db_value_type::double_:
             append_db_double_literal(output, value.double_value(), db_driver::mariadb);
             break;
-        case db_value_type::bool_value:
+        case db_value_type::bool_:
             output.push_back(value.bool_value() ? '1' : '0');
             break;
     }

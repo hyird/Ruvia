@@ -629,7 +629,7 @@ TEST(Ruvia, http_client_builders_enforce_consumed_state_websocket_options_and_di
         EXPECT_THROW(builder.redirects(1), std::logic_error);
         auto response = co_await std::move(pending);
         EXPECT_EQ(response.status(), ruvia::http_status::ok);
-        const auto body = co_await response.text();
+        const auto body = co_await response.bytes();
         EXPECT_EQ(body.text(), "ok");
 
         EXPECT_THROW(client.client().websocket("/ws").configure({.dial_port_ = 0}), std::invalid_argument);
@@ -718,11 +718,11 @@ TEST(Ruvia, http_client_plain_connect_omits_origin_cookies_even_for_matching_aut
                 .cookies_ = {{"configured_secret", "1"}},
             });
         auto seeded = co_await client.client().get("/seed").send();
-        const auto seeded_body = co_await seeded.text();
+        const auto seeded_body = co_await seeded.bytes();
         EXPECT_EQ(seeded_body.text(), "ok");
 
         auto verified = co_await client.client().get("/verify").send();
-        const auto verified_body = co_await verified.text();
+        const auto verified_body = co_await verified.bytes();
         EXPECT_EQ(verified_body.text(), "ok");
 
         auto opened = co_await client.client().connect(authority).open();

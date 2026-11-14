@@ -29,7 +29,7 @@ struct http_conditional_method_plan final {
             return {true, true, true, false};
         case http_known_method::post:
         case http_known_method::put:
-        case http_known_method::delete_value:
+        case http_known_method::delete_:
         case http_known_method::patch:
             return {true, false, false, false};
         case http_known_method::options:

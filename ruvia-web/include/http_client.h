@@ -252,10 +252,6 @@ public:
         return body_.read_all(max_bytes, std::move(operation));
     }
     task<http_client_response_bytes> bytes(std::size_t = default_max_buffered_body_bytes, operation_options = {}) && = delete;
-    [[nodiscard]] task<http_client_response_bytes> text(std::size_t max_bytes = default_max_buffered_body_bytes, operation_options operation = {}) & {
-        return body_.read_all(max_bytes, std::move(operation));
-    }
-    task<http_client_response_bytes> text(std::size_t = default_max_buffered_body_bytes, operation_options = {}) && = delete;
     template <typename value_type>
         requires detail::is_model_json_value<value_type>
     [[nodiscard]] task<value_type> json(std::size_t max_bytes = default_max_buffered_body_bytes, operation_options operation = {}) & {
@@ -567,7 +563,7 @@ public:
     [[nodiscard]] http_client_request post(std::string_view path) const;
     [[nodiscard]] http_client_request put(std::string_view path) const;
     [[nodiscard]] http_client_request patch(std::string_view path) const;
-    [[nodiscard]] http_client_request del(std::string_view path) const;
+    [[nodiscard]] http_client_request delete_(std::string_view path) const;
     [[nodiscard]] http_client_request head(std::string_view path) const;
     [[nodiscard]] http_client_request options(std::string_view path) const;
     [[nodiscard]] http_client_connect_request connect(std::string_view authority) const;

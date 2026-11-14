@@ -426,7 +426,7 @@ class controller_registration_access final {
 // response-stream (including SSE) GET routes provide an implicit HEAD fallback
 // without another route record (RFC 9110 9.3.2: same handler and head fields,
 // body suppressed); websocket GET routes require an explicit HEAD route.
-inline constexpr std::array ruvia_all_route_methods = {http_known_method::get, http_known_method::post, http_known_method::put, http_known_method::patch, http_known_method::delete_value, http_known_method::options};
+inline constexpr std::array ruvia_all_route_methods = {http_known_method::get, http_known_method::post, http_known_method::put, http_known_method::patch, http_known_method::delete_, http_known_method::options};
 
 // Startup-only holder for the RUVIA_ON method list; the macro pastes the
 // parenthesized list as a constructor call.
@@ -585,7 +585,7 @@ private:                                                                        
 
 #define RUVIA_PUT(path, handler, ...) RUVIA_DETAIL_ADD_METHOD_ROUTE(::ruvia::http_known_method::put, path, handler __VA_OPT__(, ) __VA_ARGS__)
 
-#define RUVIA_DELETE(path, handler, ...) RUVIA_DETAIL_ADD_METHOD_ROUTE(::ruvia::http_known_method::delete_value, path, handler __VA_OPT__(, ) __VA_ARGS__)
+#define RUVIA_DELETE(path, handler, ...) RUVIA_DETAIL_ADD_METHOD_ROUTE(::ruvia::http_known_method::delete_, path, handler __VA_OPT__(, ) __VA_ARGS__)
 
 #define RUVIA_PATCH(path, handler, ...) RUVIA_DETAIL_ADD_METHOD_ROUTE(::ruvia::http_known_method::patch, path, handler __VA_OPT__(, ) __VA_ARGS__)
 
@@ -614,7 +614,7 @@ private:                                                                        
     }
 
 // Hono app.on: registers the handler for an explicit method x path list, e.g.
-// RUVIA_ON((ruvia::http_known_method::put, ruvia::http_known_method::delete_value),
+// RUVIA_ON((ruvia::http_known_method::put, ruvia::http_known_method::delete_),
 //     ("/items/:id", "/legacy/:id"), handler).
 #define RUVIA_ON(methods, paths, handler, ...)                                                                                                                                                                                                                                    \
     {                                                                                                                                                                                                                                                                             \

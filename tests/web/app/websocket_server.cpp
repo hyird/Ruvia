@@ -137,7 +137,7 @@ ruvia::task<void> close_under_pending_read(ruvia::websocket& websocket, const ru
     reads.spawn(read_to_end(websocket, ended));
     std::exception_ptr failure;
     try {
-        co_await websocket.close({.code_ = ruvia::websocket_close_code::from_value(4001), .reason_ = "token expired"});
+        co_await websocket.close({.code_ = ruvia::websocket_close_code(4001), .reason_ = "token expired"});
     } catch (...) {
         failure = std::current_exception();
         websocket.abort();

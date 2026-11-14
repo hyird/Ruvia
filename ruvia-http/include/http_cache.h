@@ -28,8 +28,8 @@ enum class cache_control_directive : std::uint16_t {
     no_transform = 1U << 2,
     must_revalidate = 1U << 3,
     proxy_revalidate = 1U << 4,
-    private_value = 1U << 5,
-    public_value = 1U << 6,
+    private_ = 1U << 5,
+    public_ = 1U << 6,
     immutable = 1U << 7,
     only_if_cached = 1U << 8,
     max_stale_any = 1U << 9,
@@ -63,7 +63,7 @@ public:
         return has(cache_control_directive::proxy_revalidate);
     }
     [[nodiscard]] constexpr bool is_private() const noexcept {
-        return has(cache_control_directive::private_value);
+        return has(cache_control_directive::private_);
     }
     [[nodiscard]] constexpr bool is_unqualified_private() const noexcept {
         return has(cache_control_directive::private_unqualified);
@@ -78,7 +78,7 @@ public:
         return no_cache() && !is_unqualified_no_cache();
     }
     [[nodiscard]] constexpr bool is_public() const noexcept {
-        return has(cache_control_directive::public_value);
+        return has(cache_control_directive::public_);
     }
     [[nodiscard]] constexpr bool immutable() const noexcept {
         return has(cache_control_directive::immutable);

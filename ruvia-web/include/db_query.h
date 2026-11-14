@@ -49,8 +49,8 @@ enum class db_binary_operator : std::uint8_t {
     less_equal,
     greater,
     greater_equal,
-    and_value,
-    or_value,
+    and_,
+    or_,
     add,
     subtract,
     multiply,
@@ -91,7 +91,7 @@ enum class db_binary_operator : std::uint8_t {
     inet_contained_by_or_equal,
     inet_overlap,
 };
-enum class db_unary_operator : std::uint8_t { not_value,
+enum class db_unary_operator : std::uint8_t { not_,
     negate,
     bit_not,
     is_null,
@@ -107,17 +107,17 @@ enum class db_join_type : std::uint8_t { inner,
     cross };
 enum class db_order_direction : std::uint8_t { asc,
     desc };
-enum class db_nulls_order : std::uint8_t { default_value,
+enum class db_nulls_order : std::uint8_t { default_,
     first,
     last };
 enum class db_row_lock : std::uint8_t { update,
     no_key_update,
     share,
     key_share };
-enum class db_materialization : std::uint8_t { default_value,
+enum class db_materialization : std::uint8_t { default_,
     materialized,
     not_materialized };
-enum class db_set_operation : std::uint8_t { union_value,
+enum class db_set_operation : std::uint8_t { union_,
     union_all,
     intersect,
     intersect_all,
@@ -202,7 +202,7 @@ struct db_source_options final {
 // 独立保存 options 时，数组及文本 owner 必须存活到入口消费完成。
 struct db_cte_options final {
     bool recursive_{false};
-    db_materialization materialization_{db_materialization::default_value};
+    db_materialization materialization_{db_materialization::default_};
     borrowed_span<borrowed_text> columns_{};
 };
 // span 及元素中的文本均为借用；lock/set_lock 入口同步复制或导入。
@@ -232,14 +232,14 @@ public:
         empty,
         borrowed,
         null_value,
-        default_value,
+        default_,
         star,
         column,
         excluded,
         signed_value,
         unsigned_value,
-        double_value,
-        bool_value,
+        double_,
+        bool_,
         tree,
     };
 
@@ -369,7 +369,7 @@ public:
         if (empty()) {
             owned_ = other.owned_;
         } else {
-            owned_ = detail::db_owned_expression::make_binary(std::move(owned_), db_binary_operator::and_value, other.owned_);
+            owned_ = detail::db_owned_expression::make_binary(std::move(owned_), db_binary_operator::and_, other.owned_);
         }
         return *this;
     }
@@ -380,21 +380,21 @@ public:
         if (empty()) {
             owned_ = other.owned_;
         } else {
-            owned_ = detail::db_owned_expression::make_binary(std::move(owned_), db_binary_operator::or_value, other.owned_);
+            owned_ = detail::db_owned_expression::make_binary(std::move(owned_), db_binary_operator::or_, other.owned_);
         }
         return *this;
     }
     friend db_predicate operator&&(db_predicate left, const db_predicate& right) {
-        return combine(std::move(left), db_binary_operator::and_value, right);
+        return combine(std::move(left), db_binary_operator::and_, right);
     }
     friend db_predicate operator||(db_predicate left, const db_predicate& right) {
-        return combine(std::move(left), db_binary_operator::or_value, right);
+        return combine(std::move(left), db_binary_operator::or_, right);
     }
     friend db_predicate operator!(db_predicate value) {
         if (value.empty()) {
             throw std::invalid_argument("cannot negate an empty database condition");
         }
-        return db_predicate(detail::db_owned_expression::make_unary(db_unary_operator::not_value, std::move(value.owned_)));
+        return db_predicate(detail::db_owned_expression::make_unary(db_unary_operator::not_, std::move(value.owned_)));
     }
 
 private:
@@ -621,8 +621,8 @@ public:
     [[nodiscard]] inline db_expr over(const db_window_options& window) const;
     [[nodiscard]] inline db_expr within_group(std::span<const db_order_term> order) const;
     [[nodiscard]] inline db_expr within_group(std::initializer_list<db_order_term> order) const;
-    [[nodiscard]] inline db_order_term asc(db_nulls_order nulls = db_nulls_order::default_value) const;
-    [[nodiscard]] inline db_order_term desc(db_nulls_order nulls = db_nulls_order::default_value) const;
+    [[nodiscard]] inline db_order_term asc(db_nulls_order nulls = db_nulls_order::default_) const;
+    [[nodiscard]] inline db_order_term desc(db_nulls_order nulls = db_nulls_order::default_) const;
 
     [[nodiscard]] db_expr operator-() const {
         return unary_expr(db_unary_operator::negate);
@@ -820,7 +820,7 @@ template <detail::db_parameter v_type>
 struct db_order_term final {
     db_expr expression_{};
     db_order_direction direction_{db_order_direction::asc};
-    db_nulls_order nulls_{db_nulls_order::default_value};
+    db_nulls_order nulls_{db_nulls_order::default_};
 };
 // span 及元素中的文本均为借用；over 调用入口同步复制或导入。
 // 独立保存 options 时，数组及文本 owner 必须存活到入口消费完成。
@@ -1163,8 +1163,8 @@ public:
     db_query& and_having(db_expression predicate);
     db_query& or_having(db_expression predicate);
     db_query& clear_having();
-    db_query& order_by(db_expression expression, db_order_direction direction = db_order_direction::asc, db_nulls_order nulls = db_nulls_order::default_value);
-    db_query& add_order_by(db_expression expression, db_order_direction direction = db_order_direction::asc, db_nulls_order nulls = db_nulls_order::default_value);
+    db_query& order_by(db_expression expression, db_order_direction direction = db_order_direction::asc, db_nulls_order nulls = db_nulls_order::default_);
+    db_query& add_order_by(db_expression expression, db_order_direction direction = db_order_direction::asc, db_nulls_order nulls = db_nulls_order::default_);
     db_query& clear_order();
     db_query& limit(std::optional<query_row_count> count);
     template <std::integral integer_type>

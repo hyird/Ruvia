@@ -239,7 +239,7 @@ ruvia::task<void> serve(ruvia::request_stream& stream) {
         stream.draft().header("x-runtime-count", std::to_string(count));
         stream.draft().header("x-worker", std::to_string(stream.worker().id()));
         auto upstream = co_await stream.client().get("/ping").send();
-        auto body = co_await upstream.text();
+        auto body = co_await upstream.bytes();
         EXPECT_EQ(body.text().size(), 2048);
         EXPECT_THROW(static_cast<void>(stream.run_blocking(
                          [] {
@@ -449,7 +449,7 @@ ruvia::task<void> exercise(ruvia::http_client_ref client, ruvia::http_protocol_v
         }
         EXPECT_EQ(response.header("x-upload-checksum").value_or(""), "verified") << label;
         EXPECT_EQ(response.header("x-upload-trailers").value_or(""), "1") << label;
-        const auto content = co_await response.text();
+        const auto content = co_await response.bytes();
         EXPECT_EQ(content.text(), "uploaded:content") << label;
     }
     {
@@ -465,14 +465,14 @@ ruvia::task<void> exercise(ruvia::http_client_ref client, ruvia::http_protocol_v
             }
             previous = count;
             previous_worker = current_worker;
-            const auto content = co_await response.text();
+            const auto content = co_await response.bytes();
             EXPECT_EQ(content.text(), "runtime-ready") << label;
         }
     }
     if (version == ruvia::http_protocol_version::http2) {
         auto response = co_await client.get("/push").send();
         EXPECT_EQ(response.header("x-push").value_or(""), "yes") << label;
-        (void)co_await response.text();
+        (void)co_await response.bytes();
         auto pushed = client.next_push();
         for (int attempt = 0; !pushed && attempt != 5000; ++attempt) {
             (void)co_await ruvia::sleep_for(worker, 1ms);
@@ -482,14 +482,14 @@ ruvia::task<void> exercise(ruvia::http_client_ref client, ruvia::http_protocol_v
         if (pushed) {
             EXPECT_EQ(pushed->request().path_, "/pushed") << label;
             auto pushed_response = co_await pushed->response();
-            const auto body = co_await pushed_response.text();
+            const auto body = co_await pushed_response.bytes();
             EXPECT_EQ(body.text(), "pushed-body") << label;
         }
     }
     if (version != ruvia::http_protocol_version::http11 && client.scheme() == ruvia::http_scheme::https) {
         auto response = co_await client.get("/advertise").send();
         const std::string origin(response.header("x-advertised-origin").value_or(""));
-        (void)co_await response.text();
+        (void)co_await response.bytes();
         bool origins_seen = false;
         bool alternative_seen = false;
         for (int attempt = 0; attempt != 5000 && (!origins_seen || (version == ruvia::http_protocol_version::http2 && !alternative_seen)); ++attempt) {
@@ -553,7 +553,7 @@ ruvia::task<void> exercise(ruvia::http_client_ref client, ruvia::http_protocol_v
     for (const auto& [path, status] : {std::pair<std::string_view, unsigned>{"/fail", 500}, std::pair<std::string_view, unsigned>{"/silent", 500}, std::pair<std::string_view, unsigned>{"/conflict", 409}}) {
         auto response = co_await client.get(path).send();
         EXPECT_EQ(response.status().value(), status) << label << ' ' << path;
-        (void)co_await response.text();
+        (void)co_await response.bytes();
     }
     {
         // A failure after commit aborts the response the client is reading.
@@ -1267,7 +1267,7 @@ TEST(Ruvia, request_stream_body_wait_cancellation_and_reset_are_isolated) {
                             auto response = co_await exchange.response();
                             EXPECT_FALSE(reset);
                             EXPECT_EQ(response.status(), ruvia::http_status::forbidden);
-                            (void)co_await response.text();
+                            (void)co_await response.bytes();
                         } catch (const ruvia::http_client_error&) {
                             reset_seen = true;
                         }
@@ -1277,13 +1277,13 @@ TEST(Ruvia, request_stream_body_wait_cancellation_and_reset_are_isolated) {
                             co_await survivor->body().end();
                             auto response = co_await survivor->response();
                             EXPECT_EQ(response.header("x-connection-id").value_or(""), std::to_string(connection));
-                            (void)co_await response.text();
+                            (void)co_await response.bytes();
                         }
                         auto next = co_await client.client().get("/other").send();
                         const auto next_id = std::string(next.header("x-connection-id").value_or(""));
                         // An HTTP/1 body left incomplete closes its connection; a resumed one keeps it.
                         EXPECT_EQ(next_id == std::to_string(connection), multiplexed || resume_body);
-                        (void)co_await next.text();
+                        (void)co_await next.bytes();
                     }
                     if (multiplexed) {
                         stop.emplace();
@@ -1314,7 +1314,7 @@ TEST(Ruvia, request_stream_body_wait_cancellation_and_reset_are_isolated) {
                     }
                     {
                         auto response = co_await client.client().get("/cold").send();
-                        (void)co_await response.text();
+                        (void)co_await response.bytes();
                         // 收到响应EOF不意味着服务端已完成协程/正文facade的清理。
                         // 等待真实连接退休通知，确定冷任务的宿主已销毁，不靠延时。
                         retiring_connection = std::stoull(std::string(response.header("x-connection-id").value_or("0")));
@@ -1564,13 +1564,13 @@ TEST(Ruvia, request_stream_operation_options_bound_each_wait) {
                     co_await exchange.body().end();
                     auto read_response = co_await exchange.response();
                     EXPECT_EQ(read_response.status(), ruvia::http_status::ok) << target.label_;
-                    const auto read_bytes = co_await read_response.text();
+                    const auto read_bytes = co_await read_response.bytes();
                     EXPECT_EQ(read_bytes.text(), "abcdef") << target.label_;
 
                     auto prestopped_response = co_await client.client().get("/prestopped").send();
                     EXPECT_EQ(prestopped_response.status(), ruvia::http_status::ok) << target.label_;
                     EXPECT_TRUE(prestopped_response.informational_responses().empty()) << target.label_;
-                    const auto prestopped_bytes = co_await prestopped_response.text();
+                    const auto prestopped_bytes = co_await prestopped_response.bytes();
                     EXPECT_EQ(prestopped_bytes.text(), "ok") << target.label_;
 
                     for (const std::string_view write_path : {"/write/timeout", "/write/stop"}) {
@@ -2086,7 +2086,7 @@ TEST(Ruvia, response_pipe_bounds_upstream_reads_and_downstream_writes) {
                         EXPECT_EQ(body, "first-second") << target.label_;
                     }
                     auto prestopped = co_await client.client().get("/proxy/prestopped").send();
-                    const auto prestopped_body = co_await prestopped.text();
+                    const auto prestopped_body = co_await prestopped.bytes();
                     EXPECT_EQ(prestopped_body.text(), "first-second") << target.label_;
                     phase = 0;
                     auto stalled = co_await client.client().get("/proxy/downstream-timeout").send();
@@ -2163,7 +2163,7 @@ TEST(Ruvia, response_pipe_to_request_stream_forwards_status_headers_body_and_tra
             EXPECT_EQ(response.status(), ruvia::http_status::created);
             EXPECT_EQ(response.header("x-end-to-end").value_or(""), "retained");
             EXPECT_FALSE(response.header("x-private").has_value());
-            const auto body = co_await response.text();
+            const auto body = co_await response.bytes();
             EXPECT_EQ(body.text(), "forwarded-body");
             EXPECT_EQ(response.trailers().size(), 1U);
             if (!response.trailers().empty()) {

@@ -23,14 +23,14 @@ TEST(Ruvia, multipart_boundary_value_enforces_rfc2046_grammar) {
         }
     };
     const auto rejected = [&throws_on](std::string_view value) {
-        return throws_on(value) && !ruvia::multipart_boundary::try_create(value).has_value();
+        return throws_on(value) && !ruvia::multipart_boundary::try_from_value(value).has_value();
     };
 
     const auto spaced = ruvia::multipart_boundary("a b");
     EXPECT_EQ(spaced.value(), std::string_view("a b"));
     const auto maximum = ruvia::multipart_boundary(std::string(70, 'x'));
     EXPECT_EQ(maximum.value().size(), std::size_t{70});
-    const auto created = ruvia::multipart_boundary::try_create("a b");
+    const auto created = ruvia::multipart_boundary::try_from_value("a b");
     EXPECT_TRUE(created.has_value());
     if (created) {
         EXPECT_EQ(created->value(), std::string_view("a b"));
@@ -755,14 +755,14 @@ static_assert(!can_construct_received_status<received_status_enum>);
 }  // namespace
 
 TEST(Ruvia, http_status_code_validates_the_wire_value_boundary) {
-    EXPECT_TRUE(ruvia::http_status_code::try_from_value(100) == ruvia::http_status::continue_value);
-    EXPECT_TRUE(ruvia::http_status_code::try_from_value(599) == ruvia::http_status_code::from_value(599));
+    EXPECT_TRUE(ruvia::http_status_code::try_from_value(100) == ruvia::http_status::continue_);
+    EXPECT_TRUE(ruvia::http_status_code::try_from_value(599) == ruvia::http_status_code(599));
     EXPECT_TRUE(!ruvia::http_status_code::try_from_value(99).has_value());
     EXPECT_TRUE(!ruvia::http_status_code::try_from_value(600).has_value());
 
     bool threw = false;
     try {
-        (void)ruvia::http_status_code::from_value(600);
+        (void)ruvia::http_status_code(600);
     } catch (const std::invalid_argument&) {
         threw = true;
     }
@@ -775,7 +775,7 @@ TEST(Ruvia, http_status_code_rejects_original_integers_before_wire_narrowing) {
         EXPECT_TRUE(!ruvia::http_status_code::try_from_value(input).has_value());
         bool threw = false;
         try {
-            (void)ruvia::http_status_code::from_value(input);
+            (void)ruvia::http_status_code(input);
         } catch (const std::invalid_argument&) {
             threw = true;
         }
@@ -788,8 +788,8 @@ TEST(Ruvia, http_status_code_rejects_original_integers_before_wire_narrowing) {
     check_rejected(std::uint64_t{65736});
     check_rejected((std::numeric_limits<std::uint64_t>::max)());
 
-    EXPECT_TRUE(ruvia::http_status_code::try_from_value(std::int64_t{100}) == ruvia::http_status::continue_value);
-    EXPECT_TRUE(ruvia::http_status_code::try_from_value(std::uint64_t{599}) == ruvia::http_status_code::from_value(599));
+    EXPECT_TRUE(ruvia::http_status_code::try_from_value(std::int64_t{100}) == ruvia::http_status::continue_);
+    EXPECT_TRUE(ruvia::http_status_code::try_from_value(std::uint64_t{599}) == ruvia::http_status_code(599));
 }
 
 TEST(Ruvia, http_received_status_rejects_original_integers_before_wire_narrowing) {
@@ -809,7 +809,7 @@ TEST(Ruvia, http_received_status_preserves_every_three_digit_value_and_its_seman
         const auto received = ruvia::http_received_status::try_from_value(value);
         ASSERT_TRUE(received.has_value());
         EXPECT_EQ(received->value(), value);
-        const auto expected = value >= 100 && value <= 599 ? ruvia::http_status_code::from_value(value) : ruvia::http_status::internal_server_error;
+        const auto expected = value >= 100 && value <= 599 ? ruvia::http_status_code(value) : ruvia::http_status::internal_server_error;
         EXPECT_EQ(received->status(), expected);
     }
 }
@@ -827,10 +827,10 @@ TEST(Ruvia, http_reason_phrase_is_conventional_http1_presentation) {
 TEST(Ruvia, http_reason_phrase_does_not_mislabel_extension_statuses) {
     // 104 is still a temporary draft registration, so its unstable name is not
     // promoted into the framework's stable public vocabulary.
-    EXPECT_TRUE(http_reason_phrase(ruvia::http_status_code::from_value(104)).empty());
-    EXPECT_TRUE(http_reason_phrase(ruvia::http_status_code::from_value(299)).empty());
-    EXPECT_TRUE(http_reason_phrase(ruvia::http_status_code::from_value(499)).empty());
-    EXPECT_TRUE(http_reason_phrase(ruvia::http_status_code::from_value(599)).empty());
+    EXPECT_TRUE(http_reason_phrase(ruvia::http_status_code(104)).empty());
+    EXPECT_TRUE(http_reason_phrase(ruvia::http_status_code(299)).empty());
+    EXPECT_TRUE(http_reason_phrase(ruvia::http_status_code(499)).empty());
+    EXPECT_TRUE(http_reason_phrase(ruvia::http_status_code(599)).empty());
 }
 
 TEST(Ruvia, http_protocol_error_owns_bounded_diagnostic_without_allocation) {
@@ -1072,7 +1072,7 @@ TEST(Ruvia, http_connect_udp_rejects_statuses_that_cannot_start_capsule_protocol
     for (const std::uint16_t status : {std::uint16_t{204}, std::uint16_t{205}, std::uint16_t{206}}) {
         EXPECT_TRUE(ruvia::validate_http_connect_udp_response(ruvia::http_protocol_version::http2, status, capsule) == ruvia::http_connect_udp_error::invalid_response);
         ruvia::http_response response;
-        response.status(ruvia::http_status_code::from_value(status));
+        response.status(ruvia::http_status_code(status));
         EXPECT_TRUE(ruvia::prepare_http_connect_udp_response(std::move(response), ruvia::http_protocol_version::http2).index() != 0);
     }
 }

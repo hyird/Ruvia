@@ -203,7 +203,7 @@ public:
     static constexpr std::size_t rejected_body_size = 32 * 1024;
     enum class mode_type { chunked,
         known_length,
-        continue_value,
+        continue_,
         continue_timeout,
         early_final,
         early_final_while_uploading,
@@ -289,7 +289,7 @@ private:
             socket.shutdown(asio::ip::tcp::socket::shutdown_receive, ignored);
             co_return;
         }
-        if (mode_ == mode_type::continue_value) {
+        if (mode_ == mode_type::continue_) {
             if (!input.empty()) {
                 throw std::runtime_error("upload arrived before 100 Continue");
             }
@@ -725,7 +725,7 @@ TEST(Ruvia, client_response_body_collectors_return_public_results) {
         EXPECT_TRUE(!response.stream().complete());
         auto cold_read = response.read();
         auto cold_text = response.stream().text();
-        auto collected = co_await response.text();
+        auto collected = co_await response.bytes();
         EXPECT_TRUE(response.stream().complete());
         EXPECT_EQ(collected.size(), expected.size());
         const std::string_view collected_view = collected.text();
@@ -1257,7 +1257,7 @@ TEST(Ruvia, http_client_ref_options_override_pool_timeout_and_start_when_operati
             const auto start = std::chrono::steady_clock::now();
             auto response = co_await std::move(cold);
             const auto elapsed = std::chrono::steady_clock::now() - start;
-            EXPECT_EQ(response.status(), ruvia::http_status_code::from_value(200));
+            EXPECT_EQ(response.status(), ruvia::http_status_code(200));
             EXPECT_TRUE(elapsed >= std::chrono::milliseconds(50));
             EXPECT_TRUE(elapsed < std::chrono::seconds(2));
             co_await server.wait();
@@ -1939,7 +1939,7 @@ TEST(Ruvia, http_client_connect_failure_message_is_utf8) {
 }
 
 TEST(Ruvia, http_client_upload_exchange_owns_chunks_and_trailers_and_drives_continue) {
-    for (const auto mode : {upload_peer::mode_type::chunked, upload_peer::mode_type::known_length, upload_peer::mode_type::continue_value, upload_peer::mode_type::continue_timeout}) {
+    for (const auto mode : {upload_peer::mode_type::chunked, upload_peer::mode_type::known_length, upload_peer::mode_type::continue_, upload_peer::mode_type::continue_timeout}) {
         auto& io = ruvia::test::new_test_io_context();
         test_worker worker(io);
         upload_peer peer(io, worker.handle_, mode);
@@ -1950,8 +1950,8 @@ TEST(Ruvia, http_client_upload_exchange_owns_chunks_and_trailers_and_drives_cont
         peer.start();
         auto operation = [&]() -> ruvia::task<void> {
             const bool known = mode == upload_peer::mode_type::known_length;
-            const bool expect_continue = mode == upload_peer::mode_type::continue_value || mode == upload_peer::mode_type::continue_timeout;
-            auto exchange_value = co_await client.client().request("POST", "/upload").upload({.content_length_ = known ? std::optional<ruvia::http_content_length>{6} : std::nullopt, .expectation_ = expect_continue ? ruvia::http_client_request_expectation::continue_value : ruvia::http_client_request_expectation::none, .max_chunk_bytes_ = 3, .continue_timeout_ = std::chrono::milliseconds(20)});
+            const bool expect_continue = mode == upload_peer::mode_type::continue_ || mode == upload_peer::mode_type::continue_timeout;
+            auto exchange_value = co_await client.client().request("POST", "/upload").upload({.content_length_ = known ? std::optional<ruvia::http_content_length>{6} : std::nullopt, .expectation_ = expect_continue ? ruvia::http_client_request_expectation::continue_ : ruvia::http_client_request_expectation::none, .max_chunk_bytes_ = 3, .continue_timeout_ = std::chrono::milliseconds(20)});
             {
                 auto cold = exchange_value.body().write("bad");
             }
@@ -2027,8 +2027,8 @@ TEST(Ruvia, http_client_upload_exchange_owns_chunks_and_trailers_and_drives_cont
             auto bytes_value = co_await response.stream().read_all(16);
             EXPECT_EQ(std::string_view(reinterpret_cast<const char*>(bytes_value.bytes().data()), bytes_value.size()), "ok");
             const auto informational = response.informational_responses();
-            EXPECT_EQ(informational.size(), mode == upload_peer::mode_type::continue_value ? upload_peer::early_hint_count + 1 : std::size_t{0});
-            if (mode == upload_peer::mode_type::continue_value && informational.size() == upload_peer::early_hint_count + 1) {
+            EXPECT_EQ(informational.size(), mode == upload_peer::mode_type::continue_ ? upload_peer::early_hint_count + 1 : std::size_t{0});
+            if (mode == upload_peer::mode_type::continue_ && informational.size() == upload_peer::early_hint_count + 1) {
                 for (std::size_t i = 0; i < upload_peer::early_hint_count; ++i) {
                     EXPECT_EQ(informational[i].status().value(), std::uint16_t{103});
                     const auto fields = informational[i].headers();
@@ -2239,7 +2239,7 @@ TEST(Ruvia, http_client_upload_exchange_preserves_early_final_response_and_stops
     std::optional<ruvia::http_client> client(std::in_place, worker.attachment_.loop(), local_http_client_config(client_url));
     peer.start();
     auto operation = [&]() -> ruvia::task<void> {
-        auto exchange_value = co_await client->client().request("POST", "/upload").upload({.expectation_ = ruvia::http_client_request_expectation::continue_value});
+        auto exchange_value = co_await client->client().request("POST", "/upload").upload({.expectation_ = ruvia::http_client_request_expectation::continue_});
         auto response = co_await exchange_value.response();
         EXPECT_EQ(response.status().value(), std::uint16_t{413});
         bool cancelled = false;

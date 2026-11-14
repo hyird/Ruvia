@@ -523,7 +523,7 @@ TEST(Ruvia, http_client_finishes_upload_after_an_early_persistent_response_befor
             ruvia::http_client client(worker.attachment_.loop(), config);
             auto operation = [&]() -> ruvia::task<void> {
                 const acceptor_closer closer{acceptor};
-                ruvia::http_client_upload_config upload{.content_length_ = known_length ? std::optional<ruvia::http_content_length>{3} : std::nullopt, .expectation_ = expect_continue ? ruvia::http_client_request_expectation::continue_value : ruvia::http_client_request_expectation::none, .continue_timeout_ = std::chrono::duration<std::uint64_t, std::milli>{std::numeric_limits<std::uint64_t>::max()}};
+                ruvia::http_client_upload_config upload{.content_length_ = known_length ? std::optional<ruvia::http_content_length>{3} : std::nullopt, .expectation_ = expect_continue ? ruvia::http_client_request_expectation::continue_ : ruvia::http_client_request_expectation::none, .continue_timeout_ = std::chrono::duration<std::uint64_t, std::milli>{std::numeric_limits<std::uint64_t>::max()}};
                 if (timeout_release) {
                     upload.continue_timeout_ = mode == release_mode::submillisecond_timeout ? std::chrono::microseconds(1) : std::chrono::microseconds(20000);
                 }

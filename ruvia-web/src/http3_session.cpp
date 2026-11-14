@@ -656,7 +656,7 @@ void http3_session::start_application() {
             continue;
         }
         if (stream.take_continue_pending() && !stream.request_ended() && !stream.body_failure().has_value()) {
-            if (codec().submit_interim_response_head(stream_id, http_interim_response_head(ruvia::http_status::continue_value)) != http3_submit_status::accepted) {
+            if (codec().submit_interim_response_head(stream_id, http_interim_response_head(ruvia::http_status::continue_)) != http3_submit_status::accepted) {
                 reset_stream(stream_id, http3_error_code::internal_error);
                 continue;
             }
@@ -720,7 +720,7 @@ void http3_session::on_request_head(http3_request_head_event& event) {
         if (!base_services_.has_value()) {
             stream.defer_continue();
         } else {
-            if (codec().submit_interim_response_head(stream_id, http_interim_response_head(ruvia::http_status::continue_value)) != http3_submit_status::accepted) {
+            if (codec().submit_interim_response_head(stream_id, http_interim_response_head(ruvia::http_status::continue_)) != http3_submit_status::accepted) {
                 reset_stream(stream_id, http3_error_code::internal_error);
                 return;
             }

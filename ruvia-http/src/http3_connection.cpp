@@ -905,8 +905,8 @@ public:
         }
         if (status->status().is_informational()) {
             std::optional<http_client_request_content_signal> signal;
-            if (status->status() == http_status::continue_value && stream.continue_pending_) {
-                signal = http_client_request_content_signal::continue_value;
+            if (status->status() == http_status::continue_ && stream.continue_pending_) {
+                signal = http_client_request_content_signal::continue_;
             }
             publish(http3_informational_head_event(stream_id, std::move(head), signal));
             stream.continue_pending_ = stream.continue_pending_ && !signal;
@@ -1087,7 +1087,7 @@ public:
             return;
         }
         stream.received_head_ = true;
-        auto head = http3_request_head::try_create(stream_id, std::move(fields), stream_ended, stream.early_data_);
+        auto head = http3_request_head::try_parse(stream_id, std::move(fields), stream_ended, stream.early_data_);
         if (!head) {
             reject_received_message(stream_id, stream);
             return;
@@ -1647,7 +1647,7 @@ http3_submit_status http3_connection::submit_request_head(std::int64_t stream_id
     for (const auto& header : headers) {
         section.add_lowercase(header.name(), header.value());
     }
-    if (request.expectation_ == http_client_request_expectation::continue_value) {
+    if (request.expectation_ == http_client_request_expectation::continue_) {
         section.add("expect", detail::http_continue_expectation_token);
     }
     if (!length.empty()) {
@@ -1657,7 +1657,7 @@ http3_submit_status http3_connection::submit_request_head(std::int64_t stream_id
     if (status == http3_submit_status::accepted) {
         auto& stream = *impl_->find_stream(stream_id);
         stream.request_method_ = method;
-        stream.continue_pending_ = request.expectation_ == http_client_request_expectation::continue_value;
+        stream.continue_pending_ = request.expectation_ == http_client_request_expectation::continue_;
     }
     return status;
 }

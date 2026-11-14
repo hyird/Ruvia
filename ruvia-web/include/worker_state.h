@@ -262,17 +262,17 @@ public:
     [[nodiscard]] task<blocking_result<std::invoke_result_t<callable_type&>>> run_blocking(callable_type callable, operation_options options) const {
         if (!options.stop_token_.has_state()) {
             options.stop_token_ = stop_token_;
-            return ruvia::run_blocking(worker_, std::move(options), std::move(callable));
+            return ruvia::run_blocking(worker_, std::move(callable), std::move(options));
         }
-        return run_blocking_combined(worker_, stop_token_, std::move(options), std::move(callable));
+        return run_blocking_combined(worker_, stop_token_, std::move(callable), std::move(options));
     }
 
 private:
     template <typename callable_type>
-    [[nodiscard]] static task<blocking_result<std::invoke_result_t<callable_type&>>> run_blocking_combined(worker_ref worker_value, ruvia::stop_token worker_token, operation_options options, callable_type callable) {
+    [[nodiscard]] static task<blocking_result<std::invoke_result_t<callable_type&>>> run_blocking_combined(worker_ref worker_value, ruvia::stop_token worker_token, callable_type callable, operation_options options) {
         const stop_group stop_owner(worker_token, options.stop_token_);
         options.stop_token_ = stop_owner.token();
-        co_return co_await ruvia::run_blocking(std::move(worker_value), std::move(options), std::move(callable));
+        co_return co_await ruvia::run_blocking(std::move(worker_value), std::move(callable), std::move(options));
     }
 
     [[nodiscard]] void* worker_state_instance(const void* type_key) const;

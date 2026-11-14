@@ -70,7 +70,7 @@ public:
         return test_request("PATCH", target);
     }
 
-    [[nodiscard]] static test_request delete_request(std::string_view target) {
+    [[nodiscard]] static test_request delete_(std::string_view target) {
         return test_request("DELETE", target);
     }
 

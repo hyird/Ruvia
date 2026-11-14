@@ -49,46 +49,39 @@ refer to anonymous-namespace types with translation-unit-local linkage.
 
 ## Errors
 
-Use exceptions by default when a new operation cannot complete its assigned
-task (E.2). Use a purpose-designed exception class, throw by value, and catch
-by `const&`. Standard exception classes such as `std::invalid_argument` are
-appropriate when they fully express the error; use a domain exception when
-callers need domain-specific information. Do not throw integers or string
-literals, silently swallow failures, or use exceptions for normal flow control.
-
-Choose the mechanism by the meaning of the outcome, not by the layer. Protocol,
-sans-I/O, parser, and pure-function APIs can throw for an operation failure.
-Recoverability or untrusted input alone is not a reason to require a returned
-error. Use one error-handling shape per API family:
+`AGENTS.md` §3 decides which outcomes are values and which throw; this section
+fixes the shapes. Use one shape per API family:
 
 | outcome | Shape | example |
 | --- | --- | --- |
 | Normal protocol progress | status enum / progress result | need input, queued, backpressured, completed |
-| Operation cannot complete its assigned task | exception | invalid complete message, encoding failure, invalid configuration |
-| Explicit requirement to return failure as data | `std::variant<t_type, e_type>` / typed error result | a boundary that must not unwind, or an API designed to inspect failure values |
-| Unrecoverable lifecycle contract violation | `std::terminate()` | destroying a started `task` |
+| Data, format, or quota error from untrusted input | returned value: `std::optional<t_type>`, status enum, or result variant | malformed peer field, body over its limit |
+| Program or configuration error, allocation failure | exception | invalid local argument or option, `std::bad_alloc` |
+| Lifecycle contract violation | `std::terminate()` | destroying a started `task` |
+
+Checked conversions and parsers at a trust boundary are the only operations
+with two entries: the constructor throws (`explicit` unless implicit
+conversion is the documented contract), and a `noexcept` static
+`try_from_value(...)` (`try_parse(...)` for wire text) returns
+`std::optional<t_type>`. No other operation gets a second throwing/non-throwing
+variant, and no named throwing factory duplicates the constructor.
 
 Queuing and backpressure states are not failures and stay in a status enum.
-An operation may return these normal states while throwing for a genuine
-failure. result variants place the value (or `std::monostate`) first and the error second.
-Returning a result variant does not itself promise `noexcept` or require
-allocation failures to be translated into its error type.
+Result variants place the value (or `std::monostate`) first and the error
+second; returning one does not promise `noexcept` or translate allocation
+failures into its error type.
 
-Returned-error contracts must state the concrete requirement that makes them
-preferable to exceptions. Do not exempt an entire protocol or hot path from
-exception handling solely because of its category, or make unsupported claims
-about exception cost. Existing result-returning APIs retain their implemented
-contract until an API family is migrated with its callers and tests; their
-current shape is not a requirement for new APIs. Do not add a second
-throwing/non-throwing variant of the same operation.
+Throw a purpose-designed exception class, or a standard class such as
+`std::invalid_argument` when it fully expresses the error; throw by value and
+catch by `const&`. Do not throw integers or string literals, silently swallow
+failures, or use exceptions for normal flow control.
 
 Use RAII for cleanup during exception propagation. Destructors, deallocation,
-and `swap` must not throw; mark operations `noexcept` when throwing is impossible
-or unacceptable. Catch at a boundary that can handle or translate the failure,
-rather than adding `try` / `catch` to every function. a lifecycle contract
-violation such as destroying a started `task` remains terminal because unwinding
-cannot safely retire its suspended operations. For a recoverable failure,
-objects retained by the catching boundary must still satisfy their invariants.
+and `swap` must not throw; mark operations `noexcept` when throwing is
+impossible or unacceptable. Catch at a boundary that can handle or translate
+the failure; objects it retains must still satisfy their invariants. A
+lifecycle violation terminates because unwinding cannot safely retire a
+suspended operation.
 
 ## Names
 

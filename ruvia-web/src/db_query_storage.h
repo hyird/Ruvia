@@ -27,9 +27,9 @@ namespace ruvia::detail {
             return db_value(value.signed_value());
         case db_value_type::unsigned_value:
             return db_value(value.unsigned_value());
-        case db_value_type::double_value:
+        case db_value_type::double_:
             return db_value(value.double_value());
-        case db_value_type::bool_value:
+        case db_value_type::bool_:
             return db_value(value.bool_value());
     }
     return db_value(nullptr);
@@ -50,7 +50,7 @@ enum class db_node_kind : std::uint8_t {
     column,
     star,
     value,
-    default_value,
+    default_,
     excluded,
     function,
     coalesce,
@@ -83,7 +83,7 @@ enum class db_query_kind : std::uint8_t { select,
     values,
     insert,
     update,
-    delete_value };
+    delete_ };
 enum class db_source_kind : std::uint8_t { table,
     query,
     function };
@@ -111,7 +111,7 @@ struct db_stored_type final {
 struct db_stored_order final {
     std::size_t expression_{no_db_node};
     db_order_direction direction_{db_order_direction::asc};
-    db_nulls_order nulls_{db_nulls_order::default_value};
+    db_nulls_order nulls_{db_nulls_order::default_};
 };
 struct db_stored_named_argument final {
     db_stored_named_argument(std::string_view name, std::size_t expression) :
@@ -161,7 +161,7 @@ struct db_query_node final {
     std::vector<db_stored_order> orders_;
     db_stored_type type_;
     db_binary_operator binary_{db_binary_operator::equal};
-    db_unary_operator unary_{db_unary_operator::not_value};
+    db_unary_operator unary_{db_unary_operator::not_};
     db_date_part date_part_{db_date_part::epoch};
     std::size_t left_{no_db_node};
     std::size_t right_{no_db_node};
@@ -174,7 +174,7 @@ struct db_query_node final {
 // by and_where/or_where or `p = std::move(p) && q`) is a single nesting level
 // for import and compilation. True when `child` continues `parent`'s chain.
 [[nodiscard]] inline bool continues_logical_chain(const std::vector<db_query_node>& nodes, const db_query_node& parent, std::size_t child) noexcept {
-    if (parent.kind_ != db_node_kind::binary || child == no_db_node || (parent.binary_ != db_binary_operator::and_value && parent.binary_ != db_binary_operator::or_value)) {
+    if (parent.kind_ != db_node_kind::binary || child == no_db_node || (parent.binary_ != db_binary_operator::and_ && parent.binary_ != db_binary_operator::or_)) {
         return false;
     }
     const auto& node = nodes[child];
@@ -258,7 +258,7 @@ struct db_stored_cte final {
     std::string name_;
     std::size_t query_;
     bool recursive_{false};
-    db_materialization materialization_{db_materialization::default_value};
+    db_materialization materialization_{db_materialization::default_};
     std::vector<std::string> columns_;
 };
 struct db_stored_set_operation final {

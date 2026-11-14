@@ -18,7 +18,7 @@ namespace ruvia {
 // when the operation starts, or an absolute steady-clock deadline, which may
 // already have passed. A value is valid by construction: the relative
 // constructors throw std::invalid_argument for a non-positive limit, and
-// try_create() is the tolerant form for values that may legitimately be
+// try_from_value() is the tolerant form for values that may legitimately be
 // non-positive (configuration, remaining budgets).
 class operation_timeout final {
 public:
@@ -37,14 +37,14 @@ public:
         value_(deadline) {}
 
     template <std::integral rep_type, typename period_type>
-    [[nodiscard]] static std::optional<operation_timeout> try_create(std::chrono::duration<rep_type, period_type> value) noexcept {
+    [[nodiscard]] static std::optional<operation_timeout> try_from_value(std::chrono::duration<rep_type, period_type> value) noexcept {
         if (value.count() <= 0) {
             return std::nullopt;
         }
         return operation_timeout(relative_tag{}, saturating_duration_cast<std::chrono::milliseconds>(value));
     }
 
-    [[nodiscard]] static std::optional<operation_timeout> try_create(timeout_duration value) noexcept {
+    [[nodiscard]] static std::optional<operation_timeout> try_from_value(timeout_duration value) noexcept {
         if (value.value().count() <= 0) {
             return std::nullopt;
         }

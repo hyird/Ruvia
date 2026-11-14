@@ -206,7 +206,7 @@ struct db_entity_type_traits<float> {
 template <>
 struct db_entity_type_traits<double> {
     using value_type = double;
-    static constexpr db_data_type data_type = db_data_type::double_value;
+    static constexpr db_data_type data_type = db_data_type::double_;
 };
 template <>
 struct db_entity_type_traits<std::string> {
@@ -243,7 +243,7 @@ consteval bool is_conflict_updatable_db_column() noexcept {
 }
 template <typename c_type>
 consteval bool is_numeric_db_column() noexcept {
-    return !is_std_vector<typename c_type::value_type>::value && (c_type::data_type == db_data_type::small_int || c_type::data_type == db_data_type::integer || c_type::data_type == db_data_type::big_int || c_type::data_type == db_data_type::numeric || c_type::data_type == db_data_type::real || c_type::data_type == db_data_type::double_value);
+    return !is_std_vector<typename c_type::value_type>::value && (c_type::data_type == db_data_type::small_int || c_type::data_type == db_data_type::integer || c_type::data_type == db_data_type::big_int || c_type::data_type == db_data_type::numeric || c_type::data_type == db_data_type::real || c_type::data_type == db_data_type::double_);
 }
 consteval bool is_integer_db_data_type(db_data_type type) noexcept {
     return type == db_data_type::small_int || type == db_data_type::integer || type == db_data_type::big_int;
@@ -602,10 +602,10 @@ public:
     [[nodiscard]] db_expr excluded_expr() const noexcept {
         return db_expr(detail::db_owned_expression::make_static_excluded(field_name.view()));
     }
-    [[nodiscard]] db_order_term asc(db_nulls_order nulls = db_nulls_order::default_value) const {
+    [[nodiscard]] db_order_term asc(db_nulls_order nulls = db_nulls_order::default_) const {
         return to_expr().asc(nulls);
     }
-    [[nodiscard]] db_order_term desc(db_nulls_order nulls = db_nulls_order::default_value) const {
+    [[nodiscard]] db_order_term desc(db_nulls_order nulls = db_nulls_order::default_) const {
         return to_expr().desc(nulls);
     }
 
@@ -773,7 +773,7 @@ public:
     }
     [[nodiscard]] db_selection coalesce_text(std::string_view fallback = {}, borrowed_text alias_name = field_name.view()) const {
         auto col_expr = to_expr();
-        if constexpr (column_type::data_type != db_data_type::text && column_type::data_type != db_data_type::varchar && column_type::data_type != db_data_type::char_value) {
+        if constexpr (column_type::data_type != db_data_type::text && column_type::data_type != db_data_type::varchar && column_type::data_type != db_data_type::char_) {
             col_expr = col_expr.cast(db_data_type::text);
         }
         return db_expr::coalesce({col_expr, db_expr::value(fallback)}).as(alias_name);
@@ -813,7 +813,7 @@ public:
         auto expr = db_expr::null_if(db_expr::value(value), db_expr::value(std::string_view{}));
         if constexpr (!column_type::options.enum_name_.view().empty()) {
             expr = expr.cast({.custom_name_ = column_type::options.enum_name_.view()});
-        } else if constexpr (column_type::data_type != db_data_type::inferred && column_type::data_type != db_data_type::text && column_type::data_type != db_data_type::varchar && column_type::data_type != db_data_type::char_value) {
+        } else if constexpr (column_type::data_type != db_data_type::inferred && column_type::data_type != db_data_type::text && column_type::data_type != db_data_type::varchar && column_type::data_type != db_data_type::char_) {
             expr = expr.cast({.data_type_ = column_type::data_type, .length_ = column_type::options.length_, .precision_ = column_type::options.precision_, .scale_ = column_type::options.scale_});
         }
         return db_assignment{field_name.view(), std::move(expr)};

@@ -272,7 +272,7 @@ private:
 };
 
 // Client: a 1xx response head (RFC 9114 §4.1). request_content_signal() is
-// continue_value for the first 100 (Continue) of a request submitted with
+// continue_ for the first 100 (Continue) of a request submitted with
 // Expect: 100-continue.
 class http3_informational_head_event final {
 public:

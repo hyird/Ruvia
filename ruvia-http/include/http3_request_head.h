@@ -77,7 +77,7 @@ private:
 
     http3_request_head(std::int64_t stream_id, std::vector<http_header> fields, bool stream_ended, bool early_data);
     // nullopt: the head is malformed (RFC 9114 §4.1.2).
-    [[nodiscard]] static std::optional<http3_request_head> try_create(std::int64_t stream_id, std::vector<http_header> fields, bool stream_ended, bool early_data);
+    [[nodiscard]] static std::optional<http3_request_head> try_parse(std::int64_t stream_id, std::vector<http_header> fields, bool stream_ended, bool early_data);
     [[nodiscard]] bool validate();
     [[nodiscard]] std::string_view field_value(std::uint32_t index) const noexcept;
 
