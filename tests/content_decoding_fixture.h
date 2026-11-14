@@ -23,9 +23,10 @@
 #include <utility>
 #include <variant>
 
+#include "http1_client_request.h"
+#include "http1_client_response.h"
 #include "http1_server_response.h"
 #include "http2_connection.h"
-#include "http_client_protocol.h"
 #include "http_content_coding.h"
 #include "http_header.h"
 namespace ruvia::test {

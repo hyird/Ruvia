@@ -16,9 +16,10 @@
 #include <utility>
 
 #include "content_decoding_fixture.h"
+#include "http1_client_request.h"
+#include "http1_client_response.h"
 #include "http1_server_response.h"
 #include "http_cache.h"
-#include "http_client_protocol.h"
 #include "http_header.h"
 #include "http_response.h"
 

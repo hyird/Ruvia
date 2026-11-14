@@ -20,8 +20,10 @@
 #include "backend_config.h"
 #include "blocking_pool.h"
 #include "event_loop.h"
+#include "http1_client_request.h"
+#include "http1_client_response.h"
 #include "http_client.h"
-#include "http_client_protocol.h"
+#include "http_client_redirect.h"
 #include "middleware.h"
 namespace {
 

@@ -9,7 +9,8 @@
 #include <utility>
 
 #include "content_decoding_fixture.h"
-#include "http_client_protocol.h"
+#include "http1_client_request.h"
+#include "http1_client_response.h"
 using namespace ruvia::test;
 
 #include <cstddef>

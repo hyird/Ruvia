@@ -70,10 +70,12 @@ ruvia_install_component(ruvia-http http)
 set(ruvia_http_headers
     include/borrowed_text.h
     include/http1_chunked_body.h
+    include/http1_client_request.h
+    include/http1_client_response.h
     include/http1_server_request.h
     include/http1_server_response.h
     include/http_cache.h
-    include/http_client_protocol.h
+    include/http_client_redirect.h
     include/http_connect_udp.h
     include/http_content_coding.h
     include/http_header.h

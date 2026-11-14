@@ -12,7 +12,6 @@
 #include <utility>
 
 #include "borrowed_text.h"
-#include "http_client_protocol.h"
 #include "http_connection_fields.h"
 #include "http_header.h"
 #include "http_request.h"

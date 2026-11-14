@@ -1,3 +1,5 @@
+#include "http1_client_response.h"
+
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
@@ -12,8 +14,8 @@
 #include <variant>
 
 #include "borrowed_text.h"
+#include "http1_client_request.h"
 #include "http1_server_response.h"
-#include "http_client_protocol.h"
 #include "http_connection_fields.h"
 #include "http_header.h"
 #include "http_request.h"
