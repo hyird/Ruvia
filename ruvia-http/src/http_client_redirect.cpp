@@ -1,0 +1,330 @@
+#include <array>
+#include <cstddef>
+#include <cstdint>
+#include <cstring>
+#include <optional>
+#include <stdexcept>
+#include <string>
+#include <string_view>
+#include <utility>
+#include <variant>
+
+#include "borrowed_text.h"
+#include "http_client_protocol.h"
+#include "http_connection_fields.h"
+#include "http_header.h"
+#include "http_request.h"
+
+namespace ruvia {
+namespace {
+
+[[nodiscard]] constexpr bool http_origin_uses_default_port(const http_origin_view& origin) noexcept {
+    return origin.port() == detail::http_scheme_default_port(origin.scheme());
+}
+
+void validate_origin_host(std::string_view host) {
+    if (host.empty()) {
+        throw std::invalid_argument("HTTP origin host must not be empty");
+    }
+    if (!detail::is_valid_http_host(host)) {
+        throw std::invalid_argument("HTTP origin host is invalid");
+    }
+}
+
+std::uint16_t resolved_origin_port(http_scheme scheme, const http_origin_options& options) noexcept {
+    if (options.port_.has_value()) {
+        return options.port_->value();
+    }
+    return detail::http_scheme_default_port(scheme);
+}
+
+void remove_http_client_last_path_segment(std::string& path) noexcept {
+    const auto slash = path.rfind('/');
+    if (slash == std::string::npos) {
+        path.clear();
+        return;
+    }
+    path.erase(slash);
+}
+
+// `path` is always absolute: every caller builds it from a '/'-prefixed
+// reference path or base directory, so only the '/'-led dot-segment cases of
+// RFC 3986 section 5.2.4 can occur.
+void normalize_http_client_absolute_path(std::string_view path, std::size_t extra_reserve, std::string& normalized) {
+    normalized.clear();
+    normalized.reserve((path.empty() ? 1U : path.size()) + extra_reserve);
+    if (!path.empty() && path.find("/.") == std::string_view::npos) {
+        normalized.append(path.data(), path.size());
+        return;
+    }
+    auto remaining = path;
+    while (!remaining.empty()) {
+        // RFC 3986 section 5.2.4 deliberately moves one path segment at a
+        // time. Empty segments are significant: reducing the path to a stack
+        // of non-dot segments would turn "/a//." into "/a/" instead of the
+        // required "/a//".
+        if (remaining.starts_with("/./")) {
+            remaining.remove_prefix(2);
+        } else if (remaining == "/.") {
+            remaining = "/";
+        } else if (remaining.starts_with("/../")) {
+            remaining.remove_prefix(3);
+            remove_http_client_last_path_segment(normalized);
+        } else if (remaining == "/..") {
+            remaining = "/";
+            remove_http_client_last_path_segment(normalized);
+        } else {
+            const auto next_slash = remaining.find('/', 1);
+            const auto segment_bytes = next_slash == std::string_view::npos ? remaining.size() : next_slash;
+            normalized.append(remaining.substr(0, segment_bytes));
+            remaining.remove_prefix(segment_bytes);
+        }
+    }
+
+    if (normalized.empty()) {
+        normalized.push_back('/');
+    }
+}
+
+// Merges the reference's path/query with the current origin-form target per
+// RFC 3986 section 5.2 and validates the resolved origin-form target. Returns
+// false when the location's path or the merged product is not a valid target.
+// `reference` is the URI-reference with any scheme/authority prefix and the
+// fragment already removed.
+[[nodiscard]] bool resolve_http_client_redirect_path_and_query(bool has_authority, std::string_view reference, std::string_view current_target, std::string& resolved) {
+    const auto query_at = reference.find('?');
+    const bool has_reference_query = query_at != std::string_view::npos;
+    const auto reference_path = has_reference_query ? reference.substr(0, query_at) : reference;
+    const auto reference_query = has_reference_query ? reference.substr(query_at + 1) : std::string_view{};
+    // Dot-segment removal must not hide malformed bytes in discarded segments.
+    if (!detail::is_valid_uri_component(reference_path, true, false) || !detail::is_valid_uri_component(reference_query, true, true)) {
+        return false;
+    }
+
+    static constexpr std::size_t inline_path_capacity = 256;
+    std::array<char, inline_path_capacity> inline_merged_path{};
+    std::string merged_path_storage;
+    std::string_view merged_path;
+    std::string_view selected_query;
+    bool has_selected_query = has_reference_query;
+
+    if (has_authority) {
+        if (!reference_path.empty() && reference_path.front() != '/') {
+            return false;
+        }
+        merged_path = reference_path.empty() ? std::string_view("/") : reference_path;
+        selected_query = reference_query;
+    } else {
+        const auto base_query_at = current_target.find('?');
+        const bool has_base_query = base_query_at != std::string_view::npos;
+        const auto base_path = has_base_query ? current_target.substr(0, base_query_at) : current_target;
+        const auto base_query = has_base_query ? current_target.substr(base_query_at + 1) : std::string_view{};
+
+        if (reference_path.empty()) {
+            merged_path = base_path;
+            if (has_reference_query) {
+                selected_query = reference_query;
+            } else {
+                has_selected_query = has_base_query;
+                selected_query = base_query;
+            }
+        } else if (reference_path.front() == '/') {
+            merged_path = reference_path;
+            selected_query = reference_query;
+        } else {
+            const auto prefix_size = base_path.rfind('/') + 1U;
+            const auto total_path_size = prefix_size + reference_path.size();
+            if (total_path_size <= inline_merged_path.size()) {
+                std::memcpy(inline_merged_path.data(), base_path.data(), prefix_size);
+                std::memcpy(inline_merged_path.data() + prefix_size, reference_path.data(), reference_path.size());
+                merged_path = std::string_view(inline_merged_path.data(), total_path_size);
+            } else {
+                merged_path_storage.reserve(total_path_size);
+                merged_path_storage.append(base_path.data(), prefix_size);
+                merged_path_storage.append(reference_path.data(), reference_path.size());
+                merged_path = merged_path_storage;
+            }
+            selected_query = reference_query;
+        }
+    }
+
+    const std::size_t query_extra = has_selected_query ? 1U + selected_query.size() : 0U;
+    if (!has_authority && reference_path.empty()) {
+        // RFC 3986 section 5.2.2 copies the base path for an empty reference path.
+        resolved.clear();
+        resolved.reserve(merged_path.size() + query_extra);
+        resolved.append(merged_path.data(), merged_path.size());
+    } else {
+        normalize_http_client_absolute_path(merged_path, query_extra, resolved);
+    }
+    if (has_selected_query) {
+        resolved.push_back('?');
+        resolved.append(selected_query.data(), selected_query.size());
+    }
+    return is_valid_http_origin_form_target(resolved);
+}
+
+// The one redirect authority rule: no userinfo, a valid authority, and the
+// origin comparison by effective port of the target scheme and URI host
+// equivalence.
+struct http_client_redirect_authority final {
+    std::string_view host_;
+    std::uint16_t port_;
+    bool same_origin_;
+};
+
+[[nodiscard]] std::optional<http_client_redirect_authority> parse_http_client_redirect_authority(const http_origin_view& origin, http_scheme target_scheme, std::string_view authority) noexcept {
+    if (authority.find('@') != std::string_view::npos) {
+        return std::nullopt;
+    }
+    const auto parsed_value = parse_http_authority(authority);
+    if (!parsed_value) {
+        return std::nullopt;
+    }
+    const auto port = parsed_value->effective_port(detail::http_scheme_default_port(target_scheme));
+    return http_client_redirect_authority{
+        .host_ = parsed_value->host(),
+        .port_ = port,
+        .same_origin_ = target_scheme == origin.scheme() && port == origin.port() && detail::http_uri_host_equals(parsed_value->host(), origin.host()),
+    };
+}
+
+}  // namespace
+
+http_origin_view http_origin_view::http(http_origin_options options) {
+    const auto host = options.host_.view();
+    validate_origin_host(host);
+    return http_origin_view(http_scheme::http, host, resolved_origin_port(http_scheme::http, options));
+}
+
+http_origin_view http_origin_view::https(http_origin_options options) {
+    const auto host = options.host_.view();
+    validate_origin_host(host);
+    return http_origin_view(http_scheme::https, host, resolved_origin_port(http_scheme::https, options));
+}
+
+std::string make_http_origin_authority(const http_origin_view& origin) {
+    const auto host = origin.host();
+    const bool include_port = !http_origin_uses_default_port(origin);
+    std::string authority;
+    authority.reserve(host.size() + (include_port ? 6 : 0));
+    authority.append(host);
+    if (include_port) {
+        authority.push_back(':');
+        http_append_unsigned(authority, origin.port());
+    }
+    return authority;
+}
+
+http_client_response_header_lookup lookup_unique_http_client_response_header(const http_client_response_head& head, std::string_view name) noexcept {
+    std::string_view found;
+    bool seen = false;
+    for (const auto& header : head.headers()) {
+        if (!http_ascii_equals_ignore_case(header.name(), name)) {
+            continue;
+        }
+        if (seen) {
+            return {.status_ = http_unique_header_status::repeated};
+        }
+        seen = true;
+        found = header.value();
+    }
+    if (!seen) {
+        return {.status_ = http_unique_header_status::absent};
+    }
+    return {.status_ = http_unique_header_status::found, .value_ = found};
+}
+
+http_client_redirect_request_plan::http_client_redirect_request_plan(std::string_view method, http_client_redirect_content_disposition content_disposition) :
+    method_(method),
+    content_disposition_(content_disposition) {}
+
+http_client_redirect_request_plan plan_http_client_redirect_request(const http_client_request_view& request, http_client_redirect_request_plan_options options) {
+    if (options.status_ == http_status::see_other) {
+        return http_client_redirect_request_plan(request.method_ == "HEAD" ? request.method_.view() : std::string_view("GET"), http_client_redirect_content_disposition::drop);
+    }
+    if ((options.status_ == http_status::moved_permanently || options.status_ == http_status::found) && request.method_ == "POST") {
+        return http_client_redirect_request_plan("GET", http_client_redirect_content_disposition::drop);
+    }
+    return http_client_redirect_request_plan(request.method_.view(), http_client_redirect_content_disposition::preserve);
+}
+
+http_client_origin_authority_status classify_http_client_origin_authority(const http_origin_view& origin, std::string_view authority) noexcept {
+    const auto parsed_value = parse_http_client_redirect_authority(origin, origin.scheme(), authority);
+    if (!parsed_value) {
+        return http_client_origin_authority_status::invalid_authority;
+    }
+    return parsed_value->same_origin_ ? http_client_origin_authority_status::same_origin : http_client_origin_authority_status::different_origin;
+}
+
+http_origin_view http_client_resolved_redirect::origin() const& {
+    return scheme_ == http_scheme::https ? http_origin_view::https({.host_ = host(), .port_ = port_}) : http_origin_view::http({.host_ = host(), .port_ = port_});
+}
+
+std::variant<http_client_resolved_redirect, http_client_redirect_resolution_error> resolve_http_client_redirect_target(const http_origin_view& origin, http_client_redirect_target_options options) {
+    const auto current_target = options.current_target_.view();
+    auto location = options.location_.view();
+    if (!is_valid_http_origin_form_target(current_target)) {
+        return http_client_redirect_resolution_error::invalid_current_target;
+    }
+
+    location = http_trim_ows(location);
+    if (const auto hash = location.find('#'); hash != std::string_view::npos) {
+        if (!detail::is_valid_uri_component(location.substr(hash + 1), true, true)) {
+            return http_client_redirect_resolution_error::invalid_location;
+        }
+        location = location.substr(0, hash);
+    }
+
+    bool has_authority = false;
+    auto target_scheme = origin.scheme();
+    std::string_view reference = location;
+    const auto colon = reference.find(':');
+    const auto first_path_or_query = reference.find_first_of("/?");
+    if (colon != std::string_view::npos && (first_path_or_query == std::string_view::npos || colon < first_path_or_query)) {
+        const auto scheme = reference.substr(0, colon);
+        if (!detail::is_valid_uri_scheme(scheme)) {
+            return http_client_redirect_resolution_error::invalid_location;
+        }
+        const bool is_https = http_ascii_equals_ignore_case(scheme, "https");
+        if (!is_https && !http_ascii_equals_ignore_case(scheme, "http")) {
+            return http_client_redirect_resolution_error::unsupported_scheme;
+        }
+        target_scheme = is_https ? http_scheme::https : http_scheme::http;
+        reference.remove_prefix(colon + 1);
+        if (!reference.starts_with("//")) {
+            return http_client_redirect_resolution_error::invalid_location;
+        }
+        reference.remove_prefix(2);
+        has_authority = true;
+    } else if (reference.starts_with("//")) {
+        reference.remove_prefix(2);
+        has_authority = true;
+    }
+
+    std::string_view resolved_host = origin.host();
+    auto port = origin.port();
+    bool cross_origin = target_scheme != origin.scheme();
+    if (has_authority) {
+        const auto authority_end = reference.find_first_of("/?");
+        const auto authority = authority_end == std::string_view::npos ? reference : reference.substr(0, authority_end);
+        const auto parsed_value = parse_http_client_redirect_authority(origin, target_scheme, authority);
+        if (!parsed_value) {
+            return http_client_redirect_resolution_error::invalid_location;
+        }
+        resolved_host = parsed_value->host_;
+        port = parsed_value->port_;
+        cross_origin = !parsed_value->same_origin_;
+        reference = authority_end == std::string_view::npos ? std::string_view{} : reference.substr(authority_end);
+    }
+
+    std::string resolved;
+    if (!resolve_http_client_redirect_path_and_query(has_authority, reference, current_target, resolved)) {
+        return http_client_redirect_resolution_error::invalid_location;
+    }
+
+    std::string host(resolved_host.data(), resolved_host.size());
+    return http_client_resolved_redirect(target_scheme, std::move(host), port, std::move(resolved), cross_origin);
+}
+
+}  // namespace ruvia

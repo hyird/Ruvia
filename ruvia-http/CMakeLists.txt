@@ -1,8 +1,10 @@
 set(ruvia_http_sources
+    src/http1_client_request.cpp
+    src/http1_client_response.cpp
     src/http_cache.cpp
     src/http_c_library_memory.cpp
     src/http_client_ip.cpp
-    src/http_client_protocol.cpp
+    src/http_client_redirect.cpp
     src/http_connect_udp.cpp
     src/http_content_coding.cpp
     src/http_content_negotiation.cpp
