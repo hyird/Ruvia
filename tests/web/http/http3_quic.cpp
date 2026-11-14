@@ -740,7 +740,7 @@ private:
             }
             auto& connection = session_->connection();
             if (!connection.closed() && timestamp() >= connection.expiry()) {
-                static_cast<void>(connection.handle_expiry(timestamp()));
+                static_cast<void>(connection.expire_timers(timestamp()));
                 handle_events();
             }
             if (!connection.closed()) {

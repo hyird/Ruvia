@@ -613,7 +613,7 @@ task<dispatch_response> context::dispatch_task(std::string method, std::string t
         },
         policy, services().for_subrequest(stop), response);
     if (detail::http_response_needs_not_acceptable(admission.tail().coding_policy(), request, response) && !response.status().is_error()) {
-        response = co_await routes.handle_error(request, http_error_info(detail::http_not_acceptable_coding_error()), admission.services());
+        response = co_await routes.respond_error(request, http_error_info(detail::http_not_acceptable_coding_error()), admission.services());
     }
     // The error handler answers the 406 with any response shape, so the file
     // check covers whichever response is final.

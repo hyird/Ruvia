@@ -840,8 +840,8 @@ public:
     // response accounts for that failure. The context dies before this
     // returns, so body completion and the request arena outlive it.
     [[nodiscard]] task<bool> dispatch_resolved_route(const http_request& request, const resolved_route& resolved, const context_services& services, const std::optional<http_request_body_failure>* body_failure, http_response& response) const;
-    task<http_response> handle_error(const http_request& request, http_error_info error, const context_services& services) const;
-    task<http_response> handle_exception(const http_request& request, std::exception_ptr exception, const context_services& services) const;
+    task<http_response> respond_error(const http_request& request, http_error_info error, const context_services& services) const;
+    task<http_response> respond_exception(const http_request& request, std::exception_ptr exception, const context_services& services) const;
     // Absence means the bound output handled the request; a value is the one
     // buffered response produced before a response-stream commit.
     task<std::optional<http_response>> dispatch_response_stream(const http_request& request, const resolved_route& route, response_stream_writer& response_stream, const context_services& services) const;
@@ -909,10 +909,10 @@ private:
     // when nothing declared itself for unmatched requests.
     [[nodiscard]] task<http_response> run_unmatched_chain(context& context, route_handler terminal) const;
     [[nodiscard]] static task<void> contain_failure(const route_table& table, context& context, std::exception_ptr exception);
-    [[nodiscard]] task<http_response> handle_not_found(const http_request& request, const context_services& services) const;
-    [[nodiscard]] task<http_response> handle_exception(context& context, std::exception_ptr exception) const;
-    [[nodiscard]] task<http_response> handle_exception(context& context, std::exception_ptr exception, http_error_handler_ref error_handler) const;
-    [[nodiscard]] task<http_response> handle_exception(const http_request& request, std::exception_ptr exception, const context_services& services, http_error_handler_ref error_handler) const;
+    [[nodiscard]] task<http_response> respond_not_found(const http_request& request, const context_services& services) const;
+    [[nodiscard]] task<http_response> respond_exception(context& context, std::exception_ptr exception) const;
+    [[nodiscard]] task<http_response> respond_exception(context& context, std::exception_ptr exception, http_error_handler_ref error_handler) const;
+    [[nodiscard]] task<http_response> respond_exception(const http_request& request, std::exception_ptr exception, const context_services& services, http_error_handler_ref error_handler) const;
 
     [[nodiscard]] http_error_handler_ref error_handler_for(std::string_view path) const noexcept;
     explicit route_table(const compiled_route_plan& plan);
@@ -1695,7 +1695,7 @@ task<response_stream_dispatch_result> dispatch_response_stream_with(sink& sink_v
         // transport rather than dropped with the connection.
         co_return response_stream_dispatch_result::make_failed_after_commit(committed_response_stream_status(sink_value), std::move(exception));
     }
-    auto response = co_await routes_value.handle_exception(request, exception, services);
+    auto response = co_await routes_value.respond_exception(request, exception, services);
     co_return response_stream_dispatch_result::make_recovered_failure(std::move(response));
 }
 

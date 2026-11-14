@@ -3170,7 +3170,7 @@ private:
 }
 
 enum class buffered_response_recovery_action { ready,
-    handle_error,
+    respond_error,
     prepare_terminal };
 
 struct buffered_response_recovery_step final {
@@ -3200,7 +3200,7 @@ public:
         }
         if (stage_ == stage::application && !response.status().is_error()) {
             stage_ = stage::negotiated_error;
-            return {buffered_response_recovery_action::handle_error, std::move(error)};
+            return {buffered_response_recovery_action::respond_error, std::move(error)};
         }
         policy = http_response_coding_policy::disabled();
         stage_ = stage::terminal;

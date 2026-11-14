@@ -1481,7 +1481,7 @@ db_query_cache_state::db_query_cache_state(const redis_session& redis, const db_
     duration_(config.duration_),
     always_enabled_(config.always_enabled_),
     ignore_errors_(config.ignore_errors_),
-    max_entry_reply_bytes_(redis_client_runtime::handle_config(redis).max_reply_bytes_),
+    max_entry_reply_bytes_(redis_client_runtime::session_config(redis).max_reply_bytes_),
     prefix_(std::move(prefix)),
     redis_(redis.with_options({})),
     fills_() {}

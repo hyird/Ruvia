@@ -790,7 +790,7 @@ template <typename stream_id_type, typename writer_type, typename reset_type>
         // response instead of a reset.
         options.connection_failure_.invoke(remote_address, written.file_failure_->fault());
         tail.disable_response_coding();
-        response = co_await routes.handle_exception(request, written.file_failure_->response_error(), request_services);
+        response = co_await routes.respond_exception(request, written.file_failure_->response_error(), request_services);
         preparation = co_await tail.prepare_or_finish(response, options, routes, request_services);
         written = co_await writer.write(stream_id, response, preparation.write_plan_);
         if (written.file_failure_ && !written.committed_status_) {

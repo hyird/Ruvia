@@ -751,7 +751,7 @@ public:
     }
     // The configuration of the runtime behind an active handle, for a
     // consumer that sizes its own use of that store (the DB query cache).
-    [[nodiscard]] static const redis_config_storage& handle_config(const redis_session& handle) noexcept {
+    [[nodiscard]] static const redis_config_storage& session_config(const redis_session& handle) noexcept {
         return handle.runtime_->config();
     }
     [[nodiscard]] redis_pool& general() noexcept {

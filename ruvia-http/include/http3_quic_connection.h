@@ -147,7 +147,7 @@ struct http3_quic_datagram final {
 // TLS. Input datagrams must remain alive until next_event() drains their events.
 // Events can also be published while writing (a stream closing on an
 // acknowledgement), so the owner drains next_event() after every
-// receive_datagram(), next_datagram() and handle_expiry().
+// receive_datagram(), next_datagram() and expire_timers().
 class http3_quic_connection final {
 public:
     [[nodiscard]] static http3_quic_connection client(const http3_quic_connection_options& options);
@@ -208,7 +208,7 @@ public:
     // While the connection is open: the next packet, or would_block. After a
     // local close: the CONNECTION_CLOSE packet once, then closed.
     [[nodiscard]] http3_quic_result next_datagram(std::size_t capacity, ngtcp2_tstamp timestamp, http3_quic_datagram& output);
-    [[nodiscard]] http3_quic_result handle_expiry(ngtcp2_tstamp timestamp);
+    [[nodiscard]] http3_quic_result expire_timers(ngtcp2_tstamp timestamp);
     [[nodiscard]] ngtcp2_tstamp expiry() const noexcept;
 
     // Abandons both directions of a request stream with RESET_STREAM and

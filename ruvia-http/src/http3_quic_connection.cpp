@@ -801,7 +801,7 @@ http3_quic_result http3_quic_connection::next_datagram(std::size_t capacity, ngt
     }
 }
 
-http3_quic_result http3_quic_connection::handle_expiry(ngtcp2_tstamp timestamp) {
+http3_quic_result http3_quic_connection::expire_timers(ngtcp2_tstamp timestamp) {
     if (const auto closed = impl_->check_open()) {
         return *closed;
     }

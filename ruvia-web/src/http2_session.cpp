@@ -1667,7 +1667,7 @@ task<void> http2_sans_io_session_engine::dispatch_one(std::uint32_t stream_id) {
                         if (failure == nullptr) {
                             throw std::logic_error("HTTP/2 WebSocket validation returned no outcome");
                         }
-                        response = co_await routes_.handle_error(request, http_error_info({.status_ = failure->protocol_error().status(), .code_ = failure->protocol_error().code(), .message_ = std::string_view(failure->protocol_error().what())}), request_services);
+                        response = co_await routes_.respond_error(request, http_error_info({.status_ = failure->protocol_error().status(), .code_ = failure->protocol_error().code(), .message_ = std::string_view(failure->protocol_error().what())}), request_services);
                         failure->apply_required_response_headers(response);
                         break;
                     }

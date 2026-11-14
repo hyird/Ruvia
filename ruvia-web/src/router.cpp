@@ -1475,7 +1475,7 @@ task<void> detail::route_table::dispatch_buffered_response(const http_request& r
                 co_return;
             }
             std::optional<http_response> unmatched_response;
-            // One handle_error co_await serves both rejection kinds: each
+            // One respond_error co_await serves both rejection kinds: each
             // co_await expression reserves its own slots for the call's
             // temporaries in the frame, so distinct inline sites would each
             // add a resident http_response-sized block.
@@ -1526,14 +1526,14 @@ task<void> detail::route_table::dispatch_buffered_response(const http_request& r
             }
 
             if (error) {
-                response = co_await handle_error(request, *error, services);
+                response = co_await respond_error(request, *error, services);
                 if (allowed_methods != 0 || !extension_methods.empty()) {
                     response.allow_methods(allowed_methods, extension_methods);
                 }
                 co_return;
             }
 
-            response = co_await handle_not_found(request, services);
+            response = co_await respond_not_found(request, services);
             co_return;
         }
 
@@ -1542,7 +1542,7 @@ task<void> detail::route_table::dispatch_buffered_response(const http_request& r
     } catch (...) {
         dispatch_exception = std::current_exception();
     }
-    response = co_await handle_exception(request, dispatch_exception, services);
+    response = co_await respond_exception(request, dispatch_exception, services);
 }
 
 task<bool> detail::route_table::dispatch_resolved_route(const http_request& request, const resolved_route& resolved, const context_services& services, const std::optional<http_request_body_failure>* body_failure, http_response& response) const {
@@ -1565,7 +1565,7 @@ task<bool> detail::route_table::dispatch_resolved_route(const http_request& requ
         // Context construction and failed error finalization keep the
         // request-only fallback; transport failures still escape to the session.
         body_failure_handled = body_failed();
-        response = co_await handle_exception(request, dispatch_exception, services);
+        response = co_await respond_exception(request, dispatch_exception, services);
     }
     co_return body_failure_handled;
 }
@@ -1664,7 +1664,7 @@ detail::default_exception_response detail::make_default_exception_response(const
     return {.response_ = std::move(response), .unexpected_ = error_info.unexpected_};
 }
 
-task<http_response> detail::route_table::handle_error(const http_request& request, http_error_info error, const context_services& services) const {
+task<http_response> detail::route_table::respond_error(const http_request& request, http_error_info error, const context_services& services) const {
     // A request stream request reaches neither the error handler nor the
     // unmatched middleware: its listener serves no application route.
     const bool request_stream = static_cast<bool>(services.request_stream());
@@ -1697,11 +1697,11 @@ task<http_response> detail::route_table::handle_error(const http_request& reques
     co_return co_await finalize_failure(context_value, exception);
 }
 
-task<http_response> detail::route_table::handle_exception(const http_request& request, std::exception_ptr exception, const context_services& services) const {
-    return handle_exception(request, std::move(exception), services, services.request_stream() ? nullptr : error_handler_for(request.path()));
+task<http_response> detail::route_table::respond_exception(const http_request& request, std::exception_ptr exception, const context_services& services) const {
+    return respond_exception(request, std::move(exception), services, services.request_stream() ? nullptr : error_handler_for(request.path()));
 }
 
-task<http_response> detail::route_table::handle_exception(const http_request& request, std::exception_ptr exception, const context_services& services, http_error_handler_ref error_handler) const {
+task<http_response> detail::route_table::respond_exception(const http_request& request, std::exception_ptr exception, const context_services& services, http_error_handler_ref error_handler) const {
     if (error_handler == nullptr) {
         auto answer = make_default_exception_response(exception);
         if (answer.unexpected_) {
@@ -1712,12 +1712,12 @@ task<http_response> detail::route_table::handle_exception(const http_request& re
 
     auto context_value = detail::context_access::make(request, services);
     detail::context_access::services(context_value).bind_routes(*this);
-    auto response = co_await handle_exception(context_value, exception, error_handler);
+    auto response = co_await respond_exception(context_value, exception, error_handler);
     detail::context_access::apply_response_policy(context_value, response);
     co_return response;
 }
 
-task<http_response> detail::route_table::handle_not_found(const http_request& request, const context_services& services) const {
+task<http_response> detail::route_table::respond_not_found(const http_request& request, const context_services& services) const {
     const auto not_found_handler = not_found_handler_for(request.path());
     if (not_found_handler == nullptr && plan_->unmatched_middleware_count_ == 0) {
         co_return make_route_not_found_response();
@@ -1725,7 +1725,7 @@ task<http_response> detail::route_table::handle_not_found(const http_request& re
 
     auto context_value = detail::context_access::make(request, services);
     detail::context_access::services(context_value).bind_routes(*this);
-    // The handler's own failure keeps going through handle_exception, exactly as
+    // The handler's own failure keeps going through respond_exception, exactly as
     // before; wrapping it in the chain must not change which layer answers it.
     auto terminal = [this, not_found_handler](context& terminal_context) -> task<http_response> {
         if (not_found_handler == nullptr) {
@@ -1737,7 +1737,7 @@ task<http_response> detail::route_table::handle_not_found(const http_request& re
         } catch (...) {
             exception = std::current_exception();
         }
-        co_return co_await handle_exception(terminal_context, exception);
+        co_return co_await respond_exception(terminal_context, exception);
     };
     std::exception_ptr exception;
     try {
@@ -1748,11 +1748,11 @@ task<http_response> detail::route_table::handle_not_found(const http_request& re
     co_return co_await finalize_failure(context_value, exception);
 }
 
-task<http_response> detail::route_table::handle_exception(context& context_value, std::exception_ptr exception) const {
-    return handle_exception(context_value, std::move(exception), error_handler_for(detail::context_access::request(context_value).path()));
+task<http_response> detail::route_table::respond_exception(context& context_value, std::exception_ptr exception) const {
+    return respond_exception(context_value, std::move(exception), error_handler_for(detail::context_access::request(context_value).path()));
 }
 
-task<http_response> detail::route_table::handle_exception(context& context_value, std::exception_ptr exception, http_error_handler_ref error_handler) const {
+task<http_response> detail::route_table::respond_exception(context& context_value, std::exception_ptr exception, http_error_handler_ref error_handler) const {
     const auto error_info = classify_exception(exception);
     detail::context_access::set_error(context_value, exception);
     detail::context_access::discard_draft(context_value);
@@ -1974,7 +1974,7 @@ task<void> detail::route_table::contain_failure(const route_table& table, contex
         detail::context_access::set_error(context_value, std::move(exception));
         co_return;
     }
-    auto response = co_await table.handle_exception(context_value, exception);
+    auto response = co_await table.respond_exception(context_value, exception);
     detail::context_access::set_response(context_value, std::move(response));
 }
 
@@ -2089,7 +2089,7 @@ task<std::optional<http_response>> detail::route_table::dispatch_bound_stream(co
 
     // The middleware chain converts a handler exception into a buffered error
     // response and records it via context.exception() (contain_failure
-    // -> handle_exception -> set_error), so a mid-request failure does not surface as
+    // -> respond_exception -> set_error), so a mid-request failure does not surface as
     // a local exception above. Once the output is committed -- a started stream or
     // a websocket/tunnel handshake -- that buffered response can no longer be sent,
     // and finalizing the stream with a clean terminator would frame a truncated
@@ -2373,7 +2373,7 @@ public:
         // Only this router's own rule: the host's application-wide rule never
         // covers a request stream.
         if (const auto rejection = decide_request_rate_limit(self->limiter_.get(), context_value.conn().client().address(), services.pinned_arrival())) {
-            auto response = co_await table.handle_error(request, rate_limit_rejection_error(), services);
+            auto response = co_await table.respond_error(request, rate_limit_rejection_error(), services);
             apply_rate_limit_rejection_headers(response, *rejection);
             context_access::set_response(context_value, std::move(response));
             co_return;
@@ -2445,7 +2445,7 @@ public:
         // Body adapters above have retired. The request-only error path must
         // not retain their borrowed views while constructing its fallback.
         services = request_services;
-        auto response = co_await table.handle_exception(request, failure, services);
+        auto response = co_await table.respond_exception(request, failure, services);
         context_access::set_response(context_value, std::move(response));
     }
 
@@ -2491,7 +2491,7 @@ private:
         // The route exists only for the upgrade its endpoint names: a plain
         // GET, or an upgrade request carrying content, cannot reach it.
         if (websocket_route ? stream.accept_websocket_ == nullptr : !stream.tunnel_requested()) {
-            auto response = co_await table.handle_error(request, websocket_route ? http_error_info({.status_ = http_status::bad_request, .code_ = "invalid_websocket_handshake", .message_ = "invalid WebSocket handshake"}) : http_error_info({.status_ = http_status::bad_request, .message_ = "tunnel route requires a CONNECT or upgrade request without content"}), services);
+            auto response = co_await table.respond_error(request, websocket_route ? http_error_info({.status_ = http_status::bad_request, .code_ = "invalid_websocket_handshake", .message_ = "invalid WebSocket handshake"}) : http_error_info({.status_ = http_status::bad_request, .message_ = "tunnel route requires a CONNECT or upgrade request without content"}), services);
             context_access::set_response(context_value, std::move(response));
             co_return;
         }
@@ -2513,7 +2513,7 @@ private:
         if (stream.response_.committed() || context_access::output_committed(context_value)) {
             std::rethrow_exception(failure);
         }
-        auto response = co_await table.handle_exception(request, failure, services);
+        auto response = co_await table.respond_exception(request, failure, services);
         context_access::set_response(context_value, std::move(response));
     }
 

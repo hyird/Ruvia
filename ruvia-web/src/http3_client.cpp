@@ -877,7 +877,7 @@ public:
         try {
             while (open_) {
                 if (quic_->expiry() <= http3_quic_now()) {
-                    const auto expired = quic_->handle_expiry(http3_quic_now());
+                    const auto expired = quic_->expire_timers(http3_quic_now());
                     step_quic(expired.status_);
                 }
                 std::size_t burst = 0;

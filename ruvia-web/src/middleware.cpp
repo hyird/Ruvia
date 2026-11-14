@@ -1992,8 +1992,8 @@ task<prepared_application_response> http_response_tail::finish_prepare(const htt
         if (step.action_ == buffered_response_recovery_action::ready) {
             co_return prepared_application_response{plan_buffered_http_response_write(request.known_method(), response), recovery.recovered()};
         }
-        if (step.action_ == buffered_response_recovery_action::handle_error) {
-            response = co_await routes.handle_error(request, *step.error_, services);
+        if (step.action_ == buffered_response_recovery_action::respond_error) {
+            response = co_await routes.respond_error(request, *step.error_, services);
         }
         pass = prepare_representation(request, policy, alternative_service_, cors(options), response, options, services.worker());
     }

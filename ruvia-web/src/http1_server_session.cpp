@@ -1222,7 +1222,7 @@ inline task<http1_session_request_completion> complete_failed_http_route(connect
     if (auto* lifecycle = exception_services.connection_lifecycle_value()) {
         lifecycle->note_exception(exception);
     }
-    response = co_await routes_value.handle_exception(parsed_value.request(), exception, exception_services);
+    response = co_await routes_value.respond_exception(parsed_value.request(), exception, exception_services);
     scanner_entry.touch();
     co_return close_with_framework_response(response, parsed_value.connection_plan());
 }
@@ -2241,7 +2241,7 @@ template <typename stream_type>
     if (d.parsed_.body_plan().requires_consumption()) {
         // A generated rejection does not inherit the negotiated coding promise.
         tail.disable_response_coding();
-        d.response_ = co_await d.routes_.handle_error(d.parsed_.request(), http_error_info({.status_ = http_status::bad_request, .message_ = "CONNECT route does not accept HTTP request content"}), d.base_route_services_);
+        d.response_ = co_await d.routes_.respond_error(d.parsed_.request(), http_error_info({.status_ = http_status::bad_request, .message_ = "CONNECT route does not accept HTTP request content"}), d.base_route_services_);
         co_return close_with_framework_response(d.response_, d.parsed_.connection_plan());
     }
     // The pending bytes remain owned by the HTTP input budget until acceptance
@@ -2337,7 +2337,7 @@ task<std::optional<http1_session_request_completion>> dispatch_http_websocket_ro
     if (const auto* failure = handshake_validation.failure()) {
         // A generated rejection does not inherit the negotiated coding promise.
         tail.disable_response_coding();
-        d.response_ = co_await d.routes_.handle_error(d.parsed_.request(), http_error_info({.status_ = failure->protocol_error().status(), .code_ = failure->protocol_error().code(), .message_ = std::string_view(failure->protocol_error().what())}), d.base_route_services_);
+        d.response_ = co_await d.routes_.respond_error(d.parsed_.request(), http_error_info({.status_ = failure->protocol_error().status(), .code_ = failure->protocol_error().code(), .message_ = std::string_view(failure->protocol_error().what())}), d.base_route_services_);
         failure->apply_required_response_headers(d.response_);
         co_return close_with_framework_response(d.response_, d.parsed_.connection_plan());
     }
@@ -2652,7 +2652,7 @@ task<std::variant<http1_serve_handoff, http_connection_close>> worker_connection
         // Rejections funnel through one co_await site after the read loop:
         // every co_await expression in a coroutine reserves its own frame
         // slots for the call's temporaries (GCC does not overlap them), so
-        // inlining handle_error at each rejection site costs ~660 resident
+        // inlining respond_error at each rejection site costs ~660 resident
         // bytes per site in every active connection's frame.
         std::optional<http_request_rejection> request_rejection;
         std::size_t header_search_offset = 0;

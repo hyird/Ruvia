@@ -1094,7 +1094,7 @@ task<void> http3_session::dispatch_one(std::int64_t stream_id) {
                     const auto validation = validate_http3_websocket_handshake(head, request, endpoint.handshake_validation());
                     if (const auto* failure = validation.failure()) {
                         admission.tail().disable_response_coding();
-                        response = co_await routes.handle_error(request, http_error_info({.status_ = failure->protocol_error().status(), .code_ = failure->protocol_error().code(), .message_ = std::string_view(failure->protocol_error().what())}), request_services);
+                        response = co_await routes.respond_error(request, http_error_info({.status_ = failure->protocol_error().status(), .code_ = failure->protocol_error().code(), .message_ = std::string_view(failure->protocol_error().what())}), request_services);
                         failure->apply_required_response_headers(response);
                         break;
                     }
@@ -1294,7 +1294,7 @@ void http3_session::timer_fired(worker_timer_outcome outcome) noexcept {
         return;
     }
     try {
-        const auto result = connection_->handle_expiry(now());
+        const auto result = connection_->expire_timers(now());
         if (result.status_ == http3_quic_status::closed) {
             connection_lifecycle_.set_reason(connection_close_reason::timeout);
         } else if (result.status_ == http3_quic_status::transport_error || result.status_ == http3_quic_status::application_error) {

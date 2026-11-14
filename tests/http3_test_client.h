@@ -437,7 +437,7 @@ public:
             pacing.expires_at(wake);
             pacing.wait();
             if (timestamp() >= connection_->expiry()) {
-                static_cast<void>(connection_->handle_expiry(timestamp()));
+                static_cast<void>(connection_->expire_timers(timestamp()));
                 drain_events();
             }
             flush();
@@ -865,7 +865,7 @@ private:
         wait_readable(wake);
         receive_available();
         if (!connection_->closed() && timestamp() >= connection_->expiry()) {
-            static_cast<void>(connection_->handle_expiry(timestamp()));
+            static_cast<void>(connection_->expire_timers(timestamp()));
             drain_events();
         }
         flush();

@@ -880,9 +880,9 @@ void invoke_stop_hooks(detail::app_state& state_value) noexcept {
 // signal restores the default disposition and requests the application's
 // stop, so a repeated signal is not swallowed while the stop drains -- or
 // while a slow startup hook still runs, before the stop can take effect.
-class process_signal_handling final {
+class shutdown_signal_listener final {
 public:
-    explicit process_signal_handling(application& owner) :
+    explicit shutdown_signal_listener(application& owner) :
         runtime_({.queue_capacity_ = 1, .io_policy_ = worker_io_policy::single_owner}),
         signals_(runtime_.io_context()) {
         runtime_.configure({
@@ -918,12 +918,12 @@ public:
         }
     }
 
-    ~process_signal_handling() {
+    ~shutdown_signal_listener() {
         stop();
     }
 
-    process_signal_handling(const process_signal_handling&) = delete;
-    process_signal_handling& operator=(const process_signal_handling&) = delete;
+    shutdown_signal_listener(const shutdown_signal_listener&) = delete;
+    shutdown_signal_listener& operator=(const shutdown_signal_listener&) = delete;
 
     void stop() noexcept {
         runtime_.request_stop();
@@ -1228,7 +1228,7 @@ private:
     application& owner_;
     detail::app_state& state_;
     // Constructed only for process_signal_handler_policy::install.
-    std::optional<process_signal_handling> signals_;
+    std::optional<shutdown_signal_listener> signals_;
 };
 
 }  // namespace
