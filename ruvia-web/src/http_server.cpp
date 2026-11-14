@@ -148,12 +148,12 @@ listener_candidate load_candidate(const std::vector<std::shared_ptr<owned_listen
     listener_candidate result;
     const auto options = standalone_options(config, *callbacks, count);
     for (const auto& input : inputs) {
-        for (auto& config : input->configs_) {
-            if (!config.dispatch_) {
+        for (auto& listener_config : input->configs_) {
+            if (!listener_config.dispatch_) {
                 if (static_cast<bool>(callbacks->connection_) == static_cast<bool>(callbacks->request_stream_)) {
                     throw std::invalid_argument("standalone listener requires an unambiguous callback or explicit dispatch");
                 }
-                config.dispatch_ = callbacks->connection_ ? listener_dispatch::connection : listener_dispatch::request_stream;
+                listener_config.dispatch_ = callbacks->connection_ ? listener_dispatch::connection : listener_dispatch::request_stream;
             }
         }
         auto loaded = input->load();

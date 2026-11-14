@@ -1432,7 +1432,8 @@ private:
 
 namespace ruvia {
 [[nodiscard]] constexpr bool is_tls_grease_value(std::uint16_t value) noexcept {
-    return (value & 0x0f0fU) == 0x0a0aU && (value >> 8U) == (value & 0xffU);
+    const auto widened_value = static_cast<std::uint32_t>(value);
+    return (widened_value & 0x0f0fU) == 0x0a0aU && (widened_value >> 8U) == (widened_value & 0xffU);
 }
 
 struct tls_client_hello_fingerprints final {

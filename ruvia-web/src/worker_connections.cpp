@@ -1294,8 +1294,8 @@ windows_acceptor::windows_acceptor(std::span<const http_server_listener_definiti
           .io_policy_ = worker_io_policy::single_owner}),
       io_(runtime_.io_context()),
       failure_sink_(failure),
-      finalize_signal_(runtime_.handle()),
-      tasks_(runtime_.handle()),
+      finalize_signal_(runtime_.worker()),
+      tasks_(runtime_.worker()),
       workers_(),
       tcp_listeners_()
 #if defined(RUVIA_ENABLE_HTTP3)
@@ -1619,7 +1619,7 @@ void windows_acceptor::serve_on_context() {
 }
 
 void windows_acceptor::prepare_listener_tasks(tcp_listener& listener) {
-    listener.activated_.emplace(runtime_.handle());
+    listener.activated_.emplace(runtime_.worker());
     for (std::size_t operation = 0; operation < accepts_per_listener; ++operation) {
         tasks_.spawn(run_accepts(listener));
     }
@@ -1627,7 +1627,7 @@ void windows_acceptor::prepare_listener_tasks(tcp_listener& listener) {
     if (listener.http3_index_.has_value()) {
         auto& udp = *udp_listeners_[*listener.http3_index_];
         if (!udp.transport_->receiving_) {
-            udp.activated_.emplace(runtime_.handle());
+            udp.activated_.emplace(runtime_.worker());
             tasks_.spawn(run_receives(udp));
             udp.transport_->receiving_ = true;
             udp.receiving_ = true;
@@ -1811,7 +1811,7 @@ task<void> windows_acceptor::run_accepts(tcp_listener& listener) {
                 }
             }
             report_accept_error(error);
-            if (co_await ruvia::sleep_for(runtime_.handle(), accept_retry_delay) == timer_sleep_result::stop_requested) {
+            if (co_await ruvia::sleep_for(runtime_.worker(), accept_retry_delay) == timer_sleep_result::stop_requested) {
                 break;
             }
         }
@@ -1985,7 +1985,7 @@ bool windows_acceptor::transmit(std::size_t worker_index, std::size_t http3_list
         return false;
     }
     try {
-        const auto status = runtime_.handle().post_factory([&]() -> move_only_function<void()> {
+        const auto status = runtime_.worker().post_factory([&]() -> move_only_function<void()> {
             std::vector<std::byte> owned(bytes.begin(), bytes.end());
             return [this, http3_listener_index, remote, local, interface_index, owned = std::move(owned),
                        token = std::move(token)]() mutable noexcept {

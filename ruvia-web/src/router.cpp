@@ -3268,23 +3268,23 @@ session context::session() {
     return ruvia::session(session_state());
 }
 
-#ifdef RUVIA_ENABLE_REDIS
 task<void> detail::session_access::commit(context& context_value) {
     auto& state_value = context_value.session_state();
     if (!state_value.begin_commit()) {
         co_return;
     }
     try {
+#ifdef RUVIA_ENABLE_REDIS
         if (const auto* owner = state_value.owner()) {
             co_await owner->commit(context_value);
         }
+#endif
         state_value.finish_commit();
     } catch (...) {
         state_value.fail_commit(std::current_exception());
         throw;
     }
 }
-#endif
 
 }  // namespace ruvia
 
