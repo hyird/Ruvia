@@ -32,6 +32,7 @@ struct redisReplyObjectFunctions;
 #include "http_client_pool.h"
 #include "redis.h"
 #include "slot_pool.h"
+#include "startup_config.h"
 #include "stop_token.h"
 #include "task.h"
 #include "task_scope.h"

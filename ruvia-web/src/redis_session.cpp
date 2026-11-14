@@ -28,7 +28,9 @@
 #include "model.h"
 #include "redis.h"
 #include "redis_pool.h"
+#include "startup_config.h"
 #include "stop_token.h"
+
 namespace ruvia::detail {
 // Classifies a raw pooled command before it is encoded. Connection-stateful
 // commands are rejected; WAIT/WAITAOF are accepted only where a barrier is

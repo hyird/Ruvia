@@ -22,6 +22,7 @@
 #include "event_loop.h"
 #include "http_client_pool.h"
 #include "redis_pool.h"
+#include "startup_config.h"
 
 namespace ruvia {
 

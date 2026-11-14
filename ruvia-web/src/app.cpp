@@ -34,7 +34,9 @@
 #include "middleware.h"
 #include "rate_limit.h"
 #include "response_file.h"
+#include "runtime_control.h"
 #include "server_session.h"
+#include "startup_config.h"
 #include "stop_token.h"
 #include "worker_ref.h"
 

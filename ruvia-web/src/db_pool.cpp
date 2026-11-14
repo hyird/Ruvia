@@ -40,6 +40,7 @@
 #include "http_header.h"
 #include "redis.h"
 #include "redis_pool.h"
+#include "startup_config.h"
 #include "stop_token.h"
 #include "task_scope.h"
 

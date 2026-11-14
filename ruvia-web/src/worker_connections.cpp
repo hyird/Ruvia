@@ -68,6 +68,7 @@
 #include "proxy_protocol.h"
 #include "rate_limit.h"
 #include "response_file.h"
+#include "runtime_control.h"
 #include "server_session.h"
 #include "stop_token.h"
 #include "streaming.h"

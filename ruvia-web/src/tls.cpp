@@ -45,6 +45,7 @@
 #include "http_header.h"
 #include "http_request.h"
 #include "http_server.h"
+#include "runtime_control.h"
 #include "server_session.h"
 #include "task.h"
 #include "worker_ref.h"

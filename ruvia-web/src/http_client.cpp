@@ -44,6 +44,7 @@
 #include "http_request.h"
 #include "http_server.h"
 #include "inline_storage.h"
+#include "startup_config.h"
 #include "stop_token.h"
 #include "streaming.h"
 #include "streaming_session.h"

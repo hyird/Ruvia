@@ -63,6 +63,7 @@
 #include "rate_limit.h"
 #include "response_file.h"
 #include "route_table.h"
+#include "runtime_control.h"
 #include "stop_token.h"
 #include "streaming.h"
 #include "task.h"
