@@ -1942,10 +1942,14 @@ TEST(Ruvia, tunnel_operation_options_bound_each_wait) {
 }
 
 // pipe_to(response_stream_writer&) is one client operation bounding both its
-// upstream reads and its downstream writes. A stalled upstream read that
-// times out or is stopped keeps the unread body, so a later forward completes
-// it; a stalled downstream write that times out resets the downstream request
-// and reports the client's timeout; an already-stopped token forwards nothing.
+// upstream reads and its downstream writes. A forward stopped (from another
+// thread) or timed out while its upstream stalls keeps the unread body, so a
+// later forward completes it; a stalled downstream write that times out
+// resets the downstream request and reports the client's timeout; an
+// already-stopped token forwards nothing. The upstream stalls until its
+// proxy has run the interrupted forwards, and the stop waits for the client
+// to receive the forwarded prefix, so neither interruption races the upstream
+// or a downstream write.
 TEST(Ruvia, response_pipe_bounds_upstream_reads_and_downstream_writes) {
     asio::io_context io;
     ruvia::blocking_pool preparation({.thread_count_ = 1});
@@ -1957,6 +1961,11 @@ TEST(Ruvia, response_pipe_bounds_upstream_reads_and_downstream_writes) {
         std::optional<ruvia::http_client> upstream;
         unsigned phase = 0;
         std::vector<std::optional<std::error_code>> outcomes;
+        // The current /stalled upstream stalls until its proxy requests this.
+        ruvia::stop_token upstream_release;
+        // Stops the running /proxy/upstream-stalled forward; the client
+        // requests it once the forwarded prefix arrived.
+        ruvia::stop_source* forward_stop = nullptr;
         const auto failure_of = [](ruvia::task<void> forward) -> ruvia::task<std::optional<std::error_code>> {
             try {
                 co_await std::move(forward);
@@ -1969,9 +1978,11 @@ TEST(Ruvia, response_pipe_bounds_upstream_reads_and_downstream_writes) {
             const auto path = stream.request().path();
             auto& output = stream.response();
             if (path == "/stalled") {
+                const auto release = upstream_release;
                 (void)co_await output.commit();
                 co_await output.write(std::string_view("first-"));
-                (void)co_await output.sleep(300ms);
+                // Only a hang ends the stall by time.
+                (void)co_await output.sleep(10s, release);
                 co_await output.write(std::string_view("second"));
                 co_await output.end();
                 co_return;
@@ -1986,34 +1997,34 @@ TEST(Ruvia, response_pipe_bounds_upstream_reads_and_downstream_writes) {
                 co_return;
             }
             const bool downstream = path == "/proxy/downstream-timeout";
+            ruvia::stop_source release;
+            upstream_release = release.token();
             auto source = co_await upstream->client().get(downstream ? "/large" : "/stalled").send();
             (void)co_await output.commit();
-            ruvia::stop_source stop;
-            ruvia::operation_options operation{.timeout_ = downstream ? 300ms : 100ms};
-            if (path == "/proxy/upstream-stop") {
-                operation = {.stop_token_ = stop.token()};
-            } else if (path == "/proxy/prestopped") {
-                stop.request_stop();
-                operation = {.stop_token_ = stop.token()};
-            }
             EXPECT_THROW((void)source.stream().pipe_to(output, {.timeout_ = 0ms}), std::invalid_argument);
-            ruvia::task_scope stopper(stream.worker());
-            const auto stop_later = [&]() -> ruvia::task<void> {
-                (void)co_await ruvia::sleep_for(stream.worker(), 50ms);
-                std::thread([&stop] {
-                    stop.request_stop();
-                }).join();
-            };
-            if (path == "/proxy/upstream-stop") {
-                stopper.spawn(stop_later());
-            }
-            outcomes.push_back(co_await failure_of(source.stream().pipe_to(output, std::move(operation))));
-            co_await stopper.join();
             if (downstream) {
+                // Only a stalled downstream write may meet the timeout, so it
+                // far exceeds the work of filling what the client buffers.
+                outcomes.push_back(co_await failure_of(source.stream().pipe_to(output, {.timeout_ = 1s})));
                 EXPECT_TRUE(output.aborted());
                 phase = 1;
                 co_return;
             }
+            ruvia::stop_source stop;
+            if (path == "/proxy/upstream-stalled") {
+                // Forwards "first-", then waits on the stalled upstream until
+                // the client stops it.
+                forward_stop = &stop;
+                outcomes.push_back(co_await failure_of(source.stream().pipe_to(output, {.stop_token_ = stop.token()})));
+                forward_stop = nullptr;
+                // Nothing is left to forward, so only the stalled upstream
+                // read can time out.
+                outcomes.push_back(co_await failure_of(source.stream().pipe_to(output, {.timeout_ = 100ms})));
+            } else {
+                stop.request_stop();
+                outcomes.push_back(co_await failure_of(source.stream().pipe_to(output, {.stop_token_ = stop.token()})));
+            }
+            release.request_stop();
             co_await source.stream().pipe_to(output);
             co_await output.end();
         };
@@ -2045,11 +2056,34 @@ TEST(Ruvia, response_pipe_bounds_upstream_reads_and_downstream_writes) {
                 ruvia::http_client client(attachment.loop(), config);
                 std::exception_ptr exchange_failure;
                 try {
-                    for (const std::string_view path : {"/proxy/upstream-timeout", "/proxy/upstream-stop", "/proxy/prestopped"}) {
-                        auto response = co_await client.client().get(path).send();
-                        const auto body = co_await response.text();
-                        EXPECT_EQ(body.text(), "first-second") << target.label_ << ' ' << path;
+                    {
+                        auto response = co_await client.client().get("/proxy/upstream-stalled").send();
+                        std::string body;
+                        while (body.size() < std::string_view("first-").size()) {
+                            const auto chunk = co_await response.stream().text();
+                            if (!chunk) {
+                                break;
+                            }
+                            body.append(*chunk);
+                        }
+                        EXPECT_EQ(body, "first-") << target.label_;
+                        if (forward_stop != nullptr) {
+                            std::thread([stop = forward_stop] {
+                                stop->request_stop();
+                            }).join();
+                        }
+                        for (;;) {
+                            const auto chunk = co_await response.stream().text();
+                            if (!chunk) {
+                                break;
+                            }
+                            body.append(*chunk);
+                        }
+                        EXPECT_EQ(body, "first-second") << target.label_;
                     }
+                    auto prestopped = co_await client.client().get("/proxy/prestopped").send();
+                    const auto prestopped_body = co_await prestopped.text();
+                    EXPECT_EQ(prestopped_body.text(), "first-second") << target.label_;
                     phase = 0;
                     auto stalled = co_await client.client().get("/proxy/downstream-timeout").send();
                     for (unsigned count = 0; phase != 1 && count != 5000; ++count) {
@@ -2080,11 +2114,13 @@ TEST(Ruvia, response_pipe_bounds_upstream_reads_and_downstream_writes) {
         attachment.stop();
         if (failure) std::rethrow_exception(failure);
         EXPECT_EQ(outcomes.size(), 4 * target_count);
+        // Per target: stalled upstream stopped, then timed out; prestopped;
+        // stalled downstream timed out.
         for (std::size_t index = 0; index + 3 < outcomes.size(); index += 4) {
-            EXPECT_TRUE(outcomes[index] == std::make_error_code(std::errc::timed_out));
-            EXPECT_TRUE(outcomes[index + 1] == std::make_error_code(std::errc::operation_canceled));
-            EXPECT_TRUE(outcomes[index + 2] == std::make_error_code(std::errc::operation_canceled));
-            EXPECT_TRUE(outcomes[index + 3] == std::make_error_code(std::errc::timed_out));
+            EXPECT_TRUE(outcomes[index] == std::make_error_code(std::errc::operation_canceled)) << index / 4;
+            EXPECT_TRUE(outcomes[index + 1] == std::make_error_code(std::errc::timed_out)) << index / 4;
+            EXPECT_TRUE(outcomes[index + 2] == std::make_error_code(std::errc::operation_canceled)) << index / 4;
+            EXPECT_TRUE(outcomes[index + 3] == std::make_error_code(std::errc::timed_out)) << index / 4;
         }
     };
     auto root = attachment.loop().start(run());

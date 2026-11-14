@@ -739,6 +739,9 @@ TEST(Ruvia, raw_connection_operation_options_bound_each_wait) {
         std::atomic<unsigned> write_cancellations_{0};
         std::atomic<unsigned> aborted_after_write_{0};
         std::atomic<unsigned> handled_{0};
+        // Released by the peer once the stopped write's first byte arrived:
+        // that write has started, so its stop cannot precede it.
+        std::counting_semaphore<> payload_arrived_{0};
     };
     const auto results = std::make_shared<observations>();
     ruvia::test::tls_identity identity("localhost", "DNS:localhost,IP:127.0.0.1");
@@ -836,8 +839,8 @@ TEST(Ruvia, raw_connection_operation_options_bound_each_wait) {
         ruvia::operation_options operation{.timeout_ = 200ms};
         if (command == "c") {
             operation = {.stop_token_ = stop.token()};
-            canceller.emplace([&stop] {
-                std::this_thread::sleep_for(200ms);
+            canceller.emplace([results, &stop] {
+                EXPECT_TRUE(results->payload_arrived_.try_acquire_for(10s));
                 stop.request_stop();
             });
         }
@@ -887,6 +890,10 @@ TEST(Ruvia, raw_connection_operation_options_bound_each_wait) {
     };
     const auto stalled_session = [&](auto& stream, char command, unsigned handled) {
         asio::write(stream, asio::buffer(&command, 1));
+        if (command == 'c') {
+            EXPECT_EQ(read_exactly(stream, 1), "x");
+            results->payload_arrived_.release();
+        }
         ruvia::test::wait_until([&] {
             return results->handled_.load() == handled;
         }, 10s);
