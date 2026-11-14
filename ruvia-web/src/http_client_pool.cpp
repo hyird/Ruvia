@@ -39,6 +39,7 @@
 #include "stop_token.h"
 #include "streaming.h"
 #include "task_scope.h"
+#include "tls.h"
 #include "worker_wait.h"
 
 namespace ruvia::detail {

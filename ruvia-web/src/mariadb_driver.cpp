@@ -32,6 +32,8 @@
 #include "db_session.h"
 #include "event_loop.h"
 #include "http_header.h"
+#include "tls.h"
+
 namespace ruvia::detail {
 namespace {
 

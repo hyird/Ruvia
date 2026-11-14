@@ -40,6 +40,7 @@
 #include "server_session.h"
 #include "stop_token.h"
 #include "task_scope.h"
+#include "tls.h"
 
 #if defined(RUVIA_ENABLE_HTTP3)
 #include "http3_connection.h"

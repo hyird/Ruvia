@@ -1,3 +1,5 @@
+#include "tls.h"
+
 #include <algorithm>
 #include <array>
 #include <atomic>

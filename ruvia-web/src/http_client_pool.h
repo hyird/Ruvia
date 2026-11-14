@@ -52,6 +52,7 @@
 #include "stop_token.h"
 #include "task.h"
 #include "task_scope.h"
+#include "tls.h"
 #include "websocket_handshake.h"
 #include "worker_ref.h"
 #include "worker_wait.h"

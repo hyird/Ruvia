@@ -20,6 +20,8 @@
 #include "borrowed_text.h"
 #include "connection_lifecycle.h"
 #include "db_pool.h"
+#include "tls.h"
+
 namespace ruvia::detail {
 namespace {
 

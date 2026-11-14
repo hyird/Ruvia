@@ -71,6 +71,7 @@
 #include "streaming.h"
 #include "task.h"
 #include "task_scope.h"
+#include "tls.h"
 #include "worker_ref.h"
 #ifdef RUVIA_ENABLE_DATABASE
 #include "db_session.h"

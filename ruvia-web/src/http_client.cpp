@@ -46,7 +46,9 @@
 #include "streaming_session.h"
 #include "task.h"
 #include "task_scope.h"
+#include "tls.h"
 #include "worker_ref.h"
+
 namespace ruvia::detail {
 
 struct http_client_output_write_input final {

@@ -39,6 +39,7 @@
 #include "server_session.h"
 #include "stop_token.h"
 #include "streaming.h"
+#include "tls.h"
 #include "websocket_handshake.h"
 #include "worker_ref.h"
 #if !defined(_WIN32)
