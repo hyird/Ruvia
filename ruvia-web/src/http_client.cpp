@@ -27,6 +27,7 @@
 
 #include "borrowed_text.h"
 #include "connection_lifecycle.h"
+#include "connection_scanner.h"
 #include "context.h"
 #include "context_access.h"
 #include "crypto.h"

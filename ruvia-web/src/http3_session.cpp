@@ -28,6 +28,7 @@
 #include <asio/socket_base.hpp>
 
 #include "connection_lifecycle.h"
+#include "connection_scanner.h"
 #include "context_access.h"
 #include "crypto.h"
 #include "event_loop.h"
