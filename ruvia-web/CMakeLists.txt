@@ -156,6 +156,7 @@ set(ruvia_web_headers
     include/json_codec.h
     include/middleware.h
     include/model.h
+    include/model_value.h
     include/rate_limiting.h
     include/request_stream.h
     include/router.h

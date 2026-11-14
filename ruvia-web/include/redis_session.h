@@ -23,7 +23,7 @@
 #include "entity_storage.h"
 #include "event_loop.h"
 #include "http_client_types.h"
-#include "model.h"
+#include "model_value.h"
 #include "operation_options.h"
 #include "operation_scope.h"
 #include "stop_token.h"

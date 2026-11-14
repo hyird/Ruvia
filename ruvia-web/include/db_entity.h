@@ -21,7 +21,7 @@
 #include "db_session.h"
 #include "entity_storage.h"
 #include "fixed_string.h"
-#include "model.h"
+#include "model_value.h"
 
 namespace ruvia {
 

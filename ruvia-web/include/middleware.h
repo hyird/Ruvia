@@ -351,7 +351,7 @@ private:
 // application::use<T>() instantiates the descriptor at the call site. Built-in
 // middleware headers already include that machinery. A custom middleware's
 // use<T>() call site needs controller.h or app.h (test_app).
-// This header stays free of context so app.h does not pull it in.
+// This header only forward-declares context: context.h includes it.
 template <typename middleware_type>
 concept middleware = std::is_class_v<middleware_type> && std::is_final_v<middleware_type> && (requires { static_cast<task<void> (middleware_type::*)(context&, next&)>(&middleware_type::invoke); } || requires { static_cast<task<void> (middleware_type::*)(context&, next&) const>(&middleware_type::invoke); });
 template <typename policy_type>

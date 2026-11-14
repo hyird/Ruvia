@@ -22,7 +22,7 @@
 #include "borrowed_text.h"
 #include "fixed_string.h"
 #include "integer_parse.h"
-#include "model.h"
+#include "model_value.h"
 
 namespace ruvia::detail {
 

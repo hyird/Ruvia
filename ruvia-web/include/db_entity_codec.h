@@ -19,7 +19,7 @@
 #include "db_entity.h"
 #include "db_session.h"
 #include "entity_storage.h"
-#include "model.h"
+#include "model_value.h"
 
 namespace ruvia::detail {
 

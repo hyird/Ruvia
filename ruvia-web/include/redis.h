@@ -25,7 +25,7 @@
 #include "borrowed_text.h"
 #include "entity_storage.h"
 #include "fixed_string.h"
-#include "model.h"
+#include "model_value.h"
 #include "operation_options.h"
 #include "operation_scope.h"
 #include "redis_session.h"

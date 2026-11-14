@@ -926,7 +926,7 @@ CSRF 的 `header_name_` 必须是前端脚本主动提交 token 的自定义字�
 
 ## 5. 声明式模型 `RUVIA_MODEL`、序列化与参数校验
 
-头文件：`"model.h"`。
+头文件：`"model.h"`。只用字段值类型（如 SQL / Redis 实体代码）时可单独包含 `"model_value.h"`，不引入路由、校验与 JSON 依赖。
 
 ### 5.1 模型定义与字段类型
 

@@ -24,7 +24,8 @@
 #include "event_loop.h"
 #include "fixed_string.h"
 #include "http_client_types.h"
-#include "model.h"
+#include "model_value.h"
+#include "operation_scope.h"
 #include "stop_token.h"
 #include "task.h"
 
