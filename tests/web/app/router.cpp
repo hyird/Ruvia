@@ -474,7 +474,12 @@ TEST(Ruvia, public_router_routes_websocket_and_connect_upgrades_over_http1_and_h
         std::exception_ptr failure;
         try {
             co_await server.start();
-            for (const auto protocol : {ruvia::http_client_versions{.http2_ = false}, ruvia::http_client_versions{.http1_ = false}}) {
+            for (const auto protocol : {
+                     ruvia::http_client_versions{.http2_ = false},
+#if defined(RUVIA_ENABLE_HTTP2)
+                     ruvia::http_client_versions{.http1_ = false},
+#endif
+                 }) {
                 const std::string label = protocol == ruvia::http_client_versions{.http2_ = false} ? "HTTP/1.1" : "h2c";
                 ruvia::http_client client(attachment.loop(), {.base_url_ = origin, .versions_ = protocol});
                 std::exception_ptr exchange_failure;

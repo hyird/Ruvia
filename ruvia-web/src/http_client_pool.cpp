@@ -1325,7 +1325,7 @@ void http_client_pool::abandon_response(http_client_response_state& state_value,
             }
             break;
     }
-#if !defined(RUVIA_ENABLE_HTTP2) && !defined(RUVIA_ENABLE_HTTP3)
+#if !defined(RUVIA_ENABLE_HTTP2)
     (void)malformed;
 #endif
     if (auto* output = state_value.output()) {

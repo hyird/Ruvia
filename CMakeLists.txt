@@ -16,6 +16,13 @@ option(RUVIA_ENABLE_POSTGRESQL "Enable PostgreSQL" OFF)
 option(RUVIA_ENABLE_REDIS "Enable Redis" OFF)
 option(RUVIA_ENABLE_JWT "Enable JWT" OFF)
 
+# HTTP/3 shares the multiplexed-stream contracts and the client/server
+# multiplexing paths with HTTP/2, so enabling HTTP/3 enables HTTP/2.
+if(RUVIA_ENABLE_HTTP3 AND NOT RUVIA_ENABLE_HTTP2)
+    message(STATUS "RUVIA_ENABLE_HTTP3 enables RUVIA_ENABLE_HTTP2")
+    set(RUVIA_ENABLE_HTTP2 ON CACHE BOOL "Enable HTTP/2" FORCE)
+endif()
+
 if(RUVIA_BUILD_WEB AND (NOT RUVIA_BUILD_CORE OR NOT RUVIA_BUILD_HTTP))
     message(FATAL_ERROR "RUVIA_BUILD_WEB requires core and HTTP")
 endif()

@@ -146,11 +146,15 @@ private:
                 if (const char* name = SSL_get_servername(stream.native_handle(), TLSEXT_NAMETYPE_host_name)) {
                     observed.server_name_ = name;
                 }
+#if defined(RUVIA_ENABLE_HTTP2)
                 if (observed.selected_alpn_ == "h2") {
                     co_await serve_http2(stream, observed);
                 } else {
                     co_await serve_http1(stream, observed);
                 }
+#else
+                co_await serve_http1(stream, observed);
+#endif
             }
         } catch (const std::exception&) {
             // A client close or abort ends the connection; callers inspect closed_.
@@ -209,6 +213,7 @@ private:
         }
     }
 
+#if defined(RUVIA_ENABLE_HTTP2)
     template <typename stream_type>
     asio::awaitable<void> serve_http2(stream_type& stream, observed_connection& observed) {
         auto connection = ruvia::http2_connection::server();
@@ -257,6 +262,7 @@ private:
             }
         }
     }
+#endif
 
     asio::ip::tcp::acceptor acceptor_;
     asio::steady_timer gate_;

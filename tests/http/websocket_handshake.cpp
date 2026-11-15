@@ -26,6 +26,7 @@
 #include "http_header.h"
 #include "http_request.h"
 #include "http_response.h"
+#include "websocket_client_handshake.h"
 #include "websocket_connection.h"
 
 namespace {

@@ -43,8 +43,8 @@ Ruvia 由三个独立的静态库组成，所有公开类型、函数与概念�
 | `RUVIA_BUILD_WEB` | `ON` | — | 构建 `ruvia::web`（需开启 `CORE` 与 `HTTP`） |
 | `RUVIA_BUILD_EXAMPLES` | `OFF` | — | 构建 `examples/` 下的示例程序（需开启 `WEB`） |
 | `RUVIA_BUILD_TESTS` | `OFF` | — | 构建 `tests/` 测试套件 |
-| `RUVIA_ENABLE_HTTP2` | `ON` | `RUVIA_ENABLE_HTTP2` | 启用 nghttp2 会话与 HTTP/2 公开 API，可独立关闭 |
-| `RUVIA_ENABLE_HTTP3` | `ON` | `RUVIA_ENABLE_HTTP3` | 启用 nghttp3/ngtcp2 协议层与 Web QUIC TLS 接入，可独立关闭 |
+| `RUVIA_ENABLE_HTTP2` | `ON` | `RUVIA_ENABLE_HTTP2` | 启用 nghttp2 会话与 HTTP/2 公开 API；仅在 HTTP/3 也关闭时可关闭 |
+| `RUVIA_ENABLE_HTTP3` | `ON` | `RUVIA_ENABLE_HTTP3` | 启用 nghttp3/ngtcp2 协议层与 Web QUIC TLS 接入；开启时自动开启 `RUVIA_ENABLE_HTTP2` |
 | `RUVIA_ENABLE_MARIADB` | `OFF` | `RUVIA_ENABLE_MARIADB`、`RUVIA_ENABLE_DATABASE` | 启用 MariaDB 驱动与 `"db.h"` / `"db_entity.h"` / `"db_entity_codec.h"` / `"db_migration.h"` / `"db_query.h"` / `"db_schema.h"` / `"db_session.h"` / `"db_sql_scan.h"` 公开头 |
 | `RUVIA_ENABLE_POSTGRESQL` | `OFF` | `RUVIA_ENABLE_POSTGRESQL`、`RUVIA_ENABLE_DATABASE` | 启用 PostgreSQL 驱动、ORM 与 `"db.h"` / `"db_entity.h"` / `"db_entity_codec.h"` / `"db_migration.h"` / `"db_query.h"` / `"db_schema.h"` / `"db_session.h"` / `"db_sql_scan.h"` 公开头 |
 | `RUVIA_ENABLE_REDIS` | `OFF` | `RUVIA_ENABLE_REDIS` | 启用 `"redis.h"` / `"redis_session.h"`、服务端 `session_middleware` 与数据库查询缓存 |
