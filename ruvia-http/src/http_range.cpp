@@ -1,7 +1,6 @@
 #include "http_range.h"
 
 #include <algorithm>
-#include <charconv>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
@@ -266,26 +265,19 @@ std::optional<http_content_range> parse_http_content_range(std::string_view fiel
     if (slash == std::string_view::npos || spec.find('/', slash + 1) != std::string_view::npos || spec.find('-', dash + 1) != std::string_view::npos) {
         return std::nullopt;
     }
-    const auto parse_exact = [](std::string_view digits, std::uint64_t& out) noexcept {
-        if (digits.empty()) {
-            return false;
-        }
-        const auto [end, err] = std::from_chars(digits.data(), digits.data() + digits.size(), out);
-        return err == std::errc{} && end == digits.data() + digits.size();
-    };
-    std::uint64_t first = 0;
-    std::uint64_t last = 0;
-    std::uint64_t total = 0;
-    if (!parse_exact(spec.substr(0, dash), first) || !parse_exact(spec.substr(dash + 1, slash - dash - 1), last) || !parse_exact(spec.substr(slash + 1), total)) {
+    const auto first = parse_integer<std::uint64_t>(spec.substr(0, dash));
+    const auto last = parse_integer<std::uint64_t>(spec.substr(dash + 1, slash - dash - 1));
+    const auto total = parse_integer<std::uint64_t>(spec.substr(slash + 1));
+    if (!first || !last || !total) {
         return std::nullopt;
     }
-    if (first > last || last >= total) {
+    if (*first > *last || *last >= *total) {
         return std::nullopt;
     }
     return http_content_range{
-        .first_ = first,
-        .last_ = last,
-        .total_ = total,
+        .first_ = *first,
+        .last_ = *last,
+        .total_ = *total,
     };
 }
 

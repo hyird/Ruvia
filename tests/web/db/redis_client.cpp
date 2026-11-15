@@ -41,7 +41,7 @@
 #include "event_loop.h"
 #include "http_server.h"
 #include "http_server_fixture.h"
-#include "redis.h"
+#include "redis_executor.h"
 #include "request_stream.h"
 #include "router.h"
 #include "stop_token.h"
@@ -612,6 +612,55 @@ TEST(Ruvia, redis_typed_commands_preserve_arguments_across_direct_pipeline_and_t
     const std::vector<std::vector<std::string>> expected({std::vector<std::string>({std::string("INCRBY"), std::string(key), std::string("-9223372036854775808")}), std::vector<std::string>({std::string("DECRBY"), std::string(key), std::string("9223372036854775807")}), std::vector<std::string>({std::string("LRANGE"), std::string(key), std::string("-9223372036854775808"), std::string("9223372036854775807")}), std::vector<std::string>({std::string("ZADD"), std::string(key), std::string("-inf"), std::string(member)}), std::vector<std::string>({std::string("ZRANGE"), std::string(key), std::string("9223372036854775807"), std::string("-9223372036854775808")})});
     auto all = decltype(expected)(expected);
     all.insert(all.end(), expected.begin(), expected.end());
+    all.push_back(std::vector<std::string>({std::string("MULTI")}));
+    all.insert(all.end(), expected.begin(), expected.end());
+    all.push_back(std::vector<std::string>({std::string("EXEC")}));
+    EXPECT_TRUE(peer.commands() == all);
+}
+
+// Batches carry the whole typed command table, not a hand-picked subset: these
+// commands once existed only on the executor.
+TEST(Ruvia, redis_batches_queue_the_full_typed_command_table) {
+    auto& io_context = ruvia::test::new_test_io_context();
+    auto worker = ruvia::attach_event_loop(io_context);
+    const std::vector<std::string> command_replies({std::string("*2\r\n$1\r\nv\r\n$-1\r\n"), std::string(":1\r\n"), std::string("*1\r\n$1\r\nf\r\n"), std::string("$1\r\nx\r\n")});
+    auto replies = decltype(command_replies)(command_replies);
+    replies.emplace_back("+OK\r\n");
+    replies.insert(replies.end(), 4, std::string("+QUEUED\r\n"));
+    std::string executed("*4\r\n");
+    for (const auto& reply : command_replies) {
+        executed.append(reply);
+    }
+    replies.push_back(std::move(executed));
+    scripted_redis_peer peer(std::move(replies));
+    ruvia::redis_config config{.host_ = "127.0.0.1", .port_ = peer.port(), .tls_ = {.mode_ = ruvia::client_tls_mode::disabled}, .pool_size_per_worker_ = 1};
+    ruvia::redis_client client(worker.loop(), config);
+    ruvia::test::drive_backend_client(worker, client, [&](ruvia::redis_client& connected) -> ruvia::task<void> {
+        auto redis = connected.redis();
+        const auto append = [](auto& batch) {
+            batch.mget("a", "b").expire("a", std::chrono::seconds(30)).hmget("h", "f").lindex("l", -1);
+        };
+        auto pipeline = redis.pipeline();
+        append(pipeline);
+        const auto pipelined = co_await std::move(pipeline).exec();
+        auto transaction = redis.transaction();
+        append(transaction);
+        const auto transacted = co_await std::move(transaction).exec();
+        for (const auto* results : {&pipelined, &transacted}) {
+            EXPECT_EQ(results->size(), std::size_t{4});
+            if (results->size() != 4) {
+                continue;
+            }
+            const auto values = (*results)[0].array();
+            EXPECT_TRUE(values.size() == 2 && values[0].string() == "v" && values[1].is_null());
+            EXPECT_EQ((*results)[1].integer(), std::int64_t{1});
+            EXPECT_EQ((*results)[2].array().size(), std::size_t{1});
+            EXPECT_EQ((*results)[3].string(), std::string_view("x"));
+        }
+    });
+    peer.join();
+    const std::vector<std::vector<std::string>> expected({std::vector<std::string>({std::string("MGET"), std::string("a"), std::string("b")}), std::vector<std::string>({std::string("EXPIRE"), std::string("a"), std::string("30")}), std::vector<std::string>({std::string("HMGET"), std::string("h"), std::string("f")}), std::vector<std::string>({std::string("LINDEX"), std::string("l"), std::string("-1")})});
+    auto all = decltype(expected)(expected);
     all.push_back(std::vector<std::string>({std::string("MULTI")}));
     all.insert(all.end(), expected.begin(), expected.end());
     all.push_back(std::vector<std::string>({std::string("EXEC")}));
@@ -1578,7 +1627,7 @@ ruvia::task<void> read_late_message(ruvia::redis_subscription& subscription, std
     }
 }
 
-ruvia::task<void> publish_after_idle_intervals(ruvia::redis_session redis, const ruvia::worker_ref& worker) {
+ruvia::task<void> publish_after_idle_intervals(ruvia::redis_executor redis, const ruvia::worker_ref& worker) {
     (void)co_await ruvia::sleep_for(worker, 5 * idle_probe_interval);
     EXPECT_TRUE(co_await redis.publish("quiet", "late") == 1);
 }

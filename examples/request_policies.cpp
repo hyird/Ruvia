@@ -41,8 +41,8 @@ public:
     RUVIA_POST("/small", small, ruvia::body_limit<16>);
     RUVIA_GET("/label", label);
     RUVIA_GET("/dispatch", dispatch);
-    RUVIA_GET("/csrf", csrf, ruvia::csrf_protection);
-    RUVIA_POST("/csrf", csrf, ruvia::csrf_protection);
+    RUVIA_GET("/csrf", csrf, ruvia::csrf_middleware);
+    RUVIA_POST("/csrf", csrf, ruvia::csrf_middleware);
     RUVIA_ROUTES_END
 
 private:

@@ -1,5 +1,7 @@
 #pragma once
 
+#ifdef RUVIA_ENABLE_REDIS
+
 #include <chrono>
 #include <string>
 #include <string_view>
@@ -45,12 +47,6 @@ private:
     detail::context_session_state* state_;
     friend class context;
 };
-
-}  // namespace ruvia
-
-#ifdef RUVIA_ENABLE_REDIS
-
-namespace ruvia {
 
 // Server-side session backed by Redis (RUVIA_ENABLE_REDIS). Reads the configured
 // cookie only when its ID is exactly 48 lowercase hexadecimal characters, the

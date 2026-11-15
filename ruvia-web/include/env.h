@@ -15,7 +15,7 @@
 #include <variant>
 
 #include "borrowed_text.h"
-#include "integer_parse.h"
+#include "decimal_text.h"
 
 namespace ruvia {
 namespace detail {
@@ -123,11 +123,7 @@ std::optional<std::remove_cvref_t<t_type>> env::parse_typed_value(std::string_vi
     } else if constexpr (std::is_same_v<value_type, bool>) {
         return parse_bool_value(value);
     } else if constexpr (detail::parsed_integer<value_type>) {
-        const auto parsed_value = parse_integer<value_type>(value);
-        if (parsed_value.index() != 0) {
-            return std::nullopt;
-        }
-        return std::get<0>(parsed_value);
+        return parse_integer<value_type>(value);
     } else if constexpr (std::is_floating_point_v<value_type>) {
         return parse_arithmetic_value<value_type>(value);
     } else {

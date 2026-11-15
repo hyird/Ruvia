@@ -9,16 +9,16 @@
 
 #include "client_lifecycle.h"
 #include "db_config_storage.h"
+#include "db_executor.h"
 #include "db_pool.h"
 #include "db_registry.h"
-#include "db_session.h"
 #include "event_loop.h"
 #include "http_client_pool.h"
 #include "redis_pool.h"
 #include "startup_config.h"
 #ifdef RUVIA_ENABLE_REDIS
 #include "db_query_cache.h"
-#include "redis_session.h"
+#include "redis_executor.h"
 #endif
 
 namespace ruvia::detail {
@@ -27,7 +27,7 @@ class db_client_state final : public std::enable_shared_from_this<db_client_stat
 public:
     db_client_state(event_loop loop, const db_config& config);
 #ifdef RUVIA_ENABLE_REDIS
-    db_client_state(event_loop loop, const db_config& config, const redis_session& cache_store, const db_cache_config& cache_policy);
+    db_client_state(event_loop loop, const db_config& config, const redis_executor& cache_store, const db_cache_config& cache_policy);
 #endif
 
     db_client_state(const db_client_state&) = delete;
@@ -45,7 +45,7 @@ public:
     [[nodiscard]] task<void> shutdown() {
         return lifecycle_.shutdown();
     }
-    [[nodiscard]] db_session db();
+    [[nodiscard]] db_executor db();
 
     [[nodiscard]] const worker_ref& worker() const noexcept {
         return worker_;
@@ -72,7 +72,7 @@ db_client_state::db_client_state(event_loop loop, const db_config& config) :
     lifecycle_(*this, loop_, worker_) {}
 
 #ifdef RUVIA_ENABLE_REDIS
-db_client_state::db_client_state(event_loop loop, const db_config& config, const redis_session& cache_store, const db_cache_config& cache_policy) :
+db_client_state::db_client_state(event_loop loop, const db_config& config, const redis_executor& cache_store, const db_cache_config& cache_policy) :
     loop_(client_lifecycle<db_client_state>::require_loop(std::move(loop))),
     worker_(loop_.worker()),
     databases_(loop_.io_context(), worker_, config, cache_store, cache_policy),
@@ -83,7 +83,7 @@ void db_client_state::throw_not_ready() {
     throw std::logic_error("database client is not connected");
 }
 
-db_session db_client_state::db() {
+db_executor db_client_state::db() {
     lifecycle_.require_ready();
     return databases_.get(lifecycle_.operation_scope(), nullptr);
 }
@@ -98,7 +98,7 @@ db_client::db_client(event_loop loop, const db_config& config) :
 }
 
 #ifdef RUVIA_ENABLE_REDIS
-db_client::db_client(event_loop loop, const db_config& config, const redis_session& cache_store, const db_cache_config& cache_policy) :
+db_client::db_client(event_loop loop, const db_config& config, const redis_executor& cache_store, const db_cache_config& cache_policy) :
     state_(std::make_shared<detail::db_client_state>(std::move(loop), config, cache_store, cache_policy)) {
     state_->bind_stop();
 }
@@ -112,7 +112,7 @@ task<void> db_client::connect() & {
     return state_->connect();
 }
 
-db_session db_client::db() const& {
+db_executor db_client::db() const& {
     return state_->db();
 }
 
@@ -180,12 +180,12 @@ detail::db_registry::db_registry(asio::io_context& io_context, const worker_ref&
 }
 
 #ifdef RUVIA_ENABLE_REDIS
-detail::db_registry::db_registry(asio::io_context& io_context, const worker_ref& worker_value, const db_config& config, const redis_session& redis, const db_cache_config& policy) :
+detail::db_registry::db_registry(asio::io_context& io_context, const worker_ref& worker_value, const db_config& config, const redis_executor& redis, const db_cache_config& policy) :
     db_registry(io_context, worker_value, config) {
     attach_cache(0, worker_value, redis, db_cache_config_storage(policy), pool_config(entries_[0].pool_), default_capability_alias);
 }
 
-void detail::db_registry::attach_cache(std::size_t index, const worker_ref& worker_value, const redis_session& redis, const db_cache_config_storage& policy, const db_config_storage& config, std::string_view alias) {
+void detail::db_registry::attach_cache(std::size_t index, const worker_ref& worker_value, const redis_executor& redis, const db_cache_config_storage& policy, const db_config_storage& config, std::string_view alias) {
     if (redis.worker().id() != worker_value.id()) {
         throw std::invalid_argument("database query cache Redis capability must belong to the same worker");
     }
@@ -245,31 +245,31 @@ void detail::db_registry::close_now() noexcept {
     }
 }
 
-db_session detail::db_registry::session(const entry_type& entry, ::ruvia::operation_scope& operation_scope, request_io_metrics* io_metrics) const {
+db_executor detail::db_registry::executor(const entry_type& entry, ::ruvia::operation_scope& operation_scope, request_io_metrics* io_metrics) const {
 #ifdef RUVIA_ENABLE_REDIS
     detail::db_query_cache_state* const cache = entry.cache_.get();
 #else
     detail::db_query_cache_state* const cache = nullptr;
 #endif
-    return db_session(pool_ref(entry.pool_), operation_scope, io_metrics, cache);
+    return db_executor(pool_ref(entry.pool_), operation_scope, io_metrics, cache);
 }
 
 bool detail::db_registry::empty() const noexcept {
     return entries_.empty();
 }
 
-db_session detail::db_registry::get(::ruvia::operation_scope& operation_scope, request_io_metrics* io_metrics) const {
+db_executor detail::db_registry::get(::ruvia::operation_scope& operation_scope, request_io_metrics* io_metrics) const {
     const auto default_pool_index = alias_index_.default_index();
     if (!default_pool_index.has_value()) {
         throw db_error(db_error::code_type::not_configured, std::nullopt, "default database is not configured");
     }
-    return session(entries_[*default_pool_index], operation_scope, io_metrics);
+    return executor(entries_[*default_pool_index], operation_scope, io_metrics);
 }
 
-db_session detail::db_registry::get(std::string_view alias, ::ruvia::operation_scope& operation_scope, request_io_metrics* io_metrics) const {
+db_executor detail::db_registry::get(std::string_view alias, ::ruvia::operation_scope& operation_scope, request_io_metrics* io_metrics) const {
     const auto match = alias_index_.find(alias);
     if (match.has_value()) {
-        return session(entries_[*match], operation_scope, io_metrics);
+        return executor(entries_[*match], operation_scope, io_metrics);
     }
     throw db_error(db_error::code_type::not_configured, std::nullopt, "database is not configured");
 }

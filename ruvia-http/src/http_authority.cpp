@@ -6,11 +6,10 @@
 #include <cstdint>
 #include <optional>
 #include <string_view>
-#include <system_error>
-#include <variant>
 
 #include "binary_text_encoding.h"
 #include "borrowed_text.h"
+#include "decimal_text.h"
 #include "http_uri_syntax.h"
 #include "url_encoding.h"
 
@@ -20,7 +19,6 @@ namespace {
 using detail::is_decimal_digit;
 using detail::is_uri_lower_alpha;
 using detail::parse_ipv4_address;
-using detail::parse_port_value;
 
 [[nodiscard]] bool is_lower_alpha_numeric(char value) noexcept {
     return is_uri_lower_alpha(static_cast<unsigned char>(value)) || is_decimal_digit(value);
@@ -198,14 +196,14 @@ using detail::parse_port_value;
     return pieces.has_value() && is_canonical_serialized_origin_ipv6(literal, *pieces);
 }
 
-[[nodiscard]] std::variant<std::uint16_t, std::errc> parse_serialized_origin_port(std::string_view value) noexcept {
+[[nodiscard]] std::optional<std::uint16_t> parse_serialized_origin_port(std::string_view value) noexcept {
     // A serialized URL port is the shortest decimal form of the URL record's
     // 16-bit port. Merely accepting five digits admits values such as 99999,
     // while accepting leading zeroes admits spellings no serializer can emit.
-    if (value.empty() || (value.size() > 1 && value.front() == '0')) {
-        return std::errc::invalid_argument;
+    if (value.size() > 1 && value.front() == '0') {
+        return std::nullopt;
     }
-    return parse_port_value(value);
+    return parse_integer<std::uint16_t>(value);
 }
 
 [[nodiscard]] std::optional<std::uint16_t> serialized_origin_default_port(std::string_view scheme) noexcept {
@@ -275,11 +273,11 @@ bool is_valid_http_serialized_origin(std::string_view value) noexcept {
         return true;
     }
     const auto port_value = parse_serialized_origin_port(port);
-    if ((port_value.index() != 0)) {
+    if (!port_value) {
         return false;
     }
     const auto default_port = serialized_origin_default_port(scheme);
-    return !default_port.has_value() || std::get<0>(port_value) != *default_port;
+    return !default_port.has_value() || *port_value != *default_port;
 }
 
 namespace detail {
@@ -413,11 +411,11 @@ std::optional<http_authority_view> parse_http_authority(borrowed_text text) noex
         return detail::http_authority_view_access::make(host, http_authority_port_kind::empty);
     }
 
-    const auto port = detail::parse_port_value(port_text);
-    if ((port.index() != 0)) {
+    const auto port = parse_integer<std::uint16_t>(port_text);
+    if (!port) {
         return std::nullopt;
     }
-    return detail::http_authority_view_access::make(host, http_authority_port_kind::value, std::get<0>(port));
+    return detail::http_authority_view_access::make(host, http_authority_port_kind::value, *port);
 }
 
 std::optional<std::string_view> parse_http_authority_host(borrowed_text value) noexcept {

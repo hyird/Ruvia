@@ -212,10 +212,7 @@ void http_client_exchange::release() noexcept {
     body_.state_ = nullptr;
 }
 
-task<void> http_client_request_body_writer::write(std::span<const std::byte> bytes_value, operation_options operation) & {
-    return write(std::string_view(reinterpret_cast<const char*>(bytes_value.data()), bytes_value.size()), std::move(operation));
-}
-task<void> http_client_request_body_writer::write(std::string_view bytes_value, operation_options operation) & {
+task<void> http_client_request_body_writer::write(outbound_bytes bytes_value, operation_options operation) & {
     if (state_ == nullptr) {
         throw std::logic_error("HTTP request exchange is empty");
     }
@@ -223,17 +220,7 @@ task<void> http_client_request_body_writer::write(std::string_view bytes_value, 
     if (bytes_value.size() > state_->upload_->config_.max_chunk_bytes_) {
         throw std::length_error("HTTP upload chunk exceeds configured bound");
     }
-    return ::ruvia::make_scoped_operation(state_->upload_->output_.output_scope_, detail::write_client_output<upload_output_policy>(state_, detail::http_client_output_write_input{http_client_response(state_), std::string(bytes_value), std::move(operation)}));
-}
-task<void> http_client_request_body_writer::write_owned(std::string&& bytes_value, operation_options operation) {
-    if (state_ == nullptr) {
-        throw std::logic_error("HTTP request exchange is empty");
-    }
-    require_writable(*state_);
-    if (bytes_value.size() > state_->upload_->config_.max_chunk_bytes_) {
-        throw std::length_error("HTTP upload chunk exceeds configured bound");
-    }
-    return ::ruvia::make_scoped_operation(state_->upload_->output_.output_scope_, detail::write_client_output<upload_output_policy>(state_, detail::http_client_output_write_input{http_client_response(state_), std::move(bytes_value), std::move(operation)}));
+    return ::ruvia::make_scoped_operation(state_->upload_->output_.output_scope_, detail::write_client_output<upload_output_policy>(state_, detail::http_client_output_write_input{http_client_response(state_), std::move(bytes_value).into_string(), std::move(operation)}));
 }
 task<void> http_client_request_body_writer::end(std::span<const http_header_view> fields_value, operation_options operation) & {
     if (state_ == nullptr) {
@@ -378,24 +365,13 @@ task<std::optional<std::string_view>> http_client_tunnel::text(operation_options
     }
     return response_.stream().text(std::move(operation));
 }
-task<void> http_client_tunnel::write(std::span<const std::byte> bytes_value, operation_options operation) & {
-    return write(std::string_view(reinterpret_cast<const char*>(bytes_value.data()), bytes_value.size()), std::move(operation));
-}
-task<void> http_client_tunnel::write(std::string_view bytes_value, operation_options operation) & {
+task<void> http_client_tunnel::write(outbound_bytes bytes_value, operation_options operation) & {
     require_output(response_.state_, false);
     auto& state_value = *response_.state_;
     if (bytes_value.size() > state_value.tunnel_->config_.max_chunk_bytes_) {
         throw std::length_error("HTTP client tunnel chunk exceeds configured bound");
     }
-    return ::ruvia::make_scoped_operation(state_value.tunnel_->output_.output_scope_, detail::write_client_output<tunnel_output_policy>(&state_value, detail::http_client_output_write_input{http_client_response(&state_value), std::string(bytes_value), std::move(operation)}));
-}
-task<void> http_client_tunnel::write_owned(std::string&& bytes_value, operation_options operation) {
-    require_output(response_.state_, false);
-    auto& state_value = *response_.state_;
-    if (bytes_value.size() > state_value.tunnel_->config_.max_chunk_bytes_) {
-        throw std::length_error("HTTP client tunnel chunk exceeds configured bound");
-    }
-    return ::ruvia::make_scoped_operation(state_value.tunnel_->output_.output_scope_, detail::write_client_output<tunnel_output_policy>(&state_value, detail::http_client_output_write_input{http_client_response(&state_value), std::move(bytes_value), std::move(operation)}));
+    return ::ruvia::make_scoped_operation(state_value.tunnel_->output_.output_scope_, detail::write_client_output<tunnel_output_policy>(&state_value, detail::http_client_output_write_input{http_client_response(&state_value), std::move(bytes_value).into_string(), std::move(operation)}));
 }
 task<void> http_client_tunnel::finish(operation_options operation) & {
     require_output(response_.state_, true);

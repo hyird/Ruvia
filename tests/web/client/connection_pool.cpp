@@ -502,7 +502,7 @@ TEST(Ruvia, http_client_finishes_upload_after_an_early_persistent_response_befor
                         if (complete) {
                             break;
                         }
-                        if (decoded.need_more()) {
+                        if (decoded.need_input()) {
                             co_await asio::async_read(socket, asio::dynamic_buffer(buffered), asio::transfer_at_least(1), asio::use_awaitable);
                         }
                     }

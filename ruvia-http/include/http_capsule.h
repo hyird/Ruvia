@@ -15,7 +15,7 @@
 
 namespace ruvia {
 
-enum class http_capsule_codec_error : std::uint8_t { need_more_data,
+enum class http_capsule_codec_error : std::uint8_t { need_input,
     value_out_of_range,
     output_too_small };
 // RFC 9297 Capsule-Protocol is a Structured Field Boolean Item.
@@ -39,12 +39,12 @@ struct http_capsule_event final {
     bool end_capsule_{false};
 };
 using http_capsule_callback_type = void (*)(void*, http_capsule_event);
-enum class http_capsule_status : std::uint8_t { need_more_data,
+enum class http_capsule_status : std::uint8_t { need_input,
     end,
     truncated,
     limit };
 struct http_capsule_feed_result final {
-    http_capsule_status status_{http_capsule_status::need_more_data};
+    http_capsule_status status_{http_capsule_status::need_input};
     std::size_t consumed_bytes_{};
     bool capsule_complete_{};
 };
@@ -110,7 +110,7 @@ private:
     std::uint64_t type_{0}, remaining_{0};
     payload_mode mode_{payload_mode::deliver};
     bool payload_{false}, feeding_{false};
-    http_capsule_status status_{http_capsule_status::need_more_data};
+    http_capsule_status status_{http_capsule_status::need_input};
 };
 [[nodiscard]] std::variant<std::size_t, http_capsule_codec_error> encode_http_capsule_header(std::span<char> output, std::uint64_t type, std::uint64_t length) noexcept;
 enum class http_datagram_error : std::uint8_t {

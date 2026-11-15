@@ -11,8 +11,8 @@
 #include <utility>
 #include <vector>
 
-#include "db.h"
 #include "db_query.h"
+#include "db_repository.h"
 #include "db_schema.h"
 #include "worker_task_fixture.h"
 

@@ -29,6 +29,7 @@
 #include "http_tunnel.h"
 #include "model.h"
 #include "operation_options.h"
+#include "outbound_bytes.h"
 #include "stop_token.h"
 #include "websocket.h"
 #include "websocket_connection.h"
@@ -350,16 +351,9 @@ public:
     task<std::optional<std::span<const std::byte>>> read(operation_options = {}) && = delete;
     [[nodiscard]] task<std::optional<std::string_view>> text(operation_options operation = {}) &;
     task<std::optional<std::string_view>> text(operation_options = {}) && = delete;
-    [[nodiscard]] task<void> write(std::string_view bytes, operation_options operation = {}) &;
-    task<void> write(std::string_view, operation_options = {}) && = delete;
-    [[nodiscard]] task<void> write(std::span<const std::byte> bytes, operation_options operation = {}) &;
-    task<void> write(std::span<const std::byte>, operation_options = {}) && = delete;
-    template <std::same_as<std::string> string_type>
-    [[nodiscard]] task<void> write(string_type&& bytes, operation_options operation = {}) & {
-        return write_owned(std::move(bytes), std::move(operation));
-    }
-    template <std::same_as<std::string> string_type>
-    task<void> write(string_type&&, operation_options = {}) && = delete;
+    // Owns `bytes` before returning; exact std::string rvalues move without copying.
+    [[nodiscard]] task<void> write(outbound_bytes bytes, operation_options operation = {}) &;
+    task<void> write(outbound_bytes, operation_options = {}) && = delete;
     // A successful finish stays idempotent after transport retirement.
     [[nodiscard]] task<void> finish(operation_options operation = {}) &;
     task<void> finish(operation_options = {}) && = delete;
@@ -382,7 +376,6 @@ private:
     friend class detail::http_capsule_stream_state;
     friend class http_capsule_stream;
     explicit http_client_tunnel(http_client_response response) noexcept;
-    [[nodiscard]] task<void> write_owned(std::string&& bytes, operation_options operation = {});
     // abort() for received content that violates the tunnel's protocol (RFC 9297
     // section 3.3 capsule error): HTTP/2 resets the stream with PROTOCOL_ERROR.
     void abort_malformed() & noexcept;
@@ -487,16 +480,9 @@ class http_client_request_body_writer final {
 public:
     http_client_request_body_writer(const http_client_request_body_writer&) = delete;
     http_client_request_body_writer& operator=(const http_client_request_body_writer&) = delete;
-    [[nodiscard]] task<void> write(std::span<const std::byte> bytes, operation_options operation = {}) &;
-    task<void> write(std::span<const std::byte>, operation_options = {}) && = delete;
-    [[nodiscard]] task<void> write(std::string_view bytes, operation_options operation = {}) &;
-    task<void> write(std::string_view, operation_options = {}) && = delete;
-    template <std::same_as<std::string> string_type>
-    [[nodiscard]] task<void> write(string_type&& bytes, operation_options operation = {}) & {
-        return write_owned(std::move(bytes), std::move(operation));
-    }
-    template <std::same_as<std::string> string_type>
-    task<void> write(string_type&&, operation_options = {}) && = delete;
+    // Owns `bytes` before returning; exact std::string rvalues move without copying.
+    [[nodiscard]] task<void> write(outbound_bytes bytes, operation_options operation = {}) &;
+    task<void> write(outbound_bytes, operation_options = {}) && = delete;
     [[nodiscard]] task<void> end(std::span<const http_header_view> trailers = {}, operation_options operation = {}) &;
     task<void> end(std::span<const http_header_view> = {}, operation_options = {}) && = delete;
     [[nodiscard]] bool complete() const noexcept;
@@ -519,7 +505,6 @@ private:
     explicit http_client_request_body_writer(detail::http_client_response_state* state_value) noexcept :
         state_(state_value) {}
     ~http_client_request_body_writer() = default;
-    [[nodiscard]] task<void> write_owned(std::string&& bytes, operation_options operation);
     detail::http_client_response_state* state_;
 };
 
@@ -644,13 +629,10 @@ public:
     http_client_request&& query(std::string_view name, std::string_view value) && {
         return std::move(query(name, value));
     }
-    http_client_request& body(std::string_view bytes) &;
-    http_client_request&& body(std::string_view bytes) && {
-        return std::move(body(bytes));
-    }
-    http_client_request& body(std::span<const std::byte> bytes) &;
-    http_client_request&& body(std::span<const std::byte> bytes) && {
-        return std::move(body(bytes));
+    // Owns `bytes`; exact std::string rvalues move without copying.
+    http_client_request& body(outbound_bytes bytes) &;
+    http_client_request&& body(outbound_bytes bytes) && {
+        return std::move(body(std::move(bytes)));
     }
     // Replaces every per-request option, including the informational callback.
     http_client_request& configure(http_client_request_options options) &;

@@ -18,10 +18,10 @@
 #include "binary_text_encoding.h"
 #include "connection_lifecycle.h"
 #include "crypto.h"
-#include "db_session.h"
+#include "db_executor.h"
 #include "redis_codec.h"
+#include "redis_executor.h"
 #include "redis_pool.h"
-#include "redis_session.h"
 #include "stop_token.h"
 #include "task.h"
 #include "worker_timer.h"
@@ -346,7 +346,7 @@ task<void> finish_delete_key_batch(std::optional<task<std::int64_t>> deletion, c
     }
 }
 
-task<void> delete_key_batch(const redis_session& redis, std::span<const std::string> keys, const operation_options& options, const operation_deadline& deadline_value) {
+task<void> delete_key_batch(const redis_executor& redis, std::span<const std::string> keys, const operation_options& options, const operation_deadline& deadline_value) {
     if (keys.empty()) {
         return finish_delete_key_batch(std::nullopt, deadline_value);
     }
@@ -374,7 +374,7 @@ task<void> delete_key_batch(const redis_session& redis, std::span<const std::str
     }
 }
 
-task<void> remove_keys(redis_session redis, std::vector<std::string> keys, request_io_metrics* io_metrics, operation_options caller_options, stop_token shutdown, stop_token request_stop) {
+task<void> remove_keys(redis_executor redis, std::vector<std::string> keys, request_io_metrics* io_metrics, operation_options caller_options, stop_token shutdown, stop_token request_stop) {
     const linked_operation_options linked(caller_options, shutdown, request_stop);
     const operation_options& options = linked.options();
     scoped_request_io_timer timer(io_metrics, request_io_kind::redis);
@@ -385,7 +385,7 @@ task<void> remove_keys(redis_session redis, std::vector<std::string> keys, reque
     co_await std::move(deletion);
 }
 
-task<void> clear_keys(redis_session redis, std::string pattern, request_io_metrics* io_metrics, operation_options caller_options, stop_token shutdown, stop_token request_stop) {
+task<void> clear_keys(redis_executor redis, std::string pattern, request_io_metrics* io_metrics, operation_options caller_options, stop_token shutdown, stop_token request_stop) {
     const linked_operation_options linked(caller_options, shutdown, request_stop);
     const operation_options& options = linked.options();
     scoped_request_io_timer timer(io_metrics, request_io_kind::redis);
@@ -411,12 +411,12 @@ task<void> clear_keys(redis_session redis, std::string pattern, request_io_metri
 
 }  // namespace
 
-db_query_cache_state::db_query_cache_state(const redis_session& redis, const db_cache_config_storage& config, std::string prefix) :
+db_query_cache_state::db_query_cache_state(const redis_executor& redis, const db_cache_config_storage& config, std::string prefix) :
     worker_(redis.worker()),
     duration_(config.duration_),
     always_enabled_(config.always_enabled_),
     ignore_errors_(config.ignore_errors_),
-    max_entry_reply_bytes_(redis_client_runtime::session_config(redis).max_reply_bytes_),
+    max_entry_reply_bytes_(redis_client_runtime::executor_config(redis).max_reply_bytes_),
     prefix_(std::move(prefix)),
     redis_(redis.with_options({})),
     fills_() {}

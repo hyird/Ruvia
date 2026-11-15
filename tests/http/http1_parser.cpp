@@ -174,12 +174,12 @@ TEST(Ruvia, http1_public_request_connection_plan_only_tightens_reuse) {
 }
 
 TEST(Ruvia, http1_parse_message_outcome_exposes_only_its_active_alternative) {
-    const auto need_more = parse_http1_request_message("GET / HTTP/1.1\r\nHost: example.com\r\n");
-    EXPECT_TRUE(need_more.state_.need_request_head() != nullptr);
-    EXPECT_TRUE(need_more.state_.head_ready() == nullptr);
-    EXPECT_TRUE(!need_more.need_body());
-    EXPECT_TRUE(!need_more.complete());
-    EXPECT_TRUE(need_more.state_.failure() == nullptr);
+    const auto need_input = parse_http1_request_message("GET / HTTP/1.1\r\nHost: example.com\r\n");
+    EXPECT_TRUE(need_input.state_.need_request_head() != nullptr);
+    EXPECT_TRUE(need_input.state_.head_ready() == nullptr);
+    EXPECT_TRUE(!need_input.need_body());
+    EXPECT_TRUE(!need_input.complete());
+    EXPECT_TRUE(need_input.state_.failure() == nullptr);
 
     const auto failure = parse_http1_request_message("GET / HTTP/1.1\r\n\r\n");
     const auto* failure_state = failure.state_.failure();
@@ -296,7 +296,7 @@ TEST(Ruvia, http1_parse_message_maps_random_valid_heads_to_stable_request_plans)
         } else if (body_case == 2U) {
             EXPECT_TRUE(result_value.state_.body_plan().chunked() != nullptr);
         } else {
-            EXPECT_TRUE(result_value.state_.body_plan().without_body() != nullptr);
+            EXPECT_TRUE(result_value.state_.body_plan().without_content() != nullptr);
         }
     }
 }
@@ -583,7 +583,7 @@ TEST(Ruvia, http1_parse_upgrade_advertisement_does_not_require_connection_option
     {
         const auto result_value = parse_http1_request_message("GET / HTTP/1.1\r\nHost: x\r\nUpgrade: websocket\r\n\r\n");
         EXPECT_TRUE(result_value.complete());
-        EXPECT_TRUE(result_value.state_.body_plan().without_body() != nullptr);
+        EXPECT_TRUE(result_value.state_.body_plan().without_content() != nullptr);
         EXPECT_TRUE(result_value.state_.connection_plan().disposition() == http1_close_policy::allow_reuse);
         EXPECT_EQ(result_value.state_.request().header("Upgrade").value_or(std::string_view{}), std::string_view("websocket"));
     }
@@ -761,7 +761,7 @@ TEST(Ruvia, http1_parse_trailer_advertisement_does_not_establish_framing) {
     {
         const auto result_value = parse_http1_request_message("POST / HTTP/1.1\r\nHost: x\r\nTrailer: X-Checksum\r\n\r\n");
         EXPECT_TRUE(result_value.complete());
-        EXPECT_TRUE(result_value.state_.body_plan().without_body() != nullptr);
+        EXPECT_TRUE(result_value.state_.body_plan().without_content() != nullptr);
         EXPECT_TRUE(result_value.state_.connection_plan().disposition() == http1_close_policy::allow_reuse);
     }
     {
@@ -1207,7 +1207,7 @@ TEST(Ruvia, http1_parse_connect_accepts_zero_length_only_and_trace_frames_conten
     const auto parsed_value = parse_http1_request_message(early_tunnel_bytes);
     EXPECT_TRUE(parsed_value.complete());
     if (parsed_value.complete()) {
-        EXPECT_TRUE(parsed_value.state_.body_plan().without_body() != nullptr);
+        EXPECT_TRUE(parsed_value.state_.body_plan().without_content() != nullptr);
         EXPECT_EQ(parsed_value.state_.head_ready()->header_bytes(), connect_head.size());
         EXPECT_EQ(*parsed_value.message_bytes_, connect_head.size());
     }
@@ -1602,7 +1602,7 @@ TEST(Ruvia, http1_parse_message_classifies_cleartext_request_line_failures) {
 TEST(Ruvia, http1_request_body_plan_has_one_framing_truth) {
     const auto none_message = parse_http1_request_message("GET / HTTP/1.1\r\nHost: x\r\n\r\n");
     const auto& none = none_message.state_.body_plan();
-    EXPECT_TRUE(none.without_body() != nullptr);
+    EXPECT_TRUE(none.without_content() != nullptr);
     EXPECT_TRUE(none.known_length() == nullptr);
     EXPECT_TRUE(none.chunked() == nullptr);
     EXPECT_TRUE(!none.requires_consumption());
@@ -1613,7 +1613,7 @@ TEST(Ruvia, http1_request_body_plan_has_one_framing_truth) {
     const auto& empty_length = empty_length_message.state_.body_plan();
     const auto* known_length = empty_length.known_length();
     EXPECT_TRUE(known_length != nullptr);
-    EXPECT_TRUE(empty_length.without_body() == nullptr);
+    EXPECT_TRUE(empty_length.without_content() == nullptr);
     EXPECT_TRUE(empty_length.chunked() == nullptr);
     if (known_length != nullptr) {
         EXPECT_EQ(known_length->content_length(), std::size_t{0});
@@ -1630,7 +1630,7 @@ TEST(Ruvia, http1_request_body_plan_has_one_framing_truth) {
     const auto& compressed_chunked = compressed_chunked_message.state_.body_plan();
     const auto* chunked_body = compressed_chunked.chunked();
     EXPECT_TRUE(chunked_body != nullptr);
-    EXPECT_TRUE(compressed_chunked.without_body() == nullptr);
+    EXPECT_TRUE(compressed_chunked.without_content() == nullptr);
     EXPECT_TRUE(compressed_chunked.known_length() == nullptr);
     EXPECT_TRUE(compressed_chunked.requires_consumption());
     const auto compressed_expectation_plan = compressed_chunked.expectation_plan(http_unsupported_expectation_policy::reject);

@@ -1289,7 +1289,7 @@ TEST(Ruvia, http_capsule_incremental_unknown_empty_and_datagram) {
     ruvia::http_capsule_decoder decoder;
     capture capture_state;
     for (const char& byte : wire) {
-        EXPECT_TRUE(decoder.feed({&byte, 1}, false, capsule, &capture_state) == ruvia::http_capsule_status::need_more_data);
+        EXPECT_TRUE(decoder.feed({&byte, 1}, false, capsule, &capture_state) == ruvia::http_capsule_status::need_input);
     }
     EXPECT_EQ(capture_state.body_, std::string("hello"));
     EXPECT_EQ(capture_state.ends_, 2u);
@@ -1343,7 +1343,7 @@ TEST(Ruvia, http_capsule_pull_decoder_stops_at_each_capsule_and_commits_fin_afte
                 captured.body_.clear();
                 ++complete_value;
             }
-            EXPECT_TRUE(result_value.status_ == (offset == wire.size() ? ruvia::http_capsule_status::end : ruvia::http_capsule_status::need_more_data));
+            EXPECT_TRUE(result_value.status_ == (offset == wire.size() ? ruvia::http_capsule_status::end : ruvia::http_capsule_status::need_input));
         }
         EXPECT_EQ(complete_value, std::size_t{3});
         EXPECT_EQ(captured.ends_, std::size_t{3});

@@ -69,6 +69,11 @@ struct http_client_websocket_handshake final {
     websocket_compression compression_{};
 };
 
+// A buffered request body as request content: borrowed bytes, or none.
+[[nodiscard]] inline http_request_content_plan buffered_http_client_content(bool has_body, std::string_view body) noexcept {
+    return has_body ? http_request_content_plan::bytes(body) : http_request_content_plan::none();
+}
+
 class http_client_request_storage final {
 public:
     // Complete owning boundary: reserve field metadata once and normalize/copy
@@ -143,6 +148,11 @@ public:
     [[nodiscard]] bool has_body() const noexcept {
         return has_body_;
     }
+    // The one request content mapping every protocol consumes: an upload
+    // streams, a buffered body is borrowed bytes, otherwise none.
+    [[nodiscard]] http_request_content_plan content() const& noexcept;
+    http_request_content_plan content() const&& = delete;
+    [[nodiscard]] http_client_request_expectation expectation() const noexcept;
     [[nodiscard]] const std::vector<http_header>& headers() const noexcept {
         return headers_;
     }

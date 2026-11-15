@@ -10,7 +10,7 @@
 #include <vector>
 
 #include "borrowed_text.h"
-#include "db_session.h"
+#include "db_executor.h"
 #include "event_loop.h"
 #include "operation_options.h"
 #include "task.h"

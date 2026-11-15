@@ -24,8 +24,8 @@
 #include "client_host_resolver.h"
 #include "connection_lifecycle.h"
 #include "crypto.h"
+#include "db_executor.h"
 #include "db_pool.h"
-#include "db_session.h"
 #include "tls.h"
 
 namespace ruvia::detail {

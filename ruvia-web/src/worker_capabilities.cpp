@@ -19,11 +19,11 @@
 #include "worker_ref.h"
 #include "worker_state.h"
 #ifdef RUVIA_ENABLE_DATABASE
+#include "db_executor.h"
 #include "db_pool.h"
-#include "db_session.h"
 #endif
 #ifdef RUVIA_ENABLE_REDIS
-#include "redis.h"
+#include "redis_orm.h"
 #include "redis_pool.h"
 #endif
 
@@ -200,12 +200,12 @@ const http_client* borrowed_clients::http_clients(std::string_view alias) const 
 }
 
 #ifdef RUVIA_ENABLE_DATABASE
-void borrowed_clients::bind_database(const worker_ref& worker, std::string_view alias, const db_client& client) {
+void borrowed_clients::bind_db(const worker_ref& worker, std::string_view alias, const db_client& client) {
     require_borrowed_client_worker(worker, client.worker());
     bind_borrowed_alias(databases_, alias, client);
 }
 
-const db_client* borrowed_clients::database(std::string_view alias) const noexcept {
+const db_client* borrowed_clients::db(std::string_view alias) const noexcept {
     return find_borrowed_alias(databases_, alias);
 }
 #endif
@@ -230,7 +230,7 @@ void* worker_context_capabilities::worker_state_instance(const void* type_key) c
 }
 
 #ifdef RUVIA_ENABLE_DATABASE
-db_session worker_client_registry_view::db(::ruvia::operation_scope& operation_scope, request_io_metrics* io_metrics, const stop_token& stop_token_value) const {
+db_executor worker_client_registry_view::db(::ruvia::operation_scope& operation_scope, request_io_metrics* io_metrics, const stop_token& stop_token_value) const {
     if (borrowed_ != nullptr) {
         return db(default_capability_alias, operation_scope, io_metrics, stop_token_value);
     }
@@ -240,9 +240,9 @@ db_session worker_client_registry_view::db(::ruvia::operation_scope& operation_s
     return databases_->get(operation_scope, io_metrics).bind_caller_scope(operation_scope, io_metrics, stop_token_value);
 }
 
-db_session worker_client_registry_view::db(std::string_view alias, ::ruvia::operation_scope& operation_scope, request_io_metrics* io_metrics, const stop_token& stop_token_value) const {
+db_executor worker_client_registry_view::db(std::string_view alias, ::ruvia::operation_scope& operation_scope, request_io_metrics* io_metrics, const stop_token& stop_token_value) const {
     if (borrowed_ != nullptr) {
-        const auto* client = borrowed_->database(alias);
+        const auto* client = borrowed_->db(alias);
         if (client == nullptr) {
             throw db_error(db_error::code_type::not_configured, std::nullopt, "database is not configured");
         }
@@ -256,7 +256,7 @@ db_session worker_client_registry_view::db(std::string_view alias, ::ruvia::oper
 #endif
 
 #ifdef RUVIA_ENABLE_REDIS
-redis_session worker_client_registry_view::redis(::ruvia::operation_scope& operation_scope, request_io_metrics* io_metrics, const stop_token& stop_token_value) const {
+redis_executor worker_client_registry_view::redis(::ruvia::operation_scope& operation_scope, request_io_metrics* io_metrics, const stop_token& stop_token_value) const {
     if (borrowed_ != nullptr) {
         return redis(default_capability_alias, operation_scope, io_metrics, stop_token_value);
     }
@@ -266,7 +266,7 @@ redis_session worker_client_registry_view::redis(::ruvia::operation_scope& opera
     return redis_->get(operation_scope, io_metrics).bind_caller_scope(operation_scope, io_metrics, stop_token_value);
 }
 
-redis_session worker_client_registry_view::redis(std::string_view alias, ::ruvia::operation_scope& operation_scope, request_io_metrics* io_metrics, const stop_token& stop_token_value) const {
+redis_executor worker_client_registry_view::redis(std::string_view alias, ::ruvia::operation_scope& operation_scope, request_io_metrics* io_metrics, const stop_token& stop_token_value) const {
     if (borrowed_ != nullptr) {
         const auto* client = borrowed_->redis(alias);
         if (client == nullptr) {

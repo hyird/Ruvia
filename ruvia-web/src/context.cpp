@@ -31,7 +31,7 @@
 #include "connection_lifecycle.h"
 #include "context_access.h"
 #include "crypto.h"
-#include "db_session.h"
+#include "db_executor.h"
 #include "event_loop.h"
 #include "http1_server_response.h"
 #include "http_cache.h"
@@ -51,7 +51,7 @@
 #include "inline_storage.h"
 #include "middleware.h"
 #include "model.h"
-#include "redis.h"
+#include "redis_orm.h"
 #include "response_coding_policy.h"
 #include "route_table.h"
 #include "stop_token.h"
@@ -64,8 +64,13 @@ namespace ruvia {
 
 namespace {
 
-[[nodiscard]] std::string_view byte_body_view(std::span<const std::byte> body) noexcept {
-    return body.empty() ? std::string_view{} : std::string_view(reinterpret_cast<const char*>(body.data()), body.size());
+// Borrowed input is copied into response storage; an owned string moves in.
+void set_outbound_body(http_response& response, outbound_bytes&& body) {
+    if (body.owns()) {
+        response.owned_body(std::move(body).into_string());
+    } else {
+        response.body(body.view());
+    }
 }
 
 // text() and stream_text(): plain UTF-8 text plus nosniff, so a browser never
@@ -144,21 +149,9 @@ http_response context::body(response_options options) {
     return detail::make_response(options);
 }
 
-http_response context::body(std::string_view body, response_options options) {
+http_response context::body(outbound_bytes body, response_options options) {
     auto response = detail::make_response(options);
-    response.body(body);
-    return response;
-}
-
-http_response context::body_owned(std::string&& body, const response_options& options) {
-    auto response = detail::make_response(options);
-    response.owned_body(std::move(body));
-    return response;
-}
-
-http_response context::body(std::span<const std::byte> body, response_options options) {
-    auto response = detail::make_response(options);
-    response.body(byte_body_view(body));
+    set_outbound_body(response, std::move(body));
     return response;
 }
 
@@ -168,17 +161,10 @@ http_response context::body(static_text body, response_options options) {
     return response;
 }
 
-http_response context::text(std::string_view body, response_options options) {
+http_response context::text(outbound_bytes body, response_options options) {
     auto response = detail::make_response(options);
     mark_plain_text_defaults(response);
-    response.body(body);
-    return response;
-}
-
-http_response context::text_owned(std::string&& body, const response_options& options) {
-    auto response = detail::make_response(options);
-    mark_plain_text_defaults(response);
-    response.owned_body(std::move(body));
+    set_outbound_body(response, std::move(body));
     return response;
 }
 
@@ -204,17 +190,10 @@ http_response context::json_serialized(std::string& body, const response_options
     return response;
 }
 
-http_response context::html(std::string_view body, response_options options) {
+http_response context::html(outbound_bytes body, response_options options) {
     auto response = detail::make_response(options);
     set_default_content_type(response, http_content_type::text_html_utf8);
-    response.body(body);
-    return response;
-}
-
-http_response context::html_owned(std::string&& body, const response_options& options) {
-    auto response = detail::make_response(options);
-    set_default_content_type(response, http_content_type::text_html_utf8);
-    response.owned_body(std::move(body));
+    set_outbound_body(response, std::move(body));
     return response;
 }
 
@@ -297,9 +276,11 @@ task<http_response> detail::context_access::commit_streaming_head(context& conte
     if (context_access::has_response(context_value)) {
         throw std::logic_error("a complete response is already selected");
     }
+#ifdef RUVIA_ENABLE_REDIS
     if (session_access::available(context_value)) {
         co_await session_access::commit(context_value);
     }
+#endif
     auto response = context_value.streaming_head();
     detail::apply_alternative_service(response, context_value.services().alternative_service());
     co_return response;
@@ -787,14 +768,6 @@ const detail::context_response_state& context::response_state() const noexcept {
     return request_storage().response_state_;
 }
 
-detail::context_session_state& context::session_state() noexcept {
-    return request_storage().session_state_;
-}
-
-const detail::context_session_state& context::session_state() const noexcept {
-    return request_storage().session_state_;
-}
-
 detail::request_bindings& context::request_bindings() noexcept {
     return request_storage().request_bindings_;
 }
@@ -817,24 +790,24 @@ void context::respond(http_response&& response) {
 }
 
 #ifdef RUVIA_ENABLE_DATABASE
-db_session context::db() const {
+db_executor context::db() const {
     const auto& services_value = services();
     return services_value.client_registries().db(operation_scope_, services_value.io_metrics(), capabilities_.stop_token());
 }
 
-db_session context::db(std::string_view alias) const {
+db_executor context::db(std::string_view alias) const {
     const auto& services_value = services();
     return services_value.client_registries().db(alias, operation_scope_, services_value.io_metrics(), capabilities_.stop_token());
 }
 #endif
 
 #ifdef RUVIA_ENABLE_REDIS
-redis_session context::redis() const {
+redis_executor context::redis() const {
     const auto& services_value = services();
     return services_value.client_registries().redis(operation_scope_, services_value.io_metrics(), capabilities_.stop_token());
 }
 
-redis_session context::redis(std::string_view alias) const {
+redis_executor context::redis(std::string_view alias) const {
     const auto& services_value = services();
     return services_value.client_registries().redis(alias, operation_scope_, services_value.io_metrics(), capabilities_.stop_token());
 }

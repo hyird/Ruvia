@@ -20,6 +20,7 @@
 
 #include "blocking_pool.h"
 #include "borrowed_text.h"
+#include "decimal_text.h"
 #include "http1_server_response.h"
 #include "http2_push.h"
 #include "http_cookie.h"
@@ -30,10 +31,10 @@
 #include "http_request.h"
 #include "http_response.h"
 #include "http_status.h"
-#include "integer_parse.h"
 #include "ip_address.h"
 #include "middleware.h"
 #include "model.h"
+#include "outbound_bytes.h"
 #include "stop_token.h"
 #include "task.h"
 #include "worker_ref.h"
@@ -45,13 +46,13 @@ class env;
 class static_root;
 // Capabilities a handler reaches through context; include the defining header
 // where they are used: http_client.h, websocket.h (websocket), http_tunnel.h
-// (http_tunnel), streaming.h (multipart_reader) and session.h (session).
+// (http_tunnel), streaming.h (multipart_reader) and session.h (session, with
+// RUVIA_ENABLE_REDIS).
 class http_client_ref;
 class http_client_response;
 class websocket;
 class http_tunnel;
 class test_app;
-class session;
 class body_reader;
 class response_stream_writer;
 class tls_client_hello_record;
@@ -60,17 +61,21 @@ class sse_writer;
 class multipart_reader;
 class multipart_part;
 #ifdef RUVIA_ENABLE_DATABASE
-class db_session;
+class db_executor;
 #endif
 #ifdef RUVIA_ENABLE_REDIS
-class redis_session;
+class redis_executor;
+class session;
 #endif
 namespace detail {
 class context_request_storage;
 class context_request_body_source;
 class context_response_output;
 class context_response_state;
+#ifdef RUVIA_ENABLE_REDIS
 class context_session_state;
+struct session_access;
+#endif
 template <typename t_type>
 [[nodiscard]] request_binding_guard<t_type> bind_validated_model(context& context_value, const t_type& model);
 template <typename t_type>
@@ -82,7 +87,6 @@ request_binding_guard<std::remove_cvref_t<t_type>> bind_validated_model(context&
 
 struct context_access;
 class context_services;
-struct session_access;
 }  // namespace detail
 
 class plain_connection_transport final {
@@ -527,7 +531,9 @@ private:
     friend class context_response_editor;
     friend class http_client_response;
     friend struct detail::context_access;
+#ifdef RUVIA_ENABLE_REDIS
     friend struct detail::session_access;
+#endif
     template <typename t_type>
     friend detail::request_binding_guard<t_type> detail::bind_validated_model(context& context_value, const t_type& model);
 
@@ -628,8 +634,10 @@ public:
         return capabilities_.stop_token();
     }
 
+#ifdef RUVIA_ENABLE_REDIS
     // Present only while session_middleware is bound for this request.
     [[nodiscard]] ruvia::session session();
+#endif
 
     // Request-scoped typed state: how a middleware hands a value it computed --
     // an authenticated user, a resolved tenant, a trace span -- to everything it
@@ -687,12 +695,12 @@ public:
 
     [[nodiscard]] std::string url_for(std::string_view pattern, std::span<const std::string_view> values) const;
 #ifdef RUVIA_ENABLE_DATABASE
-    [[nodiscard]] db_session db() const;
-    [[nodiscard]] db_session db(std::string_view alias) const;
+    [[nodiscard]] db_executor db() const;
+    [[nodiscard]] db_executor db(std::string_view alias) const;
 #endif
 #ifdef RUVIA_ENABLE_REDIS
-    [[nodiscard]] redis_session redis() const;
-    [[nodiscard]] redis_session redis(std::string_view alias) const;
+    [[nodiscard]] redis_executor redis() const;
+    [[nodiscard]] redis_executor redis(std::string_view alias) const;
 #endif
     [[nodiscard]] http_client_ref client() const;
     [[nodiscard]] http_client_ref client(std::string_view alias) const;
@@ -743,32 +751,19 @@ public:
     // response_options set status, header lines, cookies and priority of the
     // built response.
     [[nodiscard]] http_response body(response_options options = {});
-    [[nodiscard]] http_response body(std::string_view body, response_options options = {});
-    template <std::same_as<std::string> string_type>
-    [[nodiscard]] http_response body(string_type&& body_value, response_options options = {}) {
-        return body_owned(std::move(body_value), options);
-    }
-    [[nodiscard]] http_response body(std::span<const std::byte> body, response_options options = {});
+    [[nodiscard]] http_response body(outbound_bytes body, response_options options = {});
     [[nodiscard]] http_response body(static_text body, response_options options = {});
 
     // text/plain; charset=UTF-8 with X-Content-Type-Options: nosniff, like
     // stream_text(); a Content-Type or X-Content-Type-Options in options is kept.
-    [[nodiscard]] http_response text(std::string_view body, response_options options = {});
-    template <std::same_as<std::string> string_type>
-    [[nodiscard]] http_response text(string_type&& body_value, response_options options = {}) {
-        return text_owned(std::move(body_value), options);
-    }
+    [[nodiscard]] http_response text(outbound_bytes body, response_options options = {});
     [[nodiscard]] http_response text(static_text body, response_options options = {});
 
     template <typename t_type>
         requires detail::is_model_json_value<t_type>
     [[nodiscard]] http_response json(const t_type& value, response_options options = {});
 
-    [[nodiscard]] http_response html(std::string_view body, response_options options = {});
-    template <std::same_as<std::string> string_type>
-    [[nodiscard]] http_response html(string_type&& body_value, response_options options = {}) {
-        return html_owned(std::move(body_value), options);
-    }
+    [[nodiscard]] http_response html(outbound_bytes body, response_options options = {});
     [[nodiscard]] http_response html(static_text body, response_options options = {});
     // The status comes from `options`; extra.status_ or a Location in
     // extra.headers_ throws std::invalid_argument.
@@ -827,9 +822,6 @@ private:
     // The head a stream commit or upgrade sends; throws once committed.
     [[nodiscard]] http_response& stream_head();
     void stage_stream_head(const response_stream_writer& writer, const response_options& head);
-    [[nodiscard]] http_response body_owned(std::string&& body, const response_options& options);
-    [[nodiscard]] http_response text_owned(std::string&& body, const response_options& options);
-    [[nodiscard]] http_response html_owned(std::string&& body, const response_options& options);
 
     [[nodiscard]] task<http_response> not_found_task();
     [[nodiscard]] task<dispatch_response> dispatch_task(std::string method, std::string target, std::string body, std::vector<http_header> headers, ::ruvia::stop_token stop);
@@ -871,8 +863,10 @@ private:
     [[nodiscard]] const detail::context_response_output& response_output() const noexcept;
     [[nodiscard]] detail::context_response_state& response_state() noexcept;
     [[nodiscard]] const detail::context_response_state& response_state() const noexcept;
+#ifdef RUVIA_ENABLE_REDIS
     [[nodiscard]] detail::context_session_state& session_state() noexcept;
     [[nodiscard]] const detail::context_session_state& session_state() const noexcept;
+#endif
     [[nodiscard]] detail::request_bindings& request_bindings() noexcept;
     [[nodiscard]] const detail::request_bindings& request_bindings() const noexcept;
 
@@ -927,10 +921,10 @@ inline std::optional<t_type> context_request::parse_typed(std::optional<std::str
         return *parsed_value;
     } else {
         const auto parsed_value = parse_integer<t_type>(*raw);
-        if (parsed_value.index() != 0) {
+        if (!parsed_value) {
             fail();
         }
-        return std::get<0>(parsed_value);
+        return *parsed_value;
     }
 }
 

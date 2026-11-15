@@ -17,6 +17,7 @@
 #include "http_capsule.h"
 #include "operation_options.h"
 #include "operation_scope.h"
+#include "outbound_bytes.h"
 #include "task.h"
 #include "worker_ref.h"
 namespace ruvia {
@@ -97,18 +98,11 @@ public:
     ~http_capsule_stream();
     [[nodiscard]] task<std::optional<http_capsule>> read(operation_options operation = {}) &;
     task<std::optional<http_capsule>> read(operation_options = {}) && = delete;
-    // Owns input before returning its cold operation. Unknown capsule types are
-    // delivered to the protocol consumer, which must ignore types it does not understand.
-    [[nodiscard]] task<void> write(std::uint64_t type, std::string_view payload, operation_options operation = {}) &;
-    task<void> write(std::uint64_t, std::string_view, operation_options = {}) && = delete;
-    [[nodiscard]] task<void> write(std::uint64_t type, std::span<const std::byte> payload, operation_options operation = {}) &;
-    task<void> write(std::uint64_t, std::span<const std::byte>, operation_options = {}) && = delete;
-    template <std::same_as<std::string> string_type>
-    [[nodiscard]] task<void> write(std::uint64_t type, string_type&& payload, operation_options operation = {}) & {
-        return write_owned(type, std::move(payload), std::move(operation));
-    }
-    template <std::same_as<std::string> string_type>
-    task<void> write(std::uint64_t, string_type&&, operation_options = {}) && = delete;
+    // Owns input before returning its cold operation (exact std::string rvalues
+    // move without copying). Unknown capsule types are delivered to the protocol
+    // consumer, which must ignore types it does not understand.
+    [[nodiscard]] task<void> write(std::uint64_t type, outbound_bytes payload, operation_options operation = {}) &;
+    task<void> write(std::uint64_t, outbound_bytes, operation_options = {}) && = delete;
     [[nodiscard]] task<void> finish(operation_options operation = {}) &;
     task<void> finish(operation_options = {}) && = delete;
     void abort() & noexcept;
@@ -120,9 +114,7 @@ private:
     friend class http_udp_tunnel;
     friend class http_datagram_stream;
     [[nodiscard]] static task<std::optional<http_capsule>> read_owned(detail::capsule_state_pin pin, operation_options operation);
-    [[nodiscard]] task<void> write_frame(std::string_view prefix, std::string_view payload, bool datagram, operation_options operation);
-    [[nodiscard]] task<void> write_owned(std::uint64_t type, std::string&& payload, operation_options operation);
-    [[nodiscard]] task<void> write_frame_owned(std::string_view prefix, std::string&& payload, bool datagram, operation_options operation);
+    [[nodiscard]] task<void> write_frame(std::string_view prefix, outbound_bytes payload, bool datagram, operation_options operation);
     explicit http_capsule_stream(http_tunnel& tunnel, http_capsule_config config);
     explicit http_capsule_stream(http_client_tunnel&& tunnel, http_capsule_config config);
     void release() noexcept;
@@ -179,16 +171,8 @@ public:
     http_datagram_stream& operator=(http_datagram_stream&&) noexcept = default;
     [[nodiscard]] task<std::optional<http_datagram>> read(operation_options operation = {}) &;
     task<std::optional<http_datagram>> read(operation_options = {}) && = delete;
-    [[nodiscard]] task<void> send(std::span<const std::byte> payload, operation_options operation = {}) &;
-    task<void> send(std::span<const std::byte>, operation_options = {}) && = delete;
-    [[nodiscard]] task<void> send(std::string_view payload, operation_options operation = {}) &;
-    task<void> send(std::string_view, operation_options = {}) && = delete;
-    template <std::same_as<std::string> string_type>
-    [[nodiscard]] task<void> send(string_type&& payload, operation_options operation = {}) & {
-        return send_owned(std::move(payload), std::move(operation));
-    }
-    template <std::same_as<std::string> string_type>
-    task<void> send(string_type&&, operation_options = {}) && = delete;
+    [[nodiscard]] task<void> send(outbound_bytes payload, operation_options operation = {}) &;
+    task<void> send(outbound_bytes, operation_options = {}) && = delete;
     [[nodiscard]] task<void> finish(operation_options operation = {}) & {
         return stream_.finish(std::move(operation));
     }
@@ -204,9 +188,7 @@ private:
     friend class http_udp_tunnel;
     explicit http_datagram_stream(http_capsule_stream&& stream);
     static task<std::optional<http_datagram>> read_owned(detail::capsule_state_pin pin, bool udp, operation_options operation);
-    [[nodiscard]] task<void> send_payload(std::string_view payload, bool udp, operation_options operation);
-    [[nodiscard]] task<void> send_owned(std::string&& payload, operation_options operation);
-    [[nodiscard]] task<void> send_payload_owned(std::string&& payload, bool udp, operation_options operation);
+    [[nodiscard]] task<void> send_payload(outbound_bytes payload, bool udp, operation_options operation);
     http_capsule_stream stream_;
 };
 
@@ -225,16 +207,8 @@ public:
     http_udp_tunnel& operator=(http_udp_tunnel&&) noexcept = default;
     [[nodiscard]] task<std::optional<http_datagram>> read(operation_options operation = {}) &;
     task<std::optional<http_datagram>> read(operation_options = {}) && = delete;
-    [[nodiscard]] task<void> send(std::span<const std::byte> payload, operation_options operation = {}) &;
-    task<void> send(std::span<const std::byte>, operation_options = {}) && = delete;
-    [[nodiscard]] task<void> send(std::string_view payload, operation_options operation = {}) &;
-    task<void> send(std::string_view, operation_options = {}) && = delete;
-    template <std::same_as<std::string> string_type>
-    [[nodiscard]] task<void> send(string_type&& payload, operation_options operation = {}) & {
-        return send_owned(std::move(payload), std::move(operation));
-    }
-    template <std::same_as<std::string> string_type>
-    task<void> send(string_type&&, operation_options = {}) && = delete;
+    [[nodiscard]] task<void> send(outbound_bytes payload, operation_options operation = {}) &;
+    task<void> send(outbound_bytes, operation_options = {}) && = delete;
     [[nodiscard]] task<void> finish(operation_options operation = {}) & {
         return stream_.finish(std::move(operation));
     }
@@ -247,7 +221,6 @@ public:
 private:
     friend class http_tunnel;
     friend class http_client_tunnel;
-    [[nodiscard]] task<void> send_owned(std::string&& payload, operation_options operation);
     explicit http_udp_tunnel(http_datagram_stream stream) noexcept :
         stream_(std::move(stream)) {}
     http_datagram_stream stream_;
@@ -291,16 +264,9 @@ public:
     // and an empty chunk is never returned.
     [[nodiscard]] task<std::optional<std::span<const std::byte>>> read(operation_options operation = {}) &;
     task<std::optional<std::span<const std::byte>>> read(operation_options = {}) && = delete;
-    [[nodiscard]] task<void> write(std::string_view bytes, operation_options operation = {}) &;
-    task<void> write(std::string_view, operation_options = {}) && = delete;
-    [[nodiscard]] task<void> write(std::span<const std::byte> bytes, operation_options operation = {}) &;
-    task<void> write(std::span<const std::byte>, operation_options = {}) && = delete;
-    template <std::same_as<std::string> string_type>
-    [[nodiscard]] task<void> write(string_type&& bytes, operation_options operation = {}) & {
-        return write_owned(std::move(bytes), std::move(operation));
-    }
-    template <std::same_as<std::string> string_type>
-    task<void> write(string_type&&, operation_options = {}) && = delete;
+    // Owns `bytes` before returning; exact std::string rvalues move without copying.
+    [[nodiscard]] task<void> write(outbound_bytes bytes, operation_options operation = {}) &;
+    task<void> write(outbound_bytes, operation_options = {}) && = delete;
 
     // Half-close the send direction; reading remains available until peer EOF.
     [[nodiscard]] task<void> finish(operation_options operation = {}) &;
@@ -334,7 +300,6 @@ private:
     http_tunnel(detail::inbound_buffer_account* inbound, const worker_ref& worker_value, void* target, read_type read, write_type write, finish_type finish_value, abort_type abort, bool datagrams, read_datagram_type read_datagram = nullptr, write_datagram_type write_datagram = nullptr) noexcept;
     [[nodiscard]] task<std::optional<std::span<const std::byte>>> read_borrowed(operation_options operation);
     [[nodiscard]] task<std::optional<std::string>> read_raw(operation_options operation);
-    [[nodiscard]] task<void> write_owned(std::string&& bytes, operation_options operation);
     [[nodiscard]] task<void> write_raw(std::string&& bytes, operation_options operation);
     [[nodiscard]] task<std::optional<detail::http_tunnel_input>> read_datagram_raw(operation_options operation);
     [[nodiscard]] task<bool> write_datagram_raw(std::string_view bytes, operation_options operation);

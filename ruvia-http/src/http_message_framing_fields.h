@@ -1,15 +1,14 @@
 #pragma once
 
-#include <charconv>
 #include <cstdint>
 #include <optional>
 #include <string_view>
-#include <system_error>
 #include <type_traits>
 #include <utility>
 #include <variant>
 
 #include "borrowed_text.h"
+#include "decimal_text.h"
 #include "http_content_coding.h"
 #include "http_field_text.h"
 #include "http_field_validation.h"
@@ -116,15 +115,11 @@ public:
 
 private:
     [[nodiscard]] static http_content_length_parse_status accumulate(std::string_view item, std::optional<std::uint64_t>& value) noexcept {
-        if (item.empty()) {
+        const auto parsed_value = parse_integer<std::uint64_t>(item);
+        if (!parsed_value) {
             return http_content_length_parse_status::invalid;
         }
-        std::uint64_t parsed_value = 0;
-        const auto [end, ec] = std::from_chars(item.data(), item.data() + item.size(), parsed_value);
-        if (ec != std::errc{} || end != item.data() + item.size()) {
-            return http_content_length_parse_status::invalid;
-        }
-        if (value.has_value() && *value != parsed_value) {
+        if (value.has_value() && *value != *parsed_value) {
             return http_content_length_parse_status::conflicting;
         }
         value = parsed_value;

@@ -315,7 +315,7 @@ std::variant<websocket_extended_connect_negotiation, http_response_head_error> h
     }
     auto negotiation = make_websocket_server_negotiation(request, options);
     if (!append_http_binary_websocket_response_fields(fields_, negotiation, max_http_header_bytes)) {
-        throw std::invalid_argument("WebSocket response headers exceed HTTP/2 header list limit");
+        return http_response_head_error::invalid_message;
     }
     commit_connect_response_head(*stream, http2_remote_peer_half_closed(*stream));
     const auto compression = negotiation.compression();

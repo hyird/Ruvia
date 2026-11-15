@@ -17,6 +17,7 @@
 #include <utility>
 #include <vector>
 
+#include "fnv1a.h"
 #include "http_content_codec.h"
 #include "http_content_coding.h"
 #include "http_content_negotiation.h"
@@ -26,7 +27,6 @@
 #include "inline_storage.h"
 #include "response_file.h"
 #include "static_root_index.h"
-#include "worker_ref.h"
 
 // servable file recorded with the metadata a response needs, and lookups after
 // that touch only the index. A request never walks or stats the tree: a

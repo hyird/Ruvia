@@ -208,7 +208,7 @@ TEST(Ruvia, chunked_body_decoder_emits_zero_copy_chunks_and_preserves_pipeline) 
             EXPECT_EQ(rendered(complete->trailers()), "x-trace=abc;");
             break;
         }
-        EXPECT_TRUE(result_value.need_more() == nullptr);
+        EXPECT_TRUE(result_value.need_input() == nullptr);
         break;
     }
 
@@ -237,7 +237,7 @@ TEST(Ruvia, chunked_body_decoder_handles_single_byte_input_fragmentation) {
                 complete_value = true;
                 break;
             }
-            if (result_value.need_more() != nullptr) {
+            if (result_value.need_input() != nullptr) {
                 break;
             }
         }
@@ -257,7 +257,7 @@ TEST(Ruvia, chunked_request_trailer_names_preserve_fragment_and_pipeline_boundar
         for (std::size_t split = 0; split < message.size(); ++split) {
             http1_chunked_body_decoder decoder;
             const auto first = decoder.decode(std::string_view(wire).substr(0, split));
-            EXPECT_TRUE(first.need_more() != nullptr);
+            EXPECT_TRUE(first.need_input() != nullptr);
             EXPECT_TRUE(first.consumed_bytes() <= split);
             const auto last = decoder.decode(std::string_view(wire).substr(first.consumed_bytes()));
             EXPECT_TRUE(last.complete() != nullptr);
@@ -292,7 +292,7 @@ TEST(Ruvia, chunked_body_decoder_handles_deterministic_arbitrary_fragmented_byte
             pending.push_back(byte);
             for (std::size_t step = 0; step <= pending.size(); ++step) {
                 const auto result_value = decoder.decode(pending);
-                const auto alternatives = static_cast<unsigned int>(result_value.need_more() != nullptr) + static_cast<unsigned int>(result_value.body_chunk() != nullptr) + static_cast<unsigned int>(result_value.complete() != nullptr) + static_cast<unsigned int>(result_value.failure() != nullptr);
+                const auto alternatives = static_cast<unsigned int>(result_value.need_input() != nullptr) + static_cast<unsigned int>(result_value.body_chunk() != nullptr) + static_cast<unsigned int>(result_value.complete() != nullptr) + static_cast<unsigned int>(result_value.failure() != nullptr);
                 EXPECT_EQ(alternatives, 1U);
                 EXPECT_TRUE(result_value.consumed_bytes() <= pending.size());
 
@@ -307,7 +307,7 @@ TEST(Ruvia, chunked_body_decoder_handles_deterministic_arbitrary_fragmented_byte
                     terminal = true;
                     break;
                 }
-                if (result_value.need_more() != nullptr) {
+                if (result_value.need_input() != nullptr) {
                     break;
                 }
                 EXPECT_TRUE(result_value.consumed_bytes() != 0);
@@ -573,7 +573,7 @@ TEST(Ruvia, chunked_body_decoder_preserves_incomplete_delimiter_consumption) {
         EXPECT_EQ(chunk->bytes().data(), wire.data() + 3);
     }
     const auto incomplete = decoder.decode(wire.substr(body.consumed_bytes()));
-    EXPECT_TRUE(incomplete.need_more() != nullptr);
+    EXPECT_TRUE(incomplete.need_input() != nullptr);
     EXPECT_EQ(incomplete.consumed_bytes(), std::size_t{0});
     constexpr std::string_view suffix = "\r\n0\r\n\r\nNEXT";
     const auto complete_value = decoder.decode(suffix);
@@ -594,7 +594,7 @@ TEST(Ruvia, chunked_body_decoder_rejects_bare_lf_without_waiting_for_crlf) {
     // A bare LF arriving in a later fragment of a partial size line is rejected too.
     http1_chunked_body_decoder fragmented;
     const auto partial = fragmented.decode("5;a=");
-    EXPECT_TRUE(partial.need_more() != nullptr);
+    EXPECT_TRUE(partial.need_input() != nullptr);
     EXPECT_EQ(partial.consumed_bytes(), std::size_t{0});
     const auto rejected = fragmented.decode("5;a=b\nhello\r\n");
     EXPECT_TRUE(rejected.failure() != nullptr);
@@ -625,7 +625,7 @@ TEST(Ruvia, chunked_body_decoder_bounds_trailers_independently_of_input_segmenta
             http1_chunked_body_decoder decoder;
             const auto first = decoder.decode(std::string_view(wire).substr(0, split));
             auto consumed = first.consumed_bytes();
-            const bool resumed = first.need_more() != nullptr;
+            const bool resumed = first.need_input() != nullptr;
             const auto result = resumed ? decoder.decode(std::string_view(wire).substr(consumed)) : first;
             if (resumed) {
                 consumed += result.consumed_bytes();

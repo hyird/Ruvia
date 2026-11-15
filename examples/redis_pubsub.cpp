@@ -20,7 +20,7 @@
 #include "borrowed_text.h"
 #include "controller.h"
 #include "middleware.h"
-#include "redis.h"
+#include "redis_orm.h"
 #include "streaming.h"
 
 namespace {

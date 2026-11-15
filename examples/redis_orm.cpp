@@ -5,6 +5,8 @@
 // Run on port 8091. POST {"id":"1","name":"Ada","age":30} as JSON to
 // /users, then GET /users/1. GET /users performs the indexed adult search.
 // backend_config.h backend_tls() reads RUVIA_REDIS_TLS/CA/CERT/KEY for Redis transport.
+#include "redis_orm.h"
+
 #include <chrono>
 #include <cstdint>
 #include <exception>
@@ -18,17 +20,20 @@
 #include "backend_config.h"
 #include "controller.h"
 #include "middleware.h"
-#include "redis.h"
 
 RUVIA_REDIS_ENTITY(cached_user, "users", RUVIA_REDIS_COLUMN(id, ruvia::string, ruvia::redis_column_options{.primary_key_ = true}), RUVIA_REDIS_COLUMN(name, ruvia::string), RUVIA_REDIS_COLUMN(age, std::uint32_t));
 
-const ruvia::redis_repository_config user_redis_config{
-    .prefix_ = "ruvia:example:users",
-    .indexes_ = {
-        {.column_ = "name", .kind_ = ruvia::redis_index_kind::tag, .sortable_ = true},
-        {.column_ = "age", .kind_ = ruvia::redis_index_kind::numeric},
-    },
-};
+// Validated once and shared read-only by every worker; repositories borrow it.
+const ruvia::redis_search_mapping& cached_user_mapping() {
+    static const auto mapping = ruvia::redis_search_mapping::create<cached_user>({
+        .indexes_ = {
+            {.column_ = "name", .kind_ = ruvia::redis_index_kind::tag, .sortable_ = true},
+            {.column_ = "age", .kind_ = ruvia::redis_index_kind::numeric},
+        },
+    });
+    return mapping;
+}
+
 RUVIA_MODEL(create_cached_user, RUVIA_REQUIRED_FIELD(id, ruvia::string, RUVIA_MIN(1, "id is required"), RUVIA_MAX(64, "id is too long")), RUVIA_REQUIRED_FIELD(name, ruvia::string, RUVIA_MIN(1, "name is required"), RUVIA_MAX(120, "name is too long")), RUVIA_REQUIRED_FIELD(age, ruvia::uint32, RUVIA_MAX(130, "age is too large")));
 
 RUVIA_MODEL(cached_user_response, RUVIA_REQUIRED_FIELD(id, ruvia::string), RUVIA_REQUIRED_FIELD(name, ruvia::string), RUVIA_REQUIRED_FIELD(age, ruvia::uint32));
@@ -56,7 +61,7 @@ private:
         user_value.set<"id">(request.get<"id">().view());
         user_value.set<"name">(request.get<"name">().view());
         user_value.set<"age">(static_cast<std::uint32_t>(request.get<"age">()));
-        auto users = c.redis().repository<cached_user>(user_redis_config);
+        auto users = c.redis().repository<cached_user>(cached_user_mapping());
         const auto result_value = co_await users.insert(user_value, {.ttl_ = std::chrono::hours(1)});
         if (result_value.affected_entities() == 0) {
             co_return c.error({.status_ = ruvia::http_status::conflict, .message_ = "user already exists"});
@@ -66,7 +71,7 @@ private:
         co_return c.json(response, {.status_ = ruvia::http_status::created});
     }
     ruvia::task<ruvia::http_response> find(ruvia::context& c) {
-        auto user_value = co_await c.redis().repository<cached_user>(user_redis_config).find_one({.where_ = cached_user::column<"id">() == c.req().param("id").value_or("")});
+        auto user_value = co_await c.redis().repository<cached_user>(cached_user_mapping()).find_one({.where_ = cached_user::column<"id">() == c.req().param("id").value_or("")});
         if (!user_value) {
             co_return c.error({.status_ = ruvia::http_status::not_found, .message_ = "user not found"});
         }
@@ -76,7 +81,7 @@ private:
     }
     ruvia::task<ruvia::http_response> adults(ruvia::context& c) {
         const ruvia::redis_find_options find_options{.where_ = cached_user::column<"age">() >= 18, .order_ = {{.column_ = "name", .direction_ = ruvia::redis_order_direction::asc}}, .take_ = 20};
-        auto users = co_await c.redis().repository<cached_user>(user_redis_config).find(find_options);
+        auto users = co_await c.redis().repository<cached_user>(cached_user_mapping()).find(find_options);
         cached_users_response response;
         auto& output = response.ensure<"users">();
         for (const auto& user : users) {
@@ -107,7 +112,7 @@ int main(int argc, char** argv) {
             auto result_value = completion.get_future();
             const auto posted = workers.front().post([completion = std::move(completion)](ruvia::web_worker_context& worker_value) mutable -> ruvia::task<void> {
                 try {
-                    co_await worker_value.redis().repository<cached_user>(user_redis_config).create_index();
+                    co_await worker_value.redis().repository<cached_user>(cached_user_mapping()).create_index();
                     completion.set_value();
                 } catch (...) {
                     completion.set_exception(std::current_exception());

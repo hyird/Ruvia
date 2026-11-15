@@ -34,6 +34,7 @@
 #include "http_content_coding.h"
 #include "http_header.h"
 #include "http_multipart.h"
+#include "http_request.h"
 #include "http_request_body_failure.h"
 #if defined(RUVIA_ENABLE_HTTP2)
 #include "http2_connection.h"
@@ -320,11 +321,6 @@ inline http1_client_response_parser exchange_parser(http1_client_request_prepare
 inline http1_client_response_parser exchange_parser(const ruvia::http_origin_view& origin, const ruvia::http_client_request_view& request, http1_client_request_wire_policy policy = {}) {
     std::array<char, 2048> request_head;
     return exchange_parser(ruvia::http1_client_request_writer().prepare(origin, request, request_head, policy));
-}
-
-inline http1_client_response_parser exchange_parser(const ruvia::http_origin_view& origin, const ruvia::http1_client_request_head_view& request, http1_client_request_wire_policy policy = {}) {
-    std::array<char, 2048> request_head;
-    return exchange_parser(ruvia::http1_client_request_writer().prepare_streaming(origin, request, request_head, policy));
 }
 
 inline http1_client_response_parse_result parse_wire(std::string_view method, std::string_view wire, http1_close_policy close_policy = http1_close_policy::allow_reuse, std::span<const ruvia::http_header_view> request_headers = {}) {

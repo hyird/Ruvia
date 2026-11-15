@@ -1,3 +1,5 @@
+#include "redis_orm.h"
+
 #include <algorithm>
 #include <array>
 #include <charconv>
@@ -19,7 +21,6 @@
 #include "connection_lifecycle.h"
 #include "http_client_pool.h"
 #include "http_header.h"
-#include "redis.h"
 #include "redis_codec.h"
 #include "redis_pool.h"
 
@@ -414,7 +415,7 @@ struct redis_column_comparison final {
         throw std::logic_error("invalid Redis predicate expression");
     }
     const auto& field = nodes[node.operands_[0]];
-    validate_entity_prefix(mapping.entity_prefix_, field.entity_prefix_);
+    validate_entity_prefix(mapping.prefix_, field.entity_prefix_);
     return {find_column_info(mapping.columns_, field.field_), nodes[node.operands_[1]]};
 }
 
@@ -748,8 +749,7 @@ void append_delete(redis_orm_arguments_type& args, field_type&& field) {
 
 }  // namespace
 
-redis_mapping normalize_redis_mapping(std::span<const redis_column_info> columns, std::string_view entity_prefix, const redis_repository_config& config) {
-    const std::string_view prefix = config.prefix_.empty() ? entity_prefix : std::string_view(config.prefix_);
+redis_mapping normalize_redis_mapping(std::span<const redis_column_info> columns, std::string_view prefix, const redis_repository_config& config) {
     if (prefix.empty()) {
         throw std::invalid_argument("Redis entity prefix cannot be empty");
     }
@@ -761,7 +761,7 @@ redis_mapping normalize_redis_mapping(std::span<const redis_column_info> columns
             throw std::invalid_argument("Redis entity column uses reserved __ruvia_ namespace");
         }
     }
-    redis_mapping result_value{columns, std::string(entity_prefix), std::string(prefix), redis_entity_storage_prefix(prefix), std::vector<redis_index_definition>{}, std::vector<redis_index_kind>(columns.size(), redis_index_kind::none)};
+    redis_mapping result_value{columns, std::string(prefix), redis_entity_storage_prefix(prefix), std::vector<redis_index_definition>{}, std::vector<redis_index_kind>(columns.size(), redis_index_kind::none)};
     result_value.indexes_.reserve(config.indexes_.size());
     for (const auto& index : config.indexes_) {
         const std::string_view field = index.column_;
@@ -789,7 +789,7 @@ redis_mapping normalize_redis_mapping(std::span<const redis_column_info> columns
 namespace ruvia {
 
 redis_search_mapping::redis_search_mapping(const redis_search_mapping& other) :
-    mapping_{other.mapping_.columns_, std::string(other.mapping_.entity_prefix_), std::string(other.mapping_.prefix_), std::string(other.mapping_.storage_prefix_), std::vector<detail::redis_index_definition>{}, std::vector<redis_index_kind>(other.mapping_.column_index_kinds_)} {
+    mapping_{other.mapping_.columns_, std::string(other.mapping_.prefix_), std::string(other.mapping_.storage_prefix_), std::vector<detail::redis_index_definition>{}, std::vector<redis_index_kind>(other.mapping_.column_index_kinds_)} {
     mapping_.indexes_.reserve(other.mapping_.indexes_.size());
     for (const auto& index : other.mapping_.indexes_) {
         mapping_.indexes_.push_back({std::string(index.column_), index.kind_, index.sortable_});
@@ -813,7 +813,6 @@ redis_search_mapping& redis_search_mapping::operator=(redis_search_mapping&& oth
 
 void redis_search_mapping::swap(redis_search_mapping& other) noexcept {
     std::swap(mapping_.columns_, other.mapping_.columns_);
-    mapping_.entity_prefix_.swap(other.mapping_.entity_prefix_);
     mapping_.prefix_.swap(other.mapping_.prefix_);
     mapping_.storage_prefix_.swap(other.mapping_.storage_prefix_);
     mapping_.indexes_.swap(other.mapping_.indexes_);

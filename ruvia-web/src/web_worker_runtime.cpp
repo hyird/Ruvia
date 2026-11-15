@@ -26,10 +26,10 @@
 #include "worker_runtime.h"
 #include "worker_state.h"
 #ifdef RUVIA_ENABLE_DATABASE
-#include "db_session.h"
+#include "db_executor.h"
 #endif
 #ifdef RUVIA_ENABLE_REDIS
-#include "redis.h"
+#include "redis_orm.h"
 #endif
 
 namespace ruvia {
@@ -48,11 +48,11 @@ const worker_ref& web_worker_context::worker() const& noexcept {
 }
 
 #ifdef RUVIA_ENABLE_DATABASE
-db_session web_worker_context::db() const {
+db_executor web_worker_context::db() const {
     return client_registries_.db(operation_scope_, nullptr, capabilities_.stop_token());
 }
 
-db_session web_worker_context::db(std::string_view alias) const {
+db_executor web_worker_context::db(std::string_view alias) const {
     return client_registries_.db(alias, operation_scope_, nullptr, capabilities_.stop_token());
 }
 #endif
@@ -66,11 +66,11 @@ http_client_ref web_worker_context::client(std::string_view alias) const {
 }
 
 #ifdef RUVIA_ENABLE_REDIS
-redis_session web_worker_context::redis() const {
+redis_executor web_worker_context::redis() const {
     return client_registries_.redis(operation_scope_, nullptr, capabilities_.stop_token());
 }
 
-redis_session web_worker_context::redis(std::string_view alias) const {
+redis_executor web_worker_context::redis(std::string_view alias) const {
     return client_registries_.redis(alias, operation_scope_, nullptr, capabilities_.stop_token());
 }
 #endif

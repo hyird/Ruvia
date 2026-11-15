@@ -32,10 +32,10 @@
 #include <asio/use_future.hpp>
 #include <asio/write.hpp>
 
-#include "db_session.h"
+#include "db_executor.h"
 #include "event_loop.h"
 #ifdef RUVIA_ENABLE_REDIS
-#include "redis.h"
+#include "redis_orm.h"
 #endif
 #include "task.h"
 
@@ -1512,7 +1512,7 @@ inline void record_failure(const ruvia::db_error& error, outcome& result) {
     result.sql_state_ = error.sql_state().value_or("");
 }
 
-inline ruvia::task<void> query(ruvia::db_session handle, std::string_view sql, outcome& result) {
+inline ruvia::task<void> query(ruvia::db_executor handle, std::string_view sql, outcome& result) {
     try {
         const ruvia::db_rows rows = co_await handle.query(sql);
         result.value_ = std::string(rows.front()["v"].as<std::string_view>().value_or(""));
@@ -1523,7 +1523,7 @@ inline ruvia::task<void> query(ruvia::db_session handle, std::string_view sql, o
     }
 }
 
-inline ruvia::task<void> query_id(ruvia::db_session handle, std::string_view sql, std::int64_t id, outcome& result) {
+inline ruvia::task<void> query_id(ruvia::db_executor handle, std::string_view sql, std::int64_t id, outcome& result) {
     try {
         const ruvia::db_rows rows = co_await handle.query(sql, id);
         result.value_ = std::string(rows.front()["v"].as<std::string_view>().value_or(""));
@@ -1532,7 +1532,7 @@ inline ruvia::task<void> query_id(ruvia::db_session handle, std::string_view sql
     }
 }
 
-inline ruvia::task<void> execute(ruvia::db_session handle, std::string_view sql, outcome& result) {
+inline ruvia::task<void> execute(ruvia::db_executor handle, std::string_view sql, outcome& result) {
     try {
         const auto executed = co_await handle.execute(sql);
         result.affected_rows_ = executed.affected_rows();
@@ -1544,7 +1544,7 @@ inline ruvia::task<void> execute(ruvia::db_session handle, std::string_view sql,
     }
 }
 
-inline ruvia::task<void> begin_and_commit(ruvia::db_session handle, outcome& result) {
+inline ruvia::task<void> begin_and_commit(ruvia::db_executor handle, outcome& result) {
     try {
         auto transaction = co_await handle.begin_transaction();
         co_await transaction.commit();

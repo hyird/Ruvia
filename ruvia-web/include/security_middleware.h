@@ -10,7 +10,7 @@
 
 namespace ruvia {
 
-struct csrf_protection_config final {
+struct csrf_config final {
     std::string cookie_name_{"XSRF-TOKEN"};
     // 必须为脚本主动提交 token 的自定义字段；构造时拒绝 CORS-safelisted、
     // 浏览器保留及已知自动生成/代理字段（名称不区分大小写）。
@@ -29,29 +29,25 @@ struct csrf_protection_config final {
 // and "X-XSRF-TOKEN" and can be rebranded per app.
 // This relies on the browser's custom-request-header boundary. It does not
 // authenticate a user or protect an origin already trusted by credentialed CORS.
-class csrf_protection final {
+class csrf_middleware final {
 public:
-    csrf_protection();
-    explicit csrf_protection(const csrf_protection_config& config);
+    csrf_middleware();
+    explicit csrf_middleware(const csrf_config& config);
 
-    csrf_protection(const csrf_protection&) = delete;
-    csrf_protection& operator=(const csrf_protection&) = delete;
-    csrf_protection(csrf_protection&&) = delete;
-    csrf_protection& operator=(csrf_protection&&) = delete;
+    csrf_middleware(const csrf_middleware&) = delete;
+    csrf_middleware& operator=(const csrf_middleware&) = delete;
+    csrf_middleware(csrf_middleware&&) = delete;
+    csrf_middleware& operator=(csrf_middleware&&) = delete;
 
     task<void> invoke(context& c, next& next);
 
 private:
-    [[nodiscard]] static const csrf_protection_config& validate(const csrf_protection_config& source);
+    [[nodiscard]] static const csrf_config& validate(const csrf_config& source);
 
     std::string cookie_name_;
     std::string header_name_;
 };
 
-struct security_header final {
-    std::string name_{};
-    std::string value_{};
-};
 // Legacy browser XSS filters can introduce vulnerabilities in otherwise safe
 // pages. Modern policy either emits X-XSS-Protection: 0 to disable the obsolete
 // auditor, or omits the obsolete header entirely for clients that ignore it.
@@ -82,7 +78,7 @@ struct security_headers_config final {
     std::string referrer_policy_{"strict-origin-when-cross-origin"};
     std::string permissions_policy_{"geolocation=(), microphone=(), camera=()"};
 
-    std::vector<security_header> custom_headers_{};
+    std::vector<http_header> custom_headers_{};
     security_header_conflict_policy existing_headers_ = security_header_conflict_policy::preserve_existing;
 };
 

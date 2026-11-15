@@ -279,13 +279,6 @@ private:
     websocket_transport_disposition disposition_;
 };
 
-enum class websocket_event_kind : std::uint8_t { message,
-    ping,
-    pong,
-    close,
-    protocol_error,
-    transport_end };
-
 class websocket_ping_event final {
 public:
     [[nodiscard]] constexpr std::string_view payload() const noexcept {
@@ -361,9 +354,6 @@ public:
     websocket_event(websocket_event&&) noexcept = default;
     websocket_event& operator=(const websocket_event&) = delete;
     websocket_event& operator=(websocket_event&&) = delete;
-    [[nodiscard]] websocket_event_kind kind() const noexcept {
-        return static_cast<websocket_event_kind>(value_.index());
-    }
     [[nodiscard]] const websocket_message* message() const& noexcept RUVIA_LIFETIMEBOUND {
         return std::get_if<websocket_message>(&value_);
     }
@@ -392,7 +382,6 @@ public:
 private:
     friend class websocket_connection;
     using value_type = std::variant<websocket_message, websocket_ping_event, websocket_pong_event, websocket_close_event, websocket_protocol_error_event, websocket_transport_end_event>;
-    static_assert(static_cast<std::uint8_t>(websocket_event_kind::transport_end) + 1 == std::variant_size_v<value_type>);
     template <typename event_type>
     explicit websocket_event(event_type event) noexcept :
         value_(std::move(event)) {}

@@ -41,6 +41,7 @@
 #include "connection_lifecycle.h"
 #include "crypto.h"
 #include "failure_report.h"
+#include "fnv1a.h"
 #include "http3_quic_driver.h"
 #include "http3_session.h"
 #include "ip_address_conversion.h"

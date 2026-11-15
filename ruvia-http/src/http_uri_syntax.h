@@ -4,8 +4,6 @@
 #include <cstdint>
 #include <optional>
 #include <string_view>
-#include <system_error>
-#include <variant>
 
 #include "borrowed_text.h"
 #include "http_message.h"
@@ -44,9 +42,6 @@ namespace ruvia::detail {
 // without validating either part. False when brackets are unbalanced, text
 // follows "]" without ":", or the port contains another ":".
 [[nodiscard]] bool split_uri_host_port(std::string_view value, std::string_view& host, std::string_view& port, bool& has_port) noexcept;
-
-// Parse a decimal port, rejecting anything that does not fit 16 bits.
-[[nodiscard]] std::variant<std::uint16_t, std::errc> parse_port_value(std::string_view value) noexcept;
 
 // Validate a percent-encoded component: unreserved / sub-delims / pct-encoded,
 // plus ':' and '@', with '/' and '?' admitted only where the component allows them.

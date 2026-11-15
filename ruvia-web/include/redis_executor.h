@@ -613,9 +613,8 @@ public:
     redis_value& operator=(redis_value&& other) noexcept;
 
     [[nodiscard]] kind_type kind() const noexcept;
-    [[nodiscard]] bool null() const noexcept;
     [[nodiscard]] bool is_null() const noexcept {
-        return null();
+        return kind() == kind_type::null;
     }
     [[nodiscard]] bool is_string() const noexcept {
         return kind() == kind_type::string;
@@ -682,7 +681,7 @@ private:
     std::vector<redis_value> array_;
 };
 
-class redis_session;
+class redis_executor;
 
 namespace detail {
 class redis_client_runtime;
@@ -751,7 +750,240 @@ enum class redis_batch_mode : std::uint8_t {
 };
 
 template <redis_batch_mode mode>
-class redis_batch final {
+class redis_batch;
+
+namespace detail {
+
+// What one typed command returns on a command surface: the executor's awaited,
+// decoded reply, or the batch itself after queueing the command.
+template <typename surface_type>
+struct redis_command_reply;
+
+template <>
+struct redis_command_reply<redis_executor> final {
+    template <typename result_type>
+    using type = task<result_type>;
+};
+
+template <redis_batch_mode mode>
+struct redis_command_reply<redis_batch<mode>> final {
+    template <typename result_type>
+    using type = redis_batch<mode>&;
+};
+
+}  // namespace detail
+
+// The single typed command table. redis_executor awaits each command and
+// decodes its reply; redis_pipeline / redis_transaction queue the command and
+// return themselves, and exec() yields the raw redis_value replies in queue
+// order (an element decodes like the executor's result of the same command).
+// Same shape as redis-plus-plus, whose Pipeline / Transaction mirror the Redis
+// command set, and go-redis, whose Pipeliner implements Cmdable. Commands a
+// batch cannot carry -- blocking reads and subscriptions -- are executor-only.
+//
+// Every call synchronously encodes its arguments into owned storage, so views
+// only have to outlive the call. Calls are non-const, as in redis-plus-plus.
+template <typename surface_type>
+class redis_command_set {
+    template <typename result_type>
+    using reply = typename detail::redis_command_reply<surface_type>::template type<result_type>;
+
+public:
+    reply<void> ping();
+    reply<std::string> ping(std::string_view message);
+    reply<std::optional<std::string>> get(std::string_view key);
+    reply<std::vector<std::optional<std::string>>> mget(std::span<const std::string_view> keys);
+    reply<std::vector<std::optional<std::string>>> mget(std::initializer_list<std::string_view> keys) = delete;
+    reply<redis_set_result> set(std::string_view key, std::string_view value, redis_set_options options = {});
+    reply<void> mset(std::span<const std::pair<std::string_view, std::string_view>> items);
+    reply<void> mset(std::initializer_list<std::pair<std::string_view, std::string_view>> items) = delete;
+    reply<std::optional<std::string>> get_del(std::string_view key);
+    reply<std::int64_t> append(std::string_view key, std::string_view value);
+    reply<std::int64_t> strlen(std::string_view key);
+    reply<std::int64_t> incr(std::string_view key);
+    reply<std::int64_t> incr_by(std::string_view key, std::int64_t value);
+    reply<std::int64_t> decr(std::string_view key);
+    reply<std::int64_t> decr_by(std::string_view key, std::int64_t value);
+    reply<std::int64_t> del(std::string_view key);
+    reply<std::int64_t> del(std::span<const std::string_view> keys);
+    reply<std::int64_t> del(std::initializer_list<std::string_view> keys) = delete;
+    reply<std::int64_t> unlink(std::string_view key);
+    reply<std::int64_t> unlink(std::span<const std::string_view> keys);
+    reply<std::int64_t> unlink(std::initializer_list<std::string_view> keys) = delete;
+    reply<bool> exists(std::string_view key);
+    reply<bool> touch(std::string_view key);
+    reply<std::string> type(std::string_view key);
+    reply<void> rename(std::string_view key, std::string_view new_key);
+    reply<bool> rename_nx(std::string_view key, std::string_view new_key);
+    reply<bool> expire(std::string_view key, std::chrono::seconds ttl);
+    reply<bool> pexpire(std::string_view key, std::chrono::milliseconds ttl);
+    reply<bool> expire_at(std::string_view key, std::chrono::system_clock::time_point expires_at);
+    reply<bool> persist(std::string_view key);
+    reply<redis_ttl> ttl(std::string_view key);
+    reply<redis_ttl> pttl(std::string_view key);
+    reply<std::optional<std::string>> hget(std::string_view key, std::string_view field);
+    reply<std::int64_t> hset(std::string_view key, std::string_view field, std::string_view value);
+    reply<std::int64_t> hset(std::string_view key, std::span<const std::pair<std::string_view, std::string_view>> fields);
+    reply<std::int64_t> hset(std::string_view key, std::initializer_list<std::pair<std::string_view, std::string_view>> fields) = delete;
+    reply<std::vector<std::optional<std::string>>> hmget(std::string_view key, std::span<const std::string_view> fields);
+    reply<std::vector<std::optional<std::string>>> hmget(std::string_view key, std::initializer_list<std::string_view> fields) = delete;
+    reply<std::vector<redis_key_value>> hget_all(std::string_view key);
+    reply<std::int64_t> hdel(std::string_view key, std::string_view field);
+    reply<bool> hexists(std::string_view key, std::string_view field);
+    reply<std::int64_t> hlen(std::string_view key);
+    reply<std::vector<std::string>> hkeys(std::string_view key);
+    reply<std::vector<std::string>> hvals(std::string_view key);
+    reply<std::int64_t> hincr_by(std::string_view key, std::string_view field, std::int64_t value);
+    reply<std::int64_t> lpush(std::string_view key, std::string_view value);
+    reply<std::int64_t> rpush(std::string_view key, std::string_view value);
+    reply<std::optional<std::string>> lpop(std::string_view key);
+    reply<std::optional<std::string>> rpop(std::string_view key);
+    reply<std::int64_t> llen(std::string_view key);
+    reply<std::vector<std::string>> lrange(std::string_view key, std::int64_t start, std::int64_t stop);
+    reply<std::optional<std::string>> lindex(std::string_view key, std::int64_t index);
+    reply<void> lset(std::string_view key, std::int64_t index, std::string_view value);
+    reply<void> ltrim(std::string_view key, std::int64_t start, std::int64_t stop);
+    reply<std::int64_t> lrem(std::string_view key, std::int64_t count, std::string_view value);
+    reply<std::int64_t> sadd(std::string_view key, std::string_view member);
+    reply<std::int64_t> srem(std::string_view key, std::string_view member);
+    reply<std::vector<std::string>> smembers(std::string_view key);
+    reply<std::int64_t> scard(std::string_view key);
+    reply<bool> sismember(std::string_view key, std::string_view member);
+    reply<std::optional<std::string>> spop(std::string_view key);
+    reply<std::optional<std::string>> srand_member(std::string_view key);
+    reply<std::vector<std::string>> sinter(std::span<const std::string_view> keys);
+    reply<std::vector<std::string>> sinter(std::initializer_list<std::string_view> keys) = delete;
+    reply<std::vector<std::string>> sunion(std::span<const std::string_view> keys);
+    reply<std::vector<std::string>> sunion(std::initializer_list<std::string_view> keys) = delete;
+    reply<std::vector<std::string>> sdiff(std::span<const std::string_view> keys);
+    reply<std::vector<std::string>> sdiff(std::initializer_list<std::string_view> keys) = delete;
+    reply<std::int64_t> zadd(std::string_view key, double score, std::string_view member);
+    reply<std::int64_t> zrem(std::string_view key, std::string_view member);
+    reply<std::vector<std::string>> zrange(std::string_view key, std::int64_t start, std::int64_t stop);
+    reply<std::vector<redis_scored_value>> zrange_with_scores(std::string_view key, std::int64_t start, std::int64_t stop);
+    reply<std::optional<double>> zscore(std::string_view key, std::string_view member);
+    reply<std::int64_t> zcard(std::string_view key);
+    reply<std::int64_t> zcount(std::string_view key, double min, double max);
+    reply<redis_scan_result> scan(redis_scan_options options = {});
+    reply<redis_hash_scan_result> hscan(std::string_view key, redis_scan_options options = {});
+    reply<redis_scan_result> sscan(std::string_view key, redis_scan_options options = {});
+    reply<redis_z_scan_result> zscan(std::string_view key, redis_scan_options options = {});
+    reply<redis_value> eval(std::string_view script, std::span<const std::string_view> keys = {}, std::span<const std::string_view> args = {});
+    reply<redis_value> eval_sha(std::string_view sha1, std::span<const std::string_view> keys = {}, std::span<const std::string_view> args = {});
+    reply<std::string> script_load(std::string_view script);
+    reply<std::vector<bool>> script_exists(std::span<const std::string_view> sha1s);
+    reply<std::vector<bool>> script_exists(std::initializer_list<std::string_view> sha1s) = delete;
+    // Delivers to a channel on the ordinary pool; the reply is the receiver count.
+    reply<std::int64_t> publish(std::string_view channel, std::string_view payload);
+
+    // Multi-argument commands as ordinary arguments: mget(a, b, c) instead of a
+    // hand-built array plus a span. A span argument is not convertible to
+    // string_view and therefore never selects one of these.
+    template <typename... keys_type>
+        requires detail::redis_argument_pack<keys_type...>
+    reply<std::vector<std::optional<std::string>>> mget(keys_type&&... keys) {
+        const std::string_view views[]{std::string_view(keys)...};
+        return mget(std::span<const std::string_view>(views));
+    }
+
+    template <typename... keys_type>
+        requires(detail::redis_argument_pack<keys_type...> && sizeof...(keys_type) >= 2)
+    reply<std::int64_t> del(keys_type&&... keys) {
+        const std::string_view views[]{std::string_view(keys)...};
+        return del(std::span<const std::string_view>(views));
+    }
+
+    template <typename... keys_type>
+        requires(detail::redis_argument_pack<keys_type...> && sizeof...(keys_type) >= 2)
+    reply<std::int64_t> unlink(keys_type&&... keys) {
+        const std::string_view views[]{std::string_view(keys)...};
+        return unlink(std::span<const std::string_view>(views));
+    }
+
+    // Alternating key/value arguments: mset(k1, v1, k2, v2).
+    template <typename... args_type>
+        requires detail::redis_pair_argument_pack<args_type...>
+    reply<void> mset(args_type&&... args) {
+        const auto items = pair_arguments(std::string_view(args)...);
+        return mset(std::span<const std::pair<std::string_view, std::string_view>>(items));
+    }
+
+    // Four or more arguments; hset(key, field, value) stays on the single-field
+    // overload above.
+    template <typename... args_type>
+        requires(detail::redis_pair_argument_pack<args_type...> && sizeof...(args_type) >= 4)
+    reply<std::int64_t> hset(std::string_view key, args_type&&... args) {
+        const auto fields = pair_arguments(std::string_view(args)...);
+        return hset(key, std::span<const std::pair<std::string_view, std::string_view>>(fields));
+    }
+
+    template <typename... fields_type>
+        requires detail::redis_argument_pack<fields_type...>
+    reply<std::vector<std::optional<std::string>>> hmget(std::string_view key, fields_type&&... fields) {
+        const std::string_view views[]{std::string_view(fields)...};
+        return hmget(key, std::span<const std::string_view>(views));
+    }
+
+    template <typename... keys_type>
+        requires detail::redis_argument_pack<keys_type...>
+    reply<std::vector<std::string>> sinter(keys_type&&... keys) {
+        const std::string_view views[]{std::string_view(keys)...};
+        return sinter(std::span<const std::string_view>(views));
+    }
+
+    template <typename... keys_type>
+        requires detail::redis_argument_pack<keys_type...>
+    reply<std::vector<std::string>> sunion(keys_type&&... keys) {
+        const std::string_view views[]{std::string_view(keys)...};
+        return sunion(std::span<const std::string_view>(views));
+    }
+
+    template <typename... keys_type>
+        requires detail::redis_argument_pack<keys_type...>
+    reply<std::vector<std::string>> sdiff(keys_type&&... keys) {
+        const std::string_view views[]{std::string_view(keys)...};
+        return sdiff(std::span<const std::string_view>(views));
+    }
+
+    template <typename... sha1s_type>
+        requires detail::redis_argument_pack<sha1s_type...>
+    reply<std::vector<bool>> script_exists(sha1s_type&&... sha1s) {
+        const std::string_view views[]{std::string_view(sha1s)...};
+        return script_exists(std::span<const std::string_view>(views));
+    }
+
+protected:
+    redis_command_set() noexcept = default;
+    redis_command_set(const redis_command_set&) noexcept = default;
+    redis_command_set(redis_command_set&&) noexcept = default;
+    redis_command_set& operator=(const redis_command_set&) noexcept = default;
+    redis_command_set& operator=(redis_command_set&&) noexcept = default;
+    ~redis_command_set() = default;
+
+private:
+    // Hands one encoded command and its reply decoder to the surface.
+    template <typename result_type, typename decoder_type>
+    reply<result_type> typed(detail::redis_owned_command&& command, decoder_type decoder) {
+        return static_cast<surface_type&>(*this).template issue<result_type>(std::move(command), std::move(decoder));
+    }
+
+    // Reassembles a flat alternating argument list into the pair sequence the
+    // span overloads take.
+    template <typename... args_type>
+    [[nodiscard]] static constexpr auto pair_arguments(args_type... args) {
+        static_assert(sizeof...(args_type) % 2 == 0);
+        const std::string_view flat[]{args...};
+        std::array<std::pair<std::string_view, std::string_view>, sizeof...(args_type) / 2> pairs{};
+        for (std::size_t index = 0; index < pairs.size(); ++index) {
+            pairs[index] = {flat[2 * index], flat[2 * index + 1]};
+        }
+        return pairs;
+    }
+};
+
+// Typed commands come from redis_command_set; exec() returns their raw replies.
+template <redis_batch_mode mode>
+class redis_batch final : public redis_command_set<redis_batch<mode>> {
 public:
     redis_batch(const redis_batch&) = delete;
     redis_batch& operator=(const redis_batch&) = delete;
@@ -771,183 +1003,27 @@ public:
         return command(std::span<const std::string_view>(views));
     }
 
-    redis_batch& get(std::string_view key) {
-        return trusted("GET", key);
-    }
-
-    redis_batch& set(std::string_view key, std::string_view value) {
-        return trusted("SET", key, value);
-    }
-
-    redis_batch& get_del(std::string_view key) {
-        return trusted("GETDEL", key);
-    }
-
-    redis_batch& append(std::string_view key, std::string_view value) {
-        return trusted("APPEND", key, value);
-    }
-
-    redis_batch& strlen(std::string_view key) {
-        return trusted("STRLEN", key);
-    }
-
-    redis_batch& del(std::string_view key) {
-        return trusted("DEL", key);
-    }
-
-    redis_batch& unlink(std::string_view key) {
-        return trusted("UNLINK", key);
-    }
-
-    redis_batch& exists(std::string_view key) {
-        return trusted("EXISTS", key);
-    }
-
-    redis_batch& touch(std::string_view key) {
-        return trusted("TOUCH", key);
-    }
-
-    redis_batch& type(std::string_view key) {
-        return trusted("TYPE", key);
-    }
-
-    redis_batch& rename(std::string_view key, std::string_view new_key) {
-        return trusted("RENAME", key, new_key);
-    }
-
-    redis_batch& rename_nx(std::string_view key, std::string_view new_key) {
-        return trusted("RENAMENX", key, new_key);
-    }
-
-    redis_batch& incr(std::string_view key) {
-        return trusted("INCR", key);
-    }
-
-    redis_batch& incr_by(std::string_view key, std::int64_t value) {
-        require_ready();
-        return append_owned(detail::make_redis_integer_command("INCRBY", key, value));
-    }
-
-    redis_batch& decr(std::string_view key) {
-        return trusted("DECR", key);
-    }
-
-    redis_batch& decr_by(std::string_view key, std::int64_t value) {
-        require_ready();
-        return append_owned(detail::make_redis_integer_command("DECRBY", key, value));
-    }
-
-    redis_batch& hget(std::string_view key, std::string_view field) {
-        return trusted("HGET", key, field);
-    }
-
-    redis_batch& hset(std::string_view key, std::string_view field, std::string_view value) {
-        return trusted("HSET", key, field, value);
-    }
-
-    redis_batch& hdel(std::string_view key, std::string_view field) {
-        return trusted("HDEL", key, field);
-    }
-
-    redis_batch& hexists(std::string_view key, std::string_view field) {
-        return trusted("HEXISTS", key, field);
-    }
-
-    redis_batch& hlen(std::string_view key) {
-        return trusted("HLEN", key);
-    }
-
-    redis_batch& hget_all(std::string_view key) {
-        return trusted("HGETALL", key);
-    }
-
-    redis_batch& lpush(std::string_view key, std::string_view value) {
-        return trusted("LPUSH", key, value);
-    }
-
-    redis_batch& rpush(std::string_view key, std::string_view value) {
-        return trusted("RPUSH", key, value);
-    }
-
-    redis_batch& lpop(std::string_view key) {
-        return trusted("LPOP", key);
-    }
-
-    redis_batch& rpop(std::string_view key) {
-        return trusted("RPOP", key);
-    }
-
-    redis_batch& llen(std::string_view key) {
-        return trusted("LLEN", key);
-    }
-
-    redis_batch& lrange(std::string_view key, std::int64_t start, std::int64_t stop) {
-        require_ready();
-        return append_owned(detail::make_redis_range_command("LRANGE", key, start, stop));
-    }
-
-    redis_batch& sadd(std::string_view key, std::string_view member) {
-        return trusted("SADD", key, member);
-    }
-
-    redis_batch& srem(std::string_view key, std::string_view member) {
-        return trusted("SREM", key, member);
-    }
-
-    redis_batch& smembers(std::string_view key) {
-        return trusted("SMEMBERS", key);
-    }
-
-    redis_batch& scard(std::string_view key) {
-        return trusted("SCARD", key);
-    }
-
-    redis_batch& zadd(std::string_view key, double score, std::string_view member) {
-        require_ready();
-        return append_owned(detail::make_redis_zadd_command(key, score, member));
-    }
-
-    redis_batch& zrem(std::string_view key, std::string_view member) {
-        return trusted("ZREM", key, member);
-    }
-
-    redis_batch& zrange(std::string_view key, std::int64_t start, std::int64_t stop) {
-        require_ready();
-        return append_owned(detail::make_redis_range_command("ZRANGE", key, start, stop));
-    }
-
-    redis_batch& zscore(std::string_view key, std::string_view member) {
-        return trusted("ZSCORE", key, member);
-    }
-
-    redis_batch& zcard(std::string_view key) {
-        return trusted("ZCARD", key);
-    }
-
-    redis_batch& publish(std::string_view channel, std::string_view payload) {
-        return trusted("PUBLISH", channel, payload);
-    }
-
     // Consumes the batch before returning the lazy task, so the coroutine frame
     // owns every command and never borrows this builder through `this`.
     [[nodiscard]] task<std::vector<redis_value>> exec() &&;
 
 private:
-    friend class redis_session;
+    friend class redis_executor;
+    friend class redis_command_set<redis_batch>;
 
     // `io_metrics` is the request's counter block, or null outside a request;
     // `request_stop` is the caller request's cancellation, empty outside one.
     redis_batch(detail::redis_pool& pool, operation_options options, stop_token request_stop, operation_scope& scope, detail::request_io_metrics* io_metrics) noexcept;
     void require_ready() const;
     [[nodiscard]] detail::redis_command_payload consume();
-    void expire() noexcept;
     redis_batch& append_owned(detail::redis_owned_command command);
 
-    template <typename... args_type>
-    redis_batch& trusted(std::string_view command_name, args_type... args) {
+    // Typed commands are trusted: neither blocking nor connection-stateful.
+    // The batch returns raw replies, so the decoder is not kept.
+    template <typename result_type, typename decoder_type>
+    redis_batch& issue(detail::redis_owned_command&& command, decoder_type) {
         require_ready();
-        const std::string_view rest[]{args...};
-        return append_owned(detail::make_owned_redis_command(command_name, std::span<const std::string_view>(rest)));
+        return append_owned(std::move(command));
     }
 
     [[nodiscard]] static task<std::vector<redis_value>> execute_owned(detail::request_io_metrics* io_metrics, detail::redis_command_payload payload);
@@ -1047,7 +1123,7 @@ private:
     std::variant<redis_pubsub_confirmation, redis_pubsub_message> value_;
 };
 
-// One dedicated Pub/Sub connection, created by redis_session::subscription().
+// One dedicated Pub/Sub connection, created by redis_executor::subscription().
 // Channels and patterns are multiplexed on it; ordinary commands stay on the
 // handle's pools. The connection is opened by the first subscribe() and lives
 // until abort(), the handle's stop token, worker shutdown, a failed operation
@@ -1147,7 +1223,7 @@ public:
     void abort() noexcept;
 
 private:
-    friend class redis_session;
+    friend class redis_executor;
 
     redis_subscription(detail::redis_subscription_set& subscriptions, operation_scope& scope, const operation_options& options, const stop_token& request_stop);
 
@@ -1162,14 +1238,16 @@ private:
     scoped_capability_registration registration_;
 };
 
-struct redis_repository_config;
 template <typename entity_type>
 class redis_repository;
 
-class redis_session final {
+// A request- or client-scoped view of the Redis pools that runs commands, in
+// the sense of sqlx's Executor. Typed commands come from redis_command_set and
+// await their decoded reply; handle factories and accessors are const.
+class redis_executor final : public redis_command_set<redis_executor> {
 public:
-    redis_session(const redis_session& other) noexcept;
-    redis_session& operator=(const redis_session&) = delete;
+    redis_executor(const redis_executor& other) noexcept;
+    redis_executor& operator=(const redis_executor&) = delete;
 
     // Returns a request-scoped view whose policy is applied to every typed
     // command and inherited by pipelines and transactions created from it.
@@ -1177,7 +1255,7 @@ public:
     // can only tighten. Accumulate with linked_operation_options. A
     // request-bound handle links the request's cancellation into every
     // operation; with_options() cannot replace it.
-    [[nodiscard]] redis_session with_options(operation_options options) const;
+    [[nodiscard]] redis_executor with_options(operation_options options) const;
 
     // Borrows the owning worker; an expired capability cannot expose it.
     [[nodiscard]] const worker_ref& worker() const& RUVIA_LIFETIMEBOUND;
@@ -1187,198 +1265,36 @@ public:
     // 将写入与屏障合并到同一非事务 pipeline，参见 pipeline()。
     // XREAD/XREADGROUP 在 STREAMS 前只接受 COUNT、BLOCK 及 XREADGROUP 的 CLAIM、NOACK；
     // 含 BLOCK 时走阻塞池，其他选项同步抛出 std::invalid_argument。
-    [[nodiscard]] task<redis_value> command(std::span<const std::string_view> args) const;
-    task<redis_value> command(std::initializer_list<std::string_view> args) const = delete;
+    [[nodiscard]] task<redis_value> command(std::span<const std::string_view> args);
+    task<redis_value> command(std::initializer_list<std::string_view> args) = delete;
     // Takes ownership synchronously, before the returned cold task can suspend.
-    [[nodiscard]] task<redis_value> command(redis_compiled_command command) const {
+    [[nodiscard]] task<redis_value> command(redis_compiled_command command) {
         if (command.arguments().empty()) {
             throw std::invalid_argument("Redis compiled command has been consumed");
         }
         return scoped(command_owned(std::move(command).take_arguments()));
     }
 
-    [[nodiscard]] task<void> ping() const;
-    [[nodiscard]] task<std::string> ping(std::string_view message) const;
-    [[nodiscard]] task<std::optional<std::string>> get(std::string_view key) const;
-    [[nodiscard]] task<std::vector<std::optional<std::string>>> mget(std::span<const std::string_view> keys) const;
-    task<std::vector<std::optional<std::string>>> mget(std::initializer_list<std::string_view> keys) const = delete;
-    [[nodiscard]] task<redis_set_result> set(std::string_view key, std::string_view value, redis_set_options options = {}) const;
-    [[nodiscard]] task<void> mset(std::span<const std::pair<std::string_view, std::string_view>> items) const;
-    task<void> mset(std::initializer_list<std::pair<std::string_view, std::string_view>> items) const = delete;
-    [[nodiscard]] task<std::optional<std::string>> get_del(std::string_view key) const;
-    [[nodiscard]] task<std::int64_t> append(std::string_view key, std::string_view value) const;
-    [[nodiscard]] task<std::int64_t> strlen(std::string_view key) const;
-    [[nodiscard]] task<std::int64_t> incr_by(std::string_view key, std::int64_t value) const;
-    [[nodiscard]] task<std::int64_t> decr(std::string_view key) const;
-    [[nodiscard]] task<std::int64_t> decr_by(std::string_view key, std::int64_t value) const;
-    [[nodiscard]] task<std::int64_t> del(std::string_view key) const;
-    [[nodiscard]] task<std::int64_t> del(std::span<const std::string_view> keys) const;
-    task<std::int64_t> del(std::initializer_list<std::string_view> keys) const = delete;
-    [[nodiscard]] task<std::int64_t> unlink(std::string_view key) const;
-    [[nodiscard]] task<std::int64_t> unlink(std::span<const std::string_view> keys) const;
-    task<std::int64_t> unlink(std::initializer_list<std::string_view> keys) const = delete;
-    [[nodiscard]] task<bool> exists(std::string_view key) const;
-    [[nodiscard]] task<bool> touch(std::string_view key) const;
-    [[nodiscard]] task<std::string> type(std::string_view key) const;
-    [[nodiscard]] task<void> rename(std::string_view key, std::string_view new_key) const;
-    [[nodiscard]] task<bool> rename_nx(std::string_view key, std::string_view new_key) const;
-    [[nodiscard]] task<bool> expire(std::string_view key, std::chrono::seconds ttl) const;
-    [[nodiscard]] task<bool> pexpire(std::string_view key, std::chrono::milliseconds ttl) const;
-    [[nodiscard]] task<bool> expire_at(std::string_view key, std::chrono::system_clock::time_point expires_at) const;
-    [[nodiscard]] task<bool> persist(std::string_view key) const;
-    [[nodiscard]] task<redis_ttl> ttl(std::string_view key) const;
-    [[nodiscard]] task<redis_ttl> pttl(std::string_view key) const;
-    [[nodiscard]] task<std::int64_t> incr(std::string_view key) const;
-    [[nodiscard]] task<std::optional<std::string>> hget(std::string_view key, std::string_view field) const;
-    [[nodiscard]] task<std::int64_t> hset(std::string_view key, std::string_view field, std::string_view value) const;
-    [[nodiscard]] task<std::int64_t> hset(std::string_view key, std::span<const std::pair<std::string_view, std::string_view>> fields) const;
-    task<std::int64_t> hset(std::string_view key, std::initializer_list<std::pair<std::string_view, std::string_view>> fields_value) const = delete;
-    [[nodiscard]] task<std::vector<std::optional<std::string>>> hmget(std::string_view key, std::span<const std::string_view> fields) const;
-    task<std::vector<std::optional<std::string>>> hmget(std::string_view key, std::initializer_list<std::string_view> fields_value) const = delete;
-    [[nodiscard]] task<std::vector<redis_key_value>> hget_all(std::string_view key) const;
-    [[nodiscard]] task<std::int64_t> hdel(std::string_view key, std::string_view field) const;
-    [[nodiscard]] task<bool> hexists(std::string_view key, std::string_view field) const;
-    [[nodiscard]] task<std::int64_t> hlen(std::string_view key) const;
-    [[nodiscard]] task<std::vector<std::string>> hkeys(std::string_view key) const;
-    [[nodiscard]] task<std::vector<std::string>> hvals(std::string_view key) const;
-    [[nodiscard]] task<std::int64_t> hincr_by(std::string_view key, std::string_view field, std::int64_t value) const;
-    [[nodiscard]] task<std::int64_t> lpush(std::string_view key, std::string_view value) const;
-    [[nodiscard]] task<std::int64_t> rpush(std::string_view key, std::string_view value) const;
-    [[nodiscard]] task<std::optional<std::string>> lpop(std::string_view key) const;
-    [[nodiscard]] task<std::optional<std::string>> rpop(std::string_view key) const;
-    [[nodiscard]] task<std::int64_t> llen(std::string_view key) const;
-    [[nodiscard]] task<std::vector<std::string>> lrange(std::string_view key, std::int64_t start, std::int64_t stop) const;
-    [[nodiscard]] task<std::optional<std::string>> lindex(std::string_view key, std::int64_t index) const;
-    [[nodiscard]] task<void> lset(std::string_view key, std::int64_t index, std::string_view value) const;
-    [[nodiscard]] task<void> ltrim(std::string_view key, std::int64_t start, std::int64_t stop) const;
-    [[nodiscard]] task<std::int64_t> lrem(std::string_view key, std::int64_t count, std::string_view value) const;
-    [[nodiscard]] task<std::int64_t> sadd(std::string_view key, std::string_view member) const;
-    [[nodiscard]] task<std::int64_t> srem(std::string_view key, std::string_view member) const;
-    [[nodiscard]] task<std::vector<std::string>> smembers(std::string_view key) const;
-    [[nodiscard]] task<std::int64_t> scard(std::string_view key) const;
-    [[nodiscard]] task<bool> sismember(std::string_view key, std::string_view member) const;
-    [[nodiscard]] task<std::optional<std::string>> spop(std::string_view key) const;
-    [[nodiscard]] task<std::optional<std::string>> srand_member(std::string_view key) const;
-    [[nodiscard]] task<std::vector<std::string>> sinter(std::span<const std::string_view> keys) const;
-    task<std::vector<std::string>> sinter(std::initializer_list<std::string_view> keys) const = delete;
-    [[nodiscard]] task<std::vector<std::string>> sunion(std::span<const std::string_view> keys) const;
-    task<std::vector<std::string>> sunion(std::initializer_list<std::string_view> keys) const = delete;
-    [[nodiscard]] task<std::vector<std::string>> sdiff(std::span<const std::string_view> keys) const;
-    task<std::vector<std::string>> sdiff(std::initializer_list<std::string_view> keys) const = delete;
-    [[nodiscard]] task<std::int64_t> zadd(std::string_view key, double score, std::string_view member) const;
-    [[nodiscard]] task<std::int64_t> zrem(std::string_view key, std::string_view member) const;
-    [[nodiscard]] task<std::vector<std::string>> zrange(std::string_view key, std::int64_t start, std::int64_t stop) const;
-    [[nodiscard]] task<std::vector<redis_scored_value>> zrange_with_scores(std::string_view key, std::int64_t start, std::int64_t stop) const;
-    [[nodiscard]] task<std::optional<double>> zscore(std::string_view key, std::string_view member) const;
-    [[nodiscard]] task<std::int64_t> zcard(std::string_view key) const;
-    [[nodiscard]] task<std::int64_t> zcount(std::string_view key, double min, double max) const;
-    [[nodiscard]] task<redis_scan_result> scan(redis_scan_options options = {}) const;
-    [[nodiscard]] task<redis_hash_scan_result> hscan(std::string_view key, redis_scan_options options = {}) const;
-    [[nodiscard]] task<redis_scan_result> sscan(std::string_view key, redis_scan_options options = {}) const;
-    [[nodiscard]] task<redis_z_scan_result> zscan(std::string_view key, redis_scan_options options = {}) const;
-    [[nodiscard]] task<redis_value> eval(std::string_view script, std::span<const std::string_view> keys = {}, std::span<const std::string_view> args = {}) const;
-    [[nodiscard]] task<redis_value> eval_sha(std::string_view sha1, std::span<const std::string_view> keys = {}, std::span<const std::string_view> args = {}) const;
-    [[nodiscard]] task<std::string> script_load(std::string_view script) const;
-    [[nodiscard]] task<std::vector<bool>> script_exists(std::span<const std::string_view> sha1s) const;
-    [[nodiscard]] task<std::optional<redis_key_value>> blpop(std::string_view key, redis_block_wait wait) const {
-        const std::string_view keys[]{key};
-        return blpop(std::span<const std::string_view>(keys), wait);
-    }
-    [[nodiscard]] task<std::optional<redis_key_value>> blpop(std::span<const std::string_view> keys, redis_block_wait wait) const;
-    [[nodiscard]] task<std::optional<redis_key_value>> brpop(std::string_view key, redis_block_wait wait) const {
-        const std::string_view keys[]{key};
-        return brpop(std::span<const std::string_view>(keys), wait);
-    }
-    [[nodiscard]] task<std::optional<redis_key_value>> brpop(std::span<const std::string_view> keys, redis_block_wait wait) const;
-    [[nodiscard]] task<std::optional<redis_x_read_group_result>> xread_group(std::string_view group, std::string_view consumer, std::span<const redis_stream_read_view> streams, redis_x_read_group_options options = {}) const;
-
-    // Multi-argument commands as ordinary arguments: mget(a, b, c) instead of a
-    // hand-built array plus a span. Every span overload above clones its
-    // arguments into owned storage before returning -- the command is built
-    // synchronously and only the owned copy is moved into the coroutine -- so the
-    // temporary array each of these creates only has to outlive the call.
-    //
-    // A span argument is not convertible to string_view and therefore never
-    // selects one of these; a caller that already holds a sequence keeps using
-    // the span overload unchanged.
+    // Every command owns its arguments before this call returns.
     template <typename... args_type>
         requires detail::redis_argument_pack<args_type...>
-    [[nodiscard]] task<redis_value> command(args_type&&... args) const {
+    [[nodiscard]] task<redis_value> command(args_type&&... args) {
         const std::string_view views[]{std::string_view(args)...};
         return command(std::span<const std::string_view>(views));
     }
 
-    template <typename... keys_type>
-        requires detail::redis_argument_pack<keys_type...>
-    [[nodiscard]] task<std::vector<std::optional<std::string>>> mget(keys_type&&... keys) const {
-        const std::string_view views[]{std::string_view(keys)...};
-        return mget(std::span<const std::string_view>(views));
+    // Blocking reads run on the blocking pool and never join a batch.
+    [[nodiscard]] task<std::optional<redis_key_value>> blpop(std::string_view key, redis_block_wait wait) {
+        const std::string_view keys[]{key};
+        return blpop(std::span<const std::string_view>(keys), wait);
     }
-    template <typename... keys_type>
-        requires(detail::redis_argument_pack<keys_type...> && sizeof...(keys_type) >= 2)
-    [[nodiscard]] task<std::int64_t> del(keys_type&&... keys) const {
-        const std::string_view views[]{std::string_view(keys)...};
-        return del(std::span<const std::string_view>(views));
+    [[nodiscard]] task<std::optional<redis_key_value>> blpop(std::span<const std::string_view> keys, redis_block_wait wait);
+    [[nodiscard]] task<std::optional<redis_key_value>> brpop(std::string_view key, redis_block_wait wait) {
+        const std::string_view keys[]{key};
+        return brpop(std::span<const std::string_view>(keys), wait);
     }
-
-    template <typename... keys_type>
-        requires(detail::redis_argument_pack<keys_type...> && sizeof...(keys_type) >= 2)
-    [[nodiscard]] task<std::int64_t> unlink(keys_type&&... keys) const {
-        const std::string_view views[]{std::string_view(keys)...};
-        return unlink(std::span<const std::string_view>(views));
-    }
-
-    // Alternating key/value arguments: mset(k1, v1, k2, v2).
-    template <typename... args_type>
-        requires detail::redis_pair_argument_pack<args_type...>
-    [[nodiscard]] task<void> mset(args_type&&... args) const {
-        const auto items = pair_arguments(std::string_view(args)...);
-        return mset(std::span<const std::pair<std::string_view, std::string_view>>(items));
-    }
-
-    // Four or more arguments; hset(key, field, value) stays on the single-field
-    // overload above rather than routing one pair through the batch path.
-    template <typename... args_type>
-        requires(detail::redis_pair_argument_pack<args_type...> && sizeof...(args_type) >= 4)
-    [[nodiscard]] task<std::int64_t> hset(std::string_view key, args_type&&... args) const {
-        const auto fields_value = pair_arguments(std::string_view(args)...);
-        return hset(key, std::span<const std::pair<std::string_view, std::string_view>>(fields_value));
-    }
-
-    template <typename... field_types>
-        requires detail::redis_argument_pack<field_types...>
-    [[nodiscard]] task<std::vector<std::optional<std::string>>> hmget(std::string_view key, field_types&&... fields) const {
-        const std::string_view views[]{std::string_view(fields)...};
-        return hmget(key, std::span<const std::string_view>(views));
-    }
-
-    template <typename... keys_type>
-        requires detail::redis_argument_pack<keys_type...>
-    [[nodiscard]] task<std::vector<std::string>> sinter(keys_type&&... keys) const {
-        const std::string_view views[]{std::string_view(keys)...};
-        return sinter(std::span<const std::string_view>(views));
-    }
-
-    template <typename... keys_type>
-        requires detail::redis_argument_pack<keys_type...>
-    [[nodiscard]] task<std::vector<std::string>> sunion(keys_type&&... keys) const {
-        const std::string_view views[]{std::string_view(keys)...};
-        return sunion(std::span<const std::string_view>(views));
-    }
-
-    template <typename... keys_type>
-        requires detail::redis_argument_pack<keys_type...>
-    [[nodiscard]] task<std::vector<std::string>> sdiff(keys_type&&... keys) const {
-        const std::string_view views[]{std::string_view(keys)...};
-        return sdiff(std::span<const std::string_view>(views));
-    }
-
-    template <typename... sha1s_type>
-        requires detail::redis_argument_pack<sha1s_type...>
-    [[nodiscard]] task<std::vector<bool>> script_exists(sha1s_type&&... sha1s) const {
-        const std::string_view views[]{std::string_view(sha1s)...};
-        return script_exists(std::span<const std::string_view>(views));
-    }
+    [[nodiscard]] task<std::optional<redis_key_value>> brpop(std::span<const std::string_view> keys, redis_block_wait wait);
+    [[nodiscard]] task<std::optional<redis_x_read_group_result>> xread_group(std::string_view group, std::string_view consumer, std::span<const redis_stream_read_view> streams, redis_x_read_group_options options = {});
 
     // 每批命令共享一次租约及同一连接，WAIT/WAITAOF 只保护该批中位于
     // 屏障之前的写入，不保护此前通过独立 handle 调用完成的写入。
@@ -1400,37 +1316,27 @@ public:
     [[nodiscard]] redis_pipeline pipeline() const;
     [[nodiscard]] redis_transaction transaction() const;
 
-    // Delivers to a channel on the ordinary pool; returns the receiver count.
-    [[nodiscard]] task<std::int64_t> publish(std::string_view channel, std::string_view payload) const;
     // A dedicated Pub/Sub connection bound to this handle's scope, stop token
     // and operation timeout. Like an infinite blocking wait, it requires a
     // stoppable token or a finite timeout (std::invalid_argument otherwise).
     [[nodiscard]] redis_subscription subscription() const;
 
-    // Validates `config` against the entity schema: the prefix must be
-    // non-empty without NUL bytes, and each index column must be a unique,
-    // identifier-named entity column whose type fits the index kind.
-    // Violations throw std::invalid_argument.
+    // A repository over `mapping`, which it borrows: keep the mapping alive
+    // until the repository is destroyed. Build the mapping once
+    // (redis_search_mapping::create) and reuse it for every request. A mapping
+    // created for another entity type throws std::invalid_argument.
+    template <typename entity_type>
+    [[nodiscard]] redis_repository<entity_type> repository(const redis_search_mapping& mapping) const;
+    template <typename entity_type>
+    redis_repository<entity_type> repository(const redis_search_mapping&& mapping) const = delete;
+    // A repository over the entity's unindexed default mapping: key-addressed
+    // operations only, since RediSearch queries need indexed columns.
     template <typename entity_type>
     [[nodiscard]] redis_repository<entity_type> repository() const;
-    template <typename entity_type>
-    [[nodiscard]] redis_repository<entity_type> repository(const redis_repository_config& config) const;
 
 private:
-    // Reassembles a flat alternating argument list into the pair sequence the
-    // span overloads take.
-    template <typename... args_type>
-    [[nodiscard]] static constexpr auto pair_arguments(args_type... args) {
-        static_assert(sizeof...(args_type) % 2 == 0);
-        const std::string_view flat[]{args...};
-        std::array<std::pair<std::string_view, std::string_view>, sizeof...(args_type) / 2> pairs{};
-        for (std::size_t index = 0; index < pairs.size(); ++index) {
-            pairs[index] = {flat[2 * index], flat[2 * index + 1]};
-        }
-        return pairs;
-    }
-
     friend class detail::redis_client_runtime;
+    friend class redis_command_set<redis_executor>;
     template <typename entity_type>
     friend class redis_repository;
 
@@ -1456,9 +1362,9 @@ private:
     }
 
     // `io_metrics` is the request's counter block, or null outside a request.
-    redis_session(detail::redis_client_runtime& runtime, operation_scope& operation_scope, detail::request_io_metrics* io_metrics) noexcept;
+    redis_executor(detail::redis_client_runtime& runtime, operation_scope& operation_scope, detail::request_io_metrics* io_metrics) noexcept;
     // A standalone client handle: no request, so no request I/O metrics.
-    redis_session(detail::redis_client_runtime& runtime, operation_scope& operation_scope, operation_options options) noexcept;
+    redis_executor(detail::redis_client_runtime& runtime, operation_scope& operation_scope, operation_options options) noexcept;
 
     template <typename t_type>
     [[nodiscard]] task<t_type> scoped(ruvia::task<t_type> task_value) const {
@@ -1475,14 +1381,16 @@ private:
         return scoped(detail::map_redis_command<result_type>(execute(pool, std::move(command), reply_timeout), std::move(mapper)));
     }
 
-    template <typename result_type, typename mapper_type>
-    [[nodiscard]] task<result_type> mapped(std::initializer_list<std::string_view> args, mapper_type mapper) const {
+    // A typed command from redis_command_set: trusted, neither blocking nor
+    // connection-stateful, so it runs on the ordinary pool.
+    template <typename result_type, typename decoder_type>
+    [[nodiscard]] task<result_type> issue(detail::redis_owned_command&& command, decoder_type decoder) const {
         registration_.require_active();
-        return execute_mapped<result_type>(pool(), detail::make_owned_redis_command(std::span<const std::string_view>(args.begin(), args.size())), std::move(mapper));
+        return execute_mapped<result_type>(pool(), std::move(command), std::move(decoder));
     }
 
     friend class detail::worker_client_registry_view;
-    [[nodiscard]] redis_session bind_caller_scope(::ruvia::operation_scope& scope, detail::request_io_metrics* io_metrics, const stop_token& stop_token_value) &&;
+    [[nodiscard]] redis_executor bind_caller_scope(::ruvia::operation_scope& scope, detail::request_io_metrics* io_metrics, const stop_token& stop_token_value) &&;
     static void expire_capability(void* target) noexcept;
     [[nodiscard]] detail::redis_pool& pool() const noexcept;
     [[nodiscard]] detail::redis_pool& blocking_pool() const noexcept;
@@ -1516,8 +1424,8 @@ public:
     // operation scope, so keep the returned handle for a sequence of commands
     // instead of calling redis() per command. Like context::redis(), the
     // handle carries no operation options; derive them with with_options().
-    [[nodiscard]] redis_session redis() const&;
-    redis_session redis() const&& = delete;
+    [[nodiscard]] redis_executor redis() const&;
+    redis_executor redis() const&& = delete;
 
     // Thread-safe close request; sockets are closed only on the bound loop.
     void close() noexcept;

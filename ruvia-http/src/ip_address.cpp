@@ -10,6 +10,7 @@
 #include <string>
 #include <string_view>
 
+#include "decimal_text.h"
 #include "http_uri_syntax.h"
 
 namespace ruvia {
@@ -19,12 +20,7 @@ namespace {
     if (text.empty() || text.front() == '0') {
         return std::nullopt;
     }
-    std::uint32_t value = 0;
-    const auto [end, error] = std::from_chars(text.data(), text.data() + text.size(), value);
-    if (error != std::errc{} || end != text.data() + text.size()) {
-        return std::nullopt;
-    }
-    return value;
+    return parse_integer<std::uint32_t>(text);
 }
 
 [[nodiscard]] char* append_ipv4(char* cursor, char* end, const std::uint8_t* bytes) noexcept {
@@ -166,13 +162,11 @@ std::optional<ip_cidr> ip_cidr::parse(std::string_view text) noexcept {
     unsigned bits = max_bits;
     if (slash != std::string_view::npos) {
         const auto prefix_text = text.substr(slash + 1);
-        if (prefix_text.empty() || prefix_text.size() > 3) {
+        const auto prefix = prefix_text.size() > 3 ? std::nullopt : parse_integer<unsigned>(prefix_text);
+        if (!prefix || *prefix > max_bits) {
             return std::nullopt;
         }
-        const auto [end, err] = std::from_chars(prefix_text.data(), prefix_text.data() + prefix_text.size(), bits);
-        if (err != std::errc{} || end != prefix_text.data() + prefix_text.size() || bits > max_bits) {
-            return std::nullopt;
-        }
+        bits = *prefix;
     }
     ip_cidr result;
     result.network_ = *mapped;

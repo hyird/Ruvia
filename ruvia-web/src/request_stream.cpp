@@ -20,10 +20,10 @@
 #include "streaming.h"
 #include "websocket.h"
 #ifdef RUVIA_ENABLE_DATABASE
-#include "db_session.h"
+#include "db_executor.h"
 #endif
 #ifdef RUVIA_ENABLE_REDIS
-#include "redis.h"
+#include "redis_orm.h"
 #endif
 
 namespace ruvia::detail {
@@ -204,21 +204,21 @@ http_client_ref request_stream::client(std::string_view alias) const {
 }
 
 #ifdef RUVIA_ENABLE_DATABASE
-db_session request_stream::db() const {
+db_executor request_stream::db() const {
     return context_.db();
 }
 
-db_session request_stream::db(std::string_view alias) const {
+db_executor request_stream::db(std::string_view alias) const {
     return context_.db(alias);
 }
 #endif
 
 #ifdef RUVIA_ENABLE_REDIS
-redis_session request_stream::redis() const {
+redis_executor request_stream::redis() const {
     return context_.redis();
 }
 
-redis_session request_stream::redis(std::string_view alias) const {
+redis_executor request_stream::redis(std::string_view alias) const {
     return context_.redis(alias);
 }
 #endif

@@ -18,6 +18,7 @@
 #include "http_multipart.h"
 #include "http_server_sent_events.h"
 #include "middleware.h"
+#include "outbound_bytes.h"
 #include "stop_token.h"
 #include "task.h"
 #include "timeout_duration.h"
@@ -107,21 +108,11 @@ public:
     task<stream_commit_result> commit(operation_options = {}) && = delete;
 
     /// 只在 commit 返回 body 后写正文；提交前、完成后调用均抛 logic_error。
-    /// string_view 在调用返回前复制到 owner-worker PMR，临时正文可安全跨挂起。
+    /// 调用返回前取得所有权：借用字节复制，std::string 右值直接移入输出通道，
+    /// 临时正文可安全跨挂起。
     /// 输出缓冲及写超时作用域保留至传输操作完成。
-    [[nodiscard]] task<void> write(std::span<const std::byte> chunk, operation_options operation = {}) &;
-    task<void> write(std::span<const std::byte>, operation_options = {}) && = delete;
-    [[nodiscard]] task<void> write(std::string_view chunk, operation_options operation = {}) &;
-    task<void> write(std::string_view, operation_options = {}) && = delete;
-
-    /// Takes ownership of an already-allocated chunk and transfers it into the
-    /// output lane before returning.
-    template <std::same_as<std::string> string_type>
-    [[nodiscard]] task<void> write(string_type&& chunk, operation_options operation = {}) & {
-        return write_owned(std::move(chunk), std::move(operation));
-    }
-    template <std::same_as<std::string> string_type>
-    task<void> write(string_type&&, operation_options = {}) && = delete;
+    [[nodiscard]] task<void> write(outbound_bytes chunk, operation_options operation = {}) &;
+    task<void> write(outbound_bytes, operation_options = {}) && = delete;
 
     [[nodiscard]] task<void> writeln(std::string_view chunk, operation_options operation = {}) &;
     task<void> writeln(std::string_view, operation_options = {}) && = delete;
@@ -202,8 +193,6 @@ private:
         }
     }
     void require_output() const;
-
-    task<void> write_owned(std::string&& chunk, operation_options operation);
 
     void* target_;
     detail::operation_interrupt_source* interrupts_;

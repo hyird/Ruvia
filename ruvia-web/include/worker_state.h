@@ -287,10 +287,10 @@ namespace ruvia {
 
 class http_client_ref;
 #ifdef RUVIA_ENABLE_DATABASE
-class db_session;
+class db_executor;
 #endif
 #ifdef RUVIA_ENABLE_REDIS
-class redis_session;
+class redis_executor;
 #endif
 
 namespace detail {
@@ -325,12 +325,12 @@ public:
     }
 
 #ifdef RUVIA_ENABLE_DATABASE
-    [[nodiscard]] db_session db() const;
-    [[nodiscard]] db_session db(std::string_view alias) const;
+    [[nodiscard]] db_executor db() const;
+    [[nodiscard]] db_executor db(std::string_view alias) const;
 #endif
 #ifdef RUVIA_ENABLE_REDIS
-    [[nodiscard]] redis_session redis() const;
-    [[nodiscard]] redis_session redis(std::string_view alias) const;
+    [[nodiscard]] redis_executor redis() const;
+    [[nodiscard]] redis_executor redis(std::string_view alias) const;
 #endif
     [[nodiscard]] http_client_ref client() const;
     [[nodiscard]] http_client_ref client(std::string_view alias) const;

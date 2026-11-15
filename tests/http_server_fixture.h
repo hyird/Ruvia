@@ -55,6 +55,7 @@
 
 #include "app.h"
 #include "context.h"
+#include "decimal_text.h"
 #include "http_client_request_view.h"
 #include "http_server.h"
 #include "middleware.h"
@@ -573,14 +574,14 @@ private:
         if (header.empty() || header.front() != '*') {
             throw std::runtime_error("expected RESP array");
         }
-        const auto count = std::get<0>(ruvia::parse_integer<std::size_t>(std::string_view(header).substr(1)));
+        const auto count = ruvia::parse_integer<std::size_t>(std::string_view(header).substr(1)).value();
         std::vector<std::string> args{};
         for (std::size_t index = 0; index < count; ++index) {
             const auto bulk = co_await line(socket, buffer);
             if (bulk.empty() || bulk.front() != '$') {
                 throw std::runtime_error("expected RESP bulk string");
             }
-            const auto size = std::get<0>(ruvia::parse_integer<std::size_t>(std::string_view(bulk).substr(1)));
+            const auto size = ruvia::parse_integer<std::size_t>(std::string_view(bulk).substr(1)).value();
             if (buffer.size() < size + 2) {
                 co_await asio::async_read(socket, asio::dynamic_buffer(buffer), asio::transfer_exactly(size + 2 - buffer.size()), asio::use_awaitable);
             }

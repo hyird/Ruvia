@@ -40,7 +40,6 @@ set(ruvia_web_sources
     src/server_listener.cpp
     src/server_options.cpp
     src/server_socket_stream.cpp
-    src/session.cpp
     src/static_root.cpp
     src/streaming.cpp
     src/tcp_client.cpp
@@ -71,6 +70,7 @@ endif()
 if(RUVIA_ENABLE_MARIADB OR RUVIA_ENABLE_POSTGRESQL)
     list(APPEND ruvia_web_sources
         src/db_client.cpp
+        src/db_executor.cpp
         src/db_migration.cpp
         src/db_pool.cpp
         src/db_query.cpp
@@ -78,7 +78,6 @@ if(RUVIA_ENABLE_MARIADB OR RUVIA_ENABLE_POSTGRESQL)
         src/db_repository.cpp
         src/db_result.cpp
         src/db_schema.cpp
-        src/db_session.cpp
         src/db_slot_socket.cpp
         src/db_transaction.cpp
     )
@@ -101,10 +100,11 @@ if(RUVIA_ENABLE_REDIS)
     list(APPEND ruvia_web_sources
         src/redis_client.cpp
         src/redis_codec.cpp
+        src/redis_executor.cpp
         src/redis_orm.cpp
         src/redis_pool.cpp
-        src/redis_session.cpp
         src/redis_subscription.cpp
+        src/session.cpp
     )
 endif()
 if(RUVIA_ENABLE_JWT)
@@ -155,18 +155,17 @@ set(ruvia_web_headers
     include/http_error.h
     include/http_server.h
     include/http_tunnel.h
-    include/integer_parse.h
     include/json_codec.h
     include/middleware.h
     include/model.h
     include/model_value.h
+    include/outbound_bytes.h
     include/rate_limiting.h
     include/request_stream.h
     include/router.h
     include/security_middleware.h
     include/server_connection.h
     include/server_observation.h
-    include/session.h
     include/static_root.h
     include/streaming.h
     include/tcp_client.h
@@ -177,20 +176,21 @@ set(ruvia_web_headers
 )
 if(RUVIA_ENABLE_MARIADB OR RUVIA_ENABLE_POSTGRESQL)
     list(APPEND ruvia_web_headers
-        include/db.h
         include/db_entity.h
         include/db_entity_codec.h
+        include/db_executor.h
         include/db_migration.h
         include/db_query.h
+        include/db_repository.h
         include/db_schema.h
-        include/db_session.h
         include/db_sql_scan.h
     )
 endif()
 if(RUVIA_ENABLE_REDIS)
     list(APPEND ruvia_web_headers
-        include/redis.h
-        include/redis_session.h
+        include/redis_executor.h
+        include/redis_orm.h
+        include/session.h
     )
 endif()
 if(RUVIA_ENABLE_JWT)

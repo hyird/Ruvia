@@ -24,8 +24,8 @@
 #include "borrowed_text.h"
 #include "db_entity.h"
 #include "db_entity_codec.h"
+#include "db_executor.h"
 #include "db_query.h"
-#include "db_session.h"
 #include "entity_storage.h"
 #include "model_value.h"
 #include "task.h"
@@ -935,9 +935,9 @@ void apply_entity_upsert(db_query& query, std::span<const std::string_view> inse
 }
 
 template <typename executor_type>
-using db_repository_executor_type = std::conditional_t<std::same_as<executor_type, db_session>, db_session, executor_type&>;
+using db_repository_executor_type = std::conditional_t<std::same_as<executor_type, db_executor>, db_executor, executor_type&>;
 template <typename executor_type>
-using db_repository_input_type = std::conditional_t<std::same_as<executor_type, db_session>, const db_session&, executor_type&>;
+using db_repository_input_type = std::conditional_t<std::same_as<executor_type, db_executor>, const db_executor&, executor_type&>;
 
 }  // namespace detail
 
@@ -1364,12 +1364,12 @@ public:
         return executor_.template query_mapped<std::vector<scalar_type>>(target_query, detail::db_map_scalars<scalar_type>{});
     }
     [[nodiscard]] task<db_stream_result> stream() const
-        requires std::same_as<executor_type, db_session>
+        requires std::same_as<executor_type, db_executor>
     {
         executor_.registration_.require_active();
         auto statement = get_query_and_parameters();
         auto& scope = executor_.registration_.scope();
-        return make_scoped_operation(scope, db_session::query_stream_prepared(executor_.client_, std::move(statement.sql_), std::move(statement.params_), executor_.resource_, scope, executor_.io_metrics_, executor_.options_));
+        return make_scoped_operation(scope, db_executor::query_stream_prepared(executor_.client_, std::move(statement.sql_), std::move(statement.params_), executor_.resource_, scope, executor_.io_metrics_, executor_.options_));
     }
     [[nodiscard]] task<std::uint64_t> get_count() const {
         const auto count = count_query();
@@ -2060,7 +2060,7 @@ public:
 
 private:
     static constexpr std::size_t column_capacity = std::tuple_size_v<typename entity_type::columns_type>;
-    friend class db_session;
+    friend class db_executor;
     friend class db_transaction;
     explicit db_repository(detail::db_repository_input_type<executor_type> executor) :
         executor_(executor) {}
@@ -2130,9 +2130,9 @@ private:
 };
 
 template <typename entity_type>
-db_repository<entity_type, db_session> db_session::repository() const {
+db_repository<entity_type, db_executor> db_executor::repository() const {
     registration_.require_active();
-    return db_repository<entity_type, db_session>(*this);
+    return db_repository<entity_type, db_executor>(*this);
 }
 template <typename entity_type>
 db_repository<entity_type, db_transaction> db_transaction::repository() & {

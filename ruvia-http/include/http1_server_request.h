@@ -17,12 +17,6 @@ namespace ruvia {
 
 class http1_server_request_parse_state;
 
-class http1_request_without_body final {
-private:
-    friend class http1_request_body_plan;
-    constexpr http1_request_without_body() noexcept = default;
-};
-
 class http1_known_length_request_body final {
 public:
     [[nodiscard]] constexpr std::size_t content_length() const noexcept {
@@ -60,10 +54,10 @@ private:
 // alternative. A caller cannot synthesize a plan that bypasses wire validation.
 class http1_request_body_plan final {
 public:
-    [[nodiscard]] constexpr const http1_request_without_body* without_body() const& noexcept RUVIA_LIFETIMEBOUND {
-        return std::get_if<http1_request_without_body>(&framing_);
+    [[nodiscard]] constexpr const http_without_content* without_content() const& noexcept RUVIA_LIFETIMEBOUND {
+        return std::get_if<http_without_content>(&framing_);
     }
-    [[nodiscard]] constexpr const http1_request_without_body* without_body() const&& = delete;
+    [[nodiscard]] constexpr const http_without_content* without_content() const&& = delete;
 
     [[nodiscard]] constexpr const http1_known_length_request_body* known_length() const& noexcept RUVIA_LIFETIMEBOUND {
         return std::get_if<http1_known_length_request_body>(&framing_);
@@ -101,10 +95,10 @@ public:
 private:
     friend class http1_server_request_parse_state;
 
-    using framing_type = std::variant<http1_request_without_body, http1_known_length_request_body, http1_chunked_request_body>;
+    using framing_type = std::variant<http_without_content, http1_known_length_request_body, http1_chunked_request_body>;
 
     explicit http1_request_body_plan(http_request_expectations expectations) noexcept :
-        http1_request_body_plan(framing_type(http1_request_without_body()), expectations) {}
+        http1_request_body_plan(framing_type(http_without_content()), expectations) {}
 
     http1_request_body_plan(std::size_t content_length, http_request_expectations expectations) noexcept :
         http1_request_body_plan(framing_type(http1_known_length_request_body(content_length)), expectations) {}

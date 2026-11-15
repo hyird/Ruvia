@@ -26,8 +26,8 @@
 #include "backend_config.h"
 #include "borrowed_text.h"
 #include "controller.h"
-#include "db.h"
 #include "db_migration.h"
+#include "db_repository.h"
 #include "middleware.h"
 
 namespace {
@@ -185,7 +185,7 @@ int main() {
             }
         }
         database_controller::set_driver(config.driver_);
-        app.database({.config_ = config});
+        app.db({.config_ = config});
 
         app.listen({.address_ = "0.0.0.0", .http_ = 8086}).server({.worker_count_ = 2, .process_signal_handlers_ = ruvia::process_signal_handler_policy::install}).run();
     } catch (...) {

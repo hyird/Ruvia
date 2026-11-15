@@ -483,7 +483,7 @@ WebSocket 握手错误仍抛 `http_client_error`；`handshake_rejected` 可通�
 - **放弃上传**：`exchange.body().abandon()` 只停止发送，请求内容保持不完整，`response()` 照常可读。HTTP/1 读完响应后关闭连接；HTTP/2 在完整响应后以 `RST_STREAM(NO_ERROR)` 只结束发送侧，HTTP/3 以 `RESET_STREAM(H3_NO_ERROR)` 只重置发送半流（RFC 9113 §8.1、RFC 9114 §4.1）。
 - **可写查询**：`exchange.body().writable()` 在内容已结束、已开始 `end()`、已 `abandon()`，或交换自身停止上传（提前收到完成交换的最终响应、或失败）后返回 `false`；据此停止泵送正文，不必以 `write()` 抛出的 `std::errc::operation_canceled` 区分原因。
 
-引用对象与响应操作留在所属 worker；请求中的 `http_client_ref` 受请求作用域约束，不能跨请求保存。拥有者的 `client()` / `client(alias)` 与 `c.client()` 一样返回 `http_client_ref`（规则见 [数据手册 1.2](data-and-auth.md#12-直接查询编译期-sql-校验与流式游标db_session)）；`with_options(operation_options)` 可附加用户取消与更紧的截止时间，但不能替换请求宿主的取消。独立拥有者结束前须 `co_await owner.shutdown()`，并在事件循环退役前收束所有已启动任务。
+引用对象与响应操作留在所属 worker；请求中的 `http_client_ref` 受请求作用域约束，不能跨请求保存。拥有者的 `client()` / `client(alias)` 与 `c.client()` 一样返回 `http_client_ref`（规则见 [数据手册 1.2](data-and-auth.md#12-直接查询编译期-sql-校验与流式游标db_executor)）；`with_options(operation_options)` 可附加用户取消与更紧的截止时间，但不能替换请求宿主的取消。独立拥有者结束前须 `co_await owner.shutdown()`，并在事件循环退役前收束所有已启动任务。
 
 ### 5.2 源站、转发与连接控制
 

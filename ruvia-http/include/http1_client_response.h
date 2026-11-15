@@ -267,11 +267,11 @@ enum class http1_client_response_parse_error : std::uint8_t {
 
 [[nodiscard]] std::string_view http1_client_response_parse_error_message(http1_client_response_parse_error error) noexcept;
 
-class http1_client_response_need_more final {
+class http1_client_response_need_input final {
 private:
     friend struct detail::http1_client_response_parse_result_access;
 
-    explicit constexpr http1_client_response_need_more() noexcept = default;
+    explicit constexpr http1_client_response_need_input() noexcept = default;
 };
 
 // One complete response head. The response owns status/header storage;
@@ -324,10 +324,10 @@ public:
     http1_client_response_parse_result(http1_client_response_parse_result&&) noexcept = default;
     http1_client_response_parse_result& operator=(http1_client_response_parse_result&&) = delete;
 
-    [[nodiscard]] const http1_client_response_need_more* need_more() const& noexcept RUVIA_LIFETIMEBOUND {
-        return std::get_if<http1_client_response_need_more>(&state_);
+    [[nodiscard]] const http1_client_response_need_input* need_input() const& noexcept RUVIA_LIFETIMEBOUND {
+        return std::get_if<http1_client_response_need_input>(&state_);
     }
-    const http1_client_response_need_more* need_more() const&& = delete;
+    const http1_client_response_need_input* need_input() const&& = delete;
 
     [[nodiscard]] http1_parsed_client_response_head* parsed() & noexcept RUVIA_LIFETIMEBOUND {
         return std::get_if<http1_parsed_client_response_head>(&state_);
@@ -347,7 +347,7 @@ public:
 private:
     friend struct detail::http1_client_response_parse_result_access;
 
-    explicit http1_client_response_parse_result(http1_client_response_need_more state_value) noexcept :
+    explicit http1_client_response_parse_result(http1_client_response_need_input state_value) noexcept :
         state_(state_value) {}
 
     explicit http1_client_response_parse_result(http1_parsed_client_response_head state_value) noexcept :
@@ -356,7 +356,7 @@ private:
     explicit http1_client_response_parse_result(http1_client_response_parse_error state_value) noexcept :
         state_(state_value) {}
 
-    std::variant<http1_client_response_need_more, http1_parsed_client_response_head, http1_client_response_parse_error> state_;
+    std::variant<http1_client_response_need_input, http1_parsed_client_response_head, http1_client_response_parse_error> state_;
 };
 
 static_assert(std::is_nothrow_move_constructible_v<http1_client_response_parse_result>);
@@ -407,7 +407,7 @@ public:
     // stop the external request writer; follow the plan's content signal.
     [[nodiscard]] http1_client_request_content_completion_status complete_request_content() noexcept;
 
-    // After need_more, append to the same logical prefix; after a parsed head,
+    // After need_input, append to the same logical prefix; after a parsed head,
     // remove consumed_bytes before supplying the following response.
     // Allocation failures propagate without completing or failing the exchange;
     // after reclaiming resources, retry with the same response prefix.

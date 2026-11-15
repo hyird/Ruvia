@@ -18,9 +18,9 @@
 #include <vector>
 
 #include "backend_client_fixture.h"
-#include "db.h"
+#include "db_executor.h"
 #include "db_query.h"
-#include "db_session.h"
+#include "db_repository.h"
 #include "event_loop.h"
 #include "stop_token.h"
 #include "worker_task_fixture.h"

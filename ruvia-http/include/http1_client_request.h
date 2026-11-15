@@ -139,115 +139,6 @@ struct http1_client_request_wire_policy final {
     http1_request_target_form target_form_{http1_request_target_form::origin};
 };
 
-struct http1_client_request_head_view final {
-    borrowed_text method_{"GET"};
-    borrowed_text target_{"/"};
-    borrowed_http_headers headers_{};
-    // A value sends Content-Length; absent sends Transfer-Encoding: chunked.
-    std::optional<http_content_length> content_length_{};
-};
-
-class http1_client_streaming_request_content final {
-public:
-    [[nodiscard]] std::optional<std::uint64_t> content_length() const noexcept {
-        return length_;
-    }
-    [[nodiscard]] bool continue_gated() const noexcept {
-        return gated_;
-    }
-
-private:
-    friend struct detail::http1_client_request_prepare_result_access;
-    http1_client_streaming_request_content(std::optional<std::uint64_t> length, bool gated) noexcept :
-        length_(length),
-        gated_(gated) {}
-    std::optional<std::uint64_t> length_;
-    bool gated_;
-};
-
-class http1_client_request_without_content final {
-private:
-    friend struct detail::http1_client_request_prepare_result_access;
-
-    constexpr http1_client_request_without_content() noexcept = default;
-};
-
-class http1_client_immediate_request_content final {
-public:
-    [[nodiscard]] constexpr std::string_view bytes() const noexcept {
-        return bytes_;
-    }
-
-private:
-    friend struct detail::http1_client_request_prepare_result_access;
-
-    explicit constexpr http1_client_immediate_request_content(std::string_view bytes_value) noexcept :
-        bytes_(bytes_value) {}
-
-    std::string_view bytes_;
-};
-
-class http1_client_continue_gated_request_content final {
-public:
-    [[nodiscard]] constexpr std::string_view bytes() const noexcept {
-        return bytes_;
-    }
-
-private:
-    friend struct detail::http1_client_request_prepare_result_access;
-
-    explicit constexpr http1_client_continue_gated_request_content(std::string_view bytes_value) noexcept :
-        bytes_(bytes_value) {}
-
-    std::string_view bytes_;
-};
-
-// Immutable outbound content contract. Continue-gated content means the writer
-// generated Expect: 100-continue and the I/O owner must send the head separately;
-// it may release those bytes after 100 Continue or according to its finite wait
-// policy. Immediate content includes explicit empty content (Content-Length: 0).
-// Payload exists only on the two alternatives that actually send content.
-class http1_client_request_content_plan final {
-public:
-    [[nodiscard]] constexpr const http1_client_request_without_content* without_content() const& noexcept {
-        return std::get_if<http1_client_request_without_content>(&content_);
-    }
-    const http1_client_request_without_content* without_content() const&& = delete;
-
-    [[nodiscard]] constexpr const http1_client_immediate_request_content* immediate() const& noexcept {
-        return std::get_if<http1_client_immediate_request_content>(&content_);
-    }
-    const http1_client_immediate_request_content* immediate() const&& = delete;
-
-    [[nodiscard]] constexpr const http1_client_continue_gated_request_content* continue_gated() const& noexcept {
-        return std::get_if<http1_client_continue_gated_request_content>(&content_);
-    }
-    const http1_client_continue_gated_request_content* continue_gated() const&& = delete;
-
-    [[nodiscard]] constexpr const http1_client_streaming_request_content* streaming() const& noexcept {
-        return std::get_if<http1_client_streaming_request_content>(&content_);
-    }
-    const http1_client_streaming_request_content* streaming() const&& = delete;
-
-private:
-    friend struct detail::http1_client_request_prepare_result_access;
-
-    explicit http1_client_request_content_plan(http1_client_streaming_request_content content) noexcept :
-        content_(content) {}
-    using content_type = std::variant<http1_client_request_without_content, http1_client_immediate_request_content, http1_client_continue_gated_request_content, http1_client_streaming_request_content>;
-
-    explicit constexpr http1_client_request_content_plan(http1_client_request_without_content content) noexcept :
-        content_(content) {}
-
-    explicit constexpr http1_client_request_content_plan(http1_client_immediate_request_content content) noexcept :
-        content_(content) {}
-
-    explicit constexpr http1_client_request_content_plan(http1_client_continue_gated_request_content content) noexcept :
-        content_(content) {}
-
-    content_type content_;
-};
-
 enum class http1_client_request_prepare_error : std::uint8_t {
     invalid_method,
     invalid_target,
@@ -297,11 +188,14 @@ private:
 };
 
 // Transactionally prepared scatter-gather request. `head()` points into the
-// caller-provided output buffer and the active immediate/continue-gated
-// alternative points into the request's borrowed content; those sources must
-// remain alive and unchanged until sent.
+// caller-provided output buffer. `content()` is none, known length with the
+// request's borrowed bytes (explicit empty content included), or streaming
+// (chunked when no length); borrowed bytes must remain alive and unchanged
+// until sent. continue_gated() means the writer generated Expect:
+// 100-continue: the I/O owner sends the head separately and may release the
+// content after 100 Continue or according to its finite wait policy.
 // take_exchange_state() moves out the independent response-side protocol facts;
-// head() and content_plan() remain readable for the request write or an explicit retry.
+// head() and content() remain readable for the request write or an explicit retry.
 class prepared_http1_client_request final {
 public:
     [[nodiscard]] constexpr std::string_view head() const& noexcept {
@@ -309,10 +203,14 @@ public:
     }
     [[nodiscard]] constexpr std::string_view head() const&& = delete;
 
-    [[nodiscard]] constexpr const http1_client_request_content_plan& content_plan() const& noexcept {
-        return content_plan_;
+    [[nodiscard]] constexpr const http_request_content_plan& content() const& noexcept {
+        return content_;
     }
-    [[nodiscard]] constexpr const http1_client_request_content_plan& content_plan() const&& = delete;
+    [[nodiscard]] constexpr const http_request_content_plan& content() const&& = delete;
+
+    [[nodiscard]] constexpr bool continue_gated() const noexcept {
+        return continue_gated_;
+    }
 
     [[nodiscard]] http1_client_exchange_state take_exchange_state() && noexcept {
         return std::move(exchange_state_);
@@ -321,14 +219,16 @@ public:
 private:
     friend struct detail::http1_client_request_prepare_result_access;
 
-    prepared_http1_client_request(std::string_view head, http1_client_request_content_plan content_plan, http1_client_exchange_state exchange_state) noexcept :
+    prepared_http1_client_request(std::string_view head, http_request_content_plan content, bool continue_gated, http1_client_exchange_state exchange_state) noexcept :
         head_(head),
-        content_plan_(content_plan),
-        exchange_state_(std::move(exchange_state)) {}
+        content_(content),
+        exchange_state_(std::move(exchange_state)),
+        continue_gated_(continue_gated) {}
 
     std::string_view head_;
-    http1_client_request_content_plan content_plan_;
+    http_request_content_plan content_;
     http1_client_exchange_state exchange_state_;
+    bool continue_gated_;
 };
 
 // HTTP/1.1 request writer for a direct origin or, in absolute-form, a forward proxy. Ordinary requests are allocation-free;
@@ -357,8 +257,6 @@ public:
     // successful protocol-upgrade response in HTTP/1.x.
     [[nodiscard]] std::variant<prepared_http1_client_request, http1_client_request_buffer_too_small, http1_client_request_prepare_error> prepare_connect_udp(const http_origin_view& origin, borrowed_text target, std::span<const http_header_view> headers, std::span<char> head_buffer, http1_client_request_wire_policy policy = {}) const;
 
-    [[nodiscard]] std::variant<prepared_http1_client_request, http1_client_request_buffer_too_small, http1_client_request_prepare_error> prepare_streaming(const http_origin_view& origin, const http1_client_request_head_view& request, std::span<char> head_buffer, http1_client_request_wire_policy policy = {}) const;
-
     // When forwarding untrusted TCP payload, RFC 9931 section 8 requires the
     // driver to wait for the successful tunnel plan before sending that payload,
     // unless close_after_response makes the request emit Connection: close.
@@ -379,7 +277,8 @@ enum class http1_request_content_write_error : std::uint8_t {
     header_too_large,
 };
 
-// Bound to a successfully prepared streaming request's immutable framing facts.
+// Bound to a successfully prepared streaming request's immutable framing facts
+// (precondition: prepared.content().streaming_content() != nullptr).
 // Payload bytes remain borrowed until commit_chunk(); prefixes/suffixes are
 // independent scatter-gather segments. A transport failure must abort the writer.
 // release_content() is called on 100 Continue or on the driver's finite timeout.
@@ -411,7 +310,7 @@ public:
         std::span<const char> payload_{};
         std::string_view suffix_{};
     };
-    explicit http1_request_content_writer(const http1_client_streaming_request_content& plan) noexcept;
+    explicit http1_request_content_writer(const prepared_http1_client_request& prepared) noexcept;
     void release_content() noexcept;
     void abort() noexcept;
     [[nodiscard]] std::variant<chunk, http1_request_content_write_error> plan_chunk(std::span<const char> payload) noexcept;

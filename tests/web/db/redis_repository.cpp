@@ -44,7 +44,7 @@
 #include "blocking_pool.h"
 #include "event_loop.h"
 #include "http_server_fixture.h"
-#include "redis.h"
+#include "redis_orm.h"
 #include "task.h"
 #include "task_scope.h"
 #include "worker_task_fixture.h"
@@ -55,10 +55,11 @@ using ruvia::redis_index_kind;
 
 RUVIA_REDIS_ENTITY(test_redis_user, "users", RUVIA_REDIS_COLUMN(id, ruvia::string, ruvia::redis_column_options{.primary_key_ = true}), RUVIA_REDIS_COLUMN(name, std::string), RUVIA_REDIS_COLUMN(active, bool), RUVIA_REDIS_COLUMN(role, std::string, ruvia::redis_column_options{.nullable_ = true}), RUVIA_REDIS_COLUMN(age, std::int32_t, ruvia::redis_column_options{.nullable_ = true}), RUVIA_REDIS_COLUMN(score, double, ruvia::redis_column_options{.nullable_ = true}));
 
-const ruvia::redis_repository_config test_redis_repository_config{
-    .prefix_ = "users",
-    .indexes_ = {{.column_ = "name", .kind_ = redis_index_kind::tag}},
-};
+// Built once and borrowed by every repository, like an application would.
+const ruvia::redis_search_mapping& test_redis_user_mapping() {
+    static const auto mapping = ruvia::redis_search_mapping::create<test_redis_user>({.indexes_ = {{.column_ = "name", .kind_ = redis_index_kind::tag}}});
+    return mapping;
+}
 
 RUVIA_REDIS_ENTITY(test_redis_unsigned_pk_user, "upk_users", RUVIA_REDIS_COLUMN(id, std::uint64_t, ruvia::redis_column_options{.primary_key_ = true}), RUVIA_REDIS_COLUMN(name, std::string));
 
@@ -340,7 +341,7 @@ TEST(Ruvia, redis_repository_owns_input_before_entity_is_destroyed) {
     auto& io_context = ruvia::test::new_test_io_context();
     redis_test_worker worker(io_context);
     ruvia::test::with_connected_redis_client(worker.attachment(), {}, [&](ruvia::redis_client& client) -> ruvia::task<void> {
-        const auto repository = client.redis().repository<test_redis_user>(test_redis_repository_config);
+        const auto repository = client.redis().repository<test_redis_user>(test_redis_user_mapping());
 
         std::optional<test_redis_user> input;
         input.emplace();
@@ -367,7 +368,7 @@ TEST(Ruvia, redis_repository_insert_owns_input_through_async_handoff) {
 
         std::uint64_t affected_entities = 0;
         exercise_with_server(worker, client, server, [&](ruvia::redis_client& connected) -> ruvia::task<void> {
-            const auto repository = connected.redis().repository<test_redis_user>(test_redis_repository_config);
+            const auto repository = connected.redis().repository<test_redis_user>(test_redis_user_mapping());
             std::optional<test_redis_user> input;
             input.emplace();
             input->set<"id">(input_id);
@@ -409,7 +410,7 @@ TEST(Ruvia, redis_repository_scripts_run_by_digest_and_reload_on_noscript) {
         {
             ruvia::redis_client client(worker.loop(), make_redis_config(server));
             exercise_with_server(worker, client, server, [&](ruvia::redis_client& connected) -> ruvia::task<void> {
-                const auto repository = connected.redis().repository<test_redis_user>(test_redis_repository_config);
+                const auto repository = connected.redis().repository<test_redis_user>(test_redis_user_mapping());
                 const auto user = make_user();
                 inserted = (co_await repository.insert(user)).affected_entities();
                 removed = (co_await repository.remove(user)).affected_entities();
@@ -454,7 +455,7 @@ TEST(Ruvia, redis_repository_script_reload_shares_the_operation_timeout) {
         {
             redis_client client(worker.loop(), config);
             auto exercise = [&](redis_client& connected) -> task<void> {
-                const auto repository = connected.redis().with_options({.timeout_ = 1s}).repository<test_redis_user>(test_redis_repository_config);
+                const auto repository = connected.redis().with_options({.timeout_ = 1s}).repository<test_redis_user>(test_redis_user_mapping());
                 const auto user = make_user();
                 try {
                     if (remove) {
@@ -486,33 +487,27 @@ TEST(Ruvia, redis_repository_script_reload_shares_the_operation_timeout) {
     }
 }
 
-TEST(Ruvia, redis_repository_find_without_take_rejects_a_truncated_page) {
+// FT.SEARCH always pages; without take_ find() returns one default page.
+TEST(Ruvia, redis_repository_find_without_take_returns_one_default_page) {
     for (const bool paged : {false, true}) {
         // An FT.SEARCH page that reports more matches than it returns.
         redis_command_server server(std::vector<std::string>({std::string("*1\r\n:150\r\n")}));
         auto& io_context = ruvia::test::new_test_io_context();
         redis_test_worker worker(io_context);
-        bool truncated = false;
-        std::size_t returned_rows = 1;
+        std::optional<std::size_t> returned_rows;
         {
             ruvia::redis_client client(worker.loop(), make_redis_config(server));
             exercise_with_server(worker, client, server, [&](ruvia::redis_client& connected) -> ruvia::task<void> {
-                const auto repository = connected.redis().repository<test_redis_user>(test_redis_repository_config);
+                const auto repository = connected.redis().repository<test_redis_user>(test_redis_user_mapping());
                 ruvia::redis_find_options options;
                 if (paged) {
                     options.take_ = ruvia::redis_find_default_take;
                 }
-                try {
-                    returned_rows = (co_await repository.find(options)).size();
-                } catch (const ruvia::redis_error& error) {
-                    truncated = error.code() == ruvia::redis_error::code_type::command_error;
-                }
+                returned_rows = (co_await repository.find(options)).size();
             });
         }
-        // 150 matches with one page of 100 must never read as a complete result;
-        // an explicit page accepts the same reply.
-        EXPECT_TRUE(truncated != paged);
-        EXPECT_EQ(returned_rows, std::size_t{paged ? 0U : 1U});
+        // An unset take_ is the same request as an explicit default page.
+        EXPECT_EQ(returned_rows, std::optional<std::size_t>(0U));
         EXPECT_EQ(server.commands().size(), std::size_t{1});
         if (server.commands().size() == 1) {
             const auto& args = server.commands().front();
@@ -529,7 +524,7 @@ TEST(Ruvia, redis_repository_search_consumes_expired_documents_without_truncatio
     {
         ruvia::redis_client client(worker.loop(), make_redis_config(server));
         exercise_with_server(worker, client, server, [&](ruvia::redis_client& connected) -> ruvia::task<void> {
-            const auto repository = connected.redis().repository<test_redis_user>(test_redis_repository_config);
+            const auto repository = connected.redis().repository<test_redis_user>(test_redis_user_mapping());
             // A returned null document occupies the complete search page even
             // though the expired entity is omitted from the decoded rows.
             const auto rows = co_await repository.find();
@@ -551,7 +546,7 @@ TEST(Ruvia, redis_repository_pre_cancelled_operations_report_cancellation) {
         const auto handle = client.redis();
         ruvia::stop_source cancellation;
         cancellation.request_stop();
-        const auto repository = handle.with_options({.stop_token_ = cancellation.token()}).repository<test_redis_user>(test_redis_repository_config);
+        const auto repository = handle.with_options({.stop_token_ = cancellation.token()}).repository<test_redis_user>(test_redis_user_mapping());
         const std::string id(2048, 'i');
 
         auto exercise = [&]() -> ruvia::task<void> {
@@ -578,7 +573,7 @@ TEST(Ruvia, redis_repository_input_may_die_before_a_cancelled_await) {
         const auto handle = client.redis();
         ruvia::stop_source cancellation;
         cancellation.request_stop();
-        const auto repository = handle.with_options({.stop_token_ = cancellation.token()}).repository<test_redis_user>(test_redis_repository_config);
+        const auto repository = handle.with_options({.stop_token_ = cancellation.token()}).repository<test_redis_user>(test_redis_user_mapping());
 
         std::optional<test_redis_user> input;
         input.emplace();
@@ -613,7 +608,7 @@ TEST(Ruvia, redis_repository_inflight_operation_observes_cancellation) {
 
         std::optional<ruvia::redis_error::code_type> observed_error;
         auto exercise = [&](ruvia::redis_client& connected) -> ruvia::task<void> {
-            const auto repository = connected.redis().with_options({.stop_token_ = cancellation.token()}).repository<test_redis_user>(test_redis_repository_config);
+            const auto repository = connected.redis().with_options({.stop_token_ = cancellation.token()}).repository<test_redis_user>(test_redis_user_mapping());
             try {
                 auto operation = repository.exists({.where_ = test_redis_user::column<"name">() == "Alice"});
                 (void)co_await std::move(operation);
@@ -649,7 +644,7 @@ TEST(Ruvia, redis_repository_rejects_invalid_input_before_io) {
     auto& io_context = ruvia::test::new_test_io_context();
     redis_test_worker worker(io_context);
     ruvia::test::with_connected_redis_client(worker.attachment(), {}, [&](ruvia::redis_client& client) -> ruvia::task<void> {
-        const auto repository = client.redis().repository<test_redis_user>(test_redis_repository_config);
+        const auto repository = client.redis().repository<test_redis_user>(test_redis_user_mapping());
 
         test_redis_user missing_id;
         missing_id.set<"name">("Alice");
@@ -686,14 +681,13 @@ TEST(Ruvia, redis_repository_rejects_invalid_input_before_io) {
             (void)repository.exists({.order_ = ruvia::redis_find_order{.column_ = "missing_field"}});
         }));
 
-        const ruvia::redis_repository_config indexed_user_config{
-            .prefix_ = "users",
+        const auto indexed_user_mapping = ruvia::redis_search_mapping::create<test_redis_user>({
             .indexes_ = {
                 {.column_ = "id", .kind_ = redis_index_kind::tag},
                 {.column_ = "age", .kind_ = redis_index_kind::numeric},
             },
-        };
-        const auto indexed_users = client.redis().repository<test_redis_user>(indexed_user_config);
+        });
+        const auto indexed_users = client.redis().repository<test_redis_user>(indexed_user_mapping);
         EXPECT_TRUE(throws_invalid_argument([&] {
             (void)indexed_users.find({.where_ = test_redis_user::column<"age">() == true});
         }));
@@ -707,7 +701,12 @@ TEST(Ruvia, redis_repository_rejects_invalid_input_before_io) {
             (void)indexed_users.find({.where_ = test_redis_user::column<"id">().in({"u-1", ""})});
         }));
 
-        const auto unsigned_repo = client.redis().repository<test_redis_unsigned_pk_user>({.prefix_ = "upk_users", .indexes_ = {{.column_ = "id", .kind_ = redis_index_kind::numeric}}});
+        const auto unsigned_mapping = ruvia::redis_search_mapping::create<test_redis_unsigned_pk_user>({.indexes_ = {{.column_ = "id", .kind_ = redis_index_kind::numeric}}});
+        // A mapping only serves the entity it was created for.
+        EXPECT_TRUE(throws_invalid_argument([&] {
+            (void)client.redis().repository<test_redis_signed_pk_user>(unsigned_mapping);
+        }));
+        const auto unsigned_repo = client.redis().repository<test_redis_unsigned_pk_user>(unsigned_mapping);
         test_redis_unsigned_pk_user unsigned_changes;
         unsigned_changes.set<"name">("Alice");
         EXPECT_TRUE(throws_invalid_argument([&] {
@@ -720,7 +719,8 @@ TEST(Ruvia, redis_repository_rejects_invalid_input_before_io) {
             (void)unsigned_repo.update(test_redis_unsigned_pk_user::column<"id">() == -1, unsigned_changes);
         }));
 
-        const auto signed_repo = client.redis().repository<test_redis_signed_pk_user>({.prefix_ = "spk_users", .indexes_ = {{.column_ = "id", .kind_ = redis_index_kind::numeric}}});
+        const auto signed_mapping = ruvia::redis_search_mapping::create<test_redis_signed_pk_user>({.indexes_ = {{.column_ = "id", .kind_ = redis_index_kind::numeric}}});
+        const auto signed_repo = client.redis().repository<test_redis_signed_pk_user>(signed_mapping);
         test_redis_signed_pk_user signed_changes;
         signed_changes.set<"name">("Bob");
         EXPECT_TRUE(throws_invalid_argument([&] {
@@ -814,14 +814,11 @@ static_assert(!borrows_temporary_command<ruvia::redis_compiled_command>);
 
 TEST(Ruvia, redis_search_compilation_owns_configuration_and_binary_predicates) {
     auto command = [&] {
-        std::string prefix = "offline:users";
         std::string column = "email";
         const ruvia::redis_repository_config config{
-            .prefix_ = prefix,
             .indexes_ = {{.column_ = column, .kind_ = ruvia::redis_index_kind::tag, .sortable_ = true}},
         };
         const auto mapping = ruvia::redis_search_mapping::create<redis_query_user>(config);
-        prefix.assign("changed");
         column.assign("age");
         std::string text("a|{ }\0", 6);
         std::string order = "email";
@@ -836,7 +833,8 @@ TEST(Ruvia, redis_search_compilation_owns_configuration_and_binary_predicates) {
     }();
     const auto args = command.arguments();
     ASSERT_EQ(args.size(), std::size_t{11});
-    EXPECT_EQ(args[1], "offline:users:idx");
+    // The index name comes only from the RUVIA_REDIS_ENTITY prefix.
+    EXPECT_EQ(args[1], "query-user:idx");
     EXPECT_EQ(args[2], "@email:{x617c7b207d00}");
     EXPECT_EQ(args[4], "2");
     EXPECT_EQ(args[5], "3");
@@ -896,18 +894,18 @@ TEST(Ruvia, redis_search_mapping_and_commands_support_copy_and_move_assignment) 
 
 TEST(Ruvia, redis_search_index_compilation_keeps_tag_shadows_and_documents) {
     const auto mapping = ruvia::redis_search_mapping::create<redis_query_user>({
-        .prefix_ = "a:b",
         .indexes_ = {{.column_ = "email", .kind_ = ruvia::redis_index_kind::tag, .sortable_ = true}},
     });
     const auto create = mapping.compile_create_index();
+    // Hashes live at ruvia:orm:<lower-hex(prefix)>:<id>, indexed as <prefix>:idx.
     const std::string_view expected[]{
         "FT.CREATE",
-        "a:b:idx",
+        "query-user:idx",
         "ON",
         "HASH",
         "PREFIX",
         "1",
-        "ruvia:orm:613a62:",
+        "ruvia:orm:71756572792d75736572:",
         "SCHEMA",
         "__ruvia_tag_email",
         "AS",
@@ -933,7 +931,7 @@ TEST(Ruvia, redis_search_index_compilation_keeps_tag_shadows_and_documents) {
     const auto drop = mapping.compile_drop_index();
     ASSERT_EQ(drop.arguments().size(), std::size_t{2});
     EXPECT_EQ(drop.arguments()[0], "FT.DROPINDEX");
-    EXPECT_EQ(drop.arguments()[1], "a:b:idx");
+    EXPECT_EQ(drop.arguments()[1], "query-user:idx");
 }
 
 namespace {

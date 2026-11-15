@@ -9,7 +9,6 @@
 #include "borrowed_text.h"
 #include "http1_client_request.h"
 #include "http_client_request_view.h"
-#include "http_client_response_head.h"
 #include "http_message.h"
 #include "http_status.h"
 

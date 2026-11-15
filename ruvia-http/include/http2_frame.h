@@ -90,7 +90,7 @@ struct http2_frame_header final {
 
 enum class http2_cleartext_preface_probe : std::uint8_t {
     http1,
-    need_more_preface,
+    need_input,
     complete_preface,
     drop_connection,
 };
@@ -104,7 +104,7 @@ enum class http2_cleartext_preface_probe : std::uint8_t {
     }
 
     if (current.starts_with(::ruvia::http2_client_preface) || ::ruvia::http2_client_preface.starts_with(current)) {
-        return current.size() >= ::ruvia::http2_client_preface.size() ? http2_cleartext_preface_probe::complete_preface : http2_cleartext_preface_probe::need_more_preface;
+        return current.size() >= ::ruvia::http2_client_preface.size() ? http2_cleartext_preface_probe::complete_preface : http2_cleartext_preface_probe::need_input;
     }
 
     if (current.starts_with("PRI ")) {

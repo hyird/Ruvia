@@ -109,6 +109,14 @@ http_client_request_storage& http_client_request_storage::set_body(std::string_v
     return *this;
 }
 
+http_request_content_plan http_client_request_storage::content() const& noexcept {
+    return upload_ != nullptr ? http_request_content_plan::streaming(upload_->config_.content_length_) : buffered_http_client_content(has_body_, body_);
+}
+
+http_client_request_expectation http_client_request_storage::expectation() const noexcept {
+    return upload_ != nullptr ? upload_->config_.expectation_ : http_client_request_expectation::none;
+}
+
 namespace {
 // host[:port] without userinfo, like the authority of base_url_.
 [[nodiscard]] http_authority_view parse_route_authority(std::string_view authority) {
@@ -321,7 +329,7 @@ http_client_request_view client_request_policy::prepare_request(const http_clien
     result.method_ = request.method();
     result.target_ = request.target();
     result.headers_ = std::span<const http_header_view>(prepared_begin, index);
-    result.content_ = request.has_body() ? http_client_request_content_view::bytes(request.body()) : http_client_request_content_view::none();
+    result.content_ = request.content();
     return result;
 }
 
@@ -452,14 +460,10 @@ http_client_request& http_client_request::query(std::string_view name, std::stri
     }
     return *this;
 }
-http_client_request& http_client_request::body(std::string_view value) & {
-    std::string owned(value);
-    body_.swap(owned);
+http_client_request& http_client_request::body(outbound_bytes value) & {
+    body_ = std::move(value).into_string();
     has_body_ = true;
     return *this;
-}
-http_client_request& http_client_request::body(std::span<const std::byte> value) & {
-    return body(std::string_view(reinterpret_cast<const char*>(value.data()), value.size()));
 }
 http_client_request& http_client_request::configure(http_client_request_options options) & {
     detail::validate_http_client_request_options(options);
@@ -556,7 +560,7 @@ task<http_client_response> http_client_request::follow_redirects(http_client_req
             std::optional<task<http_client_response>> dispatched;
             {
                 const detail::inline_http_header_views<16> fields(request.headers_);
-                const http_client_request_view view{.method_ = request.method_, .target_ = request.target_, .headers_ = fields.view(), .content_ = request.has_body_ ? http_client_request_content_view::bytes(request.body_) : http_client_request_content_view::none()};
+                const http_client_request_view view{.method_ = request.method_, .target_ = request.target_, .headers_ = fields.view(), .content_ = detail::buffered_http_client_content(request.has_body_, request.body_)};
                 dispatched.emplace(request.client_.dispatch(view, request.request_options_, request.informational_callback_));
             }
             if (redirects == request.max_redirects_) {
@@ -591,7 +595,7 @@ task<http_client_response> http_client_request::follow_redirects(http_client_req
         if (status != 301 && status != 302 && status != 303 && status != 307 && status != 308) {
             co_return response;
         }
-        const http_client_request_view current_view{.method_ = request.method_, .target_ = request.target_, .content_ = request.has_body_ ? http_client_request_content_view::bytes(request.body_) : http_client_request_content_view::none()};
+        const http_client_request_view current_view{.method_ = request.method_, .target_ = request.target_, .content_ = detail::buffered_http_client_content(request.has_body_, request.body_)};
         const auto plan = plan_http_client_redirect_request(current_view, {.status_ = response.status()});
         if (upload_initial_hop && redirects == 0 && plan.content_disposition() != http_client_redirect_content_disposition::drop) {
             co_return response;
@@ -924,15 +928,18 @@ task<http_client_response> http_client_ref::dispatch(const http_client_request_v
     request.informational_ = informational;
     request.pool_owner_ = pool_owner_;
     request.set_host_stop(host_stop_token_);
-    if (const auto* bytes = view.content_.borrowed_bytes()) {
-        request.set_body(bytes->value());
+    if (view.content_.streaming_content() != nullptr || (view.content_.known_length_content() != nullptr && !view.content_.known_length_content()->bytes())) {
+        throw std::invalid_argument("streaming request content requires dispatch_upload");
+    }
+    if (const auto* known = view.content_.known_length_content()) {
+        request.set_body(*known->bytes());
     }
     return ::ruvia::make_scoped_operation(registration_.scope(), pool_->execute(std::move(request), options_));
 }
 
 task<http_client_exchange> http_client_ref::dispatch_upload(const http_client_request_view& head, http_client_upload_config upload, const http_client_request_options& request_options, const std::shared_ptr<http_client_informational_callback>& informational) const {
     registration_.require_active();
-    if (head.content_.borrowed_bytes() != nullptr || upload.max_chunk_bytes_ == 0 || upload.continue_timeout_.value() <= std::chrono::milliseconds::zero() || (upload.expectation_ != http_client_request_expectation::none && upload.expectation_ != http_client_request_expectation::continue_)) {
+    if (head.content_.without_content() == nullptr || upload.max_chunk_bytes_ == 0 || upload.continue_timeout_.value() <= std::chrono::milliseconds::zero() || (upload.expectation_ != http_client_request_expectation::none && upload.expectation_ != http_client_request_expectation::continue_)) {
         throw std::invalid_argument("streaming upload requires a bodyless head and valid upload policy");
     }
     detail::http_client_request_storage request(head.method_.view(), head.target_.view(), head.headers_);

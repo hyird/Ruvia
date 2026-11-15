@@ -33,7 +33,7 @@
 #include "task_scope.h"
 #include "worker_signal.h"
 #ifdef RUVIA_ENABLE_REDIS
-#include "redis.h"
+#include "redis_orm.h"
 #endif
 
 namespace public_router_test {

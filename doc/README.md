@@ -45,9 +45,9 @@ Ruvia 由三个独立的静态库组成，所有公开类型、函数与概念�
 | `RUVIA_BUILD_TESTS` | `OFF` | — | 构建 `tests/` 测试套件 |
 | `RUVIA_ENABLE_HTTP2` | `ON` | `RUVIA_ENABLE_HTTP2` | 启用 nghttp2 会话与 HTTP/2 公开 API；仅在 HTTP/3 也关闭时可关闭 |
 | `RUVIA_ENABLE_HTTP3` | `ON` | `RUVIA_ENABLE_HTTP3` | 启用 nghttp3/ngtcp2 协议层与 Web QUIC TLS 接入；开启时自动开启 `RUVIA_ENABLE_HTTP2` |
-| `RUVIA_ENABLE_MARIADB` | `OFF` | `RUVIA_ENABLE_MARIADB`、`RUVIA_ENABLE_DATABASE` | 启用 MariaDB 驱动与 `"db.h"` / `"db_entity.h"` / `"db_entity_codec.h"` / `"db_migration.h"` / `"db_query.h"` / `"db_schema.h"` / `"db_session.h"` / `"db_sql_scan.h"` 公开头 |
-| `RUVIA_ENABLE_POSTGRESQL` | `OFF` | `RUVIA_ENABLE_POSTGRESQL`、`RUVIA_ENABLE_DATABASE` | 启用 PostgreSQL 驱动、ORM 与 `"db.h"` / `"db_entity.h"` / `"db_entity_codec.h"` / `"db_migration.h"` / `"db_query.h"` / `"db_schema.h"` / `"db_session.h"` / `"db_sql_scan.h"` 公开头 |
-| `RUVIA_ENABLE_REDIS` | `OFF` | `RUVIA_ENABLE_REDIS` | 启用 `"redis.h"` / `"redis_session.h"`、服务端 `session_middleware` 与数据库查询缓存 |
+| `RUVIA_ENABLE_MARIADB` | `OFF` | `RUVIA_ENABLE_MARIADB`、`RUVIA_ENABLE_DATABASE` | 启用 MariaDB 驱动与 `"db_entity.h"` / `"db_entity_codec.h"` / `"db_executor.h"` / `"db_migration.h"` / `"db_query.h"` / `"db_repository.h"` / `"db_schema.h"` / `"db_sql_scan.h"` 公开头 |
+| `RUVIA_ENABLE_POSTGRESQL` | `OFF` | `RUVIA_ENABLE_POSTGRESQL`、`RUVIA_ENABLE_DATABASE` | 启用 PostgreSQL 驱动、ORM 与 `"db_entity.h"` / `"db_entity_codec.h"` / `"db_executor.h"` / `"db_migration.h"` / `"db_query.h"` / `"db_repository.h"` / `"db_schema.h"` / `"db_sql_scan.h"` 公开头 |
+| `RUVIA_ENABLE_REDIS` | `OFF` | `RUVIA_ENABLE_REDIS` | 启用 `"redis_executor.h"` / `"redis_orm.h"`、服务端 `session_middleware` 与数据库查询缓存 |
 | `RUVIA_ENABLE_JWT` | `OFF` | `RUVIA_ENABLE_JWT` | 启用 `"jwt.h"` |
 
 顶层构建在未指定 `CMAKE_TOOLCHAIN_FILE` 时从环境变量 `VCPKG_ROOT` 选择 vcpkg，并加载项目 triplet、按开关选择 manifest 特性。子项目由宿主提供工具链与依赖清单。未启用功能不编译对应源码，也不安装相应公开头文件。
@@ -115,7 +115,7 @@ ruvia_link_controllers(my_service user_controllers)
 
 ### 3.2 协程与作用域操作契约
 
-- **`ruvia::task<T>`**：全库统一的惰性（lazy）协程。调用返回 `task<T>` 的函数仅分配协程帧而不开始执行，直到被右值 `co_await` 或传入 `event_loop::start()`。`context`、`db_session`、`redis_session` 等对象上的异步 I/O 方法返回的 `task<T>` 同时绑定到所属请求或客户端的 `operation_scope`。
+- **`ruvia::task<T>`**：全库统一的惰性（lazy）协程。调用返回 `task<T>` 的函数仅分配协程帧而不开始执行，直到被右值 `co_await` 或传入 `event_loop::start()`。`context`、`db_executor`、`redis_executor` 等对象上的异步 I/O 方法返回的 `task<T>` 同时绑定到所属请求或客户端的 `operation_scope`。
   - **未启动（cold）**的 `task<T>` 可直接析构丢弃，或随所属 `operation_scope` 关闭自动回收。
   - **已启动（started）但尚未完成**的 `task<T>` 严禁直接析构（会直接触发 `std::terminate()`）。请求取消（`stop_source::request_stop()`）后，仍必须 `co_await` 或 `join` 等待其完成退出。
 
@@ -153,7 +153,7 @@ ruvia_link_controllers(my_service user_controllers)
 | [models_validation.cpp](../examples/models_validation.cpp) | `ruvia_example_models_validation` | 默认 | `RUVIA_MODEL` 声明、字段校验规则宏、递归模型 `boxed_array`、`ruvia::bytes` Base64、从 JSON/Form/Query/Path/Header/Cookie 自动绑定校验与 `json_if` / `form_if` |
 | [model_values.cpp](../examples/model_values.cpp) | `ruvia_example_model_values` | 默认 | 独立使用 `from_json` / `to_json` / `from_form`、零拷贝动态 JSON 视图 `json_object` / `json_value` 与命令式 `ruvia::validator` |
 | [middleware_next.cpp](../examples/middleware_next.cpp) | `ruvia_example_middleware_next` | 默认 | 中间件职责链、前置/后置响应头处理、`co_await next_value()` 与 `c.respond(...)` 短路拦截 |
-| [request_policies.cpp](../examples/request_policies.cpp) | `ruvia_example_request_policies` | 默认 | 路由级请求体大小限制 `body_limit<N>`、请求级状态 `bind_request_state` / `request_state`、子请求 `c.dispatch(...)` 与 `csrf_protection` |
+| [request_policies.cpp](../examples/request_policies.cpp) | `ruvia_example_request_policies` | 默认 | 路由级请求体大小限制 `body_limit<N>`、请求级状态 `bind_request_state` / `request_state`、子请求 `c.dispatch(...)` 与 `csrf_middleware` |
 | [files_static.cpp](../examples/files_static.cpp) | `ruvia_example_files_static` | 默认 | 单文件响应 `c.file()`、不可变静态快照 `static_root` 与 `c.static_file()`、定时刷新 `document_root`、Range、ETag 与预压缩 |
 | [streaming.cpp](../examples/streaming.cpp) | `ruvia_example_streaming` | 默认 | 流式请求体 `body_reader()`、流式 Multipart `multipart_reader()`、分块文本流 `stream_text()` 与 SSE `stream_sse()` |
 | [http_features.cpp](../examples/http_features.cpp) | `ruvia_example_http_features` | 默认 | `103 Early Hints`（`c.inform`）、RFC 9218 优先级（`c.priority`）、HTTP/2 Server Push（`c.push`）、`ORIGIN` / `ALTSVC` 通告与请求/响应 Trailer |
@@ -173,7 +173,7 @@ ruvia_link_controllers(my_service user_controllers)
 | [orm_columns.cpp](../examples/orm_columns.cpp) | `ruvia_example_orm_columns` | `RUVIA_ENABLE_POSTGRESQL` | PostgreSQL `STORED` 生成列与事务隔离级别（`repeatable_read`）/ 只读事务模式（`read_only`） |
 | [orm_relations.cpp](../examples/orm_relations.cpp) | `ruvia_example_orm_relations` | `RUVIA_ENABLE_POSTGRESQL` | PostgreSQL ORM 实体关系：一对多、多对一、一对一、多对多（含连接表）、`.relations_` 预加载与 `left_join_and_select` |
 | [event_loop_data.cpp](../examples/event_loop_data.cpp) | `ruvia_example_event_loop_data` | `POSTGRESQL` + `REDIS` | 在自管 `event_loop_pool` 上独立运行 `db_client` 与 `redis_client` 并执行 ORM 操作 |
-| [sessions.cpp](../examples/sessions.cpp) | `ruvia_example_sessions` | `RUVIA_ENABLE_REDIS` | 基于 Redis 的服务端会话中间件 `session_middleware`、自动轮换会话 ID 与 `csrf_protection` |
+| [sessions.cpp](../examples/sessions.cpp) | `ruvia_example_sessions` | `RUVIA_ENABLE_REDIS` | 基于 Redis 的服务端会话中间件 `session_middleware`、自动轮换会话 ID 与 `csrf_middleware` |
 | [redis.cpp](../examples/redis.cpp) | `ruvia_example_redis` | `RUVIA_ENABLE_REDIS` | Redis 默认与命名别名池、String/Hash/List/Set/ZSet、SCAN 游标、`pipeline()`、`transaction()`、Lua 脚本与 `blpop` / `brpop` |
 | [redis_orm.cpp](../examples/redis_orm.cpp) | `ruvia_example_redis_orm` | `RUVIA_ENABLE_REDIS` | `RUVIA_REDIS_ENTITY` 声明、RediSearch 索引创建、带 TTL 写入与条件/排序分页检索 |
 | [redis_streams.cpp](../examples/redis_streams.cpp) | `ruvia_example_redis_streams` | `RUVIA_ENABLE_REDIS` | Redis Streams 消费者组、`xread_group` 阻塞拉取与通用 `command(...)` 接口 |

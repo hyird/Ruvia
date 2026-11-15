@@ -73,7 +73,7 @@ template <typename prepare_type>
 
 // The returned plan borrows only the request body and the output buffer, not
 // the temporary header descriptors or the assembled Cookie field.
-[[nodiscard]] auto prepare_client_head(http_client_pool& pool, const http_client_request_storage& request, const http_client_upload_state* upload, http_io_buffer& write_buffer) {
+[[nodiscard]] auto prepare_client_head(http_client_pool& pool, const http_client_request_storage& request, http_io_buffer& write_buffer) {
     client_prepared_request_scratch scratch;
     auto source = pool.policy().prepare_request(request, scratch);
     const auto headers = static_cast<std::span<const http_header_view>>(source.headers_);
@@ -99,10 +99,7 @@ template <typename prepare_type>
         if (request.is_tunnel() && !request.is_upgrade()) {
             return writer.prepare_connect(borrowed_text(request.tunnel_authority()), headers, buffer, {.field_source_ = request.options_.field_source_});
         }
-        if (upload != nullptr) {
-            return writer.prepare_streaming(origin, {.method_ = source.method_, .target_ = source.target_, .headers_ = headers, .content_length_ = upload->config_.content_length_}, buffer, {.expectation_ = upload->config_.expectation_, .field_source_ = request.options_.field_source_});
-        }
-        return writer.prepare(origin, source, buffer, {.field_source_ = request.options_.field_source_});
+        return writer.prepare(origin, source, buffer, {.expectation_ = request.expectation(), .field_source_ = request.options_.field_source_});
     };
     return prepare_http1_request_head(write_buffer, max_client_request_head_bytes, prepare);
 }
@@ -261,15 +258,16 @@ task<void> http1_client_exchange::run(const http_client_request_storage& request
     // The head is written into the connection's retained, uninitialized buffer.
     auto& write_buffer = connection_.write_buffer_;
     write_buffer.clear();
-    auto prepared_result = prepare_client_head(pool_, request, upload, write_buffer);
+    auto prepared_result = prepare_client_head(pool_, request, write_buffer);
     auto* prepared = std::get_if<prepared_http1_client_request>(&prepared_result);
     if (!prepared) {
         const auto* failure = std::get_if<http1_client_request_prepare_error>(&prepared_result);
         throw http_client_error(make_error_code(http_client_errc::invalid_request), failure != nullptr ? http1_client_request_prepare_error_message(*failure) : std::string_view("HTTP request head is too large"));
     }
     http1_client_response_parser parser(std::move(*prepared).take_exchange_state());
-    const auto* immediate = prepared->content_plan().immediate();
-    const bool immediate_content = immediate != nullptr && !immediate->bytes().empty();
+    const auto* known = prepared->content().known_length_content();
+    const auto immediate_bytes = known != nullptr && !prepared->continue_gated() ? known->bytes().value_or(std::string_view{}) : std::string_view{};
+    const bool immediate_content = !immediate_bytes.empty();
     if (!immediate_content) {
         // Streaming/continue-gated content sends its head before the upload.
         co_await write(single_part(prepared->head()), timeout);
@@ -289,13 +287,13 @@ task<void> http1_client_exchange::run(const http_client_request_storage& request
     restart_inactivity();
     std::array<asio::const_buffer, 2> parts;
     if (immediate_content) {
-        parts = {asio::buffer(prepared->head()), asio::buffer(immediate->bytes())};
+        parts = {asio::buffer(prepared->head()), asio::buffer(immediate_bytes)};
         // Preserve one scatter/gather write (and small TLS coalescing) while
         // receiving 1xx concurrently, without copying the owned request body.
         const auto write_parts = coalesce_tls_write_parts(connection_.transport_.secure(), write_buffer, parts);
         writers.spawn(write_immediate(write_parts, timeout, parser, immediate_completed, writer_failure));
     } else {
-        writers.spawn(write_upload(state_value, timeout, http1_request_content_writer(*prepared->content_plan().streaming()), parser, writer_failure));
+        writers.spawn(write_upload(state_value, timeout, http1_request_content_writer(*prepared), parser, writer_failure));
     }
     std::exception_ptr receive_failure;
     try {
@@ -364,7 +362,7 @@ task<void> http1_client_exchange::receive(const http_client_request_storage& req
         if (parse_result.failure()) {
             throw http_client_error(make_error_code(http_client_errc::protocol_error), http1_client_response_parse_error_message(*parse_result.failure()));
         }
-        if (parse_result.need_more()) {
+        if (parse_result.need_input()) {
             if (read_buffer.size() >= max_http_header_bytes) {
                 throw http_client_error(make_error_code(http_client_errc::protocol_error), "HTTP response head is too large");
             }

@@ -365,14 +365,10 @@ struct http2_header_decode_context final {
     return stream.remote_content().allowed_without_length() != nullptr || (known != nullptr && known->declared_length() == 0);
 }
 
-[[nodiscard]] inline websocket_handshake_validation_result validate_http2_websocket_handshake(const http2_stream_state& stream, const http_request& request, websocket_handshake_validation_options options = {}) noexcept {
-    if (!http2_is_pending_websocket_connect(stream) || !http2_remote_final_head_decoded(stream) || http2_websocket_connect_remote_head_ended(stream) || !http2_websocket_connect_content_acceptable(stream)) {
-        return websocket_handshake_validation_result::make_invalid_request();
-    }
-
-    // RFC 8441 section 5: :protocol supersedes the RFC 6455 key exchange, so
-    // Sec-WebSocket-Key and Sec-WebSocket-Accept are not processed here.
-    return validate_extended_connect_websocket_headers(request, options);
+// The stream state an RFC 8441 extended CONNECT must be in before its
+// WebSocket request fields are validated.
+[[nodiscard]] inline bool http2_websocket_connect_ready(const http2_stream_state& stream) noexcept {
+    return http2_is_pending_websocket_connect(stream) && http2_remote_final_head_decoded(stream) && !http2_websocket_connect_remote_head_ended(stream) && http2_websocket_connect_content_acceptable(stream);
 }
 
 // Queue records for the events whose public form the facade materializes from

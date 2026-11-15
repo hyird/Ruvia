@@ -20,8 +20,8 @@ struct redisReader;
 #include <asio/ssl/context.hpp>
 
 #include "http_client_pool.h"
-#include "redis.h"
-#include "redis_session.h"
+#include "redis_executor.h"
+#include "redis_orm.h"
 #include "slot_pool.h"
 #include "startup_config.h"
 #include "stop_token.h"
@@ -420,9 +420,9 @@ public:
     void close_now() noexcept;
     // An application-registry handle; `io_metrics` is the request's counter
     // block, or null outside a request.
-    [[nodiscard]] redis_session session(::ruvia::operation_scope& scope, request_io_metrics* io_metrics);
+    [[nodiscard]] redis_executor executor(::ruvia::operation_scope& scope, request_io_metrics* io_metrics);
     // A standalone client handle, which never belongs to a request.
-    [[nodiscard]] redis_session session(::ruvia::operation_scope& scope, operation_options options);
+    [[nodiscard]] redis_executor executor(::ruvia::operation_scope& scope, operation_options options);
 
     [[nodiscard]] const worker_ref& worker() const noexcept {
         return worker_;
@@ -432,7 +432,7 @@ public:
     }
     // The configuration of the runtime behind an active handle, for a
     // consumer that sizes its own use of that store (the DB query cache).
-    [[nodiscard]] static const redis_config_storage& session_config(const redis_session& handle) noexcept {
+    [[nodiscard]] static const redis_config_storage& executor_config(const redis_executor& handle) noexcept {
         return handle.runtime_->config();
     }
     [[nodiscard]] redis_pool& general() noexcept {
@@ -480,8 +480,8 @@ public:
 
     [[nodiscard]] bool empty() const noexcept;
     // `io_metrics` is the request's counter block, or null outside a request.
-    [[nodiscard]] redis_session get(::ruvia::operation_scope& operation_scope, request_io_metrics* io_metrics) const;
-    [[nodiscard]] redis_session get(std::string_view alias, ::ruvia::operation_scope& operation_scope, request_io_metrics* io_metrics) const;
+    [[nodiscard]] redis_executor get(::ruvia::operation_scope& operation_scope, request_io_metrics* io_metrics) const;
+    [[nodiscard]] redis_executor get(std::string_view alias, ::ruvia::operation_scope& operation_scope, request_io_metrics* io_metrics) const;
 
 private:
     using entry_type = std::unique_ptr<redis_client_runtime>;

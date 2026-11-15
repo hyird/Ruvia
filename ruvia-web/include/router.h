@@ -127,8 +127,8 @@ public:
     router& bind_redis(std::string_view, const redis_client&&) & = delete;
 #endif
 #ifdef RUVIA_ENABLE_DATABASE
-    router& bind_database(std::string_view alias, const db_client& client) &;
-    router& bind_database(std::string_view, const db_client&&) & = delete;
+    router& bind_db(std::string_view alias, const db_client& client) &;
+    router& bind_db(std::string_view, const db_client&&) & = delete;
 #endif
     // alias names this client's default configuration in this router.
     router& bind_http_client(std::string_view alias, const http_client& client) &;

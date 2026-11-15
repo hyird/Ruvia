@@ -295,7 +295,7 @@ task<websocket> http_client_websocket_request::connect_owned(http_client_websock
     std::optional<detail::http_client_request_storage> stored;
     {
         const detail::inline_http_header_views headers(request.headers_);
-        validate_http1_websocket_client_handshake_configuration(headers.view());
+        validate_websocket_client_handshake_headers(headers.view());
         std::vector<std::string_view> protocols;
         protocols.reserve(request.subprotocols_.size());
         for (const auto& protocol : request.subprotocols_) {

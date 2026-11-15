@@ -9,9 +9,9 @@
 #include <utility>
 #include <vector>
 
+#include "db_executor.h"
 #include "db_query.h"
 #include "db_query_storage.h"
-#include "db_session.h"
 #include "db_sql_dialect.h"
 
 namespace ruvia::detail {

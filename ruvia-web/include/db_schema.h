@@ -14,9 +14,9 @@
 
 #include "borrowed_text.h"
 #include "db_entity.h"
+#include "db_executor.h"
 #include "db_migration.h"
 #include "db_query.h"
-#include "db_session.h"
 #include "entity_storage.h"
 
 namespace ruvia {

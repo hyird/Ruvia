@@ -32,10 +32,10 @@
 #include "worker_ref.h"
 #include "worker_state.h"
 #ifdef RUVIA_ENABLE_DATABASE
-#include "db_session.h"
+#include "db_executor.h"
 #endif
 #ifdef RUVIA_ENABLE_REDIS
-#include "redis_session.h"
+#include "redis_executor.h"
 #endif
 
 namespace ruvia {
@@ -49,7 +49,7 @@ struct app_state;
 struct db_registration_config final {
     borrowed_text alias_{"default"};
     db_config config_{};
-    // Requires Redis support; without it, database() rejects a present value.
+    // Requires Redis support; without it, db() rejects a present value.
     std::optional<db_query_cache_registration> query_cache_{};
 };
 #endif
@@ -229,10 +229,10 @@ public:
     application& on_stop(std::nullptr_t) &;
     application& on_stop(std::nullptr_t) && = delete;
 #ifdef RUVIA_ENABLE_DATABASE
-    application& database(db_registration_config config) &;
-    application& database(db_registration_config config) && = delete;
-    application& database(std::nullptr_t) &;
-    application& database(std::nullptr_t) && = delete;
+    application& db(db_registration_config config) &;
+    application& db(db_registration_config config) && = delete;
+    application& db(std::nullptr_t) &;
+    application& db(std::nullptr_t) && = delete;
 #endif
 #ifdef RUVIA_ENABLE_REDIS
     application& redis(redis_registration_config config) &;

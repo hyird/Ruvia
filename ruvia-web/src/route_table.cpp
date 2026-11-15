@@ -19,6 +19,7 @@
 #include "context_access.h"
 #include "controller.h"
 #include "failure_report.h"
+#include "fnv1a.h"
 #include "http_connect_udp.h"
 #include "http_content_coding.h"
 #include "http_error.h"
@@ -30,7 +31,6 @@
 #include "middleware.h"
 #include "rate_limit.h"
 #include "route_path_segment.h"
-#include "session.h"
 #include "static_root_index.h"
 #include "streaming.h"
 #include "task.h"
@@ -484,8 +484,7 @@ std::uint64_t detail::route_table::path_hash(std::string_view path) noexcept {
     auto hash = fnv1a_offset_basis;
     for (std::size_t i = 0; i < path.size();) {
         const auto unit = path[i] == '%' ? next_uri_path_unit(path, i) : static_cast<unsigned char>(path[i++]);
-        hash ^= static_cast<unsigned char>(unit);
-        hash *= fnv1a_prime;
+        hash = fnv1a_accumulate_byte(hash, static_cast<unsigned char>(unit));
     }
 
     // MurmurHash3's public-domain fmix64 spreads common path prefixes across
@@ -499,7 +498,7 @@ std::uint64_t detail::route_table::path_hash(std::string_view path) noexcept {
 }
 
 std::uint64_t detail::route_table::route_hash(http_known_method method, std::uint64_t hash) noexcept {
-    return hash ^ (static_cast<std::uint64_t>(method) * fnv1a_prime);
+    return fnv1a_accumulate_byte(hash, static_cast<unsigned char>(method));
 }
 
 const detail::route_entry* detail::route_table::find_static_route(http_known_method method, std::string_view path, std::uint64_t hash) const noexcept {
@@ -1116,6 +1115,7 @@ task<std::optional<http_response>> detail::route_table::dispatch_bound_stream(co
             handler_invoked = true;
             co_await handler(context_value);
         } else {
+#ifdef RUVIA_ENABLE_REDIS
             // The stream terminal: a websocket or tunnel upgrade commits the
             // session the middleware chain opened before its handshake head,
             // then the handler runs. A response stream commits it explicitly
@@ -1127,6 +1127,12 @@ task<std::optional<http_response>> detail::route_table::dispatch_bound_stream(co
                 handler_invoked = true;
                 co_await handler(terminal_context);
             };
+#else
+            auto terminal = [&handler_invoked, &handler](context& terminal_context) -> task<void> {
+                handler_invoked = true;
+                co_await handler(terminal_context);
+            };
+#endif
             auto chain = route_chain(route);
             chain.terminal_ = callback_access::bind<task<void>(context&)>(terminal);
             co_await run_chain(chain, context_value);

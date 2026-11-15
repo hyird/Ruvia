@@ -10,9 +10,10 @@
 #include <string>
 #include <string_view>
 #include <type_traits>
+#include <utility>
 #include <vector>
 
-#include "worker_ref.h"
+#include "fnv1a.h"
 
 namespace ruvia::detail {
 
@@ -187,11 +188,11 @@ public:
 
     // The hash a key is kept under; never zero, which marks a free position.
     [[nodiscard]] static std::size_t key_hash(std::string_view sql, std::span<const unsigned int> types) noexcept {
-        auto hash = std::hash<std::string_view>{}(sql) ^ types.size();
+        auto hash = fnv1a_accumulate_integer(std::hash<std::string_view>{}(sql), types.size());
         for (const auto type : types) {
-            hash = (hash ^ type) * fnv1a_prime;
+            hash = fnv1a_accumulate_integer(hash, type);
         }
-        return hash == 0 ? 1 : hash;
+        return hash == 0 ? 1 : static_cast<std::size_t>(hash);
     }
 
 private:

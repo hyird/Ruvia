@@ -1,14 +1,10 @@
 #pragma once
 
-#include <cstddef>
 #include <cstdint>
-#include <span>
-#include <string>
-#include <string_view>
-#include <variant>
 
 #include "borrowed_text.h"
 #include "http_header.h"
+#include "http_request.h"
 
 namespace ruvia {
 
@@ -29,81 +25,6 @@ enum class http_client_request_expectation : std::uint8_t {
 enum class http_request_field_source : std::uint8_t { generated,
     forwarded };
 
-class http_client_request_content_view;
-
-class http_client_request_without_content final {
-private:
-    friend class http_client_request_content_view;
-
-    constexpr http_client_request_without_content() noexcept = default;
-};
-
-class http_client_request_bytes_view final {
-public:
-    [[nodiscard]] constexpr std::string_view value() const noexcept {
-        return value_;
-    }
-
-private:
-    friend class http_client_request_content_view;
-
-    explicit constexpr http_client_request_bytes_view(std::string_view value) noexcept :
-        value_(value) {}
-
-    std::string_view value_;
-};
-
-// Borrowed outbound request content. `none()` and `bytes("")` are deliberately
-// distinct: the latter asks an HTTP/1 writer to emit Content-Length: 0, while
-// the former sends no content framing field. Only the active bytes alternative
-// exposes a value. The referenced bytes must remain alive and unchanged until
-// the external runtime finishes sending them. Owning-string temporaries are
-// rejected; literals, string_view values, and owning-string lvalues are accepted.
-class http_client_request_content_view final {
-public:
-    [[nodiscard]] static constexpr http_client_request_content_view none() noexcept {
-        return http_client_request_content_view(http_client_request_without_content());
-    }
-
-    [[nodiscard]] static constexpr http_client_request_content_view bytes(std::string_view value) noexcept {
-        return http_client_request_content_view(http_client_request_bytes_view(value));
-    }
-
-    [[nodiscard]] static http_client_request_content_view bytes(std::span<const std::byte> value) noexcept {
-        return bytes(std::string_view(reinterpret_cast<const char*>(value.data()), value.size()));
-    }
-
-    template <typename traits_type, typename allocator_type>
-    static http_client_request_content_view bytes(std::basic_string<char, traits_type, allocator_type>&&) = delete;
-
-    template <typename traits_type, typename allocator_type>
-    static http_client_request_content_view bytes(const std::basic_string<char, traits_type, allocator_type>&&) = delete;
-
-    template <detail::http_temporary_owning_range<std::byte> bytes_type>
-    static http_client_request_content_view bytes(bytes_type&&) = delete;
-
-    [[nodiscard]] constexpr const http_client_request_without_content* without_content() const& noexcept RUVIA_LIFETIMEBOUND {
-        return std::get_if<http_client_request_without_content>(&content_);
-    }
-    const http_client_request_without_content* without_content() const&& = delete;
-
-    [[nodiscard]] constexpr const http_client_request_bytes_view* borrowed_bytes() const& noexcept RUVIA_LIFETIMEBOUND {
-        return std::get_if<http_client_request_bytes_view>(&content_);
-    }
-    const http_client_request_bytes_view* borrowed_bytes() const&& = delete;
-
-private:
-    using content_type = std::variant<http_client_request_without_content, http_client_request_bytes_view>;
-
-    explicit constexpr http_client_request_content_view(http_client_request_without_content content) noexcept :
-        content_(content) {}
-
-    explicit constexpr http_client_request_content_view(http_client_request_bytes_view content) noexcept :
-        content_(content) {}
-
-    content_type content_;
-};
-
 struct http_client_request_view {
     // Zero-cost field wrapper for request text retained by the sans-I/O
     // request/response transaction. String literals, string_view values, and
@@ -116,7 +37,10 @@ struct http_client_request_view {
     // HTTP/1 writer permits metadata to overlap its emitted head and owns the
     // small set of facts needed by the later response exchange.
     borrowed_http_headers headers_{};
-    http_client_request_content_view content_{http_client_request_content_view::none()};
+    // none() sends no content framing; bytes() borrows the content, which must
+    // remain alive and unchanged until the runtime sends it. Streaming and
+    // known-length-without-bytes plans name content the runtime writes later.
+    http_request_content_plan content_{http_request_content_plan::none()};
 };
 
 // Borrowed only until open_tunnel() returns its cold operation. Normal CONNECT

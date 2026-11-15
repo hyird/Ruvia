@@ -26,12 +26,12 @@
 #include <vector>
 
 #include "borrowed_text.h"
+#include "decimal_text.h"
 #include "fixed_string.h"
 #include "http_content_negotiation.h"
 #include "http_error.h"
 #include "http_header.h"
 #include "http_status.h"
-#include "integer_parse.h"
 #include "json_codec.h"
 #include "middleware.h"
 #include "model_value.h"
@@ -1774,10 +1774,10 @@ template <typename number_type>
         }
     } else {
         const auto integer = parse_integer<number_type>(decoded);
-        if ((integer.index() != 0)) {
+        if (!integer) {
             return std::nullopt;
         }
-        parsed_value = std::get<0>(integer);
+        parsed_value = *integer;
     }
     return parsed_value;
 }
@@ -3200,10 +3200,6 @@ public:
 
     [[nodiscard]] bool ok() const noexcept {
         return issues_.empty();
-    }
-
-    [[nodiscard]] bool valid() const noexcept {
-        return ok();
     }
 
     [[nodiscard]] const issue_list_type& issues() const& noexcept RUVIA_LIFETIMEBOUND {

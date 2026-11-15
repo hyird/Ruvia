@@ -53,20 +53,8 @@ struct http1_client_request_prepare_result_access final {
         return result_type(error);
     }
 
-    [[nodiscard]] static result_type prepared_streaming_content(std::string_view head, std::optional<std::uint64_t> length, bool gated, http1_client_exchange_state state_value) noexcept {
-        return result_type(prepared_http1_client_request(head, http1_client_request_content_plan(http1_client_streaming_request_content(length, gated)), std::move(state_value)));
-    }
-
-    [[nodiscard]] static result_type prepared_without_content(std::string_view head, http1_client_exchange_state exchange_state) noexcept {
-        return result_type(prepared_http1_client_request(head, http1_client_request_content_plan(http1_client_request_without_content()), std::move(exchange_state)));
-    }
-
-    [[nodiscard]] static result_type prepared_immediate_content(std::string_view head, std::string_view content_bytes, http1_client_exchange_state exchange_state) noexcept {
-        return result_type(prepared_http1_client_request(head, http1_client_request_content_plan(http1_client_immediate_request_content(content_bytes)), std::move(exchange_state)));
-    }
-
-    [[nodiscard]] static result_type prepared_continue_gated_content(std::string_view head, std::string_view content_bytes, http1_client_exchange_state exchange_state) noexcept {
-        return result_type(prepared_http1_client_request(head, http1_client_request_content_plan(http1_client_continue_gated_request_content(content_bytes)), std::move(exchange_state)));
+    [[nodiscard]] static result_type prepared(std::string_view head, http_request_content_plan content, bool continue_gated, http1_client_exchange_state state_value) noexcept {
+        return result_type(prepared_http1_client_request(head, content, continue_gated, std::move(state_value)));
     }
 };
 
@@ -243,21 +231,32 @@ struct request_head_write_plan final {
     return std::nullopt;
 }
 
-[[nodiscard]] detail::http1_client_request_prepare_result_access::result_type prepare_request(const http_origin_view& origin, std::string_view method, http_known_method known_method, std::string_view target, std::span<const http_header_view> headers, http_client_request_content_view content, std::span<char> head_buffer, http1_client_request_wire_policy policy, const http1_client_request_head_view* streaming = nullptr, std::span<const http_header_view> connect_udp_headers = {}) {
+// Normalizes the request's content plan to what the HTTP/1 wire carries:
+// none, known length with borrowed bytes (Content-Length), or streaming
+// (Content-Length when known, chunked otherwise). known_length(n) without
+// bytes streams n bytes; known_length(0) is explicit empty content.
+[[nodiscard]] constexpr http_request_content_plan http1_wire_content(const http_request_content_plan& content) noexcept {
+    if (const auto* known = content.known_length_content()) {
+        if (known->bytes()) {
+            return content;
+        }
+        return known->length().value() == 0 ? http_request_content_plan::bytes(std::string_view{}) : http_request_content_plan::streaming(known->length());
+    }
+    return content;
+}
+
+[[nodiscard]] detail::http1_client_request_prepare_result_access::result_type prepare_request(const http_origin_view& origin, std::string_view method, http_known_method known_method, std::string_view target, std::span<const http_header_view> headers, const http_request_content_plan& requested_content, std::span<char> head_buffer, http1_client_request_wire_policy policy, std::span<const http_header_view> connect_udp_headers = {}) {
     if (!detail::is_valid_http_request_field_source(policy.field_source_)) {
         return detail::http1_client_request_prepare_result_access::failure(http1_client_request_prepare_error::invalid_header);
     }
     const bool connect = known_method == http_known_method::connect;
     detail::http1_client_request_field_facts header_facts;
     http1_client_request_prepare_error error = http1_client_request_prepare_error::invalid_header;
-    const auto* content_bytes = content.borrowed_bytes();
-    const bool explicit_content = content_bytes != nullptr || streaming != nullptr;
-    const auto length = streaming
-        ? (streaming->content_length_ ? std::optional<std::uint64_t>(streaming->content_length_->value()) : std::nullopt)
-        : content_bytes
-        ? std::optional<std::uint64_t>(content_bytes->value().size())
-        : std::nullopt;
-    const bool chunked = streaming && !length;
+    const auto content = http1_wire_content(requested_content);
+    const bool explicit_content = content.without_content() == nullptr;
+    const auto declared = content.declared_length();
+    const auto length = declared ? std::optional<std::uint64_t>(declared->value()) : std::nullopt;
+    const bool chunked = explicit_content && !length;
     if (!detail::analyze_http1_client_request_fields(headers, header_facts, error, policy.field_source_)) {
         return detail::http1_client_request_prepare_result_access::failure(error);
     }
@@ -332,16 +331,7 @@ struct request_head_write_plan final {
         return write_request_head(destination, write_plan);
     });
     const auto head = std::string_view(head_buffer.data(), head_bytes);
-    if (streaming) {
-        return detail::http1_client_request_prepare_result_access::prepared_streaming_content(head, length, expect_continue, std::move(exchange_state));
-    }
-    if (!explicit_content) {
-        return detail::http1_client_request_prepare_result_access::prepared_without_content(head, std::move(exchange_state));
-    }
-    if (expect_continue) {
-        return detail::http1_client_request_prepare_result_access::prepared_continue_gated_content(head, content_bytes->value(), std::move(exchange_state));
-    }
-    return detail::http1_client_request_prepare_result_access::prepared_immediate_content(head, content_bytes->value(), std::move(exchange_state));
+    return detail::http1_client_request_prepare_result_access::prepared(head, content, expect_continue, std::move(exchange_state));
 }
 
 // The one CONNECT rule set behind both prepare_connect() entries: wire-policy
@@ -354,7 +344,7 @@ struct request_head_write_plan final {
     if (tunnel_origin == nullptr || tunnel_origin->port() == 0) {
         return detail::http1_client_request_prepare_result_access::failure(http1_client_request_prepare_error::invalid_connect_origin);
     }
-    return prepare_request(*tunnel_origin, "CONNECT", http_known_method::connect, {}, headers, http_client_request_content_view::none(), head_buffer, policy);
+    return prepare_request(*tunnel_origin, "CONNECT", http_known_method::connect, {}, headers, http_request_content_plan::none(), head_buffer, policy);
 }
 
 }  // namespace
@@ -440,14 +430,6 @@ std::variant<prepared_http1_client_request, http1_client_request_buffer_too_smal
     return prepare_request(origin, request.method_, known_method, request.target_, static_cast<std::span<const http_header_view>>(request.headers_), request.content_, head_buffer, policy);
 }
 
-std::variant<prepared_http1_client_request, http1_client_request_buffer_too_small, http1_client_request_prepare_error> http1_client_request_writer::prepare_streaming(const http_origin_view& origin, const http1_client_request_head_view& request, std::span<char> head_buffer, http1_client_request_wire_policy policy) const {
-    http_known_method known_method = http_known_method::unknown;
-    if (const auto error = validate_non_connect_request_line(request.method_, request.target_, policy, known_method)) {
-        return detail::http1_client_request_prepare_result_access::failure(*error);
-    }
-    return prepare_request(origin, request.method_, known_method, request.target_, request.headers_, http_client_request_content_view::none(), head_buffer, policy, &request);
-}
-
 std::variant<prepared_http1_client_request, http1_client_request_buffer_too_small, http1_client_request_prepare_error> http1_client_request_writer::prepare_connect_udp(const http_origin_view& origin, borrowed_text target, std::span<const http_header_view> headers, std::span<char> head_buffer, http1_client_request_wire_policy policy) const {
     http_known_method known_method = http_known_method::unknown;
     if (const auto error = validate_non_connect_request_line("GET", target.view(), policy, known_method)) {
@@ -471,7 +453,7 @@ std::variant<prepared_http1_client_request, http1_client_request_buffer_too_smal
     staged_fields.append(http_header_view{"Host", origin.host()});
     const auto all_fields = staged_fields.view();
     const auto emitted_headers = all_fields.first(all_fields.size() - 1U);
-    return prepare_request(origin, "GET", known_method, target.view(), emitted_headers, http_client_request_content_view::none(), head_buffer, policy, nullptr, all_fields);
+    return prepare_request(origin, "GET", known_method, target.view(), emitted_headers, http_request_content_plan::none(), head_buffer, policy, all_fields);
 }
 
 std::variant<prepared_http1_client_request, http1_client_request_buffer_too_small, http1_client_request_prepare_error> http1_client_request_writer::prepare_connect(const http_origin_view& tunnel_origin, std::span<const http_header_view> headers, std::span<char> head_buffer, http1_client_request_wire_policy policy) const {
@@ -592,9 +574,14 @@ namespace {
 }  // namespace
 
 using error_type = http1_request_content_write_error;
-http1_request_content_writer::http1_request_content_writer(const http1_client_streaming_request_content& plan) noexcept :
-    length_(plan.content_length()),
-    gated_(plan.continue_gated()) {}
+http1_request_content_writer::http1_request_content_writer(const prepared_http1_client_request& prepared) noexcept :
+    gated_(prepared.continue_gated()) {
+    const auto* streaming = prepared.content().streaming_content();
+    stopped_ = streaming == nullptr;
+    if (streaming != nullptr && streaming->expected_length()) {
+        length_ = streaming->expected_length()->value();
+    }
+}
 void http1_request_content_writer::release_content() noexcept {
     gated_ = false;
 }

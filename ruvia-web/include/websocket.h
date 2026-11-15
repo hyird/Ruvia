@@ -19,6 +19,7 @@
 #include "http_status.h"
 #include "operation_options.h"
 #include "operation_scope.h"
+#include "outbound_bytes.h"
 #include "task.h"
 #include "websocket_connection.h"
 #include "worker_ref.h"
@@ -151,59 +152,21 @@ public:
     [[nodiscard]] task<std::optional<websocket_message>> read(operation_options operation = {}) &;
     task<std::optional<websocket_message>> read(operation_options = {}) && = delete;
 
-    /// The string_view overloads copy payloads into owned storage before
-    /// returning. std::string&& inputs transfer their existing allocation.
+    /// Payloads are owned before returning: borrowed bytes are copied, an
+    /// exact std::string rvalue transfers its existing allocation.
     /// Output operations share one write lane: starting a second before the
     /// current operation completes throws std::logic_error. A stop request or
     /// timeout in `operation` aborts the session (a partly written frame
     /// cannot be withdrawn) and throws std::system_error (operation_canceled
     /// or timed_out); an already-stopped token fails before any output.
-    [[nodiscard]] task<void> text(std::string_view payload, websocket_send_options options = {}, operation_options operation = {}) &;
-    task<void> text(std::string_view, websocket_send_options = {}, operation_options = {}) && = delete;
-
-    /// Zero-copy text frame: takes ownership of an already-allocated payload.
-    template <std::same_as<std::string> string_type>
-    [[nodiscard]] task<void> text(string_type&& payload, websocket_send_options options = {}, operation_options operation = {}) & {
-        return write_owned(websocket_opcode::text, std::move(payload), options.compress_, std::move(operation));
-    }
-    template <std::same_as<std::string> string_type>
-    task<void> text(string_type&&, websocket_send_options = {}, operation_options = {}) && = delete;
-
-    [[nodiscard]] task<void> binary(std::string_view payload, websocket_send_options options = {}, operation_options operation = {}) &;
-    task<void> binary(std::string_view, websocket_send_options = {}, operation_options = {}) && = delete;
-
-    [[nodiscard]] task<void> binary(std::span<const std::byte> payload, websocket_send_options options = {}, operation_options operation = {}) &;
-    task<void> binary(std::span<const std::byte>, websocket_send_options = {}, operation_options = {}) && = delete;
-
-    /// Zero-copy binary frame.
-    template <std::same_as<std::string> string_type>
-    [[nodiscard]] task<void> binary(string_type&& payload, websocket_send_options options = {}, operation_options operation = {}) & {
-        return write_owned(websocket_opcode::binary, std::move(payload), options.compress_, std::move(operation));
-    }
-    template <std::same_as<std::string> string_type>
-    task<void> binary(string_type&&, websocket_send_options = {}, operation_options = {}) && = delete;
-
-    [[nodiscard]] task<void> pong(std::string_view payload = {}, operation_options operation = {}) &;
-    task<void> pong(std::string_view = {}, operation_options = {}) && = delete;
-
-    /// Zero-copy pong frame.
-    template <std::same_as<std::string> string_type>
-    [[nodiscard]] task<void> pong(string_type&& payload, operation_options operation = {}) & {
-        return write_owned(websocket_opcode::pong, std::move(payload), true, std::move(operation));
-    }
-    template <std::same_as<std::string> string_type>
-    task<void> pong(string_type&&, operation_options = {}) && = delete;
-
-    [[nodiscard]] task<void> ping(std::string_view payload = {}, operation_options operation = {}) &;
-    task<void> ping(std::string_view = {}, operation_options = {}) && = delete;
-
-    /// Zero-copy ping frame.
-    template <std::same_as<std::string> string_type>
-    [[nodiscard]] task<void> ping(string_type&& payload, operation_options operation = {}) & {
-        return write_owned(websocket_opcode::ping, std::move(payload), true, std::move(operation));
-    }
-    template <std::same_as<std::string> string_type>
-    task<void> ping(string_type&&, operation_options = {}) && = delete;
+    [[nodiscard]] task<void> text(outbound_bytes payload, websocket_send_options options = {}, operation_options operation = {}) &;
+    task<void> text(outbound_bytes, websocket_send_options = {}, operation_options = {}) && = delete;
+    [[nodiscard]] task<void> binary(outbound_bytes payload, websocket_send_options options = {}, operation_options operation = {}) &;
+    task<void> binary(outbound_bytes, websocket_send_options = {}, operation_options = {}) && = delete;
+    [[nodiscard]] task<void> pong(outbound_bytes payload = {}, operation_options operation = {}) &;
+    task<void> pong(outbound_bytes = {}, operation_options = {}) && = delete;
+    [[nodiscard]] task<void> ping(outbound_bytes payload = {}, operation_options operation = {}) &;
+    task<void> ping(outbound_bytes = {}, operation_options = {}) && = delete;
 
     /// Zero-copy send of a message returned by this connection's read(), with
     /// the message's own opcode (for example an echo). The frame borrows the
@@ -260,7 +223,6 @@ private:
     template <typename connection_type>
     friend websocket detail::make_websocket_facade(connection_type&);
     explicit websocket(std::shared_ptr<detail::websocket_state> state) noexcept;
-    [[nodiscard]] task<void> write_owned(websocket_opcode, std::string&&, bool, operation_options);
     std::shared_ptr<detail::websocket_state> state_;
 };
 
@@ -284,34 +246,17 @@ public:
     websocket_message_writer& operator=(const websocket_message_writer&) = delete;
     ~websocket_message_writer();
 
-    [[nodiscard]] task<void> write(std::string_view chunk, operation_options operation = {}) &;
-    task<void> write(std::string_view, operation_options = {}) && = delete;
-    [[nodiscard]] task<void> write(std::span<const std::byte> chunk, operation_options operation = {}) &;
-    task<void> write(std::span<const std::byte>, operation_options = {}) && = delete;
-    template <std::same_as<std::string> string_type>
-    [[nodiscard]] task<void> write(string_type&& chunk, operation_options operation = {}) & {
-        return submit_owned(std::move(chunk), false, std::move(operation));
-    }
-    template <std::same_as<std::string> string_type>
-    task<void> write(string_type&&, operation_options = {}) && = delete;
-    [[nodiscard]] task<void> finish(std::string_view last_chunk = {}, operation_options operation = {}) &;
-    task<void> finish(std::string_view = {}, operation_options = {}) && = delete;
-    [[nodiscard]] task<void> finish(std::span<const std::byte> last_chunk, operation_options operation = {}) &;
-    task<void> finish(std::span<const std::byte>, operation_options = {}) && = delete;
-    template <std::same_as<std::string> string_type>
-    [[nodiscard]] task<void> finish(string_type&& last_chunk, operation_options operation = {}) & {
-        return submit_owned(std::move(last_chunk), true, std::move(operation));
-    }
-    template <std::same_as<std::string> string_type>
-    task<void> finish(string_type&&, operation_options = {}) && = delete;
+    [[nodiscard]] task<void> write(outbound_bytes chunk, operation_options operation = {}) &;
+    task<void> write(outbound_bytes, operation_options = {}) && = delete;
+    [[nodiscard]] task<void> finish(outbound_bytes last_chunk = {}, operation_options operation = {}) &;
+    task<void> finish(outbound_bytes = {}, operation_options = {}) && = delete;
     void abort() & noexcept;
     void abort() && = delete;
 
 private:
     friend class detail::websocket_state;
     websocket_message_writer(detail::websocket_state& owner, websocket_opcode opcode, bool compress) noexcept;
-    [[nodiscard]] task<void> submit(std::string_view chunk, bool final, operation_options operation);
-    [[nodiscard]] task<void> submit_owned(std::string&& chunk, bool final, operation_options operation);
+    [[nodiscard]] task<void> submit(outbound_bytes chunk, bool final, operation_options operation);
     [[nodiscard]] bool message_open() const noexcept;
     static void expire_capability(void* target) noexcept;
 

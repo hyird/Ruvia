@@ -33,7 +33,7 @@ namespace {
 
 }  // namespace
 
-const csrf_protection_config& csrf_protection::validate(const csrf_protection_config& source_value) {
+const csrf_config& csrf_middleware::validate(const csrf_config& source_value) {
     if (!is_valid_http_header_name(source_value.cookie_name_)) {
         throw std::invalid_argument("CSRF cookie name must be a valid HTTP token");
     }
@@ -46,14 +46,14 @@ const csrf_protection_config& csrf_protection::validate(const csrf_protection_co
     return source_value;
 }
 
-csrf_protection::csrf_protection() :
-    csrf_protection(csrf_protection_config{}) {}
+csrf_middleware::csrf_middleware() :
+    csrf_middleware(csrf_config{}) {}
 
-csrf_protection::csrf_protection(const csrf_protection_config& config) :
+csrf_middleware::csrf_middleware(const csrf_config& config) :
     cookie_name_(validate(config).cookie_name_),
     header_name_(config.header_name_) {}
 
-task<void> csrf_protection::invoke(context& c, next& next_value) {
+task<void> csrf_middleware::invoke(context& c, next& next_value) {
     const auto method = c.req().known_method();
     const bool safe = method == http_known_method::get || method == http_known_method::head || method == http_known_method::options;
     // Repeated cookie or header occurrences never resolve to one token.
@@ -135,20 +135,17 @@ security_headers_middleware::security_headers_middleware(const security_headers_
     validate_value(source_value.referrer_policy_);
     validate_value(source_value.permissions_policy_);
     for (const auto& header : source_value.custom_headers_) {
-        if (!is_valid_http_header_name(header.name_)) {
+        if (!is_valid_http_header_name(header.name())) {
             throw std::invalid_argument("custom security header name is invalid");
         }
-        if (!is_valid_http_header_value(header.value_)) {
+        if (!is_valid_http_header_value(header.value())) {
             throw std::invalid_argument("custom security header value is invalid");
         }
     }
     content_security_policy_.assign(source_value.content_security_policy_);
     referrer_policy_.assign(source_value.referrer_policy_);
     permissions_policy_.assign(source_value.permissions_policy_);
-    custom_headers_.reserve(source_value.custom_headers_.size());
-    for (const auto& header : source_value.custom_headers_) {
-        custom_headers_.emplace_back(header.name_, header.value_);
-    }
+    custom_headers_ = source_value.custom_headers_;
 }
 
 task<void> security_headers_middleware::invoke(context& context_value, next& next_value) {

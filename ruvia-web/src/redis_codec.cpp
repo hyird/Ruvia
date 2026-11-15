@@ -22,7 +22,7 @@
 
 #include "http_header.h"
 #include "json_codec.h"
-#include "redis.h"
+#include "redis_orm.h"
 
 namespace ruvia::detail {
 
@@ -430,7 +430,7 @@ void throw_if_redis_transaction_reply_error(const redis_value& value, std::size_
 
 std::optional<std::string> parse_redis_optional_string(redis_value&& value) {
     throw_if_redis_error(value);
-    if (value.null()) {
+    if (value.is_null()) {
         return std::nullopt;
     }
     return take_redis_string(std::move(value));
@@ -478,7 +478,7 @@ std::vector<std::optional<std::string>> parse_redis_optional_string_array(redis_
 
 std::optional<double> parse_redis_optional_double(redis_value&& value, std::string_view context_value) {
     throw_if_redis_error(value);
-    if (value.null()) {
+    if (value.is_null()) {
         return std::nullopt;
     }
     return parse_redis_double(redis_value_string(value), context_value);
@@ -487,7 +487,7 @@ std::optional<double> parse_redis_optional_double(redis_value&& value, std::stri
 redis_set_result parse_redis_set_reply(redis_value&& value, const redis_set_options& options) {
     throw_if_redis_error(value);
     const auto returns_previous = redis_set_returns_previous(options.previous_value_);
-    if (value.null()) {
+    if (value.is_null()) {
         const bool applied = returns_previous && (!options.condition_.has_value() || *options.condition_ == redis_set_condition::if_absent);
         return redis_types_access::set_result(applied);
     }
@@ -618,7 +618,7 @@ redis_z_scan_result parse_redis_z_scan_result(redis_value&& value) {
 
 std::optional<redis_key_value> parse_redis_blocking_pop_reply(redis_value&& value) {
     throw_if_redis_error(value);
-    if (value.null()) {
+    if (value.is_null()) {
         return std::nullopt;
     }
     const auto items = redis_value_array(value);
@@ -630,7 +630,7 @@ std::optional<redis_key_value> parse_redis_blocking_pop_reply(redis_value&& valu
 
 std::optional<redis_x_read_group_result> parse_redis_x_read_group_reply(redis_value&& value) {
     throw_if_redis_error(value);
-    if (value.null()) {
+    if (value.is_null()) {
         return std::nullopt;
     }
 
@@ -653,7 +653,7 @@ std::optional<redis_x_read_group_result> parse_redis_x_read_group_reply(redis_va
                 throw redis_error(redis_error::code_type::protocol_error, "unexpected redis xreadgroup entry reply");
             }
             auto parsed_entry = redis_types_access::stream_entry(take_redis_string(std::move(entry_parts[0])));
-            if (!entry_parts[1].null()) {
+            if (!entry_parts[1].is_null()) {
                 redis_types_access::fields(parsed_entry) = parse_redis_key_value_array(std::move(entry_parts[1]), "unexpected redis xreadgroup field reply");
             }
             entries.emplace_back(std::move(parsed_entry));
@@ -675,7 +675,7 @@ redis_pubsub_event parse_redis_pubsub_event(const redis_value& value) {
     }
     const auto kind = redis_value_string(items[0]);
     const auto optional_name = [&](const redis_value& item) -> std::optional<std::string_view> {
-        return item.null() ? std::nullopt : std::optional(redis_value_string(item));
+        return item.is_null() ? std::nullopt : std::optional(redis_value_string(item));
     };
     if (items.size() == 3) {
         if (kind == "message") {
@@ -749,10 +749,6 @@ redis_value& redis_value::operator=(redis_value&& other) noexcept {
 
 redis_value::kind_type redis_value::kind() const noexcept {
     return kind_;
-}
-
-bool redis_value::null() const noexcept {
-    return kind_ == kind_type::null;
 }
 
 std::string_view redis_value::string() const& {

@@ -174,10 +174,8 @@ private:
     std::size_t size_{0};
 };
 class http2_connection;
-class http2_stream_state;
 class websocket_request_header_validator;
 inline constexpr std::string_view websocket_switching_protocols_head_prefix = "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ";
-[[nodiscard]] websocket_handshake_validation_result validate_http2_websocket_handshake(const http2_stream_state&, const http_request&, websocket_handshake_validation_options) noexcept;
 }  // namespace detail
 
 class websocket_handshake_validation_result final {
@@ -200,9 +198,8 @@ public:
 private:
     friend class detail::websocket_request_header_validator;
     friend websocket_handshake_validation_result validate_http2_websocket_handshake(http2_connection&, std::uint32_t, const http_request&, websocket_handshake_validation_options) noexcept;
-    friend websocket_handshake_validation_result detail::validate_http2_websocket_handshake(const detail::http2_stream_state&, const http_request&, websocket_handshake_validation_options) noexcept;
     friend websocket_handshake_validation_result validate_http3_websocket_handshake(const http3_request_head&, const http_request&, websocket_handshake_validation_options) noexcept;
-    friend websocket_handshake_validation_result validate_websocket_handshake(const http_request&, const http1_request_body_plan&, websocket_handshake_validation_options) noexcept;
+    friend websocket_handshake_validation_result validate_http1_websocket_handshake(const http_request&, const http1_request_body_plan&, websocket_handshake_validation_options) noexcept;
 
     using value_type = std::variant<websocket_handshake_accepted, websocket_handshake_failure>;
 
@@ -258,17 +255,17 @@ private:
 
 // Validates an RFC 6455 HTTP/1.1 opening handshake, including the parser-owned
 // request-body framing plan. It does not create or write a response.
-[[nodiscard]] websocket_handshake_validation_result validate_websocket_handshake(const http_request& request, const http1_request_body_plan& body_plan, websocket_handshake_validation_options options = {}) noexcept;
+[[nodiscard]] websocket_handshake_validation_result validate_http1_websocket_handshake(const http_request& request, const http1_request_body_plan& body_plan, websocket_handshake_validation_options options = {}) noexcept;
 
 // Owned HTTP/1.1 101 response plan. for_each_response_part emits stable views for
 // scatter-gather I/O; compression() configures the subsequent websocket driver
 // from the exact negotiation encoded in this response.
-class websocket_server_handshake final {
+class http1_websocket_handshake_plan final {
 public:
-    websocket_server_handshake(const websocket_server_handshake&) = delete;
-    websocket_server_handshake& operator=(const websocket_server_handshake&) = delete;
-    websocket_server_handshake(websocket_server_handshake&&) noexcept = default;
-    websocket_server_handshake& operator=(websocket_server_handshake&&) = delete;
+    http1_websocket_handshake_plan(const http1_websocket_handshake_plan&) = delete;
+    http1_websocket_handshake_plan& operator=(const http1_websocket_handshake_plan&) = delete;
+    http1_websocket_handshake_plan(http1_websocket_handshake_plan&&) noexcept = default;
+    http1_websocket_handshake_plan& operator=(http1_websocket_handshake_plan&&) = delete;
 
     [[nodiscard]] std::string_view subprotocol() const& noexcept RUVIA_LIFETIMEBOUND {
         return subprotocol_;
@@ -307,13 +304,13 @@ public:
     void for_each_response_part(visitor_type&&) const&& = delete;
 
 private:
-    friend websocket_server_handshake make_websocket_server_handshake(const http_request&, websocket_server_handshake_options);
+    friend http1_websocket_handshake_plan prepare_http1_websocket_handshake(const http_request&, websocket_server_handshake_options);
 
     inline static constexpr std::string_view subprotocol_header_prefix = "Sec-WebSocket-Protocol: ";
     inline static constexpr std::string_view extensions_header_prefix = "Sec-WebSocket-Extensions: ";
     inline static constexpr std::string_view crlf = "\r\n";
 
-    websocket_server_handshake(std::array<char, 28> accept, std::string subprotocol, websocket_compression compression, std::vector<http_header> response_headers_value) noexcept :
+    http1_websocket_handshake_plan(std::array<char, 28> accept, std::string subprotocol, websocket_compression compression, std::vector<http_header> response_headers_value) noexcept :
         accept_(accept),
         subprotocol_(std::move(subprotocol)),
         compression_(compression),
@@ -327,9 +324,9 @@ private:
     std::vector<http_header> response_headers_;
 };
 
-// Call after validate_websocket_handshake() succeeds. The selected subprotocol
-// and response fields are copied; the response plan borrows no
+// Call after validate_http1_websocket_handshake() succeeds. The selected
+// subprotocol and response fields are copied; the response plan borrows no
 // request or server-preference storage.
-[[nodiscard]] websocket_server_handshake make_websocket_server_handshake(const http_request& request, websocket_server_handshake_options options = {});
+[[nodiscard]] http1_websocket_handshake_plan prepare_http1_websocket_handshake(const http_request& request, websocket_server_handshake_options options = {});
 
 }  // namespace ruvia

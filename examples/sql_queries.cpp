@@ -9,8 +9,8 @@
 #include <exception>
 #include <iostream>
 
-#include "db.h"
 #include "db_query.h"
+#include "db_repository.h"
 #include "db_schema.h"
 #include "http_error.h"
 #include "middleware.h"

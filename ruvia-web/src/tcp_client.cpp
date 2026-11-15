@@ -306,16 +306,8 @@ task<std::optional<std::span<const std::byte>>> tcp_client::read(operation_optio
     return state_->read(std::move(options));
 }
 
-task<void> tcp_client::write(std::span<const std::byte> bytes, operation_options options) & {
-    return write_owned(std::string(as_chars(bytes)), std::move(options));
-}
-
-task<void> tcp_client::write(std::string_view bytes, operation_options options) & {
-    return write_owned(std::string(bytes), std::move(options));
-}
-
-task<void> tcp_client::write_owned(std::string&& bytes, operation_options options) {
-    return state_->write(std::move(bytes), std::move(options));
+task<void> tcp_client::write(outbound_bytes bytes, operation_options options) & {
+    return state_->write(std::move(bytes).into_string(), std::move(options));
 }
 
 void tcp_client::close() noexcept {

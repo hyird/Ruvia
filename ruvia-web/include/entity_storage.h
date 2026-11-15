@@ -21,7 +21,6 @@
 
 #include "borrowed_text.h"
 #include "fixed_string.h"
-#include "integer_parse.h"
 #include "model_value.h"
 
 namespace ruvia::detail {
@@ -36,9 +35,10 @@ concept text_scalar = std::is_same_v<t_type, std::remove_cv_t<t_type>> && (std::
 
 // The one text-to-scalar syntax shared by database results and Redis replies:
 // boolean tokens 1/t/true/TRUE and 0/f/false/FALSE, strict decimal integers
-// (parse_integer), and finite floating-point values. std::string_view borrows
-// `text`. A float that is syntactically complete but not representable is
-// out_of_range; any other rejection, including a non-finite value, is invalid_format.
+// (std::from_chars: no whitespace or '+'), and finite floating-point values.
+// std::string_view borrows `text`. A number that is syntactically complete but
+// not representable is out_of_range; any other rejection, including a
+// non-finite value, is invalid_format.
 template <text_scalar t_type>
 [[nodiscard]] std::variant<t_type, text_scalar_parse_error> parse_text_scalar(std::string_view text) {
     using result_type = std::variant<t_type, text_scalar_parse_error>;
@@ -56,23 +56,22 @@ template <text_scalar t_type>
             return result_type(std::in_place_index<0>, false);
         }
         return text_scalar_parse_error::invalid_format;
-    } else if constexpr (std::is_floating_point_v<t_type>) {
+    } else {
         t_type converted{};
         const auto* const last = text.data() + text.size();
         const auto [end, error] = std::from_chars(text.data(), last, converted);
         if (error == std::errc::result_out_of_range && end == last) {
             return text_scalar_parse_error::out_of_range;
         }
-        if (error != std::errc{} || end != last || !std::isfinite(converted)) {
+        if (error != std::errc{} || end != last) {
             return text_scalar_parse_error::invalid_format;
         }
-        return result_type(std::in_place_index<0>, converted);
-    } else {
-        const auto parsed = parse_integer<t_type>(text);
-        if (const auto* error = std::get_if<integer_parse_error>(&parsed)) {
-            return *error == integer_parse_error::out_of_range ? text_scalar_parse_error::out_of_range : text_scalar_parse_error::invalid_format;
+        if constexpr (std::is_floating_point_v<t_type>) {
+            if (!std::isfinite(converted)) {
+                return text_scalar_parse_error::invalid_format;
+            }
         }
-        return result_type(std::in_place_index<0>, std::get<t_type>(parsed));
+        return result_type(std::in_place_index<0>, converted);
     }
 }
 

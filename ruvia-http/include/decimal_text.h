@@ -17,6 +17,26 @@
 
 namespace ruvia {
 
+namespace detail {
+template <typename t_type>
+concept parsed_integer = std::integral<t_type> && !std::same_as<std::remove_cv_t<t_type>, bool> && !std::same_as<std::remove_cv_t<t_type>, char> && !std::same_as<std::remove_cv_t<t_type>, wchar_t> && !std::same_as<std::remove_cv_t<t_type>, char8_t> && !std::same_as<std::remove_cv_t<t_type>, char16_t> && !std::same_as<std::remove_cv_t<t_type>, char32_t>;
+}  // namespace detail
+
+// The single strict decimal integer parser: no value for empty input,
+// whitespace, a leading '+', trailing characters or a value out of range. A
+// leading '-' is accepted only for signed integers, so an unsigned result is
+// exactly 1*DIGIT.
+template <detail::parsed_integer t_type>
+[[nodiscard]] constexpr std::optional<t_type> parse_integer(std::string_view text) noexcept {
+    t_type value{};
+    const auto* last = text.data() + text.size();
+    const auto [end, error] = std::from_chars(text.data(), last, value, 10);
+    if (error != std::errc{} || end != last) {
+        return std::nullopt;
+    }
+    return value;
+}
+
 // The single saturating addition for sizes, counters and durations: the sum,
 // or the type's maximum when the sum would wrap.
 template <std::unsigned_integral value_type>

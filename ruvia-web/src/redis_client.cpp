@@ -64,18 +64,18 @@ bool redis_registry::empty() const noexcept {
     return runtimes_.empty();
 }
 
-redis_session redis_registry::get(::ruvia::operation_scope& operation_scope, request_io_metrics* io_metrics) const {
+redis_executor redis_registry::get(::ruvia::operation_scope& operation_scope, request_io_metrics* io_metrics) const {
     const auto default_pool_index = alias_index_.default_index();
     if (!default_pool_index.has_value()) {
         throw redis_error(redis_error::code_type::not_configured, "default redis is not configured");
     }
-    return runtimes_[*default_pool_index]->session(operation_scope, io_metrics);
+    return runtimes_[*default_pool_index]->executor(operation_scope, io_metrics);
 }
 
-redis_session redis_registry::get(std::string_view alias, ::ruvia::operation_scope& operation_scope, request_io_metrics* io_metrics) const {
+redis_executor redis_registry::get(std::string_view alias, ::ruvia::operation_scope& operation_scope, request_io_metrics* io_metrics) const {
     const auto match = alias_index_.find(alias);
     if (match.has_value()) {
-        return runtimes_[*match]->session(operation_scope, io_metrics);
+        return runtimes_[*match]->executor(operation_scope, io_metrics);
     }
     throw redis_error(redis_error::code_type::not_configured, "redis is not configured");
 }
@@ -104,12 +104,12 @@ void redis_client_runtime::close_now() noexcept {
     subscriptions_.close_now();
 }
 
-redis_session redis_client_runtime::session(::ruvia::operation_scope& scope, request_io_metrics* io_metrics) {
-    return redis_session(*this, scope, io_metrics);
+redis_executor redis_client_runtime::executor(::ruvia::operation_scope& scope, request_io_metrics* io_metrics) {
+    return redis_executor(*this, scope, io_metrics);
 }
 
-redis_session redis_client_runtime::session(::ruvia::operation_scope& scope, operation_options options) {
-    return redis_session(*this, scope, std::move(options));
+redis_executor redis_client_runtime::executor(::ruvia::operation_scope& scope, operation_options options) {
+    return redis_executor(*this, scope, std::move(options));
 }
 
 class redis_client_state final : public std::enable_shared_from_this<redis_client_state> {
@@ -131,7 +131,7 @@ public:
     [[nodiscard]] task<void> shutdown() {
         return lifecycle_.shutdown();
     }
-    [[nodiscard]] redis_session redis();
+    [[nodiscard]] redis_executor redis();
 
     [[nodiscard]] const worker_ref& worker() const noexcept {
         return worker_;
@@ -161,13 +161,13 @@ void redis_client_state::throw_not_ready() {
     throw std::logic_error("redis client is not connected");
 }
 
-redis_session redis_client_state::redis() {
+redis_executor redis_client_state::redis() {
     lifecycle_.require_ready();
     // Unbounded blocking commands/subscriptions require an explicit lifetime.
     // Use the client's lifetime as the default, not as an extra user source.
     // A with_options() token replaces it; runtime_.close_now() independently
     // cancels all command pools and subscriptions during client shutdown.
-    return runtime_.session(lifecycle_.operation_scope(), {.stop_token_ = lifecycle_.token()});
+    return runtime_.executor(lifecycle_.operation_scope(), {.stop_token_ = lifecycle_.token()});
 }
 
 }  // namespace ruvia::detail
@@ -187,7 +187,7 @@ task<void> redis_client::connect() & {
     return state_->connect();
 }
 
-redis_session redis_client::redis() const& {
+redis_executor redis_client::redis() const& {
     return state_->redis();
 }
 

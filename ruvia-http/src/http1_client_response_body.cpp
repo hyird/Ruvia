@@ -186,7 +186,7 @@ http1_client_response_body_decoder::result_type http1_client_response_body_decod
         if (decoded.failure() != nullptr) {
             return fail(http1_client_response_body_error::invalid_framing, chunk_consumed);
         }
-        if (decoded.need_more() != nullptr) {
+        if (decoded.need_input() != nullptr) {
             return need_input_or_incomplete(chunk_consumed, eof);
         }
         if (const auto* complete = decoded.complete()) {

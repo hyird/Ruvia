@@ -933,6 +933,7 @@ private:
 // RFC 8441 Extended CONNECT with :protocol websocket: the negotiation's
 // Sec-WebSocket-* request fields followed by the application headers.
 // Validate the final head with validate_extended_connect_websocket_client_response().
+// Returns exactly submit_request_head()'s result: HTTP/2 allocates the stream id.
 [[nodiscard]] std::variant<std::uint32_t, http2_request_head_submit_error> submit_http2_websocket_client_request(http2_connection& connection, const websocket_client_negotiation& negotiation, std::string_view scheme, std::string_view authority, std::string_view target, borrowed_http_headers headers = {}, http_request_field_source source = http_request_field_source::generated);
 
 struct http2_akamai_fingerprint_options final {

@@ -16,7 +16,7 @@
 
 #include "connection_lifecycle.h"
 #include "db_config_storage.h"
-#include "db_session.h"
+#include "db_executor.h"
 #include "db_slot_socket.h"
 #include "operation_options.h"
 #include "stop_token.h"

@@ -23,6 +23,7 @@
 #include "asio_bridge.h"
 #include "event_loop_state.h"
 #include "failure_report.h"
+#include "fnv1a.h"
 #include "move_only_function.h"
 #include "task.h"
 #include "worker_ref.h"
@@ -191,6 +192,10 @@ event_loop event_loop_pool::next_loop() noexcept {
 
 event_loop event_loop_pool::loop_for(std::uint64_t key) const noexcept {
     return event_loop(impl_->loops_[key % impl_->loops_.size()]);
+}
+
+std::uint64_t worker_selection_hash(std::string_view key) noexcept {
+    return fnv1a_accumulate(fnv1a_offset_basis, key);
 }
 
 event_loop event_loop_pool::loop_for(std::string_view key) const noexcept {

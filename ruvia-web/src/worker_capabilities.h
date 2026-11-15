@@ -145,8 +145,8 @@ public:
     [[nodiscard]] const http_client* http_clients(std::string_view alias) const noexcept;
 
 #ifdef RUVIA_ENABLE_DATABASE
-    void bind_database(const worker_ref& worker, std::string_view alias, const db_client& client);
-    [[nodiscard]] const db_client* database(std::string_view alias) const noexcept;
+    void bind_db(const worker_ref& worker, std::string_view alias, const db_client& client);
+    [[nodiscard]] const db_client* db(std::string_view alias) const noexcept;
 #endif
 
 #ifdef RUVIA_ENABLE_REDIS

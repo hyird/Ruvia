@@ -412,11 +412,11 @@ websocket_handshake_validation_result validate_extended_connect_websocket_header
 
 namespace ruvia {
 
-websocket_server_handshake make_websocket_server_handshake(const http_request& request, websocket_server_handshake_options options) {
+http1_websocket_handshake_plan prepare_http1_websocket_handshake(const http_request& request, websocket_server_handshake_options options) {
     detail::websocket_accept_key_type accept;
     detail::encode_websocket_accept(accept, detail::http_request_access::known_header(request, detail::http_field_kind::sec_websocket_key));
     auto negotiation = detail::make_websocket_server_negotiation(request, options);
-    return websocket_server_handshake(accept, std::move(negotiation).take_subprotocol(), negotiation.compression(), std::move(negotiation).take_response_headers());
+    return http1_websocket_handshake_plan(accept, std::move(negotiation).take_subprotocol(), negotiation.compression(), std::move(negotiation).take_response_headers());
 }
 
 }  // namespace ruvia
@@ -465,7 +465,7 @@ void websocket_handshake_failure::apply_required_response_headers(http_response&
     }
 }
 
-websocket_handshake_validation_result validate_websocket_handshake(const http_request& request, const http1_request_body_plan& body_plan, websocket_handshake_validation_options options) noexcept {
+websocket_handshake_validation_result validate_http1_websocket_handshake(const http_request& request, const http1_request_body_plan& body_plan, websocket_handshake_validation_options options) noexcept {
     if (request.known_method() != http_known_method::get || request.protocol_version() != http_protocol_version::http11 ||
         // RFC 6455 does not forbid Content-Length on the HTTP Upgrade request.
         // The parser-owned framing plan is the authoritative distinction:

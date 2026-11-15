@@ -417,7 +417,7 @@ template <typename stream_type>
 // The shared HTTP/1 upgrade-head writer applies the request `expectations`
 // (100 Continue before 101, RFC 9110 section 7.8).
 template <typename stream_type>
-task<std::error_code> write_websocket_handshake(stream_type& stream, const websocket_server_handshake& handshake, const http_request_expectations& expectations, connection_scanner::entry& scanner_entry) {
+task<std::error_code> write_websocket_handshake(stream_type& stream, const http1_websocket_handshake_plan& handshake, const http_request_expectations& expectations, connection_scanner::entry& scanner_entry) {
     http_response_head_buffer head;
     handshake.for_each_response_part([&](std::string_view part) {
         head.append(part);

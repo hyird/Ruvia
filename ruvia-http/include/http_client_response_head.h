@@ -10,7 +10,6 @@
 #include "borrowed_text.h"
 #include "http_header.h"
 #include "http_message.h"
-#include "http_request.h"
 #include "http_status.h"
 
 namespace ruvia::detail {

@@ -11,7 +11,7 @@
 #include <vector>
 
 #include "backend_client_fixture.h"
-#include "db_session.h"
+#include "db_executor.h"
 #include "event_loop.h"
 #include "stop_token.h"
 #include "task_scope.h"
@@ -29,7 +29,7 @@ using reply = peer_type::maria_reply;
     return value;
 }
 
-inline ruvia::task<void> query_with(ruvia::db_session handle, std::string_view sql, std::string_view param, pipeline_test::outcome& result) {
+inline ruvia::task<void> query_with(ruvia::db_executor handle, std::string_view sql, std::string_view param, pipeline_test::outcome& result) {
     try {
         const ruvia::db_rows rows = co_await handle.query(sql, param);
         result.value_ = std::string(rows.front()["v"].as<std::string_view>().value_or(""));

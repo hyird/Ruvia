@@ -811,7 +811,8 @@ private:
 // RFC 9220 extended CONNECT with :protocol websocket on a client request
 // stream: the negotiation's Sec-WebSocket-* request fields followed by the
 // application headers. Validate the final head with
-// validate_extended_connect_websocket_client_response().
+// validate_extended_connect_websocket_client_response(). Returns exactly
+// submit_request_head()'s result: the QUIC driver supplies the stream id.
 [[nodiscard]] http_submit_status submit_http3_websocket_client_request(http3_connection& connection, std::int64_t stream_id, const websocket_client_negotiation& negotiation, std::string_view scheme, std::string_view authority, std::string_view target, borrowed_http_headers headers = {}, http_request_field_source source = http_request_field_source::generated);
 
 struct http3_fingerprint_options final {

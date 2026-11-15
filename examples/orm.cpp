@@ -19,14 +19,14 @@
 
 #include "backend_config.h"
 #include "blocking_pool.h"
-#include "db.h"
+#include "db_executor.h"
 #include "db_query.h"
+#include "db_repository.h"
 #include "db_schema.h"
-#include "db_session.h"
 #include "event_loop.h"
 #include "middleware.h"
 #ifdef RUVIA_ENABLE_REDIS
-#include "redis.h"
+#include "redis_executor.h"
 #endif
 
 namespace {

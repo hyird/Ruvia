@@ -19,7 +19,7 @@
 #include <vector>
 
 #include "connection_lifecycle.h"
-#include "db_session.h"
+#include "db_executor.h"
 #include "decimal_text.h"
 #include "event_loop.h"
 #include "http_client_pool.h"

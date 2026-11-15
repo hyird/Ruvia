@@ -30,12 +30,12 @@ struct quic_varint final {
 
 [[nodiscard]] inline std::variant<quic_varint, http_capsule_codec_error> decode_quic_varint(std::span<const char> input) noexcept {
     if (input.empty()) {
-        return http_capsule_codec_error::need_more_data;
+        return http_capsule_codec_error::need_input;
     }
     const auto first = static_cast<unsigned char>(input.front());
     const std::size_t size = std::size_t{1} << (first >> 6);
     if (input.size() < size) {
-        return http_capsule_codec_error::need_more_data;
+        return http_capsule_codec_error::need_input;
     }
     std::uint64_t value = first & 0x3f;
     for (std::size_t i = 1; i < size; ++i) {

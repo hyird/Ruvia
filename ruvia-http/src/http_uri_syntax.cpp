@@ -2,13 +2,10 @@
 
 #include <algorithm>
 #include <array>
-#include <charconv>
 #include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <string_view>
-#include <system_error>
-#include <variant>
 
 #include "binary_text_encoding.h"
 #include "url_encoding.h"
@@ -125,24 +122,6 @@ bool split_uri_host_port(std::string_view value, std::string_view& host, std::st
 
 [[nodiscard]] bool is_uri_pchar(unsigned char byte) noexcept {
     return is_uri_userinfo_literal(byte) || byte == '@';
-}
-
-std::variant<std::uint16_t, std::errc> parse_port_value(std::string_view value) noexcept {
-    if (value.empty()) {
-        return std::errc::invalid_argument;
-    }
-
-    std::uint16_t parsed_value = 0;
-    const auto* begin = value.data();
-    const auto* end = value.data() + value.size();
-    const auto [ptr, ec] = std::from_chars(begin, end, parsed_value);
-    if (ec != std::errc{}) {
-        return ec;
-    }
-    if (ptr != end) {
-        return std::errc::invalid_argument;
-    }
-    return parsed_value;
 }
 
 [[nodiscard]] bool is_valid_uri_component(std::string_view value, bool allow_slash, bool allow_question) noexcept {

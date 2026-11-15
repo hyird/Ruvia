@@ -30,6 +30,7 @@
 #include "http_response_stream.h"
 #include "websocket_client_handshake.h"
 #include "websocket_handshake.h"
+#include "websocket_negotiation.h"
 
 namespace ruvia {
 
@@ -256,10 +257,12 @@ http2_connection& http2_connection::operator=(http2_connection&&) noexcept = def
 
 websocket_handshake_validation_result validate_http2_websocket_handshake(http2_connection& connection, std::uint32_t stream_id, const http_request& request, websocket_handshake_validation_options options) noexcept {
     const auto* stream = connection.impl_->connection_.stream(stream_id);
-    if (stream == nullptr) {
+    if (stream == nullptr || !detail::http2_websocket_connect_ready(*stream)) {
         return websocket_handshake_validation_result::make_invalid_request();
     }
-    return detail::validate_http2_websocket_handshake(*stream, request, options);
+    // RFC 8441 section 5: :protocol supersedes the RFC 6455 key exchange, so
+    // Sec-WebSocket-Key and Sec-WebSocket-Accept are not processed here.
+    return detail::validate_extended_connect_websocket_headers(request, options);
 }
 
 std::variant<websocket_extended_connect_negotiation, http_response_head_error> http2_connection::submit_websocket_handshake(std::uint32_t stream_id, const http_request& request, const websocket_handshake_validation_result& validation, websocket_server_handshake_options options) {

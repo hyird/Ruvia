@@ -90,7 +90,7 @@ http_capsule_feed_result http_capsule_decoder::feed_impl(std::span<const char> i
     if (feeding_) {
         throw std::logic_error("recursive capsule feed");
     }
-    if (status_ != http_capsule_status::need_more_data) {
+    if (status_ != http_capsule_status::need_input) {
         return {.status_ = status_};
     }
     struct feeding_guard final {

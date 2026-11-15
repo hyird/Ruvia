@@ -11,6 +11,7 @@
 #include <chrono>
 #include <cstdint>
 #include <exception>
+#include <functional>
 #include <iostream>
 #include <string>
 #include <string_view>
@@ -32,11 +33,7 @@ struct worker_stats final {
 // Stand-in for a genuinely blocking call (sync SDK, file crypto, ...).
 std::uint64_t slow_checksum(std::string_view input) {
     std::this_thread::sleep_for(std::chrono::milliseconds(50));
-    std::uint64_t sum = 14695981039346656037ull;
-    for (const char byte : input) {
-        sum = (sum ^ static_cast<unsigned char>(byte)) * 1099511628211ull;
-    }
-    return sum;
+    return std::hash<std::string_view>{}(input);
 }
 
 }  // namespace

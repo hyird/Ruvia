@@ -12,8 +12,8 @@
 #include <utility>
 #include <vector>
 
+#include "db_executor.h"
 #include "db_query.h"
-#include "db_session.h"
 
 namespace ruvia::detail {
 

@@ -11,14 +11,14 @@
 
 ## 1. SQL 数据库连接池、直接查询与事务
 
-聚合头文件：`"db.h"`（或按需包含 `"db_session.h"`、`"db_query.h"`）。
+头文件：`"db_executor.h"`（连接、直接查询与事务）、`"db_query.h"`（SQL 构建器）。
 参考示例：[examples/database.cpp](../examples/database.cpp)、[examples/event_loop_data.cpp](../examples/event_loop_data.cpp)。
 
 ### 1.1 连接配置 `ruvia::db_config` 与注册
 
 ```cpp
 #include "app.h"
-#include "db.h"
+#include "db_executor.h"
 
 ruvia::db_config config{
     .driver_ = ruvia::db_driver::postgresql, // 或 ruvia::db_driver::mariadb
@@ -35,7 +35,7 @@ ruvia::db_config config{
 };
 
 // 1. 注册到生产应用（每个业务 worker 独立持有 pool_size_per_worker_ 条连接）：
-ruvia::app().database({
+ruvia::app().db({
     .alias_ = "default",
     .config_ = config,
 });
@@ -66,23 +66,24 @@ ruvia::app().database({
 
 池中连接在每次租出、发送任何语句之前先做一次非阻塞探测：服务端在连接空闲期间结束了会话（PostgreSQL `idle_session_timeout`、`pg_terminate_backend`，MariaDB `wait_timeout`、`KILL`，重启或故障切换）时，该连接被关闭并透明重连，首条语句不会因已失效的连接而以 `io_error` 失败。PostgreSQL 空闲会话上的异步消息（如 `NOTIFY`、`ParameterStatus`）先交给 libpq 读取，不视为失效；MariaDB 连接在两条命令之间收到任何字节即视为失效。不重连的连接池（迁移器）在此时以 `io_error`（会话已结束）失败，同样不发送语句。
 
-### 1.2 直接查询、编译期 SQL 校验与流式游标（`db_session`）
+### 1.2 直接查询、编译期 SQL 校验与流式游标（`db_executor`）
 
-在路由中通过 `c.db()`（或 `c.db("alias")`）获取 `ruvia::db_session`。ORM 与直接查询保持独立公开路线，均可直接在 `db_session` 或 `db_transaction` 上调用。
+在路由中通过 `c.db()`（或 `c.db("alias")`）获取 `ruvia::db_executor`。ORM 与直接查询保持独立公开路线，均可直接在 `db_executor` 或 `db_transaction` 上调用。
 
-- **会话引用获取**：出站拥有者与 `context` 同名获取：`db_client::db()`、`redis_client::redis()`、`http_client::client()` / `client(alias)` 分别对应 `c.db()`、`c.redis()`、`c.client()`。
-- **逐次选项**：取得的会话对象不带操作选项；超时与取消只经 `with_options(operation_options)` 派生，合并规则见 [core 2](core-and-http.md#2-停止令牌超时截止期与定时器)。
+- **执行器语义**：`db_executor` / `redis_executor` 是请求或客户端作用域的连接池视图，按 sqlx `Executor` 命名；与 Web 登录会话 `session` 无关。
+- **执行器获取**：出站拥有者与 `context` 同名获取：`db_client::db()`、`redis_client::redis()`、`http_client::client()` / `client(alias)` 分别对应 `c.db()`、`c.redis()`、`c.client()`。
+- **逐次选项**：取得的执行器不带操作选项；超时与取消只经 `with_options(operation_options)` 派生，合并规则见 [core 2](core-and-http.md#2-停止令牌超时截止期与定时器)。
 
-| `ruvia::db_session` 方法 | 说明 |
+| `ruvia::db_executor` 方法 | 说明 |
 | --- | --- |
-| `db_session with_options(operation_options options) const` | 绑定单次查询的 `timeout_` 与 `stop_token_` |
+| `db_executor with_options(operation_options options) const` | 绑定单次查询的 `timeout_` 与 `stop_token_` |
 | `task<db_rows> query(std::string_view sql, Args&&... params) const` | 执行参数化查询并返回缓冲结果集 `db_rows`（亦支持传入 `std::span<const db_value>`） |
 | `template <fixed_string Sql, db_driver Driver = db_driver::mariadb, typename... Params> task<db_rows> query(Params&&... params) const` | **编译期校验 SQL 占位符数量**与方言语法的参数化查询（MariaDB 用 `?`，PostgreSQL 用 `$1, $2`） |
 | `task<db_stream_result> query_stream(...) const` | 流式拉取大结果集（同上支持运行期 SQL 与编译期 `fixed_string` 模板） |
 | `task<db_exec_result> execute(...) const` | 执行 `INSERT` / `UPDATE` / `DELETE` / DDL，返回 `db_exec_result`（提供 `.affected_rows()` 与 `.last_insert_id()`） |
 | `task<db_transaction> begin_transaction(db_transaction_options options = {}) const` | 开启事务（可指定隔离级别 `.isolation_` 与读写模式 `.access_mode_`） |
 | `task<void> notify(std::string_view channel, std::string_view payload = {}) const` | （PostgreSQL）发送 `NOTIFY` 通知 |
-| `template <typename E> db_repository<E, db_session> repository() const` | 获取实体 `E` 的强类型 ORM Repository |
+| `template <typename E> db_repository<E, db_executor> repository() const` | 获取实体 `E` 的强类型 ORM Repository |
 | `db_query_result_cache query_result_cache() const` | （需 `RUVIA_ENABLE_REDIS`）获取查询结果缓存控制器 |
 
 查询缓存命中时，结果集持有字段所需的底层存储；空结果和没有列的行不保留缓存正文。结果及其字段视图仍须遵守各自的所有权和借用生命周期。清除缓存时，临时键视图在删除命令获得自有参数后释放，不跨网络等待保留。缓存键前缀与条目编码不携带内部版本号。
@@ -128,7 +129,7 @@ co_await stream.close();
 
 连接归还前统一检查事务状态，覆盖普通查询、流式查询被拒绝、读尽或关闭，以及显式事务提交、回滚和异常回滚。PostgreSQL 仍处于事务中的连接、MariaDB 仍有事务或已关闭 autocommit 的连接会被关闭，不会让下一调用方继承这些状态；例如 MariaDB 的 `completion_type=CHAIN` 可以使一次成功的 `COMMIT` / `ROLLBACK` 开启新事务，框架也不会复用该连接。此检查不恢复其他会话设置，结果形状错误也不撤销已经执行的 SQL。
 
-### 1.3 事务与保存点（`"db_session.h"`）
+### 1.3 事务与保存点（`"db_executor.h"`）
 
 `db_transaction` 独占一条数据库连接；若在析构或作用域退出前未调用 `co_await tx.commit()`，底层会自动回滚并回收连接：
 
@@ -237,13 +238,13 @@ auto report = co_await migrator.migrate(migrations);
 
 ## 3. 强类型关系型 ORM（`RUVIA_DB_ENTITY` 与 `db_repository`）
 
-头文件：`"db_entity.h"`、`"db.h"`。
+头文件：`"db_entity.h"`、`"db_repository.h"`。
 参考示例：[examples/orm.cpp](../examples/orm.cpp)、[examples/orm_columns.cpp](../examples/orm_columns.cpp)、[examples/orm_relations.cpp](../examples/orm_relations.cpp)。
 
 ### 3.1 实体、生成列、关系与投影声明
 
 ```cpp
-#include "db.h"
+#include "db_repository.h"
 
 RUVIA_DB_ENTITY(device, "devices",
     RUVIA_DB_COLUMN(id, std::int64_t,
@@ -391,7 +392,7 @@ auto users = ruvia::decode_db_rows<user_projection>(raw);
 
 ## 4. Redis 客户端、Pub/Sub、Streams 与 RediSearch ORM
 
-聚合头文件：`"redis.h"`。
+头文件：`"redis_executor.h"`（客户端、命令、批处理与 Pub/Sub）、`"redis_orm.h"`（RediSearch ORM）。
 参考示例：[examples/redis.cpp](../examples/redis.cpp)、[examples/redis_pubsub.cpp](../examples/redis_pubsub.cpp)、[examples/redis_streams.cpp](../examples/redis_streams.cpp)、[examples/redis_orm.cpp](../examples/redis_orm.cpp)。
 
 ### 4.1 连接池配置 `ruvia::redis_config`
@@ -411,8 +412,8 @@ ruvia::app()
 ```
 
 - 每个 worker 维护 `pool_size_per_worker_` 条常规命令连接，以及按需建立的 `blocking_pool_size_per_worker_` 条阻塞命令专用连接（供 `blpop`、`brpop`、`xread_group` 等阻塞操作自动使用，不阻塞常规命令池）。
-- 同样支持在独立 `event_loop` 上构造 `ruvia::redis_client client(loop, config)`，通过 `client.redis()` 获取 `redis_session`（规则见 [1.2](#12-直接查询编译期-sql-校验与流式游标db_session)）；`host_` 不是 IP 字面量时，事件循环须借用阻塞池执行 DNS 查询（见 1.1）。
-- **独立宿主借入**：`router::bind_redis(alias, client)` / `bind_database(alias, client)` 把同 worker 的独立客户端按别名借给该 router 分发的请求，`c.redis(alias)` / `c.db(alias)` 与 `session_middleware` 由此解析；约束见 [显式路由组合](web-guide.md#111-显式路由组合routerh)。
+- 同样支持在独立 `event_loop` 上构造 `ruvia::redis_client client(loop, config)`，通过 `client.redis()` 获取 `redis_executor`（规则见 [1.2](#12-直接查询编译期-sql-校验与流式游标db_executor)）；`host_` 不是 IP 字面量时，事件循环须借用阻塞池执行 DNS 查询（见 1.1）。
+- **独立宿主借入**：`router::bind_redis(alias, client)` / `bind_db(alias, client)` 把同 worker 的独立客户端按别名借给该 router 分发的请求，`c.redis(alias)` / `c.db(alias)` 与 `session_middleware` 由此解析；约束见 [显式路由组合](web-guide.md#111-显式路由组合routerh)。
 - 每条连接复用回复解析根槽；嵌套值和字符串由返回结果独立持有，失败或取消时随未完成的回复一起回收。
 - **请求写缓冲**：传输结束后最多保留 `64 KiB` 容量，超限大块立即归还分配器。取消或异常同样等待传输借用结束后再清理，不提前释放在途 I/O 使用的存储。
 - 配置了 `username_` 或 `password_` 时，每条新连接先发送 `AUTH`；序列化后的 `AUTH` 请求写出后（无论成功与否）立即从连接保留的写缓冲中擦除，口令只保留在配置副本中供重连使用。
@@ -421,14 +422,14 @@ ruvia::app()
 - **竞速边界**：数字地址与单候选地址直接单次连接；`connect_timeout_` 统一覆盖解析、全部尝试与 TLS 握手；解析为一次合并的 `getaddrinfo`，不实现 RFC 8305 §3 的独立 A / AAAA 查询与 Resolution Delay。
 - **TLS 关闭**：关闭连接时以一次非阻塞写发送 `close_notify`，不等待对端告警；仍有未完整写出的记录、写入失败或已发生 TLS 错误时不发送告警。
 
-### 4.2 `ruvia::redis_session` 命令分类总览
+### 4.2 `ruvia::redis_executor` 命令分类总览
 
 在路由中通过 `c.redis()` 或 `c.redis("cache")` 获取：
 
 | 分类 | 方法 |
 | --- | --- |
 | 连接与通用 | `with_options(operation_options)`、`ping()`、`command(args...)`（发送适合单次池化租约的原始 Redis 命令并返回 `redis_value`，拒绝连接状态命令和 `WAIT` / `WAITAOF`） |
-| String 与 Key | `get`、`mget`、`set(key, val, redis_set_options)`、`mset`、`get_del`、`append`、`strlen`、`incr`、`incr_by`、`decr`、`decr_by`、`del`、`unlink`、`exists`、`touch`、`type`、`rename`、`rename_nx`、`expire`、`expire_at`、`persist`、`ttl`、`pttl` |
+| String 与 Key | `get`、`mget`、`set(key, val, redis_set_options)`、`mset`、`get_del`、`append`、`strlen`、`incr`、`incr_by`、`decr`、`decr_by`、`del`、`unlink`、`exists`、`touch`、`type`、`rename`、`rename_nx`、`expire`、`pexpire`、`expire_at`、`persist`、`ttl`、`pttl` |
 | Hash | `hget`、`hset`、`hmget`、`hget_all`、`hdel`、`hexists`、`hlen`、`hkeys`、`hvals`、`hincr_by` |
 | List | `lpush`、`rpush`、`lpop`、`rpop`、`llen`、`lrange`、`lindex`、`lset`、`ltrim`、`lrem`、`blpop`、`brpop` |
 | Set & Sorted Set | `sadd`、`srem`、`smembers`、`scard`、`sismember`、`spop`、`srand_member`、`sinter`、`sunion`、`sdiff`；`zadd`、`zrem`、`zrange`、`zrange_with_scores`、`zscore`、`zcard`、`zcount` |
@@ -436,7 +437,12 @@ ruvia::app()
 | 批处理与事务 | `pipeline()`（返回 `redis_pipeline` 即 `redis_batch<redis_batch_mode::pipeline>`，链式追加命令后 `co_await std::move(pipe).exec()`）、`transaction()`（返回 `redis_transaction` 即 `redis_batch<redis_batch_mode::transaction>`，封装 `MULTI`/`EXEC`） |
 | Streams | `xread_group(group, consumer, streams, redis_x_read_group_options)` |
 | Pub/Sub | `publish(channel, payload)`、`subscription()` |
-| RediSearch ORM | `repository<Entity>(redis_repository_config)` |
+| RediSearch ORM | `repository<Entity>(const redis_search_mapping&)`、`repository<Entity>()` |
+
+- **唯一命令表**：类型化命令只声明于 `redis_command_set`，`redis_executor` 与两种 `redis_batch` 共同继承；对照 redis-plus-plus `Pipeline` / `Transaction` 与 go-redis `Pipeliner`（实现同一 `Cmdable`）。
+- **执行器专有**：`blpop`、`brpop`、`xread_group`、`subscription()` 会阻塞或独占连接，不进入批处理。
+- **批处理结果**：batch 上的类型化命令返回 batch 自身以便链式调用；`exec()` 按入队顺序返回原始 `redis_value`，元素按同名执行器命令的结果类型解读。
+- **常量性**：命令调用为非 `const`（同 redis-plus-plus）；`with_options`、`pipeline`、`transaction`、`subscription`、`repository` 为 `const`。
 
 - **SET 结果所有权**：`redis_set_result` 复制时复制 `previous()` 文本，移动时转移存储；结果不借用回复缓冲。
 - **SET 结果语义**：赋值失败保持原结果；`previous()` 的 `std::nullopt` 与空字符串保持区分。
@@ -509,25 +515,31 @@ while (auto event = co_await sub.read()) {
 
 ### 4.4 Redis HASH 实体与 RediSearch ORM（`RUVIA_REDIS_ENTITY`）
 
-使用 `RUVIA_REDIS_ENTITY` 将结构映射为 Redis HASH 键（`<prefix>:<primary_key>`），并可通过 RediSearch 索引进行多条件过滤与排序分页：
+- **键与索引**：实体存于 HASH `ruvia:orm:<hex(prefix)>:<主键>`，`prefix` 为 `RUVIA_REDIS_ENTITY` 第二参数的小写十六进制编码；RediSearch 索引名为 `<prefix>:idx`。
+- **前缀单一来源**：前缀只来自实体宏；`redis_repository_config` 只描述索引列。
+- **映射复用**：启动期以 `redis_search_mapping::create<Entity>(config)` 构建一次，请求内 `repository<Entity>(mapping)` 借用；mapping 须活过 repository 及其操作，实体类型不符抛 `std::invalid_argument`。
+- **默认映射**：`repository<Entity>()` 使用无索引的共享映射，只适合按主键读写。
+- **分页**：FT.SEARCH 总是分页（`LIMIT` 缺省 `0 10`，见 [FT.SEARCH](https://redis.io/docs/latest/commands/ft.search/)）；`find()` / `find_and_count()` 未设 `take_` 时返回 `skip_` 之后的一页 `redis_find_default_take`（100）条，翻页用 `skip_` / `take_`，总数用 `find_and_count()` 或 `count()`。
 
 ```cpp
-RUVIA_REDIS_ENTITY(cached_user, "user:",
+RUVIA_REDIS_ENTITY(cached_user, "user",
     RUVIA_REDIS_COLUMN(id, std::string, ruvia::redis_column_options{.primary_key_ = true}),
     RUVIA_REDIS_COLUMN(role, std::string),
     RUVIA_REDIS_COLUMN(score, std::int64_t),
     RUVIA_REDIS_COLUMN(bio, std::string, ruvia::redis_column_options{.nullable_ = true})
 );
 
-const ruvia::redis_repository_config user_repo_config{
-    .prefix_ = "user:",
-    .indexes_ = {
-        {.column_ = "role", .kind_ = ruvia::redis_index_kind::tag},
-        {.column_ = "score", .kind_ = ruvia::redis_index_kind::numeric, .sortable_ = true},
-    },
-};
+const ruvia::redis_search_mapping& cached_user_mapping() {
+    static const auto mapping = ruvia::redis_search_mapping::create<cached_user>({
+        .indexes_ = {
+            {.column_ = "role", .kind_ = ruvia::redis_index_kind::tag},
+            {.column_ = "score", .kind_ = ruvia::redis_index_kind::numeric, .sortable_ = true},
+        },
+    });
+    return mapping;
+}
 
-auto repo = c.redis().repository<cached_user>(user_repo_config);
+auto repo = c.redis().repository<cached_user>(cached_user_mapping());
 // 建索引（通常在启动时执行一次）：co_await repo.create_index();
 // 带 TTL 插入：co_await repo.insert(entity, {.ttl_ = std::chrono::minutes(10)});
 // 条件查询：
@@ -544,7 +556,7 @@ NUMERIC 谓词保留输入精度，不将 double 边界窄化成 float32 列类�
 
 ### 4.5 离线查询与索引编译
 
-`redis_search_mapping::create<Entity>(config)` 校验并拥有映射配置，不需要 Redis 连接、`context` 或 `application`。Repository 与独立编译入口共用字段校验、转义与索引规则。
+`redis_search_mapping::create<Entity>(config)` 校验并拥有索引配置，不需要 Redis 连接、`context` 或 `application`。Repository 与独立编译入口共用字段校验、转义与索引规则。
 
 | 入口 | 契约 |
 | --- | --- |
@@ -553,11 +565,10 @@ NUMERIC 谓词保留输入精度，不将 double 边界窄化成 float32 列类�
 | `compile_drop_index()` | 仅删除索引，不删除文档 |
 | `redis_compiled_command::arguments() const&` | 只读借用全部二进制安全参数，可交给其他 Redis 驱动 |
 | `std::move(command).take_arguments()` | 提取拥有型参数容器 |
-| `redis_session::command(std::move(command))` | 同步接管编译结果，复用现有命令执行、取消及超时主链 |
+| `redis_executor::command(std::move(command))` | 同步接管编译结果，复用现有命令执行、取消及超时主链 |
 
 ```cpp
-const auto mapping = ruvia::redis_search_mapping::create<cached_user>(user_repo_config);
-auto command = mapping.compile_find({.where_ = cached_user::column<"role">() == "admin"});
+auto command = cached_user_mapping().compile_find({.where_ = cached_user::column<"role">() == "admin"});
 auto reply = co_await redis.command(std::move(command));
 ```
 

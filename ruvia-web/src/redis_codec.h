@@ -20,7 +20,7 @@ struct redisReader;
 struct redisReadTask;
 struct redisReplyObjectFunctions;
 
-#include "redis_session.h"
+#include "redis_executor.h"
 
 namespace ruvia::detail {
 

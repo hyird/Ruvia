@@ -9,9 +9,9 @@
 #include <string_view>
 
 #include "binary_text_encoding.h"
+#include "db_executor.h"
 #include "db_query.h"
 #include "db_schema.h"
-#include "db_session.h"
 #include "db_sql_scan.h"
 #include "decimal_text.h"
 #include "utf8.h"

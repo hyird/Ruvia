@@ -164,7 +164,7 @@ TEST(Ruvia, security_headers_emit_configured_policies) {
 }
 
 TEST(Ruvia, security_headers_apply_custom_headers) {
-    const std::vector<ruvia::security_header> custom_value({
+    const std::vector<ruvia::http_header> custom_value({
         {"X-Custom-Security", "value-1"},
         {"X-Report-To", "endpoint"},
     });
@@ -261,7 +261,7 @@ class csrf_test_middleware final {
 public:
     static constexpr bool ruvia_runs_on_unmatched_requests = true;
 
-    explicit csrf_test_middleware(ruvia::csrf_protection* middleware_value) :
+    explicit csrf_test_middleware(ruvia::csrf_middleware* middleware_value) :
         middleware_(middleware_value) {}
 
     ruvia::task<void> invoke(ruvia::context& ctx, ruvia::next& next_step) {
@@ -269,7 +269,7 @@ public:
     }
 
 private:
-    ruvia::csrf_protection* middleware_;
+    ruvia::csrf_middleware* middleware_;
 };
 
 class accepted_response final {
@@ -282,7 +282,7 @@ public:
     }
 };
 
-csrf_outcome run_csrf(ruvia::csrf_protection& csrf, std::string_view cookie_name, std::string_view header_name, http_known_method method, bool with_cookie, std::string_view cookie_token, bool with_header, std::string_view header_token) {
+csrf_outcome run_csrf(ruvia::csrf_middleware& csrf, std::string_view cookie_name, std::string_view header_name, http_known_method method, bool with_cookie, std::string_view cookie_token, bool with_header, std::string_view header_token) {
     auto request = ruvia::test_request::method(ruvia::known_http_method_token(method), "/");
     if (with_cookie) {
         request.cookie(cookie_name, cookie_token);
@@ -304,7 +304,7 @@ csrf_outcome run_csrf(ruvia::csrf_protection& csrf, std::string_view cookie_name
 }
 
 csrf_outcome run_csrf(http_known_method method, bool with_cookie, std::string_view cookie_token, bool with_header, std::string_view header_token) {
-    ruvia::csrf_protection csrf;
+    ruvia::csrf_middleware csrf;
     return run_csrf(csrf, "XSRF-TOKEN", "X-XSRF-TOKEN", method, with_cookie, cookie_token, with_header, header_token);
 }
 
@@ -334,27 +334,27 @@ TEST(Ruvia, csrf_token_is_48_lowercase_hex_chars) {
 
 TEST(Ruvia, csrf_custom_names_validate_at_construction) {
     EXPECT_TRUE(throws_invalid([] {
-        (void)ruvia::csrf_protection({.cookie_name_ = "", .header_name_ = "X-XSRF-TOKEN"});
+        (void)ruvia::csrf_middleware({.cookie_name_ = "", .header_name_ = "X-XSRF-TOKEN"});
     }));
     EXPECT_TRUE(throws_invalid([] {
-        (void)ruvia::csrf_protection({.cookie_name_ = "bad;name", .header_name_ = "X-XSRF-TOKEN"});
+        (void)ruvia::csrf_middleware({.cookie_name_ = "bad;name", .header_name_ = "X-XSRF-TOKEN"});
     }));
     EXPECT_TRUE(throws_invalid([] {
-        (void)ruvia::csrf_protection({.cookie_name_ = "XSRF-TOKEN", .header_name_ = "Bad Header"});
+        (void)ruvia::csrf_middleware({.cookie_name_ = "XSRF-TOKEN", .header_name_ = "Bad Header"});
     }));
 }
 
 TEST(Ruvia, csrf_rejects_safelisted_and_ambient_token_fields) {
     for (const std::string_view name : {"Accept", "aCcEpT-LaNgUaGe", "Content-Language", "CONTENT-TYPE", "Range", "Origin", "Host", "Content-Length", "Cookie", "uSeR-aGeNt", "Sec-Fetch-Site", "sEc-Ch-Ua", "Proxy-Authorization", "Access-Control-Request-Headers", "X-Forwarded-For", "Forwarded", "X-Real-IP", "Save-Data", "DPR", "X-Requested-With"}) {
         EXPECT_TRUE(throws_invalid([name] {
-            (void)ruvia::csrf_protection({.header_name_ = std::string(name)});
+            (void)ruvia::csrf_middleware({.header_name_ = std::string(name)});
         }));
     }
 }
 
 TEST(Ruvia, csrf_custom_token_fields_preserve_issue_and_validation_round_trip) {
     for (const std::string_view name : {"X-App-Csrf", "Csrf-Token", "Security-Token"}) {
-        ruvia::csrf_protection csrf({.cookie_name_ = "APP-XSRF", .header_name_ = std::string(name)});
+        ruvia::csrf_middleware csrf({.cookie_name_ = "APP-XSRF", .header_name_ = std::string(name)});
         const auto issued = run_csrf(csrf, "APP-XSRF", name, http_known_method::get, false, {}, false, {});
         EXPECT_TRUE(issued.accepted_);
         EXPECT_TRUE(issued.reseeded_);
@@ -370,15 +370,15 @@ TEST(Ruvia, csrf_custom_token_fields_preserve_issue_and_validation_round_trip) {
 }
 
 TEST(Ruvia, csrf_middleware_owns_custom_names_after_source_destruction) {
-    std::unique_ptr<ruvia::csrf_protection> csrf;
+    std::unique_ptr<ruvia::csrf_middleware> csrf;
     const std::string cookie_name(80, 'c');
     const std::string header_name(80, 'h');
     {
-        ruvia::csrf_protection_config config{
+        ruvia::csrf_config config{
             .cookie_name_ = cookie_name,
             .header_name_ = header_name,
         };
-        csrf = std::make_unique<ruvia::csrf_protection>(config);
+        csrf = std::make_unique<ruvia::csrf_middleware>(config);
     }
 
     const auto safe = run_csrf(*csrf, cookie_name, header_name, http_known_method::get, false, {}, false, {});
@@ -441,14 +441,14 @@ TEST(Ruvia, csrf_safe_method_reseeds_absent_or_empty_cookie) {
 }
 
 TEST(Ruvia, csrf_reseed_cookie_omits_secure_on_plaintext) {
-    ruvia::csrf_protection csrf;
+    ruvia::csrf_middleware csrf;
     const auto issued = run_csrf(csrf, "XSRF-TOKEN", "X-XSRF-TOKEN", http_known_method::get, false, {}, false, {});
     EXPECT_TRUE(issued.reseeded_);
     EXPECT_TRUE(!set_cookie_has_secure(issued.set_cookie_));
 }
 
 TEST(Ruvia, csrf_rejection_reaches_the_error_handler) {
-    ruvia::csrf_protection csrf;
+    ruvia::csrf_middleware csrf;
     ruvia::test_app app;
     std::string seen_code{};
     app.on_error([seen = &seen_code](ruvia::context& c, ruvia::http_error_info error) -> ruvia::task<ruvia::http_response> {

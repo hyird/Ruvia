@@ -17,8 +17,8 @@
 #include <vector>
 
 #include "borrowed_text.h"
+#include "db_executor.h"
 #include "db_query.h"
-#include "db_session.h"
 #include "entity_storage.h"
 #include "fixed_string.h"
 #include "model_value.h"

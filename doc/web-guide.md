@@ -42,7 +42,7 @@ int main() {
 | `application& trusted_proxies(trusted_proxy_config config)` / `trusted_proxies(std::nullptr_t)` | 配置可信反向代理 CIDR 列表与 `X-Forwarded-Proto` 信任策略 |
 | `application& rate_limit(rate_limit_config config)` / `rate_limit(std::nullptr_t)` | 启用或禁用全局按客户端 IP 限流 |
 | `application& blocking_pool(blocking_pool_options config)` / `blocking_pool(std::nullptr_t)` | 配置各 worker 事件循环借用的常驻阻塞卸载线程池（默认启用）；注册的数据库与 Redis 客户端也在其上执行 DNS 查询。禁用后 `run_blocking` 返回 `blocking_status::unavailable`，文件响应在响应头前以 `503` 回答（Windows 明文 TCP 上大于 16 KiB 的单范围仍走 `TransmitFile`），配置了文档根或主机不是 IP 字面量的注册数据库或 Redis 客户端会使 `run()` 启动失败 |
-| `application& database(db_registration_config config)` / `database(std::nullptr_t)` | 注册 per-worker SQL 数据库连接池（需 `RUVIA_ENABLE_DATABASE`） |
+| `application& db(db_registration_config config)` / `db(std::nullptr_t)` | 注册 per-worker SQL 数据库连接池（需 `RUVIA_ENABLE_DATABASE`），供 `c.db(alias)` 解析 |
 | `application& redis(redis_registration_config config)` / `redis(std::nullptr_t)` | 注册 per-worker Redis 连接池（需 `RUVIA_ENABLE_REDIS`） |
 | `application& client(http_client_config config)` / `client(std::nullptr_t)` | 按 alias 与 `base_url_` 注册或清除 per-worker 出站 HTTP 客户端；链式调用见 [客户端手册](streaming-websocket.md#5-出站-http-客户端) |
 | `application& on_error(http_error_handler handler)` | 注册全局错误处理器，重复注册抛出 `std::invalid_argument`（另有 `scoped_error_handler_options` 重载支持按路径前缀注册） |
@@ -53,6 +53,8 @@ int main() {
 | `blocking_pool_stats blocking_pool_stats() const` | 线程安全地读取阻塞线程池统计 |
 | `std::vector<web_worker_ref> workers() const` | 获取全部业务 worker 的跨线程派发引用 |
 | `web_worker_ref worker_for(std::uint64_t key) const` / `worker_for(std::string_view key) const` | 按哈希键确定性选择单个业务 worker 引用 |
+
+- **注册别名位置**：`db()` / `redis()` 的 `alias_` 在外层 `*_registration_config`，因 `db_config` / `redis_config` 同时供无别名的独立 `db_client` / `redis_client` / `db_migrator` 使用；`client()` 直接取 `http_client_config`，因其 `alias_` 也是独立多 origin `http_client` 的选择键。
 
 应用公开回调统一使用 `move_only_function`，签名中的 `noexcept` 在构造期受编译器约束；所有权与退役规则见 [core 可调用包装器](core-and-http.md)。
 
@@ -634,7 +636,7 @@ int main() {
 | `connect_protocol<Modifiers...>(protocol, path, handler, config = {})` | 扩展 CONNECT 协议隧道；`"connect-udp"` 同时接受 HTTP/1.1 Upgrade，对应 `RUVIA_CONNECT_PROTOCOL` |
 | `use<T>(args...)` / `use_at<T>(options, args...)` | 注册 worker-local 中间件；前缀按完整路径段匹配 |
 | `rate_limit(rate_limit_config)` | 本 router 的按客户端地址限流规则，与 `application::rate_limit()` 同形，含 `capacity_per_worker_`；未命中路由的请求同样计数，路由级 `rate_limit<>` 叠加生效 |
-| `bind_redis(alias, client)` / `bind_database(alias, client)` | 借入调用方拥有的同 worker `redis_client` / `db_client`，按别名供 `c.redis()` / `c.db()` 查找；受构建特性控制 |
+| `bind_redis(alias, client)` / `bind_db(alias, client)` | 借入调用方拥有的同 worker `redis_client` / `db_client`，按别名供 `c.redis()` / `c.db()` 查找；受构建特性控制 |
 | `bind_http_client(alias, client)` | 以 router 自有唯一别名借入同 worker 的 `http_client`；`c.client(alias)` 选择该对象的默认配置，`c.client()` 等价于别名 `"default"` |
 | `bind_worker_state<T>(state)` | 借入调用方拥有的 per-worker 状态，供 `c.worker_state<T>()` 查找；每类型一份 |
 | `on_error(...)` / `on_not_found(...)` | 注册全局或路径作用域的错误处理器 |
@@ -644,7 +646,7 @@ int main() {
 ```cpp
 #include "context.h"
 #include "http_server.h"
-#include "redis.h"
+#include "redis_orm.h"
 #include "router.h"
 #include "session.h"
 #include "request_stream.h"
@@ -895,11 +897,14 @@ const auto& user = c.request_state<current_user>();
 | 组件 / 头文件 | 用法与说明 |
 | --- | --- |
 | `ruvia::body_limit<MaxBytes>` (`"middleware.h"`) | 仅用于控制器或单条路由（如 `RUVIA_POST("/upload", upload, ruvia::body_limit<65536>)`），收紧该路由允许的最大请求体字节数 |
-| `ruvia::rate_limit<MaxReqs, WindowMs>` / `ruvia::sliding_window_rate_limiter` (`"rate_limiting.h"`) | 控制器或路由级滑动窗口限流中间件（按 `c.conn().client().address()` 在当前 worker 内计数），以及可独立用于 `request_stream` / `server_connection` 或自定义维度的 `sliding_window_rate_limiter`、`rate_limit_decision`、`format_rate_limit_address_key`、`apply_rate_limit_headers` |
+| `ruvia::rate_limit<MaxReqs, WindowMs>` / `ruvia::sliding_window_rate_limiter` (`"rate_limiting.h"`) | 控制器或路由级滑动窗口限流策略（按 `c.conn().client().address()` 在当前 worker 内计数），以及可独立用于 `request_stream` / `server_connection` 或自定义维度的 `sliding_window_rate_limiter`、`rate_limit_decision`、`format_rate_limit_address_key`、`apply_rate_limit_headers` |
 | `ruvia::security_headers_middleware` (`"security_middleware.h"`) | 不依赖 Session 或 Redis；注入 `X-Content-Type-Options`、`X-Frame-Options`、`Content-Security-Policy`、`Referrer-Policy`、`Permissions-Policy` 等安全响应头，对 404 同样生效；`Strict-Transport-Security` 仅在 HTTPS 下发出 |
-| `ruvia::csrf_protection` (`"security_middleware.h"`) | 基于 Double-Submit Cookie（默认 Cookie `"XSRF-TOKEN"` 与请求头 `"X-XSRF-TOKEN"`）的无状态 CSRF 防护中间件；令牌 Cookie 或请求头重复出现视同缺失；校验失败抛出 `http_error`（`403` / `csrf_token_mismatch`），经 `on_error` 应答 |
-| `ruvia::session_middleware` (`"session.h"`, 需 `RUVIA_ENABLE_REDIS`) | 基于 Redis 的服务端会话中间件；会话 Cookie 重复出现视同缺失（不加载任一会话，写入时签发新 ID）；路由中通过 `c.session().payload()`、`c.session().set(...)`、`c.session().regenerate()`、`c.session().clear()` 管理会话；`redis_alias_` 经 `c.redis(alias)` 解析，应用宿主取 `application::redis()` 注册，独立宿主取 `router::bind_redis()` 借入 |
+| `ruvia::csrf_middleware` / `csrf_config` (`"security_middleware.h"`) | 基于 Double-Submit Cookie（默认 Cookie `"XSRF-TOKEN"` 与请求头 `"X-XSRF-TOKEN"`）的无状态 CSRF 防护中间件；令牌 Cookie 或请求头重复出现视同缺失；校验失败抛出 `http_error`（`403` / `csrf_token_mismatch`），经 `on_error` 应答 |
+| `ruvia::session_middleware` / `session_config` (`"session.h"`, 需 `RUVIA_ENABLE_REDIS`) | 基于 Redis 的服务端会话中间件；会话 Cookie 重复出现视同缺失（不加载任一会话，写入时签发新 ID）；路由中通过 `c.session().payload()`、`c.session().set(...)`、`c.session().regenerate()`、`c.session().clear()` 管理会话（`ruvia::session` 与 `c.session()` 同样仅在该特性下声明）；`redis_alias_` 经 `c.redis(alias)` 解析，应用宿主取 `application::redis()` 注册，独立宿主取 `router::bind_redis()` 借入 |
 | `ruvia::make_health_response(c, extra = {})` / `make_readiness_response(c, options = {}, extra = {})` (`"context.h"`) | 生成标准健康检查（`200 OK`）与就绪探针响应（`readiness_state::ready` 返回 `200`，`unavailable` 返回 `503`）；`extra` 为 `response_options`，含 `status_` 抛 `std::invalid_argument` |
+
+- **命名规则**：以构造参数配置的中间件类以 `_middleware` 结尾，配置为同名 `_config`（`security_headers_middleware`、`csrf_middleware`、`session_middleware`）；仅以模板参数配置的路由策略保留名词名（`body_limit<N>`、`rate_limit<N, Ms>`）。
+- **自定义安全头**：`security_headers_config::custom_headers_` 为 `std::vector<http_header>`，构造期校验字段名与值。
 
 两级限流使用相同的地址身份规则：IPv4-mapped IPv6 与对应 IPv4 共用配额；不带 scope 的 IPv6 按 `/64` 网络前缀计数；带 scope 的 IPv6 按完整 128 位地址及数值 scope 计数，压缩、展开和大小写形式不会产生独立配额。不同 scope 保持隔离。地址仍由可信代理配置决定，限流计数仍归当前 worker。
 

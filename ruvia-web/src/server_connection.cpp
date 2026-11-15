@@ -200,25 +200,12 @@ task<std::optional<std::span<const std::byte>>> server_connection::read(operatio
     return ::ruvia::make_scoped_operation(operations_, read_connection(target_, read_, read_active_, std::move(operation)));
 }
 
-task<void> server_connection::write(std::string_view bytes, operation_options operation) & {
+task<void> server_connection::write(outbound_bytes bytes, operation_options operation) & {
     require_active();
     if (send_ended_) {
         throw std::logic_error("server connection send direction has ended");
     }
-    return write_owned(std::string(bytes), std::move(operation));
-}
-
-task<void> server_connection::write(std::span<const std::byte> bytes, operation_options operation) & {
-    return write(as_chars(bytes), std::move(operation));
-}
-
-task<void> server_connection::write_owned(std::string&& bytes, operation_options operation) {
-    require_active();
-    if (send_ended_) {
-        throw std::logic_error("server connection send direction has ended");
-    }
-    auto owned = std::move(bytes);
-    return ::ruvia::make_scoped_operation(operations_, write_connection(target_, write_, std::move(owned), write_active_, send_ended_, std::move(operation)));
+    return ::ruvia::make_scoped_operation(operations_, write_connection(target_, write_, std::move(bytes).into_string(), write_active_, send_ended_, std::move(operation)));
 }
 
 task<void> server_connection::finish(operation_options operation) & {

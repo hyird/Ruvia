@@ -10,8 +10,8 @@
 #include <string_view>
 #include <vector>
 
+#include "db_executor.h"
 #include "db_pipeline.h"
-#include "db_session.h"
 #include "db_slot_socket.h"
 #include "db_statement_cache.h"
 

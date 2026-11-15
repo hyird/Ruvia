@@ -14,7 +14,7 @@
 #include <vector>
 
 #include "backend_client_fixture.h"
-#include "db_session.h"
+#include "db_executor.h"
 #include "event_loop.h"
 #include "stop_token.h"
 #include "task_scope.h"
@@ -111,7 +111,7 @@ constexpr std::string_view server_tracked_list =
 }
 
 // Runs `sql` twice alone: the first use as text, the second prepared.
-inline ruvia::task<void> twice(ruvia::db_session handle, std::string_view sql, std::optional<ruvia::db_rows>& text, std::optional<ruvia::db_rows>& prepared) {
+inline ruvia::task<void> twice(ruvia::db_executor handle, std::string_view sql, std::optional<ruvia::db_rows>& text, std::optional<ruvia::db_rows>& prepared) {
     text.emplace(co_await handle.query(sql));
     prepared.emplace(co_await handle.query(sql));
 }
@@ -141,7 +141,7 @@ inline ruvia::task<void> twice(ruvia::db_session handle, std::string_view sql, s
 }
 
 template <typename... param_types>
-inline ruvia::task<void> query_with(ruvia::db_session handle, std::string_view sql, pipeline_test::outcome& result, param_types... params) {
+inline ruvia::task<void> query_with(ruvia::db_executor handle, std::string_view sql, pipeline_test::outcome& result, param_types... params) {
     try {
         result.value_ = first_row(co_await handle.query(sql, params...));
     } catch (const ruvia::db_error& error) {
@@ -150,7 +150,7 @@ inline ruvia::task<void> query_with(ruvia::db_session handle, std::string_view s
 }
 
 template <typename... param_types>
-inline ruvia::task<void> execute_with(ruvia::db_session handle, std::string_view sql, pipeline_test::outcome& result, param_types... params) {
+inline ruvia::task<void> execute_with(ruvia::db_executor handle, std::string_view sql, pipeline_test::outcome& result, param_types... params) {
     try {
         const auto executed = co_await handle.execute(sql, params...);
         result.affected_rows_ = executed.affected_rows();

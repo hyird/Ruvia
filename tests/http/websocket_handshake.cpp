@@ -32,7 +32,7 @@
 namespace {
 
 using ruvia::http_request;
-using ruvia::validate_websocket_handshake;
+using ruvia::validate_http1_websocket_handshake;
 using ruvia::test::parse_http1_request_message;
 
 http_request parse_request(std::string_view raw_request) {
@@ -42,7 +42,7 @@ http_request parse_request(std::string_view raw_request) {
 
 [[nodiscard]] auto validate_request(std::string_view raw_request) {
     const auto parsed_value = parse_http1_request_message(raw_request);
-    return validate_websocket_handshake(parsed_value.state_.request(), parsed_value.state_.body_plan());
+    return validate_http1_websocket_handshake(parsed_value.state_.request(), parsed_value.state_.body_plan());
 }
 
 [[nodiscard]] bool accepts_request(std::string_view raw_request) {
@@ -188,7 +188,7 @@ TEST(Ruvia, ws_subprotocol_offers_require_http_tokens_and_skip_repeats) {
     // 请求头借用原始报文，握手完成前必须保持报文存储存活。
     const auto repeated_wire = with_protocols("Sec-WebSocket-Protocol: chat, chat\r\n");
     const auto repeated = parse_request(repeated_wire);
-    const auto selected = ruvia::make_websocket_server_handshake(repeated, {.supported_subprotocols_ = supported});
+    const auto selected = ruvia::prepare_http1_websocket_handshake(repeated, {.supported_subprotocols_ = supported});
     EXPECT_TRUE(selected.subprotocol() == "chat");
 
     std::string too_many = "Sec-WebSocket-Protocol: ";
@@ -212,7 +212,7 @@ TEST(Ruvia, ws_required_subprotocol_rejects_offers_without_a_supported_entry) {
     constexpr std::array<std::string_view, 2> supported{"chat.v2", "chat.v1"};
     const auto validate = [&](std::string_view raw_request, bool required) {
         const auto parsed_value = parse_http1_request_message(raw_request);
-        return validate_websocket_handshake(parsed_value.state_.request(), parsed_value.state_.body_plan(), {.supported_subprotocols_ = std::span<const std::string_view>(supported), .require_subprotocol_ = required});
+        return validate_http1_websocket_handshake(parsed_value.state_.request(), parsed_value.state_.body_plan(), {.supported_subprotocols_ = std::span<const std::string_view>(supported), .require_subprotocol_ = required});
     };
     const auto accepts = [&](std::string_view raw_request, bool required) {
         const auto result_value = validate(raw_request, required);
@@ -363,7 +363,7 @@ TEST(Ruvia, ws_server_handshake_response_serialization_is_http_owned) {
         "\r\n");
     std::string supported = "chat";
     const std::array<std::string_view, 1> supported_views{supported};
-    const auto handshake = ruvia::make_websocket_server_handshake(request, {.supported_subprotocols_ = supported_views});
+    const auto handshake = ruvia::prepare_http1_websocket_handshake(request, {.supported_subprotocols_ = supported_views});
     supported.front() = 'X';
 
     std::vector<std::string_view> response_parts;
@@ -398,7 +398,7 @@ TEST(Ruvia, ws_server_handshake_negotiates_directional_context_takeover_independ
         "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n"
         "Sec-WebSocket-Extensions: permessage-deflate; client_no_context_takeover\r\n"
         "\r\n");
-    const auto handshake = ruvia::make_websocket_server_handshake(request, {.deflate_ = {.enabled_ = true, .context_takeover_ = true}});
+    const auto handshake = ruvia::prepare_http1_websocket_handshake(request, {.deflate_ = {.enabled_ = true, .context_takeover_ = true}});
     EXPECT_TRUE(handshake.compression().enabled_);
     EXPECT_TRUE(!handshake.compression().server_no_context_takeover_);
     EXPECT_TRUE(handshake.compression().client_no_context_takeover_);
@@ -408,7 +408,7 @@ TEST(Ruvia, ws_handshake_copies_application_headers_and_preserves_multiple_cooki
     const auto request = parse_request(valid_handshake());
     std::string cookie = "sid=0123456789abcdef; HttpOnly";
     const std::array fields_value{ruvia::http_header_view("Set-Cookie", cookie), ruvia::http_header_view("Set-Cookie", "theme=dark"), ruvia::http_header_view("X-Request-Id", "request-1"), ruvia::http_header_view("Alt-Svc", "h3=\":443\"; ma=86400")};
-    const auto handshake = ruvia::make_websocket_server_handshake(request, {.response_headers_ = fields_value});
+    const auto handshake = ruvia::prepare_http1_websocket_handshake(request, {.response_headers_ = fields_value});
     cookie.assign(cookie.size(), 'x');
     std::string response;
     handshake.for_each_response_part([&](std::string_view part) {
@@ -427,7 +427,7 @@ TEST(Ruvia, ws_handshake_rejects_application_framing_and_invalid_fields) {
         const std::array fields_value{ruvia::http_header_view(name, "value")};
         bool rejected = false;
         try {
-            (void)ruvia::make_websocket_server_handshake(request, {.response_headers_ = fields_value});
+            (void)ruvia::prepare_http1_websocket_handshake(request, {.response_headers_ = fields_value});
         } catch (const std::invalid_argument&) {
             rejected = true;
         }
@@ -436,7 +436,7 @@ TEST(Ruvia, ws_handshake_rejects_application_framing_and_invalid_fields) {
     const std::array fields_value{ruvia::http_header_view("Set-Cookie", "sid=a\r\nInjected: value")};
     bool rejected = false;
     try {
-        (void)ruvia::make_websocket_server_handshake(request, {.response_headers_ = fields_value});
+        (void)ruvia::prepare_http1_websocket_handshake(request, {.response_headers_ = fields_value});
     } catch (const std::invalid_argument&) {
         rejected = true;
     }
@@ -446,12 +446,12 @@ TEST(Ruvia, ws_handshake_rejects_application_framing_and_invalid_fields) {
 TEST(Ruvia, ws_handshake_bounds_application_header_size) {
     const auto request = parse_request(valid_handshake());
     const std::vector<ruvia::http_header_view> many(80, {"x", "v"});
-    (void)ruvia::make_websocket_server_handshake(request, {.response_headers_ = many});
+    (void)ruvia::prepare_http1_websocket_handshake(request, {.response_headers_ = many});
     const std::string oversized(ruvia::max_http_header_bytes, 'a');
     const std::array fields_value{ruvia::http_header_view("x", oversized)};
     bool size_rejected = false;
     try {
-        (void)ruvia::make_websocket_server_handshake(request, {.response_headers_ = fields_value});
+        (void)ruvia::prepare_http1_websocket_handshake(request, {.response_headers_ = fields_value});
     } catch (const std::length_error&) {
         size_rejected = true;
     }
@@ -460,23 +460,23 @@ TEST(Ruvia, ws_handshake_bounds_application_header_size) {
 
 TEST(Ruvia, ws_handshake_budget_covers_status_line_and_final_empty_line) {
     const auto request = parse_request(valid_handshake());
-    const auto serialize = [](const ruvia::websocket_server_handshake& handshake) {
+    const auto serialize = [](const ruvia::http1_websocket_handshake_plan& handshake) {
         std::string response;
         handshake.for_each_response_part([&](std::string_view part) {
             response.append(part);
         });
         return response;
     };
-    const auto base_size = serialize(ruvia::make_websocket_server_handshake(request, {})).size();
+    const auto base_size = serialize(ruvia::prepare_http1_websocket_handshake(request, {})).size();
     // "x: " + value + CRLF fills the head to exactly max_http_header_bytes.
     const std::string largest(ruvia::max_http_header_bytes - base_size - 5, 'a');
     const std::array fitting{ruvia::http_header_view("x", largest)};
-    EXPECT_EQ(serialize(ruvia::make_websocket_server_handshake(request, {.response_headers_ = fitting})).size(), ruvia::max_http_header_bytes);
+    EXPECT_EQ(serialize(ruvia::prepare_http1_websocket_handshake(request, {.response_headers_ = fitting})).size(), ruvia::max_http_header_bytes);
     const std::string oversized = largest + 'a';
     const std::array too_large{ruvia::http_header_view("x", oversized)};
     bool rejected = false;
     try {
-        (void)ruvia::make_websocket_server_handshake(request, {.response_headers_ = too_large});
+        (void)ruvia::prepare_http1_websocket_handshake(request, {.response_headers_ = too_large});
     } catch (const std::length_error&) {
         rejected = true;
     }
@@ -489,14 +489,14 @@ TEST(Ruvia, ws_handshake_application_values_are_valid_for_both_http_versions) {
         const std::array headers{ruvia::http_header_view("X-Test", value)};
         bool rejected = false;
         try {
-            (void)ruvia::make_websocket_server_handshake(request, {.response_headers_ = headers});
+            (void)ruvia::prepare_http1_websocket_handshake(request, {.response_headers_ = headers});
         } catch (const std::invalid_argument&) {
             rejected = true;
         }
         EXPECT_TRUE(rejected);
     }
     const std::array headers{ruvia::http_header_view("X-Test", "")};
-    const auto handshake = ruvia::make_websocket_server_handshake(request, {.response_headers_ = headers});
+    const auto handshake = ruvia::prepare_http1_websocket_handshake(request, {.response_headers_ = headers});
     std::string response;
     handshake.for_each_response_part([&](std::string_view part) {
         response.append(part);
@@ -545,7 +545,7 @@ class client_handshake final {
 public:
     explicit client_handshake(std::span<const ruvia::http_header_view> headers = {}, std::span<const std::string_view> protocols = {}) :
         negotiation_({.subprotocols_ = protocols}) {
-        ruvia::validate_http1_websocket_client_handshake_configuration(headers);
+        ruvia::validate_websocket_client_handshake_headers(headers);
         ruvia::http_base64_encode(key_.data(), nonce);
         for (const auto header : headers) {
             headers_.emplace_back(header.name(), header.value());
@@ -553,7 +553,11 @@ public:
     }
 
     [[nodiscard]] std::variant<ruvia::prepared_http1_client_request, ruvia::http1_client_request_buffer_too_small, ruvia::http1_client_request_prepare_error> prepare(const ruvia::http_origin_view& origin, std::string_view target, std::span<char> buffer) const {
-        return ruvia::prepare_http1_websocket_client_request(origin, target, key_, negotiation_, headers_, buffer);
+        std::vector<ruvia::http_header_view> views;
+        for (const auto& header : headers_) {
+            views.emplace_back(header.name(), header.value());
+        }
+        return ruvia::prepare_http1_websocket_client_request(origin, target, key_, negotiation_, views, buffer);
     }
 
     // The response parser takes a freshly prepared request's exchange state.
@@ -829,7 +833,7 @@ TEST(Ruvia, websocket_h1_client_handshake_negotiates_deflate) {
     ruvia::http_base64_encode(encoded_key.data(), nonce);
     const ruvia::websocket_client_negotiation negotiation({.deflate_ = {.compression_ = {.enabled_ = true}}});
     std::array<char, 2048> buffer{};
-    auto prepared = ruvia::prepare_http1_websocket_client_request(ruvia::http_origin_view::https({.host_ = "example.com"}), "/", encoded_key, negotiation, std::span<const ruvia::http_header>{}, buffer);
+    auto prepared = ruvia::prepare_http1_websocket_client_request(ruvia::http_origin_view::https({.host_ = "example.com"}), "/", encoded_key, negotiation, {}, buffer);
     auto* prepared_req = std::get_if<ruvia::prepared_http1_client_request>(&prepared);
     EXPECT_TRUE(prepared_req != nullptr);
     EXPECT_TRUE((prepared_req->head().find("sec-websocket-extensions: permessage-deflate") != std::string_view::npos));
@@ -1080,7 +1084,6 @@ TEST(Ruvia, ws_public_server_events_use_public_payload_types) {
     EXPECT_TRUE(sender.consume_output(message_wire.size()) == websocket_output_consume_status::drained);
     input.append(message_wire);
     auto message = protocol.next_event();
-    EXPECT_TRUE(message && message->kind() == websocket_event_kind::message);
     EXPECT_TRUE(message && message->message());
     if (message && message->message()) {
         EXPECT_TRUE(message->message()->opcode() == websocket_opcode::text);
@@ -1092,7 +1095,6 @@ TEST(Ruvia, ws_public_server_events_use_public_payload_types) {
     EXPECT_TRUE(sender.consume_output(ping_wire.size()) == websocket_output_consume_status::drained);
     input.append(ping_wire);
     auto ping = protocol.next_event();
-    EXPECT_TRUE(ping && ping->kind() == websocket_event_kind::ping);
     EXPECT_TRUE(ping && ping->ping());
     if (ping && ping->ping()) {
         EXPECT_EQ(ping->ping()->payload(), "p");
@@ -1105,7 +1107,6 @@ TEST(Ruvia, ws_public_server_protocol_reports_protocol_error_as_public_value) {
     // A server-side connection must reject an unmasked client frame.
     input.append(std::string_view("\x81\x01x", 3));
     auto error = protocol.next_event();
-    EXPECT_TRUE(error && error->kind() == websocket_event_kind::protocol_error);
     EXPECT_TRUE(error && error->protocol_error() && error->protocol_error()->close_code() == 1002);
 }
 
@@ -1177,10 +1178,9 @@ TEST(Ruvia, ws_public_server_keeps_pending_pong_before_peer_close) {
                          "\x88\x80\x05\x06\x07\x08",
             13));
     const auto ping = protocol.next_event();
-    EXPECT_TRUE(ping && ping->kind() == websocket_event_kind::ping);
     EXPECT_TRUE(ping && ping->ping() && ping->ping()->payload() == "p");
     const auto close = protocol.next_event();
-    EXPECT_TRUE(close && close->kind() == websocket_event_kind::close);
+    EXPECT_TRUE(close && close->close() != nullptr);
 
     const auto plan = protocol.output_plan();
     EXPECT_EQ(plan.bytes(), std::string_view("\x8a\x01p", 3));

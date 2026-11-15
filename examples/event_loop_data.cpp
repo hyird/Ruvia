@@ -16,11 +16,11 @@
 
 #include "backend_config.h"
 #include "blocking_pool.h"
-#include "db.h"
-#include "db_session.h"
+#include "db_executor.h"
+#include "db_repository.h"
 #include "event_loop.h"
 #include "middleware.h"
-#include "redis.h"
+#include "redis_orm.h"
 
 namespace {
 using namespace ruvia;
@@ -64,7 +64,8 @@ struct loop_backends final {
     task<void> read() {
         // Both operations explicitly use ORM; no raw SQL/Redis escape hatch.
         auto devices = db_.db().repository<device>();
-        auto cached = redis_.redis().repository<cached_device>({.prefix_ = "ruvia:example:devices"});
+        // A primary-key lookup reads the hash directly; no RediSearch index.
+        auto cached = redis_.redis().repository<cached_device>();
         auto device = co_await devices.find_one({.where_ = device::column<"id">() == 1});
         auto cache = co_await cached.find_one({.where_ = cached_device::column<"id">() == "1"});
         // Results stay in this coroutine on the owner loop and die before

@@ -53,6 +53,7 @@
 #include "http_content_coding.h"
 #include "http_header.h"
 #include "http_request.h"
+#include "http_response.h"
 #include "http_response_stream.h"
 #include "http_server_fixture.h"
 #include "model.h"
@@ -325,7 +326,7 @@ private:
                     break;
                 }
                 input.erase(0, decoded.consumed_bytes());
-                if (decoded.need_more()) {
+                if (decoded.need_input()) {
                     co_await asio::async_read(socket, asio::dynamic_buffer(input), asio::transfer_at_least(1), asio::use_awaitable);
                 }
             }

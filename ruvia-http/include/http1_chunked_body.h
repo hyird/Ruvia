@@ -10,11 +10,10 @@
 #include <vector>
 
 #include "binary_text_encoding.h"
+#include "borrowed_text.h"
 #include "http_header.h"
 #include "http_protocol.h"
-#include "http_request.h"
 #include "http_request_body_failure.h"
-#include "http_response.h"
 #include "http_status.h"
 
 namespace ruvia {
@@ -54,7 +53,7 @@ enum class http1_chunk_decode_error : std::uint8_t {
     body_limit_exceeded,
     framing_limit_exceeded,
 };
-class http1_chunk_decode_need_more final {
+class http1_chunk_decode_need_input final {
 public:
     [[nodiscard]] constexpr std::size_t consumed_bytes() const noexcept {
         return consumed_bytes_;
@@ -62,7 +61,7 @@ public:
 
 private:
     friend class http1_chunk_decode_result;
-    explicit constexpr http1_chunk_decode_need_more(std::size_t consumed_bytes) noexcept :
+    explicit constexpr http1_chunk_decode_need_input(std::size_t consumed_bytes) noexcept :
         consumed_bytes_(consumed_bytes) {}
     std::size_t consumed_bytes_;
 };
@@ -137,10 +136,10 @@ public:
             return result_value.consumed_bytes();
         }, value_);
     }
-    [[nodiscard]] const http1_chunk_decode_need_more* need_more() const& noexcept {
-        return std::get_if<http1_chunk_decode_need_more>(&value_);
+    [[nodiscard]] const http1_chunk_decode_need_input* need_input() const& noexcept {
+        return std::get_if<http1_chunk_decode_need_input>(&value_);
     }
-    const http1_chunk_decode_need_more* need_more() const&& = delete;
+    const http1_chunk_decode_need_input* need_input() const&& = delete;
     [[nodiscard]] const http1_chunk_decode_body_chunk_view* body_chunk() const& noexcept {
         return std::get_if<http1_chunk_decode_body_chunk_view>(&value_);
     }
@@ -156,11 +155,11 @@ public:
 
 private:
     friend class http1_chunked_body_decoder;
-    using value_type = std::variant<http1_chunk_decode_need_more, http1_chunk_decode_body_chunk_view, http1_chunk_decode_complete_view, http1_chunk_decode_failure>;
+    using value_type = std::variant<http1_chunk_decode_need_input, http1_chunk_decode_body_chunk_view, http1_chunk_decode_complete_view, http1_chunk_decode_failure>;
     template <typename result_type>
     explicit http1_chunk_decode_result(result_type result_value) noexcept :
         value_(std::move(result_value)) {}
-    [[nodiscard]] static http1_chunk_decode_result make_need_more(std::size_t consumed_bytes) noexcept;
+    [[nodiscard]] static http1_chunk_decode_result make_need_input(std::size_t consumed_bytes) noexcept;
     [[nodiscard]] static http1_chunk_decode_result make_body_chunk(std::size_t consumed_bytes, std::string_view bytes) noexcept;
     [[nodiscard]] static http1_chunk_decode_result make_complete(std::size_t consumed_bytes, std::span<const http_header> trailers = {}) noexcept;
     [[nodiscard]] static http1_chunk_decode_result make_failure(std::size_t consumed_bytes, http1_chunk_decode_error error) noexcept;

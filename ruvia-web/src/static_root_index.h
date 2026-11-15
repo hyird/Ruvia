@@ -18,6 +18,7 @@
 
 #include "binary_text_encoding.h"
 #include "borrowed_text.h"
+#include "fnv1a.h"
 #include "http_content_coding.h"
 #include "http_content_negotiation.h"
 #include "http_error.h"
@@ -25,7 +26,6 @@
 #include "http_response_body.h"
 #include "response_file.h"
 #include "static_root.h"
-#include "worker_ref.h"
 
 namespace ruvia::detail {
 

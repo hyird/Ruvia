@@ -338,7 +338,7 @@ application& application::callbacks(http_server_callbacks callbacks) & {
 }
 
 #ifdef RUVIA_ENABLE_DATABASE
-application& application::database(db_registration_config config) & {
+application& application::db(db_registration_config config) & {
     return detail::mutate_stopped_app(*this, *state_, "cannot configure database while app is running", [&](detail::app_state& state_value) {
         detail::validate_capability_alias(config.alias_.view(), "database alias must not be empty");
         detail::db_definition replacement{std::string(config.alias_.view()), detail::db_config_storage(config.config_)};
@@ -353,7 +353,7 @@ application& application::database(db_registration_config config) & {
     });
 }
 
-application& application::database(std::nullptr_t) & {
+application& application::db(std::nullptr_t) & {
     return detail::mutate_stopped_app(*this, *state_, "cannot configure database while app is running", [](detail::app_state& state_value) {
         state_value.databases_.clear();
     });

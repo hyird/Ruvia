@@ -501,18 +501,14 @@ public:
             }
             return;
         }
-        auto expectation = http_client_request_expectation::none;
-        if (const auto* upload = request.upload()) {
-            expectation = upload->config_.expectation_;
-        }
         const http_regular_request_head_view head{
             .method_ = request.method(),
             .scheme_ = "https",
             .authority_ = std::optional<borrowed_text>(request.route().authority_),
             .target_ = request.target(),
             .headers_ = headers,
-            .content_ = request.upload() != nullptr ? http_request_content_plan::streaming(request.upload()->config_.content_length_) : (request.has_body() ? http_request_content_plan::known_length(request.body().size()) : http_request_content_plan::none()),
-            .expectation_ = expectation,
+            .content_ = request.content(),
+            .expectation_ = request.expectation(),
             .field_source_ = request.options_.field_source_
         };
         require_accepted(connection.submit_request_head(item.id_, head));

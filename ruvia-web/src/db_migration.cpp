@@ -19,8 +19,8 @@
 #include "client_host_resolver.h"
 #include "crypto.h"
 #include "db_config_storage.h"
+#include "db_executor.h"
 #include "db_registry.h"
-#include "db_session.h"
 #include "db_sql_dialect.h"
 #include "db_sql_scan.h"
 #include "event_loop.h"
@@ -417,7 +417,7 @@ private:
     // Serializes concurrent deployers. Both locks are held by the session, so
     // losing the connection releases them -- including the migration's own
     // failure path, which closes it.
-    [[nodiscard]] static task<void> acquire_lock(db_session& handle, db_driver driver, std::string_view lock_name, timeout_duration lock_timeout) {
+    [[nodiscard]] static task<void> acquire_lock(db_executor& handle, db_driver driver, std::string_view lock_name, timeout_duration lock_timeout) {
         if (driver == db_driver::mariadb) {
             // Milliseconds are already bounded by int64; rounding after
             // division by 1000 keeps the SQL integer safely in range.
@@ -450,7 +450,7 @@ private:
         (void)co_await handle.execute("RESET lock_timeout");
     }
 
-    [[nodiscard]] static task<void> release_lock(db_session& handle, db_driver driver, std::string_view lock_name) {
+    [[nodiscard]] static task<void> release_lock(db_executor& handle, db_driver driver, std::string_view lock_name) {
         std::array<db_value, 1> release_params{db_value{lock_name}};
         if (driver == db_driver::mariadb) {
             (void)co_await handle.execute("DO RELEASE_LOCK(?)", std::span<const db_value>(release_params));
@@ -459,7 +459,7 @@ private:
         }
     }
 
-    [[nodiscard]] static task<void> apply_migrations(db_session& handle, db_driver driver, std::span<const db_migration> migrations, const db_migrator_options_storage& options, db_migration_report& report) {
+    [[nodiscard]] static task<void> apply_migrations(db_executor& handle, db_driver driver, std::span<const db_migration> migrations, const db_migrator_options_storage& options, db_migration_report& report) {
         auto create_table = [&] {
             const auto sql = build_create_migrations_table_sql(options.table_, driver);
             return handle.execute(sql);

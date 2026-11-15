@@ -1015,11 +1015,6 @@ task<bool> http_client_connection::execute_http2(const http_client_request_stora
     }
     const auto& config = pool_.config();
     const std::string_view scheme = config.scheme_ == http_scheme::https ? "https" : "http";
-    const auto content = request.upload() != nullptr
-        ? ::ruvia::http_request_content_plan::streaming(request.upload()->config_.content_length_)
-        : request.has_body()
-        ? ::ruvia::http_request_content_plan::known_length(request.body().size())
-        : ::ruvia::http_request_content_plan::none();
 
     for (int attempt_value = 0; attempt_value < 2; ++attempt_value) {
         // Each attempt acquires its stream like a connection slot: the slot's
@@ -1065,7 +1060,6 @@ task<bool> http_client_connection::execute_http2(const http_client_request_stora
         cancellation.arm(stop_token_value);
 
         auto& connection = http2_.connection();
-        const auto expectation = request.upload() != nullptr ? request.upload()->config_.expectation_ : http_client_request_expectation::none;
         // Prepared once per attempt: a wait for stream capacity resubmits the
         // same head instead of rescanning the jar on every session wake.
         client_prepared_request_scratch scratch;
@@ -1085,7 +1079,7 @@ task<bool> http_client_connection::execute_http2(const http_client_request_stora
             const auto submitted = request.websocket() != nullptr
                 ? submit_http2_websocket_client_request(connection, request.websocket()->negotiation_, scheme, request.tunnel_authority(), source_value.target_.view(), headers, request.options_.field_source_)
                 : !request.is_tunnel()
-                ? connection.submit_request_head(::ruvia::http_regular_request_head_view{.method_ = source_value.method_, .scheme_ = scheme, .authority_ = borrowed_text(request.route().authority_), .target_ = source_value.target_, .headers_ = headers, .content_ = content, .expectation_ = expectation, .field_source_ = request.options_.field_source_})
+                ? connection.submit_request_head(::ruvia::http_regular_request_head_view{.method_ = source_value.method_, .scheme_ = scheme, .authority_ = borrowed_text(request.route().authority_), .target_ = source_value.target_, .headers_ = headers, .content_ = source_value.content_, .expectation_ = request.expectation(), .field_source_ = request.options_.field_source_})
                 : request.tunnel_protocol().empty()
                 ? connection.submit_request_head(http_connect_request_head_view{.authority_ = borrowed_text(request.tunnel_authority()), .headers_ = headers, .field_source_ = request.options_.field_source_})
                 : connection.submit_request_head(http_extended_connect_request_head_view{.protocol_ = borrowed_text(request.tunnel_protocol()), .scheme_ = scheme, .authority_ = borrowed_text(request.tunnel_authority()), .target_ = source_value.target_, .headers_ = headers, .field_source_ = request.options_.field_source_});

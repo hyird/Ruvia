@@ -16,6 +16,7 @@
 #include "move_only_function.h"
 #include "operation_options.h"
 #include "operation_scope.h"
+#include "outbound_bytes.h"
 #include "stop_token.h"
 #include "task.h"
 #include "worker_ref.h"
@@ -112,21 +113,14 @@ public:
     // continue. A non-positive timeout throws std::invalid_argument.
     [[nodiscard]] task<std::optional<std::span<const std::byte>>> read(operation_options operation = {}) &;
     task<std::optional<std::span<const std::byte>>> read(operation_options = {}) && = delete;
-    // Copies `bytes` before returning, then sends them once awaited. A timeout
+    // Owns `bytes` before returning (exact std::string rvalues move without
+    // copying), then sends them once awaited. A timeout
     // or stop in `operation` of write() or finish() aborts the connection (a
     // partial write cannot be withdrawn) and throws std::system_error
     // (timed_out or operation_canceled); a stop requested before the operation
     // starts sends nothing. The server's write_timeout_ still applies.
-    [[nodiscard]] task<void> write(std::string_view bytes, operation_options operation = {}) &;
-    task<void> write(std::string_view, operation_options = {}) && = delete;
-    [[nodiscard]] task<void> write(std::span<const std::byte> bytes, operation_options operation = {}) &;
-    task<void> write(std::span<const std::byte>, operation_options = {}) && = delete;
-    template <std::same_as<std::string> string_type>
-    [[nodiscard]] task<void> write(string_type&& bytes, operation_options operation = {}) & {
-        return write_owned(std::move(bytes), std::move(operation));
-    }
-    template <std::same_as<std::string> string_type>
-    task<void> write(string_type&&, operation_options = {}) && = delete;
+    [[nodiscard]] task<void> write(outbound_bytes bytes, operation_options operation = {}) &;
+    task<void> write(outbound_bytes, operation_options = {}) && = delete;
     // Ends the send direction: TCP shuts down its send side, TLS sends
     // close_notify. Reading remains available until the peer ends its own.
     // Writing afterwards throws std::logic_error; finishing again does nothing.
@@ -146,7 +140,6 @@ private:
 
     server_connection(const detail::server_connection_fields& fields, const ::ruvia::stop_token& stop_token_value, const worker_ref& worker_value, void* target, read_type read, write_type write, finish_type finish_value, abort_type abort_value) noexcept;
     void require_active() const;
-    [[nodiscard]] task<void> write_owned(std::string&& bytes, operation_options operation);
 
     const worker_ref& worker_;
     void* target_;

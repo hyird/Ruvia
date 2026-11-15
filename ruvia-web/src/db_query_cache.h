@@ -11,16 +11,16 @@
 #include <vector>
 
 #include "db_config_storage.h"
+#include "db_executor.h"
 #include "db_query.h"
 #include "db_query_plan.h"
-#include "db_session.h"
 #include "operation_options.h"
 #include "stop_token.h"
 #include "task.h"
 #include "worker_ref.h"
 
 #ifdef RUVIA_ENABLE_REDIS
-#include "redis_session.h"
+#include "redis_executor.h"
 #endif
 
 namespace ruvia::detail {
@@ -79,7 +79,7 @@ private:
 class db_query_cache_state final {
 public:
     // `prefix` is the alias's db_cache_prefix().
-    db_query_cache_state(const redis_session& redis, const db_cache_config_storage& config, std::string prefix);
+    db_query_cache_state(const redis_executor& redis, const db_cache_config_storage& config, std::string prefix);
     ~db_query_cache_state();
     void close_now() noexcept;
     [[nodiscard]] std::optional<std::string> key(const db_query& query, const db_statement& statement, db_driver driver);
@@ -129,7 +129,7 @@ private:
     // such an entry is never written.
     std::optional<std::size_t> max_entry_reply_bytes_;
     std::string prefix_;
-    redis_session redis_;
+    redis_executor redis_;
     std::vector<fill_pointer> fills_;
 };
 #endif

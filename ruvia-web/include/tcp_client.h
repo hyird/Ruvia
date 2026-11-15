@@ -15,6 +15,7 @@
 #include "http_client_types.h"
 #include "ip_address.h"
 #include "operation_options.h"
+#include "outbound_bytes.h"
 #include "task.h"
 #include "timeout_duration.h"
 #include "worker_ref.h"
@@ -72,19 +73,11 @@ public:
     // retain this owner while using the view. EOF does not end the write lane.
     [[nodiscard]] task<std::optional<std::span<const std::byte>>> read(operation_options options = {}) &;
     task<std::optional<std::span<const std::byte>>> read(operation_options = {}) && = delete;
-    // Owns the bytes before returning the cold task; completes after all bytes
-    // are written. Failure may have sent a prefix and always retires the stream.
-    [[nodiscard]] task<void> write(std::span<const std::byte> bytes, operation_options options = {}) &;
-    task<void> write(std::span<const std::byte>, operation_options = {}) && = delete;
-    [[nodiscard]] task<void> write(std::string_view bytes, operation_options options = {}) &;
-    task<void> write(std::string_view, operation_options = {}) && = delete;
-    // Exact std::string rvalues transfer storage directly without copying.
-    template <std::same_as<std::string> string_type>
-    [[nodiscard]] task<void> write(string_type&& bytes, operation_options options = {}) & {
-        return write_owned(std::move(bytes), std::move(options));
-    }
-    template <std::same_as<std::string> string_type>
-    task<void> write(string_type&&, operation_options = {}) && = delete;
+    // Owns the bytes before returning the cold task (exact std::string rvalues
+    // move without copying); completes after all bytes are written. Failure may
+    // have sent a prefix and always retires the stream.
+    [[nodiscard]] task<void> write(outbound_bytes bytes, operation_options options = {}) &;
+    task<void> write(outbound_bytes, operation_options = {}) && = delete;
 
     // Immediate whole-connection cancellation, not a send half-close. TLS uses
     // the shared transport's bounded best-effort close_notify before closing.
@@ -97,7 +90,6 @@ public:
     const worker_ref& worker() const&& = delete;
 
 private:
-    [[nodiscard]] task<void> write_owned(std::string&& bytes, operation_options options);
     std::shared_ptr<detail::tcp_client_state> state_;
 };
 

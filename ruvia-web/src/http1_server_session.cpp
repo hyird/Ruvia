@@ -783,7 +783,7 @@ public:
                 }
                 co_return co_await read_known_length_all(body, body_reservation, content_length);
             }
-            if (body_plan_.without_body() != nullptr) {
+            if (body_plan_.without_content() != nullptr) {
                 co_return std::string_view(body);
             }
 
@@ -1117,7 +1117,7 @@ private:
             if (const auto* failure = result_value.failure()) {
                 throw http_request_chunk_decode_error(failure->error());
             }
-            if (result_value.need_more() == nullptr) {
+            if (result_value.need_input() == nullptr) {
                 throw std::logic_error("unexpected HTTP/1 chunk decode result");
             }
             materialize_initial_remainder(http_body_buffer_bytes);
@@ -2406,11 +2406,11 @@ struct http1_tunnel_upgrade_commit final {
     }
 
     [[nodiscard]] task<websocket_upgrade_attempt<transport_type>> accept_websocket(context& context_value, const websocket_route_endpoint& endpoint, std::span<const http_header_view> headers) const {
-        const auto validation = validate_websocket_handshake(dispatch_.parsed_.request(), dispatch_.parsed_.body_plan(), endpoint.handshake_validation());
+        const auto validation = validate_http1_websocket_handshake(dispatch_.parsed_.request(), dispatch_.parsed_.body_plan(), endpoint.handshake_validation());
         if (const auto* failure = validation.failure()) {
             co_return reject_request_stream_websocket(context_value, *failure);
         }
-        const auto handshake = make_websocket_server_handshake(dispatch_.parsed_.request(), {.supported_subprotocols_ = endpoint.subprotocols(), .response_headers_ = headers, .deflate_ = endpoint.deflate()});
+        const auto handshake = prepare_http1_websocket_handshake(dispatch_.parsed_.request(), {.supported_subprotocols_ = endpoint.subprotocols(), .response_headers_ = headers, .deflate_ = endpoint.deflate()});
         context_access::commit_upgrade(context_value);
         if (const auto error = co_await write_websocket_handshake(dispatch_.stream_, handshake, dispatch_.parsed_.body_plan().expectations(), dispatch_.scanner_entry_)) {
             throw inbound_transport_error(error, "WebSocket handshake write");
@@ -2504,7 +2504,7 @@ struct http1_websocket_upgrade_commit final {
     const websocket_route_endpoint& websocket_endpoint_;
 
     [[nodiscard]] task<websocket_upgrade_commit<stream_type>> operator()(context& context_value, std::span<const http_header_view> response_headers_value) const {
-        const auto handshake = make_websocket_server_handshake(dispatch_.parsed_.request(), {.supported_subprotocols_ = websocket_endpoint_.subprotocols(), .response_headers_ = response_headers_value, .deflate_ = websocket_endpoint_.deflate()});
+        const auto handshake = prepare_http1_websocket_handshake(dispatch_.parsed_.request(), {.supported_subprotocols_ = websocket_endpoint_.subprotocols(), .response_headers_ = response_headers_value, .deflate_ = websocket_endpoint_.deflate()});
         context_access::commit_upgrade(context_value);
         if (const auto ec = co_await write_websocket_handshake(dispatch_.stream_, handshake, dispatch_.parsed_.body_plan().expectations(), dispatch_.scanner_entry_); ec) {
             throw inbound_transport_error(ec, "WebSocket handshake write");
@@ -2517,7 +2517,7 @@ struct http1_websocket_upgrade_commit final {
 template <typename stream_type>
 task<std::optional<http1_session_request_completion>> dispatch_http_websocket_route(http1_route_dispatch<stream_type> d, http_response_tail& tail, const resolved_route& resolved, std::string_view pending_frames) {
     const auto& websocket_endpoint = *resolved.route().endpoint().websocket();
-    const auto handshake_validation = validate_websocket_handshake(d.parsed_.request(), d.parsed_.body_plan(), websocket_endpoint.handshake_validation());
+    const auto handshake_validation = validate_http1_websocket_handshake(d.parsed_.request(), d.parsed_.body_plan(), websocket_endpoint.handshake_validation());
     if (const auto* failure = handshake_validation.failure()) {
         // A generated rejection does not inherit the negotiated coding promise.
         tail.disable_response_coding();
@@ -2859,7 +2859,7 @@ task<std::variant<http1_serve_handoff, http_connection_close>> worker_connection
                     base_route_services.set_connection_close_reason(connection_close_reason::protocol_error);
                     co_return http_connection_close::abort;
                 }
-                if (preface_probe == http2_cleartext_preface_probe::need_more_preface) {
+                if (preface_probe == http2_cleartext_preface_probe::need_input) {
                     if (!co_await read_more_cleartext_http2_preface(stream, scanner_entry, read_buffer)) {
                         co_return http_connection_close::abort;
                     }

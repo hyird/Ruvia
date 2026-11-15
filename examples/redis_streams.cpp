@@ -17,7 +17,7 @@
 #include "backend_config.h"
 #include "controller.h"
 #include "middleware.h"
-#include "redis.h"
+#include "redis_orm.h"
 
 namespace {
 

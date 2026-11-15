@@ -30,8 +30,8 @@
 
 #include "borrowed_text.h"
 #include "connection_lifecycle.h"
+#include "db_executor.h"
 #include "db_pool.h"
-#include "db_session.h"
 #include "decimal_text.h"
 #include "event_loop.h"
 #include "http_header.h"

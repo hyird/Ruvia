@@ -11,7 +11,7 @@
 #include <vector>
 
 #include "backend_client_fixture.h"
-#include "db_session.h"
+#include "db_executor.h"
 #include "event_loop.h"
 #include "stop_token.h"
 #include "task_scope.h"

@@ -855,7 +855,7 @@ public:
     task<void> close(operation_options = {}) && = delete;
 
 private:
-    friend class db_session;
+    friend class db_executor;
     template <typename driver_type>
     friend class detail::db_pool;
 
@@ -999,7 +999,7 @@ class db_query_builder;
 template <typename entity_type, typename executor_type>
 class db_write_query_builder;
 #ifdef RUVIA_ENABLE_REDIS
-class redis_session;
+class redis_executor;
 #endif
 
 namespace detail {
@@ -1173,7 +1173,7 @@ public:
     task<db_exec_result> execute(std::string_view, std::initializer_list<db_value>) && = delete;
 
     // Bound parameters as ordinary arguments, with the same synchronous cloning
-    // and the same temporary-safety as db_session::query()/execute().
+    // and the same temporary-safety as db_executor::query()/execute().
     // Fixed SQL uses MariaDB placeholders by default; specify postgresql
     // for numbered parameters. Values are owned by the existing operation path.
     template <fixed_string sql, db_driver driver = db_driver::unspecified, typename... params_type>
@@ -1250,7 +1250,7 @@ public:
     task<void> close_cursor(std::string_view) && = delete;
 
 private:
-    friend class db_session;
+    friend class db_executor;
     template <typename, typename>
     friend class db_repository;
     template <typename, typename>
@@ -1338,7 +1338,7 @@ public:
     [[nodiscard]] task<void> clear();
 
 private:
-    friend class db_session;
+    friend class db_executor;
     db_query_result_cache(detail::db_query_cache_state& state_value, ::ruvia::operation_scope& scope, detail::request_io_metrics* io_metrics, operation_options options, stop_token request_stop) noexcept;
     static void expire_capability(void* target) noexcept;
     detail::db_query_cache_state* state_;
@@ -1349,16 +1349,16 @@ private:
 };
 #endif
 
-class db_session final {
+class db_executor final {
 public:
-    db_session(const db_session& other) noexcept;
-    db_session& operator=(const db_session&) = delete;
+    db_executor(const db_executor& other) noexcept;
+    db_executor& operator=(const db_executor&) = delete;
 
     // Inherits an empty token; a supplied state replaces user cancellation.
     // Timeout can only tighten. Accumulate with linked_operation_options. A
     // request-bound handle links the request's cancellation into every
     // operation; with_options() cannot replace it.
-    [[nodiscard]] db_session with_options(operation_options options) const;
+    [[nodiscard]] db_executor with_options(operation_options options) const;
     [[nodiscard]] const worker_ref& worker() const& RUVIA_LIFETIMEBOUND;
     const worker_ref& worker() const&& = delete;
 #ifdef RUVIA_ENABLE_REDIS
@@ -1366,7 +1366,7 @@ public:
 #endif
 
     template <typename entity_type>
-    [[nodiscard]] db_repository<entity_type, db_session> repository() const;
+    [[nodiscard]] db_repository<entity_type, db_executor> repository() const;
 
     [[nodiscard]] task<db_rows> query(std::string_view sql, std::span<const db_value> params = {}) const;
     task<db_rows> query(std::string_view sql, std::initializer_list<db_value> params) const = delete;
@@ -1461,7 +1461,7 @@ private:
     // cache is nullptr when the alias has no query cache; without Redis
     // support it is always nullptr. `io_metrics` is the request's counter
     // block, or null outside a request.
-    db_session(detail::db_pool_ref_type client, operation_scope& operation_scope, detail::request_io_metrics* io_metrics, detail::db_query_cache_state* cache) noexcept;
+    db_executor(detail::db_pool_ref_type client, operation_scope& operation_scope, detail::request_io_metrics* io_metrics, detail::db_query_cache_state* cache) noexcept;
     [[nodiscard]] detail::db_query_backend query_backend() const;
     static task<db_stream_result> query_stream_prepared(detail::db_pool_ref_type client, std::string sql, std::vector<db_value> params, operation_scope& operation_scope, detail::request_io_metrics* io_metrics, operation_options options, stop_token request_stop);
     static task<db_transaction> begin_transaction_prepared(detail::db_query_backend backend, operation_scope& operation_scope, operation_options operation_options, stop_token request_stop, db_transaction_options transaction_options);
@@ -1474,7 +1474,7 @@ private:
     // outside a request.
     stop_token request_stop_;
     friend class detail::worker_client_registry_view;
-    [[nodiscard]] db_session bind_caller_scope(::ruvia::operation_scope& scope, detail::request_io_metrics* io_metrics, const stop_token& stop_token_value) &&;
+    [[nodiscard]] db_executor bind_caller_scope(::ruvia::operation_scope& scope, detail::request_io_metrics* io_metrics, const stop_token& stop_token_value) &&;
     static void expire_capability(void* target) noexcept;
     scoped_capability_registration registration_;
 };
@@ -1489,7 +1489,7 @@ public:
 #ifdef RUVIA_ENABLE_REDIS
     // Cache operations borrow an existing Redis capability on the same worker.
     // Connect Redis first and shut this client down before its Redis owner.
-    db_client(event_loop loop, const db_config& config, const redis_session& cache_store, const db_cache_config& cache_policy);
+    db_client(event_loop loop, const db_config& config, const redis_executor& cache_store, const db_cache_config& cache_policy);
 #endif
     ~db_client();
 
@@ -1510,8 +1510,8 @@ public:
     // operation scope, so keep the returned handle for a sequence of commands
     // instead of calling db() per command. Like context::db(), the handle
     // carries no operation options; derive them with with_options().
-    [[nodiscard]] db_session db() const&;
-    db_session db() const&& = delete;
+    [[nodiscard]] db_executor db() const&;
+    db_executor db() const&& = delete;
 
     // Idempotent and callable from any thread. Pool teardown runs on the bound
     // event loop; use shutdown() when its completion must be awaited.

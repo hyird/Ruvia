@@ -100,23 +100,17 @@ websocket::~websocket() {
 task<std::optional<websocket_message>> websocket::read(operation_options operation) & {
     return require_websocket(state_).read(std::move(operation));
 }
-task<void> websocket::text(std::string_view payload, websocket_send_options options, operation_options operation) & {
-    return require_websocket(state_).text(payload, options, std::move(operation));
+task<void> websocket::text(outbound_bytes payload, websocket_send_options options, operation_options operation) & {
+    return require_websocket(state_).write(websocket_opcode::text, std::move(payload), options.compress_, std::move(operation));
 }
-task<void> websocket::binary(std::string_view payload, websocket_send_options options, operation_options operation) & {
-    return require_websocket(state_).binary(payload, options, std::move(operation));
+task<void> websocket::binary(outbound_bytes payload, websocket_send_options options, operation_options operation) & {
+    return require_websocket(state_).write(websocket_opcode::binary, std::move(payload), options.compress_, std::move(operation));
 }
-task<void> websocket::binary(std::span<const std::byte> payload, websocket_send_options options, operation_options operation) & {
-    return require_websocket(state_).binary(payload, options, std::move(operation));
+task<void> websocket::ping(outbound_bytes payload, operation_options operation) & {
+    return require_websocket(state_).write(websocket_opcode::ping, std::move(payload), true, std::move(operation));
 }
-task<void> websocket::ping(std::string_view payload, operation_options operation) & {
-    return require_websocket(state_).ping(payload, std::move(operation));
-}
-task<void> websocket::pong(std::string_view payload, operation_options operation) & {
-    return require_websocket(state_).pong(payload, std::move(operation));
-}
-task<void> websocket::write_owned(websocket_opcode opcode, std::string&& payload, bool compress, operation_options operation) {
-    return require_websocket(state_).write(opcode, std::move(payload), compress, std::move(operation));
+task<void> websocket::pong(outbound_bytes payload, operation_options operation) & {
+    return require_websocket(state_).write(websocket_opcode::pong, std::move(payload), true, std::move(operation));
 }
 task<void> websocket::send(websocket_message&& message, websocket_send_options options, operation_options operation) & {
     return require_websocket(state_).send(std::move(message), options, std::move(operation));
@@ -174,27 +168,6 @@ task<std::optional<websocket_message>> detail::websocket_state::read(operation_o
     }
     return make_scoped_operation(operation_scope_, read_websocket(target_, read_, read_active_, std::move(operation)));
 }
-
-task<void> detail::websocket_state::text(std::string_view payload_value, websocket_send_options options, operation_options operation) & {
-    return write(websocket_opcode::text, payload_value, options.compress_, std::move(operation));
-}
-
-task<void> detail::websocket_state::binary(std::string_view payload_value, websocket_send_options options, operation_options operation) & {
-    return write(websocket_opcode::binary, payload_value, options.compress_, std::move(operation));
-}
-
-task<void> detail::websocket_state::binary(std::span<const std::byte> payload_value, websocket_send_options options, operation_options operation) & {
-    return binary(as_chars(payload_value), options, std::move(operation));
-}
-
-task<void> detail::websocket_state::pong(std::string_view payload_value, operation_options operation) & {
-    return write(websocket_opcode::pong, payload_value, true, std::move(operation));
-}
-
-task<void> detail::websocket_state::ping(std::string_view payload_value, operation_options operation) & {
-    return write(websocket_opcode::ping, payload_value, true, std::move(operation));
-}
-
 task<void> detail::websocket_state::send(websocket_message&& message, websocket_send_options options, operation_options operation) & {
     require_active();
     operation = override_operation_options(defaults_, std::move(operation));
@@ -273,18 +246,13 @@ std::uint64_t detail::websocket_state::bytes_sent() const noexcept {
     return protocol_(target_).bytes_sent();
 }
 
-task<void> detail::websocket_state::write(websocket_opcode opcode, std::string_view payload_value, bool compress, operation_options operation, detail::websocket_write_extent extent) {
-    require_active();
-    return write(opcode, std::string(payload_value), compress, std::move(operation), extent);
-}
-
-task<void> detail::websocket_state::write(websocket_opcode opcode, std::string&& payload_value, bool compress, operation_options operation, detail::websocket_write_extent extent) {
+task<void> detail::websocket_state::write(websocket_opcode opcode, outbound_bytes payload_value, bool compress, operation_options operation, detail::websocket_write_extent extent) {
     require_active();
     if (extent == detail::websocket_write_extent::message && fragmented_message_active_ && (opcode == websocket_opcode::text || opcode == websocket_opcode::binary)) {
         throw std::logic_error("a fragmented websocket message is in progress");
     }
     operation = override_operation_options(defaults_, std::move(operation));
-    return make_scoped_operation(operation_scope_, write_websocket_payload(target_, write_, opcode, std::move(payload_value), write_active_, compress, extent, std::move(operation), fragmented_message_active_));
+    return make_scoped_operation(operation_scope_, write_websocket_payload(target_, write_, opcode, std::move(payload_value).into_string(), write_active_, compress, extent, std::move(operation), fragmented_message_active_));
 }
 
 websocket_message_writer detail::websocket_state::begin_text(websocket_send_options options) & {
@@ -342,31 +310,15 @@ void websocket_message_writer::abort() & noexcept {
     owner->abort();
 }
 
-task<void> websocket_message_writer::write(std::string_view chunk, operation_options operation) & {
-    return submit(chunk, false, std::move(operation));
+task<void> websocket_message_writer::write(outbound_bytes chunk, operation_options operation) & {
+    return submit(std::move(chunk), false, std::move(operation));
 }
 
-task<void> websocket_message_writer::write(std::span<const std::byte> chunk, operation_options operation) & {
-    return submit(as_chars(chunk), false, std::move(operation));
+task<void> websocket_message_writer::finish(outbound_bytes last_chunk, operation_options operation) & {
+    return submit(std::move(last_chunk), true, std::move(operation));
 }
 
-task<void> websocket_message_writer::finish(std::string_view last_chunk, operation_options operation) & {
-    return submit(last_chunk, true, std::move(operation));
-}
-
-task<void> websocket_message_writer::finish(std::span<const std::byte> last_chunk, operation_options operation) & {
-    return submit(as_chars(last_chunk), true, std::move(operation));
-}
-
-task<void> websocket_message_writer::submit(std::string_view chunk, bool final, operation_options operation) {
-    registration_.require_active();
-    if (!message_open()) {
-        throw std::logic_error("websocket message writer is finished");
-    }
-    return owner_->write(opcode_, chunk, compress_, std::move(operation), final ? detail::websocket_write_extent::final_fragment : detail::websocket_write_extent::fragment);
-}
-
-task<void> websocket_message_writer::submit_owned(std::string&& chunk, bool final, operation_options operation) {
+task<void> websocket_message_writer::submit(outbound_bytes chunk, bool final, operation_options operation) {
     registration_.require_active();
     if (!message_open()) {
         throw std::logic_error("websocket message writer is finished");

@@ -16,7 +16,7 @@
 #include <vector>
 
 #include "borrowed_text.h"
-#include "db_session.h"
+#include "db_executor.h"
 #include "entity_storage.h"
 #include "fixed_string.h"
 
@@ -1065,7 +1065,7 @@ public:
 
 private:
     friend class db_query;
-    friend class db_session;
+    friend class db_executor;
     friend class db_transaction;
     friend struct detail::db_query_plan;
     template <typename, typename>

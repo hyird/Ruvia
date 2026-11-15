@@ -32,6 +32,7 @@
 #include "app.h"
 #include "context.h"
 #include "controller.h"
+#include "decimal_text.h"
 #include "http_server_fixture.h"
 #include "middleware.h"
 #include "security_middleware.h"
@@ -39,7 +40,7 @@
 #include "worker_task_fixture.h"
 #ifdef RUVIA_ENABLE_REDIS
 
-#include "redis.h"
+#include "redis_orm.h"
 TEST(Ruvia, session_middleware_rejects_invalid_config_before_use) {
     const auto rejected = [](const ruvia::session_config& config) {
         try {
@@ -180,7 +181,7 @@ struct session_response final {
     if (!response.starts_with("HTTP/1.1 ") || head_end == std::string::npos) {
         throw std::runtime_error("invalid session HTTP response");
     }
-    session_response result{static_cast<unsigned>(std::get<0>(ruvia::parse_integer<unsigned>(std::string_view(response).substr(9, 3)))), std::string(std::string_view(response).substr(head_end + 4)), std::string{}};
+    session_response result{ruvia::parse_integer<unsigned>(std::string_view(response).substr(9, 3)).value(), std::string(std::string_view(response).substr(head_end + 4)), std::string{}};
     const auto cookie_start = response.find("\r\nSet-Cookie: ");
     if (cookie_start != std::string::npos && cookie_start < head_end) {
         const auto start = cookie_start + std::string_view("\r\nSet-Cookie: ").size();
@@ -310,7 +311,7 @@ class forward_csrf final {
 public:
     static constexpr bool ruvia_runs_on_unmatched_requests = true;
 
-    explicit forward_csrf(ruvia::csrf_protection* middleware_value) :
+    explicit forward_csrf(ruvia::csrf_middleware* middleware_value) :
         middleware_(middleware_value) {}
 
     ruvia::task<void> invoke(ruvia::context& ctx, ruvia::next& next_step) {
@@ -318,7 +319,7 @@ public:
     }
 
 private:
-    ruvia::csrf_protection* middleware_;
+    ruvia::csrf_middleware* middleware_;
 };
 
 class csrf_accepted final {
@@ -336,7 +337,7 @@ public:
 TEST(Ruvia, csrf_rejects_repeated_token_cookie_or_header) {
     const std::string token(48, 'a');
     const auto run = [](const ruvia::test_request& request) {
-        ruvia::csrf_protection csrf;
+        ruvia::csrf_middleware csrf;
         ruvia::test_app app;
         app.use<forward_csrf>(&csrf);
         app.use<csrf_accepted>();

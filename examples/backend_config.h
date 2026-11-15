@@ -20,8 +20,8 @@
 #include "http_client_types.h"
 
 #ifdef RUVIA_ENABLE_DATABASE
-#include "db.h"
 #include "db_migration.h"
+#include "db_repository.h"
 #endif
 
 namespace example {

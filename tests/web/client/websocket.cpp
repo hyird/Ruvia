@@ -75,7 +75,7 @@ namespace {
     if (!parsed.head_ready()) {
         throw std::runtime_error("invalid WebSocket handshake request");
     }
-    auto handshake = ruvia::make_websocket_server_handshake(parsed.request(), {});
+    auto handshake = ruvia::prepare_http1_websocket_handshake(parsed.request(), {});
     std::string response{};
     handshake.for_each_response_part([&response](std::string_view part) {
         response.append(part);

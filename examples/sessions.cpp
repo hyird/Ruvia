@@ -26,7 +26,7 @@ class session_controller final {
 public:
     // session_middleware loads Redis data before entering the route. CSRF uses
     // a separate readable cookie, while the session ID cookie is HttpOnly.
-    RUVIA_CONTROLLER_GROUP("/session", ruvia::session_middleware, ruvia::csrf_protection)
+    RUVIA_CONTROLLER_GROUP("/session", ruvia::session_middleware, ruvia::csrf_middleware)
     RUVIA_ROUTES_BEGIN(session_controller)
     RUVIA_GET("/", read);
     RUVIA_POST("/", write, ruvia::body_limit<1024>);

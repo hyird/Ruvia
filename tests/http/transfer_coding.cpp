@@ -269,8 +269,8 @@ TEST(Ruvia, transfer_coded_chunked_request_plan_drives_decode_order) {
     bool complete_value = false;
     while (!complete_value) {
         const auto result_value = chunks.decode(pending);
-        EXPECT_TRUE(result_value.need_more() == nullptr);
-        if (result_value.need_more() != nullptr) {
+        EXPECT_TRUE(result_value.need_input() == nullptr);
+        if (result_value.need_input() != nullptr) {
             break;
         }
         if (const auto* body_chunk = result_value.body_chunk()) {

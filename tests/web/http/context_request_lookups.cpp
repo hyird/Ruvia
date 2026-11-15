@@ -40,10 +40,10 @@ using ruvia::http_header_view;
 #include "test_app.h"
 #include "worker_task_fixture.h"
 #ifdef RUVIA_ENABLE_DATABASE
-#include "db.h"
+#include "db_repository.h"
 #endif
 #ifdef RUVIA_ENABLE_REDIS
-#include "redis.h"
+#include "redis_orm.h"
 #endif
 
 namespace {
@@ -646,6 +646,7 @@ TEST(Ruvia, context_rejects_unconfigured_worker_clients_consistently) {
 }
 #endif
 
+#ifdef RUVIA_ENABLE_REDIS
 TEST(Ruvia, context_session_capability_requires_explicit_middleware_binding) {
     const auto response = ruvia::test::with_context(ruvia::test_request::get("/capabilities"), [&](ruvia::context& context_value) -> ruvia::task<void> {
         bool rejected = false;
@@ -660,6 +661,7 @@ TEST(Ruvia, context_session_capability_requires_explicit_middleware_binding) {
     });
     (void)response;
 }
+#endif
 
 // Setting response cookies, including prefixes and signatures.
 

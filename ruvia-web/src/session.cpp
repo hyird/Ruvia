@@ -20,10 +20,8 @@
 #include "http_request.h"
 #include "inline_storage.h"
 #include "middleware.h"
+#include "redis_orm.h"
 #include "task.h"
-#ifdef RUVIA_ENABLE_REDIS
-#include "redis.h"
-#endif
 
 namespace ruvia {
 namespace detail {
@@ -184,17 +182,23 @@ session context::session() {
     return ruvia::session(session_state());
 }
 
+detail::context_session_state& context::session_state() noexcept {
+    return request_storage().session_state_;
+}
+
+const detail::context_session_state& context::session_state() const noexcept {
+    return request_storage().session_state_;
+}
+
 task<void> detail::session_access::commit(context& context_value) {
     auto& state_value = context_value.session_state();
     if (!state_value.begin_commit()) {
         co_return;
     }
     try {
-#ifdef RUVIA_ENABLE_REDIS
         if (const auto* owner = state_value.owner()) {
             co_await owner->commit(context_value);
         }
-#endif
         state_value.finish_commit();
     } catch (...) {
         state_value.fail_commit(std::current_exception());
@@ -203,11 +207,6 @@ task<void> detail::session_access::commit(context& context_value) {
     co_return;
 }
 
-}  // namespace ruvia
-
-#ifdef RUVIA_ENABLE_REDIS
-
-namespace ruvia {
 namespace {
 
 // "<key prefix><session id>", inline for typical key sizes.
@@ -342,5 +341,3 @@ task<void> session_middleware::commit(context& c) const {
 }
 
 }  // namespace ruvia
-
-#endif  // RUVIA_ENABLE_REDIS

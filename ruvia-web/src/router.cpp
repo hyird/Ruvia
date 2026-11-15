@@ -40,10 +40,10 @@
 #include "worker_ref.h"
 
 #ifdef RUVIA_ENABLE_DATABASE
-#include "db_session.h"
+#include "db_executor.h"
 #endif
 #ifdef RUVIA_ENABLE_REDIS
-#include "redis.h"
+#include "redis_orm.h"
 #endif
 
 #include <chrono>
@@ -505,9 +505,9 @@ namespace ruvia {
 #endif
 
 #ifdef RUVIA_ENABLE_DATABASE
-::ruvia::router& ::ruvia::router::bind_database(std::string_view alias, const db_client& client) & {
+::ruvia::router& ::ruvia::router::bind_db(std::string_view alias, const db_client& client) & {
     state_->require_editable();
-    state_->clients_.bind_database(state_->worker_, alias, client);
+    state_->clients_.bind_db(state_->worker_, alias, client);
     return *this;
 }
 #endif

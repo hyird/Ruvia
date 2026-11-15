@@ -191,18 +191,10 @@ task<stream_commit_result> sse_writer::commit(operation_options operation) & {
     return writer().commit(std::move(operation));
 }
 
-task<void> response_stream_writer::write(std::span<const std::byte> chunk, operation_options operation) & {
-    return write(as_chars(chunk), std::move(operation));
-}
-
-task<void> response_stream_writer::write(std::string_view chunk, operation_options operation) & {
+task<void> response_stream_writer::write(outbound_bytes chunk, operation_options operation) & {
     require_active();
-    return write_owned(std::string(chunk), std::move(operation));
-}
-
-task<void> response_stream_writer::write_owned(std::string&& chunk, operation_options operation) {
     require_output();
-    return ::ruvia::make_scoped_operation(operation_scope_, write_transferred_chunk({target_, output_active_, *interrupts_, *worker_, context_}, write_, std::move(chunk), std::move(operation)));
+    return ::ruvia::make_scoped_operation(operation_scope_, write_transferred_chunk({target_, output_active_, *interrupts_, *worker_, context_}, write_, std::move(chunk).into_string(), std::move(operation)));
 }
 
 task<void> response_stream_writer::writeln(std::string_view chunk, operation_options operation) & {
@@ -211,7 +203,7 @@ task<void> response_stream_writer::writeln(std::string_view chunk, operation_opt
     owned.reserve(chunk.size() + 1U);
     owned.append(chunk);
     owned.push_back('\n');
-    return write_owned(std::move(owned), std::move(operation));
+    return write(std::move(owned), std::move(operation));
 }
 
 task<timer_sleep_result> response_stream_writer::sleep(timeout_duration duration, stop_token stop) & {

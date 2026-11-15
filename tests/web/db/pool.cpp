@@ -25,10 +25,10 @@
 
 #include "backend_client_fixture.h"
 #include "blocking_pool.h"
-#include "db.h"
+#include "db_executor.h"
 #include "db_migration.h"
 #include "db_query.h"
-#include "db_session.h"
+#include "db_repository.h"
 #include "event_loop.h"
 #include "http_server_fixture.h"
 #include "stop_token.h"
@@ -563,7 +563,7 @@ enum class statement_kind { query,
     execute,
     stream };
 
-ruvia::task<void> run_statement(ruvia::db_session& handle, statement_kind kind) {
+ruvia::task<void> run_statement(ruvia::db_executor& handle, statement_kind kind) {
     switch (kind) {
         case statement_kind::query:
             (void)co_await handle.query("SELECT v");
@@ -846,7 +846,7 @@ namespace {
 constexpr std::string_view cached_sql = "SELECT v FROM records WHERE id = $1";
 
 template <typename param_type>
-ruvia::task<std::string> first_value(ruvia::db_session& handle, param_type param) {
+ruvia::task<std::string> first_value(ruvia::db_executor& handle, param_type param) {
     const ruvia::db_rows rows = co_await handle.query(cached_sql, param);
     co_return std::string(rows.front()["v"].as<std::string_view>().value_or(""));
 }

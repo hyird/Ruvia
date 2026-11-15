@@ -210,8 +210,8 @@ template <typename visitor_type>
 
 }  // namespace
 
-http1_chunk_decode_result http1_chunk_decode_result::make_need_more(std::size_t consumed_bytes) noexcept {
-    return http1_chunk_decode_result(http1_chunk_decode_need_more(consumed_bytes));
+http1_chunk_decode_result http1_chunk_decode_result::make_need_input(std::size_t consumed_bytes) noexcept {
+    return http1_chunk_decode_result(http1_chunk_decode_need_input(consumed_bytes));
 }
 
 http1_chunk_decode_result http1_chunk_decode_result::make_body_chunk(std::size_t consumed_bytes, std::string_view bytes_value) noexcept {
@@ -263,7 +263,7 @@ http1_chunk_decode_result http1_chunked_body_decoder::decode(std::string_view av
                         return fail(cursor, http1_chunk_decode_error::framing_limit_exceeded);
                     }
                     size_line_search_offset_ = line_bytes;
-                    return http1_chunk_decode_result::make_need_more(cursor);
+                    return http1_chunk_decode_result::make_need_input(cursor);
                 }
                 if (line_feed == 0 || line[line_feed - 1] != '\r') {
                     return fail(cursor, http1_chunk_decode_error::invalid_framing);
@@ -297,7 +297,7 @@ http1_chunk_decode_result http1_chunked_body_decoder::decode(std::string_view av
             case progress::body: {
                 const auto bytes_value = std::min({remaining_, available.size() - cursor, max_body_bytes});
                 if (bytes_value == 0) {
-                    return http1_chunk_decode_result::make_need_more(cursor);
+                    return http1_chunk_decode_result::make_need_input(cursor);
                 }
                 const auto body = available.substr(cursor, bytes_value);
                 remaining_ -= bytes_value;
@@ -314,7 +314,7 @@ http1_chunk_decode_result http1_chunked_body_decoder::decode(std::string_view av
             }
             case progress::delimiter:
                 if (available.size() - cursor < 2) {
-                    return http1_chunk_decode_result::make_need_more(cursor);
+                    return http1_chunk_decode_result::make_need_input(cursor);
                 }
                 if (!consume_delimiter(available, cursor)) {
                     return fail(cursor, http1_chunk_decode_error::invalid_framing);
@@ -343,7 +343,7 @@ http1_chunk_decode_result http1_chunked_body_decoder::decode(std::string_view av
                         return fail(cursor, http1_chunk_decode_error::framing_limit_exceeded);
                     }
                     trailer_search_offset_ = trailers.size();
-                    return http1_chunk_decode_result::make_need_more(cursor);
+                    return http1_chunk_decode_result::make_need_input(cursor);
                 }
                 const auto trailer_bytes = trailer_end + 4;
                 if (!publish_trailers(trailers.substr(0, trailer_end))) {

@@ -81,11 +81,11 @@ class stop_token;
 class operation_scope;
 
 #ifdef RUVIA_ENABLE_DATABASE
-class db_session;
+class db_executor;
 #endif
 
 #ifdef RUVIA_ENABLE_REDIS
-class redis_session;
+class redis_executor;
 #endif
 namespace detail {
 
@@ -138,13 +138,13 @@ public:
 
     // `io_metrics` is the request's counter block, or null outside a request.
 #ifdef RUVIA_ENABLE_DATABASE
-    [[nodiscard]] db_session db(::ruvia::operation_scope& operation_scope, request_io_metrics* io_metrics, const stop_token& stop_token) const;
-    [[nodiscard]] db_session db(std::string_view alias, ::ruvia::operation_scope& operation_scope, request_io_metrics* io_metrics, const stop_token& stop_token) const;
+    [[nodiscard]] db_executor db(::ruvia::operation_scope& operation_scope, request_io_metrics* io_metrics, const stop_token& stop_token) const;
+    [[nodiscard]] db_executor db(std::string_view alias, ::ruvia::operation_scope& operation_scope, request_io_metrics* io_metrics, const stop_token& stop_token) const;
 #endif
 
 #ifdef RUVIA_ENABLE_REDIS
-    [[nodiscard]] redis_session redis(::ruvia::operation_scope& operation_scope, request_io_metrics* io_metrics, const stop_token& stop_token) const;
-    [[nodiscard]] redis_session redis(std::string_view alias, ::ruvia::operation_scope& operation_scope, request_io_metrics* io_metrics, const stop_token& stop_token) const;
+    [[nodiscard]] redis_executor redis(::ruvia::operation_scope& operation_scope, request_io_metrics* io_metrics, const stop_token& stop_token) const;
+    [[nodiscard]] redis_executor redis(std::string_view alias, ::ruvia::operation_scope& operation_scope, request_io_metrics* io_metrics, const stop_token& stop_token) const;
 #endif
 
     [[nodiscard]] http_client_ref client(::ruvia::operation_scope& operation_scope, const stop_token& stop_token) const;
@@ -927,11 +927,14 @@ inline void apply_alternative_service(http_response& response, std::string_view 
 
 }  // namespace ruvia::detail
 
+#ifdef RUVIA_ENABLE_REDIS
 namespace ruvia {
 class session_middleware;
 }
+#endif
 
 namespace ruvia::detail {
+#ifdef RUVIA_ENABLE_REDIS
 
 struct session_untouched final {};
 
@@ -1094,6 +1097,7 @@ inline void append_expired_session_cookie_header(http_response_headers& headers,
             .secure_ = secure ? cookie_attribute_policy::emit : cookie_attribute_policy::omit,
         });
 }
+#endif
 
 class request_body_loader final {
 public:
@@ -1509,7 +1513,9 @@ public:
 
     context_services services_;
     context_response_state response_state_;
+#ifdef RUVIA_ENABLE_REDIS
     context_session_state session_state_;
+#endif
     request_bindings request_bindings_;
 
     std::optional<std::string> decoded_body_;

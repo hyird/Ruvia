@@ -13,11 +13,11 @@
 #include <vector>
 
 #include "connection_lifecycle.h"
+#include "db_executor.h"
 #include "db_pool.h"
 #include "db_query.h"
 #include "db_query_plan.h"
 #include "db_query_storage.h"
-#include "db_session.h"
 #include "db_sql_dialect.h"
 #include "operation_options.h"
 

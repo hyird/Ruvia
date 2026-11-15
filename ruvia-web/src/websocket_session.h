@@ -367,19 +367,13 @@ public:
         }
     }
     [[nodiscard]] task<std::optional<websocket_message>> read(operation_options) &;
-    task<void> text(std::string_view, websocket_send_options, operation_options) &;
-    task<void> binary(std::string_view, websocket_send_options, operation_options) &;
-    task<void> binary(std::span<const std::byte>, websocket_send_options, operation_options) &;
-    task<void> pong(std::string_view, operation_options) &;
-    task<void> ping(std::string_view, operation_options) &;
     task<void> send(websocket_message&&, websocket_send_options, operation_options) &;
     task<void> close(websocket_close_options, operation_options) &;
     void abort() & noexcept;
     websocket_message_writer begin_text(websocket_send_options) &;
     websocket_message_writer begin_binary(websocket_send_options) &;
     websocket_message_writer begin_message(websocket_opcode, bool);
-    task<void> write(websocket_opcode, std::string_view, bool, operation_options, websocket_write_extent = websocket_write_extent::message);
-    task<void> write(websocket_opcode, std::string&&, bool, operation_options, websocket_write_extent = websocket_write_extent::message);
+    task<void> write(websocket_opcode, outbound_bytes, bool, operation_options, websocket_write_extent = websocket_write_extent::message);
 
     [[nodiscard]] std::string_view subprotocol() const noexcept {
         if (!worker_->is_current()) {

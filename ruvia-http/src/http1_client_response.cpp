@@ -27,8 +27,8 @@
 namespace ruvia::detail {
 
 struct http1_client_response_parse_result_access final {
-    [[nodiscard]] static http1_client_response_parse_result need_more() noexcept {
-        return http1_client_response_parse_result(http1_client_response_need_more());
+    [[nodiscard]] static http1_client_response_parse_result need_input() noexcept {
+        return http1_client_response_parse_result(http1_client_response_need_input());
     }
 
     [[nodiscard]] static http1_client_response_parse_result failure(http1_client_response_parse_error error) noexcept {
@@ -207,7 +207,7 @@ http1_client_response_parse_result http1_client_response_parser::parse(std::stri
             return fail(http1_client_response_parse_error::header_too_large);
         }
         header_scan_offset_ = buffer.size() > 3 ? buffer.size() - 3 : 0;
-        return detail::http1_client_response_parse_result_access::need_more();
+        return detail::http1_client_response_parse_result_access::need_input();
     }
     // A complete head holds a line feed, so its status line was validated
     // above unless the input broke the same-prefix contract of parse().
