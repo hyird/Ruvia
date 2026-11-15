@@ -516,7 +516,7 @@ std::vector<http_header_view> http_client_request::field_views() const {
 
 task<http_client_response> http_client_request::send() && {
     client_.registration_.require_active();
-    return client_.registration_.attach(send_owned(std::move(*this)));
+    return client_.registration_.attach(follow_redirects(std::move(*this), std::nullopt, std::nullopt));
 }
 
 namespace {
@@ -537,13 +537,11 @@ namespace {
 
 }  // namespace
 
-task<http_client_response> http_client_request::send_owned(http_client_request request) {
-    // One deadline spans every redirect hop; each hop receives it as an absolute bound.
-    const operation_deadline total(request.client_.options_.timeout_.has_value() ? request.client_.options_.timeout_ : std::optional<operation_timeout>(request.client_.pool_->config().request_timeout_));
-    co_return co_await follow_redirects(std::move(request), std::nullopt, total, false);
-}
-
-task<http_client_response> http_client_request::follow_redirects(http_client_request request, std::optional<http_client_response> initial_response, const operation_deadline& total, bool upload_initial_hop) {
+task<http_client_response> http_client_request::follow_redirects(http_client_request request, std::optional<http_client_response> initial_response, std::optional<operation_deadline> initial_deadline) {
+    // Start one deadline with the cold operation, or retain the upload handoff's
+    // existing bound. The same frame owns the request throughout every hop.
+    const auto total = initial_deadline.has_value() ? *initial_deadline : operation_deadline(request.client_.options_.timeout_.has_value() ? request.client_.options_.timeout_ : std::optional<operation_timeout>(request.client_.pool_->config().request_timeout_));
+    const bool upload_initial_hop = initial_response.has_value();
     for (std::size_t redirects = 0;; ++redirects) {
         std::optional<http_client_response> hop_response;
         if (redirects == 0 && initial_response.has_value()) {

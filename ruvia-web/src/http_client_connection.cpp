@@ -77,12 +77,16 @@ http_client_connection::http_client_connection(http_client_pool& pool, std::size
 http_client_connection::~http_client_connection() = default;
 
 bool http_client_connection::serves(std::string_view dial_host, std::uint16_t dial_port, std::string_view server_name, client_alpn alpn) const noexcept {
-    if (fresh_ || retired_ || address_retired_ || transport_.endpoint().port_ != dial_port || !http_ascii_equals_ignore_case(dial_host_, dial_host) || !http_ascii_equals_ignore_case(server_name_, server_name)) {
+    if (fresh_ || retired_ || address_retired_ || transport_.endpoint().port_ != dial_port) {
         return false;
     }
     // Another offer also reuses a connection whose negotiated protocol it
     // permits; an unsettled one only serves its own offer.
-    return alpn_ == alpn || (protocol_ == protocol_type::http1 && alpn_allows_http1(alpn)) || (protocol_ == protocol_type::http2 && alpn_allows_http2(alpn));
+    if (alpn_ != alpn && !(protocol_ == protocol_type::http1 && alpn_allows_http1(alpn)) && !(protocol_ == protocol_type::http2 && alpn_allows_http2(alpn))) {
+        return false;
+    }
+    // The route names, the costliest test, compare last.
+    return http_ascii_equals_ignore_case(dial_host_, dial_host) && http_ascii_equals_ignore_case(server_name_, server_name);
 }
 
 bool http_client_connection::idle() const noexcept {

@@ -126,7 +126,7 @@ task<http_client_response> http_client_response_handoff::receive_owned(http_clie
     if (pin.state_->upload_ && pin.state_->upload_->redirect_request_) {
         auto redirect_request = std::move(*pin.state_->upload_->redirect_request_);
         pin.state_->upload_->redirect_request_.reset();
-        co_return co_await http_client_request::follow_redirects(std::move(redirect_request), std::move(pin), redirect_deadline, true);
+        co_return co_await http_client_request::follow_redirects(std::move(redirect_request), std::move(pin), redirect_deadline);
     }
     co_return std::move(pin);
 }

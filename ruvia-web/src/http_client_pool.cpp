@@ -1004,23 +1004,33 @@ task<http_client_connection*> http_client_pool::acquire_tcp_connection(const htt
     const bool may_multiplex = offer == client_alpn::http2 || offer == client_alpn::negotiate;
 #endif
     admission_waiter waiter(*this, state_value, stop);
+    // Every admission wake rescans the owners. Each candidate is classified
+    // by its use state first; only one that would change the choice pays the
+    // route comparison, so a busy HTTP/1 connection never does.
+    const auto serves_route = [&route, offer](const http_client_connection& candidate) noexcept {
+        return candidate.serves(route.dial_host_, route.dial_port_, route.server_name_, offer);
+    };
     for (;;) {
         throw_if_admission_ended(stop, state_value);
         http_client_connection* selected = nullptr;
         http_client_connection* reconnectable = nullptr;
         bool negotiating = false;
-        for (auto& owner : connections_) {
+        // A fresh_connection request reuses nothing.
+        const auto reusable = fresh ? std::span<const connection_owner_type>{} : std::span<const connection_owner_type>(connections_);
+        for (const auto& owner : reusable) {
             auto* const candidate = owner.get();
-            if (fresh || candidate == nullptr || !candidate->serves(route.dial_host_, route.dial_port_, route.server_name_, offer)) {
+            if (candidate == nullptr) {
                 continue;
             }
             if (candidate->users_ == 0 && candidate->idle_unconnected()) {
-                reconnectable = reconnectable != nullptr ? reconnectable : candidate;
+                if (reconnectable == nullptr && serves_route(*candidate)) {
+                    reconnectable = candidate;
+                }
                 continue;
             }
 #ifdef RUVIA_ENABLE_HTTP2
             if (candidate->protocol_ == http_client_connection::protocol_type::http2) {
-                if (candidate->available_http2_request_streams() != 0) {
+                if (candidate->available_http2_request_streams() != 0 && serves_route(*candidate)) {
                     selected = candidate;
                     break;
                 }
@@ -1028,7 +1038,7 @@ task<http_client_connection*> http_client_pool::acquire_tcp_connection(const htt
             }
             if (candidate->users_ != 0) {
                 // A connection of this route still negotiating may offer h2.
-                negotiating = negotiating || (may_multiplex && candidate->protocol_ == http_client_connection::protocol_type::unknown);
+                negotiating = negotiating || (may_multiplex && candidate->protocol_ == http_client_connection::protocol_type::unknown && serves_route(*candidate));
                 continue;
             }
 #else
@@ -1037,7 +1047,7 @@ task<http_client_connection*> http_client_pool::acquire_tcp_connection(const htt
             }
 #endif
             // The most recently used idle HTTP/1 connection, so the others age out.
-            if (candidate->protocol_ == http_client_connection::protocol_type::http1 && candidate->connected_ && candidate->http1_operations_ == 0 && (selected == nullptr || candidate->idle_order_ > selected->idle_order_)) {
+            if (candidate->protocol_ == http_client_connection::protocol_type::http1 && candidate->connected_ && candidate->http1_operations_ == 0 && (selected == nullptr || candidate->idle_order_ > selected->idle_order_) && serves_route(*candidate)) {
                 selected = candidate;
             }
         }

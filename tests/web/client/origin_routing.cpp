@@ -723,6 +723,44 @@ TEST(Ruvia, http_client_connection_limits_bound_open_and_idle_connections_withou
     EXPECT_TRUE(peer.connections_[1].closed_);
 }
 
+TEST(Ruvia, http_client_reuses_the_most_recently_idle_http1_connection) {
+    using namespace origin_routing_tests;
+    auto& io = ruvia::test::new_test_io_context();
+    auto attachment = ruvia::attach_event_loop(io);
+    routing_peer peer(io, nullptr);
+    const std::string base_url = "http://127.0.0.1:" + std::to_string(peer.port());
+    ruvia::http_client_config config{.base_url_ = base_url};
+    config.request_timeout_ = 5s;
+    run_client(io, attachment, {&peer}, config, [&](ruvia::http_client& client, const ruvia::worker_ref& worker) -> ruvia::task<void> {
+        auto handle = client.client();
+        ruvia::task_scope held(worker);
+        const auto hold = [&]() -> ruvia::task<void> {
+            auto response = co_await handle.get("/hold").send();
+            (void)co_await response.bytes();
+        };
+        held.spawn(hold());
+        held.spawn(hold());
+        while (peer.held_ != 2) {
+            (void)co_await ruvia::sleep_for(worker, 1ms);
+        }
+        peer.release();
+        co_await held.join();
+        for (int attempt = 0; attempt != 1000 && handle.stats().idle_connections_ != 2; ++attempt) {
+            (void)co_await ruvia::sleep_for(worker, 1ms);
+        }
+        EXPECT_EQ(handle.stats().idle_connections_, 2U);
+        // Each reuse makes its connection the most recently used one, so
+        // sequential requests stay on it while the other ages out.
+        const auto first = co_await get(client, "/one", {}, true);
+        const auto second = co_await get(client, "/two", {}, true);
+        const auto third = co_await get(client, "/three", {}, true);
+        EXPECT_EQ(second, first);
+        EXPECT_EQ(third, first);
+        EXPECT_EQ(handle.stats().open_connections_, 2U);
+    });
+    EXPECT_EQ(peer.connections_.size(), 2U);
+}
+
 TEST(Ruvia, http_client_upload_progress_keeps_the_response_head_wait_alive) {
     using namespace origin_routing_tests;
     auto& io = ruvia::test::new_test_io_context();

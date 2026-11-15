@@ -511,7 +511,7 @@ WebSocket 握手错误仍抛 `http_client_error`；`handshake_rejected` 可通�
 | 连接复用键 | 连接按 `(拨号 host, 拨号端口, TLS server name, ALPN 报价)` 复用，Host / `:authority` 不入键：HTTP/1 keep-alive 可跨 Host 复用；HTTP/2、HTTP/3 同一连接上发送其他 authority 时，由调用方保证所选证书覆盖它（RFC 9113 §9.1.1、RFC 9114 §3.3）。每个 alias 只有一个 TLS 上下文，QUIC 会话票据按路由隔离 |
 | 覆盖与 origin 策略 | 有效 authority 不同于 alias 时不使用 Cookie jar；Alt-Svc 按实际路由记录与使用（见 5.3），Server Push 只在 alias 路由的连接上接受。重定向按有效 origin 解析，跨 origin 跳转丢弃全部覆盖，同 origin 跳转保留 |
 | 无固定源站的出口 alias | `base_url_` 只写 scheme（`"https://"` / `"http://"`）时 alias 不绑定 origin：每个请求必须给 `authority_`（否则 `std::invalid_argument`），拨号默认取其 host 与端口；构造期要求 `address_validator_`，并拒绝 Cookie 配置与 `tls_.server_name_`；无 Cookie jar、无 DNS 快照；Alt-Svc 照常按实际路由学习，替代端点同样经 `address_validator_` 校验（`update_dns` / `refresh_dns` 抛 `std::logic_error`）。`on_redirect` 接受的同 scheme 跨源跳转仍经此 alias 并改用新 authority |
-| 按需连接与上限 | `connection_limits_` 中 `max_open_` 限定全部物理连接（含拨号中与空闲，`nullopt` 不限）；达上限时关闭最久未用的空闲连接，无空闲则在 `acquire_timeout_` 内等待。`max_idle_http1_` / `max_idle_multiplexed_`（默认各 64）限定跨路由保留的空闲 HTTP/1 与 HTTP/2/3 连接，超出立即关闭最久空闲者 |
+| 按需连接与上限 | `connection_limits_` 中 `max_open_` 限定全部物理连接（含拨号中与空闲，`nullopt` 不限）；TCP 优先复用最近归闲且匹配复用键的可用 HTTP/1 连接。达上限时关闭最久未用的空闲连接，无空闲则在 `acquire_timeout_` 内等待。`max_idle_http1_` / `max_idle_multiplexed_`（默认各 64）限定跨路由保留的空闲 HTTP/1 与 HTTP/2/3 连接，超出立即关闭最久空闲者 |
 | 连接观测 | handle 的 `stats()` 中 `open_connections_` 为尚未回收的连接对象数，`idle_connections_` 为空闲连接数；启动不预建连接，关闭且无借用者的连接对象随即回收 |
 | SSRF 策略 | `address_validator_(const ip_address&, port)` 校验实际数值候选，再交给 TCP/QUIC 拨号；与重定向 origin 策略分开配置，也覆盖替代服务端点 |
 | 原样编码流 | origin 的 `decode_content_ = false`，或请求 `.configure({.decode_content_ = false})`：保留 `Content-Encoding` / `Content-Length`，不等待完整正文便交付首块；默认仍自动解码 |
@@ -523,6 +523,7 @@ WebSocket 握手错误仍抛 `http_client_error`；`handshake_rejected` 可通�
 | DNS 观察与更新 | handle 的 `dns_snapshot()` 返回自有数值地址；`update_dns(addresses)` 同步校验并发布外部快照，`co_await refresh_dns()` 主动解析 alias 拨号名并淘汰地址已变更的连接；`co_await handle.resolve_dns(options)` / `co_await handle.resolve_dns(host, options)` 与独立函数 `co_await ruvia::resolve_dns(worker_or_loop, host, options)` 执行非破坏性异步 DNS 解析，返回排序去重后的 `ip_address` 列表而不触发关闭现有活动连接或 WebSocket。`dns_refresh_interval_` 每周期只重新解析仍有存活连接的拨号域名（含请求级 `dial_host_`，IP 字面量不查询，无连接不发查询），受 worker 级并发上限约束；`stats().dns_refreshes_` 计数后台查询 |
 | 定向断连 | handle 的 `close_connection(id)` 按实际物理连接 ID 关闭，旧 ID 不会命中新连接；共享多路复用连接上的流一并终止 |
 
+- **重定向期限**：普通发送在冷任务开始执行时固定总期限；普通发送与流式上传的后续重定向共用当前链的绝对期限，不逐跳重置。
 - **总期限独立**：阶段覆盖不改变 `request_timeout_` 或宿主取消。总期限仍计入慢下游与 1xx 回调等待；代理若不需要整体时限，须在 origin 配置中显式设为 `nullopt`。读无活动预算在等待调用方消费正文时暂停。
 - **慢速上传**：最终响应头到达前，请求内容的写出进展同样重启读无活动预算：等待响应头的无活动期从最后一次双向进展起算，源站读完全部请求体后再应答不会被误判超时。
 - **隧道空闲**：CONNECT / Upgrade 隧道建立后不再受 `read_timeout_` 约束，只受 `http_client_tunnel_config::idle_timeout_`（默认 `nullopt` 不限）与总期限约束；任一方向的字节进展都重启它。

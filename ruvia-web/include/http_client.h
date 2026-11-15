@@ -648,9 +648,8 @@ private:
     friend class http_client_ref;
     friend class detail::http_client_response_handoff;
     http_client_request(const http_client_ref& client, std::string_view method, std::string_view path);
-    static task<http_client_response> send_owned(http_client_request request);
     static task<http_client_exchange> upload_owned(http_client_request request, http_client_upload_config config);
-    static task<http_client_response> follow_redirects(http_client_request request, std::optional<http_client_response> initial_response, const operation_deadline& total, bool upload_initial_hop);
+    static task<http_client_response> follow_redirects(http_client_request request, std::optional<http_client_response> initial_response, std::optional<operation_deadline> initial_deadline);
     [[nodiscard]] std::vector<http_header_view> field_views() const;
     http_client_ref client_;
     std::string method_;
