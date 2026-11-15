@@ -562,6 +562,37 @@ bool test_destruction_does_not_join_running_callable() {
     return returned_before_callable && callable_finished;
 }
 
+// Thread-local destructors run as the pool thread that used this exits.
+struct pool_thread_exit_flag final {
+    std::atomic<bool>* exited_{nullptr};
+    ~pool_thread_exit_flag() {
+        if (exited_ != nullptr) {
+            exited_->store(true);
+        }
+    }
+};
+
+bool test_destruction_joins_idle_threads() {
+    std::atomic<bool> thread_exited{false};
+    auto pool = std::make_unique<blocking_pool>(blocking_pool_options{.thread_count_ = 1});
+    if (pool->post([&thread_exited] {
+        thread_local pool_thread_exit_flag flag;
+        flag.exited_ = &thread_exited;
+    }) != post_status::accepted) {
+        return false;
+    }
+    // The thread is idle again once the pool has counted its callable.
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while (pool->stats().completed_ != 1) {
+        if (std::chrono::steady_clock::now() >= deadline) {
+            return false;
+        }
+        std::this_thread::yield();
+    }
+    pool.reset();
+    return thread_exited.load();
+}
+
 bool test_join_stops_and_waits_for_running_callable() {
     auto started_promise = std::make_shared<std::promise<void>>();
     auto started = started_promise->get_future();
@@ -890,6 +921,10 @@ TEST(Ruvia, blocking_pool_default_sizing_is_bounded) {
 
 TEST(Ruvia, blocking_pool_destruction_does_not_join_running_work) {
     EXPECT_TRUE(test_destruction_does_not_join_running_callable());
+}
+
+TEST(Ruvia, blocking_pool_destruction_joins_idle_threads) {
+    EXPECT_TRUE(test_destruction_joins_idle_threads());
 }
 
 TEST(Ruvia, blocking_pool_join_waits_for_running_work) {

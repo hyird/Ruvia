@@ -243,6 +243,8 @@ struct blocking_pool::impl_type final {
         // Reserved/queued posts occupy at most queue_capacity_ nodes;
         // each thread may also hold one node while moving its callable out.
         nodes_.resize(queue_capacity_ + thread_count_);
+        busy_.resize(thread_count_);
+        busy_at_retirement_.resize(thread_count_);
         for (auto& node : nodes_) {
             node.next_ = free_head_;
             free_head_ = &node;
@@ -253,8 +255,8 @@ struct blocking_pool::impl_type final {
         threads_.reserve(thread_count_);
         try {
             for (std::size_t i = 0; i < thread_count_; ++i) {
-                threads_.emplace_back([self] {
-                    self->run();
+                threads_.emplace_back([self, i] {
+                    self->run(i);
                 });
             }
         } catch (...) {
@@ -267,7 +269,7 @@ struct blocking_pool::impl_type final {
         }
     }
 
-    void run() noexcept {
+    void run(std::size_t index) noexcept {
         struct current_pool_guard final {
             const void* previous_;
             explicit current_pool_guard(const impl_type* pool) noexcept :
@@ -293,6 +295,7 @@ struct blocking_pool::impl_type final {
             }
             --queued_;
             ++running_;
+            busy_[index] = 1;
             lock.unlock();
 
             move_only_function<void()> task = std::move(node->task_);
@@ -312,6 +315,7 @@ struct blocking_pool::impl_type final {
             node->next_ = free_head_;
             free_head_ = node;
             --running_;
+            busy_[index] = 0;
             ++completed_;
         }
     }
@@ -403,15 +407,26 @@ struct blocking_pool::impl_type final {
         }
     }
 
-    void detach_threads() noexcept {
-        std::vector<std::thread> detached_threads;
+    // After the stop is published an idle thread can only leave its loop, so it
+    // is joined and its thread-local state is gone when the pool is. A thread
+    // inside a callable cannot be interrupted and must not delay destruction:
+    // it is detached and keeps this state alive through its own reference.
+    void retire_threads() noexcept {
+        std::vector<std::thread> retiring_threads;
         {
             std::lock_guard lock(mutex_);
-            detached_threads.swap(threads_);
+            retiring_threads.swap(threads_);
+            busy_at_retirement_ = busy_;
         }
-        for (auto& thread : detached_threads) {
-            if (thread.joinable()) {
+        for (std::size_t index = 0; index < retiring_threads.size(); ++index) {
+            auto& thread = retiring_threads[index];
+            if (!thread.joinable()) {
+                continue;
+            }
+            if (busy_at_retirement_[index] != 0) {
                 thread.detach();
+            } else {
+                thread.join();
             }
         }
     }
@@ -425,6 +440,10 @@ struct blocking_pool::impl_type final {
     local_ring_queue<node_type*> queue_;
     std::vector<node_type> nodes_;
     std::vector<std::thread> threads_;
+    // Indexed like threads_; set while that thread holds a claimed callable.
+    std::vector<unsigned char> busy_;
+    // Same capacity as busy_, so the destructor's snapshot never allocates.
+    std::vector<unsigned char> busy_at_retirement_;
     node_type* free_head_{nullptr};
     std::size_t queued_{0};
     std::size_t reserved_{0};
@@ -446,7 +465,7 @@ blocking_pool::blocking_pool(blocking_pool_options options) :
 
 blocking_pool::~blocking_pool() {
     request_stop();
-    impl_->detach_threads();
+    impl_->retire_threads();
 }
 
 std::size_t blocking_pool::thread_count() const noexcept {

@@ -57,9 +57,10 @@ if(RUVIA_BUILD_CORE)
     ruvia_add_test(ruvia_core_unit_tests ruvia::core TIMEOUT 180 SOURCES
         ${_ruvia_core_unit_sources})
     target_link_libraries(ruvia_core_unit_tests PRIVATE ruvia_core_internal)
-    # 作用域任务的所有权转移必须在关闭可选拷贝消除时同样有效。
+    # 作用域任务的所有权转移必须在关闭可选拷贝消除时同样有效。仅对 Clang 启用：
+    # GCC 16 在该选项下把协程返回对象按位拷贝到返回槽后再析构原对象，冷帧随之被提前销毁。
     set_property(SOURCE core/scoped_operation.cpp APPEND PROPERTY COMPILE_OPTIONS
-        "$<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-fno-elide-constructors>")
+        "$<$<CXX_COMPILER_ID:Clang,AppleClang>:-fno-elide-constructors>")
 endif()
 
 if(RUVIA_BUILD_HTTP)

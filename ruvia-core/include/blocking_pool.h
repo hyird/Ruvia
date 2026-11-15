@@ -78,9 +78,10 @@ struct blocking_pool_stats final {
 };
 
 // Fixed threads, bounded queue. Construction starts the threads. Destruction
-// stops accepting work, discards queued tasks, and detaches threads that are
-// already running a callable; those callables may finish after the pool object
-// is gone. Call join() explicitly when the owner must wait for every thread.
+// stops accepting work, discards queued tasks, joins the idle threads, and
+// detaches threads that are already running a callable; those callables may
+// finish after the pool object is gone. Call join() explicitly when the owner
+// must wait for every thread.
 // Copy and move are deleted: posters hold a reference.
 class blocking_pool final {
 public:
