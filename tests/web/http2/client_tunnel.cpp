@@ -64,7 +64,7 @@ public:
     }
 };
 ruvia::task<void> client_tunnel_routes::echo(ruvia::context& c) {
-    auto& observation_value = *c.worker_state<std::shared_ptr<tunnel_observation>>();
+    auto& observation_value = *c.services().worker_state<std::shared_ptr<tunnel_observation>>();
     {
         std::lock_guard lock(observation_value.mutex_);
         observation_value.bytes_.clear();

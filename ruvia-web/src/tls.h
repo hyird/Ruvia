@@ -21,7 +21,7 @@
 
 #include "borrowed_text.h"
 #include "http_client_types.h"
-#include "http_request.h"
+#include "http_target_origin.h"
 
 // The OpenSSL side of every client, server and native database driver TLS
 // context: protocol policy, handshake results, parsed identities and trust

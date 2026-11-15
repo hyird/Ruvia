@@ -113,10 +113,10 @@ void context_response_editor::status(http_status_code status_code) {
 }
 
 std::string context::url_for(std::string_view pattern, std::span<const std::string_view> values) const {
-    if (services().routes() == nullptr) {
+    if (runtime_services().routes() == nullptr) {
         throw std::logic_error("url_for requires a route table bound to this context");
     }
-    return services().routes()->url_for(pattern, values);
+    return runtime_services().routes()->url_for(pattern, values);
 }
 
 std::string context::url_for(std::string_view pattern, std::initializer_list<std::string_view> values) const {
@@ -231,7 +231,7 @@ task<http_response> context::not_found() {
 task<http_response> context::not_found_task() {
     // Selected only here, on demand: every matched request carries the table,
     // and few of them ever ask for a not-found answer.
-    const auto* routes = services().routes();
+    const auto* routes = runtime_services().routes();
     const auto handler = routes == nullptr ? detail::http_not_found_handler_ref{nullptr} : routes->not_found_handler_for(request_.path());
     if (handler != nullptr) {
         co_return co_await handler(*this);
@@ -282,7 +282,7 @@ task<http_response> detail::context_access::commit_streaming_head(context& conte
     }
 #endif
     auto response = context_value.streaming_head();
-    detail::apply_alternative_service(response, context_value.services().alternative_service());
+    detail::apply_alternative_service(response, context_value.runtime_services().alternative_service());
     co_return response;
 }
 
@@ -450,28 +450,28 @@ http_response make_readiness_response(context& context_value, readiness_response
     return response;
 }
 void context::advertise_origins(std::span<const std::string_view> origins) {
-    if (services().connection_advertisements() == nullptr || conn().tls() == nullptr) {
+    if (runtime_services().connection_advertisements() == nullptr || conn().tls() == nullptr) {
         throw std::logic_error("ORIGIN requires an HTTPS connection with advertisement output");
     }
-    services().connection_advertisements()->advertise_origins(origins);
+    runtime_services().connection_advertisements()->advertise_origins(origins);
 }
 void context::advertise_alternative_service(std::string_view value) {
-    if (services().connection_advertisements() == nullptr) {
+    if (runtime_services().connection_advertisements() == nullptr) {
         throw std::logic_error("this dispatch has no connection advertisement output");
     }
-    services().connection_advertisements()->advertise_alternative_service(value);
+    runtime_services().connection_advertisements()->advertise_alternative_service(value);
 }
 bool context::push(http_push_request_view request) {
-    if (services().push_output() == nullptr) {
+    if (runtime_services().push_output() == nullptr) {
         throw std::logic_error("server push requires an HTTP/2 request");
     }
-    return services().push_output()->push(request);
+    return runtime_services().push_output()->push(request);
 }
 task<void> context::inform(const http_interim_response_head& response, operation_options operation) & {
-    if (services().interim_output() == nullptr) {
+    if (runtime_services().interim_output() == nullptr) {
         throw std::logic_error("this dispatch has no transport response output");
     }
-    return services().interim_output()->inform(response, std::move(operation), *this);
+    return runtime_services().interim_output()->inform(response, std::move(operation), *this);
 }
 }  // namespace ruvia
 
@@ -565,16 +565,16 @@ void dispatch_response::copy_head_from(const http_response& response) {
 }
 
 task<dispatch_response> context::dispatch(dispatch_options options) {
-    if (!services().routes() || !capabilities_.worker().is_current()) {
+    if (!runtime_services().routes() || !worker().is_current()) {
         throw std::logic_error("dispatch requires a routed context on its owning worker");
     }
-    if (services().dispatch_depth() >= 8) {
+    if (runtime_services().dispatch_depth() >= 8) {
         throw std::logic_error("subrequest nesting limit exceeded");
     }
     if (!is_valid_http_method_token(options.method_) || classify_http_method(options.method_) == http_known_method::connect || !is_valid_http_origin_form_target(options.target_)) {
         throw std::invalid_argument("dispatch requires a valid method and origin-form target");
     }
-    if (options.body_.size() > services().max_decoded_body_bytes()) {
+    if (options.body_.size() > runtime_services().max_decoded_body_bytes()) {
         throw std::invalid_argument("subrequest body exceeds the configured limit");
     }
     if (options.method_.size() > max_subrequest_header_bytes || options.target_.size() > max_subrequest_header_bytes - options.method_.size()) {
@@ -626,7 +626,7 @@ task<dispatch_response> context::dispatch_task(std::string method, std::string t
             throw std::invalid_argument("invalid subrequest");
         }
     }();
-    const auto& routes = *services().routes();
+    const auto& routes = *runtime_services().routes();
     const auto resolution = routes.resolve(request);
     if (const auto* resolved = resolution.resolved()) {
         const auto& endpoint = resolved->route().endpoint();
@@ -634,7 +634,7 @@ task<dispatch_response> context::dispatch_task(std::string method, std::string t
             throw std::logic_error("dispatch requires a buffered route");
         }
     }
-    const stop_group stop_owner(capabilities_.stop_token(), std::move(stop_token_value));
+    const stop_group stop_owner(runtime_services().get_stop_token(), std::move(stop_token_value));
     const auto stop = stop_owner.token();
     if (stop.stop_requested()) {
         throw std::system_error(asio::error::operation_aborted);
@@ -642,7 +642,7 @@ task<dispatch_response> context::dispatch_task(std::string method, std::string t
     // The parent request already passed the application rate limit and the
     // target-origin check of its connection.
     const detail::http_request_admission_policy policy{
-        .max_buffered_body_bytes_ = services().max_decoded_body_bytes(),
+        .max_buffered_body_bytes_ = runtime_services().max_decoded_body_bytes(),
         .apply_rate_limit_ = false,
         .verify_target_origin_ = false,
     };
@@ -653,7 +653,7 @@ task<dispatch_response> context::dispatch_task(std::string method, std::string t
             .resolution_ = resolution,
             .coding_ = http_response_coding_selection_for(request),
         },
-        policy, services().for_subrequest(stop), response);
+        policy, runtime_services().for_subrequest(stop), response);
     if (detail::http_response_needs_not_acceptable(admission.tail().coding_policy(), request, response) && !response.status().is_error()) {
         response = co_await routes.respond_error(request, http_error_info(detail::http_not_acceptable_coding_error()), admission.services());
     }
@@ -692,7 +692,6 @@ context::context(const http_request& request, const detail::context_services& se
 
 context::context(const http_request& request, std::string_view route_path, const std::string_view* param_names, const std::string_view* param_values, std::size_t param_count, std::uintptr_t route_rate_limit_scope, const detail::context_services& services) :
     request_(request),
-    capabilities_(services.worker(), services.get_stop_token(), services.worker_states()),
     route_path_(route_path),
     param_names_(param_names),
     param_values_(param_values),
@@ -704,36 +703,44 @@ context::context(const http_request& request, std::string_view route_path, const
 context::~context() = default;
 
 const conn_info& context::conn() const& noexcept {
-    return services().get_conn_info();
+    return runtime_services().get_conn_info();
 }
 
 std::shared_ptr<void> context::connection_state() const noexcept {
-    return services().connection_state();
+    return runtime_services().connection_state();
 }
 
 void context::abort_connection() noexcept {
-    services().abort_connection();
+    runtime_services().abort_connection();
 }
 
 bool context::is_subrequest() const noexcept {
-    return services().dispatch_depth() != 0;
+    return runtime_services().dispatch_depth() != 0;
 }
 
 bool context::early_data() const noexcept {
-    return services().early_data();
+    return runtime_services().early_data();
 }
 
-detail::context_services& context::services() noexcept {
+detail::context_services& context::runtime_services() noexcept {
     return request_storage().services_;
 }
 
-const detail::context_services& context::services() const noexcept {
+const detail::context_services& context::runtime_services() const noexcept {
     return request_storage().services_;
 }
 
-const ruvia::env& context::env() const noexcept {
-    static const ruvia::env empty;
-    return services().env() != nullptr ? *services().env() : empty;
+const worker_ref& context::worker() const& noexcept {
+    return runtime_services().worker();
+}
+
+::ruvia::stop_token context::stop_token() const noexcept {
+    return runtime_services().get_stop_token();
+}
+
+worker_services context::services() const& noexcept {
+    const auto& runtime = runtime_services();
+    return worker_services(runtime.worker(), runtime.get_stop_token(), runtime.worker_states(), runtime.client_registries(), operation_scope_, runtime.io_metrics(), runtime.env());
 }
 
 std::string& context::decoded_body() const {
@@ -749,15 +756,15 @@ detail::context_request_storage& context::request_storage() const {
 }
 
 const detail::context_request_body_source& context::request_body_source() const noexcept {
-    return services().request_body_source();
+    return runtime_services().request_body_source();
 }
 
 detail::context_response_output& context::response_output() noexcept {
-    return services().response_output();
+    return runtime_services().response_output();
 }
 
 const detail::context_response_output& context::response_output() const noexcept {
-    return services().response_output();
+    return runtime_services().response_output();
 }
 
 detail::context_response_state& context::response_state() noexcept {
@@ -788,30 +795,6 @@ bool context::has_response() const noexcept {
 void context::respond(http_response&& response) {
     store_response(std::move(response));
 }
-
-#ifdef RUVIA_ENABLE_DATABASE
-db_executor context::db() const {
-    const auto& services_value = services();
-    return services_value.client_registries().db(operation_scope_, services_value.io_metrics(), capabilities_.stop_token());
-}
-
-db_executor context::db(std::string_view alias) const {
-    const auto& services_value = services();
-    return services_value.client_registries().db(alias, operation_scope_, services_value.io_metrics(), capabilities_.stop_token());
-}
-#endif
-
-#ifdef RUVIA_ENABLE_REDIS
-redis_executor context::redis() const {
-    const auto& services_value = services();
-    return services_value.client_registries().redis(operation_scope_, services_value.io_metrics(), capabilities_.stop_token());
-}
-
-redis_executor context::redis(std::string_view alias) const {
-    const auto& services_value = services();
-    return services_value.client_registries().redis(alias, operation_scope_, services_value.io_metrics(), capabilities_.stop_token());
-}
-#endif
 
 bool detail::context_response_output::committed() const noexcept {
     if (buffered() != nullptr) {
@@ -1147,7 +1130,7 @@ std::string_view context_request::route_path() const noexcept {
 }
 
 http_priority context_request::priority() const noexcept {
-    if (const auto* update = context_->services().request_priority_update(); update != nullptr && *update) {
+    if (const auto* update = context_->runtime_services().request_priority_update(); update != nullptr && *update) {
         return **update;
     }
     const auto parsed_value = parse_http_priority(context_->request_.headers());
@@ -1159,11 +1142,11 @@ std::optional<std::string_view> context_request::header(std::string_view name) c
 }
 
 std::span<const http_header> context_request::trailers() const noexcept {
-    return context_->services().request_trailers() != nullptr ? context_->services().request_trailers()->fields() : std::span<const http_header>{};
+    return context_->runtime_services().request_trailers() != nullptr ? context_->runtime_services().request_trailers()->fields() : std::span<const http_header>{};
 }
 
 std::optional<std::string_view> context_request::trailer(std::string_view name) const noexcept {
-    return context_->services().request_trailers() != nullptr ? context_->services().request_trailers()->field(name) : std::nullopt;
+    return context_->runtime_services().request_trailers() != nullptr ? context_->runtime_services().request_trailers()->field(name) : std::nullopt;
 }
 
 const request_name_value_list& context_request::header_fields() const {

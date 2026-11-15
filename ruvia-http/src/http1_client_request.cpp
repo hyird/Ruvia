@@ -29,6 +29,7 @@
 #include "http_message.h"
 #include "http_message_framing_fields.h"
 #include "http_request.h"
+#include "http_request_expectation.h"
 #include "http_uri_syntax.h"
 #include "http_wire_writer.h"
 

@@ -1392,7 +1392,7 @@ public:
     task<void> connect() && = delete;
     // Each call registers one allocation-free capability with the client
     // operation scope, so keep the returned handle for a sequence of commands
-    // instead of calling redis() per command. Like context::redis(), the
+    // instead of calling redis() per command. Like worker_services::redis(), the
     // handle carries no operation options; derive them with with_options().
     [[nodiscard]] redis_executor redis() const&;
     redis_executor redis() const&& = delete;

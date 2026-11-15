@@ -34,46 +34,25 @@
 
 namespace ruvia {
 
-web_worker_context::web_worker_context(const worker_ref& worker_value, const detail::worker_client_registry_view& client_registries, const detail::worker_state_registry* worker_states, const ::ruvia::stop_token& stop_token_value) noexcept :
-    capabilities_(worker_value, stop_token_value, worker_states),
-    client_registries_(client_registries) {
+web_worker_context::web_worker_context(const worker_ref& worker_value, const detail::worker_client_registry_view& client_registries, const detail::worker_state_registry* worker_states, const ::ruvia::stop_token& stop_token_value, const ruvia::env* env) noexcept :
+    worker_(worker_value),
+    stop_token_(stop_token_value),
+    worker_states_(worker_states),
+    client_registries_(client_registries),
+    env_(env) {
     operation_scope_.bind_worker(worker_value);
 }
 const worker_ref& web_worker_context::worker() const& noexcept {
-    return capabilities_.worker();
+    return worker_;
 }
 
 ::ruvia::stop_token web_worker_context::stop_token() const noexcept {
-    return capabilities_.stop_token();
+    return stop_token_;
 }
 
-#ifdef RUVIA_ENABLE_DATABASE
-db_executor web_worker_context::db() const {
-    return client_registries_.db(operation_scope_, nullptr, capabilities_.stop_token());
+worker_services web_worker_context::services() const& noexcept {
+    return worker_services(worker_, stop_token_, worker_states_, client_registries_, operation_scope_, nullptr, env_);
 }
-
-db_executor web_worker_context::db(std::string_view alias) const {
-    return client_registries_.db(alias, operation_scope_, nullptr, capabilities_.stop_token());
-}
-#endif
-
-http_client_ref web_worker_context::client() const {
-    return client_registries_.client(operation_scope_, capabilities_.stop_token());
-}
-
-http_client_ref web_worker_context::client(std::string_view alias) const {
-    return client_registries_.client(alias, operation_scope_, capabilities_.stop_token());
-}
-
-#ifdef RUVIA_ENABLE_REDIS
-redis_executor web_worker_context::redis() const {
-    return client_registries_.redis(operation_scope_, nullptr, capabilities_.stop_token());
-}
-
-redis_executor web_worker_context::redis(std::string_view alias) const {
-    return client_registries_.redis(alias, operation_scope_, nullptr, capabilities_.stop_token());
-}
-#endif
 
 web_worker_ref::web_worker_ref(std::shared_ptr<detail::web_worker_dispatch> dispatch) noexcept :
     dispatch_(std::move(dispatch)) {}
@@ -133,6 +112,7 @@ web_worker_dispatch::web_worker_dispatch(ruvia::worker_runtime& runtime, worker_
     runtime_(runtime),
     client_registries_(capabilities.client_registries()),
     worker_states_(capabilities.worker_states()),
+    env_(capabilities.app_env()),
     jobs_(jobs),
     stop_token_(stop_token_value) {}
 
@@ -209,7 +189,7 @@ void web_worker_dispatch::start(job_type job) {
 ruvia::task<void> web_worker_dispatch::run(job_type job) {
     std::exception_ptr failure;
     try {
-        web_worker_context context(worker_, client_registries_, &worker_states_, stop_token_);
+        web_worker_context context(worker_, client_registries_, &worker_states_, stop_token_, env_);
         co_await job(context);
     } catch (...) {
         failure = std::current_exception();

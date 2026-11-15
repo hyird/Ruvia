@@ -304,8 +304,7 @@ public:
     }
     void capture_connection_info(http_client_response_state& response, bool reused) const {
         if (response.connection_info_.id_ != connection_id_) {
-            response.connection_info_.peer_ip_ = peer_ip_;
-            response.connection_info_.peer_port_ = remote_.port();
+            response.connection_info_.remote_ = ip_endpoint(peer_ip_, remote_.port());
             response.connection_info_.id_ = connection_id_;
         }
         response.connection_info_.reused_ = reused;

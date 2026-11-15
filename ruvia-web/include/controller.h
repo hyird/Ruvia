@@ -282,12 +282,14 @@ void register_controller_routes(void* controller_value, router& router_value) {
     controller_registration_access<controller_type>::register_routes(*static_cast<controller_type*>(controller_value), router_value);
 }
 
+// The one registrar a controller type contributes, shared by RUVIA_ROUTES_END
+// (process registry for application) and test_app::controllers<...>().
 template <typename controller_type>
-[[nodiscard]] bool register_controller() {
+[[nodiscard]] controller_registrar controller_registrar_of() noexcept {
     static_assert(std::is_final_v<controller_type>, "controller must be final");
     static_assert(std::is_default_constructible_v<controller_type>, "controller must be default constructible");
 
-    return add_controller_registrar({.create_ = &create_controller<controller_type>, .register_routes_ = &register_controller_routes<controller_type>});
+    return {.create_ = &create_controller<controller_type>, .register_routes_ = &register_controller_routes<controller_type>};
 }
 
 template <typename member_type>
@@ -530,7 +532,7 @@ private:                                                                        
 
 #define RUVIA_ROUTES_END \
     }                    \
-    RUVIA_DETAIL_CONTROLLER_RETAIN inline static const bool ruvia_controller_registered_ = ::ruvia::detail::register_controller<ruvia_controller_type>();
+    RUVIA_DETAIL_CONTROLLER_RETAIN inline static const bool ruvia_controller_registered_ = ::ruvia::detail::add_controller_registrar(::ruvia::detail::controller_registrar_of<ruvia_controller_type>());
 
 #define RUVIA_DETAIL_ADD_METHOD_ROUTE(method, path, handler, ...) ruvia_controller_access_type::add_route(ruvia_route_scope, method, {}, path, ruvia_controller_access_type::template bind<&ruvia_controller_type::handler>(this), ruvia_controller_access_type::template make_middlewares<__VA_ARGS__>())
 

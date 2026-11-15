@@ -145,6 +145,7 @@ ruvia_install_component(ruvia-web web)
 set(ruvia_web_headers
     include/app.h
     include/callback_ref.h
+    include/connection_transport.h
     include/context.h
     include/controller.h
     include/entity_storage.h
@@ -172,6 +173,7 @@ set(ruvia_web_headers
     include/test_app.h
     include/tls_config.h
     include/websocket.h
+    include/worker_services.h
     include/worker_state.h
 )
 if(RUVIA_ENABLE_MARIADB OR RUVIA_ENABLE_POSTGRESQL)

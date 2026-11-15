@@ -24,7 +24,6 @@
 #include "http_header.h"
 #include "http_multiplexed_stream.h"
 #include "http_priority.h"
-#include "http_request.h"
 #include "http_response.h"
 #include "http_response_body.h"
 #include "http_response_stream.h"

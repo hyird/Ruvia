@@ -305,7 +305,7 @@ void native_tls_context_scope::new_context(void* parent, void*, CRYPTO_EX_DATA* 
 }
 
 void validate_tls_record_limit(std::uint64_t limit) {
-    if (limit == 0 || limit > (std::uint64_t{1} << 23)) {
+    if (limit == 0 || limit > max_outgoing_tls_records) {
         throw std::invalid_argument("TLS outgoing record limit must be in 1..2^23");
     }
 }

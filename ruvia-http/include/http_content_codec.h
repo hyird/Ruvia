@@ -3,6 +3,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <exception>
 #include <limits>
 #include <optional>
 #include <span>
@@ -30,49 +31,6 @@ struct http_content_encode_options final {
     std::size_t max_encoded_bytes_{};
 };
 
-// Produces one complete content-coded representation within the exact output
-// cap. nullopt means only that max_encoded_bytes_ would be exceeded; zero
-// permits only a zero-byte encoding. Codec failures throw
-// http_content_codec_error.
-[[nodiscard]] std::optional<std::string> encode_http_content(http_content_coding coding, std::string_view input, http_content_encode_options options);
-
-// Applies the listed codings in order. Each intermediate representation is
-// bounded by max_encoded_bytes and released before the next stage completes.
-[[nodiscard]] std::optional<std::string> encode_http_content(std::span<const http_content_coding> codings, std::string_view input, http_content_encode_options options);
-
-// Reusable whole-buffer encoder for one coding, for an owner that encodes many
-// representations on one thread. The first encode() creates the codec state;
-// gzip, deflate and zstd keep it and reset it after every call that returns,
-// and discard it after an exception, so no history and no failed state crosses
-// representations. Brotli has no reset, so its state is created per call.
-// Results follow encode_http_content() exactly: the same bytes, cap, and
-// failures. The context is not thread-safe.
-class http_content_encode_context final {
-public:
-    explicit http_content_encode_context(http_content_coding coding) noexcept;
-    ~http_content_encode_context();
-    http_content_encode_context(const http_content_encode_context&) = delete;
-    http_content_encode_context& operator=(const http_content_encode_context&) = delete;
-    http_content_encode_context(http_content_encode_context&&) = delete;
-    http_content_encode_context& operator=(http_content_encode_context&&) = delete;
-
-    [[nodiscard]] http_content_coding coding() const noexcept {
-        return coding_;
-    }
-
-    [[nodiscard]] std::optional<std::string> encode(std::string_view input, http_content_encode_options options);
-
-private:
-    struct impl_type;
-    http_content_coding coding_;
-    impl_type* impl_{nullptr};
-};
-
-// Data errors only: a codec that cannot run throws http_content_codec_error.
-enum class http_content_decode_error : std::uint8_t { unsupported_coding,
-    invalid_content,
-    decoded_size_exceeded };
-
 struct http_content_decode_options final {
     std::size_t max_decoded_bytes_{};
 };
@@ -91,15 +49,13 @@ struct http_content_decode_options final {
 // is released before the next stage completes. Codec failures throw
 // http_content_codec_error.
 [[nodiscard]] std::variant<std::string, http_content_decode_error> decode_http_content(std::span<const http_content_coding> codings, std::string_view input, http_content_decode_options options);
-struct http_content_encoder_options final {
-    std::size_t max_encoded_bytes_{(std::numeric_limits<std::size_t>::max)()};
-    std::size_t max_memory_bytes_{(std::numeric_limits<std::size_t>::max)()};
-};
 
-// Synchronous incremental representation encoder. Each write consumes all of
-// its input and appends to caller-owned output; it does not retain either view.
-// Input may borrow output. Compressed writes snapshot that input before an
-// append can invalidate it.
+// The one content encoder: whole-buffer encode() and incremental write()/
+// finish() run the same codec stream. An unknown coding value throws
+// std::invalid_argument. max_memory_bytes bounds the codec's working memory.
+// Each write consumes all of its input and appends to caller-owned output; it
+// does not retain either view. Input may borrow output. Compressed writes
+// snapshot that input before an append can invalidate it.
 // Output can be cleared between calls and remains valid after encoder destruction.
 // Empty input is valid, including repeated flushes; it does not end the stream.
 // Codec failures throw http_content_codec_error; allocation exceptions retain
@@ -113,7 +69,7 @@ struct http_content_encoder_options final {
 // which may allocate. A reset failure leaves the encoder failed.
 class http_content_encoder final {
 public:
-    explicit http_content_encoder(http_content_coding coding, http_content_encoder_options options = {});
+    explicit http_content_encoder(http_content_coding coding, std::size_t max_memory_bytes = (std::numeric_limits<std::size_t>::max)());
     ~http_content_encoder();
     http_content_encoder(const http_content_encoder&) = delete;
     http_content_encoder& operator=(const http_content_encoder&) = delete;
@@ -127,6 +83,11 @@ public:
     // flush emits pending bytes for low-latency response streams such as SSE.
     void write(std::string_view input, std::string& output, bool flush = false);
     void finish(std::string& output);
+    // One complete representation within the exact output cap. nullopt means
+    // only that max_encoded_bytes_ would be exceeded; zero permits only a
+    // zero-byte encoding. Consumes the stream like write() plus finish();
+    // reset() before the next representation.
+    [[nodiscard]] std::optional<std::string> encode(std::string_view input, http_content_encode_options options);
     void reset();
 
 private:
@@ -139,20 +100,29 @@ private:
     phase phase_{phase::active};
 };
 
+// A fresh http_content_encoder's encode().
+[[nodiscard]] std::optional<std::string> encode_http_content(http_content_coding coding, std::string_view input, http_content_encode_options options);
+
 class http_worker_codecs;
 
-// RAII lease for a pooled incremental encoder from http_worker_codecs.
-// Destroying a non-discarded lease resets and returns the encoder to the pool;
-// discard() destroys a failed encoder instead of pooling it.
-class http_stream_encoder_lease final {
+// RAII lease for a pooled encoder from http_worker_codecs. Destroying a
+// non-discarded lease resets and returns the encoder to the pool, unless the
+// scope is unwinding an exception: failed native state never crosses
+// representations. discard() destroys a failed encoder instead of pooling it.
+class http_content_encoder_lease final {
 public:
-    http_stream_encoder_lease(const http_stream_encoder_lease&) = delete;
-    http_stream_encoder_lease& operator=(const http_stream_encoder_lease&) = delete;
-    http_stream_encoder_lease(http_stream_encoder_lease&& other) noexcept :
+    http_content_encoder_lease(const http_content_encoder_lease&) = delete;
+    http_content_encoder_lease& operator=(const http_content_encoder_lease&) = delete;
+    http_content_encoder_lease(http_content_encoder_lease&& other) noexcept :
         codecs_(std::exchange(other.codecs_, nullptr)),
-        encoder_(std::exchange(other.encoder_, nullptr)) {}
-    ~http_stream_encoder_lease() {
-        release();
+        encoder_(std::exchange(other.encoder_, nullptr)),
+        uncaught_exceptions_(other.uncaught_exceptions_) {}
+    ~http_content_encoder_lease() {
+        if (std::uncaught_exceptions() != uncaught_exceptions_) {
+            discard();
+        } else {
+            release();
+        }
     }
 
     [[nodiscard]] http_content_encoder& encoder() & noexcept RUVIA_LIFETIMEBOUND {
@@ -165,66 +135,61 @@ public:
 private:
     friend class http_worker_codecs;
 
-    http_stream_encoder_lease(http_worker_codecs& codecs, http_content_encoder& encoder) noexcept :
+    http_content_encoder_lease(http_worker_codecs& codecs, http_content_encoder& encoder) noexcept :
         codecs_(&codecs),
-        encoder_(&encoder) {}
+        encoder_(&encoder),
+        uncaught_exceptions_(std::uncaught_exceptions()) {}
 
     void release() noexcept;
 
     http_worker_codecs* codecs_{nullptr};
     http_content_encoder* encoder_{nullptr};
+    int uncaught_exceptions_{0};
 };
 
-// Per-worker reusable buffered and streaming content encoder pool.
+// Per-worker reusable content encoder pool, for buffered and streaming
+// responses alike. Not thread-safe.
 class http_worker_codecs final {
 public:
-    http_worker_codecs() noexcept;
+    http_worker_codecs() noexcept = default;
     ~http_worker_codecs();
     http_worker_codecs(const http_worker_codecs&) = delete;
     http_worker_codecs& operator=(const http_worker_codecs&) = delete;
 
-    [[nodiscard]] http_content_encode_context& encoder(http_content_coding coding);
-    [[nodiscard]] http_stream_encoder_lease acquire_stream_encoder(http_content_coding coding);
+    // identity has no encoder and throws std::logic_error.
+    [[nodiscard]] http_content_encoder_lease acquire_encoder(http_content_coding coding);
 
 private:
-    friend class http_stream_encoder_lease;
+    friend class http_content_encoder_lease;
 
-    static constexpr std::size_t max_pooled_stream_encoders = 8;
+    static constexpr std::size_t max_pooled_encoders = 8;
 
-    struct stream_encoder_pool_type final {
-        std::array<http_content_encoder*, max_pooled_stream_encoders> free_{};
+    struct encoder_pool_type final {
+        std::array<http_content_encoder*, max_pooled_encoders> free_{};
         std::size_t count_{0};
     };
 
-    struct coding_encoders_type final {
-        explicit coding_encoders_type(http_content_coding coding) noexcept :
-            buffered_(coding) {}
+    [[nodiscard]] encoder_pool_type& pool(http_content_coding coding);
+    void release_encoder(http_content_encoder& encoder) noexcept;
+    static void destroy_encoder(http_content_encoder& encoder) noexcept;
 
-        http_content_encode_context buffered_;
-        stream_encoder_pool_type streaming_;
-    };
-
-    [[nodiscard]] coding_encoders_type& encoders(http_content_coding coding);
-    void release_stream_encoder(http_content_encoder& encoder) noexcept;
-    void destroy_stream_encoder(http_content_encoder& encoder) noexcept;
-
-    coding_encoders_type gzip_;
-    coding_encoders_type deflate_;
-    coding_encoders_type brotli_;
-    coding_encoders_type zstd_;
+    encoder_pool_type gzip_;
+    encoder_pool_type deflate_;
+    encoder_pool_type brotli_;
+    encoder_pool_type zstd_;
 };
 
-inline void http_stream_encoder_lease::release() noexcept {
+inline void http_content_encoder_lease::release() noexcept {
     if (encoder_ != nullptr) {
         auto* const codecs = std::exchange(codecs_, nullptr);
-        codecs->release_stream_encoder(*std::exchange(encoder_, nullptr));
+        codecs->release_encoder(*std::exchange(encoder_, nullptr));
     }
 }
 
-inline void http_stream_encoder_lease::discard() noexcept {
+inline void http_content_encoder_lease::discard() noexcept {
     if (encoder_ != nullptr) {
-        auto* const codecs = std::exchange(codecs_, nullptr);
-        codecs->destroy_stream_encoder(*std::exchange(encoder_, nullptr));
+        codecs_ = nullptr;
+        http_worker_codecs::destroy_encoder(*std::exchange(encoder_, nullptr));
     }
 }
 

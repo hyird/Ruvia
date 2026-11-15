@@ -7,7 +7,7 @@
 #include "borrowed_text.h"
 #include "http_client_request_view.h"
 #include "http_header.h"
-#include "http_request.h"
+#include "http_request_content_plan.h"
 
 // Vocabulary shared by the HTTP/2 and HTTP/3 stream engines: one shape for
 // the request heads, submission outcomes and receive flow-control credit.

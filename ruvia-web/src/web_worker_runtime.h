@@ -83,6 +83,7 @@ private:
     ruvia::worker_runtime& runtime_;
     worker_client_registry_view client_registries_;
     const worker_state_registry& worker_states_;
+    const env* env_;
     task_scope& jobs_;
     const stop_token& stop_token_;
     std::atomic_uint64_t accepted_{0};

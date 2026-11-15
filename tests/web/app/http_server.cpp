@@ -579,10 +579,9 @@ static_assert(accepts_static_root<ruvia::static_root&>);
 static_assert(accepts_static_root<const ruvia::static_root&>);
 static_assert(!accepts_static_root<ruvia::static_root>);
 static_assert(!accepts_static_root<const ruvia::static_root>);
-static_assert(accepts_default_static_root<ruvia::static_root&>);
-static_assert(accepts_default_static_root<const ruvia::static_root&>);
-static_assert(!accepts_default_static_root<ruvia::static_root>);
-static_assert(!accepts_default_static_root<const ruvia::static_root>);
+// The options naming the file are required, as on context::static_file().
+static_assert(!accepts_default_static_root<ruvia::static_root&>);
+static_assert(!accepts_default_static_root<const ruvia::static_root&>);
 
 void write_file(const fs::path& path, std::string_view bytes) {
     std::ofstream output(path, std::ios::binary | std::ios::trunc);
@@ -781,7 +780,7 @@ TEST(Ruvia, independent_request_stream_reuses_open_file_after_path_replacement) 
         const auto path = target == "/single" ? single : (target == "/partial" ? partial : multiple);
         auto response = co_await stream.file({.path_ = path});
         EXPECT_TRUE(response.has_file_representation());
-        const auto replaced = co_await stream.run_blocking([path, bytes] {
+        const auto replaced = co_await stream.services().run_blocking([path, bytes] {
             fs::rename(path.parent_path(), fs::path(path.parent_path()).concat(".opened"));
             fs::create_directory(path.parent_path());
             write_file(path, std::string(bytes.size(), 'Z'));
@@ -824,7 +823,7 @@ TEST(Ruvia, independent_request_stream_revalidates_open_files_before_sending_the
         // Keep the opened inode, but invalidate its framed size. Even a range
         // that still fits must fail validation before any multipart boundary
         // or success head leaves the server.
-        const auto changed = co_await stream.run_blocking([path, size = bytes.size()] {
+        const auto changed = co_await stream.services().run_blocking([path, size = bytes.size()] {
             write_file(path, std::string(size + 1, 'Z'));
         });
         EXPECT_EQ(changed.status(), ruvia::blocking_status::completed);

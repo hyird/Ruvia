@@ -298,7 +298,6 @@ public:
             services.bind_route_rate_limiter(*self->limiter_);
         }
         services.bind_router_capabilities(self->clients_.empty() ? nullptr : &self->clients_, self->worker_states_ ? &*self->worker_states_ : nullptr);
-        binding.bind_worker_states();
         // Only this router's own rule: the host's application-wide rule never
         // covers a request stream.
         if (const auto rejection = decide_request_rate_limit(self->limiter_.get(), context_value.conn().client().address(), services.pinned_arrival())) {

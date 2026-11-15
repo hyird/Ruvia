@@ -406,11 +406,8 @@ public:
     [[nodiscard]] std::string_view local_address() const noexcept {
         return std::string_view(local_text_.data(), local_text_size_);
     }
-    [[nodiscard]] const ip_endpoint& local_endpoint() const noexcept {
-        return event_.local();
-    }
-    [[nodiscard]] const ip_endpoint& remote_endpoint() const noexcept {
-        return event_.remote();
+    [[nodiscard]] const connection_endpoints& endpoints() const noexcept {
+        return event_;
     }
     // On a PROXY protocol listener the event's remote is self-reported by the
     // socket peer; forwarding trust must also hold for that nearest hop.
@@ -469,9 +466,6 @@ public:
     }
     [[nodiscard]] std::uint32_t interface_index() const noexcept {
         return interface_index_;
-    }
-    [[nodiscard]] std::uint16_t local_port() const noexcept {
-        return event_.local().port();
     }
     void bind_transport(connection_transport transport) noexcept {
         transport_ = transport;

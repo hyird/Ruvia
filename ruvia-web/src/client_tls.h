@@ -48,6 +48,10 @@ inline void validate_client_tls_config(const client_tls_config& config) {
     if (config.identity_.has_value() && (!config.identity_->certificate_chain_pem_.empty() || !config.identity_->private_key_pem_.empty())) {
         throw std::invalid_argument("client TLS identities must be PEM files, not in-memory PEM");
     }
+    // A staple belongs to a server identity (RFC 6066 §8); a client never sends one.
+    if (config.identity_.has_value() && !config.identity_->ocsp_response_.empty()) {
+        throw std::invalid_argument("client TLS identities must not carry an OCSP response");
+    }
 }
 
 // Whether a client storage parses its TLS files. Owners that build their own

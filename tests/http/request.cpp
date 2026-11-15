@@ -29,6 +29,7 @@
 #include "http_request.h"
 #include "http_response.h"
 #include "http_response_stream.h"
+#include "http_target_origin.h"
 
 namespace {
 

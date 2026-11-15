@@ -21,8 +21,6 @@
 
 namespace ruvia::detail {
 
-using stream_encoder_lease = http_stream_encoder_lease;
-
 class worker_codecs final {
 public:
     worker_codecs() noexcept = default;
@@ -30,12 +28,8 @@ public:
     worker_codecs(const worker_codecs&) = delete;
     worker_codecs& operator=(const worker_codecs&) = delete;
 
-    [[nodiscard]] http_content_encode_context& encoder(http_content_coding coding) {
-        return content_codecs_.encoder(coding);
-    }
-
-    [[nodiscard]] stream_encoder_lease acquire_stream_encoder(http_content_coding coding) {
-        return content_codecs_.acquire_stream_encoder(coding);
+    [[nodiscard]] http_content_encoder_lease acquire_encoder(http_content_coding coding) {
+        return content_codecs_.acquire_encoder(coding);
     }
 
     [[nodiscard]] websocket_deflate_codecs& websocket_deflate() noexcept {

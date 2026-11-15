@@ -14,6 +14,7 @@
 #include <variant>
 
 #include "http_compression_codec.h"
+#include "http_content_codec.h"
 
 namespace ruvia {
 
@@ -23,10 +24,10 @@ namespace detail {
 // second public decoder. Its address must stay fixed for the pinned zlib stream.
 class transfer_coding_decoder final {
 public:
-    transfer_coding_decoder(http_transfer_coding coding, protocol_byte_limit decoded_limit);
+    transfer_coding_decoder(http_content_coding coding, protocol_byte_limit decoded_limit);
     transfer_coding_decoder(const transfer_coding_decoder&) = delete;
     transfer_coding_decoder& operator=(const transfer_coding_decoder&) = delete;
-    [[nodiscard]] http_transfer_coding_decode_result decode(std::string_view input, std::span<char> output) noexcept;
+    [[nodiscard]] http_transfer_coding_decode_result decode(std::string_view input, std::span<char> output);
     [[nodiscard]] http_transfer_coding_decode_result finish_input() noexcept;
     [[nodiscard]] bool received_input() const noexcept {
         return received_input_;
@@ -46,44 +47,39 @@ private:
     [[nodiscard]] static http_transfer_coding_decode_result need_input(std::size_t consumed) noexcept;
     [[nodiscard]] static http_transfer_coding_decode_result output(std::size_t consumed, std::string_view bytes) noexcept;
     [[nodiscard]] static http_transfer_coding_decode_result complete(std::size_t consumed) noexcept;
-    [[nodiscard]] static http_transfer_coding_decode_result fail(std::size_t consumed, http_transfer_coding_decode_error error) noexcept;
-    [[nodiscard]] static http_transfer_coding_decode_result fail_decoder(std::size_t consumed) noexcept;
+    [[nodiscard]] static http_transfer_coding_decode_result fail(std::size_t consumed, http_content_decode_error error) noexcept;
     zlib_inflate_stream stream_;
     state state_{active{}};
     protocol_byte_limit body_limit_;
     std::size_t decoded_bytes_{0};
     // An empty coded body carries no content and completes at framing EOF.
     bool received_input_{false};
-    http_transfer_coding coding_;
+    http_content_coding coding_;
 };
 
 namespace {
 
-[[nodiscard]] int transfer_coding_window_bits(http_transfer_coding coding) {
-    switch (coding) {
-        case http_transfer_coding::gzip:
-            return 15 + 16;
-        case http_transfer_coding::deflate:
-            return 15;
-        default:
-            throw std::invalid_argument("unsupported HTTP transfer coding");
+[[nodiscard]] int transfer_coding_window_bits(http_content_coding coding) {
+    if (!is_http_transfer_coding(coding)) {
+        throw std::invalid_argument("unsupported HTTP transfer coding");
     }
+    return coding == http_content_coding::gzip ? 15 + 16 : 15;
 }
 
 }  // namespace
 
-transfer_coding_decoder::transfer_coding_decoder(http_transfer_coding coding, protocol_byte_limit decoded_limit) :
+transfer_coding_decoder::transfer_coding_decoder(http_content_coding coding, protocol_byte_limit decoded_limit) :
     stream_(transfer_coding_window_bits(coding)),
     body_limit_(decoded_limit),
     coding_(coding) {
     if (!stream_.initialized()) {
-        throw std::runtime_error("failed to initialize transfer-coding decoder");
+        throw http_content_codec_error("failed to initialize transfer-coding decoder");
     }
 }
 
-http_transfer_coding_decode_result transfer_coding_decoder::decode(std::string_view input, std::span<char> output_buffer) noexcept {
+http_transfer_coding_decode_result transfer_coding_decoder::decode(std::string_view input, std::span<char> output_buffer) {
     if (std::holds_alternative<completed>(state_)) {
-        return input.empty() ? complete(0) : fail(0, http_transfer_coding_decode_error::invalid_content);
+        return input.empty() ? complete(0) : fail(0, http_content_decode_error::invalid_content);
     }
 
     std::size_t consumed = 0;
@@ -94,7 +90,7 @@ http_transfer_coding_decode_result transfer_coding_decoder::decode(std::string_v
                 return produced != 0 ? output(consumed, std::string_view(output_buffer.data(), produced)) : need_input(consumed);
             }
             if (!stream_.reset()) {
-                return fail_decoder(consumed);
+                throw http_content_codec_error("failed to reset transfer-coding decoder");
             }
             state_.emplace<active>();
         }
@@ -104,15 +100,15 @@ http_transfer_coding_decode_result transfer_coding_decoder::decode(std::string_v
         consumed += step.consumed_;
         received_input_ = received_input_ || step.consumed_ != 0;
         if (body_limit_.addition_exceeds(decoded_bytes_, step.produced_)) {
-            return fail(consumed, http_transfer_coding_decode_error::decoded_size_exceeded);
+            return fail(consumed, http_content_decode_error::decoded_size_exceeded);
         }
         decoded_bytes_ += step.produced_;
         produced += step.produced_;
 
         if (step.status_ == Z_STREAM_END) {
-            if (coding_ != http_transfer_coding::gzip) {
+            if (coding_ != http_content_coding::gzip) {
                 if (consumed != input.size()) {
-                    return fail(consumed, http_transfer_coding_decode_error::invalid_content);
+                    return fail(consumed, http_content_decode_error::invalid_content);
                 }
                 state_.emplace<completed>();
                 return produced != 0 ? output(consumed, std::string_view(output_buffer.data(), produced)) : complete(consumed);
@@ -131,9 +127,9 @@ http_transfer_coding_decode_result transfer_coding_decoder::decode(std::string_v
 
         if (step.status_ != Z_OK && step.status_ != Z_BUF_ERROR) {
             if (step.status_ == Z_DATA_ERROR || step.status_ == Z_NEED_DICT) {
-                return fail(consumed, http_transfer_coding_decode_error::invalid_content);
+                return fail(consumed, http_content_decode_error::invalid_content);
             }
-            return fail_decoder(consumed);
+            throw http_content_codec_error("transfer-coding decoder failed");
         }
 
         if (produced != 0) {
@@ -146,7 +142,7 @@ http_transfer_coding_decode_result transfer_coding_decoder::decode(std::string_v
             if (step.consumed_ == window_bytes) {
                 continue;
             }
-            return fail(consumed, http_transfer_coding_decode_error::invalid_content);
+            return fail(consumed, http_content_decode_error::invalid_content);
         }
         return need_input(consumed);
     }
@@ -157,7 +153,7 @@ http_transfer_coding_decode_result transfer_coding_decoder::finish_input() noexc
         state_.emplace<completed>();
         return complete(0);
     }
-    return fail(0, http_transfer_coding_decode_error::invalid_content);
+    return fail(0, http_content_decode_error::invalid_content);
 }
 
 transfer_coding_decoder::inflate_step_result transfer_coding_decoder::inflate_step(std::string_view input, std::span<char> output) noexcept {
@@ -191,12 +187,8 @@ http_transfer_coding_decode_result transfer_coding_decoder::complete(std::size_t
     return http_transfer_coding_decode_result(http_transfer_coding_decode_complete(consumed));
 }
 
-http_transfer_coding_decode_result transfer_coding_decoder::fail(std::size_t consumed, http_transfer_coding_decode_error error) noexcept {
+http_transfer_coding_decode_result transfer_coding_decoder::fail(std::size_t consumed, http_content_decode_error error) noexcept {
     return http_transfer_coding_decode_result(http_transfer_coding_decode_failure(consumed, error));
-}
-
-http_transfer_coding_decode_result transfer_coding_decoder::fail_decoder(std::size_t consumed) noexcept {
-    return http_transfer_coding_decode_result(http_transfer_coding_decoder_failure(consumed));
 }
 
 }  // namespace detail
@@ -212,7 +204,7 @@ struct transfer_coding_scratch_buffer final {
 };
 
 struct transfer_coding_stage final {
-    transfer_coding_stage(http_transfer_coding coding, protocol_byte_limit decoded_limit) :
+    transfer_coding_stage(http_content_coding coding, protocol_byte_limit decoded_limit) :
         decoder_(coding, decoded_limit) {}
 
     detail::transfer_coding_decoder decoder_;
@@ -224,24 +216,23 @@ struct transfer_coding_stage final {
 }  // namespace
 
 struct http_transfer_coding_stack_decoder::impl_type final {
-    impl_type(std::span<const http_transfer_coding> codings, protocol_byte_limit decoded_limit) :
+    impl_type(std::span<const http_content_coding> codings, protocol_byte_limit decoded_limit) :
         stage_count_(codings.size()) {
         std::size_t index = 0;
         for (auto coding = codings.rbegin(); coding != codings.rend(); ++coding) {
             stages_[index++].emplace(*coding, decoded_limit);
         }
     }
-    std::array<std::optional<transfer_coding_stage>, max_transfer_codings> stages_{};
+    std::array<std::optional<transfer_coding_stage>, max_content_codings> stages_{};
     std::size_t stage_count_{0};
     // Only inter-stage edges own scratch. The final stage writes directly to
     // the caller's buffer, so a one-coding sequence uses no internal scratch.
-    std::array<transfer_coding_scratch_buffer, max_transfer_codings - 1> buffers_;
-    std::optional<http_transfer_coding_decode_error> failure_;
-    bool decoder_failed_{false};
+    std::array<transfer_coding_scratch_buffer, max_content_codings - 1> buffers_;
+    std::optional<http_content_decode_error> failure_;
 };
 
-http_transfer_coding_stack_decoder::http_transfer_coding_stack_decoder(std::span<const http_transfer_coding> codings, protocol_byte_limit decoded_limit) {
-    if (codings.empty() || codings.size() > max_transfer_codings) {
+http_transfer_coding_stack_decoder::http_transfer_coding_stack_decoder(std::span<const http_content_coding> codings, protocol_byte_limit decoded_limit) {
+    if (codings.empty() || codings.size() > max_content_codings) {
         throw std::invalid_argument("invalid transfer-coding stack length");
     }
     impl_ = new impl_type(codings, decoded_limit);
@@ -251,19 +242,15 @@ http_transfer_coding_stack_decoder::~http_transfer_coding_stack_decoder() {
     delete impl_;
 }
 
-http_transfer_coding_decode_result http_transfer_coding_stack_decoder::decode(std::string_view input, std::span<char> output_buffer) noexcept {
+http_transfer_coding_decode_result http_transfer_coding_stack_decoder::decode(std::string_view input, std::span<char> output_buffer) {
     const auto failed = [this](std::size_t consumed) {
-        if (impl_->decoder_failed_) {
-            return http_transfer_coding_decode_result(http_transfer_coding_decoder_failure(consumed));
-        }
         return http_transfer_coding_decode_result(http_transfer_coding_decode_failure(consumed, *impl_->failure_));
     };
-    if (impl_->decoder_failed_ || impl_->failure_.has_value()) {
+    if (impl_->failure_.has_value()) {
         return failed(0);
     }
     if (output_buffer.empty()) {
-        impl_->decoder_failed_ = true;
-        return http_transfer_coding_decode_result(http_transfer_coding_decoder_failure(0));
+        throw std::invalid_argument("transfer-coding decode needs output space");
     }
 
     std::size_t wire_consumed = 0;
@@ -283,7 +270,7 @@ http_transfer_coding_decode_result http_transfer_coding_stack_decoder::decode(st
             }
             if (stage.complete_) {
                 if (!layer_input.empty()) {
-                    impl_->failure_ = http_transfer_coding_decode_error::invalid_content;
+                    impl_->failure_ = http_content_decode_error::invalid_content;
                     return failed(wire_consumed);
                 }
                 continue;
@@ -315,10 +302,6 @@ http_transfer_coding_decode_result http_transfer_coding_stack_decoder::decode(st
                 impl_->failure_ = protocol_failure->error();
                 return failed(wire_consumed);
             }
-            if (decoded.decoder_failure() != nullptr) {
-                impl_->decoder_failed_ = true;
-                return failed(wire_consumed);
-            }
             if (decoded.complete() != nullptr) {
                 stage.complete_ = true;
                 progressed = true;
@@ -342,9 +325,6 @@ http_transfer_coding_decode_result http_transfer_coding_stack_decoder::decode(st
 }
 
 http_transfer_coding_decode_result http_transfer_coding_stack_decoder::finish_input() noexcept {
-    if (impl_->decoder_failed_) {
-        return http_transfer_coding_decode_result(http_transfer_coding_decoder_failure(0));
-    }
     if (impl_->failure_.has_value()) {
         return http_transfer_coding_decode_result(http_transfer_coding_decode_failure(0, *impl_->failure_));
     }
@@ -358,17 +338,13 @@ http_transfer_coding_decode_result http_transfer_coding_stack_decoder::finish_in
             continue;
         }
         if (index > 0 && wire_received_input && !stage.decoder_.received_input()) {
-            impl_->failure_ = http_transfer_coding_decode_error::invalid_content;
+            impl_->failure_ = http_content_decode_error::invalid_content;
             return http_transfer_coding_decode_result(http_transfer_coding_decode_failure(0, *impl_->failure_));
         }
         const auto finished = stage.decoder_.finish_input();
         if (const auto* protocol_failure = finished.failure()) {
             impl_->failure_ = protocol_failure->error();
             return http_transfer_coding_decode_result(http_transfer_coding_decode_failure(0, *impl_->failure_));
-        }
-        if (finished.decoder_failure() != nullptr) {
-            impl_->decoder_failed_ = true;
-            return http_transfer_coding_decode_result(http_transfer_coding_decoder_failure(0));
         }
         stage.complete_ = true;
     }

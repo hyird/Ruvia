@@ -1,6 +1,6 @@
 // Worker-local state and blocking work: use_worker_state<T> per-worker
 // instances shared by the HTTP and dispatch paths, cross-worker task posting
-// via application::worker_for / web_worker_ref::post, and context::run_blocking() --
+// via application::worker_for / web_worker_ref::post, and worker_services::run_blocking() --
 // the escape hatch for calls that block, which run on application::blocking_pool()'s
 // threads so the worker stays free to serve its other connections.
 // Run ruvia_example_workers_blocking on port 8090; inspect its route macros
@@ -50,7 +50,7 @@ public:
 
 private:
     ruvia::task<ruvia::http_response> stats(ruvia::context& c) {
-        auto& state_value = c.worker_state<worker_stats>();
+        auto& state_value = c.services().worker_state<worker_stats>();
         ++state_value.served_;
         std::string body;
         body.append("served=");
@@ -68,7 +68,7 @@ private:
     // becomes a typed rejection; take_value() explicitly throws
     // blocking_operation_rejected, which the default error path answers with 503.
     ruvia::task<ruvia::http_response> offload(ruvia::context& c) {
-        auto result_value = co_await c.run_blocking([input = std::string(c.req().query("input").value_or("default"))] {
+        auto result_value = co_await c.services().run_blocking([input = std::string(c.req().query("input").value_or("default"))] {
             return slow_checksum(input);
         });
         const auto checksum = std::move(result_value).take_value();
@@ -83,7 +83,7 @@ private:
     // the error path, and a deadline so one wedged call cannot pin the request
     // forever.
     ruvia::task<ruvia::http_response> offload_or_shed(ruvia::context& c) {
-        auto result_value = co_await c.run_blocking([input = std::string("expensive input")] {
+        auto result_value = co_await c.services().run_blocking([input = std::string("expensive input")] {
             return slow_checksum(input);
         }, {.timeout_ = std::chrono::seconds(2)});
         if (!result_value.completed()) {
@@ -103,7 +103,7 @@ private:
         std::size_t accepted = 0;
         for (const auto& worker : ruvia::app().workers()) {
             const auto posted = worker.post([](ruvia::web_worker_context& ctx) -> ruvia::task<void> {
-                ++ctx.worker_state<worker_stats>().dispatched_;
+                ++ctx.services().worker_state<worker_stats>().dispatched_;
                 co_return;
             });
             if (posted == ruvia::post_status::accepted) {

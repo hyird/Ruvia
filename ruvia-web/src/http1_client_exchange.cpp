@@ -33,6 +33,7 @@
 #include "http_client_request_storage.h"
 #include "http_client_response_state.h"
 #include "http_client_types.h"
+#include "http_content_codec.h"
 #include "http_header.h"
 #include "http_io_buffer.h"
 #include "http_message.h"
@@ -169,8 +170,6 @@ void publish_body_progress(http_client_response_state& state_value, const http1_
         }
     } else if (const auto* failure = decoded.protocol_failure()) {
         throw http_client_error(make_error_code(http_client_errc::protocol_error), http1_client_response_body_error_message(failure->error()));
-    } else if (decoded.decoder_failure() != nullptr) {
-        throw http_client_error(make_error_code(http_client_errc::protocol_error), "HTTP/1 response body decoder failed");
     }
 }
 
@@ -458,7 +457,14 @@ task<void> http1_client_exchange::receive(const http_client_request_storage& req
         const auto output = needs_transfer_scratch ? transfer_output : (!empty_body && !read_buffer.empty() ? std::span<char>(read_buffer.data(), std::min(read_buffer.size(), http_body_buffer_bytes)) : std::span<char>(empty_output));
         const auto capacity = state_value.collect_all_ ? output.size() : std::min(output.size(), max_response_bytes - state_value.pending_.size());
         const auto scratch = output.first(capacity);
-        const auto decoded = eof ? body_decoder.finish_input(read_buffer.view(), scratch) : body_decoder.decode(read_buffer.view(), scratch);
+        const auto decoded = [&] {
+            try {
+                return eof ? body_decoder.finish_input(read_buffer.view(), scratch) : body_decoder.decode(read_buffer.view(), scratch);
+            } catch (const http_content_codec_error&) {
+                // A transfer codec that cannot run is reported like any other body failure.
+                throw http_client_error(make_error_code(http_client_errc::protocol_error), "HTTP/1 response body decoder failed");
+            }
+        }();
         const auto consumed = decoded.consumed_bytes();
         publish_body_progress(state_value, decoded, max_response_bytes);
         // Output/trailers have been owned before their source is compacted.

@@ -15,6 +15,7 @@
 #include "http_request_body_failure.h"
 #include "http_response.h"
 #include "http_response_body.h"
+#include "http_target_origin.h"
 #include "rate_limit.h"
 #include "response_coding_policy.h"
 #include "route_table.h"

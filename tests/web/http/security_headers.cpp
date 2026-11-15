@@ -525,6 +525,7 @@ void configure_window_limit(ruvia::test_app& app, std::size_t max_requests, std:
 
 TEST(Ruvia, rate_limit_saturated_table_denies_new_keys_and_keeps_counting_held_keys) {
     ruvia::test_app app;
+    app.controllers<rate_limit_table_controller>();
     configure_saturating_limit(app, ruvia::rate_limit_overflow_policy::deny);
     for (const auto address : held_addresses) {
         EXPECT_TRUE(request_from(app, address) == ruvia::http_status::ok);
@@ -541,6 +542,7 @@ TEST(Ruvia, rate_limit_saturated_table_denies_new_keys_and_keeps_counting_held_k
 
 TEST(Ruvia, rate_limit_saturated_table_admits_new_keys_under_allow_overflow) {
     ruvia::test_app app;
+    app.controllers<rate_limit_table_controller>();
     configure_saturating_limit(app, ruvia::rate_limit_overflow_policy::allow);
     for (const auto address : held_addresses) {
         EXPECT_TRUE(request_from(app, address) == ruvia::http_status::ok);
@@ -556,6 +558,7 @@ TEST(Ruvia, rate_limit_saturated_table_admits_new_keys_under_allow_overflow) {
 TEST(Ruvia, rate_limit_budget_spent_before_a_window_boundary_does_not_refill_after_it) {
     using std::chrono::milliseconds;
     ruvia::test_app app;
+    app.controllers<rate_limit_table_controller>();
     configure_window_limit(app, 10, milliseconds(1000));
     constexpr std::string_view client = "198.51.100.1";
     // The first request opens the key's window at 0; the other nine go in its
@@ -596,6 +599,7 @@ TEST(Ruvia, rate_limit_budget_spent_before_a_window_boundary_does_not_refill_aft
 TEST(Ruvia, rate_limit_admits_steady_traffic_paced_at_the_limit) {
     using std::chrono::milliseconds;
     ruvia::test_app app;
+    app.controllers<rate_limit_table_controller>();
     configure_window_limit(app, 4, milliseconds(400));
     // Gaps longer than window / limit keep the estimate below the limit at
     // every arrival, across three window boundaries.
@@ -616,6 +620,7 @@ TEST(Ruvia, rate_limit_admits_steady_traffic_paced_at_the_limit) {
 
 TEST(Ruvia, rate_limit_refusal_headers_follow_the_estimate) {
     ruvia::test_app app;
+    app.controllers<rate_limit_table_controller>();
     configure_window_limit(app, 2, std::chrono::minutes(10));
     constexpr std::string_view client = "198.51.100.4";
     EXPECT_TRUE(request_from(app, client) == ruvia::http_status::ok);
@@ -633,6 +638,7 @@ TEST(Ruvia, rate_limit_refusal_headers_follow_the_estimate) {
 
 TEST(Ruvia, rate_limit_refusal_headers_do_not_saturate_for_the_longest_window) {
     ruvia::test_app app;
+    app.controllers<rate_limit_table_controller>();
     configure_window_limit(app, 1, std::chrono::milliseconds::max());
     constexpr std::string_view client = "198.51.100.5";
     EXPECT_TRUE(request_from(app, client) == ruvia::http_status::ok);
@@ -648,6 +654,7 @@ TEST(Ruvia, rate_limit_refusal_headers_do_not_saturate_for_the_longest_window) {
 TEST(Ruvia, rate_limit_reset_preserves_fractional_window_origin) {
     using namespace std::chrono;
     ruvia::test_app app;
+    app.controllers<rate_limit_table_controller>();
     configure_window_limit(app, 1, milliseconds(1000));
     constexpr std::string_view client = "198.51.100.7";
     EXPECT_EQ(request_from(app, client, microseconds(900)), ruvia::http_status::ok);
@@ -663,6 +670,7 @@ TEST(Ruvia, rate_limit_reset_preserves_fractional_window_origin) {
 TEST(Ruvia, rate_limit_reclamation_preserves_fractional_window_origin) {
     using namespace std::chrono;
     ruvia::test_app app;
+    app.controllers<rate_limit_table_controller>();
     configure_window_limit(app, 1, milliseconds(1000), 1);
     EXPECT_EQ(request_from(app, held_addresses[0], microseconds(900)), ruvia::http_status::ok);
     EXPECT_EQ(request_from(app, held_addresses[1], milliseconds(2000)), ruvia::http_status::too_many_requests);
@@ -672,6 +680,7 @@ TEST(Ruvia, rate_limit_reclamation_preserves_fractional_window_origin) {
 TEST(Ruvia, rate_limit_table_reclaims_a_slot_only_after_two_windows) {
     using std::chrono::milliseconds;
     ruvia::test_app app;
+    app.controllers<rate_limit_table_controller>();
     configure_window_limit(app, 2, milliseconds(1000), held_addresses.size());
     for (const auto address : held_addresses) {
         EXPECT_TRUE(request_from(app, address) == ruvia::http_status::ok);
@@ -687,6 +696,7 @@ TEST(Ruvia, rate_limit_table_reclaims_a_slot_only_after_two_windows) {
 TEST(Ruvia, route_rate_limit_counts_with_the_sliding_window_estimate) {
     using std::chrono::milliseconds;
     ruvia::test_app app;
+    app.controllers<rate_limit_table_controller>();
     constexpr std::string_view client = "198.51.100.6";
     constexpr std::string_view target = "/rate-limit-table/route-limited";
     EXPECT_TRUE(request_at(app, client, {}, target).status() == ruvia::http_status::ok);

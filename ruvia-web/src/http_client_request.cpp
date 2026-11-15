@@ -1052,14 +1052,6 @@ http_origin_view http_client_ref::origin() const& {
     return pool_->origin();
 }
 
-http_client_ref context::client() const {
-    return services().client_registries().client(operation_scope_, capabilities_.stop_token());
-}
-
-http_client_ref context::client(std::string_view alias) const {
-    return services().client_registries().client(alias, operation_scope_, capabilities_.stop_token());
-}
-
 task<std::vector<ip_address>> resolve_dns(const worker_ref& worker, std::string_view host, operation_options options) {
     if (!worker.valid()) {
         throw std::invalid_argument("DNS resolution requires a valid worker handle");

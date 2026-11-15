@@ -135,6 +135,10 @@ task<void> tls_certificate_store::insert_or_assign(worker_ref caller, tls_certif
     if (id == 0) {
         throw std::invalid_argument("TLS certificate ID zero is reserved");
     }
+    // A library certificate has no staple; tls_identity_config::ocsp_response_.
+    if (!identity.ocsp_response_.empty()) {
+        throw std::invalid_argument("TLS certificate library identities must not carry an OCSP response");
+    }
     auto owned = std::make_unique<owned_identity>();
     owned->value_.certificate_chain_file_ = std::move(identity.certificate_chain_file_);
     owned->value_.private_key_file_ = std::move(identity.private_key_file_);
@@ -546,7 +550,7 @@ bool select_handshake_certificate(SSL* ssl, http_server_session_config& session,
             std::optional<tls_certificate_id> selected = identities.default_certificate_;
             if (identities.select_certificate_) {
                 const auto* binding = static_cast<const tls_client_hello_observation*>(SSL_get_ex_data(ssl, client_hello_observation_index()));
-                if (!binding || binding->fields_.connection_id_ == 0 || local == nullptr) {
+                if (!binding || binding->fields_.endpoints_.connection_id() == 0 || local == nullptr) {
                     throw std::logic_error("TLS certificate selector requires connection metadata");
                 }
                 const unsigned char* ciphers = nullptr;
@@ -556,7 +560,8 @@ bool select_handshake_certificate(SSL* ssl, http_server_session_config& session,
                 const auto supported_versions = decode_u16_list(client_hello_list(ssl, TLSEXT_TYPE_supported_versions, 1));
                 const auto supported_groups = decode_u16_list(client_hello_list(ssl, TLSEXT_TYPE_supported_groups, 2));
                 const auto alpn = decode_alpn_list(client_hello_list(ssl, TLSEXT_TYPE_application_layer_protocol_negotiation, 2));
-                const tls_certificate_selection input{.connection_id_ = binding->fields_.connection_id_, .remote_address_ = ip_address::parse(binding->fields_.remote_address_).value_or(ip_address{}), .remote_port_ = binding->fields_.remote_port_, .server_name_ = server_name, .local_address_ = local ? std::optional(to_ip_address(*local)) : std::nullopt, .local_port_ = binding->fields_.local_port_, .quic_ = binding->fields_.quic_, .legacy_version_ = static_cast<std::uint16_t>(SSL_client_hello_get0_legacy_version(ssl)), .cipher_suites_ = cipher_suites, .signature_algorithms_ = signature_algorithms, .supported_versions_ = supported_versions, .supported_groups_ = supported_groups, .alpn_ = alpn};
+                const auto& endpoints = binding->fields_.endpoints_;
+                const tls_certificate_selection input{.connection_id_ = endpoints.connection_id(), .remote_address_ = endpoints.remote().address(), .remote_port_ = endpoints.remote().port(), .server_name_ = server_name, .local_address_ = local ? std::optional(to_ip_address(*local)) : std::nullopt, .local_port_ = endpoints.local().port(), .quic_ = binding->fields_.quic_, .legacy_version_ = static_cast<std::uint16_t>(SSL_client_hello_get0_legacy_version(ssl)), .cipher_suites_ = cipher_suites, .signature_algorithms_ = signature_algorithms, .supported_versions_ = supported_versions, .supported_groups_ = supported_groups, .alpn_ = alpn};
                 selected = (*identities.select_certificate_)(input);
             }
             if (selected) {
@@ -747,7 +752,8 @@ struct tls_identity_source final {
     std::span<const std::byte> ocsp_response_;
 };
 
-[[nodiscard]] tls_identity_source make_tls_identity_source(const tls_identity_config& identity, std::span<const std::byte> ocsp_response = {}) {
+[[nodiscard]] tls_identity_source make_tls_identity_source(const tls_identity_config& identity) {
+    const std::span<const std::byte> ocsp_response = identity.ocsp_response_;
     validate_ocsp_response(ocsp_response);
     const bool files = !identity.certificate_chain_file_.empty() || !identity.private_key_file_.empty();
     const bool pem = !identity.certificate_chain_pem_.empty() || !identity.private_key_pem_.empty();
@@ -838,8 +844,7 @@ private:
 
 tls_identity_plan::tls_identity_plan(const tls_config& config) {
     if (config.certificate_store_) {
-        const auto& identity = config.identity_;
-        if (!identity.certificate_chain_file_.empty() || !identity.private_key_file_.empty() || !identity.certificate_chain_pem_.empty() || !identity.private_key_pem_.empty() || !identity.private_key_password_.empty() || !config.ocsp_response_.empty() || !config.sni_.empty() || !config.local_addresses_.empty()) {
+        if (!config.identity_.empty() || !config.sni_.empty() || !config.local_addresses_.empty()) {
             throw std::invalid_argument("TLS certificate library cannot be combined with fixed identities");
         }
         if (!config.select_certificate_ && config.default_certificate_ == 0) {
@@ -853,7 +858,7 @@ tls_identity_plan::tls_identity_plan(const tls_config& config) {
     if (config.select_certificate_ || config.default_certificate_ != 0) {
         throw std::invalid_argument("TLS certificate selection requires a certificate library");
     }
-    primary_.emplace(make_tls_identity_source(config.identity_, config.ocsp_response_));
+    primary_.emplace(make_tls_identity_source(config.identity_));
     names_.reserve(config.sni_.size());
     for (const auto& sni : config.sni_) {
         if (sni.host_.empty()) {
@@ -877,7 +882,7 @@ tls_identity_plan::tls_identity_plan(const tls_config& config) {
         names_.push_back(named_source{
             .name_ = std::move(name),
             .wildcard_ = wildcard,
-            .source_ = make_tls_identity_source(sni.identity_, sni.ocsp_response_),
+            .source_ = make_tls_identity_source(sni.identity_),
         });
     }
     addresses_.reserve(config.local_addresses_.size());
@@ -890,7 +895,7 @@ tls_identity_plan::tls_identity_plan(const tls_config& config) {
         }
         addresses_.push_back(addressed_source{
             .address_ = address,
-            .source_ = make_tls_identity_source(local.identity_, local.ocsp_response_),
+            .source_ = make_tls_identity_source(local.identity_),
         });
     }
 }

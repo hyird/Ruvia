@@ -18,9 +18,7 @@
 namespace ruvia::detail {
 
 struct http_content_coding_field_result_access final {
-    using sequence_type = http_content_coding_field_result::content_coding_sequence;
-
-    [[nodiscard]] static constexpr http_content_coding_field_result coding(sequence_type values) noexcept {
+    [[nodiscard]] static http_content_coding_field_result coding(const http_content_codings& values) noexcept {
         return http_content_coding_field_result(values);
     }
 
@@ -53,7 +51,8 @@ public:
     [[nodiscard]] http_content_coding_field_result finish() const noexcept;
 
 private:
-    http_content_coding_field_result_access::sequence_type codings_{};
+    http_content_codings codings_{};
+    std::uint8_t members_{0};
     bool unknown_coding_{false};
     bool depth_exceeded_{false};
     bool invalid_{false};
@@ -156,32 +155,32 @@ enum class http_transfer_encoding_parse_status : std::uint8_t { ok,
 
 class http_non_chunked_transfer_encoding final {
 public:
-    [[nodiscard]] const http_transfer_codings& transfer_codings() const noexcept {
+    [[nodiscard]] const http_content_codings& transfer_codings() const noexcept {
         return transfer_codings_;
     }
 
 private:
     friend class http_transfer_encoding_value;
 
-    explicit http_non_chunked_transfer_encoding(http_transfer_codings transfer_codings) :
+    explicit http_non_chunked_transfer_encoding(http_content_codings transfer_codings) :
         transfer_codings_(std::move(transfer_codings)) {}
 
-    http_transfer_codings transfer_codings_;
+    http_content_codings transfer_codings_;
 };
 
 class http_final_chunked_transfer_encoding final {
 public:
-    [[nodiscard]] const http_transfer_codings& transfer_codings() const noexcept {
+    [[nodiscard]] const http_content_codings& transfer_codings() const noexcept {
         return transfer_codings_;
     }
 
 private:
     friend class http_transfer_encoding_value;
 
-    explicit http_final_chunked_transfer_encoding(http_transfer_codings transfer_codings) :
+    explicit http_final_chunked_transfer_encoding(http_content_codings transfer_codings) :
         transfer_codings_(std::move(transfer_codings)) {}
 
-    http_transfer_codings transfer_codings_;
+    http_content_codings transfer_codings_;
 };
 
 class http_transfer_encoding_value final {
@@ -201,11 +200,11 @@ private:
 
     using value_type = std::variant<http_non_chunked_transfer_encoding, http_final_chunked_transfer_encoding>;
 
-    [[nodiscard]] static http_transfer_encoding_value make_non_chunked(http_transfer_codings transfer_codings) {
+    [[nodiscard]] static http_transfer_encoding_value make_non_chunked(http_content_codings transfer_codings) {
         return http_transfer_encoding_value(http_non_chunked_transfer_encoding(std::move(transfer_codings)));
     }
 
-    [[nodiscard]] static http_transfer_encoding_value make_final_chunked(http_transfer_codings transfer_codings) {
+    [[nodiscard]] static http_transfer_encoding_value make_final_chunked(http_content_codings transfer_codings) {
         return http_transfer_encoding_value(http_final_chunked_transfer_encoding(std::move(transfer_codings)));
     }
 
@@ -227,7 +226,7 @@ class http_transfer_encoding_state final {
 public:
     [[nodiscard]] http_transfer_encoding_parse_status parse_field(std::string_view field_value) {
         // The published value is the sole owner of the committed coding list.
-        http_transfer_codings next_codings;
+        http_content_codings next_codings;
         bool final_chunked = false;
         if (value_) {
             if (const auto* chunked = value_->final_chunked()) {
@@ -257,18 +256,19 @@ public:
                 final_chunked = true;
                 return true;
             }
-            const bool gzip = http_is_gzip_coding_token(coding);
-            const bool deflate = http_ascii_equals_ignore_case(coding, "deflate");
-            if (gzip || deflate) {
+            // RFC 9112 section 7.2: brotli, zstd, identity and unknown
+            // tokens are not decodable transfer codings.
+            const auto transfer_coding = http_content_coding_from_token(coding);
+            if (transfer_coding.has_value() && is_http_transfer_coding(*transfer_coding)) {
                 if (has_parameters) {
                     malformed = true;
                     return false;
                 }
-                if (next_codings.size() == max_transfer_codings) {
+                if (next_codings.size() == max_content_codings) {
                     unsupported = true;
                     return true;
                 }
-                next_codings.push_back(gzip ? http_transfer_coding::gzip : http_transfer_coding::deflate);
+                next_codings.push_back(*transfer_coding);
                 return true;
             }
             unsupported = true;
@@ -297,7 +297,8 @@ private:
 };
 
 [[nodiscard]] inline bool http_is_client_supported_te_transfer_coding(std::string_view coding) noexcept {
-    return http_is_gzip_coding_token(coding) || http_ascii_equals_ignore_case(coding, "deflate");
+    const auto transfer_coding = http_content_coding_from_token(coding);
+    return transfer_coding.has_value() && is_http_transfer_coding(*transfer_coding);
 }
 
 [[nodiscard]] inline bool is_valid_http_te_field_item(std::string_view item, http_field_list_role role) noexcept {

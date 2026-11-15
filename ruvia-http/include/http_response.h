@@ -9,8 +9,8 @@
 #include <variant>
 
 #include "borrowed_text.h"
+#include "http_content_length.h"
 #include "http_message.h"
-#include "http_request.h"
 #include "http_response_body.h"
 #include "http_response_headers.h"
 #include "http_status.h"
@@ -19,6 +19,7 @@ namespace ruvia {
 
 enum class http_connect_udp_error : std::uint8_t;
 class http1_response_head_plan;
+class http_request;
 
 // Composes one header block with one body. Header rules belong to
 // http_response_headers; this type only publishes body and headers together.

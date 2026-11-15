@@ -20,6 +20,7 @@
 
 #include "blocking_pool.h"
 #include "borrowed_text.h"
+#include "connection_transport.h"
 #include "decimal_text.h"
 #include "http1_server_response.h"
 #include "http2_push.h"
@@ -38,7 +39,7 @@
 #include "stop_token.h"
 #include "task.h"
 #include "worker_ref.h"
-#include "worker_state.h"
+#include "worker_services.h"
 namespace ruvia {
 
 class context;
@@ -89,69 +90,11 @@ struct context_access;
 class context_services;
 }  // namespace detail
 
-class plain_connection_transport final {
-private:
-    friend class conn_info;
-    constexpr plain_connection_transport() noexcept = default;
-};
-
-class tls_connection_transport final {
-public:
-    // Verified client certificate subject DN. Absence means no certificate;
-    // an engaged empty value is a certificate with an empty Subject (RFC 5280
-    // section 4.1.2.6), not an unauthenticated connection.
-    [[nodiscard]] constexpr std::optional<std::string_view> client_certificate_subject() const noexcept {
-        return client_certificate_subject_;
-    }
-
-    // The application protocol the handshake selected (RFC 7301); empty when
-    // the client offered no ALPN.
-    [[nodiscard]] constexpr std::string_view alpn() const noexcept {
-        return alpn_;
-    }
-
-    // The host_name the client sent in server_name (RFC 6066 §3); empty when
-    // it sent none.
-    [[nodiscard]] constexpr std::string_view server_name() const noexcept {
-        return server_name_;
-    }
-
-private:
-    friend class conn_info;
-    friend class server_connection;
-
-    constexpr tls_connection_transport(std::optional<std::string_view> client_certificate_subject, std::string_view alpn, std::string_view server_name) noexcept :
-        client_certificate_subject_(client_certificate_subject),
-        alpn_(alpn),
-        server_name_(server_name) {}
-
-    std::optional<std::string_view> client_certificate_subject_;
-    std::string_view alpn_;
-    std::string_view server_name_;
-};
-
 // Runtime connection metadata associated with a Web request. This information
 // comes from the server adapter rather than from the HTTP message bytes, so it
 // intentionally lives outside http_request and context_request.
-class conn_info final {
+class conn_info final : public connection_endpoints {
 public:
-    // Process-wide unique transport ID across workers, hosts and restarts.
-    // Every request and observation on one connection shares this ID; retired
-    // IDs are never reused. Never zero for a served connection; zero for a
-    // test_app request, which has no transport connection.
-    [[nodiscard]] constexpr std::uint64_t connection_id() const noexcept {
-        return id_;
-    }
-
-    // The peer at the other end of this socket. Behind a reverse proxy that is
-    // the proxy, not the caller -- use client() for the caller.
-    [[nodiscard]] constexpr ip_endpoint remote() const noexcept {
-        return remote_;
-    }
-
-    [[nodiscard]] constexpr ip_endpoint local() const noexcept {
-        return local_;
-    }
     // Who the request is from. Equal to remote() unless the peer is a configured
     // trusted proxy AND it sent a forwarding header, in which case it is what
     // that header names. Never derived from an untrusted peer's headers: those
@@ -192,28 +135,21 @@ public:
 private:
     friend class detail::context_services;
 
-    conn_info(std::uint64_t id, std::string_view remote_address, plain_connection_transport transport) noexcept :
-        id_(id),
-        remote_(ip_address::parse(remote_address).value_or(ip_address{}), 0),
-        remote_text_(remote_address),
-        client_(remote_),
-        transport_(transport),
-        scheme_(http_scheme::http) {}
+    using transport_type = std::variant<plain_connection_transport, tls_connection_transport>;
 
-    conn_info(std::uint64_t id, std::string_view remote_address, tls_connection_transport transport) noexcept :
-        id_(id),
-        remote_(ip_address::parse(remote_address).value_or(ip_address{}), 0),
-        remote_text_(remote_address),
-        client_(remote_),
+    conn_info(const connection_endpoints& endpoints, std::string_view remote_text, transport_type transport, http_scheme scheme) noexcept :
+        connection_endpoints(endpoints),
+        remote_text_(remote_text),
+        client_(endpoints.remote()),
         transport_(transport),
-        scheme_(http_scheme::https) {}
+        scheme_(scheme) {}
 
-    [[nodiscard]] static conn_info plain(std::uint64_t id, std::string_view remote_address) noexcept {
-        return conn_info(id, remote_address, plain_connection_transport{});
+    [[nodiscard]] static conn_info plain(const connection_endpoints& endpoints, std::string_view remote_text) noexcept {
+        return conn_info(endpoints, remote_text, plain_connection_transport{}, http_scheme::http);
     }
 
-    [[nodiscard]] static conn_info tls(std::uint64_t id, std::string_view remote_address, std::optional<std::string_view> client_certificate_subject, std::string_view alpn, std::string_view server_name) noexcept {
-        return conn_info(id, remote_address, tls_connection_transport(client_certificate_subject, alpn, server_name));
+    [[nodiscard]] static conn_info tls(const connection_endpoints& endpoints, std::string_view remote_text, const tls_connection_transport& transport) noexcept {
+        return conn_info(endpoints, remote_text, transport, http_scheme::https);
     }
 
     // Applied only after the peer has been matched against the configured
@@ -226,22 +162,18 @@ private:
         }
     }
 
-    constexpr void set_remote_port(std::uint16_t port) noexcept {
-        remote_ = ip_endpoint(remote_.address(), port);
+    // The transport's own facts replace the provisional ones; a forwarded
+    // client stays.
+    constexpr void assign_endpoints(const connection_endpoints& endpoints) noexcept {
+        static_cast<connection_endpoints&>(*this) = endpoints;
         if (!via_trusted_proxy_) {
-            client_ = remote_;
+            client_ = remote();
         }
     }
-    void set_local(std::string_view address, std::uint16_t port) noexcept {
-        local_ = ip_endpoint(ip_address::parse(address).value_or(ip_address{}), port);
-    }
 
-    std::uint64_t id_;
-    ip_endpoint remote_;
     std::string_view remote_text_;
     ip_endpoint client_;
-    ip_endpoint local_{};
-    std::variant<plain_connection_transport, tls_connection_transport> transport_;
+    transport_type transport_;
     http_scheme scheme_;
     bool via_trusted_proxy_{false};
 };
@@ -592,35 +524,20 @@ public:
 
     // Borrowed for this request. Copy the returned handle when it must outlive
     // the handler; the copy owns a terminal-safe dispatcher endpoint.
-    [[nodiscard]] const worker_ref& worker() const& noexcept RUVIA_LIFETIMEBOUND {
-        return capabilities_.worker();
-    }
+    [[nodiscard]] const worker_ref& worker() const& noexcept RUVIA_LIFETIMEBOUND;
     const worker_ref& worker() const&& = delete;
 
-    // Borrows this worker's registered instance; never hand it to another
-    // worker. An unregistered type throws std::logic_error.
-    template <typename state_type>
-    [[nodiscard]] state_type& worker_state() const {
-        return capabilities_.worker_state<state_type>();
-    }
-
-    // The callable executes on the blocking pool and must own everything it
-    // touches. Completion resumes on this worker; options.timeout_ or shutdown
-    // stops the wait without joining a still-running foreign callable, and
-    // options.stop_token_ is combined with stop_token().
-    // Rejection and callable exceptions are retained in blocking_result. Inspect
-    // status() for load shedding or use std::move(result).take_value() to throw.
-    // With application::blocking_pool(nullptr) the result reports
-    // blocking_status::unavailable without submitting the callable.
-    template <typename callable_type>
-    [[nodiscard]] task<blocking_result<std::invoke_result_t<callable_type&>>> run_blocking(callable_type callable, operation_options options = {}) const {
-        return capabilities_.run_blocking(std::move(callable), std::move(options));
-    }
+    // This worker's resources: worker state, run_blocking(), env and the
+    // HTTP, database and Redis clients. Inside a router dispatch it sees that
+    // router's worker states and clients. Executors and clients bind this
+    // request's operation lifetime and stop_token().
+    [[nodiscard]] worker_services services() const& noexcept RUVIA_LIFETIMEBOUND;
+    worker_services services() const&& = delete;
 
     // Observes worker shutdown (application::stop() closes every connection
     // at once, with no drain phase) and, for a subrequest, explicit
-    // cancellation. db(), redis(), and run_blocking() bind this token
-    // automatically. Explicit operation tokens are combined with it.
+    // cancellation. services().db(), redis() and run_blocking() bind this
+    // token automatically. Explicit operation tokens are combined with it.
     //
     // Cancellation is cooperative: framework waits, including streaming sleep(),
     // observe this token; CPU work and raw Asio waits without it are not preempted.
@@ -630,9 +547,7 @@ public:
     // 完整消费后对端 FIN/RST 或写失败，HTTP/2 本流 RST_STREAM 或连接终止。
     // 缓冲响应路由不监测读侧终止。
     //
-    [[nodiscard]] ::ruvia::stop_token stop_token() const noexcept {
-        return capabilities_.stop_token();
-    }
+    [[nodiscard]] ::ruvia::stop_token stop_token() const noexcept;
 
 #ifdef RUVIA_ENABLE_REDIS
     // Present only while session_middleware is bound for this request.
@@ -641,7 +556,7 @@ public:
 
     // Request-scoped typed state: how a middleware hands a value it computed --
     // an authenticated user, a resolved tenant, a trace span -- to everything it
-    // calls through next(). The counterpart of worker_state<T>(), which lives for
+    // calls through next(). The counterpart of services().worker_state<T>(), which lives for
     // the worker's whole life and is shared by every request on it; this lives
     // for one dynamic next() scope and is private to that request.
     //
@@ -674,7 +589,6 @@ public:
     [[nodiscard]] const std::remove_cvref_t<t_type>* try_request_state() const noexcept {
         return request_bindings().try_get_state<t_type>();
     }
-    [[nodiscard]] const ruvia::env& env() const noexcept;
 
     // Re-enter the immutable route table on this worker. Authentication,
     // validation and middleware run in a fresh request context.
@@ -694,16 +608,6 @@ public:
     [[nodiscard]] std::string url_for(std::string_view pattern, std::initializer_list<std::string_view> values = {}) const;
 
     [[nodiscard]] std::string url_for(std::string_view pattern, std::span<const std::string_view> values) const;
-#ifdef RUVIA_ENABLE_DATABASE
-    [[nodiscard]] db_executor db() const;
-    [[nodiscard]] db_executor db(std::string_view alias) const;
-#endif
-#ifdef RUVIA_ENABLE_REDIS
-    [[nodiscard]] redis_executor redis() const;
-    [[nodiscard]] redis_executor redis(std::string_view alias) const;
-#endif
-    [[nodiscard]] http_client_ref client() const;
-    [[nodiscard]] http_client_ref client(std::string_view alias) const;
     [[nodiscard]] bool early_data() const noexcept;
     [[nodiscard]] ::ruvia::websocket& websocket() const;
     [[nodiscard]] http_tunnel& tunnel() const;
@@ -830,8 +734,8 @@ private:
 
     [[nodiscard]] std::string& decoded_body() const;
     [[nodiscard]] detail::context_request_storage& request_storage() const;
-    [[nodiscard]] detail::context_services& services() noexcept;
-    [[nodiscard]] const detail::context_services& services() const noexcept;
+    [[nodiscard]] detail::context_services& runtime_services() noexcept;
+    [[nodiscard]] const detail::context_services& runtime_services() const noexcept;
     void store_response(http_response&& response);
     void store_error(std::exception_ptr exception) noexcept {
         error_ = std::move(exception);
@@ -839,9 +743,6 @@ private:
     [[nodiscard]] bool has_response() const noexcept;
 
     const http_request& request_;
-    // context cannot escape request dispatch and therefore borrows the stable
-    // server-owned handle without touching its shared ownership count.
-    detail::worker_context_capabilities capabilities_;
     std::string_view route_path_;
     const std::string_view* param_names_{nullptr};
     const std::string_view* param_values_{nullptr};

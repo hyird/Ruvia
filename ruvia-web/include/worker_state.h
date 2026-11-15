@@ -14,35 +14,22 @@
 #include <utility>
 #include <vector>
 
-#include "blocking_pool.h"
 #include "borrowed_text.h"
 #include "move_only_function.h"
-#include "operation_options.h"
 #include "operation_scope.h"
 #include "stop_token.h"
 #include "task.h"
 #include "worker_ref.h"
+#include "worker_services.h"
 
 // Worker-local user state: application::use_worker_state<T>() registers one recipe, each
-// worker builds its own instance from it, and context::worker_state<T>() /
-// web_worker_context::worker_state<T>() hand the instance back on that worker.
+// worker builds its own instance from it, and worker_services::worker_state<T>()
+// hands the instance back on that worker.
 // This generalizes the db_registry pattern (one connection-pool-like object per
 // single-threaded worker) to application-owned types: the instance is only
 // ever touched from its worker's thread, so it needs no synchronization.
 
 namespace ruvia::detail {
-
-template <typename t_type>
-struct type_key_tag final {
-    inline static constexpr std::byte value{};
-};
-
-// One stable address per type, used as the binding's identity. Cheaper and more
-// robust than typeid: no RTTI requirement and no cross-boundary name equality.
-template <typename t_type>
-[[nodiscard]] const void* type_key() noexcept {
-    return &type_key_tag<std::remove_cvref_t<t_type>>::value;
-}
 
 // Startup-registered recipe for one per-worker state type: the erased user
 // factory plus the instance create/destroy pair. The factory runs once inside
@@ -220,83 +207,18 @@ private:
     bool initialized_{false};
 };
 
-// A request and a posted job borrow the same worker-owned capabilities. No
-// dispatcher or cancellation ownership is copied until an explicit offload.
-class worker_context_capabilities final {
-public:
-    worker_context_capabilities(const worker_ref& worker_value, const ruvia::stop_token& stop_token_value, const worker_state_registry* worker_states) noexcept :
-        worker_(worker_value),
-        stop_token_(stop_token_value),
-        worker_states_(worker_states) {}
-    worker_context_capabilities(worker_ref&&, const ruvia::stop_token&, const worker_state_registry*) = delete;
-    worker_context_capabilities(const worker_ref&, ruvia::stop_token&&, const worker_state_registry*) = delete;
-    worker_context_capabilities(worker_ref&&, ruvia::stop_token&&, const worker_state_registry*) = delete;
-
-    [[nodiscard]] const worker_ref& worker() const noexcept {
-        return worker_;
-    }
-
-    [[nodiscard]] const ruvia::stop_token& stop_token() const noexcept {
-        return stop_token_;
-    }
-
-    [[nodiscard]] const worker_state_registry* worker_states() const noexcept {
-        return worker_states_;
-    }
-
-    // A router serving the request substitutes its own registry for the
-    // duration of its dispatch.
-    void bind_worker_states(const worker_state_registry* worker_states) noexcept {
-        worker_states_ = worker_states;
-    }
-
-    template <typename state_type>
-    [[nodiscard]] state_type& worker_state() const {
-        return *static_cast<state_type*>(worker_state_instance(type_key<state_type>()));
-    }
-
-    // Runs on the blocking pool of this worker's event loop; without one the
-    // result reports blocking_status::unavailable. A supplied stop token is
-    // combined with this worker's cancellation token for the wait.
-    template <typename callable_type>
-    [[nodiscard]] task<blocking_result<std::invoke_result_t<callable_type&>>> run_blocking(callable_type callable, operation_options options) const {
-        if (!options.stop_token_.has_state()) {
-            options.stop_token_ = stop_token_;
-            return ruvia::run_blocking(worker_, std::move(callable), std::move(options));
-        }
-        return run_blocking_combined(worker_, stop_token_, std::move(callable), std::move(options));
-    }
-
-private:
-    template <typename callable_type>
-    [[nodiscard]] static task<blocking_result<std::invoke_result_t<callable_type&>>> run_blocking_combined(worker_ref worker_value, ruvia::stop_token worker_token, callable_type callable, operation_options options) {
-        const linked_operation_options linked(options, worker_token);
-        co_return co_await ruvia::run_blocking(std::move(worker_value), std::move(callable), linked.options());
-    }
-
-    [[nodiscard]] void* worker_state_instance(const void* type_key) const;
-
-    const worker_ref& worker_;
-    const ruvia::stop_token& stop_token_;
-    const worker_state_registry* worker_states_;
-};
-
 }  // namespace ruvia::detail
 
 namespace ruvia {
 
-class http_client_ref;
-#ifdef RUVIA_ENABLE_DATABASE
-class db_executor;
-#endif
-#ifdef RUVIA_ENABLE_REDIS
-class redis_executor;
-#endif
-
 namespace detail {
 class web_worker_dispatch;
-class worker_client_registry_view;
 }  // namespace detail
+
+// A job posted with web_worker_ref::post(): its worker, the worker's stop
+// token and, through services(), the worker's resources. Executors and clients
+// from services() bind to this job's own operation lifetime and carry no
+// request I/O metrics.
 class web_worker_context final {
 public:
     web_worker_context(const web_worker_context&) = delete;
@@ -308,46 +230,25 @@ public:
     const worker_ref& worker() const&& = delete;
     [[nodiscard]] ::ruvia::stop_token stop_token() const noexcept;
 
-    template <typename state_type>
-    [[nodiscard]] state_type& worker_state() const {
-        return capabilities_.worker_state<state_type>();
-    }
-
-    // The callable owns its inputs and must not borrow worker state. Completion
-    // resumes here; worker shutdown and options.timeout_ end the wait, not the callable.
-    // Rejection and callable exceptions are retained in blocking_result; inspect
-    // status() or use std::move(result).take_value() to throw. The worker stop token
-    // is bound automatically and combined with options.stop_token_. With application::blocking_pool(nullptr) the
-    // result reports blocking_status::unavailable.
-    template <typename callable_type>
-    [[nodiscard]] task<blocking_result<std::invoke_result_t<callable_type&>>> run_blocking(callable_type callable, operation_options options = {}) const {
-        return capabilities_.run_blocking(std::move(callable), std::move(options));
-    }
-
-#ifdef RUVIA_ENABLE_DATABASE
-    [[nodiscard]] db_executor db() const;
-    [[nodiscard]] db_executor db(std::string_view alias) const;
-#endif
-#ifdef RUVIA_ENABLE_REDIS
-    [[nodiscard]] redis_executor redis() const;
-    [[nodiscard]] redis_executor redis(std::string_view alias) const;
-#endif
-    [[nodiscard]] http_client_ref client() const;
-    [[nodiscard]] http_client_ref client(std::string_view alias) const;
+    [[nodiscard]] worker_services services() const& noexcept RUVIA_LIFETIMEBOUND;
+    worker_services services() const&& = delete;
 
 private:
     friend class detail::web_worker_dispatch;
 
-    web_worker_context(const worker_ref& worker_value, const detail::worker_client_registry_view& client_registries, const detail::worker_state_registry* worker_states, const ::ruvia::stop_token& stop_token_value) noexcept;
-    web_worker_context(worker_ref&&, const detail::worker_client_registry_view&, const detail::worker_state_registry*, const ::ruvia::stop_token&) = delete;
-    web_worker_context(const worker_ref&, const detail::worker_client_registry_view&, const detail::worker_state_registry*, ::ruvia::stop_token&&) = delete;
-    web_worker_context(worker_ref&&, const detail::worker_client_registry_view&, const detail::worker_state_registry*, ::ruvia::stop_token&&) = delete;
+    web_worker_context(const worker_ref& worker_value, const detail::worker_client_registry_view& client_registries, const detail::worker_state_registry* worker_states, const ::ruvia::stop_token& stop_token_value, const ruvia::env* env) noexcept;
+    web_worker_context(worker_ref&&, const detail::worker_client_registry_view&, const detail::worker_state_registry*, const ::ruvia::stop_token&, const ruvia::env*) = delete;
+    web_worker_context(const worker_ref&, const detail::worker_client_registry_view&, const detail::worker_state_registry*, ::ruvia::stop_token&&, const ruvia::env*) = delete;
+    web_worker_context(worker_ref&&, const detail::worker_client_registry_view&, const detail::worker_state_registry*, ::ruvia::stop_token&&, const ruvia::env*) = delete;
 
     // The server worker owns these values and joins every posted job before
     // retiring them. Contexts borrow them so starting a job does not copy
     // endpoint or cancellation-state ownership on the worker thread.
-    detail::worker_context_capabilities capabilities_;
+    const worker_ref& worker_;
+    const ::ruvia::stop_token& stop_token_;
+    const detail::worker_state_registry* worker_states_;
     const detail::worker_client_registry_view& client_registries_;
+    const ruvia::env* env_;
     // Each posted callback gets an independent operation lifetime. Declared
     // last so cold frames are destroyed before the callback context disappears.
     mutable detail::operation_scope operation_scope_;

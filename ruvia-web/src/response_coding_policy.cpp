@@ -172,7 +172,8 @@ http_buffered_compression_step apply_response_compression(const http_response_co
         }
 
         const auto coding = selection.coding();
-        auto encoding = codecs.encoder(coding).encode(body, compressed_body_options(body, selection.identity_accepted()));
+        auto lease = codecs.acquire_encoder(coding);
+        auto encoding = lease.encoder().encode(body, compressed_body_options(body, selection.identity_accepted()));
         return {commit_compressed_body(response, coding, std::move(encoding)), false};
     } catch (...) {
         ruvia::report_unhandled_failure("response compression", std::current_exception());

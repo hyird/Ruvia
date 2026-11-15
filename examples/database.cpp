@@ -97,13 +97,13 @@ private:
     }
 
     static ruvia::task<void> load_user_found(ruvia::context& c, bool& found) {
-        auto result_value = co_await c.db().query(driver_ == ruvia::db_driver::postgresql ? "SELECT id, name FROM users WHERE id = $1" : "SELECT id, name FROM users WHERE id = ?", c.req().param("id").value_or(""));
+        auto result_value = co_await c.services().db().query(driver_ == ruvia::db_driver::postgresql ? "SELECT id, name FROM users WHERE id = $1" : "SELECT id, name FROM users WHERE id = ?", c.req().param("id").value_or(""));
         found = !result_value.empty();
         co_return;
     }
 
     static ruvia::task<void> append_users(ruvia::context& c, std::string& body) {
-        auto rows = co_await c.db().query_stream("SELECT name FROM users ORDER BY id");
+        auto rows = co_await c.services().db().query_stream("SELECT name FROM users ORDER BY id");
         while (auto row = co_await rows.read()) {
             if (!row->empty()) {
                 body.append((*row)["name"].value().value_or(""));
@@ -115,20 +115,20 @@ private:
 
     static ruvia::task<void> insert_user(ruvia::context& c, std::string_view name, std::uint64_t& id) {
         if (driver_ == ruvia::db_driver::postgresql) {
-            auto result_value = co_await c.db().query<"INSERT INTO users(name) VALUES ($1) RETURNING id", ruvia::db_driver::postgresql>(name);
+            auto result_value = co_await c.services().db().query<"INSERT INTO users(name) VALUES ($1) RETURNING id", ruvia::db_driver::postgresql>(name);
             if (result_value.empty() || result_value.front().empty()) {
                 throw std::runtime_error("PostgreSQL INSERT did not return an id");
             }
             id = result_value.front()["id"].as<std::uint64_t>().value();
         } else {
-            const auto result_value = co_await c.db().execute<"INSERT INTO users(name) VALUES (?)">(name);
+            const auto result_value = co_await c.services().db().execute<"INSERT INTO users(name) VALUES (?)">(name);
             id = result_value.last_insert_id().value_or(0);
         }
         co_return;
     }
 
     static ruvia::task<void> transfer_funds(ruvia::context& c) {
-        auto tx = co_await c.db().begin_transaction();
+        auto tx = co_await c.services().db().begin_transaction();
         (void)co_await tx.execute(driver_ == ruvia::db_driver::postgresql ? "UPDATE accounts SET balance = balance - $1 WHERE id = $2" : "UPDATE accounts SET balance = balance - ? WHERE id = ?", 100, 1);
         (void)co_await tx.execute(driver_ == ruvia::db_driver::postgresql ? "UPDATE accounts SET balance = balance + $1 WHERE id = $2" : "UPDATE accounts SET balance = balance + ? WHERE id = ?", 100, 2);
         co_await tx.commit();

@@ -4,10 +4,9 @@
 #include <cstdint>
 #include <optional>
 
-#include "http_content_codec.h"
+#include "http_content_coding.h"
 #include "http_protocol.h"
 #include "http_status.h"
-#include "http_transfer_coding.h"
 
 namespace ruvia {
 
@@ -32,11 +31,15 @@ enum class http_request_body_failure : std::uint8_t {
     return http_protocol_error(http_status::bad_request, "invalid_request_body", "invalid request body");
 }
 
-[[nodiscard]] inline http_protocol_error http_request_transfer_coding_error(http_transfer_coding_decode_error error) noexcept {
+// Status for a request body whose Transfer-Encoding could not be decoded.
+// unsupported_coding cannot occur: framing rejects such stacks with 501 first.
+[[nodiscard]] inline http_protocol_error http_request_transfer_coding_error(http_content_decode_error error) noexcept {
     switch (error) {
-        case http_transfer_coding_decode_error::invalid_content:
+        case http_content_decode_error::unsupported_coding:
+            return http_parse_protocol_error(http_parse_error::unsupported_transfer_encoding);
+        case http_content_decode_error::invalid_content:
             return http_protocol_error(http_status::bad_request, "invalid_transfer_coding_body", "invalid transfer-coding body");
-        case http_transfer_coding_decode_error::decoded_size_exceeded:
+        case http_content_decode_error::decoded_size_exceeded:
             return http_request_body_protocol_error(http_request_body_failure::too_large);
     }
     return http_protocol_error(http_status::bad_request, "invalid_transfer_coding_body", "invalid transfer-coding body");

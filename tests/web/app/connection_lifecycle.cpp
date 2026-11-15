@@ -1,8 +1,10 @@
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <concepts>
 #include <cstdint>
 #include <memory>
 #include <mutex>
@@ -39,15 +41,21 @@ using namespace std::chrono_literals;
 
 template <typename value_type>
 concept endpoint_address_borrowable = requires(value_type&& value) { std::forward<value_type>(value).address(); };
-template <typename value_type>
-concept connection_endpoints_borrowable = requires(value_type&& value) {
-    std::forward<value_type>(value).local();
-    std::forward<value_type>(value).remote();
-};
 static_assert(endpoint_address_borrowable<const ruvia::ip_endpoint&>);
 static_assert(endpoint_address_borrowable<ruvia::ip_endpoint>);
-static_assert(connection_endpoints_borrowable<const ruvia::connection_event&>);
-static_assert(!connection_endpoints_borrowable<ruvia::connection_event>);
+
+// Every connection description reads its endpoints through the one shared
+// base, by value.
+template <typename description_type>
+concept connection_description = std::derived_from<description_type, ruvia::connection_endpoints> && requires(const description_type& value) {
+    { value.connection_id() } -> std::same_as<std::uint64_t>;
+    { value.local() } -> std::same_as<ruvia::ip_endpoint>;
+    { value.remote() } -> std::same_as<ruvia::ip_endpoint>;
+};
+static_assert(connection_description<ruvia::connection_event>);
+static_assert(connection_description<ruvia::conn_info>);
+static_assert(connection_description<ruvia::server_connection>);
+static_assert(connection_description<ruvia::tls_client_hello_record>);
 
 struct loops final {
     asio::io_context first_, second_;
@@ -247,6 +255,58 @@ TEST(Ruvia, connection_registry_closes_adopted_and_accepted_ids_and_retains_owne
     EXPECT_EQ(open_count.load(), close_count.load());
     EXPECT_EQ(destroyed.load(), server.worker_count() + 1);
     EXPECT_EQ(failures.load(), 1u);
+}
+
+TEST(Ruvia, connection_descriptions_report_the_event_endpoints) {
+    loops runtime;
+    asio::io_context io;
+    ruvia::test::tcp_port_reservation raw_port(io), stream_port(io);
+    std::mutex mutex;
+    std::vector<ruvia::connection_endpoints> opened, served;
+    std::counting_semaphore<> handled{0};
+    ruvia::http_server_group server(runtime.handles_, [&](const ruvia::worker_ref&) {
+        return ruvia::http_server_callbacks{.request_stream_ = [&](ruvia::request_stream& stream) -> ruvia::task<void> {
+            {
+                const std::scoped_lock lock(mutex);
+                served.push_back(stream.conn());
+            }
+            if (co_await stream.response().commit() == ruvia::stream_commit_result::body) {
+                co_await stream.response().end();
+            }
+            handled.release();
+        }, .connection_ = [&](ruvia::server_connection& connection) -> ruvia::task<void> {
+            {
+                const std::scoped_lock lock(mutex);
+                served.push_back(connection);
+            }
+            handled.release();
+            co_return;
+        }, .connection_open_ = [&](const ruvia::connection_event& event) -> std::shared_ptr<void> {
+            const std::scoped_lock lock(mutex);
+            opened.push_back(event);
+            return {};
+        }};
+    });
+    server.listen(raw(raw_port.endpoint().port()));
+    server.listen({.address_ = "127.0.0.1", .http_ = stream_port.endpoint().port(), .dispatch_ = ruvia::listener_dispatch::request_stream});
+    runtime.handles_[0].start(server.start(runtime.handles_[0].worker())).get();
+    asio::ip::tcp::socket raw_peer(io), stream_peer(io);
+    raw_peer.connect(raw_port.endpoint());
+    stream_peer.connect(stream_port.endpoint());
+    asio::write(stream_peer, asio::buffer(std::string_view("GET / HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")));
+    ASSERT_TRUE(handled.try_acquire_for(5s));
+    ASSERT_TRUE(handled.try_acquire_for(5s));
+    EXPECT_TRUE(closed(raw_peer));
+    EXPECT_TRUE(closed(stream_peer));
+    runtime.handles_[0].start(server.shutdown(runtime.handles_[0].worker())).get();
+    const std::array peer_ports{raw_peer.local_endpoint().port(), stream_peer.local_endpoint().port()};
+    ASSERT_EQ(served.size(), 2u);
+    for (const auto& description : served) {
+        EXPECT_NE(description.connection_id(), 0u);
+        EXPECT_TRUE(std::ranges::find(opened, description) != opened.end());
+        EXPECT_TRUE(std::ranges::find(peer_ports, description.remote().port()) != peer_ports.end());
+        EXPECT_EQ(description.local().address(), *ruvia::ip_address::parse("127.0.0.1"));
+    }
 }
 
 TEST(Ruvia, single_owner_connection_close_event_can_reenter_retired_id_control) {

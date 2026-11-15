@@ -23,6 +23,7 @@
 #include <vector>
 
 #include "borrowed_text.h"
+#include "decimal_text.h"
 #include "entity_storage.h"
 #include "fixed_string.h"
 #include "model_value.h"

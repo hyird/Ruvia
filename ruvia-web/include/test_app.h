@@ -1,10 +1,12 @@
 #pragma once
 
+#include <array>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -21,8 +23,9 @@
 
 namespace ruvia {
 // In-memory testing facade for applications built on Ruvia -- the actix
-// test_request / Hono app.request() analog. test_app collects every controller
-// linked into the binary (the same macro registration path application::run() uses),
+// test_request / Hono app.request() analog. test_app serves exactly the
+// controllers named through controllers<...>() (none by default),
+// compiles them with the same route plan application::run() uses,
 // finalizes the production route table, and dispatches TestRequests through
 // the real buffered request chain of a server with default options: request
 // admission (body ceilings, rate limits), routing,
@@ -171,6 +174,15 @@ public:
     test_app(test_app&&) = delete;
     test_app& operator=(test_app&&) = delete;
 
+    // Names the controllers this app serves; each call appends. A controller
+    // named twice fails the first request with "duplicate route registration".
+    template <typename... controller_types>
+        requires(sizeof...(controller_types) > 0)
+    test_app& controllers() {
+        const std::array<detail::controller_registrar, sizeof...(controller_types)> registrars{detail::controller_registrar_of<controller_types>()...};
+        return add_controllers(registrars);
+    }
+
     // Uses the same composed dispatch configuration as application, with test_app's
     // first-request lifecycle guard instead of the process lifecycle.
     template <middleware middleware_type, typename... args_types>
@@ -217,6 +229,7 @@ public:
     [[nodiscard]] dispatch_response request(const test_request& request);
 
 private:
+    test_app& add_controllers(std::span<const detail::controller_registrar> registrars);
     test_app& use_middleware(detail::owned_middleware_descriptor descriptor);
     test_app& use_worker_state_definition(detail::worker_state_definition definition);
 

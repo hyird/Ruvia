@@ -38,6 +38,7 @@ set(ruvia_http_sources
     src/http_response_headers.cpp
     src/http_response_stream.cpp
     src/http_server_sent_events.cpp
+    src/http_target_origin.cpp
     src/http_transfer_coding.cpp
     src/http_uri_syntax.cpp
     src/http_zlib_codec.cpp
@@ -117,11 +118,13 @@ set(ruvia_http_headers
     include/http_connection_advertisement.h
     include/http_content_codec.h
     include/http_content_coding.h
+    include/http_content_length.h
     include/http_content_negotiation.h
     include/http_cookie.h
     include/http_cookie_jar.h
     include/http_cors.h
     include/http_date.h
+    include/http_field_section_budget.h
     include/http_header.h
     include/http_io_buffer.h
     include/http_message.h
@@ -134,12 +137,15 @@ set(ruvia_http_headers
     include/http_representation.h
     include/http_request.h
     include/http_request_body_failure.h
+    include/http_request_content_plan.h
+    include/http_request_expectation.h
     include/http_response.h
     include/http_response_body.h
     include/http_response_headers.h
     include/http_response_stream.h
     include/http_server_sent_events.h
     include/http_status.h
+    include/http_target_origin.h
     include/http_transfer_coding.h
     include/ip_address.h
     include/proxy_protocol.h

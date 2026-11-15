@@ -319,14 +319,13 @@ http3_session::http3_session(http3_endpoint& endpoint, connection_slot slot, con
     slot_(std::move(slot)),
     connection_lifecycle_(std::move(lifecycle)),
     connection_id_(connection_lifecycle_.connection_id()),
-    local_(to_asio_address(connection_lifecycle_.local_endpoint().address()), connection_lifecycle_.local_endpoint().port()),
+    local_(to_asio_address(connection_lifecycle_.endpoints().local().address()), connection_lifecycle_.endpoints().local().port()),
     tls_local_address_(local_.address()),
     remote_(remote),
     path_remote_(remote),
     path_local_(local_),
     path_interface_index_(connection_lifecycle_.interface_index()),
     remote_address_(),
-    local_address_(),
     connection_ids_(),
     datagram_(),
     client_certificate_(),
@@ -347,8 +346,7 @@ http3_session::http3_session(http3_endpoint& endpoint, connection_slot slot, con
     }
     bind_tls_local_address(*tls_, tls_local_address_);
     if (const auto callback = services_.options_.tls_client_hello_; callback || tls_certificate_selection_enabled(endpoint.session_config())) {
-        assign_peer_address(local_address_, local_.address());
-        client_hello_.emplace(tls_client_hello_observation{.callback_ = callback, .fields_ = {.connection_id_ = connection_id_, .local_address_ = local_address_, .local_port_ = local_.port(), .remote_address_ = remote_address_, .remote_port_ = remote_.port(), .quic_ = true, .message_ = {}}});
+        client_hello_.emplace(tls_client_hello_observation{.callback_ = callback, .fields_ = {.endpoints_ = connection_lifecycle_.endpoints(), .quic_ = true, .message_ = {}}});
         observe_tls_client_hello(*tls_, *client_hello_);
     }
     connection_reference_.get_conn = native_connection;
@@ -636,7 +634,7 @@ void http3_session::start_application() {
         client_subject = extract_tls_client_certificate(tls_.get(), client_certificate_);
     }
     served_certificate_.emplace(SSL_get_certificate(tls_.get()));
-    base_services_.emplace(services_.capabilities_.make_context_services(services_.stop_token_).with_tls_transport(connection_id_, remote_address_, client_subject, tls_selected_alpn(*tls_), tls_server_name(*tls_), remote_.port(), *served_certificate_).with_connection_lifecycle(connection_lifecycle_).with_inbound_buffers(inbound_buffers_).with_request_stream(endpoint_.session_config().request_stream_ ? services_.options_.request_stream_ : request_stream_callback_ref{}));
+    base_services_.emplace(services_.capabilities_.make_context_services(services_.stop_token_).with_tls_transport(connection_id_, remote_address_, remote_.port(), tls_connection_transport(client_subject, tls_selected_alpn(*tls_), tls_server_name(*tls_)), *served_certificate_).with_connection_lifecycle(connection_lifecycle_).with_inbound_buffers(inbound_buffers_).with_request_stream(endpoint_.session_config().request_stream_ ? services_.options_.request_stream_ : request_stream_callback_ref{}));
     base_services_->bind_routes(services_.routes_);
     set_inactivity_phase();
     if (drain_begun_) {

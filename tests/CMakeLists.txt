@@ -147,17 +147,9 @@ if(RUVIA_BUILD_WEB)
     ruvia_add_web_test(ruvia_websocket_standalone_server 180 web/app/websocket_server.cpp)
     ruvia_add_web_test(ruvia_app_listener_transactions 120 web/app/listener_transactions.cpp)
     ruvia_add_web_test(ruvia_route_dispatch_isolation 60 web/app/route_dispatch_isolation.cpp)
-    # A conflicting route pair, like a route with an invalid CONNECT
-    # protocol token, makes every application in its executable fail startup, so
-    # neither can share the process-wide controller registry.
+    # Invalid controllers still self-register for application, which would
+    # poison every application started in a shared binary.
     ruvia_add_web_test(ruvia_route_conflict 30 web/app/route_conflict.cpp)
-    target_compile_definitions(ruvia_route_conflict PRIVATE RUVIA_ROUTE_CONFLICT_CASE=1)
-    ruvia_add_web_test(ruvia_route_encoded_duplicate 30 web/app/route_conflict.cpp)
-    target_compile_definitions(ruvia_route_encoded_duplicate PRIVATE RUVIA_ROUTE_CONFLICT_CASE=2)
-    ruvia_add_web_test(ruvia_route_protocol 30 web/app/route_conflict.cpp)
-    target_compile_definitions(ruvia_route_protocol PRIVATE RUVIA_ROUTE_CONFLICT_CASE=3)
-    ruvia_add_web_test(ruvia_route_dot_segment 30 web/app/route_conflict.cpp)
-    target_compile_definitions(ruvia_route_dot_segment PRIVATE RUVIA_ROUTE_CONFLICT_CASE=4)
     set(_ruvia_tcp_client_test_sources
         web/http1/websocket.cpp
         web/http/udp_tunnel.cpp)

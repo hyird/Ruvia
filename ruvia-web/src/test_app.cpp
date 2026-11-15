@@ -44,6 +44,7 @@ struct test_app::impl_type final {
         failed };
 
     detail::app_configuration configuration_;
+    std::vector<detail::controller_registrar> registrars_{};
     detail::controller_store controllers_;
     detail::compiled_route_plan_ptr_type route_plan_;
     std::optional<detail::route_table> routes_;
@@ -100,9 +101,8 @@ struct test_app::impl_type final {
         lifecycle_ = lifecycle_type::initializing;
 
         try {
-            const auto controller_registrars = detail::seal_controller_registrars();
-            controllers_ = detail::controller_store(controller_registrars);
-            route_plan_ = detail::compile_route_plan(controller_registrars, controllers_, configuration_);
+            controllers_ = detail::controller_store(registrars_);
+            route_plan_ = detail::compile_route_plan(registrars_, controllers_, configuration_);
             routes_.emplace(*route_plan_, controllers_);
 
             capabilities_.emplace(event_loop_.io_context(), worker_, detail::worker_capability_definitions{.worker_states_ = configuration_.worker_states()},
@@ -287,6 +287,12 @@ test_app& test_app::use_middleware(detail::owned_middleware_descriptor descripto
 test_app& test_app::use_worker_state_definition(detail::worker_state_definition definition) {
     impl_->require_configurable();
     impl_->configuration_.add_worker_state(std::move(definition));
+    return *this;
+}
+
+test_app& test_app::add_controllers(std::span<const detail::controller_registrar> registrars) {
+    impl_->require_configurable();
+    impl_->registrars_.insert(impl_->registrars_.end(), registrars.begin(), registrars.end());
     return *this;
 }
 

@@ -258,7 +258,7 @@ public:
             state_.emplace<inactive_type>();
             return;
         }
-        state_.emplace<active_type>(codecs_.acquire_stream_encoder(selection_.coding()));
+        state_.emplace<active_type>(codecs_.acquire_encoder(selection_.coding()));
     }
 
     [[nodiscard]] bool active() const noexcept {
@@ -335,10 +335,10 @@ private:
     struct failed_type final {};
 
     struct active_type final {
-        explicit active_type(stream_encoder_lease lease) noexcept :
+        explicit active_type(http_content_encoder_lease lease) noexcept :
             lease_(std::move(lease)) {}
 
-        stream_encoder_lease lease_;
+        http_content_encoder_lease lease_;
     };
 
     using state_type = std::variant<unprepared_type, inactive_type, pending_type, finished_type, failed_type, active_type>;

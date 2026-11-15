@@ -798,7 +798,7 @@ TEST(Ruvia, http1_parse_transfer_coding_before_final_chunked) {
     EXPECT_TRUE(result_value.complete());
     const auto& chunked = require_chunked(result_value.state_.body_plan());
     EXPECT_EQ(chunked.transfer_codings().size(), std::size_t{1});
-    EXPECT_TRUE(chunked.transfer_codings()[0] == ruvia::http_transfer_coding::gzip);
+    EXPECT_TRUE(chunked.transfer_codings()[0] == ruvia::http_content_coding::gzip);
 }
 
 TEST(Ruvia, http1_parse_transfer_encoding_ignores_empty_members_without_losing_framing) {
@@ -880,6 +880,19 @@ TEST(Ruvia, http1_request_unknown_transfer_coding_obeys_final_framing_precedence
         "Transfer-Encoding: unknown, chunked\r\n\r\n0\r\n\r\n");
     EXPECT_TRUE(is_failure(framed.state_, http_parse_error::unsupported_transfer_encoding));
     EXPECT_TRUE(framed.state_.connection_plan().disposition() == http1_close_policy::close_after_response);
+}
+
+// RFC 9112 section 7.2: content-only codings are not transfer codings.
+TEST(Ruvia, http1_request_content_only_codings_are_unsupported_transfer_codings) {
+    for (const std::string_view coding : {"br", "zstd", "identity"}) {
+        std::string wire = "POST / HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: ";
+        wire.append(coding);
+        wire.append(", chunked\r\n\r\n0\r\n\r\n");
+        EXPECT_TRUE(is_failure(parse_http1_request_message(wire).state_, http_parse_error::unsupported_transfer_encoding));
+    }
+    const auto alias = parse_http1_request_message("POST / HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: x-gzip, chunked\r\n\r\n3\r\nraw\r\n0\r\n\r\n");
+    EXPECT_TRUE(alias.complete());
+    EXPECT_TRUE(require_chunked(alias.state_.body_plan()).transfer_codings()[0] == ruvia::http_content_coding::gzip);
 }
 
 TEST(Ruvia, http1_parse_transfer_encoding_in_http10_rejected) {

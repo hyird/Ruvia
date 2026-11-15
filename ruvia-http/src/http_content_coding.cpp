@@ -78,13 +78,15 @@ void http_content_coding_field_parser::update(std::string_view value) noexcept {
         if (coding.has_value() && *coding == http_content_coding::identity) {
             return true;
         }
-        if (codings_.size_ == max_content_codings) {
+        if (members_ == max_content_codings) {
             // Keep scanning: later malformed members still invalidate the field.
             depth_exceeded_ = true;
-        } else if (coding.has_value()) {
-            codings_.values_[codings_.size_++] = *coding;
         } else {
-            ++codings_.size_;
+            // Unknown members count toward the depth cap too.
+            ++members_;
+            if (coding.has_value()) {
+                codings_.push_back(*coding);
+            }
         }
         if (!coding.has_value()) {
             unknown_coding_ = true;

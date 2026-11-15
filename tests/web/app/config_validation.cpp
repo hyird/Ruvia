@@ -186,6 +186,7 @@ TEST(Ruvia, testing_facade_retains_owned_response_memory_across_app_lifetime) {
     std::optional<ruvia::dispatch_response> retained;
     {
         ruvia::test_app app;
+        app.controllers<testing_memory_controller>();
 
         retained.emplace(app.request(ruvia::test_request::get("/testing-memory/owned")));
         EXPECT_EQ(retained->body().size(), std::size_t(256 * 1024));
@@ -724,6 +725,7 @@ TEST(Ruvia, route_shapes_static_side_wins_over_parameter_pair) {
     // "/shapes/a/*" and "/shapes/b/:z" both overlap "/shapes/:x/:y"; the literal
     // branch is tried first and the parameter pair serves everything else.
     ruvia::test_app app;
+    app.controllers<route_shapes_controller>();
     EXPECT_EQ(body_of(app, "/shapes/a/b"), std::string("a-wild:b"));
     EXPECT_EQ(body_of(app, "/shapes/a/b/c"), std::string("a-wild:b/c"));
     EXPECT_EQ(body_of(app, "/shapes/a"), std::string("a-wild:"));
@@ -735,12 +737,14 @@ TEST(Ruvia, route_shapes_parameter_wins_over_sibling_wildcard) {
     // A parameter is tried before the wildcard at the same node and the
     // wildcard takes over once the parameter branch fails.
     ruvia::test_app app;
+    app.controllers<route_shapes_controller>();
     EXPECT_EQ(body_of(app, "/shapes/w/1"), std::string("w-param:1"));
     EXPECT_EQ(body_of(app, "/shapes/w/1/2"), std::string("w-wild:1/2"));
 }
 
 TEST(Ruvia, route_shapes_scoped_middleware_follows_the_request_path) {
     ruvia::test_app app;
+    app.controllers<route_shapes_controller>();
     app.use_at<route_shapes_scope>({.prefix_ = "/admin"}, "admin");
 
     // One parameterized route serves paths on both sides of the scope.
@@ -769,6 +773,7 @@ TEST(Ruvia, route_shapes_scoped_middleware_follows_the_request_path) {
 
 TEST(Ruvia, route_shapes_scoped_middleware_checks_wildcard_captures) {
     ruvia::test_app app;
+    app.controllers<route_shapes_controller>();
     app.use_at<route_shapes_scope>({.prefix_ = "/assets/public"}, "public");
 
     EXPECT_EQ(scope_of(app, "/assets/public"), std::string("public"));
@@ -782,6 +787,7 @@ TEST(Ruvia, route_shapes_trailing_slash_is_a_distinct_path_for_every_route_kind)
     // RFC 3986 path identity: "/a" and "/a/" name different resources, so
     // static and dynamic routes alike neither alias nor shadow each other.
     ruvia::test_app app;
+    app.controllers<route_shapes_controller>();
     EXPECT_EQ(body_of(app, "/slash/static"), std::string("static:bare"));
     EXPECT_EQ(body_of(app, "/slash/static/"), std::string("static:slash"));
     EXPECT_EQ(body_of(app, "/slash/42"), std::string("dyn:42"));
@@ -796,6 +802,7 @@ TEST(Ruvia, route_shapes_trailing_slash_is_a_distinct_path_for_every_route_kind)
 
 TEST(Ruvia, route_shapes_url_for_keeps_the_registered_trailing_slash) {
     ruvia::test_app app;
+    app.controllers<route_shapes_controller>();
     const auto links = app.request(ruvia::test_request::get("/slash-links"));
     EXPECT_EQ(links.status(), ruvia::http_status::ok);
     EXPECT_EQ(links.body(), "/slash/static/ /slash/7/ /slash/7");
@@ -807,6 +814,7 @@ TEST(Ruvia, route_shapes_non_http_absolute_target_is_rejected) {
     // A generic-scheme absolute-form target would carry a path no front proxy
     // routes like this server; it is a 400 before any route or scope runs.
     ruvia::test_app app;
+    app.controllers<route_shapes_controller>();
     app.use_at<route_shapes_scope>({.prefix_ = "/admin"}, "admin");
     EXPECT_EQ(app.request(ruvia::test_request::get("x:admin/panel")).status(), ruvia::http_status::bad_request);
     EXPECT_EQ(app.request(ruvia::test_request::get("x:/admin/panel")).status(), ruvia::http_status::bad_request);
@@ -816,6 +824,7 @@ TEST(Ruvia, route_shapes_dot_segments_match_no_route) {
     // "/assets/public/../private/key" resolves to a resource under
     // "/assets/private" although its raw segments sit outside that scope.
     ruvia::test_app app;
+    app.controllers<route_shapes_controller>();
     app.use_at<route_shapes_scope>({.prefix_ = "/assets/private"}, "private");
     for (const std::string_view path : {"/assets/public/../private/key", "/assets/public/%2E%2E/private/key", "/assets/./private/key", "/admin/panel/.", "/assets/%2e"}) {
         EXPECT_EQ(app.request(ruvia::test_request::get(path)).status(), ruvia::http_status::not_found);
@@ -827,6 +836,7 @@ TEST(Ruvia, route_shapes_dot_segments_match_no_route) {
 
 TEST(Ruvia, route_shapes_conditional_frames_keep_chain_order_and_neighbours) {
     ruvia::test_app app;
+    app.controllers<route_shapes_controller>();
     app.use<route_shapes_trace>();
     app.use_at<route_shapes_scope>({.prefix_ = "/admin"}, "admin");
 
@@ -844,6 +854,7 @@ TEST(Ruvia, route_shapes_conditional_frames_keep_chain_order_and_neighbours) {
 
 TEST(Ruvia, route_shapes_conditional_frames_keep_single_shot_next) {
     ruvia::test_app app;
+    app.controllers<route_shapes_controller>();
     app.use_at<route_shapes_double_next>({.prefix_ = "/admin"});
 
     const auto inside = app.request(ruvia::test_request::get("/admin/panel"));
@@ -887,6 +898,7 @@ TEST(Ruvia, route_shapes_encoded_spellings_select_the_literal_route_and_its_midd
     // capture an encoded spelling of a guarded literal route, neither a static
     // one nor a literal segment inside a dynamic one.
     ruvia::test_app app;
+    app.controllers<route_shapes_equivalence_controller>();
     for (const std::string_view path : {"/equiv/users/admin", "/equiv/users/%61dmin", "/equiv/users/adm%69n", "/equiv/users/%61%64%6D%69%6E", "/equiv/users/admin/x", "/equiv/users/%61dmin/x", "/equiv/users/adm%69n/x"}) {
         EXPECT_EQ(app.request(ruvia::test_request::get(path)).status(), ruvia::http_status::forbidden);
     }
@@ -900,6 +912,7 @@ TEST(Ruvia, route_shapes_encoded_spellings_select_the_literal_route_and_its_midd
 TEST(Ruvia, route_shapes_hex_case_does_not_change_the_route) {
     // RFC 3986 6.2.2.1: hex digits in a percent-encoding are case-insensitive.
     ruvia::test_app app;
+    app.controllers<route_shapes_equivalence_controller>();
     for (const std::string_view path : {"/equiv/files/caf%C3%A9", "/equiv/files/caf%c3%a9", "/equiv/files/caf%C3%a9"}) {
         EXPECT_EQ(app.request(ruvia::test_request::get(path)).status(), ruvia::http_status::forbidden);
     }
@@ -911,6 +924,7 @@ TEST(Ruvia, route_shapes_encoded_colon_or_star_literal_is_not_a_parameter_or_wil
     // encoded ("%3Aid", "%2A"); it is a route of its own beside the parameter
     // or wildcard sibling, not a duplicate registration of it.
     ruvia::test_app app;
+    app.controllers<route_shapes_equivalence_controller>();
     for (const std::string_view path : {"/equiv/colon/%3Aid", "/equiv/colon/%3aid", "/equiv/star/%2A"}) {
         EXPECT_EQ(app.request(ruvia::test_request::get(path)).status(), ruvia::http_status::forbidden);
     }
@@ -923,6 +937,7 @@ TEST(Ruvia, route_shapes_allow_names_every_extension_method_of_a_resource) {
     // many extension methods it has and however each route spelled the path.
     const std::multiset<std::string_view> expected{{"OPTIONS", "EXT-A", "EXT-B", "EXT-C", "EXT-D", "EXT-E", "EXT-F", "EXT-G", "EXT-H", "EXT-I", "EXT-J"}};
     ruvia::test_app app;
+    app.controllers<route_shapes_equivalence_controller>();
     const auto options = app.request(ruvia::test_request::options("/equiv/many"));
     EXPECT_EQ(options.status(), ruvia::http_status::no_content);
     EXPECT_EQ(allow_methods(options.header("Allow").value_or("")), expected);
@@ -936,6 +951,7 @@ TEST(Ruvia, route_shapes_allow_names_every_extension_method_of_a_resource) {
 TEST(Ruvia, route_shapes_response_stream_get_route_advertises_head) {
     // RFC 9110 9.1/9.3.2: a GET resource supports HEAD, streaming or not.
     ruvia::test_app app;
+    app.controllers<route_shapes_equivalence_controller>();
     const auto options = app.request(ruvia::test_request::options("/equiv/stream"));
     EXPECT_EQ(options.status(), ruvia::http_status::no_content);
     EXPECT_EQ(options.header("Allow").value_or(""), std::string_view("GET, HEAD, OPTIONS"));
@@ -952,6 +968,7 @@ TEST(Ruvia, extension_routes_keep_method_and_canonical_path_identity) {
     };
     constexpr route_case cases[] = {{"A-INDEX", "/indexed/a%2fb", "user:-"}, {"Z-INDEX", "/indexed/a%2Fb", "guarded"}, {"Z-INDEX", "/indexed/a/b", "file:-"}, {"A-INDEX", "/indexed/a", "guarded"}, {"Z-INDEX", "/indexed/z", "guarded"}, {"A-INDEX-TAIL", "/indexed/m", "file:-"}};
     ruvia::test_app app;
+    app.controllers<route_shapes_equivalence_controller>();
     for (const auto& item : cases) {
         SCOPED_TRACE(std::string(item.method_) + " " + std::string(item.path_));
         const auto response = app.request(ruvia::test_request::method(item.method_, item.path_));
@@ -968,6 +985,7 @@ TEST(Ruvia, extension_route_misses_distinguish_method_and_resource_identity) {
     };
     const miss_case cases[] = {{"A-INDEX", "/0-indexed", ruvia::http_status::not_found}, {"A-INDEX", "/zz-indexed", ruvia::http_status::not_found}, {"A-INDEX", "/indexed/a%2fbb", ruvia::http_status::not_found}, {"A-INDEX", "/indexed/m", ruvia::http_status::method_not_allowed}, {"A-INDEX-", "/indexed/a", ruvia::http_status::not_implemented}, {"a-index", "/indexed/a", ruvia::http_status::not_implemented}, {"000-NOT-REGISTERED-INDEX", "/indexed/a", ruvia::http_status::not_implemented}, {"ZZZ-NOT-REGISTERED-INDEX", "/indexed/a", ruvia::http_status::not_implemented}};
     ruvia::test_app app;
+    app.controllers<route_shapes_equivalence_controller>();
     for (const auto& item : cases) {
         SCOPED_TRACE(std::string(item.method_) + " " + std::string(item.path_));
         const auto response = app.request(ruvia::test_request::method(item.method_, item.path_));
@@ -980,6 +998,7 @@ TEST(Ruvia, extension_route_misses_distinguish_method_and_resource_identity) {
 
 TEST(Ruvia, extension_route_allow_groups_only_canonical_equivalent_paths) {
     ruvia::test_app app;
+    app.controllers<route_shapes_equivalence_controller>();
     const auto encoded = app.request(ruvia::test_request::options("/indexed/a%2Fb"));
     EXPECT_EQ(encoded.status(), ruvia::http_status::no_content);
     EXPECT_EQ(allow_methods(encoded.header("Allow").value_or("")), (std::multiset<std::string_view>{"OPTIONS", "A-INDEX", "Z-INDEX"}));

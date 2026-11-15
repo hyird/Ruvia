@@ -70,102 +70,12 @@
 #include "websocket.h"
 #include "websocket_connection.h"
 #include "worker_ref.h"
+#include "worker_services.h"
 #include "worker_state.h"
 #include "worker_wait.h"
 
 namespace ruvia {
 
-class http_client;
-class http_client_ref;
-class stop_token;
-
-#ifdef RUVIA_ENABLE_DATABASE
-class db_executor;
-#endif
-
-#ifdef RUVIA_ENABLE_REDIS
-class redis_executor;
-#endif
-namespace detail {
-
-class borrowed_clients;
-class operation_scope;
-class db_registry;
-struct request_io_metrics;
-class http_client_registry;
-class redis_registry;
-
-// A copyable view of the complete client registry set owned by one worker, or
-// of the clients a router borrows for its dispatches. The only other state is
-// detached: partial registry graphs are not representable. Detached views are
-// only placeholders for contexts built without worker capabilities; an
-// attached view never outlives its worker, which joins all posted work before
-// destroying its registries, nor a router's dispatch.
-class worker_client_registry_view final {
-public:
-    [[nodiscard]] static constexpr worker_client_registry_view detached() noexcept {
-        return worker_client_registry_view(nullptr);
-    }
-
-    constexpr worker_client_registry_view(http_client_registry& http_clients
-#ifdef RUVIA_ENABLE_DATABASE
-        ,
-        db_registry& databases
-#endif
-#ifdef RUVIA_ENABLE_REDIS
-        ,
-        redis_registry& redis
-#endif
-        ) noexcept :
-        http_clients_(&http_clients)
-#ifdef RUVIA_ENABLE_DATABASE
-        ,
-        databases_(&databases)
-#endif
-#ifdef RUVIA_ENABLE_REDIS
-        ,
-        redis_(&redis)
-#endif
-    {
-    }
-
-    explicit constexpr worker_client_registry_view(const borrowed_clients& borrowed) noexcept :
-        borrowed_(&borrowed) {}
-
-    [[nodiscard]] constexpr bool attached() const noexcept {
-        return http_clients_ != nullptr || borrowed_ != nullptr;
-    }
-
-    // `io_metrics` is the request's counter block, or null outside a request.
-#ifdef RUVIA_ENABLE_DATABASE
-    [[nodiscard]] db_executor db(operation_scope& operation_scope, request_io_metrics* io_metrics, const stop_token& stop_token) const;
-    [[nodiscard]] db_executor db(std::string_view alias, operation_scope& operation_scope, request_io_metrics* io_metrics, const stop_token& stop_token) const;
-#endif
-
-#ifdef RUVIA_ENABLE_REDIS
-    [[nodiscard]] redis_executor redis(operation_scope& operation_scope, request_io_metrics* io_metrics, const stop_token& stop_token) const;
-    [[nodiscard]] redis_executor redis(std::string_view alias, operation_scope& operation_scope, request_io_metrics* io_metrics, const stop_token& stop_token) const;
-#endif
-
-    [[nodiscard]] http_client_ref client(operation_scope& operation_scope, const stop_token& stop_token) const;
-    [[nodiscard]] http_client_ref client(std::string_view alias, operation_scope& operation_scope, const stop_token& stop_token) const;
-
-private:
-    explicit constexpr worker_client_registry_view(std::nullptr_t) noexcept {}
-
-    [[nodiscard]] const http_client& borrowed_http_clients(std::string_view alias) const;
-
-    const borrowed_clients* borrowed_{nullptr};
-    http_client_registry* http_clients_{nullptr};
-#ifdef RUVIA_ENABLE_DATABASE
-    db_registry* databases_{nullptr};
-#endif
-#ifdef RUVIA_ENABLE_REDIS
-    redis_registry* redis_{nullptr};
-#endif
-};
-
-}  // namespace detail
 class body_reader;
 class response_stream_writer;
 class websocket;
@@ -837,11 +747,7 @@ public:
     [[nodiscard]] context_services with_connection_lifecycle(connection_lifecycle& lifecycle) const noexcept {
         auto services = *this;
         services.connection_services_.lifecycle_ = &lifecycle;
-        services.connection_services_.info_.local_ = lifecycle.local_endpoint();
-        services.connection_services_.info_.remote_ = lifecycle.remote_endpoint();
-        if (!services.connection_services_.info_.via_trusted_proxy_) {
-            services.connection_services_.info_.client_ = lifecycle.remote_endpoint();
-        }
+        services.connection_services_.info_.assign_endpoints(lifecycle.endpoints());
         if (lifecycle.forwarding_trust_restricted()) {
             const auto& hop = lifecycle.nearest_hop();
             services.connection_services_.peer_trusted_ = services.connection_services_.peer_trusted_ && hop.has_value() && services.trusts_peer(*hop);
@@ -854,9 +760,8 @@ public:
     // worker's conn_info::connection_id() for the connection, zero without one.
     [[nodiscard]] context_services with_plain_transport(std::uint64_t connection_id, std::string_view remote_address, std::uint16_t remote_port) const noexcept {
         auto services = *this;
-        services.connection_services_.info_ = conn_info::plain(connection_id, remote_address);
-        services.connection_services_.info_.set_remote_port(remote_port);
-        services.connection_services_.peer_trusted_ = trusts_peer(services.connection_services_.info_.remote_.address());
+        services.connection_services_.info_ = conn_info::plain(transport_endpoints(connection_id, remote_address, remote_port), remote_address);
+        services.connection_services_.peer_trusted_ = trusts_peer(services.connection_services_.info_.remote().address());
         services.connection_services_.served_certificate_ = nullptr;
         return services;
     }
@@ -864,21 +769,17 @@ public:
     template <typename traits_type, typename allocator_type>
     context_services with_plain_transport(std::uint64_t, std::basic_string<char, traits_type, allocator_type>&&, std::uint16_t) const = delete;
 
-    // `alpn` and `server_name` borrow the connection's SSL, which outlives it.
-    [[nodiscard]] context_services with_tls_transport(std::uint64_t connection_id, std::string_view remote_address, std::optional<std::string_view> client_certificate_subject, std::string_view alpn, std::string_view server_name, std::uint16_t remote_port, tls_served_certificate& served_certificate) const noexcept {
+    // The transport's views borrow the connection's SSL, which outlives it.
+    [[nodiscard]] context_services with_tls_transport(std::uint64_t connection_id, std::string_view remote_address, std::uint16_t remote_port, const tls_connection_transport& transport, tls_served_certificate& served_certificate) const noexcept {
         auto services = *this;
-        services.connection_services_.info_ = conn_info::tls(connection_id, remote_address, client_certificate_subject, alpn, server_name);
-        services.connection_services_.info_.set_remote_port(remote_port);
-        services.connection_services_.peer_trusted_ = trusts_peer(services.connection_services_.info_.remote_.address());
+        services.connection_services_.info_ = conn_info::tls(transport_endpoints(connection_id, remote_address, remote_port), remote_address, transport);
+        services.connection_services_.peer_trusted_ = trusts_peer(services.connection_services_.info_.remote().address());
         services.connection_services_.served_certificate_ = &served_certificate;
         return services;
     }
 
     template <typename traits_type, typename allocator_type>
-    context_services with_tls_transport(std::uint64_t, std::basic_string<char, traits_type, allocator_type>&&, std::optional<std::string_view>, std::string_view, std::string_view, std::uint16_t, tls_served_certificate&) const = delete;
-
-    template <typename traits_type, typename allocator_type>
-    context_services with_tls_transport(std::uint64_t, std::string_view, std::basic_string<char, traits_type, allocator_type>&&, std::string_view, std::string_view, std::uint16_t, tls_served_certificate&) const = delete;
+    context_services with_tls_transport(std::uint64_t, std::basic_string<char, traits_type, allocator_type>&&, std::uint16_t, const tls_connection_transport&, tls_served_certificate&) const = delete;
 
     [[nodiscard]] constexpr std::string_view alternative_service() const noexcept {
         return connection_services_.alternative_service_;
@@ -910,8 +811,13 @@ private:
         return worker_services_->trusted_proxies_ != nullptr && worker_services_->trusted_proxies_->is_trusted_proxy(remote_address);
     }
 
+    // Provisional until with_connection_lifecycle() supplies the local side.
+    [[nodiscard]] static connection_endpoints transport_endpoints(std::uint64_t connection_id, std::string_view remote_address, std::uint16_t remote_port) noexcept {
+        return connection_endpoints(connection_id, {}, ip_endpoint(ip_address::parse(remote_address).value_or(ip_address{}), remote_port));
+    }
+
     const context_worker_services* worker_services_;
-    context_connection_services connection_services_{.info_ = conn_info::plain(0, {})};
+    context_connection_services connection_services_{.info_ = conn_info::plain({}, {})};
     context_request_services request_services_;
 };
 
@@ -1556,7 +1462,7 @@ struct context_access final {
     // An interrupted output operation cannot withdraw what it wrote, so it
     // resets the request: the HTTP/2 or HTTP/3 stream, or the HTTP/1 connection.
     static void reset_interrupted_request(void* raw_context) noexcept {
-        auto& request_services = static_cast<context*>(raw_context)->services();
+        auto& request_services = static_cast<context*>(raw_context)->runtime_services();
         try {
             request_services.reset_request({});
         } catch (...) {
@@ -1571,13 +1477,12 @@ struct context_access final {
     public:
         route_binding(context& value, std::string_view path, std::span<const std::string_view> names, std::span<const std::string_view> values, std::uintptr_t scope) :
             context_(value),
-            services_(value.services()),
+            services_(value.runtime_services()),
             path_(value.route_path_),
             names_(value.param_names_),
             values_(value.param_values_),
             count_(value.param_count_),
-            scope_(value.route_rate_limit_scope_),
-            worker_states_(value.capabilities_.worker_states()) {
+            scope_(value.route_rate_limit_scope_) {
             value.route_path_ = path;
             value.param_names_ = names.data();
             value.param_values_ = values.data();
@@ -1587,21 +1492,14 @@ struct context_access final {
         route_binding(const route_binding&) = delete;
         route_binding& operator=(const route_binding&) = delete;
         ~route_binding() {
-            const auto output = context_.services().response_output();
-            context_.services() = services_;
-            context_.services().response_output() = output;
+            const auto output = context_.runtime_services().response_output();
+            context_.runtime_services() = services_;
+            context_.runtime_services().response_output() = output;
             context_.route_path_ = path_;
             context_.param_names_ = names_;
             context_.param_values_ = values_;
             context_.param_count_ = count_;
             context_.route_rate_limit_scope_ = scope_;
-            context_.capabilities_.bind_worker_states(worker_states_);
-        }
-
-        // Points the context's worker-state lookups at the registry its
-        // services now name; the destructor restores the previous one.
-        void bind_worker_states() noexcept {
-            context_.capabilities_.bind_worker_states(context_.services().worker_states());
         }
 
     private:
@@ -1612,7 +1510,6 @@ struct context_access final {
         const std::string_view* values_;
         std::size_t count_;
         std::uintptr_t scope_;
-        const worker_state_registry* worker_states_;
     };
 
     [[nodiscard]] static context make(const http_request& request, const context_services& services) {
@@ -1649,7 +1546,7 @@ struct context_access final {
     }
 
     [[nodiscard]] static http_interim_response_output* interim_output(context& context_value) noexcept {
-        return context_value.services().interim_output();
+        return context_value.runtime_services().interim_output();
     }
 
     [[nodiscard]] static const http_request& request(const context& context_value) noexcept {
@@ -1661,11 +1558,11 @@ struct context_access final {
     }
 
     [[nodiscard]] static context_services& services(context& context_value) noexcept {
-        return context_value.services();
+        return context_value.runtime_services();
     }
 
     [[nodiscard]] static const context_services& services(const context& context_value) noexcept {
-        return context_value.services();
+        return context_value.runtime_services();
     }
 
     [[nodiscard]] static std::optional<std::string_view> decoded_body(const context& context_value) noexcept {
@@ -1694,11 +1591,11 @@ struct context_access final {
     }
 
     [[nodiscard]] static detail::rate_limiter* rate_limiter(context& context_value) noexcept {
-        return context_value.services().rate_limiter();
+        return context_value.runtime_services().rate_limiter();
     }
 
     [[nodiscard]] static const std::optional<std::chrono::steady_clock::time_point>& rate_limit_arrival(context& context_value) noexcept {
-        return context_value.services().pinned_arrival();
+        return context_value.runtime_services().pinned_arrival();
     }
 
     [[nodiscard]] static std::uintptr_t route_rate_limit_scope(const context& context_value) noexcept {
@@ -1738,7 +1635,7 @@ struct context_access final {
     // 1xx head either -- the stream now carries the upgraded protocol. Throws,
     // before anything is written, while an interim head is still being written.
     static void commit_upgrade(context& context_value) {
-        if (auto* interim = context_value.services().interim_output()) {
+        if (auto* interim = context_value.runtime_services().interim_output()) {
             interim->commit_final();
         }
         context_value.response_output() = context_response_output::upgraded();

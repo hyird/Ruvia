@@ -148,12 +148,4 @@ std::variant<std::string, http_content_decode_error> decode_zstd_content(std::st
     }
 }
 
-std::optional<std::string> encode_zstd_content(zstd_encoder_stream& encoder, std::string_view input, std::size_t max_encoded_bytes) {
-    return encode_whole_content_with_stream(encoder, ZSTD_e_end, input, max_encoded_bytes);
-}
-
-std::optional<std::string> encode_zstd_content(std::string_view input, std::size_t max_encoded_bytes) {
-    return encode_whole_content<zstd_encoder_stream>("zstd encoder initialization failed", ZSTD_e_end, input, max_encoded_bytes);
-}
-
 }  // namespace ruvia::detail

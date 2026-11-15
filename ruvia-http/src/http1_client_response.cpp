@@ -530,11 +530,11 @@ struct http1_client_response_plan_access final {
         return http1_client_response_plan(http1_client_response_plan::state_type(http1_client_known_length_response(content_length, persistence)), request_content_signal, discards_content);
     }
 
-    [[nodiscard]] static http1_client_response_plan chunked(http_transfer_codings transfer_codings, http1_close_policy persistence, request_content_signal_type request_content_signal, bool discards_content) {
+    [[nodiscard]] static http1_client_response_plan chunked(http_content_codings transfer_codings, http1_close_policy persistence, request_content_signal_type request_content_signal, bool discards_content) {
         return http1_client_response_plan(http1_client_response_plan::state_type(http1_client_chunked_response(std::move(transfer_codings), persistence)), request_content_signal, discards_content);
     }
 
-    [[nodiscard]] static http1_client_response_plan close_delimited(http_transfer_codings transfer_codings, request_content_signal_type request_content_signal, bool discards_content) {
+    [[nodiscard]] static http1_client_response_plan close_delimited(http_content_codings transfer_codings, request_content_signal_type request_content_signal, bool discards_content) {
         return http1_client_response_plan(http1_client_response_plan::state_type(http1_client_close_delimited_response(std::move(transfer_codings))), request_content_signal, discards_content);
     }
 
@@ -605,7 +605,7 @@ http1_client_response_planning_result_type plan_http1_client_response(const http
 
     // RFC 9112 section 6.3: a body-allowed response with no declared
     // length is delimited by server close and cannot return to a pool.
-    return http1_client_response_plan_access::close_delimited(http_transfer_codings{}, resolve_request_content_signal(request_content_phase, response.status_code_, true), discards_content);
+    return http1_client_response_plan_access::close_delimited(http_content_codings{}, resolve_request_content_signal(request_content_phase, response.status_code_, true), discards_content);
 }
 
 }  // namespace ruvia::detail

@@ -196,23 +196,12 @@ static std::variant<std::string, http_content_decode_error> decode_zlib_content(
     }
 }
 
-std::optional<std::string> encode_zlib_content(zlib_deflate_stream& deflater, std::string_view input, std::size_t max_encoded_bytes) {
-    return encode_whole_content_with_stream(deflater, Z_FINISH, input, max_encoded_bytes);
-}
 std::variant<std::string, http_content_decode_error> decode_gzip_content(std::string_view input, std::size_t max_decoded_bytes) {
     return decode_zlib_content(input, max_decoded_bytes, zlib_gzip_window_bits, true);
 }
 
 std::variant<std::string, http_content_decode_error> decode_deflate_content(std::string_view input, std::size_t max_decoded_bytes) {
     return decode_zlib_content(input, max_decoded_bytes, zlib_deflate_window_bits, false);
-}
-
-std::optional<std::string> encode_gzip_content(std::string_view input, std::size_t max_encoded_bytes) {
-    return encode_whole_content<zlib_deflate_stream>("zlib encoder initialization failed", Z_FINISH, input, max_encoded_bytes, zlib_content_format::gzip);
-}
-
-std::optional<std::string> encode_deflate_content(std::string_view input, std::size_t max_encoded_bytes) {
-    return encode_whole_content<zlib_deflate_stream>("zlib encoder initialization failed", Z_FINISH, input, max_encoded_bytes, zlib_content_format::deflate);
 }
 
 }  // namespace ruvia::detail

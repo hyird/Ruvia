@@ -398,7 +398,7 @@ HTTP/3 的畸形 Capsule 中止对应流并使用 `H3_MESSAGE_ERROR`；原生 HT
 
 ## 5. 出站 HTTP 客户端
 
-头文件：`"http_client.h"`。具名 origin 各有独立连接池；`http_client(event_loop, ...)` 可直接用于其他项目，不要求 `application`、路由或 `context`。框架处理器通过 `c.client(alias)` 借用注册能力。
+头文件：`"http_client.h"`。具名 origin 各有独立连接池；`http_client(event_loop, ...)` 可直接用于其他项目，不要求 `application`、路由或 `context`。框架处理器通过 `c.services().client(alias)` 借用注册能力。
 
 ### 5.1 请求、响应与会话
 
@@ -412,7 +412,7 @@ ruvia::app().client({
 请求使用链式构造器，响应保留明确的所有权与流式消费边界：
 
 ```cpp
-auto client = c.client("api");
+auto client = c.services().client("api");
 auto response = co_await client.get("/users")
     .query("name", "Ada Lovelace")
     .header("Accept", "application/json")
@@ -483,7 +483,7 @@ WebSocket 握手错误仍抛 `http_client_error`；`handshake_rejected` 可通�
 - **放弃上传**：`exchange.body().abandon()` 只停止发送，请求内容保持不完整，`response()` 照常可读。HTTP/1 读完响应后关闭连接；HTTP/2 在完整响应后以 `RST_STREAM(NO_ERROR)` 只结束发送侧，HTTP/3 以 `RESET_STREAM(H3_NO_ERROR)` 只重置发送半流（RFC 9113 §8.1、RFC 9114 §4.1）。
 - **可写查询**：`exchange.body().writable()` 在内容已结束、已开始 `end()`、已 `abandon()`，或交换自身停止上传（提前收到完成交换的最终响应、或失败）后返回 `false`；据此停止泵送正文，不必以 `write()` 抛出的 `std::errc::operation_canceled` 区分原因。
 
-引用对象与响应操作留在所属 worker；请求中的 `http_client_ref` 受请求作用域约束，不能跨请求保存。拥有者的 `client()` / `client(alias)` 与 `c.client()` 一样返回 `http_client_ref`（规则见 [数据手册 1.2](data-and-auth.md#12-直接查询编译期-sql-校验与流式游标db_executor)）；`with_options(operation_options)` 可附加用户取消与更紧的截止时间，但不能替换请求宿主的取消。独立拥有者结束前须 `co_await owner.shutdown()`，并在事件循环退役前收束所有已启动任务。
+引用对象与响应操作留在所属 worker；请求中的 `http_client_ref` 受请求作用域约束，不能跨请求保存。拥有者的 `client()` / `client(alias)` 与 `c.services().client()` 一样返回 `http_client_ref`（规则见 [数据手册 1.2](data-and-auth.md#12-直接查询编译期-sql-校验与流式游标db_executor)）；`with_options(operation_options)` 可附加用户取消与更紧的截止时间，但不能替换请求宿主的取消。独立拥有者结束前须 `co_await owner.shutdown()`，并在事件循环退役前收束所有已启动任务。
 
 ### 5.2 源站、转发与连接控制
 
@@ -503,7 +503,7 @@ WebSocket 握手错误仍抛 `http_client_error`；`handshake_rejected` 可通�
 | `max_concurrent_dns_refreshes_` | 同时进行的后台 DNS 刷新查询（默认 8）；达到上限的刷新周期顺延到下一周期 |
 运行期只对变化的 alias 调用 `upsert()`；它取消被替换池的在途操作，未更新的池不重建。准备失败或取消不发布候选；不可中断的凭据解析完成并收束后才结束取消，`shutdown()` 等待全部准备与退休任务。
 
-自动重定向由 `.redirects(maximum)` 控制（默认最多 5 次）；未设置策略时，只跟随同一 origin 或当前拥有者已注册的其他 origin，未知 origin 或 HTTPS → HTTP 降级返回原响应。`.on_redirect(bool(const http_client_redirect_hop&))` / `.on_redirect(task<bool>(const http_client_redirect_hop&, stop_token))` 在每一跳（含同源与跨源）跳转前回调源 origin、源/目标 URL、连接信息（`peer_ip_` 为强类型 `ip_address`）与重定向状态码，返回 `false` 立即停止跟随并返回当前重定向响应；后续跳发生连接或超时失败时，`http_client_error::redirect_hops()` / `followed_redirect()` 标识已完成的前序跳数。`upload()` 流式上传在收到将方法改写为 `GET`（丢弃请求体）的 `301`/`302`/`303` 响应时自动停止上传并继续按重定向策略跟随。跨源始终剥离 `Authorization`、`Proxy-Authorization` 与原源 `Cookie`，目标使用自身 TLS、连接池及凭据策略。
+自动重定向由 `.redirects(maximum)` 控制（默认最多 5 次）；未设置策略时，只跟随同一 origin 或当前拥有者已注册的其他 origin，未知 origin 或 HTTPS → HTTP 降级返回原响应。`.on_redirect(bool(const http_client_redirect_hop&))` / `.on_redirect(task<bool>(const http_client_redirect_hop&, stop_token))` 在每一跳（含同源与跨源）跳转前回调源 origin、源/目标 URL、连接信息（`remote_` 为 `ip_endpoint`）与重定向状态码，返回 `false` 立即停止跟随并返回当前重定向响应；后续跳发生连接或超时失败时，`http_client_error::redirect_hops()` / `followed_redirect()` 标识已完成的前序跳数。`upload()` 流式上传在收到将方法改写为 `GET`（丢弃请求体）的 `301`/`302`/`303` 响应时自动停止上传并继续按重定向策略跟随。跨源始终剥离 `Authorization`、`Proxy-Authorization` 与原源 `Cookie`，目标使用自身 TLS、连接池及凭据策略。
 
 | 回源能力 | 入口与契约 |
 | --- | --- |

@@ -118,8 +118,7 @@ void http_client_connection::on_http2_stopped() noexcept {
 
 void http_client_connection::capture_connection_info(http_client_response_state& response, bool reused) const {
     if (response.connection_info_.id_ != connection_id_) {
-        response.connection_info_.peer_ip_ = peer_ip_;
-        response.connection_info_.peer_port_ = transport_.peer_endpoint().port();
+        response.connection_info_.remote_ = ip_endpoint(peer_ip_, transport_.peer_endpoint().port());
         response.connection_info_.id_ = connection_id_;
     }
     response.connection_info_.reused_ = reused;

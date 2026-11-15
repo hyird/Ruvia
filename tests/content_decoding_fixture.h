@@ -60,14 +60,11 @@ using ruvia::http1_chunked_body_decoder;
 using ruvia::http1_request_body_plan;
 using ruvia::http_content_coding;
 using ruvia::http_content_decode_error;
-using ruvia::http_transfer_coding;
 using ruvia::http_transfer_coding_decode_failure;
 using ruvia::http_transfer_coding_decode_need_input;
 using ruvia::http_transfer_coding_decode_output_view;
 using ruvia::http_transfer_coding_decode_result;
-using ruvia::http_transfer_coding_decoder_failure;
 using ruvia::http_transfer_coding_stack_decoder;
-using ruvia::http_transfer_codings;
 using ruvia::http_unsupported_expectation_policy;
 using ruvia::parse_http_content_coding;
 using ruvia::protocol_byte_limit;
@@ -130,9 +127,6 @@ inline transfer_decode_observation append_transfer_decoded(http_transfer_coding_
         }
         if (const auto* failure = result_value.failure()) {
             return {true, ruvia::http_request_transfer_coding_error(failure->error())};
-        }
-        if (result_value.decoder_failure() != nullptr) {
-            return {true, std::nullopt};
         }
         return {};
     }

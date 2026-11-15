@@ -542,7 +542,6 @@ private:
     std::string remote_address_;
     // Present only with a tls_client_hello_ observer; tls_ borrows it, so
     // it is declared before tls_.
-    std::string local_address_;
     std::optional<tls_client_hello_observation> client_hello_;
     // Keys this connection holds in the endpoint's table.
     std::vector<http3_cid_key> connection_ids_;

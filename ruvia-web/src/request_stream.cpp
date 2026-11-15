@@ -19,12 +19,6 @@
 #include "route_table.h"
 #include "streaming.h"
 #include "websocket.h"
-#ifdef RUVIA_ENABLE_DATABASE
-#include "db_executor.h"
-#endif
-#ifdef RUVIA_ENABLE_REDIS
-#include "redis_orm.h"
-#endif
 
 namespace ruvia::detail {
 
@@ -194,34 +188,6 @@ void request_stream::advertise_origins(std::span<const std::string_view> origins
 void request_stream::advertise_alternative_service(std::string_view value) {
     context_.advertise_alternative_service(value);
 }
-
-http_client_ref request_stream::client() const {
-    return context_.client();
-}
-
-http_client_ref request_stream::client(std::string_view alias) const {
-    return context_.client(alias);
-}
-
-#ifdef RUVIA_ENABLE_DATABASE
-db_executor request_stream::db() const {
-    return context_.db();
-}
-
-db_executor request_stream::db(std::string_view alias) const {
-    return context_.db(alias);
-}
-#endif
-
-#ifdef RUVIA_ENABLE_REDIS
-redis_executor request_stream::redis() const {
-    return context_.redis();
-}
-
-redis_executor request_stream::redis(std::string_view alias) const {
-    return context_.redis(alias);
-}
-#endif
 
 context_response_editor request_stream::policy() & noexcept {
     return context_.policy();

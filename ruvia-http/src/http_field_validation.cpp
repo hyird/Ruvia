@@ -1,11 +1,13 @@
 #include "http_field_validation.h"
 
 #include <cstdint>
+#include <optional>
 #include <span>
 #include <stdexcept>
 #include <string_view>
 
 #include "http_client_request_view.h"
+#include "http_content_length.h"
 #include "http_content_negotiation.h"
 #include "http_field_kind.h"
 #include "http_field_text.h"
@@ -14,6 +16,7 @@
 #include "http_message_framing_fields.h"
 #include "http_proxy_forwarding.h"
 #include "http_request.h"
+#include "http_request_expectation.h"
 #include "http_response_stream.h"
 #include "http_uri_syntax.h"
 
@@ -210,6 +213,14 @@ void http_request_expectations::parse_field(std::string_view value) noexcept {
         }
         return true;
     });
+}
+
+std::optional<std::uint64_t> http_parse_content_length(std::string_view field_value) noexcept {
+    detail::http_content_length_state state;
+    if (state.parse_field(field_value) != detail::http_content_length_parse_status::ok) {
+        return std::nullopt;
+    }
+    return state.value();
 }
 
 bool is_forbidden_http_request_trailer_field_name(std::string_view field_name) noexcept {

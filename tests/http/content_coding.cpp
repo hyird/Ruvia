@@ -761,7 +761,6 @@ TEST(Ruvia, response_coding_extension_stack_is_not_limited_by_decoder_depth) {
 using ruvia::decode_http_content;
 using ruvia::encode_http_content;
 using ruvia::http_content_coding;
-using ruvia::http_content_encode_context;
 
 namespace {
 
@@ -784,28 +783,27 @@ constexpr std::array compressing_codings{http_content_coding::gzip, http_content
     return result_value.has_value() ? std::move(*result_value) : std::string();
 }
 
-[[nodiscard]] std::optional<std::string> encode_with(http_content_encode_context& context, std::string_view input, std::size_t cap) {
-    auto result_value = context.encode(input, {.max_encoded_bytes_ = cap});
-    if (!result_value.has_value()) {
-        return std::nullopt;
-    }
-    return std::string(*result_value);
-}
-
 }  // namespace
 
-TEST(Ruvia, http_content_encode_context_reuse_matches_one_shot_bytes) {
+TEST(Ruvia, pooled_encoder_encode_matches_one_shot_bytes) {
     constexpr std::array sizes{std::size_t{0}, std::size_t{1}, std::size_t{1000}, std::size_t{8192}, std::size_t{70'000}, std::size_t{300'000}};
+    ruvia::http_worker_codecs codecs;
     for (const auto coding : compressing_codings) {
-        http_content_encode_context context(coding);
-        EXPECT_TRUE(context.coding() == coding);
         unsigned seed = 0;
         // Twice through, so every size also follows a larger representation.
         for (int round = 0; round < 2; ++round) {
             for (const auto size : sizes) {
                 const auto input = sample_body(size, ++seed);
                 const auto expected = one_shot(coding, input, input.size() + 1024);
-                const auto actual = encode_with(context, input, input.size() + 1024);
+                {
+                    // A capped encode leaves the stream consumed; releasing the
+                    // lease resets it for the next representation.
+                    auto capped = codecs.acquire_encoder(coding);
+                    EXPECT_FALSE(capped.encoder().encode(input, {.max_encoded_bytes_ = expected.size() - 1}).has_value());
+                }
+                auto lease = codecs.acquire_encoder(coding);
+                EXPECT_TRUE(lease.encoder().coding() == coding);
+                const auto actual = lease.encoder().encode(input, {.max_encoded_bytes_ = input.size() + 1024});
                 EXPECT_TRUE(actual.has_value());
                 EXPECT_TRUE(actual.value_or(std::string()) == expected);
                 const auto decoded = decode_http_content(std::array{coding}, actual.value_or(std::string()), {.max_decoded_bytes_ = size});
@@ -1375,7 +1373,7 @@ TEST(RuviaHttpPublicApi, no_transform_detection_and_encoder_memory_cap) {
     EXPECT_TRUE(ruvia::http_cache_control_has_no_transform("public, ext=\"a, b\", no-transform, max-age=60"));
 
     // Exhausted native codec memory cap throws std::bad_alloc.
-    EXPECT_THROW((void)ruvia::http_content_encoder(ruvia::http_content_coding::gzip, {.max_memory_bytes_ = 64}), std::bad_alloc);
+    EXPECT_THROW((void)ruvia::http_content_encoder(ruvia::http_content_coding::gzip, 64), std::bad_alloc);
 }
 
 TEST(RuviaHttpPublicApi, media_type_compressibility_allowlist) {
@@ -1386,10 +1384,10 @@ TEST(RuviaHttpPublicApi, media_type_compressibility_allowlist) {
     EXPECT_FALSE(ruvia::is_http_media_type_compressible("image/png"));
 }
 
-TEST(RuviaHttpPublicApi, worker_codecs_reuse_reset_stream_encoders) {
+TEST(RuviaHttpPublicApi, worker_codecs_reuse_reset_encoders) {
     ruvia::http_worker_codecs codecs;
     {
-        auto lease = codecs.acquire_stream_encoder(ruvia::http_content_coding::gzip);
+        auto lease = codecs.acquire_encoder(ruvia::http_content_coding::gzip);
         std::string out;
         lease.encoder().write("streamed payload", out, true);
         lease.encoder().finish(out);
@@ -1399,7 +1397,7 @@ TEST(RuviaHttpPublicApi, worker_codecs_reuse_reset_stream_encoders) {
     }
     {
         // Second lease reuses the reset encoder from the pool.
-        auto lease = codecs.acquire_stream_encoder(ruvia::http_content_coding::gzip);
+        auto lease = codecs.acquire_encoder(ruvia::http_content_coding::gzip);
         std::string out;
         lease.encoder().write("reused encoder payload", out);
         lease.encoder().finish(out);

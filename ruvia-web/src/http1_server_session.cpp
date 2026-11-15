@@ -555,13 +555,10 @@ inline constexpr std::size_t chunked_encoded_buffer_bytes = max_http_header_byte
 }
 
 // Classifies a decode result that produced no output: returns when the decoder
-// completed or needs more input, throws for every failure.
+// completed or needs more input, throws for a data failure.
 inline void require_transfer_coding_progress(const http_transfer_coding_decode_result& result_value) {
     if (const auto* failure = result_value.failure()) {
         throw http_request_transfer_coding_error(failure->error());
-    }
-    if (result_value.decoder_failure() != nullptr) {
-        throw std::runtime_error("transfer-coding decoder failure");
     }
     if (result_value.complete() == nullptr && result_value.need_input() == nullptr) {
         throw std::logic_error("unexpected transfer-coding decode result");
@@ -570,16 +567,12 @@ inline void require_transfer_coding_progress(const http_transfer_coding_decode_r
 
 inline void require_complete_transfer_coding(http_transfer_coding_stack_decoder& decoder) {
     const auto finish_result = decoder.finish_input();
-    if (finish_result.complete() != nullptr) {
-        return;
-    }
     if (const auto* failure = finish_result.failure()) {
         throw http_request_transfer_coding_error(failure->error());
     }
-    if (finish_result.decoder_failure() != nullptr) {
-        throw std::runtime_error("transfer-coding decoder failure");
+    if (finish_result.complete() == nullptr) {
+        throw std::logic_error("unexpected transfer-coding finish result");
     }
-    throw std::logic_error("unexpected transfer-coding finish result");
 }
 
 // Reserves the next growth step of a known-length body whose first `filled`
@@ -663,7 +656,7 @@ public:
         const auto* chunked = body_plan_.chunked();
         if (chunked != nullptr && !chunked->transfer_codings().empty()) {
             const auto& codings = chunked->transfer_codings();
-            transfer_decoder_ = std::make_unique<http_transfer_coding_stack_decoder>(std::span<const http_transfer_coding>(codings.data(), codings.size()), body_limit_value);
+            transfer_decoder_ = std::make_unique<http_transfer_coding_stack_decoder>(std::span<const http_content_coding>(codings.data(), codings.size()), body_limit_value);
         }
     }
 

@@ -589,8 +589,6 @@ private:
     [[nodiscard]] task<http_client_tunnel_result> dispatch_udp(const http_client_udp_tunnel_request_view& head, http_client_tunnel_config config, const http_client_request_options& options, const std::shared_ptr<http_client_informational_callback>& informational) const;
     friend class detail::http_client_registry;
     friend class detail::http_client_state;
-    friend class context;
-    friend class web_worker_context;
     friend class detail::worker_client_registry_view;
     http_client_ref(detail::http_client_pool& pool, detail::operation_scope& scope) noexcept;
     http_client_ref(detail::http_client_pool& pool, detail::operation_scope& scope, operation_options options) noexcept;
@@ -758,7 +756,7 @@ public:
 
     // Handles and operations borrow this client's open lifecycle. Starting one
     // from a temporary would immediately run the client destructor and begin
-    // shutdown, so only lvalue clients may create them. Like context::client(),
+    // shutdown, so only lvalue clients may create them. Like worker_services::client(),
     // a handle carries no operation options; derive them with with_options().
     // client() selects the sole configuration, or alias "default" in a set.
     // 默认重定向仅可到达已注册 origin；请求策略可显式扩充集合。

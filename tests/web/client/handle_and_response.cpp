@@ -410,7 +410,7 @@ public:
     ruvia::task<void> host_cancel(ruvia::context& c) {
         ruvia::stop_source independent;
         try {
-            auto response = co_await c.client("source").with_options({.timeout_ = std::chrono::milliseconds(500), .stop_token_ = independent.token()}).get("/fluent/hold").send();
+            auto response = co_await c.services().client("source").with_options({.timeout_ = std::chrono::milliseconds(500), .stop_token_ = independent.token()}).get("/fluent/hold").send();
             (void)co_await response.bytes();
         } catch (const ruvia::http_client_error& error) {
             if (error.code() == std::make_error_code(std::errc::operation_canceled) && !independent.stop_requested()) {
@@ -428,10 +428,10 @@ public:
     }
 
     ruvia::task<ruvia::http_response> registered_redirect(ruvia::context& c) {
-        const auto& targets = *c.worker_state<std::shared_ptr<redirect_destinations>>();
+        const auto& targets = *c.services().worker_state<std::shared_ptr<redirect_destinations>>();
         const auto mode = c.req().query("mode").value_or("cross");
         const auto& target = mode == "unregistered" ? targets.unregistered_ : targets.destination_;
-        auto origin = c.client(mode == "downgrade" ? "secure" : "source");
+        auto origin = c.services().client(mode == "downgrade" ? "secure" : "source");
         auto response = co_await origin.post("/fluent/redirect").query("location", std::string(target) + "/fluent/inspect").header("authorization", "Bearer source-secret").header("proxy-authorization", "Basic proxy-secret").header("cookie", "explicit=source-secret").header("content-type", "text/plain").body("source-body").send();
         const auto status = response.status();
         auto body = co_await response.bytes();
@@ -450,7 +450,7 @@ public:
     }
 
     ruvia::task<void> pipe(ruvia::context& c) {
-        auto response = co_await c.client("source").get("/fluent/stream-source").send();
+        auto response = co_await c.services().client("source").get("/fluent/stream-source").send();
         auto forwarding = response.pipe_to(c);
         auto moved = std::move(response);
         co_await std::move(forwarding);
@@ -462,7 +462,7 @@ public:
     // An already-stopped token forwards nothing, so the bounded forward that
     // follows still commits the whole response.
     ruvia::task<void> pipe_bounded(ruvia::context& c) {
-        auto response = co_await c.client("source").get("/fluent/stream-source").send();
+        auto response = co_await c.services().client("source").get("/fluent/stream-source").send();
         ruvia::stop_source stop;
         stop.request_stop();
         bool cancelled = false;

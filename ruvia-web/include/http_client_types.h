@@ -58,10 +58,8 @@ struct client_tls_config final {
     // SNI and verified peer name, an IP literal or ASCII DNS name; nullopt
     // uses the configured host. An IP literal matches IP subjectAltNames.
     std::optional<std::string> server_name_{};
-    // 每条 TLS 连接发出的记录总上限（含握手和 KeyUpdate），范围 1..2^23。
-    // 达到上限后终止连接；更新密钥不重置计数。保守的连接级上限保证不会达到
-    // RFC 9846 §5.5 的单密钥 AES-GCM 用量上限，也适用于数据库连接。
-    std::uint64_t max_outgoing_records_{std::uint64_t{1} << 23};
+    // 1..max_outgoing_tls_records；也适用于数据库连接。
+    std::uint64_t max_outgoing_records_{max_outgoing_tls_records};
 };
 
 enum class tcp_no_delay_policy : std::uint8_t {
@@ -183,8 +181,8 @@ enum class http_client_response_framing : std::uint8_t { none,
 struct http_client_connection_info final {
     // 物理连接身份，不是槽位。重新拨号产生新 id，旧 id 不能关闭新连接。
     std::uint64_t id_{};
-    ip_address peer_ip_{};
-    std::uint16_t peer_port_{};
+    // 本连接的对端（服务器）地址与端口。
+    ip_endpoint remote_{};
     bool reused_{false};
     std::chrono::steady_clock::duration connect_duration_{};
     std::chrono::steady_clock::duration tls_duration_{};

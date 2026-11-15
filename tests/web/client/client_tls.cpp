@@ -374,6 +374,16 @@ TEST(Ruvia, http_client_tls_record_budget_covers_handshake_and_replaced_connect_
     }
 }
 
+// RFC 6066 §8: a staple belongs to a server identity; a client never sends one.
+TEST(Ruvia, http_client_tls_rejects_a_stapled_client_identity) {
+    auto& io = ruvia::test::new_test_io_context();
+    test_worker worker(io);
+    ruvia::test::tls_identity identity("localhost");
+    auto config = local_http_client_config("https://127.0.0.1:443");
+    config.tls_.identity_ = ruvia::tls_identity_config{.certificate_chain_file_ = identity.ca_file_, .private_key_file_ = identity.private_key_file(), .ocsp_response_ = {std::byte{0x30}}};
+    EXPECT_THROW({ ruvia::http_client client(worker.attachment_.loop(), config); }, std::invalid_argument);
+}
+
 // RFC 9113 §9.2.1: renegotiation is disabled. A TLS 1.2 server's HelloRequest
 // is answered with a no_renegotiation alert, which ends the server's attempt,
 // while the response already sent is still delivered.

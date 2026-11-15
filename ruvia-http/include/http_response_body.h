@@ -14,7 +14,6 @@
 
 #include "http_message.h"
 #include "http_range.h"
-#include "http_request.h"
 #include "http_status.h"
 
 namespace ruvia {

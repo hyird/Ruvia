@@ -603,6 +603,7 @@ using namespace route_middleware_config_test;  // NOLINT(google-build-using-name
 
 TEST(Ruvia, route_middleware_carries_its_configuration_in_the_type) {
     ruvia::test_app app;
+    app.controllers<configured_by_type_controller>();
     const auto one = app.request(ruvia::test_request::get("/route-config/one"));
     EXPECT_EQ(one.status(), ruvia::http_status::ok);
     EXPECT_EQ(one.header("X-Config").value_or(std::string_view{}), std::string_view("two"));
@@ -616,6 +617,7 @@ TEST(Ruvia, route_middleware_carries_its_configuration_in_the_type) {
 
 TEST(Ruvia, route_rate_limit_is_configured_without_a_generated_type) {
     ruvia::test_app app;
+    app.controllers<configured_by_type_controller>();
     // rate_limit<max, window> replaces the RUVIA_ROUTE_RATE_LIMIT macro,
     // whose only purpose was minting a named type to carry these two numbers.
     for (int i = 0; i < 10; ++i) {
@@ -630,6 +632,7 @@ TEST(Ruvia, route_rate_limit_is_configured_without_a_generated_type) {
 
 TEST(Ruvia, route_rate_limit_rejection_reaches_the_error_handler) {
     ruvia::test_app app;
+    app.controllers<configured_by_type_controller>();
     int calls = 0;
     app.on_error([counter = &calls](ruvia::context& c, ruvia::http_error_info error) -> ruvia::task<ruvia::http_response> {
         ++*counter;
@@ -649,6 +652,7 @@ TEST(Ruvia, route_rate_limit_rejection_reaches_the_error_handler) {
 
 TEST(Ruvia, stacked_route_rate_limits_count_each_declaration_once_per_request) {
     ruvia::test_app app;
+    app.controllers<stacked_rate_limit_controller>();
     for (const std::string_view target : {"/stacked-limit/same", "/stacked-limit/looser"}) {
         // The group rule allows four requests; a shared counter would be
         // consumed twice per request and reject the third.
@@ -664,6 +668,7 @@ TEST(Ruvia, stacked_route_rate_limits_count_each_declaration_once_per_request) {
 
 TEST(Ruvia, route_body_limit_is_declared_through_the_type) {
     ruvia::test_app app;
+    app.controllers<configured_by_type_controller>();
 
     // Within the route's ceiling.
     const auto small = app.request(ruvia::test_request::post("/route-config/small").body("0123456789"));
@@ -683,6 +688,7 @@ TEST(Ruvia, route_body_limit_is_declared_through_the_type) {
 
 TEST(Ruvia, route_body_limit_bounds_the_decoded_representation) {
     ruvia::test_app app;
+    app.controllers<configured_by_type_controller>();
     const std::string plain(4096, 'x');
     auto encoded = ruvia::encode_http_content(ruvia::http_content_coding::gzip, plain, {.max_encoded_bytes_ = 64});
     EXPECT_TRUE(encoded.has_value());
@@ -715,6 +721,7 @@ TEST(Ruvia, app_rejects_route_only_body_limit_middleware) {
 
 TEST(Ruvia, route_middleware_list_mixes_bare_and_parameterized_types) {
     ruvia::test_app app;
+    app.controllers<configured_by_type_controller>();
     const auto response = app.request(ruvia::test_request::post("/route-config/mixed").body("x"));
     EXPECT_EQ(response.status(), ruvia::http_status::ok);
     EXPECT_EQ(response.body(), std::string_view("mixed"));
@@ -725,6 +732,7 @@ TEST(Ruvia, route_middleware_list_mixes_bare_and_parameterized_types) {
 
 TEST(Ruvia, route_middleware_returning_a_response_answers_without_the_handler) {
     ruvia::test_app app;
+    app.controllers<configured_by_type_controller>();
     const auto response = app.request(ruvia::test_request::get("/route-config/answered"));
     EXPECT_EQ(response.status(), ruvia::http_status::accepted);
     EXPECT_EQ(response.body(), std::string_view("returned by middleware"));
@@ -734,6 +742,7 @@ TEST(Ruvia, test_app_releases_worker_middleware_after_startup_failure_and_normal
     const auto observation = std::make_shared<middleware_lifetime_observation>();
     {
         ruvia::test_app app;
+        app.controllers<configured_by_type_controller>();
         app.use<lifetime_middleware>(observation, false).use<lifetime_middleware>(observation, true);
         bool failed = false;
         try {
@@ -748,6 +757,7 @@ TEST(Ruvia, test_app_releases_worker_middleware_after_startup_failure_and_normal
     }
     {
         ruvia::test_app app;
+        app.controllers<configured_by_type_controller>();
         app.use<lifetime_middleware>(observation, false);
         const auto response = app.request(ruvia::test_request::get("/route-config/one"));
         EXPECT_EQ(response.status(), ruvia::http_status::ok);
@@ -762,6 +772,7 @@ TEST(Ruvia, test_app_releases_registered_middleware_arguments_with_the_app) {
     const auto observation = std::make_shared<middleware_lifetime_observation>();
     {
         ruvia::test_app app;
+        app.controllers<configured_by_type_controller>();
         app.use<lifetime_middleware>(observation, false);
         app.use_at<lifetime_middleware>({.prefix_ = "/route-config"}, observation, false);
         // Each registration retains its own copy of the arguments.
@@ -790,6 +801,7 @@ TEST(Ruvia, app_wide_route_declarations_are_rejected_instead_of_ignored) {
     // Admission reads body_limit from route and controller lists only,
     // so an app-wide registration would silently bound nothing.
     ruvia::test_app app;
+    app.controllers<configured_by_type_controller>();
     const auto rejects = [](auto&& register_value) {
         try {
             register_value();
@@ -981,8 +993,12 @@ TEST(Ruvia, ocsp_stapling_selects_identity_and_replaces_certificate_status_pairs
     const asio::ip::tcp::endpoint first(asio::ip::make_address("127.0.0.1"), port);
     const asio::ip::tcp::endpoint second(asio::ip::make_address("127.0.0.2"), port);
     const ruvia::listener_endpoint listener{.address_ = "0.0.0.0", .port_ = port};
+    const auto stapled = [](ruvia::tls_identity_config identity, std::vector<std::byte> ocsp) {
+        identity.ocsp_response_ = std::move(ocsp);
+        return identity;
+    };
     const auto configuration = [&](bool renewed) {
-        return ruvia::tls_config{.identity_ = files(renewed ? renewed_primary : primary), .ocsp_response_ = response(renewed ? renewed_primary : primary, renewed ? 11 : 1), .sni_ = {{.host_ = "api.example.test", .identity_ = files(renewed ? renewed_exact : exact), .ocsp_response_ = response(renewed ? renewed_exact : exact, renewed ? 12 : 2)}, {.host_ = "*.example.test", .identity_ = files(wildcard), .ocsp_response_ = response(wildcard, renewed ? 13 : 3)}, {.host_ = "empty.example.test", .identity_ = files(exact)}}, .local_addresses_ = {{.address_ = "127.0.0.2", .identity_ = files(local), .ocsp_response_ = response(local, renewed ? 14 : 4)}}};
+        return ruvia::tls_config{.identity_ = stapled(files(renewed ? renewed_primary : primary), response(renewed ? renewed_primary : primary, renewed ? 11 : 1)), .sni_ = {{.host_ = "api.example.test", .identity_ = stapled(files(renewed ? renewed_exact : exact), response(renewed ? renewed_exact : exact, renewed ? 12 : 2))}, {.host_ = "*.example.test", .identity_ = stapled(files(wildcard), response(wildcard, renewed ? 13 : 3))}, {.host_ = "empty.example.test", .identity_ = files(exact)}}, .local_addresses_ = {{.address_ = "127.0.0.2", .identity_ = stapled(files(local), response(local, renewed ? 14 : 4))}}};
     };
     ruvia::http_server_group server(runtime.loops_, [](const ruvia::worker_ref&) {
         return ruvia::http_server_callbacks{.request_stream_ = [](ruvia::request_stream& stream) -> ruvia::task<void> {
@@ -996,16 +1012,16 @@ TEST(Ruvia, ocsp_stapling_selects_identity_and_replaces_certificate_status_pairs
     server.listen({.address_ = "0.0.0.0", .https_ = port, .tls_ = original, .dispatch_ = ruvia::listener_dispatch::request_stream});
     caller.start(server.start(caller.worker())).get();
     auto retained = connect(io, TLS1_3_VERSION, first, nullptr);
-    expect_status(retained->native_handle(), primary, original.ocsp_response_);
+    expect_status(retained->native_handle(), primary, original.identity_.ocsp_response_);
     const auto check = [&](const ruvia::tls_config& config, bool renewed) {
         for (const int version : {TLS1_2_VERSION, TLS1_3_VERSION}) {
             SCOPED_TRACE(version);
-            expect_status(connect(io, version, first, nullptr)->native_handle(), renewed ? renewed_primary : primary, config.ocsp_response_);
-            expect_status(connect(io, version, first, "unknown.test")->native_handle(), renewed ? renewed_primary : primary, config.ocsp_response_);
-            expect_status(connect(io, version, second, "API.example.TEST")->native_handle(), renewed ? renewed_exact : exact, config.sni_[0].ocsp_response_);
-            expect_status(connect(io, version, first, "www.example.test")->native_handle(), wildcard, config.sni_[1].ocsp_response_);
-            expect_status(connect(io, version, second, nullptr)->native_handle(), local, config.local_addresses_[0].ocsp_response_);
-            expect_status(connect(io, version, second, "empty.example.test")->native_handle(), exact, config.sni_[2].ocsp_response_);
+            expect_status(connect(io, version, first, nullptr)->native_handle(), renewed ? renewed_primary : primary, config.identity_.ocsp_response_);
+            expect_status(connect(io, version, first, "unknown.test")->native_handle(), renewed ? renewed_primary : primary, config.identity_.ocsp_response_);
+            expect_status(connect(io, version, second, "API.example.TEST")->native_handle(), renewed ? renewed_exact : exact, config.sni_[0].identity_.ocsp_response_);
+            expect_status(connect(io, version, first, "www.example.test")->native_handle(), wildcard, config.sni_[1].identity_.ocsp_response_);
+            expect_status(connect(io, version, second, nullptr)->native_handle(), local, config.local_addresses_[0].identity_.ocsp_response_);
+            expect_status(connect(io, version, second, "empty.example.test")->native_handle(), exact, config.sni_[2].identity_.ocsp_response_);
             EXPECT_TRUE(received(connect(io, version, first, nullptr, false)->native_handle()).empty());
         }
     };
@@ -1013,7 +1029,7 @@ TEST(Ruvia, ocsp_stapling_selects_identity_and_replaces_certificate_status_pairs
     auto replacement = configuration(true);
     caller.start(server.replace_tls_identities(caller.worker(), listener, replacement)).get();
     check(replacement, true);
-    expect_status(retained->native_handle(), primary, original.ocsp_response_);
+    expect_status(retained->native_handle(), primary, original.identity_.ocsp_response_);
 
     // Reject broken primary/SNI/address DER atomically, including trailing
     // bytes and BER encodings accepted by OpenSSL's permissive d2i parser.
@@ -1021,18 +1037,21 @@ TEST(Ruvia, ocsp_stapling_selects_identity_and_replaces_certificate_status_pairs
     for (const auto& bytes : invalid) {
         for (int entry = 0; entry != 3; ++entry) {
             auto rejected = replacement;
-            auto& target = entry == 0 ? rejected.ocsp_response_ : (entry == 1 ? rejected.sni_[0].ocsp_response_ : rejected.local_addresses_[0].ocsp_response_);
+            auto& target = entry == 0 ? rejected.identity_.ocsp_response_ : (entry == 1 ? rejected.sni_[0].identity_.ocsp_response_ : rejected.local_addresses_[0].identity_.ocsp_response_);
             target = bytes;
             EXPECT_THROW(caller.start(server.replace_tls_identities(caller.worker(), listener, std::move(rejected))).get(), std::invalid_argument);
         }
     }
     auto library = std::make_shared<ruvia::tls_certificate_store>();
-    ruvia::tls_config mixed{.ocsp_response_ = replacement.ocsp_response_, .certificate_store_ = library, .default_certificate_ = 1};
+    ruvia::tls_config mixed{.identity_ = {.ocsp_response_ = replacement.identity_.ocsp_response_}, .certificate_store_ = library, .default_certificate_ = 1};
     EXPECT_THROW(caller.start(server.replace_tls_identities(caller.worker(), listener, std::move(mixed))).get(), std::invalid_argument);
+    // A library certificate carries no staple.
+    EXPECT_THROW((void)library->insert_or_assign(caller.worker(), 1, stapled(files(primary), response(primary, 1))), std::invalid_argument);
+    EXPECT_FALSE(library->contains(1));
     check(replacement, true);
 
-    replacement.ocsp_response_.clear();
-    replacement.sni_[0].ocsp_response_.clear();
+    replacement.identity_.ocsp_response_.clear();
+    replacement.sni_[0].identity_.ocsp_response_.clear();
     caller.start(server.replace_tls_identities(caller.worker(), listener, replacement)).get();
     check(replacement, true);
     retained.reset();

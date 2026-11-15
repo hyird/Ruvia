@@ -116,7 +116,7 @@ public:
         co_return;
     }
     ruvia::task<ruvia::http_response> prio_idle(ruvia::context& context_value) {
-        context_value.worker_state<std::shared_ptr<connect_observation>>()->seen_urgency_ = static_cast<int>(context_value.req().priority().urgency_.value());
+        context_value.services().worker_state<std::shared_ptr<connect_observation>>()->seen_urgency_ = static_cast<int>(context_value.req().priority().urgency_.value());
         co_return context_value.text("ok");
     }
     ruvia::task<ruvia::http_response> push_parent_cancel(ruvia::context& context_value) {
@@ -124,7 +124,7 @@ public:
         co_return context_value.text("parent");
     }
     ruvia::task<ruvia::http_response> pushed_buffered_cancel(ruvia::context& context_value) {
-        auto& obs = *context_value.worker_state<std::shared_ptr<connect_observation>>();
+        auto& obs = *context_value.services().worker_state<std::shared_ptr<connect_observation>>();
         while (obs.hold_push_) {
             (void)co_await ruvia::sleep_for(context_value.worker(), std::chrono::milliseconds(1), context_value.stop_token());
         }
@@ -132,7 +132,7 @@ public:
     }
 };
 ruvia::task<void> connect_routes::echo(ruvia::context& context_value) {
-    auto& observation_value = *context_value.worker_state<std::shared_ptr<connect_observation>>();
+    auto& observation_value = *context_value.services().worker_state<std::shared_ptr<connect_observation>>();
     if (observation_value.return_early_) {
         co_return;
     }
@@ -169,7 +169,7 @@ ruvia::task<void> connect_routes::slow_tunnel(ruvia::context& context_value) {
 }
 // Reads capsules until the malformed input aborts the stream.
 ruvia::task<void> connect_routes::capsules(ruvia::context& context_value) {
-    auto& obs = *context_value.worker_state<std::shared_ptr<connect_observation>>();
+    auto& obs = *context_value.services().worker_state<std::shared_ptr<connect_observation>>();
     auto stream = context_value.tunnel().capsules();
     if (obs.halfclose_capsules_) {
         co_await stream.finish();

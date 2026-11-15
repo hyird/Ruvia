@@ -11,7 +11,7 @@
 #include <utility>
 
 #include "borrowed_text.h"
-#include "context.h"
+#include "connection_transport.h"
 #include "ip_address.h"
 #include "move_only_function.h"
 #include "operation_options.h"
@@ -31,18 +31,8 @@ class connection_lifecycle;
 // What the worker knows of an accepted connection. Every view borrows
 // connection-owned storage that outlives the server_connection.
 struct server_connection_fields final {
-    struct tls_type final {
-        std::optional<std::string_view> client_certificate_subject_;
-        std::string_view alpn_;
-        std::string_view server_name_;
-    };
-
-    std::uint64_t id_;
-    std::string_view local_address_;
-    std::uint16_t local_port_;
-    std::string_view remote_address_;
-    std::uint16_t remote_port_;
-    std::optional<tls_type> tls_;
+    connection_endpoints endpoints_;
+    std::optional<tls_connection_transport> tls_;
     const std::shared_ptr<void>* state_{};
     connection_lifecycle* lifecycle_{};
 };
@@ -62,27 +52,12 @@ struct server_connection_fields final {
 // for that long, and host shutdown closes it at once and requests its
 // stop_token(). A closed connection fails its pending and later operations
 // with std::system_error.
-class server_connection final {
+class server_connection final : public connection_endpoints {
 public:
     server_connection(const server_connection&) = delete;
     server_connection& operator=(const server_connection&) = delete;
     server_connection(server_connection&&) = delete;
     server_connection& operator=(server_connection&&) = delete;
-
-    // conn_info::connection_id() of this connection; equal to connection_id() of its
-    // tls_client_hello_ records.
-    [[nodiscard]] constexpr std::uint64_t connection_id() const noexcept {
-        return id_;
-    }
-
-    // The server address the connection reached.
-    [[nodiscard]] constexpr ip_endpoint local() const noexcept {
-        return local_;
-    }
-
-    [[nodiscard]] constexpr ip_endpoint remote() const noexcept {
-        return remote_;
-    }
 
     // Null for a cleartext listener.
     [[nodiscard]] constexpr const tls_connection_transport* tls() const& noexcept RUVIA_LIFETIMEBOUND {
@@ -147,9 +122,6 @@ private:
     write_type write_;
     finish_type finish_;
     abort_type abort_;
-    std::uint64_t id_;
-    ip_endpoint local_;
-    ip_endpoint remote_;
     std::optional<tls_connection_transport> tls_;
     ::ruvia::stop_token stop_token_;
     const std::shared_ptr<void>* state_;

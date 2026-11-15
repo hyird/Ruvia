@@ -954,7 +954,7 @@ class app_configuration;
 // conflicts and invalid registrations throw here, before any worker starts.
 [[nodiscard]] compiled_route_plan_ptr_type compile_route_plan(std::span<const controller_registrar> registrars, const controller_store& controllers, const app_configuration& configuration);
 
-// Static controller discovery is complete before main. The first application/test_app
+// Static controller discovery is complete before main. The first application
 // build seals this registry; loading a controller-bearing module afterwards is
 // a startup contract error instead of silently changing only later workers.
 [[nodiscard]] std::vector<controller_registrar> seal_controller_registrars();

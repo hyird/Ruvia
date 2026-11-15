@@ -13,7 +13,6 @@
 
 #include "borrowed_text.h"
 #include "http_header.h"
-#include "http_request.h"
 
 namespace ruvia {
 enum class cookie_prefix : std::uint8_t {

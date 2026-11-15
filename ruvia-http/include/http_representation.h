@@ -7,12 +7,14 @@
 #include <variant>
 
 #include "borrowed_text.h"
+#include "http_content_length.h"
 #include "http_message.h"
 #include "http_range.h"
-#include "http_request.h"
 #include "http_status.h"
 
 namespace ruvia {
+
+class http_request;
 
 struct http_conditional_method_plan final {
     bool evaluates_preconditions_;

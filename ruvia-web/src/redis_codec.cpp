@@ -20,6 +20,7 @@
 #include <utility>
 #include <vector>
 
+#include "decimal_text.h"
 #include "http_header.h"
 #include "json_codec.h"
 #include "redis_orm.h"

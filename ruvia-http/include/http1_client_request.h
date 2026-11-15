@@ -17,7 +17,7 @@
 #include "http_client_request_view.h"
 #include "http_header.h"
 #include "http_message.h"
-#include "http_request.h"
+#include "http_request_content_plan.h"
 #include "ip_address.h"
 
 namespace ruvia {

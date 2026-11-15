@@ -77,7 +77,7 @@ public:
     RUVIA_ROUTES_END
 
     ruvia::task<ruvia::http_response> ready(ruvia::context& context) {
-        auto& state_value = *context.worker_state<worker_state>().state_;
+        auto& state_value = *context.services().worker_state<worker_state>().state_;
         state_value.requests_.fetch_add(1);
         co_return context.text(std::string_view(state_value.initialized_.load() ? "initialized" : "premature"));
     }
@@ -95,7 +95,7 @@ public:
     }
 
     ruvia::task<void> read_websocket(ruvia::context& context) {
-        auto& state_value = *context.worker_state<worker_state>().state_;
+        auto& state_value = *context.services().worker_state<worker_state>().state_;
         auto& websocket_value = context.websocket();
         try {
             const auto first = co_await websocket_value.read();
@@ -491,8 +491,9 @@ TEST(Ruvia, app_startup_barrier_orders_hooks_and_rolls_back) {
                 bool valid_{};
             };
             auto result_value = std::make_shared<job_result>();
-            const auto posted = worker.post([state_value, result_value](ruvia::web_worker_context& context_value) -> ruvia::task<void> {
-                result_value->valid_ = context_value.worker().is_current() && context_value.worker_state<worker_state>().state_ == state_value;
+            const auto posted = worker.post([state_value, result_value, env = &app.env()](ruvia::web_worker_context& context_value) -> ruvia::task<void> {
+                const auto services = context_value.services();
+                result_value->valid_ = context_value.worker().is_current() && services.worker_state<worker_state>().state_ == state_value && &services.env() == env;
                 result_value->completed_.release();
                 co_return;
             });

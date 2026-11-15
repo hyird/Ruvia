@@ -202,9 +202,7 @@ bool add_controller_registrar(controller_registrar registrar_value) {
     auto& state_value = controller_registry();
     std::lock_guard lock(state_value.mutex_);
     if (state_value.sealed_) {
-        throw std::logic_error(
-            "controller registration is sealed; load every controller module before application::run() or "
-            "test_app::request()");
+        throw std::logic_error("controller registration is sealed; load every controller module before application::run()");
     }
     for (const auto& existing : state_value.registrars_) {
         if (existing == registrar_value) {

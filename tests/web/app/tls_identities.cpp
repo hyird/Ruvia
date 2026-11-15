@@ -253,7 +253,7 @@ bool serves_hello(tls_stream& stream) {
             if (decoded.complete()) {
                 return successful && body == "hello";
             }
-            if (decoded.protocol_failure() || decoded.decoder_failure()) {
+            if (decoded.protocol_failure()) {
                 return false;
             }
             if (!decoded.need_input()) {

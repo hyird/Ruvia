@@ -113,19 +113,6 @@ public:
         http1_client_response_body_error error_;
     };
 
-    class decoder_failure_type final {
-    public:
-        [[nodiscard]] constexpr std::size_t consumed_bytes() const noexcept {
-            return consumed_;
-        }
-
-    private:
-        friend class http1_client_response_body_decoder;
-        explicit constexpr decoder_failure_type(std::size_t consumed) noexcept :
-            consumed_(consumed) {}
-        std::size_t consumed_;
-    };
-
     class result_type final {
     public:
         [[nodiscard]] std::size_t consumed_bytes() const noexcept;
@@ -139,12 +126,10 @@ public:
         const complete_type* complete() const&& = delete;
         [[nodiscard]] const protocol_failure_type* protocol_failure() const& noexcept;
         const protocol_failure_type* protocol_failure() const&& = delete;
-        [[nodiscard]] const decoder_failure_type* decoder_failure() const& noexcept;
-        const decoder_failure_type* decoder_failure() const&& = delete;
 
     private:
         friend class http1_client_response_body_decoder;
-        using value_type = std::variant<need_input_type, output_view_type, validated_trailers_view_type, complete_type, protocol_failure_type, decoder_failure_type>;
+        using value_type = std::variant<need_input_type, output_view_type, validated_trailers_view_type, complete_type, protocol_failure_type>;
         template <typename t_type>
         explicit result_type(t_type value) noexcept :
             value_(std::move(value)) {}
@@ -209,11 +194,10 @@ private:
     [[nodiscard]] result_type validated_trailers(std::size_t consumed, std::span<const http_header> fields);
     [[nodiscard]] result_type complete(std::size_t consumed);
     [[nodiscard]] result_type fail(http1_client_response_body_error error, std::size_t consumed = 0);
-    [[nodiscard]] result_type decoder_failure(std::size_t consumed = 0);
     [[nodiscard]] result_type drive_transfer(std::string_view input, std::size_t wire_prefix, std::span<char> scratch);
     [[nodiscard]] result_type finish_transfer(std::size_t consumed, std::span<char> scratch);
 
-    using terminal_type = std::variant<complete_type, protocol_failure_type, decoder_failure_type>;
+    using terminal_type = std::variant<complete_type, protocol_failure_type>;
     framing_type framing_;
     http1_close_policy persistence_{http1_close_policy::close_after_response};
     std::optional<http_transfer_coding_stack_decoder> transfer_;

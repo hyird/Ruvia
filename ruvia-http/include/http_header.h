@@ -6,8 +6,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
-#include <exception>
-#include <initializer_list>
 #include <iterator>
 #include <limits>
 #include <optional>
@@ -18,8 +16,6 @@
 #include <string_view>
 #include <type_traits>
 #include <utility>
-#include <variant>
-#include <vector>
 
 #include "borrowed_text.h"
 

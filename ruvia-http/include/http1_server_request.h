@@ -11,6 +11,8 @@
 #include "http1_connection_plan.h"
 #include "http_protocol.h"
 #include "http_request.h"
+#include "http_request_content_plan.h"
+#include "http_request_expectation.h"
 #include "http_transfer_coding.h"
 
 namespace ruvia {
@@ -34,18 +36,18 @@ private:
 
 class http1_chunked_request_body final {
 public:
-    [[nodiscard]] const http_transfer_codings& transfer_codings() const& noexcept RUVIA_LIFETIMEBOUND {
+    [[nodiscard]] const http_content_codings& transfer_codings() const& noexcept RUVIA_LIFETIMEBOUND {
         return transfer_codings_;
     }
-    const http_transfer_codings& transfer_codings() const&& = delete;
+    const http_content_codings& transfer_codings() const&& = delete;
 
 private:
     friend class http1_request_body_plan;
 
-    explicit http1_chunked_request_body(http_transfer_codings transfer_codings) :
+    explicit http1_chunked_request_body(http_content_codings transfer_codings) :
         transfer_codings_(std::move(transfer_codings)) {}
 
-    http_transfer_codings transfer_codings_;
+    http_content_codings transfer_codings_;
 };
 
 // Immutable framing contract produced only by the HTTP/1 parser and consumed
@@ -103,7 +105,7 @@ private:
     http1_request_body_plan(std::size_t content_length, http_request_expectations expectations) noexcept :
         http1_request_body_plan(framing_type(http1_known_length_request_body(content_length)), expectations) {}
 
-    http1_request_body_plan(http_transfer_codings transfer_codings, http_request_expectations expectations) :
+    http1_request_body_plan(http_content_codings transfer_codings, http_request_expectations expectations) :
         http1_request_body_plan(framing_type(http1_chunked_request_body(std::move(transfer_codings))), expectations) {}
 
     http1_request_body_plan(framing_type framing, http_request_expectations expectations) :

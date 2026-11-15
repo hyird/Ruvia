@@ -41,7 +41,7 @@ private:
         const auto body = co_await c.req().text();
         // PUBLISH is an ordinary command on the pooled connections and reports
         // how many subscriber connections received the message.
-        const auto receivers = co_await c.redis().publish(channel_name, body);
+        const auto receivers = co_await c.services().redis().publish(channel_name, body);
         std::string output;
         output.append("receivers=");
         ruvia::http_append_signed(output, receivers);
@@ -56,7 +56,7 @@ private:
         }
         // The subscription inherits the request stop token: when the SSE
         // client disconnects, the pending read() ends with std::nullopt.
-        auto subscription = c.redis().subscription();
+        auto subscription = c.services().redis().subscription();
         const std::array<std::string_view, 1> channels{channel_name};
         co_await subscription.subscribe(channels);
         const std::array<std::string_view, 1> patterns{channel_pattern};

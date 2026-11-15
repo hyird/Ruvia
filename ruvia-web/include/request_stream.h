@@ -12,7 +12,6 @@
 #include "borrowed_text.h"
 #include "callback_ref.h"
 #include "context.h"
-#include "env.h"
 #include "http1_server_response.h"
 #include "http2_push.h"
 #include "http_header.h"
@@ -143,30 +142,13 @@ public:
     }
     const worker_ref& worker() const&& = delete;
 
-    template <typename state_type>
-    [[nodiscard]] state_type& worker_state() const {
-        return context_.worker_state<state_type>();
+    // context::services() of this request: worker state, run_blocking(), env
+    // and clients, bound to this request's cancellation, including client
+    // abandonment.
+    [[nodiscard]] worker_services services() const& noexcept RUVIA_LIFETIMEBOUND {
+        return context_.services();
     }
-
-    // Bound to this request's cancellation, including client abandonment.
-    template <typename callable_type>
-    [[nodiscard]] task<blocking_result<std::invoke_result_t<callable_type&>>> run_blocking(callable_type callable, operation_options options = {}) const {
-        return context_.run_blocking(std::move(callable), std::move(options));
-    }
-
-    [[nodiscard]] const ruvia::env& env() const noexcept {
-        return context_.env();
-    }
-    [[nodiscard]] http_client_ref client() const;
-    [[nodiscard]] http_client_ref client(std::string_view alias) const;
-#ifdef RUVIA_ENABLE_DATABASE
-    [[nodiscard]] db_executor db() const;
-    [[nodiscard]] db_executor db(std::string_view alias) const;
-#endif
-#ifdef RUVIA_ENABLE_REDIS
-    [[nodiscard]] redis_executor redis() const;
-    [[nodiscard]] redis_executor redis(std::string_view alias) const;
-#endif
+    worker_services services() const&& = delete;
 
     // The cross-replacement policy of context::policy(): applied to the
     // response, stream head or the tunnel/WebSocket acceptance head this
@@ -180,9 +162,9 @@ public:
     // task completes. Blocking-pool, cancellation, timeout and identity checks
     // are the same as context::file()/static_file(), and so is `head`.
     [[nodiscard]] task<http_response> file(file_response_options options, response_options head = {});
-    [[nodiscard]] task<http_response> static_file(const static_root& root, static_file_response_options options = {}, response_options head = {});
+    [[nodiscard]] task<http_response> static_file(const static_root& root, static_file_response_options options, response_options head = {});
     // A temporary root would be destroyed before the returned task reads it.
-    task<http_response> static_file(const static_root&&, static_file_response_options = {}, response_options = {}) = delete;
+    task<http_response> static_file(const static_root&&, static_file_response_options, response_options = {}) = delete;
 
     // Transfers all response metadata and body ownership without sending yet.
     // The existing final-response driver sends buffers, files and multipart

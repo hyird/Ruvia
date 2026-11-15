@@ -155,7 +155,7 @@ TEST(Ruvia, http1_response_body_decoder_transfer_gzip_and_deflate_stream_with_ti
         std::string output;
         std::string input(bytes);
         auto result_value = decoder.finish_input(input, scratch);
-        for (std::size_t step = 0; step < 100 && !result_value.complete() && !result_value.protocol_failure() && !result_value.decoder_failure(); ++step) {
+        for (std::size_t step = 0; step < 100 && !result_value.complete() && !result_value.protocol_failure(); ++step) {
             input.erase(0, result_value.consumed_bytes());
             if (result_value.output()) {
                 output.append(result_value.output()->bytes());
@@ -183,7 +183,7 @@ TEST(Ruvia, http1_response_body_decoder_gzip_concatenation_and_chunked_transfer)
     std::array<char, 2> scratch{};
     std::string decoded;
     auto result_value = close_decoder.finish_input(concatenated, scratch);
-    for (std::size_t step = 0; step < 100 && !result_value.complete() && !result_value.protocol_failure() && !result_value.decoder_failure(); ++step) {
+    for (std::size_t step = 0; step < 100 && !result_value.complete() && !result_value.protocol_failure(); ++step) {
         concatenated.erase(0, result_value.consumed_bytes());
         if (result_value.output()) {
             decoded.append(result_value.output()->bytes());
@@ -317,7 +317,7 @@ TEST(Ruvia, http1_response_body_decoder_205_gzip_chunked_eof_drains_buffered_ter
     std::array<char, 8> scratch{};
     bool trailers_seen = false;
     auto result_value = decoder.finish_input(input, scratch);
-    for (std::size_t step = 0; step < 16 && !result_value.complete() && !result_value.protocol_failure() && !result_value.decoder_failure(); ++step) {
+    for (std::size_t step = 0; step < 16 && !result_value.complete() && !result_value.protocol_failure(); ++step) {
         input.erase(0, result_value.consumed_bytes());
         trailers_seen = trailers_seen || result_value.trailers() != nullptr;
         result_value = decoder.finish_input(input, scratch);
@@ -341,7 +341,6 @@ TEST(Ruvia, http1_response_body_decoder_205_accepts_empty_gzip_and_rejects_decod
         accepted = empty.finish_input({}, scratch);
     }
     EXPECT_TRUE(accepted.protocol_failure() == nullptr);
-    EXPECT_TRUE(accepted.decoder_failure() == nullptr);
     EXPECT_TRUE(accepted.complete() != nullptr);
 
     const auto nonempty_head = parse_head("GET", "HTTP/1.1 205 Reset Content\r\nTransfer-Encoding: gzip");
@@ -530,7 +529,7 @@ TEST(Ruvia, http1_response_body_decoder_decodes_transfer_coding_stack_in_reverse
         if (const auto* decoded = result_value.output()) {
             output.append(decoded->bytes());
         }
-        if (result_value.protocol_failure() != nullptr || result_value.decoder_failure() != nullptr) {
+        if (result_value.protocol_failure() != nullptr) {
             EXPECT_TRUE(false);
             return;
         }
@@ -582,14 +581,13 @@ TEST(Ruvia, http1_response_body_decoder_drains_pending_transfer_output_without_w
         for (int count = 0; count < 16 && !complete_value; ++count) {
             const auto result_value = decoder.finish_input(input, scratch);
             EXPECT_TRUE(result_value.protocol_failure() == nullptr);
-            EXPECT_TRUE(result_value.decoder_failure() == nullptr);
             EXPECT_TRUE(result_value.need_input() == nullptr);
             if (result_value.output()) {
                 content.append(result_value.output()->bytes());
             }
             input.erase(0, result_value.consumed_bytes());
             complete_value = result_value.complete() != nullptr;
-            if (result_value.protocol_failure() || result_value.decoder_failure()) {
+            if (result_value.protocol_failure()) {
                 break;
             }
         }
@@ -678,7 +676,6 @@ TEST(Ruvia, response_body_decode_continues_draining_after_framing_eof) {
         for (std::size_t step = 0; step < plain.size() * 2 + 16; ++step) {
             EXPECT_TRUE(result.need_input() == nullptr);
             EXPECT_TRUE(result.protocol_failure() == nullptr);
-            EXPECT_TRUE(result.decoder_failure() == nullptr);
             if (const auto* output = result.output()) {
                 decoded.append(output->bytes());
             }
@@ -687,7 +684,7 @@ TEST(Ruvia, response_body_decode_continues_draining_after_framing_eof) {
                 complete = true;
                 break;
             }
-            if (result.protocol_failure() != nullptr || result.decoder_failure() != nullptr) {
+            if (result.protocol_failure() != nullptr) {
                 break;
             }
             result = decoder.decode(pending, scratch);
@@ -807,7 +804,7 @@ TEST(Ruvia, http_client_response_unfolding_preserves_framing_validation) {
     const auto transfer = parse_head("GET", "HTTP/1.1 200 OK\r\nTransfer-Encoding: gzip,\r\n\tchunked");
     const auto& chunked = require_chunked(transfer.plan());
     EXPECT_EQ(chunked.transfer_codings().size(), std::size_t{1});
-    EXPECT_TRUE(chunked.transfer_codings()[0] == ruvia::http_transfer_coding::gzip);
+    EXPECT_TRUE(chunked.transfer_codings()[0] == ruvia::http_content_coding::gzip);
     EXPECT_EQ(transfer.head().headers().front().value(), "gzip, chunked");
 
     const std::pair<std::string_view, http1_client_response_parse_error> invalid[] = {
@@ -835,7 +832,7 @@ TEST(Ruvia, http_client_transfer_coding_before_final_chunked_is_typed) {
     const auto combined = parse_head("GET", "HTTP/1.1 200 OK\r\nTransfer-Encoding: gzip, chunked");
     const auto& combined_chunked = require_chunked(combined.plan());
     EXPECT_EQ(combined_chunked.transfer_codings().size(), std::size_t{1});
-    EXPECT_TRUE(combined_chunked.transfer_codings()[0] == ruvia::http_transfer_coding::gzip);
+    EXPECT_TRUE(combined_chunked.transfer_codings()[0] == ruvia::http_content_coding::gzip);
     EXPECT_TRUE(combined_chunked.persistence() == http1_close_policy::allow_reuse);
 
     // Transfer-Encoding is list-based: split field lines retain wire order.
@@ -844,15 +841,15 @@ TEST(Ruvia, http_client_transfer_coding_before_final_chunked_is_typed) {
         "Transfer-Encoding: chunked");
     const auto& split_chunked = require_chunked(split.plan());
     EXPECT_EQ(split_chunked.transfer_codings().size(), std::size_t{1});
-    EXPECT_TRUE(split_chunked.transfer_codings()[0] == ruvia::http_transfer_coding::deflate);
+    EXPECT_TRUE(split_chunked.transfer_codings()[0] == ruvia::http_content_coding::deflate);
 
     const auto repeated = parse_head("GET",
         "HTTP/1.1 200 OK\r\nTransfer-Encoding: gzip\r\n"
         "Transfer-Encoding: deflate, chunked");
     const auto& repeated_chunked = require_chunked(repeated.plan());
     EXPECT_EQ(repeated_chunked.transfer_codings().size(), std::size_t{2});
-    EXPECT_TRUE(repeated_chunked.transfer_codings()[0] == ruvia::http_transfer_coding::gzip);
-    EXPECT_TRUE(repeated_chunked.transfer_codings()[1] == ruvia::http_transfer_coding::deflate);
+    EXPECT_TRUE(repeated_chunked.transfer_codings()[0] == ruvia::http_content_coding::gzip);
+    EXPECT_TRUE(repeated_chunked.transfer_codings()[1] == ruvia::http_content_coding::deflate);
 }
 
 TEST(Ruvia, http_client_transfer_encoding_ignores_empty_recipient_list_items) {
@@ -878,7 +875,7 @@ TEST(Ruvia, http_client_transfer_encoding_ignores_empty_recipient_list_items) {
         const bool gzip = fields.find("gzip") != std::string_view::npos;
         EXPECT_EQ(chunked.transfer_codings().size(), gzip ? std::size_t{1} : std::size_t{0});
         if (gzip && !chunked.transfer_codings().empty()) {
-            EXPECT_TRUE(chunked.transfer_codings()[0] == ruvia::http_transfer_coding::gzip);
+            EXPECT_TRUE(chunked.transfer_codings()[0] == ruvia::http_content_coding::gzip);
         }
         EXPECT_EQ(parsed->consumed_bytes(), head.size());
         EXPECT_EQ(std::string_view(wire).substr(parsed->consumed_bytes()), "0\r\n\r\nHTTP/1.1 204 No Content\r\n\r\n");
@@ -887,7 +884,7 @@ TEST(Ruvia, http_client_transfer_encoding_ignores_empty_recipient_list_items) {
     const auto non_chunked = parse_head("GET", "HTTP/1.1 200 OK\r\nTransfer-Encoding: , gzip, ,\r\nTransfer-Encoding: ");
     const auto& close_delimited = require_close_delimited(non_chunked.plan());
     EXPECT_EQ(close_delimited.transfer_codings().size(), std::size_t{1});
-    EXPECT_TRUE(close_delimited.transfer_codings()[0] == ruvia::http_transfer_coding::gzip);
+    EXPECT_TRUE(close_delimited.transfer_codings()[0] == ruvia::http_content_coding::gzip);
 
     // Empty items do not make the field absent or relax framing conflicts.
     const auto empty = parse_head("GET", "HTTP/1.1 200 OK\r\nTransfer-Encoding: , ,");
@@ -915,8 +912,8 @@ TEST(Ruvia, http_client_rejects_invalid_or_unsupported_transfer_coding) {
     const auto stacked = parse_head("GET", "HTTP/1.1 200 OK\r\nTransfer-Encoding: gzip, deflate, chunked");
     const auto& stacked_chunked = require_chunked(stacked.plan());
     EXPECT_EQ(stacked_chunked.transfer_codings().size(), std::size_t{2});
-    EXPECT_TRUE(stacked_chunked.transfer_codings()[0] == ruvia::http_transfer_coding::gzip);
-    EXPECT_TRUE(stacked_chunked.transfer_codings()[1] == ruvia::http_transfer_coding::deflate);
+    EXPECT_TRUE(stacked_chunked.transfer_codings()[0] == ruvia::http_content_coding::gzip);
+    EXPECT_TRUE(stacked_chunked.transfer_codings()[1] == ruvia::http_content_coding::deflate);
 }
 
 TEST(Ruvia, http_client_content_length_and_transfer_encoding_rejected_for_body) {
@@ -970,7 +967,6 @@ TEST(Ruvia, http_client_trailer_declaration_metadata_preserves_framed_body_and_n
                 for (int step = 0; step < 8; ++step) {
                     const auto decoded = decoder.decode(remaining, scratch);
                     EXPECT_TRUE(decoded.protocol_failure() == nullptr);
-                    EXPECT_TRUE(decoded.decoder_failure() == nullptr);
                     remaining.remove_prefix(decoded.consumed_bytes());
                     if (const auto* output = decoded.output()) {
                         body.append(output->bytes());
@@ -1238,7 +1234,7 @@ TEST(Ruvia, http_client_205_owns_zero_content_framing) {
     EXPECT_TRUE(chunked_zero.close_delimited() == nullptr);
     if (chunked_zero.chunked() != nullptr) {
         EXPECT_EQ(chunked_zero.chunked()->transfer_codings().size(), std::size_t{1});
-        EXPECT_TRUE(chunked_zero.chunked()->transfer_codings()[0] == ruvia::http_transfer_coding::gzip);
+        EXPECT_TRUE(chunked_zero.chunked()->transfer_codings()[0] == ruvia::http_content_coding::gzip);
     }
     EXPECT_EQ(active_plan_alternative_count(chunked.plan()), std::size_t{1});
 
@@ -1248,7 +1244,7 @@ TEST(Ruvia, http_client_205_owns_zero_content_framing) {
     EXPECT_TRUE(transfer_coded_zero.close_delimited() != nullptr);
     if (transfer_coded_zero.close_delimited() != nullptr) {
         EXPECT_EQ(transfer_coded_zero.close_delimited()->transfer_codings().size(), std::size_t{1});
-        EXPECT_TRUE(transfer_coded_zero.close_delimited()->transfer_codings()[0] == ruvia::http_transfer_coding::gzip);
+        EXPECT_TRUE(transfer_coded_zero.close_delimited()->transfer_codings()[0] == ruvia::http_content_coding::gzip);
     }
 
     const auto unframed = parse_head("GET", "HTTP/1.1 205 Reset Content");

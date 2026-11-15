@@ -980,7 +980,7 @@ TEST(Ruvia, http_client_dns_refresh_queries_only_live_routes_and_retires_moved_c
         const std::array moved{ruvia::http_client_endpoint_address("127.0.0.2", peer.port())};
         handle.update_dns(moved);
         auto first = co_await handle.get("/first").send();
-        EXPECT_EQ(first.connection_info().peer_ip_.to_string(), "127.0.0.2");
+        EXPECT_EQ(first.connection_info().remote_.address().to_string(), "127.0.0.2");
         (void)co_await first.bytes();
         // The refresh finds localhost elsewhere and retires the moved connection.
         for (int attempt = 0; attempt != 400 && !peer.connections_[0].closed_; ++attempt) {
@@ -989,7 +989,7 @@ TEST(Ruvia, http_client_dns_refresh_queries_only_live_routes_and_retires_moved_c
         EXPECT_TRUE(peer.connections_[0].closed_);
         EXPECT_GE(handle.stats().dns_refreshes_, 1U);
         auto second = co_await handle.get("/second").send();
-        EXPECT_NE(second.connection_info().peer_ip_.to_string(), "127.0.0.2");
+        EXPECT_NE(second.connection_info().remote_.address().to_string(), "127.0.0.2");
         (void)co_await second.bytes();
         lookups.join();
     });
@@ -1072,7 +1072,7 @@ TEST(Ruvia, http_client_redirect_hop_observation_and_streaming_upload_redirect) 
             EXPECT_EQ(hop.hop_index(), 0U);
             EXPECT_EQ(hop.source_target(), "/drain-redirect");
             EXPECT_TRUE(hop.cross_origin());
-            EXPECT_EQ(hop.connection_info().peer_port_, peer.port());
+            EXPECT_EQ(hop.connection_info().remote_.port(), peer.port());
             return true;
         }).upload();
         co_await upload_exchange.body().write("upload-payload");
@@ -1137,7 +1137,7 @@ TEST(Ruvia, http_client_non_destructive_dns_resolution_preserves_active_connecti
         handle.update_dns(pinned);
 
         auto first = co_await handle.get("/first").send();
-        EXPECT_EQ(first.connection_info().peer_ip_.to_string(), "127.0.0.2");
+        EXPECT_EQ(first.connection_info().remote_.address().to_string(), "127.0.0.2");
         (void)co_await first.bytes();
 
         // Non-destructive DNS resolution returns sorted, deduplicated addresses
@@ -1158,7 +1158,7 @@ TEST(Ruvia, http_client_non_destructive_dns_resolution_preserves_active_connecti
         EXPECT_FALSE(peer.connections_[0].closed_);
         auto second = co_await handle.get("/second").send();
         EXPECT_TRUE(second.connection_info().reused_);
-        EXPECT_EQ(second.connection_info().peer_ip_.to_string(), "127.0.0.2");
+        EXPECT_EQ(second.connection_info().remote_.address().to_string(), "127.0.0.2");
         (void)co_await second.bytes();
         lookups.join();
     });

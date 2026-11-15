@@ -11,10 +11,12 @@
 
 #include "borrowed_text.h"
 #include "http_header.h"
-#include "http_request.h"
 #include "http_response.h"
 
 namespace ruvia {
+
+class http_request;
+
 struct http_cors_policy_config final {
     bool allow_any_origin_{false};
     // Exact WHATWG serialized origins ("https://example.com", "null"), "*", or

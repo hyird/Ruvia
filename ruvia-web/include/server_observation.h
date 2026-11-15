@@ -9,6 +9,7 @@
 #include <utility>
 
 #include "borrowed_text.h"
+#include "connection_transport.h"
 #include "http_message.h"
 #include "http_status.h"
 #include "ip_address.h"
@@ -175,32 +176,16 @@ private:
 // 空函数指针与目标析构重入的契约同 access_log_callback。
 using connection_failure_callback = move_only_function<void(const connection_failure_record&) noexcept>;
 
-class connection_event final {
+class connection_event final : public connection_endpoints {
 public:
-    connection_event(std::uint64_t id, ip_endpoint local, ip_endpoint remote, bool quic) noexcept :
-        id_(id),
-        local_(std::move(local)),
-        remote_(std::move(remote)),
+    constexpr connection_event(std::uint64_t id, ip_endpoint local, ip_endpoint remote, bool quic) noexcept :
+        connection_endpoints(id, local, remote),
         quic_(quic) {}
-    [[nodiscard]] std::uint64_t connection_id() const noexcept {
-        return id_;
-    }
-    [[nodiscard]] const ip_endpoint& local() const& noexcept RUVIA_LIFETIMEBOUND {
-        return local_;
-    }
-    const ip_endpoint& local() const&& = delete;
-    [[nodiscard]] const ip_endpoint& remote() const& noexcept RUVIA_LIFETIMEBOUND {
-        return remote_;
-    }
-    const ip_endpoint& remote() const&& = delete;
-    [[nodiscard]] bool quic() const noexcept {
+    [[nodiscard]] constexpr bool quic() const noexcept {
         return quic_;
     }
 
 private:
-    std::uint64_t id_;
-    ip_endpoint local_;
-    ip_endpoint remote_;
     bool quic_;
 };
 
@@ -247,23 +232,8 @@ struct server_observation_access;
 // One ClientHello a server TLS connection received, passed to
 // tls_client_hello_ before the server selects its certificate. The record
 // and every view are valid only for the callback.
-class tls_client_hello_record final {
+class tls_client_hello_record final : public connection_endpoints {
 public:
-    // conn_info::connection_id() of every request the connection carries.
-    [[nodiscard]] constexpr std::uint64_t connection_id() const noexcept {
-        return connection_id_;
-    }
-
-    // The server address the connection reached. For HTTP/3 it is the address
-    // the listener's UDP socket is bound to.
-    [[nodiscard]] constexpr ip_endpoint local() const noexcept {
-        return local_;
-    }
-
-    [[nodiscard]] constexpr ip_endpoint remote() const noexcept {
-        return remote_;
-    }
-
     // True for the TLS of an HTTP/3 (QUIC) connection, false for TLS over TCP.
     [[nodiscard]] constexpr bool quic() const noexcept {
         return quic_;
@@ -281,25 +251,16 @@ private:
     friend struct detail::server_observation_access;
 
     struct fields_type final {
-        std::uint64_t connection_id_;
-        std::string_view local_address_;
-        std::uint16_t local_port_;
-        std::string_view remote_address_;
-        std::uint16_t remote_port_;
+        connection_endpoints endpoints_;
         bool quic_;
         std::span<const std::byte> message_;
     };
 
-    explicit tls_client_hello_record(const fields_type& fields) noexcept :
-        connection_id_(fields.connection_id_),
-        local_(ip_address::parse(fields.local_address_).value_or(ip_address{}), fields.local_port_),
-        remote_(ip_address::parse(fields.remote_address_).value_or(ip_address{}), fields.remote_port_),
+    explicit constexpr tls_client_hello_record(const fields_type& fields) noexcept :
+        connection_endpoints(fields.endpoints_),
         message_(fields.message_),
         quic_(fields.quic_) {}
 
-    std::uint64_t connection_id_;
-    ip_endpoint local_;
-    ip_endpoint remote_;
     std::span<const std::byte> message_;
     bool quic_;
 };

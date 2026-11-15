@@ -1,5 +1,5 @@
 // In-memory application testing: test_app/test_request/dispatch_response drive the
-// production dispatch pipeline -- routing, params, model bodies, middleware,
+// production dispatch pipeline over the controllers it names -- routing, params, model bodies, middleware,
 // fallbacks, url_for and worker state -- without opening a socket. This is the
 // pattern an application's own test suite uses; the example doubles as a
 // runnable check and exits non-zero on any mismatch.
@@ -53,14 +53,14 @@ private:
 
     ruvia::task<ruvia::http_response> create(ruvia::context& c) {
         const auto& note = c.req().validated<note_request>();
-        ++c.worker_state<note_counter>().stored_;
+        ++c.services().worker_state<note_counter>().stored_;
         co_return c.body(note.get<"text">().has_value() ? note.get<"text">()->view() : "empty", {.status_ = ruvia::http_status::created});
     }
 
     ruvia::task<ruvia::http_response> stats(ruvia::context& c) {
         std::string body;
         body.append("stored=");
-        body.append(std::to_string(c.worker_state<note_counter>().stored_));
+        body.append(std::to_string(c.services().worker_state<note_counter>().stored_));
         co_return c.text(std::move(body));
     }
 };
@@ -82,6 +82,7 @@ void expect(bool condition, const char* what) {
 
 int main() {
     ruvia::test_app app;
+    app.controllers<notes_controller>();
     app.use<audit_middleware>().on_not_found({.prefix_ = "/notes", .handler_ = &notes_missing});
     app.use_worker_state<note_counter>();
 

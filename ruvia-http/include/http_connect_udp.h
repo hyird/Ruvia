@@ -10,11 +10,12 @@
 #include "borrowed_text.h"
 #include "http_header.h"
 #include "http_message.h"
-#include "http_request.h"
 #include "http_response.h"
 #include "ip_address.h"
 
 namespace ruvia {
+
+class http_request;
 
 // Already-expanded proxy URI path, borrowed until open_udp_tunnel() returns.
 struct http_client_udp_tunnel_request_view final {

@@ -43,9 +43,9 @@ http1_client_response_body_decoder::http1_client_response_body_decoder(http1_cli
     // A discarding (205) plan carries the same framings as an ordinary one,
     // but its content is never emitted, so it is never transfer-decoded.
     discard_content_ = plan.discards_content();
-    const auto configure_coding = [this](const http_transfer_codings& codings) {
+    const auto configure_coding = [this](const http_content_codings& codings) {
         if (!codings.empty() && !discard_content_) {
-            transfer_.emplace(std::span<const http_transfer_coding>(codings.data(), codings.size()), protocol_byte_limit::unlimited());
+            transfer_.emplace(std::span<const http_content_coding>(codings.data(), codings.size()), protocol_byte_limit::unlimited());
         }
     };
     if (const auto* known = plan.known_length()) {
@@ -254,10 +254,8 @@ http1_client_response_body_decoder::result_type http1_client_response_body_decod
         transfer_phase_ = transfer_phase_type::ended;
         return need_input(consumed);
     }
-    if (decoded.failure() != nullptr) {
-        return fail(http1_client_response_body_error::invalid_transfer_coding, consumed);
-    }
-    return decoder_failure(consumed);
+    // The only remaining alternative is a data failure.
+    return fail(http1_client_response_body_error::invalid_transfer_coding, consumed);
 }
 
 http1_client_response_body_decoder::result_type http1_client_response_body_decoder::finish_transfer(std::size_t consumed, std::span<char> scratch) {
@@ -274,9 +272,6 @@ http1_client_response_body_decoder::result_type http1_client_response_body_decod
         transfer_phase_ = transfer_phase_type::ended;
         return complete(consumed);
     }
-    if (decoded.decoder_failure() != nullptr) {
-        return decoder_failure(consumed);
-    }
     return fail(http1_client_response_body_error::incomplete_body, consumed);
 }
 
@@ -285,11 +280,9 @@ http1_client_response_body_decoder::result_type http1_client_response_body_decod
         using t_type = std::decay_t<decltype(payload_value)>;
         if constexpr (std::is_same_v<t_type, complete_type>) {
             return result_type(complete_type(0, payload_value.persistence()));
-        } else if constexpr (std::is_same_v<t_type, protocol_failure_type>) {
-            return result_type(protocol_failure_type(0, payload_value.error()));
         } else {
-            static_assert(std::is_same_v<t_type, decoder_failure_type>);
-            return result_type(decoder_failure_type(0));
+            static_assert(std::is_same_v<t_type, protocol_failure_type>);
+            return result_type(protocol_failure_type(0, payload_value.error()));
         }
     }, *terminal_);
 }
@@ -325,8 +318,6 @@ http1_client_response_body_decoder::result_type http1_client_response_body_decod
             return result_type(output_view_type(consumed, payload_value.bytes()));
         } else if constexpr (std::is_same_v<t_type, protocol_failure_type>) {
             return result_type(protocol_failure_type(consumed, payload_value.error()));
-        } else if constexpr (std::is_same_v<t_type, decoder_failure_type>) {
-            return result_type(decoder_failure_type(consumed));
         } else {
             return result_type(payload_value);
         }
@@ -345,11 +336,9 @@ http1_client_response_body_decoder::result_type http1_client_response_body_decod
             return result_type(validated_trailers_view_type(consumed, payload_value.fields()));
         } else if constexpr (std::is_same_v<t_type, complete_type>) {
             return result_type(complete_type(consumed, payload_value.persistence()));
-        } else if constexpr (std::is_same_v<t_type, protocol_failure_type>) {
-            return result_type(protocol_failure_type(consumed, payload_value.error()));
         } else {
-            static_assert(std::is_same_v<t_type, decoder_failure_type>);
-            return result_type(decoder_failure_type(consumed));
+            static_assert(std::is_same_v<t_type, protocol_failure_type>);
+            return result_type(protocol_failure_type(consumed, payload_value.error()));
         }
     }, result.value_);
 }
@@ -366,12 +355,6 @@ http1_client_response_body_decoder::result_type http1_client_response_body_decod
 
 http1_client_response_body_decoder::result_type http1_client_response_body_decoder::fail(http1_client_response_body_error error, std::size_t consumed) {
     const auto failure = protocol_failure_type(consumed, error);
-    terminal_ = failure;
-    return result_type(failure);
-}
-
-http1_client_response_body_decoder::result_type http1_client_response_body_decoder::decoder_failure(std::size_t consumed) {
-    const auto failure = decoder_failure_type(consumed);
     terminal_ = failure;
     return result_type(failure);
 }
@@ -400,10 +383,6 @@ const http1_client_response_body_decoder::complete_type* http1_client_response_b
 
 const http1_client_response_body_decoder::protocol_failure_type* http1_client_response_body_decoder::result_type::protocol_failure() const& noexcept {
     return std::get_if<protocol_failure_type>(&value_);
-}
-
-const http1_client_response_body_decoder::decoder_failure_type* http1_client_response_body_decoder::result_type::decoder_failure() const& noexcept {
-    return std::get_if<decoder_failure_type>(&value_);
 }
 
 }  // namespace ruvia

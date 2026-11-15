@@ -10,6 +10,7 @@
 #include <asio/io_context.hpp>
 
 #include "context_access.h"
+#include "env.h"
 #include "http_client.h"
 #include "http_client_pool.h"
 #include "route_table.h"
@@ -221,14 +222,6 @@ const redis_client* borrowed_clients::redis(std::string_view alias) const noexce
 }
 #endif
 
-void* worker_context_capabilities::worker_state_instance(const void* type_key) const {
-    auto* instance = worker_states_ == nullptr ? nullptr : worker_states_->instance(type_key);
-    if (instance == nullptr) {
-        throw std::logic_error("worker state type is not registered: call application::use_worker_state<state_type>() or router::bind_worker_state()");
-    }
-    return instance;
-}
-
 #ifdef RUVIA_ENABLE_DATABASE
 db_executor worker_client_registry_view::db(operation_scope& operation_scope, request_io_metrics* io_metrics, const stop_token& stop_token_value) const {
     if (borrowed_ != nullptr) {
@@ -309,3 +302,48 @@ const http_client& worker_client_registry_view::borrowed_http_clients(std::strin
 }
 
 }  // namespace ruvia::detail
+
+namespace ruvia {
+
+void* worker_services::worker_state_instance(const void* type_key) const {
+    auto* instance = worker_states_ == nullptr ? nullptr : worker_states_->instance(type_key);
+    if (instance == nullptr) {
+        throw std::logic_error("worker state type is not registered: call application::use_worker_state<state_type>() or router::bind_worker_state()");
+    }
+    return instance;
+}
+
+const ruvia::env& worker_services::env() const noexcept {
+    static const ruvia::env empty;
+    return env_ != nullptr ? *env_ : empty;
+}
+
+http_client_ref worker_services::client() const {
+    return clients_.client(*operation_scope_, *stop_token_);
+}
+
+http_client_ref worker_services::client(std::string_view alias) const {
+    return clients_.client(alias, *operation_scope_, *stop_token_);
+}
+
+#ifdef RUVIA_ENABLE_DATABASE
+db_executor worker_services::db() const {
+    return clients_.db(*operation_scope_, io_metrics_, *stop_token_);
+}
+
+db_executor worker_services::db(std::string_view alias) const {
+    return clients_.db(alias, *operation_scope_, io_metrics_, *stop_token_);
+}
+#endif
+
+#ifdef RUVIA_ENABLE_REDIS
+redis_executor worker_services::redis() const {
+    return clients_.redis(*operation_scope_, io_metrics_, *stop_token_);
+}
+
+redis_executor worker_services::redis(std::string_view alias) const {
+    return clients_.redis(alias, *operation_scope_, io_metrics_, *stop_token_);
+}
+#endif
+
+}  // namespace ruvia

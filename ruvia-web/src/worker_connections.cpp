@@ -673,7 +673,7 @@ task<void> worker_connections::run_session(http_server_session_config& listener_
             co_return;
         }
         if (listener_value.connection_.has_value()) {
-            co_await serve_connection(input, socket, server_connection_fields{.id_ = connection_id, .local_address_ = {}, .local_port_ = 0, .remote_address_ = remote_address, .remote_port_ = remote_port, .tls_ = std::nullopt, .state_ = &lifecycle.state(), .lifecycle_ = &lifecycle});
+            co_await serve_connection(input, socket, server_connection_fields{.endpoints_ = lifecycle.endpoints(), .tls_ = std::nullopt, .state_ = &lifecycle.state(), .lifecycle_ = &lifecycle});
             ruvia::close_socket(socket);
             co_return;
         }
@@ -733,13 +733,9 @@ task<void> worker_connections::run_tls_session(http_server_session_config& liste
         std::error_code local_error;
         const auto local = socket.local_endpoint(local_error);
         const auto local_address = local.address();
-        std::string local_address_text;
         std::optional<tls_client_hello_observation> client_hello;
         if (options_.tls_client_hello_ || tls_certificate_selection_enabled(listener_value)) {
-            if (!local_error) {
-                assign_peer_address(local_address_text, local_address);
-            }
-            client_hello.emplace(tls_client_hello_observation{.callback_ = options_.tls_client_hello_, .fields_ = {.connection_id_ = connection_id, .local_address_ = local_address_text, .local_port_ = local_error ? std::uint16_t{0} : local.port(), .remote_address_ = remote_address, .remote_port_ = remote_port, .quic_ = false, .message_ = {}}});
+            client_hello.emplace(tls_client_hello_observation{.callback_ = options_.tls_client_hello_, .fields_ = {.endpoints_ = lifecycle.endpoints(), .quic_ = false, .message_ = {}}});
         }
         server_tls_stream tls_stream(input, *listener_value.tls_context_);
         if (!local_error) {
@@ -767,12 +763,12 @@ task<void> worker_connections::run_tls_session(http_server_session_config& liste
         const auto alpn = tls_selected_alpn(native_tls);
         const auto server_name = tls_server_name(native_tls);
         if (listener_value.connection_.has_value()) {
-            co_await serve_connection(tls_stream, socket, server_connection_fields{.id_ = connection_id, .local_address_ = {}, .local_port_ = 0, .remote_address_ = remote_address, .remote_port_ = remote_port, .tls_ = server_connection_fields::tls_type{.client_certificate_subject_ = client_subject, .alpn_ = alpn, .server_name_ = server_name}, .state_ = &lifecycle.state(), .lifecycle_ = &lifecycle});
+            co_await serve_connection(tls_stream, socket, server_connection_fields{.endpoints_ = lifecycle.endpoints(), .tls_ = tls_connection_transport(client_subject, alpn, server_name), .state_ = &lifecycle.state(), .lifecycle_ = &lifecycle});
             ruvia::close_socket(socket);
             co_return;
         }
         tls_served_certificate served_certificate(SSL_get_certificate(&native_tls));
-        const auto services = capabilities_.make_context_services(stop_token_).with_tls_transport(connection_id, remote_address, client_subject, alpn, server_name, remote_port, served_certificate).with_connection_lifecycle(lifecycle).with_alternative_service(listener_value.alternative_service_).with_request_stream(listener_value.request_stream_ ? options_.request_stream_ : request_stream_callback_ref{});
+        const auto services = capabilities_.make_context_services(stop_token_).with_tls_transport(connection_id, remote_address, remote_port, tls_connection_transport(client_subject, alpn, server_name), served_certificate).with_connection_lifecycle(lifecycle).with_alternative_service(listener_value.alternative_service_).with_request_stream(listener_value.request_stream_ ? options_.request_stream_ : request_stream_callback_ref{});
 #if defined(RUVIA_ENABLE_HTTP2)
         const auto close_mode = alpn == "h2" ? co_await run_http2(tls_stream, socket, services) : co_await run_stream(listener_value, tls_stream, socket, services);
 #else

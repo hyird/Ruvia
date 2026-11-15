@@ -63,7 +63,7 @@ public:
             }
         }
         co_await next_value();
-        context_value.edit_response().header("X-Document-Root-Worker", context_value.worker_state<root_worker_state>().label_);
+        context_value.edit_response().header("X-Document-Root-Worker", context_value.services().worker_state<root_worker_state>().label_);
     }
 };
 

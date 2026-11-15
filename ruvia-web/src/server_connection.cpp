@@ -169,20 +169,16 @@ task<void> finish_connection(void* target, task<void> (*finish_value)(void*, ope
 }  // namespace
 
 server_connection::server_connection(const detail::server_connection_fields& fields, const ::ruvia::stop_token& stop_token_value, const worker_ref& worker_value, void* target, read_type read, write_type write, finish_type finish_value, abort_type abort_value) noexcept :
+    connection_endpoints(fields.endpoints_),
     worker_(worker_value),
     target_(target),
     read_(read),
     write_(write),
     finish_(finish_value),
     abort_(abort_value),
-    id_(fields.id_),
-    local_(fields.lifecycle_ != nullptr ? fields.lifecycle_->local_endpoint() : ip_endpoint(ip_address::parse(fields.local_address_).value_or(ip_address{}), fields.local_port_)),
-    remote_(fields.lifecycle_ != nullptr ? fields.lifecycle_->remote_endpoint() : ip_endpoint(ip_address::parse(fields.remote_address_).value_or(ip_address{}), fields.remote_port_)),
+    tls_(fields.tls_),
     stop_token_(stop_token_value),
     state_(fields.state_) {
-    if (fields.tls_.has_value()) {
-        tls_.emplace(tls_connection_transport(fields.tls_->client_certificate_subject_, fields.tls_->alpn_, fields.tls_->server_name_));
-    }
     operations_.bind_worker(worker_);
 }
 
@@ -235,13 +231,6 @@ task<void> worker_connections::serve_connection(stream_type& stream, tcp_socket_
     // A stopping worker has already closed the connection.
     if (!http_server_worker_running(state_) || !socket.is_open()) {
         co_return;
-    }
-    std::string local_address;
-    std::error_code local_error;
-    if (const auto local = socket.local_endpoint(local_error); !local_error) {
-        assign_peer_address(local_address, local.address());
-        fields.local_address_ = local_address;
-        fields.local_port_ = local.port();
     }
     connection_scanner::entry scanner_entry;
     scanner_entry.bind_lifecycle(fields.lifecycle_);

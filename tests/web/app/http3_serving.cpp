@@ -732,8 +732,8 @@ ruvia::task<void> exercise_connection_controls(ruvia::event_loop loop, std::uint
         auto first = co_await client.get("/dial-authority").send();
         const auto first_info = first.connection_info();
         EXPECT_NE(first_info.id_, 0U);
-        EXPECT_EQ(first_info.peer_ip_.to_string(), "127.0.0.1");
-        EXPECT_EQ(first_info.peer_port_, port);
+        EXPECT_EQ(first_info.remote_.address().to_string(), "127.0.0.1");
+        EXPECT_EQ(first_info.remote_.port(), port);
         EXPECT_FALSE(first_info.reused_);
         EXPECT_GT(first_info.tls_duration_, std::chrono::steady_clock::duration::zero());
         stage = "first-body";
@@ -820,8 +820,8 @@ ruvia::task<void> exercise_connection_controls(ruvia::event_loop loop, std::uint
             EXPECT_NE(information, nullptr);
             if (information) {
                 EXPECT_NE(information->id_, 0U);
-                EXPECT_EQ(information->peer_ip_.to_string(), "127.0.0.1");
-                EXPECT_EQ(information->peer_port_, port);
+                EXPECT_EQ(information->remote_.address().to_string(), "127.0.0.1");
+                EXPECT_EQ(information->remote_.port(), port);
             }
         }
         EXPECT_TRUE(timed_out);
@@ -836,8 +836,8 @@ ruvia::task<void> exercise_connection_controls(ruvia::event_loop loop, std::uint
             try {
                 auto updated = co_await client.get("/hello").send();
                 EXPECT_NE(updated.connection_info().id_, draining_id);
-                EXPECT_EQ(updated.connection_info().peer_ip_.to_string(), "127.0.0.1");
-                EXPECT_EQ(updated.connection_info().peer_port_, port);
+                EXPECT_EQ(updated.connection_info().remote_.address().to_string(), "127.0.0.1");
+                EXPECT_EQ(updated.connection_info().remote_.port(), port);
                 (void)co_await updated.bytes();
             } catch (...) {
                 replacement_failure = std::current_exception();

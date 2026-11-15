@@ -117,10 +117,10 @@ class http1_client_chunked_response final {
 public:
     // Transfer codings preceding the terminal chunked framing. The runtime
     // removes chunk framing first and then drives this decoder list.
-    [[nodiscard]] const http_transfer_codings& transfer_codings() const& noexcept RUVIA_LIFETIMEBOUND {
+    [[nodiscard]] const http_content_codings& transfer_codings() const& noexcept RUVIA_LIFETIMEBOUND {
         return transfer_codings_;
     }
-    const http_transfer_codings& transfer_codings() const&& = delete;
+    const http_content_codings& transfer_codings() const&& = delete;
 
     [[nodiscard]] constexpr http1_close_policy persistence() const noexcept {
         return persistence_;
@@ -129,11 +129,11 @@ public:
 private:
     friend struct detail::http1_client_response_plan_access;
 
-    http1_client_chunked_response(http_transfer_codings transfer_codings, http1_close_policy persistence) :
+    http1_client_chunked_response(http_content_codings transfer_codings, http1_close_policy persistence) :
         transfer_codings_(std::move(transfer_codings)),
         persistence_(persistence) {}
 
-    http_transfer_codings transfer_codings_;
+    http_content_codings transfer_codings_;
     http1_close_policy persistence_;
 };
 
@@ -142,18 +142,18 @@ public:
     // Any non-chunked transfer coding is decoded after EOF delimits the message.
     // This alternative always consumes through EOF and always closes; it exposes
     // no independent persistence field that could contradict those facts.
-    [[nodiscard]] const http_transfer_codings& transfer_codings() const& noexcept RUVIA_LIFETIMEBOUND {
+    [[nodiscard]] const http_content_codings& transfer_codings() const& noexcept RUVIA_LIFETIMEBOUND {
         return transfer_codings_;
     }
-    const http_transfer_codings& transfer_codings() const&& = delete;
+    const http_content_codings& transfer_codings() const&& = delete;
 
 private:
     friend struct detail::http1_client_response_plan_access;
 
-    explicit http1_client_close_delimited_response(http_transfer_codings transfer_codings) :
+    explicit http1_client_close_delimited_response(http_content_codings transfer_codings) :
         transfer_codings_(std::move(transfer_codings)) {}
 
-    http_transfer_codings transfer_codings_;
+    http_content_codings transfer_codings_;
 };
 
 class http1_client_connect_tunnel final {

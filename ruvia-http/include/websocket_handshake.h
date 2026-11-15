@@ -13,7 +13,6 @@
 #include "http1_server_request.h"
 #include "http_header.h"
 #include "http_protocol.h"
-#include "http_request.h"
 #include "http_response.h"
 #include "websocket_connection.h"
 

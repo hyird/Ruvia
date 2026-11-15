@@ -147,7 +147,7 @@ struct http_server_listener_definition final {
         // Never null. A worker's copy is the set its handshakes select from
         // now; only that worker replaces it, between handshakes.
         std::shared_ptr<const http_server_tls_identities> identities_;
-        std::uint64_t max_outgoing_records_{std::uint64_t{1} << 23};
+        std::uint64_t max_outgoing_records_{max_outgoing_tls_records};
         std::optional<tls_client_certificate_policy> client_certificates_;
         // Created once by server configuration validation and shared by every
         // worker, which copies its keys into its own TLS contexts' key set.

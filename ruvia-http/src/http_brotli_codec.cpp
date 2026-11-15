@@ -177,12 +177,4 @@ std::variant<std::string, http_content_decode_error> decode_brotli_content(std::
     }
 }
 
-std::optional<std::string> encode_brotli_content(brotli_encoder_stream& encoder, std::string_view input, std::size_t max_encoded_bytes) {
-    return encode_whole_content_with_stream(encoder, BROTLI_OPERATION_FINISH, input, max_encoded_bytes);
-}
-
-std::optional<std::string> encode_brotli_content(std::string_view input, std::size_t max_encoded_bytes) {
-    return encode_whole_content<brotli_encoder_stream>("brotli encoder initialization failed", BROTLI_OPERATION_FINISH, input, max_encoded_bytes, brotli_whole_buffer_window_bits);
-}
-
 }  // namespace ruvia::detail

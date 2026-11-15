@@ -1310,6 +1310,7 @@ public:
 
 TEST(Ruvia, request_binding_enforces_defaults_and_exposes_patch_states) {
     ruvia::test_app app;
+    app.controllers<request_binding_controller>();
     for (const auto& [body, expected] : {std::pair{R"({"token":"ok","retries":1})", "unchanged"}, std::pair{R"({"token":"ok","retries":1,"remark":null})", "clear"}, std::pair{R"({"token":"ok","retries":1,"remark":"changed"})", "changed"}}) {
         const auto response = app.request(ruvia::test_request::patch("/request-binding-patch").json(body));
         EXPECT_TRUE(response.status() == ruvia::http_status::ok);
@@ -1324,6 +1325,7 @@ TEST(Ruvia, request_binding_enforces_defaults_and_exposes_patch_states) {
 
 TEST(Ruvia, request_binding_serializes_the_validated_model_without_copying_fields) {
     ruvia::test_app app;
+    app.controllers<request_binding_controller>();
     const auto ok = app.request(ruvia::test_request::post("/request-binding-echo").json(R"({"name":"A\u006c"})"));
     EXPECT_TRUE(ok.status() == ruvia::http_status::ok);
     EXPECT_EQ(ok.body(), std::string_view(R"({"name":"Al"})"));
@@ -1337,6 +1339,7 @@ TEST(Ruvia, request_binding_form_keeps_malformed_percent_sequences_literally) {
     // WHATWG application/x-www-form-urlencoded parsing keeps a '%' that does not
     // start a valid escape.
     ruvia::test_app app;
+    app.controllers<request_binding_controller>();
     for (const std::string_view invalid : {"%", "%G0", "%0G"}) {
         for (const auto& body : {std::move(std::string("name=Al").append(invalid)) + "&unknown=" + std::string(invalid), std::move(std::string("unknown=").append(invalid)) + "&name=Al" + std::string(invalid)}) {
             const auto response = app.request(ruvia::test_request::post("/request-binding-form").form(body));
@@ -1351,6 +1354,7 @@ TEST(Ruvia, request_binding_form_keeps_malformed_percent_sequences_literally) {
 
 TEST(Ruvia, request_binding_validates_inputs_and_serializes_service_model) {
     ruvia::test_app app;
+    app.controllers<request_binding_controller>();
     const auto ok = app.request(ruvia::test_request::put("/request-binding/u1").json(R"({"name":"Al"})"));
     EXPECT_TRUE(ok.status() == ruvia::http_status::ok);
     EXPECT_TRUE(ok.body().find("\"id\":\"u1\"") != std::string_view::npos);
@@ -1365,6 +1369,7 @@ TEST(Ruvia, request_binding_validates_inputs_and_serializes_service_model) {
 
 TEST(Ruvia, request_binding_dynamic_json_distinguishes_syntax_from_field_type_errors) {
     ruvia::test_app app;
+    app.controllers<request_binding_controller>();
     for (const auto body : {R"({"object":[1]})", R"({"object": [1]})", R"({"object":"x"})", R"({"object": "x"})"}) {
         const auto response = app.request(ruvia::test_request::post("/request-binding-dynamic").json(body));
         EXPECT_TRUE(response.status() == ruvia::http_status::bad_request);
@@ -1387,6 +1392,7 @@ TEST(Ruvia, request_binding_large_wrong_type_arrays_report_field_validation) {
         elements.push_back('0');
     }
     ruvia::test_app app;
+    app.controllers<request_binding_controller>();
     for (const auto& body : {std::string("{\"object\":[") + elements + "]}", std::string("{\"numbers\":[") + elements + ",\"wrong type\"]}"}) {
         const auto response = app.request(ruvia::test_request::post("/request-binding-dynamic").json(body));
         EXPECT_TRUE(response.status() == ruvia::http_status::bad_request);
@@ -1398,6 +1404,7 @@ TEST(Ruvia, request_binding_large_wrong_type_arrays_report_field_validation) {
 
 TEST(Ruvia, request_binding_rejects_query_and_header_values_for_array_fields) {
     ruvia::test_app app;
+    app.controllers<request_binding_controller>();
     for (const auto target : {"/request-binding-query-tags", "/request-binding-header-tags"}) {
         const auto absent = app.request(ruvia::test_request::get(target));
         EXPECT_TRUE(absent.status() == ruvia::http_status::ok);

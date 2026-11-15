@@ -580,7 +580,7 @@ task<http_response> context::static_file(const static_root& root, static_file_re
     if (!entry_value.has_value()) {
         throw file_not_found_error();
     }
-    const auto mode = services().precompressed_static_files() ? detail::static_file_selection_mode::precompressed : detail::static_file_selection_mode::identity_only;
+    const auto mode = runtime_services().precompressed_static_files() ? detail::static_file_selection_mode::precompressed : detail::static_file_selection_mode::identity_only;
     return detail::context_access::static_file_resolved(*this, root, relative, options.content_type_.view(), *entry_value, mode, detail::make_response(head));
 }
 
@@ -593,7 +593,7 @@ task<http_response> detail::context_access::static_file_resolved(context& contex
         if (mode == detail::static_file_selection_mode::identity_only) {
             return static_file_representation(base_entry, http_content_coding::identity);
         }
-        if (const auto* admitted = context_value.services().response_coding()) {
+        if (const auto* admitted = context_value.runtime_services().response_coding()) {
             return select_static_file_representation(root, relative, *admitted, base_entry);
         }
         return select_static_file_representation(root, relative, http_response_coding_selection_for(context_value.request_), base_entry);

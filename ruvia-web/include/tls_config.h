@@ -34,7 +34,30 @@ struct tls_identity_config final {
     std::string certificate_chain_pem_{};
     std::string private_key_pem_{};
     std::string private_key_password_{};
+    // HTTPS listener identities only (tls_config's identity_, sni_ and
+    // local_addresses_); clients and tls_certificate_store reject a non-empty
+    // one with std::invalid_argument. The DER OCSPResponse (RFC 6960 §4.2.1)
+    // stapled with this identity (RFC 6066 §8 status_request; in TLS 1.3 the
+    // leaf's CertificateEntry extension, RFC 8446 §4.4.2.1), sent only to a
+    // client that requests OCSP status and only with this identity. Empty
+    // staples nothing. Invalid DER (including trailing bytes or BER) throws
+    // std::invalid_argument when identities load. The bytes are served as
+    // given; the caller owns certificate association, signature and freshness
+    // checks. No fetching or refresh: replace_tls_identities() installs a
+    // renewed response with its identity.
+    std::vector<std::byte> ocsp_response_{};
+
+    // No source, password or staple is configured.
+    [[nodiscard]] bool empty() const noexcept {
+        return certificate_chain_file_.empty() && private_key_file_.empty() && certificate_chain_pem_.empty() && private_key_pem_.empty() && private_key_password_.empty() && ocsp_response_.empty();
+    }
 };
+
+// The ceiling and default of every max_outgoing_records_: a connection-wide
+// record budget that stays below the RFC 9846 §5.5 AES-GCM per-key usage
+// limit. It counts handshake, control and KeyUpdate records, a key update
+// does not reset it, and reaching it ends the connection.
+inline constexpr std::uint64_t max_outgoing_tls_records = std::uint64_t{1} << 23;
 
 using tls_certificate_id = std::uint64_t;
 
@@ -134,8 +157,6 @@ struct tls_client_certificate_config final {
 struct tls_sni_config final {
     std::string host_{};
     tls_identity_config identity_{};
-    // This identity's stapled OCSP response; see tls_config::ocsp_response_.
-    std::vector<std::byte> ocsp_response_{};
 };
 
 // An additional identity served on connections that arrived at address_, a
@@ -149,8 +170,6 @@ struct tls_sni_config final {
 struct tls_local_address_config final {
     std::string address_{};
     tls_identity_config identity_{};
-    // This identity's stapled OCSP response; see tls_config::ocsp_response_.
-    std::vector<std::byte> ocsp_response_{};
 };
 
 // One HTTPS listener's identities. The listener negotiates TLS 1.2 or 1.3;
@@ -177,23 +196,11 @@ struct tls_local_address_config final {
 // from both checks.
 struct tls_config final {
     tls_identity_config identity_{};
-    // The DER OCSPResponse (RFC 6960 §4.2.1) stapled for identity_ (RFC 6066
-    // §8 status_request; in TLS 1.3 the leaf's CertificateEntry extension,
-    // RFC 8446 §4.4.2.1), sent only to a client that requests OCSP status and
-    // only with the identity it belongs to; each sni_ and local_addresses_
-    // entry carries its own. Empty staples nothing. Invalid DER (including
-    // trailing bytes or BER) throws std::invalid_argument when identities
-    // load. The bytes are served as given; the caller owns certificate
-    // association, signature and freshness checks. No fetching or refresh:
-    // replace_tls_identities() installs a renewed response with its identity.
-    // Not available with certificate_store_.
-    std::vector<std::byte> ocsp_response_{};
     tls_client_certificate_config client_certificates_{};
     std::vector<tls_sni_config> sni_{};
     std::vector<tls_local_address_config> local_addresses_{};
-    // 发出的 TLS 记录总上限，范围 1..2^23；含握手及控制记录，KeyUpdate 不
-    // 重置计数。达到上限后终止连接，以满足 RFC 9846 §5.5 的密钥用量约束。
-    std::uint64_t max_outgoing_records_{std::uint64_t{1} << 23};
+    // 1..max_outgoing_tls_records.
+    std::uint64_t max_outgoing_records_{max_outgoing_tls_records};
     // The ALPN protocols (RFC 7301) a listener_dispatch::connection listener
     // offers, in server preference order; empty offers h2, then http/1.1.
     // Each name is 1..255 bytes. A client offering ALPN with none of them
