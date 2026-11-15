@@ -1110,8 +1110,7 @@ public:
     // never snapshots retained after a source replacement or failed append.
     [[nodiscard]] bool has_writes() const;
     [[nodiscard]] bool has_grouping() const;
-    db_query& cache(const db_cache_setting_type& setting);
-    db_query& cache(std::string_view id, std::optional<std::chrono::milliseconds> duration = {});
+    db_query& cache(const db_cache_options& options = {});
 
     // Renders one expression with inline literals, never bound parameters.
     [[nodiscard]] static std::string render_expression(const db_expr& expression, db_driver driver);

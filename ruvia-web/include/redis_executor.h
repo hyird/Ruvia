@@ -83,7 +83,8 @@ struct redis_config final {
     std::string password_;
     client_tls_config tls_{};
     std::uint32_t database_{0};
-    // Must be greater than zero.
+    // Must be greater than zero. Ordinary commands pipeline over shared
+    // connections.
     std::size_t pool_size_per_worker_{4};
     // Blocking commands are routed to a separate lazy-connect pool under the
     // same alias, so they cannot consume ordinary request/reply connections.
@@ -565,40 +566,14 @@ class redis_pool;
 
 class redis_error final : public std::runtime_error {
 public:
-    enum class code_type : std::uint8_t { not_configured,
-        connect_failed,
-        auth_failed,
-        protocol_error,
-        command_error,
-        io_error,
-        timeout,
-        cancelled,
-        closing };
+    redis_error(backend_error_code code, std::string_view message);
 
-    redis_error(code_type code, std::string_view message);
-
-    [[nodiscard]] code_type code() const noexcept;
+    [[nodiscard]] backend_error_code code() const noexcept;
 
 private:
-    code_type code_;
+    backend_error_code code_;
 };
 
-namespace detail {
-
-template <text_scalar t_type>
-[[nodiscard]] t_type convert_redis_text(std::string_view text) {
-    auto parsed = parse_text_scalar<t_type>(text);
-    if (std::holds_alternative<text_scalar_parse_error>(parsed)) {
-        if constexpr (std::is_same_v<t_type, bool>) {
-            throw redis_error(redis_error::code_type::protocol_error, "redis value is not a boolean");
-        } else {
-            throw redis_error(redis_error::code_type::protocol_error, "redis value is not a valid number");
-        }
-    }
-    return std::get<t_type>(std::move(parsed));
-}
-
-}  // namespace detail
 class redis_value final {
 public:
     enum class kind_type : std::uint8_t { null,
@@ -649,17 +624,17 @@ public:
                 if (integer_ == 1) {
                     return true;
                 }
-                throw redis_error(redis_error::code_type::protocol_error, "redis value is not a boolean");
+                throw conversion_error(conversion_error::code_type::invalid_format, "redis integer is not a boolean");
             } else if constexpr (detail::is_model_integer<t_type>) {
                 if (!std::in_range<t_type>(integer_)) {
-                    throw redis_error(redis_error::code_type::protocol_error, "redis value is out of range");
+                    throw conversion_error(conversion_error::code_type::out_of_range, "redis integer is out of range");
                 }
                 return static_cast<t_type>(integer_);
             } else if constexpr (std::is_floating_point_v<t_type>) {
                 return static_cast<t_type>(integer_);
             }
         }
-        return detail::convert_redis_text<t_type>(string());
+        return detail::convert_text<t_type>(string());
     }
     template <detail::text_scalar t_type>
     [[nodiscard]] std::optional<t_type> as() const&& = delete;
@@ -1013,7 +988,7 @@ private:
 
     // `io_metrics` is the request's counter block, or null outside a request;
     // `request_stop` is the caller request's cancellation, empty outside one.
-    redis_batch(detail::redis_pool& pool, operation_options options, stop_token request_stop, operation_scope& scope, detail::request_io_metrics* io_metrics) noexcept;
+    redis_batch(detail::redis_pool& pool, operation_options options, stop_token request_stop, detail::operation_scope& scope, detail::request_io_metrics* io_metrics) noexcept;
     void require_ready() const;
     [[nodiscard]] detail::redis_command_payload consume();
     redis_batch& append_owned(detail::redis_owned_command command);
@@ -1027,14 +1002,14 @@ private:
     }
 
     [[nodiscard]] static task<std::vector<redis_value>> execute_owned(detail::request_io_metrics* io_metrics, detail::redis_command_payload payload);
-    static void expire_capability(void* target) noexcept;
+    void expire_capability() noexcept;
 
     detail::redis_pool* pool_;
     operation_options options_;
     stop_token request_stop_;
     std::vector<detail::redis_owned_command> commands_;
     detail::request_io_metrics* io_metrics_;
-    scoped_capability_registration registration_;
+    detail::capability_registration<&redis_batch::expire_capability> registration_;
 };
 
 using redis_pipeline = redis_batch<redis_batch_mode::pipeline>;
@@ -1204,7 +1179,7 @@ public:
     // The next confirmation or message. std::nullopt once the subscription is
     // closed by abort(), its stop token or worker shutdown. The server ending
     // the connection throws redis_error(io_error); an error reply (for example
-    // a denied channel) throws redis_error(command_error) and leaves the
+    // a denied channel) throws redis_error(command_failed) and leaves the
     // connection open; a malformed push closes it with protocol_error; an
     // unanswered idle probe closes it with timeout.
     // Requires a completed subscribe() first: std::logic_error otherwise.
@@ -1225,9 +1200,9 @@ public:
 private:
     friend class redis_executor;
 
-    redis_subscription(detail::redis_subscription_set& subscriptions, operation_scope& scope, const operation_options& options, const stop_token& request_stop);
+    redis_subscription(detail::redis_subscription_set& subscriptions, detail::operation_scope& scope, const operation_options& options, const stop_token& request_stop);
 
-    static void expire_capability(void* target) noexcept;
+    void expire_capability() noexcept;
     task<void> send(std::string_view command, std::span<const std::string_view> names, bool require_names);
 
     // The user/request cancellation link the connection observes; declared
@@ -1235,7 +1210,7 @@ private:
     linked_operation_options cancellation_;
     std::unique_ptr<detail::redis_subscription_connection> connection_;
     // Declared after the connection so it unlinks before the connection closes.
-    scoped_capability_registration registration_;
+    detail::capability_registration<&redis_subscription::expire_capability> registration_;
 };
 
 template <typename entity_type>
@@ -1272,7 +1247,7 @@ public:
         if (command.arguments().empty()) {
             throw std::invalid_argument("Redis compiled command has been consumed");
         }
-        return scoped(command_owned(std::move(command).take_arguments()));
+        return registration_.attach(command_owned(std::move(command).take_arguments()));
     }
 
     // Every command owns its arguments before this call returns.
@@ -1352,24 +1327,19 @@ private:
     template <typename result_type, typename mapper_type>
     [[nodiscard]] task<result_type> command_mapped(std::vector<std::string>&& args, mapper_type mapper) const {
         registration_.require_active();
-        return scoped(detail::map_redis_command<result_type>(command_owned(std::move(args)), std::move(mapper)));
+        return registration_.attach(detail::map_redis_command<result_type>(command_owned(std::move(args)), std::move(mapper)));
     }
 
     template <typename result_type, typename mapper_type>
     [[nodiscard]] task<result_type> script_mapped(const detail::redis_orm_script& script, std::vector<std::string>&& args, mapper_type mapper) const {
         registration_.require_active();
-        return scoped(detail::map_redis_command<result_type>(script_owned(script, std::move(args)), std::move(mapper)));
+        return registration_.attach(detail::map_redis_command<result_type>(script_owned(script, std::move(args)), std::move(mapper)));
     }
 
     // `io_metrics` is the request's counter block, or null outside a request.
-    redis_executor(detail::redis_client_runtime& runtime, operation_scope& operation_scope, detail::request_io_metrics* io_metrics) noexcept;
+    redis_executor(detail::redis_client_runtime& runtime, detail::operation_scope& operation_scope, detail::request_io_metrics* io_metrics) noexcept;
     // A standalone client handle: no request, so no request I/O metrics.
-    redis_executor(detail::redis_client_runtime& runtime, operation_scope& operation_scope, operation_options options) noexcept;
-
-    template <typename t_type>
-    [[nodiscard]] task<t_type> scoped(ruvia::task<t_type> task_value) const {
-        return make_scoped_operation(registration_.scope(), std::move(task_value));
-    }
+    redis_executor(detail::redis_client_runtime& runtime, detail::operation_scope& operation_scope, operation_options options) noexcept;
 
     // `reply_timeout` starts when the command is written (see redis_pool).
     [[nodiscard]] task<redis_value> execute(detail::redis_pool& pool, detail::redis_owned_command&& command, std::optional<timeout_duration> reply_timeout = std::nullopt) const;
@@ -1378,7 +1348,7 @@ private:
     // memory domain, with the map_redis_command mapper contract.
     template <typename result_type, typename mapper_type>
     [[nodiscard]] task<result_type> execute_mapped(detail::redis_pool& pool, detail::redis_owned_command&& command, mapper_type mapper, std::optional<timeout_duration> reply_timeout = std::nullopt) const {
-        return scoped(detail::map_redis_command<result_type>(execute(pool, std::move(command), reply_timeout), std::move(mapper)));
+        return registration_.attach(detail::map_redis_command<result_type>(execute(pool, std::move(command), reply_timeout), std::move(mapper)));
     }
 
     // A typed command from redis_command_set: trusted, neither blocking nor
@@ -1390,8 +1360,8 @@ private:
     }
 
     friend class detail::worker_client_registry_view;
-    [[nodiscard]] redis_executor bind_caller_scope(::ruvia::operation_scope& scope, detail::request_io_metrics* io_metrics, const stop_token& stop_token_value) &&;
-    static void expire_capability(void* target) noexcept;
+    [[nodiscard]] redis_executor bind_caller_scope(detail::operation_scope& scope, detail::request_io_metrics* io_metrics, const stop_token& stop_token_value) &&;
+    void expire_capability() noexcept;
     [[nodiscard]] detail::redis_pool& pool() const noexcept;
     [[nodiscard]] detail::redis_pool& blocking_pool() const noexcept;
     detail::redis_client_runtime* runtime_;
@@ -1400,7 +1370,7 @@ private:
     // The caller request's cancellation, linked into every operation; empty
     // outside a request.
     stop_token request_stop_;
-    scoped_capability_registration registration_;
+    detail::capability_registration<&redis_executor::expire_capability> registration_;
 };
 
 #ifdef RUVIA_ENABLE_REDIS

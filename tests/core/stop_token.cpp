@@ -1167,12 +1167,12 @@ TEST(Ruvia, EventLoopTryStartReturnsRejectedTask) {
     loops.stop();
     loops.join();
     auto stopped = loop.try_start(ruvia::test::asio_task_tests::answer());
-    EXPECT_EQ(stopped.status(), ruvia::post_status::worker_stopping);
+    EXPECT_EQ(stopped.status(), ruvia::post_status::stopping);
     EXPECT_NE(stopped.rejected(), nullptr);
     try {
         static_cast<void>(loop.start(std::move(stopped).take_rejected()));
         ADD_FAILURE() << "a retired loop must reject start()";
     } catch (const ruvia::event_loop_start_rejected& error) {
-        EXPECT_EQ(error.status(), ruvia::post_status::worker_stopping);
+        EXPECT_EQ(error.status(), ruvia::post_status::stopping);
     }
 }

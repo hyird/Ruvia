@@ -39,9 +39,9 @@
 #include "stop_token.h"
 #include "task.h"
 #include "task_scope.h"
+#include "wait_result.h"
 #include "worker_cancellation.h"
 #include "worker_ref.h"
-#include "worker_result.h"
 #include "worker_signal.h"
 #include "worker_timer.h"
 
@@ -119,16 +119,16 @@ namespace ruvia::detail {
 
 // A non-value wait outcome of the pool's slot, connect or HTTP/1 exchange
 // schedulers; `operation` names the wait in timeout and cancellation messages.
-[[noreturn]] inline void throw_http_client_wait_failure(worker_wait_status status, std::string_view operation) {
+[[noreturn]] inline void throw_http_client_wait_failure(wait_status status, std::string_view operation) {
     switch (status) {
-        case worker_wait_status::timed_out:
+        case wait_status::timed_out:
             throw http_client_error(std::make_error_code(std::errc::timed_out), std::string(operation).append(" timed out"));
-        case worker_wait_status::cancelled:
+        case wait_status::cancelled:
             throw http_client_error(std::make_error_code(std::errc::operation_canceled), std::string(operation).append(" cancelled"));
-        case worker_wait_status::closed:
-        case worker_wait_status::worker_stopping:
+        case wait_status::closed:
+        case wait_status::worker_stopping:
             throw http_client_error(make_error_code(http_client_errc::closing), http_client_error_message(make_error_code(http_client_errc::closing)));
-        case worker_wait_status::value:
+        case wait_status::value:
             break;
     }
     std::terminate();

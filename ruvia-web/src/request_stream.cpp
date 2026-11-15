@@ -228,11 +228,11 @@ context_response_editor request_stream::policy() & noexcept {
 }
 
 task<http_response> request_stream::file(file_response_options options, response_options head) {
-    return make_scoped_operation(operation_scope_, context_.file(options, head));
+    return operation_scope_.attach(context_.file(options, head));
 }
 
 task<http_response> request_stream::static_file(const static_root& root, static_file_response_options options, response_options head) {
-    return make_scoped_operation(operation_scope_, context_.static_file(root, options, head));
+    return operation_scope_.attach(context_.static_file(root, options, head));
 }
 
 void request_stream::respond(http_response response) {
@@ -257,7 +257,7 @@ bool request_stream::tunnel_requested() const noexcept {
 }
 
 task<http_tunnel*> request_stream::accept_tunnel(http_status_code status, http_tunnel_route_config config) & {
-    return make_scoped_operation(operation_scope_, accept_tunnel_impl(status, config));
+    return operation_scope_.attach(accept_tunnel_impl(status, config));
 }
 
 task<http_tunnel*> request_stream::accept_tunnel_impl(http_status_code status, http_tunnel_route_config config) {
@@ -278,7 +278,7 @@ task<http_tunnel*> request_stream::accept_tunnel_impl(http_status_code status, h
 }
 
 task<websocket_accept_result> request_stream::accept_websocket(websocket_route_config config) & {
-    return make_scoped_operation(operation_scope_, accept_websocket_impl(std::move(config)));
+    return operation_scope_.attach(accept_websocket_impl(std::move(config)));
 }
 
 task<websocket_accept_result> request_stream::accept_websocket_impl(websocket_route_config config) {

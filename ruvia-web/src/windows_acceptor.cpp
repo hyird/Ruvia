@@ -853,7 +853,7 @@ void windows_acceptor::dispatch(std::size_t listener_index, windows_accepted_soc
     const auto& target = workers_[select_worker()]->target_;
     // Admission is reserved before the callable takes the socket; a refused
     // socket stays here and closes with `accepted`.
-    const auto status = target.worker_.post_factory([&]() -> move_only_function<void()> {
+    const auto status = detail::worker_ref_access::post_factory(target.worker_, [&]() -> move_only_function<void()> {
         return [adopt = target.adopt_, owner = target.target_, listener_index, owned = std::move(accepted)]() mutable {
             adopt(owner, listener_index, std::move(owned));
         };
@@ -984,7 +984,7 @@ bool windows_acceptor::transmit(std::size_t worker_index, std::size_t http3_list
         return false;
     }
     try {
-        const auto status = runtime_.worker().post_factory([&]() -> move_only_function<void()> {
+        const auto status = detail::worker_ref_access::post_factory(runtime_.worker(), [&]() -> move_only_function<void()> {
             std::vector<std::byte> owned(bytes.begin(), bytes.end());
             return [this, http3_listener_index, remote, local, interface_index, owned = std::move(owned), token = std::move(token)]() mutable noexcept {
                 send_datagram(http3_listener_index, remote, owned, local, interface_index);

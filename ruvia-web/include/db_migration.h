@@ -138,7 +138,7 @@ private:
 // verifying the SQL actually applied; then record that SQL's digest explicitly.
 //
 // db_config's timeouts apply to each step: without connect_timeout or
-// query_timeout_ a stalled backend blocks the run indefinitely unless the
+// command_timeout_ a stalled backend blocks the run indefinitely unless the
 // run's own operation_options bound it.
 class db_migrator final {
 public:
@@ -165,6 +165,12 @@ public:
     // committed stays recorded.
     [[nodiscard]] task<db_migration_report> migrate(std::span<const db_migration> migrations, operation_options operation = {}) const&;
     task<db_migration_report> migrate(std::span<const db_migration>, operation_options = {}) const&& = delete;
+
+    // Startup bridge for the host thread: runs the migrations on a short-lived
+    // one-loop event_loop_pool, whose blocking pool looks a DNS host up, joins
+    // it and returns the report or rethrows the run's failure. Never call it
+    // from an event-loop worker.
+    static db_migration_report run(const db_config& config, std::span<const db_migration> migrations, const db_migrator_options& options = {}, operation_options operation = {});
 
 private:
     class storage_type;

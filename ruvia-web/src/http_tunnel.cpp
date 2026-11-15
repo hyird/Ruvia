@@ -260,8 +260,8 @@ public:
     bool read_active_{};
     bool output_active_{};
     std::size_t references_{1};
-    ::ruvia::operation_scope read_scope_;
-    ::ruvia::operation_scope output_scope_;
+    detail::operation_scope read_scope_;
+    detail::operation_scope output_scope_;
 };
 class capsule_state_pin final {
 public:
@@ -376,7 +376,7 @@ void http_tunnel::require_unadapted() const {
 task<std::optional<std::span<const std::byte>>> http_tunnel::read(operation_options operation) & {
     require_active();
     require_unadapted();
-    return ::ruvia::make_scoped_operation(operations_, read_borrowed(std::move(operation)));
+    return operations_.attach(read_borrowed(std::move(operation)));
 }
 task<std::optional<std::span<const std::byte>>> http_tunnel::read_borrowed(operation_options operation) {
     auto lease = detail::claim_operation_lane(read_active_, tunnel_lane_in_progress);
@@ -396,15 +396,15 @@ task<std::optional<std::span<const std::byte>>> http_tunnel::read_borrowed(opera
 }
 task<std::optional<std::string>> http_tunnel::read_raw(operation_options operation) {
     require_active();
-    return ::ruvia::make_scoped_operation(operations_, read_tunnel(target_, read_, read_active_, std::move(operation)));
+    return operations_.attach(read_tunnel(target_, read_, read_active_, std::move(operation)));
 }
 task<std::optional<detail::http_tunnel_input>> http_tunnel::read_datagram_raw(operation_options operation) {
     require_active();
-    return ::ruvia::make_scoped_operation(operations_, read_tunnel(target_, read_datagram_, read_active_, std::move(operation)));
+    return operations_.attach(read_tunnel(target_, read_datagram_, read_active_, std::move(operation)));
 }
 task<bool> http_tunnel::write_datagram_raw(std::string_view bytes, operation_options operation) {
     require_active();
-    return ::ruvia::make_scoped_operation(operations_, write_tunnel_datagram(target_, write_datagram_, bytes, write_active_, send_ended_, std::move(operation)));
+    return operations_.attach(write_tunnel_datagram(target_, write_datagram_, bytes, write_active_, send_ended_, std::move(operation)));
 }
 task<void> http_tunnel::write(outbound_bytes bytes_value, operation_options operation) & {
     require_active();
@@ -417,11 +417,11 @@ task<void> http_tunnel::write_raw(std::string&& bytes_value, operation_options o
         throw std::logic_error("HTTP tunnel send direction has ended");
     }
     auto owned = std::move(bytes_value);
-    return ::ruvia::make_scoped_operation(operations_, write_tunnel(target_, write_, std::move(owned), write_active_, send_ended_, std::move(operation)));
+    return operations_.attach(write_tunnel(target_, write_, std::move(owned), write_active_, send_ended_, std::move(operation)));
 }
 task<void> http_tunnel::finish(operation_options operation) & {
     require_active();
-    return ::ruvia::make_scoped_operation(operations_, finish_tunnel(target_, finish_, send_ended_, write_active_, std::move(operation)));
+    return operations_.attach(finish_tunnel(target_, finish_, send_ended_, write_active_, std::move(operation)));
 }
 void http_tunnel::abort() & noexcept {
     abort_input(false);
@@ -528,7 +528,7 @@ task<std::optional<http_capsule>> http_capsule_stream::read(operation_options op
         throw std::logic_error("capsule stream is empty");
     }
     state_->require();
-    return ::ruvia::make_scoped_operation(state_->read_scope_, read_owned(detail::capsule_state_pin(*state_), std::move(operation)));
+    return state_->read_scope_.attach(read_owned(detail::capsule_state_pin(*state_), std::move(operation)));
 }
 task<std::optional<http_capsule>> http_capsule_stream::read_owned(detail::capsule_state_pin pin, operation_options operation) {
     auto& state_value = pin.state();
@@ -613,7 +613,7 @@ task<void> http_capsule_stream::write_frame(std::string_view prefix, outbound_by
         bytes_value.append(prefix);
         bytes_value.append(payload_view);
     }
-    return ::ruvia::make_scoped_operation(state_->output_scope_, write(detail::capsule_write_input{detail::capsule_state_pin(*state_), std::move(bytes_value), datagram, std::move(operation)}));
+    return state_->output_scope_.attach(write(detail::capsule_write_input{detail::capsule_state_pin(*state_), std::move(bytes_value), datagram, std::move(operation)}));
 }
 task<void> http_capsule_stream::finish(operation_options operation) & {
     if (!state_) {
@@ -633,7 +633,7 @@ task<void> http_capsule_stream::finish(operation_options operation) & {
             state_value.send_ended_ = true;
         }
     };
-    return ::ruvia::make_scoped_operation(state_->output_scope_, finish_value(detail::capsule_state_pin(*state_), std::move(operation)));
+    return state_->output_scope_.attach(finish_value(detail::capsule_state_pin(*state_), std::move(operation)));
 }
 
 http_datagram_stream::http_datagram_stream(http_capsule_stream&& stream) :
@@ -659,7 +659,7 @@ task<std::optional<http_datagram>> http_datagram_stream::read(operation_options 
         throw std::logic_error("HTTP Datagram stream is empty");
     }
     stream_.state_->require();
-    return ::ruvia::make_scoped_operation(stream_.state_->read_scope_, read_owned(detail::capsule_state_pin(*stream_.state_), false, std::move(operation)));
+    return stream_.state_->read_scope_.attach(read_owned(detail::capsule_state_pin(*stream_.state_), false, std::move(operation)));
 }
 task<std::optional<http_datagram>> http_datagram_stream::read_owned(detail::capsule_state_pin pin, bool udp, operation_options operation) {
     auto& state_value = pin.state();
@@ -763,7 +763,7 @@ task<std::optional<http_datagram>> http_udp_tunnel::read(operation_options opera
         throw std::logic_error("UDP tunnel is empty");
     }
     state_value->require();
-    return ::ruvia::make_scoped_operation(state_value->read_scope_, http_datagram_stream::read_owned(detail::capsule_state_pin(*state_value), true, std::move(operation)));
+    return state_value->read_scope_.attach(http_datagram_stream::read_owned(detail::capsule_state_pin(*state_value), true, std::move(operation)));
 }
 task<void> http_udp_tunnel::send(outbound_bytes payload_value, operation_options operation) & {
     return stream_.send_payload(std::move(payload_value), true, std::move(operation));

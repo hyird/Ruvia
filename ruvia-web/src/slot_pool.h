@@ -28,7 +28,7 @@ enum class pool_slot_abort_reason : std::uint8_t {
 // policy_type supplies:
 //   using owner_type = ...;          // the driver pool that owns the connections
 //   using deadline_kind_type = ...;  // scoped enum naming what a deadline guards
-//   [[noreturn]] static void throw_acquire_failure(const owner_type&, worker_wait_status);
+//   [[noreturn]] static void throw_acquire_failure(const owner_type&, wait_status);
 //   [[noreturn]] static void throw_aborted(const owner_type&, pool_slot_abort_reason);
 //   static void expire_slot(owner_type&, std::size_t slot, deadline_kind_type) noexcept;
 //   static void cancel_slot(owner_type&, std::size_t slot) noexcept;
@@ -246,7 +246,7 @@ public:
         const auto deadline_value = *deadline;
         state.deadline_.arm(deadline_value, kind);
         try {
-            (void)worker_.schedule_timer(state.deadline_timer_, deadline_value, [this, slot](worker_timer_outcome outcome) noexcept {
+            (void)state.deadline_timer_.schedule(worker_, deadline_value, [this, slot](worker_timer_outcome outcome) noexcept {
                 if (outcome != worker_timer_outcome::expired) {
                     return;
                 }

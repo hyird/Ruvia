@@ -129,7 +129,7 @@ task<void> http_client_registry::upsert(const http_client_config& config, operat
     require_mutable();
     validate_capability_alias(config.alias_.view(), "HTTP client alias must not be empty");
     auto input = std::make_unique<origin_preparation>(config, worker_, preparation_stop_.token(), options.stop_token_, system_trust_);
-    return make_scoped_operation(preparations_, prepare_origin(std::move(input), std::move(options)));
+    return preparations_.attach(prepare_origin(std::move(input), std::move(options)));
 }
 
 void http_client_registry::require_prepared(stop_token stop, const operation_deadline& timeout) const {
@@ -242,15 +242,15 @@ task<void> http_client_registry::join() {
     }
 }
 
-http_client_ref http_client_registry::get_single_or_default(::ruvia::operation_scope& scope, stop_token host_stop) const {
+http_client_ref http_client_registry::get_single_or_default(operation_scope& scope, stop_token host_stop) const {
     return aliases_.size() == 1 ? get(aliases_.front().alias_, scope, std::move(host_stop)) : get(scope, std::move(host_stop));
 }
 
-http_client_ref http_client_registry::get(::ruvia::operation_scope& scope, stop_token host_stop) const {
+http_client_ref http_client_registry::get(operation_scope& scope, stop_token host_stop) const {
     return get(default_capability_alias, scope, std::move(host_stop));
 }
 
-http_client_ref http_client_registry::get(std::string_view alias, ::ruvia::operation_scope& scope, stop_token host_stop) const {
+http_client_ref http_client_registry::get(std::string_view alias, operation_scope& scope, stop_token host_stop) const {
     if (closing_) {
         throw http_client_error(make_error_code(http_client_errc::closing), "http client registry is closing", std::nullopt, nullptr, false);
     }

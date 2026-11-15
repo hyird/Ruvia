@@ -53,9 +53,9 @@
 #include "stop_token.h"
 #include "task.h"
 #include "timeout_duration.h"
+#include "wait_result.h"
 #include "worker_cancellation.h"
 #include "worker_ref.h"
-#include "worker_result.h"
 #include "worker_timer.h"
 
 #ifdef RUVIA_ENABLE_HTTP2
@@ -353,7 +353,7 @@ void http_client_pool::schedule_dns_refresh() {
     if (!config_.dns_refresh_interval_ || closing_ || background_joined_) {
         return;
     }
-    (void)worker_.schedule_timer(dns_refresh_timer_, deadline_after(config_.dns_refresh_interval_->value()), [this](worker_timer_outcome outcome) noexcept {
+    (void)dns_refresh_timer_.schedule(worker_, deadline_after(config_.dns_refresh_interval_->value()), [this](worker_timer_outcome outcome) noexcept {
         if (outcome != worker_timer_outcome::expired || closing_) {
             return;
         }
@@ -958,7 +958,7 @@ void http_client_pool::throw_if_admission_ended(const stop_token& stop, const ht
     require_open();
     throw_if_abandoned(state_value);
     if (stop.stop_requested()) {
-        throw_http_client_wait_failure(worker_wait_status::cancelled, "HTTP client connection pool acquire");
+        throw_http_client_wait_failure(wait_status::cancelled, "HTTP client connection pool acquire");
     }
 }
 
@@ -966,11 +966,11 @@ task<void> http_client_pool::wait_for_admission(const operation_deadline& acquir
     // A connection available at once is taken even past the bound; only
     // waiting is bounded.
     if (acquire_timeout.expired()) {
-        throw_http_client_wait_failure(worker_wait_status::timed_out, "HTTP client connection pool acquire");
+        throw_http_client_wait_failure(wait_status::timed_out, "HTTP client connection pool acquire");
     }
     worker_timer_registration deadline_timer;
     if (const auto deadline = acquire_timeout.deadline()) {
-        (void)worker_.schedule_timer(deadline_timer, *deadline, [this](worker_timer_outcome outcome) noexcept {
+        (void)deadline_timer.schedule(worker_, *deadline, [this](worker_timer_outcome outcome) noexcept {
             if (outcome == worker_timer_outcome::expired) {
                 admission_signal_.notify();
             }

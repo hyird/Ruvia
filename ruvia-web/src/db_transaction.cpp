@@ -45,7 +45,7 @@ db_transaction::db_transaction(db_transaction&& other) noexcept :
     request_link_(std::move(other.request_link_)),
     state_(std::move(other.state_)),
     io_metrics_(other.io_metrics_),
-    registration_(std::move(other.registration_), this) {}
+    registration_(std::move(other.registration_), *this) {}
 
 db_transaction::~db_transaction() = default;
 
@@ -53,15 +53,14 @@ bool db_transaction::active() const noexcept {
     return state_ != nullptr && state_->active();
 }
 
-void db_transaction::bind_operation_scope(::ruvia::operation_scope& scope, detail::request_io_metrics* io_metrics, std::unique_ptr<const linked_operation_options> request_link) noexcept {
+void db_transaction::bind_operation_scope(detail::operation_scope& scope, detail::request_io_metrics* io_metrics, std::unique_ptr<const linked_operation_options> request_link) noexcept {
     request_link_ = std::move(request_link);
     io_metrics_ = io_metrics;
-    registration_.bind(scope, this, &db_transaction::expire_capability);
+    registration_.bind(scope, *this);
 }
 
-void db_transaction::expire_capability(void* target) noexcept {
-    auto& transaction = *static_cast<db_transaction*>(target);
-    transaction.reset();
+void db_transaction::expire_capability() noexcept {
+    reset();
 }
 
 db_driver db_transaction::query_driver() const {
@@ -116,7 +115,7 @@ task<detail::db_query_result<with_count>> db_transaction::query_plan_prepared(de
 template <typename result_type, bool exec_statement>
 task<result_type> db_transaction::run_statement(std::string sql, std::vector<db_value> params) {
     operation_guard_type operation(*state_);
-    return ::ruvia::make_scoped_operation(registration_.scope(), statement_task<result_type, exec_statement>(std::move(sql), std::move(params), io_metrics_, std::move(operation)));
+    return registration_.attach(statement_task<result_type, exec_statement>(std::move(sql), std::move(params), io_metrics_, std::move(operation)));
 }
 
 template <typename result_type, bool exec_statement>
@@ -199,12 +198,12 @@ task<db_exec_result> db_transaction::execute(std::string_view sql, std::span<con
 
 task<void> db_transaction::commit() & {
     registration_.require_active();
-    return ::ruvia::make_scoped_operation(registration_.scope(), finish_task<true>(io_metrics_, operation_guard_type(*state_)));
+    return registration_.attach(finish_task<true>(io_metrics_, operation_guard_type(*state_)));
 }
 
 task<void> db_transaction::rollback() & {
     registration_.require_active();
-    return ::ruvia::make_scoped_operation(registration_.scope(), finish_task<false>(io_metrics_, operation_guard_type(*state_)));
+    return registration_.attach(finish_task<false>(io_metrics_, operation_guard_type(*state_)));
 }
 
 task<void> db_transaction::savepoint(std::string_view name) & {
@@ -359,7 +358,7 @@ db_stream_result::db_stream_result(db_stream_result&& other) noexcept :
     request_link_(std::move(other.request_link_)),
     state_(std::move(other.state_)),
     io_metrics_(other.io_metrics_),
-    registration_(std::move(other.registration_), this) {}
+    registration_(std::move(other.registration_), *this) {}
 
 db_stream_result::~db_stream_result() = default;
 
@@ -372,15 +371,14 @@ std::span<const std::string> db_stream_result::column_names() const& {
     return state_ != nullptr ? std::span<const std::string>(state_->column_names_) : std::span<const std::string>{};
 }
 
-void db_stream_result::bind_operation_scope(::ruvia::operation_scope& scope, detail::request_io_metrics* io_metrics, std::unique_ptr<const linked_operation_options> request_link) noexcept {
+void db_stream_result::bind_operation_scope(detail::operation_scope& scope, detail::request_io_metrics* io_metrics, std::unique_ptr<const linked_operation_options> request_link) noexcept {
     request_link_ = std::move(request_link);
     io_metrics_ = io_metrics;
-    registration_.bind(scope, this, &db_stream_result::expire_capability);
+    registration_.bind(scope, *this);
 }
 
-void db_stream_result::expire_capability(void* target) noexcept {
-    auto& result_value = *static_cast<db_stream_result*>(target);
-    result_value.reset();
+void db_stream_result::expire_capability() noexcept {
+    reset();
 }
 
 namespace {
@@ -394,7 +392,7 @@ template <typename guard_type>
     auto effective = override_operation_options(operation.lease().options_, std::move(operation_value));
     if (effective.stop_token_.stop_requested()) {
         operation.finish_active();
-        throw db_error(db_error::code_type::cancelled, std::nullopt, "database stream operation cancelled");
+        throw db_error(backend_error_code::cancelled, std::nullopt, "database stream operation cancelled");
     }
     return effective;
 }
@@ -403,7 +401,7 @@ template <typename guard_type>
 
 task<std::optional<db_row>> db_stream_result::read(operation_options operation) & {
     registration_.require_active();
-    return ::ruvia::make_scoped_operation(registration_.scope(), read_task(io_metrics_, operation_guard_type(state_->operation_), state_->column_names_, std::move(operation)));
+    return registration_.attach(read_task(io_metrics_, operation_guard_type(state_->operation_), state_->column_names_, std::move(operation)));
 }
 
 task<std::optional<db_row>> db_stream_result::read_task(detail::request_io_metrics* io_metrics, operation_guard_type pending, std::vector<std::string>& column_names, operation_options operation_value) {
@@ -425,7 +423,7 @@ task<std::optional<db_row>> db_stream_result::read_task(detail::request_io_metri
 
 task<void> db_stream_result::close(operation_options operation) & {
     registration_.require_active();
-    return ::ruvia::make_scoped_operation(registration_.scope(), close_task(io_metrics_, operation_guard_type(state_->operation_), std::move(operation)));
+    return registration_.attach(close_task(io_metrics_, operation_guard_type(state_->operation_), std::move(operation)));
 }
 
 task<void> db_stream_result::close_task(detail::request_io_metrics* io_metrics, operation_guard_type pending, operation_options operation_value) {

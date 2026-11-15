@@ -58,13 +58,13 @@ void redis_subscription_connection::throw_if_closed() const {
     }
     switch (closed_reason_) {
         case client_abort_reason::cancelled:
-            throw redis_error(redis_error::code_type::cancelled, "redis subscription cancelled");
+            throw redis_error(backend_error_code::cancelled, "redis subscription cancelled");
         case client_abort_reason::closing:
         case client_abort_reason::timeout:
         case client_abort_reason::none:
             break;
     }
-    throw redis_error(redis_error::code_type::closing, "redis subscription is closed");
+    throw redis_error(backend_error_code::closing, "redis subscription is closed");
 }
 
 void redis_subscription_connection::fail() noexcept {
@@ -127,7 +127,7 @@ task<std::optional<redis_pubsub_event>> redis_subscription_connection::read(oper
         read_stop.emplace(read_stops_, owner_.worker_, operation_options{.stop_token_ = operation.stop_token_}, this, &redis_subscription_connection::cancel_read, "redis subscription read");
     } catch (const std::system_error&) {
         // An already-stopped token: nothing was read, the subscription stays open.
-        throw redis_error(redis_error::code_type::cancelled, "redis subscription read cancelled");
+        throw redis_error(backend_error_code::cancelled, "redis subscription read cancelled");
     }
     const operation_deadline timeout_value(override_operation_options(options_, {.timeout_ = operation.timeout_}).timeout_);
     std::exception_ptr failure;
@@ -163,19 +163,19 @@ task<std::optional<redis_pubsub_event>> redis_subscription_connection::read(oper
     // An unanswered idle probe closed the connection; whatever the pending
     // read observed, the subscription failed by timing out.
     if (closed_ && closed_reason_ == client_abort_reason::timeout) {
-        throw redis_error(redis_error::code_type::timeout, "redis subscription idle probe timed out");
+        throw redis_error(backend_error_code::timeout, "redis subscription idle probe timed out");
     }
     // This read's own stop request closed the connection: unlike the
     // subscription's token, it is a failed read, not the end of the stream.
     if (read_stop->interrupted() && closed_reason_ == client_abort_reason::cancelled) {
-        throw redis_error(redis_error::code_type::cancelled, "redis subscription read cancelled");
+        throw redis_error(backend_error_code::cancelled, "redis subscription read cancelled");
     }
     if (failure != nullptr) {
         try {
             std::rethrow_exception(failure);
         } catch (const redis_error& error) {
             // The owner ended the subscription: a normal end of the event stream.
-            if (error.code() == redis_error::code_type::cancelled || error.code() == redis_error::code_type::closing) {
+            if (error.code() == backend_error_code::cancelled || error.code() == backend_error_code::closing) {
                 co_return std::nullopt;
             }
             throw;
@@ -184,7 +184,7 @@ task<std::optional<redis_pubsub_event>> redis_subscription_connection::read(oper
     // A rejected command (for example a denied channel) leaves the stream in
     // step: nothing was subscribed, and later pushes still parse.
     if (current_reply_.kind() == redis_value::kind_type::error) {
-        throw redis_error(redis_error::code_type::command_error, current_reply_.error());
+        throw redis_error(backend_error_code::command_failed, current_reply_.error());
     }
     try {
         co_return parse_redis_pubsub_event(current_reply_);
@@ -218,7 +218,7 @@ void redis_subscription_connection::arm_idle_probe(clock_type::time_point deadli
     try {
         // The read that armed the timer cancels it before returning, so the
         // completion never outlives this connection.
-        (void)owner_.worker_.schedule_timer(idle_probe_timer_, deadline, [this](worker_timer_outcome outcome) noexcept {
+        (void)idle_probe_timer_.schedule(owner_.worker_, deadline, [this](worker_timer_outcome outcome) noexcept {
             if (outcome == worker_timer_outcome::expired) {
                 idle_probe_expired();
             }
@@ -295,7 +295,7 @@ task<void> redis_subscription_connection::write_ping(operation_deadline timeout)
     } catch (const redis_error& error) {
         // No caller awaits the PING: its failure closes the connection and
         // the pending read reports it. A stalled write is the probe timing out.
-        if (error.code() == redis_error::code_type::timeout) {
+        if (error.code() == backend_error_code::timeout) {
             abort(client_abort_reason::timeout);
         } else {
             fail();
@@ -374,15 +374,15 @@ void redis_subscription_set::unlink(redis_subscription_connection& connection) n
 
 namespace ruvia {
 
-redis_subscription::redis_subscription(detail::redis_subscription_set& subscriptions, operation_scope& scope, const operation_options& options, const stop_token& request_stop) :
+redis_subscription::redis_subscription(detail::redis_subscription_set& subscriptions, detail::operation_scope& scope, const operation_options& options, const stop_token& request_stop) :
     cancellation_(options, request_stop),
     connection_(subscriptions.open(cancellation_.options())),
-    registration_(scope, this, &redis_subscription::expire_capability) {}
+    registration_(scope, *this) {}
 
 redis_subscription::~redis_subscription() = default;
 
-void redis_subscription::expire_capability(void* target) noexcept {
-    static_cast<redis_subscription*>(target)->connection_->abort(detail::client_abort_reason::closing);
+void redis_subscription::expire_capability() noexcept {
+    connection_->abort(detail::client_abort_reason::closing);
 }
 
 task<void> redis_subscription::send(std::string_view command, std::span<const std::string_view> names, bool require_names) {
@@ -390,7 +390,7 @@ task<void> redis_subscription::send(std::string_view command, std::span<const st
     if (require_names && names.empty()) {
         throw std::invalid_argument("redis subscription requires at least one channel or pattern");
     }
-    return make_scoped_operation(registration_.scope(), connection_->send(detail::make_owned_redis_command(command, names)));
+    return registration_.attach(connection_->send(detail::make_owned_redis_command(command, names)));
 }
 
 task<void> redis_subscription::subscribe(std::span<const std::string_view> channels) & {
@@ -410,8 +410,7 @@ task<void> redis_subscription::punsubscribe(std::span<const std::string_view> pa
 }
 
 task<std::optional<redis_pubsub_event>> redis_subscription::read(operation_options operation) & {
-    registration_.require_active();
-    return make_scoped_operation(registration_.scope(), connection_->read(std::move(operation)));
+    return registration_.attach(connection_->read(std::move(operation)));
 }
 
 void redis_subscription::abort() noexcept {

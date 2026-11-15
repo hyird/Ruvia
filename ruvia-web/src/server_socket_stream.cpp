@@ -34,11 +34,11 @@ public:
     graceful_close_bounds(asio::ip::tcp::socket& socket, connection_scanner& scanner, const worker_ref& worker_value) :
         guard_(scanner, entry_, connection_transport::tcp(socket)) {
         entry_.set_phase(connection_scanner::phase::writing);
-        armed_ = worker_value.schedule_timer(timer_, deadline_after(graceful_close_time), [target = &socket](worker_timer_outcome outcome) {
+        armed_ = timer_.schedule(worker_value, deadline_after(graceful_close_time), [target = &socket](worker_timer_outcome outcome) {
             if (outcome == worker_timer_outcome::expired) {
                 close_socket(*target);
             }
-        }) == worker_timer_schedule_status::scheduled;
+        });
     }
 
     graceful_close_bounds(const graceful_close_bounds&) = delete;

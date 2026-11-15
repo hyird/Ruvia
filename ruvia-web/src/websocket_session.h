@@ -578,7 +578,7 @@ private:
     public:
         operation_interrupt_registration(websocket_session_connection& connection, operation_lane lane, const operation_options& options) {
             if (options.timeout_.has_value()) {
-                (void)connection.worker_->schedule_timer(timer_, options.timeout_->deadline_from(std::chrono::steady_clock::now()), [&connection, lane](worker_timer_outcome outcome) noexcept {
+                (void)timer_.schedule(*connection.worker_, options.timeout_->deadline_from(std::chrono::steady_clock::now()), [&connection, lane](worker_timer_outcome outcome) noexcept {
                     if (outcome == worker_timer_outcome::expired) {
                         connection.interrupt(lane, operation_interrupt::timed_out);
                     }
@@ -1344,7 +1344,7 @@ template <typename stream_type>
 task<void> websocket_session_connection<stream_type>::detach_and_drain_writes() {
     require_current_worker();
     if (facade_ && !facade_->owner_) {
-        facade_->operation_scope_.expire();
+        facade_->operation_scope_.seal();
     }
     periodic_check_.reset();
     // Teardown first cancels the transport operation that owns a suspended

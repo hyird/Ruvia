@@ -1286,10 +1286,10 @@ void http3_session::arm_timer() noexcept {
         return;
     }
     try {
-        const auto status = services_.worker_.schedule_timer(timer_, http3_quic_steady_time(expiry), [this](worker_timer_outcome outcome) {
+        const bool scheduled = timer_.schedule(services_.worker_, http3_quic_steady_time(expiry), [this](worker_timer_outcome outcome) {
             timer_fired(outcome);
         });
-        if (status == worker_timer_schedule_status::worker_stopping) {
+        if (!scheduled) {
             close_now();
         }
     } catch (...) {
@@ -1340,10 +1340,10 @@ void http3_session::enter_closing() noexcept {
     timer_.cancel();
     armed_expiry_ = UINT64_MAX;
     try {
-        const auto status = services_.worker_.schedule_timer(timer_, deadline_after(http3_quic_nanoseconds(connection_->close_period())), [this](worker_timer_outcome outcome) {
+        const bool scheduled = timer_.schedule(services_.worker_, deadline_after(http3_quic_nanoseconds(connection_->close_period())), [this](worker_timer_outcome outcome) {
             timer_fired(outcome);
         });
-        if (status == worker_timer_schedule_status::worker_stopping) {
+        if (!scheduled) {
             lifecycle_ = lifecycle_type::ended;
         }
     } catch (...) {

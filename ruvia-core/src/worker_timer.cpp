@@ -94,78 +94,100 @@ bool worker_timer_registration::pending() const noexcept {
     return slot_state_ != nullptr && generation_ != 0 && slot_state_->active_generation_.load(std::memory_order_acquire) == generation_;
 }
 
-// Only a cold operation may move; a started one is referenced by its timer
-// callback and must stay address-stable.
-sleep_operation::sleep_operation(sleep_operation&& other) noexcept :
-    worker_(std::exchange(other.worker_, nullptr)),
-    target_(other.target_),
-    stop_token_(std::move(other.stop_token_)) {
-    if (other.started_) {
+wait_bounds::wait_bounds(wait_bounds&& other) noexcept :
+    timeout_(other.timeout_),
+    token_(std::move(other.token_)) {
+    if (other.worker_ != nullptr) {
         std::terminate();
     }
 }
 
-bool sleep_operation::await_ready() {
-    if (worker_ == nullptr || started_) {
-        throw std::logic_error("sleep operation cannot be awaited");
+void wait_bounds::start(const worker_ref& worker, const char* affinity_message) {
+    if (worker_ != nullptr) {
+        throw std::logic_error("wait cannot be awaited twice");
     }
-    if (!worker_->is_current()) {
-        throw std::logic_error("sleep must run on its bound worker");
+    if (!worker.is_current()) {
+        throw std::logic_error(affinity_message);
     }
-    started_ = true;
-    if (stop_token_.stop_requested()) {
+    worker_ = &worker;
+    deadline_ = operation_deadline(timeout_);
+}
+
+std::optional<wait_status> wait_bounds::ended() const noexcept {
+    if (stop_requested()) {
+        return wait_status::cancelled;
+    }
+    if (deadline_passed()) {
+        return wait_status::timed_out;
+    }
+    return std::nullopt;
+}
+
+bool wait_bounds::arm_deadline(void* owner, end_type end, bool watch_worker) {
+    const auto deadline = deadline_.deadline();
+    if (!deadline.has_value() && !watch_worker) {
         return true;
     }
-    if (const auto* duration = std::get_if<timeout_duration>(&target_)) {
-        return duration->value() <= std::chrono::milliseconds::zero();
+    auto completion = [owner, end](worker_timer_outcome outcome) noexcept {
+        end(owner, outcome == worker_timer_outcome::expired ? wait_status::timed_out : wait_status::worker_stopping);
+    };
+    static_assert(detail::move_only_function_fits_inline<decltype(completion)>);
+    return timer_.schedule(*worker_, deadline.value_or(std::chrono::steady_clock::time_point::max()), std::move(completion));
+}
+
+// Only a cold operation may move; a started one is referenced by its timer
+// callback and must stay address-stable (wait_bounds enforces it).
+sleep_operation::sleep_operation(sleep_operation&& other) noexcept :
+    worker_(std::exchange(other.worker_, nullptr)),
+    bounds_(std::move(other.bounds_)) {}
+
+bool sleep_operation::await_ready() {
+    if (worker_ == nullptr) {
+        throw std::logic_error("sleep operation cannot be awaited");
     }
-    return std::get<std::chrono::steady_clock::time_point>(target_) <= std::chrono::steady_clock::now();
+    bounds_.start(*worker_, "sleep must run on its bound worker");
+    return bounds_.stop_requested() || bounds_.deadline_passed();
 }
 
 // A stopped timer queue resolves immediately with the outcome stop_timers()
 // would have delivered to a pending sleep.
 bool sleep_operation::await_suspend(std::coroutine_handle<> continuation) {
     continuation_ = continuation;
-    const auto deadline = [&] {
-        if (const auto* duration = std::get_if<timeout_duration>(&target_)) {
-            return deadline_after(duration->value());
-        }
-        return std::get<std::chrono::steady_clock::time_point>(target_);
-    }();
-    const auto status = worker_->schedule_timer(registration_, deadline, [this](worker_timer_outcome value) {
-        outcome_ = value;
-        continuation_.resume();
-    });
-    if (status == worker_timer_schedule_status::worker_stopping) {
-        outcome_ = worker_timer_outcome::cancelled;
+    if (!bounds_.arm_deadline<sleep_operation, &sleep_operation::on_end>(*this)) {
+        status_ = wait_status::worker_stopping;
         return false;
     }
-    if (stop_token_.stoppable()) {
-        stop_token_.register_callback(stop_registration_, [cancellation = registration_.cancellation()] {
+    if (bounds_.token().stoppable()) {
+        bounds_.token().register_callback(stop_registration_, [cancellation = bounds_.deadline_cancellation()] {
             cancellation.cancel();
         });
     }
     return true;
 }
 
-// A zero/negative duration never suspends and keeps the default expired
-// outcome, so it reports elapsed unless stop was already requested.
-timer_sleep_result sleep_operation::await_resume() const noexcept {
-    return outcome_ == worker_timer_outcome::expired && !stop_token_.stop_requested() ? timer_sleep_result::elapsed : timer_sleep_result::stop_requested;
+void sleep_operation::on_end(wait_status status) noexcept {
+    status_ = status;
+    continuation_.resume();
 }
 
+timer_sleep_result sleep_operation::await_resume() const noexcept {
+    return status_ == wait_status::timed_out && !bounds_.stop_requested() ? timer_sleep_result::elapsed : timer_sleep_result::stop_requested;
+}
+
+// A non-positive duration is a target that has already passed.
 sleep_operation sleep_for(const worker_ref& worker_value, timeout_duration duration, stop_token stop_token_value) {
-    return sleep_operation(worker_value, duration, std::move(stop_token_value));
+    auto target = operation_timeout::try_from_value(duration).value_or(operation_timeout(std::chrono::steady_clock::time_point::min()));
+    return sleep_operation(worker_value, target, std::move(stop_token_value));
 }
 
 sleep_operation sleep_until(const worker_ref& worker_value, std::chrono::steady_clock::time_point deadline, stop_token stop_token_value) {
-    return sleep_operation(worker_value, deadline, std::move(stop_token_value));
+    return sleep_operation(worker_value, operation_timeout(deadline), std::move(stop_token_value));
 }
 }  // namespace ruvia
 
 namespace ruvia::detail {
 
-worker_timer_schedule_status worker_dispatcher::schedule_timer(worker_timer_registration& registration, std::chrono::steady_clock::time_point deadline_value, move_only_function<void(worker_timer_outcome)> completion) {
+bool worker_dispatcher::schedule_timer(worker_timer_registration& registration, std::chrono::steady_clock::time_point deadline_value, move_only_function<void(worker_timer_outcome)> completion) {
     if (!is_current()) {
         throw std::logic_error("worker timers must be scheduled on their worker");
     }
@@ -189,7 +211,7 @@ worker_timer_schedule_status worker_dispatcher::schedule_timer(worker_timer_regi
     }
     // Detachment also stops the timer queue, so one check covers both.
     if (timers_stopping_.load(std::memory_order_acquire)) {
-        return worker_timer_schedule_status::worker_stopping;
+        return false;
     }
     // New due entries belong to the next dispatch round. Place them after all
     // entries due at this round's snapshot, even if their requested deadline
@@ -217,7 +239,7 @@ worker_timer_schedule_status worker_dispatcher::schedule_timer(worker_timer_regi
     slot.completion_ = std::move(completion);
     if (timers_stopping_.load(std::memory_order_acquire)) {
         static_cast<void>(release_timer_slot(slot_index));
-        return worker_timer_schedule_status::worker_stopping;
+        return false;
     }
     slot.occupied_ = true;
     slot.active_generation_.store(slot.generation_, std::memory_order_release);
@@ -254,7 +276,7 @@ worker_timer_schedule_status worker_dispatcher::schedule_timer(worker_timer_regi
             throw;
         }
     }
-    return worker_timer_schedule_status::scheduled;
+    return true;
 }
 
 void worker_dispatcher::request_timer_cancellation(std::size_t slot, std::uint64_t generation, bool notify) noexcept {

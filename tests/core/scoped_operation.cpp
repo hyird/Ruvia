@@ -7,6 +7,7 @@
 #include <memory>
 #include <stdexcept>
 #include <string>
+#include <type_traits>
 #include <utility>
 
 #include "event_loop.h"
@@ -18,7 +19,7 @@
 namespace ruvia::test::scoped_operation_tests {
 
 template <typename worker_type>
-concept can_bind_worker = requires(operation_scope& scope, worker_type&& worker) { scope.bind_worker(std::forward<worker_type>(worker)); };
+concept can_bind_worker = requires(detail::operation_scope& scope, worker_type&& worker) { scope.bind_worker(std::forward<worker_type>(worker)); };
 
 static_assert(can_bind_worker<worker_ref&>);
 static_assert(can_bind_worker<const worker_ref&>);
@@ -106,12 +107,13 @@ struct direct_retirement_observation final {
     bool joined_after_expiry_{};
     bool cancelled_{};
 
-    static void expire(void* raw) noexcept {
-        auto& observation = *static_cast<direct_retirement_observation*>(raw);
-        ++observation.expirations_;
-        observation.expired_after_release_ = observation.payload_.expired();
+    void expire() noexcept {
+        ++expirations_;
+        expired_after_release_ = payload_.expired();
     }
 };
+
+static_assert(std::is_same_v<detail::capability_registration<&direct_retirement_observation::expire>::owner_type, direct_retirement_observation>);
 
 ruvia::task<void> direct_scoped_child(std::shared_ptr<int> payload, ruvia::worker_signal& gate, ruvia::stop_token token, direct_child_outcome outcome, direct_retirement_observation& observation) {
     if (outcome != direct_child_outcome::immediate) {
@@ -124,21 +126,21 @@ ruvia::task<void> direct_scoped_child(std::shared_ptr<int> payload, ruvia::worke
     }
 }
 
-ruvia::task<void> observe_direct_retirement(ruvia::operation_scope& operations, direct_retirement_observation& observation) {
+ruvia::task<void> observe_direct_retirement(ruvia::detail::operation_scope& operations, direct_retirement_observation& observation) {
     co_await operations.close_and_join();
     observation.joined_after_expiry_ = observation.expirations_ == 1 && observation.payload_.expired() && !operations.has_pending_operations();
 }
 
 ruvia::task<void> exercise_direct_retirement(ruvia::worker_ref worker, direct_child_outcome outcome, direct_retirement_observation& observation) {
-    ruvia::operation_scope operations;
+    ruvia::detail::operation_scope operations;
     operations.bind_worker(worker);
     ruvia::task_scope children(worker);
     ruvia::task_scope observers(worker);
     ruvia::worker_signal gate(worker);
     auto payload = std::make_shared<int>(42);
     observation.payload_ = payload;
-    ruvia::scoped_capability_registration capability(operations, &observation, &direct_retirement_observation::expire);
-    children.spawn(ruvia::make_scoped_operation(operations, direct_scoped_child(std::move(payload), gate, children.token(), outcome, observation)));
+    ruvia::detail::capability_registration<&direct_retirement_observation::expire> capability(operations, observation);
+    children.spawn(operations.attach(direct_scoped_child(std::move(payload), gate, children.token(), outcome, observation)));
     observers.spawn(observe_direct_retirement(operations, observation));
     if (outcome == direct_child_outcome::cancelled) {
         children.request_stop();
@@ -153,7 +155,7 @@ ruvia::task<void> exercise_direct_retirement(ruvia::worker_ref worker, direct_ch
 }
 
 struct closing_frame_input final {
-    closing_frame_input(tracked_payload payload, ruvia::operation_scope& scope, int& retired, int& expired, bool& premature_expiry) :
+    closing_frame_input(tracked_payload payload, ruvia::detail::operation_scope& scope, int& retired, int& expired, bool& premature_expiry) :
         payload_(std::move(payload)),
         scope_(&scope),
         retired_(&retired),
@@ -178,7 +180,7 @@ struct closing_frame_input final {
     }
 
     tracked_payload payload_;
-    ruvia::operation_scope* scope_;
+    ruvia::detail::operation_scope* scope_;
     int* retired_;
     int* expired_;
     bool* premature_expiry_;
@@ -198,13 +200,13 @@ using ruvia::test::scoped_operation_tests::tracked_payload;
 
 class test_scoped_capability final {
 public:
-    test_scoped_capability(ruvia::operation_scope& scope, int& expired_count, payload_counter* resource = nullptr, std::size_t* bytes_at_expire = nullptr, const bool* lease_active = nullptr, bool* lease_at_expire = nullptr) noexcept :
+    test_scoped_capability(ruvia::detail::operation_scope& scope, int& expired_count, payload_counter* resource = nullptr, std::size_t* bytes_at_expire = nullptr, const bool* lease_active = nullptr, bool* lease_at_expire = nullptr) noexcept :
         expired_count_(&expired_count),
         resource_(resource),
         bytes_at_expire_(bytes_at_expire),
         lease_active_(lease_active),
         lease_at_expire_(lease_at_expire),
-        registration_(scope, this, &test_scoped_capability::expire) {}
+        registration_(scope, *this) {}
 
     test_scoped_capability(const test_scoped_capability& other) noexcept :
         expired_count_(other.expired_count_),
@@ -212,7 +214,7 @@ public:
         bytes_at_expire_(other.bytes_at_expire_),
         lease_active_(other.lease_active_),
         lease_at_expire_(other.lease_at_expire_),
-        registration_(other.registration_, this) {}
+        registration_(other.registration_, *this) {}
 
     test_scoped_capability(test_scoped_capability&& other) noexcept :
         expired_count_(std::exchange(other.expired_count_, nullptr)),
@@ -220,21 +222,20 @@ public:
         bytes_at_expire_(other.bytes_at_expire_),
         lease_active_(other.lease_active_),
         lease_at_expire_(other.lease_at_expire_),
-        registration_(std::move(other.registration_), this) {}
+        registration_(std::move(other.registration_), *this) {}
 
     void use() const {
         registration_.require_active();
     }
 
 private:
-    static void expire(void* target) noexcept {
-        auto& capability = *static_cast<test_scoped_capability*>(target);
-        ++*capability.expired_count_;
-        if (capability.resource_ != nullptr && capability.bytes_at_expire_ != nullptr) {
-            *capability.bytes_at_expire_ = capability.resource_->live_bytes();
+    void expire() noexcept {
+        ++*expired_count_;
+        if (resource_ != nullptr && bytes_at_expire_ != nullptr) {
+            *bytes_at_expire_ = resource_->live_bytes();
         }
-        if (capability.lease_active_ != nullptr && capability.lease_at_expire_ != nullptr) {
-            *capability.lease_at_expire_ = *capability.lease_active_;
+        if (lease_active_ != nullptr && lease_at_expire_ != nullptr) {
+            *lease_at_expire_ = *lease_active_;
         }
     }
 
@@ -243,7 +244,7 @@ private:
     std::size_t* bytes_at_expire_;
     const bool* lease_active_;
     bool* lease_at_expire_;
-    ruvia::scoped_capability_registration registration_;
+    ruvia::detail::capability_registration<&test_scoped_capability::expire> registration_;
 };
 
 ruvia::task<void> await_scoped_operation(ruvia::task<void>& operation) {
@@ -278,7 +279,7 @@ private:
     bool* active_;
 };
 
-ruvia::task<std::size_t> join_and_observe_bytes(ruvia::operation_scope& scope, const payload_counter& resource) {
+ruvia::task<std::size_t> join_and_observe_bytes(ruvia::detail::operation_scope& scope, const payload_counter& resource) {
     co_await scope.close_and_join();
     co_return resource.live_bytes();
 }
@@ -417,7 +418,7 @@ struct reentrant_retirement_stats final {
     int expirations_after_join_{};
 };
 
-ruvia::task<void> join_and_observe_task(ruvia::operation_scope& scope, payload_counter& resource, int& expired_count, reentrant_retirement_stats& stats) {
+ruvia::task<void> join_and_observe_task(ruvia::detail::operation_scope& scope, payload_counter& resource, int& expired_count, reentrant_retirement_stats& stats) {
     co_await scope.close_and_join();
     stats.allocations_after_join_ = resource.live_allocations();
     stats.bytes_after_join_ = resource.live_bytes();
@@ -425,7 +426,7 @@ ruvia::task<void> join_and_observe_task(ruvia::operation_scope& scope, payload_c
 }
 
 struct reentrant_frame_input final {
-    reentrant_frame_input(payload_counter* resource, ruvia::task_scope& children, ruvia::operation_scope& parent_scope, payload_counter& counting_resource_value, int& expired_count, reentrant_retirement_stats& stats) :
+    reentrant_frame_input(payload_counter* resource, ruvia::task_scope& children, ruvia::detail::operation_scope& parent_scope, payload_counter& counting_resource_value, int& expired_count, reentrant_retirement_stats& stats) :
         payload_(1024, 'r', resource),
         children_(&children),
         parent_scope_(&parent_scope),
@@ -455,7 +456,7 @@ struct reentrant_frame_input final {
 
     tracked_payload payload_;
     ruvia::task_scope* children_;
-    ruvia::operation_scope* parent_scope_;
+    ruvia::detail::operation_scope* parent_scope_;
     payload_counter* counting_resource_;
     int* expired_count_;
     reentrant_retirement_stats* stats_;
@@ -495,10 +496,10 @@ ruvia::task<void> cold_with_sibling_drop(sibling_drop_input input) {
     co_return;
 }
 
-ruvia::task<void> run_reentrant_cold_drop(const ruvia::worker_ref& worker_value, ruvia::operation_scope& parent_scope, payload_counter& resource, int& expired_count, reentrant_retirement_stats& stats, bool close_scope = false) {
+ruvia::task<void> run_reentrant_cold_drop(const ruvia::worker_ref& worker_value, ruvia::detail::operation_scope& parent_scope, payload_counter& resource, int& expired_count, reentrant_retirement_stats& stats, bool close_scope = false) {
     ruvia::task_scope children(worker_value);
     {
-        auto operation = ruvia::make_scoped_operation(parent_scope, cold_with_reentrant_input(reentrant_frame_input(&resource, children, parent_scope, resource, expired_count, stats)));
+        auto operation = parent_scope.attach(cold_with_reentrant_input(reentrant_frame_input(&resource, children, parent_scope, resource, expired_count, stats)));
         if (close_scope) {
             parent_scope.close();
         }
@@ -536,15 +537,15 @@ TEST(Ruvia, scoped_operation_direct_spawn_retires_frame_before_join_and_capabili
 }
 
 TEST(Ruvia, scoped_operation_cold_frame_cleanup_can_reenter_scope_close) {
-    ruvia::operation_scope scope;
+    ruvia::detail::operation_scope scope;
     payload_counter resource;
     int retired = 0;
     int expired = 0;
     bool premature_expiry = false;
     std::size_t bytes_at_expire = (std::numeric_limits<std::size_t>::max)();
     test_scoped_capability capability(scope, expired, &resource, &bytes_at_expire);
-    auto first = ruvia::make_scoped_operation(scope, ruvia::test::scoped_operation_tests::cold_with_reentrant_close(ruvia::test::scoped_operation_tests::closing_frame_input(tracked_payload(1024, 'a', &resource), scope, retired, expired, premature_expiry)));
-    auto second = ruvia::make_scoped_operation(scope, ruvia::test::scoped_operation_tests::cold_with_reentrant_close(ruvia::test::scoped_operation_tests::closing_frame_input(tracked_payload(1024, 'b', &resource), scope, retired, expired, premature_expiry)));
+    auto first = scope.attach(ruvia::test::scoped_operation_tests::cold_with_reentrant_close(ruvia::test::scoped_operation_tests::closing_frame_input(tracked_payload(1024, 'a', &resource), scope, retired, expired, premature_expiry)));
+    auto second = scope.attach(ruvia::test::scoped_operation_tests::cold_with_reentrant_close(ruvia::test::scoped_operation_tests::closing_frame_input(tracked_payload(1024, 'b', &resource), scope, retired, expired, premature_expiry)));
     scope.close();
     EXPECT_EQ(retired, 2);
     EXPECT_EQ(expired, 1);
@@ -563,7 +564,7 @@ TEST(Ruvia, scoped_operation_close_and_join_releases_frame_before_expiring_capab
     const auto loop = loops.loop(0);
     const auto worker_value = loop.worker();
     ruvia::worker_signal signal(worker_value);
-    ruvia::operation_scope scope;
+    ruvia::detail::operation_scope scope;
     int expired_count = 0;
     payload_counter parameter_resource;
     std::size_t bytes_at_expire = static_cast<std::size_t>(-1);
@@ -574,7 +575,7 @@ TEST(Ruvia, scoped_operation_close_and_join_releases_frame_before_expiring_capab
     auto started_promise = std::promise<void>();
     auto started = started_promise.get_future();
     // Only the coroutine frame owns payload storage during the observation.
-    auto operation = ruvia::make_scoped_operation(scope, wait_with_payload(tracked_payload(1024, 'p', &parameter_resource), signal, started_promise, frame_lease(lease_active)));
+    auto operation = scope.attach(wait_with_payload(tracked_payload(1024, 'p', &parameter_resource), signal, started_promise, frame_lease(lease_active)));
     auto operation_root = loop.start(await_scoped_operation(operation));
     loops.start();
     started.get();
@@ -602,7 +603,7 @@ TEST(Ruvia, scoped_operation_exception_releases_frame_before_expiring_capabiliti
     const auto loop = loops.loop(0);
     const auto worker_value = loop.worker();
     ruvia::worker_signal signal(worker_value);
-    ruvia::operation_scope scope;
+    ruvia::detail::operation_scope scope;
     int expired_count = 0;
     payload_counter resource;
     std::size_t bytes_at_expire = static_cast<std::size_t>(-1);
@@ -610,7 +611,7 @@ TEST(Ruvia, scoped_operation_exception_releases_frame_before_expiring_capabiliti
     static_cast<void>(capability);
     std::promise<void> started_promise;
     auto started = started_promise.get_future();
-    auto operation = ruvia::make_scoped_operation(scope, wait_then_throw(tracked_payload(1024, 'x', &resource), signal, started_promise));
+    auto operation = scope.attach(wait_then_throw(tracked_payload(1024, 'x', &resource), signal, started_promise));
     auto operation_root = loop.start(await_scoped_operation(operation));
     loops.start();
     started.get();
@@ -636,7 +637,7 @@ TEST(Ruvia, scoped_operation_cooperative_cancellation_releases_frame_before_expi
     const auto loop = loops.loop(0);
     const auto worker_value = loop.worker();
     ruvia::worker_signal signal(worker_value);
-    ruvia::operation_scope scope;
+    ruvia::detail::operation_scope scope;
     int expired_count = 0;
     payload_counter resource;
     std::size_t bytes_at_expire = static_cast<std::size_t>(-1);
@@ -645,7 +646,7 @@ TEST(Ruvia, scoped_operation_cooperative_cancellation_releases_frame_before_expi
     std::promise<void> started_promise;
     auto started = started_promise.get_future();
     std::atomic_bool stop_requested{false};
-    auto operation = ruvia::make_scoped_operation(scope, wait_then_observe_cancellation(tracked_payload(1024, 'x', &resource), signal, started_promise, stop_requested));
+    auto operation = scope.attach(wait_then_observe_cancellation(tracked_payload(1024, 'x', &resource), signal, started_promise, stop_requested));
     auto operation_root = loop.start(await_scoped_bool(operation));
     loops.start();
     started.get();
@@ -670,7 +671,7 @@ TEST(Ruvia, scoped_operation_result_survives_join_after_frame_release) {
     const auto loop = loops.loop(0);
     const auto worker_value = loop.worker();
     ruvia::worker_signal signal(worker_value);
-    ruvia::operation_scope scope;
+    ruvia::detail::operation_scope scope;
     int expired_count = 0;
     payload_counter parameter_resource;
     payload_counter result_resource;
@@ -683,7 +684,7 @@ TEST(Ruvia, scoped_operation_result_survives_join_after_frame_release) {
     static_cast<void>(capability);
     std::promise<void> started_promise;
     auto started = started_promise.get_future();
-    auto operation = ruvia::make_scoped_operation(scope, wait_and_return(tracked_payload(1024, 'p', &parameter_resource), result_resource, signal, started_promise));
+    auto operation = scope.attach(wait_and_return(tracked_payload(1024, 'p', &parameter_resource), result_resource, signal, started_promise));
     auto operation_root = loop.start(await_scoped_result(operation));
     loops.start();
     started.get();
@@ -702,8 +703,8 @@ TEST(Ruvia, scoped_operation_result_survives_join_after_frame_release) {
         EXPECT_EQ(result_value.bytes_.size(), 2048U);
         EXPECT_EQ(result_resource.live_allocations(), allocations_per_result);
         {
-            ruvia::operation_scope repeated_scope;
-            auto repeated = ruvia::make_scoped_operation(repeated_scope, return_with_payload(tracked_payload(1024, 'q', &parameter_resource), result_resource));
+            ruvia::detail::operation_scope repeated_scope;
+            auto repeated = repeated_scope.attach(return_with_payload(tracked_payload(1024, 'q', &parameter_resource), result_resource));
             auto repeated_root = loop.start(await_scoped_result(repeated));
             auto repeated_result = std::move(repeated_root).get();
             EXPECT_EQ(parameter_resource.live_allocations(), 0U);
@@ -765,7 +766,7 @@ TEST(Ruvia, scoped_operation_result_move_failure_releases_frame_before_join) {
     const auto loop = loops.loop(0);
     const auto worker_value = loop.worker();
     ruvia::worker_signal signal(worker_value);
-    ruvia::operation_scope scope;
+    ruvia::detail::operation_scope scope;
     payload_counter parameter_resource;
     payload_counter result_resource;
     int moves = 0;
@@ -774,7 +775,7 @@ TEST(Ruvia, scoped_operation_result_move_failure_releases_frame_before_join) {
     test_scoped_capability capability(scope, expired_count, &parameter_resource, &bytes_at_expire);
     std::promise<void> started_promise;
     auto started = started_promise.get_future();
-    auto operation = ruvia::make_scoped_operation(scope, wait_and_return_throwing_result(tracked_payload(1024, 'p', &parameter_resource), result_resource, moves, signal, started_promise));
+    auto operation = scope.attach(wait_and_return_throwing_result(tracked_payload(1024, 'p', &parameter_resource), result_resource, moves, signal, started_promise));
     auto operation_root = loop.start(await_throwing_result(operation));
     loops.start();
     started.get();
@@ -802,12 +803,12 @@ TEST(Ruvia, scoped_operation_result_move_failure_releases_frame_before_join) {
 }
 
 TEST(Ruvia, scoped_operation_scope_close_reclaims_cold_frame_before_capability_expiry) {
-    ruvia::operation_scope scope;
+    ruvia::detail::operation_scope scope;
     payload_counter resource;
     int expired_count = 0;
     std::size_t bytes_at_expire = std::numeric_limits<std::size_t>::max();
     test_scoped_capability capability(scope, expired_count, &resource, &bytes_at_expire);
-    auto operation = ruvia::make_scoped_operation(scope, cold_with_payload(tracked_payload(1024, 'p', &resource)));
+    auto operation = scope.attach(cold_with_payload(tracked_payload(1024, 'p', &resource)));
     EXPECT_TRUE(resource.live_allocations() != 0);
     scope.close();
     EXPECT_EQ(expired_count, 1);
@@ -820,10 +821,10 @@ TEST(Ruvia, scoped_operation_scope_close_reclaims_cold_frame_before_capability_e
 }
 
 TEST(Ruvia, scoped_operation_expired_by_scope_close_rejects_start) {
-    ruvia::operation_scope scope;
+    ruvia::detail::operation_scope scope;
     payload_counter resource;
     {
-        auto operation = ruvia::make_scoped_operation(scope, cold_with_payload(tracked_payload(1024, 'p', &resource)));
+        auto operation = scope.attach(cold_with_payload(tracked_payload(1024, 'p', &resource)));
         EXPECT_TRUE(resource.live_bytes() > 0U);
         scope.close();
         EXPECT_EQ(resource.live_bytes(), 0U);
@@ -847,11 +848,11 @@ TEST(Ruvia, scoped_operation_expired_by_scope_close_rejects_start) {
 }
 
 TEST(Ruvia, scoped_operation_created_after_scope_close_discards_cold_frame) {
-    ruvia::operation_scope scope;
+    ruvia::detail::operation_scope scope;
     payload_counter resource;
     scope.close();
 
-    auto operation = ruvia::make_scoped_operation(scope, cold_with_payload(tracked_payload(1024, 'p', &resource)));
+    auto operation = scope.attach(cold_with_payload(tracked_payload(1024, 'p', &resource)));
     EXPECT_EQ(resource.live_allocations(), 0U);
     EXPECT_EQ(resource.live_bytes(), 0U);
 
@@ -877,7 +878,7 @@ TEST(Ruvia, scoped_operation_cold_frame_drop_allows_reentrant_parent_join) {
     ruvia::event_loop_pool loops({.loop_count_ = 1});
     const auto loop = loops.loop(0);
     const auto worker_value = loop.worker();
-    ruvia::operation_scope parent_scope;
+    ruvia::detail::operation_scope parent_scope;
     payload_counter resource;
     int expired_count = 0;
     std::size_t bytes_at_expire = std::numeric_limits<std::size_t>::max();
@@ -909,9 +910,9 @@ TEST(Ruvia, scoped_operation_completed_operation_rejects_second_await) {
     ruvia::event_loop_pool loops({.loop_count_ = 1});
     const auto loop = loops.loop(0);
     const auto worker_value = loop.worker();
-    ruvia::operation_scope scope;
+    ruvia::detail::operation_scope scope;
     scope.bind_worker(worker_value);
-    auto operation = ruvia::make_scoped_operation(scope, complete_immediately());
+    auto operation = scope.attach(complete_immediately());
     auto first_root = loop.start(await_scoped_operation(operation));
     loops.start();
     std::move(first_root).get();
@@ -930,11 +931,11 @@ TEST(Ruvia, scoped_operation_completed_operation_rejects_second_await) {
 }
 
 TEST(Ruvia, scoped_operation_rejects_empty_task_without_starting) {
-    ruvia::operation_scope scope;
+    ruvia::detail::operation_scope scope;
     auto source = complete_immediately();
     auto retained = std::move(source);
     {
-        auto operation = ruvia::make_scoped_operation(scope, std::move(source));
+        auto operation = scope.attach(std::move(source));
         ruvia::event_loop_pool loops({.loop_count_ = 1});
         const auto loop = loops.loop(0);
         auto first_root = loop.start(await_scoped_operation(operation));
@@ -961,7 +962,7 @@ TEST(Ruvia, scoped_operation_scope_drain_allows_reentrant_join_after_all_frames_
     ruvia::event_loop_pool loops({.loop_count_ = 1});
     const auto loop = loops.loop(0);
     const auto worker_value = loop.worker();
-    ruvia::operation_scope scope;
+    ruvia::detail::operation_scope scope;
     payload_counter resource;
     int expired_count = 0;
     std::size_t bytes_at_expire = std::numeric_limits<std::size_t>::max();
@@ -986,14 +987,14 @@ TEST(Ruvia, scoped_operation_scope_drain_allows_reentrant_join_after_all_frames_
 }
 
 TEST(Ruvia, scoped_operation_join_rescans_after_frame_cleanup_drops_a_sibling) {
-    ruvia::operation_scope scope;
+    ruvia::detail::operation_scope scope;
     payload_counter resource;
     int expired_count = 0;
     std::size_t bytes_at_expire = std::numeric_limits<std::size_t>::max();
     test_scoped_capability capability(scope, expired_count, &resource, &bytes_at_expire);
-    auto sibling = std::make_unique<ruvia::task<void>>(ruvia::make_scoped_operation(scope, cold_with_payload(tracked_payload(1024, 'p', &resource))));
+    auto sibling = std::make_unique<ruvia::task<void>>(scope.attach(cold_with_payload(tracked_payload(1024, 'p', &resource))));
     const auto sibling_allocations = resource.live_allocations();
-    auto operation = ruvia::make_scoped_operation(scope, cold_with_sibling_drop(sibling_drop_input(resource, sibling)));
+    auto operation = scope.attach(cold_with_sibling_drop(sibling_drop_input(resource, sibling)));
     EXPECT_EQ(resource.live_allocations(), 2 * sibling_allocations);
     ruvia::event_loop_pool loops({.loop_count_ = 1});
     const auto loop = loops.loop(0);
@@ -1012,7 +1013,7 @@ TEST(Ruvia, scoped_operation_join_rescans_after_frame_cleanup_drops_a_sibling) {
 }
 
 TEST(Ruvia, scoped_capabilities_copy_move_and_unregister_without_expiring_other_owners) {
-    ruvia::operation_scope scope;
+    ruvia::detail::operation_scope scope;
     int expired_count = 0;
     test_scoped_capability source(scope, expired_count);
     test_scoped_capability moved(std::move(source));
@@ -1040,24 +1041,23 @@ TEST(Ruvia, scoped_capabilities_copy_move_and_unregister_without_expiring_other_
 
 TEST(Ruvia, scoped_capability_cleanup_can_destroy_its_owner_and_a_sibling) {
     struct capability_owner final {
-        capability_owner(ruvia::operation_scope& scope, payload_counter& resource, int& expired_count, bool& expired_before_cleanup, std::unique_ptr<capability_owner>* self, std::unique_ptr<capability_owner>* sibling) :
+        capability_owner(ruvia::detail::operation_scope& scope, payload_counter& resource, int& expired_count, bool& expired_before_cleanup, std::unique_ptr<capability_owner>* self, std::unique_ptr<capability_owner>* sibling) :
             payload_(1024, 'p', &resource),
             expired_count_(expired_count),
             expired_before_cleanup_(expired_before_cleanup),
             self_(self),
             sibling_(sibling),
-            registration_(scope, this, &capability_owner::expire) {}
+            registration_(scope, *this) {}
 
-        static void expire(void* target) noexcept {
-            auto& owner_value = *static_cast<capability_owner*>(target);
-            ++owner_value.expired_count_;
+        void expire() noexcept {
+            ++expired_count_;
             try {
-                owner_value.registration_.require_active();
+                registration_.require_active();
             } catch (const std::logic_error&) {
-                owner_value.expired_before_cleanup_ = true;
+                expired_before_cleanup_ = true;
             }
-            auto* self = owner_value.self_;
-            auto* sibling = owner_value.sibling_;
+            auto* self = self_;
+            auto* sibling = sibling_;
             if (sibling != nullptr) {
                 sibling->reset();
             }
@@ -1071,10 +1071,10 @@ TEST(Ruvia, scoped_capability_cleanup_can_destroy_its_owner_and_a_sibling) {
         bool& expired_before_cleanup_;
         std::unique_ptr<capability_owner>* self_;
         std::unique_ptr<capability_owner>* sibling_;
-        ruvia::scoped_capability_registration registration_;
+        ruvia::detail::capability_registration<&capability_owner::expire> registration_;
     };
 
-    ruvia::operation_scope scope;
+    ruvia::detail::operation_scope scope;
     payload_counter resource;
     int expired_count = 0;
     bool expired_before_cleanup = false;
@@ -1091,17 +1091,18 @@ TEST(Ruvia, scoped_capability_cleanup_can_destroy_its_owner_and_a_sibling) {
 }
 
 TEST(Ruvia, scoped_capability_cleanup_can_reenter_scope_close) {
-    ruvia::operation_scope scope;
+    ruvia::detail::operation_scope scope;
     int expired = 0;
     struct reentrant_closer final {
-        ruvia::operation_scope* scope_;
+        void expire() noexcept {
+            ++*expired_;
+            scope_->close();
+        }
+
+        ruvia::detail::operation_scope* scope_;
         int* expired_;
     } state{&scope, &expired};
-    ruvia::scoped_capability_registration registration(scope, &state, [](void* raw) noexcept {
-        auto* value = static_cast<reentrant_closer*>(raw);
-        ++*value->expired_;
-        value->scope_->close();
-    });
+    ruvia::detail::capability_registration<&reentrant_closer::expire> registration(scope, state);
     scope.close();
     EXPECT_EQ(expired, 1);
 }
@@ -1109,7 +1110,13 @@ TEST(Ruvia, scoped_capability_cleanup_can_reenter_scope_close) {
 TEST(Ruvia, scoped_capability_reentrant_join_waits_for_cleanup) {
     struct reentrant_join_case final {
         struct state final {
-            std::unique_ptr<ruvia::operation_scope>* scope_;
+            void expire() noexcept {
+                *cleanup_active_ = true;
+                children_->spawn(join(*this));
+                *cleanup_active_ = false;
+            }
+
+            std::unique_ptr<ruvia::detail::operation_scope>* scope_;
             ruvia::task_scope* children_;
             bool* cleanup_active_;
             bool* joined_during_cleanup_;
@@ -1120,16 +1127,11 @@ TEST(Ruvia, scoped_capability_reentrant_join_waits_for_cleanup) {
             value.scope_->reset();
         }
         static ruvia::task<void> drive(const ruvia::worker_ref& worker, bool& joined_during_cleanup) {
-            auto scope = std::make_unique<ruvia::operation_scope>();
+            auto scope = std::make_unique<ruvia::detail::operation_scope>();
             ruvia::task_scope children(worker);
             bool cleanup_active = false;
             state value{&scope, &children, &cleanup_active, &joined_during_cleanup};
-            ruvia::scoped_capability_registration capability(*scope, &value, [](void* raw) noexcept {
-                auto& cleanup = *static_cast<state*>(raw);
-                *cleanup.cleanup_active_ = true;
-                cleanup.children_->spawn(join(cleanup));
-                *cleanup.cleanup_active_ = false;
-            });
+            ruvia::detail::capability_registration<&state::expire> capability(*scope, value);
             scope->close();
             co_await children.join();
         }
@@ -1150,17 +1152,18 @@ TEST(Ruvia, scoped_capability_cleanup_can_reenter_scope_close_during_join_resume
     const auto loop = loops.loop(0);
     const auto worker_value = loop.worker();
     ruvia::worker_signal signal(worker_value);
-    ruvia::operation_scope scope;
+    ruvia::detail::operation_scope scope;
     int expired = 0;
     struct reentrant_closer final {
-        ruvia::operation_scope* scope_;
+        void expire() noexcept {
+            ++*expired_;
+            scope_->close();
+        }
+
+        ruvia::detail::operation_scope* scope_;
         int* expired_;
     } state{&scope, &expired};
-    ruvia::scoped_capability_registration registration(scope, &state, [](void* raw) noexcept {
-        auto* value = static_cast<reentrant_closer*>(raw);
-        ++*value->expired_;
-        value->scope_->close();
-    });
+    ruvia::detail::capability_registration<&reentrant_closer::expire> registration(scope, state);
     struct concurrent_join_case final {
         static ruvia::task<void> wait_for_signal(ruvia::worker_signal& sig) {
             static_cast<void>(co_await sig.wait());
@@ -1168,11 +1171,11 @@ TEST(Ruvia, scoped_capability_cleanup_can_reenter_scope_close_during_join_resume
         static ruvia::task<void> run_operation(ruvia::task<void>& op) {
             co_await std::move(op);
         }
-        static ruvia::task<void> run_join(ruvia::operation_scope& target_scope, bool& completed) {
+        static ruvia::task<void> run_join(ruvia::detail::operation_scope& target_scope, bool& completed) {
             co_await target_scope.close_and_join();
             completed = true;
         }
-        static ruvia::task<void> drive(const ruvia::worker_ref& worker, ruvia::worker_signal& sig, ruvia::operation_scope& target_scope, ruvia::task<void>& op, bool& completed) {
+        static ruvia::task<void> drive(const ruvia::worker_ref& worker, ruvia::worker_signal& sig, ruvia::detail::operation_scope& target_scope, ruvia::task<void>& op, bool& completed) {
             ruvia::task_scope tasks(worker);
             tasks.spawn(run_operation(op));
             tasks.spawn(run_join(target_scope, completed));
@@ -1180,7 +1183,7 @@ TEST(Ruvia, scoped_capability_cleanup_can_reenter_scope_close_during_join_resume
             co_await tasks.join();
         }
     };
-    auto operation = ruvia::make_scoped_operation(scope, concurrent_join_case::wait_for_signal(signal));
+    auto operation = scope.attach(concurrent_join_case::wait_for_signal(signal));
     bool joined_completed = false;
     auto root = loop.start(concurrent_join_case::drive(worker_value, signal, scope, operation, joined_completed));
     loops.start();
@@ -1199,7 +1202,7 @@ TEST(Ruvia, scoped_operation_close_drain_allows_reentrant_join_to_destroy_scope_
     int expired_count = 0;
     bool join_destroyed_scope = false;
     struct inline_destroy_input final {
-        inline_destroy_input(payload_counter& res, ruvia::task_scope& children, std::unique_ptr<ruvia::operation_scope>& owned_scope, int& expired, bool& destroyed) :
+        inline_destroy_input(payload_counter& res, ruvia::task_scope& children, std::unique_ptr<ruvia::detail::operation_scope>& owned_scope, int& expired, bool& destroyed) :
             payload_(512, 'd', &res),
             children_(&children),
             owned_scope_(&owned_scope),
@@ -1214,7 +1217,7 @@ TEST(Ruvia, scoped_operation_close_drain_allows_reentrant_join_to_destroy_scope_
             expired_(other.expired_),
             destroyed_(other.destroyed_) {}
         inline_destroy_input& operator=(inline_destroy_input&&) = delete;
-        static ruvia::task<void> join_and_reset(std::unique_ptr<ruvia::operation_scope>* owned_scope, int* expired, bool* destroyed) {
+        static ruvia::task<void> join_and_reset(std::unique_ptr<ruvia::detail::operation_scope>* owned_scope, int* expired, bool* destroyed) {
             co_await (*owned_scope)->close_and_join();
             *destroyed = (*expired == 1);
             owned_scope->reset();
@@ -1227,7 +1230,7 @@ TEST(Ruvia, scoped_operation_close_drain_allows_reentrant_join_to_destroy_scope_
         }
         tracked_payload payload_;
         ruvia::task_scope* children_;
-        std::unique_ptr<ruvia::operation_scope>* owned_scope_;
+        std::unique_ptr<ruvia::detail::operation_scope>* owned_scope_;
         int* expired_;
         bool* destroyed_;
     };
@@ -1238,10 +1241,10 @@ TEST(Ruvia, scoped_operation_close_drain_allows_reentrant_join_to_destroy_scope_
         }
         static ruvia::task<void> drive(const ruvia::worker_ref& worker, payload_counter& res, int& expired, bool& destroyed) {
             ruvia::task_scope children(worker);
-            auto owned_scope = std::make_unique<ruvia::operation_scope>();
+            auto owned_scope = std::make_unique<ruvia::detail::operation_scope>();
             test_scoped_capability capability(*owned_scope, expired);
             {
-                auto cold_op = ruvia::make_scoped_operation(*owned_scope, cold_body(inline_destroy_input(res, children, owned_scope, expired, destroyed)));
+                auto cold_op = owned_scope->attach(cold_body(inline_destroy_input(res, children, owned_scope, expired, destroyed)));
                 owned_scope->close();
             }
             co_await children.join();

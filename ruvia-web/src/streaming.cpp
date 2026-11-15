@@ -69,23 +69,23 @@ namespace ruvia {
 
 sse_writer::sse_writer(const sse_writer& other) noexcept :
     writer_(other.writer_),
-    registration_(other.registration_, this) {}
+    registration_(other.registration_, *this) {}
 
 sse_writer::sse_writer(sse_writer&& other) noexcept :
     writer_(std::exchange(other.writer_, nullptr)),
-    registration_(std::move(other.registration_), this) {}
+    registration_(std::move(other.registration_), *this) {}
 
 sse_writer::sse_writer(response_stream_writer& writer) noexcept :
     writer_(writer.operation_scope_.active() ? &writer : nullptr),
-    registration_(writer.operation_scope_, this, &sse_writer::expire_capability) {}
+    registration_(writer.operation_scope_, *this) {}
 
 response_stream_writer& sse_writer::writer() const {
     registration_.require_active();
     return *writer_;
 }
 
-void sse_writer::expire_capability(void* target) noexcept {
-    static_cast<sse_writer*>(target)->writer_ = nullptr;
+void sse_writer::expire_capability() noexcept {
+    writer_ = nullptr;
 }
 
 http_tunnel& context::tunnel() const {
@@ -166,11 +166,11 @@ task<timer_sleep_result> sleep_stopped_by_either(void* target, task<timer_sleep_
 }  // namespace
 
 task<std::optional<std::span<const std::byte>>> body_reader::read(operation_options operation) & {
-    return ::ruvia::make_scoped_operation(operation_scope_, read_body<std::span<const std::byte>>(read_, read_active_, std::move(operation)));
+    return operation_scope_.attach(read_body<std::span<const std::byte>>(read_, read_active_, std::move(operation)));
 }
 
 task<std::optional<std::string_view>> body_reader::text(operation_options operation) & {
-    return ::ruvia::make_scoped_operation(operation_scope_, read_body<std::string_view>(read_, read_active_, std::move(operation)));
+    return operation_scope_.attach(read_body<std::string_view>(read_, read_active_, std::move(operation)));
 }
 
 void response_stream_writer::require_output() const {
@@ -182,7 +182,7 @@ void response_stream_writer::require_output() const {
 
 task<stream_commit_result> response_stream_writer::commit(operation_options operation) & {
     require_output();
-    return ::ruvia::make_scoped_operation(operation_scope_, run_response_stream_output({target_, output_active_, *interrupts_, *worker_, context_}, std::move(operation), "response stream commit", [target = target_, commit = commit_] {
+    return operation_scope_.attach(run_response_stream_output({target_, output_active_, *interrupts_, *worker_, context_}, std::move(operation), "response stream commit", [target = target_, commit = commit_] {
         return commit(target);
     }));
 }
@@ -194,7 +194,7 @@ task<stream_commit_result> sse_writer::commit(operation_options operation) & {
 task<void> response_stream_writer::write(outbound_bytes chunk, operation_options operation) & {
     require_active();
     require_output();
-    return ::ruvia::make_scoped_operation(operation_scope_, write_transferred_chunk({target_, output_active_, *interrupts_, *worker_, context_}, write_, std::move(chunk).into_string(), std::move(operation)));
+    return operation_scope_.attach(write_transferred_chunk({target_, output_active_, *interrupts_, *worker_, context_}, write_, std::move(chunk).into_string(), std::move(operation)));
 }
 
 task<void> response_stream_writer::writeln(std::string_view chunk, operation_options operation) & {
@@ -209,9 +209,9 @@ task<void> response_stream_writer::writeln(std::string_view chunk, operation_opt
 task<timer_sleep_result> response_stream_writer::sleep(timeout_duration duration, stop_token stop) & {
     require_active();
     if (!stop.stoppable()) {
-        return ::ruvia::make_scoped_operation(operation_scope_, sleep_(target_, duration, stop_token_));
+        return operation_scope_.attach(sleep_(target_, duration, stop_token_));
     }
-    return ::ruvia::make_scoped_operation(operation_scope_, sleep_stopped_by_either(target_, sleep_, duration, stop_token_, std::move(stop)));
+    return operation_scope_.attach(sleep_stopped_by_either(target_, sleep_, duration, stop_token_, std::move(stop)));
 }
 
 task<void> response_stream_writer::end(std::span<const http_header_view> trailers, operation_options operation) & {
@@ -221,7 +221,7 @@ task<void> response_stream_writer::end(std::span<const http_header_view> trailer
     for (const auto& header : trailers) {
         owned_trailers_value.emplace_back(header.name(), header.value());
     }
-    return ::ruvia::make_scoped_operation(operation_scope_, end_owned({target_, output_active_, *interrupts_, *worker_, context_}, end_, std::move(owned_trailers_value), std::move(operation)));
+    return operation_scope_.attach(end_owned({target_, output_active_, *interrupts_, *worker_, context_}, end_, std::move(owned_trailers_value), std::move(operation)));
 }
 
 task<timer_sleep_result> sse_writer::sleep(timeout_duration duration, stop_token stop) & {
@@ -240,7 +240,7 @@ task<void> sse_writer::write(const sse_message& message, operation_options opera
 
 task<std::optional<multipart_stream_part>> multipart_reader::read(operation_options operation) & {
     registration_.require_active();
-    return ::ruvia::make_scoped_operation(operation_scope_, read_task(std::move(operation)));
+    return operation_scope_.attach(read_task(std::move(operation)));
 }
 
 body_reader& multipart_reader::get_body_reader() const {
@@ -248,11 +248,10 @@ body_reader& multipart_reader::get_body_reader() const {
     return *body_reader_;
 }
 
-void multipart_reader::expire_capability(void* target) noexcept {
-    auto& reader_value = *static_cast<multipart_reader*>(target);
-    reader_value.operation_scope_.close();
-    reader_value.body_reader_ = nullptr;
-    reader_value.state_.emplace<expired_state_type>();
+void multipart_reader::expire_capability() noexcept {
+    operation_scope_.close();
+    body_reader_ = nullptr;
+    state_.emplace<expired_state_type>();
 }
 
 task<std::optional<multipart_stream_part>> multipart_reader::read_task(operation_options operation) {

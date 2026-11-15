@@ -13,16 +13,14 @@
 | `"task.h"` | `template <typename T> class task final`、`template <typename T> class task_awaiter final` | 结构化惰性协程（仅支持移动构造与右值 `co_await`）。未启动（cold）或已完成（done）可安全析构；**销毁已启动但仍挂起的 `task` 直接触发 `std::terminate()`**。`co_await std::move(t)` 返回的 `task_awaiter<T>` 仅由 `task` 构造，不可复制、移动或取址 |
 | `"event_loop.h"` | `template <typename T> class root_task final` | 由 `event_loop::start(task<T>)` 或 `try_start(task<T>)` 返回的跨线程等待句柄。提供 `valid()`、`ready()`、`wait()`、`wait_for(operation_timeout)`、`std::move(root).get()`（仅右值提取并消费结果）；析构时若未调用 `get()` 则转为后台托管直至完成，**禁止在所属 `event_loop` 自身线程调用 `wait()` / `get()`** |
 | `"task_scope.h"` | `class task_scope final`、`task_scope::join_operation` | 单 Worker 亲和的结构化并发任务域。提供 `spawn(task<void>)`、`request_stop()`、`token()`、`stop_requested()`、`size()`、`empty()`、`join()`；构造期建立停止状态，`token() const&` 只读且不分配，第一个子任务失败时作用域自动请求停止；`join()` 返回可丢弃、仅启动前可移动的单次冷 `join_operation`，创建和启动须在绑定 Worker，启动后独占该作用域并关闭 `spawn`，并重新抛出第一个子任务失败；之后与其不等价（同一异常对象，或动态类型与 `what()` 均相同）的子任务失败在该子任务完成时交给 `report_unhandled_failure`，不被静默丢弃；析构前若曾 `spawn` 过任务，必须完成 `co_await scope.join()` |
-| `"operation_scope.h"` | `class operation_scope final`、`class scoped_capability_registration final`、`make_scoped_operation(...)` | 将借用型能力（capability）与惰性协程操作 `task<T>` 绑定到同一 Worker 作用域，`close_and_join()` 先回收冷协程帧并等待已启动操作完成后再失效 capability；`bind_worker(worker)` 借用该 Worker 句柄后，作用域内每个操作的启动、完成与冷帧回收都必须在该 Worker 上，否则 `std::terminate()` |
 | `"asio_bridge.h"` | `async_start(task<T>&&, token)`、`template <typename T> using task_completion_result`、`template <typename T> asio::awaitable<T> as_awaitable(task<T> task_value)` | 将 `ruvia::task<T>` 作为任意 Asio 完成令牌的异步操作启动，或适配为 `asio::awaitable<T>`；反向把 Asio 回调式操作适配为 Ruvia 等待物的胶水只在构建内部使用，不安装 |
 
 - **Asio 启动**：`async_start()` 在调用线程内联启动任务，经处理器关联执行器交付 `task_completion_result<T>`；`void` 任务为 `std::exception_ptr`，其余为 `std::variant<T, std::exception_ptr>`（值在前、失败在后）。
 - **启动分配**：操作状态使用处理器关联分配器，交付前先回收协程帧；`as_awaitable()` 与 `event_loop::try_start()` / `start()` 均基于 `async_start()`。
 - **根任务限时等待**：`wait_for()` 只接受 `operation_timeout`：相对上限自调用时计时，非正值在构造 `operation_timeout` 时抛 `std::invalid_argument`；已过的绝对截止期只报告当前完成状态；`ready()` 在结果被 `get()` 消费后为 `false`。
 - **根任务替换**：`root_task` 移动赋值先接管源状态，再退役旧状态；旧结果析构时重写源句柄或释放其宿主，不会丢失已接管的任务。
-- **作用域任务移交**：`make_scoped_operation()` 的结果可直接交给 `task_scope::spawn()`；执行完毕后的内部移交仍保留作用域登记，直到帧释放才允许 `close_and_join()` 完成。
-- **关闭重入**：冷帧清理可重入已开始关闭的 `operation_scope::close()`；存在运行中任务或尚未释放帧的完成任务时，仍须使用 `close_and_join()`，不能同步关闭。
-- **Worker 引用借用**：`task_scope`、`worker_signal` 构造及 `operation_scope::bind_worker()`、`sleep_for()`、`sleep_until()` 只接受左值 `worker_ref`，拒绝含 `const` 的右值；引用宿主须地址稳定并覆盖作用域、信号或等待操作的寿命。
+- **作用域操作（内部）**：`operation_scope.h` 中的 `operation_scope` 与 `capability_registration` 位于 `ruvia::detail`，不属于公开 API；请求、客户端等宿主用它回收冷协程帧并在宿主结束时失效借用能力。宿主返回的 `task<T>` 可直接交给 `task_scope::spawn()`。
+- **Worker 引用借用**：`task_scope`、`worker_signal` 构造及 `sleep_for()`、`sleep_until()` 只接受左值 `worker_ref`，拒绝含 `const` 的右值；引用宿主须地址稳定并覆盖作用域、信号或等待操作的寿命。
 
 ---
 
@@ -34,7 +32,7 @@
 | `"timeout_duration.h"` | `class timeout_duration final`、`saturating_duration_cast<Target>()`、`saturating_deadline(now, d)`、`ceil_milliseconds(d)`、`deadline_after(d)` | 通用时长工具。`timeout_duration` 是配置输入（超时、心跳间隔、Web 流等待）的受检整数时长，可为零或负，由消费者自定策略；`value()` 显式返回 `std::chrono::milliseconds`，不接受浮点 chrono 输入 |
 | `"operation_options.h"` | `class operation_timeout final`、`struct operation_options final { std::optional<operation_timeout> timeout_; stop_token stop_token_; }`、`override_operation_options(base, overrides)` | 单次操作上限规格（正的相对时长或绝对 `steady_clock::time_point` 截止期；相对构造非正抛 `std::invalid_argument`，`try_from_value()` 为返回 `std::nullopt` 的容错入口；`duration()` / `deadline()` 分别在对应形态有值，`deadline_from(start)` 解析截止期）与唯一的操作入参形状 |
 | `"operation_options.h"` | `class operation_deadline final`、`template <typename Kind = std::monostate> class deadline_lifecycle final` | `operation_deadline` 是已启动操作解析后的截止期，在异步阶段间共享：默认无上限，`operation_deadline(std::optional<operation_timeout>)` 按当前时刻解析；`remaining()` 返回 `std::optional<std::chrono::milliseconds>`，`timeout()` 以绝对形态转交给嵌套操作。`deadline_lifecycle` 是分配无关的截止期状态（inactive / active / expired 互斥） |
-| `"worker_timer.h"` | `class worker_timer_registration final`、`class worker_timer_cancellation final`、`enum class worker_timer_outcome { expired, cancelled }` | 单 Worker 侵入式定时器注册句柄，配合 `worker_ref::schedule_timer` 使用；提供 `cancel()`（静默取消）与 `cancel_and_notify()` |
+| `"worker_timer.h"` | `class worker_timer_registration final`、`class worker_timer_cancellation final`、`enum class worker_timer_outcome { expired, cancelled }` | 单 Worker 侵入式定时器注册句柄，以 `schedule(worker, deadline, cb)` 在指定 Worker 上登记；提供 `cancel()`（静默取消）与 `cancel_and_notify()` |
 | `"worker_timer.h"` | `enum class timer_sleep_result { elapsed, stop_requested }`、`class sleep_operation final`、`sleep_for(const worker_ref&, timeout_duration, [stop_token])`、`sleep_until(const worker_ref&, steady_clock::time_point, [stop_token])` | 在绑定 Worker 上挂起当前协程指定时长或直至截止时间点；时长是睡眠目标而非操作上限，`sleep_for(d)` 等价于 `sleep_until(now + d)`，非正时长与已过截止期一样不挂起直接 `elapsed`；返回可丢弃、仅启动前可移动的单次冷 `sleep_operation`，须在绑定 Worker 上 `co_await` 启动。若传入的 `stop_token` 触发或 Worker 停止定时器，返回 `stop_requested` 而不抛异常 |
 
 - **注册重入边界**：两种 `register_callback()` 入口均先固定取消状态，再内部移交回调或退役旧注册；后续不再读取 token 宿主，旧载荷析构可清空或销毁 token。
@@ -79,17 +77,17 @@ pool.join();
 | 头文件 | 核心公开类型 / 函数 | 说明与契约 |
 | --- | --- | --- |
 | `"event_loop.h"` | `class event_loop final`、`class event_loop_stop_registration final`、`class event_loop_attachment final`、`attach_event_loop(asio::io_context&, options = {})`、`class event_loop_pool final`、`struct event_loop_pool_options` | 指向单个 Worker 运行时及其 `asio::io_context` 的轻量引用，只承担循环生命周期职责（`valid()`、`worker()`、`io_context()`、`executor()`、`report_failure(e)`、`defer_cleanup(fn)`、`try_start(task<T>)` / `start(task<T>)`、`on_stop(fn)`）；准入状态、身份、投递与定时器经 `worker()` 返回的 `worker_ref` 访问，将 Ruvia Worker 挂载到外部自管 `asio::io_context` 的适配器（`loop()`、`run()`、`stop()`、`valid()`），以及管理固定数量独立事件循环线程的池（`start()`、`stop()`、`join()`、`loop_count()`、`loop(index)`、`next_loop()`、`loop_for(key)`） |
-| `"worker_ref.h"` | `class worker_ref final`、`using worker_id_type = std::uint64_t`、`enum class post_status`、`template <typename Sig> class post_outcome final`、`class worker_shutdown_registration final`、`enum class worker_registration_status { registered, worker_stopping }`、`concept worker_shutdown_observer` | 跨线程安全的稳定派发端点与有界队列投递结果。提供 `valid()`、`accepting()`、`is_current()`、`id()`、`blocking_pool()`（借用的阻塞池或空）、`post(fn)`、`post_factory(factory)`、`post_payload(payload, wrap)`（准入后才把负载包装成回调，拒绝时退回负载）、`schedule_timer(...)`、`defer_resume(handle)`、`defer_completion(fn)`、`register_shutdown(owner, &Owner::registration)` |
+| `"worker_ref.h"` | `class worker_ref final`、`using worker_id_type = std::uint64_t` | 跨线程安全的稳定派发端点；`post(fn)` 返回 `post_outcome<>`（见 `delivery_result.h`）。公开面仅 `valid()`、`accepting()`、`is_current()`、`id()`、`post(fn)`；内部操作（`blocking_pool`、`post_factory`、`post_payload`、`defer_resume`、`defer_completion`、`register_shutdown`）移至 `detail::worker_ref_access`，定时器登记移至 `worker_timer_registration::schedule`；停机登记类型 `detail::worker_shutdown_registration` 与概念 `detail::worker_shutdown_observer` 同属 `detail` |
 | `"worker_runtime.h"` | `class worker_runtime final`、`struct worker_runtime_options`、`struct worker_runtime_hooks`、`enum class worker_runtime_state` | 底层单 Worker 线程与两阶段启停状态机（`startup -> ready -> serve -> stop_admission -> finalize -> drain -> shutdown -> join`）；`take_failure()` 接管首个失败的上报责任，析构不再上报，重复调用返回同一失败；`loop() &` 返回该 Worker 的 `event_loop`（首次调用时创建，`report_failure()` 使运行时失败），此后运行时的 `stop_admission` 等待循环的根任务、停机回调与清理排空后才执行；循环借用运行时，任何副本不得比运行时活得久 |
 | `"worker_runtime.h"` | `class worker_group final` | 协调多个 `worker_runtime` 同步完成两阶段启动屏障（`start()` / `serve()`）与停机回收（`request_stop()` / `join()`） |
-| `"blocking_pool.h"` | `class blocking_pool final`、`template <typename T> class blocking_result final`、`run_blocking(worker_ref, fn, operation_options = {})`、`using blocking_submit_result` | 固定大小阻塞卸载线程池，由调用方拥有：通过 `event_loop_pool_options`、`attach_event_loop` 的选项或 `worker_runtime_options` 的 `blocking_pool_` 交给事件循环借用，须比事件循环存活更久；core 不持有隐式进程级池。`run_blocking` 在绑定 Worker 上 `co_await`，将 `fn` 提交至该 Worker 借用的池并在完成后回到原 Worker 恢复协程；Worker 没有池时返回 `blocking_status::unavailable`，不提交 `fn`（`worker_ref::blocking_pool()` 可预先查询）。`operation_options` 的 `timeout_` / `stop_token_` 只限定等待（相对上限自任务启动计时，绝对截止期可与调用方其他阶段共享）；已停止的令牌或已过期截止期同样不提交 `fn`。调用或交付值的异常保存在结果中并由 `value()` 或 `take_value()` 重新抛出。超时、取消或 Worker 停机先释放等待者；已开始的调用继续完成，但只持有自身数据，迟到结果被丢弃 |
+| `"blocking_pool.h"` | `class blocking_pool final`、`template <typename T> class blocking_result final`、`run_blocking(worker_ref, fn, operation_options = {})` | 固定大小阻塞卸载线程池。`event_loop_pool_options` 与 `attach_event_loop` 选项的 `blocking_pool_` 为 `std::variant<blocking_pool_options, blocking_pool*>`：默认 `{.thread_count_ = 1}` 由循环自行拥有一个池（池内各循环共享），指针借用调用方的池（须比事件循环存活更久），`nullptr` 不用池；`worker_runtime_options::blocking_pool_` 仅借用。`run_blocking` 在绑定 Worker 上 `co_await`，将 `fn` 提交至该 Worker 的池并在完成后回到原 Worker 恢复协程；Worker 没有池时返回 `blocking_status::unavailable`，不提交 `fn`（内部可经 `detail::worker_ref_access::blocking_pool(worker)` 预先查询）。`operation_options` 的 `timeout_` / `stop_token_` 只限定等待（相对上限自任务启动计时，绝对截止期可与调用方其他阶段共享）；已停止的令牌或已过期截止期同样不提交 `fn`。调用或交付值的异常保存在结果中并由 `value()` 或 `take_value()` 重新抛出。超时、取消或 Worker 停机先释放等待者；已开始的调用继续完成，但只持有自身数据，迟到结果被丢弃 |
 
-- **启动准入**：`try_start()` 先取有界准入槽位再移动任务，结果 `event_loop_start_result<T>`（即 `worker_delivery_result<task<T>, post_status, accepted, root_task<T>>`）的类别构造后固定；接受时以 `value()` / `take_value()` 取得 `root_task`，`queue_full` 或 `worker_stopping` 时以 `rejected()` / `take_rejected()` 退回未消费的冷任务，仅分配失败抛异常。
-- **严格启动**：`start()` 基于 `try_start()`，拒绝时销毁冷任务并抛 `event_loop_start_rejected`（`std::runtime_error` 子类），`status()` 区分队列满与停机；已准入但因停机未运行的根任务同样以该异常（`worker_stopping`）完成。
-- **完成通道**：`worker_ref::defer_completion(fn)` 是已准入操作的完成、取消与恢复通道，不受队列满拒绝，本线程调用也在后续轮次执行，不另取退役保护；执行上下文分离后返回 `false` 并在调用线程销毁 `fn`。
+- **启动准入**：`try_start()` 先取有界准入槽位再移动任务，结果 `event_loop_start_result<T>`（即 `delivery_result<task<T>, post_status, accepted, root_task<T>>`）的类别构造后固定；接受时以 `value()` / `take_value()` 取得 `root_task`，`queue_full` 或 `stopping` 时以 `rejected()` / `take_rejected()` 退回未消费的冷任务，仅分配失败抛异常。
+- **严格启动**：`start()` 基于 `try_start()`，拒绝时销毁冷任务并抛 `event_loop_start_rejected`（`std::runtime_error` 子类），`status()` 区分队列满与停机；已准入但因停机未运行的根任务同样以该异常（`stopping`）完成。
+- **完成通道**：`detail::worker_ref_access::defer_completion(worker, fn)` 是已准入操作的完成、取消与恢复通道，不受队列满拒绝，本线程调用也在后续轮次执行，不另取退役保护；执行上下文分离后返回 `false` 并在调用线程销毁 `fn`。
 - **循环清理**：`event_loop::defer_cleanup(fn)` 是循环级冷路径资源清理，不属于任何已准入操作：绕过有界准入但取退役保护，回调及其输入在循环释放执行上下文前退役；退役开始后可返回 `false`。
-- **停机观察**：`register_shutdown(owner, &Owner::registration)` 将所有者成员链入 Worker 停机登记，停机线程先对全部所有者调用 `worker_stopping() noexcept`，再调用 `worker_stopping_complete() noexcept`；仅持弱引用，已在析构的所有者被跳过。
-- **停机登记寿命**：`worker_shutdown_registration` 须为所有者首个数据成员，析构即摘链；Worker 已停止接收时返回 `worker_stopping` 且不链入，重复登记抛 `std::logic_error`。
+- **停机观察**：`detail::worker_ref_access::register_shutdown(worker, owner, &Owner::registration)` 将所有者成员链入 Worker 停机登记，停机线程先对全部所有者调用 `worker_stopping() noexcept`，再调用 `worker_stopping_complete() noexcept`；仅持弱引用，已在析构的所有者被跳过。
+- **停机登记寿命**：`detail::worker_shutdown_registration` 须为所有者首个数据成员，析构即摘链；Worker 已停止接收时返回 `false` 且不链入，重复登记抛 `std::logic_error`。
 - **原生执行器**：`event_loop::executor()` 是唯一公开的原生执行器入口，返回 `asio::io_context::executor_type`，可直接创建 socket、定时器并接入其他 Asio 库；不是有界业务准入入口。
 - **执行器寿命**：空 loop 或执行上下文已分离时获取执行器抛 `std::logic_error`；停机排空期间仍可供在途操作完成。执行器借用物理 context，不延长其寿命；调用方须在运行时退役前结束原生操作。
 - **外部循环失败出口**：`event_loop_attachment_options::failure_` 拥有接收 `std::exception_ptr` 的回调；未配置时保留默认诊断。具名 options 通过 `std::move` 交给 `attach_event_loop()`。
@@ -101,7 +99,7 @@ pool.join();
 - **Windows 退出准备**：在另一个 worker 上 `co_await runtime.prepare_thread_join(caller)`，等待停止派发退出并启动必要的冷排空。
 - **Windows 退出完成**：返回调用方拥有的 `SYNCHRONIZE` 线程 `HANDLE`（以 `uintptr_t` 交付；`0` 表示已 join）；异步等待句柄信号后调用 `join()`，不占阻塞池。
 - **Windows 退出寿命**：运行时须存活至异步操作完成，不得并发执行其他 join。
-- **阻塞池投递**：`submit(fn)` 返回 `blocking_submit_result`：先取槽位再移动负载，`queue_full` / `pool_stopped`（含移动期间停机）时经 `rejected()` / `take_rejected()` 完整退回闭包，不在调用方线程销毁；`run_blocking` 被拒后由协程销毁退回闭包，其守卫以 `pool_stopped` 应答无人等待的 one_shot。
+- **阻塞池投递**：`submit(fn)` 与 `worker_ref::post` 同返回 `post_outcome<>`：先取槽位再移动负载，`queue_full` / `stopping`（含移动期间停机）时经 `rejected()` / `take_rejected()` 完整退回闭包，不在调用方线程销毁；`run_blocking` 被拒后由协程销毁退回闭包，其守卫以 `blocking_status::pool_stopped` 应答无人等待的 one_shot。
 - **阻塞池停止**：`stop()` 永久关闭准入，在锁外销毁未启动任务，不中断运行中的调用。
 - **阻塞池等待**：`join()` 等待工作线程、在途投递和队列任务析构完成；池线程不得自等，非池排空线程重入 `join()` 时不等待自身析构。
 
@@ -116,12 +114,14 @@ pool.join();
 
 | 头文件 | 核心公开类型 / 函数 | 说明与契约 |
 | --- | --- | --- |
-| `"worker_result.h"` | `enum class worker_wait_status { value, closed, worker_stopping, timed_out, cancelled }`、`template <typename T> class worker_wait_result final` | Worker 等待操作的统一返回包装（提供 `status()`、`has_value()`、`value()`、`take_value()`）；`with_value(value)` / `with_status(status)` 构造同类结果，`with_status(value)` 抛 `std::invalid_argument`。同头的 `worker_delivery_result<T, Status, Accepted, AcceptedValue = void>` 是 post / submit / send / complete / start 的统一投递结果：拒绝时持有未消费负载，`AcceptedValue` 非 `void` 时接受结果持有其值（`value()` / `take_value()`）；只能由投递原语产生，外部不可构造 |
-| `"worker_wait.h"` | `template <typename T, typename State> class worker_wait_slot final`、`template <typename T, typename State> class worker_single_wait_awaiter final`、`concept worker_wait_state`、`make_worker_wait_state<State>(args...)` | 单挂起等待者的 Worker 绑定等待构件，`channel` 与 `one_shot` 即由其组合；外部原语按同一契约组合超时、取消与 `worker_stopping` |
+| `"wait_result.h"` | `enum class wait_status { value, closed, worker_stopping, timed_out, cancelled }`、`template <typename T> class wait_result final` | Worker 等待操作的统一返回包装（提供 `status()`、`has_value()`、`value()`、`take_value()`）；`with_value(value)` / `with_status(status)` 构造同类结果，`with_status(value)` 抛 `std::invalid_argument` |
+| `"delivery_result.h"` | `template <typename T, typename Status, Status Accepted, typename AcceptedValue = void> class delivery_result final`、`enum class post_status { accepted, queue_full, stopping }`、`template <typename Sig = void()> using post_outcome` | post / submit / send / complete / start 的统一投递结果：拒绝时持有未消费负载，`AcceptedValue` 非 `void` 时接受结果持有其值（`value()` / `take_value()`）；只能由投递原语产生，外部不可构造。`post_status::stopping` 表示 Worker 或阻塞池不再接收 |
+| `"worker_timer.h"` | `class wait_bounds final` | 一次 Worker 绑定等待的截止期部分：`start(worker, msg)` 解析相对上限，`ended()` 依次报告 `cancelled`、`timed_out`，`arm_deadline<Owner, &Owner::end>(owner, watch_worker)` 布置计时器，到期以 `timed_out`、定时器队列停止以 `worker_stopping` 回调；队列已停返回 `false`。停止投递留给所有者；须声明在所有者末位的 `stop_registration` 之前，持锁完成路径只调用 `cancel_deadline()` |
+| `"worker_timer.h"` | `worker_timer_registration::schedule(worker, deadline, fn)` | 返回 `bool`：定时器队列已停时返回 `false`，不存储、不调用 `fn` |
+| `"worker_wait.h"` | `template <typename T, typename State> class worker_wait_slot final`、`template <typename T, typename State> class worker_single_wait_awaiter final`、`concept worker_wait_state`、`make_worker_wait_state<State>(args...)` | 单挂起等待者的 Worker 绑定等待构件，`channel` 与 `one_shot` 即由其组合；截止期经 `wait_bounds`，外部原语按同一契约组合超时、取消与 `worker_stopping` |
 | `"channel.h"` | `make_channel<T>(worker_ref, channel_options)`、`class channel_sender<T>`、`class channel_receiver<T>`、`channel_receiver<T>::receive_operation` | 有界 MPSC 通道：`channel_sender` 可拷贝并支持多生产者跨线程 `send(value)`；`channel_receiver` 绑定单个目标 Worker，`receive(operation_options = {})` 返回可丢弃、仅启动前可移动的单次冷 `receive_operation`，须在绑定 Worker 上 `co_await` 启动。`send_wait(value, operation_options = {})` 返回冷 `channel_send_operation<T>`：有空位立即投递，满载时挂起，多个等待发送方按 FIFO 取得接收方释放的空位（空位预留给队首等待者，经其 Worker 的恢复通道恢复，不内联）；须在某个 Worker 线程上 `co_await`，在该 Worker 恢复，不在 Worker 上抛 `std::logic_error`；关闭、任一方 Worker 停机（`worker_stopping`）、超时（`timed_out`）或取消（`cancelled`）时经结果完整退回值，`send()` 永不返回后两者。容量限制排队值与正在构造的发送预留；预分配一个额外交付槽，若所有槽均暂被接收或销毁操作占用，发送可返回 `full`。并发发送按发布顺序交付；构造期间关闭通道则返回被拒绝的值。`send()` 调用期间须保持调用者对象存活，包括值的移动和析构 |
 | `"one_shot.h"` | `make_one_shot<T>(worker_ref)`、`class one_shot_completion<T>`、`class one_shot_receiver<T>`、`one_shot_receiver<T>::wait_operation` | 跨线程单次值交付原语：`complete(value)` 可在任意线程调用，`wait(operation_options = {})` 返回可丢弃、仅启动前可移动的单次冷 `wait_operation`，须在绑定 Worker 上 `co_await` 启动。另一交付正在构造值时返回 `in_progress` 和被拒绝的值；构造失败后可重试，构造期间接收端关闭或 Worker 停机则拒绝交付。已交付值在接收端移动失败时异常传给接收端且值已消费。调用期间须保持 completion 存活，包括值的移动和析构 |
 | `"worker_signal.h"` | `class worker_signal final`、`worker_signal::wait_operation` | 同 Worker 内部闩锁合并通知；`wait()` 返回可丢弃、仅启动前可移动的单次冷等待器，不是 `task<void>`。创建和启动须在所属 Worker，`notify()` 同样须在所属 Worker 调用，否则二者都抛 `std::logic_error`；启动后必须等待完成；支持多个等待者，直接挂入调用方协程帧 |
-| `"worker_notification.h"` | `class worker_notification final` | 跨线程闩锁合并通知原语（任意线程无锁 `notify()`，所属 Worker 上 `co_await notification.wait()`）。从 `event_loop` 构造时仅接受左值、拒绝含 `const` 的右值；借用的 loop 须保持地址稳定并覆盖通知对象的寿命 |
 | `"pool_lease.h"` | `class pool_lease_scheduler final`、`class pool_lease_acquire final` | 单 Worker 连接/槽位池租约调度器（空闲时同步返回槽位下标，满载时挂起排队并支持超时与取消）；`acquire(operation_options = {})`。与 `channel` / `one_shot` 一致，绑定 Worker 的停机通知到达或定时器队列停止后，排队中与新到的满载 acquire 以 `worker_stopping` 完成，空闲槽位仍同步租出 |
 | `"task.h"` | `void collect_thread_heap() noexcept` | 强制收集调用线程的 mimalloc 线程堆及共享 arena 的待回收范围，不影响存活分配 |
 | `"move_only_function.h"` | `template <typename Sig> class move_only_function` | 带 `3 * sizeof(void*)` 小对象内联优化（SBO）的仅移动可调用包装器；支持普通与 `noexcept` 签名，后者编译期拒绝可抛目标。`const` 包装器仍可调用可变目标，跨线程调用须由目标同步。移动赋值与赋空共用退役路径：先提取源并提交，再于独立存储销毁旧目标，支持旧目标拥有源包装器；旧目标析构时的重入赋值最终生效 |
@@ -132,17 +132,20 @@ pool.join();
 
 `move_only_function<R(Args...)>` 的引用结果必须由目标直接返回兼容引用，允许增加 cv 限定及派生到基类转换；返回值或需要产生临时量的结果不能绑定到引用签名。不同工具链采用相同约束，不依赖编译警告阻止悬垂。需要自定义引用转换（包括按值返回 `std::reference_wrapper`）时，用显式 `-> T&` / `-> const T&` 的适配 lambda 返回实际存活对象；包装器不延长该对象的寿命。值返回签名仍支持正常隐式转换。
 
-`worker_wait_result<T>` 的状态分类在构造后固定；当 `T` 支持时可复制或移动构造，但不可重新赋值。替换保存的结果时使用新局部变量或 `std::optional` 的 `emplace()`，不要给结果或其 `optional` 直接赋值。`value()` 仍可修改 payload，移动构造和 `take_value()` 不改变源结果的状态分类，payload 遵循自身移动语义；其构造或提取抛异常不会让已有结果失去可查询的状态。通道与单次交付仍支持可抛异常的 payload，不要求其移动为 `noexcept`。
+`wait_result<T>` 的状态分类在构造后固定；当 `T` 支持时可复制或移动构造，但不可重新赋值。替换保存的结果时使用新局部变量或 `std::optional` 的 `emplace()`，不要给结果或其 `optional` 直接赋值。`value()` 仍可修改 payload，移动构造和 `take_value()` 不改变源结果的状态分类，payload 遵循自身移动语义；其构造或提取抛异常不会让已有结果失去可查询的状态。通道与单次交付仍支持可抛异常的 payload，不要求其移动为 `noexcept`。
 
-- **拒绝负载提取**：`worker_delivery_result::take_rejected()`（及接受值的 `take_value()`）成功后清空负载；失败时不额外销毁负载，内容遵循 payload 自身移动语义，可检查后重试。两种情况下结果状态均不变。
+- **拒绝负载提取**：`delivery_result::take_rejected()`（及接受值的 `take_value()`）成功后清空负载；失败时不额外销毁负载，内容遵循 payload 自身移动语义，可检查后重试。两种情况下结果状态均不变。
 - **交付状态保活**：`one_shot_completion::complete()` 与 `channel_sender::send()` 在移动 payload 前固定状态所有权；同步重绑调用句柄不改变本次操作目标，原状态保留至提交或拒绝处理完成。
 
-- **等待构件状态**：共享状态提供 `worker()`、`lock_state()` 与 `wait_slot()`，所有槽位调用都持该锁；`worker_wait_state` 还要求名为 `shutdown_registration_` 的 `worker_shutdown_registration` 数据成员并满足 `worker_shutdown_observer`，经它把 `worker_stopping` 交给槽位。
+- **等待构件状态**：共享状态提供 `worker()`、`lock_state()` 与 `wait_slot()`，所有槽位调用都持该锁；`worker_wait_state` 还要求名为 `shutdown_registration_` 的 `detail::worker_shutdown_registration` 数据成员并满足 `detail::worker_shutdown_observer`，经它把 `worker_stopping` 交给槽位。
 - **等待构件创建**：`make_worker_wait_state<State>(args...)` 分配状态并把 `shutdown_registration_` 链入其 Worker 的停机登记；Worker 已停止接收时抛 `std::runtime_error`。
 - **等待构件协议**：每次等待按值持有一个 `worker_single_wait_awaiter`；`await_ready` 先 `start()`，再持锁 `complete_ready()` 已有结果或 `complete_or_publish()` 挂起，随后 `suspend()` / `take_result()`。
 - **等待构件交付**：领域事件持锁经 `wait_slot().complete(...)` 交付平凡可移动值或终止状态；启动前可移动，启动后地址固定，同一状态只允许一个挂起等待者。
 
 `pool_lease_scheduler` 的空闲槽位仍同步获取；`release(slot)` 向排队者提交槽位归属后，通过后续 Worker 轮次恢复该协程，不在释放调用栈内执行下一位消费者，避免连续立即释放形成递归链。`close()` 同样先向全部排队者提交 `closed` 结果，再通过后续 Worker 轮次恢复它们，调用方的关闭序列在任何等待者观察到关闭前完成。提交后的取消或 `close()` 不撤销已交接槽位；尚未交接的等待者按原取消、超时和关闭规则完成。不得依赖 `release()` 或 `close()` 返回代表排队协程已经完成，销毁 scheduler 前仍须等待已启动的 acquire 完成。
+
+- **租约取消**：停止请求按等待者 id 经 `worker_cancellation_post` 送达绑定 Worker；在该 Worker 上请求时在 `request_stop()` 返回前提交 `cancelled`，跨线程请求在后续轮次提交；恢复总在后续轮次。
+- **共享等待队列**：`pool_lease_acquire` 与 `channel_send_operation` 共用 `detail::waiter_list`（`waiter_list.h`）侵入式 FIFO。
 
 框架内存由 mimalloc 原生承载，全仓使用标准容器，不设 `std::pmr` 包装层或额外池层；协程帧直接使用 mimalloc。
 

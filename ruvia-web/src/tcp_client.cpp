@@ -222,11 +222,11 @@ public:
     }
     [[nodiscard]] task<std::optional<std::span<const std::byte>>> read(operation_options options) {
         lifecycle_.require_ready();
-        return make_scoped_operation(lifecycle_.operation_scope(), read_owned(shared_from_this(), std::move(options)));
+        return lifecycle_.operation_scope().attach(read_owned(shared_from_this(), std::move(options)));
     }
     [[nodiscard]] task<void> write(std::string bytes, operation_options options) {
         lifecycle_.require_ready();
-        return make_scoped_operation(lifecycle_.operation_scope(), write_owned(shared_from_this(), std::move(bytes), std::move(options)));
+        return lifecycle_.operation_scope().attach(write_owned(shared_from_this(), std::move(bytes), std::move(options)));
     }
     void request_close() noexcept {
         lifecycle_.request_close();

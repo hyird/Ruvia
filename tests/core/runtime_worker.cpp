@@ -367,7 +367,7 @@ struct erased_worker_callable final {
 
 bool test_worker_ref_callable_lifetime() {
     const auto run_rejected = [](ruvia::post_outcome<> rejected, bool& payload_valid) {
-        if (rejected != ruvia::post_status::worker_stopping || rejected.rejected() == nullptr) {
+        if (rejected != ruvia::post_status::stopping || rejected.rejected() == nullptr) {
             return false;
         }
         auto task_value = std::move(rejected).take_rejected();
@@ -542,7 +542,7 @@ bool test_worker_ref_callable_lifetime() {
         std::optional<reentrant_worker_callable> input;
         input.emplace(state_value);
         auto rejected = use_copy ? source->post(*input) : source->post(std::move(*input));
-        if (!state_value.retired_ || source || worker_value.valid() == detach || worker_value.accepting() || rejected != ruvia::post_status::worker_stopping || rejected.rejected() == nullptr) {
+        if (!state_value.retired_ || source || worker_value.valid() == detach || worker_value.accepting() || rejected != ruvia::post_status::stopping || rejected.rejected() == nullptr) {
             return false;
         }
         auto task_value = std::move(rejected).take_rejected();
@@ -698,7 +698,7 @@ bool test_worker_ref_callable_lifetime() {
     auto closed_attachment = ruvia::attach_event_loop(closed_context, {.queue_capacity_ = 1});
     const auto closed_worker = closed_attachment.loop().worker();
     closed_attachment.stop();
-    if (!closed_worker.valid() || closed_worker.accepting() || closed_worker.post([] {}) != ruvia::post_status::worker_stopping) {
+    if (!closed_worker.valid() || closed_worker.accepting() || closed_worker.post([] {}) != ruvia::post_status::stopping) {
         return false;
     }
     closed_attachment.run();
@@ -706,7 +706,7 @@ bool test_worker_ref_callable_lifetime() {
         return false;
     }
     ruvia::worker_ref invalid;
-    return !invalid.valid() && !invalid.accepting() && invalid.post([] {}) == ruvia::post_status::worker_stopping && repeated_resource.allocation_count() > 0 && repeated_resource.allocation_count() == repeated_resource.deallocation_count();
+    return !invalid.valid() && !invalid.accepting() && invalid.post([] {}) == ruvia::post_status::stopping && repeated_resource.allocation_count() > 0 && repeated_resource.allocation_count() == repeated_resource.deallocation_count();
 }
 
 bool test_post_factory_keeps_endpoint_through_owner_retirement() {
@@ -717,7 +717,7 @@ bool test_post_factory_keeps_endpoint_through_owner_retirement() {
     auto payload = std::make_shared<int>(42);
     const std::weak_ptr<int> observed = payload;
     bool ran = false;
-    const auto status = worker.post_factory([owned = std::move(payload), &attachment, &worker, &ran]() mutable -> ruvia::move_only_function<void()> {
+    const auto status = ruvia::detail::worker_ref_access::post_factory(worker, [owned = std::move(payload), &attachment, &worker, &ran]() mutable -> ruvia::move_only_function<void()> {
         attachment.reset();
         worker = ruvia::worker_ref{};
         return [owned = std::move(owned), &ran] {
@@ -737,14 +737,14 @@ bool test_post_factory_exception_releases_admission() {
     const auto expected = std::make_error_code(std::errc::argument_out_of_domain);
     bool propagated = false;
     try {
-        static_cast<void>(worker_value.post_factory([&expected]() -> ruvia::move_only_function<void()> {
+        static_cast<void>(ruvia::detail::worker_ref_access::post_factory(worker_value, [&expected]() -> ruvia::move_only_function<void()> {
             throw std::system_error(expected);
         }));
     } catch (const std::system_error& error) {
         propagated = error.code() == expected;
     }
     bool ran = false;
-    const auto status = worker_value.post_factory([&ran]() -> ruvia::move_only_function<void()> {
+    const auto status = ruvia::detail::worker_ref_access::post_factory(worker_value, [&ran]() -> ruvia::move_only_function<void()> {
         return [&ran] {
             ran = true;
         };
@@ -759,19 +759,19 @@ bool test_post_factory_close_drains_admitted_callback() {
     auto attachment = ruvia::attach_event_loop(context, {.queue_capacity_ = 1});
     const auto worker_value = attachment.loop().worker();
     int calls = 0;
-    const auto status = worker_value.post_factory([&]() -> ruvia::move_only_function<void()> {
+    const auto status = ruvia::detail::worker_ref_access::post_factory(worker_value, [&]() -> ruvia::move_only_function<void()> {
         attachment.stop();
         return [&calls] {
             ++calls;
         };
     });
     bool rejected_factory_called = false;
-    const auto rejected = worker_value.post_factory([&]() -> ruvia::move_only_function<void()> {
+    const auto rejected = ruvia::detail::worker_ref_access::post_factory(worker_value, [&]() -> ruvia::move_only_function<void()> {
         rejected_factory_called = true;
         return [] {};
     });
     context.run();
-    return status == ruvia::post_status::accepted && calls == 1 && rejected == ruvia::post_status::worker_stopping && !rejected_factory_called;
+    return status == ruvia::post_status::accepted && calls == 1 && rejected == ruvia::post_status::stopping && !rejected_factory_called;
 }
 
 struct queue_destructor_state final {
@@ -845,7 +845,7 @@ bool test_cancellation_reaches_worker_with_saturated_or_closed_queue(bool close)
         attachment.stop();
     }
     const auto rejected = worker_value.post([] {});
-    if (rejected.status() != (close ? ruvia::post_status::worker_stopping : ruvia::post_status::queue_full)) {
+    if (rejected.status() != (close ? ruvia::post_status::stopping : ruvia::post_status::queue_full)) {
         return false;
     }
     source.request_stop();
@@ -947,7 +947,7 @@ bool test_event_loop_post_borrow_and_rejected_callable_ownership() {
     auto invalid = ruvia::event_loop{}.worker().post([payload = post_payload(&resource), &invalid_payload_valid]() mutable {
         invalid_payload_valid.store(payload.bytes_.size() == 4096 && payload.bytes_.front() == 'x' && payload.bytes_.back() == 'x', std::memory_order_release);
     });
-    if (invalid != ruvia::post_status::worker_stopping || invalid.rejected() == nullptr || resource.allocation_count() == resource.deallocation_count()) {
+    if (invalid != ruvia::post_status::stopping || invalid.rejected() == nullptr || resource.allocation_count() == resource.deallocation_count()) {
         return false;
     }
     auto invalid_task = std::move(invalid).take_rejected();
@@ -988,7 +988,7 @@ bool test_event_loop_post_borrow_and_rejected_callable_ownership() {
     auto rejected = closed.worker().post([payload = post_payload(&resource), &closed_payload_valid]() mutable {
         closed_payload_valid.store(payload.bytes_.size() == 4096 && payload.bytes_.front() == 'x' && payload.bytes_.back() == 'x', std::memory_order_release);
     });
-    if (rejected != ruvia::post_status::worker_stopping || rejected.rejected() == nullptr || resource.allocation_count() == resource.deallocation_count()) {
+    if (rejected != ruvia::post_status::stopping || rejected.rejected() == nullptr || resource.allocation_count() == resource.deallocation_count()) {
         return false;
     }
     auto retry = std::move(rejected).take_rejected();
@@ -1023,7 +1023,7 @@ bool test_event_loop_post_protects_reentrant_inline_move() {
     input.emplace(state_value);
 
     auto rejected = loop.worker().post(std::move(*input));
-    if (rejected != ruvia::post_status::worker_stopping || rejected.rejected() == nullptr || original_pool != nullptr || loop.worker().valid()) {
+    if (rejected != ruvia::post_status::stopping || rejected.rejected() == nullptr || original_pool != nullptr || loop.worker().valid()) {
         return false;
     }
     auto retry = std::move(rejected).take_rejected();
@@ -1059,7 +1059,7 @@ bool test_event_loop_post_protects_reentrant_heap_copy() {
     }
 
     auto rejected = loop.worker().post(*input);
-    if (rejected != ruvia::post_status::worker_stopping || rejected.rejected() == nullptr || original_pool != nullptr || loop.worker().valid()) {
+    if (rejected != ruvia::post_status::stopping || rejected.rejected() == nullptr || original_pool != nullptr || loop.worker().valid()) {
         return false;
     }
     input.reset();
@@ -1344,7 +1344,7 @@ bool test_dispatch_and_affinity() {
     const bool success = result_value.get();
     loops.stop();
     loops.join();
-    return success && stop_registration_value.valid() && stop_callback_ran && stop_callback_on_loop && first.worker().post([] {}) == ruvia::post_status::worker_stopping;
+    return success && stop_registration_value.valid() && stop_callback_ran && stop_callback_on_loop && first.worker().post([] {}) == ruvia::post_status::stopping;
 }
 
 bool test_bounded_queue() {
@@ -1385,7 +1385,7 @@ bool test_bounded_queue() {
     auto stopped = worker_value.post([&recovered_after_stop] {
         recovered_after_stop = true;
     });
-    if (stopped != ruvia::post_status::worker_stopping || stopped.rejected() == nullptr) {
+    if (stopped != ruvia::post_status::stopping || stopped.rejected() == nullptr) {
         return false;
     }
     auto stopped_task = std::move(stopped).take_rejected();
@@ -1448,7 +1448,7 @@ bool test_external_event_loop_attachment() {
             }
             throw;
         }
-        if (!dispatched_on_external_thread || !stop_registration_value.valid() || !stop_callback_ran || !stop_callback_on_loop || loop.worker().valid() || loop.worker().post([] {}) != ruvia::post_status::worker_stopping) {
+        if (!dispatched_on_external_thread || !stop_registration_value.valid() || !stop_callback_ran || !stop_callback_on_loop || loop.worker().valid() || loop.worker().post([] {}) != ruvia::post_status::stopping) {
             return false;
         }
     }
@@ -1873,7 +1873,7 @@ bool test_external_attachment_handles_context_destruction() {
     } catch (const std::logic_error&) {
         executor_rejected = true;
     }
-    const bool post_rejected = loop.worker().post([] {}) == ruvia::post_status::worker_stopping;
+    const bool post_rejected = loop.worker().post([] {}) == ruvia::post_status::stopping;
     attachment.stop();
     return io_context_rejected && executor_rejected && post_rejected && !attachment.valid() && !loop.worker().valid();
 }
@@ -1899,7 +1899,7 @@ bool test_join_stops_running_pool() {
     const auto loop = loops.loop(0);
     loops.start();
     loops.join();
-    return !loop.worker().accepting() && loop.worker().post([] {}) == ruvia::post_status::worker_stopping;
+    return !loop.worker().accepting() && loop.worker().post([] {}) == ruvia::post_status::stopping;
 }
 
 bool test_failure_propagation() {
@@ -1965,7 +1965,7 @@ bool test_join_before_start_drains_on_owners() {
     }
 
     loops.join();
-    const bool rejected_after_join = first.worker().post([] {}) == ruvia::post_status::worker_stopping && second.worker().post([] {}) == ruvia::post_status::worker_stopping;
+    const bool rejected_after_join = first.worker().post([] {}) == ruvia::post_status::stopping && second.worker().post([] {}) == ruvia::post_status::stopping;
     return first_stop.valid() && second_stop.valid() && rejected_after_join && task_calls.load(std::memory_order_relaxed) == 2 && stop_calls.load(std::memory_order_relaxed) == 2 && tasks_on_owners.load(std::memory_order_relaxed) && stops_on_owners.load(std::memory_order_relaxed);
 }
 
@@ -2084,7 +2084,7 @@ bool test_expired_loop() {
     } catch (const std::logic_error&) {
         context_rejected = true;
     }
-    return !loop.worker().valid() && !loop.worker().accepting() && context_rejected && loop.worker().post([] {}) == ruvia::post_status::worker_stopping;
+    return !loop.worker().valid() && !loop.worker().accepting() && context_rejected && loop.worker().post([] {}) == ruvia::post_status::stopping;
 }
 
 bool test_escaped_worker_ref_becomes_detached_endpoint() {
@@ -2099,7 +2099,7 @@ bool test_escaped_worker_ref_becomes_detached_endpoint() {
         }
     }
 
-    return !worker.valid() && !worker.accepting() && !worker.is_current() && worker.id() == 0 && worker.post([] {}) == ruvia::post_status::worker_stopping;
+    return !worker.valid() && !worker.accepting() && !worker.is_current() && worker.id() == 0 && worker.post([] {}) == ruvia::post_status::stopping;
 }
 
 bool test_abandoned_root_task_completes_when_queue_drain_fails() {
@@ -2131,7 +2131,7 @@ bool test_abandoned_root_task_completes_when_queue_drain_fails() {
         static_cast<void>(std::move(root).get());
         return false;
     } catch (const ruvia::event_loop_start_rejected& error) {
-        return error.status() == ruvia::post_status::worker_stopping;
+        return error.status() == ruvia::post_status::stopping;
     } catch (...) {
         return false;
     }

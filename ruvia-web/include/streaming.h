@@ -84,7 +84,7 @@ private:
     read_type read_;
     bool read_active_{false};
     const worker_ref* worker_{nullptr};
-    ::ruvia::operation_scope operation_scope_;
+    detail::operation_scope operation_scope_;
 };
 
 // 提交成功后只有这两种正常结果：可生产正文，或整个响应已完成。
@@ -208,7 +208,7 @@ private:
     const worker_ref* worker_{nullptr};
     context* context_{nullptr};
     bool output_active_{false};
-    ::ruvia::operation_scope operation_scope_;
+    detail::operation_scope operation_scope_;
 
     friend class sse_writer;
 };
@@ -246,10 +246,10 @@ private:
 
     explicit sse_writer(response_stream_writer& writer) noexcept;
     [[nodiscard]] response_stream_writer& writer() const;
-    static void expire_capability(void* target) noexcept;
+    void expire_capability() noexcept;
 
     response_stream_writer* writer_;
-    scoped_capability_registration registration_;
+    detail::capability_registration<&sse_writer::expire_capability> registration_;
 };
 
 class multipart_reader final {
@@ -263,7 +263,7 @@ public:
             if (body_reader_value.worker_ != nullptr) {
                 operation_scope_.bind_worker(*body_reader_value.worker_);
             }
-            registration_.bind(body_reader_value.operation_scope_, this, &multipart_reader::expire_capability);
+            registration_.bind(body_reader_value.operation_scope_, *this);
         }
     }
 
@@ -314,13 +314,13 @@ private:
     };
 
     [[nodiscard]] body_reader& get_body_reader() const;
-    static void expire_capability(void* target) noexcept;
+    void expire_capability() noexcept;
 
     body_reader* body_reader_;
     state_type state_;
     bool read_active_{false};
-    ::ruvia::operation_scope operation_scope_;
-    scoped_capability_registration registration_;
+    detail::operation_scope operation_scope_;
+    detail::capability_registration<&multipart_reader::expire_capability> registration_;
 
     [[nodiscard]] task<std::optional<multipart_stream_part>> read_task(operation_options operation);
 };

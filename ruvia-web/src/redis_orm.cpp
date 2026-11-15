@@ -171,7 +171,7 @@ redis_write_result redis_orm_exec_result(redis_value&& reply) {
         case 2:
             return redis_write_result(1);
         default:
-            throw redis_error(redis_error::code_type::protocol_error, "invalid entity write affected-row reply");
+            throw redis_error(backend_error_code::protocol_error, "invalid entity write affected-row reply");
     }
 }
 
@@ -180,19 +180,19 @@ redis_write_result redis_orm_delete_result(redis_value&& reply) {
     if (value == 0 || value == 1) {
         return redis_write_result(static_cast<std::uint64_t>(value));
     }
-    throw redis_error(redis_error::code_type::protocol_error, "invalid entity delete affected-row reply");
+    throw redis_error(backend_error_code::protocol_error, "invalid entity delete affected-row reply");
 }
 
 void redis_orm_status_result(redis_value&& reply) {
     if (redis_value_string(reply) != "OK") {
-        throw redis_error(redis_error::code_type::protocol_error, "invalid entity index status reply");
+        throw redis_error(backend_error_code::protocol_error, "invalid entity index status reply");
     }
 }
 
 std::uint64_t redis_orm_count(const redis_value& reply) {
     const auto count = redis_value_integer(reply);
     if (count < 0) {
-        throw redis_error(redis_error::code_type::protocol_error, "negative entity result count");
+        throw redis_error(backend_error_code::protocol_error, "negative entity result count");
     }
     return static_cast<std::uint64_t>(count);
 }
@@ -200,7 +200,7 @@ std::uint64_t redis_orm_count(const redis_value& reply) {
 std::uint64_t redis_orm_count_result(redis_value&& reply) {
     const auto values = redis_value_array(reply);
     if (values.size() != 1) {
-        throw redis_error(redis_error::code_type::protocol_error, "invalid entity count reply");
+        throw redis_error(backend_error_code::protocol_error, "invalid entity count reply");
     }
     return redis_orm_count(values.front());
 }
@@ -829,18 +829,18 @@ redis_compiled_command redis_search_mapping::compile_find(const redis_find_optio
     require_valid();
     const auto& mapping = mapping_;
     const detail::redis_query_compiler compiler(mapping);
-    const auto skip = options.skip_ ? options.skip_->value() : 0U;
-    const auto requested_take = options.take_ ? options.take_->value() : redis_find_default_take;
-    if (!std::in_range<std::int64_t>(skip) || !std::in_range<std::int64_t>(requested_take)) {
-        throw std::invalid_argument("Redis search skip and take must fit in 64-bit signed range");
+    const auto offset = options.offset_ ? options.offset_->value() : 0U;
+    const auto requested_limit = options.limit_ ? options.limit_->value() : redis_find_default_limit;
+    if (!std::in_range<std::int64_t>(offset) || !std::in_range<std::int64_t>(requested_limit)) {
+        throw std::invalid_argument("Redis search offset and limit must fit in 64-bit signed range");
     }
-    std::uint64_t take = requested_take;
+    std::uint64_t limit = requested_limit;
     bool count_only = false;
     switch (mode) {
         case redis_search_mode::rows:
             break;
         case redis_search_mode::first:
-            take = (std::min)(take, std::uint64_t{1});
+            limit = (std::min)(limit, std::uint64_t{1});
             break;
         case redis_search_mode::count:
             count_only = true;
@@ -852,11 +852,11 @@ redis_compiled_command redis_search_mapping::compile_find(const redis_find_optio
     if (options.order_.has_value()) {
         const auto& order = *options.order_;
         if (count_only) {
-            compiler.validate_sort_field(order.column_);
+            compiler.validate_sort_field(order.column());
         } else {
-            sort_field_name = compiler.sort_field(order.column_);
+            sort_field_name = compiler.sort_field(order.column());
         }
-        switch (order.direction_) {
+        switch (order.direction()) {
             case redis_order_direction::asc:
             case redis_order_direction::desc:
                 break;
@@ -881,16 +881,16 @@ redis_compiled_command redis_search_mapping::compile_find(const redis_find_optio
         args.emplace_back("0");
         args.emplace_back("0");
     } else {
-        std::string encoded_skip, encoded_take;
-        http_append_unsigned(encoded_skip, skip);
-        http_append_unsigned(encoded_take, take);
-        args.emplace_back(std::move(encoded_skip));
-        args.emplace_back(std::move(encoded_take));
+        std::string encoded_offset, encoded_limit;
+        http_append_unsigned(encoded_offset, offset);
+        http_append_unsigned(encoded_limit, limit);
+        args.emplace_back(std::move(encoded_offset));
+        args.emplace_back(std::move(encoded_limit));
     }
     if (sort_field_name.has_value()) {
         args.emplace_back("SORTBY");
         args.push_back(std::move(*sort_field_name));
-        args.emplace_back(options.order_->direction_ == redis_order_direction::asc ? "ASC" : "DESC");
+        args.emplace_back(options.order_->direction() == redis_order_direction::asc ? "ASC" : "DESC");
     }
     args.emplace_back("DIALECT");
     args.emplace_back("2");

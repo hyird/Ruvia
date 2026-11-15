@@ -119,7 +119,7 @@ TEST(Ruvia, redis_blocking_commands_ignore_the_ordinary_pool_timeout_and_honor_o
             try {
                 (void)co_await std::move(operation);
             } catch (const ruvia::redis_error& error) {
-                if (error.code() != ruvia::redis_error::code_type::timeout) {
+                if (error.code() != ruvia::backend_error_code::timeout) {
                     throw;
                 }
                 timed_out = true;
@@ -179,7 +179,7 @@ TEST(Ruvia, redis_blocking_commands_ignore_the_ordinary_pool_timeout_and_honor_o
             try {
                 (void)co_await std::move(operation);
             } catch (const ruvia::redis_error& error) {
-                if (error.code() != ruvia::redis_error::code_type::cancelled) {
+                if (error.code() != ruvia::backend_error_code::cancelled) {
                     throw;
                 }
                 rejected = true;
@@ -221,7 +221,7 @@ TEST(Ruvia, redis_request_session_with_a_user_token_keeps_request_cancellation) 
                 // The startup peer never replies: only a cancellation ends the wait.
                 (void)co_await context.redis().with_options({.stop_token_ = user.token()}).blpop(keys, ruvia::redis_block_wait::indefinitely());
             } catch (const ruvia::redis_error& error) {
-                cancelled_by_request = error.code() == ruvia::redis_error::code_type::cancelled && !user.stop_requested();
+                cancelled_by_request = error.code() == ruvia::backend_error_code::cancelled && !user.stop_requested();
             }
             co_return context.text("done");
         });
@@ -713,7 +713,7 @@ TEST(Ruvia, redis_sorted_set_replies_and_arguments_round_trip_infinite_scores) {
         try {
             (void)co_await redis.zscore("scores", "overflow");
         } catch (const ruvia::redis_error& error) {
-            rejected = error.code() == ruvia::redis_error::code_type::protocol_error;
+            rejected = error.code() == ruvia::backend_error_code::protocol_error;
         }
         EXPECT_TRUE(rejected);
     });
@@ -879,7 +879,7 @@ TEST(Ruvia, redis_string_array_replies_reject_nil_elements) {
             try {
                 (void)co_await std::move(operation);
             } catch (const ruvia::redis_error& error) {
-                rejected = error.code() == ruvia::redis_error::code_type::protocol_error;
+                rejected = error.code() == ruvia::backend_error_code::protocol_error;
             }
             EXPECT_TRUE(rejected);
         };
@@ -985,7 +985,7 @@ TEST(Ruvia, redis_typed_replies_retain_binary_payloads_and_recover_from_invalid_
             try {
                 (void)co_await std::move(operation);
             } catch (const ruvia::redis_error& error) {
-                rejected = error.code() == ruvia::redis_error::code_type::protocol_error;
+                rejected = error.code() == ruvia::backend_error_code::protocol_error;
             }
             EXPECT_TRUE(rejected);
         };
@@ -1411,7 +1411,7 @@ ruvia::task<void> check_error_reply_keeps_connection(ruvia::redis_client& client
     try {
         (void)co_await subscription.read();
     } catch (const ruvia::redis_error& error) {
-        denied = error.code() == ruvia::redis_error::code_type::command_error;
+        denied = error.code() == ruvia::backend_error_code::command_failed;
     }
     EXPECT_TRUE(denied);
     auto allowed = co_await subscription.read();
@@ -1433,7 +1433,7 @@ ruvia::task<void> check_server_close_is_an_io_error(ruvia::redis_client& client)
     try {
         (void)co_await subscription.read();
     } catch (const ruvia::redis_error& error) {
-        io_error = error.code() == ruvia::redis_error::code_type::io_error;
+        io_error = error.code() == ruvia::backend_error_code::io_error;
     }
     EXPECT_TRUE(io_error);
     // Closed is terminal: the stream ends and commands report it.
@@ -1442,7 +1442,7 @@ ruvia::task<void> check_server_close_is_an_io_error(ruvia::redis_client& client)
     try {
         co_await subscription.subscribe(channels);
     } catch (const ruvia::redis_error& error) {
-        closed = error.code() == ruvia::redis_error::code_type::closing;
+        closed = error.code() == ruvia::backend_error_code::closing;
     }
     EXPECT_TRUE(closed);
     co_await client.shutdown();
@@ -1457,7 +1457,7 @@ ruvia::task<void> check_malformed_push_closes(ruvia::redis_client& client) {
     try {
         (void)co_await subscription.read();
     } catch (const ruvia::redis_error& error) {
-        protocol_error = error.code() == ruvia::redis_error::code_type::protocol_error;
+        protocol_error = error.code() == ruvia::backend_error_code::protocol_error;
     }
     EXPECT_TRUE(protocol_error);
     EXPECT_TRUE(!(co_await subscription.read()).has_value());
@@ -1475,7 +1475,7 @@ ruvia::task<void> check_read_timeout(ruvia::redis_client& client) {
     try {
         (void)co_await subscription.read();
     } catch (const ruvia::redis_error& error) {
-        timed_out = error.code() == ruvia::redis_error::code_type::timeout;
+        timed_out = error.code() == ruvia::backend_error_code::timeout;
     }
     EXPECT_TRUE(timed_out);
     EXPECT_TRUE(!(co_await subscription.read()).has_value());
@@ -1490,7 +1490,7 @@ ruvia::task<void> check_read_operation_options(ruvia::redis_client& client, bool
     auto subscription = client.redis().subscription();
     const std::array<std::string_view, 1> channels{"silent"};
     co_await subscription.subscribe(channels);
-    const auto failure_of = [](ruvia::task<std::optional<ruvia::redis_pubsub_event>> read) -> ruvia::task<std::optional<ruvia::redis_error::code_type>> {
+    const auto failure_of = [](ruvia::task<std::optional<ruvia::redis_pubsub_event>> read) -> ruvia::task<std::optional<ruvia::backend_error_code>> {
         try {
             (void)co_await std::move(read);
         } catch (const ruvia::redis_error& error) {
@@ -1500,7 +1500,7 @@ ruvia::task<void> check_read_operation_options(ruvia::redis_client& client, bool
     };
     ruvia::stop_source stopped;
     stopped.request_stop();
-    EXPECT_TRUE(co_await failure_of(subscription.read({.stop_token_ = stopped.token()})) == ruvia::redis_error::code_type::cancelled);
+    EXPECT_TRUE(co_await failure_of(subscription.read({.stop_token_ = stopped.token()})) == ruvia::backend_error_code::cancelled);
     EXPECT_THROW((void)subscription.read({.timeout_ = std::chrono::milliseconds(0)}), std::invalid_argument);
     auto confirmed = co_await subscription.read();
     EXPECT_TRUE(confirmed && confirmed->confirmation() && confirmed->confirmation()->name() == "silent");
@@ -1517,7 +1517,7 @@ ruvia::task<void> check_read_operation_options(ruvia::redis_client& client, bool
     }
     const auto code = co_await failure_of(subscription.read(std::move(operation)));
     co_await stopper.join();
-    EXPECT_TRUE(code == (cancel ? ruvia::redis_error::code_type::cancelled : ruvia::redis_error::code_type::timeout));
+    EXPECT_TRUE(code == (cancel ? ruvia::backend_error_code::cancelled : ruvia::backend_error_code::timeout));
     EXPECT_TRUE(!(co_await subscription.read()).has_value());
     co_await client.shutdown();
 }
@@ -1536,7 +1536,7 @@ ruvia::task<void> check_stop_token_ends_the_stream(ruvia::redis_client& client, 
     try {
         co_await subscription.subscribe(channels);
     } catch (const ruvia::redis_error& error) {
-        cancelled = error.code() == ruvia::redis_error::code_type::cancelled;
+        cancelled = error.code() == ruvia::backend_error_code::cancelled;
     }
     EXPECT_TRUE(cancelled);
     co_await client.shutdown();
@@ -1605,7 +1605,7 @@ ruvia::task<void> check_silent_peer_fails_the_idle_probe(ruvia::redis_client& cl
     try {
         (void)co_await subscription.read();
     } catch (const ruvia::redis_error& error) {
-        timed_out = error.code() == ruvia::redis_error::code_type::timeout;
+        timed_out = error.code() == ruvia::backend_error_code::timeout;
     }
     const auto elapsed = std::chrono::steady_clock::now() - started;
     EXPECT_TRUE(timed_out);
@@ -1667,7 +1667,7 @@ ruvia::task<void> check_unsubscribed_connection_consumes_plain_pong(ruvia::redis
     try {
         (void)co_await subscription.read();
     } catch (const ruvia::redis_error& error) {
-        timed_out = error.code() == ruvia::redis_error::code_type::timeout;
+        timed_out = error.code() == ruvia::backend_error_code::timeout;
     }
     EXPECT_TRUE(timed_out);
     EXPECT_TRUE(std::chrono::steady_clock::now() - started >= read_timeout);
@@ -1685,7 +1685,7 @@ ruvia::task<void> check_unanswered_command_stands_in_for_the_ping(ruvia::redis_c
     try {
         (void)co_await subscription.read();
     } catch (const ruvia::redis_error& error) {
-        timed_out = error.code() == ruvia::redis_error::code_type::timeout;
+        timed_out = error.code() == ruvia::backend_error_code::timeout;
     }
     const auto elapsed = std::chrono::steady_clock::now() - started;
     EXPECT_TRUE(timed_out);

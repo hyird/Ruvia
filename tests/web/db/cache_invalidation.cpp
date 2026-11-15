@@ -270,20 +270,20 @@ private:
 
 // Every read names the same cache id; each result shape stores its own entry.
 ruvia::task<std::string> read_one(const ruvia::db_executor& handle) {
-    const auto row = co_await handle.repository<record>().query_builder().cache(cache_id, cache_lifetime).get_one();
+    const auto row = co_await handle.repository<record>().query_builder().cache({.id_ = cache_id, .duration_ = cache_lifetime}).get_one();
     co_return row ? std::string(std::string_view(row->get<"v">())) : std::string("missing");
 }
 
 ruvia::task<bool> read_exists(const ruvia::db_executor& handle) {
-    co_return co_await handle.repository<record>().query_builder().cache(cache_id, cache_lifetime).get_exists();
+    co_return co_await handle.repository<record>().query_builder().cache({.id_ = cache_id, .duration_ = cache_lifetime}).get_exists();
 }
 
 ruvia::task<std::uint64_t> read_count(const ruvia::db_executor& handle) {
-    co_return co_await handle.repository<record>().query_builder().cache(cache_id, cache_lifetime).get_count();
+    co_return co_await handle.repository<record>().query_builder().cache({.id_ = cache_id, .duration_ = cache_lifetime}).get_count();
 }
 
 ruvia::task<std::vector<std::string>> read_many(const ruvia::db_executor& handle, std::string_view id = cache_id) {
-    const auto rows = co_await handle.repository<record>().query_builder().cache(id, cache_lifetime).get_many();
+    const auto rows = co_await handle.repository<record>().query_builder().cache({.id_ = id, .duration_ = cache_lifetime}).get_many();
     std::vector<std::string> values{};
     for (std::size_t index = 0; index < rows.size(); ++index) {
         values.emplace_back(std::string_view(rows[index].get<"v">()));
@@ -293,7 +293,7 @@ ruvia::task<std::vector<std::string>> read_many(const ruvia::db_executor& handle
 
 ruvia::task<std::string> read_sql_cached(const ruvia::db_executor& handle, std::string_view parameter) {
     auto query = handle.repository<record>().query_builder();
-    query.where(record::column<"v">() == parameter).cache(cache_lifetime);
+    query.where(record::column<"v">() == parameter).cache({.duration_ = cache_lifetime});
     const auto row = co_await query.get_one();
     co_return row ? std::string(std::string_view(row->get<"v">())) : std::string("missing");
 }
@@ -306,7 +306,7 @@ namespace query_cache_test {
 // thrown so every reader in a scope finishes on its own.
 struct read_outcome final {
     std::string value_{};
-    std::optional<ruvia::db_error::code_type> error_;
+    std::optional<ruvia::backend_error_code> error_;
     bool done_{false};
 };
 
@@ -430,7 +430,7 @@ TEST(Ruvia, db_query_result_cache_remove_invalidates_repository_result_shapes) {
                 EXPECT_TRUE(co_await read_exists(handle));
                 EXPECT_EQ(co_await read_count(handle), std::uint64_t{3});
                 auto raw_query = handle.repository<record>().query_builder();
-                raw_query.cache(cache_id, cache_lifetime);
+                raw_query.cache({.id_ = cache_id, .duration_ = cache_lifetime});
                 auto cached_rows = co_await raw_query.get_raw_many();
                 auto moved_rows = std::move(cached_rows);
                 // Subsequent Redis reads must not invalidate an earlier result.
@@ -553,7 +553,7 @@ TEST(Ruvia, db_query_result_cache_preserves_empty_and_zero_column_results) {
             try {
                 co_await database.connect();
                 auto query = database.db().repository<record>().query_builder();
-                query.cache(cache_id, cache_lifetime);
+                query.cache({.id_ = cache_id, .duration_ = cache_lifetime});
                 auto empty_rows = co_await query.get_raw_many();
                 EXPECT_TRUE(empty_rows.empty());
                 auto empty_with_schema = decltype(empty)(empty);
@@ -665,7 +665,7 @@ TEST(Ruvia, db_client_shutdown_cancels_inflight_cache_without_closing_borrowed_r
                 try {
                     (void)co_await read_sql_cached(database.db(), "cancel-cache");
                 } catch (const ruvia::redis_error& error) {
-                    cancelled = error.code() == ruvia::redis_error::code_type::cancelled || error.code() == ruvia::redis_error::code_type::closing;
+                    cancelled = error.code() == ruvia::backend_error_code::cancelled || error.code() == ruvia::backend_error_code::closing;
                 }
                 EXPECT_TRUE(cancelled);
             } catch (...) {
@@ -772,7 +772,7 @@ TEST(Ruvia, db_query_result_cache_waiter_takes_over_from_a_cancelled_leader) {
         co_await readers.join();
     };
     query_cache_test::run_with_query_cache(redis_peer, database_peer.config(), scenario);
-    EXPECT_TRUE(leader.error_ == ruvia::db_error::code_type::cancelled);
+    EXPECT_TRUE(leader.error_ == ruvia::backend_error_code::cancelled);
     EXPECT_TRUE(!waiter.error_.has_value());
     EXPECT_TRUE(waiter.value_ == "taken over");
     EXPECT_EQ(database_peer.postgres_parses().size(), std::size_t{2});
@@ -802,7 +802,7 @@ TEST(Ruvia, db_query_result_cache_waiter_is_bounded_by_its_own_timeout) {
     };
     query_cache_test::run_with_query_cache(redis_peer, database_peer.config(), scenario);
     EXPECT_TRUE(waiter_finished_first);
-    EXPECT_TRUE(waiter.error_ == ruvia::db_error::code_type::timeout);
+    EXPECT_TRUE(waiter.error_ == ruvia::backend_error_code::timeout);
     EXPECT_TRUE(!leader.error_.has_value());
     EXPECT_TRUE(leader.value_ == "first");
     EXPECT_EQ(database_peer.postgres_parses().size(), std::size_t{1});

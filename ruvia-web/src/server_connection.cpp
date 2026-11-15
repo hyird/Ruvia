@@ -197,7 +197,7 @@ void server_connection::require_active() const {
 
 task<std::optional<std::span<const std::byte>>> server_connection::read(operation_options operation) & {
     require_active();
-    return ::ruvia::make_scoped_operation(operations_, read_connection(target_, read_, read_active_, std::move(operation)));
+    return operations_.attach(read_connection(target_, read_, read_active_, std::move(operation)));
 }
 
 task<void> server_connection::write(outbound_bytes bytes, operation_options operation) & {
@@ -205,12 +205,12 @@ task<void> server_connection::write(outbound_bytes bytes, operation_options oper
     if (send_ended_) {
         throw std::logic_error("server connection send direction has ended");
     }
-    return ::ruvia::make_scoped_operation(operations_, write_connection(target_, write_, std::move(bytes).into_string(), write_active_, send_ended_, std::move(operation)));
+    return operations_.attach(write_connection(target_, write_, std::move(bytes).into_string(), write_active_, send_ended_, std::move(operation)));
 }
 
 task<void> server_connection::finish(operation_options operation) & {
     require_active();
-    return ::ruvia::make_scoped_operation(operations_, finish_connection(target_, finish_, send_ended_, write_active_, std::move(operation)));
+    return operations_.attach(finish_connection(target_, finish_, send_ended_, write_active_, std::move(operation)));
 }
 
 void server_connection::abort() & noexcept {

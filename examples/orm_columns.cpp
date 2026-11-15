@@ -13,8 +13,8 @@
 #include <string_view>
 
 #include "backend_config.h"
-#include "blocking_pool.h"
 #include "db_executor.h"
+#include "db_migration.h"
 #include "db_repository.h"
 #include "db_schema.h"
 #include "event_loop.h"
@@ -74,7 +74,7 @@ task<void> demonstrate(db_client& db, db_client& concurrent) {
     try {
         co_await snapshot_items.update(line_item::column<"id">() == 1, changes);
     } catch (const db_error& error) {
-        rejected = error.code() == db_error::code_type::statement_failed;
+        rejected = error.code() == backend_error_code::command_failed;
     }
     require(rejected, "read-only transaction accepted a write");
     // Failed transactions are retired by the backend. A new transaction must
@@ -134,14 +134,11 @@ int main(int argc, char** argv) {
         }
         const auto settings = config();
         if (migrate) {
-            (void)example::apply_migrations(settings, changes);
+            ruvia::db_migrator::run(settings, changes);
         }
         if (execute) {
             asio::io_context context_value(asio::config_from_concurrency_hint(ASIO_CONCURRENCY_HINT_UNSAFE_IO));
-            // The loop looks a DNS RUVIA_DB_HOST up on this pool; declared
-            // first, it outlives the attachment.
-            blocking_pool host_lookups({.thread_count_ = 1});
-            auto attachment = attach_event_loop(context_value, {.blocking_pool_ = &host_lookups});
+            auto attachment = attach_event_loop(context_value);
             db_client db(attachment.loop(), settings);
             db_client concurrent(attachment.loop(), settings);
             auto root = attachment.loop().start(run(db, concurrent, attachment));

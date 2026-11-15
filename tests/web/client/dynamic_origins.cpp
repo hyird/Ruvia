@@ -464,7 +464,7 @@ TEST(Ruvia, http_client_retired_origin_resources_release_after_last_cold_borrow)
         EXPECT_FALSE(observed.expired());
         cold.reset();
         ruvia::worker_timer_registration deadline;
-        (void)worker.schedule_timer(deadline, ruvia::deadline_after(std::chrono::seconds(2)), [&](ruvia::worker_timer_outcome outcome) noexcept {
+        (void)deadline.schedule(worker, ruvia::deadline_after(std::chrono::seconds(2)), [&](ruvia::worker_timer_outcome outcome) noexcept {
             if (outcome == ruvia::worker_timer_outcome::expired) {
                 expired = true;
                 retired.notify();
@@ -542,7 +542,7 @@ TEST(Ruvia, http_client_tls_upsert_prepares_owned_paths_and_password_off_worker)
 
 TEST(Ruvia, http_client_tls_upsert_without_blocking_pool_fails_without_publication) {
     auto& io = ruvia::test::new_test_io_context();
-    auto attachment = ruvia::attach_event_loop(io);
+    auto attachment = ruvia::attach_event_loop(io, {.blocking_pool_ = nullptr});
     const auto run = [&]() -> ruvia::task<void> {
         ruvia::http_client client(attachment.loop(), {.base_url_ = "http://127.0.0.1:8001"});
         try {
@@ -578,7 +578,7 @@ void exercise_origin_preparation_cancellation(cancellation_case mode) {
     ASSERT_EQ(blocking.submit([gate] {
         gate.wait();
     }),
-        blocking_submit_status::accepted);
+        post_status::accepted);
     auto attachment = attach_event_loop(io, {.blocking_pool_ = &blocking});
     const auto worker = attachment.loop().worker();
     const auto run = [&]() -> task<void> {
@@ -1247,8 +1247,7 @@ TEST(Ruvia, tcp_client_resolves_dns_through_its_event_loop_blocking_pool) {
     byte_peer peer(10000);
     auto config = peer.config();
     config.host_ = "localhost";
-    ruvia::blocking_pool lookups({.thread_count_ = 1});
-    ruvia::event_loop_pool pool({.loop_count_ = 1, .blocking_pool_ = &lookups});
+    ruvia::event_loop_pool pool({.loop_count_ = 1});
     pool.start();
     pool.loop(0).start(byte_exchange(pool.loop(0), config)).get();
     pool.join();

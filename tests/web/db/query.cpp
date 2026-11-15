@@ -1615,15 +1615,15 @@ TEST(Ruvia, db_query_expression_ownership_import_subquery_cast_and_cache_methods
     EXPECT_TRUE(state.returns_rows());
     EXPECT_TRUE(!state.has_where());
     EXPECT_TRUE(!state.has_grouping());
-    state.cache(false).cache(std::chrono::milliseconds(50)).cache(db_cache_options{.id_ = "cq-cache", .duration_ = std::chrono::milliseconds(25)});
+    state.cache({.enabled_ = false}).cache({.duration_ = std::chrono::milliseconds(50)}).cache({.id_ = "cq-cache", .duration_ = std::chrono::milliseconds(25)});
     state.select(db_expr::value(1)).from("cq_devices");
     const auto state_statement = state.compile(db_driver::postgresql);
     EXPECT_TRUE(state_statement.params().size() == std::size_t{1});
     EXPECT_TRUE(testing::throws_on([&] {
-        state.cache("bad", std::chrono::milliseconds(0));
+        state.cache({.id_ = "bad", .duration_ = std::chrono::milliseconds(0)});
     }));
     EXPECT_TRUE(testing::throws_on([&] {
-        state.cache("bad", std::chrono::milliseconds(-1));
+        state.cache({.id_ = "bad", .duration_ = std::chrono::milliseconds(-1)});
     }));
 
     auto clone = state.clone();

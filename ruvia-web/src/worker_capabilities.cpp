@@ -230,58 +230,58 @@ void* worker_context_capabilities::worker_state_instance(const void* type_key) c
 }
 
 #ifdef RUVIA_ENABLE_DATABASE
-db_executor worker_client_registry_view::db(::ruvia::operation_scope& operation_scope, request_io_metrics* io_metrics, const stop_token& stop_token_value) const {
+db_executor worker_client_registry_view::db(operation_scope& operation_scope, request_io_metrics* io_metrics, const stop_token& stop_token_value) const {
     if (borrowed_ != nullptr) {
         return db(default_capability_alias, operation_scope, io_metrics, stop_token_value);
     }
     if (!attached()) {
-        throw db_error(db_error::code_type::not_configured, std::nullopt, "database is not configured");
+        throw db_error(backend_error_code::not_configured, std::nullopt, "database is not configured");
     }
     return databases_->get(operation_scope, io_metrics).bind_caller_scope(operation_scope, io_metrics, stop_token_value);
 }
 
-db_executor worker_client_registry_view::db(std::string_view alias, ::ruvia::operation_scope& operation_scope, request_io_metrics* io_metrics, const stop_token& stop_token_value) const {
+db_executor worker_client_registry_view::db(std::string_view alias, operation_scope& operation_scope, request_io_metrics* io_metrics, const stop_token& stop_token_value) const {
     if (borrowed_ != nullptr) {
         const auto* client = borrowed_->db(alias);
         if (client == nullptr) {
-            throw db_error(db_error::code_type::not_configured, std::nullopt, "database is not configured");
+            throw db_error(backend_error_code::not_configured, std::nullopt, "database is not configured");
         }
         return client->db().bind_caller_scope(operation_scope, io_metrics, stop_token_value);
     }
     if (!attached()) {
-        throw db_error(db_error::code_type::not_configured, std::nullopt, "database is not configured");
+        throw db_error(backend_error_code::not_configured, std::nullopt, "database is not configured");
     }
     return databases_->get(alias, operation_scope, io_metrics).bind_caller_scope(operation_scope, io_metrics, stop_token_value);
 }
 #endif
 
 #ifdef RUVIA_ENABLE_REDIS
-redis_executor worker_client_registry_view::redis(::ruvia::operation_scope& operation_scope, request_io_metrics* io_metrics, const stop_token& stop_token_value) const {
+redis_executor worker_client_registry_view::redis(operation_scope& operation_scope, request_io_metrics* io_metrics, const stop_token& stop_token_value) const {
     if (borrowed_ != nullptr) {
         return redis(default_capability_alias, operation_scope, io_metrics, stop_token_value);
     }
     if (!attached()) {
-        throw redis_error(redis_error::code_type::not_configured, "redis is not configured");
+        throw redis_error(backend_error_code::not_configured, "redis is not configured");
     }
     return redis_->get(operation_scope, io_metrics).bind_caller_scope(operation_scope, io_metrics, stop_token_value);
 }
 
-redis_executor worker_client_registry_view::redis(std::string_view alias, ::ruvia::operation_scope& operation_scope, request_io_metrics* io_metrics, const stop_token& stop_token_value) const {
+redis_executor worker_client_registry_view::redis(std::string_view alias, operation_scope& operation_scope, request_io_metrics* io_metrics, const stop_token& stop_token_value) const {
     if (borrowed_ != nullptr) {
         const auto* client = borrowed_->redis(alias);
         if (client == nullptr) {
-            throw redis_error(redis_error::code_type::not_configured, "redis is not configured");
+            throw redis_error(backend_error_code::not_configured, "redis is not configured");
         }
         return client->redis().bind_caller_scope(operation_scope, io_metrics, stop_token_value);
     }
     if (!attached()) {
-        throw redis_error(redis_error::code_type::not_configured, "redis is not configured");
+        throw redis_error(backend_error_code::not_configured, "redis is not configured");
     }
     return redis_->get(alias, operation_scope, io_metrics).bind_caller_scope(operation_scope, io_metrics, stop_token_value);
 }
 #endif
 
-http_client_ref worker_client_registry_view::client(::ruvia::operation_scope& operation_scope, const stop_token& stop_token_value) const {
+http_client_ref worker_client_registry_view::client(operation_scope& operation_scope, const stop_token& stop_token_value) const {
     if (borrowed_ != nullptr) {
         return client(default_capability_alias, operation_scope, stop_token_value);
     }
@@ -291,7 +291,7 @@ http_client_ref worker_client_registry_view::client(::ruvia::operation_scope& op
     return http_clients_->get(operation_scope, stop_token_value);
 }
 
-http_client_ref worker_client_registry_view::client(std::string_view alias, ::ruvia::operation_scope& operation_scope, const stop_token& stop_token_value) const {
+http_client_ref worker_client_registry_view::client(std::string_view alias, operation_scope& operation_scope, const stop_token& stop_token_value) const {
     if (borrowed_ != nullptr) {
         return borrowed_http_clients(alias).client().bind_caller_scope(operation_scope, stop_token_value);
     }

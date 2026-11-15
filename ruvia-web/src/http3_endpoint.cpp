@@ -1106,7 +1106,7 @@ bool http3_worker_directory::hand_off(std::size_t owner, std::size_t listener_in
         return false;
     }
     try {
-        const auto status = target.worker_.post_factory([&]() -> move_only_function<void()> {
+        const auto status = detail::worker_ref_access::post_factory(target.worker_, [&]() -> move_only_function<void()> {
             std::vector<std::byte> copied(bytes.begin(), bytes.end());
             http3_handoff_datagram datagram{
                 .bytes_ = std::move(copied),

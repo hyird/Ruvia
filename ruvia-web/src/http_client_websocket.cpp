@@ -286,7 +286,7 @@ http_client_websocket_request& http_client_websocket_request::configure(http_cli
 }
 task<websocket> http_client_websocket_request::connect() && {
     require_worker();
-    return make_scoped_operation(client_.registration_.scope(), connect_owned(std::move(*this)));
+    return client_.registration_.attach(connect_owned(std::move(*this)));
 }
 task<websocket> http_client_websocket_request::connect_owned(http_client_websocket_request request) {
     request.client_.registration_.require_active();
@@ -324,7 +324,7 @@ task<websocket> http_client_websocket_request::connect_owned(http_client_websock
     worker_timer_registration opening_timer;
     const auto connect_timeout = request.request_options_.timeouts_.connect_.resolve(pool.config().connect_timeout_);
     if (connect_timeout) {
-        (void)pool.worker().schedule_timer(opening_timer, deadline_after(connect_timeout->value()), [&opening_stop, &opening_expired](worker_timer_outcome outcome) noexcept {
+        (void)opening_timer.schedule(pool.worker(), deadline_after(connect_timeout->value()), [&opening_stop, &opening_expired](worker_timer_outcome outcome) noexcept {
             if (outcome == worker_timer_outcome::expired) {
                 opening_expired = true;
                 opening_stop.request_stop();

@@ -872,7 +872,7 @@ private:
 
     // Declared last so it closes first, while every request-owned object and its
     // memory resource are still alive.
-    mutable ::ruvia::operation_scope operation_scope_;
+    mutable detail::operation_scope operation_scope_;
 };
 
 enum class readiness_state : std::uint8_t {
@@ -964,13 +964,13 @@ template <validation_target target, typename model_type>
 template <typename t_type>
 task<std::optional<t_type>> context_request::json_if(operation_options operation) const {
     static_assert(detail::is_model<t_type>, "JSON body type must use RUVIA_MODEL");
-    return ::ruvia::make_scoped_operation(context_->operation_scope_, detail::parse_optional_request_model<validation_target::json, t_type>(*context_, std::move(operation)));
+    return context_->operation_scope_.attach(detail::parse_optional_request_model<validation_target::json, t_type>(*context_, std::move(operation)));
 }
 
 template <typename t_type>
 task<std::optional<t_type>> context_request::form_if(operation_options operation) const {
     static_assert(detail::is_model<t_type>, "form body type must use RUVIA_MODEL");
-    return ::ruvia::make_scoped_operation(context_->operation_scope_, detail::parse_optional_request_model<validation_target::form, t_type>(*context_, std::move(operation)));
+    return context_->operation_scope_.attach(detail::parse_optional_request_model<validation_target::form, t_type>(*context_, std::move(operation)));
 }
 
 template <typename t_type>

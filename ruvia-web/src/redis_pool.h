@@ -241,7 +241,7 @@ private:
         using owner_type = redis_pool;
         enum class deadline_kind_type : std::uint8_t { none };
 
-        [[noreturn]] static void throw_acquire_failure(const redis_pool& pool, worker_wait_status status);
+        [[noreturn]] static void throw_acquire_failure(const redis_pool& pool, wait_status status);
         [[noreturn]] static void throw_aborted(const redis_pool& pool, pool_slot_abort_reason reason);
         static void expire_slot(redis_pool&, std::size_t, deadline_kind_type) noexcept {}
         static void cancel_slot(redis_pool& pool, std::size_t slot) noexcept;
@@ -420,9 +420,9 @@ public:
     void close_now() noexcept;
     // An application-registry handle; `io_metrics` is the request's counter
     // block, or null outside a request.
-    [[nodiscard]] redis_executor executor(::ruvia::operation_scope& scope, request_io_metrics* io_metrics);
+    [[nodiscard]] redis_executor executor(operation_scope& scope, request_io_metrics* io_metrics);
     // A standalone client handle, which never belongs to a request.
-    [[nodiscard]] redis_executor executor(::ruvia::operation_scope& scope, operation_options options);
+    [[nodiscard]] redis_executor executor(operation_scope& scope, operation_options options);
 
     [[nodiscard]] const worker_ref& worker() const noexcept {
         return worker_;
@@ -480,8 +480,8 @@ public:
 
     [[nodiscard]] bool empty() const noexcept;
     // `io_metrics` is the request's counter block, or null outside a request.
-    [[nodiscard]] redis_executor get(::ruvia::operation_scope& operation_scope, request_io_metrics* io_metrics) const;
-    [[nodiscard]] redis_executor get(std::string_view alias, ::ruvia::operation_scope& operation_scope, request_io_metrics* io_metrics) const;
+    [[nodiscard]] redis_executor get(operation_scope& operation_scope, request_io_metrics* io_metrics) const;
+    [[nodiscard]] redis_executor get(std::string_view alias, operation_scope& operation_scope, request_io_metrics* io_metrics) const;
 
 private:
     using entry_type = std::unique_ptr<redis_client_runtime>;

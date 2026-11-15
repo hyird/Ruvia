@@ -4,11 +4,15 @@
 #include <coroutine>
 #include <cstddef>
 #include <cstdint>
+#include <memory>
+#include <optional>
 #include <utility>
-#include <variant>
 
+#include "move_only_function.h"
+#include "operation_options.h"
 #include "stop_token.h"
 #include "timeout_duration.h"
+#include "wait_result.h"
 
 namespace ruvia::detail {
 class worker_dispatcher;
@@ -51,20 +55,8 @@ enum class worker_timer_outcome : std::uint8_t {
     cancelled,
 };
 
-// Result of worker_ref::schedule_timer(). Shutdown is a normal state, not a
-// failure: once the worker's timer queue has stopped, scheduling returns
-// worker_stopping, stores nothing, never invokes the completion, and leaves the
-// registration unbound. That is the same terminal point a pending timer reaches
-// through stop_timers(), which delivers worker_timer_outcome::cancelled; timed
-// primitives map both to their own shutdown result.
-// This also applies when moving the completion itself stops the timer queue.
-enum class worker_timer_schedule_status : std::uint8_t {
-    scheduled,
-    worker_stopping,
-};
-
 // Borrowed timer token. A registration is bound to the worker of its most
-// recent schedule_timer() until that timer expires, is cancelled, or is
+// recent schedule() until that timer expires, is cancelled, or is
 // released by cancel()/cancel_and_notify(). Rescheduling while registration
 // is in progress or the timer is still pending throws std::logic_error. Once
 // it has expired or been cancelled, it may be scheduled on another worker;
@@ -79,6 +71,19 @@ public:
     worker_timer_registration& operator=(const worker_timer_registration&) = delete;
     worker_timer_registration(worker_timer_registration&&) = delete;
     worker_timer_registration& operator=(worker_timer_registration&&) = delete;
+
+    // Schedules this registration on `worker`, which must outlive it;
+    // destruction unregisters without a late callback. Shutdown is a normal
+    // state, not a failure: once that worker's timer queue has stopped (even
+    // while the completion is being moved in), returns false, stores nothing,
+    // never invokes the completion, and leaves the registration unbound -- the
+    // same terminal point stop_timers() reaches for a pending timer by
+    // delivering worker_timer_outcome::cancelled. Rescheduling a still-pending
+    // registration throws std::logic_error; an empty worker_ref throws
+    // std::runtime_error.
+    bool schedule(const worker_ref& worker, std::chrono::steady_clock::time_point deadline, move_only_function<void(worker_timer_outcome)> completion);
+    bool schedule(worker_ref&&, std::chrono::steady_clock::time_point, move_only_function<void(worker_timer_outcome)>) = delete;
+    bool schedule(const worker_ref&&, std::chrono::steady_clock::time_point, move_only_function<void(worker_timer_outcome)>) = delete;
 
     // Removes the registration without delivering its completion: the owner
     // that cancels has stopped observing the outcome (a finished operation,
@@ -100,7 +105,7 @@ private:
     void release() noexcept;
     [[nodiscard]] bool pending() const noexcept;
 
-    // The worker_ref supplied to schedule_timer() must outlive this registration.
+    // The worker_ref supplied to schedule() must outlive this registration.
     // Destruction only removes it; it never queues a callback referencing the
     // destroyed owner.
     detail::worker_dispatcher* dispatcher_{nullptr};
@@ -111,6 +116,80 @@ private:
     bool scheduling_{false};
 
     friend class detail::worker_dispatcher;
+};
+
+// The deadline half of one worker-bound wait: the operation_options it was
+// started with, the deadline resolved when it starts, and the timer that ends
+// it there. Stop delivery stays with the owner -- inline under its lock, or
+// hopped to the worker by id -- because that is where waits differ.
+//
+// Declare it before the owner's stop_registration, which must be the last
+// member. Completion paths that hold a lock the stop callback also takes call
+// cancel_deadline(), never a stop-registration reset, which would join that
+// callback and deadlock. A cold wait_bounds may move; a started one is
+// referenced by its timer and must stay address-stable.
+class wait_bounds final {
+public:
+    explicit wait_bounds(operation_options options) noexcept :
+        timeout_(options.timeout_),
+        token_(std::move(options.stop_token_)) {}
+    wait_bounds(wait_bounds&& other) noexcept;
+    wait_bounds(const wait_bounds&) = delete;
+    wait_bounds& operator=(const wait_bounds&) = delete;
+    wait_bounds& operator=(wait_bounds&&) = delete;
+
+    // The first step of the owner's await_ready, on `worker`, which is borrowed
+    // until destruction. Throws std::logic_error(affinity_message) off that
+    // worker and std::logic_error when started twice. A relative timeout
+    // starts now.
+    void start(const worker_ref& worker, const char* affinity_message);
+
+    [[nodiscard]] const stop_token& token() const noexcept {
+        return token_;
+    }
+    [[nodiscard]] bool stop_requested() const noexcept {
+        return token_.stop_requested();
+    }
+    [[nodiscard]] bool deadline_passed() const noexcept {
+        return deadline_.expired();
+    }
+    // cancelled, then timed_out; empty while neither bound has ended the wait.
+    [[nodiscard]] std::optional<wait_status> ended() const noexcept;
+
+    // Arms the deadline timer: `end` runs on the worker with timed_out at the
+    // deadline, or worker_stopping when the timer queue stops first. Without a
+    // deadline nothing is armed, unless watch_worker: the timer then waits at
+    // time_point::max() so a timer-queue stop still ends the wait. Returns
+    // false, storing nothing and never running `end`, once the worker's timer
+    // queue has stopped; the owner then ends the wait as worker_stopping.
+    // Allocation may throw; the owner rolls back.
+    template <typename owner_type, void (owner_type::*end)(wait_status) noexcept>
+    [[nodiscard]] bool arm_deadline(owner_type& owner, bool watch_worker = false) {
+        return arm_deadline(std::addressof(owner), [](void* target, wait_status status) noexcept {
+            (static_cast<owner_type*>(target)->*end)(status);
+        }, watch_worker);
+    }
+
+    void cancel_deadline() noexcept {
+        timer_.cancel();
+    }
+
+    // Cancels the armed timer from any thread; `end` then runs with worker_stopping.
+    [[nodiscard]] worker_timer_cancellation deadline_cancellation() const& {
+        return timer_.cancellation();
+    }
+    worker_timer_cancellation deadline_cancellation() const&& = delete;
+
+private:
+    using end_type = void (*)(void*, wait_status) noexcept;
+
+    [[nodiscard]] bool arm_deadline(void* owner, end_type end, bool watch_worker);
+
+    std::optional<operation_timeout> timeout_;
+    stop_token token_;
+    operation_deadline deadline_;
+    const worker_ref* worker_{nullptr};
+    worker_timer_registration timer_;
 };
 
 enum class timer_sleep_result : std::uint8_t {
@@ -175,25 +254,19 @@ private:
     friend sleep_operation sleep_for(const worker_ref&, timeout_duration, stop_token);
     friend sleep_operation sleep_until(const worker_ref&, std::chrono::steady_clock::time_point, stop_token);
 
-    sleep_operation(const worker_ref& worker_value, timeout_duration duration, stop_token stop_token_value) noexcept :
+    sleep_operation(const worker_ref& worker_value, operation_timeout target, stop_token stop_token_value) noexcept :
         worker_(&worker_value),
-        target_(duration),
-        stop_token_(std::move(stop_token_value)) {}
+        bounds_({.timeout_ = target, .stop_token_ = std::move(stop_token_value)}) {}
 
-    sleep_operation(const worker_ref& worker_value, std::chrono::steady_clock::time_point deadline, stop_token stop_token_value) noexcept :
-        worker_(&worker_value),
-        target_(deadline),
-        stop_token_(std::move(stop_token_value)) {}
+    void on_end(wait_status status) noexcept;
 
     const worker_ref* worker_;
-    std::variant<timeout_duration, std::chrono::steady_clock::time_point> target_;
-    stop_token stop_token_;
+    wait_bounds bounds_;
     std::coroutine_handle<> continuation_{};
-    worker_timer_outcome outcome_{worker_timer_outcome::expired};
-    bool started_{false};
-    worker_timer_registration registration_;
-    // Declared last so callback teardown completes before the timer registration
-    // and the borrowed worker begin destruction.
+    // A sleep that never suspends reached its deadline.
+    wait_status status_{wait_status::timed_out};
+    // Declared last so callback teardown completes before the timer
+    // registration and the borrowed worker begin destruction.
     stop_registration stop_registration_;
 };
 

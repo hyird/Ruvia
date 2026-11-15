@@ -784,7 +784,7 @@ task<void> detail::http_client_response_state::dispatch_informational(const oper
         stop_group cancellation{informational_stop_, informational_abort_->token(), deadline_stop.token()};
         worker_timer_registration timer;
         if (const auto deadline = timeout.deadline()) {
-            (void)memory_domain_.worker().schedule_timer(timer, *deadline, [&deadline_stop](worker_timer_outcome outcome) noexcept {
+            (void)timer.schedule(memory_domain_.worker(), *deadline, [&deadline_stop](worker_timer_outcome outcome) noexcept {
                 if (outcome == worker_timer_outcome::expired) {
                     deadline_stop.request_stop();
                 }
@@ -968,12 +968,12 @@ bool http_client_response_body::complete() const {
 
 task<std::optional<std::span<const std::byte>>> http_client_response_body::read(operation_options operation) & {
     auto& state_value = require_response_body_state(state_);
-    return ::ruvia::make_scoped_operation(state_value.body_operation_scope_, state_value.consume_body<std::span<const std::byte>>(std::move(operation)));
+    return state_value.body_operation_scope_.attach(state_value.consume_body<std::span<const std::byte>>(std::move(operation)));
 }
 
 task<std::optional<std::string_view>> http_client_response_body::text(operation_options operation) & {
     auto& state_value = require_response_body_state(state_);
-    return ::ruvia::make_scoped_operation(state_value.body_operation_scope_, state_value.consume_body<std::string_view>(std::move(operation)));
+    return state_value.body_operation_scope_.attach(state_value.consume_body<std::string_view>(std::move(operation)));
 }
 
 template <typename view>
@@ -1035,7 +1035,7 @@ template task<void> detail::http_client_response_state::consume_body<void>(opera
 
 task<http_client_response_bytes> http_client_response_body::read_all(std::size_t max_bytes, operation_options operation) & {
     auto& state_value = require_response_body_state(state_);
-    return ::ruvia::make_scoped_operation(state_value.body_operation_scope_, state_value.read_all(max_bytes, std::move(operation)));
+    return state_value.body_operation_scope_.attach(state_value.read_all(max_bytes, std::move(operation)));
 }
 
 task<http_client_response_bytes> detail::http_client_response_state::read_all(std::size_t max_bytes, operation_options operation) {
@@ -1090,7 +1090,7 @@ task<http_client_response_bytes> detail::http_client_response_state::read_all(st
 
 task<void> http_client_response_body::pipe_to(response_stream_writer& output, operation_options operation) & {
     auto& state_value = require_response_body_state(state_);
-    return ::ruvia::make_scoped_operation(state_value.body_operation_scope_, state_value.consume_body<void>(std::move(operation), &output));
+    return state_value.body_operation_scope_.attach(state_value.consume_body<void>(std::move(operation), &output));
 }
 
 std::optional<std::string_view> http_client_response::header(std::string_view name) const& {
@@ -1113,7 +1113,7 @@ task<void> http_client_response::pipe_to(request_stream& output, operation_optio
     return pipe_to_destination(output.context_.stream_head(), output.response(), output.operation_scope_, std::move(operation));
 }
 
-task<void> http_client_response::pipe_to_destination(http_response& head, response_stream_writer& writer, ::ruvia::operation_scope& destination, operation_options operation) {
+task<void> http_client_response::pipe_to_destination(http_response& head, response_stream_writer& writer, detail::operation_scope& destination, operation_options operation) {
     if (state_ == nullptr) {
         throw std::logic_error("response owner has moved");
     }
@@ -1132,8 +1132,8 @@ task<void> http_client_response::pipe_to_destination(http_response& head, respon
             head.header(field->name(), field->value(), {.mode_ = repeated ? http_response_header_mode::append : http_response_header_mode::replace});
         }
     }
-    auto source = make_scoped_operation(state_->body_operation_scope_, pipe_response(http_client_response(state_), *state_, writer, std::move(operation)));
-    return make_scoped_operation(destination, pipe_response_in_destination(std::move(source)));
+    auto source = state_->body_operation_scope_.attach(pipe_response(http_client_response(state_), *state_, writer, std::move(operation)));
+    return destination.attach(pipe_response_in_destination(std::move(source)));
 }
 
 }  // namespace ruvia

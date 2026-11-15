@@ -19,8 +19,9 @@
 #include "operation_options.h"
 #include "stop_token.h"
 #include "suspend_race.h"
+#include "wait_result.h"
+#include "waiter_list.h"
 #include "worker_ref.h"
-#include "worker_result.h"
 #include "worker_timer.h"
 #include "worker_wait.h"
 
@@ -50,7 +51,7 @@ struct channel_options final {
 };
 
 template <typename t_type>
-using channel_send_result = worker_delivery_result<t_type, channel_send_status, channel_send_status::sent>;
+using channel_send_result = delivery_result<t_type, channel_send_status, channel_send_status::sent>;
 
 namespace detail {
 
@@ -158,9 +159,6 @@ struct channel_state final {
     void grant_send_waiters() noexcept;
     // Called under mutex_ by close and worker shutdown.
     void complete_send_waiters(channel_send_status status) noexcept;
-    void enqueue_send_waiter(channel_send_operation<t_type>& waiter) noexcept;
-    // Returns false when the waiter is no longer queued.
-    [[nodiscard]] bool remove_send_waiter(channel_send_operation<t_type>& waiter) noexcept;
 
     // Called under mutex_: publishes a filled reservation to the pending
     // receiver or the queue. Returns the rejection when the channel closed or
@@ -170,7 +168,7 @@ struct channel_state final {
         auto rejection = check_open_locked();
         if (!rejection) {
             if (wait_slot_.occupied()) {
-                wait_slot_.complete(worker_wait_result<node*>::with_value(slot));
+                wait_slot_.complete(wait_result<node*>::with_value(slot));
                 // A direct handoff never occupied the queue.
                 grant_send_waiters();
             } else {
@@ -227,8 +225,7 @@ struct channel_state final {
     lifecycle_type lifecycle_;
     bool receiver_closed_{false};
     worker_wait_slot<node*, channel_state<t_type>> wait_slot_;
-    channel_send_operation<t_type>* send_head_{nullptr};
-    channel_send_operation<t_type>* send_tail_{nullptr};
+    waiter_list<channel_send_operation<t_type>> send_waiters_;
 
     void close(bool retire_receiver);
     void worker_stopping() noexcept;
@@ -244,7 +241,7 @@ void channel_state<t_type>::close(bool retire_receiver) {
         receiver_closed_ = receiver_closed_ || retire_receiver;
         if (std::holds_alternative<channel_open>(lifecycle_)) {
             lifecycle_.template emplace<channel_closed>();
-            wait_slot_.complete(worker_wait_status::closed);
+            wait_slot_.complete(wait_status::closed);
             complete_send_waiters(channel_send_status::closed);
         }
     }
@@ -278,7 +275,7 @@ template <typename t_type>
 void channel_state<t_type>::worker_stopping() noexcept {
     auto lock = lock_state();
     lifecycle_.template emplace<channel_worker_stopping>();
-    wait_slot_.complete(worker_wait_status::worker_stopping);
+    wait_slot_.complete(wait_status::worker_stopping);
     complete_send_waiters(channel_send_status::worker_stopping);
 }
 
@@ -289,15 +286,14 @@ void channel_state<t_type>::worker_stopping() noexcept {
 // while it waits is reserved for it and filled when it resumes on the worker
 // that awaited it.
 template <typename t_type>
-class channel_send_operation final {
+class channel_send_operation final : public detail::waiter_link<channel_send_operation<t_type>> {
 public:
     channel_send_operation(const channel_send_operation&) = delete;
     channel_send_operation& operator=(const channel_send_operation&) = delete;
     channel_send_operation(channel_send_operation&& other) noexcept(std::is_nothrow_move_constructible_v<t_type>) :
         state_(std::move(other.state_)),
         value_(std::move(other.value_)),
-        timeout_(other.timeout_),
-        stop_token_(std::move(other.stop_token_)) {
+        bounds_(std::move(other.bounds_)) {
         if (other.started_) {
             std::terminate();
         }
@@ -307,9 +303,9 @@ public:
 
     ~channel_send_operation() {
         // A frame destroyed while suspended must not leave a dangling waiter.
-        if (queued_) {
+        if (this->queued()) {
             auto lock = state_->lock_state();
-            (void)state_->remove_send_waiter(*this);
+            (void)state_->send_waiters_.remove(*this);
         }
     }
 
@@ -317,21 +313,13 @@ public:
         if (started_ || !value_.has_value()) {
             throw std::logic_error("channel send cannot be awaited");
         }
+        started_ = true;
         if (!state_) {
-            started_ = true;
             complete_ready({channel_send_status::closed, nullptr});
             return true;
         }
-        auto worker_value = detail::worker_ref_access::current();
-        if (!worker_value.valid()) {
-            throw std::logic_error("channel send_wait must be awaited on a worker");
-        }
-        started_ = true;
-        worker_ = std::move(worker_value);
-        const auto now = std::chrono::steady_clock::now();
-        if (timeout_.has_value()) {
-            deadline_ = timeout_->deadline_from(now);
-        }
+        worker_ = detail::worker_ref_access::current();
+        bounds_.start(worker_, "channel send_wait must be awaited on a worker");
         auto& state = *state_;
         auto lock = state.lock_state();
         if (const auto rejection = state.check_open_locked()) {
@@ -342,15 +330,11 @@ public:
             complete_ready({channel_send_status::sent, slot});
             return true;
         }
-        if (stop_token_.stop_requested()) {
-            complete_ready({channel_send_status::cancelled, nullptr});
+        if (const auto ended = bounds_.ended()) {
+            complete_ready({send_status(*ended), nullptr});
             return true;
         }
-        if (deadline_.has_value() && *deadline_ <= now) {
-            complete_ready({channel_send_status::timed_out, nullptr});
-            return true;
-        }
-        state.enqueue_send_waiter(*this);
+        state.send_waiters_.push_back(*this);
         return false;
     }
 
@@ -361,18 +345,16 @@ public:
             auto lock = state.lock_state();
             // A timer is always armed on the awaiting worker, at the deadline or
             // never, so that worker's timer shutdown also ends the wait.
-            if (queued_) {
-                auto status = worker_timer_schedule_status::worker_stopping;
+            if (this->queued()) {
+                bool armed = false;
                 try {
-                    status = worker_.schedule_timer(timer_, deadline_.value_or(std::chrono::steady_clock::time_point::max()), [this](worker_timer_outcome outcome) noexcept {
-                        on_timer_completed(outcome);
-                    });
+                    armed = bounds_.arm_deadline<channel_send_operation, &channel_send_operation::on_end>(*this, true);
                 } catch (...) {
-                    (void)state.remove_send_waiter(*this);
+                    (void)state.send_waiters_.remove(*this);
                     throw;
                 }
-                if (status == worker_timer_schedule_status::worker_stopping) {
-                    (void)state.remove_send_waiter(*this);
+                if (!armed) {
+                    (void)state.send_waiters_.remove(*this);
                     (void)completion_.complete({channel_send_status::worker_stopping, nullptr});
                 }
             }
@@ -380,8 +362,8 @@ public:
         }
         // Registered only once the wait really suspends; a stop already
         // requested runs the callback inline and completes the wait.
-        if (suspended && stop_token_.stoppable()) {
-            stop_token_.register_callback(stop_registration_, [this] {
+        if (suspended && bounds_.token().stoppable()) {
+            bounds_.token().register_callback(stop_registration_, [this] {
                 request_cancellation();
             });
         }
@@ -392,7 +374,7 @@ public:
         using result_type = channel_send_result<t_type>;
         const auto outcome = completion_.take_value();
         if (outcome.status_ != channel_send_status::sent) {
-            return detail::worker_delivery_access::reject<result_type>(outcome.status_, std::move(*value_));
+            return detail::delivery_access::reject<result_type>(outcome.status_, std::move(*value_));
         }
         auto& state = *state_;
         typename state_type::node_guard guard(state, outcome.slot_);
@@ -413,9 +395,9 @@ public:
             }
         }
         if (rejection) {
-            return detail::worker_delivery_access::reject<result_type>(*rejection, std::move(*outcome.slot_->value_));
+            return detail::delivery_access::reject<result_type>(*rejection, std::move(*outcome.slot_->value_));
         }
-        return detail::worker_delivery_access::accept<result_type>();
+        return detail::delivery_access::accept<result_type>();
     }
 
 private:
@@ -434,8 +416,18 @@ private:
     channel_send_operation(std::shared_ptr<state_type> state_value, t_type&& value, operation_options options) noexcept(std::is_nothrow_move_constructible_v<t_type>) :
         state_(std::move(state_value)),
         value_(std::move(value)),
-        timeout_(options.timeout_),
-        stop_token_(std::move(options.stop_token_)) {}
+        bounds_(std::move(options)) {}
+
+    [[nodiscard]] static channel_send_status send_status(wait_status status) noexcept {
+        switch (status) {
+            case wait_status::timed_out:
+                return channel_send_status::timed_out;
+            case wait_status::cancelled:
+                return channel_send_status::cancelled;
+            default:
+                return channel_send_status::worker_stopping;
+        }
+    }
 
     void complete_ready(outcome_type outcome) noexcept {
         (void)completion_.complete(std::move(outcome));
@@ -446,21 +438,19 @@ private:
     // this operation first.
     void complete_locked(outcome_type outcome) noexcept {
         if (completion_.complete(std::move(outcome))) {
-            if (timer_.registered()) {
-                timer_.cancel();
-            }
-            worker_.defer_resume(completion_.continuation());
+            bounds_.cancel_deadline();
+            detail::worker_ref_access::defer_resume(worker_, completion_.continuation());
         }
     }
 
-    void on_timer_completed(worker_timer_outcome outcome) noexcept {
+    void on_end(wait_status status) noexcept {
         std::coroutine_handle<> continuation;
         {
             auto lock = state_->lock_state();
-            if (!state_->remove_send_waiter(*this)) {
+            if (!state_->send_waiters_.remove(*this)) {
                 return;
             }
-            if (!completion_.complete({outcome == worker_timer_outcome::expired ? channel_send_status::timed_out : channel_send_status::worker_stopping, nullptr})) {
+            if (!completion_.complete({send_status(status), nullptr})) {
                 return;
             }
             continuation = completion_.continuation();
@@ -472,23 +462,17 @@ private:
     // state outlive it.
     void request_cancellation() noexcept {
         auto lock = state_->lock_state();
-        if (state_->remove_send_waiter(*this)) {
+        if (state_->send_waiters_.remove(*this)) {
             complete_locked({channel_send_status::cancelled, nullptr});
         }
     }
 
     std::shared_ptr<state_type> state_;
     std::optional<t_type> value_;
-    std::optional<operation_timeout> timeout_;
-    stop_token stop_token_;
+    // The awaiting worker, which may differ from the channel's.
     worker_ref worker_;
-    std::optional<std::chrono::steady_clock::time_point> deadline_;
-    // Queue links, guarded by the state lock.
-    channel_send_operation* previous_{nullptr};
-    channel_send_operation* next_{nullptr};
-    bool queued_{false};
+    wait_bounds bounds_;
     bool started_{false};
-    worker_timer_registration timer_;
     detail::suspend_race_state<outcome_type> completion_;
     // Last so callback unregistration completes before anything it touches
     // begins destruction.
@@ -498,58 +482,23 @@ private:
 namespace detail {
 
 template <typename t_type>
-void channel_state<t_type>::enqueue_send_waiter(channel_send_operation<t_type>& waiter) noexcept {
-    waiter.previous_ = send_tail_;
-    waiter.next_ = nullptr;
-    waiter.queued_ = true;
-    if (send_tail_ != nullptr) {
-        send_tail_->next_ = std::addressof(waiter);
-    } else {
-        send_head_ = std::addressof(waiter);
-    }
-    send_tail_ = std::addressof(waiter);
-}
-
-template <typename t_type>
-bool channel_state<t_type>::remove_send_waiter(channel_send_operation<t_type>& waiter) noexcept {
-    if (!waiter.queued_) {
-        return false;
-    }
-    if (waiter.previous_ != nullptr) {
-        waiter.previous_->next_ = waiter.next_;
-    } else {
-        send_head_ = waiter.next_;
-    }
-    if (waiter.next_ != nullptr) {
-        waiter.next_->previous_ = waiter.previous_;
-    } else {
-        send_tail_ = waiter.previous_;
-    }
-    waiter.previous_ = nullptr;
-    waiter.next_ = nullptr;
-    waiter.queued_ = false;
-    return true;
-}
-
-template <typename t_type>
 void channel_state<t_type>::grant_send_waiters() noexcept {
-    while (send_head_ != nullptr && std::holds_alternative<channel_open>(lifecycle_)) {
+    while (send_waiters_.front() != nullptr && std::holds_alternative<channel_open>(lifecycle_)) {
         auto* slot = reserve_node();
         if (slot == nullptr) {
             return;
         }
-        auto& waiter = *send_head_;
-        (void)remove_send_waiter(waiter);
+        auto& waiter = *send_waiters_.front();
+        (void)send_waiters_.remove(waiter);
         waiter.complete_locked({channel_send_status::sent, slot});
     }
 }
 
 template <typename t_type>
 void channel_state<t_type>::complete_send_waiters(channel_send_status status) noexcept {
-    while (send_head_ != nullptr) {
-        auto& waiter = *send_head_;
-        (void)remove_send_waiter(waiter);
-        waiter.complete_locked({status, nullptr});
+    while (auto* waiter = send_waiters_.front()) {
+        (void)send_waiters_.remove(*waiter);
+        waiter->complete_locked({status, nullptr});
     }
 }
 
@@ -572,7 +521,7 @@ public:
         // Payload code may synchronously rebind this handle while the call is active.
         const auto state = state_;
         if (state == nullptr) {
-            return detail::worker_delivery_access::reject<channel_send_result<t_type>>(channel_send_status::closed, std::move(value));
+            return detail::delivery_access::reject<channel_send_result<t_type>>(channel_send_status::closed, std::move(value));
         }
         using state_type = detail::channel_state<t_type>;
         typename state_type::node* slot = nullptr;
@@ -585,7 +534,7 @@ public:
             }
         }
         if (rejection) {
-            return detail::worker_delivery_access::reject<channel_send_result<t_type>>(*rejection, std::move(value));
+            return detail::delivery_access::reject<channel_send_result<t_type>>(*rejection, std::move(value));
         }
 
         typename state_type::node_guard guard(*state, slot);
@@ -605,9 +554,9 @@ public:
             }
         }
         if (rejection) {
-            return detail::worker_delivery_access::reject<channel_send_result<t_type>>(*rejection, std::move(*slot->value_));
+            return detail::delivery_access::reject<channel_send_result<t_type>>(*rejection, std::move(*slot->value_));
         }
-        return detail::worker_delivery_access::accept<channel_send_result<t_type>>();
+        return detail::delivery_access::accept<channel_send_result<t_type>>();
     }
 
     // The waiting form of send(): a cold operation that, once awaited, takes a
@@ -675,16 +624,16 @@ public:
             if (!owner_value.receiver_closed_) {
                 if (auto* item = owner_value.dequeue()) {
                     owner_value.grant_send_waiters();
-                    wait_.complete_ready(worker_wait_result<node*>::with_value(item));
+                    wait_.complete_ready(wait_result<node*>::with_value(item));
                     return true;
                 }
             }
             if (std::holds_alternative<detail::channel_worker_stopping>(owner_value.lifecycle_)) {
-                wait_.complete_ready(worker_wait_status::worker_stopping);
+                wait_.complete_ready(wait_status::worker_stopping);
                 return true;
             }
             if (std::holds_alternative<detail::channel_closed>(owner_value.lifecycle_)) {
-                wait_.complete_ready(worker_wait_status::closed);
+                wait_.complete_ready(wait_status::closed);
                 return true;
             }
             assert(std::holds_alternative<detail::channel_open>(owner_value.lifecycle_));
@@ -695,14 +644,14 @@ public:
             return wait_.suspend(continuation);
         }
 
-        [[nodiscard]] worker_wait_result<t_type> await_resume() {
+        [[nodiscard]] wait_result<t_type> await_resume() {
             auto result = wait_.take_result();
             if (!result.has_value()) {
-                return worker_wait_result<t_type>::with_status(result.status());
+                return wait_result<t_type>::with_status(result.status());
             }
             auto* item = result.value();
             typename state_type::node_guard guard(wait_.state(), item);
-            return worker_wait_result<t_type>::with_value(std::move(*item->value_));
+            return wait_result<t_type>::with_value(std::move(*item->value_));
         }
 
     private:

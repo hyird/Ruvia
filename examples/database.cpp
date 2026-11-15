@@ -44,7 +44,7 @@ ruvia::db_config db_config_from_env(const example::environment& env_value) {
     auto config = example::database_config(env_value, selected);
     config.acquire_timeout_ = std::chrono::seconds(2);
     config.connect_timeout_ = std::chrono::seconds(5);
-    config.query_timeout_ = std::chrono::seconds(30);
+    config.command_timeout_ = std::chrono::seconds(30);
     return config;
 }
 
@@ -179,9 +179,9 @@ int main() {
 
         if (env_value.get<bool>("RUVIA_DB_MIGRATE").value_or(false)) {
             if (config.driver_ == ruvia::db_driver::postgresql) {
-                (void)example::apply_migrations(config, postgresql_migrations);
+                ruvia::db_migrator::run(config, postgresql_migrations);
             } else {
-                (void)example::apply_migrations(config, mariadb_migrations);
+                ruvia::db_migrator::run(config, mariadb_migrations);
             }
         }
         database_controller::set_driver(config.driver_);

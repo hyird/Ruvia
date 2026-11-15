@@ -23,6 +23,48 @@
 #include "fixed_string.h"
 #include "model_value.h"
 
+namespace ruvia {
+
+// Failure category shared by db_error and redis_error.
+enum class backend_error_code : std::uint8_t {
+    not_configured,
+    // DNS resolution, TCP/TLS establishment, or the startup handshake
+    // (authentication, database selection) failed.
+    connect_failed,
+    io_error,
+    protocol_error,
+    // The server rejected one statement or command.
+    command_failed,
+    timeout,
+    cancelled,
+    closing,
+};
+
+// A database field or Redis reply that cannot become the requested type.
+class conversion_error final : public std::runtime_error {
+public:
+    enum class code_type : std::uint8_t {
+        invalid_format,
+        out_of_range,
+        unexpected_null,
+        missing_column,
+        unexpected_row_count,
+    };
+
+    conversion_error(code_type code, std::string_view message) :
+        std::runtime_error(std::string(message)),
+        code_(code) {}
+
+    [[nodiscard]] code_type code() const noexcept {
+        return code_;
+    }
+
+private:
+    code_type code_;
+};
+
+}  // namespace ruvia
+
 namespace ruvia::detail {
 
 enum class text_scalar_parse_error {
@@ -73,6 +115,20 @@ template <text_scalar t_type>
         }
         return result_type(std::in_place_index<0>, converted);
     }
+}
+
+// The one text-to-scalar conversion for database fields and Redis replies.
+template <text_scalar t_type>
+[[nodiscard]] t_type convert_text(std::string_view text) {
+    auto parsed = parse_text_scalar<t_type>(text);
+    if (const auto* error = std::get_if<text_scalar_parse_error>(&parsed)) {
+        if constexpr (std::is_same_v<t_type, bool>) {
+            throw conversion_error(conversion_error::code_type::invalid_format, "text is not a boolean");
+        } else {
+            throw conversion_error(*error == text_scalar_parse_error::out_of_range ? conversion_error::code_type::out_of_range : conversion_error::code_type::invalid_format, "text is not a valid number");
+        }
+    }
+    return std::get<t_type>(std::move(parsed));
 }
 
 // Shared owning value storage. Backend descriptors and relations stay with

@@ -7,7 +7,6 @@
 #include <cstdlib>
 #include <filesystem>
 #include <optional>
-#include <span>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -15,12 +14,9 @@
 #include <utility>
 
 #include "app.h"
-#include "blocking_pool.h"
-#include "event_loop.h"
 #include "http_client_types.h"
 
 #ifdef RUVIA_ENABLE_DATABASE
-#include "db_migration.h"
 #include "db_repository.h"
 #endif
 
@@ -126,21 +122,8 @@ inline ruvia::db_config database_config(const environment& env, ruvia::db_driver
         config.pool_size_per_worker_ = *size;
     }
     config.connect_timeout_ = std::chrono::seconds(5);
-    config.query_timeout_ = std::chrono::seconds(10);
+    config.command_timeout_ = std::chrono::seconds(10);
     return config;
-}
-
-// Startup bridge on the host thread: migrates on a short-lived loop, whose
-// blocking pool looks a DNS RUVIA_DB_HOST up, before the demo or app starts.
-inline ruvia::db_migration_report apply_migrations(const ruvia::db_config& config, std::span<const ruvia::db_migration> migrations) {
-    ruvia::blocking_pool host_lookups({.thread_count_ = 1});
-    ruvia::event_loop_pool loops({.loop_count_ = 1, .blocking_pool_ = &host_lookups});
-    const ruvia::db_migrator migrator(loops.loop(0), config);
-    loops.start();
-    auto run = loops.loop(0).start(migrator.migrate(migrations));
-    run.wait();
-    loops.join();
-    return std::move(run).get();
 }
 #endif
 

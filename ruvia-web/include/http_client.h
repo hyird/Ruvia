@@ -275,7 +275,7 @@ public:
 
 private:
     // The one forwarding chain of both pipe_to() destinations.
-    [[nodiscard]] task<void> pipe_to_destination(http_response& head, response_stream_writer& writer, ::ruvia::operation_scope& destination, operation_options operation);
+    [[nodiscard]] task<void> pipe_to_destination(http_response& head, response_stream_writer& writer, detail::operation_scope& destination, operation_options operation);
     template <typename value_type>
     static task<value_type> decode_json(task<http_client_response_bytes> input) {
         auto owned = co_await std::move(input);
@@ -592,16 +592,16 @@ private:
     friend class context;
     friend class web_worker_context;
     friend class detail::worker_client_registry_view;
-    http_client_ref(detail::http_client_pool& pool, ::ruvia::operation_scope& scope) noexcept;
-    http_client_ref(detail::http_client_pool& pool, ::ruvia::operation_scope& scope, operation_options options) noexcept;
-    [[nodiscard]] http_client_ref bind_caller_scope(::ruvia::operation_scope& scope, const stop_token& host_stop) && noexcept;
-    static void expire_capability(void* target) noexcept;
+    http_client_ref(detail::http_client_pool& pool, detail::operation_scope& scope) noexcept;
+    http_client_ref(detail::http_client_pool& pool, detail::operation_scope& scope, operation_options options) noexcept;
+    [[nodiscard]] http_client_ref bind_caller_scope(detail::operation_scope& scope, const stop_token& host_stop) && noexcept;
+    void expire_capability() noexcept;
 
     detail::http_client_pool* pool_{nullptr};
     std::shared_ptr<detail::http_client_pool> pool_owner_;
     operation_options options_;
     stop_token host_stop_token_;
-    scoped_capability_registration registration_;
+    detail::capability_registration<&http_client_ref::expire_capability> registration_;
     const detail::http_client_registry* registry_{};
 };
 

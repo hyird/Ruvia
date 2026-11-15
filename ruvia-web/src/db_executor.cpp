@@ -59,11 +59,11 @@ template <bool exec_statement>
 
 }  // namespace
 
-db_executor::db_executor(detail::db_pool_ref_type client, ::ruvia::operation_scope& operation_scope, detail::request_io_metrics* io_metrics, detail::db_query_cache_state* cache) noexcept :
+db_executor::db_executor(detail::db_pool_ref_type client, detail::operation_scope& operation_scope, detail::request_io_metrics* io_metrics, detail::db_query_cache_state* cache) noexcept :
     cache_(cache),
     client_(client),
     io_metrics_(io_metrics),
-    registration_(operation_scope, this, &db_executor::expire_capability) {}
+    registration_(operation_scope, *this) {}
 
 db_executor::db_executor(const db_executor& other) noexcept :
     cache_(other.cache_),
@@ -71,13 +71,13 @@ db_executor::db_executor(const db_executor& other) noexcept :
     io_metrics_(other.io_metrics_),
     options_(other.options_),
     request_stop_(other.request_stop_),
-    registration_(other.registration_, this) {}
+    registration_(other.registration_, *this) {}
 
 #ifdef RUVIA_ENABLE_REDIS
 db_query_result_cache db_executor::query_result_cache() const {
     registration_.require_active();
     if (!cache_) {
-        throw db_error(db_error::code_type::not_configured, std::nullopt, "database query cache is not configured");
+        throw db_error(backend_error_code::not_configured, std::nullopt, "database query cache is not configured");
     }
     return db_query_result_cache(*cache_, registration_.scope(), io_metrics_, options_, request_stop_);
 }
@@ -97,13 +97,12 @@ const worker_ref& db_executor::worker() const& {
     });
 }
 
-void db_executor::expire_capability(void* target) noexcept {
-    auto& handle = *static_cast<db_executor*>(target);
-    handle.cache_ = nullptr;
-    handle.client_ = detail::db_pool_ref_type{};
-    handle.io_metrics_ = nullptr;
-    handle.options_ = {};
-    handle.request_stop_ = {};
+void db_executor::expire_capability() noexcept {
+    cache_ = nullptr;
+    client_ = detail::db_pool_ref_type{};
+    io_metrics_ = nullptr;
+    options_ = {};
+    request_stop_ = {};
 }
 
 db_driver db_executor::query_driver() const {
@@ -151,34 +150,33 @@ task<db_exec_result> db_executor::execute_query(const db_query& query) const {
     if (statement.returns_rows()) {
         throw std::invalid_argument("execute requires a statement without returned rows");
     }
-    return ::ruvia::make_scoped_operation(registration_.scope(), start_db_statement<true>(options_, request_stop_, client_, std::move(statement.sql_), std::move(statement.params_), io_metrics_));
+    return registration_.attach(start_db_statement<true>(options_, request_stop_, client_, std::move(statement.sql_), std::move(statement.params_), io_metrics_));
 }
 
 task<db_exec_result> db_executor::execute_prepared(std::string sql) const {
-    registration_.require_active();
-    return ::ruvia::make_scoped_operation(registration_.scope(), start_db_statement<true>(options_, request_stop_, client_, std::move(sql), {}, io_metrics_));
+    return registration_.attach(start_db_statement<true>(options_, request_stop_, client_, std::move(sql), {}, io_metrics_));
 }
 
 task<db_rows> db_executor::query(std::string_view sql, std::span<const db_value> params) const {
     registration_.require_active();
     auto statement = prepare_db_statement(sql, params);
-    return ::ruvia::make_scoped_operation(registration_.scope(), start_db_statement<false>(options_, request_stop_, client_, std::move(statement.sql_), std::move(statement.params_), io_metrics_));
+    return registration_.attach(start_db_statement<false>(options_, request_stop_, client_, std::move(statement.sql_), std::move(statement.params_), io_metrics_));
 }
 
 task<db_exec_result> db_executor::execute(std::string_view sql, std::span<const db_value> params) const {
     registration_.require_active();
     auto statement = prepare_db_statement(sql, params);
-    return ::ruvia::make_scoped_operation(registration_.scope(), start_db_statement<true>(options_, request_stop_, client_, std::move(statement.sql_), std::move(statement.params_), io_metrics_));
+    return registration_.attach(start_db_statement<true>(options_, request_stop_, client_, std::move(statement.sql_), std::move(statement.params_), io_metrics_));
 }
 
 task<db_stream_result> db_executor::query_stream(std::string_view sql, std::span<const db_value> params) const {
     registration_.require_active();
     auto statement = prepare_db_statement(sql, params);
     auto& scope = registration_.scope();
-    return ::ruvia::make_scoped_operation(scope, query_stream_prepared(client_, std::move(statement.sql_), std::move(statement.params_), scope, io_metrics_, options_, request_stop_));
+    return registration_.attach(query_stream_prepared(client_, std::move(statement.sql_), std::move(statement.params_), scope, io_metrics_, options_, request_stop_));
 }
 
-task<db_stream_result> db_executor::query_stream_prepared(detail::db_pool_ref_type client, std::string sql, std::vector<db_value> params, ::ruvia::operation_scope& operation_scope, detail::request_io_metrics* io_metrics, operation_options options, stop_token request_stop) {
+task<db_stream_result> db_executor::query_stream_prepared(detail::db_pool_ref_type client, std::string sql, std::vector<db_value> params, detail::operation_scope& operation_scope, detail::request_io_metrics* io_metrics, operation_options options, stop_token request_stop) {
     detail::scoped_request_io_timer timer(io_metrics, detail::request_io_kind::db);
     // The stream outlives this call, so it owns the link its reads use.
     auto request_link = detail::make_request_link(options, request_stop);
@@ -193,10 +191,10 @@ task<db_stream_result> db_executor::query_stream_prepared(detail::db_pool_ref_ty
 task<db_transaction> db_executor::begin_transaction(db_transaction_options options) const {
     registration_.require_active();
     auto& scope = registration_.scope();
-    return ::ruvia::make_scoped_operation(scope, begin_transaction_prepared(query_backend(), scope, options_, request_stop_, std::move(options)));
+    return registration_.attach(begin_transaction_prepared(query_backend(), scope, options_, request_stop_, std::move(options)));
 }
 
-task<db_transaction> db_executor::begin_transaction_prepared(detail::db_query_backend backend, ::ruvia::operation_scope& operation_scope, operation_options operation_options_value, stop_token request_stop, db_transaction_options transaction_options) {
+task<db_transaction> db_executor::begin_transaction_prepared(detail::db_query_backend backend, detail::operation_scope& operation_scope, operation_options operation_options_value, stop_token request_stop, db_transaction_options transaction_options) {
     detail::scoped_request_io_timer timer(backend.io_metrics_, detail::request_io_kind::db);
     // The transaction outlives this call, so it owns the link its statements use.
     auto request_link = detail::make_request_link(operation_options_value, request_stop);
@@ -214,11 +212,10 @@ task<void> db_executor::notify(std::string_view channel, std::string_view payloa
         throw std::invalid_argument("database notify requires PostgreSQL");
     }
     auto statement = prepare_db_notify(channel, payload);
-    auto& scope = registration_.scope();
-    return ::ruvia::make_scoped_operation(scope, discard_rows_task(start_db_statement<false>(options_, request_stop_, client_, std::move(statement.sql_), std::move(statement.params_), io_metrics_)));
+    return registration_.attach(discard_rows_task(start_db_statement<false>(options_, request_stop_, client_, std::move(statement.sql_), std::move(statement.params_), io_metrics_)));
 }
 
-db_executor db_executor::bind_caller_scope(::ruvia::operation_scope& scope, detail::request_io_metrics* io_metrics, const stop_token& stop_token_value) && {
+db_executor db_executor::bind_caller_scope(detail::operation_scope& scope, detail::request_io_metrics* io_metrics, const stop_token& stop_token_value) && {
     registration_.require_active();
     db_executor bound(client_, scope, io_metrics, cache_);
     bound.options_ = options_;
@@ -256,7 +253,7 @@ namespace detail {
 namespace {
 
 [[noreturn]] void throw_db_plan_timeout(db_driver driver) {
-    throw db_error(db_error::code_type::timeout, driver, "database query timed out");
+    throw db_error(backend_error_code::timeout, driver, "database query timed out");
 }
 
 }  // namespace

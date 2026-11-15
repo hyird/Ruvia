@@ -197,7 +197,7 @@ redis_reply_builder::redis_reply_builder(std::optional<std::size_t> max_reply_by
 redisReader* redis_reply_builder::create_reader() {
     auto* reader_value = redisReaderCreateWithFunctions(&functions_);
     if (reader_value == nullptr) {
-        throw redis_error(redis_error::code_type::protocol_error, "failed to create redis reader");
+        throw redis_error(backend_error_code::protocol_error, "failed to create redis reader");
     }
     reader_value->privdata = this;
     if (max_reply_bytes_.has_value()) {
@@ -229,9 +229,9 @@ void redis_reply_builder::throw_if_rejected() {
         case rejection_type::none:
             return;
         case rejection_type::elements:
-            throw redis_error(redis_error::code_type::protocol_error, "redis reply exceeds configured element limit");
+            throw redis_error(backend_error_code::protocol_error, "redis reply exceeds configured element limit");
         case rejection_type::depth:
-            throw redis_error(redis_error::code_type::protocol_error, "redis array nesting is too deep");
+            throw redis_error(backend_error_code::protocol_error, "redis array nesting is too deep");
         case rejection_type::failed:
             std::rethrow_exception(failure);
     }
@@ -352,7 +352,7 @@ namespace {
     std::uint64_t cursor_value = 0;
     const auto [ptr, ec] = std::from_chars(value.data(), value.data() + value.size(), cursor_value);
     if (ec != std::errc{} || ptr != value.data() + value.size()) {
-        throw redis_error(redis_error::code_type::protocol_error, "invalid redis scan cursor");
+        throw redis_error(backend_error_code::protocol_error, "invalid redis scan cursor");
     }
     if (cursor_value == 0) {
         return std::nullopt;
@@ -362,7 +362,7 @@ namespace {
 
 void throw_if_redis_error(const redis_value& value) {
     if (value.kind() == redis_value::kind_type::error) {
-        throw redis_error(redis_error::code_type::command_error, value.error());
+        throw redis_error(backend_error_code::command_failed, value.error());
     }
 }
 
@@ -371,7 +371,7 @@ void throw_if_redis_error(const redis_value& value) {
 std::string_view redis_value_string(const redis_value& value) {
     throw_if_redis_error(value);
     if (value.kind() != redis_value::kind_type::string) {
-        throw redis_error(redis_error::code_type::protocol_error, "redis reply is not a string");
+        throw redis_error(backend_error_code::protocol_error, "redis reply is not a string");
     }
     return value.string();
 }
@@ -384,7 +384,7 @@ std::string take_redis_string(redis_value&& value) {
 std::int64_t redis_value_integer(const redis_value& value) {
     throw_if_redis_error(value);
     if (value.kind() != redis_value::kind_type::integer) {
-        throw redis_error(redis_error::code_type::protocol_error, "redis reply is not an integer");
+        throw redis_error(backend_error_code::protocol_error, "redis reply is not an integer");
     }
     return value.integer();
 }
@@ -397,13 +397,13 @@ bool redis_value_integer_bool(const redis_value& value) {
     if (integer == 1) {
         return true;
     }
-    throw redis_error(redis_error::code_type::protocol_error, "redis boolean reply is not 0 or 1");
+    throw redis_error(backend_error_code::protocol_error, "redis boolean reply is not 0 or 1");
 }
 
 std::span<const redis_value> redis_value_array(const redis_value& value) {
     throw_if_redis_error(value);
     if (value.kind() != redis_value::kind_type::array) {
-        throw redis_error(redis_error::code_type::protocol_error, "redis reply is not an array");
+        throw redis_error(backend_error_code::protocol_error, "redis reply is not an array");
     }
     return value.array();
 }
@@ -425,7 +425,7 @@ void throw_if_redis_transaction_reply_error(const redis_value& value, std::size_
     message.append(index_text);
     message.append(": ");
     message.append(value.error());
-    throw redis_error(redis_error::code_type::command_error, message);
+    throw redis_error(backend_error_code::command_failed, message);
 }
 
 std::optional<std::string> parse_redis_optional_string(redis_value&& value) {
@@ -446,13 +446,13 @@ bool parse_redis_integer_bool(redis_value&& value) {
 
 void parse_redis_ok(redis_value&& value) {
     if (!http_ascii_equals_ignore_case(redis_value_string(value), "OK")) {
-        throw redis_error(redis_error::code_type::command_error, "unexpected redis status reply");
+        throw redis_error(backend_error_code::command_failed, "unexpected redis status reply");
     }
 }
 
 void parse_redis_pong(redis_value&& value) {
     if (!http_ascii_equals_ignore_case(redis_value_string(value), "PONG")) {
-        throw redis_error(redis_error::code_type::command_error, "unexpected redis ping reply");
+        throw redis_error(backend_error_code::command_failed, "unexpected redis ping reply");
     }
 }
 
@@ -493,7 +493,7 @@ redis_set_result parse_redis_set_reply(redis_value&& value, const redis_set_opti
     }
     if (!returns_previous) {
         if (!http_ascii_equals_ignore_case(redis_value_string(value), "OK")) {
-            throw redis_error(redis_error::code_type::command_error, "unexpected redis set reply");
+            throw redis_error(backend_error_code::command_failed, "unexpected redis set reply");
         }
         return redis_types_access::set_result(true);
     }
@@ -510,14 +510,14 @@ redis_ttl parse_redis_ttl(redis_value&& value, bool seconds_precision) {
         return redis_types_access::ttl(redis_ttl_state::persistent);
     }
     if (integer < 0) {
-        throw redis_error(redis_error::code_type::protocol_error, "invalid redis TTL reply");
+        throw redis_error(backend_error_code::protocol_error, "invalid redis TTL reply");
     }
     using milliseconds_type = std::chrono::milliseconds;
     auto milliseconds = integer;
     if (seconds_precision) {
         constexpr auto scale = milliseconds_type(std::chrono::seconds(1)).count();
         if (integer > milliseconds_type::max().count() / scale) {
-            throw redis_error(redis_error::code_type::protocol_error, "redis TTL reply exceeds milliseconds range");
+            throw redis_error(backend_error_code::protocol_error, "redis TTL reply exceeds milliseconds range");
         }
         milliseconds *= scale;
     }
@@ -539,7 +539,7 @@ double parse_redis_double(std::string_view value, std::string_view context_value
     }
     const auto output = detail::parse_decimal_number(value);
     if (!output || !std::isfinite(*output)) {
-        throw redis_error(redis_error::code_type::protocol_error, context_value);
+        throw redis_error(backend_error_code::protocol_error, context_value);
     }
     return *output;
 }
@@ -547,7 +547,7 @@ double parse_redis_double(std::string_view value, std::string_view context_value
 std::vector<redis_key_value> parse_redis_key_value_array(redis_value&& value, std::string_view context_value) {
     const auto values = redis_value_array(value);
     if (values.size() % 2 != 0) {
-        throw redis_error(redis_error::code_type::protocol_error, context_value);
+        throw redis_error(backend_error_code::protocol_error, context_value);
     }
     std::vector<redis_key_value> result;
     result.reserve(values.size() / 2);
@@ -560,7 +560,7 @@ std::vector<redis_key_value> parse_redis_key_value_array(redis_value&& value, st
 std::vector<redis_scored_value> parse_redis_scored_array(redis_value&& value) {
     const auto values = redis_value_array(value);
     if (values.size() % 2 != 0) {
-        throw redis_error(redis_error::code_type::protocol_error, "unexpected redis scored array reply");
+        throw redis_error(backend_error_code::protocol_error, "unexpected redis scored array reply");
     }
     std::vector<redis_scored_value> result;
     result.reserve(values.size() / 2);
@@ -589,7 +589,7 @@ template <typename result_type, typename payload_parser_type>
 [[nodiscard]] result_type parse_redis_scan_envelope(redis_value&& value, result_type result_value, std::string_view context_value, payload_parser_type parse_payload) {
     const auto root = redis_value_array(value);
     if (root.size() != 2) {
-        throw redis_error(redis_error::code_type::protocol_error, context_value);
+        throw redis_error(backend_error_code::protocol_error, context_value);
     }
     redis_types_access::next_cursor(result_value) = parse_redis_cursor(redis_value_string(root[0]));
     parse_payload(result_value, std::move(root[1]));
@@ -623,7 +623,7 @@ std::optional<redis_key_value> parse_redis_blocking_pop_reply(redis_value&& valu
     }
     const auto items = redis_value_array(value);
     if (items.size() != 2) {
-        throw redis_error(redis_error::code_type::protocol_error, "unexpected redis blocking pop reply");
+        throw redis_error(backend_error_code::protocol_error, "unexpected redis blocking pop reply");
     }
     return redis_types_access::key_value(take_redis_string(std::move(items[0])), take_redis_string(std::move(items[1])));
 }
@@ -641,7 +641,7 @@ std::optional<redis_x_read_group_result> parse_redis_x_read_group_reply(redis_va
     for (auto& stream_value : stream_values) {
         const auto stream_parts = redis_value_array(stream_value);
         if (stream_parts.size() != 2) {
-            throw redis_error(redis_error::code_type::protocol_error, "unexpected redis xreadgroup stream reply");
+            throw redis_error(backend_error_code::protocol_error, "unexpected redis xreadgroup stream reply");
         }
         auto stream = redis_types_access::stream_read_result(take_redis_string(std::move(stream_parts[0])));
         const auto entry_values = redis_value_array(stream_parts[1]);
@@ -650,7 +650,7 @@ std::optional<redis_x_read_group_result> parse_redis_x_read_group_reply(redis_va
         for (auto& entry_value : entry_values) {
             const auto entry_parts = redis_value_array(entry_value);
             if (entry_parts.size() != 2) {
-                throw redis_error(redis_error::code_type::protocol_error, "unexpected redis xreadgroup entry reply");
+                throw redis_error(backend_error_code::protocol_error, "unexpected redis xreadgroup entry reply");
             }
             auto parsed_entry = redis_types_access::stream_entry(take_redis_string(std::move(entry_parts[0])));
             if (!entry_parts[1].is_null()) {
@@ -671,7 +671,7 @@ redis_pubsub_event parse_redis_pubsub_event(const redis_value& value) {
     constexpr std::string_view malformed = "unexpected redis pub/sub push";
     const auto items = redis_value_array(value);
     if (items.size() < 3 || items.size() > 4) {
-        throw redis_error(redis_error::code_type::protocol_error, malformed);
+        throw redis_error(backend_error_code::protocol_error, malformed);
     }
     const auto kind = redis_value_string(items[0]);
     const auto optional_name = [&](const redis_value& item) -> std::optional<std::string_view> {
@@ -684,14 +684,14 @@ redis_pubsub_event parse_redis_pubsub_event(const redis_value& value) {
         const bool pattern = kind == "psubscribe" || kind == "punsubscribe";
         const bool subscribed = kind == "subscribe" || kind == "psubscribe";
         if (!subscribed && kind != "unsubscribe" && kind != "punsubscribe") {
-            throw redis_error(redis_error::code_type::protocol_error, malformed);
+            throw redis_error(backend_error_code::protocol_error, malformed);
         }
         const auto name = optional_name(items[1]);
         const auto confirmation_kind = pattern ? (subscribed ? redis_pubsub_confirmation_kind::pattern_subscribed : redis_pubsub_confirmation_kind::pattern_unsubscribed) : (subscribed ? redis_pubsub_confirmation_kind::subscribed : redis_pubsub_confirmation_kind::unsubscribed);
         return redis_types_access::pubsub_confirmation(confirmation_kind, name, redis_value_integer(items[2]));
     }
     if (kind != "pmessage") {
-        throw redis_error(redis_error::code_type::protocol_error, malformed);
+        throw redis_error(backend_error_code::protocol_error, malformed);
     }
     return redis_types_access::pubsub_message(redis_value_string(items[2]), redis_value_string(items[1]), redis_value_string(items[3]));
 }
@@ -715,11 +715,11 @@ bool is_redis_subscription_pong(const redis_value& value) {
 
 namespace ruvia {
 
-redis_error::redis_error(code_type code, std::string_view message) :
+redis_error::redis_error(backend_error_code code, std::string_view message) :
     std::runtime_error(std::string(message)),
     code_(code) {}
 
-redis_error::code_type redis_error::code() const noexcept {
+backend_error_code redis_error::code() const noexcept {
     return code_;
 }
 

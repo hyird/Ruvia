@@ -29,7 +29,7 @@ ruvia::db_config config{
     .database_ = "app_db",
     .pool_size_per_worker_ = 4,
     .connect_timeout_ = std::chrono::seconds(5),
-    .query_timeout_ = std::chrono::seconds(30),
+    .command_timeout_ = std::chrono::seconds(30),
     .acquire_timeout_ = std::chrono::seconds(5),
     .transaction_timeout_ = std::chrono::seconds(60),
 };
@@ -41,10 +41,9 @@ ruvia::app().db({
 });
 
 // 2. 或在独立 event_loop 上使用 db_client（通过 client.db() 获取句柄）。
-//    host_ 不是 IP 字面量时，事件循环须借用执行 DNS 查询的阻塞池，否则构造抛出
-//    std::invalid_argument；db_migrator 同样借用其事件循环的阻塞池：
-// ruvia::blocking_pool lookups({.thread_count_ = 1});  // 比事件循环存活更久
-// ruvia::event_loop_pool loops({.loop_count_ = 1, .blocking_pool_ = &lookups});
+//    host_ 不是 IP 字面量时在事件循环的阻塞池上做 DNS 查询（独立事件循环默认自带）；
+//    事件循环以 .blocking_pool_ = nullptr 禁用阻塞池时构造抛出 std::invalid_argument：
+// ruvia::event_loop_pool loops({.loop_count_ = 1});
 // auto loop = loops.loop(0);
 // ruvia::db_client client(loop, config);
 // co_await client.connect();
@@ -57,12 +56,12 @@ ruvia::app().db({
 
 `read_timeout_` / `write_timeout_` 按毫秒限制每次对应方向的 socket 等待，普通查询、事务和流式结果均适用；MariaDB 原生选项的秒级取整不会放宽框架配置。单次流式 `read()` 的 operation timeout 包含 EOF 后的最终状态排空，不会在阶段切换时重新计时；另一次显式 `close()` 使用自己的新预算。两者都不晚于下述流的整体截止期。
 
-`transaction_timeout_`（默认 `60s`，`std::nullopt` 关闭，零或负值作为非法配置以 `std::invalid_argument` 拒绝）是一次连接租约的整体截止期，与每条语句自身的超时构成双轨：事务从 `begin_transaction()` 取得连接起（`BEGIN` 之前，不含等待空闲连接的时间）到 `commit()` / `rollback()` 结束，流式结果从 `query_stream()` 取得连接起到读尽或 `close()` 为止，两次操作之间的空闲时间也计入。其中每条语句（含 `BEGIN`、`COMMIT`、`ROLLBACK` 与每次流式 `read()` / `close()`）的截止期取其自身 operation timeout、`query_timeout_` 与租约剩余时间中最早者。到期时：
+`transaction_timeout_`（默认 `60s`，`std::nullopt` 关闭，零或负值作为非法配置以 `std::invalid_argument` 拒绝）是一次连接租约的整体截止期，与每条语句自身的超时构成双轨：事务从 `begin_transaction()` 取得连接起（`BEGIN` 之前，不含等待空闲连接的时间）到 `commit()` / `rollback()` 结束，流式结果从 `query_stream()` 取得连接起到读尽或 `close()` 为止，两次操作之间的空闲时间也计入。其中每条语句（含 `BEGIN`、`COMMIT`、`ROLLBACK` 与每次流式 `read()` / `close()`）的截止期取其自身 operation timeout、`command_timeout_` 与租约剩余时间中最早者。到期时：
 
 - 语句正在执行：该语句以 `db_error`（`timeout`）失败，连接被关闭而不归还连接池，事务或流随之以失败结束，之后的调用因其已不再活跃而失败。
 - 调用方持有租约但没有操作在执行（如事务中等待远程 I/O）：worker 上由该截止期驱动的定时器（不轮询）立即关闭连接，服务端随之回滚事务并释放锁；之后对该事务或流的下一次调用（包括 `commit()`、`rollback()`、`read()`、`close()`）不再发送任何语句，以 `db_error`（`timeout`）失败并结束它。租约在此之前仍由持有者占用，析构或下一次调用后才回到连接池。
 
-迁移器不另设事务超时：PostgreSQL 的 `transactional` 迁移沿用 `transaction_timeout_`，单个迁移及其历史记录共用一次事务租约；超过截止期时以 `timeout` 失败并关闭迁移连接，本次运行终止，服务端结束该会话后释放迁移锁。长时间运行的 PostgreSQL 事务型迁移应同时放宽 `query_timeout_` 与 `transaction_timeout_`。PostgreSQL 的 `unwrapped` 迁移及所有 MariaDB 迁移不创建事务租约，因而不受 `transaction_timeout_` 限制，执行语句仍受 `query_timeout_` 和 socket 读写超时限制。MariaDB 即使指定 `transactional` 也不包裹事务（DDL 会隐式提交）；迁移与历史记录可能只完成前者，迁移 SQL 必须可安全重跑。
+迁移器不另设事务超时：PostgreSQL 的 `transactional` 迁移沿用 `transaction_timeout_`，单个迁移及其历史记录共用一次事务租约；超过截止期时以 `timeout` 失败并关闭迁移连接，本次运行终止，服务端结束该会话后释放迁移锁。长时间运行的 PostgreSQL 事务型迁移应同时放宽 `command_timeout_` 与 `transaction_timeout_`。PostgreSQL 的 `unwrapped` 迁移及所有 MariaDB 迁移不创建事务租约，因而不受 `transaction_timeout_` 限制，执行语句仍受 `command_timeout_` 和 socket 读写超时限制。MariaDB 即使指定 `transactional` 也不包裹事务（DDL 会隐式提交）；迁移与历史记录可能只完成前者，迁移 SQL 必须可安全重跑。
 
 池中连接在每次租出、发送任何语句之前先做一次非阻塞探测：服务端在连接空闲期间结束了会话（PostgreSQL `idle_session_timeout`、`pg_terminate_backend`，MariaDB `wait_timeout`、`KILL`，重启或故障切换）时，该连接被关闭并透明重连，首条语句不会因已失效的连接而以 `io_error` 失败。PostgreSQL 空闲会话上的异步消息（如 `NOTIFY`、`ParameterStatus`）先交给 libpq 读取，不视为失效；MariaDB 连接在两条命令之间收到任何字节即视为失效。不重连的连接池（迁移器）在此时以 `io_error`（会话已结束）失败，同样不发送语句。
 
@@ -88,13 +87,19 @@ ruvia::app().db({
 
 查询缓存命中时，结果集持有字段所需的底层存储；空结果和没有列的行不保留缓存正文。结果及其字段视图仍须遵守各自的所有权和借用生命周期。清除缓存时，临时键视图在删除命令获得自有参数后释放，不跨网络等待保留。缓存键前缀与条目编码不携带内部版本号。
 
+- **单条查询缓存**：`db_query` / Builder 的 `cache(db_cache_options = {})` 与 `db_find_options::cache_` 共用 `db_cache_options`。
+- `id_` 为空时按 SQL 与参数生成键；`duration_` 为空时取 `db_cache_config::duration_`，非正值抛 `std::invalid_argument`。
+- `enabled_ = false` 使该查询不走缓存，即使 `always_enabled_` 开启；`db_find_options::cache_` 为空表示沿用配置。
+
 缓存条目的大小受所用 Redis 连接的 `max_reply_bytes_` 约束：编码后读取回复会超过该上限的结果照常返回给调用方，但不写入缓存（否则之后每次命中都会因回复超限而失败并关闭一条 Redis 连接）。同一 worker 上同一缓存键的并发未命中只由第一个调用方查询数据库（单飞），其余调用方在各自的超时与停止令牌约束内等待它的结果并直接使用；它失败、被取消或超时后，等待者重新读取缓存，由下一个仍未命中的调用方接着查询。合并只在单个 worker 内进行，不跨 worker 或进程加锁。`remove()` / `clear()` 之后到达的调用方不会合并到此前已开始的查询上。
 
 直接查询保留 raw 借用路线：`db_field::as<std::string_view>()` 与 `value()` 返回的文本视图只在所属行存储有效期间可用，不得从已经析构的 `db_rows` 中逸出。需要独立结果时，使用 `as<std::string>()` / `as<ruvia::string>()`；ORM 映射入口则在编译期要求 owning 类型，见第 3.1 节。
 
 - **按列名查找**：`db_row::find(column)` 返回 `db_field_lookup { status_, field_ }`，`status_` 为 `unique_lookup_status::absent / found / repeated`，仅 `found` 时 `field_` 有效。
 - **重名列不择一**：结果集重复列名时 `find` 报告 `repeated`，从不静默取第一列。
-- **`row["name"]` 失败语义**：缺列抛 `db_conversion_error::missing_column`，重名列抛 `db_conversion_error::invalid_format`，与实体映射一致。
+- **`row["name"]` 失败语义**：缺列抛 `conversion_error::missing_column`，重名列抛 `conversion_error::invalid_format`，与实体映射一致。
+- **错误分类**：`db_error::code()` 与 `redis_error::code()` 同为 `backend_error_code`：`not_configured`、`connect_failed`（DNS、建连、TLS、认证、选库）、`io_error`、`protocol_error`、`command_failed`（服务端拒绝单条语句或命令）、`timeout`、`cancelled`、`closing`。
+- **文本转换失败**：数据库字段与 Redis 回复（`redis_value::as<T>()`、Redis 实体字段）转换失败同抛 `conversion_error`，`invalid_format` / `out_of_range` 区分；Redis 回复形状错误仍为 `redis_error(protocol_error)`。
 
 事务外的 `query()` / `execute()` 会与同一 worker 上的其他调用共享连接：PostgreSQL 使用管线模式，MariaDB 连续发送多条命令后按顺序读取各自的结果。每条语句独立成功或失败，并与等待连接的事务、流式查询保持到达顺序。改变会话状态的语句（`SET`、`USE`、`BEGIN`、`LOCK TABLES` 等）会影响之后共享同一连接的语句，应放在事务中执行；若某条语句使连接停留在事务中，该连接在归还时会被关闭而不会交给下一位调用者。MariaDB 的参数在入队时插值为所有 `sql_mode` 与字符集下含义相同的文本；SQL 或字符串参数含反斜杠时，其含义取决于 `NO_BACKSLASH_ESCAPES`，这类语句会等之前的结果全部读完后，按当时的会话状态插值再发送；若字符串参数中的反斜杠紧跟在大于 0x7F 的字节之后，且会话跟踪不能确认客户端字符集仍是 `utf8mb4`（未跟踪、已报告改为其他字符集，或之后执行过 `CALL`），还会先查询当时的 `@@character_set_client`，按该字符集转义，使 GBK、Big5、SJIS 等字符集中以 0x5C 结尾的多字节字符保持完整。MariaDB 连接在握手前强制关闭 `MYSQL_OPT_LOCAL_INFILE`，任何 `LOAD DATA LOCAL INFILE` 均拒绝读取与发送本地文件，单独报错而不污染同连接上的其他语句。服务器表示会话已结束或收到错序数据包的错误（如 1927、1156）按 I/O 错误处理，该连接不再复用。
 
@@ -171,7 +176,7 @@ auto report = co_await migrator.migrate(migrations);
 // report.applied(), report.skipped(), report.changed()
 ```
 
-- **输入与线程**：返回冷任务前校验并复制迁移列表，任务拥有全部输入；只能在绑定循环上运行，否则抛 `std::logic_error`。进程启动期的同步宿主自行启停事件循环桥接（见示例 `backend_config.h` 的 `apply_migrations`）。
+- **输入与线程**：返回冷任务前校验并复制迁移列表，任务拥有全部输入；只能在绑定循环上运行，否则抛 `std::logic_error`。进程启动期在宿主线程调用 `db_migrator::run(config, migrations, options = {}, operation = {})`：内部用一个临时单循环 `event_loop_pool`（带阻塞池查 DNS）运行并 join，返回报告或重抛失败；不得在事件循环 worker 上调用。
 - **整次期限与取消**：`operation_options` 约束整次运行（含建连）；非正超时在调用处抛 `std::invalid_argument`，启动前已停止的令牌在建连前抛 `db_error(cancelled)`；到期或取消关闭专用连接（随之释放迁移锁）并抛 `db_error(timeout / cancelled)`，已提交的迁移保留其记录。
 - **迁移锁时长**：`db_migrator_options::lock_timeout_` 使用 `timeout_duration`，默认 `30s`；MariaDB 向上取整至整秒，PostgreSQL 超过 `INT32_MAX` 毫秒时在连接前拒绝。输入与解包规则见 [Core 超时契约](core-and-http.md)。
 
@@ -199,7 +204,7 @@ auto report = co_await migrator.migrate(migrations);
 `db_source_options`、`db_cte_options`、`db_lock_options`、`db_window_options`、`db_conflict_options` 中的集合字段为 `borrowed_span<T>`；Repository 的 `db_find_options` 同样使用 `borrowed_span<T>` 借用集合及元素中的文本。请使用具名 `const std::array`、C 数组或左值容器保存元素；独立保存 options 时，数组和文本 owner 必须存活到调用入口同步复制或导入完成。同步导入型 API 的 `initializer_list` 参数不持久保存裸视图，可继续直接传入列表。
 
 - **查询子句**：`select`、`add_select`、`distinct`、`distinct_on`、`from`、`from_function`、`join`、`where` / `and_where` / `or_where`、`group_by`、`having`、`order_by`、`limit`、`offset`、`lock`（`FOR UPDATE` / `FOR SHARE` + `NOWAIT` / `SKIP LOCKED`）、`with`（CTE / `RECURSIVE`）、`combine`（`UNION` / `INTERSECT` / `EXCEPT`）。表达式参数均为 `const db_expr&`（列表为 `span` / `initializer_list<db_expr>`）；`select` / `add_select` / `returning` 的投影项为 `db_selection`：裸列名、表达式或 `expr.as("name")`（生成 `AS`）。
-  `limit`、`offset`、`db_window_boundary::offset_` 及 SQL / Redis Repository 的 `skip_`、`take_` 共用 `"entity_storage.h"` 的 `query_row_count`（可选位置仍包在 `std::optional` 中）。合法整数可直接填入，构造前检查 `0..INT64_MAX`，负数或超范围抛出 `std::invalid_argument`，无异常探测用 `query_row_count::try_from_value()`；不隐式接受浮点或枚举，需要整数时用 `value()` 解包，不要预先转成无符号数。
+  `limit`、`offset`、`db_window_boundary::offset_` 及 SQL / Redis Repository 的 `offset_`、`limit_` 共用 `"entity_storage.h"` 的 `query_row_count`（可选位置仍包在 `std::optional` 中）。合法整数可直接填入，构造前检查 `0..INT64_MAX`，负数或超范围抛出 `std::invalid_argument`，无异常探测用 `query_row_count::try_from_value()`；不隐式接受浮点或枚举，需要整数时用 `value()` 解包，不要预先转成无符号数。
 - **变更子句**：`insert_into`、`values`、`insert_from`、`on_conflict`、`update`、`set`、`update_from`、`delete_from`、`delete_using`、`returning`（MariaDB 需 ≥ 10.5，支持 `INSERT ... RETURNING` 与 `DELETE ... RETURNING`，`UPDATE ... RETURNING` 仅 PostgreSQL；`db_repository::save()` 依赖此能力）。
 - **Upsert（`db_conflict_options`）**：字段按 [PostgreSQL INSERT](https://www.postgresql.org/docs/current/sql-insert.html) 语法命名，直接 Query 与 Repository 共用：
   - 冲突目标：`conflict_target_`（索引列）+ `index_predicate_`（目标 `WHERE`），或 `constraint_`（`ON CONSTRAINT`）。
@@ -266,7 +271,7 @@ RUVIA_DB_PROJECTION(device_summary,
 ```
 
 - **映射结果必须拥有数据**：公开概念 `ruvia::db_mapped_value<T>` 统一约束实体/投影的 `db_column`、读 Builder 与写 `RETURNING` Builder 的 `get_scalar<T>()` / `get_scalars<T>()` 以及字段解码。支持既有数值类型、`bool`、`std::string`、`ruvia::string`，以及这些值的一维 `std::vector`；`std::optional` 递归保留此约束，数组元素可用 `std::optional<T>` 表示 `NULL`。`std::string_view`、引用、含借用元素的数组与嵌套数组在编译期被拒绝。结果不借用局部 `db_rows` 或数组解析 token，也不会通过隐藏缓存延长其寿命。
-- **标量与数组的 NULL 语义**：`get_scalar<T>()` 返回 `std::optional<T>`，无行或首列为 SQL `NULL` 时返回 `std::nullopt`；`get_scalars<T>()` 返回 `std::vector<T>`，遇到 SQL `NULL` 行抛出 `db_conversion_error`，即使 `T` 自身为 optional 也不改变此规则。数组内部的 `NULL` 只允许 optional 元素，带引号的 `"NULL"` 是普通文本；数组下界不保留，但元素顺序保留，多维数组文本在运行期被拒绝。`[lower:upper]=` 声明的长度在预留容量前先受实际文本约束（每个元素至少占一个字符加一个分隔符），超出时抛出 `db_conversion_error::invalid_format`，不会按声明长度一次性分配。读查询与写 `RETURNING` 共用这些语义。
+- **标量与数组的 NULL 语义**：`get_scalar<T>()` 返回 `std::optional<T>`，无行或首列为 SQL `NULL` 时返回 `std::nullopt`；`get_scalars<T>()` 返回 `std::vector<T>`，遇到 SQL `NULL` 行抛出 `conversion_error`，即使 `T` 自身为 optional 也不改变此规则。数组内部的 `NULL` 只允许 optional 元素，带引号的 `"NULL"` 是普通文本；数组下界不保留，但元素顺序保留，多维数组文本在运行期被拒绝。`[lower:upper]=` 声明的长度在预留容量前先受实际文本约束（每个元素至少占一个字符加一个分隔符），超出时抛出 `conversion_error::invalid_format`，不会按声明长度一次性分配。读查询与写 `RETURNING` 共用这些语义。
 - **可空列约定**：顶层列类型直接使用值类型（如 `std::int64_t`、`std::string`），并在 `db_column_options` 中设置 `.nullable_ = true`。通过 `entity.set_null<"notes">()` 置空，通过 `entity.is_null<"notes">()` 检查是否为 `NULL`。
 - **实体数值输入**：SQL 与 Redis 实体的 `set<"field">()` 在发布字段前检查整数范围和有限浮点溢出，超界抛出 `std::out_of_range`，保留原值及 unset/null 状态。SQL 数组及 optional 元素递归应用同一规则，后续元素失败不会发布部分新数组。整数列拒绝隐式浮点输入（包括模型标量包装及数组元素），调用方须先显式选择整数转换策略；浮点字段保留通常的精度舍入和显式非有限值语义。检查仅覆盖 `set()`，不拦截调用方经可变 `get()` 或显式转换自行执行的赋值。
 - **PostgreSQL 浮点数组写入**：按元素的原始浮点类型生成十进制文本，不先转为 `double`；`long double` 的额外精度与范围可由显式 `numeric` 数组列承载。NaN 与无穷大在编码时拒绝，写 Builder 保留此前已接受的行。
@@ -277,7 +282,7 @@ RUVIA_DB_PROJECTION(device_summary,
   - `.version_` 要求非空整数列；主键不能 `.nullable_`，也不能是 `.delete_date_`。
   - 每列至多一个生命周期角色（`create_date_` / `update_date_` / `delete_date_` / `version_`）；由 Repository 写入的 `update_date_` / `delete_date_` / `version_` 列必须可写（不能是 `.read_only_` 或计算列），否则软删过滤会静默失效。
 - **生命周期列统一盖章**：所有由 ORM 生成的 `UPDATE` 与冲突更新共用一套规则：`update_date_` 列写入 `now()`，`version_` 列加 1；同一语句显式赋值该列时以显式值为准。
-  - 覆盖范围：`update(where, entity)`、`update(where, assignments)`、`increment` / `decrement`、`soft_delete`、`restore`、`update_builder()`（构建器创建时即带盖章，后续 `set` 同名列会覆盖）、`save()` 的冲突更新分支、`upsert()` 与 `insert_builder().on_conflict()` 的 `DO UPDATE`。
+  - 覆盖范围：`update(where, entity)`、`update(where, assignments)`、`soft_delete`、`restore`、`update_builder()`（构建器创建时即带盖章，后续 `set` 同名列会覆盖）、`save()` 的冲突更新分支、`upsert()` 与 `insert_builder().on_conflict()` 的 `DO UPDATE`。
   - 冲突更新仅在至少更新一个其他列时盖章；无可更新列时仍按原规则退化为 `DO NOTHING`（PostgreSQL），`do_nothing_` 也不盖章。`save()` 冲突分支对已显式设置的 `update_date_` / `version_` 使用 `excluded` 值。
   - 批量 `save()` / `upsert()` 未指定 `update_columns_` 时，每个自动更新列（含生命周期列）须在所有实体中同时设置或同时未设置，否则抛出 `std::invalid_argument`；`EXCLUDED` 对未设置的行取列默认值，会把已有值改写为默认值。
   - 直接 `db_query` 不参与盖章。
@@ -300,12 +305,12 @@ RUVIA_DB_PROJECTION(device_summary,
 
 | 分类 | 方法 | 说明 |
 | --- | --- | --- |
-| 查询 | `find(db_find_options = {})` | 查询实体列表 `entity_rows<Entity>`（支持 `.where_`、`.relations_` 关联预加载、`.order_`、`.skip_`、`.take_`、`.lock_`、`.cache_`） |
+| 查询 | `find(db_find_options = {})` | 查询实体列表 `entity_rows<Entity>`（支持 `.where_`、`.relations_` 关联预加载、`.select_`、`.order_`（`column<"x">().asc()` / `.desc()`）、`.offset_`、`.limit_`、`.lock_`、`.cache_`） |
 | 查询 | `find_one(db_find_options)` | 查询单条实体 `std::optional<Entity>` |
 | 查询 | `find_and_count(db_find_options = {})` | 分页查询并同时返回总行数 `std::pair<entity_rows<Entity>, std::uint64_t>` |
 | 统计与存在性 | `count(db_find_options = {})` / `exists(db_find_options = {})` | 按条件统计行数或判断是否存在匹配行 |
 | 写入与变更 | `save` / `insert` / `upsert(entity, db_conflict_options = {})` | 保存、插入或冲突更新 Upsert（支持单条与批量 `std::span`）；PostgreSQL 下 `DO UPDATE` 未给冲突目标时默认主键（与 `save()` 相同），默认 SET 为已插入的非主键可写列 |
-| 更新与删除 | `update(where, changes)` / `increment` / `decrement` | 按条件更新指定字段或原子自增/自减 |
+| 更新与删除 | `update(where, changes)` | 按条件更新指定字段；原子自增/自减传 `{column<"x">().increment(n)}` |
 | 删除与软删 | `delete_by(where)` / `remove(entity)` / `soft_delete(where)` / `restore(where)` / `clear()` | 硬删除、按软删列（`.delete_date_ = true`）软删除与恢复、清空表 |
 | 构建器与 `RETURNING` | `query_builder(alias)` / `update_builder` / `delete_builder` / `insert_builder` | 链式构建复杂 JOIN（`left_join_and_select`）、`offset`/`limit`、CTE、窗口函数、`on_conflict(db_conflict_options)` 与子查询（`subquery()` / `exists()`）；写构建器通过 `.returning(...)` + `.get_many()` / `.get_one()` / `.get_scalar<T>()` 映射 `RETURNING` 结果 |
 
@@ -315,8 +320,9 @@ RUVIA_DB_PROJECTION(device_summary,
 
 写 Builder 的 `.set(span<db_assignment>)`、`.set({...})` 和 `.set(entity)` 整批提交：字段校验与表达式导入完成后才发布 SET 列表，后续项失败不会留下此前项的部分更新。失败前已构建的 SQL 与参数语义不变；此保证针对查询构建，不等同于数据库事务。
 
-- **写入入口一致**：Repository 的 `update`、`delete_by`、`increment` / `decrement` 使用对应写 Builder；重复 SET 列以最后一次赋值为准。空 assignment 批次被拒绝；空实体变更仅在 UPDATE 自带生命周期盖章时有效。
-- **表达式列表**：读 Builder 的 `group_by`、`add_group_by`、`distinct_on` 接受 `span<const db_expr>` 或 `initializer_list<db_expr>`，列名入口保留；类型化列引用隐式转为 `db_expr`。`order_by` / `add_order_by` 共用 `db_expr` 表达式入口。
+- **写入入口一致**：Repository 的 `update`、`delete_by` 使用对应写 Builder；重复 SET 列以最后一次赋值为准。空 assignment 批次被拒绝；空实体变更仅在 UPDATE 自带生命周期盖章时有效。
+- **类型化列引用**：读 Builder 的 `group_by`、`add_group_by`、`distinct_on` 接受 `span<const db_expr>` 或 `initializer_list<db_expr>`，`order_by` / `add_order_by` 接受 `db_expr` 或 `db_order_term`；列一律写 `column<"x">()`，不接受列名字符串。
+- **写 Builder 赋值**：`set` 只接受 `db_assignment`（`column<"x">().set(v)`、`.set_null()`、`.set_now()`、`.increment(n)`）；只读、计算列或非数值列的赋值与自增编译失败。
 - **CTE 校验一致**：读 Builder 的 `with` 不按来源入口区分校验；只读 CTE 可与关系预加载并用，含写入的 CTE 统一要求平面结果映射。
 
 读写 Builder 统一提供 `const db_query& query() const&`：这是只读、零拷贝的 AST 借用，不是快照，不延长 Builder 的寿命。Builder 销毁或移动前必须结束借用；后续 Builder 修改会反映在视图中。直接在右值 Builder 上调用 `query()` 被拒绝，应先保存具名 Builder。`db_query::with()`、子查询 JOIN 等消费者在调用返回前克隆输入（右值重载直接接管），因此导入完成后源 Query / Builder 即可销毁，外层仍拥有完整 AST、文本和参数。
@@ -326,7 +332,7 @@ RUVIA_DB_PROJECTION(device_summary,
 ```cpp
 auto repo = c.db().repository<device>();
 auto changed = repo.update_builder("d");
-changed.set("name", "edge-2")
+changed.set(device::column<"name">().set("edge-2"))
     .where(device::column<"id">() == 7)
     .returning({"id", "name"});
 
@@ -367,10 +373,10 @@ mixed.with("samples", samples).from_cte("samples")
 通配投影的结果仍按数据库返回的**列名元数据**映射，不按位置猜测，也不假设 CTE 与根实体有相同列清单：
 
 - 实体 / DTO 中与实际返回列同名的字段被解码；通配部分没有返回的字段保持 unset。通配带出的其他字段保留在 raw rows 中，不强迫 DTO 声明它们。
-- 显式具名项仍是必需列：在映射类型内声明后，结果缺少该列时抛出 `db_conversion_error::missing_column`；具名项不在映射类型内时仍沿既有规则拒绝，`get_raw_and_entities()` 继续允许额外具名列。
-- 通配项的真实名称在构建期未知，无法静态判断它与具名项是否重名。结果若含两个同名且需要映射的列，抛出 `db_conversion_error::invalid_format`，不会任选第一列；只取 raw rows 时不替数据库重命名或丢弃列。无通配项的投影（包括原始 SQL、CTE 或 JOIN 带出的同名列）同样适用：需要映射的列名必须在结果中唯一，重复匹配列被拒绝。
+- 显式具名项仍是必需列：在映射类型内声明后，结果缺少该列时抛出 `conversion_error::missing_column`；具名项不在映射类型内时仍沿既有规则拒绝，`get_raw_and_entities()` 继续允许额外具名列。
+- 通配项的真实名称在构建期未知，无法静态判断它与具名项是否重名。结果若含两个同名且需要映射的列，抛出 `conversion_error::invalid_format`，不会任选第一列；只取 raw rows 时不替数据库重命名或丢弃列。无通配项的投影（包括原始 SQL、CTE 或 JOIN 带出的同名列）同样适用：需要映射的列名必须在结果中唯一，重复匹配列被拒绝。
 - 对包含通配项的 `insert_from(columns, builder)`，Builder 不伪造源宽度或列清单；目标列名照常校验，实际源/目标宽度是否匹配交由数据库检查。无通配项的显式投影保留既有宽度检查。
-- 关系预加载（`relations_` / `*_join_and_select`）解码结果形状错误时同样抛出 `db_conversion_error`：映射列缺失为 `missing_column`，重名列为 `invalid_format`，根主键或复合主键部分为 NULL 为 `unexpected_null`，to-one 关系返回多行或单实体查询返回多个根为 `unexpected_row_count`。
+- 关系预加载（`relations_` / `*_join_and_select`）解码结果形状错误时同样抛出 `conversion_error`：映射列缺失为 `missing_column`，重名列为 `invalid_format`，根主键或复合主键部分为 NULL 为 `unexpected_null`，to-one 关系返回多行或单实体查询返回多个根为 `unexpected_row_count`。
 
 ### 3.5 独立字段与实体映射（`"db_entity_codec.h"`）
 
@@ -380,7 +386,7 @@ mixed.with("samples", samples).from_cte("samples")
 | `decode_db_row<Entity>(row)` | 映射任意直接查询或流式行；同样接受 `db_projection` |
 | `decode_db_rows<Entity>(rows)` | 批量映射并在该结果集内复用列索引，返回 `entity_rows<Entity>` |
 
-- **形状与错误**：映射类型声明的列全部必需且须唯一，额外列忽略；子集用投影声明。缺列、重名、NULL 与数值错误沿用 `db_conversion_error`，不依赖 Repository。解码结果完全独立拥有数据，可独立于原始行存储存活。
+- **形状与错误**：映射类型声明的列全部必需且须唯一，额外列忽略；子集用投影声明。缺列、重名、NULL 与数值错误沿用 `conversion_error`，不依赖 Repository。解码结果完全独立拥有数据，可独立于原始行存储存活。
 
 ```cpp
 auto raw = co_await db.query("SELECT id, name FROM users");
@@ -411,8 +417,8 @@ ruvia::app()
     .redis({.alias_ = "cache", .config_ = config});
 ```
 
-- 每个 worker 维护 `pool_size_per_worker_` 条常规命令连接，以及按需建立的 `blocking_pool_size_per_worker_` 条阻塞命令专用连接（供 `blpop`、`brpop`、`xread_group` 等阻塞操作自动使用，不阻塞常规命令池）。
-- 同样支持在独立 `event_loop` 上构造 `ruvia::redis_client client(loop, config)`，通过 `client.redis()` 获取 `redis_executor`（规则见 [1.2](#12-直接查询编译期-sql-校验与流式游标db_executor)）；`host_` 不是 IP 字面量时，事件循环须借用阻塞池执行 DNS 查询（见 1.1）。
+- 每个 worker 维护 `pool_size_per_worker_`（默认 4）条常规命令连接，以及按需建立的 `blocking_pool_size_per_worker_` 条阻塞命令专用连接（供 `blpop`、`brpop`、`xread_group` 等阻塞操作自动使用，不阻塞常规命令池）。
+- 同样支持在独立 `event_loop` 上构造 `ruvia::redis_client client(loop, config)`，通过 `client.redis()` 获取 `redis_executor`（规则见 [1.2](#12-直接查询编译期-sql-校验与流式游标db_executor)）；`host_` 不是 IP 字面量时在事件循环的阻塞池上做 DNS 查询（见 1.1）。
 - **独立宿主借入**：`router::bind_redis(alias, client)` / `bind_db(alias, client)` 把同 worker 的独立客户端按别名借给该 router 分发的请求，`c.redis(alias)` / `c.db(alias)` 与 `session_middleware` 由此解析；约束见 [显式路由组合](web-guide.md#111-显式路由组合routerh)。
 - 每条连接复用回复解析根槽；嵌套值和字符串由返回结果独立持有，失败或取消时随未完成的回复一起回收。
 - **请求写缓冲**：传输结束后最多保留 `64 KiB` 容量，超限大块立即归还分配器。取消或异常同样等待传输借用结束后再清理，不提前释放在途 I/O 使用的存储。
@@ -468,7 +474,7 @@ batch.set("session:42", "value").command("WAIT", "1", "1000");
 const auto replies = co_await std::move(batch).exec();
 for (const auto& reply : replies) {
     if (reply.kind() == ruvia::redis_value::kind_type::error) {
-        throw ruvia::redis_error(ruvia::redis_error::code_type::command_error, reply.error());
+        throw ruvia::redis_error(ruvia::backend_error_code::command_failed, reply.error());
     }
 }
 if (replies[1].integer() < 1) {
@@ -510,7 +516,7 @@ while (auto event = co_await sub.read()) {
 - 一个间隔内无任何输入时，若没有在途的用户命令，就在订阅连接上发送 `PING`；若在途命令（正在写出，或在最近一次输入之后写出、回复尚未到达）存在，则以该命令自身的回复作为存活证明，不再发送 `PING`。
 - 探测开始后又满一个间隔仍无任何输入，订阅关闭，等待中的 `read()` 抛出 `redis_error(timeout)`，之后 `read()` 返回 `std::nullopt`、命令抛出 `redis_error(closing)`。`PING` 本身须在一个间隔内写出，且不超过发起它的 `read()` 的整体截止期（`operation_options::timeout_`），写出超时同样按超时关闭订阅；`read()` 失败时先关闭连接唤醒在途 `PING` 写出再返回，因此 `PING` 不会把 `read()` 拖过其截止期。
 - `PING` 回复在内部消费，从不作为事件从 `read()` 返回：订阅状态下 RESP2 回复为 `["pong", ""]`，退订全部频道后连接回到普通模式，回复为 `+PONG`（与 RESP3 形式相同）；未发送 `PING` 时收到的此类回复仍按畸形推送关闭连接。
-- 一次只有一个 `PING` 写出；与用户命令共用写通道，用户命令遇到正在写出的 `PING` 时等待其完成，不会因此抛出 `std::logic_error`。启用 ACL 时订阅用户须允许 `PING`，否则其错误回复会以 `redis_error(command_error)` 出现在 `read()` 中，此时应关闭探活。
+- 一次只有一个 `PING` 写出；与用户命令共用写通道，用户命令遇到正在写出的 `PING` 时等待其完成，不会因此抛出 `std::logic_error`。启用 ACL 时订阅用户须允许 `PING`，否则其错误回复会以 `redis_error(command_failed)` 出现在 `read()` 中，此时应关闭探活。
 - 探活只覆盖 `read()` 等待期间；需要整次读取截止期时仍使用 `operation_options::timeout_`，两者独立生效。
 
 ### 4.4 Redis HASH 实体与 RediSearch ORM（`RUVIA_REDIS_ENTITY`）
@@ -519,7 +525,7 @@ while (auto event = co_await sub.read()) {
 - **前缀单一来源**：前缀只来自实体宏；`redis_repository_config` 只描述索引列。
 - **映射复用**：启动期以 `redis_search_mapping::create<Entity>(config)` 构建一次，请求内 `repository<Entity>(mapping)` 借用；mapping 须活过 repository 及其操作，实体类型不符抛 `std::invalid_argument`。
 - **默认映射**：`repository<Entity>()` 使用无索引的共享映射，只适合按主键读写。
-- **分页**：FT.SEARCH 总是分页（`LIMIT` 缺省 `0 10`，见 [FT.SEARCH](https://redis.io/docs/latest/commands/ft.search/)）；`find()` / `find_and_count()` 未设 `take_` 时返回 `skip_` 之后的一页 `redis_find_default_take`（100）条，翻页用 `skip_` / `take_`，总数用 `find_and_count()` 或 `count()`。
+- **分页**：FT.SEARCH 总是分页（`LIMIT` 缺省 `0 10`，见 [FT.SEARCH](https://redis.io/docs/latest/commands/ft.search/)）；`find()` / `find_and_count()` 未设 `limit_` 时返回 `offset_` 之后的一页 `redis_find_default_limit`（100）条，翻页用 `offset_` / `limit_`（与 SQL 相同），总数用 `find_and_count()` 或 `count()`。
 
 ```cpp
 RUVIA_REDIS_ENTITY(cached_user, "user",
@@ -545,8 +551,8 @@ auto repo = c.redis().repository<cached_user>(cached_user_mapping());
 // 条件查询：
 auto rows = co_await repo.find({
     .where_ = (cached_user::column<"role">() == "admin") && (cached_user::column<"score">() >= 80),
-    .order_ = {{.column_ = "score", .direction_ = ruvia::redis_order_direction::desc}},
-    .take_ = 20,
+    .order_ = cached_user::column<"score">().desc(),
+    .limit_ = 20,
 });
 ```
 

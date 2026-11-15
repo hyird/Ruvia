@@ -21,7 +21,7 @@
 #include "event_loop.h"
 #include "operation_options.h"
 #include "task_scope.h"
-#include "worker_result.h"
+#include "wait_result.h"
 #include "worker_task_fixture.h"
 #include "worker_wait.h"
 
@@ -140,7 +140,7 @@ private:
 ruvia::task<void> receive_last(ruvia::channel_receiver<int>& receiver, bool& success) {
     const auto value = co_await receiver.receive();
     const auto closed = co_await receiver.receive();
-    success = value.has_value() && value.value() == 3 && closed.status() == ruvia::worker_wait_status::closed;
+    success = value.has_value() && value.value() == 3 && closed.status() == ruvia::wait_status::closed;
 }
 
 ruvia::task<void> receive_one(ruvia::channel_receiver<int>& receiver, int& value) {
@@ -156,7 +156,7 @@ ruvia::task<void> receive_queued_then_stopping(ruvia::event_loop_attachment& att
         attachment.stop();
     });
     const auto stopping = co_await receiver.receive();
-    success = value.has_value() && value.value() == 9 && stopping.status() == ruvia::worker_wait_status::worker_stopping;
+    success = value.has_value() && value.value() == 9 && stopping.status() == ruvia::wait_status::worker_stopping;
 }
 
 ruvia::task<void> receive_throwing_move(ruvia::channel_receiver<throwing_move>& receiver, bool& success) {
@@ -178,7 +178,7 @@ ruvia::task<void> receive_after_move_failure(ruvia::channel_sender<throwing_move
     const auto next = co_await receiver.receive();
     sender.close();
     const auto closed = co_await receiver.receive();
-    success = move_failed && next.has_value() && next.value().value() == 2 && closed.status() == ruvia::worker_wait_status::closed;
+    success = move_failed && next.has_value() && next.value().value() == 2 && closed.status() == ruvia::wait_status::closed;
 }
 
 ruvia::task<void> receive_after_late_cancellation(ruvia::channel_receiver<int>& receiver, ruvia::stop_token stop_token_value, ruvia::stop_token next_stop_token, bool& success) {
@@ -189,7 +189,7 @@ ruvia::task<void> receive_after_late_cancellation(ruvia::channel_receiver<int>& 
 
 ruvia::task<void> receive_until_closed(ruvia::channel_receiver<int>& receiver, bool& success) {
     const auto result_value = co_await receiver.receive({.timeout_ = std::chrono::seconds(1)});
-    success = result_value.status() == ruvia::worker_wait_status::closed;
+    success = result_value.status() == ruvia::wait_status::closed;
 }
 
 ruvia::channel_receiver<int>::receive_operation make_cold_receive_after_receiver_close(ruvia::worker_ref worker_value, bool timed, bool buffered = false) {
@@ -206,7 +206,7 @@ ruvia::channel_receiver<int>::receive_operation make_cold_receive_after_receiver
 ruvia::task<void> verify_cold_receive_operations(ruvia::channel_receiver<int>::receive_operation receive, ruvia::channel_receiver<int>::receive_operation timed_receive, bool& success) {
     const auto cold_closed = co_await std::move(receive);
     const auto timed_cold_closed = co_await std::move(timed_receive);
-    success = cold_closed.status() == ruvia::worker_wait_status::closed && timed_cold_closed.status() == ruvia::worker_wait_status::closed;
+    success = cold_closed.status() == ruvia::wait_status::closed && timed_cold_closed.status() == ruvia::wait_status::closed;
 }
 
 ruvia::task<void> verify_channel_side_closure(ruvia::worker_ref worker_value, bool& success) {
@@ -218,7 +218,7 @@ ruvia::task<void> verify_channel_side_closure(ruvia::worker_ref worker_value, bo
     sender.close();
     const auto buffered = co_await std::move(cold_receive);
     const auto drained = co_await receiver.receive();
-    if (!buffered.has_value() || buffered.value() != 42 || drained.status() != ruvia::worker_wait_status::closed) {
+    if (!buffered.has_value() || buffered.value() != 42 || drained.status() != ruvia::wait_status::closed) {
         co_return;
     }
 
@@ -233,7 +233,7 @@ ruvia::task<void> verify_channel_side_closure(ruvia::worker_ref worker_value, bo
     retired_receiver.close();
     const auto closed = co_await std::move(receive);
     const auto timed_closed = co_await std::move(timed_receive);
-    success = closed.status() == ruvia::worker_wait_status::closed && timed_closed.status() == ruvia::worker_wait_status::closed && retired_sender.send(8).status() == ruvia::channel_send_status::closed;
+    success = closed.status() == ruvia::wait_status::closed && timed_closed.status() == ruvia::wait_status::closed && retired_sender.send(8).status() == ruvia::channel_send_status::closed;
 }
 
 ruvia::task<void> verify_receiver_retirement_after_worker_stop(ruvia::event_loop_attachment& attachment, bool& success) {
@@ -247,7 +247,7 @@ ruvia::task<void> verify_receiver_retirement_after_worker_stop(ruvia::event_loop
     attachment.stop();
     const auto stopping = co_await std::move(receive);
     const auto timed_stopping = co_await std::move(timed_receive);
-    success = stopping.status() == ruvia::worker_wait_status::worker_stopping && timed_stopping.status() == ruvia::worker_wait_status::worker_stopping && sender.send(10).status() == ruvia::channel_send_status::worker_stopping;
+    success = stopping.status() == ruvia::wait_status::worker_stopping && timed_stopping.status() == ruvia::wait_status::worker_stopping && sender.send(10).status() == ruvia::channel_send_status::worker_stopping;
 }
 
 struct buffered_payload final {
@@ -271,7 +271,7 @@ struct buffered_payload final {
 
 ruvia::task<void> verify_retired_payload_receive(ruvia::channel_receiver<buffered_payload>::receive_operation receive, bool& success) {
     const auto result_value = co_await std::move(receive);
-    success = result_value.status() == ruvia::worker_wait_status::closed && !result_value.has_value();
+    success = result_value.status() == ruvia::wait_status::closed && !result_value.has_value();
 }
 
 bool test_retired_receiver_storage_is_released() {
@@ -388,7 +388,7 @@ ruvia::task<void> exercise(ruvia::worker_ref worker_value, bool& success) {
         }));
         const auto cancelled = co_await cancel_receiver.receive({.timeout_ = std::chrono::seconds(1), .stop_token_ = source.token()});
         stopper.join();
-        if (cancelled.status() != ruvia::worker_wait_status::cancelled || !cancel_sender.send(5).accepted()) {
+        if (cancelled.status() != ruvia::wait_status::cancelled || !cancel_sender.send(5).accepted()) {
             co_return;
         }
         const auto recovered = co_await cancel_receiver.receive();
@@ -402,7 +402,7 @@ ruvia::task<void> exercise(ruvia::worker_ref worker_value, bool& success) {
         source.request_stop();
         auto [cancel_sender, cancel_receiver] = ruvia::make_channel<int>(worker_value, {.capacity_ = 1});
         const auto cancelled = co_await cancel_receiver.receive({.stop_token_ = source.token()});
-        if (cancelled.status() != ruvia::worker_wait_status::cancelled) {
+        if (cancelled.status() != ruvia::wait_status::cancelled) {
             co_return;
         }
     }
@@ -454,7 +454,7 @@ ruvia::task<void> exercise(ruvia::worker_ref worker_value, bool& success) {
         ruvia::task_scope scope(worker_value);
         scope.spawn([](ruvia::channel_receiver<int>& rx, ruvia::stop_token token, bool& cancelled) -> ruvia::task<void> {
             const auto outcome = co_await rx.receive({.stop_token_ = std::move(token)});
-            cancelled = outcome.status() == ruvia::worker_wait_status::cancelled;
+            cancelled = outcome.status() == ruvia::wait_status::cancelled;
         }(same_stack_receiver, source.token(), first_cancelled));
         source.request_stop();
         if (!same_stack_sender.send(77).accepted()) {
@@ -501,12 +501,12 @@ ruvia::task<void> exercise(ruvia::worker_ref worker_value, bool& success) {
         co_return;
     }
     const auto timeout = co_await active_receiver.receive({.timeout_ = std::chrono::milliseconds(1)});
-    if (timeout.status() != ruvia::worker_wait_status::timed_out) {
+    if (timeout.status() != ruvia::wait_status::timed_out) {
         co_return;
     }
     const auto passed_deadline = co_await active_receiver.receive({.timeout_ = ruvia::operation_timeout(std::chrono::steady_clock::time_point{})});
     const auto deadline = co_await active_receiver.receive({.timeout_ = ruvia::operation_timeout(std::chrono::steady_clock::now() + std::chrono::milliseconds(1))});
-    if (passed_deadline.status() != ruvia::worker_wait_status::timed_out || deadline.status() != ruvia::worker_wait_status::timed_out) {
+    if (passed_deadline.status() != ruvia::wait_status::timed_out || deadline.status() != ruvia::wait_status::timed_out) {
         co_return;
     }
     try {
@@ -599,7 +599,7 @@ ruvia::task<void> verify_reentrant_receive(ruvia::channel_receiver<reentrant_pay
     const auto first = co_await receiver.receive();
     const auto second = co_await receiver.receive();
     const auto closed = co_await receiver.receive();
-    success = first.has_value() && first.value().value_ == 1 && second.has_value() && second.value().value_ == 2 && closed.status() == ruvia::worker_wait_status::closed;
+    success = first.has_value() && first.value().value_ == 1 && second.has_value() && second.value().value_ == 2 && closed.status() == ruvia::wait_status::closed;
 }
 
 bool test_reentrant_payload_moves_and_destruction() {

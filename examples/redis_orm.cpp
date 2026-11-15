@@ -80,7 +80,7 @@ private:
         co_return c.json(response);
     }
     ruvia::task<ruvia::http_response> adults(ruvia::context& c) {
-        const ruvia::redis_find_options find_options{.where_ = cached_user::column<"age">() >= 18, .order_ = {{.column_ = "name", .direction_ = ruvia::redis_order_direction::asc}}, .take_ = 20};
+        const ruvia::redis_find_options find_options{.where_ = cached_user::column<"age">() >= 18, .order_ = cached_user::column<"name">().asc(), .limit_ = 20};
         auto users = co_await c.redis().repository<cached_user>(cached_user_mapping()).find(find_options);
         cached_users_response response;
         auto& output = response.ensure<"users">();

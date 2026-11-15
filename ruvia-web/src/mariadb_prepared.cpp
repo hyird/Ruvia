@@ -301,7 +301,7 @@ static_assert(std::is_trivially_copyable_v<MYSQL_BIND>);
     return reinterpret_cast<MYSQL_BIND*>(storage.data());
 }
 
-[[nodiscard]] db_error statement_error(MYSQL_STMT& statement, std::string_view operation, db_error::code_type code = db_error::code_type::statement_failed) {
+[[nodiscard]] db_error statement_error(MYSQL_STMT& statement, std::string_view operation, backend_error_code code = backend_error_code::command_failed) {
     return mariadb_error(operation, mysql_stmt_errno(&statement), mysql_stmt_sqlstate(&statement), mysql_stmt_error(&statement), code);
 }
 
@@ -309,9 +309,9 @@ static_assert(std::is_trivially_copyable_v<MYSQL_BIND>);
 // connection's own report when it has one, else the statement's.
 [[noreturn]] void throw_connection_failure(MYSQL& connection, MYSQL_STMT& statement, std::string_view operation) {
     if (mysql_errno(&connection) != 0) {
-        throw mysql_error(connection, operation, db_error::code_type::io_error);
+        throw mysql_error(connection, operation, backend_error_code::io_error);
     }
-    throw statement_error(statement, operation, db_error::code_type::io_error);
+    throw statement_error(statement, operation, backend_error_code::io_error);
 }
 
 [[nodiscard]] bool connection_failure(MYSQL_STMT& statement) noexcept {
@@ -472,7 +472,7 @@ mariadb_statement_cache::~mariadb_statement_cache() {
 mariadb_statement& mariadb_statement_cache::entry(entry_ref statement) {
     auto* found = statements_.payload(statement);
     if (found == nullptr) {
-        throw db_error(db_error::code_type::protocol_error, db_driver::mariadb, "MariaDB statement left the cache");
+        throw db_error(backend_error_code::protocol_error, db_driver::mariadb, "MariaDB statement left the cache");
     }
     return *found;
 }
@@ -925,7 +925,7 @@ int resume_mariadb_prepared(MYSQL& connection, mariadb_prepared_run& run, int re
                 ready = 0;
                 if (failed != 0) {
                     if (mariadb_connection_failure(mysql_errno(&connection))) {
-                        throw mysql_error(connection, "reading MariaDB session tracking", db_error::code_type::io_error);
+                        throw mysql_error(connection, "reading MariaDB session tracking", backend_error_code::io_error);
                     }
                     cache.lose_tracking();
                     run.text_ = true;
@@ -945,7 +945,7 @@ int resume_mariadb_prepared(MYSQL& connection, mariadb_prepared_run& run, int re
                 run.started_ = false;
                 ready = 0;
                 if (result == nullptr && mariadb_connection_failure(mysql_errno(&connection))) {
-                    throw mysql_error(connection, "reading MariaDB session tracking", db_error::code_type::io_error);
+                    throw mysql_error(connection, "reading MariaDB session tracking", backend_error_code::io_error);
                 }
                 const std::unique_ptr<MYSQL_RES, decltype(&mysql_free_result)> owned(result, &mysql_free_result);
                 auto* row = result == nullptr || mysql_num_fields(result) != 1 ? nullptr : mysql_fetch_row(result);
@@ -989,7 +989,7 @@ int resume_mariadb_prepared(MYSQL& connection, mariadb_prepared_run& run, int re
                 cache.retired_.pop_back();
                 run.closing_ = nullptr;
                 if (failed != 0) {
-                    throw mysql_error(connection, "mysql_stmt_close", db_error::code_type::io_error);
+                    throw mysql_error(connection, "mysql_stmt_close", backend_error_code::io_error);
                 }
                 continue;
             }
@@ -1068,7 +1068,7 @@ int resume_mariadb_prepared(MYSQL& connection, mariadb_prepared_run& run, int re
                         run.failure_ = std::make_exception_ptr(mariadb_error("mysql_stmt_execute", code, mysql_stmt_sqlstate(&statement),
                             "the statement's result changed shape since it was prepared; it is prepared anew on its "
                             "next use",
-                            db_error::code_type::statement_failed));
+                            backend_error_code::command_failed));
                         start_draining(cache, run, entry, false);
                         continue;
                     }
@@ -1090,7 +1090,7 @@ int resume_mariadb_prepared(MYSQL& connection, mariadb_prepared_run& run, int re
                 run.insert_id_ = mysql_stmt_insert_id(&statement);
                 if (mysql_stmt_field_count(&statement) != 0) {
                     if (!readable_as_text(statement.fields, statement.field_count, true)) {
-                        run.failure_ = std::make_exception_ptr(db_error(db_error::code_type::statement_failed, db_driver::mariadb,
+                        run.failure_ = std::make_exception_ptr(db_error(backend_error_code::command_failed, db_driver::mariadb,
                             "MariaDB prepared statement result has a YEAR column whose text the binary protocol does "
                             "not tell; the statement runs as text from its next use"));
                         start_draining(cache, run, entry, true);

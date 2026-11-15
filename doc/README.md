@@ -111,12 +111,12 @@ ruvia_link_controllers(my_service user_controllers)
 - **连接亲和**：socket 一经业务 worker 接收（POSIX 自行 accept；Windows 接管 Acceptor 派发的未绑 IOCP 裸 `SOCKET` 并首次绑定自身 IOCP），其后的 TCP/TLS I/O、HTTP/1 / HTTP/2 / HTTP/3 解析、路由执行与协议定时器全程留在该 worker 线程，无需加锁访问 worker 局部状态（`c.worker_state<T>()`）。`stop()` 直接断开全部连接，不设排空阶段。
 - **跨线程调度与卸载**：
   - 跨 worker 通信通过 `web_worker_ref::post`、`event_loop::post` 或有界通道 `make_channel` / `make_one_shot` 进行。
-  - 阻塞或 CPU 密集型计算必须通过 `c.run_blocking(...)` 或 `ruvia::run_blocking(...)` 显式卸载到 worker 事件循环借用的 `blocking_pool`；独立事件循环须在创建时通过 `blocking_pool_` 选项交给它一个比它存活更久的池，否则返回 `blocking_status::unavailable`，主机不是 IP 字面量的数据库或 Redis 客户端也无法构造。**卸载闭包必须按值/移动持有自有数据，严禁在阻塞池线程中访问 `ruvia::context` 或任何 worker 局部状态**。
+  - 阻塞或 CPU 密集型计算必须通过 `c.run_blocking(...)` 或 `ruvia::run_blocking(...)` 显式卸载到 worker 事件循环的 `blocking_pool`；独立事件循环（`event_loop_pool`、`attach_event_loop`）默认自带 1 线程池，`blocking_pool_` 选项可改为借用比它存活更久的池，或置 `nullptr` 不用池（此时返回 `blocking_status::unavailable`，主机不是 IP 字面量的数据库或 Redis 客户端也无法构造）。**卸载闭包必须按值/移动持有自有数据，严禁在阻塞池线程中访问 `ruvia::context` 或任何 worker 局部状态**。
 
 ### 3.2 协程与作用域操作契约
 
-- **`ruvia::task<T>`**：全库统一的惰性（lazy）协程。调用返回 `task<T>` 的函数仅分配协程帧而不开始执行，直到被右值 `co_await` 或传入 `event_loop::start()`。`context`、`db_executor`、`redis_executor` 等对象上的异步 I/O 方法返回的 `task<T>` 同时绑定到所属请求或客户端的 `operation_scope`。
-  - **未启动（cold）**的 `task<T>` 可直接析构丢弃，或随所属 `operation_scope` 关闭自动回收。
+- **`ruvia::task<T>`**：全库统一的惰性（lazy）协程。调用返回 `task<T>` 的函数仅分配协程帧而不开始执行，直到被右值 `co_await` 或传入 `event_loop::start()`。`context`、`db_executor`、`redis_executor` 等对象上的异步 I/O 方法返回的 `task<T>` 同时绑定到所属请求或客户端的生命周期。
+  - **未启动（cold）**的 `task<T>` 可直接析构丢弃，或在所属请求或客户端结束时自动回收。
   - **已启动（started）但尚未完成**的 `task<T>` 严禁直接析构（会直接触发 `std::terminate()`）。请求取消（`stop_source::request_stop()`）后，仍必须 `co_await` 或 `join` 等待其完成退出。
 
 ### 3.3 内存资源与借用生命周期
@@ -132,7 +132,7 @@ ruvia_link_controllers(my_service user_controllers)
 - **配置结构体字段命名**：所有配置/选项结构体（`*_config`、`*_options`、`*_rule` 等）的公开成员变量均以**下划线 `_` 结尾**（例如 `listen_config{.address_ = "0.0.0.0", .http_ = 8080}`），支持 C++20 指定初始化器（designated initializers）。
 - **配置容器**：拥有型文本与集合使用 `std::string` / `std::vector`。
 - **错误处理形状**：
-  - **正常协议/队列状态推进**：通过状态枚举或结果类型表示（如 `post_status::queue_full`、`channel_send_status::full`、`blocking_status::timed_out`、`worker_wait_status::closed`）。
+  - **正常协议/队列状态推进**：通过状态枚举或结果类型表示（如 `post_status::queue_full`、`channel_send_status::full`、`blocking_status::timed_out`、`wait_status::closed`）。
   - **操作失败或业务/协议错误**：抛出类型化异常（如路由中抛出 `ruvia::http_error`（可携带校验 issues）由错误处理器转换为对应 HTTP 响应；协议原语抛出 `ruvia::http_protocol_error`，携带状态码与稳定机器码 `code()`；客户端抛出 `db_error`、`redis_error`）。
   - **纯解析/值校验边界**：返回 `std::optional<T>`、`std::variant<T, Error>`，或直接返回值并在格式/规则非法时抛出 `std::invalid_argument` / 携带 issues 的 `ruvia::http_error`（如 `ruvia::parse_integer<T>`、`ruvia::from_json<T>`）。
 
@@ -167,7 +167,7 @@ ruvia_link_controllers(my_service user_controllers)
 | [workers_blocking.cpp](../examples/workers_blocking.cpp) | `ruvia_example_workers_blocking` | 默认 | Worker 局部状态 `use_worker_state<T>()`、跨 Worker 任务投递 `worker.post(...)` 与 `c.run_blocking(...)` 阻塞池卸载 |
 | [testing.cpp](../examples/testing.cpp) | `ruvia_example_testing` | 默认 | 使用 `test_app`、`test_request`、`dispatch_response` 在内存内无 Socket 测试完整路由与中间件管线 |
 | [auth_jwt.cpp](../examples/auth_jwt.cpp) | `ruvia_example_auth_jwt` | `RUVIA_ENABLE_JWT` | HMAC-SHA256/384/512 JWT 签发 `jwt_sign`、Bearer 提取 `jwt_bearer_token`、值语义校验 `try_jwt_verify` 与鉴权中间件 |
-| [database.cpp](../examples/database.cpp) | `ruvia_example_database` | `MARIADB` 或 `POSTGRESQL` | 数据库连接池配置、启动迁移 `db_migrator::migrate`、参数化查询、编译期 SQL 校验模板、流式游标 `query_stream` 与事务 |
+| [database.cpp](../examples/database.cpp) | `ruvia_example_database` | `MARIADB` 或 `POSTGRESQL` | 数据库连接池配置、启动迁移 `db_migrator::run`、参数化查询、编译期 SQL 校验模板、流式游标 `query_stream` 与事务 |
 | [sql_queries.cpp](../examples/sql_queries.cpp) | `ruvia_example_sql_queries` | `MARIADB` 或 `POSTGRESQL` | 离线 SQL 构建器 `db_query`、Schema DDL 构建器 `db_schema`、PL/pgSQL 过程块 `db_procedure` 与 TimescaleDB 策略生成 |
 | [orm.cpp](../examples/orm.cpp) | `ruvia_example_orm` | `RUVIA_ENABLE_POSTGRESQL` | PostgreSQL 强类型 ORM：实体与投影宏、Upsert / FindAndCount / Update / Increment、`query_builder`、窗口函数、`RETURNING`、事务抢占与 Redis 查询缓存 |
 | [orm_columns.cpp](../examples/orm_columns.cpp) | `ruvia_example_orm_columns` | `RUVIA_ENABLE_POSTGRESQL` | PostgreSQL `STORED` 生成列与事务隔离级别（`repeatable_read`）/ 只读事务模式（`read_only`） |

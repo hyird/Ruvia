@@ -43,8 +43,8 @@ public:
     void close_now() noexcept;
     [[nodiscard]] bool empty() const noexcept;
     // `io_metrics` is the request's counter block, or null outside a request.
-    [[nodiscard]] db_executor get(::ruvia::operation_scope& operation_scope, request_io_metrics* io_metrics) const;
-    [[nodiscard]] db_executor get(std::string_view alias, ::ruvia::operation_scope& operation_scope, request_io_metrics* io_metrics) const;
+    [[nodiscard]] db_executor get(operation_scope& operation_scope, request_io_metrics* io_metrics) const;
+    [[nodiscard]] db_executor get(std::string_view alias, operation_scope& operation_scope, request_io_metrics* io_metrics) const;
 
     template <typename driver_type>
     using pool_owner_ptr_type = std::unique_ptr<db_pool<driver_type>>;
@@ -70,12 +70,12 @@ private:
 #ifdef RUVIA_ENABLE_REDIS
     void attach_cache(std::size_t index, const worker_ref& worker_value, const redis_executor& redis, const db_cache_config_storage& policy, const db_config_storage& config, std::string_view alias);
 #endif
-    [[nodiscard]] db_executor executor(const entry_type& entry, ::ruvia::operation_scope& operation_scope, request_io_metrics* io_metrics) const;
+    [[nodiscard]] db_executor executor(const entry_type& entry, operation_scope& operation_scope, request_io_metrics* io_metrics) const;
 
     std::vector<entry_type> entries_;
     named_capability_index alias_index_;
 #ifdef RUVIA_ENABLE_REDIS
-    mutable ::ruvia::operation_scope cache_scope_;
+    mutable operation_scope cache_scope_;
 #endif
 };
 

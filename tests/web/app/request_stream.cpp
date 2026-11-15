@@ -786,10 +786,8 @@ TEST(Ruvia, request_stream_listeners_serve_every_protocol_beside_routes) {
     targets.push_back({"https://localhost:" + std::to_string(http3_port), ruvia::http_client_versions{.http1_ = false, .http2_ = false, .http3_ = true}, ruvia::http_protocol_version::http3, "HTTP/3"});
 #endif
     {
-        // "localhost" is looked up on the pool, which outlives the loop.
-        ruvia::blocking_pool lookups({.thread_count_ = 1});
         auto& client_io = ruvia::test::new_test_io_context();
-        auto attachment = ruvia::attach_event_loop(client_io, {.blocking_pool_ = &lookups});
+        auto attachment = ruvia::attach_event_loop(client_io);
         std::exception_ptr failure;
         auto run = [&]() -> ruvia::task<void> {
             co_await exercise_all(attachment.loop(), targets, identity.ca_file_, failure);

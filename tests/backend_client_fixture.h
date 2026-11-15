@@ -1500,7 +1500,7 @@ struct outcome final {
     std::string value_{};
     std::uint64_t affected_rows_{0};
     std::optional<std::uint64_t> insert_id_;
-    std::optional<ruvia::db_error::code_type> error_;
+    std::optional<ruvia::backend_error_code> error_;
     std::string sql_state_{};
     // The statement was refused for its shape (rows where none were wanted,
     // or none where rows were).

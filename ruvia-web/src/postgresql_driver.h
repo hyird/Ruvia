@@ -23,11 +23,11 @@ struct pg_result;
 // consumes input and reads results whenever libpq holds them.
 
 namespace ruvia::detail {
-// Builds the error for a failed libpq call or result. A statement_failed on a
+// Builds the error for a failed libpq call or result. A command_failed on a
 // connection libpq has marked bad is reported as io_error. Server messages can
 // quote row values, so what() carries only SQLSTATE and object names; libpq
 // text is kept for connect failures alone.
-[[nodiscard]] db_error postgresql_error(const pg_conn& connection, std::string_view operation, db_error::code_type code, const pg_result* result = nullptr);
+[[nodiscard]] db_error postgresql_error(const pg_conn& connection, std::string_view operation, backend_error_code code, const pg_result* result = nullptr);
 
 // Parameters are sent in text format. A double declares float8 so the server
 // never infers an integer type from an integral value; every other parameter

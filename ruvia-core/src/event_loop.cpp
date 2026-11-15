@@ -38,6 +38,15 @@ std::size_t default_loop_count() noexcept {
     return std::max<std::size_t>(1, std::thread::hardware_concurrency());
 }
 
+// A pointer borrows (as a non-owning alias), options build an owned pool,
+// nullptr leaves the loop without one.
+std::shared_ptr<blocking_pool> resolve_blocking_pool(const std::variant<blocking_pool_options, blocking_pool*>& choice) {
+    if (const auto* const borrowed = std::get_if<blocking_pool*>(&choice)) {
+        return std::shared_ptr<blocking_pool>(std::shared_ptr<void>{}, *borrowed);
+    }
+    return std::make_shared<blocking_pool>(std::get<blocking_pool_options>(choice));
+}
+
 }  // namespace
 
 struct event_loop_pool::impl_type final {
@@ -46,9 +55,10 @@ struct event_loop_pool::impl_type final {
         if (options.queue_capacity_ == 0) {
             throw std::invalid_argument("event loop queue capacity must be greater than zero");
         }
+        const auto pool = resolve_blocking_pool(options.blocking_pool_);
         loops_.reserve(count);
         for (std::size_t i = 0; i < count; ++i) {
-            loops_.push_back(std::make_shared<detail::event_loop_state>(options.queue_capacity_, options.blocking_pool_));
+            loops_.push_back(std::make_shared<detail::event_loop_state>(options.queue_capacity_, pool));
             loops_.back()->install_shutdown_registration();
         }
     }
@@ -325,7 +335,7 @@ public:
         loop_(std::move(loop)) {}
 
     void install_shutdown_registration() {
-        if (worker_.register_shutdown(shared_from_this(), &event_loop_stop_listener::shutdown_registration_) != worker_registration_status::registered) {
+        if (!detail::worker_ref_access::register_shutdown(worker_, shared_from_this(), &event_loop_stop_listener::shutdown_registration_)) {
             throw std::runtime_error("cannot register a stop callback on a stopping event loop");
         }
     }
@@ -419,7 +429,7 @@ private:
     }
 
     // First member: unlinks from the worker registry after every other member is gone.
-    worker_shutdown_registration shutdown_registration_;
+    detail::worker_shutdown_registration shutdown_registration_;
     worker_ref worker_;
     asio::io_context::executor_type executor_;
     std::mutex mutex_;
@@ -431,8 +441,9 @@ private:
     std::shared_ptr<event_loop_state> active_loop_;
 };
 
-event_loop_state::event_loop_state(std::size_t queue_capacity, blocking_pool* pool) :
-    context_ownership_(std::in_place_type<worker_runtime>, worker_runtime_options{.queue_capacity_ = queue_capacity, .blocking_pool_ = pool}),
+event_loop_state::event_loop_state(std::size_t queue_capacity, std::shared_ptr<blocking_pool> pool) :
+    blocking_pool_(std::move(pool)),
+    context_ownership_(std::in_place_type<worker_runtime>, worker_runtime_options{.queue_capacity_ = queue_capacity, .blocking_pool_ = blocking_pool_.get()}),
     io_context_(&owned_runtime().io_context()),
     executor_(io_context_->get_executor()),
     runtime_(owned_runtime().context()) {}
@@ -443,8 +454,9 @@ event_loop_state::event_loop_state(worker_runtime& runtime) :
     executor_(io_context_->get_executor()),
     runtime_(runtime.context()) {}
 
-event_loop_state::event_loop_state(asio::io_context& external_context, std::size_t queue_capacity, blocking_pool* pool, move_only_function<void(std::exception_ptr)> failure) :
-    context_ownership_(std::in_place_type<attached_context>, external_context, queue_capacity, pool, std::move(failure)),
+event_loop_state::event_loop_state(asio::io_context& external_context, std::size_t queue_capacity, std::shared_ptr<blocking_pool> pool, move_only_function<void(std::exception_ptr)> failure) :
+    blocking_pool_(std::move(pool)),
+    context_ownership_(std::in_place_type<attached_context>, external_context, queue_capacity, blocking_pool_.get(), std::move(failure)),
     io_context_(std::addressof(external_context)),
     executor_(external_context.get_executor()),
     runtime_(std::get_if<attached_context>(&context_ownership_)->runtime_) {}
@@ -484,7 +496,7 @@ void event_loop_state::shutdown_external_context() noexcept {
     worker_ref_access::wait_for_reservations(runtime_.worker());
 }
 void event_loop_state::install_shutdown_registration() {
-    if (runtime_.worker().register_shutdown(shared_from_this(), &event_loop_state::shutdown_registration_) != worker_registration_status::registered) {
+    if (!worker_ref_access::register_shutdown(runtime_.worker(), shared_from_this(), &event_loop_state::shutdown_registration_)) {
         throw std::runtime_error("cannot register an event loop on a stopping worker");
     }
 }
@@ -571,7 +583,7 @@ void event_loop_state::defer_finalize_stop(std::shared_ptr<event_loop_state> sel
     try {
         // A detached context ran shutdown_external_context(), which
         // already abandoned the stop chain this would finalize.
-        (void)worker_value.defer_completion([state_value = std::move(self)] {
+        (void)worker_ref_access::defer_completion(worker_value, [state_value = std::move(self)] {
             state_value->finalize_stop();
         });
     } catch (...) {
@@ -708,7 +720,7 @@ bool event_loop::defer_cleanup_task(move_only_function<void()> task_value) const
             }
         }
     };
-    return state_->runtime_.worker().defer_completion([control = cleanup_control(state_, std::move(task_value))]() mutable {
+    return detail::worker_ref_access::defer_completion(state_->runtime_.worker(), [control = cleanup_control(state_, std::move(task_value))]() mutable {
         control.task_();
     });
 }
@@ -764,7 +776,7 @@ void event_loop_attachment::stop() noexcept {
 }
 
 event_loop_attachment attach_event_loop(asio::io_context& io_context, event_loop_attachment_options options) {
-    auto state_value = std::make_shared<detail::event_loop_state>(io_context, options.queue_capacity_, options.blocking_pool_, std::move(options.failure_));
+    auto state_value = std::make_shared<detail::event_loop_state>(io_context, options.queue_capacity_, resolve_blocking_pool(options.blocking_pool_), std::move(options.failure_));
     const std::weak_ptr<detail::event_loop_state> weak_state = state_value;
     // root_task uses this sink directly; it must not call event_loop_state::route_failure,
     // which would route back through this same sink.

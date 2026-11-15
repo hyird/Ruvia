@@ -224,7 +224,7 @@ void http_client_connection::begin_idle() noexcept {
         return;
     }
     try {
-        (void)pool_.worker().schedule_timer(idle_timer_, deadline_after(idle_timeout->value()), [this](worker_timer_outcome outcome) noexcept {
+        (void)idle_timer_.schedule(pool_.worker(), deadline_after(idle_timeout->value()), [this](worker_timer_outcome outcome) noexcept {
             if (outcome == worker_timer_outcome::expired) {
                 close_idle();
             }

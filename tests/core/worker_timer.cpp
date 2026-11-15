@@ -39,7 +39,6 @@
 #include "task.h"
 #include "task_scope.h"
 #include "timeout_duration.h"
-#include "worker_result.h"
 #include "worker_task_fixture.h"
 #include "worker_wait.h"
 
@@ -90,7 +89,7 @@ bool timer_immediate_shutdown_works() {
         std::promise<void> stopped;
         auto stopped_ready = stopped.get_future();
         asio::post(io_context, [&] {
-            (worker_value).schedule_timer(registration, std::chrono::steady_clock::now() + std::chrono::hours(1), [](ruvia::worker_timer_outcome) {});
+            registration.schedule(worker_value, std::chrono::steady_clock::now() + std::chrono::hours(1), [](ruvia::worker_timer_outcome) {});
             attachment.stop();
             asio::post(io_context, [&] {
                 stopped.set_value();
@@ -116,7 +115,7 @@ bool off_worker_cancellation_can_race_with_timer_shutdown() {
         std::atomic_int completions{0};
 
         asio::post(io_context, [&] {
-            (worker_value).schedule_timer(registration, std::chrono::steady_clock::now() + std::chrono::hours(1), [&](ruvia::worker_timer_outcome outcome) {
+            registration.schedule(worker_value, std::chrono::steady_clock::now() + std::chrono::hours(1), [&](ruvia::worker_timer_outcome outcome) {
                 if (outcome == ruvia::worker_timer_outcome::cancelled) {
                     completions.fetch_add(1, std::memory_order_relaxed);
                 }
@@ -153,7 +152,7 @@ bool off_worker_cancellation_after_context_stop_does_not_expire_later() {
     bool cancelled = false;
 
     asio::post(io_context, [&] {
-        (worker_value).schedule_timer(*registration, std::chrono::steady_clock::now() + std::chrono::milliseconds(1), [&](ruvia::worker_timer_outcome outcome) {
+        registration->schedule(worker_value, std::chrono::steady_clock::now() + std::chrono::milliseconds(1), [&](ruvia::worker_timer_outcome outcome) {
             expired = outcome == ruvia::worker_timer_outcome::expired;
             cancelled = outcome == ruvia::worker_timer_outcome::cancelled;
         });
@@ -179,7 +178,7 @@ bool off_worker_cancellation_before_queued_stop_timers_does_not_invoke_callback(
     bool invoked = false;
 
     asio::post(io_context, [&] {
-        (worker_value).schedule_timer(*registration, std::chrono::steady_clock::now() + std::chrono::hours(1), [&invoked](ruvia::worker_timer_outcome) {
+        registration->schedule(worker_value, std::chrono::steady_clock::now() + std::chrono::hours(1), [&invoked](ruvia::worker_timer_outcome) {
             invoked = true;
         });
         io_context.stop();
@@ -202,7 +201,7 @@ bool explicit_timer_cancellation_notifies_after_quiet_destruction() {
     bool cancelled = false;
 
     asio::post(io_context, [&] {
-        (worker_value).schedule_timer(*registration, std::chrono::steady_clock::now() + std::chrono::hours(1), [&cancelled](ruvia::worker_timer_outcome outcome) {
+        registration->schedule(worker_value, std::chrono::steady_clock::now() + std::chrono::hours(1), [&cancelled](ruvia::worker_timer_outcome outcome) {
             cancelled = outcome == ruvia::worker_timer_outcome::cancelled;
         });
         registration->cancel_and_notify();
@@ -233,7 +232,7 @@ bool on_worker_token_cancellation_followed_by_owner_cancel_withdraws_callback() 
     std::weak_ptr<int> weak_capture = capture;
 
     asio::post(io_context, [&] {
-        static_cast<void>(worker_value.schedule_timer(owner->registration_, std::chrono::steady_clock::now(), [&callback_ran, captured = std::move(capture)](ruvia::worker_timer_outcome) {
+        static_cast<void>(owner->registration_.schedule(worker_value, std::chrono::steady_clock::now(), [&callback_ran, captured = std::move(capture)](ruvia::worker_timer_outcome) {
             static_cast<void>(captured);
             callback_ran = true;
         }));
@@ -258,16 +257,16 @@ ruvia::task<void> exercise(ruvia::event_loop_attachment& attachment, ruvia::work
     bool expired = false;
     bool cancelled = false;
     ruvia::worker_timer_registration expired_timer;
-    (worker_value).schedule_timer(expired_timer, std::chrono::steady_clock::now(), [&expired](ruvia::worker_timer_outcome outcome) {
+    expired_timer.schedule(worker_value, std::chrono::steady_clock::now(), [&expired](ruvia::worker_timer_outcome outcome) {
         expired = outcome == ruvia::worker_timer_outcome::expired;
     });
     ruvia::worker_timer_registration cancelled_timer;
-    (worker_value).schedule_timer(cancelled_timer, std::chrono::steady_clock::now() + std::chrono::hours(1), [&cancelled](ruvia::worker_timer_outcome outcome) {
+    cancelled_timer.schedule(worker_value, std::chrono::steady_clock::now() + std::chrono::hours(1), [&cancelled](ruvia::worker_timer_outcome outcome) {
         cancelled = outcome == ruvia::worker_timer_outcome::cancelled;
     });
     bool quiet_invoked = false;
     ruvia::worker_timer_registration quiet_timer;
-    (worker_value).schedule_timer(quiet_timer, std::chrono::steady_clock::now() + std::chrono::hours(1), [&quiet_invoked](ruvia::worker_timer_outcome) {
+    quiet_timer.schedule(worker_value, std::chrono::steady_clock::now() + std::chrono::hours(1), [&quiet_invoked](ruvia::worker_timer_outcome) {
         quiet_invoked = true;
     });
     if (!expired_timer.registered() || !cancelled_timer.registered() || !quiet_timer.registered()) {
@@ -385,12 +384,12 @@ bool stoppable_sleep_works() {
     return success;
 }
 
-ruvia::task<void> receive_through_timer_stop(ruvia::channel_receiver<int>& receiver, ruvia::worker_wait_status& status) {
+ruvia::task<void> receive_through_timer_stop(ruvia::channel_receiver<int>& receiver, ruvia::wait_status& status) {
     const auto result_value = co_await receiver.receive({.timeout_ = std::chrono::hours(1)});
     status = result_value.status();
 }
 
-ruvia::task<void> acquire_after_timer_stop(ruvia::pool_lease_scheduler& pool, std::optional<ruvia::worker_wait_result<std::size_t>>& result) {
+ruvia::task<void> acquire_after_timer_stop(ruvia::pool_lease_scheduler& pool, std::optional<ruvia::wait_result<std::size_t>>& result) {
     result.emplace(co_await pool.acquire({.timeout_ = std::chrono::milliseconds(1)}));
 }
 
@@ -403,7 +402,7 @@ ruvia::task<void> exercise_after_timer_stop(ruvia::event_loop_attachment& attach
     auto [sender, receiver] = ruvia::make_channel<int>(worker_value, {.capacity_ = 1});
     auto [completion, one_shot_receiver] = ruvia::make_one_shot<int>(worker_value);
 
-    auto pending_status = ruvia::worker_wait_status::value;
+    auto pending_status = ruvia::wait_status::value;
     {
         ruvia::task_scope scope(worker_value);
         scope.spawn(receive_through_timer_stop(receiver, pending_status));
@@ -412,7 +411,7 @@ ruvia::task<void> exercise_after_timer_stop(ruvia::event_loop_attachment& attach
         attachment.stop();
         co_await scope.join();
     }
-    if (pending_status != ruvia::worker_wait_status::worker_stopping) {
+    if (pending_status != ruvia::wait_status::worker_stopping) {
         co_return;
     }
 
@@ -423,19 +422,19 @@ ruvia::task<void> exercise_after_timer_stop(ruvia::event_loop_attachment& attach
     if (co_await ruvia::sleep_for(worker_value, std::chrono::hours(1), idle.token()) != ruvia::timer_sleep_result::stop_requested) {
         co_return;
     }
-    if ((co_await receiver.receive({.timeout_ = std::chrono::hours(1)})).status() != ruvia::worker_wait_status::worker_stopping) {
+    if ((co_await receiver.receive({.timeout_ = std::chrono::hours(1)})).status() != ruvia::wait_status::worker_stopping) {
         co_return;
     }
-    if ((co_await one_shot_receiver.wait({.timeout_ = std::chrono::hours(1)})).status() != ruvia::worker_wait_status::worker_stopping) {
+    if ((co_await one_shot_receiver.wait({.timeout_ = std::chrono::hours(1)})).status() != ruvia::wait_status::worker_stopping) {
         co_return;
     }
 
     ruvia::worker_timer_registration registration;
     bool invoked = false;
-    const auto schedule_status = worker_value.schedule_timer(registration, std::chrono::steady_clock::now() + std::chrono::hours(1), [&invoked](ruvia::worker_timer_outcome) {
+    const bool scheduled = registration.schedule(worker_value, std::chrono::steady_clock::now() + std::chrono::hours(1), [&invoked](ruvia::worker_timer_outcome) {
         invoked = true;
     });
-    if (schedule_status != ruvia::worker_timer_schedule_status::worker_stopping || registration.registered() || invoked) {
+    if (scheduled || registration.registered() || invoked) {
         co_return;
     }
 
@@ -446,14 +445,14 @@ ruvia::task<void> exercise_after_timer_stop(ruvia::event_loop_attachment& attach
     if (!held.has_value()) {
         co_return;
     }
-    std::optional<ruvia::worker_wait_result<std::size_t>> waiting_result;
+    std::optional<ruvia::wait_result<std::size_t>> waiting_result;
     {
         ruvia::task_scope scope(worker_value);
         scope.spawn(acquire_after_timer_stop(pool, waiting_result));
         co_await scope.join();
     }
     pool.release(held.value());
-    success = waiting_result.has_value() && waiting_result->status() == ruvia::worker_wait_status::worker_stopping;
+    success = waiting_result.has_value() && waiting_result->status() == ruvia::wait_status::worker_stopping;
 }
 
 bool timed_primitives_report_timer_stop() {
@@ -490,10 +489,10 @@ bool expired_registration_reschedules_on_another_worker() {
     };
 
     const auto first_post = first_worker.post([&] {
-        static_cast<void>(first_worker.schedule_timer(expiring, std::chrono::steady_clock::now(), [&first_expired](ruvia::worker_timer_outcome outcome) {
+        static_cast<void>(expiring.schedule(first_worker, std::chrono::steady_clock::now(), [&first_expired](ruvia::worker_timer_outcome outcome) {
             first_expired = outcome == ruvia::worker_timer_outcome::expired;
         }));
-        static_cast<void>(first_worker.schedule_timer(pending, std::chrono::steady_clock::now() + std::chrono::hours(1), [](ruvia::worker_timer_outcome) {}));
+        static_cast<void>(pending.schedule(first_worker, std::chrono::steady_clock::now() + std::chrono::hours(1), [](ruvia::worker_timer_outcome) {}));
     });
     if (!first_post.accepted()) {
         return false;
@@ -502,11 +501,11 @@ bool expired_registration_reschedules_on_another_worker() {
 
     const auto second_post = second_worker.post([&] {
         try {
-            static_cast<void>(second_worker.schedule_timer(pending, std::chrono::steady_clock::now(), [](ruvia::worker_timer_outcome) {}));
+            static_cast<void>(pending.schedule(second_worker, std::chrono::steady_clock::now(), [](ruvia::worker_timer_outcome) {}));
         } catch (const std::logic_error&) {
             pending_rejected = true;
         }
-        static_cast<void>(second_worker.schedule_timer(expiring, std::chrono::steady_clock::now(), [&second_expired](ruvia::worker_timer_outcome outcome) {
+        static_cast<void>(expiring.schedule(second_worker, std::chrono::steady_clock::now(), [&second_expired](ruvia::worker_timer_outcome outcome) {
             second_expired = outcome == ruvia::worker_timer_outcome::expired;
         }));
     });
@@ -519,7 +518,7 @@ bool expired_registration_reschedules_on_another_worker() {
     pending.cancel();
     drive(first_context);
     const auto rescheduled_post = second_worker.post([&] {
-        cancelled_rescheduled = second_worker.schedule_timer(pending, std::chrono::steady_clock::now() + std::chrono::hours(1), [](ruvia::worker_timer_outcome) {}) == ruvia::worker_timer_schedule_status::scheduled;
+        cancelled_rescheduled = pending.schedule(second_worker, std::chrono::steady_clock::now() + std::chrono::hours(1), [](ruvia::worker_timer_outcome) {});
         pending.cancel();
     });
     if (!rescheduled_post.accepted()) {
@@ -549,17 +548,17 @@ bool timer_callback_failure_preserves_remaining_operations() {
         const auto deadline = std::chrono::steady_clock::now();
         auto owned = std::make_shared<int>(1);
         failed_capture = owned;
-        static_cast<void>(worker_value.schedule_timer(failing_timer, deadline, [owned = std::move(owned)](ruvia::worker_timer_outcome) {
+        static_cast<void>(failing_timer.schedule(worker_value, deadline, [owned = std::move(owned)](ruvia::worker_timer_outcome) {
             throw std::runtime_error("timer completion failure");
         }));
         owned = std::make_shared<int>(2);
         completed_capture = owned;
-        static_cast<void>(worker_value.schedule_timer(remaining_timer, deadline, [owned = std::move(owned), &remaining_expired](ruvia::worker_timer_outcome outcome) {
+        static_cast<void>(remaining_timer.schedule(worker_value, deadline, [owned = std::move(owned), &remaining_expired](ruvia::worker_timer_outcome outcome) {
             remaining_expired = outcome == ruvia::worker_timer_outcome::expired;
         }));
         owned = std::make_shared<int>(3);
         cancelled_capture = owned;
-        static_cast<void>(worker_value.schedule_timer(cancelled_timer, deadline + std::chrono::hours(1), [owned = std::move(owned), &cancellation_observed](ruvia::worker_timer_outcome outcome) {
+        static_cast<void>(cancelled_timer.schedule(worker_value, deadline + std::chrono::hours(1), [owned = std::move(owned), &cancellation_observed](ruvia::worker_timer_outcome outcome) {
             cancellation_observed = outcome == ruvia::worker_timer_outcome::cancelled;
         }));
     });
@@ -572,7 +571,7 @@ bool timer_callback_failure_preserves_remaining_operations() {
     }
     asio::post(io_context, [&] {
         cancelled_timer.cancel_and_notify();
-        static_cast<void>(worker_value.schedule_timer(failing_timer, std::chrono::steady_clock::now(), [&rescheduled_expired](ruvia::worker_timer_outcome outcome) {
+        static_cast<void>(failing_timer.schedule(worker_value, std::chrono::steady_clock::now(), [&rescheduled_expired](ruvia::worker_timer_outcome outcome) {
             rescheduled_expired = outcome == ruvia::worker_timer_outcome::expired;
         }));
     });
@@ -607,13 +606,13 @@ bool self_rescheduling_due_timer_yields_to_other_handlers() {
             });
         }
         if (rounds < round_limit && rounds_before_handler < 0) {
-            static_cast<void>(worker_value.schedule_timer(timer, std::chrono::steady_clock::now(), [&tick](ruvia::worker_timer_outcome next) {
+            static_cast<void>(timer.schedule(worker_value, std::chrono::steady_clock::now(), [&tick](ruvia::worker_timer_outcome next) {
                 tick(next);
             }));
         }
     };
     asio::post(io_context, [&] {
-        static_cast<void>(worker_value.schedule_timer(timer, std::chrono::steady_clock::now(), [&tick](ruvia::worker_timer_outcome next) {
+        static_cast<void>(timer.schedule(worker_value, std::chrono::steady_clock::now(), [&tick](ruvia::worker_timer_outcome next) {
             tick(next);
         }));
     });
@@ -640,7 +639,7 @@ bool self_rescheduling_due_timer_preserves_other_expirations() {
         }
         order += 'A';
         if (++rounds < 3) {
-            static_cast<void>(worker.schedule_timer(repeating, earlier, [&](ruvia::worker_timer_outcome next) {
+            static_cast<void>(repeating.schedule(worker, earlier, [&](ruvia::worker_timer_outcome next) {
                 tick(next);
             }));
         } else {
@@ -649,10 +648,10 @@ bool self_rescheduling_due_timer_preserves_other_expirations() {
         }
     };
     asio::post(io_context, [&] {
-        static_cast<void>(worker.schedule_timer(repeating, earlier, [&](ruvia::worker_timer_outcome next) {
+        static_cast<void>(repeating.schedule(worker, earlier, [&](ruvia::worker_timer_outcome next) {
             tick(next);
         }));
-        static_cast<void>(worker.schedule_timer(other, earlier + std::chrono::seconds(1), [&](ruvia::worker_timer_outcome outcome) {
+        static_cast<void>(other.schedule(worker, earlier + std::chrono::seconds(1), [&](ruvia::worker_timer_outcome outcome) {
             if (outcome == ruvia::worker_timer_outcome::expired) {
                 order += 'B';
             }
@@ -697,17 +696,17 @@ ruvia::task<void> schedule_with_stop_during_callback_move(ruvia::event_loop_atta
     ruvia::worker_timer_registration registration;
     ruvia::move_only_function<void(ruvia::worker_timer_outcome)> completion{stop_during_move_callback(current)};
     current.moves_ = 0;
-    const auto result = worker.schedule_timer(registration, std::chrono::steady_clock::now() + std::chrono::hours(1), std::move(completion));
+    const bool scheduled = registration.schedule(worker, std::chrono::steady_clock::now() + std::chrono::hours(1), std::move(completion));
     if (!current.stopped_) {
         attachment.stop();
     }
     static_cast<void>(co_await ruvia::sleep_for(worker, std::chrono::hours(1)));
     bool reusable = false;
     try {
-        reusable = worker.schedule_timer(registration, std::chrono::steady_clock::now(), [](ruvia::worker_timer_outcome) {}) == ruvia::worker_timer_schedule_status::worker_stopping;
+        reusable = !registration.schedule(worker, std::chrono::steady_clock::now(), [](ruvia::worker_timer_outcome) {});
     } catch (const std::logic_error&) {
     }
-    success = reusable && ((result == ruvia::worker_timer_schedule_status::worker_stopping && current.completions_ == 0) || (result == ruvia::worker_timer_schedule_status::scheduled && current.completions_ == 1 && current.cancelled_));
+    success = reusable && ((!scheduled && current.completions_ == 0) || (scheduled && current.completions_ == 1 && current.cancelled_));
     registration.cancel();
 }
 
@@ -747,7 +746,7 @@ bool timer_registration_rejects_reentrant_acquire() {
             }
             state_->attempted_ = true;
             try {
-                state_->inner_accepted_ = state_->worker_->schedule_timer(*state_->registration_, std::chrono::steady_clock::now() + std::chrono::hours(1), [](ruvia::worker_timer_outcome) {}) == ruvia::worker_timer_schedule_status::scheduled;
+                state_->inner_accepted_ = state_->registration_->schedule(*state_->worker_, std::chrono::steady_clock::now() + std::chrono::hours(1), [](ruvia::worker_timer_outcome) {});
             } catch (const std::logic_error&) {
                 state_->inner_rejected_ = true;
             }
@@ -768,7 +767,7 @@ bool timer_registration_rejects_reentrant_acquire() {
             bool outer_accepted = false;
             bool outer_rejected = false;
             try {
-                outer_accepted = worker.schedule_timer(registration, std::chrono::steady_clock::now() + std::chrono::hours(1), std::move(completion)) == ruvia::worker_timer_schedule_status::scheduled;
+                outer_accepted = registration.schedule(worker, std::chrono::steady_clock::now() + std::chrono::hours(1), std::move(completion));
             } catch (const std::logic_error&) {
                 outer_rejected = true;
             }

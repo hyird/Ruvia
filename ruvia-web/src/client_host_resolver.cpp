@@ -43,7 +43,7 @@ bool client_host_needs_lookup(std::string_view host) {
 }
 
 void require_client_host_lookup(std::string_view host, const worker_ref& worker) {
-    if (worker.blocking_pool() == nullptr && client_host_needs_lookup(host)) {
+    if (detail::worker_ref_access::blocking_pool(worker) == nullptr && client_host_needs_lookup(host)) {
         throw std::invalid_argument("a DNS host requires an event loop with a blocking pool");
     }
 }

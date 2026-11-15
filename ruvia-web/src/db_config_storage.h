@@ -83,7 +83,7 @@ inline void validate_db_config(const db_config& config) {
     }
     detail::ensure_non_zero_port(configured_db_port(config), "database port must not be zero");
     detail::ensure_positive_size(config.pool_size_per_worker_, "database pool size must be greater than zero");
-    detail::ensure_positive_optional_durations("configured database timeouts must be greater than zero", config.connect_timeout_, config.read_timeout_, config.write_timeout_, config.query_timeout_, config.acquire_timeout_, config.transaction_timeout_);
+    detail::ensure_positive_optional_durations("configured database timeouts must be greater than zero", config.connect_timeout_, config.read_timeout_, config.write_timeout_, config.command_timeout_, config.acquire_timeout_, config.transaction_timeout_);
 }
 
 [[nodiscard]] inline validated_db_config_view validated_db_config(const db_config& config) {
@@ -137,7 +137,7 @@ struct db_config_storage final {
     std::optional<timeout_duration> connect_timeout_;
     std::optional<timeout_duration> read_timeout_;
     std::optional<timeout_duration> write_timeout_;
-    std::optional<timeout_duration> query_timeout_;
+    std::optional<timeout_duration> command_timeout_;
     std::optional<timeout_duration> acquire_timeout_;
     std::optional<timeout_duration> transaction_timeout_;
     // Whether a slot whose connection ended connects again on its next use.
@@ -182,7 +182,7 @@ private:
         connect_timeout_(source_value.connect_timeout_),
         read_timeout_(source_value.read_timeout_),
         write_timeout_(source_value.write_timeout_),
-        query_timeout_(source_value.query_timeout_),
+        command_timeout_(source_value.command_timeout_),
         acquire_timeout_(source_value.acquire_timeout_),
         transaction_timeout_(source_value.transaction_timeout_),
         reconnect_(resolved_reconnect(source_value)) {}

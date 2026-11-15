@@ -851,8 +851,7 @@ TEST(Ruvia, http_client_fluent_ownership_helpers_json_and_registered_redirects) 
 void fluent_client_tests::verify_standalone_origins(server& server) {
     SCOPED_TRACE("standalone origins, isolated policies and shared budget");
     auto& io = ruvia::test::new_test_io_context();
-    ruvia::blocking_pool lookups({.thread_count_ = 1});
-    auto attachment = ruvia::attach_event_loop(io, {.blocking_pool_ = &lookups});
+    auto attachment = ruvia::attach_event_loop(io);
     std::exception_ptr failure;
     const auto run = [&]() -> ruvia::task<void> {
         auto secure = server.secure_config();

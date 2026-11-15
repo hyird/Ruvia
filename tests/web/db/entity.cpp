@@ -228,13 +228,13 @@ TEST(Ruvia, db_field_and_array_decoding_reject_nonfinite_floats_and_prioritize_f
             bool invalid_float = false;
             try {
                 (void)rows.front()["val"].as<double>();
-            } catch (const db_conversion_error& error) {
-                invalid_double = error.code() == db_conversion_error::code_type::invalid_format;
+            } catch (const conversion_error& error) {
+                invalid_double = error.code() == conversion_error::code_type::invalid_format;
             }
             try {
                 (void)rows.front()["val"].as<float>();
-            } catch (const db_conversion_error& error) {
-                invalid_float = error.code() == db_conversion_error::code_type::invalid_format;
+            } catch (const conversion_error& error) {
+                invalid_float = error.code() == conversion_error::code_type::invalid_format;
             }
             EXPECT_TRUE(invalid_double);
             EXPECT_TRUE(invalid_float);
@@ -244,8 +244,8 @@ TEST(Ruvia, db_field_and_array_decoding_reject_nonfinite_floats_and_prioritize_f
             bool invalid_format = false;
             try {
                 (void)rows.front()["val"].as<std::int64_t>();
-            } catch (const db_conversion_error& error) {
-                invalid_format = error.code() == db_conversion_error::code_type::invalid_format;
+            } catch (const conversion_error& error) {
+                invalid_format = error.code() == conversion_error::code_type::invalid_format;
             }
             EXPECT_TRUE(invalid_format);
         }
@@ -254,8 +254,8 @@ TEST(Ruvia, db_field_and_array_decoding_reject_nonfinite_floats_and_prioritize_f
             bool out_of_range = false;
             try {
                 (void)rows.front()["val"].as<std::int64_t>();
-            } catch (const db_conversion_error& error) {
-                out_of_range = error.code() == db_conversion_error::code_type::out_of_range;
+            } catch (const conversion_error& error) {
+                out_of_range = error.code() == conversion_error::code_type::out_of_range;
             }
             EXPECT_TRUE(out_of_range);
         }
@@ -267,8 +267,8 @@ TEST(Ruvia, db_field_and_array_decoding_reject_nonfinite_floats_and_prioritize_f
                 auto qb = repo.query_builder("n");
                 qb.select({"ratios"});
                 (void)co_await qb.get_many();
-            } catch (const db_conversion_error& error) {
-                invalid_array_float = error.code() == db_conversion_error::code_type::invalid_format;
+            } catch (const conversion_error& error) {
+                invalid_array_float = error.code() == conversion_error::code_type::invalid_format;
             }
             EXPECT_TRUE(invalid_array_float);
         }
@@ -278,8 +278,8 @@ TEST(Ruvia, db_field_and_array_decoding_reject_nonfinite_floats_and_prioritize_f
                 auto qb = repo.query_builder("n");
                 qb.select({"counts"});
                 (void)co_await qb.get_many();
-            } catch (const db_conversion_error& error) {
-                invalid_array_int_format = error.code() == db_conversion_error::code_type::invalid_format;
+            } catch (const conversion_error& error) {
+                invalid_array_int_format = error.code() == conversion_error::code_type::invalid_format;
             }
             EXPECT_TRUE(invalid_array_int_format);
         }
@@ -289,8 +289,8 @@ TEST(Ruvia, db_field_and_array_decoding_reject_nonfinite_floats_and_prioritize_f
                 auto qb = repo.query_builder("n");
                 qb.select({"counts"});
                 (void)co_await qb.get_many();
-            } catch (const db_conversion_error& error) {
-                array_int_out_of_range = error.code() == db_conversion_error::code_type::out_of_range;
+            } catch (const conversion_error& error) {
+                array_int_out_of_range = error.code() == conversion_error::code_type::out_of_range;
             }
             EXPECT_TRUE(array_int_out_of_range);
         }
@@ -346,17 +346,17 @@ TEST(Ruvia, db_public_mapping_owns_values_and_rejects_missing_or_ambiguous_colum
             bool rejected = false;
             try {
                 (void)decode_db_field<int>(rows.front()["v"]);
-            } catch (const db_conversion_error& error) {
-                rejected = error.code() == db_conversion_error::code_type::unexpected_null;
+            } catch (const conversion_error& error) {
+                rejected = error.code() == conversion_error::code_type::unexpected_null;
             }
             EXPECT_TRUE(rejected);
         }
-        for (const auto expected : {db_conversion_error::code_type::missing_column, db_conversion_error::code_type::invalid_format}) {
+        for (const auto expected : {conversion_error::code_type::missing_column, conversion_error::code_type::invalid_format}) {
             const auto rows = co_await handle.query("SELECT * FROM invalid_mapping");
             bool rejected = false;
             try {
                 (void)decode_db_row<mapped_user>(rows.front());
-            } catch (const db_conversion_error& error) {
+            } catch (const conversion_error& error) {
                 rejected = error.code() == expected;
             }
             EXPECT_TRUE(rejected);
@@ -382,16 +382,16 @@ TEST(Ruvia, db_row_column_lookup_reports_absent_found_and_repeated) {
         EXPECT_TRUE(row["name"].as<std::string_view>() == "alice");
         EXPECT_TRUE(row.find("id").status_ == unique_lookup_status::repeated);
         EXPECT_TRUE(row.find("missing").status_ == unique_lookup_status::absent);
-        const auto code_of = [&](std::string_view column) -> std::optional<db_conversion_error::code_type> {
+        const auto code_of = [&](std::string_view column) -> std::optional<conversion_error::code_type> {
             try {
                 (void)row[column];
-            } catch (const db_conversion_error& error) {
+            } catch (const conversion_error& error) {
                 return error.code();
             }
             return std::nullopt;
         };
-        EXPECT_TRUE(code_of("id") == db_conversion_error::code_type::invalid_format);
-        EXPECT_TRUE(code_of("missing") == db_conversion_error::code_type::missing_column);
+        EXPECT_TRUE(code_of("id") == conversion_error::code_type::invalid_format);
+        EXPECT_TRUE(code_of("missing") == conversion_error::code_type::missing_column);
     });
 }
 }  // namespace
@@ -429,7 +429,7 @@ TEST(Ruvia, db_transaction_options_support_cold_cancellation_and_reject_invalid_
                         auto transaction = co_await std::move(operation);
                         EXPECT_TRUE(false);
                     } catch (const db_error& error) {
-                        observed_cancellation = error.code() == db_error::code_type::cancelled;
+                        observed_cancellation = error.code() == backend_error_code::cancelled;
                     }
                     auto invalid = handle.begin_transaction(options);
                     options = {};
@@ -644,7 +644,7 @@ TEST(Ruvia, db_stream_read_takes_its_own_operation_options) {
         db_client client(attachment.loop(), peer.config());
         test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
             auto stream = co_await connected.db().query_stream("SELECT v FROM records");
-            const auto failure_of = [](task<std::optional<db_row>> read) -> task<std::optional<db_error::code_type>> {
+            const auto failure_of = [](task<std::optional<db_row>> read) -> task<std::optional<backend_error_code>> {
                 try {
                     (void)co_await std::move(read);
                 } catch (const db_error& error) {
@@ -654,7 +654,7 @@ TEST(Ruvia, db_stream_read_takes_its_own_operation_options) {
             };
             stop_source stopped;
             stopped.request_stop();
-            EXPECT_TRUE(co_await failure_of(stream.read({.stop_token_ = stopped.token()})) == db_error::code_type::cancelled);
+            EXPECT_TRUE(co_await failure_of(stream.read({.stop_token_ = stopped.token()})) == backend_error_code::cancelled);
             EXPECT_TRUE(stream.active());
             EXPECT_THROW((void)stream.read({.timeout_ = std::chrono::milliseconds(0)}), std::invalid_argument);
             const auto first = co_await stream.read();
@@ -672,7 +672,7 @@ TEST(Ruvia, db_stream_read_takes_its_own_operation_options) {
             }
             const auto code = co_await failure_of(stream.read(std::move(operation)));
             co_await stopper.join();
-            EXPECT_TRUE(code == (cancel ? db_error::code_type::cancelled : db_error::code_type::timeout));
+            EXPECT_TRUE(code == (cancel ? backend_error_code::cancelled : backend_error_code::timeout));
             EXPECT_TRUE(!stream.active());
         });
     }
@@ -755,7 +755,7 @@ TEST(Ruvia, db_transaction_scalar_decode_failure_releases_slot_for_next_transact
             bool failed = false;
             try {
                 (void)co_await transaction.try_advisory_lock(7001);
-            } catch (const db_conversion_error&) {
+            } catch (const conversion_error&) {
                 failed = true;
             }
             EXPECT_TRUE(failed);
@@ -917,7 +917,7 @@ TEST(Ruvia, db_transaction_held_idle_past_its_deadline_closes_the_session_and_fa
     using namespace ruvia;
     for (const auto driver : drivers) {
         auto peer = make_peer(driver, {step::begin});
-        std::optional<db_error::code_type> code;
+        std::optional<backend_error_code> code;
         bool ended = false;
         drive_client(*peer, driver, std::chrono::milliseconds(100), [&](db_client& connected) -> task<void> {
             auto transaction = co_await connected.db().begin_transaction();
@@ -931,14 +931,14 @@ TEST(Ruvia, db_transaction_held_idle_past_its_deadline_closes_the_session_and_fa
             }
             ended = !transaction.active();
         });
-        EXPECT_TRUE(code == db_error::code_type::timeout);
+        EXPECT_TRUE(code == backend_error_code::timeout);
         EXPECT_TRUE(ended);
         EXPECT_TRUE(!sent_statement(*peer, driver, "COMMIT"));
     }
 }
 
 // Half the transaction's time passes idle; the statement then waits on a reply
-// that never comes. query_timeout_ (30 s) alone would let it wait on: it gets
+// that never comes. command_timeout_ (30 s) alone would let it wait on: it gets
 // only what is left of the transaction, fails with timeout, ends the
 // transaction and closes the connection instead of returning it to the pool.
 TEST(Ruvia, db_transaction_statement_is_bounded_by_the_remaining_transaction_time) {
@@ -946,7 +946,7 @@ TEST(Ruvia, db_transaction_statement_is_bounded_by_the_remaining_transaction_tim
     constexpr auto lease = std::chrono::milliseconds(600);
     for (const auto driver : drivers) {
         auto peer = make_peer(driver, {step::begin, step::held_row});
-        std::optional<db_error::code_type> code;
+        std::optional<backend_error_code> code;
         std::chrono::steady_clock::duration statement_time{};
         bool ended = false;
         drive_client(*peer, driver, lease, [&](db_client& connected) -> task<void> {
@@ -964,7 +964,7 @@ TEST(Ruvia, db_transaction_statement_is_bounded_by_the_remaining_transaction_tim
             // Throws unless the timed-out connection was closed.
             co_await await_disconnects(connected.worker(), *peer);
         });
-        EXPECT_TRUE(code == db_error::code_type::timeout);
+        EXPECT_TRUE(code == backend_error_code::timeout);
         EXPECT_TRUE(statement_time < lease);
         EXPECT_TRUE(ended);
     }
@@ -1004,7 +1004,7 @@ TEST(Ruvia, db_stream_held_idle_past_its_deadline_closes_the_session_and_fails_r
         for (const bool close : {false, true}) {
             auto peer = make_peer(driver, {step::stream_rows});
             std::string first{};
-            std::optional<db_error::code_type> code;
+            std::optional<backend_error_code> code;
             bool ended = false;
             drive_client(*peer, driver, std::chrono::milliseconds(100), [&](db_client& connected) -> task<void> {
                 auto stream = co_await connected.db().query_stream("SELECT v FROM records");
@@ -1027,7 +1027,7 @@ TEST(Ruvia, db_stream_held_idle_past_its_deadline_closes_the_session_and_fails_r
                 co_await stream.close();
             });
             EXPECT_TRUE(first == "first");
-            EXPECT_TRUE(code == db_error::code_type::timeout);
+            EXPECT_TRUE(code == backend_error_code::timeout);
             EXPECT_TRUE(ended);
         }
     }
@@ -1043,7 +1043,7 @@ ruvia::task<void> connect_until_stopped(ruvia::db_client& client, bool& cancelle
     try {
         co_await client.connect();
     } catch (const ruvia::db_error& error) {
-        if (error.code() != ruvia::db_error::code_type::closing) {
+        if (error.code() != ruvia::backend_error_code::closing) {
             throw;
         }
         cancelled = true;
@@ -1205,7 +1205,7 @@ TEST(Ruvia, db_client_shutdown_waiters_join_pending_authentication) {
     try {
         std::move(first).get();
     } catch (const ruvia::db_error& error) {
-        if (error.code() != ruvia::db_error::code_type::closing) {
+        if (error.code() != ruvia::backend_error_code::closing) {
             throw;
         }
         cancelled = true;

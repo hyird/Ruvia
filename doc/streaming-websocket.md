@@ -152,7 +152,7 @@ ruvia::task<void> stream_subscription(
     const auto stop = c.stop_token();
     co_await sse.write({.data_ = initial_snapshot, .event_ = "snapshot"});
     while (!stop.stop_requested()) {
-        auto message = co_await subscription.receive(stop);
+        auto message = co_await subscription.receive({.stop_token_ = stop});
         if (!message.has_value()) {
             co_return;  // cancelled、closed 或 worker_stopping
         }

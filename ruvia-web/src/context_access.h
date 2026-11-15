@@ -78,7 +78,6 @@ namespace ruvia {
 class http_client;
 class http_client_ref;
 class stop_token;
-class operation_scope;
 
 #ifdef RUVIA_ENABLE_DATABASE
 class db_executor;
@@ -90,6 +89,7 @@ class redis_executor;
 namespace detail {
 
 class borrowed_clients;
+class operation_scope;
 class db_registry;
 struct request_io_metrics;
 class http_client_registry;
@@ -138,17 +138,17 @@ public:
 
     // `io_metrics` is the request's counter block, or null outside a request.
 #ifdef RUVIA_ENABLE_DATABASE
-    [[nodiscard]] db_executor db(::ruvia::operation_scope& operation_scope, request_io_metrics* io_metrics, const stop_token& stop_token) const;
-    [[nodiscard]] db_executor db(std::string_view alias, ::ruvia::operation_scope& operation_scope, request_io_metrics* io_metrics, const stop_token& stop_token) const;
+    [[nodiscard]] db_executor db(operation_scope& operation_scope, request_io_metrics* io_metrics, const stop_token& stop_token) const;
+    [[nodiscard]] db_executor db(std::string_view alias, operation_scope& operation_scope, request_io_metrics* io_metrics, const stop_token& stop_token) const;
 #endif
 
 #ifdef RUVIA_ENABLE_REDIS
-    [[nodiscard]] redis_executor redis(::ruvia::operation_scope& operation_scope, request_io_metrics* io_metrics, const stop_token& stop_token) const;
-    [[nodiscard]] redis_executor redis(std::string_view alias, ::ruvia::operation_scope& operation_scope, request_io_metrics* io_metrics, const stop_token& stop_token) const;
+    [[nodiscard]] redis_executor redis(operation_scope& operation_scope, request_io_metrics* io_metrics, const stop_token& stop_token) const;
+    [[nodiscard]] redis_executor redis(std::string_view alias, operation_scope& operation_scope, request_io_metrics* io_metrics, const stop_token& stop_token) const;
 #endif
 
-    [[nodiscard]] http_client_ref client(::ruvia::operation_scope& operation_scope, const stop_token& stop_token) const;
-    [[nodiscard]] http_client_ref client(std::string_view alias, ::ruvia::operation_scope& operation_scope, const stop_token& stop_token) const;
+    [[nodiscard]] http_client_ref client(operation_scope& operation_scope, const stop_token& stop_token) const;
+    [[nodiscard]] http_client_ref client(std::string_view alias, operation_scope& operation_scope, const stop_token& stop_token) const;
 
 private:
     explicit constexpr worker_client_registry_view(std::nullptr_t) noexcept {}
@@ -1309,7 +1309,7 @@ private:
     bool final_committed_{};
     bool output_active_{};
     operation_interrupt_source interrupts_;
-    ::ruvia::operation_scope scope_;
+    operation_scope scope_;
 };
 // A lazily built index for queries(name). Values stay in request order within
 // each name; groups are sorted only for lookup and are never exposed publicly.

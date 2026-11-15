@@ -8,7 +8,7 @@
 #include "task.h"
 #include "worker_ref.h"
 
-namespace ruvia {
+namespace ruvia::detail {
 
 // Keeps a reentrant join from publishing retirement during frame/capability
 // cleanup. Its registration is a value, not a frame-owner base class.
@@ -72,7 +72,7 @@ void operation_scope::close() noexcept {
     expire_for_join();
 }
 
-void operation_scope::expire() noexcept {
+void operation_scope::seal() noexcept {
     if (expiring_capabilities_ || !active_) {
         return;
     }
@@ -140,7 +140,7 @@ void operation_scope::resume_joiner() noexcept {
     const auto resume = [continuation] {
         continuation.resume();
     };
-    if (bound_worker != nullptr ? bound_worker->defer_completion(resume) : detail::worker_ref_access::current().defer_completion(resume)) {
+    if (worker_ref_access::defer_completion(bound_worker != nullptr ? *bound_worker : worker_ref_access::current(), resume)) {
         return;
     }
     // No attached event loop owns this thread (or its context has detached):
@@ -154,7 +154,7 @@ void operation_scope::check_worker() const noexcept {
     }
 }
 
-scoped_capability_registration::scoped_capability_registration(operation_scope& scope, void* target, void (*cleanup)(void*) noexcept) noexcept :
+capability_link::capability_link(operation_scope& scope, void* target, void (*cleanup)(void*) noexcept) noexcept :
     target_(target),
     cleanup_(cleanup),
     active_(scope.active()) {
@@ -163,7 +163,7 @@ scoped_capability_registration::scoped_capability_registration(operation_scope& 
     }
 }
 
-scoped_capability_registration::scoped_capability_registration(const scoped_capability_registration& other, void* target) noexcept :
+capability_link::capability_link(const capability_link& other, void* target) noexcept :
     target_(target),
     cleanup_(other.cleanup_),
     active_(other.active_) {
@@ -172,7 +172,7 @@ scoped_capability_registration::scoped_capability_registration(const scoped_capa
     }
 }
 
-scoped_capability_registration::scoped_capability_registration(scoped_capability_registration&& other, void* target) noexcept :
+capability_link::capability_link(capability_link&& other, void* target) noexcept :
     scope_(other.scope_),
     previous_(other.previous_),
     next_(other.next_),
@@ -197,22 +197,22 @@ scoped_capability_registration::scoped_capability_registration(scoped_capability
     other.active_ = false;
 }
 
-scoped_capability_registration::~scoped_capability_registration() {
+capability_link::~capability_link() {
     unlink();
 }
 
-void scoped_capability_registration::require_active() const {
+void capability_link::require_active() const {
     if (!active_) {
         throw std::logic_error("scoped capability lifetime has expired");
     }
 }
 
-operation_scope& scoped_capability_registration::scope() const {
+operation_scope& capability_link::scope() const {
     require_active();
     return *scope_;
 }
 
-void scoped_capability_registration::bind(operation_scope& scope, void* target, void (*cleanup)(void*) noexcept) noexcept {
+void capability_link::bind(operation_scope& scope, void* target, void (*cleanup)(void*) noexcept) noexcept {
     if (scope_ != nullptr || active_) {
         std::terminate();
     }
@@ -224,7 +224,7 @@ void scoped_capability_registration::bind(operation_scope& scope, void* target, 
     }
 }
 
-void scoped_capability_registration::link(operation_scope& scope) noexcept {
+void capability_link::link(operation_scope& scope) noexcept {
     scope_ = &scope;
     next_ = scope.capability_head_;
     if (next_ != nullptr) {
@@ -233,7 +233,7 @@ void scoped_capability_registration::link(operation_scope& scope) noexcept {
     scope.capability_head_ = this;
 }
 
-void scoped_capability_registration::unlink() noexcept {
+void capability_link::unlink() noexcept {
     if (scope_ == nullptr) {
         return;
     }
@@ -250,7 +250,7 @@ void scoped_capability_registration::unlink() noexcept {
     next_ = nullptr;
 }
 
-void scoped_capability_registration::expire() noexcept {
+void capability_link::expire() noexcept {
     const auto cleanup = cleanup_;
     auto* target = target_;
     active_ = false;
@@ -284,8 +284,6 @@ void operation_scope::unlink(detail::scoped_operation_registration& operation) n
     operation.previous_ = nullptr;
     operation.next_ = nullptr;
 }
-
-namespace detail {
 
 scoped_operation_registration::scoped_operation_registration(scoped_operation_registration&& other, void* new_frame_target) noexcept {
     if (other.phase_ == phase::running || other.phase_ == phase::retiring) {
@@ -407,6 +405,4 @@ void scoped_operation_registration::retire_frame() noexcept {
     }
 }
 
-}  // namespace detail
-
-}  // namespace ruvia
+}  // namespace ruvia::detail

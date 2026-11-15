@@ -64,20 +64,20 @@ bool redis_registry::empty() const noexcept {
     return runtimes_.empty();
 }
 
-redis_executor redis_registry::get(::ruvia::operation_scope& operation_scope, request_io_metrics* io_metrics) const {
+redis_executor redis_registry::get(operation_scope& operation_scope, request_io_metrics* io_metrics) const {
     const auto default_pool_index = alias_index_.default_index();
     if (!default_pool_index.has_value()) {
-        throw redis_error(redis_error::code_type::not_configured, "default redis is not configured");
+        throw redis_error(backend_error_code::not_configured, "default redis is not configured");
     }
     return runtimes_[*default_pool_index]->executor(operation_scope, io_metrics);
 }
 
-redis_executor redis_registry::get(std::string_view alias, ::ruvia::operation_scope& operation_scope, request_io_metrics* io_metrics) const {
+redis_executor redis_registry::get(std::string_view alias, operation_scope& operation_scope, request_io_metrics* io_metrics) const {
     const auto match = alias_index_.find(alias);
     if (match.has_value()) {
         return runtimes_[*match]->executor(operation_scope, io_metrics);
     }
-    throw redis_error(redis_error::code_type::not_configured, "redis is not configured");
+    throw redis_error(backend_error_code::not_configured, "redis is not configured");
 }
 
 redis_client_runtime::redis_client_runtime(asio::io_context& io_context, const worker_ref& worker_value, redis_config_storage config) :
@@ -104,11 +104,11 @@ void redis_client_runtime::close_now() noexcept {
     subscriptions_.close_now();
 }
 
-redis_executor redis_client_runtime::executor(::ruvia::operation_scope& scope, request_io_metrics* io_metrics) {
+redis_executor redis_client_runtime::executor(operation_scope& scope, request_io_metrics* io_metrics) {
     return redis_executor(*this, scope, io_metrics);
 }
 
-redis_executor redis_client_runtime::executor(::ruvia::operation_scope& scope, operation_options options) {
+redis_executor redis_client_runtime::executor(operation_scope& scope, operation_options options) {
     return redis_executor(*this, scope, std::move(options));
 }
 

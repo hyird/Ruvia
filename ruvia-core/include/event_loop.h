@@ -13,15 +13,16 @@
 #include <string_view>
 #include <type_traits>
 #include <utility>
+#include <variant>
 
 #include <asio/io_context.hpp>
 
 #include "asio_bridge.h"
+#include "blocking_pool.h"
 #include "move_only_function.h"
 #include "operation_options.h"
 #include "task.h"
 #include "worker_ref.h"
-#include "worker_result.h"
 
 namespace ruvia {
 
@@ -321,7 +322,7 @@ private:
 // root_task (value()/take_value()); a rejection owns the unconsumed cold task
 // (rejected()/take_rejected()) with its post_status.
 template <typename t_type>
-using event_loop_start_result = worker_delivery_result<task<t_type>, post_status, post_status::accepted, root_task<t_type>>;
+using event_loop_start_result = delivery_result<task<t_type>, post_status, post_status::accepted, root_task<t_type>>;
 
 namespace detail {
 
@@ -347,7 +348,7 @@ struct root_task_launch_guard final {
         // Retire it before waking a caller that may reclaim its inputs.
         task_.reset();
         if (completion_ != nullptr) {
-            completion_->completion().complete_failure(std::make_exception_ptr(event_loop_start_rejected(post_status::worker_stopping)));
+            completion_->completion().complete_failure(std::make_exception_ptr(event_loop_start_rejected(post_status::stopping)));
         }
     }
     void release() noexcept {
@@ -458,7 +459,7 @@ public:
     // admission but takes retirement protection, so it can still return false
     // after retirement has begun. Accepted callbacks and their owned inputs
     // retire before the loop can release its execution context. Contrast
-    // worker_ref::defer_completion(), the completion, cancellation, and
+    // worker_ref_access::defer_completion(), the completion, cancellation, and
     // resume lane of an operation the worker already admitted.
     template <typename fn_type>
         requires detail::move_only_function_target<void, fn_type>
@@ -481,11 +482,11 @@ public:
         using result_type = event_loop_start_result<t_type>;
         auto retirement_lease = acquire_root_lease();
         if (!retirement_lease) {
-            return detail::worker_delivery_access::reject<result_type>(post_status::worker_stopping, std::move(task_value));
+            return detail::delivery_access::reject<result_type>(post_status::stopping, std::move(task_value));
         }
         auto completion = std::make_shared<detail::root_task_state<t_type>>(worker(), state_);
         const auto bound_executor = executor();
-        const auto status = worker().post_factory([&]() -> move_only_function<void()> {
+        const auto status = detail::worker_ref_access::post_factory(worker(), [&]() -> move_only_function<void()> {
             return [bound_executor, retirement_lease = std::move(retirement_lease), launch = detail::root_task_launch_guard<t_type>(std::move(task_value), completion)]() mutable {
                 try {
                     async_start(std::move(*launch.task_), detail::root_task_completion_handler<t_type>(bound_executor, launch.completion_, std::move(retirement_lease)));
@@ -498,9 +499,9 @@ public:
             };
         });
         if (status != post_status::accepted) {
-            return detail::worker_delivery_access::reject<result_type>(status, std::move(task_value));
+            return detail::delivery_access::reject<result_type>(status, std::move(task_value));
         }
-        return detail::worker_delivery_access::accept<result_type>(root_task<t_type>(std::move(completion)));
+        return detail::delivery_access::accept<result_type>(root_task<t_type>(std::move(completion)));
     }
 
     // The local strict form of try_start(): a rejection destroys the cold task
@@ -542,9 +543,10 @@ private:
 
 struct event_loop_attachment_options final {
     std::size_t queue_capacity_{1024};
-    // Borrowed pool for run_blocking() and client host lookups on this loop;
-    // it must outlive the attachment. Null leaves the loop without one.
-    blocking_pool* blocking_pool_{nullptr};
+    // Pool for run_blocking() and client host lookups on this loop. Options
+    // make the attachment own one; a pointer borrows a caller-owned pool that
+    // must outlive the attachment; nullptr leaves the loop without one.
+    std::variant<blocking_pool_options, blocking_pool*> blocking_pool_{blocking_pool_options{.thread_count_ = 1}};
     // Owns the receiver for each reported failure (including abandoned root
     // tasks and failed stop callbacks). Empty uses report_unhandled_failure.
     // Invoked synchronously, outside runtime locks, on the reporting thread:
@@ -617,14 +619,13 @@ private:
 // retires only Ruvia-managed work and never cancels unrelated operations.
 [[nodiscard]] event_loop_attachment attach_event_loop(asio::io_context& io_context, event_loop_attachment_options options = {});
 
-class blocking_pool;
-
 struct event_loop_pool_options final {
     std::size_t loop_count_{0};
     std::size_t queue_capacity_{1024};
-    // One borrowed pool shared by every loop for run_blocking() and client
-    // host lookups; it must outlive the pool. Null leaves the loops without one.
-    blocking_pool* blocking_pool_{nullptr};
+    // Pool shared by every loop for run_blocking() and client host lookups.
+    // Options make this pool own one; a pointer borrows a caller-owned pool
+    // that must outlive this pool; nullptr leaves the loops without one.
+    std::variant<blocking_pool_options, blocking_pool*> blocking_pool_{blocking_pool_options{.thread_count_ = 1}};
 };
 
 class event_loop_pool final {

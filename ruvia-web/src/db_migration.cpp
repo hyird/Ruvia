@@ -353,13 +353,13 @@ public:
         // which never reconnects. A statement that ends or poisons the session
         // (a lost connection, a migration leaving a transaction open) fails
         // every statement after it instead of running them unserialized.
-        // transaction_timeout_ stays as configured, like query_timeout_: a
+        // transaction_timeout_ stays as configured, like command_timeout_: a
         // transactional migration that outlives it fails with timeout and its
         // session closes, ending the run with the lock released.
         config.pool_size_per_worker_ = 1;
         config.reconnect_ = false;
         if (!config.acquire_timeout_.has_value()) {
-            config.acquire_timeout_ = config.query_timeout_;
+            config.acquire_timeout_ = config.command_timeout_;
         }
         db_migration_report report;
 
@@ -373,13 +373,13 @@ public:
         try {
             interrupt.emplace(interrupts, loop.worker(), operation, &registry, &close_registry, "database migration");
         } catch (const std::system_error&) {
-            throw db_error(db_error::code_type::cancelled, driver, "database migration cancelled");
+            throw db_error(backend_error_code::cancelled, driver, "database migration cancelled");
         }
 
         std::exception_ptr failure;
         try {
             co_await registry.connect();
-            ::ruvia::operation_scope operation_scope;
+            detail::operation_scope operation_scope;
             auto handle = registry.get(operation_scope, nullptr);
             co_await acquire_lock(handle, driver, lock_name, options.lock_timeout_);
             try {
@@ -400,7 +400,7 @@ public:
 
         registry.close_now();
         if (const auto cause = interrupt->cause()) {
-            throw db_error(*cause == operation_interrupt_cause::timed_out ? db_error::code_type::timeout : db_error::code_type::cancelled, driver, *cause == operation_interrupt_cause::timed_out ? "database migration timed out" : "database migration cancelled");
+            throw db_error(*cause == operation_interrupt_cause::timed_out ? backend_error_code::timeout : backend_error_code::cancelled, driver, *cause == operation_interrupt_cause::timed_out ? "database migration timed out" : "database migration cancelled");
         }
         if (failure != nullptr) {
             std::rethrow_exception(failure);
@@ -565,6 +565,18 @@ task<db_migration_report> db_migrator::migrate(std::span<const db_migration> mig
     }
     detail::validate_migration_list(migrations, storage_->config_.driver_);
     return detail::db_migration_runner::run(storage_->loop_, detail::db_config_storage(storage_->config_), std::vector<db_migration>(migrations.begin(), migrations.end()), db_migrator_options_storage(storage_->options_), std::move(operation));
+}
+
+db_migration_report db_migrator::run(const db_config& config, std::span<const db_migration> migrations, const db_migrator_options& options, operation_options operation) {
+    // The pool owns the one-thread blocking pool that looks a DNS host up.
+    event_loop_pool loops({.loop_count_ = 1});
+    const db_migrator migrator(loops.loop(0), config, options);
+    auto migration = migrator.migrate(migrations, std::move(operation));
+    loops.start();
+    auto root = loops.loop(0).start(std::move(migration));
+    root.wait();
+    loops.join();
+    return std::move(root).get();
 }
 
 }  // namespace ruvia

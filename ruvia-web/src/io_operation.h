@@ -202,7 +202,7 @@ public:
             source_.target_ = make_worker_cancellation_target(source_, worker_value);
         }
         if (options.timeout_.has_value()) {
-            (void)worker_value.schedule_timer(timer_, options.timeout_->deadline_from(std::chrono::steady_clock::now()), [this](worker_timer_outcome outcome) noexcept {
+            (void)timer_.schedule(worker_value, options.timeout_->deadline_from(std::chrono::steady_clock::now()), [this](worker_timer_outcome outcome) noexcept {
                 if (outcome == worker_timer_outcome::expired) {
                     fire(operation_interrupt_cause::timed_out);
                 }

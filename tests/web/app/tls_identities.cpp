@@ -404,7 +404,7 @@ struct held_pool_job final {
         if (pool.submit([state = state_] {
             state->entered_.release();
             state->release_.acquire();
-        }) != ruvia::blocking_submit_status::accepted) {
+        }) != ruvia::post_status::accepted) {
             throw std::runtime_error("cannot occupy TLS preparation pool");
         }
         state_->entered_.acquire();

@@ -626,7 +626,7 @@ TEST(Ruvia, context_rejects_unconfigured_worker_clients_consistently) {
         try {
             static_cast<void>(context_value.db());
         } catch (const ruvia::db_error& error) {
-            database_rejected = error.code() == ruvia::db_error::code_type::not_configured;
+            database_rejected = error.code() == ruvia::backend_error_code::not_configured;
         }
         EXPECT_TRUE(database_rejected);
 #endif
@@ -636,7 +636,7 @@ TEST(Ruvia, context_rejects_unconfigured_worker_clients_consistently) {
         try {
             static_cast<void>(context_value.redis());
         } catch (const ruvia::redis_error& error) {
-            redis_rejected = error.code() == ruvia::redis_error::code_type::not_configured;
+            redis_rejected = error.code() == ruvia::backend_error_code::not_configured;
         }
         EXPECT_TRUE(redis_rejected);
 #endif
@@ -1689,30 +1689,29 @@ namespace ruvia::test {
 
 class test_scoped_capability final {
 public:
-    test_scoped_capability(ruvia::operation_scope& scope, int& expired_count) noexcept :
+    test_scoped_capability(ruvia::detail::operation_scope& scope, int& expired_count) noexcept :
         expired_count_(&expired_count),
-        registration_(scope, this, &test_scoped_capability::expire) {}
+        registration_(scope, *this) {}
 
     test_scoped_capability(const test_scoped_capability& other) noexcept :
         expired_count_(other.expired_count_),
-        registration_(other.registration_, this) {}
+        registration_(other.registration_, *this) {}
 
     test_scoped_capability(test_scoped_capability&& other) noexcept :
         expired_count_(std::exchange(other.expired_count_, nullptr)),
-        registration_(std::move(other.registration_), this) {}
+        registration_(std::move(other.registration_), *this) {}
 
     void use() const {
         registration_.require_active();
     }
 
 private:
-    static void expire(void* target) noexcept {
-        auto& capability = *static_cast<test_scoped_capability*>(target);
-        ++*capability.expired_count_;
+    void expire() noexcept {
+        ++*expired_count_;
     }
 
     int* expired_count_;
-    ruvia::scoped_capability_registration registration_;
+    ruvia::detail::capability_registration<&test_scoped_capability::expire> registration_;
 };
 
 struct cold_frame_probe final {
@@ -1743,10 +1742,10 @@ using namespace ruvia::test;
 // Scoped operations release cold frames and shared registrations exactly once.
 
 TEST(Ruvia, scoped_operation_destruction_destroys_cold_frame) {
-    ruvia::operation_scope scope;
+    ruvia::detail::operation_scope scope;
     bool destroyed = false;
     {
-        auto operation = ruvia::make_scoped_operation(scope, cold_frame_task(cold_frame_probe(destroyed)));
+        auto operation = scope.attach(cold_frame_task(cold_frame_probe(destroyed)));
         EXPECT_TRUE(!destroyed);
         (void)operation;
     }
@@ -1754,7 +1753,7 @@ TEST(Ruvia, scoped_operation_destruction_destroys_cold_frame) {
 }
 
 TEST(Ruvia, scoped_capability_move_relinks_and_parent_close_expires_destination) {
-    ruvia::operation_scope scope;
+    ruvia::detail::operation_scope scope;
     int expired_count = 0;
     test_scoped_capability first(scope, expired_count);
     test_scoped_capability moved(std::move(first));
@@ -1772,7 +1771,7 @@ TEST(Ruvia, scoped_capability_move_relinks_and_parent_close_expires_destination)
 
 TEST(Ruvia, scoped_capability_copy_relinks_and_early_destruction_unlinks) {
     int expired_count = 0;
-    ruvia::operation_scope scope;
+    ruvia::detail::operation_scope scope;
     test_scoped_capability source(scope, expired_count);
     {
         test_scoped_capability destroyed_early(source);
@@ -1792,9 +1791,9 @@ TEST(Ruvia, scoped_capability_copy_relinks_and_early_destruction_unlinks) {
 }
 
 TEST(Ruvia, scoped_operation_parent_close_destroys_cold_frame_immediately) {
-    ruvia::operation_scope scope;
+    ruvia::detail::operation_scope scope;
     bool destroyed = false;
-    auto operation = ruvia::make_scoped_operation(scope, cold_frame_task(cold_frame_probe(destroyed)));
+    auto operation = scope.attach(cold_frame_task(cold_frame_probe(destroyed)));
     EXPECT_TRUE(!destroyed);
     scope.close();
     EXPECT_TRUE(destroyed);

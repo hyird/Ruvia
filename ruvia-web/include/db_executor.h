@@ -97,7 +97,8 @@ struct db_config final {
     // Host name or unbracketed address only; keep the port in port.
     std::string host_{"127.0.0.1"};
     // Absence selects the driver's standard port: 3306 or 5432. Explicit values
-    // are checked before narrowing and must be non-zero.
+    // are checked before narrowing and must be non-zero. Unlike redis_config
+    // there is no tcp_ policy: the driver library opens the socket itself.
     std::optional<port_number> port_{};
     std::string username_;
     std::string password_;
@@ -114,15 +115,15 @@ struct db_config final {
     // with millisecond precision (including exclusive transactions and streams).
     std::optional<timeout_duration> read_timeout_{};
     std::optional<timeout_duration> write_timeout_{};
-    std::optional<timeout_duration> query_timeout_{std::chrono::seconds(30)};
+    std::optional<timeout_duration> command_timeout_{std::chrono::seconds(30)};
     std::optional<timeout_duration> acquire_timeout_{std::chrono::seconds(5)};
     // Overall deadline of one connection lease: a transaction from the moment
     // begin_transaction() holds its connection (before BEGIN) through commit()
     // or rollback(), and a streaming result from query_stream() until it is
     // exhausted or closed. Every statement inside runs under the earlier of its
-    // own deadline (operation timeout and query_timeout_) and the remaining
+    // own deadline (operation timeout and command_timeout_) and the remaining
     // lease time. Expiry while a statement runs fails that statement with
-    // db_error::code_type::timeout and ends the transaction or stream. Expiry
+    // backend_error_code::timeout and ends the transaction or stream. Expiry
     // while the caller holds the lease between operations closes the
     // connection at once, so the server rolls the transaction back and
     // releases its locks; the next operation, commit() included, then fails
@@ -152,12 +153,15 @@ struct db_query_cache_registration final {
     db_cache_config policy_{};
 };
 
+// Per-query cache setting.
 struct db_cache_options final {
+    // Empty: the key is derived from the SQL and its parameters.
     borrowed_text id_{};
+    // Empty: db_cache_config::duration_. Must be positive.
     std::optional<std::chrono::milliseconds> duration_{};
+    // false: opt this query out even under db_cache_config::always_enabled_.
+    bool enabled_{true};
 };
-
-using db_cache_setting_type = std::variant<std::monostate, bool, std::chrono::milliseconds, db_cache_options>;
 
 namespace detail {
 
@@ -199,19 +203,7 @@ enum class db_cache_shape : std::uint8_t {
 
 class db_error final : public std::runtime_error {
 public:
-    enum class code_type : std::uint8_t {
-        not_configured,
-        resolve_failed,
-        connect_failed,
-        io_error,
-        statement_failed,
-        protocol_error,
-        timeout,
-        cancelled,
-        closing,
-    };
-
-    db_error(code_type code, std::optional<db_driver> driver, std::string_view message, std::optional<std::int64_t> native_code = std::nullopt, std::string_view sql_state = {}, std::string_view constraint_name = {}) :
+    db_error(backend_error_code code, std::optional<db_driver> driver, std::string_view message, std::optional<std::int64_t> native_code = std::nullopt, std::string_view sql_state = {}, std::string_view constraint_name = {}) :
         std::runtime_error(std::string(message)),
         code_(code),
         driver_(driver),
@@ -230,7 +222,7 @@ public:
     db_error& operator=(const db_error&) = default;
     db_error& operator=(db_error&&) = default;
 
-    [[nodiscard]] code_type code() const noexcept {
+    [[nodiscard]] backend_error_code code() const noexcept {
         return code_;
     }
 
@@ -261,7 +253,7 @@ public:
     [[nodiscard]] std::optional<std::string_view> constraint_name() const&& = delete;
 
 private:
-    code_type code_;
+    backend_error_code code_;
     std::optional<db_driver> driver_;
     std::optional<std::int64_t> native_code_;
     std::string sql_state_;
@@ -284,28 +276,6 @@ enum class db_value_type : std::uint8_t { null,
     double_,
     bool_ };
 
-class db_conversion_error final : public std::runtime_error {
-public:
-    enum class code_type : std::uint8_t {
-        invalid_format,
-        out_of_range,
-        unexpected_null,
-        missing_column,
-        unexpected_row_count,
-    };
-
-    db_conversion_error(code_type code, std::string_view message) :
-        std::runtime_error(std::string(message)),
-        code_(code) {}
-
-    [[nodiscard]] code_type code() const noexcept {
-        return code_;
-    }
-
-private:
-    code_type code_;
-};
-
 namespace detail {
 
 template <typename t_type, bool allow_array = true>
@@ -316,21 +286,6 @@ struct db_mapped_value_traits<std::optional<t_type>, allow_array> : db_mapped_va
 
 template <typename t_type, bool allow_array>
 struct db_mapped_value_traits<std::vector<t_type>, allow_array> : std::bool_constant<allow_array && db_mapped_value_traits<t_type, false>::value> {};
-
-// The one text-to-scalar conversion for database results: fields and array
-// elements accept the same boolean tokens and numeric syntax.
-template <text_scalar t_type>
-[[nodiscard]] t_type convert_db_text(std::string_view text) {
-    auto parsed = parse_text_scalar<t_type>(text);
-    if (const auto* error = std::get_if<text_scalar_parse_error>(&parsed)) {
-        if constexpr (std::is_same_v<t_type, bool>) {
-            throw db_conversion_error(db_conversion_error::code_type::invalid_format, "database text is not a boolean");
-        } else {
-            throw db_conversion_error(*error == text_scalar_parse_error::out_of_range ? db_conversion_error::code_type::out_of_range : db_conversion_error::code_type::invalid_format, "database text is not a valid number");
-        }
-    }
-    return std::get<t_type>(std::move(parsed));
-}
 
 }  // namespace detail
 
@@ -483,7 +438,7 @@ public:
         if (!source_value) {
             return std::nullopt;
         }
-        return detail::convert_db_text<t_type>(*source_value);
+        return detail::convert_text<t_type>(*source_value);
     }
 
     template <detail::text_scalar t_type>
@@ -525,7 +480,7 @@ public:
     [[nodiscard]] std::size_t size() const noexcept;
     [[nodiscard]] const db_field& operator[](std::size_t index) const& noexcept RUVIA_LIFETIMEBOUND;
     [[nodiscard]] const db_field& operator[](std::size_t index) const&& = delete;
-    // Throws db_conversion_error: missing_column when absent, invalid_format
+    // Throws conversion_error: missing_column when absent, invalid_format
     // when the result repeats the column name.
     [[nodiscard]] const db_field& operator[](std::string_view column) const& RUVIA_LIFETIMEBOUND;
     [[nodiscard]] const db_field& operator[](std::string_view column) const&& = delete;
@@ -841,7 +796,7 @@ public:
     // (db_config::transaction_timeout_), which runs from query_stream() until
     // the stream ends and also counts the time between operations; once it has
     // passed, the connection is closed and read() and close() fail with
-    // db_error::code_type::timeout.
+    // backend_error_code::timeout.
     // `operation` refines the handle's options for this call only: its timeout
     // may only tighten, and a supplied token replaces the inherited one. A
     // non-positive timeout throws std::invalid_argument at the call; an
@@ -887,8 +842,8 @@ private:
     // `io_metrics` is the request's counter block, or null outside a request;
     // `request_link` owns the user/request cancellation link of this stream, or
     // is null when one token alone already cancels it.
-    void bind_operation_scope(::ruvia::operation_scope& scope, detail::request_io_metrics* io_metrics, std::unique_ptr<const linked_operation_options> request_link) noexcept;
-    static void expire_capability(void* target) noexcept;
+    void bind_operation_scope(detail::operation_scope& scope, detail::request_io_metrics* io_metrics, std::unique_ptr<const linked_operation_options> request_link) noexcept;
+    void expire_capability() noexcept;
     static task<std::optional<db_row>> read_task(detail::request_io_metrics* io_metrics, operation_guard_type operation, std::vector<std::string>& column_names, operation_options operation_value);
     static task<void> close_task(detail::request_io_metrics* io_metrics, operation_guard_type operation, operation_options operation_value);
 
@@ -896,7 +851,7 @@ private:
     std::unique_ptr<const linked_operation_options> request_link_;
     state_owner_type state_;
     detail::request_io_metrics* io_metrics_{nullptr};
-    scoped_capability_registration registration_;
+    detail::capability_registration<&db_stream_result::expire_capability> registration_;
 };
 
 namespace detail {
@@ -1021,11 +976,11 @@ task<result_type> map_db_query(task<db_rows> query, mapper_type mapper) {
 
 inline std::uint64_t db_count_value(const db_rows& rows) {
     if (rows.size() != 1) {
-        throw db_conversion_error(db_conversion_error::code_type::unexpected_row_count, "database count did not return exactly one row");
+        throw conversion_error(conversion_error::code_type::unexpected_row_count, "database count did not return exactly one row");
     }
     const auto count = rows.front()["count"].as<std::uint64_t>();
     if (!count) {
-        throw db_conversion_error(db_conversion_error::code_type::unexpected_null, "database count column is NULL");
+        throw conversion_error(conversion_error::code_type::unexpected_null, "database count column is NULL");
     }
     return *count;
 }
@@ -1144,7 +1099,7 @@ void validate_db_sql_literal(db_driver actual_driver) {
 // deadline and the remaining transaction time. Once that has passed while no
 // operation runs, the connection is closed, so the server rolls back and
 // releases the transaction's locks; the next operation (commit() and
-// rollback() included) fails with db_error::code_type::timeout and ends the
+// rollback() included) fails with backend_error_code::timeout and ends the
 // transaction.
 class db_transaction final {
 public:
@@ -1265,17 +1220,13 @@ private:
     [[nodiscard]] task<std::pair<db_rows, db_rows>> query_and_count_task(const db_query& query, const db_query& count);
     template <typename result_type, typename mapper_type>
     [[nodiscard]] task<std::pair<result_type, std::uint64_t>> query_mapped_and_count(const db_query& query, const db_query& count, mapper_type mapper) {
-        registration_.require_active();
-        auto& scope = registration_.scope();
         auto task_value = query_and_count_task(query, count);
-        return make_scoped_operation(scope, detail::map_db_query_and_count<result_type>(std::move(task_value), std::move(mapper)));
+        return registration_.attach(detail::map_db_query_and_count<result_type>(std::move(task_value), std::move(mapper)));
     }
     template <typename result_type, typename mapper_type>
     [[nodiscard]] task<result_type> query_mapped(const db_query& query, mapper_type mapper) {
-        registration_.require_active();
-        auto& scope = registration_.scope();
         auto task_value = query_task(query);
-        return make_scoped_operation(scope, detail::map_db_query<result_type>(std::move(task_value), std::move(mapper)));
+        return registration_.attach(detail::map_db_query<result_type>(std::move(task_value), std::move(mapper)));
     }
     template <typename driver_type>
     friend class detail::db_pool;
@@ -1308,8 +1259,8 @@ private:
     task<void> query_void_prepared(std::string_view sql, std::span<const db_value> params);
     task<bool> query_bool_prepared(std::string_view sql, std::span<const db_value> params);
     void reset() noexcept;
-    void bind_operation_scope(operation_scope& scope, detail::request_io_metrics* io_metrics, std::unique_ptr<const linked_operation_options> request_link) noexcept;
-    static void expire_capability(void* target) noexcept;
+    void bind_operation_scope(detail::operation_scope& scope, detail::request_io_metrics* io_metrics, std::unique_ptr<const linked_operation_options> request_link) noexcept;
+    void expire_capability() noexcept;
 
     [[nodiscard]] detail::db_query_backend query_backend(const lease_type& lease) const;
     template <bool with_count>
@@ -1318,7 +1269,7 @@ private:
     std::unique_ptr<const linked_operation_options> request_link_;
     state_owner_type state_;
     detail::request_io_metrics* io_metrics_{nullptr};
-    scoped_capability_registration registration_;
+    detail::capability_registration<&db_transaction::expire_capability> registration_;
 };
 
 #ifdef RUVIA_ENABLE_REDIS
@@ -1339,13 +1290,13 @@ public:
 
 private:
     friend class db_executor;
-    db_query_result_cache(detail::db_query_cache_state& state_value, ::ruvia::operation_scope& scope, detail::request_io_metrics* io_metrics, operation_options options, stop_token request_stop) noexcept;
-    static void expire_capability(void* target) noexcept;
+    db_query_result_cache(detail::db_query_cache_state& state_value, detail::operation_scope& scope, detail::request_io_metrics* io_metrics, operation_options options, stop_token request_stop) noexcept;
+    void expire_capability() noexcept;
     detail::db_query_cache_state* state_;
     detail::request_io_metrics* io_metrics_;
     operation_options options_;
     stop_token request_stop_;
-    scoped_capability_registration registration_;
+    detail::capability_registration<&db_query_result_cache::expire_capability> registration_;
 };
 #endif
 
@@ -1445,26 +1396,22 @@ private:
     [[nodiscard]] task<std::pair<db_rows, db_rows>> query_and_count_task(const db_query& query, const db_query& count) const;
     template <typename result_type, typename mapper_type>
     [[nodiscard]] task<std::pair<result_type, std::uint64_t>> query_mapped_and_count(const db_query& query, const db_query& count, mapper_type mapper) const {
-        registration_.require_active();
-        auto& scope = registration_.scope();
         auto task_value = query_and_count_task(query, count);
-        return make_scoped_operation(scope, detail::map_db_query_and_count<result_type>(std::move(task_value), std::move(mapper)));
+        return registration_.attach(detail::map_db_query_and_count<result_type>(std::move(task_value), std::move(mapper)));
     }
     template <typename result_type, typename mapper_type>
     [[nodiscard]] task<result_type> query_mapped(const db_query& query, mapper_type mapper) const {
-        registration_.require_active();
-        auto& scope = registration_.scope();
         auto task_value = query_task(query);
-        return make_scoped_operation(scope, detail::map_db_query<result_type>(std::move(task_value), std::move(mapper)));
+        return registration_.attach(detail::map_db_query<result_type>(std::move(task_value), std::move(mapper)));
     }
 
     // cache is nullptr when the alias has no query cache; without Redis
     // support it is always nullptr. `io_metrics` is the request's counter
     // block, or null outside a request.
-    db_executor(detail::db_pool_ref_type client, operation_scope& operation_scope, detail::request_io_metrics* io_metrics, detail::db_query_cache_state* cache) noexcept;
+    db_executor(detail::db_pool_ref_type client, detail::operation_scope& operation_scope, detail::request_io_metrics* io_metrics, detail::db_query_cache_state* cache) noexcept;
     [[nodiscard]] detail::db_query_backend query_backend() const;
-    static task<db_stream_result> query_stream_prepared(detail::db_pool_ref_type client, std::string sql, std::vector<db_value> params, operation_scope& operation_scope, detail::request_io_metrics* io_metrics, operation_options options, stop_token request_stop);
-    static task<db_transaction> begin_transaction_prepared(detail::db_query_backend backend, operation_scope& operation_scope, operation_options operation_options, stop_token request_stop, db_transaction_options transaction_options);
+    static task<db_stream_result> query_stream_prepared(detail::db_pool_ref_type client, std::string sql, std::vector<db_value> params, detail::operation_scope& operation_scope, detail::request_io_metrics* io_metrics, operation_options options, stop_token request_stop);
+    static task<db_transaction> begin_transaction_prepared(detail::db_query_backend backend, detail::operation_scope& operation_scope, operation_options operation_options, stop_token request_stop, db_transaction_options transaction_options);
 
     detail::db_query_cache_state* cache_{nullptr};
     detail::db_pool_ref_type client_;
@@ -1474,9 +1421,9 @@ private:
     // outside a request.
     stop_token request_stop_;
     friend class detail::worker_client_registry_view;
-    [[nodiscard]] db_executor bind_caller_scope(::ruvia::operation_scope& scope, detail::request_io_metrics* io_metrics, const stop_token& stop_token_value) &&;
-    static void expire_capability(void* target) noexcept;
-    scoped_capability_registration registration_;
+    [[nodiscard]] db_executor bind_caller_scope(detail::operation_scope& scope, detail::request_io_metrics* io_metrics, const stop_token& stop_token_value) &&;
+    void expire_capability() noexcept;
+    detail::capability_registration<&db_executor::expire_capability> registration_;
 };
 
 #ifdef RUVIA_ENABLE_DATABASE
@@ -1516,8 +1463,8 @@ public:
     // Idempotent and callable from any thread. Pool teardown runs on the bound
     // event loop; use shutdown() when its completion must be awaited.
     void close() noexcept;
-    // Pending pool waiters report db_error::code_type::closing, distinct from
-    // user-token cancellation (db_error::code_type::cancelled).
+    // Pending pool waiters report backend_error_code::closing, distinct from
+    // user-token cancellation (backend_error_code::cancelled).
     // Requests cancellation, joins worker-owned operations, and completes on
     // the bound event loop after the client teardown is finished.
     [[nodiscard]] task<void> shutdown() &;

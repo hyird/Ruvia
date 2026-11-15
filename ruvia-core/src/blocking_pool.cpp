@@ -19,7 +19,6 @@
 
 #include "failure_report.h"
 #include "move_only_function.h"
-#include "worker_result.h"
 
 namespace ruvia {
 
@@ -469,22 +468,22 @@ blocking_pool_stats blocking_pool::stats() const noexcept {
     };
 }
 
-blocking_submit_result blocking_pool::submit(move_only_function<void()> task_value) {
+post_outcome<> blocking_pool::submit(move_only_function<void()> task_value) {
     if (!task_value) {
         throw std::invalid_argument("blocking pool requires a callable task");
     }
     const auto owner_ptr = impl_;
     auto& owner = *owner_ptr;
     impl_type::node_type* node = nullptr;
-    std::optional<blocking_submit_status> refused;
+    std::optional<post_status> refused;
     {
         std::lock_guard lock(owner.mutex_);
         if (owner.stopping_) {
             ++owner.discarded_;
-            refused = blocking_submit_status::pool_stopped;
+            refused = post_status::stopping;
         } else if (owner.queued_ + owner.reserved_ >= owner.queue_capacity_) {
             ++owner.rejected_;
-            refused = blocking_submit_status::queue_full;
+            refused = post_status::queue_full;
         } else {
             node = owner.free_head_;
             owner.free_head_ = node->next_;
@@ -494,7 +493,7 @@ blocking_submit_result blocking_pool::submit(move_only_function<void()> task_val
     // The refused task moves back to the caller outside the lock: its move
     // constructor may reenter the pool.
     if (refused) {
-        return detail::worker_delivery_access::reject<blocking_submit_result>(*refused, std::move(task_value));
+        return detail::delivery_access::reject<post_outcome<>>(*refused, std::move(task_value));
     }
     node->task_ = std::move(task_value);
     bool stopped = false;
@@ -514,7 +513,7 @@ blocking_submit_result blocking_pool::submit(move_only_function<void()> task_val
     if (stopped) {
         // Stopping never recycles nodes, so the reserved node stays exclusive
         // until its callable has been handed back.
-        auto rejected = detail::worker_delivery_access::reject<blocking_submit_result>(blocking_submit_status::pool_stopped, std::move(node->task_));
+        auto rejected = detail::delivery_access::reject<post_outcome<>>(post_status::stopping, std::move(node->task_));
         bool notify = false;
         {
             std::lock_guard lock(owner.mutex_);
@@ -526,7 +525,7 @@ blocking_submit_result blocking_pool::submit(move_only_function<void()> task_val
         return rejected;
     }
     owner.condition_.notify_one();
-    return detail::worker_delivery_access::accept<blocking_submit_result>();
+    return detail::delivery_access::accept<post_outcome<>>();
 }
 
 void blocking_pool::stop() noexcept {

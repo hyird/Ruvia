@@ -45,7 +45,7 @@ namespace ruvia::detail {
 // Typed reply accessors that enforce the redis_value kind. A reply's type is
 // chosen by the (untrusted) server, so a mismatch throws
 // redis_error(protocol_error) rather than the raw accessors' std::logic_error,
-// and an error reply throws redis_error(command_error).
+// and an error reply throws redis_error(command_failed).
 [[nodiscard]] std::string_view redis_value_string(const redis_value& value);
 [[nodiscard]] std::span<const redis_value> redis_value_array(const redis_value& value);
 
@@ -106,7 +106,7 @@ template <typename t_type>
 inline constexpr bool is_redis_entity_primary_key_scalar = redis_column_value_kind<t_type>() == redis_column_kind::text || redis_column_value_kind<t_type>() == redis_column_kind::signed_value || redis_column_value_kind<t_type>() == redis_column_kind::unsigned_value;
 
 [[noreturn]] inline void throw_invalid_redis_scalar(std::string_view message) {
-    throw redis_error(redis_error::code_type::protocol_error, message);
+    throw redis_error(backend_error_code::protocol_error, message);
 }
 
 inline constexpr std::size_t redis_scalar_scratch_size = 128;
@@ -162,13 +162,9 @@ template <typename t_type>
         if (value == "1") {
             return true;
         }
-        throw_invalid_redis_scalar("malformed Redis boolean scalar");
+        throw conversion_error(conversion_error::code_type::invalid_format, "malformed Redis boolean scalar");
     } else if constexpr (is_redis_entity_native_number<scalar_type>) {
-        const auto parsed = parse_text_scalar<scalar_type>(value);
-        if (std::holds_alternative<text_scalar_parse_error>(parsed)) {
-            throw_invalid_redis_scalar("malformed Redis scalar");
-        }
-        return std::get<scalar_type>(parsed);
+        return convert_text<scalar_type>(value);
     } else {
         static_assert(always_false<scalar_type>, "unsupported Redis scalar type");
     }
@@ -458,7 +454,7 @@ void append_redis_entity_field(redis_orm_arguments_type& args, std::string_view 
 template <typename entity_type>
 entity_type decode_redis_entity(std::span<const redis_value> fields_value, std::string_view key, std::string_view storage_prefix) {
     if (fields_value.size() % 2 != 0) {
-        throw redis_error(redis_error::code_type::protocol_error, "invalid entity hash reply");
+        throw redis_error(backend_error_code::protocol_error, "invalid entity hash reply");
     }
     std::array<std::optional<std::string_view>, std::tuple_size_v<typename entity_type::columns_type>> values{};
     bool marker = false;
@@ -468,7 +464,7 @@ entity_type decode_redis_entity(std::span<const redis_value> fields_value, std::
         if (name.starts_with("__ruvia_")) {
             if (name == "__ruvia_entity") {
                 if (marker || value != "1") {
-                    throw redis_error(redis_error::code_type::protocol_error, "invalid entity storage marker");
+                    throw redis_error(backend_error_code::protocol_error, "invalid entity storage marker");
                 }
                 marker = true;
             }
@@ -478,7 +474,7 @@ entity_type decode_redis_entity(std::span<const redis_value> fields_value, std::
         for_each_descriptor<typename entity_type::columns_type>([&]<typename field_type, std::size_t index> {
             if (!matched && name == field_type::name.view()) {
                 if (values[index].has_value()) {
-                    throw redis_error(redis_error::code_type::protocol_error, "duplicate entity field");
+                    throw redis_error(backend_error_code::protocol_error, "duplicate entity field");
                 }
                 values[index] = value;
                 matched = true;
@@ -486,7 +482,7 @@ entity_type decode_redis_entity(std::span<const redis_value> fields_value, std::
         });
     }
     if (!marker) {
-        throw redis_error(redis_error::code_type::protocol_error, "entity storage marker missing");
+        throw redis_error(backend_error_code::protocol_error, "entity storage marker missing");
     }
     entity_type entity;
     for_each_descriptor<typename entity_type::columns_type>([&]<typename field_type, std::size_t index> {
@@ -495,16 +491,16 @@ entity_type decode_redis_entity(std::span<const redis_value> fields_value, std::
         } else if constexpr (field_type::options.nullable_) {
             entity.template set_null<field_type::name>();
         } else {
-            throw redis_error(redis_error::code_type::protocol_error, "required entity field missing from hash");
+            throw redis_error(backend_error_code::protocol_error, "required entity field missing from hash");
         }
     });
     redis_scalar_scratch_type id_scratch;
     const auto id = try_redis_entity_id(entity, id_scratch);
     if (!id) {
-        throw redis_error(redis_error::code_type::protocol_error, "invalid stored entity ID");
+        throw redis_error(backend_error_code::protocol_error, "invalid stored entity ID");
     }
     if (!redis_entity_key_matches(storage_prefix, *id, key)) {
-        throw redis_error(redis_error::code_type::protocol_error, "entity ID does not match its Redis key");
+        throw redis_error(backend_error_code::protocol_error, "entity ID does not match its Redis key");
     }
     return entity;
 }
@@ -532,12 +528,12 @@ struct redis_map_search final {
     std::string_view storage_prefix_;
     std::pair<entity_rows<entity_type>, std::uint64_t> decode(std::span<const redis_value> values) const {
         if (values.empty() || values.size() % 2 != 1) {
-            throw redis_error(redis_error::code_type::protocol_error, "invalid entity search reply");
+            throw redis_error(backend_error_code::protocol_error, "invalid entity search reply");
         }
         const auto count = redis_orm_count(values.front());
         const auto documents = (values.size() - 1) / 2;
         if (count < documents) {
-            throw redis_error(redis_error::code_type::protocol_error, "invalid entity search count");
+            throw redis_error(backend_error_code::protocol_error, "invalid entity search count");
         }
         entity_rows<entity_type> rows;
         rows.reserve(documents);
@@ -573,7 +569,7 @@ struct redis_map_first final {
             return std::nullopt;
         }
         if (result_value.first.size() != 1) {
-            throw redis_error(redis_error::code_type::protocol_error, "multiple entities in find_one reply");
+            throw redis_error(backend_error_code::protocol_error, "multiple entities in find_one reply");
         }
         return std::move(result_value.first[0]);
     }
@@ -734,6 +730,33 @@ concept redis_entity_schema = requires(const entity& value) {
 };
 }  // namespace detail
 
+enum class redis_order_direction : std::uint8_t {
+    asc,
+    desc,
+};
+
+// Created only by redis_field_reference::asc() / desc().
+class redis_find_order final {
+public:
+    [[nodiscard]] std::string_view column() const noexcept {
+        return column_;
+    }
+    [[nodiscard]] redis_order_direction direction() const noexcept {
+        return direction_;
+    }
+
+private:
+    template <typename, fixed_string>
+    friend class redis_field_reference;
+
+    constexpr redis_find_order(std::string_view column, redis_order_direction direction) noexcept :
+        column_(column),
+        direction_(direction) {}
+
+    std::string_view column_;
+    redis_order_direction direction_;
+};
+
 template <typename entity_type, fixed_string name>
 class redis_field_reference final {
     static_assert(detail::redis_entity_schema<entity_type>, "Redis field references require a Redis entity");
@@ -802,6 +825,12 @@ public:
     [[nodiscard]] redis_predicate not_in(std::initializer_list<value_type> values) const {
         return not_in(std::span<const value_type>(values.begin(), values.size()));
     }
+    [[nodiscard]] redis_find_order asc() const noexcept {
+        return redis_find_order(name.view(), redis_order_direction::asc);
+    }
+    [[nodiscard]] redis_find_order desc() const noexcept {
+        return redis_find_order(name.view(), redis_order_direction::desc);
+    }
 
 private:
     static redis_predicate create_field(std::size_t initial_capacity) {
@@ -863,28 +892,18 @@ private:
         RUVIA_DETAIL_ENTITY_VALUE_API(entity_)                                                                         \
     };
 
-enum class redis_order_direction : std::uint8_t {
-    asc,
-    desc,
-};
-
-struct redis_find_order final {
-    borrowed_text column_{};
-    redis_order_direction direction_{redis_order_direction::asc};
-};
-
 // FT.SEARCH always returns one page (`LIMIT offset num`, default `0 10`):
 // https://redis.io/docs/latest/commands/ft.search/
-// With `take_` unset, find() and find_and_count() return the first
-// redis_find_default_take matches after `skip_`; page with skip_ / take_.
-inline constexpr std::uint64_t redis_find_default_take = 100;
+// With `limit_` unset, find() and find_and_count() return the first
+// redis_find_default_limit matches after `offset_`; page with offset_ / limit_.
+inline constexpr std::uint64_t redis_find_default_limit = 100;
 
 // Redis filters and pagination have no SQL relation, lock or cache options.
 struct redis_find_options final {
     redis_predicate where_{};
     std::optional<redis_find_order> order_{};
-    std::optional<query_row_count> skip_{};
-    std::optional<query_row_count> take_{};
+    std::optional<query_row_count> offset_{};
+    std::optional<query_row_count> limit_{};
 };
 
 enum class redis_index_kind : std::uint8_t {
@@ -930,7 +949,7 @@ public:
     redis_search_mapping& operator=(const redis_search_mapping& other);
     redis_search_mapping& operator=(redis_search_mapping&& other);
 
-    // rows uses take_ or redis_find_default_take; first caps that page at one.
+    // rows uses limit_ or redis_find_default_limit; first caps that page at one.
     // count validates all options but counts all matches, ignoring pagination.
     // Commands own all arguments in this mapping's resource.
     [[nodiscard]] redis_compiled_command compile_find(const redis_find_options& options = {}, redis_search_mode mode = redis_search_mode::rows) const;
@@ -980,7 +999,7 @@ public:
     redis_repository(redis_repository&& other) noexcept :
         executor_(other.executor_),
         mapping_(std::exchange(other.mapping_, nullptr)),
-        registration_(std::move(other.registration_), this) {}
+        registration_(std::move(other.registration_), *this) {}
     redis_repository& operator=(redis_repository&&) = delete;
 
     [[nodiscard]] task<redis_write_result> insert(const entity_type& entity, redis_write_options options = {}) const {
@@ -1010,7 +1029,7 @@ public:
     }
 
     [[nodiscard]] task<std::optional<entity_type>> find_one(const redis_find_options& options = {}) const {
-        const bool plain = !options.order_.has_value() && !options.skip_ && !options.take_;
+        const bool plain = !options.order_.has_value() && !options.offset_ && !options.limit_;
         if (plain) {
             detail::redis_scalar_scratch_type id_scratch;
             if (const auto id = detail::redis_primary_key(mapping(), options.where_, id_scratch)) {
@@ -1048,7 +1067,7 @@ public:
     }
 
     [[nodiscard]] task<bool> exists(const redis_find_options& options = {}) const {
-        if (!options.order_.has_value() && !options.skip_ && !options.take_) {
+        if (!options.order_.has_value() && !options.offset_ && !options.limit_) {
             detail::redis_scalar_scratch_type id_scratch;
             if (const auto id = detail::redis_primary_key(mapping(), options.where_, id_scratch)) {
                 const auto key = detail::redis_entity_key(mapping().storage_prefix_, *id);
@@ -1104,7 +1123,7 @@ private:
     redis_repository(const redis_executor& executor_value, const redis_search_mapping& mapping_value) :
         executor_(executor_value),
         mapping_(&mapping_value),
-        registration_(executor_value.registration_.scope(), this, &redis_repository::expire_capability) {
+        registration_(executor_value.registration_.scope(), *this) {
         mapping_value.require_valid();
         if (mapping_value.mapping_.columns_.data() != detail::redis_query_columns<entity_type>.data()) {
             throw std::invalid_argument("Redis search mapping was created for another entity");
@@ -1128,8 +1147,8 @@ private:
         return executor_;
     }
 
-    static void expire_capability(void* target) noexcept {
-        static_cast<redis_repository*>(target)->mapping_ = nullptr;
+    void expire_capability() noexcept {
+        mapping_ = nullptr;
     }
 
     [[nodiscard]] std::string_view require_primary_key(const redis_predicate& predicate, std::span<char, detail::redis_scalar_scratch_size> scratch) const {
@@ -1217,7 +1236,7 @@ private:
 
     redis_executor executor_;
     const redis_search_mapping* mapping_;
-    scoped_capability_registration registration_;
+    detail::capability_registration<&redis_repository::expire_capability> registration_;
 };
 
 template <typename entity_type>

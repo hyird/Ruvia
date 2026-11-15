@@ -46,9 +46,9 @@ public:
 
     void close_now() noexcept;
     [[nodiscard]] task<void> join();
-    [[nodiscard]] http_client_ref get(::ruvia::operation_scope& scope, stop_token host_stop = {}) const;
-    [[nodiscard]] http_client_ref get(std::string_view alias, ::ruvia::operation_scope& scope, stop_token host_stop = {}) const;
-    [[nodiscard]] http_client_ref get_single_or_default(::ruvia::operation_scope& scope, stop_token host_stop = {}) const;
+    [[nodiscard]] http_client_ref get(operation_scope& scope, stop_token host_stop = {}) const;
+    [[nodiscard]] http_client_ref get(std::string_view alias, operation_scope& scope, stop_token host_stop = {}) const;
+    [[nodiscard]] http_client_ref get_single_or_default(operation_scope& scope, stop_token host_stop = {}) const;
     [[nodiscard]] std::shared_ptr<http_client_pool> find_origin(http_scheme scheme, std::string_view authority) const;
 
 private:

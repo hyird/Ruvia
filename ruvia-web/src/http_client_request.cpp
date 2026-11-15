@@ -499,7 +499,7 @@ task<http_client_tunnel_result> http_client_request::connect(http_client_tunnel_
     if (has_body_) {
         request.set_body(body_);
     }
-    auto operation = make_scoped_operation(client_.registration_.scope(), client_.pool_->open_tunnel(std::move(request), config, client_.options_));
+    auto operation = client_.registration_.attach(client_.pool_->open_tunnel(std::move(request), config, client_.options_));
     std::string(method_.get_allocator()).swap(method_);
     std::string(target_.get_allocator()).swap(target_);
     std::vector<http_header>(headers_.get_allocator()).swap(headers_);
@@ -518,7 +518,7 @@ std::vector<http_header_view> http_client_request::field_views() const {
 
 task<http_client_response> http_client_request::send() && {
     client_.registration_.require_active();
-    return make_scoped_operation(client_.registration_.scope(), send_owned(std::move(*this)));
+    return client_.registration_.attach(send_owned(std::move(*this)));
 }
 
 namespace {
@@ -631,7 +631,7 @@ task<http_client_response> http_client_request::follow_redirects(http_client_req
                 stop_group cancellation{request.client_.options_.stop_token_, request.client_.host_stop_token_, deadline_stop.token()};
                 worker_timer_registration timer;
                 if (const auto deadline_value = total.deadline()) {
-                    (void)request.client_.pool_->worker().schedule_timer(timer, *deadline_value, [&deadline_stop](worker_timer_outcome outcome) noexcept {
+                    (void)timer.schedule(request.client_.pool_->worker(), *deadline_value, [&deadline_stop](worker_timer_outcome outcome) noexcept {
                         if (outcome == worker_timer_outcome::expired) {
                             deadline_stop.request_stop();
                         }
@@ -707,7 +707,7 @@ task<http_client_exchange> http_client_request::upload(http_client_upload_config
     if (config.max_chunk_bytes_ == 0 || config.continue_timeout_.value() <= std::chrono::milliseconds::zero() || (config.expectation_ != http_client_request_expectation::none && config.expectation_ != http_client_request_expectation::continue_)) {
         throw std::invalid_argument("streaming upload requires a bodyless head and valid upload policy");
     }
-    return make_scoped_operation(client_.registration_.scope(), upload_owned(std::move(*this), config));
+    return client_.registration_.attach(upload_owned(std::move(*this), config));
 }
 
 task<http_client_exchange> http_client_request::upload_owned(http_client_request request, http_client_upload_config config) {
@@ -800,7 +800,7 @@ task<void> migrate_client_pool(std::shared_ptr<detail::http_client_pool> pool, s
 task<void> http_client_ref::migrate(std::string_view local_address, std::uint16_t port) const {
     registration_.require_active();
 #ifdef RUVIA_ENABLE_HTTP3
-    return make_scoped_operation(registration_.scope(), migrate_client_pool(pool_owner_, std::string(local_address), port, options_, host_stop_token_));
+    return registration_.attach(migrate_client_pool(pool_owner_, std::string(local_address), port, options_, host_stop_token_));
 #else
     (void)local_address;
     (void)port;
@@ -883,27 +883,26 @@ task<void> refresh_client_dns(std::shared_ptr<detail::http_client_pool> pool, op
 }
 }  // namespace
 
-http_client_ref::http_client_ref(detail::http_client_pool& pool, ::ruvia::operation_scope& scope) noexcept :
+http_client_ref::http_client_ref(detail::http_client_pool& pool, detail::operation_scope& scope) noexcept :
     pool_(&pool),
-    registration_(scope, this, &http_client_ref::expire_capability) {}
+    registration_(scope, *this) {}
 
-http_client_ref::http_client_ref(detail::http_client_pool& pool, ::ruvia::operation_scope& scope, operation_options options) noexcept :
+http_client_ref::http_client_ref(detail::http_client_pool& pool, detail::operation_scope& scope, operation_options options) noexcept :
     pool_(&pool),
     options_(std::move(options)),
-    registration_(scope, this, &http_client_ref::expire_capability) {}
+    registration_(scope, *this) {}
 
 http_client_ref::http_client_ref(const http_client_ref& other) :
     pool_(other.pool_),
     pool_owner_(other.pool_owner_),
     options_(other.options_),
     host_stop_token_(other.host_stop_token_),
-    registration_(other.registration_, this),
+    registration_(other.registration_, *this),
     registry_(other.registry_) {}
 
-void http_client_ref::expire_capability(void* target) noexcept {
-    auto& self = *static_cast<http_client_ref*>(target);
-    self.pool_ = nullptr;
-    self.pool_owner_.reset();
+void http_client_ref::expire_capability() noexcept {
+    pool_ = nullptr;
+    pool_owner_.reset();
 }
 
 http_client_ref http_client_ref::with_options(operation_options options) const {
@@ -913,7 +912,7 @@ http_client_ref http_client_ref::with_options(operation_options options) const {
     return copy;
 }
 
-http_client_ref http_client_ref::bind_caller_scope(::ruvia::operation_scope& scope, const stop_token& host_stop) && noexcept {
+http_client_ref http_client_ref::bind_caller_scope(detail::operation_scope& scope, const stop_token& host_stop) && noexcept {
     http_client_ref bound(*pool_, scope, std::move(options_));
     bound.pool_owner_ = std::move(pool_owner_);
     bound.registry_ = registry_;
@@ -934,7 +933,7 @@ task<http_client_response> http_client_ref::dispatch(const http_client_request_v
     if (const auto* known = view.content_.known_length_content()) {
         request.set_body(*known->bytes());
     }
-    return ::ruvia::make_scoped_operation(registration_.scope(), pool_->execute(std::move(request), options_));
+    return registration_.attach(pool_->execute(std::move(request), options_));
 }
 
 task<http_client_exchange> http_client_ref::dispatch_upload(const http_client_request_view& head, http_client_upload_config upload, const http_client_request_options& request_options, const std::shared_ptr<http_client_informational_callback>& informational) const {
@@ -947,7 +946,7 @@ task<http_client_exchange> http_client_ref::dispatch_upload(const http_client_re
     request.informational_ = informational;
     request.pool_owner_ = pool_owner_;
     request.set_host_stop(host_stop_token_);
-    return ::ruvia::make_scoped_operation(registration_.scope(), pool_->open_request(std::move(request), upload, options_));
+    return registration_.attach(pool_->open_request(std::move(request), upload, options_));
 }
 
 task<http_client_tunnel_result> http_client_ref::dispatch_udp(const http_client_udp_tunnel_request_view& head, http_client_tunnel_config config, const http_client_request_options& request_options, const std::shared_ptr<http_client_informational_callback>& informational) const {
@@ -984,7 +983,7 @@ task<http_client_tunnel_result> http_client_ref::dispatch_connect(const http_cli
     request.pool_owner_ = pool_owner_;
     request.set_tunnel(head.authority_.view(), head.protocol_.view());
     request.set_host_stop(host_stop_token_);
-    return ::ruvia::make_scoped_operation(registration_.scope(), pool_->open_tunnel(std::move(request), config, options_));
+    return registration_.attach(pool_->open_tunnel(std::move(request), config, options_));
 }
 
 http_client_stats http_client_ref::stats() const {
@@ -1001,8 +1000,7 @@ void http_client_ref::update_dns(std::span<const http_client_endpoint_address> a
     pool_->update_dns(addresses);
 }
 task<void> http_client_ref::refresh_dns() const {
-    registration_.require_active();
-    return make_scoped_operation(registration_.scope(), refresh_client_dns(pool_owner_, options_, host_stop_token_));
+    return registration_.attach(refresh_client_dns(pool_owner_, options_, host_stop_token_));
 }
 task<std::vector<ip_address>> http_client_ref::resolve_dns(operation_options options) const {
     registration_.require_active();
@@ -1018,7 +1016,7 @@ task<std::vector<ip_address>> http_client_ref::resolve_dns(std::string_view host
         throw std::invalid_argument("DNS host must not be empty or contain NUL");
     }
     detail::require_client_host_lookup(host, pool_->worker());
-    return make_scoped_operation(registration_.scope(), resolve_client_handle_dns(pool_owner_, std::string(host), options_, std::move(options), host_stop_token_));
+    return registration_.attach(resolve_client_handle_dns(pool_owner_, std::string(host), options_, std::move(options), host_stop_token_));
 }
 bool http_client_ref::close_connection(std::uint64_t id) {
     registration_.require_active();

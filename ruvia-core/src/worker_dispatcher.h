@@ -79,7 +79,7 @@ public:
     worker_dispatcher(const worker_dispatcher&) = delete;
     worker_dispatcher& operator=(const worker_dispatcher&) = delete;
 
-    [[nodiscard]] post_result_type post(move_only_function<void()> task);
+    [[nodiscard]] post_outcome<> post(move_only_function<void()> task);
     [[nodiscard]] post_status post_factory(move_only_function<move_only_function<void()>()> factory);
     // Queues `task` on the io_context; false, dropping it, once the context
     // was detached. Off the worker an admitted defer delays detach_context(),
@@ -101,13 +101,13 @@ public:
         }
     }
     // Links `registration`, a member of the object `owner` aliases, for both
-    // stop phases; worker_stopping once the worker stops accepting.
-    [[nodiscard]] worker_registration_status register_shutdown(worker_shutdown_registration& registration, std::weak_ptr<void> owner, const worker_shutdown_operations_type& operations);
+    // stop phases; false once the worker stops accepting.
+    [[nodiscard]] bool register_shutdown(worker_shutdown_registration& registration, std::weak_ptr<void> owner, const worker_shutdown_operations_type& operations);
     // Runs after the first stopping batch has notified every hook, or now if
     // no batch is active. The active bit is published with accepting=false.
     void when_shutdown_notifications_complete(move_only_function<void()> callback);
     void when_idle(move_only_function<void()> callback);
-    worker_timer_schedule_status schedule_timer(worker_timer_registration& registration, std::chrono::steady_clock::time_point deadline, move_only_function<void(worker_timer_outcome)> completion);
+    bool schedule_timer(worker_timer_registration& registration, std::chrono::steady_clock::time_point deadline, move_only_function<void(worker_timer_outcome)> completion);
     // From any thread. A notified cancellation of a still-live timer delivers
     // `cancelled` inline from the handler a foreign thread posts, or deferred
     // when the caller is already running on this worker.
@@ -152,7 +152,7 @@ public:
     }
 
 private:
-    friend class ruvia::worker_shutdown_registration;
+    friend class worker_shutdown_registration;
     static constexpr std::size_t no_node = static_cast<std::size_t>(-1);
     struct waiter_node_type final {
         explicit waiter_node_type(move_only_function<void()> callback_value) noexcept :

@@ -1168,7 +1168,7 @@ TEST(Ruvia, WorkerRuntimeLoopReportsFailuresToItsRuntime) {
     auto refused = loop.try_start([]() -> ruvia::task<void> {
         co_return;
     }());
-    EXPECT_EQ(refused.status(), ruvia::post_status::worker_stopping);
+    EXPECT_EQ(refused.status(), ruvia::post_status::stopping);
     EXPECT_NE(refused.rejected(), nullptr);
 }
 
@@ -1176,7 +1176,7 @@ TEST(Ruvia, WorkerRefPostPayloadReturnsRefusedPayload) {
     ruvia::event_loop_pool loops({.loop_count_ = 1, .queue_capacity_ = 1});
     const auto worker_value = loops.loop(0).worker();
     std::promise<int> ran;
-    auto accepted = worker_value.post_payload(std::make_unique<int>(3), [&ran](std::unique_ptr<int>&& value) -> ruvia::move_only_function<void()> {
+    auto accepted = ruvia::detail::worker_ref_access::post_payload(worker_value, std::make_unique<int>(3), [&ran](std::unique_ptr<int>&& value) -> ruvia::move_only_function<void()> {
         return [value = std::move(value), &ran] {
             ran.set_value(*value);
         };
@@ -1184,7 +1184,7 @@ TEST(Ruvia, WorkerRefPostPayloadReturnsRefusedPayload) {
     EXPECT_TRUE(accepted.accepted());
     EXPECT_EQ(accepted.rejected(), nullptr);
     bool wrapped_refused = false;
-    auto refused = worker_value.post_payload(std::make_unique<int>(4), [&wrapped_refused](std::unique_ptr<int>&&) -> ruvia::move_only_function<void()> {
+    auto refused = ruvia::detail::worker_ref_access::post_payload(worker_value, std::make_unique<int>(4), [&wrapped_refused](std::unique_ptr<int>&&) -> ruvia::move_only_function<void()> {
         wrapped_refused = true;
         return [] {};
     });
@@ -1192,10 +1192,10 @@ TEST(Ruvia, WorkerRefPostPayloadReturnsRefusedPayload) {
     EXPECT_FALSE(wrapped_refused);
     ASSERT_NE(refused.rejected(), nullptr);
     EXPECT_EQ(**refused.rejected(), 4);
-    auto unbound = ruvia::worker_ref{}.post_payload(std::make_unique<int>(5), [](std::unique_ptr<int>&&) -> ruvia::move_only_function<void()> {
+    auto unbound = ruvia::detail::worker_ref_access::post_payload(ruvia::worker_ref{}, std::make_unique<int>(5), [](std::unique_ptr<int>&&) -> ruvia::move_only_function<void()> {
         return [] {};
     });
-    EXPECT_EQ(unbound.status(), ruvia::post_status::worker_stopping);
+    EXPECT_EQ(unbound.status(), ruvia::post_status::stopping);
     EXPECT_EQ(*std::move(unbound).take_rejected(), 5);
     loops.start();
     auto future = ran.get_future();

@@ -159,10 +159,10 @@ db_field_lookup db_row::find(std::string_view column) const& noexcept {
 const db_field& db_row::operator[](std::string_view column) const& {
     const auto lookup = find(column);
     if (lookup.status_ == unique_lookup_status::repeated) {
-        throw db_conversion_error(db_conversion_error::code_type::invalid_format, "database result has ambiguous column names");
+        throw conversion_error(conversion_error::code_type::invalid_format, "database result has ambiguous column names");
     }
     if (lookup.status_ == unique_lookup_status::absent) {
-        throw db_conversion_error(db_conversion_error::code_type::missing_column, "database result has no such column");
+        throw conversion_error(conversion_error::code_type::missing_column, "database result has no such column");
     }
     return *lookup.field_;
 }

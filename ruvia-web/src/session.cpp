@@ -321,7 +321,7 @@ task<void> session_middleware::commit(context& c) const {
         }();
         const auto result_value = co_await std::move(eval_task);
         if (result_value.kind() == redis_value::kind_type::error) {
-            throw redis_error(redis_error::code_type::command_error, result_value.error());
+            throw redis_error(backend_error_code::command_failed, result_value.error());
         }
         applied = result_value.integer() == 1;
     } else {

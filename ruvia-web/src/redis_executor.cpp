@@ -243,15 +243,15 @@ void require_positive_redis_ttl(duration_type ttl, const char* message) {
 
 }  // namespace
 
-redis_executor::redis_executor(detail::redis_client_runtime& runtime, ::ruvia::operation_scope& operation_scope, detail::request_io_metrics* io_metrics) noexcept :
+redis_executor::redis_executor(detail::redis_client_runtime& runtime, detail::operation_scope& operation_scope, detail::request_io_metrics* io_metrics) noexcept :
     runtime_(&runtime),
     io_metrics_(io_metrics),
-    registration_(operation_scope, this, &redis_executor::expire_capability) {}
+    registration_(operation_scope, *this) {}
 
-redis_executor::redis_executor(detail::redis_client_runtime& runtime, ::ruvia::operation_scope& operation_scope, operation_options options) noexcept :
+redis_executor::redis_executor(detail::redis_client_runtime& runtime, detail::operation_scope& operation_scope, operation_options options) noexcept :
     runtime_(&runtime),
     operation_options_(std::move(options)),
-    registration_(operation_scope, this, &redis_executor::expire_capability) {}
+    registration_(operation_scope, *this) {}
 
 redis_executor::redis_executor(const redis_executor& other) noexcept :
     redis_command_set<redis_executor>(other),
@@ -259,7 +259,7 @@ redis_executor::redis_executor(const redis_executor& other) noexcept :
     io_metrics_(other.io_metrics_),
     operation_options_(other.operation_options_),
     request_stop_(other.request_stop_),
-    registration_(other.registration_, this) {}
+    registration_(other.registration_, *this) {}
 
 redis_executor redis_executor::with_options(operation_options options) const {
     registration_.require_active();
@@ -287,12 +287,11 @@ task<redis_value> redis_executor::execute(detail::redis_pool& pool_value, detail
     });
 }
 
-void redis_executor::expire_capability(void* target) noexcept {
-    auto& handle = *static_cast<redis_executor*>(target);
-    handle.runtime_ = nullptr;
-    handle.io_metrics_ = nullptr;
-    handle.operation_options_ = {};
-    handle.request_stop_ = {};
+void redis_executor::expire_capability() noexcept {
+    runtime_ = nullptr;
+    io_metrics_ = nullptr;
+    operation_options_ = {};
+    request_stop_ = {};
 }
 
 task<redis_value> redis_executor::command(std::span<const std::string_view> args) {
@@ -301,7 +300,7 @@ task<redis_value> redis_executor::command(std::span<const std::string_view> args
     if (blocking) {
         detail::require_bounded_redis_wait(detail::request_bound_options(operation_options_, request_stop_), "raw blocking redis command requires a stop_token or finite operation timeout");
     }
-    return scoped(execute(blocking ? blocking_pool() : pool(), detail::make_owned_redis_command(args)));
+    return registration_.attach(execute(blocking ? blocking_pool() : pool(), detail::make_owned_redis_command(args)));
 }
 
 task<redis_value> redis_executor::command_owned(std::vector<std::string>&& args) const {
@@ -358,7 +357,7 @@ redis_subscription redis_executor::subscription() const {
     return redis_subscription(runtime_->subscriptions(), registration_.scope(), operation_options_, request_stop_);
 }
 
-redis_executor redis_executor::bind_caller_scope(::ruvia::operation_scope& scope, detail::request_io_metrics* io_metrics, const stop_token& stop_token_value) && {
+redis_executor redis_executor::bind_caller_scope(detail::operation_scope& scope, detail::request_io_metrics* io_metrics, const stop_token& stop_token_value) && {
     registration_.require_active();
     redis_executor bound(*runtime_, scope, io_metrics);
     bound.operation_options_ = operation_options_;
@@ -367,13 +366,13 @@ redis_executor redis_executor::bind_caller_scope(::ruvia::operation_scope& scope
 }
 
 template <redis_batch_mode mode>
-redis_batch<mode>::redis_batch(detail::redis_pool& pool, operation_options options, stop_token request_stop, operation_scope& scope, detail::request_io_metrics* io_metrics) noexcept :
+redis_batch<mode>::redis_batch(detail::redis_pool& pool, operation_options options, stop_token request_stop, detail::operation_scope& scope, detail::request_io_metrics* io_metrics) noexcept :
     pool_(&pool),
     options_(std::move(options)),
     request_stop_(std::move(request_stop)),
     commands_(),
     io_metrics_(io_metrics),
-    registration_(scope, this, &redis_batch::expire_capability) {}
+    registration_(scope, *this) {}
 
 template <redis_batch_mode mode>
 redis_batch<mode>::redis_batch(redis_batch&& other) noexcept :
@@ -382,7 +381,7 @@ redis_batch<mode>::redis_batch(redis_batch&& other) noexcept :
     request_stop_(std::move(other.request_stop_)),
     commands_(std::move(other.commands_)),
     io_metrics_(other.io_metrics_),
-    registration_(std::move(other.registration_), this) {}
+    registration_(std::move(other.registration_), *this) {}
 
 template <redis_batch_mode mode>
 void redis_batch<mode>::require_ready() const {
@@ -400,14 +399,13 @@ detail::redis_command_payload redis_batch<mode>::consume() {
 }
 
 template <redis_batch_mode mode>
-void redis_batch<mode>::expire_capability(void* target) noexcept {
-    auto& batch = *static_cast<redis_batch*>(target);
-    batch.pool_ = nullptr;
-    batch.options_ = {};
-    batch.request_stop_ = {};
-    batch.io_metrics_ = nullptr;
+void redis_batch<mode>::expire_capability() noexcept {
+    pool_ = nullptr;
+    options_ = {};
+    request_stop_ = {};
+    io_metrics_ = nullptr;
     std::vector<detail::redis_owned_command> empty;
-    batch.commands_.swap(empty);
+    commands_.swap(empty);
 }
 
 template <redis_batch_mode mode>
@@ -435,14 +433,14 @@ task<std::vector<redis_value>> redis_batch<mode>::execute_owned(detail::request_
     } else {
         auto replies = co_await payload_value.pool_.get().execute_pipeline(std::move(payload_value.commands_), linked.options(), true);
         if (replies.empty()) {
-            throw redis_error(redis_error::code_type::protocol_error, "redis transaction returned no replies");
+            throw redis_error(backend_error_code::protocol_error, "redis transaction returned no replies");
         }
         for (std::size_t i = 0; i < replies.size(); ++i) {
             detail::throw_if_redis_transaction_reply_error(replies[i], i);
         }
         auto exec_reply = std::move(replies.back());
         if (exec_reply.kind() != redis_value::kind_type::array) {
-            throw redis_error(redis_error::code_type::command_error, "unexpected redis transaction reply");
+            throw redis_error(backend_error_code::command_failed, "unexpected redis transaction reply");
         }
 
         // Every reply node lives in `resource`, so the EXEC elements move without copying.
@@ -452,9 +450,8 @@ task<std::vector<redis_value>> redis_batch<mode>::execute_owned(detail::request_
 
 template <redis_batch_mode mode>
 task<std::vector<redis_value>> redis_batch<mode>::exec() && {
-    auto& scope = registration_.scope();
     auto payload_value = consume();
-    return make_scoped_operation(scope, execute_owned(io_metrics_, std::move(payload_value)));
+    return registration_.attach(execute_owned(io_metrics_, std::move(payload_value)));
 }
 
 template class redis_batch<redis_batch_mode::pipeline>;

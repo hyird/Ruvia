@@ -40,7 +40,7 @@ void text(std::string& out, std::string_view value) {
     out.append(value);
 }
 [[noreturn]] void invalid_cache() {
-    throw db_conversion_error(db_conversion_error::code_type::invalid_format, "invalid database query cache entry");
+    throw conversion_error(conversion_error::code_type::invalid_format, "invalid database query cache entry");
 }
 struct reader {
     std::string_view bytes_;
@@ -283,12 +283,12 @@ std::string db_cache_key(std::string_view prefix, std::string_view id, db_cache_
 namespace {
 
 [[noreturn]] void throw_db_cache_timeout() {
-    throw db_error(db_error::code_type::timeout, std::nullopt, "database query cache operation timed out");
+    throw db_error(backend_error_code::timeout, std::nullopt, "database query cache operation timed out");
 }
 
 // The options of one Redis operation under the deadline it shares with the
 // query it caches.
-[[nodiscard]] operation_options db_cache_options(const operation_options& base, const operation_deadline& timeout) {
+[[nodiscard]] operation_options remaining_cache_options(const operation_options& base, const operation_deadline& timeout) {
     if (timeout.expired()) {
         throw_db_cache_timeout();
     }
@@ -296,7 +296,7 @@ namespace {
 }
 
 bool is_fatal_redis_cache_error(const redis_error& error) noexcept {
-    return error.code() == redis_error::code_type::cancelled || error.code() == redis_error::code_type::closing;
+    return error.code() == backend_error_code::cancelled || error.code() == backend_error_code::closing;
 }
 
 void rethrow_or_timeout_redis_cache_error(const redis_error& error, const operation_deadline& deadline, bool ignore_errors) {
@@ -317,7 +317,7 @@ void rethrow_or_timeout_redis_cache_error(const redis_error& error, const operat
     std::optional<db_rows> rows;
     try {
         rows.emplace(decode_db_cache_rows(std::move(bytes_value)));
-    } catch (const db_conversion_error&) {
+    } catch (const conversion_error&) {
         if (deadline.expired()) {
             throw_db_cache_timeout();
         }
@@ -358,7 +358,7 @@ task<void> delete_key_batch(const redis_executor& redis, std::span<const std::st
                 inline_views[i] = keys[i];
             }
             // DEL owns its arguments before returning its cold operation.
-            auto deletion = redis.with_options(db_cache_options(options, deadline_value)).del(std::span<const std::string_view>(inline_views.data(), keys.size()));
+            auto deletion = redis.with_options(remaining_cache_options(options, deadline_value)).del(std::span<const std::string_view>(inline_views.data(), keys.size()));
             return finish_delete_key_batch(std::move(deletion), deadline_value);
         }
         std::vector<std::string_view> heap_views;
@@ -366,7 +366,7 @@ task<void> delete_key_batch(const redis_executor& redis, std::span<const std::st
         for (const auto& key : keys) {
             heap_views.emplace_back(key);
         }
-        auto deletion = redis.with_options(db_cache_options(options, deadline_value)).del(heap_views);
+        auto deletion = redis.with_options(remaining_cache_options(options, deadline_value)).del(heap_views);
         return finish_delete_key_batch(std::move(deletion), deadline_value);
     } catch (const redis_error& error) {
         rethrow_or_timeout_redis_cache_error(error, deadline_value, false);
@@ -394,7 +394,7 @@ task<void> clear_keys(redis_executor redis, std::string pattern, request_io_metr
     do {
         std::optional<redis_scan_result> result;
         try {
-            result.emplace(co_await redis.with_options(db_cache_options(options, deadline_value)).scan({.cursor_ = cursor, .match_ = std::string_view(pattern), .count_ = 256}));
+            result.emplace(co_await redis.with_options(remaining_cache_options(options, deadline_value)).scan({.cursor_ = cursor, .match_ = std::string_view(pattern), .count_ = 256}));
         } catch (const redis_error& error) {
             rethrow_or_timeout_redis_cache_error(error, deadline_value, false);
         }
@@ -461,7 +461,7 @@ void db_query_cache_state::close_now() noexcept {
 
 void db_query_cache_state::require_open() const {
     if (closed_) {
-        throw db_error(db_error::code_type::closing, std::nullopt, "database query cache is closing");
+        throw db_error(backend_error_code::closing, std::nullopt, "database query cache is closing");
     }
 }
 
@@ -510,7 +510,7 @@ task<db_rows> db_query_cache_state::query(std::string key, std::chrono::millisec
     for (;;) {
         std::optional<std::string> bytes_value;
         try {
-            bytes_value = co_await redis_.with_options(db_cache_options(options, deadline)).get(key);
+            bytes_value = co_await redis_.with_options(remaining_cache_options(options, deadline)).get(key);
         } catch (const redis_error& error) {
             rethrow_or_timeout_redis_cache_error(error, deadline, ignore_errors_);
         }
@@ -534,7 +534,7 @@ task<db_rows> db_query_cache_state::query(std::string key, std::chrono::millisec
         }
         if (options.stop_token_.stop_requested()) {
             require_open();
-            throw db_error(db_error::code_type::cancelled, std::nullopt, "database query cache operation cancelled");
+            throw db_error(backend_error_code::cancelled, std::nullopt, "database query cache operation cancelled");
         }
         if (joined->result_.has_value()) {
             if (auto rows = decode_cached_rows(std::string(*joined->result_), deadline, ignore_errors_)) {
@@ -546,7 +546,7 @@ task<db_rows> db_query_cache_state::query(std::string key, std::chrono::millisec
         }
         // Cut short with the fill still running: the worker is stopping.
         if (woken == timer_sleep_result::stop_requested && !joined->done_.stop_requested()) {
-            throw db_error(db_error::code_type::closing, std::nullopt, "database query cache is closing");
+            throw db_error(backend_error_code::closing, std::nullopt, "database query cache is closing");
         }
     }
 
@@ -575,7 +575,7 @@ task<db_rows> db_query_cache_state::query(std::string key, std::chrono::millisec
     if (store && fits) {
         try {
             // SET owns its arguments before returning the cold operation.
-            write.emplace(redis_.with_options(db_cache_options(options, deadline)).set(key, encoded_bytes, {.expiration_ = redis_set_expiration::expires_after(duration - elapsed)}));
+            write.emplace(redis_.with_options(remaining_cache_options(options, deadline)).set(key, encoded_bytes, {.expiration_ = redis_set_expiration::expires_after(duration - elapsed)}));
         } catch (const redis_error& error) {
             rethrow_or_timeout_redis_cache_error(error, deadline, ignore_errors_);
         }
@@ -630,33 +630,32 @@ task<void> db_query_cache_state::clear(request_io_metrics* io_metrics, operation
 }  // namespace ruvia::detail
 
 namespace ruvia {
-db_query_result_cache::db_query_result_cache(detail::db_query_cache_state& state_value, operation_scope& scope, detail::request_io_metrics* io_metrics, operation_options options, stop_token request_stop) noexcept :
+db_query_result_cache::db_query_result_cache(detail::db_query_cache_state& state_value, detail::operation_scope& scope, detail::request_io_metrics* io_metrics, operation_options options, stop_token request_stop) noexcept :
     state_(&state_value),
     io_metrics_(io_metrics),
     options_(std::move(options)),
     request_stop_(std::move(request_stop)),
-    registration_(scope, this, &db_query_result_cache::expire_capability) {}
+    registration_(scope, *this) {}
 
 db_query_result_cache::db_query_result_cache(const db_query_result_cache& other) noexcept :
     state_(other.state_),
     io_metrics_(other.io_metrics_),
     options_(other.options_),
     request_stop_(other.request_stop_),
-    registration_(other.registration_, this) {}
+    registration_(other.registration_, *this) {}
 
-void db_query_result_cache::expire_capability(void* target) noexcept {
-    auto& cache = *static_cast<db_query_result_cache*>(target);
-    cache.state_ = nullptr;
-    cache.io_metrics_ = nullptr;
-    cache.options_ = {};
-    cache.request_stop_ = {};
+void db_query_result_cache::expire_capability() noexcept {
+    state_ = nullptr;
+    io_metrics_ = nullptr;
+    options_ = {};
+    request_stop_ = {};
 }
 task<void> db_query_result_cache::remove(std::span<const std::string_view> ids) const {
     registration_.require_active();
-    return make_scoped_operation(registration_.scope(), state_->remove(ids, io_metrics_, options_, request_stop_));
+    return registration_.attach(state_->remove(ids, io_metrics_, options_, request_stop_));
 }
 task<void> db_query_result_cache::clear() {
     registration_.require_active();
-    return make_scoped_operation(registration_.scope(), state_->clear(io_metrics_, options_, request_stop_));
+    return registration_.attach(state_->clear(io_metrics_, options_, request_stop_));
 }
 }  // namespace ruvia

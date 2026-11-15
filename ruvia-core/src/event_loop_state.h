@@ -235,9 +235,10 @@ struct borrowed_runtime final {
 struct event_loop_state final : std::enable_shared_from_this<event_loop_state> {
     using context_ownership_type = std::variant<worker_runtime, attached_context, borrowed_runtime>;
 
-    event_loop_state(std::size_t queue_capacity, blocking_pool* pool);
+    // `pool` is null, owning, or a non-owning alias of a borrowed pool.
+    event_loop_state(std::size_t queue_capacity, std::shared_ptr<blocking_pool> pool);
     explicit event_loop_state(worker_runtime& runtime);
-    event_loop_state(asio::io_context& external_context, std::size_t queue_capacity, blocking_pool* pool, move_only_function<void(std::exception_ptr)> failure);
+    event_loop_state(asio::io_context& external_context, std::size_t queue_capacity, std::shared_ptr<blocking_pool> pool, move_only_function<void(std::exception_ptr)> failure);
 
     [[nodiscard]] worker_runtime& owned_runtime() noexcept {
         return *std::get_if<worker_runtime>(&context_ownership_);
@@ -270,6 +271,8 @@ struct event_loop_state final : std::enable_shared_from_this<event_loop_state> {
 
     // First member: unlinks from the worker registry after every other member is gone.
     worker_shutdown_registration shutdown_registration_;
+    // Declared before the runtime so the pool outlives the worker that uses it.
+    std::shared_ptr<blocking_pool> blocking_pool_;
     context_ownership_type context_ownership_;
     asio::io_context* const io_context_;
     asio::io_context::executor_type executor_;

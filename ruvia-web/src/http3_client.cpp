@@ -370,7 +370,7 @@ public:
             return;
         }
         try {
-            (void)pool_.worker().schedule_timer(idle_timer_, deadline_after(pool_.config().idle_timeout_->value()), [this](worker_timer_outcome outcome) noexcept {
+            (void)idle_timer_.schedule(pool_.worker(), deadline_after(pool_.config().idle_timeout_->value()), [this](worker_timer_outcome outcome) noexcept {
                 if (outcome == worker_timer_outcome::expired && streams_.empty()) {
                     close();
                 }
@@ -879,7 +879,7 @@ public:
         if (time == UINT64_MAX) {
             return;
         }
-        (void)pool_.worker().schedule_timer(expiry_, http3_quic_steady_time(time), [this](worker_timer_outcome outcome) noexcept {
+        (void)expiry_.schedule(pool_.worker(), http3_quic_steady_time(time), [this](worker_timer_outcome outcome) noexcept {
             if (outcome == worker_timer_outcome::expired) {
                 writer_.notify();
             }
@@ -987,7 +987,7 @@ public:
             worker_timer_registration drain_timer;
             bool drain_expired = false;
             if (const auto deadline = acquire_timeout.deadline()) {
-                (void)pool_.worker().schedule_timer(drain_timer, *deadline, [this, &drain_expired](worker_timer_outcome outcome) noexcept {
+                (void)drain_timer.schedule(pool_.worker(), *deadline, [this, &drain_expired](worker_timer_outcome outcome) noexcept {
                     if (outcome == worker_timer_outcome::expired) {
                         drain_expired = true;
                         changed_.notify();
@@ -1036,7 +1036,7 @@ public:
         worker_timer_registration timer;
         const auto bound = item.timeout_.constrained_by(acquire_timeout.timeout()).constrained_by(item.response_.effective_connect_timeout_);
         if (const auto deadline = bound.deadline()) {
-            (void)pool_.worker().schedule_timer(timer, *deadline, [this](worker_timer_outcome outcome) noexcept {
+            (void)timer.schedule(pool_.worker(), *deadline, [this](worker_timer_outcome outcome) noexcept {
                 if (outcome == worker_timer_outcome::expired) {
                     close(std::make_error_code(std::errc::timed_out));
                 }
@@ -1349,7 +1349,7 @@ public:
     }
     void arm_next() {
         delay_.cancel();
-        (void)pool_.worker().schedule_timer(delay_, deadline_after(client_connection_attempt_delay), [this](worker_timer_outcome outcome) noexcept {
+        (void)delay_.schedule(pool_.worker(), deadline_after(client_connection_attempt_delay), [this](worker_timer_outcome outcome) noexcept {
             if (outcome == worker_timer_outcome::expired) {
                 launch_ready_ = true;
                 changed_.notify();
@@ -1423,7 +1423,7 @@ task<void> http3_client_connection::select_endpoint(bool allow_early, const oper
     const auto bound = timeout.constrained_by(acquire_timeout.timeout()).constrained_by(response.effective_connect_timeout_);
     worker_timer_registration deadline_timer;
     if (const auto deadline = bound.deadline()) {
-        (void)race.pool_.worker().schedule_timer(deadline_timer, *deadline, [&race](worker_timer_outcome outcome) noexcept {
+        (void)deadline_timer.schedule(race.pool_.worker(), *deadline, [&race](worker_timer_outcome outcome) noexcept {
             if (outcome == worker_timer_outcome::expired) {
                 race.cancel(std::make_error_code(std::errc::timed_out));
             }
@@ -1852,7 +1852,7 @@ task<bool> http3_client_connection::execute(const http_client_request_storage& r
         worker_timer_registration admission_timer;
         bool admission_expired = false;
         if (const auto deadline = acquire_timeout.deadline()) {
-            (void)self.pool_.worker().schedule_timer(admission_timer, *deadline, [&item, &admission_expired](worker_timer_outcome outcome) noexcept {
+            (void)admission_timer.schedule(self.pool_.worker(), *deadline, [&item, &admission_expired](worker_timer_outcome outcome) noexcept {
                 if (outcome == worker_timer_outcome::expired) {
                     admission_expired = true;
                     item.signal_.notify();
@@ -2051,7 +2051,7 @@ task<void> http3_client_connection::migrate(std::string_view local_address, std:
         throw http_client_error(make_error_code(http_client_errc::connect_failed), "HTTP/3 migration socket setup failed");
     }
     worker_timer_registration timer;
-    (void)self.pool_.worker().schedule_timer(timer, *timeout.deadline(), [&self](worker_timer_outcome) noexcept {
+    (void)timer.schedule(self.pool_.worker(), *timeout.deadline(), [&self](worker_timer_outcome) noexcept {
         self.changed_.notify();
     });
     for (;;) {
@@ -2146,7 +2146,7 @@ task<bool> http3_client_connection::send_datagram(http_client_response_state& re
     const auto bound = item->timeout_.constrained_by(response.effective_write_timeout_);
     worker_timer_registration timer;
     if (const auto deadline = bound.deadline()) {
-        (void)self.pool_.worker().schedule_timer(timer, *deadline, [&self](worker_timer_outcome outcome) noexcept {
+        (void)timer.schedule(self.pool_.worker(), *deadline, [&self](worker_timer_outcome outcome) noexcept {
             if (outcome == worker_timer_outcome::expired) {
                 self.changed_.notify();
             }

@@ -46,7 +46,7 @@ class mysql_library_env final {
 public:
     mysql_library_env() {
         if (mysql_library_init(0, nullptr, nullptr) != 0) {
-            throw db_error(db_error::code_type::connect_failed, db_driver::mariadb, "failed to initialize the MariaDB client library");
+            throw db_error(backend_error_code::connect_failed, db_driver::mariadb, "failed to initialize the MariaDB client library");
         }
     }
 
@@ -59,7 +59,7 @@ class mysql_thread_env final {
 public:
     mysql_thread_env() {
         if (mysql_thread_init() != 0) {
-            throw db_error(db_error::code_type::connect_failed, db_driver::mariadb, "failed to initialize the MariaDB client thread");
+            throw db_error(backend_error_code::connect_failed, db_driver::mariadb, "failed to initialize the MariaDB client thread");
         }
     }
 
@@ -118,7 +118,7 @@ struct mysql_wait_deadline final {
         message.append(": ");
         message.append(error_code_text(error));
     }
-    return db_error(db_error::code_type::io_error, db_driver::mariadb, std::move(message), error ? std::optional<std::int64_t>(error.value()) : std::nullopt);
+    return db_error(backend_error_code::io_error, db_driver::mariadb, std::move(message), error ? std::optional<std::int64_t>(error.value()) : std::nullopt);
 }
 
 [[nodiscard]] db_slot_socket::native_socket_type mysql_native_socket(MYSQL& connection) noexcept {
@@ -135,12 +135,12 @@ struct mysql_wait_deadline final {
 // the pool keeps it. A failure that leaves the connection unusable
 // (mariadb_connection_failure()), or a result the server still has to send,
 // leaves its state unknown: the slot is closed here, before the pool sees a
-// statement_failed it would otherwise keep -- unless the caller knows the
+// command_failed it would otherwise keep -- unless the caller knows the
 // exchange ended (`statement_only`).
 [[nodiscard]] db_error mysql_statement_error(mariadb_pool& pool, std::size_t index, std::string_view operation, bool statement_only = false) {
     auto& connection = *pool.slot(index).connection_;
-    auto error = mysql_error(connection, operation, db_error::code_type::statement_failed);
-    if (error.code() == db_error::code_type::statement_failed && !statement_only && (mariadb_connection_failure(mysql_errno(&connection)) || mysql_more_results(&connection) != 0)) {
+    auto error = mysql_error(connection, operation, backend_error_code::command_failed);
+    if (error.code() == backend_error_code::command_failed && !statement_only && (mariadb_connection_failure(mysql_errno(&connection)) || mysql_more_results(&connection) != 0)) {
         pool.close_slot(index);
     }
     return error;
@@ -236,7 +236,7 @@ struct mysql_wait final {
     if (wanted == db_socket_readiness::none) {
         const auto selected_deadline = select_mysql_wait_deadline(operation_deadline_value, driver_deadline);
         if (!selected_deadline.deadline_) {
-            throw db_error(db_error::code_type::io_error, db_driver::mariadb, "MariaDB requested an unsupported empty wait");
+            throw db_error(backend_error_code::io_error, db_driver::mariadb, "MariaDB requested an unsupported empty wait");
         }
         return mysql_wait{db_driver_socket_wait<mariadb_driver>{pool, pool.sleep(index, selected_deadline.deadline_, deadline_value), selected_deadline.source_ == mysql_wait_deadline_source::operation}};
     }
@@ -373,8 +373,8 @@ void materialize_mysql_rows(db_rows& output, MYSQL_RES& raw_result) {
 // connection out of step and fail it for every statement on it -- unless the
 // caller knows the exchange ended (`statement_only`).
 [[nodiscard]] std::exception_ptr mysql_pipelined_failure(MYSQL& connection, std::string_view operation, bool statement_only = false) {
-    auto error = mysql_error(connection, operation, db_error::code_type::statement_failed);
-    if (error.code() != db_error::code_type::statement_failed || (!statement_only && (mariadb_connection_failure(mysql_errno(&connection)) || mysql_more_results(&connection) != 0))) {
+    auto error = mysql_error(connection, operation, backend_error_code::command_failed);
+    if (error.code() != backend_error_code::command_failed || (!statement_only && (mariadb_connection_failure(mysql_errno(&connection)) || mysql_more_results(&connection) != 0))) {
         throw error;
     }
     return std::make_exception_ptr(std::move(error));
@@ -507,7 +507,7 @@ void finish_mysql_operation(mariadb_pipeline_io::state_type& state, std::size_t 
     switch (operation) {
         case mariadb_operation::send: {
             if (data.result_ != 0) {
-                throw mysql_error(connection, "mysql_send_query", db_error::code_type::io_error);
+                throw mysql_error(connection, "mysql_send_query", backend_error_code::io_error);
             }
             auto& record = group.record(data.sent_);
             record.flight_.sent_ = true;
@@ -531,7 +531,7 @@ void finish_mysql_operation(mariadb_pipeline_io::state_type& state, std::size_t 
             return;
         case mariadb_operation::charset_query: {
             if (data.result_ != 0) {
-                throw mysql_error(connection, "reading the MariaDB session character set", db_error::code_type::io_error);
+                throw mysql_error(connection, "reading the MariaDB session character set", backend_error_code::io_error);
             }
             MYSQL_RES* stored = nullptr;
             const int status = mysql_store_result_start(&stored, &connection);
@@ -542,7 +542,7 @@ void finish_mysql_operation(mariadb_pipeline_io::state_type& state, std::size_t 
         case mariadb_operation::charset_store: {
             auto* stored = std::exchange(data.stored_, nullptr);
             if (stored == nullptr) {
-                throw mysql_error(connection, "reading the MariaDB session character set", db_error::code_type::io_error);
+                throw mysql_error(connection, "reading the MariaDB session character set", backend_error_code::io_error);
             }
             std::unique_ptr<MYSQL_RES, decltype(&mysql_free_result)> owned(stored, &mysql_free_result);
             try {
@@ -888,16 +888,16 @@ task<void> mariadb_driver::connect(pool_type& pool, std::size_t index, const ope
     ensure_mysql_thread_initialized();
     slot.connection_ = mysql_init(nullptr);
     if (slot.connection_ == nullptr) {
-        throw db_error(db_error::code_type::connect_failed, db_driver::mariadb, "mysql_init failed");
+        throw db_error(backend_error_code::connect_failed, db_driver::mariadb, "mysql_init failed");
     }
     auto& initialized = *slot.connection_;
     if (mysql_optionsv(&initialized, MYSQL_OPT_NONBLOCK, nullptr) != 0) {
-        throw mysql_error(initialized, "enabling MariaDB non-blocking I/O", db_error::code_type::connect_failed);
+        throw mysql_error(initialized, "enabling MariaDB non-blocking I/O", backend_error_code::connect_failed);
     }
     // The statement cache hears every change of the session the server
     // reports, from the handshake on.
     if (!slot.session_.statements_.observe(initialized)) {
-        throw mysql_error(initialized, "observing the MariaDB session", db_error::code_type::connect_failed);
+        throw mysql_error(initialized, "observing the MariaDB session", backend_error_code::connect_failed);
     }
     // Pin the connection charset before connecting: utf8mb4 carries full
     // Unicode whatever the server or client library default, and keeps 0x5C
@@ -906,10 +906,10 @@ task<void> mariadb_driver::connect(pool_type& pool, std::size_t index, const ope
     // (interpolate_sql()). Set here (not via SET NAMES) so it also governs
     // the handshake.
     if (mysql_optionsv(&initialized, MYSQL_SET_CHARSET_NAME, "utf8mb4") != 0) {
-        throw mysql_error(initialized, "configuring MariaDB utf8mb4", db_error::code_type::connect_failed);
+        throw mysql_error(initialized, "configuring MariaDB utf8mb4", backend_error_code::connect_failed);
     }
     if (!set_mysql_timeout(initialized, MYSQL_OPT_CONNECT_TIMEOUT, config.connect_timeout_) || !set_mysql_timeout(initialized, MYSQL_OPT_READ_TIMEOUT, config.read_timeout_) || !set_mysql_timeout(initialized, MYSQL_OPT_WRITE_TIMEOUT, config.write_timeout_)) {
-        throw mysql_error(initialized, "configuring MariaDB timeouts", db_error::code_type::connect_failed);
+        throw mysql_error(initialized, "configuring MariaDB timeouts", backend_error_code::connect_failed);
     }
     // The pool keeps one registered duplicate of the connection socket and
     // tells sockets apart by handle value, so the driver must never silently
@@ -917,29 +917,29 @@ task<void> mariadb_driver::connect(pool_type& pool, std::size_t index, const ope
     // reconnects through a fresh connection instead.
     const my_bool reconnect = 0;
     if (mysql_optionsv(&initialized, MYSQL_OPT_RECONNECT, &reconnect) != 0) {
-        throw mysql_error(initialized, "disabling MariaDB automatic reconnect", db_error::code_type::connect_failed);
+        throw mysql_error(initialized, "disabling MariaDB automatic reconnect", backend_error_code::connect_failed);
     }
     const unsigned int local_infile = 0;
     if (mysql_optionsv(&initialized, MYSQL_OPT_LOCAL_INFILE, &local_infile) != 0) {
-        throw mysql_error(initialized, "disabling MariaDB LOCAL INFILE", db_error::code_type::connect_failed);
+        throw mysql_error(initialized, "disabling MariaDB LOCAL INFILE", backend_error_code::connect_failed);
     }
 
     const bool use_tls = config.tls_.mode_ == client_tls_mode::verify_identity;
     const my_bool enforce_tls = use_tls ? 1 : 0;
     if (mysql_optionsv(&initialized, MYSQL_OPT_SSL_ENFORCE, &enforce_tls) != 0 || mysql_optionsv(&initialized, MYSQL_OPT_SSL_VERIFY_SERVER_CERT, &enforce_tls) != 0) {
-        throw mysql_error(initialized, "configuring MariaDB authenticated TLS", db_error::code_type::connect_failed);
+        throw mysql_error(initialized, "configuring MariaDB authenticated TLS", backend_error_code::connect_failed);
     }
     if (use_tls) {
         const char* tls_versions = config.tls_.minimum_version_ == tls_version::tls_1_3 ? "TLSv1.3" : "TLSv1.2,TLSv1.3";
         if (mysql_optionsv(&initialized, MYSQL_OPT_TLS_VERSION, tls_versions) != 0) {
-            throw mysql_error(initialized, "configuring MariaDB TLS versions", db_error::code_type::connect_failed);
+            throw mysql_error(initialized, "configuring MariaDB TLS versions", backend_error_code::connect_failed);
         }
         if (mysql_optionsv(&initialized, MYSQL_OPT_SSL_CIPHER, tls_cipher_suites) != 0) {
-            throw mysql_error(initialized, "configuring MariaDB TLS ciphers", db_error::code_type::connect_failed);
+            throw mysql_error(initialized, "configuring MariaDB TLS ciphers", backend_error_code::connect_failed);
         }
         const auto set_path = [&initialized](mysql_option option, const tls_file_name& path) {
             if (mysql_optionsv(&initialized, option, tls_file_name_c_str(path)) != 0) {
-                throw mysql_error(initialized, "configuring MariaDB TLS credentials", db_error::code_type::connect_failed);
+                throw mysql_error(initialized, "configuring MariaDB TLS credentials", backend_error_code::connect_failed);
             }
         };
         if (config.tls_.ca_file_.has_value()) {
@@ -966,10 +966,10 @@ task<void> mariadb_driver::connect(pool_type& pool, std::size_t index, const ope
     }
     std::string(resolved_hosts).swap(resolved_hosts);
     if (connected == nullptr) {
-        throw mysql_error(initialized, "mysql_real_connect", db_error::code_type::connect_failed);
+        throw mysql_error(initialized, "mysql_real_connect", backend_error_code::connect_failed);
     }
     if (use_tls && mysql_get_ssl_cipher(&initialized) == nullptr) {
-        throw db_error(db_error::code_type::connect_failed, db_driver::mariadb, "MariaDB refused required TLS");
+        throw db_error(backend_error_code::connect_failed, db_driver::mariadb, "MariaDB refused required TLS");
     }
 
     // MariaDB's non-blocking API suspends by yielding out of a fibre when
@@ -998,7 +998,7 @@ task<void> mariadb_driver::connect(pool_type& pool, std::size_t index, const ope
         if (co_await exec_mysql_query(pool, index, mariadb_session_tracking_setup, deadline_value) == 0) {
             tracked = mysql_field_count(&initialized) == 0;
         } else if (mariadb_connection_failure(mysql_errno(&initialized))) {
-            throw mysql_error(initialized, "turning on MariaDB session tracking", db_error::code_type::connect_failed);
+            throw mysql_error(initialized, "turning on MariaDB session tracking", backend_error_code::connect_failed);
         }
     }
     slot.session_.statements_.connected(tracked);
@@ -1128,7 +1128,7 @@ task<db_stream_start> mariadb_driver::start_stream(pool_type& pool, std::size_t 
     std::unique_ptr<MYSQL_RES, decltype(&discard_unbuffered_result)> result(mysql_use_result(&connection), &discard_unbuffered_result);
     if (result == nullptr) {
         if (mysql_field_count(&connection) != 0 || mysql_errno(&connection) != 0) {
-            throw mysql_error(connection, "mysql_use_result", db_error::code_type::statement_failed);
+            throw mysql_error(connection, "mysql_use_result", backend_error_code::command_failed);
         }
         db_stream_start empty;
         empty.returns_rows_ = false;
@@ -1169,7 +1169,7 @@ task<void> finish_mysql_stream(mariadb_pool& pool, std::size_t index, void*& res
     }
     auto& connection = *pool.slot(index).connection_;
     if (mysql_errno(&connection) != 0) {
-        throw mysql_error(connection, "mysql_fetch_row", db_error::code_type::statement_failed);
+        throw mysql_error(connection, "mysql_fetch_row", backend_error_code::command_failed);
     }
     // EOF detached the native result from its connection; freeing it
     // cannot perform I/O or discard another result's status.
@@ -1194,7 +1194,7 @@ task<db_stream_step> mariadb_driver::read_stream_row(pool_type& pool, std::size_
         // rows or a failed read; only mysql_errno() tells them apart.
         auto& connection = *pool.slot(index).connection_;
         if (mysql_errno(&connection) != 0) {
-            throw mysql_error(connection, "mysql_fetch_row", db_error::code_type::statement_failed);
+            throw mysql_error(connection, "mysql_fetch_row", backend_error_code::command_failed);
         }
         co_await finish_mysql_stream(pool, index, result_value, deadline_value);
         co_return db_stream_end::exhausted;
@@ -1248,16 +1248,16 @@ void validate_mariadb_sql_length(std::size_t length) {
     }
 }
 
-db_error mariadb_error(std::string_view operation, unsigned int native_code, const char* sql_state, const char* message, db_error::code_type error_code) {
+db_error mariadb_error(std::string_view operation, unsigned int native_code, const char* sql_state, const char* message, backend_error_code error_code) {
     // A server error's text can quote row and parameter values (`Duplicate
     // entry '...'`), so only errno and SQLSTATE name it. libmariadb's own
     // errors, and a connection no statement ran on, carry no row data and
     // keep their text.
-    const bool library_text = error_code == db_error::code_type::connect_failed || native_code == 0 || (native_code >= CR_MIN_ERROR && native_code <= CR_MAX_ERROR) || (native_code >= CER_MIN_ERROR && native_code <= CER_MAX_ERROR);
+    const bool library_text = error_code == backend_error_code::connect_failed || native_code == 0 || (native_code >= CR_MIN_ERROR && native_code <= CR_MAX_ERROR) || (native_code >= CER_MIN_ERROR && native_code <= CER_MAX_ERROR);
     // A statement that failed because the connection did is an I/O failure,
     // not a statement the server rejected.
-    if (error_code == db_error::code_type::statement_failed && (native_code == CR_SERVER_GONE_ERROR || native_code == CR_SERVER_LOST || native_code == CR_ERR_NET_READ || native_code == CR_ERR_NET_WRITE || session_ended(native_code))) {
-        error_code = db_error::code_type::io_error;
+    if (error_code == backend_error_code::command_failed && (native_code == CR_SERVER_GONE_ERROR || native_code == CR_SERVER_LOST || native_code == CR_ERR_NET_READ || native_code == CR_ERR_NET_WRITE || session_ended(native_code))) {
+        error_code = backend_error_code::io_error;
     }
     const std::string_view state_view = (sql_state != nullptr && sql_state[0] != '\0') ? std::string_view(sql_state) : std::string_view{};
     const std::string_view message_view = (library_text && message != nullptr && message[0] != '\0') ? std::string_view(message) : std::string_view{};
@@ -1284,7 +1284,7 @@ db_error mariadb_error(std::string_view operation, unsigned int native_code, con
     return db_error(error_code, db_driver::mariadb, error, native_code == 0 ? std::nullopt : std::optional<std::int64_t>(native_code), sql_state == nullptr ? std::string_view{} : std::string_view(sql_state));
 }
 
-db_error mysql_error(const st_mysql& connection, std::string_view operation, db_error::code_type error_code) {
+db_error mysql_error(const st_mysql& connection, std::string_view operation, backend_error_code error_code) {
     auto* mutable_connection = const_cast<st_mysql*>(&connection);
     return mariadb_error(operation, mysql_errno(mutable_connection), mysql_sqlstate(mutable_connection), mysql_error(mutable_connection), error_code);
 }

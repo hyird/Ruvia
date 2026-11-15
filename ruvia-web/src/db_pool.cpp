@@ -40,7 +40,7 @@ void append_db_resolved_address(db_resolved_addresses_type& addresses, const asi
     try {
         address = endpoint.to_string();
     } catch (const std::system_error& error) {
-        throw db_error(db_error::code_type::resolve_failed, driver, system_error_text(error), error.code().value());
+        throw db_error(backend_error_code::connect_failed, driver, system_error_text(error), error.code().value());
     }
     if (std::ranges::none_of(addresses, [&address](const std::string& existing) {
         return std::string_view(existing) == address;
@@ -62,9 +62,9 @@ void append_db_resolved_address(db_resolved_addresses_type& addresses, const asi
     } catch (const db_error& error) {
         return error;
     } catch (const std::system_error& error) {
-        return db_error(db_error::code_type::io_error, driver, system_error_text(error), error.code().value());
+        return db_error(backend_error_code::io_error, driver, system_error_text(error), error.code().value());
     } catch (const std::exception& error) {
-        return db_error(db_error::code_type::io_error, driver, error.what());
+        return db_error(backend_error_code::io_error, driver, error.what());
     }
 }
 
@@ -78,7 +78,7 @@ void append_db_resolved_address(db_resolved_addresses_type& addresses, const asi
     try {
         std::rethrow_exception(failure);
     } catch (const db_error& error) {
-        return error.code() == db_error::code_type::statement_failed;
+        return error.code() == backend_error_code::command_failed;
     } catch (const std::invalid_argument&) {
         return true;
     } catch (...) {
@@ -131,7 +131,7 @@ db_resolved_addresses_type collect_db_resolved_addresses(const client_resolve_re
         }
     }
     if (addresses.empty()) {
-        throw db_error(db_error::code_type::resolve_failed, driver, "database host resolved to no addresses");
+        throw db_error(backend_error_code::connect_failed, driver, "database host resolved to no addresses");
     }
     return addresses;
 }
@@ -190,16 +190,16 @@ std::array<char, 6> format_db_port(std::uint16_t port) {
 }
 
 template <typename driver_type>
-void db_pool<driver_type>::slot_policy::throw_acquire_failure(const db_pool& pool, worker_wait_status status) {
+void db_pool<driver_type>::slot_policy::throw_acquire_failure(const db_pool& pool, wait_status status) {
     switch (status) {
-        case worker_wait_status::timed_out:
-            throw db_error(db_error::code_type::timeout, pool.config_.driver_, "database connection pool acquire timed out");
-        case worker_wait_status::cancelled:
-            throw db_error(db_error::code_type::cancelled, pool.config_.driver_, "database operation cancelled");
-        case worker_wait_status::closed:
-        case worker_wait_status::worker_stopping:
+        case wait_status::timed_out:
+            throw db_error(backend_error_code::timeout, pool.config_.driver_, "database connection pool acquire timed out");
+        case wait_status::cancelled:
+            throw db_error(backend_error_code::cancelled, pool.config_.driver_, "database operation cancelled");
+        case wait_status::closed:
+        case wait_status::worker_stopping:
             throw pool.closing_error();
-        case worker_wait_status::value:
+        case wait_status::value:
             break;
     }
     std::terminate();
@@ -208,7 +208,7 @@ void db_pool<driver_type>::slot_policy::throw_acquire_failure(const db_pool& poo
 template <typename driver_type>
 void db_pool<driver_type>::slot_policy::throw_aborted(const db_pool& pool, pool_slot_abort_reason reason) {
     if (reason == pool_slot_abort_reason::cancelled) {
-        throw db_error(db_error::code_type::cancelled, pool.config_.driver_, "database operation cancelled");
+        throw db_error(backend_error_code::cancelled, pool.config_.driver_, "database operation cancelled");
     }
     throw pool.closing_error();
 }
@@ -260,12 +260,12 @@ db_pool<driver_type>::~db_pool() {
 
 template <typename driver_type>
 db_error db_pool<driver_type>::timed_out() const {
-    return db_error(db_error::code_type::timeout, driver_type::driver, std::string(driver_type::name).append(" operation timed out"));
+    return db_error(backend_error_code::timeout, driver_type::driver, std::string(driver_type::name).append(" operation timed out"));
 }
 
 template <typename driver_type>
 db_error db_pool<driver_type>::closing_error() const {
-    return db_error(db_error::code_type::closing, driver_type::driver, "database client is closing");
+    return db_error(backend_error_code::closing, driver_type::driver, "database client is closing");
 }
 
 template <typename driver_type>
@@ -312,7 +312,7 @@ void db_pool<driver_type>::start_lease(std::size_t index) {
     if (const auto deadline = leased.lease_timeout_.deadline(); deadline.has_value()) {
         // A stopping worker schedules nothing; its shutdown closes the pool,
         // and every operation stays bounded by the lease deadline meanwhile.
-        (void)worker_.schedule_timer(leased.lease_timer_, *deadline, [this, index](worker_timer_outcome outcome) noexcept {
+        (void)leased.lease_timer_.schedule(worker_, *deadline, [this, index](worker_timer_outcome outcome) noexcept {
             if (outcome == worker_timer_outcome::expired) {
                 expire_idle_lease(index);
             }
@@ -366,7 +366,7 @@ void db_pool<driver_type>::expire_idle_lease(std::size_t index) noexcept {
 
 template <typename driver_type>
 db_error db_pool<driver_type>::lease_timed_out() const {
-    return db_error(db_error::code_type::timeout, driver_type::driver, std::string(driver_type::name).append(" transaction or stream exceeded transaction_timeout"));
+    return db_error(backend_error_code::timeout, driver_type::driver, std::string(driver_type::name).append(" transaction or stream exceeded transaction_timeout"));
 }
 
 // Nothing has been sent on a fresh lease, so replacing the connection is
@@ -457,7 +457,7 @@ void db_pool<driver_type>::close_slot(std::size_t index) noexcept {
 template <typename driver_type>
 task<void> db_pool<driver_type>::connect_slot(std::size_t index, const operation_deadline& timeout) {
     if (!config_.reconnect_ && !slot(index).connected_ && !leases_.closing()) {
-        throw db_error(db_error::code_type::io_error, driver_type::driver, std::string(driver_type::name).append(" session ended, and this pool does not reconnect"));
+        throw db_error(backend_error_code::io_error, driver_type::driver, std::string(driver_type::name).append(" session ended, and this pool does not reconnect"));
     }
     co_await open_slot(index, timeout);
 }
@@ -490,7 +490,7 @@ task<void> db_pool<driver_type>::open_slot(std::size_t index, const operation_de
 template <typename driver_type>
 task<db_resolved_addresses_type> db_pool<driver_type>::resolve_host(std::size_t index, const operation_deadline& deadline_value) {
     const auto resolve_timed_out = [] {
-        return db_error(db_error::code_type::timeout, driver_type::driver, std::string(driver_type::name).append(" host resolve timed out"));
+        return db_error(backend_error_code::timeout, driver_type::driver, std::string(driver_type::name).append(" host resolve timed out"));
     };
 
     leases_.throw_if_aborted(index);
@@ -519,7 +519,7 @@ task<db_resolved_addresses_type> db_pool<driver_type>::resolve_host(std::size_t 
             throw resolve_timed_out();
         }
         if (resolve_error) {
-            throw db_error(db_error::code_type::resolve_failed, driver_type::driver, std::string("resolving ").append(driver_type::name).append(" host failed: ").append(error_code_text(resolve_error)), resolve_error.value());
+            throw db_error(backend_error_code::connect_failed, driver_type::driver, std::string("resolving ").append(driver_type::name).append(" host failed: ").append(error_code_text(resolve_error)), resolve_error.value());
         }
         co_return collect_db_resolved_addresses(completion, driver_type::driver);
     } catch (...) {
@@ -552,7 +552,7 @@ bool db_pool<driver_type>::slot_wait::await_ready() {
     auto& slot = *pool_.slots_[index_];
     if (kind_ == db_deadline_kind::socket) {
         if (const auto error = slot.wait_socket_.attach(native_); error) {
-            throw db_error(db_error::code_type::io_error, driver_type::driver, std::string("registering ").append(driver_type::name).append(" connection socket: ").append(error_code_text(error)), error.value());
+            throw db_error(backend_error_code::io_error, driver_type::driver, std::string("registering ").append(driver_type::name).append(" connection socket: ").append(error_code_text(error)), error.value());
         }
     }
     if (!leases.arm_deadline(index_, wait_deadline_, kind_)) {
@@ -654,7 +654,7 @@ task<result_type> db_pool<driver_type>::run_on_transaction_slot(std::size_t inde
         if (!slot(index).connected_) {
             co_await connect_slot(index, timeout);
         }
-        auto result_value = co_await statement(*this, index, sql, std::span<const db_value>(params), timeout.constrained_by(config_.query_timeout_));
+        auto result_value = co_await statement(*this, index, sql, std::span<const db_value>(params), timeout.constrained_by(config_.command_timeout_));
         leave_lease_operation(index);
         co_return result_value;
     } catch (...) {
@@ -699,7 +699,7 @@ task<void> db_pool<driver_type>::execute_control(std::size_t index, std::string_
     if (!slot(index).connected_) {
         co_await connect_slot(index, timeout);
     }
-    (void)co_await driver_type::execute(*this, index, sql, {}, timeout.constrained_by(config_.query_timeout_));
+    (void)co_await driver_type::execute(*this, index, sql, {}, timeout.constrained_by(config_.command_timeout_));
 }
 
 // Starting a transaction transfers the acquired lease to the transaction
@@ -810,7 +810,7 @@ task<db_stream_result> db_pool<driver_type>::stream(std::string sql, std::vector
         if (!slot(index).connected_) {
             co_await connect_slot(index, start_timeout);
         }
-        auto start = co_await driver_type::start_stream(*this, index, sql, std::span<const db_value>(params), start_timeout.constrained_by(config_.query_timeout_));
+        auto start = co_await driver_type::start_stream(*this, index, sql, std::span<const db_value>(params), start_timeout.constrained_by(config_.command_timeout_));
         if (!start.returns_rows_) {
             released = true;
             cancellation.finish();
@@ -840,7 +840,7 @@ task<std::optional<db_row>> db_pool<driver_type>::read_stream_row(std::size_t in
     std::optional<db_stream_step> step;
     try {
         enter_lease_operation(index);
-        step.emplace(co_await driver_type::read_stream_row(*this, index, slot(index).stream_result_, fields, column_names, timeout.constrained_by(config_.query_timeout_)));
+        step.emplace(co_await driver_type::read_stream_row(*this, index, slot(index).stream_result_, fields, column_names, timeout.constrained_by(config_.command_timeout_)));
         if (std::holds_alternative<db_row>(*step)) {
             leave_lease_operation(index);
         }
@@ -866,7 +866,7 @@ task<void> db_pool<driver_type>::close_stream(std::size_t index, const operation
     typename leases_type::cancellation_guard cancellation(leases_, index, options.stop_token_);
     try {
         enter_lease_operation(index);
-        co_await driver_type::close_stream(*this, index, slot(index).stream_result_, timeout.constrained_by(config_.query_timeout_));
+        co_await driver_type::close_stream(*this, index, slot(index).stream_result_, timeout.constrained_by(config_.command_timeout_));
     } catch (...) {
         fail_stream(index, cancellation);
         throw;

@@ -225,7 +225,7 @@ http_response context::error(const http_error_info& info, response_options extra
 }
 
 task<http_response> context::not_found() {
-    return ::ruvia::make_scoped_operation(operation_scope_, not_found_task());
+    return operation_scope_.attach(not_found_task());
 }
 
 task<http_response> context::not_found_task() {
@@ -510,7 +510,7 @@ task<void> http_interim_response_output::inform(const http_interim_response_head
     for (const auto& field : response.headers()) {
         owned.emplace_back(field.name(), field.value());
     }
-    return ::ruvia::make_scoped_operation(scope_, write_owned(response.status(), std::move(owned), std::move(operation), context_value));
+    return scope_.attach(write_owned(response.status(), std::move(owned), std::move(operation), context_value));
 }
 task<void> http_interim_response_output::write_owned(http_status_code status, std::vector<http_header> fields_value, operation_options operation, context& context_value) {
     auto lease = claim_operation_lane(output_active_, "interim response output is already active");
@@ -606,7 +606,7 @@ task<dispatch_response> context::dispatch(dispatch_options options) {
             headers.emplace_back(header.name(), header.value());
         }
     }
-    return ::ruvia::make_scoped_operation(operation_scope_, dispatch_task(std::move(method), std::move(target), std::move(body), std::move(headers), std::move(options.stop_token_)));
+    return operation_scope_.attach(dispatch_task(std::move(method), std::move(target), std::move(body), std::move(headers), std::move(options.stop_token_)));
 }
 
 task<dispatch_response> context::dispatch_task(std::string method, std::string target, std::string body_storage, std::vector<http_header> headers, ::ruvia::stop_token stop_token_value) {
@@ -1003,7 +1003,7 @@ void ensure_route_params(const std::string_view* param_names, const std::string_
 inline constexpr std::size_t inline_request_decode_bytes = 64 * 1024;
 
 [[nodiscard]] task<std::variant<std::string, http_content_decode_error>> decode_request_content(const worker_ref& worker_value, const stop_token& stop_token_value, std::span<const http_content_coding> codings, std::string_view raw, http_content_decode_options options) {
-    if (worker_value.blocking_pool() != nullptr && options.max_decoded_bytes_ > inline_request_decode_bytes) {
+    if (detail::worker_ref_access::blocking_pool(worker_value) != nullptr && options.max_decoded_bytes_ > inline_request_decode_bytes) {
         if (raw.size() <= inline_request_decode_bytes) {
             auto inline_result = decode_http_content(codings, raw, {.max_decoded_bytes_ = inline_request_decode_bytes});
             const auto* failure = std::get_if<http_content_decode_error>(&inline_result);
@@ -1370,11 +1370,11 @@ std::optional<std::string_view> context_request::negotiate(negotiable_field fiel
 }
 
 task<std::string_view> context_request::text(operation_options operation) const {
-    return ::ruvia::make_scoped_operation(context_->operation_scope_, read_request_text(*context_, std::move(operation)));
+    return context_->operation_scope_.attach(read_request_text(*context_, std::move(operation)));
 }
 
 task<std::span<const std::byte>> context_request::bytes(operation_options operation) const {
-    return ::ruvia::make_scoped_operation(context_->operation_scope_, read_request_bytes(*context_, std::move(operation)));
+    return context_->operation_scope_.attach(read_request_bytes(*context_, std::move(operation)));
 }
 
 std::optional<std::string_view> context_request::signed_cookie(signed_cookie_lookup_options options) const {
@@ -1401,11 +1401,11 @@ std::optional<std::string_view> context_request::signed_cookie(signed_cookie_loo
 }
 
 task<std::vector<multipart_part>> context_request::multipart(operation_options operation) const {
-    return ::ruvia::make_scoped_operation(context_->operation_scope_, read_request_multipart(*context_, std::move(operation)));
+    return context_->operation_scope_.attach(read_request_multipart(*context_, std::move(operation)));
 }
 
 task<void> context_request::discard_body(operation_options operation) const {
-    return ::ruvia::make_scoped_operation(context_->operation_scope_, discard_request_body(*context_, std::move(operation)));
+    return context_->operation_scope_.attach(discard_request_body(*context_, std::move(operation)));
 }
 
 body_reader& context_request::body_reader() const {

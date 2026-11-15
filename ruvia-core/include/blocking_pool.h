@@ -38,12 +38,13 @@
 #include <utility>
 #include <variant>
 
+#include "delivery_result.h"
 #include "move_only_function.h"
 #include "one_shot.h"
 #include "operation_options.h"
 #include "task.h"
+#include "wait_result.h"
 #include "worker_ref.h"
-#include "worker_result.h"
 
 namespace ruvia {
 
@@ -59,15 +60,6 @@ struct blocking_pool_options final {
     // overload from the caller that could still shed load.
     std::size_t queue_capacity_{0};
 };
-
-enum class blocking_submit_status : std::uint8_t {
-    accepted,
-    queue_full,
-    pool_stopped,
-};
-
-// A rejected submission returns the callable it did not run.
-using blocking_submit_result = worker_delivery_result<move_only_function<void()>, blocking_submit_status, blocking_submit_status::accepted>;
 
 struct blocking_pool_stats final {
     // Tasks waiting for a free thread, and tasks a thread is running right now.
@@ -105,12 +97,12 @@ public:
     [[nodiscard]] blocking_pool_stats stats() const noexcept;
 
     // Safe from any thread. Admission is reserved before the callable moves
-    // into the queue; a rejection (queue_full, or pool_stopped, including a
+    // into the queue; a rejection (queue_full, or stopping, including a
     // stop that lands during that move) returns the callable untouched in the
     // result, so the caller decides where it is destroyed. Callable moves and
     // destruction may query stats(), submit(), or stop(). Admission includes
     // submissions whose callable move has not finished.
-    [[nodiscard]] blocking_submit_result submit(move_only_function<void()> task);
+    [[nodiscard]] post_outcome<> submit(move_only_function<void()> task);
 
     // Stops accepting, discards tasks that have not started, and wakes the
     // threads. Tasks already running are not interrupted -- a blocking call
@@ -402,7 +394,7 @@ template <typename fn_type>
     if (!worker_value.is_current()) {
         throw std::logic_error("blocking work must be awaited on its bound worker");
     }
-    auto* const pool = worker_value.blocking_pool();
+    auto* const pool = detail::worker_ref_access::blocking_pool(worker_value);
     if (pool == nullptr) {
         co_return outcome_type::with_status(blocking_status::unavailable);
     }
@@ -443,7 +435,7 @@ template <typename fn_type>
     if (!submitted.accepted()) {
         // The returned closure is destroyed here; its guard answers the
         // one-shot with pool_stopped, which nobody awaits any more.
-        co_return outcome_type::with_status(submitted.status() == blocking_submit_status::queue_full ? blocking_status::queue_full : blocking_status::pool_stopped);
+        co_return outcome_type::with_status(submitted.status() == post_status::queue_full ? blocking_status::queue_full : blocking_status::pool_stopped);
     }
 
     try {
@@ -455,10 +447,10 @@ template <typename fn_type>
             }
             co_return detail::completed_blocking_result(std::move(payload_value));
         }
-        if (waited.status() == worker_wait_status::timed_out) {
+        if (waited.status() == wait_status::timed_out) {
             co_return outcome_type::with_status(blocking_status::timed_out);
         }
-        if (waited.status() == worker_wait_status::cancelled) {
+        if (waited.status() == wait_status::cancelled) {
             co_return outcome_type::with_status(blocking_status::cancelled);
         }
         // Closed cannot happen -- this coroutine owns the receiver and is the only

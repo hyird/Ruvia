@@ -18,8 +18,8 @@
 #include <vector>
 
 #include "backend_config.h"
-#include "blocking_pool.h"
 #include "db_executor.h"
+#include "db_migration.h"
 #include "db_query.h"
 #include "db_repository.h"
 #include "db_schema.h"
@@ -66,8 +66,8 @@ task<void> demonstrate(db_client& db) {
     // The conflict target defaults to the primary key, as save() does.
     co_await devices.upsert(input, {.skip_update_if_no_values_changed_ = true});
 
-    const std::array<db_find_order, 1> find_order{{{"id", db_order_direction::asc}}};
-    const db_find_options find_options{.where_ = device::column<"id">().between(1, 100) && device::column<"name">().like("%station%") && device::column<"labels">().array_contains({"telemetry"}), .order_ = find_order, .take_ = 20};
+    const std::array find_order{device::column<"id">().asc()};
+    const db_find_options find_options{.where_ = device::column<"id">().between(1, 100) && device::column<"name">().like("%station%") && device::column<"labels">().array_contains({"telemetry"}), .order_ = find_order, .limit_ = 20};
     auto [found, total] = co_await devices.find_and_count(find_options);
     std::cout << "total=" << total << '\n';
     for (const auto& device : found) {
@@ -77,8 +77,8 @@ task<void> demonstrate(db_client& db) {
     device patch;
     patch.set<"name">("Pump station updated");
     co_await devices.update(device::column<"id">() == 1, patch);
-    co_await devices.increment(device::column<"id">() == 1, "revision", 1);
-    co_await devices.decrement(device::column<"id">() == 1, "revision", 1);
+    co_await devices.update(device::column<"id">() == 1, {device::column<"revision">().increment(1)});
+    co_await devices.update(device::column<"id">() == 1, {device::column<"revision">().decrement(1)});
     std::cout << "exists=" << co_await devices.exists({.where_ = device::column<"id">() == 1}) << '\n';
     const auto one = co_await devices.find_one({.where_ = device::column<"id">() == 1});
     if (one) {
@@ -116,12 +116,12 @@ task<void> demonstrate(db_client& db) {
     auto candidates = transactional.query_builder("candidate");
     candidates.where(device::column<"id">() == 1).limit(1).set_lock({.mode_ = db_row_lock::update, .skip_locked_ = true});
     auto claim = transactional.update_builder("target");
-    claim.update_from_cte("candidates", "candidate").set("name", "Claimed device").where(device::column<"id">("target") == device::column<"id">("candidate")).returning();
+    claim.update_from_cte("candidates", "candidate").set(device::column<"name">().set("Claimed device")).where(device::column<"id">("target") == device::column<"id">("candidate")).returning();
     auto claimed = transactional.query_builder("claimed");
     claimed.with("candidates", candidates).with("claimed", claim).from_cte("claimed");
     const auto claimed_devices = co_await claimed.get_many();
     std::cout << "claimed=" << claimed_devices.size() << '\n';
-    const db_find_options transaction_page{.where_ = device::column<"id">() == 1, .skip_ = 10, .take_ = 1};
+    const db_find_options transaction_page{.where_ = device::column<"id">() == 1, .offset_ = 10, .limit_ = 1};
     auto [empty_page, transaction_total] = co_await transactional.find_and_count(transaction_page);
     std::cout << "empty page=" << empty_page.size() << ", transaction total=" << transaction_total << '\n';
     const auto locked = co_await transactional.find_one({.where_ = device::column<"id">() == 1, .lock_ = db_lock_options{.mode_ = db_row_lock::update, .skip_locked_ = true}});
@@ -136,12 +136,12 @@ task<void> demonstrate(db_client& db) {
 task<void> demonstrate_cache(db_client& db) {
     auto handle = db.db();
     auto devices = handle.repository<device>();
-    const std::array<db_find_order, 1> cache_order{{{"id"}}};
-    const db_find_options options{.order_ = cache_order, .take_ = 20, .cache_ = db_cache_options{.id_ = "device-page", .duration_ = std::chrono::seconds(30)}};
+    const std::array cache_order{device::column<"id">().asc()};
+    const db_find_options options{.order_ = cache_order, .limit_ = 20, .cache_ = db_cache_options{.id_ = "device-page", .duration_ = std::chrono::seconds(30)}};
     auto [page, total] = co_await devices.find_and_count(options);
     std::cout << "cached page=" << page.size() << ", total=" << total << '\n';
     auto query = devices.query_builder();
-    query.cache(std::chrono::seconds(5));
+    query.cache({.duration_ = std::chrono::seconds(5)});
     std::cout << "cached count=" << co_await query.get_count() << '\n';
     // The id covers the page and the count find_and_count derived from it.
     const std::array<std::string_view, 1> ids{"device-page"};
@@ -223,14 +223,11 @@ int main(int argc, char** argv) {
         const example::environment env(&app.env());
         const auto settings = config(env);
         if (migrate) {
-            (void)example::apply_migrations(settings, changes);
+            ruvia::db_migrator::run(settings, changes);
         }
         if (execute) {
             asio::io_context context_value(asio::config_from_concurrency_hint(ASIO_CONCURRENCY_HINT_UNSAFE_IO));
-            // The loop looks a DNS RUVIA_DB_HOST up on this pool; declared
-            // first, it outlives the attachment.
-            blocking_pool host_lookups({.thread_count_ = 1});
-            auto attachment = attach_event_loop(context_value, {.blocking_pool_ = &host_lookups});
+            auto attachment = attach_event_loop(context_value);
             auto root = attachment.loop().start(run(settings, attachment, env));
             attachment.run();
             std::move(root).get();

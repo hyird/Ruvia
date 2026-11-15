@@ -141,7 +141,7 @@ public:
                 continuation = std::exchange(value->continuation_, {});
             }
             if (continuation) {
-                value->caller_.defer_resume(continuation);
+                detail::worker_ref_access::defer_resume(value->caller_, continuation);
             }
         }) {}
     runtime_control_completion(const runtime_control_completion&) = delete;
@@ -296,7 +296,7 @@ private:
             caller = next->caller_;
             continuation = std::exchange(next->continuation_, {});
         }
-        caller.defer_resume(continuation);
+        detail::worker_ref_access::defer_resume(caller, continuation);
     }
     std::mutex mutex_;
     acquire_operation* head_{};

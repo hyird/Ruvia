@@ -113,13 +113,13 @@ public:
     template <typename duration_type, typename expired_type, typename failure_type>
     void arm(const worker_ref& worker_value, duration_type bound, expired_type on_expired, failure_type on_failure) noexcept {
         try {
-            const auto status = worker_value.schedule_timer(timer_, deadline_after(bound), [on_expired](worker_timer_outcome outcome) {
+            const bool scheduled = timer_.schedule(worker_value, deadline_after(bound), [on_expired](worker_timer_outcome outcome) {
                 // Cancellation belongs to worker shutdown, which closes the session.
                 if (outcome == worker_timer_outcome::expired) {
                     on_expired();
                 }
             });
-            if (status == worker_timer_schedule_status::worker_stopping) {
+            if (!scheduled) {
                 on_expired();
             }
         } catch (...) {

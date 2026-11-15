@@ -24,7 +24,7 @@
 namespace ruvia::detail {
 
 [[noreturn]] inline void throw_invalid_postgresql_array() {
-    throw db_conversion_error(db_conversion_error::code_type::invalid_format, "malformed one-dimensional PostgreSQL array");
+    throw conversion_error(conversion_error::code_type::invalid_format, "malformed one-dimensional PostgreSQL array");
 }
 
 struct postgresql_array_text final {
@@ -166,7 +166,7 @@ template <db_mapped_value t_type>
         using v_type = typename is_optional<t_type>::value_type;
         return decode_array_element<v_type>(text);
     } else {
-        return convert_db_text<t_type>(text);
+        return convert_text<t_type>(text);
     }
 }
 
@@ -193,7 +193,7 @@ void decode_db_field(const db_field& field, t_type& out) {
                 if constexpr (is_optional<v_type>::value) {
                     out.emplace_back(std::nullopt);
                 } else {
-                    throw db_conversion_error(db_conversion_error::code_type::invalid_format, "NULL array element");
+                    throw conversion_error(conversion_error::code_type::invalid_format, "NULL array element");
                 }
             } else {
                 out.push_back(decode_array_element<v_type>(*element));
@@ -205,19 +205,19 @@ void decode_db_field(const db_field& field, t_type& out) {
         if (auto value = field.as<std::string_view>()) {
             out.assign(*value);
         } else {
-            throw db_conversion_error(db_conversion_error::code_type::unexpected_null, "NULL in non-nullable entity column");
+            throw conversion_error(conversion_error::code_type::unexpected_null, "NULL in non-nullable entity column");
         }
     } else if constexpr (std::is_same_v<u_type, string>) {
         if (auto value = field.as<std::string_view>()) {
             out.assign_owned(*value);
         } else {
-            throw db_conversion_error(db_conversion_error::code_type::unexpected_null, "NULL in non-nullable entity column");
+            throw conversion_error(conversion_error::code_type::unexpected_null, "NULL in non-nullable entity column");
         }
     } else {
         if (auto value = field.as<u_type>()) {
             out = *value;
         } else {
-            throw db_conversion_error(db_conversion_error::code_type::unexpected_null, "NULL in non-nullable entity column");
+            throw conversion_error(conversion_error::code_type::unexpected_null, "NULL in non-nullable entity column");
         }
     }
 }
@@ -230,7 +230,7 @@ void decode_entity_field(e_type& entity, const db_field& field) {
             entity.template set_null<c_type::name>();
             return;
         } else {
-            throw db_conversion_error(db_conversion_error::code_type::unexpected_null, "NULL in non-nullable database entity column");
+            throw conversion_error(conversion_error::code_type::unexpected_null, "NULL in non-nullable database entity column");
         }
     }
     using value_type = typename c_type::value_type;
@@ -275,7 +275,7 @@ public:
                 // SQL permits repeated result names; a mapped column must name exactly one.
                 const auto lookup = row.find(column_type::name.view());
                 if (lookup.status_ == unique_lookup_status::repeated) {
-                    throw db_conversion_error(db_conversion_error::code_type::invalid_format, "database result has ambiguous mapped column names");
+                    throw conversion_error(conversion_error::code_type::invalid_format, "database result has ambiguous mapped column names");
                 }
                 indices_[i] = lookup.status_ == unique_lookup_status::found ? static_cast<std::size_t>(lookup.field_ - row.begin()) : missing_column;
             });
@@ -287,7 +287,7 @@ public:
                 return;
             }
             if (indices_[i] == missing_column) {
-                throw db_conversion_error(db_conversion_error::code_type::missing_column, "database result has no such column");
+                throw conversion_error(conversion_error::code_type::missing_column, "database result has no such column");
             }
             decode_entity_field<e_type, column_type>(result, row[indices_[i]]);
         });
@@ -383,7 +383,7 @@ db_value entity_db_value(const t_type& value) {
 namespace ruvia {
 
 // Decoding owns every text/array element independently of db_rows. SQL NULL
-// requires an optional destination; malformed values keep db_conversion_error.
+// requires an optional destination; malformed values keep conversion_error.
 template <db_mapped_value value_type>
 [[nodiscard]] value_type decode_db_field(const db_field& field) {
     auto result = detail::entity_value_slot<value_type>::make_value();

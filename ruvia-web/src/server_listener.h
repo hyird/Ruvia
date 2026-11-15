@@ -302,7 +302,7 @@ public:
             continuation = std::exchange(continuation_, {});
         }
         if (continuation) {
-            caller_.defer_resume(continuation);
+            detail::worker_ref_access::defer_resume(caller_, continuation);
         }
     }
     struct decision_wait final {

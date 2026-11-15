@@ -114,7 +114,7 @@ TEST(Ruvia, db_mariadb_failed_pipelined_statement_does_not_fail_the_others) {
         co_await pipeline_test::query(handle, "SELECT v FROM d", outcomes[3]);
     });
     EXPECT_TRUE(outcomes[0].value_ == "a");
-    EXPECT_TRUE(outcomes[1].error_ == db_error::code_type::statement_failed);
+    EXPECT_TRUE(outcomes[1].error_ == backend_error_code::command_failed);
     EXPECT_TRUE(outcomes[1].sql_state_ == "42S02");
     EXPECT_TRUE(outcomes[2].value_ == "c");
     EXPECT_TRUE(outcomes[3].value_ == "d");
@@ -254,7 +254,7 @@ TEST(Ruvia, db_mariadb_stream_eof_and_procedure_status_share_one_read_deadline) 
         co_await pipeline_test::query(handle, "SELECT v FROM after_stream_timeout", next);
     });
     EXPECT_TRUE(completed_before_status);
-    EXPECT_TRUE(result.error_ == db_error::code_type::timeout);
+    EXPECT_TRUE(result.error_ == backend_error_code::timeout);
     EXPECT_TRUE(result.value_.empty());
     EXPECT_TRUE(next.value_ == "clean");
     EXPECT_EQ(peer.startups(), std::size_t{2});
@@ -440,7 +440,7 @@ TEST(Ruvia, db_mariadb_abandoned_pipelined_statement_does_not_affect_the_others)
             });
             for (std::size_t index = 0; index < sql.size(); ++index) {
                 if (index == abandoned_index) {
-                    EXPECT_TRUE(outcomes[index].error_ == (cancel ? db_error::code_type::cancelled : db_error::code_type::timeout));
+                    EXPECT_TRUE(outcomes[index].error_ == (cancel ? backend_error_code::cancelled : backend_error_code::timeout));
                     EXPECT_TRUE(outcomes[index].value_.empty());
                 } else {
                     EXPECT_TRUE(outcomes[index].value_ == values[index]);
@@ -477,8 +477,8 @@ TEST(Ruvia, db_mariadb_connection_is_closed_when_every_pipelined_statement_is_ab
         peer.release_replies();
         co_await pipeline_test::query(handle, "SELECT v FROM c", outcomes[2]);
     });
-    EXPECT_TRUE(outcomes[0].error_ == db_error::code_type::cancelled);
-    EXPECT_TRUE(outcomes[1].error_ == db_error::code_type::cancelled);
+    EXPECT_TRUE(outcomes[0].error_ == backend_error_code::cancelled);
+    EXPECT_TRUE(outcomes[1].error_ == backend_error_code::cancelled);
     EXPECT_TRUE(outcomes[2].value_ == "c");
     // The second statement was stopped before its command went out.
     EXPECT_TRUE((peer.maria_queries() == std::vector<std::string>({std::string("SELECT v FROM a"), std::string("SELECT v FROM c")})));
@@ -543,10 +543,10 @@ TEST(Ruvia, db_mariadb_lost_connection_fails_every_pipelined_statement) {
         if (first_answered) {
             EXPECT_TRUE(outcomes[0].value_ == "a");
         } else {
-            EXPECT_TRUE(outcomes[0].error_ == db_error::code_type::io_error);
+            EXPECT_TRUE(outcomes[0].error_ == backend_error_code::io_error);
         }
-        EXPECT_TRUE(outcomes[1].error_ == db_error::code_type::io_error);
-        EXPECT_TRUE(outcomes[2].error_ == db_error::code_type::io_error);
+        EXPECT_TRUE(outcomes[1].error_ == backend_error_code::io_error);
+        EXPECT_TRUE(outcomes[2].error_ == backend_error_code::io_error);
     }
 }
 
@@ -572,7 +572,7 @@ TEST(Ruvia, db_mariadb_close_ends_pipelined_statements_in_every_phase) {
         co_await statements.join();
     });
     for (const auto& result : outcomes) {
-        EXPECT_TRUE(result.error_ == db_error::code_type::cancelled || result.error_ == db_error::code_type::closing);
+        EXPECT_TRUE(result.error_ == backend_error_code::cancelled || result.error_ == backend_error_code::closing);
     }
 }
 
@@ -600,7 +600,7 @@ TEST(Ruvia, db_mariadb_read_timeout_fails_every_pipelined_statement) {
         co_await pipeline_test::query(handle, "SELECT v FROM d", outcomes[3]);
     });
     for (std::size_t index = 0; index < 3; ++index) {
-        EXPECT_TRUE(outcomes[index].error_ == db_error::code_type::timeout);
+        EXPECT_TRUE(outcomes[index].error_ == backend_error_code::timeout);
     }
     EXPECT_TRUE(outcomes[3].value_ == "d");
     EXPECT_EQ(peer.startups(), std::size_t{2});
@@ -638,7 +638,7 @@ TEST(Ruvia, db_mariadb_transaction_read_timeout_is_millisecond_bounded_and_retir
         }
     });
     EXPECT_TRUE(completed_before_reply);
-    EXPECT_TRUE(result.error_ == db_error::code_type::timeout);
+    EXPECT_TRUE(result.error_ == backend_error_code::timeout);
     EXPECT_TRUE(result.value_.empty());
     EXPECT_TRUE(next.value_ == "clean");
     EXPECT_EQ(peer.startups(), std::size_t{2});
@@ -705,7 +705,7 @@ TEST(Ruvia, db_mariadb_pipelined_server_error_above_the_client_range_fails_alone
         co_await pipeline_test::query(handle, "SELECT v FROM d", outcomes[3]);
     });
     EXPECT_TRUE(outcomes[0].value_ == "a");
-    EXPECT_TRUE(outcomes[1].error_ == db_error::code_type::statement_failed);
+    EXPECT_TRUE(outcomes[1].error_ == backend_error_code::command_failed);
     EXPECT_TRUE(outcomes[1].sql_state_ == "23000");
     EXPECT_TRUE(outcomes[2].value_ == "c");
     EXPECT_TRUE(outcomes[3].value_ == "d");
@@ -732,7 +732,7 @@ TEST(Ruvia, db_mariadb_server_error_ending_the_session_closes_the_connection) {
         co_await pipeline_test::query(handle, "SELECT v FROM c", outcomes[2]);
     });
     EXPECT_TRUE(outcomes[0].value_ == "a");
-    EXPECT_TRUE(outcomes[1].error_ == db_error::code_type::io_error);
+    EXPECT_TRUE(outcomes[1].error_ == backend_error_code::io_error);
     EXPECT_TRUE(outcomes[2].value_ == "fresh");
     EXPECT_EQ(peer.startups(), std::size_t{2});
 }
@@ -794,7 +794,7 @@ TEST(Ruvia, db_mariadb_disables_local_infile_even_for_leading_load_command) {
         co_await pipeline_test::query(handle, "SELECT v FROM d", outcomes[3]);
     });
     EXPECT_TRUE(outcomes[0].value_ == "a");
-    EXPECT_TRUE(outcomes[1].error_ == db_error::code_type::statement_failed);
+    EXPECT_TRUE(outcomes[1].error_ == backend_error_code::command_failed);
     EXPECT_TRUE(outcomes[2].value_ == "c");
     EXPECT_TRUE(outcomes[3].value_ == "d");
     EXPECT_TRUE((peer.maria_commands() == std::vector<std::string>({std::string("query:SELECT v FROM a"), std::string("query:") + load, std::string("infile:"), std::string("query:SELECT v FROM c"), std::string("query:SELECT v FROM d")})));
@@ -824,7 +824,7 @@ TEST(Ruvia, db_mariadb_refused_load_data_local_infile_fails_alone) {
         co_await statements.join();
     });
     EXPECT_TRUE(outcomes[0].value_ == "a");
-    EXPECT_TRUE(outcomes[1].error_ == db_error::code_type::statement_failed);
+    EXPECT_TRUE(outcomes[1].error_ == backend_error_code::command_failed);
     EXPECT_TRUE(outcomes[2].value_ == "c");
     EXPECT_TRUE((peer.maria_commands() == std::vector<std::string>({std::string("query:SELECT v FROM a"), std::string("query:") + load, std::string("infile:"), std::string("query:SELECT v FROM c")})));
     EXPECT_EQ(peer.startups(), std::size_t{1});

@@ -223,11 +223,11 @@ bool http2_client_session::begin_close(const client_transport_result& transport)
         // A client drain queues its final GOAWAY at once; idempotent. closed:
         // the connection already failed and its termination path runs.
         (void)connection_->begin_drain();
-        if (worker_.schedule_timer(close_timer_, deadline_after(http2_client_goaway_flush_time), [this, generation](worker_timer_outcome outcome) noexcept {
+        if (!close_timer_.schedule(worker_, deadline_after(http2_client_goaway_flush_time), [this, generation](worker_timer_outcome outcome) noexcept {
             if (outcome == worker_timer_outcome::expired) {
                 fail(generation, close_result_, {});
             }
-        }) != worker_timer_schedule_status::scheduled) {
+        })) {
             // A stopping worker cannot bound the flush.
             fail(generation, transport, {});
             return false;
@@ -273,7 +273,7 @@ bool http2_client_session::ended(std::uint64_t generation) const noexcept {
 }
 
 void http2_client_session::schedule_ping(std::uint64_t generation, std::chrono::steady_clock::time_point deadline) {
-    (void)worker_.schedule_timer(ping_timer_, deadline, [this, generation](worker_timer_outcome outcome) noexcept {
+    (void)ping_timer_.schedule(worker_, deadline, [this, generation](worker_timer_outcome outcome) noexcept {
         if (outcome == worker_timer_outcome::expired) {
             check_liveness(generation);
         }
@@ -525,7 +525,7 @@ void http_client_connection::schedule_http2_stream_timer(http2_stream& stream) {
 
 void http_client_connection::arm_http2_write_timer(worker_timer_registration& write_timer, const http2_stream& stream) {
     if (const auto deadline = stream.timeout_->constrained_by(stream.state_->effective_write_timeout_).deadline()) {
-        (void)pool_.worker().schedule_timer(write_timer, *deadline, [this, request_id = stream.request_id_](worker_timer_outcome outcome) noexcept {
+        (void)write_timer.schedule(pool_.worker(), *deadline, [this, request_id = stream.request_id_](worker_timer_outcome outcome) noexcept {
             if (outcome == worker_timer_outcome::expired) {
                 cancel_http2_stream(request_id, client_abort_reason::timeout);
             }
@@ -974,7 +974,7 @@ task<void> http_client_connection::wait_for_http2_session_stop(const operation_d
         if (*deadline <= std::chrono::steady_clock::now()) {
             throw http_client_error(std::make_error_code(std::errc::timed_out), "HTTP/2 session shutdown wait timed out");
         }
-        (void)pool_.worker().schedule_timer(deadline_timer, *deadline, [this](worker_timer_outcome outcome) noexcept {
+        (void)deadline_timer.schedule(pool_.worker(), *deadline, [this](worker_timer_outcome outcome) noexcept {
             if (outcome == worker_timer_outcome::expired) {
                 http2_.state_signal().notify();
             }

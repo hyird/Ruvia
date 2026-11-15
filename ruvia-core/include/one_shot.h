@@ -11,9 +11,10 @@
 #include <utility>
 #include <variant>
 
+#include "delivery_result.h"
 #include "operation_options.h"
+#include "wait_result.h"
 #include "worker_ref.h"
-#include "worker_result.h"
 #include "worker_wait.h"
 
 namespace ruvia {
@@ -30,7 +31,7 @@ template <typename t_type>
 class one_shot_completion;
 
 template <typename t_type>
-using one_shot_complete_result = worker_delivery_result<t_type, one_shot_complete_status, one_shot_complete_status::completed>;
+using one_shot_complete_result = delivery_result<t_type, one_shot_complete_status, one_shot_complete_status::completed>;
 
 namespace detail {
 
@@ -92,7 +93,7 @@ void one_shot_state<t_type>::worker_stopping() noexcept {
     if (std::holds_alternative<one_shot_pending>(lifecycle_) || std::holds_alternative<one_shot_completing>(lifecycle_)) {
         lifecycle_.template emplace<one_shot_worker_stopping>();
     }
-    wait_slot_.complete(worker_wait_status::worker_stopping);
+    wait_slot_.complete(wait_status::worker_stopping);
 }
 
 }  // namespace detail
@@ -113,7 +114,7 @@ public:
         // Payload code may synchronously rebind this handle while the call is active.
         const auto state = state_;
         if (state == nullptr) {
-            return detail::worker_delivery_access::reject<one_shot_complete_result<t_type>>(one_shot_complete_status::receiver_closed, std::move(value));
+            return detail::delivery_access::reject<one_shot_complete_result<t_type>>(one_shot_complete_status::receiver_closed, std::move(value));
         }
         std::optional<one_shot_complete_status> rejection;
         {
@@ -134,7 +135,7 @@ public:
             }
         }
         if (rejection) {
-            return detail::worker_delivery_access::reject<one_shot_complete_result<t_type>>(*rejection, std::move(value));
+            return detail::delivery_access::reject<one_shot_complete_result<t_type>>(*rejection, std::move(value));
         }
         try {
             state->ready_value_.emplace(std::move(value));
@@ -151,19 +152,19 @@ public:
                 rejection = one_shot_complete_status::receiver_closed;
             } else if (std::holds_alternative<detail::one_shot_worker_stopping>(state->lifecycle_) || !state->worker_.accepting()) {
                 state->lifecycle_.template emplace<detail::one_shot_worker_stopping>();
-                state->wait_slot_.complete(worker_wait_status::worker_stopping);
+                state->wait_slot_.complete(wait_status::worker_stopping);
                 rejection = one_shot_complete_status::worker_stopping;
             } else if (state->wait_slot_.occupied()) {
                 state->lifecycle_.template emplace<detail::one_shot_consumed>();
-                state->wait_slot_.complete(worker_wait_result<std::monostate>::with_value(std::monostate{}));
+                state->wait_slot_.complete(wait_result<std::monostate>::with_value(std::monostate{}));
             } else {
                 state->lifecycle_.template emplace<detail::one_shot_ready>();
             }
         }
         if (rejection) {
-            return detail::worker_delivery_access::reject<one_shot_complete_result<t_type>>(*rejection, state->take_ready_value());
+            return detail::delivery_access::reject<one_shot_complete_result<t_type>>(*rejection, state->take_ready_value());
         }
-        return detail::worker_delivery_access::accept<one_shot_complete_result<t_type>>();
+        return detail::delivery_access::accept<one_shot_complete_result<t_type>>();
     }
 
 private:
@@ -206,15 +207,15 @@ public:
             auto lock = owner_value.lock_state();
             if (std::holds_alternative<detail::one_shot_ready>(owner_value.lifecycle_)) {
                 owner_value.lifecycle_.template emplace<detail::one_shot_consumed>();
-                wait_.complete_ready(worker_wait_result<std::monostate>::with_value(std::monostate{}));
+                wait_.complete_ready(wait_result<std::monostate>::with_value(std::monostate{}));
                 return true;
             }
             if (std::holds_alternative<detail::one_shot_worker_stopping>(owner_value.lifecycle_)) {
-                wait_.complete_ready(worker_wait_status::worker_stopping);
+                wait_.complete_ready(wait_status::worker_stopping);
                 return true;
             }
             if (std::holds_alternative<detail::one_shot_receiver_closed>(owner_value.lifecycle_) || std::holds_alternative<detail::one_shot_consumed>(owner_value.lifecycle_)) {
-                wait_.complete_ready(worker_wait_status::closed);
+                wait_.complete_ready(wait_status::closed);
                 return true;
             }
             assert(std::holds_alternative<detail::one_shot_pending>(owner_value.lifecycle_) || std::holds_alternative<detail::one_shot_completing>(owner_value.lifecycle_));
@@ -225,12 +226,12 @@ public:
             return wait_.suspend(continuation);
         }
 
-        [[nodiscard]] worker_wait_result<t_type> await_resume() {
+        [[nodiscard]] wait_result<t_type> await_resume() {
             auto result = wait_.take_result();
             if (!result.has_value()) {
-                return worker_wait_result<t_type>::with_status(result.status());
+                return wait_result<t_type>::with_status(result.status());
             }
-            return worker_wait_result<t_type>::with_value(wait_.state().take_ready_value());
+            return wait_result<t_type>::with_value(wait_.state().take_ready_value());
         }
 
     private:
@@ -279,7 +280,7 @@ public:
                 return;
             }
             state->lifecycle_.template emplace<detail::one_shot_receiver_closed>();
-            state->wait_slot_.complete(worker_wait_status::closed);
+            state->wait_slot_.complete(wait_status::closed);
         }
         if (discard) {
             state->ready_value_.reset();

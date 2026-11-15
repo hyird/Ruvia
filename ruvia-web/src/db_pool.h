@@ -95,7 +95,7 @@ using db_stream_step = std::variant<db_row, db_stream_end>;
 // NUL-terminated storage for the entire hook call: raw SQL is checked once
 // where it enters (prepare_db_statement), compiled SQL is built that way, and
 // parameters are checked where they are encoded for the client library. Hooks
-// throw on failure. A statement_failed db_error or a std::invalid_argument
+// throw on failure. A command_failed db_error or a std::invalid_argument
 // promises that the command has been drained and the connection is idle -- a
 // hook that cannot get there closes the slot before throwing -- so the pool
 // keeps the connection; any other failure closes it.
@@ -239,7 +239,7 @@ public:
     struct slot_policy final {
         using owner_type = db_pool;
         using deadline_kind_type = db_deadline_kind;
-        [[noreturn]] static void throw_acquire_failure(const db_pool& pool, worker_wait_status status);
+        [[noreturn]] static void throw_acquire_failure(const db_pool& pool, wait_status status);
         [[noreturn]] static void throw_aborted(const db_pool& pool, pool_slot_abort_reason reason);
         static void expire_slot(db_pool& pool, std::size_t slot, db_deadline_kind kind) noexcept;
         static void cancel_slot(db_pool& pool, std::size_t slot) noexcept;

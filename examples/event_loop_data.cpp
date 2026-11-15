@@ -15,7 +15,6 @@
 #include <vector>
 
 #include "backend_config.h"
-#include "blocking_pool.h"
 #include "db_executor.h"
 #include "db_repository.h"
 #include "event_loop.h"
@@ -100,10 +99,7 @@ int main(int argc, char** argv) {
             sql.database_ = "postgres";
         }
         auto cache = example::redis_config(env);
-        // Both loops look DNS hosts up on this pool; IP literals need none.
-        // Declared first, it outlives the loops.
-        blocking_pool host_lookups({.thread_count_ = 1});
-        event_loop_pool pool({.loop_count_ = 2, .blocking_pool_ = &host_lookups});
+        event_loop_pool pool({.loop_count_ = 2});
         std::vector<std::unique_ptr<loop_backends>> backends;
         for (std::size_t index = 0; index < pool.loop_count(); ++index) {
             backends.push_back(std::make_unique<loop_backends>(pool.loop(index), sql, cache));

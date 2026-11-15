@@ -252,7 +252,7 @@ TEST(Ruvia, runtime_tls_listener_preparation_does_not_block_its_caller_worker) {
         entered.release();
         release.acquire();
     }),
-        ruvia::blocking_submit_status::accepted);
+        ruvia::post_status::accepted);
     entered.acquire();
 
     const auto loop = control_loop();

@@ -21,6 +21,7 @@
 #include <string_view>
 #include <system_error>
 #include <thread>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -464,7 +465,7 @@ TEST(Ruvia, redis_repository_script_reload_shares_the_operation_timeout) {
                         (void)co_await repository.insert(user);
                     }
                 } catch (const redis_error& error) {
-                    timed_out = error.code() == redis_error::code_type::timeout;
+                    timed_out = error.code() == backend_error_code::timeout;
                 }
             };
             auto root = worker.loop().start(test::exercise_backend_client(client, exercise));
@@ -487,8 +488,8 @@ TEST(Ruvia, redis_repository_script_reload_shares_the_operation_timeout) {
     }
 }
 
-// FT.SEARCH always pages; without take_ find() returns one default page.
-TEST(Ruvia, redis_repository_find_without_take_returns_one_default_page) {
+// FT.SEARCH always pages; without limit_ find() returns one default page.
+TEST(Ruvia, redis_repository_find_without_limit_returns_one_default_page) {
     for (const bool paged : {false, true}) {
         // An FT.SEARCH page that reports more matches than it returns.
         redis_command_server server(std::vector<std::string>({std::string("*1\r\n:150\r\n")}));
@@ -501,12 +502,12 @@ TEST(Ruvia, redis_repository_find_without_take_returns_one_default_page) {
                 const auto repository = connected.redis().repository<test_redis_user>(test_redis_user_mapping());
                 ruvia::redis_find_options options;
                 if (paged) {
-                    options.take_ = ruvia::redis_find_default_take;
+                    options.limit_ = ruvia::redis_find_default_limit;
                 }
                 returned_rows = (co_await repository.find(options)).size();
             });
         }
-        // An unset take_ is the same request as an explicit default page.
+        // An unset limit_ is the same request as an explicit default page.
         EXPECT_EQ(returned_rows, std::optional<std::size_t>(0U));
         EXPECT_EQ(server.commands().size(), std::size_t{1});
         if (server.commands().size() == 1) {
@@ -556,7 +557,7 @@ TEST(Ruvia, redis_repository_pre_cancelled_operations_report_cancellation) {
                     auto operation = repository.exists({.where_ = test_redis_user::column<"name">() == id});
                     (void)co_await std::move(operation);
                 } catch (const ruvia::redis_error& error) {
-                    cancelled = error.code() == ruvia::redis_error::code_type::cancelled;
+                    cancelled = error.code() == ruvia::backend_error_code::cancelled;
                 }
                 EXPECT_TRUE(cancelled);
             }
@@ -588,7 +589,7 @@ TEST(Ruvia, redis_repository_input_may_die_before_a_cancelled_await) {
             try {
                 (void)co_await std::move(pending);
             } catch (const ruvia::redis_error& error) {
-                cancelled = error.code() == ruvia::redis_error::code_type::cancelled;
+                cancelled = error.code() == ruvia::backend_error_code::cancelled;
             }
             EXPECT_TRUE(cancelled);
         };
@@ -606,7 +607,7 @@ TEST(Ruvia, redis_repository_inflight_operation_observes_cancellation) {
         ruvia::redis_client client(worker.loop(), config);
         ruvia::stop_source cancellation;
 
-        std::optional<ruvia::redis_error::code_type> observed_error;
+        std::optional<ruvia::backend_error_code> observed_error;
         auto exercise = [&](ruvia::redis_client& connected) -> ruvia::task<void> {
             const auto repository = connected.redis().with_options({.stop_token_ = cancellation.token()}).repository<test_redis_user>(test_redis_user_mapping());
             try {
@@ -633,7 +634,7 @@ TEST(Ruvia, redis_repository_inflight_operation_observes_cancellation) {
         runner.join();
         server.finish();
         std::move(root).get();
-        EXPECT_EQ(observed_error, std::optional{ruvia::redis_error::code_type::cancelled});
+        EXPECT_EQ(observed_error, std::optional{ruvia::backend_error_code::cancelled});
         if (peer_failure) {
             std::rethrow_exception(peer_failure);
         }
@@ -663,22 +664,22 @@ TEST(Ruvia, redis_repository_rejects_invalid_input_before_io) {
         }));
         for (const auto invalid : {std::numeric_limits<std::int64_t>::min(), std::numeric_limits<std::int64_t>::min() + 5, std::int64_t{-1}}) {
             EXPECT_TRUE(throws_invalid_argument([&] {
-                (void)repository.find_one({.take_ = invalid});
+                (void)repository.find_one({.limit_ = invalid});
             }));
             EXPECT_TRUE(throws_invalid_argument([&] {
-                (void)repository.count({.skip_ = invalid});
+                (void)repository.count({.offset_ = invalid});
             }));
         }
         for (const auto invalid : {static_cast<std::uint64_t>((std::numeric_limits<std::int64_t>::max)()) + 1, (std::numeric_limits<std::uint64_t>::max)()}) {
             EXPECT_TRUE(throws_invalid_argument([&] {
-                (void)repository.find_one({.take_ = invalid});
+                (void)repository.find_one({.limit_ = invalid});
             }));
             EXPECT_TRUE(throws_invalid_argument([&] {
-                (void)repository.count({.skip_ = invalid});
+                (void)repository.count({.offset_ = invalid});
             }));
         }
         EXPECT_TRUE(throws_invalid_argument([&] {
-            (void)repository.exists({.order_ = ruvia::redis_find_order{.column_ = "missing_field"}});
+            (void)repository.exists({.order_ = test_redis_user::column<"role">().asc()});
         }));
 
         const auto indexed_user_mapping = ruvia::redis_search_mapping::create<test_redis_user>({
@@ -810,6 +811,10 @@ const ruvia::redis_repository_config search_config{
 template <typename command_type>
 concept borrows_temporary_command = requires(command_type command) { std::move(command).arguments(); };
 static_assert(!borrows_temporary_command<ruvia::redis_compiled_command>);
+// Sort fields come only from typed field references.
+static_assert(!std::is_aggregate_v<ruvia::redis_find_order>);
+static_assert(!std::is_constructible_v<ruvia::redis_find_order, std::string_view, ruvia::redis_order_direction>);
+static_assert(std::is_same_v<decltype(std::declval<const ruvia::redis_error&>().code()), ruvia::backend_error_code>);
 }  // namespace
 
 TEST(Ruvia, redis_search_compilation_owns_configuration_and_binary_predicates) {
@@ -821,12 +826,11 @@ TEST(Ruvia, redis_search_compilation_owns_configuration_and_binary_predicates) {
         const auto mapping = ruvia::redis_search_mapping::create<redis_query_user>(config);
         column.assign("age");
         std::string text("a|{ }\0", 6);
-        std::string order = "email";
         ruvia::redis_find_options options{
             .where_ = redis_query_user::column<"email">() == text,
-            .order_ = ruvia::redis_find_order{.column_ = order, .direction_ = ruvia::redis_order_direction::desc},
-            .skip_ = 2,
-            .take_ = 3,
+            .order_ = redis_query_user::column<"email">().desc(),
+            .offset_ = 2,
+            .limit_ = 3,
         };
         text.assign("changed");
         return mapping.compile_find(options);
@@ -852,8 +856,8 @@ TEST(Ruvia, redis_search_mapping_rejects_invalid_schema_and_query_fields_offline
     EXPECT_THROW((void)mapping.compile_find({.where_ = redis_signed_pk_entity::column<"id">() == 1}), std::invalid_argument);
     EXPECT_THROW((void)mapping.compile_find({.where_ = redis_query_user::column<"age">() == true}), std::invalid_argument);
     EXPECT_THROW((void)mapping.compile_find({.where_ = redis_query_user::column<"age">() == std::uint64_t{9007199254740992}}), std::invalid_argument);
-    EXPECT_THROW((void)mapping.compile_find({.order_ = ruvia::redis_find_order{.column_ = "missing"}}, ruvia::redis_search_mode::count), std::invalid_argument);
-    EXPECT_THROW((void)mapping.compile_find({.order_ = ruvia::redis_find_order{.column_ = "age"}}), std::invalid_argument);
+    EXPECT_THROW((void)mapping.compile_find({.order_ = redis_query_user::column<"age">().asc()}, ruvia::redis_search_mode::count), std::invalid_argument);
+    EXPECT_THROW((void)mapping.compile_find({.order_ = redis_query_user::column<"age">().asc()}), std::invalid_argument);
     const auto no_indexes = mapping_type::create<redis_query_user>();
     EXPECT_THROW((void)no_indexes.compile_create_index(), std::invalid_argument);
 }
@@ -864,10 +868,10 @@ TEST(Ruvia, redis_search_compilation_preserves_empty_tag_and_zero_first_page) {
     const auto missing = mapping.compile_find({.where_ = redis_query_user::column<"email">().is_null()});
     EXPECT_EQ(empty.arguments()[2], "@email:{x}");
     EXPECT_EQ(missing.arguments()[2], "-@__ruvia_present_email:{1}");
-    const auto first = mapping.compile_find({.skip_ = 9, .take_ = 0}, ruvia::redis_search_mode::first);
+    const auto first = mapping.compile_find({.offset_ = 9, .limit_ = 0}, ruvia::redis_search_mode::first);
     EXPECT_EQ(first.arguments()[4], "9");
     EXPECT_EQ(first.arguments()[5], "0");
-    const auto count = mapping.compile_find({.skip_ = 9, .take_ = 4}, ruvia::redis_search_mode::count);
+    const auto count = mapping.compile_find({.offset_ = 9, .limit_ = 4}, ruvia::redis_search_mode::count);
     EXPECT_EQ(count.arguments()[4], "0");
     EXPECT_EQ(count.arguments()[5], "0");
 }
@@ -1045,8 +1049,8 @@ TEST(Ruvia, redis_entity_supports_8bit_integers) {
 }
 
 TEST(Ruvia, redis_error_uses_runtime_error_message_and_stable_code) {
-    const ruvia::redis_error error(ruvia::redis_error::code_type::timeout, "redis timed out");
-    EXPECT_TRUE(error.code() == ruvia::redis_error::code_type::timeout);
+    const ruvia::redis_error error(ruvia::backend_error_code::timeout, "redis timed out");
+    EXPECT_TRUE(error.code() == ruvia::backend_error_code::timeout);
     EXPECT_EQ(std::string_view(error.what()), std::string_view("redis timed out"));
 }
 
@@ -1491,7 +1495,7 @@ ruvia::task<void> check_owned_transaction(ruvia::redis_client& client, redis_pee
         accepted = true;
     } catch (const ruvia::redis_error& error) {
         EXPECT_TRUE(mode != redis_peer::mode_type::transaction_success);
-        EXPECT_TRUE(error.code() == ruvia::redis_error::code_type::command_error);
+        EXPECT_TRUE(error.code() == ruvia::backend_error_code::command_failed);
         if (mode == redis_peer::mode_type::transaction_queue_error) {
             EXPECT_TRUE((std::string_view(error.what()).find("reply 1") != std::string_view::npos));
             EXPECT_TRUE((std::string_view(error.what()).find("queue failed") != std::string_view::npos));
@@ -1510,7 +1514,7 @@ ruvia::task<void> check_oversized_reply(ruvia::redis_client& client) {
     try {
         (void)co_await client.redis().get("large");
     } catch (const ruvia::redis_error& error) {
-        rejected = error.code() == ruvia::redis_error::code_type::protocol_error;
+        rejected = error.code() == ruvia::backend_error_code::protocol_error;
     }
     EXPECT_TRUE(rejected);
     co_await client.shutdown();
@@ -1522,7 +1526,7 @@ ruvia::task<void> check_huge_declared_array(ruvia::redis_client& client) {
     try {
         co_await client.redis().ping();
     } catch (const ruvia::redis_error& error) {
-        rejected = error.code() == ruvia::redis_error::code_type::protocol_error;
+        rejected = error.code() == ruvia::backend_error_code::protocol_error;
     }
     EXPECT_TRUE(rejected);
     co_await client.shutdown();
@@ -1552,7 +1556,7 @@ ruvia::task<void> check_reconnect_after_budget_rejection(ruvia::redis_client& cl
     try {
         co_await redis.ping();
     } catch (const ruvia::redis_error& error) {
-        rejected = error.code() == ruvia::redis_error::code_type::protocol_error;
+        rejected = error.code() == ruvia::backend_error_code::protocol_error;
     }
     EXPECT_TRUE(rejected);
     co_await redis.ping();
@@ -1598,7 +1602,7 @@ ruvia::task<void> check_runtime_handle_timeout(ruvia::event_loop loop, ruvia::re
     try {
         (void)co_await std::move(cold_operation);
     } catch (const ruvia::redis_error& error) {
-        command_timed_out = error.code() == ruvia::redis_error::code_type::timeout;
+        command_timed_out = error.code() == ruvia::backend_error_code::timeout;
     }
     const auto elapsed = std::chrono::steady_clock::now() - started;
     EXPECT_TRUE(command_timed_out);
@@ -1620,7 +1624,7 @@ ruvia::task<void> check_runtime_handle_cancellation_group(ruvia::event_loop loop
     try {
         (void)co_await derived.command("STALL");
     } catch (const ruvia::redis_error& error) {
-        cancelled = error.code() == ruvia::redis_error::code_type::cancelled;
+        cancelled = error.code() == ruvia::backend_error_code::cancelled;
     }
     EXPECT_TRUE(cancelled);
     co_await client.shutdown();
@@ -1676,7 +1680,7 @@ TEST(Ruvia, redis_client_accepts_many_user_sources_and_replaces_old_handle_cance
             try {
                 (void)co_await std::move(cold);
             } catch (const ruvia::redis_error& error) {
-                cancelled = error.code() == ruvia::redis_error::code_type::cancelled;
+                cancelled = error.code() == ruvia::backend_error_code::cancelled;
             }
             EXPECT_TRUE(cancelled);
             co_await client.shutdown();
@@ -1709,7 +1713,7 @@ TEST(Ruvia, redis_client_cold_operation_retains_explicit_group_after_handle_dest
         try {
             (void)co_await std::move(cold);
         } catch (const ruvia::redis_error& error) {
-            cancelled = error.code() == ruvia::redis_error::code_type::cancelled;
+            cancelled = error.code() == ruvia::backend_error_code::cancelled;
         }
         EXPECT_TRUE(cancelled);
         co_await client.redis().ping();
@@ -1742,7 +1746,7 @@ TEST(Ruvia, redis_client_needs_a_loop_with_a_blocking_pool_to_look_up_a_dns_host
     const ruvia::redis_config config{.host_ = "localhost", .tls_ = {.mode_ = ruvia::client_tls_mode::disabled}};
     bool rejected = false;
     {
-        ruvia::event_loop_pool pool({.loop_count_ = 1});
+        ruvia::event_loop_pool pool({.loop_count_ = 1, .blocking_pool_ = static_cast<ruvia::blocking_pool*>(nullptr)});
         try {
             ruvia::redis_client client(pool.loop(0), config);
         } catch (const std::invalid_argument&) {
@@ -2006,7 +2010,7 @@ TEST(Ruvia, redis_client_expire_at_preserves_the_requested_deadline) {
     EXPECT_EQ(command, (std::vector<std::string>({std::string("PEXPIREAT"), std::string("session"), std::string("2000000000002")})));
 }
 
-ruvia::task<void> check_pipeline_abort_and_reconnect(ruvia::redis_client& client, ruvia::operation_options options, ruvia::redis_error::code_type expected, std::string_view barrier = {}) {
+ruvia::task<void> check_pipeline_abort_and_reconnect(ruvia::redis_client& client, ruvia::operation_options options, ruvia::backend_error_code expected, std::string_view barrier = {}) {
     co_await client.connect();
     std::exception_ptr failure;
     try {
@@ -2054,7 +2058,7 @@ TEST(Ruvia, redis_pipeline_timeout_and_cancellation_release_the_slot_for_reconne
         ruvia::redis_client client(pool.loop(0), peer.config());
         ruvia::stop_source stop;
         pool.start();
-        auto pending = pool.loop(0).start(check_pipeline_abort_and_reconnect(client, {.timeout_ = cancel ? std::chrono::seconds(5) : std::chrono::milliseconds(100), .stop_token_ = stop.token()}, cancel ? ruvia::redis_error::code_type::cancelled : ruvia::redis_error::code_type::timeout));
+        auto pending = pool.loop(0).start(check_pipeline_abort_and_reconnect(client, {.timeout_ = cancel ? std::chrono::seconds(5) : std::chrono::milliseconds(100), .stop_token_ = stop.token()}, cancel ? ruvia::backend_error_code::cancelled : ruvia::backend_error_code::timeout));
         peer.wait_for_blocked_command();
         if (cancel) {
             stop.request_stop();
@@ -2080,7 +2084,7 @@ TEST(Ruvia, redis_pipeline_barrier_timeout_cancellation_and_protocol_failure_ret
             if (!pool_timeout) {
                 options.timeout_ = cancel || malformed ? std::chrono::seconds(5) : std::chrono::milliseconds(100);
             }
-            const auto expected = malformed ? ruvia::redis_error::code_type::protocol_error : (cancel ? ruvia::redis_error::code_type::cancelled : ruvia::redis_error::code_type::timeout);
+            const auto expected = malformed ? ruvia::backend_error_code::protocol_error : (cancel ? ruvia::backend_error_code::cancelled : ruvia::backend_error_code::timeout);
             pool.start();
             auto pending = pool.loop(0).start(check_pipeline_abort_and_reconnect(client, options, expected, barrier));
             peer.wait_for_blocked_command();
@@ -2317,7 +2321,7 @@ TEST(Ruvia, redis_tls_rejects_untrusted_and_wrong_name_before_authentication) {
         try {
             pool.loop(0).start(client.connect()).get();
         } catch (const ruvia::redis_error& error) {
-            rejected = error.code() == ruvia::redis_error::code_type::connect_failed;
+            rejected = error.code() == ruvia::backend_error_code::connect_failed;
         }
         EXPECT_TRUE(rejected);
         pool.loop(0).start(client.shutdown()).get();

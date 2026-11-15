@@ -77,7 +77,7 @@ void retire_websocket(std::shared_ptr<detail::websocket_state> state) noexcept {
     if (state->owner_) {
         state->abort();
     }
-    state->operation_scope_.expire();
+    state->operation_scope_.seal();
     if (auto owner = std::exchange(state->owner_, nullptr)) {
         if (state->retire_) {
             state->retire_(owner.get());
@@ -166,7 +166,7 @@ task<std::optional<websocket_message>> detail::websocket_state::read(operation_o
     if (read_timeout_) {
         operation = override_operation_options({.timeout_ = read_timeout_->value()}, std::move(operation));
     }
-    return make_scoped_operation(operation_scope_, read_websocket(target_, read_, read_active_, std::move(operation)));
+    return operation_scope_.attach(read_websocket(target_, read_, read_active_, std::move(operation)));
 }
 task<void> detail::websocket_state::send(websocket_message&& message, websocket_send_options options, operation_options operation) & {
     require_active();
@@ -176,14 +176,14 @@ task<void> detail::websocket_state::send(websocket_message&& message, websocket_
     }
     auto read_lease = detail::claim_operation_lane(read_active_, "websocket message send cannot overlap a read");
     auto message_lease = detail::claim_operation_lane(message_send_active_, "websocket message send is already pending");
-    return make_scoped_operation(operation_scope_, write_websocket_message(target_, write_, message, std::move(read_lease), std::move(message_lease), write_active_, options.compress_, std::move(operation)));
+    return operation_scope_.attach(write_websocket_message(target_, write_, message, std::move(read_lease), std::move(message_lease), write_active_, options.compress_, std::move(operation)));
 }
 
 task<void> detail::websocket_state::close(websocket_close_options options, operation_options operation) & {
     require_active();
     operation = override_operation_options(defaults_, std::move(operation));
     std::string owned(options.reason_.view());
-    return make_scoped_operation(operation_scope_, close_websocket_with_reason(target_, close_, options, std::move(owned), std::move(operation), read_active_, write_active_, message_send_active_));
+    return operation_scope_.attach(close_websocket_with_reason(target_, close_, options, std::move(owned), std::move(operation), read_active_, write_active_, message_send_active_));
 }
 
 void detail::websocket_state::abort() & noexcept {
@@ -252,7 +252,7 @@ task<void> detail::websocket_state::write(websocket_opcode opcode, outbound_byte
         throw std::logic_error("a fragmented websocket message is in progress");
     }
     operation = override_operation_options(defaults_, std::move(operation));
-    return make_scoped_operation(operation_scope_, write_websocket_payload(target_, write_, opcode, std::move(payload_value).into_string(), write_active_, compress, extent, std::move(operation), fragmented_message_active_));
+    return operation_scope_.attach(write_websocket_payload(target_, write_, opcode, std::move(payload_value).into_string(), write_active_, compress, extent, std::move(operation), fragmented_message_active_));
 }
 
 websocket_message_writer detail::websocket_state::begin_text(websocket_send_options options) & {
@@ -278,21 +278,21 @@ websocket_message_writer::websocket_message_writer(detail::websocket_state& owne
     message_id_(owner.fragmented_message_sequence_),
     opcode_(opcode),
     compress_(compress),
-    registration_(owner.operation_scope_, this, &websocket_message_writer::expire_capability) {}
+    registration_(owner.operation_scope_, *this) {}
 
 websocket_message_writer::websocket_message_writer(websocket_message_writer&& other) noexcept :
     owner_(std::exchange(other.owner_, nullptr)),
     message_id_(other.message_id_),
     opcode_(other.opcode_),
     compress_(other.compress_),
-    registration_(std::move(other.registration_), this) {}
+    registration_(std::move(other.registration_), *this) {}
 
 websocket_message_writer::~websocket_message_writer() {
     abort();
 }
 
-void websocket_message_writer::expire_capability(void* target) noexcept {
-    static_cast<websocket_message_writer*>(target)->owner_ = nullptr;
+void websocket_message_writer::expire_capability() noexcept {
+    owner_ = nullptr;
 }
 
 bool websocket_message_writer::message_open() const noexcept {

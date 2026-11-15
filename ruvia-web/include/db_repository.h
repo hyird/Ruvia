@@ -35,23 +35,17 @@ namespace ruvia {
 template <typename entity_type, typename executor_type>
 class db_write_query_builder;
 
-struct db_find_order final {
-    borrowed_text column_{};
-    db_order_direction direction_{db_order_direction::asc};
-    db_nulls_order nulls_{db_nulls_order::default_};
-};
-
 // span 及元素中的文本均为借用；repository 调用入口同步复制或导入。
 // 独立保存 options 时，数组及文本 owner 必须存活到入口消费完成。
 struct db_find_options final {
-    borrowed_span<borrowed_text> select_{};
+    borrowed_span<db_selection> select_{};
     db_predicate where_{};
     borrowed_span<borrowed_text> relations_{};
-    borrowed_span<db_find_order> order_{};
-    std::optional<query_row_count> skip_{};
-    std::optional<query_row_count> take_{};
+    borrowed_span<db_order_term> order_{};
+    std::optional<query_row_count> offset_{};
+    std::optional<query_row_count> limit_{};
     std::optional<db_lock_options> lock_{};
-    db_cache_setting_type cache_{};
+    std::optional<db_cache_options> cache_{};
     bool with_deleted_{false};
 };
 
@@ -370,7 +364,7 @@ public:
         for (const auto& row : rows) {
             const auto key = make_key<entity_type>(row, 0, 0, db_relation_plan::root);
             if (!key) {
-                throw db_conversion_error(db_conversion_error::code_type::unexpected_null, "NULL root primary key in a relation query");
+                throw conversion_error(conversion_error::code_type::unexpected_null, "NULL root primary key in a relation query");
             }
             auto position = identities_.find(*key);
             db_graph_identity identity;
@@ -395,10 +389,10 @@ private:
         const auto resolve = [&](std::string_view name) {
             const auto lookup = row.find(name);
             if (lookup.status_ == unique_lookup_status::repeated) {
-                throw db_conversion_error(db_conversion_error::code_type::invalid_format, "duplicate entity projection name in a relation query");
+                throw conversion_error(conversion_error::code_type::invalid_format, "duplicate entity projection name in a relation query");
             }
             if (lookup.status_ == unique_lookup_status::absent) {
-                throw db_conversion_error(db_conversion_error::code_type::missing_column, "relation query must select every mapped entity column");
+                throw conversion_error(conversion_error::code_type::missing_column, "relation query must select every mapped entity column");
             }
             return static_cast<std::size_t>(lookup.field_ - row.begin());
         };
@@ -451,7 +445,7 @@ private:
                 }
             });
             if (nulls != 0 && nulls != db_primary_key_count<entity_type>()) {
-                throw db_conversion_error(db_conversion_error::code_type::unexpected_null, "partially NULL composite primary key in a relation query");
+                throw conversion_error(conversion_error::code_type::unexpected_null, "partially NULL composite primary key in a relation query");
             }
             if (nulls != 0) {
                 return std::nullopt;
@@ -498,7 +492,7 @@ private:
             } else {
                 if (!key) {
                     if (entity.template is_set<relation_type::name>() && !entity.template is_null<relation_type::name>()) {
-                        throw db_conversion_error(db_conversion_error::code_type::unexpected_row_count, "inconsistent to-one rows in a relation query");
+                        throw conversion_error(conversion_error::code_type::unexpected_row_count, "inconsistent to-one rows in a relation query");
                     }
                     db_entity_access<entity_type>::template set_relation_null<relation_type::name>(entity);
                     return;
@@ -507,7 +501,7 @@ private:
                 db_graph_identity identity;
                 if (position == identities_.end()) {
                     if (entity.template is_set<relation_type::name>()) {
-                        throw db_conversion_error(db_conversion_error::code_type::unexpected_row_count, "to-one relation returned more than one target");
+                        throw conversion_error(conversion_error::code_type::unexpected_row_count, "to-one relation returned more than one target");
                     }
                     identity = {0, next_scope_++};
                     auto& child_value = db_entity_access<entity_type>::template emplace_relation<relation_type::name>(entity);
@@ -546,7 +540,7 @@ struct db_map_one_related_entity final {
             return std::nullopt;
         }
         if (entities.size() != 1) {
-            throw db_conversion_error(db_conversion_error::code_type::unexpected_row_count, "single-entity relation query returned multiple roots");
+            throw conversion_error(conversion_error::code_type::unexpected_row_count, "single-entity relation query returned multiple roots");
         }
         return std::optional<entity_type>(std::in_place, std::move(entities[0]));
     }
@@ -572,24 +566,6 @@ void import_db_expressions(std::span<const source_type> sources, import_type&& i
         imported.push_back(import_one(source));
     }
     consume(std::span<const staged_type>(imported));
-}
-
-// Stages borrowed column names as one db_selection list for `consume`.
-template <std::size_t inline_capacity, typename name_type, typename consume_type>
-decltype(auto) stage_db_selections(std::span<const name_type> columns, consume_type&& consume) {
-    if (columns.size() <= inline_capacity) {
-        std::array<db_selection, inline_capacity> selections{};
-        for (std::size_t i = 0; i < columns.size(); ++i) {
-            selections[i] = db_selection{columns[i]};
-        }
-        return consume(std::span<const db_selection>(selections.data(), columns.size()));
-    }
-    std::vector<db_selection> selections;
-    selections.reserve(columns.size());
-    for (const auto& column : columns) {
-        selections.emplace_back(column);
-    }
-    return consume(std::span<const db_selection>(selections));
 }
 
 }  // namespace detail
@@ -751,15 +727,16 @@ void select_entity(db_query& query, std::string_view alias) {
 }
 template <typename e_type>
 void apply_find_options(db_query& query, const db_find_options& options, std::string_view alias = {}) {
-    query.cache(options.cache_);
+    if (options.cache_) {
+        query.cache(*options.cache_);
+    }
     if (!options.where_.empty()) {
         query.where(options.where_.expression(query, e_type::table_name(), alias));
     }
-    for (const auto& order : options.order_) {
-        require_db_column(db_entity_columns<e_type>, order.column_);
-        query.add_order_by(db_expr(detail::db_owned_expression::make_static_column(order.column_, alias.empty() ? e_type::table_name() : alias, {})), order.direction_, order.nulls_);
+    for (const auto& term : options.order_) {
+        query.add_order_by(term.expression_.expression(query, e_type::table_name(), alias), term.direction_, term.nulls_);
     }
-    query.offset(options.skip_).limit(options.take_);
+    query.offset(options.offset_).limit(options.limit_);
     if (options.lock_) {
         query.lock(*options.lock_);
     }
@@ -772,11 +749,11 @@ struct db_map_count final {
 struct db_map_exists final {
     bool operator()(db_rows&& rows) const {
         if (rows.size() != 1) {
-            throw db_conversion_error(db_conversion_error::code_type::unexpected_row_count, "database exists did not return exactly one row");
+            throw conversion_error(conversion_error::code_type::unexpected_row_count, "database exists did not return exactly one row");
         }
         const auto value = rows.front()["exists"].template as<bool>();
         if (!value) {
-            throw db_conversion_error(db_conversion_error::code_type::unexpected_null, "database exists column is NULL");
+            throw conversion_error(conversion_error::code_type::unexpected_null, "database exists column is NULL");
         }
         return *value;
     }
@@ -888,7 +865,7 @@ struct db_map_scalars final {
         result.reserve(rows.size());
         for (const auto& row : rows) {
             if (!row[std::size_t{0}].value()) {
-                throw db_conversion_error(db_conversion_error::code_type::unexpected_null, "database scalar column is NULL");
+                throw conversion_error(conversion_error::code_type::unexpected_null, "database scalar column is NULL");
             }
             result.push_back(::ruvia::decode_db_field<scalar_type>(row[std::size_t{0}]));
         }
@@ -908,7 +885,7 @@ struct db_map_required_one final {
     db_map_projection<e_type> mapper_;
     e_type operator()(db_rows&& rows) const {
         if (rows.size() != 1) {
-            throw db_conversion_error(db_conversion_error::code_type::unexpected_row_count, "database save did not return the saved row");
+            throw conversion_error(conversion_error::code_type::unexpected_row_count, "database save did not return the saved row");
         }
         db_entity_row_decoder<e_type> decoder(mapper_.selected_columns_, mapper_.wildcard_);
         return decoder.decode(rows.front());
@@ -962,11 +939,6 @@ public:
     db_query_builder& select(std::initializer_list<db_selection> fields_value) {
         return select(std::span<const db_selection>(fields_value.begin(), fields_value.size()));
     }
-    db_query_builder& select(std::span<const std::string_view> columns) {
-        return detail::stage_db_selections<column_capacity>(columns, [this](std::span<const db_selection> selections) -> db_query_builder& {
-            return select(selections);
-        });
-    }
     db_query_builder& select(const db_expr& expression, borrowed_text alias_name) {
         return select({expression.as(alias_name)});
     }
@@ -994,9 +966,6 @@ public:
     }
     db_query_builder& add_select(std::initializer_list<db_selection> fields_value) {
         return add_select(std::span<const db_selection>(fields_value.begin(), fields_value.size()));
-    }
-    db_query_builder& add_select(std::string_view column) {
-        return add_select({db_selection{column}});
     }
     db_query_builder& add_select(const db_expr& expression, borrowed_text alias_name) {
         return add_select({expression.as(alias_name)});
@@ -1150,17 +1119,6 @@ public:
     db_query_builder& group_by(std::initializer_list<db_expr> expressions) {
         return group_by(std::span<const db_expr>(expressions.begin(), expressions.size()));
     }
-    db_query_builder& group_by(std::span<const std::string_view> columns) {
-        detail::import_db_expressions(columns, [this](std::string_view column) {
-            return db_expr(import_entity_column(column));
-        }, [this](std::span<const db_expr> imported) {
-            query_.group_by(imported);
-        });
-        return *this;
-    }
-    db_query_builder& group_by(std::initializer_list<std::string_view> columns) {
-        return group_by(std::span<const std::string_view>(columns.begin(), columns.size()));
-    }
     db_query_builder& add_group_by(std::span<const db_expr> expressions) {
         for (const auto& expression : expressions) {
             query_.add_group_by(import_entity_expression(expression));
@@ -1169,10 +1127,6 @@ public:
     }
     db_query_builder& add_group_by(std::initializer_list<db_expr> expressions) {
         return add_group_by(std::span<const db_expr>(expressions.begin(), expressions.size()));
-    }
-    db_query_builder& add_group_by(std::string_view column) {
-        query_.add_group_by(import_entity_column(column));
-        return *this;
     }
     db_query_builder& having(const db_predicate& predicate) {
         query_.having(predicate.expression(query_, entity_type::table_name(), alias_));
@@ -1239,17 +1193,6 @@ public:
     db_query_builder& distinct_on(std::initializer_list<db_expr> expressions) {
         return distinct_on(std::span<const db_expr>(expressions.begin(), expressions.size()));
     }
-    db_query_builder& distinct_on(std::span<const std::string_view> columns) {
-        detail::import_db_expressions(columns, [this](std::string_view column) {
-            return db_expr(import_entity_column(column));
-        }, [this](std::span<const db_expr> imported) {
-            query_.distinct_on(imported);
-        });
-        return *this;
-    }
-    db_query_builder& distinct_on(std::initializer_list<std::string_view> columns) {
-        return distinct_on(std::span<const std::string_view>(columns.begin(), columns.size()));
-    }
     db_query_builder& where(const db_predicate& predicate) {
         query_.where(predicate.expression(query_, entity_type::table_name(), alias_));
         return *this;
@@ -1264,14 +1207,6 @@ public:
     }
     db_query_builder& clear_where() {
         query_.clear_where();
-        return *this;
-    }
-    db_query_builder& order_by(std::string_view column, db_order_direction direction = db_order_direction::asc, db_nulls_order nulls = db_nulls_order::default_) {
-        query_.order_by(import_entity_column(column), direction, nulls);
-        return *this;
-    }
-    db_query_builder& add_order_by(std::string_view column, db_order_direction direction = db_order_direction::asc, db_nulls_order nulls = db_nulls_order::default_) {
-        query_.add_order_by(import_entity_column(column), direction, nulls);
         return *this;
     }
     db_query_builder& clear_order() {
@@ -1296,12 +1231,8 @@ public:
     db_query_builder& inner_join_and_select(std::string_view relation, std::string_view alias, const db_predicate& condition = {}) {
         return join_and_select(relation, alias, db_join_type::inner, condition.expression(query_, entity_type::table_name(), alias_));
     }
-    db_query_builder& cache(const db_cache_setting_type& setting) {
-        query_.cache(setting);
-        return *this;
-    }
-    db_query_builder& cache(std::string_view id, std::optional<std::chrono::milliseconds> duration = {}) {
-        query_.cache(id, duration);
+    db_query_builder& cache(const db_cache_options& options = {}) {
+        query_.cache(options);
         return *this;
     }
     db_query_builder& set_lock(const db_lock_options& options) {
@@ -1369,7 +1300,7 @@ public:
         executor_.registration_.require_active();
         auto statement = get_query_and_parameters();
         auto& scope = executor_.registration_.scope();
-        return make_scoped_operation(scope, db_executor::query_stream_prepared(executor_.client_, std::move(statement.sql_), std::move(statement.params_), executor_.resource_, scope, executor_.io_metrics_, executor_.options_));
+        return executor_.registration_.attach(db_executor::query_stream_prepared(executor_.client_, std::move(statement.sql_), std::move(statement.params_), scope, executor_.io_metrics_, executor_.options_, executor_.request_stop_));
     }
     [[nodiscard]] task<std::uint64_t> get_count() const {
         const auto count = count_query();
@@ -1420,10 +1351,6 @@ private:
     }
     [[nodiscard]] db_expression import_entity_expression(const db_expr& expression) {
         return expression.expression(query_, entity_type::table_name(), alias_);
-    }
-    [[nodiscard]] db_expression import_entity_column(std::string_view column) {
-        detail::require_db_column(detail::db_entity_columns<entity_type>, column);
-        return query_.column(column, alias_);
     }
     template <typename output_type>
     detail::db_map_projection<output_type> projection_mapper(bool allow_extra_columns = false) const {
@@ -1542,51 +1469,6 @@ public:
         require_condition(predicate);
         query_.or_where(predicate.expression(query_, entity_type::table_name(), alias_));
         return *this;
-    }
-    db_write_query_builder& set(std::string_view column, const db_expr& value) {
-        if (!detail::require_db_column(detail::db_entity_columns<entity_type>, column).writable_ || value.empty()) {
-            throw std::invalid_argument("SET requires a writable entity column and expression");
-        }
-        query_.set(column, value.expression(query_, entity_type::table_name(), alias_));
-        return *this;
-    }
-    template <detail::db_parameter v_type>
-        requires(!std::same_as<std::remove_cvref_t<v_type>, db_expression> && !std::same_as<std::remove_cvref_t<v_type>, db_expr>)
-    db_write_query_builder& set(std::string_view column, v_type&& value) {
-        if (!detail::require_db_column(detail::db_entity_columns<entity_type>, column).writable_) {
-            throw std::invalid_argument("SET requires a writable entity column and expression");
-        }
-        if constexpr (std::same_as<std::remove_cvref_t<v_type>, std::nullptr_t>) {
-            return set_null(column);
-        } else {
-            query_.set(column, query_.value(detail::make_immediate_db_parameter(std::forward<v_type>(value))));
-            return *this;
-        }
-    }
-    db_write_query_builder& set_null(std::string_view column) {
-        const auto& info = detail::require_db_column(detail::db_entity_columns<entity_type>, column);
-        if (!info.writable_ || !info.nullable_) {
-            throw std::invalid_argument("SET NULL requires a writable nullable entity column");
-        }
-        query_.set(column, query_.null_value());
-        return *this;
-    }
-    db_write_query_builder& set_now(std::string_view column) {
-        if (!detail::require_db_column(detail::db_entity_columns<entity_type>, column).writable_) {
-            throw std::invalid_argument("SET requires a writable entity column and expression");
-        }
-        query_.set(column, db_expr::now());
-        return *this;
-    }
-    template <typename number_type = std::int64_t>
-        requires((std::integral<number_type> || std::floating_point<number_type>) && !std::same_as<number_type, bool>)
-    db_write_query_builder& increment(std::string_view column, number_type value = number_type{1}) {
-        return adjust_number(column, value, db_binary_operator::add);
-    }
-    template <typename number_type = std::int64_t>
-        requires((std::integral<number_type> || std::floating_point<number_type>) && !std::same_as<number_type, bool>)
-    db_write_query_builder& decrement(std::string_view column, number_type value = number_type{1}) {
-        return adjust_number(column, value, db_binary_operator::subtract);
     }
     db_write_query_builder& set(const db_assignment& assignment) {
         query_.set(prepare_assignment(assignment));
@@ -1785,11 +1667,6 @@ public:
     db_write_query_builder& returning(std::initializer_list<db_selection> fields_value) {
         return returning(std::span<const db_selection>(fields_value.begin(), fields_value.size()));
     }
-    db_write_query_builder& returning(std::span<const std::string_view> columns) {
-        return detail::stage_db_selections<column_capacity>(columns, [this](std::span<const db_selection> selections) -> db_write_query_builder& {
-            return returning(selections);
-        });
-    }
     [[nodiscard]] task<db_exec_result> execute() const {
         validate();
         return executor_.execute_query(query_);
@@ -1854,15 +1731,6 @@ private:
             throw std::invalid_argument("SET requires a writable entity column and expression");
         }
         return {assignment.column_, db_expr(assignment.expression(query_, entity_type::table_name(), alias_), {}, true)};
-    }
-    template <typename number_type>
-    db_write_query_builder& adjust_number(std::string_view column, number_type value, db_binary_operator op) {
-        const auto& info = detail::require_db_column(detail::db_entity_columns<entity_type>, column);
-        if (!info.writable_ || !info.numeric_) {
-            throw std::invalid_argument("increment/decrement requires a writable numeric column");
-        }
-        query_.set(column, query_.binary(query_.column(column, qualifier()), op, query_.value(value)));
-        return *this;
     }
     void record_inserted_columns(std::span<const std::string_view> columns) noexcept {
         for (const auto& column : detail::db_entity_columns<entity_type>) {
@@ -1984,7 +1852,7 @@ public:
             throw std::invalid_argument("repository soft_delete requires a condition");
         }
         auto builder = update_builder();
-        builder.set_now(detail::delete_date_column<entity_type>());
+        builder.set(db_assignment{detail::delete_date_column<entity_type>(), db_expr::now()});
         builder.where(predicate);
         return builder.execute();
     }
@@ -1995,7 +1863,7 @@ public:
             throw std::invalid_argument("repository restore requires a condition");
         }
         auto builder = update_builder();
-        builder.set_null(detail::delete_date_column<entity_type>());
+        builder.set(db_assignment{detail::delete_date_column<entity_type>(), db_expr::null()});
         builder.where(predicate);
         return builder.execute();
     }
@@ -2014,16 +1882,6 @@ public:
     }
     [[nodiscard]] task<db_exec_result> delete_by(const db_predicate& predicate) const {
         return delete_builder().where(predicate).execute();
-    }
-    template <typename number_type = std::int64_t>
-        requires((std::integral<number_type> || std::floating_point<number_type>) && !std::same_as<number_type, bool>)
-    [[nodiscard]] task<db_exec_result> increment(const db_predicate& predicate, std::string_view property_path, number_type value = number_type{1}) const {
-        return update_builder().increment(property_path, value).where(predicate).execute();
-    }
-    template <typename number_type = std::int64_t>
-        requires((std::integral<number_type> || std::floating_point<number_type>) && !std::same_as<number_type, bool>)
-    [[nodiscard]] task<db_exec_result> decrement(const db_predicate& predicate, std::string_view property_path, number_type value = number_type{1}) const {
-        return update_builder().decrement(property_path, value).where(predicate).execute();
     }
     [[nodiscard]] task<db_exec_result> remove(const entity_type& entity) const {
         db_query query;
@@ -2091,9 +1949,7 @@ private:
         auto builder = query_builder();
         builder.with_deleted(options.with_deleted_);
         if (!options.select_.empty()) {
-            detail::stage_db_selections<column_capacity>(options.select_.view(), [&builder](std::span<const db_selection> selections) -> auto& {
-                return builder.select(selections);
-            });
+            builder.select(options.select_.view());
         }
         detail::apply_find_options<entity_type>(builder.query_, options, builder.alias_);
         if (!options.relations_.empty()) {

@@ -64,10 +64,9 @@ void client_happy_eyeballs::schedule_next() noexcept {
         return;
     }
     try {
-        const auto status = worker_.schedule_timer(delay_, deadline_after(client_connection_attempt_delay), [this](worker_timer_outcome outcome) noexcept {
+        if (delay_.schedule(worker_, deadline_after(client_connection_attempt_delay), [this](worker_timer_outcome outcome) noexcept {
             on_delay(outcome);
-        });
-        if (status != worker_timer_schedule_status::worker_stopping) {
+        })) {
             return;
         }
     } catch (...) {

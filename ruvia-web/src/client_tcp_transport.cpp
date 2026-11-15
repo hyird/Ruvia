@@ -181,7 +181,7 @@ bool client_tcp_transport::arm(lane_deadline& lane, const operation_deadline& ti
     }
     const auto deadline_value = *timeout.deadline();
     lane.deadline_.arm(deadline_value);
-    (void)worker_.schedule_timer(lane.timer_, deadline_value, [this, &lane](worker_timer_outcome outcome) noexcept {
+    (void)lane.timer_.schedule(worker_, deadline_value, [this, &lane](worker_timer_outcome outcome) noexcept {
         if (outcome == worker_timer_outcome::expired && lane.deadline_.expire(std::chrono::steady_clock::now())) {
             abort(client_abort_reason::timeout);
         }

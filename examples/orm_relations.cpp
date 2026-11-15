@@ -18,8 +18,8 @@
 #include <utility>
 
 #include "backend_config.h"
-#include "blocking_pool.h"
 #include "db_executor.h"
+#include "db_migration.h"
 #include "db_repository.h"
 #include "db_schema.h"
 #include "event_loop.h"
@@ -67,11 +67,11 @@ auto migrations() {
 task<void> query_example(db_client& db) {
     auto employees = db.db().repository<employee>();
     const std::array<borrowed_text, 2> employee_relations{"department", "department.employees"};
-    const std::array<db_find_order, 1> employee_order{{{"id", db_order_direction::asc}}};
+    const std::array employee_order{employee::column<"id">().asc()};
     const db_find_options employee_options{
         .relations_ = employee_relations,
         .order_ = employee_order,
-        .take_ = 25,
+        .limit_ = 25,
     };
     auto [rows, total] = co_await employees.find_and_count(employee_options);
     for (const auto& employee : rows) {
@@ -147,8 +147,8 @@ task<void> run(db_client& db, event_loop_attachment& attachment) {
         }
         co_await query_example(db);
         const std::array<borrowed_text, 1> department_relations{"employees"};
-        const std::array<db_find_order, 1> id_order{{{"id"}}};
-        const db_find_options department_page_options{.relations_ = department_relations, .order_ = id_order, .take_ = 1};
+        const std::array department_order{department::column<"id">().asc()};
+        const db_find_options department_page_options{.relations_ = department_relations, .order_ = department_order, .limit_ = 1};
         auto [department_page, department_count] = co_await departments.find_and_count(department_page_options);
         if (department_page.size() != 1 || department_count != 2 || department_page[0].get<"employees">().size() != 2) {
             throw std::runtime_error("one-to-many pagination truncated the employees");
@@ -158,7 +158,7 @@ task<void> run(db_client& db, event_loop_attachment& attachment) {
             throw std::runtime_error("findOne did not preserve the complete collection");
         }
         auto next_page = departments.query_builder("d");
-        next_page.left_join_and_select("d.employees", "e").order_by("id").offset(1).limit(1);
+        next_page.left_join_and_select("d.employees", "e").order_by(department::column<"id">().asc()).offset(1).limit(1);
         auto second = co_await next_page.get_one();
         if (!second || second->get<"id">() != 2 || second->get<"employees">().size() != 1) {
             throw std::runtime_error("relation query offset did not page departments");
@@ -175,7 +175,8 @@ task<void> run(db_client& db, event_loop_attachment& attachment) {
             throw std::runtime_error("one-to-one owning and inverse mapping failed");
         }
         const std::array<borrowed_text, 1> course_relations{"courses.students"};
-        const db_find_options course_options{.relations_ = course_relations, .order_ = id_order, .take_ = 1};
+        const std::array student_order{student::column<"id">().asc()};
+        const db_find_options course_options{.relations_ = course_relations, .order_ = student_order, .limit_ = 1};
         auto [course_rows, student_count] = co_await students.find_and_count(course_options);
         if (course_rows.size() != 1 || student_count != 2 || course_rows[0].get<"courses">().size() != 2) {
             throw std::runtime_error("many-to-many pagination truncated the courses");
@@ -221,14 +222,11 @@ int main(int argc, char** argv) {
             std::cout << migration.sql() << ";\n";
         }
         if (migrate) {
-            (void)example::apply_migrations(ruvia::examples::config(), changes);
+            ruvia::db_migrator::run(ruvia::examples::config(), changes);
         }
         if (execute) {
             asio::io_context context_value(asio::config_from_concurrency_hint(ASIO_CONCURRENCY_HINT_UNSAFE_IO));
-            // The loop looks a DNS RUVIA_DB_HOST up on this pool; declared
-            // first, it outlives the attachment.
-            ruvia::blocking_pool host_lookups({.thread_count_ = 1});
-            auto attachment = ruvia::attach_event_loop(context_value, {.blocking_pool_ = &host_lookups});
+            auto attachment = ruvia::attach_event_loop(context_value);
             auto settings = ruvia::examples::config();
             ruvia::db_client db(attachment.loop(), settings);
             auto root = attachment.loop().start(ruvia::examples::run(db, attachment));

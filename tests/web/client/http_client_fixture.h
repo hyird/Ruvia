@@ -30,18 +30,12 @@ namespace {
 class test_worker final {
 public:
     explicit test_worker(asio::io_context& io) :
-        attachment_(ruvia::attach_event_loop(io, {.queue_capacity_ = 8, .blocking_pool_ = &host_lookups_})),
+        attachment_(ruvia::attach_event_loop(io, {.queue_capacity_ = 8})),
         handle_(attachment_.loop().worker()) {}
 
     test_worker(const test_worker&) = delete;
     test_worker& operator=(const test_worker&) = delete;
 
-    ~test_worker() {
-        host_lookups_.join();
-    }
-
-    // Declared before the attachment, which borrows it for "localhost" lookups.
-    ruvia::blocking_pool host_lookups_{{.thread_count_ = 1}};
     ruvia::event_loop_attachment attachment_;
     ruvia::worker_ref handle_;
 };

@@ -110,7 +110,7 @@ using ruvia::blocking_pool_options;
     return valid;
 }
 using ruvia::blocking_status;
-using ruvia::blocking_submit_status;
+using ruvia::post_status;
 using ruvia::task;
 using ruvia::worker_ref;
 
@@ -125,7 +125,7 @@ struct thread_gate final {
             started_.release();
             release_.acquire();
         });
-        if (submitted != blocking_submit_status::accepted) {
+        if (submitted != post_status::accepted) {
             std::terminate();
         }
         started_.acquire();
@@ -156,7 +156,7 @@ struct reentrant_discarded_task final {
         state_->destroyed_.fetch_add(1, std::memory_order_relaxed);
         static_cast<void>(state_->pool_->stats());
         state_->pool_->stop();
-        if (state_->pool_->submit([] {}) == blocking_submit_status::pool_stopped) {
+        if (state_->pool_->submit([] {}) == post_status::stopping) {
             state_->rejected_.fetch_add(1, std::memory_order_relaxed);
         }
     }
@@ -178,7 +178,7 @@ struct reentrant_move_state final {
     std::atomic<int> destroyed_{};
     std::atomic<int> ran_{};
     std::binary_semaphore ran_signal_{0};
-    blocking_submit_status nested_status_{blocking_submit_status::accepted};
+    post_status nested_status_{post_status::accepted};
 };
 
 struct reentrant_moving_task final {
@@ -228,14 +228,14 @@ bool test_callable_moves_and_destruction_can_query_pool() {
         const auto status = pool.submit(std::move(task_value));
         const auto queued = pool.stats();
         gate.release_.release();
-        if (status != blocking_submit_status::accepted) {
+        if (status != post_status::accepted) {
             pool.join();
             return false;
         }
         state.ran_signal_.acquire();
         pool.join();
         const auto finished = pool.stats();
-        if (queued.queued_ != 1 || finished.completed_ != 2 || finished.running_ != 0 || state.moves_.load() < 4 || state.queries_.load() < 4 || state.ran_.load() != 1 || state.destroyed_.load() != 1 || (action == move_action::submit && (state.nested_status_ != blocking_submit_status::queue_full || finished.rejected_ != 1))) {
+        if (queued.queued_ != 1 || finished.completed_ != 2 || finished.running_ != 0 || state.moves_.load() < 4 || state.queries_.load() < 4 || state.ran_.load() != 1 || state.destroyed_.load() != 1 || (action == move_action::submit && (state.nested_status_ != post_status::queue_full || finished.rejected_ != 1))) {
             return false;
         }
     }
@@ -259,9 +259,9 @@ bool test_callable_move_can_stop_pool_before_publication() {
     pool.join();
     const auto stopped = pool.stats();
     // The callable that lost the race to stop() comes back to the caller untouched.
-    const bool returned = status == blocking_submit_status::pool_stopped && status.rejected() != nullptr && state.destroyed_.load() == 0;
+    const bool returned = status == post_status::stopping && status.rejected() != nullptr && state.destroyed_.load() == 0;
     static_cast<void>(std::move(status).take_rejected());
-    return returned && queued == blocking_submit_status::accepted && stopped.queued_ == 0 && stopped.running_ == 0 && stopped.discarded_ == 2 && stopped.completed_ == 1 && !queued_ran.load() && state.ran_.load() == 0 && state.destroyed_.load() == 1;
+    return returned && queued == post_status::accepted && stopped.queued_ == 0 && stopped.running_ == 0 && stopped.discarded_ == 2 && stopped.completed_ == 1 && !queued_ran.load() && state.ran_.load() == 0 && state.destroyed_.load() == 1;
 }
 
 task<void> exercise_results(worker_ref worker_value, bool& success) {
@@ -459,7 +459,7 @@ task<void> exercise_queue_full(blocking_pool& pool, worker_ref worker_value, thr
     });
     gate_value.release_.release();
     const auto stats = pool.stats();
-    success = queued == blocking_submit_status::accepted && result_value.status() == blocking_status::queue_full && stats.rejected_ == 1 && stats.discarded_ == 0;
+    success = queued == post_status::accepted && result_value.status() == blocking_status::queue_full && stats.rejected_ == 1 && stats.discarded_ == 0;
 }
 
 task<void> exercise_worker_stopping(ruvia::event_loop_attachment& attachment, worker_ref worker_value, thread_gate& gate_value, bool& success) {
@@ -545,7 +545,7 @@ bool test_destruction_does_not_join_running_callable() {
         started->set_value();
         release.wait();
         finished->set_value();
-    }) != blocking_submit_status::accepted) {
+    }) != post_status::accepted) {
         return false;
     }
     started.wait();
@@ -574,7 +574,7 @@ bool test_join_stops_and_waits_for_running_callable() {
     if (pool.submit([started = std::move(started_promise), release] {
         started->set_value();
         release.wait();
-    }) != blocking_submit_status::accepted) {
+    }) != post_status::accepted) {
         return false;
     }
     started.wait();
@@ -601,9 +601,9 @@ bool test_join_rejects_pool_thread_before_stopping() {
         } catch (const std::logic_error& error) {
             rejected = std::string_view(error.what()) == "cannot join a blocking pool from one of its threads";
         }
-        const auto still_accepting = pool.submit([] {}) == blocking_submit_status::accepted;
+        const auto still_accepting = pool.submit([] {}) == post_status::accepted;
         completed.set_value(rejected && still_accepting);
-    }) != blocking_submit_status::accepted) {
+    }) != post_status::accepted) {
         return false;
     }
     const bool rejected = result_value.get();
@@ -620,7 +620,7 @@ bool test_stop_drains_without_running_queued_tasks() {
     gate.occupy(pool);
 
     for (int i = 0; i < queued_task_count; ++i) {
-        if (pool.submit(reentrant_discarded_task(state)) != blocking_submit_status::accepted) {
+        if (pool.submit(reentrant_discarded_task(state)) != post_status::accepted) {
             gate.release_.release();
             pool.join();
             return false;
@@ -777,10 +777,10 @@ TEST(Ruvia, blocking_pool_preserves_fifo_and_recovers_queue_capacity) {
                         completed.release();
                     }
                 }),
-                    blocking_submit_status::accepted);
+                    post_status::accepted);
             }
             EXPECT_EQ(pool.stats().queued_, capacity);
-            EXPECT_EQ(pool.submit([] {}), blocking_submit_status::queue_full);
+            EXPECT_EQ(pool.submit([] {}), post_status::queue_full);
             gate.release_.release();
             completed.acquire();
             for (std::size_t index = 0; index != capacity; ++index) {
@@ -829,12 +829,12 @@ TEST(Ruvia, blocking_pool_rejects_settled_operations_before_submission) {
         asio::io_context io_context;
         auto attachment = ruvia::attach_event_loop(io_context, {.queue_capacity_ = 8, .blocking_pool_ = &pool});
         asio::io_context other_context;
-        auto other_attachment = ruvia::attach_event_loop(other_context, {.queue_capacity_ = 8});
+        auto other_attachment = ruvia::attach_event_loop(other_context, {.queue_capacity_ = 8, .blocking_pool_ = nullptr});
         const auto worker_value = attachment.loop().worker();
         // The worker lends out the pool its loop borrows, and nothing else.
-        EXPECT_EQ(attachment.loop().worker().blocking_pool(), &pool);
-        EXPECT_EQ(other_attachment.loop().worker().blocking_pool(), nullptr);
-        EXPECT_EQ(ruvia::worker_ref{}.blocking_pool(), nullptr);
+        EXPECT_EQ(ruvia::detail::worker_ref_access::blocking_pool(attachment.loop().worker()), &pool);
+        EXPECT_EQ(ruvia::detail::worker_ref_access::blocking_pool(other_attachment.loop().worker()), nullptr);
+        EXPECT_EQ(ruvia::detail::worker_ref_access::blocking_pool(ruvia::worker_ref{}), nullptr);
         ruvia::test::run_worker_tasks(attachment, exercise_settled_before_submit(worker_value, other_attachment.loop().worker(), settled_task_ran, settled_before_submit));
         pool.join();
         settled_before_submit = settled_before_submit && !settled_task_ran.load() && pool.stats().completed_ == 0;
@@ -846,10 +846,26 @@ TEST(Ruvia, blocking_pool_worker_without_pool_reports_unavailable) {
     bool unavailable = false;
     std::atomic_bool ran{false};
     asio::io_context io_context;
-    auto attachment = ruvia::attach_event_loop(io_context, {.queue_capacity_ = 8});
+    auto attachment = ruvia::attach_event_loop(io_context, {.queue_capacity_ = 8, .blocking_pool_ = nullptr});
     ruvia::test::run_worker_tasks(attachment, exercise_worker_without_pool(attachment.loop().worker(), ran, unavailable));
     EXPECT_TRUE(unavailable);
     EXPECT_TRUE(!ran.load());
+}
+
+TEST(Ruvia, standalone_loops_own_a_default_blocking_pool) {
+    asio::io_context io_context;
+    auto attachment = ruvia::attach_event_loop(io_context);
+    auto* const attached_pool = ruvia::detail::worker_ref_access::blocking_pool(attachment.loop().worker());
+    ASSERT_NE(attached_pool, nullptr);
+    EXPECT_EQ(attached_pool->thread_count(), 1U);
+    attachment.stop();
+    io_context.run();
+
+    ruvia::event_loop_pool loops({.loop_count_ = 2});
+    auto* const shared_pool = ruvia::detail::worker_ref_access::blocking_pool(loops.loop(0).worker());
+    ASSERT_NE(shared_pool, nullptr);
+    EXPECT_EQ(ruvia::detail::worker_ref_access::blocking_pool(loops.loop(1).worker()), shared_pool);
+    loops.join();
 }
 
 TEST(Ruvia, blocking_pool_rejects_empty_tasks) {
@@ -863,7 +879,7 @@ TEST(Ruvia, blocking_pool_rejects_empty_tasks) {
         }
         pool.stop();
         pool.join();
-        rejects_empty_task = rejects_empty_task && pool.submit([] {}) == blocking_submit_status::pool_stopped;
+        rejects_empty_task = rejects_empty_task && pool.submit([] {}) == post_status::stopping;
     }
     EXPECT_TRUE(rejects_empty_task);
 }
@@ -917,7 +933,7 @@ TEST(Ruvia, blocking_pool_join_waits_for_discard_cleanup_and_allows_reentrant_jo
     const auto status = pool.submit([payload = std::move(payload), &ran] {
         ran = *payload == 17;
     });
-    if (status != blocking_submit_status::accepted) {
+    if (status != post_status::accepted) {
         gate.release_.release();
         pool.join();
         FAIL() << "failed to queue the discard probe";
@@ -983,13 +999,13 @@ TEST(Ruvia, blocking_pool_submit_returns_rejected_callable) {
     gate.occupy(pool);
     auto owned = std::make_shared<int>(7);
     const std::weak_ptr<int> watch = owned;
-    EXPECT_EQ(pool.submit([] {}), blocking_submit_status::accepted);
+    EXPECT_EQ(pool.submit([] {}), post_status::accepted);
 
     // A full queue returns the callable with everything it owns.
     auto full = pool.submit([owned = std::move(owned)] {
         static_cast<void>(owned);
     });
-    EXPECT_EQ(full.status(), blocking_submit_status::queue_full);
+    EXPECT_EQ(full.status(), post_status::queue_full);
     ASSERT_NE(full.rejected(), nullptr);
     EXPECT_FALSE(watch.expired());
     auto returned = std::move(full).take_rejected();
@@ -1000,7 +1016,7 @@ TEST(Ruvia, blocking_pool_submit_returns_rejected_callable) {
     pool.stop();
     // A stopped pool returns it as well; the caller decides where it dies.
     auto stopped = pool.submit(std::move(returned));
-    EXPECT_EQ(stopped.status(), blocking_submit_status::pool_stopped);
+    EXPECT_EQ(stopped.status(), post_status::stopping);
     ASSERT_NE(stopped.rejected(), nullptr);
     EXPECT_FALSE(watch.expired());
     static_cast<void>(std::move(stopped).take_rejected());

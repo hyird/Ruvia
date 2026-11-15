@@ -260,7 +260,7 @@ TEST(Ruvia, db_postgresql_failed_pipelined_statement_does_not_fail_the_others) {
         co_await pipeline_test::query(handle, "SELECT v FROM d", outcomes[3]);
     });
     EXPECT_TRUE(outcomes[0].value_ == "a");
-    EXPECT_TRUE(outcomes[1].error_ == db_error::code_type::statement_failed);
+    EXPECT_TRUE(outcomes[1].error_ == backend_error_code::command_failed);
     EXPECT_TRUE(outcomes[1].sql_state_ == "23505");
     EXPECT_TRUE(outcomes[2].value_ == "c");
     EXPECT_TRUE(outcomes[3].value_ == "d");
@@ -306,7 +306,7 @@ TEST(Ruvia, db_postgresql_abandoned_pipelined_statement_does_not_affect_the_othe
             });
             for (std::size_t index = 0; index < sql.size(); ++index) {
                 if (index == abandoned_index) {
-                    EXPECT_TRUE(outcomes[index].error_ == (cancel ? db_error::code_type::cancelled : db_error::code_type::timeout));
+                    EXPECT_TRUE(outcomes[index].error_ == (cancel ? backend_error_code::cancelled : backend_error_code::timeout));
                     EXPECT_TRUE(outcomes[index].value_.empty());
                 } else {
                     EXPECT_TRUE(outcomes[index].value_ == values[index]);
@@ -340,8 +340,8 @@ TEST(Ruvia, db_postgresql_connection_is_closed_when_every_pipelined_statement_is
         peer.release_replies();
         co_await pipeline_test::query(handle, "SELECT v FROM c", outcomes[2]);
     });
-    EXPECT_TRUE(outcomes[0].error_ == db_error::code_type::cancelled);
-    EXPECT_TRUE(outcomes[1].error_ == db_error::code_type::cancelled);
+    EXPECT_TRUE(outcomes[0].error_ == backend_error_code::cancelled);
+    EXPECT_TRUE(outcomes[1].error_ == backend_error_code::cancelled);
     EXPECT_TRUE(outcomes[2].value_ == "c");
     EXPECT_EQ(peer.startups(), std::size_t{2});
 }
@@ -441,10 +441,10 @@ TEST(Ruvia, db_postgresql_lost_connection_fails_every_pipelined_statement) {
         if (first_answered) {
             EXPECT_TRUE(outcomes[0].value_ == "a");
         } else {
-            EXPECT_TRUE(outcomes[0].error_ == db_error::code_type::io_error);
+            EXPECT_TRUE(outcomes[0].error_ == backend_error_code::io_error);
         }
-        EXPECT_TRUE(outcomes[1].error_ == db_error::code_type::io_error);
-        EXPECT_TRUE(outcomes[2].error_ == db_error::code_type::io_error);
+        EXPECT_TRUE(outcomes[1].error_ == backend_error_code::io_error);
+        EXPECT_TRUE(outcomes[2].error_ == backend_error_code::io_error);
     }
 }
 
@@ -469,8 +469,8 @@ TEST(Ruvia, db_postgresql_protocol_failure_fails_the_pipelined_statements_after_
         co_await pipeline_test::query(handle, "SELECT v FROM d", outcomes[3]);
     });
     EXPECT_TRUE(outcomes[0].value_ == "a");
-    EXPECT_TRUE(outcomes[1].error_ == db_error::code_type::protocol_error);
-    EXPECT_TRUE(outcomes[2].error_ == db_error::code_type::protocol_error);
+    EXPECT_TRUE(outcomes[1].error_ == backend_error_code::protocol_error);
+    EXPECT_TRUE(outcomes[2].error_ == backend_error_code::protocol_error);
     EXPECT_TRUE(outcomes[3].value_ == "d");
     EXPECT_EQ(peer.startups(), std::size_t{2});
 }
@@ -547,7 +547,7 @@ TEST(Ruvia, db_postgresql_statement_waiting_for_pipeline_room_times_out_like_an_
     EXPECT_TRUE(completed > 0);
     EXPECT_TRUE(completed < statement_count);
     for (std::size_t index = completed; index < statement_count; ++index) {
-        EXPECT_TRUE(outcomes[index].error_ == db_error::code_type::timeout);
+        EXPECT_TRUE(outcomes[index].error_ == backend_error_code::timeout);
     }
     EXPECT_EQ(peer.postgres_parses().size(), completed);
 }
@@ -604,7 +604,7 @@ TEST(Ruvia, db_postgresql_failed_parse_makes_later_binds_of_its_name_run_again) 
         co_await statements.join();
     });
     EXPECT_TRUE(outcomes[0].value_ == "a");
-    EXPECT_TRUE(outcomes[1].error_ == db_error::code_type::statement_failed);
+    EXPECT_TRUE(outcomes[1].error_ == backend_error_code::command_failed);
     EXPECT_TRUE(outcomes[1].sql_state_ == "42P01");
     EXPECT_TRUE(outcomes[2].value_ == "c");
     // Unnamed, the failed named Parse, and the retry unnamed again.
@@ -634,7 +634,7 @@ TEST(Ruvia, db_postgresql_close_ends_pipelined_statements_in_every_phase) {
         co_await statements.join();
     });
     for (const auto& result : outcomes) {
-        EXPECT_TRUE(result.error_ == db_error::code_type::cancelled || result.error_ == db_error::code_type::closing);
+        EXPECT_TRUE(result.error_ == backend_error_code::cancelled || result.error_ == backend_error_code::closing);
     }
 }
 
@@ -662,7 +662,7 @@ TEST(Ruvia, db_postgresql_read_timeout_fails_every_pipelined_statement) {
         co_await pipeline_test::query(handle, "SELECT v FROM d", outcomes[3]);
     });
     for (std::size_t index = 0; index < 3; ++index) {
-        EXPECT_TRUE(outcomes[index].error_ == db_error::code_type::timeout);
+        EXPECT_TRUE(outcomes[index].error_ == backend_error_code::timeout);
     }
     EXPECT_TRUE(outcomes[3].value_ == "d");
     EXPECT_EQ(peer.startups(), std::size_t{2});
@@ -693,7 +693,7 @@ TEST(Ruvia, db_postgresql_cancelled_waiting_transaction_lets_later_statements_jo
     EXPECT_TRUE(outcomes[0].value_ == "a");
     EXPECT_TRUE(outcomes[1].value_ == "b");
     EXPECT_TRUE(outcomes[2].value_ == "c");
-    EXPECT_TRUE(outcomes[3].error_ == db_error::code_type::cancelled);
+    EXPECT_TRUE(outcomes[3].error_ == backend_error_code::cancelled);
     EXPECT_TRUE((pipeline_test::parsed_sql(peer) == std::vector<std::string>({std::string("SELECT v FROM a"), std::string("SELECT v FROM b"), std::string("SELECT v FROM c")})));
 }
 
@@ -720,7 +720,7 @@ TEST(Ruvia, db_postgresql_cancelled_statement_waiting_behind_a_transaction_leave
         co_await work.join();
     });
     EXPECT_TRUE(outcomes[0].value_ == "a");
-    EXPECT_TRUE(outcomes[1].error_ == db_error::code_type::cancelled);
+    EXPECT_TRUE(outcomes[1].error_ == backend_error_code::cancelled);
     EXPECT_TRUE(outcomes[2].value_ == "c");
     EXPECT_TRUE(outcomes[3].value_ == "committed");
     EXPECT_TRUE((pipeline_test::parsed_sql(peer) == std::vector<std::string>({std::string("SELECT v FROM a"), std::string("BEGIN"), std::string("COMMIT"), std::string("SELECT v FROM c")})));
@@ -788,9 +788,9 @@ TEST(Ruvia, db_postgresql_statement_is_not_sent_behind_an_abandoned_one) {
         co_await statements.join();
         co_await pipeline_test::query(handle, "SELECT v FROM d", outcomes[3]);
     });
-    EXPECT_TRUE(outcomes[0].error_ == db_error::code_type::timeout);
+    EXPECT_TRUE(outcomes[0].error_ == backend_error_code::timeout);
     EXPECT_TRUE(outcomes[1].value_ == "b");
-    EXPECT_TRUE(outcomes[2].error_ == db_error::code_type::timeout);
+    EXPECT_TRUE(outcomes[2].error_ == backend_error_code::timeout);
     EXPECT_TRUE(outcomes[3].value_ == "d");
     // The statement that timed out waiting was never sent.
     EXPECT_TRUE((pipeline_test::parsed_sql(peer) == std::vector<std::string>({std::string("SELECT v FROM a"), std::string("SELECT v FROM b"), std::string("SELECT v FROM d")})));
@@ -848,7 +848,7 @@ TEST(Ruvia, db_postgresql_connection_released_after_a_waiting_transaction_stops_
     });
     EXPECT_TRUE(outcomes[0].value_ == "s");
     EXPECT_TRUE(outcomes[1].value_ == "committed");
-    EXPECT_TRUE(outcomes[2].error_ == db_error::code_type::cancelled);
+    EXPECT_TRUE(outcomes[2].error_ == backend_error_code::cancelled);
     EXPECT_TRUE((pipeline_test::parsed_sql(peer) == std::vector<std::string>({std::string("BEGIN"), std::string("SELECT v FROM s"), std::string("BEGIN"), std::string("COMMIT")})));
     EXPECT_EQ(peer.startups(), std::size_t{2});
 }

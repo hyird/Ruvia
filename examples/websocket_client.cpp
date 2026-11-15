@@ -15,7 +15,6 @@
 
 #include "app.h"
 #include "backend_config.h"
-#include "blocking_pool.h"
 #include "event_loop.h"
 #include "http_client.h"
 #include "middleware.h"
@@ -71,10 +70,7 @@ int main(int argc, char** argv) {
             .versions_ = protocol == "2" ? ruvia::http_client_versions{.http1_ = false} : ruvia::http_client_versions{.http2_ = false},
             .tls_ = {.ca_file_ = env.path("RUVIA_TLS_CA")},
         };
-        // The loop looks "localhost" up on this pool instead of blocking in
-        // getaddrinfo; declared first, it outlives the loops.
-        ruvia::blocking_pool host_lookups({.thread_count_ = 1});
-        ruvia::event_loop_pool loops({.loop_count_ = 1, .blocking_pool_ = &host_lookups});
+        ruvia::event_loop_pool loops({.loop_count_ = 1});
         loops.start();
         auto done = loops.loop(0).start(exchange(loops.loop(0), std::move(config)));
         std::move(done).get();

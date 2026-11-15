@@ -22,9 +22,9 @@
 #include "stop_token.h"
 #include "task.h"
 #include "timeout_duration.h"
+#include "wait_result.h"
 #include "worker_cancellation.h"
 #include "worker_ref.h"
-#include "worker_result.h"
 #include "worker_timer.h"
 
 namespace ruvia::detail {
@@ -431,7 +431,7 @@ typename db_pipeline_state<io_type>::group_type& db_pipeline_state<io_type>::gro
 
 template <typename io_type>
 db_error db_pipeline_state<io_type>::cancelled() const {
-    return db_error(db_error::code_type::cancelled, driver_type::driver, "database operation cancelled");
+    return db_error(backend_error_code::cancelled, driver_type::driver, "database operation cancelled");
 }
 
 template <typename io_type>
@@ -447,7 +447,7 @@ template <typename io_type>
 void db_pipeline_state<io_type>::settle(member_type& member, db_pipeline_event event) noexcept {
     member.event_ = event;
     if (auto continuation = std::exchange(member.continuation_, {})) {
-        worker_.defer_resume(continuation);
+        detail::worker_ref_access::defer_resume(worker_, continuation);
     }
 }
 
@@ -519,7 +519,7 @@ void db_pipeline_state<io_type>::admitted(db_pipeline_event event) const {
         case db_pipeline_event::joined:
             return;
         case db_pipeline_event::timed_out:
-            pool_type::slot_policy::throw_acquire_failure(pool_, worker_wait_status::timed_out);
+            pool_type::slot_policy::throw_acquire_failure(pool_, wait_status::timed_out);
         case db_pipeline_event::cancelled:
             throw cancelled();
         case db_pipeline_event::closing:
@@ -533,11 +533,11 @@ template <typename io_type>
 void db_pipeline_state<io_type>::park(member_type& member, const operation_deadline& admission_deadline) {
     if (const auto deadline_value = admission_deadline.deadline()) {
         if (*deadline_value <= std::chrono::steady_clock::now()) {
-            pool_type::slot_policy::throw_acquire_failure(pool_, worker_wait_status::timed_out);
+            pool_type::slot_policy::throw_acquire_failure(pool_, wait_status::timed_out);
         }
         // A stopped timer queue arms nothing; the statement still leaves
         // through admission, its stop token or close().
-        (void)worker_.schedule_timer(member.admission_timer_, *deadline_value, [this, &member](worker_timer_outcome outcome) noexcept {
+        (void)member.admission_timer_.schedule(worker_, *deadline_value, [this, &member](worker_timer_outcome outcome) noexcept {
             if (outcome == worker_timer_outcome::expired && member.phase_ == db_pipeline_phase::parked) {
                 unpark(member);
                 member.phase_ = db_pipeline_phase::admitting;
@@ -1041,7 +1041,7 @@ public:
         }
         [[nodiscard]] bool await_suspend(std::coroutine_handle<> handle) noexcept {
             if (!wait_.has_value()) {
-                reader_.pool_.state().worker().defer_resume(handle);
+                detail::worker_ref_access::defer_resume(reader_.pool_.state().worker(), handle);
                 return true;
             }
             return wait_->await_suspend(handle);
@@ -1175,7 +1175,7 @@ task<result_type> run_pipelined(typename db_pipeline_state<io_type>::pool_type& 
         pipeline.found_group(member);
     }
 
-    member.deadline_ = timeout.constrained_by(pool.config().query_timeout_).deadline();
+    member.deadline_ = timeout.constrained_by(pool.config().command_timeout_).deadline();
     for (;;) {
         pipeline.send(member, statement);
         auto event = db_pipeline_event::none;

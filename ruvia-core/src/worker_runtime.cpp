@@ -284,7 +284,7 @@ public:
         }
         // A worker that already stops never notifies the loop; retire its
         // admission directly.
-        if (context_.worker().register_shutdown(created, &detail::event_loop_state::shutdown_registration_) != worker_registration_status::registered) {
+        if (!detail::worker_ref_access::register_shutdown(context_.worker(), created, &detail::event_loop_state::shutdown_registration_)) {
             created->stop();
         }
         return created;
@@ -434,7 +434,7 @@ public:
             current->next_ = nullptr;
             auto caller = current->caller_;
             const auto continuation = std::exchange(current->continuation_, {});
-            caller.defer_resume(continuation);
+            detail::worker_ref_access::defer_resume(caller, continuation);
         }
 #endif
     }

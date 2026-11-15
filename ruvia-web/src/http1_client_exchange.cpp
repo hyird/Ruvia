@@ -190,7 +190,7 @@ void http1_client_exchange::restart_inactivity() noexcept {
         return;
     }
     try {
-        (void)pool_.worker().schedule_timer(inactivity_timer_, deadline_after(inactivity_bound_->value()), [this, generation = connection_.generation_](worker_timer_outcome outcome) noexcept {
+        (void)inactivity_timer_.schedule(pool_.worker(), deadline_after(inactivity_bound_->value()), [this, generation = connection_.generation_](worker_timer_outcome outcome) noexcept {
             if (outcome == worker_timer_outcome::expired) {
                 connection_.cancel(generation, client_abort_reason::timeout);
             }
@@ -323,7 +323,7 @@ task<void> http1_client_exchange::run(const http_client_request_storage& request
         if (timeout.expired()) {
             connection_.cancel(connection_.generation_, client_abort_reason::timeout);
         } else if (const auto deadline = timeout.deadline()) {
-            (void)pool_.worker().schedule_timer(upload_completion_timer, *deadline, [this, generation = connection_.generation_](worker_timer_outcome outcome) noexcept {
+            (void)upload_completion_timer.schedule(pool_.worker(), *deadline, [this, generation = connection_.generation_](worker_timer_outcome outcome) noexcept {
                 if (outcome == worker_timer_outcome::expired) {
                     connection_.cancel(generation, client_abort_reason::timeout);
                 }
@@ -510,7 +510,7 @@ task<void> http1_client_exchange::wait_for_body_space(http_client_response_state
         bool expired = false;
         worker_timer_registration timer;
         if (deadline) {
-            (void)pool_.worker().schedule_timer(timer, *deadline, [&expired, &state_value](worker_timer_outcome outcome) noexcept {
+            (void)timer.schedule(pool_.worker(), *deadline, [&expired, &state_value](worker_timer_outcome outcome) noexcept {
                 if (outcome == worker_timer_outcome::expired) {
                     expired = true;
                     state_value.space_signal_.notify();
@@ -556,7 +556,7 @@ task<void> http1_client_exchange::write_tunnel_output(http_client_output_queue& 
             }
             worker_timer_registration write_timer;
             if (const auto deadline = write_timeout.deadline()) {
-                (void)pool_.worker().schedule_timer(write_timer, *deadline, [this](worker_timer_outcome outcome) noexcept {
+                (void)write_timer.schedule(pool_.worker(), *deadline, [this](worker_timer_outcome outcome) noexcept {
                     if (outcome == worker_timer_outcome::expired) {
                         expire_tunnel();
                     }
@@ -610,7 +610,7 @@ task<void> http1_client_exchange::run_tunnel(http_client_response_state& state_v
             connection.throw_if_aborted();
         }
         if (const auto deadline = timeout.deadline()) {
-            (void)pool_.worker().schedule_timer(lifetime_timer, *deadline, [this](worker_timer_outcome outcome) noexcept {
+            (void)lifetime_timer.schedule(pool_.worker(), *deadline, [this](worker_timer_outcome outcome) noexcept {
                 if (outcome == worker_timer_outcome::expired) {
                     expire_tunnel();
                 }
@@ -706,7 +706,7 @@ task<void> http1_client_exchange::write_upload(http_client_response_state& state
     auto& upload = *state_value.upload_;
     worker_timer_registration continue_timer;
     if (!upload.content_released_) {
-        (void)pool_.worker().schedule_timer(continue_timer, deadline_after(upload.config_.continue_timeout_.value()), [&upload, &parser](worker_timer_outcome outcome) noexcept {
+        (void)continue_timer.schedule(pool_.worker(), deadline_after(upload.config_.continue_timeout_.value()), [&upload, &parser](worker_timer_outcome outcome) noexcept {
             if (outcome == worker_timer_outcome::expired && !upload.output_.stopped_) {
                 parser.release_request_content();
                 upload.content_released_ = true;

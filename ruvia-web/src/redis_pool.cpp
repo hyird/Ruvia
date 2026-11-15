@@ -125,16 +125,16 @@ void redis_pool::close_now() noexcept {
     }
 }
 
-void redis_pool::slot_policy::throw_acquire_failure(const redis_pool&, worker_wait_status status) {
+void redis_pool::slot_policy::throw_acquire_failure(const redis_pool&, wait_status status) {
     switch (status) {
-        case worker_wait_status::timed_out:
-            throw redis_error(redis_error::code_type::timeout, "redis connection pool acquire timed out");
-        case worker_wait_status::cancelled:
-            throw redis_error(redis_error::code_type::cancelled, "redis operation cancelled");
-        case worker_wait_status::closed:
-        case worker_wait_status::worker_stopping:
-            throw redis_error(redis_error::code_type::closing, "redis pool is closing");
-        case worker_wait_status::value:
+        case wait_status::timed_out:
+            throw redis_error(backend_error_code::timeout, "redis connection pool acquire timed out");
+        case wait_status::cancelled:
+            throw redis_error(backend_error_code::cancelled, "redis operation cancelled");
+        case wait_status::closed:
+        case wait_status::worker_stopping:
+            throw redis_error(backend_error_code::closing, "redis pool is closing");
+        case wait_status::value:
             break;
     }
     std::terminate();
@@ -143,9 +143,9 @@ void redis_pool::slot_policy::throw_acquire_failure(const redis_pool&, worker_wa
 void redis_pool::slot_policy::throw_aborted(const redis_pool&, pool_slot_abort_reason reason) {
     switch (reason) {
         case pool_slot_abort_reason::cancelled:
-            throw redis_error(redis_error::code_type::cancelled, "redis operation cancelled");
+            throw redis_error(backend_error_code::cancelled, "redis operation cancelled");
         case pool_slot_abort_reason::closing:
-            throw redis_error(redis_error::code_type::closing, "redis pool is closing");
+            throw redis_error(backend_error_code::closing, "redis pool is closing");
         case pool_slot_abort_reason::none:
             break;
     }
@@ -238,14 +238,14 @@ namespace {
 [[noreturn]] void throw_redis_abort(client_abort_reason reason, std::string_view timeout_message) {
     switch (reason) {
         case client_abort_reason::cancelled:
-            throw redis_error(redis_error::code_type::cancelled, "redis operation cancelled");
+            throw redis_error(backend_error_code::cancelled, "redis operation cancelled");
         case client_abort_reason::closing:
-            throw redis_error(redis_error::code_type::closing, "redis connection is closing");
+            throw redis_error(backend_error_code::closing, "redis connection is closing");
         case client_abort_reason::timeout:
         case client_abort_reason::none:
             break;
     }
-    throw redis_error(redis_error::code_type::timeout, timeout_message);
+    throw redis_error(backend_error_code::timeout, timeout_message);
 }
 
 [[noreturn]] void throw_redis_connect_error(const client_transport_result& result) {
@@ -253,16 +253,16 @@ namespace {
         case client_transport_status::aborted:
             throw_redis_abort(result.abort_, "redis connect timed out");
         case client_transport_status::resolve_failed:
-            throw redis_error(redis_error::code_type::connect_failed, "redis resolve failed: " + error_code_text(result.error_));
+            throw redis_error(backend_error_code::connect_failed, "redis resolve failed: " + error_code_text(result.error_));
         case client_transport_status::tls_failed:
-            throw redis_error(redis_error::code_type::connect_failed, "redis TLS handshake failed: " + error_code_text(result.error_));
+            throw redis_error(backend_error_code::connect_failed, "redis TLS handshake failed: " + error_code_text(result.error_));
         case client_transport_status::ok:
         case client_transport_status::eof:
         case client_transport_status::connect_failed:
         case client_transport_status::io_failed:
             break;
     }
-    throw redis_error(redis_error::code_type::connect_failed, "redis connect failed: " + error_code_text(result.error_));
+    throw redis_error(backend_error_code::connect_failed, "redis connect failed: " + error_code_text(result.error_));
 }
 
 [[noreturn]] void throw_redis_io_error(const client_transport_result& result) {
@@ -270,9 +270,9 @@ namespace {
         throw_redis_abort(result.abort_, "redis command timed out");
     }
     if (result.status_ == client_transport_status::eof) {
-        throw redis_error(redis_error::code_type::io_error, "redis server closed the connection");
+        throw redis_error(backend_error_code::io_error, "redis server closed the connection");
     }
-    throw redis_error(redis_error::code_type::io_error, error_code_text(result.error_));
+    throw redis_error(backend_error_code::io_error, error_code_text(result.error_));
 }
 
 }  // namespace
@@ -345,7 +345,7 @@ task<void> redis_connection::write_request(const operation_deadline& timeout, re
 
 task<redis_value> redis_connection::read_reply(const operation_deadline& timeout, std::chrono::steady_clock::time_point* input_time) {
     if (!connected_) {
-        throw redis_error(redis_error::code_type::io_error, "redis connection is closed");
+        throw redis_error(backend_error_code::io_error, "redis connection is closed");
     }
     ensure_reader();
     reply_builder_->begin();
@@ -354,7 +354,7 @@ task<redis_value> redis_connection::read_reply(const operation_deadline& timeout
         void* raw_reply = nullptr;
         if (redisReaderGetReply(reader_.get(), &raw_reply) != REDIS_OK) {
             reply_builder_->throw_if_rejected();
-            throw redis_error(redis_error::code_type::protocol_error, hiredis_reader_error(*reader_));
+            throw redis_error(backend_error_code::protocol_error, hiredis_reader_error(*reader_));
         }
         std::optional<redis_value> reply;
         if (raw_reply != nullptr) {
@@ -368,7 +368,7 @@ task<redis_value> redis_connection::read_reply(const operation_deadline& timeout
         if (config_.max_reply_bytes_.has_value()) {
             const auto limit = *config_.max_reply_bytes_;
             if (consumed > limit || reply_bytes_ > limit - consumed || (!reply && unread_after >= limit - (reply_bytes_ + consumed))) {
-                throw redis_error(redis_error::code_type::protocol_error, "redis reply exceeds configured limit");
+                throw redis_error(backend_error_code::protocol_error, "redis reply exceeds configured limit");
             }
         }
         reply_bytes_ += consumed;
@@ -399,7 +399,7 @@ task<redis_value> redis_connection::read_reply(const operation_deadline& timeout
         // that had already completed, so the reader itself is checked too.
         throw_if_aborted();
         if (reader_ == nullptr) {
-            throw redis_error(redis_error::code_type::io_error, "redis connection is closed");
+            throw redis_error(backend_error_code::io_error, "redis connection is closed");
         }
         if (!received.ok()) {
             throw_redis_io_error(received);
@@ -408,7 +408,7 @@ task<redis_value> redis_connection::read_reply(const operation_deadline& timeout
             *input_time = std::chrono::steady_clock::now();
         }
         if (redisReaderFeed(reader_.get(), read_buffer_.data(), received.bytes_) != REDIS_OK) {
-            throw redis_error(redis_error::code_type::protocol_error, hiredis_reader_error(*reader_));
+            throw redis_error(backend_error_code::protocol_error, hiredis_reader_error(*reader_));
         }
     }
 }
@@ -452,7 +452,7 @@ task<void> redis_connection::authenticate(const operation_deadline& connect_time
         const auto auth_args = config_.username_.empty() ? std::span<const std::string_view>(password_args) : std::span<const std::string_view>(user_args);
         const auto reply = co_await exchange_control_command(auth_args, deadline_value, redis_request_content::credential);
         if (reply.kind() == redis_value::kind_type::error) {
-            throw redis_error(redis_error::code_type::auth_failed, reply.error());
+            throw redis_error(backend_error_code::connect_failed, reply.error());
         }
     }
 
@@ -461,7 +461,7 @@ task<void> redis_connection::authenticate(const operation_deadline& connect_time
         const std::array<std::string_view, 2> args{"SELECT", http_format_unsigned(database_digits, config_.database_)};
         const auto reply = co_await exchange_control_command(args, deadline_value, redis_request_content::ordinary);
         if (reply.kind() == redis_value::kind_type::error) {
-            throw redis_error(redis_error::code_type::command_error, reply.error());
+            throw redis_error(backend_error_code::connect_failed, reply.error());
         }
     }
 }

@@ -258,13 +258,13 @@ private:
     websocket_message_writer(detail::websocket_state& owner, websocket_opcode opcode, bool compress) noexcept;
     [[nodiscard]] task<void> submit(outbound_bytes chunk, bool final, operation_options operation);
     [[nodiscard]] bool message_open() const noexcept;
-    static void expire_capability(void* target) noexcept;
+    void expire_capability() noexcept;
 
     detail::websocket_state* owner_;
     std::uint64_t message_id_;
     websocket_opcode opcode_;
     bool compress_;
-    scoped_capability_registration registration_;
+    detail::capability_registration<&websocket_message_writer::expire_capability> registration_;
 };
 
 }  // namespace ruvia

@@ -1477,33 +1477,19 @@ void db_query::copy_cache(const db_query& source_value, detail::db_cache_shape s
     s.cache_id_ = source_value.cache_id();
     s.cache_shape_ = shape;
 }
-db_query& db_query::cache(const db_cache_setting_type& setting) {
-    return std::visit([&](const auto& value) -> db_query& {
-        using t_type = std::remove_cvref_t<decltype(value)>;
-        if constexpr (std::same_as<t_type, db_cache_options>) {
-            return cache(std::string_view(value.id_), value.duration_);
-        } else if constexpr (std::same_as<t_type, std::chrono::milliseconds>) {
-            return cache(std::string_view{}, value);
-        } else {
-            auto& s = storage();
-            s.cache_enabled_.reset();
-            if constexpr (std::same_as<t_type, bool>) {
-                s.cache_enabled_ = value;
-            }
-            s.cache_duration_.reset();
-            s.cache_id_.clear();
-            return *this;
-        }
-    }, setting);
-}
-db_query& db_query::cache(std::string_view id, std::optional<std::chrono::milliseconds> duration) {
-    if (duration && duration->count() <= 0) {
+db_query& db_query::cache(const db_cache_options& options) {
+    if (options.duration_ && options.duration_->count() <= 0) {
         throw std::invalid_argument("cache duration must be positive");
     }
     auto& s = storage();
-    s.cache_id_ = id;
-    s.cache_duration_ = duration;
-    s.cache_enabled_ = true;
+    s.cache_enabled_ = options.enabled_;
+    if (options.enabled_) {
+        s.cache_id_ = std::string_view(options.id_);
+        s.cache_duration_ = options.duration_;
+    } else {
+        s.cache_id_.clear();
+        s.cache_duration_.reset();
+    }
     return *this;
 }
 

@@ -557,7 +557,7 @@ void ::ruvia::router::freeze() & {
 }
 
 task<void> ruvia::router::dispatch(request_stream& stream) & {
-    return make_scoped_operation(stream.operation_scope_, detail::router_state::dispatch(state_, stream));
+    return stream.operation_scope_.attach(detail::router_state::dispatch(state_, stream));
 }
 
 }  // namespace ruvia

@@ -260,7 +260,7 @@ private:
     // Null unless tunnel_requested().
     const detail::request_stream_tunnel_accept* accept_tunnel_;
     const detail::request_stream_websocket_accept* accept_websocket_;
-    ::ruvia::operation_scope operation_scope_;
+    detail::operation_scope operation_scope_;
     bool routed_{false};
 };
 

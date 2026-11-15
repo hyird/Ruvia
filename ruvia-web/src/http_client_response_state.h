@@ -318,7 +318,7 @@ public:
     bool ended_{};
     bool stopped_{};
     bool operation_active_{};
-    ::ruvia::operation_scope output_scope_;
+    operation_scope output_scope_;
 };
 
 // Transfers the response of an exchange or a push to its consumer once, after
@@ -343,7 +343,7 @@ public:
 private:
     [[nodiscard]] task<http_client_response> receive_owned(http_client_response pin, std::string_view head_message, operation_options operation);
 
-    ::ruvia::operation_scope scope_;
+    operation_scope scope_;
     bool taken_{false};
     bool active_{false};
 };
@@ -418,11 +418,11 @@ struct http_client_stream_timer final {
         }
         timer_.cancel();
         timer_at_.reset();
-        if (worker.schedule_timer(timer_, *deadline, [on_expired = std::forward<callback_type>(on_expired)](worker_timer_outcome outcome) mutable noexcept {
+        if (timer_.schedule(worker, *deadline, [on_expired = std::forward<callback_type>(on_expired)](worker_timer_outcome outcome) mutable noexcept {
             if (outcome == worker_timer_outcome::expired) {
                 on_expired();
             }
-        }) == worker_timer_schedule_status::scheduled) {
+        })) {
             timer_at_ = deadline;
         }
     }
@@ -466,7 +466,7 @@ template <typename wake_fn_type, typename stop_predicate_type, typename release_
     } wake_guard{upload};
     worker_timer_registration continue_timer;
     if (request.upload() != nullptr && !request.upload()->content_released_) {
-        (void)worker.schedule_timer(continue_timer, deadline_after(request.upload()->config_.continue_timeout_.value()), [&upload, policy = request.upload()](worker_timer_outcome outcome) noexcept {
+        (void)continue_timer.schedule(worker, deadline_after(request.upload()->config_.continue_timeout_.value()), [&upload, policy = request.upload()](worker_timer_outcome outcome) noexcept {
             if (outcome == worker_timer_outcome::expired && !upload.stopped_) {
                 policy->content_released_ = true;
                 upload.notify_data();
@@ -686,7 +686,7 @@ public:
     operation_interrupt_source interrupt_source_;
     // Declared after every field a body coroutine borrows, so the operation
     // scope closes while they are alive.
-    ::ruvia::operation_scope body_operation_scope_;
+    operation_scope body_operation_scope_;
 
 private:
     void promote_pending_data();

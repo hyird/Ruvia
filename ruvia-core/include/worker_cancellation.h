@@ -113,7 +113,7 @@ public:
         // Cancellation belongs to an already admitted operation. Use the
         // dispatcher completion lane so a full user queue cannot reject it.
         // Detached endpoints have already retired their owners and operations.
-        (void)retained->worker().defer_completion(worker_cancellation_dispatch<target_type>(retained, operation_id_));
+        (void)detail::worker_ref_access::defer_completion(retained->worker(), worker_cancellation_dispatch<target_type>(retained, operation_id_));
     }
 
 private:

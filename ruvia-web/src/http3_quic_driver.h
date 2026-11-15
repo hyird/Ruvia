@@ -73,7 +73,7 @@ struct worker_turn final {
         return false;
     }
     void await_suspend(std::coroutine_handle<> continuation) const noexcept {
-        worker_.defer_resume(continuation);
+        detail::worker_ref_access::defer_resume(worker_, continuation);
     }
     void await_resume() const noexcept {}
 

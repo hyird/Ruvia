@@ -1,16 +1,16 @@
 #pragma once
 
-#include <chrono>
 #include <coroutine>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
-#include <optional>
 
 #include "operation_options.h"
 #include "stop_token.h"
+#include "suspend_race.h"
+#include "wait_result.h"
+#include "waiter_list.h"
 #include "worker_ref.h"
-#include "worker_result.h"
 #include "worker_timer.h"
 
 namespace ruvia {
@@ -66,7 +66,7 @@ private:
 
 // One acquire: single-use, movable only before it is awaited. The scheduler
 // must outlive it; destroying a scheduler with live acquires terminates.
-class pool_lease_acquire final {
+class pool_lease_acquire final : public detail::waiter_link<pool_lease_acquire> {
 public:
     pool_lease_acquire(pool_lease_acquire&& other) noexcept;
     pool_lease_acquire(const pool_lease_acquire&) = delete;
@@ -77,30 +77,26 @@ public:
 
     [[nodiscard]] bool await_ready();
     [[nodiscard]] bool await_suspend(std::coroutine_handle<> continuation);
-    [[nodiscard]] worker_wait_result<std::size_t> await_resume();
+    [[nodiscard]] wait_result<std::size_t> await_resume();
 
 private:
     friend class pool_lease_scheduler;
 
-    pool_lease_acquire(pool_lease_scheduler::impl_type& owner_value, std::optional<operation_timeout> timeout, stop_token stop_token_value) noexcept;
+    pool_lease_acquire(pool_lease_scheduler::impl_type& owner_value, operation_options options) noexcept;
     void cancel_registrations() noexcept;
-    void complete(worker_wait_result<std::size_t> result_value) noexcept;
-    [[nodiscard]] std::coroutine_handle<> resolve(worker_wait_result<std::size_t> result_value) noexcept;
-    [[nodiscard]] std::coroutine_handle<> resolve(worker_wait_status status) noexcept;
+    // Commits the outcome; returns the continuation to resume, or null while
+    // the acquire has not suspended yet.
+    [[nodiscard]] std::coroutine_handle<> resolve(wait_result<std::size_t> result_value) noexcept;
+    void on_end(wait_status status) noexcept;
 
     pool_lease_scheduler::impl_type* owner_;
-    std::optional<operation_timeout> timeout_;
-    std::optional<std::chrono::steady_clock::time_point> deadline_;
-    stop_token stop_token_;
-    std::optional<worker_wait_result<std::size_t>> result_;
+    wait_bounds bounds_;
+    detail::suspend_race_state<wait_result<std::size_t>> completion_;
     std::uint64_t waiter_id_{0};
-    std::coroutine_handle<> continuation_{};
-    pool_lease_acquire* previous_{nullptr};
-    pool_lease_acquire* next_{nullptr};
-    worker_timer_registration deadline_timer_;
-    stop_registration stop_registration_;
-    bool queued_{false};
     bool awaited_{false};
+    // Last so callback unregistration completes before anything it touches
+    // begins destruction.
+    stop_registration stop_registration_;
 };
 
 }  // namespace ruvia

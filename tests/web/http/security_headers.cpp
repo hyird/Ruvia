@@ -993,7 +993,7 @@ TEST(Ruvia, clients_need_a_loop_with_a_blocking_pool_to_look_up_a_dns_host) {
     using namespace resolve_cancellation_tests;
     bool http_rejected = false;
     {
-        ruvia::event_loop_pool loops({.loop_count_ = 1});
+        ruvia::event_loop_pool loops({.loop_count_ = 1, .blocking_pool_ = nullptr});
         try {
             ruvia::http_client client(loops.loop(0), dns_http_config());
         } catch (const std::invalid_argument&) {
@@ -1003,14 +1003,12 @@ TEST(Ruvia, clients_need_a_loop_with_a_blocking_pool_to_look_up_a_dns_host) {
     }
     EXPECT_TRUE(http_rejected);
 
-    // The unified HTTP/WebSocket origin is accepted once the loop borrows a pool.
-    ruvia::blocking_pool lookups({.thread_count_ = 1});
-    ruvia::event_loop_pool loops({.loop_count_ = 1, .blocking_pool_ = &lookups});
+    // The unified HTTP/WebSocket origin is accepted on a loop with its default pool.
+    ruvia::event_loop_pool loops({.loop_count_ = 1});
     {
         ruvia::http_client http(loops.loop(0), dns_http_config());
     }
     loops.join();
-    lookups.join();
 }
 
 TEST(Ruvia, host_lookup_timeout_cancel_and_shutdown_retire_before_system_work_finishes) {

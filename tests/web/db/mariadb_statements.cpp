@@ -308,7 +308,7 @@ TEST(Ruvia, db_mariadb_stale_prepared_statement_is_prepared_again_once) {
     EXPECT_TRUE(outcomes[1].value_ == "b");
     EXPECT_TRUE(outcomes[2].value_ == "c");
     // Stale again on its retry: the error reaches the caller.
-    EXPECT_TRUE(outcomes[3].error_ == db_error::code_type::statement_failed);
+    EXPECT_TRUE(outcomes[3].error_ == backend_error_code::command_failed);
     EXPECT_TRUE((peer.maria_commands() == std::vector<std::string>({std::string("query:SELECT v FROM t"), std::string("prepare:SELECT v FROM t"), std::string("execute:1:"), std::string("execute:1:"), std::string("close:1"), std::string("prepare:SELECT v FROM t"), std::string("execute:2:"), std::string("execute:2:"), std::string("close:2"), std::string("prepare:SELECT v FROM t"), std::string("execute:3:")})));
 }
 
@@ -413,7 +413,7 @@ TEST(Ruvia, db_mariadb_prepared_server_error_above_the_client_range_is_the_state
         }
     });
     EXPECT_EQ(outcomes[0].affected_rows_, std::uint64_t{1});
-    EXPECT_TRUE(outcomes[1].error_ == db_error::code_type::statement_failed);
+    EXPECT_TRUE(outcomes[1].error_ == backend_error_code::command_failed);
     EXPECT_TRUE(outcomes[1].sql_state_ == "23000");
     EXPECT_EQ(outcomes[2].affected_rows_, std::uint64_t{1});
     EXPECT_TRUE((peer.maria_commands() == std::vector<std::string>({std::string("query:INSERT INTO t (v) VALUES (1)"), std::string("prepare:INSERT INTO t (v) VALUES (1)"), std::string("execute:1:"), std::string("execute:1:")})));
@@ -631,7 +631,7 @@ TEST(Ruvia, db_mariadb_year_column_appearing_at_execution_reads_padded_or_fails_
     EXPECT_TRUE(padded_rows.has_value());
     EXPECT_TRUE((values(*padded_rows) == std::vector<std::optional<std::string>>({std::string("0000"), std::string("2155")})));
     EXPECT_TRUE(outcomes[0].value_ == "y");
-    EXPECT_TRUE(outcomes[1].error_ == db_error::code_type::statement_failed);
+    EXPECT_TRUE(outcomes[1].error_ == backend_error_code::command_failed);
     EXPECT_TRUE(outcomes[2].value_ == "0");
     EXPECT_TRUE((peer.maria_commands() == std::vector<std::string>({std::string("query:SELECT y FROM t"), std::string("prepare:SELECT y FROM t"), std::string("execute:1:"), std::string("query:SELECT y FROM u"), std::string("prepare:SELECT y FROM u"), std::string("execute:2:"), std::string("query:SELECT y FROM u")})));
 }
@@ -660,7 +660,7 @@ TEST(Ruvia, db_mariadb_statement_whose_result_changed_shape_fails_once_and_is_pr
     });
     EXPECT_TRUE(outcomes[0].value_ == "1");
     EXPECT_TRUE(outcomes[1].value_ == "1");
-    EXPECT_TRUE(outcomes[2].error_ == db_error::code_type::statement_failed);
+    EXPECT_TRUE(outcomes[2].error_ == backend_error_code::command_failed);
     EXPECT_TRUE(outcomes[2].value_.empty());
     EXPECT_TRUE(outcomes[3].value_ == "3|2");
     EXPECT_TRUE((peer.maria_commands() == std::vector<std::string>({std::string("query:SELECT NEXTVAL(s), t.* FROM t"), std::string("prepare:SELECT NEXTVAL(s), t.* FROM t"), std::string("execute:1:"), std::string("execute:1:"), std::string("close:1"), std::string("prepare:SELECT NEXTVAL(s), t.* FROM t"), std::string("execute:2:")})));
@@ -680,7 +680,7 @@ TEST(Ruvia, db_mariadb_statement_whose_result_changed_shape_fails_inside_a_trans
     auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
     db_client client(attachment.loop(), config(peer));
     std::vector<std::string> results{};
-    std::optional<db_error::code_type> failure;
+    std::optional<backend_error_code> failure;
     pipeline_test::outcome after;
     test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
         const auto handle = connected.db().with_options({.timeout_ = std::chrono::seconds(5)});
@@ -696,7 +696,7 @@ TEST(Ruvia, db_mariadb_statement_whose_result_changed_shape_fails_inside_a_trans
         co_await pipeline_test::query(handle, "SELECT * FROM t", after);
     });
     EXPECT_TRUE((results == std::vector<std::string>({std::string("1"), std::string("1")})));
-    EXPECT_TRUE(failure == db_error::code_type::statement_failed);
+    EXPECT_TRUE(failure == backend_error_code::command_failed);
     EXPECT_TRUE(after.value_ == "after");
     EXPECT_TRUE((peer.maria_commands() == std::vector<std::string>({std::string("query:START TRANSACTION"), std::string("query:SELECT * FROM t"), std::string("prepare:SELECT * FROM t"), std::string("execute:1:"), std::string("execute:1:"), std::string("query:ROLLBACK"), std::string("close:1"), std::string("prepare:SELECT * FROM t"), std::string("execute:2:")})));
     EXPECT_EQ(peer.startups(), std::size_t{1});
@@ -735,7 +735,7 @@ TEST(Ruvia, db_mariadb_abandoned_prepare_is_finished_from_the_cached_statement_t
         co_await pipeline_test::query(handle, "SELECT v FROM t", outcomes[3]);
     });
     EXPECT_TRUE(outcomes[0].value_ == "text");
-    EXPECT_TRUE(outcomes[1].error_ == db_error::code_type::cancelled);
+    EXPECT_TRUE(outcomes[1].error_ == backend_error_code::cancelled);
     EXPECT_TRUE(outcomes[2].value_ == "second");
     EXPECT_TRUE(outcomes[3].value_ == "third");
     const auto commands = peer.maria_commands();
@@ -769,7 +769,7 @@ TEST(Ruvia, db_mariadb_prepared_statement_failing_in_its_rows_leaves_the_others_
         }
     });
     EXPECT_TRUE(outcomes[0].value_ == "1");
-    EXPECT_TRUE(outcomes[1].error_ == db_error::code_type::statement_failed);
+    EXPECT_TRUE(outcomes[1].error_ == backend_error_code::command_failed);
     EXPECT_TRUE(outcomes[1].sql_state_ == "22003");
     EXPECT_TRUE(outcomes[2].value_ == "b");
     EXPECT_TRUE(outcomes[3].value_ == "b");
@@ -801,7 +801,7 @@ TEST(Ruvia, db_mariadb_prepared_statement_runs_again_after_its_rows_failed) {
         co_await together.join();
     });
     EXPECT_TRUE(outcomes[0].value_ == "1");
-    EXPECT_TRUE(outcomes[1].error_ == db_error::code_type::statement_failed);
+    EXPECT_TRUE(outcomes[1].error_ == backend_error_code::command_failed);
     EXPECT_TRUE(outcomes[1].sql_state_ == "21000");
     EXPECT_TRUE(outcomes[2].value_ == "3");
     EXPECT_TRUE(outcomes[3].value_ == "f1");

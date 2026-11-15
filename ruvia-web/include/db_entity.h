@@ -313,7 +313,7 @@ using tuple_filter_t = typename tuple_filter<predicate_type, ts_type...>::type;
 // Columns and projections require db_mapped_value: all text is owned.
 // PostgreSQL arrays use std::vector of owning scalar or optional elements.
 // Decoding retains one-dimensional element order and discards the lower bound;
-// multidimensional arrays are rejected with db_conversion_error.
+// multidimensional arrays are rejected with conversion_error.
 // Option combinations that cannot hold (see valid_db_column_options) do not
 // name a column type, so the declaration fails to compile.
 template <fixed_string field_name, db_mapped_value t_type, db_column_options options_type = db_column_options{}>

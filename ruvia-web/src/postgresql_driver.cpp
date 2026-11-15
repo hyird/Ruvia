@@ -136,7 +136,7 @@ void materialize_borrowed_result(db_rows& output, PGresult& result_value) {
 [[nodiscard]] bool flush_postgresql(pg_conn& connection) {
     const auto status = PQflush(&connection);
     if (status < 0) {
-        throw postgresql_error(connection, "PQflush", db_error::code_type::io_error);
+        throw postgresql_error(connection, "PQflush", backend_error_code::io_error);
     }
     return status != 0;
 }
@@ -148,7 +148,7 @@ void materialize_borrowed_result(db_rows& output, PGresult& result_value) {
 // remains.
 [[nodiscard]] bool exchange_postgresql_io(pg_conn& connection, bool output_pending) {
     if (PQconsumeInput(&connection) == 0) {
-        throw postgresql_error(connection, "PQconsumeInput", db_error::code_type::io_error);
+        throw postgresql_error(connection, "PQconsumeInput", backend_error_code::io_error);
     }
     return output_pending && flush_postgresql(connection);
 }
@@ -194,16 +194,16 @@ task<void> wait_until_result_ready(postgresql_pool& pool, std::size_t index, con
     auto* connection = pool.slot(index).connection_;
     const postgresql_params encoded(params);
     if (PQenterPipelineMode(connection) == 0) {
-        throw postgresql_error(*connection, "PQenterPipelineMode", db_error::code_type::io_error);
+        throw postgresql_error(*connection, "PQenterPipelineMode", backend_error_code::io_error);
     }
     if (PQsendQueryParams(connection, sql.data(), encoded.count(), encoded.types(), encoded.values(), nullptr, nullptr, 0) == 0) {
-        throw postgresql_error(*connection, "PQsendQueryParams", db_error::code_type::statement_failed);
+        throw postgresql_error(*connection, "PQsendQueryParams", backend_error_code::command_failed);
     }
     if (PQsetSingleRowMode(connection) == 0) {
-        throw postgresql_error(*connection, "PQsetSingleRowMode", db_error::code_type::statement_failed);
+        throw postgresql_error(*connection, "PQsetSingleRowMode", backend_error_code::command_failed);
     }
     if (PQsendPipelineSync(connection) == 0) {
-        throw postgresql_error(*connection, "PQsendPipelineSync", db_error::code_type::io_error);
+        throw postgresql_error(*connection, "PQsendPipelineSync", backend_error_code::io_error);
     }
     return flush_postgresql(*connection);
 }
@@ -219,7 +219,7 @@ task<void> wait_until_result_ready(postgresql_pool& pool, std::size_t index, con
     const auto* values = encoded.values();
     const auto* types = encoded.types();
     const auto queue_failure = [&connection](std::string_view operation) {
-        return postgresql_error(connection, operation, db_error::code_type::io_error);
+        return postgresql_error(connection, operation, backend_error_code::io_error);
     };
     postgresql_flight flight{lookup.statement_, 0, lookup.inserted_};
     if (!lookup.statement_.has_value()) {
@@ -275,7 +275,7 @@ task<void> wait_until_result_ready(postgresql_pool& pool, std::size_t index, con
 }
 
 [[nodiscard]] db_error postgresql_protocol_failure(std::string_view message) {
-    return db_error(db_error::code_type::protocol_error, db_driver::postgresql, message);
+    return db_error(backend_error_code::protocol_error, db_driver::postgresql, message);
 }
 
 // Feeds the next PQgetResult() of a flight into its results; true once the
@@ -305,13 +305,13 @@ task<void> wait_until_result_ready(postgresql_pool& pool, std::size_t index, con
     }
     if (status == PGRES_FATAL_ERROR) {
         if (PQstatus(&connection) == CONNECTION_BAD) {
-            throw postgresql_error(connection, operation, db_error::code_type::io_error, result_value.get());
+            throw postgresql_error(connection, operation, backend_error_code::io_error, result_value.get());
         }
         if (!results.failure_.has_value()) {
             results.statement_failed_ = results.command_ == flight.setup_commands_;
             results.stale_ = postgresql_stale_statement(*result_value);
             results.stale_before_execution_ = postgresql_stale_before_execution(*result_value);
-            results.failure_.emplace(postgresql_error(connection, operation, db_error::code_type::statement_failed, result_value.get()));
+            results.failure_.emplace(postgresql_error(connection, operation, backend_error_code::command_failed, result_value.get()));
         }
         return false;
     }
@@ -414,7 +414,7 @@ task<result_type> run_cached_statement(postgresql_pool& pool, std::size_t index,
     auto& statements = pool.slot(index).session_.statements_;
     for (bool may_retry = true;; may_retry = false) {
         if (PQenterPipelineMode(connection) == 0) {
-            throw postgresql_error(*connection, "PQenterPipelineMode", db_error::code_type::io_error);
+            throw postgresql_error(*connection, "PQenterPipelineMode", backend_error_code::io_error);
         }
         const auto flight = queue_cached_statement(*connection, statements, sql, encoded);
         if (flush_postgresql(*connection)) {
@@ -433,7 +433,7 @@ task<result_type> run_cached_statement(postgresql_pool& pool, std::size_t index,
             }
         }
         if (PQexitPipelineMode(connection) == 0) {
-            throw postgresql_error(*connection, "PQexitPipelineMode", db_error::code_type::protocol_error);
+            throw postgresql_error(*connection, "PQexitPipelineMode", backend_error_code::protocol_error);
         }
         const auto end = finish_flight(statements, flight, results, returns_rows, may_retry, PQtransactionStatus(connection) == PQTRANS_IDLE);
         if (end == postgresql_flight_end::retry) {
@@ -471,12 +471,12 @@ postgresql_statement_name make_postgresql_statement_name(std::string_view sql, s
     return name;
 }
 
-db_error postgresql_error(const pg_conn& connection, std::string_view operation, db_error::code_type error_code, const pg_result* result_value) {
+db_error postgresql_error(const pg_conn& connection, std::string_view operation, backend_error_code error_code, const pg_result* result_value) {
     // libpq marks the connection bad when the transport fails, and reports
     // that failure as a fatal result; it is an I/O failure, not a statement
     // the server rejected.
-    if (error_code == db_error::code_type::statement_failed && PQstatus(&connection) == CONNECTION_BAD) {
-        error_code = db_error::code_type::io_error;
+    if (error_code == backend_error_code::command_failed && PQstatus(&connection) == CONNECTION_BAD) {
+        error_code = backend_error_code::io_error;
     }
     std::string error(operation);
     error.append(" failed");
@@ -501,7 +501,7 @@ db_error postgresql_error(const pg_conn& connection, std::string_view operation,
                 error.push_back(']');
             }
         }
-    } else if (error_code == db_error::code_type::connect_failed) {
+    } else if (error_code == backend_error_code::connect_failed) {
         // libpq keeps a failed statement's text in the connection's message
         // too; only a connection no statement ran on reports it.
         const char* message = PQerrorMessage(&connection);
@@ -624,7 +624,7 @@ postgresql_pipeline_io::statement_type postgresql_pipeline_io::prepare(std::stri
 db_slot_socket::native_socket_type postgresql_pipeline_io::socket(pool_type& pool, std::size_t slot) {
     const auto native = PQsocket(pool.slot(slot).connection_);
     if (native < 0) {
-        throw db_error(db_error::code_type::io_error, db_driver::postgresql, "PostgreSQL connection socket is unavailable");
+        throw db_error(backend_error_code::io_error, db_driver::postgresql, "PostgreSQL connection socket is unavailable");
     }
     return static_cast<db_slot_socket::native_socket_type>(native);
 }
@@ -632,7 +632,7 @@ db_slot_socket::native_socket_type postgresql_pipeline_io::socket(pool_type& poo
 void postgresql_pipeline_io::open(state_type& state, std::size_t slot) {
     auto* connection = state.pool().slot(slot).connection_;
     if (PQenterPipelineMode(connection) == 0) {
-        auto failure = postgresql_error(*connection, "PQenterPipelineMode", db_error::code_type::io_error);
+        auto failure = postgresql_error(*connection, "PQenterPipelineMode", backend_error_code::io_error);
         state.pool().close_slot(slot);
         throw failure;
     }
@@ -742,10 +742,10 @@ task<void> postgresql_driver::connect(pool_type& pool, std::size_t index, const 
         tls_scope.rethrow_failure();
     }
     if (slot.connection_ == nullptr) {
-        throw db_error(db_error::code_type::connect_failed, db_driver::postgresql, "PQconnectStartParams failed");
+        throw db_error(backend_error_code::connect_failed, db_driver::postgresql, "PQconnectStartParams failed");
     }
     if (PQstatus(slot.connection_) == CONNECTION_BAD) {
-        throw postgresql_error(*slot.connection_, "PQconnectStartParams", db_error::code_type::connect_failed);
+        throw postgresql_error(*slot.connection_, "PQconnectStartParams", backend_error_code::connect_failed);
     }
 
     // PQconnectStartParams() has already polled once and left the socket
@@ -762,13 +762,13 @@ task<void> postgresql_driver::connect(pool_type& pool, std::size_t index, const 
         tls_scope.rethrow_failure();
     }
     if (status != PGRES_POLLING_OK || PQstatus(slot.connection_) != CONNECTION_OK) {
-        throw postgresql_error(*slot.connection_, "PQconnectPoll", db_error::code_type::connect_failed);
+        throw postgresql_error(*slot.connection_, "PQconnectPoll", backend_error_code::connect_failed);
     }
     if (use_tls && PQsslInUse(slot.connection_) != 1) {
-        throw db_error(db_error::code_type::connect_failed, db_driver::postgresql, "PostgreSQL refused required TLS");
+        throw db_error(backend_error_code::connect_failed, db_driver::postgresql, "PostgreSQL refused required TLS");
     }
     if (PQsetnonblocking(slot.connection_, 1) != 0) {
-        throw postgresql_error(*slot.connection_, "PQsetnonblocking", db_error::code_type::connect_failed);
+        throw postgresql_error(*slot.connection_, "PQsetnonblocking", backend_error_code::connect_failed);
     }
 }
 
@@ -846,7 +846,7 @@ task<db_stream_step> postgresql_driver::read_stream_row(pool_type& pool, std::si
         co_return materialize_stream_single_row(*result_value, fields, column_names);
     }
     if (status != PGRES_TUPLES_OK && status != PGRES_COMMAND_OK && status != PGRES_EMPTY_QUERY) {
-        throw postgresql_error(*connection, "PostgreSQL stream", db_error::code_type::statement_failed, result_value.get());
+        throw postgresql_error(*connection, "PostgreSQL stream", backend_error_code::command_failed, result_value.get());
     }
     result_value.reset();
     co_await wait_until_result_ready(pool, index, deadline_value);
@@ -860,7 +860,7 @@ task<db_stream_step> postgresql_driver::read_stream_row(pool_type& pool, std::si
         throw postgresql_protocol_failure("PostgreSQL stream ended without its Sync");
     }
     if (PQexitPipelineMode(connection) == 0) {
-        throw postgresql_error(*connection, "PQexitPipelineMode", db_error::code_type::protocol_error);
+        throw postgresql_error(*connection, "PQexitPipelineMode", backend_error_code::protocol_error);
     }
     co_return status == PGRES_TUPLES_OK ? db_stream_end::exhausted : db_stream_end::no_row_set;
 }

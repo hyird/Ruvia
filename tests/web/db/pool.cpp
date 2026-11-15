@@ -34,23 +34,6 @@
 #include "stop_token.h"
 #include "task_scope.h"
 #include "worker_task_fixture.h"
-namespace ruvia::test {
-
-// Runs one migration to completion on a fresh loop, whose blocking pool looks
-// a DNS host up, and returns its report or rethrows its failure.
-[[nodiscard]] inline db_migration_report run_db_migration(const db_config& config, std::span<const db_migration> migrations, const db_migrator_options& options = {}, operation_options operation = {}) {
-    blocking_pool host_lookups({.thread_count_ = 1});
-    event_loop_pool loops({.loop_count_ = 1, .blocking_pool_ = &host_lookups});
-    const db_migrator migrator(loops.loop(0), config, options);
-    auto migration = migrator.migrate(migrations, std::move(operation));
-    loops.start();
-    auto run = loops.loop(0).start(std::move(migration));
-    run.wait();
-    loops.join();
-    return std::move(run).get();
-}
-
-}  // namespace ruvia::test
 
 namespace {
 constexpr std::array database_drivers{
@@ -90,7 +73,7 @@ TEST(Ruvia, db_client_needs_a_loop_with_a_blocking_pool_to_look_up_a_dns_host) {
         const ruvia::db_config config{.driver_ = driver, .host_ = "localhost", .tls_ = {.mode_ = ruvia::client_tls_mode::disabled}};
         bool rejected = false;
         {
-            ruvia::event_loop_pool pool({.loop_count_ = 1});
+            ruvia::event_loop_pool pool({.loop_count_ = 1, .blocking_pool_ = static_cast<ruvia::blocking_pool*>(nullptr)});
             try {
                 ruvia::db_client client(pool.loop(0), config);
             } catch (const std::invalid_argument&) {
@@ -156,7 +139,7 @@ TEST(Ruvia, db_pool_failed_startup_retires_already_connected_slots) {
         try {
             ruvia::test::drive_backend_client(attachment, client, connected);
         } catch (const ruvia::db_error& error) {
-            timed_out = error.code() == ruvia::db_error::code_type::timeout;
+            timed_out = error.code() == ruvia::backend_error_code::timeout;
         }
         EXPECT_TRUE(timed_out);
         EXPECT_TRUE(!entered);
@@ -198,7 +181,7 @@ TEST(Ruvia, db_pool_transaction_retirement_checks_server_state_before_reuse) {
                     try {
                         (void)co_await transaction.query("SELECT * FROM missing_table");
                     } catch (const db_error& error) {
-                        failed = error.code() == db_error::code_type::statement_failed && error.sql_state() == "42S02";
+                        failed = error.code() == backend_error_code::command_failed && error.sql_state() == "42S02";
                     }
                     EXPECT_TRUE(failed);
                 }
@@ -234,7 +217,7 @@ TEST(Ruvia, db_pool_allows_parallel_transactions_and_reuses_released_connections
         try {
             (void)co_await handle.query("SELECT exhausted");
         } catch (const db_error& error) {
-            timed_out = error.code() == db_error::code_type::timeout;
+            timed_out = error.code() == backend_error_code::timeout;
         }
         EXPECT_TRUE(timed_out);
 
@@ -245,7 +228,7 @@ TEST(Ruvia, db_pool_allows_parallel_transactions_and_reuses_released_connections
             try {
                 (void)co_await handle.with_options({.stop_token_ = stop.token()}).query("SELECT cancelled");
             } catch (const db_error& error) {
-                cancelled = error.code() == db_error::code_type::cancelled;
+                cancelled = error.code() == backend_error_code::cancelled;
             }
         };
         pending.spawn(wait_for_connection());
@@ -286,7 +269,7 @@ TEST(Ruvia, db_pool_shutdown_wakes_waiters_while_all_connections_are_leased) {
             try {
                 (void)co_await handle.query("SELECT blocked");
             } catch (const db_error& error) {
-                closing = error.code() == db_error::code_type::closing;
+                closing = error.code() == backend_error_code::closing;
             }
         };
         pending.spawn(wait_for_connection());
@@ -310,10 +293,9 @@ using ruvia::test::throws_on;
 #endif
 }
 
-// A loop a migrator can bind; its blocking pool admits a DNS host.
+// A loop a migrator can bind; its default blocking pool admits a DNS host.
 struct migrator_loop final {
-    ruvia::blocking_pool host_lookups_{{.thread_count_ = 1}};
-    ruvia::event_loop_pool loops_{{.loop_count_ = 1, .blocking_pool_ = &host_lookups_}};
+    ruvia::event_loop_pool loops_{{.loop_count_ = 1}};
 
     [[nodiscard]] ruvia::event_loop loop() const {
         return loops_.loop(0);
@@ -323,23 +305,23 @@ struct migrator_loop final {
 }  // namespace
 
 TEST(Ruvia, scoped_operation_scope_tracks_cold_owner_operations) {
-    ruvia::operation_scope operation_scope;
+    ruvia::detail::operation_scope operation_scope;
     auto cold_task = []() -> ruvia::task<void> {
         co_return;
     }();
     {
-        auto operation = ruvia::make_scoped_operation(operation_scope, std::move(cold_task));
+        auto operation = operation_scope.attach(std::move(cold_task));
         EXPECT_TRUE(operation_scope.has_pending_operations());
     }
     EXPECT_TRUE(!operation_scope.has_pending_operations());
 }
 
 TEST(Ruvia, db_error_carries_category_and_native_diagnostics) {
-    const ruvia::db_error timeout(ruvia::db_error::code_type::timeout, ruvia::db_driver::mariadb, "timeout", 1205, "HY000");
-    const ruvia::db_error unique_violation(ruvia::db_error::code_type::statement_failed, ruvia::db_driver::postgresql, "duplicate key", std::nullopt, "23505", "uq_jobs_key");
-    const ruvia::db_error cancelled(ruvia::db_error::code_type::cancelled, ruvia::db_driver::postgresql, "cancelled");
-    const ruvia::db_error closing(ruvia::db_error::code_type::closing, ruvia::db_driver::mariadb, "closing");
-    EXPECT_TRUE(timeout.code() == ruvia::db_error::code_type::timeout);
+    const ruvia::db_error timeout(ruvia::backend_error_code::timeout, ruvia::db_driver::mariadb, "timeout", 1205, "HY000");
+    const ruvia::db_error unique_violation(ruvia::backend_error_code::command_failed, ruvia::db_driver::postgresql, "duplicate key", std::nullopt, "23505", "uq_jobs_key");
+    const ruvia::db_error cancelled(ruvia::backend_error_code::cancelled, ruvia::db_driver::postgresql, "cancelled");
+    const ruvia::db_error closing(ruvia::backend_error_code::closing, ruvia::db_driver::mariadb, "closing");
+    EXPECT_TRUE(timeout.code() == ruvia::backend_error_code::timeout);
     EXPECT_TRUE(timeout.driver() == ruvia::db_driver::mariadb);
     EXPECT_TRUE(timeout.native_code() == 1205);
     EXPECT_TRUE(timeout.sql_state() == "HY000");
@@ -347,17 +329,17 @@ TEST(Ruvia, db_error_carries_category_and_native_diagnostics) {
     EXPECT_TRUE(unique_violation.sql_state() == "23505");
     EXPECT_TRUE(unique_violation.constraint_name() == "uq_jobs_key");
     EXPECT_TRUE(!unique_violation.native_code());
-    EXPECT_TRUE(cancelled.code() == ruvia::db_error::code_type::cancelled);
+    EXPECT_TRUE(cancelled.code() == ruvia::backend_error_code::cancelled);
     EXPECT_TRUE(!cancelled.native_code());
     EXPECT_TRUE(!cancelled.sql_state());
     EXPECT_TRUE(!cancelled.constraint_name());
-    EXPECT_TRUE(closing.code() == ruvia::db_error::code_type::closing);
+    EXPECT_TRUE(closing.code() == ruvia::backend_error_code::closing);
 }
 
 TEST(Ruvia, db_config_rejects_non_positive_timeouts) {
     const migrator_loop loop;
     auto config = test_db_config();
-    for (const auto field : {&ruvia::db_config::connect_timeout_, &ruvia::db_config::read_timeout_, &ruvia::db_config::write_timeout_, &ruvia::db_config::query_timeout_, &ruvia::db_config::acquire_timeout_, &ruvia::db_config::transaction_timeout_}) {
+    for (const auto field : {&ruvia::db_config::connect_timeout_, &ruvia::db_config::read_timeout_, &ruvia::db_config::write_timeout_, &ruvia::db_config::command_timeout_, &ruvia::db_config::acquire_timeout_, &ruvia::db_config::transaction_timeout_}) {
         for (const auto invalid : {std::chrono::milliseconds(0), std::chrono::milliseconds(-1)}) {
             config.*field = invalid;
             EXPECT_TRUE(throws_on([&] {
@@ -590,7 +572,7 @@ void check_session_ended_while_idle(ruvia::test::backend_startup_peer& peer, ruv
     auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
     db_client client(attachment.loop(), config);
     std::string before{};
-    std::optional<db_error::code_type> code;
+    std::optional<backend_error_code> code;
     std::string after{};
     test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
         auto handle = connected.db().with_options({.timeout_ = std::chrono::seconds(5)});
@@ -632,7 +614,7 @@ TEST(Ruvia, db_connection_lost_mid_result_is_an_io_error) {
         for (const auto kind : {statement_kind::query, statement_kind::execute, statement_kind::stream}) {
             auto& context_value = test::new_test_io_context();
             auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
-            std::optional<db_error::code_type> code;
+            std::optional<backend_error_code> code;
             test::with_connected_db_client(attachment, db_config{.driver_ = driver}, test::backend_startup_peer::after_startup::drop_mid_result, [&](db_client& client) -> task<void> {
                 auto handle = client.db();
                 try {
@@ -641,7 +623,7 @@ TEST(Ruvia, db_connection_lost_mid_result_is_an_io_error) {
                     code = error.code();
                 }
             });
-            EXPECT_TRUE(code == db_error::code_type::io_error);
+            EXPECT_TRUE(code == backend_error_code::io_error);
         }
     }
 }
@@ -676,7 +658,7 @@ TEST(Ruvia, db_rejected_statement_keeps_the_pooled_connection) {
     auto& context_value = test::new_test_io_context();
     auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
     db_client client(attachment.loop(), peer.config());
-    std::optional<db_error::code_type> code;
+    std::optional<backend_error_code> code;
     std::string sql_state{};
     std::string kept{};
     test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
@@ -690,7 +672,7 @@ TEST(Ruvia, db_rejected_statement_keeps_the_pooled_connection) {
         const auto rows = co_await handle.query("SELECT v FROM records");
         kept = rows.front()["v"].as<std::string_view>().value_or("");
     });
-    EXPECT_TRUE(code == db_error::code_type::statement_failed);
+    EXPECT_TRUE(code == backend_error_code::command_failed);
     EXPECT_TRUE(sql_state == "23505");
     EXPECT_TRUE(kept == "kept");
     EXPECT_EQ(peer.postgres_parses().size(), std::size_t{2});
@@ -704,7 +686,7 @@ TEST(Ruvia, db_postgresql_statement_error_omits_server_text) {
     auto& context_value = test::new_test_io_context();
     auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
     db_client client(attachment.loop(), peer.config());
-    std::optional<db_error::code_type> code;
+    std::optional<backend_error_code> code;
     std::string sql_state{};
     std::string message{};
     test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
@@ -717,7 +699,7 @@ TEST(Ruvia, db_postgresql_statement_error_omits_server_text) {
             message = error.what();
         }
     });
-    EXPECT_TRUE(code == db_error::code_type::statement_failed);
+    EXPECT_TRUE(code == backend_error_code::command_failed);
     EXPECT_TRUE(sql_state == "23505");
     EXPECT_TRUE(message.find("[sqlstate=23505]") != std::string::npos);
     EXPECT_TRUE(message.find("secret@example.com") == std::string::npos);
@@ -732,7 +714,7 @@ TEST(Ruvia, db_rejected_transaction_statement_rolls_back_on_the_kept_connection)
     auto& context_value = test::new_test_io_context();
     auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
     db_client client(attachment.loop(), peer.config());
-    std::optional<db_error::code_type> code;
+    std::optional<backend_error_code> code;
     bool transaction_failed = false;
     std::string after{};
     test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
@@ -747,7 +729,7 @@ TEST(Ruvia, db_rejected_transaction_statement_rolls_back_on_the_kept_connection)
         const auto rows = co_await handle.query("SELECT v FROM records");
         after = rows.front()["v"].as<std::string_view>().value_or("");
     });
-    EXPECT_TRUE(code == db_error::code_type::statement_failed);
+    EXPECT_TRUE(code == backend_error_code::command_failed);
     EXPECT_TRUE(transaction_failed);
     EXPECT_TRUE(after == "after");
     const auto statements = peer.postgres_parses();
@@ -769,7 +751,7 @@ TEST(Ruvia, db_copy_result_fails_the_statement_and_closes_the_connection) {
             auto& context_value = test::new_test_io_context();
             auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
             db_client client(attachment.loop(), peer.config());
-            std::optional<db_error::code_type> code;
+            std::optional<backend_error_code> code;
             std::string fresh{};
             test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
                 auto handle = connected.db();
@@ -786,7 +768,7 @@ TEST(Ruvia, db_copy_result_fails_the_statement_and_closes_the_connection) {
                 const auto rows = co_await handle.query("SELECT v FROM records");
                 fresh = rows.front()["v"].as<std::string_view>().value_or("");
             });
-            EXPECT_TRUE(code == db_error::code_type::protocol_error);
+            EXPECT_TRUE(code == backend_error_code::protocol_error);
             EXPECT_TRUE(fresh == "fresh");
             EXPECT_EQ(peer.startups(), std::size_t{2});
             EXPECT_EQ(peer.postgres_parses().size(), std::size_t{2});
@@ -965,7 +947,7 @@ TEST(Ruvia, db_postgresql_stale_sql_state_raised_by_the_statement_is_not_retried
     auto& context_value = test::new_test_io_context();
     auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
     db_client client(attachment.loop(), peer.config());
-    std::optional<db_error::code_type> code;
+    std::optional<backend_error_code> code;
     std::string after{};
     test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
         auto handle = connected.db();
@@ -979,7 +961,7 @@ TEST(Ruvia, db_postgresql_stale_sql_state_raised_by_the_statement_is_not_retried
         }
         after = co_await first_value(handle, std::int64_t{1});
     });
-    EXPECT_TRUE(code == db_error::code_type::statement_failed);
+    EXPECT_TRUE(code == backend_error_code::command_failed);
     EXPECT_TRUE(after == "c");
     EXPECT_EQ(peer.postgres_parses().size(), std::size_t{3});
 }
@@ -1126,9 +1108,9 @@ bool sends_startup(ruvia::db_driver driver, const char* reference, const char* c
     config.connect_timeout_ = std::chrono::seconds(3);
     bool connect_failed = false;
     try {
-        (void)ruvia::test::run_db_migration(config, {});
+        ruvia::db_migrator::run(config, {});
     } catch (const ruvia::db_error& error) {
-        connect_failed = error.code() == ruvia::db_error::code_type::connect_failed;
+        connect_failed = error.code() == ruvia::backend_error_code::connect_failed;
     }
     if (!connect_failed) {
         throw std::runtime_error("test peer must end the database startup");
@@ -1217,10 +1199,10 @@ void check_unverifiable_history(ruvia::test::backend_startup_peer& peer, ruvia::
     auto config = peer.config();
     config.driver_ = driver;
     config.username_ = "test";
-    config.query_timeout_ = std::chrono::seconds(2);
+    config.command_timeout_ = std::chrono::seconds(2);
     bool rejected = false;
     try {
-        (void)ruvia::test::run_db_migration(config, migrations);
+        ruvia::db_migrator::run(config, migrations);
     } catch (const ruvia::db_error&) {
         // A scripted wire error is not evidence of history validation.
         throw;
@@ -1241,7 +1223,7 @@ void check_unverifiable_history(ruvia::test::backend_startup_peer& peer, ruvia::
 // through `stop` (when given) and returns how the run ended. The peer never
 // answers the lock, so only the run's own operation can end it.
 template <typename lock_requested_type>
-[[nodiscard]] std::optional<ruvia::db_error::code_type> interrupted_migration(const ruvia::db_config& config, ruvia::operation_options operation, ruvia::stop_source* stop, lock_requested_type lock_requested) {
+[[nodiscard]] std::optional<ruvia::backend_error_code> interrupted_migration(const ruvia::db_config& config, ruvia::operation_options operation, ruvia::stop_source* stop, lock_requested_type lock_requested) {
     const std::array migrations{ruvia::db_migration({.id_ = "001", .sql_ = "CREATE TABLE t(id INT)"})};
     ruvia::event_loop_pool loops({.loop_count_ = 1});
     const ruvia::db_migrator migrator(loops.loop(0), config);
@@ -1275,7 +1257,7 @@ TEST(Ruvia, db_migrator_rejects_sql_with_embedded_nul) {
         const std::array<ruvia::db_migration, 1> bad_migrations{{
             ruvia::db_migration{{.id_ = "001", .sql_ = std::string("SELECT 1\0", 9)}},
         }};
-        (void)ruvia::test::run_db_migration(ruvia::db_config{.driver_ = ruvia::db_driver::postgresql}, bad_migrations);
+        ruvia::db_migrator::run(ruvia::db_config{.driver_ = ruvia::db_driver::postgresql}, bad_migrations);
     } catch (const std::invalid_argument&) {
         nul_sql_rejected = true;
     }
@@ -1311,14 +1293,14 @@ TEST(Ruvia, db_migrator_fails_once_its_locked_session_is_lost) {
                 {{.column_ = "", .command_ = "INSERT 0 1"}, {.column_ = "pg_advisory_unlock", .type_ = 16, .rows_ = {"t"}}})}));
     auto config = peer.config();
     config.username_ = "test";
-    config.query_timeout_ = std::chrono::seconds(2);
-    std::optional<ruvia::db_error::code_type> failure;
+    config.command_timeout_ = std::chrono::seconds(2);
+    std::optional<ruvia::backend_error_code> failure;
     try {
-        (void)ruvia::test::run_db_migration(config, migrations);
+        ruvia::db_migrator::run(config, migrations);
     } catch (const ruvia::db_error& error) {
         failure = error.code();
     }
-    EXPECT_TRUE(failure == ruvia::db_error::code_type::io_error);
+    EXPECT_TRUE(failure == ruvia::backend_error_code::io_error);
     EXPECT_EQ(peer.startups(), std::size_t{1});
 }
 
@@ -1329,7 +1311,7 @@ TEST(Ruvia, db_migrator_looks_up_a_dns_host_on_its_loop_pool) {
     config.connect_timeout_ = std::chrono::seconds(1);
     bool lookup_failed = false;
     try {
-        (void)ruvia::test::run_db_migration(config, std::span<const ruvia::db_migration>{});
+        ruvia::db_migrator::run(config, std::span<const ruvia::db_migration>{});
     } catch (const ruvia::db_error&) {
         lookup_failed = true;
     }
@@ -1340,7 +1322,7 @@ TEST(Ruvia, db_migrator_applies_and_records_postgresql_migrations_on_the_callers
     using peer_type = ruvia::test::backend_startup_peer;
     const std::array migrations{ruvia::db_migration({.id_ = "001", .sql_ = "CREATE TABLE t(id INT)", .atomicity_ = ruvia::db_migration_atomicity::unwrapped})};
     peer_type peer(std::vector<std::vector<peer_type::postgres_reply>>({std::vector<peer_type::postgres_reply>({{.column_ = "", .command_ = "SET"}, {.column_ = "pg_advisory_lock", .rows_ = {""}}, {.column_ = "", .command_ = "RESET"}, {.column_ = "", .command_ = "CREATE TABLE"}, {.column_ = "?column?", .type_ = 23, .rows_ = {"1"}}, {.column_ = "checksum"}, {.column_ = "", .command_ = "CREATE TABLE"}, {.column_ = "", .command_ = "INSERT 0 1"}, {.column_ = "pg_advisory_unlock", .type_ = 16, .rows_ = {"t"}}})}));
-    const auto report = ruvia::test::run_db_migration(scripted_config(peer, ruvia::db_driver::postgresql), migrations);
+    const auto report = ruvia::db_migrator::run(scripted_config(peer, ruvia::db_driver::postgresql), migrations);
     ASSERT_EQ(report.applied().size(), std::size_t{1});
     EXPECT_EQ(report.applied()[0], "001");
     EXPECT_TRUE(report.skipped().empty());
@@ -1366,7 +1348,7 @@ TEST(Ruvia, db_migrator_postgresql_run_ends_on_cancellation_and_timeout) {
         };
         const auto started = std::chrono::steady_clock::now();
         const auto code = cancel ? interrupted_migration(scripted_config(peer, ruvia::db_driver::postgresql), {.stop_token_ = stop.token()}, &stop, lock_requested) : interrupted_migration(scripted_config(peer, ruvia::db_driver::postgresql), {.timeout_ = std::chrono::milliseconds(200)}, nullptr, lock_requested);
-        EXPECT_TRUE(code == (cancel ? ruvia::db_error::code_type::cancelled : ruvia::db_error::code_type::timeout));
+        EXPECT_TRUE(code == (cancel ? ruvia::backend_error_code::cancelled : ruvia::backend_error_code::timeout));
         EXPECT_TRUE(std::chrono::steady_clock::now() - started < std::chrono::seconds(5));
         // Answering the held lock only reaches a connection the run closed.
         peer.release_hold(1);
@@ -1380,22 +1362,22 @@ TEST(Ruvia, db_migrator_rejects_a_stopped_token_and_non_positive_timeout_before_
     const auto config = scripted_config(peer, ruvia::db_driver::postgresql);
     ruvia::stop_source stop;
     stop.request_stop();
-    std::optional<ruvia::db_error::code_type> code;
+    std::optional<ruvia::backend_error_code> code;
     try {
-        (void)ruvia::test::run_db_migration(config, {}, {}, {.stop_token_ = stop.token()});
+        ruvia::db_migrator::run(config, {}, {}, {.stop_token_ = stop.token()});
     } catch (const ruvia::db_error& error) {
         code = error.code();
     }
-    EXPECT_TRUE(code == ruvia::db_error::code_type::cancelled);
+    EXPECT_TRUE(code == ruvia::backend_error_code::cancelled);
     for (const auto invalid : {std::chrono::milliseconds(0), std::chrono::milliseconds(-1)}) {
-        EXPECT_THROW((void)ruvia::test::run_db_migration(config, {}, {}, {.timeout_ = invalid}), std::invalid_argument);
+        EXPECT_THROW(ruvia::db_migrator::run(config, {}, {}, {.timeout_ = invalid}), std::invalid_argument);
     }
     EXPECT_EQ(peer.startups(), std::size_t{0});
 }
 
 TEST(Ruvia, db_migrator_requires_a_valid_loop_and_runs_only_on_it) {
     EXPECT_THROW((void)ruvia::db_migrator(ruvia::event_loop{}, ruvia::db_config{.driver_ = ruvia::db_driver::postgresql}), std::invalid_argument);
-    ruvia::event_loop_pool without_lookups({.loop_count_ = 2});
+    ruvia::event_loop_pool without_lookups({.loop_count_ = 2, .blocking_pool_ = static_cast<ruvia::blocking_pool*>(nullptr)});
     EXPECT_THROW((void)ruvia::db_migrator(without_lookups.loop(0), ruvia::db_config{.driver_ = ruvia::db_driver::postgresql, .host_ = "db.example"}), std::invalid_argument);
     const ruvia::db_migrator migrator(without_lookups.loop(0), ruvia::db_config{.driver_ = ruvia::db_driver::postgresql, .host_ = "127.0.0.1", .tls_ = {.mode_ = ruvia::client_tls_mode::disabled}});
     auto migration = migrator.migrate({});
@@ -1427,7 +1409,7 @@ TEST(Ruvia, db_migrator_applies_and_records_mariadb_migrations_on_the_callers_lo
     using peer_type = ruvia::test::backend_startup_peer;
     const std::array migrations{ruvia::db_migration({.id_ = "001", .sql_ = "CREATE TABLE IF NOT EXISTS t(id INT)"})};
     peer_type peer(std::vector<peer_type::maria_reply>({{.rows_ = {"1"}}, {.column_ = ""}, {.rows_ = {"1"}}, {.column_ = "checksum"}, {.column_ = ""}, {.column_ = "", .affected_rows_ = 1}, {.column_ = ""}}), peer_type::after_startup::idle);
-    const auto report = ruvia::test::run_db_migration(scripted_config(peer, ruvia::db_driver::mariadb), migrations);
+    const auto report = ruvia::db_migrator::run(scripted_config(peer, ruvia::db_driver::mariadb), migrations);
     ASSERT_EQ(report.applied().size(), std::size_t{1});
     EXPECT_EQ(report.applied()[0], "001");
     EXPECT_TRUE(report.skipped().empty());
@@ -1449,7 +1431,7 @@ TEST(Ruvia, db_migrator_mariadb_run_ends_on_cancellation_and_timeout) {
         };
         const auto started = std::chrono::steady_clock::now();
         const auto code = cancel ? interrupted_migration(scripted_config(peer, ruvia::db_driver::mariadb), {.stop_token_ = stop.token()}, &stop, lock_requested) : interrupted_migration(scripted_config(peer, ruvia::db_driver::mariadb), {.timeout_ = std::chrono::milliseconds(200)}, nullptr, lock_requested);
-        EXPECT_TRUE(code == (cancel ? ruvia::db_error::code_type::cancelled : ruvia::db_error::code_type::timeout));
+        EXPECT_TRUE(code == (cancel ? ruvia::backend_error_code::cancelled : ruvia::backend_error_code::timeout));
         EXPECT_TRUE(std::chrono::steady_clock::now() - started < std::chrono::seconds(5));
         // Answering the held lock only reaches a connection the run closed.
         peer.release_hold(1);
