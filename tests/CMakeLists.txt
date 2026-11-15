@@ -224,6 +224,9 @@ if(RUVIA_BUILD_WEB)
         # listener, stopped gracefully at its end.
         ruvia_add_web_test(ruvia_app_http3 60 web/app/http3_serving.cpp)
         target_compile_definitions(ruvia_app_http3 PRIVATE RUVIA_TEST_CLIENT_OPERATIONS)
+        # Owns a one-worker application re-run per case with small inbound
+        # budgets, windows and short stream and idle deadlines.
+        ruvia_add_web_test(ruvia_app_http3_stream_limits 60 web/app/http3_stream_limits.cpp)
     endif()
 
     # Feature files join the unit suite only when their feature is built.

@@ -157,10 +157,12 @@ struct server_config final {
     std::optional<std::size_t> max_requests_per_connection_{1000};
     std::size_t max_buffered_body_bytes_{default_max_buffered_body_bytes};
     // Live inbound buffer allocations across buffered and streamed HTTP request
-    // bodies, CONNECT tunnel reads (including chunks a handler still holds) and
-    // websocket sessions. Includes capacity and reallocation overlap; the
-    // limits cannot be disabled. An allocation past either limit fails with
-    // std::bad_alloc, which an unhandled request answers with 503.
+    // bodies, CONNECT tunnel reads (including chunks a handler still holds),
+    // HTTP/3 tunnel datagrams waiting for their reader and websocket sessions.
+    // Includes capacity and reallocation overlap; the limits cannot be
+    // disabled. An allocation past either limit fails with std::bad_alloc,
+    // which an unhandled request answers with 503. An HTTP/2 or HTTP/3 tunnel
+    // whose unread bytes pass a limit is reset; a datagram past it is dropped.
     std::size_t max_inbound_buffer_bytes_per_worker_{256 * 1024 * 1024};
     std::size_t max_inbound_buffer_bytes_per_connection_{64 * 1024 * 1024};
     std::optional<std::size_t> max_stream_body_bytes_{};

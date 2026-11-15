@@ -14,6 +14,7 @@
 #include <string>
 #include <string_view>
 #include <system_error>
+#include <type_traits>
 #include <utility>
 
 #include <asio/cancellation_signal.hpp>
@@ -24,7 +25,11 @@
 #include "context.h"
 #include "context_access.h"
 #include "event_loop.h"
+#include "http_error.h"
 #include "http_header.h"
+#include "http_multiplexed_stream.h"
+#include "http_priority.h"
+#include "http_protocol.h"
 #include "http_request.h"
 #include "http_request_admission.h"
 #include "http_request_body_failure.h"
@@ -46,12 +51,15 @@
 #include "task.h"
 #include "task_scope.h"
 #include "transport_stream_end.h"
+#include "websocket_handshake.h"
 #include "worker_ref.h"
 
 // Server stream machinery shared by HTTP/2 and HTTP/3 sessions: per-stream
-// deadlines and wake-ups, session termination and drain, the bounded file
-// reader, and the CRTP bases for response sinks, request body readers and
-// tunnel transports over one multiplexed stream.
+// deadlines and wake-ups, session termination and drain, the per-stream
+// request state with its body queue and the DATA chunk store policy, the
+// bounded file reader, the CRTP bases for response sinks, request body readers
+// and tunnel transports over one multiplexed stream, and the endpoint tails
+// both dispatch spines end in.
 
 namespace ruvia::detail {
 
@@ -310,6 +318,317 @@ private:
     bool output_wait_expired_{false};
     std::optional<std::int64_t> output_wait_observed_ms_;
     std::optional<std::int64_t> output_operation_started_ms_;
+};
+
+enum class multiplexed_body_store_status : std::uint8_t {
+    stored,
+    too_large,
+    backlog_overflow,
+    buffer_limit,
+};
+
+// Request content of one multiplexed stream that already crossed the protocol
+// core's event boundary and waits for a suspended route handler: a streamed
+// body or tunnel bytes. The core owns framing and flow-control debt; this
+// queue owns the bytes, charged to the connection's inbound budget, and the
+// receive credit they hold until the handler consumed them. Pending DATA is
+// concatenated so each frame is copied once; pop() swaps the pending buffer
+// aside so a later enqueue cannot invalidate the borrowed view.
+class multiplexed_request_body_queue final {
+public:
+    explicit multiplexed_request_body_queue(inbound_buffer_account* inbound = nullptr) noexcept :
+        queued_reservation_(inbound),
+        active_reservation_(inbound) {}
+
+    // Never too_large: the total limit belongs to the stream. Credit moves in
+    // only after the append succeeded; otherwise it stays with the caller,
+    // whose token returns it.
+    [[nodiscard]] multiplexed_body_store_status enqueue_bounded(std::string_view data, http_received_data_credit&& credit, std::size_t backlog_limit) {
+        const auto queued_bytes = queued_chunk_.size();
+        if (queued_bytes > backlog_limit || data.size() > backlog_limit - queued_bytes) {
+            return multiplexed_body_store_status::backlog_overflow;
+        }
+        if (data.empty()) {
+            return multiplexed_body_store_status::stored;
+        }
+        try {
+            inbound_append(queued_chunk_, queued_reservation_, data);
+        } catch (const inbound_buffer_limit_error&) {
+            return multiplexed_body_store_status::buffer_limit;
+        }
+        if (credit.valid()) {
+            if (queued_credit_.has_value()) {
+                queued_credit_->merge(std::move(credit));
+            } else {
+                queued_credit_.emplace(std::move(credit));
+            }
+        }
+        return multiplexed_body_store_status::stored;
+    }
+
+    // The consumer finished with the active view: its storage (beyond a small
+    // retained capacity) and its credit return. True when credit returned, so
+    // the caller can let the writer send it.
+    bool release_active() noexcept {
+        inbound_clear_retaining_small(active_chunk_, active_reservation_);
+        const bool returned = active_credit_.has_value();
+        active_credit_.reset();
+        return returned;
+    }
+
+    // The request content ended: the peer's end of stream was delivered, or
+    // there never was content. The core's own receive state can run ahead of
+    // event delivery within one input batch, so readers end on this flag.
+    void mark_ended() noexcept {
+        ended_ = true;
+    }
+
+    [[nodiscard]] bool ended() const noexcept {
+        return ended_;
+    }
+
+    // Every queued byte as one view, valid until the next pop() or
+    // release_active(); it keeps its credit until then.
+    [[nodiscard]] std::string_view pop() & {
+        (void)release_active();
+        if (queued_chunk_.empty()) {
+            return {};
+        }
+        active_chunk_.swap(queued_chunk_);
+        active_reservation_.swap(queued_reservation_);
+        if (queued_credit_.has_value()) {
+            active_credit_.emplace(std::move(*queued_credit_));
+            queued_credit_.reset();
+        }
+        inbound_clear_retaining_small(queued_chunk_, queued_reservation_);
+        return std::string_view(active_chunk_);
+    }
+    std::string_view pop() && = delete;
+
+    // Every queued byte as storage the consumer owns from here on; its credit
+    // returns now.
+    [[nodiscard]] std::string take() noexcept {
+        std::string taken;
+        taken.swap(queued_chunk_);
+        queued_reservation_.clear();
+        queued_credit_.reset();
+        return taken;
+    }
+
+    // Drops the content no consumer has taken and returns every credit. The
+    // active chunk stays: the reader's last view borrows it until its next
+    // read starts (body_reader::read).
+    void discard_unread() noexcept {
+        inbound_discard(queued_chunk_, queued_reservation_);
+        queued_credit_.reset();
+        active_credit_.reset();
+    }
+
+    // No consumer is left.
+    bool discard() noexcept {
+        const bool returned = queued_credit_.has_value() || active_credit_.has_value();
+        discard_unread();
+        inbound_discard(active_chunk_, active_reservation_);
+        return returned;
+    }
+
+private:
+    // The byte storage is destroyed before its credits, so return-window side
+    // effects cannot outlive the copied data they account for.
+    std::optional<http_received_data_credit> queued_credit_;
+    std::optional<http_received_data_credit> active_credit_;
+    std::string queued_chunk_;
+    inbound_buffer_reservation queued_reservation_;
+    std::string active_chunk_;
+    inbound_buffer_reservation active_reservation_;
+    bool ended_{false};
+};
+
+// Web-side state every HTTP/2 and HTTP/3 request stream keeps: the route it
+// resolved to, the request content as that route consumes it (buffered whole
+// and borrowed by the request at dispatch, or queued for a streaming reader
+// or tunnel), the trailers, the priority, the body failure its response
+// reports, the request-body deadline, and the wake/stop signal of its
+// dispatched handler. Each protocol's stream type adds its request head and
+// its own lifecycle flags.
+class multiplexed_request_stream_state {
+public:
+    multiplexed_request_stream_state(const multiplexed_request_stream_state&) = delete;
+    multiplexed_request_stream_state& operator=(const multiplexed_request_stream_state&) = delete;
+
+    [[nodiscard]] http_request_trailers& trailers() & noexcept RUVIA_LIFETIMEBOUND {
+        return trailers_;
+    }
+    http_request_trailers& trailers() && = delete;
+    [[nodiscard]] const std::optional<http_priority>& priority() const& noexcept RUVIA_LIFETIMEBOUND {
+        return priority_;
+    }
+    const std::optional<http_priority>& priority() const&& = delete;
+    void set_priority(std::optional<http_priority> priority) noexcept {
+        priority_ = priority;
+    }
+
+    void mark_body_failure(http_request_body_failure failure) noexcept {
+        if (!body_failure_.has_value()) {
+            body_failure_ = failure;
+        }
+    }
+    [[nodiscard]] const std::optional<http_request_body_failure>& body_failure() const& noexcept RUVIA_LIFETIMEBOUND {
+        return body_failure_;
+    }
+    const std::optional<http_request_body_failure>& body_failure() const&& = delete;
+
+    void mark_response_committed() noexcept {
+        response_committed_ = true;
+    }
+    [[nodiscard]] bool response_committed() const noexcept {
+        return response_committed_;
+    }
+
+    // Once per stream: false when its route was already selected.
+    [[nodiscard]] bool select_route(route_resolution resolution, request_body_mode body_mode) noexcept {
+        if (route_selected_) {
+            return false;
+        }
+        resolution_ = std::move(resolution);
+        body_mode_ = body_mode;
+        route_selected_ = true;
+        return true;
+    }
+    [[nodiscard]] bool route_selected() const noexcept {
+        return route_selected_;
+    }
+    [[nodiscard]] const route_resolution& resolution() const& noexcept RUVIA_LIFETIMEBOUND {
+        return resolution_;
+    }
+    const route_resolution& resolution() const&& = delete;
+    [[nodiscard]] request_body_mode body_mode() const noexcept {
+        return body_mode_;
+    }
+
+    // One DATA chunk of the request body. A buffered body takes no credit: it
+    // returns as the content is stored. A streamed body queues the bytes with
+    // their credit until the reader takes them. Credit not moved from stays
+    // with the caller, whose token returns it.
+    [[nodiscard]] multiplexed_body_store_status store_body(std::string_view data, http_received_data_credit&& credit, protocol_byte_limit total_limit, std::size_t backlog_limit) {
+        if (http_request_body_addition_failure(received_bytes_, data.size(), total_limit).has_value()) {
+            return multiplexed_body_store_status::too_large;
+        }
+        if (body_mode_ == request_body_mode::stream) {
+            if (const auto status = body_queue_.enqueue_bounded(data, std::move(credit), backlog_limit); status != multiplexed_body_store_status::stored) {
+                return status;
+            }
+        } else {
+            try {
+                inbound_append(buffered_body_, buffered_reservation_, data);
+            } catch (const inbound_buffer_limit_error&) {
+                return multiplexed_body_store_status::buffer_limit;
+            }
+        }
+        received_bytes_ += data.size();
+        return multiplexed_body_store_status::stored;
+    }
+
+    [[nodiscard]] std::string_view buffered_body() const& noexcept RUVIA_LIFETIMEBOUND {
+        return buffered_body_;
+    }
+    std::string_view buffered_body() const&& = delete;
+
+    [[nodiscard]] multiplexed_request_body_queue& body_queue() & noexcept RUVIA_LIFETIMEBOUND {
+        return body_queue_;
+    }
+    multiplexed_request_body_queue& body_queue() && = delete;
+    [[nodiscard]] const multiplexed_request_body_queue& body_queue() const& noexcept RUVIA_LIFETIMEBOUND {
+        return body_queue_;
+    }
+    const multiplexed_request_body_queue& body_queue() const&& = delete;
+
+    // The inbound budget is exhausted: the content no handler was given goes
+    // back to it and every credit returns. What a handler borrows stays -- a
+    // dispatched buffered body, the reader's last chunk.
+    void discard_unread_body() noexcept {
+        if (!dispatched()) {
+            inbound_discard(buffered_body_, buffered_reservation_);
+        }
+        body_queue_.discard_unread();
+    }
+
+    // No handler borrows the content any more (it finished, or never ran):
+    // the storage goes back to the inbound budget, and credit for content
+    // received but never read returns so a stopped reader cannot strand
+    // connection-level credit. True when any credit returned.
+    bool discard_body() noexcept {
+        inbound_discard(buffered_body_, buffered_reservation_);
+        return body_queue_.discard();
+    }
+
+    // Null when the route is not selected yet or the stream was dispatched.
+    [[nodiscard]] multiplexed_stream_signal* begin_dispatch(const worker_ref& worker_value, multiplexed_session_termination& termination) {
+        if (!route_selected_ || signal_) {
+            return nullptr;
+        }
+        signal_.emplace(worker_value, termination);
+        return &*signal_;
+    }
+    multiplexed_stream_signal* begin_dispatch(worker_ref&&, multiplexed_session_termination&) = delete;
+    [[nodiscard]] bool dispatched() const noexcept {
+        return signal_.has_value();
+    }
+    [[nodiscard]] multiplexed_stream_signal* signal() & noexcept RUVIA_LIFETIMEBOUND {
+        return signal_ ? &*signal_ : nullptr;
+    }
+    multiplexed_stream_signal* signal() && = delete;
+    [[nodiscard]] const multiplexed_stream_signal* signal() const& noexcept RUVIA_LIFETIMEBOUND {
+        return signal_ ? &*signal_ : nullptr;
+    }
+    const multiplexed_stream_signal* signal() const&& = delete;
+
+    // `now_ms` is the time of the read that carried the request head or DATA.
+    void mark_request_body_open(std::int64_t now_ms) noexcept {
+        request_body_deadline_.open(now_ms);
+    }
+    void note_request_body_progress(std::int64_t now_ms) noexcept {
+        request_body_deadline_.progress(now_ms);
+    }
+    void mark_request_body_closed() noexcept {
+        request_body_deadline_.close();
+    }
+    // The request body is still open and went `inactivity` without DATA, or
+    // `completion` since it opened (request_body_timeout_ and
+    // body_completion_timeout_).
+    [[nodiscard]] bool request_body_overdue(std::int64_t now_ms, const std::optional<timeout_duration>& inactivity, const std::optional<timeout_duration>& completion) const noexcept {
+        return request_body_deadline_.overdue(now_ms, inactivity, completion);
+    }
+
+    // The session counts its tunnel streams as it marks them.
+    void mark_tunnel() noexcept {
+        tunnel_ = true;
+    }
+    [[nodiscard]] bool tunnel() const noexcept {
+        return tunnel_;
+    }
+
+protected:
+    explicit multiplexed_request_stream_state(inbound_buffer_account* inbound) noexcept :
+        buffered_reservation_(inbound),
+        body_queue_(inbound) {}
+    ~multiplexed_request_stream_state() = default;
+
+private:
+    http_request_trailers trailers_;
+    std::optional<http_priority> priority_{};
+    route_resolution resolution_{};
+    request_body_mode body_mode_{request_body_mode::buffered};
+    std::string buffered_body_;
+    inbound_buffer_reservation buffered_reservation_;
+    multiplexed_request_body_queue body_queue_;
+    std::size_t received_bytes_{0};
+    std::optional<multiplexed_stream_signal> signal_;
+    std::optional<http_request_body_failure> body_failure_{};
+    multiplexed_request_body_deadline request_body_deadline_;
+    bool route_selected_{false};
+    bool tunnel_{false};
+    bool response_committed_{false};
 };
 
 // Streams of one multiplexed connection that may open or read a file body on
@@ -771,6 +1090,63 @@ private:
         services);
 }
 
+// The error response of a WebSocket handshake that failed validation. A
+// generated rejection does not inherit the negotiated coding promise.
+[[nodiscard]] inline task<http_response> respond_websocket_handshake_failure(const route_table& routes, const http_request& request, websocket_handshake_error failure, const context_services& services, http_response_tail& tail) {
+    tail.disable_response_coding();
+    const auto protocol_error = make_http_protocol_error(failure);
+    auto response = co_await routes.respond_error(request, http_error_info({.status_ = protocol_error.status(), .code_ = protocol_error.code(), .message_ = std::string_view(protocol_error.what())}), services);
+    apply_websocket_handshake_error_headers(failure, response);
+    co_return response;
+}
+
+// Stores one DATA chunk of a request body that is still wanted and applies
+// the outcome, alike for HTTP/2 and HTTP/3. A streamed backlog past its bound
+// cancels the stream. Content past the body limit or the inbound buffer
+// budget fails the body: the response reports it (413, or 503 for the
+// budget), or the stream is cancelled once a response was committed. The
+// host operations:
+//   reset_stream(bool cancelled) noexcept: resets the stream as cancelled, or
+//     with an internal error;
+//   wake_writer() noexcept: lets the writer send returned credit;
+//   admit_stream() -> bool: dispatches the stream, which has no handler yet.
+template <typename reset_type, typename wake_writer_type, typename admit_type>
+void store_multiplexed_request_body_chunk(multiplexed_request_stream_state& stream, std::string_view bytes, http_received_data_credit&& chunk_credit, protocol_byte_limit total_limit, std::size_t backlog_limit, reset_type&& reset_stream, wake_writer_type&& wake_writer, admit_type&& admit_stream) {
+    auto status = multiplexed_body_store_status::stored;
+    {
+        // Credit the stream does not keep returns here, before the writer is
+        // woken for it.
+        auto credit = std::move(chunk_credit);
+        status = stream.store_body(bytes, std::move(credit), total_limit, backlog_limit);
+        if (status == multiplexed_body_store_status::buffer_limit) {
+            stream.discard_unread_body();
+        }
+    }
+    if (status == multiplexed_body_store_status::backlog_overflow) {
+        reset_stream(true);
+        return;
+    }
+    if (status == multiplexed_body_store_status::stored) {
+        if (stream.body_mode() != request_body_mode::stream) {
+            wake_writer();
+        } else if (auto* signal = stream.signal()) {
+            signal->wake();
+        }
+        return;
+    }
+    stream.mark_body_failure(status == multiplexed_body_store_status::buffer_limit ? http_request_body_failure::buffer_limit : http_request_body_failure::too_large);
+    if (stream.response_committed()) {
+        reset_stream(true);
+        return;
+    }
+    wake_writer();
+    if (auto* signal = stream.signal()) {
+        signal->wake();
+    } else if (!admit_stream()) {
+        reset_stream(false);
+    }
+}
+
 // Completes a multiplexed response-stream route result. Returns true when the
 // stream already terminated (peer abort before commit or committed head), or
 // false when `response` holds a buffered route/recovered response to finish.
@@ -836,6 +1212,26 @@ template <typename stream_id_type, typename writer_type, typename reset_type>
     if (written.committed_status_) {
         tail.record_access(options.access_log_, *written.committed_status_);
     }
+}
+
+// Runs a tunnel route over one multiplexed stream. A request stream
+// listener's tunnel route may refuse through `refusal_sink`, the stream's
+// ordinary response stream, instead of establishing the tunnel. Returns the
+// buffered response still to finish; none when the stream is answered -- the
+// tunnel ran, or the refusal was committed on the sink.
+template <typename transport_type, typename sink_type, typename commit_upgrade_type, typename commit_websocket_type>
+[[nodiscard]] task<std::optional<http_response>> execute_multiplexed_tunnel_endpoint(sink_type& refusal_sink, const route_table& routes, const http_request& request, const resolved_route& resolved, const context_services& dispatch_services, const http_server_options& options, connection_scanner::entry& scanner_entry, inbound_buffer_account& inbound, bool udp, http_response_tail& tail, commit_upgrade_type commit_upgrade, commit_websocket_type commit_websocket) {
+    auto refusal_writer = make_response_stream_writer(refusal_sink);
+    auto upgrade_services = dispatch_services;
+    if (is_request_stream_tunnel_route(resolved.route())) {
+        upgrade_services.bind_response_stream(refusal_writer);
+    }
+    auto buffered = co_await execute_tunnel_upgrade_session<transport_type>(routes, request, resolved, upgrade_services, options, scanner_entry, inbound, udp, std::string_view{}, std::move(commit_upgrade), std::move(commit_websocket));
+    if (refusal_sink.committed()) {
+        tail.record_access(options.access_log_, committed_response_stream_status(refusal_sink));
+        co_return std::nullopt;
+    }
+    co_return buffered;
 }
 
 }  // namespace ruvia::detail

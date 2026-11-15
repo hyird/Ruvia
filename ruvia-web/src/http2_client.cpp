@@ -585,12 +585,11 @@ void http_client_connection::wake_http2_stream(http2_stream& stream) noexcept {
 }
 
 void http_client_connection::release_response_data(http_client_response_state& state_value) noexcept {
-    if (!state_value.data_credit_) {
-        return;
-    }
     // The token returns credit to its original connection even if that session
     // has already retired. Its destructor also defers allocation failures.
-    state_value.data_credit_.reset();
+    if (!state_value.release_data_credit()) {
+        return;
+    }
     http2_.wake_writer();
     // The returned credit lets the peer send again: the read is active.
     if (auto* stream = find_http2_request(state_value.request_id_); stream != nullptr && stream->state_ == &state_value) {
@@ -647,19 +646,13 @@ void http_client_connection::consume_http2_data(std::uint32_t stream_id, std::st
             stream->signal_.notify();
             return;
         }
-        if (state_value.collect_all_ || !credit.valid()) {
+        if (!state_value.retain_data_credit(std::move(credit))) {
             restart_http2_stream_read(*stream);
             return;
         }
     } catch (...) {
         fail_http2_stream(*stream, std::current_exception(), true);
         return;
-    }
-    auto& retained_credit = state_value.data_credit_;
-    if (!retained_credit) {
-        retained_credit.emplace(std::move(credit));
-    } else {
-        retained_credit->merge(std::move(credit));
     }
     // The peer may now wait for this client's consumer to return the credit;
     // release_response_data() restarts the read.
@@ -718,10 +711,7 @@ task<void> http_client_connection::deliver_http2_informational(std::uint32_t str
     } catch (...) {
         failure = std::current_exception();
     }
-    state->informational_active_ = false;
-    if (failure) {
-        state->failure_ = failure;
-    }
+    state->finish_informational(failure);
     state->head_signal_.notify();
     if (auto* current = find_http2_request(request_id)) {
         if (failure) {
@@ -932,8 +922,7 @@ void http_client_connection::remove_http2_stream(http2_stream& stream) noexcept 
         http2_.submit_reset(stream.stream_id_, response_kept ? http2_error_code::no_error : http2_error_code::cancel);
     }
     stream.timer_.cancel();
-    if (stream.state_->data_credit_) {
-        stream.state_->data_credit_.reset();
+    if (stream.state_->release_data_credit()) {
         http2_.wake_writer();
     }
     const auto index = stream.registry_index_;

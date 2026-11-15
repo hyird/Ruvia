@@ -20,6 +20,7 @@
 #include "http_header.h"
 #include "http_multiplexed_stream.h"
 #include "http_priority.h"
+#include "http_request.h"
 #include "http_request_expectation.h"
 #include "http_request_head_view.h"
 #include "http_response.h"

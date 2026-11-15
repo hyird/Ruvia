@@ -608,6 +608,25 @@ public:
         return response;
     }
 
+    // The response ended or the stream closed or was reset, as received so
+    // far: finish_response() then returns without waiting. Never waits.
+    [[nodiscard]] bool request_closed(std::int64_t stream_id) {
+        return response_complete(tracked_stream(stream_id));
+    }
+
+    // Request or tunnel DATA submitted on the stream that the server has not
+    // acknowledged yet; zero once the stream closed. Never waits.
+    [[nodiscard]] std::size_t unacknowledged_data_bytes(std::int64_t stream_id) const noexcept {
+        return connection_->http3().unacknowledged_data_bytes(stream_id);
+    }
+
+    // Sends a QUIC PING once the connection has been silent for `interval`
+    // while a wait drives it, so only the peer's HTTP deadlines can end it:
+    // a PING opens no stream and carries no HTTP/3 frame.
+    void keep_alive(std::chrono::milliseconds interval) noexcept {
+        ngtcp2_conn_set_keep_alive_timeout(connection_->native_handle(), static_cast<ngtcp2_duration>(std::chrono::duration_cast<std::chrono::nanoseconds>(interval).count()));
+    }
+
     // Abandons the request in both directions with RESET_STREAM and
     // STOP_SENDING carrying `application_error` (RFC 9114 §4.1.1).
     void reset_request(std::int64_t stream_id, http3_error_code application_error) {

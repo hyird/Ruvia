@@ -468,12 +468,11 @@ public:
         return nullptr;
     }
     void release(http_client_response_state& response) noexcept {
-        if (!response.data_credit_) {
-            return;
-        }
         // The token returns credit to the connection that issued it, or
         // nothing once that connection is gone.
-        response.data_credit_.reset();
+        if (!response.release_data_credit()) {
+            return;
+        }
         if (quic_ && response.connection_generation_ == generation_) {
             writer_.notify();
             if (auto* item = find(static_cast<std::int64_t>(response.stream_id_))) {
@@ -585,14 +584,9 @@ public:
         if (!response.append_received_body(bytes, pool_.config().max_response_bytes_)) {
             throw http_client_error(make_error_code(http_client_errc::response_too_large), "HTTP/3 response exceeds byte budget");
         }
-        if (response.collect_all_ || !credit.valid()) {
+        if (!response.retain_data_credit(std::move(credit))) {
             read_progress(item);
             return;
-        }
-        if (response.data_credit_) {
-            response.data_credit_->merge(std::move(credit));
-        } else {
-            response.data_credit_.emplace(std::move(credit));
         }
         item.timer_.read_deadline_.reset();
     }
@@ -718,10 +712,9 @@ public:
         } catch (...) {
             failure = std::current_exception();
         }
-        response->informational_active_ = false;
+        response->finish_informational(failure);
         auto* item = find(id);
         if (failure) {
-            response->failure_ = failure;
             if (item && &item->response_ == response) {
                 item->failure_ = failure;
                 cancel(*item, std::make_error_code(std::errc::operation_canceled));

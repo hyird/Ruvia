@@ -1,9 +1,12 @@
 #include <gtest/gtest.h>
 
+#include <array>
+#include <atomic>
 #include <chrono>
 #include <cstddef>
 #include <new>
 #include <optional>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <system_error>
@@ -25,6 +28,11 @@
 #include "http_server_fixture.h"
 #include "streaming.h"
 #include "worker_task_fixture.h"
+#include "worker_timer.h"
+#if defined(RUVIA_ENABLE_HTTP2)
+#include "http2_frame.h"
+#include "http2_hpack.h"
+#endif
 // Inbound buffer budgets on the streamed request body and CONNECT tunnel
 // paths. This executable owns its application with small inbound budgets.
 
@@ -45,10 +53,31 @@ constexpr std::size_t worker_budget = 10000;
     };
 }
 
+// What the held-view route saw: the size of its first read, the test's
+// release, and whether the view of that read still held its bytes then.
+struct held_view_observation final {
+    std::atomic<std::size_t> first_read_bytes_{};
+    std::atomic<bool> release_{};
+    std::atomic<bool> intact_{};
+};
+held_view_observation& held_view() {
+    static held_view_observation value;
+    return value;
+}
+
+// Releases the held-view route when its case ends, also by a failed assertion
+// or a throwing read, so the handler is never left parked.
+struct held_view_release final {
+    ~held_view_release() {
+        held_view().release_ = true;
+    }
+};
+
 class inbound_memory_routes final {
     RUVIA_ROUTES_BEGIN(inbound_memory_routes)
     RUVIA_POST("/inbound-buffered", buffered_body);
     RUVIA_POST("/inbound-stream", stream_body, ruvia::stream_body);
+    RUVIA_POST("/inbound-held-view", held_view_body, ruvia::stream_body);
     RUVIA_CONNECT("inbound-tunnel.test:443", tunnel);
     RUVIA_ROUTES_END
 
@@ -64,6 +93,29 @@ class inbound_memory_routes final {
             received += chunk->size();
         }
         co_return context_value.text(std::string(std::to_string(received)));
+    }
+
+    // Keeps the view of its first read until the test has seen the rest of
+    // the body exhaust the inbound budget, then reads again.
+    ruvia::task<ruvia::http_response> held_view_body(ruvia::context& context_value) {
+        auto& reader = context_value.request_body();
+        const auto first = co_await reader.read();
+        if (!first || first->empty()) {
+            throw std::runtime_error("held view request carried no content");
+        }
+        const std::string_view view(reinterpret_cast<const char*>(first->data()), first->size());
+        const std::string copy(view);
+        held_view().first_read_bytes_ = view.size();
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+        while (!held_view().release_.load()) {
+            if (std::chrono::steady_clock::now() >= deadline || co_await ruvia::sleep_for(context_value.worker(), std::chrono::milliseconds(1), context_value.stop_token()) != ruvia::timer_sleep_result::elapsed) {
+                throw std::runtime_error("held view was not released");
+            }
+        }
+        held_view().intact_ = view == copy;
+        // The body failed meanwhile: this read reports the exhausted budget.
+        (void)co_await reader.read();
+        co_return context_value.text("unreachable");
     }
 
     // Acknowledges each borrowed chunk and reports inbound budget exhaustion.
@@ -249,6 +301,90 @@ TEST(Ruvia, http2_request_body_inbound_budget_exhaustion_answers_with_503) {
     });
     driver.join();
     std::move(root).get();
+    server.finish();
+}
+
+// The view of a streamed body read stays valid until the next read starts
+// (body_reader::read). Exhausting the inbound budget meanwhile fails the body
+// and frees the content nobody read, not the chunk the handler still holds.
+// The request is written as frames: a PING sent after the body is
+// acknowledged only once the session has handled every frame before it.
+TEST(Ruvia, http2_inbound_budget_exhaustion_keeps_the_last_body_view_valid) {
+    auto& state = held_view();
+    state.first_read_bytes_ = 0;
+    state.release_ = false;
+    state.intact_ = false;
+    auto& io = ruvia::test::new_test_io_context();
+    ruvia::test::http_server_fixture server(io, inbound_memory_config());
+    const held_view_release release_at_exit{};
+    asio::ip::tcp::socket socket(io);
+    socket.connect(server.endpoint());
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    std::string wire(ruvia::http2_client_preface);
+    ruvia::test::append_frame(wire, ruvia::http2_frame_type::settings, 0, 0, {});
+    asio::write(socket, asio::buffer(wire));
+    for (;;) {
+        const auto frame = ruvia::test::read_frame(socket, deadline);
+        if (frame.header_.type_ == static_cast<unsigned>(ruvia::http2_frame_type::settings) && (frame.header_.flags_ & 1U) == 0) {
+            break;
+        }
+    }
+    wire.clear();
+    ruvia::test::append_frame(wire, ruvia::http2_frame_type::settings, 1, 0, {});
+    std::string block;
+    for (const auto& field : std::array<std::pair<std::string_view, std::string_view>, 4>{{{":method", "POST"}, {":scheme", "http"}, {":authority", "localhost"}, {":path", "/inbound-held-view"}}}) {
+        ruvia::hpack_encoder::encode_header(block, field.first, field.second);
+    }
+    // END_HEADERS, then the chunk the handler reads and keeps.
+    ruvia::test::append_frame(wire, ruvia::http2_frame_type::headers, 4, 1, block);
+    ruvia::test::append_frame(wire, ruvia::http2_frame_type::data, 0, 1, std::string(512, 'v'));
+    asio::write(socket, asio::buffer(wire));
+    while (state.first_read_bytes_.load() == 0) {
+        ASSERT_LT(std::chrono::steady_clock::now(), deadline);
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+
+    // The rest outgrows the connection budget while the handler is parked.
+    wire.clear();
+    const std::string rest(4096, 'r');
+    for (unsigned sent = 0; sent != 4; ++sent) {
+        ruvia::test::append_frame(wire, ruvia::http2_frame_type::data, sent == 3 ? 1 : 0, 1, rest);
+    }
+    ruvia::test::append_frame(wire, ruvia::http2_frame_type::ping, 0, 0, "heldview");
+    asio::write(socket, asio::buffer(wire));
+    for (;;) {
+        const auto frame = ruvia::test::read_frame(socket, deadline);
+        if (frame.header_.type_ == static_cast<unsigned>(ruvia::http2_frame_type::ping) && (frame.header_.flags_ & 1U) != 0) {
+            break;
+        }
+    }
+    state.release_ = true;
+
+    block.clear();
+    for (bool complete = false; !complete;) {
+        const auto frame = ruvia::test::read_frame(socket, deadline);
+        const auto type = frame.header_.type_;
+        // Credit of the dropped content returns as WINDOW_UPDATE.
+        if (frame.header_.stream_id_ != 1 || type == static_cast<unsigned>(ruvia::http2_frame_type::window_update)) {
+            continue;
+        }
+        ASSERT_TRUE(type == static_cast<unsigned>(ruvia::http2_frame_type::headers) || type == static_cast<unsigned>(ruvia::http2_frame_type::continuation));
+        block.append(frame.payload_);
+        complete = (frame.header_.flags_ & 4U) != 0;
+    }
+    std::string status;
+    ruvia::hpack_decoder decoder;
+    const auto error = decoder.decode(block, [&status](std::string_view name, std::string_view value) {
+        if (name == ":status") {
+            status = value;
+        }
+        return true;
+    });
+    EXPECT_FALSE(error.has_value());
+    EXPECT_EQ(status, "503");
+    EXPECT_TRUE(state.intact_.load());
+    std::error_code ignored;
+    socket.close(ignored);
     server.finish();
 }
 #endif

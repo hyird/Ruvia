@@ -375,7 +375,7 @@ ruvia::task<void> handle_udp(ruvia::context& c) {
 
 其他升级协议隧道（HTTP/2 Extended CONNECT）通过 `http_tunnel_route_config{.datagrams_ = true}` 声明使用 Capsule 协议：该路由的 2xx 响应携带唯一的 `Capsule-Protocol: ?1`（[RFC 9297 §3.4](https://www.rfc-editor.org/rfc/rfc9297.html#section-3.4)；`connect-udp` 由 RFC 9298 握手自行生成，不重复添加），处理器才可调用 `tunnel.datagrams()`、`udp()` 或 `capsules()`；未声明的路由调用这三者抛出 `std::logic_error`（协商由路由协议负责）。普通 `CONNECT` 路由声明 `datagrams_` 时注册即抛出 `std::invalid_argument`。
 
-HTTP/3 CONNECT-UDP 在双方协商 `SETTINGS_H3_DATAGRAM` 及 QUIC DATAGRAM 后优先发送原生不可靠数据报；否则使用请求流中的 DATAGRAM Capsule。`udp()` 在两种传输上统一处理 Context ID 0，空载荷也是有效数据报。不要将成功 `send()` 视为对端已收到：原生 QUIC DATAGRAM 不重传。
+HTTP/3 CONNECT-UDP 在双方协商 `SETTINGS_H3_DATAGRAM` 及 QUIC DATAGRAM 后优先发送原生不可靠数据报；否则使用请求流中的 DATAGRAM Capsule。`udp()` 在两种传输上统一处理 Context ID 0，空载荷也是有效数据报。不要将成功 `send()` 视为对端已收到：原生 QUIC DATAGRAM 不重传。服务端在处理器读取前暂存的原生数据报（每流至多 64 个）按载荷字节计入入站缓冲预算（`max_inbound_buffer_bytes_per_connection_` / `_per_worker_`），超出预算或上限的数据报直接丢弃（RFC 9221 允许丢失）；隧道未读的可靠字节超出预算时以 `H3_REQUEST_CANCELLED`（HTTP/2 为 `CANCEL`）重置该流。
 
 | 类名 | 核心方法 |
 | --- | --- |

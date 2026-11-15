@@ -581,6 +581,15 @@ public:
             informational_abort_->request_stop();
         }
     }
+    // The informational callbacks of an HTTP/2 or HTTP/3 response, run
+    // outside its connection's event dispatch, returned: their failure, if
+    // any, becomes the response's.
+    void finish_informational(const std::exception_ptr& failure) noexcept {
+        informational_active_ = false;
+        if (failure) {
+            failure_ = failure;
+        }
+    }
     void release_consumed_body_prefix();
     [[nodiscard]] bool append_received_body(std::string_view bytes_value, std::size_t max_response_bytes) {
         const auto retained = buffered_.size() - offset_ + pending_.size();
@@ -592,6 +601,30 @@ public:
         // Appending producer output must never relocate that view.
         pending_.append(bytes_value);
         data_signal_.notify();
+        return true;
+    }
+    // Keeps the receive credit of DATA appended for a consumer that takes it
+    // piecewise, until it does. False when nothing is held back -- the body
+    // is collected whole, or the chunk carried no credit -- so the stream's
+    // read stays active.
+    [[nodiscard]] bool retain_data_credit(::ruvia::http_received_data_credit&& credit) {
+        if (collect_all_ || !credit.valid()) {
+            return false;
+        }
+        if (data_credit_) {
+            data_credit_->merge(std::move(credit));
+        } else {
+            data_credit_.emplace(std::move(credit));
+        }
+        return true;
+    }
+    // The consumer took the buffered DATA: its credit returns to the issuing
+    // connection, or nowhere once that is gone. False when none was held.
+    bool release_data_credit() noexcept {
+        if (!data_credit_) {
+            return false;
+        }
+        data_credit_.reset();
         return true;
     }
 

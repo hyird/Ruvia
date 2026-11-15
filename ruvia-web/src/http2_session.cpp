@@ -185,157 +185,25 @@ private:
     std::array<bool, http2_data_output_credit_slots> cancelled_{};
 };
 
-enum class http2_body_queue_store_status : std::uint8_t {
-    stored,
-    backlog_overflow,
-    buffer_limit,
-};
-
-// Web-owned storage for body/tunnel bytes that have already crossed the
-// http2_connection event boundary. The HTTP/2 core owns framing and flow-control
-// debt; this queue owns only runtime buffering for a suspended route handler.
-// Pending DATA is concatenated so each frame is copied once, not into a new
-// string per frame. pop() swaps the pending buffer aside so enqueue cannot
-// invalidate the borrowed view.
-class http2_sans_io_body_queue final {
-public:
-    explicit http2_sans_io_body_queue(inbound_buffer_account* inbound = nullptr) noexcept :
-        queued_reservation_(inbound),
-        active_reservation_(inbound) {}
-
-    void enqueue(std::string_view data, http_received_data_credit&& credit) {
-        if (data.empty()) {
-            return;
-        }
-        // Transfer credit only after append succeeds; allocation failure leaves
-        // the incoming token with its owner for unwinding.
-        inbound_append(queued_chunk_, queued_reservation_, data);
-        if (!credit.valid()) {
-            return;
-        }
-        if (!queued_credit_.has_value()) {
-            queued_credit_.emplace(std::move(credit));
-            return;
-        }
-        queued_credit_->merge(std::move(credit));
-    }
-
-    [[nodiscard]] http2_body_queue_store_status enqueue_bounded(std::string_view data, http_received_data_credit&& credit, std::size_t backlog_limit) {
-        const auto queued_bytes = queued_chunk_.size();
-        if (queued_bytes > backlog_limit || data.size() > backlog_limit - queued_bytes) {
-            return http2_body_queue_store_status::backlog_overflow;
-        }
-        try {
-            enqueue(data, std::move(credit));
-        } catch (const inbound_buffer_limit_error&) {
-            return http2_body_queue_store_status::buffer_limit;
-        }
-        return http2_body_queue_store_status::stored;
-    }
-
-    // Release credits only after the consumer has copied/finished the active view.
-    void release_active_credits() noexcept {
-        active_credit_.reset();
-    }
-
-    [[nodiscard]] bool empty() const noexcept {
-        return queued_chunk_.empty();
-    }
-
-    // The message-end event for this body has been delivered. The core's own
-    // receive state can run ahead of event delivery within one input batch, so
-    // readers end on this flag rather than on the stream's receive status.
-    void mark_ended() noexcept {
-        ended_ = true;
-    }
-
-    [[nodiscard]] bool ended() const noexcept {
-        return ended_;
-    }
-
-    // The returned view remains valid until the next pop().
-    [[nodiscard]] std::string_view pop() & {
-        inbound_clear_retaining_small(active_chunk_, active_reservation_);
-        release_active_credits();
-        if (queued_chunk_.empty()) {
-            return {};
-        }
-        active_chunk_.swap(queued_chunk_);
-        active_reservation_.swap(queued_reservation_);
-        if (queued_credit_.has_value()) {
-            active_credit_.emplace(std::move(*queued_credit_));
-            queued_credit_.reset();
-        }
-        inbound_clear_retaining_small(queued_chunk_, queued_reservation_);
-        return std::string_view(active_chunk_);
-    }
-    std::string_view pop() && = delete;
-
-    void discard() noexcept {
-        inbound_discard(queued_chunk_, queued_reservation_);
-        inbound_discard(active_chunk_, active_reservation_);
-        queued_credit_.reset();
-        active_credit_.reset();
-    }
-
-private:
-    // The byte storage is destroyed before its credits, so return-window side
-    // effects cannot outlive the copied data they account for.
-    std::optional<http_received_data_credit> queued_credit_;
-    std::optional<http_received_data_credit> active_credit_;
-    std::string queued_chunk_;
-    inbound_buffer_reservation queued_reservation_;
-    std::string active_chunk_;
-    inbound_buffer_reservation active_reservation_;
-    bool ended_{false};
-};
-
-enum class http2_request_body_store_status : std::uint8_t {
-    stored,
-    too_large,
-    backlog_overflow,
-    buffer_limit,
-};
-
-class http2_sans_io_stream_runtime final {
+// Web-side state of one HTTP/2 stream: the shared request stream state plus
+// the leased request head and, for a pushed stream, its parent.
+class http2_sans_io_stream_runtime final : public multiplexed_request_stream_state {
 public:
     // The owning table resolves metadata and body resources before construction.
     explicit http2_sans_io_stream_runtime(std::uint32_t stream_id, inbound_buffer_account* inbound = nullptr) noexcept :
-        stream_id_(stream_id),
-        buffered_reservation_(inbound),
-        body_queue_(inbound) {}
+        multiplexed_request_stream_state(inbound),
+        stream_id_(stream_id) {}
+    ~http2_sans_io_stream_runtime() {
+        // Receive credit returns before the request-head lease lets the core
+        // retire the stream.
+        discard_body();
+    }
 
     void bind_push_parent(std::uint32_t id) noexcept {
         push_parent_ = id;
     }
     [[nodiscard]] std::uint32_t push_parent() const noexcept {
         return push_parent_;
-    }
-    [[nodiscard]] http_request_trailers& trailers() & noexcept RUVIA_LIFETIMEBOUND {
-        return trailers_;
-    }
-    http_request_trailers& trailers() && = delete;
-    [[nodiscard]] const std::optional<http_priority>& priority_update() const& noexcept RUVIA_LIFETIMEBOUND {
-        return priority_update_;
-    }
-    const std::optional<http_priority>& priority_update() const&& = delete;
-    void reprioritize(http_priority priority) noexcept {
-        priority_update_ = priority;
-    }
-    void mark_body_failure(http_request_body_failure failure) noexcept {
-        if (!body_failure_.has_value()) {
-            body_failure_ = failure;
-        }
-    }
-    [[nodiscard]] const std::optional<http_request_body_failure>& body_failure() const& noexcept RUVIA_LIFETIMEBOUND {
-        return body_failure_;
-    }
-    const std::optional<http_request_body_failure>& body_failure() const&& = delete;
-    void mark_response_committed() noexcept {
-        response_committed_ = true;
-    }
-    [[nodiscard]] bool response_committed() const noexcept {
-        return response_committed_;
     }
     [[nodiscard]] std::uint32_t stream_id() const noexcept {
         return stream_id_;
@@ -354,146 +222,10 @@ public:
     }
     http2_request_head_event* request_head() && = delete;
 
-    [[nodiscard]] bool select_route(route_resolution resolution, request_body_mode body_mode) noexcept {
-        if (route_selected_) {
-            return false;
-        }
-        resolution_ = std::move(resolution);
-        body_mode_ = body_mode;
-        route_selected_ = true;
-        return true;
-    }
-
-    [[nodiscard]] bool route_selected() const noexcept {
-        return route_selected_;
-    }
-
-    [[nodiscard]] const route_resolution& resolution() const& noexcept RUVIA_LIFETIMEBOUND {
-        return resolution_;
-    }
-    const route_resolution& resolution() const&& = delete;
-
-    [[nodiscard]] request_body_mode body_mode() const noexcept {
-        return body_mode_;
-    }
-
-    [[nodiscard]] http2_request_body_store_status store_body(http2_data_event& chunk, protocol_byte_limit total_limit, std::size_t backlog_limit) {
-        const auto data = chunk.bytes();
-        if (http_request_body_addition_failure(received_bytes_, data.size(), total_limit).has_value()) {
-            return http2_request_body_store_status::too_large;
-        }
-        if (body_mode_ == request_body_mode::stream) {
-            switch (body_queue_.enqueue_bounded(data, chunk.take_credit(), backlog_limit)) {
-                case http2_body_queue_store_status::stored:
-                    break;
-                case http2_body_queue_store_status::backlog_overflow:
-                    return http2_request_body_store_status::backlog_overflow;
-                case http2_body_queue_store_status::buffer_limit:
-                    return http2_request_body_store_status::buffer_limit;
-            }
-        } else {
-            try {
-                if (!data.empty()) {
-                    inbound_append(buffered_body_, buffered_reservation_, data);
-                }
-            } catch (const inbound_buffer_limit_error&) {
-                return http2_request_body_store_status::buffer_limit;
-            }
-        }
-        received_bytes_ += data.size();
-        return http2_request_body_store_status::stored;
-    }
-
-    [[nodiscard]] std::string_view buffered_body() const& noexcept RUVIA_LIFETIMEBOUND {
-        return buffered_body_;
-    }
-    std::string_view buffered_body() const&& = delete;
-
-    [[nodiscard]] http2_sans_io_body_queue& body_queue() & noexcept RUVIA_LIFETIMEBOUND {
-        return body_queue_;
-    }
-    http2_sans_io_body_queue& body_queue() && = delete;
-
-    [[nodiscard]] const http2_sans_io_body_queue& body_queue() const& noexcept RUVIA_LIFETIMEBOUND {
-        return body_queue_;
-    }
-    const http2_sans_io_body_queue& body_queue() const&& = delete;
-
-    void discard_body() noexcept {
-        inbound_discard(buffered_body_, buffered_reservation_);
-        body_queue_.discard();
-    }
-
-    [[nodiscard]] bool dispatched() const noexcept {
-        return signal_.has_value();
-    }
-
-    [[nodiscard]] multiplexed_stream_signal* signal() & noexcept RUVIA_LIFETIMEBOUND {
-        return signal_ ? &*signal_ : nullptr;
-    }
-    multiplexed_stream_signal* signal() && = delete;
-
-    [[nodiscard]] const multiplexed_stream_signal* signal() const& noexcept RUVIA_LIFETIMEBOUND {
-        return signal_ ? &*signal_ : nullptr;
-    }
-    const multiplexed_stream_signal* signal() const&& = delete;
-
-    // Request-body DATA arrived at `now_ms` (the time of the read carrying it).
-    void note_request_body_progress(std::int64_t now_ms) noexcept {
-        request_body_deadline_.progress(now_ms);
-    }
-
-    // The request body is still open and has gone `inactivity` without DATA,
-    // or `completion` since it opened (the stream's request_body_timeout_ and
-    // body_completion_timeout_).
-    [[nodiscard]] bool request_body_overdue(std::int64_t now_ms, const std::optional<timeout_duration>& inactivity, const std::optional<timeout_duration>& completion) const noexcept {
-        return request_body_deadline_.overdue(now_ms, inactivity, completion);
-    }
-
 private:
-    friend class http2_sans_io_stream_runtime_table;
-
-    [[nodiscard]] multiplexed_stream_signal* begin_dispatch(const worker_ref& worker_value, multiplexed_session_termination& termination) {
-        if (!route_selected_ || signal_) {
-            return nullptr;
-        }
-        signal_.emplace(worker_value, termination);
-        return &*signal_;
-    }
-
-    void mark_tunnel() noexcept {
-        tunnel_ = true;
-    }
-
-    [[nodiscard]] bool tunnel() const noexcept {
-        return tunnel_;
-    }
-
-    void mark_request_body_open(std::int64_t now_ms) noexcept {
-        request_body_deadline_.open(now_ms);
-    }
-
-    void mark_request_body_closed() noexcept {
-        request_body_deadline_.close();
-    }
-
     std::uint32_t stream_id_;
     std::uint32_t push_parent_{};
-    http_request_trailers trailers_;
-    std::optional<http_priority> priority_update_{};
     std::optional<http2_request_head_event> request_head_;
-    route_resolution resolution_{};
-    request_body_mode body_mode_{request_body_mode::buffered};
-    std::string buffered_body_;
-    inbound_buffer_reservation buffered_reservation_;
-    http2_sans_io_body_queue body_queue_;
-    std::size_t received_bytes_{0};
-    std::optional<multiplexed_stream_signal> signal_;
-    std::optional<http_request_body_failure> body_failure_{};
-    multiplexed_request_body_deadline request_body_deadline_;
-    bool route_selected_{false};
-    bool tunnel_{false};
-    bool response_committed_{false};
 };
 
 // Stable per-stream Web runtime storage. The common multiplexing case uses inline
@@ -952,7 +684,7 @@ public:
     // continue_output is non-null when the request carries a pending
     // 100-continue expectation: the first read sends it, as the HTTP/1 reader
     // does, so an unread content never prompts the client to send it.
-    http2_sans_io_request_body_reader(ruvia::http2_connection& connection, std::uint32_t stream_id, http2_sans_io_body_queue& body_queue, const std::optional<http_request_body_failure>& body_failure, multiplexed_stream_signal& signal, worker_signal& write_signal, http_interim_response_output* continue_output) noexcept :
+    http2_sans_io_request_body_reader(ruvia::http2_connection& connection, std::uint32_t stream_id, multiplexed_request_body_queue& body_queue, const std::optional<http_request_body_failure>& body_failure, multiplexed_stream_signal& signal, worker_signal& write_signal, http_interim_response_output* continue_output) noexcept :
         multiplexed_request_body_reader_base(signal, continue_output),
         connection_(connection),
         stream_id_(stream_id),
@@ -988,7 +720,7 @@ private:
 
     ruvia::http2_connection& connection_;
     std::uint32_t stream_id_;
-    http2_sans_io_body_queue& body_queue_;
+    multiplexed_request_body_queue& body_queue_;
     const std::optional<http_request_body_failure>& body_failure_;
     worker_signal& write_signal_;
 };
@@ -1090,7 +822,7 @@ private:
 // Queued input retains its receive-window credit until the application consumes it.
 class http2_sans_io_tunnel_transport final : public multiplexed_tunnel_transport_base<http2_sans_io_tunnel_transport> {
 public:
-    http2_sans_io_tunnel_transport(http2_sans_io_session_engine& engine, ruvia::http2_connection& connection, std::uint32_t stream_id, http2_sans_io_body_queue& body_queue, multiplexed_stream_signal& signal, worker_signal& write_signal, http2_data_output_budget& output_budget) noexcept :
+    http2_sans_io_tunnel_transport(http2_sans_io_session_engine& engine, ruvia::http2_connection& connection, std::uint32_t stream_id, multiplexed_request_body_queue& body_queue, multiplexed_stream_signal& signal, worker_signal& write_signal, http2_data_output_budget& output_budget) noexcept :
         multiplexed_tunnel_transport_base(signal),
         engine_(&engine),
         connection_(connection),
@@ -1153,7 +885,7 @@ private:
             return false;
         }
         buffer.append(std::string_view(chunk.data(), chunk.size()));
-        body_queue_.release_active_credits();
+        (void)body_queue_.release_active();
         if (connection_.wants_write()) {
             wake_writer();
         }
@@ -1171,7 +903,7 @@ private:
     http2_sans_io_session_engine* engine_;
     ruvia::http2_connection& connection_;
     std::uint32_t stream_id_;
-    http2_sans_io_body_queue& body_queue_;
+    multiplexed_request_body_queue& body_queue_;
     worker_signal& write_signal_;
     http2_data_output_budget& output_budget_;
     bool aborted_{false};
@@ -1606,7 +1338,7 @@ task<void> http2_sans_io_session_engine::dispatch_one(std::uint32_t stream_id) {
             .interim_output_ = &interim_output,
             .connection_advertisements_ = &advertisements,
             .push_output_ = &push_output,
-            .priority_update_ = &stream_runtime->priority_update(),
+            .priority_update_ = &stream_runtime->priority(),
         });
         admission_services.bind_request_trailers(stream_runtime->trailers());
         auto admission = admit_http_request(
@@ -1679,16 +1411,7 @@ task<void> http2_sans_io_session_engine::dispatch_one(std::uint32_t stream_id) {
                         co_return websocket_upgrade_commit<http2_sans_io_tunnel_transport>(finish_upgrade_commit(http_status::ok, context_value), handshake->compression(), handshake->subprotocol());
                     };
                     http2_sans_io_response_stream_sink refusal_sink(connection_, stream_id, *stream_runtime, write_signal_, *stream_signal, output_budget_, request.known_method(), *options.codecs_, *admission.tail().coding_policy().selection(), options.compression_ ? &*options.compression_ : nullptr, admission.tail().cors(options));
-                    auto refusal_writer = make_response_stream_writer(refusal_sink);
-                    auto upgrade_services = dispatch_services;
-                    if (is_request_stream_tunnel_route(resolved->route())) {
-                        upgrade_services.bind_response_stream(refusal_writer);
-                    }
-                    auto buffered = co_await execute_tunnel_upgrade_session<http2_sans_io_tunnel_transport>(routes_, request, *resolved, upgrade_services, options, session_.scanner_entry(), inbound_buffers_, admission.udp_tunnel(), std::string_view{}, commit, commit_websocket);
-                    if (refusal_sink.committed()) {
-                        admission.tail().record_access(options.access_log_, committed_response_stream_status(refusal_sink));
-                        co_return;
-                    }
+                    auto buffered = co_await execute_multiplexed_tunnel_endpoint<http2_sans_io_tunnel_transport>(refusal_sink, routes_, request, *resolved, dispatch_services, options, session_.scanner_entry(), inbound_buffers_, admission.udp_tunnel(), admission.tail(), commit, commit_websocket);
                     if (!buffered) {
                         co_return;
                     }
@@ -1699,9 +1422,7 @@ task<void> http2_sans_io_session_engine::dispatch_one(std::uint32_t stream_id) {
                     const auto& websocket_endpoint = *resolved->route().endpoint().websocket();
                     const auto handshake_validation = connection_.validate_websocket_handshake(stream_id, request, websocket_endpoint.handshake_validation());
                     if (const auto* failure = std::get_if<websocket_handshake_error>(&handshake_validation)) {
-                        const auto protocol_error = make_http_protocol_error(*failure);
-                        response = co_await routes_.respond_error(request, http_error_info({.status_ = protocol_error.status(), .code_ = protocol_error.code(), .message_ = std::string_view(protocol_error.what())}), request_services);
-                        apply_websocket_handshake_error_headers(*failure, response);
+                        response = co_await respond_websocket_handshake_failure(routes_, request, *failure, request_services, admission.tail());
                         break;
                     }
                     if (!streaming_body) {
@@ -1777,6 +1498,7 @@ bool http2_sans_io_session_engine::admit_stream(std::uint32_t stream_id) {
         counted = true;
         ruvia::async_start(dispatch_one(stream_id), asio::bind_executor(executor_, [this](std::exception_ptr exception) noexcept {
             if (exception != nullptr) {
+                // dispatch_one() contains its failures, so this is a broken invariant: the session's stream state is no longer trusted and the session ends. HTTP/3 keeps its connection, restoring the one stream outside the coroutine.
                 if (auto* lifecycle = base_services_.connection_lifecycle_value()) {
                     lifecycle->note_exception(exception);
                 }
@@ -1842,7 +1564,7 @@ void http2_sans_io_session_engine::on_message_head(http2_request_head_event& mes
     // even when it starts and ends within this input batch.
     set_inactivity_phase();
     if (snapshot.priority_update_.has_value()) {
-        stream_runtime->reprioritize(snapshot.priority_update_->request_priority());
+        stream_runtime->set_priority(snapshot.priority_update_->request_priority());
     }
     const bool connect_request = snapshot.connect_pending_;
     if (snapshot.body_open_ && !connect_request) {
@@ -1919,42 +1641,18 @@ void http2_sans_io_session_engine::on_body_chunk(http2_data_event& body_chunk) {
         wake_writer();
         return;
     }
-    const auto total_limit = http_request_body_limit(stream_runtime->resolution(), stream_runtime->body_mode(), admission_policy_);
-    const auto store_status = stream_runtime->store_body(body_chunk, total_limit, options.server_.max_buffered_body_bytes_);
-    if (store_status == http2_request_body_store_status::backlog_overflow) {
-        reset_event_stream(stream_id, http2_error_code::cancel);
+    if (streaming_body && !stream_runtime->dispatched()) {
+        // A streamed body is dispatched from its request head.
+        reset_event_stream(stream_id, http2_error_code::internal_error);
         return;
     }
-    if (store_status == http2_request_body_store_status::too_large || store_status == http2_request_body_store_status::buffer_limit) {
-        const auto failure = store_status == http2_request_body_store_status::buffer_limit ? http_request_body_failure::buffer_limit : http_request_body_failure::too_large;
-        if (failure == http_request_body_failure::buffer_limit) {
-            stream_runtime->discard_body();
-        }
-        stream_runtime->mark_body_failure(failure);
-        (void)body_chunk.take_credit();
-        if (stream_runtime->response_committed()) {
-            reset_event_stream(stream_id, http2_error_code::cancel);
-            return;
-        }
+    store_multiplexed_request_body_chunk(*stream_runtime, body_chunk.bytes(), body_chunk.take_credit(), http_request_body_limit(stream_runtime->resolution(), stream_runtime->body_mode(), admission_policy_), options.server_.max_buffered_body_bytes_, [this, stream_id](bool cancelled) noexcept {
+        reset_event_stream(stream_id, cancelled ? http2_error_code::cancel : http2_error_code::internal_error);
+    }, [this]() noexcept {
         wake_writer();
-        if (auto* signal = stream_runtime->signal()) {
-            signal->wake();
-        } else if (!admit_stream(stream_id)) {
-            reset_event_stream(stream_id, http2_error_code::internal_error);
-        }
-        return;
-    }
-    if (streaming_body) {
-        auto* signal = stream_runtime->signal();
-        if (signal == nullptr) {
-            reset_event_stream(stream_id, http2_error_code::internal_error);
-            return;
-        }
-        signal->wake();
-    } else {
-        (void)body_chunk.take_credit();
-        wake_writer();
-    }
+    }, [this, stream_id] {
+        return admit_stream(stream_id);
+    });
 }
 
 void http2_sans_io_session_engine::on_tunnel_data(http2_tunnel_data_event& tunnel_data) {
@@ -1975,7 +1673,7 @@ void http2_sans_io_session_engine::on_tunnel_data(http2_tunnel_data_event& tunne
         wake_writer();
         return;
     }
-    if (stream_runtime->body_queue().enqueue_bounded(tunnel_data.bytes(), tunnel_data.take_credit(), options.server_.max_buffered_body_bytes_) != http2_body_queue_store_status::stored) {
+    if (stream_runtime->body_queue().enqueue_bounded(tunnel_data.bytes(), tunnel_data.take_credit(), options.server_.max_buffered_body_bytes_) != multiplexed_body_store_status::stored) {
         reset_event_stream(stream_id, http2_error_code::cancel);
         return;
     }
@@ -2059,7 +1757,7 @@ void http2_sans_io_session_engine::drain_events() {
             on_stream_closed(*stream_closed);
         } else if (const auto* update = event->priority_update(); update != nullptr) {
             if (auto* runtime = stream_runtimes_.find(static_cast<std::uint32_t>(update->element_id_))) {
-                runtime->reprioritize(update->fields_.request_priority());
+                runtime->set_priority(update->fields_.request_priority());
             }
         }
     }

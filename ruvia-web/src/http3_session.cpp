@@ -122,11 +122,13 @@ private:
     }
 
     [[nodiscard]] std::string_view pop_chunk() noexcept {
-        const auto [chunk, returned] = stream_.pop();
-        if (returned) {
+        auto& queue = stream_.body_queue();
+        // The handler consumed the previous chunk: its credit returns before
+        // this reader may suspend with the peer blocked on it.
+        if (queue.release_active()) {
             session_.wake_writer();
         }
-        return chunk;
+        return queue.pop();
     }
 
     [[nodiscard]] bool body_ended() const noexcept {
@@ -225,11 +227,9 @@ public:
         for (;;) {
             require_live();
             // Reliable input is not starved by a native datagram flood.
-            auto chunk = stream_.take_tunnel_bytes();
-            if (!chunk.bytes_.empty()) {
-                chunk.credit_.reset();
+            if (auto bytes = stream_.body_queue().take(); !bytes.empty()) {
                 session_.wake_writer();
-                co_return http_tunnel_input{std::move(chunk.bytes_), false};
+                co_return http_tunnel_input{std::move(bytes), false};
             }
             if (auto payload = stream_.pop_datagram()) {
                 co_return http_tunnel_input{std::move(*payload), true};
@@ -289,14 +289,15 @@ private:
 
     template <typename buffer_type>
     [[nodiscard]] bool consume_tunnel_chunk(buffer_type& buffer) {
-        auto chunk = stream_.take_tunnel_bytes();
-        if (chunk.bytes_.empty()) {
+        auto& queue = stream_.body_queue();
+        const auto chunk = queue.pop();
+        if (chunk.empty()) {
             return false;
         }
-        buffer.append(chunk.bytes_);
-        std::string(chunk.bytes_.get_allocator()).swap(chunk.bytes_);
-        chunk.credit_.reset();
-        session_.wake_writer();
+        buffer.append(chunk);
+        if (queue.release_active()) {
+            session_.wake_writer();
+        }
         return true;
     }
 
@@ -523,7 +524,7 @@ void http3_session::reset_stream(std::int64_t stream_id, http3_error_code error)
         stream->mark_aborted();
         if (!stream->dispatched() || stream->handler_done()) {
             stream->mark_request_body_closed();
-            (void)stream->discard_body();
+            (void)stream->discard_inbound();
             remove_stream_if_done(stream_id);
         }
     }
@@ -683,9 +684,6 @@ void http3_session::on_request_head(http3_request_head_event& event) {
     const auto connect = head.connect();
     auto [resolution, body_mode] = resolve_multiplexed_stream_route(services_.routes_, endpoint_.session_config().request_stream_, head.method(), head.path(), head.authority(), head.protocol());
     const auto* resolved = resolution.resolved();
-    if (connect) {
-        body_mode = request_body_mode::stream;
-    }
     const bool resolved_route = resolved != nullptr && !connect;
     const auto expectation_plan = head.expectation_plan(http_unsupported_expectation_policy::reject);
     const auto declared_length = head.declared_content_length();
@@ -750,30 +748,30 @@ void http3_session::on_data(http3_data_event& event) {
         return;
     }
     stream->note_request_body_progress(scanner_entry_.last_active_ms());
-    const auto total_limit = stream->head().connect() ? protocol_byte_limit::unlimited() : http_request_body_limit(stream->resolution(), stream->body_mode(), admission_policy_);
-    const auto status = stream->store(event.bytes(), std::move(credit), total_limit, services_.options_.server_.max_buffered_body_bytes_);
-    if (status == http3_body_store_status::backlog_overflow) {
-        reset_stream(stream_id, http3_error_code::request_cancelled);
-        return;
-    }
-    if (status == http3_body_store_status::too_large) {
-        stream->mark_body_failure(http_request_body_failure::too_large);
-        if (stream->response_committed()) {
-            reset_stream(stream_id, http3_error_code::request_cancelled);
+    const auto backlog_limit = services_.options_.server_.max_buffered_body_bytes_;
+    if (stream->head().connect()) {
+        // Tunnel bytes, as HTTP/2's on_tunnel_data. A CONNECT that no tunnel
+        // or WebSocket route accepts has no reader: its bytes are dropped and
+        // their credit returns, so its refusal is still answered. An accepted
+        // tunnel has no response left to report a backlog or inbound budget
+        // overflow, so its stream is cancelled rather than truncated.
+        if (stream->body_mode() != request_body_mode::stream) {
             return;
         }
-        if (auto* signal = stream->signal()) {
+        if (stream->body_queue().enqueue_bounded(event.bytes(), std::move(credit), backlog_limit) != multiplexed_body_store_status::stored) {
+            reset_stream(stream_id, http3_error_code::request_cancelled);
+        } else if (auto* signal = stream->signal()) {
             signal->wake();
-        } else if (!admit_stream(stream_id)) {
-            reset_stream(stream_id, http3_error_code::internal_error);
         }
         return;
     }
-    if (stream->body_mode() == request_body_mode::stream) {
-        if (auto* signal = stream->signal()) {
-            signal->wake();
-        }
-    }
+    store_multiplexed_request_body_chunk(*stream, event.bytes(), std::move(credit), http_request_body_limit(stream->resolution(), stream->body_mode(), admission_policy_), backlog_limit, [this, stream_id](bool cancelled) noexcept {
+        reset_stream(stream_id, cancelled ? http3_error_code::request_cancelled : http3_error_code::internal_error);
+    }, [this]() noexcept {
+        wake_writer();
+    }, [this, stream_id] {
+        return admit_stream(stream_id);
+    });
 }
 
 void http3_session::on_message_end(const http3_message_end_event& event) {
@@ -807,6 +805,7 @@ void http3_session::on_stream_abort(const http3_transport_action_event& event) n
     // never decoded; once the request ended it can only STOP_SENDING the
     // response. A tracked stream counts once for both directions.
     const bool abandons = event.action() == http3_transport_action::reset_stream || (stream != nullptr && stream->request_ended());
+    // Counted here, where HTTP/2 counts in its core: a QUIC stream reset is a transport action, not an HTTP/3 frame the core reads.
     if (event.origin() == http3_transport_action_origin::peer && abandons && (stream == nullptr || stream->note_peer_abandoned())) {
         ++peer_reset_streams_;
         if (lifecycle_ == lifecycle_type::open && !connection_->closed() && peer_reset_streams_ > completed_responses_ + max_unprocessed_stream_resets) {
@@ -857,7 +856,7 @@ void http3_session::remove_stream_if_done(std::int64_t stream_id) noexcept {
     if (stream.dispatched() ? !stream.handler_done() : (!stream.closed() && !stream.aborted())) {
         return;
     }
-    if (stream.discard_body()) {
+    if (stream.discard_inbound()) {
         wake_writer();
     }
     if (stream.tunnel()) {
@@ -886,7 +885,7 @@ void http3_session::finish_stream_handler(std::int64_t stream_id) noexcept {
     }
     // Content that arrived but was never read holds connection credit.
     stream->mark_request_body_closed();
-    (void)stream->discard_body();
+    (void)stream->discard_inbound();
     remove_stream_if_done(stream_id);
     wake_writer();
 }
@@ -930,13 +929,21 @@ bool http3_session::admit_stream(std::int64_t stream_id) {
     }
     bool counted = false;
     try {
-        if (stream->begin_dispatch(services_.worker_, termination_) == nullptr) {
+        if (stream->handler_done()) {
             return false;
+        }
+        auto* signal = stream->begin_dispatch(services_.worker_, termination_);
+        if (signal == nullptr) {
+            return false;
+        }
+        if (stream->aborted()) {
+            signal->stop();
         }
         ++active_handler_tasks_;
         counted = true;
         ruvia::async_start(dispatch_one(stream_id), asio::bind_executor(services_.io_.get_executor(), [this, stream_id](std::exception_ptr exception) noexcept {
             if (exception != nullptr) {
+                // dispatch_one() contains its failures, so this is a broken invariant. The connection is kept, where HTTP/2 ends its session: this stream's state is restored right below, outside the coroutine.
                 services_.options_.connection_failure_.invoke(remote_address_, std::move(exception));
             }
             finish_stream_handler(stream_id);
@@ -1091,16 +1098,7 @@ task<void> http3_session::dispatch_one(std::int64_t stream_id) {
                         co_return websocket_upgrade_commit<http3_tunnel_transport>(http3_tunnel_transport(*this, *stream, *signal), handshake->compression(), handshake->subprotocol());
                     };
                     http3_response_stream_sink refusal_sink(*this, *stream, *signal, request.known_method(), *options.codecs_, *admission.tail().coding_policy().selection(), options.compression_ ? &*options.compression_ : nullptr, admission.tail().cors(options));
-                    auto refusal_writer = make_response_stream_writer(refusal_sink);
-                    auto upgrade_services = dispatch_services;
-                    if (is_request_stream_tunnel_route(resolved->route())) {
-                        upgrade_services.bind_response_stream(refusal_writer);
-                    }
-                    auto buffered = co_await execute_tunnel_upgrade_session<http3_tunnel_transport>(routes, request, *resolved, upgrade_services, options, scanner_entry_, inbound_buffers_, admission.udp_tunnel(), std::string_view{}, commit, commit_websocket);
-                    if (refusal_sink.committed()) {
-                        admission.tail().record_access(options.access_log_, committed_response_stream_status(refusal_sink));
-                        co_return;
-                    }
+                    auto buffered = co_await execute_multiplexed_tunnel_endpoint<http3_tunnel_transport>(refusal_sink, routes, request, *resolved, dispatch_services, options, scanner_entry_, inbound_buffers_, admission.udp_tunnel(), admission.tail(), commit, commit_websocket);
                     if (!buffered) {
                         co_return;
                     }
@@ -1111,10 +1109,7 @@ task<void> http3_session::dispatch_one(std::int64_t stream_id) {
                     const auto& endpoint = *resolved->route().endpoint().websocket();
                     const auto validation = codec().validate_websocket_handshake(stream->id(), request, endpoint.handshake_validation());
                     if (const auto* failure = std::get_if<websocket_handshake_error>(&validation)) {
-                        admission.tail().disable_response_coding();
-                        const auto protocol_error = make_http_protocol_error(*failure);
-                        response = co_await routes.respond_error(request, http_error_info({.status_ = protocol_error.status(), .code_ = protocol_error.code(), .message_ = std::string_view(protocol_error.what())}), request_services);
-                        apply_websocket_handshake_error_headers(*failure, response);
+                        response = co_await respond_websocket_handshake_failure(routes, request, *failure, request_services, admission.tail());
                         break;
                     }
                     auto commit = [this, stream, signal, &request, &validation, &endpoint, &admission, &options](context& context_value, std::span<const http_header_view> headers) {
@@ -1230,6 +1225,9 @@ task<void> http3_session::flush() {
         break;
     }
     if (lifecycle_ == lifecycle_type::open) {
+        // Nothing is left to write: a queued final GOAWAY went out, unless
+        // congestion or flow control holds it, which a drain does not wait for.
+        final_goaway_flushed_ = final_goaway_flushed_ || codec().drain_final();
         finish_drain_if_ready();
         arm_timer();
     }
@@ -1406,6 +1404,7 @@ void http3_session::begin_drain() noexcept {
     if (lifecycle_ != lifecycle_type::open) {
         return;
     }
+    // HTTP/2 has no such phase: its drain starts on a connection that needs no handshake first.
     if (!connection_->http3_started()) {
         if (streams_.empty() && accepted_request_heads_ == 0) {
             // No request can be in flight before the handshake completed.
@@ -1434,6 +1433,7 @@ void http3_session::arm_drain_timer() noexcept {
     if (!drain_timer_.needed(termination_.terminated(), codec().drain_final())) {
         return;
     }
+    // HTTP/2 waits its fixed bound alone: TCP gives it no probe timeout to cap the wait with.
     const auto round_trip = std::chrono::ceil<std::chrono::milliseconds>(http3_quic_nanoseconds(connection_->close_period()));
     const auto bound = (std::min)(http3_drain_round_trip_bound, (std::max)(round_trip, std::chrono::milliseconds(1)));
     drain_timer_.arm(services_.worker_, bound, [this]() noexcept {
@@ -1451,13 +1451,16 @@ void http3_session::drain_timer_expired() noexcept {
         connection_->close(http3_error_code::internal_error);
     }
     drain_timer_.mark_expired();
+    // The writer sends the final GOAWAY before the drain may close the
+    // connection: its flush re-checks once nothing is left to write.
     wake_writer();
     finish_drain_if_ready();
-    arm_drain_timer();
 }
 
 void http3_session::finish_drain_if_ready() noexcept {
-    if (lifecycle_ != lifecycle_type::open || !drain_begun_ || connection_->closed() || !codec().drain_final()) {
+    // A CONNECTION_CLOSE written ahead of the queued final GOAWAY would
+    // replace it, so the close waits for the writer pass that sends it.
+    if (lifecycle_ != lifecycle_type::open || !drain_begun_ || connection_->closed() || !codec().drain_final() || !final_goaway_flushed_) {
         return;
     }
     // Every admitted stream closed -- its response acknowledged -- ends the

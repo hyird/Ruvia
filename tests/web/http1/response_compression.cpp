@@ -12,6 +12,7 @@
 #include <string>
 #include <string_view>
 #include <system_error>
+#include <utility>
 #include <variant>
 #include <vector>
 
@@ -33,6 +34,10 @@
 #include "http_server_fixture.h"
 #include "streaming.h"
 #include "worker_task_fixture.h"
+#if defined(RUVIA_ENABLE_HTTP2)
+#include "http2_frame.h"
+#include "http2_hpack.h"
+#endif
 // Inline buffered-response compression on one worker, whose encoders are
 // reused across responses. This executable owns its application, so the
 // app-wide compression policy cannot change the bodies of other suites.
@@ -103,7 +108,13 @@ class response_compression_routes final {
     RUVIA_GET("/compression-stream-declared", stream_declared_length);
     RUVIA_GET("/compression-validators", validators);
     RUVIA_GET("/compression-media", media);
+    RUVIA_GET_WS("/compression-websocket", refused_websocket);
     RUVIA_ROUTES_END
+
+    // Never reached: the cases refuse the handshake.
+    ruvia::task<void> refused_websocket(ruvia::context&) {
+        co_return;
+    }
 
     ruvia::task<ruvia::http_response> small(ruvia::context& context_value) {
         co_return context_value.text(std::string_view(small_body));
@@ -332,6 +343,72 @@ class response_compression_routes final {
 }
 
 }  // namespace
+
+#if defined(RUVIA_ENABLE_HTTP2)
+// A WebSocket handshake that fails validation is answered with a generated
+// error, which does not inherit the negotiated coding promise: HTTP/2 leaves
+// it unencoded, as HTTP/1.1 and HTTP/3 do, even for a client that refuses
+// identity -- a refusal that would encode a body of any size. The typed
+// client senders always offer version 13, so the request is written as frames.
+TEST(Ruvia, http2_websocket_handshake_failure_response_is_not_encoded) {
+    auto& io = ruvia::test::new_test_io_context();
+    ruvia::test::http_server_fixture server(io, compressing_server());
+    asio::ip::tcp::socket socket(io);
+    socket.connect(server.endpoint());
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    std::string wire(ruvia::http2_client_preface);
+    ruvia::test::append_frame(wire, ruvia::http2_frame_type::settings, 0, 0, {});
+    asio::write(socket, asio::buffer(wire));
+    for (;;) {
+        const auto frame = ruvia::test::read_frame(socket, deadline);
+        if (frame.header_.type_ == static_cast<unsigned>(ruvia::http2_frame_type::settings) && (frame.header_.flags_ & 1U) == 0) {
+            break;
+        }
+    }
+    wire.clear();
+    ruvia::test::append_frame(wire, ruvia::http2_frame_type::settings, 1, 0, {});
+    std::string block;
+    for (const auto& field : std::array<std::pair<std::string_view, std::string_view>, 7>{{{":method", "CONNECT"}, {":protocol", "websocket"}, {":scheme", "http"}, {":authority", "localhost"}, {":path", "/compression-websocket"}, {"sec-websocket-version", "12"}, {"accept-encoding", "gzip, identity;q=0"}}}) {
+        ruvia::hpack_encoder::encode_header(block, field.first, field.second);
+    }
+    // END_HEADERS without END_STREAM, on the first client stream.
+    ruvia::test::append_frame(wire, ruvia::http2_frame_type::headers, 4, 1, block);
+    asio::write(socket, asio::buffer(wire));
+
+    block.clear();
+    for (bool complete = false; !complete;) {
+        const auto frame = ruvia::test::read_frame(socket, deadline);
+        if (frame.header_.stream_id_ != 1) {
+            continue;
+        }
+        const auto type = frame.header_.type_;
+        ASSERT_TRUE(type == static_cast<unsigned>(ruvia::http2_frame_type::headers) || type == static_cast<unsigned>(ruvia::http2_frame_type::continuation));
+        block.append(frame.payload_);
+        complete = (frame.header_.flags_ & 4U) != 0;
+    }
+    std::string status;
+    bool version = false;
+    bool encoded = false;
+    ruvia::hpack_decoder decoder;
+    const auto error = decoder.decode(block, [&](std::string_view name, std::string_view value) {
+        if (name == ":status") {
+            status = value;
+        } else if (name == "sec-websocket-version") {
+            version = value == "13";
+        } else if (name == "content-encoding") {
+            encoded = true;
+        }
+        return true;
+    });
+    EXPECT_FALSE(error.has_value());
+    EXPECT_EQ(status, "400");
+    EXPECT_TRUE(version);
+    EXPECT_FALSE(encoded);
+    std::error_code ignored;
+    socket.close(ignored);
+    server.finish();
+}
+#endif
 
 TEST(Ruvia, http1_streaming_head_preserves_coding_before_following_encoded_get) {
     auto& io = ruvia::test::new_test_io_context();

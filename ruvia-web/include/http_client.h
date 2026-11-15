@@ -15,6 +15,7 @@
 
 #include "event_loop.h"
 #include "http2_push.h"
+#include "http_authority.h"
 #include "http_capsule.h"
 #include "http_client_types.h"
 #include "http_connect_udp.h"
