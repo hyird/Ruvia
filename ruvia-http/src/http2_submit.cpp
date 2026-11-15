@@ -22,7 +22,6 @@
 #include "http2_stream_state.h"
 #include "http_advertisement_payload.h"
 #include "http_binary_message.h"
-#include "http_client_request_view.h"
 #include "http_field_kind.h"
 #include "http_field_validation.h"
 #include "http_header.h"
@@ -31,6 +30,7 @@
 #include "http_priority.h"
 #include "http_protocol.h"
 #include "http_request.h"
+#include "http_request_head_view.h"
 #include "http_response.h"
 #include "http_response_body.h"
 #include "http_response_framing.h"
@@ -180,7 +180,7 @@ std::variant<http_response_stream_commit_plan, http_response_head_error> http2_c
     if (const auto error = response_head_admission_error(stream, head.status())) {
         return *error;
     }
-    auto prepared_commit_plan = plan_http_response_stream_commit(http_response_stream_framing::http2_frames, stream->request_known_method(), head.status(), trailer_intent);
+    auto prepared_commit_plan = plan_http_response_stream_commit(http_multiplexed_frames{}, stream->request_known_method(), head.status(), trailer_intent);
     if (!prepared_commit_plan.trailer_intent_allowed()) {
         return http_response_head_error::invalid_message;
     }
@@ -310,7 +310,7 @@ std::variant<websocket_extended_connect_negotiation, http_response_head_error> h
     if (stream == nullptr) {
         return http_response_head_error::closed;
     }
-    if (role_ != http_connection_role::server || !http2_remote_final_head_decoded(*stream) || http2_websocket_connect_remote_head_ended(*stream) || !http2_websocket_connect_content_acceptable(*stream) || stream->local_send().head_pending() == nullptr || !http2_is_pending_websocket_connect(*stream) || validation.accepted() == nullptr) {
+    if (role_ != http_connection_role::server || !http2_remote_final_head_decoded(*stream) || http2_websocket_connect_remote_head_ended(*stream) || !http2_websocket_connect_content_acceptable(*stream) || stream->local_send().head_pending() == nullptr || !http2_is_pending_websocket_connect(*stream) || !std::holds_alternative<std::monostate>(validation)) {
         return http_response_head_error::invalid_state;
     }
     auto negotiation = make_websocket_server_negotiation(request, options);
@@ -376,6 +376,26 @@ http_finish_status http2_connection::finish_response(std::uint32_t stream_id, co
     return http_finish_status::accepted;
 }
 
+http_finish_status http2_connection::finish_stream(std::uint32_t stream_id) {
+    auto* stream = find_outbound_stream(stream_id);
+    if (stream == nullptr) {
+        return http_finish_status::closed;
+    }
+    const auto& local_send = stream->local_send();
+    const bool request_content = local_send.request_content_open() != nullptr;
+    if ((!request_content && local_send.response_content_open() == nullptr && local_send.tunnel_open() == nullptr) || (request_content && (stream->request_continue_pending() || stream->request_content_canceled()))) {
+        throw std::logic_error("HTTP/2 stream is not open for finishing");
+    }
+    if (!stream->local_content().length_complete()) {
+        return http_finish_status::invalid_message;
+    }
+    if (!can_send_empty_end_stream(stream_id)) {
+        return http_finish_status::backpressured;
+    }
+    end_local_stream(*stream, true);
+    return http_finish_status::accepted;
+}
+
 void http2_connection::end_local_stream(http2_stream_state& stream, bool empty_data) {
     const auto stream_id = stream.id();
     if (empty_data) {
@@ -410,7 +430,7 @@ http_submit_status http2_connection::submit_reset(std::uint32_t stream_id, http2
     if (local_connection_state_.fatal_failure() != nullptr) {
         // Owner release still retires the stream and its leases after failure;
         // only the wire reset is suppressed on the terminal connection.
-        return close_stream_impl(stream_id, http2_stream_close_source::local, http2_error_code::no_error, close_notification_type::owner_already_knows) ? http_submit_status::accepted : http_submit_status::closed;
+        return close_stream_impl(stream_id, http_stream_close_source::local, http2_error_code::no_error, close_notification_type::owner_already_knows) ? http_submit_status::accepted : http_submit_status::closed;
     }
     // A server owner does not own a peer stream until its initial header block
     // has decoded. A stream whose halves both ended is closed on the wire (RFC
@@ -423,7 +443,7 @@ http_submit_status http2_connection::submit_reset(std::uint32_t stream_id, http2
         submit_owner_reset(stream_id, error);
     }
     cancel_push_promise_on(stream_id);
-    (void)close_stream_impl(stream_id, http2_stream_close_source::local, error, close_notification_type::owner_already_knows);
+    (void)close_stream_impl(stream_id, http_stream_close_source::local, error, close_notification_type::owner_already_knows);
     flush_session();
     return http_submit_status::accepted;
 }
@@ -441,7 +461,7 @@ http_submit_status http2_connection::submit_origin_advertisement(std::span<const
     if (local_connection_state_.fatal_failure() != nullptr || peer_goaway_) {
         return http_submit_status::closed;
     }
-    if (!received_peer_settings_) {
+    if (!peer_settings_.has_value()) {
         return http_submit_status::invalid_state;
     }
     const auto payload_size = http_origin_payload_size(origins, extension_payload_limit(peer_setting(NGHTTP2_SETTINGS_MAX_FRAME_SIZE)));
@@ -467,7 +487,7 @@ http_submit_status http2_connection::submit_alternative_service_advertisement(st
         return http_submit_status::closed;
     }
     const auto* stream = stream_id != 0 ? streams_.find(stream_id) : nullptr;
-    if (!received_peer_settings_ || (stream_id != 0 && (stream == nullptr || http2_stream_is_closed(*stream) || stream->push_reservation() == http2_push_reservation::local || !http2_remote_final_head_decoded(*stream) || stream->tunnel().not_connect() == nullptr))) {
+    if (!peer_settings_.has_value() || (stream_id != 0 && (stream == nullptr || http2_stream_is_closed(*stream) || stream->push_reservation() == http2_push_reservation::local || !http2_remote_final_head_decoded(*stream) || stream->tunnel().not_connect() == nullptr))) {
         return http_submit_status::invalid_state;
     }
     const auto payload_size = http2_alternative_service_payload_size(stream_id, origin, field_value, extension_payload_limit(peer_setting(NGHTTP2_SETTINGS_MAX_FRAME_SIZE)));
@@ -487,15 +507,15 @@ http_submit_status http2_connection::submit_alternative_service_advertisement(st
 }
 
 template <typename prepare_type>
-std::variant<std::uint32_t, http2_request_head_submit_error> http2_connection::submit_local_request_head(http2_end_stream end_stream, const prepare_type& prepare) {
+std::variant<std::uint32_t, http_submit_status> http2_connection::submit_local_request_head(http2_end_stream end_stream, const prepare_type& prepare) {
     if (active_local_request_streams_ >= http2_local_settings::max_concurrent_streams) {
-        return http2_request_head_submit_error::local_stream_capacity_reached;
+        return http_submit_status::local_stream_capacity_reached;
     }
     // nghttp2 assigns this identifier to the next request HEADERS.
     const auto stream_id = static_cast<std::uint32_t>(nghttp2_session_get_next_stream_id(session_.get()));
     auto* stream = create_stream(stream_id);
     if (stream == nullptr) {
-        return http2_request_head_submit_error::local_stream_capacity_reached;
+        return http_submit_status::local_stream_capacity_reached;
     }
     std::int32_t submitted = 0;
     try {
@@ -519,10 +539,33 @@ std::variant<std::uint32_t, http2_request_head_submit_error> http2_connection::s
     return stream_id;
 }
 
-std::variant<std::uint32_t, http2_request_head_submit_error> http2_connection::submit_regular_request_head(std::string_view method, std::string_view scheme, std::optional<std::string_view> authority, std::string_view path, std::span<const http_header_view> headers, http_request_content_plan content, http_client_request_expectation expectation, http_request_field_source source) {
+// The one request entry: admission first, then the kind the head's fields
+// derive selects the pseudo-header set (RFC 9113 §8.3, §8.5, RFC 8441 §4).
+std::variant<std::uint32_t, http_submit_status> http2_connection::submit_request_head(const http_request_head_view& request) {
     if (const auto error = local_request_admission_error()) {
         return *error;
     }
+    const auto kind = request.kind();
+    const auto headers = static_cast<std::span<const http_header_view>>(request.headers_);
+    if (kind == http_request_head_kind::regular) {
+        const auto authority = request.authority_.has_value() ? std::optional<std::string_view>(request.authority_->view()) : std::nullopt;
+        return submit_regular_request_head(request.method_, request.scheme_, authority, request.target_, headers, request.content_, request.expectation_, request.field_source_);
+    }
+    // A CONNECT request carries no content of its own; its DATA is the tunnel.
+    if (request.content_.without_content() == nullptr || request.expectation_ != http_client_request_expectation::none) {
+        return http_submit_status::invalid_message;
+    }
+    const auto authority = request.authority_.has_value() ? request.authority_->view() : std::string_view{};
+    if (kind == http_request_head_kind::connect) {
+        return submit_connect_request_head(authority, headers, request.field_source_);
+    }
+    if (kind == http_request_head_kind::extended_connect) {
+        return submit_extended_connect_request_head(*request.protocol_, request.scheme_, authority, request.target_, headers, request.field_source_);
+    }
+    return http_submit_status::invalid_message;
+}
+
+std::variant<std::uint32_t, http_submit_status> http2_connection::submit_regular_request_head(std::string_view method, std::string_view scheme, std::optional<std::string_view> authority, std::string_view path, std::span<const http_header_view> headers, http_request_content_plan content, http_client_request_expectation expectation, http_request_field_source source) {
     const bool without_content = content.without_content() != nullptr;
     const auto* known_length_content = content.known_length_content();
     const bool streaming_content = content.streaming_content() != nullptr;
@@ -545,7 +588,7 @@ std::variant<std::uint32_t, http2_request_head_submit_error> http2_connection::s
     // Validate the entire semantic head and decoded-size budget before touching
     // the session, stream metadata, or lifecycle state.
     if (!http_binary_is_valid_outbound_regular_request_head(method, known_method, scheme, default_port, authority, path, headers, content_indication, content_length_value, expectation, source, max_http_header_bytes)) {
-        return http2_request_head_submit_error::invalid_message;
+        return http_submit_status::invalid_message;
     }
     return submit_local_request_head(end_stream, [&](http2_stream_state& stream) {
         stream.assign_request_method(method);
@@ -583,11 +626,7 @@ std::variant<std::uint32_t, http2_request_head_submit_error> http2_connection::s
     });
 }
 
-std::variant<std::uint32_t, http2_request_head_submit_error> http2_connection::submit_connect_request_head(std::string_view authority, std::span<const http_header_view> headers, http_request_field_source source) {
-    if (const auto error = local_request_admission_error()) {
-        return *error;
-    }
-
+std::variant<std::uint32_t, http_submit_status> http2_connection::submit_connect_request_head(std::string_view authority, std::span<const http_header_view> headers, http_request_field_source source) {
     request_target_view target;
     binary_field_section_size section_size(max_http_header_bytes);
     request_field_state fields{request_field_framing::binary};
@@ -595,7 +634,7 @@ std::variant<std::uint32_t, http2_request_head_submit_error> http2_connection::s
         !http_binary_are_valid_outbound_request_headers(authority, 0, headers,
             /*allow_host=*/false,
             /*allow_trailers=*/false, section_size, fields, source)) {
-        return http2_request_head_submit_error::invalid_message;
+        return http_submit_status::invalid_message;
     }
 
     return submit_local_request_head(http2_end_stream::keep_open, [&](http2_stream_state& stream) {
@@ -611,17 +650,14 @@ std::variant<std::uint32_t, http2_request_head_submit_error> http2_connection::s
     });
 }
 
-std::variant<std::uint32_t, http2_request_head_submit_error> http2_connection::submit_extended_connect_request_head(std::string_view protocol, std::string_view scheme, std::string_view authority, std::string_view path, std::span<const http_header_view> headers, http_request_field_source source) {
-    if (const auto error = local_request_admission_error()) {
-        return *error;
-    }
+std::variant<std::uint32_t, http_submit_status> http2_connection::submit_extended_connect_request_head(std::string_view protocol, std::string_view scheme, std::string_view authority, std::string_view path, std::span<const http_header_view> headers, http_request_field_source source) {
     if (peer_setting(NGHTTP2_SETTINGS_ENABLE_CONNECT_PROTOCOL) != 1) {
-        return http2_request_head_submit_error::peer_capability_unavailable;
+        return http_submit_status::peer_capability_unavailable;
     }
 
     const auto encoded_protocol = http_binary_validate_extended_connect_request(protocol, scheme, authority, path, headers, source, max_http_header_bytes);
     if (!encoded_protocol) {
-        return http2_request_head_submit_error::invalid_message;
+        return http_submit_status::invalid_message;
     }
 
     return submit_local_request_head(http2_end_stream::keep_open, [&](http2_stream_state& stream) {
@@ -642,10 +678,10 @@ std::variant<std::uint32_t, http2_request_head_submit_error> http2_connection::s
     });
 }
 
-std::variant<std::uint32_t, http2_push_submit_error> http2_connection::submit_push_promise(std::uint32_t associated_stream_id, http_push_request_view request) {
+std::variant<std::uint32_t, http2_push_submit_error> http2_connection::submit_push_promise(std::uint32_t associated_stream_id, const http_request_head_view& request) {
     const auto* parent_value = streams_.find(associated_stream_id);
     const auto promised_id = static_cast<std::uint32_t>(nghttp2_session_get_next_stream_id(session_.get()));
-    if (role_ != http_connection_role::server || !received_peer_settings_ || local_connection_state_.open() == nullptr || peer_goaway_ || !parent_value || parent_value->is_aborted() || (associated_stream_id & 1U) == 0 || !http2_remote_final_head_decoded(*parent_value) || parent_value->tunnel().not_connect() == nullptr || parent_value->local_send().end_stream_committed() || promised_id > http2_max_stream_id) {
+    if (role_ != http_connection_role::server || !peer_settings_.has_value() || local_connection_state_.open() == nullptr || peer_goaway_ || !parent_value || parent_value->is_aborted() || (associated_stream_id & 1U) == 0 || !http2_remote_final_head_decoded(*parent_value) || parent_value->tunnel().not_connect() == nullptr || parent_value->local_send().end_stream_committed() || promised_id > http2_max_stream_id) {
         return http2_push_submit_error::invalid_state;
     }
     if (peer_setting(NGHTTP2_SETTINGS_ENABLE_PUSH) == 0) {
@@ -657,9 +693,12 @@ std::variant<std::uint32_t, http2_push_submit_error> http2_connection::submit_pu
     if (active_local_request_streams_ >= peer_setting(NGHTTP2_SETTINGS_MAX_CONCURRENT_STREAMS)) {
         return http2_push_submit_error::stream_limit;
     }
+    // A promise is a regular GET or HEAD request with an authority and no
+    // content (RFC 9113 §8.4).
     const auto known_method = request.method_ == "GET" ? http_known_method::get : (request.method_ == "HEAD" ? http_known_method::head : http_known_method::unknown);
     const auto default_port = http_uri_scheme_default_port(request.scheme_);
-    if (known_method == http_known_method::unknown || !http_binary_is_valid_outbound_regular_request_head(request.method_.view(), known_method, request.scheme_.view(), default_port, request.authority_.view(), request.path_.view(), request.headers_, http_request_content_indication::no_content, {}, http_client_request_expectation::none, http_request_field_source::generated, max_http_header_bytes)) {
+    const auto authority = request.authority_.has_value() ? request.authority_->view() : std::string_view{};
+    if (known_method == http_known_method::unknown || request.protocol_.has_value() || request.content_.without_content() == nullptr || !http_binary_is_valid_outbound_regular_request_head(request.method_.view(), known_method, request.scheme_.view(), default_port, authority, request.target_.view(), request.headers_, http_request_content_indication::no_content, {}, request.expectation_, request.field_source_, max_http_header_bytes)) {
         return http2_push_submit_error::invalid_request;
     }
     auto* stream = create_stream(promised_id);
@@ -669,8 +708,8 @@ std::variant<std::uint32_t, http2_push_submit_error> http2_connection::submit_pu
     try {
         stream->assign_request_method(request.method_);
         stream->assign_request_scheme(request.scheme_);
-        stream->assign_request_authority(request.authority_);
-        stream->assign_request_path(request.path_);
+        stream->assign_request_authority(authority);
+        stream->assign_request_path(request.target_);
         stream->mark_scheme(default_port);
         stream->mark_authority();
         stream->mark_path();
@@ -706,8 +745,8 @@ std::variant<std::uint32_t, http2_push_submit_error> http2_connection::submit_pu
         fields_.reserve(request.headers_.size() + 4);
         fields_.add(":method", request.method_.view());
         fields_.add(":scheme", request.scheme_.view());
-        fields_.add(":authority", request.authority_.view());
-        fields_.add(":path", request.path_.view());
+        fields_.add(":authority", authority);
+        fields_.add(":path", request.target_.view());
         fields_.add_lowercase_fields(request.headers_);
         const auto fields = fields_.nv();
         const auto submitted = nghttp2_submit_push_promise(session_.get(), NGHTTP2_FLAG_NONE, static_cast<std::int32_t>(associated_stream_id), fields.data(), fields.size(), nullptr);

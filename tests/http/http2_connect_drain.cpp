@@ -257,6 +257,36 @@ TEST(Ruvia, http2_connect_data_with_end_stream_before_accept_ends_tunnel_after_a
     EXPECT_TRUE(!has_frame(take_frames(server), ruvia::http2_frame_type::rst_stream, 1));
 }
 
+// finish_stream() ends whichever send half is open; for an accepted tunnel
+// that is an empty DATA frame carrying END_STREAM (RFC 9113 section 8.5).
+TEST(Ruvia, http2_finish_stream_ends_an_accepted_tunnel) {
+    auto server = started_server();
+    auto wire = opening_wire();
+    append_frame(wire, ruvia::http2_frame_type::headers, end_headers_flag, 1, connect_block({}));
+    EXPECT_TRUE(server.feed(wire) == ruvia::http2_feed_result::accepted);
+    auto head = take_request_head(server);
+    EXPECT_TRUE(head.has_value());
+    if (!head) {
+        return;
+    }
+    // The peer's SETTINGS arrived with its preface.
+    EXPECT_TRUE(server.peer_settings().has_value());
+    // No send half is open before the tunnel is accepted.
+    EXPECT_THROW((void)server.finish_stream(1), std::logic_error);
+    ruvia::http_response accepted;
+    accepted.status(ruvia::http_status::ok);
+    EXPECT_TRUE(server.submit_connect_response_head(1, accepted) == ruvia::http_submit_status::accepted);
+    (void)take_frames(server);
+    EXPECT_TRUE(server.finish_stream(1) == ruvia::http_finish_status::accepted);
+    bool ended = false;
+    for (const auto& frame : take_frames(server)) {
+        ended = ended || (frame.is(ruvia::http2_frame_type::data) && frame.header_.stream_id_ == 1 && (frame.header_.flags_ & end_stream_flag) != 0 && frame.payload_.empty());
+    }
+    EXPECT_TRUE(ended);
+    EXPECT_TRUE(server.finish_stream(3) == ruvia::http_finish_status::closed);
+    (void)server.release(std::move(*head));
+}
+
 // After a non-2xx CONNECT response the optimistic bytes are discarded with their
 // flow-control credit instead of resetting the stream.
 TEST(Ruvia, http2_connect_data_after_rejection_is_discarded_with_credit) {
@@ -405,6 +435,8 @@ TEST(Ruvia, http2_server_graceful_drain_admits_in_flight_streams_until_ping_ack)
     append_frame(ack, ruvia::http2_frame_type::ping, 0x1, 0, *ping_payload);
     EXPECT_TRUE(server.feed(ack) == ruvia::http2_feed_result::accepted);
     EXPECT_TRUE(server.drain_final());
+    // Streams 1 and 3 are still leased to their owners.
+    EXPECT_TRUE(!server.drained());
     EXPECT_TRUE(goaway_last_stream_ids(take_frames(server)) == std::vector<std::uint32_t>{3});
 
     // RFC 9113 §6.8: a stream above the final boundary is discarded unanswered;
@@ -460,8 +492,12 @@ TEST(Ruvia, http2_server_graceful_drain_bounds_streams_opened_before_ping_ack) {
 TEST(Ruvia, http2_client_graceful_drain_sends_final_goaway_at_once) {
     auto client = ruvia::http2_connection::client({});
     (void)ruvia::test::drain_output(client);
+    EXPECT_TRUE(!client.peer_settings().has_value());
+    EXPECT_TRUE(!client.drained());
     EXPECT_TRUE(client.begin_drain() == ruvia::http_submit_status::accepted);
     EXPECT_TRUE(client.drain_final());
+    // No stream remains, so the drain is complete.
+    EXPECT_TRUE(client.drained());
     const auto frames = take_frames(client);
     EXPECT_TRUE(goaway_last_stream_ids(frames) == std::vector<std::uint32_t>{0});
     for (const auto& frame : frames) {
@@ -683,8 +719,8 @@ TEST(Ruvia, http2_websocket_connect_accepts_zero_content_length_and_early_data_w
         EXPECT_TRUE(head.has_value());
         if (head) {
             const auto req = head->build_request();
-            const auto val = ruvia::validate_http2_websocket_handshake(server, 1, req);
-            EXPECT_TRUE(val.accepted() != nullptr);
+            const auto val = server.validate_websocket_handshake(1, req);
+            EXPECT_TRUE(std::holds_alternative<std::monostate>(val));
             const auto sub = server.submit_websocket_handshake(1, req, val);
             EXPECT_TRUE(std::holds_alternative<ruvia::websocket_extended_connect_negotiation>(sub));
             (void)server.release(std::move(*head));
@@ -710,8 +746,8 @@ TEST(Ruvia, http2_websocket_connect_accepts_zero_content_length_and_early_data_w
         EXPECT_TRUE(saw_data);
         if (head) {
             const auto req = head->build_request();
-            const auto val = ruvia::validate_http2_websocket_handshake(server, 1, req);
-            EXPECT_TRUE(val.accepted() != nullptr);
+            const auto val = server.validate_websocket_handshake(1, req);
+            EXPECT_TRUE(std::holds_alternative<std::monostate>(val));
             const auto sub = server.submit_websocket_handshake(1, req, val);
             EXPECT_TRUE(std::holds_alternative<ruvia::websocket_extended_connect_negotiation>(sub));
             auto end_ev = server.next_event();
@@ -742,8 +778,8 @@ TEST(Ruvia, http2_websocket_connect_accepts_zero_content_length_and_early_data_w
         EXPECT_TRUE(saw_data);
         if (head) {
             const auto req = head->build_request();
-            const auto val = ruvia::validate_http2_websocket_handshake(server, 1, req);
-            EXPECT_TRUE(val.accepted() != nullptr);
+            const auto val = server.validate_websocket_handshake(1, req);
+            EXPECT_TRUE(std::holds_alternative<std::monostate>(val));
             const auto sub = server.submit_websocket_handshake(1, req, val);
             EXPECT_TRUE(std::holds_alternative<ruvia::websocket_extended_connect_negotiation>(sub));
             auto end_ev = server.next_event();
@@ -1332,7 +1368,7 @@ TEST(Ruvia, http2_public_receive_credit_restores_exact_window) {
     auto client = ruvia::http2_connection::client({});
     const auto receive_window = advertised_receive_window(ruvia::test::drain_output(client));
     EXPECT_TRUE(receive_window != 0);
-    const auto submitted = client.submit_request_head(ruvia::http_regular_request_head_view{.authority_ = "example.test"});
+    const auto submitted = client.submit_request_head(ruvia::http_request_head_view{.authority_ = "example.test"});
     EXPECT_TRUE(std::holds_alternative<std::uint32_t>(submitted));
     (void)ruvia::test::drain_output(client);
 
@@ -1598,11 +1634,11 @@ TEST(Ruvia, http2_locally_synthesized_push_has_no_received_pseudo_header_order) 
     relay.transfer(client, server);
     relay.transfer(server, client);
     relay.transfer(client, server);
-    EXPECT_TRUE(std::holds_alternative<std::uint32_t>(client.submit_request_head(ruvia::http_regular_request_head_view{.authority_ = "example.test"})));
+    EXPECT_TRUE(std::holds_alternative<std::uint32_t>(client.submit_request_head(ruvia::http_request_head_view{.authority_ = "example.test"})));
     relay.transfer(client, server);
     auto parent = take_request_head(server);
     EXPECT_TRUE(parent.has_value());
-    auto pushed = server.submit_push_request(1, {.authority_ = "example.test", .path_ = "/asset"});
+    auto pushed = server.submit_push_request(1, {.authority_ = "example.test", .target_ = "/asset"});
     EXPECT_TRUE(pushed.index() == 0);
     if (pushed.index() == 0) {
         EXPECT_TRUE(std::get<0>(pushed).request_view().pseudo_header_order_.empty());

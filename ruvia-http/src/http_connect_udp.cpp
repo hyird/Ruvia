@@ -25,6 +25,7 @@
 #include "http_message_access.h"
 #include "http_message_framing_fields.h"
 #include "http_request.h"
+#include "http_request_head_view.h"
 #include "http_uri_syntax.h"
 #include "ip_address.h"
 #include "url_encoding.h"
@@ -191,9 +192,10 @@ std::variant<http_connect_udp_target, http_connect_udp_error> parse_http_connect
     return http_connect_udp_target{std::move(host), *port};
 }
 namespace {
-std::optional<http_connect_udp_error> validate_request(http_connect_udp_request_view request, bool sending) noexcept {
-    const auto authority = parse_http_authority(request.authority_);
-    if (!authority || authority->host().empty() || !is_valid_http_origin_form_target(request.path_)) {
+std::optional<http_connect_udp_error> validate_request(http_protocol_version version, const http_request_head_view& request, bool sending) noexcept {
+    const auto authority_text = request.authority_.has_value() ? request.authority_->view() : std::string_view{};
+    const auto authority = parse_http_authority(authority_text);
+    if (!authority || authority->host().empty() || !is_valid_http_origin_form_target(request.target_)) {
         return http_connect_udp_error::invalid_request;
     }
     const auto parsed_value = scan_handshake_fields(request.headers_.view(), sending ? handshake_message_role::request_sender : handshake_message_role::request_recipient, http_connect_udp_error::invalid_request);
@@ -204,20 +206,20 @@ std::optional<http_connect_udp_error> validate_request(http_connect_udp_request_
     if (sending && found.capsule_protocol_ != capsule_protocol_state::valid_true) {
         return http_connect_udp_error::invalid_capsule_protocol;
     }
-    if (found.forbidden_ || request.authority_.empty() || request.path_.empty()) {
+    if (found.forbidden_ || authority_text.empty() || request.target_.empty()) {
         return http_connect_udp_error::invalid_request;
     }
-    if (request.version_ == http_protocol_version::http10) {
+    if (version == http_protocol_version::http10) {
         return http_connect_udp_error::invalid_request;
     }
     if (found.host_) {
         const auto default_port = detail::http_uri_scheme_default_port(request.scheme_);
-        if (!detail::authority_matches_host(request.authority_.view(), found.host_value_, default_port)) {
+        if (!detail::authority_matches_host(authority_text, found.host_value_, default_port)) {
             return http_connect_udp_error::invalid_request;
         }
     }
-    if (request.version_ != http_protocol_version::http11) {
-        if (request.method_.view() != "CONNECT" || request.protocol_.view() != "connect-udp" || !is_http_or_https_scheme(request.scheme_) || found.connection_field_ || found.upgrade_field_ || found.http2_forbidden_) {
+    if (version != http_protocol_version::http11) {
+        if (request.method_.view() != "CONNECT" || !request.protocol_.has_value() || request.protocol_->view() != "connect-udp" || !is_http_or_https_scheme(request.scheme_) || found.connection_field_ || found.upgrade_field_ || found.http2_forbidden_) {
             return http_connect_udp_error::invalid_request;
         }
     } else if (request.method_.view() != "GET" || (!request.scheme_.empty() && !is_http_or_https_scheme(request.scheme_)) || !found.upgrade_ || !found.connection_ || !found.host_) {
@@ -226,11 +228,11 @@ std::optional<http_connect_udp_error> validate_request(http_connect_udp_request_
     return std::nullopt;
 }
 }  // namespace
-std::optional<http_connect_udp_error> validate_http_connect_udp_request(http_connect_udp_request_view request) noexcept {
-    return validate_request(request, false);
+std::optional<http_connect_udp_error> validate_http_connect_udp_request(http_protocol_version version, const http_request_head_view& request) noexcept {
+    return validate_request(version, request, false);
 }
-std::optional<http_connect_udp_error> validate_http_connect_udp_request_to_send(http_connect_udp_request_view request) noexcept {
-    return validate_request(request, true);
+std::optional<http_connect_udp_error> validate_http_connect_udp_request_to_send(http_protocol_version version, const http_request_head_view& request) noexcept {
+    return validate_request(version, request, true);
 }
 std::optional<http_connect_udp_error> validate_http_connect_udp_response(http_protocol_version version, std::uint16_t status, const http_header_range_view& headers) noexcept {
     if (version == http_protocol_version::http10) {
@@ -270,7 +272,7 @@ std::optional<http_connect_udp_error> validate_http_connect_udp_request(const ht
         return http_connect_udp_error::invalid_request;
     }
     const auto path = request.target_form() == http_request_target_form::absolute ? request.path() : request.target();
-    return validate_http_connect_udp_request({.version_ = request.protocol_version(), .method_ = request.method(), .protocol_ = request.protocol(), .scheme_ = request.scheme(), .authority_ = request.authority().empty() ? detail::http_request_access::known_header(request, detail::http_field_kind::host) : request.authority(), .path_ = path, .headers_ = request.headers()});
+    return validate_http_connect_udp_request(request.protocol_version(), {.method_ = request.method(), .protocol_ = request.protocol(), .scheme_ = request.scheme(), .authority_ = request.authority().empty() ? detail::http_request_access::known_header(request, detail::http_field_kind::host) : request.authority(), .target_ = path, .headers_ = request.headers()});
 }
 std::variant<http_response, http_connect_udp_error> prepare_http_connect_udp_response(http_response response, http_protocol_version version) {
     if (version == http_protocol_version::http10 || !response.status().is_successful() || forbids_capsule_protocol(response.status().value()) || response.file_body() || !response.body_bytes().empty()) {
@@ -304,7 +306,7 @@ http1_response_head_plan prepare_http1_connect_udp_response_head(const http_resp
     if (response.status() != http_status::switching_protocols || response.file_body() || !response.body_bytes().empty() || validate_http_connect_udp_response(http_protocol_version::http11, response.status().value(), response.headers())) {
         throw http1_response_head_error("invalid HTTP/1 CONNECT-UDP response head");
     }
-    return http1_close_delimited_response_stream_head_plan(plan_http_response_body(http_known_method::get, response.status()), http1_request_connection_plan::http11_close());
+    return plan_http1_response_stream_head(plan_http_response_body(http_known_method::get, response.status()), http1_request_connection_plan::http11_close(), http1_message_framing::close_delimited());
 }
 
 }  // namespace ruvia

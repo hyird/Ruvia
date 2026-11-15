@@ -10,18 +10,13 @@
 #include "borrowed_text.h"
 #include "http_header.h"
 #include "http_message.h"
+#include "http_request_head_view.h"
 #include "http_response.h"
 #include "ip_address.h"
 
 namespace ruvia {
 
 class http_request;
-
-// Already-expanded proxy URI path, borrowed until open_udp_tunnel() returns.
-struct http_client_udp_tunnel_request_view final {
-    borrowed_text target_{};
-    borrowed_http_headers headers_{};
-};
 
 struct http_connect_udp_target_view final {
     borrowed_text host_{};
@@ -50,24 +45,18 @@ enum class http_connect_udp_error : std::uint8_t {
 [[nodiscard]] std::variant<std::string, http_connect_udp_error> encode_http_connect_udp_path(http_connect_udp_target_view target);
 [[nodiscard]] std::variant<http_connect_udp_target, http_connect_udp_error> parse_http_connect_udp_path(std::string_view path);
 
-struct http_connect_udp_request_view final {
-    // HTTP/1.1 Upgrade versus HTTP/2 Extended CONNECT.
-    http_protocol_version version_{http_protocol_version::http11};
-    borrowed_text method_{"GET"};
-    borrowed_text protocol_{"connect-udp"};
-    borrowed_text scheme_{"https"};
-    borrowed_text authority_{};
-    borrowed_text path_{};
-    borrowed_http_headers headers_{};
-};
-// Recipient checks. The connect-udp token selects the Capsule Protocol, so
+// Recipient checks of a CONNECT-UDP request head in the wire form of
+// `version`: the HTTP/1.1 GET Upgrade (method GET; authority_ is the Host) or
+// the HTTP/2 and HTTP/3 Extended CONNECT (method CONNECT, protocol_
+// connect-udp, an http or https scheme_). authority_ and an origin-form
+// target_ are required. The connect-udp token selects the Capsule Protocol, so
 // Capsule-Protocol is optional; a non-Boolean, ?0 or repeated field is treated as
 // absent (RFC 9297 section 3.4). Responses with 204/205/206 are malformed (RFC 9297 section 3.2).
-[[nodiscard]] std::optional<http_connect_udp_error> validate_http_connect_udp_request(http_connect_udp_request_view request) noexcept;
+[[nodiscard]] std::optional<http_connect_udp_error> validate_http_connect_udp_request(http_protocol_version version, const http_request_head_view& request) noexcept;
 // Sender check for a CONNECT-UDP request this endpoint emits: the recipient
 // rules plus exactly one Capsule-Protocol: ?1 field (RFC 9297 section 3.4
 // SHOULD, kept mandatory for Ruvia senders on HTTP/1.1 and HTTP/2).
-[[nodiscard]] std::optional<http_connect_udp_error> validate_http_connect_udp_request_to_send(http_connect_udp_request_view request) noexcept;
+[[nodiscard]] std::optional<http_connect_udp_error> validate_http_connect_udp_request_to_send(http_protocol_version version, const http_request_head_view& request) noexcept;
 [[nodiscard]] std::optional<http_connect_udp_error> validate_http_connect_udp_response(http_protocol_version version, std::uint16_t status, const http_header_range_view& headers) noexcept;
 // Classifies the HTTP/1 Upgrade token; full validation remains mandatory.
 [[nodiscard]] bool is_http_connect_udp_upgrade_request(const http_request& request) noexcept;

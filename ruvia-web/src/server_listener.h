@@ -460,12 +460,17 @@ class tls_secret_cleanser final {
 public:
     explicit tls_secret_cleanser(tls_config& config) noexcept :
         config_(config) {}
+    // Only fixed identities carry secrets; a library cleanses its own copies.
     ~tls_secret_cleanser() {
-        cleanse_identity(config_.identity_);
-        for (auto& sni : config_.sni_) {
+        auto* const fixed = std::get_if<tls_fixed_identities>(&config_.identities_);
+        if (fixed == nullptr) {
+            return;
+        }
+        cleanse_identity(fixed->primary_);
+        for (auto& sni : fixed->sni_) {
             cleanse_identity(sni.identity_);
         }
-        for (auto& local : config_.local_addresses_) {
+        for (auto& local : fixed->local_addresses_) {
             cleanse_identity(local.identity_);
         }
     }

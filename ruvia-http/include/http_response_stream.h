@@ -4,8 +4,10 @@
 #include <initializer_list>
 #include <span>
 #include <utility>
+#include <variant>
 
 #include "borrowed_text.h"
+#include "http1_connection_plan.h"
 #include "http_header.h"
 #include "http_message.h"
 #include "http_response.h"
@@ -44,22 +46,24 @@ template <detail::http_temporary_owning_range<http_header_view> headers_type>
 http_response_trailer_section validate_http_response_trailers(headers_type&&) = delete;
 http_response_trailer_section validate_http_response_trailers(std::initializer_list<http_header_view>) = delete;
 
-enum class http_response_stream_framing : std::uint8_t {
-    http1_chunked,
-    // RFC 9112 6.1: a server MUST NOT send Transfer-Encoding to a client that did
-    // not indicate HTTP/1.1. An HTTP/1.0 stream therefore carries no chunk framing;
-    // the body is delimited by the connection close (RFC 9112 6.3), so it also
-    // announces Connection: close and the session shuts the socket afterwards.
-    http1_close_delimited,
-    // RFC 9112 6.3: a valid Content-Length the response itself declares, with
-    // no Transfer-Encoding, delimits the stream on HTTP/1.1 and HTTP/1.0 alike,
-    // so the connection stays reusable. Selected at head commit, never planned.
-    http1_length_delimited,
-    http2_frames,
-    // RFC 9114 §4.1: HTTP/3 delimits content with DATA frames and carries a
-    // trailer section in a trailing HEADERS frame, exactly like HTTP/2.
-    http3_frames
+// HTTP/2 (RFC 9113 §8.1) and HTTP/3 (RFC 9114 §4.1) delimit content with DATA
+// frames and carry a trailer section in a trailing HEADERS frame.
+struct http_multiplexed_frames final {
+    [[nodiscard]] friend constexpr bool operator==(const http_multiplexed_frames&, const http_multiplexed_frames&) noexcept = default;
 };
+
+// How a streamed response body is delimited: by one HTTP/1 framing kind, or by
+// the frames of a multiplexed stream. For HTTP/1:
+// - chunked is the HTTP/1.1 default.
+// - close_delimited serves HTTP/1.0. RFC 9112 6.1: a server MUST NOT send
+//   Transfer-Encoding to a client that did not indicate HTTP/1.1, so the body
+//   is delimited by the connection close (RFC 9112 6.3); the stream also
+//   announces Connection: close and the session shuts the socket afterwards.
+// - known_length (RFC 9112 6.3) is a valid Content-Length the response itself
+//   declares, with no Transfer-Encoding. It delimits the stream on HTTP/1.1
+//   and HTTP/1.0 alike, so the connection stays reusable. Selected at head
+//   commit, never planned.
+using http_response_stream_framing = std::variant<http1_framing_kind, http_multiplexed_frames>;
 // A trailer section is terminal message metadata, not an independently queued
 // side channel. The caller declares whether this head commit is reserving a
 // terminal trailer section. Trailers are optional metadata a recipient may
@@ -84,10 +88,6 @@ enum class http_response_stream_head_disposition : std::uint8_t { body_open,
 
 class http_response_stream_commit_plan final {
 public:
-    [[nodiscard]] http_status_code response_status() const noexcept {
-        return body_plan_.response_status();
-    }
-
     [[nodiscard]] http_response_stream_framing framing() const noexcept {
         return framing_;
     }
@@ -100,7 +100,7 @@ public:
     // HTTP/2 and HTTP/3 carry them in a trailing field section. A body-suppressed
     // response (HEAD / 304) ends at its initial head and discards trailers.
     [[nodiscard]] bool trailers_available() const noexcept {
-        return !body_plan_.body_suppressed() && (framing_ == http_response_stream_framing::http1_chunked || framing_ == http_response_stream_framing::http2_frames || framing_ == http_response_stream_framing::http3_frames);
+        return !body_plan_.body_suppressed() && (framing_ == http_response_stream_framing(http1_framing_kind::chunked) || std::holds_alternative<http_multiplexed_frames>(framing_));
     }
 
     [[nodiscard]] http_response_stream_head_disposition head_disposition() const noexcept {
@@ -126,7 +126,7 @@ private:
         body_plan_(body_plan),
         trailer_intent_present_(trailer_intent_present) {}
 
-    http_response_stream_framing framing_{http_response_stream_framing::http1_chunked};
+    http_response_stream_framing framing_;
     http_response_body_plan body_plan_;
     bool trailer_intent_present_{false};
 };

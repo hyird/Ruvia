@@ -150,17 +150,17 @@ class http2_stream_state;
 // Open and normally ended states cannot expose a close source.
 class http2_stream_aborted final {
 public:
-    [[nodiscard]] constexpr http2_stream_close_source source() const noexcept {
+    [[nodiscard]] constexpr http_stream_close_source source() const noexcept {
         return source_;
     }
 
 private:
     friend class http2_local_send_state;
 
-    explicit constexpr http2_stream_aborted(http2_stream_close_source source_value) noexcept :
+    explicit constexpr http2_stream_aborted(http_stream_close_source source_value) noexcept :
         source_(source_value) {}
 
-    http2_stream_close_source source_;
+    http_stream_close_source source_;
 };
 
 // Local frame permission is one exclusive protocol state. Request content,
@@ -238,8 +238,8 @@ class http2_local_send_state final {
         return true;
     }
 
-    [[nodiscard]] bool abort(http2_stream_close_source source_value) noexcept {
-        if (!http2_is_valid_stream_close_source(source_value) || aborted() != nullptr) {
+    [[nodiscard]] bool abort(http_stream_close_source source_value) noexcept {
+        if ((source_value != http_stream_close_source::local && source_value != http_stream_close_source::peer && source_value != http_stream_close_source::peer_goaway) || aborted() != nullptr) {
             return false;
         }
         state_ = http2_stream_aborted(source_value);
@@ -959,7 +959,7 @@ public:
     }
 
     // Aborting closes both halves together; a stream is never half-aborted.
-    [[nodiscard]] bool abort(http2_stream_close_source source_value) noexcept {
+    [[nodiscard]] bool abort(http_stream_close_source source_value) noexcept {
         if (remote_receive_.aborted() != nullptr) {
             return false;
         }

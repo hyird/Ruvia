@@ -31,7 +31,6 @@
 #include "http_client_connection.h"
 #include "http_client_pool.h"
 #include "http_client_request_storage.h"
-#include "http_client_request_view.h"
 #include "http_client_response_state.h"
 #include "http_client_types.h"
 #include "http_header.h"
@@ -39,6 +38,7 @@
 #include "http_message.h"
 #include "http_priority.h"
 #include "http_request.h"
+#include "http_request_head_view.h"
 #include "inline_storage.h"
 #include "operation_options.h"
 #include "stop_token.h"
@@ -99,7 +99,7 @@ task<http2_client_session_start_result> http2_client_session::start(http2_connec
                 co_return http2_client_session_start_result{.status_ = http2_client_session_start_status::transport_failed, .transport_ = written};
             }
         }
-        if (connection_->received_peer_settings()) {
+        if (connection_->peer_settings().has_value()) {
             break;
         }
         const auto read = co_await transport_.read_some(input, timeout);
@@ -672,7 +672,7 @@ void http_client_connection::finish_http2_message(std::uint32_t stream_id, http2
         return;
     }
     try {
-        const bool content_semantics_present = end.content_semantics() == http2_message_content_semantics::content;
+        const bool content_semantics_present = end.content_semantics() == http_message_content_semantics::content;
         const auto trailers = end.trailers();
         auto& state_value = *stream->state_;
         state_value.trailers_.clear();
@@ -810,7 +810,7 @@ void http_client_connection::on_http2_event(http2_event& event) {
                     output->stop();
                 }
                 stream->signal_.notify();
-            } else if (closed->source() == http2_stream_close_source::peer && closed->error() == http2_error_code::http11_required && !state_value.head_ready_ && !state_value.promised_request_) {
+            } else if (closed->source() == http_stream_close_source::peer && closed->error() == http2_error_code::http11_required && !state_value.head_ready_ && !state_value.promised_request_) {
                 // RFC 9113 section 7: the origin refuses this request over
                 // HTTP/2. Like Pingora, a negotiate pool prefers HTTP/1.1 from
                 // now on and this session admits no further request.
@@ -821,7 +821,7 @@ void http_client_connection::on_http2_event(http2_event& event) {
                     http2_.mark_draining();
                 }
                 stream->signal_.notify();
-            } else if (stream->websocket_ && state_value.tunnel_->accepted_ && state_value.tunnel_->receive_ended_ && closed->source() == http2_stream_close_source::peer && closed->error() == http2_error_code::no_error) {
+            } else if (stream->websocket_ && state_value.tunnel_->accepted_ && state_value.tunnel_->receive_ended_ && closed->source() == http_stream_close_source::peer && closed->error() == http2_error_code::no_error) {
                 // A server can retire its half-open request lease immediately
                 // after Close + END_STREAM. Keep the buffered Close for the
                 // WebSocket parser; NO_ERROR alone is never a close handshake.
@@ -1077,12 +1077,12 @@ task<bool> http_client_connection::execute_http2(const http_client_request_stora
                 break;
             }
             const auto submitted = request.websocket() != nullptr
-                ? submit_http2_websocket_client_request(connection, request.websocket()->negotiation_, scheme, request.tunnel_authority(), source_value.target_.view(), headers, request.options_.field_source_)
+                ? connection.submit_websocket_request_head(request.websocket()->negotiation_, scheme, request.tunnel_authority(), source_value.target_.view(), headers, request.options_.field_source_)
                 : !request.is_tunnel()
-                ? connection.submit_request_head(::ruvia::http_regular_request_head_view{.method_ = source_value.method_, .scheme_ = scheme, .authority_ = borrowed_text(request.route().authority_), .target_ = source_value.target_, .headers_ = headers, .content_ = source_value.content_, .expectation_ = request.expectation(), .field_source_ = request.options_.field_source_})
+                ? connection.submit_request_head(::ruvia::http_request_head_view{.method_ = source_value.method_, .scheme_ = scheme, .authority_ = borrowed_text(request.route().authority_), .target_ = source_value.target_, .headers_ = headers, .content_ = source_value.content_, .expectation_ = request.expectation(), .field_source_ = request.options_.field_source_})
                 : request.tunnel_protocol().empty()
-                ? connection.submit_request_head(http_connect_request_head_view{.authority_ = borrowed_text(request.tunnel_authority()), .headers_ = headers, .field_source_ = request.options_.field_source_})
-                : connection.submit_request_head(http_extended_connect_request_head_view{.protocol_ = borrowed_text(request.tunnel_protocol()), .scheme_ = scheme, .authority_ = borrowed_text(request.tunnel_authority()), .target_ = source_value.target_, .headers_ = headers, .field_source_ = request.options_.field_source_});
+                ? connection.submit_request_head(http_request_head_view{.method_ = "CONNECT", .authority_ = borrowed_text(request.tunnel_authority()), .headers_ = headers, .field_source_ = request.options_.field_source_})
+                : connection.submit_request_head(http_request_head_view{.method_ = "CONNECT", .protocol_ = borrowed_text(request.tunnel_protocol()), .scheme_ = scheme, .authority_ = borrowed_text(request.tunnel_authority()), .target_ = source_value.target_, .headers_ = headers, .field_source_ = request.options_.field_source_});
             if (const auto* accepted = std::get_if<std::uint32_t>(&submitted)) {
                 state_value.request_written_ = true;
                 stream.stream_id_ = *accepted;
@@ -1109,15 +1109,15 @@ task<bool> http_client_connection::execute_http2(const http_client_request_stora
                 restart_http2_stream_read(stream);
                 break;
             }
-            const auto error = std::get<http2_request_head_submit_error>(submitted);
-            if (error == http2_request_head_submit_error::peer_stream_limit_reached || error == http2_request_head_submit_error::local_stream_capacity_reached) {
+            const auto error = std::get<http_submit_status>(submitted);
+            if (error == http_submit_status::peer_stream_limit_reached || error == http_submit_status::local_stream_capacity_reached) {
                 // Outer admission counts the local stream limit; a lower peer
                 // limit parks here until a stream closes or the peer raises
                 // it, within the attempt's acquisition bound.
                 co_await http2_.capacity_signal().wait();
                 continue;
             }
-            if (error == http2_request_head_submit_error::connection_unavailable) {
+            if (error == http_submit_status::closed) {
                 // GOAWAY may have been consumed during the preface, or local
                 // stream IDs may be exhausted (no GOAWAY at all). Either way this
                 // session admits no new streams: drain it so the retry opens a
@@ -1297,14 +1297,14 @@ void http_client_pool::accept_http2_push(http_client_connection& connection, con
         request.method_ = promise.request_.method_;
         request.scheme_ = promise.request_.scheme_;
         request.authority_ = promise.request_.authority_;
-        request.path_ = promise.request_.path_;
+        request.target_ = promise.request_.target_;
         request.headers_.reserve(promise.request_.headers_.size());
         for (const auto& field : promise.request_.headers_) {
             request.headers_.emplace_back(field.name(), field.value());
         }
         auto driver = std::make_unique<http2_push_driver>(*this, connection, http_client_response(response.state_), state_value);
         driver->stream_.timeout_ = &driver->timeout_;
-        driver->stream_.request_target_ = request.path_;
+        driver->stream_.request_target_ = request.target_;
         driver->stream_.request_id_ = state_value.request_id_;
         driver->stream_.stream_id_ = promise.promised_stream_id_;
         driver->stream_.input_mark_ = connection.http2_.input_reads();

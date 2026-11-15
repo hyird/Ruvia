@@ -4,12 +4,12 @@
 #include <string_view>
 
 #include "http1_client_request.h"
-#include "http_client_request_view.h"
 #include "http_connection_fields.h"
 #include "http_field_kind.h"
 #include "http_field_validation.h"
 #include "http_header.h"
 #include "http_request.h"
+#include "http_request_head_view.h"
 
 // What a caller-supplied request header section must satisfy before the writer
 // will encode it, and the facts the encoder then needs from it: its field

@@ -732,7 +732,7 @@ TEST(Ruvia, public_router_buffered_body_reads_honour_their_operation) {
             return routes.dispatch(stream);
         }});
         server.listen({.address_ = "127.0.0.1", .http_ = plain.endpoint().port(), .dispatch_ = ruvia::listener_dispatch::request_stream});
-        ruvia::listen_config tls{.address_ = "127.0.0.1", .https_ = secure.endpoint().port(), .tls_ = {.identity_ = {.certificate_chain_file_ = identity.ca_file_, .private_key_file_ = identity.private_key_file()}}, .dispatch_ = ruvia::listener_dispatch::request_stream};
+        ruvia::listen_config tls{.address_ = "127.0.0.1", .https_ = secure.endpoint().port(), .tls_ = {.identities_ = ruvia::tls_fixed_identities{.primary_ = {.certificate_chain_file_ = identity.ca_file_, .private_key_file_ = identity.private_key_file()}}}, .dispatch_ = ruvia::listener_dispatch::request_stream};
 #if defined(RUVIA_ENABLE_HTTP3)
         tls.http3_ = udp.endpoint().port();
 #endif

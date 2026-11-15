@@ -1411,14 +1411,14 @@ TEST(Ruvia, request_body_failures_own_cross_runtime_http_errors) {
     const auto too_large = ruvia::http_request_body_size_failure(5, protocol_byte_limit::limited(4));
     EXPECT_TRUE(too_large.has_value());
     if (too_large) {
-        const auto error = ruvia::http_request_body_protocol_error(*too_large);
+        const auto error = ruvia::make_http_protocol_error(*too_large);
         EXPECT_EQ(error.status(), ruvia::http_status::content_too_large);
         EXPECT_EQ(std::string_view(error.what()), std::string_view("request body is too large"));
     }
     EXPECT_TRUE(!ruvia::http_request_body_addition_failure(2, 2, protocol_byte_limit::limited(4)));
     EXPECT_TRUE(ruvia::http_request_body_addition_failure(2, 3, protocol_byte_limit::limited(4)).has_value());
 
-    const auto incomplete = ruvia::http_request_body_protocol_error(ruvia::http_request_body_failure::incomplete);
+    const auto incomplete = ruvia::make_http_protocol_error(ruvia::http_request_body_failure::incomplete);
     EXPECT_EQ(incomplete.status(), ruvia::http_status::bad_request);
     EXPECT_EQ(std::string_view(incomplete.what()), std::string_view("incomplete request body"));
 }
@@ -1517,7 +1517,7 @@ TEST(Ruvia, http_request_content_decode_errors_own_protocol_failure_status) {
         const auto* failure = std::get_if<http_content_decode_error>(&result_value);
         EXPECT_TRUE(failure != nullptr);
         if (failure != nullptr) {
-            EXPECT_EQ(ruvia::http_request_content_decode_error(*failure).status(), expected_status);
+            EXPECT_EQ(ruvia::make_http_protocol_error(*failure, ruvia::http_coding_field::content_encoding).status(), expected_status);
         }
     };
     check_protocol_error(gzip, "not-gzip", 1024, ruvia::http_status::bad_request);

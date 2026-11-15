@@ -256,8 +256,8 @@ TEST(Ruvia, connection_listeners_serve_byte_streams_beside_routes) {
     const ruvia::tls_identity_config server_identity{.certificate_chain_file_ = identity.ca_file_, .private_key_file_ = identity.private_key_file()};
     auto raw_listener = connection_listener(raw_endpoint);
     raw_listener.https_ = raw_tls_endpoint.port();
-    raw_listener.tls_ = {.identity_ = server_identity, .alpn_ = {"echo/1", "h2"}};
-    const ruvia::listen_config routes_listener{.address_ = "127.0.0.1", .http_ = routes_endpoint.port(), .https_ = routes_tls_endpoint.port(), .tls_ = {.identity_ = server_identity}};
+    raw_listener.tls_ = {.identities_ = ruvia::tls_fixed_identities{.primary_ = server_identity}, .alpn_ = {"echo/1", "h2"}};
+    const ruvia::listen_config routes_listener{.address_ = "127.0.0.1", .http_ = routes_endpoint.port(), .https_ = routes_tls_endpoint.port(), .tls_ = {.identities_ = ruvia::tls_fixed_identities{.primary_ = server_identity}}};
 
     observed().clear();
     auto& app = ruvia::app();
@@ -386,7 +386,7 @@ TEST(Ruvia, raw_connection_abort_cancels_outputs_without_reporting_faults) {
     const auto tls_endpoint = tls_reservation.endpoint();
     auto listener = connection_listener(plain_endpoint);
     listener.https_ = tls_endpoint.port();
-    listener.tls_.identity_ = {.certificate_chain_file_ = identity.ca_file_, .private_key_file_ = identity.private_key_file()};
+    listener.tls_.identities_ = ruvia::tls_fixed_identities{.primary_ = {.certificate_chain_file_ = identity.ca_file_, .private_key_file_ = identity.private_key_file()}};
     auto& app = ruvia::app();
     app.workers({.worker_count_ = 1})
         .listen(listener)
@@ -690,7 +690,7 @@ TEST(Ruvia, connection_dispatch_configuration_is_validated) {
     const auto endpoint = reservation.endpoint();
     const auto tls_port = tls_reservation.endpoint().port();
     ruvia::test::tls_identity identity("localhost");
-    const ruvia::tls_config tls{.identity_ = {.certificate_chain_file_ = identity.ca_file_, .private_key_file_ = identity.private_key_file()}};
+    const ruvia::tls_config tls{.identities_ = ruvia::tls_fixed_identities{.primary_ = {.certificate_chain_file_ = identity.ca_file_, .private_key_file_ = identity.private_key_file()}}};
     auto& app = ruvia::app();
     app.workers({.worker_count_ = 1}).listen(connection_listener(endpoint)).on_start(nullptr).callbacks({});
     EXPECT_THROW(app.run(), std::invalid_argument);
@@ -750,7 +750,7 @@ TEST(Ruvia, raw_connection_operation_options_bound_each_wait) {
     const auto tls_endpoint = tls_reservation.endpoint();
     auto listener = connection_listener(plain_endpoint);
     listener.https_ = tls_endpoint.port();
-    listener.tls_.identity_ = {.certificate_chain_file_ = identity.ca_file_, .private_key_file_ = identity.private_key_file()};
+    listener.tls_.identities_ = ruvia::tls_fixed_identities{.primary_ = {.certificate_chain_file_ = identity.ca_file_, .private_key_file_ = identity.private_key_file()}};
     const auto read_text = [](ruvia::server_connection& connection, std::size_t size) -> ruvia::task<std::string> {
         std::string received;
         while (received.size() < size) {

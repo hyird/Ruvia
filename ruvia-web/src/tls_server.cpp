@@ -843,24 +843,32 @@ private:
 };
 
 tls_identity_plan::tls_identity_plan(const tls_config& config) {
-    if (config.certificate_store_) {
-        if (!config.identity_.empty() || !config.sni_.empty() || !config.local_addresses_.empty()) {
-            throw std::invalid_argument("TLS certificate library cannot be combined with fixed identities");
+    if (const auto* stored = std::get_if<tls_stored_identity>(&config.identities_)) {
+        if (!stored->store_) {
+            throw std::invalid_argument("TLS stored identity requires a certificate library");
         }
-        if (!config.select_certificate_ && config.default_certificate_ == 0) {
-            throw std::invalid_argument("TLS certificate library requires a selector or default certificate ID");
+        if (stored->id_ == 0) {
+            throw std::invalid_argument("TLS stored identity requires a nonzero certificate ID");
         }
-        store_ = config.certificate_store_;
-        selector_ = config.select_certificate_;
-        default_certificate_ = config.default_certificate_;
+        store_ = stored->store_;
+        default_certificate_ = stored->id_;
         return;
     }
-    if (config.select_certificate_ || config.default_certificate_ != 0) {
-        throw std::invalid_argument("TLS certificate selection requires a certificate library");
+    if (const auto* selected = std::get_if<tls_selected_identities>(&config.identities_)) {
+        if (!selected->store_) {
+            throw std::invalid_argument("TLS certificate selection requires a certificate library");
+        }
+        if (!selected->select_) {
+            throw std::invalid_argument("TLS certificate selection requires a selector");
+        }
+        store_ = selected->store_;
+        selector_ = selected->select_;
+        return;
     }
-    primary_.emplace(make_tls_identity_source(config.identity_));
-    names_.reserve(config.sni_.size());
-    for (const auto& sni : config.sni_) {
+    const auto& fixed = std::get<tls_fixed_identities>(config.identities_);
+    primary_.emplace(make_tls_identity_source(fixed.primary_));
+    names_.reserve(fixed.sni_.size());
+    for (const auto& sni : fixed.sni_) {
         if (sni.host_.empty()) {
             throw std::invalid_argument("SNI host must not be empty");
         }
@@ -885,8 +893,8 @@ tls_identity_plan::tls_identity_plan(const tls_config& config) {
             .source_ = make_tls_identity_source(sni.identity_),
         });
     }
-    addresses_.reserve(config.local_addresses_.size());
-    for (const auto& local : config.local_addresses_) {
+    addresses_.reserve(fixed.local_addresses_.size());
+    for (const auto& local : fixed.local_addresses_) {
         const auto address = make_tls_local_address(local.address_);
         for (const auto& existing : addresses_) {
             if (existing.address_ == address) {

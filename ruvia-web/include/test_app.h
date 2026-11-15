@@ -19,7 +19,6 @@
 #include "middleware.h"
 #include "model.h"
 #include "rate_limiting.h"
-#include "worker_state.h"
 
 namespace ruvia {
 // In-memory testing facade for applications built on Ruvia -- the actix

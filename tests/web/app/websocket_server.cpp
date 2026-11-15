@@ -1126,7 +1126,7 @@ void exercise_protocol(ruvia::http_client_versions protocol) {
         }},
             {.connection_scan_interval_ = 5ms});
         server.listen({.address_ = "127.0.0.1", .http_ = plain.endpoint().port(), .dispatch_ = ruvia::listener_dispatch::request_stream});
-        ruvia::listen_config tls{.address_ = "127.0.0.1", .https_ = secure.endpoint().port(), .tls_ = {.identity_ = {.certificate_chain_file_ = identity.ca_file_, .private_key_file_ = identity.private_key_file()}}, .dispatch_ = ruvia::listener_dispatch::request_stream};
+        ruvia::listen_config tls{.address_ = "127.0.0.1", .https_ = secure.endpoint().port(), .tls_ = {.identities_ = ruvia::tls_fixed_identities{.primary_ = {.certificate_chain_file_ = identity.ca_file_, .private_key_file_ = identity.private_key_file()}}}, .dispatch_ = ruvia::listener_dispatch::request_stream};
 #if defined(RUVIA_ENABLE_HTTP3)
         tls.http3_ = udp.endpoint().port();
 #endif

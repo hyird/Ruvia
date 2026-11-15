@@ -348,7 +348,7 @@ ruvia::task<void> serve(ruvia::request_stream& stream) {
     std::vector<ruvia::http_header_view> head_fields;
     std::string advertised_origin;
     if (request.path() == "/push") {
-        const bool accepted = stream.push({.scheme_ = request.scheme(), .authority_ = request.authority(), .path_ = "/pushed"});
+        const bool accepted = stream.push({.scheme_ = request.scheme(), .authority_ = request.authority(), .target_ = "/pushed"});
         head_fields.emplace_back("x-push", accepted ? "yes" : "no");
     }
     if (request.path() == "/pushed") {
@@ -488,7 +488,7 @@ ruvia::task<void> exercise(ruvia::http_client_ref client, ruvia::http_protocol_v
         }
         EXPECT_TRUE(pushed.has_value()) << label;
         if (pushed) {
-            EXPECT_EQ(pushed->request().path_, "/pushed") << label;
+            EXPECT_EQ(pushed->request().target_, "/pushed") << label;
             auto pushed_response = co_await pushed->response();
             const auto body = co_await pushed_response.bytes();
             EXPECT_EQ(body.text(), "pushed-body") << label;
@@ -744,7 +744,7 @@ TEST(Ruvia, request_stream_listeners_serve_every_protocol_beside_routes) {
     const auto plain_endpoint = plain_reservation.endpoint();
     const auto tls_port = tls_reservation.endpoint().port();
     const auto routes_endpoint = routes_reservation.endpoint();
-    ruvia::listen_config stream_listener{.address_ = "127.0.0.1", .http_ = plain_endpoint.port(), .https_ = tls_port, .tls_ = {.identity_ = {.certificate_chain_file_ = identity.ca_file_, .private_key_file_ = identity.private_key_file()}}, .dispatch_ = ruvia::listener_dispatch::request_stream};
+    ruvia::listen_config stream_listener{.address_ = "127.0.0.1", .http_ = plain_endpoint.port(), .https_ = tls_port, .tls_ = {.identities_ = ruvia::tls_fixed_identities{.primary_ = {.certificate_chain_file_ = identity.ca_file_, .private_key_file_ = identity.private_key_file()}}}, .dispatch_ = ruvia::listener_dispatch::request_stream};
 #if defined(RUVIA_ENABLE_HTTP3)
     ruvia::test::udp_port_reservation http3_reservation(io);
     const auto http3_port = http3_reservation.endpoint().port();
@@ -819,7 +819,7 @@ TEST(Ruvia, request_stream_listeners_serve_every_protocol_beside_routes) {
         EXPECT_TRUE(resumed.early_data_accepted());
 
         constexpr std::array fields{ruvia::http_header_view{"capsule-protocol", "?1"}};
-        const ruvia::http_extended_connect_request_head_view udp{.protocol_ = "connect-udp", .authority_ = "localhost", .target_ = "/.well-known/masque/udp/echo.test/53/", .headers_ = fields};
+        const ruvia::http_request_head_view udp{.method_ = "CONNECT", .protocol_ = "connect-udp", .authority_ = "localhost", .target_ = "/.well-known/masque/udp/echo.test/53/", .headers_ = fields};
         const auto stream = initial.start_tunnel(udp);
         EXPECT_EQ(initial.wait_for_response_head(stream).status_, 200);
         const std::string native("\0native", 7);
@@ -1039,7 +1039,7 @@ TEST(Ruvia, standalone_streamed_tunnel_refusals_propagate_upstream_disconnect) {
             co_await response.stream().pipe_to(request.stream());
         }});
         proxy.listen({.address_ = "127.0.0.1", .http_ = plain_port.endpoint().port(), .dispatch_ = ruvia::listener_dispatch::request_stream});
-        ruvia::listen_config secure{.address_ = "127.0.0.1", .https_ = tls_port.endpoint().port(), .tls_ = {.identity_ = {.certificate_chain_file_ = identity.ca_file_, .private_key_file_ = identity.private_key_file()}}, .dispatch_ = ruvia::listener_dispatch::request_stream};
+        ruvia::listen_config secure{.address_ = "127.0.0.1", .https_ = tls_port.endpoint().port(), .tls_ = {.identities_ = ruvia::tls_fixed_identities{.primary_ = {.certificate_chain_file_ = identity.ca_file_, .private_key_file_ = identity.private_key_file()}}}, .dispatch_ = ruvia::listener_dispatch::request_stream};
 #if defined(RUVIA_ENABLE_HTTP3)
         secure.http3_ = udp_port.endpoint().port();
 #endif
@@ -1199,7 +1199,7 @@ TEST(Ruvia, request_stream_body_wait_cancellation_and_reset_are_isolated) {
             }
         }});
         server.listen({.address_ = "127.0.0.1", .http_ = plain.endpoint().port(), .dispatch_ = ruvia::listener_dispatch::request_stream});
-        ruvia::listen_config tls{.address_ = "127.0.0.1", .https_ = secure.endpoint().port(), .tls_ = {.identity_ = {.certificate_chain_file_ = identity.ca_file_, .private_key_file_ = identity.private_key_file()}}, .dispatch_ = ruvia::listener_dispatch::request_stream};
+        ruvia::listen_config tls{.address_ = "127.0.0.1", .https_ = secure.endpoint().port(), .tls_ = {.identities_ = ruvia::tls_fixed_identities{.primary_ = {.certificate_chain_file_ = identity.ca_file_, .private_key_file_ = identity.private_key_file()}}}, .dispatch_ = ruvia::listener_dispatch::request_stream};
 #if defined(RUVIA_ENABLE_HTTP3)
         tls.http3_ = udp.endpoint().port();
 #endif
@@ -1523,7 +1523,7 @@ TEST(Ruvia, request_stream_operation_options_bound_each_wait) {
         };
         ruvia::http_server server(attachment.loop(), {.request_stream_ = handle});
         server.listen({.address_ = "127.0.0.1", .http_ = plain.endpoint().port(), .dispatch_ = ruvia::listener_dispatch::request_stream});
-        ruvia::listen_config tls{.address_ = "127.0.0.1", .https_ = secure.endpoint().port(), .tls_ = {.identity_ = {.certificate_chain_file_ = identity.ca_file_, .private_key_file_ = identity.private_key_file()}}, .dispatch_ = ruvia::listener_dispatch::request_stream};
+        ruvia::listen_config tls{.address_ = "127.0.0.1", .https_ = secure.endpoint().port(), .tls_ = {.identities_ = ruvia::tls_fixed_identities{.primary_ = {.certificate_chain_file_ = identity.ca_file_, .private_key_file_ = identity.private_key_file()}}}, .dispatch_ = ruvia::listener_dispatch::request_stream};
 #if defined(RUVIA_ENABLE_HTTP3)
         tls.http3_ = udp.endpoint().port();
 #endif
@@ -1801,7 +1801,7 @@ TEST(Ruvia, tunnel_operation_options_bound_each_wait) {
         };
         ruvia::http_server server(attachment.loop(), {.request_stream_ = handle});
         server.listen({.address_ = "127.0.0.1", .http_ = plain.endpoint().port(), .dispatch_ = ruvia::listener_dispatch::request_stream});
-        ruvia::listen_config tls{.address_ = "127.0.0.1", .https_ = secure.endpoint().port(), .tls_ = {.identity_ = {.certificate_chain_file_ = identity.ca_file_, .private_key_file_ = identity.private_key_file()}}, .dispatch_ = ruvia::listener_dispatch::request_stream};
+        ruvia::listen_config tls{.address_ = "127.0.0.1", .https_ = secure.endpoint().port(), .tls_ = {.identities_ = ruvia::tls_fixed_identities{.primary_ = {.certificate_chain_file_ = identity.ca_file_, .private_key_file_ = identity.private_key_file()}}}, .dispatch_ = ruvia::listener_dispatch::request_stream};
 #if defined(RUVIA_ENABLE_HTTP3)
         tls.http3_ = udp.endpoint().port();
 #endif
@@ -2030,7 +2030,7 @@ TEST(Ruvia, response_pipe_bounds_upstream_reads_and_downstream_writes) {
         };
         ruvia::http_server server(attachment.loop(), {.request_stream_ = handle});
         server.listen({.address_ = "127.0.0.1", .http_ = plain.endpoint().port(), .dispatch_ = ruvia::listener_dispatch::request_stream});
-        ruvia::listen_config tls{.address_ = "127.0.0.1", .https_ = secure.endpoint().port(), .tls_ = {.identity_ = {.certificate_chain_file_ = identity.ca_file_, .private_key_file_ = identity.private_key_file()}}, .dispatch_ = ruvia::listener_dispatch::request_stream};
+        ruvia::listen_config tls{.address_ = "127.0.0.1", .https_ = secure.endpoint().port(), .tls_ = {.identities_ = ruvia::tls_fixed_identities{.primary_ = {.certificate_chain_file_ = identity.ca_file_, .private_key_file_ = identity.private_key_file()}}}, .dispatch_ = ruvia::listener_dispatch::request_stream};
 #if defined(RUVIA_ENABLE_HTTP3)
         tls.http3_ = udp.endpoint().port();
 #endif

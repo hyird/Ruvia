@@ -36,11 +36,11 @@
 #include "http1_server_response.h"
 #include "http_client.h"
 #include "http_client_fixture.h"
-#include "http_client_request_view.h"
 #include "http_client_types.h"
 #include "http_connect_udp.h"
 #include "http_header.h"
 #include "http_request.h"
+#include "http_request_head_view.h"
 #include "http_server_fixture.h"
 #include "stop_token.h"
 #include "streaming.h"
@@ -488,21 +488,21 @@ TEST(Ruvia, http_client_finishes_upload_after_an_early_persistent_response_befor
                     ruvia::http1_chunked_body_decoder decoder;
                     for (;;) {
                         const auto decoded = decoder.decode(buffered);
-                        if (decoded.failure()) {
+                        if (decoded.holds<ruvia::http1_chunk_decode_failure>()) {
                             throw std::runtime_error("invalid upload chunk framing");
                         }
-                        if (const auto* chunk = decoded.body_chunk()) {
+                        if (const auto* chunk = decoded.get_if<ruvia::decode_output>()) {
                             request_body.append(chunk->bytes());
                         }
-                        const bool complete = decoded.complete() != nullptr;
-                        if (complete && request_trailers.append_received(decoded.complete()->trailers())) {
+                        const auto* const complete = decoded.get_if<ruvia::http1_chunk_decode_complete>();
+                        if (complete != nullptr && request_trailers.append_received(complete->trailers())) {
                             throw std::runtime_error("invalid upload trailers");
                         }
                         buffered.erase(0, decoded.consumed_bytes());
-                        if (complete) {
+                        if (complete != nullptr) {
                             break;
                         }
-                        if (decoded.need_input()) {
+                        if (decoded.holds<ruvia::decode_need_input>()) {
                             co_await asio::async_read(socket, asio::dynamic_buffer(buffered), asio::transfer_at_least(1), asio::use_awaitable);
                         }
                     }
@@ -556,9 +556,9 @@ TEST(Ruvia, http_client_finishes_upload_after_an_early_persistent_response_befor
             run_operation(worker, io, operation);
             EXPECT_EQ(request_body, "abc");
             EXPECT_TRUE(request_trailers.field("x-end") == (known_length ? std::nullopt : std::optional<std::string_view>("retained")));
-            ruvia::http1_server_request_parse_state parsed;
-            parsed.parse_head(next_request);
-            EXPECT_TRUE(parsed.head_ready());
+            ruvia::http1_server_request_parser parsed;
+            const auto next_head = parsed.parse(next_request);
+            EXPECT_TRUE(next_head.holds<ruvia::decode_complete>());
             EXPECT_EQ(parsed.request().method(), "GET");
             EXPECT_EQ(parsed.request().target(), "/next");
         }

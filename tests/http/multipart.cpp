@@ -8,6 +8,8 @@
 #include <string>
 #include <string_view>
 #include <utility>
+#include <variant>
+#include <vector>
 
 #include "content_decoding_fixture.h"
 #include "http_multipart.h"
@@ -46,62 +48,64 @@ TEST(Ruvia, multipart_boundary_value_enforces_rfc2046_grammar) {
 // value consumed by buffered and streaming parsers.
 TEST(Ruvia, multipart_boundary_from_content_type) {
     const auto plain = ruvia::parse_multipart_boundary("multipart/form-data; boundary=abc123");
-    EXPECT_TRUE(plain.boundary() != nullptr);
-    EXPECT_TRUE(plain.not_applicable() == nullptr);
-    EXPECT_TRUE(plain.failure() == nullptr);
-    EXPECT_EQ(plain.boundary()->value(), std::string_view("abc123"));
+    EXPECT_TRUE(std::get_if<ruvia::multipart_boundary>(&plain) != nullptr);
+    EXPECT_TRUE(std::get_if<ruvia::multipart_boundary_error>(&plain) == nullptr);
+    EXPECT_EQ(std::get<ruvia::multipart_boundary>(plain).value(), std::string_view("abc123"));
 
     const auto quoted = ruvia::parse_multipart_boundary(R"(multipart/form-data; boundary="a b")");
-    EXPECT_TRUE(quoted.boundary() != nullptr);
-    EXPECT_EQ(quoted.boundary()->value(), std::string_view("a b"));
+    EXPECT_TRUE(std::get_if<ruvia::multipart_boundary>(&quoted) != nullptr);
+    EXPECT_EQ(std::get<ruvia::multipart_boundary>(quoted).value(), std::string_view("a b"));
 
     const auto quoted_special = ruvia::parse_multipart_boundary(R"(multipart/form-data; boundary="a:b")");
-    EXPECT_TRUE(quoted_special.boundary() != nullptr);
-    EXPECT_EQ(quoted_special.boundary()->value(), std::string_view("a:b"));
+    EXPECT_TRUE(std::get_if<ruvia::multipart_boundary>(&quoted_special) != nullptr);
+    EXPECT_EQ(std::get<ruvia::multipart_boundary>(quoted_special).value(), std::string_view("a:b"));
 
     const auto quoted_pair = ruvia::parse_multipart_boundary(R"(multipart/form-data; boundary="a\?b")");
-    EXPECT_TRUE(quoted_pair.boundary() != nullptr);
-    EXPECT_EQ(quoted_pair.boundary()->value(), std::string_view("a?b"));
+    EXPECT_TRUE(std::get_if<ruvia::multipart_boundary>(&quoted_pair) != nullptr);
+    EXPECT_EQ(std::get<ruvia::multipart_boundary>(quoted_pair).value(), std::string_view("a?b"));
 
     // A different media type is not applicable to the multipart parser.
     const auto wrong_type = ruvia::parse_multipart_boundary("text/plain; boundary=abc");
-    EXPECT_TRUE(wrong_type.boundary() == nullptr);
-    EXPECT_TRUE(wrong_type.not_applicable() != nullptr);
-    EXPECT_TRUE(wrong_type.failure() == nullptr);
+    EXPECT_TRUE(std::get_if<ruvia::multipart_boundary>(&wrong_type) == nullptr);
+    const auto* wrong_type_error = std::get_if<ruvia::multipart_boundary_error>(&wrong_type);
+    EXPECT_TRUE(wrong_type_error != nullptr && *wrong_type_error == ruvia::multipart_boundary_error::not_form_data);
 
     // Once multipart/form-data is declared, an invalid boundary is an HTTP
     // request failure rather than a Web-layer parsing policy decision.
     for (const std::string_view invalid : {"multipart/form-data", "multipart/form-data; charset=utf-8", "multipart/form-data; boundary=", "multipart/form-data; boundary=a:b", R"(multipart/form-data; boundary="a;b")", "multipart/form-data; boundary=one; boundary=two", "multipart/form-data; boundary=abc; charset=utf-8; CHARSET=latin1", "multipart/form-data; boundary=abc; broken", "multipart/form-data; broken; boundary=abc", "multipart/form-data; boundary =abc", "multipart/form-data; boundary= abc", "multipart/form-data; boundary=abc; charset=unquoted value", R"(multipart/form-data; boundary=abc; charset="unterminated)", "multipart/form-data; boundary=abc; =value"}) {
         const auto result_value = ruvia::parse_multipart_boundary(invalid);
-        EXPECT_TRUE(result_value.boundary() == nullptr);
-        EXPECT_TRUE(result_value.not_applicable() == nullptr);
-        EXPECT_TRUE(result_value.failure() != nullptr);
-        if (result_value.failure() != nullptr) {
-            const auto error = result_value.failure()->protocol_error();
+        EXPECT_TRUE(std::get_if<ruvia::multipart_boundary>(&result_value) == nullptr);
+        const auto* boundary_error = std::get_if<ruvia::multipart_boundary_error>(&result_value);
+        EXPECT_TRUE(boundary_error != nullptr && *boundary_error == ruvia::multipart_boundary_error::invalid_boundary);
+        if (boundary_error != nullptr) {
+            const auto error = ruvia::make_http_protocol_error(*boundary_error);
             EXPECT_EQ(error.status(), ruvia::http_status::bad_request);
             EXPECT_EQ(std::string_view(error.what()), std::string_view("invalid multipart boundary"));
         }
     }
 
     const auto extension = ruvia::parse_multipart_boundary(R"(multipart/form-data; charset="utf-8"; boundary=abc)");
-    EXPECT_TRUE(extension.boundary() != nullptr);
-    if (extension.boundary() != nullptr) {
-        EXPECT_EQ(extension.boundary()->value(), std::string_view("abc"));
+    const auto* extension_boundary = std::get_if<ruvia::multipart_boundary>(&extension);
+    EXPECT_TRUE(extension_boundary != nullptr);
+    if (extension_boundary != nullptr) {
+        EXPECT_EQ(extension_boundary->value(), std::string_view("abc"));
     }
 }
 
 TEST(Ruvia, multipart_boundary_allows_empty_http_parameter_slots_without_relaxing_validation) {
     for (const std::string_view valid : {"multipart/form-data;;boundary=abc;", "multipart/form-data; ; boundary=abc; \t;", R"(multipart/form-data;;charset="utf-8";;boundary="a b";;)"}) {
         const auto result = ruvia::parse_multipart_boundary(valid);
-        EXPECT_TRUE(result.boundary() != nullptr);
-        if (result.boundary()) {
+        const auto* boundary = std::get_if<ruvia::multipart_boundary>(&result);
+        EXPECT_TRUE(boundary != nullptr);
+        if (boundary != nullptr) {
             const auto expected = valid.find("a b") == std::string_view::npos ? "abc" : "a b";
-            EXPECT_EQ(result.boundary()->value(), std::string_view(expected));
+            EXPECT_EQ(boundary->value(), std::string_view(expected));
         }
     }
     for (const std::string_view invalid : {"multipart/form-data; ; ;", "multipart/form-data;;boundary=;", "multipart/form-data;;boundary=abc;;BOUNDARY=abc;", "multipart/form-data;;boundary=abc;;charset=utf-8;;CHARSET=latin1;", "multipart/form-data;;boundary=abc;;broken;", "multipart/form-data;;boundary =abc;", "multipart/form-data;;boundary= abc;"}) {
         const auto result = ruvia::parse_multipart_boundary(invalid);
-        EXPECT_TRUE(result.failure() != nullptr);
+        const auto* boundary_error = std::get_if<ruvia::multipart_boundary_error>(&result);
+        EXPECT_TRUE(boundary_error != nullptr && *boundary_error == ruvia::multipart_boundary_error::invalid_boundary);
     }
 }
 
@@ -115,7 +119,7 @@ TEST(Ruvia, multipart_parser_commits_an_eof_close_only_after_finish_input) {
         "--BOUNDARY--");
 
     const auto first = parser.poll();
-    const auto* first_part = first.part();
+    const auto* first_part = first.get_if<ruvia::multipart_stream_part>();
     EXPECT_TRUE(first_part != nullptr);
     if (first_part != nullptr) {
         EXPECT_TRUE(first_part->phase() == ruvia::multipart_chunk_phase::first);
@@ -123,22 +127,22 @@ TEST(Ruvia, multipart_parser_commits_an_eof_close_only_after_finish_input) {
     }
 
     const auto waiting = parser.poll();
-    EXPECT_TRUE(waiting.need_input() != nullptr);
-    EXPECT_TRUE(waiting.part() == nullptr);
-    EXPECT_TRUE(waiting.done() == nullptr);
+    EXPECT_TRUE(waiting.holds<ruvia::decode_need_input>());
+    EXPECT_TRUE(!waiting.holds<ruvia::multipart_stream_part>());
+    EXPECT_TRUE(!waiting.holds<ruvia::decode_complete>());
 
     parser.finish_input();
     const auto last = parser.poll();
-    const auto* last_part = last.part();
+    const auto* last_part = last.get_if<ruvia::multipart_stream_part>();
     EXPECT_TRUE(last_part != nullptr);
     if (last_part != nullptr) {
         EXPECT_TRUE(last_part->phase() == ruvia::multipart_chunk_phase::last);
         EXPECT_TRUE(last_part->body().empty());
     }
     const auto done = parser.poll();
-    EXPECT_TRUE(done.done() != nullptr);
-    EXPECT_TRUE(done.need_input() == nullptr);
-    EXPECT_TRUE(done.part() == nullptr);
+    EXPECT_TRUE(done.holds<ruvia::decode_complete>());
+    EXPECT_TRUE(!done.holds<ruvia::decode_need_input>());
+    EXPECT_TRUE(!done.holds<ruvia::multipart_stream_part>());
 
     bool feed_after_finish_threw = false;
     try {
@@ -159,12 +163,13 @@ TEST(Ruvia, multipart_parser_reports_typed_incomplete_body) {
     parser.finish_input();
 
     const auto result_value = parser.poll();
-    EXPECT_TRUE(result_value.failure() != nullptr);
-    EXPECT_TRUE(result_value.need_input() == nullptr);
-    EXPECT_TRUE(result_value.part() == nullptr);
-    EXPECT_TRUE(result_value.done() == nullptr);
-    if (result_value.failure() != nullptr) {
-        const auto error = result_value.failure()->protocol_error();
+    const auto* failure = result_value.get_if<ruvia::multipart_parse_failure>();
+    EXPECT_TRUE(failure != nullptr);
+    EXPECT_TRUE(!result_value.holds<ruvia::decode_need_input>());
+    EXPECT_TRUE(!result_value.holds<ruvia::multipart_stream_part>());
+    EXPECT_TRUE(!result_value.holds<ruvia::decode_complete>());
+    if (failure != nullptr) {
+        const auto error = ruvia::make_http_protocol_error(failure->error());
         EXPECT_EQ(error.status(), ruvia::http_status::bad_request);
         EXPECT_EQ(std::string_view(error.what()), std::string_view("incomplete multipart body"));
     }
@@ -177,7 +182,7 @@ TEST(Ruvia, multipart_part_preserves_empty_filename_parameter_presence) {
         "\r\n"
         "data\r\n"
         "--BOUNDARY--\r\n";
-    const auto parts = ruvia::parse_multipart_body(body, {.boundary_ = ruvia::test::make_multipart_boundary("BOUNDARY")}).take_parts();
+    const auto parts = std::get<std::vector<ruvia::multipart_part>>(ruvia::parse_multipart_body(body, {.boundary_ = ruvia::test::make_multipart_boundary("BOUNDARY")}));
     EXPECT_EQ(parts.size(), std::size_t{1});
     if (!parts.empty()) {
         EXPECT_TRUE(parts[0].has_filename());
@@ -188,7 +193,7 @@ TEST(Ruvia, multipart_part_preserves_empty_filename_parameter_presence) {
     parser.feed(body);
     parser.finish_input();
     const auto streamed = parser.poll();
-    const auto* part = streamed.part();
+    const auto* part = streamed.get_if<ruvia::multipart_stream_part>();
     EXPECT_TRUE(part != nullptr);
     if (part != nullptr) {
         EXPECT_TRUE(part->has_filename());
@@ -207,9 +212,10 @@ TEST(Ruvia, multipart_part_header_rejects_ambiguous_disposition_parameters) {
         body.append(invalid);
         body.append("\r\n\r\nvalue\r\n--BOUNDARY--\r\n");
         const auto parsed = ruvia::parse_multipart_body(body, {.boundary_ = ruvia::test::make_multipart_boundary("BOUNDARY")});
-        EXPECT_TRUE(parsed.failure() != nullptr);
-        if (const auto* failure = parsed.failure()) {
-            const auto error = failure->protocol_error();
+        const auto* failure = std::get_if<ruvia::multipart_parse_error>(&parsed);
+        EXPECT_TRUE(failure != nullptr);
+        if (failure != nullptr) {
+            const auto error = ruvia::make_http_protocol_error(*failure);
             EXPECT_EQ(error.status(), ruvia::http_status::bad_request);
             EXPECT_EQ(std::string_view(error.what()), std::string_view("invalid multipart content disposition"));
         }
@@ -228,9 +234,10 @@ TEST(Ruvia, multipart_part_header_rejects_ambiguous_header_blocks) {
         body.append(invalid);
         body.append("\r\n\r\nvalue\r\n--BOUNDARY--\r\n");
         const auto parsed = ruvia::parse_multipart_body(body, {.boundary_ = ruvia::test::make_multipart_boundary("BOUNDARY")});
-        EXPECT_TRUE(parsed.failure() != nullptr);
-        if (const auto* failure = parsed.failure()) {
-            const auto error = failure->protocol_error();
+        const auto* failure = std::get_if<ruvia::multipart_parse_error>(&parsed);
+        EXPECT_TRUE(failure != nullptr);
+        if (failure != nullptr) {
+            const auto error = ruvia::make_http_protocol_error(*failure);
             EXPECT_EQ(error.status(), ruvia::http_status::bad_request);
             EXPECT_EQ(std::string_view(error.what()), std::string_view("invalid multipart part headers"));
         }
@@ -248,7 +255,7 @@ TEST(Ruvia, multipart_complete_body_parser_returns_borrowed_part_bodies) {
         "Content-Type: text/plain\r\n\r\n"
         "file-data\r\n"
         "--BOUNDARY--\r\n";
-    const auto parts = ruvia::parse_multipart_body(body, {.boundary_ = ruvia::test::make_multipart_boundary("BOUNDARY")}).take_parts();
+    const auto parts = std::get<std::vector<ruvia::multipart_part>>(ruvia::parse_multipart_body(body, {.boundary_ = ruvia::test::make_multipart_boundary("BOUNDARY")}));
     EXPECT_EQ(parts.size(), std::size_t{2});
     EXPECT_EQ(parts[0].name(), std::string_view("field"));
     EXPECT_EQ(parts[0].body(), std::string_view("value"));
@@ -269,23 +276,25 @@ TEST(Ruvia, multipart_complete_body_parser_returns_borrowed_part_bodies) {
 TEST(Ruvia, multipart_complete_body_parser_rejects_malformed_body) {
     constexpr std::string_view truncated = "--BOUNDARY\r\nContent-Disposition: form-data; name=\"x\"\r\n\r\nmissing close";
     const auto parsed = ruvia::parse_multipart_body(truncated, {.boundary_ = ruvia::test::make_multipart_boundary("BOUNDARY")});
-    EXPECT_TRUE(parsed.parts() == nullptr);
-    EXPECT_TRUE(parsed.failure() != nullptr);
-    if (const auto* failure = parsed.failure()) {
-        const auto error = failure->protocol_error();
+    EXPECT_TRUE(std::get_if<std::vector<ruvia::multipart_part>>(&parsed) == nullptr);
+    const auto* failure = std::get_if<ruvia::multipart_parse_error>(&parsed);
+    EXPECT_TRUE(failure != nullptr);
+    if (failure != nullptr) {
+        const auto error = ruvia::make_http_protocol_error(*failure);
         EXPECT_EQ(error.status(), ruvia::http_status::bad_request);
         EXPECT_EQ(std::string_view(error.what()), std::string_view("incomplete multipart body"));
     }
-    EXPECT_THROW((void)ruvia::parse_multipart_body(truncated, {.boundary_ = ruvia::test::make_multipart_boundary("BOUNDARY")}).take_parts(), std::logic_error);
+    EXPECT_THROW((void)std::get<std::vector<ruvia::multipart_part>>(ruvia::parse_multipart_body(truncated, {.boundary_ = ruvia::test::make_multipart_boundary("BOUNDARY")})), std::bad_variant_access);
 }
 
 TEST(Ruvia, multipart_complete_body_parser_shares_incremental_limits) {
     std::string oversized_preamble(64 * 1024 + 1, 'x');
     std::string complete_error_message;
     const auto parsed = ruvia::parse_multipart_body(oversized_preamble, {.boundary_ = ruvia::test::make_multipart_boundary("BOUNDARY")});
-    EXPECT_TRUE(parsed.failure() != nullptr);
-    if (const auto* failure = parsed.failure()) {
-        const auto error = failure->protocol_error();
+    const auto* failure = std::get_if<ruvia::multipart_parse_error>(&parsed);
+    EXPECT_TRUE(failure != nullptr);
+    if (failure != nullptr) {
+        const auto error = ruvia::make_http_protocol_error(*failure);
         complete_error_message = error.what();
         EXPECT_EQ(error.status(), ruvia::http_status::content_too_large);
         EXPECT_EQ(std::string_view(error.what()), std::string_view("multipart preamble exceeds limit"));
@@ -294,12 +303,14 @@ TEST(Ruvia, multipart_complete_body_parser_shares_incremental_limits) {
     ruvia::multipart_parser incremental({.boundary_ = ruvia::test::make_multipart_boundary("BOUNDARY")});
     incremental.feed(oversized_preamble);
     const auto streamed = incremental.poll();
-    EXPECT_TRUE(streamed.failure() != nullptr);
-    EXPECT_EQ(streamed.failure()->protocol_error().status(), ruvia::http_status::content_too_large);
-    EXPECT_EQ(std::string_view(streamed.failure()->protocol_error().what()), std::string_view(complete_error_message));
+    const auto* streamed_failure = streamed.get_if<ruvia::multipart_parse_failure>();
+    ASSERT_TRUE(streamed_failure != nullptr);
+    EXPECT_EQ(ruvia::make_http_protocol_error(streamed_failure->error()).status(), ruvia::http_status::content_too_large);
+    EXPECT_EQ(std::string_view(ruvia::make_http_protocol_error(streamed_failure->error()).what()), std::string_view(complete_error_message));
     const auto repeated = incremental.poll();
-    EXPECT_TRUE(repeated.failure() != nullptr);
-    EXPECT_EQ(std::string_view(repeated.failure()->protocol_error().what()), std::string_view(complete_error_message));
+    const auto* repeated_failure = repeated.get_if<ruvia::multipart_parse_failure>();
+    ASSERT_TRUE(repeated_failure != nullptr);
+    EXPECT_EQ(std::string_view(ruvia::make_http_protocol_error(repeated_failure->error()).what()), std::string_view(complete_error_message));
     bool feed_after_failure_threw = false;
     try {
         incremental.feed("--BOUNDARY--");
@@ -315,20 +326,22 @@ TEST(Ruvia, multipart_complete_limits_cannot_be_bypassed_by_terminators) {
     };
     const auto check_failure = [&parse](const std::string& body, std::string_view message) {
         const auto parsed = parse(body);
-        EXPECT_TRUE(parsed.failure() != nullptr);
-        if (const auto* failure = parsed.failure()) {
-            EXPECT_EQ(failure->protocol_error().status(), ruvia::http_status::content_too_large);
-            EXPECT_EQ(std::string_view(failure->protocol_error().what()), message);
+        const auto* parsed_failure = std::get_if<ruvia::multipart_parse_error>(&parsed);
+        EXPECT_TRUE(parsed_failure != nullptr);
+        if (parsed_failure != nullptr) {
+            EXPECT_EQ(ruvia::make_http_protocol_error(*parsed_failure).status(), ruvia::http_status::content_too_large);
+            EXPECT_EQ(std::string_view(ruvia::make_http_protocol_error(*parsed_failure).what()), message);
         }
 
         ruvia::multipart_parser incremental({.boundary_ = ruvia::test::make_multipart_boundary("BOUNDARY")});
         incremental.feed(body);
         incremental.finish_input();
         const auto streamed = incremental.poll();
-        EXPECT_TRUE(streamed.failure() != nullptr);
-        if (const auto* failure = streamed.failure()) {
-            EXPECT_EQ(failure->protocol_error().status(), ruvia::http_status::content_too_large);
-            EXPECT_EQ(std::string_view(failure->protocol_error().what()), message);
+        const auto* streamed_failure = streamed.get_if<ruvia::multipart_parse_failure>();
+        EXPECT_TRUE(streamed_failure != nullptr);
+        if (streamed_failure != nullptr) {
+            EXPECT_EQ(ruvia::make_http_protocol_error(streamed_failure->error()).status(), ruvia::http_status::content_too_large);
+            EXPECT_EQ(std::string_view(ruvia::make_http_protocol_error(streamed_failure->error()).what()), message);
         }
     };
 
@@ -381,17 +394,19 @@ TEST(Ruvia, multipart_part_and_metadata_limits_are_cumulative) {
     }
     body += "--abc--\r\n";
 
-    const auto accepted = ruvia::parse_multipart_body(body, {.boundary_ = ruvia::test::make_multipart_boundary("abc"), .max_parts_ = 3, .max_metadata_bytes_ = 3 * header_value.size()}).take_parts();
+    const auto accepted = std::get<std::vector<ruvia::multipart_part>>(ruvia::parse_multipart_body(body, {.boundary_ = ruvia::test::make_multipart_boundary("abc"), .max_parts_ = 3, .max_metadata_bytes_ = 3 * header_value.size()}));
     EXPECT_EQ(accepted.size(), std::size_t{3});
     const auto too_many = ruvia::parse_multipart_body(body, {.boundary_ = ruvia::test::make_multipart_boundary("abc"), .max_parts_ = 2});
-    EXPECT_TRUE(too_many.failure() != nullptr);
-    if (const auto* failure = too_many.failure()) {
-        EXPECT_EQ(failure->protocol_error().status(), ruvia::http_status::content_too_large);
+    const auto* too_many_failure = std::get_if<ruvia::multipart_parse_error>(&too_many);
+    EXPECT_TRUE(too_many_failure != nullptr);
+    if (too_many_failure != nullptr) {
+        EXPECT_EQ(ruvia::make_http_protocol_error(*too_many_failure).status(), ruvia::http_status::content_too_large);
     }
     const auto too_large = ruvia::parse_multipart_body(body, {.boundary_ = ruvia::test::make_multipart_boundary("abc"), .max_metadata_bytes_ = 3 * header_value.size() - 1});
-    EXPECT_TRUE(too_large.failure() != nullptr);
-    if (const auto* failure = too_large.failure()) {
-        EXPECT_EQ(failure->protocol_error().status(), ruvia::http_status::content_too_large);
+    const auto* too_large_failure = std::get_if<ruvia::multipart_parse_error>(&too_large);
+    EXPECT_TRUE(too_large_failure != nullptr);
+    if (too_large_failure != nullptr) {
+        EXPECT_EQ(ruvia::make_http_protocol_error(*too_large_failure).status(), ruvia::http_status::content_too_large);
     }
 
     ruvia::multipart_parser parser({.boundary_ = ruvia::test::make_multipart_boundary("abc"), .max_parts_ = 2});
@@ -399,9 +414,9 @@ TEST(Ruvia, multipart_part_and_metadata_limits_are_cumulative) {
     for (std::size_t index = 0; index < 4; ++index) {
         const auto result_value = parser.poll();
         if (index < 2) {
-            EXPECT_TRUE(result_value.part() != nullptr);
+            EXPECT_TRUE(result_value.holds<ruvia::multipart_stream_part>());
         } else {
-            EXPECT_TRUE(result_value.failure() != nullptr);
+            EXPECT_TRUE(result_value.holds<ruvia::multipart_parse_failure>());
         }
     }
 }
@@ -418,7 +433,7 @@ TEST(Ruvia, multipart_streaming_handles_bytewise_long_syntax_and_false_delimiter
     body.append(16 * 1024, '\t');
     body += "\r\n";
 
-    const auto expected = ruvia::parse_multipart_body(body, {.boundary_ = ruvia::test::make_multipart_boundary("abc")}).take_parts();
+    const auto expected = std::get<std::vector<ruvia::multipart_part>>(ruvia::parse_multipart_body(body, {.boundary_ = ruvia::test::make_multipart_boundary("abc")}));
     EXPECT_TRUE(!expected.empty());
     ruvia::multipart_parser parser({.boundary_ = ruvia::test::make_multipart_boundary("abc")});
     std::string received;
@@ -428,14 +443,14 @@ TEST(Ruvia, multipart_streaming_handles_bytewise_long_syntax_and_false_delimiter
         parser.feed(std::string_view(body).substr(offset, 1));
         for (;;) {
             const auto result_value = parser.poll();
-            EXPECT_TRUE(result_value.failure() == nullptr);
-            if (const auto* part = result_value.part()) {
+            EXPECT_TRUE(!result_value.holds<ruvia::multipart_parse_failure>());
+            if (const auto* part = result_value.get_if<ruvia::multipart_stream_part>()) {
                 received += part->body();
                 if (part->phase() == ruvia::multipart_chunk_phase::complete || part->phase() == ruvia::multipart_chunk_phase::last) {
                     ++ended;
                 }
             } else {
-                done = result_value.done() != nullptr;
+                done = result_value.holds<ruvia::decode_complete>();
                 break;
             }
         }
@@ -458,7 +473,7 @@ TEST(Ruvia, multipart_part_may_end_at_its_header_block) {
         "--b\r\nContent-Disposition: form-data; name=\"d\"\r\n\r\n--ax\r\n"
         "--b\r\nContent-Disposition: form-data; name=\"e\"\r\n\r\n--b--";
 
-    const auto parts = ruvia::parse_multipart_body(body, {.boundary_ = ruvia::test::make_multipart_boundary("b")}).take_parts();
+    const auto parts = std::get<std::vector<ruvia::multipart_part>>(ruvia::parse_multipart_body(body, {.boundary_ = ruvia::test::make_multipart_boundary("b")}));
     EXPECT_EQ(parts.size(), std::size_t{4});
     if (parts.size() == 4) {
         EXPECT_EQ(parts[0].name(), std::string_view("a"));
@@ -479,8 +494,8 @@ TEST(Ruvia, multipart_part_may_end_at_its_header_block) {
         const auto drain = [&]() {
             for (;;) {
                 const auto result_value = parser.poll();
-                EXPECT_TRUE(result_value.failure() == nullptr);
-                if (const auto* part = result_value.part()) {
+                EXPECT_TRUE(!result_value.holds<ruvia::multipart_parse_failure>());
+                if (const auto* part = result_value.get_if<ruvia::multipart_stream_part>()) {
                     if (part->phase() == ruvia::multipart_chunk_phase::first || part->phase() == ruvia::multipart_chunk_phase::complete) {
                         received += '[';
                         received += part->name();
@@ -492,7 +507,7 @@ TEST(Ruvia, multipart_part_may_end_at_its_header_block) {
                         ++ended;
                     }
                 } else {
-                    done = result_value.done() != nullptr;
+                    done = result_value.holds<ruvia::decode_complete>();
                     return;
                 }
             }
@@ -519,9 +534,10 @@ TEST(Ruvia, multipart_preamble_limit_counts_misleading_and_incomplete_marker_byt
             wire += "\r\n--abc\r\nContent-Disposition: form-data; name=field\r\n\r\nvalue\r\n--abc--\r\n";
         }
         const auto buffered = ruvia::parse_multipart_body(wire, {.boundary_ = ruvia::test::make_multipart_boundary("abc")});
-        EXPECT_TRUE(buffered.failure() != nullptr);
-        if (const auto* failure = buffered.failure()) {
-            EXPECT_EQ(failure->protocol_error().status(), ruvia::http_status::content_too_large);
+        const auto* buffered_failure = std::get_if<ruvia::multipart_parse_error>(&buffered);
+        EXPECT_TRUE(buffered_failure != nullptr);
+        if (buffered_failure != nullptr) {
+            EXPECT_EQ(ruvia::make_http_protocol_error(*buffered_failure).status(), ruvia::http_status::content_too_large);
         }
 
         ruvia::multipart_parser parser({.boundary_ = ruvia::test::make_multipart_boundary("abc")});
@@ -529,19 +545,19 @@ TEST(Ruvia, multipart_preamble_limit_counts_misleading_and_incomplete_marker_byt
         for (std::size_t offset = 0; offset < wire.size() && !failed; ++offset) {
             parser.feed(std::string_view(wire).substr(offset, 1));
             const auto result_value = parser.poll();
-            EXPECT_TRUE(result_value.part() == nullptr);
-            EXPECT_TRUE(result_value.done() == nullptr);
-            if (const auto* failure = result_value.failure()) {
+            EXPECT_TRUE(!result_value.holds<ruvia::multipart_stream_part>());
+            EXPECT_TRUE(!result_value.holds<ruvia::decode_complete>());
+            if (const auto* failure = result_value.get_if<ruvia::multipart_parse_failure>()) {
                 failed = true;
-                EXPECT_EQ(failure->protocol_error().status(), ruvia::http_status::content_too_large);
+                EXPECT_EQ(ruvia::make_http_protocol_error(failure->error()).status(), ruvia::http_status::content_too_large);
             }
         }
         if (!failed) {
             parser.finish_input();
             const auto result_value = parser.poll();
-            failed = result_value.failure() != nullptr;
-            if (const auto* failure = result_value.failure()) {
-                EXPECT_EQ(failure->protocol_error().status(), ruvia::http_status::content_too_large);
+            failed = result_value.holds<ruvia::multipart_parse_failure>();
+            if (const auto* failure = result_value.get_if<ruvia::multipart_parse_failure>()) {
+                EXPECT_EQ(ruvia::make_http_protocol_error(failure->error()).status(), ruvia::http_status::content_too_large);
             }
         }
         EXPECT_TRUE(failed);
@@ -554,8 +570,8 @@ TEST(Ruvia, multipart_truncated_body_at_eof_fails_without_emitting_partial_part)
     parser.feed(truncated);
     parser.finish_input();
     const auto polled = parser.poll();
-    EXPECT_TRUE(polled.part() == nullptr);
-    EXPECT_TRUE(polled.failure() != nullptr);
+    EXPECT_TRUE(!polled.holds<ruvia::multipart_stream_part>());
+    EXPECT_TRUE(polled.holds<ruvia::multipart_parse_failure>());
 }
 
 TEST(Ruvia, multipart_part_ignores_filename_star_parameter) {
@@ -565,7 +581,7 @@ TEST(Ruvia, multipart_part_ignores_filename_star_parameter) {
         "\r\n"
         "data\r\n"
         "--b--\r\n";
-    const auto parts = ruvia::parse_multipart_body(body, {.boundary_ = ruvia::test::make_multipart_boundary("b")}).take_parts();
+    const auto parts = std::get<std::vector<ruvia::multipart_part>>(ruvia::parse_multipart_body(body, {.boundary_ = ruvia::test::make_multipart_boundary("b")}));
     EXPECT_EQ(parts.size(), std::size_t{1});
     if (!parts.empty()) {
         EXPECT_EQ(parts[0].filename(), std::string_view("a.txt"));
@@ -581,8 +597,8 @@ TEST(Ruvia, multipart_rejects_boundary_line_that_is_not_a_delimiter) {
              std::string_view("preamble\r\n--bX\r\n--b\r\nContent-Disposition: form-data; name=\"f\"\r\n\r\nX\r\n--b--\r\n"),
          }) {
         const auto parsed = ruvia::parse_multipart_body(body, {.boundary_ = ruvia::test::make_multipart_boundary("b")});
-        const auto* failure = parsed.failure();
-        EXPECT_TRUE(failure != nullptr && std::string_view(failure->protocol_error().code()) == "multipart_invalid_delimiter");
+        const auto* failure = std::get_if<ruvia::multipart_parse_error>(&parsed);
+        EXPECT_TRUE(failure != nullptr && std::string_view(ruvia::make_http_protocol_error(*failure).code()) == "multipart_invalid_delimiter");
 
         ruvia::multipart_parser parser({.boundary_ = ruvia::test::make_multipart_boundary("b")});
         parser.feed(body);
@@ -590,8 +606,8 @@ TEST(Ruvia, multipart_rejects_boundary_line_that_is_not_a_delimiter) {
         bool failed = false;
         for (int step = 0; step < 8 && !failed; ++step) {
             const auto result_value = parser.poll();
-            failed = result_value.failure() != nullptr;
-            if (result_value.done() != nullptr) {
+            failed = result_value.holds<ruvia::multipart_parse_failure>();
+            if (result_value.holds<ruvia::decode_complete>()) {
                 break;
             }
         }
@@ -599,13 +615,57 @@ TEST(Ruvia, multipart_rejects_boundary_line_that_is_not_a_delimiter) {
     }
 }
 
+TEST(Ruvia, multipart_parser_state_and_reset_parse_two_bodies_in_a_row) {
+    ruvia::multipart_parser parser({.boundary_ = ruvia::test::make_multipart_boundary("b")});
+    EXPECT_EQ(parser.state(), ruvia::decoder_state::active);
+    const auto parse_one = [&parser](std::string_view name, std::string_view value) {
+        std::string body = "--b\r\nContent-Disposition: form-data; name=\"";
+        body.append(name);
+        body.append("\"\r\n\r\n");
+        body.append(value);
+        body.append("\r\n--b--\r\n");
+        parser.feed(body);
+        parser.finish_input();
+        std::string received;
+        for (;;) {
+            const auto result = parser.poll();
+            EXPECT_TRUE(!result.holds<ruvia::multipart_parse_failure>());
+            const auto* part = result.get_if<ruvia::multipart_stream_part>();
+            if (part == nullptr) {
+                EXPECT_TRUE(result.holds<ruvia::decode_complete>());
+                break;
+            }
+            EXPECT_EQ(part->name(), name);
+            received += part->body();
+        }
+        return received;
+    };
+
+    EXPECT_EQ(parse_one("first", "one"), std::string("one"));
+    EXPECT_EQ(parser.state(), ruvia::decoder_state::finished);
+    parser.reset();
+    EXPECT_EQ(parser.state(), ruvia::decoder_state::active);
+    EXPECT_EQ(parse_one("second", "two"), std::string("two"));
+    EXPECT_EQ(parser.state(), ruvia::decoder_state::finished);
+
+    parser.reset();
+    parser.feed("--b\r\nContent-Disposition: form-data; name=\"cut\"\r\n\r\ntruncated");
+    parser.finish_input();
+    const auto failed = parser.poll();
+    EXPECT_TRUE(failed.holds<ruvia::multipart_parse_failure>());
+    EXPECT_EQ(parser.state(), ruvia::decoder_state::failed);
+    parser.reset();
+    EXPECT_EQ(parser.state(), ruvia::decoder_state::active);
+    EXPECT_EQ(parse_one("third", "three"), std::string("three"));
+}
+
 // Quoted names and boundaries in a multipart body, and the delimiter terminator each form requires.
 
 TEST(Ruvia, multipart_boundary_quoted_with_mime_special) {
     const std::string_view content_type_value = R"(multipart/form-data; boundary="a:b")";
     const auto result_value = ruvia::parse_multipart_boundary(content_type_value);
-    EXPECT_TRUE(result_value.boundary() != nullptr);
-    EXPECT_EQ(result_value.boundary()->value(), std::string_view("a:b"));
+    EXPECT_TRUE(std::get_if<ruvia::multipart_boundary>(&result_value) != nullptr);
+    EXPECT_EQ(std::get<ruvia::multipart_boundary>(result_value).value(), std::string_view("a:b"));
 }
 
 TEST(Ruvia, multipart_part_fields_unfold_mime_continuations) {
@@ -627,7 +687,7 @@ TEST(Ruvia, multipart_part_fields_unfold_mime_continuations) {
     const std::array<std::string_view, 3> types{"text/plain", "text/plain; charset=utf-8", "application/json"};
     const std::array<std::string_view, 3> bodies{"one", "two", "three"};
 
-    auto parsed = ruvia::parse_multipart_body(wire, {.boundary_ = ruvia::test::make_multipart_boundary("abc")}).take_parts();
+    auto parsed = std::get<std::vector<ruvia::multipart_part>>(ruvia::parse_multipart_body(wire, {.boundary_ = ruvia::test::make_multipart_boundary("abc")}));
     EXPECT_EQ(parsed.size(), names.size());
     for (std::size_t index = 0; index < parsed.size() && index < names.size(); ++index) {
         const auto& part = parsed[index];
@@ -647,8 +707,8 @@ TEST(Ruvia, multipart_part_fields_unfold_mime_continuations) {
         parser.feed(std::string_view(wire).substr(offset, 1));
         for (;;) {
             const auto result = parser.poll();
-            EXPECT_TRUE(result.failure() == nullptr);
-            if (const auto* part = result.part()) {
+            EXPECT_TRUE(!result.holds<ruvia::multipart_parse_failure>());
+            if (const auto* part = result.get_if<ruvia::multipart_stream_part>()) {
                 EXPECT_TRUE(part_index < names.size());
                 if (part_index < names.size()) {
                     EXPECT_EQ(part->name(), names[part_index]);
@@ -660,7 +720,7 @@ TEST(Ruvia, multipart_part_fields_unfold_mime_continuations) {
                 }
                 continue;
             }
-            done = result.done() != nullptr;
+            done = result.holds<ruvia::decode_complete>();
             break;
         }
     }
@@ -685,35 +745,39 @@ TEST(Ruvia, multipart_unfolding_preserves_wire_limits_and_field_validation) {
         "Content-Disposition: form-data;\r\n name=field\r\n"
         "Content-Type: text/plain;\r\n charset=utf-8\r\n\r\n";
     const std::string wire = "--abc\r\n" + headers + "value\r\n--abc--\r\n";
-    const auto accepted = ruvia::parse_multipart_body(wire, {.boundary_ = ruvia::test::make_multipart_boundary("abc"), .max_metadata_bytes_ = headers.size()}).take_parts();
+    const auto accepted = std::get<std::vector<ruvia::multipart_part>>(ruvia::parse_multipart_body(wire, {.boundary_ = ruvia::test::make_multipart_boundary("abc"), .max_metadata_bytes_ = headers.size()}));
     EXPECT_EQ(accepted.size(), std::size_t{1});
     const auto oversized = ruvia::parse_multipart_body(wire, {.boundary_ = ruvia::test::make_multipart_boundary("abc"), .max_metadata_bytes_ = headers.size() - 1});
-    EXPECT_TRUE(oversized.failure() != nullptr);
-    if (const auto* failure = oversized.failure()) {
-        EXPECT_TRUE(failure->protocol_error().status() == ruvia::http_status::content_too_large);
+    const auto* oversized_failure = std::get_if<ruvia::multipart_parse_error>(&oversized);
+    EXPECT_TRUE(oversized_failure != nullptr);
+    if (oversized_failure != nullptr) {
+        EXPECT_TRUE(ruvia::make_http_protocol_error(*oversized_failure).status() == ruvia::http_status::content_too_large);
     }
     ruvia::multipart_parser limited({.boundary_ = ruvia::test::make_multipart_boundary("abc"), .max_metadata_bytes_ = headers.size() - 1});
     limited.feed(wire);
     limited.finish_input();
     const auto limited_result = limited.poll();
-    EXPECT_TRUE(limited_result.failure() != nullptr);
-    if (const auto* failure = limited_result.failure()) {
-        EXPECT_TRUE(failure->protocol_error().status() == ruvia::http_status::content_too_large);
+    const auto* limited_failure = limited_result.get_if<ruvia::multipart_parse_failure>();
+    EXPECT_TRUE(limited_failure != nullptr);
+    if (limited_failure != nullptr) {
+        EXPECT_TRUE(ruvia::make_http_protocol_error(limited_failure->error()).status() == ruvia::http_status::content_too_large);
     }
 
     for (const std::string_view invalid : {" Content-Disposition: form-data; name=field", "Content-Disposition: form-data;\n name=field", "Content-Disposition: form-data;\r name=field", "Content-Disposition: form-data; name=field\r\n Content-Type: text/plain", "Content-Disposition: form-data; name=field\r\nContent-Disposition:\r\n form-data; name=other"}) {
         const std::string malformed = "--abc\r\n" + std::string(invalid) + "\r\n\r\nvalue\r\n--abc--\r\n";
         const auto buffered = ruvia::parse_multipart_body(malformed, {.boundary_ = ruvia::test::make_multipart_boundary("abc")});
-        EXPECT_TRUE(buffered.failure() != nullptr);
+        EXPECT_TRUE(std::get_if<ruvia::multipart_parse_error>(&buffered) != nullptr);
         ruvia::multipart_parser parser({.boundary_ = ruvia::test::make_multipart_boundary("abc")});
         parser.feed(malformed);
         parser.finish_input();
         const auto streamed = parser.poll();
         const auto repeated = parser.poll();
-        EXPECT_TRUE(streamed.failure() != nullptr);
-        EXPECT_TRUE(repeated.failure() != nullptr);
-        if (streamed.failure() != nullptr && repeated.failure() != nullptr) {
-            EXPECT_EQ(std::string_view(streamed.failure()->protocol_error().what()), std::string_view(repeated.failure()->protocol_error().what()));
+        const auto* streamed_failure = streamed.get_if<ruvia::multipart_parse_failure>();
+        const auto* repeated_failure = repeated.get_if<ruvia::multipart_parse_failure>();
+        EXPECT_TRUE(streamed_failure != nullptr);
+        EXPECT_TRUE(repeated_failure != nullptr);
+        if (streamed_failure != nullptr && repeated_failure != nullptr) {
+            EXPECT_EQ(std::string_view(ruvia::make_http_protocol_error(streamed_failure->error()).what()), std::string_view(ruvia::make_http_protocol_error(repeated_failure->error()).what()));
         }
     }
 }
@@ -734,9 +798,9 @@ TEST(Ruvia, multipart_unfolding_preserves_wire_limits_and_field_validation) {
 namespace {
 
 using ruvia::http_parse_error;
-using ruvia::http_parse_protocol_error;
 using ruvia::http_protocol_error;
 using ruvia::http_reason_phrase;
+using ruvia::make_http_protocol_error;
 
 template <typename value_type>
 constexpr bool can_construct_received_status = requires(value_type value) { ruvia::http_received_status::try_from_value(value); };
@@ -847,15 +911,15 @@ TEST(Ruvia, http_protocol_error_owns_bounded_diagnostic_without_allocation) {
 
 TEST(Ruvia, parse_error_status_mapping) {
     // Size limits map to their specific statuses.
-    EXPECT_EQ(http_parse_protocol_error(http_parse_error::header_too_large).status(), ruvia::http_status::request_header_fields_too_large);
-    EXPECT_EQ(http_parse_protocol_error(http_parse_error::uri_too_long).status(), ruvia::http_status::uri_too_long);
-    EXPECT_EQ(http_parse_protocol_error(http_parse_error::unsupported_transfer_encoding).status(), ruvia::http_status::not_implemented);
-    EXPECT_EQ(http_parse_protocol_error(http_parse_error::unsupported_http_version).status(), ruvia::http_status::http_version_not_supported);
+    EXPECT_EQ(make_http_protocol_error(http_parse_error::header_too_large).status(), ruvia::http_status::request_header_fields_too_large);
+    EXPECT_EQ(make_http_protocol_error(http_parse_error::uri_too_long).status(), ruvia::http_status::uri_too_long);
+    EXPECT_EQ(make_http_protocol_error(http_parse_error::unsupported_transfer_encoding).status(), ruvia::http_status::not_implemented);
+    EXPECT_EQ(make_http_protocol_error(http_parse_error::unsupported_http_version).status(), ruvia::http_status::http_version_not_supported);
     // Everything else is a 400 Bad Request.
-    EXPECT_EQ(http_parse_protocol_error(http_parse_error::missing_host).status(), ruvia::http_status::bad_request);
-    EXPECT_EQ(http_parse_protocol_error(http_parse_error::invalid_connection).status(), ruvia::http_status::bad_request);
-    EXPECT_EQ(http_parse_protocol_error(http_parse_error::invalid_upgrade).status(), ruvia::http_status::bad_request);
-    EXPECT_EQ(http_parse_protocol_error(http_parse_error::conflicting_content_length).status(), ruvia::http_status::bad_request);
+    EXPECT_EQ(make_http_protocol_error(http_parse_error::missing_host).status(), ruvia::http_status::bad_request);
+    EXPECT_EQ(make_http_protocol_error(http_parse_error::invalid_connection).status(), ruvia::http_status::bad_request);
+    EXPECT_EQ(make_http_protocol_error(http_parse_error::invalid_upgrade).status(), ruvia::http_status::bad_request);
+    EXPECT_EQ(make_http_protocol_error(http_parse_error::conflicting_content_length).status(), ruvia::http_status::bad_request);
 }
 
 TEST(Ruvia, http_connect_udp_default_template_roundtrip_and_target_rejection) {
@@ -887,10 +951,10 @@ TEST(Ruvia, http_connect_udp_default_template_requires_target_segments) {
 }
 TEST(Ruvia, http_connect_udp_upgrade_handshake_requires_capsule_negotiation) {
     const std::array fields{ruvia::http_header_view{"Host", "example.test"}, ruvia::http_header_view{"Connection", "Upgrade"}, ruvia::http_header_view{"Upgrade", "connect-udp"}, ruvia::http_header_view{"Capsule-Protocol", "?1;version=1"}};
-    EXPECT_TRUE(!ruvia::validate_http_connect_udp_request({.authority_ = "example.test", .path_ = "/proxy", .headers_ = fields}).has_value());
+    EXPECT_TRUE(!ruvia::validate_http_connect_udp_request(ruvia::http_protocol_version::http11, {.authority_ = "example.test", .target_ = "/proxy", .headers_ = fields}).has_value());
     EXPECT_TRUE(!ruvia::validate_http_connect_udp_response(ruvia::http_protocol_version::http11, 101, fields).has_value());
-    EXPECT_TRUE(ruvia::validate_http_connect_udp_request({.version_ = ruvia::http_protocol_version::http10, .authority_ = "example.test", .path_ = "/proxy", .headers_ = fields}).has_value());
-    EXPECT_TRUE(ruvia::validate_http_connect_udp_request({.method_ = "CONNECT", .authority_ = "example.test", .path_ = "/proxy", .headers_ = fields}).has_value());
+    EXPECT_TRUE(ruvia::validate_http_connect_udp_request(ruvia::http_protocol_version::http10, {.authority_ = "example.test", .target_ = "/proxy", .headers_ = fields}).has_value());
+    EXPECT_TRUE(ruvia::validate_http_connect_udp_request(ruvia::http_protocol_version::http11, {.method_ = "CONNECT", .authority_ = "example.test", .target_ = "/proxy", .headers_ = fields}).has_value());
     EXPECT_TRUE(ruvia::validate_http_connect_udp_response(ruvia::http_protocol_version::http11, 200, fields).has_value());
     EXPECT_TRUE(!ruvia::parse_http_capsule_protocol("?1, ?0").has_value());
     EXPECT_TRUE(!ruvia::parse_http_capsule_protocol("true").has_value());
@@ -925,7 +989,7 @@ TEST(Ruvia, http_udp_capsule_session_checks_context_size_and_half_close) {
         }
     }, &captured);
     EXPECT_TRUE(captured.datagram_);
-    EXPECT_TRUE(status == ruvia::http_capsule_status::end);
+    EXPECT_TRUE(status.holds<ruvia::decode_complete>());
     const auto value = std::string_view(capsule);
     const auto received = session.receive_udp_datagram(value);
     EXPECT_TRUE(received.index() == 0 && std::get<0>(received));
@@ -991,12 +1055,11 @@ TEST(Ruvia, http_connect_udp_response_preparation_owns_required_fields_and_http1
     EXPECT_TRUE(rejected);
 }
 
-TEST(Ruvia, http_connect_udp_http1_request_writer_generates_upgrade_without_message_content) {
-    ruvia::http1_client_request_writer writer;
+TEST(Ruvia, http_connect_udp_http1_request_preparation_generates_upgrade_without_message_content) {
     std::array<char, 4096> buffer;
     const std::array fields_value{ruvia::http_header_view{"Capsule-Protocol", "?1"}, ruvia::http_header_view{"X-Proxy", "test"}};
     const auto origin = ruvia::http_origin_view::https({.host_ = "[::1]", .port_ = 8443});
-    auto result_value = writer.prepare_connect_udp(origin, "/udp", fields_value, buffer);
+    auto result_value = ruvia::prepare_http1_client_request(origin, {.protocol_ = "connect-udp", .target_ = "/udp", .headers_ = fields_value}, buffer);
     const auto* const prepared = std::get_if<ruvia::prepared_http1_client_request>(&result_value);
     EXPECT_TRUE(prepared != nullptr);
     if (prepared != nullptr) {
@@ -1007,35 +1070,35 @@ TEST(Ruvia, http_connect_udp_http1_request_writer_generates_upgrade_without_mess
         EXPECT_TRUE(head.find("Content-Length:") == std::string_view::npos);
         EXPECT_TRUE(head.find("Transfer-Encoding:") == std::string_view::npos);
     }
-    auto missing = writer.prepare_connect_udp(origin, "/udp", {}, buffer);
+    auto missing = ruvia::prepare_http1_client_request(origin, {.protocol_ = "connect-udp", .target_ = "/udp"}, buffer);
     EXPECT_TRUE(std::holds_alternative<ruvia::http1_client_request_prepare_error>(missing));
     const std::array invalid{ruvia::http_header_view{"Capsule-Protocol", "?0"}};
-    auto disabled = writer.prepare_connect_udp(origin, "/udp", invalid, buffer);
+    auto disabled = ruvia::prepare_http1_client_request(origin, {.protocol_ = "connect-udp", .target_ = "/udp", .headers_ = invalid}, buffer);
     EXPECT_TRUE(std::holds_alternative<ruvia::http1_client_request_prepare_error>(disabled));
-    auto bad_target = writer.prepare_connect_udp(origin, "relative", fields_value, buffer);
+    auto bad_target = ruvia::prepare_http1_client_request(origin, {.protocol_ = "connect-udp", .target_ = "relative", .headers_ = fields_value}, buffer);
     EXPECT_TRUE(std::holds_alternative<ruvia::http1_client_request_prepare_error>(bad_target) && std::get<ruvia::http1_client_request_prepare_error>(bad_target) == ruvia::http1_client_request_prepare_error::invalid_target);
     const std::array with_host{fields_value[0], ruvia::http_header_view{"Host", "[::1]:8443"}};
-    auto managed_host = writer.prepare_connect_udp(origin, "/udp", with_host, buffer);
+    auto managed_host = ruvia::prepare_http1_client_request(origin, {.protocol_ = "connect-udp", .target_ = "/udp", .headers_ = with_host}, buffer);
     EXPECT_TRUE(std::holds_alternative<ruvia::http1_client_request_prepare_error>(managed_host) && std::get<ruvia::http1_client_request_prepare_error>(managed_host) == ruvia::http1_client_request_prepare_error::host_header_managed_by_writer);
 }
 
 TEST(Ruvia, http_connect_udp_http2_uses_extended_connect_without_upgrade_fields) {
     const std::array fields{ruvia::http_header_view{"capsule-protocol", "?1"}};
-    const ruvia::http_connect_udp_request_view request{.version_ = ruvia::http_protocol_version::http2, .method_ = "CONNECT", .protocol_ = "connect-udp", .scheme_ = "https", .authority_ = "example.test", .path_ = "/proxy", .headers_ = fields};
-    EXPECT_TRUE(!ruvia::validate_http_connect_udp_request(request).has_value());
+    const ruvia::http_request_head_view request{.method_ = "CONNECT", .protocol_ = "connect-udp", .scheme_ = "https", .authority_ = "example.test", .target_ = "/proxy", .headers_ = fields};
+    EXPECT_TRUE(!ruvia::validate_http_connect_udp_request(ruvia::http_protocol_version::http2, request).has_value());
     auto invalid = request;
     invalid.method_ = "GET";
-    EXPECT_TRUE(ruvia::validate_http_connect_udp_request(invalid).has_value());
+    EXPECT_TRUE(ruvia::validate_http_connect_udp_request(ruvia::http_protocol_version::http2, invalid).has_value());
     invalid = request;
     invalid.protocol_ = "websocket";
-    EXPECT_TRUE(ruvia::validate_http_connect_udp_request(invalid).has_value());
+    EXPECT_TRUE(ruvia::validate_http_connect_udp_request(ruvia::http_protocol_version::http2, invalid).has_value());
     invalid = request;
     invalid.scheme_ = "";
-    EXPECT_TRUE(ruvia::validate_http_connect_udp_request(invalid).has_value());
+    EXPECT_TRUE(ruvia::validate_http_connect_udp_request(ruvia::http_protocol_version::http2, invalid).has_value());
     const std::array upgrade_fields{fields[0], ruvia::http_header_view{"connection", "upgrade"}, ruvia::http_header_view{"upgrade", "connect-udp"}};
     invalid = request;
     invalid.headers_ = upgrade_fields;
-    EXPECT_TRUE(ruvia::validate_http_connect_udp_request(invalid).has_value());
+    EXPECT_TRUE(ruvia::validate_http_connect_udp_request(ruvia::http_protocol_version::http2, invalid).has_value());
     EXPECT_TRUE(!ruvia::validate_http_connect_udp_response(ruvia::http_protocol_version::http2, 200, fields).has_value());
     EXPECT_TRUE(ruvia::validate_http_connect_udp_response(ruvia::http_protocol_version::http2, 101, fields).has_value());
     EXPECT_TRUE(ruvia::validate_http_connect_udp_response(ruvia::http_protocol_version::http2, 200, upgrade_fields).has_value());
@@ -1054,12 +1117,12 @@ TEST(Ruvia, http_connect_udp_http2_uses_extended_connect_without_upgrade_fields)
 
 TEST(Ruvia, http_connect_udp_recipient_treats_capsule_protocol_as_optional) {
     const std::array upgrade{ruvia::http_header_view{"Host", "example.test"}, ruvia::http_header_view{"Connection", "Upgrade"}, ruvia::http_header_view{"Upgrade", "connect-udp"}};
-    EXPECT_TRUE(!ruvia::validate_http_connect_udp_request({.authority_ = "example.test", .path_ = "/proxy", .headers_ = upgrade}).has_value());
+    EXPECT_TRUE(!ruvia::validate_http_connect_udp_request(ruvia::http_protocol_version::http11, {.authority_ = "example.test", .target_ = "/proxy", .headers_ = upgrade}).has_value());
     EXPECT_TRUE(!ruvia::validate_http_connect_udp_response(ruvia::http_protocol_version::http11, 101, std::span<const ruvia::http_header_view>(upgrade).subspan(1)).has_value());
     for (const auto value : {"1", "?0", "\"yes\""}) {
         const std::array ignored{ruvia::http_header_view{"Capsule-Protocol", value}};
-        const ruvia::http_connect_udp_request_view request{.version_ = ruvia::http_protocol_version::http2, .method_ = "CONNECT", .authority_ = "example.test", .path_ = "/proxy", .headers_ = ignored};
-        EXPECT_TRUE(!ruvia::validate_http_connect_udp_request(request).has_value());
+        const ruvia::http_request_head_view request{.method_ = "CONNECT", .protocol_ = "connect-udp", .authority_ = "example.test", .target_ = "/proxy", .headers_ = ignored};
+        EXPECT_TRUE(!ruvia::validate_http_connect_udp_request(ruvia::http_protocol_version::http2, request).has_value());
         EXPECT_TRUE(!ruvia::validate_http_connect_udp_response(ruvia::http_protocol_version::http2, 200, ignored).has_value());
     }
     const std::array duplicate{ruvia::http_header_view{"Capsule-Protocol", "?1"}, ruvia::http_header_view{"Capsule-Protocol", "?1"}};
@@ -1079,7 +1142,7 @@ TEST(Ruvia, http_connect_udp_rejects_statuses_that_cannot_start_capsule_protocol
 
 TEST(Ruvia, http_connect_udp_sender_requires_exactly_one_capsule_protocol_true) {
     const auto check = [](std::span<const ruvia::http_header_view> fields) {
-        return ruvia::validate_http_connect_udp_request_to_send({.version_ = ruvia::http_protocol_version::http2, .method_ = "CONNECT", .authority_ = "example.test", .path_ = "/proxy", .headers_ = fields});
+        return ruvia::validate_http_connect_udp_request_to_send(ruvia::http_protocol_version::http2, {.method_ = "CONNECT", .protocol_ = "connect-udp", .authority_ = "example.test", .target_ = "/proxy", .headers_ = fields});
     };
     EXPECT_TRUE(check({}).has_value());
     const std::array false_value{ruvia::http_header_view{"Capsule-Protocol", "?0"}};
@@ -1096,7 +1159,7 @@ TEST(Ruvia, http_connect_udp_sender_and_recipient_field_validation) {
         ruvia::http_header_view{"Upgrade", "connect-udp"},
         ruvia::http_header_view{"Capsule-Protocol", "?1"},
     };
-    EXPECT_TRUE(ruvia::validate_http_connect_udp_request_to_send({.version_ = ruvia::http_protocol_version::http11, .method_ = "GET", .authority_ = "example.test", .path_ = "/.well-known/masque/udp/192.0.2.1/443/", .headers_ = sender_bad_connection}).has_value());
+    EXPECT_TRUE(ruvia::validate_http_connect_udp_request_to_send(ruvia::http_protocol_version::http11, {.method_ = "GET", .authority_ = "example.test", .target_ = "/.well-known/masque/udp/192.0.2.1/443/", .headers_ = sender_bad_connection}).has_value());
 
     // Sender validates Host syntax and authority match.
     const std::array bad_host_h1{
@@ -1105,7 +1168,7 @@ TEST(Ruvia, http_connect_udp_sender_and_recipient_field_validation) {
         ruvia::http_header_view{"Upgrade", "connect-udp"},
         ruvia::http_header_view{"Capsule-Protocol", "?1"},
     };
-    EXPECT_TRUE(ruvia::validate_http_connect_udp_request_to_send({.version_ = ruvia::http_protocol_version::http11, .method_ = "GET", .authority_ = "example.test", .path_ = "/proxy", .headers_ = bad_host_h1}).has_value());
+    EXPECT_TRUE(ruvia::validate_http_connect_udp_request_to_send(ruvia::http_protocol_version::http11, {.method_ = "GET", .authority_ = "example.test", .target_ = "/proxy", .headers_ = bad_host_h1}).has_value());
 
     const std::array mismatched_host_h1{
         ruvia::http_header_view{"Host", "other.test"},
@@ -1113,16 +1176,16 @@ TEST(Ruvia, http_connect_udp_sender_and_recipient_field_validation) {
         ruvia::http_header_view{"Upgrade", "connect-udp"},
         ruvia::http_header_view{"Capsule-Protocol", "?1"},
     };
-    EXPECT_TRUE(ruvia::validate_http_connect_udp_request_to_send({.version_ = ruvia::http_protocol_version::http11, .method_ = "GET", .authority_ = "example.test", .path_ = "/proxy", .headers_ = mismatched_host_h1}).has_value());
+    EXPECT_TRUE(ruvia::validate_http_connect_udp_request_to_send(ruvia::http_protocol_version::http11, {.method_ = "GET", .authority_ = "example.test", .target_ = "/proxy", .headers_ = mismatched_host_h1}).has_value());
 
     // HTTP/2 rejects connection-specific headers (Keep-Alive, Proxy-Connection, TE) and non-http(s) schemes.
     const std::array h2_keep_alive{
         ruvia::http_header_view{"Capsule-Protocol", "?1"},
         ruvia::http_header_view{"Keep-Alive", "timeout=5"},
     };
-    EXPECT_TRUE(ruvia::validate_http_connect_udp_request_to_send({.version_ = ruvia::http_protocol_version::http2, .method_ = "CONNECT", .protocol_ = "connect-udp", .scheme_ = "https", .authority_ = "example.test", .path_ = "/proxy", .headers_ = h2_keep_alive}).has_value());
+    EXPECT_TRUE(ruvia::validate_http_connect_udp_request_to_send(ruvia::http_protocol_version::http2, {.method_ = "CONNECT", .protocol_ = "connect-udp", .scheme_ = "https", .authority_ = "example.test", .target_ = "/proxy", .headers_ = h2_keep_alive}).has_value());
     const std::array valid_capsule{ruvia::http_header_view{"Capsule-Protocol", "?1"}};
-    EXPECT_TRUE(ruvia::validate_http_connect_udp_request_to_send({.version_ = ruvia::http_protocol_version::http2, .method_ = "CONNECT", .protocol_ = "connect-udp", .scheme_ = "not a valid scheme!", .authority_ = "example.test", .path_ = "/proxy", .headers_ = valid_capsule}).has_value());
+    EXPECT_TRUE(ruvia::validate_http_connect_udp_request_to_send(ruvia::http_protocol_version::http2, {.method_ = "CONNECT", .protocol_ = "connect-udp", .scheme_ = "not a valid scheme!", .authority_ = "example.test", .target_ = "/proxy", .headers_ = valid_capsule}).has_value());
     EXPECT_TRUE(ruvia::validate_http_connect_udp_response(ruvia::http_protocol_version::http2, 200, h2_keep_alive).has_value());
     ruvia::http_response h2_resp;
     h2_resp.status(ruvia::http_status::ok);
@@ -1153,22 +1216,22 @@ TEST(Ruvia, http_connect_udp_sender_and_recipient_field_validation) {
         ruvia::http_header_view{"Capsule-Protocol", "?1"},
         ruvia::http_header_view{"Content-Length", "0"},
     };
-    EXPECT_TRUE(ruvia::validate_http_connect_udp_request({.version_ = ruvia::http_protocol_version::http2, .method_ = "CONNECT", .protocol_ = "connect-udp", .scheme_ = "https", .authority_ = "example.test", .path_ = "/proxy", .headers_ = cl0_req}).has_value());
+    EXPECT_TRUE(ruvia::validate_http_connect_udp_request(ruvia::http_protocol_version::http2, {.method_ = "CONNECT", .protocol_ = "connect-udp", .scheme_ = "https", .authority_ = "example.test", .target_ = "/proxy", .headers_ = cl0_req}).has_value());
     const std::array cl5_req{
         ruvia::http_header_view{"Capsule-Protocol", "?1"},
         ruvia::http_header_view{"Content-Length", "5"},
     };
-    EXPECT_TRUE(ruvia::validate_http_connect_udp_request({.version_ = ruvia::http_protocol_version::http2, .method_ = "CONNECT", .protocol_ = "connect-udp", .scheme_ = "https", .authority_ = "example.test", .path_ = "/proxy", .headers_ = cl5_req}).has_value());
+    EXPECT_TRUE(ruvia::validate_http_connect_udp_request(ruvia::http_protocol_version::http2, {.method_ = "CONNECT", .protocol_ = "connect-udp", .scheme_ = "https", .authority_ = "example.test", .target_ = "/proxy", .headers_ = cl5_req}).has_value());
     EXPECT_TRUE(ruvia::validate_http_connect_udp_response(ruvia::http_protocol_version::http2, 200, cl0_req).has_value());
 
     // RFC 9110 7.8: Upgrade is ignored on HTTP/1.0 requests.
-    ruvia::http1_server_request_parse_state h10_parser;
+    ruvia::http1_server_request_parser h10_parser;
     constexpr std::string_view raw_h10 =
         "GET /.well-known/masque/udp/192.0.2.1/443/ HTTP/1.0\r\n"
         "Host: example.test\r\n"
         "Upgrade: connect-udp\r\n\r\n";
-    h10_parser.parse_head(raw_h10, 0);
-    EXPECT_TRUE(h10_parser.head_ready() != nullptr);
+    const auto h10_head = h10_parser.parse(raw_h10);
+    EXPECT_TRUE(h10_head.holds<ruvia::decode_complete>());
     EXPECT_TRUE(!ruvia::is_http_connect_udp_upgrade_request(h10_parser.request()));
 
     // RFC 9113 8.2.2: TE: trailers is allowed on HTTP/2 requests, while other TE
@@ -1177,17 +1240,16 @@ TEST(Ruvia, http_connect_udp_sender_and_recipient_field_validation) {
         ruvia::http_header_view{"Capsule-Protocol", "?1"},
         ruvia::http_header_view{"te", "trailers"},
     };
-    const ruvia::http_connect_udp_request_view h2_te_req{
-        .version_ = ruvia::http_protocol_version::http2,
+    const ruvia::http_request_head_view h2_te_req{
         .method_ = "CONNECT",
         .protocol_ = "connect-udp",
         .scheme_ = "https",
         .authority_ = "example.test",
-        .path_ = "/.well-known/masque/udp/192.0.2.1/443/",
+        .target_ = "/.well-known/masque/udp/192.0.2.1/443/",
         .headers_ = h2_te_trailers,
     };
-    EXPECT_TRUE(!ruvia::validate_http_connect_udp_request(h2_te_req).has_value());
-    EXPECT_TRUE(!ruvia::validate_http_connect_udp_request_to_send(h2_te_req).has_value());
+    EXPECT_TRUE(!ruvia::validate_http_connect_udp_request(ruvia::http_protocol_version::http2, h2_te_req).has_value());
+    EXPECT_TRUE(!ruvia::validate_http_connect_udp_request_to_send(ruvia::http_protocol_version::http2, h2_te_req).has_value());
     EXPECT_TRUE(ruvia::validate_http_connect_udp_response(ruvia::http_protocol_version::http2, 200, h2_te_trailers).has_value());
     const std::array h2_te_gzip{
         ruvia::http_header_view{"Capsule-Protocol", "?1"},
@@ -1195,8 +1257,8 @@ TEST(Ruvia, http_connect_udp_sender_and_recipient_field_validation) {
     };
     auto h2_bad_te_req = h2_te_req;
     h2_bad_te_req.headers_ = h2_te_gzip;
-    EXPECT_TRUE(ruvia::validate_http_connect_udp_request(h2_bad_te_req).has_value());
-    EXPECT_TRUE(ruvia::validate_http_connect_udp_request_to_send(h2_bad_te_req).has_value());
+    EXPECT_TRUE(ruvia::validate_http_connect_udp_request(ruvia::http_protocol_version::http2, h2_bad_te_req).has_value());
+    EXPECT_TRUE(ruvia::validate_http_connect_udp_request_to_send(ruvia::http_protocol_version::http2, h2_bad_te_req).has_value());
 }
 
 TEST(Ruvia, http_connect_udp_views_accept_named_owners_and_preserve_addresses) {
@@ -1207,27 +1269,26 @@ TEST(Ruvia, http_connect_udp_views_accept_named_owners_and_preserve_addresses) {
     std::string authority("example.test");
     std::string path("/.well-known/masque/udp/192.0.2.1/443/");
     const ruvia::http_connect_udp_target_view target_view{.host_ = host, .port_ = 443};
-    const ruvia::http_client_udp_tunnel_request_view tunnel_view{.target_ = path};
+    const ruvia::http_request_head_view tunnel_view{.target_ = path};
     const std::array fields{ruvia::http_header_view{"Capsule-Protocol", "?1"}};
-    const ruvia::http_connect_udp_request_view request_view{
-        .version_ = ruvia::http_protocol_version::http2,
+    const ruvia::http_request_head_view request_view{
         .method_ = method,
         .protocol_ = protocol,
         .scheme_ = scheme,
         .authority_ = authority,
-        .path_ = path,
+        .target_ = path,
         .headers_ = fields,
     };
     EXPECT_TRUE(target_view.host_.data() == host.data());
     EXPECT_TRUE(tunnel_view.target_.data() == path.data());
     EXPECT_TRUE(request_view.method_.data() == method.data());
-    EXPECT_TRUE(request_view.protocol_.data() == protocol.data());
+    EXPECT_TRUE(request_view.protocol_.has_value() && request_view.protocol_->data() == protocol.data());
     EXPECT_TRUE(request_view.scheme_.data() == scheme.data());
-    EXPECT_TRUE(request_view.authority_.data() == authority.data());
-    EXPECT_TRUE(request_view.path_.data() == path.data());
+    EXPECT_TRUE(request_view.authority_.has_value() && request_view.authority_->data() == authority.data());
+    EXPECT_TRUE(request_view.target_.data() == path.data());
     const auto encoded = ruvia::encode_http_connect_udp_path(target_view);
     EXPECT_TRUE(std::holds_alternative<std::string>(encoded));
-    EXPECT_TRUE(!ruvia::validate_http_connect_udp_request_to_send(request_view).has_value());
+    EXPECT_TRUE(!ruvia::validate_http_connect_udp_request_to_send(ruvia::http_protocol_version::http2, request_view).has_value());
 }
 
 namespace {
@@ -1289,16 +1350,16 @@ TEST(Ruvia, http_capsule_incremental_unknown_empty_and_datagram) {
     ruvia::http_capsule_decoder decoder;
     capture capture_state;
     for (const char& byte : wire) {
-        EXPECT_TRUE(decoder.feed({&byte, 1}, false, capsule, &capture_state) == ruvia::http_capsule_status::need_input);
+        EXPECT_TRUE(decoder.feed({&byte, 1}, false, capsule, &capture_state).holds<ruvia::decode_need_input>());
     }
     EXPECT_EQ(capture_state.body_, std::string("hello"));
     EXPECT_EQ(capture_state.ends_, 2u);
-    EXPECT_TRUE(decoder.feed({}, true, capsule, &capture_state) == ruvia::http_capsule_status::end);
+    EXPECT_TRUE(decoder.feed({}, true, capsule, &capture_state).holds<ruvia::decode_complete>());
     ruvia::http_capsule_decoder lambda_decoder;
     capture lambda_capture;
     EXPECT_TRUE(lambda_decoder.feed(wire, true, [&](ruvia::http_capsule_event event) {
         capsule(&lambda_capture, event);
-    }) == ruvia::http_capsule_status::end);
+    }).holds<ruvia::decode_complete>());
     EXPECT_EQ(lambda_capture.body_, std::string("hello"));
     EXPECT_EQ(lambda_capture.ends_, 2u);
     ruvia::http_capsule_decoder pull_lambda_decoder;
@@ -1306,15 +1367,51 @@ TEST(Ruvia, http_capsule_incremental_unknown_empty_and_datagram) {
     const auto pull_first = pull_lambda_decoder.feed_one(wire, true, [&](ruvia::http_capsule_event event) {
         capsule(&pull_lambda_capture, event);
     });
-    EXPECT_TRUE(pull_first.capsule_complete_);
+    EXPECT_TRUE(pull_first.holds<ruvia::http_capsule_boundary>());
     EXPECT_EQ(pull_lambda_capture.body_, std::string("hello"));
 }
 TEST(Ruvia, http_capsule_truncated_and_length_limit_are_terminal) {
     const std::array prefix{char(0), char(3)};
     ruvia::http_capsule_decoder limit({.max_capsule_length_ = 2});
-    EXPECT_TRUE(limit.feed(prefix, false, nullptr, nullptr) == ruvia::http_capsule_status::limit);
+    const auto limit_result = limit.feed(prefix, false, nullptr, nullptr);
+    const auto* limit_failure = limit_result.get_if<ruvia::http_capsule_decode_failure>();
+    EXPECT_TRUE(limit_failure != nullptr && limit_failure->error() == ruvia::http_capsule_decode_error::limit_exceeded);
     ruvia::http_capsule_decoder truncated;
-    EXPECT_TRUE(truncated.feed(prefix, true, nullptr, nullptr) == ruvia::http_capsule_status::truncated);
+    const auto truncated_result = truncated.feed(prefix, true, nullptr, nullptr);
+    const auto* truncated_failure = truncated_result.get_if<ruvia::http_capsule_decode_failure>();
+    EXPECT_TRUE(truncated_failure != nullptr && truncated_failure->error() == ruvia::http_capsule_decode_error::truncated);
+}
+
+TEST(Ruvia, http_capsule_decoder_state_and_reset) {
+    std::array<char, 16> prefix{};
+    const auto count = ruvia::encode_http_capsule_header(prefix, 0x1234, 5);
+    std::string wire(prefix.data(), std::get<0>(count));
+    wire += "hello";
+
+    ruvia::http_capsule_decoder decoder;
+    EXPECT_TRUE(decoder.state() == ruvia::decoder_state::active);
+    capture first;
+    EXPECT_TRUE(decoder.feed(wire, true, capsule, &first).holds<ruvia::decode_complete>());
+    EXPECT_TRUE(decoder.state() == ruvia::decoder_state::finished);
+    EXPECT_EQ(first.body_, std::string("hello"));
+    // A finished decoder replays its terminal result without consuming input.
+    const auto replayed = decoder.feed(wire, true, capsule, &first);
+    EXPECT_TRUE(replayed.holds<ruvia::decode_complete>() && replayed.consumed_bytes() == 0);
+    EXPECT_EQ(first.body_, std::string("hello"));
+
+    decoder.reset();
+    EXPECT_TRUE(decoder.state() == ruvia::decoder_state::active);
+    const auto cut = decoder.feed(std::span<const char>(wire).first(wire.size() - 1), true, nullptr, nullptr);
+    const auto* cut_failure = cut.get_if<ruvia::http_capsule_decode_failure>();
+    EXPECT_TRUE(cut_failure != nullptr && cut_failure->error() == ruvia::http_capsule_decode_error::truncated);
+    EXPECT_TRUE(decoder.state() == ruvia::decoder_state::failed);
+
+    decoder.reset();
+    EXPECT_TRUE(decoder.state() == ruvia::decoder_state::active);
+    capture second;
+    EXPECT_TRUE(decoder.feed(wire, true, capsule, &second).holds<ruvia::decode_complete>());
+    EXPECT_TRUE(decoder.state() == ruvia::decoder_state::finished);
+    EXPECT_EQ(second.body_, std::string("hello"));
 }
 
 TEST(Ruvia, http_capsule_pull_decoder_stops_at_each_capsule_and_commits_fin_after_the_suffix) {
@@ -1333,9 +1430,9 @@ TEST(Ruvia, http_capsule_pull_decoder_stops_at_each_capsule_and_commits_fin_afte
         while (offset != wire.size()) {
             const auto count = std::min(block, wire.size() - offset);
             const auto result_value = decoder.feed_one(std::span<const char>(wire).subspan(offset, count), offset + count == wire.size(), capsule, &captured);
-            EXPECT_TRUE(result_value.consumed_bytes_ > 0 && result_value.consumed_bytes_ <= count);
-            offset += result_value.consumed_bytes_;
-            if (result_value.capsule_complete_) {
+            EXPECT_TRUE(result_value.consumed_bytes() > 0 && result_value.consumed_bytes() <= count);
+            offset += result_value.consumed_bytes();
+            if (result_value.holds<ruvia::http_capsule_boundary>()) {
                 const std::array<std::uint64_t, 3> expected_types{0x123456789ULL, 0, 7};
                 const std::array<std::string_view, 3> expected_payloads{"first", "", "last"};
                 EXPECT_TRUE(captured.type_ == expected_types[complete_value]);
@@ -1343,17 +1440,19 @@ TEST(Ruvia, http_capsule_pull_decoder_stops_at_each_capsule_and_commits_fin_afte
                 captured.body_.clear();
                 ++complete_value;
             }
-            EXPECT_TRUE(result_value.status_ == (offset == wire.size() ? ruvia::http_capsule_status::end : ruvia::http_capsule_status::need_input));
+            EXPECT_TRUE(result_value.holds<ruvia::http_capsule_boundary>() || result_value.holds<ruvia::decode_need_input>());
+            EXPECT_TRUE(decoder.state() == (offset == wire.size() ? ruvia::decoder_state::finished : ruvia::decoder_state::active));
         }
         EXPECT_EQ(complete_value, std::size_t{3});
         EXPECT_EQ(captured.ends_, std::size_t{3});
         const auto ended = decoder.feed_one({}, true, capsule, &captured);
-        EXPECT_TRUE(ended.status_ == ruvia::http_capsule_status::end && !ended.capsule_complete_ && ended.consumed_bytes_ == 0);
+        EXPECT_TRUE(ended.holds<ruvia::decode_complete>() && ended.consumed_bytes() == 0);
     }
     ruvia::http_capsule_decoder truncated;
     const std::array partial{char(0), char(3), char('a')};
     const auto result_value = truncated.feed_one(partial, true, nullptr, nullptr);
-    EXPECT_TRUE(result_value.status_ == ruvia::http_capsule_status::truncated && !result_value.capsule_complete_ && result_value.consumed_bytes_ == partial.size());
+    const auto* truncated_failure = result_value.get_if<ruvia::http_capsule_decode_failure>();
+    EXPECT_TRUE(truncated_failure != nullptr && truncated_failure->error() == ruvia::http_capsule_decode_error::truncated && result_value.consumed_bytes() == partial.size());
 }
 
 // RFC 9297 section 3.2: capsules the reader does not keep are skipped at any
@@ -1377,18 +1476,20 @@ TEST(Ruvia, http_capsule_retention_skips_dropped_capsules_beyond_the_length_limi
         capture captured;
         std::vector<std::string> kept;
         std::size_t offset{};
-        ruvia::http_capsule_feed_result result_value{};
         while (offset != wire.size()) {
             const auto count = std::min(block, wire.size() - offset);
-            result_value = decoder.feed_one(std::span<const char>(wire).subspan(offset, count), offset + count == wire.size(), capsule, &captured, ruvia::http_capsule_retention::udp_payloads);
-            EXPECT_TRUE(result_value.status_ != ruvia::http_capsule_status::limit);
-            offset += result_value.consumed_bytes_;
-            if (result_value.capsule_complete_) {
+            const auto result_value = decoder.feed_one(std::span<const char>(wire).subspan(offset, count), offset + count == wire.size(), capsule, &captured, ruvia::http_capsule_retention::udp_payloads);
+            EXPECT_TRUE(!result_value.holds<ruvia::http_capsule_decode_failure>());
+            if (result_value.holds<ruvia::http_capsule_decode_failure>()) {
+                break;
+            }
+            offset += result_value.consumed_bytes();
+            if (result_value.holds<ruvia::http_capsule_boundary>()) {
                 EXPECT_EQ(captured.type_, std::uint64_t{0});
                 kept.push_back(std::exchange(captured.body_, {}));
             }
         }
-        EXPECT_TRUE(result_value.status_ == ruvia::http_capsule_status::end);
+        EXPECT_TRUE(decoder.state() == ruvia::decoder_state::finished);
         // Context ID 0 in either encoding, and a value too short for its
         // Context ID (left to the reader as malformed), are kept.
         EXPECT_TRUE(kept == (std::vector<std::string>{std::string("\x40\x00", 2) + "two-byte-zero", std::string("\0", 1) + "after", std::string("\x41", 1)}));
@@ -1400,7 +1501,7 @@ TEST(Ruvia, http_capsule_retention_skips_dropped_capsules_beyond_the_length_limi
     append_capsule(datagrams, 0, "\x03kept");
     ruvia::http_capsule_decoder decoder({.max_capsule_length_ = 100});
     capture captured;
-    EXPECT_TRUE(decoder.feed(datagrams, true, capsule, &captured, ruvia::http_capsule_retention::datagrams) == ruvia::http_capsule_status::end);
+    EXPECT_TRUE(decoder.feed(datagrams, true, capsule, &captured, ruvia::http_capsule_retention::datagrams).holds<ruvia::decode_complete>());
     EXPECT_EQ(captured.body_, std::string("\x03kept"));
     EXPECT_EQ(captured.ends_, std::size_t{1});
 
@@ -1410,7 +1511,9 @@ TEST(Ruvia, http_capsule_retention_skips_dropped_capsules_beyond_the_length_limi
         std::string oversized;
         append_capsule(oversized, retention == ruvia::http_capsule_retention::all ? 0x17 : 0, std::string("\0", 1) + std::string(200, 'o'));
         ruvia::http_capsule_decoder limited({.max_capsule_length_ = 100});
-        EXPECT_TRUE(limited.feed(oversized, false, nullptr, nullptr, retention) == ruvia::http_capsule_status::limit);
+        const auto limited_result = limited.feed(oversized, false, nullptr, nullptr, retention);
+        const auto* limited_failure = limited_result.get_if<ruvia::http_capsule_decode_failure>();
+        EXPECT_TRUE(limited_failure != nullptr && limited_failure->error() == ruvia::http_capsule_decode_error::limit_exceeded);
     }
 }
 
@@ -1452,13 +1555,13 @@ struct parsed_event final {
 std::vector<parsed_event> parse_chunks(ruvia::sse_parser& parser, std::initializer_list<std::string_view> chunks) {
     std::vector<parsed_event> events;
     for (auto chunk : chunks) {
-        while (!chunk.empty() && parser.state() == ruvia::sse_parser_state::active) {
+        while (!chunk.empty() && parser.state() == ruvia::decoder_state::active) {
             const auto result = parser.parse(chunk);
-            EXPECT_LE(result.consumed_bytes_, chunk.size());
-            chunk.remove_prefix(result.consumed_bytes_);
-            if (result.event_) {
-                events.push_back({std::string(result.event_->type()), std::string(result.event_->data()), std::string(result.event_->last_event_id())});
-            } else if (parser.state() == ruvia::sse_parser_state::active) {
+            EXPECT_LE(result.consumed_bytes(), chunk.size());
+            chunk.remove_prefix(result.consumed_bytes());
+            if (const auto* event = result.get_if<ruvia::sse_event>()) {
+                events.push_back({std::string(event->type()), std::string(event->data()), std::string(event->last_event_id())});
+            } else if (parser.state() == ruvia::decoder_state::active) {
                 EXPECT_TRUE(chunk.empty());
             }
         }
@@ -1546,7 +1649,7 @@ TEST(Ruvia, sse_rejects_newline_in_event_or_id_and_nul_in_id) {
 TEST(Ruvia, sse_parser_interprets_fields_per_whatwg) {
     ruvia::sse_parser parser;
     EXPECT_EQ(parse_chunks(parser, {whatwg_stream}), whatwg_events);
-    EXPECT_EQ(parser.state(), ruvia::sse_parser_state::active);
+    EXPECT_EQ(parser.state(), ruvia::decoder_state::active);
     EXPECT_EQ(parser.last_event_id(), "");
 
     // A block without data dispatches nothing but still commits its id.
@@ -1572,16 +1675,18 @@ TEST(Ruvia, sse_parser_returns_one_event_per_call_with_consumed_bytes) {
     ruvia::sse_parser parser;
     constexpr std::string_view input = "data: a\n\ndata: b\n\n: tail";
     const auto first = parser.parse(input);
-    ASSERT_TRUE(first.event_.has_value());
-    EXPECT_EQ(first.consumed_bytes_, std::size_t{9});
-    EXPECT_EQ(first.event_->data(), "a");
-    const auto second = parser.parse(input.substr(first.consumed_bytes_));
-    ASSERT_TRUE(second.event_.has_value());
-    EXPECT_EQ(second.consumed_bytes_, std::size_t{9});
-    EXPECT_EQ(second.event_->data(), "b");
+    const auto* first_event = first.get_if<ruvia::sse_event>();
+    ASSERT_TRUE(first_event != nullptr);
+    EXPECT_EQ(first.consumed_bytes(), std::size_t{9});
+    EXPECT_EQ(first_event->data(), "a");
+    const auto second = parser.parse(input.substr(first.consumed_bytes()));
+    const auto* second_event = second.get_if<ruvia::sse_event>();
+    ASSERT_TRUE(second_event != nullptr);
+    EXPECT_EQ(second.consumed_bytes(), std::size_t{9});
+    EXPECT_EQ(second_event->data(), "b");
     const auto rest = parser.parse(input.substr(18));
-    EXPECT_FALSE(rest.event_.has_value());
-    EXPECT_EQ(rest.consumed_bytes_, std::size_t{6});
+    EXPECT_FALSE(rest.holds<ruvia::sse_event>());
+    EXPECT_EQ(rest.consumed_bytes(), std::size_t{6});
 }
 
 TEST(Ruvia, sse_parser_ends_lines_at_crlf_lf_and_cr_across_chunks) {
@@ -1634,17 +1739,19 @@ TEST(Ruvia, sse_parser_fails_an_event_over_its_limit_and_reset_reuses_it) {
     EXPECT_EQ(parse_chunks(parser, {"id: 1\ndata: 1234567\n\n"}), (std::vector<parsed_event>{{"message", "1234567", "1"}}));
     // Comments and ignored fields buffer nothing, whatever their length.
     EXPECT_TRUE(parse_chunks(parser, {": " + std::string(1000, 'c') + "\nignored: " + std::string(1000, 'i') + "\n"}).empty());
-    EXPECT_EQ(parser.state(), ruvia::sse_parser_state::active);
+    EXPECT_EQ(parser.state(), ruvia::decoder_state::active);
 
     const auto failed = parser.parse("data: 1234\ndata: 567\n\n");
-    EXPECT_FALSE(failed.event_.has_value());
-    EXPECT_EQ(parser.state(), ruvia::sse_parser_state::failed);
+    EXPECT_FALSE(failed.holds<ruvia::sse_event>());
+    const auto* failure = failed.get_if<ruvia::sse_parse_failure>();
+    EXPECT_TRUE(failure != nullptr && failure->error() == ruvia::sse_parse_error::event_limit_exceeded);
+    EXPECT_EQ(parser.state(), ruvia::decoder_state::failed);
     EXPECT_THROW((void)parser.parse("data: x\n\n"), std::logic_error);
     parser.finish();
-    EXPECT_EQ(parser.state(), ruvia::sse_parser_state::failed);
+    EXPECT_EQ(parser.state(), ruvia::decoder_state::failed);
 
     parser.reset();
-    EXPECT_EQ(parser.state(), ruvia::sse_parser_state::active);
+    EXPECT_EQ(parser.state(), ruvia::decoder_state::active);
     EXPECT_EQ(parser.last_event_id(), "");
     EXPECT_EQ(parse_chunks(parser,
                   {"\xEF\xBB\xBF"
@@ -1653,14 +1760,14 @@ TEST(Ruvia, sse_parser_fails_an_event_over_its_limit_and_reset_reuses_it) {
 
     // A pending event type counts too.
     EXPECT_TRUE(parse_chunks(parser, {"event: 123456789\n"}).empty());
-    EXPECT_EQ(parser.state(), ruvia::sse_parser_state::failed);
+    EXPECT_EQ(parser.state(), ruvia::decoder_state::failed);
 }
 
 TEST(Ruvia, sse_parser_finish_discards_an_incomplete_event) {
     ruvia::sse_parser parser;
     EXPECT_EQ(parse_chunks(parser, {"id: 9\n\nretry: 50\ndata: pending\n", "data: partial"}), std::vector<parsed_event>{});
     parser.finish();
-    EXPECT_EQ(parser.state(), ruvia::sse_parser_state::finished);
+    EXPECT_EQ(parser.state(), ruvia::decoder_state::finished);
     EXPECT_EQ(parser.last_event_id(), "9");
     EXPECT_EQ(parser.reconnection_time(), std::chrono::milliseconds{50});
     EXPECT_THROW((void)parser.parse("\n"), std::logic_error);

@@ -70,9 +70,9 @@ ruvia::task<void> receive_payload(ruvia::task<std::optional<ruvia::websocket_mes
 namespace {
 
 [[nodiscard]] std::string make_server_handshake_response(std::string_view request) {
-    ruvia::http1_server_request_parse_state parsed;
-    parsed.parse_head(request, 0);
-    if (!parsed.head_ready()) {
+    ruvia::http1_server_request_parser parsed;
+    const auto head = parsed.parse(request);
+    if (!head.holds<ruvia::decode_complete>()) {
         throw std::runtime_error("invalid WebSocket handshake request");
     }
     auto handshake = ruvia::prepare_http1_websocket_handshake(parsed.request(), {});
@@ -511,9 +511,9 @@ TEST(Ruvia, websocket_client_handshake_sends_heads_beyond_the_retained_buffer) {
         auto socket = co_await peer.async_accept(asio::use_awaitable);
         std::string request{};
         co_await asio::async_read_until(socket, asio::dynamic_buffer(request), "\r\n\r\n", asio::use_awaitable);
-        ruvia::http1_server_request_parse_state parsed;
-        parsed.parse_head(request);
-        received_large_header = parsed.head_ready() && parsed.request().header("x-large") == large_value;
+        ruvia::http1_server_request_parser parsed;
+        const auto head = parsed.parse(request);
+        received_large_header = head.holds<ruvia::decode_complete>() && parsed.request().header("x-large") == large_value;
         const auto response = make_server_handshake_response(request);
         co_await asio::async_write(socket, asio::buffer(response), asio::use_awaitable);
         std::array<char, 1024> input{};
@@ -617,9 +617,9 @@ TEST(Ruvia, websocket_client_handshake_sends_the_default_user_agent_unless_heade
         if (peer_failure) {
             std::rethrow_exception(peer_failure);
         }
-        ruvia::http1_server_request_parse_state parsed;
-        parsed.parse_head(request);
-        EXPECT_TRUE(parsed.head_ready());
+        ruvia::http1_server_request_parser parsed;
+        const auto head = parsed.parse(request);
+        EXPECT_TRUE(head.holds<ruvia::decode_complete>());
         std::size_t user_agents = 0;
         for (const auto& field : parsed.request().headers()) {
             if (ruvia::http_ascii_equals_ignore_case(field.name(), "user-agent")) {

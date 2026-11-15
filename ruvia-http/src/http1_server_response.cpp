@@ -116,8 +116,8 @@ namespace ruvia {
 
 void append_http1_response_head(const http_response& response, http_response_head_buffer& head, const http1_response_head_plan& plan) {
     const auto body_plan = plan.body_plan();
-    const auto* buffered = plan.buffered();
-    const auto content_length_plan = buffered != nullptr ? detail::http_framed_buffered_response_head_plan(body_plan, buffered->content_length(), response) : detail::http_framed_streaming_response_head_plan(body_plan, response);
+    const auto& framing = plan.framing();
+    const auto content_length_plan = plan.content_source() == http1_response_content_source::buffered ? detail::http_framed_buffered_response_head_plan(body_plan, framing.content_length(), response) : detail::http_framed_streaming_response_head_plan(body_plan, response);
     const auto* framed = std::get_if<detail::http_framed_response_head_plan>(&content_length_plan);
     if (framed == nullptr) {
         switch (std::get<detail::http_framed_response_head_plan_error>(content_length_plan)) {
@@ -135,14 +135,14 @@ void append_http1_response_head(const http_response& response, http_response_hea
         throw http1_response_head_error("HTTP response Transfer-Encoding must be exactly chunked");
     }
     const auto response_status = body_plan.response_status();
-    const bool chunked_payload_plan = plan.chunked_stream() != nullptr && body_plan.transfer_encoding_allowed() && !body_plan.body_suppressed();
+    const bool chunked_payload_plan = framing.kind() == http1_framing_kind::chunked && body_plan.transfer_encoding_allowed() && !body_plan.body_suppressed();
     if (chunked_payload_plan && plan.protocol_version() == http_protocol_version::http10) {
         throw http1_response_head_error("HTTP/1.0 response cannot use chunked Transfer-Encoding");
     }
     const bool emit_chunked_transfer_encoding = chunked_payload_plan;
     // HTTP/1 alone can frame a stream with chunked coding or connection close.
     // Those delimiters replace Content-Length except suppressed HEAD metadata.
-    const auto content_length = emit_chunked_transfer_encoding || (plan.close_delimited_stream() != nullptr && !body_plan.body_suppressed()) ? std::nullopt : framed->content_length();
+    const auto content_length = emit_chunked_transfer_encoding || (framing.kind() == http1_framing_kind::close_delimited && !body_plan.body_suppressed()) ? std::nullopt : framed->content_length();
     const auto known_bits = detail::response_known_header_bits(response);
 
     const auto reason_phrase = http_reason_phrase(response_status);
@@ -272,7 +272,7 @@ http1_request_connection_plan http1_commit_final_response(http_response& respons
     if (response_options.close() || (plan.tunnel_request() && !response.status().is_successful())) {
         plan = plan.require_close();
     }
-    if (plan.disposition() == http1_close_policy::close_after_response) {
+    if (plan.close_policy() == http1_close_policy::close_after_response) {
         http1_mark_connection_close(response, preserve_upgrade ? http1_connection_close_field_policy::preserve_upgrade : http1_connection_close_field_policy::close_only);
     } else {
         const bool generate_upgrade_option = preserve_upgrade && !response_options.upgrade();
@@ -303,22 +303,20 @@ namespace {
 
 prepared_http1_response_stream prepare_http1_response_stream_head(http_response response, const http1_response_stream_plan& plan, http_response_trailer_intent trailer_intent) {
     const auto content_length = declared_stream_content_length(response, plan_http_response_body(plan.request_method(), response.status()));
-    const auto framing = content_length.has_value() ? http_response_stream_framing::http1_length_delimited : plan.framing();
-    auto commit_plan = plan_http_response_stream_commit(framing, plan.request_method(), response.status(), trailer_intent);
+    const auto framing = content_length.has_value() ? http1_message_framing::known_length(*content_length) : plan.framing() == http1_framing_kind::chunked ? http1_message_framing::chunked()
+                                                                                                                                                           : http1_message_framing::close_delimited();
+    auto commit_plan = plan_http_response_stream_commit(framing.kind(), plan.request_method(), response.status(), trailer_intent);
     const auto body_plan = commit_plan.body_plan();
     // HTTP/1.0 cannot delimit an open-ended response stream without closing the
     // connection, but a declared length or a response whose method/status forbids
     // payload is already self-delimited. Make this decision at head commit, when
     // the response is finally known, instead of pessimistically baking close into
     // the pre-commit plan.
-    const auto planned_connection = plan.request_connection_plan().disposition() == http1_close_policy::allow_reuse && plan.close_policy() == http1_close_policy::allow_reuse && (framing != http_response_stream_framing::http1_close_delimited || body_plan.body_suppressed()) ? plan.request_connection_plan() : plan.request_connection_plan().require_close();
+    const auto planned_connection = plan.request_connection_plan().close_policy() == http1_close_policy::allow_reuse && plan.close_policy() == http1_close_policy::allow_reuse && (framing.kind() != http1_framing_kind::close_delimited || body_plan.body_suppressed()) ? plan.request_connection_plan() : plan.request_connection_plan().require_close();
     const auto connection_plan = http1_commit_final_response(response, planned_connection);
-    auto head = prepare_http_response_stream_head(std::move(response), std::move(commit_plan));
-    const auto head_body_plan = head.commit_plan().body_plan();
-    const auto response_head_plan = content_length.has_value()   ? http1_length_delimited_response_stream_head_plan(head_body_plan, connection_plan, *content_length)
-        : framing == http_response_stream_framing::http1_chunked ? http1_chunked_response_stream_head_plan(head_body_plan, connection_plan)
-                                                                 : http1_close_delimited_response_stream_head_plan(head_body_plan, connection_plan);
-    return prepared_http1_response_stream(std::move(head), response_head_plan, connection_plan);
+    auto head = prepare_http_response_stream_head(std::move(response), commit_plan);
+    const auto response_head_plan = plan_http1_response_stream_head(head.commit_plan().body_plan(), connection_plan, framing);
+    return prepared_http1_response_stream(std::move(head.response()), head.commit_plan(), response_head_plan, connection_plan);
 }
 
 bool http1_request_offers_upgrade(const http_request& request) noexcept {
@@ -378,7 +376,7 @@ http1_response_head_plan prepare_http1_upgrade_response_head(http_response& resp
         add_http1_connection_option(response, detail::http_connection_upgrade_option, http1_control.connection_options().has_field());
     }
     response.status_code_ = http_status::switching_protocols;
-    return http1_close_delimited_response_stream_head_plan(plan_http_response_body(http_known_method::get, http_status::switching_protocols), http1_request_connection_plan::http11_close());
+    return plan_http1_response_stream_head(plan_http_response_body(http_known_method::get, http_status::switching_protocols), http1_request_connection_plan::http11_close(), http1_message_framing::close_delimited());
 }
 
 http_response_head_buffer::http_response_head_buffer(const http_response_head_buffer& other) :
@@ -611,8 +609,8 @@ http1_response_head_plan prepare_http1_connect_response_head(const http_response
         throw http1_response_head_error("CONNECT response cannot contain message framing fields");
     }
     const auto body = plan_http_response_body(http_known_method::connect, response.status());
-    const auto connection = version == http_protocol_version::http10 ? plan_http10_request_connection(true, false) : http1_request_connection_plan::http11_close();
-    return http1_close_delimited_response_stream_head_plan(body, connection);
+    const auto connection = version == http_protocol_version::http10 ? plan_http1_request_connection(http_protocol_version::http10, true, false) : http1_request_connection_plan::http11_close();
+    return plan_http1_response_stream_head(body, connection, http1_message_framing::close_delimited());
 }
 
 }  // namespace ruvia

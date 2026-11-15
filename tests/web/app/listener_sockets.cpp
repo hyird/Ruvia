@@ -155,7 +155,7 @@ asio::ip::tcp::endpoint loopback(std::uint16_t port) {
 }
 
 ruvia::tls_config tls_of(const ruvia::test::tls_identity& identity) {
-    return {.identity_ = {.certificate_chain_file_ = identity.ca_file_, .private_key_file_ = identity.private_key_file()}};
+    return {.identities_ = ruvia::tls_fixed_identities{.primary_ = {.certificate_chain_file_ = identity.ca_file_, .private_key_file_ = identity.private_key_file()}}};
 }
 
 // The body of GET `target` over a fresh connection; empty when none came.

@@ -10,9 +10,9 @@
 #include "borrowed_text.h"
 #include "http1_client_request.h"
 #include "http1_client_response.h"
-#include "http_client_request_view.h"
 #include "http_client_response_head.h"
 #include "http_header.h"
+#include "http_request_head_view.h"
 #include "websocket_connection.h"
 
 namespace ruvia {
@@ -103,7 +103,7 @@ class http1_parsed_client_response_head;
 // before the HTTP version of the exchange is known.
 void validate_websocket_client_handshake_headers(std::span<const http_header_view> headers);
 
-[[nodiscard]] std::variant<prepared_http1_client_request, http1_client_request_buffer_too_small, http1_client_request_prepare_error> prepare_http1_websocket_client_request(const http_origin_view& origin, std::string_view target, std::span<const char, 24> encoded_key, const websocket_client_negotiation& negotiation, borrowed_http_headers headers, std::span<char> head_buffer, http_request_field_source source = http_request_field_source::generated);
+[[nodiscard]] http1_client_request_prepare_result prepare_http1_websocket_client_request(const http_origin_view& origin, std::string_view target, std::span<const char, 24> encoded_key, const websocket_client_negotiation& negotiation, borrowed_http_headers headers, std::span<char> head_buffer, http_request_field_source source = http_request_field_source::generated);
 
 // Validates the 101 response against the key, then the server's selection
 // against the negotiation. The result view borrows the response head.

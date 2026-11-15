@@ -9,6 +9,7 @@
 #include <string_view>
 
 #include "borrowed_text.h"
+#include "decode_step.h"
 #include "http_protocol.h"
 
 namespace ruvia {
@@ -36,12 +37,10 @@ struct sse_parser_options final {
     protocol_byte_limit event_limit_{protocol_byte_limit::limited(default_max_sse_event_bytes)};
 };
 
-enum class sse_parser_state : std::uint8_t {
-    active,
-    // finish() ended the stream.
-    finished,
+// Why parse() failed the stream.
+enum class sse_parse_error : std::uint8_t {
     // An event exceeded sse_parser_options::event_limit_.
-    failed,
+    event_limit_exceeded,
 };
 
 // One dispatched event (WHATWG HTML, "Dispatch the event"). Its views borrow
@@ -74,12 +73,12 @@ private:
     std::string_view last_event_id_;
 };
 
-struct sse_parse_result final {
-    // Input bytes the parser consumed: through the blank line that completed
-    // event_, up to the field bytes that failed the stream, or all of it.
-    std::size_t consumed_bytes_{0};
-    std::optional<sse_event> event_{};
-};
+using sse_parse_failure = decode_failure<sse_parse_error>;
+
+// One parse() outcome. consumed_bytes() counts the input the parser took:
+// through the blank line that completed the event, up to the field bytes that
+// failed the stream, or all of it when more input is needed.
+using sse_parse_result = decode_step<decode_need_input, sse_event, sse_parse_failure>;
 
 // Sans-I/O text/event-stream parser (WHATWG HTML, "Parsing an event stream")
 // for one response body, fed in chunks of any size. It skips one leading
@@ -88,7 +87,8 @@ struct sse_parse_result final {
 // handles the event, data, id and retry fields; comments and other fields are
 // ignored. Each input byte is scanned once: an incomplete line keeps only its
 // field's routed value, never the raw line. The end of the stream discards an
-// incomplete line or event. Only reset() leaves the finished or failed state;
+// incomplete line or event. finish() ends the stream (finished); a failure
+// leaves the parser failed. Only reset() leaves the finished or failed state;
 // it starts a new stream and keeps buffer capacity within a small bound.
 class sse_parser final {
 public:
@@ -109,7 +109,7 @@ public:
     void finish() noexcept;
     void reset() noexcept;
 
-    [[nodiscard]] sse_parser_state state() const noexcept {
+    [[nodiscard]] decoder_state state() const noexcept {
         return state_;
     }
     // The stream's last event ID string, set by each blank line from the id
@@ -176,6 +176,6 @@ private:
     bool bom_settled_{false};
     line_phase phase_{line_phase::name};
     field_kind field_{field_kind::ignored};
-    sse_parser_state state_{sse_parser_state::active};
+    decoder_state state_{decoder_state::active};
 };
 }  // namespace ruvia

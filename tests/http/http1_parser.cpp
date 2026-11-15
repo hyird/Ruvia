@@ -31,8 +31,8 @@ namespace {
 
 using ruvia::http1_chunk_decode_error;
 using ruvia::http1_close_policy;
-using ruvia::http1_server_request_parse_failure_source;
-using ruvia::http1_server_request_parse_state;
+using ruvia::http1_framing_kind;
+using ruvia::http1_server_request_parser;
 using ruvia::http_known_method;
 using ruvia::http_parse_error;
 using ruvia::http_protocol_version;
@@ -40,30 +40,43 @@ using ruvia::http_request_target_form;
 using ruvia::http_unsupported_expectation_policy;
 using ruvia::test::parse_http1_request_message;
 
-const ruvia::http1_known_length_request_body& require_known_length(const ruvia::http1_request_body_plan& plan) {
-    const auto* known_length = plan.known_length();
-    if (known_length == nullptr) {
+const ruvia::http1_message_framing& require_known_length(const ruvia::http1_request_body_plan& plan) {
+    const auto& framing = plan.framing();
+    if (framing.kind() != http1_framing_kind::known_length) {
         throw std::runtime_error("test expected known-length request framing");
     }
-    return *known_length;
+    return framing;
 }
 
-const ruvia::http1_chunked_request_body& require_chunked(const ruvia::http1_request_body_plan& plan) {
-    const auto* chunked = plan.chunked();
-    if (chunked == nullptr) {
+const ruvia::http1_message_framing& require_chunked(const ruvia::http1_request_body_plan& plan) {
+    const auto& framing = plan.framing();
+    if (framing.kind() != http1_framing_kind::chunked) {
         throw std::runtime_error("test expected chunked request framing");
     }
-    return *chunked;
+    return framing;
 }
 
-[[nodiscard]] bool is_failure(const http1_server_request_parse_state& state_value, http_parse_error error) noexcept {
-    const auto* failure = state_value.failure();
-    if (failure == nullptr) {
+[[nodiscard]] bool is_failure(const std::optional<http_parse_error>& actual_error, http_parse_error error) noexcept {
+    if (!actual_error) {
         return false;
     }
-    const auto actual = failure->protocol_error();
-    const auto expected = ruvia::http_parse_protocol_error(error);
+    const auto actual = ruvia::make_http_protocol_error(*actual_error);
+    const auto expected = ruvia::make_http_protocol_error(error);
     return actual.status() == expected.status() && std::string_view(actual.what()) == expected.what();
+}
+
+[[nodiscard]] bool is_failure(const ruvia::test::http1_request_message& message, http_parse_error error) noexcept {
+    return is_failure(message.head_error_, error);
+}
+
+[[nodiscard]] bool is_failure(const ruvia::http1_server_request_parse_result& head, http_parse_error error) noexcept {
+    const auto* failure = head.get_if<ruvia::http1_server_request_parse_failure>();
+    return failure != nullptr && is_failure(std::optional<http_parse_error>(failure->error()), error);
+}
+
+// The request-line rejections a cleartext listener may answer by dropping the input.
+[[nodiscard]] constexpr bool is_request_line_error(http_parse_error error) noexcept {
+    return error == http_parse_error::invalid_request_line || error == http_parse_error::unsupported_http_version;
 }
 
 constexpr std::size_t many_headers_repeat_count = 192;
@@ -81,15 +94,15 @@ constexpr std::size_t many_headers_host_index = 160;
     return head;
 }
 
-void verify_many_headers_request_head(const http1_server_request_parse_state& state, std::size_t header_bytes) {
-    EXPECT_TRUE(state.failure() == nullptr);
-    EXPECT_TRUE(state.need_request_head() == nullptr);
-    const auto* ready = state.head_ready();
-    EXPECT_TRUE(ready != nullptr);
-    if (ready == nullptr) {
+void verify_many_headers_request_head(const ruvia::test::http1_request_message& message, std::size_t header_bytes) {
+    const auto& state = message.state_;
+    EXPECT_TRUE(!message.head_error_.has_value());
+    EXPECT_TRUE(!message.need_head());
+    EXPECT_TRUE(message.head_ready());
+    if (!message.head_ready()) {
         return;
     }
-    EXPECT_EQ(ready->header_bytes(), header_bytes);
+    EXPECT_EQ(message.head_bytes_, header_bytes);
     EXPECT_EQ(state.request().method(), std::string_view("POST"));
     EXPECT_TRUE(state.request().known_method() == http_known_method::post);
     EXPECT_TRUE(state.request().protocol_version() == http_protocol_version::http11);
@@ -118,7 +131,7 @@ void verify_many_headers_request_head(const http1_server_request_parse_state& st
         ++index;
     }
     EXPECT_EQ(require_known_length(state.body_plan()).content_length(), std::size_t{5});
-    EXPECT_TRUE(state.connection_plan().disposition() == http1_close_policy::allow_reuse);
+    EXPECT_TRUE(state.connection_plan().close_policy() == http1_close_policy::allow_reuse);
 }
 
 }  // namespace
@@ -142,9 +155,9 @@ TEST(Ruvia, http1_request_trailer_declaration_metadata_preserves_body_and_pipeli
             }
             EXPECT_EQ(parsed.state_.request().header("Trailer").value_or("missing"), declaration);
             EXPECT_EQ(parsed.state_.request().header("Host").value_or("missing"), "example.test");
-            EXPECT_EQ(parsed.state_.head_ready()->header_bytes(), head.size());
+            EXPECT_EQ(parsed.head_bytes_, head.size());
             if (chunked) {
-                EXPECT_TRUE(parsed.state_.body_plan().chunked() != nullptr);
+                EXPECT_TRUE(parsed.state_.body_plan().framing().kind() == http1_framing_kind::chunked);
             } else {
                 EXPECT_EQ(require_known_length(parsed.state_.body_plan()).content_length(), std::size_t{3});
             }
@@ -161,35 +174,34 @@ TEST(Ruvia, http1_request_trailer_declaration_metadata_preserves_body_and_pipeli
 }
 
 TEST(Ruvia, http1_public_request_connection_plan_only_tightens_reuse) {
-    const auto http10 = ruvia::plan_http10_request_connection(false, true);
+    const auto http10 = ruvia::plan_http1_request_connection(ruvia::http_protocol_version::http10, false, true);
     EXPECT_EQ(http10.protocol_version(), http_protocol_version::http10);
-    EXPECT_EQ(http10.disposition(), http1_close_policy::allow_reuse);
-    EXPECT_EQ(http10.require_close().disposition(), http1_close_policy::close_after_response);
+    EXPECT_EQ(http10.close_policy(), http1_close_policy::allow_reuse);
+    EXPECT_EQ(http10.require_close().close_policy(), http1_close_policy::close_after_response);
 
-    const auto http11 = ruvia::plan_http11_request_connection(false);
+    const auto http11 = ruvia::plan_http1_request_connection(ruvia::http_protocol_version::http11, false, false);
     EXPECT_EQ(http11.protocol_version(), http_protocol_version::http11);
-    EXPECT_EQ(http11.disposition(), http1_close_policy::allow_reuse);
-    EXPECT_EQ(ruvia::apply_request_body_consumption(http11, ruvia::http1_request_body_consumption::incomplete).disposition(), http1_close_policy::close_after_response);
-    EXPECT_EQ(ruvia::apply_request_body_consumption(http11, ruvia::http1_request_body_consumption::complete).disposition(), http1_close_policy::allow_reuse);
+    EXPECT_EQ(http11.close_policy(), http1_close_policy::allow_reuse);
+    EXPECT_EQ(ruvia::apply_request_body_consumption(http11, ruvia::http1_request_body_consumption::incomplete).close_policy(), http1_close_policy::close_after_response);
+    EXPECT_EQ(ruvia::apply_request_body_consumption(http11, ruvia::http1_request_body_consumption::complete).close_policy(), http1_close_policy::allow_reuse);
 }
 
 TEST(Ruvia, http1_parse_message_outcome_exposes_only_its_active_alternative) {
     const auto need_input = parse_http1_request_message("GET / HTTP/1.1\r\nHost: example.com\r\n");
-    EXPECT_TRUE(need_input.state_.need_request_head() != nullptr);
-    EXPECT_TRUE(need_input.state_.head_ready() == nullptr);
+    EXPECT_TRUE(need_input.need_head());
+    EXPECT_TRUE(!need_input.head_ready());
     EXPECT_TRUE(!need_input.need_body());
     EXPECT_TRUE(!need_input.complete());
-    EXPECT_TRUE(need_input.state_.failure() == nullptr);
+    EXPECT_TRUE(!need_input.head_error_.has_value());
 
     const auto failure = parse_http1_request_message("GET / HTTP/1.1\r\n\r\n");
-    const auto* failure_state = failure.state_.failure();
-    EXPECT_TRUE(failure.state_.need_request_head() == nullptr);
-    EXPECT_TRUE(failure.state_.head_ready() == nullptr);
+    EXPECT_TRUE(!failure.need_head());
+    EXPECT_TRUE(!failure.head_ready());
     EXPECT_TRUE(!failure.need_body());
     EXPECT_TRUE(!failure.complete());
-    EXPECT_TRUE(failure_state != nullptr);
-    if (failure_state != nullptr) {
-        const auto error = failure_state->protocol_error();
+    EXPECT_TRUE(failure.head_error_.has_value());
+    if (failure.head_error_) {
+        const auto error = ruvia::make_http_protocol_error(*failure.head_error_);
         EXPECT_EQ(error.status(), ruvia::http_status::bad_request);
         EXPECT_EQ(std::string_view(error.what()), std::string_view("missing Host header"));
     }
@@ -210,9 +222,9 @@ TEST(Ruvia, http1_parse_message_handles_deterministic_arbitrary_bytes) {
         }
 
         const auto result_value = parse_http1_request_message(input);
-        const auto active_alternatives = static_cast<unsigned>(result_value.state_.need_request_head() != nullptr) + static_cast<unsigned>(result_value.state_.head_ready() != nullptr) + static_cast<unsigned>(result_value.state_.failure() != nullptr);
+        const auto active_alternatives = static_cast<unsigned>(result_value.need_head()) + static_cast<unsigned>(result_value.head_ready()) + static_cast<unsigned>(result_value.head_error_.has_value());
         EXPECT_EQ(active_alternatives, 1U);
-        if (result_value.state_.head_ready() != nullptr) {
+        if (result_value.head_ready()) {
             const auto active_outcomes = static_cast<unsigned>(result_value.complete()) + static_cast<unsigned>(result_value.need_body()) + static_cast<unsigned>(result_value.chunk_error_.has_value());
             EXPECT_EQ(active_outcomes, 1U);
         }
@@ -275,8 +287,8 @@ TEST(Ruvia, http1_parse_message_maps_random_valid_heads_to_stable_request_plans)
 
         const auto result_value = parse_http1_request_message(message);
         EXPECT_TRUE(result_value.complete());
-        EXPECT_TRUE(result_value.state_.failure() == nullptr);
-        if (!result_value.complete() || result_value.state_.failure() != nullptr) {
+        EXPECT_TRUE(!result_value.head_error_.has_value());
+        if (!result_value.complete() || result_value.head_error_.has_value()) {
             continue;
         }
         EXPECT_EQ(result_value.state_.request().method(), std::string_view("POST"));
@@ -286,7 +298,7 @@ TEST(Ruvia, http1_parse_message_maps_random_valid_heads_to_stable_request_plans)
         EXPECT_TRUE(result_value.state_.request().protocol_version() == (http11 ? http_protocol_version::http11 : http_protocol_version::http10));
 
         const auto expected_close_policy = (!http11 && connection_case != 2U) || connection_case == 1U ? http1_close_policy::close_after_response : http1_close_policy::allow_reuse;
-        EXPECT_TRUE(result_value.state_.connection_plan().disposition() == expected_close_policy);
+        EXPECT_TRUE(result_value.state_.connection_plan().close_policy() == expected_close_policy);
         EXPECT_TRUE(result_value.state_.connection_plan().protocol_version() == (http11 ? http_protocol_version::http11 : http_protocol_version::http10));
 
         EXPECT_EQ(*result_value.message_bytes_, framed_bytes);
@@ -294,24 +306,24 @@ TEST(Ruvia, http1_parse_message_maps_random_valid_heads_to_stable_request_plans)
         if (body_case == 1U) {
             EXPECT_EQ(require_known_length(result_value.state_.body_plan()).content_length(), body.size());
         } else if (body_case == 2U) {
-            EXPECT_TRUE(result_value.state_.body_plan().chunked() != nullptr);
+            EXPECT_TRUE(result_value.state_.body_plan().framing().kind() == http1_framing_kind::chunked);
         } else {
-            EXPECT_TRUE(result_value.state_.body_plan().without_content() != nullptr);
+            EXPECT_TRUE(result_value.state_.body_plan().framing().kind() == http1_framing_kind::no_content);
         }
     }
 }
 
 TEST(Ruvia, http1_parse_failure_classifies_only_request_line_failures) {
     const auto request_line_failure = parse_http1_request_message("GET / HTTP/9.0\r\nHost: example.com\r\n\r\n");
-    EXPECT_TRUE(request_line_failure.state_.failure() != nullptr);
-    if (const auto* failure = request_line_failure.state_.failure()) {
-        EXPECT_TRUE(failure->source() == http1_server_request_parse_failure_source::request_line);
+    EXPECT_TRUE(request_line_failure.head_error_.has_value());
+    if (request_line_failure.head_error_) {
+        EXPECT_TRUE(is_request_line_error(*request_line_failure.head_error_));
     }
 
     const auto message_failure = parse_http1_request_message("GET / HTTP/1.1\r\n\r\n");
-    EXPECT_TRUE(message_failure.state_.failure() != nullptr);
-    if (const auto* failure = message_failure.state_.failure()) {
-        EXPECT_TRUE(failure->source() == http1_server_request_parse_failure_source::message);
+    EXPECT_TRUE(message_failure.head_error_.has_value());
+    if (message_failure.head_error_) {
+        EXPECT_TRUE(!is_request_line_error(*message_failure.head_error_));
     }
 }
 
@@ -321,13 +333,13 @@ TEST(Ruvia, http1_parse_message_need_body_separates_required_size_from_consumpti
         "Content-Length: 5\r\n\r\nhe";
     const auto result_value = parse_http1_request_message(partial);
     EXPECT_TRUE(result_value.need_body());
-    const auto* head = result_value.state_.head_ready();
-    const auto* known_length = result_value.state_.body_plan().known_length();
-    EXPECT_TRUE(head != nullptr);
-    EXPECT_TRUE(known_length != nullptr);
-    if (head != nullptr && known_length != nullptr) {
-        EXPECT_EQ(head->header_bytes(), partial.size() - std::size_t{2});
-        EXPECT_EQ(head->header_bytes() + known_length->content_length(), partial.size() + std::size_t{3});
+    const auto& framing = result_value.state_.body_plan().framing();
+    const bool known_length = framing.kind() == http1_framing_kind::known_length;
+    EXPECT_TRUE(result_value.head_ready());
+    EXPECT_TRUE(known_length);
+    if (result_value.head_ready() && known_length) {
+        EXPECT_EQ(result_value.head_bytes_, partial.size() - std::size_t{2});
+        EXPECT_EQ(result_value.head_bytes_ + framing.content_length(), partial.size() + std::size_t{3});
     }
 }
 
@@ -341,7 +353,7 @@ TEST(Ruvia, http1_parse_message_success_frames_the_exact_wire_body) {
     if (fixed_result.complete()) {
         EXPECT_EQ(fixed_result.state_.request().path(), std::string_view("/fixed"));
         EXPECT_EQ(require_known_length(fixed_result.state_.body_plan()).content_length(), std::size_t{5});
-        const auto header_bytes = fixed_result.state_.head_ready()->header_bytes();
+        const auto header_bytes = fixed_result.head_bytes_;
         EXPECT_EQ(std::string_view(content_length_pipeline).substr(header_bytes, *fixed_result.message_bytes_ - header_bytes), std::string_view("hello"));
         EXPECT_EQ(*fixed_result.message_bytes_, content_length_message.size());
         EXPECT_EQ(fixed_result.body_, std::string_view("hello"));
@@ -355,8 +367,8 @@ TEST(Ruvia, http1_parse_message_success_frames_the_exact_wire_body) {
     const auto chunked_result = parse_http1_request_message(chunked_pipeline);
     EXPECT_TRUE(chunked_result.complete());
     if (chunked_result.complete()) {
-        EXPECT_TRUE(chunked_result.state_.body_plan().chunked() != nullptr);
-        const auto header_bytes = chunked_result.state_.head_ready()->header_bytes();
+        EXPECT_TRUE(chunked_result.state_.body_plan().framing().kind() == http1_framing_kind::chunked);
+        const auto header_bytes = chunked_result.head_bytes_;
         EXPECT_EQ(std::string_view(chunked_pipeline).substr(header_bytes, *chunked_result.message_bytes_ - header_bytes), std::string_view("3\r\nabc\r\n0\r\nX-Checksum: ok\r\n\r\n"));
         EXPECT_EQ(*chunked_result.message_bytes_, chunked_message.size());
         EXPECT_EQ(chunked_result.body_, std::string_view("abc"));
@@ -371,7 +383,7 @@ TEST(Ruvia, http1_parse_message_preserves_expect_extensions_as_semantics) {
         "Content-Length: 1\r\n\r\nx");
 
     EXPECT_TRUE(result_value.complete());
-    EXPECT_TRUE(result_value.state_.failure() == nullptr);
+    EXPECT_TRUE(!result_value.head_error_.has_value());
     if (result_value.complete()) {
         const auto plan = result_value.state_.body_plan().expectation_plan(http_unsupported_expectation_policy::reject);
         EXPECT_TRUE(plan == ruvia::http_server_expectation_plan::reject_unsupported);
@@ -389,7 +401,7 @@ TEST(Ruvia, http1_parse_accepts_empty_expect_parameter_slots) {
         "Content-Length: 1\r\n\r\nx");
 
     EXPECT_TRUE(result_value.complete());
-    EXPECT_TRUE(result_value.state_.failure() == nullptr);
+    EXPECT_TRUE(!result_value.head_error_.has_value());
     if (result_value.complete()) {
         EXPECT_TRUE(!result_value.state_.body_plan().expectations().has_continue());
         EXPECT_TRUE(result_value.state_.body_plan().expectations().has_unsupported());
@@ -404,10 +416,10 @@ TEST(Ruvia, http1_parse_rejects_malformed_expect_field) {
         "Content-Length: 1\r\n\r\nx");
 
     EXPECT_TRUE(!result_value.complete());
-    EXPECT_TRUE(result_value.state_.failure() != nullptr);
-    if (const auto* failure = result_value.state_.failure()) {
-        const auto protocol_error = failure->protocol_error();
-        const auto expected = ruvia::http_parse_protocol_error(http_parse_error::invalid_header);
+    EXPECT_TRUE(result_value.head_error_.has_value());
+    if (result_value.head_error_) {
+        const auto protocol_error = ruvia::make_http_protocol_error(*result_value.head_error_);
+        const auto expected = ruvia::make_http_protocol_error(http_parse_error::invalid_header);
         EXPECT_EQ(protocol_error.status(), expected.status());
         EXPECT_EQ(std::string_view(protocol_error.what()), std::string_view(expected.what()));
     }
@@ -418,7 +430,7 @@ TEST(Ruvia, http1_parse_expect_equals_whitespace_is_not_parameter_whitespace) {
     for (const auto field : invalid) {
         const auto wire = std::string("POST / HTTP/1.1\r\nHost: example.test\r\nExpect: ") + std::string(field) + "\r\nContent-Length: 1\r\n\r\nx";
         const auto result = parse_http1_request_message(wire);
-        EXPECT_TRUE(is_failure(result.state_, http_parse_error::invalid_header));
+        EXPECT_TRUE(is_failure(result, http_parse_error::invalid_header));
     }
 
     constexpr std::string_view valid[]{"custom=value \t; \ta=b", "custom=\"a b\"; a=\" b \"", "custom=value; ; a=b;", "custom=\"a=b\"; a=\"x=y\""};
@@ -462,18 +474,18 @@ TEST(Ruvia, http1_parser_maps_wire_versions_to_typed_control_data) {
 TEST(Ruvia, http1_parse_incomplete_head) {
     // No terminating blank line yet -> incomplete, keep reading.
     const auto result_value = parse_http1_request_message("GET / HTTP/1.1\r\nHost: example.com\r\n");
-    EXPECT_TRUE(result_value.state_.need_request_head() != nullptr);
+    EXPECT_TRUE(result_value.need_head());
 }
 
 TEST(Ruvia, http1_parse_missing_host_rejected) {
     const auto result_value = parse_http1_request_message("GET / HTTP/1.1\r\n\r\n");
-    EXPECT_TRUE(is_failure(result_value.state_, http_parse_error::missing_host));
+    EXPECT_TRUE(is_failure(result_value, http_parse_error::missing_host));
 }
 
 TEST(Ruvia, http1_parse_rejects_header_smuggling_vectors) {
     const auto rejected = [](std::string_view request) {
         const auto result_value = parse_http1_request_message(request);
-        return result_value.state_.failure() != nullptr;
+        return result_value.head_error_.has_value();
     };
 
     // obs-fold: a continuation line (leading SP or HTAB) must be rejected, not
@@ -494,7 +506,7 @@ TEST(Ruvia, http1_parse_rejects_header_smuggling_vectors) {
 
 TEST(Ruvia, http1_parse_invalid_request_line_rejected) {
     const auto result_value = parse_http1_request_message("!!!garbage!!!\r\n\r\n");
-    EXPECT_TRUE(result_value.state_.failure() != nullptr);
+    EXPECT_TRUE(result_value.head_error_.has_value());
 }
 
 TEST(Ruvia, http1_parse_content_length_body) {
@@ -507,7 +519,7 @@ TEST(Ruvia, http1_parse_content_length_body) {
 
 TEST(Ruvia, http1_parse_conflicting_content_length_rejected) {
     const auto result_value = parse_http1_request_message("POST / HTTP/1.1\r\nHost: x\r\nContent-Length: 5\r\nContent-Length: 6\r\n\r\n");
-    EXPECT_TRUE(is_failure(result_value.state_, http_parse_error::conflicting_content_length));
+    EXPECT_TRUE(is_failure(result_value, http_parse_error::conflicting_content_length));
 }
 
 TEST(Ruvia, http1_parse_content_length_combined_equal_values) {
@@ -523,7 +535,7 @@ TEST(Ruvia, http1_parse_content_length_combined_equal_values) {
     const auto conflict = parse_http1_request_message(
         "POST / HTTP/1.1\r\nHost: x\r\n"
         "Content-Length: 5, 6\r\n\r\n");
-    EXPECT_TRUE(is_failure(conflict.state_, http_parse_error::conflicting_content_length));
+    EXPECT_TRUE(is_failure(conflict, http_parse_error::conflicting_content_length));
 }
 
 TEST(Ruvia, http1_parse_invalid_content_length_forms_rejected) {
@@ -532,7 +544,7 @@ TEST(Ruvia, http1_parse_invalid_content_length_forms_rejected) {
     for (const auto* value : {"+5", "-5", "0x10", "5abc", "5,", ",5"}) {
         const std::string raw = std::string("POST / HTTP/1.1\r\nHost: x\r\nContent-Length: ") + value + "\r\n\r\n";
         const auto result_value = parse_http1_request_message(raw);
-        EXPECT_TRUE(is_failure(result_value.state_, http_parse_error::invalid_content_length));
+        EXPECT_TRUE(is_failure(result_value, http_parse_error::invalid_content_length));
     }
 }
 
@@ -551,7 +563,7 @@ TEST(Ruvia, http1_parse_content_length_with_transfer_encoding_rejected) {
     // TE + CL together is a request-smuggling vector and must be rejected
     // (RFC 9112 section 6.3).
     const auto result_value = parse_http1_request_message("POST / HTTP/1.1\r\nHost: x\r\nContent-Length: 5\r\nTransfer-Encoding: chunked\r\n\r\n");
-    EXPECT_TRUE(result_value.state_.failure() != nullptr);
+    EXPECT_TRUE(result_value.head_error_.has_value());
 }
 
 TEST(Ruvia, http1_parse_duplicate_content_type_rejected) {
@@ -560,7 +572,7 @@ TEST(Ruvia, http1_parse_duplicate_content_type_rejected) {
         "Content-Type: text/plain\r\n"
         "Content-Type: application/json\r\n"
         "Content-Length: 2\r\n\r\n{}");
-    EXPECT_TRUE(is_failure(result_value.state_, http_parse_error::invalid_header));
+    EXPECT_TRUE(is_failure(result_value, http_parse_error::invalid_header));
 }
 
 TEST(Ruvia, http1_parse_duplicate_range_rejected) {
@@ -568,7 +580,7 @@ TEST(Ruvia, http1_parse_duplicate_range_rejected) {
         "GET /file HTTP/1.1\r\nHost: x\r\n"
         "Range: bytes=0-99\r\n"
         "Range: bytes=200-299\r\n\r\n");
-    EXPECT_TRUE(is_failure(result_value.state_, http_parse_error::invalid_header));
+    EXPECT_TRUE(is_failure(result_value, http_parse_error::invalid_header));
 }
 
 TEST(Ruvia, http1_parse_repeated_etag_list_fields_accepted) {
@@ -583,8 +595,8 @@ TEST(Ruvia, http1_parse_upgrade_advertisement_does_not_require_connection_option
     {
         const auto result_value = parse_http1_request_message("GET / HTTP/1.1\r\nHost: x\r\nUpgrade: websocket\r\n\r\n");
         EXPECT_TRUE(result_value.complete());
-        EXPECT_TRUE(result_value.state_.body_plan().without_content() != nullptr);
-        EXPECT_TRUE(result_value.state_.connection_plan().disposition() == http1_close_policy::allow_reuse);
+        EXPECT_TRUE(result_value.state_.body_plan().framing().kind() == http1_framing_kind::no_content);
+        EXPECT_TRUE(result_value.state_.connection_plan().close_policy() == http1_close_policy::allow_reuse);
         EXPECT_EQ(result_value.state_.request().header("Upgrade").value_or(std::string_view{}), std::string_view("websocket"));
     }
     {
@@ -639,7 +651,7 @@ TEST(Ruvia, http1_parse_te_ignores_empty_received_list_members) {
         std::string wire = "GET / HTTP/1.1\r\nHost: x\r\nConnection: TE\r\nTE: ";
         wire.append(value);
         wire.append("\r\n\r\n");
-        EXPECT_TRUE(is_failure(parse_http1_request_message(wire).state_, http_parse_error::invalid_header));
+        EXPECT_TRUE(is_failure(parse_http1_request_message(wire), http_parse_error::invalid_header));
     }
 }
 
@@ -668,7 +680,7 @@ TEST(Ruvia, http1_parse_te_accepts_any_received_transfer_parameter) {
         std::string wire = "GET / HTTP/1.1\r\nHost: x\r\nConnection: TE\r\nTE: ";
         wire.append(value);
         wire.append("\r\n\r\n");
-        EXPECT_TRUE(is_failure(parse_http1_request_message(wire).state_, http_parse_error::invalid_header));
+        EXPECT_TRUE(is_failure(parse_http1_request_message(wire), http_parse_error::invalid_header));
     }
 }
 
@@ -683,7 +695,7 @@ TEST(Ruvia, http1_parse_connection_options_reject_only_protected_fields) {
             "\r\nUser-Agent: probe\r\n\r\n");
         const auto result_value = parse_http1_request_message(wire);
         EXPECT_TRUE(result_value.complete());
-        EXPECT_TRUE(result_value.state_.connection_plan().disposition() == http1_close_policy::allow_reuse);
+        EXPECT_TRUE(result_value.state_.connection_plan().close_policy() == http1_close_policy::allow_reuse);
         EXPECT_EQ(result_value.state_.request().header("User-Agent").value_or(""), "probe");
         EXPECT_EQ(result_value.state_.request().header("Authorization").value_or(""), "Bearer tok");
         EXPECT_EQ(result_value.state_.request().header("Cookie").value_or(""), "sid=1");
@@ -694,7 +706,7 @@ TEST(Ruvia, http1_parse_connection_options_reject_only_protected_fields) {
         std::string wire = "GET / HTTP/1.1\r\nHost: x\r\nConnection: ";
         wire.append(option);
         wire.append("\r\n\r\n");
-        EXPECT_TRUE(is_failure(parse_http1_request_message(wire).state_, http_parse_error::invalid_connection));
+        EXPECT_TRUE(is_failure(parse_http1_request_message(wire), http_parse_error::invalid_connection));
     }
 }
 
@@ -703,7 +715,7 @@ TEST(Ruvia, http1_parse_duplicate_authorization_rejected) {
         "GET / HTTP/1.1\r\nHost: x\r\n"
         "Authorization: Bearer first\r\n"
         "Authorization: Bearer second\r\n\r\n");
-    EXPECT_TRUE(is_failure(result_value.state_, http_parse_error::invalid_header));
+    EXPECT_TRUE(is_failure(result_value, http_parse_error::invalid_header));
 }
 
 TEST(Ruvia, http1_parse_duplicate_websocket_identity_rejected) {
@@ -717,7 +729,7 @@ TEST(Ruvia, http1_parse_duplicate_websocket_identity_rejected) {
     };
     for (const auto message : messages) {
         const auto result_value = parse_http1_request_message(message);
-        EXPECT_TRUE(is_failure(result_value.state_, http_parse_error::invalid_header));
+        EXPECT_TRUE(is_failure(result_value, http_parse_error::invalid_header));
     }
 }
 
@@ -751,7 +763,7 @@ TEST(Ruvia, http1_parse_chunked_body_accepts_many_small_chunks) {
     const auto result_value = parse_http1_request_message(request);
     EXPECT_TRUE(result_value.complete());
     if (result_value.complete()) {
-        EXPECT_EQ(result_value.state_.head_ready()->header_bytes(), header_size);
+        EXPECT_EQ(result_value.head_bytes_, header_size);
         EXPECT_EQ(*result_value.message_bytes_, request.size());
         EXPECT_EQ(result_value.body_.size(), std::size_t{20000});
     }
@@ -761,21 +773,21 @@ TEST(Ruvia, http1_parse_trailer_advertisement_does_not_establish_framing) {
     {
         const auto result_value = parse_http1_request_message("POST / HTTP/1.1\r\nHost: x\r\nTrailer: X-Checksum\r\n\r\n");
         EXPECT_TRUE(result_value.complete());
-        EXPECT_TRUE(result_value.state_.body_plan().without_content() != nullptr);
-        EXPECT_TRUE(result_value.state_.connection_plan().disposition() == http1_close_policy::allow_reuse);
+        EXPECT_TRUE(result_value.state_.body_plan().framing().kind() == http1_framing_kind::no_content);
+        EXPECT_TRUE(result_value.state_.connection_plan().close_policy() == http1_close_policy::allow_reuse);
     }
     {
         const auto result_value = parse_http1_request_message("POST / HTTP/1.1\r\nHost: x\r\nTrailer: X-Checksum\r\nContent-Length: 0\r\n\r\n");
         EXPECT_TRUE(result_value.complete());
         EXPECT_EQ(require_known_length(result_value.state_.body_plan()).content_length(), std::size_t{0});
-        EXPECT_TRUE(result_value.state_.connection_plan().disposition() == http1_close_policy::allow_reuse);
+        EXPECT_TRUE(result_value.state_.connection_plan().close_policy() == http1_close_policy::allow_reuse);
     }
     {
         const auto result_value = parse_http1_request_message("POST / HTTP/1.1\r\nHost: x\r\nTrailer: X-Checksum\r\nContent-Length: 3\r\n\r\nabc");
         EXPECT_TRUE(result_value.complete());
         EXPECT_EQ(require_known_length(result_value.state_.body_plan()).content_length(), std::size_t{3});
         EXPECT_EQ(result_value.body_.size(), std::size_t{3});
-        EXPECT_TRUE(result_value.state_.connection_plan().disposition() == http1_close_policy::allow_reuse);
+        EXPECT_TRUE(result_value.state_.connection_plan().close_policy() == http1_close_policy::allow_reuse);
     }
     {
         const auto result_value = parse_http1_request_message("POST / HTTP/1.1\r\nHost: x\r\nTrailer: ,\r\n\r\n");
@@ -786,7 +798,7 @@ TEST(Ruvia, http1_parse_trailer_advertisement_does_not_establish_framing) {
             "POST / HTTP/1.1\r\nHost: x\r\nTrailer: X-Checksum\r\nTransfer-Encoding: "
             "chunked\r\n\r\n0\r\n\r\n");
         EXPECT_TRUE(result_value.complete());
-        EXPECT_TRUE(result_value.state_.body_plan().chunked() != nullptr);
+        EXPECT_TRUE(result_value.state_.body_plan().framing().kind() == http1_framing_kind::chunked);
     }
 }
 
@@ -813,36 +825,35 @@ TEST(Ruvia, http1_parse_transfer_encoding_ignores_empty_members_without_losing_f
         if (parsed.complete()) {
             EXPECT_EQ(parsed.body_, std::string("hello"));
             EXPECT_EQ(*parsed.message_bytes_, message_bytes);
-            EXPECT_TRUE(parsed.state_.body_plan().chunked() != nullptr);
+            EXPECT_TRUE(parsed.state_.body_plan().framing().kind() == http1_framing_kind::chunked);
         }
     }
     const auto unframed = parse_http1_request_message("POST / HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: ,\r\n\r\n");
-    EXPECT_TRUE(is_failure(unframed.state_, http_parse_error::invalid_transfer_encoding));
-    EXPECT_TRUE(unframed.state_.connection_plan().disposition() == http1_close_policy::close_after_response);
+    EXPECT_TRUE(is_failure(unframed, http_parse_error::invalid_transfer_encoding));
+    EXPECT_TRUE(unframed.state_.connection_plan().close_policy() == http1_close_policy::close_after_response);
 
     const auto conflict = parse_http1_request_message("POST / HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: ,\r\nContent-Length: 0\r\n\r\n");
-    EXPECT_TRUE(is_failure(conflict.state_, http_parse_error::invalid_transfer_encoding));
-    EXPECT_TRUE(conflict.state_.connection_plan().disposition() == http1_close_policy::close_after_response);
+    EXPECT_TRUE(is_failure(conflict, http_parse_error::invalid_transfer_encoding));
+    EXPECT_TRUE(conflict.state_.connection_plan().close_policy() == http1_close_policy::close_after_response);
 }
 
 TEST(Ruvia, http1_parse_transfer_codings_reset_across_requests) {
-    http1_server_request_parse_state state;
-    state.parse_head("POST / HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: gzip, chunked\r\n\r\n", 0);
-    EXPECT_TRUE(state.head_ready() != nullptr);
+    http1_server_request_parser state;
+    EXPECT_TRUE(state.parse("POST / HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: gzip, chunked\r\n\r\n").holds<ruvia::decode_complete>());
     const auto& chunked = require_chunked(state.body_plan());
     EXPECT_EQ(chunked.transfer_codings().size(), std::size_t{1});
     (void)std::move(state).take_request();
 
-    state.parse_head("GET / HTTP/1.1\r\nHost: x\r\n\r\n", 0);
-    EXPECT_TRUE(state.head_ready() != nullptr);
-    EXPECT_TRUE(state.body_plan().chunked() == nullptr);
+    state.reset();
+    EXPECT_TRUE(state.parse("GET / HTTP/1.1\r\nHost: x\r\n\r\n").holds<ruvia::decode_complete>());
+    EXPECT_TRUE(state.body_plan().framing().kind() != http1_framing_kind::chunked);
     (void)std::move(state).take_request();
 }
 
 TEST(Ruvia, http1_parse_unsupported_version_rejected) {
     for (const auto wire : {"GET / HTTP/2.0\r\nHost: x\r\n\r\n", "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n"}) {
         const auto result_value = parse_http1_request_message(wire);
-        EXPECT_TRUE(is_failure(result_value.state_, http_parse_error::unsupported_http_version));
+        EXPECT_TRUE(is_failure(result_value, http_parse_error::unsupported_http_version));
     }
 }
 
@@ -861,25 +872,25 @@ TEST(Ruvia, http1_parse_extension_method_preserves_case_sensitive_token) {
 
 TEST(Ruvia, http1_parse_invalid_method_token_rejected) {
     const auto result_value = parse_http1_request_message("BAD(METHOD / HTTP/1.1\r\nHost: x\r\n\r\n");
-    EXPECT_TRUE(is_failure(result_value.state_, http_parse_error::invalid_request_line));
+    EXPECT_TRUE(is_failure(result_value, http_parse_error::invalid_request_line));
 }
 
 TEST(Ruvia, http1_parse_transfer_encoding_not_chunked_rejected) {
     // A non-chunked Transfer-Encoding leaves message framing undetermined.
     const auto result_value = parse_http1_request_message("POST / HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: gzip\r\n\r\n");
-    EXPECT_TRUE(is_failure(result_value.state_, http_parse_error::invalid_transfer_encoding));
+    EXPECT_TRUE(is_failure(result_value, http_parse_error::invalid_transfer_encoding));
 }
 
 TEST(Ruvia, http1_request_unknown_transfer_coding_obeys_final_framing_precedence) {
     const auto unframed = parse_http1_request_message("POST / HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: unknown\r\n\r\n");
-    EXPECT_TRUE(is_failure(unframed.state_, http_parse_error::invalid_transfer_encoding));
-    EXPECT_TRUE(unframed.state_.connection_plan().disposition() == http1_close_policy::close_after_response);
+    EXPECT_TRUE(is_failure(unframed, http_parse_error::invalid_transfer_encoding));
+    EXPECT_TRUE(unframed.state_.connection_plan().close_policy() == http1_close_policy::close_after_response);
 
     const auto framed = parse_http1_request_message(
         "POST / HTTP/1.1\r\nHost: x\r\n"
         "Transfer-Encoding: unknown, chunked\r\n\r\n0\r\n\r\n");
-    EXPECT_TRUE(is_failure(framed.state_, http_parse_error::unsupported_transfer_encoding));
-    EXPECT_TRUE(framed.state_.connection_plan().disposition() == http1_close_policy::close_after_response);
+    EXPECT_TRUE(is_failure(framed, http_parse_error::unsupported_transfer_encoding));
+    EXPECT_TRUE(framed.state_.connection_plan().close_policy() == http1_close_policy::close_after_response);
 }
 
 // RFC 9112 section 7.2: content-only codings are not transfer codings.
@@ -888,7 +899,7 @@ TEST(Ruvia, http1_request_content_only_codings_are_unsupported_transfer_codings)
         std::string wire = "POST / HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: ";
         wire.append(coding);
         wire.append(", chunked\r\n\r\n0\r\n\r\n");
-        EXPECT_TRUE(is_failure(parse_http1_request_message(wire).state_, http_parse_error::unsupported_transfer_encoding));
+        EXPECT_TRUE(is_failure(parse_http1_request_message(wire), http_parse_error::unsupported_transfer_encoding));
     }
     const auto alias = parse_http1_request_message("POST / HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: x-gzip, chunked\r\n\r\n3\r\nraw\r\n0\r\n\r\n");
     EXPECT_TRUE(alias.complete());
@@ -898,23 +909,23 @@ TEST(Ruvia, http1_request_content_only_codings_are_unsupported_transfer_codings)
 TEST(Ruvia, http1_parse_transfer_encoding_in_http10_rejected) {
     // Transfer-Encoding in HTTP/1.0 is faulty framing (RFC 9112 6.1).
     const auto result_value = parse_http1_request_message("POST / HTTP/1.0\r\nHost: x\r\nTransfer-Encoding: chunked\r\n\r\n");
-    EXPECT_TRUE(is_failure(result_value.state_, http_parse_error::invalid_transfer_encoding));
+    EXPECT_TRUE(is_failure(result_value, http_parse_error::invalid_transfer_encoding));
 }
 
 TEST(Ruvia, http1_parse_failure_preserves_accepted_http10_version) {
     // The request line is valid HTTP/1.0, but the target grammar is rejected
     // afterwards. The error response must retain HTTP/1.0 as its wire version.
     const auto invalid_target = parse_http1_request_message("GET * HTTP/1.0\r\n\r\n");
-    EXPECT_TRUE(invalid_target.state_.failure() != nullptr);
+    EXPECT_TRUE(invalid_target.head_error_.has_value());
     EXPECT_TRUE(invalid_target.state_.connection_plan().protocol_version() == http_protocol_version::http10);
-    EXPECT_TRUE(invalid_target.state_.connection_plan().disposition() == http1_close_policy::close_after_response);
+    EXPECT_TRUE(invalid_target.state_.connection_plan().close_policy() == http1_close_policy::close_after_response);
 
     // The same invariant applies to a framing rule checked after the version
     // line has already been accepted.
     const auto invalid_framing = parse_http1_request_message("POST / HTTP/1.0\r\nTransfer-Encoding: chunked\r\n\r\n");
-    EXPECT_TRUE(invalid_framing.state_.failure() != nullptr);
+    EXPECT_TRUE(invalid_framing.head_error_.has_value());
     EXPECT_TRUE(invalid_framing.state_.connection_plan().protocol_version() == http_protocol_version::http10);
-    EXPECT_TRUE(invalid_framing.state_.connection_plan().disposition() == http1_close_policy::close_after_response);
+    EXPECT_TRUE(invalid_framing.state_.connection_plan().close_policy() == http1_close_policy::close_after_response);
 }
 
 TEST(Ruvia, http1_parse_head_failures_close_persistent_connections) {
@@ -927,8 +938,8 @@ TEST(Ruvia, http1_parse_head_failures_close_persistent_connections) {
              "POST / HTTP/1.1\r\nContent-Length: 1\r\n\r\nx",
          }) {
         const auto result_value = parse_http1_request_message(wire);
-        EXPECT_TRUE(result_value.state_.failure() != nullptr);
-        EXPECT_TRUE(result_value.state_.connection_plan().disposition() == http1_close_policy::close_after_response);
+        EXPECT_TRUE(result_value.head_error_.has_value());
+        EXPECT_TRUE(result_value.state_.connection_plan().close_policy() == http1_close_policy::close_after_response);
     }
     const auto http10 = parse_http1_request_message("POST / HTTP/1.0\r\nConnection: keep-alive\r\nTransfer-Encoding: chunked\r\n\r\n");
     EXPECT_TRUE(http10.state_.connection_plan().protocol_version() == http_protocol_version::http10);
@@ -958,7 +969,7 @@ TEST(Ruvia, http1_parse_absolute_uri_rejects_non_http_schemes_and_empty_authorit
     // http(s) URI without a non-empty authority, is a 400 and never rewrites
     // Host to an empty value.
     for (const std::string_view message : {"GET ftp://archive.example/pub/file HTTP/1.1\r\nHost: x\r\n\r\n", "GET javascript:/features/safe HTTP/1.1\r\nHost: x\r\n\r\n", "GET x:/features/safe HTTP/1.1\r\nHost: x\r\n\r\n", "GET urn:example:animal:ferret:nose HTTP/1.1\r\nHost:\r\n\r\n", "GET file:///path HTTP/1.1\r\nHost:\r\n\r\n", "GET x:80 HTTP/1.1\r\nHost: x\r\n\r\n", "GET http:/path HTTP/1.1\r\nHost: x\r\n\r\n", "GET http:///path HTTP/1.1\r\nHost: x\r\n\r\n", "GET https://user@a.example/ HTTP/1.1\r\nHost: x\r\n\r\n"}) {
-        EXPECT_TRUE(is_failure(parse_http1_request_message(message).state_, http_parse_error::invalid_request_target));
+        EXPECT_TRUE(is_failure(parse_http1_request_message(message), http_parse_error::invalid_request_target));
     }
 
     const auto upper_case = parse_http1_request_message("GET HTTPS://a.example/p HTTP/1.1\r\nHost: x\r\n\r\n");
@@ -994,7 +1005,7 @@ TEST(Ruvia, http1_parse_options_content_type_presence_is_sender_obligation) {
         "Content-Length: 0\r\n\r\n");
     EXPECT_TRUE(missing_for_empty_content.complete());
     EXPECT_EQ(require_known_length(missing_for_empty_content.state_.body_plan()).content_length(), std::size_t{0});
-    EXPECT_TRUE(missing_for_empty_content.state_.connection_plan().disposition() == http1_close_policy::allow_reuse);
+    EXPECT_TRUE(missing_for_empty_content.state_.connection_plan().close_policy() == http1_close_policy::allow_reuse);
 
     const auto missing_for_chunked_content = parse_http1_request_message(
         "OPTIONS /diagnostics HTTP/1.1\r\n"
@@ -1002,8 +1013,8 @@ TEST(Ruvia, http1_parse_options_content_type_presence_is_sender_obligation) {
         "Transfer-Encoding: chunked\r\n\r\n"
         "0\r\n\r\n");
     EXPECT_TRUE(missing_for_chunked_content.complete());
-    EXPECT_TRUE(missing_for_chunked_content.state_.body_plan().chunked() != nullptr);
-    EXPECT_TRUE(missing_for_chunked_content.state_.connection_plan().disposition() == http1_close_policy::allow_reuse);
+    EXPECT_TRUE(missing_for_chunked_content.state_.body_plan().framing().kind() == http1_framing_kind::chunked);
+    EXPECT_TRUE(missing_for_chunked_content.state_.connection_plan().close_policy() == http1_close_policy::allow_reuse);
 
     const auto missing_for_nonempty_content = parse_http1_request_message(
         "OPTIONS /diagnostics HTTP/1.1\r\n"
@@ -1134,11 +1145,11 @@ TEST(Ruvia, http1_parse_connect_requires_authority_form) {
     }
     {
         const auto result_value = parse_http1_request_message("CONNECT / HTTP/1.1\r\nHost: example.com\r\n\r\n");
-        EXPECT_TRUE(is_failure(result_value.state_, http_parse_error::invalid_request_target));
+        EXPECT_TRUE(is_failure(result_value, http_parse_error::invalid_request_target));
     }
     {
         const auto result_value = parse_http1_request_message("CONNECT http://example.com:443 HTTP/1.1\r\nHost: example.com\r\n\r\n");
-        EXPECT_TRUE(is_failure(result_value.state_, http_parse_error::invalid_request_target));
+        EXPECT_TRUE(is_failure(result_value, http_parse_error::invalid_request_target));
     }
 }
 
@@ -1159,7 +1170,7 @@ TEST(Ruvia, http1_parse_connect_uses_target_authority) {
 TEST(Ruvia, http1_parse_connect_accepts_zero_length_only_and_trace_frames_content) {
     const auto rejects = [&](std::string_view request, http_parse_error error) {
         const auto result_value = parse_http1_request_message(request);
-        EXPECT_TRUE(is_failure(result_value.state_, error));
+        EXPECT_TRUE(is_failure(result_value, error));
     };
 
     // RFC 9110 section 9.3.6 leaves CONNECT content without meaning, so any
@@ -1172,8 +1183,8 @@ TEST(Ruvia, http1_parse_connect_accepts_zero_length_only_and_trace_frames_conten
         EXPECT_TRUE(accepted.complete());
         EXPECT_EQ(require_known_length(accepted.state_.body_plan()).content_length(), std::size_t{0});
         EXPECT_TRUE(accepted.body_.empty());
-        EXPECT_TRUE(!accepted.state_.body_plan().requires_consumption());
-        EXPECT_TRUE(accepted.state_.connection_plan().disposition() == http1_close_policy::allow_reuse);
+        EXPECT_TRUE(!accepted.state_.body_plan().framing().requires_consumption());
+        EXPECT_TRUE(accepted.state_.connection_plan().close_policy() == http1_close_policy::allow_reuse);
         EXPECT_EQ(accepted.state_.connection_plan().tunnel_request(), accepted.state_.request().known_method() == http_known_method::connect);
         std::string with_following_bytes(wire);
         with_following_bytes.append("opaque");
@@ -1181,7 +1192,7 @@ TEST(Ruvia, http1_parse_connect_accepts_zero_length_only_and_trace_frames_conten
         EXPECT_TRUE(boundary.complete());
         if (boundary.complete()) {
             EXPECT_EQ(*boundary.message_bytes_, std::string_view(wire).size());
-            EXPECT_EQ(boundary.state_.head_ready()->header_bytes(), std::string_view(wire).size());
+            EXPECT_EQ(boundary.head_bytes_, std::string_view(wire).size());
         }
     }
     rejects(
@@ -1220,8 +1231,8 @@ TEST(Ruvia, http1_parse_connect_accepts_zero_length_only_and_trace_frames_conten
     const auto parsed_value = parse_http1_request_message(early_tunnel_bytes);
     EXPECT_TRUE(parsed_value.complete());
     if (parsed_value.complete()) {
-        EXPECT_TRUE(parsed_value.state_.body_plan().without_content() != nullptr);
-        EXPECT_EQ(parsed_value.state_.head_ready()->header_bytes(), connect_head.size());
+        EXPECT_TRUE(parsed_value.state_.body_plan().framing().kind() == http1_framing_kind::no_content);
+        EXPECT_EQ(parsed_value.head_bytes_, connect_head.size());
         EXPECT_EQ(*parsed_value.message_bytes_, connect_head.size());
     }
 }
@@ -1248,7 +1259,7 @@ TEST(Ruvia, http1_parse_http10_ignores_upgrade_field_semantics) {
 
 TEST(Ruvia, http1_parse_non_numeric_content_length_rejected) {
     const auto result_value = parse_http1_request_message("POST / HTTP/1.1\r\nHost: x\r\nContent-Length: abc\r\n\r\n");
-    EXPECT_TRUE(is_failure(result_value.state_, http_parse_error::invalid_content_length));
+    EXPECT_TRUE(is_failure(result_value, http_parse_error::invalid_content_length));
 }
 
 TEST(Ruvia, http1_parse_many_headers_within_byte_budget_accepted) {
@@ -1258,11 +1269,11 @@ TEST(Ruvia, http1_parse_many_headers_within_byte_budget_accepted) {
     const auto head_only = parse_http1_request_message(head);
     EXPECT_TRUE(head_only.need_body());
     EXPECT_TRUE(!head_only.complete());
-    verify_many_headers_request_head(head_only.state_, head.size());
+    verify_many_headers_request_head(head_only, head.size());
 
     const auto result_value = parse_http1_request_message(wire);
     EXPECT_TRUE(result_value.complete());
-    verify_many_headers_request_head(result_value.state_, head.size());
+    verify_many_headers_request_head(result_value, head.size());
     if (!result_value.complete()) {
         return;
     }
@@ -1281,27 +1292,26 @@ TEST(Ruvia, http1_parse_chunk_size_overflow_rejected) {
     const auto result_value = parse_http1_request_message(
         "POST / HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: chunked\r\n\r\n"
         "10000000000000000\r\nx\r\n0\r\n\r\n");  // 2^64 chunk size overflows
-    EXPECT_TRUE(result_value.state_.head_ready() != nullptr);
+    EXPECT_TRUE(result_value.head_ready());
     EXPECT_TRUE(!result_value.complete());
     EXPECT_TRUE(result_value.chunk_error_ == http1_chunk_decode_error::invalid_framing);
 }
 
 TEST(Ruvia, http1_parse_invalid_chunk_size_rejected) {
     const auto result_value = parse_http1_request_message("POST / HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: chunked\r\n\r\nZZ\r\nx\r\n0\r\n\r\n");
-    EXPECT_TRUE(result_value.state_.head_ready() != nullptr);
+    EXPECT_TRUE(result_value.head_ready());
     EXPECT_TRUE(!result_value.complete());
     EXPECT_TRUE(result_value.chunk_error_ == http1_chunk_decode_error::invalid_framing);
 }
 
 TEST(Ruvia, http1_server_head_ready_is_distinct_from_message_ready) {
-    http1_server_request_parse_state head;
+    http1_server_request_parser head;
     constexpr std::string_view request = "POST / HTTP/1.1\r\nHost: x\r\nContent-Length: 5\r\n\r\nhello";
 
-    head.parse_head(request);
-    const auto* request_head = head.head_ready();
-    EXPECT_TRUE(request_head != nullptr);
-    if (request_head != nullptr) {
-        EXPECT_EQ(request_head->header_bytes(), request.size() - std::string_view("hello").size());
+    const auto request_head = head.parse(request);
+    EXPECT_TRUE(request_head.holds<ruvia::decode_complete>());
+    if (request_head.holds<ruvia::decode_complete>()) {
+        EXPECT_EQ(request_head.consumed_bytes(), request.size() - std::string_view("hello").size());
     }
     EXPECT_EQ(head.request().method(), std::string_view("POST"));
     EXPECT_TRUE(head.request().known_method() == http_known_method::post);
@@ -1316,12 +1326,12 @@ TEST(Ruvia, http1_server_head_ready_is_distinct_from_message_ready) {
     const auto body_pending = parse_http1_request_message(request.substr(0, request.size() - 1));
     EXPECT_TRUE(body_pending.need_body());
     EXPECT_TRUE(!body_pending.complete());
-    const auto* pending_head = body_pending.state_.head_ready();
-    const auto* pending_length = body_pending.state_.body_plan().known_length();
-    EXPECT_TRUE(pending_head != nullptr);
-    EXPECT_TRUE(pending_length != nullptr);
-    if (pending_head != nullptr && pending_length != nullptr) {
-        EXPECT_EQ(pending_head->header_bytes() + pending_length->content_length(), request.size());
+    const auto& pending_framing = body_pending.state_.body_plan().framing();
+    const bool pending_length = pending_framing.kind() == http1_framing_kind::known_length;
+    EXPECT_TRUE(body_pending.head_ready());
+    EXPECT_TRUE(pending_length);
+    if (body_pending.head_ready() && pending_length) {
+        EXPECT_EQ(body_pending.head_bytes_ + pending_framing.content_length(), request.size());
     }
 }
 
@@ -1342,13 +1352,12 @@ TEST(Ruvia, http1_parse_ignores_bounded_empty_lines_before_request_line) {
     }
 
     for (const std::string_view partial : {std::string_view("\r\n"), std::string_view("\r\n\r"), std::string_view("\r\n\r\n"), std::string_view("\r\nGET / HTTP/1.1\r\n")}) {
-        http1_server_request_parse_state head;
-        head.parse_head(partial);
-        EXPECT_TRUE(head.need_request_head() != nullptr);
+        http1_server_request_parser head;
+        EXPECT_TRUE(head.parse(partial).holds<ruvia::decode_need_input>());
     }
 
     // A bare CR is not an empty line.
-    EXPECT_TRUE(is_failure(parse_http1_request_message("\rGET / HTTP/1.1\r\nHost: x\r\n\r\n").state_, http_parse_error::invalid_request_line));
+    EXPECT_TRUE(is_failure(parse_http1_request_message("\rGET / HTTP/1.1\r\nHost: x\r\n\r\n"), http_parse_error::invalid_request_line));
 
     // Ignored lines count toward the head limit.
     std::string flood;
@@ -1356,7 +1365,7 @@ TEST(Ruvia, http1_parse_ignores_bounded_empty_lines_before_request_line) {
         flood.append("\r\n");
     }
     flood.append("GET / HTTP/1.1\r\nHost: x\r\n\r\n");
-    EXPECT_TRUE(is_failure(parse_http1_request_message(flood).state_, http_parse_error::header_too_large));
+    EXPECT_TRUE(is_failure(parse_http1_request_message(flood), http_parse_error::header_too_large));
 }
 
 TEST(Ruvia, http1_parse_message_ignores_empty_line_after_pipelined_body) {
@@ -1371,7 +1380,7 @@ TEST(Ruvia, http1_parse_message_ignores_empty_line_after_pipelined_body) {
     if (!first_result.complete()) {
         return;
     }
-    const auto first_header_bytes = first_result.state_.head_ready()->header_bytes();
+    const auto first_header_bytes = first_result.head_bytes_;
     const auto first_message_bytes = *first_result.message_bytes_;
     EXPECT_EQ(std::string_view(pipeline).substr(first_header_bytes, first_message_bytes - first_header_bytes), std::string_view("hello"));
     EXPECT_EQ(first_message_bytes, first_message.size());
@@ -1410,7 +1419,7 @@ TEST(Ruvia, http1_parse_header_block_too_large_rejected) {
     std::string request = "GET / HTTP/1.1\r\nX-Big: ";
     request += std::string(64 * 1024, 'a');  // pushes past the cap, no blank line
     const auto result_value = parse_http1_request_message(request);
-    EXPECT_TRUE(is_failure(result_value.state_, http_parse_error::header_too_large));
+    EXPECT_TRUE(is_failure(result_value, http_parse_error::header_too_large));
 }
 
 TEST(Ruvia, http1_parse_caps_header_field_count) {
@@ -1439,7 +1448,7 @@ TEST(Ruvia, http1_parse_caps_header_field_count) {
             EXPECT_EQ(result_value.state_.request().headers().size(), field_count);
             EXPECT_TRUE(!constructed_rejected);
         } else {
-            EXPECT_TRUE(is_failure(result_value.state_, http_parse_error::header_too_large));
+            EXPECT_TRUE(is_failure(result_value, http_parse_error::header_too_large));
             EXPECT_TRUE(constructed_rejected);
         }
     }
@@ -1449,19 +1458,19 @@ TEST(Ruvia, http1_parse_request_target_reaching_head_cap_is_uri_too_long) {
     // The cap hit inside the request-target is 414, not 431 (RFC 9112 section 3).
     std::string request = "\r\nGET /";
     request += std::string(ruvia::max_http_header_bytes, 'a');
-    EXPECT_TRUE(is_failure(parse_http1_request_message(request).state_, http_parse_error::uri_too_long));
-    EXPECT_EQ(http_parse_protocol_error(http_parse_error::uri_too_long).status(), ruvia::http_status::uri_too_long);
+    EXPECT_TRUE(is_failure(parse_http1_request_message(request), http_parse_error::uri_too_long));
+    EXPECT_EQ(make_http_protocol_error(http_parse_error::uri_too_long).status(), ruvia::http_status::uri_too_long);
 
     // A long method token or a capped request-line version stays a head-size failure.
-    EXPECT_TRUE(is_failure(parse_http1_request_message(std::string(ruvia::max_http_header_bytes, 'G')).state_, http_parse_error::header_too_large));
-    EXPECT_TRUE(is_failure(parse_http1_request_message("GET / " + std::string(ruvia::max_http_header_bytes, 'H')).state_, http_parse_error::header_too_large));
+    EXPECT_TRUE(is_failure(parse_http1_request_message(std::string(ruvia::max_http_header_bytes, 'G')), http_parse_error::header_too_large));
+    EXPECT_TRUE(is_failure(parse_http1_request_message("GET / " + std::string(ruvia::max_http_header_bytes, 'H')), http_parse_error::header_too_large));
 }
 
 TEST(Ruvia, http1_parse_invalid_request_target_rejected) {
     // An origin-form target must begin with '/'; a bare word is not a valid
     // request target for GET.
     const auto result_value = parse_http1_request_message("GET foobar HTTP/1.1\r\nHost: x\r\n\r\n");
-    EXPECT_TRUE(is_failure(result_value.state_, http_parse_error::invalid_request_target));
+    EXPECT_TRUE(is_failure(result_value, http_parse_error::invalid_request_target));
 }
 
 TEST(Ruvia, http1_parse_te_trailers_tolerates_ows) {
@@ -1497,22 +1506,24 @@ TEST(Ruvia, http1_parse_cors_metadata_preserves_body_and_pipeline_boundary) {
 TEST(Ruvia, http1_parse_head_resumes_leading_empty_lines_and_request_line_across_segments) {
     constexpr std::string_view request = "\r\n\n\r\nGET /seg HTTP/1.1\r\nHost: x\r\n\r\n";
     for (const std::size_t segment : {std::size_t{1}, std::size_t{2}, std::size_t{5}}) {
-        http1_server_request_parse_state state;
-        std::size_t search_offset = 0;
+        http1_server_request_parser state;
         std::size_t delivered = 0;
+        std::size_t header_bytes = 0;
         while (delivered < request.size()) {
             delivered = std::min(request.size(), delivered + segment);
-            state.parse_head(request.substr(0, delivered), search_offset);
-            EXPECT_TRUE(state.failure() == nullptr);
+            const auto head = state.parse(request.substr(0, delivered));
+            EXPECT_TRUE(!head.holds<ruvia::http1_server_request_parse_failure>());
             if (delivered < request.size()) {
-                EXPECT_TRUE(state.need_request_head() != nullptr);
+                EXPECT_TRUE(head.holds<ruvia::decode_need_input>());
             }
-            search_offset = delivered;
+            if (!head.holds<ruvia::decode_need_input>()) {
+                header_bytes = head.consumed_bytes();
+                break;
+            }
         }
-        const auto* head = state.head_ready();
-        EXPECT_TRUE(head != nullptr);
-        if (head != nullptr) {
-            EXPECT_EQ(head->header_bytes(), request.size());
+        EXPECT_TRUE(state.state() == ruvia::decoder_state::finished);
+        if (state.state() == ruvia::decoder_state::finished) {
+            EXPECT_EQ(header_bytes, request.size());
         }
         EXPECT_EQ(state.request().path(), std::string_view("/seg"));
     }
@@ -1521,48 +1532,46 @@ TEST(Ruvia, http1_parse_head_resumes_leading_empty_lines_and_request_line_across
 TEST(Ruvia, http1_parse_head_classifies_request_line_before_the_head_completes) {
     // TLS ClientHello prefix and other non-token first bytes fail at once.
     for (const std::string_view wire : {std::string_view("\x16\x03\x01\x00\xa5\x01", 6), std::string_view("\r\rGET"), std::string_view("\nGET / NOT-HTTP\r\nHost: x\r\n"), std::string_view("GET / HTTP/1.1 extra\r\n")}) {
-        http1_server_request_parse_state state;
-        state.parse_head(wire);
-        const auto* failure = state.failure();
+        http1_server_request_parser state;
+        const auto head = state.parse(wire);
+        const auto* failure = head.get_if<ruvia::http1_server_request_parse_failure>();
         EXPECT_TRUE(failure != nullptr);
         if (failure != nullptr) {
-            EXPECT_TRUE(failure->source() == http1_server_request_parse_failure_source::request_line);
+            EXPECT_TRUE(is_request_line_error(failure->error()));
         }
     }
-    EXPECT_TRUE(ruvia::should_drop_invalid_cleartext_http1_input(std::string_view("\x16\x03\x01\x00\xa5\x01", 6), http1_server_request_parse_failure_source::request_line));
-    EXPECT_TRUE(ruvia::should_drop_invalid_cleartext_http1_input("\r\nGET / NOT-HTTP\r\nHost: x\r\n", http1_server_request_parse_failure_source::request_line));
-    EXPECT_TRUE(!ruvia::should_drop_invalid_cleartext_http1_input("GET / HTTP/9.0\r\n", http1_server_request_parse_failure_source::request_line));
+    EXPECT_TRUE(ruvia::should_drop_invalid_cleartext_http1_input(std::string_view("\x16\x03\x01\x00\xa5\x01", 6), http_parse_error::invalid_request_line));
+    EXPECT_TRUE(ruvia::should_drop_invalid_cleartext_http1_input("\r\nGET / NOT-HTTP\r\nHost: x\r\n", http_parse_error::invalid_request_line));
+    EXPECT_TRUE(!ruvia::should_drop_invalid_cleartext_http1_input("GET / HTTP/9.0\r\n", http_parse_error::unsupported_http_version));
     // A line naming an HTTP/ version anywhere is HTTP and gets a 400; a line
     // without one, separator or not, is not.
-    EXPECT_TRUE(!ruvia::should_drop_invalid_cleartext_http1_input("GET / HTTP/1.1 extra\r\n", http1_server_request_parse_failure_source::request_line));
-    EXPECT_TRUE(ruvia::should_drop_invalid_cleartext_http1_input("SSH-2.0-OpenSSH_9.6\r\n", http1_server_request_parse_failure_source::request_line));
+    EXPECT_TRUE(!ruvia::should_drop_invalid_cleartext_http1_input("GET / HTTP/1.1 extra\r\n", http_parse_error::invalid_request_line));
+    EXPECT_TRUE(ruvia::should_drop_invalid_cleartext_http1_input("SSH-2.0-OpenSSH_9.6\r\n", http_parse_error::invalid_request_line));
     // A bare LF inside the request-line is invalid, but the HTTP/ version after
     // it still identifies an HTTP peer.
-    EXPECT_TRUE(!ruvia::should_drop_invalid_cleartext_http1_input("GET /\nHTTP/1.1\r\nHost: x\r\n\r\n", http1_server_request_parse_failure_source::request_line));
+    EXPECT_TRUE(!ruvia::should_drop_invalid_cleartext_http1_input("GET /\nHTTP/1.1\r\nHost: x\r\n\r\n", http_parse_error::invalid_request_line));
     // RFC 9112 sections 2.2 and 3: an invalid request-line that still names an
     // HTTP version earns a 400, whatever its first byte or version case.
     for (const std::string_view http_like : {" GET /hello HTTP/1.1\r\nHost: x\r\n\r\n", "GET /hello http/1.1\r\nHost: x\r\n\r\n", "GET /hello FOO/1.1\r\nHost: x\r\n\r\n", " GET /hello HTTP/1.1"}) {
-        http1_server_request_parse_state state;
-        state.parse_head(http_like);
-        const auto* failure = state.failure();
+        http1_server_request_parser state;
+        const auto head = state.parse(http_like);
+        const auto* failure = head.get_if<ruvia::http1_server_request_parse_failure>();
         EXPECT_TRUE(failure != nullptr);
         if (failure != nullptr) {
-            EXPECT_TRUE(failure->source() == http1_server_request_parse_failure_source::request_line);
+            EXPECT_TRUE(is_request_line_error(failure->error()));
         }
-        EXPECT_TRUE(!ruvia::should_drop_invalid_cleartext_http1_input(http_like, http1_server_request_parse_failure_source::request_line));
+        EXPECT_TRUE(!ruvia::should_drop_invalid_cleartext_http1_input(http_like, http_parse_error::invalid_request_line));
     }
 
     {
-        http1_server_request_parse_state state;
-        state.parse_head("GET / HTTP/9.0\r\nHost: x\r\n");
-        EXPECT_TRUE(is_failure(state, http_parse_error::unsupported_http_version));
+        http1_server_request_parser state;
+        EXPECT_TRUE(is_failure(state.parse("GET / HTTP/9.0\r\nHost: x\r\n"), http_parse_error::unsupported_http_version));
     }
     // A valid request-line waits for the rest of the head; an incomplete line
     // is not classified yet.
     for (const std::string_view partial : {std::string_view("G"), std::string_view("GET / HTTP/1.1"), std::string_view("GET / HTTP/1.1\r"), std::string_view("GET / HTTP/1.1\r\nHost: x\r\n"), std::string_view("\r\n\r")}) {
-        http1_server_request_parse_state state;
-        state.parse_head(partial);
-        EXPECT_TRUE(state.need_request_head() != nullptr);
+        http1_server_request_parser state;
+        EXPECT_TRUE(state.parse(partial).holds<ruvia::decode_need_input>());
     }
 }
 
@@ -1570,9 +1579,8 @@ TEST(Ruvia, http1_parse_head_rejects_bare_lf_in_field_section_before_the_head_co
     // RFC 9112 section 2.2: a bare LF that is not recognized as a line
     // terminator makes the head invalid; it can never be completed by CRLFCRLF.
     for (const std::string_view wire : {std::string_view("GET / HTTP/1.1\r\nHost: a\n\r\n"), std::string_view("GET / HTTP/1.1\r\nHost: a\r\nX: b\n")}) {
-        http1_server_request_parse_state whole;
-        whole.parse_head(wire);
-        EXPECT_TRUE(is_failure(whole, http_parse_error::invalid_header));
+        http1_server_request_parser whole;
+        EXPECT_TRUE(is_failure(whole.parse(wire), http_parse_error::invalid_header));
 
         std::size_t bare_line_feed = 0;
         for (std::size_t index = 1; index < wire.size(); ++index) {
@@ -1581,57 +1589,55 @@ TEST(Ruvia, http1_parse_head_rejects_bare_lf_in_field_section_before_the_head_co
                 break;
             }
         }
-        http1_server_request_parse_state incremental;
+        http1_server_request_parser incremental;
+        std::optional<http_parse_error> incremental_error;
         for (std::size_t size = 1; size <= wire.size(); ++size) {
-            incremental.parse_head(wire.substr(0, size), size - 1);
-            if (incremental.failure() != nullptr) {
+            const auto head = incremental.parse(wire.substr(0, size));
+            if (const auto* failure = head.get_if<ruvia::http1_server_request_parse_failure>()) {
+                incremental_error = failure->error();
                 EXPECT_EQ(size, bare_line_feed + 1);
                 break;
             }
+            if (!head.holds<ruvia::decode_need_input>()) {
+                break;
+            }
         }
-        EXPECT_TRUE(is_failure(incremental, http_parse_error::invalid_header));
+        EXPECT_TRUE(is_failure(incremental_error, http_parse_error::invalid_header));
     }
 }
 
 TEST(Ruvia, http1_parse_message_classifies_cleartext_request_line_failures) {
     constexpr std::string_view invalid_request_line = "GET / NOT-HTTP\r\n\r\n";
     const auto parsed_line = parse_http1_request_message(invalid_request_line);
-    const auto* line_failure = parsed_line.state_.failure();
-    EXPECT_TRUE(line_failure != nullptr);
-    if (line_failure != nullptr) {
-        EXPECT_TRUE(line_failure->source() == ruvia::http1_server_request_parse_failure_source::request_line);
-        EXPECT_TRUE(ruvia::should_drop_invalid_cleartext_http1_input(invalid_request_line, line_failure->source()));
+    const auto& line_failure = parsed_line.head_error_;
+    EXPECT_TRUE(line_failure.has_value());
+    if (line_failure) {
+        EXPECT_TRUE(is_request_line_error(*line_failure));
+        EXPECT_TRUE(ruvia::should_drop_invalid_cleartext_http1_input(invalid_request_line, *line_failure));
     }
 
     const auto malformed_header = parse_http1_request_message("GET / HTTP/1.1\r\nBad Header\r\n\r\n");
-    const auto* message_failure = malformed_header.state_.failure();
-    EXPECT_TRUE(message_failure != nullptr);
-    if (message_failure != nullptr) {
-        EXPECT_TRUE(message_failure->source() == ruvia::http1_server_request_parse_failure_source::message);
-        EXPECT_TRUE(!ruvia::should_drop_invalid_cleartext_http1_input("GET / HTTP/1.1\r\nBad Header\r\n\r\n", message_failure->source()));
+    const auto& message_failure = malformed_header.head_error_;
+    EXPECT_TRUE(message_failure.has_value());
+    if (message_failure) {
+        EXPECT_TRUE(!is_request_line_error(*message_failure));
+        EXPECT_TRUE(!ruvia::should_drop_invalid_cleartext_http1_input("GET / HTTP/1.1\r\nBad Header\r\n\r\n", *message_failure));
     }
 }
 
 TEST(Ruvia, http1_request_body_plan_has_one_framing_truth) {
     const auto none_message = parse_http1_request_message("GET / HTTP/1.1\r\nHost: x\r\n\r\n");
     const auto& none = none_message.state_.body_plan();
-    EXPECT_TRUE(none.without_content() != nullptr);
-    EXPECT_TRUE(none.known_length() == nullptr);
-    EXPECT_TRUE(none.chunked() == nullptr);
-    EXPECT_TRUE(!none.requires_consumption());
+    EXPECT_TRUE(none.framing().kind() == http1_framing_kind::no_content);
+    EXPECT_TRUE(!none.framing().requires_consumption());
 
     const auto empty_length_message = parse_http1_request_message(
         "POST / HTTP/1.1\r\nHost: x\r\n"
         "Expect: 100-continue\r\nContent-Length: 0\r\n\r\n");
     const auto& empty_length = empty_length_message.state_.body_plan();
-    const auto* known_length = empty_length.known_length();
-    EXPECT_TRUE(known_length != nullptr);
-    EXPECT_TRUE(empty_length.without_content() == nullptr);
-    EXPECT_TRUE(empty_length.chunked() == nullptr);
-    if (known_length != nullptr) {
-        EXPECT_EQ(known_length->content_length(), std::size_t{0});
-    }
-    EXPECT_TRUE(!empty_length.requires_consumption());
+    EXPECT_TRUE(empty_length.framing().kind() == http1_framing_kind::known_length);
+    EXPECT_EQ(empty_length.framing().content_length(), std::size_t{0});
+    EXPECT_TRUE(!empty_length.framing().requires_consumption());
     EXPECT_TRUE(empty_length.expectations().has_continue());
     const auto empty_expectation_plan = empty_length.expectation_plan(http_unsupported_expectation_policy::reject);
     EXPECT_TRUE(empty_expectation_plan == ruvia::http_server_expectation_plan::no_action);
@@ -1641,16 +1647,11 @@ TEST(Ruvia, http1_request_body_plan_has_one_framing_truth) {
         "Expect: 100-continue\r\n"
         "Transfer-Encoding: gzip, chunked\r\n\r\n0\r\n\r\n");
     const auto& compressed_chunked = compressed_chunked_message.state_.body_plan();
-    const auto* chunked_body = compressed_chunked.chunked();
-    EXPECT_TRUE(chunked_body != nullptr);
-    EXPECT_TRUE(compressed_chunked.without_content() == nullptr);
-    EXPECT_TRUE(compressed_chunked.known_length() == nullptr);
-    EXPECT_TRUE(compressed_chunked.requires_consumption());
+    EXPECT_TRUE(compressed_chunked.framing().kind() == http1_framing_kind::chunked);
+    EXPECT_TRUE(compressed_chunked.framing().requires_consumption());
     const auto compressed_expectation_plan = compressed_chunked.expectation_plan(http_unsupported_expectation_policy::reject);
     EXPECT_TRUE(compressed_expectation_plan == ruvia::http_server_expectation_plan::send_continue);
-    if (chunked_body != nullptr) {
-        EXPECT_EQ(chunked_body->transfer_codings().size(), std::size_t{1});
-    }
+    EXPECT_EQ(compressed_chunked.framing().transfer_codings().size(), std::size_t{1});
 }
 
 TEST(Ruvia, http_authority_host_public_parse_preserves_ip_literal_brackets) {

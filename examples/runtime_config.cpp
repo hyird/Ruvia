@@ -117,35 +117,35 @@ int main() {
         if (cert && key) {
             std::string password;
             assign_if_present(password, env_value.get("RUVIA_TLS_PASSWORD"));
-            ruvia::listen_config listener_value{
-                .address_ = "0.0.0.0",
-                .http_ = http_port,
-                .https_ = env_value.get<std::uint16_t>("RUVIA_HTTPS_PORT").value_or(8443),
-                .tls_ =
+            ruvia::tls_fixed_identities identities{
+                .primary_ =
                     {
-                        .identity_ =
-                            {
-                                .certificate_chain_file_ = *cert,
-                                .private_key_file_ = *key,
-                                .private_key_password_ = password,
-                            },
+                        .certificate_chain_file_ = *cert,
+                        .private_key_file_ = *key,
+                        .private_key_password_ = password,
                     },
-                .auto_https_redirect_ = env_value.get<bool>("RUVIA_AUTO_HTTPS").value_or(false),
             };
-            if (const auto client_ca = env_value.path("RUVIA_TLS_CLIENT_CA")) {
-                listener_value.tls_.client_certificates_.ca_file_ = *client_ca;
-                listener_value.tls_.client_certificates_.requirement_ = env_value.get<bool>("RUVIA_REQUIRE_CLIENT_CERT").value_or(false) ? ruvia::tls_client_certificate_requirement::required : ruvia::tls_client_certificate_requirement::optional;
-            }
             if (const auto host = env_value.get("RUVIA_SNI_HOST")) {
-                // Each SNI entry has its own certificate/key. The default listener
-                // certificate remains the fallback for other server names.
-                listener_value.tls_.sni_.push_back({
+                // Each SNI entry has its own certificate/key. The primary
+                // identity remains the fallback for other server names.
+                identities.sni_.push_back({
                     .host_ = std::string(*host),
                     .identity_ = {
                         .certificate_chain_file_ = env_value.path("RUVIA_SNI_CERT").value_or(std::filesystem::path{}),
                         .private_key_file_ = env_value.path("RUVIA_SNI_KEY").value_or(std::filesystem::path{}),
                     },
                 });
+            }
+            ruvia::listen_config listener_value{
+                .address_ = "0.0.0.0",
+                .http_ = http_port,
+                .https_ = env_value.get<std::uint16_t>("RUVIA_HTTPS_PORT").value_or(8443),
+                .tls_ = {.identities_ = std::move(identities)},
+                .auto_https_redirect_ = env_value.get<bool>("RUVIA_AUTO_HTTPS").value_or(false),
+            };
+            if (const auto client_ca = env_value.path("RUVIA_TLS_CLIENT_CA")) {
+                listener_value.tls_.client_certificates_.ca_file_ = *client_ca;
+                listener_value.tls_.client_certificates_.requirement_ = env_value.get<bool>("RUVIA_REQUIRE_CLIENT_CERT").value_or(false) ? ruvia::tls_client_certificate_requirement::required : ruvia::tls_client_certificate_requirement::optional;
             }
             app.listen(std::move(listener_value));
         } else {

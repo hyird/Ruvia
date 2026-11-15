@@ -21,9 +21,10 @@
 
 #include "borrowed_text.h"
 #include "checked_integer.h"
+#include "client_transport_config.h"
 #include "entity_storage.h"
 #include "event_loop.h"
-#include "http_client_types.h"
+#include "ip_address.h"
 #include "model_value.h"
 #include "operation_options.h"
 #include "operation_scope.h"

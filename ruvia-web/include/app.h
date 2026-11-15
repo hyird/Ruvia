@@ -34,8 +34,8 @@
 #include "static_root.h"
 #include "task.h"
 #include "timeout_duration.h"
+#include "web_worker.h"
 #include "worker_ref.h"
-#include "worker_state.h"
 #ifdef RUVIA_ENABLE_DATABASE
 #include "db_executor.h"
 #endif

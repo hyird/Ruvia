@@ -43,7 +43,7 @@ struct http_request_admission_policy final {
     std::size_t max_buffered_body_bytes_{};
     bool apply_rate_limit_{true};
     // RFC 9110 §7.4: answer 421 when the connection cannot carry the target
-    // (decide_http_target_origin against the services' transport facts).
+    // (plan_http_target_origin against the services' transport facts).
     bool verify_target_origin_{true};
     [[nodiscard]] static http_request_admission_policy server(const http_server_options& options) noexcept;
 };

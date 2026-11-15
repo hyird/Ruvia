@@ -21,10 +21,10 @@
 #include "stop_token.h"
 #include "task.h"
 #include "task_scope.h"
+#include "web_worker.h"
 #include "worker_capabilities.h"
 #include "worker_ref.h"
 #include "worker_runtime.h"
-#include "worker_state.h"
 #ifdef RUVIA_ENABLE_DATABASE
 #include "db_executor.h"
 #endif

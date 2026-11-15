@@ -13,6 +13,7 @@
 #include <vector>
 
 #include "borrowed_text.h"
+#include "decode_step.h"
 #include "http_io_buffer.h"
 #include "http_protocol.h"
 #include "http_status.h"
@@ -148,79 +149,19 @@ struct multipart_parse_options final {
     std::size_t max_metadata_bytes_{1024 * 1024};
 };
 
-class multipart_boundary_not_applicable final {
-private:
-    friend class multipart_boundary_parse_result;
-
-    constexpr multipart_boundary_not_applicable() noexcept = default;
+// Why a Content-Type value yields no multipart boundary: it names another
+// media type, or its multipart/form-data declaration is malformed.
+enum class multipart_boundary_error : std::uint8_t {
+    not_form_data,
+    invalid_boundary,
 };
 
-class multipart_boundary_parse_failure final {
-public:
-    [[nodiscard]] http_protocol_error protocol_error() const noexcept {
-        return http_protocol_error(http_status::bad_request, "multipart_invalid_boundary", "invalid multipart boundary");
-    }
-
-private:
-    friend class multipart_boundary_parse_result;
-
-    constexpr multipart_boundary_parse_failure() noexcept = default;
-};
-
-// Content-Type boundary extraction distinguishes another media type from a
-// malformed multipart/form-data declaration. The successful alternative owns
-// its decoded boundary bytes.
-class multipart_boundary_parse_result final {
-public:
-    multipart_boundary_parse_result(const multipart_boundary_parse_result&) = default;
-    multipart_boundary_parse_result(multipart_boundary_parse_result&&) noexcept = default;
-    multipart_boundary_parse_result& operator=(const multipart_boundary_parse_result&) = delete;
-    multipart_boundary_parse_result& operator=(multipart_boundary_parse_result&&) = delete;
-
-    [[nodiscard]] constexpr const multipart_boundary* boundary() const& noexcept RUVIA_LIFETIMEBOUND {
-        return std::get_if<multipart_boundary>(&value_);
-    }
-    const multipart_boundary* boundary() const&& = delete;
-
-    [[nodiscard]] constexpr const multipart_boundary_not_applicable* not_applicable() const& noexcept RUVIA_LIFETIMEBOUND {
-        return std::get_if<multipart_boundary_not_applicable>(&value_);
-    }
-    const multipart_boundary_not_applicable* not_applicable() const&& = delete;
-
-    [[nodiscard]] constexpr const multipart_boundary_parse_failure* failure() const& noexcept RUVIA_LIFETIMEBOUND {
-        return std::get_if<multipart_boundary_parse_failure>(&value_);
-    }
-    const multipart_boundary_parse_failure* failure() const&& = delete;
-
-private:
-    friend multipart_boundary_parse_result parse_multipart_boundary(std::string_view);
-
-    using value_type = std::variant<multipart_boundary, multipart_boundary_not_applicable, multipart_boundary_parse_failure>;
-
-    explicit multipart_boundary_parse_result(multipart_boundary boundary) :
-        value_(boundary) {}
-
-    [[nodiscard]] static constexpr multipart_boundary_parse_result make_not_applicable() noexcept {
-        return multipart_boundary_parse_result(multipart_boundary_not_applicable());
-    }
-
-    [[nodiscard]] static constexpr multipart_boundary_parse_result make_failure() noexcept {
-        return multipart_boundary_parse_result(multipart_boundary_parse_failure());
-    }
-
-    explicit constexpr multipart_boundary_parse_result(multipart_boundary_not_applicable not_applicable) noexcept :
-        value_(not_applicable) {}
-
-    explicit constexpr multipart_boundary_parse_result(multipart_boundary_parse_failure failure) noexcept :
-        value_(failure) {}
-
-    value_type value_;
-};
+[[nodiscard]] http_protocol_error make_http_protocol_error(multipart_boundary_error error) noexcept;
 
 // Extracts the RFC 2046 boundary parameter from multipart/form-data. MIME
 // quoted-pairs are decoded into the owned multipart_boundary value. Empty HTTP
 // parameter slots are ignored; a nonempty, unique boundary remains required.
-[[nodiscard]] multipart_boundary_parse_result parse_multipart_boundary(std::string_view content_type_value);
+[[nodiscard]] std::variant<multipart_boundary, multipart_boundary_error> parse_multipart_boundary(std::string_view content_type_value);
 
 enum class multipart_chunk_phase : std::uint8_t {
     complete,
@@ -274,18 +215,6 @@ private:
     bool filename_present_{false};
 };
 
-class multipart_poll_need_input final {
-private:
-    friend class multipart_poll_result;
-    constexpr multipart_poll_need_input() noexcept = default;
-};
-
-class multipart_poll_done final {
-private:
-    friend class multipart_poll_result;
-    constexpr multipart_poll_done() noexcept = default;
-};
-
 enum class multipart_parse_error : std::uint8_t {
     incomplete_body,
     invalid_delimiter,
@@ -299,124 +228,20 @@ enum class multipart_parse_error : std::uint8_t {
     metadata_too_large,
 };
 
-class multipart_poll_failure final {
-public:
-    [[nodiscard]] http_protocol_error protocol_error() const noexcept;
+[[nodiscard]] http_protocol_error make_http_protocol_error(multipart_parse_error error) noexcept;
 
-private:
-    friend class multipart_poll_result;
-    friend class multipart_body_parse_result;
+using multipart_parse_failure = decode_failure<multipart_parse_error>;
 
-    explicit constexpr multipart_poll_failure(multipart_parse_error error) noexcept :
-        error_(error) {}
+// One poll() outcome: more input needed, a borrowed part chunk, the end of the
+// body, or a failure. The parser owns its buffered input, so consumed_bytes()
+// is always zero. All borrowed views remain valid only until the next feed(),
+// finish_input(), poll() or reset() call.
+using multipart_poll_result = decode_step<decode_need_input, multipart_stream_part, decode_complete, multipart_parse_failure>;
 
-    multipart_parse_error error_;
-};
-
-// Incremental multipart parsing has four mutually exclusive outcomes. Only
-// the part alternative exposes borrowed part metadata/body, while only a
-// failure exposes a protocol error. Need-input and done are payload-free
-// lifecycle signals. All borrowed views remain valid only until the next
-// feed(), finish_input(), or poll() call.
-class multipart_poll_result final {
-public:
-    multipart_poll_result(const multipart_poll_result&) = default;
-    multipart_poll_result(multipart_poll_result&&) noexcept = default;
-    multipart_poll_result& operator=(const multipart_poll_result&) = delete;
-    multipart_poll_result& operator=(multipart_poll_result&&) = delete;
-
-    [[nodiscard]] constexpr const multipart_poll_need_input* need_input() const& noexcept RUVIA_LIFETIMEBOUND {
-        return std::get_if<multipart_poll_need_input>(&value_);
-    }
-    const multipart_poll_need_input* need_input() const&& = delete;
-
-    [[nodiscard]] constexpr const multipart_stream_part* part() const& noexcept RUVIA_LIFETIMEBOUND {
-        return std::get_if<multipart_stream_part>(&value_);
-    }
-    const multipart_stream_part* part() const&& = delete;
-
-    [[nodiscard]] constexpr const multipart_poll_done* done() const& noexcept RUVIA_LIFETIMEBOUND {
-        return std::get_if<multipart_poll_done>(&value_);
-    }
-    const multipart_poll_done* done() const&& = delete;
-
-    [[nodiscard]] constexpr const multipart_poll_failure* failure() const& noexcept RUVIA_LIFETIMEBOUND {
-        return std::get_if<multipart_poll_failure>(&value_);
-    }
-    const multipart_poll_failure* failure() const&& = delete;
-
-private:
-    friend class multipart_parser;
-
-    using value_type = std::variant<multipart_poll_need_input, multipart_stream_part, multipart_poll_done, multipart_poll_failure>;
-
-    explicit constexpr multipart_poll_result(multipart_poll_need_input value) noexcept :
-        value_(value) {}
-
-    explicit constexpr multipart_poll_result(multipart_stream_part value) noexcept :
-        value_(value) {}
-
-    explicit constexpr multipart_poll_result(multipart_poll_done value) noexcept :
-        value_(value) {}
-
-    explicit constexpr multipart_poll_result(multipart_poll_failure value) noexcept :
-        value_(value) {}
-
-    [[nodiscard]] static constexpr multipart_poll_result make_need_input() noexcept {
-        return multipart_poll_result(multipart_poll_need_input());
-    }
-
-    [[nodiscard]] static constexpr multipart_poll_result make_part(multipart_stream_part part) noexcept {
-        return multipart_poll_result(part);
-    }
-
-    [[nodiscard]] static constexpr multipart_poll_result make_done() noexcept {
-        return multipart_poll_result(multipart_poll_done());
-    }
-
-    [[nodiscard]] static constexpr multipart_poll_result make_failure(multipart_parse_error error) noexcept {
-        return multipart_poll_result(multipart_poll_failure(error));
-    }
-
-    value_type value_;
-};
-
-// One-shot multipart parsing yields either every part or the first protocol
-// failure; malformed or over-limit peer bytes are values, not exceptions.
-class multipart_body_parse_result final {
-public:
-    multipart_body_parse_result(const multipart_body_parse_result&) = default;
-    multipart_body_parse_result(multipart_body_parse_result&&) noexcept = default;
-    multipart_body_parse_result& operator=(const multipart_body_parse_result&) = delete;
-    multipart_body_parse_result& operator=(multipart_body_parse_result&&) = delete;
-
-    [[nodiscard]] const std::vector<multipart_part>* parts() const& noexcept RUVIA_LIFETIMEBOUND {
-        return std::get_if<std::vector<multipart_part>>(&value_);
-    }
-    const std::vector<multipart_part>* parts() const&& = delete;
-
-    [[nodiscard]] const multipart_poll_failure* failure() const& noexcept RUVIA_LIFETIMEBOUND {
-        return std::get_if<multipart_poll_failure>(&value_);
-    }
-    const multipart_poll_failure* failure() const&& = delete;
-
-    // Throws std::logic_error when the result holds a failure.
-    [[nodiscard]] std::vector<multipart_part> take_parts() &&;
-
-private:
-    friend multipart_body_parse_result parse_multipart_body(std::string_view, multipart_parse_options);
-
-    explicit multipart_body_parse_result(std::vector<multipart_part> parts) noexcept :
-        value_(std::in_place_type<std::vector<multipart_part>>, std::move(parts)) {}
-
-    explicit multipart_body_parse_result(multipart_poll_failure failure) noexcept :
-        value_(failure) {}
-
-    explicit multipart_body_parse_result(multipart_parse_error error) noexcept :
-        value_(multipart_poll_failure(error)) {}
-
-    std::variant<std::vector<multipart_part>, multipart_poll_failure> value_;
-};
+// One-shot multipart parsing yields either every part or the first failure
+// (the one poll() reports); malformed or over-limit peer bytes are values, not
+// exceptions.
+using multipart_body_parse_result = std::variant<std::vector<multipart_part>, multipart_parse_error>;
 
 class multipart_parser final {
 public:
@@ -431,14 +256,19 @@ public:
     // the latest part body. Allocation failure leaves that body valid for retry.
     // finish_input() marks the enclosing HTTP body's end so a close delimiter
     // ending exactly at EOF can be distinguished from a line split across chunks.
-    // A protocol failure is terminal: later poll() calls repeat the exact error
-    // and feed() rejects further bytes.
+    // A failure is terminal: later poll() calls repeat the exact error. feed()
+    // throws std::logic_error once the parser is not active or input ended.
     void feed(std::string_view chunk);
     void finish_input() noexcept;
 
     // If owning part metadata throws, the part stays pending without consuming
     // its limits. poll() may be retried after allocations become available.
     [[nodiscard]] multipart_poll_result poll();
+
+    [[nodiscard]] decoder_state state() const noexcept;
+    // Starts a new body with the constructed boundary and limits, keeping
+    // buffer capacity.
+    void reset() noexcept;
 
 private:
     struct complete_input_tag_type final {};
@@ -480,6 +310,8 @@ private:
     std::string current_headers_;
     state_type state_{progress_state_type::boundary};
     std::size_t pending_erase_bytes_{0};
+    std::size_t max_parts_;
+    std::size_t max_metadata_bytes_;
     std::size_t remaining_parts_;
     std::size_t remaining_metadata_bytes_;
     std::size_t header_scan_offset_{0};

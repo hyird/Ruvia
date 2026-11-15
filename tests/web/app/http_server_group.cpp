@@ -141,7 +141,7 @@ ruvia::listen_config plain(std::uint16_t port) {
 }
 
 ruvia::listen_config secure(std::uint16_t tcp, std::uint16_t udp, const ruvia::test::tls_identity& identity) {
-    ruvia::listen_config config{.address_ = "127.0.0.1", .https_ = tcp, .tls_ = {.identity_ = {.certificate_chain_file_ = identity.ca_file_, .private_key_file_ = identity.private_key_file()}}, .dispatch_ = ruvia::listener_dispatch::request_stream};
+    ruvia::listen_config config{.address_ = "127.0.0.1", .https_ = tcp, .tls_ = {.identities_ = ruvia::tls_fixed_identities{.primary_ = {.certificate_chain_file_ = identity.ca_file_, .private_key_file_ = identity.private_key_file()}}}, .dispatch_ = ruvia::listener_dispatch::request_stream};
 #if defined(RUVIA_ENABLE_HTTP3)
     if (udp != 0) {
         config.http3_ = udp;
@@ -424,7 +424,7 @@ TEST(Ruvia, independent_group_shared_http3_endpoint_survives_repeated_migration_
     ASSERT_EQ(initial.status_, 200);
     ASSERT_FALSE(initial.body_.empty());
     const ruvia::test::tls_identity rotated("localhost", "DNS:localhost,IP:127.0.0.1");
-    runtime.loops_[0].start(group.replace_tls_identities(runtime.loops_[0].worker(), {.address_ = "127.0.0.1", .port_ = tcp.endpoint().port()}, {.identity_ = {.certificate_chain_file_ = rotated.ca_file_, .private_key_file_ = rotated.private_key_file()}})).get();
+    runtime.loops_[0].start(group.replace_tls_identities(runtime.loops_[0].worker(), {.address_ = "127.0.0.1", .port_ = tcp.endpoint().port()}, {.identities_ = ruvia::tls_fixed_identities{.primary_ = {.certificate_chain_file_ = rotated.ca_file_, .private_key_file_ = rotated.private_key_file()}}})).get();
     {
         ruvia::test::http3_test_client renewed({asio::ip::address_v4::loopback(), udp.endpoint().port()}, rotated.ca_file_, "localhost", 5s);
         EXPECT_EQ(renewed.request("GET", "/worker").status_, 200);

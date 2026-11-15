@@ -302,7 +302,7 @@ struct connection_work_set final {
     connection_read_buffer read_buffer_;
     http_response_head_buffer response_head_;
     http1_deferred_access_log deferred_access_;
-    http1_server_request_parse_state parsed_;
+    http1_server_request_parser parsed_;
     route_resolution route_resolution_;
 };
 
@@ -441,7 +441,7 @@ private:
 class http1_session_request_completion final {
 public:
     [[nodiscard]] static http1_session_request_completion make_buffered_closing(http1_request_connection_plan connection_plan) noexcept {
-        if (connection_plan.disposition() != http1_close_policy::close_after_response) {
+        if (connection_plan.close_policy() != http1_close_policy::close_after_response) {
             std::terminate();
         }
         return http1_session_request_completion(http1_buffered_response_ready{}, connection_plan, http1_request_buffer_completion(http1_request_buffer_discarded{}));
@@ -452,7 +452,7 @@ public:
     }
 
     [[nodiscard]] static http1_session_request_completion make_buffered_pipeline_restore(http1_request_connection_plan connection_plan, borrowed_text pipeline) noexcept {
-        if (connection_plan.disposition() != http1_close_policy::allow_reuse) {
+        if (connection_plan.close_policy() != http1_close_policy::allow_reuse) {
             std::terminate();
         }
         return http1_session_request_completion(http1_buffered_response_ready{}, connection_plan, http1_request_buffer_completion(http1_request_buffer_pipeline_restore(pipeline.view())));
@@ -463,7 +463,7 @@ public:
     }
 
     [[nodiscard]] static http1_session_request_completion make_committed_stream_pipeline_restore(http1_request_connection_plan connection_plan, http_status_code status, borrowed_text pipeline) noexcept {
-        if (connection_plan.disposition() != http1_close_policy::allow_reuse) {
+        if (connection_plan.close_policy() != http1_close_policy::allow_reuse) {
             std::terminate();
         }
         return http1_session_request_completion(http1_committed_stream_response(status, false), connection_plan, http1_request_buffer_completion(http1_request_buffer_pipeline_restore(pipeline.view())));
@@ -516,7 +516,7 @@ public:
             return make_buffered_unrestored(connection_plan, compaction->consumed_bytes());
         }
         if (const auto* pipeline = buffer_completion_.pipeline_restore()) {
-            if (connection_plan.disposition() == http1_close_policy::close_after_response) {
+            if (connection_plan.close_policy() == http1_close_policy::close_after_response) {
                 return make_buffered_closing(connection_plan);
             }
             return make_buffered_pipeline_restore(connection_plan, pipeline->pipeline());
@@ -528,7 +528,7 @@ private:
     using value_type = std::variant<http1_buffered_response_ready, http1_committed_stream_response, http1_rejected_final_response>;
 
     [[nodiscard]] static http1_request_buffer_completion unshifted_buffer_completion(http1_request_connection_plan connection_plan, std::size_t consumed_bytes) noexcept {
-        if (connection_plan.disposition() == http1_close_policy::close_after_response) {
+        if (connection_plan.close_policy() == http1_close_policy::close_after_response) {
             return http1_request_buffer_completion(http1_request_buffer_discarded{});
         }
         return http1_request_buffer_completion(http1_request_buffer_compaction(consumed_bytes));

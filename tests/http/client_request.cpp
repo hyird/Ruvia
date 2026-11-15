@@ -24,9 +24,9 @@
 #include "http1_server_response.h"
 #include "http_authority.h"
 #include "http_client_redirect.h"
-#include "http_client_request_view.h"
 #include "http_header.h"
 #include "http_request.h"
+#include "http_request_head_view.h"
 
 namespace {
 
@@ -40,11 +40,10 @@ static_assert(!content_bytes_binds<std::string>);
 using ruvia::http1_client_request_buffer_too_small;
 using ruvia::http1_client_request_prepare_error;
 using ruvia::http1_client_request_wire_policy;
-using ruvia::http1_client_request_writer;
 using ruvia::http1_close_policy;
-using ruvia::http_client_request_view;
 using ruvia::http_origin_view;
 using ruvia::http_request_content_plan;
+using ruvia::http_request_head_view;
 using ruvia::is_valid_http_origin_form_target;
 using ruvia::prepared_http1_client_request;
 
@@ -63,15 +62,15 @@ TEST(Ruvia, http_client_origin_target_validation) {
 template <std::size_t n = 2048>
 struct prepared_fixture final {
     std::array<char, n> buffer_{};
-    std::variant<prepared_http1_client_request, http1_client_request_buffer_too_small, http1_client_request_prepare_error> result_;
+    ruvia::http1_client_request_prepare_result result_;
 
-    prepared_fixture(const http_origin_view& origin, const http_client_request_view& request, http1_client_request_wire_policy policy = http1_client_request_wire_policy{}) :
-        result_(http1_client_request_writer().prepare(origin, request, buffer_, policy)) {}
+    prepared_fixture(const http_origin_view& origin, const http_request_head_view& request, http1_client_request_wire_policy policy = http1_client_request_wire_policy{}) :
+        result_(prepare_http1_client_request(origin, request, buffer_, policy)) {}
 };
 
-[[nodiscard]] http1_client_request_prepare_error prepare_error(const http_client_request_view& request, http1_client_request_wire_policy policy = http1_client_request_wire_policy{}) {
+[[nodiscard]] http1_client_request_prepare_error prepare_error(const http_request_head_view& request, http1_client_request_wire_policy policy = http1_client_request_wire_policy{}) {
     std::array<char, 512> buffer;
-    const auto result_value = http1_client_request_writer().prepare(http_origin_view::https({.host_ = "example.test"}), request, buffer, policy);
+    const auto result_value = prepare_http1_client_request(http_origin_view::https({.host_ = "example.test"}), request, buffer, policy);
     const auto* failure = std::get_if<http1_client_request_prepare_error>(&result_value);
     if (failure == nullptr) {
         throw std::runtime_error("test expected request preparation to fail");
@@ -81,32 +80,30 @@ struct prepared_fixture final {
 
 auto prepare_field_request(unsigned entry, std::span<const ruvia::http_header_view> fields, std::span<char> output, ruvia::http_request_field_source source) {
     const auto origin = http_origin_view::https({.host_ = "example.test"});
-    const http1_client_request_wire_policy policy{.field_source_ = source};
-    const http1_client_request_writer writer;
     switch (entry) {
         case 0:
-            return writer.prepare(origin, http_client_request_view{.headers_ = fields}, output, policy);
+            return prepare_http1_client_request(origin, http_request_head_view{.headers_ = fields, .field_source_ = source}, output);
         case 1:
-            return writer.prepare(origin, http_client_request_view{.method_ = "POST", .headers_ = fields, .content_ = http_request_content_plan::streaming(0)}, output, policy);
-        case 2:
-            return writer.prepare_connect(origin, fields, output, policy);
+            return prepare_http1_client_request(origin, http_request_head_view{.method_ = "POST", .headers_ = fields, .content_ = http_request_content_plan::streaming(0), .field_source_ = source}, output);
         default:
-            return writer.prepare_connect("example.test:443", fields, output, policy);
+            return prepare_http1_client_request(origin, http_request_head_view{.method_ = "CONNECT", .authority_ = "example.test:443", .headers_ = fields, .field_source_ = source}, output);
     }
 }
 }  // namespace
 
-TEST(Ruvia, http1_client_request_writer_emits_one_canonical_scatter_gather_plan) {
+TEST(Ruvia, http1_client_request_preparation_emits_one_canonical_scatter_gather_plan) {
     const ruvia::http_header_view headers[] = {
         {"X-Test", "one"},
     };
-    http_client_request_view request;
+    http_request_head_view request;
     request.method_ = "POST";
     request.target_ = "/items?q=1";
     request.headers_ = headers;
     request.content_ = http_request_content_plan::bytes("payload");
 
-    prepared_fixture fixture_value(http_origin_view::https({.host_ = "example.test"}), request, http1_client_request_wire_policy{.expectation_ = ruvia::http_client_request_expectation::continue_});
+    request.expectation_ = ruvia::http_client_request_expectation::continue_;
+
+    prepared_fixture fixture_value(http_origin_view::https({.host_ = "example.test"}), request);
     const auto* prepared = std::get_if<prepared_http1_client_request>(&fixture_value.result_);
     EXPECT_TRUE(prepared != nullptr);
     if (prepared == nullptr) {
@@ -134,7 +131,7 @@ TEST(Ruvia, http1_client_request_writer_emits_one_canonical_scatter_gather_plan)
 }
 
 TEST(Ruvia, http1_client_request_content_distinguishes_absent_from_explicit_empty) {
-    http_client_request_view absent;
+    http_request_head_view absent;
     absent.method_ = "GET";
     EXPECT_TRUE(absent.content_.without_content() != nullptr);
     EXPECT_TRUE(absent.content_.known_length_content() == nullptr);
@@ -147,7 +144,7 @@ TEST(Ruvia, http1_client_request_content_distinguishes_absent_from_explicit_empt
         EXPECT_TRUE(!(absent_prepared->head().find("Content-Length") != std::string_view::npos));
     }
 
-    http_client_request_view empty;
+    http_request_head_view empty;
     empty.method_ = "POST";
     empty.content_ = http_request_content_plan::bytes("");
     EXPECT_TRUE(empty.content_.without_content() == nullptr);
@@ -169,8 +166,8 @@ TEST(Ruvia, http1_client_request_content_distinguishes_absent_from_explicit_empt
     }
 }
 
-TEST(Ruvia, http1_client_request_writer_owns_request_target_forms_and_host) {
-    http_client_request_view extension;
+TEST(Ruvia, http1_client_request_preparation_owns_request_target_forms_and_host) {
+    http_request_head_view extension;
     extension.method_ = "PROPFIND";
     extension.target_ = "/dav";
     prepared_fixture extension_fixture(http_origin_view::https({.host_ = "example.test", .port_ = 8443}), extension);
@@ -180,30 +177,30 @@ TEST(Ruvia, http1_client_request_writer_owns_request_target_forms_and_host) {
         EXPECT_TRUE(extension_prepared->head().starts_with("PROPFIND /dav HTTP/1.1\r\nHost: example.test:8443\r\n"));
     }
 
-    http_client_request_view options;
+    http_request_head_view options;
     options.method_ = "OPTIONS";
     options.target_ = "*";
     prepared_fixture options_fixture(http_origin_view::http({.host_ = "example.test"}), options);
     EXPECT_TRUE(std::holds_alternative<prepared_http1_client_request>(options_fixture.result_));
 
-    http_client_request_view invalid_asterisk;
+    http_request_head_view invalid_asterisk;
     invalid_asterisk.method_ = "GET";
     invalid_asterisk.target_ = "*";
     EXPECT_TRUE(prepare_error(invalid_asterisk) == http1_client_request_prepare_error::invalid_target);
 
-    http_client_request_view absolute;
+    http_request_head_view absolute;
     absolute.target_ = "https://example.test/path";
     EXPECT_TRUE(prepare_error(absolute) == http1_client_request_prepare_error::invalid_target);
 
-    http_client_request_view connect;
+    http_request_head_view connect;
     connect.method_ = "CONNECT";
     connect.target_ = "example.test:443";
-    EXPECT_TRUE(prepare_error(connect) == http1_client_request_prepare_error::connect_requires_dedicated_entry);
+    EXPECT_TRUE(prepare_error(connect) == http1_client_request_prepare_error::invalid_connect_authority);
 }
 
 TEST(Ruvia, http1_client_connect_entry_generates_authority_form_atomically) {
     std::array<char, 512> buffer;
-    const auto result_value = http1_client_request_writer().prepare_connect(http_origin_view::https({.host_ = "example.test"}), {}, buffer);
+    const auto result_value = prepare_http1_client_request(http_origin_view::https({.host_ = "example.test"}), {.method_ = "CONNECT", .authority_ = "example.test:443"}, buffer);
     const auto* prepared = std::get_if<prepared_http1_client_request>(&result_value);
     EXPECT_TRUE(prepared != nullptr);
     if (prepared != nullptr) {
@@ -214,7 +211,7 @@ TEST(Ruvia, http1_client_connect_entry_generates_authority_form_atomically) {
     }
 
     std::array<char, 512> ipv6_buffer;
-    const auto ipv6 = http1_client_request_writer().prepare_connect(http_origin_view::https({.host_ = "[::1]"}), {}, ipv6_buffer);
+    const auto ipv6 = prepare_http1_client_request(http_origin_view::https({.host_ = "[::1]"}), {.method_ = "CONNECT", .authority_ = "[::1]:443"}, ipv6_buffer);
     const auto* ipv6_prepared = std::get_if<prepared_http1_client_request>(&ipv6);
     EXPECT_TRUE(ipv6_prepared != nullptr);
     if (ipv6_prepared != nullptr) {
@@ -222,17 +219,12 @@ TEST(Ruvia, http1_client_connect_entry_generates_authority_form_atomically) {
     }
 
     std::array<char, 128> invalid_buffer;
-    const auto invalid = http1_client_request_writer().prepare_connect(http_origin_view::https({.host_ = "example.test", .port_ = 0}), {}, invalid_buffer);
+    const auto invalid = prepare_http1_client_request(http_origin_view::https({.host_ = "example.test"}), {.method_ = "CONNECT", .authority_ = "example.test:0"}, invalid_buffer);
     const auto* invalid_failure = std::get_if<http1_client_request_prepare_error>(&invalid);
-    EXPECT_TRUE(invalid_failure != nullptr);
-    EXPECT_TRUE(*invalid_failure == http1_client_request_prepare_error::invalid_connect_origin);
-
-    const auto invalid_authority = http1_client_request_writer().prepare_connect("example.test:0", {}, invalid_buffer);
-    const auto* invalid_authority_failure = std::get_if<http1_client_request_prepare_error>(&invalid_authority);
-    EXPECT_TRUE(invalid_authority_failure != nullptr && *invalid_authority_failure == http1_client_request_prepare_error::invalid_connect_origin);
+    EXPECT_TRUE(invalid_failure != nullptr && *invalid_failure == http1_client_request_prepare_error::invalid_connect_authority);
 }
 
-TEST(Ruvia, http1_client_request_writer_is_the_only_host_and_framing_owner) {
+TEST(Ruvia, http1_client_request_preparation_is_the_only_host_and_framing_owner) {
     struct case_value final {
         std::string_view name_;
         std::string_view value_;
@@ -247,7 +239,7 @@ TEST(Ruvia, http1_client_request_writer_is_the_only_host_and_framing_owner) {
     };
     for (const auto& test : cases) {
         const ruvia::http_header_view header_value(test.name_, test.value_);
-        http_client_request_view request;
+        http_request_head_view request;
         request.method_ = "POST";
         request.headers_ = std::span<const ruvia::http_header_view>(&header_value, 1);
         request.content_ = http_request_content_plan::bytes("payload");
@@ -255,7 +247,7 @@ TEST(Ruvia, http1_client_request_writer_is_the_only_host_and_framing_owner) {
     }
 }
 
-TEST(Ruvia, http1_client_request_writer_rejects_repeated_singleton_fields) {
+TEST(Ruvia, http1_client_request_preparation_rejects_repeated_singleton_fields) {
     struct case_value final {
         std::string_view name_;
         std::string_view first_;
@@ -279,21 +271,21 @@ TEST(Ruvia, http1_client_request_writer_rejects_repeated_singleton_fields) {
             {test.name_, test.first_},
             {test.name_, test.second_},
         };
-        http_client_request_view request;
+        http_request_head_view request;
         request.headers_ = headers;
 
         EXPECT_TRUE(prepare_error(request) == http1_client_request_prepare_error::invalid_header);
     }
 }
 
-TEST(Ruvia, http1_client_request_writer_validates_cors_fields) {
+TEST(Ruvia, http1_client_request_preparation_validates_cors_fields) {
     const ruvia::http_header_view invalid_headers[] = {
         {"Origin", "https://example.test/path"},
         {"Access-Control-Request-Method", "GET, POST"},
         {"Access-Control-Request-Headers", "X-Good, Bad Header"},
     };
     for (const auto& header : invalid_headers) {
-        http_client_request_view request;
+        http_request_head_view request;
         request.headers_ = std::span<const ruvia::http_header_view>(&header, 1);
         EXPECT_TRUE(prepare_error(request) == http1_client_request_prepare_error::invalid_header);
     }
@@ -304,13 +296,13 @@ TEST(Ruvia, http1_client_request_writer_validates_cors_fields) {
         {"Access-Control-Request-Headers", "X-First"},
         {"Access-Control-Request-Headers", "X-Second, X-Third"},
     };
-    http_client_request_view valid;
+    http_request_head_view valid;
     valid.headers_ = valid_headers;
     prepared_fixture fixture_value(http_origin_view::https({.host_ = "example.test"}), valid);
     EXPECT_TRUE(std::holds_alternative<prepared_http1_client_request>(fixture_value.result_));
 }
 
-TEST(Ruvia, http1_client_request_writer_owns_hop_by_hop_field_contracts) {
+TEST(Ruvia, http1_client_request_preparation_owns_hop_by_hop_field_contracts) {
     struct failure_case final {
         std::array<ruvia::http_header_view, 2> headers_;
         std::size_t count_;
@@ -324,14 +316,14 @@ TEST(Ruvia, http1_client_request_writer_owns_hop_by_hop_field_contracts) {
         {.headers_ = {ruvia::http_header_view("TE", "trailers"), {}}, .count_ = 1, .error_ = http1_client_request_prepare_error::te_connection_option_required},
     };
     for (const auto& test : failures) {
-        http_client_request_view request;
+        http_request_head_view request;
         request.headers_ = std::span<const ruvia::http_header_view>(test.headers_.data(), test.count_);
         EXPECT_TRUE(prepare_error(request) == test.error_);
     }
 
     for (const std::string_view connection_options : {"Host", "close, content-length", "EXPECT, keep-alive", "Cache-Control", "Trailer", "Authorization", "Cookie", "Range", "Transfer-Encoding", "close, transfer-encoding", "Forwarded", "close, X-Forwarded-For", "x-forwarded-proto", "keep-alive, X-FORWARDED-HOST"}) {
         const ruvia::http_header_view connection("Connection", connection_options);
-        http_client_request_view request;
+        http_request_head_view request;
         request.method_ = "POST";
         request.headers_ = std::span<const ruvia::http_header_view>(&connection, 1);
         request.content_ = http_request_content_plan::bytes("payload");
@@ -346,22 +338,22 @@ TEST(Ruvia, http1_client_request_writer_owns_hop_by_hop_field_contracts) {
         {"X-Hop", "value"},
         {"X-Forwarded-For", "192.0.2.1"},
     };
-    http_client_request_view valid;
+    http_request_head_view valid;
     valid.headers_ = valid_headers;
     prepared_fixture fixture_value(http_origin_view::https({.host_ = "example.test"}), valid);
     EXPECT_TRUE(std::holds_alternative<prepared_http1_client_request>(fixture_value.result_));
 }
 
-TEST(Ruvia, http1_client_request_writer_validates_te_capabilities_and_weights) {
+TEST(Ruvia, http1_client_request_preparation_validates_te_capabilities_and_weights) {
     const auto prepare_with_te = [](std::string_view value) -> std::optional<http1_client_request_prepare_error> {
         const std::array headers{
             ruvia::http_header_view("Connection", "TE"),
             ruvia::http_header_view("TE", value),
         };
-        http_client_request_view request;
+        http_request_head_view request;
         request.headers_ = headers;
         std::array<char, 512> buffer;
-        const auto result_value = http1_client_request_writer().prepare(http_origin_view::https({.host_ = "example.test"}), request, buffer);
+        const auto result_value = prepare_http1_client_request(http_origin_view::https({.host_ = "example.test"}), request, buffer);
         if (const auto* failure = std::get_if<http1_client_request_prepare_error>(&result_value)) {
             return *failure;
         }
@@ -378,36 +370,38 @@ TEST(Ruvia, http1_client_request_writer_validates_te_capabilities_and_weights) {
     }
 }
 
-TEST(Ruvia, http1_client_request_writer_enforces_expect_content_semantics) {
+TEST(Ruvia, http1_client_request_preparation_enforces_expect_content_semantics) {
     const ruvia::http_header_view expect("Expect", "100-Continue");
-    http_client_request_view raw_expectation;
+    http_request_head_view raw_expectation;
     raw_expectation.method_ = "POST";
     raw_expectation.headers_ = std::span<const ruvia::http_header_view>(&expect, 1);
     raw_expectation.content_ = http_request_content_plan::bytes("x");
     EXPECT_TRUE(prepare_error(raw_expectation) == http1_client_request_prepare_error::expect_header_managed_by_writer);
 
-    http_client_request_view absent;
+    http_request_head_view absent;
     absent.method_ = "POST";
-    prepared_fixture absent_fixture(http_origin_view::https({.host_ = "example.test"}), absent, http1_client_request_wire_policy{.expectation_ = ruvia::http_client_request_expectation::continue_});
+    absent.expectation_ = ruvia::http_client_request_expectation::continue_;
+    prepared_fixture absent_fixture(http_origin_view::https({.host_ = "example.test"}), absent);
     const auto* absent_failure = std::get_if<http1_client_request_prepare_error>(&absent_fixture.result_);
     EXPECT_TRUE(absent_failure != nullptr);
     if (absent_failure != nullptr) {
         EXPECT_TRUE(*absent_failure == http1_client_request_prepare_error::expectation_without_content);
     }
 
-    http_client_request_view empty = absent;
+    http_request_head_view empty = absent;
     empty.content_ = http_request_content_plan::bytes("");
-    prepared_fixture empty_fixture(http_origin_view::https({.host_ = "example.test"}), empty, http1_client_request_wire_policy{.expectation_ = ruvia::http_client_request_expectation::continue_});
+    prepared_fixture empty_fixture(http_origin_view::https({.host_ = "example.test"}), empty);
     const auto* empty_failure = std::get_if<http1_client_request_prepare_error>(&empty_fixture.result_);
     EXPECT_TRUE(empty_failure != nullptr);
     if (empty_failure != nullptr) {
         EXPECT_TRUE(*empty_failure == http1_client_request_prepare_error::expectation_without_content);
     }
 
-    http_client_request_view nonempty;
+    http_request_head_view nonempty;
     nonempty.method_ = "POST";
     nonempty.content_ = http_request_content_plan::bytes("x");
-    prepared_fixture fixture_value(http_origin_view::https({.host_ = "example.test"}), nonempty, http1_client_request_wire_policy{.expectation_ = ruvia::http_client_request_expectation::continue_});
+    nonempty.expectation_ = ruvia::http_client_request_expectation::continue_;
+    prepared_fixture fixture_value(http_origin_view::https({.host_ = "example.test"}), nonempty);
     const auto* prepared = std::get_if<prepared_http1_client_request>(&fixture_value.result_);
     EXPECT_TRUE(prepared != nullptr);
     if (prepared != nullptr) {
@@ -416,24 +410,24 @@ TEST(Ruvia, http1_client_request_writer_enforces_expect_content_semantics) {
     }
 }
 
-TEST(Ruvia, http1_client_request_writer_rejects_invalid_wire_policy) {
-    http_client_request_view request;
+TEST(Ruvia, http1_client_request_preparation_rejects_invalid_wire_policy) {
+    http_request_head_view request;
     const auto invalid_without_expectation = http1_client_request_wire_policy{.close_policy_ = static_cast<http1_close_policy>(0xFF)};
-    const auto invalid_expect_continue = http1_client_request_wire_policy{.close_policy_ = static_cast<http1_close_policy>(0xFF), .expectation_ = ruvia::http_client_request_expectation::continue_};
-    const auto invalid_expectation = http1_client_request_wire_policy{.expectation_ = static_cast<ruvia::http_client_request_expectation>(0xFF)};
+    const http_request_head_view expect_continue{.expectation_ = ruvia::http_client_request_expectation::continue_};
+    const http_request_head_view invalid_expectation{.expectation_ = static_cast<ruvia::http_client_request_expectation>(0xFF)};
     EXPECT_TRUE(prepare_error(request, invalid_without_expectation) == http1_client_request_prepare_error::invalid_close_policy);
-    EXPECT_TRUE(prepare_error(request, invalid_expect_continue) == http1_client_request_prepare_error::invalid_close_policy);
-    EXPECT_TRUE(prepare_error(request, invalid_expectation) == http1_client_request_prepare_error::invalid_expectation);
+    EXPECT_TRUE(prepare_error(expect_continue, invalid_without_expectation) == http1_client_request_prepare_error::invalid_close_policy);
+    EXPECT_TRUE(prepare_error(invalid_expectation) == http1_client_request_prepare_error::invalid_expectation);
 
     std::array<char, 512> buffer{};
-    const auto connect = http1_client_request_writer().prepare_connect(http_origin_view::https({.host_ = "example.test"}), std::span<const ruvia::http_header_view>{}, buffer, invalid_without_expectation);
+    const auto connect = prepare_http1_client_request(http_origin_view::https({.host_ = "example.test"}), {.method_ = "CONNECT", .authority_ = "example.test:443"}, buffer, invalid_without_expectation);
     const auto* connect_failure = std::get_if<http1_client_request_prepare_error>(&connect);
     EXPECT_TRUE(connect_failure != nullptr);
     if (connect_failure != nullptr) {
         EXPECT_TRUE(*connect_failure == http1_client_request_prepare_error::invalid_close_policy);
     }
 
-    const auto invalid_connect_expectation = http1_client_request_writer().prepare_connect(http_origin_view::https({.host_ = "example.test"}), std::span<const ruvia::http_header_view>{}, buffer, invalid_expectation);
+    const auto invalid_connect_expectation = prepare_http1_client_request(http_origin_view::https({.host_ = "example.test"}), {.method_ = "CONNECT", .authority_ = "example.test:443", .expectation_ = static_cast<ruvia::http_client_request_expectation>(0xFF)}, buffer);
     const auto* invalid_connect_expectation_failure = std::get_if<http1_client_request_prepare_error>(&invalid_connect_expectation);
     EXPECT_TRUE(invalid_connect_expectation_failure != nullptr);
     if (invalid_connect_expectation_failure != nullptr) {
@@ -444,14 +438,14 @@ TEST(Ruvia, http1_client_request_writer_rejects_invalid_wire_policy) {
 // RFC 9112 section 3.2.2: a request through a forward proxy names its origin
 // in absolute-form, and the generated Host carries the same authority
 // (section 3.2). OPTIONS * keeps only the authority (section 3.2.4).
-TEST(Ruvia, http1_client_request_writer_emits_absolute_form_for_a_forward_proxy) {
+TEST(Ruvia, http1_client_request_preparation_emits_absolute_form_for_a_forward_proxy) {
     const http1_client_request_wire_policy absolute{.target_form_ = ruvia::http1_request_target_form::absolute};
     const auto head_of = [](const auto& fixture_value) {
         const auto* prepared = std::get_if<prepared_http1_client_request>(&fixture_value.result_);
         return prepared != nullptr ? std::string(prepared->head()) : std::string("<failed>");
     };
 
-    http_client_request_view request;
+    http_request_head_view request;
     request.target_ = "/items?q=1";
     const prepared_fixture default_port(http_origin_view::http({.host_ = "example.test"}), request, absolute);
     EXPECT_EQ(head_of(default_port), "GET http://example.test/items?q=1 HTTP/1.1\r\nHost: example.test\r\n\r\n");
@@ -468,47 +462,44 @@ TEST(Ruvia, http1_client_request_writer_emits_absolute_form_for_a_forward_proxy)
     EXPECT_EQ(received.state_.request().authority(), "[::1]:8443");
     EXPECT_EQ(received.state_.request().path(), "/items");
 
-    http_client_request_view options;
+    http_request_head_view options;
     options.method_ = "OPTIONS";
     options.target_ = "*";
     const prepared_fixture asterisk(http_origin_view::http({.host_ = "example.test", .port_ = 8001}), options, absolute);
     EXPECT_EQ(head_of(asterisk), "OPTIONS http://example.test:8001 HTTP/1.1\r\nHost: example.test:8001\r\n\r\n");
 
     std::array<char, 512> buffer{};
-    const auto streaming = http1_client_request_writer().prepare(http_origin_view::https({.host_ = "example.test"}), http_client_request_view{.method_ = "POST", .target_ = "/upload", .content_ = http_request_content_plan::streaming(3)}, buffer, absolute);
+    const auto streaming = prepare_http1_client_request(http_origin_view::https({.host_ = "example.test"}), http_request_head_view{.method_ = "POST", .target_ = "/upload", .content_ = http_request_content_plan::streaming(3)}, buffer, absolute);
     const auto* streamed = std::get_if<prepared_http1_client_request>(&streaming);
     ASSERT_TRUE(streamed != nullptr);
     EXPECT_EQ(streamed->head(), "POST https://example.test/upload HTTP/1.1\r\nHost: example.test\r\nContent-Length: 3\r\n\r\n");
 
     // The head budget counts the scheme and authority of the target.
     std::array<char, 40> small{};
-    const auto too_small = http1_client_request_writer().prepare(http_origin_view::http({.host_ = "example.test"}), request, small, absolute);
+    const auto too_small = prepare_http1_client_request(http_origin_view::http({.host_ = "example.test"}), request, small, absolute);
     const auto* required = std::get_if<http1_client_request_buffer_too_small>(&too_small);
     ASSERT_TRUE(required != nullptr);
     EXPECT_EQ(required->required_head_bytes(), head_of(default_port).size());
 }
 
-TEST(Ruvia, http1_client_request_writer_rejects_invalid_target_forms) {
-    EXPECT_EQ(prepare_error(http_client_request_view{}, http1_client_request_wire_policy{.target_form_ = static_cast<ruvia::http1_request_target_form>(0xFF)}), http1_client_request_prepare_error::invalid_target_form);
+TEST(Ruvia, http1_client_request_preparation_rejects_invalid_target_forms) {
+    EXPECT_EQ(prepare_error(http_request_head_view{}, http1_client_request_wire_policy{.target_form_ = static_cast<ruvia::http1_request_target_form>(0xFF)}), http1_client_request_prepare_error::invalid_target_form);
     // CONNECT is authority-form only (RFC 9112 section 3.2.3).
     const http1_client_request_wire_policy absolute{.target_form_ = ruvia::http1_request_target_form::absolute};
     std::array<char, 512> buffer{};
-    const auto by_origin = http1_client_request_writer().prepare_connect(http_origin_view::https({.host_ = "example.test"}), std::span<const ruvia::http_header_view>{}, buffer, absolute);
-    const auto by_authority = http1_client_request_writer().prepare_connect("example.test:443", std::span<const ruvia::http_header_view>{}, buffer, absolute);
-    for (const auto* result_value : {&by_origin, &by_authority}) {
-        const auto* failure = std::get_if<http1_client_request_prepare_error>(result_value);
-        ASSERT_TRUE(failure != nullptr);
-        EXPECT_EQ(*failure, http1_client_request_prepare_error::invalid_target_form);
-    }
+    const auto connect = prepare_http1_client_request(http_origin_view::https({.host_ = "example.test"}), {.method_ = "CONNECT", .authority_ = "example.test:443"}, buffer, absolute);
+    const auto* failure = std::get_if<http1_client_request_prepare_error>(&connect);
+    ASSERT_TRUE(failure != nullptr);
+    EXPECT_EQ(*failure, http1_client_request_prepare_error::invalid_target_form);
 }
 
-TEST(Ruvia, http1_client_request_writer_enforces_method_content_semantics) {
-    http_client_request_view trace;
+TEST(Ruvia, http1_client_request_preparation_enforces_method_content_semantics) {
+    http_request_head_view trace;
     trace.method_ = "TRACE";
     trace.content_ = http_request_content_plan::bytes("trace body");
     EXPECT_TRUE(prepare_error(trace) == http1_client_request_prepare_error::content_forbidden_for_method);
 
-    http_client_request_view options;
+    http_request_head_view options;
     options.method_ = "OPTIONS";
     options.content_ = http_request_content_plan::bytes("options body");
     EXPECT_TRUE(prepare_error(options) == http1_client_request_prepare_error::options_content_type_required);
@@ -530,9 +521,9 @@ TEST(Ruvia, http1_client_request_writer_enforces_method_content_semantics) {
     EXPECT_TRUE(prepare_error(options) == http1_client_request_prepare_error::invalid_header);
 }
 
-TEST(Ruvia, http1_client_request_writer_allows_empty_method_content) {
+TEST(Ruvia, http1_client_request_preparation_allows_empty_method_content) {
     for (const char* method : {"OPTIONS", "TRACE"}) {
-        http_client_request_view request;
+        http_request_head_view request;
         request.method_ = method;
         request.content_ = http_request_content_plan::bytes("");
         prepared_fixture fixture(http_origin_view::http({.host_ = "example.test"}), request);
@@ -549,10 +540,10 @@ TEST(Ruvia, http1_client_request_writer_allows_empty_method_content) {
         }
 
         std::array<char, 1024> head_buffer;
-        http_client_request_view streaming;
+        http_request_head_view streaming;
         streaming.method_ = method;
         streaming.content_ = http_request_content_plan::streaming(0);
-        const auto result = http1_client_request_writer().prepare(http_origin_view::http({.host_ = "example.test"}), streaming, head_buffer);
+        const auto result = prepare_http1_client_request(http_origin_view::http({.host_ = "example.test"}), streaming, head_buffer);
         const auto* streaming_prepared = std::get_if<prepared_http1_client_request>(&result);
         EXPECT_TRUE(streaming_prepared != nullptr);
         if (streaming_prepared != nullptr) {
@@ -566,10 +557,10 @@ TEST(Ruvia, http1_client_request_writer_allows_empty_method_content) {
     }
 }
 
-TEST(Ruvia, http1_client_request_writer_rejects_invalid_content_type_parameters) {
+TEST(Ruvia, http1_client_request_preparation_rejects_invalid_content_type_parameters) {
     for (const std::string_view value : {"text/plain; charset", "text/plain; charset=", "text/plain; charset =utf-8", "text/plain; charset=utf-8; CHARSET=latin1", "text/plain; charset=\"unterminated"}) {
         const ruvia::http_header_view content_type_value("Content-Type", value);
-        http_client_request_view request;
+        http_request_head_view request;
         request.method_ = "POST";
         request.headers_ = std::span<const ruvia::http_header_view>(&content_type_value, 1);
         request.content_ = http_request_content_plan::bytes("body");
@@ -577,7 +568,7 @@ TEST(Ruvia, http1_client_request_writer_rejects_invalid_content_type_parameters)
     }
 
     const ruvia::http_header_view valid_content_type("Content-Type", "text/plain; charset=\"utf-8\"");
-    http_client_request_view valid;
+    http_request_head_view valid;
     valid.method_ = "POST";
     valid.headers_ = std::span<const ruvia::http_header_view>(&valid_content_type, 1);
     valid.content_ = http_request_content_plan::bytes("body");
@@ -585,10 +576,10 @@ TEST(Ruvia, http1_client_request_writer_rejects_invalid_content_type_parameters)
     EXPECT_TRUE(std::holds_alternative<prepared_http1_client_request>(fixture_value.result_));
 }
 
-TEST(Ruvia, http1_client_request_writer_rejects_invalid_content_encoding_syntax) {
+TEST(Ruvia, http1_client_request_preparation_rejects_invalid_content_encoding_syntax) {
     for (const std::string_view value : {"gzip;level=9", "bad coding", "", ",gzip", "gzip,"}) {
         const ruvia::http_header_view content_encoding("Content-Encoding", value);
-        http_client_request_view request;
+        http_request_head_view request;
         request.method_ = "POST";
         request.headers_ = std::span<const ruvia::http_header_view>(&content_encoding, 1);
         request.content_ = http_request_content_plan::bytes("body");
@@ -597,7 +588,7 @@ TEST(Ruvia, http1_client_request_writer_rejects_invalid_content_encoding_syntax)
 
     for (const std::string_view value : {"deflate", "gzip, br"}) {
         const ruvia::http_header_view content_encoding("Content-Encoding", value);
-        http_client_request_view request;
+        http_request_head_view request;
         request.method_ = "POST";
         request.headers_ = std::span<const ruvia::http_header_view>(&content_encoding, 1);
         request.content_ = http_request_content_plan::bytes("body");
@@ -606,15 +597,15 @@ TEST(Ruvia, http1_client_request_writer_rejects_invalid_content_encoding_syntax)
     }
 }
 
-TEST(Ruvia, http1_client_request_writer_returns_exact_buffer_requirement_without_partial_output) {
-    http_client_request_view request;
+TEST(Ruvia, http1_client_request_preparation_returns_exact_buffer_requirement_without_partial_output) {
+    http_request_head_view request;
     request.method_ = "POST";
     request.target_ = "/upload";
     request.content_ = http_request_content_plan::bytes("body");
 
     std::array<char, 8> small;
     small.fill('z');
-    const auto too_small = http1_client_request_writer().prepare(http_origin_view::https({.host_ = "example.test"}), request, small);
+    const auto too_small = prepare_http1_client_request(http_origin_view::https({.host_ = "example.test"}), request, small);
     const auto* too_small_val = std::get_if<http1_client_request_buffer_too_small>(&too_small);
     EXPECT_TRUE(too_small_val != nullptr);
     EXPECT_TRUE(std::ranges::all_of(small, [](char value) {
@@ -622,7 +613,7 @@ TEST(Ruvia, http1_client_request_writer_returns_exact_buffer_requirement_without
     }));
 
     std::array<char, 512> enough;
-    const auto prepared = http1_client_request_writer().prepare(http_origin_view::https({.host_ = "example.test"}), request, enough);
+    const auto prepared = prepare_http1_client_request(http_origin_view::https({.host_ = "example.test"}), request, enough);
     const auto* prepared_val = std::get_if<prepared_http1_client_request>(&prepared);
     EXPECT_TRUE(prepared_val != nullptr);
     if (prepared_val != nullptr && too_small_val != nullptr) {
@@ -630,25 +621,25 @@ TEST(Ruvia, http1_client_request_writer_returns_exact_buffer_requirement_without
     }
 }
 
-TEST(Ruvia, http1_client_request_writer_enforces_header_size_transactionally) {
+TEST(Ruvia, http1_client_request_preparation_enforces_header_size_transactionally) {
     std::array<ruvia::http_header_view, 80> headers;
     headers.fill(ruvia::http_header_view("X-Test", "x"));
-    http_client_request_view many;
+    http_request_head_view many;
     many.headers_ = headers;
     std::array<char, 2048> many_output{};
-    const auto many_prepared = http1_client_request_writer().prepare(http_origin_view::https({.host_ = "example.test"}), many, many_output);
+    const auto many_prepared = prepare_http1_client_request(http_origin_view::https({.host_ = "example.test"}), many, many_output);
     EXPECT_TRUE(std::holds_alternative<prepared_http1_client_request>(many_prepared));
-    http_client_request_view oversized;
+    http_request_head_view oversized;
     std::string target(ruvia::max_http_header_bytes, 'a');
     target.front() = '/';
     oversized.target_ = target;
     EXPECT_TRUE(prepare_error(oversized) == http1_client_request_prepare_error::header_too_large);
 
-    http_client_request_view invalid_method;
+    http_request_head_view invalid_method;
     invalid_method.method_ = "GET\r";
     std::array<char, 128> untouched;
     untouched.fill('q');
-    const auto invalid = http1_client_request_writer().prepare(http_origin_view::https({.host_ = "example.test"}), invalid_method, untouched);
+    const auto invalid = prepare_http1_client_request(http_origin_view::https({.host_ = "example.test"}), invalid_method, untouched);
     const auto* invalid_failure = std::get_if<http1_client_request_prepare_error>(&invalid);
     EXPECT_TRUE(invalid_failure != nullptr);
     EXPECT_TRUE(*invalid_failure == http1_client_request_prepare_error::invalid_method);
@@ -660,7 +651,7 @@ TEST(Ruvia, http1_client_request_writer_enforces_header_size_transactionally) {
 
 TEST(Ruvia, http1_client_request_context_binds_the_actual_close_signal) {
     const ruvia::http_header_view close_header("Connection", "close");
-    http_client_request_view request;
+    http_request_head_view request;
     request.headers_ = std::span<const ruvia::http_header_view>(&close_header, 1);
     prepared_fixture explicit_close(http_origin_view::https({.host_ = "example.test"}), request);
     auto* explicit_prepared = std::get_if<prepared_http1_client_request>(&explicit_close.result_);
@@ -668,17 +659,17 @@ TEST(Ruvia, http1_client_request_context_binds_the_actual_close_signal) {
     if (explicit_prepared != nullptr) {
         auto parser = ruvia::http1_client_response_parser(std::move(*explicit_prepared).take_exchange_state());
         const auto response = parser.parse("HTTP/1.1 204 No Content\r\n\r\n");
-        EXPECT_TRUE(response.parsed() != nullptr);
-        if (response.parsed() != nullptr) {
-            const auto* without_content = response.parsed()->plan().without_content();
-            EXPECT_TRUE(without_content != nullptr);
-            if (without_content != nullptr) {
-                EXPECT_TRUE(without_content->persistence() == ruvia::http1_close_policy::close_after_response);
+        EXPECT_TRUE(response.holds<ruvia::http1_parsed_client_response_head>());
+        if (const auto* parsed = response.get_if<ruvia::http1_parsed_client_response_head>()) {
+            const auto* framing = parsed->plan().framing();
+            EXPECT_TRUE(framing != nullptr && framing->kind() == ruvia::http1_framing_kind::no_content);
+            if (framing != nullptr && framing->kind() == ruvia::http1_framing_kind::no_content) {
+                EXPECT_TRUE(parsed->plan().close_policy() == ruvia::http1_close_policy::close_after_response);
             }
         }
     }
 
-    http_client_request_view generated_request;
+    http_request_head_view generated_request;
     prepared_fixture generated_close(http_origin_view::https({.host_ = "example.test"}), generated_request, http1_client_request_wire_policy{.close_policy_ = http1_close_policy::close_after_response});
     const auto* generated_prepared = std::get_if<prepared_http1_client_request>(&generated_close.result_);
     EXPECT_TRUE(generated_prepared != nullptr);
@@ -687,14 +678,14 @@ TEST(Ruvia, http1_client_request_context_binds_the_actual_close_signal) {
     }
 }
 
-TEST(Ruvia, http1_client_request_writer_prepare_connect_udp_preserves_specific_prepare_errors) {
+TEST(Ruvia, http1_client_request_preparation_of_connect_udp_preserves_specific_prepare_errors) {
     const auto origin = http_origin_view::https({.host_ = "example.test", .port_ = 443});
     const std::array valid_capsule{ruvia::http_header_view{"Capsule-Protocol", "?1"}};
     std::array<char, 256> untouched;
     untouched.fill('z');
 
     const auto expect_error = [&](std::string_view target, std::span<const ruvia::http_header_view> headers, http1_client_request_prepare_error expected) {
-        const auto result = http1_client_request_writer().prepare_connect_udp(origin, target, headers, untouched);
+        const auto result = prepare_http1_client_request(origin, {.protocol_ = "connect-udp", .target_ = target, .headers_ = headers}, untouched);
         const auto* failure = std::get_if<http1_client_request_prepare_error>(&result);
         EXPECT_TRUE(failure != nullptr);
         if (failure != nullptr) {
@@ -742,9 +733,8 @@ TEST(Ruvia, http1_client_forwards_received_application_fields_without_regenerati
     for (const auto& field : cases) {
         std::string wire = "GET / HTTP/1.1\r\nHost: example.test\r\n";
         wire.append(field.name()).append(": ").append(field.value()).append("\r\n\r\n");
-        ruvia::http1_server_request_parse_state incoming;
-        incoming.parse_head(wire);
-        EXPECT_TRUE(incoming.head_ready() != nullptr);
+        ruvia::http1_server_request_parser incoming;
+        EXPECT_TRUE(incoming.parse(wire).holds<ruvia::decode_complete>());
         const auto received = incoming.request().header(field.name());
         EXPECT_TRUE(received == std::optional<std::string_view>{field.value()});
         if (!received) {
@@ -765,9 +755,8 @@ TEST(Ruvia, http1_client_forwards_received_application_fields_without_regenerati
             if (!prepared) {
                 continue;
             }
-            ruvia::http1_server_request_parse_state upstream;
-            upstream.parse_head(prepared->head());
-            EXPECT_TRUE(upstream.head_ready() != nullptr);
+            ruvia::http1_server_request_parser upstream;
+            EXPECT_TRUE(upstream.parse(prepared->head()).holds<ruvia::decode_complete>());
             EXPECT_TRUE(upstream.request().header(field.name()) == received);
             EXPECT_TRUE(upstream.request().header("Host") == std::optional<std::string_view>{entry < 2 ? "example.test" : "example.test:443"});
         }
@@ -799,9 +788,8 @@ TEST(Ruvia, http1_client_forwarding_retains_security_ownership_and_singleton_rul
 
 TEST(Ruvia, http1_client_forwarded_upgrade_empty_members_preserve_protocol_transition) {
     constexpr std::string_view wire = "GET / HTTP/1.1\r\nHost: example.test\r\nConnection: Upgrade\r\nUpgrade: , websocket,,\r\n\r\n";
-    ruvia::http1_server_request_parse_state incoming;
-    incoming.parse_head(wire);
-    EXPECT_TRUE(incoming.head_ready() != nullptr);
+    ruvia::http1_server_request_parser incoming;
+    EXPECT_TRUE(incoming.parse(wire).holds<ruvia::decode_complete>());
     const auto upgrade = incoming.request().header("Upgrade");
     EXPECT_TRUE(upgrade == std::optional<std::string_view>{", websocket,,"});
     if (!upgrade) {
@@ -819,9 +807,9 @@ TEST(Ruvia, http1_client_forwarded_upgrade_empty_members_preserve_protocol_trans
     EXPECT_TRUE(prepared->head().find("Upgrade: , websocket,,\r\n") != std::string_view::npos);
     ruvia::http1_client_response_parser response_parser(std::move(*prepared).take_exchange_state());
     const auto response = response_parser.parse("HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\r\n");
-    EXPECT_TRUE(response.parsed() != nullptr);
-    if (const auto* parsed = response.parsed()) {
-        EXPECT_TRUE(parsed->plan().protocol_upgrade() != nullptr);
+    EXPECT_TRUE(response.holds<ruvia::http1_parsed_client_response_head>());
+    if (const auto* parsed = response.get_if<ruvia::http1_parsed_client_response_head>()) {
+        EXPECT_TRUE(parsed->plan().protocol_upgrade());
     }
     auto second = prepare_field_request(0, fields, output, ruvia::http_request_field_source::forwarded);
     auto* second_prepared = std::get_if<prepared_http1_client_request>(&second);
@@ -829,7 +817,7 @@ TEST(Ruvia, http1_client_forwarded_upgrade_empty_members_preserve_protocol_trans
     if (second_prepared) {
         ruvia::http1_client_response_parser unoffered_parser(std::move(*second_prepared).take_exchange_state());
         const auto unoffered = unoffered_parser.parse("HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: other\r\n\r\n");
-        EXPECT_TRUE(unoffered.failure() != nullptr);
+        EXPECT_TRUE(unoffered.holds<ruvia::http1_client_response_parse_failure>());
     }
     const std::array invalid_fields{fields[0], ruvia::http_header_view{"Upgrade", ",websocket/,"}};
     EXPECT_TRUE(std::holds_alternative<http1_client_request_prepare_error>(prepare_field_request(0, invalid_fields, output, ruvia::http_request_field_source::forwarded)));
@@ -839,24 +827,22 @@ TEST(Ruvia, http1_connect_udp_forwarding_keeps_protocol_owned_fields) {
     const auto origin = http_origin_view::https({.host_ = "example.test"});
     const std::array fields{ruvia::http_header_view{"Capsule-Protocol", "?1"}, ruvia::http_header_view{"Origin", "https://example.test/path"}};
     std::array<char, 1024> output;
-    const http1_client_request_writer writer;
-    const http1_client_request_wire_policy policy{.field_source_ = ruvia::http_request_field_source::forwarded};
-    EXPECT_TRUE(std::holds_alternative<http1_client_request_prepare_error>(writer.prepare_connect_udp(origin, "/udp", fields, output)));
-    auto forwarded = writer.prepare_connect_udp(origin, "/udp", fields, output, policy);
+    const auto forwarded_source = ruvia::http_request_field_source::forwarded;
+    EXPECT_TRUE(std::holds_alternative<http1_client_request_prepare_error>(prepare_http1_client_request(origin, {.protocol_ = "connect-udp", .target_ = "/udp", .headers_ = fields}, output)));
+    auto forwarded = prepare_http1_client_request(origin, {.protocol_ = "connect-udp", .target_ = "/udp", .headers_ = fields, .field_source_ = forwarded_source}, output);
     const auto* prepared = std::get_if<prepared_http1_client_request>(&forwarded);
     EXPECT_TRUE(prepared != nullptr);
     if (prepared) {
-        ruvia::http1_server_request_parse_state upstream;
-        upstream.parse_head(prepared->head());
-        EXPECT_TRUE(upstream.head_ready() != nullptr);
+        ruvia::http1_server_request_parser upstream;
+        EXPECT_TRUE(upstream.parse(prepared->head()).holds<ruvia::decode_complete>());
         EXPECT_TRUE(upstream.request().header("Origin") == std::optional<std::string_view>{fields[1].value()});
         EXPECT_TRUE(upstream.request().header("Upgrade") == std::optional<std::string_view>{"connect-udp"});
     }
     for (const auto& forbidden : std::array{ruvia::http_header_view{"Content-Type", "invalid"}, ruvia::http_header_view{"Content-Length", "0"}, ruvia::http_header_view{"Upgrade", "connect-udp"}, ruvia::http_header_view{"Connection", "Upgrade"}, ruvia::http_header_view{"Origin", "bad\r\nInjected: yes"}}) {
         const std::array invalid{fields[0], forbidden};
-        EXPECT_TRUE(std::holds_alternative<http1_client_request_prepare_error>(writer.prepare_connect_udp(origin, "/udp", invalid, output, policy)));
+        EXPECT_TRUE(std::holds_alternative<http1_client_request_prepare_error>(prepare_http1_client_request(origin, {.protocol_ = "connect-udp", .target_ = "/udp", .headers_ = invalid, .field_source_ = forwarded_source}, output)));
     }
-    EXPECT_TRUE(std::holds_alternative<http1_client_request_prepare_error>(writer.prepare_connect_udp(origin, "/udp", {}, output, {.field_source_ = static_cast<ruvia::http_request_field_source>(0xff)})));
+    EXPECT_TRUE(std::holds_alternative<http1_client_request_prepare_error>(prepare_http1_client_request(origin, {.protocol_ = "connect-udp", .target_ = "/udp", .field_source_ = static_cast<ruvia::http_request_field_source>(0xff)}, output)));
 }
 
 TEST(Ruvia, http1_client_forwards_options_content_without_inventing_media_type) {
@@ -868,12 +854,10 @@ TEST(Ruvia, http1_client_forwards_options_content_without_inventing_media_type) 
     for (unsigned entry = 0; entry != 3; ++entry) {
         std::array<char, 1024> output;
         const auto prepare = [&](std::string_view method, ruvia::http_request_field_source source) {
-            const http1_client_request_wire_policy policy{.field_source_ = source};
-            const http1_client_request_writer writer;
             if (entry == 0) {
-                return writer.prepare(origin, http_client_request_view{.method_ = method, .content_ = http_request_content_plan::bytes(incoming.body_)}, output, policy);
+                return prepare_http1_client_request(origin, http_request_head_view{.method_ = method, .content_ = http_request_content_plan::bytes(incoming.body_), .field_source_ = source}, output);
             }
-            return writer.prepare(origin, http_client_request_view{.method_ = method, .content_ = http_request_content_plan::streaming(entry == 1 ? std::optional<ruvia::http_content_length>{4} : std::nullopt)}, output, policy);
+            return prepare_http1_client_request(origin, http_request_head_view{.method_ = method, .content_ = http_request_content_plan::streaming(entry == 1 ? std::optional<ruvia::http_content_length>{4} : std::nullopt), .field_source_ = source}, output);
         };
         const auto generated = prepare("OPTIONS", ruvia::http_request_field_source::generated);
         const auto* error = std::get_if<http1_client_request_prepare_error>(&generated);
@@ -1020,9 +1004,9 @@ using ruvia::classify_http_client_origin_authority;
 using ruvia::http_client_origin_authority_status;
 using ruvia::http_client_redirect_content_disposition;
 using ruvia::http_client_redirect_resolution_error;
-using ruvia::http_client_request_view;
 using ruvia::http_client_resolved_redirect;
 using ruvia::http_origin_view;
+using ruvia::http_request_head_view;
 using ruvia::http_scheme;
 using ruvia::is_http_redirect_status;
 using ruvia::plan_http_client_redirect_request;
@@ -1074,7 +1058,7 @@ TEST(Ruvia, http_client_redirect_request_plan_follows_rfc) {
     // 303 selects a retrieval request. HEAD remains HEAD; every other method
     // becomes GET. The representation and content-specific fields are dropped.
     {
-        http_client_request_view request;
+        http_request_head_view request;
         request.method_ = "PUT";
         request.content_ = ruvia::http_request_content_plan::bytes("payload");
         const auto plan = plan_http_client_redirect_request(request, {.status_ = ruvia::http_status::see_other});
@@ -1082,7 +1066,7 @@ TEST(Ruvia, http_client_redirect_request_plan_follows_rfc) {
         EXPECT_TRUE(plan.content_disposition() == http_client_redirect_content_disposition::drop);
     }
     {
-        http_client_request_view request;
+        http_request_head_view request;
         request.method_ = "HEAD";
         const auto plan = plan_http_client_redirect_request(request, {.status_ = ruvia::http_status::see_other});
         EXPECT_EQ(plan.method(), std::string_view("HEAD"));
@@ -1092,7 +1076,7 @@ TEST(Ruvia, http_client_redirect_request_plan_follows_rfc) {
     // RFC 9110 permits the historical POST-to-GET rewrite for 301/302. Other
     // methods are not aliases for POST and retain both method and content.
     {
-        http_client_request_view request;
+        http_request_head_view request;
         request.method_ = "POST";
         request.content_ = ruvia::http_request_content_plan::bytes("payload");
         const auto plan = plan_http_client_redirect_request(request, {.status_ = ruvia::http_status::found});
@@ -1100,7 +1084,7 @@ TEST(Ruvia, http_client_redirect_request_plan_follows_rfc) {
         EXPECT_TRUE(plan.content_disposition() == http_client_redirect_content_disposition::drop);
     }
     {
-        http_client_request_view request;
+        http_request_head_view request;
         request.method_ = "PUT";
         request.content_ = ruvia::http_request_content_plan::bytes("payload");
         const auto plan = plan_http_client_redirect_request(request, {.status_ = ruvia::http_status::moved_permanently});
@@ -1110,7 +1094,7 @@ TEST(Ruvia, http_client_redirect_request_plan_follows_rfc) {
 
     // Method tokens are case-sensitive: lowercase "post" is a distinct method.
     {
-        http_client_request_view request;
+        http_request_head_view request;
         request.method_ = "post";
         const auto plan = plan_http_client_redirect_request(request, {.status_ = ruvia::http_status::moved_permanently});
         EXPECT_EQ(plan.method(), std::string_view("post"));
@@ -1119,7 +1103,7 @@ TEST(Ruvia, http_client_redirect_request_plan_follows_rfc) {
 
     // 307/308 never change method or content.
     for (const ruvia::http_status_code status : {ruvia::http_status::temporary_redirect, ruvia::http_status::permanent_redirect}) {
-        http_client_request_view request;
+        http_request_head_view request;
         request.method_ = "POST";
         request.content_ = ruvia::http_request_content_plan::bytes("payload");
         const auto plan = plan_http_client_redirect_request(request, {.status_ = status});
@@ -1130,7 +1114,7 @@ TEST(Ruvia, http_client_redirect_request_plan_follows_rfc) {
 
 TEST(Ruvia, http_client_redirect_request_plan_owns_preserved_method) {
     std::string method = "PROPFIND";
-    http_client_request_view request;
+    http_request_head_view request;
     request.method_ = method;
 
     const auto plan = plan_http_client_redirect_request(request, {.status_ = ruvia::http_status::temporary_redirect});
@@ -1419,7 +1403,7 @@ namespace {
 
 ruvia::http1_request_content_writer chunked_request_writer() {
     std::array<char, 1024> head{};
-    auto prepared = ruvia::http1_client_request_writer{}.prepare(ruvia::http_origin_view::http({.host_ = "example.com"}), {.method_ = "POST", .content_ = ruvia::http_request_content_plan::streaming()}, head);
+    auto prepared = ruvia::prepare_http1_client_request(ruvia::http_origin_view::http({.host_ = "example.com"}), {.method_ = "POST", .content_ = ruvia::http_request_content_plan::streaming()}, head);
     const auto* prepared_req = std::get_if<ruvia::prepared_http1_client_request>(&prepared);
     if (prepared_req == nullptr || prepared_req->content().streaming_content() == nullptr) {
         throw std::logic_error("cannot prepare test request content");
@@ -1430,9 +1414,8 @@ ruvia::http1_request_content_writer chunked_request_writer() {
 }  // namespace
 
 TEST(Ruvia, http1_streaming_request_chunked_upload_and_trailers) {
-    ruvia::http1_client_request_writer head_writer;
     std::array<char, 4096> head{};
-    auto prepared = head_writer.prepare(ruvia::http_origin_view::https({.host_ = "example.com"}), {.method_ = "POST", .content_ = ruvia::http_request_content_plan::streaming()}, head);
+    auto prepared = ruvia::prepare_http1_client_request(ruvia::http_origin_view::https({.host_ = "example.com"}), {.method_ = "POST", .content_ = ruvia::http_request_content_plan::streaming()}, head);
     const auto* prepared_req = std::get_if<ruvia::prepared_http1_client_request>(&prepared);
     ASSERT_TRUE(prepared_req != nullptr);
     EXPECT_TRUE(prepared_req->content().streaming_content() != nullptr);
@@ -1459,7 +1442,7 @@ TEST(Ruvia, http1_streaming_request_chunked_upload_and_trailers) {
 TEST(Ruvia, http1_streaming_request_declares_trailer_only_for_chunked_content) {
     const std::array declared{ruvia::http_header_view{"Trailer", "Digest"}};
     std::array<char, 1024> head{};
-    auto prepared = ruvia::http1_client_request_writer{}.prepare(ruvia::http_origin_view::http({.host_ = "example.com"}), {.method_ = "POST", .headers_ = declared, .content_ = ruvia::http_request_content_plan::streaming()}, head);
+    auto prepared = ruvia::prepare_http1_client_request(ruvia::http_origin_view::http({.host_ = "example.com"}), {.method_ = "POST", .headers_ = declared, .content_ = ruvia::http_request_content_plan::streaming()}, head);
     const auto* prepared_req = std::get_if<ruvia::prepared_http1_client_request>(&prepared);
     EXPECT_TRUE(prepared_req != nullptr);
     if (prepared_req != nullptr) {
@@ -1473,19 +1456,18 @@ TEST(Ruvia, http1_streaming_request_declares_trailer_only_for_chunked_content) {
         EXPECT_TRUE((final.index() == 0));
     }
 
-    auto known_length = ruvia::http1_client_request_writer{}.prepare(ruvia::http_origin_view::http({.host_ = "example.com"}), {.method_ = "POST", .headers_ = declared, .content_ = ruvia::http_request_content_plan::streaming(3)}, head);
+    auto known_length = ruvia::prepare_http1_client_request(ruvia::http_origin_view::http({.host_ = "example.com"}), {.method_ = "POST", .headers_ = declared, .content_ = ruvia::http_request_content_plan::streaming(3)}, head);
     const auto* failure = std::get_if<ruvia::http1_client_request_prepare_error>(&known_length);
     EXPECT_TRUE(failure != nullptr && *failure == ruvia::http1_client_request_prepare_error::trailer_requires_chunked_content);
 
     const std::array forbidden{ruvia::http_header_view{"Trailer", "Content-Length"}};
-    auto rejected = ruvia::http1_client_request_writer{}.prepare(ruvia::http_origin_view::http({.host_ = "example.com"}), {.method_ = "POST", .headers_ = forbidden, .content_ = ruvia::http_request_content_plan::streaming()}, head);
+    auto rejected = ruvia::prepare_http1_client_request(ruvia::http_origin_view::http({.host_ = "example.com"}), {.method_ = "POST", .headers_ = forbidden, .content_ = ruvia::http_request_content_plan::streaming()}, head);
     const auto* invalid = std::get_if<ruvia::http1_client_request_prepare_error>(&rejected);
     EXPECT_TRUE(invalid != nullptr && *invalid == ruvia::http1_client_request_prepare_error::invalid_header);
 }
 TEST(Ruvia, http1_streaming_request_known_length_and_continue_gate) {
-    ruvia::http1_client_request_writer head_writer;
     std::array<char, 4096> head{};
-    auto prepared = head_writer.prepare(ruvia::http_origin_view::http({.host_ = "example.com"}), {.method_ = "PUT", .content_ = ruvia::http_request_content_plan::streaming(3)}, head, {.expectation_ = ruvia::http_client_request_expectation::continue_});
+    auto prepared = ruvia::prepare_http1_client_request(ruvia::http_origin_view::http({.host_ = "example.com"}), {.method_ = "PUT", .content_ = ruvia::http_request_content_plan::streaming(3), .expectation_ = ruvia::http_client_request_expectation::continue_}, head);
     const auto* prepared_req = std::get_if<ruvia::prepared_http1_client_request>(&prepared);
     ASSERT_TRUE(prepared_req != nullptr);
     EXPECT_TRUE((prepared_req->head().find("Content-Length: 3\r\n") != std::string_view::npos));
@@ -1513,7 +1495,7 @@ TEST(Ruvia, http1_streaming_request_known_length_and_continue_gate) {
 }
 TEST(Ruvia, http1_streaming_request_rejects_forbidden_trailer_without_mutating_buffer) {
     std::array<char, 1024> head{};
-    auto prepared = ruvia::http1_client_request_writer{}.prepare(ruvia::http_origin_view::http({.host_ = "example.com"}), {.method_ = "POST", .content_ = ruvia::http_request_content_plan::streaming()}, head);
+    auto prepared = ruvia::prepare_http1_client_request(ruvia::http_origin_view::http({.host_ = "example.com"}), {.method_ = "POST", .content_ = ruvia::http_request_content_plan::streaming()}, head);
     ruvia::http1_request_content_writer writer(std::get<0>(prepared));
     std::array<char, 128> finish_value{};
     finish_value.fill('X');
@@ -1627,7 +1609,7 @@ TEST(Ruvia, http1_streaming_request_finish_accepts_trailer_descriptors_stored_in
 }
 
 TEST(Ruvia, http_content_length_rejects_negative_sources_without_mutating_existing_options) {
-    ruvia::http_client_request_view request{.method_ = "POST", .target_ = "/upload", .content_ = ruvia::http_request_content_plan::streaming(3)};
+    ruvia::http_request_head_view request{.method_ = "POST", .target_ = "/upload", .content_ = ruvia::http_request_content_plan::streaming(3)};
     for (const auto invalid : {std::numeric_limits<std::int64_t>::min(), std::int64_t{-1}}) {
         EXPECT_TRUE(!ruvia::http_content_length::try_from_value(invalid).has_value());
         EXPECT_TRUE(ruvia::test::throws_on([&] {
@@ -1641,7 +1623,7 @@ TEST(Ruvia, http_content_length_rejects_negative_sources_without_mutating_existi
         }));
     }
     std::array<char, 256> head{};
-    const auto prepared = ruvia::http1_client_request_writer{}.prepare(ruvia::http_origin_view::http({.host_ = "example.com"}), request, head);
+    const auto prepared = ruvia::prepare_http1_client_request(ruvia::http_origin_view::http({.host_ = "example.com"}), request, head);
     const auto* retained = std::get_if<ruvia::prepared_http1_client_request>(&prepared);
     EXPECT_TRUE(retained != nullptr && retained->content().streaming_content() != nullptr);
     if (retained && retained->content().streaming_content()) {

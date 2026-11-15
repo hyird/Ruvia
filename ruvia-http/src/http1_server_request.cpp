@@ -163,70 +163,83 @@ void apply_parsed_request_target(http_request& request, const request_target_vie
 }
 }  // namespace
 
-http1_server_request_parse_state::http1_server_request_parse_state() noexcept :
+http1_server_request_parser::http1_server_request_parser() noexcept :
     request_(http_request_access::make()) {}
 
-http_request http1_server_request_parse_state::take_request() && noexcept {
+http_request http1_server_request_parser::take_request() && noexcept {
     return std::exchange(request_, http_request_access::make());
 }
 
-http1_request_body_plan http1_server_request_parse_state::take_body_plan() && noexcept {
-    return std::exchange(body_plan_, http1_request_body_plan(http_request_expectations{}));
+http1_request_body_plan http1_server_request_parser::take_body_plan() && noexcept {
+    return std::exchange(body_plan_, http1_request_body_plan(http1_message_framing::no_content(), http_request_expectations{}));
 }
 
-http1_request_connection_plan http1_server_request_parse_state::take_connection_plan() && noexcept {
+http1_request_connection_plan http1_server_request_parser::take_connection_plan() && noexcept {
     return std::exchange(connection_plan_, http1_request_connection_plan::http11_close());
 }
 
-void http1_server_request_parse_state::parse_head(std::string_view buffer, std::size_t header_search_offset) {
-    // Bytes before header_search_offset were classified by an earlier call on
-    // this state; an earlier search offset discards that progress.
-    auto scan = need_request_head() != nullptr ? *need_request_head() : http1_server_need_request_head{};
-    scan.leading_bytes_ = std::min(scan.leading_bytes_, header_search_offset);
-    scan.request_line_end_ = scan.request_line_end_ <= header_search_offset ? scan.request_line_end_ : 0;
-
-    // Incomplete input allocates no descriptor storage. The scan state is
-    // published first so an allocation failure while binding descriptors
-    // below cannot leave an earlier head_ready result beside the new request.
-    body_plan_ = http1_request_body_plan(http_request_expectations{});
+void http1_server_request_parser::reset() noexcept {
+    request_ = http_request_access::make();
+    body_plan_ = http1_request_body_plan(http1_message_framing::no_content(), http_request_expectations{});
     connection_plan_ = http1_request_connection_plan::http11_close();
-    progress_ = scan;
+    leading_bytes_ = 0;
+    request_line_end_ = 0;
+    scanned_bytes_ = 0;
+    state_ = decoder_state::active;
+}
+
+http1_server_request_parse_result http1_server_request_parser::fail(http_parse_error error) noexcept {
+    // A rejected head leaves the message boundary unknown and its content
+    // unconsumed, so the connection cannot be reused (RFC 9112 sections 6.1
+    // and 6.3). The request version may already have been accepted when a
+    // later target/framing semantic check fails; preserve it so an HTTP/1.0
+    // error response is not silently upgraded to HTTP/1.1.
+    const auto connection_plan = connection_plan_.require_close();
+    request_.reset();
+    connection_plan_ = connection_plan;
+    state_ = decoder_state::failed;
+    return http1_server_request_parse_result(0, http1_server_request_parse_failure(error));
+}
+
+http1_server_request_parse_result http1_server_request_parser::parse(std::string_view buffer) {
+    if (state_ != decoder_state::active) {
+        throw std::logic_error("HTTP/1 request parser is not active");
+    }
+    // Bytes before header_search_offset were classified by an earlier call; a
+    // shorter buffer discards the progress it no longer covers.
+    const auto header_search_offset = std::min(scanned_bytes_, buffer.size());
+    leading_bytes_ = std::min(leading_bytes_, header_search_offset);
+    request_line_end_ = request_line_end_ <= header_search_offset ? request_line_end_ : 0;
+
+    // Incomplete input allocates no descriptor storage. The plans return to
+    // their defaults first so an allocation failure while binding descriptors
+    // below cannot leave an earlier request's plans beside the new request.
+    body_plan_ = http1_request_body_plan(http1_message_framing::no_content(), http_request_expectations{});
+    connection_plan_ = http1_request_connection_plan::http11_close();
     request_.reset();
 
-    const auto fail = [this](http_parse_error error) noexcept {
-        // A rejected head leaves the message boundary unknown and its content
-        // unconsumed, so the connection cannot be reused (RFC 9112 sections 6.1
-        // and 6.3). The request version may already have been accepted when a
-        // later target/framing semantic check fails; preserve it so an HTTP/1.0
-        // error response is not silently upgraded to HTTP/1.1.
-        const auto connection_plan = connection_plan_.require_close();
-        request_.reset();
-        progress_ = http1_server_request_parse_failure(error);
-        connection_plan_ = connection_plan;
-    };
-
-    const auto header_bytes = find_http_request_head_end(buffer, scan.leading_bytes_, header_search_offset);
+    const auto header_bytes = find_http_request_head_end(buffer, leading_bytes_, header_search_offset);
     if (header_bytes == std::string_view::npos) {
-        if (scan.request_line_end_ == 0) {
-            if (const auto error = classify_http_request_line_prefix(buffer, scan.leading_bytes_, header_search_offset, scan.request_line_end_)) {
+        if (request_line_end_ == 0) {
+            if (const auto error = classify_http_request_line_prefix(buffer, leading_bytes_, header_search_offset, request_line_end_)) {
                 return fail(*error);
             }
         }
         // A field section line ending in a bare LF can never complete the
         // CRLF-delimited head (RFC 9112 section 2.2); answer it at once rather
         // than waiting for the header timeout.
-        if (scan.request_line_end_ != 0 && has_http_bare_line_feed(buffer, std::max(scan.request_line_end_, header_search_offset))) {
+        if (request_line_end_ != 0 && has_http_bare_line_feed(buffer, std::max(request_line_end_, header_search_offset))) {
             return fail(http_parse_error::invalid_header);
         }
         if (buffer.size() >= max_http_header_bytes) {
-            return fail(classify_head_cap(buffer, scan.leading_bytes_, scan.request_line_end_));
+            return fail(classify_head_cap(buffer, leading_bytes_, request_line_end_));
         }
-        progress_ = scan;
-        return;
+        scanned_bytes_ = buffer.size();
+        return http1_server_request_parse_result(0, decode_need_input{});
     }
 
     parsed_request_header_block block;
-    if (const auto error = parse_http_header_block(buffer, scan.leading_bytes_, header_bytes, block)) {
+    if (const auto error = parse_http_header_block(buffer, leading_bytes_, header_bytes, block)) {
         return fail(*error);
     }
 
@@ -246,7 +259,7 @@ void http1_server_request_parse_state::parse_head(std::string_view buffer, std::
     // can fail after the version line itself has been accepted. The final
     // disposition is already derived from the parsed Connection fields and is
     // tightened to close by body/response policy later.
-    connection_plan_ = protocol_version == http_protocol_version::http11 ? plan_http11_request_connection(block.connection_options_.close()) : plan_http10_request_connection(block.connection_options_.close(), block.connection_options_.keep_alive());
+    connection_plan_ = plan_http1_request_connection(protocol_version, block.connection_options_.close(), block.connection_options_.keep_alive());
     if (known_method == http_known_method::connect) {
         connection_plan_ = connection_plan_.with_tunnel_request();
     }
@@ -317,23 +330,24 @@ void http1_server_request_parse_state::parse_head(std::string_view buffer, std::
         expectations.ignore_continue();
     }
     if (final_chunked != nullptr) {
-        body_plan_ = http1_request_body_plan(final_chunked->transfer_codings(), expectations);
+        body_plan_ = http1_request_body_plan(http1_message_framing::chunked(final_chunked->transfer_codings()), expectations);
     } else if (content_length.has_value()) {
         if (*content_length > (std::numeric_limits<std::size_t>::max)()) {
             return fail(http_parse_error::invalid_content_length);
         }
-        body_plan_ = http1_request_body_plan(static_cast<std::size_t>(*content_length), expectations);
+        body_plan_ = http1_request_body_plan(http1_message_framing::known_length(*content_length), expectations);
     } else {
-        body_plan_ = http1_request_body_plan(expectations);
+        body_plan_ = http1_request_body_plan(http1_message_framing::no_content(), expectations);
     }
-    progress_ = http1_server_request_head_ready(header_bytes);
+    state_ = decoder_state::finished;
+    return http1_server_request_parse_result(header_bytes, decode_complete{});
 }
 
 http_request make_parsed_http_request(borrowed_text method, borrowed_text target, std::span<const http_header_view> headers, borrowed_span<std::byte> body) {
     const auto method_view = method.view();
     const auto target_text = target.view();
     if (!is_valid_http_method_token(method_view)) {
-        throw http_parse_protocol_error(http_parse_error::invalid_request_line);
+        throw make_http_protocol_error(http_parse_error::invalid_request_line);
     }
     auto request = http_request_access::make();
     http_request_access::set_method(request, method_view);
@@ -341,7 +355,7 @@ http_request make_parsed_http_request(borrowed_text method, borrowed_text target
 
     request_target_view target_view;
     if (!parse_request_target(request.known_method(), target_text, target_view)) {
-        throw http_parse_protocol_error(http_parse_error::invalid_request_target);
+        throw make_http_protocol_error(http_parse_error::invalid_request_target);
     }
     // The same recipient field rules as the wire parsers: repeated singleton
     // fields such as Range or If-Range make the request invalid instead of
@@ -353,17 +367,17 @@ http_request make_parsed_http_request(borrowed_text method, borrowed_text target
     for (std::size_t i = 0; i < headers.size(); ++i) {
         const auto& header = headers[i];
         if (!is_valid_http_header_name(header.name()) || !is_valid_http_header_value(header.value())) {
-            throw http_parse_protocol_error(http_parse_error::invalid_header);
+            throw make_http_protocol_error(http_parse_error::invalid_header);
         }
         if (!budget.add_field(header.name(), header.value())) {
-            throw http_parse_protocol_error(http_parse_error::header_too_large);
+            throw make_http_protocol_error(http_parse_error::header_too_large);
         }
         const auto kind = detail::classify_http_field(header.name());
         if (i < inline_kind_capacity) {
             inline_kinds[i] = kind;
         }
         if (detail::validate_request_field(kind, header.value(), detail::http_field_list_role::recipient, fields) != detail::request_field_status::ok) {
-            throw http_parse_protocol_error(kind == detail::http_field_kind::host ? http_parse_error::invalid_host : http_parse_error::invalid_header);
+            throw make_http_protocol_error(kind == detail::http_field_kind::host ? http_parse_error::invalid_host : http_parse_error::invalid_header);
         }
     }
 
@@ -376,15 +390,15 @@ http_request make_parsed_http_request(borrowed_text method, borrowed_text target
             field = http_header_view{field.name(), bound_host_field_value(target_view, field.value())};
         }
         if (!http_request_access::add_header(request, field, kind)) {
-            throw http_parse_protocol_error(http_parse_error::header_too_large);
+            throw make_http_protocol_error(http_parse_error::header_too_large);
         }
     }
     http_request_access::set_body(request, body.view());
     return request;
 }
 
-bool should_drop_invalid_cleartext_http1_input(std::string_view buffer, http1_server_request_parse_failure_source source_value) noexcept {
-    if (source_value != http1_server_request_parse_failure_source::request_line) {
+bool should_drop_invalid_cleartext_http1_input(std::string_view buffer, http_parse_error error) noexcept {
+    if (error != http_parse_error::invalid_request_line && error != http_parse_error::unsupported_http_version) {
         return false;
     }
 

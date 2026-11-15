@@ -977,7 +977,7 @@ public:
         const auto path = context_value.req().path() == "/large" ? "/large-asset" : (context_value.req().path() == "/delayed-parent" ? "/delayed-asset" : "/asset");
         const std::array<ruvia::http_header_view, 1> headers{{{"x-promise", "owned-request"}}};
         for (unsigned i = 0; i != count; ++i) {
-            if (context_value.push({.scheme_ = "http", .authority_ = context_value.req().authority(), .path_ = path, .headers_ = headers})) {
+            if (context_value.push({.scheme_ = "http", .authority_ = context_value.req().authority(), .target_ = path, .headers_ = headers})) {
                 ++owner_value.promised_;
             } else {
                 ++owner_value.refused_;
@@ -1035,7 +1035,7 @@ TEST(Ruvia, http2_push_routes_and_client_preserve_owners_flow_control_cold_reads
                     if (!push) {
                         throw std::runtime_error("missing push");
                     }
-                    EXPECT_TRUE(push->request().path_ == "/asset");
+                    EXPECT_TRUE(push->request().target_ == "/asset");
                     EXPECT_TRUE(push->request().headers_.front().value() == "owned-request");
                     {
                         auto cold = push->response();
@@ -1058,7 +1058,7 @@ TEST(Ruvia, http2_push_routes_and_client_preserve_owners_flow_control_cold_reads
                         retained.emplace(std::move(moved));
                         retained_response.emplace(std::move(response));
                     }
-                    EXPECT_TRUE(retained->request().path_ == "/asset");
+                    EXPECT_TRUE(retained->request().target_ == "/asset");
                     EXPECT_TRUE(retained_response->header("x-asset") == "metadata");
                 }
                 auto parent_value = co_await client_origin.get("/large").send();
@@ -1100,7 +1100,7 @@ TEST(Ruvia, http2_push_routes_and_client_preserve_owners_flow_control_cold_reads
                 std::rethrow_exception(failure);
             }
         }
-        EXPECT_TRUE(retained->request().path_ == "/asset");
+        EXPECT_TRUE(retained->request().target_ == "/asset");
         EXPECT_TRUE(retained_response->header("x-asset") == "metadata");
         retained_response.reset();
         retained.reset();

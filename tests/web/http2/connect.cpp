@@ -120,7 +120,7 @@ public:
         co_return context_value.text("ok");
     }
     ruvia::task<ruvia::http_response> push_parent_cancel(ruvia::context& context_value) {
-        (void)context_value.push({.method_ = "GET", .scheme_ = "http", .authority_ = "localhost", .path_ = "/pushed-buffered-cancel"});
+        (void)context_value.push({.method_ = "GET", .scheme_ = "http", .authority_ = "localhost", .target_ = "/pushed-buffered-cancel"});
         co_return context_value.text("parent");
     }
     ruvia::task<ruvia::http_response> pushed_buffered_cancel(ruvia::context& context_value) {
@@ -244,7 +244,7 @@ TEST(Ruvia, http2_connect_routes_echo_large_duplex_streams_and_leave_sibling_req
                 }
             };
             co_await flush_peer(socket, peer);
-            while (!peer.received_peer_settings()) {
+            while (!peer.peer_settings().has_value()) {
                 co_await pump();
                 while (auto event = peer.next_event()) {
                     if (peer.connection_error()) {
@@ -255,7 +255,7 @@ TEST(Ruvia, http2_connect_routes_echo_large_duplex_streams_and_leave_sibling_req
             }
             for (unsigned round = 0; round != 3; ++round) {
                 observation_value.return_early_ = round == 2;
-                const auto request = round != 1 ? peer.submit_request_head(ruvia::http_connect_request_head_view{.authority_ = "TARGET.TEST:443"}) : peer.submit_request_head(ruvia::http_extended_connect_request_head_view{.protocol_ = "test-tunnel", .scheme_ = "http", .authority_ = "proxy.test", .target_ = "/udp/target.test/443"});
+                const auto request = round != 1 ? peer.submit_request_head(ruvia::http_request_head_view{.method_ = "CONNECT", .authority_ = "TARGET.TEST:443"}) : peer.submit_request_head(ruvia::http_request_head_view{.method_ = "CONNECT", .protocol_ = "test-tunnel", .scheme_ = "http", .authority_ = "proxy.test", .target_ = "/udp/target.test/443"});
                 const auto* id_ptr = std::get_if<std::uint32_t>(&request);
                 if (id_ptr == nullptr) {
                     throw std::runtime_error("CONNECT request submission rejected");
@@ -345,7 +345,7 @@ TEST(Ruvia, http2_connect_routes_echo_large_duplex_streams_and_leave_sibling_req
                 }
                 observation_value.saw_eof_ = false;
             }
-            auto sibling = peer.submit_request_head(ruvia::http_regular_request_head_view{.scheme_ = "http", .authority_ = "proxy.test", .target_ = "/after"});
+            auto sibling = peer.submit_request_head(ruvia::http_request_head_view{.scheme_ = "http", .authority_ = "proxy.test", .target_ = "/after"});
             if (!std::holds_alternative<std::uint32_t>(sibling)) {
                 throw std::runtime_error("sibling request failed");
             }
@@ -421,7 +421,7 @@ TEST(Ruvia, http2_connect_route_receives_data_sent_before_the_response) {
                 }
             };
             co_await flush_peer(socket, peer);
-            while (!peer.received_peer_settings()) {
+            while (!peer.peer_settings().has_value()) {
                 co_await pump();
                 while (peer.next_event()) {
                     if (peer.connection_error()) {
@@ -430,7 +430,7 @@ TEST(Ruvia, http2_connect_route_receives_data_sent_before_the_response) {
                 }
                 co_await flush_peer(socket, peer);
             }
-            const auto request = peer.submit_request_head(ruvia::http_connect_request_head_view{.authority_ = "target.test:443"});
+            const auto request = peer.submit_request_head(ruvia::http_request_head_view{.method_ = "CONNECT", .authority_ = "target.test:443"});
             const auto* id_ptr = std::get_if<std::uint32_t>(&request);
             if (id_ptr == nullptr) {
                 throw std::runtime_error("CONNECT request submission rejected");
@@ -538,7 +538,7 @@ TEST(Ruvia, http2_slow_body_and_tunnel_consumers_return_receive_window_without_p
                 }
             };
             co_await flush_peer(socket, peer);
-            while (!peer.received_peer_settings()) {
+            while (!peer.peer_settings().has_value()) {
                 co_await pump();
                 while (auto event = peer.next_event()) {
                     if (peer.connection_error()) {
@@ -551,7 +551,7 @@ TEST(Ruvia, http2_slow_body_and_tunnel_consumers_return_receive_window_without_p
             const std::string payload_value(std::size_t{3} * 1024 * 1024 + 7, 'w');
             const auto expected = std::string(std::to_string(payload_value.size()));
 
-            const auto tunnel = peer.submit_request_head(ruvia::http_extended_connect_request_head_view{.protocol_ = "slow-tunnel", .scheme_ = "http", .authority_ = "proxy.test", .target_ = "/slow-tunnel"});
+            const auto tunnel = peer.submit_request_head(ruvia::http_request_head_view{.method_ = "CONNECT", .protocol_ = "slow-tunnel", .scheme_ = "http", .authority_ = "proxy.test", .target_ = "/slow-tunnel"});
             const auto* tunnel_id_ptr = std::get_if<std::uint32_t>(&tunnel);
             if (tunnel_id_ptr == nullptr) {
                 throw std::runtime_error("slow tunnel request submission rejected");
@@ -603,7 +603,7 @@ TEST(Ruvia, http2_slow_body_and_tunnel_consumers_return_receive_window_without_p
             EXPECT_EQ(tunnel_consumed, payload_value.size());
             EXPECT_TRUE(tunnel_reply == expected);
 
-            const auto upload = peer.submit_request_head(ruvia::http_regular_request_head_view{.method_ = "POST", .scheme_ = "http", .authority_ = "proxy.test", .target_ = "/slow-upload", .content_ = ruvia::http_request_content_plan::streaming()});
+            const auto upload = peer.submit_request_head(ruvia::http_request_head_view{.method_ = "POST", .scheme_ = "http", .authority_ = "proxy.test", .target_ = "/slow-upload", .content_ = ruvia::http_request_content_plan::streaming()});
             const auto* upload_id_ptr = std::get_if<std::uint32_t>(&upload);
             if (upload_id_ptr == nullptr) {
                 throw std::runtime_error("slow upload request submission rejected");
@@ -694,7 +694,7 @@ TEST(Ruvia, http2_websocket_request_half_closed_before_handshake_receives_error_
                 }
             };
             co_await flush_peer(socket, peer);
-            while (!peer.received_peer_settings()) {
+            while (!peer.peer_settings().has_value()) {
                 co_await pump();
                 while (auto event = peer.next_event()) {
                     if (peer.connection_error()) {
@@ -704,7 +704,7 @@ TEST(Ruvia, http2_websocket_request_half_closed_before_handshake_receives_error_
                 co_await flush_peer(socket, peer);
             }
             const std::array<ruvia::http_header_view, 1> headers{ruvia::http_header_view("sec-websocket-version", "13")};
-            const auto request = peer.submit_request_head(ruvia::http_extended_connect_request_head_view{.protocol_ = "websocket", .scheme_ = "http", .authority_ = "proxy.test", .target_ = "/late-fin-websocket", .headers_ = headers});
+            const auto request = peer.submit_request_head(ruvia::http_request_head_view{.method_ = "CONNECT", .protocol_ = "websocket", .scheme_ = "http", .authority_ = "proxy.test", .target_ = "/late-fin-websocket", .headers_ = headers});
             const auto* id_ptr = std::get_if<std::uint32_t>(&request);
             if (id_ptr == nullptr) {
                 throw std::runtime_error("websocket request submission rejected");
@@ -890,7 +890,7 @@ TEST(Ruvia, http2_capsule_route_resets_truncated_capsule_with_protocol_error) {
                 }
             };
             co_await flush_peer(socket, peer);
-            while (!peer.received_peer_settings()) {
+            while (!peer.peer_settings().has_value()) {
                 co_await pump();
                 while (peer.next_event()) {
                     if (peer.connection_error()) {
@@ -899,7 +899,7 @@ TEST(Ruvia, http2_capsule_route_resets_truncated_capsule_with_protocol_error) {
                 }
                 co_await flush_peer(socket, peer);
             }
-            const auto request = peer.submit_request_head(ruvia::http_extended_connect_request_head_view{.protocol_ = "capsule-tunnel", .scheme_ = "http", .authority_ = "proxy.test", .target_ = "/capsules"});
+            const auto request = peer.submit_request_head(ruvia::http_request_head_view{.method_ = "CONNECT", .protocol_ = "capsule-tunnel", .scheme_ = "http", .authority_ = "proxy.test", .target_ = "/capsules"});
             const auto* id_ptr = std::get_if<std::uint32_t>(&request);
             if (id_ptr == nullptr) {
                 throw std::runtime_error("capsule request submission rejected");
@@ -997,13 +997,13 @@ TEST(Ruvia, http2_capsule_route_closed_stream_rejects_truncated_capsule_without_
             co_return true;
         };
         co_await flush_peer(socket, peer);
-        while (!peer.received_peer_settings()) {
+        while (!peer.peer_settings().has_value()) {
             co_await pump();
             while (peer.next_event()) {
             }
             co_await flush_peer(socket, peer);
         }
-        const auto req = peer.submit_request_head(ruvia::http_extended_connect_request_head_view{.protocol_ = "capsule-tunnel", .scheme_ = "http", .authority_ = "proxy.test", .target_ = "/capsules"});
+        const auto req = peer.submit_request_head(ruvia::http_request_head_view{.method_ = "CONNECT", .protocol_ = "capsule-tunnel", .scheme_ = "http", .authority_ = "proxy.test", .target_ = "/capsules"});
         const auto id = std::get<std::uint32_t>(req);
         co_await flush_peer(socket, peer);
         bool saw_server_end = false;

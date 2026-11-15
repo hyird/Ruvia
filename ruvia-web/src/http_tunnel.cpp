@@ -116,15 +116,15 @@ public:
         };
         const auto bytes_value = std::span<const char>(input_).subspan(offset_);
         const auto result_value = decoder_.feed_one(bytes_value, fin, collect, this, retention);
-        offset_ += result_value.consumed_bytes_;
-        if (result_value.status_ == http_capsule_status::limit || result_value.status_ == http_capsule_status::truncated) {
+        offset_ += result_value.consumed_bytes();
+        if (result_value.holds<http_capsule_decode_failure>()) {
             abort_malformed();
             throw std::runtime_error("invalid or oversized capsule stream");
         }
-        if (result_value.status_ == http_capsule_status::end) {
+        if (decoder_.state() == decoder_state::finished) {
             receive_ended_ = true;
         }
-        return result_value.capsule_complete_;
+        return result_value.holds<http_capsule_boundary>();
     }
     // Interruptions are std::system_error (timed_out / operation_canceled);
     // a client tunnel reports them as its http_client_error subclass.

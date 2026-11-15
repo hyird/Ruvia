@@ -234,8 +234,8 @@ private:
                     throw std::runtime_error("invalid HTTP/2 input");
                 }
                 while (auto event = connection.next_event()) {
-                    if (const auto* closed = event->stream_closed(); closed != nullptr && closed->source() == ruvia::http2_stream_close_source::peer) {
-                        observed.resets_.push_back(closed->error());
+                    if (const auto* closed = event->stream_closed(); closed != nullptr && closed->source() == ruvia::http_stream_close_source::peer) {
+                        observed.resets_.push_back(*closed->error());
                     }
                     auto* request = event->request_head();
                     if (request == nullptr) {

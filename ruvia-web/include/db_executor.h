@@ -19,17 +19,20 @@
 #include <vector>
 
 #include "borrowed_text.h"
+#include "client_transport_config.h"
 #include "db_sql_scan.h"
 #include "decimal_text.h"
 #include "entity_storage.h"
 #include "event_loop.h"
 #include "fixed_string.h"
-#include "http_client_types.h"
+#include "ip_address.h"
 #include "model_value.h"
 #include "operation_options.h"
 #include "operation_scope.h"
 #include "stop_token.h"
 #include "task.h"
+#include "timeout_duration.h"
+#include "worker_ref.h"
 
 namespace ruvia {
 

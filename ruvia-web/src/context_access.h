@@ -43,7 +43,6 @@
 #include "crypto.h"
 #include "event_loop.h"
 #include "http1_server_response.h"
-#include "http2_push.h"
 #include "http_cache.h"
 #include "http_client_ip.h"
 #include "http_client_types.h"
@@ -54,6 +53,7 @@
 #include "http_header.h"
 #include "http_priority.h"
 #include "http_request.h"
+#include "http_request_head_view.h"
 #include "http_response.h"
 #include "http_tunnel.h"
 #include "inbound_buffer.h"
@@ -327,12 +327,12 @@ struct streaming_access final {
 // Borrows the request's connection.
 class http_push_output final {
 public:
-    using submit_type = bool (*)(void*, http_push_request_view);
+    using submit_type = bool (*)(void*, http_request_head_view);
     http_push_output(void* target, submit_type submit) noexcept :
         target_(target),
         submit_(submit) {}
     // Header-list bounds are enforced by the HTTP/2 submit path.
-    [[nodiscard]] bool push(http_push_request_view request) {
+    [[nodiscard]] bool push(http_request_head_view request) {
         return submit_(target_, request);
     }
 

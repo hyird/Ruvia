@@ -17,7 +17,7 @@
 #include "borrowed_text.h"
 #include "callback_ref.h"
 #include "task.h"
-#include "worker_state.h"
+#include "worker_services.h"
 
 // The three non-owning callable shapes a route runs: a buffered handler, a
 // streaming (response-stream / websocket / tunnel) handler, and one middleware

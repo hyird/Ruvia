@@ -145,6 +145,7 @@ ruvia_install_component(ruvia-web web)
 set(ruvia_web_headers
     include/app.h
     include/callback_ref.h
+    include/client_transport_config.h
     include/connection_transport.h
     include/context.h
     include/controller.h
@@ -172,6 +173,7 @@ set(ruvia_web_headers
     include/tcp_client.h
     include/test_app.h
     include/tls_config.h
+    include/web_worker.h
     include/websocket.h
     include/worker_services.h
     include/worker_state.h

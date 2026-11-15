@@ -381,7 +381,7 @@ struct served_get final {
 // http3_request_head and the buffered response mapping.
 served_get serve_get(in_memory_h3_pair& pair, std::int64_t stream_id, std::string_view path, std::string_view body) {
     served_get result;
-    const ruvia::http_regular_request_head_view request_head{.authority_ = "localhost", .target_ = path};
+    const ruvia::http_request_head_view request_head{.authority_ = "localhost", .target_ = path};
     if (pair.client().http3().submit_request_head(stream_id, request_head) != ruvia::http_submit_status::accepted) {
         return result;
     }
@@ -1138,20 +1138,20 @@ public:
                      .https_ = enabled_tcp_.endpoint().port(),
                      .http3_ = enabled_udp_.endpoint().port(),
                      .http3_early_data_ = true,
-                     .tls_ = {.identity_ = {.certificate_chain_file_ = identity_.ca_file_, .private_key_file_ = key}},
+                     .tls_ = {.identities_ = ruvia::tls_fixed_identities{.primary_ = {.certificate_chain_file_ = identity_.ca_file_, .private_key_file_ = key}}},
                  },
                     {
                         .address_ = "127.0.0.1",
                         .https_ = disabled_tcp_.endpoint().port(),
                         .http3_ = disabled_udp_.endpoint().port(),
-                        .tls_ = {.identity_ = {.certificate_chain_file_ = identity_.ca_file_, .private_key_file_ = key}},
+                        .tls_ = {.identities_ = ruvia::tls_fixed_identities{.primary_ = {.certificate_chain_file_ = identity_.ca_file_, .private_key_file_ = key}}},
                     },
                     {
                         .address_ = "127.0.0.1",
                         .https_ = retry_tcp_.endpoint().port(),
                         .http3_ = retry_udp_.endpoint().port(),
                         .http3_retry_ = true,
-                        .tls_ = {.identity_ = {.certificate_chain_file_ = identity_.ca_file_, .private_key_file_ = key}},
+                        .tls_ = {.identities_ = ruvia::tls_fixed_identities{.primary_ = {.certificate_chain_file_ = identity_.ca_file_, .private_key_file_ = key}}},
                     }})
             .on_start([this] {
             started_.set_value();

@@ -1070,9 +1070,9 @@ task<void> http3_session::dispatch_one(std::int64_t stream_id) {
                         admission.tail().record_access(options.access_log_, head_response.status());
                         return http3_tunnel_transport(*this, *stream, *signal);
                     };
-                    auto commit_websocket = [this, stream, signal, &request, &head, &admission, &options](context& context_value, const websocket_route_endpoint& endpoint, std::span<const http_header_view> headers) -> task<websocket_upgrade_attempt<http3_tunnel_transport>> {
-                        const auto validation = validate_http3_websocket_handshake(head, request, endpoint.handshake_validation());
-                        if (const auto* failure = validation.failure()) {
+                    auto commit_websocket = [this, stream, signal, &request, &admission, &options](context& context_value, const websocket_route_endpoint& endpoint, std::span<const http_header_view> headers) -> task<websocket_upgrade_attempt<http3_tunnel_transport>> {
+                        const auto validation = codec().validate_websocket_handshake(stream->id(), request, endpoint.handshake_validation());
+                        if (const auto* failure = std::get_if<websocket_handshake_error>(&validation)) {
                             co_return reject_request_stream_websocket(context_value, *failure);
                         }
                         const auto result = codec().submit_websocket_handshake(stream->id(), request, validation, {.supported_subprotocols_ = endpoint.subprotocols(), .response_headers_ = headers, .deflate_ = endpoint.deflate()});
@@ -1110,11 +1110,12 @@ task<void> http3_session::dispatch_one(std::int64_t stream_id) {
                 }
                 case http_request_endpoint::websocket: {
                     const auto& endpoint = *resolved->route().endpoint().websocket();
-                    const auto validation = validate_http3_websocket_handshake(head, request, endpoint.handshake_validation());
-                    if (const auto* failure = validation.failure()) {
+                    const auto validation = codec().validate_websocket_handshake(stream->id(), request, endpoint.handshake_validation());
+                    if (const auto* failure = std::get_if<websocket_handshake_error>(&validation)) {
                         admission.tail().disable_response_coding();
-                        response = co_await routes.respond_error(request, http_error_info({.status_ = failure->protocol_error().status(), .code_ = failure->protocol_error().code(), .message_ = std::string_view(failure->protocol_error().what())}), request_services);
-                        failure->apply_required_response_headers(response);
+                        const auto protocol_error = make_http_protocol_error(*failure);
+                        response = co_await routes.respond_error(request, http_error_info({.status_ = protocol_error.status(), .code_ = protocol_error.code(), .message_ = std::string_view(protocol_error.what())}), request_services);
+                        apply_websocket_handshake_error_headers(*failure, response);
                         break;
                     }
                     auto commit = [this, stream, signal, &request, &validation, &endpoint, &admission, &options](context& context_value, std::span<const http_header_view> headers) {

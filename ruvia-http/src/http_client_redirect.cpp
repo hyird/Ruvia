@@ -13,10 +13,10 @@
 #include "borrowed_text.h"
 #include "http1_client_request.h"
 #include "http_authority.h"
-#include "http_client_request_view.h"
 #include "http_client_response_head.h"
 #include "http_header.h"
 #include "http_request.h"
+#include "http_request_head_view.h"
 #include "http_uri_syntax.h"
 
 namespace ruvia {
@@ -179,7 +179,7 @@ http_client_redirect_request_plan::http_client_redirect_request_plan(std::string
     method_(method),
     content_disposition_(content_disposition) {}
 
-http_client_redirect_request_plan plan_http_client_redirect_request(const http_client_request_view& request, http_client_redirect_request_plan_options options) {
+http_client_redirect_request_plan plan_http_client_redirect_request(const http_request_head_view& request, http_client_redirect_request_plan_options options) {
     if (options.status_ == http_status::see_other) {
         return http_client_redirect_request_plan(request.method_ == "HEAD" ? request.method_.view() : std::string_view("GET"), http_client_redirect_content_disposition::drop);
     }

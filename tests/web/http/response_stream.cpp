@@ -332,7 +332,7 @@ using response_stream_test::stream_lane_observed;
 TEST(Ruvia, response_stream_head_rejects_a_mismatched_status_plan) {
     ruvia::http_response response;
     response.status(ruvia::http_status::created);
-    auto plan = ruvia::plan_http_response_stream_commit(ruvia::http_response_stream_framing::http1_chunked, ruvia::http_known_method::get, ruvia::http_status::accepted, ruvia::http_response_trailer_intent::none);
+    auto plan = ruvia::plan_http_response_stream_commit(ruvia::http1_framing_kind::chunked, ruvia::http_known_method::get, ruvia::http_status::accepted, ruvia::http_response_trailer_intent::none);
     bool rejected = false;
     try {
         (void)ruvia::prepare_http_response_stream_head(std::move(response), std::move(plan));

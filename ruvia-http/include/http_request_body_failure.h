@@ -19,7 +19,7 @@ enum class http_request_body_failure : std::uint8_t {
     buffer_limit,
 };
 
-[[nodiscard]] inline http_protocol_error http_request_body_protocol_error(http_request_body_failure failure) noexcept {
+[[nodiscard]] inline http_protocol_error make_http_protocol_error(http_request_body_failure failure) noexcept {
     switch (failure) {
         case http_request_body_failure::too_large:
             return http_protocol_error(http_status::content_too_large, "request_body_too_large", "request body is too large");
@@ -31,29 +31,28 @@ enum class http_request_body_failure : std::uint8_t {
     return http_protocol_error(http_status::bad_request, "invalid_request_body", "invalid request body");
 }
 
-// Status for a request body whose Transfer-Encoding could not be decoded.
-// unsupported_coding cannot occur: framing rejects such stacks with 501 first.
-[[nodiscard]] inline http_protocol_error http_request_transfer_coding_error(http_content_decode_error error) noexcept {
-    switch (error) {
-        case http_content_decode_error::unsupported_coding:
-            return http_parse_protocol_error(http_parse_error::unsupported_transfer_encoding);
-        case http_content_decode_error::invalid_content:
-            return http_protocol_error(http_status::bad_request, "invalid_transfer_coding_body", "invalid transfer-coding body");
-        case http_content_decode_error::decoded_size_exceeded:
-            return http_request_body_protocol_error(http_request_body_failure::too_large);
-    }
-    return http_protocol_error(http_status::bad_request, "invalid_transfer_coding_body", "invalid transfer-coding body");
-}
+// The request field that named the coding a decoder failed to remove. The same
+// decode error answers with a different status for each.
+enum class http_coding_field : std::uint8_t {
+    content_encoding,
+    transfer_encoding,
+};
 
-// Status for a request body whose Content-Encoding could not be decoded.
-[[nodiscard]] inline http_protocol_error http_request_content_decode_error(http_content_decode_error error) noexcept {
-    switch (error) {
-        case http_content_decode_error::unsupported_coding:
-            return http_protocol_error(http_status::unsupported_media_type, "unsupported_content_coding", "request Content-Encoding is not supported");
-        case http_content_decode_error::invalid_content:
-            return http_protocol_error(http_status::bad_request, "invalid_content_coding", "failed to decode request body");
-        case http_content_decode_error::decoded_size_exceeded:
-            return http_request_body_protocol_error(http_request_body_failure::too_large);
+// Status for a request body whose Content-Encoding or Transfer-Encoding could
+// not be decoded. A transfer-coding unsupported_coding cannot occur: framing
+// rejects such stacks with 501 first.
+[[nodiscard]] inline http_protocol_error make_http_protocol_error(http_content_decode_error error, http_coding_field field) noexcept {
+    if (error == http_content_decode_error::decoded_size_exceeded) {
+        return make_http_protocol_error(http_request_body_failure::too_large);
+    }
+    if (field == http_coding_field::transfer_encoding) {
+        if (error == http_content_decode_error::unsupported_coding) {
+            return make_http_protocol_error(http_parse_error::unsupported_transfer_encoding);
+        }
+        return http_protocol_error(http_status::bad_request, "invalid_transfer_coding_body", "invalid transfer-coding body");
+    }
+    if (error == http_content_decode_error::unsupported_coding) {
+        return http_protocol_error(http_status::unsupported_media_type, "unsupported_content_coding", "request Content-Encoding is not supported");
     }
     return http_protocol_error(http_status::bad_request, "invalid_content_coding", "failed to decode request body");
 }

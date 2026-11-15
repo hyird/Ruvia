@@ -22,13 +22,13 @@
 #include "connection_transport.h"
 #include "decimal_text.h"
 #include "http1_server_response.h"
-#include "http2_push.h"
 #include "http_cookie.h"
 #include "http_error.h"
 #include "http_header.h"
 #include "http_message.h"
 #include "http_priority.h"
 #include "http_request.h"
+#include "http_request_head_view.h"
 #include "http_response.h"
 #include "http_status.h"
 #include "ip_address.h"
@@ -88,6 +88,7 @@ request_binding_guard<std::remove_cvref_t<t_type>> bind_validated_model(context&
 [[noreturn]] void throw_invalid_param();
 
 struct context_access;
+struct request_name_value_list_access;
 class context_services;
 }  // namespace detail
 
@@ -249,6 +250,153 @@ public:
 private:
     std::string_view value_;
 };
+
+// The fields of one request source -- headers, query, cookies or path
+// parameters -- in request order, duplicates preserved. Views borrow the
+// context's request storage.
+class request_name_value_list final {
+public:
+    using value_type = http_header_view;
+    using const_iterator = const http_header_view*;
+
+    request_name_value_list(const request_name_value_list&) = delete;
+    request_name_value_list& operator=(const request_name_value_list&) = delete;
+    request_name_value_list(request_name_value_list&& other) noexcept :
+        owned_(std::move(other.owned_)),
+        case_insensitive_(other.case_insensitive_) {
+        items_ = owned_.empty() ? other.items_ : std::span<const http_header_view>(owned_);
+        other.items_ = {};
+    }
+    request_name_value_list& operator=(request_name_value_list&&) = delete;
+
+    [[nodiscard]] const_iterator begin() const& noexcept RUVIA_LIFETIMEBOUND {
+        return items_.data();
+    }
+    [[nodiscard]] const_iterator begin() const&& = delete;
+
+    [[nodiscard]] const_iterator cbegin() const& noexcept RUVIA_LIFETIMEBOUND {
+        return begin();
+    }
+    [[nodiscard]] const_iterator cbegin() const&& = delete;
+
+    [[nodiscard]] const_iterator end() const& noexcept RUVIA_LIFETIMEBOUND {
+        return items_.data() + items_.size();
+    }
+    [[nodiscard]] const_iterator end() const&& = delete;
+
+    [[nodiscard]] const_iterator cend() const& noexcept RUVIA_LIFETIMEBOUND {
+        return end();
+    }
+    [[nodiscard]] const_iterator cend() const&& = delete;
+
+    [[nodiscard]] std::size_t size() const noexcept {
+        return items_.size();
+    }
+
+    [[nodiscard]] bool empty() const noexcept {
+        return items_.empty();
+    }
+
+    [[nodiscard]] const http_header_view* data() const& noexcept RUVIA_LIFETIMEBOUND {
+        return items_.data();
+    }
+    [[nodiscard]] const http_header_view* data() const&& = delete;
+
+    [[nodiscard]] const http_header_view& operator[](std::size_t index) const& noexcept RUVIA_LIFETIMEBOUND {
+        return items_[index];
+    }
+    [[nodiscard]] const http_header_view& operator[](std::size_t) const&& = delete;
+
+    // Duplicate fields are preserved in materialization order; scalar lookup uses
+    // the first occurrence. Header lists compare names case-insensitively;
+    // other field sources compare exactly. Enumeration preserves name spelling.
+    [[nodiscard]] std::optional<std::string_view> get(std::string_view name) const noexcept {
+        for (const auto& item : items_) {
+            if (names_equal(item.name(), name)) {
+                return item.value();
+            }
+        }
+        return std::nullopt;
+    }
+
+    // Security-relevant single-valued fields must not pick one of several
+    // occurrences: a repeated name reports repeated instead of a value.
+    [[nodiscard]] http_unique_field_lookup unique(std::string_view name) const& noexcept RUVIA_LIFETIMEBOUND {
+        http_unique_field_lookup result;
+        for (const auto& item : items_) {
+            if (names_equal(item.name(), name)) {
+                result.add_occurrence(item.value());
+                if (result.status_ == unique_lookup_status::repeated) {
+                    break;
+                }
+            }
+        }
+        return result;
+    }
+    http_unique_field_lookup unique(std::string_view) const&& = delete;
+
+    [[nodiscard]] std::size_t count(std::string_view name) const noexcept {
+        std::size_t result_value = 0;
+        for (const auto& item : items_) {
+            if (names_equal(item.name(), name)) {
+                ++result_value;
+            }
+        }
+        return result_value;
+    }
+
+    [[nodiscard]] std::span<const http_header_view> entries() const& noexcept RUVIA_LIFETIMEBOUND {
+        return items_;
+    }
+    [[nodiscard]] std::span<const http_header_view> entries() const&& = delete;
+
+private:
+    friend struct detail::request_name_value_list_access;
+
+    explicit request_name_value_list(bool case_insensitive = false) noexcept :
+        items_(owned_),
+        case_insensitive_(case_insensitive) {}
+    explicit request_name_value_list(std::span<const http_header_view> headers) noexcept :
+        items_(headers),
+        case_insensitive_(true) {}
+
+    [[nodiscard]] bool names_equal(std::string_view left, std::string_view right) const noexcept {
+        return case_insensitive_ ? http_ascii_equals_ignore_case(left, right) : left == right;
+    }
+
+    void reserve(std::size_t count) {
+        owned_.reserve(count);
+        items_ = owned_;
+    }
+
+    void push_back(http_header_view value) {
+        owned_.push_back(value);
+        items_ = owned_;
+    }
+
+    std::vector<http_header_view> owned_{};
+    std::span<const http_header_view> items_{};
+    bool case_insensitive_{false};
+};
+
+namespace detail {
+struct request_name_value_list_access final {
+    [[nodiscard]] static request_name_value_list make() noexcept {
+        return request_name_value_list();
+    }
+    [[nodiscard]] static request_name_value_list borrow_headers(std::span<const http_header_view> headers) noexcept {
+        return request_name_value_list(headers);
+    }
+
+    static void reserve(request_name_value_list& list, std::size_t count) {
+        list.reserve(count);
+    }
+
+    static void push_back(request_name_value_list& list, http_header_view value) {
+        list.push_back(value);
+    }
+};
+}  // namespace detail
 
 struct signed_cookie_lookup_options final {
     borrowed_text name_{};
@@ -473,7 +621,7 @@ public:
 
     // Queues a promised request on this HTTP/2 connection. False means the
     // peer disabled push or its stream capacity cannot admit the promise.
-    [[nodiscard]] bool push(http_push_request_view request);
+    [[nodiscard]] bool push(http_request_head_view request);
     // Connection-scoped ORIGIN (HTTP/2 and HTTP/3, requires TLS) and ALTSVC
     // (HTTP/2) advertisements.
     void advertise_origins(std::span<const std::string_view> origins);
@@ -961,7 +1109,7 @@ task<void> model_validation_middleware<target, body_type>::invoke(context& c, ne
         auto binding = bind_validated_model(c, body);
         co_await next_value();
     } else {
-        auto body = parse_and_validate_request_model<target, body_type>(std::cref(validation_target_fields<target>(c)));
+        auto body = parse_and_validate_request_model<target, body_type>(validation_target_fields<target>(c).entries());
         auto binding = bind_validated_model(c, body);
         co_await next_value();
     }

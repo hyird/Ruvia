@@ -6,7 +6,6 @@
 #include <stdexcept>
 #include <string_view>
 
-#include "http_client_request_view.h"
 #include "http_content_length.h"
 #include "http_content_negotiation.h"
 #include "http_field_kind.h"
@@ -17,6 +16,7 @@
 #include "http_proxy_forwarding.h"
 #include "http_request.h"
 #include "http_request_expectation.h"
+#include "http_request_head_view.h"
 #include "http_response_stream.h"
 #include "http_uri_syntax.h"
 

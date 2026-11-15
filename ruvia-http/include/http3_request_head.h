@@ -8,8 +8,8 @@
 
 #include "borrowed_text.h"
 #include "http_header.h"
+#include "http_request.h"
 #include "http_request_expectation.h"
-#include "websocket_handshake.h"
 
 namespace ruvia {
 
@@ -99,8 +99,5 @@ private:
     bool stream_ended_{false};
     bool early_data_{false};
 };
-
-// RFC 9220 uses the extended CONNECT request in place of the HTTP/1 key exchange.
-[[nodiscard]] websocket_handshake_validation_result validate_http3_websocket_handshake(const http3_request_head& head, const http_request& request, websocket_handshake_validation_options options = {}) noexcept;
 
 }  // namespace ruvia

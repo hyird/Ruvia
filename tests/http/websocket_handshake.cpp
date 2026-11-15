@@ -47,12 +47,12 @@ http_request parse_request(std::string_view raw_request) {
 
 [[nodiscard]] bool accepts_request(std::string_view raw_request) {
     const auto result_value = validate_request(raw_request);
-    return result_value.accepted() != nullptr;
+    return std::holds_alternative<std::monostate>(result_value);
 }
 
 [[nodiscard]] bool rejects_request(std::string_view raw_request) {
     const auto result_value = validate_request(raw_request);
-    return result_value.failure() != nullptr;
+    return std::holds_alternative<ruvia::websocket_handshake_error>(result_value);
 }
 
 std::string_view valid_handshake() {
@@ -216,7 +216,7 @@ TEST(Ruvia, ws_required_subprotocol_rejects_offers_without_a_supported_entry) {
     };
     const auto accepts = [&](std::string_view raw_request, bool required) {
         const auto result_value = validate(raw_request, required);
-        return result_value.accepted() != nullptr;
+        return std::holds_alternative<std::monostate>(result_value);
     };
 
     // Not required: an offer sharing nothing is still a valid handshake.
@@ -231,12 +231,12 @@ TEST(Ruvia, ws_required_subprotocol_rejects_offers_without_a_supported_entry) {
                              "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n"
                              "Sec-WebSocket-Protocol: other, Chat.v1\r\n\r\n")}) {
         const auto result_value = validate(raw_request, true);
-        const auto* failure = result_value.failure();
+        const auto* failure = std::get_if<ruvia::websocket_handshake_error>(&result_value);
         EXPECT_TRUE(failure != nullptr);
         if (failure != nullptr) {
-            EXPECT_TRUE(failure->protocol_error().status() == ruvia::http_status::bad_request);
+            EXPECT_TRUE(ruvia::make_http_protocol_error(*failure).status() == ruvia::http_status::bad_request);
             ruvia::http_response response;
-            failure->apply_required_response_headers(response);
+            ruvia::apply_websocket_handshake_error_headers(*failure, response);
             EXPECT_TRUE(!response.header("Sec-WebSocket-Version").has_value());
         }
     }
@@ -326,13 +326,13 @@ TEST(Ruvia, ws_valid_request_requires_all_conditions) {
     EXPECT_TRUE(rejects_request(non_canonical_key));
 
     const auto unsupported_version = validate_request(bad_version_handshake());
-    EXPECT_TRUE(unsupported_version.failure() != nullptr);
-    if (const auto* failure = unsupported_version.failure()) {
-        const auto error = failure->protocol_error();
+    EXPECT_TRUE(std::holds_alternative<ruvia::websocket_handshake_error>(unsupported_version));
+    if (const auto* failure = std::get_if<ruvia::websocket_handshake_error>(&unsupported_version)) {
+        const auto error = ruvia::make_http_protocol_error(*failure);
         EXPECT_EQ(error.status(), ruvia::http_status::bad_request);
         EXPECT_EQ(std::string_view(error.what()), std::string_view("unsupported WebSocket version"));
         ruvia::http_response response;
-        failure->apply_required_response_headers(response);
+        ruvia::apply_websocket_handshake_error_headers(*failure, response);
         EXPECT_EQ(response.header("Sec-WebSocket-Version"), std::string_view("13"));
     }
 }
@@ -573,10 +573,11 @@ public:
     [[nodiscard]] ruvia::http1_parsed_client_response_head parse(std::string_view wire) const {
         auto response_parser = parser();
         auto result_value = response_parser.parse(wire);
-        if (result_value.parsed() == nullptr) {
+        auto* parsed = result_value.get_if<ruvia::http1_parsed_client_response_head>();
+        if (parsed == nullptr) {
             throw std::runtime_error("expected parsed response");
         }
-        return std::move(*result_value.parsed());
+        return std::move(*parsed);
     }
 
     [[nodiscard]] std::variant<ruvia::websocket_client_negotiation_result_view, ruvia::websocket_client_handshake_error> validate(const ruvia::http1_parsed_client_response_head& response) const {
@@ -662,7 +663,7 @@ TEST(Ruvia, websocket_client_handshake_rejects_bad_accept_and_extensions) {
     const auto bad = handshake.parse(
         "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
         "Sec-WebSocket-Accept: wrong\r\n\r\n");
-    EXPECT_TRUE(bad.plan().protocol_upgrade() != nullptr);
+    EXPECT_TRUE(bad.plan().protocol_upgrade());
     const auto bad_result = handshake.validate(bad);
     EXPECT_TRUE(!(bad_result.index() == 0));
     if (!(bad_result.index() == 0)) {
@@ -688,14 +689,14 @@ TEST(Ruvia, websocket_client_handshake_parser_accepts_informational_before_upgra
     const client_handshake handshake;
     auto parser = handshake.parser();
     auto informational = parser.parse("HTTP/1.1 103 Early Hints\r\n\r\n");
-    EXPECT_TRUE(informational.parsed() != nullptr);
-    if (informational.parsed() != nullptr) {
-        EXPECT_TRUE(informational.parsed()->plan().informational() != nullptr);
+    EXPECT_TRUE(informational.holds<ruvia::http1_parsed_client_response_head>());
+    if (const auto* parsed = informational.get_if<ruvia::http1_parsed_client_response_head>()) {
+        EXPECT_TRUE(parsed->plan().informational());
     }
     auto final = parser.parse(valid_response());
-    EXPECT_TRUE(final.parsed() != nullptr);
-    if (final.parsed() != nullptr) {
-        const auto result_value = handshake.validate(*final.parsed());
+    EXPECT_TRUE(final.holds<ruvia::http1_parsed_client_response_head>());
+    if (const auto* parsed = final.get_if<ruvia::http1_parsed_client_response_head>()) {
+        const auto result_value = handshake.validate(*parsed);
         EXPECT_TRUE((result_value.index() == 0));
     }
 }
@@ -839,8 +840,8 @@ TEST(Ruvia, websocket_h1_client_handshake_negotiates_deflate) {
     EXPECT_TRUE((prepared_req->head().find("sec-websocket-extensions: permessage-deflate") != std::string_view::npos));
     ruvia::http1_client_response_parser parser(std::move(*prepared_req).take_exchange_state());
     auto response = parser.parse("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=\r\nSec-WebSocket-Extensions: permessage-deflate; server_no_context_takeover; client_no_context_takeover\r\n\r\n");
-    EXPECT_TRUE(response.parsed() != nullptr);
-    auto accepted = ruvia::validate_http1_websocket_client_response(encoded_key, negotiation, *response.parsed());
+    EXPECT_TRUE(response.holds<ruvia::http1_parsed_client_response_head>());
+    auto accepted = ruvia::validate_http1_websocket_client_response(encoded_key, negotiation, *response.get_if<ruvia::http1_parsed_client_response_head>());
     EXPECT_TRUE((accepted.index() == 0));
     EXPECT_TRUE(std::get<0>(accepted).compression_.enabled_);
 }

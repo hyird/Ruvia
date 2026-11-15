@@ -376,15 +376,15 @@ bool websocket_request_header_validator::client_offers_valid() const noexcept {
 
 websocket_handshake_validation_result websocket_request_header_validator::finish(websocket_handshake_validation_options options) const noexcept {
     if (!offers_valid()) {
-        return websocket_handshake_validation_result::make_invalid_request();
+        return websocket_handshake_error::invalid_request;
     }
     if (http_trim_ows(version_) != "13") {
-        return websocket_handshake_validation_result::make_unsupported_version();
+        return websocket_handshake_error::unsupported_version;
     }
     if (options.require_subprotocol_ && choose_websocket_subprotocol(protocols_, options.supported_subprotocols_).empty()) {
-        return websocket_handshake_validation_result::make_unsupported_subprotocol();
+        return websocket_handshake_error::unsupported_subprotocol;
     }
-    return websocket_handshake_validation_result::make_accepted();
+    return std::monostate{};
 }
 
 websocket_server_negotiation::websocket_server_negotiation(std::string_view subprotocol, websocket_compression compression, std::span<const http_header_view> response_headers_value) :
@@ -445,22 +445,22 @@ namespace {
 
 namespace ruvia {
 
-http_protocol_error websocket_handshake_failure::protocol_error() const noexcept {
-    switch (kind_) {
-        case kind_type::invalid_request:
+http_protocol_error make_http_protocol_error(websocket_handshake_error error) noexcept {
+    switch (error) {
+        case websocket_handshake_error::invalid_request:
             return http_protocol_error(http_status::bad_request, "invalid_websocket_handshake", "invalid WebSocket handshake");
-        case kind_type::unsupported_version:
+        case websocket_handshake_error::unsupported_version:
             // RFC 6455 section 4.4 requires Sec-websocket-Version and uses 400
             // in its example. 426 would instead require HTTP Upgrade fields.
             return http_protocol_error(http_status::bad_request, "unsupported_websocket_version", "unsupported WebSocket version");
-        case kind_type::unsupported_subprotocol:
+        case websocket_handshake_error::unsupported_subprotocol:
             return http_protocol_error(http_status::bad_request, "unsupported_websocket_subprotocol", "no supported WebSocket subprotocol offered");
     }
     return http_protocol_error(http_status::bad_request, "invalid_websocket_handshake", "invalid WebSocket handshake");
 }
 
-void websocket_handshake_failure::apply_required_response_headers(http_response& response) const {
-    if (kind_ == kind_type::unsupported_version) {
+void apply_websocket_handshake_error_headers(websocket_handshake_error error, http_response& response) {
+    if (error == websocket_handshake_error::unsupported_version) {
         response.header_stable_view("Sec-WebSocket-Version", "13");
     }
 }
@@ -472,8 +472,8 @@ websocket_handshake_validation_result validate_http1_websocket_handshake(const h
         // Content-Length: 0 carries no content, while a positive length or
         // chunked coding still has bytes that must be consumed before the
         // connection can change protocols.
-        body_plan.requires_consumption()) {
-        return websocket_handshake_validation_result::make_invalid_request();
+        body_plan.framing().requires_consumption()) {
+        return websocket_handshake_error::invalid_request;
     }
 
     detail::http_connection_options connection_options;
@@ -489,7 +489,7 @@ websocket_handshake_validation_result validate_http1_websocket_handshake(const h
         const auto& header_value = headers[i];
         if (kind == detail::http_field_kind::connection) {
             if (connection_options.parse_field(header_value.value(), detail::http_connection_field_role::request_recipient) != detail::http_field_list_parse_status::ok) {
-                return websocket_handshake_validation_result::make_invalid_request();
+                return websocket_handshake_error::invalid_request;
             }
         } else if (kind == detail::http_field_kind::upgrade) {
             if (upgrade_protocols.parse_field(header_value.value(), detail::http_field_list_role::recipient, [&websocket_upgrade](const detail::http_upgrade_protocol& protocol) noexcept {
@@ -498,18 +498,18 @@ websocket_handshake_validation_result validate_http1_websocket_handshake(const h
                 }
                 return true;
             }) != detail::http_field_list_parse_status::ok) {
-                return websocket_handshake_validation_result::make_invalid_request();
+                return websocket_handshake_error::invalid_request;
             }
         } else if (kind == detail::http_field_kind::sec_websocket_key) {
             key = header_value.value();
             ++key_count;
         } else if (!websocket_headers.observe_header(kind, header_value.value())) {
-            return websocket_handshake_validation_result::make_invalid_request();
+            return websocket_handshake_error::invalid_request;
         }
     }
 
     if (!connection_options.upgrade() || !upgrade_protocols.has_protocol() || !websocket_upgrade || key_count != 1 || !detail::decode_websocket_key(key).has_value()) {
-        return websocket_handshake_validation_result::make_invalid_request();
+        return websocket_handshake_error::invalid_request;
     }
     return websocket_headers.finish(options);
 }

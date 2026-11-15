@@ -23,6 +23,7 @@
 #include "http1_client_request.h"
 #include "http1_client_response.h"
 #include "http1_connection_plan.h"
+#include "http1_message_body.h"
 #include "http1_server_response.h"
 #include "http_cookie.h"
 #include "http_header.h"
@@ -31,18 +32,18 @@
 
 namespace {
 
-using ruvia::http1_buffered_response_plan;
-using ruvia::http1_chunked_response_stream_head_plan;
-using ruvia::http1_close_delimited_response_stream_head_plan;
+using ruvia::http1_message_framing;
 using ruvia::http1_request_connection_plan;
 using ruvia::http1_response_head_plan;
 using ruvia::http_known_method;
 using ruvia::http_response;
 using ruvia::http_response_header_options;
+using ruvia::plan_http1_buffered_response_head;
+using ruvia::plan_http1_response_stream_head;
 using ruvia::plan_http_response_body;
 
 ruvia::http1_request_connection_plan connection_plan_for(ruvia::http_protocol_version protocol_version) {
-    return protocol_version == ruvia::http_protocol_version::http10 ? ruvia::plan_http10_request_connection(false, false) : ruvia::plan_http11_request_connection(false);
+    return ruvia::plan_http1_request_connection(protocol_version, false, false);
 }
 
 std::string emit_head(http_response& response, const http1_response_head_plan& plan) {
@@ -54,16 +55,15 @@ std::string emit_head(http_response& response, const http1_response_head_plan& p
 
 std::string emit_buffered_head(http_response& response, http_known_method request_method = http_known_method::get, ruvia::http_protocol_version protocol_version = ruvia::http_protocol_version::http11) {
     const auto write_plan = ruvia::plan_buffered_http_response_write(request_method, response);
-    const auto response_plan = get_http1_buffered_response_plan(write_plan, connection_plan_for(protocol_version));
-    return emit_head(response, response_plan.head_plan());
+    return emit_head(response, plan_http1_buffered_response_head(write_plan, connection_plan_for(protocol_version)));
 }
 
 std::string emit_chunked_stream_head(http_response& response, http_known_method request_method = http_known_method::get, ruvia::http_protocol_version protocol_version = ruvia::http_protocol_version::http11) {
-    return emit_head(response, http1_chunked_response_stream_head_plan(plan_http_response_body(request_method, response.status()), connection_plan_for(protocol_version)));
+    return emit_head(response, plan_http1_response_stream_head(plan_http_response_body(request_method, response.status()), connection_plan_for(protocol_version), http1_message_framing::chunked()));
 }
 
 std::string emit_close_delimited_stream_head(http_response& response, http_known_method request_method = http_known_method::get, ruvia::http_protocol_version protocol_version = ruvia::http_protocol_version::http11) {
-    return emit_head(response, http1_close_delimited_response_stream_head_plan(plan_http_response_body(request_method, response.status()), connection_plan_for(protocol_version)));
+    return emit_head(response, plan_http1_response_stream_head(plan_http_response_body(request_method, response.status()), connection_plan_for(protocol_version), http1_message_framing::close_delimited()));
 }
 
 std::size_t count_occurrences(std::string_view haystack, std::string_view needle) {
@@ -224,7 +224,7 @@ TEST(Ruvia, http1_response_trailers_preserve_fields_borrowed_from_output) {
     }
 }
 
-TEST(Ruvia, http1_buffered_response_plan_owns_request_version_and_length) {
+TEST(Ruvia, http1_buffered_response_head_plan_owns_request_version_and_length) {
     using ruvia::plan_buffered_http_response_write;
     using ruvia::test::parse_http1_request_message;
 
@@ -235,9 +235,11 @@ TEST(Ruvia, http1_buffered_response_plan_owns_request_version_and_length) {
         if (connection_plan.protocol_version() == ruvia::http_protocol_version::http10) {
             response.header("Connection", "keep-alive");
         }
-        const auto response_plan = get_http1_buffered_response_plan(plan_buffered_http_response_write(http_known_method::get, response), connection_plan);
-        EXPECT_EQ(response_plan.head_plan().buffered()->content_length(), response_plan.content_length());
-        return std::pair(emit_head(response, response_plan.head_plan()), response_plan.head_plan().protocol_version());
+        const auto write_plan = plan_buffered_http_response_write(http_known_method::get, response);
+        const auto response_plan = plan_http1_buffered_response_head(write_plan, connection_plan);
+        EXPECT_TRUE(response_plan.content_source() == ruvia::http1_response_content_source::buffered);
+        EXPECT_EQ(response_plan.framing().content_length(), write_plan.content_length());
+        return std::pair(emit_head(response, response_plan), response_plan.protocol_version());
     };
 
     const auto [http10_head, http10_version] = emit_for("GET / HTTP/1.0\r\nConnection: keep-alive\r\n\r\n");
@@ -256,26 +258,26 @@ TEST(Ruvia, http1_response_head_rejects_status_plan_mismatch) {
     http_response response;
     response.status(ruvia::http_status::multi_status);
     response.body("planned");
-    const auto plan = get_http1_buffered_response_plan(ruvia::plan_buffered_http_response_write(http_known_method::get, response), connection_plan_for(ruvia::http_protocol_version::http11));
+    const auto plan = plan_http1_buffered_response_head(ruvia::plan_buffered_http_response_write(http_known_method::get, response), connection_plan_for(ruvia::http_protocol_version::http11));
 
     response.status(ruvia::http_status::already_reported);
     EXPECT_TRUE(throws_invalid([&] {
-        (void)emit_head(response, plan.head_plan());
+        (void)emit_head(response, plan);
     }));
-    EXPECT_EQ(plan.head_plan().body_plan().response_status(), ruvia::http_status::multi_status);
+    EXPECT_EQ(plan.body_plan().response_status(), ruvia::http_status::multi_status);
 }
 
 TEST(Ruvia, http1_response_head_rejects_representation_plan_mismatch) {
     http_response response;
     response.status(ruvia::http_status::multi_status);
     response.body("old");
-    const auto plan = get_http1_buffered_response_plan(ruvia::plan_buffered_http_response_write(http_known_method::get, response), connection_plan_for(ruvia::http_protocol_version::http11));
+    const auto plan = plan_http1_buffered_response_head(ruvia::plan_buffered_http_response_write(http_known_method::get, response), connection_plan_for(ruvia::http_protocol_version::http11));
 
     response.body("longer");
     EXPECT_TRUE(throws_invalid([&] {
-        (void)emit_head(response, plan.head_plan());
+        (void)emit_head(response, plan);
     }));
-    EXPECT_EQ(plan.content_length(), std::uint64_t{3});
+    EXPECT_EQ(plan.framing().content_length(), std::uint64_t{3});
 }
 
 TEST(Ruvia, http1_response_head_requires_upgrade_connection_option) {
@@ -285,12 +287,12 @@ TEST(Ruvia, http1_response_head_requires_upgrade_connection_option) {
         if (!connection.empty()) {
             response.header("Connection", connection);
         }
-        const auto plan = get_http1_buffered_response_plan(ruvia::plan_buffered_http_response_write(http_known_method::get, response), connection_plan_for(ruvia::http_protocol_version::http11));
+        const auto plan = plan_http1_buffered_response_head(ruvia::plan_buffered_http_response_write(http_known_method::get, response), connection_plan_for(ruvia::http_protocol_version::http11));
         ruvia::http_response_head_buffer buffer;
         buffer.append("existing output");
 
         EXPECT_TRUE(throws_invalid([&] {
-            ruvia::append_http1_response_head(response, buffer, plan.head_plan());
+            ruvia::append_http1_response_head(response, buffer, plan);
         }));
         EXPECT_EQ(buffer.view(), std::string_view("existing output"));
     }
@@ -311,7 +313,7 @@ TEST(Ruvia, http1_response_head_upgrade_connection_fields_round_trip) {
         EXPECT_TRUE(head.find("UpGrAdE") != std::string_view::npos);
 
         std::array<char, 256> request_buffer;
-        auto request = ruvia::http1_client_request_writer().prepare(ruvia::http_origin_view::http({.host_ = "example.test"}), {}, request_buffer);
+        auto request = ruvia::prepare_http1_client_request(ruvia::http_origin_view::http({.host_ = "example.test"}), {}, request_buffer);
         auto* prepared_req = std::get_if<ruvia::prepared_http1_client_request>(&request);
         EXPECT_TRUE(prepared_req != nullptr);
         if (prepared_req == nullptr) {
@@ -319,14 +321,17 @@ TEST(Ruvia, http1_response_head_upgrade_connection_fields_round_trip) {
         }
         ruvia::http1_client_response_parser parser(std::move(*prepared_req).take_exchange_state());
         const auto parsed = parser.parse(head);
-        EXPECT_TRUE(parsed.parsed() != nullptr);
-        if (const auto* accepted = parsed.parsed()) {
+        const auto* accepted = parsed.get_if<ruvia::http1_parsed_client_response_head>();
+        EXPECT_TRUE(accepted != nullptr);
+        if (accepted != nullptr) {
             EXPECT_EQ(accepted->head().status(), ruvia::http_status::ok);
-            EXPECT_EQ(accepted->consumed_bytes(), head.size());
-            EXPECT_TRUE(accepted->plan().known_length() != nullptr);
-            if (const auto* known_length = accepted->plan().known_length()) {
-                EXPECT_EQ(known_length->content_length(), std::size_t{5});
-                EXPECT_EQ(known_length->persistence(), ruvia::http1_close_policy::allow_reuse);
+            EXPECT_EQ(parsed.consumed_bytes(), head.size());
+            const auto* framing = accepted->plan().framing();
+            const bool known_length = framing != nullptr && framing->kind() == ruvia::http1_framing_kind::known_length;
+            EXPECT_TRUE(known_length);
+            if (known_length) {
+                EXPECT_EQ(framing->content_length(), std::size_t{5});
+                EXPECT_EQ(accepted->plan().close_policy(), ruvia::http1_close_policy::allow_reuse);
             }
         }
     }
@@ -511,7 +516,7 @@ TEST(Ruvia, response_head_canonicalizes_managed_framing_fields_across_case) {
 TEST(Ruvia, http1_response_head_rejects_http10_chunked_payload_plan) {
     http_response response;
     response.body("hello");
-    const auto plan = http1_chunked_response_stream_head_plan(plan_http_response_body(http_known_method::get, response.status()), connection_plan_for(ruvia::http_protocol_version::http10));
+    const auto plan = plan_http1_response_stream_head(plan_http_response_body(http_known_method::get, response.status()), connection_plan_for(ruvia::http_protocol_version::http10), http1_message_framing::chunked());
 
     EXPECT_TRUE(throws_invalid([&] {
         (void)emit_head(response, plan);
@@ -537,21 +542,21 @@ TEST(Ruvia, http1_response_head_rejects_transfer_encoding_other_than_chunked) {
                 response.status(status);
                 response.header("Transfer-Encoding", coding);
                 const auto body_plan = plan_http_response_body(method, response.status());
-                const auto buffered = get_http1_buffered_response_plan(ruvia::plan_buffered_http_response_write(method, response), connection_plan_for(ruvia::http_protocol_version::http11));
-                EXPECT_TRUE(rejected_without_output(response, buffered.head_plan()));
-                EXPECT_TRUE(rejected_without_output(response, http1_chunked_response_stream_head_plan(body_plan, connection_plan_for(ruvia::http_protocol_version::http11))));
-                EXPECT_TRUE(rejected_without_output(response, http1_close_delimited_response_stream_head_plan(body_plan, connection_plan_for(ruvia::http_protocol_version::http10))));
+                const auto buffered = plan_http1_buffered_response_head(ruvia::plan_buffered_http_response_write(method, response), connection_plan_for(ruvia::http_protocol_version::http11));
+                EXPECT_TRUE(rejected_without_output(response, buffered));
+                EXPECT_TRUE(rejected_without_output(response, plan_http1_response_stream_head(body_plan, connection_plan_for(ruvia::http_protocol_version::http11), http1_message_framing::chunked())));
+                EXPECT_TRUE(rejected_without_output(response, plan_http1_response_stream_head(body_plan, connection_plan_for(ruvia::http_protocol_version::http10), http1_message_framing::close_delimited())));
             }
         }
 
         http_response committed;
         committed.header("Transfer-Encoding", coding);
         EXPECT_TRUE(throws_head_error([&] {
-            (void)ruvia::http1_commit_final_response(committed, ruvia::plan_http11_request_connection(true));
+            (void)ruvia::http1_commit_final_response(committed, ruvia::plan_http1_request_connection(ruvia::http_protocol_version::http11, true, false));
         }));
         EXPECT_TRUE(!committed.header("Connection").has_value());
 
-        for (const auto framing : {ruvia::http_response_stream_framing::http1_chunked, ruvia::http_response_stream_framing::http1_close_delimited, ruvia::http_response_stream_framing::http2_frames}) {
+        for (const auto framing : {ruvia::http_response_stream_framing(ruvia::http1_framing_kind::chunked), ruvia::http_response_stream_framing(ruvia::http1_framing_kind::close_delimited), ruvia::http_response_stream_framing(ruvia::http_multiplexed_frames{})}) {
             http_response streamed;
             streamed.header("Transfer-Encoding", coding);
             const auto plan = ruvia::plan_http_response_stream_commit(framing, http_known_method::get, streamed.status(), ruvia::http_response_trailer_intent::none);
@@ -564,7 +569,7 @@ TEST(Ruvia, http1_response_head_rejects_transfer_encoding_other_than_chunked) {
             } catch (const std::invalid_argument&) {
                 invalid = true;
             }
-            if (framing == ruvia::http_response_stream_framing::http2_frames) {
+            if (std::holds_alternative<ruvia::http_multiplexed_frames>(framing)) {
                 EXPECT_TRUE(invalid);
             } else {
                 EXPECT_TRUE(head_error);
@@ -576,13 +581,13 @@ TEST(Ruvia, http1_response_head_rejects_transfer_encoding_other_than_chunked) {
 // The chunked hint never reaches a wire that cannot carry it: only the HTTP/1
 // chunk writer keeps it, as its own canonical field.
 TEST(Ruvia, response_stream_head_replaces_chunked_transfer_encoding_hint_with_writer_framing) {
-    for (const auto framing : {ruvia::http_response_stream_framing::http1_chunked, ruvia::http_response_stream_framing::http1_close_delimited, ruvia::http_response_stream_framing::http2_frames}) {
+    for (const auto framing : {ruvia::http_response_stream_framing(ruvia::http1_framing_kind::chunked), ruvia::http_response_stream_framing(ruvia::http1_framing_kind::close_delimited), ruvia::http_response_stream_framing(ruvia::http_multiplexed_frames{})}) {
         http_response response;
         response.header("Transfer-Encoding", "CHUNKED");
         const auto plan = ruvia::plan_http_response_stream_commit(framing, http_known_method::get, response.status(), ruvia::http_response_trailer_intent::none);
         const auto prepared = ruvia::prepare_http_response_stream_head(std::move(response), plan);
         const auto transfer_encoding = prepared.response().header("Transfer-Encoding");
-        if (framing == ruvia::http_response_stream_framing::http1_chunked) {
+        if (framing == ruvia::http_response_stream_framing(ruvia::http1_framing_kind::chunked)) {
             EXPECT_EQ(transfer_encoding.value_or(""), std::string_view("chunked"));
         } else {
             EXPECT_TRUE(!transfer_encoding.has_value());
@@ -779,8 +784,8 @@ TEST(Ruvia, http1_commit_final_response_preserves_custom_connection_options_when
     response.status(ruvia::http_status::ok);
     response.header("X-Custom-Hop", "secret-hop");
     response.header("Connection", "keep-alive, X-Custom-Hop");
-    const auto committed = ruvia::http1_commit_final_response(response, ruvia::plan_http11_request_connection(true));
-    EXPECT_EQ(committed.disposition(), ruvia::http1_close_policy::close_after_response);
+    const auto committed = ruvia::http1_commit_final_response(response, ruvia::plan_http1_request_connection(ruvia::http_protocol_version::http11, true, false));
+    EXPECT_EQ(committed.close_policy(), ruvia::http1_close_policy::close_after_response);
     EXPECT_EQ(response.header("Connection").value_or(""), std::string_view("close, X-Custom-Hop"));
 
     http_response upgrade_response;
@@ -788,8 +793,8 @@ TEST(Ruvia, http1_commit_final_response_preserves_custom_connection_options_when
     upgrade_response.header("Upgrade", "example/1");
     upgrade_response.header("X-Hop-2", "v");
     upgrade_response.header("Connection", "X-Hop-2");
-    const auto upgrade_committed = ruvia::http1_commit_final_response(upgrade_response, ruvia::plan_http11_request_connection(true));
-    EXPECT_EQ(upgrade_committed.disposition(), ruvia::http1_close_policy::close_after_response);
+    const auto upgrade_committed = ruvia::http1_commit_final_response(upgrade_response, ruvia::plan_http1_request_connection(ruvia::http_protocol_version::http11, true, false));
+    EXPECT_EQ(upgrade_committed.close_policy(), ruvia::http1_close_policy::close_after_response);
     EXPECT_EQ(upgrade_response.header("Connection").value_or(""), std::string_view("close, Upgrade, X-Hop-2"));
 }
 
@@ -864,11 +869,11 @@ TEST(Ruvia, response_body_plan_classifies_protocol_response_states) {
 
 TEST(Ruvia, response_stream_plan_restricts_trailers_by_status_and_method) {
     for (const auto status : {ruvia::http_status_code(199), ruvia::http_status::no_content, ruvia::http_status::not_modified}) {
-        const auto plan = ruvia::plan_http_response_stream_commit(ruvia::http_response_stream_framing::http1_chunked, ruvia::http_known_method::get, status, ruvia::http_response_trailer_intent::present);
+        const auto plan = ruvia::plan_http_response_stream_commit(ruvia::http1_framing_kind::chunked, ruvia::http_known_method::get, status, ruvia::http_response_trailer_intent::present);
         EXPECT_TRUE(!plan.trailer_intent_allowed());
     }
 
-    const auto head_plan = ruvia::plan_http_response_stream_commit(ruvia::http_response_stream_framing::http1_chunked, ruvia::http_known_method::head, ruvia::http_status::ok, ruvia::http_response_trailer_intent::present);
+    const auto head_plan = ruvia::plan_http_response_stream_commit(ruvia::http1_framing_kind::chunked, ruvia::http_known_method::head, ruvia::http_status::ok, ruvia::http_response_trailer_intent::present);
     EXPECT_TRUE(head_plan.trailer_intent_allowed());
     EXPECT_TRUE(!head_plan.trailers_available());
     EXPECT_TRUE(head_plan.head_disposition() == ruvia::http_response_stream_head_disposition::message_ended);
@@ -892,42 +897,36 @@ TEST(Ruvia, http1_response_head_framing_is_an_exclusive_plan) {
     ruvia::http_response response;
     response.body("hello");
     const auto body_plan = ruvia::plan_http_response_body(ruvia::http_known_method::get, ruvia::http_status::ok);
-    const auto connection_plan = ruvia::plan_http11_request_connection(false);
+    const auto connection_plan = ruvia::plan_http1_request_connection(ruvia::http_protocol_version::http11, false, false);
     const auto write_plan = ruvia::plan_buffered_http_response_write(ruvia::http_known_method::get, response);
-    const auto combined = ruvia::get_http1_buffered_response_plan(write_plan, connection_plan);
-    const auto& buffered = combined.head_plan();
-    const auto chunked = ruvia::http1_chunked_response_stream_head_plan(body_plan, connection_plan);
-    const auto close_delimited = ruvia::http1_close_delimited_response_stream_head_plan(body_plan, connection_plan);
+    const auto buffered = ruvia::plan_http1_buffered_response_head(write_plan, connection_plan);
+    const auto chunked = ruvia::plan_http1_response_stream_head(body_plan, connection_plan, ruvia::http1_message_framing::chunked());
+    const auto close_delimited = ruvia::plan_http1_response_stream_head(body_plan, connection_plan, ruvia::http1_message_framing::close_delimited());
 
-    EXPECT_TRUE(buffered.buffered() != nullptr);
-    EXPECT_TRUE(buffered.chunked_stream() == nullptr);
-    EXPECT_TRUE(buffered.close_delimited_stream() == nullptr);
-    EXPECT_TRUE(chunked.buffered() == nullptr);
-    EXPECT_TRUE(chunked.chunked_stream() != nullptr);
-    EXPECT_TRUE(chunked.close_delimited_stream() == nullptr);
-    EXPECT_TRUE(close_delimited.buffered() == nullptr);
-    EXPECT_TRUE(close_delimited.chunked_stream() == nullptr);
-    EXPECT_TRUE(close_delimited.close_delimited_stream() != nullptr);
+    EXPECT_TRUE(buffered.content_source() == ruvia::http1_response_content_source::buffered);
+    EXPECT_TRUE(buffered.framing().kind() == ruvia::http1_framing_kind::known_length);
+    EXPECT_TRUE(chunked.content_source() == ruvia::http1_response_content_source::streamed);
+    EXPECT_TRUE(chunked.framing().kind() == ruvia::http1_framing_kind::chunked);
+    EXPECT_TRUE(close_delimited.content_source() == ruvia::http1_response_content_source::streamed);
+    EXPECT_TRUE(close_delimited.framing().kind() == ruvia::http1_framing_kind::close_delimited);
     EXPECT_TRUE(close_delimited.body_plan().content_semantics() == ruvia::http_response_content_semantics::with_content);
-    EXPECT_EQ(buffered.buffered()->content_length(), std::uint64_t{5});
-    EXPECT_EQ(combined.content_length(), std::uint64_t{5});
-    EXPECT_EQ(combined.body_plan().response_status(), ruvia::http_status::ok);
-    EXPECT_TRUE(combined.send_body());
-    EXPECT_TRUE(combined.body_plan().request_method() == ruvia::http_known_method::get);
+    EXPECT_EQ(buffered.framing().content_length(), std::uint64_t{5});
+    EXPECT_EQ(buffered.body_plan().response_status(), ruvia::http_status::ok);
+    EXPECT_TRUE(buffered.send_body());
+    EXPECT_TRUE(buffered.body_plan().request_method() == ruvia::http_known_method::get);
     EXPECT_TRUE(buffered.protocol_version() == ruvia::http_protocol_version::http11);
 
-    EXPECT_EQ(combined.content_length(), combined.head_plan().buffered()->content_length());
+    EXPECT_EQ(buffered.framing().content_length(), write_plan.content_length());
 }
 
 namespace {
 
 ruvia::prepared_http1_response_stream prepare_stream_for(std::string_view request_wire, http_response response, ruvia::http_response_trailer_intent trailers = ruvia::http_response_trailer_intent::none) {
-    ruvia::http1_server_request_parse_state parsed;
-    parsed.parse_head(request_wire, 0);
-    if (parsed.head_ready() == nullptr) {
+    ruvia::http1_server_request_parser parsed;
+    if (!parsed.parse(request_wire).holds<ruvia::decode_complete>()) {
         throw std::logic_error("test request did not parse");
     }
-    const auto plan = ruvia::http1_plan_response_stream(parsed, ruvia::http1_close_policy::allow_reuse, ruvia::http1_request_body_consumption::complete);
+    const auto plan = ruvia::plan_http1_response_stream(parsed, ruvia::http1_close_policy::allow_reuse, ruvia::http1_request_body_consumption::complete);
     return ruvia::prepare_http1_response_stream_head(std::move(response), plan, trailers);
 }
 
@@ -937,12 +936,13 @@ TEST(Ruvia, http1_stream_with_declared_content_length_is_length_delimited_and_re
     http_response response;
     response.header("Content-Length", "5");
     auto prepared = prepare_stream_for("GET / HTTP/1.1\r\nHost: a\r\n\r\n", std::move(response), ruvia::http_response_trailer_intent::present);
-    const auto* length = prepared.response_head_plan().length_delimited_stream();
-    ASSERT_NE(length, nullptr);
-    EXPECT_EQ(length->content_length(), std::uint64_t{5});
-    EXPECT_EQ(prepared.commit_plan().framing(), ruvia::http_response_stream_framing::http1_length_delimited);
+    const auto& head_plan = prepared.response_head_plan();
+    EXPECT_TRUE(head_plan.content_source() == ruvia::http1_response_content_source::streamed);
+    ASSERT_TRUE(head_plan.framing().kind() == ruvia::http1_framing_kind::known_length);
+    EXPECT_EQ(head_plan.framing().content_length(), std::uint64_t{5});
+    EXPECT_TRUE(prepared.commit_plan().framing() == ruvia::http_response_stream_framing(ruvia::http1_framing_kind::known_length));
     EXPECT_FALSE(prepared.commit_plan().trailers_available());
-    EXPECT_EQ(prepared.connection_plan().disposition(), ruvia::http1_close_policy::allow_reuse);
+    EXPECT_EQ(prepared.connection_plan().close_policy(), ruvia::http1_close_policy::allow_reuse);
     const auto wire = emit_head(prepared.response(), prepared.response_head_plan());
     EXPECT_EQ(count_occurrences(wire, "Content-Length: 5\r\n"), std::size_t{1});
     EXPECT_EQ(wire.find("Transfer-Encoding:"), std::string::npos);
@@ -953,8 +953,7 @@ TEST(Ruvia, http1_stream_transfer_encoding_hint_overrides_declared_content_lengt
     response.header("Content-Length", "5");
     response.header("Transfer-Encoding", "chunked");
     auto prepared = prepare_stream_for("GET / HTTP/1.1\r\nHost: a\r\n\r\n", std::move(response));
-    EXPECT_NE(prepared.response_head_plan().chunked_stream(), nullptr);
-    EXPECT_EQ(prepared.response_head_plan().length_delimited_stream(), nullptr);
+    EXPECT_TRUE(prepared.response_head_plan().framing().kind() == ruvia::http1_framing_kind::chunked);
     const auto wire = emit_head(prepared.response(), prepared.response_head_plan());
     EXPECT_EQ(wire.find("Content-Length:"), std::string::npos);
     EXPECT_NE(wire.find("Transfer-Encoding: chunked\r\n"), std::string::npos);
@@ -964,9 +963,9 @@ TEST(Ruvia, http10_keep_alive_stream_with_content_length_stays_reusable) {
     http_response response;
     response.header("Content-Length", "5");
     auto prepared = prepare_stream_for("GET / HTTP/1.0\r\nHost: a\r\nConnection: keep-alive\r\n\r\n", std::move(response));
-    ASSERT_NE(prepared.response_head_plan().length_delimited_stream(), nullptr);
-    EXPECT_EQ(prepared.response_head_plan().close_delimited_stream(), nullptr);
-    EXPECT_EQ(prepared.connection_plan().disposition(), ruvia::http1_close_policy::allow_reuse);
+    EXPECT_TRUE(prepared.response_head_plan().content_source() == ruvia::http1_response_content_source::streamed);
+    ASSERT_TRUE(prepared.response_head_plan().framing().kind() == ruvia::http1_framing_kind::known_length);
+    EXPECT_EQ(prepared.connection_plan().close_policy(), ruvia::http1_close_policy::allow_reuse);
     const auto wire = emit_head(prepared.response(), prepared.response_head_plan());
     EXPECT_NE(wire.find("Content-Length: 5\r\n"), std::string::npos);
     EXPECT_EQ(wire.find("Transfer-Encoding:"), std::string::npos);
@@ -976,8 +975,51 @@ TEST(Ruvia, http1_head_stream_with_content_length_is_not_length_delimited) {
     http_response response;
     response.header("Content-Length", "5");
     auto prepared = prepare_stream_for("HEAD / HTTP/1.1\r\nHost: a\r\n\r\n", std::move(response));
-    EXPECT_EQ(prepared.response_head_plan().length_delimited_stream(), nullptr);
-    EXPECT_NE(prepared.commit_plan().framing(), ruvia::http_response_stream_framing::http1_length_delimited);
+    EXPECT_TRUE(prepared.response_head_plan().framing().kind() != ruvia::http1_framing_kind::known_length);
+    EXPECT_TRUE(prepared.commit_plan().framing() != ruvia::http_response_stream_framing(ruvia::http1_framing_kind::known_length));
+}
+
+// A server decodes a request body with the framing of the parsed body plan and
+// leaves the pipelined request that follows it untouched.
+TEST(Ruvia, http1_body_decoder_decodes_a_server_request_body_from_its_plan_framing) {
+    const std::string_view head = "POST /upload HTTP/1.1\r\nHost: a\r\nTransfer-Encoding: chunked\r\n\r\n";
+    const std::string_view body = "5\r\nhello\r\n6\r\n world\r\n0\r\n\r\n";
+    const std::string_view next = "GET / HTTP/1.1\r\nHost: a\r\n\r\n";
+    const std::string wire = std::string(head) + std::string(body) + std::string(next);
+
+    ruvia::http1_server_request_parser parser;
+    const auto parsed = parser.parse(wire);
+    ASSERT_TRUE(parsed.holds<ruvia::decode_complete>());
+    ASSERT_EQ(parsed.consumed_bytes(), head.size());
+    const auto& framing = parser.body_plan().framing();
+    ASSERT_TRUE(framing.kind() == ruvia::http1_framing_kind::chunked);
+
+    ruvia::http1_body_decoder decoder(framing);
+    std::string_view available = std::string_view(wire).substr(head.size());
+    std::string content;
+    bool complete = false;
+    for (std::size_t step = 0; step != 16 && !complete; ++step) {
+        const auto result = decoder.decode(available, {});
+        if (const auto* output = result.get_if<ruvia::decode_output>()) {
+            content.append(output->bytes());
+        } else if (const auto* trailers = result.get_if<ruvia::http1_body_trailers>()) {
+            EXPECT_TRUE(trailers->fields().empty());
+        } else if (result.holds<ruvia::decode_complete>()) {
+            complete = true;
+        } else {
+            ADD_FAILURE() << "request body needed more input or failed";
+            break;
+        }
+        available.remove_prefix(result.consumed_bytes());
+    }
+    EXPECT_TRUE(complete);
+    EXPECT_EQ(content, "hello world");
+    EXPECT_EQ(available, next);
+    EXPECT_TRUE(decoder.state() == ruvia::decoder_state::finished);
+
+    const auto replayed = decoder.decode(available, {});
+    EXPECT_TRUE(replayed.holds<ruvia::decode_complete>());
+    EXPECT_EQ(replayed.consumed_bytes(), std::size_t{0});
 }
 
 TEST(Ruvia, response_commit_headers_leaves_staged_response_independent) {
@@ -1175,7 +1217,7 @@ TEST(Ruvia, response_public_server_plans_preserve_head_representation_length) {
     EXPECT_TRUE(!write_plan.send_body());
     EXPECT_TRUE(write_plan.matches_response(response));
 
-    constexpr std::array framings{ruvia::http_response_stream_framing::http1_chunked, ruvia::http_response_stream_framing::http2_frames};
+    const std::array framings{ruvia::http_response_stream_framing(ruvia::http1_framing_kind::chunked), ruvia::http_response_stream_framing(ruvia::http_multiplexed_frames{})};
     for (const auto framing : framings) {
         const auto stream_plan = ruvia::plan_http_response_stream_commit(framing, ruvia::http_known_method::head, response.status(), ruvia::http_response_trailer_intent::none);
         EXPECT_TRUE(stream_plan.body_plan().body_suppressed());
@@ -1413,7 +1455,9 @@ TEST(Ruvia, response_appended_values_can_borrow_existing_header_storage) {
 
 namespace {
 
+using ruvia::http1_framing_kind;
 using ruvia::http_known_method;
+using ruvia::http_multiplexed_frames;
 using ruvia::http_response;
 using ruvia::http_response_stream_framing;
 using ruvia::http_response_trailer_intent;
@@ -1421,11 +1465,11 @@ using ruvia::http_response_trailer_intent;
 }  // namespace
 
 TEST(Ruvia, response_stream_commit_discards_trailers_without_wire_framing) {
-    constexpr std::array framings{http_response_stream_framing::http1_close_delimited, http_response_stream_framing::http1_chunked, http_response_stream_framing::http2_frames};
+    const std::array framings{http_response_stream_framing(http1_framing_kind::close_delimited), http_response_stream_framing(http1_framing_kind::chunked), http_response_stream_framing(http_multiplexed_frames{})};
     constexpr std::array methods{http_known_method::get, http_known_method::head};
     for (const auto framing : framings) {
         for (const auto method : methods) {
-            if ((framing == http_response_stream_framing::http1_chunked || framing == http_response_stream_framing::http2_frames) && method == http_known_method::get) {
+            if ((framing == http_response_stream_framing(http1_framing_kind::chunked) || std::holds_alternative<http_multiplexed_frames>(framing)) && method == http_known_method::get) {
                 continue;
             }
             http_response response;
@@ -1443,7 +1487,7 @@ TEST(Ruvia, response_stream_commit_discards_trailers_without_wire_framing) {
 }
 
 TEST(Ruvia, response_stream_commit_keeps_allowed_trailers_open) {
-    constexpr std::array framings{http_response_stream_framing::http1_chunked, http_response_stream_framing::http2_frames};
+    const std::array framings{http_response_stream_framing(http1_framing_kind::chunked), http_response_stream_framing(http_multiplexed_frames{})};
     for (const auto framing : framings) {
         http_response response;
         response.header("Trailer", "X-Checksum");
@@ -1457,7 +1501,7 @@ TEST(Ruvia, response_stream_commit_keeps_allowed_trailers_open) {
 }
 
 TEST(Ruvia, response_stream_commit_rejects_trailers_for_bodyless_statuses) {
-    constexpr std::array framings{http_response_stream_framing::http1_chunked, http_response_stream_framing::http2_frames};
+    const std::array framings{http_response_stream_framing(http1_framing_kind::chunked), http_response_stream_framing(http_multiplexed_frames{})};
     constexpr std::array statuses{ruvia::http_status::no_content, ruvia::http_status::reset_content, ruvia::http_status::not_modified};
     for (const auto framing : framings) {
         for (const auto status : statuses) {
@@ -1539,7 +1583,7 @@ using ruvia::test::parse_http1_request_message;
     EXPECT_TRUE(parsed.complete()) << request_wire;
     try {
         const auto plan = ruvia::prepare_http1_upgrade_response_head(response, parsed.state_.request());
-        EXPECT_TRUE(plan.close_delimited_stream() != nullptr);
+        EXPECT_TRUE(plan.framing().kind() == ruvia::http1_framing_kind::close_delimited);
         ruvia::http_response_head_buffer head;
         ruvia::append_http1_response_head(response, head, plan);
         return std::string(head.view());

@@ -23,7 +23,7 @@ struct http_conditional_method_plan final {
     bool evaluates_range_;
 };
 
-[[nodiscard]] inline constexpr http_conditional_method_plan get_http_conditional_method_plan(http_known_method method) noexcept {
+[[nodiscard]] inline constexpr http_conditional_method_plan plan_http_conditional_method(http_known_method method) noexcept {
     switch (method) {
         case http_known_method::get:
             return {true, true, true, true};

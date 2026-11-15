@@ -160,7 +160,7 @@ TEST(Ruvia, http2_typed_observers_fingerprint_tls_frames_independently_of_record
     observation_log observations;
     auto& app = ruvia::app();
     app.workers({.worker_count_ = 2})
-        .listen({.address_ = "127.0.0.1", .https_ = endpoint.port(), .tls_ = {.identity_ = {.certificate_chain_file_ = identity.ca_file_, .private_key_file_ = identity.private_key_file()}}})
+        .listen({.address_ = "127.0.0.1", .https_ = endpoint.port(), .tls_ = {.identities_ = ruvia::tls_fixed_identities{.primary_ = {.certificate_chain_file_ = identity.ca_file_, .private_key_file_ = identity.private_key_file()}}}})
         .on_start([&] {
         started.release();
     })

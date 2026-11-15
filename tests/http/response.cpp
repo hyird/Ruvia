@@ -311,10 +311,10 @@ TEST(Ruvia, representation_response_plan_ignores_repeated_date_conditions) {
                 wire.append(" / HTTP/1.1\r\nHost: example.test\r\n");
                 wire.append(field.name()).append(": ").append(first_value).append("\r\n");
                 wire.append(field.name()).append(": ").append(field.value()).append("\r\n\r\n");
-                ruvia::http1_server_request_parse_state parsed;
-                parsed.parse_head(wire, 0);
-                EXPECT_TRUE(parsed.head_ready() != nullptr);
-                if (parsed.head_ready() != nullptr) {
+                ruvia::http1_server_request_parser parsed;
+                const auto head = parsed.parse(wire);
+                EXPECT_TRUE(head.holds<ruvia::decode_complete>());
+                if (head.holds<ruvia::decode_complete>()) {
                     const auto plan = ruvia::plan_http_representation_response(parsed.request(), representation);
                     EXPECT_TRUE(plan.full() != nullptr);
                     EXPECT_EQ(plan.status(), ruvia::http_status::ok);

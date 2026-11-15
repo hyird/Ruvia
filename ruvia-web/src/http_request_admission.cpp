@@ -43,7 +43,7 @@ namespace {
 // RFC 9110 §7.4 against the transport connection's facts. A secured
 // connection without a recorded certificate cannot vouch for any host.
 [[nodiscard]] bool connection_carries_target(const http_request& request, const context_services& services) noexcept {
-    const auto origin = decide_http_target_origin(request, {.secured_ = services.get_conn_info().tls() != nullptr, .trusted_gateway_ = services.peer_trusted()});
+    const auto origin = plan_http_target_origin(request, {.secured_ = services.get_conn_info().tls() != nullptr, .trusted_gateway_ = services.peer_trusted()});
     switch (origin.action()) {
         case http_target_origin_action::accept:
             return true;
@@ -195,7 +195,7 @@ http_request_admission admit_http_request(const http_request_admission_input& in
     // to the same ceiling a streaming protocol enforces while reading.
     if (admission.body_limit_.exceeds(request.body_bytes().size())) {
         return reject(http_request_rejection::error([&] {
-            const auto err = http_request_body_protocol_error(http_request_body_failure::too_large);
+            const auto err = make_http_protocol_error(http_request_body_failure::too_large);
             return http_error_info({.status_ = err.status(), .code_ = err.code(), .message_ = std::string_view(err.what())});
         }()));
     }

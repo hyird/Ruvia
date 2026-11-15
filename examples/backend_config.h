@@ -14,7 +14,7 @@
 #include <utility>
 
 #include "app.h"
-#include "http_client_types.h"
+#include "client_transport_config.h"
 
 #ifdef RUVIA_ENABLE_DATABASE
 #include "db_repository.h"

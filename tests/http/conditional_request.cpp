@@ -24,20 +24,20 @@ TEST(RuviaHttpPublicApi, entity_tag_validation_comparison_and_weakening) {
 TEST(Ruvia, conditional_method_plan_follows_precondition_and_range_semantics) {
     using ruvia::http_conditional_method_plan;
 
-    const auto get = get_http_conditional_method_plan(ruvia::http_known_method::get);
+    const auto get = plan_http_conditional_method(ruvia::http_known_method::get);
     EXPECT_TRUE(get.evaluates_preconditions_);
     EXPECT_TRUE(get.uses_not_modified_response_);
     EXPECT_TRUE(get.evaluates_if_modified_since_);
     EXPECT_TRUE(get.evaluates_range_);
 
-    const auto head = get_http_conditional_method_plan(ruvia::http_known_method::head);
+    const auto head = plan_http_conditional_method(ruvia::http_known_method::head);
     EXPECT_TRUE(head.evaluates_preconditions_);
     EXPECT_TRUE(head.uses_not_modified_response_);
     EXPECT_TRUE(head.evaluates_if_modified_since_);
     EXPECT_TRUE(!head.evaluates_range_);
 
     for (const auto method : {ruvia::http_known_method::post, ruvia::http_known_method::put, ruvia::http_known_method::delete_, ruvia::http_known_method::patch}) {
-        const auto plan = get_http_conditional_method_plan(method);
+        const auto plan = plan_http_conditional_method(method);
         EXPECT_TRUE(plan.evaluates_preconditions_);
         EXPECT_TRUE(!plan.uses_not_modified_response_);
         EXPECT_TRUE(!plan.evaluates_if_modified_since_);
@@ -45,7 +45,7 @@ TEST(Ruvia, conditional_method_plan_follows_precondition_and_range_semantics) {
     }
 
     for (const auto method : {ruvia::http_known_method::options, ruvia::http_known_method::connect, ruvia::http_known_method::unknown}) {
-        const auto plan = get_http_conditional_method_plan(method);
+        const auto plan = plan_http_conditional_method(method);
         EXPECT_TRUE(!plan.evaluates_preconditions_);
         EXPECT_TRUE(!plan.uses_not_modified_response_);
         EXPECT_TRUE(!plan.evaluates_if_modified_since_);

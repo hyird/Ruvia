@@ -88,7 +88,7 @@ public:
             auto chunk = co_await source_->read(std::move(operation));
             if (chunk && limit_) {
                 if (chunk->size() > *limit_ - consumed_) {
-                    throw http_request_body_protocol_error(http_request_body_failure::too_large);
+                    throw make_http_protocol_error(http_request_body_failure::too_large);
                 }
                 consumed_ += chunk->size();
             }
@@ -338,7 +338,7 @@ public:
             if (limit) {
                 if (const auto length = request.header("Content-Length")) {
                     if (const auto declared = http_parse_content_length(*length); declared.has_value() && *declared > *limit) {
-                        throw http_request_body_protocol_error(http_request_body_failure::too_large);
+                        throw make_http_protocol_error(http_request_body_failure::too_large);
                     }
                 }
             }

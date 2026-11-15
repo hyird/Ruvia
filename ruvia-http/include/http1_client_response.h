@@ -8,12 +8,13 @@
 #include <variant>
 
 #include "borrowed_text.h"
+#include "decode_step.h"
 #include "http1_client_request.h"
 #include "http1_connection_plan.h"
 #include "http_client_response_head.h"
+#include "http_content_coding.h"
 #include "http_message.h"
 #include "http_status.h"
-#include "http_transfer_coding.h"
 
 namespace ruvia {
 namespace detail {
@@ -44,11 +45,6 @@ enum class http1_client_request_content_phase : std::uint8_t {
 
 }  // namespace detail
 
-// Connection lifecycle after a self-delimited response has been consumed.
-// For an informational response, reuse means the same exchange can await its
-// final response; it does not make the connection poolable before that final.
-// Close-delimited responses, tunnels, and upgrades are separate alternatives.
-
 // Result of notifying the exchange that the external runtime finished writing
 // every byte in the prepared request content plan. This event is required before
 // a content-bearing request can accept 101 Switching Protocols.
@@ -58,165 +54,49 @@ enum class http1_client_request_content_completion_status : std::uint8_t {
     exchange_terminal,
 };
 
-class http1_client_informational_response final {
-public:
-    [[nodiscard]] constexpr http1_close_policy persistence() const noexcept {
-        return persistence_;
-    }
-
-private:
-    friend struct detail::http1_client_response_plan_access;
-
-    explicit constexpr http1_client_informational_response(http1_close_policy persistence) noexcept :
-        persistence_(persistence) {}
-
-    http1_close_policy persistence_;
-};
-
-class http1_client_response_without_content final {
-public:
-    [[nodiscard]] constexpr http1_close_policy persistence() const noexcept {
-        return persistence_;
-    }
-
-private:
-    friend struct detail::http1_client_response_plan_access;
-
-    explicit constexpr http1_client_response_without_content(http1_close_policy persistence) noexcept :
-        persistence_(persistence) {}
-
-    http1_close_policy persistence_;
-};
-
-class http1_client_known_length_response final {
-public:
-    [[nodiscard]] constexpr std::size_t content_length() const noexcept {
-        return content_length_;
-    }
-
-    [[nodiscard]] constexpr bool requires_body_consumption() const noexcept {
-        return content_length_ != 0;
-    }
-
-    [[nodiscard]] constexpr http1_close_policy persistence() const noexcept {
-        return persistence_;
-    }
-
-private:
-    friend struct detail::http1_client_response_plan_access;
-
-    constexpr http1_client_known_length_response(std::size_t content_length, http1_close_policy persistence) noexcept :
-        content_length_(content_length),
-        persistence_(persistence) {}
-
-    std::size_t content_length_;
-    http1_close_policy persistence_;
-};
-
-class http1_client_chunked_response final {
-public:
-    // Transfer codings preceding the terminal chunked framing. The runtime
-    // removes chunk framing first and then drives this decoder list.
-    [[nodiscard]] const http_content_codings& transfer_codings() const& noexcept RUVIA_LIFETIMEBOUND {
-        return transfer_codings_;
-    }
-    const http_content_codings& transfer_codings() const&& = delete;
-
-    [[nodiscard]] constexpr http1_close_policy persistence() const noexcept {
-        return persistence_;
-    }
-
-private:
-    friend struct detail::http1_client_response_plan_access;
-
-    http1_client_chunked_response(http_content_codings transfer_codings, http1_close_policy persistence) :
-        transfer_codings_(std::move(transfer_codings)),
-        persistence_(persistence) {}
-
-    http_content_codings transfer_codings_;
-    http1_close_policy persistence_;
-};
-
-class http1_client_close_delimited_response final {
-public:
-    // Any non-chunked transfer coding is decoded after EOF delimits the message.
-    // This alternative always consumes through EOF and always closes; it exposes
-    // no independent persistence field that could contradict those facts.
-    [[nodiscard]] const http_content_codings& transfer_codings() const& noexcept RUVIA_LIFETIMEBOUND {
-        return transfer_codings_;
-    }
-    const http_content_codings& transfer_codings() const&& = delete;
-
-private:
-    friend struct detail::http1_client_response_plan_access;
-
-    explicit http1_client_close_delimited_response(http_content_codings transfer_codings) :
-        transfer_codings_(std::move(transfer_codings)) {}
-
-    http_content_codings transfer_codings_;
-};
-
-class http1_client_connect_tunnel final {
-private:
-    friend struct detail::http1_client_response_plan_access;
-    constexpr http1_client_connect_tunnel() noexcept = default;
-};
-
-class http1_client_protocol_upgrade final {
-private:
-    friend struct detail::http1_client_response_plan_access;
-    constexpr http1_client_protocol_upgrade() noexcept = default;
-};
-
-// Immutable RFC 9110/9112 response framing and lifecycle contract. The eight
-// alternatives mirror message-length precedence and content semantics directly:
-// informational, no-content final, zero-content-with-framing, exact-length,
-// final-chunked, close-delimited, CONNECT tunnel, or protocol upgrade.
-// Alternative-specific payload is only reachable from the alternative that owns
-// it.
+// Immutable RFC 9110/9112 response framing and lifecycle contract. A head is
+// exactly one of: an informational response (the exchange awaits another
+// head), a final response delimited by its HTTP/1 framing, a CONNECT tunnel,
+// or a protocol upgrade. The framing mirrors message-length precedence and
+// content semantics directly: no_content is a final response that cannot
+// carry content (HEAD, 204, 304), while a zero known_length still has framing.
 class http1_client_response_plan final {
 public:
-    [[nodiscard]] constexpr const http1_client_informational_response* informational() const& noexcept RUVIA_LIFETIMEBOUND {
-        return std::get_if<http1_client_informational_response>(&state_);
+    [[nodiscard]] constexpr bool informational() const noexcept {
+        return std::holds_alternative<informational_type>(state_);
     }
-    const http1_client_informational_response* informational() const&& = delete;
 
-    [[nodiscard]] constexpr const http1_client_response_without_content* without_content() const& noexcept RUVIA_LIFETIMEBOUND {
-        return std::get_if<http1_client_response_without_content>(&state_);
+    // The framing of a final response; null for the other alternatives.
+    [[nodiscard]] constexpr const http1_message_framing* framing() const& noexcept RUVIA_LIFETIMEBOUND {
+        return std::get_if<http1_message_framing>(&state_);
     }
-    const http1_client_response_without_content* without_content() const&& = delete;
+    const http1_message_framing* framing() const&& = delete;
+
+    [[nodiscard]] constexpr bool connect_tunnel() const noexcept {
+        return std::holds_alternative<connect_tunnel_type>(state_);
+    }
+
+    [[nodiscard]] constexpr bool protocol_upgrade() const noexcept {
+        return std::holds_alternative<protocol_upgrade_type>(state_);
+    }
+
+    // Connection lifecycle after a self-delimited response has been consumed.
+    // For an informational response, reuse means the same exchange can await
+    // its final response; it does not make the connection poolable before that
+    // final. A close-delimited response always closes, and a tunnel or upgrade
+    // never returns the connection to HTTP: all three report
+    // close_after_response.
+    [[nodiscard]] constexpr http1_close_policy close_policy() const noexcept {
+        return close_policy_;
+    }
 
     // A 205 response with an ordinary framing. RFC 9110 section 15.3.6 forbids
     // only generating its content, so content the framing delimits is consumed
-    // and discarded: http1_client_response_body_decoder never emits it, and the
+    // and discarded (http1_body_decoder::discard_content()), and the
     // connection stays reusable.
     [[nodiscard]] constexpr bool discards_content() const noexcept {
         return discards_content_;
     }
-    [[nodiscard]] constexpr const http1_client_known_length_response* known_length() const& noexcept RUVIA_LIFETIMEBOUND {
-        return std::get_if<http1_client_known_length_response>(&state_);
-    }
-    const http1_client_known_length_response* known_length() const&& = delete;
-
-    [[nodiscard]] constexpr const http1_client_chunked_response* chunked() const& noexcept RUVIA_LIFETIMEBOUND {
-        return std::get_if<http1_client_chunked_response>(&state_);
-    }
-    const http1_client_chunked_response* chunked() const&& = delete;
-
-    [[nodiscard]] constexpr const http1_client_close_delimited_response* close_delimited() const& noexcept RUVIA_LIFETIMEBOUND {
-        return std::get_if<http1_client_close_delimited_response>(&state_);
-    }
-    const http1_client_close_delimited_response* close_delimited() const&& = delete;
-
-    [[nodiscard]] constexpr const http1_client_connect_tunnel* connect_tunnel() const& noexcept RUVIA_LIFETIMEBOUND {
-        return std::get_if<http1_client_connect_tunnel>(&state_);
-    }
-    const http1_client_connect_tunnel* connect_tunnel() const&& = delete;
-
-    [[nodiscard]] constexpr const http1_client_protocol_upgrade* protocol_upgrade() const& noexcept RUVIA_LIFETIMEBOUND {
-        return std::get_if<http1_client_protocol_upgrade>(&state_);
-    }
-    const http1_client_protocol_upgrade* protocol_upgrade() const&& = delete;
 
     // Only exchange_complete cancels pending request content. Receiving an early
     // final response without that signal leaves the external writer responsible
@@ -229,15 +109,20 @@ public:
 private:
     friend struct detail::http1_client_response_plan_access;
 
-    using state_type = std::variant<http1_client_informational_response, http1_client_response_without_content, http1_client_known_length_response, http1_client_chunked_response, http1_client_close_delimited_response, http1_client_connect_tunnel, http1_client_protocol_upgrade>;
+    struct informational_type final {};
+    struct connect_tunnel_type final {};
+    struct protocol_upgrade_type final {};
+    using state_type = std::variant<informational_type, http1_message_framing, connect_tunnel_type, protocol_upgrade_type>;
 
-    http1_client_response_plan(state_type state_value, std::optional<http_client_request_content_signal> request_content_signal, bool discards_content = false) :
-        state_(std::move(state_value)),
+    constexpr http1_client_response_plan(state_type state_value, http1_close_policy close_policy, std::optional<http_client_request_content_signal> request_content_signal, bool discards_content = false) noexcept :
+        state_(state_value),
         request_content_signal_(request_content_signal),
+        close_policy_(close_policy),
         discards_content_(discards_content) {}
 
     state_type state_;
     std::optional<http_client_request_content_signal> request_content_signal_;
+    http1_close_policy close_policy_;
     bool discards_content_{false};
 };
 
@@ -247,7 +132,7 @@ static_assert(std::is_nothrow_move_constructible_v<http1_client_response_plan>);
 // Resource exhaustion can throw while unfolding fields, storing temporary
 // descriptors, or materializing an owning response. Exchange termination is
 // NOT a parse error: parsing after the exchange completed or failed throws
-// std::logic_error.
+// std::logic_error until reset().
 enum class http1_client_response_parse_error : std::uint8_t {
     header_too_large,
     invalid_status_line,
@@ -267,16 +152,10 @@ enum class http1_client_response_parse_error : std::uint8_t {
 
 [[nodiscard]] std::string_view http1_client_response_parse_error_message(http1_client_response_parse_error error) noexcept;
 
-class http1_client_response_need_input final {
-private:
-    friend struct detail::http1_client_response_parse_result_access;
-
-    explicit constexpr http1_client_response_need_input() noexcept = default;
-};
-
-// One complete response head. The response owns status/header storage;
-// consumed_bytes() is the exact boundary after CRLF CRLF, so a sans-I/O
-// driver can feed the remaining bytes to the body/tunnel/upgrade path directly.
+// One complete response head. The response owns status/header storage. The
+// step that carries it reports the exact boundary after CRLF CRLF as
+// consumed_bytes(), so a sans-I/O driver can feed the remaining bytes to the
+// body/tunnel/upgrade path directly.
 class http1_parsed_client_response_head final {
 public:
     http1_parsed_client_response_head(const http1_parsed_client_response_head&) = delete;
@@ -298,68 +177,25 @@ public:
     }
     [[nodiscard]] const http1_client_response_plan& plan() const&& = delete;
 
-    [[nodiscard]] constexpr std::size_t consumed_bytes() const noexcept {
-        return consumed_bytes_;
-    }
-
 private:
     friend struct detail::http1_client_response_parse_result_access;
 
-    http1_parsed_client_response_head(http_client_response_head head, http1_client_response_plan plan, std::size_t consumed_bytes) noexcept :
+    http1_parsed_client_response_head(http_client_response_head head, http1_client_response_plan plan) noexcept :
         head_(std::move(head)),
-        plan_(std::move(plan)),
-        consumed_bytes_(consumed_bytes) {}
+        plan_(std::move(plan)) {}
 
     http_client_response_head head_;
     http1_client_response_plan plan_;
-    std::size_t consumed_bytes_{0};
 };
 
 static_assert(std::is_nothrow_move_constructible_v<http1_parsed_client_response_head>);
 
-class http1_client_response_parse_result final {
-public:
-    http1_client_response_parse_result(const http1_client_response_parse_result&) = delete;
-    http1_client_response_parse_result& operator=(const http1_client_response_parse_result&) = delete;
-    http1_client_response_parse_result(http1_client_response_parse_result&&) noexcept = default;
-    http1_client_response_parse_result& operator=(http1_client_response_parse_result&&) = delete;
+using http1_client_response_parse_failure = decode_failure<http1_client_response_parse_error>;
 
-    [[nodiscard]] const http1_client_response_need_input* need_input() const& noexcept RUVIA_LIFETIMEBOUND {
-        return std::get_if<http1_client_response_need_input>(&state_);
-    }
-    const http1_client_response_need_input* need_input() const&& = delete;
-
-    [[nodiscard]] http1_parsed_client_response_head* parsed() & noexcept RUVIA_LIFETIMEBOUND {
-        return std::get_if<http1_parsed_client_response_head>(&state_);
-    }
-
-    [[nodiscard]] const http1_parsed_client_response_head* parsed() const& noexcept RUVIA_LIFETIMEBOUND {
-        return std::get_if<http1_parsed_client_response_head>(&state_);
-    }
-    http1_parsed_client_response_head* parsed() && = delete;
-    const http1_parsed_client_response_head* parsed() const&& = delete;
-
-    [[nodiscard]] const http1_client_response_parse_error* failure() const& noexcept RUVIA_LIFETIMEBOUND {
-        return std::get_if<http1_client_response_parse_error>(&state_);
-    }
-    const http1_client_response_parse_error* failure() const&& = delete;
-
-private:
-    friend struct detail::http1_client_response_parse_result_access;
-
-    explicit http1_client_response_parse_result(http1_client_response_need_input state_value) noexcept :
-        state_(state_value) {}
-
-    explicit http1_client_response_parse_result(http1_parsed_client_response_head state_value) noexcept :
-        state_(std::move(state_value)) {}
-
-    explicit http1_client_response_parse_result(http1_client_response_parse_error state_value) noexcept :
-        state_(state_value) {}
-
-    std::variant<http1_client_response_need_input, http1_parsed_client_response_head, http1_client_response_parse_error> state_;
-};
-
-static_assert(std::is_nothrow_move_constructible_v<http1_client_response_parse_result>);
+// One parse() outcome: the head is incomplete, complete (consumed_bytes() is
+// then its exact size, zero otherwise), or rejected. The parsed head is
+// move-only: extract it through the step that holds it.
+using http1_client_response_parse_result = decode_step<decode_need_input, http1_parsed_client_response_head, http1_client_response_parse_failure>;
 
 // Per-request HTTP/1 response-head state machine. Construction consumes the
 // owning exchange state from one successfully prepared request; informational
@@ -408,22 +244,25 @@ public:
     [[nodiscard]] http1_client_request_content_completion_status complete_request_content() noexcept;
 
     // After need_input, append to the same logical prefix; after a parsed head,
-    // remove consumed_bytes before supplying the following response.
+    // remove consumed_bytes() before supplying the following response.
     // Allocation failures propagate without completing or failing the exchange;
     // after reclaiming resources, retry with the same response prefix.
     [[nodiscard]] http1_client_response_parse_result parse(std::string_view buffer);
 
+    // Active while a response head is awaited (informational heads keep it
+    // active); finished once the final response, tunnel or upgrade head was
+    // parsed; failed after a rejected head.
+    [[nodiscard]] decoder_state state() const noexcept {
+        return state_;
+    }
+    // Starts the response side of another prepared request.
+    void reset(http1_client_exchange_state exchange_state) noexcept;
+
 private:
     [[nodiscard]] static detail::http1_client_request_content_phase initial_request_content_phase(const http1_client_exchange_state& state_value) noexcept;
 
-    enum class phase_type : std::uint8_t {
-        await_response,
-        complete,
-        failed,
-    };
-
     http1_client_exchange_state exchange_state_;
-    phase_type phase_{phase_type::await_response};
+    decoder_state state_{decoder_state::active};
     detail::http1_client_request_content_phase request_content_phase_;
     bool interim_faulty_framing_{false};
     std::size_t header_scan_offset_{0};

@@ -12,10 +12,10 @@
 #include <vector>
 
 #include "http1_client_request.h"
-#include "http_client_request_view.h"
 #include "http_client_types.h"
 #include "http_cookie_jar.h"
 #include "http_header.h"
+#include "http_request_head_view.h"
 #include "stop_token.h"
 #include "websocket_client_handshake.h"
 #include "websocket_connection.h"
@@ -214,7 +214,7 @@ public:
     explicit client_request_policy(const http_client_config_storage& config);
     // The complete view borrows the request, policy text and both scratch buffers;
     // keep their owners alive through protocol serialization.
-    [[nodiscard]] http_client_request_view prepare_request(const http_client_request_storage& request, client_prepared_request_scratch& scratch);
+    [[nodiscard]] http_request_head_view prepare_request(const http_client_request_storage& request, client_prepared_request_scratch& scratch);
     // Stored and configured cookies belong to the fixed origin: false for a
     // request whose authority override or tunnel authority names another
     // host or port. Requires a resolved request route.

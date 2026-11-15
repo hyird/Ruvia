@@ -61,7 +61,7 @@ private:
             const bool pushed = c.push({
                 .scheme_ = connection.tls() ? "https" : "http",
                 .authority_ = c.req().header("host").value_or(connection.tls() ? "localhost:8444" : "localhost:8093"),
-                .path_ = "/features/asset",
+                .target_ = "/features/asset",
             });
             push_header[push_header_count++] = {"X-Push-Accepted", pushed ? "yes" : "no"};
         }
@@ -138,9 +138,11 @@ int main() {
 #if defined(RUVIA_ENABLE_HTTP3)
             listener_value.http3_ = 8444;
 #endif
-            listener_value.tls_.identity_ = {
-                .certificate_chain_file_ = std::filesystem::path(*certificate),
-                .private_key_file_ = std::filesystem::path(*key),
+            listener_value.tls_.identities_ = ruvia::tls_fixed_identities{
+                .primary_ = {
+                    .certificate_chain_file_ = std::filesystem::path(*certificate),
+                    .private_key_file_ = std::filesystem::path(*key),
+                },
             };
         }
         app.workers({.worker_count_ = 2, .process_signal_handlers_ = ruvia::process_signal_handler_policy::install}).server({.compression_ = ruvia::compression_config{.min_bytes_ = 16}}).listen(std::move(listener_value)).run();

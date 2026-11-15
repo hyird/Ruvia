@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "borrowed_text.h"
+#include "decode_step.h"
 #include "ip_address.h"
 
 namespace ruvia {
@@ -45,15 +46,6 @@ struct proxy_protocol_parser_options final {
     // A v1 line is always capped at its spec §2.1 maximum of 107 bytes
     // including CRLF.
     std::size_t max_v2_header_bytes_{4096};
-};
-
-enum class proxy_protocol_parser_state : std::uint8_t {
-    active,
-    // A complete header was parsed; header() is available.
-    finished,
-    // The input was not a valid PROXY protocol header, exceeded a limit, or
-    // the parser could not buffer it.
-    failed,
 };
 
 // A parsed header. Its TLV views borrow the parser that produced it.
@@ -129,43 +121,14 @@ enum class proxy_protocol_parse_error : std::uint8_t {
     v2_tlv_overrun,
 };
 
-// One parse() outcome, fixed when the parser builds it: need more input, a
-// complete header, or a failure.
-class proxy_protocol_parse_result final {
-public:
-    constexpr proxy_protocol_parse_result(const proxy_protocol_parse_result&) noexcept = default;
-    proxy_protocol_parse_result& operator=(const proxy_protocol_parse_result&) = delete;
-    proxy_protocol_parse_result& operator=(proxy_protocol_parse_result&&) = delete;
+using proxy_protocol_parse_failure = decode_failure<proxy_protocol_parse_error>;
 
-    // The header ended within this input.
-    [[nodiscard]] constexpr bool complete() const noexcept {
-        return complete_;
-    }
-    // Header bytes only: never a byte after the header's end, so the caller
-    // hands input[consumed_bytes()..] to the next protocol. Without complete()
-    // or failure(), every input byte was consumed and more are needed. Zero for
-    // a failure, which leaves no byte the caller may reuse.
-    [[nodiscard]] constexpr std::size_t consumed_bytes() const noexcept {
-        return consumed_bytes_;
-    }
-    // Set when the input was not a valid header or exceeded a limit; the
-    // parser is then failed.
-    [[nodiscard]] constexpr std::optional<proxy_protocol_parse_error> failure() const noexcept {
-        return failure_;
-    }
-
-private:
-    friend class proxy_protocol_parser;
-
-    constexpr proxy_protocol_parse_result(bool complete, std::size_t consumed_bytes, std::optional<proxy_protocol_parse_error> failure) noexcept :
-        complete_(complete),
-        consumed_bytes_(consumed_bytes),
-        failure_(failure) {}
-
-    bool complete_;
-    std::size_t consumed_bytes_;
-    std::optional<proxy_protocol_parse_error> failure_;
-};
+// One parse() outcome: need more input, a complete header, or a failure.
+// consumed_bytes() covers header bytes only: never a byte after the header's
+// end, so the caller hands input[consumed_bytes()..] to the next protocol.
+// With decode_need_input every input byte was consumed. It is zero for a
+// failure, which leaves no byte the caller may reuse.
+using proxy_protocol_parse_result = decode_step<decode_need_input, decode_complete, proxy_protocol_parse_failure>;
 
 // Sans-I/O PROXY protocol header parser for the start of one connection, fed
 // in chunks split at any byte. The first bytes must begin the v1 "PROXY "
@@ -173,6 +136,7 @@ private:
 // input. Each byte is scanned once and only header bytes are buffered.
 // Invalid or over-limit input fails closed: parse() returns the failure and
 // the parser becomes failed, as it does when buffering the header throws.
+// A finished parser holds a complete header, available through header().
 // Only reset() leaves the finished or failed state; it keeps buffer capacity,
 // bounded by the v2 header limit.
 class proxy_protocol_parser final {
@@ -190,7 +154,7 @@ public:
     [[nodiscard]] proxy_protocol_parse_result parse(std::span<const std::byte> input) &;
     proxy_protocol_parse_result parse(std::span<const std::byte> input) && = delete;
 
-    [[nodiscard]] proxy_protocol_parser_state state() const noexcept {
+    [[nodiscard]] decoder_state state() const noexcept {
         return state_;
     }
     // Finished parsers only; otherwise throws std::logic_error. Its views stay
@@ -228,7 +192,7 @@ private:
     std::size_t v2_header_size_{0};
     std::uint8_t v2_family_{0};
     parse_phase phase_{parse_phase::signature};
-    proxy_protocol_parser_state state_{proxy_protocol_parser_state::active};
+    decoder_state state_{decoder_state::active};
     // Meaningful only while state_ is failed.
     proxy_protocol_parse_error failure_{proxy_protocol_parse_error::invalid_signature};
 };

@@ -22,7 +22,7 @@
 #include "http1_client_response.h"
 #include "http_client.h"
 #include "http_client_redirect.h"
-#include "http_client_request_view.h"
+#include "http_request_head_view.h"
 #include "middleware.h"
 namespace {
 
@@ -96,7 +96,7 @@ ruvia::task<ruvia::http_client_response_bytes> exercise(ruvia::event_loop loop, 
             while (co_await response.stream().read()) {
             }
             while (auto push = origin.next_push()) {
-                std::cout << "push=" << push->request().path_ << '\n';
+                std::cout << "push=" << push->request().target_ << '\n';
                 auto pushed = co_await push->response();
                 auto content = co_await pushed.bytes(4096);
                 std::cout << "pushed bytes=" << content.bytes().size() << '\n';

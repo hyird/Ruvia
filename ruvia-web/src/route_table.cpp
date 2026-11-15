@@ -839,7 +839,7 @@ task<http_response> detail::route_table::dispatch_bound_buffered(const resolved_
     try {
         auto response = co_await invoke_route(resolved, context_value);
         if (body_failure != nullptr && body_failure->has_value() && context_value.exception() == nullptr) {
-            throw http_request_body_protocol_error(**body_failure);
+            throw make_http_protocol_error(**body_failure);
         }
         if (!resolved.route().has_middleware()) {
             detail::context_access::apply_response_policy(context_value, response);

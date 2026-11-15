@@ -94,38 +94,24 @@ struct websocket_handshake_validation_options final {
     bool require_subprotocol_{false};
 };
 
-class websocket_handshake_accepted final {
-private:
-    friend class websocket_handshake_validation_result;
-
-    constexpr websocket_handshake_accepted() noexcept = default;
+// Why a server refuses a WebSocket opening handshake.
+enum class websocket_handshake_error : std::uint8_t {
+    invalid_request,
+    unsupported_version,
+    unsupported_subprotocol,
 };
 
-class websocket_handshake_failure final {
-public:
-    [[nodiscard]] http_protocol_error protocol_error() const noexcept;
+[[nodiscard]] http_protocol_error make_http_protocol_error(websocket_handshake_error error) noexcept;
 
-    // RFC 6455 requires a server rejecting an unsupported version to advertise
-    // every supported version. Apply this after any application error handler.
-    void apply_required_response_headers(http_response& response) const;
+// RFC 6455 requires a server rejecting an unsupported version to advertise
+// every supported version. Apply this after any application error handler.
+void apply_websocket_handshake_error_headers(websocket_handshake_error error, http_response& response);
 
-private:
-    friend class websocket_handshake_validation_result;
+// One-shot handshake validation: accepted, or the reason to refuse.
+using websocket_handshake_validation_result = std::variant<std::monostate, websocket_handshake_error>;
 
-    enum class kind_type : std::uint8_t { invalid_request,
-        unsupported_version,
-        unsupported_subprotocol };
-
-    explicit constexpr websocket_handshake_failure(kind_type kind) noexcept :
-        kind_(kind) {}
-
-    kind_type kind_;
-};
-
-class websocket_handshake_validation_result;
 class http2_connection;
 class http3_connection;
-class http3_request_head;
 namespace detail {
 class websocket_compression_extension final {
 public:
@@ -176,56 +162,6 @@ class http2_connection;
 class websocket_request_header_validator;
 inline constexpr std::string_view websocket_switching_protocols_head_prefix = "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ";
 }  // namespace detail
-
-class websocket_handshake_validation_result final {
-public:
-    websocket_handshake_validation_result(const websocket_handshake_validation_result&) = default;
-    websocket_handshake_validation_result(websocket_handshake_validation_result&&) noexcept = default;
-    websocket_handshake_validation_result& operator=(const websocket_handshake_validation_result&) = delete;
-    websocket_handshake_validation_result& operator=(websocket_handshake_validation_result&&) = delete;
-
-    [[nodiscard]] constexpr const websocket_handshake_accepted* accepted() const& noexcept RUVIA_LIFETIMEBOUND {
-        return (value_.index() == 0) ? &std::get<0>(value_) : nullptr;
-    }
-    const websocket_handshake_accepted* accepted() const&& = delete;
-
-    [[nodiscard]] constexpr const websocket_handshake_failure* failure() const& noexcept RUVIA_LIFETIMEBOUND {
-        return (value_.index() == 0) ? nullptr : &std::get<1>(value_);
-    }
-    const websocket_handshake_failure* failure() const&& = delete;
-
-private:
-    friend class detail::websocket_request_header_validator;
-    friend websocket_handshake_validation_result validate_http2_websocket_handshake(http2_connection&, std::uint32_t, const http_request&, websocket_handshake_validation_options) noexcept;
-    friend websocket_handshake_validation_result validate_http3_websocket_handshake(const http3_request_head&, const http_request&, websocket_handshake_validation_options) noexcept;
-    friend websocket_handshake_validation_result validate_http1_websocket_handshake(const http_request&, const http1_request_body_plan&, websocket_handshake_validation_options) noexcept;
-
-    using value_type = std::variant<websocket_handshake_accepted, websocket_handshake_failure>;
-
-    explicit constexpr websocket_handshake_validation_result(websocket_handshake_accepted accepted) noexcept :
-        value_(accepted) {}
-
-    explicit constexpr websocket_handshake_validation_result(websocket_handshake_failure failure) noexcept :
-        value_(failure) {}
-
-    [[nodiscard]] static constexpr websocket_handshake_validation_result make_accepted() noexcept {
-        return websocket_handshake_validation_result(websocket_handshake_accepted());
-    }
-
-    [[nodiscard]] static constexpr websocket_handshake_validation_result make_invalid_request() noexcept {
-        return websocket_handshake_validation_result(websocket_handshake_failure(websocket_handshake_failure::kind_type::invalid_request));
-    }
-
-    [[nodiscard]] static constexpr websocket_handshake_validation_result make_unsupported_version() noexcept {
-        return websocket_handshake_validation_result(websocket_handshake_failure(websocket_handshake_failure::kind_type::unsupported_version));
-    }
-
-    [[nodiscard]] static constexpr websocket_handshake_validation_result make_unsupported_subprotocol() noexcept {
-        return websocket_handshake_validation_result(websocket_handshake_failure(websocket_handshake_failure::kind_type::unsupported_subprotocol));
-    }
-
-    value_type value_;
-};
 
 // The negotiation an RFC 8441 (HTTP/2) or RFC 9220 (HTTP/3) extended CONNECT
 // 200 response committed on the wire. The runtime configures its websocket

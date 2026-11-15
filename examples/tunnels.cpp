@@ -72,9 +72,11 @@ int main() {
         }
         if (cert && key) {
             listener_value.https_ = 8445;
-            listener_value.tls_.identity_ = {
-                .certificate_chain_file_ = std::filesystem::path(*cert),
-                .private_key_file_ = std::filesystem::path(*key),
+            listener_value.tls_.identities_ = ruvia::tls_fixed_identities{
+                .primary_ = {
+                    .certificate_chain_file_ = std::filesystem::path(*cert),
+                    .private_key_file_ = std::filesystem::path(*key),
+                },
             };
         }
         app.workers({.worker_count_ = 2, .process_signal_handlers_ = ruvia::process_signal_handler_policy::install})

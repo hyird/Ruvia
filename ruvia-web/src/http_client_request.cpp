@@ -31,7 +31,6 @@
 #include "http_client_redirect.h"
 #include "http_client_registry.h"
 #include "http_client_request_storage.h"
-#include "http_client_request_view.h"
 #include "http_client_response_state.h"
 #include "http_client_types.h"
 #include "http_connect_udp.h"
@@ -40,6 +39,7 @@
 #include "http_message.h"
 #include "http_protocol.h"
 #include "http_request.h"
+#include "http_request_head_view.h"
 #include "inline_storage.h"
 #include "ip_address.h"
 #include "operation_options.h"
@@ -245,7 +245,7 @@ bool client_request_policy::addresses_origin(const http_client_request_storage& 
     return (!request.is_tunnel() || request.is_upgrade()) && request.route().alias_origin_;
 }
 
-http_client_request_view client_request_policy::prepare_request(const http_client_request_storage& request, client_prepared_request_scratch& scratch) {
+http_request_head_view client_request_policy::prepare_request(const http_client_request_storage& request, client_prepared_request_scratch& scratch) {
     const auto& input_headers = request.headers();
     const auto max_prepared_headers = input_headers.size() + 2;
     http_header_view* prepared_begin = scratch.inline_headers_.data();
@@ -325,7 +325,7 @@ http_client_request_view client_request_policy::prepare_request(const http_clien
     if (!cookie_header_view.empty()) {
         prepared_begin[index++] = http_header_view{"cookie", cookie_header_view};
     }
-    http_client_request_view result;
+    http_request_head_view result;
     result.method_ = request.method();
     result.target_ = request.target();
     result.headers_ = std::span<const http_header_view>(prepared_begin, index);
@@ -560,7 +560,7 @@ task<http_client_response> http_client_request::follow_redirects(http_client_req
             std::optional<task<http_client_response>> dispatched;
             {
                 const detail::inline_http_header_views<16> fields(request.headers_);
-                const http_client_request_view view{.method_ = request.method_, .target_ = request.target_, .headers_ = fields.view(), .content_ = detail::buffered_http_client_content(request.has_body_, request.body_)};
+                const http_request_head_view view{.method_ = request.method_, .target_ = request.target_, .headers_ = fields.view(), .content_ = detail::buffered_http_client_content(request.has_body_, request.body_)};
                 dispatched.emplace(request.client_.dispatch(view, request.request_options_, request.informational_callback_));
             }
             if (redirects == request.max_redirects_) {
@@ -595,7 +595,7 @@ task<http_client_response> http_client_request::follow_redirects(http_client_req
         if (status != 301 && status != 302 && status != 303 && status != 307 && status != 308) {
             co_return response;
         }
-        const http_client_request_view current_view{.method_ = request.method_, .target_ = request.target_, .content_ = detail::buffered_http_client_content(request.has_body_, request.body_)};
+        const http_request_head_view current_view{.method_ = request.method_, .target_ = request.target_, .content_ = detail::buffered_http_client_content(request.has_body_, request.body_)};
         const auto plan = plan_http_client_redirect_request(current_view, {.status_ = response.status()});
         if (upload_initial_hop && redirects == 0 && plan.content_disposition() != http_client_redirect_content_disposition::drop) {
             co_return response;
@@ -781,7 +781,7 @@ http_client_connect_request& http_client_connect_request::target(std::string_vie
 }
 task<http_client_tunnel_result> http_client_connect_request::connect(http_client_tunnel_config config) && {
     const detail::inline_http_header_views<16> fields(headers_);
-    auto dispatched = udp_ ? client_.dispatch_udp({.target_ = target_, .headers_ = fields.view()}, config, request_options_, informational_callback_) : client_.dispatch_connect({.authority_ = authority_, .protocol_ = protocol_, .target_ = target_, .headers_ = fields.view()}, config, request_options_, informational_callback_);
+    auto dispatched = udp_ ? client_.dispatch_udp({.target_ = target_, .headers_ = fields.view()}, config, request_options_, informational_callback_) : client_.dispatch_connect({.method_ = "CONNECT", .protocol_ = protocol_.empty() ? std::optional<borrowed_text>() : std::optional<borrowed_text>(protocol_), .authority_ = authority_, .target_ = target_, .headers_ = fields.view()}, config, request_options_, informational_callback_);
     std::string(authority_.get_allocator()).swap(authority_);
     std::string(protocol_.get_allocator()).swap(protocol_);
     std::string(target_.get_allocator()).swap(target_);
@@ -920,7 +920,7 @@ http_client_ref http_client_ref::bind_caller_scope(detail::operation_scope& scop
     return bound;
 }
 
-task<http_client_response> http_client_ref::dispatch(const http_client_request_view& view, const http_client_request_options& request_options, const std::shared_ptr<http_client_informational_callback>& informational) const {
+task<http_client_response> http_client_ref::dispatch(const http_request_head_view& view, const http_client_request_options& request_options, const std::shared_ptr<http_client_informational_callback>& informational) const {
     registration_.require_active();
     detail::http_client_request_storage request(view.method_.view(), view.target_.view(), view.headers_);
     request.options_ = detail::copy_http_client_request_settings(request_options);
@@ -936,7 +936,7 @@ task<http_client_response> http_client_ref::dispatch(const http_client_request_v
     return registration_.attach(pool_->execute(std::move(request), options_));
 }
 
-task<http_client_exchange> http_client_ref::dispatch_upload(const http_client_request_view& head, http_client_upload_config upload, const http_client_request_options& request_options, const std::shared_ptr<http_client_informational_callback>& informational) const {
+task<http_client_exchange> http_client_ref::dispatch_upload(const http_request_head_view& head, http_client_upload_config upload, const http_client_request_options& request_options, const std::shared_ptr<http_client_informational_callback>& informational) const {
     registration_.require_active();
     if (head.content_.without_content() == nullptr || upload.max_chunk_bytes_ == 0 || upload.continue_timeout_.value() <= std::chrono::milliseconds::zero() || (upload.expectation_ != http_client_request_expectation::none && upload.expectation_ != http_client_request_expectation::continue_)) {
         throw std::invalid_argument("streaming upload requires a bodyless head and valid upload policy");
@@ -949,7 +949,7 @@ task<http_client_exchange> http_client_ref::dispatch_upload(const http_client_re
     return registration_.attach(pool_->open_request(std::move(request), upload, options_));
 }
 
-task<http_client_tunnel_result> http_client_ref::dispatch_udp(const http_client_udp_tunnel_request_view& head, http_client_tunnel_config config, const http_client_request_options& request_options, const std::shared_ptr<http_client_informational_callback>& informational) const {
+task<http_client_tunnel_result> http_client_ref::dispatch_udp(const http_request_head_view& head, http_client_tunnel_config config, const http_client_request_options& request_options, const std::shared_ptr<http_client_informational_callback>& informational) const {
     registration_.require_active();
     if (!is_valid_http_origin_form_target(head.target_) || config.max_chunk_bytes_ == 0 || config.max_chunk_bytes_ > default_max_buffered_body_bytes) {
         throw std::invalid_argument("invalid CONNECT-UDP request or tunnel policy");
@@ -966,22 +966,27 @@ task<http_client_tunnel_result> http_client_ref::dispatch_udp(const http_client_
     fields.push_back(http_header_view{"Capsule-Protocol", "?1"});
     // The dispatch owns fields before temporary preparation storage dies.
     const std::string_view authority = request_options.authority_ ? std::string_view(*request_options.authority_) : std::string_view(pool_->config().authority_);
-    return dispatch_connect({.authority_ = authority, .protocol_ = "connect-udp", .target_ = head.target_, .headers_ = fields.view()}, config, request_options, informational);
+    return dispatch_connect({.method_ = "CONNECT", .protocol_ = "connect-udp", .authority_ = authority, .target_ = head.target_, .headers_ = fields.view()}, config, request_options, informational);
 }
 
-task<http_client_tunnel_result> http_client_ref::dispatch_connect(const http_client_tunnel_request_view& head, http_client_tunnel_config config, const http_client_request_options& request_options, const std::shared_ptr<http_client_informational_callback>& informational) const {
+task<http_client_tunnel_result> http_client_ref::dispatch_connect(const http_request_head_view& head, http_client_tunnel_config config, const http_client_request_options& request_options, const std::shared_ptr<http_client_informational_callback>& informational) const {
     registration_.require_active();
-    if (config.max_chunk_bytes_ == 0 || config.max_chunk_bytes_ > default_max_buffered_body_bytes || (head.protocol_.empty() ? (!is_valid_http_connect_authority(head.authority_) || !head.target_.empty()) : (!is_valid_http_method_token(head.protocol_) || !is_valid_http_origin_form_target(head.target_) || !parse_http_authority(head.authority_)))) {
+    // A CONNECT head without a protocol is authority-form and has no target;
+    // with one it is Extended CONNECT to an origin-form target. Any other
+    // head is not a tunnel request.
+    const auto protocol = head.protocol_.has_value() ? head.protocol_->view() : std::string_view{};
+    const auto authority = head.authority_.has_value() ? head.authority_->view() : std::string_view{};
+    if (head.kind() != (protocol.empty() ? http_request_head_kind::connect : http_request_head_kind::extended_connect) || config.max_chunk_bytes_ == 0 || config.max_chunk_bytes_ > default_max_buffered_body_bytes || (protocol.empty() ? (!is_valid_http_connect_authority(authority) || !head.target_.empty()) : (!is_valid_http_method_token(protocol) || !is_valid_http_origin_form_target(head.target_) || !parse_http_authority(authority)))) {
         throw std::invalid_argument("invalid CONNECT request or tunnel policy");
     }
-    if (head.protocol_.view() == "connect-udp" && validate_http_connect_udp_request_to_send({.version_ = http_protocol_version::http2, .method_ = "CONNECT", .scheme_ = scheme() == http_scheme::https ? "https" : "http", .authority_ = head.authority_, .path_ = head.target_, .headers_ = head.headers_}).has_value()) {
+    if (protocol == "connect-udp" && validate_http_connect_udp_request_to_send(http_protocol_version::http2, {.method_ = "CONNECT", .protocol_ = "connect-udp", .scheme_ = scheme() == http_scheme::https ? "https" : "http", .authority_ = authority, .target_ = head.target_, .headers_ = head.headers_}).has_value()) {
         throw std::invalid_argument("invalid CONNECT-UDP request head");
     }
     detail::http_client_request_storage request("CONNECT", head.target_.view(), head.headers_);
     request.options_ = detail::copy_http_client_request_settings(request_options);
     request.informational_ = informational;
     request.pool_owner_ = pool_owner_;
-    request.set_tunnel(head.authority_.view(), head.protocol_.view());
+    request.set_tunnel(authority, protocol);
     request.set_host_stop(host_stop_token_);
     return registration_.attach(pool_->open_tunnel(std::move(request), config, options_));
 }

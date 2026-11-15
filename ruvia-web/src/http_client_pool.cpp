@@ -39,12 +39,12 @@
 #include "http_client_config_storage.h"
 #include "http_client_connection.h"
 #include "http_client_request_storage.h"
-#include "http_client_request_view.h"
 #include "http_client_response_state.h"
 #include "http_client_types.h"
 #include "http_header.h"
 #include "http_message.h"
 #include "http_priority.h"
+#include "http_request_head_view.h"
 #include "http_tunnel.h"
 #include "io_operation.h"
 #include "ip_address_conversion.h"
@@ -1102,6 +1102,13 @@ task<void> http_client_pool::execute_tcp_request(const http_client_request_stora
 task<void> http_client_pool::execute_request_into(http_client_request_storage request, operation_options options, http_client_response_state* state_value) {
     try {
         throw_if_abandoned(*state_value);
+        // An exchange that is not a tunnel must be a regular request on
+        // every HTTP version: a CONNECT method names a tunnel, which only the
+        // tunnel entry may open. Refused before a route, connection or
+        // version is chosen, so nothing reaches the wire.
+        if (!request.is_tunnel() && http_request_head_view{.method_ = request.method()}.kind() != http_request_head_kind::regular) {
+            throw http_client_error(make_error_code(http_client_errc::invalid_request), "CONNECT requires the tunnel request entry");
+        }
         // The storage is at its final address in this frame.
         request.resolve_route(config_);
     } catch (...) {

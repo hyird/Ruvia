@@ -16,6 +16,11 @@
 
 namespace {
 
+using ruvia::decode_need_input;
+using ruvia::decode_output;
+using ruvia::decoder_state;
+using ruvia::http1_chunk_decode_complete;
+using ruvia::http1_chunk_decode_failure;
 using ruvia::http1_chunked_body_decoder;
 using ruvia::protocol_byte_limit;
 
@@ -72,16 +77,16 @@ TEST(Ruvia, protocol_byte_limit_rejects_negative_sources_without_weakening_body_
     http1_chunked_body_decoder exact({.body_limit_ = retained});
     constexpr std::string_view wire = "2\r\nok\r\n0\r\n\r\n";
     const auto admitted = exact.decode(wire);
-    EXPECT_TRUE(admitted.body_chunk() != nullptr);
-    if (const auto* chunk = admitted.body_chunk()) {
+    EXPECT_TRUE(admitted.holds<decode_output>());
+    if (const auto* chunk = admitted.get_if<decode_output>()) {
         EXPECT_EQ(chunk->bytes(), "ok");
-        const auto terminal = exact.decode(wire.substr(chunk->consumed_bytes()));
-        EXPECT_TRUE(terminal.complete() != nullptr);
+        const auto terminal = exact.decode(wire.substr(admitted.consumed_bytes()));
+        EXPECT_TRUE(terminal.holds<http1_chunk_decode_complete>());
     }
     http1_chunked_body_decoder excess({.body_limit_ = retained});
     const auto refused = excess.decode("3\r\nbad\r\n0\r\n\r\n");
-    EXPECT_TRUE(refused.failure() != nullptr);
-    if (const auto* failure = refused.failure()) {
+    EXPECT_TRUE(refused.holds<http1_chunk_decode_failure>());
+    if (const auto* failure = refused.get_if<http1_chunk_decode_failure>()) {
         EXPECT_TRUE(failure->error() == ruvia::http1_chunk_decode_error::body_limit_exceeded);
     }
 }
@@ -89,40 +94,40 @@ TEST(Ruvia, protocol_byte_limit_rejects_negative_sources_without_weakening_body_
 TEST(Ruvia, chunked_body_decoder_reports_typed_size_and_limit_failures) {
     http1_chunked_body_decoder invalid({.body_limit_ = protocol_byte_limit::unlimited()});
     const auto invalid_result = invalid.decode("xyz\r\n");
-    EXPECT_TRUE(invalid_result.failure() != nullptr);
-    EXPECT_TRUE(invalid_result.failure()->error() == ruvia::http1_chunk_decode_error::invalid_framing);
-    EXPECT_EQ(ruvia::http_request_chunk_decode_error(invalid_result.failure()->error()).status(), ruvia::http_status::bad_request);
+    ASSERT_TRUE(invalid_result.holds<http1_chunk_decode_failure>());
+    EXPECT_TRUE(invalid_result.get_if<http1_chunk_decode_failure>()->error() == ruvia::http1_chunk_decode_error::invalid_framing);
+    EXPECT_EQ(ruvia::make_http_protocol_error(invalid_result.get_if<http1_chunk_decode_failure>()->error()).status(), ruvia::http_status::bad_request);
     const auto repeated_invalid = invalid.decode("0\r\n\r\n");
-    EXPECT_TRUE(repeated_invalid.failure() != nullptr);
-    EXPECT_TRUE(repeated_invalid.failure()->error() == ruvia::http1_chunk_decode_error::invalid_framing);
+    ASSERT_TRUE(repeated_invalid.holds<http1_chunk_decode_failure>());
+    EXPECT_TRUE(repeated_invalid.get_if<http1_chunk_decode_failure>()->error() == ruvia::http1_chunk_decode_error::invalid_framing);
     EXPECT_EQ(repeated_invalid.consumed_bytes(), std::size_t{0});
 
     http1_chunked_body_decoder single_limit({.body_limit_ = protocol_byte_limit::limited(10)});
     const auto single_limit_result = single_limit.decode("b\r\n");
-    EXPECT_TRUE(single_limit_result.failure() != nullptr);
-    EXPECT_TRUE(single_limit_result.failure()->error() == ruvia::http1_chunk_decode_error::body_limit_exceeded);
-    EXPECT_EQ(ruvia::http_request_chunk_decode_error(single_limit_result.failure()->error()).status(), ruvia::http_status::content_too_large);
+    ASSERT_TRUE(single_limit_result.holds<http1_chunk_decode_failure>());
+    EXPECT_TRUE(single_limit_result.get_if<http1_chunk_decode_failure>()->error() == ruvia::http1_chunk_decode_error::body_limit_exceeded);
+    EXPECT_EQ(ruvia::make_http_protocol_error(single_limit_result.get_if<http1_chunk_decode_failure>()->error()).status(), ruvia::http_status::content_too_large);
     EXPECT_EQ(single_limit_result.consumed_bytes(), std::size_t{3});
 
     http1_chunked_body_decoder accumulated({.body_limit_ = protocol_byte_limit::limited(10)});
     const std::string_view wire = "8\r\n12345678\r\n5\r\nabcde\r\n0\r\n\r\n";
     const auto first = accumulated.decode(wire);
-    EXPECT_TRUE(first.body_chunk() != nullptr);
+    EXPECT_TRUE(first.holds<decode_output>());
     const auto second = accumulated.decode(wire.substr(first.consumed_bytes()));
-    EXPECT_TRUE(second.failure() != nullptr);
-    EXPECT_TRUE(second.failure()->error() == ruvia::http1_chunk_decode_error::body_limit_exceeded);
-    EXPECT_EQ(ruvia::http_request_chunk_decode_error(second.failure()->error()).status(), ruvia::http_status::content_too_large);
+    ASSERT_TRUE(second.holds<http1_chunk_decode_failure>());
+    EXPECT_TRUE(second.get_if<http1_chunk_decode_failure>()->error() == ruvia::http1_chunk_decode_error::body_limit_exceeded);
+    EXPECT_EQ(ruvia::make_http_protocol_error(second.get_if<http1_chunk_decode_failure>()->error()).status(), ruvia::http_status::content_too_large);
 }
 
 TEST(Ruvia, chunked_body_decoder_separates_body_and_framing_limits) {
     http1_chunked_body_decoder tiny_body({.body_limit_ = protocol_byte_limit::limited(1)});
     constexpr std::string_view tiny_wire = "1\r\nx\r\n0\r\n\r\n";
     const auto body = tiny_body.decode(tiny_wire);
-    EXPECT_TRUE(body.body_chunk() != nullptr);
-    if (const auto* chunk = body.body_chunk()) {
+    EXPECT_TRUE(body.holds<decode_output>());
+    if (const auto* chunk = body.get_if<decode_output>()) {
         EXPECT_EQ(chunk->bytes(), std::string_view("x"));
-        const auto terminal = tiny_body.decode(tiny_wire.substr(chunk->consumed_bytes()));
-        EXPECT_TRUE(terminal.complete() != nullptr);
+        const auto terminal = tiny_body.decode(tiny_wire.substr(body.consumed_bytes()));
+        EXPECT_TRUE(terminal.holds<http1_chunk_decode_complete>());
     }
 
     // Size-line overhead has its own per-message budget, independent of the
@@ -144,11 +149,11 @@ TEST(Ruvia, chunked_body_decoder_separates_body_and_framing_limits) {
     for (std::size_t step = 0; step < 8; ++step) {
         const auto result_value = decoder.decode(remaining);
         remaining.remove_prefix(result_value.consumed_bytes());
-        if (const auto* chunk = result_value.body_chunk()) {
+        if (const auto* chunk = result_value.get_if<decode_output>()) {
             decoded.append(chunk->bytes());
             continue;
         }
-        EXPECT_TRUE(result_value.complete() != nullptr);
+        EXPECT_TRUE(result_value.holds<http1_chunk_decode_complete>());
         break;
     }
     EXPECT_EQ(decoded, "xyz");
@@ -173,14 +178,14 @@ TEST(Ruvia, chunked_body_decoder_accepts_unbounded_chunk_count) {
     for (;;) {
         const auto result_value = decoder.decode(remaining);
         remaining.remove_prefix(result_value.consumed_bytes());
-        if (const auto* chunk = result_value.body_chunk()) {
+        if (const auto* chunk = result_value.get_if<decode_output>()) {
             for (const char byte : chunk->bytes()) {
                 ordered = ordered && byte == static_cast<char>('a' + decoded_bytes % 26);
                 ++decoded_bytes;
             }
             continue;
         }
-        EXPECT_TRUE(result_value.complete() != nullptr);
+        EXPECT_TRUE(result_value.holds<http1_chunk_decode_complete>());
         break;
     }
     EXPECT_TRUE(ordered);
@@ -200,15 +205,15 @@ TEST(Ruvia, chunked_body_decoder_emits_zero_copy_chunks_and_preserves_pipeline) 
     for (;;) {
         const auto result_value = decoder.decode(wire.substr(consumed));
         consumed += result_value.consumed_bytes();
-        if (const auto* body_chunk = result_value.body_chunk()) {
+        if (const auto* body_chunk = result_value.get_if<decode_output>()) {
             body.append(body_chunk->bytes());
             continue;
         }
-        if (const auto* complete = result_value.complete()) {
+        if (const auto* complete = result_value.get_if<http1_chunk_decode_complete>()) {
             EXPECT_EQ(rendered(complete->trailers()), "x-trace=abc;");
             break;
         }
-        EXPECT_TRUE(result_value.need_input() == nullptr);
+        EXPECT_TRUE(!result_value.holds<decode_need_input>());
         break;
     }
 
@@ -227,17 +232,17 @@ TEST(Ruvia, chunked_body_decoder_handles_single_byte_input_fragmentation) {
         pending.push_back(byte);
         for (;;) {
             const auto result_value = decoder.decode(pending);
-            if (const auto* body_chunk = result_value.body_chunk()) {
+            if (const auto* body_chunk = result_value.get_if<decode_output>()) {
                 body.append(body_chunk->bytes());
             }
             if (result_value.consumed_bytes() != 0) {
                 pending.erase(0, result_value.consumed_bytes());
             }
-            if (result_value.complete() != nullptr) {
+            if (result_value.holds<http1_chunk_decode_complete>()) {
                 complete_value = true;
                 break;
             }
-            if (result_value.need_input() != nullptr) {
+            if (result_value.holds<decode_need_input>()) {
                 break;
             }
         }
@@ -257,13 +262,13 @@ TEST(Ruvia, chunked_request_trailer_names_preserve_fragment_and_pipeline_boundar
         for (std::size_t split = 0; split < message.size(); ++split) {
             http1_chunked_body_decoder decoder;
             const auto first = decoder.decode(std::string_view(wire).substr(0, split));
-            EXPECT_TRUE(first.need_input() != nullptr);
+            EXPECT_TRUE(first.holds<decode_need_input>());
             EXPECT_TRUE(first.consumed_bytes() <= split);
             const auto last = decoder.decode(std::string_view(wire).substr(first.consumed_bytes()));
-            EXPECT_TRUE(last.complete() != nullptr);
-            if (const auto* complete = last.complete()) {
+            EXPECT_TRUE(last.holds<http1_chunk_decode_complete>());
+            if (const auto* complete = last.get_if<http1_chunk_decode_complete>()) {
                 EXPECT_EQ(rendered(complete->trailers()), std::string(length, 'x') + "=first:second;x-next=done;");
-                const auto consumed = first.consumed_bytes() + complete->consumed_bytes();
+                const auto consumed = first.consumed_bytes() + last.consumed_bytes();
                 EXPECT_EQ(consumed, message.size());
                 EXPECT_EQ(std::string_view(wire).substr(consumed), std::string_view("NEXT"));
             }
@@ -292,22 +297,22 @@ TEST(Ruvia, chunked_body_decoder_handles_deterministic_arbitrary_fragmented_byte
             pending.push_back(byte);
             for (std::size_t step = 0; step <= pending.size(); ++step) {
                 const auto result_value = decoder.decode(pending);
-                const auto alternatives = static_cast<unsigned int>(result_value.need_input() != nullptr) + static_cast<unsigned int>(result_value.body_chunk() != nullptr) + static_cast<unsigned int>(result_value.complete() != nullptr) + static_cast<unsigned int>(result_value.failure() != nullptr);
+                const auto alternatives = static_cast<unsigned int>(result_value.holds<decode_need_input>()) + static_cast<unsigned int>(result_value.holds<decode_output>()) + static_cast<unsigned int>(result_value.holds<http1_chunk_decode_complete>()) + static_cast<unsigned int>(result_value.holds<http1_chunk_decode_failure>());
                 EXPECT_EQ(alternatives, 1U);
                 EXPECT_TRUE(result_value.consumed_bytes() <= pending.size());
 
-                if (const auto* body = result_value.body_chunk()) {
+                if (const auto* body = result_value.get_if<decode_output>()) {
                     EXPECT_TRUE(!body->bytes().empty());
                     EXPECT_TRUE(pending.find(body->bytes()) != std::string::npos);
                 }
                 if (result_value.consumed_bytes() != 0) {
                     pending.erase(0, result_value.consumed_bytes());
                 }
-                if (result_value.complete() != nullptr || result_value.failure() != nullptr) {
+                if (result_value.holds<http1_chunk_decode_complete>() || result_value.holds<http1_chunk_decode_failure>()) {
                     terminal = true;
                     break;
                 }
-                if (result_value.need_input() != nullptr) {
+                if (result_value.holds<decode_need_input>()) {
                     break;
                 }
                 EXPECT_TRUE(result_value.consumed_bytes() != 0);
@@ -322,14 +327,39 @@ TEST(Ruvia, chunked_body_decoder_handles_deterministic_arbitrary_fragmented_byte
 TEST(Ruvia, chunked_body_decoder_rejects_bad_delimiter_and_trailer) {
     http1_chunked_body_decoder delimiter({.body_limit_ = protocol_byte_limit::limited(1024)});
     const auto bad_delimiter = delimiter.decode("1\r\nxXY");
-    EXPECT_TRUE(bad_delimiter.failure() != nullptr);
-    EXPECT_TRUE(bad_delimiter.failure()->error() == ruvia::http1_chunk_decode_error::invalid_framing);
+    ASSERT_TRUE(bad_delimiter.holds<http1_chunk_decode_failure>());
+    EXPECT_TRUE(bad_delimiter.get_if<http1_chunk_decode_failure>()->error() == ruvia::http1_chunk_decode_error::invalid_framing);
     EXPECT_EQ(bad_delimiter.consumed_bytes(), std::size_t{4});
 
     http1_chunked_body_decoder trailer({.body_limit_ = protocol_byte_limit::limited(1024)});
     const auto bad_trailer = trailer.decode("0\r\nX-Trace abc\r\n\r\n");
-    EXPECT_TRUE(bad_trailer.failure() != nullptr);
-    EXPECT_TRUE(bad_trailer.failure()->error() == ruvia::http1_chunk_decode_error::invalid_framing);
+    ASSERT_TRUE(bad_trailer.holds<http1_chunk_decode_failure>());
+    EXPECT_TRUE(bad_trailer.get_if<http1_chunk_decode_failure>()->error() == ruvia::http1_chunk_decode_error::invalid_framing);
+}
+
+TEST(Ruvia, chunked_body_decoder_reports_state_and_is_reusable_after_reset) {
+    http1_chunked_body_decoder decoder;
+    EXPECT_EQ(decoder.state(), decoder_state::active);
+    const auto finished = decoder.decode("0\r\n\r\n");
+    EXPECT_TRUE(finished.holds<http1_chunk_decode_complete>());
+    EXPECT_EQ(decoder.state(), decoder_state::finished);
+
+    decoder.reset();
+    EXPECT_EQ(decoder.state(), decoder_state::active);
+    const auto failed = decoder.decode("xyz\r\n");
+    EXPECT_TRUE(failed.holds<http1_chunk_decode_failure>());
+    EXPECT_EQ(decoder.state(), decoder_state::failed);
+
+    decoder.reset();
+    EXPECT_EQ(decoder.state(), decoder_state::active);
+    constexpr std::string_view wire = "2\r\nok\r\n0\r\n\r\n";
+    const auto body = decoder.decode(wire);
+    ASSERT_TRUE(body.holds<decode_output>());
+    EXPECT_EQ(body.get_if<decode_output>()->bytes(), "ok");
+    EXPECT_EQ(decoder.state(), decoder_state::active);
+    const auto terminal = decoder.decode(wire.substr(body.consumed_bytes()));
+    EXPECT_TRUE(terminal.holds<http1_chunk_decode_complete>());
+    EXPECT_EQ(decoder.state(), decoder_state::finished);
 }
 
 // RFC 9110 section 6.5.1 forbids generating these trailers, but RFC 9112
@@ -351,10 +381,10 @@ TEST(Ruvia, chunked_body_decoder_discards_fields_not_permitted_as_trailers) {
         for (const auto message : {ruvia::http1_trailer_message::request, ruvia::http1_trailer_message::response}) {
             http1_chunked_body_decoder decoder({.trailer_message_ = message});
             const auto result_value = decoder.decode(wire);
-            EXPECT_TRUE(result_value.complete() != nullptr);
-            if (const auto* complete = result_value.complete()) {
+            EXPECT_TRUE(result_value.holds<http1_chunk_decode_complete>());
+            if (const auto* complete = result_value.get_if<http1_chunk_decode_complete>()) {
                 EXPECT_EQ(rendered(complete->trailers()), message == ruvia::http1_trailer_message::request ? request : response);
-                EXPECT_EQ(complete->consumed_bytes(), wire.size() - 4);
+                EXPECT_EQ(result_value.consumed_bytes(), wire.size() - 4);
             }
         }
     }
@@ -367,17 +397,17 @@ TEST(Ruvia, chunked_body_decoder_trailer_obs_fold_follows_the_configured_policy)
     constexpr std::string_view folded = "0\r\nX-T: a\r\n \t b\r\n\t\r\n c\r\nX-U: d\r\n\r\nNEXT";
     http1_chunked_body_decoder request;
     const auto rejected = request.decode(folded);
-    EXPECT_TRUE(rejected.failure() != nullptr);
-    if (const auto* failure = rejected.failure()) {
+    EXPECT_TRUE(rejected.holds<http1_chunk_decode_failure>());
+    if (const auto* failure = rejected.get_if<http1_chunk_decode_failure>()) {
         EXPECT_TRUE(failure->error() == ruvia::http1_chunk_decode_error::invalid_framing);
     }
 
     http1_chunked_body_decoder response({.obs_fold_ = ruvia::http1_trailer_obs_fold::accept});
     const auto accepted = response.decode(folded);
-    EXPECT_TRUE(accepted.complete() != nullptr);
-    if (const auto* complete = accepted.complete()) {
+    EXPECT_TRUE(accepted.holds<http1_chunk_decode_complete>());
+    if (const auto* complete = accepted.get_if<http1_chunk_decode_complete>()) {
         EXPECT_EQ(rendered(complete->trailers()), "x-t=a b  c;x-u=d;");
-        EXPECT_EQ(complete->consumed_bytes(), folded.size() - 4);
+        EXPECT_EQ(accepted.consumed_bytes(), folded.size() - 4);
     }
 
     // A fold is a continuation, never a field line of its own, and its bytes
@@ -385,7 +415,7 @@ TEST(Ruvia, chunked_body_decoder_trailer_obs_fold_follows_the_configured_policy)
     for (const std::string_view invalid : {std::string_view("0\r\n x: a\r\n\r\n"), std::string_view("0\r\nX-T: a\r\n b\x01\r\n\r\n"), std::string_view("0\r\nX-T: a\r\nbad\r\n\r\n")}) {
         http1_chunked_body_decoder decoder({.obs_fold_ = ruvia::http1_trailer_obs_fold::accept});
         const auto result_value = decoder.decode(invalid);
-        EXPECT_TRUE(result_value.failure() != nullptr);
+        EXPECT_TRUE(result_value.holds<http1_chunk_decode_failure>());
     }
 }
 
@@ -403,19 +433,17 @@ TEST(Ruvia, chunked_body_decoder_counts_each_folded_trailer_as_one_field) {
     const auto at_limit = wire_with(ruvia::max_http_header_fields);
     http1_chunked_body_decoder response({.obs_fold_ = ruvia::http1_trailer_obs_fold::accept});
     const auto accepted = response.decode(at_limit);
-    EXPECT_TRUE(accepted.complete() != nullptr);
-    if (const auto* complete = accepted.complete()) {
-        EXPECT_EQ(complete->consumed_bytes(), at_limit.size());
-    }
+    EXPECT_TRUE(accepted.holds<http1_chunk_decode_complete>());
+    EXPECT_EQ(accepted.consumed_bytes(), at_limit.size());
     http1_chunked_body_decoder request;
     const auto folded_request = request.decode(at_limit);
-    EXPECT_TRUE(folded_request.failure() != nullptr);
+    EXPECT_TRUE(folded_request.holds<http1_chunk_decode_failure>());
 
     const auto over_limit = wire_with(ruvia::max_http_header_fields + 1);
     http1_chunked_body_decoder over({.obs_fold_ = ruvia::http1_trailer_obs_fold::accept});
     const auto rejected = over.decode(over_limit);
-    EXPECT_TRUE(rejected.failure() != nullptr);
-    if (const auto* failure = rejected.failure()) {
+    EXPECT_TRUE(rejected.holds<http1_chunk_decode_failure>());
+    if (const auto* failure = rejected.get_if<http1_chunk_decode_failure>()) {
         EXPECT_TRUE(failure->error() == ruvia::http1_chunk_decode_error::invalid_framing);
     }
 }
@@ -431,31 +459,31 @@ TEST(Ruvia, chunked_body_decoder_validates_config_quota_and_neutral_errors) {
     }
     EXPECT_TRUE(rejected_quota);
     const auto decoded = decoder.decode(wire, 2);
-    EXPECT_TRUE(decoded.body_chunk() != nullptr);
-    if (const auto* chunk = decoded.body_chunk()) {
+    EXPECT_TRUE(decoded.holds<decode_output>());
+    if (const auto* chunk = decoded.get_if<decode_output>()) {
         EXPECT_EQ(chunk->bytes(), std::string_view("ab"));
-        EXPECT_EQ(chunk->consumed_bytes(), std::size_t{5});
-        const auto remainder = decoder.decode(wire.substr(chunk->consumed_bytes()), 1);
-        EXPECT_TRUE(remainder.body_chunk() != nullptr);
-        if (const auto* final_chunk = remainder.body_chunk()) {
+        EXPECT_EQ(decoded.consumed_bytes(), std::size_t{5});
+        const auto remainder = decoder.decode(wire.substr(decoded.consumed_bytes()), 1);
+        EXPECT_TRUE(remainder.holds<decode_output>());
+        if (const auto* final_chunk = remainder.get_if<decode_output>()) {
             EXPECT_EQ(final_chunk->bytes(), std::string_view("c"));
-            EXPECT_EQ(final_chunk->consumed_bytes(), std::size_t{3});
+            EXPECT_EQ(remainder.consumed_bytes(), std::size_t{3});
         }
     }
 
-    EXPECT_EQ(ruvia::http_request_chunk_decode_error(ruvia::http1_chunk_decode_error::framing_limit_exceeded).status(), ruvia::http_status::content_too_large);
+    EXPECT_EQ(ruvia::make_http_protocol_error(ruvia::http1_chunk_decode_error::framing_limit_exceeded).status(), ruvia::http_status::content_too_large);
 }
 
 TEST(Ruvia, chunked_body_decoder_replays_completion_without_retained_trailers) {
     for (const std::string_view wire : {std::string_view("1\r\nx\r\n0\r\n\r\n"), std::string_view("1\r\nx\r\n0\r\nContent-Length: 1\r\n\r\n")}) {
         http1_chunked_body_decoder decoder;
         const auto body = decoder.decode(wire);
-        EXPECT_TRUE(body.body_chunk() != nullptr);
-        if (const auto* chunk = body.body_chunk()) {
+        EXPECT_TRUE(body.holds<decode_output>());
+        if (const auto* chunk = body.get_if<decode_output>()) {
             EXPECT_EQ(chunk->bytes(), std::string_view("x"));
-            const auto terminal = decoder.decode(wire.substr(chunk->consumed_bytes()));
-            EXPECT_TRUE(terminal.complete() != nullptr);
-            if (const auto* complete = terminal.complete()) {
+            const auto terminal = decoder.decode(wire.substr(body.consumed_bytes()));
+            EXPECT_TRUE(terminal.holds<http1_chunk_decode_complete>());
+            if (const auto* complete = terminal.get_if<http1_chunk_decode_complete>()) {
                 EXPECT_TRUE(complete->trailers().empty());
             }
         }
@@ -463,13 +491,13 @@ TEST(Ruvia, chunked_body_decoder_replays_completion_without_retained_trailers) {
 
     http1_chunked_body_decoder decoder;
     const auto terminal = decoder.decode("0\r\nX-Trace: ok\r\n\r\n");
-    EXPECT_TRUE(terminal.complete() != nullptr);
-    if (const auto* complete = terminal.complete()) {
+    EXPECT_TRUE(terminal.holds<http1_chunk_decode_complete>());
+    if (const auto* complete = terminal.get_if<http1_chunk_decode_complete>()) {
         EXPECT_EQ(rendered(complete->trailers()), "x-trace=ok;");
     }
     const auto replay = decoder.decode({});
-    EXPECT_TRUE(replay.complete() != nullptr);
-    if (const auto* complete = replay.complete()) {
+    EXPECT_TRUE(replay.holds<http1_chunk_decode_complete>());
+    if (const auto* complete = replay.get_if<http1_chunk_decode_complete>()) {
         EXPECT_TRUE(complete->trailers().empty());
     }
 }
@@ -483,29 +511,29 @@ TEST(Ruvia, chunked_body_decoder_caps_each_size_line_at_exact_boundary) {
         http1_chunked_body_decoder decoder({.body_limit_ = protocol_byte_limit::limited(ruvia::default_max_buffered_body_bytes)});
         const auto body = decoder.decode(wire, 1);
         if (excess == 0) {
-            EXPECT_TRUE(body.body_chunk() != nullptr);
-            if (!body.body_chunk()) {
+            EXPECT_TRUE(body.holds<decode_output>());
+            if (!body.holds<decode_output>()) {
                 continue;
             }
-            EXPECT_EQ(body.body_chunk()->bytes(), "x");
+            EXPECT_EQ(body.get_if<decode_output>()->bytes(), "x");
             auto suffix = std::string_view(wire).substr(body.consumed_bytes());
             const auto terminal = decoder.decode(suffix, 1);
-            EXPECT_TRUE(terminal.complete() != nullptr);
+            EXPECT_TRUE(terminal.holds<http1_chunk_decode_complete>());
             suffix.remove_prefix(terminal.consumed_bytes());
             EXPECT_EQ(suffix, "NEXT");
             const auto replay = decoder.decode(suffix);
-            EXPECT_TRUE(replay.complete() != nullptr);
+            EXPECT_TRUE(replay.holds<http1_chunk_decode_complete>());
             EXPECT_EQ(replay.consumed_bytes(), std::size_t{0});
         } else {
-            EXPECT_TRUE(body.failure() != nullptr);
+            EXPECT_TRUE(body.holds<http1_chunk_decode_failure>());
             EXPECT_EQ(body.consumed_bytes(), std::size_t{0});
-            if (const auto* failure = body.failure()) {
+            if (const auto* failure = body.get_if<http1_chunk_decode_failure>()) {
                 EXPECT_TRUE(failure->error() == ruvia::http1_chunk_decode_error::framing_limit_exceeded);
             }
             const auto replay = decoder.decode(wire);
-            EXPECT_TRUE(replay.failure() != nullptr);
+            EXPECT_TRUE(replay.holds<http1_chunk_decode_failure>());
             EXPECT_EQ(replay.consumed_bytes(), std::size_t{0});
-            if (const auto* failure = replay.failure()) {
+            if (const auto* failure = replay.get_if<http1_chunk_decode_failure>()) {
                 EXPECT_TRUE(failure->error() == ruvia::http1_chunk_decode_error::framing_limit_exceeded);
             }
         }
@@ -515,8 +543,8 @@ TEST(Ruvia, chunked_body_decoder_caps_each_size_line_at_exact_boundary) {
     std::string oversized = "1;x=";
     oversized.append(ruvia::max_http_header_bytes, 'a');
     const auto result_value = unterminated.decode(oversized);
-    EXPECT_TRUE(result_value.failure() != nullptr);
-    if (const auto* failure = result_value.failure()) {
+    EXPECT_TRUE(result_value.holds<http1_chunk_decode_failure>());
+    if (const auto* failure = result_value.get_if<http1_chunk_decode_failure>()) {
         EXPECT_TRUE(failure->error() == ruvia::http1_chunk_decode_error::framing_limit_exceeded);
     }
 }
@@ -542,17 +570,17 @@ TEST(Ruvia, chunked_body_decoder_bounds_cumulative_size_line_overhead_per_messag
             const auto result = decoder.decode(rest);
             consumed += result.consumed_bytes();
             rest.remove_prefix(result.consumed_bytes());
-            if (const auto* chunk = result.body_chunk()) {
+            if (const auto* chunk = result.get_if<decode_output>()) {
                 body.append(chunk->bytes());
                 continue;
             }
             if (excess == 0) {
-                EXPECT_TRUE(result.complete() != nullptr);
+                EXPECT_TRUE(result.holds<http1_chunk_decode_complete>());
                 EXPECT_EQ(body, "xy");
                 EXPECT_EQ(rest, "NEXT");
             } else {
-                EXPECT_TRUE(result.failure() != nullptr);
-                if (const auto* failure = result.failure()) {
+                EXPECT_TRUE(result.holds<http1_chunk_decode_failure>());
+                if (const auto* failure = result.get_if<http1_chunk_decode_failure>()) {
                     EXPECT_TRUE(failure->error() == ruvia::http1_chunk_decode_error::framing_limit_exceeded);
                 }
                 EXPECT_EQ(consumed, second_line_offset);
@@ -567,17 +595,17 @@ TEST(Ruvia, chunked_body_decoder_preserves_incomplete_delimiter_consumption) {
     http1_chunked_body_decoder decoder;
     constexpr std::string_view wire = "1\r\nx\r";
     const auto body = decoder.decode(wire);
-    EXPECT_TRUE(body.body_chunk() != nullptr);
+    EXPECT_TRUE(body.holds<decode_output>());
     EXPECT_EQ(body.consumed_bytes(), std::size_t{4});
-    if (const auto* chunk = body.body_chunk()) {
+    if (const auto* chunk = body.get_if<decode_output>()) {
         EXPECT_EQ(chunk->bytes().data(), wire.data() + 3);
     }
     const auto incomplete = decoder.decode(wire.substr(body.consumed_bytes()));
-    EXPECT_TRUE(incomplete.need_input() != nullptr);
+    EXPECT_TRUE(incomplete.holds<decode_need_input>());
     EXPECT_EQ(incomplete.consumed_bytes(), std::size_t{0});
     constexpr std::string_view suffix = "\r\n0\r\n\r\nNEXT";
     const auto complete_value = decoder.decode(suffix);
-    EXPECT_TRUE(complete_value.complete() != nullptr);
+    EXPECT_TRUE(complete_value.holds<http1_chunk_decode_complete>());
     EXPECT_EQ(suffix.substr(complete_value.consumed_bytes()), "NEXT");
 }
 
@@ -585,8 +613,8 @@ TEST(Ruvia, chunked_body_decoder_rejects_bare_lf_without_waiting_for_crlf) {
     for (const std::string_view wire : {std::string_view("5\nhello\n0\n\n"), std::string_view("5;a=b\n"), std::string_view("\n"), std::string_view("0\r\nX-Trace: ok\n\n"), std::string_view("0\r\n\n"), std::string_view("0\r\nX-Trace: ok\r\n\n")}) {
         http1_chunked_body_decoder decoder;
         const auto result_value = decoder.decode(wire);
-        EXPECT_TRUE(result_value.failure() != nullptr);
-        if (const auto* failure = result_value.failure()) {
+        EXPECT_TRUE(result_value.holds<http1_chunk_decode_failure>());
+        if (const auto* failure = result_value.get_if<http1_chunk_decode_failure>()) {
             EXPECT_TRUE(failure->error() == ruvia::http1_chunk_decode_error::invalid_framing);
         }
     }
@@ -594,11 +622,11 @@ TEST(Ruvia, chunked_body_decoder_rejects_bare_lf_without_waiting_for_crlf) {
     // A bare LF arriving in a later fragment of a partial size line is rejected too.
     http1_chunked_body_decoder fragmented;
     const auto partial = fragmented.decode("5;a=");
-    EXPECT_TRUE(partial.need_input() != nullptr);
+    EXPECT_TRUE(partial.holds<decode_need_input>());
     EXPECT_EQ(partial.consumed_bytes(), std::size_t{0});
     const auto rejected = fragmented.decode("5;a=b\nhello\r\n");
-    EXPECT_TRUE(rejected.failure() != nullptr);
-    if (const auto* failure = rejected.failure()) {
+    EXPECT_TRUE(rejected.holds<http1_chunk_decode_failure>());
+    if (const auto* failure = rejected.get_if<http1_chunk_decode_failure>()) {
         EXPECT_TRUE(failure->error() == ruvia::http1_chunk_decode_error::invalid_framing);
     }
 }
@@ -611,7 +639,7 @@ TEST(Ruvia, chunked_body_decoder_accepts_many_trailer_fields_within_byte_budget)
     fields_value.append("\r\n");
     http1_chunked_body_decoder field_limit;
     const auto field_result = field_limit.decode(fields_value);
-    EXPECT_TRUE(field_result.complete() != nullptr);
+    EXPECT_TRUE(field_result.holds<http1_chunk_decode_complete>());
 }
 
 TEST(Ruvia, chunked_body_decoder_bounds_trailers_independently_of_input_segmentation) {
@@ -625,27 +653,27 @@ TEST(Ruvia, chunked_body_decoder_bounds_trailers_independently_of_input_segmenta
             http1_chunked_body_decoder decoder;
             const auto first = decoder.decode(std::string_view(wire).substr(0, split));
             auto consumed = first.consumed_bytes();
-            const bool resumed = first.need_input() != nullptr;
+            const bool resumed = first.holds<decode_need_input>();
             const auto result = resumed ? decoder.decode(std::string_view(wire).substr(consumed)) : first;
             if (resumed) {
                 consumed += result.consumed_bytes();
             }
             if (excess == 0) {
-                EXPECT_TRUE(result.complete() != nullptr);
-                if (const auto* complete = result.complete()) {
+                EXPECT_TRUE(result.holds<http1_chunk_decode_complete>());
+                if (const auto* complete = result.get_if<http1_chunk_decode_complete>()) {
                     EXPECT_EQ(complete->trailers().size(), std::size_t{1});
                     EXPECT_EQ(rendered(complete->trailers()), "x-trace=x;");
                 }
                 EXPECT_EQ(consumed, message_end);
                 EXPECT_EQ(std::string_view(wire).substr(consumed), "NEXT");
             } else {
-                EXPECT_TRUE(result.failure() != nullptr);
+                EXPECT_TRUE(result.holds<http1_chunk_decode_failure>());
                 EXPECT_EQ(consumed, std::size_t{3});
-                if (const auto* failure = result.failure()) {
+                if (const auto* failure = result.get_if<http1_chunk_decode_failure>()) {
                     EXPECT_TRUE(failure->error() == ruvia::http1_chunk_decode_error::framing_limit_exceeded);
                 }
                 const auto replay = decoder.decode({});
-                EXPECT_TRUE(replay.failure() != nullptr);
+                EXPECT_TRUE(replay.holds<http1_chunk_decode_failure>());
                 EXPECT_EQ(replay.consumed_bytes(), std::size_t{0});
             }
         }
@@ -659,8 +687,8 @@ TEST(Ruvia, chunked_body_decoder_reports_byte_cap_before_later_invalid_framing) 
         wire.append("\n\r\n\r\n");
         http1_chunked_body_decoder decoder;
         const auto result = decoder.decode(wire);
-        EXPECT_TRUE(result.failure() != nullptr);
-        if (const auto* failure = result.failure()) {
+        EXPECT_TRUE(result.holds<http1_chunk_decode_failure>());
+        if (const auto* failure = result.get_if<http1_chunk_decode_failure>()) {
             EXPECT_TRUE(failure->error() == ruvia::http1_chunk_decode_error::framing_limit_exceeded);
         }
     }

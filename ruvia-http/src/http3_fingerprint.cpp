@@ -7,7 +7,7 @@
 
 namespace ruvia {
 
-http3_fingerprint_collector::http3_fingerprint_collector(http3_fingerprint_options options) :
+http3_fingerprint_collector::http3_fingerprint_collector(http_fingerprint_options options) :
     max_frames_(options.max_frames_),
     max_bytes_(options.max_bytes_) {}
 

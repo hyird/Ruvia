@@ -13,7 +13,6 @@
 #include "http1_client_request.h"
 #include "http1_client_request_fields.h"
 #include "http1_client_response.h"
-#include "http_client_request_view.h"
 #include "http_client_response_head.h"
 #include "http_connection_fields.h"
 #include "http_field_kind.h"
@@ -22,6 +21,7 @@
 #include "http_header.h"
 #include "http_protocol.h"
 #include "http_request.h"
+#include "http_request_head_view.h"
 #include "http_status.h"
 #include "websocket_connection.h"
 #include "websocket_handshake.h"
@@ -331,7 +331,7 @@ void validate_websocket_client_handshake_headers(std::span<const http_header_vie
     }
 }
 
-std::variant<prepared_http1_client_request, http1_client_request_buffer_too_small, http1_client_request_prepare_error> prepare_http1_websocket_client_request(const http_origin_view& origin, std::string_view target, std::span<const char, 24> encoded_key, const websocket_client_negotiation& negotiation, borrowed_http_headers headers, std::span<char> head_buffer, http_request_field_source source) {
+http1_client_request_prepare_result prepare_http1_websocket_client_request(const http_origin_view& origin, std::string_view target, std::span<const char, 24> encoded_key, const websocket_client_negotiation& negotiation, borrowed_http_headers headers, std::span<char> head_buffer, http_request_field_source source) {
     const auto negotiation_fields = negotiation.request_fields();
     detail::http_header_descriptor_storage<http_header_view> staged_headers;
     staged_headers.reserve(headers.size() + 3U + negotiation_fields.size());
@@ -344,11 +344,11 @@ std::variant<prepared_http1_client_request, http1_client_request_buffer_too_smal
     for (const auto& field : negotiation_fields) {
         staged_headers.append(http_header_view{field.name(), field.value()});
     }
-    return http1_client_request_writer().prepare(origin, {.method_ = "GET", .target_ = target, .headers_ = staged_headers.view()}, head_buffer, {.field_source_ = source});
+    return prepare_http1_client_request(origin, {.method_ = "GET", .target_ = target, .headers_ = staged_headers.view(), .field_source_ = source}, head_buffer);
 }
 
 std::variant<websocket_client_negotiation_result_view, websocket_client_handshake_error> validate_http1_websocket_client_response(std::span<const char, 24> encoded_key, const websocket_client_negotiation& negotiation, const http1_parsed_client_response_head& response) {
-    if (response.plan().protocol_upgrade() == nullptr || response.head().status() != http_status::switching_protocols) {
+    if (!response.plan().protocol_upgrade() || response.head().status() != http_status::switching_protocols) {
         return websocket_client_handshake_error::response_status;
     }
     detail::websocket_accept_key_type expected{};

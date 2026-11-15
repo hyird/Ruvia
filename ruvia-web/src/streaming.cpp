@@ -249,18 +249,18 @@ task<std::optional<multipart_stream_part>> multipart_reader::read_task(operation
     try {
         for (;;) {
             auto result_value = std::get<receiving_state_type>(state_).parser_.poll();
-            if (const auto* part = result_value.part()) {
+            if (const auto* part = result_value.get_if<multipart_stream_part>()) {
                 read_guard_value.commit();
                 co_return *part;
             }
-            if (result_value.done() != nullptr) {
+            if (result_value.holds<decode_complete>()) {
                 while (co_await get_body_reader().read(steps.next("multipart body read"))) {
                 }
                 state_.emplace<finished_state_type>();
                 read_guard_value.commit();
                 co_return std::nullopt;
             }
-            if (result_value.need_input() != nullptr) {
+            if (result_value.holds<decode_need_input>()) {
                 auto chunk = co_await get_body_reader().read(steps.next("multipart body read"));
                 if (!chunk) {
                     std::get<receiving_state_type>(state_).parser_.finish_input();
@@ -269,8 +269,8 @@ task<std::optional<multipart_stream_part>> multipart_reader::read_task(operation
                 }
                 continue;
             }
-            if (const auto* failure = result_value.failure()) {
-                throw failure->protocol_error();
+            if (const auto* failure = result_value.get_if<multipart_parse_failure>()) {
+                throw make_http_protocol_error(failure->error());
             }
             throw std::logic_error("unexpected multipart poll result");
         }

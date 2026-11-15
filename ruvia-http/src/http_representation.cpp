@@ -178,7 +178,7 @@ http_representation_response_plan plan_http_representation_response(const http_r
     const auto make_full = [&]() noexcept {
         return http_representation_response_plan(http_representation_response_plan::full_type{options.normal_status_});
     };
-    auto method = get_http_conditional_method_plan(request.known_method());
+    auto method = plan_http_conditional_method(request.known_method());
     if (request.known_method() == http_known_method::unknown && !request.method().empty() && request.method() != "TRACE") {
         method.evaluates_preconditions_ = true;
     }

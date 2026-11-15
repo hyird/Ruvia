@@ -80,8 +80,18 @@ http_capsule_decoder::http_capsule_decoder(http_capsule_config config) :
         throw std::invalid_argument("capsule length exceeds varint range");
     }
 }
-http_capsule_status http_capsule_decoder::feed(std::span<const char> input, bool fin, http_capsule_callback_type callback_value, void* context_value, http_capsule_retention retention) {
-    return feed_impl(input, fin, callback_value, context_value, false, retention).status_;
+void http_capsule_decoder::reset() noexcept {
+    header_size_ = 0;
+    type_size_ = 0;
+    context_id_size_ = 0;
+    type_ = 0;
+    remaining_ = 0;
+    mode_ = payload_mode::deliver;
+    payload_ = false;
+    state_ = decoder_state::active;
+}
+http_capsule_feed_result http_capsule_decoder::feed(std::span<const char> input, bool fin, http_capsule_callback_type callback_value, void* context_value, http_capsule_retention retention) {
+    return feed_impl(input, fin, callback_value, context_value, false, retention);
 }
 http_capsule_feed_result http_capsule_decoder::feed_one(std::span<const char> input, bool fin, http_capsule_callback_type callback_value, void* context_value, http_capsule_retention retention) {
     return feed_impl(input, fin, callback_value, context_value, true, retention);
@@ -90,8 +100,11 @@ http_capsule_feed_result http_capsule_decoder::feed_impl(std::span<const char> i
     if (feeding_) {
         throw std::logic_error("recursive capsule feed");
     }
-    if (status_ != http_capsule_status::need_input) {
-        return {.status_ = status_};
+    if (state_ == decoder_state::failed) {
+        return http_capsule_feed_result(0, http_capsule_decode_failure(error_));
+    }
+    if (state_ == decoder_state::finished) {
+        return http_capsule_feed_result(0, decode_complete{});
     }
     struct feeding_guard final {
         bool& value_;
@@ -105,9 +118,13 @@ http_capsule_feed_result http_capsule_decoder::feed_impl(std::span<const char> i
     } feeding_scope(feeding_);
     const auto initial_size = input.size();
     bool completed{};
-    const auto limit_reached = [&] {
-        status_ = http_capsule_status::limit;
-        return http_capsule_feed_result{.status_ = status_, .consumed_bytes_ = initial_size - input.size()};
+    const auto fail = [&](http_capsule_decode_error error) noexcept {
+        error_ = error;
+        state_ = decoder_state::failed;
+        return http_capsule_feed_result(initial_size - input.size(), http_capsule_decode_failure(error));
+    };
+    const auto limit_reached = [&]() noexcept {
+        return fail(http_capsule_decode_error::limit_exceeded);
     };
     try {
         while (!input.empty()) {
@@ -202,12 +219,23 @@ http_capsule_feed_result http_capsule_decoder::feed_impl(std::span<const char> i
                 }
             }
         }
+        const auto consumed = initial_size - input.size();
         if (fin && input.empty()) {
-            status_ = payload_ || header_size_ ? http_capsule_status::truncated : http_capsule_status::end;
+            if (payload_ || header_size_ != 0) {
+                return fail(http_capsule_decode_error::truncated);
+            }
+            state_ = decoder_state::finished;
         }
-        return {.status_ = status_, .consumed_bytes_ = initial_size - input.size(), .capsule_complete_ = completed};
+        if (one && completed) {
+            return http_capsule_feed_result(consumed, http_capsule_boundary{});
+        }
+        if (state_ == decoder_state::finished) {
+            return http_capsule_feed_result(consumed, decode_complete{});
+        }
+        return http_capsule_feed_result(consumed, decode_need_input{});
     } catch (...) {
-        status_ = http_capsule_status::truncated;
+        error_ = http_capsule_decode_error::truncated;
+        state_ = decoder_state::failed;
         throw;
     }
 }

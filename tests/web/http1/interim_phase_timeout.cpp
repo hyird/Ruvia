@@ -175,7 +175,7 @@ TEST(Ruvia, a_handler_after_its_interim_head_is_timed_as_a_handler_not_a_write) 
     app.workers({.worker_count_ = 1}).server({.connection_scan_interval_ = 5ms, .write_timeout_ = write_timeout}).listen({
                                                                                                                              .address_ = "127.0.0.1",
                                                                                                                              .https_ = endpoint.port(),
-                                                                                                                             .tls_ = {.identity_ = {.certificate_chain_file_ = identity.ca_file_, .private_key_file_ = private_key}},
+                                                                                                                             .tls_ = {.identities_ = ruvia::tls_fixed_identities{.primary_ = {.certificate_chain_file_ = identity.ca_file_, .private_key_file_ = private_key}}},
                                                                                                                          })
         .on_start([] {
         started.release();
@@ -253,7 +253,7 @@ TEST(Ruvia, a_trickling_reader_cannot_hold_a_write_past_write_completion_timeout
     ruvia::event_loop_pool loops({.loop_count_ = 1, .blocking_pool_ = &preparation});
     const auto loop = loops.loop(0);
     loops.start();
-    auto server = loop.start(serve_slow_reader(loop, std::move(accepted), endpoint.port(), {.identity_ = {.certificate_chain_file_ = identity.ca_file_, .private_key_file_ = private_key}}, close_reason));
+    auto server = loop.start(serve_slow_reader(loop, std::move(accepted), endpoint.port(), {.identities_ = ruvia::tls_fixed_identities{.primary_ = {.certificate_chain_file_ = identity.ca_file_, .private_key_file_ = private_key}}}, close_reason));
     std::string response;
     std::array<char, 4096> buffer;
     asio::error_code error;

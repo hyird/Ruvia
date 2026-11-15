@@ -563,7 +563,7 @@ int http2_connection::on_begin_frame(const nghttp2_frame_hd& header) {
             frame_observer_(observer_context_, observed_frame_);
         }
     }
-    if (non_progress_frame_header(header, received_peer_settings_)) {
+    if (non_progress_frame_header(header, peer_settings_.has_value())) {
         charge_non_progress_frame();
     }
     switch (header.type) {
@@ -672,7 +672,14 @@ int http2_connection::on_frame_recv(const nghttp2_frame& frame) {
 }
 
 void http2_connection::on_settings_frame(const nghttp2_frame& frame) {
-    received_peer_settings_ = true;
+    // nghttp2 applied the frame before this callback; later reads cost nothing.
+    peer_settings_ = http2_peer_settings{
+        .enable_connect_protocol_ = peer_setting(NGHTTP2_SETTINGS_ENABLE_CONNECT_PROTOCOL) == 1,
+        .enable_push_ = peer_setting(NGHTTP2_SETTINGS_ENABLE_PUSH) != 0,
+        .no_rfc7540_priorities_ = peer_setting(NGHTTP2_SETTINGS_NO_RFC7540_PRIORITIES) != 0,
+        .max_concurrent_streams_ = peer_setting(NGHTTP2_SETTINGS_MAX_CONCURRENT_STREAMS),
+        .max_frame_size_ = peer_setting(NGHTTP2_SETTINGS_MAX_FRAME_SIZE),
+    };
     if (!receive_frame_metadata_) {
         return;
     }
@@ -763,13 +770,13 @@ void http2_connection::on_goaway_frame(const nghttp2_frame& frame) {
     for (std::size_t i = 0; i < unprocessed_count; ++i) {
         const auto stream_id = unprocessed_stream_ids[i];
         if (role_ == http_connection_role::server) {
-            (void)close_stream(stream_id, http2_stream_close_source::peer_goaway, goaway.error());
+            (void)close_stream(stream_id, http_stream_close_source::peer_goaway, goaway.error());
             continue;
         }
         // Higher locally initiated streams were never processed and can be
         // replayed on a new connection (RFC 9113 §8.7).
-        if (close_stream_impl(stream_id, http2_stream_close_source::peer_goaway, goaway.error(), close_notification_type::owner_already_knows)) {
-            publish_event(http2_event(http2_request_unprocessed_event(stream_id)));
+        if (close_stream_impl(stream_id, http_stream_close_source::peer_goaway, goaway.error(), close_notification_type::owner_already_knows)) {
+            publish_event(http2_event(http_stream_event_access::make<http2_request_unprocessed_event>(stream_id)));
         }
     }
 }
@@ -864,11 +871,11 @@ void http2_connection::on_rst_stream_frame(const nghttp2_frame& frame) {
     const bool refused_request = role_ == http_connection_role::client && error == http2_error_code::refused_stream && (stream_id & 1U) != 0 && stream != nullptr && stream->response_status() == nullptr && !stream->has_informational_response();
     if (stream != nullptr && !stream->is_aborted() && !http2_stream_is_closed(*stream)) {
         if (refused_request) {
-            if (close_stream_impl(stream_id, http2_stream_close_source::peer, error, close_notification_type::owner_already_knows)) {
-                publish_event(http2_event(http2_request_unprocessed_event(stream_id)));
+            if (close_stream_impl(stream_id, http_stream_close_source::peer, error, close_notification_type::owner_already_knows)) {
+                publish_event(http2_event(http_stream_event_access::make<http2_request_unprocessed_event>(stream_id)));
             }
         } else {
-            (void)close_stream(stream_id, http2_stream_close_source::peer, error);
+            (void)close_stream(stream_id, http_stream_close_source::peer, error);
         }
     }
     // Rapid reset (CVE-2023-44487): a peer that keeps resetting streams far ahead
@@ -895,7 +902,7 @@ int http2_connection::on_stream_close(std::uint32_t stream_id, std::uint32_t err
     }
     // nghttp2 ended a stream Ruvia still considers open: a stream error it
     // detected itself (flow control, frame on a closed half, refused stream).
-    (void)close_stream(stream_id, http2_stream_close_source::local, static_cast<http2_error_code>(error_code));
+    (void)close_stream(stream_id, http_stream_close_source::local, static_cast<http2_error_code>(error_code));
     return 0;
 }
 
@@ -1140,7 +1147,7 @@ bool http2_connection::stream_aborted(std::uint32_t stream_id) const noexcept {
 
 // --- stream leases ------------------------------------------------------------
 
-void http2_connection::lease_submitted_request(const std::variant<std::uint32_t, http2_request_head_submit_error>& result) noexcept {
+void http2_connection::lease_submitted_request(const std::variant<std::uint32_t, http_submit_status>& result) noexcept {
     const auto* submitted = std::get_if<std::uint32_t>(&result);
     if (submitted == nullptr) {
         return;
@@ -1295,7 +1302,7 @@ void http2_connection::unpin_stream(std::uint32_t stream_id) {
     }
 }
 
-bool http2_connection::close_stream_impl(std::uint32_t stream_id, http2_stream_close_source source_value, http2_error_code error, close_notification_type notification) {
+bool http2_connection::close_stream_impl(std::uint32_t stream_id, http_stream_close_source source_value, http2_error_code error, close_notification_type notification) {
     auto* stream = streams_.find(stream_id);
     if (stream == nullptr || stream->is_aborted()) {
         return false;
@@ -1310,7 +1317,7 @@ bool http2_connection::close_stream_impl(std::uint32_t stream_id, http2_stream_c
     });
     (void)stream->abort(source_value);
     if (notification == close_notification_type::emit_event) {
-        publish_event(http2_event(http2_stream_closed_event(stream_id, source_value, error)));
+        publish_event(http2_event(http_stream_event_access::make<http2_stream_closed_event>(stream_id, std::optional<http2_error_code>(error), std::optional<http_stream_close_source>(source_value))));
     }
     if (!pinned) {
         flush_window_debt(*stream);
@@ -1319,7 +1326,7 @@ bool http2_connection::close_stream_impl(std::uint32_t stream_id, http2_stream_c
     return true;
 }
 
-bool http2_connection::close_stream(std::uint32_t stream_id, http2_stream_close_source source_value, http2_error_code error) {
+bool http2_connection::close_stream(std::uint32_t stream_id, http_stream_close_source source_value, http2_error_code error) {
     return close_stream_impl(stream_id, source_value, error, close_notification_type::emit_event);
 }
 
@@ -1334,7 +1341,7 @@ void http2_connection::submit_owner_reset(std::uint32_t stream_id, http2_error_c
 
 void http2_connection::reset_stream_for_peer_error(std::uint32_t stream_id, http2_error_code error) {
     check_nghttp2(nghttp2_submit_rst_stream(session_.get(), NGHTTP2_FLAG_NONE, static_cast<std::int32_t>(stream_id), static_cast<std::uint32_t>(error)));
-    (void)close_stream(stream_id, http2_stream_close_source::local, error);
+    (void)close_stream(stream_id, http_stream_close_source::local, error);
 }
 
 http2_stream_state* http2_connection::find_outbound_stream(std::uint32_t stream_id) noexcept {
@@ -1349,18 +1356,18 @@ http2_stream_state* http2_connection::create_stream(std::uint32_t stream_id) {
     return streams_.create(stream_id);
 }
 
-std::optional<http2_request_head_submit_error> http2_connection::local_request_admission_error() const noexcept {
+std::optional<http_submit_status> http2_connection::local_request_admission_error() const noexcept {
     if (role_ != http_connection_role::client) {
-        return http2_request_head_submit_error::invalid_state;
+        return http_submit_status::invalid_state;
     }
     if (!started_) {
         std::terminate();
     }
     if (local_connection_state_.fatal_failure() != nullptr || peer_goaway_.has_value() || nghttp2_session_get_next_stream_id(session_.get()) > http2_max_stream_id) {
-        return http2_request_head_submit_error::connection_unavailable;
+        return http_submit_status::closed;
     }
     if (active_local_request_streams_ >= peer_setting(NGHTTP2_SETTINGS_MAX_CONCURRENT_STREAMS)) {
-        return http2_request_head_submit_error::peer_stream_limit_reached;
+        return http_submit_status::peer_stream_limit_reached;
     }
     return std::nullopt;
 }

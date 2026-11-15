@@ -425,7 +425,7 @@ TEST(Ruvia, http2_client_udp_tunnel_skips_dropped_capsules_and_resets_malformed_
                         EXPECT_TRUE(connection.submit_data(head->stream_id(), capsules, ruvia::http2_end_stream::keep_open, 65535).status_ == ruvia::http_data_submit_status::complete);
                         request.emplace(std::move(*head));
                     } else if (auto* closed = event->stream_closed()) {
-                        if (closed->source() == ruvia::http2_stream_close_source::peer) {
+                        if (closed->source() == ruvia::http_stream_close_source::peer) {
                             reset_error = closed->error();
                         }
                     } else if (auto* data = event->tunnel_data()) {
@@ -645,7 +645,7 @@ TEST(Ruvia, http2_client_stale_tunnel_malformed_abort_does_not_reset_reconnected
                         req2.emplace(std::move(*head));
                     } else if (auto* closed = ev->stream_closed()) {
                         second_conn_rst_stream_id = closed->stream_id();
-                        second_conn_rst_code = static_cast<std::uint32_t>(closed->error());
+                        second_conn_rst_code = static_cast<std::uint32_t>(*closed->error());
                     }
                 }
             }

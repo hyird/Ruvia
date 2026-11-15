@@ -2,7 +2,7 @@ set(ruvia_http_sources
     src/http1_chunked_body.cpp
     src/http1_client_request.cpp
     src/http1_client_response.cpp
-    src/http1_client_response_body.cpp
+    src/http1_message_body.cpp
     src/http1_server_request.cpp
     src/http1_server_response.cpp
     src/http_authority.cpp
@@ -99,11 +99,12 @@ set(ruvia_http_headers
     include/borrowed_text.h
     include/checked_integer.h
     include/decimal_text.h
+    include/decode_step.h
     include/http1_chunked_body.h
     include/http1_client_request.h
     include/http1_client_response.h
-    include/http1_client_response_body.h
     include/http1_connection_plan.h
+    include/http1_message_body.h
     include/http1_server_request.h
     include/http1_server_response.h
     include/http2_frame.h
@@ -113,7 +114,7 @@ set(ruvia_http_headers
     include/http_capsule.h
     include/http_client_ip.h
     include/http_client_redirect.h
-    include/http_client_request_view.h
+    include/http_request_head_view.h
     include/http_client_response_head.h
     include/http_connect_udp.h
     include/http_connection_advertisement.h

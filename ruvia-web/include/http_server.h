@@ -494,7 +494,7 @@ public:
     // connections alone.
     [[nodiscard]] task<void> wait_connections_closed(worker_ref caller, const listener_endpoint& endpoint, operation_options options = {}) &;
     task<void> wait_connections_closed(worker_ref, const listener_endpoint&, operation_options = {}) && = delete;
-    // Replaces the identities (identity_, sni_, local_addresses_) of the
+    // Replaces the identity source (tls_config::identities_) of the
     // HTTPS listener `endpoint` names, for TLS over TCP and its HTTP/3
     // service; client_certificates_ and max_outgoing_records_ must equal the
     // listener's (std::invalid_argument otherwise). Credentials load on

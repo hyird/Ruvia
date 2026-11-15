@@ -556,7 +556,7 @@ protected:
             if (*body_failure == http_request_body_failure::buffer_limit) {
                 throw inbound_buffer_limit_error{};
             }
-            throw http_request_body_protocol_error(*body_failure);
+            throw make_http_protocol_error(*body_failure);
         }
     }
 
@@ -669,7 +669,7 @@ private:
             if (*failure == http_request_body_failure::buffer_limit) {
                 throw inbound_buffer_limit_error{};
             }
-            throw http_request_body_protocol_error(*failure);
+            throw make_http_protocol_error(*failure);
         }
     }
 };
@@ -765,7 +765,7 @@ private:
 [[nodiscard]] inline task<http_response> respond_http_request_body_failure(const route_table& routes, const http_request& request, http_request_body_failure failure, const context_services& services, http_response_tail& tail) {
     tail.disable_response_coding();
     return respond_http_request_rejection(routes, request, http_request_rejection::error([&] {
-        const auto err = http_request_body_protocol_error(failure);
+        const auto err = make_http_protocol_error(failure);
         return http_error_info({.status_ = err.status(), .code_ = err.code(), .message_ = std::string_view(err.what())});
     }()),
         services);

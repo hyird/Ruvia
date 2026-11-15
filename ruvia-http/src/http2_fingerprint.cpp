@@ -7,7 +7,7 @@
 #include "http2_frame.h"
 
 namespace ruvia {
-http2_akamai_fingerprint_collector::http2_akamai_fingerprint_collector(http2_akamai_fingerprint_options options) :
+http2_akamai_fingerprint_collector::http2_akamai_fingerprint_collector(http_fingerprint_options options) :
     max_frames_(options.max_frames_),
     max_bytes_(options.max_bytes_) {}
 

@@ -51,11 +51,13 @@ bool throws_invalid(fn_type&& fn) {
 
 ruvia::tls_config tls_config(std::filesystem::path certificate_chain_file, std::filesystem::path private_key_file, std::string_view private_key_password = {}) {
     return {
-        .identity_ = {
-            .certificate_chain_file_ = std::move(certificate_chain_file),
-            .private_key_file_ = std::move(private_key_file),
-            .private_key_password_ = std::string(private_key_password),
-        }
+        .identities_ = ruvia::tls_fixed_identities{
+            .primary_ = {
+                .certificate_chain_file_ = std::move(certificate_chain_file),
+                .private_key_file_ = std::move(private_key_file),
+                .private_key_password_ = std::string(private_key_password),
+            },
+        },
     };
 }
 
@@ -186,14 +188,14 @@ TEST(Ruvia, listener_config_rejects_invalid_listener_and_tls_states_at_construct
         ruvia::app().listen({
             .address_ = "127.0.0.1",
             .https_ = 8443,
-            .tls_ = {.identity_ = {.certificate_chain_file_ = "cert.pem"}},
+            .tls_ = {.identities_ = ruvia::tls_fixed_identities{.primary_ = {.certificate_chain_file_ = "cert.pem"}}},
         });
     }));
     EXPECT_TRUE(throws_invalid([] {
         ruvia::app().listen({
             .address_ = "127.0.0.1",
             .http_ = 8080,
-            .tls_ = {.identity_ = {.certificate_chain_file_ = "cert.pem", .private_key_file_ = "key.pem"}},
+            .tls_ = {.identities_ = ruvia::tls_fixed_identities{.primary_ = {.certificate_chain_file_ = "cert.pem", .private_key_file_ = "key.pem"}}},
         });
     }));
     EXPECT_TRUE(throws_invalid([] {
@@ -201,7 +203,7 @@ TEST(Ruvia, listener_config_rejects_invalid_listener_and_tls_states_at_construct
             .address_ = "127.0.0.1",
             .https_ = 8443,
             .tls_ = {
-                .identity_ = {.certificate_chain_file_ = "cert.pem", .private_key_file_ = "key.pem"},
+                .identities_ = ruvia::tls_fixed_identities{.primary_ = {.certificate_chain_file_ = "cert.pem", .private_key_file_ = "key.pem"}},
                 .client_certificates_ = {
                     .requirement_ = ruvia::tls_client_certificate_requirement::required,
                 },
@@ -213,7 +215,7 @@ TEST(Ruvia, listener_config_rejects_invalid_listener_and_tls_states_at_construct
             .address_ = "127.0.0.1",
             .https_ = 8443,
             .tls_ = {
-                .identity_ = {.certificate_chain_file_ = "cert.pem", .private_key_file_ = "key.pem"},
+                .identities_ = ruvia::tls_fixed_identities{.primary_ = {.certificate_chain_file_ = "cert.pem", .private_key_file_ = "key.pem"}},
                 .max_outgoing_records_ = 0,
             },
         });
@@ -223,7 +225,7 @@ TEST(Ruvia, listener_config_rejects_invalid_listener_and_tls_states_at_construct
             .address_ = "127.0.0.1",
             .https_ = 8443,
             .tls_ = {
-                .identity_ = {.certificate_chain_file_ = "cert.pem", .private_key_file_ = "key.pem"},
+                .identities_ = ruvia::tls_fixed_identities{.primary_ = {.certificate_chain_file_ = "cert.pem", .private_key_file_ = "key.pem"}},
                 .max_outgoing_records_ = (std::uint64_t{1} << 23) + 1,
             },
         });
@@ -240,8 +242,10 @@ TEST(Ruvia, tls_config_rejects_empty_or_duplicate_sni_identity) {
                 .address_ = "127.0.0.1",
                 .https_ = 8443,
                 .tls_ = {
-                    .identity_ = {.certificate_chain_file_ = "cert.pem", .private_key_file_ = "key.pem"},
-                    .sni_ = std::vector<ruvia::tls_sni_config>(sni),
+                    .identities_ = ruvia::tls_fixed_identities{
+                        .primary_ = {.certificate_chain_file_ = "cert.pem", .private_key_file_ = "key.pem"},
+                        .sni_ = std::vector<ruvia::tls_sni_config>(sni),
+                    },
                 },
             });
         });
@@ -262,8 +266,10 @@ TEST(Ruvia, tls_config_rejects_invalid_or_duplicate_sni_wildcards) {
             .address_ = "127.0.0.1",
             .https_ = 8443,
             .tls_ = {
-                .identity_ = {.certificate_chain_file_ = "cert.pem", .private_key_file_ = "key.pem"},
-                .sni_ = std::move(sni),
+                .identities_ = ruvia::tls_fixed_identities{
+                    .primary_ = {.certificate_chain_file_ = "cert.pem", .private_key_file_ = "key.pem"},
+                    .sni_ = std::move(sni),
+                },
             },
         });
     };
@@ -289,26 +295,35 @@ TEST(Ruvia, tls_config_rejects_ambiguous_identity_sources_and_local_addresses) {
             listen_with(std::move(tls));
         });
     };
-    EXPECT_TRUE(rejects({.identity_ = {.certificate_chain_file_ = "cert.pem", .private_key_file_ = "key.pem", .certificate_chain_pem_ = "pem", .private_key_pem_ = "pem"}}));
-    EXPECT_TRUE(rejects({.identity_ = {.certificate_chain_file_ = "cert.pem", .private_key_pem_ = "pem"}}));
-    EXPECT_TRUE(rejects({.identity_ = {.certificate_chain_pem_ = "pem"}}));
-    EXPECT_TRUE(rejects({.identity_ = {.private_key_pem_ = "pem"}}));
+    EXPECT_TRUE(rejects({.identities_ = ruvia::tls_fixed_identities{.primary_ = {.certificate_chain_file_ = "cert.pem", .private_key_file_ = "key.pem", .certificate_chain_pem_ = "pem", .private_key_pem_ = "pem"}}}));
+    EXPECT_TRUE(rejects({.identities_ = ruvia::tls_fixed_identities{.primary_ = {.certificate_chain_file_ = "cert.pem", .private_key_pem_ = "pem"}}}));
+    EXPECT_TRUE(rejects({.identities_ = ruvia::tls_fixed_identities{.primary_ = {.certificate_chain_pem_ = "pem"}}}));
+    EXPECT_TRUE(rejects({.identities_ = ruvia::tls_fixed_identities{.primary_ = {.private_key_pem_ = "pem"}}}));
 
     const ruvia::tls_identity_config files{.certificate_chain_file_ = "cert.pem", .private_key_file_ = "key.pem"};
     const auto rejects_local = [&](std::vector<ruvia::tls_local_address_config> local) {
-        return rejects({.identity_ = files, .local_addresses_ = std::move(local)});
+        return rejects({.identities_ = ruvia::tls_fixed_identities{.primary_ = files, .local_addresses_ = std::move(local)}});
     };
     for (const char* address : {"", "localhost", "127.0.0.1:443", "0.0.0.0", "::", "::ffff:0.0.0.0"}) {
         EXPECT_TRUE(rejects_local({{.address_ = address, .identity_ = files}})) << address;
     }
     EXPECT_TRUE(rejects_local({{.address_ = "127.0.0.2"}}));
     EXPECT_TRUE(rejects_local({{.address_ = "127.0.0.2", .identity_ = files}, {.address_ = "::ffff:127.0.0.2", .identity_ = files}}));
+    // A library source names its store and a certificate ID or selector.
+    const auto store = std::make_shared<ruvia::tls_certificate_store>();
+    const auto selector = std::make_shared<const ruvia::tls_certificate_selector>([](const ruvia::tls_certificate_selection&) -> std::optional<ruvia::tls_certificate_id> {
+        return std::nullopt;
+    });
+    EXPECT_TRUE(rejects({.identities_ = ruvia::tls_stored_identity{.id_ = 1}}));
+    EXPECT_TRUE(rejects({.identities_ = ruvia::tls_stored_identity{.store_ = store}}));
+    EXPECT_TRUE(rejects({.identities_ = ruvia::tls_selected_identities{.select_ = selector}}));
+    EXPECT_TRUE(rejects({.identities_ = ruvia::tls_selected_identities{.store_ = store}}));
     // TLS settings require an HTTPS port.
     EXPECT_TRUE(throws_invalid([] {
-        ruvia::app().listen({.address_ = "127.0.0.1", .http_ = 8080, .tls_ = {.identity_ = {.certificate_chain_pem_ = "pem", .private_key_pem_ = "pem"}}});
+        ruvia::app().listen({.address_ = "127.0.0.1", .http_ = 8080, .tls_ = {.identities_ = ruvia::tls_fixed_identities{.primary_ = {.certificate_chain_pem_ = "pem", .private_key_pem_ = "pem"}}}});
     }));
     EXPECT_TRUE(throws_invalid([&] {
-        ruvia::app().listen({.address_ = "127.0.0.1", .http_ = 8080, .tls_ = {.local_addresses_ = {{.address_ = "127.0.0.2", .identity_ = files}}}});
+        ruvia::app().listen({.address_ = "127.0.0.1", .http_ = 8080, .tls_ = {.identities_ = ruvia::tls_fixed_identities{.local_addresses_ = {{.address_ = "127.0.0.2", .identity_ = files}}}}});
     }));
 }
 
@@ -320,7 +335,7 @@ TEST(Ruvia, tls_identity_owns_password_independently_of_caller_buffer) {
         identity.emplace(tls_config("cert.pem", "key.pem", std::string_view(password)));
         password.assign(password.size(), 'x');
     }
-    EXPECT_EQ(identity->identity_.private_key_password_, std::string_view(expected));
+    EXPECT_EQ(std::get<ruvia::tls_fixed_identities>(identity->identities_).primary_.private_key_password_, std::string_view(expected));
 }
 
 TEST(Ruvia, self_contained_app_callbacks_release_owned_state) {
@@ -998,7 +1013,7 @@ TEST(Ruvia, ocsp_stapling_selects_identity_and_replaces_certificate_status_pairs
         return identity;
     };
     const auto configuration = [&](bool renewed) {
-        return ruvia::tls_config{.identity_ = stapled(files(renewed ? renewed_primary : primary), response(renewed ? renewed_primary : primary, renewed ? 11 : 1)), .sni_ = {{.host_ = "api.example.test", .identity_ = stapled(files(renewed ? renewed_exact : exact), response(renewed ? renewed_exact : exact, renewed ? 12 : 2))}, {.host_ = "*.example.test", .identity_ = stapled(files(wildcard), response(wildcard, renewed ? 13 : 3))}, {.host_ = "empty.example.test", .identity_ = files(exact)}}, .local_addresses_ = {{.address_ = "127.0.0.2", .identity_ = stapled(files(local), response(local, renewed ? 14 : 4))}}};
+        return ruvia::tls_config{.identities_ = ruvia::tls_fixed_identities{.primary_ = stapled(files(renewed ? renewed_primary : primary), response(renewed ? renewed_primary : primary, renewed ? 11 : 1)), .sni_ = {{.host_ = "api.example.test", .identity_ = stapled(files(renewed ? renewed_exact : exact), response(renewed ? renewed_exact : exact, renewed ? 12 : 2))}, {.host_ = "*.example.test", .identity_ = stapled(files(wildcard), response(wildcard, renewed ? 13 : 3))}, {.host_ = "empty.example.test", .identity_ = files(exact)}}, .local_addresses_ = {{.address_ = "127.0.0.2", .identity_ = stapled(files(local), response(local, renewed ? 14 : 4))}}}};
     };
     ruvia::http_server_group server(runtime.loops_, [](const ruvia::worker_ref&) {
         return ruvia::http_server_callbacks{.request_stream_ = [](ruvia::request_stream& stream) -> ruvia::task<void> {
@@ -1012,16 +1027,18 @@ TEST(Ruvia, ocsp_stapling_selects_identity_and_replaces_certificate_status_pairs
     server.listen({.address_ = "0.0.0.0", .https_ = port, .tls_ = original, .dispatch_ = ruvia::listener_dispatch::request_stream});
     caller.start(server.start(caller.worker())).get();
     auto retained = connect(io, TLS1_3_VERSION, first, nullptr);
-    expect_status(retained->native_handle(), primary, original.identity_.ocsp_response_);
+    const auto& original_identities = std::get<ruvia::tls_fixed_identities>(original.identities_);
+    expect_status(retained->native_handle(), primary, original_identities.primary_.ocsp_response_);
     const auto check = [&](const ruvia::tls_config& config, bool renewed) {
+        const auto& identities = std::get<ruvia::tls_fixed_identities>(config.identities_);
         for (const int version : {TLS1_2_VERSION, TLS1_3_VERSION}) {
             SCOPED_TRACE(version);
-            expect_status(connect(io, version, first, nullptr)->native_handle(), renewed ? renewed_primary : primary, config.identity_.ocsp_response_);
-            expect_status(connect(io, version, first, "unknown.test")->native_handle(), renewed ? renewed_primary : primary, config.identity_.ocsp_response_);
-            expect_status(connect(io, version, second, "API.example.TEST")->native_handle(), renewed ? renewed_exact : exact, config.sni_[0].identity_.ocsp_response_);
-            expect_status(connect(io, version, first, "www.example.test")->native_handle(), wildcard, config.sni_[1].identity_.ocsp_response_);
-            expect_status(connect(io, version, second, nullptr)->native_handle(), local, config.local_addresses_[0].identity_.ocsp_response_);
-            expect_status(connect(io, version, second, "empty.example.test")->native_handle(), exact, config.sni_[2].identity_.ocsp_response_);
+            expect_status(connect(io, version, first, nullptr)->native_handle(), renewed ? renewed_primary : primary, identities.primary_.ocsp_response_);
+            expect_status(connect(io, version, first, "unknown.test")->native_handle(), renewed ? renewed_primary : primary, identities.primary_.ocsp_response_);
+            expect_status(connect(io, version, second, "API.example.TEST")->native_handle(), renewed ? renewed_exact : exact, identities.sni_[0].identity_.ocsp_response_);
+            expect_status(connect(io, version, first, "www.example.test")->native_handle(), wildcard, identities.sni_[1].identity_.ocsp_response_);
+            expect_status(connect(io, version, second, nullptr)->native_handle(), local, identities.local_addresses_[0].identity_.ocsp_response_);
+            expect_status(connect(io, version, second, "empty.example.test")->native_handle(), exact, identities.sni_[2].identity_.ocsp_response_);
             EXPECT_TRUE(received(connect(io, version, first, nullptr, false)->native_handle()).empty());
         }
     };
@@ -1029,7 +1046,7 @@ TEST(Ruvia, ocsp_stapling_selects_identity_and_replaces_certificate_status_pairs
     auto replacement = configuration(true);
     caller.start(server.replace_tls_identities(caller.worker(), listener, replacement)).get();
     check(replacement, true);
-    expect_status(retained->native_handle(), primary, original.identity_.ocsp_response_);
+    expect_status(retained->native_handle(), primary, original_identities.primary_.ocsp_response_);
 
     // Reject broken primary/SNI/address DER atomically, including trailing
     // bytes and BER encodings accepted by OpenSSL's permissive d2i parser.
@@ -1037,21 +1054,21 @@ TEST(Ruvia, ocsp_stapling_selects_identity_and_replaces_certificate_status_pairs
     for (const auto& bytes : invalid) {
         for (int entry = 0; entry != 3; ++entry) {
             auto rejected = replacement;
-            auto& target = entry == 0 ? rejected.identity_.ocsp_response_ : (entry == 1 ? rejected.sni_[0].identity_.ocsp_response_ : rejected.local_addresses_[0].identity_.ocsp_response_);
+            auto& identities = std::get<ruvia::tls_fixed_identities>(rejected.identities_);
+            auto& target = entry == 0 ? identities.primary_.ocsp_response_ : (entry == 1 ? identities.sni_[0].identity_.ocsp_response_ : identities.local_addresses_[0].identity_.ocsp_response_);
             target = bytes;
             EXPECT_THROW(caller.start(server.replace_tls_identities(caller.worker(), listener, std::move(rejected))).get(), std::invalid_argument);
         }
     }
     auto library = std::make_shared<ruvia::tls_certificate_store>();
-    ruvia::tls_config mixed{.identity_ = {.ocsp_response_ = replacement.identity_.ocsp_response_}, .certificate_store_ = library, .default_certificate_ = 1};
-    EXPECT_THROW(caller.start(server.replace_tls_identities(caller.worker(), listener, std::move(mixed))).get(), std::invalid_argument);
     // A library certificate carries no staple.
     EXPECT_THROW((void)library->insert_or_assign(caller.worker(), 1, stapled(files(primary), response(primary, 1))), std::invalid_argument);
     EXPECT_FALSE(library->contains(1));
     check(replacement, true);
 
-    replacement.identity_.ocsp_response_.clear();
-    replacement.sni_[0].identity_.ocsp_response_.clear();
+    auto& replacement_identities = std::get<ruvia::tls_fixed_identities>(replacement.identities_);
+    replacement_identities.primary_.ocsp_response_.clear();
+    replacement_identities.sni_[0].identity_.ocsp_response_.clear();
     caller.start(server.replace_tls_identities(caller.worker(), listener, replacement)).get();
     check(replacement, true);
     retained.reset();

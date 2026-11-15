@@ -132,5 +132,7 @@ enum class http_parse_error : std::uint8_t { header_too_large,
     conflicting_content_length,
     invalid_transfer_encoding,
     unsupported_transfer_encoding };
-[[nodiscard]] http_protocol_error http_parse_protocol_error(http_parse_error error) noexcept;
+// The response status a server answers each rejected input with. Every error
+// family that maps onto a response overloads this one name beside its enum.
+[[nodiscard]] http_protocol_error make_http_protocol_error(http_parse_error error) noexcept;
 }  // namespace ruvia

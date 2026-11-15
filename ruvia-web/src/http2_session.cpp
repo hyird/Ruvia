@@ -888,7 +888,7 @@ private:
     void on_tunnel_end(const http2_tunnel_end_event& tunnel_end) noexcept;
     void on_message_end(const http2_message_end_event& message_end);
     void on_stream_closed(const http2_stream_closed_event& stream_closed) noexcept;
-    [[nodiscard]] bool push_request(std::uint32_t associated_stream_id, http_push_request_view request);
+    [[nodiscard]] bool push_request(std::uint32_t associated_stream_id, http_request_head_view request);
     [[nodiscard]] task<void> dispatch_one(std::uint32_t stream_id);
     [[nodiscard]] bool admit_stream(std::uint32_t stream_id);
     void remove_stream_runtime(std::uint32_t stream_id) noexcept;
@@ -1384,7 +1384,7 @@ void http2_sans_io_session_engine::peer_input_ended() noexcept {
 }
 
 void http2_sans_io_session_engine::set_inactivity_phase() noexcept {
-    const auto next_phase = multiplexed_inactivity_phase(connection_.received_peer_settings(), connection_.header_block_in_progress(), stream_runtimes_.size() != 0 || active_handler_tasks_ != 0, stream_runtimes_.tunnel_count() != 0);
+    const auto next_phase = multiplexed_inactivity_phase(connection_.peer_settings().has_value(), connection_.header_block_in_progress(), stream_runtimes_.size() != 0 || active_handler_tasks_ != 0, stream_runtimes_.tunnel_count() != 0);
     if (inactivity_phase_ == next_phase) {
         return;
     }
@@ -1433,7 +1433,7 @@ void http2_sans_io_session_engine::remove_stream_runtime(std::uint32_t stream_id
 }
 
 http2_feed_result http2_sans_io_session_engine::feed_read(std::string_view bytes_value) {
-    const bool initial = !connection_.received_peer_settings() || connection_.header_block_in_progress();
+    const bool initial = !connection_.peer_settings().has_value() || connection_.header_block_in_progress();
     const auto progress = connection_.received_stream_progress();
     const auto result_value = feed_and_drain(bytes_value);
     if (initial || connection_.received_stream_progress() != progress) {
@@ -1480,14 +1480,14 @@ void http2_sans_io_session_engine::reset_stream_no_throw(std::uint32_t stream_id
     wake_writer();
 }
 
-bool http2_sans_io_session_engine::push_request(std::uint32_t associated_stream_id, http_push_request_view request) {
+bool http2_sans_io_session_engine::push_request(std::uint32_t associated_stream_id, http_request_head_view request) {
     auto* parent_value = stream_runtimes_.find(associated_stream_id);
     const auto* head = parent_value != nullptr ? parent_value->request_head() : nullptr;
     if (head == nullptr || (associated_stream_id & 1U) == 0) {
         return false;
     }
     const auto original = head->request_view();
-    if (!http_ascii_equals_ignore_case(original.scheme_, request.scheme_) || !http_authorities_equal(borrowed_text(original.authority_), request.authority_, http_ascii_equals_ignore_case(original.scheme_, "https") ? 443 : 80)) {
+    if (!http_ascii_equals_ignore_case(original.scheme_, request.scheme_) || !http_authorities_equal(borrowed_text(original.authority_), request.authority_.value_or(borrowed_text()), http_ascii_equals_ignore_case(original.scheme_, "https") ? 443 : 80)) {
         throw std::invalid_argument("push request must use its associated request origin");
     }
     auto promised = connection_.submit_push_request(associated_stream_id, request);
@@ -1584,7 +1584,7 @@ task<void> http2_sans_io_session_engine::dispatch_one(std::uint32_t stream_id) {
             target.writer_.notify();
         });
         push_target push_target_value{*this, stream_id};
-        http_push_output push_output(&push_target_value, [](void* raw, http_push_request_view promised_request) -> bool {
+        http_push_output push_output(&push_target_value, [](void* raw, http_request_head_view promised_request) -> bool {
             auto& target = *static_cast<push_target*>(raw);
             return target.owner_.push_request(target.stream_id_, promised_request);
         });
@@ -1668,8 +1668,8 @@ task<void> http2_sans_io_session_engine::dispatch_one(std::uint32_t stream_id) {
                         return finish_upgrade_commit(head_response.status(), context_value);
                     };
                     auto commit_websocket = [this, stream_id, &request, &finish_upgrade_commit](context& context_value, const websocket_route_endpoint& endpoint, std::span<const http_header_view> headers) -> task<websocket_upgrade_attempt<http2_sans_io_tunnel_transport>> {
-                        const auto validation = ruvia::validate_http2_websocket_handshake(connection_, stream_id, request, endpoint.handshake_validation());
-                        if (const auto* failure = validation.failure()) {
+                        const auto validation = connection_.validate_websocket_handshake(stream_id, request, endpoint.handshake_validation());
+                        if (const auto* failure = std::get_if<websocket_handshake_error>(&validation)) {
                             co_return reject_request_stream_websocket(context_value, *failure);
                         }
                         const auto result = connection_.submit_websocket_handshake(stream_id, request, validation, {.supported_subprotocols_ = endpoint.subprotocols(), .response_headers_ = headers, .deflate_ = endpoint.deflate()});
@@ -1698,14 +1698,11 @@ task<void> http2_sans_io_session_engine::dispatch_one(std::uint32_t stream_id) {
                 }
                 case http_request_endpoint::websocket: {
                     const auto& websocket_endpoint = *resolved->route().endpoint().websocket();
-                    const auto handshake_validation = ruvia::validate_http2_websocket_handshake(connection_, stream_id, request, websocket_endpoint.handshake_validation());
-                    if (handshake_validation.accepted() == nullptr) {
-                        const auto* failure = handshake_validation.failure();
-                        if (failure == nullptr) {
-                            throw std::logic_error("HTTP/2 WebSocket validation returned no outcome");
-                        }
-                        response = co_await routes_.respond_error(request, http_error_info({.status_ = failure->protocol_error().status(), .code_ = failure->protocol_error().code(), .message_ = std::string_view(failure->protocol_error().what())}), request_services);
-                        failure->apply_required_response_headers(response);
+                    const auto handshake_validation = connection_.validate_websocket_handshake(stream_id, request, websocket_endpoint.handshake_validation());
+                    if (const auto* failure = std::get_if<websocket_handshake_error>(&handshake_validation)) {
+                        const auto protocol_error = make_http_protocol_error(*failure);
+                        response = co_await routes_.respond_error(request, http_error_info({.status_ = protocol_error.status(), .code_ = protocol_error.code(), .message_ = std::string_view(protocol_error.what())}), request_services);
+                        apply_websocket_handshake_error_headers(*failure, response);
                         break;
                     }
                     if (!streaming_body) {

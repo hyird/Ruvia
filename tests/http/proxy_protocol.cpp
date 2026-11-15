@@ -15,12 +15,15 @@
 
 namespace {
 
+using ruvia::decode_complete;
+using ruvia::decode_need_input;
+using ruvia::decoder_state;
 using ruvia::proxy_protocol_command;
 using ruvia::proxy_protocol_header;
 using ruvia::proxy_protocol_parse_error;
+using ruvia::proxy_protocol_parse_failure;
 using ruvia::proxy_protocol_parser;
 using ruvia::proxy_protocol_parser_options;
-using ruvia::proxy_protocol_parser_state;
 using ruvia::proxy_protocol_transport;
 using ruvia::proxy_protocol_version;
 
@@ -109,10 +112,10 @@ void expect_v2_inet_with_tlvs(const proxy_protocol_header& header) {
 
 const proxy_protocol_header& parse_whole(proxy_protocol_parser& parser, std::string_view input) {
     const auto result = parser.parse(wire(input));
-    EXPECT_TRUE(result.complete());
-    EXPECT_FALSE(result.failure());
+    EXPECT_TRUE(result.holds<decode_complete>());
+    EXPECT_FALSE(result.holds<proxy_protocol_parse_failure>());
     EXPECT_EQ(result.consumed_bytes(), input.size());
-    EXPECT_EQ(parser.state(), proxy_protocol_parser_state::finished);
+    EXPECT_EQ(parser.state(), decoder_state::finished);
     return parser.header();
 }
 
@@ -122,16 +125,18 @@ void expect_chunks_rejected(std::initializer_list<std::string_view> chunks, prox
     std::size_t index = 0;
     for (const auto chunk : chunks) {
         const auto result = parser.parse(wire(chunk));
-        EXPECT_FALSE(result.complete());
+        EXPECT_FALSE(result.holds<decode_complete>());
         if (++index < chunks.size()) {
-            EXPECT_FALSE(result.failure());
+            EXPECT_TRUE(result.holds<decode_need_input>());
             EXPECT_EQ(result.consumed_bytes(), chunk.size());
             continue;
         }
-        EXPECT_EQ(result.failure(), error);
+        const auto* failure = result.get_if<proxy_protocol_parse_failure>();
+        ASSERT_TRUE(failure != nullptr);
+        EXPECT_EQ(failure->error(), error);
         EXPECT_EQ(result.consumed_bytes(), 0U);
     }
-    EXPECT_EQ(parser.state(), proxy_protocol_parser_state::failed);
+    EXPECT_EQ(parser.state(), decoder_state::failed);
 }
 
 void expect_rejected(std::string_view input, proxy_protocol_parse_error error, proxy_protocol_parser_options options = {}) {
@@ -147,14 +152,14 @@ void expect_every_split_point(std::string_view input, check_type check) {
         const auto first = parser.parse(wire(input.substr(0, split)));
         EXPECT_EQ(first.consumed_bytes(), split);
         if (split < input.size()) {
-            EXPECT_FALSE(first.complete());
+            EXPECT_FALSE(first.holds<decode_complete>());
             const auto second = parser.parse(wire(input.substr(split)));
-            EXPECT_TRUE(second.complete());
+            EXPECT_TRUE(second.holds<decode_complete>());
             EXPECT_EQ(second.consumed_bytes(), input.size() - split);
         } else {
-            EXPECT_TRUE(first.complete());
+            EXPECT_TRUE(first.holds<decode_complete>());
         }
-        ASSERT_EQ(parser.state(), proxy_protocol_parser_state::finished);
+        ASSERT_EQ(parser.state(), decoder_state::finished);
         check(parser.header());
     }
 }
@@ -165,9 +170,9 @@ void expect_byte_by_byte(std::string_view input, check_type check) {
     for (std::size_t index = 0; index < input.size(); ++index) {
         const auto result = parser.parse(wire(input.substr(index, 1)));
         EXPECT_EQ(result.consumed_bytes(), 1U);
-        EXPECT_EQ(result.complete(), index + 1 == input.size());
+        EXPECT_EQ(result.holds<decode_complete>(), index + 1 == input.size());
     }
-    ASSERT_EQ(parser.state(), proxy_protocol_parser_state::finished);
+    ASSERT_EQ(parser.state(), decoder_state::finished);
     check(parser.header());
 }
 
@@ -286,7 +291,7 @@ TEST(Ruvia, proxy_protocol_consumed_bytes_exclude_payload) {
         proxy_protocol_parser parser;
         const auto input = std::string(v1_tcp4) + std::string(http_request_line);
         const auto result = parser.parse(wire(input));
-        EXPECT_TRUE(result.complete());
+        EXPECT_TRUE(result.holds<decode_complete>());
         EXPECT_EQ(result.consumed_bytes(), v1_tcp4.size());
         expect_v1_tcp4(parser.header());
     }
@@ -294,10 +299,10 @@ TEST(Ruvia, proxy_protocol_consumed_bytes_exclude_payload) {
         // The CR of the CRLF ends one chunk; the LF and the payload follow.
         proxy_protocol_parser parser;
         const auto first = parser.parse(wire(v1_tcp4.substr(0, v1_tcp4.size() - 1)));
-        EXPECT_FALSE(first.complete());
+        EXPECT_FALSE(first.holds<decode_complete>());
         const auto rest = std::string("\n") + std::string(http_request_line);
         const auto second = parser.parse(wire(rest));
-        EXPECT_TRUE(second.complete());
+        EXPECT_TRUE(second.holds<decode_complete>());
         EXPECT_EQ(second.consumed_bytes(), 1U);
     }
     {
@@ -305,7 +310,7 @@ TEST(Ruvia, proxy_protocol_consumed_bytes_exclude_payload) {
         const auto header = v2_inet_with_tlvs();
         const auto input = header + std::string(http_request_line);
         const auto result = parser.parse(wire(input));
-        EXPECT_TRUE(result.complete());
+        EXPECT_TRUE(result.holds<decode_complete>());
         EXPECT_EQ(result.consumed_bytes(), header.size());
         expect_v2_inet_with_tlvs(parser.header());
     }
@@ -314,7 +319,7 @@ TEST(Ruvia, proxy_protocol_consumed_bytes_exclude_payload) {
         proxy_protocol_parser parser;
         const auto input = v2_header(0x20, 0x00, "") + std::string(http_request_line);
         const auto result = parser.parse(wire(input));
-        EXPECT_TRUE(result.complete());
+        EXPECT_TRUE(result.holds<decode_complete>());
         EXPECT_EQ(result.consumed_bytes(), 16U);
     }
 }
@@ -335,10 +340,9 @@ TEST(Ruvia, proxy_protocol_rejects_invalid_signature_immediately) {
     for (const std::string_view prefix : {std::string_view("PROX"), std::string_view("\r\n\r\n\0\r\nQ", 8)}) {
         proxy_protocol_parser parser;
         const auto result = parser.parse(wire(prefix));
-        EXPECT_FALSE(result.complete());
-        EXPECT_FALSE(result.failure());
+        EXPECT_TRUE(result.holds<decode_need_input>());
         EXPECT_EQ(result.consumed_bytes(), prefix.size());
-        EXPECT_EQ(parser.state(), proxy_protocol_parser_state::active);
+        EXPECT_EQ(parser.state(), decoder_state::active);
     }
 }
 
@@ -482,13 +486,15 @@ TEST(Ruvia, proxy_protocol_parse_after_finished_or_failed_throws_logic_error) {
     (void)parse_whole(parser, v1_tcp4);
     EXPECT_THROW((void)parser.parse(wire(http_request_line)), std::logic_error);
     EXPECT_THROW((void)parser.parse({}), std::logic_error);
-    EXPECT_EQ(parser.state(), proxy_protocol_parser_state::finished);
+    EXPECT_EQ(parser.state(), decoder_state::finished);
 
     proxy_protocol_parser failed;
-    EXPECT_EQ(failed.parse(wire("X")).failure(), proxy_protocol_parse_error::invalid_signature);
+    const auto rejected = failed.parse(wire("X"));
+    ASSERT_TRUE(rejected.holds<proxy_protocol_parse_failure>());
+    EXPECT_EQ(rejected.get_if<proxy_protocol_parse_failure>()->error(), proxy_protocol_parse_error::invalid_signature);
     EXPECT_THROW((void)failed.parse(wire(v1_tcp4)), std::logic_error);
     EXPECT_THROW((void)failed.header(), std::logic_error);
-    EXPECT_EQ(failed.state(), proxy_protocol_parser_state::failed);
+    EXPECT_EQ(failed.state(), decoder_state::failed);
 }
 
 TEST(Ruvia, proxy_protocol_reset_reuses_parser) {
@@ -496,11 +502,13 @@ TEST(Ruvia, proxy_protocol_reset_reuses_parser) {
     const auto v2 = v2_inet_with_tlvs();
     expect_v2_inet_with_tlvs(parse_whole(parser, v2));
     parser.reset();
-    EXPECT_EQ(parser.state(), proxy_protocol_parser_state::active);
+    EXPECT_EQ(parser.state(), decoder_state::active);
     expect_v1_tcp4(parse_whole(parser, v1_tcp4));
 
     parser.reset();
-    EXPECT_EQ(parser.parse(wire("PROXY TCP4 1.2.3.4\n")).failure(), proxy_protocol_parse_error::v1_invalid_line_ending);
+    const auto rejected = parser.parse(wire("PROXY TCP4 1.2.3.4\n"));
+    ASSERT_TRUE(rejected.holds<proxy_protocol_parse_failure>());
+    EXPECT_EQ(rejected.get_if<proxy_protocol_parse_failure>()->error(), proxy_protocol_parse_error::v1_invalid_line_ending);
     parser.reset();
     expect_v2_inet_with_tlvs(parse_whole(parser, v2));
 
@@ -517,7 +525,7 @@ TEST(Ruvia, proxy_protocol_moved_parser_keeps_header_views) {
     (void)parse_whole(parser, input);
     const auto tlvs = parser.header().tlvs();
     const proxy_protocol_parser moved(std::move(parser));
-    EXPECT_EQ(moved.state(), proxy_protocol_parser_state::finished);
+    EXPECT_EQ(moved.state(), decoder_state::finished);
     expect_v2_inet_with_tlvs(moved.header());
     EXPECT_EQ(moved.header().tlvs().data(), tlvs.data());
 }

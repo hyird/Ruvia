@@ -62,7 +62,7 @@ TEST(Ruvia, auto_https_redirect_points_cleartext_requests_at_the_https_service) 
                                                                                             .address_ = "127.0.0.1",
                                                                                             .http_ = http_endpoint.port(),
                                                                                             .https_ = https_endpoint.port(),
-                                                                                            .tls_ = {.identity_ = {.certificate_chain_file_ = identity.ca_file_, .private_key_file_ = private_key}},
+                                                                                            .tls_ = {.identities_ = ruvia::tls_fixed_identities{.primary_ = {.certificate_chain_file_ = identity.ca_file_, .private_key_file_ = private_key}}},
                                                                                             .auto_https_redirect_ = true,
                                                                                         })
         .on_start([] {

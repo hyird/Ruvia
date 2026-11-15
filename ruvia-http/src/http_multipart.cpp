@@ -450,9 +450,19 @@ namespace {
 
 }  // namespace
 
-multipart_boundary_parse_result parse_multipart_boundary(std::string_view content_type_value) {
+http_protocol_error make_http_protocol_error(multipart_boundary_error error) noexcept {
+    switch (error) {
+        case multipart_boundary_error::not_form_data:
+            return http_protocol_error(http_status::unsupported_media_type, "unsupported_media_type", "request body must be multipart/form-data");
+        case multipart_boundary_error::invalid_boundary:
+            break;
+    }
+    return http_protocol_error(http_status::bad_request, "multipart_invalid_boundary", "invalid multipart boundary");
+}
+
+std::variant<multipart_boundary, multipart_boundary_error> parse_multipart_boundary(std::string_view content_type_value) {
     if (!http_ascii_equals_ignore_case(detail::http_header_token_before_parameters(content_type_value), "multipart/form-data")) {
-        return multipart_boundary_parse_result::make_not_applicable();
+        return multipart_boundary_error::not_form_data;
     }
     std::optional<multipart_boundary> boundary;
     std::array<char, 70> decoded{};
@@ -476,9 +486,9 @@ multipart_boundary_parse_result parse_multipart_boundary(std::string_view conten
         return true;
     });
     if (!valid || !boundary) {
-        return multipart_boundary_parse_result::make_failure();
+        return multipart_boundary_error::invalid_boundary;
     }
-    return multipart_boundary_parse_result(std::move(*boundary));
+    return std::move(*boundary);
 }
 
 namespace {
@@ -516,7 +526,9 @@ std::string& emplace_owned_multipart_text(std::variant<std::string_view, std::st
     return storage.emplace<std::string>();
 }
 
-[[nodiscard]] http_protocol_error multipart_protocol_error(multipart_parse_error error) noexcept {
+}  // namespace
+
+http_protocol_error make_http_protocol_error(multipart_parse_error error) noexcept {
     switch (error) {
         case multipart_parse_error::incomplete_body:
             return http_protocol_error(http_status::bad_request, "multipart_incomplete_body", "incomplete multipart body");
@@ -542,49 +554,39 @@ std::string& emplace_owned_multipart_text(std::variant<std::string_view, std::st
     return http_protocol_error(http_status::bad_request, "multipart_invalid_body", "invalid multipart body");
 }
 
-}  // namespace
-
-http_protocol_error multipart_poll_failure::protocol_error() const noexcept {
-    return multipart_protocol_error(error_);
-}
-
 multipart_parser::multipart_parser(multipart_parse_options options) :
     boundary_(std::move(options.boundary_)),
     input_(std::in_place_type<http_io_buffer>),
+    max_parts_(options.max_parts_),
+    max_metadata_bytes_(options.max_metadata_bytes_),
     remaining_parts_(options.max_parts_),
     remaining_metadata_bytes_(options.max_metadata_bytes_) {}
 
 multipart_parser::multipart_parser(std::string_view complete_body, multipart_parse_options options, complete_input_tag_type) :
     boundary_(std::move(options.boundary_)),
     input_(complete_body),
+    max_parts_(options.max_parts_),
+    max_metadata_bytes_(options.max_metadata_bytes_),
     remaining_parts_(options.max_parts_),
     remaining_metadata_bytes_(options.max_metadata_bytes_),
     input_eof_(true) {}
-
-std::vector<multipart_part> multipart_body_parse_result::take_parts() && {
-    auto* parts = std::get_if<std::vector<multipart_part>>(&value_);
-    if (parts == nullptr) {
-        throw std::logic_error("multipart body parse result holds a failure");
-    }
-    return std::move(*parts);
-}
 
 multipart_body_parse_result parse_multipart_body(std::string_view body, multipart_parse_options options) {
     multipart_parser parser(body, std::move(options), multipart_parser::complete_input_tag_type{});
     std::vector<multipart_part> parts;
     for (;;) {
         auto result_value = parser.poll();
-        if (const auto* part = result_value.part()) {
+        if (const auto* part = result_value.get_if<multipart_stream_part>()) {
             parts.push_back(detail::multipart_part_access::make_decoded(std::exchange(parser.current_name_, std::string_view{}), std::exchange(parser.current_filename_, std::string_view{}), std::exchange(parser.current_content_type_, std::string_view{}), part->body(), part->has_filename()));
             continue;
         }
-        if (result_value.done() != nullptr) {
+        if (result_value.holds<decode_complete>()) {
             return multipart_body_parse_result(std::move(parts));
         }
-        if (const auto* failure = result_value.failure()) {
-            return multipart_body_parse_result(*failure);
+        if (const auto* failure = result_value.get_if<multipart_parse_failure>()) {
+            return failure->error();
         }
-        return multipart_body_parse_result(multipart_parse_error::incomplete_body);
+        return multipart_parse_error::incomplete_body;
     }
 }
 
@@ -621,7 +623,7 @@ void multipart_parser::compact_pending() {
 
 void multipart_parser::feed(std::string_view chunk) {
     auto* owned = std::get_if<http_io_buffer>(&input_);
-    if (owned == nullptr || input_eof_ || (state_.index() != 0) || std::get<0>(state_) == progress_state_type::done) {
+    if (owned == nullptr || input_eof_ || state() != decoder_state::active) {
         throw std::logic_error("multipart parser cannot accept input in a terminal state");
     }
     owned->append(chunk);
@@ -631,15 +633,40 @@ void multipart_parser::finish_input() noexcept {
     input_eof_ = true;
 }
 
+decoder_state multipart_parser::state() const noexcept {
+    if (const auto* progress = std::get_if<progress_state_type>(&state_)) {
+        return *progress == progress_state_type::done ? decoder_state::finished : decoder_state::active;
+    }
+    return decoder_state::failed;
+}
+
+void multipart_parser::reset() noexcept {
+    if (auto* owned = std::get_if<http_io_buffer>(&input_)) {
+        owned->clear();
+    }
+    current_name_ = std::string_view{};
+    current_filename_ = std::string_view{};
+    current_content_type_ = std::string_view{};
+    current_headers_.clear();
+    state_ = progress_state_type::boundary;
+    pending_erase_bytes_ = 0;
+    remaining_parts_ = max_parts_;
+    remaining_metadata_bytes_ = max_metadata_bytes_;
+    reset_scan_cursors();
+    input_eof_ = false;
+    next_chunk_is_first_ = false;
+    first_boundary_ = true;
+    has_current_filename_ = false;
+}
+
 multipart_poll_result multipart_parser::fail(multipart_parse_error error) noexcept {
-    auto result_value = multipart_poll_result::make_failure(error);
     state_ = error;
-    return result_value;
+    return multipart_poll_result(0, multipart_parse_failure(error));
 }
 
 multipart_poll_result multipart_parser::poll() {
     if ((state_.index() != 0)) {
-        return multipart_poll_result::make_failure(std::get<1>(state_));
+        return multipart_poll_result(0, multipart_parse_failure(std::get<1>(state_)));
     }
     for (;;) {
         compact_pending();
@@ -654,10 +681,10 @@ multipart_poll_result multipart_parser::poll() {
                     if (input_eof_) {
                         return fail(multipart_parse_error::incomplete_body);
                     }
-                    return multipart_poll_result::make_need_input();
+                    return multipart_poll_result(0, decode_need_input{});
                 }
                 if (progress_value == step_progress_type::done) {
-                    return multipart_poll_result::make_done();
+                    return multipart_poll_result(0, decode_complete{});
                 }
                 break;
             }
@@ -671,19 +698,19 @@ multipart_poll_result multipart_parser::poll() {
                     if (input_eof_) {
                         return fail(multipart_parse_error::incomplete_body);
                     }
-                    return multipart_poll_result::make_need_input();
+                    return multipart_poll_result(0, decode_need_input{});
                 }
                 break;
             }
             case progress_state_type::body: {
                 auto result_value = read_body_chunk();
-                if (result_value.need_input() != nullptr && input_eof_) {
+                if (result_value.holds<decode_need_input>() && input_eof_) {
                     return fail(multipart_parse_error::incomplete_body);
                 }
                 return result_value;
             }
             case progress_state_type::done:
-                return multipart_poll_result::make_done();
+                return multipart_poll_result(0, decode_complete{});
         }
     }
 }
@@ -849,7 +876,7 @@ multipart_poll_result multipart_parser::read_body_chunk() {
         pending_erase_bytes_ = delimiter.offset_ + crlf_bytes + delimiter.line_bytes_;
         reset_scan_cursors();
         state_ = delimiter.kind_ == detail::http_multipart_delimiter_kind::part ? progress_state_type::headers : progress_state_type::done;
-        return multipart_poll_result::make_part(part);
+        return multipart_poll_result(0, part);
     }
     if (delimiter.kind_ == detail::http_multipart_delimiter_kind::need_input) {
         if (buffer.size() - delimiter.offset_ > max_multipart_delimiter_line_bytes + 2) {
@@ -858,9 +885,9 @@ multipart_poll_result multipart_parser::read_body_chunk() {
         if (delimiter.offset_ > 0) {
             auto part = make_part(buffer.substr(0, delimiter.offset_), false);
             pending_erase_bytes_ = delimiter.offset_;
-            return multipart_poll_result::make_part(part);
+            return multipart_poll_result(0, part);
         }
-        return multipart_poll_result::make_need_input();
+        return multipart_poll_result(0, decode_need_input{});
     }
 
     const auto keep_tail = boundary_.value().size() + 8;
@@ -868,10 +895,10 @@ multipart_poll_result multipart_parser::read_body_chunk() {
         const auto bytes_value = buffer.size() - keep_tail;
         auto part = make_part(buffer.substr(0, bytes_value), false);
         pending_erase_bytes_ = bytes_value;
-        return multipart_poll_result::make_part(part);
+        return multipart_poll_result(0, part);
     }
 
-    return multipart_poll_result::make_need_input();
+    return multipart_poll_result(0, decode_need_input{});
 }
 
 }  // namespace ruvia

@@ -127,7 +127,7 @@ proxy_protocol_parser::proxy_protocol_parser(proxy_protocol_parser_options optio
 }
 
 proxy_protocol_parse_result proxy_protocol_parser::parse(std::span<const std::byte> input) & {
-    if (state_ != proxy_protocol_parser_state::active) {
+    if (state_ != decoder_state::active) {
         throw std::logic_error("PROXY protocol parser is not active");
     }
     try {
@@ -135,13 +135,13 @@ proxy_protocol_parse_result proxy_protocol_parser::parse(std::span<const std::by
     } catch (...) {
         // Fail closed: the caller cannot know how much of an unbufferable
         // input was taken.
-        state_ = proxy_protocol_parser_state::failed;
+        state_ = decoder_state::failed;
         throw;
     }
 }
 
 const proxy_protocol_header& proxy_protocol_parser::header() const& {
-    if (state_ != proxy_protocol_parser_state::finished) {
+    if (state_ != decoder_state::finished) {
         throw std::logic_error("PROXY protocol header is not complete");
     }
     return header_;
@@ -154,17 +154,17 @@ void proxy_protocol_parser::reset() noexcept {
     v2_header_size_ = 0;
     v2_family_ = 0;
     phase_ = parse_phase::signature;
-    state_ = proxy_protocol_parser_state::active;
+    state_ = decoder_state::active;
 }
 
 void proxy_protocol_parser::reject(proxy_protocol_parse_error error) noexcept {
     failure_ = error;
-    state_ = proxy_protocol_parser_state::failed;
+    state_ = decoder_state::failed;
 }
 
 proxy_protocol_parse_result proxy_protocol_parser::parse_bytes(std::span<const std::byte> input) {
     std::size_t position = 0;
-    while (position < input.size() && state_ == proxy_protocol_parser_state::active) {
+    while (position < input.size() && state_ == decoder_state::active) {
         switch (phase_) {
             case parse_phase::signature:
                 position = consume_signature(input, position);
@@ -180,10 +180,13 @@ proxy_protocol_parse_result proxy_protocol_parser::parse_bytes(std::span<const s
                 break;
         }
     }
-    if (state_ == proxy_protocol_parser_state::failed) {
-        return proxy_protocol_parse_result(false, 0, failure_);
+    if (state_ == decoder_state::failed) {
+        return proxy_protocol_parse_result(0, proxy_protocol_parse_failure(failure_));
     }
-    return proxy_protocol_parse_result(state_ == proxy_protocol_parser_state::finished, position, std::nullopt);
+    if (state_ == decoder_state::finished) {
+        return proxy_protocol_parse_result(position, decode_complete{});
+    }
+    return proxy_protocol_parse_result(position, decode_need_input{});
 }
 
 // The first byte selects the only signature it can begin ('P' or CR), so each
@@ -336,7 +339,7 @@ void proxy_protocol_parser::finish_v1() {
         // Spec §2.1: anything after UNKNOWN is ignored and the real endpoints
         // are used.
         header_.transport_ = proxy_protocol_transport::unspecified;
-        state_ = proxy_protocol_parser_state::finished;
+        state_ = decoder_state::finished;
         return;
     }
     const bool tcp4 = line.starts_with("TCP4 ");
@@ -365,14 +368,14 @@ void proxy_protocol_parser::finish_v1() {
     header_.transport_ = proxy_protocol_transport::stream;
     header_.source_ = ip_endpoint(*source_address, *source_port);
     header_.destination_ = ip_endpoint(*destination_address, *destination_port);
-    state_ = proxy_protocol_parser_state::finished;
+    state_ = decoder_state::finished;
 }
 
 void proxy_protocol_parser::finish_v2() {
     // Spec §2.2: LOCAL discards the block, family included. With AF_UNSPEC the
     // address length is unknown, so no TLV boundary can be located.
     if (header_.command_ == proxy_protocol_command::local || v2_family_ == af_unspec) {
-        state_ = proxy_protocol_parser_state::finished;
+        state_ = decoder_state::finished;
         return;
     }
     const auto block = std::span<const std::byte>(buffer_).subspan(v2_fixed_bytes);
@@ -400,7 +403,7 @@ void proxy_protocol_parser::finish_v2() {
         rest = rest.subspan(v2_tlv_header_bytes + value_bytes);
     }
     header_.tlvs_ = tlvs_;
-    state_ = proxy_protocol_parser_state::finished;
+    state_ = decoder_state::finished;
 }
 
 }  // namespace ruvia

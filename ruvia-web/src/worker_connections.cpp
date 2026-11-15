@@ -859,10 +859,10 @@ task<void> worker_connections::prepare_connection(std::size_t index, tcp_socket_
             const auto parsed = parser.parse(input);
             // A malformed preface, or a datagram transport on this TCP
             // listener, is untrusted input: drop only this connection.
-            if (parsed.failure()) {
+            if (parsed.holds<proxy_protocol_parse_failure>()) {
                 co_return;
             }
-            if (parsed.complete()) {
+            if (parsed.holds<decode_complete>()) {
                 const auto& header = parser.header();
                 if (header.transport() == proxy_protocol_transport::datagram) {
                     co_return;

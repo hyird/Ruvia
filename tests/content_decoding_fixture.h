@@ -28,7 +28,6 @@
 #include "http1_client_response.h"
 #include "http1_connection_plan.h"
 #include "http1_server_response.h"
-#include "http_client_request_view.h"
 #include "http_client_response_head.h"
 #include "http_content_codec.h"
 #include "http_content_coding.h"
@@ -36,6 +35,8 @@
 #include "http_multipart.h"
 #include "http_request.h"
 #include "http_request_body_failure.h"
+#include "http_request_head_view.h"
+#include "http_transfer_coding.h"
 #if defined(RUVIA_ENABLE_HTTP2)
 #include "http2_connection.h"
 #endif
@@ -61,8 +62,6 @@ using ruvia::http1_request_body_plan;
 using ruvia::http_content_coding;
 using ruvia::http_content_decode_error;
 using ruvia::http_transfer_coding_decode_failure;
-using ruvia::http_transfer_coding_decode_need_input;
-using ruvia::http_transfer_coding_decode_output_view;
 using ruvia::http_transfer_coding_decode_result;
 using ruvia::http_transfer_coding_stack_decoder;
 using ruvia::http_unsupported_expectation_policy;
@@ -121,12 +120,12 @@ inline transfer_decode_observation append_transfer_decoded(http_transfer_coding_
     for (;;) {
         const auto result_value = decoder.decode(input, window);
         input.remove_prefix(std::min(input.size(), result_value.consumed_bytes()));
-        if (const auto* decoded = result_value.output()) {
+        if (const auto* decoded = result_value.get_if<ruvia::decode_output>()) {
             output.append(decoded->bytes());
             continue;
         }
-        if (const auto* failure = result_value.failure()) {
-            return {true, ruvia::http_request_transfer_coding_error(failure->error())};
+        if (const auto* failure = result_value.get_if<ruvia::http_transfer_coding_decode_failure>()) {
+            return {true, ruvia::make_http_protocol_error(failure->error(), ruvia::http_coding_field::transfer_encoding)};
         }
         return {};
     }
@@ -229,10 +228,14 @@ inline std::optional<std::string> zstd_round_trip(std::string_view plain, std::s
 }
 
 // One-shot whole-message view of a buffered request over the public server
-// contract: parse_head frames the head, and the body plan drives either a
-// Content-Length slice or http1_chunked_body_decoder over the rest.
+// contract: the parser frames the head, and the body plan's framing drives
+// either a Content-Length slice or http1_chunked_body_decoder over the rest.
 struct http1_request_message final {
-    http1_server_request_parse_state state_;
+    http1_server_request_parser state_;
+    // Size of the head once it is complete; zero until then.
+    std::size_t head_bytes_{0};
+    // The rejection of a failed head.
+    std::optional<ruvia::http_parse_error> head_error_{};
     // Wire bytes of the whole message once it is complete (head, chunk lines
     // and trailers included).
     std::optional<std::size_t> message_bytes_{};
@@ -241,32 +244,43 @@ struct http1_request_message final {
     std::string body_{};
     std::optional<http1_chunk_decode_error> chunk_error_{};
 
+    [[nodiscard]] bool head_ready() const noexcept {
+        return state_.state() == ruvia::decoder_state::finished;
+    }
+    [[nodiscard]] bool need_head() const noexcept {
+        return state_.state() == ruvia::decoder_state::active;
+    }
     [[nodiscard]] bool complete() const noexcept {
         return message_bytes_.has_value();
     }
     // Head accepted, body still incomplete.
     [[nodiscard]] bool need_body() const noexcept {
-        return state_.head_ready() != nullptr && !message_bytes_.has_value() && !chunk_error_.has_value();
+        return head_ready() && !message_bytes_.has_value() && !chunk_error_.has_value();
     }
 };
 
 [[nodiscard]] inline http1_request_message parse_http1_request_message(std::string_view buffer) {
     http1_request_message message;
-    message.state_.parse_head(buffer, 0);
-    const auto* head = message.state_.head_ready();
-    if (head == nullptr) {
+    const auto head = message.state_.parse(buffer);
+    if (const auto* failure = head.get_if<ruvia::http1_server_request_parse_failure>()) {
+        message.head_error_ = failure->error();
+    }
+    if (!head.holds<ruvia::decode_complete>()) {
         return message;
     }
-    const auto header_bytes = head->header_bytes();
-    if (const auto* known_length = message.state_.body_plan().known_length()) {
-        if (buffer.size() - header_bytes < known_length->content_length()) {
+    const auto header_bytes = head.consumed_bytes();
+    message.head_bytes_ = header_bytes;
+    const auto& framing = message.state_.body_plan().framing();
+    if (framing.kind() == ruvia::http1_framing_kind::known_length) {
+        const auto content_length = static_cast<std::size_t>(framing.content_length());
+        if (buffer.size() - header_bytes < content_length) {
             return message;
         }
-        message.body_.assign(buffer.substr(header_bytes, known_length->content_length()));
-        message.message_bytes_ = header_bytes + known_length->content_length();
+        message.body_.assign(buffer.substr(header_bytes, content_length));
+        message.message_bytes_ = header_bytes + content_length;
         return message;
     }
-    if (message.state_.body_plan().chunked() == nullptr) {
+    if (framing.kind() != ruvia::http1_framing_kind::chunked) {
         message.message_bytes_ = header_bytes;
         return message;
     }
@@ -274,14 +288,14 @@ struct http1_request_message final {
     auto consumed = header_bytes;
     for (;;) {
         const auto result_value = decoder.decode(buffer.substr(consumed));
-        if (const auto* chunk = result_value.body_chunk()) {
+        if (const auto* chunk = result_value.get_if<ruvia::decode_output>()) {
             message.body_.append(chunk->bytes());
-            consumed += chunk->consumed_bytes();
+            consumed += result_value.consumed_bytes();
             continue;
         }
-        if (const auto* done = result_value.complete()) {
-            message.message_bytes_ = consumed + done->consumed_bytes();
-        } else if (const auto* failure = result_value.failure()) {
+        if (result_value.holds<ruvia::http1_chunk_decode_complete>()) {
+            message.message_bytes_ = consumed + result_value.consumed_bytes();
+        } else if (const auto* failure = result_value.get_if<ruvia::http1_chunk_decode_failure>()) {
             message.chunk_error_ = failure->error();
         }
         return message;
@@ -312,9 +326,9 @@ inline http1_client_response_parser exchange_parser(http1_client_request_prepare
     return http1_client_response_parser(std::move(*prepared).take_exchange_state());
 }
 
-inline http1_client_response_parser exchange_parser(const ruvia::http_origin_view& origin, const ruvia::http_client_request_view& request, http1_client_request_wire_policy policy = {}) {
+inline http1_client_response_parser exchange_parser(const ruvia::http_origin_view& origin, const ruvia::http_request_head_view& request, http1_client_request_wire_policy policy = {}) {
     std::array<char, 2048> request_head;
-    return exchange_parser(ruvia::http1_client_request_writer().prepare(origin, request, request_head, policy));
+    return exchange_parser(ruvia::prepare_http1_client_request(origin, request, request_head, policy));
 }
 
 inline http1_client_response_parse_result parse_wire(std::string_view method, std::string_view wire, http1_close_policy close_policy = http1_close_policy::allow_reuse, std::span<const ruvia::http_header_view> request_headers = {}) {
@@ -322,9 +336,9 @@ inline http1_client_response_parse_result parse_wire(std::string_view method, st
     const http1_client_request_wire_policy policy{.close_policy_ = close_policy};
     if (method == "CONNECT") {
         std::array<char, 2048> request_head;
-        return exchange_parser(ruvia::http1_client_request_writer().prepare_connect("example.test:443", request_headers, request_head, policy)).parse(wire);
+        return exchange_parser(ruvia::prepare_http1_client_request(origin, {.method_ = "CONNECT", .authority_ = "example.test:443", .headers_ = request_headers}, request_head, policy)).parse(wire);
     }
-    ruvia::http_client_request_view request;
+    ruvia::http_request_head_view request;
     request.method_ = method;
     request.headers_ = request_headers;
     return exchange_parser(origin, request, policy).parse(wire);
@@ -338,7 +352,7 @@ inline http1_client_response_parse_result parse_result(std::string_view method, 
 
 inline http1_parsed_client_response_head parse_head(std::string_view method, std::string_view header_section, http1_close_policy close_policy = http1_close_policy::allow_reuse, std::span<const ruvia::http_header_view> request_headers = {}) {
     auto result_value = parse_result(method, header_section, close_policy, request_headers);
-    auto* parsed_value = result_value.parsed();
+    auto* parsed_value = result_value.get_if<http1_parsed_client_response_head>();
     if (parsed_value == nullptr) {
         throw std::runtime_error("test expected a parsed HTTP/1 response head");
     }
@@ -356,52 +370,41 @@ inline parsed_response parse_response(std::string_view method, std::string_view 
 
 inline bool parse_fails(std::string_view method, std::string_view header_section, http1_close_policy close_policy = http1_close_policy::allow_reuse, std::span<const ruvia::http_header_view> request_headers = {}) {
     const auto result_value = parse_result(method, header_section, close_policy, request_headers);
-    return result_value.failure() != nullptr;
+    return result_value.holds<ruvia::http1_client_response_parse_failure>();
 }
 
-inline const ruvia::http1_client_known_length_response& require_known_length(const ruvia::http1_client_response_plan& plan) {
-    const auto* known_length = plan.known_length();
-    if (known_length == nullptr) {
-        throw std::runtime_error("test expected exact-length response framing");
+// The framing of a final response, checked to be of `kind`.
+inline const ruvia::http1_message_framing& require_framing(const ruvia::http1_client_response_plan& plan, ruvia::http1_framing_kind kind) {
+    const auto* framing = plan.framing();
+    if (framing == nullptr || framing->kind() != kind) {
+        throw std::runtime_error("test expected another response framing");
     }
-    return *known_length;
+    return *framing;
 }
 
-inline const ruvia::http1_client_chunked_response& require_chunked(const ruvia::http1_client_response_plan& plan) {
-    const auto* chunked = plan.chunked();
-    if (chunked == nullptr) {
-        throw std::runtime_error("test expected chunked response framing");
-    }
-    return *chunked;
+inline const ruvia::http1_message_framing& require_known_length(const ruvia::http1_client_response_plan& plan) {
+    return require_framing(plan, ruvia::http1_framing_kind::known_length);
 }
 
-inline const ruvia::http1_client_close_delimited_response& require_close_delimited(const ruvia::http1_client_response_plan& plan) {
-    const auto* close_delimited = plan.close_delimited();
-    if (close_delimited == nullptr) {
-        throw std::runtime_error("test expected close-delimited response framing");
-    }
-    return *close_delimited;
+inline const ruvia::http1_message_framing& require_chunked(const ruvia::http1_client_response_plan& plan) {
+    return require_framing(plan, ruvia::http1_framing_kind::chunked);
 }
 
-inline const ruvia::http1_client_response_without_content& require_without_content(const ruvia::http1_client_response_plan& plan) {
-    const auto* without_content = plan.without_content();
-    if (without_content == nullptr) {
-        throw std::runtime_error("test expected a final response without content");
-    }
-    return *without_content;
+inline const ruvia::http1_message_framing& require_close_delimited(const ruvia::http1_client_response_plan& plan) {
+    return require_framing(plan, ruvia::http1_framing_kind::close_delimited);
 }
 
-inline std::size_t active_plan_alternative_count(const ruvia::http1_client_response_plan& plan) noexcept {
-    return static_cast<std::size_t>(plan.informational() != nullptr) + static_cast<std::size_t>(plan.without_content() != nullptr) + static_cast<std::size_t>(plan.known_length() != nullptr) + static_cast<std::size_t>(plan.chunked() != nullptr) + static_cast<std::size_t>(plan.close_delimited() != nullptr) + static_cast<std::size_t>(plan.connect_tunnel() != nullptr) + static_cast<std::size_t>(plan.protocol_upgrade() != nullptr);
+inline const ruvia::http1_message_framing& require_without_content(const ruvia::http1_client_response_plan& plan) {
+    return require_framing(plan, ruvia::http1_framing_kind::no_content);
 }
 
 inline http1_client_response_parse_error parse_failure_error(std::string_view method, std::string_view header_section, std::span<const ruvia::http_header_view> request_headers = {}) {
     const auto result_value = parse_result(method, header_section, http1_close_policy::allow_reuse, request_headers);
-    const auto* failure = result_value.failure();
+    const auto* failure = result_value.get_if<ruvia::http1_client_response_parse_failure>();
     if (failure == nullptr) {
         throw std::runtime_error("test expected an HTTP/1 response parse failure");
     }
-    return *failure;
+    return failure->error();
 }
 
 // A multipart/form-data Content-Type whose boundary parameter is `value` as a
@@ -421,7 +424,7 @@ inline http1_client_response_parse_error parse_failure_error(std::string_view me
 // Builds a boundary through parse_multipart_boundary, the Content-Type route.
 [[nodiscard]] inline ruvia::multipart_boundary make_multipart_boundary(std::string_view value) {
     const auto parsed = ruvia::parse_multipart_boundary(multipart_boundary_content_type(value));
-    if (const auto* boundary = parsed.boundary()) {
+    if (const auto* boundary = std::get_if<ruvia::multipart_boundary>(&parsed)) {
         return *boundary;
     }
     throw std::invalid_argument("invalid test multipart boundary");

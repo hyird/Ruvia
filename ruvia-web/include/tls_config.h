@@ -8,6 +8,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <variant>
 #include <vector>
 
 #include "ip_address.h"
@@ -34,8 +35,8 @@ struct tls_identity_config final {
     std::string certificate_chain_pem_{};
     std::string private_key_pem_{};
     std::string private_key_password_{};
-    // HTTPS listener identities only (tls_config's identity_, sni_ and
-    // local_addresses_); clients and tls_certificate_store reject a non-empty
+    // HTTPS listener identities only (tls_fixed_identities' primary_, sni_
+    // and local_addresses_); clients and tls_certificate_store reject a non-empty
     // one with std::invalid_argument. The DER OCSPResponse (RFC 6960 §4.2.1)
     // stapled with this identity (RFC 6066 §8 status_request; in TLS 1.3 the
     // leaf's CertificateEntry extension, RFC 8446 §4.4.2.1), sent only to a
@@ -172,17 +173,41 @@ struct tls_local_address_config final {
     tls_identity_config identity_{};
 };
 
-// One HTTPS listener's identities. The listener negotiates TLS 1.2 or 1.3;
+// Identities fixed in configuration. Each handshake selects once, when its
+// ClientHello is processed: an exact sni_ host, else a wildcard sni_ host,
+// else a local_addresses_ entry, else primary_. A client offering no
+// server_name, or one matching nothing, is thus still served: a product
+// choice for single-certificate and wildcard deployments, deliberately not
+// RFC 9325 §3.7's unrecognized_name alert.
+struct tls_fixed_identities final {
+    tls_identity_config primary_{};
+    std::vector<tls_sni_config> sni_{};
+    std::vector<tls_local_address_config> local_addresses_{};
+};
+
+// Every handshake presents the certificate currently stored under id_ in a
+// live library shared by every worker and both TLS transports. store_ must
+// not be null and id_ not zero (std::invalid_argument). Updating the library
+// never rebuilds contexts, ticket keys or caches.
+struct tls_stored_identity final {
+    std::shared_ptr<tls_certificate_store> store_;
+    tls_certificate_id id_{};
+};
+
+// select_ chooses, per handshake, the ID to present from a live library
+// shared by every worker and both TLS transports. Neither pointer may be null
+// (std::invalid_argument). Updating the library never rebuilds contexts,
+// ticket keys or caches.
+struct tls_selected_identities final {
+    std::shared_ptr<tls_certificate_store> store_;
+    std::shared_ptr<const tls_certificate_selector> select_;
+};
+
+// One HTTPS listener's TLS settings. The listener negotiates TLS 1.2 or 1.3;
 // its TLS 1.2 suites are ECDHE with AEAD only, chosen by server preference;
 // renegotiation is refused; ALPN selects h2, http/1.1 or http/1.0. The paired
 // HTTP/3 service (listen_config::http3_)
 // uses the same identities over QUIC with TLS 1.3 only and ALPN h3 only.
-// Without certificate_store_, each handshake selects once, when its
-// ClientHello is processed: an exact sni_ host, else a
-// wildcard sni_ host, else a local_addresses_ entry, else the primary
-// identity_. A client offering no server_name, or one matching nothing, is
-// thus still served: a product choice for single-certificate and wildcard
-// deployments, deliberately not RFC 9325 §3.7's unrecognized_name alert.
 // Sessions resume across workers of the listener, in every supported TLS
 // version only under the server_name (compared ASCII case-insensitively) they
 // were established with, and across application::replace_tls_identities(). Ticket
@@ -195,10 +220,10 @@ struct tls_local_address_config final {
 // answer 421 to "https" targets. Peers in trusted_proxy_config are exempt
 // from both checks.
 struct tls_config final {
-    tls_identity_config identity_{};
+    // Exactly one identity source: identities fixed in configuration, one ID
+    // of a live library, or a per-handshake selector over a live library.
+    std::variant<tls_fixed_identities, tls_stored_identity, tls_selected_identities> identities_{};
     tls_client_certificate_config client_certificates_{};
-    std::vector<tls_sni_config> sni_{};
-    std::vector<tls_local_address_config> local_addresses_{};
     // 1..max_outgoing_tls_records.
     std::uint64_t max_outgoing_records_{max_outgoing_tls_records};
     // The ALPN protocols (RFC 7301) a listener_dispatch::connection listener
@@ -208,14 +233,6 @@ struct tls_config final {
     // offering no ALPN completes it without a protocol. A routes listener
     // negotiates its own HTTP versions and rejects a non-empty list.
     std::vector<std::string> alpn_{};
-    // Optional live library, shared by every worker and both TLS transports.
-    // With a library, fixed identity_/sni_/local_addresses_ must be empty.
-    // Without a selector, default_certificate_ selects an ID. A selector must
-    // be paired with a library and completely replaces fixed selection.
-    // Updating the library never rebuilds contexts, ticket keys or caches.
-    std::shared_ptr<tls_certificate_store> certificate_store_;
-    std::shared_ptr<const tls_certificate_selector> select_certificate_;
-    tls_certificate_id default_certificate_{};
 };
 
 }  // namespace ruvia

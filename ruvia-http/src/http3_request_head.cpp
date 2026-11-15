@@ -19,8 +19,6 @@
 #include "http_protocol.h"
 #include "http_request.h"
 #include "http_uri_syntax.h"
-#include "websocket_handshake.h"
-#include "websocket_negotiation.h"
 
 namespace ruvia {
 
@@ -64,13 +62,6 @@ std::string_view http3_request_head::protocol() const& noexcept {
 
 bool http3_request_head::connect() const noexcept {
     return classify_http_method(method()) == http_known_method::connect;
-}
-
-websocket_handshake_validation_result validate_http3_websocket_handshake(const http3_request_head& head, const http_request& request, websocket_handshake_validation_options options) noexcept {
-    if (!head.connect() || http_canonical_extended_connect_protocol(head.protocol()) != "websocket" || head.stream_ended() || (head.declared_content_length().has_value() && *head.declared_content_length() != 0)) {
-        return websocket_handshake_validation_result::make_invalid_request();
-    }
-    return detail::validate_extended_connect_websocket_headers(request, options);
 }
 
 bool http3_request_head::validate() {

@@ -309,7 +309,7 @@ bool http2_connection::finish_request_head(http2_stream_state& stream) {
     }
     if (stream.has_protocol()) {
         // RFC 8441 §4: Extended CONNECT requires our SETTINGS_ENABLE_CONNECT_PROTOCOL.
-        if (!received_peer_settings_ || stream.request_known_method() != http_known_method::connect || !stream.has_scheme() || !stream.has_path() || !stream.has_authority() || !is_valid_binary_request_authority(stream.request_scheme(), stream.request_authority()) || !http_binary_request_path_matches_method_and_scheme(stream.request_known_method(), stream.request_scheme(), stream.request_path()) || !http2_connect_content_length_acceptable(stream)) {
+        if (!peer_settings_.has_value() || stream.request_known_method() != http_known_method::connect || !stream.has_scheme() || !stream.has_path() || !stream.has_authority() || !is_valid_binary_request_authority(stream.request_scheme(), stream.request_authority()) || !http_binary_request_path_matches_method_and_scheme(stream.request_known_method(), stream.request_scheme(), stream.request_path()) || !http2_connect_content_length_acceptable(stream)) {
             return false;
         }
         // RFC 8441 defines websocket extended CONNECT only for HTTP(S) URI
@@ -358,7 +358,7 @@ bool http2_connection::finish_response_head(http2_stream_state& stream, header_b
         if (block.status_->status() == http_status::continue_ && stream.release_request_continue()) {
             signal = http_client_request_content_signal::continue_;
         }
-        publish_event(http2_event(http2_informational_head_event(stream.id(), std::move(head), signal)));
+        publish_event(http2_event(http_stream_event_access::make<http2_informational_head_event>(stream.id(), std::move(head), signal)));
         return true;
     }
     (void)stream.cancel_pending_request_continue();
@@ -446,7 +446,7 @@ void http2_connection::finish_push_promise(const nghttp2_frame& frame, header_bl
     request.method_ = scratch.request_method();
     request.scheme_ = scratch.request_scheme();
     request.authority_ = scratch.request_authority();
-    request.path_ = scratch.request_path();
+    request.target_ = scratch.request_path();
     request.headers_.reserve(scratch.remote_header_count() + static_cast<std::size_t>(scratch.has_cookie()));
     for (std::size_t i = 0; i < scratch.remote_header_count(); ++i) {
         const auto field = scratch.remote_header_at(i);

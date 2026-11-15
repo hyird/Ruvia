@@ -83,7 +83,7 @@ ruvia::listen_config raw(std::uint16_t port) {
 }
 
 ruvia::listen_config secure(ruvia::borrowed_text address, std::uint16_t tcp, const ruvia::test::tls_identity& identity, std::uint16_t udp = 0) {
-    ruvia::listen_config result{.address_ = address, .https_ = tcp, .tls_ = {.identity_ = {.certificate_chain_file_ = identity.ca_file_, .private_key_file_ = identity.private_key_file()}}, .dispatch_ = ruvia::listener_dispatch::request_stream};
+    ruvia::listen_config result{.address_ = address, .https_ = tcp, .tls_ = {.identities_ = ruvia::tls_fixed_identities{.primary_ = {.certificate_chain_file_ = identity.ca_file_, .private_key_file_ = identity.private_key_file()}}}, .dispatch_ = ruvia::listener_dispatch::request_stream};
 #if defined(RUVIA_ENABLE_HTTP3)
     if (udp != 0) {
         result.http3_ = udp;

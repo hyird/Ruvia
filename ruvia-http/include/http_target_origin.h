@@ -151,6 +151,6 @@ private:
 //   empty authority, which RFC 9112 §3.3 completes with the server's
 //   configured default rather than a client-chosen name.
 // The port is not compared: certificates name hosts, not ports. Allocation free.
-[[nodiscard]] http_target_origin decide_http_target_origin(const http_request& request, http_target_origin_connection connection) noexcept;
+[[nodiscard]] http_target_origin plan_http_target_origin(const http_request& request, http_target_origin_connection connection) noexcept;
 
 }  // namespace ruvia

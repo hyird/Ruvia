@@ -304,7 +304,7 @@ TEST(Ruvia, server_observers_see_client_hellos_and_http2_input_by_connection_id)
         .address_ = "127.0.0.1",
         .http_ = http_endpoint.port(),
         .https_ = https_endpoint.port(),
-        .tls_ = {.identity_ = {.certificate_chain_file_ = identity.ca_file_, .private_key_file_ = identity.private_key_file()}},
+        .tls_ = {.identities_ = ruvia::tls_fixed_identities{.primary_ = {.certificate_chain_file_ = identity.ca_file_, .private_key_file_ = identity.private_key_file()}}},
     };
 #if defined(RUVIA_ENABLE_HTTP3)
     ruvia::test::udp_port_reservation udp_reservation(io);

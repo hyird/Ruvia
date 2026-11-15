@@ -117,38 +117,40 @@ ruvia::app().listen({
     .https_ = 8443,
     .http3_ = 8443,
     .tls_ = {
-        .identity_ = {
-            .certificate_chain_file_ = "certs/server.crt",
-            .private_key_file_ = "certs/server.key",
+        .identities_ = ruvia::tls_fixed_identities{
+            .primary_ = {
+                .certificate_chain_file_ = "certs/server.crt",
+                .private_key_file_ = "certs/server.key",
+            },
+            .sni_ = {
+                {
+                    .host_ = "api.example.com",
+                    .identity_ = {
+                        .certificate_chain_file_ = "certs/api.crt",
+                        .private_key_file_ = "certs/api.key",
+                    },
+                },
+                {
+                    .host_ = "*.example.com",
+                    .identity_ = {
+                        .certificate_chain_pem_ = wildcard_chain_pem,  // 内存 PEM
+                        .private_key_pem_ = wildcard_key_pem,
+                    },
+                },
+            },
+            .local_addresses_ = {
+                {
+                    .address_ = "192.0.2.10",
+                    .identity_ = {
+                        .certificate_chain_file_ = "certs/ip.crt",
+                        .private_key_file_ = "certs/ip.key",
+                    },
+                },
+            },
         },
         .client_certificates_ = {
             .ca_file_ = "certs/ca.crt",
             .requirement_ = ruvia::tls_client_certificate_requirement::optional,
-        },
-        .sni_ = {
-            {
-                .host_ = "api.example.com",
-                .identity_ = {
-                    .certificate_chain_file_ = "certs/api.crt",
-                    .private_key_file_ = "certs/api.key",
-                },
-            },
-            {
-                .host_ = "*.example.com",
-                .identity_ = {
-                    .certificate_chain_pem_ = wildcard_chain_pem,  // 内存 PEM
-                    .private_key_pem_ = wildcard_key_pem,
-                },
-            },
-        },
-        .local_addresses_ = {
-            {
-                .address_ = "192.0.2.10",
-                .identity_ = {
-                    .certificate_chain_file_ = "certs/ip.crt",
-                    .private_key_file_ = "certs/ip.key",
-                },
-            },
         },
     },
     .auto_https_redirect_ = true,
@@ -168,12 +170,13 @@ ruvia::app().listen({
 - HTTP/3 的超时与连接级排空复用 HTTP/2 的语义：`idle_timeout_` 同时作为 QUIC `max_idle_timeout`（未设置则不启用），握手受 `header_completion_timeout_` 约束；请求体超过 `request_body_timeout_` / `body_completion_timeout_`、或对端超过 `write_timeout_` 未确认输出、或一次流写入跨越其全部等待超过 `write_completion_timeout_` 的流以 `H3_REQUEST_CANCELLED` 单独重置；对端放弃的请求流（`RESET_STREAM`，含首部未解码的流；请求已结束时为 `STOP_SENDING`，每流计一次）比已完成响应多出 1000 条（与 HTTP/2 Rapid-Reset 同一上限）时以 `H3_EXCESSIVE_LOAD` 关闭连接；达到 `max_requests_per_connection_` 或连接超时时先发 shutdown-notice GOAWAY，经 `min(1 s, 3×PTO)` 后发最终 GOAWAY，所有已接纳流结束后以 `H3_NO_ERROR` 关闭连接；`stop()` 则立即以 `H3_NO_ERROR` 关闭。
 - 服务端与数据库、Redis 客户端共用 `tls_config.h` 中的 `tls_identity_config`（证书链、私钥与可选口令）。每个身份恰好使用一种来源：两个 PEM 文件（`certificate_chain_file_` / `private_key_file_`），或内存 PEM 文本（`certificate_chain_pem_` 为叶证书后接其链，`private_key_pem_` 为可加密私钥）；混用或只给一半抛出 `std::invalid_argument`。路径为 `std::filesystem::path`，不得为空或含 NUL，以 UTF-8 交给 OpenSSL 与数据库驱动，Windows 原生路径不经过 ANSI 代码页。内存 PEM 仅供 HTTPS 监听器使用，数据库、Redis 与 HTTP 客户端读取身份文件并拒绝它。凭据解析后清除操作自身持有的口令与内存 PEM 副本；`application::listen()` 在启动前同步解析，独立宿主的 `listen()` 只暂存，解析推迟至异步启动。
 - `tls_.client_certificates_.requirement_` 支持 `tls_client_certificate_requirement::optional` 或 `required`（双向 TLS / mTLS）。先用 `const auto connection = c.conn();` 保存元数据，再通过 `connection.tls()->client_certificate_subject()` 读取 optional 主题：无值表示未出示证书，有值空串表示已验证但 Subject DN 为空的证书（[RFC 5280 §4.1.2.6](https://www.rfc-editor.org/rfc/rfc5280.html#section-4.1.2.6)）；不能用文本是否为空判断证书存在性。主题提取失败终止该连接并报告，不降级为未认证身份。
-- **固定身份选择**：未设置 `certificate_store_` 时，每次握手在处理 ClientHello 时选定一次身份并安装到该连接，优先级为精确 `sni_` 主机名 > 通配 `sni_` 主机名 > `local_addresses_` > 主身份 `identity_`；HelloRetryRequest 之后的第二个 ClientHello 沿用首次所选。
+- **身份来源（`tls_config::identities_`）**：`std::variant<tls_fixed_identities, tls_stored_identity, tls_selected_identities>`，三种来源互斥，类型上无法同时书写；默认是空的 `tls_fixed_identities`。
+- **固定身份选择（`tls_fixed_identities`）**：每次握手在处理 ClientHello 时选定一次身份并安装到该连接，优先级为精确 `sni_` 主机名 > 通配 `sni_` 主机名 > `local_addresses_` > 主身份 `primary_`；HelloRetryRequest 之后的第二个 ClientHello 沿用首次所选。
   - **SNI**：`sni_` 按 SNI 主机名（ASCII 不区分大小写）匹配；`host_` 可写作 `*.example.com`，通配符只能是完整的最左标签并恰好覆盖一个标签（RFC 6125 §6.4.3：匹配 `a.example.com`，不匹配 `example.com` 与 `a.b.example.com`）。
   - **本端地址**：`local_addresses_` 按连接到达的本端地址选择身份，`address_` 须为非未指定的数字 IP（IPv4 映射 IPv6 地址等同其 IPv4 形式），用于客户端以 IP 字面量连接的部署（RFC 6066 禁止在 SNI 中携带 IP）。TCP 与 HTTP/3 都使用实际目的地址，支持通配监听；QUIC 跨 worker 转交保留目的地址与接口，回复使用对应源地址。
   - **兜底**：客户端未发送 server_name 或名称与地址都不匹配时使用主证书完成握手。这是为单证书与通配符证书部署做出的产品选择，不发送 RFC 9325 §3.7 建议的 `unrecognized_name` 告警。
-- **OCSP Stapling**：`tls_identity_config::ocsp_response_` 为该身份的 DER `OCSPResponse`，与证书一起选择；`identity_`、每个 `sni_` 与 `local_addresses_` 项各自设置，绝不借用其他身份的响应。仅向请求 `status_request` 的客户端发送；空值不附送，TLS 1.2 使用 CertificateStatus，TLS 1.3（含 HTTP/3）使用叶证书的 CertificateEntry 扩展。
-  - **输入与更新**：加载时拒绝非法 DER、BER 与尾随字节（`std::invalid_argument`），不与 `certificate_store_` 混用。不代为获取、刷新、验证签名或检查有效期；部署方负责提供相应证书的有效响应，使用 `replace_tls_identities()` 连同身份更新，新握手立即采用，已选身份的握手保留原证书与响应。
+- **OCSP Stapling**：`tls_identity_config::ocsp_response_` 为该身份的 DER `OCSPResponse`，与证书一起选择；`primary_`、每个 `sni_` 与 `local_addresses_` 项各自设置，绝不借用其他身份的响应。仅向请求 `status_request` 的客户端发送；空值不附送，TLS 1.2 使用 CertificateStatus，TLS 1.3（含 HTTP/3）使用叶证书的 CertificateEntry 扩展。
+  - **输入与更新**：加载时拒绝非法 DER、BER 与尾随字节（`std::invalid_argument`），仅固定身份携带，证书库身份不附送。不代为获取、刷新、验证签名或检查有效期；部署方负责提供相应证书的有效响应，使用 `replace_tls_identities()` 连同身份更新，新握手立即采用，已选身份的握手保留原证书与响应。
   - **仅限服务端**：出站客户端（HTTP、Redis、数据库）与 `tls_certificate_store::insert_or_assign()` 收到非空 `ocsp_response_` 抛出 `std::invalid_argument`。
 - **运行期替换**：`co_await app().replace_tls_identities(caller, {.address_ = "0.0.0.0", .port_ = 8443}, new_tls)` 替换该 HTTPS 端点及其 HTTP/3 服务的固定身份集合，或证书库与选择策略。`ruvia::listener_endpoint` 以 `address_`（默认 `"0.0.0.0"`，按 `listen_config::address_` 同一规则规范化）与 `port_`（该监听配置的 `http_` 或 `https_` 端口）指名一个 TCP 服务，HTTP/3 服务经其 HTTPS 端点指名。
   - **校验在前**：候选凭据的文件读取、PEM 与 CA 加载、TLS 上下文准备卸载至 `caller` 借用的有界 `blocking_pool`，不阻塞事件循环。未知端点、非 HTTPS 端点、非法设置，或 `client_certificates_` 与 `max_outgoing_records_` 与现值不同，抛出 `std::invalid_argument`；文件不可读、PEM 无效或证书私钥不匹配抛出系统错误。失败保留原集合。
@@ -181,7 +184,7 @@ ruvia::app().listen({
   - **线程与生命周期**：在显式 `caller` 所属 worker 上 `co_await`，允许业务 worker 发起；应用未运行（含启动钩子与停机期间）抛出 `std::logic_error`。与停机竞争时等待已投递控制及其负载退出，再传播失败，不提前销毁运行时；未成功提交的监听定义保留原集合。已采用新集合的 worker 只可能将其用于与停机竞争的握手，这些连接随停机关闭。
   - **持久化**：成功替换同时更新监听器定义，应用停止后再次 `run()` 继续使用新集合；停止期间仍用 `listen()` 整体替换监听配置。并发调用按发布顺序生效。
 - **TCP TLS 版本**：入站服务、出站 HTTP/原始 TCP、Redis 与数据库最低为 TLS 1.2，按 [RFC 8996 §2-3](https://www.rfc-editor.org/rfc/rfc8996.html#section-2) 与 [RFC 9325 §3.1.1](https://www.rfc-editor.org/rfc/rfc9325.html#section-3.1.1) 拒绝更早版本，并拒绝压缩与重协商。TLS 1.2 仅使用 ECDHE + AEAD（AES-128-GCM 优先），TLS 1.3 使用 OpenSSL 默认 AEAD 套件；证书链、SAN 与密钥强度检查仍委托原 [OpenSSL 安全回调](https://docs.openssl.org/3.0/man3/SSL_CTX_set_security_level/)。
-- **出站 TLS 下限**：`client_tls_config::minimum_version_` 接受 `tls_version::tls_1_2`（默认）与 `tls_1_3`，覆盖 HTTP、原始 TCP、Redis 与数据库客户端；协议自身的更高下限不被配置降低。
+- **出站 TLS 下限**：`client_tls_config::minimum_version_`（`"client_transport_config.h"`，与 `client_tcp_config` 同为各出站客户端共用的传输配置）接受 `tls_version::tls_1_2`（默认）与 `tls_1_3`，覆盖 HTTP、原始 TCP、Redis 与数据库客户端；协议自身的更高下限不被配置降低。
 - **HTTP 协议下限**：HTTP/3 / QUIC 仅 TLS 1.3。`routes` 与 `request_stream` 的 ALPN 按 `h2`、`http/1.1`、`http/1.0` 选择；没有共同协议时以 `no_application_protocol` 告警失败。
 - `tls_.alpn_` 只用于 `listener_dispatch::connection` 的 HTTPS 服务：按服务器偏好顺序提供的 ALPN 协议名（每个 1..255 字节，为空时依次为 `h2`、`http/1.1`）；客户端提供的 ALPN 均不在列表中时以 `no_application_protocol` 告警失败（RFC 7301 §3.2），未提供 ALPN 时握手照常完成且不选协议。`routes` 与 `request_stream` 监听器设置非空列表、名称长度越界或无 `https_` 时 `listen()` 抛 `std::invalid_argument`。
 - `tls_.max_outgoing_records_`（默认与上限均为 `max_outgoing_tls_records` = `2^23`，范围 `1..2^23`；客户端 `client_tls_config` 同一常量）限制每条连接发出的全部 TLS 记录，计入握手与 KeyUpdate 且更新密钥不重置；到达上限时终止连接，以低于 RFC 9846 §5.5 的 AES-GCM 单密钥用量上限。
@@ -218,15 +221,14 @@ ruvia::app().listen({
 | `co_await tls_certificate_store::insert_or_assign(caller, id, identity)` | 非零 ID，异步解析并新增或替换单个身份；失败不改变库，清除操作自身持有的口令与 PEM 副本 |
 | `co_await erase(caller, id)` | 异步删除并返回是否存在该 ID |
 | `contains(id)` / `size()` | 同步查询；库可独立使用，全部方法线程安全 |
-| `tls_config::certificate_store_` | 共享证书库；不能同时配置固定 `identity_`、`sni_` 或 `local_addresses_` |
-| `tls_config::default_certificate_` | 未配置选择器时使用的证书 ID |
-| `tls_config::select_certificate_` | `shared_ptr<const tls_certificate_selector>`；必须配合证书库，完全接管身份选择 |
+| `tls_stored_identity{.store_, .id_}` | `tls_config::identities_` 的证书库来源：每次握手出示库中 `id_` 当前的证书；`store_` 为空或 `id_` 为零抛出 `std::invalid_argument` |
+| `tls_selected_identities{.store_, .select_}` | `tls_config::identities_` 的选择器来源：`select_` 为 `shared_ptr<const tls_certificate_selector>`，按握手从库中选择 ID；任一指针为空抛出 `std::invalid_argument` |
 | `tls_certificate_selection` | 连接 ID、真实本端/对端地址（`optional<ip_address>` / `ip_address`）及端口、SNI、QUIC 标志、legacy version，以及主机字节序 `span<const uint16_t>` 的 cipher suites、signature algorithms、supported versions/groups 与 `span<const string_view>` 的 ALPN 协议名借用视图 |
 | `offers_signature_algorithm(code)` | 按 TLS 签名方案编号检查客户端能力，可用于 RSA / ECDSA 选择 |
 
 - **发布与所有权**：每次变更原子发布不可变快照；握手在调用选择器前取得快照，期间替换或删除所选 ID 不影响该握手。已建立连接保留原证书引用，不重建上下文、会话缓存或票据密钥。
 - **执行与取消**：在 `caller` 所属 worker 上等待变更；已有身份的快照复制、解析及删除卸载至其借用的有界 `blocking_pool`。缺池、满池、解析失败或调用方停止均不发布候选；已开始的后台作业仅持有自有输入，取消等待后不能偷偷提交。不存在的 ID 可直接返回 `false`，不占阻塞池。
-- **拒绝规则**：选择器返回 `nullopt`、抛异常或返回快照中不存在的 ID 时握手失败；恢复握手也执行选择，不绕过拒绝策略。没有选择器时，缺失的默认 ID 同样拒绝握手。
+- **拒绝规则**：选择器返回 `nullopt`、抛异常或返回快照中不存在的 ID 时握手失败；恢复握手也执行选择，不绕过拒绝策略。`tls_stored_identity` 的 `id_` 在快照中缺失时同样拒绝握手。
 - **回调边界**：TCP TLS 与 QUIC 共用选择入口，不要求启用观察回调；视图仅在选择期间有效，不暴露 OpenSSL 对象。不同 worker 可并发调用，目标自行同步可变状态；文件读取与 PEM 解析只发生在库更新时。
 
 
@@ -301,7 +303,7 @@ ruvia::app().listen({
 
 ---
 
-### 1.5 Worker 状态、Worker 资源与跨 Worker 任务投递（`"worker_state.h"`, `"worker_services.h"`）
+### 1.5 Worker 状态、Worker 资源与跨 Worker 任务投递（`"web_worker.h"`, `"worker_services.h"`）
 
 每个业务 worker 可绑定无锁局部状态，并支持从任意线程或控制器向指定 worker 投递异步任务：
 
@@ -408,7 +410,7 @@ ruvia::task<void> echo(ruvia::server_connection& connection) {
 
 ruvia::app()
     .listen({.address_ = "0.0.0.0", .http_ = 7000, .https_ = 7443,
-        .tls_ = {.identity_ = {.certificate_chain_file_ = "certs/server.crt", .private_key_file_ = "certs/server.key"},
+        .tls_ = {.identities_ = ruvia::tls_fixed_identities{.primary_ = {.certificate_chain_file_ = "certs/server.crt", .private_key_file_ = "certs/server.key"}},
             .alpn_ = {"echo/1"}},
         .dispatch_ = ruvia::listener_dispatch::connection})
     .callbacks({.connection_ = &echo});
@@ -461,7 +463,7 @@ ruvia::task<void> proxy(ruvia::request_stream& stream) {
 
 ruvia::app()
     .listen({.address_ = "0.0.0.0", .http_ = 8080, .https_ = 8443, .http3_ = 8443,
-        .tls_ = {.identity_ = {.certificate_chain_file_ = "certs/server.crt", .private_key_file_ = "certs/server.key"}},
+        .tls_ = {.identities_ = ruvia::tls_fixed_identities{.primary_ = {.certificate_chain_file_ = "certs/server.crt", .private_key_file_ = "certs/server.key"}}},
         .dispatch_ = ruvia::listener_dispatch::request_stream})
     .callbacks({.request_stream_ = &proxy});
 ```

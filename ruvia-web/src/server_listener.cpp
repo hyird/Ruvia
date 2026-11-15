@@ -321,7 +321,9 @@ namespace ruvia {
 namespace {
 
 [[nodiscard]] bool has_tls_configuration(const tls_config& config) noexcept {
-    return !config.identity_.empty() || config.client_certificates_.ca_file_.has_value() || config.client_certificates_.requirement_ != tls_client_certificate_requirement::optional || !config.sni_.empty() || !config.local_addresses_.empty() || config.certificate_store_ != nullptr || static_cast<bool>(config.select_certificate_) || config.default_certificate_ != 0;
+    const auto* fixed = std::get_if<tls_fixed_identities>(&config.identities_);
+    const bool has_identities = fixed == nullptr || !fixed->primary_.empty() || !fixed->sni_.empty() || !fixed->local_addresses_.empty();
+    return has_identities || config.client_certificates_.ca_file_.has_value() || config.client_certificates_.requirement_ != tls_client_certificate_requirement::optional;
 }
 
 // Validates listen_config::dispatch_ and tls_.alpn_. For a connection-dispatch

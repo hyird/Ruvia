@@ -26,12 +26,12 @@
 #include "task.h"
 #include "task_scope.h"
 #include "tls_server.h"
+#include "web_worker.h"
 #include "worker_capabilities.h"
 #include "worker_connections.h"
 #include "worker_ref.h"
 #include "worker_runtime.h"
 #include "worker_signal.h"
-#include "worker_state.h"
 #if defined(RUVIA_ENABLE_HTTP3)
 #include "http3_endpoint.h"
 #endif

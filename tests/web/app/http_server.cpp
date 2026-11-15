@@ -111,7 +111,7 @@ TEST(Ruvia, independent_servers_share_an_external_loop_without_routes_or_shared_
         const auto plain = first.endpoint().port();
         const auto another = second.endpoint().port();
         server.listen({.address_ = "127.0.0.1", .http_ = plain, .dispatch_ = ruvia::listener_dispatch::request_stream});
-        ruvia::listen_config tls{.address_ = "127.0.0.1", .http_ = secure.endpoint().port(), .https_ = secure.endpoint().port(), .tls_ = {.identity_ = {.certificate_chain_file_ = identity.ca_file_, .private_key_file_ = identity.private_key_file()}}, .dispatch_ = ruvia::listener_dispatch::request_stream};
+        ruvia::listen_config tls{.address_ = "127.0.0.1", .http_ = secure.endpoint().port(), .https_ = secure.endpoint().port(), .tls_ = {.identities_ = ruvia::tls_fixed_identities{.primary_ = {.certificate_chain_file_ = identity.ca_file_, .private_key_file_ = identity.private_key_file()}}}, .dispatch_ = ruvia::listener_dispatch::request_stream};
 #if defined(RUVIA_ENABLE_HTTP3)
         tls.http3_ = udp.endpoint().port();
 #endif
@@ -249,7 +249,7 @@ TEST(Ruvia, independent_server_failed_addition_releases_every_prepared_listener)
         const auto port = good.endpoint().port();
         bool rejected = false;
         try {
-            co_await server.add_listener({.address_ = "127.0.0.1", .http_ = port, .https_ = busy.local_endpoint().port(), .tls_ = {.identity_ = {.certificate_chain_file_ = identity.ca_file_, .private_key_file_ = identity.private_key_file()}}, .dispatch_ = ruvia::listener_dispatch::request_stream});
+            co_await server.add_listener({.address_ = "127.0.0.1", .http_ = port, .https_ = busy.local_endpoint().port(), .tls_ = {.identities_ = ruvia::tls_fixed_identities{.primary_ = {.certificate_chain_file_ = identity.ca_file_, .private_key_file_ = identity.private_key_file()}}}, .dispatch_ = ruvia::listener_dispatch::request_stream});
         } catch (const std::system_error&) {
             rejected = true;
         }
@@ -542,7 +542,7 @@ TEST(Ruvia, independent_server_ipv6_only_validates_inherited_quic_socket_before_
         bool rejected = false;
         std::exception_ptr failure;
         try {
-            const std::array quic{ruvia::listen_config{.address_ = "::", .ipv6_only_ = true, .https_ = endpoint.port(), .http3_ = endpoint.port(), .tls_ = {.identity_ = {.certificate_chain_file_ = identity.ca_file_, .private_key_file_ = identity.private_key_file()}}, .dispatch_ = ruvia::listener_dispatch::request_stream, .inherited_sockets_ = ruvia::listener_sockets{.http3_ = {socket.release()}}}};
+            const std::array quic{ruvia::listen_config{.address_ = "::", .ipv6_only_ = true, .https_ = endpoint.port(), .http3_ = endpoint.port(), .tls_ = {.identities_ = ruvia::tls_fixed_identities{.primary_ = {.certificate_chain_file_ = identity.ca_file_, .private_key_file_ = identity.private_key_file()}}}, .dispatch_ = ruvia::listener_dispatch::request_stream, .inherited_sockets_ = ruvia::listener_sockets{.http3_ = {socket.release()}}}};
             auto prepared = co_await server.prepare_listeners(quic);
         } catch (const std::invalid_argument&) {
             rejected = true;

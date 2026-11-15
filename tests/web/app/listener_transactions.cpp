@@ -165,7 +165,7 @@ TEST(Ruvia, add_listener_prepare_failure_discards_already_adopted_sockets_withou
         .address_ = "127.0.0.1",
         .http_ = addition.endpoint().port(),
         .https_ = blocker.local_endpoint().port(),
-        .tls_ = {.identity_ = {.certificate_chain_file_ = identity.ca_file_, .private_key_file_ = identity.private_key_file()}},
+        .tls_ = {.identities_ = ruvia::tls_fixed_identities{.primary_ = {.certificate_chain_file_ = identity.ca_file_, .private_key_file_ = identity.private_key_file()}}},
         .dispatch_ = ruvia::listener_dispatch::connection,
         .inherited_sockets_ = ruvia::listener_sockets{},
     };
@@ -202,7 +202,7 @@ TEST(Ruvia, mixed_listener_adopts_one_physical_socket_group_for_plain_and_tls_ra
         .address_ = "127.0.0.1",
         .http_ = endpoint.port(),
         .https_ = endpoint.port(),
-        .tls_ = {.identity_ = {.certificate_chain_file_ = identity.ca_file_, .private_key_file_ = identity.private_key_file()}},
+        .tls_ = {.identities_ = ruvia::tls_fixed_identities{.primary_ = {.certificate_chain_file_ = identity.ca_file_, .private_key_file_ = identity.private_key_file()}}},
         .dispatch_ = ruvia::listener_dispatch::connection,
         .inherited_sockets_ = ruvia::listener_sockets{},
     };
@@ -256,7 +256,7 @@ TEST(Ruvia, runtime_tls_listener_preparation_does_not_block_its_caller_worker) {
     entered.acquire();
 
     const auto loop = control_loop();
-    auto addition = loop.start(app.add_listener(loop.worker(), {.address_ = "127.0.0.1", .https_ = secure.endpoint().port(), .tls_ = {.identity_ = {.certificate_chain_file_ = identity.ca_file_, .private_key_file_ = identity.private_key_file()}}, .dispatch_ = ruvia::listener_dispatch::connection}));
+    auto addition = loop.start(app.add_listener(loop.worker(), {.address_ = "127.0.0.1", .https_ = secure.endpoint().port(), .tls_ = {.identities_ = ruvia::tls_fixed_identities{.primary_ = {.certificate_chain_file_ = identity.ca_file_, .private_key_file_ = identity.private_key_file()}}}, .dispatch_ = ruvia::listener_dispatch::connection}));
     std::promise<void> heartbeat;
     auto observed = heartbeat.get_future();
     const auto posted = loop.worker().post([&heartbeat] {

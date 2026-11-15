@@ -19,7 +19,6 @@
 #include "http1_client_request_fields.h"
 #include "http1_connection_plan.h"
 #include "http_authority.h"
-#include "http_client_request_view.h"
 #include "http_connect_udp.h"
 #include "http_connection_fields.h"
 #include "http_field_kind.h"
@@ -30,6 +29,7 @@
 #include "http_message_framing_fields.h"
 #include "http_request.h"
 #include "http_request_expectation.h"
+#include "http_request_head_view.h"
 #include "http_uri_syntax.h"
 #include "http_wire_writer.h"
 
@@ -40,7 +40,7 @@ namespace ruvia::detail {
 [[nodiscard]] bool analyze_http1_client_request_fields(std::span<const http_header_view> headers, http1_client_request_field_facts& facts, http1_client_request_prepare_error& error, http_request_field_source source) noexcept;
 
 struct http1_client_request_prepare_result_access final {
-    using result_type = std::variant<prepared_http1_client_request, http1_client_request_buffer_too_small, http1_client_request_prepare_error>;
+    using result_type = http1_client_request_prepare_result;
 
     [[nodiscard]] static http1_client_exchange_state exchange_state(http_known_method method, http1_close_policy close_policy, http1_client_initial_content_state content_state, std::string offered_upgrade_protocols) noexcept {
         return http1_client_exchange_state(method, close_policy, content_state, std::move(offered_upgrade_protocols));
@@ -196,11 +196,11 @@ struct request_head_write_plan final {
 
 // Every request line, CONNECT included, rejects these wire policies first.
 // CONNECT is always authority-form (RFC 9112 section 3.2.3).
-[[nodiscard]] std::optional<http1_client_request_prepare_error> validate_wire_policy(http1_client_request_wire_policy policy, bool connect) noexcept {
+[[nodiscard]] std::optional<http1_client_request_prepare_error> validate_wire_policy(http1_client_request_wire_policy policy, http_client_request_expectation expectation, bool connect) noexcept {
     if (!is_valid_http1_close_policy(policy.close_policy_)) {
         return http1_client_request_prepare_error::invalid_close_policy;
     }
-    if (!is_valid_http_client_request_expectation(policy.expectation_)) {
+    if (!is_valid_http_client_request_expectation(expectation)) {
         return http1_client_request_prepare_error::invalid_expectation;
     }
     switch (policy.target_form_) {
@@ -215,17 +215,11 @@ struct request_head_write_plan final {
     return http1_client_request_prepare_error::invalid_target_form;
 }
 
-[[nodiscard]] std::optional<http1_client_request_prepare_error> validate_non_connect_request_line(std::string_view method, std::string_view target, http1_client_request_wire_policy policy, http_known_method& known_method) noexcept {
-    if (const auto error = validate_wire_policy(policy, false)) {
-        return error;
-    }
+[[nodiscard]] std::optional<http1_client_request_prepare_error> validate_non_connect_request_line(std::string_view method, std::string_view target, http_known_method& known_method) noexcept {
     if (!is_valid_http_method_token(method)) {
         return http1_client_request_prepare_error::invalid_method;
     }
     known_method = classify_http_method(method);
-    if (known_method == http_known_method::connect) {
-        return http1_client_request_prepare_error::connect_requires_dedicated_entry;
-    }
     if (!detail::is_valid_origin_or_asterisk_form_target(known_method, target)) {
         return http1_client_request_prepare_error::invalid_target;
     }
@@ -246,8 +240,8 @@ struct request_head_write_plan final {
     return content;
 }
 
-[[nodiscard]] detail::http1_client_request_prepare_result_access::result_type prepare_request(const http_origin_view& origin, std::string_view method, http_known_method known_method, std::string_view target, std::span<const http_header_view> headers, const http_request_content_plan& requested_content, std::span<char> head_buffer, http1_client_request_wire_policy policy, std::span<const http_header_view> connect_udp_headers = {}) {
-    if (!detail::is_valid_http_request_field_source(policy.field_source_)) {
+[[nodiscard]] http1_client_request_prepare_result prepare_request(const http_origin_view& origin, std::string_view method, http_known_method known_method, std::string_view target, std::span<const http_header_view> headers, const http_request_content_plan& requested_content, http_client_request_expectation expectation, http_request_field_source field_source, std::span<char> head_buffer, http1_client_request_wire_policy policy, std::span<const http_header_view> connect_udp_headers = {}) {
+    if (!detail::is_valid_http_request_field_source(field_source)) {
         return detail::http1_client_request_prepare_result_access::failure(http1_client_request_prepare_error::invalid_header);
     }
     const bool connect = known_method == http_known_method::connect;
@@ -258,7 +252,7 @@ struct request_head_write_plan final {
     const auto declared = content.declared_length();
     const auto length = declared ? std::optional<std::uint64_t>(declared->value()) : std::nullopt;
     const bool chunked = explicit_content && !length;
-    if (!detail::analyze_http1_client_request_fields(headers, header_facts, error, policy.field_source_)) {
+    if (!detail::analyze_http1_client_request_fields(headers, header_facts, error, field_source)) {
         return detail::http1_client_request_prepare_result_access::failure(error);
     }
     // A sender that will generate trailer fields SHOULD declare them (RFC 9110
@@ -266,7 +260,7 @@ struct request_head_write_plan final {
     if (header_facts.has_trailer_ && !chunked) {
         return detail::http1_client_request_prepare_result_access::failure(http1_client_request_prepare_error::trailer_requires_chunked_content);
     }
-    const bool expect_continue = policy.expectation_ == http_client_request_expectation::continue_;
+    const bool expect_continue = expectation == http_client_request_expectation::continue_;
     const auto content_indication = explicit_content && (!length || *length != 0) ? http_request_content_indication::will_follow : http_request_content_indication::no_content;
     if (!http_client_expectation_is_valid(expect_continue, content_indication)) {
         return detail::http1_client_request_prepare_result_access::failure(http1_client_request_prepare_error::expectation_without_content);
@@ -278,7 +272,7 @@ struct request_head_write_plan final {
         }
         // RFC 9110 section 9.3.7 requires the media description when generating
         // OPTIONS content, not when forwarding an already received request.
-        if (policy.field_source_ == http_request_field_source::generated && content_semantics == http_request_content_semantics::content_type_required && !header_facts.fields_.seen(detail::http_field_kind::content_type)) {
+        if (field_source == http_request_field_source::generated && content_semantics == http_request_content_semantics::content_type_required && !header_facts.fields_.seen(detail::http_field_kind::content_type)) {
             return detail::http1_client_request_prepare_result_access::failure(http1_client_request_prepare_error::options_content_type_required);
         }
     }
@@ -309,7 +303,7 @@ struct request_head_write_plan final {
     if (!head_budget.add(method.size()) || !head_budget.add(1) || !head_budget.add(target_bytes) || !head_budget.add(http11_request_line_suffix.size()) || !head_budget.add(host_prefix.size()) || !head_budget.add(authority_bytes) || !head_budget.add(crlf.size()) || (chunked && !head_budget.add(chunked_header.size())) || (explicit_content && !chunked && (!head_budget.add(content_length_prefix.size()) || !head_budget.add(content_length_value.size()) || !head_budget.add(crlf.size()))) || (expect_continue && (!head_budget.add(expect_prefix.size()) || !head_budget.add(detail::http_continue_expectation_token.size()) || !head_budget.add(crlf.size()))) || (generate_connection_close && !head_budget.add(connection_close.size())) || !head_budget.add(crlf.size())) {
         return detail::http1_client_request_prepare_result_access::failure(http1_client_request_prepare_error::header_too_large);
     }
-    if (!connect_udp_headers.empty() && validate_http_connect_udp_request_to_send({.version_ = http_protocol_version::http11, .method_ = "GET", .authority_ = origin.host(), .path_ = target, .headers_ = connect_udp_headers}).has_value()) {
+    if (!connect_udp_headers.empty() && validate_http_connect_udp_request_to_send(http_protocol_version::http11, {.method_ = "GET", .protocol_ = "connect-udp", .authority_ = origin.host(), .target_ = target, .headers_ = connect_udp_headers}).has_value()) {
         return detail::http1_client_request_prepare_result_access::failure(http1_client_request_prepare_error::invalid_header);
     }
     const auto head_bytes = head_budget.bytes();
@@ -335,17 +329,58 @@ struct request_head_write_plan final {
     return detail::http1_client_request_prepare_result_access::prepared(head, content, expect_continue, std::move(exchange_state));
 }
 
-// The one CONNECT rule set behind both prepare_connect() entries: wire-policy
-// checks first, then the tunnel target (null when the caller's authority is
-// invalid; port 0 is never a tunnel target), emitted in authority-form.
-[[nodiscard]] detail::http1_client_request_prepare_result_access::result_type prepare_connect_request(const http_origin_view* tunnel_origin, std::span<const http_header_view> headers, std::span<char> head_buffer, http1_client_request_wire_policy policy) {
-    if (const auto error = validate_wire_policy(policy, true)) {
+// CONNECT (RFC 9110 section 9.3.6): the tunnel destination is the head's
+// authority, which needs a non-empty, nonzero port, emitted in authority-form
+// as both the request-target and the generated Host.
+[[nodiscard]] http1_client_request_prepare_result prepare_connect_request(const http_request_head_view& request, std::span<char> head_buffer, http1_client_request_wire_policy policy) {
+    if (request.content_.without_content() == nullptr) {
+        return detail::http1_client_request_prepare_result_access::failure(http1_client_request_prepare_error::content_forbidden_for_method);
+    }
+    if (!request.authority_.has_value()) {
+        return detail::http1_client_request_prepare_result_access::failure(http1_client_request_prepare_error::invalid_connect_authority);
+    }
+    const auto parsed_value = parse_http_authority(*request.authority_);
+    if (!parsed_value || parsed_value->port_kind() != http_authority_port_kind::value) {
+        return detail::http1_client_request_prepare_result_access::failure(http1_client_request_prepare_error::invalid_connect_authority);
+    }
+    const auto tunnel_origin = http_origin_view::http({.host_ = parsed_value->host(), .port_ = *parsed_value->port()});
+    if (tunnel_origin.port() == 0) {
+        return detail::http1_client_request_prepare_result_access::failure(http1_client_request_prepare_error::invalid_connect_authority);
+    }
+    return prepare_request(tunnel_origin, "CONNECT", http_known_method::connect, {}, static_cast<std::span<const http_header_view>>(request.headers_), http_request_content_plan::none(), request.expectation_, request.field_source_, head_buffer, policy);
+}
+
+// RFC 9298 section 3.2: GET with Connection: Upgrade and Upgrade: connect-udp.
+// The caller's fields may not carry either; Host remains owned by the writer
+// and joins only the CONNECT-UDP validation.
+[[nodiscard]] http1_client_request_prepare_result prepare_connect_udp_request(const http_origin_view& origin, const http_request_head_view& request, std::span<char> head_buffer, http1_client_request_wire_policy policy) {
+    if (request.content_.without_content() == nullptr) {
+        return detail::http1_client_request_prepare_result_access::failure(http1_client_request_prepare_error::content_forbidden_for_method);
+    }
+    http_known_method known_method = http_known_method::unknown;
+    if (const auto error = validate_non_connect_request_line("GET", request.target_, known_method)) {
         return detail::http1_client_request_prepare_result_access::failure(*error);
     }
-    if (tunnel_origin == nullptr || tunnel_origin->port() == 0) {
-        return detail::http1_client_request_prepare_result_access::failure(http1_client_request_prepare_error::invalid_connect_origin);
+    const auto headers = static_cast<std::span<const http_header_view>>(request.headers_);
+    for (const auto& field : headers) {
+        if (http_ascii_equals_ignore_case(field.name(), "connection")) {
+            return detail::http1_client_request_prepare_result_access::failure(http1_client_request_prepare_error::invalid_connection);
+        }
+        if (http_ascii_equals_ignore_case(field.name(), "upgrade")) {
+            return detail::http1_client_request_prepare_result_access::failure(http1_client_request_prepare_error::invalid_upgrade);
+        }
     }
-    return prepare_request(*tunnel_origin, "CONNECT", http_known_method::connect, {}, headers, http_request_content_plan::none(), head_buffer, policy);
+    detail::http_header_descriptor_storage<http_header_view> staged_fields;
+    staged_fields.reserve(headers.size() + 3U);
+    for (const auto& field : headers) {
+        staged_fields.append(field);
+    }
+    staged_fields.append(http_header_view{detail::http_connection_field_name, detail::http_connection_upgrade_option});
+    staged_fields.append(http_header_view{"Upgrade", "connect-udp"});
+    staged_fields.append(http_header_view{"Host", origin.host()});
+    const auto all_fields = staged_fields.view();
+    const auto emitted_headers = all_fields.first(all_fields.size() - 1U);
+    return prepare_request(origin, "GET", known_method, request.target_, emitted_headers, http_request_content_plan::none(), request.expectation_, request.field_source_, head_buffer, policy, all_fields);
 }
 
 }  // namespace
@@ -381,10 +416,10 @@ std::string_view http1_client_request_prepare_error_message(http1_client_request
             return "invalid HTTP/1 client request method";
         case http1_client_request_prepare_error::invalid_target:
             return "invalid HTTP/1 client request target";
-        case http1_client_request_prepare_error::connect_requires_dedicated_entry:
-            return "CONNECT requires the dedicated HTTP/1 client entry";
-        case http1_client_request_prepare_error::invalid_connect_origin:
-            return "invalid HTTP/1 CONNECT origin";
+        case http1_client_request_prepare_error::invalid_connect_authority:
+            return "invalid HTTP/1 CONNECT authority";
+        case http1_client_request_prepare_error::unsupported_protocol:
+            return "HTTP/1 client request protocol is unsupported";
         case http1_client_request_prepare_error::invalid_header:
             return "invalid HTTP/1 client request header";
         case http1_client_request_prepare_error::host_header_managed_by_writer:
@@ -423,53 +458,33 @@ std::string_view http1_client_request_prepare_error_message(http1_client_request
     return "invalid HTTP/1 client request";
 }
 
-std::variant<prepared_http1_client_request, http1_client_request_buffer_too_small, http1_client_request_prepare_error> http1_client_request_writer::prepare(const http_origin_view& origin, const http_client_request_view& request, std::span<char> head_buffer, http1_client_request_wire_policy policy) const {
-    http_known_method known_method = http_known_method::unknown;
-    if (const auto error = validate_non_connect_request_line(request.method_, request.target_, policy, known_method)) {
+http1_client_request_prepare_result prepare_http1_client_request(const http_origin_view& origin, const http_request_head_view& request, std::span<char> head_buffer, http1_client_request_wire_policy policy) {
+    const auto kind = request.kind();
+    if (const auto error = validate_wire_policy(policy, request.expectation_, kind == http_request_head_kind::connect)) {
         return detail::http1_client_request_prepare_result_access::failure(*error);
     }
-    return prepare_request(origin, request.method_, known_method, request.target_, static_cast<std::span<const http_header_view>>(request.headers_), request.content_, head_buffer, policy);
-}
-
-std::variant<prepared_http1_client_request, http1_client_request_buffer_too_small, http1_client_request_prepare_error> http1_client_request_writer::prepare_connect_udp(const http_origin_view& origin, borrowed_text target, std::span<const http_header_view> headers, std::span<char> head_buffer, http1_client_request_wire_policy policy) const {
-    http_known_method known_method = http_known_method::unknown;
-    if (const auto error = validate_non_connect_request_line("GET", target.view(), policy, known_method)) {
-        return detail::http1_client_request_prepare_result_access::failure(*error);
+    if (!kind.has_value()) {
+        return detail::http1_client_request_prepare_result_access::failure(http1_client_request_prepare_error::unsupported_protocol);
     }
-    for (const auto& field : headers) {
-        if (http_ascii_equals_ignore_case(field.name(), "connection")) {
-            return detail::http1_client_request_prepare_result_access::failure(http1_client_request_prepare_error::invalid_connection);
+    switch (*kind) {
+        case http_request_head_kind::regular: {
+            http_known_method known_method = http_known_method::unknown;
+            if (const auto error = validate_non_connect_request_line(request.method_, request.target_, known_method)) {
+                return detail::http1_client_request_prepare_result_access::failure(*error);
+            }
+            return prepare_request(origin, request.method_, known_method, request.target_, static_cast<std::span<const http_header_view>>(request.headers_), request.content_, request.expectation_, request.field_source_, head_buffer, policy);
         }
-        if (http_ascii_equals_ignore_case(field.name(), "upgrade")) {
-            return detail::http1_client_request_prepare_result_access::failure(http1_client_request_prepare_error::invalid_upgrade);
-        }
+        case http_request_head_kind::connect:
+            return prepare_connect_request(request, head_buffer, policy);
+        case http_request_head_kind::protocol_upgrade:
+            if (http_ascii_equals_ignore_case(*request.protocol_, "connect-udp")) {
+                return prepare_connect_udp_request(origin, request, head_buffer, policy);
+            }
+            break;
+        case http_request_head_kind::extended_connect:
+            break;
     }
-    detail::http_header_descriptor_storage<http_header_view> staged_fields;
-    staged_fields.reserve(headers.size() + 3U);
-    for (const auto& field : headers) {
-        staged_fields.append(field);
-    }
-    staged_fields.append(http_header_view{detail::http_connection_field_name, detail::http_connection_upgrade_option});
-    staged_fields.append(http_header_view{"Upgrade", "connect-udp"});
-    staged_fields.append(http_header_view{"Host", origin.host()});
-    const auto all_fields = staged_fields.view();
-    const auto emitted_headers = all_fields.first(all_fields.size() - 1U);
-    return prepare_request(origin, "GET", known_method, target.view(), emitted_headers, http_request_content_plan::none(), head_buffer, policy, all_fields);
-}
-
-std::variant<prepared_http1_client_request, http1_client_request_buffer_too_small, http1_client_request_prepare_error> http1_client_request_writer::prepare_connect(const http_origin_view& tunnel_origin, std::span<const http_header_view> headers, std::span<char> head_buffer, http1_client_request_wire_policy policy) const {
-    return prepare_connect_request(&tunnel_origin, headers, head_buffer, policy);
-}
-
-std::variant<prepared_http1_client_request, http1_client_request_buffer_too_small, http1_client_request_prepare_error> http1_client_request_writer::prepare_connect(borrowed_text authority, std::span<const http_header_view> headers, std::span<char> head_buffer, http1_client_request_wire_policy policy) const {
-    // RFC 9110 section 9.3.6: the tunnel destination needs a non-empty port,
-    // and port zero is rejected by prepare_connect_request.
-    const auto parsed_value = parse_http_authority(authority);
-    if (!parsed_value || parsed_value->port_kind() != http_authority_port_kind::value) {
-        return prepare_connect_request(nullptr, headers, head_buffer, policy);
-    }
-    const auto tunnel_origin = http_origin_view::http({.host_ = parsed_value->host(), .port_ = *parsed_value->port()});
-    return prepare_connect_request(&tunnel_origin, headers, head_buffer, policy);
+    return detail::http1_client_request_prepare_result_access::failure(http1_client_request_prepare_error::unsupported_protocol);
 }
 
 }  // namespace ruvia

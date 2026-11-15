@@ -12,7 +12,7 @@
 namespace ruvia {
 
 http_response_stream_head prepare_http_response_stream_head(http_response response, http_response_stream_commit_plan commit_plan) {
-    if (response.status() != commit_plan.response_status()) {
+    if (response.status() != commit_plan.body_plan().response_status()) {
         throw std::invalid_argument("response stream commit plan status does not match response");
     }
     if (!commit_plan.trailer_intent_allowed()) {
@@ -20,13 +20,13 @@ http_response_stream_head prepare_http_response_stream_head(http_response respon
     }
     const auto framing = commit_plan.framing();
     if (!detail::response_transfer_encoding_replaceable(response)) {
-        if (framing == http_response_stream_framing::http2_frames || framing == http_response_stream_framing::http3_frames) {
+        if (std::holds_alternative<http_multiplexed_frames>(framing)) {
             throw std::invalid_argument("HTTP/2 or HTTP/3 response cannot carry a Transfer-Encoding other than chunked");
         }
         throw http1_response_head_error("HTTP response Transfer-Encoding must be exactly chunked");
     }
     const auto body_plan = commit_plan.body_plan();
-    const bool writer_owns_http1_chunked = framing == http_response_stream_framing::http1_chunked && body_plan.transfer_encoding_allowed() && !body_plan.body_suppressed();
+    const bool writer_owns_http1_chunked = framing == http_response_stream_framing(http1_framing_kind::chunked) && body_plan.transfer_encoding_allowed() && !body_plan.body_suppressed();
 
     // Keep the prepared response metadata consistent with the wire plan. The
     // framework's chunk writer is the only Transfer-Encoding producer, so the
@@ -39,7 +39,7 @@ http_response_stream_head prepare_http_response_stream_head(http_response respon
     } else {
         response.remove_header("Transfer-Encoding");
     }
-    if (framing == http_response_stream_framing::http1_close_delimited && !body_plan.body_suppressed()) {
+    if (framing == http_response_stream_framing(http1_framing_kind::close_delimited) && !body_plan.body_suppressed()) {
         response.remove_header("Content-Length");
     }
     // Without a chunked body the trailer section is discarded, so the head must

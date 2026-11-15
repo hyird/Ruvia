@@ -1098,9 +1098,8 @@ ruvia::task<void> serve_client_connect(asio::ip::tcp::socket& stream, unsigned m
         }
         head.push_back(byte);
     }
-    ruvia::http1_server_request_parse_state parsed;
-    parsed.parse_head(head);
-    if (!parsed.head_ready() || parsed.request().method() != "CONNECT" || parsed.request().target() != "target.test:443") {
+    ruvia::http1_server_request_parser parsed;
+    if (!parsed.parse(head).holds<ruvia::decode_complete>() || parsed.request().method() != "CONNECT" || parsed.request().target() != "target.test:443") {
         throw std::runtime_error("invalid CONNECT authority-form");
     }
     if (parsed.request().header("content-length") || parsed.request().header("transfer-encoding")) {
@@ -1300,10 +1299,10 @@ TEST(Ruvia, http1_client_rejected_keep_alive_connect_retires_the_proxy_connectio
                 auto socket = std::move(accepted_socket.result());
                 ++accepted;
                 const auto head = co_await read_head(socket);
-                ruvia::http1_server_request_parse_state parsed;
-                parsed.parse_head(head);
+                ruvia::http1_server_request_parser parsed;
+                const bool head_ready = parsed.parse(head).holds<ruvia::decode_complete>();
                 if (accepted == 1) {
-                    if (!parsed.head_ready() || parsed.request().method() != "CONNECT" || parsed.request().target() != "target.test:443") {
+                    if (!head_ready || parsed.request().method() != "CONNECT" || parsed.request().target() != "target.test:443") {
                         throw std::runtime_error("expected CONNECT on the first connection");
                     }
                     co_await write_all(socket, "HTTP/1.1 407 Proxy Authentication Required\r\nContent-Length: 6\r\nProxy-Authenticate: Basic realm=proxy\r\n\r\ndenied");
@@ -1311,7 +1310,7 @@ TEST(Ruvia, http1_client_rejected_keep_alive_connect_retires_the_proxy_connectio
                     after_rejection = co_await read_to_end(socket);
                     continue;
                 }
-                if (!parsed.head_ready() || parsed.request().method() != "GET" || parsed.request().target() != "/after") {
+                if (!head_ready || parsed.request().method() != "GET" || parsed.request().target() != "/after") {
                     throw std::runtime_error("expected the next request on a new connection");
                 }
                 co_await write_all(socket, "HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok");

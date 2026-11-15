@@ -536,7 +536,7 @@ void request_exchange<host_type>::advertise_alternative_service(std::string_view
 }
 
 template <typename host_type>
-bool request_exchange<host_type>::push(http_push_request_view request) {
+bool request_exchange<host_type>::push(http_request_head_view request) {
     auto& services = exchange().runtime_services();
     if (services.push_output() == nullptr) {
         throw std::logic_error("server push requires an HTTP/2 request");
@@ -1052,16 +1052,16 @@ void ensure_route_params(const std::string_view* param_names, const std::string_
 
 [[nodiscard]] multipart_boundary get_multipart_boundary(const http_request& request) {
     const auto boundary = parse_multipart_boundary(request.header("Content-Type").value_or(std::string_view{}));
-    if (const auto* parsed = boundary.boundary()) {
+    if (const auto* parsed = std::get_if<multipart_boundary>(&boundary)) {
         return *parsed;
     }
-    if (boundary.not_applicable() != nullptr) {
-        throw http_error({.status_ = http_status::unsupported_media_type, .code_ = "unsupported_media_type", .message_ = "request body must be multipart/form-data"});
+    // Another media type is refused like the other typed body readers do, as
+    // an http_error; its status, code and message come from the one mapping.
+    const auto error = make_http_protocol_error(std::get<multipart_boundary_error>(boundary));
+    if (std::get<multipart_boundary_error>(boundary) == multipart_boundary_error::not_form_data) {
+        throw http_error({.status_ = error.status(), .code_ = error.code(), .message_ = error.what()});
     }
-    if (const auto* failure = boundary.failure()) {
-        throw failure->protocol_error();
-    }
-    throw std::logic_error("unexpected multipart boundary parse result");
+    throw error;
 }
 
 // Decoded bytes a request body may produce on the event loop. A body that
@@ -1141,7 +1141,7 @@ task<std::string_view> read_request_text(const context& context_value, operation
     auto decode_result = co_await decode_request_content(services.worker(), context_value.stop_token(), codings, raw, {.max_decoded_bytes_ = services.max_decoded_request_body_bytes()});
     auto* decoded_content = std::get_if<std::string>(&decode_result);
     if (decoded_content == nullptr) {
-        throw http_request_content_decode_error(std::get<http_content_decode_error>(decode_result));
+        throw make_http_protocol_error(std::get<http_content_decode_error>(decode_result), http_coding_field::content_encoding);
     }
     co_return detail::context_access::store_decoded_body(context_value, std::move(*decoded_content));
 }
@@ -1155,10 +1155,10 @@ task<std::vector<multipart_part>> read_request_multipart(const context& context_
     const auto boundary = get_multipart_boundary(detail::context_access::request(context_value));
     const auto request_body = co_await read_request_text(context_value, std::move(operation));
     auto parsed = parse_multipart_body(request_body, {.boundary_ = boundary});
-    if (const auto* failure = parsed.failure()) {
-        throw failure->protocol_error();
+    if (const auto* error = std::get_if<multipart_parse_error>(&parsed)) {
+        throw make_http_protocol_error(*error);
     }
-    co_return std::move(parsed).take_parts();
+    co_return std::get<std::vector<multipart_part>>(std::move(parsed));
 }
 
 task<void> discard_request_body(const context& context_value, operation_options operation) {

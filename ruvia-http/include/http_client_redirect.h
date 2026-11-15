@@ -8,8 +8,8 @@
 
 #include "borrowed_text.h"
 #include "http1_client_request.h"
-#include "http_client_request_view.h"
 #include "http_message.h"
+#include "http_request_head_view.h"
 #include "http_status.h"
 
 namespace ruvia {
@@ -49,7 +49,7 @@ public:
     }
 
 private:
-    friend http_client_redirect_request_plan plan_http_client_redirect_request(const http_client_request_view&, http_client_redirect_request_plan_options);
+    friend http_client_redirect_request_plan plan_http_client_redirect_request(const http_request_head_view&, http_client_redirect_request_plan_options);
 
     http_client_redirect_request_plan(std::string_view method, http_client_redirect_content_disposition content_disposition);
 
@@ -57,7 +57,7 @@ private:
     http_client_redirect_content_disposition content_disposition_;
 };
 
-[[nodiscard]] http_client_redirect_request_plan plan_http_client_redirect_request(const http_client_request_view& request, http_client_redirect_request_plan_options options);
+[[nodiscard]] http_client_redirect_request_plan plan_http_client_redirect_request(const http_request_head_view& request, http_client_redirect_request_plan_options options);
 
 // This classification has no alternative-specific payload, so an enum is the
 // complete result rather than a status coupled to unrelated fields.

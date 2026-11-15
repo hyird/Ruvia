@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <memory>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -27,16 +28,8 @@
 namespace ruvia::detail {
 
 struct http1_client_response_parse_result_access final {
-    [[nodiscard]] static http1_client_response_parse_result need_input() noexcept {
-        return http1_client_response_parse_result(http1_client_response_need_input());
-    }
-
-    [[nodiscard]] static http1_client_response_parse_result failure(http1_client_response_parse_error error) noexcept {
-        return http1_client_response_parse_result(error);
-    }
-
     [[nodiscard]] static http1_client_response_parse_result parsed(http_client_response_head head, http1_client_response_plan plan, std::size_t consumed_bytes) noexcept {
-        return http1_client_response_parse_result(http1_parsed_client_response_head(std::move(head), std::move(plan), consumed_bytes));
+        return http1_client_response_parse_result(consumed_bytes, http1_parsed_client_response_head(std::move(head), std::move(plan)));
     }
 };
 
@@ -169,13 +162,25 @@ http1_client_response_parser::http1_client_response_parser(http1_client_exchange
     exchange_state_(std::move(exchange_state)),
     request_content_phase_(initial_request_content_phase(exchange_state_)) {}
 
+void http1_client_response_parser::reset(http1_client_exchange_state exchange_state) noexcept {
+    // The exchange state is move-constructible only; both steps are noexcept.
+    std::destroy_at(&exchange_state_);
+    std::construct_at(&exchange_state_, std::move(exchange_state));
+    state_ = decoder_state::active;
+    request_content_phase_ = initial_request_content_phase(exchange_state_);
+    interim_faulty_framing_ = false;
+    header_scan_offset_ = 0;
+    status_line_.reset();
+    status_line_end_ = 0;
+}
+
 http1_client_response_parse_result http1_client_response_parser::parse(std::string_view buffer) {
-    if (phase_ != phase_type::await_response) {
+    if (state_ != decoder_state::active) {
         throw std::logic_error("HTTP/1 client response parser is already terminal");
     }
     const auto fail = [this](http1_client_response_parse_error error) noexcept {
-        phase_ = phase_type::failed;
-        return detail::http1_client_response_parse_result_access::failure(error);
+        state_ = decoder_state::failed;
+        return http1_client_response_parse_result(0, http1_client_response_parse_failure(error));
     };
 
     // The status line is validated once its line feed arrives, so a non-HTTP
@@ -207,7 +212,7 @@ http1_client_response_parse_result http1_client_response_parser::parse(std::stri
             return fail(http1_client_response_parse_error::header_too_large);
         }
         header_scan_offset_ = buffer.size() > 3 ? buffer.size() - 3 : 0;
-        return detail::http1_client_response_parse_result_access::need_input();
+        return http1_client_response_parse_result(0, decode_need_input{});
     }
     // A complete head holds a line feed, so its status line was validated
     // above unless the input broke the same-prefix contract of parse().
@@ -266,19 +271,19 @@ http1_client_response_parse_result http1_client_response_parser::parse(std::stri
         request_content_phase_ = receive_continue(request_content_phase_);
     }
     if (parsed_value.status_code_ == http_status::switching_protocols || parsed_value.status_code_.is_final()) {
-        phase_ = phase_type::complete;
+        state_ = decoder_state::finished;
     }
     return result_value;
 }
 
 void http1_client_response_parser::release_request_content() noexcept {
-    if (phase_ == phase_type::await_response && request_content_phase_ == detail::http1_client_request_content_phase::awaiting_continue) {
+    if (state_ == decoder_state::active && request_content_phase_ == detail::http1_client_request_content_phase::awaiting_continue) {
         request_content_phase_ = detail::http1_client_request_content_phase::content_released_awaiting_continue;
     }
 }
 
 http1_client_request_content_completion_status http1_client_response_parser::complete_request_content() noexcept {
-    if (phase_ != phase_type::await_response) {
+    if (state_ != decoder_state::active) {
         return http1_client_request_content_completion_status::exchange_terminal;
     }
     switch (request_content_phase_) {
@@ -518,32 +523,20 @@ namespace {
 struct http1_client_response_plan_access final {
     using request_content_signal_type = std::optional<http_client_request_content_signal>;
 
-    [[nodiscard]] static http1_client_response_plan informational(http1_close_policy persistence, request_content_signal_type request_content_signal) noexcept {
-        return http1_client_response_plan(http1_client_response_plan::state_type(http1_client_informational_response(persistence)), request_content_signal);
+    [[nodiscard]] static http1_client_response_plan informational(request_content_signal_type request_content_signal) noexcept {
+        return http1_client_response_plan(http1_client_response_plan::informational_type{}, http1_close_policy::allow_reuse, request_content_signal);
     }
 
-    [[nodiscard]] static http1_client_response_plan without_content(http1_close_policy persistence, request_content_signal_type request_content_signal) noexcept {
-        return http1_client_response_plan(http1_client_response_plan::state_type(http1_client_response_without_content(persistence)), request_content_signal);
-    }
-
-    [[nodiscard]] static http1_client_response_plan known_length(std::size_t content_length, http1_close_policy persistence, request_content_signal_type request_content_signal, bool discards_content) noexcept {
-        return http1_client_response_plan(http1_client_response_plan::state_type(http1_client_known_length_response(content_length, persistence)), request_content_signal, discards_content);
-    }
-
-    [[nodiscard]] static http1_client_response_plan chunked(http_content_codings transfer_codings, http1_close_policy persistence, request_content_signal_type request_content_signal, bool discards_content) {
-        return http1_client_response_plan(http1_client_response_plan::state_type(http1_client_chunked_response(std::move(transfer_codings), persistence)), request_content_signal, discards_content);
-    }
-
-    [[nodiscard]] static http1_client_response_plan close_delimited(http_content_codings transfer_codings, request_content_signal_type request_content_signal, bool discards_content) {
-        return http1_client_response_plan(http1_client_response_plan::state_type(http1_client_close_delimited_response(std::move(transfer_codings))), request_content_signal, discards_content);
+    [[nodiscard]] static http1_client_response_plan framed(http1_message_framing framing, http1_close_policy close_policy, request_content_signal_type request_content_signal, bool discards_content) noexcept {
+        return http1_client_response_plan(framing, close_policy, request_content_signal, discards_content);
     }
 
     [[nodiscard]] static http1_client_response_plan connect_tunnel() noexcept {
-        return http1_client_response_plan(http1_client_response_plan::state_type(http1_client_connect_tunnel()), std::nullopt);
+        return http1_client_response_plan(http1_client_response_plan::connect_tunnel_type{}, http1_close_policy::close_after_response, std::nullopt);
     }
 
     [[nodiscard]] static http1_client_response_plan protocol_upgrade() noexcept {
-        return http1_client_response_plan(http1_client_response_plan::state_type(http1_client_protocol_upgrade()), std::nullopt);
+        return http1_client_response_plan(http1_client_response_plan::protocol_upgrade_type{}, http1_close_policy::close_after_response, std::nullopt);
     }
 };
 
@@ -560,7 +553,7 @@ http1_client_response_planning_result_type plan_http1_client_response(const http
         // A 1xx never ends the exchange or cancels request content, so it cannot
         // close the connection either; the final response alone decides that
         // (RFC 9110 Section 15.2).
-        return http1_client_response_plan_access::informational(http1_close_policy::allow_reuse, resolve_request_content_signal(request_content_phase, response.status_code_, false));
+        return http1_client_response_plan_access::informational(resolve_request_content_signal(request_content_phase, response.status_code_, false));
     }
     if (content_semantics == http_response_content_semantics::connect_tunnel) {
         return http1_client_response_plan_access::connect_tunnel();
@@ -575,7 +568,7 @@ http1_client_response_planning_result_type plan_http1_client_response(const http
     const auto persistence = final_response_persistence(exchange_state, response, request_content_phase, interim_faulty_framing);
     const auto persistent_content_signal = resolve_request_content_signal(request_content_phase, response.status_code_, persistence == http1_close_policy::close_after_response);
     if (content_semantics == http_response_content_semantics::without_content) {
-        return http1_client_response_plan_access::without_content(persistence, persistent_content_signal);
+        return http1_client_response_plan_access::framed(http1_message_framing::no_content(), persistence, persistent_content_signal, false);
     }
 
     const auto& transfer_encoding = response.transfer_encoding_.value();
@@ -591,21 +584,21 @@ http1_client_response_planning_result_type plan_http1_client_response(const http
             return http1_client_response_parse_error::invalid_transfer_encoding;
         }
         if (const auto* final_chunked = transfer_encoding->final_chunked()) {
-            return http1_client_response_plan_access::chunked(final_chunked->transfer_codings(), persistence, persistent_content_signal, discards_content);
+            return http1_client_response_plan_access::framed(http1_message_framing::chunked(final_chunked->transfer_codings()), persistence, persistent_content_signal, discards_content);
         }
-        return http1_client_response_plan_access::close_delimited(transfer_encoding->non_chunked()->transfer_codings(), resolve_request_content_signal(request_content_phase, response.status_code_, true), discards_content);
+        return http1_client_response_plan_access::framed(http1_message_framing::close_delimited(transfer_encoding->non_chunked()->transfer_codings()), http1_close_policy::close_after_response, resolve_request_content_signal(request_content_phase, response.status_code_, true), discards_content);
     }
 
     if (content_length.has_value()) {
         if (*content_length > (std::numeric_limits<std::size_t>::max)()) {
             return http1_client_response_parse_error::invalid_content_length;
         }
-        return http1_client_response_plan_access::known_length(static_cast<std::size_t>(*content_length), persistence, persistent_content_signal, discards_content);
+        return http1_client_response_plan_access::framed(http1_message_framing::known_length(*content_length), persistence, persistent_content_signal, discards_content);
     }
 
     // RFC 9112 section 6.3: a body-allowed response with no declared
     // length is delimited by server close and cannot return to a pool.
-    return http1_client_response_plan_access::close_delimited(http_content_codings{}, resolve_request_content_signal(request_content_phase, response.status_code_, true), discards_content);
+    return http1_client_response_plan_access::framed(http1_message_framing::close_delimited(), http1_close_policy::close_after_response, resolve_request_content_signal(request_content_phase, response.status_code_, true), discards_content);
 }
 
 }  // namespace ruvia::detail

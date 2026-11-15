@@ -431,33 +431,36 @@ TEST(Ruvia, https_serves_credentials_from_non_ascii_paths_across_runs) {
             .address_ = "127.0.0.1",
             .https_ = endpoint.port(),
             .tls_ = {
-                .identity_ =
-                    {
-                        .certificate_chain_file_ = std::move(chain),
-                        .private_key_file_ = private_key,
-                        .private_key_password_ = std::string(key_password),
+                .identities_ =
+                    ruvia::tls_fixed_identities{
+                        .primary_ =
+                            {
+                                .certificate_chain_file_ = std::move(chain),
+                                .private_key_file_ = private_key,
+                                .private_key_password_ = std::string(key_password),
+                            },
+                        .sni_ =
+                            {
+                                {
+                                    .host_ = "sni.test",
+                                    .identity_ =
+                                        {
+                                            .certificate_chain_file_ = certificate,
+                                            .private_key_file_ = private_key,
+                                            .private_key_password_ = password,
+                                        },
+                                },
+                                {
+                                    .host_ = "ecdsa.test",
+                                    .identity_ =
+                                        {
+                                            .certificate_chain_file_ = elliptic_identity.ca_file_,
+                                            .private_key_file_ = elliptic_identity.private_key_file(),
+                                        },
+                                },
+                            },
                     },
                 .client_certificates_ = {.ca_file_ = client_ca},
-                .sni_ =
-                    {
-                        {
-                            .host_ = "sni.test",
-                            .identity_ =
-                                {
-                                    .certificate_chain_file_ = certificate,
-                                    .private_key_file_ = private_key,
-                                    .private_key_password_ = password,
-                                },
-                        },
-                        {
-                            .host_ = "ecdsa.test",
-                            .identity_ =
-                                {
-                                    .certificate_chain_file_ = elliptic_identity.ca_file_,
-                                    .private_key_file_ = elliptic_identity.private_key_file(),
-                                },
-                        },
-                    },
                 .max_outgoing_records_ = 32,
             },
         };

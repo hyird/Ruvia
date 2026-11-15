@@ -4,20 +4,12 @@
 #include <string>
 #include <vector>
 
-#include "borrowed_text.h"
 #include "http_header.h"
 
 namespace ruvia {
 
-struct http_push_request_view final {
-    borrowed_text method_{"GET"};
-    borrowed_text scheme_{"https"};
-    borrowed_text authority_{};
-    borrowed_text path_{"/"};
-    borrowed_http_headers headers_{};
-};
-
 // Detached promise metadata owns its decoded bytes independently of feed input.
+// The promise a server submits is described by an http_request_head_view.
 // Accepting a promise does
 // not establish transport authority: the driver validates the URI origin using
 // its authenticated connection before consuming the pushed response.
@@ -30,7 +22,7 @@ struct http_push_request final {
     std::string method_;
     std::string scheme_;
     std::string authority_;
-    std::string path_;
+    std::string target_;
     std::vector<http_header> headers_;
 };
 

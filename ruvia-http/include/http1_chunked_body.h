@@ -3,6 +3,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <span>
 #include <string_view>
 #include <utility>
@@ -11,6 +12,7 @@
 
 #include "binary_text_encoding.h"
 #include "borrowed_text.h"
+#include "decode_step.h"
 #include "http_header.h"
 #include "http_protocol.h"
 #include "http_request_body_failure.h"
@@ -53,118 +55,29 @@ enum class http1_chunk_decode_error : std::uint8_t {
     body_limit_exceeded,
     framing_limit_exceeded,
 };
-class http1_chunk_decode_need_input final {
+
+// The end of a chunked body, zero-size chunk and trailer section included.
+class http1_chunk_decode_complete final {
 public:
-    [[nodiscard]] constexpr std::size_t consumed_bytes() const noexcept {
-        return consumed_bytes_;
-    }
-
-private:
-    friend class http1_chunk_decode_result;
-    explicit constexpr http1_chunk_decode_need_input(std::size_t consumed_bytes) noexcept :
-        consumed_bytes_(consumed_bytes) {}
-    std::size_t consumed_bytes_;
-};
-
-class http1_chunk_decode_body_chunk_view final {
-public:
-    [[nodiscard]] constexpr std::size_t consumed_bytes() const noexcept {
-        return consumed_bytes_;
-    }
-    [[nodiscard]] constexpr std::string_view bytes() const& noexcept {
-        return bytes_;
-    }
-    std::string_view bytes() const&& = delete;
-
-private:
-    friend class http1_chunk_decode_result;
-    constexpr http1_chunk_decode_body_chunk_view(std::size_t consumed_bytes, std::string_view bytes_value) noexcept :
-        consumed_bytes_(consumed_bytes),
-        bytes_(bytes_value) {}
-    std::size_t consumed_bytes_;
-    std::string_view bytes_;
-};
-
-class http1_chunk_decode_complete_view final {
-public:
-    [[nodiscard]] constexpr std::size_t consumed_bytes() const noexcept {
-        return consumed_bytes_;
-    }
     // The received trailer section, empty when there was none. The fields
     // borrow the decoder that produced this result (see
     // http1_chunked_body_decoder).
-    [[nodiscard]] constexpr std::span<const http_header> trailers() const& noexcept {
+    [[nodiscard]] constexpr std::span<const http_header> trailers() const noexcept {
         return trailers_;
     }
-    std::span<const http_header> trailers() const&& = delete;
-
-private:
-    friend class http1_chunk_decode_result;
-    explicit constexpr http1_chunk_decode_complete_view(std::size_t consumed_bytes, std::span<const http_header> trailers) noexcept :
-        consumed_bytes_(consumed_bytes),
-        trailers_(trailers) {}
-    std::size_t consumed_bytes_;
-    std::span<const http_header> trailers_;
-};
-
-class http1_chunk_decode_failure final {
-public:
-    [[nodiscard]] constexpr std::size_t consumed_bytes() const noexcept {
-        return consumed_bytes_;
-    }
-    [[nodiscard]] constexpr http1_chunk_decode_error error() const noexcept {
-        return error_;
-    }
-
-private:
-    friend class http1_chunk_decode_result;
-    constexpr http1_chunk_decode_failure(std::size_t consumed_bytes, http1_chunk_decode_error error) noexcept :
-        consumed_bytes_(consumed_bytes),
-        error_(error) {}
-    std::size_t consumed_bytes_;
-    http1_chunk_decode_error error_;
-};
-
-class http1_chunk_decode_result final {
-public:
-    http1_chunk_decode_result(const http1_chunk_decode_result&) = default;
-    http1_chunk_decode_result(http1_chunk_decode_result&&) noexcept = default;
-    http1_chunk_decode_result& operator=(const http1_chunk_decode_result&) = delete;
-    http1_chunk_decode_result& operator=(http1_chunk_decode_result&&) = delete;
-    [[nodiscard]] std::size_t consumed_bytes() const noexcept {
-        return std::visit([](const auto& result_value) {
-            return result_value.consumed_bytes();
-        }, value_);
-    }
-    [[nodiscard]] const http1_chunk_decode_need_input* need_input() const& noexcept {
-        return std::get_if<http1_chunk_decode_need_input>(&value_);
-    }
-    const http1_chunk_decode_need_input* need_input() const&& = delete;
-    [[nodiscard]] const http1_chunk_decode_body_chunk_view* body_chunk() const& noexcept {
-        return std::get_if<http1_chunk_decode_body_chunk_view>(&value_);
-    }
-    const http1_chunk_decode_body_chunk_view* body_chunk() const&& = delete;
-    [[nodiscard]] const http1_chunk_decode_complete_view* complete() const& noexcept {
-        return std::get_if<http1_chunk_decode_complete_view>(&value_);
-    }
-    const http1_chunk_decode_complete_view* complete() const&& = delete;
-    [[nodiscard]] const http1_chunk_decode_failure* failure() const& noexcept {
-        return std::get_if<http1_chunk_decode_failure>(&value_);
-    }
-    const http1_chunk_decode_failure* failure() const&& = delete;
 
 private:
     friend class http1_chunked_body_decoder;
-    using value_type = std::variant<http1_chunk_decode_need_input, http1_chunk_decode_body_chunk_view, http1_chunk_decode_complete_view, http1_chunk_decode_failure>;
-    template <typename result_type>
-    explicit http1_chunk_decode_result(result_type result_value) noexcept :
-        value_(std::move(result_value)) {}
-    [[nodiscard]] static http1_chunk_decode_result make_need_input(std::size_t consumed_bytes) noexcept;
-    [[nodiscard]] static http1_chunk_decode_result make_body_chunk(std::size_t consumed_bytes, std::string_view bytes) noexcept;
-    [[nodiscard]] static http1_chunk_decode_result make_complete(std::size_t consumed_bytes, std::span<const http_header> trailers = {}) noexcept;
-    [[nodiscard]] static http1_chunk_decode_result make_failure(std::size_t consumed_bytes, http1_chunk_decode_error error) noexcept;
-    value_type value_;
+    explicit constexpr http1_chunk_decode_complete(std::span<const http_header> trailers) noexcept :
+        trailers_(trailers) {}
+    std::span<const http_header> trailers_;
 };
+
+using http1_chunk_decode_failure = decode_failure<http1_chunk_decode_error>;
+
+// One decode() outcome: more input needed, chunk payload bytes borrowed from
+// the input, the end of the body, or a framing failure.
+using http1_chunk_decode_result = decode_step<decode_need_input, decode_output, http1_chunk_decode_complete, http1_chunk_decode_failure>;
 
 // How a received trailer section treats obs-fold (RFC 9112 section 5.2). A
 // server may reject a request carrying it (the default); a user agent must
@@ -211,11 +124,13 @@ struct http1_chunked_body_decoder_config final {
 // line; see http_trailer_section_budget()). obs-fold in the trailer section
 // follows http1_chunked_body_decoder_config::obs_fold_, and fields the sender
 // was not permitted to generate follow trailer_message_.
-// The complete view publishes the remaining fields in received order, names
-// lowercase and values without surrounding OWS. The decoder owns them: storage
-// is allocated only for a section that keeps a
-// field, and the view stays valid until the next decode() call, or until the
-// decoder is moved from, assigned to or destroyed.
+// The complete alternative publishes the remaining fields in received order,
+// names lowercase and values without surrounding OWS. The decoder owns them:
+// storage is allocated only for a section that keeps a field, and the view
+// stays valid until the next decode() or reset() call, or until the decoder is
+// moved from, assigned to or destroyed.
+// A finished or failed decoder consumes no further input: decode() repeats
+// the terminal result (a finished one without its trailers) until reset().
 class http1_chunked_body_decoder final {
 public:
     explicit http1_chunked_body_decoder(http1_chunked_body_decoder_config config = {});
@@ -225,12 +140,15 @@ public:
     http1_chunked_body_decoder(http1_chunked_body_decoder&&) noexcept;
     http1_chunked_body_decoder& operator=(http1_chunked_body_decoder&&) noexcept;
 
-    [[nodiscard]] http1_chunk_decode_result decode(std::string_view available);
-    [[nodiscard]] http1_chunk_decode_result decode(std::string_view available, std::size_t max_body_bytes);
+    // At most max_body_bytes of chunk payload are published per call.
+    [[nodiscard]] http1_chunk_decode_result decode(std::string_view available, std::size_t max_body_bytes = (std::numeric_limits<std::size_t>::max)());
     template <detail::http_temporary_owning_char_string input_type>
-    http1_chunk_decode_result decode(input_type&&) = delete;
-    template <detail::http_temporary_owning_char_string input_type>
-    http1_chunk_decode_result decode(input_type&&, std::size_t) = delete;
+    http1_chunk_decode_result decode(input_type&&, std::size_t = 0) = delete;
+
+    [[nodiscard]] decoder_state state() const noexcept;
+    // Starts a new body with the constructed configuration, keeping trailer
+    // storage capacity.
+    void reset() noexcept;
 
 private:
     enum class progress : std::uint8_t {
@@ -261,12 +179,12 @@ private:
     std::vector<http_header> trailers_;
 };
 
-[[nodiscard]] inline http_protocol_error http_request_chunk_decode_error(http1_chunk_decode_error error) noexcept {
+[[nodiscard]] inline http_protocol_error make_http_protocol_error(http1_chunk_decode_error error) noexcept {
     switch (error) {
         case http1_chunk_decode_error::invalid_framing:
             return http_protocol_error(http_status::bad_request, "invalid_chunked_body", "invalid chunked request body");
         case http1_chunk_decode_error::body_limit_exceeded:
-            return http_request_body_protocol_error(http_request_body_failure::too_large);
+            return make_http_protocol_error(http_request_body_failure::too_large);
         case http1_chunk_decode_error::framing_limit_exceeded:
             return http_protocol_error(http_status::content_too_large, "chunked_framing_too_large", "request body framing is too large");
     }

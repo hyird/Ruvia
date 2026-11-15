@@ -25,8 +25,8 @@
 #include "http1_chunked_body.h"
 #include "http1_client_request.h"
 #include "http1_client_response.h"
-#include "http1_client_response_body.h"
 #include "http1_connection_plan.h"
+#include "http1_message_body.h"
 #include "http_authority.h"
 #include "http_client_connection.h"
 #include "http_client_pool.h"
@@ -63,7 +63,7 @@ constexpr std::size_t response_read_chunk_bytes = 16384;
 // head asks for exactly its required size once, up to `max_head_bytes`; the
 // caller reports the remaining too-small result.
 template <typename prepare_type>
-[[nodiscard]] std::variant<prepared_http1_client_request, http1_client_request_buffer_too_small, http1_client_request_prepare_error> prepare_http1_request_head(http_io_buffer& buffer, std::size_t max_head_bytes, const prepare_type& prepare) {
+[[nodiscard]] http1_client_request_prepare_result prepare_http1_request_head(http_io_buffer& buffer, std::size_t max_head_bytes, const prepare_type& prepare) {
     auto first = prepare(buffer.prepare((std::max)(buffer.capacity(), http_retained_string_bytes)));
     const auto* too_small = std::get_if<http1_client_request_buffer_too_small>(&first);
     if (too_small == nullptr || too_small->required_head_bytes() > max_head_bytes) {
@@ -89,18 +89,18 @@ template <typename prepare_type>
         const http_origin_options options{.host_ = authority->host(), .port_ = authority->port()};
         origin = pool.config().scheme_ == http_scheme::https ? http_origin_view::https(options) : http_origin_view::http(options);
     }
-    http1_client_request_writer writer;
+    // One preparation entry; the head's method and protocol select the kind.
     const auto prepare = [&](std::span<char> buffer) {
         if (const auto* websocket = request.websocket()) {
             return prepare_http1_websocket_client_request(origin, source.target_.view(), websocket->key_, websocket->negotiation_, headers, buffer, request.options_.field_source_);
         }
         if (connect_udp) {
-            return writer.prepare_connect_udp(origin, source.target_, headers, buffer, {.field_source_ = request.options_.field_source_});
+            return prepare_http1_client_request(origin, {.protocol_ = "connect-udp", .target_ = source.target_, .headers_ = headers, .field_source_ = request.options_.field_source_}, buffer);
         }
         if (request.is_tunnel() && !request.is_upgrade()) {
-            return writer.prepare_connect(borrowed_text(request.tunnel_authority()), headers, buffer, {.field_source_ = request.options_.field_source_});
+            return prepare_http1_client_request(origin, {.method_ = "CONNECT", .authority_ = borrowed_text(request.tunnel_authority()), .headers_ = headers, .field_source_ = request.options_.field_source_}, buffer);
         }
-        return writer.prepare(origin, source, buffer, {.expectation_ = request.expectation(), .field_source_ = request.options_.field_source_});
+        return prepare_http1_client_request(origin, {.method_ = source.method_, .target_ = source.target_, .headers_ = headers, .content_ = source.content_, .expectation_ = request.expectation(), .field_source_ = request.options_.field_source_}, buffer);
     };
     return prepare_http1_request_head(write_buffer, max_client_request_head_bytes, prepare);
 }
@@ -152,24 +152,24 @@ template <typename prepare_type>
 // The parser validates the exact offered protocols and Connection options;
 // every accepted Upgrade uses the same transparent byte tunnel as CONNECT.
 [[nodiscard]] bool opens_tunnel(const http_client_request_storage& request, const http1_parsed_client_response_head& head) noexcept {
-    return request.is_tunnel() && (head.plan().connect_tunnel() != nullptr || ((request.is_upgrade() || request.udp_tunnel() || request.websocket() != nullptr) && head.plan().protocol_upgrade() != nullptr));
+    return request.is_tunnel() && (head.plan().connect_tunnel() || ((request.is_upgrade() || request.udp_tunnel() || request.websocket() != nullptr) && head.plan().protocol_upgrade()));
 }
 
 // Publishes one decoder step's body bytes or trailers to the consumer, or
 // throws its failure.
-void publish_body_progress(http_client_response_state& state_value, const http1_client_response_body_decoder::result_type& decoded, std::size_t max_response_bytes) {
-    if (const auto* body = decoded.output()) {
+void publish_body_progress(http_client_response_state& state_value, const http1_body_decode_result& decoded, std::size_t max_response_bytes) {
+    if (const auto* body = decoded.get_if<decode_output>()) {
         if (!state_value.append_received_body(body->bytes(), max_response_bytes)) {
             throw http_client_error(make_error_code(http_client_errc::response_too_large), "HTTP response exceeds configured byte limit");
         }
-    } else if (const auto* trailers = decoded.trailers()) {
+    } else if (const auto* trailers = decoded.get_if<http1_body_trailers>()) {
         const auto fields = trailers->fields();
         state_value.trailers_.reserve(state_value.trailers_.size() + fields.size());
         for (const auto& field : fields) {
             state_value.trailers_.emplace_back(field.name(), field.value());
         }
-    } else if (const auto* failure = decoded.protocol_failure()) {
-        throw http_client_error(make_error_code(http_client_errc::protocol_error), http1_client_response_body_error_message(failure->error()));
+    } else if (const auto* failure = decoded.get_if<http1_body_decode_failure>()) {
+        throw http_client_error(make_error_code(http_client_errc::protocol_error), http1_response_body_error_message(failure->error()));
     }
 }
 
@@ -352,16 +352,17 @@ task<void> http1_client_exchange::receive(const http_client_request_storage& req
     auto& read_buffer = connection_.read_buffer_;
     // The parsed head is move-constructible only, so it is emplaced once.
     std::optional<http1_parsed_client_response_head> head;
+    std::size_t head_bytes = 0;
     while (!head) {
         connection_.throw_if_aborted();
         if (timeout.expired()) {
             throw http_client_error(std::make_error_code(std::errc::timed_out), "HTTP response head timed out");
         }
         auto parse_result = parser.parse(read_buffer.view());
-        if (parse_result.failure()) {
-            throw http_client_error(make_error_code(http_client_errc::protocol_error), http1_client_response_parse_error_message(*parse_result.failure()));
+        if (const auto* failure = parse_result.get_if<http1_client_response_parse_failure>()) {
+            throw http_client_error(make_error_code(http_client_errc::protocol_error), http1_client_response_parse_error_message(failure->error()));
         }
-        if (parse_result.need_input()) {
+        if (parse_result.holds<decode_need_input>()) {
             if (read_buffer.size() >= max_http_header_bytes) {
                 throw http_client_error(make_error_code(http_client_errc::protocol_error), "HTTP response head is too large");
             }
@@ -371,17 +372,18 @@ task<void> http1_client_exchange::receive(const http_client_request_storage& req
             restart_inactivity();
             continue;
         }
-        auto* parsed = parse_result.parsed();
+        auto* parsed = parse_result.get_if<http1_parsed_client_response_head>();
         if (parsed == nullptr) {
             std::terminate();
         }
-        if (parsed->plan().informational() == nullptr) {
+        if (!parsed->plan().informational()) {
+            head_bytes = parse_result.consumed_bytes();
             head.emplace(std::move(*parsed));
             break;
         }
         auto informational = std::move(*parsed).take_head();
         state_value.retain_informational(informational.status(), std::move(informational).take_headers(), parsed->plan().request_content_signal());
-        read_buffer.consume(parsed->consumed_bytes());
+        read_buffer.consume(parse_result.consumed_bytes());
         // No further transport input or parsing while the consumer is suspended.
         if (state_value.informational_callback_) {
             co_await state_value.dispatch_informational(timeout);
@@ -400,28 +402,36 @@ task<void> http1_client_exchange::receive(const http_client_request_storage& req
     // The parser's message-length precedence is authoritative, including HEAD,
     // 205 framing, ignored HTTP/1.0 Transfer-Encoding and accepted tunnels.
     state_value.content_length_ = head->head().content_length();
-    if (plan.known_length() != nullptr) {
-        state_value.framing_ = http_client_response_framing::fixed_length;
-    } else if (plan.chunked() != nullptr) {
-        state_value.framing_ = http_client_response_framing::chunked;
-    } else if (plan.close_delimited() != nullptr) {
-        state_value.framing_ = http_client_response_framing::close_delimited;
-    } else if (plan.connect_tunnel() != nullptr) {
+    const auto* framing = plan.framing();
+    if (plan.connect_tunnel()) {
         state_value.framing_ = http_client_response_framing::tunnel;
-    } else if (plan.protocol_upgrade() != nullptr) {
+    } else if (plan.protocol_upgrade()) {
         state_value.framing_ = http_client_response_framing::protocol_upgrade;
     } else {
-        state_value.framing_ = http_client_response_framing::none;
+        switch (framing->kind()) {
+            case http1_framing_kind::known_length:
+                state_value.framing_ = http_client_response_framing::fixed_length;
+                break;
+            case http1_framing_kind::chunked:
+                state_value.framing_ = http_client_response_framing::chunked;
+                break;
+            case http1_framing_kind::close_delimited:
+                state_value.framing_ = http_client_response_framing::close_delimited;
+                break;
+            case http1_framing_kind::no_content:
+                state_value.framing_ = http_client_response_framing::none;
+                break;
+        }
     }
     stop_inactivity();
     const bool tunnel_opened = opens_tunnel(request, *head);
-    if (!tunnel_opened && (plan.connect_tunnel() != nullptr || plan.protocol_upgrade() != nullptr)) {
+    if (!tunnel_opened && (plan.connect_tunnel() || plan.protocol_upgrade())) {
         throw http_client_error(make_error_code(http_client_errc::protocol_error), "HTTP tunnel and protocol upgrade responses require a dedicated API");
     }
     const http_client_final_head final_head{.status_ = head->head().received_status(), .protocol_version_ = head->head().protocol_version(), .request_content_signal_ = plan.request_content_signal(), .origin_target_ = pool_.policy().addresses_origin(request) ? std::optional(request.target()) : std::nullopt, .opens_tunnel_ = tunnel_opened};
     // Parsed fields already use the response resource: transfer, not copy.
     state_value.headers_ = std::move(*head).take_head().take_headers();
-    read_buffer.consume(head->consumed_bytes());
+    read_buffer.consume(head_bytes);
     publish_http_client_final_head(state_value, pool_.policy(), final_head);
     if (tunnel_opened) {
         // The HTTP request deadline ends at a WebSocket's accepted Upgrade.
@@ -430,22 +440,26 @@ task<void> http1_client_exchange::receive(const http_client_request_storage& req
         co_await run_tunnel(state_value, tunnel_timeout, request.websocket() != nullptr);
         co_return;
     }
-    http1_client_response_body_decoder body_decoder(plan);
-    const bool content_semantics_present = plan.without_content() == nullptr;
+    // A discarding plan (205) consumes its framing without transfer decoding,
+    // so its decoder is built from the coding-less framing of the same kind
+    // and no transfer codec is constructed.
+    const auto body_framing = !plan.discards_content() ? *framing : framing->kind() == http1_framing_kind::chunked ? http1_message_framing::chunked()
+        : framing->kind() == http1_framing_kind::close_delimited                                                   ? http1_message_framing::close_delimited()
+                                                                                                                   : *framing;
+    http1_body_decoder body_decoder(body_framing, {.obs_fold_ = http1_trailer_obs_fold::accept, .trailer_message_ = http1_trailer_message::response});
+    if (plan.discards_content()) {
+        body_decoder.discard_content();
+    }
+    const bool content_semantics_present = framing->kind() != http1_framing_kind::no_content;
 
     // The body loop stays in this frame: one exchange costs one receive frame.
     const auto max_response_bytes = pool_.config().max_response_bytes_;
-    // Empty framing still runs the decoder and boundary checks, but its
-    // mandatory nonempty scratch can stay inline. Other responses borrow
-    // uninitialized worker storage without inflating this coroutine frame.
-    const auto* known_length = plan.known_length();
-    const bool empty_body = !content_semantics_present || (known_length != nullptr && !known_length->requires_body_consumption());
-    const bool needs_transfer_scratch = !empty_body && !plan.discards_content() && ((plan.chunked() != nullptr && !plan.chunked()->transfer_codings().empty()) || (plan.close_delimited() != nullptr && !plan.close_delimited()->transfer_codings().empty()));
-    std::array<char, 1> empty_output{};
+    // Only transfer-coded content needs scratch; it borrows uninitialized
+    // worker storage without inflating this coroutine frame.
+    const bool needs_transfer_scratch = framing->requires_consumption() && !plan.discards_content() && !framing->transfer_codings().empty();
     http_io_buffer output_storage;
     const auto transfer_output = needs_transfer_scratch ? output_storage.prepare(http_body_buffer_bytes) : std::span<char>{};
     bool eof = false;
-    http1_close_policy persistence = http1_close_policy::close_after_response;
     for (;;) {
         // Buffered protocol input may still complete the response without I/O.
         // Drain it within the queue limit before waiting for the consumer, so
@@ -454,12 +468,10 @@ task<void> http1_client_exchange::receive(const http_client_request_storage& req
             co_await wait_for_body_space(state_value, timeout);
         }
         connection_.throw_if_aborted();
-        const auto output = needs_transfer_scratch ? transfer_output : (!empty_body && !read_buffer.empty() ? std::span<char>(read_buffer.data(), std::min(read_buffer.size(), http_body_buffer_bytes)) : std::span<char>(empty_output));
-        const auto capacity = state_value.collect_all_ ? output.size() : std::min(output.size(), max_response_bytes - state_value.pending_.size());
-        const auto scratch = output.first(capacity);
+        const auto capacity = state_value.collect_all_ ? http_body_buffer_bytes : std::min(http_body_buffer_bytes, max_response_bytes - state_value.pending_.size());
         const auto decoded = [&] {
             try {
-                return eof ? body_decoder.finish_input(read_buffer.view(), scratch) : body_decoder.decode(read_buffer.view(), scratch);
+                return eof ? body_decoder.finish_input(read_buffer.view(), transfer_output, capacity) : body_decoder.decode(read_buffer.view(), transfer_output, capacity);
             } catch (const http_content_codec_error&) {
                 // A transfer codec that cannot run is reported like any other body failure.
                 throw http_client_error(make_error_code(http_client_errc::protocol_error), "HTTP/1 response body decoder failed");
@@ -469,11 +481,10 @@ task<void> http1_client_exchange::receive(const http_client_request_storage& req
         publish_body_progress(state_value, decoded, max_response_bytes);
         // Output/trailers have been owned before their source is compacted.
         read_buffer.consume(consumed);
-        if (const auto* complete = decoded.complete()) {
-            persistence = complete->persistence();
+        if (decoded.holds<decode_complete>()) {
             break;
         }
-        if (decoded.need_input() == nullptr || (consumed != 0 && !read_buffer.empty())) {
+        if (!decoded.holds<decode_need_input>() || (consumed != 0 && !read_buffer.empty())) {
             continue;
         }
         if (eof) {
@@ -499,7 +510,7 @@ task<void> http1_client_exchange::receive(const http_client_request_storage& req
     // transport so those bytes are discarded rather than parsed as a future
     // response. A rejected CONNECT likewise leaves subsequent ownership
     // unknown (RFC 9112 §9.6).
-    const bool reusable = persistence == http1_close_policy::allow_reuse && (!request.is_tunnel() || request.is_upgrade()) && read_buffer.empty();
+    const bool reusable = plan.close_policy() == http1_close_policy::allow_reuse && (!request.is_tunnel() || request.is_upgrade()) && read_buffer.empty();
     finish_http_client_response_body(state_value, timeout, content_semantics_present, max_response_bytes);
     if (!reusable) {
         connection_.close();

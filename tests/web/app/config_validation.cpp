@@ -1198,7 +1198,7 @@ TEST(Ruvia, adopted_prefix_is_replayed_for_http_raw_and_tls_with_remote_override
     const auto setup = [&]() -> ruvia::task<void> {
         co_await http_server.add_connection_service({.address_ = "127.0.0.1", .http_ = http.local_endpoint().port()});
         co_await raw_server.add_connection_service({.address_ = "127.0.0.1", .http_ = raw.local_endpoint().port()});
-        co_await tls_server.add_connection_service({.address_ = "127.0.0.1", .https_ = tls.local_endpoint().port(), .tls_ = {.identity_ = {.certificate_chain_file_ = identity.ca_file_, .private_key_file_ = identity.private_key_file()}}});
+        co_await tls_server.add_connection_service({.address_ = "127.0.0.1", .https_ = tls.local_endpoint().port(), .tls_ = {.identities_ = ruvia::tls_fixed_identities{.primary_ = {.certificate_chain_file_ = identity.ca_file_, .private_key_file_ = identity.private_key_file()}}}});
         co_await http_server.start();
         co_await raw_server.start();
         co_await tls_server.start();
@@ -1282,7 +1282,7 @@ TEST(Ruvia, proxy_preface_precedes_tls_client_hello_and_preserves_effective_sour
     ruvia::test::tcp_port_reservation port(io);
     const ruvia::test::tls_identity identity("localhost", "DNS:localhost,IP:127.0.0.1");
     ruvia::http_server server(runtime.loop_, {.request_stream_ = &identify});
-    runtime.loop_.start(start(server, {.address_ = "127.0.0.1", .https_ = port.endpoint().port(), .tls_ = {.identity_ = {.certificate_chain_file_ = identity.ca_file_, .private_key_file_ = identity.private_key_file()}}, .proxy_protocol_ = true})).get();
+    runtime.loop_.start(start(server, {.address_ = "127.0.0.1", .https_ = port.endpoint().port(), .tls_ = {.identities_ = ruvia::tls_fixed_identities{.primary_ = {.certificate_chain_file_ = identity.ca_file_, .private_key_file_ = identity.private_key_file()}}}, .proxy_protocol_ = true})).get();
     asio::ssl::context context(asio::ssl::context::tls_client);
     context.load_verify_file(identity.ca_file_.string());
     asio::ssl::stream<asio::ip::tcp::socket> peer(io, context);

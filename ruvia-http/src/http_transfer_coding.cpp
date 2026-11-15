@@ -32,6 +32,7 @@ public:
     [[nodiscard]] bool received_input() const noexcept {
         return received_input_;
     }
+    void reset();
 
 private:
     struct inflate_step_result {
@@ -175,20 +176,29 @@ transfer_coding_decoder::inflate_step_result transfer_coding_decoder::inflate_st
     return inflate_step_result{consumed, produced, status};
 }
 
+void transfer_coding_decoder::reset() {
+    if (!stream_.reset()) {
+        throw http_content_codec_error("failed to reset transfer-coding decoder");
+    }
+    state_.emplace<active>();
+    decoded_bytes_ = 0;
+    received_input_ = false;
+}
+
 http_transfer_coding_decode_result transfer_coding_decoder::need_input(std::size_t consumed) noexcept {
-    return http_transfer_coding_decode_result(http_transfer_coding_decode_need_input(consumed));
+    return http_transfer_coding_decode_result(consumed, decode_need_input{});
 }
 
 http_transfer_coding_decode_result transfer_coding_decoder::output(std::size_t consumed, std::string_view bytes_value) noexcept {
-    return http_transfer_coding_decode_result(http_transfer_coding_decode_output_view(consumed, bytes_value));
+    return http_transfer_coding_decode_result(consumed, decode_output(bytes_value));
 }
 
 http_transfer_coding_decode_result transfer_coding_decoder::complete(std::size_t consumed) noexcept {
-    return http_transfer_coding_decode_result(http_transfer_coding_decode_complete(consumed));
+    return http_transfer_coding_decode_result(consumed, decode_complete{});
 }
 
 http_transfer_coding_decode_result transfer_coding_decoder::fail(std::size_t consumed, http_content_decode_error error) noexcept {
-    return http_transfer_coding_decode_result(http_transfer_coding_decode_failure(consumed, error));
+    return http_transfer_coding_decode_result(consumed, http_transfer_coding_decode_failure(error));
 }
 
 }  // namespace detail
@@ -244,10 +254,13 @@ http_transfer_coding_stack_decoder::~http_transfer_coding_stack_decoder() {
 
 http_transfer_coding_decode_result http_transfer_coding_stack_decoder::decode(std::string_view input, std::span<char> output_buffer) {
     const auto failed = [this](std::size_t consumed) {
-        return http_transfer_coding_decode_result(http_transfer_coding_decode_failure(consumed, *impl_->failure_));
+        return http_transfer_coding_decode_result(consumed, http_transfer_coding_decode_failure(*impl_->failure_));
     };
     if (impl_->failure_.has_value()) {
         return failed(0);
+    }
+    if (state() == decoder_state::finished) {
+        return http_transfer_coding_decode_result(0, decode_complete{});
     }
     if (output_buffer.empty()) {
         throw std::invalid_argument("transfer-coding decode needs output space");
@@ -289,20 +302,20 @@ http_transfer_coding_decode_result http_transfer_coding_stack_decoder::decode(st
                 }
             }
             progressed = progressed || consumed != 0;
-            if (const auto* bytes = decoded.output()) {
+            if (const auto* bytes = decoded.get_if<decode_output>()) {
                 progressed = true;
                 if (index + 1 == impl_->stage_count_) {
-                    return http_transfer_coding_decode_result(http_transfer_coding_decode_output_view(wire_consumed, bytes->bytes()));
+                    return http_transfer_coding_decode_result(wire_consumed, decode_output(bytes->bytes()));
                 }
                 stage.begin_ = 0;
                 stage.end_ = bytes->bytes().size();
                 continue;
             }
-            if (const auto* protocol_failure = decoded.failure()) {
+            if (const auto* protocol_failure = decoded.get_if<http_transfer_coding_decode_failure>()) {
                 impl_->failure_ = protocol_failure->error();
                 return failed(wire_consumed);
             }
-            if (decoded.complete() != nullptr) {
+            if (decoded.holds<decode_complete>()) {
                 stage.complete_ = true;
                 progressed = true;
             }
@@ -316,39 +329,63 @@ http_transfer_coding_decode_result http_transfer_coding_stack_decoder::decode(st
             pending = pending || (index + 1 < impl_->stage_count_ && stage.begin_ != stage.end_);
         }
         if (all_complete && !pending) {
-            return http_transfer_coding_decode_result(http_transfer_coding_decode_complete(wire_consumed));
+            return http_transfer_coding_decode_result(wire_consumed, decode_complete{});
         }
         if (!progressed) {
-            return http_transfer_coding_decode_result(http_transfer_coding_decode_need_input(wire_consumed));
+            return http_transfer_coding_decode_result(wire_consumed, decode_need_input{});
         }
     }
 }
 
+decoder_state http_transfer_coding_stack_decoder::state() const noexcept {
+    if (impl_->failure_.has_value()) {
+        return decoder_state::failed;
+    }
+    for (std::size_t index = 0; index < impl_->stage_count_; ++index) {
+        const auto& stage = *impl_->stages_[index];
+        if (!stage.complete_ || stage.begin_ != stage.end_) {
+            return decoder_state::active;
+        }
+    }
+    return decoder_state::finished;
+}
+
+void http_transfer_coding_stack_decoder::reset() {
+    for (std::size_t index = 0; index < impl_->stage_count_; ++index) {
+        auto& stage = *impl_->stages_[index];
+        stage.decoder_.reset();
+        stage.begin_ = 0;
+        stage.end_ = 0;
+        stage.complete_ = false;
+    }
+    impl_->failure_.reset();
+}
+
 http_transfer_coding_decode_result http_transfer_coding_stack_decoder::finish_input() noexcept {
     if (impl_->failure_.has_value()) {
-        return http_transfer_coding_decode_result(http_transfer_coding_decode_failure(0, *impl_->failure_));
+        return http_transfer_coding_decode_result(0, http_transfer_coding_decode_failure(*impl_->failure_));
     }
     const bool wire_received_input = impl_->stages_[0]->decoder_.received_input();
     for (std::size_t index = 0; index < impl_->stage_count_; ++index) {
         auto& stage = *impl_->stages_[index];
         if (index + 1 < impl_->stage_count_ && stage.begin_ != stage.end_) {
-            return http_transfer_coding_decode_result(http_transfer_coding_decode_need_input(0));
+            return http_transfer_coding_decode_result(0, decode_need_input{});
         }
         if (stage.complete_) {
             continue;
         }
         if (index > 0 && wire_received_input && !stage.decoder_.received_input()) {
             impl_->failure_ = http_content_decode_error::invalid_content;
-            return http_transfer_coding_decode_result(http_transfer_coding_decode_failure(0, *impl_->failure_));
+            return http_transfer_coding_decode_result(0, http_transfer_coding_decode_failure(*impl_->failure_));
         }
         const auto finished = stage.decoder_.finish_input();
-        if (const auto* protocol_failure = finished.failure()) {
+        if (const auto* protocol_failure = finished.get_if<http_transfer_coding_decode_failure>()) {
             impl_->failure_ = protocol_failure->error();
-            return http_transfer_coding_decode_result(http_transfer_coding_decode_failure(0, *impl_->failure_));
+            return http_transfer_coding_decode_result(0, http_transfer_coding_decode_failure(*impl_->failure_));
         }
         stage.complete_ = true;
     }
-    return http_transfer_coding_decode_result(http_transfer_coding_decode_complete(0));
+    return http_transfer_coding_decode_result(0, decode_complete{});
 }
 
 }  // namespace ruvia

@@ -45,8 +45,8 @@
 #include "http1_server_response.h"
 #include "http3_test_client.h"
 #include "http_client.h"
-#include "http_client_request_view.h"
 #include "http_connect_udp.h"
+#include "http_request_head_view.h"
 #include "http_server_fixture.h"
 #include "stop_token.h"
 #include "streaming.h"
@@ -301,7 +301,7 @@ public:
         context.advertise_origins(origins);
         if (context.req().protocol_version() == ruvia::http_protocol_version::http2) {
             const std::array<ruvia::http_header_view, 1> push_headers{{{"x-pushed", "1"}}};
-            (void)context.push({.scheme_ = "https", .authority_ = context.req().authority(), .path_ = "/hello", .headers_ = push_headers});
+            (void)context.push({.scheme_ = "https", .authority_ = context.req().authority(), .target_ = "/hello", .headers_ = push_headers});
         }
         co_return context.text("origin-and-push");
     }
@@ -768,6 +768,22 @@ ruvia::task<void> exercise_connection_controls(ruvia::event_loop loop, std::uint
         const auto replacement_id = replaced.connection_info().id_;
         EXPECT_NE(replacement_id, first_info.id_);
         (void)co_await replaced.bytes();
+        // CONNECT names a tunnel: the ordinary request entry refuses it on
+        // every HTTP version before a connection is used, so the pooled
+        // connection serves the next request untouched.
+        stage = "connect-method-rejection";
+        std::optional<std::error_code> connect_rejection;
+        try {
+            (void)co_await client.request("CONNECT", "/hello").send();
+        } catch (const ruvia::http_client_error& error) {
+            connect_rejection = error.code();
+        }
+        EXPECT_TRUE(connect_rejection == ruvia::make_error_code(ruvia::http_client_errc::invalid_request));
+        stage = "after-connect-method-rejection";
+        auto after_rejection = co_await client.get("/hello").send();
+        EXPECT_EQ(after_rejection.connection_info().id_, replacement_id);
+        EXPECT_TRUE(after_rejection.connection_info().reused_);
+        (void)co_await after_rejection.bytes();
         if (protocol != ruvia::http_client_versions{.http2_ = false}) {
             stage = "independent-informational";
             co_await exercise_independent_informational(loop, client);
@@ -1089,7 +1105,7 @@ TEST(Ruvia, a_multi_worker_app_serves_http3_and_closes_it_on_stop) {
                                                                                                        .address_ = "127.0.0.1",
                                                                                                        .https_ = port,
                                                                                                        .http3_ = port,
-                                                                                                       .tls_ = {.identity_ = {.certificate_chain_file_ = identity.ca_file_, .private_key_file_ = private_key}},
+                                                                                                       .tls_ = {.identities_ = ruvia::tls_fixed_identities{.primary_ = {.certificate_chain_file_ = identity.ca_file_, .private_key_file_ = private_key}}},
                                                                                                    })
         .on_start([&started] {
         started.release();
@@ -1160,7 +1176,7 @@ TEST(Ruvia, a_multi_worker_app_serves_http3_and_closes_it_on_stop) {
         auto client = connect(port, identity);
         EXPECT_TRUE(client.peer_settings().enable_connect_protocol_);
         EXPECT_TRUE(client.peer_settings().h3_datagram_);
-        const auto tunnel = client.start_tunnel(ruvia::http_connect_request_head_view{.authority_ = "echo.test:443"});
+        const auto tunnel = client.start_tunnel(ruvia::http_request_head_view{.method_ = "CONNECT", .authority_ = "echo.test:443"});
         EXPECT_EQ(client.wait_for_response_head(tunnel).status_, 200);
         const std::string payload(128 * 1024, 't');
         client.send_stream_data(tunnel, byte_view(payload), true);
@@ -1168,13 +1184,13 @@ TEST(Ruvia, a_multi_worker_app_serves_http3_and_closes_it_on_stop) {
         EXPECT_EQ(echo.body_, payload);
         EXPECT_TRUE(!echo.reset_error_);
         EXPECT_EQ(client.request("GET", "/hello").status_, 200);
-        const auto cancelled = client.start_tunnel(ruvia::http_connect_request_head_view{.authority_ = "echo.test:443"});
+        const auto cancelled = client.start_tunnel(ruvia::http_request_head_view{.method_ = "CONNECT", .authority_ = "echo.test:443"});
         EXPECT_EQ(client.wait_for_response_head(cancelled).status_, 200);
         client.reset_request(cancelled, ruvia::http3_error_code::request_cancelled);
         EXPECT_EQ(client.request("GET", "/hello").status_, 200);
 
         constexpr std::array websocket_fields{ruvia::http_header_view{"sec-websocket-version", "13"}};
-        const auto websocket = client.start_tunnel(ruvia::http_extended_connect_request_head_view{.protocol_ = "websocket", .authority_ = "localhost", .target_ = "/websocket", .headers_ = websocket_fields});
+        const auto websocket = client.start_tunnel(ruvia::http_request_head_view{.method_ = "CONNECT", .protocol_ = "websocket", .authority_ = "localhost", .target_ = "/websocket", .headers_ = websocket_fields});
         const auto& head = client.wait_for_response_head(websocket);
         EXPECT_EQ(head.status_, 200);
         EXPECT_TRUE(!head.header("sec-websocket-accept"));
@@ -1194,7 +1210,7 @@ TEST(Ruvia, a_multi_worker_app_serves_http3_and_closes_it_on_stop) {
     }
 
     constexpr std::array udp_fields{ruvia::http_header_view{"capsule-protocol", "?1"}};
-    const ruvia::http_extended_connect_request_head_view udp_head{.protocol_ = "connect-udp", .authority_ = "localhost", .target_ = "/.well-known/masque/udp/echo.test/53/", .headers_ = udp_fields};
+    const ruvia::http_request_head_view udp_head{.method_ = "CONNECT", .protocol_ = "connect-udp", .authority_ = "localhost", .target_ = "/.well-known/masque/udp/echo.test/53/", .headers_ = udp_fields};
     {
         auto client = connect(port, identity);
         const auto tunnel = client.start_tunnel(udp_head);

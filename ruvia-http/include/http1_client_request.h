@@ -14,10 +14,10 @@
 
 #include "borrowed_text.h"
 #include "http1_connection_plan.h"
-#include "http_client_request_view.h"
 #include "http_header.h"
 #include "http_message.h"
 #include "http_request_content_plan.h"
+#include "http_request_head_view.h"
 #include "ip_address.h"
 
 namespace ruvia {
@@ -25,7 +25,7 @@ namespace ruvia {
 // Outbound HTTP client protocol models.
 //
 // OWNERSHIP: these are transport-free HTTP values. http_origin_view and
-// http_client_request_view borrow their string storage; http_client_response_head owns
+// http_request_head_view borrow their string storage; http_client_response_head owns
 // parsed header storage. Response content remains owned by the
 // external sans-I/O driver that follows the framing plan. Socket/TLS
 // configuration, pools, redirect limits, and timeouts also belong there.
@@ -116,7 +116,7 @@ private:
 };
 
 // Request-target form of a non-CONNECT request line (RFC 9112 section 3.2).
-// CONNECT always uses authority-form through prepare_connect().
+// CONNECT always uses authority-form.
 enum class http1_request_target_form : std::uint8_t {
     // origin-form, or asterisk-form for OPTIONS *: the request goes to the
     // origin server itself (section 3.2.1).
@@ -128,22 +128,24 @@ enum class http1_request_target_form : std::uint8_t {
     absolute,
 };
 
-// One immutable wire policy for request preparation. Expect is writer-owned so
-// the emitted field and the resulting content gate cannot disagree. How long an
-// I/O runtime waits before releasing a continue-gated body remains runtime
+// The HTTP/1-only wire choices of request preparation. The request's
+// expectation and field source travel in its http_request_head_view. How long
+// an I/O runtime waits before releasing a continue-gated body remains runtime
 // policy, not an HTTP message-model setting.
 struct http1_client_request_wire_policy final {
     http1_close_policy close_policy_{http1_close_policy::allow_reuse};
-    http_client_request_expectation expectation_{http_client_request_expectation::none};
-    http_request_field_source field_source_{http_request_field_source::generated};
     http1_request_target_form target_form_{http1_request_target_form::origin};
 };
 
 enum class http1_client_request_prepare_error : std::uint8_t {
     invalid_method,
     invalid_target,
-    connect_requires_dedicated_entry,
-    invalid_connect_origin,
+    // A CONNECT whose authority_ is absent or is not host:port with a nonzero
+    // port (RFC 9110 section 9.3.6).
+    invalid_connect_authority,
+    // protocol_ names a request HTTP/1.1 cannot carry: Extended CONNECT, an
+    // Upgrade other than connect-udp, or a protocol on another method.
+    unsupported_protocol,
     invalid_header,
     host_header_managed_by_writer,
     content_length_managed_by_writer,
@@ -161,12 +163,14 @@ enum class http1_client_request_prepare_error : std::uint8_t {
     upgrade_connection_option_required,
     te_connection_option_required,
     expectation_without_content,
+    // Content will follow on TRACE, or any content plan on CONNECT or on a
+    // protocol upgrade request.
     content_forbidden_for_method,
     options_content_type_required,
     header_too_large,
     invalid_close_policy,
     invalid_expectation,
-    // An unknown target form, or absolute-form on the CONNECT entries.
+    // An unknown target form, or absolute-form on CONNECT.
     invalid_target_form,
 };
 
@@ -231,39 +235,39 @@ private:
     bool continue_gated_;
 };
 
-// HTTP/1.1 request writer for a direct origin or, in absolute-form, a forward proxy. Ordinary requests are allocation-free;
+// The one outcome of preparing an HTTP/1 request head.
+using http1_client_request_prepare_result = std::variant<prepared_http1_client_request, http1_client_request_buffer_too_small, http1_client_request_prepare_error>;
+
+// Prepares one HTTP/1.1 request head for a direct origin or, in absolute-form,
+// a forward proxy. Ordinary requests are allocation-free;
 // an Upgrade request owns only its offered protocol value for later 101
 // validation. It validates the complete request before touching the caller's
 // buffer, generates Host and exact Content-Length, and returns separate
 // head/content views for writev-style I/O or Expect: 100-continue gating.
+// Expect is writer-owned (request.expectation_) so the emitted field and the
+// resulting content gate cannot disagree.
 // Generated port and Content-Length tokens are shared by measurement and writing.
 // Metadata text and the header descriptor array may overlap head_buffer:
 // successful preparation consumes them before overwriting the emitted head.
 // Borrowed content must not overlap those written bytes; it may use the unused
 // tail of head_buffer and remains unchanged until the runtime sends it.
-// CONNECT uses its dedicated entry so authority form cannot be confused with an
-// origin-form target.
 // Explicit empty content emits Content-Length: 0 without triggering TRACE's
 // content prohibition or generated OPTIONS' Content-Type requirement.
-class http1_client_request_writer final {
-public:
-    http1_client_request_writer() noexcept = default;
-
-    [[nodiscard]] std::variant<prepared_http1_client_request, http1_client_request_buffer_too_small, http1_client_request_prepare_error> prepare(const http_origin_view& origin, const http_client_request_view& request, std::span<char> head_buffer, http1_client_request_wire_policy policy = {}) const;
-
-    // RFC 9298 HTTP/1.1 GET Upgrade. Capsule-Protocol is validated; Upgrade and
-    // Connection are driver-owned, and Host remains owned by the writer.
-    // RFC 9931 section 6.3 forbids sending UDP payload before the server's
-    // successful protocol-upgrade response in HTTP/1.x.
-    [[nodiscard]] std::variant<prepared_http1_client_request, http1_client_request_buffer_too_small, http1_client_request_prepare_error> prepare_connect_udp(const http_origin_view& origin, borrowed_text target, std::span<const http_header_view> headers, std::span<char> head_buffer, http1_client_request_wire_policy policy = {}) const;
-
-    // When forwarding untrusted TCP payload, RFC 9931 section 8 requires the
-    // driver to wait for the successful tunnel plan before sending that payload,
-    // unless close_after_response makes the request emit Connection: close.
-    [[nodiscard]] std::variant<prepared_http1_client_request, http1_client_request_buffer_too_small, http1_client_request_prepare_error> prepare_connect(const http_origin_view& tunnel_origin, std::span<const http_header_view> headers, std::span<char> head_buffer, http1_client_request_wire_policy policy = {}) const;
-
-    [[nodiscard]] std::variant<prepared_http1_client_request, http1_client_request_buffer_too_small, http1_client_request_prepare_error> prepare_connect(borrowed_text authority, std::span<const http_header_view> headers, std::span<char> head_buffer, http1_client_request_wire_policy policy = {}) const;
-};
+// The head's kind() selects the request line:
+// - regular: `origin` supplies the scheme and authority (Host and, in
+//   absolute-form, the target prefix); request.scheme_ and
+//   request.authority_ are not read.
+// - connect: authority-form to request.authority_, which needs a nonzero
+//   port; `origin` is not written (RFC 9112 section 3.2.3). When forwarding
+//   untrusted TCP payload, RFC 9931 section 8 requires the driver to wait for
+//   the successful tunnel plan before sending that payload, unless
+//   close_after_response makes the request emit Connection: close.
+// - protocol_upgrade with protocol_ connect-udp: the RFC 9298 section 3.2
+//   GET Upgrade to `origin`. Capsule-Protocol is validated; Upgrade and
+//   Connection are writer-owned. RFC 9931 section 6.3 forbids sending UDP
+//   payload before the server's successful protocol-upgrade response.
+// - extended_connect has no HTTP/1.1 form and is unsupported_protocol.
+[[nodiscard]] http1_client_request_prepare_result prepare_http1_client_request(const http_origin_view& origin, const http_request_head_view& request, std::span<char> head_buffer, http1_client_request_wire_policy policy = {});
 
 enum class http1_request_content_write_error : std::uint8_t {
     awaiting_continue,

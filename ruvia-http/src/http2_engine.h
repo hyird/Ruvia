@@ -28,7 +28,6 @@
 #include "http2_stream_state.h"
 #include "http_binary_message.h"
 #include "http_c_library_memory.h"
-#include "http_client_request_view.h"
 #include "http_client_response_head.h"
 #include "http_field_kind.h"
 #include "http_field_text.h"
@@ -38,6 +37,7 @@
 #include "http_message_framing_fields.h"
 #include "http_protocol.h"
 #include "http_request.h"
+#include "http_request_head_view.h"
 #include "http_response.h"
 #include "http_response_framing.h"
 #include "http_response_stream.h"
@@ -1124,9 +1124,10 @@ public:
     [[nodiscard]] http_submit_status submit_interim_response_head(std::uint32_t stream_id, const http_interim_response_head& response);
     [[nodiscard]] std::variant<websocket_extended_connect_negotiation, http_response_head_error> submit_websocket_handshake(std::uint32_t stream_id, const http_request& request, const websocket_handshake_validation_result& validation, websocket_server_handshake_options options);
     [[nodiscard]] http_submit_status submit_connect_response_head(std::uint32_t stream_id, const http_response& response);
-    [[nodiscard]] std::variant<std::uint32_t, http2_push_submit_error> submit_push_promise(std::uint32_t associated_stream_id, http_push_request_view request);
+    [[nodiscard]] std::variant<std::uint32_t, http2_push_submit_error> submit_push_promise(std::uint32_t associated_stream_id, const http_request_head_view& request);
     [[nodiscard]] http_finish_status finish_request(std::uint32_t stream_id, std::span<const http_header_view> trailers = {});
     [[nodiscard]] http_finish_status finish_response(std::uint32_t stream_id, const http_response_trailer_section& trailers);
+    [[nodiscard]] http_finish_status finish_stream(std::uint32_t stream_id);
     [[nodiscard]] http_submit_status submit_origin_advertisement(std::span<const std::string_view> origins);
     [[nodiscard]] http_submit_status submit_alternative_service_advertisement(std::uint32_t stream_id, std::string_view origin, std::string_view field_value);
     [[nodiscard]] http_submit_status submit_priority_update(std::uint32_t stream_id, http_priority_fields fields);
@@ -1154,6 +1155,9 @@ public:
         const auto* drain = local_connection_state_.graceful_drain();
         return drain != nullptr && !drain->awaiting_round_trip();
     }
+    [[nodiscard]] bool drained() const noexcept {
+        return drain_final() && streams_.size() == 0;
+    }
     [[nodiscard]] bool header_block_in_progress() const noexcept {
         return header_block_in_progress_ || header_block_.has_value();
     }
@@ -1163,9 +1167,7 @@ public:
 
     // --- client role -------------------------------------------------------------
     [[nodiscard]] std::size_t available_local_request_streams(std::size_t local_limit) const noexcept;
-    [[nodiscard]] std::variant<std::uint32_t, http2_request_head_submit_error> submit_regular_request_head(std::string_view method, std::string_view scheme, std::optional<std::string_view> authority, std::string_view path, std::span<const http_header_view> headers, http_request_content_plan content, http_client_request_expectation expectation = http_client_request_expectation::none, http_request_field_source source = http_request_field_source::generated);
-    [[nodiscard]] std::variant<std::uint32_t, http2_request_head_submit_error> submit_connect_request_head(std::string_view authority, std::span<const http_header_view> headers = {}, http_request_field_source source = http_request_field_source::generated);
-    [[nodiscard]] std::variant<std::uint32_t, http2_request_head_submit_error> submit_extended_connect_request_head(std::string_view protocol, std::string_view scheme, std::string_view authority, std::string_view path, std::span<const http_header_view> headers = {}, http_request_field_source source = http_request_field_source::generated);
+    [[nodiscard]] std::variant<std::uint32_t, http_submit_status> submit_request_head(const http_request_head_view& request);
 
     // A DATA event borrows bytes from the accepted input and retains the matching
     // receive-window debt; destroying its credit hands the bytes to
@@ -1176,8 +1178,8 @@ public:
     [[nodiscard]] std::size_t pending_data_output_bytes(std::uint32_t stream_id) const noexcept;
     [[nodiscard]] std::optional<http2_send_window_state> send_window_state(std::uint32_t stream_id) const noexcept;
     [[nodiscard]] bool stream_aborted(std::uint32_t stream_id) const noexcept;
-    [[nodiscard]] bool received_peer_settings() const noexcept {
-        return received_peer_settings_;
+    [[nodiscard]] const std::optional<http2_peer_settings>& peer_settings() const& noexcept {
+        return peer_settings_;
     }
     [[nodiscard]] std::uint64_t received_stream_progress() const noexcept {
         return received_stream_progress_;
@@ -1188,7 +1190,7 @@ public:
     // peer reset only marks it aborted (emitting stream_closed) instead of
     // freeing it.
     void pin_stream(std::uint32_t stream_id) noexcept;
-    void lease_submitted_request(const std::variant<std::uint32_t, http2_request_head_submit_error>& result) noexcept;
+    void lease_submitted_request(const std::variant<std::uint32_t, http_submit_status>& result) noexcept;
     // Ends an owner lease. The stream is unpinned once its delivered DATA credit
     // and queued events are gone; until then the release stays deferred.
     void release_stream_lease(std::uint32_t stream_id);
@@ -1304,11 +1306,14 @@ private:
 
     // --- stream lifecycle -------------------------------------------------------
     [[nodiscard]] http2_stream_state* create_stream(std::uint32_t stream_id);
-    [[nodiscard]] std::optional<http2_request_head_submit_error> local_request_admission_error() const noexcept;
+    [[nodiscard]] std::optional<http_submit_status> local_request_admission_error() const noexcept;
     // Queues the staged request fields as the next client stream's HEADERS.
     // A failure consumes neither a stream identifier nor a concurrency slot.
     template <typename prepare_type>
-    [[nodiscard]] std::variant<std::uint32_t, http2_request_head_submit_error> submit_local_request_head(http2_end_stream end_stream, const prepare_type& prepare);
+    [[nodiscard]] std::variant<std::uint32_t, http_submit_status> submit_local_request_head(http2_end_stream end_stream, const prepare_type& prepare);
+    [[nodiscard]] std::variant<std::uint32_t, http_submit_status> submit_regular_request_head(std::string_view method, std::string_view scheme, std::optional<std::string_view> authority, std::string_view path, std::span<const http_header_view> headers, http_request_content_plan content, http_client_request_expectation expectation, http_request_field_source source);
+    [[nodiscard]] std::variant<std::uint32_t, http_submit_status> submit_connect_request_head(std::string_view authority, std::span<const http_header_view> headers, http_request_field_source source);
+    [[nodiscard]] std::variant<std::uint32_t, http_submit_status> submit_extended_connect_request_head(std::string_view protocol, std::string_view scheme, std::string_view authority, std::string_view path, std::span<const http_header_view> headers, http_request_field_source source);
     void release_local_request_stream_if_closed(http2_stream_state& stream) noexcept;
     void release_local_request_stream(http2_stream_state& stream) noexcept;
     void unpin_stream(std::uint32_t stream_id);
@@ -1370,8 +1375,8 @@ private:
 
     enum class close_notification_type : std::uint8_t { emit_event,
         owner_already_knows };
-    bool close_stream_impl(std::uint32_t stream_id, http2_stream_close_source source, http2_error_code error, close_notification_type notification);
-    bool close_stream(std::uint32_t stream_id, http2_stream_close_source source, http2_error_code error);
+    bool close_stream_impl(std::uint32_t stream_id, http_stream_close_source source, http2_error_code error, close_notification_type notification);
+    bool close_stream(std::uint32_t stream_id, http_stream_close_source source, http2_error_code error);
     void finish_drain_round_trip();
     void begin_final_drain();
     void submit_goaway(std::uint32_t last_stream_id);
@@ -1419,7 +1424,9 @@ private:
     std::size_t observed_scalar_size_{0};
     bool observed_headers_padding_{false};
     bool started_{false};
-    bool received_peer_settings_{false};
+    // The peer's SETTINGS in force, captured when each SETTINGS frame is
+    // applied; empty until the first one.
+    std::optional<http2_peer_settings> peer_settings_{};
     bool header_block_in_progress_{false};
     bool liveness_ping_outstanding_{false};
     std::uint32_t last_peer_stream_id_{0};

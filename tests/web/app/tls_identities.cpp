@@ -40,7 +40,7 @@
 #include "controller.h"
 #include "http1_client_request.h"
 #include "http1_client_response.h"
-#include "http1_client_response_body.h"
+#include "http1_message_body.h"
 #include "http_server.h"
 #include "http_server_fixture.h"
 #include "request_stream.h"
@@ -215,7 +215,7 @@ std::string served_name(asio::io_context& io, asio::ssl::context& client, const 
 bool serves_hello(tls_stream& stream) {
     const auto deadline = std::chrono::steady_clock::now() + 3s;
     std::array<char, 1024> request;
-    auto prepared = ruvia::http1_client_request_writer().prepare(ruvia::http_origin_view::https({.host_ = "localhost"}), {.method_ = "GET", .target_ = "/hello"}, request);
+    auto prepared = ruvia::prepare_http1_client_request(ruvia::http_origin_view::https({.host_ = "localhost"}), {.method_ = "GET", .target_ = "/hello"}, request);
     auto& exchange = std::get<ruvia::prepared_http1_client_request>(prepared);
     ruvia::http1_client_response_parser parser(std::move(exchange).take_exchange_state());
     const auto written = client_io(stream.next_layer(), deadline, [&](auto completion) {
@@ -224,39 +224,46 @@ bool serves_hello(tls_stream& stream) {
     if (written.error_) {
         return false;
     }
-    std::optional<ruvia::http1_client_response_body_decoder> decoder;
+    std::optional<ruvia::http1_body_decoder> decoder;
     std::string response, body;
     std::array<char, 1024> bytes, scratch;
     bool successful = false, eof = false;
     for (;;) {
         if (!decoder) {
             auto parsed = parser.parse(response);
-            if (parsed.failure()) {
+            if (parsed.holds<ruvia::http1_client_response_parse_failure>()) {
                 return false;
             }
-            if (const auto* head = parsed.parsed()) {
+            if (const auto* head = parsed.get_if<ruvia::http1_parsed_client_response_head>()) {
                 if (head->plan().informational()) {
-                    response.erase(0, head->consumed_bytes());
+                    response.erase(0, parsed.consumed_bytes());
                     continue;
                 }
+                const auto* framing = head->plan().framing();
+                if (framing == nullptr) {
+                    return false;
+                }
                 successful = head->head().status() == ruvia::http_status::ok;
-                decoder.emplace(head->plan());
-                response.erase(0, head->consumed_bytes());
+                decoder.emplace(*framing, ruvia::http1_body_decoder_config{.obs_fold_ = ruvia::http1_trailer_obs_fold::accept, .trailer_message_ = ruvia::http1_trailer_message::response});
+                if (head->plan().discards_content()) {
+                    decoder->discard_content();
+                }
+                response.erase(0, parsed.consumed_bytes());
             }
         }
         if (decoder) {
             const auto decoded = eof ? decoder->finish_input(response, scratch) : decoder->decode(response, scratch);
-            if (const auto* output = decoded.output()) {
+            if (const auto* output = decoded.get_if<ruvia::decode_output>()) {
                 body.append(output->bytes());
             }
             response.erase(0, decoded.consumed_bytes());
-            if (decoded.complete()) {
+            if (decoded.holds<ruvia::decode_complete>()) {
                 return successful && body == "hello";
             }
-            if (decoded.protocol_failure()) {
+            if (decoded.holds<ruvia::http1_body_decode_failure>()) {
                 return false;
             }
-            if (!decoded.need_input()) {
+            if (!decoded.holds<ruvia::decode_need_input>()) {
                 continue;
             }
         }
@@ -513,9 +520,12 @@ TEST(Ruvia, https_selects_identity_by_exact_and_wildcard_sni_then_local_address)
             .https_ = port,
             .tls_ =
                 {
-                    .identity_ = pem_identity(primary),
-                    .sni_ = {{.host_ = "*.example.test", .identity_ = pem_identity(wildcard)}, {.host_ = "api.example.test", .identity_ = file_identity(exact)}},
-                    .local_addresses_ = {{.address_ = "127.0.0.2", .identity_ = file_identity(local)}},
+                    .identities_ =
+                        ruvia::tls_fixed_identities{
+                            .primary_ = pem_identity(primary),
+                            .sni_ = {{.host_ = "*.example.test", .identity_ = pem_identity(wildcard)}, {.host_ = "api.example.test", .identity_ = file_identity(exact)}},
+                            .local_addresses_ = {{.address_ = "127.0.0.2", .identity_ = file_identity(local)}},
+                        },
                 },
         })
         .on_start(nullptr)
@@ -566,13 +576,13 @@ TEST(Ruvia, https_identities_are_replaced_at_runtime_for_new_handshakes) {
     const auto http_endpoint = http_reservation.endpoint();
     const auto https_endpoint = https_reservation.endpoint();
     replaced_port() = https_endpoint.port();
-    worker_replacement() = {.identity_ = file_identity(first)};
+    worker_replacement() = {.identities_ = ruvia::tls_fixed_identities{.primary_ = file_identity(first)}};
     const ruvia::listener_endpoint https{.address_ = "127.0.0.1", .port_ = https_endpoint.port()};
     ruvia::listen_config listener{
         .address_ = "127.0.0.1",
         .http_ = http_endpoint.port(),
         .https_ = https_endpoint.port(),
-        .tls_ = {.identity_ = file_identity(first)},
+        .tls_ = {.identities_ = ruvia::tls_fixed_identities{.primary_ = file_identity(first)}},
     };
 #if defined(RUVIA_ENABLE_HTTP3)
     ruvia::test::udp_port_reservation udp_reservation(io);
@@ -584,7 +594,7 @@ TEST(Ruvia, https_identities_are_replaced_at_runtime_for_new_handshakes) {
         started().release();
     });
     EXPECT_EQ(failure_of([&] {
-        caller.start(app.replace_tls_identities(caller.worker(), https, {.identity_ = file_identity(second)})).get();
+        caller.start(app.replace_tls_identities(caller.worker(), https, {.identities_ = ruvia::tls_fixed_identities{.primary_ = file_identity(second)}})).get();
     }),
         "logic_error");
 
@@ -616,23 +626,23 @@ TEST(Ruvia, https_identities_are_replaced_at_runtime_for_new_handshakes) {
             });
         };
         const auto replacement = [&] {
-            return ruvia::tls_config{.identity_ = file_identity(second)};
+            return ruvia::tls_config{.identities_ = ruvia::tls_fixed_identities{.primary_ = file_identity(second)}};
         };
         EXPECT_EQ(replace({.address_ = "127.0.0.2", .port_ = https_endpoint.port()}, replacement()), "invalid_argument");
         EXPECT_EQ(replace({.address_ = "localhost", .port_ = https_endpoint.port()}, replacement()), "invalid_argument");
         EXPECT_EQ(replace({.address_ = "127.0.0.1", .port_ = http_endpoint.port()}, replacement()), "invalid_argument");
-        EXPECT_EQ(replace(https, {.identity_ = file_identity(second), .max_outgoing_records_ = 32}), "invalid_argument");
-        EXPECT_EQ(replace(https, {.identity_ = file_identity(second), .client_certificates_ = {.ca_file_ = first.ca_file_}}), "invalid_argument");
-        EXPECT_EQ(replace(https, {.identity_ = file_identity(second), .sni_ = {{.host_ = "*", .identity_ = file_identity(exact)}}}), "invalid_argument");
-        EXPECT_EQ(replace(https, {.identity_ = {.certificate_chain_pem_ = read_text(second.ca_file_)}}), "invalid_argument");
-        EXPECT_EQ(replace(https, {.identity_ = {.certificate_chain_file_ = first.ca_file_.parent_path() / "missing.pem", .private_key_file_ = first.private_key_file()}}), "system_error");
-        EXPECT_EQ(replace(https, {.identity_ = {.certificate_chain_pem_ = read_text(second.ca_file_), .private_key_pem_ = read_text(first.private_key_file())}}), "system_error");
+        EXPECT_EQ(replace(https, {.identities_ = ruvia::tls_fixed_identities{.primary_ = file_identity(second)}, .max_outgoing_records_ = 32}), "invalid_argument");
+        EXPECT_EQ(replace(https, {.identities_ = ruvia::tls_fixed_identities{.primary_ = file_identity(second)}, .client_certificates_ = {.ca_file_ = first.ca_file_}}), "invalid_argument");
+        EXPECT_EQ(replace(https, {.identities_ = ruvia::tls_fixed_identities{.primary_ = file_identity(second), .sni_ = {{.host_ = "*", .identity_ = file_identity(exact)}}}}), "invalid_argument");
+        EXPECT_EQ(replace(https, {.identities_ = ruvia::tls_fixed_identities{.primary_ = {.certificate_chain_pem_ = read_text(second.ca_file_)}}}), "invalid_argument");
+        EXPECT_EQ(replace(https, {.identities_ = ruvia::tls_fixed_identities{.primary_ = {.certificate_chain_file_ = first.ca_file_.parent_path() / "missing.pem", .private_key_file_ = first.private_key_file()}}}), "system_error");
+        EXPECT_EQ(replace(https, {.identities_ = ruvia::tls_fixed_identities{.primary_ = {.certificate_chain_pem_ = read_text(second.ca_file_), .private_key_pem_ = read_text(first.private_key_file())}}}), "system_error");
         EXPECT_EQ(served_name(io, client, https_endpoint, "localhost"), "first");
 #if defined(RUVIA_ENABLE_HTTP3)
         EXPECT_TRUE(http3_serves(http3_port, first.ca_file_, "localhost"));
 #endif
 
-        EXPECT_EQ(replace(https, {.identity_ = pem_identity(second), .sni_ = {{.host_ = "api.example.test", .identity_ = file_identity(exact)}}}), "none");
+        EXPECT_EQ(replace(https, {.identities_ = ruvia::tls_fixed_identities{.primary_ = pem_identity(second), .sni_ = {{.host_ = "api.example.test", .identity_ = file_identity(exact)}}}}), "none");
         EXPECT_EQ(served_name(io, client, https_endpoint, "localhost"), "second");
         EXPECT_EQ(served_name(io, client, https_endpoint, nullptr), "second");
         EXPECT_EQ(served_name(io, client, https_endpoint, "api.example.test"), "exact");
@@ -653,7 +663,7 @@ TEST(Ruvia, https_identities_are_replaced_at_runtime_for_new_handshakes) {
 
         // A connection without SNI (HTTP/3 to an IP literal) arrives at
         // 127.0.0.1, which now names its own identity.
-        EXPECT_EQ(replace(https, {.identity_ = file_identity(second), .local_addresses_ = {{.address_ = "127.0.0.1", .identity_ = pem_identity(local)}}}), "none");
+        EXPECT_EQ(replace(https, {.identities_ = ruvia::tls_fixed_identities{.primary_ = file_identity(second), .local_addresses_ = {{.address_ = "127.0.0.1", .identity_ = pem_identity(local)}}}}), "none");
         EXPECT_EQ(served_name(io, client, https_endpoint, nullptr), "local");
         EXPECT_EQ(served_name(io, client, https_endpoint, "localhost"), "local");
 #if defined(RUVIA_ENABLE_HTTP3)
@@ -663,7 +673,7 @@ TEST(Ruvia, https_identities_are_replaced_at_runtime_for_new_handshakes) {
         runner.join();
     }
     EXPECT_EQ(failure_of([&] {
-        caller.start(app.replace_tls_identities(caller.worker(), https, {.identity_ = file_identity(second)})).get();
+        caller.start(app.replace_tls_identities(caller.worker(), https, {.identities_ = ruvia::tls_fixed_identities{.primary_ = file_identity(second)}})).get();
     }),
         "logic_error");
 
@@ -745,7 +755,7 @@ TEST(Ruvia, certificate_library_selector_uses_capabilities_rejects_and_preserves
         }
         return input.offers_signature_algorithm(0x0403) ? 2 : 1;
     });
-    ruvia::listen_config listener{.address_ = "127.0.0.1", .https_ = endpoint.port(), .tls_ = {.certificate_store_ = store, .select_certificate_ = selector}};
+    ruvia::listen_config listener{.address_ = "127.0.0.1", .https_ = endpoint.port(), .tls_ = {.identities_ = ruvia::tls_selected_identities{.store_ = store, .select_ = selector}}};
 #if defined(RUVIA_ENABLE_HTTP3)
     ruvia::test::udp_port_reservation udp(io);
     listener.http3_ = udp.endpoint().port();
@@ -850,7 +860,7 @@ TEST(Ruvia, certificate_library_is_shared_by_independent_single_and_multiworker_
         return 1;
     });
     const auto configuration = [&](std::uint16_t port) {
-        return ruvia::listen_config{.address_ = "127.0.0.1", .https_ = port, .tls_ = {.certificate_store_ = store, .select_certificate_ = selector}, .dispatch_ = ruvia::listener_dispatch::request_stream};
+        return ruvia::listen_config{.address_ = "127.0.0.1", .https_ = port, .tls_ = {.identities_ = ruvia::tls_selected_identities{.store_ = store, .select_ = selector}}, .dispatch_ = ruvia::listener_dispatch::request_stream};
     };
     ruvia::http_server single(loops[0], {.request_stream_ = answer});
     ruvia::http_server_group group(loops, [&](const ruvia::worker_ref&) {
@@ -868,8 +878,7 @@ TEST(Ruvia, certificate_library_is_shared_by_independent_single_and_multiworker_
 #endif
         single.listen(single_configuration);
         auto mtls = configuration(mtls_port.endpoint().port());
-        mtls.tls_.select_certificate_.reset();
-        mtls.tls_.default_certificate_ = 1;
+        mtls.tls_.identities_ = ruvia::tls_stored_identity{.store_ = store, .id_ = 1};
         mtls.tls_.client_certificates_ = {.ca_file_ = first.ca_file_, .requirement_ = ruvia::tls_client_certificate_requirement::required};
         single.listen(mtls);
         auto limited = configuration(limited_port.endpoint().port());
@@ -944,16 +953,14 @@ TEST(Ruvia, certificate_selector_retirement_can_schedule_async_application_repla
             {.address_ = "127.0.0.1",
                 .https_ = port.endpoint().port(),
                 .tls_ =
-                    {.certificate_store_ = store,
-                        .select_certificate_ = retiring_selector(
-                            [&] {
+                    {.identities_ = ruvia::tls_selected_identities{.store_ = store, .select_ = retiring_selector([&] {
         try {
             EXPECT_TRUE(store->contains(1));
-            retirement.set_value(caller.start(app.replace_tls_identities(caller.worker(), endpoint, {.certificate_store_ = store, .default_certificate_ = 3})));
+            retirement.set_value(caller.start(app.replace_tls_identities(caller.worker(), endpoint, {.identities_ = ruvia::tls_stored_identity{.store_ = store, .id_ = 3}})));
         } catch (...) {
             retirement.set_exception(std::current_exception());
         }
-    }, retirement_failure)}})
+    }, retirement_failure)}}})
         .on_start(nullptr)
         .on_start([] {
         started().release();
@@ -962,7 +969,7 @@ TEST(Ruvia, certificate_selector_retirement_can_schedule_async_application_repla
     ASSERT_TRUE(started().try_acquire_for(10s));
     auto client = tls_client();
     EXPECT_EQ(served_name(io, client, port.endpoint(), "localhost"), "first");
-    caller.start(app.replace_tls_identities(caller.worker(), endpoint, {.certificate_store_ = store, .default_certificate_ = 2})).get();
+    caller.start(app.replace_tls_identities(caller.worker(), endpoint, {.identities_ = ruvia::tls_stored_identity{.store_ = store, .id_ = 2}})).get();
     ASSERT_EQ(retired.wait_for(3s), std::future_status::ready);
     retired.get().get();
     EXPECT_FALSE(static_cast<bool>(retirement_failure));
@@ -1004,16 +1011,14 @@ TEST(Ruvia, certificate_selector_retirement_can_schedule_async_member_host_contr
             {.address_ = "127.0.0.1",
                 .https_ = single_port.endpoint().port(),
                 .tls_ =
-                    {.certificate_store_ = store,
-                        .select_certificate_ = retiring_selector(
-                            [&] {
+                    {.identities_ = ruvia::tls_selected_identities{.store_ = store, .select_ = retiring_selector([&] {
             try {
                 EXPECT_TRUE(store->contains(1));
-                single_retirement.set_value(caller.start(single.replace_tls_identities(single_endpoint, {.certificate_store_ = store, .default_certificate_ = 3})));
+                single_retirement.set_value(caller.start(single.replace_tls_identities(single_endpoint, {.identities_ = ruvia::tls_stored_identity{.store_ = store, .id_ = 3}})));
             } catch (...) {
                 single_retirement.set_exception(std::current_exception());
             }
-        }, single_failure)},
+        }, single_failure)}},
                 .dispatch_ = ruvia::listener_dispatch::request_stream});
         co_await single.start();
     };
@@ -1022,25 +1027,23 @@ TEST(Ruvia, certificate_selector_retirement_can_schedule_async_member_host_contr
         {.address_ = "127.0.0.1",
             .https_ = group_port.endpoint().port(),
             .tls_ =
-                {.certificate_store_ = store,
-                    .select_certificate_ = retiring_selector(
-                        [&] {
+                {.identities_ = ruvia::tls_selected_identities{.store_ = store, .select_ = retiring_selector([&] {
         try {
             EXPECT_TRUE(store->contains(1));
-            group_retirement.set_value(caller.start(group.replace_tls_identities(caller.worker(), group_endpoint, {.certificate_store_ = store, .default_certificate_ = 3})));
+            group_retirement.set_value(caller.start(group.replace_tls_identities(caller.worker(), group_endpoint, {.identities_ = ruvia::tls_stored_identity{.store_ = store, .id_ = 3}})));
         } catch (...) {
             group_retirement.set_exception(std::current_exception());
         }
-    }, group_failure)},
+    }, group_failure)}},
             .dispatch_ = ruvia::listener_dispatch::request_stream});
     caller.start(group.start(caller.worker())).get();
     auto client = tls_client();
     EXPECT_EQ(served_name(io, client, single_port.endpoint(), "localhost"), "first");
     EXPECT_EQ(served_name(io, client, group_port.endpoint(), "localhost"), "first");
-    caller.start(single.replace_tls_identities(single_endpoint, {.certificate_store_ = store, .default_certificate_ = 2})).get();
+    caller.start(single.replace_tls_identities(single_endpoint, {.identities_ = ruvia::tls_stored_identity{.store_ = store, .id_ = 2}})).get();
     ASSERT_EQ(single_retired.wait_for(3s), std::future_status::ready);
     single_retired.get().get();
-    caller.start(group.replace_tls_identities(caller.worker(), group_endpoint, {.certificate_store_ = store, .default_certificate_ = 2})).get();
+    caller.start(group.replace_tls_identities(caller.worker(), group_endpoint, {.identities_ = ruvia::tls_stored_identity{.store_ = store, .id_ = 2}})).get();
     ASSERT_EQ(group_retired.wait_for(3s), std::future_status::ready);
     group_retired.get().get();
     EXPECT_FALSE(static_cast<bool>(single_failure));
@@ -1078,14 +1081,14 @@ TEST(Ruvia, public_certificate_preparation_leaves_caller_worker_responsive_and_p
         return ruvia::http_server_callbacks{.request_stream_ = answer};
     });
     const auto start_single = [&]() -> ruvia::task<void> {
-        single.listen({.address_ = "127.0.0.1", .https_ = single_port.endpoint().port(), .tls_ = {.certificate_store_ = store, .default_certificate_ = 1}, .dispatch_ = ruvia::listener_dispatch::request_stream});
+        single.listen({.address_ = "127.0.0.1", .https_ = single_port.endpoint().port(), .tls_ = {.identities_ = ruvia::tls_stored_identity{.store_ = store, .id_ = 1}}, .dispatch_ = ruvia::listener_dispatch::request_stream});
         co_await single.start();
     };
     caller.start(start_single()).get();
-    group.listen({.address_ = "127.0.0.1", .https_ = group_port.endpoint().port(), .tls_ = {.identity_ = file_identity(first)}, .dispatch_ = ruvia::listener_dispatch::request_stream});
+    group.listen({.address_ = "127.0.0.1", .https_ = group_port.endpoint().port(), .tls_ = {.identities_ = ruvia::tls_fixed_identities{.primary_ = file_identity(first)}}, .dispatch_ = ruvia::listener_dispatch::request_stream});
     EXPECT_FALSE(queued_preparation(runtime, group.start(caller.worker())));
     auto& app = ruvia::app();
-    app.workers({.worker_count_ = 2}).listen({.address_ = "127.0.0.1", .https_ = app_port.endpoint().port(), .tls_ = {.identity_ = file_identity(first)}}).on_start(nullptr).on_start([] {
+    app.workers({.worker_count_ = 2}).listen({.address_ = "127.0.0.1", .https_ = app_port.endpoint().port(), .tls_ = {.identities_ = ruvia::tls_fixed_identities{.primary_ = file_identity(first)}}}).on_start(nullptr).on_start([] {
         started().release();
     });
     ruvia::test::app_run runner(app);
@@ -1111,30 +1114,30 @@ TEST(Ruvia, public_certificate_preparation_leaves_caller_worker_responsive_and_p
     EXPECT_EQ(served_name(io, client, single_port.endpoint(), "localhost"), "second");
     auto replace_single = [&] {
         auto endpoint = single_endpoint;
-        ruvia::tls_config config{.identity_ = file_identity(first)};
+        ruvia::tls_config config{.identities_ = ruvia::tls_fixed_identities{.primary_ = file_identity(first)}};
         return single.replace_tls_identities(endpoint, std::move(config));
     }();
     EXPECT_FALSE(queued_preparation(runtime, std::move(replace_single)));
     EXPECT_EQ(served_name(io, client, single_port.endpoint(), "localhost"), "first");
-    expect_bad_identity(single.replace_tls_identities(single_endpoint, {.identity_ = invalid()}));
+    expect_bad_identity(single.replace_tls_identities(single_endpoint, {.identities_ = ruvia::tls_fixed_identities{.primary_ = invalid()}}));
     EXPECT_EQ(served_name(io, client, single_port.endpoint(), "localhost"), "first");
     auto replace_group = [&] {
         auto endpoint = group_endpoint;
-        ruvia::tls_config config{.identity_ = pem_identity(second)};
+        ruvia::tls_config config{.identities_ = ruvia::tls_fixed_identities{.primary_ = pem_identity(second)}};
         return group.replace_tls_identities(caller.worker(), endpoint, std::move(config));
     }();
     EXPECT_FALSE(queued_preparation(runtime, std::move(replace_group)));
     EXPECT_EQ(served_name(io, client, group_port.endpoint(), "localhost"), "second");
-    expect_bad_identity(group.replace_tls_identities(caller.worker(), group_endpoint, {.identity_ = invalid()}));
+    expect_bad_identity(group.replace_tls_identities(caller.worker(), group_endpoint, {.identities_ = ruvia::tls_fixed_identities{.primary_ = invalid()}}));
     EXPECT_EQ(served_name(io, client, group_port.endpoint(), "localhost"), "second");
     auto replace_app = [&] {
         auto endpoint = app_endpoint;
-        ruvia::tls_config config{.identity_ = file_identity(second)};
+        ruvia::tls_config config{.identities_ = ruvia::tls_fixed_identities{.primary_ = file_identity(second)}};
         return app.replace_tls_identities(caller.worker(), endpoint, std::move(config));
     }();
     EXPECT_FALSE(queued_preparation(runtime, std::move(replace_app)));
     EXPECT_EQ(served_name(io, client, app_port.endpoint(), "localhost"), "second");
-    expect_bad_identity(app.replace_tls_identities(caller.worker(), app_endpoint, {.identity_ = invalid()}));
+    expect_bad_identity(app.replace_tls_identities(caller.worker(), app_endpoint, {.identities_ = ruvia::tls_fixed_identities{.primary_ = invalid()}}));
     EXPECT_EQ(served_name(io, client, app_port.endpoint(), "localhost"), "second");
     app.stop();
     runner.join();

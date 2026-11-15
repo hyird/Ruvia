@@ -12,6 +12,7 @@
 #include <variant>
 
 #include "borrowed_text.h"
+#include "decode_step.h"
 
 namespace ruvia {
 
@@ -39,15 +40,18 @@ struct http_capsule_event final {
     bool end_capsule_{false};
 };
 using http_capsule_callback_type = void (*)(void*, http_capsule_event);
-enum class http_capsule_status : std::uint8_t { need_input,
-    end,
+enum class http_capsule_decode_error : std::uint8_t {
+    // The stream ended inside a capsule header or payload.
     truncated,
-    limit };
-struct http_capsule_feed_result final {
-    http_capsule_status status_{http_capsule_status::need_input};
-    std::size_t consumed_bytes_{};
-    bool capsule_complete_{};
+    // A kept capsule exceeds http_capsule_config::max_capsule_length_.
+    limit_exceeded,
 };
+using http_capsule_decode_failure = decode_failure<http_capsule_decode_error>;
+// A kept capsule ended within the input feed_one() consumed.
+struct http_capsule_boundary final {};
+// One feed() or feed_one() outcome: more input needed, a kept capsule ended
+// (feed_one() only), the stream ended at FIN, or a failure.
+using http_capsule_feed_result = decode_step<decode_need_input, http_capsule_boundary, decode_complete, http_capsule_decode_failure>;
 // max_capsule_length_ bounds the capsules a reader keeps (see
 // http_capsule_retention); dropped capsules are skipped at any length.
 struct http_capsule_config final {
@@ -73,21 +77,31 @@ enum class http_capsule_retention : std::uint8_t {
 // storage) only during callbacks. No owned payload or event queue is created.
 // The retention of a capsule is decided from the feed call that completes its
 // header (and, for udp_payloads, its Context ID).
+// FIN finishes the decoder and a failure fails it; either then repeats its
+// result without consuming input until reset().
 class http_capsule_decoder final {
 public:
     explicit http_capsule_decoder(http_capsule_config config = {});
-    [[nodiscard]] http_capsule_status feed(std::span<const char> input, bool fin, http_capsule_callback_type callback, void* context, http_capsule_retention retention = http_capsule_retention::all);
+    [[nodiscard]] decoder_state state() const noexcept {
+        return state_;
+    }
+    // Starts a new capsule stream with the constructed configuration.
+    void reset() noexcept;
+    // Consumes all of input unless a kept capsule exceeds the length limit.
+    [[nodiscard]] http_capsule_feed_result feed(std::span<const char> input, bool fin, http_capsule_callback_type callback, void* context, http_capsule_retention retention = http_capsule_retention::all);
     template <typename visitor_type>
         requires std::invocable<visitor_type&, http_capsule_event>
-    [[nodiscard]] http_capsule_status feed(std::span<const char> input, bool fin, visitor_type&& visitor, http_capsule_retention retention = http_capsule_retention::all) {
+    [[nodiscard]] http_capsule_feed_result feed(std::span<const char> input, bool fin, visitor_type&& visitor, http_capsule_retention retention = http_capsule_retention::all) {
         auto& target = visitor;
         return feed(input, fin, +[](void* context, http_capsule_event event) {
             (*static_cast<std::remove_reference_t<visitor_type>*>(context))(event);
         }, std::addressof(target), retention);
     }
     // Stops at the first complete kept capsule. The unconsumed suffix stays with
-    // the caller; FIN is committed only after all input is consumed. This permits
-    // pull-based adapters without buffering a queue of complete capsules.
+    // the caller; FIN is committed only after all input is consumed, so a
+    // capsule that ends exactly at FIN reports the boundary and leaves the
+    // decoder finished. This permits pull-based adapters without buffering a
+    // queue of complete capsules.
     [[nodiscard]] http_capsule_feed_result feed_one(std::span<const char> input, bool fin, http_capsule_callback_type callback, void* context, http_capsule_retention retention = http_capsule_retention::all);
     template <typename visitor_type>
         requires std::invocable<visitor_type&, http_capsule_event>
@@ -110,7 +124,9 @@ private:
     std::uint64_t type_{0}, remaining_{0};
     payload_mode mode_{payload_mode::deliver};
     bool payload_{false}, feeding_{false};
-    http_capsule_status status_{http_capsule_status::need_input};
+    decoder_state state_{decoder_state::active};
+    // Meaningful only while state_ is failed.
+    http_capsule_decode_error error_{http_capsule_decode_error::truncated};
 };
 [[nodiscard]] std::variant<std::size_t, http_capsule_codec_error> encode_http_capsule_header(std::span<char> output, std::uint64_t type, std::uint64_t length) noexcept;
 enum class http_datagram_error : std::uint8_t {

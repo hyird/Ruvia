@@ -6,7 +6,7 @@
 #include <asio/ip/tcp.hpp>
 #include <asio/socket_base.hpp>
 
-#include "http_client_types.h"
+#include "client_transport_config.h"
 
 // Validation and application of client_tcp_config socket policies.
 namespace ruvia::detail {

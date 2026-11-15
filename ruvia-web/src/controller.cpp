@@ -16,6 +16,7 @@
 #include "borrowed_text.h"
 #include "callback_ref.h"
 #include "http_error.h"
+#include "http_request.h"
 #include "http_tunnel.h"
 #include "middleware.h"
 #include "rate_limit.h"
@@ -180,7 +181,8 @@ controller_store::controller_store() = default;
 controller_store::controller_store(std::span<const controller_registrar> registrars) {
     lifetimes_.reserve(registrars.size());
     for (const auto& registrar : registrars) {
-        registrar.create_(*this);
+        // Capacity is reserved, so adopting a created instance cannot throw.
+        lifetimes_.emplace_back(registrar.create_(), registrar.destroy_);
     }
 }
 
@@ -196,10 +198,6 @@ std::size_t controller_store::size() const noexcept {
 
 void* controller_store::instance(std::size_t slot) const noexcept {
     return lifetimes_[slot].target_;
-}
-
-void controller_store::add_lifetime(void* target, destroy_type destroy) {
-    lifetimes_.emplace_back(target, destroy);
 }
 
 bool add_controller_registrar(controller_registrar registrar_value) {
@@ -231,6 +229,23 @@ std::vector<controller_registrar> seal_controller_registrars() {
 }  // namespace ruvia
 
 namespace ruvia::detail {
+
+std::string_view normalize_fallback_prefix(std::string_view prefix) {
+    if (prefix.empty() || prefix.front() != '/') {
+        throw std::invalid_argument("fallback prefix must start with '/'");
+    }
+    if ((prefix.find('?') != std::string_view::npos) || !is_valid_http_origin_form_target(prefix)) {
+        throw std::invalid_argument("fallback prefix must be an origin-form path without query");
+    }
+    while (prefix.size() > 1 && prefix.back() == '/') {
+        prefix.remove_suffix(1);
+    }
+    if (prefix == "/") {
+        throw std::invalid_argument("fallback prefix must not be '/'; register app-wide without a prefix");
+    }
+    return prefix;
+}
+
 namespace {
 
 template <typename handlers_type, typename handler_type>

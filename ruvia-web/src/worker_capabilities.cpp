@@ -19,6 +19,7 @@
 #include "startup_config.h"
 #include "stop_token.h"
 #include "task.h"
+#include "web_worker.h"
 #include "worker_ref.h"
 #include "worker_state.h"
 #ifdef RUVIA_ENABLE_DATABASE

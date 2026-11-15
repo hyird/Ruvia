@@ -395,7 +395,7 @@ public:
     [[nodiscard]] std::int64_t start_streaming_request(std::string_view method, std::string_view path, std::optional<http_content_length> length = std::nullopt) {
         const auto stream_id = open_stream(false);
         const auto request_authority = authority();
-        const http_regular_request_head_view head{.method_ = method, .authority_ = std::optional<borrowed_text>(request_authority), .target_ = path, .content_ = http_request_content_plan::streaming(length)};
+        const http_request_head_view head{.method_ = method, .authority_ = std::optional<borrowed_text>(request_authority), .target_ = path, .content_ = http_request_content_plan::streaming(length)};
         if (connection_->http3().submit_request_head(stream_id, head) != http_submit_status::accepted) {
             throw std::runtime_error("HTTP/3 test client cannot submit the streaming request head");
         }
@@ -444,12 +444,17 @@ public:
         }
     }
 
-    [[nodiscard]] std::int64_t start_tunnel(const http_connect_request_head_view& request) {
-        return open_tunnel(request);
-    }
-
-    [[nodiscard]] std::int64_t start_tunnel(const http_extended_connect_request_head_view& request) {
-        return open_tunnel(request);
+    [[nodiscard]] std::int64_t start_tunnel(const http_request_head_view& request) {
+        if (request.kind() == http_request_head_kind::extended_connect) {
+            // TLS completion does not imply arrival of the server's HTTP/3 SETTINGS.
+            (void)peer_settings();
+        }
+        const auto stream_id = open_stream(false);
+        if (connection_->http3().submit_request_head(stream_id, request) != http_submit_status::accepted) {
+            throw std::runtime_error("HTTP/3 tunnel request was not accepted");
+        }
+        flush();
+        return stream_id;
     }
 
     void send_stream_data(std::int64_t stream_id, std::span<const std::byte> payload, bool finish = false) {
@@ -461,7 +466,7 @@ public:
             bytes.remove_prefix(submitted.consumed_bytes_);
             if (submitted.status_ == http_data_submit_status::backpressured && submitted.consumed_bytes_ == 0) {
                 wait_or_throw([&] {
-                    return codec.pending_output_bytes(stream_id) < max_stream_output_bytes || response_complete(stream);
+                    return codec.unacknowledged_data_bytes(stream_id) < max_stream_output_bytes || response_complete(stream);
                 }, "HTTP/3 tunnel write did not progress");
                 if (response_complete(stream)) {
                     throw std::runtime_error("HTTP/3 tunnel closed during write");
@@ -793,20 +798,6 @@ private:
         return *opened;
     }
 
-    template <typename head_type>
-    [[nodiscard]] std::int64_t open_tunnel(const head_type& request) {
-        if constexpr (std::is_same_v<head_type, http_extended_connect_request_head_view>) {
-            // TLS completion does not imply arrival of the server's HTTP/3 SETTINGS.
-            (void)peer_settings();
-        }
-        const auto stream_id = open_stream(false);
-        if (connection_->http3().submit_request_head(stream_id, request) != http_submit_status::accepted) {
-            throw std::runtime_error("HTTP/3 tunnel request was not accepted");
-        }
-        flush();
-        return stream_id;
-    }
-
     [[nodiscard]] std::int64_t open_request(std::string_view method, std::string_view request_path, std::initializer_list<std::pair<std::string_view, std::string_view>> headers, std::string_view body, bool consume_on_arrival) {
         const auto stream_id = open_stream(consume_on_arrival);
         auto& stream = streams_.at(stream_id);
@@ -817,7 +808,7 @@ private:
         for (const auto& [name, value] : headers) {
             fields.emplace_back(name, value);
         }
-        const http_regular_request_head_view head{.method_ = method, .authority_ = std::optional<borrowed_text>(request_authority), .target_ = request_path, .headers_ = fields, .content_ = body.empty() ? http_request_content_plan::none() : http_request_content_plan::known_length(body.size())};
+        const http_request_head_view head{.method_ = method, .authority_ = std::optional<borrowed_text>(request_authority), .target_ = request_path, .headers_ = fields, .content_ = body.empty() ? http_request_content_plan::none() : http_request_content_plan::known_length(body.size())};
         if (connection_->http3().submit_request_head(stream_id, head) != http_submit_status::accepted) {
             throw std::runtime_error("HTTP/3 test client cannot submit the request head");
         }
@@ -844,7 +835,7 @@ private:
             // The stream's output budget is full until the server acknowledges
             // DATA; an early complete response also ends the upload.
             wait_or_throw([&] {
-                return codec.pending_output_bytes(stream_id) < max_stream_output_bytes || response_complete(stream);
+                return codec.unacknowledged_data_bytes(stream_id) < max_stream_output_bytes || response_complete(stream);
             }, "HTTP/3 request body was not acknowledged");
             if (response_complete(stream)) {
                 return;

@@ -15,7 +15,6 @@
 
 #include "decimal_text.h"
 #include "http1_server_response.h"
-#include "http_client_request_view.h"
 #include "http_date_parts.h"
 #include "http_field_kind.h"
 #include "http_field_text.h"
@@ -26,6 +25,7 @@
 #include "http_message_framing_fields.h"
 #include "http_protocol.h"
 #include "http_request.h"
+#include "http_request_head_view.h"
 #include "http_response.h"
 #include "http_response_framing.h"
 #include "http_status.h"

@@ -2,7 +2,7 @@
 
 namespace ruvia {
 
-http_protocol_error http_parse_protocol_error(http_parse_error error) noexcept {
+http_protocol_error make_http_protocol_error(http_parse_error error) noexcept {
     switch (error) {
         case http_parse_error::header_too_large:
             return http_protocol_error(http_status::request_header_fields_too_large, "header_too_large", "request header is too large");

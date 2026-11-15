@@ -12,7 +12,7 @@
 #include <vector>
 
 #include "borrowed_text.h"
-#include "http_client_types.h"
+#include "client_transport_config.h"
 #include "ip_address.h"
 #include "operation_options.h"
 #include "outbound_bytes.h"

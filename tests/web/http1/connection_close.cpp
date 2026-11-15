@@ -273,7 +273,7 @@ TEST(Ruvia, server_closes_connections_gracefully) {
                                                                                                                            .address_ = "127.0.0.1",
                                                                                                                            .http_ = plain_endpoint.port(),
                                                                                                                            .https_ = tls_endpoint.port(),
-                                                                                                                           .tls_ = {.identity_ = {.certificate_chain_file_ = identity.ca_file_, .private_key_file_ = private_key}},
+                                                                                                                           .tls_ = {.identities_ = ruvia::tls_fixed_identities{.primary_ = {.certificate_chain_file_ = identity.ca_file_, .private_key_file_ = private_key}}},
                                                                                                                        })
         .on_start([] {
         started.release();

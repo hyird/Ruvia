@@ -97,7 +97,7 @@ void exercise_client(bool reset_peer, bool secure = false) {
                         EXPECT_TRUE(built_request.header("x-client") == "unified");
                         const auto request_view = request->request_view();
                         saw_extended_connect = request_view.method_ == "CONNECT" && request_view.protocol_ == "websocket";
-                        const auto validation = ruvia::validate_http2_websocket_handshake(connection, request->stream_id(), built_request);
+                        const auto validation = connection.validate_websocket_handshake(request->stream_id(), built_request);
                         const auto submitted = connection.submit_websocket_handshake(request->stream_id(), built_request, validation, {.deflate_ = {.enabled_ = true}});
                         const auto* negotiated = std::get_if<ruvia::websocket_extended_connect_negotiation>(&submitted);
                         if (negotiated == nullptr) {
@@ -251,7 +251,7 @@ void exercise_closing_peer(closing_peer behavior) {
                 while (auto event = connection.next_event()) {
                     if (auto* head = event->request_head()) {
                         const auto built_request = head->build_request();
-                        const auto validation = ruvia::validate_http2_websocket_handshake(connection, head->stream_id(), built_request);
+                        const auto validation = connection.validate_websocket_handshake(head->stream_id(), built_request);
                         const auto submitted = connection.submit_websocket_handshake(head->stream_id(), built_request, validation);
                         EXPECT_TRUE(std::holds_alternative<ruvia::websocket_extended_connect_negotiation>(submitted));
                         request.emplace(std::move(*head));
@@ -445,7 +445,7 @@ void exercise_handshake_end(handshake_end mode) {
                         co_await asio::async_write(socket, asio::buffer(output), asio::use_awaitable);
                     } else {
                         const auto built_request = head->build_request();
-                        const auto validation = ruvia::validate_http2_websocket_handshake(connection, head->stream_id(), built_request);
+                        const auto validation = connection.validate_websocket_handshake(head->stream_id(), built_request);
                         const auto submitted = connection.submit_websocket_handshake(head->stream_id(), built_request, validation);
                         EXPECT_TRUE(std::holds_alternative<ruvia::websocket_extended_connect_negotiation>(submitted));
                         ruvia::http_io_buffer websocket_input;

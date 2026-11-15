@@ -82,7 +82,7 @@ sse_parser::sse_parser(sse_parser_options options) :
     event_limit_(options.event_limit_) {}
 
 sse_parse_result sse_parser::parse(std::string_view input) & {
-    if (state_ != sse_parser_state::active) {
+    if (state_ != decoder_state::active) {
         throw std::logic_error("SSE parser is not active");
     }
     release_event_buffers();
@@ -93,7 +93,7 @@ sse_parse_result sse_parser::parse(std::string_view input) & {
             ++position;
         }
         if (bom_matched_ < sse_utf8_bom.size() && position == input.size()) {
-            return {.consumed_bytes_ = position};
+            return sse_parse_result(position, decode_need_input{});
         }
         bom_settled_ = true;
         if (bom_matched_ < sse_utf8_bom.size()) {
@@ -118,7 +118,7 @@ sse_parse_result sse_parser::parse(std::string_view input) & {
             const auto stop = rest.find_first_of(":\r\n");
             append_name(rest.substr(0, stop));
             if (stop == std::string_view::npos) {
-                return {.consumed_bytes_ = input.size()};
+                return sse_parse_result(input.size(), decode_need_input{});
             }
             position += stop + 1;
             const bool unnamed = name_size_ == 0 && !name_overflow_;
@@ -132,14 +132,14 @@ sse_parse_result sse_parser::parse(std::string_view input) & {
             skip_line_feed_ = rest[stop] == '\r';
             if (unnamed) {
                 if (dispatch()) {
-                    return {.consumed_bytes_ = position, .event_ = sse_event(event_type_.empty() ? sse_default_event_type : std::string_view(event_type_), data_, last_event_id_)};
+                    return sse_parse_result(position, sse_event(event_type_.empty() ? sse_default_event_type : std::string_view(event_type_), data_, last_event_id_));
                 }
                 continue;
             }
             // A line without a colon names a field with an empty value.
             if (!end_line()) {
                 fail();
-                return {.consumed_bytes_ = position};
+                return sse_parse_result(position, sse_parse_failure(sse_parse_error::event_limit_exceeded));
             }
             continue;
         }
@@ -147,10 +147,10 @@ sse_parse_result sse_parser::parse(std::string_view input) & {
         const auto bytes = rest.substr(0, stop);
         if (phase_ == line_phase::value && !append_value(bytes)) {
             fail();
-            return {.consumed_bytes_ = position};
+            return sse_parse_result(position, sse_parse_failure(sse_parse_error::event_limit_exceeded));
         }
         if (stop == std::string_view::npos) {
-            return {.consumed_bytes_ = input.size()};
+            return sse_parse_result(input.size(), decode_need_input{});
         }
         position += stop + 1;
         skip_line_feed_ = rest[stop] == '\r';
@@ -158,14 +158,14 @@ sse_parse_result sse_parser::parse(std::string_view input) & {
             reset_line();
         } else if (!end_line()) {
             fail();
-            return {.consumed_bytes_ = position};
+            return sse_parse_result(position, sse_parse_failure(sse_parse_error::event_limit_exceeded));
         }
     }
-    return {.consumed_bytes_ = position};
+    return sse_parse_result(position, decode_need_input{});
 }
 
 void sse_parser::finish() noexcept {
-    if (state_ != sse_parser_state::active) {
+    if (state_ != decoder_state::active) {
         return;
     }
     release_event_buffers();
@@ -173,7 +173,7 @@ void sse_parser::finish() noexcept {
     http_clear_string_retaining_small(data_);
     http_clear_string_retaining_small(event_type_);
     http_clear_string_retaining_small(value_);
-    state_ = sse_parser_state::finished;
+    state_ = decoder_state::finished;
 }
 
 void sse_parser::reset() noexcept {
@@ -188,7 +188,7 @@ void sse_parser::reset() noexcept {
     skip_line_feed_ = false;
     bom_matched_ = 0;
     bom_settled_ = false;
-    state_ = sse_parser_state::active;
+    state_ = decoder_state::active;
 }
 
 std::size_t sse_parser::buffered_bytes() const noexcept {
@@ -308,7 +308,7 @@ void sse_parser::fail() noexcept {
     http_clear_string_retaining_small(data_);
     http_clear_string_retaining_small(event_type_);
     http_clear_string_retaining_small(value_);
-    state_ = sse_parser_state::failed;
+    state_ = decoder_state::failed;
 }
 
 std::string format_sse_message(const sse_message& message) {

@@ -17,7 +17,6 @@
 #include "http2_push.h"
 #include "http2_stream_state.h"
 #include "http_binary_message.h"
-#include "http_client_request_view.h"
 #include "http_client_response_head.h"
 #include "http_header.h"
 #include "http_message.h"
@@ -25,6 +24,7 @@
 #include "http_multiplexed_stream.h"
 #include "http_priority.h"
 #include "http_request.h"
+#include "http_request_head_view.h"
 #include "http_response.h"
 #include "http_response_body.h"
 #include "http_response_stream.h"
@@ -66,9 +66,9 @@ namespace {
     return result_value;
 }
 
-[[nodiscard]] http2_message_content_semantics message_content_semantics(const detail::http2_stream_state& stream) noexcept {
+[[nodiscard]] http_message_content_semantics message_content_semantics(const detail::http2_stream_state& stream) noexcept {
     const auto& content = stream.remote_content();
-    return content.metadata_only_without_length() != nullptr || content.metadata_only_known_length() != nullptr ? http2_message_content_semantics::metadata_only : http2_message_content_semantics::content;
+    return content.metadata_only_without_length() != nullptr || content.metadata_only_known_length() != nullptr ? http_message_content_semantics::metadata_only : http_message_content_semantics::content;
 }
 
 }  // namespace
@@ -100,7 +100,7 @@ public:
             if (stream == nullptr) {
                 throw std::logic_error("HTTP/2 response event has no stream");
             }
-            return ::ruvia::http2_event::response_head(value.stream_id_, response_head_from_stream(*stream), value.request_content_signal_, !value.body_open_);
+            return ::ruvia::http2_event(detail::http_stream_event_access::make<http2_response_head_event>(value.stream_id_, response_head_from_stream(*stream), value.request_content_signal_, !value.body_open_));
         }
         if (stream == nullptr) {
             throw std::logic_error("HTTP/2 request event has no stream");
@@ -131,15 +131,15 @@ public:
         if constexpr (std::is_same_v<value_type, detail::http2_message_head_record>) {
             return materialize_message_head_event(value);
         } else if constexpr (std::is_same_v<value_type, detail::http2_message_data_record>) {
-            return ::ruvia::http2_event::data(value.stream_id_, value.bytes_, detail::http_received_data_credit_access::make(this, value.stream_id_, value.flow_control_bytes_));
+            return ::ruvia::http2_event(detail::http_stream_event_access::make<http2_data_event>(value.stream_id_, value.bytes_, false, detail::http_received_data_credit_access::make(this, value.stream_id_, value.flow_control_bytes_)));
         } else if constexpr (std::is_same_v<value_type, detail::http2_tunnel_data_record>) {
-            return ::ruvia::http2_event::tunnel_data(value.stream_id_, value.bytes_, detail::http_received_data_credit_access::make(this, value.stream_id_, value.flow_control_bytes_));
+            return ::ruvia::http2_event(detail::http_stream_event_access::make<http2_tunnel_data_event>(value.stream_id_, value.bytes_, false, detail::http_received_data_credit_access::make(this, value.stream_id_, value.flow_control_bytes_)));
         } else if constexpr (std::is_same_v<value_type, detail::http2_message_end_record>) {
             auto* stream = connection_.stream(value.stream_id_);
             if (stream == nullptr) {
                 throw std::logic_error("HTTP/2 message end event has no stream");
             }
-            auto result = ::ruvia::http2_event::message_end(value.stream_id_, stream->take_remote_trailers(), message_content_semantics(*stream));
+            auto result = ::ruvia::http2_event(detail::http_stream_event_access::make<http2_message_end_event>(value.stream_id_, stream->take_remote_trailers(), message_content_semantics(*stream)));
             if (client) {
                 connection_.release_stream_lease_after_remote_end(value.stream_id_);
             }
@@ -255,10 +255,10 @@ http2_connection::~http2_connection() = default;
 http2_connection::http2_connection(http2_connection&&) noexcept = default;
 http2_connection& http2_connection::operator=(http2_connection&&) noexcept = default;
 
-websocket_handshake_validation_result validate_http2_websocket_handshake(http2_connection& connection, std::uint32_t stream_id, const http_request& request, websocket_handshake_validation_options options) noexcept {
-    const auto* stream = connection.impl_->connection_.stream(stream_id);
+websocket_handshake_validation_result http2_connection::validate_websocket_handshake(std::uint32_t stream_id, const http_request& request, websocket_handshake_validation_options options) const noexcept {
+    const auto* stream = impl_->connection_.stream(stream_id);
     if (stream == nullptr || !detail::http2_websocket_connect_ready(*stream)) {
-        return websocket_handshake_validation_result::make_invalid_request();
+        return websocket_handshake_error::invalid_request;
     }
     // RFC 8441 section 5: :protocol supersedes the RFC 6455 key exchange, so
     // Sec-WebSocket-Key and Sec-WebSocket-Accept are not processed here.
@@ -276,8 +276,8 @@ http_connection_role http2_connection::role() const noexcept {
 bool http2_connection::header_block_in_progress() const noexcept {
     return impl_->connection_.header_block_in_progress();
 }
-bool http2_connection::received_peer_settings() const noexcept {
-    return impl_->connection_.received_peer_settings();
+const std::optional<http2_peer_settings>& http2_connection::peer_settings() const& noexcept {
+    return impl_->connection_.peer_settings();
 }
 std::uint64_t http2_connection::received_stream_progress() const noexcept {
     return impl_->connection_.received_stream_progress();
@@ -312,29 +312,24 @@ bool http2_connection::wants_write() const noexcept {
     return impl_->connection_.wants_write();
 }
 
-std::variant<std::uint32_t, http2_request_head_submit_error> http2_connection::submit_request_head(const http_regular_request_head_view& request) {
+std::variant<std::uint32_t, http_submit_status> http2_connection::submit_request_head(const http_request_head_view& request) {
     impl_->connection_.retry_deferred_stream_leases();
-    std::optional<std::string_view> authority;
-    if (request.authority_) {
-        authority = request.authority_->view();
-    }
-    auto result_value = impl_->connection_.submit_regular_request_head(request.method_.view(), request.scheme_.view(), authority, request.target_.view(), static_cast<std::span<const http_header_view>>(request.headers_), request.content_, request.expectation_, request.field_source_);
+    auto result_value = impl_->connection_.submit_request_head(request);
     impl_->connection_.lease_submitted_request(result_value);
     return result_value;
 }
 
-std::variant<std::uint32_t, http2_request_head_submit_error> http2_connection::submit_request_head(const http_connect_request_head_view& request) {
-    impl_->connection_.retry_deferred_stream_leases();
-    auto result_value = impl_->connection_.submit_connect_request_head(request.authority_.view(), static_cast<std::span<const http_header_view>>(request.headers_), request.field_source_);
-    impl_->connection_.lease_submitted_request(result_value);
-    return result_value;
-}
-
-std::variant<std::uint32_t, http2_request_head_submit_error> http2_connection::submit_request_head(const http_extended_connect_request_head_view& request) {
-    impl_->connection_.retry_deferred_stream_leases();
-    auto result_value = impl_->connection_.submit_extended_connect_request_head(request.protocol_.view(), request.scheme_.view(), request.authority_.view(), request.target_.view(), static_cast<std::span<const http_header_view>>(request.headers_), request.field_source_);
-    impl_->connection_.lease_submitted_request(result_value);
-    return result_value;
+std::variant<std::uint32_t, http_submit_status> http2_connection::submit_websocket_request_head(const websocket_client_negotiation& negotiation, std::string_view scheme, std::string_view authority, std::string_view target, borrowed_http_headers headers, http_request_field_source source) {
+    const auto staged_headers = detail::stage_websocket_extended_connect_fields(negotiation, headers.view());
+    return submit_request_head({
+        .method_ = "CONNECT",
+        .protocol_ = "websocket",
+        .scheme_ = scheme,
+        .authority_ = authority,
+        .target_ = target,
+        .headers_ = staged_headers.view(),
+        .field_source_ = source,
+    });
 }
 
 http_data_submit_result http2_connection::submit_data(std::uint32_t stream_id, std::string_view bytes_value, http2_end_stream end_stream, std::size_t max_payload_bytes) {
@@ -381,7 +376,15 @@ http_finish_status http2_connection::finish_response(std::uint32_t stream_id, co
     return status;
 }
 
-std::variant<http2_request_head_event, http2_push_submit_error> http2_connection::submit_push_request(std::uint32_t associated_stream_id, http_push_request_view request) {
+http_finish_status http2_connection::finish_stream(std::uint32_t stream_id) {
+    auto& connection = impl_->connection_;
+    const auto status = connection.finish_stream(stream_id);
+    connection.retry_deferred_stream_lease(stream_id);
+    connection.retry_deferred_stream_leases();
+    return status;
+}
+
+std::variant<http2_request_head_event, http2_push_submit_error> http2_connection::submit_push_request(std::uint32_t associated_stream_id, const http_request_head_view& request) {
     impl_->connection_.retry_deferred_stream_leases();
     const auto id = impl_->connection_.submit_push_promise(associated_stream_id, request);
     if ((id.index() != 0)) {
@@ -466,20 +469,11 @@ bool http2_connection::draining() const noexcept {
 bool http2_connection::drain_final() const noexcept {
     return impl_->connection_.drain_final();
 }
+bool http2_connection::drained() const noexcept {
+    return impl_->connection_.drained();
+}
 std::optional<http2_error_code> http2_connection::connection_error() const noexcept {
     return impl_->connection_.connection_error();
-}
-
-std::variant<std::uint32_t, http2_request_head_submit_error> submit_http2_websocket_client_request(http2_connection& connection, const websocket_client_negotiation& negotiation, std::string_view scheme, std::string_view authority, std::string_view target, borrowed_http_headers headers, http_request_field_source source) {
-    const auto staged_headers = detail::stage_websocket_extended_connect_fields(negotiation, headers.view());
-    return connection.submit_request_head(http_extended_connect_request_head_view{
-        .protocol_ = "websocket",
-        .scheme_ = scheme,
-        .authority_ = authority,
-        .target_ = target,
-        .headers_ = staged_headers.view(),
-        .field_source_ = source,
-    });
 }
 
 }  // namespace ruvia

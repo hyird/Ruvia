@@ -36,13 +36,13 @@
 #include "http3_quic_driver.h"
 #include "http_client_pool.h"
 #include "http_client_request_storage.h"
-#include "http_client_request_view.h"
 #include "http_client_response_state.h"
 #include "http_client_types.h"
 #include "http_header.h"
 #include "http_message.h"
 #include "http_priority.h"
 #include "http_request.h"
+#include "http_request_head_view.h"
 #include "http_response_body.h"
 #include "ip_address.h"
 #include "ip_address_conversion.h"
@@ -490,17 +490,17 @@ public:
         auto& connection = quic_->http3();
         if (request.is_tunnel()) {
             if (const auto* websocket = request.websocket()) {
-                require_accepted(submit_http3_websocket_client_request(connection, item.id_, websocket->negotiation_, "https", request.tunnel_authority(), request.target(), headers, request.options_.field_source_));
+                require_accepted(connection.submit_websocket_request_head(item.id_, websocket->negotiation_, "https", request.tunnel_authority(), request.target(), headers, request.options_.field_source_));
             } else if (request.tunnel_protocol().empty()) {
-                const http_connect_request_head_view head{.authority_ = request.tunnel_authority(), .headers_ = headers, .field_source_ = request.options_.field_source_};
+                const http_request_head_view head{.method_ = "CONNECT", .authority_ = request.tunnel_authority(), .headers_ = headers, .field_source_ = request.options_.field_source_};
                 require_accepted(connection.submit_request_head(item.id_, head));
             } else {
-                const http_extended_connect_request_head_view head{.protocol_ = request.tunnel_protocol(), .scheme_ = "https", .authority_ = request.tunnel_authority(), .target_ = request.target(), .headers_ = headers, .field_source_ = request.options_.field_source_};
+                const http_request_head_view head{.method_ = "CONNECT", .protocol_ = request.tunnel_protocol(), .scheme_ = "https", .authority_ = request.tunnel_authority(), .target_ = request.target(), .headers_ = headers, .field_source_ = request.options_.field_source_};
                 require_accepted(connection.submit_request_head(item.id_, head));
             }
             return;
         }
-        const http_regular_request_head_view head{
+        const http_request_head_view head{
             .method_ = request.method(),
             .scheme_ = "https",
             .authority_ = std::optional<borrowed_text>(request.route().authority_),
@@ -1223,11 +1223,11 @@ public:
                 co_await item.signal_.wait();
             }
         }
-        auto outstanding = quic_->http3().pending_output_bytes(item.id_);
+        auto outstanding = quic_->http3().unacknowledged_data_bytes(item.id_);
         while (outstanding != 0 && !stopped()) {
             check(item);
             co_await item.signal_.wait();
-            const auto remaining = quic_->http3().pending_output_bytes(item.id_);
+            const auto remaining = quic_->http3().unacknowledged_data_bytes(item.id_);
             if (remaining < outstanding && item.response_.effective_write_timeout_) {
                 item.timer_.write_deadline_ = deadline_after(item.response_.effective_write_timeout_->value());
                 schedule(item);

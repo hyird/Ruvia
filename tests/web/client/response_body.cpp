@@ -47,12 +47,12 @@
 #include "http1_server_response.h"
 #include "http2_connection.h"
 #include "http_client.h"
-#include "http_client_request_view.h"
 #include "http_client_types.h"
 #include "http_content_codec.h"
 #include "http_content_coding.h"
 #include "http_header.h"
 #include "http_request.h"
+#include "http_request_head_view.h"
 #include "http_response.h"
 #include "http_response_stream.h"
 #include "http_server_fixture.h"
@@ -307,20 +307,20 @@ private:
             ruvia::http1_chunked_body_decoder decoder;
             for (;;) {
                 const auto decoded = decoder.decode(input);
-                if (decoded.failure()) {
+                if (decoded.holds<ruvia::http1_chunk_decode_failure>()) {
                     throw std::runtime_error("invalid upload chunk framing");
                 }
-                if (const auto* chunk = decoded.body_chunk()) {
+                if (const auto* chunk = decoded.get_if<ruvia::decode_output>()) {
                     body_.append(chunk->bytes());
                 }
-                if (const auto* complete = decoded.complete()) {
+                if (const auto* complete = decoded.get_if<ruvia::http1_chunk_decode_complete>()) {
                     if (trailers_.append_received(complete->trailers())) {
                         throw std::runtime_error("invalid upload trailers");
                     }
                     break;
                 }
                 input.erase(0, decoded.consumed_bytes());
-                if (decoded.need_input()) {
+                if (decoded.holds<ruvia::decode_need_input>()) {
                     co_await asio::async_read(socket, asio::dynamic_buffer(input), asio::transfer_at_least(1), asio::use_awaitable);
                 }
             }

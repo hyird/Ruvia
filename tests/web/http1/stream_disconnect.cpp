@@ -562,7 +562,7 @@ TEST(Ruvia, http1_stream_peer_close_stops_request_and_recycles_connections) {
     const auto tls_endpoint = tls_reservation.endpoint();
     auto& app = ruvia::app();
     static std::binary_semaphore started{0};
-    app.workers({.worker_count_ = 2}).server({.idle_timeout_ = 15s, .connection_scan_interval_ = 5ms, .write_timeout_ = 150ms}).listen({.address_ = "127.0.0.1", .http_ = plain_endpoint.port(), .https_ = tls_endpoint.port(), .tls_ = {.identity_ = {.certificate_chain_file_ = identity.ca_file_, .private_key_file_ = private_key}}}).on_error([](ruvia::context& c, ruvia::http_error_info error) -> ruvia::task<ruvia::http_response> {
+    app.workers({.worker_count_ = 2}).server({.idle_timeout_ = 15s, .connection_scan_interval_ = 5ms, .write_timeout_ = 150ms}).listen({.address_ = "127.0.0.1", .http_ = plain_endpoint.port(), .https_ = tls_endpoint.port(), .tls_ = {.identities_ = ruvia::tls_fixed_identities{.primary_ = {.certificate_chain_file_ = identity.ca_file_, .private_key_file_ = private_key}}}}).on_error([](ruvia::context& c, ruvia::http_error_info error) -> ruvia::task<ruvia::http_response> {
         errors.fetch_add(1);
         std::cerr << "stream_disconnect error: " << error.code() << ": " << error.message() << '\n';
         co_return c.text("unexpected-error", {.status_ = error.status()});

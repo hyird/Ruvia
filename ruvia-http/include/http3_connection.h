@@ -18,12 +18,12 @@
 #include "borrowed_text.h"
 #include "http1_server_response.h"
 #include "http3_request_head.h"
-#include "http_client_request_view.h"
 #include "http_client_response_head.h"
 #include "http_connection_advertisement.h"
 #include "http_header.h"
 #include "http_multiplexed_stream.h"
 #include "http_priority.h"
+#include "http_request_head_view.h"
 #include "http_response.h"
 #include "http_response_body.h"
 #include "http_response_stream.h"
@@ -130,142 +130,24 @@ private:
     http3_request_head head_;
 };
 
-// DATA payload of a request stream. With own_data_events_ the event owns its
-// bytes; otherwise they borrow the read_stream() input. The credit stays with
-// the event until take_credit() hands it to the consumer.
-// Move assignment returns the target's untaken credit.
-class http3_data_event final {
-public:
-    http3_data_event(const http3_data_event&) = delete;
-    http3_data_event& operator=(const http3_data_event&) = delete;
-    http3_data_event(http3_data_event&& other) noexcept;
-    http3_data_event& operator=(http3_data_event&& other) noexcept;
-
-    [[nodiscard]] std::int64_t stream_id() const noexcept {
-        return stream_id_;
-    }
-    [[nodiscard]] std::string_view bytes() const& noexcept RUVIA_LIFETIMEBOUND {
-        return bytes_;
-    }
-    std::string_view bytes() const&& = delete;
-    [[nodiscard]] http_received_data_credit take_credit() & noexcept {
-        return std::move(credit_);
-    }
-
-private:
-    friend class http3_connection;
-    http3_data_event(std::int64_t stream_id, std::string_view bytes, bool own_bytes, http_received_data_credit credit);
-    std::int64_t stream_id_{-1};
-    std::string_view bytes_;
-    std::string owned_bytes_;
-    bool owns_bytes_{false};
-    http_received_data_credit credit_;
-};
-
-// Client: a 1xx response head (RFC 9114 §4.1). request_content_signal() is
-// continue_ for the first 100 (Continue) of a request submitted with
-// Expect: 100-continue.
-class http3_informational_head_event final {
-public:
-    http3_informational_head_event(http3_informational_head_event&&) noexcept = default;
-    http3_informational_head_event& operator=(http3_informational_head_event&&) = delete;
-    [[nodiscard]] std::int64_t stream_id() const noexcept {
-        return stream_id_;
-    }
-    [[nodiscard]] const http_client_response_head& head() const& noexcept RUVIA_LIFETIMEBOUND {
-        return head_;
-    }
-    const http_client_response_head& head() const&& = delete;
-    [[nodiscard]] http_client_response_head take_head() && noexcept {
-        return std::move(head_);
-    }
-    [[nodiscard]] std::optional<http_client_request_content_signal> request_content_signal() const noexcept {
-        return signal_;
-    }
-
-private:
-    friend class http3_connection;
-    http3_informational_head_event(std::int64_t stream_id, http_client_response_head head, std::optional<http_client_request_content_signal> signal) noexcept :
-        stream_id_(stream_id),
-        head_(std::move(head)),
-        signal_(signal) {}
-    std::int64_t stream_id_;
-    http_client_response_head head_;
-    std::optional<http_client_request_content_signal> signal_;
-};
-
-// Client: the final response head. Fields are validated regular fields; the
-// raw three-digit status is retained (received_status()) and status() applies
-// RFC 9110 §15 semantics (600..999 process as 500). request_content_signal()
-// is exchange_complete when the final head arrived while request content
-// still waited for 100 (Continue). stream_ended(): the HEADERS frame ended
-// the stream, so no content or tunnel DATA follows.
-class http3_response_head_event final {
-public:
-    http3_response_head_event(http3_response_head_event&&) noexcept = default;
-    http3_response_head_event& operator=(http3_response_head_event&&) = delete;
-    [[nodiscard]] std::int64_t stream_id() const noexcept {
-        return stream_id_;
-    }
-    [[nodiscard]] const http_client_response_head& head() const& noexcept RUVIA_LIFETIMEBOUND {
-        return head_;
-    }
-    const http_client_response_head& head() const&& = delete;
-    [[nodiscard]] http_client_response_head take_head() && noexcept {
-        return std::move(head_);
-    }
-    [[nodiscard]] std::optional<http_client_request_content_signal> request_content_signal() const noexcept {
-        return signal_;
-    }
-    [[nodiscard]] bool stream_ended() const noexcept {
-        return stream_ended_;
-    }
-
-private:
-    friend class http3_connection;
-    http3_response_head_event(std::int64_t stream_id, http_client_response_head head, std::optional<http_client_request_content_signal> signal, bool stream_ended) noexcept :
-        stream_id_(stream_id),
-        head_(std::move(head)),
-        signal_(signal),
-        stream_ended_(stream_ended) {}
-    std::int64_t stream_id_;
-    http_client_response_head head_;
-    std::optional<http_client_request_content_signal> signal_;
-    bool stream_ended_;
-};
-
-// The peer ended its send half normally: the request or response content is
-// complete, or a tunnel's receive direction ended. trailers() is the trailer
-// section that preceded the end, empty when there was none. A client receives
-// validated regular fields with those RFC 9110 §6.5.1 forbids in response
-// trailers already discarded; a server receives the decoded regular fields
-// (nghttp3 rejects pseudo-header fields in a trailer section, RFC 9114 §4.3)
-// for http_request_trailers::append_received(). The span borrows the event:
-// it is invalidated when the event is moved or destroyed, or once
-// take_trailers() moved the fields out.
-class http3_message_end_event final {
-public:
-    http3_message_end_event(http3_message_end_event&&) noexcept = default;
-    http3_message_end_event& operator=(http3_message_end_event&&) = delete;
-    [[nodiscard]] std::int64_t stream_id() const noexcept {
-        return stream_id_;
-    }
-    [[nodiscard]] std::span<const http_header> trailers() const& noexcept RUVIA_LIFETIMEBOUND {
-        return trailers_;
-    }
-    std::span<const http_header> trailers() const&& = delete;
-    [[nodiscard]] std::vector<http_header> take_trailers() && noexcept {
-        return std::move(trailers_);
-    }
-
-private:
-    friend class http3_connection;
-    http3_message_end_event(std::int64_t stream_id, std::vector<http_header> trailers) noexcept :
-        stream_id_(stream_id),
-        trailers_(std::move(trailers)) {}
-    std::int64_t stream_id_;
-    std::vector<http_header> trailers_;
-};
+// The HTTP/3 instantiations of the stream events both stream engines publish
+// (http_multiplexed_stream.h).
+// - A data event owns its bytes with own_data_events_ and otherwise borrows
+//   the read_stream() input. A tunnel's bytes are data events and the end of
+//   its receive direction a message end.
+// - A server receives the decoded regular trailer fields (nghttp3 rejects
+//   pseudo-header fields in a trailer section, RFC 9114 §4.3).
+// - A stream closed event is published once QUIC retired the stream; its
+//   identifier may not be submitted to again.
+// - A request-unprocessed event is followed only by the local
+//   H3_REQUEST_CANCELLED transport actions for whichever direction of the
+//   stream is still open.
+using http3_informational_head_event = http_stream_informational_head_event<std::int64_t>;
+using http3_response_head_event = http_stream_response_head_event<std::int64_t>;
+using http3_data_event = http_stream_data_event<std::int64_t, http_stream_data_kind::message>;
+using http3_message_end_event = http_stream_message_end_event<std::int64_t>;
+using http3_stream_closed_event = http_stream_closed_event<std::int64_t, http3_error_code>;
+using http3_request_unprocessed_event = http_stream_request_unprocessed_event<std::int64_t>;
 
 enum class http3_transport_action : std::uint8_t {
     stop_sending,
@@ -330,49 +212,6 @@ private:
         bytes_(bytes) {}
     std::int64_t stream_id_;
     std::size_t bytes_;
-};
-
-// The stream is closed in both directions; no further event names it and its
-// identifier may not be submitted to again. error() is present when the
-// stream ended by RESET_STREAM or STOP_SENDING rather than by completing.
-// A stream reported by http3_request_unprocessed_event publishes no close.
-class http3_stream_closed_event final {
-public:
-    [[nodiscard]] std::int64_t stream_id() const noexcept {
-        return stream_id_;
-    }
-    [[nodiscard]] std::optional<http3_error_code> error() const noexcept {
-        return error_;
-    }
-
-private:
-    friend class http3_connection;
-    constexpr http3_stream_closed_event(std::int64_t stream_id, std::optional<http3_error_code> error) noexcept :
-        stream_id_(stream_id),
-        error_(error) {}
-    std::int64_t stream_id_;
-    std::optional<http3_error_code> error_;
-};
-
-// Client only: a request stream this endpoint opened that the server did not
-// process, so the request may be retried on another connection (RFC 9114
-// §4.1.1, §5.2). Published, after the GOAWAY event, for every open request
-// stream at or above a GOAWAY's identifier, and for a stream the server reset
-// or stopped with H3_REQUEST_REJECTED before its final response head. It is
-// followed only by the local H3_REQUEST_CANCELLED transport actions for
-// whichever direction of the stream is still open; no message, peer
-// notification or stream close names the stream after it.
-class http3_request_unprocessed_event final {
-public:
-    [[nodiscard]] std::int64_t stream_id() const noexcept {
-        return stream_id_;
-    }
-
-private:
-    friend class http3_connection;
-    explicit constexpr http3_request_unprocessed_event(std::int64_t stream_id) noexcept :
-        stream_id_(stream_id) {}
-    std::int64_t stream_id_;
 };
 
 // The peer sent GOAWAY (RFC 9114 §5.2). For a client, id() is the first
@@ -688,28 +527,37 @@ public:
     // The transport supplies monotonically increasing limits; client is a no-op.
     void set_max_client_streams_bidi(std::uint64_t max_streams) noexcept;
 
-    // QUIC allocates client-initiated bidirectional request stream
-    // identifiers. Each head is validated as a whole, against the local and
-    // known peer field section limits, before anything is published; the core
-    // owns the framing fields. A head that leaves the stream open installs a
-    // pull source that submit_data() and the finishing calls resume without
-    // retaining caller views. invalid_state: not a client, not a client
-    // bidirectional stream, or a head was already submitted on it.
-    // invalid_message: the request cannot be sent as HTTP/3 (RFC 9114 §4.3.1,
-    // RFC 9110). Extended CONNECT (RFC 9220) returns peer_settings_pending
+    // Opens the request on a client-initiated bidirectional stream whose
+    // identifier QUIC allocated. The head's kind() selects the request (RFC
+    // 9114 §4.3.1, §4.4, RFC 9220): a regular request needs scheme_ and
+    // target_ (authority_ may be absent), CONNECT only authority_, Extended
+    // CONNECT protocol_, scheme_, authority_ and target_; content_ and
+    // expectation_ belong to a regular request. Each head is validated as a
+    // whole, against the local and known peer field section limits, before
+    // anything is published; the core owns the framing fields. A head that
+    // leaves the stream open installs a pull source that submit_data() and
+    // the finishing calls resume without retaining caller views.
+    // invalid_state: not a client, not a client bidirectional stream, or a
+    // head was already submitted on it. invalid_message: the request cannot
+    // be sent as HTTP/3. Extended CONNECT returns peer_settings_pending
     // before the peer SETTINGS (or 0-RTT remembered ones) are known and
     // peer_capability_unavailable when they do not enable it.
-    [[nodiscard]] http_submit_status submit_request_head(std::int64_t stream_id, const http_regular_request_head_view& request);
-    [[nodiscard]] http_submit_status submit_request_head(std::int64_t stream_id, const http_connect_request_head_view& request);
-    [[nodiscard]] http_submit_status submit_request_head(std::int64_t stream_id, const http_extended_connect_request_head_view& request);
+    [[nodiscard]] http_submit_status submit_request_head(std::int64_t stream_id, const http_request_head_view& request);
+    // RFC 9220 Extended CONNECT with :protocol websocket: submit_request_head()
+    // for the negotiation's Sec-WebSocket-* request fields followed by the
+    // application headers. Validate the final head with
+    // validate_extended_connect_websocket_client_response().
+    [[nodiscard]] http_submit_status submit_websocket_request_head(std::int64_t stream_id, const websocket_client_negotiation& negotiation, std::string_view scheme, std::string_view authority, std::string_view target, borrowed_http_headers headers = {}, http_request_field_source source = http_request_field_source::generated);
     // Copies the prefix that fits the stream's output budget; empty input is
     // complete without effect. A stream whose head declared a content length
     // returns invalid_message for DATA beyond it before copying anything.
     // Submitting to a stream whose content is not open (no head, a head that
     // ended the stream, or content already finished) throws std::logic_error.
     [[nodiscard]] http_data_submit_result submit_data(std::int64_t stream_id, std::string_view bytes);
-    // DATA payload submitted on the stream and not yet acknowledged.
-    [[nodiscard]] std::size_t pending_output_bytes(std::int64_t stream_id) const noexcept;
+    // DATA payload submit_data() accepted on the stream that the peer has
+    // not acknowledged yet (acknowledge_output()); it stays charged to
+    // max_stream_output_bytes_ until then, whether or not QUIC already sent it.
+    [[nodiscard]] std::size_t unacknowledged_data_bytes(std::int64_t stream_id) const noexcept;
     // 当前排队的 HEADERS/DATA/尾部已全部交给 QUIC；不表示对端已确认，
     // 也不表示之后不能继续提交正文。已移除的流返回 true。
     [[nodiscard]] bool output_flushed(std::int64_t stream_id) const noexcept;
@@ -752,8 +600,14 @@ public:
     // invalid_state: the stream did not receive a CONNECT head or already
     // answered it; invalid_message: the head cannot accept a tunnel.
     [[nodiscard]] http_submit_status submit_connect_response_head(std::int64_t stream_id, const http_response& response);
+    // Validates an RFC 9220 Extended CONNECT WebSocket bootstrap: the stream
+    // received a CONNECT head with :protocol websocket that left the stream
+    // open and declared no content, and `request` carries acceptable
+    // Sec-WebSocket-* fields. The request must remain alive for the duration
+    // of the call.
+    [[nodiscard]] websocket_handshake_validation_result validate_websocket_handshake(std::int64_t stream_id, const http_request& request, websocket_handshake_validation_options options = {}) const noexcept;
     // Accepts an RFC 9220 WebSocket bootstrap that
-    // validate_http3_websocket_handshake() accepted: the 200 head carries the
+    // validate_websocket_handshake() accepted: the 200 head carries the
     // negotiated subprotocol and permessage-deflate parameters, and the
     // stream continues as a tunnel like submit_connect_response_head().
     [[nodiscard]] std::variant<websocket_extended_connect_negotiation, http_response_head_error> submit_websocket_handshake(std::int64_t stream_id, const http_request& request, const websocket_handshake_validation_result& validation, websocket_server_handshake_options options = {});
@@ -785,12 +639,20 @@ public:
     // Server graceful shutdown, RFC 9114 §5.2: begin_drain() sends the
     // shutdown-notice GOAWAY that still admits in-flight requests;
     // finish_drain(), at least one round trip later, sends the final GOAWAY
-    // naming the first request stream that will not be processed. drained()
-    // then reports that every admitted request stream has closed. Both return
+    // naming the first request stream that will not be processed. Both return
     // closed after a connection error.
     [[nodiscard]] http_submit_status begin_drain() noexcept;
     [[nodiscard]] http_submit_status finish_drain() noexcept;
+    // True from an accepted begin_drain() or finish_drain(), or a peer GOAWAY,
+    // on.
+    [[nodiscard]] bool draining() const noexcept;
+    // True once this endpoint's finish_drain() was accepted. Unlike HTTP/2, a
+    // peer GOAWAY does not make the local drain final.
     [[nodiscard]] bool drain_final() const noexcept;
+    // drain_final() and every client-initiated request stream below the final
+    // GOAWAY identifier has closed (nghttp3_conn_is_drained2). It follows only
+    // this endpoint's own finish_drain(): after a peer GOAWAY alone it stays
+    // false, and the owner ends the connection once its own requests finish.
     [[nodiscard]] bool drained() const noexcept;
     [[nodiscard]] std::optional<http3_error_code> connection_error() const noexcept;
 
@@ -807,24 +669,12 @@ private:
     std::unique_ptr<impl> impl_;
 };
 
-// RFC 9220 extended CONNECT with :protocol websocket on a client request
-// stream: the negotiation's Sec-WebSocket-* request fields followed by the
-// application headers. Validate the final head with
-// validate_extended_connect_websocket_client_response(). Returns exactly
-// submit_request_head()'s result: the QUIC driver supplies the stream id.
-[[nodiscard]] http_submit_status submit_http3_websocket_client_request(http3_connection& connection, std::int64_t stream_id, const websocket_client_negotiation& negotiation, std::string_view scheme, std::string_view authority, std::string_view target, borrowed_http_headers headers = {}, http_request_field_source source = http_request_field_source::generated);
-
-struct http3_fingerprint_options final {
-    std::size_t max_frames_{32};
-    std::size_t max_bytes_{16384};
-};
-
 // Collects HTTP/3 frame and QPACK field observations up to the end of the
 // client's first request header block and builds a deterministic HTTP/3
 // fingerprint string: "CONTROL_FRAMES|FIRST_STREAM_ID|PSEUDO_HEADER_ORDER".
 class http3_fingerprint_collector final {
 public:
-    explicit http3_fingerprint_collector(http3_fingerprint_options options = {});
+    explicit http3_fingerprint_collector(http_fingerprint_options options = {});
 
     void observe_frame(const http3_frame_metadata& frame) noexcept;
     void observe_field(const http3_field_metadata& field) noexcept;

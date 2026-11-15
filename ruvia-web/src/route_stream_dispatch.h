@@ -288,7 +288,7 @@ private:
 // Only called once sink_value.committed() holds.
 template <typename sink>
 [[nodiscard]] http_status_code committed_response_stream_status(const sink& sink_value) {
-    return sink_value.commit_plan()->response_status();
+    return sink_value.commit_plan()->body_plan().response_status();
 }
 
 struct response_stream_no_peer_abort final {
@@ -443,10 +443,10 @@ task<std::error_code> write_websocket_handshake(stream_type& stream, const http1
 }
 
 // Selects the refusal response the server sends after the callback returns.
-[[nodiscard]] inline websocket_rejection reject_request_stream_websocket(context& context_value, const websocket_handshake_failure& failure) {
-    const auto error = failure.protocol_error();
+[[nodiscard]] inline websocket_rejection reject_request_stream_websocket(context& context_value, websocket_handshake_error failure) {
+    const auto error = make_http_protocol_error(failure);
     auto response = context_value.error(copy_http_protocol_error_info(error));
-    failure.apply_required_response_headers(response);
+    apply_websocket_handshake_error_headers(failure, response);
     const websocket_rejection rejection{response.status(), error.code()};
     context_access::set_response(context_value, std::move(response));
     return rejection;

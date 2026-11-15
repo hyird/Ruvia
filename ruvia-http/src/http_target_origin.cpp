@@ -83,7 +83,7 @@ namespace {
 
 }  // namespace
 
-http_target_origin decide_http_target_origin(const http_request& request, http_target_origin_connection connection) noexcept {
+http_target_origin plan_http_target_origin(const http_request& request, http_target_origin_connection connection) noexcept {
     if (connection.trusted_gateway_) {
         return http_target_origin::accepted();
     }
