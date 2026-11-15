@@ -56,7 +56,7 @@ public:
 private:
     ruvia::task<ruvia::http_response> forward(ruvia::context& c) {
         const auto incoming_body = co_await c.req().bytes();
-        auto client = c.services().client();
+        auto client = c.client();
 
         try {
             std::array<ruvia::http_header_view, 2> headers{};
@@ -96,7 +96,7 @@ private:
     }
 
     ruvia::task<void> forward_stream(ruvia::context& c) {
-        auto client = c.services().client();
+        auto client = c.client();
         std::array<ruvia::http_header_view, 1> headers{};
         std::size_t header_count = 0;
         if (const auto authorization = c.req().header("authorization")) {

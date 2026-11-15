@@ -67,7 +67,7 @@ class udp_tunnel_routes final {
     RUVIA_ROUTES_END
 
     ruvia::task<void> retain_capsule(ruvia::context& c) {
-        auto& retained = c.services().worker_state<retained_tunnel_results>();
+        auto& retained = c.worker_state<retained_tunnel_results>();
         auto& tunnel = c.tunnel();
         std::optional stream(tunnel.capsules());
         unsigned adapted_rejected{};
@@ -122,14 +122,14 @@ class udp_tunnel_routes final {
     }
 
     ruvia::task<void> retain_datagram(ruvia::context& c) {
-        auto& retained = c.services().worker_state<retained_tunnel_results>();
+        auto& retained = c.worker_state<retained_tunnel_results>();
         auto tunnel = c.tunnel().udp();
         retained.datagram_ = co_await tunnel.read();
         co_await tunnel.finish();
     }
 
     ruvia::task<ruvia::http_response> take_retained(ruvia::context& c) {
-        auto& retained = c.services().worker_state<retained_tunnel_results>();
+        auto& retained = c.worker_state<retained_tunnel_results>();
         if (retained.capsule_) {
             auto response = c.text(retained.cold_operations_expired_ && retained.capsule_->type() == 42 && retained.capsule_->bytes().size() == retained.capsule_->text().size() ? retained.capsule_->text() : std::string_view("invalid-capsule-state"));
             retained.capsule_.reset();
@@ -144,13 +144,13 @@ class udp_tunnel_routes final {
     }
 
     ruvia::task<void> dynamic(ruvia::context& c) {
-        c.services().worker_state<std::shared_ptr<udp_tunnel_observation>>()->dynamic_invoked_ = true;
+        c.worker_state<std::shared_ptr<udp_tunnel_observation>>()->dynamic_invoked_ = true;
         auto tunnel = c.tunnel().udp();
         co_await tunnel.finish();
     }
 
     ruvia::task<void> echo(ruvia::context& c) {
-        auto& observation = *c.services().worker_state<std::shared_ptr<udp_tunnel_observation>>();
+        auto& observation = *c.worker_state<std::shared_ptr<udp_tunnel_observation>>();
         ruvia::http_capsule_config config{.max_capsule_length_ = 13};
         auto original = c.tunnel().udp(config);
         try {
@@ -216,7 +216,7 @@ class udp_tunnel_routes final {
         co_return c.text("sibling");
     }
     ruvia::task<void> ws_inspect(ruvia::context& c) {
-        auto& observation = *c.services().worker_state<std::shared_ptr<udp_tunnel_observation>>();
+        auto& observation = *c.worker_state<std::shared_ptr<udp_tunnel_observation>>();
         auto& ws = c.websocket();
         observation.ws_subprotocol_matched_ = ws.subprotocol() == "chat.v2";
         co_await ws.pong();

@@ -117,31 +117,16 @@ private:
 #endif
 };
 
-}  // namespace detail
-
-// The worker-level resources a request or a posted job reaches: worker state,
-// the blocking pool, env and the client registries. Its host builds it on
-// demand -- context::services(), request_stream::services(),
-// web_worker_context::services() -- and it borrows that host, so it must not
-// outlive it. Executors and client handles it returns bind to the host's
-// operation lifetime and stop_token(), not to this view.
+// The worker-level resources a request or a posted job reaches, built on demand
+// by its host (see worker_services_access). It borrows that host, so it must
+// not outlive it.
 class worker_services final {
 public:
-    // Borrows this worker's registered instance; never hand it to another
-    // worker. An unregistered type throws std::logic_error.
     template <typename state_type>
     [[nodiscard]] state_type& worker_state() const {
         return *static_cast<state_type*>(worker_state_instance(detail::type_key<state_type>()));
     }
 
-    // The callable executes on the blocking pool and must own everything it
-    // touches. Completion resumes on this worker; options.timeout_ or shutdown
-    // stops the wait without joining a still-running foreign callable, and
-    // options.stop_token_ is combined with the host's stop_token().
-    // Rejection and callable exceptions are retained in blocking_result. Inspect
-    // status() for load shedding or use std::move(result).take_value() to throw.
-    // With application::blocking_pool(nullptr) the result reports
-    // blocking_status::unavailable without submitting the callable.
     template <typename callable_type>
     [[nodiscard]] task<blocking_result<std::invoke_result_t<callable_type&>>> run_blocking(callable_type callable, operation_options options = {}) const {
         if (!options.stop_token_.has_state()) {
@@ -151,7 +136,6 @@ public:
         return run_blocking_combined(*worker_, *stop_token_, std::move(callable), std::move(options));
     }
 
-    // The application's env; an empty one when the host has none.
     [[nodiscard]] const ruvia::env& env() const noexcept;
 
     [[nodiscard]] http_client_ref client() const;
@@ -166,8 +150,8 @@ public:
 #endif
 
 private:
-    friend class context;
-    friend class web_worker_context;
+    friend class ::ruvia::context;
+    friend class ::ruvia::web_worker_context;
 
     // `io_metrics` is the request's counter block, null for a posted job.
     constexpr worker_services(const worker_ref& worker, const ::ruvia::stop_token& stop_token, const detail::worker_state_registry* worker_states, detail::worker_client_registry_view clients, detail::operation_scope& operation_scope, detail::request_io_metrics* io_metrics, const ruvia::env* env) noexcept :
@@ -194,6 +178,68 @@ private:
     detail::operation_scope* operation_scope_;
     detail::request_io_metrics* io_metrics_;
     const ruvia::env* env_;
+};
+
+}  // namespace detail
+
+// The worker-level resources shared by context, request_stream and
+// web_worker_context: worker state, the blocking pool, env and the client
+// registries. Executors and client handles bind to the host's operation
+// lifetime and stop_token(), so only lvalue hosts hand them out.
+template <typename host_type>
+class worker_services_access {
+public:
+    // Borrows this worker's registered instance; never hand it to another
+    // worker. An unregistered type throws std::logic_error.
+    template <typename state_type>
+    [[nodiscard]] state_type& worker_state() const {
+        return services().template worker_state<state_type>();
+    }
+
+    // The callable executes on the blocking pool and must own everything it
+    // touches. Completion resumes on this worker; options.timeout_ or shutdown
+    // stops the wait without joining a still-running foreign callable, and
+    // options.stop_token_ is combined with the host's stop_token().
+    // Rejection and callable exceptions are retained in blocking_result. Inspect
+    // status() for load shedding or use std::move(result).take_value() to throw.
+    // With application::blocking_pool(nullptr) the result reports
+    // blocking_status::unavailable without submitting the callable.
+    template <typename callable_type>
+    [[nodiscard]] task<blocking_result<std::invoke_result_t<callable_type&>>> run_blocking(callable_type callable, operation_options options = {}) const {
+        return services().run_blocking(std::move(callable), std::move(options));
+    }
+
+    // The application's env; an empty one when the host has none.
+    [[nodiscard]] const ruvia::env& env() const noexcept {
+        return services().env();
+    }
+
+    // Defined in the library and instantiated there for every host.
+    [[nodiscard]] http_client_ref client() const&;
+    [[nodiscard]] http_client_ref client(std::string_view alias) const&;
+    http_client_ref client() const&& = delete;
+    http_client_ref client(std::string_view) const&& = delete;
+#ifdef RUVIA_ENABLE_DATABASE
+    [[nodiscard]] db_executor db() const&;
+    [[nodiscard]] db_executor db(std::string_view alias) const&;
+    db_executor db() const&& = delete;
+    db_executor db(std::string_view) const&& = delete;
+#endif
+#ifdef RUVIA_ENABLE_REDIS
+    [[nodiscard]] redis_executor redis() const&;
+    [[nodiscard]] redis_executor redis(std::string_view alias) const&;
+    redis_executor redis() const&& = delete;
+    redis_executor redis(std::string_view) const&& = delete;
+#endif
+
+private:
+    friend host_type;
+
+    worker_services_access() = default;
+
+    [[nodiscard]] detail::worker_services services() const noexcept {
+        return static_cast<const host_type&>(*this).services();
+    }
 };
 
 }  // namespace ruvia

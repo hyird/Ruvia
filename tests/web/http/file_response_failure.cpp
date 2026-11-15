@@ -71,7 +71,7 @@ class file_failure_routes final {
 
     // Occupies the pool's only thread until the test releases it (bounded).
     ruvia::task<ruvia::http_response> hold_pool(ruvia::context& c) {
-        auto held = co_await c.services().run_blocking([] {
+        auto held = co_await c.run_blocking([] {
             pool_held.store(true);
             for (int wait = 0; wait < 10000 && !release_pool.load(); ++wait) {
                 std::this_thread::sleep_for(1ms);

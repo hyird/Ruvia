@@ -159,7 +159,7 @@ class http1_websocket_routes final {
     // send(websocket_message&&) borrows the read buffer, so it claims the read
     // lane at the call and holds it until the frame is written or dropped.
     ruvia::task<void> echo_send(ruvia::context& context_value) {
-        auto& observed_value = *context_value.services().worker_state<std::shared_ptr<websocket_eof_observation>>();
+        auto& observed_value = *context_value.worker_state<std::shared_ptr<websocket_eof_observation>>();
         auto& websocket_value = context_value.websocket();
         try {
             auto first = co_await websocket_value.read();
@@ -208,7 +208,7 @@ class http1_websocket_routes final {
     }
 
     ruvia::task<void> close_exclusively(ruvia::context& context_value) {
-        auto& observed_value = *context_value.services().worker_state<std::shared_ptr<websocket_eof_observation>>();
+        auto& observed_value = *context_value.worker_state<std::shared_ptr<websocket_eof_observation>>();
         auto& websocket_value = context_value.websocket();
         ruvia::task_scope closing(context_value.worker());
         closing.spawn(websocket_value.close());
@@ -234,7 +234,7 @@ class http1_websocket_routes final {
     }
 
     ruvia::task<void> read_until_eof(ruvia::context& context_value) {
-        auto& observed_value = *context_value.services().worker_state<std::shared_ptr<websocket_eof_observation>>();
+        auto& observed_value = *context_value.worker_state<std::shared_ptr<websocket_eof_observation>>();
         auto& websocket_value = context_value.websocket();
         // The 101 head is committed: a 1xx head written now would land inside
         // the frame stream.
@@ -1163,7 +1163,7 @@ class http1_tunnel_routes final {
     RUVIA_ROUTES_END
 
     ruvia::task<void> tunnel(ruvia::context& context_value) {
-        auto& observed_value = *context_value.services().worker_state<std::shared_ptr<observation>>();
+        auto& observed_value = *context_value.worker_state<std::shared_ptr<observation>>();
         auto& tunnel_value = context_value.tunnel();
         if (observed_value.finish_first_) {
             co_await tunnel_value.finish();

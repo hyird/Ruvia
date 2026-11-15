@@ -173,7 +173,7 @@ private:
         // Session capability requires session_middleware; see sessions.cpp for
         // its Redis setup. This standalone example only installs application services.
         body.append("env-vars=");
-        ruvia::http_append_unsigned(body, c.services().env().size());
+        ruvia::http_append_unsigned(body, c.env().size());
         body.push_back('\n');
         co_return c.text(std::move(body));
     }

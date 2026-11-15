@@ -82,7 +82,9 @@ using request_stream_websocket_accept = callback_ref<task<websocket_accept_resul
 // commitment, a callback exception aborts the stream (HTTP/1: the connection)
 // and reaches connection_failure_. A callback returning without a response
 // answers 500; a committed response stream not explicitly ended is ended.
-class request_stream final {
+// Worker resources come from worker_services_access, as on context, bound to
+// this request's cancellation, including client abandonment.
+class request_stream final : public worker_services_access<request_stream> {
 public:
     request_stream(const request_stream&) = delete;
     request_stream& operator=(const request_stream&) = delete;
@@ -141,14 +143,6 @@ public:
         return context_.worker();
     }
     const worker_ref& worker() const&& = delete;
-
-    // context::services() of this request: worker state, run_blocking(), env
-    // and clients, bound to this request's cancellation, including client
-    // abandonment.
-    [[nodiscard]] worker_services services() const& noexcept RUVIA_LIFETIMEBOUND {
-        return context_.services();
-    }
-    worker_services services() const&& = delete;
 
     // The cross-replacement policy of context::policy(): applied to the
     // response, stream head or the tunnel/WebSocket acceptance head this
@@ -218,6 +212,7 @@ public:
 
 private:
     friend struct detail::request_stream_access;
+    friend class worker_services_access<request_stream>;
     // http_client_response::pipe_to() binds its forward to operation_scope_.
     friend class http_client_response;
     friend class router;
@@ -229,6 +224,10 @@ private:
         accept_tunnel_(accept_tunnel),
         accept_websocket_(accept_websocket) {
         operation_scope_.bind_worker(context_value.worker());
+    }
+
+    [[nodiscard]] detail::worker_services services() const noexcept {
+        return context_.services();
     }
 
     [[nodiscard]] task<http_tunnel*> accept_tunnel_impl(http_status_code status, http_tunnel_route_config config);

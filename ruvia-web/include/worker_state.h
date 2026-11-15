@@ -23,7 +23,7 @@
 #include "worker_services.h"
 
 // Worker-local user state: application::use_worker_state<T>() registers one recipe, each
-// worker builds its own instance from it, and worker_services::worker_state<T>()
+// worker builds its own instance from it, and worker_services_access::worker_state<T>()
 // hands the instance back on that worker.
 // This generalizes the db_registry pattern (one connection-pool-like object per
 // single-threaded worker) to application-owned types: the instance is only
@@ -216,10 +216,10 @@ class web_worker_dispatch;
 }  // namespace detail
 
 // A job posted with web_worker_ref::post(): its worker, the worker's stop
-// token and, through services(), the worker's resources. Executors and clients
-// from services() bind to this job's own operation lifetime and carry no
-// request I/O metrics.
-class web_worker_context final {
+// token and, through worker_services_access, the worker's resources.
+// Executors and clients bind to this job's own operation lifetime and carry
+// no request I/O metrics.
+class web_worker_context final : public worker_services_access<web_worker_context> {
 public:
     web_worker_context(const web_worker_context&) = delete;
     web_worker_context& operator=(const web_worker_context&) = delete;
@@ -230,11 +230,11 @@ public:
     const worker_ref& worker() const&& = delete;
     [[nodiscard]] ::ruvia::stop_token stop_token() const noexcept;
 
-    [[nodiscard]] worker_services services() const& noexcept RUVIA_LIFETIMEBOUND;
-    worker_services services() const&& = delete;
-
 private:
     friend class detail::web_worker_dispatch;
+    friend class worker_services_access<web_worker_context>;
+
+    [[nodiscard]] detail::worker_services services() const noexcept;
 
     web_worker_context(const worker_ref& worker_value, const detail::worker_client_registry_view& client_registries, const detail::worker_state_registry* worker_states, const ::ruvia::stop_token& stop_token_value, const ruvia::env* env) noexcept;
     web_worker_context(worker_ref&&, const detail::worker_client_registry_view&, const detail::worker_state_registry*, const ::ruvia::stop_token&, const ruvia::env*) = delete;

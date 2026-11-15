@@ -253,7 +253,7 @@ task<void> session_middleware::invoke(context& c, next& next_value) {
         detail::session_access::observe_presented_id(c, cookie.value_);
         auto get_task = [&] {
             const session_key key({key_prefix_, cookie.value_});
-            return c.services().redis(redis_alias_).get(key.view());
+            return c.redis(redis_alias_).get(key.view());
         }();
         if (auto stored = co_await std::move(get_task)) {
             detail::session_access::load(c, *stored);
@@ -284,7 +284,7 @@ task<void> session_middleware::commit(context& c) const {
         if (cleared->old_id_.has_value()) {
             auto del_task = [&] {
                 const session_key key({key_prefix_, *cleared->old_id_});
-                return c.services().redis(redis_alias_).del(key.view());
+                return c.redis(redis_alias_).del(key.view());
             }();
             (void)(co_await std::move(del_task));
         }
@@ -317,7 +317,7 @@ task<void> session_middleware::commit(context& c) const {
             const std::array<std::string_view, 2> args{payload, ttl};
             // Redis executes the entire transition atomically. A stale request may
             // neither recreate a revoked identifier nor mint a successor from it.
-            return c.services().redis(redis_alias_).eval(detail::session_rotation_script, keys, args);
+            return c.redis(redis_alias_).eval(detail::session_rotation_script, keys, args);
         }();
         const auto result_value = co_await std::move(eval_task);
         if (result_value.kind() == redis_value::kind_type::error) {
@@ -329,7 +329,7 @@ task<void> session_middleware::commit(context& c) const {
             redis_set_options options;
             options.condition_ = redis_set_condition::if_absent;
             options.expiration_ = redis_set_expiration::expires_after(ttl_);
-            return c.services().redis(redis_alias_).set(key.view(), payload, std::move(options));
+            return c.redis(redis_alias_).set(key.view(), payload, std::move(options));
         }();
         const auto result_value = co_await std::move(set_task);
         applied = result_value.applied();

@@ -131,7 +131,7 @@ public:
         const auto id = c.req().cookie("sid_b");
         if (id) {
             const std::string key = "sess:a" + std::string(*id);
-            (void)co_await c.services().redis().del(key);
+            (void)co_await c.redis().del(key);
         }
         c.session().regenerate();
         co_return c.text("stale");
@@ -140,7 +140,7 @@ public:
     ruvia::task<ruvia::http_response> stored(ruvia::context& c) {
         const auto id = c.req().query("id");
         const std::string key = "sess:" + std::string(id.value_or(""));
-        const auto value = co_await c.services().redis().get(key);
+        const auto value = co_await c.redis().get(key);
         co_return c.text(value ? std::string_view(*value) : "empty");
     }
 };

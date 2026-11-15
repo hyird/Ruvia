@@ -1429,7 +1429,7 @@ private:
 
 #ifdef RUVIA_ENABLE_DATABASE
 // One database pool bound to one Ruvia event loop. It is the standalone
-// counterpart of worker_services::db(): application-created and attached workers use
+// counterpart of worker_services_access::db(): application-created and attached workers use
 // the same worker-local backend without an HTTP application or a special context.
 class db_client final {
 public:
@@ -1456,7 +1456,7 @@ public:
     // client would begin pool shutdown at the end of the full expression.
     // Each call registers one allocation-free capability with the client
     // operation scope, so keep the returned handle for a sequence of commands
-    // instead of calling db() per command. Like worker_services::db(), the handle
+    // instead of calling db() per command. Like worker_services_access::db(), the handle
     // carries no operation options; derive them with with_options().
     [[nodiscard]] db_executor db() const&;
     db_executor db() const&& = delete;

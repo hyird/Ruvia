@@ -219,7 +219,7 @@ TEST(Ruvia, redis_request_session_with_a_user_token_keeps_request_cancellation) 
             waiting = true;
             try {
                 // The startup peer never replies: only a cancellation ends the wait.
-                (void)co_await context.services().redis().with_options({.stop_token_ = user.token()}).blpop(keys, ruvia::redis_block_wait::indefinitely());
+                (void)co_await context.redis().with_options({.stop_token_ = user.token()}).blpop(keys, ruvia::redis_block_wait::indefinitely());
             } catch (const ruvia::redis_error& error) {
                 cancelled_by_request = error.code() == ruvia::backend_error_code::cancelled && !user.stop_requested();
             }

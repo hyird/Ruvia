@@ -102,7 +102,7 @@ class stream_lane_routes final {
     RUVIA_ROUTES_END
 
     ruvia::task<void> output(ruvia::context& context_value) {
-        auto& observed = *context_value.services().worker_state<std::shared_ptr<stream_lane_observation>>();
+        auto& observed = *context_value.worker_state<std::shared_ptr<stream_lane_observation>>();
         auto& writer = context_value.stream_text();
         auto policy = context_value.policy();
         auto selected = context_value.edit_response();
@@ -160,7 +160,7 @@ class stream_lane_routes final {
 
     // Streams until the peer goes away, like an SSE feed a browser tab closes.
     ruvia::task<void> endless(ruvia::context& context_value) {
-        auto& observed = *context_value.services().worker_state<std::shared_ptr<stream_lane_observation>>();
+        auto& observed = *context_value.worker_state<std::shared_ptr<stream_lane_observation>>();
         auto& writer = context_value.stream_text();
         if (co_await writer.commit() == ruvia::stream_commit_result::completed) {
             co_return;
@@ -233,7 +233,7 @@ class stream_lane_routes final {
 
     // The second header is invalid, so the first must not reach the staged head.
     ruvia::task<void> atomic_head(ruvia::context& context_value) {
-        auto& observed = *context_value.services().worker_state<std::shared_ptr<stream_lane_observation>>();
+        auto& observed = *context_value.worker_state<std::shared_ptr<stream_lane_observation>>();
         const std::array invalid{
             ruvia::http_header_view{"X-Candidate", "staged"},
             ruvia::http_header_view{"Bad Name", "value"},
@@ -267,7 +267,7 @@ class stream_lane_routes final {
 
     // stream_sse() owns Content-Type; Cache-Control is only a default.
     ruvia::task<void> sse_head(ruvia::context& context_value) {
-        auto& observed = *context_value.services().worker_state<std::shared_ptr<stream_lane_observation>>();
+        auto& observed = *context_value.worker_state<std::shared_ptr<stream_lane_observation>>();
         const std::array content_type{ruvia::http_header_view{"Content-Type", "text/plain"}};
         try {
             static_cast<void>(context_value.stream_sse({.headers_ = content_type}));
@@ -284,7 +284,7 @@ class stream_lane_routes final {
     }
 
     ruvia::task<void> uaf_head_stream(ruvia::context& context_value) {
-        auto& observed = *context_value.services().worker_state<std::shared_ptr<stream_lane_observation>>();
+        auto& observed = *context_value.worker_state<std::shared_ptr<stream_lane_observation>>();
         auto& out = context_value.stream_text();
         auto& reader = context_value.req().body_reader();
         try {
@@ -1223,7 +1223,7 @@ class body_lane_routes final {
     RUVIA_ROUTES_END
 
     ruvia::task<ruvia::http_response> read_multipart_reader(ruvia::context& context_value) {
-        auto& observed = *context_value.services().worker_state<std::shared_ptr<body_lane_observation>>();
+        auto& observed = *context_value.worker_state<std::shared_ptr<body_lane_observation>>();
         auto reader = context_value.req().multipart_reader();
         std::string body;
         while (auto part = co_await reader.read()) {
@@ -1236,7 +1236,7 @@ class body_lane_routes final {
     // A read that times out or was stopped before it started leaves the parser
     // where it was; the next read resumes the same part.
     ruvia::task<ruvia::http_response> read_interrupted_multipart(ruvia::context& context_value) {
-        auto& observed = *context_value.services().worker_state<std::shared_ptr<body_lane_observation>>();
+        auto& observed = *context_value.worker_state<std::shared_ptr<body_lane_observation>>();
         ruvia::multipart_reader reader(context_value.req().body_reader(), {.boundary_ = ruvia::test::make_multipart_boundary("cut")});
         try {
             (void)reader.read({.timeout_ = std::chrono::milliseconds(0)});
@@ -1275,7 +1275,7 @@ class body_lane_routes final {
     // A buffered read that times out keeps what arrived; the next read
     // returns the whole body.
     ruvia::task<ruvia::http_response> read_interrupted_buffered(ruvia::context& context_value) {
-        auto& observed = *context_value.services().worker_state<std::shared_ptr<body_lane_observation>>();
+        auto& observed = *context_value.worker_state<std::shared_ptr<body_lane_observation>>();
         const auto request = context_value.req();
         try {
             (void)request.text({.timeout_ = std::chrono::milliseconds(0)});
@@ -1301,7 +1301,7 @@ class body_lane_routes final {
     }
 
     ruvia::task<ruvia::http_response> read(ruvia::context& context_value) {
-        auto& observed = *context_value.services().worker_state<std::shared_ptr<body_lane_observation>>();
+        auto& observed = *context_value.worker_state<std::shared_ptr<body_lane_observation>>();
         auto& reader = context_value.req().body_reader();
         {
             auto discarded = reader.read();
@@ -1328,7 +1328,7 @@ class body_lane_routes final {
     }
 
     ruvia::task<ruvia::http_response> read_multipart(ruvia::context& context_value) {
-        auto& observed = *context_value.services().worker_state<std::shared_ptr<body_lane_observation>>();
+        auto& observed = *context_value.worker_state<std::shared_ptr<body_lane_observation>>();
         ruvia::multipart_reader reader(context_value.req().body_reader(), {.boundary_ = ruvia::test::make_multipart_boundary("lazy")});
         auto first = reader.read();
         auto last = reader.read();
@@ -1361,7 +1361,7 @@ class body_lane_routes final {
     }
 
     ruvia::task<ruvia::http_response> reread_truncated(ruvia::context& context_value) {
-        auto& observed = *context_value.services().worker_state<std::shared_ptr<body_lane_observation>>();
+        auto& observed = *context_value.worker_state<std::shared_ptr<body_lane_observation>>();
         auto& reader = context_value.req().body_reader();
         try {
             static_cast<void>(co_await reader.read());

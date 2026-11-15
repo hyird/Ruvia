@@ -624,7 +624,7 @@ TEST(Ruvia, context_rejects_unconfigured_worker_clients_consistently) {
 #ifdef RUVIA_ENABLE_DATABASE
         bool database_rejected = false;
         try {
-            static_cast<void>(context_value.services().db());
+            static_cast<void>(context_value.db());
         } catch (const ruvia::db_error& error) {
             database_rejected = error.code() == ruvia::backend_error_code::not_configured;
         }
@@ -634,7 +634,7 @@ TEST(Ruvia, context_rejects_unconfigured_worker_clients_consistently) {
 #ifdef RUVIA_ENABLE_REDIS
         bool redis_rejected = false;
         try {
-            static_cast<void>(context_value.services().redis());
+            static_cast<void>(context_value.redis());
         } catch (const ruvia::redis_error& error) {
             redis_rejected = error.code() == ruvia::backend_error_code::not_configured;
         }

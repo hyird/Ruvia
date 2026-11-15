@@ -133,7 +133,7 @@ public:
     application& document_root(std::nullptr_t) &;
     application& document_root(std::nullptr_t) && = delete;
     // Configures the process-wide ordinary-thread pool every worker's event
-    // loop borrows for worker_services::run_blocking(), file reads, large
+    // loop borrows for worker_services_access::run_blocking(), file reads, large
     // buffered-response compression, document-root refreshes and the DNS
     // lookups of registered clients. It is enabled by default with bounded
     // CPU-based sizing; nullptr explicitly disables it: run_blocking() then

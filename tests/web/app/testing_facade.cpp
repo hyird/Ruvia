@@ -342,7 +342,7 @@ private:
     }
 
     ruvia::task<ruvia::http_response> count(ruvia::context& c) {
-        auto& counter = c.services().worker_state<testing_facade_counter>();
+        auto& counter = c.worker_state<testing_facade_counter>();
         ++counter.count_;
         std::string reply;
         reply.append(std::to_string(counter.count_));

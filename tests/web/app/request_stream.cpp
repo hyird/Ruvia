@@ -218,7 +218,7 @@ ruvia::task<void> serve(ruvia::request_stream& stream) {
         while (co_await stream.body().read()) {
         }
         (void)co_await stream.response().commit();
-        const auto result = co_await stream.services().run_blocking([] {
+        const auto result = co_await stream.run_blocking([] {
             blocking_entered.release();
             blocking_release.acquire();
         });
@@ -230,18 +230,18 @@ ruvia::task<void> serve(ruvia::request_stream& stream) {
     if (request.path() == "/runtime") {
         EXPECT_TRUE(stream.worker().is_current());
         EXPECT_EQ(co_await ruvia::sleep_for(stream.worker(), 1ms, stream.stop_token()), ruvia::timer_sleep_result::elapsed);
-        auto result = co_await stream.services().run_blocking([] {
+        auto result = co_await stream.run_blocking([] {
             return 42;
         });
         EXPECT_EQ(std::move(result).take_value(), 42);
-        const auto count = ++stream.services().worker_state<runtime_state>().requests_;
+        const auto count = ++stream.worker_state<runtime_state>().requests_;
         const std::string runtime_count = std::to_string(count);
         const std::string worker_id = std::to_string(stream.worker().id());
         const std::array runtime_headers{ruvia::http_header_view{"x-runtime-count", runtime_count}, ruvia::http_header_view{"x-worker", worker_id}};
-        auto upstream = co_await stream.services().client().get("/ping").send();
+        auto upstream = co_await stream.client().get("/ping").send();
         auto body = co_await upstream.bytes();
         EXPECT_EQ(body.text().size(), 2048);
-        EXPECT_THROW(static_cast<void>(stream.services().run_blocking(
+        EXPECT_THROW(static_cast<void>(stream.run_blocking(
                          [] {
             return 1;
         }, {.timeout_ = 0ms})),
@@ -270,7 +270,7 @@ ruvia::task<void> serve(ruvia::request_stream& stream) {
             stream.policy().header("x-denied", "yes");
             EXPECT_THROW((void)stream.body(), std::logic_error);
             if (request.target() == "pipe-deny.test:443") {
-                auto upstream = co_await stream.services().client().get("/refusal-source").header("accept-encoding", "identity").send();
+                auto upstream = co_await stream.client().get("/refusal-source").header("accept-encoding", "identity").send();
                 EXPECT_EQ(upstream.status(), ruvia::http_status::forbidden);
                 co_await upstream.pipe_to(stream);
                 refusal_returned = true;

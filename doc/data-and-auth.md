@@ -67,10 +67,10 @@ ruvia::app().db({
 
 ### 1.2 直接查询、编译期 SQL 校验与流式游标（`db_executor`）
 
-在路由中通过 `c.services().db()`（或 `c.services().db("alias")`）获取 `ruvia::db_executor`。ORM 与直接查询保持独立公开路线，均可直接在 `db_executor` 或 `db_transaction` 上调用。
+在路由中通过 `c.db()`（或 `c.db("alias")`）获取 `ruvia::db_executor`。ORM 与直接查询保持独立公开路线，均可直接在 `db_executor` 或 `db_transaction` 上调用。
 
 - **执行器语义**：`db_executor` / `redis_executor` 是请求或客户端作用域的连接池视图，按 sqlx `Executor` 命名；与 Web 登录会话 `session` 无关。
-- **执行器获取**：出站拥有者与 `c.services()` 同名获取：`db_client::db()`、`redis_client::redis()`、`http_client::client()` / `client(alias)` 分别对应 `c.services().db()`、`c.services().redis()`、`c.services().client()`。
+- **执行器获取**：出站拥有者与 `c` 同名获取：`db_client::db()`、`redis_client::redis()`、`http_client::client()` / `client(alias)` 分别对应 `c.db()`、`c.redis()`、`c.client()`。
 - **逐次选项**：取得的执行器不带操作选项；超时与取消只经 `with_options(operation_options)` 派生，合并规则见 [core 2](core-and-http.md#2-停止令牌超时截止期与定时器)。
 
 | `ruvia::db_executor` 方法 | 说明 |
@@ -107,7 +107,7 @@ ruvia::app().db({
 
 ```cpp
 // 编译期检查 PostgreSQL 的 $1, $2 占位符数量：
-auto rows = co_await c.services().db().query<
+auto rows = co_await c.db().query<
     "SELECT id, name FROM users WHERE active = $1 AND score >= $2",
     ruvia::db_driver::postgresql>(true, 100);
 
@@ -117,7 +117,7 @@ for (const auto& row : rows) {
 }
 
 // 流式结果集读取：
-auto stream = co_await c.services().db().query_stream("SELECT id FROM events");
+auto stream = co_await c.db().query_stream("SELECT id FROM events");
 while (auto row = co_await stream.read()) {
     // 处理单行 *row
 }
@@ -139,7 +139,7 @@ co_await stream.close();
 `db_transaction` 独占一条数据库连接；若在析构或作用域退出前未调用 `co_await tx.commit()`，底层会自动回滚并回收连接：
 
 ```cpp
-auto tx = co_await c.services().db().begin_transaction({
+auto tx = co_await c.db().begin_transaction({
     .isolation_ = ruvia::db_transaction_isolation::repeatable_read,
     .access_mode_ = ruvia::db_transaction_access_mode::read_write,
 });
@@ -301,7 +301,7 @@ RUVIA_DB_PROJECTION(device_summary,
 
 ### 3.3 `ruvia::db_repository<Entity, Executor>` 核心操作
 
-通过 `c.services().db().repository<device>()` 或 `tx.repository<device>()` 获取：
+通过 `c.db().repository<device>()` 或 `tx.repository<device>()` 获取：
 
 | 分类 | 方法 | 说明 |
 | --- | --- | --- |
@@ -330,7 +330,7 @@ RUVIA_DB_PROJECTION(device_summary,
 读 Builder 的 `query()` 保留原组合视图语义：它只暴露平面查询，拒绝 relation hydration；**不会应用** `get_many()` / `get_query_and_parameters()` 等执行入口经 `effective_query()` 添加的软删除过滤。写 Builder 的视图先执行既有写安全校验（例如 UPDATE / DELETE 必须有条件），保留完整 INSERT / UPDATE / DELETE / `on_conflict()` 与 `RETURNING`；没有增加新的 SQL 生成路线。
 
 ```cpp
-auto repo = c.services().db().repository<device>();
+auto repo = c.db().repository<device>();
 auto changed = repo.update_builder("d");
 changed.set(device::column<"name">().set("edge-2"))
     .where(device::column<"id">() == 7)
@@ -419,7 +419,7 @@ ruvia::app()
 
 - 每个 worker 维护 `pool_size_per_worker_`（默认 4）条常规命令连接，以及按需建立的 `blocking_pool_size_per_worker_` 条阻塞命令专用连接（供 `blpop`、`brpop`、`xread_group` 等阻塞操作自动使用，不阻塞常规命令池）。
 - 同样支持在独立 `event_loop` 上构造 `ruvia::redis_client client(loop, config)`，通过 `client.redis()` 获取 `redis_executor`（规则见 [1.2](#12-直接查询编译期-sql-校验与流式游标db_executor)）；`host_` 不是 IP 字面量时在事件循环的阻塞池上做 DNS 查询（见 1.1）。
-- **独立宿主借入**：`router::bind_redis(alias, client)` / `bind_db(alias, client)` 把同 worker 的独立客户端按别名借给该 router 分发的请求，`c.services().redis(alias)` / `c.services().db(alias)` 与 `session_middleware` 由此解析；约束见 [显式路由组合](web-guide.md#111-显式路由组合routerh)。
+- **独立宿主借入**：`router::bind_redis(alias, client)` / `bind_db(alias, client)` 把同 worker 的独立客户端按别名借给该 router 分发的请求，`c.redis(alias)` / `c.db(alias)` 与 `session_middleware` 由此解析；约束见 [显式路由组合](web-guide.md#111-显式路由组合routerh)。
 - 每条连接复用回复解析根槽；嵌套值和字符串由返回结果独立持有，失败或取消时随未完成的回复一起回收。
 - **请求写缓冲**：传输结束后最多保留 `64 KiB` 容量，超限大块立即归还分配器。取消或异常同样等待传输借用结束后再清理，不提前释放在途 I/O 使用的存储。
 - 配置了 `username_` 或 `password_` 时，每条新连接先发送 `AUTH`；序列化后的 `AUTH` 请求写出后（无论成功与否）立即从连接保留的写缓冲中擦除，口令只保留在配置副本中供重连使用。
@@ -430,7 +430,7 @@ ruvia::app()
 
 ### 4.2 `ruvia::redis_executor` 命令分类总览
 
-在路由中通过 `c.services().redis()` 或 `c.services().redis("cache")` 获取：
+在路由中通过 `c.redis()` 或 `c.redis("cache")` 获取：
 
 | 分类 | 方法 |
 | --- | --- |
@@ -466,7 +466,7 @@ ruvia::app()
 `WAIT` / `WAITAOF` 依据 **current connection** 的前序写入 offset 工作；独立的 `handle.set()` 与 `handle.command()` 不保证共享连接。因此单次 `command("WAIT", ...)` / `command("WAITAOF", ...)` 同步抛出 `std::invalid_argument`。请将需要保护的写入和屏障放进同一非事务 `redis_pipeline`：
 
 ```cpp
-auto batch = c.services().redis().with_options({
+auto batch = c.redis().with_options({
     .timeout_ = std::chrono::seconds(2),
     .stop_token_ = c.stop_token(),
 }).pipeline();
@@ -490,10 +490,10 @@ if (replies[1].integer() < 1) {
 
 ### 4.3 Pub/Sub 独占订阅连接（`redis_subscription`）
 
-Pub/Sub 订阅不共享常规连接池：每次调用 `c.services().redis().subscription()` 都会创建一条独占的 Redis 订阅通道（在首次 `subscribe` 时打开连接），直到调用 `abort()`、取消或析构：
+Pub/Sub 订阅不共享常规连接池：每次调用 `c.redis().subscription()` 都会创建一条独占的 Redis 订阅通道（在首次 `subscribe` 时打开连接），直到调用 `abort()`、取消或析构：
 
 ```cpp
-auto sub = c.services().redis().with_options({.stop_token_ = c.stop_token()}).subscription();
+auto sub = c.redis().with_options({.stop_token_ = c.stop_token()}).subscription();
 co_await sub.subscribe("news");
 while (auto event = co_await sub.read()) {
     if (const auto* message = event->message()) {
@@ -545,7 +545,7 @@ const ruvia::redis_search_mapping& cached_user_mapping() {
     return mapping;
 }
 
-auto repo = c.services().redis().repository<cached_user>(cached_user_mapping());
+auto repo = c.redis().repository<cached_user>(cached_user_mapping());
 // 建索引（通常在启动时执行一次）：co_await repo.create_index();
 // 带 TTL 插入：co_await repo.insert(entity, {.ttl_ = std::chrono::minutes(10)});
 // 条件查询：

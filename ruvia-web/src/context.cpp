@@ -738,9 +738,9 @@ const worker_ref& context::worker() const& noexcept {
     return runtime_services().get_stop_token();
 }
 
-worker_services context::services() const& noexcept {
+detail::worker_services context::services() const noexcept {
     const auto& runtime = runtime_services();
-    return worker_services(runtime.worker(), runtime.get_stop_token(), runtime.worker_states(), runtime.client_registries(), operation_scope_, runtime.io_metrics(), runtime.env());
+    return detail::worker_services(runtime.worker(), runtime.get_stop_token(), runtime.worker_states(), runtime.client_registries(), operation_scope_, runtime.io_metrics(), runtime.env());
 }
 
 std::string& context::decoded_body() const {

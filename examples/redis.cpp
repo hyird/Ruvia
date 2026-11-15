@@ -73,13 +73,13 @@ public:
     RUVIA_ROUTES_END
 
     ruvia::task<ruvia::http_response> ping(ruvia::context& c) {
-        co_await c.services().redis().with_options({.timeout_ = std::chrono::seconds(2), .stop_token_ = c.stop_token()}).ping();
-        auto message = co_await c.services().redis().ping("hello");
+        co_await c.redis().with_options({.timeout_ = std::chrono::seconds(2), .stop_token_ = c.stop_token()}).ping();
+        auto message = co_await c.redis().ping("hello");
         co_return c.text(std::move(message));
     }
 
     ruvia::task<ruvia::http_response> get_value(ruvia::context& c) {
-        auto value = co_await c.services().redis().get(c.req().param("key").value_or(""));
+        auto value = co_await c.redis().get(c.req().param("key").value_or(""));
         if (!value) {
             co_return c.error({.status_ = ruvia::http_status::not_found, .code_ = "not_found", .message_ = "redis key not found"});
         }
@@ -88,12 +88,12 @@ public:
 
     ruvia::task<ruvia::http_response> set_value(ruvia::context& c) {
         auto body = co_await c.req().text();
-        (void)(co_await c.services().redis().set(c.req().param("key").value_or(""), body));
+        (void)(co_await c.redis().set(c.req().param("key").value_or(""), body));
         co_return c.text("OK\n");
     }
 
     ruvia::task<ruvia::http_response> increment(ruvia::context& c) {
-        const auto value = co_await c.services().redis().incr(c.req().param("key").value_or(""));
+        const auto value = co_await c.redis().incr(c.req().param("key").value_or(""));
         std::string body;
         ruvia::http_append_signed(body, value);
         body.push_back('\n');
@@ -102,7 +102,7 @@ public:
 
     ruvia::task<ruvia::http_response> key_metadata(ruvia::context& c) {
         const auto key = c.req().param("key").value_or("");
-        auto redis = c.services().redis();
+        auto redis = c.redis();
         const auto exists = co_await redis.exists(key);
         const auto touched = co_await redis.touch(key);
         const auto type = co_await redis.type(key);
@@ -130,7 +130,7 @@ public:
     ruvia::task<ruvia::http_response> strings(ruvia::context& c) {
         const auto key = c.req().param("key").value_or("");
         const auto value = co_await c.req().text();
-        auto redis = c.services().redis();
+        auto redis = c.redis();
         (void)(co_await redis.set(key, value));
         ruvia::redis_set_options set_options;
         set_options.previous_value_ = ruvia::redis_set_previous_value_policy::return_;
@@ -147,15 +147,15 @@ public:
         const auto appended = co_await redis.append(key, "+tail");
         const auto length = co_await redis.strlen(key);
         auto deleted = co_await redis.get_del("ruvia:example:nx");
-        co_await c.services().redis().mset("ruvia:example:mset:a", "one", "ruvia:example:mset:b", "two");
-        auto values = co_await c.services().redis().mget("ruvia:example:mset:a", "ruvia:example:mset:b");
+        co_await c.redis().mset("ruvia:example:mset:a", "one", "ruvia:example:mset:b", "two");
+        auto values = co_await c.redis().mget("ruvia:example:mset:a", "ruvia:example:mset:b");
         // Redis counters must contain integer text. Keep them separate from
         // the string value above, which now contains "replaced+tail".
         constexpr std::string_view counter_key = "ruvia:example:number";
-        (void)co_await c.services().redis().set(counter_key, "10");
-        const auto decremented = co_await c.services().redis().decr(counter_key);
-        const auto decremented_by = co_await c.services().redis().decr_by(counter_key, 2);
-        const auto incremented_by = co_await c.services().redis().incr_by(counter_key, 3);
+        (void)co_await c.redis().set(counter_key, "10");
+        const auto decremented = co_await c.redis().decr(counter_key);
+        const auto decremented_by = co_await c.redis().decr_by(counter_key, 2);
+        const auto incremented_by = co_await c.redis().incr_by(counter_key, 3);
 
         std::string body;
         body.append("previous=");
@@ -184,17 +184,17 @@ public:
 
     ruvia::task<ruvia::http_response> hashes(ruvia::context& c) {
         const auto key = c.req().param("key").value_or("");
-        const auto changed = co_await c.services().redis().hset(key, "name", "ruvia", "kind", "framework");
-        const auto extra = co_await c.services().redis().hset(key, "count", "1");
-        const auto count = co_await c.services().redis().hincr_by(key, "count", 1);
-        auto name = co_await c.services().redis().hget(key, "name");
-        auto values = co_await c.services().redis().hmget(key, "name", "kind");
-        auto all = co_await c.services().redis().hget_all(key);
-        auto keys = co_await c.services().redis().hkeys(key);
-        auto hvals = co_await c.services().redis().hvals(key);
-        const auto exists = co_await c.services().redis().hexists(key, "name");
-        const auto length = co_await c.services().redis().hlen(key);
-        const auto removed = co_await c.services().redis().hdel(key, "kind");
+        const auto changed = co_await c.redis().hset(key, "name", "ruvia", "kind", "framework");
+        const auto extra = co_await c.redis().hset(key, "count", "1");
+        const auto count = co_await c.redis().hincr_by(key, "count", 1);
+        auto name = co_await c.redis().hget(key, "name");
+        auto values = co_await c.redis().hmget(key, "name", "kind");
+        auto all = co_await c.redis().hget_all(key);
+        auto keys = co_await c.redis().hkeys(key);
+        auto hvals = co_await c.redis().hvals(key);
+        const auto exists = co_await c.redis().hexists(key, "name");
+        const auto length = co_await c.redis().hlen(key);
+        const auto removed = co_await c.redis().hdel(key, "kind");
 
         std::string body;
         body.append("changed=");
@@ -223,18 +223,18 @@ public:
 
     ruvia::task<ruvia::http_response> lists(ruvia::context& c) {
         const auto key = c.req().param("key").value_or("");
-        const auto left = co_await c.services().redis().lpush(key, "left");
-        const auto right = co_await c.services().redis().rpush(key, "right");
-        const auto length = co_await c.services().redis().llen(key);
-        auto values = co_await c.services().redis().lrange(key, 0, -1);
-        auto first = co_await c.services().redis().lindex(key, 0);
+        const auto left = co_await c.redis().lpush(key, "left");
+        const auto right = co_await c.redis().rpush(key, "right");
+        const auto length = co_await c.redis().llen(key);
+        auto values = co_await c.redis().lrange(key, 0, -1);
+        auto first = co_await c.redis().lindex(key, 0);
         if (first) {
-            co_await c.services().redis().lset(key, 0, "updated");
+            co_await c.redis().lset(key, 0, "updated");
         }
-        co_await c.services().redis().ltrim(key, 0, 8);
-        const auto removed = co_await c.services().redis().lrem(key, 0, "missing");
-        auto popped_left = co_await c.services().redis().lpop(key);
-        auto popped_right = co_await c.services().redis().rpop(key);
+        co_await c.redis().ltrim(key, 0, 8);
+        const auto removed = co_await c.redis().lrem(key, 0, "missing");
+        auto popped_left = co_await c.redis().lpop(key);
+        auto popped_right = co_await c.redis().rpop(key);
 
         std::string body;
         body.append("pushed=");
@@ -257,20 +257,20 @@ public:
 
     ruvia::task<ruvia::http_response> sets(ruvia::context& c) {
         const auto key = c.req().param("key").value_or("");
-        const auto added = co_await c.services().redis().sadd(key, "one");
-        const auto also_added = co_await c.services().redis().sadd("ruvia:example:set:other", "one");
-        auto members = co_await c.services().redis().smembers(key);
-        const auto size = co_await c.services().redis().scard(key);
-        const auto member = co_await c.services().redis().sismember(key, "one");
-        auto random = co_await c.services().redis().srand_member(key);
+        const auto added = co_await c.redis().sadd(key, "one");
+        const auto also_added = co_await c.redis().sadd("ruvia:example:set:other", "one");
+        auto members = co_await c.redis().smembers(key);
+        const auto size = co_await c.redis().scard(key);
+        const auto member = co_await c.redis().sismember(key, "one");
+        auto random = co_await c.redis().srand_member(key);
         // Three commands over the same key set: a prepared sequence still passes
         // as a span, while one-off calls read better as plain arguments.
         const std::array<std::string_view, 2> keys{key, "ruvia:example:set:other"};
-        auto intersection = co_await c.services().redis().sinter(keys);
-        auto union_values = co_await c.services().redis().sunion(keys);
-        auto difference = co_await c.services().redis().sdiff(keys);
-        auto popped = co_await c.services().redis().spop(key);
-        const auto removed = co_await c.services().redis().srem("ruvia:example:set:other", "one");
+        auto intersection = co_await c.redis().sinter(keys);
+        auto union_values = co_await c.redis().sunion(keys);
+        auto difference = co_await c.redis().sdiff(keys);
+        auto popped = co_await c.redis().spop(key);
+        const auto removed = co_await c.redis().srem("ruvia:example:set:other", "one");
 
         std::string body;
         body.append("added=");
@@ -299,14 +299,14 @@ public:
 
     ruvia::task<ruvia::http_response> sorted_sets(ruvia::context& c) {
         const auto key = c.req().param("key").value_or("");
-        const auto added = co_await c.services().redis().zadd(key, 1.0, "one");
-        const auto added_two = co_await c.services().redis().zadd(key, 2.0, "two");
-        auto values = co_await c.services().redis().zrange(key, 0, -1);
-        auto scored = co_await c.services().redis().zrange_with_scores(key, 0, -1);
-        auto score = co_await c.services().redis().zscore(key, "one");
-        const auto size = co_await c.services().redis().zcard(key);
-        const auto counted = co_await c.services().redis().zcount(key, 0.0, 10.0);
-        const auto removed = co_await c.services().redis().zrem(key, "two");
+        const auto added = co_await c.redis().zadd(key, 1.0, "one");
+        const auto added_two = co_await c.redis().zadd(key, 2.0, "two");
+        auto values = co_await c.redis().zrange(key, 0, -1);
+        auto scored = co_await c.redis().zrange_with_scores(key, 0, -1);
+        auto score = co_await c.redis().zscore(key, "one");
+        const auto size = co_await c.redis().zcard(key);
+        const auto counted = co_await c.redis().zcount(key, 0.0, 10.0);
+        const auto removed = co_await c.redis().zrem(key, "two");
 
         std::string body;
         body.append("added=");
@@ -333,10 +333,10 @@ public:
         key_scan.count_ = 16;
         ruvia::redis_scan_options member_scan;
         member_scan.count_ = 16;
-        const auto keys = co_await c.services().redis().scan(key_scan);
-        const auto hash = co_await c.services().redis().hscan("ruvia:example:hash", member_scan);
-        const auto set = co_await c.services().redis().sscan("ruvia:example:set", member_scan);
-        const auto zset = co_await c.services().redis().zscan("ruvia:example:zset", member_scan);
+        const auto keys = co_await c.redis().scan(key_scan);
+        const auto hash = co_await c.redis().hscan("ruvia:example:hash", member_scan);
+        const auto set = co_await c.redis().sscan("ruvia:example:set", member_scan);
+        const auto zset = co_await c.redis().zscan("ruvia:example:zset", member_scan);
 
         std::string body;
         body.append("keys=");
@@ -352,7 +352,7 @@ public:
     }
 
     ruvia::task<ruvia::http_response> pipeline(ruvia::context& c) {
-        auto pipeline = c.services().redis().pipeline();
+        auto pipeline = c.redis().pipeline();
         pipeline.set("ruvia:example:pipeline", "1").get("ruvia:example:pipeline").incr("ruvia:example:pipeline").hset("ruvia:example:pipeline:hash", "field", "value").hget("ruvia:example:pipeline:hash", "field").lpush("ruvia:example:pipeline:list", "item").sadd("ruvia:example:pipeline:set", "member").zadd("ruvia:example:pipeline:zset", 1.0, "member").command("TYPE", "ruvia:example:pipeline");
         auto results = co_await std::move(pipeline).exec();
 
@@ -364,7 +364,7 @@ public:
     }
 
     ruvia::task<ruvia::http_response> transaction(ruvia::context& c) {
-        auto tx = c.services().redis().transaction();
+        auto tx = c.redis().transaction();
         tx.set("ruvia:example:tx", "1").incr("ruvia:example:tx").get("ruvia:example:tx");
         auto results = co_await std::move(tx).exec();
 
@@ -378,10 +378,10 @@ public:
     ruvia::task<ruvia::http_response> scripts(ruvia::context& c) {
         static constexpr std::string_view script = "return ARGV[1]";
         const std::array<std::string_view, 1> args{"hello"};
-        auto value = co_await c.services().redis().eval(script, {}, args);
-        auto sha = co_await c.services().redis().script_load(script);
-        auto exists = co_await c.services().redis().script_exists(sha);
-        auto sha_value = co_await c.services().redis().eval_sha(sha, {}, args);
+        auto value = co_await c.redis().eval(script, {}, args);
+        auto sha = co_await c.redis().script_load(script);
+        auto exists = co_await c.redis().script_exists(sha);
+        auto sha_value = co_await c.redis().eval_sha(sha, {}, args);
 
         std::string body;
         body.append("eval-kind=");
@@ -396,8 +396,8 @@ public:
 
     ruvia::task<ruvia::http_response> blocking_pop(ruvia::context& c) {
         const std::array<std::string_view, 1> keys{"ruvia:example:blocking"};
-        auto left = co_await c.services().redis().blpop(keys, ruvia::redis_block_wait::for_duration(std::chrono::seconds(1)));
-        auto right = co_await c.services().redis().brpop(keys, ruvia::redis_block_wait::for_duration(std::chrono::seconds(1)));
+        auto left = co_await c.redis().blpop(keys, ruvia::redis_block_wait::for_duration(std::chrono::seconds(1)));
+        auto right = co_await c.redis().brpop(keys, ruvia::redis_block_wait::for_duration(std::chrono::seconds(1)));
 
         std::string body;
         body.append("left=");
@@ -409,7 +409,7 @@ public:
     }
 
     ruvia::task<ruvia::http_response> alias_value(ruvia::context& c) {
-        auto value = co_await c.services().redis("cache").get(c.req().param("key").value_or(""));
+        auto value = co_await c.redis("cache").get(c.req().param("key").value_or(""));
         std::string body;
         if (value) {
             body.append(*value);

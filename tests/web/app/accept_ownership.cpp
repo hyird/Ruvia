@@ -73,7 +73,7 @@ public:
     RUVIA_ROUTES_END
 
     ruvia::task<ruvia::http_response> echo(ruvia::context& context) {
-        auto& owner = context.services().worker_state<worker_state>();
+        auto& owner = context.worker_state<worker_state>();
         owner.check(context);
         const auto worker_id = context.worker().id();
         std::string body;

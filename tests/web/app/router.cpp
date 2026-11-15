@@ -588,12 +588,12 @@ TEST(Ruvia, public_router_lends_borrowed_clients_and_state_to_session_middleware
             EXPECT_THROW(routes.bind_worker_state(visits), std::invalid_argument);
             routes.use<ruvia::session_middleware>(ruvia::session_config{.cookie_name_ = "sid"});
             routes.add("GET", "/set", [](ruvia::context& context) -> ruvia::task<ruvia::http_response> {
-                ++context.services().worker_state<visit_counter>().visits_;
+                ++context.worker_state<visit_counter>().visits_;
                 context.session().set("private");
                 co_return context.text("set");
             });
             routes.add("GET", "/read", [](ruvia::context& context) -> ruvia::task<ruvia::http_response> {
-                ++context.services().worker_state<visit_counter>().visits_;
+                ++context.worker_state<visit_counter>().visits_;
                 auto value = context.session();
                 co_return context.text(value.payload().empty() ? "empty" : value.payload());
             });
@@ -605,9 +605,9 @@ TEST(Ruvia, public_router_lends_borrowed_clients_and_state_to_session_middleware
                 co_return context.text("plain");
             });
             routes.add("GET", "/relay", [](ruvia::context& context) -> ruvia::task<ruvia::http_response> {
-                auto upstream = co_await context.services().client().get("/plain").send();
+                auto upstream = co_await context.client().get("/plain").send();
                 const auto content = co_await upstream.bytes();
-                const auto stored = co_await context.services().redis().get("absent");
+                const auto stored = co_await context.redis().get("absent");
                 co_return context.text(std::string(content.text()) + (stored ? ":stored" : ":absent"));
             });
             routes.freeze();
@@ -819,9 +819,9 @@ TEST(Ruvia, public_router_binds_http_clients_by_its_own_unique_aliases) {
             co_return context.text("two");
         });
         routes.add("GET", "/relay", [](ruvia::context& context) -> ruvia::task<ruvia::http_response> {
-            auto one = co_await context.services().client("one").get("/one").send();
+            auto one = co_await context.client("one").get("/one").send();
             const auto first = co_await one.bytes();
-            auto two = co_await context.services().client("two").get("/two").send();
+            auto two = co_await context.client("two").get("/two").send();
             const auto second = co_await two.bytes();
             co_return context.text(std::string(first.text()) + ":" + std::string(second.text()));
         });

@@ -457,8 +457,14 @@ struct file_response_options final {
     borrowed_text content_type_{};
 };
 
-class context final {
+// Worker resources (worker_state<T>(), run_blocking(), env(), client(), db(),
+// redis()) come from worker_services_access. Inside a router dispatch they see
+// that router's worker states and clients; executors and clients bind this
+// request's operation lifetime and stop_token().
+class context final : public worker_services_access<context> {
 private:
+    friend class worker_services_access<context>;
+    friend class request_stream;
     friend class context_request;
     friend class context_response_editor;
     friend class http_client_response;
@@ -527,16 +533,9 @@ public:
     [[nodiscard]] const worker_ref& worker() const& noexcept RUVIA_LIFETIMEBOUND;
     const worker_ref& worker() const&& = delete;
 
-    // This worker's resources: worker state, run_blocking(), env and the
-    // HTTP, database and Redis clients. Inside a router dispatch it sees that
-    // router's worker states and clients. Executors and clients bind this
-    // request's operation lifetime and stop_token().
-    [[nodiscard]] worker_services services() const& noexcept RUVIA_LIFETIMEBOUND;
-    worker_services services() const&& = delete;
-
     // Observes worker shutdown (application::stop() closes every connection
     // at once, with no drain phase) and, for a subrequest, explicit
-    // cancellation. services().db(), redis() and run_blocking() bind this
+    // cancellation. db(), redis() and run_blocking() bind this
     // token automatically. Explicit operation tokens are combined with it.
     //
     // Cancellation is cooperative: framework waits, including streaming sleep(),
@@ -556,7 +555,7 @@ public:
 
     // Request-scoped typed state: how a middleware hands a value it computed --
     // an authenticated user, a resolved tenant, a trace span -- to everything it
-    // calls through next(). The counterpart of services().worker_state<T>(), which lives for
+    // calls through next(). The counterpart of worker_state<T>(), which lives for
     // the worker's whole life and is shared by every request on it; this lives
     // for one dynamic next() scope and is private to that request.
     //
@@ -734,6 +733,7 @@ private:
 
     [[nodiscard]] std::string& decoded_body() const;
     [[nodiscard]] detail::context_request_storage& request_storage() const;
+    [[nodiscard]] detail::worker_services services() const noexcept;
     [[nodiscard]] detail::context_services& runtime_services() noexcept;
     [[nodiscard]] const detail::context_services& runtime_services() const noexcept;
     void store_response(http_response&& response);

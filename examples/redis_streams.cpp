@@ -37,7 +37,7 @@ private:
     ruvia::task<ruvia::http_response> setup(ruvia::context& c) {
         // Commands without a typed convenience API still use the same bounded
         // pool, cancellation token, PMR result ownership, and error handling.
-        auto created = co_await c.services().redis().command("XGROUP", "CREATE", stream_key, group_name, "0", "MKSTREAM");
+        auto created = co_await c.redis().command("XGROUP", "CREATE", stream_key, group_name, "0", "MKSTREAM");
         // command() returns Redis error replies as values; BUSYGROUP means the
         // group already exists and is reported, never recreated.
         if (created.is_error()) {
@@ -51,12 +51,12 @@ private:
 
     ruvia::task<ruvia::http_response> publish(ruvia::context& c) {
         const auto body = co_await c.req().text();
-        auto result_value = co_await c.services().redis().command("XADD", stream_key, "*", "body", body);
+        auto result_value = co_await c.redis().command("XADD", stream_key, "*", "body", body);
         co_return c.text(result_value.string());
     }
 
     ruvia::task<ruvia::http_response> consume(ruvia::context& c) {
-        auto redis = c.services().redis().with_options({.timeout_ = std::chrono::seconds(2)});
+        auto redis = c.redis().with_options({.timeout_ = std::chrono::seconds(2)});
         // ">" requests never-delivered entries. A real consumer also reclaims
         // abandoned pending work (XAUTOCLAIM) and makes its effects idempotent.
         const std::array<ruvia::redis_stream_read_view, 1> streams{{{stream_key, ">"}}};

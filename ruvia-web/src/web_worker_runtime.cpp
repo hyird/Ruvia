@@ -50,8 +50,8 @@ const worker_ref& web_worker_context::worker() const& noexcept {
     return stop_token_;
 }
 
-worker_services web_worker_context::services() const& noexcept {
-    return worker_services(worker_, stop_token_, worker_states_, client_registries_, operation_scope_, nullptr, env_);
+detail::worker_services web_worker_context::services() const noexcept {
+    return detail::worker_services(worker_, stop_token_, worker_states_, client_registries_, operation_scope_, nullptr, env_);
 }
 
 web_worker_ref::web_worker_ref(std::shared_ptr<detail::web_worker_dispatch> dispatch) noexcept :

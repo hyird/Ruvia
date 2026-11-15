@@ -113,7 +113,7 @@ public:
     router& rate_limit(rate_limit_config config) &;
 
     // Lend caller-owned clients and per-worker state to the requests this
-    // router dispatches, so worker_services::redis(alias), db(alias), client(alias)
+    // router dispatches, so worker_services_access::redis(alias), db(alias), client(alias)
     // and worker_state<T>() -- and middleware built on them, such as
     // session_middleware -- resolve here. A router with any bound client
     // resolves every client lookup only among its own, and one with any bound

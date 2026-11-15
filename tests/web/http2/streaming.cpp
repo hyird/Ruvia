@@ -83,7 +83,7 @@ class sleeping_stream_routes final {
     // HEAD 正常完成，不启动生产循环，也不会取消业务等待 token。
     ruvia::task<void> head_loop_sse(ruvia::context& context_value) {
         const auto status = context_value.req().query("not-modified").has_value() ? std::optional(ruvia::http_status::not_modified) : std::nullopt;
-        auto& observed = *context_value.services().worker_state<std::shared_ptr<sleeping_stream_observation>>();
+        auto& observed = *context_value.worker_state<std::shared_ptr<sleeping_stream_observation>>();
         auto writer = context_value.stream_sse({.status_ = status});
         const auto token = context_value.stop_token();
         if (co_await writer.commit() == ruvia::stream_commit_result::body) {
@@ -110,7 +110,7 @@ class sleeping_stream_routes final {
 
     // 提交结果结束无正文响应，不靠轮询取消或等待 peer 断开。
     ruvia::task<void> head_naive_sse(ruvia::context& context_value) {
-        auto& observed = *context_value.services().worker_state<std::shared_ptr<sleeping_stream_observation>>();
+        auto& observed = *context_value.worker_state<std::shared_ptr<sleeping_stream_observation>>();
         auto writer = context_value.stream_sse();
         if (co_await writer.commit() == ruvia::stream_commit_result::completed) {
             observed.naive_loop_finished_ = true;
@@ -141,7 +141,7 @@ class sleeping_stream_routes final {
     }
 
     ruvia::task<void> head_trailer_only(ruvia::context& context_value) {
-        auto& observed = *context_value.services().worker_state<std::shared_ptr<sleeping_stream_observation>>();
+        auto& observed = *context_value.worker_state<std::shared_ptr<sleeping_stream_observation>>();
         const ruvia::http_header_view trailer_field[] = {{"Trailer", "X-Complete"}};
         auto& out = context_value.stream_text({.headers_ = trailer_field});
         const auto token = context_value.stop_token();
@@ -219,7 +219,7 @@ class sleeping_stream_routes final {
     }
 
     ruvia::task<void> quiet_sse(ruvia::context& context_value) {
-        auto& observed = *context_value.services().worker_state<std::shared_ptr<sleeping_stream_observation>>();
+        auto& observed = *context_value.worker_state<std::shared_ptr<sleeping_stream_observation>>();
         auto writer = context_value.stream_sse();
         if (co_await writer.commit() == ruvia::stream_commit_result::completed) {
             co_return;
@@ -248,7 +248,7 @@ class sleeping_stream_routes final {
     // Writes one chunk, then pauses far longer than the test waits: only a
     // peer disconnect can end the sleep in time.
     ruvia::task<void> sleeping(ruvia::context& context_value) {
-        auto& observed = *context_value.services().worker_state<std::shared_ptr<sleeping_stream_observation>>();
+        auto& observed = *context_value.worker_state<std::shared_ptr<sleeping_stream_observation>>();
         auto& writer = context_value.stream_text();
         if (co_await writer.commit() == ruvia::stream_commit_result::completed) {
             co_return;
@@ -973,7 +973,7 @@ public:
     RUVIA_ROUTES_END
 
     ruvia::task<ruvia::http_response> parent(ruvia::context& context_value) {
-        auto& owner_value = *context_value.services().worker_state<std::shared_ptr<push_observation>>();
+        auto& owner_value = *context_value.worker_state<std::shared_ptr<push_observation>>();
         const auto count = context_value.req().path() == "/two" ? 2U : 1U;
         const auto path = context_value.req().path() == "/large" ? "/large-asset" : (context_value.req().path() == "/delayed-parent" ? "/delayed-asset" : "/asset");
         const std::array<ruvia::http_header_view, 1> headers{{{"x-promise", "owned-request"}}};
@@ -999,7 +999,7 @@ public:
         co_return context_value.text("late-asset");
     }
     ruvia::task<void> large(ruvia::context& context_value) {
-        auto& owner_value = *context_value.services().worker_state<std::shared_ptr<push_observation>>();
+        auto& owner_value = *context_value.worker_state<std::shared_ptr<push_observation>>();
         std::string chunk(16384, 'p');
         if (co_await context_value.stream().commit() == ruvia::stream_commit_result::completed) {
             co_return;

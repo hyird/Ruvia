@@ -9,10 +9,12 @@
 
 #include <asio/io_context.hpp>
 
+#include "context.h"
 #include "context_access.h"
 #include "env.h"
 #include "http_client.h"
 #include "http_client_pool.h"
+#include "request_stream.h"
 #include "route_table.h"
 #include "startup_config.h"
 #include "stop_token.h"
@@ -301,10 +303,6 @@ const http_client& worker_client_registry_view::borrowed_http_clients(std::strin
     return *clients;
 }
 
-}  // namespace ruvia::detail
-
-namespace ruvia {
-
 void* worker_services::worker_state_instance(const void* type_key) const {
     auto* instance = worker_states_ == nullptr ? nullptr : worker_states_->instance(type_key);
     if (instance == nullptr) {
@@ -345,5 +343,47 @@ redis_executor worker_services::redis(std::string_view alias) const {
     return clients_.redis(alias, *operation_scope_, io_metrics_, *stop_token_);
 }
 #endif
+
+}  // namespace ruvia::detail
+
+namespace ruvia {
+
+template <typename host_type>
+http_client_ref worker_services_access<host_type>::client() const& {
+    return services().client();
+}
+
+template <typename host_type>
+http_client_ref worker_services_access<host_type>::client(std::string_view alias) const& {
+    return services().client(alias);
+}
+
+#ifdef RUVIA_ENABLE_DATABASE
+template <typename host_type>
+db_executor worker_services_access<host_type>::db() const& {
+    return services().db();
+}
+
+template <typename host_type>
+db_executor worker_services_access<host_type>::db(std::string_view alias) const& {
+    return services().db(alias);
+}
+#endif
+
+#ifdef RUVIA_ENABLE_REDIS
+template <typename host_type>
+redis_executor worker_services_access<host_type>::redis() const& {
+    return services().redis();
+}
+
+template <typename host_type>
+redis_executor worker_services_access<host_type>::redis(std::string_view alias) const& {
+    return services().redis(alias);
+}
+#endif
+
+template class worker_services_access<context>;
+template class worker_services_access<request_stream>;
+template class worker_services_access<web_worker_context>;
 
 }  // namespace ruvia
