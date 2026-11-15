@@ -3,13 +3,17 @@
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <cstddef>
+#include <cstdint>
 #include <exception>
 #include <memory>
+#include <optional>
 #include <semaphore>
 #include <stdexcept>
 #include <string>
 #include <string_view>
 #include <thread>
+#include <utility>
 
 #include <asio/buffer.hpp>
 #include <asio/io_context.hpp>
@@ -20,11 +24,18 @@
 #include <openssl/ssl.h>
 
 #include "app.h"
+#include "blocking_pool.h"
 #include "context.h"
 #include "controller.h"
+#include "event_loop.h"
+#include "http_response.h"
+#include "http_server.h"
 #include "http_server_fixture.h"
+#include "request_stream.h"
+#include "server_observation.h"
 #include "streaming.h"
 #include "task_scope.h"
+#include "tls_config.h"
 // An interim head sent from a handler first writes the pipelined responses
 // held before it; over TLS that write always completes asynchronously. Once
 // it and the interim head are out, the handler is timed as a handler again
@@ -83,7 +94,7 @@ class interim_phase_routes final {
     }
 };
 
-// Larger than any loopback socket buffering, so only a timeout can cut it.
+constexpr int completion_socket_buffer = 16 * 1024;
 constexpr std::size_t completion_body_bytes = std::size_t{16} * 1024 * 1024;
 constexpr auto write_completion_timeout = 300ms;
 // Inactivity limit far beyond the whole exchange, so it cannot be what ends it.
@@ -91,15 +102,25 @@ constexpr auto patient_write_timeout = 20s;
 // The reader trickles for several completion budgets before draining.
 constexpr auto trickle_period = 1500ms;
 
-class write_completion_routes final {
-    RUVIA_ROUTES_BEGIN(write_completion_routes)
-    RUVIA_GET("/write-completion/bulk", bulk);
-    RUVIA_ROUTES_END
+ruvia::task<void> serve_buffered_response(ruvia::request_stream& stream) {
+    ruvia::http_response response;
+    response.owned_body(std::string(completion_body_bytes, 'w'));
+    stream.respond(std::move(response));
+    co_return;
+}
 
-    ruvia::task<ruvia::http_response> bulk(ruvia::context& c) {
-        co_return c.text(std::string(completion_body_bytes, 'w'));
-    }
-};
+ruvia::task<void> serve_slow_reader(ruvia::event_loop loop, asio::ip::tcp::socket accepted, std::uint16_t port, ruvia::tls_config tls, std::optional<ruvia::connection_close_reason>& close_reason) {
+    ruvia::http_server server(loop, {.request_stream_ = &serve_buffered_response, .connection_close_ = [&close_reason](const ruvia::connection_event&, const std::shared_ptr<void>&, const ruvia::connection_close_info& info) noexcept {
+        close_reason = info.reason_;
+    }},
+        {.connection_scan_interval_ = 5ms, .write_timeout_ = patient_write_timeout, .write_completion_timeout_ = write_completion_timeout});
+    co_await server.add_connection_service({.address_ = "127.0.0.1", .https_ = port, .tls_ = tls, .dispatch_ = ruvia::listener_dispatch::request_stream});
+    co_await server.start();
+    const ruvia::listener_endpoint endpoint{.address_ = "127.0.0.1", .port_ = port};
+    server.adopt(endpoint, accepted.release());
+    co_await server.wait_connections_closed(endpoint, {.timeout_ = patient_write_timeout});
+    co_await server.shutdown();
+}
 
 // Sends `requests` in one TLS record, then reads until the server closes.
 // A paced read drains a full 64 KiB before pausing: sleeping after each 16 KiB
@@ -212,44 +233,55 @@ TEST(Ruvia, a_handler_after_its_interim_head_is_timed_as_a_handler_not_a_write) 
 // one buffered response write open: write_completion_timeout runs from the
 // start of the write and progress does not renew it.
 TEST(Ruvia, a_trickling_reader_cannot_hold_a_write_past_write_completion_timeout) {
-    auto& app = ruvia::app();
-    EXPECT_THROW(app.server({.write_completion_timeout_ = 0ms}), std::invalid_argument);
+    EXPECT_THROW(ruvia::app().server({.write_completion_timeout_ = 0ms}), std::invalid_argument);
 
+    const ruvia::test::tls_identity identity("localhost");
+    const auto private_key = identity.private_key_file();
     asio::io_context io;
-    ruvia::test::tcp_port_reservation reservation(io);
-    const auto endpoint = reservation.endpoint();
-    static std::binary_semaphore started{0};
-    app.server({.worker_count_ = 1, .connection_scan_interval_ = 5ms, .write_timeout_ = patient_write_timeout, .write_completion_timeout_ = write_completion_timeout})
-        .listen({.address_ = "127.0.0.1", .http_ = endpoint.port()})
-        .on_start([] {
-        started.release();
-    });
-    ruvia::test::app_run runner(app);
-    const bool ready = started.try_acquire_for(10s);
-    EXPECT_TRUE(ready);
-    if (ready) {
-        asio::ip::tcp::socket client(io);
-        client.open(endpoint.protocol());
-        client.set_option(asio::socket_base::receive_buffer_size(16 * 1024));
-        client.connect(endpoint);
-        asio::write(client, asio::buffer(std::string_view("GET /write-completion/bulk HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")));
-        std::string response{};
-        std::array<char, 4096> buffer;
-        asio::error_code error;
-        const auto requested = std::chrono::steady_clock::now();
-        while (!error && std::chrono::steady_clock::now() - requested < trickle_period) {
-            response.append(buffer.data(), client.read_some(asio::buffer(buffer), error));
+    asio::ip::tcp::acceptor acceptor(io, {asio::ip::address_v4::loopback(), 0});
+    const auto endpoint = acceptor.local_endpoint();
+    asio::ssl::context tls(asio::ssl::context::tls_client);
+    asio::ssl::stream<asio::ip::tcp::socket> client(io, tls);
+    client.next_layer().open(endpoint.protocol());
+    client.next_layer().set_option(asio::socket_base::receive_buffer_size(completion_socket_buffer));
+    client.next_layer().connect(endpoint);
+    auto accepted = acceptor.accept();
+    // Bound queued TLS records so the slow reader leaves the response write pending.
+    accepted.set_option(asio::socket_base::send_buffer_size(completion_socket_buffer));
+
+    std::optional<ruvia::connection_close_reason> close_reason;
+    ruvia::blocking_pool preparation({.thread_count_ = 1});
+    ruvia::event_loop_pool loops({.loop_count_ = 1, .blocking_pool_ = &preparation});
+    const auto loop = loops.loop(0);
+    loops.start();
+    auto server = loop.start(serve_slow_reader(loop, std::move(accepted), endpoint.port(), {.identity_ = {.certificate_chain_file_ = identity.ca_file_, .private_key_file_ = private_key}}, close_reason));
+    std::string response;
+    std::array<char, 4096> buffer;
+    asio::error_code error;
+    client.handshake(asio::ssl::stream_base::client, error);
+    EXPECT_FALSE(error);
+    const auto requested = std::chrono::steady_clock::now();
+    if (!error) {
+        asio::write(client, asio::buffer(std::string_view("GET / HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")), error);
+        EXPECT_FALSE(error);
+    }
+    while (!error) {
+        response.append(buffer.data(), client.read_some(asio::buffer(buffer), error));
+        if (std::chrono::steady_clock::now() - requested < trickle_period) {
             std::this_thread::sleep_for(10ms);
         }
-        while (!error) {
-            response.append(buffer.data(), client.read_some(asio::buffer(buffer), error));
-        }
-        const auto elapsed = std::chrono::steady_clock::now() - requested;
-        EXPECT_TRUE(response.starts_with("HTTP/1.1 200 "));
-        EXPECT_TRUE(response.size() < completion_body_bytes);
-        EXPECT_TRUE(elapsed < patient_write_timeout);
     }
-    app.stop();
-    runner.join();
-    EXPECT_TRUE(runner.failure() == nullptr);
+    const auto elapsed = std::chrono::steady_clock::now() - requested;
+    client.next_layer().close(error);
+    std::move(server).get();
+    loops.join();
+
+    EXPECT_EQ(close_reason, ruvia::connection_close_reason::timeout);
+    ASSERT_TRUE(response.starts_with("HTTP/1.1 200 "));
+    const auto head_end = response.find("\r\n\r\n");
+    ASSERT_NE(head_end, std::string::npos);
+    const auto body_bytes = response.size() - (head_end + 4);
+    EXPECT_GT(body_bytes, 0U);
+    EXPECT_LT(body_bytes, completion_body_bytes);
+    EXPECT_LT(elapsed, patient_write_timeout);
 }
