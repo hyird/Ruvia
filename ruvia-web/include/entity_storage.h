@@ -178,10 +178,10 @@ void assign_entity_value(t_type& out, v_type&& value) {
         if constexpr (movable_rvalue && std::is_same_v<std::remove_cvref_t<v_type>, std::string>) {
             std::string owned(std::move(value));
             commit_entity_value(out, std::move(owned));
-            return;
+        } else {
+            std::string owned{std::string_view(value)};
+            commit_entity_value(out, std::move(owned));
         }
-        std::string owned{std::string_view(value)};
-        commit_entity_value(out, std::move(owned));
     } else if constexpr (is_optional<t_type>::value) {
         using element_type = typename is_optional<t_type>::value_type;
         if constexpr (is_optional<std::remove_cvref_t<v_type>>::value) {
@@ -206,9 +206,7 @@ void assign_entity_value(t_type& out, v_type&& value) {
         if constexpr (movable_rvalue && std::is_same_v<std::remove_cvref_t<v_type>, t_type>) {
             t_type owned(std::move(value));
             commit_entity_value(out, std::move(owned));
-            return;
-        }
-        if constexpr (std::is_arithmetic_v<element_type> && is_exact_element_range<v_type, element_type>()) {
+        } else if constexpr (std::is_arithmetic_v<element_type> && is_exact_element_range<v_type, element_type>()) {
             t_type owned(value.begin(), value.end());
             commit_entity_value(out, std::move(owned));
         } else if constexpr (std::is_same_v<element_type, std::string>) {
@@ -218,11 +216,10 @@ void assign_entity_value(t_type& out, v_type&& value) {
                 for (auto& item : value) {
                     owned.emplace_back(std::move(item));
                 }
-                commit_entity_value(out, std::move(owned));
-                return;
-            }
-            for (const auto& item : value) {
-                owned.emplace_back(std::string_view(item));
+            } else {
+                for (const auto& item : value) {
+                    owned.emplace_back(std::string_view(item));
+                }
             }
             commit_entity_value(out, std::move(owned));
         } else {

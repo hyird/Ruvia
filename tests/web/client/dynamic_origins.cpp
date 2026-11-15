@@ -1033,7 +1033,7 @@ TEST(Ruvia, tcp_client_minimum_tls_version_rejects_downgrade_before_application_
 
 TEST(Ruvia, tcp_client_rejects_invalid_tls_minimum_configuration) {
     ruvia::event_loop_pool pool({.loop_count_ = 1});
-    for (const std::uint16_t version : {0x0301, 0x0302}) {
+    for (const int version : {0x0301, 0x0302}) {
         ruvia::tcp_client_config config{.host_ = "127.0.0.1", .port_ = 443};
         config.tls_.mode_ = ruvia::client_tls_mode::verify_identity;
         config.tls_.minimum_version_ = static_cast<ruvia::tls_version>(version);
