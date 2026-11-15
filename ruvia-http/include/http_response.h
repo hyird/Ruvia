@@ -10,6 +10,7 @@
 
 #include "borrowed_text.h"
 #include "http_content_length.h"
+#include "http_header.h"
 #include "http_message.h"
 #include "http_response_body.h"
 #include "http_response_headers.h"
@@ -123,6 +124,28 @@ private:
     http_status_code status_code_{http_status::ok};
     http_response_headers headers_;
     detail::http_response_body body_;
+};
+
+// Immutable, bodyless response-head view for 1xx progress messages that precede
+// a final response. 101 is deliberately excluded: switching protocols transfers
+// connection ownership and therefore requires its dedicated protocol driver.
+// Header elements and their strings are borrowed and must remain stable through
+// the synchronous sans-I/O submit call.
+class http_interim_response_head final {
+public:
+    explicit http_interim_response_head(http_status_code status_code, borrowed_http_headers headers = {});
+
+    [[nodiscard]] constexpr http_status_code status() const noexcept {
+        return status_code_;
+    }
+
+    [[nodiscard]] constexpr std::span<const http_header_view> headers() const noexcept {
+        return headers_;
+    }
+
+private:
+    http_status_code status_code_;
+    std::span<const http_header_view> headers_;
 };
 
 }  // namespace ruvia

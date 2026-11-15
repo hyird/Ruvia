@@ -45,6 +45,7 @@
 #include "http_server_fixture.h"
 #include "request_stream.h"
 #include "task_scope.h"
+#include "tls_certificate_store.h"
 #if defined(RUVIA_ENABLE_HTTP3)
 #include <asio/ip/udp.hpp>
 
@@ -244,7 +245,7 @@ bool serves_hello(tls_stream& stream) {
                     return false;
                 }
                 successful = head->head().status() == ruvia::http_status::ok;
-                decoder.emplace(*framing, ruvia::http1_body_decoder_config{.obs_fold_ = ruvia::http1_trailer_obs_fold::accept, .trailer_message_ = ruvia::http1_trailer_message::response});
+                decoder.emplace(*framing, ruvia::http1_body_decoder_options{.obs_fold_ = ruvia::http1_trailer_obs_fold::accept, .trailer_message_ = ruvia::http1_trailer_message::response});
                 if (head->plan().discards_content()) {
                     decoder->discard_content();
                 }

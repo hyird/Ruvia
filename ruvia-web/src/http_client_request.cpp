@@ -23,7 +23,6 @@
 #include "context.h"
 #include "context_access.h"
 #include "event_loop.h"
-#include "http1_client_request.h"
 #include "http_authority.h"
 #include "http_client.h"
 #include "http_client_config_storage.h"
@@ -188,7 +187,7 @@ void http_client_request_storage::resolve_route(const http_client_config_storage
     if (options_.authority_) {
         const auto parsed = parse_route_authority(*options_.authority_);
         const http_origin_options origin{.host_ = parsed.host(), .port_ = parsed.effective_port(default_port)};
-        authority_origin = https ? http_origin_view::https(origin) : http_origin_view::http(origin);
+        authority_origin = http_origin_view::for_scheme(config.scheme_, origin);
         route_authority_ = make_http_origin_authority(*authority_origin);
         authority_host = parsed.host();
         if (authority_host.starts_with('[')) {
@@ -372,9 +371,8 @@ void replace_field(std::vector<http_header>& fields, std::string_view name, std:
         return client.origin();
     }
     const auto parsed = detail::parse_route_authority(*options.authority_);
-    const bool https = client.scheme() == http_scheme::https;
-    const http_origin_options origin{.host_ = parsed.host(), .port_ = parsed.effective_port(https ? 443 : 80)};
-    return https ? http_origin_view::https(origin) : http_origin_view::http(origin);
+    const http_origin_options origin{.host_ = parsed.host(), .port_ = parsed.port()};
+    return http_origin_view::for_scheme(client.scheme(), origin);
 }
 
 void clear_route_overrides(http_client_request_options& options) noexcept {
@@ -928,25 +926,12 @@ task<http_client_response> http_client_ref::dispatch(const http_request_head_vie
     request.pool_owner_ = pool_owner_;
     request.set_host_stop(host_stop_token_);
     if (view.content_.streaming_content() != nullptr || (view.content_.known_length_content() != nullptr && !view.content_.known_length_content()->bytes())) {
-        throw std::invalid_argument("streaming request content requires dispatch_upload");
+        throw std::invalid_argument("streaming request content requires http_client_request::upload()");
     }
     if (const auto* known = view.content_.known_length_content()) {
         request.set_body(*known->bytes());
     }
     return registration_.attach(pool_->execute(std::move(request), options_));
-}
-
-task<http_client_exchange> http_client_ref::dispatch_upload(const http_request_head_view& head, http_client_upload_config upload, const http_client_request_options& request_options, const std::shared_ptr<http_client_informational_callback>& informational) const {
-    registration_.require_active();
-    if (head.content_.without_content() == nullptr || upload.max_chunk_bytes_ == 0 || upload.continue_timeout_.value() <= std::chrono::milliseconds::zero() || (upload.expectation_ != http_client_request_expectation::none && upload.expectation_ != http_client_request_expectation::continue_)) {
-        throw std::invalid_argument("streaming upload requires a bodyless head and valid upload policy");
-    }
-    detail::http_client_request_storage request(head.method_.view(), head.target_.view(), head.headers_);
-    request.options_ = detail::copy_http_client_request_settings(request_options);
-    request.informational_ = informational;
-    request.pool_owner_ = pool_owner_;
-    request.set_host_stop(host_stop_token_);
-    return registration_.attach(pool_->open_request(std::move(request), upload, options_));
 }
 
 task<http_client_tunnel_result> http_client_ref::dispatch_udp(const http_request_head_view& head, http_client_tunnel_config config, const http_client_request_options& request_options, const std::shared_ptr<http_client_informational_callback>& informational) const {

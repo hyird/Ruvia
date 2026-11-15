@@ -159,8 +159,8 @@ std::optional<permessage_deflate_params> parse_permessage_deflate_params(std::st
     return accepted.value_or((websocket_compression{}));
 }
 
-[[nodiscard]] inline websocket_compression websocket_negotiate_permessage_deflate(const http_request& request, websocket_deflate_config config) {
-    validate_websocket_deflater_config(config.deflater_);
+[[nodiscard]] inline websocket_compression websocket_negotiate_permessage_deflate(const http_request& request, websocket_server_deflate_options config) {
+    validate_websocket_zlib_options(config.deflater_);
     if (!config.enabled_) {
         return (websocket_compression{});
     }

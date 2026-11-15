@@ -129,7 +129,7 @@ redis_orm_arguments_type redis_orm_write_arguments(std::string_view storage_pref
     args.emplace_back(mode);
     args.emplace_back(options.ttl_ ? "expire" : (options.persist_ ? "persist" : "keep"));
     if (options.ttl_) {
-        http_append_signed(args.emplace_back(), static_cast<std::int64_t>(options.ttl_->count()));
+        append_decimal(args.emplace_back(), static_cast<std::int64_t>(options.ttl_->count()));
     } else {
         args.emplace_back("0");
     }
@@ -882,8 +882,8 @@ redis_compiled_command redis_search_mapping::compile_find(const redis_find_optio
         args.emplace_back("0");
     } else {
         std::string encoded_offset, encoded_limit;
-        http_append_unsigned(encoded_offset, offset);
-        http_append_unsigned(encoded_limit, limit);
+        append_decimal(encoded_offset, offset);
+        append_decimal(encoded_limit, limit);
         args.emplace_back(std::move(encoded_offset));
         args.emplace_back(std::move(encoded_limit));
     }

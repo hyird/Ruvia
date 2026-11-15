@@ -33,7 +33,7 @@ namespace {
     if (value > std::numeric_limits<std::uint64_t>::max()) {
         throw std::length_error("redis RESP length is too large");
     }
-    return http_unsigned_decimal_size(static_cast<std::uint64_t>(value));
+    return decimal_size(static_cast<std::uint64_t>(value));
 }
 
 template <typename args_type>
@@ -105,13 +105,13 @@ std::size_t resp_bulk_serialized_size(std::size_t arg_bytes) {
 
 void append_resp_header(std::string& output, std::size_t arg_count) {
     output.push_back('*');
-    http_append_unsigned(output, static_cast<std::uint64_t>(arg_count));
+    append_decimal(output, static_cast<std::uint64_t>(arg_count));
     output.append("\r\n", 2);
 }
 
 void append_resp_bulk(std::string& output, std::string_view arg) {
     output.push_back('$');
-    http_append_unsigned(output, static_cast<std::uint64_t>(arg.size()));
+    append_decimal(output, static_cast<std::uint64_t>(arg.size()));
     output.append("\r\n", 2);
     if (!arg.empty()) {
         output.append(arg.data(), arg.size());
@@ -418,8 +418,8 @@ void throw_if_redis_transaction_reply_error(const redis_value& value, std::size_
     if (value.kind() != redis_value::kind_type::error) {
         return;
     }
-    std::array<char, http_max_unsigned_decimal_size> index_digits;
-    const auto index_text = http_format_unsigned(index_digits, index);
+    std::array<char, max_decimal_size> index_digits;
+    const auto index_text = format_decimal(index_digits, index);
     std::string message;
     message.reserve(26 + index_text.size() + value.error().size());
     message.append("redis transaction reply ");

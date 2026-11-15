@@ -8,7 +8,6 @@
 #include <string_view>
 
 #include "borrowed_text.h"
-#include "http1_client_request.h"
 #include "http_authority.h"
 #include "http_request.h"
 

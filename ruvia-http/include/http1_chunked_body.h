@@ -99,7 +99,7 @@ enum class http1_trailer_message : std::uint8_t {
     response,
 };
 
-struct http1_chunked_body_decoder_config final {
+struct http1_chunked_body_decoder_options final {
     protocol_byte_limit body_limit_{protocol_byte_limit::unlimited()};
     http1_trailer_obs_fold obs_fold_{http1_trailer_obs_fold::reject};
     http1_trailer_message trailer_message_{http1_trailer_message::request};
@@ -122,7 +122,7 @@ struct http1_chunked_body_decoder_config final {
 // Trailer sections must also fit the http_field_section_budget byte rule
 // (name.size() + value.size() + 4 per field, plus 2 for the terminating empty
 // line; see http_trailer_section_budget()). obs-fold in the trailer section
-// follows http1_chunked_body_decoder_config::obs_fold_, and fields the sender
+// follows http1_chunked_body_decoder_options::obs_fold_, and fields the sender
 // was not permitted to generate follow trailer_message_.
 // The complete alternative publishes the remaining fields in received order,
 // names lowercase and values without surrounding OWS. The decoder owns them:
@@ -133,7 +133,7 @@ struct http1_chunked_body_decoder_config final {
 // the terminal result (a finished one without its trailers) until reset().
 class http1_chunked_body_decoder final {
 public:
-    explicit http1_chunked_body_decoder(http1_chunked_body_decoder_config config = {});
+    explicit http1_chunked_body_decoder(http1_chunked_body_decoder_options config = {});
     ~http1_chunked_body_decoder();
     http1_chunked_body_decoder(const http1_chunked_body_decoder&) = delete;
     http1_chunked_body_decoder& operator=(const http1_chunked_body_decoder&) = delete;

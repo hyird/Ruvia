@@ -142,7 +142,7 @@ namespace ruvia::detail {
     return (inflater.native().data_type & 128) != 0 ? websocket_inflate_result::ok : websocket_inflate_result::error;
 }
 
-websocket_deflate::websocket_deflate(websocket_deflate_codecs* shared, websocket_deflater_config deflater, bool send_takeover, bool receive_takeover, int send_window, int receive_window) noexcept :
+websocket_deflate::websocket_deflate(websocket_deflate_codecs* shared, websocket_zlib_options deflater, bool send_takeover, bool receive_takeover, int send_window, int receive_window) noexcept :
     shared_(shared),
     deflater_config_(deflater),
     send_window_(send_window),

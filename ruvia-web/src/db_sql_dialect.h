@@ -174,8 +174,8 @@ template <typename contains_fn_type>
     std::string_view delimiter = "$ruvia$";
     for (std::uint64_t suffix = 1; contains_delimiter(delimiter); ++suffix) {
         std::string_view("$ruvia").copy(delimiter_buf.data(), 6);
-        std::array<char, http_max_unsigned_decimal_size> digits;
-        const auto formatted = http_format_unsigned(digits, suffix);
+        std::array<char, max_decimal_size> digits;
+        const auto formatted = format_decimal(digits, suffix);
         std::size_t length = 6;
         formatted.copy(delimiter_buf.data() + length, formatted.size());
         length += formatted.size();

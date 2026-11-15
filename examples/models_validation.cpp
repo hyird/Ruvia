@@ -135,7 +135,7 @@ private:
         body.append(request_query.has_value() && request_query->data() == query_value.data() && request_query->size() == query_value.size() ? "true" : "false");
         if (const auto page = query.get<"page">()) {
             body.append("\npage=");
-            ruvia::http_append_signed(body, page->value_);
+            ruvia::append_decimal(body, page->value_);
         }
         body.push_back('\n');
         co_return c.text(std::move(body));

@@ -181,7 +181,7 @@ public:
         return lifecycle_;
     }
 
-    [[nodiscard]] const websocket_deflate_config& deflate() const noexcept {
+    [[nodiscard]] const websocket_server_deflate_options& deflate() const noexcept {
         return deflate_;
     }
     [[nodiscard]] protocol_byte_limit message_limit(std::size_t server_limit) const {
@@ -218,7 +218,7 @@ private:
     std::vector<std::string_view> subprotocols_;
     bool require_subprotocol_;
     websocket_lifecycle_options lifecycle_;
-    websocket_deflate_config deflate_;
+    websocket_server_deflate_options deflate_;
     protocol_byte_limit max_message_bytes_;
 };
 
@@ -245,7 +245,7 @@ public:
 
     [[nodiscard]] static route_endpoint websocket(route_stream_handler::invoke_type invoke, websocket_route_config options) {
         options.lifecycle_ = normalize_websocket_lifecycle_options(options.lifecycle_);
-        validate_websocket_deflater_config(options.deflate_.deflater_);
+        validate_websocket_zlib_options(options.deflate_.deflater_);
         ruvia::websocket_subprotocol_set subprotocols;
         for (const auto& subprotocol : options.subprotocols_) {
             if (!subprotocols.append(subprotocol)) {

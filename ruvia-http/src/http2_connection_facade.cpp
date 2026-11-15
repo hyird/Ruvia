@@ -10,7 +10,6 @@
 #include <variant>
 
 #include "borrowed_text.h"
-#include "http1_server_response.h"
 #include "http2_connection.h"
 #include "http2_engine.h"
 #include "http2_frame.h"

@@ -87,7 +87,7 @@ template <typename prepare_type>
             throw http_client_error(make_error_code(http_client_errc::invalid_request), "invalid CONNECT-UDP authority");
         }
         const http_origin_options options{.host_ = authority->host(), .port_ = authority->port()};
-        origin = pool.config().scheme_ == http_scheme::https ? http_origin_view::https(options) : http_origin_view::http(options);
+        origin = http_origin_view::for_scheme(pool.config().scheme_, options);
     }
     // One preparation entry; the head's method and protocol select the kind.
     const auto prepare = [&](std::span<char> buffer) {

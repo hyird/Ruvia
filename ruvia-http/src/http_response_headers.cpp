@@ -602,14 +602,14 @@ void http_response_headers::content_range(http_content_length offset_value, http
         throw std::logic_error("file response byte range is outside the representation");
     }
     const auto end_offset = offset + length - 1;
-    const auto value_size = std::string_view("bytes ").size() + http_unsigned_decimal_size(offset) + 1 + http_unsigned_decimal_size(end_offset) + 1 + http_unsigned_decimal_size(size);
+    const auto value_size = std::string_view("bytes ").size() + decimal_size(offset) + 1 + decimal_size(end_offset) + 1 + decimal_size(size);
     auto& header_value = prepare_header_value_storage("Content-Range", value_size, detail::response_header_content_range);
     write_content_range_header_value(header_value, offset, length, size);
 }
 
 void http_response_headers::content_range_unsatisfied(http_content_length size_value) {
     const auto size = size_value.value();
-    const auto value_size = std::string_view("bytes */").size() + http_unsigned_decimal_size(size);
+    const auto value_size = std::string_view("bytes */").size() + decimal_size(size);
     auto& header_value = prepare_header_value_storage("Content-Range", value_size, detail::response_header_content_range);
     write_content_range_unsatisfied_header_value(header_value, size);
 }

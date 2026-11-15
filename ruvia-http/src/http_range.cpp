@@ -25,7 +25,7 @@ http_multipart_byte_range_plan make_http_multipart_byte_range_plan(const http_by
         throw std::invalid_argument("invalid multipart byte-range plan input");
     }
 
-    const auto representation_digits = http_unsigned_decimal_size(representation_length);
+    const auto representation_digits = decimal_size(representation_length);
     std::size_t metadata_size = 2U + boundary.size() + 4U;
     std::uint64_t total_content_length = metadata_size;
     for (std::size_t index = 0; index < ranges.size(); ++index) {
@@ -33,7 +33,7 @@ http_multipart_byte_range_plan make_http_multipart_byte_range_plan(const http_by
         if (range.length_ == 0 || range.offset_ > representation_length || range.length_ > representation_length - range.offset_) {
             throw std::invalid_argument("multipart range is outside the representation");
         }
-        const auto part_metadata_size = 2U + boundary.size() + 16U + media_type.size() + 23U + http_unsigned_decimal_size(range.offset_) + 1U + http_unsigned_decimal_size(range.offset_ + range.length_ - 1) + 1U + representation_digits + 6U;
+        const auto part_metadata_size = 2U + boundary.size() + 16U + media_type.size() + 23U + decimal_size(range.offset_) + 1U + decimal_size(range.offset_ + range.length_ - 1) + 1U + representation_digits + 6U;
         if (part_metadata_size > (std::numeric_limits<std::size_t>::max)() - metadata_size) {
             throw std::length_error("multipart response metadata size overflows size_t");
         }
@@ -79,11 +79,11 @@ http_multipart_byte_range_plan make_http_multipart_byte_range_plan(const http_by
         metadata.append("\r\nContent-Type: ");
         metadata.append(media_type);
         metadata.append("\r\nContent-Range: bytes ");
-        http_append_unsigned(metadata, range.offset_);
+        append_decimal(metadata, range.offset_);
         metadata.push_back('-');
-        http_append_unsigned(metadata, range.offset_ + range.length_ - 1);
+        append_decimal(metadata, range.offset_ + range.length_ - 1);
         metadata.push_back('/');
-        http_append_unsigned(metadata, representation_length);
+        append_decimal(metadata, representation_length);
         metadata.append("\r\n\r\n");
         record_metadata(part_offset);
 
@@ -198,7 +198,7 @@ http_byte_range_set resolve_http_byte_range_set(std::string_view field_value, ht
         const auto first = spec.substr(0, dash);
         const auto last = spec.substr(dash + 1);
         if (first.empty()) {
-            const auto suffix = http_parse_saturating_decimal(last);
+            const auto suffix = parse_saturating_decimal(last);
             if (!suffix) {
                 return http_byte_range_set{};
             }
@@ -211,8 +211,8 @@ http_byte_range_set resolve_http_byte_range_set(std::string_view field_value, ht
             }
             continue;
         }
-        const auto parsed_start = http_parse_saturating_decimal(first);
-        const auto parsed_end = http_parse_saturating_decimal(last);
+        const auto parsed_start = parse_saturating_decimal(first);
+        const auto parsed_end = parse_saturating_decimal(last);
         if (!parsed_start || (!last.empty() && !parsed_end)) {
             return http_byte_range_set{};
         }
@@ -297,10 +297,10 @@ std::optional<std::uint64_t> compute_http_byte_range_content_length(std::span<co
     if (!is_valid_http_content_type_field_value(media_type) || !multipart_boundary::try_from_value(boundary).has_value()) {
         return std::nullopt;
     }
-    const auto representation_digits = http_unsigned_decimal_size(representation_length);
+    const auto representation_digits = decimal_size(representation_length);
     std::uint64_t total = 2U + boundary.size() + 4U;
     for (const auto& range : ranges) {
-        const std::uint64_t part_metadata = 2U + boundary.size() + 16U + media_type.size() + 23U + http_unsigned_decimal_size(range.offset_) + 1U + http_unsigned_decimal_size(range.offset_ + range.length_ - 1) + 1U + representation_digits + 6U;
+        const std::uint64_t part_metadata = 2U + boundary.size() + 16U + media_type.size() + 23U + decimal_size(range.offset_) + 1U + decimal_size(range.offset_ + range.length_ - 1) + 1U + representation_digits + 6U;
         constexpr auto max_u64 = (std::numeric_limits<std::uint64_t>::max)();
         if (total > max_u64 - part_metadata || total + part_metadata > max_u64 - range.length_) {
             return std::nullopt;
@@ -349,11 +349,11 @@ http_byte_range_slicer::http_byte_range_slicer(std::span<const http_byte_range> 
         content_type_.assign(media_type);
         const auto single = ranges_.front();
         content_range_.append("bytes ");
-        http_append_unsigned(content_range_, single.offset_);
+        append_decimal(content_range_, single.offset_);
         content_range_.push_back('-');
-        http_append_unsigned(content_range_, single.offset_ + single.length_ - 1);
+        append_decimal(content_range_, single.offset_ + single.length_ - 1);
         content_range_.push_back('/');
-        http_append_unsigned(content_range_, representation_length_);
+        append_decimal(content_range_, representation_length_);
         content_length_ = single.length_;
         return;
     }
@@ -385,11 +385,11 @@ void http_byte_range_slicer::emit_part_header(std::size_t index, std::string& ou
     output.append("\r\nContent-Type: ");
     output.append(media_type_);
     output.append("\r\nContent-Range: bytes ");
-    http_append_unsigned(output, range.offset_);
+    append_decimal(output, range.offset_);
     output.push_back('-');
-    http_append_unsigned(output, range.offset_ + range.length_ - 1);
+    append_decimal(output, range.offset_ + range.length_ - 1);
     output.push_back('/');
-    http_append_unsigned(output, representation_length_);
+    append_decimal(output, representation_length_);
     output.append("\r\n\r\n");
 }
 

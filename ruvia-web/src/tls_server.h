@@ -18,6 +18,7 @@
 #include "server_observation.h"
 #include "server_options.h"
 #include "tls.h"
+#include "tls_certificate_store.h"
 #include "tls_config.h"
 
 #if defined(RUVIA_ENABLE_HTTP3)

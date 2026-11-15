@@ -82,7 +82,7 @@ struct websocket_server_handshake_options final {
     // itself. Names/values must be valid fields; values cannot start or end
     // with SP/HTAB.
     borrowed_http_headers response_headers_{};
-    websocket_deflate_config deflate_{};
+    websocket_server_deflate_options deflate_{};
 };
 
 struct websocket_handshake_validation_options final {

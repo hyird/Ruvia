@@ -228,7 +228,7 @@ bool sse_parser::append_value(std::string_view bytes) {
                 break;
             }
             retry_digits_ = true;
-            retry_value_ = http_accumulate_decimal_digit(retry_value_, static_cast<unsigned>(byte - '0'), max_retry);
+            retry_value_ = accumulate_decimal_digit(retry_value_, static_cast<unsigned>(byte - '0'), max_retry);
         }
         return true;
     }
@@ -327,7 +327,7 @@ std::string format_sse_message(const sse_message& message) {
     }
 
     std::string frame;
-    std::array<char, http_max_unsigned_decimal_size> retry_buffer{};
+    std::array<char, max_decimal_size> retry_buffer{};
     std::string_view retry_digits{};
     std::size_t total_size = 1U;
     const auto add_size = [&frame, &total_size](std::size_t bytes) {
@@ -350,7 +350,7 @@ std::string format_sse_message(const sse_message& message) {
         add_size(1U);
     }
     if (message.retry_.has_value()) {
-        retry_digits = http_format_unsigned(retry_buffer, static_cast<std::uint64_t>(message.retry_->count()));
+        retry_digits = format_decimal(retry_buffer, static_cast<std::uint64_t>(message.retry_->count()));
         add_size(7U);
         add_size(retry_digits.size());
         add_size(1U);

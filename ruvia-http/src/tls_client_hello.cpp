@@ -198,7 +198,7 @@ void append_decimal_list(std::string& out, std::span<const int_type> items) {
         if (index != 0) {
             out.push_back('-');
         }
-        http_append_unsigned(out, static_cast<std::uint64_t>(items[index]));
+        append_decimal(out, static_cast<std::uint64_t>(items[index]));
     }
 }
 
@@ -253,7 +253,7 @@ std::uint16_t tls_client_hello_info::version() const noexcept {
 
 std::string tls_client_hello_info::ja3_raw() const {
     std::string out;
-    http_append_unsigned(out, legacy_version_);
+    append_decimal(out, legacy_version_);
     out.push_back(',');
     append_decimal_list<std::uint16_t>(out, cipher_suites_);
     out.push_back(',');
@@ -362,7 +362,7 @@ std::string tls_client_hello_info::peetprint() const {
     if (!supported_versions_.empty()) {
         append_decimal_list<std::uint16_t>(out, supported_versions_);
     } else {
-        http_append_unsigned(out, legacy_version_);
+        append_decimal(out, legacy_version_);
     }
     out.push_back('|');
     append_decimal_list<std::uint16_t>(out, cipher_suites_);

@@ -17,7 +17,6 @@
 #include <vector>
 
 #include "content_decoding_fixture.h"
-#include "http1_server_response.h"
 #include "http2_connection.h"
 #include "http2_hpack.h"
 #include "http_connect_udp.h"

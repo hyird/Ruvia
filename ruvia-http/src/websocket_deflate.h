@@ -100,10 +100,10 @@ private:
 // codec memory. Every other direction owns a private zlib stream,
 // created on its first compressed message and kept,
 // with its dictionary, until the connection ends. The owner validates the
-// deflater (validate_websocket_deflater_config) and windows (8-15).
+// deflater (validate_websocket_zlib_options) and windows (8-15).
 class websocket_deflate final {
 public:
-    websocket_deflate(websocket_deflate_codecs* shared, websocket_deflater_config deflater, bool send_takeover, bool receive_takeover, int send_window, int receive_window) noexcept;
+    websocket_deflate(websocket_deflate_codecs* shared, websocket_zlib_options deflater, bool send_takeover, bool receive_takeover, int send_window, int receive_window) noexcept;
     ~websocket_deflate();
 
     websocket_deflate(const websocket_deflate&) = delete;
@@ -131,7 +131,7 @@ private:
     websocket_deflate_codecs* shared_;
     std::unique_ptr<zlib_deflate_stream> deflater_;
     std::unique_ptr<zlib_inflate_stream> inflater_;
-    websocket_deflater_config deflater_config_;
+    websocket_zlib_options deflater_config_;
     int send_window_;
     int receive_window_;
     bool send_takeover_;

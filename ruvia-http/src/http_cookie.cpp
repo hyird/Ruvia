@@ -207,7 +207,7 @@ set_cookie_plan::set_cookie_plan(std::string_view name, std::string_view value, 
     }
     if (max_age_value_ != 0) {
         add_size(std::string_view("; Max-Age=").size());
-        add_size(http_unsigned_decimal_size(max_age_value_));
+        add_size(decimal_size(max_age_value_));
     }
     if (expires_size_ != 0) {
         add_size(std::string_view("; Expires=").size());
@@ -293,7 +293,7 @@ set_cookie_plan::written_fields set_cookie_plan::write_fields(char* cursor_value
         sink.append(domain_);
     }
     if (max_age_value_ != 0) {
-        // The constructor sized this slice with http_unsigned_decimal_size().
+        // The constructor sized this slice with decimal_size().
         sink.append("; Max-Age=");
         sink.append_unsigned(max_age_value_);
     }

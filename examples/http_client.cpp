@@ -143,7 +143,7 @@ int main() {
             base_url.push_back(']');
         }
         base_url.push_back(':');
-        ruvia::http_append_unsigned(base_url, env.get<std::uint16_t>("RUVIA_UPSTREAM_PORT").value_or(tls ? 8444 : 8093));
+        ruvia::append_decimal(base_url, env.get<std::uint16_t>("RUVIA_UPSTREAM_PORT").value_or(tls ? 8444 : 8093));
         app.listen({.address_ = "0.0.0.0", .http_ = 8099})
             .workers({.worker_count_ = 2, .process_signal_handlers_ = ruvia::process_signal_handler_policy::install})
             .client({

@@ -284,9 +284,9 @@ void http_response::apply_encoded_representation(std::string_view content_encodi
     if (etag_well_formed && !detail::http_is_weak_etag(current_etag)) {
         update.stage_weak_etag(current_etag);
     }
-    std::array<char, http_max_unsigned_decimal_size> length_digits;
+    std::array<char, max_decimal_size> length_digits;
     if (body != nullptr) {
-        update.stage("Content-Length", http_format_unsigned(length_digits, body->size()), detail::response_header_content_length);
+        update.stage("Content-Length", format_decimal(length_digits, body->size()), detail::response_header_content_length);
     }
     update.reserve();
     // Every descriptor and table slot exists before the body changes. set_owned
@@ -337,6 +337,17 @@ void http_response::content_range_unsatisfied(http_content_length size) {
 
 void http_response::add_vary_token(std::string_view token) {
     headers_.add_vary_token(token);
+}
+
+// 101 is a protocol transition rather than an interim progress head. It is
+// intentionally owned by a dedicated Upgrade driver instead of either generic
+// response-head type.
+http_interim_response_head::http_interim_response_head(http_status_code status_code, borrowed_http_headers headers) :
+    status_code_(status_code),
+    headers_(headers.view()) {
+    if (!status_code.is_informational() || status_code == http_status::switching_protocols) {
+        throw std::invalid_argument(status_code == http_status::switching_protocols ? "Switching Protocols requires a dedicated protocol driver" : "invalid interim HTTP status code");
+    }
 }
 
 }  // namespace ruvia

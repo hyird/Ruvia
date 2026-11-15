@@ -971,7 +971,7 @@ TEST(Ruvia, http_connect_udp_upgrade_handshake_requires_capsule_negotiation) {
 TEST(Ruvia, http_udp_capsule_session_checks_context_size_and_half_close) {
     ruvia::http_datagram_session session;
     const std::string payload = "udp";
-    const auto plan = session.prepare_udp_datagram(payload);
+    const auto plan = session.prepare_datagram(ruvia::http_datagram_mode::connect_udp, payload);
     EXPECT_TRUE(plan.index() == 0);
     std::string wire(std::get<0>(plan).prefix());
     wire.append(payload);
@@ -991,18 +991,18 @@ TEST(Ruvia, http_udp_capsule_session_checks_context_size_and_half_close) {
     EXPECT_TRUE(captured.datagram_);
     EXPECT_TRUE(status.holds<ruvia::decode_complete>());
     const auto value = std::string_view(capsule);
-    const auto received = session.receive_udp_datagram(value);
+    const auto received = session.receive_datagram(ruvia::http_datagram_mode::connect_udp, value);
     EXPECT_TRUE(received.index() == 0 && std::get<0>(received));
-    EXPECT_TRUE(std::string_view(std::get<0>(received)->payload_.data(), std::get<0>(received)->payload_.size()) == payload);
+    EXPECT_TRUE(std::string_view(std::get<0>(received)->data(), std::get<0>(received)->size()) == payload);
     capsule[0] = 2;
-    const auto dropped = session.receive_udp_datagram(value);
+    const auto dropped = session.receive_datagram(ruvia::http_datagram_mode::connect_udp, value);
     EXPECT_TRUE(dropped.index() == 0 && !std::get<0>(dropped));
     const std::string too_large(65528, 'x');
-    EXPECT_TRUE(session.prepare_udp_datagram(too_large).index() != 0);
+    EXPECT_TRUE(session.prepare_datagram(ruvia::http_datagram_mode::connect_udp, too_large).index() != 0);
     session.close_send();
     session.close_receive();
-    EXPECT_TRUE(session.prepare_udp_datagram(payload).index() != 0);
-    const auto closed = session.receive_udp_datagram(value);
+    EXPECT_TRUE(session.prepare_datagram(ruvia::http_datagram_mode::connect_udp, payload).index() != 0);
+    const auto closed = session.receive_datagram(ruvia::http_datagram_mode::connect_udp, value);
     EXPECT_TRUE(closed.index() == 0 && !std::get<0>(closed));
 }
 
@@ -1520,19 +1520,20 @@ TEST(Ruvia, http_capsule_retention_skips_dropped_capsules_beyond_the_length_limi
 TEST(Ruvia, http_datagram_capsule_channel_frames_opaque_payloads_and_obeys_half_close) {
     ruvia::http_datagram_session session;
     const std::string_view opaque("\1\0\xff", 3);
-    const auto plan = session.prepare_datagram(std::span(opaque.data(), opaque.size()));
+    const auto plan = session.prepare_datagram(ruvia::http_datagram_mode::raw, std::span(opaque.data(), opaque.size()));
     EXPECT_TRUE(plan.index() == 0);
-    const auto received = session.receive_datagram(std::get<0>(plan).payload());
-    EXPECT_TRUE(received.has_value());
-    EXPECT_TRUE(std::string_view(received->data(), received->size()) == opaque);
-    const auto empty = session.prepare_datagram({});
+    const auto received = session.receive_datagram(ruvia::http_datagram_mode::raw, std::get<0>(plan).payload());
+    EXPECT_TRUE(received.index() == 0 && std::get<0>(received).has_value());
+    EXPECT_TRUE(std::string_view(std::get<0>(received)->data(), std::get<0>(received)->size()) == opaque);
+    const auto empty = session.prepare_datagram(ruvia::http_datagram_mode::raw, {});
     EXPECT_TRUE(empty.index() == 0);
-    const auto empty_received = session.receive_datagram(std::get<0>(empty).payload());
-    EXPECT_TRUE(empty_received.has_value() && empty_received->empty());
+    const auto empty_received = session.receive_datagram(ruvia::http_datagram_mode::raw, std::get<0>(empty).payload());
+    EXPECT_TRUE(empty_received.index() == 0 && std::get<0>(empty_received).has_value() && std::get<0>(empty_received)->empty());
     session.close_receive();
-    EXPECT_TRUE(!session.receive_datagram(opaque).has_value());
+    const auto closed = session.receive_datagram(ruvia::http_datagram_mode::raw, opaque);
+    EXPECT_TRUE(closed.index() == 0 && !std::get<0>(closed).has_value());
     session.close_send();
-    EXPECT_TRUE(session.prepare_datagram({}).index() != 0);
+    EXPECT_TRUE(session.prepare_datagram(ruvia::http_datagram_mode::raw, {}).index() != 0);
 }
 
 namespace {

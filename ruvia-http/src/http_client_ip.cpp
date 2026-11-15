@@ -232,7 +232,7 @@ private:
 }
 }  // namespace
 
-http_client_ip_extractor::http_client_ip_extractor(const http_client_ip_config& config) :
+http_client_ip_extractor::http_client_ip_extractor(const http_client_ip_options& config) :
     enabled_(config.enabled_),
     trust_x_forwarded_proto_(config.trust_x_forwarded_proto_) {
     trusted_cidrs_.reserve(config.trusted_proxies_.size());

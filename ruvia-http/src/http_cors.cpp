@@ -148,7 +148,7 @@ void merge_http_vary_token(editable_http_headers headers, std::string_view token
     merge_http_vary_tokens(headers, std::span<const std::string_view>(&token, 1));
 }
 
-http_cors_policy::http_cors_policy(const http_cors_policy_config& config) :
+http_cors_policy::http_cors_policy(const http_cors_policy_options& config) :
     allow_any_origin_(config.allow_any_origin_),
     reflect_request_headers_(config.reflect_request_headers_),
     allow_credentials_(config.allow_credentials_) {
@@ -251,8 +251,8 @@ http_cors_policy::http_cors_policy(const http_cors_policy_config& config) :
         if (config.max_age_->count() < 0) {
             throw std::invalid_argument("CORS max age must not be negative");
         }
-        std::array<char, http_max_unsigned_decimal_size> buffer{};
-        const auto formatted = http_format_unsigned(buffer, static_cast<std::uint64_t>(config.max_age_->count()));
+        std::array<char, max_decimal_size> buffer{};
+        const auto formatted = format_decimal(buffer, static_cast<std::uint64_t>(config.max_age_->count()));
         max_age_.assign(formatted);
     }
 }

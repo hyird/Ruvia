@@ -17,7 +17,7 @@ namespace ruvia {
 
 class http_request;
 
-struct http_cors_policy_config final {
+struct http_cors_policy_options final {
     bool allow_any_origin_{false};
     // Exact WHATWG serialized origins ("https://example.com", "null"), "*", or
     // suffix domain patterns starting with "." or "*." (e.g. ".example.com").
@@ -80,7 +80,7 @@ private:
 // evaluation and actual response header rewriting.
 class http_cors_policy final {
 public:
-    explicit http_cors_policy(const http_cors_policy_config& config);
+    explicit http_cors_policy(const http_cors_policy_options& config);
 
     [[nodiscard]] bool allow_any_origin() const noexcept {
         return allow_any_origin_;

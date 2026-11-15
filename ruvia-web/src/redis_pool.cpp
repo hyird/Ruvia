@@ -457,8 +457,8 @@ task<void> redis_connection::authenticate(const operation_deadline& connect_time
     }
 
     if (config_.database_ != 0) {
-        std::array<char, http_max_unsigned_decimal_size> database_digits;
-        const std::array<std::string_view, 2> args{"SELECT", http_format_unsigned(database_digits, config_.database_)};
+        std::array<char, max_decimal_size> database_digits;
+        const std::array<std::string_view, 2> args{"SELECT", format_decimal(database_digits, config_.database_)};
         const auto reply = co_await exchange_control_command(args, deadline_value, redis_request_content::ordinary);
         if (reply.kind() == redis_value::kind_type::error) {
             throw redis_error(backend_error_code::connect_failed, reply.error());

@@ -431,7 +431,7 @@ task<std::error_code> write_websocket_handshake(stream_type& stream, const http1
 // owns the resulting session; once a session exists it is always finished,
 // otherwise a handler failure propagates and an uncommitted response falls
 // back to the ordinary buffered tail.
-[[nodiscard]] inline websocket_connection_options make_websocket_session_connection_options(const http_server_options& options, websocket_compression negotiated, const websocket_deflate_config& deflate, protocol_byte_limit receive_limit) noexcept {
+[[nodiscard]] inline websocket_connection_options make_websocket_session_connection_options(const http_server_options& options, websocket_compression negotiated, const websocket_server_deflate_options& deflate, protocol_byte_limit receive_limit) noexcept {
     // Directions without context takeover borrow the worker's codecs, which
     // outlive every connection, so they allocate no codec state here.
     return websocket_connection_options{

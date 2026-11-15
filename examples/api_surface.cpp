@@ -154,7 +154,7 @@ private:
         body.append(c.req().param("id").value_or(""));
         body.append("\ntag-values=");
         const auto tags = request.queries("tag");
-        ruvia::http_append_unsigned(body, tags.size());
+        ruvia::append_decimal(body, tags.size());
         body.append("\ntag-first=");
         if (!tags.empty()) {
             body.append(tags.front());
@@ -173,7 +173,7 @@ private:
         // Session capability requires session_middleware; see sessions.cpp for
         // its Redis setup. This standalone example only installs application services.
         body.append("env-vars=");
-        ruvia::http_append_unsigned(body, c.env().size());
+        ruvia::append_decimal(body, c.env().size());
         body.push_back('\n');
         co_return c.text(std::move(body));
     }
@@ -271,7 +271,7 @@ private:
         auto parts = co_await c.req().multipart();
         std::string body;
         body.append("parts=");
-        ruvia::http_append_unsigned(body, parts.size());
+        ruvia::append_decimal(body, parts.size());
         for (const auto& part : parts) {
             body.append("\nname=");
             body.append(part.name());
@@ -280,7 +280,7 @@ private:
             body.append(";content-type=");
             body.append(part.content_type());
             body.append(";bytes=");
-            ruvia::http_append_unsigned(body, part.body().size());
+            ruvia::append_decimal(body, part.body().size());
         }
         body.push_back('\n');
         co_return c.text(std::move(body));
@@ -290,7 +290,7 @@ private:
         const auto bytes_value = co_await c.req().bytes();
         std::string body;
         body.append("bytes bytes=");
-        ruvia::http_append_unsigned(body, bytes_value.size());
+        ruvia::append_decimal(body, bytes_value.size());
         body.append("\ncontent-type=");
         body.append(c.req().header("Content-Type").value_or(std::string_view{}));
         body.push_back('\n');
@@ -302,7 +302,7 @@ private:
         const auto raw = co_await c.req().text();
         std::string body;
         body.append("json-value bytes=");
-        ruvia::http_append_unsigned(body, raw.size());
+        ruvia::append_decimal(body, raw.size());
         if (const auto& message = json.get<"message">()) {
             body.append("\nmessage=");
             body.append(message->view());
@@ -322,7 +322,7 @@ private:
         output.append("replace id=");
         output.append(c.req().param("id").value_or(""));
         output.append(" bytes=");
-        ruvia::http_append_unsigned(output, body.size());
+        ruvia::append_decimal(output, body.size());
         output.push_back('\n');
         co_return c.text(std::move(output));
     }
@@ -333,7 +333,7 @@ private:
         output.append("patch id=");
         output.append(c.req().param("id").value_or(""));
         output.append(" bytes=");
-        ruvia::http_append_unsigned(output, body.size());
+        ruvia::append_decimal(output, body.size());
         output.push_back('\n');
         co_return c.text(std::move(output));
     }
@@ -443,7 +443,7 @@ private:
         body.append(" stream id=");
         body.append(c.req().param("id").value_or(""));
         body.append(" bytes=");
-        ruvia::http_append_unsigned(body, bytes_value);
+        ruvia::append_decimal(body, bytes_value);
         body.push_back('\n');
         co_return c.text(std::move(body));
     }

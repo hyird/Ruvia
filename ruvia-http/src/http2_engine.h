@@ -22,7 +22,6 @@
 #include <vector>
 
 #include "borrowed_text.h"
-#include "http1_server_response.h"
 #include "http2_connection.h"
 #include "http2_frame.h"
 #include "http2_stream_state.h"

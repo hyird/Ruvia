@@ -15,7 +15,6 @@
 
 #include "client_host_resolver.h"
 #include "client_tls.h"
-#include "http1_client_request.h"
 #include "http_authority.h"
 #include "http_client_types.h"
 #include "http_cookie.h"
@@ -98,7 +97,7 @@ inline void validate_http_client_versions(const http_client_versions& versions, 
     }
     auto result = spec;
     if (authority) {
-        result.origin_ = tls ? http_origin_view::https({.host_ = authority->host(), .port_ = authority->effective_port(443)}) : http_origin_view::http({.host_ = authority->host(), .port_ = authority->effective_port(80)});
+        result.origin_ = http_origin_view::for_scheme(spec.scheme_, {.host_ = authority->host(), .port_ = authority->port()});
     }
     auto host = result.origin_ ? result.origin_->host() : std::string_view{};
     if (host.starts_with('[')) {
@@ -227,7 +226,7 @@ struct http_client_config_storage final {
     // cache the returned view, which borrows uri_host_. Requires fixed_origin_.
     [[nodiscard]] http_origin_view origin() const {
         const http_origin_options options{.host_ = uri_host_, .port_ = port_};
-        return scheme_ == http_scheme::https ? http_origin_view::https(options) : http_origin_view::http(options);
+        return http_origin_view::for_scheme(scheme_, options);
     }
 
 private:

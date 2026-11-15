@@ -30,8 +30,8 @@ struct client_host_resolver::query final {
     [[nodiscard]] client_resolve_result operator()() const {
         asio::io_context io;
         asio::ip::tcp::resolver resolver(io);
-        std::array<char, http_max_unsigned_decimal_size> digits;
-        const auto service = http_format_unsigned(digits, port_);
+        std::array<char, max_decimal_size> digits;
+        const auto service = format_decimal(digits, port_);
         client_resolve_result result;
         result.addresses_ = resolver.resolve(host_, service, result.error_);
         return result;

@@ -2504,8 +2504,8 @@ inline http_response make_auto_https_redirect_response(const http_request& reque
     // empty query ("/x" versus "/x?"); query_string() alone cannot express it.
     const bool has_query = (request.target().find('?') != std::string_view::npos);
     const auto query = request.query_string();
-    std::array<char, http_max_unsigned_decimal_size> port_buffer{};
-    const auto port_digits = https_port == 443 ? std::string_view{} : http_format_unsigned(port_buffer, https_port);
+    std::array<char, max_decimal_size> port_buffer{};
+    const auto port_digits = https_port == 443 ? std::string_view{} : format_decimal(port_buffer, https_port);
     static constexpr std::string_view scheme_prefix = "https://";
     const std::size_t total_size = scheme_prefix.size() + host.size() + (port_digits.empty() ? 0U : 1U + port_digits.size()) + path.size() + (has_query ? 1U + query.size() : 0U);
     std::string location;

@@ -87,9 +87,9 @@ int main() {
         if (env_value.get<bool>("RUVIA_GZIP").value_or(false)) {
             compression.emplace();
         }
-        std::optional<ruvia::http_cors_policy_config> cors;
+        std::optional<ruvia::http_cors_policy_options> cors;
         if (env_value.get<bool>("RUVIA_CORS").value_or(false)) {
-            ruvia::http_cors_policy_config policy;
+            ruvia::http_cors_policy_options policy;
             policy.allowed_headers_ = {"content-type", "authorization"};
             policy.max_age_ = std::chrono::seconds(600);
             cors = std::move(policy);

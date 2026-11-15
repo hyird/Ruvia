@@ -174,7 +174,7 @@ struct client_offer_plan final {
     if (!valid_window(offer.server_max_window_bits_) || !valid_window(offer.client_max_window_bits_) || (offer.client_max_window_bits_ && !config.deflate_.offer_client_max_window_bits_)) {
         throw std::invalid_argument("invalid WebSocket client deflate offer");
     }
-    validate_websocket_deflater_config(config.deflate_.deflater_);
+    validate_websocket_zlib_options(config.deflate_.deflater_);
     client_offer_plan plan;
     websocket_subprotocol_set seen;
     for (const auto protocol_view : config.subprotocols_) {

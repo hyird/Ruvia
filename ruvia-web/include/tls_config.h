@@ -13,8 +13,6 @@
 
 #include "ip_address.h"
 #include "move_only_function.h"
-#include "task.h"
-#include "worker_ref.h"
 
 namespace ruvia {
 
@@ -89,47 +87,9 @@ struct tls_certificate_selection final {
 // on different workers; the callable must synchronize its own mutable state.
 using tls_certificate_selector = move_only_function<std::optional<tls_certificate_id>(const tls_certificate_selection&)>;
 
-namespace detail {
-struct tls_certificate_store_access;
-}
-
-// Thread-safe, independently usable certificate library. Writers serialize
-// without blocking workers, prepare immutable snapshots on caller's blocking
-// pool, then atomically publish on caller. Failed/rejected updates leave the
-// library unchanged. Handshakes capture a snapshot before calling the selector:
-// replacing/erasing its selected ID cannot invalidate that handshake.
-// Established connections retain their OpenSSL references. Cold tasks retain
-// the library state and own their inputs even after this object is destroyed.
-// Copies are deliberately disabled; tls_config retains shared ownership.
-class tls_certificate_store final {
-public:
-    tls_certificate_store();
-    ~tls_certificate_store();
-    tls_certificate_store(const tls_certificate_store&) = delete;
-    tls_certificate_store& operator=(const tls_certificate_store&) = delete;
-
-    // Await on caller; awaiting elsewhere throws std::logic_error. The caller
-    // must have an attached blocking_pool for parsing or snapshot preparation.
-    // Rejections throw blocking_operation_rejected; loader exceptions propagate
-    // unchanged. A stopping caller cannot publish: std::runtime_error before
-    // submission/after preparation, or blocking_operation_rejected while
-    // waiting for the pool. Started tasks must be awaited/joined.
-    // ID zero throws std::invalid_argument. Before returning a cold task, the
-    // library copies secrets into heap storage and cleanses its
-    // incoming copy, including on failure. Discarding a cold task cleanses its
-    // retained copy; any detached preparation owns and cleanses its own input
-    // and never publishes. These operations have no per-call timeout/token.
-    [[nodiscard]] task<void> insert_or_assign(worker_ref caller, tls_certificate_id id, tls_identity_config identity);
-    // Returns false for an absent ID without submitting blocking work.
-    [[nodiscard]] task<bool> erase(worker_ref caller, tls_certificate_id id);
-    [[nodiscard]] bool contains(tls_certificate_id id) const noexcept;
-    [[nodiscard]] std::size_t size() const noexcept;
-
-private:
-    friend struct detail::tls_certificate_store_access;
-    struct state;
-    std::shared_ptr<state> state_;
-};
+// The live certificate library referenced by tls_stored_identity and
+// tls_selected_identities; the class is defined in "tls_certificate_store.h".
+class tls_certificate_store;
 
 // TLS wire ProtocolVersion values. TLS 1.0 and 1.1 are not offered (RFC 8996
 // §2-3, RFC 9325 §3.1.1).

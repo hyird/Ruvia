@@ -33,7 +33,6 @@
 #include "crypto.h"
 #include "db_executor.h"
 #include "event_loop.h"
-#include "http1_server_response.h"
 #include "http_cache.h"
 #include "http_client.h"
 #include "http_client_pool.h"
@@ -691,8 +690,8 @@ task<dispatch_response> context::dispatch(dispatch_options options) {
 
 task<dispatch_response> context::dispatch_task(std::string method, std::string target, std::string body_storage, std::vector<http_header> headers, ::ruvia::stop_token stop_token_value) {
     const std::string_view body = body_storage;
-    std::array<char, http_max_unsigned_decimal_size> content_length_text;
-    const auto content_length = http_format_unsigned(content_length_text, body.size());
+    std::array<char, max_decimal_size> content_length_text;
+    const auto content_length = format_decimal(content_length_text, body.size());
     detail::inline_http_header_views<16> active_headers(2U + headers.size());
     active_headers.push_back(http_header_view("Host", "localhost"));
     for (const auto& header : headers) {

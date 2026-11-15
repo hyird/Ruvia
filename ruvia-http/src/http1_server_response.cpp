@@ -35,13 +35,6 @@ namespace ruvia::detail {
 
 namespace {
 
-// 101 is a protocol transition rather than an interim progress head. It is
-// intentionally owned by a dedicated Upgrade driver instead of either generic
-// response-head type.
-[[nodiscard]] constexpr bool http_interim_status_code_valid(http_status_code status) noexcept {
-    return status.is_informational() && status != http_status::switching_protocols;
-}
-
 inline constexpr std::string_view chunked_transfer_encoding_header = "Transfer-Encoding: chunked\r\n";
 
 inline constexpr std::string_view content_length_name = "Content-Length";
@@ -152,8 +145,8 @@ void append_http1_response_head(const http_response& response, http_response_hea
     // Buffered HEAD metadata retains the selected representation length.
     // A status-level no-content policy that still owns framing (205) is
     // canonicalized to zero for both buffered and streaming heads.
-    std::array<char, http_max_unsigned_decimal_size> content_length_buffer;
-    const auto content_length_value = content_length.has_value() ? http_format_unsigned(content_length_buffer, *content_length) : std::string_view{};
+    std::array<char, max_decimal_size> content_length_buffer;
+    const auto content_length_value = content_length.has_value() ? format_decimal(content_length_buffer, *content_length) : std::string_view{};
 
     // Measure the exact emitted head before touching reusable output storage.
     // This both bounds the unchecked raw stack sink and enforces the shared
@@ -470,8 +463,8 @@ void http_response_head_buffer::append(char value) {
 }
 
 void http_response_head_buffer::append_unsigned(std::uint64_t value) {
-    std::array<char, http_max_unsigned_decimal_size> digits;
-    append(http_format_unsigned(digits, value));
+    std::array<char, max_decimal_size> digits;
+    append(format_decimal(digits, value));
 }
 
 void http_response_head_buffer::reserve_additional(std::size_t size) {
@@ -572,14 +565,6 @@ void analyze_http1_fields(const http_interim_response_head& response, http1_inte
 }
 
 }  // namespace
-
-http_interim_response_head::http_interim_response_head(http_status_code status_code, borrowed_http_headers headers) :
-    status_code_(status_code),
-    headers_(headers.view()) {
-    if (!detail::http_interim_status_code_valid(status_code)) {
-        throw std::invalid_argument(status_code == http_status::switching_protocols ? "Switching Protocols requires a dedicated protocol driver" : "invalid interim HTTP status code");
-    }
-}
 
 std::variant<prepared_http1_interim_response, http1_interim_response_buffer_too_small> prepare_http1_interim_response_head(const http_interim_response_head& response, std::span<char> head_buffer) {
     const auto reason_phrase = http_reason_phrase(response.status());

@@ -759,7 +759,7 @@ TEST(Ruvia, request_stream_listeners_serve_every_protocol_beside_routes) {
         failures().clear();
     }
     auto& app = ruvia::app();
-    app.workers({.worker_count_ = 2}).server({.compression_ = ruvia::compression_config{}, .cors_ = ruvia::http_cors_policy_config{}}).listen({stream_listener, routes_listener}).blocking_pool({.thread_count_ = 2}).use_worker_state<runtime_state>().client({.base_url_ = registered_client_url}).use<marking_middleware>().on_error(&answer_error).on_start(nullptr).on_start([] {
+    app.workers({.worker_count_ = 2}).server({.compression_ = ruvia::compression_config{}, .cors_ = ruvia::http_cors_policy_options{}}).listen({stream_listener, routes_listener}).blocking_pool({.thread_count_ = 2}).use_worker_state<runtime_state>().client({.base_url_ = registered_client_url}).use<marking_middleware>().on_error(&answer_error).on_start(nullptr).on_start([] {
         started().release();
     }).callbacks({.request_stream_ = &serve, .connection_failure_ = &record_failure});
 

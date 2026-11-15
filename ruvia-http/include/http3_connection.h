@@ -16,7 +16,6 @@
 #include <vector>
 
 #include "borrowed_text.h"
-#include "http1_server_response.h"
 #include "http3_request_head.h"
 #include "http_client_response_head.h"
 #include "http_connection_advertisement.h"

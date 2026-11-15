@@ -5,6 +5,8 @@
 #include <cstddef>
 #include <cstdint>
 #include <optional>
+#include <stdexcept>
+#include <string>
 #include <string_view>
 
 #include "binary_text_encoding.h"
@@ -435,6 +437,30 @@ std::optional<std::string_view> parse_http_authority_host(borrowed_text value) n
 
 bool http_authorities_equal(borrowed_text left, borrowed_text right, std::optional<port_number> default_port) noexcept {
     return detail::authorities_equal(left.view(), right.view(), default_port ? std::optional<std::uint16_t>(default_port->value()) : std::nullopt);
+}
+
+http_origin_view http_origin_view::for_scheme(http_scheme scheme, http_origin_options options) {
+    const auto host = options.host_.view();
+    if (host.empty()) {
+        throw std::invalid_argument("HTTP origin host must not be empty");
+    }
+    if (!detail::is_valid_http_host(host)) {
+        throw std::invalid_argument("HTTP origin host is invalid");
+    }
+    return http_origin_view(scheme, host, options.port_.has_value() ? options.port_->value() : detail::http_scheme_default_port(scheme));
+}
+
+std::string make_http_origin_authority(const http_origin_view& origin) {
+    const auto host = origin.host();
+    const bool include_port = origin.port() != detail::http_scheme_default_port(origin.scheme());
+    std::string authority;
+    authority.reserve(host.size() + (include_port ? 6 : 0));
+    authority.append(host);
+    if (include_port) {
+        authority.push_back(':');
+        append_decimal(authority, origin.port());
+    }
+    return authority;
 }
 
 }  // namespace ruvia

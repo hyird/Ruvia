@@ -45,7 +45,7 @@ private:
 
     ruvia::task<void> udp(ruvia::context& c) {
         // This protocol route has already negotiated CONNECT-UDP. Capsule
-        // limits can be passed directly to udp(http_capsule_config).
+        // limits can be passed directly to udp(http_capsule_options).
         auto stream = c.tunnel().udp();
         while (auto packet = co_await stream.read()) {
             // The adapter handles context ID 0 and ignores unknown contexts.

@@ -95,14 +95,14 @@ struct websocket_compression final {
 // buffer at 2^(memLevel + 9) bytes on top of the 128 KiB window and history of
 // a 15-bit window: 128 KiB at 8, 8 KiB at 4, so 4 saves 120 KiB per takeover
 // connection at a lower ratio.
-struct websocket_deflater_config final {
+struct websocket_zlib_options final {
     int compression_level_{6};
     int mem_level_{8};
 };
 
-// The one range check of websocket_deflater_config; throws
+// The one range check of websocket_zlib_options; throws
 // std::invalid_argument outside zlib's ranges.
-inline void validate_websocket_deflater_config(websocket_deflater_config config) {
+inline void validate_websocket_zlib_options(websocket_zlib_options config) {
     if (config.compression_level_ < 0 || config.compression_level_ > 9) {
         throw std::invalid_argument("WebSocket compression level must be between 0 and 9");
     }
@@ -112,12 +112,12 @@ inline void validate_websocket_deflater_config(websocket_deflater_config config)
 }
 
 // Server permessage-deflate policy.
-struct websocket_deflate_config final {
+struct websocket_server_deflate_options final {
     bool enabled_{true};
     // Opt-in: never mix secrets and attacker-controlled content in one dictionary.
     // A peer requesting no-context-takeover still receives independent messages.
     bool context_takeover_{false};
-    websocket_deflater_config deflater_{};
+    websocket_zlib_options deflater_{};
 };
 
 // Client permessage-deflate offer. compression_ holds the offered extension
@@ -128,7 +128,7 @@ struct websocket_deflate_config final {
 struct websocket_client_deflate_offer final {
     websocket_compression compression_{};
     bool offer_client_max_window_bits_{true};
-    websocket_deflater_config deflater_{};
+    websocket_zlib_options deflater_{};
 };
 
 class websocket_message final {
@@ -495,7 +495,7 @@ struct websocket_connection_options final {
     websocket_mask_key_generator_type mask_key_generator_{nullptr};
     void* mask_key_context_{nullptr};
     // The private deflater of a direction negotiated with context takeover.
-    websocket_deflater_config deflater_{};
+    websocket_zlib_options deflater_{};
     // Borrowed codecs for every permessage-deflate direction negotiated without
     // context takeover; they must outlive the connection and are used only
     // synchronously inside its calls. nullptr gives such a direction a private

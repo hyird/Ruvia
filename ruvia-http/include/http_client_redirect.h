@@ -7,7 +7,7 @@
 #include <variant>
 
 #include "borrowed_text.h"
-#include "http1_client_request.h"
+#include "http_authority.h"
 #include "http_message.h"
 #include "http_request_head_view.h"
 #include "http_status.h"

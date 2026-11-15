@@ -16,7 +16,7 @@
 
 #include "borrowed_text.h"
 #include "client_transport_config.h"
-#include "http1_client_request.h"
+#include "http_authority.h"
 #include "http_header.h"
 #include "http_protocol.h"
 #include "http_request.h"

@@ -11,7 +11,7 @@
 #include <utility>
 #include <vector>
 
-#include "http1_client_request.h"
+#include "http_authority.h"
 #include "http_client_types.h"
 #include "http_cookie_jar.h"
 #include "http_header.h"

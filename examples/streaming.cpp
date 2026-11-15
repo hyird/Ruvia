@@ -44,7 +44,7 @@ private:
 
         std::string body;
         body.append("uploaded bytes=");
-        ruvia::http_append_unsigned(body, bytes_value);
+        ruvia::append_decimal(body, bytes_value);
         body.push_back('\n');
         co_return c.text(std::move(body));
     }
@@ -62,9 +62,9 @@ private:
 
         std::string body;
         body.append("multipart parts=");
-        ruvia::http_append_unsigned(body, parts);
+        ruvia::append_decimal(body, parts);
         body.append(" bytes=");
-        ruvia::http_append_unsigned(body, bytes_value);
+        ruvia::append_decimal(body, bytes_value);
         body.push_back('\n');
         co_return c.text(std::move(body));
     }

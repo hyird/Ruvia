@@ -37,6 +37,7 @@
 #include "http_server_fixture.h"
 #include "middleware.h"
 #include "request_stream.h"
+#include "tls_certificate_store.h"
 namespace {
 
 template <typename fn_type>

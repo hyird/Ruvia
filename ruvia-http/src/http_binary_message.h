@@ -14,7 +14,6 @@
 #include <variant>
 
 #include "decimal_text.h"
-#include "http1_server_response.h"
 #include "http_date_parts.h"
 #include "http_field_kind.h"
 #include "http_field_text.h"
@@ -561,10 +560,10 @@ template <typename sink_type>
             return false;
         }
     }
-    std::array<char, http_max_unsigned_decimal_size> content_length_bytes;
+    std::array<char, max_decimal_size> content_length_bytes;
     std::string_view content_length_value;
     if (const auto content_length = plan.content_length()) {
-        content_length_value = http_format_unsigned(content_length_bytes, *content_length);
+        content_length_value = format_decimal(content_length_bytes, *content_length);
         if (!section_size.add("content-length", content_length_value)) {
             return false;
         }

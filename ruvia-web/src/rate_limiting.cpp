@@ -462,8 +462,8 @@ namespace {
 }
 
 void set_unsigned_header(http_response& response, std::string_view name, std::uint64_t value) {
-    std::array<char, http_max_unsigned_decimal_size> buffer;
-    response.header(name, http_format_unsigned(buffer, value));
+    std::array<char, max_decimal_size> buffer;
+    response.header(name, format_decimal(buffer, value));
 }
 
 // Rounds up in the unsigned millisecond domain, where every delay the limiter

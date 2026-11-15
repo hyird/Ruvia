@@ -1334,15 +1334,15 @@ TEST(Ruvia, http_ascii_equals_ignore_case_folds_only_letters) {
 }
 
 TEST(Ruvia, number_format_decimal_width_and_string_output) {
-    EXPECT_EQ(ruvia::http_unsigned_decimal_size(0), std::size_t{1});
-    EXPECT_EQ(ruvia::http_unsigned_decimal_size(999), std::size_t{3});
-    EXPECT_EQ(ruvia::http_unsigned_decimal_size((std::numeric_limits<std::uint64_t>::max)()), std::size_t{20});
+    EXPECT_EQ(ruvia::decimal_size(0), std::size_t{1});
+    EXPECT_EQ(ruvia::decimal_size(999), std::size_t{3});
+    EXPECT_EQ(ruvia::decimal_size((std::numeric_limits<std::uint64_t>::max)()), std::size_t{20});
 
     std::string output;
-    ruvia::http_append_formatted_number(output, std::int64_t{-42}, "format failure");
-    ruvia::http_append_formatted_number(output, std::uint64_t{123}, "format failure");
+    ruvia::append_number(output, std::int64_t{-42}, "format failure");
+    ruvia::append_number(output, std::uint64_t{123}, "format failure");
     EXPECT_EQ(output, "-42123");
-    ruvia::http_append_formatted_finite_number(output, 1.5, "nonfinite", "format failure");
+    ruvia::append_finite_number(output, 1.5, "nonfinite", "format failure");
     EXPECT_EQ(output, "-421231.5");
 }
 
@@ -1350,7 +1350,7 @@ TEST(Ruvia, number_format_rejects_nonfinite_without_modifying_output) {
     std::string output("prefix");
     bool rejected = false;
     try {
-        ruvia::http_append_formatted_finite_number(output, std::numeric_limits<double>::infinity(), "nonfinite", "format failure");
+        ruvia::append_finite_number(output, std::numeric_limits<double>::infinity(), "nonfinite", "format failure");
     } catch (const std::invalid_argument&) {
         rejected = true;
     }
@@ -1360,10 +1360,10 @@ TEST(Ruvia, number_format_rejects_nonfinite_without_modifying_output) {
 
 TEST(Ruvia, number_format_signed_extremes) {
     std::string output;
-    ruvia::http_append_signed(output, (std::numeric_limits<std::int64_t>::min)());
+    ruvia::append_decimal(output, (std::numeric_limits<std::int64_t>::min)());
     EXPECT_EQ(output, "-9223372036854775808");
     output.clear();
-    ruvia::http_append_signed(output, (std::numeric_limits<std::int64_t>::max)());
+    ruvia::append_decimal(output, (std::numeric_limits<std::int64_t>::max)());
     EXPECT_EQ(output, "9223372036854775807");
 }
 

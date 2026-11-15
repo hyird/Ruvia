@@ -16,9 +16,10 @@
 
 namespace ruvia {
 
-enum class http_capsule_codec_error : std::uint8_t { need_input,
+enum class http_capsule_codec_error : std::uint8_t {
     value_out_of_range,
-    output_too_small };
+    output_too_small,
+};
 // RFC 9297 Capsule-Protocol is a Structured Field Boolean Item.
 [[nodiscard]] std::optional<bool> parse_http_capsule_protocol(std::string_view value) noexcept;
 
@@ -43,7 +44,7 @@ using http_capsule_callback_type = void (*)(void*, http_capsule_event);
 enum class http_capsule_decode_error : std::uint8_t {
     // The stream ended inside a capsule header or payload.
     truncated,
-    // A kept capsule exceeds http_capsule_config::max_capsule_length_.
+    // A kept capsule exceeds http_capsule_options::max_capsule_length_.
     limit_exceeded,
 };
 using http_capsule_decode_failure = decode_failure<http_capsule_decode_error>;
@@ -54,7 +55,7 @@ struct http_capsule_boundary final {};
 using http_capsule_feed_result = decode_step<decode_need_input, http_capsule_boundary, decode_complete, http_capsule_decode_failure>;
 // max_capsule_length_ bounds the capsules a reader keeps (see
 // http_capsule_retention); dropped capsules are skipped at any length.
-struct http_capsule_config final {
+struct http_capsule_options final {
     std::uint64_t max_capsule_length_{16 * 1024 * 1024};
 };
 // Which capsules a reader keeps. RFC 9297 section 3.2: a recipient silently
@@ -81,7 +82,7 @@ enum class http_capsule_retention : std::uint8_t {
 // result without consuming input until reset().
 class http_capsule_decoder final {
 public:
-    explicit http_capsule_decoder(http_capsule_config config = {});
+    explicit http_capsule_decoder(http_capsule_options config = {});
     [[nodiscard]] decoder_state state() const noexcept {
         return state_;
     }
@@ -117,7 +118,7 @@ private:
         skip,
         context_id };
     [[nodiscard]] http_capsule_feed_result feed_impl(std::span<const char> input, bool fin, http_capsule_callback_type callback, void* context, bool one, http_capsule_retention retention);
-    http_capsule_config config_;
+    http_capsule_options config_;
     std::array<char, 16> header_{};
     std::array<char, 8> context_id_{};
     std::size_t header_size_{0}, type_size_{0}, context_id_size_{0};
@@ -155,9 +156,18 @@ private:
     std::size_t prefix_size_{0};
     std::span<const char> payload_{};
 };
-// One accepted HTTP Datagram channel, with optional CONNECT-UDP semantics. Construct after request negotiation (clients
+// What one DATAGRAM capsule value carries. `raw` is the HTTP Datagram payload
+// as is, including any protocol-specific Context ID. `connect_udp` is one UDP
+// packet of an RFC 9298 tunnel: sending prefixes Context ID 0 and bounds the
+// payload at 65527 bytes; receiving strips Context ID 0 and drops every other
+// Context ID.
+enum class http_datagram_mode : std::uint8_t {
+    raw,
+    connect_udp,
+};
+// One accepted HTTP Datagram channel. Construct after request negotiation (clients
 // may optimistically send before the response). Owns no memory or transport.
-// Returned payloads borrow caller input; unknown context IDs are dropped.
+// Returned payloads borrow caller input.
 class http_datagram_session final {
 public:
     http_datagram_session() noexcept = default;
@@ -167,20 +177,16 @@ public:
     void close_receive() noexcept {
         receive_open_ = false;
     }
-    [[nodiscard]] std::variant<http_datagram_write_plan, http_datagram_error> prepare_datagram(std::span<const char> payload) const noexcept;
+    [[nodiscard]] std::variant<http_datagram_write_plan, http_datagram_error> prepare_datagram(http_datagram_mode mode, std::span<const char> payload) const noexcept;
     template <detail::http_temporary_owning_range<char> payload_type>
-    std::variant<http_datagram_write_plan, http_datagram_error> prepare_datagram(payload_type&&) const noexcept = delete;
-    [[nodiscard]] std::optional<std::span<const char>> receive_datagram(std::span<const char> input) const noexcept;
-    template <detail::http_temporary_owning_range<char> input_type>
-    std::optional<std::span<const char>> receive_datagram(input_type&&) const noexcept = delete;
-    [[nodiscard]] std::variant<http_datagram_write_plan, http_datagram_error> prepare_udp_datagram(std::span<const char> payload) const noexcept;
-    template <detail::http_temporary_owning_range<char> payload_type>
-    std::variant<http_datagram_write_plan, http_datagram_error> prepare_udp_datagram(payload_type&&) const noexcept = delete;
+    std::variant<http_datagram_write_plan, http_datagram_error> prepare_datagram(http_datagram_mode, payload_type&&) const noexcept = delete;
     // Capsule input is the complete DATAGRAM capsule value, excluding type/length.
-    // Empty optional means silently dropped.
-    [[nodiscard]] std::variant<std::optional<http_udp_datagram_view>, http_datagram_error> receive_udp_datagram(std::span<const char> input) const noexcept;
+    // Returns the payload within `input`. Empty optional means silently dropped:
+    // the receive side is closed, or `connect_udp` saw an unknown Context ID.
+    // Only `connect_udp` reports errors (malformed Context ID, oversized payload).
+    [[nodiscard]] std::variant<std::optional<std::span<const char>>, http_datagram_error> receive_datagram(http_datagram_mode mode, std::span<const char> input) const noexcept;
     template <detail::http_temporary_owning_range<char> input_type>
-    std::variant<std::optional<http_udp_datagram_view>, http_datagram_error> receive_udp_datagram(input_type&&) const noexcept = delete;
+    std::variant<std::optional<std::span<const char>>, http_datagram_error> receive_datagram(http_datagram_mode, input_type&&) const noexcept = delete;
 
 private:
     [[nodiscard]] static std::variant<http_datagram_write_plan, http_datagram_error> plan_datagram_capsule(std::span<const char> payload, std::string_view context_prefix) noexcept;

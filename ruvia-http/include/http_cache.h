@@ -236,12 +236,6 @@ bool strip_http_cache_no_cache_headers(editable_http_headers headers, const cach
 [[nodiscard]] bool http_cache_control_has_no_transform(std::string_view field_value) noexcept;
 [[nodiscard]] bool http_cache_control_has_no_transform(const http_header_range_view& headers) noexcept;
 
-struct http_cache_control_directive_view final {
-    std::string_view raw_{};
-    std::string_view name_{};
-    std::optional<std::string_view> argument_{};
-};
-
 // Rewrites Cache-Control to preserve all directives except max-age and s-maxage
 // while setting client max-age=<client_max_age>.
 [[nodiscard]] std::string rewrite_http_cache_control_max_age(std::string_view field_value, std::uint64_t client_max_age);

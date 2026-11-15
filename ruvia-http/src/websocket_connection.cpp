@@ -162,7 +162,7 @@ public:
         if (role_ == websocket_connection_role::client && mask_key_generator_ == nullptr) {
             throw std::invalid_argument("WebSocket client connection requires a mask key generator");
         }
-        validate_websocket_deflater_config(options.deflater_);
+        validate_websocket_zlib_options(options.deflater_);
         if (compression.enabled_) {
             const bool server = role_ == websocket_connection_role::server;
             const bool send_takeover = !(server ? compression.server_no_context_takeover_ : compression.client_no_context_takeover_);

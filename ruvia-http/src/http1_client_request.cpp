@@ -64,26 +64,6 @@ struct http1_client_request_prepare_result_access final {
 namespace ruvia {
 namespace {
 
-[[nodiscard]] constexpr bool http_origin_uses_default_port(const http_origin_view& origin) noexcept {
-    return origin.port() == detail::http_scheme_default_port(origin.scheme());
-}
-
-void validate_origin_host(std::string_view host) {
-    if (host.empty()) {
-        throw std::invalid_argument("HTTP origin host must not be empty");
-    }
-    if (!detail::is_valid_http_host(host)) {
-        throw std::invalid_argument("HTTP origin host is invalid");
-    }
-}
-
-std::uint16_t resolved_origin_port(http_scheme scheme, const http_origin_options& options) noexcept {
-    if (options.port_.has_value()) {
-        return options.port_->value();
-    }
-    return detail::http_scheme_default_port(scheme);
-}
-
 constexpr std::string_view crlf = "\r\n";
 constexpr std::string_view http11_request_line_suffix = " HTTP/1.1\r\n";
 constexpr std::string_view host_prefix = "Host: ";
@@ -282,11 +262,11 @@ struct request_head_write_plan final {
 
     // Reuse each decimal token in measurement and emission. CONNECT uses the
     // same port token for both its authority target and generated Host field.
-    std::array<char, http_max_unsigned_decimal_size> port_buffer;
-    const auto port_value = connect || origin.port() != (origin.scheme() == http_scheme::https ? std::uint16_t{443} : std::uint16_t{80}) ? http_format_unsigned(port_buffer, origin.port()) : std::string_view{};
+    std::array<char, max_decimal_size> port_buffer;
+    const auto port_value = connect || origin.port() != (origin.scheme() == http_scheme::https ? std::uint16_t{443} : std::uint16_t{80}) ? format_decimal(port_buffer, origin.port()) : std::string_view{};
     const auto authority_bytes = origin.host().size() + (port_value.empty() ? 0 : 1 + port_value.size());
-    std::array<char, http_max_unsigned_decimal_size> content_length_buffer;
-    const auto content_length_value = explicit_content && !chunked ? http_format_unsigned(content_length_buffer, *length) : std::string_view{};
+    std::array<char, max_decimal_size> content_length_buffer;
+    const auto content_length_value = explicit_content && !chunked ? format_decimal(content_length_buffer, *length) : std::string_view{};
     // absolute-form names the origin as the generated Host does, so the two
     // authorities agree (RFC 9112 section 3.2); OPTIONS * keeps only the
     // authority, with an empty path (section 3.2.4).
@@ -384,31 +364,6 @@ struct request_head_write_plan final {
 }
 
 }  // namespace
-
-http_origin_view http_origin_view::http(http_origin_options options) {
-    const auto host = options.host_.view();
-    validate_origin_host(host);
-    return http_origin_view(http_scheme::http, host, resolved_origin_port(http_scheme::http, options));
-}
-
-http_origin_view http_origin_view::https(http_origin_options options) {
-    const auto host = options.host_.view();
-    validate_origin_host(host);
-    return http_origin_view(http_scheme::https, host, resolved_origin_port(http_scheme::https, options));
-}
-
-std::string make_http_origin_authority(const http_origin_view& origin) {
-    const auto host = origin.host();
-    const bool include_port = !http_origin_uses_default_port(origin);
-    std::string authority;
-    authority.reserve(host.size() + (include_port ? 6 : 0));
-    authority.append(host);
-    if (include_port) {
-        authority.push_back(':');
-        http_append_unsigned(authority, origin.port());
-    }
-    return authority;
-}
 
 std::string_view http1_client_request_prepare_error_message(http1_client_request_prepare_error error) noexcept {
     switch (error) {

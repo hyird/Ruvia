@@ -98,7 +98,7 @@ int main() {
 | `max_stream_body_bytes_` | `std::optional<std::size_t>`（默认无上限） | 流式路由请求体总字节上限 |
 | `max_websocket_message_bytes_` | `std::size_t`（默认 `default_max_websocket_message_bytes`） | WebSocket 单条消息最大字节数 |
 | `compression_` | `std::optional<compression_config>`（默认不启用） | 宿主级响应内容协商压缩（gzip / deflate / br / zstd）与预压缩静态变体协商，见下文“压缩、CORS 与可信代理配置” |
-| `cors_` | `std::optional<http_cors_policy_config>`（默认不启用） | 宿主级 CORS 策略（复用 `ruvia::http_cors_policy`），含路由引擎 `OPTIONS` 预检回答 |
+| `cors_` | `std::optional<http_cors_policy_options>`（默认不启用） | 宿主级 CORS 策略（复用 `ruvia::http_cors_policy`），含路由引擎 `OPTIONS` 预检回答 |
 
 连接关闭遵循 [RFC 9112 §9.6/§9.8](https://www.rfc-editor.org/rfc/rfc9112.html#section-9.6)：
 
@@ -214,7 +214,7 @@ ruvia::app().listen({
 
 `add_listener()` 仍是同一准备与激活主链的便利入口。`application`、`http_server_group` 经 `listener_controls` 共用该主链并显式传入 `caller`；单循环 `http_server` 使用绑定循环。
 
-#### 增量证书库与选择策略（`"tls_config.h"`）
+#### 增量证书库与选择策略（`"tls_certificate_store.h"` / `"tls_config.h"`）
 
 | 公开入口 | 契约 |
 | --- | --- |
@@ -255,9 +255,9 @@ ruvia::app().listen({
   - **HEAD 回退**：`GET` 路由（含 `HEAD` 回退）、0 字节文件与重定向响应在 `HEAD` 下与 `GET` 一致发送 `Content-Length: 0`；拒绝 identity 时同样编码 0 字节体。
   - **显式 HEAD**：`RUVIA_HEAD` 返回空非文件响应体时不压缩该空体；按声明的 `Content-Length` 决定是否添加编码，支持逗号分隔的相同值，无声明时仅在拒绝 identity 时添加。添加编码后去掉未知的编码长度（RFC 9110 §8.6）；未声明长度的显式空 `HEAD` 响应省略 `Content-Length`。
   - **请求解码**：按 `Content-Encoding` 透明解码时，前 64 KiB 输出在事件循环内完成，更大的表示改在阻塞池上解码。无阻塞池或池拒绝时仍在事件循环内解码，请求必须得到内容；两条路径均受解码上限约束。
-- `http_cors_policy_config`（`"http_cors.h"`）：
+- `http_cors_policy_options`（`"http_cors.h"`）：
   - `allow_any_origin_`、`allowed_origins_`（精确 Origin、`*` 或尾缀域名模式）、`allowed_origin_suffixes_`、`allowed_methods_`、`allowed_headers_`、`reflect_request_headers_`、`expose_headers_`、`allow_credentials_`、`max_age_`。
-  - 默认构造 `http_cors_policy_config{}` 允许任意 Origin（`*`）、任意合法方法并反射 `Access-Control-Request-Headers`；显式配置任一列表时仅匹配所列项。
+  - 默认构造 `http_cors_policy_options{}` 允许任意 Origin（`*`）、任意合法方法并反射 `Access-Control-Request-Headers`；显式配置任一列表时仅匹配所列项。
   - **凭据需显式来源**：`allow_credentials_` 必须配合 `allowed_origins_` 或 `allowed_origin_suffixes_`；任意 Origin 与凭据同开时构造抛出 `std::invalid_argument`，不反射任意 Origin。
   - **预检判定**：仅 `OPTIONS` 同时携带合法 `Origin` 与 `Access-Control-Request-Method` 时才进入预检分支；未固定 `allowed_methods_` 时自动提升路由生成的 `Allow` 响应头为 `Access-Control-Allow-Methods`。
   - **完整校验**：策略在新增授权头前校验 `Origin` 与 `OPTIONS` 的预检字段；请求首部列表即使采用固定授权模式也须完整合法。
@@ -696,7 +696,7 @@ routes.websocket("/ws", [](ruvia::context& c) -> ruvia::task<void> {
 routes.freeze();
 ruvia::http_server server(loop,
     {.request_stream_ = [&](ruvia::request_stream& stream) { return routes.dispatch(stream); }},
-    {.compression_ = ruvia::compression_config{}, .cors_ = ruvia::http_cors_policy_config{}});
+    {.compression_ = ruvia::compression_config{}, .cors_ = ruvia::http_cors_policy_options{}});
 server.listen({.address_ = "127.0.0.1", .http_ = 8080,
     .dispatch_ = ruvia::listener_dispatch::request_stream});
 co_await server.start();

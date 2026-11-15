@@ -14,6 +14,7 @@
 
 #include "borrowed_text.h"
 #include "http1_connection_plan.h"
+#include "http_authority.h"
 #include "http_header.h"
 #include "http_message.h"
 #include "http_request_content_plan.h"
@@ -29,49 +30,6 @@ namespace ruvia {
 // parsed header storage. Response content remains owned by the
 // external sans-I/O driver that follows the framing plan. Socket/TLS
 // configuration, pools, redirect limits, and timeouts also belong there.
-struct http_origin_options final {
-    borrowed_text host_{};
-    std::optional<port_number> port_{};
-};
-
-class http_origin_view final {
-public:
-    // `host` is a borrowed RFC 3986 uri-host; its storage must remain alive and
-    // unchanged whenever this value is consumed. IP literals therefore include
-    // brackets (for example, "[::1]"). Factories reject an empty or malformed
-    // host before an origin can be observed.
-    [[nodiscard]] static http_origin_view http(http_origin_options options);
-
-    [[nodiscard]] static http_origin_view https(http_origin_options options);
-
-    [[nodiscard]] constexpr http_scheme scheme() const noexcept {
-        return scheme_;
-    }
-
-    // RFC 3986 uri-host only; keep the port in port().
-    [[nodiscard]] constexpr std::string_view host() const noexcept {
-        return host_;
-    }
-
-    [[nodiscard]] constexpr std::uint16_t port() const noexcept {
-        return port_;
-    }
-
-private:
-    constexpr http_origin_view(http_scheme scheme, std::string_view host, std::uint16_t port) noexcept :
-        host_(host),
-        port_(port),
-        scheme_(scheme) {}
-
-    std::string_view host_;
-    std::uint16_t port_;
-    http_scheme scheme_;
-};
-
-// RFC 3986 authority for this origin: preserves IP-literal brackets and
-// includes the port only when it differs from the scheme's default. The
-// returned string owns its bytes; the origin remains borrowed.
-[[nodiscard]] std::string make_http_origin_authority(const http_origin_view& origin);
 
 namespace detail {
 

@@ -79,12 +79,12 @@ std::string http_max_forwards_result::format_decremented() const {
     if (!next_val.has_value()) {
         return {};
     }
-    std::array<char, http_max_unsigned_decimal_size> buffer{};
-    return std::string(http_format_unsigned(buffer, *next_val));
+    std::array<char, max_decimal_size> buffer{};
+    return std::string(format_decimal(buffer, *next_val));
 }
 
 std::optional<std::uint64_t> parse_http_max_forwards_value(std::string_view field_value, std::uint64_t max_saturation) noexcept {
-    return http_parse_saturating_decimal(http_trim_ows(field_value), max_saturation);
+    return parse_saturating_decimal(http_trim_ows(field_value), max_saturation);
 }
 
 http_max_forwards_result parse_http_max_forwards(std::string_view field_value, std::uint64_t max_saturation) noexcept {

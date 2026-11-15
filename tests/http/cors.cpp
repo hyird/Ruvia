@@ -16,7 +16,7 @@
 #include "http_response.h"
 
 TEST(RuviaHttpPublicApi, cors_policy_preflight_and_response_rewrite) {
-    ruvia::http_cors_policy_config config;
+    ruvia::http_cors_policy_options config;
     config.allowed_origins_.emplace_back("https://app.example.com");
     config.allowed_origin_suffixes_.emplace_back(".trusted.example");
     config.allowed_origin_suffixes_.emplace_back("https://partner.test:8443");
@@ -111,7 +111,7 @@ TEST(RuviaHttpPublicApi, cors_policy_preflight_and_response_rewrite) {
         EXPECT_FALSE(opts_resp.header("Access-Control-Allow-Origin").has_value());
         EXPECT_EQ(opts_resp.header("Vary"), std::optional<std::string_view>("Origin, Access-Control-Request-Method"));
 
-        ruvia::http_cors_policy reflecting_policy(ruvia::http_cors_policy_config{
+        ruvia::http_cors_policy reflecting_policy(ruvia::http_cors_policy_options{
             .allowed_origins_ = {"https://app.example.com"},
             .reflect_request_headers_ = true,
         });
@@ -140,10 +140,10 @@ TEST(RuviaHttpPublicApi, cors_policy_preflight_and_response_rewrite) {
 // Fetch forbids credentials with a wildcard origin, so a policy that would
 // answer any origin cannot also allow credentials.
 TEST(RuviaHttpPublicApi, cors_policy_rejects_credentials_with_any_origin) {
-    EXPECT_THROW((void)ruvia::http_cors_policy(ruvia::http_cors_policy_config{.allow_credentials_ = true}), std::invalid_argument);
-    EXPECT_THROW((void)ruvia::http_cors_policy(ruvia::http_cors_policy_config{.allowed_origins_ = {"*"}, .allow_credentials_ = true}), std::invalid_argument);
+    EXPECT_THROW((void)ruvia::http_cors_policy(ruvia::http_cors_policy_options{.allow_credentials_ = true}), std::invalid_argument);
+    EXPECT_THROW((void)ruvia::http_cors_policy(ruvia::http_cors_policy_options{.allowed_origins_ = {"*"}, .allow_credentials_ = true}), std::invalid_argument);
 
-    const ruvia::http_cors_policy policy(ruvia::http_cors_policy_config{.allowed_origins_ = {"https://example.com"}, .allow_credentials_ = true});
+    const ruvia::http_cors_policy policy(ruvia::http_cors_policy_options{.allowed_origins_ = {"https://example.com"}, .allow_credentials_ = true});
     const std::array<ruvia::http_header_view, 1> headers{
         ruvia::http_header_view{"Origin", "https://example.com"},
     };

@@ -193,22 +193,22 @@ void require_positive_redis_ttl(duration_type ttl, const char* message) {
 }
 
 [[nodiscard]] detail::redis_owned_command make_redis_scan_command(std::string_view command, std::optional<std::string_view> key, const redis_scan_options& options) {
-    std::array<char, http_max_unsigned_decimal_size> cursor_scratch{};
-    std::array<char, http_max_unsigned_decimal_size> count_scratch{};
+    std::array<char, max_decimal_size> cursor_scratch{};
+    std::array<char, max_decimal_size> count_scratch{};
     std::array<std::string_view, 7> args{};
     std::size_t count = 0;
     args[count++] = command;
     if (key.has_value()) {
         args[count++] = *key;
     }
-    args[count++] = http_format_unsigned(cursor_scratch, options.cursor_.has_value() ? detail::redis_types_access::cursor_value(*options.cursor_) : 0);
+    args[count++] = format_decimal(cursor_scratch, options.cursor_.has_value() ? detail::redis_types_access::cursor_value(*options.cursor_) : 0);
     if (options.match_.has_value()) {
         args[count++] = "MATCH";
         args[count++] = *options.match_;
     }
     if (options.count_.has_value()) {
         args[count++] = "COUNT";
-        args[count++] = http_format_unsigned(count_scratch, options.count_->value());
+        args[count++] = format_decimal(count_scratch, options.count_->value());
     }
     return detail::make_owned_redis_command(std::span<const std::string_view>(args.data(), count));
 }
@@ -659,8 +659,8 @@ auto redis_command_set<surface_type>::hvals(std::string_view key) -> reply<std::
 
 template <typename surface_type>
 auto redis_command_set<surface_type>::hincr_by(std::string_view key, std::string_view field, std::int64_t value) -> reply<std::int64_t> {
-    std::array<char, http_max_signed_decimal_size> value_scratch{};
-    return typed<std::int64_t>(detail::make_owned_redis_command({"HINCRBY", key, field, http_format_signed(value_scratch, value)}), detail::parse_redis_integer);
+    std::array<char, max_decimal_size> value_scratch{};
+    return typed<std::int64_t>(detail::make_owned_redis_command({"HINCRBY", key, field, format_decimal(value_scratch, value)}), detail::parse_redis_integer);
 }
 
 template <typename surface_type>
@@ -700,8 +700,8 @@ auto redis_command_set<surface_type>::lindex(std::string_view key, std::int64_t 
 
 template <typename surface_type>
 auto redis_command_set<surface_type>::lset(std::string_view key, std::int64_t index, std::string_view value) -> reply<void> {
-    std::array<char, http_max_signed_decimal_size> index_scratch{};
-    return typed<void>(detail::make_owned_redis_command({"LSET", key, http_format_signed(index_scratch, index), value}), detail::parse_redis_ok);
+    std::array<char, max_decimal_size> index_scratch{};
+    return typed<void>(detail::make_owned_redis_command({"LSET", key, format_decimal(index_scratch, index), value}), detail::parse_redis_ok);
 }
 
 template <typename surface_type>
@@ -711,8 +711,8 @@ auto redis_command_set<surface_type>::ltrim(std::string_view key, std::int64_t s
 
 template <typename surface_type>
 auto redis_command_set<surface_type>::lrem(std::string_view key, std::int64_t count, std::string_view value) -> reply<std::int64_t> {
-    std::array<char, http_max_signed_decimal_size> count_scratch{};
-    return typed<std::int64_t>(detail::make_owned_redis_command({"LREM", key, http_format_signed(count_scratch, count), value}), detail::parse_redis_integer);
+    std::array<char, max_decimal_size> count_scratch{};
+    return typed<std::int64_t>(detail::make_owned_redis_command({"LREM", key, format_decimal(count_scratch, count), value}), detail::parse_redis_integer);
 }
 
 template <typename surface_type>
@@ -909,18 +909,18 @@ redis_owned_command make_owned_redis_command(std::initializer_list<std::string_v
 }
 
 redis_owned_command make_redis_integer_command(std::string_view command, std::string_view key, std::int64_t value) {
-    std::array<char, http_max_signed_decimal_size> value_scratch{};
-    return make_owned_redis_command({command, key, http_format_signed(value_scratch, value)});
+    std::array<char, max_decimal_size> value_scratch{};
+    return make_owned_redis_command({command, key, format_decimal(value_scratch, value)});
 }
 
 redis_owned_command make_redis_range_command(std::string_view command, std::string_view key, std::int64_t start, std::int64_t stop, bool with_scores) {
-    std::array<char, http_max_signed_decimal_size> start_scratch{};
-    std::array<char, http_max_signed_decimal_size> stop_scratch{};
+    std::array<char, max_decimal_size> start_scratch{};
+    std::array<char, max_decimal_size> stop_scratch{};
     const std::string_view args[]{
         command,
         key,
-        http_format_signed(start_scratch, start),
-        http_format_signed(stop_scratch, stop),
+        format_decimal(start_scratch, start),
+        format_decimal(stop_scratch, stop),
         "WITHSCORES",
     };
     return make_owned_redis_command(std::span<const std::string_view>(args, with_scores ? 5U : 4U));
@@ -970,8 +970,8 @@ redis_owned_command redis_set_args(std::string_view key, std::string_view value,
     const bool returns_previous = redis_set_returns_previous(options.previous_value_);
     const auto* duration = options.expiration_ ? options.expiration_->duration() : nullptr;
     const bool keeps_existing = options.expiration_ && options.expiration_->keeps_existing();
-    std::array<char, http_max_signed_decimal_size> duration_scratch{};
-    const std::string_view duration_text = duration != nullptr ? http_format_signed(duration_scratch, static_cast<std::int64_t>(duration->count())) : std::string_view();
+    std::array<char, max_decimal_size> duration_scratch{};
+    const std::string_view duration_text = duration != nullptr ? format_decimal(duration_scratch, static_cast<std::int64_t>(duration->count())) : std::string_view();
     return encode_redis_command([&](const auto& emit) {
         emit("SET");
         emit(key);
@@ -1010,8 +1010,8 @@ redis_owned_command redis_command_with_key_fields(std::string_view command, std:
 }
 
 redis_owned_command redis_eval_args(std::string_view command, std::string_view script, std::span<const std::string_view> keys, std::span<const std::string_view> argv) {
-    std::array<char, http_max_unsigned_decimal_size> key_count_scratch{};
-    const auto key_count = http_format_unsigned(key_count_scratch, keys.size());
+    std::array<char, max_decimal_size> key_count_scratch{};
+    const auto key_count = format_decimal(key_count_scratch, keys.size());
     return encode_redis_command([&](const auto& emit) {
         emit(command);
         emit(script);
@@ -1030,11 +1030,11 @@ redis_owned_command redis_blocking_pop_args(std::string_view command, std::span<
         throw std::invalid_argument("redis blocking pop requires at least one key");
     }
     // Seconds with millisecond precision: digits, '.', three fraction digits.
-    std::array<char, http_max_signed_decimal_size + 4> timeout_scratch{};
+    std::array<char, max_decimal_size + 4> timeout_scratch{};
     std::string_view timeout_text = "0";
     if (const auto duration = wait.duration(); duration.has_value()) {
         const auto milliseconds = duration->count();
-        const auto seconds_text = http_format_signed(std::span<char, http_max_signed_decimal_size>(timeout_scratch.data(), http_max_signed_decimal_size), milliseconds / 1000);
+        const auto seconds_text = format_decimal(std::span<char, max_decimal_size>(timeout_scratch.data(), max_decimal_size), milliseconds / 1000);
         auto len = seconds_text.size();
         const auto remainder = milliseconds % 1000;
         if (remainder != 0) {
@@ -1067,16 +1067,16 @@ redis_owned_command redis_x_read_group_args(std::string_view group, std::string_
         }
     }
     const auto use_no_ack = redis_x_read_group_uses_no_ack(options.acknowledgement_);
-    std::array<char, http_max_unsigned_decimal_size> count_scratch{};
+    std::array<char, max_decimal_size> count_scratch{};
     std::string_view count_text;
     if (options.count_.has_value()) {
-        count_text = http_format_unsigned(count_scratch, options.count_->value());
+        count_text = format_decimal(count_scratch, options.count_->value());
     }
-    std::array<char, http_max_signed_decimal_size> block_scratch{};
+    std::array<char, max_decimal_size> block_scratch{};
     std::string_view block_text = "0";
     if (options.block_.has_value()) {
         if (const auto duration = options.block_->duration(); duration.has_value()) {
-            block_text = http_format_signed(block_scratch, static_cast<std::int64_t>(duration->count()));
+            block_text = format_decimal(block_scratch, static_cast<std::int64_t>(duration->count()));
         }
     }
     return encode_redis_command([&](const auto& emit) {

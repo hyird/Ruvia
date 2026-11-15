@@ -696,7 +696,7 @@ public:
         }
         const auto parent_size = parent_->size_hint();
         if (indexed_) {
-            return parent_size + 2U + http_unsigned_decimal_size(index_);
+            return parent_size + 2U + decimal_size(index_);
         }
         return parent_size + (parent_size == 0 ? 0U : 1U) + field_.size();
     }
@@ -721,8 +721,8 @@ private:
         parent_->append_to_buffer(buffer, length);
         if (indexed_) {
             buffer[length++] = '[';
-            std::array<char, http_max_unsigned_decimal_size> digits;
-            const auto formatted = http_format_unsigned(digits, index_);
+            std::array<char, max_decimal_size> digits;
+            const auto formatted = format_decimal(digits, index_);
             std::memcpy(buffer.data() + length, formatted.data(), formatted.size());
             length += formatted.size();
             buffer[length++] = ']';
@@ -2173,10 +2173,8 @@ void append_json_value(std::string& output, const value_type& value) {
         append_json_value(output, value.value_);
     } else if constexpr (std::is_same_v<t_type, bool>) {
         output.append(value ? "true" : "false");
-    } else if constexpr (std::is_unsigned_v<t_type>) {
-        http_append_unsigned(output, value);
     } else if constexpr (std::is_integral_v<t_type>) {
-        http_append_signed(output, value);
+        append_decimal(output, value);
     } else if constexpr (std::is_floating_point_v<t_type>) {
         // JSON (RFC 8259) has no representation for infinity or NaN, and
         // std::to_chars would emit the bare tokens "inf"/"nan" — invalid JSON.
@@ -2185,7 +2183,7 @@ void append_json_value(std::string& output, const value_type& value) {
             output.append("null");
             return;
         }
-        http_append_formatted_number(output, value, "JSON number cannot be formatted");
+        append_number(output, value, "JSON number cannot be formatted");
     } else if constexpr (is_ruvia_bytes<t_type>) {
         append_model_binary(output, value);
     } else if constexpr (is_ruvia_string<t_type>) {

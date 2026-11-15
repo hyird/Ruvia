@@ -38,8 +38,8 @@ struct http_forwarded_header_spec final {
     http_forwarded_header_kind kind_{http_forwarded_header_kind::auto_detect};
 };
 
-struct http_client_ip_config final {
-    http_client_ip_config() noexcept = default;
+struct http_client_ip_options final {
+    http_client_ip_options() noexcept = default;
 
     bool enabled_{true};
     // Trusted proxy IP literals or CIDR ranges (e.g. "127.0.0.1", "10.0.0.0/8", "::1").
@@ -76,7 +76,7 @@ public:
     http_client_ip_extractor() noexcept :
         enabled_(false) {}
 
-    explicit http_client_ip_extractor(const http_client_ip_config& config);
+    explicit http_client_ip_extractor(const http_client_ip_options& config);
 
     [[nodiscard]] constexpr bool enabled() const noexcept {
         return enabled_;

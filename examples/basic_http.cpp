@@ -109,7 +109,7 @@ private:
         body.append(c.req().header("User-Agent").value_or(""));
         body.append("\npage=");
         const std::uint32_t page = std::max(std::uint32_t{1}, c.req().query<std::uint32_t>("page").value_or(1));
-        ruvia::http_append_unsigned(body, page);
+        ruvia::append_decimal(body, page);
         body.append("\nsession=");
         body.append(c.req().cookie("session").value_or(""));
         body.push_back('\n');

@@ -181,8 +181,8 @@ postgresql_resolved_host_list make_postgresql_resolved_host_list(std::string_vie
 }
 
 std::array<char, 6> format_db_port(std::uint16_t port) {
-    std::array<char, http_max_unsigned_decimal_size> digits;
-    const auto text = http_format_unsigned(digits, port);
+    std::array<char, max_decimal_size> digits;
+    const auto text = format_decimal(digits, port);
     // Zero initialization NUL-terminates the at most five port digits.
     std::array<char, 6> output{};
     text.copy(output.data(), text.size());

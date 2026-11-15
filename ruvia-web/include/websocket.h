@@ -62,7 +62,7 @@ struct websocket_route_config final {
     // handler runs; subprotocols_ must then be nonempty.
     bool require_subprotocol_{false};
     websocket_lifecycle_options lifecycle_{};
-    websocket_deflate_config deflate_{};
+    websocket_server_deflate_options deflate_{};
     // 单会话接收消息上限（含解压后）；unlimited 继承服务器上限，只能收紧。
     protocol_byte_limit max_message_bytes_{};
 };

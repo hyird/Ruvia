@@ -43,7 +43,7 @@ void append_ttl(std::string& output, const ruvia::redis_ttl& ttl) {
             output.append("persistent");
             break;
         case ruvia::redis_ttl_state::expiring:
-            ruvia::http_append_signed(output, ttl.remaining()->count());
+            ruvia::append_decimal(output, ttl.remaining()->count());
             output.append("ms");
             break;
     }
@@ -95,7 +95,7 @@ public:
     ruvia::task<ruvia::http_response> increment(ruvia::context& c) {
         const auto value = co_await c.redis().incr(c.req().param("key").value_or(""));
         std::string body;
-        ruvia::http_append_signed(body, value);
+        ruvia::append_decimal(body, value);
         body.push_back('\n');
         co_return c.text(std::move(body));
     }
@@ -165,19 +165,19 @@ public:
         body.append("\nreplaced=");
         body.append(replaced.previous().value_or(""));
         body.append("\nappended=");
-        ruvia::http_append_signed(body, appended);
+        ruvia::append_decimal(body, appended);
         body.append("\nlength=");
-        ruvia::http_append_signed(body, length);
+        ruvia::append_decimal(body, length);
         body.append("\ndeleted=");
         body.append(deleted.value_or(""));
         body.append("\nmget=");
-        ruvia::http_append_signed(body, static_cast<std::int64_t>(values.size()));
+        ruvia::append_decimal(body, static_cast<std::int64_t>(values.size()));
         body.append("\ndecr=");
-        ruvia::http_append_signed(body, decremented);
+        ruvia::append_decimal(body, decremented);
         body.append("\ndecr-by=");
-        ruvia::http_append_signed(body, decremented_by);
+        ruvia::append_decimal(body, decremented_by);
         body.append("\nincr-by=");
-        ruvia::http_append_signed(body, incremented_by);
+        ruvia::append_decimal(body, incremented_by);
         body.push_back('\n');
         co_return c.text(std::move(body));
     }
@@ -198,25 +198,25 @@ public:
 
         std::string body;
         body.append("changed=");
-        ruvia::http_append_signed(body, changed + extra);
+        ruvia::append_decimal(body, changed + extra);
         body.append("\ncount=");
-        ruvia::http_append_signed(body, count);
+        ruvia::append_decimal(body, count);
         body.append("\nname=");
         body.append(name.value_or(""));
         body.append("\nhmget=");
-        ruvia::http_append_signed(body, static_cast<std::int64_t>(values.size()));
+        ruvia::append_decimal(body, static_cast<std::int64_t>(values.size()));
         body.append("\nall=");
-        ruvia::http_append_signed(body, static_cast<std::int64_t>(all.size()));
+        ruvia::append_decimal(body, static_cast<std::int64_t>(all.size()));
         body.append("\nkeys=");
-        ruvia::http_append_signed(body, static_cast<std::int64_t>(keys.size()));
+        ruvia::append_decimal(body, static_cast<std::int64_t>(keys.size()));
         body.append("\nvalues=");
-        ruvia::http_append_signed(body, static_cast<std::int64_t>(hvals.size()));
+        ruvia::append_decimal(body, static_cast<std::int64_t>(hvals.size()));
         body.append("\nexists=");
         append_bool(body, exists);
         body.append("\nlength=");
-        ruvia::http_append_signed(body, length);
+        ruvia::append_decimal(body, length);
         body.append("\nremoved=");
-        ruvia::http_append_signed(body, removed);
+        ruvia::append_decimal(body, removed);
         body.push_back('\n');
         co_return c.text(std::move(body));
     }
@@ -238,15 +238,15 @@ public:
 
         std::string body;
         body.append("pushed=");
-        ruvia::http_append_signed(body, left + right);
+        ruvia::append_decimal(body, left + right);
         body.append("\nlength=");
-        ruvia::http_append_signed(body, length);
+        ruvia::append_decimal(body, length);
         body.append("\nrange=");
-        ruvia::http_append_signed(body, static_cast<std::int64_t>(values.size()));
+        ruvia::append_decimal(body, static_cast<std::int64_t>(values.size()));
         body.append("\nfirst=");
         body.append(first.value_or(""));
         body.append("\nremoved=");
-        ruvia::http_append_signed(body, removed);
+        ruvia::append_decimal(body, removed);
         body.append("\nleft=");
         body.append(popped_left.value_or(""));
         body.append("\nright=");
@@ -274,25 +274,25 @@ public:
 
         std::string body;
         body.append("added=");
-        ruvia::http_append_signed(body, added + also_added);
+        ruvia::append_decimal(body, added + also_added);
         body.append("\nmembers=");
-        ruvia::http_append_signed(body, static_cast<std::int64_t>(members.size()));
+        ruvia::append_decimal(body, static_cast<std::int64_t>(members.size()));
         body.append("\nsize=");
-        ruvia::http_append_signed(body, size);
+        ruvia::append_decimal(body, size);
         body.append("\nis-member=");
         append_bool(body, member);
         body.append("\nrandom=");
         body.append(random.value_or(""));
         body.append("\nintersection=");
-        ruvia::http_append_signed(body, static_cast<std::int64_t>(intersection.size()));
+        ruvia::append_decimal(body, static_cast<std::int64_t>(intersection.size()));
         body.append("\nunion=");
-        ruvia::http_append_signed(body, static_cast<std::int64_t>(union_values.size()));
+        ruvia::append_decimal(body, static_cast<std::int64_t>(union_values.size()));
         body.append("\ndifference=");
-        ruvia::http_append_signed(body, static_cast<std::int64_t>(difference.size()));
+        ruvia::append_decimal(body, static_cast<std::int64_t>(difference.size()));
         body.append("\npopped=");
         body.append(popped.value_or(""));
         body.append("\nremoved=");
-        ruvia::http_append_signed(body, removed);
+        ruvia::append_decimal(body, removed);
         body.push_back('\n');
         co_return c.text(std::move(body));
     }
@@ -310,19 +310,19 @@ public:
 
         std::string body;
         body.append("added=");
-        ruvia::http_append_signed(body, added + added_two);
+        ruvia::append_decimal(body, added + added_two);
         body.append("\nvalues=");
-        ruvia::http_append_signed(body, static_cast<std::int64_t>(values.size()));
+        ruvia::append_decimal(body, static_cast<std::int64_t>(values.size()));
         body.append("\nscored=");
-        ruvia::http_append_signed(body, static_cast<std::int64_t>(scored.size()));
+        ruvia::append_decimal(body, static_cast<std::int64_t>(scored.size()));
         body.append("\nscore=");
         append_bool(body, score.has_value());
         body.append("\nsize=");
-        ruvia::http_append_signed(body, size);
+        ruvia::append_decimal(body, size);
         body.append("\ncounted=");
-        ruvia::http_append_signed(body, counted);
+        ruvia::append_decimal(body, counted);
         body.append("\nremoved=");
-        ruvia::http_append_signed(body, removed);
+        ruvia::append_decimal(body, removed);
         body.push_back('\n');
         co_return c.text(std::move(body));
     }
@@ -340,13 +340,13 @@ public:
 
         std::string body;
         body.append("keys=");
-        ruvia::http_append_signed(body, static_cast<std::int64_t>(keys.entries().size()));
+        ruvia::append_decimal(body, static_cast<std::int64_t>(keys.entries().size()));
         body.append("\nhash=");
-        ruvia::http_append_signed(body, static_cast<std::int64_t>(hash.entries().size()));
+        ruvia::append_decimal(body, static_cast<std::int64_t>(hash.entries().size()));
         body.append("\nset=");
-        ruvia::http_append_signed(body, static_cast<std::int64_t>(set.entries().size()));
+        ruvia::append_decimal(body, static_cast<std::int64_t>(set.entries().size()));
         body.append("\nzset=");
-        ruvia::http_append_signed(body, static_cast<std::int64_t>(zset.entries().size()));
+        ruvia::append_decimal(body, static_cast<std::int64_t>(zset.entries().size()));
         body.push_back('\n');
         co_return c.text(std::move(body));
     }
@@ -358,7 +358,7 @@ public:
 
         std::string body;
         body.append("pipeline results=");
-        ruvia::http_append_signed(body, static_cast<std::int64_t>(results.size()));
+        ruvia::append_decimal(body, static_cast<std::int64_t>(results.size()));
         body.push_back('\n');
         co_return c.text(std::move(body));
     }
@@ -370,7 +370,7 @@ public:
 
         std::string body;
         body.append("transaction results=");
-        ruvia::http_append_signed(body, static_cast<std::int64_t>(results.size()));
+        ruvia::append_decimal(body, static_cast<std::int64_t>(results.size()));
         body.push_back('\n');
         co_return c.text(std::move(body));
     }
@@ -385,11 +385,11 @@ public:
 
         std::string body;
         body.append("eval-kind=");
-        ruvia::http_append_signed(body, static_cast<std::int64_t>(value.kind()));
+        ruvia::append_decimal(body, static_cast<std::int64_t>(value.kind()));
         body.append("\nsha-kind=");
-        ruvia::http_append_signed(body, static_cast<std::int64_t>(sha_value.kind()));
+        ruvia::append_decimal(body, static_cast<std::int64_t>(sha_value.kind()));
         body.append("\nexists=");
-        ruvia::http_append_signed(body, static_cast<std::int64_t>(exists.size()));
+        ruvia::append_decimal(body, static_cast<std::int64_t>(exists.size()));
         body.push_back('\n');
         co_return c.text(std::move(body));
     }

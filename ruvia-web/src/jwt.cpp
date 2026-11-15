@@ -194,8 +194,8 @@ struct decimal_view final {
             order = -order;
         }
     } else {
-        std::array<char, http_max_unsigned_decimal_size> buffer;
-        const auto shift_digits = http_format_unsigned(buffer, static_cast<std::uint64_t>(shift));
+        std::array<char, max_decimal_size> buffer;
+        const auto shift_digits = format_decimal(buffer, static_cast<std::uint64_t>(shift));
         order = clipped_difference(parts.exponent_, shift_digits);
         if (parts.exponent_negative_) {
             order = -order;
@@ -274,7 +274,7 @@ struct clock_parts final {
     if (negative) {
         output[0] = '-';
     }
-    const auto digits = http_format_unsigned(std::span<char, http_max_unsigned_decimal_size>{output.data() + prefix, http_max_unsigned_decimal_size}, seconds);
+    const auto digits = format_decimal(std::span<char, max_decimal_size>{output.data() + prefix, max_decimal_size}, seconds);
     return {output.data(), prefix + digits.size()};
 }
 
@@ -297,7 +297,7 @@ struct clock_parts final {
         }
         return {{buffer.data(), size}, size, order, parts.negative_};
     }
-    const auto seconds_digits = http_format_unsigned(std::span<char, http_max_unsigned_decimal_size>{buffer.data(), http_max_unsigned_decimal_size}, parts.seconds_);
+    const auto seconds_digits = format_decimal(std::span<char, max_decimal_size>{buffer.data(), max_decimal_size}, parts.seconds_);
     const int order = static_cast<int>(seconds_digits.size());
     auto size = seconds_digits.size();
     if (parts.fraction_ == 0) {

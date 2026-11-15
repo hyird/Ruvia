@@ -13,7 +13,7 @@
 #include <vector>
 
 #include "decimal_text.h"
-#include "http1_client_request.h"
+#include "http_authority.h"
 #include "http_cookie.h"
 #include "http_header.h"
 #include "http_message.h"

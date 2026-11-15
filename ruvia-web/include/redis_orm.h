@@ -124,10 +124,8 @@ template <typename t_type>
             throw_invalid_redis_scalar("failed to encode Redis scalar");
         }
         return {scratch.data(), static_cast<std::size_t>(result_value.ptr - scratch.data())};
-    } else if constexpr (std::is_unsigned_v<t_type>) {
-        return http_format_unsigned(std::span<char, http_max_unsigned_decimal_size>(scratch.data(), http_max_unsigned_decimal_size), value);
     } else {
-        return http_format_signed(std::span<char, http_max_signed_decimal_size>(scratch.data(), http_max_signed_decimal_size), value);
+        return format_decimal(std::span<char, max_decimal_size>(scratch.data(), max_decimal_size), value);
     }
 }
 

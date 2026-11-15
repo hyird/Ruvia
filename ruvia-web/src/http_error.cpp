@@ -60,7 +60,7 @@ namespace {
     out.append("{\"type\":\"about:blank\",\"title\":");
     detail::append_json_string(out, title);
     out.append(",\"status\":");
-    http_append_unsigned(out, error.status().value());
+    append_decimal(out, error.status().value());
     out.append(",\"detail\":");
     detail::append_json_string(out, error.message());
     out.append(",\"code\":");

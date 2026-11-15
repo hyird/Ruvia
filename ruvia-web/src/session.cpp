@@ -311,8 +311,8 @@ task<void> session_middleware::commit(context& c) const {
         auto eval_task = [&] {
             const session_key old_key({key_prefix_, old_id});
             // session_middleware::validate requires a positive TTL.
-            std::array<char, http_max_unsigned_decimal_size> ttl_buffer;
-            const auto ttl = http_format_unsigned(ttl_buffer, static_cast<std::uint64_t>(ttl_.count()));
+            std::array<char, max_decimal_size> ttl_buffer;
+            const auto ttl = format_decimal(ttl_buffer, static_cast<std::uint64_t>(ttl_.count()));
             const std::array<std::string_view, 2> keys{old_key.view(), key.view()};
             const std::array<std::string_view, 2> args{payload, ttl};
             // Redis executes the entire transition atomically. A stale request may

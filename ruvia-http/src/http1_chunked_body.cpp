@@ -210,7 +210,7 @@ template <typename visitor_type>
 
 }  // namespace
 
-http1_chunked_body_decoder::http1_chunked_body_decoder(http1_chunked_body_decoder_config config) :
+http1_chunked_body_decoder::http1_chunked_body_decoder(http1_chunked_body_decoder_options config) :
     body_limit_(config.body_limit_),
     obs_fold_(config.obs_fold_),
     trailer_message_(config.trailer_message_) {}

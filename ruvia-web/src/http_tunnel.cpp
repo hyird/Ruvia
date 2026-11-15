@@ -25,7 +25,7 @@
 namespace ruvia::detail {
 class http_capsule_stream_state final {
 public:
-    http_capsule_stream_state(http_tunnel& tunnel, http_capsule_config config) :
+    http_capsule_stream_state(http_tunnel& tunnel, http_capsule_options config) :
         worker_(tunnel.worker_),
         tunnel_(&tunnel),
         decoder_(config),
@@ -204,7 +204,7 @@ public:
     std::optional<http_client_response> memory_pin_;
     http_tunnel* tunnel_{};
     http_capsule_decoder decoder_;
-    http_capsule_config config_;
+    http_capsule_options config_;
     std::optional<std::string> owned_input_;
     std::string_view input_;
     std::size_t offset_{};
@@ -346,7 +346,7 @@ void http_capsule::release() noexcept {
         state->release();
     }
 }
-http_capsule_stream::http_capsule_stream(http_tunnel& tunnel, http_capsule_config config) {
+http_capsule_stream::http_capsule_stream(http_tunnel& tunnel, http_capsule_options config) {
     if (!tunnel.worker_.is_current()) {
         throw std::logic_error("capsule stream requires its owner worker");
     }
@@ -376,7 +376,7 @@ void http_capsule_stream::abort() & noexcept {
         state_->abort();
     }
 }
-http_capsule_stream http_tunnel::capsules(http_capsule_config config) & {
+http_capsule_stream http_tunnel::capsules(http_capsule_options config) & {
     // The tunnel's protocol owns Capsule Protocol negotiation (RFC 9297
     // section 3.4); a server route that did not declare datagrams never
     // advertised it.
@@ -495,29 +495,29 @@ task<void> http_capsule_stream::finish(operation_options operation) & {
     return state_->output_scope_.attach(finish_value(detail::capsule_state_pin(*state_), std::move(operation)));
 }
 
-http_datagram_stream::http_datagram_stream(http_capsule_stream&& stream, bool udp) :
+http_datagram_stream::http_datagram_stream(http_capsule_stream&& stream, http_datagram_mode mode) :
     stream_(std::move(stream)),
-    udp_(udp) {}
-http_datagram_stream http_tunnel::datagram_stream(http_capsule_config config, bool udp) {
+    mode_(mode) {}
+http_datagram_stream http_tunnel::datagram_stream(http_capsule_options config, http_datagram_mode mode) {
     if (!negotiated_.datagrams_) {
         throw std::logic_error("HTTP tunnel did not negotiate HTTP Datagrams");
     }
-    return http_datagram_stream(capsules(config), udp);
+    return http_datagram_stream(capsules(config), mode);
 }
-http_datagram_stream http_tunnel::datagrams(http_capsule_config config) & {
-    return datagram_stream(config, false);
+http_datagram_stream http_tunnel::datagrams(http_capsule_options config) & {
+    return datagram_stream(config, http_datagram_mode::raw);
 }
-http_datagram_stream http_tunnel::udp(http_capsule_config config) & {
-    return datagram_stream(config, true);
+http_datagram_stream http_tunnel::udp(http_capsule_options config) & {
+    return datagram_stream(config, http_datagram_mode::connect_udp);
 }
 task<std::optional<http_datagram>> http_datagram_stream::read(operation_options operation) & {
     if (!stream_.state_) {
         throw std::logic_error("HTTP Datagram stream is empty");
     }
     stream_.state_->require();
-    return stream_.state_->read_scope_.attach(read_owned(detail::capsule_state_pin(*stream_.state_), udp_, std::move(operation)));
+    return stream_.state_->read_scope_.attach(read_owned(detail::capsule_state_pin(*stream_.state_), mode_, std::move(operation)));
 }
-task<std::optional<http_datagram>> http_datagram_stream::read_owned(detail::capsule_state_pin pin, bool udp, operation_options operation) {
+task<std::optional<http_datagram>> http_datagram_stream::read_owned(detail::capsule_state_pin pin, http_datagram_mode mode, operation_options operation) {
     auto& state_value = pin.state();
     state_value.throw_if_stopped_before_start(operation, "HTTP Datagram read");
     const detail::operation_steps steps(std::move(operation));
@@ -533,7 +533,7 @@ task<std::optional<http_datagram>> http_datagram_stream::read_owned(detail::caps
             }
             // The decoder drops other capsule types and, for CONNECT-UDP, unknown
             // Context IDs before the length limit applies (RFC 9297 section 3.2).
-            if (!state_value.native_input_ && !state_value.poll_capsule(fin, udp ? http_capsule_retention::udp_payloads : http_capsule_retention::datagrams)) {
+            if (!state_value.native_input_ && !state_value.poll_capsule(fin, mode == http_datagram_mode::connect_udp ? http_capsule_retention::udp_payloads : http_capsule_retention::datagrams)) {
                 continue;
             }
             const bool native = state_value.native_input_;
@@ -543,30 +543,19 @@ task<std::optional<http_datagram>> http_datagram_stream::read_owned(detail::caps
             }
             auto bytes_value = std::span<const char>(owned);
             http_datagram_session datagrams;
-            std::size_t offset{};
-            if (udp) {
-                auto decoded = datagrams.receive_udp_datagram(bytes_value);
-                if ((decoded.index() != 0)) {
-                    state_value.abort_malformed();
-                    throw std::runtime_error("malformed CONNECT-UDP datagram");
-                }
-                if (!std::get<0>(decoded)) {
-                    if (!native) {
-                        owned.clear();
-                    }
-                    continue;
-                }
-                offset = bytes_value.size() - (std::get<0>(decoded))->payload_.size();
-            } else {
-                auto decoded = datagrams.receive_datagram(bytes_value);
-                if (!decoded) {
-                    if (!native) {
-                        owned.clear();
-                    }
-                    continue;
-                }
-                offset = bytes_value.size() - decoded->size();
+            // Only CONNECT-UDP mode can report an error here.
+            const auto decoded = datagrams.receive_datagram(mode, bytes_value);
+            if (decoded.index() != 0) {
+                state_value.abort_malformed();
+                throw std::runtime_error("malformed CONNECT-UDP datagram");
             }
+            if (!std::get<0>(decoded)) {
+                if (!native) {
+                    owned.clear();
+                }
+                continue;
+            }
+            const std::size_t offset = bytes_value.size() - std::get<0>(decoded)->size();
             if (native && owned.size() > state_value.config_.max_capsule_length_) {
                 state_value.abort_malformed();
                 throw std::runtime_error("oversized HTTP Datagram");
@@ -595,18 +584,19 @@ task<void> http_datagram_stream::send(outbound_bytes payload_value, operation_op
     if (state_value.send_ended_) {
         throw std::logic_error("HTTP Datagram sending direction is closed");
     }
-    const auto context_bytes = udp_ ? std::size_t{1} : std::size_t{0};
+    const bool udp = mode_ == http_datagram_mode::connect_udp;
+    const auto context_bytes = udp ? std::size_t{1} : std::size_t{0};
     if (context_bytes > state_value.config_.max_capsule_length_ || payload_value.size() > state_value.config_.max_capsule_length_ - context_bytes) {
         throw std::length_error("HTTP Datagram exceeds capsule bound");
     }
     const auto payload_view = payload_value.view();
     http_datagram_session session_value;
-    const auto plan = udp_ ? session_value.prepare_udp_datagram(std::span(payload_view.data(), payload_view.size())) : session_value.prepare_datagram(std::span(payload_view.data(), payload_view.size()));
+    const auto plan = session_value.prepare_datagram(mode_, std::span(payload_view.data(), payload_view.size()));
     if (plan.index() != 0) {
         throw std::length_error("HTTP Datagram payload exceeds its bound");
     }
     if (state_value.has_native_transport()) {
-        return stream_.write_frame(udp_ ? std::string_view("\0", 1) : std::string_view{}, std::move(payload_value), true, std::move(operation));
+        return stream_.write_frame(udp ? std::string_view("\0", 1) : std::string_view{}, std::move(payload_value), true, std::move(operation));
     }
     return stream_.write_frame(std::get<0>(plan).prefix(), std::move(payload_value), false, std::move(operation));
 }

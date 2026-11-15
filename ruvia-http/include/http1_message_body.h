@@ -26,7 +26,7 @@ enum class http1_body_decode_error : std::uint8_t {
     // max_http_header_bytes.
     framing_limit_exceeded,
     // Chunk payload or transfer-decoded content exceeded
-    // http1_body_decoder_config::body_limit_.
+    // http1_body_decoder_options::body_limit_.
     body_limit_exceeded,
     // Corrupt coded bytes, bytes after a coding ended, or a coding left
     // unfinished by complete chunked framing.
@@ -69,7 +69,7 @@ using http1_body_decode_failure = decode_failure<http1_body_decode_error>;
 using http1_body_decode_result = decode_step<decode_need_input, decode_output, http1_body_trailers, decode_complete, http1_body_decode_failure>;
 
 // What differs between the two roles that receive an HTTP/1 message body.
-struct http1_body_decoder_config final {
+struct http1_body_decoder_options final {
     // Bounds the chunk payload bytes of a chunked body and, independently, the
     // output of each transfer-decoding layer. A known length is bounded by its
     // caller before the decoder is constructed.
@@ -92,7 +92,7 @@ class http1_body_decoder final {
 public:
     // Throws std::invalid_argument for transfer codings that are not transfer
     // codings, and http_content_codec_error when a codec cannot start.
-    explicit http1_body_decoder(const http1_message_framing& framing, http1_body_decoder_config config = {});
+    explicit http1_body_decoder(const http1_message_framing& framing, http1_body_decoder_options config = {});
     ~http1_body_decoder() = default;
     http1_body_decoder(const http1_body_decoder&) = delete;
     http1_body_decoder& operator=(const http1_body_decoder&) = delete;
@@ -153,7 +153,7 @@ private:
     [[nodiscard]] http1_body_decode_result finish_transfer(std::size_t consumed, std::span<char> scratch, http1_body_decode_error unfinished);
 
     http1_message_framing framing_;
-    http1_body_decoder_config config_;
+    http1_body_decoder_options config_;
     std::optional<http_transfer_coding_stack_decoder> transfer_;
     std::optional<http1_chunked_body_decoder> chunked_;
     decoder_state state_{decoder_state::active};

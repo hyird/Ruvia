@@ -14,7 +14,6 @@
 #include <vector>
 
 #include "event_loop.h"
-#include "http1_server_response.h"
 #include "http2_push.h"
 #include "http_capsule.h"
 #include "http_client_types.h"
@@ -25,6 +24,7 @@
 #include "http_priority.h"
 #include "http_protocol.h"
 #include "http_request_head_view.h"
+#include "http_response.h"
 #include "http_status.h"
 #include "http_tunnel.h"
 #include "model.h"
@@ -555,7 +555,6 @@ private:
     friend class http_client_connect_request;
     friend class http_client_websocket_request;
     [[nodiscard]] task<http_client_response> dispatch(const http_request_head_view& request, const http_client_request_options& options, const std::shared_ptr<http_client_informational_callback>& informational) const;
-    [[nodiscard]] task<http_client_exchange> dispatch_upload(const http_request_head_view& head, http_client_upload_config upload, const http_client_request_options& options, const std::shared_ptr<http_client_informational_callback>& informational) const;
     [[nodiscard]] task<http_client_tunnel_result> dispatch_connect(const http_request_head_view& head, http_client_tunnel_config config, const http_client_request_options& options, const std::shared_ptr<http_client_informational_callback>& informational) const;
     [[nodiscard]] task<http_client_tunnel_result> dispatch_udp(const http_request_head_view& head, http_client_tunnel_config config, const http_client_request_options& options, const std::shared_ptr<http_client_informational_callback>& informational) const;
     friend class detail::http_client_registry;

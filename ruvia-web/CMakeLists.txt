@@ -172,6 +172,7 @@ set(ruvia_web_headers
     include/streaming.h
     include/tcp_client.h
     include/test_app.h
+    include/tls_certificate_store.h
     include/tls_config.h
     include/web_worker.h
     include/websocket.h

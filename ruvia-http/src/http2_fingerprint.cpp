@@ -42,13 +42,13 @@ void http2_akamai_fingerprint_collector::observe_frame(const http2_frame_metadat
             if (!priorities_.empty()) {
                 priorities_.push_back(',');
             }
-            http_append_unsigned(priorities_, pri.stream_id_);
+            append_decimal(priorities_, pri.stream_id_);
             priorities_.push_back(':');
             priorities_.push_back(pri.exclusive_ ? '1' : '0');
             priorities_.push_back(':');
-            http_append_unsigned(priorities_, pri.stream_dependency_);
+            append_decimal(priorities_, pri.stream_dependency_);
             priorities_.push_back(':');
-            http_append_unsigned(priorities_, pri.weight_);
+            append_decimal(priorities_, pri.weight_);
         };
 
         switch (frame.type_) {
@@ -64,9 +64,9 @@ void http2_akamai_fingerprint_collector::observe_frame(const http2_frame_metadat
                     if (!settings_.empty()) {
                         settings_.push_back(';');
                     }
-                    http_append_unsigned(settings_, static_cast<std::uint16_t>(entry.id_));
+                    append_decimal(settings_, static_cast<std::uint16_t>(entry.id_));
                     settings_.push_back(':');
-                    http_append_unsigned(settings_, entry.value_);
+                    append_decimal(settings_, entry.value_);
                 }
                 break;
             case http2_frame_type::window_update:
@@ -161,7 +161,7 @@ void http2_akamai_fingerprint_collector::observe_header(const http2_header_metad
                 fingerprint_.append(settings_);
                 fingerprint_.push_back('|');
                 if (has_window_update_) {
-                    http_append_unsigned(fingerprint_, window_update_);
+                    append_decimal(fingerprint_, window_update_);
                 } else {
                     fingerprint_.append("00");
                 }

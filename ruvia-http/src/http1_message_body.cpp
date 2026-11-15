@@ -66,7 +66,7 @@ std::string_view http1_response_body_error_message(http1_body_decode_error error
     return "invalid HTTP/1 response body";
 }
 
-http1_body_decoder::http1_body_decoder(const http1_message_framing& framing, http1_body_decoder_config config) :
+http1_body_decoder::http1_body_decoder(const http1_message_framing& framing, http1_body_decoder_options config) :
     framing_(framing),
     config_(config) {
     start();
@@ -93,7 +93,7 @@ void http1_body_decoder::start() {
         if (chunked_) {
             chunked_->reset();
         } else {
-            chunked_.emplace(http1_chunked_body_decoder_config{.body_limit_ = config_.body_limit_, .obs_fold_ = config_.obs_fold_, .trailer_message_ = config_.trailer_message_});
+            chunked_.emplace(http1_chunked_body_decoder_options{.body_limit_ = config_.body_limit_, .obs_fold_ = config_.obs_fold_, .trailer_message_ = config_.trailer_message_});
         }
     }
 }

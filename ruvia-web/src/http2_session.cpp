@@ -30,7 +30,6 @@
 #include "connection_scanner.h"
 #include "context_access.h"
 #include "event_loop.h"
-#include "http1_server_response.h"
 #include "http1_session_state.h"
 #include "http2_connection.h"
 #include "http_client_pool.h"

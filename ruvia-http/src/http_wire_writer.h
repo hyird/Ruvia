@@ -45,11 +45,11 @@ public:
     }
 
     void append_unsigned(std::uint64_t value) noexcept {
-        // The measured output reserves only http_unsigned_decimal_size(value)
+        // The measured output reserves only decimal_size(value)
         // bytes, so formatting in place could form a pointer past the caller's
         // buffer when the digits end it. Format locally and copy.
-        std::array<char, http_max_unsigned_decimal_size> digits;
-        append(http_format_unsigned(digits, value));
+        std::array<char, max_decimal_size> digits;
+        append(format_decimal(digits, value));
     }
 
     [[nodiscard]] char* position() const noexcept {

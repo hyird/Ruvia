@@ -13,9 +13,9 @@
 #include <variant>
 
 #include "callback_ref.h"
-#include "http1_server_response.h"
 #include "http_header.h"
 #include "http_multipart.h"
+#include "http_response.h"
 #include "http_server_sent_events.h"
 #include "middleware.h"
 #include "outbound_bytes.h"

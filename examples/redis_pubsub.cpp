@@ -44,7 +44,7 @@ private:
         const auto receivers = co_await c.redis().publish(channel_name, body);
         std::string output;
         output.append("receivers=");
-        ruvia::http_append_signed(output, receivers);
+        ruvia::append_decimal(output, receivers);
         output.push_back('\n');
         co_return c.text(std::move(output));
     }

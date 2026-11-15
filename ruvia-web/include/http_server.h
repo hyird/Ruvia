@@ -173,7 +173,7 @@ struct server_config final {
     // negotiation of indexed precompressed static variants; CORS headers
     // also follow the route engine's OPTIONS preflight answer.
     std::optional<compression_config> compression_{};
-    std::optional<http_cors_policy_config> cors_{};
+    std::optional<http_cors_policy_options> cors_{};
 };
 
 struct trusted_proxy_config final {

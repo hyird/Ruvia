@@ -13,7 +13,6 @@
 #include <vector>
 
 #include "borrowed_text.h"
-#include "http1_server_response.h"
 #include "http2_frame.h"
 #include "http2_push.h"
 #include "http_client_response_head.h"

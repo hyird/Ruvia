@@ -21,7 +21,6 @@
 #include "borrowed_text.h"
 #include "connection_transport.h"
 #include "decimal_text.h"
-#include "http1_server_response.h"
 #include "http_cookie.h"
 #include "http_error.h"
 #include "http_header.h"

@@ -151,7 +151,7 @@ class udp_tunnel_routes final {
 
     ruvia::task<void> echo(ruvia::context& c) {
         auto& observation = *c.worker_state<std::shared_ptr<udp_tunnel_observation>>();
-        ruvia::http_capsule_config config{.max_capsule_length_ = 13};
+        ruvia::http_capsule_options config{.max_capsule_length_ = 13};
         auto original = c.tunnel().udp(config);
         try {
             try {

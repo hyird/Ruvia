@@ -38,7 +38,6 @@
 #include "context.h"
 #include "controller.h"
 #include "event_loop.h"
-#include "http1_server_response.h"
 #include "http_content_codec.h"
 #include "http_content_coding.h"
 #include "http_header.h"

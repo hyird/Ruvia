@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <span>
 #include <variant>
 
@@ -28,14 +29,15 @@ struct quic_varint final {
         : 8;
 }
 
-[[nodiscard]] inline std::variant<quic_varint, http_capsule_codec_error> decode_quic_varint(std::span<const char> input) noexcept {
+// No value until `input` holds the whole integer its first byte announces.
+[[nodiscard]] inline std::optional<quic_varint> decode_quic_varint(std::span<const char> input) noexcept {
     if (input.empty()) {
-        return http_capsule_codec_error::need_input;
+        return std::nullopt;
     }
     const auto first = static_cast<unsigned char>(input.front());
     const std::size_t size = std::size_t{1} << (first >> 6);
     if (input.size() < size) {
-        return http_capsule_codec_error::need_input;
+        return std::nullopt;
     }
     std::uint64_t value = first & 0x3f;
     for (std::size_t i = 1; i < size; ++i) {

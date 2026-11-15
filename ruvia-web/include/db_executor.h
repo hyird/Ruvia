@@ -157,17 +157,17 @@ class db_pool;
 using db_pool_ref_type = std::variant<std::monostate, db_pool<mariadb_driver>*, db_pool<postgresql_driver>*>;
 
 inline void append_db_number(std::string& output, std::int64_t value) {
-    http_append_signed(output, value);
+    append_decimal(output, value);
 }
 
 inline void append_db_number(std::string& output, std::uint64_t value) {
-    http_append_unsigned(output, value);
+    append_decimal(output, value);
 }
 
 template <std::floating_point number_type>
 inline void append_db_number(std::string& output, number_type value) {
     // SQL numeric literals cannot contain the inf/nan spellings of to_chars.
-    http_append_formatted_finite_number(output, value, "database floating-point value must be finite", "database floating-point value cannot be formatted");
+    append_finite_number(output, value, "database floating-point value must be finite", "database floating-point value cannot be formatted");
 }
 
 // The result shapes a repository builder derives from one query. An id-keyed

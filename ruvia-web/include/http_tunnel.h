@@ -114,7 +114,7 @@ private:
     friend class http_datagram_stream;
     [[nodiscard]] static task<std::optional<http_capsule>> read_owned(detail::capsule_state_pin pin, operation_options operation);
     [[nodiscard]] task<void> write_frame(std::string_view prefix, outbound_bytes payload, bool datagram, operation_options operation);
-    explicit http_capsule_stream(http_tunnel& tunnel, http_capsule_config config);
+    explicit http_capsule_stream(http_tunnel& tunnel, http_capsule_options config);
     void release() noexcept;
     detail::http_capsule_stream_state* state_{};
 };
@@ -183,11 +183,10 @@ public:
 
 private:
     friend class http_tunnel;
-    explicit http_datagram_stream(http_capsule_stream&& stream, bool udp);
-    static task<std::optional<http_datagram>> read_owned(detail::capsule_state_pin pin, bool udp, operation_options operation);
+    explicit http_datagram_stream(http_capsule_stream&& stream, http_datagram_mode mode);
+    static task<std::optional<http_datagram>> read_owned(detail::capsule_state_pin pin, http_datagram_mode mode, operation_options operation);
     http_capsule_stream stream_;
-    // CONNECT-UDP mode: payloads travel under Context ID 0 (RFC 9298 section 5).
-    bool udp_;
+    http_datagram_mode mode_;
 };
 struct http_tunnel_route_config final {
     // Aborts the tunnel's transport once no tunnel byte has been read or
@@ -255,12 +254,12 @@ public:
     // every accepted tunnel may carry capsules(), while datagrams() and udp()
     // require an accepted CONNECT-UDP tunnel. Capsule Protocol payload limits
     // apply to both native datagrams and reliable DATAGRAM capsules.
-    [[nodiscard]] http_capsule_stream capsules(http_capsule_config config = {}) &;
-    http_capsule_stream capsules(http_capsule_config = {}) && = delete;
-    [[nodiscard]] http_datagram_stream datagrams(http_capsule_config config = {}) &;
-    http_datagram_stream datagrams(http_capsule_config = {}) && = delete;
-    [[nodiscard]] http_datagram_stream udp(http_capsule_config config = {}) &;
-    http_datagram_stream udp(http_capsule_config = {}) && = delete;
+    [[nodiscard]] http_capsule_stream capsules(http_capsule_options config = {}) &;
+    http_capsule_stream capsules(http_capsule_options = {}) && = delete;
+    [[nodiscard]] http_datagram_stream datagrams(http_capsule_options config = {}) &;
+    http_datagram_stream datagrams(http_capsule_options = {}) && = delete;
+    [[nodiscard]] http_datagram_stream udp(http_capsule_options config = {}) &;
+    http_datagram_stream udp(http_capsule_options = {}) && = delete;
 
 private:
     template <typename stream_type>
@@ -292,7 +291,7 @@ private:
         abort_(abort),
         negotiated_(negotiated) {}
     http_tunnel(worker_ref&&, void*, read_type, write_type, finish_type, abort_type, negotiation) = delete;
-    [[nodiscard]] http_datagram_stream datagram_stream(http_capsule_config config, bool udp);
+    [[nodiscard]] http_datagram_stream datagram_stream(http_capsule_options config, http_datagram_mode mode);
     void require_unadapted() const;
     const worker_ref& worker_;
     void* target_;

@@ -14,7 +14,6 @@
 #include <variant>
 
 #include "decimal_text.h"
-#include "http1_server_response.h"
 #include "http2_connection.h"
 #include "http2_engine.h"
 #include "http2_frame.h"
@@ -575,7 +574,7 @@ std::variant<std::uint32_t, http_submit_status> http2_connection::submit_regular
     const auto content_indication = content_will_follow ? http_request_content_indication::will_follow : http_request_content_indication::no_content;
     auto end_stream = http2_end_stream::keep_open;
     // Only the formatted prefix is exposed; an omitted length keeps an empty view.
-    std::array<char, http_max_unsigned_decimal_size> length_buffer;
+    std::array<char, max_decimal_size> length_buffer;
     if (without_content) {
         end_stream = http2_end_stream::end_stream;
     } else if (known_length_content != nullptr) {
@@ -584,7 +583,7 @@ std::variant<std::uint32_t, http_submit_status> http2_connection::submit_regular
     const auto known_method = classify_http_method(method);
     const auto default_port = http_uri_scheme_default_port(scheme);
     const bool emit_length = expected_length && method != "TRACE";
-    const auto content_length_value = emit_length ? http_format_unsigned(length_buffer, *expected_length) : std::string_view{};
+    const auto content_length_value = emit_length ? format_decimal(length_buffer, *expected_length) : std::string_view{};
     // Validate the entire semantic head and decoded-size budget before touching
     // the session, stream metadata, or lifecycle state.
     if (!http_binary_is_valid_outbound_regular_request_head(method, known_method, scheme, default_port, authority, path, headers, content_indication, content_length_value, expectation, source, max_http_header_bytes)) {

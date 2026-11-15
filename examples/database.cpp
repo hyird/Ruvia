@@ -86,7 +86,7 @@ private:
         co_await insert_user(c, name, id);
         std::string body;
         body.append("created id=");
-        ruvia::http_append_unsigned(body, id);
+        ruvia::append_decimal(body, id);
         body.push_back('\n');
         co_return c.text(std::move(body), {.status_ = ruvia::http_status::created});
     }

@@ -1115,8 +1115,8 @@ std::vector<db_migration> db_schema::compile(std::string_view id) const {
     } else {
         out.reserve(statements_.size());
         for (size_t i = 0; i < statements_.size(); ++i) {
-            std::array<char, http_max_unsigned_decimal_size> digits;
-            const auto suffix = http_format_unsigned(digits, static_cast<std::uint64_t>(i + 1U));
+            std::array<char, max_decimal_size> digits;
+            const auto suffix = format_decimal(digits, static_cast<std::uint64_t>(i + 1U));
             std::string numbered;
             numbered.reserve(id.size() + 1U + suffix.size());
             numbered.append(id);

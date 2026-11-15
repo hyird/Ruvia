@@ -30,7 +30,7 @@ namespace {
 // greatest convenient representation; non-digit / empty input remains invalid.
 [[nodiscard]] std::optional<std::uint64_t> parse_delta_seconds(std::string_view value) noexcept {
     if (value.empty() || value.front() != '"') {
-        return http_parse_saturating_decimal(value);
+        return parse_saturating_decimal(value);
     }
     std::uint64_t result_value = 0;
     bool any_digit = false;
@@ -40,7 +40,7 @@ namespace {
         if (ch < '0' || ch > '9') {
             return std::nullopt;
         }
-        result_value = http_accumulate_decimal_digit(result_value, static_cast<unsigned>(ch - '0'));
+        result_value = accumulate_decimal_digit(result_value, static_cast<unsigned>(ch - '0'));
         any_digit = true;
     }
     if (!cursor.closed() || cursor.consumed() != value.size() || !any_digit) {
@@ -518,7 +518,7 @@ void finish_rewritten_cache_control_max_age(std::string& output, std::uint64_t c
         output.append(", ");
     }
     output.append("max-age=");
-    http_append_unsigned(output, client_max_age);
+    append_decimal(output, client_max_age);
 }
 
 [[nodiscard]] std::string normalize_vary_field_value(std::string_view raw) {

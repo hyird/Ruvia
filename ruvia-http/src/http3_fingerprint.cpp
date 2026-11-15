@@ -38,9 +38,9 @@ void http3_fingerprint_collector::observe_frame(const http3_frame_metadata& fram
             if (!control_frames_.empty()) {
                 control_frames_.push_back(';');
             }
-            http_append_unsigned(control_frames_, static_cast<std::uint64_t>(frame.type_));
+            append_decimal(control_frames_, static_cast<std::uint64_t>(frame.type_));
             control_frames_.push_back(':');
-            http_append_unsigned(control_frames_, frame.payload_length_);
+            append_decimal(control_frames_, frame.payload_length_);
         }
     } catch (...) {
         phase_ = phase::failed;
@@ -120,7 +120,7 @@ void http3_fingerprint_collector::observe_field(const http3_field_metadata& fiel
                 fingerprint_.clear();
                 fingerprint_.append(control_frames_);
                 fingerprint_.push_back('|');
-                http_append_unsigned(fingerprint_, static_cast<std::uint64_t>(first_request_stream_id_));
+                append_decimal(fingerprint_, static_cast<std::uint64_t>(first_request_stream_id_));
                 fingerprint_.push_back('|');
                 fingerprint_.append(pseudo_headers_);
                 phase_ = phase::complete;

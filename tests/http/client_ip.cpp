@@ -7,7 +7,7 @@
 #include "http_header.h"
 
 TEST(RuviaHttpPublicApi, trusted_proxy_client_ip_extractor) {
-    ruvia::http_client_ip_config config;
+    ruvia::http_client_ip_options config;
     config.enabled_ = true;
     config.trusted_proxies_.emplace_back("127.0.0.0/8");
     config.trusted_proxies_.emplace_back("10.0.0.0/8");

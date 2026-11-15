@@ -1261,8 +1261,8 @@ db_error mariadb_error(std::string_view operation, unsigned int native_code, con
     }
     const std::string_view state_view = (sql_state != nullptr && sql_state[0] != '\0') ? std::string_view(sql_state) : std::string_view{};
     const std::string_view message_view = (library_text && message != nullptr && message[0] != '\0') ? std::string_view(message) : std::string_view{};
-    std::array<char, http_max_unsigned_decimal_size> digits;
-    const std::string_view code_view = native_code != 0 ? http_format_unsigned(digits, static_cast<std::uint64_t>(native_code)) : std::string_view{};
+    std::array<char, max_decimal_size> digits;
+    const std::string_view code_view = native_code != 0 ? format_decimal(digits, static_cast<std::uint64_t>(native_code)) : std::string_view{};
     std::string error;
     error.reserve(operation.size() + 7U + (code_view.empty() ? 0U : 9U + code_view.size()) + (state_view.empty() ? 0U : 12U + state_view.size()) + (message_view.empty() ? 0U : 2U + message_view.size()));
     error.append(operation);

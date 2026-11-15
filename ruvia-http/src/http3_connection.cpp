@@ -1572,8 +1572,8 @@ http_submit_status http3_connection::impl::submit_regular_request(std::int64_t s
     const auto content_indication = content.without_content() == nullptr && (!declared_length || declared_length->value() != 0) ? http_request_content_indication::will_follow : http_request_content_indication::no_content;
     const auto method = classify_http_method(request.method_);
     const std::optional<std::string_view> authority = request.authority_ ? std::optional<std::string_view>(*request.authority_) : std::nullopt;
-    std::array<char, http_max_unsigned_decimal_size> length_bytes;
-    const auto length = declared_length && request.method_ != "TRACE" ? http_format_unsigned(length_bytes, declared_length->value()) : std::string_view{};
+    std::array<char, max_decimal_size> length_bytes;
+    const auto length = declared_length && request.method_ != "TRACE" ? format_decimal(length_bytes, declared_length->value()) : std::string_view{};
     const auto headers = static_cast<std::span<const http_header_view>>(request.headers_);
     if (!detail::http_binary_is_valid_outbound_regular_request_head(request.method_, method, request.scheme_, detail::http_uri_scheme_default_port(request.scheme_), authority, request.target_, headers, content_indication, length, request.expectation_, request.field_source_, outbound_field_limit())) {
         return http_submit_status::invalid_message;
@@ -1936,14 +1936,14 @@ http3_transport_result http3_connection::read_datagram(std::span<const std::byte
     }
     impl_->reset_drained_events();
     const auto parsed = detail::decode_quic_varint({reinterpret_cast<const char*>(payload.data()), payload.size()});
-    if (!impl_->enable_h3_datagram_ || parsed.index() != 0 || std::get<0>(parsed).value_ > ((std::uint64_t{1} << 60) - 1)) {
+    if (!impl_->enable_h3_datagram_ || !parsed || parsed->value_ > ((std::uint64_t{1} << 60) - 1)) {
         impl_->connection_error_ = http3_error_code::datagram_error;
         return {.status_ = http3_transport_status::protocol_error, .error_code_ = impl_->connection_error_};
     }
-    const auto id = static_cast<std::int64_t>(std::get<0>(parsed).value_ * 4);
+    const auto id = static_cast<std::int64_t>(parsed->value_ * 4);
     const auto* stream = impl_->find_stream(id);
     if (stream != nullptr && !stream->read_aborted_ && (stream->received_head_ || (impl_->role_ == http_connection_role::client && stream->head_submitted()))) {
-        const auto content = payload.subspan(std::get<0>(parsed).encoded_bytes_);
+        const auto content = payload.subspan(parsed->encoded_bytes_);
         impl_->publish(http3_datagram_event(id, std::string(reinterpret_cast<const char*>(content.data()), content.size())));
     }
     return {};

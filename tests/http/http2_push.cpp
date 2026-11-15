@@ -19,7 +19,6 @@
 #include "content_decoding_fixture.h"
 #include "http1_client_request.h"
 #include "http1_client_response.h"
-#include "http1_server_response.h"
 #include "http2_connection.h"
 #include "http2_hpack.h"
 #include "http_client_response_head.h"

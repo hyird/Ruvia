@@ -93,7 +93,7 @@ void http_server_options::set_server(const server_config& config) {
 }
 
 void http_server_options::set_trusted_proxies(const trusted_proxy_config& config) {
-    http_client_ip_config ip_config;
+    http_client_ip_options ip_config;
     ip_config.enabled_ = !config.cidrs_.empty();
     ip_config.trusted_proxies_ = config.cidrs_;
     ip_config.forwarding_headers_ = config.forwarding_headers_;
