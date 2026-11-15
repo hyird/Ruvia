@@ -198,6 +198,40 @@ namespace {
 using ruvia::test::scoped_operation_tests::payload_counter;
 using ruvia::test::scoped_operation_tests::tracked_payload;
 
+struct retiring_capability final {
+    retiring_capability(ruvia::detail::operation_scope& scope, payload_counter& resource, int& expired_count, bool& expired_before_cleanup, std::unique_ptr<retiring_capability>* self, std::unique_ptr<retiring_capability>* sibling) :
+        payload_(1024, 'p', &resource),
+        expired_count_(expired_count),
+        expired_before_cleanup_(expired_before_cleanup),
+        self_(self),
+        sibling_(sibling),
+        registration_(scope, *this) {}
+
+    void expire() noexcept {
+        ++expired_count_;
+        try {
+            registration_.require_active();
+        } catch (const std::logic_error&) {
+            expired_before_cleanup_ = true;
+        }
+        auto* self = self_;
+        auto* sibling = sibling_;
+        if (sibling != nullptr) {
+            sibling->reset();
+        }
+        if (self != nullptr) {
+            self->reset();
+        }
+    }
+
+    tracked_payload payload_;
+    int& expired_count_;
+    bool& expired_before_cleanup_;
+    std::unique_ptr<retiring_capability>* self_;
+    std::unique_ptr<retiring_capability>* sibling_;
+    ruvia::detail::capability_registration<&retiring_capability::expire> registration_;
+};
+
 class test_scoped_capability final {
 public:
     test_scoped_capability(ruvia::detail::operation_scope& scope, int& expired_count, payload_counter* resource = nullptr, std::size_t* bytes_at_expire = nullptr, const bool* lease_active = nullptr, bool* lease_at_expire = nullptr) noexcept :
@@ -1040,47 +1074,13 @@ TEST(Ruvia, scoped_capabilities_copy_move_and_unregister_without_expiring_other_
 }
 
 TEST(Ruvia, scoped_capability_cleanup_can_destroy_its_owner_and_a_sibling) {
-    struct capability_owner final {
-        capability_owner(ruvia::detail::operation_scope& scope, payload_counter& resource, int& expired_count, bool& expired_before_cleanup, std::unique_ptr<capability_owner>* self, std::unique_ptr<capability_owner>* sibling) :
-            payload_(1024, 'p', &resource),
-            expired_count_(expired_count),
-            expired_before_cleanup_(expired_before_cleanup),
-            self_(self),
-            sibling_(sibling),
-            registration_(scope, *this) {}
-
-        void expire() noexcept {
-            ++expired_count_;
-            try {
-                registration_.require_active();
-            } catch (const std::logic_error&) {
-                expired_before_cleanup_ = true;
-            }
-            auto* self = self_;
-            auto* sibling = sibling_;
-            if (sibling != nullptr) {
-                sibling->reset();
-            }
-            if (self != nullptr) {
-                self->reset();
-            }
-        }
-
-        tracked_payload payload_;
-        int& expired_count_;
-        bool& expired_before_cleanup_;
-        std::unique_ptr<capability_owner>* self_;
-        std::unique_ptr<capability_owner>* sibling_;
-        ruvia::detail::capability_registration<&capability_owner::expire> registration_;
-    };
-
     ruvia::detail::operation_scope scope;
     payload_counter resource;
     int expired_count = 0;
     bool expired_before_cleanup = false;
-    std::unique_ptr<capability_owner> self;
-    auto sibling = std::make_unique<capability_owner>(scope, resource, expired_count, expired_before_cleanup, nullptr, nullptr);
-    self = std::make_unique<capability_owner>(scope, resource, expired_count, expired_before_cleanup, &self, &sibling);
+    std::unique_ptr<retiring_capability> self;
+    auto sibling = std::make_unique<retiring_capability>(scope, resource, expired_count, expired_before_cleanup, nullptr, nullptr);
+    self = std::make_unique<retiring_capability>(scope, resource, expired_count, expired_before_cleanup, &self, &sibling);
     scope.close();
     EXPECT_TRUE(self == nullptr);
     EXPECT_TRUE(sibling == nullptr);

@@ -240,6 +240,7 @@ jobs:
           cmake -S . -B build/ci -A x64 `
             -DCMAKE_COMPILE_WARNING_AS_ERROR=ON `
             -DCMAKE_INTERPROCEDURAL_OPTIMIZATION_RELEASE=ON `
+            '-DCMAKE_EXE_LINKER_FLAGS=/CGTHREADS:2' `
             -DRUVIA_ENABLE_MARIADB=ON -DRUVIA_ENABLE_POSTGRESQL=ON `
             -DRUVIA_ENABLE_REDIS=ON -DRUVIA_ENABLE_JWT=ON `
             -DRUVIA_BUILD_EXAMPLES=ON -DRUVIA_BUILD_TESTS=ON `
@@ -255,7 +256,8 @@ jobs:
           key: ${{ steps.vcpkg-cache.outputs.cache-primary-key }}
 
       - name: Build
-        run: cmake --build build/ci --config $env:BUILD_TYPE "-j$([Environment]::ProcessorCount)"
+        # Each concurrent MSBuild project can run a separate LTCG linker.
+        run: cmake --build build/ci --config $env:BUILD_TYPE --parallel 2
 
       - name: Test
         run: ctest --test-dir build/ci --output-on-failure --no-tests=error --build-config $env:BUILD_TYPE

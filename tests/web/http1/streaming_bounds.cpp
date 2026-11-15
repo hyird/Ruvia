@@ -256,15 +256,16 @@ TEST(Ruvia, tunnel_idle_timeout_aborts_a_tunnel_without_traffic) {
     EXPECT_TRUE(head && head->starts_with("HTTP/1.1 200 "));
     // Traffic in both directions keeps the tunnel open well past its idle timeout.
     const auto start = std::chrono::steady_clock::now();
+    auto last_sent = start;
     while (elapsed_since(start) < 2 * idle_timeout) {
+        last_sent = std::chrono::steady_clock::now();
         EXPECT_TRUE(client.send("x"));
         EXPECT_TRUE(client.read_exactly(1, 2s) == std::optional<std::string>("x"));
         std::this_thread::sleep_for(50ms);
     }
-    const auto idle_start = std::chrono::steady_clock::now();
     EXPECT_FALSE(client.read_exactly(1, 5s).has_value());
     EXPECT_TRUE(client.closed());
-    EXPECT_GE(elapsed_since(idle_start), idle_timeout - 50ms);
+    EXPECT_GE(elapsed_since(last_sent), idle_timeout - 1ms);
     client.close();
     server.finish();
 }
@@ -275,17 +276,18 @@ TEST(Ruvia, websocket_idle_timeout_aborts_a_session_without_traffic) {
     raw_client client(io, server.endpoint());
     EXPECT_TRUE(open_websocket(client, "/idle-websocket"));
     const auto start = std::chrono::steady_clock::now();
+    auto last_sent = start;
     while (elapsed_since(start) < 2 * idle_timeout) {
+        last_sent = std::chrono::steady_clock::now();
         EXPECT_TRUE(client.send(masked_frame(text_message, "hi")));
         const auto echo = client.read_frame(2s);
         EXPECT_TRUE(echo && echo->opcode_ == 1 && echo->payload_ == "hi");
         std::this_thread::sleep_for(50ms);
     }
-    const auto idle_start = std::chrono::steady_clock::now();
     // The session ends without a Close frame: an aborted transport.
     EXPECT_FALSE(client.read_frame(5s).has_value());
     EXPECT_TRUE(client.closed());
-    EXPECT_GE(elapsed_since(idle_start), idle_timeout - 50ms);
+    EXPECT_GE(elapsed_since(last_sent), idle_timeout - 1ms);
     client.close();
     server.finish();
 }
