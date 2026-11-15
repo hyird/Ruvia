@@ -189,40 +189,19 @@ struct redis_types_access final {
         return redis_scored_value(std::move(value), score);
     }
 
-    [[nodiscard]] static redis_scan_result scan_result() {
-        return redis_scan_result{};
+    template <typename entry_type>
+    [[nodiscard]] static redis_scan_page<entry_type> scan_page() {
+        return redis_scan_page<entry_type>{};
     }
 
-    [[nodiscard]] static std::optional<redis_scan_cursor>& next_cursor(redis_scan_result& result_value) noexcept {
-        return result_value.next_cursor_;
+    template <typename entry_type>
+    [[nodiscard]] static std::optional<redis_scan_cursor>& next_cursor(redis_scan_page<entry_type>& page) noexcept {
+        return page.next_cursor_;
     }
 
-    [[nodiscard]] static std::vector<std::string>& values(redis_scan_result& result_value) noexcept {
-        return result_value.values_;
-    }
-
-    [[nodiscard]] static redis_hash_scan_result hash_scan_result() {
-        return redis_hash_scan_result{};
-    }
-
-    [[nodiscard]] static std::optional<redis_scan_cursor>& next_cursor(redis_hash_scan_result& result_value) noexcept {
-        return result_value.next_cursor_;
-    }
-
-    [[nodiscard]] static std::vector<redis_key_value>& entries(redis_hash_scan_result& result_value) noexcept {
-        return result_value.entries_;
-    }
-
-    [[nodiscard]] static redis_z_scan_result z_scan_result() {
-        return redis_z_scan_result{};
-    }
-
-    [[nodiscard]] static std::optional<redis_scan_cursor>& next_cursor(redis_z_scan_result& result_value) noexcept {
-        return result_value.next_cursor_;
-    }
-
-    [[nodiscard]] static std::vector<redis_scored_value>& entries(redis_z_scan_result& result_value) noexcept {
-        return result_value.entries_;
+    template <typename entry_type>
+    [[nodiscard]] static std::vector<entry_type>& entries(redis_scan_page<entry_type>& page) noexcept {
+        return page.entries_;
     }
 
     [[nodiscard]] static redis_stream_entry stream_entry(std::string&& id) noexcept {
@@ -239,14 +218,6 @@ struct redis_types_access final {
 
     [[nodiscard]] static std::vector<redis_stream_entry>& entries(redis_stream_read_result& result_value) noexcept {
         return result_value.entries_;
-    }
-
-    [[nodiscard]] static redis_x_read_group_result xread_group_result() {
-        return redis_x_read_group_result{};
-    }
-
-    [[nodiscard]] static std::vector<redis_stream_read_result>& streams(redis_x_read_group_result& result_value) noexcept {
-        return result_value.streams_;
     }
 
     [[nodiscard]] static constexpr redis_ttl ttl(redis_ttl_state state_value, std::optional<std::chrono::milliseconds> remaining = std::nullopt) noexcept {
@@ -314,7 +285,7 @@ void parse_redis_pong(redis_value&& value);
 [[nodiscard]] redis_hash_scan_result parse_redis_hash_scan_result(redis_value&& value);
 [[nodiscard]] redis_z_scan_result parse_redis_z_scan_result(redis_value&& value);
 [[nodiscard]] std::optional<redis_key_value> parse_redis_blocking_pop_reply(redis_value&& value);
-[[nodiscard]] std::optional<redis_x_read_group_result> parse_redis_x_read_group_reply(redis_value&& value);
+[[nodiscard]] std::optional<std::vector<redis_stream_read_result>> parse_redis_x_read_group_reply(redis_value&& value);
 
 [[nodiscard]] double parse_redis_double(std::string_view value, std::string_view context_value);
 [[nodiscard]] std::optional<double> parse_redis_optional_double(redis_value&& value, std::string_view context_value);

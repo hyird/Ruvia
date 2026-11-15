@@ -40,6 +40,28 @@ class db_query_cache_state;
 #endif
 }  // namespace detail
 
+enum class db_data_type : unsigned char { inferred,
+    boolean,
+    small_int,
+    integer,
+    big_int,
+    real,
+    double_,
+    text,
+    char_,
+    varchar,
+    numeric,
+    json,
+    jsonb,
+    uuid,
+    date,
+    timestamp,
+    timestamp_tz,
+    interval,
+    inet,
+    cidr,
+    bytea,
+    array };
 enum class db_parameter_mode : std::uint8_t { bound,
     literal };
 enum class db_binary_operator : std::uint8_t {
@@ -105,8 +127,6 @@ enum class db_join_type : std::uint8_t { inner,
     right,
     full,
     cross };
-enum class db_order_direction : std::uint8_t { asc,
-    desc };
 enum class db_nulls_order : std::uint8_t { default_,
     first,
     last };
@@ -473,11 +493,8 @@ public:
     [[nodiscard]] static db_expr raw_sql(std::string_view expression) {
         return raw_sql(std::span<const std::string_view>(&expression, 1), {});
     }
-    [[nodiscard]] static db_expr raw_sql(std::span<const std::string_view> parts, std::span<const db_expr> args) {
-        return db_expr(detail::db_owned_expression::make_raw_sql(parts, args));
-    }
-    [[nodiscard]] static db_expr raw_sql(std::initializer_list<std::string_view> parts, std::initializer_list<db_expr> args) {
-        return raw_sql(std::span<const std::string_view>(parts.begin(), parts.size()), std::span<const db_expr>(args.begin(), args.size()));
+    [[nodiscard]] static db_expr raw_sql(argument_list<std::string_view> parts, argument_list<db_expr> args) {
+        return db_expr(detail::db_owned_expression::make_raw_sql(parts.span(), args.span()));
     }
     [[nodiscard]] static db_expr now() {
         return call("now");
@@ -488,11 +505,8 @@ public:
     [[nodiscard]] static db_expr interval(std::string_view spec) {
         return value(spec).cast(db_data_type::interval);
     }
-    [[nodiscard]] static inline db_expr call(std::string_view function, std::span<const db_expr> args = {});
+    [[nodiscard]] static inline db_expr call(std::string_view function, argument_list<db_expr> args = {});
     [[nodiscard]] static inline db_expr call(std::string_view function, std::span<const db_expr> args, std::span<const db_named_argument> named);
-    [[nodiscard]] static db_expr call(std::string_view function, std::initializer_list<db_expr> args) {
-        return call(function, std::span<const db_expr>(args.begin(), args.size()));
-    }
     [[nodiscard]] static db_expr binary(const db_expr& lhs, db_binary_operator op, const db_expr& rhs) {
         return db_expr(detail::db_owned_expression::make_binary(lhs.owned_, op, rhs.owned_));
     }
@@ -500,17 +514,11 @@ public:
         return db_expr(detail::db_owned_expression::make_unary(op, operand.owned_));
     }
     // A parenthesized expression list, the right operand of IN / NOT IN.
-    [[nodiscard]] static db_expr list(std::span<const db_expr> elements) {
-        return db_expr(detail::db_owned_expression::make_list(elements));
+    [[nodiscard]] static db_expr list(argument_list<db_expr> elements) {
+        return db_expr(detail::db_owned_expression::make_list(elements.span()));
     }
-    [[nodiscard]] static db_expr list(std::initializer_list<db_expr> elements) {
-        return list(std::span<const db_expr>(elements.begin(), elements.size()));
-    }
-    [[nodiscard]] static db_expr array(std::span<const db_expr> elements) {
-        return db_expr(detail::db_owned_expression::make_array(elements));
-    }
-    [[nodiscard]] static db_expr array(std::initializer_list<db_expr> elements) {
-        return array(std::span<const db_expr>(elements.begin(), elements.size()));
+    [[nodiscard]] static db_expr array(argument_list<db_expr> elements) {
+        return db_expr(detail::db_owned_expression::make_array(elements.span()));
     }
     [[nodiscard]] static db_expr any(const db_expr& array_value) {
         return db_expr(detail::db_owned_expression::make_any(array_value.owned_));
@@ -522,54 +530,34 @@ public:
     [[nodiscard]] static db_expr subquery(const db_query& query) {
         return db_expr(detail::db_owned_expression::make_subquery(query));
     }
-    [[nodiscard]] static db_expr coalesce(std::span<const db_expr> args) {
-        return db_expr(detail::db_owned_expression::make_coalesce(args));
-    }
-    [[nodiscard]] static db_expr coalesce(std::initializer_list<db_expr> args) {
-        return coalesce(std::span<const db_expr>(args.begin(), args.size()));
+    [[nodiscard]] static db_expr coalesce(argument_list<db_expr> args) {
+        return db_expr(detail::db_owned_expression::make_coalesce(args.span()));
     }
     [[nodiscard]] static db_expr null_if(const db_expr& lhs, const db_expr& rhs) {
         return db_expr(detail::db_owned_expression::make_null_if(lhs.owned_, rhs.owned_));
     }
-    [[nodiscard]] static db_expr greatest(std::span<const db_expr> args) {
-        return db_expr(detail::db_owned_expression::make_greatest(args));
+    [[nodiscard]] static db_expr greatest(argument_list<db_expr> args) {
+        return db_expr(detail::db_owned_expression::make_greatest(args.span()));
     }
-    [[nodiscard]] static db_expr greatest(std::initializer_list<db_expr> args) {
-        return greatest(std::span<const db_expr>(args.begin(), args.size()));
+    [[nodiscard]] static db_expr least(argument_list<db_expr> args) {
+        return db_expr(detail::db_owned_expression::make_least(args.span()));
     }
-    [[nodiscard]] static db_expr least(std::span<const db_expr> args) {
-        return db_expr(detail::db_owned_expression::make_least(args));
-    }
-    [[nodiscard]] static db_expr least(std::initializer_list<db_expr> args) {
-        return least(std::span<const db_expr>(args.begin(), args.size()));
-    }
-    [[nodiscard]] static inline db_expr case_when(std::span<const db_case_branch> branches, const db_expr& otherwise = {});
-    [[nodiscard]] static inline db_expr case_when(std::initializer_list<db_case_branch> branches, const db_expr& otherwise = {});
+    [[nodiscard]] static inline db_expr case_when(argument_list<db_case_branch> branches, const db_expr& otherwise = {});
 
-    [[nodiscard]] static db_expr jsonb_build_object(std::span<const db_expr> args) {
-        return call("jsonb_build_object", args);
+    [[nodiscard]] static db_expr jsonb_build_object(argument_list<db_expr> args) {
+        return call("jsonb_build_object", args.span());
     }
-    [[nodiscard]] static db_expr jsonb_build_object(std::initializer_list<db_expr> args) {
-        return call("jsonb_build_object", args);
+    [[nodiscard]] static db_expr jsonb_build_array(argument_list<db_expr> args) {
+        return call("jsonb_build_array", args.span());
     }
-    [[nodiscard]] static db_expr jsonb_build_array(std::span<const db_expr> args) {
-        return call("jsonb_build_array", args);
-    }
-    [[nodiscard]] static db_expr jsonb_build_array(std::initializer_list<db_expr> args) {
-        return call("jsonb_build_array", args);
-    }
-    [[nodiscard]] static db_expr jsonb_set(const db_expr& target, std::span<const std::string_view> path, const db_expr& new_value, bool create_if_missing = true) {
-        return db_expr(detail::db_owned_expression::make_jsonb_set(target.owned_, path, new_value.owned_, create_if_missing));
-    }
-    [[nodiscard]] static db_expr jsonb_set(const db_expr& target, std::initializer_list<std::string_view> path, const db_expr& new_value, bool create_if_missing = true) {
-        return jsonb_set(target, std::span<const std::string_view>(path.begin(), path.size()), new_value, create_if_missing);
+    [[nodiscard]] static db_expr jsonb_set(const db_expr& target, argument_list<std::string_view> path, const db_expr& new_value, bool create_if_missing = true) {
+        return db_expr(detail::db_owned_expression::make_jsonb_set(target.owned_, path.span(), new_value.owned_, create_if_missing));
     }
     [[nodiscard]] static db_expr jsonb_strip_nulls(const db_expr& target) {
         return call("jsonb_strip_nulls", std::span<const db_expr>(&target, 1));
     }
 
-    [[nodiscard]] static inline db_expr aggregate(std::string_view function, std::span<const db_expr> args, bool distinct = false, std::span<const db_order_term> order = {});
-    [[nodiscard]] static inline db_expr aggregate(std::string_view function, std::initializer_list<db_expr> args, bool distinct = false, std::initializer_list<db_order_term> order = {});
+    [[nodiscard]] static inline db_expr aggregate(std::string_view function, argument_list<db_expr> args, bool distinct = false, argument_list<db_order_term> order = {});
     [[nodiscard]] static db_expr count() {
         return db_expr(detail::db_owned_expression::make_count_star());
     }
@@ -580,8 +568,7 @@ public:
     [[nodiscard]] static inline db_expr avg(const db_expr& arg, bool distinct = false);
     [[nodiscard]] static inline db_expr bool_and(const db_expr& arg);
     [[nodiscard]] static inline db_expr bool_or(const db_expr& arg);
-    [[nodiscard]] static inline db_expr jsonb_agg(const db_expr& arg, std::span<const db_order_term> order = {});
-    [[nodiscard]] static inline db_expr jsonb_agg(const db_expr& arg, std::initializer_list<db_order_term> order);
+    [[nodiscard]] static inline db_expr jsonb_agg(const db_expr& arg, argument_list<db_order_term> order = {});
 
     [[nodiscard]] bool empty() const noexcept {
         return owned_.empty();
@@ -639,17 +626,11 @@ public:
     [[nodiscard]] db_expr json_get_text(std::int64_t index) const {
         return binary(db_binary_operator::json_get_text, value(index));
     }
-    [[nodiscard]] db_expr json_path(std::span<const std::string_view> path) const {
-        return apply_json_path(db_binary_operator::json_path, path);
+    [[nodiscard]] db_expr json_path(argument_list<std::string_view> path) const {
+        return apply_json_path(db_binary_operator::json_path, path.span());
     }
-    [[nodiscard]] db_expr json_path(std::initializer_list<std::string_view> path) const {
-        return json_path(std::span<const std::string_view>(path.begin(), path.size()));
-    }
-    [[nodiscard]] db_expr json_path_text(std::span<const std::string_view> path) const {
-        return apply_json_path(db_binary_operator::json_path_text, path);
-    }
-    [[nodiscard]] db_expr json_path_text(std::initializer_list<std::string_view> path) const {
-        return json_path_text(std::span<const std::string_view>(path.begin(), path.size()));
+    [[nodiscard]] db_expr json_path_text(argument_list<std::string_view> path) const {
+        return apply_json_path(db_binary_operator::json_path_text, path.span());
     }
     [[nodiscard]] db_expr json_delete(std::string_view key) const {
         return binary(db_binary_operator::json_delete, value(key));
@@ -657,11 +638,8 @@ public:
     [[nodiscard]] db_expr json_delete(std::int64_t index) const {
         return binary(db_binary_operator::json_delete, value(index));
     }
-    [[nodiscard]] db_expr json_delete_path(std::span<const std::string_view> path) const {
-        return apply_json_path(db_binary_operator::json_delete_path, path);
-    }
-    [[nodiscard]] db_expr json_delete_path(std::initializer_list<std::string_view> path) const {
-        return json_delete_path(std::span<const std::string_view>(path.begin(), path.size()));
+    [[nodiscard]] db_expr json_delete_path(argument_list<std::string_view> path) const {
+        return apply_json_path(db_binary_operator::json_delete_path, path.span());
     }
     [[nodiscard]] db_expr json_concat(const db_expr& rhs) const {
         return binary(db_binary_operator::json_concat, rhs);
@@ -673,8 +651,7 @@ public:
         return db_expr(detail::db_owned_expression::make_filter(owned_, predicate.owned_));
     }
     [[nodiscard]] inline db_expr over(const db_window_options& window) const;
-    [[nodiscard]] inline db_expr within_group(std::span<const db_order_term> order) const;
-    [[nodiscard]] inline db_expr within_group(std::initializer_list<db_order_term> order) const;
+    [[nodiscard]] inline db_expr within_group(argument_list<db_order_term> order) const;
     [[nodiscard]] inline db_order_term asc(db_nulls_order nulls = db_nulls_order::default_) const;
     [[nodiscard]] inline db_order_term desc(db_nulls_order nulls = db_nulls_order::default_) const;
 
@@ -879,7 +856,7 @@ template <detail::db_parameter v_type>
 
 struct db_order_term final {
     db_expr expression_{};
-    db_order_direction direction_{db_order_direction::asc};
+    order_direction direction_{order_direction::asc};
     db_nulls_order nulls_{db_nulls_order::default_};
 };
 // span 及元素中的文本均为借用；over 调用入口同步复制或导入。
@@ -980,24 +957,18 @@ struct db_named_argument final {
     db_expr value_{};
 };
 
-inline db_expr db_expr::call(std::string_view function, std::span<const db_expr> args) {
-    return call(function, args, {});
+inline db_expr db_expr::call(std::string_view function, argument_list<db_expr> args) {
+    return call(function, args.span(), {});
 }
 inline db_expr db_expr::call(std::string_view function, std::span<const db_expr> args, std::span<const db_named_argument> named) {
     return db_expr(detail::db_owned_expression::make_call(function, args, named));
 }
 
-inline db_expr db_expr::case_when(std::span<const db_case_branch> branches, const db_expr& otherwise) {
-    return db_expr(detail::db_owned_expression::make_case_when(branches, otherwise.owned_));
+inline db_expr db_expr::case_when(argument_list<db_case_branch> branches, const db_expr& otherwise) {
+    return db_expr(detail::db_owned_expression::make_case_when(branches.span(), otherwise.owned_));
 }
-inline db_expr db_expr::case_when(std::initializer_list<db_case_branch> branches, const db_expr& otherwise) {
-    return case_when(std::span<const db_case_branch>(branches.begin(), branches.size()), otherwise);
-}
-inline db_expr db_expr::aggregate(std::string_view function, std::span<const db_expr> args, bool distinct, std::span<const db_order_term> order) {
-    return db_expr(detail::db_owned_expression::make_aggregate(function, args, distinct, order));
-}
-inline db_expr db_expr::aggregate(std::string_view function, std::initializer_list<db_expr> args, bool distinct, std::initializer_list<db_order_term> order) {
-    return aggregate(function, std::span<const db_expr>(args.begin(), args.size()), distinct, std::span<const db_order_term>(order.begin(), order.size()));
+inline db_expr db_expr::aggregate(std::string_view function, argument_list<db_expr> args, bool distinct, argument_list<db_order_term> order) {
+    return db_expr(detail::db_owned_expression::make_aggregate(function, args.span(), distinct, order.span()));
 }
 inline db_expr db_expr::count(const db_expr& arg, bool distinct) {
     return aggregate("count", std::span<const db_expr>(&arg, 1), distinct);
@@ -1020,11 +991,8 @@ inline db_expr db_expr::bool_and(const db_expr& arg) {
 inline db_expr db_expr::bool_or(const db_expr& arg) {
     return aggregate("bool_or", std::span<const db_expr>(&arg, 1));
 }
-inline db_expr db_expr::jsonb_agg(const db_expr& arg, std::span<const db_order_term> order) {
-    return aggregate("jsonb_agg", std::span<const db_expr>(&arg, 1), false, order);
-}
-inline db_expr db_expr::jsonb_agg(const db_expr& arg, std::initializer_list<db_order_term> order) {
-    return jsonb_agg(arg, std::span<const db_order_term>(order.begin(), order.size()));
+inline db_expr db_expr::jsonb_agg(const db_expr& arg, argument_list<db_order_term> order) {
+    return aggregate("jsonb_agg", std::span<const db_expr>(&arg, 1), false, order.span());
 }
 inline db_selection db_expr::as(borrowed_text alias_name) const {
     return db_selection(alias_name, *this);
@@ -1032,17 +1000,14 @@ inline db_selection db_expr::as(borrowed_text alias_name) const {
 inline db_expr db_expr::over(const db_window_options& window) const {
     return db_expr(detail::db_owned_expression::make_over(owned_, window));
 }
-inline db_expr db_expr::within_group(std::span<const db_order_term> order) const {
-    return db_expr(detail::db_owned_expression::make_within_group(owned_, order));
-}
-inline db_expr db_expr::within_group(std::initializer_list<db_order_term> order) const {
-    return within_group(std::span<const db_order_term>(order.begin(), order.size()));
+inline db_expr db_expr::within_group(argument_list<db_order_term> order) const {
+    return db_expr(detail::db_owned_expression::make_within_group(owned_, order.span()));
 }
 inline db_order_term db_expr::asc(db_nulls_order nulls) const {
-    return db_order_term{*this, db_order_direction::asc, nulls};
+    return db_order_term{*this, order_direction::asc, nulls};
 }
 inline db_order_term db_expr::desc(db_nulls_order nulls) const {
-    return db_order_term{*this, db_order_direction::desc, nulls};
+    return db_order_term{*this, order_direction::desc, nulls};
 }
 
 class db_statement final {
@@ -1065,8 +1030,8 @@ public:
 
 private:
     friend class db_query;
-    friend class db_executor;
-    friend class db_transaction;
+    template <typename>
+    friend class db_command_set;
     friend struct detail::db_query_plan;
     template <typename, typename>
     friend class db_query_builder;
@@ -1132,10 +1097,7 @@ public:
     db_query& from(db_query&& query, std::string_view alias, const db_source_options& options = {});
     db_query& from_function(const db_expr& function, std::string_view alias, const db_source_options& options = {});
     db_query& clear_source();
-    db_query& join(db_join_type type, std::string_view table, const db_expr& on = {}, std::string_view alias = {}, std::span<const std::string_view> using_columns = {});
-    db_query& join(db_join_type type, std::string_view table_value, const db_expr& on, std::string_view alias, std::initializer_list<std::string_view> using_columns) {
-        return join(type, table_value, on, alias, std::span<const std::string_view>(using_columns.begin(), using_columns.size()));
-    }
+    db_query& join(db_join_type type, std::string_view table, const db_expr& on = {}, std::string_view alias = {}, argument_list<std::string_view> using_columns = {});
     db_query& join(db_join_type type, const db_query& query, const db_expr& on, std::string_view alias, const db_source_options& options = {});
     db_query& join(db_join_type type, db_query&& query, const db_expr& on, std::string_view alias, const db_source_options& options = {});
     db_query& join_function(db_join_type type, const db_expr& function, const db_expr& on, std::string_view alias, const db_source_options& options = {});
@@ -1143,17 +1105,14 @@ public:
     db_query& and_where(const db_expr& predicate);
     db_query& or_where(const db_expr& predicate);
     db_query& clear_where();
-    db_query& group_by(std::span<const db_expr> expressions);
-    db_query& group_by(std::initializer_list<db_expr> expressions) {
-        return group_by(std::span<const db_expr>(expressions.begin(), expressions.size()));
-    }
+    db_query& group_by(argument_list<db_expr> expressions);
     db_query& add_group_by(const db_expr& expression);
     db_query& having(const db_expr& predicate);
     db_query& and_having(const db_expr& predicate);
     db_query& or_having(const db_expr& predicate);
     db_query& clear_having();
-    db_query& order_by(const db_expr& expression, db_order_direction direction = db_order_direction::asc, db_nulls_order nulls = db_nulls_order::default_);
-    db_query& add_order_by(const db_expr& expression, db_order_direction direction = db_order_direction::asc, db_nulls_order nulls = db_nulls_order::default_);
+    db_query& order_by(const db_expr& expression, order_direction direction = order_direction::asc, db_nulls_order nulls = db_nulls_order::default_);
+    db_query& add_order_by(const db_expr& expression, order_direction direction = order_direction::asc, db_nulls_order nulls = db_nulls_order::default_);
     db_query& clear_order();
     db_query& limit(std::optional<query_row_count> count);
     template <std::integral integer_type>
@@ -1174,27 +1133,15 @@ public:
         return set_offset_value(static_cast<std::uint64_t>(count));
     }
     db_query& distinct(bool enabled = true);
-    db_query& distinct_on(std::span<const db_expr> expressions);
-    db_query& distinct_on(std::initializer_list<db_expr> expressions) {
-        return distinct_on(std::span<const db_expr>(expressions.begin(), expressions.size()));
-    }
-    db_query& returning(std::span<const db_selection> expressions);
-    db_query& returning(std::initializer_list<db_selection> expressions) {
-        return returning(std::span<const db_selection>(expressions.begin(), expressions.size()));
-    }
+    db_query& distinct_on(argument_list<db_expr> expressions);
+    db_query& returning(argument_list<db_selection> expressions);
     // Existing positional rows cannot be reinterpreted with a different column
     // list. Use insert_rows() to append named rows and grow the column union.
     // insert_into(), update() and delete_from() switch the statement kind only
     // while the query holds no clause beyond WHERE and WITH: a retained FROM
     // would otherwise widen the target (use update_from / delete_using).
-    db_query& insert_into(std::string_view table, std::span<const std::string_view> columns = {}, std::string_view alias = {});
-    db_query& insert_into(std::string_view table_value, std::initializer_list<std::string_view> columns, std::string_view alias = {}) {
-        return insert_into(table_value, std::span<const std::string_view>(columns.begin(), columns.size()), alias);
-    }
-    db_query& values(std::span<const db_expr> row);
-    db_query& values(std::initializer_list<db_expr> row) {
-        return values(std::span<const db_expr>(row.begin(), row.size()));
-    }
+    db_query& insert_into(std::string_view table, argument_list<std::string_view> columns = {}, std::string_view alias = {});
+    db_query& values(argument_list<db_expr> row);
     // Appends a row-major batch to an INSERT, matching fields by column name.
     // Missing fields in old/new rows become DEFAULT. values.size() must equal
     // columns.size() * row_count. One explicit default-only row is supported;
@@ -1361,17 +1308,11 @@ public:
     [[nodiscard]] db_predicate is_not_distinct_from(const db_tuple& rhs) const {
         return compare(db_binary_operator::is_not_distinct_from, rhs);
     }
-    [[nodiscard]] db_predicate in(std::span<const db_tuple> rows) const {
-        return compare_list(db_binary_operator::in, rows);
+    [[nodiscard]] db_predicate in(argument_list<db_tuple> rows) const {
+        return compare_list(db_binary_operator::in, rows.span());
     }
-    [[nodiscard]] db_predicate in(std::initializer_list<db_tuple> rows) const {
-        return in(std::span<const db_tuple>(rows.begin(), rows.size()));
-    }
-    [[nodiscard]] db_predicate not_in(std::span<const db_tuple> rows) const {
-        return compare_list(db_binary_operator::not_in, rows);
-    }
-    [[nodiscard]] db_predicate not_in(std::initializer_list<db_tuple> rows) const {
-        return not_in(std::span<const db_tuple>(rows.begin(), rows.size()));
+    [[nodiscard]] db_predicate not_in(argument_list<db_tuple> rows) const {
+        return compare_list(db_binary_operator::not_in, rows.span());
     }
 
 private:

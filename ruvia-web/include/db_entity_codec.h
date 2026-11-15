@@ -277,7 +277,7 @@ public:
                 if (lookup.status_ == unique_lookup_status::repeated) {
                     throw conversion_error(conversion_error::code_type::invalid_format, "database result has ambiguous mapped column names");
                 }
-                indices_[i] = lookup.status_ == unique_lookup_status::found ? static_cast<std::size_t>(lookup.field_ - row.begin()) : missing_column;
+                indices_[i] = lookup.status_ == unique_lookup_status::found ? static_cast<std::size_t>(lookup.value_ - row.begin()) : missing_column;
             });
             schema_ = names;
         }

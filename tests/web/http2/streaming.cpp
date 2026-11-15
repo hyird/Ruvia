@@ -180,7 +180,7 @@ class sleeping_stream_routes final {
     ruvia::task<ruvia::http_response> bounded_delayed_stream(ruvia::context& context_value) {
         (void)co_await ruvia::sleep_for(context_value.worker(), std::chrono::milliseconds(40));
         if (context_value.req().query("read").has_value()) {
-            static_cast<void>(co_await context_value.req().body_reader().read());
+            static_cast<void>(co_await context_value.request_body().read());
         }
         co_return context_value.text("accepted");
     }
@@ -209,7 +209,7 @@ class sleeping_stream_routes final {
 
     ruvia::task<ruvia::http_response> count_upload(ruvia::context& context_value) {
         std::size_t bytes_value = 0;
-        auto& reader_value = context_value.req().body_reader();
+        auto& reader_value = context_value.request_body();
         while (auto chunk = co_await reader_value.read()) {
             bytes_value += chunk->size();
         }
@@ -692,7 +692,6 @@ TEST(Ruvia, http2_sse_response_is_not_killed_by_request_body_completion_timeout)
     auto& io = ruvia::test::new_test_io_context();
     ruvia::test::http_server_fixture server(io,
         ruvia::server_config{
-            .worker_count_ = 1,
             .idle_timeout_ = std::chrono::milliseconds(2000),
             .connection_scan_interval_ = std::chrono::milliseconds(10),
             .request_header_timeout_ = std::chrono::milliseconds(500),
@@ -935,7 +934,7 @@ TEST(Ruvia, http2_stream_custom_content_encoding_and_bodyless_status_negotiation
 
 namespace {
 ruvia::task<std::string> collect_text(ruvia::http_client_response& response) {
-    const auto bytes_value = co_await response.stream().read_all();
+    const auto bytes_value = co_await response.bytes();
     const auto view = bytes_value.bytes();
     co_return std::string(reinterpret_cast<const char*>(view.data()), view.size());
 }
@@ -1071,7 +1070,7 @@ TEST(Ruvia, http2_push_routes_and_client_preserve_owners_flow_control_cold_reads
                 }
                 auto response = co_await pushed->response();
                 std::size_t bytes_value = 0;
-                while (auto chunk = co_await response.stream().text()) {
+                while (auto chunk = co_await response.stream().read_text()) {
                     EXPECT_TRUE(chunk->find_first_not_of('p') == std::string_view::npos);
                     bytes_value += chunk->size();
                 }
@@ -1105,7 +1104,7 @@ TEST(Ruvia, http2_push_routes_and_client_preserve_owners_flow_control_cold_reads
         EXPECT_TRUE(retained_response->header("x-asset") == "metadata");
         retained_response.reset();
         retained.reset();
-        attachment.stop();
+        attachment.request_stop();
     };
     auto root = attachment.loop().start(run());
     attachment.run();
@@ -1143,7 +1142,7 @@ TEST(Ruvia, http2_push_queue_overflow_and_disabled_permission_keep_parent_respon
             if (failure) {
                 std::rethrow_exception(failure);
             }
-            attachment.stop();
+            attachment.request_stop();
         };
         auto root = attachment.loop().start(run());
         attachment.run();
@@ -1194,7 +1193,7 @@ TEST(Ruvia, http2_push_response_wait_honours_its_operation) {
         if (failure) {
             std::rethrow_exception(failure);
         }
-        attachment.stop();
+        attachment.request_stop();
     };
     auto root = attachment.loop().start(run());
     attachment.run();

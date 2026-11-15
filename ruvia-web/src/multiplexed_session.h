@@ -477,7 +477,7 @@ public:
         state_.ensure_body_allowed();
         // Connection termination wakes the sleep through the combined token and
         // then fails it; the caller's own stop still reports stop_requested.
-        const stop_group stop_owner(stop_token_value, signal_.termination().token());
+        const stop_group stop_owner{stop_token_value, signal_.termination().token()};
         const auto result = co_await sleep_for(signal_.worker(), duration, stop_owner.token());
         if (signal_.terminated()) {
             throw inbound_transport_error(signal_.terminal_error(), derived_type::sleep_terminated_error_message);

@@ -2007,7 +2007,7 @@ task<http1_session_request_completion> dispatch_http_response_stream_route(http1
     // write, stops the request: context::stop_token() combines it with the
     // worker's stop, so every framework wait of the handler observes it.
     stop_source peer_stop;
-    const stop_group request_stop(d.base_route_services_.get_stop_token(), peer_stop.token());
+    const stop_group request_stop{d.base_route_services_.get_stop_token(), peer_stop.token()};
     const auto request_stop_token = request_stop.token();
     d.base_route_services_.bind_stop_token(request_stop_token);
     response_sink_type response_sink(d.stream_, *d.options_.codecs_, response_head, d.scanner_entry_, d.base_route_services_.worker(), d.parsed_.request(), d.cors_, stream_plan, http1_plan_response_stream(d.parsed_, close_policy, http1_request_body_consumption::complete), body_state.body(), d.response_coding_, d.options_.compression_ ? &*d.options_.compression_ : nullptr, peer_stop, d.request_pipelined_);
@@ -2429,7 +2429,7 @@ template <typename stream_type>
         std::rethrow_exception(setup_failure);
     }
     stop_source peer_stop;
-    const stop_group request_stop(d.base_route_services_.get_stop_token(), peer_stop.token());
+    const stop_group request_stop{d.base_route_services_.get_stop_token(), peer_stop.token()};
     const auto request_stop_token = request_stop.token();
     d.base_route_services_.bind_stop_token(request_stop_token);
     http_response_head_buffer refusal_head;

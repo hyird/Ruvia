@@ -556,18 +556,18 @@ void apply_file_response_state(const http_response& head, const file_response_so
 
 // Not a coroutine: the options are owned before the task is returned, so a
 // stored task never reads the caller's path, content type or head.
-task<http_response> context::file(file_response_options options, response_options head) {
+task<http_response> detail::context_access::file(context& context_value, file_response_options options, response_options head) {
     http_native_path_string_type native_path;
     if (!assign_native_file_path(options.path_, native_path)) {
         throw file_not_found_error();
     }
     auto head_response = detail::make_response(head);
-    return serve_file(*this, std::move(native_path), std::string(options.content_type_.view()), std::move(head_response));
+    return serve_file(context_value, std::move(native_path), std::string(options.content_type_.view()), std::move(head_response));
 }
 
 // Not a coroutine: the path is resolved and the content type and head owned
 // before the task is returned; only `root` stays borrowed.
-task<http_response> context::static_file(const static_root& root, static_file_response_options options, response_options head) {
+task<http_response> detail::context_access::static_file(context& context_value, const static_root& root, static_file_response_options options, response_options head) {
     // relative_path_ is a decoded file path -- a wildcard capture from
     // req().param("*") is passed as is -- so it is never percent-decoded here:
     // a second decode would turn "%252E%252E" into a ".." no route or path
@@ -580,8 +580,8 @@ task<http_response> context::static_file(const static_root& root, static_file_re
     if (!entry_value.has_value()) {
         throw file_not_found_error();
     }
-    const auto mode = runtime_services().precompressed_static_files() ? detail::static_file_selection_mode::precompressed : detail::static_file_selection_mode::identity_only;
-    return detail::context_access::static_file_resolved(*this, root, relative, options.content_type_.view(), *entry_value, mode, detail::make_response(head));
+    const auto mode = context_value.runtime_services().precompressed_static_files() ? detail::static_file_selection_mode::precompressed : detail::static_file_selection_mode::identity_only;
+    return static_file_resolved(context_value, root, relative, options.content_type_.view(), *entry_value, mode, detail::make_response(head));
 }
 
 task<http_response> detail::context_access::static_file_resolved(context& context_value, const static_root& root, std::string_view relative, std::string_view content_type_value, detail::static_root_entry_view base_entry, detail::static_file_selection_mode mode, http_response head) {

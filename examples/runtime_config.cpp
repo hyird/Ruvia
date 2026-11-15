@@ -94,9 +94,11 @@ int main() {
             policy.max_age_ = std::chrono::seconds(600);
             cors = std::move(policy);
         }
-        app.server({
+        app.workers({
             .worker_count_ = env_value.get<std::uint32_t>("RUVIA_WORKERS").value_or(2),
             .process_signal_handlers_ = ruvia::process_signal_handler_policy::install,
+        });
+        app.server({
             .idle_timeout_ = std::chrono::seconds(75),
             .connection_scan_interval_ = std::chrono::seconds(1),
             .request_header_timeout_ = std::chrono::seconds(60),

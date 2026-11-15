@@ -381,8 +381,6 @@ public:
     explicit stop_group(std::span<const stop_token> parents);
     stop_group(std::initializer_list<stop_token> parents) :
         stop_group(std::span<const stop_token>(parents.begin(), parents.size())) {}
-    stop_group(const stop_token& first, const stop_token& second) :
-        stop_group(std::span<const stop_token>(std::array<stop_token, 2>{first, second})) {}
     ~stop_group() = default;
 
     stop_group(const stop_group&) = delete;

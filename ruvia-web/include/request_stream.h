@@ -74,7 +74,7 @@ using request_stream_websocket_accept = callback_ref<task<websocket_accept_resul
 // handler takes part automatically. A callback may explicitly await
 // router::dispatch() to apply its own frozen routes and middleware.
 //
-// The callback selects exactly one response: respond(), response().commit(),
+// The callback selects exactly one response: respond(), stream().commit(),
 // accept_tunnel(), accept_websocket(), or terminal reset()/abort_connection().
 // respond() transfers a complete response to the server, which sends it after
 // the callback returns; it does not commit output to the wire. Before wire commitment, callback failures
@@ -82,34 +82,19 @@ using request_stream_websocket_accept = callback_ref<task<websocket_accept_resul
 // commitment, a callback exception aborts the stream (HTTP/1: the connection)
 // and reaches connection_failure_. A callback returning without a response
 // answers 500; a committed response stream not explicitly ended is ended.
-// Worker resources come from worker_services_access, as on context, bound to
-// this request's cancellation, including client abandonment.
-class request_stream final : public worker_services_access<request_stream> {
+// Worker resources come from worker_services_access and the connection,
+// streaming and response-builder members from request_exchange, as on
+// context, bound to this request's cancellation, including client abandonment.
+class request_stream final : public worker_services_access<request_stream>, public request_exchange<request_stream> {
 public:
     request_stream(const request_stream&) = delete;
     request_stream& operator=(const request_stream&) = delete;
     request_stream(request_stream&&) = delete;
     request_stream& operator=(request_stream&&) = delete;
 
-    // Method, target and header fields; the body arrives through body().
+    // Method, target and header fields; the body arrives through request_body().
     [[nodiscard]] const http_request& request() const& noexcept RUVIA_LIFETIMEBOUND;
     const http_request& request() const&& = delete;
-
-    // conn_info::connection_id() names the connection, as on routes listeners.
-    [[nodiscard]] const conn_info& conn() const& noexcept RUVIA_LIFETIMEBOUND;
-    const conn_info& conn() const&& = delete;
-
-    // Shares the state returned by the connection-open callback.
-    [[nodiscard]] std::shared_ptr<void> connection_state() const noexcept {
-        return context_.connection_state();
-    }
-    // Immediately aborts the entire connection, not only this HTTP/2 or HTTP/3
-    // stream. Other in-flight requests on that connection are cancelled too.
-    // This is a terminal choice; no response is required afterwards. A later
-    // callback exception is still reported rather than treated as success.
-    void abort_connection() noexcept {
-        context_.abort_connection();
-    }
 
     // 终结当前请求；HTTP/2、HTTP/3 只重置本流，HTTP/1 关闭连接。
     // 默认分别使用 CANCEL / H3_REQUEST_CANCELLED。正常返回不再自动生成响应；
@@ -123,58 +108,15 @@ public:
     // The streamed request content. Its first read sends a pending
     // 100 Continue. Throws std::logic_error for a tunnel request, whose bytes
     // after the head belong to the tunnel.
-    [[nodiscard]] body_reader& body() & RUVIA_LIFETIMEBOUND;
-    body_reader& body() && = delete;
-
-    // Available after body() reaches EOF; never replaces the initial fields.
-    [[nodiscard]] std::span<const http_header> trailers() const noexcept;
-    [[nodiscard]] std::optional<std::string_view> trailer(std::string_view name) const noexcept;
-
-    // Sends a bodyless 1xx before the final head; copies fields before return.
-    // `operation` follows context::inform().
-    [[nodiscard]] task<void> inform(const http_interim_response_head& response, operation_options operation = {}) &;
-    task<void> inform(const http_interim_response_head&, operation_options = {}) && = delete;
-    [[nodiscard]] bool early_data() const noexcept;
-    [[nodiscard]] bool push(http_push_request_view request);
-    void advertise_origins(std::span<const std::string_view> origins);
-    void advertise_alternative_service(std::string_view value);
-
-    [[nodiscard]] const worker_ref& worker() const& noexcept RUVIA_LIFETIMEBOUND {
-        return context_.worker();
-    }
-    const worker_ref& worker() const&& = delete;
-
-    // The cross-replacement policy of context::policy(): applied to the
-    // response, stream head or the tunnel/WebSocket acceptance head this
-    // request sends.
-    [[nodiscard]] context_response_editor policy() & noexcept;
-    context_response_editor policy() && = delete;
-
-    // Reuses Context's file factory: conditional requests, HEAD and single or
-    // multipart ranges retain their settled status and opened file handle.
-    // Options are owned before return; static_file() borrows root until its
-    // task completes. Blocking-pool, cancellation, timeout and identity checks
-    // are the same as context::file()/static_file(), and so is `head`.
-    [[nodiscard]] task<http_response> file(file_response_options options, response_options head = {});
-    [[nodiscard]] task<http_response> static_file(const static_root& root, static_file_response_options options, response_options head = {});
-    // A temporary root would be destroyed before the returned task reads it.
-    task<http_response> static_file(const static_root&&, static_file_response_options, response_options = {}) = delete;
+    [[nodiscard]] body_reader& request_body() & RUVIA_LIFETIMEBOUND;
+    body_reader& request_body() && = delete;
 
     // Transfers all response metadata and body ownership without sending yet.
     // The existing final-response driver sends buffers, files and multipart
     // ranges after the callback returns. Throws logic_error once any response
     // is selected or output committed. Failure before wire commitment still
     // replaces it with an error response, releasing its file/body resources.
-    void respond(http_response response);
-
-    // The streamed response: `head` is applied to the head the writer's
-    // commit sends, as context::stream(head) does; then write the content and
-    // end it, with trailers where the protocol carries them.
-    // A refused tunnel uses the same immediate, backpressured writer as any
-    // response; HTTP/1.1 closes the connection after its framed response.
-    // A successful CONNECT or 101 must instead use an accept operation.
-    [[nodiscard]] response_stream_writer& response(response_options head = {}) & RUVIA_LIFETIMEBOUND;
-    response_stream_writer& response(response_options = {}) && = delete;
+    void respond(http_response&& response);
 
     // Whether accept_tunnel() can establish a tunnel: a CONNECT or extended
     // CONNECT (RFC 9110 §9.3.6, RFC 8441, RFC 9220), or an HTTP/1.1 request
@@ -205,14 +147,10 @@ public:
     [[nodiscard]] task<websocket_accept_result> accept_websocket(websocket_route_config config = {}) &;
     task<websocket_accept_result> accept_websocket(websocket_route_config = {}) && = delete;
 
-    // Requested when the application stops and, for a request that is not a
-    // tunnel request, when the client abandons it (HTTP/1: the connection
-    // ends after the request content; HTTP/2 and HTTP/3: the stream is reset).
-    [[nodiscard]] ::ruvia::stop_token stop_token() const noexcept;
-
 private:
     friend struct detail::request_stream_access;
     friend class worker_services_access<request_stream>;
+    friend class request_exchange<request_stream>;
     // http_client_response::pipe_to() binds its forward to operation_scope_.
     friend class http_client_response;
     friend class router;
@@ -228,6 +166,10 @@ private:
 
     [[nodiscard]] detail::worker_services services() const noexcept {
         return context_.services();
+    }
+
+    [[nodiscard]] context& exchange_context() const noexcept {
+        return context_;
     }
 
     [[nodiscard]] task<http_tunnel*> accept_tunnel_impl(http_status_code status, http_tunnel_route_config config);

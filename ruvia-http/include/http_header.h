@@ -16,10 +16,16 @@
 #include <string_view>
 #include <type_traits>
 #include <utility>
+#include <variant>
+#include <vector>
 
 #include "borrowed_text.h"
 
 namespace ruvia {
+
+class http_response;
+class http_response_headers;
+
 [[nodiscard]] constexpr unsigned char http_ascii_to_lower(unsigned char c) noexcept {
     return c >= 'A' && c <= 'Z' ? static_cast<unsigned char>(c + ('a' - 'A')) : c;
 }
@@ -605,15 +611,16 @@ enum class unique_lookup_status : unsigned char { absent,
     found,
     repeated };
 
-// Result of looking up a field that must not resolve to one of several
-// occurrences. value_ is meaningful only when found and borrows the searched
-// storage.
-struct http_unique_field_lookup final {
+// Result of looking up a name that must not resolve to one of several
+// occurrences. value_ is meaningful only when found; a view or pointer value
+// borrows the searched storage.
+template <typename value_type>
+struct unique_lookup final {
     unique_lookup_status status_{unique_lookup_status::absent};
-    std::string_view value_{};
+    value_type value_{};
 
     // absent -> found(value) -> repeated (value cleared); repeated is terminal.
-    constexpr void add_occurrence(std::string_view value) noexcept {
+    constexpr void add_occurrence(value_type value) noexcept {
         if (status_ == unique_lookup_status::absent) {
             status_ = unique_lookup_status::found;
             value_ = value;
@@ -624,68 +631,52 @@ struct http_unique_field_lookup final {
     }
 };
 
-// Case-insensitive field-name match over received fields; stops at the second
-// occurrence. The found value borrows the fields' storage (`fields` may be a
-// temporary view such as a span).
-template <http_header_field_range range_type>
-[[nodiscard]] constexpr http_unique_field_lookup find_unique_http_header(const range_type& fields, std::string_view name) noexcept {
-    http_unique_field_lookup result;
-    for (const auto& field : fields) {
-        if (http_ascii_equals_ignore_case(field.name(), name)) {
-            result.add_occurrence(field.value());
-            if (result.status_ == unique_lookup_status::repeated) {
-                break;
-            }
-        }
-    }
-    return result;
-}
+using http_unique_field_lookup = unique_lookup<std::string_view>;
 
-namespace detail {
-// Singular convenience accessors over received fields select the first
-// matching field line (see doc/core-and-http.md) without copying its value.
-template <http_header_field_range range_type>
-[[nodiscard]] constexpr std::optional<std::string_view> find_first_http_header(const range_type& fields, std::string_view name) noexcept {
-    for (const auto& field : fields) {
-        if (http_ascii_equals_ignore_case(field.name(), name)) {
-            return std::string_view(field.value());
-        }
-    }
-    return std::nullopt;
-}
-}  // namespace detail
-
-namespace detail {
 class http_header_range_view;
-}  // namespace detail
 
-template <typename source_type>
-concept http_header_field_source = std::same_as<std::remove_cvref_t<source_type>, detail::http_header_range_view> || http_header_field_range<source_type> || requires(const std::remove_cvref_t<source_type>& source) {
-    { source.headers() } -> http_header_field_range;
+// A message exposing its fields through headers() (http_request,
+// http_response, http_client_response_head).
+template <typename message_type>
+concept http_header_field_message = !http_header_field_range<message_type> && requires(const std::remove_cvref_t<message_type>& message) {
+    { message.headers() } -> http_header_field_range;
 };
-namespace detail {
 
+// Anything a function can read header fields from: a contiguous range of
+// fields (std::vector<http_header>, std::span<const http_header_view>,
+// http_response_headers, ...), a message exposing one through headers(), or
+// an http_header_range_view already bound to either.
+template <typename source_type>
+concept http_header_field_source = std::same_as<std::remove_cvref_t<source_type>, http_header_range_view> || http_header_field_range<source_type> || http_header_field_message<source_type>;
+
+// The single read-only header parameter: a type-erased view over a field
+// range or message, so a function reading fields is declared once, as
+// `const http_header_range_view&`, and accepts every header container. It
+// borrows the source for the call that receives it and, like argument_list,
+// also binds a temporary container: that storage lasts for the full call
+// expression. It can be neither copied nor moved, so it cannot be returned by
+// a reader, captured by value or stored in a member.
 class http_header_range_view final {
 public:
     using accessor_type = http_header_view (*)(const void*, std::size_t) noexcept;
 
     constexpr http_header_range_view() noexcept = default;
 
-    template <http_header_field_source source_type>
-        requires(!std::same_as<std::remove_cvref_t<source_type>, http_header_range_view>)
-    constexpr http_header_range_view(const source_type& source) noexcept {
-        if constexpr (http_header_field_range<source_type>) {
-            using value_type = std::remove_cv_t<std::ranges::range_value_t<const source_type>>;
-            data_ = std::ranges::data(source);
-            size_ = std::ranges::size(source);
-            at_ = +[](const void* base, std::size_t index) noexcept -> http_header_view {
-                const auto& field = static_cast<const value_type*>(base)[index];
-                return {field.name(), field.value()};
-            };
-        } else {
-            *this = http_header_range_view(source.headers());
-        }
-    }
+    template <http_header_field_range range_type>
+    constexpr http_header_range_view(const range_type& fields) noexcept :
+        data_(std::ranges::data(fields)),
+        size_(std::ranges::size(fields)),
+        at_(+[](const void* base, std::size_t index) noexcept -> http_header_view {
+            const auto& field = static_cast<const std::remove_cv_t<std::ranges::range_value_t<const range_type>>*>(base)[index];
+            return {field.name(), field.value()};
+        }) {}
+
+    template <http_header_field_message message_type>
+    constexpr http_header_range_view(const message_type& message) noexcept :
+        http_header_range_view(message.headers()) {}
+
+    http_header_range_view(const http_header_range_view&) = delete;
+    http_header_range_view& operator=(const http_header_range_view&) = delete;
 
     [[nodiscard]] constexpr std::size_t size() const noexcept {
         return size_;
@@ -747,5 +738,95 @@ private:
     std::size_t size_{0};
     accessor_type at_{nullptr};
 };
-}  // namespace detail
+
+// Case-insensitive field-name match over any header field source; stops at
+// the second occurrence. The found value borrows the source's field storage
+// (`fields` itself may be a temporary view such as a span).
+template <http_header_field_source source_type>
+[[nodiscard]] constexpr http_unique_field_lookup find_unique_http_header(const source_type& fields, std::string_view name) noexcept {
+    if constexpr (http_header_field_message<source_type>) {
+        return find_unique_http_header(fields.headers(), name);
+    } else {
+        http_unique_field_lookup result;
+        for (const auto& field : fields) {
+            if (http_ascii_equals_ignore_case(field.name(), name)) {
+                result.add_occurrence(field.value());
+                if (result.status_ == unique_lookup_status::repeated) {
+                    break;
+                }
+            }
+        }
+        return result;
+    }
+}
+
+// Singular convenience accessors over received fields select the first
+// matching field line (see doc/core-and-http.md) without copying its value.
+template <http_header_field_source source_type>
+[[nodiscard]] constexpr std::optional<std::string_view> find_first_http_header(const source_type& fields, std::string_view name) noexcept {
+    if constexpr (http_header_field_message<source_type>) {
+        return find_first_http_header(fields.headers(), name);
+    } else {
+        for (const auto& field : fields) {
+            if (http_ascii_equals_ignore_case(field.name(), name)) {
+                return std::string_view(field.value());
+            }
+        }
+        return std::nullopt;
+    }
+}
+
+// The single mutable header parameter: a header container edited in place,
+// so a function rewriting fields is declared once and accepts an lvalue
+// std::vector<http_header>, http_response_headers or http_response. A
+// response target keeps its own field rules: names and values are validated
+// and a rejected one throws std::invalid_argument. The container is borrowed
+// for the duration of the call that receives this parameter.
+//
+// Each operation below either applies completely or leaves the container
+// unchanged, and the removals cannot fail. An edit that writes more than once
+// goes through transact().
+class editable_http_headers final {
+public:
+    editable_http_headers(std::vector<http_header>& fields) noexcept :
+        target_(&fields) {}
+    editable_http_headers(http_response_headers& block) noexcept :
+        target_(&block) {}
+    editable_http_headers(http_response& response) noexcept :
+        target_(&response) {}
+
+    // Current field lines. Any mutation below invalidates the view.
+    [[nodiscard]] http_header_range_view fields() const noexcept;
+    // Erases every line named `name` (case-insensitive); a name no field can
+    // carry erases nothing. `name` must not borrow this container.
+    void remove(std::string_view name) noexcept;
+    // Erases every line whose name `matches`.
+    void remove_if(bool (*matches)(std::string_view field_name) noexcept) noexcept;
+    // Leaves exactly one line for `name`: the first existing line is replaced
+    // and later ones are erased, or the line is added.
+    void set(std::string_view name, std::string_view value);
+    // Adds one more line for `name`, keeping existing ones.
+    void append(std::string_view name, std::string_view value);
+
+    // Runs a multi-write edit as one header transaction. An http_response is
+    // edited through a candidate copy of its header block (with room for
+    // `additional_fields` more lines) that is published without failure only
+    // after `edit` returns, so a throwing write leaves the response unchanged.
+    // A std::vector<http_header> or http_response_headers is already the
+    // caller's own candidate storage and is edited directly.
+    template <std::invocable<editable_http_headers> edit_type>
+    void transact(edit_type edit, std::size_t additional_fields = 0) {
+        run_transaction(
+            [](void* callable, editable_http_headers candidate) {
+            (*static_cast<edit_type*>(callable))(candidate);
+        },
+            &edit, additional_fields);
+    }
+
+private:
+    void run_transaction(void (*edit)(void* callable, editable_http_headers candidate), void* callable, std::size_t additional_fields);
+
+    std::variant<std::vector<http_header>*, http_response_headers*, http_response*> target_;
+};
+
 }  // namespace ruvia

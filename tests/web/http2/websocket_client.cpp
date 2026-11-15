@@ -192,7 +192,7 @@ void exercise_client(bool reset_peer, bool secure = false) {
         }
         co_await client.shutdown();
         peer.close();
-        attachment.stop();
+        attachment.request_stop();
         if (failure) {
             std::rethrow_exception(failure);
         }
@@ -344,7 +344,7 @@ void exercise_closing_peer(closing_peer behavior) {
             failure = std::current_exception();
         }
         co_await client.shutdown();
-        attachment.stop();
+        attachment.request_stop();
         if (failure) {
             std::rethrow_exception(failure);
         }
@@ -486,7 +486,7 @@ void exercise_handshake_end(handshake_end mode) {
         }
         co_await client.shutdown();
         co_await peer_done.wait();
-        attachment.stop();
+        attachment.request_stop();
         if (failure) {
             std::rethrow_exception(failure);
         }

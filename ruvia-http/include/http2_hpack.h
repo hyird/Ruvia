@@ -13,50 +13,31 @@
 #include <type_traits>
 #include <utility>
 
+#include "checked_integer.h"
 #include "http_status.h"
 
 namespace ruvia {
 
 namespace detail {
 class hpack_decoder;
-}  // namespace detail
 
-// 32-bit HPACK dynamic-table byte capacity (RFC 7541 section 6.3). Checked
-// before narrowing so negative or wider integers cannot wrap into valid sizes.
-class hpack_table_size final {
-public:
-    constexpr hpack_table_size() noexcept = default;
-
-    template <std::integral integer_type>
-    constexpr hpack_table_size(integer_type value) :
-        value_(is_valid_value(value) ? static_cast<std::uint32_t>(value) : throw std::invalid_argument("HPACK dynamic table size must be in 0..4294967295")) {}
+struct hpack_table_size_policy final {
+    static constexpr std::uint32_t default_value = 0;
+    static constexpr bool implicit_conversion = true;
+    static constexpr const char* invalid_value_message = "HPACK dynamic table size must be in 0..4294967295";
 
     template <std::integral integer_type>
     [[nodiscard]] static constexpr bool is_valid_value(integer_type value) noexcept {
         return std::in_range<std::uint32_t>(+value);
     }
+};
+}  // namespace detail
 
-    template <std::integral integer_type>
-    [[nodiscard]] static constexpr std::optional<hpack_table_size> try_from_value(integer_type value) noexcept {
-        if (!is_valid_value(value)) {
-            return std::nullopt;
-        }
-        return hpack_table_size(static_cast<std::uint32_t>(value), validated_tag_type{});
-    }
-
-    [[nodiscard]] constexpr std::uint32_t value() const noexcept {
-        return value_;
-    }
-
-    friend constexpr auto operator<=>(hpack_table_size, hpack_table_size) = default;
-
-private:
-    struct validated_tag_type {};
-
-    constexpr hpack_table_size(std::uint32_t value, validated_tag_type) noexcept :
-        value_(value) {}
-
-    std::uint32_t value_{0};
+// 32-bit HPACK dynamic-table byte capacity (RFC 7541 section 6.3). Checked
+// before narrowing so negative or wider integers cannot wrap into valid sizes.
+class hpack_table_size final : public checked_integer<hpack_table_size, std::uint32_t, detail::hpack_table_size_policy> {
+public:
+    using checked_integer::checked_integer;
 };
 
 static_assert(std::is_trivially_copyable_v<hpack_table_size>);

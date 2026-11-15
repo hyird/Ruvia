@@ -575,7 +575,7 @@ void exercise_origin_preparation_cancellation(cancellation_case mode) {
     blocking_pool blocking({.thread_count_ = 1, .queue_capacity_ = 4});
     std::promise<void> release;
     auto gate = release.get_future().share();
-    ASSERT_EQ(blocking.submit([gate] {
+    ASSERT_EQ(blocking.post([gate] {
         gate.wait();
     }),
         post_status::accepted);
@@ -944,7 +944,7 @@ private:
         rejected = true;
     }
     EXPECT_TRUE(rejected);
-    client.close();
+    client.abort();
     co_await scope.join();
     co_await client.shutdown();
 }
@@ -1203,7 +1203,7 @@ TEST(Ruvia, tcp_client_loop_stop_joins_pending_reads_and_writes) {
         std::promise<void> started;
         auto operation = pool.loop(0).start(expect_io_failure(client, writing, {}, std::errc::operation_canceled, &started));
         started.get_future().get();
-        pool.stop();
+        pool.request_stop();
         std::move(operation).get();
         pool.join();
     }

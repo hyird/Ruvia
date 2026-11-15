@@ -89,6 +89,13 @@ void mark_plain_text_defaults(http_response& response) {
     }
 }
 
+[[nodiscard]] http_response make_owned_json_response(std::string& body, const response_options& options) {
+    auto response = detail::make_response(options);
+    set_default_content_type(response, http_content_type::application_json);
+    response.owned_body(std::move(body));
+    return response;
+}
+
 }  // namespace
 
 http_response& context_response_editor::target() const {
@@ -112,15 +119,11 @@ void context_response_editor::status(http_status_code status_code) {
     }
 }
 
-std::string context::url_for(std::string_view pattern, std::span<const std::string_view> values) const {
+std::string context::url_for(std::string_view pattern, argument_list<std::string_view> values) const {
     if (runtime_services().routes() == nullptr) {
         throw std::logic_error("url_for requires a route table bound to this context");
     }
-    return runtime_services().routes()->url_for(pattern, values);
-}
-
-std::string context::url_for(std::string_view pattern, std::initializer_list<std::string_view> values) const {
-    return url_for(pattern, std::span<const std::string_view>(values.begin(), values.size()));
+    return runtime_services().routes()->url_for(pattern, values.span());
 }
 
 bool context::committed() const noexcept {
@@ -145,70 +148,133 @@ void context::store_response(http_response&& response) {
     response_state().finalize(std::move(response));
 }
 
-http_response context::body(response_options options) {
+template <typename host_type>
+context& request_exchange<host_type>::exchange() noexcept {
+    return static_cast<host_type&>(*this).exchange_context();
+}
+
+template <typename host_type>
+const context& request_exchange<host_type>::exchange() const noexcept {
+    return static_cast<const host_type&>(*this).exchange_context();
+}
+
+template <typename host_type>
+http_response request_exchange<host_type>::body(response_options options) const {
     return detail::make_response(options);
 }
 
-http_response context::body(outbound_bytes body, response_options options) {
+template <typename host_type>
+http_response request_exchange<host_type>::body(outbound_bytes body, response_options options) const {
     auto response = detail::make_response(options);
     set_outbound_body(response, std::move(body));
     return response;
 }
 
-http_response context::body(static_text body, response_options options) {
+template <typename host_type>
+http_response request_exchange<host_type>::body(static_text body, response_options options) const {
     auto response = detail::make_response(options);
     response.static_body(body.view());
     return response;
 }
 
-http_response context::text(outbound_bytes body, response_options options) {
+template <typename host_type>
+http_response request_exchange<host_type>::text(outbound_bytes body, response_options options) const {
     auto response = detail::make_response(options);
     mark_plain_text_defaults(response);
     set_outbound_body(response, std::move(body));
     return response;
 }
 
-http_response context::text(static_text body, response_options options) {
+template <typename host_type>
+http_response request_exchange<host_type>::text(static_text body, response_options options) const {
     auto response = detail::make_response(options);
     mark_plain_text_defaults(response);
     response.static_body(body.view());
     return response;
 }
 
-response_stream_writer& context::stream_text(response_options head) {
+template <typename host_type>
+context_response_editor request_exchange<host_type>::policy() & noexcept {
+    return context_response_editor(exchange(), context_response_editor::target_type::policy);
+}
+
+template <typename host_type>
+response_stream_writer& request_exchange<host_type>::stream(response_options head) & {
+    auto& context_value = exchange();
+    const auto* output = context_value.response_output().response_stream();
+    if (output == nullptr) {
+        throw std::logic_error("response body is not streamable");
+    }
+    auto& writer = output->writer();
+    context_value.stage_stream_head(writer, head);
+    return writer;
+}
+
+template <typename host_type>
+response_stream_writer& request_exchange<host_type>::stream_text(response_options head) & {
     auto& writer = stream(head);
-    if (!writer.committed() && !response_output().committed()) {
-        mark_plain_text_defaults(response_state().stream_head());
+    auto& context_value = exchange();
+    if (!writer.committed() && !context_value.response_output().committed()) {
+        mark_plain_text_defaults(context_value.response_state().stream_head());
     }
     return writer;
 }
 
-http_response context::json_serialized(std::string& body, const response_options& options) {
-    auto response = detail::make_response(options);
-    set_default_content_type(response, http_content_type::application_json);
-    response.owned_body(std::move(body));
-    return response;
+template <typename host_type>
+sse_writer request_exchange<host_type>::stream_sse(response_options head) & {
+    if (detail::response_options_carry_header(head, "Content-Type")) {
+        throw std::invalid_argument("stream_sse() owns the Content-Type field");
+    }
+    auto& writer = stream(head);
+    if (!writer.committed()) {
+        auto& staged = exchange().stream_head();
+        staged.header_stable_view("Content-Type", "text/event-stream");
+        if (!staged.header("Cache-Control")) {
+            staged.header_stable_view("Cache-Control", "no-cache");
+        }
+    }
+    return sse_writer(writer);
 }
 
-http_response context::html(outbound_bytes body, response_options options) {
+template <typename host_type>
+http_response request_exchange<host_type>::json_serialized(std::string& body, const response_options& options) {
+    return make_owned_json_response(body, options);
+}
+
+template <typename host_type>
+http_response request_exchange<host_type>::html(outbound_bytes body, response_options options) const {
     auto response = detail::make_response(options);
     set_default_content_type(response, http_content_type::text_html_utf8);
     set_outbound_body(response, std::move(body));
     return response;
 }
 
-http_response context::html(static_text body, response_options options) {
+template <typename host_type>
+http_response request_exchange<host_type>::html(static_text body, response_options options) const {
     auto response = detail::make_response(options);
     set_default_content_type(response, http_content_type::text_html_utf8);
     response.static_body(body.view());
     return response;
 }
 
-http_response context::error(http_error_info_options info, response_options extra) const {
+// The cold task joins the host's request scope, which discards it unstarted.
+template <typename host_type>
+task<http_response> request_exchange<host_type>::file(file_response_options options, response_options head) {
+    return static_cast<host_type&>(*this).operation_scope_.attach(detail::context_access::file(exchange(), options, head));
+}
+
+template <typename host_type>
+task<http_response> request_exchange<host_type>::static_file(const static_root& root, static_file_response_options options, response_options head) {
+    return static_cast<host_type&>(*this).operation_scope_.attach(detail::context_access::static_file(exchange(), root, options, head));
+}
+
+template <typename host_type>
+http_response request_exchange<host_type>::error(http_error_info_options info, response_options extra) const {
     return error(http_error_info(info), extra);
 }
 
-http_response context::error(const http_error_info& info, response_options extra) const {
+template <typename host_type>
+http_response request_exchange<host_type>::error(const http_error_info& info, response_options extra) const {
     if (extra.status_) {
         throw std::invalid_argument("error() takes its status from the error info");
     }
@@ -381,7 +447,8 @@ void context_response_editor::priority(http_priority_fields fields_value) {
     write_priority(target(), fields_value);
 }
 
-http_response context::redirect(redirect_response_options options, response_options extra) {
+template <typename host_type>
+http_response request_exchange<host_type>::redirect(redirect_response_options options, response_options extra) const {
     const auto location = options.location_.view();
     const auto status_code = options.status_;
     if (!is_http_redirect_status(status_code)) {
@@ -421,7 +488,7 @@ http_response make_health_response(context&, response_options extra) {
     return detail::context_access::make_static_json_response(R"({"status":"ok"})", extra);
 }
 
-http_response make_readiness_response(context& context_value, readiness_response_options options, response_options extra) {
+http_response make_readiness_response(context&, readiness_response_options options, response_options extra) {
     require_probe_status(extra);
     switch (options.state_) {
         case readiness_state::ready:
@@ -445,34 +512,47 @@ http_response make_readiness_response(context& context_value, readiness_response
     body.append(prefix);
     detail::append_json_string(body, reason);
     body.push_back('}');
-    auto response = detail::context_access::make_owned_json_response(context_value, body, extra);
+    auto response = make_owned_json_response(body, extra);
     response.status(http_status::service_unavailable);
     return response;
 }
-void context::advertise_origins(std::span<const std::string_view> origins) {
-    if (runtime_services().connection_advertisements() == nullptr || conn().tls() == nullptr) {
+
+template <typename host_type>
+void request_exchange<host_type>::advertise_origins(std::span<const std::string_view> origins) {
+    auto& services = exchange().runtime_services();
+    if (services.connection_advertisements() == nullptr || conn().tls() == nullptr) {
         throw std::logic_error("ORIGIN requires an HTTPS connection with advertisement output");
     }
-    runtime_services().connection_advertisements()->advertise_origins(origins);
+    services.connection_advertisements()->advertise_origins(origins);
 }
-void context::advertise_alternative_service(std::string_view value) {
-    if (runtime_services().connection_advertisements() == nullptr) {
+
+template <typename host_type>
+void request_exchange<host_type>::advertise_alternative_service(std::string_view value) {
+    auto& services = exchange().runtime_services();
+    if (services.connection_advertisements() == nullptr) {
         throw std::logic_error("this dispatch has no connection advertisement output");
     }
-    runtime_services().connection_advertisements()->advertise_alternative_service(value);
+    services.connection_advertisements()->advertise_alternative_service(value);
 }
-bool context::push(http_push_request_view request) {
-    if (runtime_services().push_output() == nullptr) {
+
+template <typename host_type>
+bool request_exchange<host_type>::push(http_push_request_view request) {
+    auto& services = exchange().runtime_services();
+    if (services.push_output() == nullptr) {
         throw std::logic_error("server push requires an HTTP/2 request");
     }
-    return runtime_services().push_output()->push(request);
+    return services.push_output()->push(request);
 }
-task<void> context::inform(const http_interim_response_head& response, operation_options operation) & {
-    if (runtime_services().interim_output() == nullptr) {
+
+template <typename host_type>
+task<void> request_exchange<host_type>::inform(const http_interim_response_head& response, operation_options operation) & {
+    auto& context_value = exchange();
+    if (context_value.runtime_services().interim_output() == nullptr) {
         throw std::logic_error("this dispatch has no transport response output");
     }
-    return runtime_services().interim_output()->inform(response, std::move(operation), *this);
+    return context_value.runtime_services().interim_output()->inform(response, std::move(operation), context_value);
 }
+
 }  // namespace ruvia
 
 namespace ruvia::detail {
@@ -634,7 +714,7 @@ task<dispatch_response> context::dispatch_task(std::string method, std::string t
             throw std::logic_error("dispatch requires a buffered route");
         }
     }
-    const stop_group stop_owner(runtime_services().get_stop_token(), std::move(stop_token_value));
+    const stop_group stop_owner{runtime_services().get_stop_token(), std::move(stop_token_value)};
     const auto stop = stop_owner.token();
     if (stop.stop_requested()) {
         throw std::system_error(asio::error::operation_aborted);
@@ -702,24 +782,28 @@ context::context(const http_request& request, std::string_view route_path, const
 }
 context::~context() = default;
 
-const conn_info& context::conn() const& noexcept {
-    return runtime_services().get_conn_info();
+template <typename host_type>
+const conn_info& request_exchange<host_type>::conn() const& noexcept {
+    return exchange().runtime_services().get_conn_info();
 }
 
-std::shared_ptr<void> context::connection_state() const noexcept {
-    return runtime_services().connection_state();
+template <typename host_type>
+std::shared_ptr<void> request_exchange<host_type>::connection_state() const noexcept {
+    return exchange().runtime_services().connection_state();
 }
 
-void context::abort_connection() noexcept {
-    runtime_services().abort_connection();
+template <typename host_type>
+void request_exchange<host_type>::abort_connection() noexcept {
+    exchange().runtime_services().abort_connection();
 }
 
 bool context::is_subrequest() const noexcept {
     return runtime_services().dispatch_depth() != 0;
 }
 
-bool context::early_data() const noexcept {
-    return runtime_services().early_data();
+template <typename host_type>
+bool request_exchange<host_type>::early_data() const noexcept {
+    return exchange().runtime_services().early_data();
 }
 
 detail::context_services& context::runtime_services() noexcept {
@@ -730,12 +814,14 @@ const detail::context_services& context::runtime_services() const noexcept {
     return request_storage().services_;
 }
 
-const worker_ref& context::worker() const& noexcept {
-    return runtime_services().worker();
+template <typename host_type>
+const worker_ref& request_exchange<host_type>::worker() const& noexcept {
+    return exchange().runtime_services().worker();
 }
 
-::ruvia::stop_token context::stop_token() const noexcept {
-    return runtime_services().get_stop_token();
+template <typename host_type>
+ruvia::stop_token request_exchange<host_type>::stop_token() const noexcept {
+    return exchange().runtime_services().get_stop_token();
 }
 
 detail::worker_services context::services() const noexcept {
@@ -986,7 +1072,7 @@ void ensure_route_params(const std::string_view* param_names, const std::string_
 inline constexpr std::size_t inline_request_decode_bytes = 64 * 1024;
 
 [[nodiscard]] task<std::variant<std::string, http_content_decode_error>> decode_request_content(const worker_ref& worker_value, const stop_token& stop_token_value, std::span<const http_content_coding> codings, std::string_view raw, http_content_decode_options options) {
-    if (detail::worker_ref_access::blocking_pool(worker_value) != nullptr && options.max_decoded_bytes_ > inline_request_decode_bytes) {
+    if (worker_value.blocking_pool() != nullptr && options.max_decoded_bytes_ > inline_request_decode_bytes) {
         if (raw.size() <= inline_request_decode_bytes) {
             auto inline_result = decode_http_content(codings, raw, {.max_decoded_bytes_ = inline_request_decode_bytes});
             const auto* failure = std::get_if<http_content_decode_error>(&inline_result);
@@ -1141,12 +1227,16 @@ std::optional<std::string_view> context_request::header(std::string_view name) c
     return context_->request_.header(name);
 }
 
-std::span<const http_header> context_request::trailers() const noexcept {
-    return context_->runtime_services().request_trailers() != nullptr ? context_->runtime_services().request_trailers()->fields() : std::span<const http_header>{};
+template <typename host_type>
+std::span<const http_header> request_exchange<host_type>::trailers() const noexcept {
+    const auto* trailers = exchange().runtime_services().request_trailers();
+    return trailers != nullptr ? trailers->fields() : std::span<const http_header>{};
 }
 
-std::optional<std::string_view> context_request::trailer(std::string_view name) const noexcept {
-    return context_->runtime_services().request_trailers() != nullptr ? context_->runtime_services().request_trailers()->field(name) : std::nullopt;
+template <typename host_type>
+std::optional<std::string_view> request_exchange<host_type>::trailer(std::string_view name) const noexcept {
+    const auto* trailers = exchange().runtime_services().request_trailers();
+    return trailers != nullptr ? trailers->field(name) : std::nullopt;
 }
 
 const request_name_value_list& context_request::header_fields() const {
@@ -1274,7 +1364,8 @@ std::optional<std::string_view> context_request::param(std::string_view name) co
     return storage.route_params_->get(name);
 }
 
-std::optional<std::string_view> context_request::negotiate(negotiable_field field, std::span<const std::string_view> supported) const noexcept {
+std::optional<std::string_view> context_request::negotiate(negotiable_field field, argument_list<std::string_view> offers) const noexcept {
+    const auto supported = offers.span();
     if (supported.empty()) {
         return std::nullopt;
     }
@@ -1391,24 +1482,30 @@ task<void> context_request::discard_body(operation_options operation) const {
     return context_->operation_scope_.attach(discard_request_body(*context_, std::move(operation)));
 }
 
-body_reader& context_request::body_reader() const {
-    const auto* streaming = context_->request_body_source().streaming();
+body_reader& context::request_body() & {
+    const auto* streaming = request_body_source().streaming();
     if (streaming == nullptr) {
         throw std::logic_error("request body is not streamable");
     }
     return streaming->reader();
 }
 
-multipart_reader context_request::multipart_reader() const {
-    const auto boundary = get_multipart_boundary(context_->request_);
+template <typename host_type>
+multipart_reader request_exchange<host_type>::request_multipart() & {
+    const auto& request = exchange().request_;
+    const auto boundary = get_multipart_boundary(request);
     // The reader parses raw body bytes as they arrive and decodes no content
     // coding, so only an identity body is accepted.
-    const auto parsed_coding = require_decodable_request_coding(context_->request_, detail::unsupported_request_content_coding::read_type::streaming);
+    const auto parsed_coding = require_decodable_request_coding(request, detail::unsupported_request_content_coding::read_type::streaming);
     if (std::ranges::any_of(parsed_coding.codings(), [](http_content_coding coding) {
         return coding != http_content_coding::identity;
     })) {
         throw detail::unsupported_request_content_coding(detail::unsupported_request_content_coding::read_type::streaming);
     }
-    return ::ruvia::multipart_reader(body_reader(), {.boundary_ = boundary});
+    return multipart_reader(static_cast<host_type&>(*this).request_body(), {.boundary_ = boundary});
 }
+
+template class request_exchange<context>;
+template class request_exchange<request_stream>;
+
 }  // namespace ruvia

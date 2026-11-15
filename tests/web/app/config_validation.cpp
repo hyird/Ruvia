@@ -1022,7 +1022,7 @@ struct runtime final {
         attachment_.run();
     }};
     ~runtime() {
-        attachment_.stop();
+        attachment_.request_stop();
         thread_.join();
         pool_.join();
     }
@@ -1035,9 +1035,9 @@ ruvia::task<void> identify(ruvia::request_stream& stream) {
     body += ":" + std::to_string(remote.port());
     body += ":" + std::string(stream.conn().client().address().to_string());
     body += stream.conn().via_trusted_proxy() ? ":trusted" : ":direct";
-    if (co_await stream.response().commit() == ruvia::stream_commit_result::body) {
-        co_await stream.response().write(body);
-        co_await stream.response().end();
+    if (co_await stream.stream().commit() == ruvia::stream_commit_result::body) {
+        co_await stream.stream().write(body);
+        co_await stream.stream().end();
     }
 }
 

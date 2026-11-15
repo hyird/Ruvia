@@ -36,7 +36,7 @@ void exercise(const std::string& url, ruvia::http_client_versions versions) {
             failure = std::current_exception();
         }
         co_await owner.shutdown();
-        attachment.stop();
+        attachment.request_stop();
     };
     auto root = attachment.loop().start(run());
     attachment.run();

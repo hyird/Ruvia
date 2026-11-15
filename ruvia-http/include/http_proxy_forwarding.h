@@ -77,10 +77,10 @@ private:
 };
 
 [[nodiscard]] std::optional<std::uint64_t> parse_http_max_forwards_value(std::string_view field_value, std::uint64_t max_saturation = (std::numeric_limits<std::uint64_t>::max)()) noexcept;
+// One Max-Forwards field value, or the single Max-Forwards line of a header
+// block: absent without one, invalid when repeated.
 [[nodiscard]] http_max_forwards_result parse_http_max_forwards(std::string_view field_value, std::uint64_t max_saturation = (std::numeric_limits<std::uint64_t>::max)()) noexcept;
-[[nodiscard]] http_max_forwards_result parse_http_max_forwards(std::span<const http_header> headers, std::uint64_t max_saturation = (std::numeric_limits<std::uint64_t>::max)()) noexcept;
-[[nodiscard]] http_max_forwards_result parse_http_max_forwards(std::span<const http_header_view> headers, std::uint64_t max_saturation = (std::numeric_limits<std::uint64_t>::max)()) noexcept;
-[[nodiscard]] http_max_forwards_result parse_http_max_forwards(const http_request& request, std::uint64_t max_saturation = (std::numeric_limits<std::uint64_t>::max)()) noexcept;
+[[nodiscard]] http_max_forwards_result parse_http_max_forwards(const http_header_range_view& headers, std::uint64_t max_saturation = (std::numeric_limits<std::uint64_t>::max)()) noexcept;
 
 // Case-insensitive set of field/option tokens parsed from one or more
 // Connection header lines (RFC 9110 section 7.6.1).
@@ -89,10 +89,7 @@ public:
     http_connection_nominated_fields() noexcept = default;
 
     void update(std::string_view connection_field_value);
-    template <http_header_field_source headers_type>
-    void update_headers(const headers_type& headers) {
-        update_header_range(headers);
-    }
+    void update_headers(const http_header_range_view& headers);
 
     [[nodiscard]] bool contains(std::string_view field_name) const noexcept;
     [[nodiscard]] constexpr bool has_close() const noexcept {
@@ -123,8 +120,6 @@ public:
     [[nodiscard]] std::string rebuild_connection_field(bool retain_upgrade = false, bool include_non_standard = true) const;
 
 private:
-    void update_header_range(detail::http_header_range_view headers);
-
     std::vector<std::string> tokens_;
     bool has_close_{false};
     bool has_keep_alive_{false};
@@ -133,12 +128,7 @@ private:
 };
 
 [[nodiscard]] http_connection_nominated_fields parse_http_connection_nominated_fields(std::string_view connection_field_value);
-template <http_header_field_source headers_type>
-[[nodiscard]] http_connection_nominated_fields parse_http_connection_nominated_fields(const headers_type& headers) {
-    http_connection_nominated_fields nominated;
-    nominated.update_headers(headers);
-    return nominated;
-}
+[[nodiscard]] http_connection_nominated_fields parse_http_connection_nominated_fields(const http_header_range_view& headers);
 
 // Protocol hop-by-hop fields (RFC 9110 section 7.6.1): Connection, Keep-Alive,
 // Proxy-Connection, TE, Transfer-Encoding, Trailer, Upgrade,

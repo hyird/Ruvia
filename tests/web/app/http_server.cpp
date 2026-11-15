@@ -61,12 +61,12 @@ public:
 
 ruvia::task<void> answer(ruvia::request_stream& stream) {
     std::string body;
-    while (auto chunk = co_await stream.body().text()) {
+    while (auto chunk = co_await stream.request_body().read_text()) {
         body.append(*chunk);
     }
-    if (co_await stream.response().commit() == ruvia::stream_commit_result::body) {
-        co_await stream.response().write(body.empty() ? std::string_view("independent") : std::string_view(body));
-        co_await stream.response().end();
+    if (co_await stream.stream().commit() == ruvia::stream_commit_result::body) {
+        co_await stream.stream().write(body.empty() ? std::string_view("independent") : std::string_view(body));
+        co_await stream.stream().end();
     }
 }
 
@@ -169,7 +169,7 @@ TEST(Ruvia, independent_servers_share_an_external_loop_without_routes_or_shared_
         }
         co_await server.shutdown();
         co_await other.shutdown();
-        attachment.stop();
+        attachment.request_stop();
         if (failure) std::rethrow_exception(failure);
     };
     auto root = attachment.loop().start(run());
@@ -226,7 +226,7 @@ TEST(Ruvia, independent_server_adopts_connected_sockets_for_raw_and_http_service
         co_await client.shutdown();
         co_await server.shutdown();
         EXPECT_EQ(server.stats().active_connections_, 0);
-        attachment.stop();
+        attachment.request_stop();
         if (failure) {
             std::rethrow_exception(failure);
         }
@@ -265,7 +265,7 @@ TEST(Ruvia, independent_server_failed_addition_releases_every_prepared_listener)
         }
         co_await client.shutdown();
         co_await server.shutdown();
-        attachment.stop();
+        attachment.request_stop();
         if (failure) {
             std::rethrow_exception(failure);
         }
@@ -300,7 +300,7 @@ TEST(Ruvia, independent_server_loop_retirement_joins_pending_adopted_connection)
         co_await server.start();
         server.adopt({.address_ = "127.0.0.1", .port_ = acceptor.local_endpoint().port()}, accepted.release());
         co_await entered.wait();
-        attachment.stop();
+        attachment.request_stop();
         co_await server.shutdown();
         EXPECT_EQ(server.stats().active_connections_, 0);
     };
@@ -336,7 +336,7 @@ TEST(Ruvia, independent_server_cold_runtime_addition_owns_configuration) {
         }
         co_await client.shutdown();
         co_await server.shutdown();
-        attachment.stop();
+        attachment.request_stop();
         if (failure) {
             std::rethrow_exception(failure);
         }
@@ -368,7 +368,7 @@ TEST(Ruvia, independent_server_discarded_cold_addition_closes_inherited_socket) 
     EXPECT_FALSE(error);
     const auto shutdown = [&]() -> ruvia::task<void> {
         co_await server.shutdown();
-        attachment.stop();
+        attachment.request_stop();
     };
     auto completed = attachment.loop().start(shutdown());
     attachment.run();
@@ -408,7 +408,7 @@ TEST(Ruvia, independent_server_cold_shutdown_joins_after_host_destruction) {
         co_await std::move(shutdown);
         EXPECT_TRUE(retired);
         EXPECT_TRUE(attachment.loop().worker().accepting());
-        attachment.stop();
+        attachment.request_stop();
     };
     auto root = attachment.loop().start(run());
     attachment.run();
@@ -466,7 +466,7 @@ TEST(Ruvia, independent_server_prepared_batch_cancel_and_shutdown_are_owning_tra
             rejected = true;
         }
         EXPECT_TRUE(rejected);
-        attachment.stop();
+        attachment.request_stop();
     };
     auto root = attachment.loop().start(run());
     attachment.run();
@@ -514,7 +514,7 @@ TEST(Ruvia, independent_server_ipv6_only_rejects_ipv4_and_mismatched_inherited_s
         co_await check_response(client, ruvia::http_protocol_version::http11);
         co_await client.shutdown();
         co_await server.shutdown();
-        attachment.stop();
+        attachment.request_stop();
     };
     auto root = attachment.loop().start(run());
     attachment.run();
@@ -554,7 +554,7 @@ TEST(Ruvia, independent_server_ipv6_only_validates_inherited_quic_socket_before_
         replacement.open(asio::ip::udp::v6());
         EXPECT_NO_THROW(replacement.bind(endpoint));
         co_await server.shutdown();
-        attachment.stop();
+        attachment.request_stop();
         if (failure) {
             std::rethrow_exception(failure);
         }
@@ -618,7 +618,7 @@ void with_server(ruvia::request_stream_callback callback, check_type check) {
         co_await client.shutdown();
         co_await server.shutdown();
         EXPECT_EQ(server.stats().active_connections_, 0);
-        attachment.stop();
+        attachment.request_stop();
         if (failure) {
             std::rethrow_exception(failure);
         }
@@ -626,7 +626,7 @@ void with_server(ruvia::request_stream_callback callback, check_type check) {
     auto root = attachment.loop().start(run());
     attachment.run();
     std::move(root).get();
-    pool.stop();
+    pool.request_stop();
     pool.join();
     EXPECT_EQ(pool.stats().queued_, 0);
     EXPECT_EQ(pool.stats().running_, 0);
@@ -708,7 +708,7 @@ TEST(Ruvia, independent_request_stream_submits_complete_file_and_multipart_respo
             EXPECT_EQ(response.header("Content-Type"), std::optional<std::string_view>("application/octet-stream"));
         }
         stream.respond(std::move(response));
-        EXPECT_FALSE(stream.response().committed());
+        EXPECT_FALSE(stream.stream().committed());
     }, [&](ruvia::http_client& client, ruvia::http_server&) -> ruvia::task<void> {
         co_await expect_file_responses(client, bytes, "/file");
     });
@@ -849,10 +849,10 @@ TEST(Ruvia, independent_request_stream_response_forms_are_mutually_exclusive_and
     with_server([](ruvia::request_stream& stream) -> ruvia::task<void> {
         const auto target = stream.request().path();
         if (target == "/stream-first") {
-            (void)co_await stream.response().commit();
+            (void)co_await stream.stream().commit();
             ruvia::http_response rejected;
             EXPECT_THROW(stream.respond(std::move(rejected)), std::logic_error);
-            co_await stream.response().write(std::string_view("streamed"));
+            co_await stream.stream().write(std::string_view("streamed"));
             co_return;
         }
         ruvia::http_response response;
@@ -860,16 +860,16 @@ TEST(Ruvia, independent_request_stream_response_forms_are_mutually_exclusive_and
         response.header("x-selected", "retained");
         response.body("buffered");
         stream.respond(std::move(response));
-        EXPECT_FALSE(stream.response().committed());
+        EXPECT_FALSE(stream.stream().committed());
         if (target == "/failure") {
             throw ruvia::http_error({.status_ = ruvia::http_status::forbidden, .message_ = "replace selected response"});
         }
         bool refused = false;
         try {
             if (target == "/end") {
-                co_await stream.response().end();
+                co_await stream.stream().end();
             } else if (target == "/commit") {
-                (void)co_await stream.response().commit();
+                (void)co_await stream.stream().commit();
             } else if (target == "/tunnel") {
                 (void)co_await stream.accept_tunnel();
             } else if (target == "/websocket") {
@@ -882,7 +882,7 @@ TEST(Ruvia, independent_request_stream_response_forms_are_mutually_exclusive_and
             refused = true;
         }
         EXPECT_TRUE(refused);
-        EXPECT_FALSE(stream.response().committed());
+        EXPECT_FALSE(stream.stream().committed());
     }, [](ruvia::http_client& client, ruvia::http_server&) -> ruvia::task<void> {
         for (const auto target : {"/commit", "/end", "/twice", "/tunnel", "/websocket"}) {
             auto request = client.client().get(target);
@@ -1033,7 +1033,7 @@ TEST(Ruvia, independent_request_stream_releases_selected_file_exactly_once_on_er
         co_await client.shutdown();
         co_await server.shutdown();
         EXPECT_EQ(server.stats().active_connections_, 0);
-        attachment.stop();
+        attachment.request_stop();
         if (failure) {
             std::rethrow_exception(failure);
         }

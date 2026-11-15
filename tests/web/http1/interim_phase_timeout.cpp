@@ -172,12 +172,11 @@ TEST(Ruvia, a_handler_after_its_interim_head_is_timed_as_a_handler_not_a_write) 
         (void)co_await ruvia::sleep_for(c.worker(), handler_pause);
         co_return c.text("refused", {.status_ = error.status()});
     });
-    app.server({.worker_count_ = 1, .connection_scan_interval_ = 5ms, .write_timeout_ = write_timeout})
-        .listen({
-            .address_ = "127.0.0.1",
-            .https_ = endpoint.port(),
-            .tls_ = {.identity_ = {.certificate_chain_file_ = identity.ca_file_, .private_key_file_ = private_key}},
-        })
+    app.workers({.worker_count_ = 1}).server({.connection_scan_interval_ = 5ms, .write_timeout_ = write_timeout}).listen({
+                                                                                                                             .address_ = "127.0.0.1",
+                                                                                                                             .https_ = endpoint.port(),
+                                                                                                                             .tls_ = {.identity_ = {.certificate_chain_file_ = identity.ca_file_, .private_key_file_ = private_key}},
+                                                                                                                         })
         .on_start([] {
         started.release();
     });

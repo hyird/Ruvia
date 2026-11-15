@@ -4,7 +4,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <exception>
-#include <limits>
 #include <optional>
 #include <stdexcept>
 #include <string_view>
@@ -15,7 +14,6 @@
 #include "http_cors.h"
 #include "http_server.h"
 #include "ip_address.h"
-#include "rate_limit.h"
 #include "rate_limiting.h"
 #include "startup_config.h"
 #include "transport_stream_end.h"
@@ -23,21 +21,9 @@
 namespace ruvia::detail {
 namespace {
 
-void validate_worker_queue_capacity(std::size_t capacity) {
-    detail::ensure_positive_size(capacity, "worker queue capacity must be greater than zero");
-    if (capacity == std::numeric_limits<std::size_t>::max()) {
-        throw std::invalid_argument("worker queue capacity must leave a reserved execution slot");
-    }
-}
-
 void validate_server_limits(const server_config& config) {
-    detail::ensure_positive_size(config.worker_count_, "worker count must be greater than zero");
-    if (config.process_signal_handlers_ != process_signal_handler_policy::external_owner && config.process_signal_handlers_ != process_signal_handler_policy::install) {
-        throw std::invalid_argument("process signal handler policy is invalid");
-    }
     detail::ensure_positive_optional_durations("configured server timeouts must be greater than zero", config.idle_timeout_, config.request_header_timeout_, config.request_body_timeout_, config.write_timeout_);
     detail::ensure_positive_duration(config.connection_scan_interval_, "connection scan interval must be greater than 0");
-    validate_worker_queue_capacity(config.worker_queue_capacity_);
     detail::ensure_positive_size(config.max_buffered_body_bytes_, "buffered body limit must be greater than 0");
     detail::ensure_positive_optional_size(config.max_stream_body_bytes_, "configured stream body limit must be greater than zero");
     detail::ensure_positive_size(config.max_websocket_message_bytes_, "websocket message limit must be greater than 0");
@@ -104,12 +90,6 @@ void http_server_options::set_server(const server_config& config) {
     server_ = config;
     compression_ = config.compression_;
     cors_ = std::move(cors);
-}
-
-void http_server_options::set_rate_limit(const rate_limit_config& config) {
-    validate_rate_limit_config(config);
-    default_rate_limit_per_worker_ = config.rule_;
-    rate_limit_capacity_per_worker_ = config.capacity_per_worker_;
 }
 
 void http_server_options::set_trusted_proxies(const trusted_proxy_config& config) {

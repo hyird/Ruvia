@@ -6,6 +6,8 @@
 #include <string_view>
 #include <utility>
 
+#include "callback_ref.h"
+#include "controller.h"
 #include "http_error.h"
 #include "http_tunnel.h"
 #include "middleware.h"
@@ -42,7 +44,7 @@ using router_stream_handler = move_only_function<task<void>(context&)>;
 // The worker is retained. Configuration, freezing and destruction of the last
 // owner run on that worker. A dispatch task retains the frozen state, so the
 // facade need not outlive that task; the request still must.
-class router final {
+class router final : public dispatch_configuration<router> {
 public:
     explicit router(worker_ref worker);
     ~router();
@@ -95,22 +97,11 @@ public:
         return add_tunnel(protocol, path, std::move(handler), config, descriptors);
     }
 
-    template <middleware middleware_type, typename... args_types>
-    router& use(args_types&&... args) & {
-        return add_middleware(detail::make_owned_middleware_descriptor<middleware_type>(std::forward<args_types>(args)...));
-    }
-
-    template <middleware middleware_type, typename... args_types>
-    router& use_at(middleware_scope_options options, args_types&&... args) & {
-        static_assert(!detail::middleware_runs_on_unmatched_requests<middleware_type>(), "middleware serving unmatched requests must be registered with use<T>()");
-        return add_scoped_middleware(options.prefix_.view(), detail::make_owned_middleware_descriptor<middleware_type>(std::forward<args_types>(args)...));
-    }
-
-    // The rule every request this router dispatches passes, matched or not,
-    // keyed on the client address like application::rate_limit(). Route
-    // ruvia::rate_limit<> rules stack on it. Counted per router, which is
-    // per worker; replaces an earlier rule.
-    router& rate_limit(rate_limit_config config) &;
+    // use(), use_at(), use_worker_state(), on_error(), on_not_found() and
+    // rate_limit() are the dispatch_configuration members application shares.
+    // Here they apply to the requests this router dispatches, are counted and
+    // instantiated per router (which is per worker), and are accepted on the
+    // owner worker until freeze().
 
     // Lend caller-owned clients and per-worker state to the requests this
     // router dispatches, so worker_services_access::redis(alias), db(alias), client(alias)
@@ -133,16 +124,12 @@ public:
     // alias names this client's default configuration in this router.
     router& bind_http_client(std::string_view alias, const http_client& client) &;
     router& bind_http_client(std::string_view, const http_client&&) & = delete;
-    // One instance per type; the router never destroys it.
+    // One caller-owned instance per type; the router never destroys it. The
+    // lending counterpart of use_worker_state(), whose instance it owns.
     template <typename state_type>
     router& bind_worker_state(state_type& state) & {
         return add_worker_state(detail::worker_state_definition::borrow(state));
     }
-
-    router& on_error(http_error_handler handler) &;
-    router& on_not_found(http_not_found_handler handler) &;
-    router& on_error(scoped_error_handler_options options) &;
-    router& on_not_found(scoped_not_found_handler_options options) &;
 
     // Compiles the shared route/method/parameter/middleware engine and creates
     // this worker's middleware once. Failure leaves configuration editable;
@@ -161,13 +148,13 @@ public:
     task<void> dispatch(request_stream&) && = delete;
 
 private:
+    friend class dispatch_configuration<router>;
+
     router& add_buffered(std::string_view method, std::string_view path, router_handler handler, std::span<const detail::controller_middleware_descriptor> modifiers);
     router& add_stream(std::string_view method, std::string_view path, router_stream_handler handler, std::span<const detail::controller_middleware_descriptor> modifiers);
     router& add_websocket(std::string_view path, router_stream_handler handler, websocket_route_config config, std::span<const detail::controller_middleware_descriptor> modifiers);
     router& add_tunnel(std::string_view protocol, std::string_view target, router_stream_handler handler, http_tunnel_route_config config, std::span<const detail::controller_middleware_descriptor> modifiers);
-    router& add_worker_state(detail::worker_state_definition definition);
-    router& add_middleware(detail::owned_middleware_descriptor descriptor);
-    router& add_scoped_middleware(std::string_view prefix, detail::owned_middleware_descriptor descriptor);
+    void edit_configuration(detail::callback_ref<void(detail::app_configuration&)> edit);
 
     std::shared_ptr<detail::router_state> state_;
 };

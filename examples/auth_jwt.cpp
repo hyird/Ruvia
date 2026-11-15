@@ -117,7 +117,7 @@ private:
 
 int main() {
     try {
-        ruvia::app().listen({.address_ = "0.0.0.0", .http_ = 8085}).server({.worker_count_ = 2, .process_signal_handlers_ = ruvia::process_signal_handler_policy::install}).run();
+        ruvia::app().listen({.address_ = "0.0.0.0", .http_ = 8085}).workers({.worker_count_ = 2, .process_signal_handlers_ = ruvia::process_signal_handler_policy::install}).run();
     } catch (...) {
         std::cerr << ruvia::exception_text(std::current_exception()) << '\n';
         return 1;

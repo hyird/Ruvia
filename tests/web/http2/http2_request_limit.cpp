@@ -146,7 +146,7 @@ TEST(Ruvia, http2_upgrade_on_the_request_that_reaches_the_connection_limit_is_se
     asio::io_context io;
     ruvia::test::tcp_port_reservation reservation(io);
     const auto endpoint = reservation.endpoint();
-    app.server({.worker_count_ = 1, .connection_scan_interval_ = 5ms, .max_requests_per_connection_ = 1});
+    app.workers({.worker_count_ = 1}).server({.connection_scan_interval_ = 5ms, .max_requests_per_connection_ = 1});
     app.listen({.address_ = "127.0.0.1", .http_ = endpoint.port()});
     ruvia::test::app_run thread(app);
     if (!started().try_acquire_for(3s)) {

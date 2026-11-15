@@ -12,14 +12,18 @@
 #include <utility>
 #include <vector>
 
+#include "app.h"
 #include "borrowed_text.h"
 #include "callback_ref.h"
 #include "http_error.h"
 #include "http_tunnel.h"
 #include "middleware.h"
+#include "rate_limit.h"
+#include "rate_limiting.h"
 #include "route_path_segment.h"
 #include "route_table.h"
 #include "router.h"
+#include "test_app.h"
 #include "websocket.h"
 #include "worker_state.h"
 
@@ -306,6 +310,15 @@ void app_configuration::on_not_found(borrowed_text prefix, callback_registration
     append_prefix_handler(prefix_not_found_handlers_, prefix.view(), std::move(handler));
 }
 
+void app_configuration::rate_limit(const rate_limit_config& config) {
+    validate_rate_limit_config(config);
+    rate_limit_ = config;
+}
+
+void app_configuration::rate_limit(std::nullptr_t) noexcept {
+    rate_limit_.reset();
+}
+
 void app_configuration::apply(router& routes_value) const {
     routes_value.set_error_handler(callback_access::ref(error_handler_));
     routes_value.set_not_found_handler(callback_access::ref(not_found_handler_));
@@ -322,3 +335,98 @@ void app_configuration::apply(router& routes_value) const {
 }
 
 }  // namespace ruvia::detail
+
+namespace ruvia {
+
+template <typename host_type>
+template <typename change_type>
+host_type& dispatch_configuration<host_type>::edit(change_type&& change) {
+    auto& host = static_cast<host_type&>(*this);
+    host.edit_configuration(detail::callback_access::bind<void(detail::app_configuration&)>(change));
+    return host;
+}
+
+template <typename host_type>
+host_type& dispatch_configuration<host_type>::add_middleware(detail::owned_middleware_descriptor descriptor) {
+    return edit([&descriptor](detail::app_configuration& configuration) {
+        configuration.add_middleware(std::move(descriptor));
+    });
+}
+
+template <typename host_type>
+host_type& dispatch_configuration<host_type>::add_worker_state(detail::worker_state_definition definition) {
+    return edit([&definition](detail::app_configuration& configuration) {
+        configuration.add_worker_state(std::move(definition));
+    });
+}
+
+// Handlers are pinned before the host's guard is taken: publication under it
+// only swaps owning pointers.
+template <typename host_type>
+host_type& dispatch_configuration<host_type>::on_error(http_error_handler handler) & {
+    auto owned = detail::own_callback(std::move(handler));
+    return edit([&owned](detail::app_configuration& configuration) {
+        configuration.on_error(std::move(owned));
+    });
+}
+
+template <typename host_type>
+host_type& dispatch_configuration<host_type>::on_not_found(http_not_found_handler handler) & {
+    auto owned = detail::own_callback(std::move(handler));
+    return edit([&owned](detail::app_configuration& configuration) {
+        configuration.on_not_found(std::move(owned));
+    });
+}
+
+// A cleared handler leaves through `retired`, destroyed once edit() returned.
+template <typename host_type>
+host_type& dispatch_configuration<host_type>::on_error(std::nullptr_t) & {
+    detail::callback_registration<http_error_handler> retired;
+    return edit([&retired](detail::app_configuration& configuration) {
+        retired = configuration.on_error(nullptr);
+    });
+}
+
+template <typename host_type>
+host_type& dispatch_configuration<host_type>::on_not_found(std::nullptr_t) & {
+    detail::callback_registration<http_not_found_handler> retired;
+    return edit([&retired](detail::app_configuration& configuration) {
+        retired = configuration.on_not_found(nullptr);
+    });
+}
+
+template <typename host_type>
+host_type& dispatch_configuration<host_type>::on_error(scoped_error_handler_options options) & {
+    auto owned = detail::own_callback(std::move(options.handler_));
+    return edit([&options, &owned](detail::app_configuration& configuration) {
+        configuration.on_error(options.prefix_, std::move(owned));
+    });
+}
+
+template <typename host_type>
+host_type& dispatch_configuration<host_type>::on_not_found(scoped_not_found_handler_options options) & {
+    auto owned = detail::own_callback(std::move(options.handler_));
+    return edit([&options, &owned](detail::app_configuration& configuration) {
+        configuration.on_not_found(options.prefix_, std::move(owned));
+    });
+}
+
+template <typename host_type>
+host_type& dispatch_configuration<host_type>::rate_limit(rate_limit_config config) & {
+    return edit([&config](detail::app_configuration& configuration) {
+        configuration.rate_limit(config);
+    });
+}
+
+template <typename host_type>
+host_type& dispatch_configuration<host_type>::rate_limit(std::nullptr_t) & {
+    return edit([](detail::app_configuration& configuration) {
+        configuration.rate_limit(nullptr);
+    });
+}
+
+template class dispatch_configuration<application>;
+template class dispatch_configuration<test_app>;
+template class dispatch_configuration<::ruvia::router>;
+
+}  // namespace ruvia

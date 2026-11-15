@@ -87,7 +87,7 @@ bool test_rejected_payload_moves_can_close_the_channel() {
             } else if (expected == channel_send_status::full) {
                 success = sender.send(rejection_payload(11)).accepted() && success;
             } else {
-                attachment.stop();
+                attachment.request_stop();
             }
             rejection_move_state state;
             state.close_ = [&] {
@@ -153,7 +153,7 @@ ruvia::task<void> receive_one(ruvia::channel_receiver<int>& receiver, int& value
 ruvia::task<void> receive_queued_then_stopping(ruvia::event_loop_attachment& attachment, ruvia::channel_receiver<int>& receiver, bool& success) {
     const auto value = co_await receiver.receive();
     asio::post(attachment.loop().executor(), [&attachment] {
-        attachment.stop();
+        attachment.request_stop();
     });
     const auto stopping = co_await receiver.receive();
     success = value.has_value() && value.value() == 9 && stopping.status() == ruvia::wait_status::worker_stopping;
@@ -244,7 +244,7 @@ ruvia::task<void> verify_receiver_retirement_after_worker_stop(ruvia::event_loop
     auto receive = receiver.receive();
     auto timed_receive = receiver.receive({.timeout_ = std::chrono::seconds(1)});
     receiver.close();
-    attachment.stop();
+    attachment.request_stop();
     const auto stopping = co_await std::move(receive);
     const auto timed_stopping = co_await std::move(timed_receive);
     success = stopping.status() == ruvia::wait_status::worker_stopping && timed_stopping.status() == ruvia::wait_status::worker_stopping && sender.send(10).status() == ruvia::channel_send_status::worker_stopping;
@@ -752,7 +752,7 @@ ruvia::task<void> verify_send_wait_observes_worker_stop(ruvia::event_loop_attach
         co_return;
     }
     static_cast<void>(worker_value.post([&attachment] {
-        attachment.stop();
+        attachment.request_stop();
     }));
     auto stopping = co_await sender.send_wait(7);
     success = stopping.status() == ruvia::channel_send_status::worker_stopping && stopping.rejected() != nullptr && *stopping.rejected() == 7;
@@ -962,6 +962,6 @@ TEST(Ruvia, ChannelSendWaitResumesOnTheAwaitingWorker) {
     }(receiver));
     EXPECT_TRUE(std::move(produced).get());
     EXPECT_EQ(std::move(consumed).get(), 6);
-    loops.stop();
+    loops.request_stop();
     loops.join();
 }

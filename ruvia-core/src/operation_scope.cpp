@@ -140,7 +140,7 @@ void operation_scope::resume_joiner() noexcept {
     const auto resume = [continuation] {
         continuation.resume();
     };
-    if (worker_ref_access::defer_completion(bound_worker != nullptr ? *bound_worker : worker_ref_access::current(), resume)) {
+    if ((bound_worker != nullptr ? *bound_worker : worker_ref_access::current()).defer_completion(resume)) {
         return;
     }
     // No attached event loop owns this thread (or its context has detached):

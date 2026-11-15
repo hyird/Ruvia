@@ -295,7 +295,7 @@ void run_clients(ruvia::event_loop_attachment& attachment, std::initializer_list
                 (void)co_await ruvia::sleep_for(worker, 1ms);
             }
         }
-        attachment.stop();
+        attachment.request_stop();
     };
     auto root = loop.start(run());
     attachment.run();
@@ -417,7 +417,7 @@ TEST(Ruvia, http_client_upgrade_on_a_negotiated_h2_origin_uses_an_http11_connect
         }
         EXPECT_EQ(tunnel->status().value(), 101);
         EXPECT_TRUE(tunnel->protocol_version() == ruvia::http_protocol_version::http11);
-        tunnel->abort();
+        tunnel->stream().abort();
         // Ordinary requests keep multiplexing on the h2 connection.
         auto again = co_await client.client().get("/again").send();
         EXPECT_TRUE(again.protocol_version() == ruvia::http_protocol_version::http2);
@@ -772,8 +772,8 @@ TEST(Ruvia, http_client_upgrade_tunnels_follow_their_own_idle_timeout) {
                 co_return;
             }
             (void)co_await ruvia::sleep_for(worker, 200ms);
-            co_await tunnel->write(std::string_view("ping"));
-            const auto echoed = co_await tunnel->text();
+            co_await tunnel->stream().write(std::string_view("ping"));
+            const auto echoed = co_await tunnel->stream().read_text();
             EXPECT_TRUE(echoed == std::optional<std::string_view>("ping"));
         }
         {
@@ -786,12 +786,12 @@ TEST(Ruvia, http_client_upgrade_tunnels_follow_their_own_idle_timeout) {
             // Traffic in either direction restarts the idle bound.
             for (int round = 0; round != 3; ++round) {
                 (void)co_await ruvia::sleep_for(worker, 75ms);
-                co_await tunnel->write(std::string_view("tick"));
-                EXPECT_TRUE((co_await tunnel->text()) == std::optional<std::string_view>("tick"));
+                co_await tunnel->stream().write(std::string_view("tick"));
+                EXPECT_TRUE((co_await tunnel->stream().read_text()) == std::optional<std::string_view>("tick"));
             }
             std::optional<std::error_code> failure;
             try {
-                (void)co_await tunnel->read();
+                (void)co_await tunnel->stream().read();
             } catch (const ruvia::http_client_error& error) {
                 failure = error.code();
             }
@@ -1175,7 +1175,7 @@ TEST(Ruvia, http_client_dns_resolution_keeps_the_tighter_of_relative_and_absolut
     run_client(io, attachment, {&peer}, config, [&](ruvia::http_client& client, const ruvia::worker_ref&) -> ruvia::task<void> {
         // Occupy the only lookup thread so the resolution can end only by its bound.
         std::promise<void> release;
-        EXPECT_TRUE(lookups.submit([released = release.get_future()]() mutable {
+        EXPECT_TRUE(lookups.post([released = release.get_future()]() mutable {
             (void)released.wait_for(5s);
         }).accepted());
         // A far absolute call deadline must not relax the tighter relative handle timeout.

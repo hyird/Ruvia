@@ -67,7 +67,7 @@ namespace {
     apply_alternative_service(response, alternative_service);
     if (options.compression_.has_value()) {
         if (const auto* selection = policy.selection()) {
-            return apply_response_compression(*selection, request.known_method(), response, *options.compression_, *options.codecs_, detail::worker_ref_access::blocking_pool(worker) != nullptr);
+            return apply_response_compression(*selection, request.known_method(), response, *options.compression_, *options.codecs_, worker.blocking_pool() != nullptr);
         }
     }
     return {http_response_compression_status::not_applicable, false};

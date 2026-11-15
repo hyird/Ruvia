@@ -17,14 +17,14 @@
 
 > **体积限额与拒绝生命周期**：`ruvia::body_limit<N>` 可与 `stream_body` 叠加，且只能收紧部署级请求体限额。HTTP/2 在声明的 `Content-Length` 或已接收的 DATA 超限时，若响应头尚未提交，仍通过应用错误处理器返回 `413`（`request_body_too_large`）；处理器已启动但尚未读取请求体时也适用。已确定超限后不会再发送 `100 Continue`。响应头提交后再发现超限则重置该流，不能发送第二个响应头。拒绝任务按值持有错误元数据快照，协议诊断文本复制到请求内存域，直到异步错误处理与响应发送结束；不会借用生成拒绝结果时的栈临时对象。
 
-#### `ruvia::body_reader`（通过 `c.req().body_reader()` 获取）
+#### `ruvia::body_reader`（通过 `c.request_body()` 获取）
 
 | 方法签名 | 说明 |
 | --- | --- |
 | `task<std::optional<std::span<const std::byte>>> read(operation_options operation = {}) &` | 读取下一个请求体字节块；返回 `std::nullopt` 表示已到达请求体末尾（EOF） |
 | `task<std::optional<std::string_view>> text(operation_options operation = {}) &` | 读取下一个请求体字符视图块；返回 `std::nullopt` 表示 EOF |
 
-> **生命周期约束**：每次 `read()` 或 `text()` 返回的视图仅在下一次调用 `read()` / `text()` 启动前有效；同一 `body_reader` 上同一时刻只能有一个运行中的读取操作。
+> **生命周期约束**：每次 `read()` 或 `read_text()` 返回的视图仅在下一次调用 `read()` / `read_text()` 启动前有效；同一 `body_reader` 上同一时刻只能有一个运行中的读取操作。
 
 > **HTTP/1 读取终态**：主动读到 EOF 表示分帧与传输解码均已完成，重复读取仍返回 EOF。读取失败后再读抛 `std::logic_error`；自动消费已缓冲字节也不能使失败的正文恢复完整状态或连接复用。
 
@@ -32,7 +32,7 @@
 - **继续读取**：HTTP/1、HTTP/2、HTTP/3 均保留已缓冲正文、解码状态与读通道，下次读取从中断处继续；其他流和响应方向不受影响。HTTP/1 提交响应时正文仍未读完则响应后不复用连接。
 - **时限叠加**：服务器正文超时继续生效，逐次超时只收紧；非正超时抛 `std::invalid_argument`。
 
-#### `ruvia::multipart_reader`（通过 `c.req().multipart_reader()` 获取）
+#### `ruvia::multipart_reader`（通过 `c.request_multipart()` 获取）
 
 | 方法签名 | 说明 |
 | --- | --- |
@@ -46,7 +46,7 @@
 RUVIA_POST("/upload", upload_stream, ruvia::stream_body);
 
 ruvia::task<ruvia::http_response> upload_stream(ruvia::context& c) {
-    auto& reader = c.req().body_reader();
+    auto& reader = c.request_body();
     std::size_t total = 0;
     while (auto chunk = co_await reader.read()) {
         total += chunk->size();
@@ -176,7 +176,7 @@ ruvia::task<void> stream_subscription(
 | `bool c.push(http_push_request_view request)` | （HTTP/2）向开启了 Server Push 的客户端推送关联资源，同步返回 `bool` 表示是否被接纳；`method_`、`scheme_`、`authority_`、`path_` 使用 `borrowed_text`，`headers_` 使用 `borrowed_http_headers`，拒绝临时拥有型字符串与临时首部容器；对端禁用推送，或已打开的推送流（不含仅预留的推送）已达到对端 `SETTINGS_MAX_CONCURRENT_STREAMS`（包括其为 0）时返回 `false`，不发送 `PUSH_PROMISE`；已预留的推送在提交响应头时仍无并发额度则以 `RST_STREAM(CANCEL)` 取消，不视为连接失败 |
 | `void c.advertise_origins(std::span<const std::string_view> origins)` | （HTTP/2、HTTP/3，需 TLS）在连接或控制流上排入 RFC 8336 / RFC 9412 `ORIGIN` 帧，通告当前连接可合并服务的权威源集合 |
 | `void c.advertise_alternative_service(std::string_view value)` | （HTTP/2）在连接上排入 RFC 7838 `ALTSVC` 帧通告替代服务 |
-| `c.req().trailers()` / `c.req().trailer(name)` | 在流式请求体读取到 EOF 后，读取客户端发送的请求 Trailer 首部；按 RFC 9110 §6.5.1 不允许出现在 Trailer 中的字段（如 `Content-Length`、`Cache-Control`）被丢弃而不导致请求失败，也不会并入请求头 |
+| `c.trailers()` / `c.trailer(name)` | 在流式请求体读取到 EOF 后，读取客户端发送的请求 Trailer 首部；按 RFC 9110 §6.5.1 不允许出现在 Trailer 中的字段（如 `Content-Length`、`Cache-Control`）被丢弃而不导致请求失败，也不会并入请求头 |
 | `co_await stream.end(trailers)` | 在正文阶段结束响应并发送 Trailer；须在 commit 前声明 `Trailer` 头（如 `c.stream_text({.headers_ = head})`，`head` 为具名数组），completed 结果不生产 trailers |
 
 ---
@@ -367,7 +367,7 @@ RUVIA_CONNECT_PROTOCOL("connect-udp", "/proxy/udp", handle_udp, udp_tunnel_optio
 ruvia::task<void> handle_udp(ruvia::context& c) {
     auto udp = c.tunnel().udp();
     while (auto datagram = co_await udp.read()) {
-        co_await udp.send(datagram->payload());
+        co_await udp.send(datagram->bytes());
     }
     co_await udp.finish();
 }
@@ -379,13 +379,12 @@ HTTP/3 CONNECT-UDP 在双方协商 `SETTINGS_H3_DATAGRAM` 及 QUIC DATAGRAM 后�
 
 | 类名 | 核心方法 |
 | --- | --- |
-| `ruvia::http_tunnel` | `read(operation = {})`（返回 `std::optional<std::span<const std::byte>>`）、`write(bytes, operation = {})`、`finish(operation = {})`、`abort()`、`udp(config = {})`、`datagrams(config = {})`、`capsules(config = {})` |
-| `ruvia::http_capsule_stream` | `read(operation = {})`（返回 `std::optional<http_capsule>`）、`write(type, payload, operation = {})`、`finish(operation = {})`、`abort()` |
-| `ruvia::http_datagram_stream` | `read(operation = {})`（返回 `std::optional<http_datagram>`）、`send(payload, operation = {})`、`finish(operation = {})`、`abort()` |
-| `ruvia::http_udp_tunnel` | `read(operation = {})`（返回 `std::optional<http_datagram>`，自动剥离/封装 `context_id = 0`）、`send(payload, operation = {})`、`finish(operation = {})`、`abort()` |
+| `ruvia::http_tunnel` | `read(operation = {})`（返回 `std::optional<std::span<const std::byte>>`）、`read_text(operation = {})`（同一读通道，返回 `std::optional<std::string_view>`）、`write(bytes, operation = {})`、`finish(operation = {})`、`abort()`、`udp(config = {})`、`datagrams(config = {})`、`capsules(config = {})` |
+| `ruvia::http_capsule_stream` | `read(operation = {})`（返回 `std::optional<http_capsule>`，以 `type()`、`bytes()` / `text()` 访问）、`write(type, payload, operation = {})`、`finish(operation = {})`、`abort()` |
+| `ruvia::http_datagram_stream` | `read(operation = {})`（返回 `std::optional<http_datagram>`，以 `bytes()` / `text()` 访问）、`send(payload, operation = {})`、`finish(operation = {})`、`abort()`。模式在创建时固定：`tunnel.datagrams()` 收发原始 HTTP Datagram 载荷；`tunnel.udp()` 为 CONNECT-UDP 自动剥离/封装 `context_id = 0` 并丢弃未知 Context ID |
 
 - **逐次读取中断**：`read()` 的 `operation`（`operation_options`）超时或停止只结束本次读取，抛 `std::system_error`（`timed_out` / `operation_canceled`）；未消费输入与半个 Capsule 保留，可继续读取。
-- **客户端适配器**：由 `http_client_tunnel` 转成的 Capsule / Datagram / UDP 门面语义相同，中断抛 `http_client_error : std::system_error`（标准 `errc::timed_out` / `operation_canceled`）。
+- **客户端隧道**：服务端与客户端共用 `http_tunnel` 这一个已建立隧道类型。`http_client_tunnel` 只拥有客户端特有部分（2xx 响应的状态、字段、连接信息与连接租约），字节流经 `tunnel->stream()` 取得；Capsule / Datagram / UDP 门面在两种角色下都借用该 `http_tunnel`，须先于路由处理器返回或 `http_client_tunnel` 销毁而销毁。客户端门面若晚于 `http_client_tunnel` 销毁即视为已关闭：之后调用或此前创建但尚未启动的操作抛 `std::logic_error`，`abort()` 无操作，已读到的 `http_capsule` / `http_datagram` 仍然有效；销毁拥有者前须等待已启动的操作结束。客户端每个已接受隧道都可使用 `capsules()`，`datagrams()` / `udp()` 仅限已接受的 CONNECT-UDP 隧道；中断与已关闭隧道上的操作抛 `http_client_error : std::system_error`（标准 `errc::timed_out` / `operation_canceled`）。
 - **逐次输出中断**：`write()`、`send()`、`finish()` 的超时或停止中止隧道（部分写出无法撤回）并抛同样的异常；令牌在启动前已停止则不发出任何字节、不中止隧道。
 - **时限叠加**：一次 Capsule / Datagram 调用内的多次传输读写共用该调用的截止期；服务器写超时与隧道排空时限继续生效；非正超时抛 `std::invalid_argument`。
 
@@ -436,11 +435,11 @@ co_return c.text(body.text());
 | `response.connection_info()` | 借用物理连接 ID、对端 IP/端口、复用标志及连接/TLS 阶段耗时；隧道结果同样提供连接信息 |
 | `response.bytes(max_bytes)` | 收集尚未消费的正文；返回拥有型 `http_client_response_bytes`，以 `.text()` / `.bytes()` 借用内容 |
 | `response.json<T>(max_bytes)` | 收集正文并按公开 Model JSON 契约解析 |
-| `response.stream().read()` / `.text()` | 拉取下一块正文；`nullopt` 表示 EOF，视图在下一次正文操作启动前有效 |
+| `response.stream().read()` / `.read_text()` | 拉取下一块正文；`nullopt` 表示 EOF，视图在下一次正文操作启动前有效 |
 | `response.pipe_to(c)` / `response.pipe_to(request_stream)` | 将上游响应转发给当前服务端响应；提交后的传输失败中止流，不伪造完整响应 |
 | `response.stream().pipe_to(writer)` | 只转发正文；调用方先设置响应元数据并 `commit()`，仅 `body` 结果允许转发。入站 Upgrade / CONNECT 拒绝同样支持流式输出，见[请求流分发](web-guide.md#18-请求流分发request_streamh) |
 | `response.reprioritize(http_priority)` | 对尚在传输中的 HTTP/2 或 HTTP/3 响应流发送 RFC 9218 `PRIORITY_UPDATE` 帧 |
-| `client.connect(authority).connect()`、`client.udp(path).connect()` | 打开字节隧道或 CONNECT-UDP；结果区分已建立的隧道与非 2xx HTTP 响应 |
+| `client.connect(authority).connect()`、`client.udp(path).connect()` | 打开字节隧道或 CONNECT-UDP；结果区分已建立的隧道（`result.tunnel()` 返回 `http_client_tunnel*`，其 `stream()` 即与服务端相同的 `http_tunnel`）与非 2xx HTTP 响应（`result.response()`） |
 | `request.connect(config = {})` | 将带 `Connection: Upgrade`、`Upgrade` 字段的 HTTP/1.1 请求升级为原始字节隧道；非 101 保留为普通流式 HTTP 响应 |
 | `client.migrate(local_address, port)` | 对已有 HTTP/3 连接发起本地地址迁移，保留连接与流状态 |
 | `client.websocket(path).connect()` | 返回拥有型 `websocket`；与服务端共用同一个类型、消息写入器和会话状态机（见 [3.2](#32-ruviawebsocket-与-ruviawebsocket_message-api)） |
@@ -456,7 +455,7 @@ co_return c.text(body.text());
 
 | 入口 | 超时或取消时 |
 | --- | --- |
-| 正文 `read()` / `text()`、`read_all()` / `bytes()` / `json<T>()`，隧道 `read()` / `text()` | 只结束本次等待，抛 `http_client_error`（标准 `errc::timed_out` / `operation_canceled`）；已缓冲正文与读通道保留，可继续读取 |
+| 正文 `read()` / `read_text()`、`bytes()` / `json<T>()`，隧道 `read()` / `read_text()` | 只结束本次等待，抛 `http_client_error`（标准 `errc::timed_out` / `operation_canceled`）；已缓冲正文与读通道保留，可继续读取 |
 | `exchange.response()`、`push.response()` | 只结束本次等待响应头；随后可再次调用 `response()` |
 | 上传 `write()` / `end()`，隧道 `write()` / `finish()` | 中止该交换或隧道（已写出部分无法撤回），抛标准 `errc::timed_out` / `operation_canceled` |
 | `stream().pipe_to(writer)`、`pipe_to(c)` | 约束整次转发；中断抛标准 `errc::timed_out` / `operation_canceled`，已提交下游随异常中止 |

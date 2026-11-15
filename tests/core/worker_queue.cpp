@@ -28,7 +28,7 @@ TEST(Ruvia, worker_queue_yields_to_io_context_between_batches) {
             if (!*foreign_ran_ && *runs_ < 1000) {
                 static_cast<void>(worker_->post(*this));
             } else {
-                attachment_->stop();
+                attachment_->request_stop();
             }
         }
     };
@@ -102,7 +102,7 @@ TEST(Ruvia, worker_cancellation_registration_retires_before_slot_reuse) {
         new_stop.request_stop();
         current.reset();
         target->detach(state);
-        attachment.stop();
+        attachment.request_stop();
     }).accepted());
     attachment.run();
     EXPECT_EQ(state.accepted_, 1u);
@@ -136,7 +136,7 @@ TEST(Ruvia, worker_cancellation_registration_handles_precancel_and_exception_unw
             unwound = state.identity_ == 0;
         }
         target->detach(state);
-        attachment.stop();
+        attachment.request_stop();
     }).accepted());
     attachment.run();
     EXPECT_TRUE(unwound);
@@ -182,10 +182,10 @@ struct deferred_resume final {
     void await_suspend(std::coroutine_handle<> continuation) const {
         if (foreign_) {
             std::jthread([this, continuation] {
-                ruvia::detail::worker_ref_access::defer_resume(worker_, continuation);
+                worker_.defer_resume(continuation);
             }).join();
         } else {
-            ruvia::detail::worker_ref_access::defer_resume(worker_, continuation);
+            worker_.defer_resume(continuation);
         }
         order_.push_back(-step_);
     }

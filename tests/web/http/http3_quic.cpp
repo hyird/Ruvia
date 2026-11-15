@@ -1131,7 +1131,7 @@ public:
         identity_("localhost", "DNS:localhost,DNS:a.localhost,DNS:b.localhost,DNS:c.localhost"),
         app_(ruvia::app()) {
         const auto& key = identity_.private_key_file();
-        app_.server({.worker_count_ = 4})
+        app_.workers({.worker_count_ = 4})
             .listen(
                 {{
                      .address_ = "127.0.0.1",
@@ -1401,7 +1401,7 @@ ruvia::task<void> exercise_blocked_migration(ruvia::event_loop_attachment& attac
         } else if (mode == 3) {
             owner.close();
         } else if (mode == 4) {
-            attachment.stop();
+            attachment.request_stop();
         }
         co_await tasks.join();
         if (mode == 1 || mode == 2) {
@@ -1417,7 +1417,7 @@ ruvia::task<void> exercise_blocked_migration(ruvia::event_loop_attachment& attac
     }
     co_await owner.shutdown();
     co_await relay.shutdown();
-    attachment.stop();
+    attachment.request_stop();
     if (failure) {
         std::rethrow_exception(failure);
     }
@@ -1497,11 +1497,11 @@ ruvia::task<void> exercise_outbound_features(ruvia::event_loop loop, ruvia::http
         {
             auto response = co_await client.get("/resumption/reprioritize").header("priority", "u=6").send();
             EXPECT_TRUE(response.ok());
-            auto first = co_await response.stream().text();
+            auto first = co_await response.stream().read_text();
             EXPECT_TRUE(first.has_value() && *first == "u=6,i=0\n");
             response.reprioritize({.urgency_ = ruvia::http_priority_urgency(1), .incremental_ = true});
             std::string remainder{};
-            while (auto chunk = co_await response.stream().text()) {
+            while (auto chunk = co_await response.stream().read_text()) {
                 remainder.append(*chunk);
             }
             EXPECT_EQ(remainder, "u=1,i=1");
@@ -1750,11 +1750,11 @@ TEST(Ruvia, http3_outbound_alt_svc_is_learned_and_used_per_route) {
     try {
         loops.loop(0).start(http3_resumption_test::exercise_route_alt_svc(loops.loop(0), server.outbound_config(), server.enabled_tcp_port())).get();
     } catch (...) {
-        loops.stop();
+        loops.request_stop();
         loops.join();
         throw;
     }
-    loops.stop();
+    loops.request_stop();
     loops.join();
 }
 
@@ -1766,11 +1766,11 @@ TEST(Ruvia, http3_outbound_request_routes_send_their_authority_and_server_name_p
     try {
         loops.loop(0).start(http3_resumption_test::exercise_outbound_routes(loops.loop(0), server.outbound_config(), server.enabled_endpoint().port())).get();
     } catch (...) {
-        loops.stop();
+        loops.request_stop();
         loops.join();
         throw;
     }
-    loops.stop();
+    loops.request_stop();
     loops.join();
 }
 
@@ -1782,11 +1782,11 @@ TEST(Ruvia, http3_outbound_session_tickets_resume_only_their_route) {
     try {
         loops.loop(0).start(http3_resumption_test::exercise_route_tickets(loops.loop(0), server.outbound_config(), server.enabled_endpoint().port())).get();
     } catch (...) {
-        loops.stop();
+        loops.request_stop();
         loops.join();
         throw;
     }
-    loops.stop();
+    loops.request_stop();
     loops.join();
 }
 
@@ -1799,11 +1799,11 @@ TEST(Ruvia, http3_outbound_idle_reconnect_serves_requests_and_bounds_425_retries
         auto loop = loops.loop(0);
         loop.start(http3_resumption_test::exercise_outbound_resumption(loop, config)).get();
     } catch (...) {
-        loops.stop();
+        loops.request_stop();
         loops.join();
         throw;
     }
-    loops.stop();
+    loops.request_stop();
     loops.join();
 }
 
@@ -1816,11 +1816,11 @@ TEST(Ruvia, http3_outbound_consecutive_migrations_wait_for_connection_ids) {
         auto loop = loops.loop(0);
         loop.start(http3_resumption_test::exercise_outbound_migration(loop, config)).get();
     } catch (...) {
-        loops.stop();
+        loops.request_stop();
         loops.join();
         throw;
     }
-    loops.stop();
+    loops.request_stop();
     loops.join();
 }
 
@@ -1998,11 +1998,11 @@ TEST(Ruvia, http3_outbound_advertises_origins_and_reprioritizes_active_streams) 
         auto loop = loops.loop(0);
         loop.start(http3_resumption_test::exercise_outbound_features(loop, config, retry_config)).get();
     } catch (...) {
-        loops.stop();
+        loops.request_stop();
         loops.join();
         throw;
     }
-    loops.stop();
+    loops.request_stop();
     loops.join();
 }
 
@@ -2023,10 +2023,10 @@ TEST(Ruvia, http3_outbound_concurrent_early_data_retry_and_goaway_drain_stress) 
             std::move(f).get();
         }
     } catch (...) {
-        loops.stop();
+        loops.request_stop();
         loops.join();
         throw;
     }
-    loops.stop();
+    loops.request_stop();
     loops.join();
 }

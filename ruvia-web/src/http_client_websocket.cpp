@@ -99,7 +99,7 @@ public:
         }
         check();
         try {
-            const auto chunk = co_await tunnel_.read();
+            const auto chunk = co_await tunnel_.stream().read();
             if (!chunk) {
                 co_return false;
             }
@@ -113,12 +113,12 @@ public:
         try {
             while (!bytes.empty()) {
                 const auto chunk = bytes.substr(0, 16384);
-                co_await tunnel_.write(chunk);
+                co_await tunnel_.stream().write(chunk);
                 activity_.note_write_progress();
                 bytes.remove_prefix(chunk.size());
             }
             if (end == http_stream_end::end) {
-                co_await tunnel_.finish();
+                co_await tunnel_.stream().finish();
             }
             co_return std::error_code{};
         } catch (const http_client_error& error) {
@@ -126,7 +126,7 @@ public:
         }
     }
     void abort() noexcept {
-        tunnel_.abort();
+        response_.tunnel_->stream_.abort();
         response_.data_signal_.notify();
     }
     http_client_response_state& response() noexcept {

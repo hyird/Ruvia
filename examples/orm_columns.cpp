@@ -100,7 +100,7 @@ task<void> run(db_client& db, db_client& concurrent, event_loop_attachment& atta
     }
     co_await db.shutdown();
     co_await concurrent.shutdown();
-    attachment.stop();
+    attachment.request_stop();
     if (failure) {
         std::rethrow_exception(failure);
     }

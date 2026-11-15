@@ -313,7 +313,7 @@ TEST(Ruvia, server_observers_see_client_hellos_and_http2_input_by_connection_id)
 #endif
 
     auto& app = ruvia::app();
-    app.server({.worker_count_ = 2})
+    app.workers({.worker_count_ = 2})
         .listen(listener)
         .on_start([] {
         started().release();

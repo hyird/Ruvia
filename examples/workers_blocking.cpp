@@ -122,7 +122,7 @@ int main() {
     try {
         ruvia::app()
             .listen({.address_ = "0.0.0.0", .http_ = 8090})
-            .server({.worker_count_ = 2, .process_signal_handlers_ = ruvia::process_signal_handler_policy::install})
+            .workers({.worker_count_ = 2, .process_signal_handlers_ = ruvia::process_signal_handler_policy::install})
             // Each worker builds its own worker_stats before serving; the factory
             // form (use_worker_state<T>(fn)) covers non-default-constructible types.
             .use_worker_state<worker_stats>()

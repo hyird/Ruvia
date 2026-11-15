@@ -14,7 +14,7 @@
 
 TEST(RuviaHttpPublicApi, strict_byte_ranges_content_range_and_streaming_slicer) {
     // Strict ascending non-overlapping mode rejects out-of-order and overlapping ranges.
-    const auto strict_ok = ruvia::resolve_http_byte_range_set("bytes=0-4, 5-9, 20-29", 100, {.max_ranges_ = 32, .strict_order_ = true});
+    const auto strict_ok = ruvia::resolve_http_byte_range_set("bytes=0-4, 5-9, 20-29", 100, {.max_ranges_ = 32, .order_policy_ = ruvia::http_byte_range_order_policy::strict_ascending_disjoint});
     EXPECT_FALSE(strict_ok.ignored());
     ASSERT_EQ(strict_ok.size(), 3U);
     EXPECT_EQ(strict_ok[0].offset(), 0U);
@@ -22,10 +22,10 @@ TEST(RuviaHttpPublicApi, strict_byte_ranges_content_range_and_streaming_slicer) 
     EXPECT_EQ(strict_ok[1].offset(), 5U);
     EXPECT_EQ(strict_ok[1].length(), 5U);
 
-    const auto strict_out_of_order = ruvia::resolve_http_byte_range_set("bytes=20-29, 0-4", 100, {.max_ranges_ = 32, .strict_order_ = true});
+    const auto strict_out_of_order = ruvia::resolve_http_byte_range_set("bytes=20-29, 0-4", 100, {.max_ranges_ = 32, .order_policy_ = ruvia::http_byte_range_order_policy::strict_ascending_disjoint});
     EXPECT_TRUE(strict_out_of_order.ignored());
 
-    const auto strict_overlapping = ruvia::resolve_http_byte_range_set("bytes=0-10, 10-20", 100, {.max_ranges_ = 32, .strict_order_ = true});
+    const auto strict_overlapping = ruvia::resolve_http_byte_range_set("bytes=0-10, 10-20", 100, {.max_ranges_ = 32, .order_policy_ = ruvia::http_byte_range_order_policy::strict_ascending_disjoint});
     EXPECT_TRUE(strict_overlapping.ignored());
 
     // Configurable max_ranges > 16 works.
@@ -36,7 +36,7 @@ TEST(RuviaHttpPublicApi, strict_byte_ranges_content_range_and_streaming_slicer) 
         }
         twenty_ranges += std::to_string(i * 2) + "-" + std::to_string(i * 2);
     }
-    const auto many = ruvia::resolve_http_byte_range_set(twenty_ranges, 100, {.max_ranges_ = 24, .strict_order_ = true});
+    const auto many = ruvia::resolve_http_byte_range_set(twenty_ranges, 100, {.max_ranges_ = 24, .order_policy_ = ruvia::http_byte_range_order_policy::strict_ascending_disjoint});
     EXPECT_FALSE(many.ignored());
     EXPECT_EQ(many.size(), 20U);
 

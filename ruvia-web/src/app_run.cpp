@@ -233,6 +233,10 @@ private:
         runtime->routes_enabled_ = routes_enabled;
         auto prepared_options = state_.options_;
         prepared_options.env_ = &state_.env_;
+        if (const auto& limit = state_.configuration_.rate_limit()) {
+            prepared_options.default_rate_limit_per_worker_ = limit->rule_;
+            prepared_options.rate_limit_capacity_per_worker_ = limit->capacity_per_worker_;
+        }
         prepared_options.failure_ = detail::worker_failure_sink{
             .target_ = &owner_,
             .invoke_ = [](void* target, const std::exception_ptr&) noexcept {
@@ -249,7 +253,7 @@ private:
             // Precompressed variants are negotiated by the compression policy,
             // so without it the refresher never builds them.
             const auto precompression = prepared_options.compression_.has_value() ? document_root.precompression_ : detail::static_root_precompression_options{};
-            runtime->document_root_ = std::make_unique<detail::document_root_publisher>(http_make_path_from_native_path(document_root.root_), document_root.static_options_, document_root.refresh_interval_, precompression, document_root.resident_, state_.options_.server_.worker_count_);
+            runtime->document_root_ = std::make_unique<detail::document_root_publisher>(http_make_path_from_native_path(document_root.root_), document_root.static_options_, document_root.refresh_interval_, precompression, document_root.resident_, state_.options_.worker_count_);
             prepared_options.document_root_ = detail::http_server_options::document_root_state::refreshing(*runtime->document_root_);
         }
         if (state_.blocking_pool_.has_value()) {
@@ -277,18 +281,18 @@ private:
         if (std::ranges::any_of(validated_configuration.listeners(), [](const auto& listener) {
             return listener.http3_.has_value();
         })) {
-            runtime->http3_directory_ = std::make_unique<detail::http3_worker_directory>(state_.options_.server_.worker_count_);
+            runtime->http3_directory_ = std::make_unique<detail::http3_worker_directory>(state_.options_.worker_count_);
         }
 #endif
 #if defined(_WIN32)
-        runtime->acceptor_ = std::make_unique<detail::windows_acceptor>(validated_configuration.listeners(), state_.options_.server_.worker_count_,
+        runtime->acceptor_ = std::make_unique<detail::windows_acceptor>(validated_configuration.listeners(), state_.options_.worker_count_,
 #if defined(RUVIA_ENABLE_HTTP3)
             runtime->http3_directory_.get(),
 #endif
             validated_configuration.options().failure_);
 #endif
-        runtime->workers_.reserve(state_.options_.server_.worker_count_);
-        for (std::size_t i = 0; i < state_.options_.server_.worker_count_; ++i) {
+        runtime->workers_.reserve(state_.options_.worker_count_);
+        for (std::size_t i = 0; i < state_.options_.worker_count_; ++i) {
             auto controllers = i == 0 ? std::move(first_controllers) : detail::controller_store(controller_registrars);
             auto routes_value = std::make_unique<detail::route_table>(*runtime->route_plan_, controllers);
             const detail::worker_capability_definitions capabilities{
@@ -358,7 +362,7 @@ private:
     }
 
     void start_signal_handling() {
-        if (state_.options_.server_.process_signal_handlers_ == process_signal_handler_policy::install) {
+        if (state_.process_signal_handlers_ == process_signal_handler_policy::install) {
             signals_.emplace(owner_);
         }
     }

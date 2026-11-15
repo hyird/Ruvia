@@ -696,7 +696,7 @@ void run_operation(test_worker& worker_value, asio::io_context& io, operation_ty
         } catch (...) {
             failure = std::current_exception();
         }
-        worker_value.attachment_.stop();
+        worker_value.attachment_.request_stop();
     };
     auto root = worker_value.attachment_.loop().start(run());
     worker_value.attachment_.run();
@@ -719,8 +719,8 @@ TEST(Ruvia, client_response_body_collectors_return_public_results) {
     auto operation = [&]() -> ruvia::task<void> {
         auto response = co_await client.client().get("/collect").send();
         EXPECT_TRUE(!response.stream().complete());
-        auto cold_read = response.read();
-        auto cold_text = response.stream().text();
+        auto cold_read = response.stream().read();
+        auto cold_text = response.stream().read_text();
         auto collected = co_await response.bytes();
         EXPECT_TRUE(response.stream().complete());
         EXPECT_EQ(collected.size(), expected.size());
@@ -730,7 +730,7 @@ TEST(Ruvia, client_response_body_collectors_return_public_results) {
         EXPECT_TRUE(remaining.empty());
         EXPECT_TRUE(!(co_await std::move(cold_read)));
         EXPECT_TRUE(!(co_await std::move(cold_text)));
-        EXPECT_TRUE(!(co_await response.stream().text()));
+        EXPECT_TRUE(!(co_await response.stream().read_text()));
         co_await client.shutdown();
         EXPECT_TRUE(response.stream().complete());
         EXPECT_EQ(collected_view, expected);
@@ -750,7 +750,7 @@ TEST(Ruvia, client_response_body_completion_preserves_truncation_after_buffered_
             auto response = co_await client.client().get("/truncated").send();
             std::optional<std::error_code> response_error;
             try {
-                (void)co_await response.stream().read_all();
+                (void)co_await response.bytes();
             } catch (const ruvia::http_client_error& error) {
                 response_error = error.code();
             }
@@ -758,7 +758,7 @@ TEST(Ruvia, client_response_body_completion_preserves_truncation_after_buffered_
             std::string received{};
             while (received.size() < prefix.size()) {
                 EXPECT_TRUE(!response.stream().complete());
-                const auto chunk = co_await response.stream().text();
+                const auto chunk = co_await response.stream().read_text();
                 if (!chunk) {
                     break;
                 }
@@ -798,7 +798,7 @@ TEST(Ruvia, http_client_preserves_fixed_length_response_before_unsolicited_bytes
     peer.start();
     auto operation = [&]() -> ruvia::task<void> {
         auto response = co_await client.client().get("/overlong").send();
-        const auto body = co_await response.stream().read_all();
+        const auto body = co_await response.bytes();
         EXPECT_EQ(body.text(), std::string_view("ok"));
         co_await peer.wait();
         co_await client.shutdown();
@@ -815,9 +815,9 @@ TEST(Ruvia, client_response_body_claims_its_shared_lane_only_when_started) {
     ruvia::http_client client(worker.attachment_.loop(), local_http_client_config(client_url));
     auto operation = [&]() -> ruvia::task<void> {
         auto response = co_await client.client().get("/body-lane").send();
-        auto collect = response.stream().read_all();
+        auto collect = response.bytes();
         auto read = response.stream().read();
-        auto text = response.stream().text();
+        auto text = response.stream().read_text();
         bool collected = false;
         ruvia::task_scope readers(worker.handle_);
         const auto consume = [&]() -> ruvia::task<void> {
@@ -839,7 +839,7 @@ TEST(Ruvia, client_response_body_claims_its_shared_lane_only_when_started) {
             text_rejected = true;
         }
         try {
-            (void)co_await response.stream().read_all();
+            (void)co_await response.bytes();
         } catch (const std::logic_error&) {
             collect_rejected = true;
         }
@@ -847,7 +847,7 @@ TEST(Ruvia, client_response_body_claims_its_shared_lane_only_when_started) {
         co_await readers.join();
         EXPECT_TRUE(read_rejected && text_rejected && collect_rejected);
         EXPECT_TRUE(collected);
-        EXPECT_TRUE(!(co_await response.stream().text()));
+        EXPECT_TRUE(!(co_await response.stream().read_text()));
         co_await client.shutdown();
     };
     run_operation(worker, io, operation);
@@ -877,12 +877,12 @@ void exercise_final_head_cookies(ruvia::http_client_versions protocol) {
             EXPECT_EQ(streaming->informational_responses().size(), std::size_t{1});
             {
                 auto response = co_await client.client().get("/before-abandonment").send();
-                EXPECT_TRUE((co_await response.stream().read_all()).empty());
+                EXPECT_TRUE((co_await response.bytes()).empty());
             }
             streaming.reset();
             {
                 auto response = co_await client.client().get("/after-abandonment").send();
-                EXPECT_TRUE((co_await response.stream().read_all()).empty());
+                EXPECT_TRUE((co_await response.bytes()).empty());
             }
             co_await peer.wait();
             for (const auto& request : peer.requests_) {
@@ -924,15 +924,15 @@ TEST(Ruvia, http1_slow_body_completion_does_not_roll_back_newer_final_head_cooki
         EXPECT_TRUE(!slow.stream().complete());
         {
             auto update = co_await client.client().get("/scope/update").send();
-            EXPECT_TRUE((co_await update.stream().read_all()).empty());
+            EXPECT_TRUE((co_await update.bytes()).empty());
         }
         // The gate opens only after the newer final head has updated the jar.
         peer.release_terminal_body();
-        const auto body = co_await slow.stream().read_all();
+        const auto body = co_await slow.bytes();
         EXPECT_EQ(std::string_view(reinterpret_cast<const char*>(body.bytes().data()), body.size()), std::string_view("x"));
         {
             auto check = co_await client.client().get("/scope/check").send();
-            EXPECT_TRUE((co_await check.stream().read_all()).empty());
+            EXPECT_TRUE((co_await check.bytes()).empty());
         }
         co_await peer.wait();
         EXPECT_TRUE(peer.requests_[0].find("sid=old") != std::string::npos);
@@ -963,7 +963,7 @@ TEST(Ruvia, http_client_replaces_host_only_cookie_with_same_named_domain_cookie)
     auto operation = [&]() -> ruvia::task<void> {
         for (const auto* target : {"/host", "/domain", "/check"}) {
             auto response = co_await client.client().get(target).send();
-            EXPECT_TRUE((co_await response.stream().read_all()).empty());
+            EXPECT_TRUE((co_await response.bytes()).empty());
             EXPECT_TRUE(response.stream().complete());
         }
         co_await peer.wait();
@@ -1001,7 +1001,7 @@ TEST(Ruvia, http_client_jar_follows_user_agent_set_cookie_algorithm) {
     auto operation = [&]() -> ruvia::task<void> {
         for (const auto* target : {"/set", "/check"}) {
             auto response = co_await client.client().get(target).send();
-            EXPECT_TRUE((co_await response.stream().read_all()).empty());
+            EXPECT_TRUE((co_await response.bytes()).empty());
         }
         co_await peer.wait();
         EXPECT_EQ(peer.requests_.size(), std::size_t{2});
@@ -1046,7 +1046,7 @@ TEST(Ruvia, http_client_merges_explicit_cookie_fields_without_losing_other_heade
     auto operation = [&]() -> ruvia::task<void> {
         const std::array fields{ruvia::http_header_view{"Cookie", "a=1"}, ruvia::http_header_view{"X-Test", "present"}, ruvia::http_header_view{"cOoKiE", "b=2"}};
         auto response = co_await client.client().get("/").headers(fields).send();
-        EXPECT_TRUE((co_await response.stream().read_all()).empty());
+        EXPECT_TRUE((co_await response.bytes()).empty());
         co_await peer.wait();
         EXPECT_EQ(peer.requests_.size(), std::size_t{1});
         if (!peer.requests_.empty()) {
@@ -1097,7 +1097,7 @@ TEST(Ruvia, http_client_omits_stored_cookies_from_trace) {
     auto operation = [&]() -> ruvia::task<void> {
         for (const auto* method : {"TRACE", "GET"}) {
             auto response = co_await client.client().request(method, "/").send();
-            EXPECT_TRUE((co_await response.stream().read_all()).empty());
+            EXPECT_TRUE((co_await response.bytes()).empty());
         }
         co_await peer.wait();
         EXPECT_EQ(peer.requests_.size(), std::size_t{2});
@@ -1128,7 +1128,7 @@ TEST(Ruvia, http_client_passes_encoded_partial_content_through) {
     auto operation = [&]() -> ruvia::task<void> {
         auto response = co_await client.client().get("/range").send();
         EXPECT_EQ(response.status().value(), std::uint16_t{206});
-        const auto bytes_value = co_await response.stream().read_all();
+        const auto bytes_value = co_await response.bytes();
         EXPECT_EQ(std::string_view(reinterpret_cast<const char*>(bytes_value.bytes().data()), bytes_value.size()), std::string_view(gzip_prefix));
         co_await peer.wait();
         co_await client.shutdown();
@@ -1154,7 +1154,7 @@ TEST(Ruvia, http_client_passes_unsupported_content_codings_through) {
             auto response = co_await client.client().get("/coded").send();
             EXPECT_EQ(response.status().value(), std::uint16_t{200});
             EXPECT_TRUE(response.header("Content-Encoding") == std::optional<std::string_view>(coding));
-            const auto bytes_value = co_await response.stream().read_all();
+            const auto bytes_value = co_await response.bytes();
             EXPECT_EQ(bytes_value.text(), std::string_view(opaque));
         }
         co_await peer.wait();
@@ -1186,7 +1186,7 @@ TEST(Ruvia, http_client_strips_decoded_content_encoding_and_rejects_overdeep_kno
         for (int i = 0; i < 2; ++i) {
             auto response = co_await client.client().get("/decoded").send();
             EXPECT_EQ(response.status().value(), std::uint16_t{200});
-            const auto bytes_value = co_await response.stream().read_all();
+            const auto bytes_value = co_await response.bytes();
             EXPECT_EQ(bytes_value.text(), std::string_view("hello"));
             EXPECT_TRUE(!response.header("Content-Encoding").has_value());
             EXPECT_TRUE(!response.header("Content-Length").has_value());
@@ -1194,7 +1194,7 @@ TEST(Ruvia, http_client_strips_decoded_content_encoding_and_rejects_overdeep_kno
         bool rejected_overdeep = false;
         try {
             auto response = co_await client.client().get("/overdeep").send();
-            (void)co_await response.stream().read_all();
+            (void)co_await response.bytes();
         } catch (const ruvia::http_client_error& error) {
             rejected_overdeep = error.code() == ruvia::make_error_code(ruvia::http_client_errc::protocol_error);
         }
@@ -1224,10 +1224,10 @@ TEST(Ruvia, http_client_preserves_large_unsigned_timeout_bounds) {
     server.start();
     auto operation = [&]() -> ruvia::task<void> {
         auto first = co_await client.client().get("/large-config").send();
-        auto first_body = co_await first.stream().read_all();
+        auto first_body = co_await first.bytes();
         EXPECT_EQ(first_body.text(), std::string_view("first"));
         auto second = co_await client.client().with_options({.timeout_ = large}).get("/large-operation").send();
-        auto second_body = co_await second.stream().read_all();
+        auto second_body = co_await second.bytes();
         EXPECT_EQ(second_body.text(), std::string_view("second"));
         co_await server.wait();
         co_await client.shutdown();
@@ -1347,7 +1347,7 @@ TEST(Ruvia, http_client_ref_options_override_pool_timeout_and_start_when_operati
 
         auto operation = [&]() -> ruvia::task<void> {
             server.on_request([&worker] {
-                worker.attachment_.stop();
+                worker.attachment_.request_stop();
             });
             bool cancelled = false;
             try {
@@ -1458,7 +1458,7 @@ TEST(Ruvia, http1_full_response_queue_loop_stop_joins_without_reading) {
     auto operation = [&]() -> ruvia::task<void> {
         auto response = co_await client.client().get("/backpressure-stop").send();
         EXPECT_EQ(response.status(), ruvia::http_status::ok);
-        worker.attachment_.stop();
+        worker.attachment_.request_stop();
         // The response remains alive across shutdown; its destructor/read()
         // cannot be the event that wakes the producer.
         co_await client.shutdown();
@@ -1550,7 +1550,7 @@ TEST(Ruvia, http1_transfer_gzip_full_queue_loop_stop_joins_without_reading) {
             });
         }
         EXPECT_TRUE(client.client().stats().plaintext_bytes_received_ >= encoded.size());
-        worker.attachment_.stop();
+        worker.attachment_.request_stop();
         co_await client.shutdown();
         joined = true;
     };
@@ -1640,7 +1640,7 @@ TEST(Ruvia, http1_response_storage_remains_worker_owned_after_client_destruction
                 collected.append(reinterpret_cast<const char*>(first->data()), first->size());
             }
             peer.release_terminal_chunk();
-            retained_body.emplace(co_await response->stream().read_all());
+            retained_body.emplace(co_await response->bytes());
             co_await client.shutdown();
         }
 
@@ -1652,10 +1652,10 @@ TEST(Ruvia, http1_response_storage_remains_worker_owned_after_client_destruction
             return value == 'h';
         }));
         EXPECT_TRUE(!headers.empty());
-        const auto text = co_await response->stream().text();
+        const auto text = co_await response->stream().read_text();
         EXPECT_TRUE(!text.has_value());
         EXPECT_TRUE(!(co_await response->stream().read()).has_value());
-        const auto remaining = co_await response->stream().read_all();
+        const auto remaining = co_await response->bytes();
         EXPECT_TRUE(remaining.empty());
         const auto retained_view = retained_body->bytes();
         collected.append(reinterpret_cast<const char*>(retained_view.data()), retained_view.size());
@@ -1681,13 +1681,13 @@ TEST(Ruvia, client_response_cold_collection_survives_client_and_expires_with_res
         auto client = std::make_unique<ruvia::http_client>(worker.attachment_.loop(), local_http_client_config(client_url));
         std::optional<ruvia::http_client_response> response;
         response.emplace(co_await client->client().get("/cold-body").send());
-        auto cold = response->stream().read_all();
+        auto cold = response->bytes();
         co_await client->shutdown();
         client.reset();
 
         auto retained = co_await std::move(cold);
         EXPECT_EQ(std::string_view(reinterpret_cast<const char*>(retained.bytes().data()), retained.bytes().size()), std::string_view("cold-body"));
-        auto expired = response->stream().read_all();
+        auto expired = response->bytes();
         response.reset();
         bool rejected = false;
         try {
@@ -1718,10 +1718,10 @@ TEST(Ruvia, http_client_sends_heads_beyond_the_retained_buffer_and_rejects_overs
         const std::array large_headers{ruvia::http_header_view{"X-Large", large_value}};
         auto large = co_await client.client().get("/large").headers(large_headers).send();
         EXPECT_TRUE(large.status() == ruvia::http_status::ok);
-        EXPECT_EQ(body_text(co_await large.stream().read_all()), std::string("large-head"));
+        EXPECT_EQ(body_text(co_await large.bytes()), std::string("large-head"));
         auto small = co_await client.client().get("/small").send();
         EXPECT_TRUE(small.status() == ruvia::http_status::ok);
-        EXPECT_EQ(body_text(co_await small.stream().read_all()), std::string("small-head"));
+        EXPECT_EQ(body_text(co_await small.bytes()), std::string("small-head"));
         co_await server.wait();
 
         const std::string oversized_value(ruvia::max_http_header_bytes + 2048, 'o');
@@ -1750,7 +1750,7 @@ TEST(Ruvia, http_client_rejects_connection_options_naming_request_origin_metadat
         const std::array hop_by_hop{ruvia::http_header_view{"Connection", "X-Hop, Proxy-Authorization"}, ruvia::http_header_view{"X-Hop", "1"}};
         auto accepted = co_await client.client().get("/hop").headers(hop_by_hop).send();
         EXPECT_TRUE(accepted.status() == ruvia::http_status::ok);
-        (void)co_await accepted.stream().read_all();
+        (void)co_await accepted.bytes();
         co_await server.wait();
 
         for (const std::string_view nominated : {"Forwarded", "X-Forwarded-For", "X-Forwarded-Proto", "X-Forwarded-Host"}) {
@@ -1790,7 +1790,7 @@ TEST(Ruvia, client_shutdown_keeps_incomplete_response_error_observable) {
                 }
             });
             try {
-                (void)co_await response->stream().read_all();
+                (void)co_await response->bytes();
             } catch (const ruvia::http_client_error& error) {
                 running_read_failed = error.code() == ruvia::make_error_code(ruvia::http_client_errc::closing) || error.code() == std::make_error_code(std::errc::operation_canceled) || error.code() == ruvia::make_error_code(ruvia::http_client_errc::io_error);
             }
@@ -1799,7 +1799,7 @@ TEST(Ruvia, client_shutdown_keeps_incomplete_response_error_observable) {
         }
         bool retained_response_failed = false;
         try {
-            (void)co_await response->stream().read_all();
+            (void)co_await response->bytes();
         } catch (const ruvia::http_client_error& error) {
             retained_response_failed = error.code() == ruvia::make_error_code(ruvia::http_client_errc::closing) || error.code() == std::make_error_code(std::errc::operation_canceled) || error.code() == ruvia::make_error_code(ruvia::http_client_errc::io_error);
         }
@@ -1860,7 +1860,7 @@ TEST(Ruvia, client_body_result_uses_pool_budget_after_client_and_worker_teardown
                 auto operation = [&]() -> ruvia::task<void> {
                     auto send = client.client().get("/").send();
                     auto response = co_await std::move(send);
-                    auto bytes_value = co_await response.stream().read_all();
+                    auto bytes_value = co_await response.bytes();
                     retained.emplace(std::move(bytes_value));
                     co_await server_done.wait();
                     if (server_failure != nullptr) {
@@ -2020,7 +2020,7 @@ TEST(Ruvia, http_client_upload_exchange_owns_chunks_and_trailers_and_drives_cont
             }
             EXPECT_TRUE(transferred_twice);
             auto& response = *received;
-            auto bytes_value = co_await response.stream().read_all(16);
+            auto bytes_value = co_await response.bytes(16);
             EXPECT_EQ(std::string_view(reinterpret_cast<const char*>(bytes_value.bytes().data()), bytes_value.size()), "ok");
             const auto informational = response.informational_responses();
             EXPECT_EQ(informational.size(), mode == upload_peer::mode_type::continue_ ? upload_peer::early_hint_count + 1 : std::size_t{0});
@@ -2069,7 +2069,7 @@ TEST(Ruvia, http1_small_upload_completes_with_a_bounded_response_budget) {
                 EXPECT_TRUE(exchange.body().complete());
                 auto response = co_await exchange.response();
                 EXPECT_TRUE(response.status() == ruvia::http_status::ok);
-                auto bytes = co_await response.stream().read_all(16);
+                auto bytes = co_await response.bytes(16);
                 EXPECT_EQ(std::string_view(reinterpret_cast<const char*>(bytes.bytes().data()), bytes.size()), "ok");
             } catch (...) {
                 failure = std::current_exception();
@@ -2138,13 +2138,13 @@ TEST(Ruvia, http_client_tunnel_claims_output_when_started_and_retires_after_abor
             }
             unsigned datagram_adapters_rejected = 0;
             try {
-                auto datagrams = std::move(*tunnel).datagrams();
+                auto datagrams = tunnel->stream().datagrams();
                 static_cast<void>(datagrams);
             } catch (const std::logic_error&) {
                 ++datagram_adapters_rejected;
             }
             try {
-                auto udp = std::move(*tunnel).udp();
+                auto udp = tunnel->stream().udp();
                 static_cast<void>(udp);
             } catch (const std::logic_error&) {
                 ++datagram_adapters_rejected;
@@ -2152,11 +2152,11 @@ TEST(Ruvia, http_client_tunnel_claims_output_when_started_and_retires_after_abor
             EXPECT_EQ(datagram_adapters_rejected, 2U);
             EXPECT_TRUE(tunnel->status() == ruvia::http_status::ok);
             std::string input{"abc"};
-            auto first = tunnel->write(input);
-            auto second = tunnel->write("def");
-            auto ending = tunnel->finish();
-            auto reading = tunnel->read();
-            auto reading_again = tunnel->read();
+            auto first = tunnel->stream().write(input);
+            auto second = tunnel->stream().write("def");
+            auto ending = tunnel->stream().finish();
+            auto reading = tunnel->stream().read();
+            auto reading_again = tunnel->stream().read();
             input.assign("changed");
             bool first_cancelled = false;
             ruvia::task_scope writers(worker.handle_);
@@ -2169,7 +2169,7 @@ TEST(Ruvia, http_client_tunnel_claims_output_when_started_and_retires_after_abor
             };
             writers.spawn(send_first());
             if (aborting) {
-                tunnel->abort();
+                tunnel->stream().abort();
                 co_await writers.join();
                 EXPECT_TRUE(first_cancelled);
                 unsigned cancelled = 0;
@@ -2187,12 +2187,12 @@ TEST(Ruvia, http_client_tunnel_claims_output_when_started_and_retires_after_abor
             } else {
                 unsigned rejected = 0;
                 try {
-                    co_await tunnel->write("bad");
+                    co_await tunnel->stream().write("bad");
                 } catch (const std::logic_error&) {
                     ++rejected;
                 }
                 try {
-                    co_await tunnel->finish();
+                    co_await tunnel->stream().finish();
                 } catch (const std::logic_error&) {
                     ++rejected;
                 }
@@ -2208,11 +2208,11 @@ TEST(Ruvia, http_client_tunnel_claims_output_when_started_and_retires_after_abor
                 if (const auto bytes_value = co_await std::move(reading_again)) {
                     echoed.append(reinterpret_cast<const char*>(bytes_value->data()), bytes_value->size());
                 }
-                while (const auto bytes_value = co_await tunnel->read()) {
+                while (const auto bytes_value = co_await tunnel->stream().read()) {
                     echoed.append(reinterpret_cast<const char*>(bytes_value->data()), bytes_value->size());
                 }
                 EXPECT_EQ(echoed, "abcdef");
-                co_await tunnel->finish();
+                co_await tunnel->stream().finish();
             }
             co_await peer_done.wait();
             if (peer_failure) {
@@ -2245,7 +2245,7 @@ TEST(Ruvia, http_client_upload_exchange_preserves_early_final_response_and_stops
             cancelled = error.code() == std::make_error_code(std::errc::operation_canceled);
         }
         EXPECT_TRUE(cancelled);
-        auto bytes_value = co_await response.stream().read_all(16);
+        auto bytes_value = co_await response.bytes(16);
         EXPECT_EQ(std::string_view(reinterpret_cast<const char*>(bytes_value.bytes().data()), bytes_value.size()), "no");
         co_await peer.wait();
         co_await client->shutdown();

@@ -1031,7 +1031,7 @@ task<void> http3_session::dispatch_one(std::int64_t stream_id) {
         if (body_reader_storage) {
             dispatch_services.bind_streaming_request_body(body_reader_storage->facade());
         }
-        const stop_group request_stop(dispatch_services.get_stop_token(), signal->terminal_stop_token());
+        const stop_group request_stop{dispatch_services.get_stop_token(), signal->terminal_stop_token()};
         const auto request_stop_token = request_stop.token();
         dispatch_services.bind_stop_token(request_stop_token);
 

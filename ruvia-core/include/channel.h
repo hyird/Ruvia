@@ -439,7 +439,7 @@ private:
     void complete_locked(outcome_type outcome) noexcept {
         if (completion_.complete(std::move(outcome))) {
             bounds_.cancel_deadline();
-            detail::worker_ref_access::defer_resume(worker_, completion_.continuation());
+            worker_.defer_resume(completion_.continuation());
         }
     }
 

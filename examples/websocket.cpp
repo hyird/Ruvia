@@ -101,9 +101,11 @@ int main() {
     try {
         ruvia::app()
             .listen({.address_ = "0.0.0.0", .http_ = 8084})
-            .server({
+            .workers({
                 .worker_count_ = 2,
                 .process_signal_handlers_ = ruvia::process_signal_handler_policy::install,
+            })
+            .server({
                 .max_websocket_message_bytes_ = 16 * 1024 * 1024,
             })
             .run();

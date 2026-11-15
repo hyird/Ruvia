@@ -40,9 +40,20 @@ public:
     void run();
     void run(move_only_function<void()> startup_handler, move_only_function<void(std::exception_ptr)> failure_handler, move_only_function<void()> shutdown_handler);
 
+    // The owner may drive the context with its own io_context::run() instead
+    // of run(); is_current() then falls back to the executor's thread check.
+    void enable_external_runner() noexcept;
     void close() noexcept;
+    // Runs `callback` once the first stopping batch has notified every
+    // registered owner, or now when no batch is active.
+    void when_shutdown_notifications_complete(move_only_function<void()> callback);
+    // Runs `callback` once no posted callable is reserved, queued, or running;
+    // throws std::runtime_error on a detached context.
+    void when_idle(move_only_function<void()> callback);
     void stop_timers() noexcept;
     void detach() noexcept;
+    // Blocks until no admitted post is still reserved or queued.
+    void wait_for_reservations() noexcept;
 
 private:
     asio::io_context* io_context_;

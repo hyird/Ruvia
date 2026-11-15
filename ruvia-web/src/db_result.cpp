@@ -148,10 +148,10 @@ db_field_lookup db_row::find(std::string_view column) const& noexcept {
         if (column_names_[index] != column) {
             continue;
         }
-        if (result.status_ == unique_lookup_status::found) {
-            return {unique_lookup_status::repeated, nullptr};
+        result.add_occurrence(&fields_[index]);
+        if (result.status_ == unique_lookup_status::repeated) {
+            break;
         }
-        result = {unique_lookup_status::found, &fields_[index]};
     }
     return result;
 }
@@ -164,7 +164,7 @@ const db_field& db_row::operator[](std::string_view column) const& {
     if (lookup.status_ == unique_lookup_status::absent) {
         throw conversion_error(conversion_error::code_type::missing_column, "database result has no such column");
     }
-    return *lookup.field_;
+    return *lookup.value_;
 }
 
 const db_field* db_row::begin() const& noexcept {

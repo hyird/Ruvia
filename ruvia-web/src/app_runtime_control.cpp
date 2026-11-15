@@ -201,10 +201,11 @@ struct runtime_route_candidate final {
         }
         tables.push_back(std::make_unique<detail::route_table>(*result.plan_, controllers.back()));
     }
-    if (tables.front()->has_route_rate_limit() && !state_value.options_.default_rate_limit_per_worker_.has_value()) {
+    const auto& host_rate_limit = state_value.configuration_.rate_limit();
+    if (tables.front()->has_route_rate_limit() && !host_rate_limit.has_value()) {
         rate_limiters.reserve(worker_count);
         for (std::size_t index = 0; index < worker_count; ++index) {
-            rate_limiters.push_back(std::make_unique<detail::rate_limiter>(std::nullopt, detail::route_rate_limit_presence::present, state_value.options_.rate_limit_capacity_per_worker_));
+            rate_limiters.push_back(std::make_unique<detail::rate_limiter>(std::nullopt, detail::route_rate_limit_presence::present, default_rate_limit_capacity_per_worker));
         }
     }
     return result;

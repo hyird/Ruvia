@@ -584,7 +584,7 @@ void db_schema::create_index(const db_index_definition& i) {
             s += ' ';
             append_db_qualified_identifier(s, i.keys_[n].operator_class_, driver_);
         }
-        if (i.keys_[n].order_ == db_order_direction::desc) {
+        if (i.keys_[n].order_ == order_direction::desc) {
             s += " DESC";
         }
         if (i.keys_[n].nulls_ == db_nulls_order::first) {
@@ -1041,7 +1041,7 @@ void db_schema::set_compression(std::string_view table_value, const db_compressi
                 order += ", ";
             }
             append_db_identifier(order, column.column_, driver_);
-            order += column.direction_ == db_order_direction::asc ? " ASC" : " DESC";
+            order += column.direction_ == order_direction::asc ? " ASC" : " DESC";
             if (column.nulls_ == db_nulls_order::first) {
                 order += " NULLS FIRST";
             }
@@ -1363,7 +1363,8 @@ void db_procedure::end_loop() {
     statements_ += "END LOOP;\n";
     blocks_.pop_back();
 }
-void db_procedure::execute_dynamic(const db_expr& command, std::span<const db_expr> using_args) {
+void db_procedure::execute_dynamic(const db_expr& command, argument_list<db_expr> using_arg_list) {
+    const auto using_args = using_arg_list.span();
     procedure_append_guard guard(statements_, 48U + using_args.size() * 24U);
     statements_ += "EXECUTE ";
     append_expression(statements_, command);

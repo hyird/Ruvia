@@ -32,7 +32,7 @@ ruvia::task<void> follow_redirect(const ruvia::http_client_ref& origin) {
         // Disable the fluent client's automatic redirects to inspect each hop.
         auto response = co_await origin.get(target).redirects(0).send();
         if (!ruvia::is_http_redirect_status(response.status())) {
-            auto bytes_value = co_await response.stream().read_all();
+            auto bytes_value = co_await response.bytes();
             std::cout << "redirected bytes=" << bytes_value.bytes().size() << '\n';
             co_return;
         }
@@ -80,7 +80,7 @@ ruvia::task<ruvia::http_client_response_bytes> exercise(ruvia::event_loop loop, 
             const std::array<ruvia::http_header_view, 1> trailers{{{"X-Upload-Complete", "yes"}}};
             co_await exchange_value.body().end(trailers);
             auto response = co_await exchange_value.response();
-            while (const auto text = co_await response.stream().text()) {
+            while (const auto text = co_await response.stream().read_text()) {
                 // Each view expires at the next body operation. Do not retain
                 // it or assume an entire UTF-8 character is in one chunk.
                 std::cout << *text;
@@ -98,7 +98,7 @@ ruvia::task<ruvia::http_client_response_bytes> exercise(ruvia::event_loop loop, 
             while (auto push = origin.next_push()) {
                 std::cout << "push=" << push->request().path_ << '\n';
                 auto pushed = co_await push->response();
-                auto content = co_await pushed.stream().read_all(4096);
+                auto content = co_await pushed.bytes(4096);
                 std::cout << "pushed bytes=" << content.bytes().size() << '\n';
             }
             while (auto advertisement = origin.next_advertisement()) {
@@ -113,10 +113,10 @@ ruvia::task<ruvia::http_client_response_bytes> exercise(ruvia::event_loop loop, 
         }
         {
             auto response = co_await bounded.get("/features/download").send();
-            // read(), text(), read_all(), and pipe_to() consume ONE linear body
-            // reader. read_all() collects only its unread remainder, with both
+            // read(), read_text(), bytes(), and pipe_to() consume ONE linear body
+            // reader. bytes() collects only its unread remainder, with both
             // a per-call limit and a total retained-result budget.
-            retained.emplace(co_await response.stream().read_all(4096));
+            retained.emplace(co_await response.bytes(4096));
             if (response.trailer("X-Example-Complete") != "yes") {
                 throw std::runtime_error("missing response trailer");
             }
@@ -158,7 +158,7 @@ int main(int argc, char** argv) {
         loops.start();
         auto done = loops.loop(0).start(exercise(loops.loop(0), std::move(config)));
         auto body = std::move(done).get();
-        loops.stop();
+        loops.request_stop();
         loops.join();
         const auto bytes_value = body.bytes();
         std::cout.write(reinterpret_cast<const char*>(bytes_value.data()), static_cast<std::streamsize>(bytes_value.size()));

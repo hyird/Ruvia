@@ -191,7 +191,7 @@ task<void> run(db_client& db, event_loop_attachment& attachment) {
         failure = std::current_exception();
     }
     co_await db.shutdown();
-    attachment.stop();
+    attachment.request_stop();
     if (failure) {
         std::rethrow_exception(failure);
     }

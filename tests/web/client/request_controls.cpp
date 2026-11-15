@@ -223,7 +223,7 @@ void raw_stream(bool http2, bool configured_raw) {
             EXPECT_EQ(response.content_length(), upstream.encoded_.size());
             EXPECT_EQ(response.header("content-encoding"), "gzip");
             EXPECT_TRUE(response.header("content-length").has_value());
-            const auto first = co_await response.read();
+            const auto first = co_await response.stream().read();
             EXPECT_TRUE(first.has_value());
             EXPECT_FALSE(upstream.tail_sent_);
             std::string bytes;
@@ -243,7 +243,7 @@ void raw_stream(bool http2, bool configured_raw) {
         co_await client.shutdown();
         upstream.stop();
         co_await upstream.join();
-        attachment.stop();
+        attachment.request_stop();
     };
     auto root = attachment.loop().start(run());
     attachment.run();
@@ -296,7 +296,7 @@ void read_timeout(bool http2, bool total_only) {
         }
         upstream.stop();
         co_await upstream.join();
-        attachment.stop();
+        attachment.request_stop();
     };
     auto root = attachment.loop().start(run());
     attachment.run();
@@ -395,7 +395,7 @@ TEST(Ruvia, http_client_http2_informational_backpressure_does_not_block_other_st
                 request.configure({.informational_ = [&](ruvia::http_status_code, std::span<const ruvia::http_header>, ruvia::stop_token stop) -> ruvia::task<void> {
                     callback_entered = true;
                     entered.notify();
-                    ruvia::stop_group cancellation(stop, release.token());
+                    ruvia::stop_group cancellation{stop, release.token()};
                     (void)co_await ruvia::sleep_for(worker, std::chrono::hours(1), cancellation.token());
                 }});
                 auto response = co_await std::move(request).send();
@@ -428,7 +428,7 @@ TEST(Ruvia, http_client_http2_informational_backpressure_does_not_block_other_st
         while (!finished) {
             co_await peer_done.wait();
         }
-        attachment.stop();
+        attachment.request_stop();
     };
     auto root = attachment.loop().start(run());
     attachment.run();
@@ -507,7 +507,7 @@ TEST(Ruvia, http_client_ipv6_dial_target_preserves_logical_authority) {
         std::error_code ignored;
         acceptor.close(ignored);
         co_await peers.join();
-        attachment.stop();
+        attachment.request_stop();
     };
     auto root = attachment.loop().start(run());
     attachment.run();
@@ -569,7 +569,7 @@ TEST(Ruvia, http_client_dial_and_dns_ports_reject_invalid_original_integer_domai
         const std::array addresses{ruvia::http_client_endpoint_address("127.0.0.1", 0)};
         EXPECT_THROW(client.client().update_dns(addresses), std::invalid_argument);
         co_await client.shutdown();
-        attachment.stop();
+        attachment.request_stop();
     };
     auto root = attachment.loop().start(run());
     attachment.run();
@@ -636,7 +636,7 @@ TEST(Ruvia, http_client_builders_enforce_consumed_state_websocket_options_and_di
 
         co_await client.shutdown();
         co_await peers.join();
-        attachment.stop();
+        attachment.request_stop();
     };
     auto root = attachment.loop().start(run());
     attachment.run();
@@ -727,12 +727,12 @@ TEST(Ruvia, http_client_plain_connect_omits_origin_cookies_even_for_matching_aut
         auto opened = co_await client.client().connect(authority).connect();
         EXPECT_NE(opened.tunnel(), nullptr);
         if (opened.tunnel() != nullptr) {
-            co_await opened.tunnel()->finish();
+            co_await opened.tunnel()->stream().finish();
         }
 
         co_await client.shutdown();
         co_await peers.join();
-        attachment.stop();
+        attachment.request_stop();
     };
     auto root = attachment.loop().start(run());
     attachment.run();
@@ -805,7 +805,7 @@ peer_observation exchange(std::string_view wire, client_fn_type&& exercise) {
         while (!peer_done) {
             co_await peer_finished.wait();
         }
-        attachment.stop();
+        attachment.request_stop();
     };
     auto root = attachment.loop().start(run());
     attachment.run();
@@ -851,10 +851,10 @@ TEST(Ruvia, http1_client_generic_upgrade_preserves_early_binary_bytes_and_caller
             EXPECT_EQ(tunnel.header("upgrade"), std::optional(protocol));
             EXPECT_EQ(informational_count, 1u);
             EXPECT_EQ(tunnel.informational_responses().size(), std::size_t{1});
-            co_await tunnel.write(outgoing);
-            co_await tunnel.finish();
+            co_await tunnel.stream().write(outgoing);
+            co_await tunnel.stream().finish();
             std::string received;
-            while (auto bytes = co_await tunnel.text()) {
+            while (auto bytes = co_await tunnel.stream().read_text()) {
                 received.append(*bytes);
             }
             EXPECT_EQ(received, early);
@@ -880,7 +880,7 @@ TEST(Ruvia, http1_client_generic_upgrade_rejection_is_an_ordinary_response) {
         EXPECT_EQ(response.header("x-rejected"), std::optional<std::string_view>("yes"));
         EXPECT_EQ(response.framing(), ruvia::http_client_response_framing::fixed_length);
         EXPECT_EQ(response.content_length(), std::optional<std::uint64_t>(6));
-        const auto body = co_await response.stream().read_all();
+        const auto body = co_await response.bytes();
         EXPECT_EQ(body.text(), "denied");
     });
 }
@@ -898,7 +898,7 @@ TEST(Ruvia, http1_client_generic_upgrade_rejects_invalid_switch_agreement) {
             try {
                 auto result = co_await std::move(request).connect();
                 if (result.tunnel() != nullptr) {
-                    result.tunnel()->abort();
+                    result.tunnel()->stream().abort();
                 }
             } catch (const ruvia::http_client_error& error) {
                 rejected = error.code() == ruvia::make_error_code(ruvia::http_client_errc::protocol_error);
@@ -935,7 +935,7 @@ TEST(Ruvia, http1_client_response_unique_header_reports_repeated_lines) {
         EXPECT_TRUE(empty.value_.empty());
         // The singular getter keeps the first line.
         EXPECT_EQ(response.header("content-type"), std::optional<std::string_view>("text/plain"));
-        const auto body = co_await response.stream().read_all();
+        const auto body = co_await response.bytes();
         EXPECT_EQ(body.text(), "ok");
     });
 }
@@ -968,7 +968,7 @@ TEST(Ruvia, http1_client_informational_callbacks_backpressure_coalesced_heads) {
                 auto response = co_await std::move(request).send();
                 returned = true;
                 EXPECT_EQ(response.informational_responses().size(), std::size_t{2});
-                const auto body = co_await response.stream().read_all();
+                const auto body = co_await response.bytes();
                 EXPECT_EQ(body.text(), "ok");
             } catch (...) {
                 failure = std::current_exception();
@@ -1037,7 +1037,7 @@ TEST(Ruvia, http1_client_response_framing_comes_from_parser_precedence) {
             auto response = co_await client.client().request(scenario.method_, "/framing").send();
             EXPECT_EQ(response.framing(), scenario.framing_);
             EXPECT_EQ(response.content_length(), scenario.length_);
-            const auto body = co_await response.stream().read_all();
+            const auto body = co_await response.bytes();
             EXPECT_EQ(body.text(), scenario.body_);
             EXPECT_EQ(response.framing(), scenario.framing_);
             EXPECT_EQ(response.content_length(), scenario.length_);
@@ -1186,7 +1186,7 @@ TEST(Ruvia, http1_client_buffered_upload_receives_hints_before_blocked_write_com
                     auto response = co_await std::move(request).send();
                     EXPECT_NE(expected, outcome::cancel);
                     EXPECT_EQ(response.status().value(), expected == outcome::early_final ? 413 : 200);
-                    const auto body = co_await response.stream().read_all();
+                    const auto body = co_await response.bytes();
                     EXPECT_EQ(body.text(), expected == outcome::early_final ? "" : "ok");
                 } catch (const ruvia::http_client_error& error) {
                     error_code = error.code();
@@ -1215,7 +1215,7 @@ TEST(Ruvia, http1_client_buffered_upload_receives_hints_before_blocked_write_com
             while (!peer_done) {
                 co_await peer_finished.wait();
             }
-            attachment.stop();
+            attachment.request_stop();
         };
         auto root = attachment.loop().start(run());
         attachment.run();
@@ -1278,14 +1278,14 @@ TEST(Ruvia, http1_client_borrowed_small_chunk_pauses_read_inactivity_until_next_
         ruvia::http_client client(attachment.loop(), {.base_url_ = url, .read_timeout_ = std::chrono::milliseconds(50), .request_timeout_ = std::chrono::seconds(3), .versions_ = ruvia::http_client_versions{.http2_ = false}});
         try {
             auto response = co_await client.client().get("/slow-consumer").send();
-            const auto first = co_await response.stream().text();
+            const auto first = co_await response.stream().read_text();
             EXPECT_EQ(first, std::optional<std::string_view>("a"));
             (void)co_await ruvia::sleep_for(worker, std::chrono::milliseconds(200));
             EXPECT_EQ(first, std::optional<std::string_view>("a"));
             tail_gate.cancel();
-            const auto tail = co_await response.stream().text();
+            const auto tail = co_await response.stream().read_text();
             EXPECT_EQ(tail, std::optional<std::string_view>("b"));
-            EXPECT_FALSE((co_await response.stream().text()).has_value());
+            EXPECT_FALSE((co_await response.stream().read_text()).has_value());
         } catch (...) {
             failure = std::current_exception();
         }
@@ -1298,7 +1298,7 @@ TEST(Ruvia, http1_client_borrowed_small_chunk_pauses_read_inactivity_until_next_
         while (!peer_done) {
             co_await peer_finished.wait();
         }
-        attachment.stop();
+        attachment.request_stop();
     };
     auto root = attachment.loop().start(run());
     attachment.run();

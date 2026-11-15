@@ -74,7 +74,7 @@ int main(int argc, char** argv) {
         loops.start();
         auto done = loops.loop(0).start(exchange(loops.loop(0), std::move(config)));
         std::move(done).get();
-        loops.stop();
+        loops.request_stop();
         loops.join();
     } catch (...) {
         std::cerr << ruvia::exception_text(std::current_exception()) << '\n';

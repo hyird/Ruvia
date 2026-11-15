@@ -762,7 +762,7 @@ private:
                 output_.sql_ += term.nulls_ == db_nulls_order::first ? " DESC, " : " ASC, ";
             }
             expr(s, term.expression_, depth);
-            output_.sql_ += term.direction_ == db_order_direction::asc ? " ASC" : " DESC";
+            output_.sql_ += term.direction_ == order_direction::asc ? " ASC" : " DESC";
             if (output_.pg()) {
                 if (term.nulls_ == db_nulls_order::first) {
                     output_.sql_ += " NULLS FIRST";

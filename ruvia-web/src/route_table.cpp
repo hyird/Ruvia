@@ -336,7 +336,7 @@ detail::route_resolution detail::route_table::resolve_connect(std::string_view p
         if (route.endpoint().tunnel()->protocol() != protocol) {
             continue;
         }
-        if (!route.dynamic() && (protocol.empty() ? http_authorities_equal(route.path(), target, 0) : uri_paths_equivalent(route.path(), target))) {
+        if (!route.dynamic() && (protocol.empty() ? http_authorities_equal(route.path(), target, std::nullopt) : uri_paths_equivalent(route.path(), target))) {
             return resolved(route);
         }
         if (protocol.empty() && route.path() == "*") {

@@ -187,7 +187,7 @@ int main() {
         database_controller::set_driver(config.driver_);
         app.db({.config_ = config});
 
-        app.listen({.address_ = "0.0.0.0", .http_ = 8086}).server({.worker_count_ = 2, .process_signal_handlers_ = ruvia::process_signal_handler_policy::install}).run();
+        app.listen({.address_ = "0.0.0.0", .http_ = 8086}).workers({.worker_count_ = 2, .process_signal_handlers_ = ruvia::process_signal_handler_policy::install}).run();
     } catch (...) {
         std::cerr << ruvia::exception_text(std::current_exception()) << '\n';
         return 1;

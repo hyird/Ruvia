@@ -413,7 +413,7 @@ TEST(Ruvia, app_startup_barrier_orders_hooks_and_rolls_back) {
     const auto private_key = identity.private_key_file();
     auto state_value = std::make_shared<startup_state>();
     auto& app = ruvia::app();
-    app.server({.worker_count_ = 2, .worker_queue_capacity_ = 16, .max_connections_per_worker_ = 4}).trusted_proxies({.cidrs_ = {"::ffff:127.0.0.0/104"}, .trust_x_forwarded_proto_ = true}).blocking_pool(nullptr).use_worker_state<worker_state>([state_value] {
+    app.workers({.worker_count_ = 2, .worker_queue_capacity_ = 16}).server({.max_connections_per_worker_ = 4}).trusted_proxies({.cidrs_ = {"::ffff:127.0.0.0/104"}, .trust_x_forwarded_proto_ = true}).blocking_pool(nullptr).use_worker_state<worker_state>([state_value] {
         if (state_value->outcome_ == startup_outcome::stop_during_worker_startup && !state_value->worker_startup_blocked_.exchange(true)) {
             // Hold one worker inside startup while the lifecycle caller waits for it.
             state_value->hook_entered_.release();

@@ -127,7 +127,7 @@ http_byte_range_set resolve_http_byte_range_set(std::string_view field_value, ht
         return result;
     }
 
-    const bool strict = options.strict_order_ || options.order_policy_ == http_byte_range_order_policy::strict_ascending_disjoint;
+    const bool strict = options.order_policy_ == http_byte_range_order_policy::strict_ascending_disjoint;
     const auto add_range = [&](std::uint64_t offset, std::uint64_t length) -> bool {
         if (strict) {
             if (result.count_ > 0) {

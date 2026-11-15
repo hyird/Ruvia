@@ -566,7 +566,7 @@ TEST(Ruvia, scoped_operation_direct_spawn_retires_frame_before_join_and_capabili
             EXPECT_TRUE(observation.failure_ == nullptr);
         }
     }
-    loops.stop();
+    loops.request_stop();
     loops.join();
 }
 
@@ -628,7 +628,7 @@ TEST(Ruvia, scoped_operation_close_and_join_releases_frame_before_expiring_capab
     EXPECT_EQ(bytes_at_join, 0U);
     EXPECT_TRUE(!lease_at_expire);
     EXPECT_TRUE(!lease_active);
-    loops.stop();
+    loops.request_stop();
     loops.join();
 }
 
@@ -662,7 +662,7 @@ TEST(Ruvia, scoped_operation_exception_releases_frame_before_expiring_capabiliti
     EXPECT_EQ(expired_count, 1);
     EXPECT_EQ(bytes_at_expire, 0U);
     EXPECT_EQ(resource.live_allocations(), 0U);
-    loops.stop();
+    loops.request_stop();
     loops.join();
 }
 
@@ -696,7 +696,7 @@ TEST(Ruvia, scoped_operation_cooperative_cancellation_releases_frame_before_expi
     EXPECT_EQ(expired_count, 1);
     EXPECT_EQ(bytes_at_expire, 0U);
     EXPECT_EQ(resource.live_allocations(), 0U);
-    loops.stop();
+    loops.request_stop();
     loops.join();
 }
 
@@ -750,7 +750,7 @@ TEST(Ruvia, scoped_operation_result_survives_join_after_frame_release) {
         EXPECT_EQ(result_resource.live_allocations(), allocations_per_result);
     }
     EXPECT_EQ(result_resource.live_allocations(), 0U);
-    loops.stop();
+    loops.request_stop();
     loops.join();
 }
 
@@ -772,7 +772,7 @@ TEST(Ruvia, root_result_publication_retires_delivery_borrows_before_get_returns)
         }));
         EXPECT_EQ(borrows.load(), 0U);
     }
-    loops.stop();
+    loops.request_stop();
     loops.join();
 }
 
@@ -832,7 +832,7 @@ TEST(Ruvia, scoped_operation_result_move_failure_releases_frame_before_join) {
     EXPECT_EQ(bytes_at_expire, 0U);
     EXPECT_EQ(parameter_resource.live_allocations(), 0U);
     EXPECT_EQ(result_resource.live_allocations(), 0U);
-    loops.stop();
+    loops.request_stop();
     loops.join();
 }
 
@@ -874,7 +874,7 @@ TEST(Ruvia, scoped_operation_expired_by_scope_close_rejects_start) {
             rejected_as_expired = true;
         }
         EXPECT_TRUE(rejected_as_expired);
-        loops.stop();
+        loops.request_stop();
         loops.join();
     }
     EXPECT_EQ(resource.live_allocations(), 0U);
@@ -901,7 +901,7 @@ TEST(Ruvia, scoped_operation_created_after_scope_close_discards_cold_frame) {
         rejected_as_expired = true;
     }
     EXPECT_TRUE(rejected_as_expired);
-    loops.stop();
+    loops.request_stop();
     loops.join();
 
     EXPECT_EQ(resource.live_allocations(), 0U);
@@ -936,7 +936,7 @@ TEST(Ruvia, scoped_operation_cold_frame_drop_allows_reentrant_parent_join) {
     EXPECT_EQ(resource.live_allocations(), 0U);
     EXPECT_EQ(resource.live_bytes(), 0U);
     EXPECT_TRUE(!parent_scope.has_pending_operations());
-    loops.stop();
+    loops.request_stop();
     loops.join();
 }
 
@@ -959,7 +959,7 @@ TEST(Ruvia, scoped_operation_completed_operation_rejects_second_await) {
         rejected_as_completed = true;
     }
     EXPECT_TRUE(rejected_as_completed);
-    loops.stop();
+    loops.request_stop();
     loops.join();
     scope.close();
 }
@@ -985,7 +985,7 @@ TEST(Ruvia, scoped_operation_rejects_empty_task_without_starting) {
             EXPECT_TRUE(rejected);
         }
         EXPECT_TRUE(scope.has_pending_operations());
-        loops.stop();
+        loops.request_stop();
         loops.join();
     }
     EXPECT_TRUE(!scope.has_pending_operations());
@@ -1016,7 +1016,7 @@ TEST(Ruvia, scoped_operation_scope_drain_allows_reentrant_join_after_all_frames_
     EXPECT_EQ(stats.expirations_after_join_, 1);
     EXPECT_EQ(resource.live_allocations(), 0U);
     EXPECT_TRUE(!scope.has_pending_operations());
-    loops.stop();
+    loops.request_stop();
     loops.join();
 }
 
@@ -1041,7 +1041,7 @@ TEST(Ruvia, scoped_operation_join_rescans_after_frame_cleanup_drops_a_sibling) {
     EXPECT_EQ(resource.live_allocations(), 0U);
     EXPECT_EQ(resource.live_bytes(), 0U);
     EXPECT_TRUE(!scope.has_pending_operations());
-    loops.stop();
+    loops.request_stop();
     loops.join();
     static_cast<void>(operation);
 }
@@ -1143,7 +1143,7 @@ TEST(Ruvia, scoped_capability_reentrant_join_waits_for_cleanup) {
     loops.start();
     std::move(root).get();
     EXPECT_TRUE(!joined_during_cleanup);
-    loops.stop();
+    loops.request_stop();
     loops.join();
 }
 
@@ -1190,7 +1190,7 @@ TEST(Ruvia, scoped_capability_cleanup_can_reenter_scope_close_during_join_resume
     std::move(root).get();
     EXPECT_TRUE(joined_completed);
     EXPECT_EQ(expired, 1);
-    loops.stop();
+    loops.request_stop();
     loops.join();
 }
 
@@ -1256,6 +1256,6 @@ TEST(Ruvia, scoped_operation_close_drain_allows_reentrant_join_to_destroy_scope_
     EXPECT_TRUE(join_destroyed_scope);
     EXPECT_EQ(expired_count, 1);
     EXPECT_EQ(resource.live_allocations(), 0U);
-    loops.stop();
+    loops.request_stop();
     loops.join();
 }

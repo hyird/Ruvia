@@ -91,7 +91,7 @@ void exercise_tls_response_retirement(bool join_before_reuse) {
         ruvia::stop_source cancellation;
         {
             auto response = co_await client.client().with_options({.stop_token_ = cancellation.token()}).get("/partial").send();
-            const auto first = co_await response.stream().text();
+            const auto first = co_await response.stream().read_text();
             EXPECT_TRUE(first.has_value());
             EXPECT_TRUE(!first->empty());
             EXPECT_TRUE(first->size() < large.size());
@@ -117,7 +117,7 @@ void exercise_tls_response_retirement(bool join_before_reuse) {
         for (const auto body : expected) {
             auto response = co_await client.client().get("/next?exact=body").send();
             EXPECT_TRUE(response.protocol_version() == ruvia::http_protocol_version::http11);
-            const auto bytes_value = co_await response.stream().read_all();
+            const auto bytes_value = co_await response.bytes();
             EXPECT_EQ(std::string_view(reinterpret_cast<const char*>(bytes_value.bytes().data()), bytes_value.size()), body);
             EXPECT_TRUE(!(co_await response.stream().read()));
         }
@@ -188,7 +188,7 @@ TEST(Ruvia, http1_tls_close_delimited_response_requires_close_notify) {
             std::optional<std::string> body;
             bool truncated = false;
             try {
-                const auto bytes_value = co_await response.stream().read_all();
+                const auto bytes_value = co_await response.bytes();
                 body.emplace(reinterpret_cast<const char*>(bytes_value.bytes().data()), bytes_value.size());
             } catch (const ruvia::http_client_error& error) {
                 truncated = error.code() == ruvia::make_error_code(ruvia::http_client_errc::io_error);
@@ -265,7 +265,7 @@ TEST(Ruvia, http_client_tls_matches_dns_names_only_against_dns_id_subject_alt_na
             try {
                 auto response = co_await client.client().get("/identity").send();
                 EXPECT_EQ(response.status().value(), std::uint16_t{200});
-                (void)co_await response.stream().read_all();
+                (void)co_await response.bytes();
             } catch (const ruvia::http_client_error& error) {
                 failure = error.code();
             }
@@ -320,7 +320,7 @@ struct tunnel_peer final {
             auto result = co_await client.client().connect("target.test:443").connect();
             auto tunnel = std::move(*result.tunnel());
             for (; completed != 64; ++completed) {
-                co_await tunnel.write("x");
+                co_await tunnel.stream().write("x");
             }
         } catch (const ruvia::http_client_error&) {
             failed = true;
@@ -428,7 +428,7 @@ TEST(Ruvia, http_client_tls_refuses_server_initiated_renegotiation) {
     auto operation = [&]() -> ruvia::task<void> {
         const acceptor_closer closer{acceptor};
         auto response = co_await client.client().get("/renegotiate").send();
-        const auto bytes_value = co_await response.stream().read_all();
+        const auto bytes_value = co_await response.bytes();
         EXPECT_EQ(std::string_view(reinterpret_cast<const char*>(bytes_value.bytes().data()), bytes_value.size()), "ok");
         co_await client.shutdown();
         while (!peer_finished) {
@@ -528,7 +528,7 @@ TEST(Ruvia, tls_client_sends_close_notify_before_closing) {
         auto operation = [&]() -> ruvia::task<void> {
             const acceptor_closer closer{acceptor};
             auto response = co_await client.client().get("/close-notify").send();
-            const auto bytes_value = co_await response.stream().read_all();
+            const auto bytes_value = co_await response.bytes();
             EXPECT_EQ(bytes_value.size(), std::size_t{2});
             co_await client.shutdown();
             while (!peer_finished) {
@@ -608,7 +608,7 @@ TEST(Ruvia, http_client_tls_idle_probe_retires_a_connection_with_unread_peer_rec
             const acceptor_closer closer{acceptor};
             for (const std::string_view expected : {std::string_view("first"), std::string_view("second")}) {
                 auto response = co_await client.client().get("/idle").send();
-                const auto bytes_value = co_await response.stream().read_all();
+                const auto bytes_value = co_await response.bytes();
                 EXPECT_EQ(std::string_view(reinterpret_cast<const char*>(bytes_value.bytes().data()), bytes_value.size()), expected);
                 while (!idle_sent) {
                     co_await idle_sent_signal.wait();

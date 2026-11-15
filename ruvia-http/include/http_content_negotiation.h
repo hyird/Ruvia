@@ -79,11 +79,7 @@ struct http_accepted_encoding_quality {
         return wildcard_quality_ > 0 ? wildcard_quality_ : 0;
     }
 
-    [[nodiscard]] bool accepts() const noexcept {
-        return accepts(false);
-    }
-
-    [[nodiscard]] bool accepts(bool is_identity) const noexcept {
+    [[nodiscard]] bool accepts(bool is_identity = false) const noexcept {
         return quality(is_identity) > 0;
     }
 };

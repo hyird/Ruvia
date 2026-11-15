@@ -96,7 +96,7 @@ private:
 };
 
 inline std::optional<std::string_view> http_client_response_head::header(std::string_view name) const& noexcept {
-    return detail::find_first_http_header(headers_, name);
+    return find_first_http_header(headers_, name);
 }
 
 }  // namespace ruvia

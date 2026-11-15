@@ -98,14 +98,14 @@ private:
 
     ruvia::task<ruvia::http_response> upload(ruvia::context& c) {
         std::size_t bytes_value = 0;
-        auto& body = c.req().body_reader();
+        auto& body = c.request_body();
         while (const auto chunk = co_await body.read()) {
             bytes_value += chunk->size();
         }
         // Request trailers are available only after the request body reaches EOF.
         std::string result_value;
         result_value.append("uploaded=").append(std::to_string(bytes_value));
-        result_value.append(" trailers=").append(std::to_string(c.req().trailers().size()));
+        result_value.append(" trailers=").append(std::to_string(c.trailers().size()));
         result_value.push_back('\n');
         co_return c.text(std::move(result_value));
     }
@@ -143,7 +143,7 @@ int main() {
                 .private_key_file_ = std::filesystem::path(*key),
             };
         }
-        app.server({.worker_count_ = 2, .process_signal_handlers_ = ruvia::process_signal_handler_policy::install, .compression_ = ruvia::compression_config{.min_bytes_ = 16}}).listen(std::move(listener_value)).run();
+        app.workers({.worker_count_ = 2, .process_signal_handlers_ = ruvia::process_signal_handler_policy::install}).server({.compression_ = ruvia::compression_config{.min_bytes_ = 16}}).listen(std::move(listener_value)).run();
     } catch (...) {
         std::cerr << ruvia::exception_text(std::current_exception()) << '\n';
         return 1;

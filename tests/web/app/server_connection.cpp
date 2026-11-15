@@ -261,7 +261,7 @@ TEST(Ruvia, connection_listeners_serve_byte_streams_beside_routes) {
 
     observed().clear();
     auto& app = ruvia::app();
-    app.server({.worker_count_ = 2})
+    app.workers({.worker_count_ = 2})
         .listen({raw_listener, routes_listener})
         .on_start(nullptr)
         .on_start([] {
@@ -388,7 +388,7 @@ TEST(Ruvia, raw_connection_abort_cancels_outputs_without_reporting_faults) {
     listener.https_ = tls_endpoint.port();
     listener.tls_.identity_ = {.certificate_chain_file_ = identity.ca_file_, .private_key_file_ = identity.private_key_file()};
     auto& app = ruvia::app();
-    app.server({.worker_count_ = 1})
+    app.workers({.worker_count_ = 1})
         .listen(listener)
         .on_start(nullptr)
         .on_start([] {
@@ -527,10 +527,7 @@ TEST(Ruvia, connection_idle_timeout_closes_raw_connection) {
     const auto endpoint = reservation.endpoint();
     observed().clear();
     auto& app = ruvia::app();
-    app.server({.worker_count_ = 1, .idle_timeout_ = 300ms, .connection_scan_interval_ = 50ms})
-        .listen(connection_listener(endpoint))
-        .on_start(nullptr)
-        .on_start([] {
+    app.workers({.worker_count_ = 1}).server({.idle_timeout_ = 300ms, .connection_scan_interval_ = 50ms}).listen(connection_listener(endpoint)).on_start(nullptr).on_start([] {
         started().release();
     }).callbacks({.connection_ = &wait_for_input});
 
@@ -564,7 +561,7 @@ TEST(Ruvia, stop_disconnects_raw_connections) {
     const auto endpoint = reservation.endpoint();
     observed().clear();
     auto& app = ruvia::app();
-    app.server({.worker_count_ = 2})
+    app.workers({.worker_count_ = 2})
         .listen(connection_listener(endpoint))
         .on_start(nullptr)
         .on_start([] {
@@ -599,7 +596,7 @@ TEST(Ruvia, raw_handler_failure_reaches_connection_failure_hook) {
     ruvia::test::tcp_port_reservation reservation(io);
     const auto endpoint = reservation.endpoint();
     auto& app = ruvia::app();
-    app.server({.worker_count_ = 1})
+    app.workers({.worker_count_ = 1})
         .listen(connection_listener(endpoint))
         .on_start(nullptr)
         .on_start([] {
@@ -631,7 +628,7 @@ TEST(Ruvia, raw_connection_return_expires_unstarted_read_write_and_finish) {
     const auto endpoint = reservation.endpoint();
     const auto pending = std::make_shared<unstarted_connection_operations>();
     auto& app = ruvia::app();
-    app.server({.worker_count_ = 1})
+    app.workers({.worker_count_ = 1})
         .listen(connection_listener(endpoint))
         .on_start(nullptr)
         .on_start([] {
@@ -695,7 +692,7 @@ TEST(Ruvia, connection_dispatch_configuration_is_validated) {
     ruvia::test::tls_identity identity("localhost");
     const ruvia::tls_config tls{.identity_ = {.certificate_chain_file_ = identity.ca_file_, .private_key_file_ = identity.private_key_file()}};
     auto& app = ruvia::app();
-    app.server({.worker_count_ = 1}).listen(connection_listener(endpoint)).on_start(nullptr).callbacks({});
+    app.workers({.worker_count_ = 1}).listen(connection_listener(endpoint)).on_start(nullptr).callbacks({});
     EXPECT_THROW(app.run(), std::invalid_argument);
 
     auto with_http3 = connection_listener(endpoint);
@@ -766,7 +763,7 @@ TEST(Ruvia, raw_connection_operation_options_bound_each_wait) {
         co_return received;
     };
     auto& app = ruvia::app();
-    app.server({.worker_count_ = 1})
+    app.workers({.worker_count_ = 1})
         .listen(listener)
         .on_start(nullptr)
         .on_start([] {

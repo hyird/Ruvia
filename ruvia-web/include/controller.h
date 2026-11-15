@@ -3,6 +3,7 @@
 #include <array>
 #include <concepts>
 #include <cstddef>
+#include <optional>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -22,6 +23,7 @@
 #include "http_tunnel.h"
 #include "middleware.h"
 #include "model.h"
+#include "rate_limiting.h"
 #include "task.h"
 #include "websocket.h"
 #include "worker_state.h"
@@ -74,10 +76,10 @@ template <typename state_type>
     });
 }
 
-// application and test_app own this same dispatch configuration. Their lifecycle guards
-// remain outside the component; validation, callback ownership, registration
-// storage and router binding have one implementation. Bound callback views
-// borrow this immovable owner until its routers have retired.
+// application, test_app and router own this same dispatch configuration. Their
+// lifecycle guards remain outside the component; validation, callback
+// ownership, registration storage and router binding have one implementation.
+// Bound callback views borrow this immovable owner until its routers have retired.
 class app_configuration final {
 public:
     app_configuration();
@@ -96,11 +98,19 @@ public:
     void on_not_found(callback_registration<http_not_found_handler>&& handler);
     void on_not_found(borrowed_text prefix, callback_registration<http_not_found_handler>&& handler);
     [[nodiscard]] callback_registration<http_not_found_handler> on_not_found(std::nullptr_t) noexcept;
+    // The rule every request of the host passes; validated before it replaces
+    // the previous one.
+    void rate_limit(const rate_limit_config& config);
+    void rate_limit(std::nullptr_t) noexcept;
 
     [[nodiscard]] std::span<const worker_state_definition> worker_states() const& noexcept RUVIA_LIFETIMEBOUND {
         return worker_states_;
     }
     std::span<const worker_state_definition> worker_states() const&& = delete;
+    [[nodiscard]] const std::optional<rate_limit_config>& rate_limit() const& noexcept RUVIA_LIFETIMEBOUND {
+        return rate_limit_;
+    }
+    const std::optional<rate_limit_config>& rate_limit() const&& = delete;
 
     void apply(router& routes) const;
 
@@ -111,7 +121,120 @@ private:
     std::vector<std::pair<std::string, callback_registration<http_not_found_handler>>> prefix_not_found_handlers_;
     std::vector<owned_middleware_descriptor> middlewares_;
     std::vector<worker_state_definition> worker_states_;
+    std::optional<rate_limit_config> rate_limit_;
 };
+
+}  // namespace ruvia::detail
+
+namespace ruvia {
+
+// The dispatch configuration application, test_app and router share, declared
+// once: middleware, per-worker state, fallback handlers and the host-wide rate
+// limit, all stored in one detail::app_configuration. A host supplies only its
+// lifecycle guard -- a stopped application, a test_app before its first
+// request(), an unfrozen router on its worker -- and a call that guard refuses
+// throws std::logic_error. nullptr clears a setting; a cleared handler is
+// destroyed after the host released its guard, so its destructor may reenter
+// the host. Non-template members are defined in the library and instantiated
+// there for the three hosts.
+template <typename host_type>
+class dispatch_configuration {
+public:
+    // Registers per-worker middleware instances in order before the matched
+    // route's controller and route middleware. Arguments are retained at
+    // registration; route model validators must be declared on their route.
+    template <middleware middleware_type, typename... args_types>
+    host_type& use(args_types&&... args) & {
+        return add_middleware(detail::make_owned_middleware_descriptor<middleware_type>(std::forward<args_types>(args)...));
+    }
+    template <middleware middleware_type, typename... args_types>
+    host_type& use(args_types&&...) && = delete;
+
+    // Runs the middleware exactly on requests whose path is under the prefix:
+    // whole path segments, compared percent-decoded, with trailing slashes
+    // normalized ("/admin" covers "/admin", "/admin/x" and "/%61dmin/x", never
+    // "/administrator"). Scope follows the request path, not the route
+    // pattern: a route "/:section/panel" runs it for "/admin/panel" but not
+    // "/other/panel". Membership is compiled into the route plan; only a route
+    // that serves paths both inside and outside the scope checks the request
+    // path at dispatch. Middleware constructor arguments cannot be confused
+    // with the separately named scope. A "/" prefix throws
+    // std::invalid_argument: use<T>() is the only host-wide spelling.
+    template <middleware middleware_type, typename... args_types>
+    host_type& use_at(const middleware_scope_options& options, args_types&&... args) & {
+        return add_middleware(detail::make_scoped_app_middleware<middleware_type>(options, std::forward<args_types>(args)...));
+    }
+    template <middleware middleware_type, typename... args_types>
+    host_type& use_at(const middleware_scope_options&, args_types&&...) && = delete;
+
+    // One recipe per type; every worker of the host owns an independent
+    // instance. A request or posted job only borrows its own worker's instance.
+    template <typename state_type, typename factory_type>
+    host_type& use_worker_state(factory_type&& factory) & {
+        return add_worker_state(detail::worker_state_definition::make<state_type>(std::forward<factory_type>(factory)));
+    }
+    template <typename state_type, typename factory_type>
+    host_type& use_worker_state(factory_type&&) && = delete;
+
+    template <typename state_type>
+    host_type& use_worker_state() & {
+        return add_worker_state(detail::make_default_worker_state<state_type>());
+    }
+    template <typename state_type>
+    host_type& use_worker_state() && = delete;
+
+    // The host-wide fallbacks; registering one a second time throws
+    // std::invalid_argument instead of silently replacing the first.
+    host_type& on_error(http_error_handler handler) &;
+    host_type& on_error(http_error_handler handler) && = delete;
+    host_type& on_not_found(http_not_found_handler handler) &;
+    host_type& on_not_found(http_not_found_handler handler) && = delete;
+    host_type& on_error(std::nullptr_t) &;
+    host_type& on_error(std::nullptr_t) && = delete;
+    host_type& on_not_found(std::nullptr_t) &;
+    host_type& on_not_found(std::nullptr_t) && = delete;
+    // Path-prefix-scoped fallbacks, the Hono sub-app scoping analog: the
+    // deepest matching registered prefix wins, matching on whole path
+    // segments ("/api" scopes "/api" and "/api/x", never "/apix") compared
+    // percent-decoded; the prefix-less on_error/not_found remain the host-wide
+    // fallback. A trailing slash is ignored; registering an equivalent prefix
+    // twice ("/api", "/api/", "/%61pi") throws std::invalid_argument instead
+    // of silently choosing by call order, and so does the prefix "/", which
+    // would shadow the prefix-less form.
+    host_type& on_error(scoped_error_handler_options options) &;
+    host_type& on_error(scoped_error_handler_options options) && = delete;
+    host_type& on_not_found(scoped_not_found_handler_options options) &;
+    host_type& on_not_found(scoped_not_found_handler_options options) && = delete;
+
+    // The rate limit every request of the host passes, matched or not, keyed
+    // on the client address; replaces an earlier rule. A route may add its own
+    // with ruvia::rate_limit<max, window_ms>; both then apply, so the stricter
+    // is what a caller actually meets -- the same "narrower scope may only
+    // tighten" rule server_config::max_buffered_body_bytes_ follows.
+    //
+    // Worker-local: each worker counts independently, so an application with
+    // N workers admits up to N times this rule. Size it accordingly.
+    host_type& rate_limit(rate_limit_config config) &;
+    host_type& rate_limit(rate_limit_config config) && = delete;
+    host_type& rate_limit(std::nullptr_t) &;
+    host_type& rate_limit(std::nullptr_t) && = delete;
+
+private:
+    friend host_type;
+
+    dispatch_configuration() = default;
+
+    host_type& add_middleware(detail::owned_middleware_descriptor descriptor);
+    host_type& add_worker_state(detail::worker_state_definition definition);
+    // Runs `change` under the host's lifecycle guard: the host's
+    // edit_configuration(detail::callback_ref<void(detail::app_configuration&)>).
+    template <typename change_type>
+    host_type& edit(change_type&& change);
+};
+
+}  // namespace ruvia
+
+namespace ruvia::detail {
 
 // Internal startup-time controller registration contracts.
 

@@ -63,8 +63,8 @@ namespace {
     return found;
 }
 
-[[nodiscard]] bool headers_have_vary_token(std::span<const http_header> headers, std::string_view token) noexcept {
-    for (const auto& header : headers) {
+[[nodiscard]] bool headers_have_vary_token(const http_header_range_view& headers, std::string_view token) noexcept {
+    for (const auto header : headers) {
         if (http_ascii_equals_ignore_case(header.name(), "Vary") && vary_value_contains_token(header.value(), token)) {
             return true;
         }
@@ -91,7 +91,8 @@ bool is_http_cors_controlled_response_header(std::string_view name) noexcept {
     }
 }
 
-void merge_http_vary_tokens(std::vector<http_header>& headers, std::span<const std::string_view> tokens) {
+void merge_http_vary_tokens(editable_http_headers headers, std::span<const std::string_view> tokens) {
+    const auto fields = headers.fields();
     std::vector<std::string_view> missing;
     for (const auto token : tokens) {
         const auto trimmed = http_trim_ows(token);
@@ -99,18 +100,15 @@ void merge_http_vary_tokens(std::vector<http_header>& headers, std::span<const s
             continue;
         }
         if (trimmed == "*") {
-            if (!headers_have_vary_token(headers, "*")) {
-                std::erase_if(headers, [](const http_header& field) noexcept {
-                    return http_ascii_equals_ignore_case(field.name(), "Vary");
-                });
-                headers.emplace_back("Vary", "*");
+            if (!headers_have_vary_token(fields, "*")) {
+                headers.set("Vary", "*");
             }
             return;
         }
         if (!is_valid_http_header_name(trimmed)) {
             throw std::invalid_argument("Vary token must be a valid HTTP field name");
         }
-        if (headers_have_vary_token(headers, trimmed)) {
+        if (headers_have_vary_token(fields, trimmed)) {
             continue;
         }
         const bool duplicate = std::ranges::any_of(missing, [trimmed](std::string_view current) noexcept {
@@ -124,50 +122,29 @@ void merge_http_vary_tokens(std::vector<http_header>& headers, std::span<const s
         return;
     }
 
-    for (std::size_t index = 0; index < headers.size(); ++index) {
-        if (!http_ascii_equals_ignore_case(headers[index].name(), "Vary")) {
+    std::string combined;
+    const auto append_member = [&combined](std::string_view member) {
+        if (!combined.empty()) {
+            combined.append(", ");
+        }
+        combined.append(member);
+    };
+    for (const auto field : fields) {
+        if (!http_ascii_equals_ignore_case(field.name(), "Vary")) {
             continue;
         }
-        std::string combined;
-        for (const auto& field : headers) {
-            if (!http_ascii_equals_ignore_case(field.name(), "Vary")) {
-                continue;
-            }
-            const auto trimmed = http_trim_ows(field.value());
-            if (trimmed.empty()) {
-                continue;
-            }
-            if (!combined.empty()) {
-                combined.append(", ");
-            }
-            combined.append(trimmed);
+        const auto listed = http_trim_ows(field.value());
+        if (!listed.empty()) {
+            append_member(listed);
         }
-        for (const auto token : missing) {
-            if (!combined.empty()) {
-                combined.append(", ");
-            }
-            combined.append(token);
-        }
-        headers[index] = http_header("Vary", combined);
-        for (std::size_t rest = headers.size(); rest > index + 1; --rest) {
-            if (http_ascii_equals_ignore_case(headers[rest - 1].name(), "Vary")) {
-                headers.erase(headers.begin() + static_cast<std::ptrdiff_t>(rest - 1));
-            }
-        }
-        return;
     }
-
-    std::string value;
-    for (std::size_t index = 0; index < missing.size(); ++index) {
-        if (index != 0) {
-            value.append(", ");
-        }
-        value.append(missing[index]);
+    for (const auto token : missing) {
+        append_member(token);
     }
-    headers.emplace_back("Vary", value);
+    headers.set("Vary", combined);
 }
 
-void merge_http_vary_token(std::vector<http_header>& headers, std::string_view token) {
+void merge_http_vary_token(editable_http_headers headers, std::string_view token) {
     merge_http_vary_tokens(headers, std::span<const std::string_view>(&token, 1));
 }
 
@@ -447,63 +424,27 @@ http_cors_preflight_result http_cors_policy::evaluate_preflight(const http_reque
     });
 }
 
-bool http_cors_policy::rewrite_response_headers(borrowed_text request_origin, std::vector<http_header>& response_headers) const {
-    std::erase_if(response_headers, [](const http_header& field) noexcept {
-        return is_http_cors_controlled_response_header(field.name());
-    });
-
+bool http_cors_policy::rewrite_response_headers(borrowed_text request_origin, editable_http_headers response_headers) const {
     const auto origin = request_origin.view();
     const bool granted = !origin.empty() && allows_origin(origin);
-    if (!allow_any_origin_) {
-        merge_http_vary_token(response_headers, "Origin");
-    }
-    if (!granted) {
-        return false;
-    }
-
-    const std::string_view allow_origin = allow_any_origin_ ? std::string_view("*") : origin;
-    response_headers.emplace_back("Access-Control-Allow-Origin", allow_origin);
-    if (allow_credentials_) {
-        response_headers.emplace_back("Access-Control-Allow-Credentials", "true");
-    }
-    if (!joined_expose_headers_.empty()) {
-        response_headers.emplace_back("Access-Control-Expose-Headers", joined_expose_headers_);
-    }
-    return true;
-}
-
-bool http_cors_policy::rewrite_response_headers(borrowed_text request_origin, http_response_headers& response_headers) const {
-    response_headers.remove_header("Access-Control-Allow-Origin");
-    response_headers.remove_header("Access-Control-Allow-Credentials");
-    response_headers.remove_header("Access-Control-Expose-Headers");
-    response_headers.remove_header("Access-Control-Max-Age");
-    response_headers.remove_header("Access-Control-Allow-Methods");
-    response_headers.remove_header("Access-Control-Allow-Headers");
-
-    const auto origin = request_origin.view();
-    const bool granted = !origin.empty() && allows_origin(origin);
-    if (!allow_any_origin_) {
-        response_headers.add_vary_token("Origin");
-    }
-    if (!granted) {
-        return false;
-    }
-
-    const std::string_view allow_origin = allow_any_origin_ ? std::string_view("*") : origin;
-    response_headers.header("Access-Control-Allow-Origin", allow_origin);
-    if (allow_credentials_) {
-        response_headers.header_stable_view("Access-Control-Allow-Credentials", "true");
-    }
-    if (!joined_expose_headers_.empty()) {
-        response_headers.header("Access-Control-Expose-Headers", joined_expose_headers_);
-    }
-    return true;
-}
-
-bool http_cors_policy::rewrite_response_headers(borrowed_text request_origin, http_response& response) const {
-    auto staged = response.headers().clone(4);
-    const bool granted = rewrite_response_headers(request_origin, staged);
-    response.commit_headers(std::move(staged));
+    // Vary and up to three Access-Control-* lines are written: an
+    // http_response takes all of them or none.
+    response_headers.transact([this, origin, granted](editable_http_headers candidate) {
+        candidate.remove_if(is_http_cors_controlled_response_header);
+        if (!allow_any_origin_) {
+            merge_http_vary_token(candidate, "Origin");
+        }
+        if (!granted) {
+            return;
+        }
+        candidate.set("Access-Control-Allow-Origin", allow_any_origin_ ? std::string_view("*") : origin);
+        if (allow_credentials_) {
+            candidate.set("Access-Control-Allow-Credentials", "true");
+        }
+        if (!joined_expose_headers_.empty()) {
+            candidate.set("Access-Control-Expose-Headers", joined_expose_headers_);
+        }
+    }, 4);
     return granted;
 }
 

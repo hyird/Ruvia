@@ -402,7 +402,7 @@ task<void> clear_keys(redis_executor redis, std::string pattern, request_io_metr
             throw_db_cache_timeout();
         }
         cursor = result->next_cursor();
-        auto deletion = delete_key_batch(redis, result->values(), options, deadline_value);
+        auto deletion = delete_key_batch(redis, result->entries(), options, deadline_value);
         // Preserve only the cursor while the owned DEL waits for its reply.
         result.reset();
         co_await std::move(deletion);

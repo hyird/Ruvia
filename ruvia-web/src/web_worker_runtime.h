@@ -45,7 +45,7 @@ namespace ruvia::detail {
 class worker_state_registry;
 
 // The endpoint behind every web_worker_ref. Core owns admission: posts go
-// through detail::worker_ref_access::post_payload and accepted jobs start only while that
+// through worker_ref::post_payload and accepted jobs start only while that
 // worker accepts and its stop token is clear. Started jobs run in the worker's
 // task_scope, which the server worker joins before retiring capabilities.
 //

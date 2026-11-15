@@ -68,8 +68,7 @@ struct http_connect_udp_request_view final {
 // rules plus exactly one Capsule-Protocol: ?1 field (RFC 9297 section 3.4
 // SHOULD, kept mandatory for Ruvia senders on HTTP/1.1 and HTTP/2).
 [[nodiscard]] std::optional<http_connect_udp_error> validate_http_connect_udp_request_to_send(http_connect_udp_request_view request) noexcept;
-[[nodiscard]] std::optional<http_connect_udp_error> validate_http_connect_udp_response(http_protocol_version version, std::uint16_t status, std::span<const http_header_view> headers) noexcept;
-[[nodiscard]] std::optional<http_connect_udp_error> validate_http_connect_udp_response(http_protocol_version version, std::uint16_t status, std::span<const http_header> headers) noexcept;
+[[nodiscard]] std::optional<http_connect_udp_error> validate_http_connect_udp_response(http_protocol_version version, std::uint16_t status, const http_header_range_view& headers) noexcept;
 // Classifies the HTTP/1 Upgrade token; full validation remains mandatory.
 [[nodiscard]] bool is_http_connect_udp_upgrade_request(const http_request& request) noexcept;
 [[nodiscard]] std::optional<http_connect_udp_error> validate_http_connect_udp_request(const http_request& request) noexcept;

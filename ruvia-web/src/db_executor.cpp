@@ -66,6 +66,7 @@ db_executor::db_executor(detail::db_pool_ref_type client, detail::operation_scop
     registration_(operation_scope, *this) {}
 
 db_executor::db_executor(const db_executor& other) noexcept :
+    db_command_set<db_executor>(other),
     cache_(other.cache_),
     client_(other.client_),
     io_metrics_(other.io_metrics_),
@@ -144,29 +145,12 @@ task<std::pair<db_rows, db_rows>> db_executor::query_and_count_task(const db_que
     });
 }
 
-task<db_exec_result> db_executor::execute_query(const db_query& query) const {
-    registration_.require_active();
-    auto statement = query.compile(query_driver());
-    if (statement.returns_rows()) {
-        throw std::invalid_argument("execute requires a statement without returned rows");
-    }
-    return registration_.attach(start_db_statement<true>(options_, request_stop_, client_, std::move(statement.sql_), std::move(statement.params_), io_metrics_));
+task<db_rows> db_executor::start_query(std::string sql, std::vector<db_value> params) const {
+    return registration_.attach(start_db_statement<false>(options_, request_stop_, client_, std::move(sql), std::move(params), io_metrics_));
 }
 
-task<db_exec_result> db_executor::execute_prepared(std::string sql) const {
-    return registration_.attach(start_db_statement<true>(options_, request_stop_, client_, std::move(sql), {}, io_metrics_));
-}
-
-task<db_rows> db_executor::query(std::string_view sql, std::span<const db_value> params) const {
-    registration_.require_active();
-    auto statement = prepare_db_statement(sql, params);
-    return registration_.attach(start_db_statement<false>(options_, request_stop_, client_, std::move(statement.sql_), std::move(statement.params_), io_metrics_));
-}
-
-task<db_exec_result> db_executor::execute(std::string_view sql, std::span<const db_value> params) const {
-    registration_.require_active();
-    auto statement = prepare_db_statement(sql, params);
-    return registration_.attach(start_db_statement<true>(options_, request_stop_, client_, std::move(statement.sql_), std::move(statement.params_), io_metrics_));
+task<db_exec_result> db_executor::start_execute(std::string sql, std::vector<db_value> params) const {
+    return registration_.attach(start_db_statement<true>(options_, request_stop_, client_, std::move(sql), std::move(params), io_metrics_));
 }
 
 task<db_stream_result> db_executor::query_stream(std::string_view sql, std::span<const db_value> params) const {
@@ -222,6 +206,41 @@ db_executor db_executor::bind_caller_scope(detail::operation_scope& scope, detai
     bound.request_stop_ = stop_token_value;
     return bound;
 }
+
+// The command surface shared by db_executor and db_transaction. Statements are
+// validated and their parameters cloned here, synchronously; the surface then
+// starts the owned statement on its pool or on its leased connection.
+template <typename surface_type>
+task<db_rows> db_command_set<surface_type>::query_statement(surface_reference receiver, std::string_view sql, std::span<const db_value> params) {
+    receiver.registration_.require_active();
+    auto statement = prepare_db_statement(sql, params);
+    return receiver.start_query(std::move(statement.sql_), std::move(statement.params_));
+}
+
+template <typename surface_type>
+task<db_exec_result> db_command_set<surface_type>::execute_statement(surface_reference receiver, std::string_view sql, std::span<const db_value> params) {
+    receiver.registration_.require_active();
+    auto statement = prepare_db_statement(sql, params);
+    return receiver.start_execute(std::move(statement.sql_), std::move(statement.params_));
+}
+
+template <typename surface_type>
+task<db_exec_result> db_command_set<surface_type>::execute_query(surface_reference receiver, const db_query& query) {
+    auto statement = query.compile(receiver.query_driver());
+    if (statement.returns_rows()) {
+        throw std::invalid_argument("execute requires a statement without returned rows");
+    }
+    return receiver.start_execute(std::move(statement.sql_), std::move(statement.params_));
+}
+
+template <typename surface_type>
+task<db_exec_result> db_command_set<surface_type>::execute_prepared(surface_reference receiver, std::string sql) {
+    receiver.registration_.require_active();
+    return receiver.start_execute(std::move(sql), {});
+}
+
+template class db_command_set<db_executor>;
+template class db_command_set<db_transaction>;
 
 }  // namespace ruvia
 

@@ -197,7 +197,7 @@ class udp_tunnel_routes final {
             co_await reads.join();
             observation.eof_ = !(co_await std::move(last_read));
             if (datagram) {
-                co_await tunnel.send(datagram->payload());
+                co_await tunnel.send(datagram->bytes());
             }
             co_await std::move(finish);
         } catch (...) {

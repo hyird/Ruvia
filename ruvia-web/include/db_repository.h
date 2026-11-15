@@ -394,7 +394,7 @@ private:
             if (lookup.status_ == unique_lookup_status::absent) {
                 throw conversion_error(conversion_error::code_type::missing_column, "relation query must select every mapped entity column");
             }
-            return static_cast<std::size_t>(lookup.field_ - row.begin());
+            return static_cast<std::size_t>(lookup.value_ - row.begin());
         };
         for_each_descriptor<typename entity_type::columns_type>([&]<typename column_type, std::size_t i> {
             columns_[i] = resolve(column_type::name.view());
@@ -584,15 +584,12 @@ public:
     explicit db_values_builder(std::initializer_list<std::string_view> columns) :
         db_values_builder(std::span<const std::string_view>(columns.begin(), columns.size())) {}
 
-    db_values_builder& row(std::span<const db_expr> values) {
-        if (values.size() != columns_.size()) {
+    db_values_builder& row(argument_list<db_expr> values) {
+        if (values.span().size() != columns_.size()) {
             throw std::invalid_argument("db_values_builder row width differs from column count");
         }
-        query_.values(values);
+        query_.values(values.span());
         return *this;
-    }
-    db_values_builder& row(std::initializer_list<db_expr> values) {
-        return row(std::span<const db_expr>(values.begin(), values.size()));
     }
 
     [[nodiscard]] const db_query& query() const& noexcept RUVIA_LIFETIMEBOUND {
@@ -926,7 +923,8 @@ public:
     db_query_builder(db_query_builder&&) = default;
     db_query_builder& operator=(db_query_builder&&) = delete;
 
-    db_query_builder& select(std::span<const db_selection> fields_value) {
+    db_query_builder& select(argument_list<db_selection> field_list) {
+        const auto fields_value = field_list.span();
         require_plain_projection();
         for (const auto& field : fields_value) {
             if (!field.has_expression() && !field.is_wildcard()) {
@@ -936,13 +934,11 @@ public:
         selected_ = detail::apply_projection(query_, fields_value, alias_, false, entity_type::table_name());
         return *this;
     }
-    db_query_builder& select(std::initializer_list<db_selection> fields_value) {
-        return select(std::span<const db_selection>(fields_value.begin(), fields_value.size()));
-    }
     db_query_builder& select(const db_expr& expression, borrowed_text alias_name) {
         return select({expression.as(alias_name)});
     }
-    db_query_builder& add_select(std::span<const db_selection> fields_value) {
+    db_query_builder& add_select(argument_list<db_selection> field_list) {
+        const auto fields_value = field_list.span();
         require_plain_projection();
         if (fields_value.empty()) {
             throw std::invalid_argument("add_select requires at least one field");
@@ -963,9 +959,6 @@ public:
         }
         selected_ = detail::apply_projection(query_, fields_value, alias_, false, entity_type::table_name(), previous);
         return *this;
-    }
-    db_query_builder& add_select(std::initializer_list<db_selection> fields_value) {
-        return add_select(std::span<const db_selection>(fields_value.begin(), fields_value.size()));
     }
     db_query_builder& add_select(const db_expr& expression, borrowed_text alias_name) {
         return add_select({expression.as(alias_name)});
@@ -1108,25 +1101,19 @@ public:
         query_.combine(operation, source_value.target(scratch));
         return *this;
     }
-    db_query_builder& group_by(std::span<const db_expr> expressions) {
-        detail::import_db_expressions(expressions, [this](const db_expr& expression) {
+    db_query_builder& group_by(argument_list<db_expr> expressions) {
+        detail::import_db_expressions(expressions.span(), [this](const db_expr& expression) {
             return db_expr(import_entity_expression(expression));
         }, [this](std::span<const db_expr> imported) {
             query_.group_by(imported);
         });
         return *this;
     }
-    db_query_builder& group_by(std::initializer_list<db_expr> expressions) {
-        return group_by(std::span<const db_expr>(expressions.begin(), expressions.size()));
-    }
-    db_query_builder& add_group_by(std::span<const db_expr> expressions) {
-        for (const auto& expression : expressions) {
+    db_query_builder& add_group_by(argument_list<db_expr> expressions) {
+        for (const auto& expression : expressions.span()) {
             query_.add_group_by(import_entity_expression(expression));
         }
         return *this;
-    }
-    db_query_builder& add_group_by(std::initializer_list<db_expr> expressions) {
-        return add_group_by(std::span<const db_expr>(expressions.begin(), expressions.size()));
     }
     db_query_builder& having(const db_predicate& predicate) {
         query_.having(predicate.expression(query_, entity_type::table_name(), alias_));
@@ -1140,11 +1127,11 @@ public:
         query_.or_having(predicate.expression(query_, entity_type::table_name(), alias_));
         return *this;
     }
-    db_query_builder& order_by(const db_expr& expression, db_order_direction direction = db_order_direction::asc, db_nulls_order nulls = db_nulls_order::default_) {
+    db_query_builder& order_by(const db_expr& expression, order_direction direction = order_direction::asc, db_nulls_order nulls = db_nulls_order::default_) {
         query_.order_by(expression.expression(query_, entity_type::table_name(), alias_), direction, nulls);
         return *this;
     }
-    db_query_builder& add_order_by(const db_expr& expression, db_order_direction direction = db_order_direction::asc, db_nulls_order nulls = db_nulls_order::default_) {
+    db_query_builder& add_order_by(const db_expr& expression, order_direction direction = order_direction::asc, db_nulls_order nulls = db_nulls_order::default_) {
         query_.add_order_by(expression.expression(query_, entity_type::table_name(), alias_), direction, nulls);
         return *this;
     }
@@ -1182,16 +1169,13 @@ public:
         query_.distinct(enabled);
         return *this;
     }
-    db_query_builder& distinct_on(std::span<const db_expr> expressions) {
-        detail::import_db_expressions(expressions, [this](const db_expr& expression) {
+    db_query_builder& distinct_on(argument_list<db_expr> expressions) {
+        detail::import_db_expressions(expressions.span(), [this](const db_expr& expression) {
             return db_expr(import_entity_expression(expression));
         }, [this](std::span<const db_expr> imported) {
             query_.distinct_on(imported);
         });
         return *this;
-    }
-    db_query_builder& distinct_on(std::initializer_list<db_expr> expressions) {
-        return distinct_on(std::span<const db_expr>(expressions.begin(), expressions.size()));
     }
     db_query_builder& where(const db_predicate& predicate) {
         query_.where(predicate.expression(query_, entity_type::table_name(), alias_));
@@ -1252,10 +1236,10 @@ public:
         if constexpr (std::same_as<output_type, entity_type>) {
             if (hydrates()) {
                 auto prepared = prepare_relation_query(target_query);
-                return executor_.template query_mapped<entity_rows<entity_type>>(prepared ? *prepared : target_query, detail::db_map_related_entities<entity_type>{relations_->clone()});
+                return db_command_set<executor_type>::template query_mapped<entity_rows<entity_type>>(executor_, prepared ? *prepared : target_query, detail::db_map_related_entities<entity_type>{relations_->clone()});
             }
         }
-        return executor_.template query_mapped<entity_rows<output_type>>(target_query, std::move(mapper));
+        return db_command_set<executor_type>::template query_mapped<entity_rows<output_type>>(executor_, target_query, std::move(mapper));
     }
     template <typename output_type = entity_type>
     [[nodiscard]] task<std::optional<output_type>> get_one() const {
@@ -1264,35 +1248,35 @@ public:
         if constexpr (std::same_as<output_type, entity_type>) {
             if (hydrates()) {
                 auto prepared = prepare_relation_query(query);
-                return executor_.template query_mapped<std::optional<entity_type>>(prepared ? *prepared : query, detail::db_map_one_related_entity<entity_type>{relations_->clone()});
+                return db_command_set<executor_type>::template query_mapped<std::optional<entity_type>>(executor_, prepared ? *prepared : query, detail::db_map_one_related_entity<entity_type>{relations_->clone()});
             }
         }
-        return executor_.template query_mapped<std::optional<output_type>>(query, detail::db_map_one_projection<output_type>{std::move(mapper)});
+        return db_command_set<executor_type>::template query_mapped<std::optional<output_type>>(executor_, query, detail::db_map_one_projection<output_type>{std::move(mapper)});
     }
     [[nodiscard]] task<db_rows> get_raw_many() const {
         std::optional<db_query> active_query;
         const auto& target_query = target(active_query);
-        return executor_.template query_mapped<db_rows>(target_query, detail::db_map_raw_rows{});
+        return db_command_set<executor_type>::template query_mapped<db_rows>(executor_, target_query, detail::db_map_raw_rows{});
     }
     template <typename output_type = entity_type>
     [[nodiscard]] task<std::pair<entity_rows<output_type>, db_rows>> get_raw_and_entities() const {
         auto mapper = projection_mapper<output_type>(true);
         std::optional<db_query> active_query;
         const auto& target_query = target(active_query);
-        return executor_.template query_mapped<std::pair<entity_rows<output_type>, db_rows>>(target_query, detail::db_map_raw_and_entities<output_type>{std::move(mapper)});
+        return db_command_set<executor_type>::template query_mapped<std::pair<entity_rows<output_type>, db_rows>>(executor_, target_query, detail::db_map_raw_and_entities<output_type>{std::move(mapper)});
     }
     // Scalars own all decoded data; get_scalar returns nullopt for no row or
     // SQL NULL, while get_scalars rejects NULL rows. Arrays remain one-dimensional.
     template <db_mapped_value scalar_type>
     [[nodiscard]] task<std::optional<scalar_type>> get_scalar() const {
         auto query = single_row_query();
-        return executor_.template query_mapped<std::optional<scalar_type>>(query, detail::db_map_scalar<scalar_type>{});
+        return db_command_set<executor_type>::template query_mapped<std::optional<scalar_type>>(executor_, query, detail::db_map_scalar<scalar_type>{});
     }
     template <db_mapped_value scalar_type>
     [[nodiscard]] task<std::vector<scalar_type>> get_scalars() const {
         std::optional<db_query> active_query;
         const auto& target_query = target(active_query);
-        return executor_.template query_mapped<std::vector<scalar_type>>(target_query, detail::db_map_scalars<scalar_type>{});
+        return db_command_set<executor_type>::template query_mapped<std::vector<scalar_type>>(executor_, target_query, detail::db_map_scalars<scalar_type>{});
     }
     [[nodiscard]] task<db_stream_result> stream() const
         requires std::same_as<executor_type, db_executor>
@@ -1304,14 +1288,14 @@ public:
     }
     [[nodiscard]] task<std::uint64_t> get_count() const {
         const auto count = count_query();
-        return executor_.template query_mapped<std::uint64_t>(count, detail::db_map_count{});
+        return db_command_set<executor_type>::template query_mapped<std::uint64_t>(executor_, count, detail::db_map_count{});
     }
     [[nodiscard]] task<bool> get_exists() const {
         auto source_value = unpaged_source();
         db_query query;
         query.select(db_expr(query.alias(query.exists(std::move(source_value)), "exists")));
         query.copy_cache(query_, detail::db_cache_shape::exists);
-        return executor_.template query_mapped<bool>(query, detail::db_map_exists{});
+        return db_command_set<executor_type>::template query_mapped<bool>(executor_, query, detail::db_map_exists{});
     }
     template <typename output_type = entity_type>
     [[nodiscard]] task<std::pair<entity_rows<output_type>, std::uint64_t>> get_many_and_count() const {
@@ -1325,10 +1309,10 @@ public:
         if constexpr (std::same_as<output_type, entity_type>) {
             if (hydrates()) {
                 auto prepared = prepare_relation_query(target_query);
-                return executor_.template query_mapped_and_count<entity_rows<entity_type>>(prepared ? *prepared : target_query, count, detail::db_map_related_entities<entity_type>{relations_->clone()});
+                return db_command_set<executor_type>::template query_mapped_and_count<entity_rows<entity_type>>(executor_, prepared ? *prepared : target_query, count, detail::db_map_related_entities<entity_type>{relations_->clone()});
             }
         }
-        return executor_.template query_mapped_and_count<entity_rows<output_type>>(target_query, count, std::move(mapper));
+        return db_command_set<executor_type>::template query_mapped_and_count<entity_rows<output_type>>(executor_, target_query, count, std::move(mapper));
     }
     [[nodiscard]] db_statement get_query_and_parameters() const {
         std::optional<db_query> active_query;
@@ -1588,7 +1572,8 @@ public:
         return *this;
     }
     template <typename source, typename source_executor_type>
-    db_write_query_builder& insert_from(std::span<const std::string_view> columns, const db_query_builder<source, source_executor_type>& source_value) {
+    db_write_query_builder& insert_from(argument_list<std::string_view> column_list, const db_query_builder<source, source_executor_type>& source_value) {
+        const auto columns = column_list.span();
         if (!inserting_) {
             throw std::invalid_argument("insert_from requires an insert builder");
         }
@@ -1605,11 +1590,8 @@ public:
         record_inserted_columns(columns);
         return *this;
     }
-    template <typename source, typename source_executor_type>
-    db_write_query_builder& insert_from(std::initializer_list<std::string_view> columns, const db_query_builder<source, source_executor_type>& source_value) {
-        return insert_from(std::span<const std::string_view>(columns.begin(), columns.size()), source_value);
-    }
-    db_write_query_builder& insert_from(std::span<const std::string_view> columns, const db_query& source_value) {
+    db_write_query_builder& insert_from(argument_list<std::string_view> column_list, const db_query& source_value) {
+        const auto columns = column_list.span();
         if (!inserting_) {
             throw std::invalid_argument("insert_from requires an insert builder");
         }
@@ -1619,9 +1601,6 @@ public:
         inserted_column_count_ = 0;
         record_inserted_columns(columns);
         return *this;
-    }
-    db_write_query_builder& insert_from(std::initializer_list<std::string_view> columns, const db_query& source_value) {
-        return insert_from(std::span<const std::string_view>(columns.begin(), columns.size()), source_value);
     }
     db_write_query_builder& on_conflict(const db_conflict_options& options) {
         if (!inserting_) {
@@ -1645,7 +1624,8 @@ public:
         query_.with_columns(name, values.query(), materialization, values.columns());
         return *this;
     }
-    db_write_query_builder& returning(std::span<const db_selection> fields = {}) {
+    db_write_query_builder& returning(argument_list<db_selection> field_list = {}) {
+        const auto fields = field_list.span();
         if (fields.empty()) {
             std::array<db_selection, column_capacity> expressions{};
             detail::for_each_descriptor<typename entity_type::columns_type>([&]<typename c_type, std::size_t index> {
@@ -1664,37 +1644,34 @@ public:
         }
         return *this;
     }
-    db_write_query_builder& returning(std::initializer_list<db_selection> fields_value) {
-        return returning(std::span<const db_selection>(fields_value.begin(), fields_value.size()));
-    }
     [[nodiscard]] task<db_exec_result> execute() const {
         validate();
-        return executor_.execute_query(query_);
+        return db_command_set<executor_type>::execute_query(executor_, query_);
     }
     template <typename output_type = entity_type>
     [[nodiscard]] task<entity_rows<output_type>> get_many() const {
         require_returning<output_type>("get_many requires RETURNING");
-        return executor_.template query_mapped<entity_rows<output_type>>(query_, detail::db_map_projection<output_type>(selected_.columns_, false, selected_.wildcard_));
+        return db_command_set<executor_type>::template query_mapped<entity_rows<output_type>>(executor_, query_, detail::db_map_projection<output_type>(selected_.columns_, false, selected_.wildcard_));
     }
     template <typename output_type = entity_type>
     [[nodiscard]] task<std::optional<output_type>> get_one() const {
         require_returning<output_type>("get_one requires RETURNING");
-        return executor_.template query_mapped<std::optional<output_type>>(query_, detail::db_map_one_projection<output_type>{detail::db_map_projection<output_type>(selected_.columns_, false, selected_.wildcard_)});
+        return db_command_set<executor_type>::template query_mapped<std::optional<output_type>>(executor_, query_, detail::db_map_one_projection<output_type>{detail::db_map_projection<output_type>(selected_.columns_, false, selected_.wildcard_)});
     }
     [[nodiscard]] task<db_rows> get_raw_many() const {
         require_returning("get_raw_many requires RETURNING");
-        return executor_.template query_mapped<db_rows>(query_, detail::db_map_raw_rows{});
+        return db_command_set<executor_type>::template query_mapped<db_rows>(executor_, query_, detail::db_map_raw_rows{});
     }
     // RETURNING uses the same owning value and NULL contract as read scalars.
     template <db_mapped_value scalar_type>
     [[nodiscard]] task<std::optional<scalar_type>> get_scalar() const {
         require_returning("get_scalar requires RETURNING");
-        return executor_.template query_mapped<std::optional<scalar_type>>(query_, detail::db_map_scalar<scalar_type>{});
+        return db_command_set<executor_type>::template query_mapped<std::optional<scalar_type>>(executor_, query_, detail::db_map_scalar<scalar_type>{});
     }
     template <db_mapped_value scalar_type>
     [[nodiscard]] task<std::vector<scalar_type>> get_scalars() const {
         require_returning("get_scalars requires RETURNING");
-        return executor_.template query_mapped<std::vector<scalar_type>>(query_, detail::db_map_scalars<scalar_type>{});
+        return db_command_set<executor_type>::template query_mapped<std::vector<scalar_type>>(executor_, query_, detail::db_map_scalars<scalar_type>{});
     }
     [[nodiscard]] db_statement get_query_and_parameters() const {
         validate();
@@ -1809,16 +1786,8 @@ public:
     [[nodiscard]] task<entity_rows<entity_type>> find(const db_find_options& options = {}) const {
         return find_builder(options).get_many();
     }
-    template <std::same_as<db_predicate> predicate_type>
-    [[nodiscard]] task<entity_rows<entity_type>> find(const predicate_type& where) const {
-        return find(db_find_options{.where_ = where});
-    }
     [[nodiscard]] task<std::optional<entity_type>> find_one(const db_find_options& options = {}) const {
         return find_builder(options).get_one();
-    }
-    template <std::same_as<db_predicate> predicate_type>
-    [[nodiscard]] task<std::optional<entity_type>> find_one(const predicate_type& where) const {
-        return find_one(db_find_options{.where_ = where});
     }
     [[nodiscard]] task<std::pair<entity_rows<entity_type>, std::uint64_t>> find_and_count(const db_find_options& options = {}) const {
         return find_builder(options).get_many_and_count();
@@ -1826,21 +1795,13 @@ public:
     [[nodiscard]] task<std::uint64_t> count(const db_find_options& options = {}) const {
         return find_builder(options).get_count();
     }
-    template <std::same_as<db_predicate> predicate_type>
-    [[nodiscard]] task<std::uint64_t> count(const predicate_type& where) const {
-        return count(db_find_options{.where_ = where});
-    }
     [[nodiscard]] task<bool> exists(const db_find_options& options = {}) const {
         return find_builder(options).get_exists();
-    }
-    template <std::same_as<db_predicate> predicate_type>
-    [[nodiscard]] task<bool> exists(const predicate_type& where) const {
-        return exists(db_find_options{.where_ = where});
     }
     [[nodiscard]] task<entity_type> save(const entity_type& entity) const {
         auto builder = save_builder(std::span<const entity_type>(&entity, 1));
         builder.returning();
-        return executor_.template query_mapped<entity_type>(builder.query(), detail::db_map_required_one<entity_type>{detail::db_map_projection<entity_type>({})});
+        return db_command_set<executor_type>::template query_mapped<entity_type>(executor_, builder.query(), detail::db_map_required_one<entity_type>{detail::db_map_projection<entity_type>({})});
     }
     [[nodiscard]] task<entity_rows<entity_type>> save(std::span<const entity_type> entities) const {
         return save_builder(entities).returning().get_many();
@@ -1867,9 +1828,9 @@ public:
         builder.where(predicate);
         return builder.execute();
     }
-    [[nodiscard]] task<db_exec_result> clear() {
+    [[nodiscard]] task<db_exec_result> clear() const {
         auto sql = detail::format_truncate_table(entity_type::table_name(), executor_.query_driver());
-        return executor_.execute_prepared(std::move(sql));
+        return db_command_set<executor_type>::execute_prepared(executor_, std::move(sql));
     }
     [[nodiscard]] task<db_exec_result> insert(const entity_type& entity) const {
         return insert(std::span<const entity_type>(&entity, 1));
@@ -1897,7 +1858,7 @@ public:
         if (!query.has_where()) {
             throw std::invalid_argument("remove requires an entity primary key");
         }
-        return executor_.execute_query(query);
+        return db_command_set<executor_type>::execute_query(executor_, query);
     }
     // An empty PostgreSQL conflict target with an update action defaults to the
     // primary key, the target save() uses.
@@ -1906,7 +1867,7 @@ public:
     }
     [[nodiscard]] task<db_exec_result> upsert(std::span<const entity_type> entities, const db_conflict_options& options = {}) const {
         auto query = upsert_query(entities, options);
-        return executor_.execute_query(query);
+        return db_command_set<executor_type>::execute_query(executor_, query);
     }
 
     [[nodiscard]] task<db_exec_result> update(const db_predicate& predicate, std::span<const db_assignment> changes) const {

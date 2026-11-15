@@ -260,7 +260,7 @@ private:
     // A wake on the worker's own thread posts the resume directly.
     void wake() noexcept {
         bounds_.cancel_deadline();
-        detail::worker_ref_access::defer_resume(state().worker(), completion_.continuation());
+        state().worker().defer_resume(completion_.continuation());
     }
 
     void on_end(wait_status status) noexcept {

@@ -20,6 +20,7 @@
 #include <vector>
 
 #include "borrowed_text.h"
+#include "checked_integer.h"
 #include "fixed_string.h"
 #include "model_value.h"
 
@@ -38,6 +39,12 @@ enum class backend_error_code : std::uint8_t {
     timeout,
     cancelled,
     closing,
+};
+
+// Sort direction of one ordering key, shared by the SQL and Redis query layers.
+enum class order_direction : std::uint8_t {
+    asc,
+    desc,
 };
 
 // A database field or Redis reply that cannot become the requested type.
@@ -459,42 +466,24 @@ public:                                                            \
     }
 
 namespace ruvia {
-// Non-negative row count or offset in SQL and RediSearch 64-bit signed range.
-// Checked before narrowing so negative integers cannot wrap into huge counts.
-class query_row_count final {
-public:
-    constexpr query_row_count() noexcept = default;
-
-    template <std::integral integer_type>
-    constexpr query_row_count(integer_type value) :
-        value_(is_valid_value(value) ? static_cast<std::uint64_t>(value) : throw std::invalid_argument("query row count must be in 0..9223372036854775807")) {}
+namespace detail {
+struct query_row_count_policy final {
+    static constexpr std::uint64_t default_value = 0;
+    static constexpr bool implicit_conversion = true;
+    static constexpr const char* invalid_value_message = "query row count must be in 0..9223372036854775807";
 
     template <std::integral integer_type>
     [[nodiscard]] static constexpr bool is_valid_value(integer_type value) noexcept {
         return std::cmp_greater_equal(+value, 0) && std::in_range<std::int64_t>(+value);
     }
+};
+}  // namespace detail
 
-    template <std::integral integer_type>
-    [[nodiscard]] static constexpr std::optional<query_row_count> try_from_value(integer_type value) noexcept {
-        if (!is_valid_value(value)) {
-            return std::nullopt;
-        }
-        return query_row_count(static_cast<std::uint64_t>(value), validated_tag_type{});
-    }
-
-    [[nodiscard]] constexpr std::uint64_t value() const noexcept {
-        return value_;
-    }
-
-    friend constexpr auto operator<=>(query_row_count, query_row_count) = default;
-
-private:
-    struct validated_tag_type {};
-
-    constexpr query_row_count(std::uint64_t value, validated_tag_type) noexcept :
-        value_(value) {}
-
-    std::uint64_t value_{0};
+// Non-negative row count or offset in SQL and RediSearch 64-bit signed range.
+// Checked before narrowing so negative integers cannot wrap into huge counts.
+class query_row_count final : public checked_integer<query_row_count, std::uint64_t, detail::query_row_count_policy> {
+public:
+    using checked_integer::checked_integer;
 };
 
 static_assert(std::is_trivially_copyable_v<query_row_count>);

@@ -69,10 +69,10 @@ private:
 
 // Compares HTTP authorities using case-insensitive host syntax and the supplied
 // scheme default port, checked before narrowing like other port inputs.
-// Zero means no known scheme default: absent/empty ports then compare equal
-// only to absent/empty ports, never to an explicitly supplied zero.
+// Without a scheme default (std::nullopt) an absent/empty port has no numeric
+// value: it equals only another absent/empty port, never an explicit one.
 // Invalid authorities never compare equal.
-[[nodiscard]] bool http_authorities_equal(borrowed_text left, borrowed_text right, port_number default_port) noexcept;
+[[nodiscard]] bool http_authorities_equal(borrowed_text left, borrowed_text right, std::optional<port_number> default_port) noexcept;
 
 // Validates a WHATWG serialized origin, not a general URI or origin list.
 [[nodiscard]] bool is_valid_http_serialized_origin(std::string_view value) noexcept;

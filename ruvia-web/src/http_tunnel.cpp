@@ -27,19 +27,23 @@ class http_capsule_stream_state final {
 public:
     http_capsule_stream_state(http_tunnel& tunnel, http_capsule_config config) :
         worker_(tunnel.worker_),
-        server_(&tunnel),
+        tunnel_(&tunnel),
         decoder_(config),
         config_(config),
         inbound_(tunnel.inbound_),
-        payload_reservation_(inbound_) {}
-    http_capsule_stream_state(http_client_tunnel&& tunnel, http_capsule_config config) :
-        worker_(tunnel.response_.state_->memory_domain().worker()),
-        memory_pin_(http_client_response(tunnel.response_.state_)),
-        client_(std::move(tunnel)),
-        decoder_(config),
-        config_(config) {}
+        payload_reservation_(inbound_) {
+        if (tunnel.client_ != nullptr) {
+            memory_pin_.emplace(http_client_response(tunnel.client_));
+        }
+    }
+    // A client tunnel whose owner was destroyed (which closes its output
+    // scope) or whose pool has shut down: the pinned response state keeps
+    // results and the borrowed input readable, the transport is gone.
+    [[nodiscard]] bool client_closed() const noexcept {
+        return memory_pin_ && (memory_pin_->state_->pool_ == nullptr || !memory_pin_->state_->tunnel_->output_.output_scope_.active());
+    }
     void require() const {
-        if (closed_ || (client_ && (!client_->response_.state_ || client_->response_.state_->pool_ == nullptr))) {
+        if (closed_ || client_closed()) {
             throw std::logic_error("capsule stream is closed");
         }
         if (!worker_.is_current()) {
@@ -73,7 +77,7 @@ public:
         if (closed_) {
             return;
         }
-        if (client_ && (!client_->response_.state_ || client_->response_.state_->pool_ == nullptr)) {
+        if (client_closed()) {
             closed_ = true;
             return;
         }
@@ -81,15 +85,7 @@ public:
             std::terminate();
         }
         closed_ = true;
-        if (server_) {
-            server_->abort_input(malformed);
-        } else if (client_) {
-            if (malformed) {
-                client_->abort_malformed();
-            } else {
-                client_->abort();
-            }
-        }
+        tunnel_->abort_(tunnel_->target_, malformed);
     }
     void clear_input() noexcept {
         input_ = {};
@@ -104,15 +100,11 @@ public:
         if (read_active_ || output_active_) {
             std::terminate();
         }
-        if (client_) {
-            abort();
-        } else {
-            closed_ = true;
-        }
+        closed_ = true;
         read_scope_.close();
         output_scope_.close();
         clear_input();
-        server_ = nullptr;
+        tunnel_ = nullptr;
     }
     [[nodiscard]] bool poll_capsule(bool fin, http_capsule_retention retention) {
         const auto collect = [](void* raw, http_capsule_event event) {
@@ -137,7 +129,7 @@ public:
     // Interruptions are std::system_error (timed_out / operation_canceled);
     // a client tunnel reports them as its http_client_error subclass.
     [[noreturn]] void throw_interrupted(operation_interrupt_cause cause, const char* operation_name) const {
-        if (client_) {
+        if (memory_pin_) {
             throw http_client_error(std::make_error_code(cause == operation_interrupt_cause::timed_out ? std::errc::timed_out : std::errc::operation_canceled), operation_name);
         }
         operation_interrupt::throw_cause(cause, operation_name);
@@ -168,16 +160,7 @@ public:
     [[nodiscard]] task<bool> read_input(bool datagrams, const operation_steps& steps) {
         clear_input();
         if (datagrams && has_native_transport()) {
-            std::optional<http_tunnel_input> chunk;
-            if (server_) {
-                chunk = co_await server_->read_datagram_raw(next_step(steps, "capsule read"));
-            }
-#ifdef RUVIA_ENABLE_HTTP3
-            else {
-                auto& state = *client_->response_.state_;
-                chunk = co_await state.pool_->read_http3_tunnel_input(state, next_step(steps, "capsule read"));
-            }
-#endif
+            auto chunk = co_await tunnel_->read_datagram_(tunnel_->target_, next_step(steps, "capsule read"));
             if (!chunk) {
                 co_return false;
             }
@@ -186,64 +169,40 @@ public:
             input_ = *owned_input_;
             co_return true;
         }
-        if (server_) {
-            auto chunk = co_await server_->read_raw(next_step(steps, "capsule read"));
-            if (!chunk) {
-                co_return false;
-            }
-            owned_input_.emplace(std::move(*chunk));
-            input_ = *owned_input_;
-        } else {
-            auto chunk = co_await client_->read(next_step(steps, "capsule read"));
-            if (!chunk) {
-                co_return false;
-            }
-            input_ = as_chars(*chunk);
+        // The tunnel keeps this chunk until its next read starts.
+        const auto chunk = co_await tunnel_->read_(tunnel_->target_, next_step(steps, "capsule read"));
+        if (!chunk) {
+            co_return false;
         }
+        input_ = as_chars(*chunk);
         co_return true;
     }
     [[nodiscard]] bool has_native_transport() const noexcept {
-        if (server_) {
-            return server_->read_datagram_ != nullptr && server_->write_datagram_ != nullptr;
-        }
-#ifdef RUVIA_ENABLE_HTTP3
-        return client_ && client_->response_.state_->transport_ == http_client_response_transport::http3;
-#else
-        return false;
-#endif
+        return tunnel_->read_datagram_ != nullptr && tunnel_->write_datagram_ != nullptr;
     }
     [[nodiscard]] task<bool> send_datagram(std::string_view bytes, const operation_steps& steps) {
-        if (server_) {
-            co_return co_await server_->write_datagram_raw(bytes, next_step(steps, "capsule write"));
-        }
-#ifdef RUVIA_ENABLE_HTTP3
-        auto& state = *client_->response_.state_;
-        co_return co_await state.pool_->send_http3_datagram(state, bytes, next_step(steps, "capsule write"));
-#else
-        co_return false;
-#endif
+        return tunnel_->write_datagram_(tunnel_->target_, bytes, next_step(steps, "capsule write"));
     }
     [[nodiscard]] task<void> send_bytes(std::string&& bytes_value, const operation_steps& steps) {
-        if (server_ != nullptr) {
-            co_await server_->write_raw(std::move(bytes_value), next_step(steps, "capsule write"));
-            co_return;
-        }
-        const auto limit = client_->response_.state_->tunnel_->config_.max_chunk_bytes_;
+        // A client tunnel bounds each write: a larger frame goes out in order.
+        const auto limit = memory_pin_ ? memory_pin_->state_->tunnel_->config_.max_chunk_bytes_ : bytes_value.size();
         if (bytes_value.size() <= limit) {
-            co_await client_->write(std::move(bytes_value), next_step(steps, "capsule write"));
+            co_await tunnel_->write_(tunnel_->target_, std::move(bytes_value), next_step(steps, "capsule write"));
             co_return;
         }
         std::string_view remaining = bytes_value;
         while (!remaining.empty()) {
             const auto chunk = remaining.substr(0, limit);
-            co_await client_->write(chunk, next_step(steps, "capsule write"));
+            co_await tunnel_->write_(tunnel_->target_, std::string(chunk), next_step(steps, "capsule write"));
             remaining.remove_prefix(chunk.size());
         }
     }
+    [[nodiscard]] task<void> finish_output(operation_options operation) {
+        return tunnel_->finish_(tunnel_->target_, std::move(operation));
+    }
     const worker_ref& worker_;
     std::optional<http_client_response> memory_pin_;
-    http_tunnel* server_{};
-    std::optional<http_client_tunnel> client_;
+    http_tunnel* tunnel_{};
     http_capsule_decoder decoder_;
     http_capsule_config config_;
     std::optional<std::string> owned_input_;
@@ -317,122 +276,36 @@ private:
 
 namespace ruvia {
 namespace {
-constexpr const char* tunnel_lane_in_progress = "HTTP tunnel operation already in progress on this direction";
-template <typename input_type>
-task<std::optional<input_type>> read_tunnel(void* target, task<std::optional<input_type>> (*read)(void*, operation_options), bool& read_active, operation_options operation) {
-    auto lease = detail::claim_operation_lane(read_active, tunnel_lane_in_progress);
-    co_return co_await read(target, std::move(operation));
-}
-task<void> write_tunnel(void* target, task<void> (*write)(void*, std::string_view, operation_options), std::string bytes_value, bool& write_active, bool& ended, operation_options operation) {
-    auto lease = detail::claim_operation_lane(write_active, tunnel_lane_in_progress);
-    if (ended) {
-        throw std::logic_error("HTTP tunnel send direction has ended");
+task<std::optional<std::string_view>> read_text_chunk(task<std::optional<std::span<const std::byte>>> read) {
+    const auto chunk = co_await std::move(read);
+    if (!chunk) {
+        co_return std::nullopt;
     }
-    co_await write(target, bytes_value, std::move(operation));
-}
-task<bool> write_tunnel_datagram(void* target, task<bool> (*write)(void*, std::string_view, operation_options), std::string_view bytes, bool& write_active, bool& ended, operation_options operation) {
-    auto lease = detail::claim_operation_lane(write_active, tunnel_lane_in_progress);
-    if (ended) {
-        throw std::logic_error("HTTP tunnel send direction has ended");
-    }
-    co_return co_await write(target, bytes, std::move(operation));
-}
-task<void> finish_tunnel(void* target, task<void> (*finish_value)(void*, operation_options), bool& ended, bool& write_active, operation_options operation) {
-    auto lease = detail::claim_operation_lane(write_active, tunnel_lane_in_progress);
-    if (!ended) {
-        co_await finish_value(target, std::move(operation));
-        ended = true;
-    }
+    co_return as_chars(*chunk);
 }
 }  // namespace
 
-http_tunnel::http_tunnel(detail::inbound_buffer_account* inbound, const worker_ref& worker_value, void* target, read_type read, write_type write, finish_type finish_value, abort_type abort, bool datagrams, read_datagram_type read_datagram, write_datagram_type write_datagram) noexcept :
-    inbound_(inbound),
-    worker_(worker_value),
-    target_(target),
-    read_(read),
-    write_(write),
-    finish_(finish_value),
-    abort_(abort),
-    read_datagram_(read_datagram),
-    write_datagram_(write_datagram),
-    datagrams_(datagrams) {
-    operations_.bind_worker(worker_);
-}
-
-void http_tunnel::require_active() const {
-    if (!worker_.is_current()) {
-        std::terminate();
-    }
-    if (!operations_.active()) {
-        throw std::logic_error("HTTP tunnel session has expired");
-    }
-}
 void http_tunnel::require_unadapted() const {
     if (adapted_) {
         throw std::logic_error("HTTP tunnel is already adapted to a capsule stream");
     }
 }
 task<std::optional<std::span<const std::byte>>> http_tunnel::read(operation_options operation) & {
-    require_active();
     require_unadapted();
-    return operations_.attach(read_borrowed(std::move(operation)));
+    return read_(target_, std::move(operation));
 }
-task<std::optional<std::span<const std::byte>>> http_tunnel::read_borrowed(operation_options operation) {
-    auto lease = detail::claim_operation_lane(read_active_, tunnel_lane_in_progress);
-    // The previous view expires as this read starts.
-    read_chunk_.reset();
-    const detail::operation_steps steps(std::move(operation));
-    for (;;) {
-        auto chunk = co_await read_(target_, steps.next("HTTP tunnel read"));
-        if (!chunk) {
-            co_return std::nullopt;
-        }
-        if (!chunk->empty()) {
-            read_chunk_.emplace(std::move(*chunk));
-            co_return as_bytes(std::string_view(*read_chunk_));
-        }
-    }
-}
-task<std::optional<std::string>> http_tunnel::read_raw(operation_options operation) {
-    require_active();
-    return operations_.attach(read_tunnel(target_, read_, read_active_, std::move(operation)));
-}
-task<std::optional<detail::http_tunnel_input>> http_tunnel::read_datagram_raw(operation_options operation) {
-    require_active();
-    return operations_.attach(read_tunnel(target_, read_datagram_, read_active_, std::move(operation)));
-}
-task<bool> http_tunnel::write_datagram_raw(std::string_view bytes, operation_options operation) {
-    require_active();
-    return operations_.attach(write_tunnel_datagram(target_, write_datagram_, bytes, write_active_, send_ended_, std::move(operation)));
+task<std::optional<std::string_view>> http_tunnel::read_text(operation_options operation) & {
+    return read_text_chunk(read(std::move(operation)));
 }
 task<void> http_tunnel::write(outbound_bytes bytes_value, operation_options operation) & {
-    require_active();
     require_unadapted();
-    return write_raw(std::move(bytes_value).into_string(), std::move(operation));
-}
-task<void> http_tunnel::write_raw(std::string&& bytes_value, operation_options operation) {
-    require_active();
-    if (send_ended_) {
-        throw std::logic_error("HTTP tunnel send direction has ended");
-    }
-    auto owned = std::move(bytes_value);
-    return operations_.attach(write_tunnel(target_, write_, std::move(owned), write_active_, send_ended_, std::move(operation)));
+    return write_(target_, std::move(bytes_value).into_string(), std::move(operation));
 }
 task<void> http_tunnel::finish(operation_options operation) & {
-    require_active();
-    return operations_.attach(finish_tunnel(target_, finish_, send_ended_, write_active_, std::move(operation)));
+    return finish_(target_, std::move(operation));
 }
 void http_tunnel::abort() & noexcept {
-    abort_input(false);
-}
-void http_tunnel::abort_input(bool malformed) noexcept {
-    if (!worker_.is_current()) {
-        std::terminate();
-    }
-    if (operations_.active()) {
-        abort_(target_, malformed);
-    }
+    abort_(target_, false);
 }
 
 http_capsule::http_capsule(detail::http_capsule_stream_state& state_value, std::uint64_t type, std::string payload_value) noexcept :
@@ -474,18 +347,11 @@ void http_capsule::release() noexcept {
     }
 }
 http_capsule_stream::http_capsule_stream(http_tunnel& tunnel, http_capsule_config config) {
-    tunnel.require_active();
-    tunnel.require_unadapted();
+    if (!tunnel.worker_.is_current()) {
+        throw std::logic_error("capsule stream requires its owner worker");
+    }
     state_ = new detail::http_capsule_stream_state(tunnel, config);
     tunnel.adapted_ = true;
-}
-http_capsule_stream::http_capsule_stream(http_client_tunnel&& tunnel, http_capsule_config config) {
-    if (!tunnel.response_.state_ || !tunnel.response_.state_->memory_domain().worker().is_current()) {
-        throw std::logic_error("capsule stream requires a live tunnel on its worker");
-    }
-    // Validate before consuming the caller's owner.
-    http_capsule_decoder validation(config);
-    state_ = new detail::http_capsule_stream_state(std::move(tunnel), config);
 }
 http_capsule_stream::http_capsule_stream(http_capsule_stream&& other) noexcept :
     state_(std::exchange(other.state_, nullptr)) {}
@@ -510,18 +376,15 @@ void http_capsule_stream::abort() & noexcept {
         state_->abort();
     }
 }
-// datagrams() and udp() build on this one gate.
 http_capsule_stream http_tunnel::capsules(http_capsule_config config) & {
-    // The route protocol owns Capsule Protocol negotiation (RFC 9297 section
-    // 3.4); a route that did not declare datagrams never advertised it.
-    if (!datagrams_) {
-        throw std::logic_error("HTTP tunnel route did not declare datagrams");
+    // The tunnel's protocol owns Capsule Protocol negotiation (RFC 9297
+    // section 3.4); a server route that did not declare datagrams never
+    // advertised it.
+    if (!negotiated_.capsules_) {
+        throw std::logic_error("HTTP tunnel did not negotiate the Capsule Protocol");
     }
     require_unadapted();
     return http_capsule_stream(*this, config);
-}
-http_capsule_stream http_client_tunnel::capsules(http_capsule_config config) && {
-    return http_capsule_stream(std::move(*this), config);
 }
 task<std::optional<http_capsule>> http_capsule_stream::read(operation_options operation) & {
     if (!state_) {
@@ -625,41 +488,34 @@ task<void> http_capsule_stream::finish(operation_options operation) & {
         state_value.throw_if_stopped_before_start(finish_operation, "capsule finish");
         detail::running_capsule_operation running(state_value, true);
         if (!state_value.send_ended_) {
-            if (state_value.server_) {
-                co_await state_value.server_->finish(std::move(finish_operation));
-            } else {
-                co_await state_value.client_->finish(std::move(finish_operation));
-            }
+            co_await state_value.finish_output(std::move(finish_operation));
             state_value.send_ended_ = true;
         }
     };
     return state_->output_scope_.attach(finish_value(detail::capsule_state_pin(*state_), std::move(operation)));
 }
 
-http_datagram_stream::http_datagram_stream(http_capsule_stream&& stream) :
-    stream_(std::move(stream)) {
-    if (!stream_.state_) {
-        throw std::logic_error("HTTP Datagram stream is empty");
+http_datagram_stream::http_datagram_stream(http_capsule_stream&& stream, bool udp) :
+    stream_(std::move(stream)),
+    udp_(udp) {}
+http_datagram_stream http_tunnel::datagram_stream(http_capsule_config config, bool udp) {
+    if (!negotiated_.datagrams_) {
+        throw std::logic_error("HTTP tunnel did not negotiate HTTP Datagrams");
     }
+    return http_datagram_stream(capsules(config), udp);
 }
 http_datagram_stream http_tunnel::datagrams(http_capsule_config config) & {
-    return http_datagram_stream(capsules(config));
+    return datagram_stream(config, false);
 }
-http_udp_tunnel http_tunnel::udp(http_capsule_config config) & {
-    return http_udp_tunnel(datagrams(config));
-}
-http_datagram_stream http_client_tunnel::datagrams(http_capsule_config config) && {
-    if (!response_.state_ || !response_.state_->tunnel_ || !response_.state_->tunnel_->udp_ || !response_.state_->tunnel_->accepted_) {
-        throw std::logic_error("HTTP Datagrams require an accepted datagram tunnel");
-    }
-    return http_datagram_stream(std::move(*this).capsules(config));
+http_datagram_stream http_tunnel::udp(http_capsule_config config) & {
+    return datagram_stream(config, true);
 }
 task<std::optional<http_datagram>> http_datagram_stream::read(operation_options operation) & {
     if (!stream_.state_) {
         throw std::logic_error("HTTP Datagram stream is empty");
     }
     stream_.state_->require();
-    return stream_.state_->read_scope_.attach(read_owned(detail::capsule_state_pin(*stream_.state_), false, std::move(operation)));
+    return stream_.state_->read_scope_.attach(read_owned(detail::capsule_state_pin(*stream_.state_), udp_, std::move(operation)));
 }
 task<std::optional<http_datagram>> http_datagram_stream::read_owned(detail::capsule_state_pin pin, bool udp, operation_options operation) {
     auto& state_value = pin.state();
@@ -731,9 +587,6 @@ task<std::optional<http_datagram>> http_datagram_stream::read_owned(detail::caps
     }
 }
 task<void> http_datagram_stream::send(outbound_bytes payload_value, operation_options operation) & {
-    return send_payload(std::move(payload_value), false, std::move(operation));
-}
-task<void> http_datagram_stream::send_payload(outbound_bytes payload_value, bool udp, operation_options operation) {
     if (!stream_.state_) {
         throw std::logic_error("HTTP Datagram stream is empty");
     }
@@ -742,30 +595,19 @@ task<void> http_datagram_stream::send_payload(outbound_bytes payload_value, bool
     if (state_value.send_ended_) {
         throw std::logic_error("HTTP Datagram sending direction is closed");
     }
-    const auto context_bytes = udp ? std::size_t{1} : std::size_t{0};
+    const auto context_bytes = udp_ ? std::size_t{1} : std::size_t{0};
     if (context_bytes > state_value.config_.max_capsule_length_ || payload_value.size() > state_value.config_.max_capsule_length_ - context_bytes) {
         throw std::length_error("HTTP Datagram exceeds capsule bound");
     }
     const auto payload_view = payload_value.view();
     http_datagram_session session_value;
-    const auto plan = udp ? session_value.prepare_udp_datagram(std::span(payload_view.data(), payload_view.size())) : session_value.prepare_datagram(std::span(payload_view.data(), payload_view.size()));
+    const auto plan = udp_ ? session_value.prepare_udp_datagram(std::span(payload_view.data(), payload_view.size())) : session_value.prepare_datagram(std::span(payload_view.data(), payload_view.size()));
     if (plan.index() != 0) {
         throw std::length_error("HTTP Datagram payload exceeds its bound");
     }
     if (state_value.has_native_transport()) {
-        return stream_.write_frame(udp ? std::string_view("\0", 1) : std::string_view{}, std::move(payload_value), true, std::move(operation));
+        return stream_.write_frame(udp_ ? std::string_view("\0", 1) : std::string_view{}, std::move(payload_value), true, std::move(operation));
     }
     return stream_.write_frame(std::get<0>(plan).prefix(), std::move(payload_value), false, std::move(operation));
-}
-task<std::optional<http_datagram>> http_udp_tunnel::read(operation_options operation) & {
-    auto* state_value = stream_.stream_.state_;
-    if (!state_value) {
-        throw std::logic_error("UDP tunnel is empty");
-    }
-    state_value->require();
-    return state_value->read_scope_.attach(http_datagram_stream::read_owned(detail::capsule_state_pin(*state_value), true, std::move(operation)));
-}
-task<void> http_udp_tunnel::send(outbound_bytes payload_value, operation_options operation) & {
-    return stream_.send_payload(std::move(payload_value), true, std::move(operation));
 }
 }  // namespace ruvia

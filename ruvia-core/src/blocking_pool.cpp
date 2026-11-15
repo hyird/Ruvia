@@ -240,7 +240,7 @@ struct blocking_pool::impl_type final {
         queue_(queue_capacity_),
         nodes_(),
         threads_() {
-        // Reserved/queued submissions occupy at most queue_capacity_ nodes;
+        // Reserved/queued posts occupy at most queue_capacity_ nodes;
         // each thread may also hold one node while moving its callable out.
         nodes_.resize(queue_capacity_ + thread_count_);
         for (auto& node : nodes_) {
@@ -261,7 +261,7 @@ struct blocking_pool::impl_type final {
             // A pool that could not start all of its threads is not a pool the
             // caller asked for. Unwind the ones that did start before the
             // exception leaves construction.
-            stop();
+            request_stop();
             join_threads();
             throw;
         }
@@ -301,7 +301,7 @@ struct blocking_pool::impl_type final {
             } catch (...) {
                 // The blocking wrapper catches the callable's exceptions and
                 // hands them back to the waiter, so reaching this is a raw
-                // submit() whose task threw with nobody to receive it.
+                // post() whose task threw with nobody to receive it.
                 report_unhandled_failure("blocking pool task", std::current_exception());
             }
             // The task owns the completion it answered; destroy it here rather
@@ -316,9 +316,9 @@ struct blocking_pool::impl_type final {
         }
     }
 
-    void stop() noexcept {
+    void request_stop() noexcept {
         // Only the first stop caller owns the drain. In particular, a queued
-        // task's destructor may call stop() again; letting that call recurse
+        // task's destructor may call request_stop() again; letting that call recurse
         // into the drain would grow the stack once per queued task.
         std::size_t dropped = 0;
         {
@@ -341,7 +341,7 @@ struct blocking_pool::impl_type final {
         // Once stopping is published no thread pops or pushes the ring again,
         // so the first stop caller owns the remaining slots. Destroy them
         // outside the mutex so callable destructors may reenter stats(),
-        // stop(), or submit() safely without recursion.
+        // request_stop(), or post() safely without recursion.
         // Stopping permanently closes admission, so drained nodes need no recycling.
         node_type* node = nullptr;
         while (dropped-- != 0) {
@@ -373,7 +373,7 @@ struct blocking_pool::impl_type final {
         if (is_current_thread()) {
             throw std::logic_error("cannot join a blocking pool from one of its threads");
         }
-        stop();
+        request_stop();
         std::vector<std::thread> joining_threads;
         {
             std::unique_lock lock(mutex_);
@@ -445,7 +445,7 @@ blocking_pool::blocking_pool(blocking_pool_options options) :
 }
 
 blocking_pool::~blocking_pool() {
-    stop();
+    request_stop();
     impl_->detach_threads();
 }
 
@@ -468,7 +468,7 @@ blocking_pool_stats blocking_pool::stats() const noexcept {
     };
 }
 
-post_outcome<> blocking_pool::submit(move_only_function<void()> task_value) {
+post_outcome<> blocking_pool::post(move_only_function<void()> task_value) {
     if (!task_value) {
         throw std::invalid_argument("blocking pool requires a callable task");
     }
@@ -528,9 +528,9 @@ post_outcome<> blocking_pool::submit(move_only_function<void()> task_value) {
     return detail::delivery_access::accept<post_outcome<>>();
 }
 
-void blocking_pool::stop() noexcept {
+void blocking_pool::request_stop() noexcept {
     const auto owner = impl_;
-    owner->stop();
+    owner->request_stop();
 }
 
 void blocking_pool::join() {

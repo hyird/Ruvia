@@ -27,7 +27,7 @@ void portable_queries() {
     ruvia::db_query query;
     const auto amount = db_expr::column("amount", "o");
     const auto total = db_expr::sum(amount);
-    query.select({db_expr::column("name", "u"), total.as("total")}).from("users", "u").join(ruvia::db_join_type::inner, "orders", db_expr::column("id", "u") == db_expr::column("user_id", "o"), "o").where(amount.between(10, 1000)).group_by({db_expr::column("id", "u"), db_expr::column("name", "u")}).having(total > 100).order_by(total, ruvia::db_order_direction::desc).limit(10).offset(0);
+    query.select({db_expr::column("name", "u"), total.as("total")}).from("users", "u").join(ruvia::db_join_type::inner, "orders", db_expr::column("id", "u") == db_expr::column("user_id", "o"), "o").where(amount.between(10, 1000)).group_by({db_expr::column("id", "u"), db_expr::column("name", "u")}).having(total > 100).order_by(total, ruvia::order_direction::desc).limit(10).offset(0);
     // Values become parameters; identifier quoting and placeholders follow the
     // selected driver. Never concatenate untrusted input into raw_sql() syntax.
     print_query(query, ruvia::db_driver::postgresql);
@@ -67,7 +67,7 @@ void migrations() {
     schema.create_table({.name_ = "samples", .columns_ = {{.name_ = "device", .type_ = {.data_type_ = ruvia::db_data_type::text}}, {.name_ = "value", .type_ = {.data_type_ = ruvia::db_data_type::double_}}, {.name_ = "quality", .type_ = {.custom_name_ = "sample_quality"}, .default_value_ = db_expr::value("raw")}, {.name_ = "recorded_at", .type_ = {.data_type_ = ruvia::db_data_type::timestamp_tz}}}, .if_not_exists_ = true});
     schema.add_column("samples", {.name_ = "label", .type_ = {.data_type_ = ruvia::db_data_type::text}, .nullable_ = true}, true);
     schema.set_column_default("samples", "label", db_expr::value("unknown"));
-    schema.create_index({.name_ = "samples_device_time", .table_ = "samples", .keys_ = {{.column_ = "device"}, {.column_ = "recorded_at", .order_ = ruvia::db_order_direction::desc}}, .if_not_exists_ = true});
+    schema.create_index({.name_ = "samples_device_time", .table_ = "samples", .keys_ = {{.column_ = "device"}, {.column_ = "recorded_at", .order_ = ruvia::order_direction::desc}}, .if_not_exists_ = true});
     for (const auto& migration : schema.compile("samples_001")) {
         std::cout << migration.id() << '\n'
                   << migration.sql() << "\n\n";
@@ -89,7 +89,7 @@ void migrations() {
     ruvia::db_schema timescale({.driver_ = ruvia::db_driver::postgresql});
     timescale.create_extension("timescaledb");
     timescale.create_hypertable({.table_ = "samples", .time_column_ = "recorded_at", .chunk_interval_ = db_expr::raw_sql("INTERVAL '1 day'"), .if_not_exists_ = true});
-    timescale.set_compression("samples", {.segment_by_ = {"device"}, .order_by_ = {{.column_ = "recorded_at", .direction_ = ruvia::db_order_direction::desc}}});
+    timescale.set_compression("samples", {.segment_by_ = {"device"}, .order_by_ = {{.column_ = "recorded_at", .direction_ = ruvia::order_direction::desc}}});
     timescale.add_compression_policy("samples", db_expr::raw_sql("INTERVAL '7 days'"));
     timescale.add_retention_policy("samples", db_expr::raw_sql("INTERVAL '90 days'"));
     for (const auto& migration : timescale.compile("samples_timescale_002")) {

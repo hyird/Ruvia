@@ -38,6 +38,7 @@
 #include "move_only_function.h"
 #include "operation_options.h"
 #include "task.h"
+#include "worker_runtime.h"
 
 namespace stop_token_test {
 
@@ -664,7 +665,7 @@ TEST(Ruvia, stop_token_registration_reset_pending_before_stop_already_requested_
 TEST(Ruvia, stop_group_can_be_destroyed_from_its_downstream_callback) {
     ruvia::stop_source first;
     ruvia::stop_source second;
-    auto group = std::make_unique<ruvia::stop_group>(first.token(), second.token());
+    auto group = std::make_unique<ruvia::stop_group>(std::initializer_list<ruvia::stop_token>{first.token(), second.token()});
     auto token = group->token();
     int calls = 0;
     ruvia::stop_registration registration;
@@ -683,7 +684,7 @@ TEST(Ruvia, stop_group_can_be_destroyed_from_its_downstream_callback) {
 TEST(Ruvia, stop_group_destruction_waits_for_cross_thread_downstream_callback) {
     ruvia::stop_source first;
     ruvia::stop_source second;
-    auto group = std::make_unique<ruvia::stop_group>(first.token(), second.token());
+    auto group = std::make_unique<ruvia::stop_group>(std::initializer_list<ruvia::stop_token>{first.token(), second.token()});
     std::atomic_bool entered{false};
     std::atomic_bool released{false};
     std::atomic_bool returned{false};
@@ -1088,7 +1089,7 @@ TEST(Ruvia, AsioTaskLifecycle) {
     } catch (...) {
         valid = false;
     }
-    loops.stop();
+    loops.request_stop();
     loops.join();
     valid = valid && result_value && result_value->addresses_aligned_ && result_value->value_ != nullptr && *result_value->value_ == 42;
     EXPECT_TRUE(valid);
@@ -1100,7 +1101,7 @@ TEST(Ruvia, AsioTaskAbandonedFailureReachesJoin) {
         auto unobserved = abandoned_pool.loop(0).start(ruvia::test::asio_task_tests::fail());
     }
     abandoned_pool.start();
-    abandoned_pool.stop();
+    abandoned_pool.request_stop();
     try {
         abandoned_pool.join();
     } catch (const std::runtime_error& error) {
@@ -1164,7 +1165,7 @@ TEST(Ruvia, EventLoopTryStartReturnsRejectedTask) {
     EXPECT_EQ(std::move(root).get(), 7);
     EXPECT_FALSE(root.ready());
 
-    loops.stop();
+    loops.request_stop();
     loops.join();
     auto stopped = loop.try_start(ruvia::test::asio_task_tests::answer());
     EXPECT_EQ(stopped.status(), ruvia::post_status::stopping);

@@ -1524,6 +1524,11 @@ struct context_access final {
         return context_value.request_storage().allocate_raw(size, alignment);
     }
 
+    // request_exchange::file() and static_file() once the host's request
+    // scope is chosen; the options are owned before the task is returned.
+    [[nodiscard]] static task<http_response> file(context& context_value, file_response_options options, response_options head);
+    [[nodiscard]] static task<http_response> static_file(context& context_value, const static_root& root, static_file_response_options options, response_options head);
+
     // The response for an indexed entry already resolved below `root`. The
     // representation is selected and the content type copied before the task
     // is returned, so `relative` and `content_type_value` are read only by
@@ -1539,10 +1544,6 @@ struct context_access final {
         }
         response.static_body(json_body);
         return response;
-    }
-
-    [[nodiscard]] static http_response make_owned_json_response(context& context_value, std::string& json_body, const response_options& options) {
-        return context_value.json_serialized(json_body, options);
     }
 
     [[nodiscard]] static http_interim_response_output* interim_output(context& context_value) noexcept {
@@ -1624,10 +1625,6 @@ struct context_access final {
         auto& state = context_value.response_state();
         auto& response = replace ? state.policy() : state.defaults();
         response.header_stable_view(name, value);
-    }
-
-    static void stage_stream_head(context& context_value, const response_stream_writer& writer, const response_options& head) {
-        context_value.stage_stream_head(writer, head);
     }
 
     // Called by a driver right before it hands the upgrade/CONNECT handshake

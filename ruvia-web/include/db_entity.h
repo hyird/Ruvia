@@ -732,26 +732,17 @@ public:
     [[nodiscard]] db_predicate json_has_key(std::string_view key) const {
         return to_expr().compare_expr(db_binary_operator::json_has_key, db_expr::value(key));
     }
-    [[nodiscard]] db_predicate json_has_any_key(std::span<const std::string_view> keys) const {
-        return compare_json_keys(db_binary_operator::json_has_any_key, keys);
+    [[nodiscard]] db_predicate json_has_any_key(argument_list<std::string_view> keys) const {
+        return compare_json_keys(db_binary_operator::json_has_any_key, keys.span());
     }
-    [[nodiscard]] db_predicate json_has_any_key(std::initializer_list<std::string_view> keys) const {
-        return json_has_any_key(std::span<const std::string_view>(keys.begin(), keys.size()));
-    }
-    [[nodiscard]] db_predicate json_has_all_keys(std::span<const std::string_view> keys) const {
-        return compare_json_keys(db_binary_operator::json_has_all_keys, keys);
-    }
-    [[nodiscard]] db_predicate json_has_all_keys(std::initializer_list<std::string_view> keys) const {
-        return json_has_all_keys(std::span<const std::string_view>(keys.begin(), keys.size()));
+    [[nodiscard]] db_predicate json_has_all_keys(argument_list<std::string_view> keys) const {
+        return compare_json_keys(db_binary_operator::json_has_all_keys, keys.span());
     }
     [[nodiscard]] db_predicate json_text_equals(std::string_view key, std::string_view value) const {
         return to_expr().json_get_text(key) == value;
     }
-    [[nodiscard]] db_predicate json_path_text_equals(std::span<const std::string_view> path, std::string_view value) const {
-        return to_expr().json_path_text(path) == value;
-    }
-    [[nodiscard]] db_predicate json_path_text_equals(std::initializer_list<std::string_view> path, std::string_view value) const {
-        return json_path_text_equals(std::span<const std::string_view>(path.begin(), path.size()), value);
+    [[nodiscard]] db_predicate json_path_text_equals(argument_list<std::string_view> path, std::string_view value) const {
+        return to_expr().json_path_text(path.span()) == value;
     }
 
     [[nodiscard]] db_selection select() const {

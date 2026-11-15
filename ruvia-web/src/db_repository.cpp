@@ -241,7 +241,7 @@ std::optional<db_query> db_relation_plan::prepare_entity_read(const db_query& qu
     if (orders.empty()) {
         orders.reserve(window.args_.size());
         for (const auto key : window.args_) {
-            orders.push_back({key, db_order_direction::asc, db_nulls_order::default_});
+            orders.push_back({key, order_direction::asc, db_nulls_order::default_});
         }
     }
     // Give the outer result the same stable tie order as its page.

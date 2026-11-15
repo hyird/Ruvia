@@ -92,13 +92,10 @@ http_max_forwards_result parse_http_max_forwards(std::string_view field_value, s
     return parsed.has_value() ? http_max_forwards_result::valid(*parsed) : http_max_forwards_result::invalid();
 }
 
-namespace {
-
-template <typename header_span_type>
-[[nodiscard]] http_max_forwards_result parse_max_forwards_from_headers(header_span_type headers, std::uint64_t max_saturation) noexcept {
+http_max_forwards_result parse_http_max_forwards(const http_header_range_view& headers, std::uint64_t max_saturation) noexcept {
     std::string_view found_value{};
     std::size_t count = 0;
-    for (const auto& field : headers) {
+    for (const auto field : headers) {
         if (http_ascii_equals_ignore_case(field.name(), "Max-Forwards")) {
             found_value = field.value();
             ++count;
@@ -111,20 +108,6 @@ template <typename header_span_type>
         return http_max_forwards_result::invalid();
     }
     return parse_http_max_forwards(found_value, max_saturation);
-}
-
-}  // namespace
-
-http_max_forwards_result parse_http_max_forwards(std::span<const http_header> headers, std::uint64_t max_saturation) noexcept {
-    return parse_max_forwards_from_headers(headers, max_saturation);
-}
-
-http_max_forwards_result parse_http_max_forwards(std::span<const http_header_view> headers, std::uint64_t max_saturation) noexcept {
-    return parse_max_forwards_from_headers(headers, max_saturation);
-}
-
-http_max_forwards_result parse_http_max_forwards(const http_request& request, std::uint64_t max_saturation) noexcept {
-    return parse_max_forwards_from_headers(request.headers(), max_saturation);
 }
 
 bool is_http_hop_by_hop_field_name(std::string_view field_name) noexcept {
@@ -174,7 +157,7 @@ void http_connection_nominated_fields::update(std::string_view connection_field_
     });
 }
 
-void http_connection_nominated_fields::update_header_range(detail::http_header_range_view headers) {
+void http_connection_nominated_fields::update_headers(const http_header_range_view& headers) {
     for (const auto field : headers) {
         if (http_ascii_equals_ignore_case(field.name(), "Connection")) {
             update(field.value());
@@ -222,6 +205,13 @@ http_connection_nominated_fields parse_http_connection_nominated_fields(std::str
     nominated.update(connection_field_value);
     return nominated;
 }
+
+http_connection_nominated_fields parse_http_connection_nominated_fields(const http_header_range_view& headers) {
+    http_connection_nominated_fields nominated;
+    nominated.update_headers(headers);
+    return nominated;
+}
+
 bool is_http_hop_by_hop_or_nominated_field(std::string_view field_name, const http_connection_nominated_fields& nominated, bool retain_upgrade) noexcept {
     if (retain_upgrade && nominated.has_upgrade() && http_ascii_equals_ignore_case(field_name, "Upgrade")) {
         return false;

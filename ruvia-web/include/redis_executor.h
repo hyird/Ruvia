@@ -20,6 +20,7 @@
 #include <vector>
 
 #include "borrowed_text.h"
+#include "checked_integer.h"
 #include "entity_storage.h"
 #include "event_loop.h"
 #include "http_client_types.h"
@@ -36,10 +37,6 @@ namespace ruvia {
 class redis_value;
 class redis_key_value;
 class redis_scored_value;
-class redis_scan_result;
-class redis_hash_scan_result;
-class redis_z_scan_result;
-class redis_x_read_group_result;
 
 class redis_search_mapping;
 
@@ -158,42 +155,24 @@ enum class redis_x_read_group_acknowledgement_policy : std::uint8_t {
     track_pending,
     no_ack,
 };
-// Strictly positive Redis batch count in signed 64-bit wire range. Checked
-// before narrowing so negative or zero inputs cannot wrap into huge counts.
-class redis_positive_count final {
-public:
-    constexpr redis_positive_count() noexcept = default;
-
-    template <std::integral integer_type>
-    constexpr redis_positive_count(integer_type value) :
-        value_(is_valid_value(value) ? static_cast<std::uint64_t>(value) : throw std::invalid_argument("Redis count must be in 1..9223372036854775807")) {}
+namespace detail {
+struct redis_positive_count_policy final {
+    static constexpr std::uint64_t default_value = 1;
+    static constexpr bool implicit_conversion = true;
+    static constexpr const char* invalid_value_message = "Redis count must be in 1..9223372036854775807";
 
     template <std::integral integer_type>
     [[nodiscard]] static constexpr bool is_valid_value(integer_type value) noexcept {
         return std::cmp_greater(+value, 0) && std::in_range<std::int64_t>(+value);
     }
+};
+}  // namespace detail
 
-    template <std::integral integer_type>
-    [[nodiscard]] static constexpr std::optional<redis_positive_count> try_from_value(integer_type value) noexcept {
-        if (!is_valid_value(value)) {
-            return std::nullopt;
-        }
-        return redis_positive_count(static_cast<std::uint64_t>(value), validated_tag_type{});
-    }
-
-    [[nodiscard]] constexpr std::uint64_t value() const noexcept {
-        return value_;
-    }
-
-    friend constexpr auto operator<=>(redis_positive_count, redis_positive_count) = default;
-
-private:
-    struct validated_tag_type {};
-
-    constexpr redis_positive_count(std::uint64_t value, validated_tag_type) noexcept :
-        value_(value) {}
-
-    std::uint64_t value_{1};
+// Strictly positive Redis batch count in signed 64-bit wire range. Checked
+// before narrowing so negative or zero inputs cannot wrap into huge counts.
+class redis_positive_count final : public checked_integer<redis_positive_count, std::uint64_t, detail::redis_positive_count_policy> {
+public:
+    using checked_integer::checked_integer;
 };
 
 static_assert(std::is_trivially_copyable_v<redis_positive_count>);
@@ -397,12 +376,16 @@ private:
 // target resource, even when a different source resource compares equal. Such
 // rebinding may allocate; failure leaves both values unchanged. Moves within
 // the same resource transfer storage without allocation.
-class redis_scan_result final {
+//
+// One page of a SCAN-family reply: this page's entries and the cursor that
+// continues the iteration, absent once the server reports it complete.
+template <typename entry_type>
+class redis_scan_page final {
 public:
-    redis_scan_result(const redis_scan_result&) = delete;
-    redis_scan_result& operator=(const redis_scan_result&) = delete;
-    redis_scan_result(redis_scan_result&&) noexcept = default;
-    redis_scan_result& operator=(redis_scan_result&& other) noexcept = default;
+    redis_scan_page(const redis_scan_page&) = delete;
+    redis_scan_page& operator=(const redis_scan_page&) = delete;
+    redis_scan_page(redis_scan_page&&) noexcept = default;
+    redis_scan_page& operator=(redis_scan_page&& other) noexcept = default;
 
     [[nodiscard]] bool done() const noexcept {
         return !next_cursor_.has_value();
@@ -412,77 +395,24 @@ public:
         return next_cursor_;
     }
 
-    [[nodiscard]] std::span<const std::string> values() const& noexcept RUVIA_LIFETIMEBOUND {
-        return values_;
-    }
-    [[nodiscard]] std::span<const std::string> values() const&& = delete;
-
-private:
-    friend struct detail::redis_types_access;
-
-    redis_scan_result() noexcept = default;
-
-    std::optional<redis_scan_cursor> next_cursor_;
-    std::vector<std::string> values_;
-};
-
-class redis_hash_scan_result final {
-public:
-    redis_hash_scan_result(const redis_hash_scan_result&) = delete;
-    redis_hash_scan_result& operator=(const redis_hash_scan_result&) = delete;
-    redis_hash_scan_result(redis_hash_scan_result&&) noexcept = default;
-    redis_hash_scan_result& operator=(redis_hash_scan_result&& other) noexcept = default;
-
-    [[nodiscard]] bool done() const noexcept {
-        return !next_cursor_.has_value();
-    }
-
-    [[nodiscard]] std::optional<redis_scan_cursor> next_cursor() const noexcept {
-        return next_cursor_;
-    }
-
-    [[nodiscard]] std::span<const redis_key_value> entries() const& noexcept RUVIA_LIFETIMEBOUND {
+    [[nodiscard]] std::span<const entry_type> entries() const& noexcept RUVIA_LIFETIMEBOUND {
         return entries_;
     }
-    [[nodiscard]] std::span<const redis_key_value> entries() const&& = delete;
+    [[nodiscard]] std::span<const entry_type> entries() const&& = delete;
 
 private:
     friend struct detail::redis_types_access;
 
-    redis_hash_scan_result() noexcept = default;
+    redis_scan_page() noexcept = default;
 
     std::optional<redis_scan_cursor> next_cursor_;
-    std::vector<redis_key_value> entries_;
+    std::vector<entry_type> entries_;
 };
 
-class redis_z_scan_result final {
-public:
-    redis_z_scan_result(const redis_z_scan_result&) = delete;
-    redis_z_scan_result& operator=(const redis_z_scan_result&) = delete;
-    redis_z_scan_result(redis_z_scan_result&&) noexcept = default;
-    redis_z_scan_result& operator=(redis_z_scan_result&& other) noexcept = default;
-
-    [[nodiscard]] bool done() const noexcept {
-        return !next_cursor_.has_value();
-    }
-
-    [[nodiscard]] std::optional<redis_scan_cursor> next_cursor() const noexcept {
-        return next_cursor_;
-    }
-
-    [[nodiscard]] std::span<const redis_scored_value> entries() const& noexcept RUVIA_LIFETIMEBOUND {
-        return entries_;
-    }
-    [[nodiscard]] std::span<const redis_scored_value> entries() const&& = delete;
-
-private:
-    friend struct detail::redis_types_access;
-
-    redis_z_scan_result() noexcept = default;
-
-    std::optional<redis_scan_cursor> next_cursor_;
-    std::vector<redis_scored_value> entries_;
-};
+// SCAN / SSCAN yield keys or members, HSCAN field-value pairs, ZSCAN scored members.
+using redis_scan_result = redis_scan_page<std::string>;
+using redis_hash_scan_result = redis_scan_page<redis_key_value>;
+using redis_z_scan_result = redis_scan_page<redis_scored_value>;
 
 class redis_stream_entry final {
 public:
@@ -537,25 +467,6 @@ private:
 
     std::string stream_;
     std::vector<redis_stream_entry> entries_;
-};
-
-class redis_x_read_group_result final {
-public:
-    redis_x_read_group_result(const redis_x_read_group_result&) = delete;
-    redis_x_read_group_result& operator=(const redis_x_read_group_result&) = delete;
-    redis_x_read_group_result(redis_x_read_group_result&&) noexcept = default;
-    redis_x_read_group_result& operator=(redis_x_read_group_result&& other) noexcept = default;
-
-    [[nodiscard]] std::span<const redis_stream_read_result> streams() const& noexcept RUVIA_LIFETIMEBOUND {
-        return streams_;
-    }
-    [[nodiscard]] std::span<const redis_stream_read_result> streams() const&& = delete;
-
-private:
-    friend struct detail::redis_types_access;
-
-    redis_x_read_group_result() noexcept = default;
-    std::vector<redis_stream_read_result> streams_;
 };
 
 namespace detail {
@@ -1269,7 +1180,8 @@ public:
         return brpop(std::span<const std::string_view>(keys), wait);
     }
     [[nodiscard]] task<std::optional<redis_key_value>> brpop(std::span<const std::string_view> keys, redis_block_wait wait);
-    [[nodiscard]] task<std::optional<redis_x_read_group_result>> xread_group(std::string_view group, std::string_view consumer, std::span<const redis_stream_read_view> streams, redis_x_read_group_options options = {});
+    // std::nullopt is the server's nil reply: no stream returned an entry.
+    [[nodiscard]] task<std::optional<std::vector<redis_stream_read_result>>> xread_group(std::string_view group, std::string_view consumer, std::span<const redis_stream_read_view> streams, redis_x_read_group_options options = {});
 
     // 每批命令共享一次租约及同一连接，WAIT/WAITAOF 只保护该批中位于
     // 屏障之前的写入，不保护此前通过独立 handle 调用完成的写入。

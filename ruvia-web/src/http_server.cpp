@@ -61,11 +61,10 @@
 namespace ruvia::detail {
 namespace {
 
-http_server_options standalone_options(server_config config, const http_server_callbacks& callbacks, std::size_t count) {
-    config.worker_count_ = count;
-    config.process_signal_handlers_ = process_signal_handler_policy::external_owner;
+http_server_options standalone_options(const server_config& config, const http_server_callbacks& callbacks, std::size_t count) {
     http_server_options options;
     options.set_server(config);
+    options.worker_count_ = count;
     options.use_callbacks(callbacks);
     return options;
 }

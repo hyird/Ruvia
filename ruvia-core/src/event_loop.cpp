@@ -110,14 +110,14 @@ struct event_loop_pool::impl_type final {
                 report_unhandled_failure("additional event loop failure", failure);
             }
         }
-        stop();
+        request_stop();
     }
 
     void start() {
         group_.launch();
     }
 
-    void stop() noexcept {
+    void request_stop() noexcept {
         group_.request_stop();
         for (const auto& loop : loops_) {
             loop->stop();
@@ -127,7 +127,7 @@ struct event_loop_pool::impl_type final {
     [[nodiscard]] std::exception_ptr join() noexcept {
         auto failure = group_.join();
         for (const auto& loop : loops_) {
-            detail::worker_ref_access::wait_for_reservations(loop->runtime_.worker());
+            loop->runtime_.wait_for_reservations();
         }
         const std::lock_guard lock(failure_mutex_);
         if (joined_) {
@@ -155,7 +155,7 @@ event_loop_pool::~event_loop_pool() {
     })) {
         std::terminate();
     }
-    impl_->stop();
+    impl_->request_stop();
     if (const auto failure = impl_->join()) {
         // Destroying a pool that was never joined explicitly makes this the
         // only place its first failure is ever observed, and a destructor
@@ -168,8 +168,8 @@ void event_loop_pool::start() {
     impl_->start();
 }
 
-void event_loop_pool::stop() noexcept {
-    impl_->stop();
+void event_loop_pool::request_stop() noexcept {
+    impl_->request_stop();
 }
 
 void event_loop_pool::join() {
@@ -178,7 +178,7 @@ void event_loop_pool::join() {
     })) {
         throw std::logic_error("cannot join an event loop pool from one of its workers");
     }
-    impl_->stop();
+    impl_->request_stop();
     if (const auto failure = impl_->join()) {
         std::rethrow_exception(failure);
     }
@@ -321,7 +321,7 @@ attached_context::attached_context(asio::io_context& io_context, std::size_t que
     runtime_(io_context, queue_capacity, pool),
     stop_(runtime_),
     failure_(std::move(failure)) {
-    worker_ref_access::enable_external_runner(runtime_.worker());
+    runtime_.enable_external_runner();
 }
 
 // The callback owner is kept alive by the completion handler until both the
@@ -493,7 +493,7 @@ void event_loop_state::shutdown_external_context() noexcept {
     stopping_.store(true, std::memory_order_release);
     attached.stop_.abandon();
     runtime_.detach();
-    worker_ref_access::wait_for_reservations(runtime_.worker());
+    runtime_.wait_for_reservations();
 }
 void event_loop_state::install_shutdown_registration() {
     if (!worker_ref_access::register_shutdown(runtime_.worker(), shared_from_this(), &event_loop_state::shutdown_registration_)) {
@@ -565,7 +565,7 @@ void event_loop_state::schedule_finalize_when_idle() noexcept {
     }
     const std::weak_ptr<event_loop_state> weak = weak_from_this();
     try {
-        worker_ref_access::when_idle(runtime_.worker(), [weak] {
+        runtime_.when_idle([weak] {
             if (const auto idle_state = weak.lock()) {
                 idle_state->retirement_.seal();
             }
@@ -583,7 +583,7 @@ void event_loop_state::defer_finalize_stop(std::shared_ptr<event_loop_state> sel
     try {
         // A detached context ran shutdown_external_context(), which
         // already abandoned the stop chain this would finalize.
-        (void)worker_ref_access::defer_completion(worker_value, [state_value = std::move(self)] {
+        (void)worker_value.defer_completion([state_value = std::move(self)] {
             state_value->finalize_stop();
         });
     } catch (...) {
@@ -720,7 +720,7 @@ bool event_loop::defer_cleanup_task(move_only_function<void()> task_value) const
             }
         }
     };
-    return detail::worker_ref_access::defer_completion(state_->runtime_.worker(), [control = cleanup_control(state_, std::move(task_value))]() mutable {
+    return state_->runtime_.worker().defer_completion([control = cleanup_control(state_, std::move(task_value))]() mutable {
         control.task_();
     });
 }
@@ -744,7 +744,7 @@ event_loop_attachment::event_loop_attachment(std::shared_ptr<detail::event_loop_
     state_(std::move(state_value)) {}
 
 event_loop_attachment::~event_loop_attachment() {
-    stop();
+    request_stop();
 }
 
 event_loop_attachment::event_loop_attachment(event_loop_attachment&& other) noexcept :
@@ -769,7 +769,7 @@ void event_loop_attachment::run() {
     state_value->runtime_.run();
 }
 
-void event_loop_attachment::stop() noexcept {
+void event_loop_attachment::request_stop() noexcept {
     if (state_) {
         state_->stop();
     }

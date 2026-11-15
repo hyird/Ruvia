@@ -29,8 +29,8 @@ namespace ruvia {
 class context;
 
 // Route-level policy declaration that switches the matched route's request body
-// from buffered to streamed (read via c.req().body_reader() or
-// c.req().multipart_reader()). May be combined with either a buffered-response
+// from buffered to streamed (read via c.request_body() or
+// c.request_multipart()). May be combined with either a buffered-response
 // handler (task<http_response>) or a streaming-response handler (task<void>).
 struct stream_body final {
     static constexpr bool ruvia_stream_request_body = true;
@@ -72,8 +72,8 @@ public:
     /// Reads the next chunk as characters without charset conversion or UTF-8
     /// validation. Chunk boundaries may split encoded characters. Shares read()'s
     /// lifetime, linear operation and `operation` contract.
-    [[nodiscard]] task<std::optional<std::string_view>> text(operation_options operation = {}) &;
-    task<std::optional<std::string_view>> text(operation_options = {}) && = delete;
+    [[nodiscard]] task<std::optional<std::string_view>> read_text(operation_options operation = {}) &;
+    task<std::optional<std::string_view>> read_text(operation_options = {}) && = delete;
 
 private:
     void bind_worker(const worker_ref& worker_value) noexcept {
@@ -242,7 +242,9 @@ public:
     task<void> end(std::span<const http_header_view> = {}, operation_options = {}) && = delete;
 
 private:
-    friend class context;
+    // request_exchange::stream_sse() is the only constructor of a first handle.
+    template <typename host_type>
+    friend class request_exchange;
 
     explicit sse_writer(response_stream_writer& writer) noexcept;
     [[nodiscard]] response_stream_writer& writer() const;

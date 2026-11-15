@@ -7,10 +7,13 @@
 #include <cstdint>
 #include <limits>
 #include <optional>
+#include <span>
+#include <stdexcept>
 #include <string_view>
 #include <vector>
 
 #include "http_header.h"
+#include "http_response.h"
 
 TEST(RuviaHttpPublicApi, rfc9111_shared_cache_primitives) {
     const auto cc = ruvia::parse_cache_control("public, max-age=120, s-maxage=300, stale-while-revalidate=30, stale-if-error=600, must-revalidate");
@@ -167,6 +170,69 @@ TEST(RuviaHttpPublicApi, cache_control_field_qualified_private_and_no_cache_stri
     EXPECT_TRUE(unqual_priv.is_unqualified_private());
     EXPECT_FALSE(unqual_priv.is_field_qualified_private());
     EXPECT_FALSE(ruvia::strip_http_cache_private_headers(strip_headers, unqual_priv));
+}
+
+TEST(RuviaHttpPublicApi, header_rewrites_edit_header_blocks_and_responses_in_place) {
+    ruvia::http_response response;
+    response.header("Cache-Control", "public, s-maxage=300, max-age=120");
+    response.header("Expires", "Wed, 21 Oct 2015 07:28:00 GMT");
+    response.header("Content-Type", "text/plain");
+    response.header("X-User-Secret", "top-secret");
+
+    ruvia::rewrite_http_response_cache_max_age(response, 45);
+    EXPECT_EQ(response.header("Cache-Control"), std::optional<std::string_view>("public, max-age=45"));
+    EXPECT_FALSE(response.header("Expires").has_value());
+
+    EXPECT_TRUE(ruvia::strip_http_cache_private_headers(response, ruvia::parse_cache_control("private=\"X-User-Secret\"")));
+    EXPECT_FALSE(response.header("X-User-Secret").has_value());
+
+    // A staged header block is edited the same way and leaves its source alone.
+    auto staged = response.headers().clone();
+    ruvia::sanitize_http_304_response_headers(staged);
+    EXPECT_FALSE(staged.header("Content-Type").has_value());
+    EXPECT_TRUE(staged.header("Cache-Control").has_value());
+    EXPECT_TRUE(response.header("Content-Type").has_value());
+
+    const std::array<ruvia::http_header_view, 2> not_modified{{
+        {"ETag", "\"v2\""},
+        {"Content-Type", "text/html"},
+    }};
+    ruvia::merge_http_304_response_headers(response, not_modified);
+    EXPECT_EQ(response.header("ETag"), std::optional<std::string_view>("\"v2\""));
+    EXPECT_EQ(response.header("Content-Type"), std::optional<std::string_view>("text/plain"));
+}
+
+TEST(RuviaHttpPublicApi, merge_http_304_response_headers_reads_fields_that_view_part_of_the_cached_block) {
+    std::vector<ruvia::http_header> cached;
+    cached.emplace_back("X-First", "1");
+    cached.emplace_back("ETag", "\"v1\"");
+    cached.emplace_back("Cache-Control", "max-age=60");
+
+    // The 304 fields are the last two cached lines themselves.
+    ruvia::merge_http_304_response_headers(cached, std::span<const ruvia::http_header>(cached).subspan(1));
+    ASSERT_EQ(cached.size(), 3U);
+    EXPECT_EQ(ruvia::find_unique_http_header(cached, "X-First").value_, "1");
+    EXPECT_EQ(ruvia::find_unique_http_header(cached, "ETag").value_, "\"v1\"");
+    EXPECT_EQ(ruvia::find_unique_http_header(cached, "Cache-Control").value_, "max-age=60");
+}
+
+TEST(RuviaHttpPublicApi, multi_write_header_edit_leaves_an_http_response_unchanged_when_a_write_fails) {
+    ruvia::http_response response;
+    response.header("ETag", "\"v1\"");
+    response.header("X-Trace", "kept");
+    const auto field_count = response.headers().size();
+
+    // The second Server line cannot join the first, so the merge fails after
+    // ETag and the first Server line were already written to the candidate.
+    const std::array<ruvia::http_header_view, 3> repeated_singleton{{
+        {"ETag", "\"v2\""},
+        {"Server", "edge-a"},
+        {"Server", "edge-b"},
+    }};
+    EXPECT_THROW(ruvia::merge_http_304_response_headers(response, repeated_singleton), std::invalid_argument);
+    EXPECT_EQ(response.header("ETag"), std::optional<std::string_view>("\"v1\""));
+    EXPECT_FALSE(response.header("Server").has_value());
+    EXPECT_EQ(response.headers().size(), field_count);
 }
 
 TEST(Ruvia, parse_cache_control_flags_and_ages) {

@@ -140,8 +140,7 @@ private:
     bool awaiting_nearest_trusted_{false};
 };
 
-template <typename header_span_type>
-[[nodiscard]] std::optional<http_client_ip_result> resolve_from_header(const http_client_ip_extractor& extractor, const ip_address& normalized_peer, std::string_view header_name, http_forwarded_header_kind kind, header_span_type headers) noexcept {
+[[nodiscard]] std::optional<http_client_ip_result> resolve_from_header(const http_client_ip_extractor& extractor, const ip_address& normalized_peer, std::string_view header_name, http_forwarded_header_kind kind, const http_header_range_view& headers) noexcept {
     if (kind == http_forwarded_header_kind::single_ip) {
         std::string_view single_value{};
         std::size_t line_count = 0;
@@ -281,13 +280,13 @@ bool http_client_ip_extractor::is_trusted_proxy(std::string_view address_text) c
     return parsed.has_value() && is_trusted_proxy(*parsed);
 }
 
-http_client_ip_result http_client_ip_extractor::resolve(const ip_address& peer_ip, std::span<const http_header> headers) const noexcept {
+http_client_ip_result http_client_ip_extractor::resolve(const ip_address& peer_ip, const http_header_range_view& headers) const noexcept {
     const auto normalized_peer = peer_ip.normalized_ipv4();
     if (!enabled_ || trusted_cidrs_.empty() || !is_trusted_proxy(normalized_peer)) {
         return {.address_ = normalized_peer, .from_forwarded_header_ = false};
     }
     for (const auto& header_spec : headers_) {
-        const bool present = std::ranges::any_of(headers, [&](const http_header& field) noexcept {
+        const bool present = std::ranges::any_of(headers, [&](http_header_view field) noexcept {
             return http_ascii_equals_ignore_case(field.name(), header_spec.name_);
         });
         if (!present) {
@@ -300,47 +299,12 @@ http_client_ip_result http_client_ip_extractor::resolve(const ip_address& peer_i
     return {.address_ = normalized_peer, .from_forwarded_header_ = false};
 }
 
-http_client_ip_result http_client_ip_extractor::resolve(const ip_address& peer_ip, std::span<const http_header_view> headers) const noexcept {
-    const auto normalized_peer = peer_ip.normalized_ipv4();
-    if (!enabled_ || trusted_cidrs_.empty() || !is_trusted_proxy(normalized_peer)) {
-        return {.address_ = normalized_peer, .from_forwarded_header_ = false};
-    }
-    for (const auto& header_spec : headers_) {
-        const bool present = std::ranges::any_of(headers, [&](const http_header_view& field) noexcept {
-            return http_ascii_equals_ignore_case(field.name(), header_spec.name_);
-        });
-        if (!present) {
-            continue;
-        }
-        if (const auto extracted = resolve_from_header(*this, normalized_peer, header_spec.name_, header_spec.kind_, headers)) {
-            return *extracted;
-        }
-    }
-    return {.address_ = normalized_peer, .from_forwarded_header_ = false};
-}
-
-http_client_ip_result http_client_ip_extractor::resolve(const ip_address& peer_ip, const http_request& request) const noexcept {
-    return resolve(peer_ip, request.headers());
-}
-
-std::optional<http_client_ip_result> http_client_ip_extractor::resolve(std::string_view peer_ip, std::span<const http_header> headers) const noexcept {
+std::optional<http_client_ip_result> http_client_ip_extractor::resolve(std::string_view peer_ip, const http_header_range_view& headers) const noexcept {
     const auto parsed = ip_address::parse(peer_ip);
     if (!parsed.has_value()) {
         return std::nullopt;
     }
     return resolve(*parsed, headers);
-}
-
-std::optional<http_client_ip_result> http_client_ip_extractor::resolve(std::string_view peer_ip, std::span<const http_header_view> headers) const noexcept {
-    const auto parsed = ip_address::parse(peer_ip);
-    if (!parsed.has_value()) {
-        return std::nullopt;
-    }
-    return resolve(*parsed, headers);
-}
-
-std::optional<http_client_ip_result> http_client_ip_extractor::resolve(std::string_view peer_ip, const http_request& request) const noexcept {
-    return resolve(peer_ip, request.headers());
 }
 
 }  // namespace ruvia

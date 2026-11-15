@@ -156,6 +156,7 @@ struct app_state final {
     // Heap-stable: options_ borrows its members. Replaced whole by callbacks().
     callback_registration<http_server_callbacks> callbacks_;
     http_server_options options_{};
+    process_signal_handler_policy process_signal_handlers_{process_signal_handler_policy::external_owner};
     std::optional<app_document_root_config> document_root_config_;
     app_configuration configuration_;
     std::optional<blocking_pool_options> blocking_pool_{std::in_place};

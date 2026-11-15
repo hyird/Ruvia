@@ -397,8 +397,8 @@ class http_server_fixture final {
 public:
     // The application is shared by every case in the executable, so the first
     // fixture constructed fixes its server_config.
-    explicit http_server_fixture(asio::io_context& io, server_config config = {.worker_count_ = 1, .connection_scan_interval_ = std::chrono::milliseconds(5)}) :
-        runtime_(&shared_runtime(io, config)) {}
+    explicit http_server_fixture(asio::io_context& io, server_config config = {.connection_scan_interval_ = std::chrono::milliseconds(5)}, application_worker_config workers = {.worker_count_ = 1}) :
+        runtime_(&shared_runtime(io, config, workers)) {}
 
     [[nodiscard]] const asio::ip::tcp::endpoint& endpoint() const noexcept {
         return runtime_->endpoint();
@@ -413,11 +413,11 @@ public:
 private:
     class server_runtime final {
     public:
-        server_runtime(asio::io_context& io, const server_config& config) :
+        server_runtime(asio::io_context& io, const server_config& config, const application_worker_config& workers) :
             reservation_(io),
             endpoint_(reservation_.endpoint()),
             startup_(std::make_shared<startup_state>()) {
-            app().server(config).listen({.address_ = "127.0.0.1", .http_ = endpoint_.port()}).on_start([startup = std::weak_ptr<startup_state>(startup_)] {
+            app().workers(workers).server(config).listen({.address_ = "127.0.0.1", .http_ = endpoint_.port()}).on_start([startup = std::weak_ptr<startup_state>(startup_)] {
                 if (auto state = startup.lock()) {
                     state->ready_.set_value();
                 }
@@ -464,8 +464,8 @@ private:
         std::unique_ptr<app_run> runner_;
     };
 
-    static server_runtime& shared_runtime(asio::io_context& io, const server_config& config) {
-        static server_runtime runtime(io, config);
+    static server_runtime& shared_runtime(asio::io_context& io, const server_config& config, const application_worker_config& workers) {
+        static server_runtime runtime(io, config, workers);
         return runtime;
     }
 
@@ -761,14 +761,14 @@ public:
     }
     ruvia::task<ruvia::http_response> echo_upload(ruvia::context& context) {
         std::string echoed("echo:");
-        auto& reader = context.req().body_reader();
-        while (auto chunk = co_await reader.text()) {
+        auto& reader = context.request_body();
+        while (auto chunk = co_await reader.read_text()) {
             echoed.append(*chunk);
         }
         co_return context.text(echoed);
     }
     ruvia::task<ruvia::http_response> late_head(ruvia::context& context) {
-        auto& reader = context.req().body_reader();
+        auto& reader = context.request_body();
         while (co_await reader.read()) {
         }
         (void)co_await ruvia::sleep_for(context.worker(), server_stall, context.stop_token());
@@ -812,17 +812,17 @@ inline void append(std::string& target, const std::optional<std::span<const std:
 [[nodiscard]] inline ruvia::task<void> check_body_reads(ruvia::http_client_ref client, const ruvia::worker_ref& worker) {
     auto response = co_await client.get("/operation/stalled-body").send();
     std::string body;
-    append(body, co_await response.read());
+    append(body, co_await response.stream().read());
     EXPECT_EQ(body, "first-");
-    EXPECT_TRUE(co_await failure_of(response.read({.timeout_ = interruption})) == timed_out);
+    EXPECT_TRUE(co_await failure_of(response.stream().read({.timeout_ = interruption})) == timed_out);
     ruvia::stop_source stop;
     ruvia::task_scope stopper(worker);
     stopper.spawn(stop_after(worker, stop));
-    EXPECT_TRUE(co_await failure_of(response.stream().text({.stop_token_ = stop.token()})) == cancelled);
+    EXPECT_TRUE(co_await failure_of(response.stream().read_text({.stop_token_ = stop.token()})) == cancelled);
     co_await stopper.join();
-    EXPECT_TRUE(co_await failure_of(response.read({.stop_token_ = stop.token()})) == cancelled);
-    EXPECT_THROW((void)response.read({.timeout_ = 0ms}), std::invalid_argument);
-    while (auto chunk = co_await response.read()) {
+    EXPECT_TRUE(co_await failure_of(response.stream().read({.stop_token_ = stop.token()})) == cancelled);
+    EXPECT_THROW((void)response.stream().read({.timeout_ = 0ms}), std::invalid_argument);
+    while (auto chunk = co_await response.stream().read()) {
         append(body, chunk);
     }
     EXPECT_EQ(body, "first-second");
@@ -886,16 +886,16 @@ inline void append(std::string& target, const std::optional<std::span<const std:
     if (tunnel == nullptr) {
         co_return;
     }
-    EXPECT_TRUE(co_await failure_of(tunnel->read({.timeout_ = interruption})) == timed_out);
+    EXPECT_TRUE(co_await failure_of(tunnel->stream().read({.timeout_ = interruption})) == timed_out);
     ruvia::stop_source stop;
     stop.request_stop();
-    EXPECT_TRUE(co_await failure_of(tunnel->write("lost", {.stop_token_ = stop.token()})) == cancelled);
-    EXPECT_TRUE(co_await failure_of(tunnel->finish({.stop_token_ = stop.token()})) == cancelled);
-    EXPECT_THROW((void)tunnel->text({.timeout_ = 0ms}), std::invalid_argument);
-    co_await tunnel->write("ping");
-    co_await tunnel->finish();
+    EXPECT_TRUE(co_await failure_of(tunnel->stream().write("lost", {.stop_token_ = stop.token()})) == cancelled);
+    EXPECT_TRUE(co_await failure_of(tunnel->stream().finish({.stop_token_ = stop.token()})) == cancelled);
+    EXPECT_THROW((void)tunnel->stream().read_text({.timeout_ = 0ms}), std::invalid_argument);
+    co_await tunnel->stream().write("ping");
+    co_await tunnel->stream().finish();
     std::string echoed;
-    while (auto chunk = co_await tunnel->text()) {
+    while (auto chunk = co_await tunnel->stream().read_text()) {
         echoed.append(*chunk);
     }
     EXPECT_EQ(echoed, "ping");

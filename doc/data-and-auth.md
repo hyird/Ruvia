@@ -77,13 +77,17 @@ ruvia::app().db({
 | --- | --- |
 | `db_executor with_options(operation_options options) const` | 绑定单次查询的 `timeout_` 与 `stop_token_` |
 | `task<db_rows> query(std::string_view sql, Args&&... params) const` | 执行参数化查询并返回缓冲结果集 `db_rows`（亦支持传入 `std::span<const db_value>`） |
-| `template <fixed_string Sql, db_driver Driver = db_driver::mariadb, typename... Params> task<db_rows> query(Params&&... params) const` | **编译期校验 SQL 占位符数量**与方言语法的参数化查询（MariaDB 用 `?`，PostgreSQL 用 `$1, $2`） |
+| `template <fixed_string Sql, db_driver Driver = db_driver::unspecified, typename... Params> task<db_rows> query(Params&&... params) const` | **编译期校验 SQL 占位符数量**与实参个数一致的参数化查询；`Driver` 缺省 `unspecified` 时按占位符推断方言（`?` 为 MariaDB，`$1, $2` 为 PostgreSQL，二者混用须显式指定 `Driver`），方言与连接驱动不符时抛 `std::invalid_argument` |
 | `task<db_stream_result> query_stream(...) const` | 流式拉取大结果集（同上支持运行期 SQL 与编译期 `fixed_string` 模板） |
 | `task<db_exec_result> execute(...) const` | 执行 `INSERT` / `UPDATE` / `DELETE` / DDL，返回 `db_exec_result`（提供 `.affected_rows()` 与 `.last_insert_id()`） |
 | `task<db_transaction> begin_transaction(db_transaction_options options = {}) const` | 开启事务（可指定隔离级别 `.isolation_` 与读写模式 `.access_mode_`） |
 | `task<void> notify(std::string_view channel, std::string_view payload = {}) const` | （PostgreSQL）发送 `NOTIFY` 通知 |
 | `template <typename E> db_repository<E, db_executor> repository() const` | 获取实体 `E` 的强类型 ORM Repository |
 | `db_query_result_cache query_result_cache() const` | （需 `RUVIA_ENABLE_REDIS`）获取查询结果缓存控制器 |
+
+- **唯一命令面**：`query` / `execute` 的三种形式（`std::span<const db_value>`、参数包、编译期 `fixed_string`）只声明于 `db_command_set<Surface>`，`db_executor` 与 `db_transaction` 共同继承，与 Redis 的 `redis_command_set` 同构。
+- **接收者契约**：执行器经 `const` 引用或临时句柄调用；事务只经可变左值调用，`const` 或临时 `db_transaction` 无可用重载。
+- **专有入口**：`query_stream`、`begin_transaction` 仅 `db_executor` 提供；提交、回滚、保存点、咨询锁与游标仅 `db_transaction` 提供。
 
 查询缓存命中时，结果集持有字段所需的底层存储；空结果和没有列的行不保留缓存正文。结果及其字段视图仍须遵守各自的所有权和借用生命周期。清除缓存时，临时键视图在删除命令获得自有参数后释放，不跨网络等待保留。缓存键前缀与条目编码不携带内部版本号。
 
@@ -95,7 +99,7 @@ ruvia::app().db({
 
 直接查询保留 raw 借用路线：`db_field::as<std::string_view>()` 与 `value()` 返回的文本视图只在所属行存储有效期间可用，不得从已经析构的 `db_rows` 中逸出。需要独立结果时，使用 `as<std::string>()` / `as<ruvia::string>()`；ORM 映射入口则在编译期要求 owning 类型，见第 3.1 节。
 
-- **按列名查找**：`db_row::find(column)` 返回 `db_field_lookup { status_, field_ }`，`status_` 为 `unique_lookup_status::absent / found / repeated`，仅 `found` 时 `field_` 有效。
+- **按列名查找**：`db_row::find(column)` 返回 `db_field_lookup`（即 `unique_lookup<const db_field*>{ status_, value_ }`，与 HTTP 字段的 `http_unique_field_lookup` 同一模板），`status_` 为 `unique_lookup_status::absent / found / repeated`，仅 `found` 时 `value_` 有效。
 - **重名列不择一**：结果集重复列名时 `find` 报告 `repeated`，从不静默取第一列。
 - **`row["name"]` 失败语义**：缺列抛 `conversion_error::missing_column`，重名列抛 `conversion_error::invalid_format`，与实体映射一致。
 - **错误分类**：`db_error::code()` 与 `redis_error::code()` 同为 `backend_error_code`：`not_configured`、`connect_failed`（DNS、建连、TLS、认证、选库）、`io_error`、`protocol_error`、`command_failed`（服务端拒绝单条语句或命令）、`timeout`、`cancelled`、`closing`。
@@ -201,9 +205,9 @@ auto report = co_await migrator.migrate(migrations);
 - **外部驱动绑定**：`db_statement::params()` 可直接读取 `db_value::type()`（`db_value_type`）及 `text()`、`signed_value()`、`unsigned_value()`、`double_value()`、`bool_value()`；不做隐式类型转换，读取错误分支抛 `std::bad_variant_access`。`null` 通过类型判别，无需取值。
 - **编译参数寿命**：语句拥有编译后的 SQL 与参数文本；`sql()`、`params()` 仅允许左值借用，视图不得超过语句寿命。外部项目可交给自己的数据库驱动，无须使用 Repository 或连接池。
 
-`db_source_options`、`db_cte_options`、`db_lock_options`、`db_window_options`、`db_conflict_options` 中的集合字段为 `borrowed_span<T>`；Repository 的 `db_find_options` 同样使用 `borrowed_span<T>` 借用集合及元素中的文本。请使用具名 `const std::array`、C 数组或左值容器保存元素；独立保存 options 时，数组和文本 owner 必须存活到调用入口同步复制或导入完成。同步导入型 API 的 `initializer_list` 参数不持久保存裸视图，可继续直接传入列表。
+`db_source_options`、`db_cte_options`、`db_lock_options`、`db_window_options`、`db_conflict_options` 中的集合字段为 `borrowed_span<T>`；Repository 的 `db_find_options` 同样使用 `borrowed_span<T>` 借用集合及元素中的文本。请使用具名 `const std::array`、C 数组或左值容器保存元素；独立保存 options 时，数组和文本 owner 必须存活到调用入口同步复制或导入完成。同步导入型 API 的列表参数为 `argument_list<T>`（`"borrowed_text.h"`）：可直接传入花括号列表、`std::span<const T>`、数组或连续容器（含临时量），入口返回前完成消费，不保存裸视图。元素类型由花括号推导的入口（如 `column<"x">().in({...})`）、构造函数，以及同一位置另有单值重载的入口（`db_query::select` / `set`、Builder 的 `order_by` / `add_order_by` / `set` / `values`、`join` 的 `USING` 列、`db_repository::update`）仍保留 `span` 与 `initializer_list` 两个重载。
 
-- **查询子句**：`select`、`add_select`、`distinct`、`distinct_on`、`from`、`from_function`、`join`、`where` / `and_where` / `or_where`、`group_by`、`having`、`order_by`、`limit`、`offset`、`lock`（`FOR UPDATE` / `FOR SHARE` + `NOWAIT` / `SKIP LOCKED`）、`with`（CTE / `RECURSIVE`）、`combine`（`UNION` / `INTERSECT` / `EXCEPT`）。表达式参数均为 `const db_expr&`（列表为 `span` / `initializer_list<db_expr>`）；`select` / `add_select` / `returning` 的投影项为 `db_selection`：裸列名、表达式或 `expr.as("name")`（生成 `AS`）。
+- **查询子句**：`select`、`add_select`、`distinct`、`distinct_on`、`from`、`from_function`、`join`、`where` / `and_where` / `or_where`、`group_by`、`having`、`order_by`、`limit`、`offset`、`lock`（`FOR UPDATE` / `FOR SHARE` + `NOWAIT` / `SKIP LOCKED`）、`with`（CTE / `RECURSIVE`）、`combine`（`UNION` / `INTERSECT` / `EXCEPT`）。表达式参数均为 `const db_expr&`（列表为 `argument_list<db_expr>`）；排序方向为 SQL 与 Redis ORM 共用的 `order_direction`（`"entity_storage.h"`）；`select` / `add_select` / `returning` 的投影项为 `db_selection`：裸列名、表达式或 `expr.as("name")`（生成 `AS`）。
   `limit`、`offset`、`db_window_boundary::offset_` 及 SQL / Redis Repository 的 `offset_`、`limit_` 共用 `"entity_storage.h"` 的 `query_row_count`（可选位置仍包在 `std::optional` 中）。合法整数可直接填入，构造前检查 `0..INT64_MAX`，负数或超范围抛出 `std::invalid_argument`，无异常探测用 `query_row_count::try_from_value()`；不隐式接受浮点或枚举，需要整数时用 `value()` 解包，不要预先转成无符号数。
 - **变更子句**：`insert_into`、`values`、`insert_from`、`on_conflict`、`update`、`set`、`update_from`、`delete_from`、`delete_using`、`returning`（MariaDB 需 ≥ 10.5，支持 `INSERT ... RETURNING` 与 `DELETE ... RETURNING`，`UPDATE ... RETURNING` 仅 PostgreSQL；`db_repository::save()` 依赖此能力）。
 - **Upsert（`db_conflict_options`）**：字段按 [PostgreSQL INSERT](https://www.postgresql.org/docs/current/sql-insert.html) 语法命名，直接 Query 与 Repository 共用：
@@ -321,7 +325,7 @@ RUVIA_DB_PROJECTION(device_summary,
 写 Builder 的 `.set(span<db_assignment>)`、`.set({...})` 和 `.set(entity)` 整批提交：字段校验与表达式导入完成后才发布 SET 列表，后续项失败不会留下此前项的部分更新。失败前已构建的 SQL 与参数语义不变；此保证针对查询构建，不等同于数据库事务。
 
 - **写入入口一致**：Repository 的 `update`、`delete_by` 使用对应写 Builder；重复 SET 列以最后一次赋值为准。空 assignment 批次被拒绝；空实体变更仅在 UPDATE 自带生命周期盖章时有效。
-- **类型化列引用**：读 Builder 的 `group_by`、`add_group_by`、`distinct_on` 接受 `span<const db_expr>` 或 `initializer_list<db_expr>`，`order_by` / `add_order_by` 接受 `db_expr` 或 `db_order_term`；列一律写 `column<"x">()`，不接受列名字符串。
+- **类型化列引用**：读 Builder 的 `group_by`、`add_group_by`、`distinct_on` 接受 `argument_list<db_expr>`，`order_by` / `add_order_by` 接受 `db_expr` 或 `db_order_term`；列一律写 `column<"x">()`，不接受列名字符串。
 - **写 Builder 赋值**：`set` 只接受 `db_assignment`（`column<"x">().set(v)`、`.set_null()`、`.set_now()`、`.increment(n)`）；只读、计算列或非数值列的赋值与自增编译失败。
 - **CTE 校验一致**：读 Builder 的 `with` 不按来源入口区分校验；只读 CTE 可与关系预加载并用，含写入的 CTE 统一要求平面结果映射。
 
@@ -439,9 +443,9 @@ ruvia::app()
 | Hash | `hget`、`hset`、`hmget`、`hget_all`、`hdel`、`hexists`、`hlen`、`hkeys`、`hvals`、`hincr_by` |
 | List | `lpush`、`rpush`、`lpop`、`rpop`、`llen`、`lrange`、`lindex`、`lset`、`ltrim`、`lrem`、`blpop`、`brpop` |
 | Set & Sorted Set | `sadd`、`srem`、`smembers`、`scard`、`sismember`、`spop`、`srand_member`、`sinter`、`sunion`、`sdiff`；`zadd`、`zrem`、`zrange`、`zrange_with_scores`、`zscore`、`zcard`、`zcount` |
-| 游标迭代与脚本 | `scan`、`hscan`、`sscan`、`zscan`；`eval`、`eval_sha`、`script_load`、`script_exists` |
+| 游标迭代与脚本 | `scan`、`hscan`、`sscan`、`zscan`（返回 `redis_scan_page<Entry>`：`done()`、`next_cursor()`、`entries()`；`redis_scan_result` / `redis_hash_scan_result` / `redis_z_scan_result` 为其 `std::string` / `redis_key_value` / `redis_scored_value` 实例）；`eval`、`eval_sha`、`script_load`、`script_exists` |
 | 批处理与事务 | `pipeline()`（返回 `redis_pipeline` 即 `redis_batch<redis_batch_mode::pipeline>`，链式追加命令后 `co_await std::move(pipe).exec()`）、`transaction()`（返回 `redis_transaction` 即 `redis_batch<redis_batch_mode::transaction>`，封装 `MULTI`/`EXEC`） |
-| Streams | `xread_group(group, consumer, streams, redis_x_read_group_options)` |
+| Streams | `xread_group(group, consumer, streams, redis_x_read_group_options)`，返回 `std::optional<std::vector<redis_stream_read_result>>`（nil 回复为 `std::nullopt`） |
 | Pub/Sub | `publish(channel, payload)`、`subscription()` |
 | RediSearch ORM | `repository<Entity>(const redis_search_mapping&)`、`repository<Entity>()` |
 
@@ -457,7 +461,7 @@ ruvia::app()
 
 `redis_scan_options::count_` 与 `redis_x_read_group_options::count_` 使用 `std::optional<redis_positive_count>`：未指定不发送 `COUNT`，指定整数时在构造阶段检查 `1..INT64_MAX`，零、负数或超范围抛出 `std::invalid_argument`，无异常探测用 `redis_positive_count::try_from_value()`。不隐式接受浮点或枚举，需要整数时用 `value()` 解包；不要预先窄化输入。
 
-返回字符串数组的方法（`lrange`、`zrange`、`smembers`、`hkeys`、`hvals`、`sinter`、`sunion`、`sdiff` 以及 `scan`／`sscan` 的 `values()`）要求每个元素都是字符串：回复中出现 nil 元素时抛出 `redis_error(protocol_error)`，不会静默丢弃而改变结果长度或位置。允许缺失值的 `mget`／`hmget` 仍以 `std::optional` 表示 nil。
+返回字符串数组的方法（`lrange`、`zrange`、`smembers`、`hkeys`、`hvals`、`sinter`、`sunion`、`sdiff` 以及 `scan`／`sscan` 的 `entries()`）要求每个元素都是字符串：回复中出现 nil 元素时抛出 `redis_error(protocol_error)`，不会静默丢弃而改变结果长度或位置。允许缺失值的 `mget`／`hmget` 仍以 `std::optional` 表示 nil。
 
 原始 `command()` 与批处理的 `command()` 按 Redis 文档语法识别 `XREAD`／`XREADGROUP` 在 `STREAMS` 之前的选项：`COUNT`、`BLOCK`，以及仅 `XREADGROUP` 支持的 `CLAIM`（Redis 8.4+）与 `NOACK`。含 `BLOCK` 的命令视为阻塞命令，走阻塞池且须由 `timeout_` 或可取消的 `stop_token_` 约束，不能进入 pipeline／transaction；其他未识别的选项同步抛出 `std::invalid_argument`，不会被猜测为非阻塞命令。依据 [XREADGROUP](https://redis.io/docs/latest/commands/xreadgroup/)。
 

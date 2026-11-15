@@ -97,6 +97,7 @@ ruvia_install_component(ruvia-http http)
 set(ruvia_http_headers
     include/binary_text_encoding.h
     include/borrowed_text.h
+    include/checked_integer.h
     include/decimal_text.h
     include/http1_chunked_body.h
     include/http1_client_request.h

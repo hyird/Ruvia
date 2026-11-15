@@ -149,17 +149,25 @@ private:
     std::chrono::milliseconds value_{};
 };
 
+// `now + delay`, saturating: a non-positive delay yields `now`, and a sum
+// past the clock's range yields time_point::max(). The one-argument form
+// starts at steady_clock::now().
 template <typename rep_type, typename period_type>
-[[nodiscard]] inline std::chrono::steady_clock::time_point saturating_deadline(std::chrono::steady_clock::time_point now, std::chrono::duration<rep_type, period_type> value) noexcept {
-    const auto delay = saturating_duration_cast(value);
-    if (delay <= std::chrono::steady_clock::duration::zero()) {
+[[nodiscard]] inline std::chrono::steady_clock::time_point deadline_after(std::chrono::steady_clock::time_point now, std::chrono::duration<rep_type, period_type> delay) noexcept {
+    const auto steady_delay = saturating_duration_cast(delay);
+    if (steady_delay <= std::chrono::steady_clock::duration::zero()) {
         return now;
     }
     constexpr auto maximum = std::chrono::steady_clock::time_point::max();
-    if (now > maximum - delay) {
+    if (now > maximum - steady_delay) {
         return maximum;
     }
-    return now + delay;
+    return now + steady_delay;
+}
+
+template <typename rep_type, typename period_type>
+[[nodiscard]] inline std::chrono::steady_clock::time_point deadline_after(std::chrono::duration<rep_type, period_type> delay) noexcept {
+    return deadline_after(std::chrono::steady_clock::now(), delay);
 }
 
 // Non-positive delays map to zero; positive delays round up to whole
@@ -170,11 +178,6 @@ template <typename rep_type, typename period_type>
         return std::chrono::milliseconds::zero();
     }
     return saturating_duration_cast<std::chrono::milliseconds>(value);
-}
-
-template <typename rep_type, typename period_type>
-[[nodiscard]] inline std::chrono::steady_clock::time_point deadline_after(std::chrono::duration<rep_type, period_type> delay) noexcept {
-    return saturating_deadline(std::chrono::steady_clock::now(), delay);
 }
 
 }  // namespace ruvia

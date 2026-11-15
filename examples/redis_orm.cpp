@@ -102,7 +102,7 @@ int main(int argc, char** argv) {
         auto config = example::redis_config(env_value);
         app.redis({.config_ = config})
             .listen({.address_ = "127.0.0.1", .http_ = 8091})
-            .server({.worker_count_ = 1, .process_signal_handlers_ = ruvia::process_signal_handler_policy::install})
+            .workers({.worker_count_ = 1, .process_signal_handlers_ = ruvia::process_signal_handler_policy::install})
             .on_start([create_index, &failed] {
             if (!create_index) {
                 return;

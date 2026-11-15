@@ -13,8 +13,6 @@
 
 namespace ruvia {
 
-class http_request;
-
 enum class http_forwarded_header_kind : std::uint8_t {
     auto_detect,
     rfc7239_forwarded,
@@ -92,13 +90,10 @@ public:
     [[nodiscard]] bool is_trusted_proxy(const ip_address& address) const noexcept;
     [[nodiscard]] bool is_trusted_proxy(std::string_view address_text) const noexcept;
 
-    [[nodiscard]] http_client_ip_result resolve(const ip_address& peer_ip, std::span<const http_header> headers) const noexcept;
-    [[nodiscard]] http_client_ip_result resolve(const ip_address& peer_ip, std::span<const http_header_view> headers) const noexcept;
-    [[nodiscard]] http_client_ip_result resolve(const ip_address& peer_ip, const http_request& request) const noexcept;
-
-    [[nodiscard]] std::optional<http_client_ip_result> resolve(std::string_view peer_ip, std::span<const http_header> headers) const noexcept;
-    [[nodiscard]] std::optional<http_client_ip_result> resolve(std::string_view peer_ip, std::span<const http_header_view> headers) const noexcept;
-    [[nodiscard]] std::optional<http_client_ip_result> resolve(std::string_view peer_ip, const http_request& request) const noexcept;
+    // Resolves the client address behind `peer_ip` from the configured
+    // forwarding headers. The text form is std::nullopt for an unparsable peer.
+    [[nodiscard]] http_client_ip_result resolve(const ip_address& peer_ip, const http_header_range_view& headers) const noexcept;
+    [[nodiscard]] std::optional<http_client_ip_result> resolve(std::string_view peer_ip, const http_header_range_view& headers) const noexcept;
 
 private:
     struct compiled_header final {
@@ -111,16 +106,4 @@ private:
     bool enabled_{true};
     bool trust_x_forwarded_proto_{false};
 };
-
-[[nodiscard]] inline http_client_ip_result extract_http_client_ip(const http_client_ip_extractor& extractor, const ip_address& peer_ip, std::span<const http_header> headers) noexcept {
-    return extractor.resolve(peer_ip, headers);
-}
-
-[[nodiscard]] inline http_client_ip_result extract_http_client_ip(const http_client_ip_extractor& extractor, const ip_address& peer_ip, std::span<const http_header_view> headers) noexcept {
-    return extractor.resolve(peer_ip, headers);
-}
-
-[[nodiscard]] inline http_client_ip_result extract_http_client_ip(const http_client_ip_extractor& extractor, const ip_address& peer_ip, const http_request& request) noexcept {
-    return extractor.resolve(peer_ip, request);
-}
 }  // namespace ruvia

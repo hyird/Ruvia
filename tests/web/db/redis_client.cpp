@@ -769,7 +769,7 @@ TEST(Ruvia, redis_composite_results_rebind_equivalent_resource_owners) {
         auto scored = co_await redis.zscan("scores");
         auto score_seed = co_await redis.zscan("scores");
         EXPECT_TRUE(group_seed.has_value());
-        if (!grouped || !group_seed || grouped->streams().size() != 2 || grouped->streams()[0].entries().size() != 2) {
+        if (!grouped || !group_seed || grouped->size() != 2 || (*grouped)[0].entries().size() != 2) {
             co_return;
         }
 
@@ -805,9 +805,9 @@ TEST(Ruvia, redis_composite_results_rebind_equivalent_resource_owners) {
                     EXPECT_EQ(result.array()[1].integer(), std::int64_t{42});
                 }
             });
-            const auto& stream = grouped->streams()[0];
+            const auto& stream = (*grouped)[0];
             check_redis_result_rebinding(stream.entries()[0], stream.entries()[1], allocator_move, check_entry);
-            check_redis_result_rebinding(stream, grouped->streams()[1], allocator_move, check_stream);
+            check_redis_result_rebinding(stream, (*grouped)[1], allocator_move, check_stream);
             if (hashed.entries().size() == 1 && hash_seed.entries().size() == 1) {
                 check_redis_result_rebinding(hashed.entries()[0], hash_seed.entries()[0], allocator_move, [&](const ruvia::redis_key_value& kv) {
                     EXPECT_EQ(kv.key(), std::string_view(field_name));
@@ -821,8 +821,6 @@ TEST(Ruvia, redis_composite_results_rebind_equivalent_resource_owners) {
                 });
             }
         }
-        static_assert(!std::is_copy_constructible_v<ruvia::redis_x_read_group_result>);
-        static_assert(!std::is_copy_assignable_v<ruvia::redis_x_read_group_result>);
         static_assert(!std::is_copy_constructible_v<ruvia::redis_scan_result>);
         static_assert(!std::is_copy_assignable_v<ruvia::redis_scan_result>);
         static_assert(!std::is_copy_constructible_v<ruvia::redis_hash_scan_result>);
@@ -831,20 +829,20 @@ TEST(Ruvia, redis_composite_results_rebind_equivalent_resource_owners) {
         static_assert(!std::is_copy_assignable_v<ruvia::redis_z_scan_result>);
 
         *group_seed = std::move(*grouped);
-        EXPECT_EQ(group_seed->streams().size(), std::size_t{2});
-        if (group_seed->streams().size() == 2) {
-            check_stream(group_seed->streams()[0]);
-            EXPECT_EQ(group_seed->streams()[1].stream(), std::string_view("seed"));
-            EXPECT_EQ(group_seed->streams()[1].entries().size(), std::size_t{1});
+        EXPECT_EQ(group_seed->size(), std::size_t{2});
+        if (group_seed->size() == 2) {
+            check_stream((*group_seed)[0]);
+            EXPECT_EQ((*group_seed)[1].stream(), std::string_view("seed"));
+            EXPECT_EQ((*group_seed)[1].entries().size(), std::size_t{1});
         }
         const auto expected_scan_cursor = scanned.next_cursor();
         scan_seed = std::move(scanned);
         EXPECT_TRUE(!scan_seed.done());
         EXPECT_EQ(scan_seed.next_cursor(), expected_scan_cursor);
-        EXPECT_EQ(scan_seed.values().size(), std::size_t{2});
-        if (scan_seed.values().size() == 2) {
-            EXPECT_EQ(std::string_view(scan_seed.values()[0]), std::string_view(key_name));
-            EXPECT_EQ(std::string_view(scan_seed.values()[1]), std::string_view("second"));
+        EXPECT_EQ(scan_seed.entries().size(), std::size_t{2});
+        if (scan_seed.entries().size() == 2) {
+            EXPECT_EQ(std::string_view(scan_seed.entries()[0]), std::string_view(key_name));
+            EXPECT_EQ(std::string_view(scan_seed.entries()[1]), std::string_view("second"));
         }
         const auto expected_hash_cursor = hashed.next_cursor();
         hash_seed = std::move(hashed);
@@ -1026,13 +1024,13 @@ TEST(Ruvia, redis_typed_replies_retain_binary_payloads_and_recover_from_invalid_
         check_scores(sorted);
         check_scores(sorted_scan.entries());
         EXPECT_TRUE(scanned.done() && hash_scan.done() && sorted_scan.done());
-        EXPECT_EQ(scanned.values().size(), std::size_t{2});
-        if (scanned.values().size() == 2) {
-            EXPECT_TRUE(scanned.values()[0] == expected_key && scanned.values()[1] == expected_payload);
+        EXPECT_EQ(scanned.entries().size(), std::size_t{2});
+        if (scanned.entries().size() == 2) {
+            EXPECT_TRUE(scanned.entries()[0] == expected_key && scanned.entries()[1] == expected_payload);
         }
-        EXPECT_TRUE(grouped && grouped->streams().size() == 1);
-        if (grouped && grouped->streams().size() == 1) {
-            const auto& result = grouped->streams()[0];
+        EXPECT_TRUE(grouped && grouped->size() == 1);
+        if (grouped && grouped->size() == 1) {
+            const auto& result = (*grouped)[0];
             EXPECT_TRUE(result.stream() == expected_key && result.entries().size() == 1);
             if (result.entries().size() == 1) {
                 EXPECT_EQ(result.entries()[0].id(), std::string_view("1-0"));
@@ -1704,7 +1702,7 @@ TEST(Ruvia, redis_subscription_delivers_confirmations_and_messages_in_wire_order
     ruvia::redis_client client(pool.loop(0), peer.config());
     pool.start();
     pool.loop(0).start(check_events_arrive_in_wire_order(client)).get();
-    pool.stop();
+    pool.request_stop();
     pool.join();
 }
 
@@ -1714,7 +1712,7 @@ TEST(Ruvia, redis_subscription_error_reply_leaves_the_connection_open) {
     ruvia::redis_client client(pool.loop(0), peer.config());
     pool.start();
     pool.loop(0).start(check_error_reply_keeps_connection(client)).get();
-    pool.stop();
+    pool.request_stop();
     pool.join();
 }
 
@@ -1724,7 +1722,7 @@ TEST(Ruvia, redis_subscription_reports_server_close_and_stays_closed) {
     ruvia::redis_client client(pool.loop(0), peer.config());
     pool.start();
     pool.loop(0).start(check_server_close_is_an_io_error(client)).get();
-    pool.stop();
+    pool.request_stop();
     pool.join();
 }
 
@@ -1734,7 +1732,7 @@ TEST(Ruvia, redis_subscription_closes_on_a_malformed_push) {
     ruvia::redis_client client(pool.loop(0), peer.config());
     pool.start();
     pool.loop(0).start(check_malformed_push_closes(client)).get();
-    pool.stop();
+    pool.request_stop();
     pool.join();
 }
 
@@ -1744,7 +1742,7 @@ TEST(Ruvia, redis_subscription_read_honors_the_operation_timeout) {
     ruvia::redis_client client(pool.loop(0), peer.config());
     pool.start();
     pool.loop(0).start(check_read_timeout(client)).get();
-    pool.stop();
+    pool.request_stop();
     pool.join();
 }
 
@@ -1756,7 +1754,7 @@ TEST(Ruvia, redis_subscription_read_takes_its_own_operation_options) {
         ruvia::redis_client client(pool.loop(0), peer.config());
         pool.start();
         pool.loop(0).start(check_read_operation_options(client, cancel)).get();
-        pool.stop();
+        pool.request_stop();
         pool.join();
     }
 }
@@ -1772,7 +1770,7 @@ TEST(Ruvia, redis_subscription_stop_token_ends_the_stream) {
     confirmed.get_future().get();
     stop.request_stop();
     std::move(operation).get();
-    pool.stop();
+    pool.request_stop();
     pool.join();
 }
 
@@ -1782,7 +1780,7 @@ TEST(Ruvia, redis_subscription_abort_ends_a_pending_read_and_rejects_a_second) {
     ruvia::redis_client client(pool.loop(0), peer.config());
     pool.start();
     pool.loop(0).start(check_abort_and_concurrent_reads(client)).get();
-    pool.stop();
+    pool.request_stop();
     pool.join();
 }
 
@@ -1796,7 +1794,7 @@ TEST(Ruvia, redis_subscription_client_close_ends_a_pending_read) {
     confirmed.get_future().get();
     client.close();
     std::move(operation).get();
-    pool.stop();
+    pool.request_stop();
     pool.join();
 }
 
@@ -1806,7 +1804,7 @@ TEST(Ruvia, redis_subscription_distinguishes_empty_channel_empty_pattern_and_nil
     ruvia::redis_client client(pool.loop(0), peer.config());
     pool.start();
     pool.loop(0).start(check_empty_names_keep_their_wire_identity(client)).get();
-    pool.stop();
+    pool.request_stop();
     pool.join();
 }
 
@@ -1816,7 +1814,7 @@ TEST(Ruvia, redis_subscription_idle_probe_fails_a_silent_peer) {
     ruvia::redis_client client(pool.loop(0), probed_config(peer));
     pool.start();
     pool.loop(0).start(check_silent_peer_fails_the_idle_probe(client, peer)).get();
-    pool.stop();
+    pool.request_stop();
     pool.join();
 }
 
@@ -1826,7 +1824,7 @@ TEST(Ruvia, redis_subscription_answered_probes_keep_an_idle_subscription) {
     ruvia::redis_client client(pool.loop(0), probed_config(peer));
     pool.start();
     pool.loop(0).start(check_answered_probes_keep_an_idle_subscription(client, peer)).get();
-    pool.stop();
+    pool.request_stop();
     pool.join();
 }
 
@@ -1836,7 +1834,7 @@ TEST(Ruvia, redis_subscription_idle_probe_accepts_the_unsubscribed_pong) {
     ruvia::redis_client client(pool.loop(0), probed_config(peer));
     pool.start();
     pool.loop(0).start(check_unsubscribed_connection_consumes_plain_pong(client, peer)).get();
-    pool.stop();
+    pool.request_stop();
     pool.join();
 }
 
@@ -1846,7 +1844,7 @@ TEST(Ruvia, redis_subscription_idle_probe_relies_on_an_unanswered_command) {
     ruvia::redis_client client(pool.loop(0), probed_config(peer));
     pool.start();
     pool.loop(0).start(check_unanswered_command_stands_in_for_the_ping(client, peer)).get();
-    pool.stop();
+    pool.request_stop();
     pool.join();
 }
 

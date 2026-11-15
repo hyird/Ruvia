@@ -269,13 +269,12 @@ TEST(Ruvia, server_closes_connections_gracefully) {
 
     auto& app = ruvia::app();
     static std::binary_semaphore started{0};
-    app.server({.worker_count_ = 1, .idle_timeout_ = idle_timeout, .connection_scan_interval_ = 5ms})
-        .listen({
-            .address_ = "127.0.0.1",
-            .http_ = plain_endpoint.port(),
-            .https_ = tls_endpoint.port(),
-            .tls_ = {.identity_ = {.certificate_chain_file_ = identity.ca_file_, .private_key_file_ = private_key}},
-        })
+    app.workers({.worker_count_ = 1}).server({.idle_timeout_ = idle_timeout, .connection_scan_interval_ = 5ms}).listen({
+                                                                                                                           .address_ = "127.0.0.1",
+                                                                                                                           .http_ = plain_endpoint.port(),
+                                                                                                                           .https_ = tls_endpoint.port(),
+                                                                                                                           .tls_ = {.identity_ = {.certificate_chain_file_ = identity.ca_file_, .private_key_file_ = private_key}},
+                                                                                                                       })
         .on_start([] {
         started.release();
     });

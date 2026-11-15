@@ -163,14 +163,8 @@ public:
 
     // Reads one chunk as characters, without decoding or charset validation.
     // Encoded characters may straddle chunks. Uses the same linear read lane.
-    [[nodiscard]] task<std::optional<std::string_view>> text(operation_options operation = {}) &;
-    task<std::optional<std::string_view>> text(operation_options = {}) && = delete;
-
-    // Collects the unread remainder of this same stream. max_bytes is a caller
-    // bound in addition to the origin's transport bound. An interrupted
-    // collection keeps the bytes received so far for the next body operation.
-    [[nodiscard]] task<http_client_response_bytes> read_all(std::size_t max_bytes = default_max_buffered_body_bytes, operation_options operation = {}) &;
-    task<http_client_response_bytes> read_all(std::size_t = default_max_buffered_body_bytes, operation_options = {}) && = delete;
+    [[nodiscard]] task<std::optional<std::string_view>> read_text(operation_options operation = {}) &;
+    task<std::optional<std::string_view>> read_text(operation_options = {}) && = delete;
 
     // 以自然背压转发当前上游正文；调用者必须先对 output 执行 commit()，
     // 只有 body 结果才启动转发，completed 时不得消费/生产转发正文。
@@ -247,13 +241,11 @@ public:
         return body_;
     }
     http_client_response_body& stream() && = delete;
-    [[nodiscard]] task<std::optional<std::span<const std::byte>>> read(operation_options operation = {}) & {
-        return body_.read(std::move(operation));
-    }
-    task<std::optional<std::span<const std::byte>>> read(operation_options = {}) && = delete;
-    [[nodiscard]] task<http_client_response_bytes> bytes(std::size_t max_bytes = default_max_buffered_body_bytes, operation_options operation = {}) & {
-        return body_.read_all(max_bytes, std::move(operation));
-    }
+    // Collects the unread remainder of the body on stream()'s read lane.
+    // max_bytes is a caller bound in addition to the origin's transport bound.
+    // An interrupted collection keeps the bytes received so far for the next
+    // body operation.
+    [[nodiscard]] task<http_client_response_bytes> bytes(std::size_t max_bytes = default_max_buffered_body_bytes, operation_options operation = {}) &;
     task<http_client_response_bytes> bytes(std::size_t = default_max_buffered_body_bytes, operation_options = {}) && = delete;
     template <typename value_type>
         requires detail::is_model_json_value<value_type>
@@ -285,7 +277,7 @@ private:
     friend class detail::http_client_websocket_transport;
     friend class http_client_exchange;
     friend class http_client_tunnel;
-    friend class http_capsule_stream;
+    friend class detail::http_client_tunnel_state;
     friend class detail::http_capsule_stream_state;
     friend class detail::http_client_response_handoff;
     friend class http_client_push;
@@ -301,17 +293,23 @@ private:
     bool consumer_{true};
 };
 
-// Owns an established CONNECT byte stream on its client worker. Metadata borrows
-// this owner; a read view lasts until the next read starts. Inputs are copied before a
-// cold write is returned. One running read and one running write/finish may coexist; cold operations do not reserve either lane. Moving the
-// owner preserves operations. Destruction aborts both directions; shutdown joins
-// transport drivers. finish() closes only the local sending direction and is
-// idempotent after successful completion, including normal transport retirement.
-// Each read/text/write/finish takes its own operation_options, timed from when
-// it starts. A read's expiry or stop request ends only that read with
-// http_client_error (errc::timed_out / operation_canceled) and keeps received bytes; a write's
-// or finish's aborts the tunnel, since partly sent bytes cannot be withdrawn,
-// and an already-stopped token fails before anything is queued.
+// Owns an established CONNECT tunnel on its client worker: the 2xx response
+// metadata, which borrows this owner, and the tunnel's connection lease.
+// stream() is the tunnel's byte stream. Its operations, and the capsule and
+// datagram adapters created from it, bind to address-stable transport state,
+// so moving this owner preserves them; they expire with this owner. Join
+// started operations first. An adapter that outlives this owner is closed:
+// its operations throw std::logic_error, and the capsules and datagrams it
+// already returned stay valid.
+// Destruction aborts both directions; shutdown joins transport drivers.
+// Stream operations report failures as http_client_error. Each takes its own
+// operation_options, timed from when it starts. A read's expiry or stop
+// request ends only that read (errc::timed_out / operation_canceled) and keeps
+// received bytes; a write's or finish's aborts the tunnel, since partly sent
+// bytes cannot be withdrawn, and an already-stopped token fails before
+// anything is queued. A write on a closed tunnel or closed sending direction
+// throws when called. A successful finish stays idempotent after transport
+// retirement.
 class http_client_tunnel final {
 public:
     http_client_tunnel(const http_client_tunnel&) = delete;
@@ -347,38 +345,14 @@ public:
         return response_.informational_responses();
     }
     std::span<const http_client_informational_response> informational_responses() const&& = delete;
-    [[nodiscard]] task<std::optional<std::span<const std::byte>>> read(operation_options operation = {}) &;
-    task<std::optional<std::span<const std::byte>>> read(operation_options = {}) && = delete;
-    [[nodiscard]] task<std::optional<std::string_view>> text(operation_options operation = {}) &;
-    task<std::optional<std::string_view>> text(operation_options = {}) && = delete;
-    // Owns `bytes` before returning; exact std::string rvalues move without copying.
-    [[nodiscard]] task<void> write(outbound_bytes bytes, operation_options operation = {}) &;
-    task<void> write(outbound_bytes, operation_options = {}) && = delete;
-    // A successful finish stays idempotent after transport retirement.
-    [[nodiscard]] task<void> finish(operation_options operation = {}) &;
-    task<void> finish(operation_options = {}) && = delete;
-    void abort() & noexcept;
-    void abort() && = delete;
-    // Transfers tunnel ownership to the Capsule Protocol adapter.
-    [[nodiscard]] http_capsule_stream capsules(http_capsule_config config = {}) &&;
-    http_capsule_stream capsules(http_capsule_config = {}) & = delete;
-    // Checked ownership transfers for accepted, negotiated datagram/CONNECT-UDP
-    // tunnels. Ordinary CONNECT throws std::logic_error without consuming this
-    // owner. The Capsule Protocol limits apply directly to encoded datagrams.
-    [[nodiscard]] http_datagram_stream datagrams(http_capsule_config config = {}) &&;
-    http_datagram_stream datagrams(http_capsule_config = {}) & = delete;
-    [[nodiscard]] http_udp_tunnel udp(http_capsule_config config = {}) &&;
-    http_udp_tunnel udp(http_capsule_config = {}) & = delete;
+    // Throws std::logic_error once this owner has been moved from.
+    [[nodiscard]] http_tunnel& stream() & RUVIA_LIFETIMEBOUND;
+    http_tunnel& stream() && = delete;
 
 private:
     friend class detail::http_client_pool;
     friend class detail::http_client_websocket_transport;
-    friend class detail::http_capsule_stream_state;
-    friend class http_capsule_stream;
     explicit http_client_tunnel(http_client_response response) noexcept;
-    // abort() for received content that violates the tunnel's protocol (RFC 9297
-    // section 3.3 capsule error): HTTP/2 resets the stream with PROTOCOL_ERROR.
-    void abort_malformed() & noexcept;
     void release() noexcept;
     http_client_response response_;
 };
@@ -402,9 +376,6 @@ public:
 
 private:
     friend class detail::http_client_pool;
-    friend class detail::http_capsule_stream_state;
-    friend class http_capsule_stream;
-    friend class http_datagram_stream;
     explicit http_client_tunnel_result(http_client_tunnel tunnel) noexcept :
         value_(std::move(tunnel)) {}
     explicit http_client_tunnel_result(http_client_response response) noexcept :

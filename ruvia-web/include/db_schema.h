@@ -2,7 +2,6 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <initializer_list>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -70,10 +69,7 @@ public:
     void begin_for_query(std::string_view target, const db_query& query);
     void begin_foreach(std::string_view target, const db_expr& array, unsigned slice = 0);
     void end_loop();
-    void execute_dynamic(const db_expr& command, std::span<const db_expr> using_args = {});
-    void execute_dynamic(const db_expr& command, std::initializer_list<db_expr> using_args) {
-        execute_dynamic(command, std::span<const db_expr>(using_args.begin(), using_args.size()));
-    }
+    void execute_dynamic(const db_expr& command, argument_list<db_expr> using_args = {});
     void lock_table(std::string_view table, db_table_lock_mode mode = db_table_lock_mode::access_exclusive, bool nowait = false);
     void return_value(const db_expr& expression = {});
     void raise_exception(std::string_view message, std::string_view sql_state = "P0001");
@@ -198,7 +194,7 @@ struct db_table_definition final {
 struct db_index_key final {
     borrowed_text column_{};
     db_expr expression_{};
-    db_order_direction order_{db_order_direction::asc};
+    order_direction order_{order_direction::asc};
     db_nulls_order nulls_{db_nulls_order::default_};
     borrowed_text operator_class_{};
 };
@@ -249,7 +245,7 @@ struct db_hypertable_options final {
 };
 struct db_compression_order final {
     borrowed_text column_{};
-    db_order_direction direction_{db_order_direction::asc};
+    order_direction direction_{order_direction::asc};
     db_nulls_order nulls_{db_nulls_order::default_};
 };
 struct db_compression_options final {

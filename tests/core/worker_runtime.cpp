@@ -1001,7 +1001,7 @@ TEST(Ruvia, event_loop_cleanup_drains_owned_inputs_after_business_admission_clos
         return hold_retirement(gate, retirement_started);
     });
     pool.start();
-    pool.stop();
+    pool.request_stop();
     retirement_started.get_future().get();
     bool ran{};
     bool inputs_destroyed_on_owner{};
@@ -1043,7 +1043,7 @@ TEST(Ruvia, event_loop_draining_post_can_schedule_defer_cleanup_after_stop) {
         });
     }),
         ruvia::post_status::accepted);
-    pool.stop();
+    pool.request_stop();
     pool.join();
     EXPECT_TRUE(post_ran);
     EXPECT_TRUE(cleanup_scheduled);
@@ -1176,7 +1176,7 @@ TEST(Ruvia, WorkerRefPostPayloadReturnsRefusedPayload) {
     ruvia::event_loop_pool loops({.loop_count_ = 1, .queue_capacity_ = 1});
     const auto worker_value = loops.loop(0).worker();
     std::promise<int> ran;
-    auto accepted = ruvia::detail::worker_ref_access::post_payload(worker_value, std::make_unique<int>(3), [&ran](std::unique_ptr<int>&& value) -> ruvia::move_only_function<void()> {
+    auto accepted = worker_value.post_payload(std::make_unique<int>(3), [&ran](std::unique_ptr<int>&& value) -> ruvia::move_only_function<void()> {
         return [value = std::move(value), &ran] {
             ran.set_value(*value);
         };
@@ -1184,7 +1184,7 @@ TEST(Ruvia, WorkerRefPostPayloadReturnsRefusedPayload) {
     EXPECT_TRUE(accepted.accepted());
     EXPECT_EQ(accepted.rejected(), nullptr);
     bool wrapped_refused = false;
-    auto refused = ruvia::detail::worker_ref_access::post_payload(worker_value, std::make_unique<int>(4), [&wrapped_refused](std::unique_ptr<int>&&) -> ruvia::move_only_function<void()> {
+    auto refused = worker_value.post_payload(std::make_unique<int>(4), [&wrapped_refused](std::unique_ptr<int>&&) -> ruvia::move_only_function<void()> {
         wrapped_refused = true;
         return [] {};
     });
@@ -1192,7 +1192,7 @@ TEST(Ruvia, WorkerRefPostPayloadReturnsRefusedPayload) {
     EXPECT_FALSE(wrapped_refused);
     ASSERT_NE(refused.rejected(), nullptr);
     EXPECT_EQ(**refused.rejected(), 4);
-    auto unbound = ruvia::detail::worker_ref_access::post_payload(ruvia::worker_ref{}, std::make_unique<int>(5), [](std::unique_ptr<int>&&) -> ruvia::move_only_function<void()> {
+    auto unbound = ruvia::worker_ref{}.post_payload(std::make_unique<int>(5), [](std::unique_ptr<int>&&) -> ruvia::move_only_function<void()> {
         return [] {};
     });
     EXPECT_EQ(unbound.status(), ruvia::post_status::stopping);
@@ -1201,7 +1201,7 @@ TEST(Ruvia, WorkerRefPostPayloadReturnsRefusedPayload) {
     auto future = ran.get_future();
     ASSERT_EQ(future.wait_for(std::chrono::seconds(10)), std::future_status::ready);
     EXPECT_EQ(future.get(), 3);
-    loops.stop();
+    loops.request_stop();
     loops.join();
 }
 

@@ -82,7 +82,7 @@ web_worker_post_result web_worker_ref::post_task(move_only_function<task<void>(w
         return dispatch_->post(std::move(task_value));
     }
     // A handle without a worker refuses with worker_stopping and returns the task.
-    return detail::worker_ref_access::post_payload(worker_ref(), std::move(task_value), [](move_only_function<task<void>(web_worker_context&)>&&) -> move_only_function<void()> {
+    return worker_ref().post_payload(std::move(task_value), [](move_only_function<task<void>(web_worker_context&)>&&) -> move_only_function<void()> {
         std::terminate();  // An empty handle never admits.
     });
 }
@@ -141,7 +141,7 @@ web_worker_post_result web_worker_dispatch::post(job_type job) {
     // for an accepted post and destroys an unrun job on abandonment.
     outstanding_.fetch_add(1, std::memory_order_acq_rel);
     abandon_reservation_type reservation(this);
-    auto result = detail::worker_ref_access::post_payload(worker_, std::move(job), [&reservation](job_type&& admitted) -> move_only_function<void()> {
+    auto result = worker_.post_payload(std::move(job), [&reservation](job_type&& admitted) -> move_only_function<void()> {
         return [job = std::move(admitted), reservation = std::move(reservation)]() mutable {
             reservation.release()->start(std::move(job));
         };
@@ -229,7 +229,7 @@ web_worker_runtime::web_worker_runtime(std::span<const http_server_listener_defi
     http3_worker_placement http3_placement
 #endif
     ) :
-    runtime_({.queue_capacity_ = validated_options.server_.worker_queue_capacity_, .io_policy_ = ruvia::worker_io_policy::single_owner, .blocking_pool_ = pool}),
+    runtime_({.queue_capacity_ = validated_options.worker_queue_capacity_, .io_policy_ = ruvia::worker_io_policy::single_owner, .blocking_pool_ = pool}),
     io_context_(runtime_.io_context()),
     finalize_signal_(runtime_.worker()),
     routes_(routes_value),

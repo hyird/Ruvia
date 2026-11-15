@@ -31,6 +31,7 @@
 #include "http_request.h"
 #include "http_response_body.h"
 #include "http_status.h"
+#include "http_tunnel.h"
 #include "io_operation.h"
 #include "operation_options.h"
 #include "operation_scope.h"
@@ -348,16 +349,41 @@ private:
     bool active_{false};
 };
 
+// The client half of an http_tunnel. Embedded in its response state, which
+// the entries below receive as their target, so the tunnel's address survives
+// moves of the public http_client_tunnel owner.
 class http_client_tunnel_state final {
 public:
-    http_client_tunnel_state(const worker_ref& worker_value, http_client_tunnel_config config) :
-        output_(worker_value),
-        config_(config) {}
+    http_client_tunnel_state(http_client_response_state& response, http_client_tunnel_config config, bool udp);
+#ifdef RUVIA_ENABLE_HTTP3
+    // An accepted HTTP/3 tunnel carries datagrams natively.
+    void bind_native_datagrams() noexcept;
+#endif
     http_client_output_queue output_;
     http_client_tunnel_config config_;
-    bool udp_{};
+    bool udp_;
     bool accepted_{};
     bool receive_ended_{};
+    http_tunnel stream_;
+
+private:
+    // The http_tunnel entries; `target` is the response state embedding this
+    // tunnel. Each validates when called and returns a cold operation:
+    // - read: an operation of the response's body scope, which the owner's
+    //   release closes. It holds no pin; its caller keeps the state alive.
+    // - write, finish: operations of output_'s scope that pin the response
+    //   state until they complete or are retired cold.
+    // - read_datagram, write_datagram: pool operations outside both scopes
+    //   that hold no pin. Only a capsule operation runs them, and it pins the
+    //   response state for its whole duration.
+    static task<std::optional<std::span<const std::byte>>> read(void* target, operation_options operation);
+    static task<void> write(void* target, std::string&& bytes, operation_options operation);
+    static task<void> finish(void* target, operation_options operation);
+    static void abort(void* target, bool malformed) noexcept;
+#ifdef RUVIA_ENABLE_HTTP3
+    static task<std::optional<http_tunnel_input>> read_datagram(void* target, operation_options operation);
+    static task<bool> write_datagram(void* target, std::string_view bytes, operation_options operation);
+#endif
 };
 
 class http_client_upload_state final {
@@ -518,7 +544,7 @@ public:
     // validated by the facade and timed from here.
     template <typename view>
     [[nodiscard]] task<std::conditional_t<std::is_void_v<view>, void, std::optional<view>>> consume_body(operation_options operation, response_stream_writer* output = nullptr);
-    [[nodiscard]] task<http_client_response_bytes> read_all(std::size_t max_bytes, operation_options operation);
+    [[nodiscard]] task<http_client_response_bytes> collect_body(std::size_t max_bytes, operation_options operation);
     void retain_reference() noexcept;
     void release_reference() noexcept;
     [[nodiscard]] http_client_response_memory_domain& memory_domain() const noexcept {

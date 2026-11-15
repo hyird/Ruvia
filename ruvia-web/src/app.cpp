@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -44,12 +45,31 @@
 #endif
 
 namespace ruvia::detail {
+namespace {
+
+// Validates the whole aggregate before publishing any of it.
+void set_worker_config(app_state& state_value, const application_worker_config& config) {
+    ensure_positive_size(config.worker_count_, "worker count must be greater than zero");
+    if (config.process_signal_handlers_ != process_signal_handler_policy::external_owner && config.process_signal_handlers_ != process_signal_handler_policy::install) {
+        throw std::invalid_argument("process signal handler policy is invalid");
+    }
+    ensure_positive_size(config.worker_queue_capacity_, "worker queue capacity must be greater than zero");
+    if (config.worker_queue_capacity_ == std::numeric_limits<std::size_t>::max()) {
+        throw std::invalid_argument("worker queue capacity must leave a reserved execution slot");
+    }
+    state_value.options_.worker_count_ = config.worker_count_;
+    state_value.options_.worker_queue_capacity_ = config.worker_queue_capacity_;
+    state_value.process_signal_handlers_ = config.process_signal_handlers_;
+}
+
+}  // namespace
 
 app_state::app_state() {
     // listen() keeps loaded TLS credentials here; initializing OpenSSL first registers its atexit cleanup before the app singleton completes, so the app is destroyed first.
     if (OPENSSL_init_ssl(0, nullptr) != 1) {
         throw std::runtime_error("failed to initialize OpenSSL");
     }
+    set_worker_config(*this, application_worker_config{});
 }
 
 app_state::~app_state() = default;
@@ -200,10 +220,12 @@ application& application::document_root(std::nullptr_t) & {
     });
 }
 
-application& application::use_middleware(detail::owned_middleware_descriptor descriptor) & {
-    return detail::mutate_stopped_app(*this, *state_, "cannot add app middleware while app is running", [&descriptor](detail::app_state& state_value) {
-        state_value.configuration_.add_middleware(std::move(descriptor));
-    });
+// Every dispatch_configuration member funnels through this guard.
+void application::edit_configuration(detail::callback_ref<void(detail::app_configuration&)> edit) {
+    auto& state_value = *state_;
+    std::lock_guard lock(state_value.mutex_);
+    detail::ensure_app_not_running(state_value.lifecycle_.active(), "cannot change dispatch configuration while app is running");
+    edit(state_value.configuration_);
 }
 
 application& application::blocking_pool(blocking_pool_options config) & {
@@ -218,49 +240,6 @@ application& application::blocking_pool(std::nullptr_t) & {
     });
 }
 
-application& application::use_worker_state_definition(detail::worker_state_definition definition) & {
-    return detail::mutate_stopped_app(*this, *state_, "cannot register worker state while app is running", [&definition](detail::app_state& state_value) {
-        state_value.configuration_.add_worker_state(std::move(definition));
-    });
-}
-
-application& application::on_error(http_error_handler handler) & {
-    return detail::mutate_stopped_app(*this, *state_, "cannot change error handler while app is running", [handler = detail::own_callback(std::move(handler))](detail::app_state& state_value) mutable {
-        state_value.configuration_.on_error(std::move(handler));
-    });
-}
-
-application& application::on_not_found(http_not_found_handler handler) & {
-    return detail::mutate_stopped_app(*this, *state_, "cannot change not found handler while app is running", [handler = detail::own_callback(std::move(handler))](detail::app_state& state_value) mutable {
-        state_value.configuration_.on_not_found(std::move(handler));
-    });
-}
-
-application& application::on_error(std::nullptr_t) & {
-    return detail::mutate_stopped_app(*this, *state_, "cannot change error handler while app is running", [retired = detail::callback_registration<http_error_handler>()](detail::app_state& state_value) mutable {
-        // The cleared target retires with this lambda, after the app lock.
-        retired = state_value.configuration_.on_error(nullptr);
-    });
-}
-
-application& application::on_not_found(std::nullptr_t) & {
-    return detail::mutate_stopped_app(*this, *state_, "cannot change not found handler while app is running", [retired = detail::callback_registration<http_not_found_handler>()](detail::app_state& state_value) mutable {
-        retired = state_value.configuration_.on_not_found(nullptr);
-    });
-}
-
-application& application::on_error(scoped_error_handler_options options) & {
-    return detail::mutate_stopped_app(*this, *state_, "cannot change error handler while app is running", [prefix = options.prefix_, handler = detail::own_callback(std::move(options.handler_))](detail::app_state& state_value) mutable {
-        state_value.configuration_.on_error(prefix, std::move(handler));
-    });
-}
-
-application& application::on_not_found(scoped_not_found_handler_options options) & {
-    return detail::mutate_stopped_app(*this, *state_, "cannot change not found handler while app is running", [prefix = options.prefix_, handler = detail::own_callback(std::move(options.handler_))](detail::app_state& state_value) mutable {
-        state_value.configuration_.on_not_found(prefix, std::move(handler));
-    });
-}
-
 application& application::load_dotenv(dotenv_options options) & {
     return detail::mutate_stopped_app(*this, *state_, "cannot load dotenv while app is running", [&](detail::app_state& state_value) {
         state_value.env_.load_dotenv(options);
@@ -270,6 +249,12 @@ application& application::load_dotenv(dotenv_options options) & {
 application& application::load_dotenv(const std::filesystem::path& path, dotenv_options options) & {
     return detail::mutate_stopped_app(*this, *state_, "cannot load dotenv while app is running", [&](detail::app_state& state_value) {
         state_value.env_.load_dotenv(path, options);
+    });
+}
+
+application& application::workers(application_worker_config config) & {
+    return detail::mutate_stopped_app(*this, *state_, "cannot change worker config while app is running", [&config](detail::app_state& state_value) {
+        detail::set_worker_config(state_value, config);
     });
 }
 
@@ -310,21 +295,15 @@ application& application::on_stop(std::nullptr_t) & {
     });
 }
 
-application& application::rate_limit(rate_limit_config config) & {
-    return detail::mutate_stopped_app(*this, *state_, "cannot change the default rate limit per worker while app is running", [config](detail::app_state& state_value) {
-        state_value.options_.set_rate_limit(config);
-    });
-}
-
-application& application::rate_limit(std::nullptr_t) & {
-    return detail::mutate_stopped_app(*this, *state_, "cannot change the default rate limit per worker while app is running", [](detail::app_state& state_value) {
-        state_value.options_.clear_rate_limit();
-    });
-}
-
 application& application::trusted_proxies(trusted_proxy_config config) & {
     return detail::mutate_stopped_app(*this, *state_, "cannot change trusted proxies while app is running", [config = std::move(config)](detail::app_state& state_value) {
         state_value.options_.set_trusted_proxies(config);
+    });
+}
+
+application& application::trusted_proxies(std::nullptr_t) & {
+    return detail::mutate_stopped_app(*this, *state_, "cannot change trusted proxies while app is running", [](detail::app_state& state_value) {
+        state_value.options_.clear_trusted_proxies();
     });
 }
 

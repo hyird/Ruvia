@@ -239,4 +239,36 @@ private:
     std::span<const element_type> values_{};
 };
 
+// Read-only element list taken by value as a function parameter and consumed
+// before that function returns. Unlike borrowed_span it also binds a braced
+// list and temporary containers: their storage lasts for the full call
+// expression, which is all a synchronous consumer needs. It can be neither
+// copied nor moved, so it cannot be returned, captured or stored in a member.
+template <typename element_type>
+class argument_list final {
+public:
+    constexpr argument_list() noexcept = default;
+
+    constexpr argument_list(std::span<const element_type> values) noexcept :
+        values_(values) {}
+
+    constexpr argument_list(std::initializer_list<element_type> values) noexcept :
+        values_(values.begin(), values.size()) {}
+
+    template <typename range_type>
+        requires(!std::same_as<std::remove_cvref_t<range_type>, argument_list>) && std::ranges::contiguous_range<range_type> && std::ranges::sized_range<range_type> && std::same_as<std::remove_cv_t<std::ranges::range_value_t<range_type>>, element_type>
+    constexpr argument_list(range_type&& values) noexcept :
+        values_(std::ranges::data(values), std::ranges::size(values)) {}
+
+    argument_list(const argument_list&) = delete;
+    argument_list& operator=(const argument_list&) = delete;
+
+    [[nodiscard]] constexpr std::span<const element_type> span() const noexcept {
+        return values_;
+    }
+
+private:
+    std::span<const element_type> values_{};
+};
+
 }  // namespace ruvia

@@ -813,7 +813,7 @@ concept borrows_temporary_command = requires(command_type command) { std::move(c
 static_assert(!borrows_temporary_command<ruvia::redis_compiled_command>);
 // Sort fields come only from typed field references.
 static_assert(!std::is_aggregate_v<ruvia::redis_find_order>);
-static_assert(!std::is_constructible_v<ruvia::redis_find_order, std::string_view, ruvia::redis_order_direction>);
+static_assert(!std::is_constructible_v<ruvia::redis_find_order, std::string_view, ruvia::order_direction>);
 static_assert(std::is_same_v<decltype(std::declval<const ruvia::redis_error&>().code()), ruvia::backend_error_code>);
 }  // namespace
 
@@ -1738,7 +1738,7 @@ TEST(Ruvia, redis_client_runs_on_its_event_loop_and_retains_results) {
     }
     EXPECT_TRUE(rejected);
     pool.loop(0).start(check_commands(client)).get();
-    pool.stop();
+    pool.request_stop();
     pool.join();
 }
 
@@ -1788,7 +1788,7 @@ TEST(Ruvia, redis_value_copy_assignment_from_its_own_subtree) {
     ruvia::redis_client client(pool.loop(0), peer.config());
     pool.start();
     pool.loop(0).start(check_self_nested_copy(client)).get();
-    pool.stop();
+    pool.request_stop();
     pool.join();
 }
 
@@ -1808,7 +1808,7 @@ TEST(Ruvia, redis_pool_replaces_an_idle_connection_the_peer_closed) {
     ruvia::redis_client client(pool.loop(0), peer.config());
     pool.start();
     pool.loop(0).start(check_reconnect_after_peer_close(client, peer)).get();
-    pool.stop();
+    pool.request_stop();
     pool.join();
 }
 
@@ -2110,7 +2110,7 @@ TEST(Ruvia, redis_client_loop_stop_cancels_and_joins_pending_commands) {
     pool.start();
     auto pending = pool.loop(0).start(blocked_command(client));
     peer.wait_for_blocked_command();
-    pool.stop();
+    pool.request_stop();
     bool cancelled = false;
     try {
         std::move(pending).get();
@@ -2142,7 +2142,7 @@ TEST(Ruvia, redis_client_close_and_shutdown_waiters_join_pending_commands) {
     std::move(closing).get();
     std::move(also_closing).get();
     pool.loop(0).start(client.shutdown()).get();
-    pool.stop();
+    pool.request_stop();
     pool.join();
     EXPECT_TRUE(cancelled);
     EXPECT_TRUE(!group.token().stop_requested());
@@ -2166,7 +2166,7 @@ TEST(Ruvia, redis_client_event_loop_stop_awaits_retirement_of_pending_authentica
             }
         });
         peer.wait_for_blocked_command();
-        attachment.stop();
+        attachment.request_stop();
         driver.join();
         std::move(root).get();
         EXPECT_TRUE(cancelled);
@@ -2238,7 +2238,7 @@ TEST(Ruvia, redis_client_fresh_close_and_loop_stop_share_worker_completion) {
             client.close();
         });
         rendezvous.arrive_and_wait();
-        pool.stop();
+        pool.request_stop();
         closer.join();
         pool.join();
         EXPECT_TRUE(!client.worker().accepting());

@@ -15,6 +15,7 @@
 #include "task.h"
 #include "timeout_duration.h"
 #include "worker_ref.h"
+#include "worker_runtime.h"
 #include "worker_timer.h"
 
 namespace ruvia::detail {

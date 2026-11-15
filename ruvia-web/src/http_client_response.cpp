@@ -971,7 +971,7 @@ task<std::optional<std::span<const std::byte>>> http_client_response_body::read(
     return state_value.body_operation_scope_.attach(state_value.consume_body<std::span<const std::byte>>(std::move(operation)));
 }
 
-task<std::optional<std::string_view>> http_client_response_body::text(operation_options operation) & {
+task<std::optional<std::string_view>> http_client_response_body::read_text(operation_options operation) & {
     auto& state_value = require_response_body_state(state_);
     return state_value.body_operation_scope_.attach(state_value.consume_body<std::string_view>(std::move(operation)));
 }
@@ -1033,12 +1033,12 @@ template task<std::optional<std::span<const std::byte>>> detail::http_client_res
 template task<std::optional<std::string_view>> detail::http_client_response_state::consume_body<std::string_view>(operation_options, response_stream_writer*);
 template task<void> detail::http_client_response_state::consume_body<void>(operation_options, response_stream_writer*);
 
-task<http_client_response_bytes> http_client_response_body::read_all(std::size_t max_bytes, operation_options operation) & {
+task<http_client_response_bytes> http_client_response::bytes(std::size_t max_bytes, operation_options operation) & {
     auto& state_value = require_response_body_state(state_);
-    return state_value.body_operation_scope_.attach(state_value.read_all(max_bytes, std::move(operation)));
+    return state_value.body_operation_scope_.attach(state_value.collect_body(max_bytes, std::move(operation)));
 }
 
-task<http_client_response_bytes> detail::http_client_response_state::read_all(std::size_t max_bytes, operation_options operation) {
+task<http_client_response_bytes> detail::http_client_response_state::collect_body(std::size_t max_bytes, operation_options operation) {
     auto& state_value = *this;
     auto activity = claim_operation_lane(state_value.body_operation_active_, "HTTP client response body operation is already active");
     const http_client_operation_interruption interruption(state_value, http_client_operation_lane::read, operation);
@@ -1064,7 +1064,7 @@ task<http_client_response_bytes> detail::http_client_response_state::read_all(st
     const auto remaining = state_value.buffered_.size() - state_value.offset_;
     const auto effective_limit = std::min(max_bytes, state_value.buffered_limit_);
     if (state_value.pending_.size() > effective_limit || remaining > effective_limit - state_value.pending_.size()) {
-        throw http_client_error(make_error_code(http_client_errc::response_too_large), "HTTP response body exceeds read_all byte limit", std::nullopt, state_value.connection_info_.id_ != 0 ? &state_value.connection_info_ : nullptr, state_value.request_written_);
+        throw http_client_error(make_error_code(http_client_errc::response_too_large), "HTTP response body exceeds its collection byte limit", std::nullopt, state_value.connection_info_.id_ != 0 ? &state_value.connection_info_ : nullptr, state_value.request_written_);
     }
     const auto total_remaining = remaining + state_value.pending_.size();
     if (total_remaining == 0) {
@@ -1094,7 +1094,7 @@ task<void> http_client_response_body::pipe_to(response_stream_writer& output, op
 }
 
 std::optional<std::string_view> http_client_response::header(std::string_view name) const& {
-    return detail::find_first_http_header(require_response_state(state_).headers_, name);
+    return find_first_http_header(require_response_state(state_).headers_, name);
 }
 
 http_unique_field_lookup http_client_response::unique_header(std::string_view name) const& {
@@ -1102,7 +1102,7 @@ http_unique_field_lookup http_client_response::unique_header(std::string_view na
 }
 
 std::optional<std::string_view> http_client_response::trailer(std::string_view name) const& {
-    return detail::find_first_http_header(require_response_state(state_).trailers_, name);
+    return find_first_http_header(require_response_state(state_).trailers_, name);
 }
 
 task<void> http_client_response::pipe_to(context& output, operation_options operation) & {
@@ -1110,7 +1110,7 @@ task<void> http_client_response::pipe_to(context& output, operation_options oper
 }
 
 task<void> http_client_response::pipe_to(request_stream& output, operation_options operation) & {
-    return pipe_to_destination(output.context_.stream_head(), output.response(), output.operation_scope_, std::move(operation));
+    return pipe_to_destination(output.context_.stream_head(), output.stream(), output.operation_scope_, std::move(operation));
 }
 
 task<void> http_client_response::pipe_to_destination(http_response& head, response_stream_writer& writer, detail::operation_scope& destination, operation_options operation) {

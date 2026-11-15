@@ -169,31 +169,12 @@ task<void> db_transaction::finish_task(detail::request_io_metrics* io_metrics, o
     operation.finish_closed();
 }
 
-task<db_exec_result> db_transaction::execute_query(const db_query& query) {
-    registration_.require_active();
-    const auto& lease_value = state_->preparation_payload();
-    auto statement = query.compile(detail::db_pool_driver(lease_value.client_));
-    if (statement.returns_rows()) {
-        throw std::invalid_argument("execute requires a statement without returned rows");
-    }
-    return run_statement<db_exec_result, true>(std::move(statement.sql_), std::move(statement.params_));
+task<db_rows> db_transaction::start_query(std::string sql, std::vector<db_value> params) {
+    return run_statement<db_rows, false>(std::move(sql), std::move(params));
 }
 
-task<db_exec_result> db_transaction::execute_prepared(std::string sql) {
-    registration_.require_active();
-    return run_statement<db_exec_result, true>(std::move(sql), std::vector<db_value>{});
-}
-
-task<db_rows> db_transaction::query(std::string_view sql, std::span<const db_value> params) & {
-    registration_.require_active();
-    auto statement = prepare_db_statement(sql, params);
-    return run_statement<db_rows, false>(std::move(statement.sql_), std::move(statement.params_));
-}
-
-task<db_exec_result> db_transaction::execute(std::string_view sql, std::span<const db_value> params) & {
-    registration_.require_active();
-    auto statement = prepare_db_statement(sql, params);
-    return run_statement<db_exec_result, true>(std::move(statement.sql_), std::move(statement.params_));
+task<db_exec_result> db_transaction::start_execute(std::string sql, std::vector<db_value> params) {
+    return run_statement<db_exec_result, true>(std::move(sql), std::move(params));
 }
 
 task<void> db_transaction::commit() & {

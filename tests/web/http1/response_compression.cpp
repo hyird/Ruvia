@@ -42,7 +42,7 @@ namespace {
 // Every fixture passes the same configuration: whichever case runs first
 // fixes the shared application's server_config.
 [[nodiscard]] ruvia::server_config compressing_server() {
-    return {.worker_count_ = 1, .connection_scan_interval_ = std::chrono::milliseconds(5), .compression_ = ruvia::compression_config{.min_bytes_ = 16, .sync_bytes_ = 64 * 1024}};
+    return {.connection_scan_interval_ = std::chrono::milliseconds(5), .compression_ = ruvia::compression_config{.min_bytes_ = 16, .sync_bytes_ = 64 * 1024}};
 }
 
 [[nodiscard]] std::string make_body(std::size_t size, unsigned seed) {

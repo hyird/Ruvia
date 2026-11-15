@@ -835,7 +835,7 @@ private:
     std::exception_ptr failure;
     try {
         auto response = co_await client.client().get("/happy-eyeballs").send();
-        const auto body = co_await response.stream().read_all();
+        const auto body = co_await response.bytes();
         const std::string_view body_text(reinterpret_cast<const char*>(body.bytes().data()), body.size());
         EXPECT_TRUE(body_text == "ok");
     } catch (...) {
@@ -850,7 +850,7 @@ private:
             failure = std::current_exception();
         }
     }
-    attachment.stop();
+    attachment.request_stop();
     if (failure) {
         std::rethrow_exception(failure);
     }
@@ -941,7 +941,7 @@ ruvia::task<void> hold_executor(ruvia::worker_ref worker, std::shared_ptr<held_q
 ruvia::task<void> send_query(ruvia::http_client& client, ruvia::stop_token stop, std::optional<std::error_code>& code) {
     try {
         auto response = co_await client.client().with_options({.stop_token_ = std::move(stop)}).get("/resolve").send();
-        (void)co_await response.stream().read_all();
+        (void)co_await response.bytes();
     } catch (const ruvia::http_client_error& error) {
         code = error.code();
     }
@@ -1038,7 +1038,7 @@ TEST(Ruvia, host_lookup_timeout_cancel_and_shutdown_retire_before_system_work_fi
         if (kind == stop_kind::worker_stop) {
             const bool started = ready_result.wait_for(2s) == std::future_status::ready;
             EXPECT_TRUE(started);
-            pool.stop();
+            pool.request_stop();
             const bool ended = retired_result.wait_for(2s) == std::future_status::ready;
             EXPECT_TRUE(ended);
             if (!started || !ended) {
@@ -1175,7 +1175,7 @@ void exercise_client_connect(unsigned mode) {
                     }
                     EXPECT_TRUE(result_value.response()->status().value() == 407);
                     std::string text{};
-                    while (auto bytes = co_await result_value.response()->stream().text()) {
+                    while (auto bytes = co_await result_value.response()->stream().read_text()) {
                         text.append(*bytes);
                     }
                     EXPECT_TRUE(text == "denied");
@@ -1188,7 +1188,7 @@ void exercise_client_connect(unsigned mode) {
                     EXPECT_TRUE(tunnel.header("x-tunnel") == "owned-metadata");
                     const auto read_greeting = [&]() -> ruvia::task<void> {
                         std::string greeting{};
-                        while (auto bytes = co_await tunnel.read()) {
+                        while (auto bytes = co_await tunnel.stream().read()) {
                             greeting.append(reinterpret_cast<const char*>(bytes->data()), bytes->size());
                         }
                         EXPECT_TRUE(greeting == std::string(100003, 's'));
@@ -1198,12 +1198,12 @@ void exercise_client_connect(unsigned mode) {
                     }
                     for (unsigned part = 0; part != 8; ++part) {
                         std::string payload_value(16384, 't');
-                        auto write = tunnel.write(std::string_view(payload_value));
+                        auto write = tunnel.stream().write(std::string_view(payload_value));
                         payload_value.assign("mutated");
                         co_await std::move(write);
                     }
-                    co_await tunnel.finish();
-                    co_await tunnel.finish();
+                    co_await tunnel.stream().finish();
+                    co_await tunnel.stream().finish();
                     if (mode == 0) {
                         co_await read_greeting();
                     }
@@ -1222,7 +1222,7 @@ void exercise_client_connect(unsigned mode) {
                 failure = std::current_exception();
             }
         }
-        attachment.stop();
+        attachment.request_stop();
     };
     auto root = attachment.loop().start(run());
     attachment.run();
@@ -1329,7 +1329,7 @@ TEST(Ruvia, http1_client_rejected_keep_alive_connect_retires_the_proxy_connectio
                 }
                 EXPECT_TRUE(result_value.response()->status().value() == 407);
                 std::string text{};
-                while (auto bytes = co_await result_value.response()->stream().text()) {
+                while (auto bytes = co_await result_value.response()->stream().read_text()) {
                     text.append(*bytes);
                 }
                 EXPECT_TRUE(text == "denied");
@@ -1337,7 +1337,7 @@ TEST(Ruvia, http1_client_rejected_keep_alive_connect_retires_the_proxy_connectio
             auto response = co_await client.client().get("/after").send();
             EXPECT_TRUE(response.status().value() == 200);
             std::string text{};
-            while (auto bytes = co_await response.stream().text()) {
+            while (auto bytes = co_await response.stream().read_text()) {
                 text.append(*bytes);
             }
             EXPECT_TRUE(text == "ok");
@@ -1354,7 +1354,7 @@ TEST(Ruvia, http1_client_rejected_keep_alive_connect_retires_the_proxy_connectio
                 failure = std::current_exception();
             }
         }
-        attachment.stop();
+        attachment.request_stop();
     };
     auto root = attachment.loop().start(run());
     attachment.run();

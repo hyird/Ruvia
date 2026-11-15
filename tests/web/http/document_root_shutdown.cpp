@@ -74,7 +74,7 @@ TEST(Ruvia, document_root_shutdown_cancels_old_snapshot_lease_and_restarts_refre
     ruvia::document_root_config config;
     config.root_ = directory.path();
     config.refresh_interval_ = 20ms;
-    app.server({.worker_count_ = 3, .connection_scan_interval_ = 5ms}).listen({.address_ = "127.0.0.1", .http_ = endpoint.port()}).use<hold_root_request>().document_root(std::move(config)).on_start([] {
+    app.workers({.worker_count_ = 3}).server({.connection_scan_interval_ = 5ms}).listen({.address_ = "127.0.0.1", .http_ = endpoint.port()}).use<hold_root_request>().document_root(std::move(config)).on_start([] {
         started.release();
     });
     constexpr std::string_view get_version = "GET /version.txt HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n";

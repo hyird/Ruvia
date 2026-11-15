@@ -251,4 +251,10 @@ private:
     std::exception_ptr join_failure_;
 };
 
+// Collects the calling thread's mimalloc heap and forces the shared arenas to
+// purge. Live allocations are untouched. A completely idle thread never runs
+// mimalloc's deferred collection by itself, so a worker that went quiet calls
+// this once on its own thread.
+void collect_thread_heap() noexcept;
+
 }  // namespace ruvia

@@ -459,7 +459,7 @@ public:
     // admission but takes retirement protection, so it can still return false
     // after retirement has begun. Accepted callbacks and their owned inputs
     // retire before the loop can release its execution context. Contrast
-    // worker_ref_access::defer_completion(), the completion, cancellation, and
+    // worker_ref::defer_completion(), the completion, cancellation, and
     // resume lane of an operation the worker already admitted.
     template <typename fn_type>
         requires detail::move_only_function_target<void, fn_type>
@@ -486,7 +486,7 @@ public:
         }
         auto completion = std::make_shared<detail::root_task_state<t_type>>(worker(), state_);
         const auto bound_executor = executor();
-        const auto status = detail::worker_ref_access::post_factory(worker(), [&]() -> move_only_function<void()> {
+        const auto status = worker().post_factory([&]() -> move_only_function<void()> {
             return [bound_executor, retirement_lease = std::move(retirement_lease), launch = detail::root_task_launch_guard<t_type>(std::move(task_value), completion)]() mutable {
                 try {
                     async_start(std::move(*launch.task_), detail::root_task_completion_handler<t_type>(bound_executor, launch.completion_, std::move(retirement_lease)));
@@ -569,7 +569,7 @@ struct event_loop_attachment_options final {
 // or joins a context it does not own.
 //
 // Retirement runs the same stop/finalize sequence as an event_loop_pool loop.
-// stop(), or destroying the attachment, closes admission at once, from any
+// request_stop(), or destroying the attachment, closes admission at once, from any
 // thread, including while another thread is inside run(). Stop callbacks,
 // root tasks, and deferred cleanup then drain, timers are cancelled, and the
 // worker retires on the context's thread. Until then the attachment holds
@@ -605,7 +605,7 @@ public:
     // identity installed. A callback may destroy the attachment during run();
     // the caller-owned context must remain alive until this call returns.
     void run();
-    void stop() noexcept;
+    void request_stop() noexcept;
 
 private:
     explicit event_loop_attachment(std::shared_ptr<detail::event_loop_state> state_value) noexcept;
@@ -615,8 +615,9 @@ private:
 };
 
 // Attach a Ruvia worker to a caller-owned io_context. The caller retains
-// ownership of the context's unrelated work and stop/restart policy; stop()
-// retires only Ruvia-managed work and never cancels unrelated operations.
+// ownership of the context's unrelated work and stop/restart policy;
+// request_stop() retires only Ruvia-managed work and never cancels unrelated
+// operations.
 [[nodiscard]] event_loop_attachment attach_event_loop(asio::io_context& io_context, event_loop_attachment_options options = {});
 
 struct event_loop_pool_options final {
@@ -639,7 +640,8 @@ public:
     event_loop_pool& operator=(event_loop_pool&&) = delete;
 
     void start();
-    void stop() noexcept;
+    // Closes admission on every loop without waiting; safe from any thread.
+    void request_stop() noexcept;
     // Stops the pool and waits for every worker to finish its managed cleanup.
     // If join() happens before start(), it creates short-lived owner threads to
     // drain accepted work and run stop callbacks. Loop handles become invalid

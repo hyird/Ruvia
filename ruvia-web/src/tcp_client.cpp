@@ -295,22 +295,22 @@ tcp_client::~tcp_client() {
     state_->request_close();
 }
 
-task<void> tcp_client::connect(operation_options options) & {
-    return state_->connect(std::move(options));
+task<void> tcp_client::connect(operation_options operation) & {
+    return state_->connect(std::move(operation));
 }
 
 std::string_view tcp_client::alpn() const& {
     return state_->alpn();
 }
-task<std::optional<std::span<const std::byte>>> tcp_client::read(operation_options options) & {
-    return state_->read(std::move(options));
+task<std::optional<std::span<const std::byte>>> tcp_client::read(operation_options operation) & {
+    return state_->read(std::move(operation));
 }
 
-task<void> tcp_client::write(outbound_bytes bytes, operation_options options) & {
-    return state_->write(std::move(bytes).into_string(), std::move(options));
+task<void> tcp_client::write(outbound_bytes bytes, operation_options operation) & {
+    return state_->write(std::move(bytes).into_string(), std::move(operation));
 }
 
-void tcp_client::close() noexcept {
+void tcp_client::abort() noexcept {
     state_->request_close();
 }
 

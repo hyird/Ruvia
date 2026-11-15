@@ -60,29 +60,6 @@ struct db_transaction_options final {
     db_transaction_access_mode access_mode_{db_transaction_access_mode::default_};
 };
 
-enum class db_data_type : unsigned char { inferred,
-    boolean,
-    small_int,
-    integer,
-    big_int,
-    real,
-    double_,
-    text,
-    char_,
-    varchar,
-    numeric,
-    json,
-    jsonb,
-    uuid,
-    date,
-    timestamp,
-    timestamp_tz,
-    interval,
-    inet,
-    cidr,
-    bytea,
-    array };
-
 // Each worker owns a fixed pool per database alias. Standalone db_client uses
 // one pool on its bound event loop; db_migrator uses a dedicated connection.
 // PostgreSQL query() and execute() keep a bounded set of named server-side
@@ -462,12 +439,9 @@ private:
 };
 
 // Result of db_row::find(column). SQL permits repeated result names, so a
-// lookup never picks one of several columns. field_ is meaningful only when
+// lookup never picks one of several columns. value_ is meaningful only when
 // status_ is found and borrows the row's field storage.
-struct db_field_lookup final {
-    unique_lookup_status status_{unique_lookup_status::absent};
-    const db_field* field_{nullptr};
-};
+using db_field_lookup = unique_lookup<const db_field*>;
 
 class db_row final {
 public:
@@ -946,6 +920,7 @@ struct db_result_access final {
 
 }  // namespace detail
 
+class db_executor;
 class db_transaction;
 class db_query;
 template <typename entity_type, typename executor_type>
@@ -1087,7 +1062,163 @@ void validate_db_sql_literal(db_driver actual_driver) {
         }
     }
 }
+
+// db_executor is a pooled handle: copyable, and issuing a command through a
+// const reference or a temporary is safe. db_transaction, the other command
+// surface, owns one leased connection and the state its operations borrow.
+template <typename surface_type>
+concept db_pooled_surface = std::same_as<surface_type, db_executor>;
 }  // namespace detail
+
+// The single SQL command surface, inherited by db_executor and db_transaction
+// the way redis_command_set serves redis_executor and redis_batch.
+//
+// Every entry validates the SQL and clones its parameters into the statement
+// before it returns -- never inside the returned operation -- so argument
+// temporaries only have to outlive the call, not the operation awaited
+// afterwards.
+//
+// Each entry is spelled once per receiver contract. db_executor issues
+// commands through a const reference or a temporary handle. db_transaction
+// issues them only through a mutable lvalue: the operation borrows state the
+// transaction object owns, so a const or temporary transaction finds no entry.
+template <typename surface_type>
+class db_command_set {
+public:
+    [[nodiscard]] task<db_rows> query(std::string_view sql, std::span<const db_value> params = {}) const&
+        requires detail::db_pooled_surface<surface_type>
+    {
+        return query_statement(surface(), sql, params);
+    }
+    [[nodiscard]] task<db_rows> query(std::string_view sql, std::span<const db_value> params = {}) &
+        requires(!detail::db_pooled_surface<surface_type>)
+    {
+        return query_statement(surface(), sql, params);
+    }
+    task<db_rows> query(std::string_view sql, std::initializer_list<db_value> params) const& = delete;
+
+    [[nodiscard]] task<db_exec_result> execute(std::string_view sql, std::span<const db_value> params = {}) const&
+        requires detail::db_pooled_surface<surface_type>
+    {
+        return execute_statement(surface(), sql, params);
+    }
+    [[nodiscard]] task<db_exec_result> execute(std::string_view sql, std::span<const db_value> params = {}) &
+        requires(!detail::db_pooled_surface<surface_type>)
+    {
+        return execute_statement(surface(), sql, params);
+    }
+    task<db_exec_result> execute(std::string_view sql, std::initializer_list<db_value> params) const& = delete;
+
+    // Bound parameters as ordinary arguments: query(sql, id, name). A caller
+    // that already holds a contiguous parameter sequence passes it as a span
+    // instead; a span cannot construct a db_value, so it never reaches here.
+    template <typename... params_type>
+        requires detail::db_pooled_surface<surface_type> && detail::db_parameter_pack<params_type...>
+    [[nodiscard]] task<db_rows> query(std::string_view sql, params_type&&... params) const& {
+        const db_value values[]{detail::make_immediate_db_parameter(std::forward<params_type>(params))...};
+        return query_statement(surface(), sql, values);
+    }
+    template <typename... params_type>
+        requires(!detail::db_pooled_surface<surface_type>) && detail::db_parameter_pack<params_type...>
+    [[nodiscard]] task<db_rows> query(std::string_view sql, params_type&&... params) & {
+        const db_value values[]{detail::make_immediate_db_parameter(std::forward<params_type>(params))...};
+        return query_statement(surface(), sql, values);
+    }
+
+    template <typename... params_type>
+        requires detail::db_pooled_surface<surface_type> && detail::db_parameter_pack<params_type...>
+    [[nodiscard]] task<db_exec_result> execute(std::string_view sql, params_type&&... params) const& {
+        const db_value values[]{detail::make_immediate_db_parameter(std::forward<params_type>(params))...};
+        return execute_statement(surface(), sql, values);
+    }
+    template <typename... params_type>
+        requires(!detail::db_pooled_surface<surface_type>) && detail::db_parameter_pack<params_type...>
+    [[nodiscard]] task<db_exec_result> execute(std::string_view sql, params_type&&... params) & {
+        const db_value values[]{detail::make_immediate_db_parameter(std::forward<params_type>(params))...};
+        return execute_statement(surface(), sql, values);
+    }
+
+    // SQL literal checked at compile time: query<"SELECT ... WHERE id = ?">(id).
+    // The placeholder count must equal the argument count. With the default
+    // db_driver::unspecified the dialect follows the placeholders ('?' is
+    // MariaDB, '$n' PostgreSQL) and a literal mixing both needs an explicit
+    // driver. A dialect other than the connection's throws std::invalid_argument.
+    template <fixed_string sql, db_driver driver = db_driver::unspecified, typename... params_type>
+        requires detail::db_pooled_surface<surface_type> && (detail::db_parameter<params_type> && ...)
+    [[nodiscard]] task<db_rows> query(params_type&&... params) const& {
+        detail::validate_db_sql_literal<sql, driver, sizeof...(params_type)>(surface().query_driver());
+        return query(sql.view(), std::forward<params_type>(params)...);
+    }
+    template <fixed_string sql, db_driver driver = db_driver::unspecified, typename... params_type>
+        requires(!detail::db_pooled_surface<surface_type>) && (detail::db_parameter<params_type> && ...)
+    [[nodiscard]] task<db_rows> query(params_type&&... params) & {
+        detail::validate_db_sql_literal<sql, driver, sizeof...(params_type)>(surface().query_driver());
+        return query(sql.view(), std::forward<params_type>(params)...);
+    }
+
+    template <fixed_string sql, db_driver driver = db_driver::unspecified, typename... params_type>
+        requires detail::db_pooled_surface<surface_type> && (detail::db_parameter<params_type> && ...)
+    [[nodiscard]] task<db_exec_result> execute(params_type&&... params) const& {
+        detail::validate_db_sql_literal<sql, driver, sizeof...(params_type)>(surface().query_driver());
+        return execute(sql.view(), std::forward<params_type>(params)...);
+    }
+    template <fixed_string sql, db_driver driver = db_driver::unspecified, typename... params_type>
+        requires(!detail::db_pooled_surface<surface_type>) && (detail::db_parameter<params_type> && ...)
+    [[nodiscard]] task<db_exec_result> execute(params_type&&... params) & {
+        detail::validate_db_sql_literal<sql, driver, sizeof...(params_type)>(surface().query_driver());
+        return execute(sql.view(), std::forward<params_type>(params)...);
+    }
+
+protected:
+    db_command_set() noexcept = default;
+    db_command_set(const db_command_set&) noexcept = default;
+    db_command_set(db_command_set&&) noexcept = default;
+    db_command_set& operator=(const db_command_set&) noexcept = default;
+    db_command_set& operator=(db_command_set&&) noexcept = default;
+    ~db_command_set() = default;
+
+private:
+    template <typename, typename>
+    friend class db_repository;
+    template <typename, typename>
+    friend class db_query_builder;
+    template <typename, typename>
+    friend class db_write_query_builder;
+
+    // The surface as its receiver contract sees it: const for the pooled
+    // executor, mutable for the transaction. Starting a statement claims the
+    // transaction's single-operation state and its connection, so no path
+    // below reaches a transaction through const. The surface supplies
+    // query_driver(), start_query(), start_execute(), query_task(),
+    // query_and_count_task() and its capability registration.
+    using surface_reference = std::conditional_t<detail::db_pooled_surface<surface_type>, const surface_type&, surface_type&>;
+    [[nodiscard]] surface_reference surface() const& noexcept
+        requires detail::db_pooled_surface<surface_type>
+    {
+        return static_cast<surface_reference>(*this);
+    }
+    [[nodiscard]] surface_reference surface() & noexcept
+        requires(!detail::db_pooled_surface<surface_type>)
+    {
+        return static_cast<surface_reference>(*this);
+    }
+    [[nodiscard]] static task<db_rows> query_statement(surface_reference receiver, std::string_view sql, std::span<const db_value> params);
+    [[nodiscard]] static task<db_exec_result> execute_statement(surface_reference receiver, std::string_view sql, std::span<const db_value> params);
+    // ORM plumbing: a compiled db_query that returns no rows, trusted SQL
+    // without parameters, and row-returning queries decoded by a mapper.
+    [[nodiscard]] static task<db_exec_result> execute_query(surface_reference receiver, const db_query& query);
+    [[nodiscard]] static task<db_exec_result> execute_prepared(surface_reference receiver, std::string sql);
+    template <typename result_type, typename mapper_type>
+    [[nodiscard]] static task<result_type> query_mapped(surface_reference receiver, const db_query& query, mapper_type mapper) {
+        auto task_value = receiver.query_task(query);
+        return receiver.registration_.attach(detail::map_db_query<result_type>(std::move(task_value), std::move(mapper)));
+    }
+    template <typename result_type, typename mapper_type>
+    [[nodiscard]] static task<std::pair<result_type, std::uint64_t>> query_mapped_and_count(surface_reference receiver, const db_query& query, const db_query& count, mapper_type mapper) {
+        auto task_value = receiver.query_and_count_task(query, count);
+        return receiver.registration_.attach(detail::map_db_query_and_count<result_type>(std::move(task_value), std::move(mapper)));
+    }
+};
 
 // Statement and completion operations are lazy. Inputs are owned before the
 // entry returns, so cold operations may be prepared while a statement runs.
@@ -1102,7 +1233,7 @@ void validate_db_sql_literal(db_driver actual_driver) {
 // releases the transaction's locks; the next operation (commit() and
 // rollback() included) fails with backend_error_code::timeout and ends the
 // transaction.
-class db_transaction final {
+class db_transaction final : public db_command_set<db_transaction> {
 public:
     db_transaction(const db_transaction&) = delete;
     db_transaction& operator=(const db_transaction&) = delete;
@@ -1118,59 +1249,6 @@ public:
     [[nodiscard]] db_repository<entity_type, db_transaction> repository() &;
     template <typename entity_type>
     db_repository<entity_type, db_transaction> repository() && = delete;
-
-    [[nodiscard]] task<db_rows> query(std::string_view sql, std::span<const db_value> params = {}) &;
-    task<db_rows> query(std::string_view, std::span<const db_value> = {}) && = delete;
-    task<db_rows> query(std::string_view, std::initializer_list<db_value>) & = delete;
-    task<db_rows> query(std::string_view, std::initializer_list<db_value>) && = delete;
-    [[nodiscard]] task<db_exec_result> execute(std::string_view sql, std::span<const db_value> params = {}) &;
-    task<db_exec_result> execute(std::string_view, std::span<const db_value> = {}) && = delete;
-    task<db_exec_result> execute(std::string_view, std::initializer_list<db_value>) & = delete;
-    task<db_exec_result> execute(std::string_view, std::initializer_list<db_value>) && = delete;
-
-    // Bound parameters as ordinary arguments, with the same synchronous cloning
-    // and the same temporary-safety as db_executor::query()/execute().
-    // Fixed SQL uses MariaDB placeholders by default; specify postgresql
-    // for numbered parameters. Values are owned by the existing operation path.
-    template <fixed_string sql, db_driver driver = db_driver::unspecified, typename... params_type>
-        requires(detail::db_parameter<params_type> && ...)
-    [[nodiscard]] task<db_rows> query(params_type&&... params) & {
-        detail::validate_db_sql_literal<sql, driver, sizeof...(params_type)>(query_driver());
-        return query(sql.view(), std::forward<params_type>(params)...);
-    }
-    template <fixed_string sql, db_driver driver = db_driver::unspecified, typename... params_type>
-        requires(detail::db_parameter<params_type> && ...)
-    task<db_rows> query(params_type&&...) && = delete;
-
-    template <fixed_string sql, db_driver driver = db_driver::unspecified, typename... params_type>
-        requires(detail::db_parameter<params_type> && ...)
-    [[nodiscard]] task<db_exec_result> execute(params_type&&... params) & {
-        detail::validate_db_sql_literal<sql, driver, sizeof...(params_type)>(query_driver());
-        return execute(sql.view(), std::forward<params_type>(params)...);
-    }
-    template <fixed_string sql, db_driver driver = db_driver::unspecified, typename... params_type>
-        requires(detail::db_parameter<params_type> && ...)
-    task<db_exec_result> execute(params_type&&...) && = delete;
-
-    template <typename... params_type>
-        requires detail::db_parameter_pack<params_type...>
-    [[nodiscard]] task<db_rows> query(std::string_view sql, params_type&&... params) & {
-        const db_value values[]{detail::make_immediate_db_parameter(std::forward<params_type>(params))...};
-        return query(sql, std::span<const db_value>(values));
-    }
-    template <typename... params_type>
-        requires detail::db_parameter_pack<params_type...>
-    task<db_rows> query(std::string_view, params_type&&...) && = delete;
-
-    template <typename... params_type>
-        requires detail::db_parameter_pack<params_type...>
-    [[nodiscard]] task<db_exec_result> execute(std::string_view sql, params_type&&... params) & {
-        const db_value values[]{detail::make_immediate_db_parameter(std::forward<params_type>(params))...};
-        return execute(sql, std::span<const db_value>(values));
-    }
-    template <typename... params_type>
-        requires detail::db_parameter_pack<params_type...>
-    task<db_exec_result> execute(std::string_view, params_type&&...) && = delete;
 
     [[nodiscard]] task<void> commit() &;
     task<void> commit() && = delete;
@@ -1207,6 +1285,7 @@ public:
 
 private:
     friend class db_executor;
+    friend class db_command_set<db_transaction>;
     template <typename, typename>
     friend class db_repository;
     template <typename, typename>
@@ -1215,20 +1294,10 @@ private:
     friend class db_write_query_builder;
 
     [[nodiscard]] db_driver query_driver() const;
-    [[nodiscard]] task<db_exec_result> execute_query(const db_query& query);
-    [[nodiscard]] task<db_exec_result> execute_prepared(std::string sql);
+    [[nodiscard]] task<db_rows> start_query(std::string sql, std::vector<db_value> params);
+    [[nodiscard]] task<db_exec_result> start_execute(std::string sql, std::vector<db_value> params);
     [[nodiscard]] task<db_rows> query_task(const db_query& query);
     [[nodiscard]] task<std::pair<db_rows, db_rows>> query_and_count_task(const db_query& query, const db_query& count);
-    template <typename result_type, typename mapper_type>
-    [[nodiscard]] task<std::pair<result_type, std::uint64_t>> query_mapped_and_count(const db_query& query, const db_query& count, mapper_type mapper) {
-        auto task_value = query_and_count_task(query, count);
-        return registration_.attach(detail::map_db_query_and_count<result_type>(std::move(task_value), std::move(mapper)));
-    }
-    template <typename result_type, typename mapper_type>
-    [[nodiscard]] task<result_type> query_mapped(const db_query& query, mapper_type mapper) {
-        auto task_value = query_task(query);
-        return registration_.attach(detail::map_db_query<result_type>(std::move(task_value), std::move(mapper)));
-    }
     template <typename driver_type>
     friend class detail::db_pool;
 
@@ -1301,7 +1370,7 @@ private:
 };
 #endif
 
-class db_executor final {
+class db_executor final : public db_command_set<db_executor> {
 public:
     db_executor(const db_executor& other) noexcept;
     db_executor& operator=(const db_executor&) = delete;
@@ -1320,55 +1389,15 @@ public:
     template <typename entity_type>
     [[nodiscard]] db_repository<entity_type, db_executor> repository() const;
 
-    [[nodiscard]] task<db_rows> query(std::string_view sql, std::span<const db_value> params = {}) const;
-    task<db_rows> query(std::string_view sql, std::initializer_list<db_value> params) const = delete;
-    [[nodiscard]] task<db_exec_result> execute(std::string_view sql, std::span<const db_value> params = {}) const;
-    task<db_exec_result> execute(std::string_view sql, std::initializer_list<db_value> params) const = delete;
     [[nodiscard]] task<db_stream_result> query_stream(std::string_view sql, std::span<const db_value> params = {}) const;
     task<db_stream_result> query_stream(std::string_view sql, std::initializer_list<db_value> params) const = delete;
-    // Bound parameters as ordinary arguments: query(sql, id, name). Each one is
-    // converted to a db_value and cloned into the prepared statement before the
-    // call returns -- the span overloads below build the statement synchronously,
-    // never inside the returned operation -- so argument temporaries only have to
-    // outlive the call itself, not the operation that is awaited afterwards.
-    //
-    // A caller that already holds a contiguous parameter sequence passes it as a
-    // span instead; a span cannot construct a db_value, so it never reaches here.
-    // Fixed SQL uses MariaDB placeholders by default; specify postgresql
-    // for numbered parameters. Values are owned by the existing operation path.
-    template <fixed_string sql, db_driver driver = db_driver::unspecified, typename... params_type>
-        requires(detail::db_parameter<params_type> && ...)
-    [[nodiscard]] task<db_rows> query(params_type&&... params) const {
-        detail::validate_db_sql_literal<sql, driver, sizeof...(params_type)>(query_driver());
-        return query(sql.view(), std::forward<params_type>(params)...);
-    }
-
-    template <fixed_string sql, db_driver driver = db_driver::unspecified, typename... params_type>
-        requires(detail::db_parameter<params_type> && ...)
-    [[nodiscard]] task<db_exec_result> execute(params_type&&... params) const {
-        detail::validate_db_sql_literal<sql, driver, sizeof...(params_type)>(query_driver());
-        return execute(sql.view(), std::forward<params_type>(params)...);
-    }
-
+    // The variadic and compile-time-checked forms of db_command_set, for a
+    // streamed result.
     template <fixed_string sql, db_driver driver = db_driver::unspecified, typename... params_type>
         requires(detail::db_parameter<params_type> && ...)
     [[nodiscard]] task<db_stream_result> query_stream(params_type&&... params) const {
         detail::validate_db_sql_literal<sql, driver, sizeof...(params_type)>(query_driver());
         return query_stream(sql.view(), std::forward<params_type>(params)...);
-    }
-
-    template <typename... params_type>
-        requires detail::db_parameter_pack<params_type...>
-    [[nodiscard]] task<db_rows> query(std::string_view sql, params_type&&... params) const {
-        const db_value values[]{detail::make_immediate_db_parameter(std::forward<params_type>(params))...};
-        return query(sql, std::span<const db_value>(values));
-    }
-
-    template <typename... params_type>
-        requires detail::db_parameter_pack<params_type...>
-    [[nodiscard]] task<db_exec_result> execute(std::string_view sql, params_type&&... params) const {
-        const db_value values[]{detail::make_immediate_db_parameter(std::forward<params_type>(params))...};
-        return execute(sql, std::span<const db_value>(values));
     }
 
     template <typename... params_type>
@@ -1383,6 +1412,7 @@ public:
 
 private:
     friend class detail::db_registry;
+    friend class db_command_set<db_executor>;
     template <typename, typename>
     friend class db_repository;
     template <typename, typename>
@@ -1391,20 +1421,10 @@ private:
     friend class db_write_query_builder;
 
     [[nodiscard]] db_driver query_driver() const;
-    [[nodiscard]] task<db_exec_result> execute_query(const db_query& query) const;
-    [[nodiscard]] task<db_exec_result> execute_prepared(std::string sql) const;
+    [[nodiscard]] task<db_rows> start_query(std::string sql, std::vector<db_value> params) const;
+    [[nodiscard]] task<db_exec_result> start_execute(std::string sql, std::vector<db_value> params) const;
     [[nodiscard]] task<db_rows> query_task(const db_query& query) const;
     [[nodiscard]] task<std::pair<db_rows, db_rows>> query_and_count_task(const db_query& query, const db_query& count) const;
-    template <typename result_type, typename mapper_type>
-    [[nodiscard]] task<std::pair<result_type, std::uint64_t>> query_mapped_and_count(const db_query& query, const db_query& count, mapper_type mapper) const {
-        auto task_value = query_and_count_task(query, count);
-        return registration_.attach(detail::map_db_query_and_count<result_type>(std::move(task_value), std::move(mapper)));
-    }
-    template <typename result_type, typename mapper_type>
-    [[nodiscard]] task<result_type> query_mapped(const db_query& query, mapper_type mapper) const {
-        auto task_value = query_task(query);
-        return registration_.attach(detail::map_db_query<result_type>(std::move(task_value), std::move(mapper)));
-    }
 
     // cache is nullptr when the alias has no query cache; without Redis
     // support it is always nullptr. `io_metrics` is the request's counter

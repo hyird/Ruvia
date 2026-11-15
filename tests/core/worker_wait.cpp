@@ -190,7 +190,7 @@ task<void> exercise_semaphore(const worker_ref& worker_value, std::binary_semaph
 
 task<void> wait_through_stop(event_loop_attachment& attachment, worker_semaphore& semaphore, bool& stopping) {
     asio::post(attachment.loop().executor(), [&attachment] {
-        attachment.stop();
+        attachment.request_stop();
     });
     stopping = (co_await semaphore.acquire()).status() == wait_status::worker_stopping;
 }
@@ -246,7 +246,7 @@ TEST(Ruvia, WorkerShutdownRegistrationRunsBothPhasesOnce) {
         EXPECT_TRUE(detail::worker_ref_access::register_shutdown(worker_value, dropped, &counting_observer::registration_));
         // Destroying the owner unlinks it before the worker stops.
         dropped.reset();
-        attachment.stop();
+        attachment.request_stop();
         io_context.run();
         EXPECT_FALSE(detail::worker_ref_access::register_shutdown(worker_value, std::make_shared<counting_observer>(), &counting_observer::registration_));
     }
@@ -269,14 +269,14 @@ TEST(Ruvia, WorkerCompletionLaneBypassesFullQueue) {
         ++ran;
     }).status(),
         post_status::queue_full);
-    EXPECT_TRUE(detail::worker_ref_access::defer_completion(worker_value, [&ran] {
+    EXPECT_TRUE(worker_value.defer_completion([&ran] {
         ran += 10;
     }));
-    EXPECT_THROW(static_cast<void>(detail::worker_ref_access::defer_completion(worker_value, move_only_function<void()>{})), std::invalid_argument);
+    EXPECT_THROW(static_cast<void>(worker_value.defer_completion(move_only_function<void()>{})), std::invalid_argument);
     io_context.run_one();
     io_context.poll();
     EXPECT_EQ(ran, 11);
-    attachment.stop();
+    attachment.request_stop();
     io_context.run();
     bool destroyed = false;
     struct destruction_flag final {
@@ -292,9 +292,9 @@ TEST(Ruvia, WorkerCompletionLaneBypassesFullQueue) {
             }
         }
     };
-    EXPECT_FALSE(detail::worker_ref_access::defer_completion(worker_value, [flag = destruction_flag(destroyed)] {}));
+    EXPECT_FALSE(worker_value.defer_completion([flag = destruction_flag(destroyed)] {}));
     EXPECT_TRUE(destroyed);
-    EXPECT_FALSE(detail::worker_ref_access::defer_completion(worker_ref{}, [] {}));
+    EXPECT_FALSE(worker_ref{}.defer_completion([] {}));
 }
 
 TEST(Ruvia, WorkerWaitResultFactoriesFixCategory) {
@@ -454,7 +454,7 @@ bool test_completion_move_can_close_receiver(bool stop_worker) {
     bool closed_during_move = false;
     const auto close = [&] {
         if (stop_worker) {
-            attachment.stop();
+            attachment.request_stop();
         } else {
             receiver.close();
         }
@@ -617,7 +617,7 @@ ruvia::task<void> wait_for_value(ruvia::one_shot_receiver<int>& receiver, int ex
 
 ruvia::task<void> wait_for_worker_stopping(ruvia::event_loop_attachment& attachment, ruvia::one_shot_receiver<int>& receiver, bool& success) {
     asio::post(attachment.loop().executor(), [&attachment] {
-        attachment.stop();
+        attachment.request_stop();
     });
     const auto result_value = co_await receiver.wait();
     success = result_value.status() == ruvia::wait_status::worker_stopping && !result_value.has_value();
@@ -627,7 +627,7 @@ ruvia::task<void> settled_outcomes_survive_worker_stopping(ruvia::event_loop_att
     const bool completed = delivered_completion.complete(1).accepted();
     const auto delivered = co_await delivered_receiver.wait();
     closed_receiver.close();
-    attachment.stop();
+    attachment.request_stop();
     const auto duplicate = delivered_completion.complete(2);
     const auto after_consumed = co_await delivered_receiver.wait();
     const auto after_close = closed_completion.complete(3);
@@ -1391,7 +1391,7 @@ ruvia::task<void> exercise_acquire_observes_worker_stop(ruvia::event_loop_attach
     scope.spawn(record_acquire_status(scheduler, {}, queued));
     scope.spawn(record_acquire_status(scheduler, {.timeout_ = std::chrono::seconds(30)}, timed));
     static_cast<void>(worker_value.post([&attachment] {
-        attachment.stop();
+        attachment.request_stop();
     }));
     co_await scope.join();
     const auto saturated = co_await scheduler.acquire({.timeout_ = std::chrono::seconds(30)});

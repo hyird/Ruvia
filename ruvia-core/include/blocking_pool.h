@@ -72,7 +72,7 @@ struct blocking_pool_stats final {
     // small for the offered load.
     std::uint64_t rejected_{0};
     // Tasks that never ran because the pool was stopping -- dropped from the
-    // queue by stop(), or submitted after it. Shutdown accounting, kept apart
+    // queue by request_stop(), or posted after it. Shutdown accounting, kept apart
     // from `rejected` so it cannot be mistaken for overload.
     std::uint64_t discarded_{0};
 };
@@ -81,7 +81,7 @@ struct blocking_pool_stats final {
 // stops accepting work, discards queued tasks, and detaches threads that are
 // already running a callable; those callables may finish after the pool object
 // is gone. Call join() explicitly when the owner must wait for every thread.
-// Copy and move are deleted: submitters hold a reference.
+// Copy and move are deleted: posters hold a reference.
 class blocking_pool final {
 public:
     explicit blocking_pool(blocking_pool_options options = {});
@@ -100,15 +100,15 @@ public:
     // into the queue; a rejection (queue_full, or stopping, including a
     // stop that lands during that move) returns the callable untouched in the
     // result, so the caller decides where it is destroyed. Callable moves and
-    // destruction may query stats(), submit(), or stop(). Admission includes
-    // submissions whose callable move has not finished.
-    [[nodiscard]] post_outcome<> submit(move_only_function<void()> task);
+    // destruction may query stats(), post(), or request_stop(). Admission
+    // includes posts whose callable move has not finished.
+    [[nodiscard]] post_outcome<> post(move_only_function<void()> task);
 
     // Stops accepting, discards tasks that have not started, and wakes the
     // threads. Tasks already running are not interrupted -- a blocking call
     // cannot be -- but nothing waits for their queued successors. Idempotent
     // and safe from any thread.
-    void stop() noexcept;
+    void request_stop() noexcept;
     // Stops the pool and waits for its threads to leave their loops. Joining
     // from one of this pool's own threads would deadlock and throws logic_error
     // before changing the pool's state.
@@ -174,12 +174,12 @@ struct blocking_payload final {
     std::exception_ptr error_;
 };
 
-// Guards the one-shot half a submitted task owns. If the task is destroyed
+// Guards the one-shot half a posted task owns. If the task is destroyed
 // without running -- a stopped pool discards its queue -- the guard still
 // answers the waiting coroutine instead of leaving it suspended forever.
 // Answering or moving releases the completion, which is the answered marker:
 // an empty completion rejects without effect. Holding nothing else keeps the
-// submitted closure within move_only_function's inline storage.
+// posted closure within move_only_function's inline storage.
 template <typename t_type>
 class blocking_completion_guard final {
 public:
@@ -363,7 +363,7 @@ template <typename t_type>
 //
 // The returned task must be awaited on `worker` -- that is the thread the
 // coroutine resumes on and the only thread the result is touched from;
-// awaiting it elsewhere throws std::logic_error before `fn` is submitted. `fn`
+// awaiting it elsewhere throws std::logic_error before `fn` is posted. `fn`
 // is moved into the pool and runs on a foreign thread: it must own everything
 // it uses (see the file header).
 //
@@ -376,7 +376,7 @@ template <typename t_type>
 //
 // Never throws for a rejection; the status says what happened. A worker
 // without a pool, a stop token that is already stopped, or a deadline that has
-// passed rejects without submitting `fn`. Use std::move(result).take_value()
+// passed rejects without posting `fn`. Use std::move(result).take_value()
 // to turn a rejection into an exception and to rethrow the callable's own
 // exception.
 template <typename fn_type>
@@ -394,7 +394,7 @@ template <typename fn_type>
     if (!worker_value.is_current()) {
         throw std::logic_error("blocking work must be awaited on its bound worker");
     }
-    auto* const pool = detail::worker_ref_access::blocking_pool(worker_value);
+    auto* const pool = worker_value.blocking_pool();
     if (pool == nullptr) {
         co_return outcome_type::with_status(blocking_status::unavailable);
     }
@@ -419,7 +419,7 @@ template <typename fn_type>
         co_return outcome_type::with_status(blocking_status::worker_stopping);
     }
     auto& [completion, receiver] = *channel;
-    const auto submitted = pool->submit([guard = detail::blocking_completion_guard<result_type>(std::move(completion)), call = std::move(fn)]() mutable {
+    const auto posted = pool->post([guard = detail::blocking_completion_guard<result_type>(std::move(completion)), call = std::move(fn)]() mutable {
         payload payload_value;
         try {
             if constexpr (std::is_void_v<result_type>) {
@@ -432,10 +432,10 @@ template <typename fn_type>
         }
         guard.answer(std::move(payload_value));
     });
-    if (!submitted.accepted()) {
+    if (!posted.accepted()) {
         // The returned closure is destroyed here; its guard answers the
         // one-shot with pool_stopped, which nobody awaits any more.
-        co_return outcome_type::with_status(submitted.status() == post_status::queue_full ? blocking_status::queue_full : blocking_status::pool_stopped);
+        co_return outcome_type::with_status(posted.status() == post_status::queue_full ? blocking_status::queue_full : blocking_status::pool_stopped);
     }
 
     try {

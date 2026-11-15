@@ -70,8 +70,8 @@ struct loops final {
         second_attachment_.run();
     }};
     ~loops() {
-        first_attachment_.stop();
-        second_attachment_.stop();
+        first_attachment_.request_stop();
+        second_attachment_.request_stop();
         first_thread_.join();
         second_thread_.join();
         pool_.join();
@@ -270,8 +270,8 @@ TEST(Ruvia, connection_descriptions_report_the_event_endpoints) {
                 const std::scoped_lock lock(mutex);
                 served.push_back(stream.conn());
             }
-            if (co_await stream.response().commit() == ruvia::stream_commit_result::body) {
-                co_await stream.response().end();
+            if (co_await stream.stream().commit() == ruvia::stream_commit_result::body) {
+                co_await stream.stream().end();
             }
             handled.release();
         }, .connection_ = [&](ruvia::server_connection& connection) -> ruvia::task<void> {
@@ -370,9 +370,9 @@ TEST(Ruvia, quic_wildcard_connections_report_destination_and_reply_from_that_add
             return ruvia::http_server_callbacks{.request_stream_ = [&](ruvia::request_stream& stream) -> ruvia::task<void> {
                 EXPECT_EQ(stream.conn().local().port(), udp_port);
                 EXPECT_EQ(*std::static_pointer_cast<int>(stream.connection_state()), 7);
-                if (co_await stream.response().commit() == ruvia::stream_commit_result::body) {
-                    co_await stream.response().write(stream.conn().local().address().to_string());
-                    co_await stream.response().end();
+                if (co_await stream.stream().commit() == ruvia::stream_commit_result::body) {
+                    co_await stream.stream().write(stream.conn().local().address().to_string());
+                    co_await stream.stream().end();
                 }
             }, .connection_admission_ = [&](const ruvia::connection_event& event) noexcept {
                 EXPECT_TRUE(event.quic());
@@ -464,7 +464,7 @@ TEST(Ruvia, request_stream_abort_connection_wakes_every_http2_body_reader) {
             }
             entered.release();
             try {
-                (void)co_await stream.body().text();
+                (void)co_await stream.request_body().read_text();
             } catch (const std::system_error&) {
             }
             left.release();
@@ -523,7 +523,7 @@ TEST(Ruvia, request_stream_abort_connection_wakes_every_http3_body_reader) {
             }
             entered.release();
             try {
-                (void)co_await stream.body().text();
+                (void)co_await stream.request_body().read_text();
             } catch (const std::system_error&) {
             }
             left.release();
@@ -594,7 +594,7 @@ TEST(Ruvia, application_hooks_connection_id_control_context_abort_and_virtual_lo
     std::atomic<unsigned> admissions{}, opens{}, closes{};
     std::atomic<std::uint64_t> id{};
     auto& app = ruvia::app();
-    app.server({.worker_count_ = 2})
+    app.workers({.worker_count_ = 2})
         .listen({.address_ = "127.0.0.1", .http_ = port.endpoint().port()})
         .on_start(nullptr)
         .on_start([&] {

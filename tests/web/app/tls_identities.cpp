@@ -388,8 +388,8 @@ struct external_runtime final {
         second_.run();
     }};
     ~external_runtime() {
-        first_.stop();
-        second_.stop();
+        first_.request_stop();
+        second_.request_stop();
     }
 };
 
@@ -401,7 +401,7 @@ struct held_pool_job final {
     bool released_{false};
 
     explicit held_pool_job(ruvia::blocking_pool& pool) {
-        if (pool.submit([state = state_] {
+        if (pool.post([state = state_] {
             state->entered_.release();
             state->release_.acquire();
         }) != ruvia::post_status::accepted) {
@@ -507,7 +507,7 @@ TEST(Ruvia, https_selects_identity_by_exact_and_wildcard_sni_then_local_address)
     const asio::ip::tcp::endpoint second(asio::ip::make_address("127.0.0.2"), port);
 
     auto& app = ruvia::app();
-    app.server({.worker_count_ = 2})
+    app.workers({.worker_count_ = 2})
         .listen({
             .address_ = "0.0.0.0",
             .https_ = port,
@@ -580,7 +580,7 @@ TEST(Ruvia, https_identities_are_replaced_at_runtime_for_new_handshakes) {
     listener.http3_ = http3_port;
 #endif
     auto& app = ruvia::app();
-    app.server({.worker_count_ = 2}).listen(listener).on_start(nullptr).on_start([] {
+    app.workers({.worker_count_ = 2}).listen(listener).on_start(nullptr).on_start([] {
         started().release();
     });
     EXPECT_EQ(failure_of([&] {
@@ -751,7 +751,7 @@ TEST(Ruvia, certificate_library_selector_uses_capabilities_rejects_and_preserves
     listener.http3_ = udp.endpoint().port();
 #endif
     auto& app = ruvia::app();
-    app.server({.worker_count_ = 2}).listen(listener).on_start(nullptr).on_start([] {
+    app.workers({.worker_count_ = 2}).listen(listener).on_start(nullptr).on_start([] {
         started().release();
     });
     ruvia::test::app_run runner(app);
@@ -838,9 +838,9 @@ TEST(Ruvia, certificate_library_is_shared_by_independent_single_and_multiworker_
     ruvia::test::udp_port_reservation single_udp(client_io), group_udp(client_io);
 #endif
     const auto answer = [](ruvia::request_stream& stream) -> ruvia::task<void> {
-        if (co_await stream.response().commit() == ruvia::stream_commit_result::body) {
-            co_await stream.response().write("hello");
-            co_await stream.response().end();
+        if (co_await stream.stream().commit() == ruvia::stream_commit_result::body) {
+            co_await stream.stream().write("hello");
+            co_await stream.stream().end();
         }
     };
     const auto selector = std::make_shared<const ruvia::tls_certificate_selector>([](const ruvia::tls_certificate_selection& input) -> std::optional<ruvia::tls_certificate_id> {
@@ -939,7 +939,7 @@ TEST(Ruvia, certificate_selector_retirement_can_schedule_async_application_repla
     std::promise<ruvia::root_task<void>> retirement;
     auto retired = retirement.get_future();
     auto& app = ruvia::app();
-    app.server({.worker_count_ = 2})
+    app.workers({.worker_count_ = 2})
         .listen(
             {.address_ = "127.0.0.1",
                 .https_ = port.endpoint().port(),
@@ -986,9 +986,9 @@ TEST(Ruvia, certificate_selector_retirement_can_schedule_async_member_host_contr
     const ruvia::listener_endpoint single_endpoint{.address_ = "127.0.0.1", .port_ = single_port.endpoint().port()};
     const ruvia::listener_endpoint group_endpoint{.address_ = "127.0.0.1", .port_ = group_port.endpoint().port()};
     const auto answer = [](ruvia::request_stream& stream) -> ruvia::task<void> {
-        if (co_await stream.response().commit() == ruvia::stream_commit_result::body) {
-            co_await stream.response().write("hello");
-            co_await stream.response().end();
+        if (co_await stream.stream().commit() == ruvia::stream_commit_result::body) {
+            co_await stream.stream().write("hello");
+            co_await stream.stream().end();
         }
     };
     std::exception_ptr single_failure, group_failure;
@@ -1068,9 +1068,9 @@ TEST(Ruvia, public_certificate_preparation_leaves_caller_worker_responsive_and_p
     }();
     EXPECT_FALSE(queued_preparation(runtime, std::move(initial)));
     const auto answer = [](ruvia::request_stream& stream) -> ruvia::task<void> {
-        if (co_await stream.response().commit() == ruvia::stream_commit_result::body) {
-            co_await stream.response().write("hello");
-            co_await stream.response().end();
+        if (co_await stream.stream().commit() == ruvia::stream_commit_result::body) {
+            co_await stream.stream().write("hello");
+            co_await stream.stream().end();
         }
     };
     ruvia::http_server single(caller, {.request_stream_ = answer});
@@ -1085,7 +1085,7 @@ TEST(Ruvia, public_certificate_preparation_leaves_caller_worker_responsive_and_p
     group.listen({.address_ = "127.0.0.1", .https_ = group_port.endpoint().port(), .tls_ = {.identity_ = file_identity(first)}, .dispatch_ = ruvia::listener_dispatch::request_stream});
     EXPECT_FALSE(queued_preparation(runtime, group.start(caller.worker())));
     auto& app = ruvia::app();
-    app.server({.worker_count_ = 2}).listen({.address_ = "127.0.0.1", .https_ = app_port.endpoint().port(), .tls_ = {.identity_ = file_identity(first)}}).on_start(nullptr).on_start([] {
+    app.workers({.worker_count_ = 2}).listen({.address_ = "127.0.0.1", .https_ = app_port.endpoint().port(), .tls_ = {.identity_ = file_identity(first)}}).on_start(nullptr).on_start([] {
         started().release();
     });
     ruvia::test::app_run runner(app);

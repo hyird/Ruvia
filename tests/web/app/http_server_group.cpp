@@ -67,8 +67,8 @@ struct external_loops final {
         loops_[1].start(ready()).get();
     }
     ~external_loops() {
-        first_attachment_.stop();
-        second_attachment_.stop();
+        first_attachment_.request_stop();
+        second_attachment_.request_stop();
         if (first_thread_.joinable()) {
             first_thread_.join();
         }
@@ -103,9 +103,9 @@ ruvia::task<void> answer(ruvia::request_stream& stream) {
         body += stream.conn().via_trusted_proxy() ? ":proxy:" : ":direct:";
         body += stream.conn().scheme() == ruvia::http_scheme::https ? "https" : "http";
     }
-    if (co_await stream.response().commit() == ruvia::stream_commit_result::body) {
-        co_await stream.response().write(body);
-        co_await stream.response().end();
+    if (co_await stream.stream().commit() == ruvia::stream_commit_result::body) {
+        co_await stream.stream().write(body);
+        co_await stream.stream().end();
     }
 }
 
@@ -359,7 +359,7 @@ TEST(Ruvia, independent_group_accepts_member_worker_controls_and_coordinates_loo
     auto unrelated_root = runtime.loops_[1].start(unrelated());
     sleeping_result.get();
     runtime.loops_[0].start(retiring.start(runtime.loops_[0].worker())).get();
-    runtime.first_attachment_.stop();
+    runtime.first_attachment_.request_stop();
     auto finished = std::async(std::launch::async, [&] {
         runtime.loops_[1].start(retiring.shutdown(runtime.loops_[1].worker())).get();
     });
@@ -672,7 +672,7 @@ TEST(Ruvia, independent_group_tls_preparation_keeps_caller_live_and_close_cancel
     held_work held(2);
     for (int index = 0; index != 2; ++index) {
         ASSERT_TRUE(runtime.pool_
-                .submit([gate = held.gate_, &occupied] {
+                .post([gate = held.gate_, &occupied] {
             occupied.release();
             gate->acquire();
         }).accepted());
@@ -797,7 +797,7 @@ TEST(Ruvia, independent_group_member_retirement_cancels_pending_cross_worker_add
     };
     auto observed = runtime.loops_[0].start(observe());
     const auto progress = submitted_result.wait_for(2s);
-    runtime.second_attachment_.stop();
+    runtime.second_attachment_.request_stop();
     held.release();
     EXPECT_EQ(progress, std::future_status::ready);
     std::move(observed).get();

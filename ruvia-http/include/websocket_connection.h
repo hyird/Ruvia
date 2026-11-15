@@ -15,6 +15,7 @@
 #include <variant>
 
 #include "borrowed_text.h"
+#include "checked_integer.h"
 #include "http_io_buffer.h"
 #include "http_protocol.h"
 
@@ -38,42 +39,25 @@ enum class websocket_liveness_mode : std::uint8_t { open,
     awaiting_peer_eof,
     inactive };
 
-// The supported Close status space from RFC 6455 section 7.4 and the IANA
-// WebSocket Close Code registry. Role-specific restrictions remain with the
-// connection. Local-only sentinel codes such as 1005/1006 are not wire values.
-class websocket_close_code final {
-public:
-    template <std::integral integer_type>
-    explicit constexpr websocket_close_code(integer_type value) :
-        value_(is_valid_value(value) ? static_cast<std::uint16_t>(value) : throw std::invalid_argument("invalid WebSocket Close status code")) {}
-
-    template <std::integral integer_type>
-    [[nodiscard]] static constexpr std::optional<websocket_close_code> try_from_value(integer_type value) noexcept {
-        if (!is_valid_value(value)) {
-            return std::nullopt;
-        }
-        return websocket_close_code(static_cast<std::uint16_t>(value), validated_tag_type{});
-    }
+namespace detail {
+struct websocket_close_code_policy final {
+    static constexpr bool implicit_conversion = false;
+    static constexpr const char* invalid_value_message = "invalid WebSocket Close status code";
 
     template <std::integral integer_type>
     [[nodiscard]] static constexpr bool is_valid_value(integer_type value) noexcept {
         const auto integer_value = +value;
         return (integer_value >= 1000 && integer_value <= 1003) || (integer_value >= 1007 && integer_value <= 1014) || (integer_value >= 3000 && integer_value <= 4999);
     }
+};
+}  // namespace detail
 
-    [[nodiscard]] constexpr std::uint16_t value() const noexcept {
-        return value_;
-    }
-
-    friend constexpr auto operator<=>(websocket_close_code, websocket_close_code) = default;
-
-private:
-    struct validated_tag_type {};
-
-    constexpr websocket_close_code(std::uint16_t value, validated_tag_type) noexcept :
-        value_(value) {}
-
-    std::uint16_t value_;
+// The supported Close status space from RFC 6455 section 7.4 and the IANA
+// WebSocket Close Code registry. Role-specific restrictions remain with the
+// connection. Local-only sentinel codes such as 1005/1006 are not wire values.
+class websocket_close_code final : public checked_integer<websocket_close_code, std::uint16_t, detail::websocket_close_code_policy> {
+public:
+    using checked_integer::checked_integer;
 };
 
 static_assert(std::is_trivially_copyable_v<websocket_close_code>);

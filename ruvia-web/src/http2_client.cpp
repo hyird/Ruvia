@@ -131,7 +131,7 @@ task<http2_client_session_start_result> http2_client_session::start(http2_connec
         if (ping_interval_) {
             last_input_ = std::chrono::steady_clock::now();
             ping_pending_ = false;
-            schedule_ping(generation, saturating_deadline(last_input_, ping_interval_->value()));
+            schedule_ping(generation, deadline_after(last_input_, ping_interval_->value()));
         }
     } catch (...) {
         const auto failure = std::current_exception();
@@ -291,14 +291,14 @@ void http2_client_session::check_liveness(std::uint64_t generation) noexcept {
             ping_pending_ = false;
         }
         if (ping_pending_) {
-            if (now >= saturating_deadline(ping_sent_at_, interval)) {
+            if (now >= deadline_after(ping_sent_at_, interval)) {
                 fail(generation, {.status_ = client_transport_status::aborted, .abort_ = client_abort_reason::timeout}, {});
             } else {
-                schedule_ping(generation, saturating_deadline(ping_sent_at_, interval));
+                schedule_ping(generation, deadline_after(ping_sent_at_, interval));
             }
             return;
         }
-        if (const auto idle_deadline = saturating_deadline(last_input_, interval); idle_deadline > now) {
+        if (const auto idle_deadline = deadline_after(last_input_, interval); idle_deadline > now) {
             schedule_ping(generation, idle_deadline);
             return;
         }
@@ -309,7 +309,7 @@ void http2_client_session::check_liveness(std::uint64_t generation) noexcept {
         ping_pending_ = true;
         ping_sent_at_ = now;
         wake_writer();
-        schedule_ping(generation, saturating_deadline(now, interval));
+        schedule_ping(generation, deadline_after(now, interval));
     } catch (...) {
         fail(generation, {}, std::current_exception());
     }

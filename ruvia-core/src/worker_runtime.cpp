@@ -434,7 +434,7 @@ public:
             current->next_ = nullptr;
             auto caller = current->caller_;
             const auto continuation = std::exchange(current->continuation_, {});
-            detail::worker_ref_access::defer_resume(caller, continuation);
+            caller.defer_resume(continuation);
         }
 #endif
     }
@@ -758,7 +758,7 @@ void worker_stop_chain::request_stop() noexcept {
         // close() can lose the race to a dispatcher failure that is still
         // notifying listeners. Keep the work guard until all of them have
         // published their cleanup.
-        worker_ref_access::when_shutdown_notifications_complete(context_.worker(), [this] {
+        context_.when_shutdown_notifications_complete([this] {
             {
                 const std::lock_guard lock(mutex_);
                 ++control_posts_;

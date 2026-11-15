@@ -183,8 +183,8 @@ ruvia::task<void> connect_routes::capsules(ruvia::context& context_value) {
 ruvia::task<ruvia::http_response> connect_routes::slow_upload(ruvia::context& context_value) {
     co_await hold_off(context_value);
     std::size_t total = 0;
-    auto& reader = context_value.req().body_reader();
-    while (auto chunk = co_await reader.text()) {
+    auto& reader = context_value.request_body();
+    while (auto chunk = co_await reader.read_text()) {
         total += chunk->size();
     }
     std::string body;
@@ -372,7 +372,7 @@ TEST(Ruvia, http2_connect_routes_echo_large_duplex_streams_and_leave_sibling_req
         (void)watchdog_value.cancel();
         server.finish();
         EXPECT_TRUE(!expired);
-        attachment.stop();
+        attachment.request_stop();
     };
     auto root = attachment.loop().start(run());
     io.run();
@@ -493,7 +493,7 @@ TEST(Ruvia, http2_connect_route_receives_data_sent_before_the_response) {
         (void)watchdog_value.cancel();
         server.finish();
         EXPECT_TRUE(!expired);
-        attachment.stop();
+        attachment.request_stop();
     };
     auto root = attachment.loop().start(run());
     io.run();
@@ -649,7 +649,7 @@ TEST(Ruvia, http2_slow_body_and_tunnel_consumers_return_receive_window_without_p
         (void)watchdog_value.cancel();
         server.finish();
         EXPECT_TRUE(!expired);
-        attachment.stop();
+        attachment.request_stop();
     };
     auto root = attachment.loop().start(run());
     io.run();
@@ -743,7 +743,7 @@ TEST(Ruvia, http2_websocket_request_half_closed_before_handshake_receives_error_
         (void)watchdog_value.cancel();
         server.finish();
         EXPECT_TRUE(!expired);
-        attachment.stop();
+        attachment.request_stop();
     };
     auto root = attachment.loop().start(run());
     io.run();
@@ -841,7 +841,7 @@ TEST(Ruvia, http2_rejected_expectation_discards_request_content_received_during_
         (void)watchdog_value.cancel();
         server.finish();
         EXPECT_TRUE(!expired);
-        attachment.stop();
+        attachment.request_stop();
     };
     auto root = attachment.loop().start(run());
     io.run();
@@ -938,7 +938,7 @@ TEST(Ruvia, http2_capsule_route_resets_truncated_capsule_with_protocol_error) {
         (void)watchdog_value.cancel();
         server.finish();
         EXPECT_TRUE(!expired);
-        attachment.stop();
+        attachment.request_stop();
     };
     auto root = attachment.loop().start(run());
     io.run();
@@ -1033,7 +1033,7 @@ TEST(Ruvia, http2_capsule_route_closed_stream_rejects_truncated_capsule_without_
         }
         ruvia::close_socket(socket);
         server.finish();
-        attachment.stop();
+        attachment.request_stop();
     };
     auto root = attachment.loop().start(run());
     io.run();

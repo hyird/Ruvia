@@ -268,7 +268,7 @@ void check_file_end(bool exhaust_connection) {
         ruvia::close_socket(socket);
         (void)watchdog.cancel();
         server.finish();
-        attachment.stop();
+        attachment.request_stop();
     };
     auto root = attachment.loop().start(run());
     io.run();
@@ -382,7 +382,7 @@ TEST(Ruvia, http2_buffered_response_resumes_after_stream_window_update) {
         ruvia::close_socket(socket);
         (void)watchdog.cancel();
         server.finish();
-        attachment.stop();
+        attachment.request_stop();
     };
     auto root = attachment.loop().start(run());
     io.run();
@@ -486,7 +486,7 @@ TEST(Ruvia, http2_file_body_is_read_only_after_send_window_is_granted) {
         ruvia::close_socket(socket);
         (void)watchdog.cancel();
         server.finish();
-        attachment.stop();
+        attachment.request_stop();
     };
     auto root = attachment.loop().start(run());
     io.run();
@@ -621,7 +621,7 @@ TEST(Ruvia, http2_failed_file_writes_release_output_budget_slots) {
         ruvia::close_socket(socket);
         (void)watchdog.cancel();
         server.finish();
-        attachment.stop();
+        attachment.request_stop();
     };
     auto root = attachment.loop().start(run());
     io.run();
@@ -748,7 +748,7 @@ TEST(Ruvia, http2_empty_file_validation_precedes_end_stream_headers) {
         ruvia::close_socket(socket);
         (void)watchdog.cancel();
         server.finish();
-        attachment.stop();
+        attachment.request_stop();
     };
     auto operation = attachment.loop().start(run());
     io.run();
@@ -1181,7 +1181,7 @@ void exercise_abandon_during_drain() {
                 failure = std::current_exception();
             }
         }
-        attachment.stop();
+        attachment.request_stop();
     };
     auto root = attachment.loop().start(run());
     attachment.run();
@@ -1222,7 +1222,7 @@ void exercise(response_mode mode) {
                 co_await exchange.body().write("payload");
                 co_await exchange.body().end();
                 auto response = co_await exchange.response();
-                const auto bytes = co_await response.stream().read_all();
+                const auto bytes = co_await response.bytes();
                 const auto body = bytes.bytes();
                 EXPECT_EQ(std::string_view(reinterpret_cast<const char*>(body.data()), body.size()), "ok");
                 co_await peer.join();
@@ -1239,7 +1239,7 @@ void exercise(response_mode mode) {
                 }
                 bool cancelled = false;
                 try {
-                    (void)co_await retained->stream().read_all();
+                    (void)co_await retained->bytes();
                 } catch (const ruvia::http_client_error& error) {
                     cancelled = error.code() == std::make_error_code(std::errc::operation_canceled);
                 }
@@ -1255,7 +1255,7 @@ void exercise(response_mode mode) {
                 const std::string payload(65536, 'b');
                 auto response = co_await client.client().post("/upload").body(payload).send();
                 EXPECT_TRUE(response.status() == ruvia::http_status::no_content);
-                const auto bytes = co_await response.stream().read_all();
+                const auto bytes = co_await response.bytes();
                 EXPECT_TRUE(bytes.bytes().empty());
                 EXPECT_TRUE(response.stream().complete());
             } else if (mode == response_mode::streaming) {
@@ -1263,7 +1263,7 @@ void exercise(response_mode mode) {
                 auto exchange = co_await client.client().request("POST", "/upload").upload({.content_length_ = payload.size(), .max_chunk_bytes_ = payload.size()});
                 auto response = co_await exchange.response();
                 EXPECT_TRUE(response.status() == ruvia::http_status::no_content);
-                const auto bytes = co_await response.stream().read_all();
+                const auto bytes = co_await response.bytes();
                 EXPECT_TRUE(bytes.bytes().empty());
                 EXPECT_TRUE(response.stream().complete());
                 co_await exchange.body().write(payload);
@@ -1274,7 +1274,7 @@ void exercise(response_mode mode) {
                 auto exchange = co_await client.client().request("POST", "/upload").upload({.content_length_ = 7, .expectation_ = expect ? ruvia::http_client_request_expectation::continue_ : ruvia::http_client_request_expectation::none});
                 auto response = co_await exchange.response();
                 EXPECT_EQ(response.status().value(), mode == response_mode::rejected ? 413 : 200);
-                const auto bytes = co_await response.stream().read_all();
+                const auto bytes = co_await response.bytes();
                 const auto body = bytes.bytes();
                 EXPECT_EQ(std::string_view(reinterpret_cast<const char*>(body.data()), body.size()), mode == response_mode::rejected ? "no" : "ok");
                 EXPECT_TRUE(response.stream().complete());
@@ -1300,7 +1300,7 @@ void exercise(response_mode mode) {
                     co_await writers.join();
                     EXPECT_TRUE(write_error == ruvia::make_error_code(ruvia::http_client_errc::io_error));
                     co_await client.shutdown();
-                    EXPECT_TRUE(!(co_await response.stream().text()).has_value());
+                    EXPECT_TRUE(!(co_await response.stream().read_text()).has_value());
                     EXPECT_TRUE(response.stream().complete());
                 } else if (mode == response_mode::ordinary || mode == response_mode::continued) {
                     co_await exchange.body().write("payload");
@@ -1318,7 +1318,7 @@ void exercise(response_mode mode) {
             }
             if (mode != response_mode::disconnected && mode != response_mode::connection_lost_upload && mode != response_mode::goaway_upload && mode != response_mode::refused_always) {
                 auto next = co_await client.client().get("/next").send();
-                const auto bytes = co_await next.stream().read_all();
+                const auto bytes = co_await next.bytes();
                 const auto body = bytes.bytes();
                 EXPECT_EQ(std::string_view(reinterpret_cast<const char*>(body.data()), body.size()), "next");
                 co_await peer.join();
@@ -1347,7 +1347,7 @@ void exercise(response_mode mode) {
                 failure = std::current_exception();
             }
         }
-        attachment.stop();
+        attachment.request_stop();
     };
     auto root = attachment.loop().start(run());
     attachment.run();

@@ -88,7 +88,7 @@ int main() {
             app.trusted_proxies({.cidrs_ = {"127.0.0.1", "::1"}, .trust_x_forwarded_proto_ = true});
         }
         app.listen({.address_ = "0.0.0.0", .http_ = 8098})
-            .server({.worker_count_ = 2, .process_signal_handlers_ = ruvia::process_signal_handler_policy::install})
+            .workers({.worker_count_ = 2, .process_signal_handlers_ = ruvia::process_signal_handler_policy::install})
             // Each worker counts independently. Route-level limits additionally
             // apply and can only tighten the deployment-wide rule.
             .rate_limit({.rule_ = {.max_requests_ = 100, .window_ = std::chrono::seconds(1)}})

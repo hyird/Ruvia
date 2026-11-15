@@ -463,7 +463,7 @@ TEST(Ruvia, https_serves_credentials_from_non_ascii_paths_across_runs) {
         };
     };
     // Invalid credentials never replace the application's staged listeners.
-    app.server({.worker_count_ = 1});
+    app.workers({.worker_count_ = 1});
     EXPECT_TRUE(throws_system_error([&] {
         app.listen(listener("wrong password", certificate));
     }));
@@ -472,7 +472,7 @@ TEST(Ruvia, https_serves_credentials_from_non_ascii_paths_across_runs) {
     }));
 
     static std::binary_semaphore started{0};
-    app.server({.worker_count_ = 1}).listen(listener(password, certificate)).on_start([] {
+    app.workers({.worker_count_ = 1}).listen(listener(password, certificate)).on_start([] {
         started.release();
     });
     for (int round = 0; round < 2; ++round) {

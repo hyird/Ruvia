@@ -256,9 +256,10 @@ public:
             auto plan = builder.compile();
             auto table = std::make_unique<route_table>(*plan, std::span<void* const>(targets));
             const auto route_limits = table->has_route_rate_limit() ? route_rate_limit_presence::present : route_rate_limit_presence::absent;
-            auto limiter = rate_limit_ || route_limits == route_rate_limit_presence::present ? std::make_unique<rate_limiter>(rate_limit_ ? std::optional<rate_limit_rule>(rate_limit_->rule_) : std::nullopt, route_limits, rate_limit_ ? rate_limit_->capacity_per_worker_ : default_rate_limit_capacity_per_worker) : std::unique_ptr<rate_limiter>{};
-            if (!worker_state_definitions_.empty()) {
-                worker_states_.emplace(worker_state_definitions_);
+            const auto& rate_limit = configuration_.rate_limit();
+            auto limiter = rate_limit || route_limits == route_rate_limit_presence::present ? std::make_unique<rate_limiter>(rate_limit ? std::optional<rate_limit_rule>(rate_limit->rule_) : std::nullopt, route_limits, rate_limit ? rate_limit->capacity_per_worker_ : default_rate_limit_capacity_per_worker) : std::unique_ptr<rate_limiter>{};
+            if (!configuration_.worker_states().empty()) {
+                worker_states_.emplace(configuration_.worker_states());
                 try {
                     worker_states_->initialize();
                 } catch (...) {
@@ -329,7 +330,7 @@ public:
             ? std::optional<std::size_t>(route.max_request_body_bytes())
             : std::nullopt;
         const auto request_services = services;
-        auto* const body_source = stream.tunnel_requested() ? nullptr : &stream.body();
+        auto* const body_source = stream.tunnel_requested() ? nullptr : &stream.request_body();
         std::exception_ptr failure;
         try {
             // The transport already validated and normalized this field. Do not
@@ -378,9 +379,7 @@ public:
     worker_ref worker_;
     app_configuration configuration_;
     std::vector<registration> registrations_{};
-    std::optional<rate_limit_config> rate_limit_;
     borrowed_clients clients_;
-    std::vector<worker_state_definition> worker_state_definitions_{};
 
 private:
     enum class phase { editable,
@@ -482,19 +481,6 @@ namespace ruvia {
     return *this;
 }
 
-::ruvia::router& ::ruvia::router::add_worker_state(detail::worker_state_definition definition) {
-    state_->require_editable();
-    detail::append_worker_state_definition(state_->worker_state_definitions_, std::move(definition));
-    return *this;
-}
-
-::ruvia::router& ::ruvia::router::rate_limit(rate_limit_config config) & {
-    state_->require_editable();
-    detail::validate_rate_limit_config(config);
-    state_->rate_limit_ = config;
-    return *this;
-}
-
 #ifdef RUVIA_ENABLE_REDIS
 ::ruvia::router& ::ruvia::router::bind_redis(std::string_view alias, const redis_client& client) & {
     state_->require_editable();
@@ -517,38 +503,9 @@ namespace ruvia {
     return *this;
 }
 
-::ruvia::router& ::ruvia::router::add_middleware(detail::owned_middleware_descriptor descriptor) {
+void ::ruvia::router::edit_configuration(detail::callback_ref<void(detail::app_configuration&)> edit) {
     state_->require_editable();
-    state_->configuration_.add_middleware(std::move(descriptor));
-    return *this;
-}
-
-::ruvia::router& ::ruvia::router::add_scoped_middleware(std::string_view prefix, detail::owned_middleware_descriptor descriptor) {
-    return add_middleware(std::move(descriptor).scoped_to(detail::normalize_fallback_prefix(prefix)));
-}
-
-::ruvia::router& ::ruvia::router::on_error(http_error_handler handler) & {
-    state_->require_editable();
-    state_->configuration_.on_error(detail::own_callback(std::move(handler)));
-    return *this;
-}
-
-::ruvia::router& ::ruvia::router::on_not_found(http_not_found_handler handler) & {
-    state_->require_editable();
-    state_->configuration_.on_not_found(detail::own_callback(std::move(handler)));
-    return *this;
-}
-
-::ruvia::router& ::ruvia::router::on_error(scoped_error_handler_options options) & {
-    state_->require_editable();
-    state_->configuration_.on_error(options.prefix_, detail::own_callback(std::move(options.handler_)));
-    return *this;
-}
-
-::ruvia::router& ::ruvia::router::on_not_found(scoped_not_found_handler_options options) & {
-    state_->require_editable();
-    state_->configuration_.on_not_found(options.prefix_, detail::own_callback(std::move(options.handler_)));
-    return *this;
+    edit(state_->configuration_);
 }
 
 void ::ruvia::router::freeze() & {

@@ -30,6 +30,9 @@ struct http_byte_range final {
         return length_;
     }
 };
+// coalesce merges overlapping or adjacent ranges into the earliest of them;
+// strict_ascending_disjoint keeps every requested range and ignores the whole
+// Range field when the ranges are not ascending and disjoint.
 enum class http_byte_range_order_policy : std::uint8_t {
     coalesce,
     strict_ascending_disjoint,
@@ -38,7 +41,6 @@ enum class http_byte_range_order_policy : std::uint8_t {
 struct http_byte_range_options final {
     std::size_t max_ranges_{16};
     http_byte_range_order_policy order_policy_{http_byte_range_order_policy::coalesce};
-    bool strict_order_{false};
 };
 
 // Bounded result for a byte-range set. Inline storage covers up to 16 ranges
@@ -117,11 +119,7 @@ private:
     bool ignored_{true};
 };
 
-[[nodiscard]] http_byte_range_set resolve_http_byte_range_set(std::string_view field_value, http_content_length representation_length_value, http_byte_range_options options);
-
-[[nodiscard]] inline http_byte_range_set resolve_http_byte_range_set(std::string_view field_value, http_content_length representation_length_value) noexcept {
-    return resolve_http_byte_range_set(field_value, representation_length_value, {});
-}
+[[nodiscard]] http_byte_range_set resolve_http_byte_range_set(std::string_view field_value, http_content_length representation_length_value, http_byte_range_options options = {});
 
 // Parsed Content-Range: "bytes first-last/total" (RFC 9110 section 14.4).
 struct http_content_range final {

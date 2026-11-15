@@ -64,8 +64,7 @@ struct handshake_fields {
     bool host_{false}, forbidden_{false}, http2_forbidden_{false};
     std::string_view host_value_{};
 };
-template <typename header_type>
-std::variant<handshake_fields, http_connect_udp_error> scan_handshake_fields(std::span<const header_type> headers, handshake_message_role role, http_connect_udp_error syntax_error) noexcept {
+std::variant<handshake_fields, http_connect_udp_error> scan_handshake_fields(const http_header_range_view& headers, handshake_message_role role, http_connect_udp_error syntax_error) noexcept {
     const auto connection_role = role == handshake_message_role::request_recipient ? detail::http_connection_field_role::request_recipient : (role == handshake_message_role::response_recipient ? detail::http_connection_field_role::response_recipient : detail::http_connection_field_role::sender);
     const auto list_role = (role == handshake_message_role::request_recipient || role == handshake_message_role::response_recipient) ? detail::http_field_list_role::recipient : detail::http_field_list_role::sender;
     handshake_fields found;
@@ -135,24 +134,6 @@ std::variant<handshake_fields, http_connect_udp_error> scan_handshake_fields(std
         return syntax_error;
     }
     return found;
-}
-template <typename header_type>
-std::optional<http_connect_udp_error> validate_connect_udp_response(http_protocol_version version, std::uint16_t status, std::span<const header_type> headers) noexcept {
-    if (version == http_protocol_version::http10) {
-        return http_connect_udp_error::invalid_response;
-    }
-    const bool extended_connect = version != http_protocol_version::http11;
-    const auto parsed_value = scan_handshake_fields(headers, handshake_message_role::response_recipient, http_connect_udp_error::invalid_response);
-    if (parsed_value.index() != 0) {
-        return std::get<1>(parsed_value);
-    }
-    const auto& found = std::get<0>(parsed_value);
-    // The connect-udp token, not Capsule-Protocol, selects the Capsule Protocol
-    // (RFC 9298 section 3); RFC 9297 section 3.2 makes 204/205/206 malformed.
-    if (found.forbidden_ || (extended_connect ? status < 200 || status >= 300 || forbids_capsule_protocol(status) || found.upgrade_field_ || found.connection_field_ || found.http2_forbidden_ : status != 101 || !found.upgrade_ || !found.connection_)) {
-        return http_connect_udp_error::invalid_response;
-    }
-    return std::nullopt;
 }
 }  // namespace
 std::variant<std::string, http_connect_udp_error> encode_http_connect_udp_path(http_connect_udp_target_view target) {
@@ -231,7 +212,7 @@ std::optional<http_connect_udp_error> validate_request(http_connect_udp_request_
     }
     if (found.host_) {
         const auto default_port = detail::http_uri_scheme_default_port(request.scheme_);
-        if (!http_authorities_equal(request.authority_, found.host_value_, default_port)) {
+        if (!detail::authority_matches_host(request.authority_.view(), found.host_value_, default_port)) {
             return http_connect_udp_error::invalid_request;
         }
     }
@@ -251,11 +232,22 @@ std::optional<http_connect_udp_error> validate_http_connect_udp_request(http_con
 std::optional<http_connect_udp_error> validate_http_connect_udp_request_to_send(http_connect_udp_request_view request) noexcept {
     return validate_request(request, true);
 }
-std::optional<http_connect_udp_error> validate_http_connect_udp_response(http_protocol_version version, std::uint16_t status, std::span<const http_header_view> headers) noexcept {
-    return validate_connect_udp_response(version, status, headers);
-}
-std::optional<http_connect_udp_error> validate_http_connect_udp_response(http_protocol_version version, std::uint16_t status, std::span<const http_header> headers) noexcept {
-    return validate_connect_udp_response(version, status, headers);
+std::optional<http_connect_udp_error> validate_http_connect_udp_response(http_protocol_version version, std::uint16_t status, const http_header_range_view& headers) noexcept {
+    if (version == http_protocol_version::http10) {
+        return http_connect_udp_error::invalid_response;
+    }
+    const bool extended_connect = version != http_protocol_version::http11;
+    const auto parsed_value = scan_handshake_fields(headers, handshake_message_role::response_recipient, http_connect_udp_error::invalid_response);
+    if (parsed_value.index() != 0) {
+        return std::get<1>(parsed_value);
+    }
+    const auto& found = std::get<0>(parsed_value);
+    // The connect-udp token, not Capsule-Protocol, selects the Capsule Protocol
+    // (RFC 9298 section 3); RFC 9297 section 3.2 makes 204/205/206 malformed.
+    if (found.forbidden_ || (extended_connect ? status < 200 || status >= 300 || forbids_capsule_protocol(status) || found.upgrade_field_ || found.connection_field_ || found.http2_forbidden_ : status != 101 || !found.upgrade_ || !found.connection_)) {
+        return http_connect_udp_error::invalid_response;
+    }
+    return std::nullopt;
 }
 bool is_http_connect_udp_upgrade_request(const http_request& request) noexcept {
     if (request.protocol_version() != http_protocol_version::http11 || request.known_method() != http_known_method::get) {
@@ -286,7 +278,7 @@ std::variant<http_response, http_connect_udp_error> prepare_http_connect_udp_res
     }
     // The response's own fields go through the one CONNECT-UDP handshake walk;
     // the protocol, not the application, generates the Upgrade pair.
-    const auto parsed_value = scan_handshake_fields(std::span(response.headers().begin(), response.headers().size()), handshake_message_role::response_sender, http_connect_udp_error::invalid_response);
+    const auto parsed_value = scan_handshake_fields(response.headers(), handshake_message_role::response_sender, http_connect_udp_error::invalid_response);
     if (parsed_value.index() != 0) {
         return std::get<1>(parsed_value);
     }
@@ -309,7 +301,7 @@ std::variant<http_response, http_connect_udp_error> prepare_http_connect_udp_res
     return response;
 }
 http1_response_head_plan prepare_http1_connect_udp_response_head(const http_response& response) {
-    if (response.status() != http_status::switching_protocols || response.file_body() || !response.body_bytes().empty() || validate_connect_udp_response(http_protocol_version::http11, response.status().value(), std::span(response.headers().begin(), response.headers().size()))) {
+    if (response.status() != http_status::switching_protocols || response.file_body() || !response.body_bytes().empty() || validate_http_connect_udp_response(http_protocol_version::http11, response.status().value(), response.headers())) {
         throw http1_response_head_error("invalid HTTP/1 CONNECT-UDP response head");
     }
     return http1_close_delimited_response_stream_head_plan(plan_http_response_body(http_known_method::get, response.status()), http1_request_connection_plan::http11_close());

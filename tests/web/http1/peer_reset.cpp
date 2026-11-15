@@ -146,7 +146,7 @@ TEST(Ruvia, a_peer_reset_during_a_handlers_transport_write_is_a_normal_connectio
 
     auto& app = ruvia::app();
     static std::binary_semaphore started{0};
-    app.server({.worker_count_ = 1, .idle_timeout_ = idle_timeout, .connection_scan_interval_ = 5ms}).listen({.address_ = "127.0.0.1", .http_ = endpoint.port()}).on_error(&count_error).on_start([] {
+    app.workers({.worker_count_ = 1}).server({.idle_timeout_ = idle_timeout, .connection_scan_interval_ = 5ms}).listen({.address_ = "127.0.0.1", .http_ = endpoint.port()}).on_error(&count_error).on_start([] {
         started.release();
     });
     ruvia::test::app_run runner(app);

@@ -731,18 +731,13 @@ concept redis_entity_schema = requires(const entity& value) {
 };
 }  // namespace detail
 
-enum class redis_order_direction : std::uint8_t {
-    asc,
-    desc,
-};
-
 // Created only by redis_field_reference::asc() / desc().
 class redis_find_order final {
 public:
     [[nodiscard]] std::string_view column() const noexcept {
         return column_;
     }
-    [[nodiscard]] redis_order_direction direction() const noexcept {
+    [[nodiscard]] order_direction direction() const noexcept {
         return direction_;
     }
 
@@ -750,12 +745,12 @@ private:
     template <typename, fixed_string>
     friend class redis_field_reference;
 
-    constexpr redis_find_order(std::string_view column, redis_order_direction direction) noexcept :
+    constexpr redis_find_order(std::string_view column, order_direction direction) noexcept :
         column_(column),
         direction_(direction) {}
 
     std::string_view column_;
-    redis_order_direction direction_;
+    order_direction direction_;
 };
 
 template <typename entity_type, fixed_string name>
@@ -827,10 +822,10 @@ public:
         return not_in(std::span<const value_type>(values.begin(), values.size()));
     }
     [[nodiscard]] redis_find_order asc() const noexcept {
-        return redis_find_order(name.view(), redis_order_direction::asc);
+        return redis_find_order(name.view(), order_direction::asc);
     }
     [[nodiscard]] redis_find_order desc() const noexcept {
-        return redis_find_order(name.view(), redis_order_direction::desc);
+        return redis_find_order(name.view(), order_direction::desc);
     }
 
 private:
@@ -1024,10 +1019,6 @@ public:
         detail::redis_map_many<entity_type> mapper{{mapping().storage_prefix_}};
         return executor_.template command_mapped<entity_rows<entity_type>>(std::move(args), std::move(mapper));
     }
-    template <std::same_as<redis_predicate> predicate_type>
-    [[nodiscard]] task<entity_rows<entity_type>> find(const predicate_type& where) const {
-        return find(redis_find_options{.where_ = where});
-    }
 
     [[nodiscard]] task<std::optional<entity_type>> find_one(const redis_find_options& options = {}) const {
         const bool plain = !options.order_.has_value() && !options.offset_ && !options.limit_;
@@ -1047,11 +1038,6 @@ public:
         detail::redis_map_first<entity_type> mapper{{mapping().storage_prefix_}};
         return executor_.template command_mapped<std::optional<entity_type>>(std::move(args), std::move(mapper));
     }
-
-    template <std::same_as<redis_predicate> predicate_type>
-    [[nodiscard]] task<std::optional<entity_type>> find_one(const predicate_type& where) const {
-        return find_one(redis_find_options{.where_ = where});
-    }
     [[nodiscard]] task<std::pair<entity_rows<entity_type>, std::uint64_t>> find_and_count(const redis_find_options& options = {}) const {
         auto args = search_mapping().compile_find(options).take_arguments();
         detail::redis_map_search<entity_type> mapper{mapping().storage_prefix_};
@@ -1060,11 +1046,6 @@ public:
 
     [[nodiscard]] task<std::uint64_t> count(const redis_find_options& options = {}) const {
         return executor_.template command_mapped<std::uint64_t>(search_mapping().compile_find(options, redis_search_mode::count).take_arguments(), detail::redis_orm_count_result);
-    }
-
-    template <std::same_as<redis_predicate> predicate_type>
-    [[nodiscard]] task<std::uint64_t> count(const predicate_type& where) const {
-        return count(redis_find_options{.where_ = where});
     }
 
     [[nodiscard]] task<bool> exists(const redis_find_options& options = {}) const {
@@ -1076,11 +1057,6 @@ public:
             }
         }
         return executor_.template command_mapped<bool>(search_mapping().compile_find(options, redis_search_mode::count).take_arguments(), detail::redis_orm_exists_result);
-    }
-
-    template <std::same_as<redis_predicate> predicate_type>
-    [[nodiscard]] task<bool> exists(const predicate_type& where) const {
-        return exists(redis_find_options{.where_ = where});
     }
 
     [[nodiscard]] task<redis_write_result> delete_by(const redis_predicate& predicate) const {

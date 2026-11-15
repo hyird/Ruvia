@@ -1,14 +1,22 @@
 #include "http_header.h"
 
+#include <algorithm>
 #include <array>
 #include <bit>
+#include <concepts>
 #include <cstddef>
 #include <cstdint>
 #include <optional>
+#include <string>
 #include <string_view>
+#include <utility>
+#include <variant>
+#include <vector>
 
 #include "http_field_kind.h"
 #include "http_field_text.h"
+#include "http_message_access.h"
+#include "http_response.h"
 
 namespace ruvia::detail {
 
@@ -171,6 +179,104 @@ std::optional<std::string_view> http_field_name_list::next() noexcept {
         return name;
     }
     return std::nullopt;
+}
+
+namespace {
+
+template <typename target_type>
+concept http_header_vector_target = std::same_as<target_type, std::vector<http_header>*>;
+
+}  // namespace
+
+http_header_range_view editable_http_headers::fields() const noexcept {
+    // The view cannot be moved: each branch returns a prvalue.
+    if (const auto* const lines = std::get_if<std::vector<http_header>*>(&target_)) {
+        return http_header_range_view(**lines);
+    }
+    if (const auto* const block = std::get_if<http_response_headers*>(&target_)) {
+        return http_header_range_view(**block);
+    }
+    return http_header_range_view(*std::get<http_response*>(target_));
+}
+
+void editable_http_headers::remove(std::string_view name) noexcept {
+    std::visit([name](auto* target) noexcept {
+        if constexpr (http_header_vector_target<decltype(target)>) {
+            std::erase_if(*target, [name](const http_header& field) noexcept {
+                return http_ascii_equals_ignore_case(field.name(), name);
+            });
+        } else if (is_valid_http_header_name(name) && detail::response_header_storage_size_fits(name.size(), 0)) {
+            // A response block rejects a name no field can carry; no line has
+            // such a name, so there is nothing to erase.
+            target->remove_header(name);
+        }
+    }, target_);
+}
+
+void editable_http_headers::remove_if(bool (*matches)(std::string_view field_name) noexcept) noexcept {
+    if (auto* const lines = std::get_if<std::vector<http_header>*>(&target_)) {
+        std::erase_if(**lines, [matches](const http_header& field) noexcept {
+            return matches(field.name());
+        });
+        return;
+    }
+    // A response block removes by name and tolerates a name borrowed from one
+    // of its own lines. Each removal invalidates the view, so the scan
+    // restarts until no line matches.
+    for (bool removed = true; removed;) {
+        removed = false;
+        for (const auto field : fields()) {
+            if (matches(field.name())) {
+                remove(field.name());
+                removed = true;
+                break;
+            }
+        }
+    }
+}
+
+void editable_http_headers::set(std::string_view name, std::string_view value) {
+    std::visit([name, value](auto* target) {
+        if constexpr (http_header_vector_target<decltype(target)>) {
+            // Built before any line is retired: name and value may borrow one.
+            http_header replacement(name, value);
+            const auto first = std::ranges::find_if(*target, [name](const http_header& field) noexcept {
+                return http_ascii_equals_ignore_case(field.name(), name);
+            });
+            if (first == target->end()) {
+                target->push_back(std::move(replacement));
+                return;
+            }
+            *first = std::move(replacement);
+            const auto retained_name = first->name();
+            target->erase(std::remove_if(first + 1, target->end(), [retained_name](const http_header& field) noexcept {
+                return http_ascii_equals_ignore_case(field.name(), retained_name);
+            }),
+                target->end());
+        } else {
+            target->header(name, value);
+        }
+    }, target_);
+}
+
+void editable_http_headers::append(std::string_view name, std::string_view value) {
+    std::visit([name, value](auto* target) {
+        if constexpr (http_header_vector_target<decltype(target)>) {
+            target->emplace_back(name, value);
+        } else {
+            target->header(name, value, {.mode_ = http_response_header_mode::append});
+        }
+    }, target_);
+}
+
+void editable_http_headers::run_transaction(void (*edit)(void* callable, editable_http_headers candidate), void* callable, std::size_t additional_fields) {
+    if (auto* const response = std::get_if<http_response*>(&target_)) {
+        auto candidate = (*response)->headers().clone(additional_fields);
+        edit(callable, candidate);
+        (*response)->commit_headers(std::move(candidate));
+        return;
+    }
+    edit(callable, *this);
 }
 
 }  // namespace ruvia

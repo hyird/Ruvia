@@ -15,6 +15,7 @@
 #include "wait_result.h"
 #include "waiter_list.h"
 #include "worker_cancellation.h"
+#include "worker_dispatcher.h"
 #include "worker_ref.h"
 #include "worker_timer.h"
 
@@ -62,7 +63,7 @@ public:
                 return;
             }
             if (auto continuation = waiter->resolve(acquire_result_type::with_status(wait_status::cancelled))) {
-                detail::worker_ref_access::defer_resume(worker, continuation);
+                worker.defer_resume(continuation);
             }
         }
 
@@ -82,7 +83,7 @@ public:
         void complete_all(const worker_ref& worker, wait_status status) noexcept {
             while (auto* waiter = waiters_.front()) {
                 if (auto continuation = waiter->resolve(acquire_result_type::with_status(status))) {
-                    detail::worker_ref_access::defer_resume(worker, continuation);
+                    worker.defer_resume(continuation);
                 }
             }
         }
@@ -143,7 +144,7 @@ public:
             }
             try {
                 // A detached worker has already retired every suspended acquire.
-                (void)detail::worker_ref_access::defer_completion(worker_, [retained = shared_from_this()] {
+                (void)worker_.defer_completion([retained = shared_from_this()] {
                     retained->stop_waiters();
                 });
             } catch (...) {
@@ -167,7 +168,8 @@ public:
             return acquire_result_type::with_status(wait_status::cancelled);
         }
         if (free_head_ == no_free_slot) {
-            if (waiter_state_->stopping_ || !worker_.accepting() || detail::worker_ref_access::timers_stopping(worker_)) {
+            const auto* const dispatcher = detail::worker_dispatcher::of(worker_);
+            if (waiter_state_->stopping_ || !worker_.accepting() || dispatcher == nullptr || dispatcher->timers_stopping()) {
                 return acquire_result_type::with_status(wait_status::worker_stopping);
             }
             if (bounds.deadline_passed()) {
@@ -187,7 +189,7 @@ public:
         std::coroutine_handle<> continuation;
         if (!closing_ && waiter_state_->queue_.commit_handoff(slot, continuation)) {
             if (continuation) {
-                detail::worker_ref_access::defer_resume(worker_, continuation);
+                worker_.defer_resume(continuation);
             }
             return;
         }

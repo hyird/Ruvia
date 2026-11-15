@@ -95,7 +95,7 @@ public:
 }
 
 [[nodiscard]] ruvia::server_config multi_worker_config() {
-    return {.worker_count_ = worker_count, .connection_scan_interval_ = std::chrono::milliseconds(5)};
+    return {.connection_scan_interval_ = std::chrono::milliseconds(5)};
 }
 
 template <typename fn_type>
@@ -202,7 +202,7 @@ using namespace document_root_refresh_test;
 TEST(Ruvia, document_root_refresh_updates_multi_worker_application) {
     static_cast<void>(configure_application());
     auto& io = ruvia::test::new_test_io_context();
-    ruvia::test::http_server_fixture server(io, multi_worker_config());
+    ruvia::test::http_server_fixture server(io, multi_worker_config(), {.worker_count_ = worker_count});
     EXPECT_EQ(ruvia::app().workers().size(), worker_count);
 
     // Every version has a distinct size, so a change is indexed even where the
@@ -218,7 +218,7 @@ TEST(Ruvia, document_root_refresh_updates_multi_worker_application) {
 TEST(Ruvia, document_root_refresh_keeps_old_requests_across_multiple_publications) {
     static_cast<void>(configure_application());
     auto& io = ruvia::test::new_test_io_context();
-    ruvia::test::http_server_fixture server(io, multi_worker_config());
+    ruvia::test::http_server_fixture server(io, multi_worker_config(), {.worker_count_ = worker_count});
 
     EXPECT_TRUE(write_version("old leased snapshot"));
     EXPECT_TRUE(eventually_serves(io, server.endpoint(), "old leased snapshot"));
@@ -253,7 +253,7 @@ TEST(Ruvia, document_root_refresh_keeps_old_requests_across_multiple_publication
 TEST(Ruvia, document_root_refresh_follows_a_retargeted_symlink_root) {
     static_cast<void>(configure_application());
     auto& io = ruvia::test::new_test_io_context();
-    ruvia::test::http_server_fixture server(io, multi_worker_config());
+    ruvia::test::http_server_fixture server(io, multi_worker_config(), {.worker_count_ = worker_count});
 
     const auto release = test_directory() / "release";
     const auto staged_link = test_directory() / "link.next";
@@ -282,7 +282,7 @@ TEST(Ruvia, document_root_refresh_follows_a_retargeted_symlink_root) {
 TEST(Ruvia, document_root_refresh_failures_count_once_per_application) {
     static_cast<void>(configure_application());
     auto& io = ruvia::test::new_test_io_context();
-    ruvia::test::http_server_fixture server(io, multi_worker_config());
+    ruvia::test::http_server_fixture server(io, multi_worker_config(), {.worker_count_ = worker_count});
 
     EXPECT_TRUE(write_version("cached before removal"));
     EXPECT_TRUE(eventually_serves(io, server.endpoint(), "cached before removal"));

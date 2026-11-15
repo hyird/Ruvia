@@ -110,7 +110,7 @@ struct db_stored_type final {
 };
 struct db_stored_order final {
     std::size_t expression_{no_db_node};
-    db_order_direction direction_{db_order_direction::asc};
+    order_direction direction_{order_direction::asc};
     db_nulls_order nulls_{db_nulls_order::default_};
 };
 struct db_stored_named_argument final {

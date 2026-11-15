@@ -340,11 +340,11 @@ public:
 
         std::string body;
         body.append("keys=");
-        ruvia::http_append_signed(body, static_cast<std::int64_t>(keys.values().size()));
+        ruvia::http_append_signed(body, static_cast<std::int64_t>(keys.entries().size()));
         body.append("\nhash=");
         ruvia::http_append_signed(body, static_cast<std::int64_t>(hash.entries().size()));
         body.append("\nset=");
-        ruvia::http_append_signed(body, static_cast<std::int64_t>(set.values().size()));
+        ruvia::http_append_signed(body, static_cast<std::int64_t>(set.entries().size()));
         body.append("\nzset=");
         ruvia::http_append_signed(body, static_cast<std::int64_t>(zset.entries().size()));
         body.push_back('\n');
@@ -429,7 +429,7 @@ int main() {
         app.redis({.config_ = config})
             .redis({.alias_ = "cache", .config_ = config})
             .listen({.address_ = "0.0.0.0", .http_ = env_value.get<std::uint16_t>("RUVIA_PORT").value_or(8090)})
-            .server({
+            .workers({
                 .worker_count_ = env_value.get<std::uint32_t>("RUVIA_WORKERS").value_or(2),
                 .process_signal_handlers_ = ruvia::process_signal_handler_policy::install,
             })

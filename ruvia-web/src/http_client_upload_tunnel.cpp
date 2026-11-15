@@ -344,38 +344,55 @@ void http_client_tunnel::release() noexcept {
     }
     response_.release();
 }
-void http_client_tunnel::abort() & noexcept {
-    abort_tunnel(response_.state_, false);
-}
-void http_client_tunnel::abort_malformed() & noexcept {
-    abort_tunnel(response_.state_, true);
-}
-http_udp_tunnel http_client_tunnel::udp(http_capsule_config config) && {
-    return http_udp_tunnel(std::move(*this).datagrams(config));
-}
-task<std::optional<std::span<const std::byte>>> http_client_tunnel::read(operation_options operation) & {
+http_tunnel& http_client_tunnel::stream() & {
     if (response_.state_ == nullptr) {
         throw std::logic_error("HTTP client tunnel is empty");
     }
-    return response_.stream().read(std::move(operation));
-}
-task<std::optional<std::string_view>> http_client_tunnel::text(operation_options operation) & {
-    if (response_.state_ == nullptr) {
-        throw std::logic_error("HTTP client tunnel is empty");
-    }
-    return response_.stream().text(std::move(operation));
-}
-task<void> http_client_tunnel::write(outbound_bytes bytes_value, operation_options operation) & {
-    require_output(response_.state_, false);
-    auto& state_value = *response_.state_;
-    if (bytes_value.size() > state_value.tunnel_->config_.max_chunk_bytes_) {
-        throw std::length_error("HTTP client tunnel chunk exceeds configured bound");
-    }
-    return state_value.tunnel_->output_.output_scope_.attach(detail::write_client_output<tunnel_output_policy>(&state_value, detail::http_client_output_write_input{http_client_response(&state_value), std::move(bytes_value).into_string(), std::move(operation)}));
-}
-task<void> http_client_tunnel::finish(operation_options operation) & {
-    require_output(response_.state_, true);
-    auto& state_value = *response_.state_;
-    return state_value.tunnel_->output_.output_scope_.attach(detail::finish_client_output<tunnel_output_policy>(&state_value, http_client_response(&state_value), std::move(operation)));
+    return response_.state_->tunnel_->stream_;
 }
 }  // namespace ruvia
+
+namespace ruvia::detail {
+http_client_tunnel_state::http_client_tunnel_state(http_client_response_state& response, http_client_tunnel_config config, bool udp) :
+    output_(response.memory_domain().worker()),
+    config_(config),
+    udp_(udp),
+    stream_(response.memory_domain().worker(), &response, &read, &write, &finish, &abort, {.capsules_ = true, .datagrams_ = udp}) {
+    stream_.client_ = &response;
+}
+task<std::optional<std::span<const std::byte>>> http_client_tunnel_state::read(void* target, operation_options operation) {
+    // The body operation binds to the response state, not to this handle.
+    http_client_response pin(static_cast<http_client_response_state*>(target));
+    return pin.stream().read(std::move(operation));
+}
+task<void> http_client_tunnel_state::write(void* target, std::string&& bytes, operation_options operation) {
+    auto& state_value = *static_cast<http_client_response_state*>(target);
+    require_output(&state_value, false);
+    if (bytes.size() > state_value.tunnel_->config_.max_chunk_bytes_) {
+        throw std::length_error("HTTP client tunnel chunk exceeds configured bound");
+    }
+    return state_value.tunnel_->output_.output_scope_.attach(write_client_output<tunnel_output_policy>(&state_value, http_client_output_write_input{http_client_response(&state_value), std::move(bytes), std::move(operation)}));
+}
+task<void> http_client_tunnel_state::finish(void* target, operation_options operation) {
+    auto& state_value = *static_cast<http_client_response_state*>(target);
+    require_output(&state_value, true);
+    return state_value.tunnel_->output_.output_scope_.attach(finish_client_output<tunnel_output_policy>(&state_value, http_client_response(&state_value), std::move(operation)));
+}
+void http_client_tunnel_state::abort(void* target, bool malformed) noexcept {
+    abort_tunnel(static_cast<http_client_response_state*>(target), malformed);
+}
+#ifdef RUVIA_ENABLE_HTTP3
+void http_client_tunnel_state::bind_native_datagrams() noexcept {
+    stream_.read_datagram_ = &read_datagram;
+    stream_.write_datagram_ = &write_datagram;
+}
+task<std::optional<http_tunnel_input>> http_client_tunnel_state::read_datagram(void* target, operation_options operation) {
+    auto& state_value = *static_cast<http_client_response_state*>(target);
+    return state_value.pool_->read_http3_tunnel_input(state_value, std::move(operation));
+}
+task<bool> http_client_tunnel_state::write_datagram(void* target, std::string_view bytes, operation_options operation) {
+    auto& state_value = *static_cast<http_client_response_state*>(target);
+    return state_value.pool_->send_http3_datagram(state_value, bytes, std::move(operation));
+}
+#endif
+}  // namespace ruvia::detail

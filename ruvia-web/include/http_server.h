@@ -10,7 +10,6 @@
 #include <optional>
 #include <span>
 #include <string>
-#include <thread>
 #include <vector>
 
 #include "borrowed_text.h"
@@ -33,11 +32,6 @@
 #include "worker_ref.h"
 
 namespace ruvia {
-
-enum class process_signal_handler_policy : std::uint8_t {
-    external_owner,
-    install,
-};
 
 struct compression_config final {
     // Only text-like media types are encoded (text/*, JSON, XML and their +json
@@ -63,10 +57,12 @@ struct compression_config final {
     std::size_t max_bytes_{std::size_t{64} * 1024 * 1024};
 };
 
-// The complete always-present Web server runtime configuration. application consumes
-// this aggregate atomically, validates it as one unit, and publishes the same
-// normalized values to every worker. Optional fields disable only the policy
-// they name; optional application capabilities remain separate config-or-null calls.
+// The Web server runtime configuration every host honours: application,
+// test_app, http_server and http_server_group validate this aggregate as one
+// unit and publish the same normalized values to every worker. Optional fields
+// disable only the policy they name. Worker scheduling is not part of it:
+// application owns its workers (application_worker_config), a standalone host
+// runs on the caller's loops.
 // A final response that closes HTTP/1, and an HTTP/2 session that ends with
 // GOAWAY, close lingering (RFC 9112 §9.6): TLS sends close_notify, TCP shuts
 // down its send side, and peer input is read and discarded until the peer ends
@@ -88,16 +84,6 @@ struct compression_config final {
 // TCP may close before the session task is reclaimed. Worker shutdown still
 // joins session tasks before retiring their worker-local resources.
 struct server_config final {
-    // Business workers, each with its own event loop; a connection stays on
-    // the worker that adopted it. On POSIX every worker binds each TCP
-    // listener with SO_REUSEPORT and accepts on its own event loop. On
-    // Windows one acceptor thread per application owns every listener
-    // exclusively (SO_EXCLUSIVEADDRUSE) and hands each accepted socket to the
-    // business worker holding the fewest connections; a socket that worker's
-    // queue cannot admit is closed and counted in connections_refused_.
-    std::size_t worker_count_{(std::max)(1U, std::thread::hardware_concurrency())};
-    process_signal_handler_policy process_signal_handlers_{process_signal_handler_policy::external_owner};
-    std::size_t worker_queue_capacity_{1024};
     // HTTP connection inactivity: the keep-alive wait for the next request,
     // and a handler -- buffered or response-stream -- that neither reads nor
     // writes the connection (for a stream, the wait between two writes).
@@ -247,7 +233,7 @@ enum class listener_dispatch : std::uint8_t {
 // targets the HTTPS service port. On POSIX every worker binds each enabled
 // service with SO_REUSEADDR and SO_REUSEPORT (platforms without SO_REUSEPORT
 // fail startup); on Windows the acceptor thread binds it exclusively
-// (SO_EXCLUSIVEADDRUSE, see server_config::worker_count_). inherited_sockets_
+// (SO_EXCLUSIVEADDRUSE, see application_worker_config::worker_count_). inherited_sockets_
 // replaces either binding with sockets bound elsewhere.
 struct listen_config final {
     // Numeric IPv4 or IPv6 bind address, normalized when application::listen consumes
@@ -384,22 +370,6 @@ struct adopt_options final {
     std::optional<ip_endpoint> remote_{};
 };
 
-// Runtime behavior belongs to the server's document-root binding, not to the
-// immutable static_root index. application document roots are always refreshed:
-// one refresher per application rebuilds the index each interval and every
-// worker adopts the shared snapshot. A standalone static_root remains immutable
-// because it has no server runtime.
-struct document_root_config final {
-    std::filesystem::path root_{};
-    static_root_options static_options_{};
-    timeout_duration refresh_interval_{std::chrono::seconds(1)};
-    bool precompress_gzip_{false};
-    bool precompress_brotli_{false};
-    bool precompress_zstd_{false};
-    std::size_t precompress_min_bytes_{1024};
-    std::size_t precompress_max_bytes_{std::size_t{256} * 1024};
-};
-
 // Live connections of one serving or removed-but-not-retired listener, named
 // as its listener_endpoint: the normalized address_ text and its http_ or
 // https_ port. A paired HTTP/3 service's QUIC connections count under its
@@ -448,15 +418,6 @@ struct http_server_stats final {
     std::size_t document_root_refresh_failures_{0};
 };
 
-// A self-contained startup/shutdown callback, invoked on the application::run() caller.
-// on_start runs after worker initialization, before TCP admission. on_stop
-// runs after admission closes, before runtime join (including start-hook failure
-// or cancellation). A self-contained callable is owned by the hook value;
-// references captured by that callable must still
-// outlive the registered hook. Invoking an empty hook is a programming error
-// and throws std::logic_error.
-// 空函数指针与目标析构重入的契约同 access_log_callback。
-using app_hook = move_only_function<void()>;
 namespace detail {
 class prepared_listener_state;
 struct prepared_listener_access;

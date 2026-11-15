@@ -185,8 +185,14 @@ struct http_server_options final {
         document_root_generation* current_{nullptr};
     };
 
-    // The validated application server configuration, one copy per worker.
+    // The validated host configuration, one copy per worker.
     server_config server_{};
+    // Workers sharing each listener: the application's worker count, or the
+    // loop count of a standalone host.
+    std::size_t worker_count_{1};
+    // Bound of each application worker's cross-thread job queue; standalone
+    // hosts run on caller-owned loops and never read it.
+    std::size_t worker_queue_capacity_{0};
     // Borrowed from the worker runtime, whose shutdown joins every connection;
     // each connection charges its inbound_buffer_account against it.
     inbound_buffer_budget* inbound_budget_{nullptr};
@@ -227,17 +233,14 @@ struct http_server_options final {
     // Serves every listener_dispatch::request_stream listener; run() requires
     // it when one exists.
     request_stream_callback_ref request_stream_{};
+    // The host-wide rate limit as each worker's limiter takes it: the
+    // application copies its dispatch configuration's rule here for a run.
     std::optional<rate_limit_rule> default_rate_limit_per_worker_{};
     std::size_t rate_limit_capacity_per_worker_{default_rate_limit_capacity_per_worker};
 
     // Validates the whole aggregate, including its compression and CORS
     // policies, before publishing any of it.
     void set_server(const server_config& config);
-    void set_rate_limit(const rate_limit_config& config);
-    void clear_rate_limit() noexcept {
-        default_rate_limit_per_worker_.reset();
-        rate_limit_capacity_per_worker_ = default_rate_limit_capacity_per_worker;
-    }
     void set_trusted_proxies(const trusted_proxy_config& config);
     void clear_trusted_proxies() noexcept {
         trusted_proxies_ = http_client_ip_extractor();

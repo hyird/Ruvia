@@ -164,7 +164,7 @@ void check_peer_exchange(bool reply_close, bool truncated_frame = false) {
         websocket.reset();
         co_await client.shutdown();
         peer.close();
-        attachment.stop();
+        attachment.request_stop();
         if (failure) {
             std::rethrow_exception(failure);
         }
@@ -275,7 +275,7 @@ void check_server_closes_first(bool client_initiates, bool server_closes) {
             (void)co_await ruvia::sleep_for(client.worker(), std::chrono::milliseconds(10));
         }
         peer.close();
-        attachment.stop();
+        attachment.request_stop();
         if (failure) {
             std::rethrow_exception(failure);
         }
@@ -424,7 +424,7 @@ TEST(Ruvia, websocket_client_negotiates_deflate_and_can_skip_individual_messages
         client.close();
         co_await client.shutdown();
         peer.close();
-        attachment.stop();
+        attachment.request_stop();
     };
     const auto run_to_completion = [&]() -> ruvia::task<void> {
         try {
@@ -433,7 +433,7 @@ TEST(Ruvia, websocket_client_negotiates_deflate_and_can_skip_individual_messages
             // A rejected handshake must report its error, not leave the test's
             // event-loop work guard running until the whole suite times out.
             peer.close();
-            attachment.stop();
+            attachment.request_stop();
             throw;
         }
     };
@@ -481,7 +481,7 @@ TEST(Ruvia, websocket_client_event_loop_stop_joins_pending_connect) {
         attachment.run();
     });
     if (received_value.wait_for(std::chrono::seconds(5)) != std::future_status::ready) {
-        attachment.stop();
+        attachment.request_stop();
         asio::post(io, [&gate] {
             gate.cancel();
         });
@@ -490,7 +490,7 @@ TEST(Ruvia, websocket_client_event_loop_stop_joins_pending_connect) {
         throw std::runtime_error("WebSocket peer did not receive the upgrade request");
     }
     received_value.get();
-    attachment.stop();
+    attachment.request_stop();
     asio::post(io, [&gate] {
         gate.cancel();
     });
@@ -539,7 +539,7 @@ TEST(Ruvia, websocket_client_handshake_sends_heads_beyond_the_retained_buffer) {
         }
         co_await client.shutdown();
         peer.close();
-        attachment.stop();
+        attachment.request_stop();
         if (failure) {
             std::rethrow_exception(failure);
         }
@@ -606,7 +606,7 @@ TEST(Ruvia, websocket_client_handshake_sends_the_default_user_agent_unless_heade
             }
             co_await client.shutdown();
             peer.close();
-            attachment.stop();
+            attachment.request_stop();
             if (failure) {
                 std::rethrow_exception(failure);
             }
@@ -687,7 +687,7 @@ TEST(Ruvia, websocket_client_event_loop_stop_joins_connected_heartbeat_and_pendi
         attachment.run();
     });
     if (ping_ready.wait_for(std::chrono::seconds(5)) != std::future_status::ready) {
-        attachment.stop();
+        attachment.request_stop();
         driver.join();
         std::move(root).get();
         if (peer_failure != nullptr) {
@@ -696,7 +696,7 @@ TEST(Ruvia, websocket_client_event_loop_stop_joins_connected_heartbeat_and_pendi
         throw std::runtime_error("WebSocket client did not send its heartbeat ping");
     }
     ping_ready.get();
-    attachment.stop();
+    attachment.request_stop();
     driver.join();
     std::move(root).get();
     if (peer_failure != nullptr) {
@@ -796,7 +796,7 @@ TEST(Ruvia, websocket_client_heartbeat_pings_after_a_blocked_message_write) {
         attachment.run();
     });
     if (ping_ready.wait_for(std::chrono::seconds(10)) != std::future_status::ready) {
-        attachment.stop();
+        attachment.request_stop();
         driver.join();
         std::move(root).get();
         if (peer_failure != nullptr) {
@@ -805,7 +805,7 @@ TEST(Ruvia, websocket_client_heartbeat_pings_after_a_blocked_message_write) {
         throw std::runtime_error("WebSocket client did not ping after its blocked write");
     }
     ping_ready.get();
-    attachment.stop();
+    attachment.request_stop();
     driver.join();
     std::move(root).get();
     if (peer_failure != nullptr) {
@@ -862,7 +862,7 @@ TEST(Ruvia, websocket_client_heartbeat_aborts_a_write_stalled_by_a_non_reading_p
     });
     // Well under the 30 s default write timeout the configuration disabled.
     const bool finished = write_done.wait_for(std::chrono::seconds(5)) == std::future_status::ready;
-    attachment.stop();
+    attachment.request_stop();
     driver.join();
     std::move(root).get();
     if (!finished) {
@@ -945,7 +945,7 @@ TEST(Ruvia, websocket_client_reads_frame_above_default_message_limit) {
         }
         co_await client.shutdown();
         peer.close();
-        attachment.stop();
+        attachment.request_stop();
         if (failure) {
             std::rethrow_exception(failure);
         }
@@ -1018,7 +1018,7 @@ TEST(Ruvia, websocket_client_rejects_untrusted_tls_peer) {
         }
         co_await client.shutdown();
         peer.close();
-        attachment.stop();
+        attachment.request_stop();
         if (failure) {
             std::rethrow_exception(failure);
         }
@@ -1147,7 +1147,7 @@ void check_heartbeat_policy(bool enabled) {
         // before joining its completion so the original exception is reported.
         peer.close();
         co_await peer_done.wait();
-        attachment.stop();
+        attachment.request_stop();
         if (failure) {
             std::rethrow_exception(failure);
         }
@@ -1231,7 +1231,7 @@ void check_client_failure_termination(client_failure_scenario scenario) {
         co_await client.shutdown();
         peer.close();
         co_await peer_done.wait();
-        attachment.stop();
+        attachment.request_stop();
         if (failure) {
             std::rethrow_exception(failure);
         }
@@ -1332,7 +1332,7 @@ TEST(Ruvia, websocket_client_keeps_a_peer_whose_pong_waits_for_the_next_read) {
         }
         co_await client.shutdown();
         peer.close();
-        attachment.stop();
+        attachment.request_stop();
         if (failure) {
             std::rethrow_exception(failure);
         }
@@ -1403,7 +1403,7 @@ TEST(Ruvia, websocket_client_read_progresses_between_back_to_back_writes) {
         }
         co_await client.shutdown();
         peer.close();
-        attachment.stop();
+        attachment.request_stop();
         if (failure) {
             std::rethrow_exception(failure);
         }
@@ -1449,7 +1449,7 @@ TEST(Ruvia, websocket_client_handshake_rejection_records_upstream_http_status) {
         }
         co_await client.shutdown();
         peer.close();
-        attachment.stop();
+        attachment.request_stop();
         if (failure) {
             std::rethrow_exception(failure);
         }

@@ -124,22 +124,10 @@ http_content_coding_field_result parse_http_content_coding(std::string_view valu
     return parser.finish();
 }
 
-http_content_coding_field_result parse_http_content_coding_headers(std::span<const http_header> headers) noexcept {
-    return detail::http_content_coding_from_headers(headers);
-}
-
-http_content_coding_field_result parse_http_content_coding_headers(const http_response_headers& headers) noexcept {
+http_content_coding_field_result parse_http_content_coding_headers(const http_header_range_view& headers) noexcept {
     detail::http_content_coding_field_parser parser;
-    const auto* const first = detail::http_response_header_state_access::known_header(headers, detail::response_header_content_encoding);
-    if (first == nullptr) {
-        return parser.finish();
-    }
-    if (!detail::http_response_header_access::append(*first)) {
-        parser.update(first->value());
-        return parser.finish();
-    }
-    for (const auto& header : headers) {
-        if (detail::http_response_header_access::known_bit(header) == detail::response_header_content_encoding) {
+    for (const auto header : headers) {
+        if (http_ascii_equals_ignore_case(header.name(), "Content-Encoding")) {
             parser.update(header.value());
         }
     }

@@ -159,7 +159,7 @@ void exercise_legacy_http_peer(int version, ruvia::http_client_versions protocol
             auto response = co_await client.client().get("/legacy").send();
             EXPECT_TRUE(response.protocol_version() == ruvia::http_protocol_version::http11);
             EXPECT_TRUE(response.status() == ruvia::http_status::ok);
-            const auto body = co_await response.stream().read_all();
+            const auto body = co_await response.bytes();
             EXPECT_EQ(body.text(), std::string_view("legacy"));
             exchanged = true;
         } catch (const ruvia::http_client_error& error) {
@@ -254,7 +254,7 @@ TEST(Ruvia, http_client_ref_origin_and_expired_send_reject_after_shutdown) {
                 failure = std::current_exception();
             }
         }
-        attachment.stop();
+        attachment.request_stop();
     };
     auto root = attachment.loop().start(run());
     attachment.run();
@@ -320,22 +320,22 @@ TEST(Ruvia, http_client_response_and_body_moved_from_throw_logic_error) {
                 (void)original.stream().read();
             }));
             EXPECT_TRUE(throws_logic_error([&] {
-                (void)original.stream().text();
+                (void)original.stream().read_text();
             }));
             EXPECT_TRUE(throws_logic_error([&] {
-                (void)original.stream().read_all();
+                (void)original.bytes();
             }));
 
             EXPECT_TRUE(active.status() == ruvia::http_status::ok);
             EXPECT_EQ(active.header("x-test"), std::optional<std::string_view>("ok"));
-            auto body = co_await active.stream().read_all();
+            auto body = co_await active.bytes();
             EXPECT_EQ(body.text(), std::string_view("hi"));
         } catch (...) {
             failure = std::current_exception();
         }
         co_await client.shutdown();
         peer.close();
-        attachment.stop();
+        attachment.request_stop();
     };
     auto root = attachment.loop().start(run());
     attachment.run();
@@ -516,7 +516,7 @@ public:
         const auto& key = identity_.private_key_file();
         const std::array listeners{ruvia::listen_config{.address_ = "127.0.0.1", .http_ = source_port_.endpoint().port(), .https_ = secure_port_.endpoint().port(), .tls_ = {.identity_ = {.certificate_chain_file_ = identity_.ca_file_, .private_key_file_ = key}}}, ruvia::listen_config{.address_ = "127.0.0.1", .http_ = destination_port_.endpoint().port()}};
         auto& app = ruvia::app();
-        app.server({.worker_count_ = 1}).listen(std::span<const ruvia::listen_config>(listeners)).client({.alias_ = "source", .base_url_ = targets_->source_, .request_timeout_ = std::chrono::seconds(3), .versions_ = ruvia::http_client_versions{.http2_ = false}, .cookies_ = {{"configured", "source-secret"}}}).client({.alias_ = "destination", .base_url_ = targets_->destination_, .request_timeout_ = std::chrono::seconds(3), .versions_ = ruvia::http_client_versions{.http2_ = false}}).client({.alias_ = "secure", .base_url_ = targets_->secure_, .request_timeout_ = std::chrono::seconds(3), .versions_ = ruvia::http_client_versions{.http2_ = false}, .tls_ = {.ca_file_ = identity_.ca_file_, .server_name_ = "localhost"}});
+        app.workers({.worker_count_ = 1}).listen(std::span<const ruvia::listen_config>(listeners)).client({.alias_ = "source", .base_url_ = targets_->source_, .request_timeout_ = std::chrono::seconds(3), .versions_ = ruvia::http_client_versions{.http2_ = false}, .cookies_ = {{"configured", "source-secret"}}}).client({.alias_ = "destination", .base_url_ = targets_->destination_, .request_timeout_ = std::chrono::seconds(3), .versions_ = ruvia::http_client_versions{.http2_ = false}}).client({.alias_ = "secure", .base_url_ = targets_->secure_, .request_timeout_ = std::chrono::seconds(3), .versions_ = ruvia::http_client_versions{.http2_ = false}, .tls_ = {.ca_file_ = identity_.ca_file_, .server_name_ = "localhost"}});
         app.use_worker_state<std::shared_ptr<redirect_destinations>>([targets = targets_] {
             return targets;
         });
@@ -606,7 +606,7 @@ TEST(Ruvia, http_client_fluent_ownership_helpers_json_and_registered_redirects) 
             EXPECT_EQ(observed.get<"single_header">().view(), "owned-value");
             EXPECT_EQ(observed.get<"span_header">().view(), "span-value");
             EXPECT_TRUE((co_await response.bytes()).empty());
-            EXPECT_TRUE(!(co_await response.read()));
+            EXPECT_TRUE(!(co_await response.stream().read()));
             bool replay_rejected = false;
             try {
                 (void)co_await response.json<fluent_client_observation>();
@@ -833,7 +833,7 @@ TEST(Ruvia, http_client_fluent_ownership_helpers_json_and_registered_redirects) 
             failure = std::current_exception();
         }
         co_await client.shutdown();
-        attachment.stop();
+        attachment.request_stop();
     };
     auto root = attachment.loop().start(run());
     attachment.run();
@@ -1034,7 +1034,7 @@ TEST(Ruvia, http_client_unconsumed_builders_outlive_shutdown_and_client_storage)
         } catch (...) {
             failure = std::current_exception();
         }
-        attachment.stop();
+        attachment.request_stop();
     };
     auto root = attachment.loop().start(run());
     attachment.run();

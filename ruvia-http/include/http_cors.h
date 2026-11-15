@@ -101,9 +101,7 @@ public:
     // Removes controlled Access-Control-* headers from the existing response,
     // writes computed CORS headers when the origin is permitted, and merges
     // Vary tokens (such as Origin) without duplicates.
-    bool rewrite_response_headers(borrowed_text request_origin, std::vector<http_header>& response_headers) const;
-    bool rewrite_response_headers(borrowed_text request_origin, http_response_headers& response_headers) const;
-    bool rewrite_response_headers(borrowed_text request_origin, http_response& response) const;
+    bool rewrite_response_headers(borrowed_text request_origin, editable_http_headers response_headers) const;
     // Applies server-side CORS headers (including OPTIONS preflight and Allow
     // promotion) without overwriting headers already set by the route handler.
     bool apply_response_headers(const http_request& request, http_response& response) const;
@@ -132,6 +130,8 @@ private:
 
 [[nodiscard]] bool is_http_cors_controlled_response_header(std::string_view name) noexcept;
 
-void merge_http_vary_tokens(std::vector<http_header>& headers, std::span<const std::string_view> tokens);
-void merge_http_vary_token(std::vector<http_header>& headers, std::string_view token);
+// Adds the Vary tokens the block does not list yet, leaving one combined Vary
+// line; "*" replaces every Vary line.
+void merge_http_vary_tokens(editable_http_headers headers, std::span<const std::string_view> tokens);
+void merge_http_vary_token(editable_http_headers headers, std::string_view token);
 }  // namespace ruvia

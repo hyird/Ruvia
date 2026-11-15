@@ -600,19 +600,19 @@ template <typename result_type, typename payload_parser_type>
 }  // namespace
 
 redis_scan_result parse_redis_scan_result(redis_value&& value) {
-    return parse_redis_scan_envelope(std::move(value), redis_types_access::scan_result(), "unexpected redis scan reply", [](redis_scan_result& result_value, redis_value&& payload) {
-        redis_types_access::values(result_value) = parse_redis_string_array(std::move(payload));
+    return parse_redis_scan_envelope(std::move(value), redis_types_access::scan_page<std::string>(), "unexpected redis scan reply", [](redis_scan_result& result_value, redis_value&& payload) {
+        redis_types_access::entries(result_value) = parse_redis_string_array(std::move(payload));
     });
 }
 
 redis_hash_scan_result parse_redis_hash_scan_result(redis_value&& value) {
-    return parse_redis_scan_envelope(std::move(value), redis_types_access::hash_scan_result(), "unexpected redis hscan reply", [](redis_hash_scan_result& result_value, redis_value&& payload) {
+    return parse_redis_scan_envelope(std::move(value), redis_types_access::scan_page<redis_key_value>(), "unexpected redis hscan reply", [](redis_hash_scan_result& result_value, redis_value&& payload) {
         redis_types_access::entries(result_value) = parse_redis_key_value_array(std::move(payload), "unexpected redis hscan entry count");
     });
 }
 
 redis_z_scan_result parse_redis_z_scan_result(redis_value&& value) {
-    return parse_redis_scan_envelope(std::move(value), redis_types_access::z_scan_result(), "unexpected redis zscan reply", [](redis_z_scan_result& result_value, redis_value&& payload) {
+    return parse_redis_scan_envelope(std::move(value), redis_types_access::scan_page<redis_scored_value>(), "unexpected redis zscan reply", [](redis_z_scan_result& result_value, redis_value&& payload) {
         redis_types_access::entries(result_value) = parse_redis_scored_array(std::move(payload));
     });
 }
@@ -629,15 +629,14 @@ std::optional<redis_key_value> parse_redis_blocking_pop_reply(redis_value&& valu
     return redis_types_access::key_value(take_redis_string(std::move(items[0])), take_redis_string(std::move(items[1])));
 }
 
-std::optional<redis_x_read_group_result> parse_redis_x_read_group_reply(redis_value&& value) {
+std::optional<std::vector<redis_stream_read_result>> parse_redis_x_read_group_reply(redis_value&& value) {
     throw_if_redis_error(value);
     if (value.is_null()) {
         return std::nullopt;
     }
 
-    auto result_value = redis_types_access::xread_group_result();
     const auto stream_values = redis_value_array(value);
-    auto& streams = redis_types_access::streams(result_value);
+    std::vector<redis_stream_read_result> streams;
     streams.reserve(stream_values.size());
     for (auto& stream_value : stream_values) {
         const auto stream_parts = redis_value_array(stream_value);
@@ -661,7 +660,7 @@ std::optional<redis_x_read_group_result> parse_redis_x_read_group_reply(redis_va
         }
         streams.emplace_back(std::move(stream));
     }
-    return result_value;
+    return streams;
 }
 
 // RESP2 subscribed-mode pushes are arrays led by their kind: confirmations

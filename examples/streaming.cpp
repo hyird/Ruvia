@@ -35,7 +35,7 @@ public:
 private:
     ruvia::task<ruvia::http_response> upload_raw(ruvia::context& c) {
         std::size_t bytes_value = 0;
-        auto& reader_value = c.req().body_reader();
+        auto& reader_value = c.request_body();
         // Each read waits at most 30 s for the next chunk; a timeout throws
         // std::system_error(std::errc::timed_out) and keeps the body readable.
         while (auto chunk = co_await reader_value.read({.timeout_ = std::chrono::seconds(30)})) {
@@ -52,7 +52,7 @@ private:
     ruvia::task<ruvia::http_response> upload_multipart(ruvia::context& c) {
         std::size_t parts = 0;
         std::size_t bytes_value = 0;
-        auto reader_value = c.req().multipart_reader();
+        auto reader_value = c.request_multipart();
         while (auto part = co_await reader_value.read()) {
             if (part->phase() == ruvia::multipart_chunk_phase::first || part->phase() == ruvia::multipart_chunk_phase::complete) {
                 ++parts;
@@ -105,9 +105,11 @@ int main() {
     try {
         ruvia::app()
             .listen({.address_ = "0.0.0.0", .http_ = 8082})
-            .server({
+            .workers({
                 .worker_count_ = 2,
                 .process_signal_handlers_ = ruvia::process_signal_handler_policy::install,
+            })
+            .server({
                 .max_buffered_body_bytes_ = 16 * 1024 * 1024,
                 .max_stream_body_bytes_ = std::nullopt,
             })

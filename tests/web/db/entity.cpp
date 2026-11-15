@@ -378,7 +378,7 @@ TEST(Ruvia, db_row_column_lookup_reports_absent_found_and_repeated) {
         const auto& row = rows.front();
         const auto found = row.find("name");
         EXPECT_TRUE(found.status_ == unique_lookup_status::found);
-        EXPECT_TRUE(found.field_ == &row[2]);
+        EXPECT_TRUE(found.value_ == &row[2]);
         EXPECT_TRUE(row["name"].as<std::string_view>() == "alice");
         EXPECT_TRUE(row.find("id").status_ == unique_lookup_status::repeated);
         EXPECT_TRUE(row.find("missing").status_ == unique_lookup_status::absent);
@@ -1133,7 +1133,7 @@ TEST(Ruvia, db_client_fresh_close_and_loop_stop_share_worker_completion) {
             client.close();
         });
         rendezvous.arrive_and_wait();
-        pool.stop();
+        pool.request_stop();
         closer.join();
         pool.join();
         EXPECT_TRUE(!client.worker().accepting());
@@ -1172,7 +1172,7 @@ TEST(Ruvia, db_client_event_loop_stop_awaits_retirement_of_pending_authenticatio
         } catch (...) {
             peer_failure = std::current_exception();
         }
-        attachment.stop();
+        attachment.request_stop();
         driver.join();
         std::move(root).get();
         if (peer_failure) {

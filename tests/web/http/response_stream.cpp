@@ -286,7 +286,7 @@ class stream_lane_routes final {
     ruvia::task<void> uaf_head_stream(ruvia::context& context_value) {
         auto& observed = *context_value.worker_state<std::shared_ptr<stream_lane_observation>>();
         auto& out = context_value.stream_text();
-        auto& reader = context_value.req().body_reader();
+        auto& reader = context_value.request_body();
         try {
             const auto phase = co_await out.commit();
             if (phase == ruvia::stream_commit_result::body) {
@@ -504,7 +504,7 @@ TEST(Ruvia, response_stream_completed_head_preserves_transfer_coded_request_cons
     stream_lane_observed->uaf_decoded_bytes_.store(0);
 
     auto& io = ruvia::test::new_test_io_context();
-    ruvia::test::http_server_fixture server(io, {.worker_count_ = 1, .connection_scan_interval_ = std::chrono::milliseconds(5)});
+    ruvia::test::http_server_fixture server(io, {.connection_scan_interval_ = std::chrono::milliseconds(5)});
 
     asio::ip::tcp::socket sock(io);
     sock.connect(server.endpoint());
@@ -1224,7 +1224,7 @@ class body_lane_routes final {
 
     ruvia::task<ruvia::http_response> read_multipart_reader(ruvia::context& context_value) {
         auto& observed = *context_value.worker_state<std::shared_ptr<body_lane_observation>>();
-        auto reader = context_value.req().multipart_reader();
+        auto reader = context_value.request_multipart();
         std::string body;
         while (auto part = co_await reader.read()) {
             observed.multipart_reader_parts_.fetch_add(1);
@@ -1237,7 +1237,7 @@ class body_lane_routes final {
     // where it was; the next read resumes the same part.
     ruvia::task<ruvia::http_response> read_interrupted_multipart(ruvia::context& context_value) {
         auto& observed = *context_value.worker_state<std::shared_ptr<body_lane_observation>>();
-        ruvia::multipart_reader reader(context_value.req().body_reader(), {.boundary_ = ruvia::test::make_multipart_boundary("cut")});
+        ruvia::multipart_reader reader(context_value.request_body(), {.boundary_ = ruvia::test::make_multipart_boundary("cut")});
         try {
             (void)reader.read({.timeout_ = std::chrono::milliseconds(0)});
         } catch (const std::invalid_argument&) {
@@ -1302,12 +1302,12 @@ class body_lane_routes final {
 
     ruvia::task<ruvia::http_response> read(ruvia::context& context_value) {
         auto& observed = *context_value.worker_state<std::shared_ptr<body_lane_observation>>();
-        auto& reader = context_value.req().body_reader();
+        auto& reader = context_value.request_body();
         {
             auto discarded = reader.read();
             static_cast<void>(discarded);
         }
-        auto first = reader.text();
+        auto first = reader.read_text();
         auto last = reader.read();
         ruvia::task_scope reads(context_value.worker());
         const auto receive = [&]() -> ruvia::task<void> {
@@ -1329,7 +1329,7 @@ class body_lane_routes final {
 
     ruvia::task<ruvia::http_response> read_multipart(ruvia::context& context_value) {
         auto& observed = *context_value.worker_state<std::shared_ptr<body_lane_observation>>();
-        ruvia::multipart_reader reader(context_value.req().body_reader(), {.boundary_ = ruvia::test::make_multipart_boundary("lazy")});
+        ruvia::multipart_reader reader(context_value.request_body(), {.boundary_ = ruvia::test::make_multipart_boundary("lazy")});
         auto first = reader.read();
         auto last = reader.read();
         std::string body;
@@ -1362,7 +1362,7 @@ class body_lane_routes final {
 
     ruvia::task<ruvia::http_response> reread_truncated(ruvia::context& context_value) {
         auto& observed = *context_value.worker_state<std::shared_ptr<body_lane_observation>>();
-        auto& reader = context_value.req().body_reader();
+        auto& reader = context_value.request_body();
         try {
             static_cast<void>(co_await reader.read());
         } catch (const ruvia::http_protocol_error&) {
@@ -1377,13 +1377,13 @@ class body_lane_routes final {
     }
 
     ruvia::task<ruvia::http_response> read_small_chunks(ruvia::context& context_value) {
-        auto& reader = context_value.req().body_reader();
+        auto& reader = context_value.request_body();
         std::string body;
-        while (const auto chunk = co_await reader.text()) {
+        while (const auto chunk = co_await reader.read_text()) {
             body.append(*chunk);
         }
         body.push_back(';');
-        body.append(context_value.req().trailer("X-Sum").value_or("missing"));
+        body.append(context_value.trailer("X-Sum").value_or("missing"));
         co_return context_value.text(std::move(body));
     }
 
@@ -1521,7 +1521,7 @@ void exercise_lazy_body_reads(std::string_view target, std::string_view body, st
         }
         static_cast<void>(watchdog.cancel());
         ruvia::close_socket(client);
-        attachment.stop();
+        attachment.request_stop();
     };
     auto done = attachment.loop().start(run());
     attachment.run();
@@ -1598,7 +1598,7 @@ std::string exchange_raw_request(std::string_view head, std::string_view body, b
         }
         static_cast<void>(watchdog.cancel());
         ruvia::close_socket(client);
-        attachment.stop();
+        attachment.request_stop();
     };
     auto done = attachment.loop().start(run());
     attachment.run();

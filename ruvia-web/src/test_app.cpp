@@ -76,8 +76,8 @@ struct test_app::impl_type final {
                 std::terminate();
             }
         }
-        blocking_pool_.stop();
-        event_loop_pool_.stop();
+        blocking_pool_.request_stop();
+        event_loop_pool_.request_stop();
         event_loop_pool_.join();
         blocking_pool_.join();
     }
@@ -105,11 +105,12 @@ struct test_app::impl_type final {
             route_plan_ = detail::compile_route_plan(registrars_, controllers_, configuration_);
             routes_.emplace(*route_plan_, controllers_);
 
+            const auto& host_rate_limit = configuration_.rate_limit();
             capabilities_.emplace(event_loop_.io_context(), worker_, detail::worker_capability_definitions{.worker_states_ = configuration_.worker_states()},
                 detail::worker_capability_options{
-                    .default_rate_limit_ = options_.default_rate_limit_per_worker_,
+                    .default_rate_limit_ = host_rate_limit ? std::optional<rate_limit_rule>(host_rate_limit->rule_) : std::nullopt,
                     .route_rate_limits_ = routes_->has_route_rate_limit() ? detail::route_rate_limit_presence::present : detail::route_rate_limit_presence::absent,
-                    .rate_limit_capacity_ = options_.rate_limit_capacity_per_worker_,
+                    .rate_limit_capacity_ = host_rate_limit ? host_rate_limit->capacity_per_worker_ : default_rate_limit_capacity_per_worker,
                     .max_decoded_body_bytes_ = options_.server_.max_buffered_body_bytes_,
                     .http_client_worker_ = options_.server_.http_client_worker_,
                     .env_ = &env_,
@@ -217,18 +218,6 @@ test_app& test_app::server(server_config config) {
     return *this;
 }
 
-test_app& test_app::rate_limit(rate_limit_config config) {
-    impl_->require_configurable();
-    impl_->options_.set_rate_limit(config);
-    return *this;
-}
-
-test_app& test_app::rate_limit(std::nullptr_t) {
-    impl_->require_configurable();
-    impl_->options_.clear_rate_limit();
-    return *this;
-}
-
 test_app& test_app::trusted_proxies(trusted_proxy_config config) {
     impl_->require_configurable();
     impl_->options_.set_trusted_proxies(config);
@@ -241,53 +230,9 @@ test_app& test_app::trusted_proxies(std::nullptr_t) {
     return *this;
 }
 
-test_app& test_app::on_error(http_error_handler handler) {
+void test_app::edit_configuration(detail::callback_ref<void(detail::app_configuration&)> edit) {
     impl_->require_configurable();
-    impl_->configuration_.on_error(detail::own_callback(std::move(handler)));
-    return *this;
-}
-
-test_app& test_app::on_not_found(http_not_found_handler handler) {
-    impl_->require_configurable();
-    impl_->configuration_.on_not_found(detail::own_callback(std::move(handler)));
-    return *this;
-}
-
-test_app& test_app::on_error(std::nullptr_t) {
-    impl_->require_configurable();
-    // test_app holds no configuration lock, so the old handler may die here.
-    (void)impl_->configuration_.on_error(nullptr);
-    return *this;
-}
-
-test_app& test_app::on_not_found(std::nullptr_t) {
-    impl_->require_configurable();
-    (void)impl_->configuration_.on_not_found(nullptr);
-    return *this;
-}
-
-test_app& test_app::on_error(scoped_error_handler_options options) {
-    impl_->require_configurable();
-    impl_->configuration_.on_error(options.prefix_, detail::own_callback(std::move(options.handler_)));
-    return *this;
-}
-
-test_app& test_app::on_not_found(scoped_not_found_handler_options options) {
-    impl_->require_configurable();
-    impl_->configuration_.on_not_found(options.prefix_, detail::own_callback(std::move(options.handler_)));
-    return *this;
-}
-
-test_app& test_app::use_middleware(detail::owned_middleware_descriptor descriptor) {
-    impl_->require_configurable();
-    impl_->configuration_.add_middleware(std::move(descriptor));
-    return *this;
-}
-
-test_app& test_app::use_worker_state_definition(detail::worker_state_definition definition) {
-    impl_->require_configurable();
-    impl_->configuration_.add_worker_state(std::move(definition));
-    return *this;
+    edit(impl_->configuration_);
 }
 
 test_app& test_app::add_controllers(std::span<const detail::controller_registrar> registrars) {

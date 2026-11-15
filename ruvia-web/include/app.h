@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -11,6 +12,7 @@
 #include <string>
 #include <string_view>
 #include <system_error>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -24,11 +26,14 @@
 #include "http_header.h"
 #include "http_server.h"
 #include "middleware.h"
+#include "move_only_function.h"
 #include "rate_limiting.h"
 #include "request_stream.h"
 #include "server_connection.h"
 #include "server_observation.h"
+#include "static_root.h"
 #include "task.h"
+#include "timeout_duration.h"
 #include "worker_ref.h"
 #include "worker_state.h"
 #ifdef RUVIA_ENABLE_DATABASE
@@ -61,60 +66,70 @@ struct redis_registration_config final {
 };
 #endif
 
+enum class process_signal_handler_policy : std::uint8_t {
+    external_owner,
+    install,
+};
+
+// The workers application::run() owns. Standalone hosts (http_server,
+// http_server_group) run on the caller's event loops and have no counterpart.
+struct application_worker_config final {
+    // Business workers, each with its own event loop; a connection stays on
+    // the worker that adopted it. On POSIX every worker binds each TCP
+    // listener with SO_REUSEPORT and accepts on its own event loop. On
+    // Windows one acceptor thread per application owns every listener
+    // exclusively (SO_EXCLUSIVEADDRUSE) and hands each accepted socket to the
+    // business worker holding the fewest connections; a socket that worker's
+    // queue cannot admit is closed and counted in connections_refused_.
+    std::size_t worker_count_{(std::max)(1U, std::thread::hardware_concurrency())};
+    // install: run() installs SIGINT/SIGTERM handlers that call stop().
+    process_signal_handler_policy process_signal_handlers_{process_signal_handler_policy::external_owner};
+    // Bound of each worker's cross-thread job queue.
+    std::size_t worker_queue_capacity_{1024};
+};
+
+// Runtime behavior belongs to the server's document-root binding, not to the
+// immutable static_root index. application document roots are always refreshed:
+// one refresher per application rebuilds the index each interval and every
+// worker adopts the shared snapshot. A standalone static_root remains immutable
+// because it has no server runtime.
+struct document_root_config final {
+    std::filesystem::path root_{};
+    static_root_options static_options_{};
+    timeout_duration refresh_interval_{std::chrono::seconds(1)};
+    bool precompress_gzip_{false};
+    bool precompress_brotli_{false};
+    bool precompress_zstd_{false};
+    std::size_t precompress_min_bytes_{1024};
+    std::size_t precompress_max_bytes_{std::size_t{256} * 1024};
+};
+
+// A self-contained startup/shutdown callback, invoked on the application::run() caller.
+// on_start runs after worker initialization, before TCP admission. on_stop
+// runs after admission closes, before runtime join (including start-hook failure
+// or cancellation). A self-contained callable is owned by the hook value;
+// references captured by that callable must still
+// outlive the registered hook. Invoking an empty hook is a programming error
+// and throws std::logic_error.
+// 空函数指针与目标析构重入的契约同 access_log_callback。
+using app_hook = move_only_function<void()>;
+
 // Runtime listener controls (add_listener(), remove_listener(), ...) are the
 // listener_controls members; they require a running app, and listeners they
 // add or remove stay so for later run()s. stats() is all zero before run()
 // starts the workers and after it returns, and is safe from a stop hook.
-class application final : public listener_controls {
+// Middleware, worker state, fallback handlers and the rate limit are the
+// dispatch_configuration members; they require a stopped app.
+class application final : public listener_controls, public dispatch_configuration<application> {
 public:
-    // Registers per-worker middleware instances in order before the matched
-    // route's controller and route middleware. Arguments are retained at
-    // registration; route model validators must be declared on their route.
-    template <middleware middleware_type, typename... args_types>
-    application& use(args_types&&... args) & {
-        return use_middleware(detail::make_owned_middleware_descriptor<middleware_type>(std::forward<args_types>(args)...));
-    }
-    template <middleware middleware_type, typename... args_types>
-    application& use(args_types&&...) && = delete;
-
-    // Runs the middleware exactly on requests whose path is under the prefix:
-    // whole path segments, compared percent-decoded, with trailing slashes
-    // normalized ("/admin" covers "/admin", "/admin/x" and "/%61dmin/x", never
-    // "/administrator"). Scope follows the request path, not the route
-    // pattern: a route "/:section/panel" runs it for "/admin/panel" but not
-    // "/other/panel". Membership is compiled into the route plan; only a route
-    // that serves paths both inside and outside the scope checks the request
-    // path at dispatch. Middleware constructor arguments cannot be confused
-    // with the separately named scope. A "/" prefix throws
-    // std::invalid_argument: use<T>() is the only app-wide spelling.
-    template <middleware middleware_type, typename... args_types>
-    application& use_at(const middleware_scope_options& options, args_types&&... args) & {
-        return use_middleware(detail::make_scoped_app_middleware<middleware_type>(options, std::forward<args_types>(args)...));
-    }
-    template <middleware middleware_type, typename... args_types>
-    application& use_at(const middleware_scope_options&, args_types&&...) && = delete;
-
-    // One recipe per type; every worker owns an independent instance. A
-    // request or posted job only borrows its own worker's instance.
-    template <typename state_type, typename factory_type>
-    application& use_worker_state(factory_type&& factory) & {
-        return use_worker_state_definition(detail::worker_state_definition::make<state_type>(std::forward<factory_type>(factory)));
-    }
-    template <typename state_type, typename factory_type>
-    application& use_worker_state(factory_type&&) && = delete;
-
-    template <typename state_type>
-    application& use_worker_state() & {
-        return use_worker_state_definition(detail::make_default_worker_state<state_type>());
-    }
-    template <typename state_type>
-    application& use_worker_state() && = delete;
-
     [[nodiscard]] const ruvia::env& env() const noexcept;
     application& load_dotenv(dotenv_options options = {}) &;
     application& load_dotenv(dotenv_options options = {}) && = delete;
     application& load_dotenv(const std::filesystem::path& path, dotenv_options options = {}) &;
     application& load_dotenv(const std::filesystem::path& path, dotenv_options options = {}) && = delete;
+    // Validated as one unit; a stopped app only, like every setter below.
+    application& workers(application_worker_config config) &;
+    application& workers(application_worker_config config) && = delete;
     application& server(server_config config) &;
     application& server(server_config config) && = delete;
     // Loads every TLS certificate, private key and client CA bundle of
@@ -150,31 +165,6 @@ public:
     application& blocking_pool(blocking_pool_options config) && = delete;
     application& blocking_pool(std::nullptr_t) &;
     application& blocking_pool(std::nullptr_t) && = delete;
-
-    // The app-wide fallbacks; registering one a second time throws
-    // std::invalid_argument instead of silently replacing the first.
-    application& on_error(http_error_handler handler) &;
-    application& on_error(http_error_handler handler) && = delete;
-    application& on_not_found(http_not_found_handler handler) &;
-    application& on_not_found(http_not_found_handler handler) && = delete;
-    // Clearing retires the old handler after releasing the application
-    // configuration lock, as callbacks() does.
-    application& on_error(std::nullptr_t) &;
-    application& on_error(std::nullptr_t) && = delete;
-    application& on_not_found(std::nullptr_t) &;
-    application& on_not_found(std::nullptr_t) && = delete;
-    // Path-prefix-scoped fallbacks, the Hono sub-app scoping analog: the
-    // deepest matching registered prefix wins, matching on whole path
-    // segments ("/api" scopes "/api" and "/api/x", never "/apix") compared
-    // percent-decoded; the prefix-less on_error/not_found remain the app-wide
-    // fallback. A trailing slash is ignored; registering an equivalent prefix
-    // twice ("/api", "/api/", "/%61pi") throws std::invalid_argument instead
-    // of silently choosing by call order, and so does the prefix "/", which
-    // would shadow the prefix-less form.
-    application& on_error(scoped_error_handler_options options) &;
-    application& on_error(scoped_error_handler_options options) && = delete;
-    application& on_not_found(scoped_not_found_handler_options options) &;
-    application& on_not_found(scoped_not_found_handler_options options) && = delete;
     // Peers whose forwarding headers name the real client. Accepts addresses
     // and CIDR blocks ("10.0.0.0/8", "2001:db8::/32", "127.0.0.1"); a malformed
     // entry throws std::invalid_argument at configuration time rather than
@@ -190,18 +180,8 @@ public:
     // client() is then the nearest trusted address after it, or remote().
     application& trusted_proxies(trusted_proxy_config config) &;
     application& trusted_proxies(trusted_proxy_config config) && = delete;
-
-    // The rate limit every request passes. A route may add its own with
-    // ruvia::rate_limit<max, window_ms>; both then apply, so the stricter is what
-    // a caller actually meets -- the same "narrower scope may only tighten"
-    // rule server_config::max_buffered_body_bytes_ follows.
-    //
-    // Worker-local: each worker counts independently, so a deployment with N
-    // workers admits up to N times this rule. Size it accordingly.
-    application& rate_limit(rate_limit_config config) &;
-    application& rate_limit(rate_limit_config config) && = delete;
-    application& rate_limit(std::nullptr_t) &;
-    application& rate_limit(std::nullptr_t) && = delete;
+    application& trusted_proxies(std::nullptr_t) &;
+    application& trusted_proxies(std::nullptr_t) && = delete;
     // Replaces the whole host callback set (see http_server_callbacks); empty
     // members clear. Stopped app only (std::logic_error while running). The
     // previous set is destroyed after releasing the application configuration
@@ -276,9 +256,10 @@ public:
 
 private:
     friend application& app();
+    friend class dispatch_configuration<application>;
 
-    application& use_middleware(detail::owned_middleware_descriptor descriptor) &;
-    application& use_worker_state_definition(detail::worker_state_definition definition) &;
+    // The dispatch_configuration guard: the app lock, and a stopped app.
+    void edit_configuration(detail::callback_ref<void(detail::app_configuration&)> edit);
 
     application();
     explicit application(std::shared_ptr<detail::app_state> state);

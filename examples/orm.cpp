@@ -188,7 +188,7 @@ task<void> run(const db_config& settings, event_loop_attachment& attachment, con
         co_await redis->shutdown();
     }
 #endif
-    attachment.stop();
+    attachment.request_stop();
     if (failure) {
         std::rethrow_exception(failure);
     }

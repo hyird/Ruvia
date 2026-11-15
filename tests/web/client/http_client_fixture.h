@@ -53,7 +53,7 @@ void run_operation(test_worker& worker_value, asio::io_context& io, operation_ty
         } catch (...) {
             failure = std::current_exception();
         }
-        worker_value.attachment_.stop();
+        worker_value.attachment_.request_stop();
     };
     auto root = worker_value.attachment_.loop().start(run());
     worker_value.attachment_.run();

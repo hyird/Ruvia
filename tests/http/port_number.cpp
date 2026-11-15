@@ -3,6 +3,7 @@
 #include <array>
 #include <cstdint>
 #include <limits>
+#include <optional>
 #include <stdexcept>
 #include <string_view>
 
@@ -102,7 +103,8 @@ TEST(Ruvia, port_number_preserves_absent_empty_and_explicit_authority_port_rules
         EXPECT_TRUE(explicit_port->effective_port(source) == 8443);
         EXPECT_TRUE(ruvia::http_authorities_equal("[::1]", "[::1]:", source));
     }
-    EXPECT_TRUE(!ruvia::http_authorities_equal("[::1]", "[::1]:0", 0));
+    EXPECT_TRUE(!ruvia::http_authorities_equal("[::1]", "[::1]:0", std::nullopt));
+    EXPECT_TRUE(ruvia::http_authorities_equal("[::1]", "[::1]:", std::nullopt));
     EXPECT_TRUE(ruvia::http_authorities_equal("[::1]:", "[::1]:65535", 65535));
     EXPECT_TRUE(!ruvia::http_authorities_equal("[::1]:8443", "[::1]:443", 443));
 }

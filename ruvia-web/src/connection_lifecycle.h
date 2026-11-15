@@ -143,9 +143,14 @@ public:
             for (auto& weak : ready) {
                 if (auto state = weak.lock()) {
                     state->closed_.store(true, std::memory_order_release);
-                    detail::worker_ref_access::defer_or_terminate(state->worker_, [state] {
+                    // A waiter suspended on a worker that can no longer run
+                    // this notification would be stranded; that is terminal.
+                    const bool deferred = state->worker_.defer_completion([state] {
                         state->changed_.notify();
                     });
+                    if (!deferred) {
+                        std::terminate();
+                    }
                 }
             }
         }

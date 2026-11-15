@@ -1421,7 +1421,7 @@ inline void retire_backend_attachment(event_loop_attachment& attachment) {
         return;
     }
     auto& io = loop.io_context();
-    attachment.stop();
+    attachment.request_stop();
     io.restart();
     attachment.run();
 }

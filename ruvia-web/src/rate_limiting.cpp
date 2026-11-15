@@ -353,7 +353,7 @@ void validate_rate_limit_config(const rate_limit_config& config) {
 
 rate_limiter::rate_limiter(std::optional<rate_limit_rule> default_rule_per_worker, route_rate_limit_presence route_rules, std::size_t capacity_value) :
     default_rule_per_worker_(default_rule_per_worker) {
-    // http_server_options::set_rate_limit, the only writer of the rule and the
+    // app_configuration::rate_limit, the only writer of the rule and the
     // capacity, validated both; the capacity is a power of two for the mask.
     if (default_rule_per_worker_.has_value() || route_rules == route_rate_limit_presence::present) {
         slots_.resize(capacity_value);

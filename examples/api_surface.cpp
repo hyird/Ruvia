@@ -433,7 +433,7 @@ private:
 
     static ruvia::task<ruvia::http_response> count_streaming_body(ruvia::context& c, std::string_view verb) {
         std::uint64_t bytes_value = 0;
-        auto& reader_value = c.req().body_reader();
+        auto& reader_value = c.request_body();
         while (auto chunk = co_await reader_value.read()) {
             bytes_value += chunk->size();
         }
@@ -451,7 +451,7 @@ private:
 
 int main() {
     try {
-        ruvia::app().listen({.address_ = "0.0.0.0", .http_ = 8088}).server({.worker_count_ = 2, .process_signal_handlers_ = ruvia::process_signal_handler_policy::install}).on_not_found(&surface_not_found).run();
+        ruvia::app().listen({.address_ = "0.0.0.0", .http_ = 8088}).workers({.worker_count_ = 2, .process_signal_handlers_ = ruvia::process_signal_handler_policy::install}).on_not_found(&surface_not_found).run();
     } catch (...) {
         std::cerr << ruvia::exception_text(std::current_exception()) << '\n';
         return 1;

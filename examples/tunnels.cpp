@@ -50,7 +50,7 @@ private:
         while (auto packet = co_await stream.read()) {
             // The adapter handles context ID 0 and ignores unknown contexts.
             // A zero-byte payload is a valid UDP packet, not an EOF marker.
-            co_await stream.send(packet->payload());
+            co_await stream.send(packet->bytes());
         }
         co_await stream.finish();
     }
@@ -77,7 +77,7 @@ int main() {
                 .private_key_file_ = std::filesystem::path(*key),
             };
         }
-        app.server({.worker_count_ = 2, .process_signal_handlers_ = ruvia::process_signal_handler_policy::install})
+        app.workers({.worker_count_ = 2, .process_signal_handlers_ = ruvia::process_signal_handler_policy::install})
             .listen(std::move(listener_value))
             .callbacks({.connection_failure_ = [](const ruvia::connection_failure_record& record) noexcept {
             try {

@@ -163,8 +163,10 @@ private:
 // instantiated and the route table finalized on the first request(), so the
 // configuration calls below may run in any order before that. Not thread-safe:
 // drive one test_app from one thread, like the single-threaded worker it
-// stands in for.
-class test_app final {
+// stands in for. Middleware, worker state, fallback handlers and the rate
+// limit are the dispatch_configuration members application shares, with the
+// same registration rules; here they are accepted until the first request().
+class test_app final : public dispatch_configuration<test_app> {
 public:
     test_app();
     ~test_app();
@@ -183,44 +185,9 @@ public:
         return add_controllers(registrars);
     }
 
-    // Uses the same composed dispatch configuration as application, with test_app's
-    // first-request lifecycle guard instead of the process lifecycle.
-    template <middleware middleware_type, typename... args_types>
-    test_app& use(args_types&&... args) {
-        return use_middleware(detail::make_owned_middleware_descriptor<middleware_type>(std::forward<args_types>(args)...));
-    }
-
-    template <middleware middleware_type, typename... args_types>
-    test_app& use_at(const middleware_scope_options& options, args_types&&... args) {
-        return use_middleware(detail::make_scoped_app_middleware<middleware_type>(options, std::forward<args_types>(args)...));
-    }
-
-    template <typename state_type, typename factory_type>
-    test_app& use_worker_state(factory_type&& factory) {
-        return use_worker_state_definition(detail::worker_state_definition::make<state_type>(std::forward<factory_type>(factory)));
-    }
-
-    template <typename state_type>
-    test_app& use_worker_state() {
-        return use_worker_state_definition(detail::make_default_worker_state<state_type>());
-    }
-
     test_app& server(server_config config);
-    test_app& rate_limit(rate_limit_config config);
-    test_app& rate_limit(std::nullptr_t);
     test_app& trusted_proxies(trusted_proxy_config config);
     test_app& trusted_proxies(std::nullptr_t);
-
-    // Same registration rules as application: a second app-wide handler, a
-    // "/" prefix (here and in use_at) and duplicate normalized prefixes throw
-    // std::invalid_argument rather than allowing production and in-memory
-    // tests to choose different handlers by call order.
-    test_app& on_error(http_error_handler handler);
-    test_app& on_not_found(http_not_found_handler handler);
-    test_app& on_error(std::nullptr_t);
-    test_app& on_not_found(std::nullptr_t);
-    test_app& on_error(scoped_error_handler_options options);
-    test_app& on_not_found(scoped_not_found_handler_options options);
 
     // Dispatches one request through the production route table and returns
     // the copied-out response. Request-level failures become the same error
@@ -229,9 +196,10 @@ public:
     [[nodiscard]] dispatch_response request(const test_request& request);
 
 private:
+    friend class dispatch_configuration<test_app>;
+
     test_app& add_controllers(std::span<const detail::controller_registrar> registrars);
-    test_app& use_middleware(detail::owned_middleware_descriptor descriptor);
-    test_app& use_worker_state_definition(detail::worker_state_definition definition);
+    void edit_configuration(detail::callback_ref<void(detail::app_configuration&)> edit);
 
     struct impl_type;
     std::unique_ptr<impl_type> impl_;

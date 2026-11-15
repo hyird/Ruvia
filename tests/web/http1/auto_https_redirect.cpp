@@ -58,14 +58,13 @@ TEST(Ruvia, auto_https_redirect_points_cleartext_requests_at_the_https_service) 
     auto& app = ruvia::app();
     static std::binary_semaphore started{0};
     app.on_error(&counted_error);
-    app.server({.worker_count_ = 1, .connection_scan_interval_ = 5ms})
-        .listen({
-            .address_ = "127.0.0.1",
-            .http_ = http_endpoint.port(),
-            .https_ = https_endpoint.port(),
-            .tls_ = {.identity_ = {.certificate_chain_file_ = identity.ca_file_, .private_key_file_ = private_key}},
-            .auto_https_redirect_ = true,
-        })
+    app.workers({.worker_count_ = 1}).server({.connection_scan_interval_ = 5ms}).listen({
+                                                                                            .address_ = "127.0.0.1",
+                                                                                            .http_ = http_endpoint.port(),
+                                                                                            .https_ = https_endpoint.port(),
+                                                                                            .tls_ = {.identity_ = {.certificate_chain_file_ = identity.ca_file_, .private_key_file_ = private_key}},
+                                                                                            .auto_https_redirect_ = true,
+                                                                                        })
         .on_start([] {
         started.release();
     });

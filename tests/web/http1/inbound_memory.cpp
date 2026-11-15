@@ -39,7 +39,6 @@ constexpr std::size_t worker_budget = 10000;
 
 [[nodiscard]] ruvia::server_config inbound_memory_config() {
     return {
-        .worker_count_ = 1,
         .connection_scan_interval_ = scan_interval,
         .max_inbound_buffer_bytes_per_worker_ = worker_budget,
         .max_inbound_buffer_bytes_per_connection_ = connection_budget,
@@ -59,7 +58,7 @@ class inbound_memory_routes final {
     }
 
     ruvia::task<ruvia::http_response> stream_body(ruvia::context& context_value) {
-        auto& reader = context_value.req().body_reader();
+        auto& reader = context_value.request_body();
         std::size_t received = 0;
         while (const auto chunk = co_await reader.read()) {
             received += chunk->size();
@@ -242,7 +241,7 @@ TEST(Ruvia, http2_request_body_inbound_budget_exhaustion_answers_with_503) {
             EXPECT_NE(body.text().find("inbound_buffer_limit"), std::string_view::npos);
         }
         co_await client.shutdown();
-        attachment.stop();
+        attachment.request_stop();
     };
     auto root = attachment.loop().start(run());
     std::jthread driver([&] {

@@ -204,7 +204,7 @@ void redis_subscription_connection::begin_idle_probe(task_scope& ping_writes, co
     // Only a waiting read observes input, so the idle clock starts with it.
     read_started_ = clock_type::now();
     probe_started_.reset();
-    arm_idle_probe(saturating_deadline(read_started_, interval->value()));
+    arm_idle_probe(deadline_after(read_started_, interval->value()));
 }
 
 void redis_subscription_connection::end_idle_probe() noexcept {
@@ -250,7 +250,7 @@ void redis_subscription_connection::idle_probe_expired() noexcept {
         probe_started_.reset();
     }
     if (probe_started_.has_value()) {
-        const auto probe_deadline = saturating_deadline(*probe_started_, interval);
+        const auto probe_deadline = deadline_after(*probe_started_, interval);
         if (now < probe_deadline) {
             arm_idle_probe(probe_deadline);
             return;
@@ -258,7 +258,7 @@ void redis_subscription_connection::idle_probe_expired() noexcept {
         abort(client_abort_reason::timeout);
         return;
     }
-    const auto idle_deadline = saturating_deadline(idle_since, interval);
+    const auto idle_deadline = deadline_after(idle_since, interval);
     if (now < idle_deadline) {
         arm_idle_probe(idle_deadline);
         return;
@@ -279,7 +279,7 @@ void redis_subscription_connection::idle_probe_expired() noexcept {
         }
     }
     if (!closed_) {
-        arm_idle_probe(saturating_deadline(now, interval));
+        arm_idle_probe(deadline_after(now, interval));
     }
 }
 

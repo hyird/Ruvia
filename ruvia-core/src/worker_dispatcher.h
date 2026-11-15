@@ -79,7 +79,17 @@ public:
     worker_dispatcher(const worker_dispatcher&) = delete;
     worker_dispatcher& operator=(const worker_dispatcher&) = delete;
 
-    [[nodiscard]] post_outcome<> post(move_only_function<void()> task);
+    // The endpoint `worker` shares; null for an empty worker_ref.
+    [[nodiscard]] static worker_dispatcher* of(const worker_ref& worker) noexcept {
+        return worker.dispatcher_.get();
+    }
+    // A worker_ref sharing `dispatcher`.
+    [[nodiscard]] static worker_ref make_ref(std::shared_ptr<worker_dispatcher> dispatcher) noexcept {
+        return worker_ref(std::move(dispatcher));
+    }
+
+    // The one bounded admission; see worker_ref::post_factory(), which has
+    // already rejected an empty `factory`.
     [[nodiscard]] post_status post_factory(move_only_function<move_only_function<void()>()> factory);
     // Queues `task` on the io_context; false, dropping it, once the context
     // was detached. Off the worker an admitted defer delays detach_context(),

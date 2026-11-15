@@ -37,7 +37,7 @@ constexpr std::size_t admitted_requests = 4;
 constexpr auto phase_timeout = std::chrono::milliseconds(200);
 
 [[nodiscard]] ruvia::server_config admission_server_config() {
-    return {.worker_count_ = 1, .idle_timeout_ = phase_timeout, .connection_scan_interval_ = std::chrono::milliseconds(5), .request_header_timeout_ = phase_timeout, .request_body_timeout_ = phase_timeout};
+    return {.idle_timeout_ = phase_timeout, .connection_scan_interval_ = std::chrono::milliseconds(5), .request_header_timeout_ = phase_timeout, .request_body_timeout_ = phase_timeout};
 }
 
 // Error-handler calls of the request in flight; the server worker writes, the

@@ -104,31 +104,6 @@ websocket& context::websocket() const {
     return output->get_websocket();
 }
 
-response_stream_writer& context::stream(response_options head) {
-    const auto* output = response_output().response_stream();
-    if (output == nullptr) {
-        throw std::logic_error("response body is not streamable");
-    }
-    auto& writer = output->writer();
-    stage_stream_head(writer, head);
-    return writer;
-}
-
-sse_writer context::stream_sse(response_options head) {
-    if (detail::response_options_carry_header(head, "Content-Type")) {
-        throw std::invalid_argument("stream_sse() owns the Content-Type field");
-    }
-    auto& writer = stream(head);
-    if (!writer.committed()) {
-        auto& staged = stream_head();
-        staged.header_stable_view("Content-Type", "text/event-stream");
-        if (!staged.header("Cache-Control")) {
-            staged.header_stable_view("Cache-Control", "no-cache");
-        }
-    }
-    return sse_writer(writer);
-}
-
 namespace {
 
 template <typename view_type>
@@ -159,7 +134,7 @@ task<void> end_owned(response_stream_output output, task<void> (*end)(void*, std
 }
 
 task<timer_sleep_result> sleep_stopped_by_either(void* target, task<timer_sleep_result> (*sleep)(void*, timeout_duration, const stop_token&), timeout_duration duration, stop_token context_stop, stop_token stop) {
-    const stop_group either(context_stop, stop);
+    const stop_group either{context_stop, stop};
     co_return co_await sleep(target, duration, either.token());
 }
 
@@ -169,7 +144,7 @@ task<std::optional<std::span<const std::byte>>> body_reader::read(operation_opti
     return operation_scope_.attach(read_body<std::span<const std::byte>>(read_, read_active_, std::move(operation)));
 }
 
-task<std::optional<std::string_view>> body_reader::text(operation_options operation) & {
+task<std::optional<std::string_view>> body_reader::read_text(operation_options operation) & {
     return operation_scope_.attach(read_body<std::string_view>(read_, read_active_, std::move(operation)));
 }
 

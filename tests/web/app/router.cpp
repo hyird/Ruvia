@@ -124,7 +124,7 @@ ruvia::task<void> echo_udp(ruvia::context& context) {
     EXPECT_EQ(context.req().param("host").value_or(""), "echo.test");
     auto channel = context.tunnel().udp();
     while (auto datagram = co_await channel.read()) {
-        co_await channel.send(datagram->payload());
+        co_await channel.send(datagram->bytes());
     }
     co_await channel.finish();
 }
@@ -174,7 +174,7 @@ TEST(Ruvia, public_router_dispatches_parameters_bodies_streams_methods_and_middl
         });
         routes.stream<ruvia::stream_body, ruvia::body_limit<4>>("POST", "/api/upload", [](ruvia::context& context) -> ruvia::task<void> {
             std::string content;
-            while (auto chunk = co_await context.req().body_reader().text()) {
+            while (auto chunk = co_await context.request_body().read_text()) {
                 content.append(*chunk);
             }
             if (co_await context.stream().commit() == ruvia::stream_commit_result::body) {
@@ -273,7 +273,7 @@ TEST(Ruvia, public_router_dispatches_parameters_bodies_streams_methods_and_middl
         }
         co_await client.shutdown();
         co_await server.shutdown();
-        attachment.stop();
+        attachment.request_stop();
         if (failure) {
             std::rethrow_exception(failure);
         }
@@ -320,7 +320,7 @@ TEST(Ruvia, public_router_freeze_rejects_ambiguity_and_rolls_back_middleware_lif
         EXPECT_EQ(first->destroyed_, 2);
         EXPECT_EQ(second->live_, 0);
         EXPECT_EQ(second->destroyed_, 1);
-        attachment.stop();
+        attachment.request_stop();
         co_return;
     };
     auto root = attachment.loop().start(run());
@@ -367,7 +367,7 @@ TEST(Ruvia, public_router_retains_cold_dispatch_after_facade_destruction_and_joi
         EXPECT_TRUE(cancelled);
         EXPECT_EQ(state->live_, 0);
         EXPECT_EQ(state->destroyed_, 1);
-        attachment.stop();
+        attachment.request_stop();
     };
     auto root = attachment.loop().start(run());
     attachment.run();
@@ -439,7 +439,7 @@ TEST(Ruvia, public_router_applies_host_representation_policies_and_its_rate_limi
         }
         co_await client.shutdown();
         co_await server.shutdown();
-        attachment.stop();
+        attachment.request_stop();
         if (failure) {
             std::rethrow_exception(failure);
         }
@@ -502,10 +502,10 @@ TEST(Ruvia, public_router_routes_websocket_and_connect_upgrades_over_http1_and_h
                         EXPECT_TRUE(tunnel != nullptr) << label;
                         if (tunnel != nullptr) {
                             EXPECT_EQ(tunnel->status().value(), 200) << label;
-                            co_await tunnel->write(std::string_view("tunnel bytes"));
-                            co_await tunnel->finish();
+                            co_await tunnel->stream().write(std::string_view("tunnel bytes"));
+                            co_await tunnel->stream().finish();
                             std::string echoed;
-                            while (auto chunk = co_await tunnel->text()) {
+                            while (auto chunk = co_await tunnel->stream().read_text()) {
                                 echoed.append(*chunk);
                             }
                             EXPECT_EQ(echoed, "tunnel bytes") << label;
@@ -516,7 +516,7 @@ TEST(Ruvia, public_router_routes_websocket_and_connect_upgrades_over_http1_and_h
                         auto* tunnel = opened.tunnel();
                         EXPECT_TRUE(tunnel != nullptr) << label;
                         if (tunnel != nullptr) {
-                            auto channel = std::move(*tunnel).udp();
+                            auto channel = tunnel->stream().udp();
                             co_await channel.send(std::string_view("datagram"));
                             const auto packet = co_await channel.read();
                             EXPECT_TRUE(packet.has_value()) << label;
@@ -555,7 +555,7 @@ TEST(Ruvia, public_router_routes_websocket_and_connect_upgrades_over_http1_and_h
             failure = std::current_exception();
         }
         co_await server.shutdown();
-        attachment.stop();
+        attachment.request_stop();
         if (failure) {
             std::rethrow_exception(failure);
         }
@@ -657,7 +657,7 @@ TEST(Ruvia, public_router_lends_borrowed_clients_and_state_to_session_middleware
         }
         co_await client.shutdown();
         co_await redis.shutdown();
-        attachment.stop();
+        attachment.request_stop();
         if (failure) {
             std::rethrow_exception(failure);
         }
@@ -787,7 +787,7 @@ TEST(Ruvia, public_router_buffered_body_reads_honour_their_operation) {
             failure = std::current_exception();
         }
         co_await server.shutdown();
-        attachment.stop();
+        attachment.request_stop();
         if (failure) {
             std::rethrow_exception(failure);
         }
@@ -843,7 +843,7 @@ TEST(Ruvia, public_router_binds_http_clients_by_its_own_unique_aliases) {
         co_await first.shutdown();
         co_await second.shutdown();
         co_await server.shutdown();
-        attachment.stop();
+        attachment.request_stop();
         if (failure) {
             std::rethrow_exception(failure);
         }

@@ -5,6 +5,7 @@
 #include <exception>
 #include <memory>
 #include <optional>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -22,6 +23,7 @@
 #include <openssl/ssl.h>
 
 #include "asio_completion.h"
+#include "byte_view.h"
 #include "connection_scanner.h"
 #include "context.h"
 #include "context_access.h"
@@ -30,6 +32,7 @@
 #include "inbound_buffer.h"
 #include "io_operation.h"
 #include "middleware.h"
+#include "operation_scope.h"
 #include "server_options.h"
 #include "server_socket_stream.h"
 #include "task.h"
@@ -241,9 +244,13 @@ private:
     connection_scanner::entry* write_scanner_entry_;
 };
 
+inline constexpr const char* tunnel_lane_in_progress = "HTTP tunnel operation already in progress on this direction";
+
 // A tunnel over an HTTP/1 socket transport or one HTTP/2 or HTTP/3 stream. Received
 // chunks charge the connection's and worker's inbound buffer budgets. Every
-// read or write that moves tunnel bytes renews its idle clock.
+// read or write that moves tunnel bytes renews its idle clock. One running
+// read and one running output operation are allowed; each belongs to the
+// session's operation scope, which join() retires.
 template <typename transport_type>
 class http_tunnel_session final {
 public:
@@ -253,7 +260,9 @@ public:
         read_reservation_(inbound),
         pending_reservation_(inbound),
         delivered_reservation_(inbound),
-        facade_(inbound, worker_value, this, &read_thunk, &write_thunk, &finish_thunk, &abort_thunk, datagrams) {
+        facade_(worker_value, this, &read_thunk, &write_thunk, &finish_thunk, &abort_thunk, {.capsules_ = datagrams, .datagrams_ = datagrams}) {
+        facade_.inbound_ = inbound;
+        operations_.bind_worker(worker_value);
         if (!pending.empty()) {
             inbound_append(pending_, pending_reservation_, pending);
         }
@@ -297,16 +306,16 @@ public:
         }
     }
     [[nodiscard]] task<void> drain() {
-        delivered_reservation_.clear();
+        inbound_discard(delivered_, delivered_reservation_);
         while (!receive_ended_) {
             receive_ended_ = !(co_await read_some());
         }
     }
     [[nodiscard]] task<void> join() {
-        if (facade_.read_active_ || facade_.write_active_) {
+        if (read_active_ || write_active_) {
             abort();
         }
-        co_await facade_.operations_.close_and_join();
+        co_await operations_.close_and_join();
     }
 
 private:
@@ -352,79 +361,136 @@ private:
     static void wake_read(void* raw) noexcept {
         static_cast<asio::cancellation_signal*>(raw)->emit(asio::cancellation_type::terminal);
     }
-    static task<std::optional<std::string>> read_thunk(void* raw, operation_options operation) {
-        auto& owner_value = *static_cast<http_tunnel_session*>(raw);
-        owner_value.delivered_reservation_.clear();
-        operation_interrupt interrupt(owner_value.interrupts_, owner_value.facade_.worker_, operation, &owner_value.read_cancellation_, &wake_read, "HTTP tunnel read");
-        if (!owner_value.pending_.empty()) {
-            owner_value.delivered_reservation_.swap(owner_value.pending_reservation_);
-            co_return std::exchange(owner_value.pending_, std::string{});
+    void require_active() const {
+        if (!facade_.worker_.is_current()) {
+            std::terminate();
         }
-        if (owner_value.receive_ended_) {
-            co_return std::nullopt;
+        if (!operations_.active()) {
+            throw std::logic_error("HTTP tunnel session has expired");
         }
-        owner_value.read_buffer_.clear();
-        bool has_more = false;
-        if constexpr (requires(transport_type& t, std::string& b, asio::cancellation_slot sl, inbound_buffer_reservation* r) { t.read_more(b, [] {}, sl, r); }) {
-            has_more = co_await owner_value.transport_.read_more(owner_value.read_buffer_, [&interrupt] {
-                interrupt.throw_if_interrupted();
-            }, owner_value.read_cancellation_.slot(), &owner_value.read_reservation_);
-        } else {
-            has_more = co_await owner_value.transport_.read_more(owner_value.read_buffer_, [&interrupt] {
-                interrupt.throw_if_interrupted();
-            }, owner_value.read_cancellation_.slot());
-        }
-        owner_value.last_transfer_ms_ = steady_stamp_ms();
-        if (!has_more) {
-            owner_value.receive_ended_ = true;
-            co_return std::nullopt;
-        }
-        std::string chunk;
-        inbound_append(chunk, owner_value.delivered_reservation_, owner_value.read_buffer_);
-        co_return chunk;
     }
-    static task<void> write_thunk(void* raw, std::string_view bytes_value, operation_options operation) {
+    // The http_tunnel entries validate when called and return cold operations
+    // of this session's scope.
+    static task<std::optional<std::span<const std::byte>>> read_thunk(void* raw, operation_options operation) {
         auto& owner_value = *static_cast<http_tunnel_session*>(raw);
+        owner_value.require_active();
+        return owner_value.operations_.attach(owner_value.read_chunk(std::move(operation)));
+    }
+    static task<void> write_thunk(void* raw, std::string&& bytes_value, operation_options operation) {
+        auto& owner_value = *static_cast<http_tunnel_session*>(raw);
+        owner_value.require_active();
         if (owner_value.ended_) {
             throw std::logic_error("HTTP tunnel send direction has ended");
         }
-        operation_interrupt interrupt(owner_value.interrupts_, owner_value.facade_.worker_, operation, raw, &abort_thunk_default, "HTTP tunnel write");
-        const write_activity activity(owner_value);
-        const auto error = co_await owner_value.transport_.write_bytes(bytes_value, http_stream_end::keep_open);
+        return owner_value.operations_.attach(owner_value.write_chunk(std::move(bytes_value), std::move(operation)));
+    }
+    static task<void> finish_thunk(void* raw, operation_options operation) {
+        auto& owner_value = *static_cast<http_tunnel_session*>(raw);
+        owner_value.require_active();
+        return owner_value.operations_.attach(owner_value.finish_output(std::move(operation)));
+    }
+    static void abort_thunk(void* raw, bool malformed) noexcept {
+        auto& owner_value = *static_cast<http_tunnel_session*>(raw);
+        if (!owner_value.facade_.worker_.is_current()) {
+            std::terminate();
+        }
+        if (owner_value.operations_.active()) {
+            owner_value.abort(malformed);
+        }
+    }
+    static task<std::optional<http_tunnel_input>> read_datagram_thunk(void* raw, operation_options operation) {
+        auto& owner_value = *static_cast<http_tunnel_session*>(raw);
+        owner_value.require_active();
+        return owner_value.operations_.attach(owner_value.read_datagram(std::move(operation)));
+    }
+    static task<bool> write_datagram_thunk(void* raw, std::string_view bytes, operation_options operation) {
+        auto& owner_value = *static_cast<http_tunnel_session*>(raw);
+        owner_value.require_active();
+        return owner_value.operations_.attach(owner_value.write_datagram(bytes, std::move(operation)));
+    }
+    static void abort_thunk_default(void* raw) noexcept {
+        static_cast<http_tunnel_session*>(raw)->abort();
+    }
+    // The returned view borrows delivered_ until the next read starts; an
+    // empty chunk is never returned.
+    [[nodiscard]] task<std::optional<std::span<const std::byte>>> read_chunk(operation_options operation) {
+        auto lease = claim_operation_lane(read_active_, tunnel_lane_in_progress);
+        inbound_discard(delivered_, delivered_reservation_);
+        operation_interrupt interrupt(interrupts_, facade_.worker_, operation, &read_cancellation_, &wake_read, "HTTP tunnel read");
+        if (!pending_.empty()) {
+            delivered_reservation_.swap(pending_reservation_);
+            delivered_ = std::exchange(pending_, std::string{});
+            co_return as_bytes(std::string_view(delivered_));
+        }
+        while (!receive_ended_) {
+            interrupt.throw_if_interrupted();
+            read_buffer_.clear();
+            bool has_more = false;
+            if constexpr (requires(transport_type& t, std::string& b, asio::cancellation_slot sl, inbound_buffer_reservation* r) { t.read_more(b, [] {}, sl, r); }) {
+                has_more = co_await transport_.read_more(read_buffer_, [&interrupt] {
+                    interrupt.throw_if_interrupted();
+                }, read_cancellation_.slot(), &read_reservation_);
+            } else {
+                has_more = co_await transport_.read_more(read_buffer_, [&interrupt] {
+                    interrupt.throw_if_interrupted();
+                }, read_cancellation_.slot());
+            }
+            last_transfer_ms_ = steady_stamp_ms();
+            if (!has_more) {
+                receive_ended_ = true;
+            } else if (!read_buffer_.empty()) {
+                inbound_append(delivered_, delivered_reservation_, read_buffer_);
+                co_return as_bytes(std::string_view(delivered_));
+            }
+        }
+        co_return std::nullopt;
+    }
+    [[nodiscard]] task<void> write_chunk(std::string bytes_value, operation_options operation) {
+        auto lease = claim_operation_lane(write_active_, tunnel_lane_in_progress);
+        if (ended_) {
+            throw std::logic_error("HTTP tunnel send direction has ended");
+        }
+        operation_interrupt interrupt(interrupts_, facade_.worker_, operation, this, &abort_thunk_default, "HTTP tunnel write");
+        const write_activity activity(*this);
+        const auto error = co_await transport_.write_bytes(bytes_value, http_stream_end::keep_open);
         interrupt.throw_if_interrupted();
         if (error) {
             throw inbound_transport_error(error, "HTTP tunnel write");
         }
     }
-    static task<std::optional<http_tunnel_input>> read_datagram_thunk(void* raw, operation_options operation) {
-        auto& owner_value = *static_cast<http_tunnel_session*>(raw);
-        owner_value.delivered_reservation_.clear();
-        operation_interrupt interrupt(owner_value.interrupts_, owner_value.facade_.worker_, operation, &owner_value.read_cancellation_, &wake_read, "HTTP tunnel read");
-        if (!owner_value.pending_.empty()) {
-            owner_value.delivered_reservation_.swap(owner_value.pending_reservation_);
-            co_return http_tunnel_input{std::exchange(owner_value.pending_, std::string{}), false};
+    [[nodiscard]] task<void> finish_output(operation_options operation) {
+        auto lease = claim_operation_lane(write_active_, tunnel_lane_in_progress);
+        co_await finish(std::move(operation));
+    }
+    [[nodiscard]] task<std::optional<http_tunnel_input>> read_datagram(operation_options operation) {
+        auto lease = claim_operation_lane(read_active_, tunnel_lane_in_progress);
+        inbound_discard(delivered_, delivered_reservation_);
+        operation_interrupt interrupt(interrupts_, facade_.worker_, operation, &read_cancellation_, &wake_read, "HTTP tunnel read");
+        if (!pending_.empty()) {
+            delivered_reservation_.swap(pending_reservation_);
+            co_return http_tunnel_input{std::exchange(pending_, std::string{}), false};
         }
-        if (owner_value.receive_ended_) {
+        if (receive_ended_) {
             co_return std::nullopt;
         }
-        auto input = co_await owner_value.transport_.read_datagram([&interrupt] {
+        auto input = co_await transport_.read_datagram([&interrupt] {
             interrupt.throw_if_interrupted();
-        }, owner_value.read_cancellation_.slot());
-        owner_value.last_transfer_ms_ = steady_stamp_ms();
+        }, read_cancellation_.slot());
+        last_transfer_ms_ = steady_stamp_ms();
         if (!input) {
-            owner_value.receive_ended_ = true;
+            receive_ended_ = true;
         }
         co_return input;
     }
-    static task<bool> write_datagram_thunk(void* raw, std::string_view bytes, operation_options operation) {
-        auto& owner_value = *static_cast<http_tunnel_session*>(raw);
-        if (owner_value.ended_) {
+    [[nodiscard]] task<bool> write_datagram(std::string_view bytes, operation_options operation) {
+        auto lease = claim_operation_lane(write_active_, tunnel_lane_in_progress);
+        if (ended_) {
             throw std::logic_error("HTTP tunnel send direction has ended");
         }
-        operation_interrupt interrupt(owner_value.interrupts_, owner_value.facade_.worker_, operation, raw, &abort_thunk_default, "HTTP tunnel write");
-        const write_activity activity(owner_value);
+        operation_interrupt interrupt(interrupts_, facade_.worker_, operation, this, &abort_thunk_default, "HTTP tunnel write");
+        const write_activity activity(*this);
         try {
-            const bool sent = co_await owner_value.transport_.write_datagram(bytes);
+            const bool sent = co_await transport_.write_datagram(bytes);
             interrupt.throw_if_interrupted();
             co_return sent;
         } catch (...) {
@@ -432,31 +498,27 @@ private:
             throw;
         }
     }
-    static task<void> finish_thunk(void* raw, operation_options operation) {
-        return static_cast<http_tunnel_session*>(raw)->finish(std::move(operation));
-    }
-    static void abort_thunk(void* raw, bool malformed) noexcept {
-        static_cast<http_tunnel_session*>(raw)->abort(malformed);
-    }
-    static void abort_thunk_default(void* raw) noexcept {
-        static_cast<http_tunnel_session*>(raw)->abort();
-    }
     transport_type transport_;
     inbound_buffer_account* inbound_;
     std::string read_buffer_;
     inbound_buffer_reservation read_reservation_;
     std::string pending_;
     inbound_buffer_reservation pending_reservation_;
+    // The chunk the last read returned.
+    std::string delivered_;
     inbound_buffer_reservation delivered_reservation_;
     bool ended_{false};
     bool receive_ended_{false};
     bool aborted_{false};
+    bool read_active_{false};
+    bool write_active_{false};
     // Writes started and not yet finished; idleness counts none of them.
     std::uint32_t writes_in_flight_{0};
     std::int64_t last_transfer_ms_{steady_stamp_ms()};
     std::int64_t idle_timeout_ms_{0};
     asio::cancellation_signal read_cancellation_;
     operation_interrupt_source interrupts_;
+    detail::operation_scope operations_;
     http_tunnel facade_;
     // Declared last so destruction unregisters before the state it reads.
     connection_scanner::periodic_check_registration idle_check_;

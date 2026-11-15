@@ -64,15 +64,13 @@ std::variant<http_priority_fields, http_priority_error> parse_http_priority(std:
     }
     return fields;
 }
-namespace detail {
-std::variant<http_priority_fields, http_priority_error> parse_http_priority_headers(http_header_range_view headers) noexcept {
+std::variant<http_priority_fields, http_priority_error> parse_http_priority(const http_header_range_view& headers) noexcept {
     http_priority_fields fields;
-    if (auto parsed_value = parse_priority_members(http_structured_parser{http_structured_header_input{headers.begin(), headers.end(), "priority"}}, fields); parsed_value.index() != 0) {
+    if (auto parsed_value = parse_priority_members(detail::http_structured_parser{detail::http_structured_header_input{headers.begin(), headers.end(), "priority"}}, fields); parsed_value.index() != 0) {
         return std::get<1>(parsed_value);
     }
     return fields;
 }
-}  // namespace detail
 std::variant<std::size_t, http_priority_error> encode_http_priority(std::span<char> output, http_priority_fields fields_value) noexcept {
     std::array<char, 12> bytes_value{};
     std::size_t count = 0;

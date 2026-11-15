@@ -227,8 +227,8 @@ ruvia::task<void> serve(ruvia::request_stream& request, observation& observed) {
     request_retirement retirement(observed);
     const auto path = request.request().path();
     if (path == "/forbidden") {
-        (void)co_await request.response({.status_ = ruvia::http_status::forbidden}).commit();
-        co_await request.response().end();
+        (void)co_await request.stream({.status_ = ruvia::http_status::forbidden}).commit();
+        co_await request.stream().end();
         try {
             (void)co_await request.accept_websocket();
         } catch (const std::logic_error&) {
@@ -238,8 +238,8 @@ ruvia::task<void> serve(ruvia::request_stream& request, observation& observed) {
     }
     if (path == "/cold") {
         observed.expired_accept_.emplace(request.accept_websocket());
-        (void)co_await request.response({.status_ = ruvia::http_status::forbidden}).commit();
-        co_await request.response().end();
+        (void)co_await request.stream({.status_ = ruvia::http_status::forbidden}).commit();
+        co_await request.stream().end();
         co_return;
     }
     ruvia::websocket_route_config config{.subprotocols_ = {"standalone.v1"}, .require_subprotocol_ = true, .lifecycle_ = {.close_handshake_timeout_ = 40ms}, .deflate_ = {.context_takeover_ = true}};
@@ -274,7 +274,7 @@ ruvia::task<void> serve(ruvia::request_stream& request, observation& observed) {
         ++observed.exclusive_;
     }
     try {
-        (void)co_await request.response().commit();
+        (void)co_await request.stream().commit();
     } catch (const std::logic_error&) {
         ++observed.exclusive_;
     }
@@ -472,7 +472,7 @@ public:
 
     ruvia::task<void> write(std::string_view bytes) {
         if (result_) {
-            co_await result_->tunnel()->write(bytes);
+            co_await result_->tunnel()->stream().write(bytes);
         } else {
             const auto sent = co_await ruvia::async_asio<std::size_t>([&](auto completion) {
                 asio::async_write(socket_, asio::buffer(bytes), std::move(completion));
@@ -519,7 +519,7 @@ public:
     // Ends the peer's sending direction without a Close frame.
     ruvia::task<void> finish() {
         if (result_) {
-            co_await result_->tunnel()->finish();
+            co_await result_->tunnel()->stream().finish();
         } else {
             std::error_code ignored;
             socket_.shutdown(asio::ip::tcp::socket::shutdown_send, ignored);
@@ -528,7 +528,7 @@ public:
 
     void abort() {
         if (result_ && result_->tunnel()) {
-            result_->tunnel()->abort();
+            result_->tunnel()->stream().abort();
         }
         ruvia::close_socket(socket_);
     }
@@ -537,7 +537,7 @@ private:
     ruvia::task<bool> fill(std::size_t bytes) {
         while (input_.size() < bytes) {
             if (result_) {
-                auto chunk = co_await result_->tunnel()->text();
+                auto chunk = co_await result_->tunnel()->stream().read_text();
                 if (!chunk) {
                     co_return false;
                 }
@@ -1190,7 +1190,7 @@ void exercise_protocol(ruvia::http_client_versions protocol) {
         EXPECT_GT(observed.refused_, 0U);
         EXPECT_GE(observed.exclusive_, 4U);
         EXPECT_GT(observed.cancelled_, 0U);
-        attachment.stop();
+        attachment.request_stop();
         if (failure) std::rethrow_exception(failure);
     };
     auto root = attachment.loop().start(run());

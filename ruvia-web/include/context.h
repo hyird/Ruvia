@@ -7,7 +7,6 @@
 #include <exception>
 #include <filesystem>
 #include <functional>
-#include <initializer_list>
 #include <memory>
 #include <optional>
 #include <span>
@@ -43,6 +42,8 @@
 namespace ruvia {
 
 class context;
+template <typename host_type>
+class request_exchange;
 class env;
 class static_root;
 // Capabilities a handler reaches through context; include the defining header
@@ -278,16 +279,9 @@ public:
         encoding,
         charset };
     [[nodiscard]] std::optional<std::string_view> header(std::string_view name) const;
-    // Read after body completion to observe the complete terminal section.
-    // Trailers never replace initial headers or change route selection.
-    [[nodiscard]] std::span<const http_header> trailers() const noexcept;
-    [[nodiscard]] std::optional<std::string_view> trailer(std::string_view name) const noexcept;
     // Client weights select a caller-owned supported value; server order breaks
     // ties. An absent field selects the first offer, no acceptable offer is nullopt.
-    [[nodiscard]] std::optional<std::string_view> negotiate(negotiable_field field, std::span<const std::string_view> supported) const noexcept;
-    [[nodiscard]] std::optional<std::string_view> negotiate(negotiable_field field, std::initializer_list<std::string_view> supported) const noexcept {
-        return negotiate(field, std::span<const std::string_view>(supported.begin(), supported.size()));
-    }
+    [[nodiscard]] std::optional<std::string_view> negotiate(negotiable_field field, argument_list<std::string_view> offers) const noexcept;
     [[nodiscard]] std::optional<std::string_view> query(std::string_view name) const;
     [[nodiscard]] std::span<const std::string_view> queries(std::string_view name) const;
     [[nodiscard]] std::optional<std::string_view> cookie(std::string_view name) const;
@@ -337,13 +331,10 @@ public:
     [[nodiscard]] const t_type& validated() const;
 
     // Multipart remains a flat protocol representation, without dotted paths
-    // or implicit array/group interpretation. Streaming is explicit-route only.
-    // multipart() decodes a supported Content-Encoding; multipart_reader()
-    // decodes none, so a coded body is refused with 415 and an invalid
-    // Content-Encoding field with 400.
+    // or implicit array/group interpretation. multipart() buffers the content
+    // and decodes a supported Content-Encoding; the streamed forms are
+    // context::request_body() and context::request_multipart().
     [[nodiscard]] task<std::vector<multipart_part>> multipart(operation_options operation = {}) const;
-    [[nodiscard]] ::ruvia::body_reader& body_reader() const;
-    [[nodiscard]] ::ruvia::multipart_reader multipart_reader() const;
 
 private:
     friend class context;
@@ -395,6 +386,8 @@ public:
 
 private:
     friend class context;
+    template <typename host_type>
+    friend class request_exchange;
     enum class target_type { selected,
         policy };
     context_response_editor(context& owner, target_type target) noexcept :
@@ -457,28 +450,14 @@ struct file_response_options final {
     borrowed_text content_type_{};
 };
 
-// Worker resources (worker_state<T>(), run_blocking(), env(), client(), db(),
-// redis()) come from worker_services_access. Inside a router dispatch they see
-// that router's worker states and clients; executors and clients bind this
-// request's operation lifetime and stop_token().
-class context final : public worker_services_access<context> {
-private:
-    friend class worker_services_access<context>;
-    friend class request_stream;
-    friend class context_request;
-    friend class context_response_editor;
-    friend class http_client_response;
-    friend struct detail::context_access;
-#ifdef RUVIA_ENABLE_REDIS
-    friend struct detail::session_access;
-#endif
-    template <typename t_type>
-    friend detail::request_binding_guard<t_type> detail::bind_validated_model(context& context_value, const t_type& model);
-
-    context(const http_request& request, const detail::context_services& services);
-
-    context(const http_request& request, std::string_view route_path, const std::string_view* param_names, const std::string_view* param_values, std::size_t param_count, std::uintptr_t route_rate_limit_scope, const detail::context_services& services);
-
+// The request exchange context and request_stream share, declared once: the
+// connection and worker handles, interim and connection-scoped output, the
+// request trailers and streamed multipart content, the cross-replacement
+// policy, the streamed response, and the response builders. Each host adds
+// respond() and request_body(), whose preconditions differ. Members are
+// defined in the library and instantiated there for both hosts.
+template <typename host_type>
+class request_exchange {
 public:
     // Sends a bodyless 1xx head before the final response. Fields are copied
     // before return; the operation and its storage retire on the owning worker.
@@ -499,34 +478,20 @@ public:
     // (HTTP/2) advertisements.
     void advertise_origins(std::span<const std::string_view> origins);
     void advertise_alternative_service(std::string_view value);
-
-    ~context();
-
-    context(const context&) = delete;
-    context& operator=(const context&) = delete;
-    context(context&&) = delete;
-    context& operator=(context&&) = delete;
-
-    [[nodiscard]] context_request req() const& noexcept RUVIA_LIFETIMEBOUND {
-        return context_request(*this);
-    }
-    context_request req() const&& = delete;
+    [[nodiscard]] bool early_data() const noexcept;
 
     // Connection metadata borrows this request's transport state.
+    // conn_info::connection_id() names the connection.
     [[nodiscard]] const conn_info& conn() const& noexcept RUVIA_LIFETIMEBOUND;
     const conn_info& conn() const&& = delete;
     // Copies shared ownership of the state returned by connection_open_.
     [[nodiscard]] std::shared_ptr<void> connection_state() const noexcept;
     // Closes the entire transport immediately, including every HTTP/2 or
-    // HTTP/3 stream. A virtual test connection has no transport to close.
+    // HTTP/3 stream; other in-flight requests on it are cancelled too. In a
+    // request_stream callback this is a terminal choice: no response is
+    // required afterwards, and a later callback exception is still reported.
+    // A virtual test connection has no transport to close.
     void abort_connection() noexcept;
-
-    // The exception that failed the current middleware/handler dispatch, or
-    // null. Distinct from error(status, code, message) which constructs an
-    // error response.
-    [[nodiscard]] std::exception_ptr exception() const noexcept {
-        return error_;
-    }
 
     // Borrowed for this request. Copy the returned handle when it must outlive
     // the handler; the copy owns a terminal-safe dispatcher endpoint.
@@ -544,9 +509,185 @@ public:
     //
     // 流式响应（stream()/stream_sse()）的 token 还观察客户端离开：HTTP/1 请求体
     // 完整消费后对端 FIN/RST 或写失败，HTTP/2 本流 RST_STREAM 或连接终止。
-    // 缓冲响应路由不监测读侧终止。
-    //
+    // 缓冲响应路由不监测读侧终止。request_stream 回调中，非隧道请求被客户端
+    // 放弃（HTTP/2、HTTP/3 流被重置）同样触发。
     [[nodiscard]] ::ruvia::stop_token stop_token() const noexcept;
+
+    // Read after request_body() reaches EOF to observe the complete terminal
+    // section. Trailers never replace initial headers or change route selection.
+    [[nodiscard]] std::span<const http_header> trailers() const noexcept;
+    [[nodiscard]] std::optional<std::string_view> trailer(std::string_view name) const noexcept;
+
+    // Parses request_body() as multipart while it arrives. Decodes no content
+    // coding: a coded body is refused with 415 and an invalid
+    // Content-Encoding field with 400.
+    [[nodiscard]] multipart_reader request_multipart() &;
+    multipart_reader request_multipart() && = delete;
+
+    // 显式跨替换策略，只在最终交付/stream commit/升级握手时应用一次，也覆盖
+    // error() 与抛出的错误；builder 不继承它。在 next() 前写入的 header 覆盖
+    // handler 的同名字段。header/cookie 覆盖同名或同 cookie 身份的响应字段；
+    // append 保留重复语义。
+    // 警告：显式 policy().status() 也覆盖错误响应；默认不强制任何状态。
+    // context::response() 观察的是尚未应用 policy 的选定响应，不是最终 wire head。
+    // 提交后任何修改均抛 logic_error。
+    [[nodiscard]] context_response_editor policy() & noexcept;
+    context_response_editor policy() && = delete;
+
+    // 流式响应的 writer。流头选项应用到待提交的流响应头；默认选项不做任何事。
+    // 提交后传入非默认选项抛 logic_error。先构造候选头再整体应用，失败不改动
+    // 已暂存的头。缓冲路由没有流式输出，抛 logic_error。request_stream 回调中，
+    // 被拒绝的隧道请求用同一个 writer 作答；成功的 CONNECT 或 101 必须改用
+    // accept 操作。
+    [[nodiscard]] response_stream_writer& stream(response_options head = {}) & RUVIA_LIFETIMEBOUND;
+    response_stream_writer& stream(response_options = {}) && = delete;
+
+    // Sends text/plain; charset=UTF-8 and X-Content-Type-Options: nosniff,
+    // like text(): a Content-Type or X-Content-Type-Options in `head` is kept.
+    [[nodiscard]] response_stream_writer& stream_text(response_options head = {}) & RUVIA_LIFETIMEBOUND;
+    response_stream_writer& stream_text(response_options = {}) && = delete;
+
+    // Content-Type is text/event-stream; one in `head` throws
+    // std::invalid_argument. Cache-Control defaults to no-cache.
+    [[nodiscard]] sse_writer stream_sse(response_options head = {}) &;
+    sse_writer stream_sse(response_options = {}) && = delete;
+
+    // Body builders copy their input into response-owned storage, except
+    // static_text, which explicitly borrows static bytes without copying, and
+    // std::string&&, which transfers existing string allocations. The trailing
+    // response_options set status, header lines, cookies and priority of the
+    // built response. A builder only builds: hand the result to respond(), or
+    // return it from a buffered route handler.
+    [[nodiscard]] http_response body(response_options options = {}) const;
+    [[nodiscard]] http_response body(outbound_bytes body, response_options options = {}) const;
+    [[nodiscard]] http_response body(static_text body, response_options options = {}) const;
+
+    // text/plain; charset=UTF-8 with X-Content-Type-Options: nosniff, like
+    // stream_text(); a Content-Type or X-Content-Type-Options in options is kept.
+    [[nodiscard]] http_response text(outbound_bytes body, response_options options = {}) const;
+    [[nodiscard]] http_response text(static_text body, response_options options = {}) const;
+
+    template <typename t_type>
+        requires detail::is_model_json_value<t_type>
+    [[nodiscard]] http_response json(const t_type& value, response_options options = {}) const {
+        auto serialized = to_json(value);
+        return json_serialized(serialized, options);
+    }
+
+    [[nodiscard]] http_response html(outbound_bytes body, response_options options = {}) const;
+    [[nodiscard]] http_response html(static_text body, response_options options = {}) const;
+    // The status comes from `options`; extra.status_ or a Location in
+    // extra.headers_ throws std::invalid_argument.
+    [[nodiscard]] http_response redirect(redirect_response_options options, response_options extra = {}) const;
+
+    // The status and Content-Type come from `info`; extra.status_ or a
+    // Content-Type in extra.headers_ throws std::invalid_argument.
+    [[nodiscard]] http_response error(http_error_info_options info, response_options extra = {}) const;
+    [[nodiscard]] http_response error(const http_error_info& info, response_options extra = {}) const;
+
+    // File helpers honor If-Range only for matching strong ETags. Last-Modified
+    // dates are weak and do not authorize a partial response. Conditional
+    // requests, HEAD and single or multipart ranges keep their settled status.
+    //
+    // file() and static_file() open the file on this worker's blocking pool,
+    // never on the worker, and complete with the settled response: status,
+    // validators, Content-Length or Content-Range, and the opened handle the
+    // response owns. The pool wait is bounded by server_config::write_timeout_
+    // and stop_token(); a wait that cannot complete (no blocking pool, a full
+    // queue, the timeout) throws a 503 file_read_unavailable http_error, and
+    // a missing pool or a timed-out open is reported to the connection
+    // failure channel.
+    //
+    // Both own their options before they return: the path, relative path and
+    // content type are copied (and a static path resolved, its representation
+    // selected) by the call, so a stored task never reads the caller's
+    // storage. A path that cannot name a file (404), a rejected relative path
+    // (403), an unindexed name (404) or an unacceptable coding (406) throws at
+    // the call. Only static_file()'s `root` stays borrowed: it must outlive
+    // the returned task. The cold task belongs to the host's request scope.
+    //
+    // file() opens the file once and the response owns that handle; plain-TCP
+    // transfers send from it without resolving the path again. The handle is
+    // checked again right before sending: a file changed in place since file()
+    // fails a single plain-TCP body before its head leaves and aborts any
+    // other transfer before its bytes.
+    //
+    // head.status_ is the status of a full-body answer (200 when unset);
+    // conditional and range answers keep their own status. head is copied
+    // before the task is returned.
+    [[nodiscard]] task<http_response> file(file_response_options options, response_options head = {});
+
+    // relative_path_ is a decoded file path below the root, such as
+    // req().param("*") of a wildcard route; it is never percent-decoded again.
+    // '/' and '\\' separate segments. A "." or ".." segment, an empty interior
+    // segment, an absolute path, or a NUL is 403 -- rejected, never resolved,
+    // whichever parameter it came from -- and an unindexed name 404. A file
+    // that is no longer the indexed one is 500 static_file_changed.
+    [[nodiscard]] task<http_response> static_file(const static_root& root, static_file_response_options options, response_options head = {});
+    // A temporary root would be destroyed before the returned task reads it.
+    task<http_response> static_file(const static_root&&, static_file_response_options, response_options = {}) = delete;
+
+private:
+    friend host_type;
+
+    request_exchange() = default;
+
+    // The host's context: context itself, or the one a request_stream wraps.
+    [[nodiscard]] context& exchange() noexcept;
+    [[nodiscard]] const context& exchange() const noexcept;
+
+    [[nodiscard]] static http_response json_serialized(std::string& body, const response_options& options);
+};
+
+// Worker resources (worker_state<T>(), run_blocking(), env(), client(), db(),
+// redis()) come from worker_services_access. Inside a router dispatch they see
+// that router's worker states and clients; executors and clients bind this
+// request's operation lifetime and stop_token(). The connection, streaming
+// and response-builder members come from request_exchange.
+class context final : public worker_services_access<context>, public request_exchange<context> {
+private:
+    friend class worker_services_access<context>;
+    template <typename host_type>
+    friend class request_exchange;
+    friend class request_stream;
+    friend class context_request;
+    friend class context_response_editor;
+    friend class http_client_response;
+    friend struct detail::context_access;
+#ifdef RUVIA_ENABLE_REDIS
+    friend struct detail::session_access;
+#endif
+    template <typename t_type>
+    friend detail::request_binding_guard<t_type> detail::bind_validated_model(context& context_value, const t_type& model);
+
+    context(const http_request& request, const detail::context_services& services);
+
+    context(const http_request& request, std::string_view route_path, const std::string_view* param_names, const std::string_view* param_values, std::size_t param_count, std::uintptr_t route_rate_limit_scope, const detail::context_services& services);
+
+public:
+    ~context();
+
+    context(const context&) = delete;
+    context& operator=(const context&) = delete;
+    context(context&&) = delete;
+    context& operator=(context&&) = delete;
+
+    [[nodiscard]] context_request req() const& noexcept RUVIA_LIFETIMEBOUND {
+        return context_request(*this);
+    }
+    context_request req() const&& = delete;
+
+    // The streamed request content of a stream_body route; throws
+    // std::logic_error on a route whose body is buffered.
+    [[nodiscard]] body_reader& request_body() & RUVIA_LIFETIMEBOUND;
+    body_reader& request_body() && = delete;
+
+    // The exception that failed the current middleware/handler dispatch, or
+    // null. Distinct from error(status, code, message) which constructs an
+    // error response.
+    [[nodiscard]] std::exception_ptr exception() const noexcept {
+        return error_;
+    }
 
 #ifdef RUVIA_ENABLE_REDIS
     // Present only while session_middleware is bound for this request.
@@ -604,40 +745,18 @@ public:
     // or a "*" value the route cannot capture back (one holding '\', or
     // starting with '/' at the root), and std::logic_error when the context
     // carries no route table (for example a hand-built test context).
-    [[nodiscard]] std::string url_for(std::string_view pattern, std::initializer_list<std::string_view> values = {}) const;
+    [[nodiscard]] std::string url_for(std::string_view pattern, argument_list<std::string_view> values = {}) const;
 
-    [[nodiscard]] std::string url_for(std::string_view pattern, std::span<const std::string_view> values) const;
-    [[nodiscard]] bool early_data() const noexcept;
+    // The session of a negotiated websocket or CONNECT route (controller or
+    // router): the server already ran the handshake, so context never accepts
+    // one itself; request_stream::accept_websocket()/accept_tunnel() do.
     [[nodiscard]] ::ruvia::websocket& websocket() const;
     [[nodiscard]] http_tunnel& tunnel() const;
-
-    // 流头选项应用到待提交的流响应头；默认选项不做任何事。提交后传入非默认
-    // 选项抛 logic_error。先构造候选头再整体应用，失败不改动已暂存的头。
-    [[nodiscard]] response_stream_writer& stream(response_options head = {});
-
-    // Sends text/plain; charset=UTF-8 and X-Content-Type-Options: nosniff,
-    // like text(): a Content-Type or X-Content-Type-Options in `head` is kept.
-    [[nodiscard]] response_stream_writer& stream_text(response_options head = {});
-
-    // Content-Type is text/event-stream; one in `head` throws
-    // std::invalid_argument. Cache-Control defaults to no-cache.
-    [[nodiscard]] sse_writer stream_sse(response_options head = {});
 
     // 明确后处理已 respond 的缓冲响应；尚无响应或已提交时修改抛 logic_error。
     // 字段只属于当前响应，下一次替换不继承；跨替换字段显式写入 policy()。
     [[nodiscard]] context_response_editor edit_response() noexcept {
         return context_response_editor(*this, context_response_editor::target_type::selected);
-    }
-
-    // 显式跨替换策略，只在最终交付/stream commit/升级握手时应用一次，也覆盖
-    // error() 与抛出的错误；builder 不继承它。在 next() 前写入的 header 覆盖
-    // handler 的同名字段。header/cookie 覆盖同名或同 cookie 身份的响应字段；
-    // append 保留重复语义。
-    // 警告：显式 policy().status() 也覆盖错误响应；默认不强制任何状态。
-    // response() 观察的是尚未应用 policy 的选定响应，不是最终 wire head。
-    // 与 edit_response 一样，提交后任何修改均抛 logic_error。
-    [[nodiscard]] context_response_editor policy() noexcept {
-        return context_response_editor(*this, context_response_editor::target_type::policy);
     }
 
     // 只读观察已选择的缓冲响应（不包含尚待应用的 policy）；没有响应则为 nullptr。
@@ -648,79 +767,16 @@ public:
     // next() 在 respond() 后启动是控制流错误；已提交后不得替换。
     void respond(http_response&& response);
 
-    // Body builders copy their input into response-owned storage, except
-    // static_text, which explicitly borrows static bytes without copying, and
-    // std::string&&, which transfers existing string allocations. The trailing
-    // response_options set status, header lines, cookies and priority of the
-    // built response.
-    [[nodiscard]] http_response body(response_options options = {});
-    [[nodiscard]] http_response body(outbound_bytes body, response_options options = {});
-    [[nodiscard]] http_response body(static_text body, response_options options = {});
-
-    // text/plain; charset=UTF-8 with X-Content-Type-Options: nosniff, like
-    // stream_text(); a Content-Type or X-Content-Type-Options in options is kept.
-    [[nodiscard]] http_response text(outbound_bytes body, response_options options = {});
-    [[nodiscard]] http_response text(static_text body, response_options options = {});
-
-    template <typename t_type>
-        requires detail::is_model_json_value<t_type>
-    [[nodiscard]] http_response json(const t_type& value, response_options options = {});
-
-    [[nodiscard]] http_response html(outbound_bytes body, response_options options = {});
-    [[nodiscard]] http_response html(static_text body, response_options options = {});
-    // The status comes from `options`; extra.status_ or a Location in
-    // extra.headers_ throws std::invalid_argument.
-    [[nodiscard]] http_response redirect(redirect_response_options options, response_options extra = {});
-
-    // File helpers honor If-Range only for matching strong ETags. Last-Modified
-    // dates are weak and do not authorize a partial response.
-    //
-    // file() and static_file() open the file on this worker's blocking pool,
-    // never on the worker, and complete with the settled response: status,
-    // validators, Content-Length or Content-Range, and the opened handle the
-    // response owns. The pool wait is bounded by server_config::write_timeout_
-    // and stop_token(); a wait that cannot complete (no blocking pool, a full
-    // queue, the timeout) throws a 503 file_read_unavailable http_error, and
-    // a missing pool or a timed-out open is reported to the connection
-    // failure channel.
-    //
-    // Both own their options before they return: the path, relative path and
-    // content type are copied (and a static path resolved, its representation
-    // selected) by the call, so a stored task never reads the caller's
-    // storage. A path that cannot name a file (404), a rejected relative path
-    // (403), an unindexed name (404) or an unacceptable coding (406) throws at
-    // the call. Only static_file()'s `root` stays borrowed: it must outlive
-    // the returned task.
-    //
-    // file() opens the file once and the response owns that handle; plain-TCP
-    // transfers send from it without resolving the path again. The handle is
-    // checked again right before sending: a file changed in place since file()
-    // fails a single plain-TCP body before its head leaves and aborts any
-    // other transfer before its bytes.
-    //
-    // head.status_ is the status of a full-body answer (200 when unset);
-    // conditional and range answers keep their own status. head is copied
-    // before the task is returned.
-    [[nodiscard]] task<http_response> file(file_response_options options, response_options head = {});
-
-    // relative_path_ is a decoded file path below the root, such as
-    // req().param("*") of a wildcard route; it is never percent-decoded again.
-    // '/' and '\\' separate segments. A "." or ".." segment, an empty interior
-    // segment, an absolute path, or a NUL is 403 -- rejected, never resolved,
-    // whichever parameter it came from -- and an unindexed name 404. A file
-    // that is no longer the indexed one is 500 static_file_changed.
-    [[nodiscard]] task<http_response> static_file(const static_root& root, static_file_response_options options, response_options head = {});
-    // A temporary root would be destroyed before the returned task reads it.
-    task<http_response> static_file(const static_root&&, static_file_response_options, response_options = {}) = delete;
-
-    // The status and Content-Type come from `info`; extra.status_ or a
-    // Content-Type in extra.headers_ throws std::invalid_argument.
-    [[nodiscard]] http_response error(http_error_info_options info, response_options extra = {}) const;
-    [[nodiscard]] http_response error(const http_error_info& info, response_options extra = {}) const;
-
     [[nodiscard]] task<http_response> not_found();
 
 private:
+    [[nodiscard]] context& exchange_context() noexcept {
+        return *this;
+    }
+    [[nodiscard]] const context& exchange_context() const noexcept {
+        return *this;
+    }
+
     [[nodiscard]] http_response streaming_head();
     // The head a stream commit or upgrade sends; throws once committed.
     [[nodiscard]] http_response& stream_head();
@@ -728,8 +784,6 @@ private:
 
     [[nodiscard]] task<http_response> not_found_task();
     [[nodiscard]] task<dispatch_response> dispatch_task(std::string method, std::string target, std::string body, std::vector<http_header> headers, ::ruvia::stop_token stop);
-
-    [[nodiscard]] http_response json_serialized(std::string& body, const response_options& options);
 
     [[nodiscard]] std::string& decoded_body() const;
     [[nodiscard]] detail::context_request_storage& request_storage() const;
@@ -800,13 +854,6 @@ inline request_state_binding<t_type> context::bind_request_state(const t_type& v
 template <typename t_type>
 inline const std::remove_cvref_t<t_type>& context::request_state() const {
     return request_bindings().get_state<t_type>();
-}
-
-template <typename t_type>
-    requires detail::is_model_json_value<t_type>
-inline http_response context::json(const t_type& value, response_options options) {
-    auto body = to_json(value);
-    return json_serialized(body, options);
 }
 
 template <typename t_type>

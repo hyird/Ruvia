@@ -447,7 +447,7 @@ template <typename io_type>
 void db_pipeline_state<io_type>::settle(member_type& member, db_pipeline_event event) noexcept {
     member.event_ = event;
     if (auto continuation = std::exchange(member.continuation_, {})) {
-        detail::worker_ref_access::defer_resume(worker_, continuation);
+        worker_.defer_resume(continuation);
     }
 }
 
@@ -1041,7 +1041,7 @@ public:
         }
         [[nodiscard]] bool await_suspend(std::coroutine_handle<> handle) noexcept {
             if (!wait_.has_value()) {
-                detail::worker_ref_access::defer_resume(reader_.pool_.state().worker(), handle);
+                reader_.pool_.state().worker().defer_resume(handle);
                 return true;
             }
             return wait_->await_suspend(handle);
@@ -1097,7 +1097,7 @@ public:
             }
             io_deadline_.reset();
             if (const auto io_timeout = db_io_timeout(pool_.config(), wanted)) {
-                io_deadline_ = saturating_deadline(*group.stretch_start_, io_timeout->value());
+                io_deadline_ = deadline_after(*group.stretch_start_, io_timeout->value());
             }
             auto until = pool_.state().earliest_deadline(slot);
             if (io_deadline_.has_value() && (!until.has_value() || *io_deadline_ < *until)) {

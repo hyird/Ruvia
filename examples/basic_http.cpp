@@ -164,9 +164,11 @@ int main() {
     try {
         ruvia::app()
             .listen({.address_ = "0.0.0.0", .http_ = 8080})
-            .server({
+            .workers({
                 .worker_count_ = 2,
                 .process_signal_handlers_ = ruvia::process_signal_handler_policy::install,
+            })
+            .server({
                 .idle_timeout_ = std::chrono::seconds(75),
                 .request_header_timeout_ = std::chrono::seconds(60),
                 .request_body_timeout_ = std::chrono::seconds(60),

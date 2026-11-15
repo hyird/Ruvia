@@ -1672,7 +1672,7 @@ TEST(Ruvia, server_answers_an_uncommittable_route_response_with_a_closing_error)
         }
         static_cast<void>(watchdog.cancel());
         ruvia::close_socket(client);
-        attachment.stop();
+        attachment.request_stop();
     };
     auto done = attachment.loop().start(run());
     attachment.run();

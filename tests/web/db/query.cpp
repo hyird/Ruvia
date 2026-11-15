@@ -148,7 +148,7 @@ TEST(Ruvia, db_query_binds_values_in_wire_order_and_preserves_zero_limit) {
     const auto first = db_expr::value(db_value(9));
     const auto id = db_expr::column("id", "u");
     query.select(first).from("users", "u").where(db_expr::binary(id, op_type::equal, second));
-    query.order_by(id, db_order_direction::desc).limit(0).lock({.nowait_ = true});
+    query.order_by(id, order_direction::desc).limit(0).lock({.nowait_ = true});
     const auto statement = query.compile(db_driver::postgresql);
     EXPECT_EQ(statement.sql(), "SELECT $1 FROM \"users\" AS \"u\" WHERE (\"u\".\"id\" = $2) ORDER BY \"u\".\"id\" DESC LIMIT $3 FOR UPDATE NOWAIT");
     EXPECT_EQ(statement.params().size(), std::size_t{3});
@@ -465,10 +465,10 @@ TEST(Ruvia, db_query_window_aggregate_filter_and_lateral_source) {
     const auto ts = db_expr::column("ts", "e");
     const auto id = db_expr::column("id", "e");
     const db_expr partitions[]{id};
-    const db_order_term window_order[]{{ts, db_order_direction::desc}};
+    const db_order_term window_order[]{{ts, order_direction::desc}};
     const auto rank = db_expr::call("row_number").over({.partition_by_ = partitions, .order_by_ = window_order});
     const std::array args{id};
-    const std::array order{db_order_term{ts, db_order_direction::asc}};
+    const std::array order{db_order_term{ts, order_direction::asc}};
     const auto aggregate = db_expr::aggregate("array_agg", args, false, order).filter(id.is_not_null());
     const std::array<db_selection, 2> projections{rank.as("rank"), aggregate};
     query.select(projections).from("events", "e");
@@ -484,7 +484,7 @@ TEST(Ruvia, db_query_expression_helpers_render_postgresql_and_reject_empty_input
     const auto left = db_expr::column("left");
     const auto right = db_expr::column("right");
     const auto values = db_expr::array({db_expr::value(1), db_expr::value(2)});
-    const std::array ordered_by{db_order_term{db_expr::column("score"), db_order_direction::desc}};
+    const std::array ordered_by{db_order_term{db_expr::column("score"), order_direction::desc}};
     const auto ordered = db_expr::aggregate("percentile_cont", {db_expr::value(0.5)}).within_group(ordered_by);
     const auto branches = std::array{db_case_branch{db_expr::binary(left, op_type::greater, db_expr::value(0)), db_expr::value("positive")}};
     const std::array<db_selection, 12> projections{
@@ -515,7 +515,7 @@ TEST(Ruvia, db_query_expression_helpers_render_postgresql_and_reject_empty_input
 
     db_query maria_within_group;
     const auto aggregate = db_expr::aggregate("percentile_cont", {db_expr::value(0.5)});
-    const std::array maria_order{db_order_term{db_expr::column("score"), db_order_direction::asc}};
+    const std::array maria_order{db_order_term{db_expr::column("score"), order_direction::asc}};
     maria_within_group.select(aggregate.within_group(maria_order)).from("metrics");
     EXPECT_TRUE(testing::throws_on([&] {
         (void)maria_within_group.compile(db_driver::mariadb);
@@ -546,7 +546,7 @@ TEST(Ruvia, db_query_native_functions_and_identifier_quoting_are_dialect_safe) {
     const auto name = db_expr::column("name", "s");
     const auto count = db_expr::aggregate("count", {db_expr::star()});
     const auto sum = db_expr::aggregate("sum", {amount});
-    const db_order_term window_order[]{{db_expr::column("id", "s"), db_order_direction::asc}};
+    const db_order_term window_order[]{{db_expr::column("id", "s"), order_direction::asc}};
     const auto row_number = db_expr::call("row_number").over({.order_by_ = window_order});
     const auto scalar = db_expr::call("lower", {name});
     query.select({count, sum, row_number, scalar}).from("sales", "s");
@@ -725,7 +725,7 @@ TEST(Ruvia, db_query_mariadb_uses_its_own_placeholders_and_null_ordering) {
     db_query query;
     const auto name = db_expr::column("name");
     query.select(db_expr::binary(name, op_type::concat, db_expr::value(db_value("suffix")))).from("user");
-    query.order_by(name, db_order_direction::asc, db_nulls_order::last).offset(2);
+    query.order_by(name, order_direction::asc, db_nulls_order::last).offset(2);
     const auto statement = query.compile(db_driver::mariadb);
     EXPECT_EQ(statement.sql(), "SELECT CONCAT(`name`, ?) FROM `user` ORDER BY (`name` IS NULL) ASC, `name` ASC LIMIT 18446744073709551615 OFFSET ?");
     query.where(db_expr::binary(name, op_type::i_like, db_expr::value(db_value("needle"))));
@@ -1150,7 +1150,7 @@ TEST(Ruvia, db_query_clause_source_and_join_methods_cover_state_and_dialect_rule
     db_query query;
     const auto id = db_expr::column("id", "e");
     const auto kind = db_expr::column("kind", "e");
-    query.select(db_selection::star("e")).add_select(db_expr::column("id", "e").as("selected_id")).from("cq_events", "e").where(db_expr::binary(id, op_type::greater, db_expr::value(0))).and_where(db_expr::binary(kind, op_type::not_equal, db_expr::value("archived"))).or_where(db_expr::binary(id, op_type::equal, db_expr::value(99))).group_by({id}).add_group_by(kind).having(db_expr::binary(db_expr::aggregate("count", {db_expr::star()}), op_type::greater, db_expr::value(0))).and_having(db_expr::binary(kind, op_type::like, db_expr::value("%live%"))).order_by(id, db_order_direction::desc, db_nulls_order::first).add_order_by(kind, db_order_direction::asc, db_nulls_order::last).limit(10).offset(2).distinct();
+    query.select(db_selection::star("e")).add_select(db_expr::column("id", "e").as("selected_id")).from("cq_events", "e").where(db_expr::binary(id, op_type::greater, db_expr::value(0))).and_where(db_expr::binary(kind, op_type::not_equal, db_expr::value("archived"))).or_where(db_expr::binary(id, op_type::equal, db_expr::value(99))).group_by({id}).add_group_by(kind).having(db_expr::binary(db_expr::aggregate("count", {db_expr::star()}), op_type::greater, db_expr::value(0))).and_having(db_expr::binary(kind, op_type::like, db_expr::value("%live%"))).order_by(id, order_direction::desc, db_nulls_order::first).add_order_by(kind, order_direction::asc, db_nulls_order::last).limit(10).offset(2).distinct();
     EXPECT_TRUE(query.has_where());
     EXPECT_TRUE(query.has_grouping());
     const auto statement = query.compile(db_driver::postgresql);
@@ -1701,7 +1701,7 @@ TEST(Ruvia, db_query_span_overloads_cover_expression_and_statement_builders) {
     const auto array_value = db_expr::array(std::span<const db_expr>(expressions));
     const std::array<db_case_branch, 1> branches{{{db_expr::binary(left, db_binary_operator::equal, db_expr::value(1)), right}}};
     const auto case_expression = db_expr::case_when(std::span<const db_case_branch>(branches), db_expr::value(0));
-    const std::array<db_order_term, 1> order{{{left, db_order_direction::asc, db_nulls_order::default_}}};
+    const std::array<db_order_term, 1> order{{{left, order_direction::asc, db_nulls_order::default_}}};
     const auto within = aggregate.within_group(std::span<const db_order_term>(order));
     const std::array<db_selection, 2> selections{left, right};
     query.select(std::span<const db_selection>(selections)).add_select(call).from("cq_span").group_by(std::span<const db_expr>(&left, 1)).add_group_by(right).having(db_expr::unary(db_unary_operator::is_not_null, coalesced)).and_having(db_expr::binary(greatest, db_binary_operator::greater, least)).order_by(left).add_order_by(right);

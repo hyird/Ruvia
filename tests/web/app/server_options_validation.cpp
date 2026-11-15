@@ -229,7 +229,7 @@ TEST(Ruvia, listener_config_rejects_invalid_listener_and_tls_states_at_construct
         });
     }));
     EXPECT_TRUE(throws_invalid([] {
-        ruvia::app().server({.process_signal_handlers_ = static_cast<ruvia::process_signal_handler_policy>(0xFF)});
+        ruvia::app().workers({.process_signal_handlers_ = static_cast<ruvia::process_signal_handler_policy>(0xFF)});
     }));
 }
 
@@ -839,8 +839,8 @@ struct runtime final {
         second_.run();
     }};
     ~runtime() {
-        first_.stop();
-        second_.stop();
+        first_.request_stop();
+        second_.request_stop();
     }
 };
 
@@ -1002,9 +1002,9 @@ TEST(Ruvia, ocsp_stapling_selects_identity_and_replaces_certificate_status_pairs
     };
     ruvia::http_server_group server(runtime.loops_, [](const ruvia::worker_ref&) {
         return ruvia::http_server_callbacks{.request_stream_ = [](ruvia::request_stream& stream) -> ruvia::task<void> {
-            if (co_await stream.response().commit() == ruvia::stream_commit_result::body) {
-                co_await stream.response().write("ocsp");
-                co_await stream.response().end();
+            if (co_await stream.stream().commit() == ruvia::stream_commit_result::body) {
+                co_await stream.stream().write("ocsp");
+                co_await stream.stream().end();
             }
         }};
     });

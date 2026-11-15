@@ -27,7 +27,7 @@ namespace ruvia {
 worker_runtime_context::worker_runtime_context(asio::io_context& io_context, std::size_t queue_capacity, blocking_pool* pool) :
     io_context_(&io_context),
     dispatcher_(std::make_shared<detail::worker_dispatcher>(io_context, queue_capacity, pool)),
-    worker_(detail::worker_ref_access::make(dispatcher_)) {}
+    worker_(detail::worker_dispatcher::make_ref(dispatcher_)) {}
 
 worker_runtime_context::~worker_runtime_context() {
     detach();
@@ -49,8 +49,20 @@ void worker_runtime_context::run(move_only_function<void()> startup_handler, mov
     dispatcher_->run_context(std::move(startup_handler), std::move(failure_handler), std::move(shutdown_handler));
 }
 
+void worker_runtime_context::enable_external_runner() noexcept {
+    dispatcher_->enable_external_runner();
+}
+
 void worker_runtime_context::close() noexcept {
     dispatcher_->close();
+}
+
+void worker_runtime_context::when_shutdown_notifications_complete(move_only_function<void()> callback) {
+    dispatcher_->when_shutdown_notifications_complete(std::move(callback));
+}
+
+void worker_runtime_context::when_idle(move_only_function<void()> callback) {
+    dispatcher_->when_idle(std::move(callback));
 }
 
 void worker_runtime_context::stop_timers() noexcept {
@@ -59,6 +71,10 @@ void worker_runtime_context::stop_timers() noexcept {
 
 void worker_runtime_context::detach() noexcept {
     dispatcher_->detach_context();
+}
+
+void worker_runtime_context::wait_for_reservations() noexcept {
+    dispatcher_->wait_for_reservations();
 }
 
 }  // namespace ruvia
@@ -167,27 +183,12 @@ post_status worker_dispatcher::reserve(std::size_t& index) noexcept {
     return post_status::accepted;
 }
 
-// Moving a task into its node runs the callable's own move constructor, which
-// may reenter this worker (post, close, detach). Admission and publication are
-// therefore two critical sections with the move between them, never under the
-// mutex; the reserved node counts against capacity throughout.
-post_outcome<> worker_dispatcher::post(move_only_function<void()> task_value) {
-    if (!task_value) {
-        throw std::invalid_argument("worker post requires a callable task");
-    }
-    std::size_t index = no_node;
-    if (const auto status = reserve(index); status != post_status::accepted) {
-        return detail::delivery_access::reject<post_outcome<>>(status, std::move(task_value));
-    }
-    nodes_[index].task_ = std::move(task_value);
-    publish(index);
-    return detail::delivery_access::accept<post_outcome<>>();
-}
-
+// Building the task and moving it into its node run the caller's factory and
+// the callable's own move constructor, either of which may reenter this
+// worker (post, close, detach). Admission and publication are therefore two
+// critical sections with that code between them, never under the mutex; the
+// reserved node counts against capacity throughout.
 post_status worker_dispatcher::post_factory(move_only_function<move_only_function<void()>()> factory) {
-    if (!factory) {
-        throw std::invalid_argument("worker post factory requires a callable");
-    }
     std::size_t index = no_node;
     if (const auto status = reserve(index); status != post_status::accepted) {
         return status;
@@ -267,7 +268,7 @@ bool worker_dispatcher::defer_if_attached(move_only_function<void()> task_value)
     // Off the worker, admission under the mutex orders this defer before
     // detach_context(), which waits for admitted defers before the context
     // may be destroyed. The task's move into the context runs unlocked, since
-    // its move constructor may reenter this worker (see post()).
+    // its move constructor may reenter this worker (see post_factory()).
     {
         std::lock_guard lock(mutex_);
         if (!context_attached_) {
@@ -759,16 +760,12 @@ worker_id_type worker_ref::id() const noexcept {
     return dispatcher_ ? dispatcher_->id() : 0;
 }
 
-blocking_pool* detail::worker_ref_access::blocking_pool(const worker_ref& worker_value) noexcept {
-    return worker_value.dispatcher_ ? worker_value.dispatcher_->blocking_pool() : nullptr;
-}
-
-detail::worker_dispatcher* detail::worker_ref_access::dispatcher(const worker_ref& worker_value) noexcept {
-    return worker_value.dispatcher_.get();
+blocking_pool* worker_ref::blocking_pool() const noexcept {
+    return dispatcher_ ? dispatcher_->blocking_pool() : nullptr;
 }
 
 asio::io_context::executor_type detail::worker_executor(const worker_ref& worker_value) {
-    auto* dispatcher = detail::worker_ref_access::dispatcher(worker_value);
+    auto* dispatcher = detail::worker_dispatcher::of(worker_value);
     if (dispatcher == nullptr) {
         throw std::logic_error("worker has no execution context");
     }
@@ -780,92 +777,75 @@ worker_ref detail::worker_ref_access::current() noexcept {
     if (dispatcher == nullptr) {
         return {};
     }
-    return worker_ref(std::const_pointer_cast<detail::worker_dispatcher>(dispatcher->shared_from_this()));
+    return detail::worker_dispatcher::make_ref(std::const_pointer_cast<detail::worker_dispatcher>(dispatcher->shared_from_this()));
+}
+
+post_status worker_ref::post_factory(move_only_function<move_only_function<void()>()> factory) const {
+    if (!factory) {
+        throw std::invalid_argument("worker post factory requires a callable");
+    }
+    // The factory may release the last owner of this worker_ref.
+    const auto dispatcher = dispatcher_;
+    return dispatcher ? dispatcher->post_factory(std::move(factory)) : post_status::stopping;
 }
 
 post_outcome<> worker_ref::post_task(move_only_function<void()> task_value) const {
     if (!task_value) {
         throw std::invalid_argument("worker post requires a callable task");
     }
-    return dispatcher_ ? dispatcher_->post(std::move(task_value)) : detail::delivery_access::reject<post_outcome<>>(post_status::stopping, std::move(task_value));
+    // No endpoint snapshot here: post() already pinned it whenever moving the
+    // callable can run user code. The factory only hands the built callable
+    // over, so a refusal leaves it untouched for the result.
+    const auto status = dispatcher_ ? dispatcher_->post_factory([&task_value]() noexcept -> move_only_function<void()> {
+        return std::move(task_value);
+    })
+                                    : post_status::stopping;
+    if (status != post_status::accepted) {
+        return detail::delivery_access::reject<post_outcome<>>(status, std::move(task_value));
+    }
+    return detail::delivery_access::accept<post_outcome<>>();
 }
 
-void detail::worker_ref_access::defer_resume(const worker_ref& worker_value, std::coroutine_handle<> continuation) noexcept {
-    defer_or_terminate(worker_value, [continuation] {
+void worker_ref::defer_resume(std::coroutine_handle<> continuation) const noexcept {
+    if (!dispatcher_) {
+        std::terminate();
+    }
+    dispatcher_->defer_or_terminate([continuation] {
         continuation.resume();
     });
 }
 
-worker_ref detail::worker_ref_access::make(const std::shared_ptr<worker_dispatcher>& dispatcher) noexcept {
-    return worker_ref(dispatcher);
-}
-
-bool detail::worker_ref_access::defer_completion(const worker_ref& worker_value, move_only_function<void()> completion) {
+bool worker_ref::defer_completion(move_only_function<void()> completion) const {
     if (!completion) {
         throw std::invalid_argument("worker completion requires a callable task");
     }
     // The completion's move may release the last owner of this worker_ref.
-    const auto dispatcher = worker_value.dispatcher_;
+    const auto dispatcher = dispatcher_;
     return dispatcher && dispatcher->defer_if_attached(std::move(completion));
 }
 
 void detail::worker_ref_access::defer_or_terminate(const worker_ref& worker_value, move_only_function<void()> task_value) noexcept {
-    if (!worker_value.dispatcher_) {
+    auto* const dispatcher = detail::worker_dispatcher::of(worker_value);
+    if (dispatcher == nullptr) {
         std::terminate();
     }
-    worker_value.dispatcher_->defer_or_terminate(std::move(task_value));
+    dispatcher->defer_or_terminate(std::move(task_value));
 }
 
 bool detail::worker_ref_access::link_shutdown(const worker_ref& worker_value, worker_shutdown_registration& registration, std::weak_ptr<void> owner, const worker_shutdown_operations_type& operations) {
-    if (!worker_value.dispatcher_) {
+    auto* const dispatcher = detail::worker_dispatcher::of(worker_value);
+    if (dispatcher == nullptr) {
         return false;
     }
-    return worker_value.dispatcher_->register_shutdown(registration, std::move(owner), operations);
-}
-
-void detail::worker_ref_access::when_shutdown_notifications_complete(const worker_ref& worker_value, move_only_function<void()> callback_value) {
-    const auto& dispatcher = worker_value.dispatcher_;
-    if (!dispatcher) {
-        throw std::runtime_error("cannot observe shutdown notifications on a stopped worker");
-    }
-    dispatcher->when_shutdown_notifications_complete(std::move(callback_value));
-}
-
-void detail::worker_ref_access::when_idle(const worker_ref& worker_value, move_only_function<void()> callback_value) {
-    const auto& dispatcher = worker_value.dispatcher_;
-    if (!dispatcher) {
-        throw std::runtime_error("cannot observe idleness on a stopped worker");
-    }
-    dispatcher->when_idle(std::move(callback_value));
-}
-
-void detail::worker_ref_access::wait_for_reservations(const worker_ref& worker_value) noexcept {
-    if (worker_value.dispatcher_) {
-        worker_value.dispatcher_->wait_for_reservations();
-    }
-}
-
-bool detail::worker_ref_access::timers_stopping(const worker_ref& worker_value) noexcept {
-    return !worker_value.dispatcher_ || worker_value.dispatcher_->timers_stopping();
-}
-
-void detail::worker_ref_access::enable_external_runner(const worker_ref& worker_value) noexcept {
-    if (worker_value.dispatcher_) {
-        worker_value.dispatcher_->enable_external_runner();
-    }
+    return dispatcher->register_shutdown(registration, std::move(owner), operations);
 }
 
 bool worker_timer_registration::schedule(const worker_ref& worker_value, std::chrono::steady_clock::time_point deadline_value, move_only_function<void(worker_timer_outcome)> completion) {
-    auto* const dispatcher = detail::worker_ref_access::dispatcher(worker_value);
+    auto* const dispatcher = detail::worker_dispatcher::of(worker_value);
     if (dispatcher == nullptr) {
         throw std::runtime_error("cannot schedule a timer on a stopped worker");
     }
     return dispatcher->schedule_timer(*this, deadline_value, std::move(completion));
-}
-
-post_status detail::worker_ref_access::post_factory(const worker_ref& worker_value, move_only_function<move_only_function<void()>()> factory) {
-    const auto dispatcher = worker_value.dispatcher_;
-    return dispatcher ? dispatcher->post_factory(std::move(factory)) : post_status::stopping;
 }
 
 }  // namespace ruvia

@@ -41,7 +41,6 @@ constexpr std::size_t fragment_size = 64 * 1024;
 
 [[nodiscard]] ruvia::server_config streaming_bounds_config() {
     return {
-        .worker_count_ = 1,
         .connection_scan_interval_ = 10ms,
         .max_inbound_buffer_bytes_per_worker_ = 4 * connection_budget,
         .max_inbound_buffer_bytes_per_connection_ = connection_budget,

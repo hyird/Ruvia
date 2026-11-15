@@ -72,7 +72,7 @@ public:
     // Resolves the bound for an operation that starts at `start`.
     [[nodiscard]] clock_type::time_point deadline_from(clock_type::time_point start) const noexcept {
         if (const auto* relative = std::get_if<std::chrono::milliseconds>(&value_)) {
-            return saturating_deadline(start, *relative);
+            return deadline_after(start, *relative);
         }
         return std::get<clock_type::time_point>(value_);
     }

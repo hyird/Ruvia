@@ -1688,7 +1688,8 @@ db_query& db_query::clear_source() {
     storage().source_.reset();
     return *this;
 }
-db_query& db_query::join(db_join_type type, std::string_view table_value, const db_expr& on, std::string_view alias, std::span<const std::string_view> using_columns) {
+db_query& db_query::join(db_join_type type, std::string_view table_value, const db_expr& on, std::string_view alias, argument_list<std::string_view> using_column_list) {
+    const auto using_columns = using_column_list.span();
     detail::require_name(table_value, true);
     if (!alias.empty()) {
         detail::require_unqualified_name(alias);
@@ -1755,8 +1756,8 @@ db_query& db_query::clear_where() {
     storage().predicate_ = no_db_node;
     return *this;
 }
-db_query& db_query::group_by(std::span<const db_expr> expressions) {
-    auto nodes = bind_all(expressions);
+db_query& db_query::group_by(argument_list<db_expr> expressions) {
+    auto nodes = bind_all(expressions.span());
     storage().groups_ = std::move(nodes);
     return *this;
 }
@@ -1780,7 +1781,7 @@ db_query& db_query::clear_having() {
     storage().having_ = no_db_node;
     return *this;
 }
-db_query& db_query::order_by(const db_expr& expression, db_order_direction direction, db_nulls_order nulls) {
+db_query& db_query::order_by(const db_expr& expression, order_direction direction, db_nulls_order nulls) {
     const auto index = bind(expression);
     auto& s = storage();
     s.orders_.reserve(1);
@@ -1788,7 +1789,7 @@ db_query& db_query::order_by(const db_expr& expression, db_order_direction direc
     s.orders_.push_back({index, direction, nulls});
     return *this;
 }
-db_query& db_query::add_order_by(const db_expr& expression, db_order_direction direction, db_nulls_order nulls) {
+db_query& db_query::add_order_by(const db_expr& expression, order_direction direction, db_nulls_order nulls) {
     const auto index = bind(expression);
     storage().orders_.push_back({index, direction, nulls});
     return *this;
@@ -1819,22 +1820,23 @@ db_query& db_query::distinct(bool enabled) {
     s.distinct_on_.clear();
     return *this;
 }
-db_query& db_query::distinct_on(std::span<const db_expr> expressions) {
-    if (expressions.empty()) {
+db_query& db_query::distinct_on(argument_list<db_expr> expressions) {
+    if (expressions.span().empty()) {
         throw std::invalid_argument("DISTINCT ON requires an expression");
     }
-    auto nodes = bind_all(expressions);
+    auto nodes = bind_all(expressions.span());
     auto& s = storage();
     s.distinct_on_ = std::move(nodes);
     s.distinct_ = false;
     return *this;
 }
-db_query& db_query::returning(std::span<const db_selection> expressions) {
-    auto nodes = bind_projections(expressions);
+db_query& db_query::returning(argument_list<db_selection> expressions) {
+    auto nodes = bind_projections(expressions.span());
     storage().returning_ = std::move(nodes);
     return *this;
 }
-db_query& db_query::insert_into(std::string_view table_value, std::span<const std::string_view> columns, std::string_view alias) {
+db_query& db_query::insert_into(std::string_view table_value, argument_list<std::string_view> column_list, std::string_view alias) {
+    const auto columns = column_list.span();
     detail::require_name(table_value, true);
     if (!alias.empty()) {
         detail::require_unqualified_name(alias);
@@ -1865,12 +1867,12 @@ db_query& db_query::insert_into(std::string_view table_value, std::span<const st
     s.kind_ = db_query_kind::insert;
     return *this;
 }
-db_query& db_query::values(std::span<const db_expr> row) {
+db_query& db_query::values(argument_list<db_expr> row) {
     auto& s = storage();
     if (s.kind_ != db_query_kind::select && s.kind_ != db_query_kind::values && s.kind_ != db_query_kind::insert) {
         throw std::invalid_argument("VALUES requires an INSERT or a values query");
     }
-    auto values = bind_all(row);
+    auto values = bind_all(row.span());
     s.rows_.push_back(std::move(values));
     if (s.kind_ != db_query_kind::insert) {
         s.kind_ = db_query_kind::values;

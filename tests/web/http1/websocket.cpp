@@ -431,7 +431,7 @@ void check_fair_handoff(bool peer_close) {
         }
         ruvia::close_socket(client);
         (void)watchdog.cancel();
-        attachment.stop();
+        attachment.request_stop();
     };
     auto root = attachment.loop().start(run());
     io.run();
@@ -544,7 +544,7 @@ TEST(Ruvia, http1_websocket_read_reports_orderly_peer_eof_as_end) {
             ruvia::close_socket(client);
         }
         (void)watchdog_value.cancel();
-        attachment.stop();
+        attachment.request_stop();
     };
     auto root = attachment.loop().start(run());
     io.run();
@@ -681,7 +681,7 @@ TEST(Ruvia, http1_websocket_send_echoes_borrowed_message_while_holding_read_lane
             ruvia::close_socket(client);
         }
         (void)watchdog_value.cancel();
-        attachment.stop();
+        attachment.request_stop();
     };
     auto root = attachment.loop().start(run());
     io.run();
@@ -778,7 +778,7 @@ TEST(Ruvia, http1_websocket_longest_heartbeat_never_aborts_a_slow_write) {
         }
         ruvia::close_socket(client);
         (void)watchdog_value.cancel();
-        attachment.stop();
+        attachment.request_stop();
     };
     auto root = attachment.loop().start(run());
     io.run();
@@ -915,7 +915,7 @@ TEST(Ruvia, http1_websocket_required_subprotocol_refuses_offers_without_one) {
                 break;
             }
         }
-        attachment.stop();
+        attachment.request_stop();
     };
     auto root = attachment.loop().start(run());
     io.run();
@@ -981,7 +981,7 @@ TEST(Ruvia, http1_websocket_upgrade_with_continue_expectation_sends_100_before_1
         }
         ruvia::close_socket(client);
         (void)watchdog_value.cancel();
-        attachment.stop();
+        attachment.request_stop();
     };
     auto root = attachment.loop().start(run());
     io.run();
@@ -1264,7 +1264,7 @@ void exercise_connect(bool finish_first) {
             ruvia::close_socket(client);
         }
         (void)watchdog_value.cancel();
-        attachment.stop();
+        attachment.request_stop();
     };
     auto root = attachment.loop().start(run());
     io.run();
@@ -1377,7 +1377,7 @@ std::string exchange_closing_request(std::string_view request) {
             failure = std::current_exception();
         }
         (void)watchdog_value.cancel();
-        attachment.stop();
+        attachment.request_stop();
     };
     auto root = attachment.loop().start(run());
     io.run();

@@ -65,7 +65,7 @@ private:
             co_return c.text("no messages\n");
         }
         std::string output;
-        for (const auto& stream : result_value->streams()) {
+        for (const auto& stream : *result_value) {
             for (const auto& entry : stream.entries()) {
                 output.append(entry.id()).append("\n");
                 for (const auto& field : entry.fields()) {
@@ -91,7 +91,7 @@ int main() {
         auto config = example::redis_config(env_value);
         // Blocking readers do not occupy ordinary command connections.
         config.blocking_pool_size_per_worker_ = 2;
-        app.server({.process_signal_handlers_ = ruvia::process_signal_handler_policy::install}).listen({.address_ = "127.0.0.1", .http_ = 8095}).redis({.config_ = config}).run();
+        app.workers({.process_signal_handlers_ = ruvia::process_signal_handler_policy::install}).listen({.address_ = "127.0.0.1", .http_ = 8095}).redis({.config_ = config}).run();
     } catch (...) {
         std::cerr << ruvia::exception_text(std::current_exception()) << '\n';
         return 1;

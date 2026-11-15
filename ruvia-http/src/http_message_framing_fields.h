@@ -62,17 +62,6 @@ private:
 // retain empty members, but every nonempty member must still be a coding token.
 [[nodiscard]] bool is_valid_http_content_encoding_field_value(std::string_view value, http_field_list_role role) noexcept;
 
-template <typename headers_type>
-[[nodiscard]] inline http_content_coding_field_result http_content_coding_from_headers(const headers_type& headers) noexcept {
-    http_content_coding_field_parser parser;
-    for (const auto& header : headers) {
-        if (http_ascii_equals_ignore_case(header.name(), "Content-Encoding")) {
-            parser.update(header.value());
-        }
-    }
-    return parser.finish();
-}
-
 enum class http_content_length_parse_status : std::uint8_t { ok,
     invalid,
     conflicting };

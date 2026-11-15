@@ -244,7 +244,7 @@ inherited_listener_sockets::~inherited_listener_sockets() {
 }
 
 http_server_listener_definition validate_run_listener(const http_server_listener_definition& listener, const http_server_options& options, std::chrono::steady_clock::time_point key_origin) {
-    const auto worker_count = options.server_.worker_count_;
+    const auto worker_count = options.worker_count_;
     if (const auto* redirect = std::get_if<http_server_listener_definition::redirect_http_to_https>(&listener.transport_)) {
         detail::ensure_non_zero_port(redirect->https_port_, "HTTP-to-HTTPS redirect requires a fixed HTTPS listen port");
     }

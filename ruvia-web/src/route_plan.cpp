@@ -248,7 +248,7 @@ void detail::router::register_owned_endpoint(std::size_t slot, http_known_method
         }
         if (tunnel != nullptr) {
             const auto* registered_tunnel = registered.endpoint().tunnel();
-            if (registered_tunnel != nullptr && registered_tunnel->protocol() == tunnel->protocol() && (tunnel->protocol().empty() ? registered.path() == path || http_authorities_equal(path, registered.path(), 0) : route_patterns_equivalent(registered.path(), path, /*compare_param_names=*/true))) {
+            if (registered_tunnel != nullptr && registered_tunnel->protocol() == tunnel->protocol() && (tunnel->protocol().empty() ? registered.path() == path || http_authorities_equal(path, registered.path(), std::nullopt) : route_patterns_equivalent(registered.path(), path, /*compare_param_names=*/true))) {
                 throw std::invalid_argument("duplicate CONNECT route registration");
             }
         } else if (route_patterns_equivalent(registered.path(), path, /*compare_param_names=*/true)) {

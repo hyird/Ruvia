@@ -52,7 +52,7 @@ std::vector<access_entry> access_entries{};
 // Every fixture passes the same configuration: whichever case runs first
 // fixes the shared application's server_config.
 [[nodiscard]] ruvia::server_config cors_server() {
-    return {.worker_count_ = 1, .connection_scan_interval_ = std::chrono::milliseconds(5), .cors_ = ruvia::http_cors_policy_config{}};
+    return {.connection_scan_interval_ = std::chrono::milliseconds(5), .cors_ = ruvia::http_cors_policy_config{}};
 }
 
 [[maybe_unused]] const bool policy_configured = [] {

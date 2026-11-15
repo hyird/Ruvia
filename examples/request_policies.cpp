@@ -87,7 +87,7 @@ private:
 
 int main() {
     try {
-        ruvia::app().server({.process_signal_handlers_ = ruvia::process_signal_handler_policy::install, .max_buffered_body_bytes_ = 1024}).listen({.address_ = "127.0.0.1", .http_ = 8097}).run();
+        ruvia::app().workers({.process_signal_handlers_ = ruvia::process_signal_handler_policy::install}).server({.max_buffered_body_bytes_ = 1024}).listen({.address_ = "127.0.0.1", .http_ = 8097}).run();
     } catch (...) {
         std::cerr << ruvia::exception_text(std::current_exception()) << '\n';
         return 1;

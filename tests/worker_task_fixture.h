@@ -116,7 +116,7 @@ task<void> join_worker_tasks_then_stop(event_loop_attachment& attachment, const 
         failure = std::current_exception();
     }
     joined = true;
-    attachment.stop();
+    attachment.request_stop();
     if (failure) {
         std::rethrow_exception(failure);
     }

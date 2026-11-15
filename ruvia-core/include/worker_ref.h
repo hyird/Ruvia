@@ -25,7 +25,6 @@ class blocking_pool;
 
 namespace detail {
 class worker_dispatcher;
-struct worker_ref_access;
 
 // Per-owner-type phase table; a null entry skips that phase.
 struct worker_shutdown_operations_type final {
@@ -109,6 +108,43 @@ public:
     [[nodiscard]] bool is_current() const noexcept;
     [[nodiscard]] worker_id_type id() const noexcept;
 
+    // The blocking pool the worker's event loop uses, or null (always null for
+    // an empty worker_ref); run_blocking() on a worker without one reports
+    // blocking_status::unavailable. The pool's owner keeps it alive for at
+    // least the worker's lifetime.
+    [[nodiscard]] ruvia::blocking_pool* blocking_pool() const noexcept;
+
+    // The general bounded post. Reserves admission before synchronously
+    // invoking `factory`, so the caller's inputs are consumed only after
+    // admission: a refusal (queue_full, or stopping, also for an empty
+    // worker_ref) never calls it. Keeps the selected endpoint alive across
+    // factory code, even if it reentrantly retires the runtime and clears the
+    // caller's worker_ref. An empty factory throws std::invalid_argument
+    // before admission, whatever the worker's state. An admitted factory that
+    // throws, or that produces an empty callable (std::invalid_argument),
+    // releases the reservation. accepted does not guarantee execution: detaching
+    // the runtime abandons an admitted callback and releases its owned inputs.
+    [[nodiscard]] post_status post_factory(move_only_function<move_only_function<void()>()> factory) const;
+
+    // post_factory() for a typed payload: `wrap` turns the payload into the
+    // posted callable only after admission, and a refusal returns the
+    // untouched payload in the result.
+    template <typename payload_type, typename wrap_type>
+        requires std::invocable<wrap_type&, payload_type&&> && std::convertible_to<std::invoke_result_t<wrap_type&, payload_type&&>, move_only_function<void()>>
+    [[nodiscard]] delivery_result<payload_type, post_status, post_status::accepted> post_payload(payload_type payload, wrap_type wrap) const {
+        using result_type = delivery_result<payload_type, post_status, post_status::accepted>;
+        const auto status = post_factory([&]() -> move_only_function<void()> {
+            return wrap(std::move(payload));
+        });
+        if (status != post_status::accepted) {
+            return detail::delivery_access::reject<result_type>(status, std::move(payload));
+        }
+        return detail::delivery_access::accept<result_type>();
+    }
+
+    // post_factory() for a callable that is already built: a refusal returns
+    // it untouched in the result. An empty callable throws
+    // std::invalid_argument before admission, whatever the worker's state.
     template <typename fn_type>
         requires detail::move_only_function_target<void, fn_type>
     [[nodiscard]] post_outcome<> post(fn_type&& fn) const {
@@ -120,33 +156,6 @@ public:
             return snapshot.post_task(move_only_function<void()>(std::forward<fn_type>(fn)));
         }
     }
-
-private:
-    explicit worker_ref(std::shared_ptr<detail::worker_dispatcher> dispatcher) noexcept;
-    [[nodiscard]] post_outcome<> post_task(move_only_function<void()> task) const;
-
-    // Owns the stable dispatcher endpoint, not the worker's io_context.
-    // The worker detaches that endpoint before destroying its execution context.
-    std::shared_ptr<detail::worker_dispatcher> dispatcher_;
-    friend struct detail::worker_ref_access;
-};
-
-namespace detail {
-
-struct worker_ref_access {
-    [[nodiscard]] static worker_ref make(const std::shared_ptr<worker_dispatcher>& dispatcher) noexcept;
-    static void defer_or_terminate(const worker_ref& worker, move_only_function<void()> task) noexcept;
-    static void when_shutdown_notifications_complete(const worker_ref& worker, move_only_function<void()> callback);
-    static void when_idle(const worker_ref& worker, move_only_function<void()> callback);
-    static void wait_for_reservations(const worker_ref& worker) noexcept;
-    [[nodiscard]] static bool timers_stopping(const worker_ref& worker) noexcept;
-    static void enable_external_runner(const worker_ref& worker) noexcept;
-    // The worker's dispatcher endpoint; null for an empty worker_ref.
-    [[nodiscard]] static worker_dispatcher* dispatcher(const worker_ref& worker) noexcept;
-    // The blocking pool the worker's event loop uses, or null; run_blocking()
-    // on a worker without one reports blocking_status::unavailable. The pool's
-    // owner keeps it alive for at least the worker's lifetime.
-    [[nodiscard]] static ruvia::blocking_pool* blocking_pool(const worker_ref& worker) noexcept;
 
     // Resumes `continuation` on the worker in a later turn, never inline --
     // for a coroutine suspended in an operation this worker already runs.
@@ -160,7 +169,7 @@ struct worker_ref_access {
     // it terminates. A request the event loop is destroyed before running is
     // dropped and the coroutine never resumes, so the worker must run until
     // every operation it admitted has completed, as for any started task.
-    static void defer_resume(const worker_ref& worker, std::coroutine_handle<> continuation) noexcept;
+    void defer_resume(std::coroutine_handle<> continuation) const noexcept;
 
     // The completion lane of an operation the worker already admitted:
     // cancellation, cleanup, or result delivery. It takes no retirement
@@ -171,31 +180,28 @@ struct worker_ref_access {
     // thread, once the worker's execution context has been detached (or on an
     // empty worker_ref): the admitted operation has then retired with
     // its worker. Throws std::invalid_argument for an empty callable.
-    [[nodiscard]] static bool defer_completion(const worker_ref& worker, move_only_function<void()> completion);
+    [[nodiscard]] bool defer_completion(move_only_function<void()> completion) const;
 
-    // Reserves bounded admission before synchronously invoking the factory, so
-    // ownership transfers only after admission. Keeps the selected endpoint
-    // alive across factory code, even if it reentrantly retires the runtime
-    // and clears the caller's worker_ref. accepted does not guarantee execution: detaching
-    // the runtime abandons an admitted callback and releases its owned inputs.
-    [[nodiscard]] static post_status post_factory(const worker_ref& worker, move_only_function<move_only_function<void()>()> factory);
+private:
+    explicit worker_ref(std::shared_ptr<detail::worker_dispatcher> dispatcher) noexcept;
+    // post() behind its type-erasure boundary: the same admission as
+    // post_factory(), with a factory that hands over the built callable.
+    [[nodiscard]] post_outcome<> post_task(move_only_function<void()> task) const;
 
-    // post_factory() for a typed payload: `wrap` turns the payload into the
-    // posted callable only after admission, and a refusal returns the
-    // untouched payload in the result. An empty worker_ref refuses with
-    // stopping.
-    template <typename payload_type, typename wrap_type>
-        requires std::invocable<wrap_type&, payload_type&&> && std::convertible_to<std::invoke_result_t<wrap_type&, payload_type&&>, move_only_function<void()>>
-    [[nodiscard]] static delivery_result<payload_type, post_status, post_status::accepted> post_payload(const worker_ref& worker, payload_type payload, wrap_type wrap) {
-        using result_type = delivery_result<payload_type, post_status, post_status::accepted>;
-        const auto status = post_factory(worker, [&]() -> move_only_function<void()> {
-            return wrap(std::move(payload));
-        });
-        if (status != post_status::accepted) {
-            return delivery_access::reject<result_type>(status, std::move(payload));
-        }
-        return delivery_access::accept<result_type>();
-    }
+    // Owns the stable dispatcher endpoint, not the worker's io_context.
+    // The worker detaches that endpoint before destroying its execution context.
+    std::shared_ptr<detail::worker_dispatcher> dispatcher_;
+    friend class detail::worker_dispatcher;
+};
+
+namespace detail {
+
+// What core's own inline headers need beyond the public worker_ref surface.
+struct worker_ref_access {
+    // defer_completion() for an intrusive node that has no owner to hand a
+    // refusal back to: a detached or empty worker, or a failed dispatch, is
+    // terminal.
+    static void defer_or_terminate(const worker_ref& worker, move_only_function<void()> task) noexcept;
 
     // Links `owner->*registration` into the worker's shutdown registry, so
     // the worker's stop reaches the owner's worker_stopping() and

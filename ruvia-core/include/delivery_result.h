@@ -22,7 +22,7 @@ struct delivery_access;
 
 namespace ruvia {
 
-// The outcome of a bounded delivery: post, submit, send, complete, or start.
+// The outcome of a bounded delivery: post, send, complete, or start.
 // The category is fixed at construction. A rejection owns the unconsumed
 // payload; when accepted_type is not void, acceptance owns that value (the
 // started operation). take_rejected() and take_value() both consume their

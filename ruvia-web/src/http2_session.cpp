@@ -1631,7 +1631,7 @@ task<void> http2_sans_io_session_engine::dispatch_one(std::uint32_t stream_id) {
         if (body_reader_storage) {
             dispatch_services.bind_streaming_request_body(body_reader_storage->facade());
         }
-        const stop_group dispatch_stop(dispatch_services.get_stop_token(), stream_signal->terminal_stop_token());
+        const stop_group dispatch_stop{dispatch_services.get_stop_token(), stream_signal->terminal_stop_token()};
         const auto dispatch_stop_token = dispatch_stop.token();
         dispatch_services.bind_stop_token(dispatch_stop_token);
 
@@ -1735,7 +1735,7 @@ task<void> http2_sans_io_session_engine::dispatch_one(std::uint32_t stream_id) {
                     if (connection_.stream_aborted(stream_id)) {
                         stream_signal->stop();
                     }
-                    const stop_group request_stop(dispatch_services.get_stop_token(), stream_signal->terminal_stop_token());
+                    const stop_group request_stop{dispatch_services.get_stop_token(), stream_signal->terminal_stop_token()};
                     const auto request_stop_token = request_stop.token();
                     auto stream_services = dispatch_services;
                     stream_services.bind_stop_token(request_stop_token);

@@ -668,11 +668,15 @@ task<http_client_tunnel_result> http_client_pool::open_tunnel(http_client_reques
     require_accepting();
     http_client_response response(*this);
     auto& state_value = *response.state_;
-    state_value.tunnel_.emplace(state_value.memory_domain().worker(), config);
-    state_value.tunnel_->udp_ = request.udp_tunnel();
+    state_value.tunnel_.emplace(state_value, config, request.udp_tunnel());
     spawn_request(std::move(request), std::move(options), state_value);
     co_await state_value.await_head("CONNECT handshake failed");
     if (state_value.tunnel_->accepted_) {
+#ifdef RUVIA_ENABLE_HTTP3
+        if (state_value.transport_ == http_client_response_transport::http3) {
+            state_value.tunnel_->bind_native_datagrams();
+        }
+#endif
         co_return http_client_tunnel_result(http_client_tunnel(std::move(response)));
     }
     co_return http_client_tunnel_result(std::move(response));

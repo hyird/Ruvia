@@ -335,7 +335,7 @@ TEST(Ruvia, db_schema_timescale_policies_are_typed_function_calls_and_table_opti
     auto interval = db_expr::value("7 days").cast(db_data_type::interval);
     db_schema schema({.driver_ = db_driver::postgresql});
     schema.create_hypertable({.table_ = "telemetry.events", .time_column_ = "ts", .chunk_interval_ = interval, .if_not_exists_ = true});
-    schema.set_compression("telemetry.events", {.segment_by_ = {"device_id"}, .order_by_ = {{"ts", ruvia::db_order_direction::desc}}});
+    schema.set_compression("telemetry.events", {.segment_by_ = {"device_id"}, .order_by_ = {{"ts", ruvia::order_direction::desc}}});
     schema.add_compression_policy("telemetry.events", interval, true);
     schema.add_retention_policy("telemetry.events", db_expr::value("90 days").cast(db_data_type::interval));
     const auto migrations = schema.compile("storage");
@@ -522,7 +522,7 @@ TEST(Ruvia, db_schema_constructor_table_flags_and_compile_boundaries_are_checked
 TEST(Ruvia, db_schema_index_variants_and_dialect_rejections) {
     const auto predicate = db_expr::binary(db_expr::column("active"), ruvia::db_binary_operator::equal, db_expr::value(true));
     db_schema pg({.driver_ = db_driver::postgresql});
-    pg.create_index({.name_ = "cs_idx", .table_ = "cs_records", .keys_ = {{.column_ = "name", .order_ = ruvia::db_order_direction::desc, .nulls_ = ruvia::db_nulls_order::last, .operator_class_ = "text_ops"}, {.expression_ = db_expr::column("lower_name")}}, .unique_ = true, .if_not_exists_ = true, .method_ = ruvia::db_index_method::btree, .include_ = {"id"}, .where_ = predicate});
+    pg.create_index({.name_ = "cs_idx", .table_ = "cs_records", .keys_ = {{.column_ = "name", .order_ = ruvia::order_direction::desc, .nulls_ = ruvia::db_nulls_order::last, .operator_class_ = "text_ops"}, {.expression_ = db_expr::column("lower_name")}}, .unique_ = true, .if_not_exists_ = true, .method_ = ruvia::db_index_method::btree, .include_ = {"id"}, .where_ = predicate});
     const auto pg_migrations = pg.compile("cs_index");
     EXPECT_EQ(pg_migrations.size(), std::size_t{1});
     EXPECT_TRUE(pg_migrations[0].sql().find("CREATE UNIQUE INDEX IF NOT EXISTS \"cs_idx\" ON \"cs_records\" USING btree") != std::string_view::npos);
@@ -551,7 +551,7 @@ TEST(Ruvia, db_schema_index_variants_and_dialect_rejections) {
         invalid.create_index({.name_ = "bad", .table_ = "t", .keys_ = {{.column_ = "id"}, {.column_ = ""}}});
     }));
     db_schema maria({.driver_ = db_driver::mariadb});
-    maria.create_index({.name_ = "cs_maria_idx", .table_ = "cs_records", .keys_ = {{.column_ = "name", .order_ = ruvia::db_order_direction::desc}}, .unique_ = true, .if_not_exists_ = true});
+    maria.create_index({.name_ = "cs_maria_idx", .table_ = "cs_records", .keys_ = {{.column_ = "name", .order_ = ruvia::order_direction::desc}}, .unique_ = true, .if_not_exists_ = true});
     EXPECT_TRUE(maria.compile("cs_maria_idx")[0].sql().find("CREATE UNIQUE INDEX IF NOT EXISTS `cs_maria_idx` USING btree ON `cs_records`") != std::string_view::npos);
     EXPECT_TRUE(throws_on([&] {
         maria.create_index({.name_ = "bad", .table_ = "t", .keys_ = {{.column_ = "id"}}, .concurrently_ = true});

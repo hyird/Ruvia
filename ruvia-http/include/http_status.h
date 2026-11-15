@@ -9,72 +9,56 @@
 #include <type_traits>
 #include <utility>
 
+#include "checked_integer.h"
+
 namespace ruvia {
 
-// A validated HTTP status-code value. The complete 100..599 extension space is
-// representable, while arbitrary integers cannot leak into protocol APIs.
-class http_status_code final {
-public:
-    // Validate the original integer before narrowing to the stored wire value.
-    template <std::integral integer_type>
-    explicit constexpr http_status_code(integer_type value) :
-        value_(is_valid_value(value) ? static_cast<std::uint16_t>(value) : throw std::invalid_argument("HTTP status code must be in 100..599")) {}
-
-    template <std::integral integer_type>
-    [[nodiscard]] static constexpr std::optional<http_status_code> try_from_value(integer_type value) noexcept {
-        if (!is_valid_value(value)) {
-            return std::nullopt;
-        }
-        return http_status_code(static_cast<std::uint16_t>(value), validated_tag_type{});
-    }
+namespace detail {
+struct http_status_code_policy final {
+    static constexpr bool implicit_conversion = false;
+    static constexpr const char* invalid_value_message = "HTTP status code must be in 100..599";
 
     template <std::integral integer_type>
     [[nodiscard]] static constexpr bool is_valid_value(integer_type value) noexcept {
         const auto integer_value = +value;
         return integer_value >= 100 && integer_value <= 599;
     }
+};
+}  // namespace detail
 
-    [[nodiscard]] constexpr std::uint16_t value() const noexcept {
-        return value_;
-    }
+// A validated HTTP status-code value. The complete 100..599 extension space is
+// representable, while arbitrary integers cannot leak into protocol APIs.
+class http_status_code final : public checked_integer<http_status_code, std::uint16_t, detail::http_status_code_policy> {
+public:
+    using checked_integer::checked_integer;
 
     [[nodiscard]] constexpr bool is_informational() const noexcept {
-        return value_ < 200;
+        return value() < 200;
     }
 
     [[nodiscard]] constexpr bool is_successful() const noexcept {
-        return value_ >= 200 && value_ < 300;
+        return value() >= 200 && value() < 300;
     }
 
     [[nodiscard]] constexpr bool is_redirection() const noexcept {
-        return value_ >= 300 && value_ < 400;
+        return value() >= 300 && value() < 400;
     }
 
     [[nodiscard]] constexpr bool is_client_error() const noexcept {
-        return value_ >= 400 && value_ < 500;
+        return value() >= 400 && value() < 500;
     }
 
     [[nodiscard]] constexpr bool is_server_error() const noexcept {
-        return value_ >= 500;
+        return value() >= 500;
     }
 
     [[nodiscard]] constexpr bool is_error() const noexcept {
-        return value_ >= 400;
+        return value() >= 400;
     }
 
     [[nodiscard]] constexpr bool is_final() const noexcept {
-        return value_ >= 200;
+        return value() >= 200;
     }
-
-    friend constexpr auto operator<=>(http_status_code, http_status_code) = default;
-
-private:
-    struct validated_tag_type {};
-
-    constexpr http_status_code(std::uint16_t value, validated_tag_type) noexcept :
-        value_(value) {}
-
-    std::uint16_t value_;
 };
 
 static_assert(std::is_trivially_copyable_v<http_status_code>);

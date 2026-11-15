@@ -269,11 +269,11 @@ public:
         const std::array<ruvia::http_header_view, 1> hint_fields{{{"link", "</app.css>; rel=preload"}}};
         co_await context.inform(ruvia::http_interim_response_head(ruvia::http_status::early_hints, hint_fields));
         std::size_t bytes = 0;
-        auto& reader = context.req().body_reader();
+        auto& reader = context.request_body();
         while (auto chunk = co_await reader.read()) {
             bytes += chunk->size();
         }
-        const auto checksum = context.req().trailer("x-upload-checksum").value_or("missing");
+        const auto checksum = context.trailer("x-upload-checksum").value_or("missing");
         const std::array trailer_header{ruvia::http_header_view{"Trailer", "x-response-trailer"}};
         auto& out = context.stream_text({.headers_ = trailer_header});
         if (co_await out.commit() == ruvia::stream_commit_result::completed) {
@@ -497,7 +497,7 @@ ruvia::task<void> run_protocol_lane(ruvia::http_client_ref client, ruvia::http_p
                 resp.reprioritize({.urgency_ = ruvia::http_priority_urgency(2), .incremental_ = true});
             }
             std::string collected{};
-            while (auto chunk = co_await resp.stream().text()) {
+            while (auto chunk = co_await resp.stream().read_text()) {
                 collected.append(*chunk);
             }
             EXPECT_EQ(collected, expected_stream);
@@ -513,14 +513,14 @@ ruvia::task<void> run_protocol_lane(ruvia::http_client_ref client, ruvia::http_p
             {
                 auto partial = co_await client.get("/stream").send();
                 EXPECT_TRUE(partial.ok());
-                auto first_chunk = co_await partial.stream().text();
+                auto first_chunk = co_await partial.stream().read_text();
                 EXPECT_TRUE(first_chunk.has_value());
             }
 
             auto sse_resp = co_await client.get("/events").send();
             EXPECT_TRUE(sse_resp.ok());
             std::string sse_collected{};
-            while (auto chunk = co_await sse_resp.stream().text()) {
+            while (auto chunk = co_await sse_resp.stream().read_text()) {
                 sse_collected.append(*chunk);
             }
             EXPECT_TRUE(sse_collected.find("event: tick\nid: 0\ndata: item-0\n\n") != std::string::npos);
@@ -555,7 +555,7 @@ ruvia::task<void> run_protocol_lane(ruvia::http_client_ref client, ruvia::http_p
                 EXPECT_TRUE(resp.ok());
                 EXPECT_TRUE(resp.informational_responses().size() >= std::size_t{1});
                 std::string uploaded_text{};
-                while (auto chunk = co_await resp.stream().text()) {
+                while (auto chunk = co_await resp.stream().read_text()) {
                     uploaded_text.append(*chunk);
                 }
                 EXPECT_EQ(uploaded_text, "uploaded:13:crc-ok");
@@ -581,10 +581,10 @@ ruvia::task<void> run_protocol_lane(ruvia::http_client_ref client, ruvia::http_p
             EXPECT_TRUE(tunnel != nullptr);
             if (tunnel != nullptr) {
                 const std::string msg(8192, static_cast<char>('0' + lane % 10));
-                co_await tunnel->write(msg);
-                co_await tunnel->finish();
+                co_await tunnel->stream().write(msg);
+                co_await tunnel->stream().finish();
                 std::string echoed{};
-                while (auto chunk = co_await tunnel->text()) {
+                while (auto chunk = co_await tunnel->stream().read_text()) {
                     echoed.append(*chunk);
                 }
                 EXPECT_EQ(echoed, msg);
@@ -594,7 +594,7 @@ ruvia::task<void> run_protocol_lane(ruvia::http_client_ref client, ruvia::http_p
                 auto* raw_tunnel = udp_res.tunnel();
                 EXPECT_TRUE(raw_tunnel != nullptr);
                 if (raw_tunnel != nullptr) {
-                    auto udp = std::move(*raw_tunnel).udp();
+                    auto udp = raw_tunnel->stream().udp();
                     const std::string dgram("udp-" + std::string(std::to_string(loop_idx)) + "-" + std::string(std::to_string(lane)));
                     co_await udp.send(dgram);
                     auto echoed_dgram = co_await udp.read();
@@ -798,12 +798,12 @@ ruvia::task<void> exercise_connection_controls(ruvia::event_loop loop, std::uint
                     throw std::runtime_error("HTTP/3 finish race requires an accepted tunnel");
                 }
                 stage = "tunnel-write";
-                co_await tunnel->write("half-close");
+                co_await tunnel->stream().write("half-close");
                 stage = "tunnel-finish";
-                co_await tunnel->finish();
+                co_await tunnel->stream().finish();
                 stage = "tunnel-read-eof";
                 std::string echoed;
-                while (const auto chunk = co_await tunnel->text()) {
+                while (const auto chunk = co_await tunnel->stream().read_text()) {
                     echoed.append(*chunk);
                 }
                 EXPECT_EQ(echoed, "half-close");
@@ -1085,13 +1085,12 @@ TEST(Ruvia, a_multi_worker_app_serves_http3_and_closes_it_on_stop) {
 
     auto& app = ruvia::app();
     std::binary_semaphore started{0};
-    app.server({.worker_count_ = 4, .max_buffered_body_bytes_ = 4 * 1024 * 1024})
-        .listen({
-            .address_ = "127.0.0.1",
-            .https_ = port,
-            .http3_ = port,
-            .tls_ = {.identity_ = {.certificate_chain_file_ = identity.ca_file_, .private_key_file_ = private_key}},
-        })
+    app.workers({.worker_count_ = 4}).server({.max_buffered_body_bytes_ = 4 * 1024 * 1024}).listen({
+                                                                                                       .address_ = "127.0.0.1",
+                                                                                                       .https_ = port,
+                                                                                                       .http3_ = port,
+                                                                                                       .tls_ = {.identity_ = {.certificate_chain_file_ = identity.ca_file_, .private_key_file_ = private_key}},
+                                                                                                   })
         .on_start([&started] {
         started.release();
     });
@@ -1352,11 +1351,11 @@ TEST(Ruvia, a_multi_worker_app_serves_http3_and_closes_it_on_stop) {
 #endif
             EXPECT_EQ(completed_ops.load(), std::size_t{4 * lanes_per_worker * 3});
         } catch (...) {
-            client_loops.stop();
+            client_loops.request_stop();
             client_loops.join();
             throw;
         }
-        client_loops.stop();
+        client_loops.request_stop();
         client_loops.join();
     }
 
@@ -1387,7 +1386,7 @@ TEST(Ruvia, a_multi_worker_app_serves_http3_and_closes_it_on_stop) {
     // A connection that reaches max_requests_per_connection_ still ends
     // gracefully (RFC 9114 §5.2): its requests are answered, the shutdown
     // notice and the final GOAWAY follow, then CONNECTION_CLOSE(H3_NO_ERROR).
-    app.server({.worker_count_ = 4, .max_requests_per_connection_ = 2});
+    app.workers({.worker_count_ = 4}).server({.max_requests_per_connection_ = 2});
     ruvia::test::app_run capped(app);
     EXPECT_TRUE(started.try_acquire_for(10s));
     {
@@ -1424,11 +1423,11 @@ TEST(Ruvia, a_multi_worker_app_serves_http3_and_closes_it_on_stop) {
                 std::move(f).get();
             }
         } catch (...) {
-            capped_loops.stop();
+            capped_loops.request_stop();
             capped_loops.join();
             throw;
         }
-        capped_loops.stop();
+        capped_loops.request_stop();
         capped_loops.join();
     }
     app.stop();
@@ -1437,7 +1436,7 @@ TEST(Ruvia, a_multi_worker_app_serves_http3_and_closes_it_on_stop) {
     // Rapid Reset (CVE-2023-44487), bounded as for HTTP/2: request streams the
     // peer abandons may run 1000 ahead of the responses its connection
     // completed; past that the connection closes with H3_EXCESSIVE_LOAD.
-    app.server({.worker_count_ = 4, .max_requests_per_connection_ = std::nullopt});
+    app.workers({.worker_count_ = 4}).server({.max_requests_per_connection_ = std::nullopt});
     ruvia::test::app_run resetting(app);
     EXPECT_TRUE(started.try_acquire_for(10s));
     {

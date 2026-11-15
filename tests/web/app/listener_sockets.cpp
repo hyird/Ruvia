@@ -339,7 +339,7 @@ TEST(Ruvia, readded_http3_listener_serves_new_and_retired_connections_on_every_w
     const auto udp = udp_reservation.endpoint();
     ruvia::listen_config config{.address_ = "127.0.0.1", .https_ = https.port(), .http3_ = udp.port(), .tls_ = tls_of(first)};
     auto& app = ruvia::app();
-    app.server({.worker_count_ = 2}).listen(config).on_start(nullptr).on_start([] {
+    app.workers({.worker_count_ = 2}).listen(config).on_start(nullptr).on_start([] {
         started().release();
     });
     ruvia::test::app_run runner(app);
@@ -422,7 +422,7 @@ TEST(Ruvia, readded_http3_listener_without_connections_releases_its_udp_sockets)
     const auto https = https_reservation.endpoint();
     const ruvia::listen_config config{.address_ = "127.0.0.1", .https_ = https.port(), .http3_ = udp.port(), .tls_ = tls_of(identity)};
     auto& app = ruvia::app();
-    app.server({.worker_count_ = 2}).listen({.address_ = "127.0.0.1", .http_ = base_reservation.endpoint().port()}).on_start(nullptr).on_start([] {
+    app.workers({.worker_count_ = 2}).listen({.address_ = "127.0.0.1", .http_ = base_reservation.endpoint().port()}).on_start(nullptr).on_start([] {
         started().release();
     });
     ruvia::test::app_run runner(app);
@@ -524,7 +524,7 @@ TEST(Ruvia, listen_adopts_inherited_tcp_sockets_and_closes_rejected_ones) {
 
     const int exclusive = listening_socket(0, false);
     const auto exclusive_endpoint = loopback(local_port(exclusive));
-    app.server({.worker_count_ = 1}).listen({.address_ = "127.0.0.1", .http_ = exclusive_endpoint.port(), .inherited_sockets_ = ruvia::listener_sockets{.http_ = {exclusive}}});
+    app.workers({.worker_count_ = 1}).listen({.address_ = "127.0.0.1", .http_ = exclusive_endpoint.port(), .inherited_sockets_ = ruvia::listener_sockets{.http_ = {exclusive}}});
     EXPECT_TRUE(close_on_exec(exclusive));
     {
         ruvia::test::app_run runner(app);
@@ -538,7 +538,7 @@ TEST(Ruvia, listen_adopts_inherited_tcp_sockets_and_closes_rejected_ones) {
     ruvia::test::tcp_port_reservation other(io);
     const auto endpoint = reservation.endpoint();
     const auto port = endpoint.port();
-    app.server({.worker_count_ = 2});
+    app.workers({.worker_count_ = 2});
     const auto listen_with = [&](ruvia::listener_sockets sockets) {
         return failure_of([&] {
             app.listen({.address_ = "127.0.0.1", .http_ = port, .inherited_sockets_ = std::move(sockets)});
@@ -612,7 +612,7 @@ TEST(Ruvia, listen_adopts_inherited_https_and_http3_sockets) {
     }
     const auto adopted = sockets;
     auto& app = ruvia::app();
-    app.server({.worker_count_ = 2}).listen({.address_ = "127.0.0.1", .https_ = https.port(), .http3_ = http3, .tls_ = tls_of(identity), .inherited_sockets_ = std::move(sockets)}).on_start(nullptr).on_start([] {
+    app.workers({.worker_count_ = 2}).listen({.address_ = "127.0.0.1", .https_ = https.port(), .http3_ = http3, .tls_ = tls_of(identity), .inherited_sockets_ = std::move(sockets)}).on_start(nullptr).on_start([] {
         started().release();
     });
     for (const auto fd : adopted.http3_) {
@@ -659,7 +659,7 @@ TEST(Ruvia, duplicated_listener_sockets_serve_a_successor) {
     constexpr std::size_t http3_sockets = 0;
 #endif
     auto& app = ruvia::app();
-    app.server({.worker_count_ = 2}).listen(config).on_start(nullptr).on_start([] {
+    app.workers({.worker_count_ = 2}).listen(config).on_start(nullptr).on_start([] {
         started().release();
     });
     const ruvia::listener_endpoint https_endpoint{.address_ = "127.0.0.1", .port_ = https.port()};
@@ -738,7 +738,7 @@ TEST(Ruvia, added_listeners_adopt_inherited_sockets) {
     const auto adopted = adopted_reservation.endpoint();
     const auto rejected = rejected_reservation.endpoint();
     auto& app = ruvia::app();
-    app.server({.worker_count_ = 2}).listen({.address_ = "127.0.0.1", .http_ = base.port()}).on_start(nullptr).on_start([] {
+    app.workers({.worker_count_ = 2}).listen({.address_ = "127.0.0.1", .http_ = base.port()}).on_start(nullptr).on_start([] {
         started().release();
     });
     ruvia::test::app_run runner(app);
@@ -819,7 +819,7 @@ TEST(Ruvia, listeners_are_added_while_running_and_kept_for_later_runs) {
 #endif
 
     auto& app = ruvia::app();
-    app.server({.worker_count_ = 2}).listen({.address_ = "127.0.0.1", .http_ = base.port()}).on_start(nullptr).on_start([] {
+    app.workers({.worker_count_ = 2}).listen({.address_ = "127.0.0.1", .http_ = base.port()}).on_start(nullptr).on_start([] {
         started().release();
     });
     EXPECT_EQ(failure_of([&] {
@@ -934,7 +934,7 @@ TEST(Ruvia, removed_listeners_refuse_new_connections_and_serve_established_ones)
     secure_config.http3_ = http3;
 #endif
     auto& app = ruvia::app();
-    app.server({.worker_count_ = 2})
+    app.workers({.worker_count_ = 2})
         .listen({
             {.address_ = "127.0.0.1", .http_ = kept.port()},
             {.address_ = "127.0.0.1", .http_ = removed.port()},
@@ -1024,7 +1024,7 @@ TEST(Ruvia, mixed_listener_shares_one_socket_group_and_preserves_transport_throu
     config.http3_ = udp.endpoint().port();
 #endif
     auto& app = ruvia::app();
-    app.server({.worker_count_ = 2}).listen({.address_ = "127.0.0.1", .http_ = base.endpoint().port()}).on_start(nullptr).on_start([] {
+    app.workers({.worker_count_ = 2}).listen({.address_ = "127.0.0.1", .http_ = base.endpoint().port()}).on_start(nullptr).on_start([] {
         started().release();
     });
     auto client = tls_client();
@@ -1098,7 +1098,7 @@ TEST(Ruvia, mixed_listener_redirects_only_plaintext_and_accepts_fragmented_clien
     ruvia::test::tcp_port_reservation reservation(io);
     const auto endpoint = reservation.endpoint();
     auto& app = ruvia::app();
-    app.server({.worker_count_ = 2}).listen({.address_ = "127.0.0.1", .http_ = endpoint.port(), .https_ = endpoint.port(), .tls_ = tls_of(identity), .auto_https_redirect_ = true}).on_start(nullptr).on_start([] {
+    app.workers({.worker_count_ = 2}).listen({.address_ = "127.0.0.1", .http_ = endpoint.port(), .https_ = endpoint.port(), .tls_ = tls_of(identity), .auto_https_redirect_ = true}).on_start(nullptr).on_start([] {
         started().release();
     });
     ruvia::test::app_run runner(app);
@@ -1123,7 +1123,7 @@ TEST(Ruvia, mixed_listener_detection_and_partial_handshakes_share_deadlines_and_
     ruvia::test::tcp_port_reservation reservation(io);
     const auto endpoint = reservation.endpoint();
     auto& app = ruvia::app();
-    app.server({.worker_count_ = 2, .connection_scan_interval_ = 5ms, .request_header_timeout_ = 1s, .header_completion_timeout_ = 300ms}).listen({.address_ = "127.0.0.1", .http_ = endpoint.port(), .https_ = endpoint.port(), .tls_ = tls_of(identity)}).on_start(nullptr).on_start([] {
+    app.workers({.worker_count_ = 2}).server({.connection_scan_interval_ = 5ms, .request_header_timeout_ = 1s, .header_completion_timeout_ = 300ms}).listen({.address_ = "127.0.0.1", .http_ = endpoint.port(), .https_ = endpoint.port(), .tls_ = tls_of(identity)}).on_start(nullptr).on_start([] {
         started().release();
     });
     ruvia::test::app_run runner(app);

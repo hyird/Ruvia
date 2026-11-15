@@ -329,7 +329,7 @@ task<std::optional<redis_key_value>> redis_executor::brpop(std::span<const std::
     return execute_mapped<std::optional<redis_key_value>>(blocking_pool(), detail::redis_blocking_pop_args("BRPOP", keys, wait), detail::parse_redis_blocking_pop_reply, reply_timeout);
 }
 
-task<std::optional<redis_x_read_group_result>> redis_executor::xread_group(std::string_view group, std::string_view consumer, std::span<const redis_stream_read_view> streams, redis_x_read_group_options options) {
+task<std::optional<std::vector<redis_stream_read_result>>> redis_executor::xread_group(std::string_view group, std::string_view consumer, std::span<const redis_stream_read_view> streams, redis_x_read_group_options options) {
     registration_.require_active();
     auto args = detail::redis_x_read_group_args(group, consumer, streams, options);
     auto* selected_pool = &pool();
@@ -338,7 +338,7 @@ task<std::optional<redis_x_read_group_result>> redis_executor::xread_group(std::
         selected_pool = &blocking_pool();
         reply_timeout = redis_block_reply_timeout(detail::request_bound_options(operation_options_, request_stop_), *options.block_);
     }
-    return execute_mapped<std::optional<redis_x_read_group_result>>(*selected_pool, std::move(args), detail::parse_redis_x_read_group_reply, reply_timeout);
+    return execute_mapped<std::optional<std::vector<redis_stream_read_result>>>(*selected_pool, std::move(args), detail::parse_redis_x_read_group_reply, reply_timeout);
 }
 
 redis_pipeline redis_executor::pipeline() const {

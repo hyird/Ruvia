@@ -107,10 +107,10 @@ ruvia_link_controllers(my_service user_controllers)
 
 ### 3.1 Shared-Nothing Worker 线程模型
 
-- **单 Worker 独占连接生命周期**：生产应用 `ruvia::app()` 按 `server_config::worker_count_` 启动同构业务 worker 线程。每个 worker 独占一个 standalone Asio `io_context`、控制器实例、中间件实例以及绑定的 `db_client` / `redis_client` 连接池。POSIX 上每个 worker 以 `SO_REUSEPORT` 自行绑定监听器；Windows 由独立 Acceptor 线程以 `SO_EXCLUSIVEADDRUSE` 独占监听。
+- **单 Worker 独占连接生命周期**：生产应用 `ruvia::app()` 按 `application_worker_config::worker_count_` 启动同构业务 worker 线程。每个 worker 独占一个 standalone Asio `io_context`、控制器实例、中间件实例以及绑定的 `db_client` / `redis_client` 连接池。POSIX 上每个 worker 以 `SO_REUSEPORT` 自行绑定监听器；Windows 由独立 Acceptor 线程以 `SO_EXCLUSIVEADDRUSE` 独占监听。
 - **连接亲和**：socket 一经业务 worker 接收（POSIX 自行 accept；Windows 接管 Acceptor 派发的未绑 IOCP 裸 `SOCKET` 并首次绑定自身 IOCP），其后的 TCP/TLS I/O、HTTP/1 / HTTP/2 / HTTP/3 解析、路由执行与协议定时器全程留在该 worker 线程，无需加锁访问 worker 局部状态（`c.worker_state<T>()`）。`stop()` 直接断开全部连接，不设排空阶段。
 - **跨线程调度与卸载**：
-  - 跨 worker 通信通过 `web_worker_ref::post`、`event_loop::post` 或有界通道 `make_channel` / `make_one_shot` 进行。
+  - 跨 worker 通信通过 `web_worker_ref::post`、`worker_ref::post`（端点取自 `event_loop::worker()`）或有界通道 `make_channel` / `make_one_shot` 进行。
   - 阻塞或 CPU 密集型计算必须通过 `c.run_blocking(...)` 或 `ruvia::run_blocking(...)` 显式卸载到 worker 事件循环的 `blocking_pool`；独立事件循环（`event_loop_pool`、`attach_event_loop`）默认自带 1 线程池，`blocking_pool_` 选项可改为借用比它存活更久的池，或置 `nullptr` 不用池（此时返回 `blocking_status::unavailable`，主机不是 IP 字面量的数据库或 Redis 客户端也无法构造）。**卸载闭包必须按值/移动持有自有数据，严禁在阻塞池线程中访问 `ruvia::context` 或任何 worker 局部状态**。
 
 ### 3.2 协程与作用域操作契约
@@ -155,7 +155,7 @@ ruvia_link_controllers(my_service user_controllers)
 | [middleware_next.cpp](../examples/middleware_next.cpp) | `ruvia_example_middleware_next` | 默认 | 中间件职责链、前置/后置响应头处理、`co_await next_value()` 与 `c.respond(...)` 短路拦截 |
 | [request_policies.cpp](../examples/request_policies.cpp) | `ruvia_example_request_policies` | 默认 | 路由级请求体大小限制 `body_limit<N>`、请求级状态 `bind_request_state` / `request_state`、子请求 `c.dispatch(...)` 与 `csrf_middleware` |
 | [files_static.cpp](../examples/files_static.cpp) | `ruvia_example_files_static` | 默认 | 单文件响应 `c.file()`、不可变静态快照 `static_root` 与 `c.static_file()`、定时刷新 `document_root`、Range、ETag 与预压缩 |
-| [streaming.cpp](../examples/streaming.cpp) | `ruvia_example_streaming` | 默认 | 流式请求体 `body_reader()`、流式 Multipart `multipart_reader()`、分块文本流 `stream_text()` 与 SSE `stream_sse()` |
+| [streaming.cpp](../examples/streaming.cpp) | `ruvia_example_streaming` | 默认 | 流式请求体 `request_body()`、流式 Multipart `request_multipart()`、分块文本流 `stream_text()` 与 SSE `stream_sse()` |
 | [http_features.cpp](../examples/http_features.cpp) | `ruvia_example_http_features` | 默认 | `103 Early Hints`（`c.inform`）、RFC 9218 优先级（`c.priority`）、HTTP/2 Server Push（`c.push`）、`ORIGIN` / `ALTSVC` 通告与请求/响应 Trailer |
 | [websocket.cpp](../examples/websocket.cpp) | `ruvia_example_websocket` | 默认 | WebSocket 服务端路由（`RUVIA_GET_WS`）、子协议协商、心跳与关闭握手、零拷贝帧回显 |
 | [http_client.cpp](../examples/http_client.cpp) | `ruvia_example_http_client` | 默认 | 独立事件循环 HTTP 客户端 |

@@ -1451,7 +1451,7 @@ TEST(Ruvia, db_repository_builders_support_typed_joins_assignments_upserts_delet
     test::with_connected_db_client(runtime.attachment_, {.driver_ = db_driver::postgresql}, [&](db_client& client) -> task<void> {
         auto roles = client.db().repository<role_entity>();
         auto query = roles.query_builder("r");
-        query.join<user_role_entity>(db_join_type::inner, "ur", user_role_entity::column<"role_id">() == role_entity::column<"id">()).where(user_role_entity::column<"user_id">("ur") == 42).distinct_on({role_entity::column<"id">()}).order_by(role_entity::column<"id">()).add_order_by(user_role_entity::column<"role_id">("ur"), db_order_direction::desc);
+        query.join<user_role_entity>(db_join_type::inner, "ur", user_role_entity::column<"role_id">() == role_entity::column<"id">()).where(user_role_entity::column<"user_id">("ur") == 42).distinct_on({role_entity::column<"id">()}).order_by(role_entity::column<"id">()).add_order_by(user_role_entity::column<"role_id">("ur"), order_direction::desc);
         const auto role_sql = query.get_query_and_parameters();
         EXPECT_EQ(role_sql.sql(),
             "SELECT DISTINCT ON (\"r\".\"id\") \"r\".\"id\", \"r\".\"name\" FROM \"roles\" AS \"r\" "

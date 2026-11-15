@@ -147,10 +147,10 @@ int main(int argc, char** argv) {
             }
             // Also covers failure while launching a root task. Loop stop hooks
             // close clients; join drains all previously accepted work.
-            pool.stop();
+            pool.request_stop();
             observe();
         }
-        pool.stop();
+        pool.request_stop();
         pool.join();
         if (failure) {
             std::rethrow_exception(failure);

@@ -857,8 +857,8 @@ redis_compiled_command redis_search_mapping::compile_find(const redis_find_optio
             sort_field_name = compiler.sort_field(order.column());
         }
         switch (order.direction()) {
-            case redis_order_direction::asc:
-            case redis_order_direction::desc:
+            case order_direction::asc:
+            case order_direction::desc:
                 break;
             default:
                 throw std::invalid_argument("invalid Redis order direction");
@@ -890,7 +890,7 @@ redis_compiled_command redis_search_mapping::compile_find(const redis_find_optio
     if (sort_field_name.has_value()) {
         args.emplace_back("SORTBY");
         args.push_back(std::move(*sort_field_name));
-        args.emplace_back(options.order_->direction() == redis_order_direction::asc ? "ASC" : "DESC");
+        args.emplace_back(options.order_->direction() == order_direction::asc ? "ASC" : "DESC");
     }
     args.emplace_back("DIALECT");
     args.emplace_back("2");

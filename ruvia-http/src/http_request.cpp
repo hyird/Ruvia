@@ -193,7 +193,7 @@ std::optional<http_request_trailer_error> http_request_trailers::append_received
 }
 
 std::optional<std::string_view> http_request_trailers::field(std::string_view name) const& noexcept {
-    return detail::find_first_http_header(fields_, name);
+    return find_first_http_header(fields_, name);
 }
 
 }  // namespace ruvia

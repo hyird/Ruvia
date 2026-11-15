@@ -128,10 +128,6 @@ const http_request& request_stream::request() const& noexcept {
     return detail::context_access::request(context_);
 }
 
-const conn_info& request_stream::conn() const& noexcept {
-    return context_.conn();
-}
-
 request_body_state request_stream::body_state() const noexcept {
     return detail::context_access::services(context_).body_state();
 }
@@ -154,54 +150,14 @@ void request_stream::reset(http3_error_code error) {
     detail::context_access::services(context_).reset_request(error);
 }
 
-body_reader& request_stream::body() & {
+body_reader& request_stream::request_body() & {
     if (accept_tunnel_ != nullptr) {
         throw std::logic_error("a tunnel request carries no content: its bytes belong to accept_tunnel()");
     }
-    return context_.req().body_reader();
+    return context_.request_body();
 }
 
-std::span<const http_header> request_stream::trailers() const noexcept {
-    return context_.req().trailers();
-}
-
-std::optional<std::string_view> request_stream::trailer(std::string_view name) const noexcept {
-    return context_.req().trailer(name);
-}
-
-task<void> request_stream::inform(const http_interim_response_head& response, operation_options operation) & {
-    return context_.inform(response, std::move(operation));
-}
-
-bool request_stream::early_data() const noexcept {
-    return context_.early_data();
-}
-
-bool request_stream::push(http_push_request_view request) {
-    return context_.push(request);
-}
-
-void request_stream::advertise_origins(std::span<const std::string_view> origins) {
-    context_.advertise_origins(origins);
-}
-
-void request_stream::advertise_alternative_service(std::string_view value) {
-    context_.advertise_alternative_service(value);
-}
-
-context_response_editor request_stream::policy() & noexcept {
-    return context_.policy();
-}
-
-task<http_response> request_stream::file(file_response_options options, response_options head) {
-    return operation_scope_.attach(context_.file(options, head));
-}
-
-task<http_response> request_stream::static_file(const static_root& root, static_file_response_options options, response_options head) {
-    return operation_scope_.attach(context_.static_file(root, options, head));
-}
-
-void request_stream::respond(http_response response) {
+void request_stream::respond(http_response&& response) {
     auto lease = detail::claim_operation_lane(detail::streaming_access::output_lane(response_), "response stream output operation is already in progress");
     require_unselected_response();
     if (tunnel_requested() && request().known_method() == http_known_method::connect && response.status().is_successful()) {
@@ -211,11 +167,6 @@ void request_stream::respond(http_response response) {
         throw std::logic_error("a 101 response requires accept_tunnel() or accept_websocket()");
     }
     context_.respond(std::move(response));
-}
-
-response_stream_writer& request_stream::response(response_options head) & {
-    detail::context_access::stage_stream_head(context_, response_, head);
-    return response_;
 }
 
 bool request_stream::tunnel_requested() const noexcept {
@@ -266,10 +217,6 @@ void request_stream::require_unselected_response() const {
     if (detail::context_access::services(context_).request_reset() || detail::context_access::services(context_).connection_aborted() || response_.committed() || detail::context_access::output_committed(context_) || detail::context_access::has_response(context_)) {
         throw std::logic_error("the request's response is already selected or committed");
     }
-}
-
-::ruvia::stop_token request_stream::stop_token() const noexcept {
-    return context_.stop_token();
 }
 
 }  // namespace ruvia

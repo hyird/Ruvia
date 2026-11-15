@@ -44,10 +44,10 @@ struct tcp_client_config final {
 
 // Address-stable owner of one outbound byte stream, with the shared DNS,
 // Happy Eyeballs and SAN-authenticating TLS/mTLS transport.
-// Operations run on worker(); construction, close and destruction may run on
+// Operations run on worker(); construction, abort and destruction may run on
 // another thread. Connect once; one read and one write may run concurrently,
 // but overlapping operations in the same direction throw std::logic_error.
-// Timeouts begin when awaited; per-operation options may tighten the configured
+// Timeouts begin when awaited; each call's `operation` may tighten the configured
 // timeout. Cancellation or I/O failure closes both directions, never permitting
 // reuse of a partially transmitted TLS record. I/O failures throw std::system_error
 // (timed_out / operation_canceled for deadlines / cancellation).
@@ -62,27 +62,27 @@ public:
     tcp_client(tcp_client&&) = delete;
     tcp_client& operator=(tcp_client&&) = delete;
 
-    [[nodiscard]] task<void> connect(operation_options options = {}) &;
+    [[nodiscard]] task<void> connect(operation_options operation = {}) &;
     task<void> connect(operation_options = {}) && = delete;
     // Owner loop, after connect(). Empty for TCP or if the peer skipped ALPN.
-    // The view borrows this connection until close, shutdown or I/O failure.
+    // The view borrows this connection until abort, shutdown or I/O failure.
     [[nodiscard]] std::string_view alpn() const& RUVIA_LIFETIMEBOUND;
     std::string_view alpn() const&& = delete;
     // At most 4 KiB. nullopt is EOF (TCP FIN, TLS close_notify or truncation).
     // Borrowed bytes remain valid until the next read starts or shutdown joins;
     // retain this owner while using the view. EOF does not end the write lane.
-    [[nodiscard]] task<std::optional<std::span<const std::byte>>> read(operation_options options = {}) &;
+    [[nodiscard]] task<std::optional<std::span<const std::byte>>> read(operation_options operation = {}) &;
     task<std::optional<std::span<const std::byte>>> read(operation_options = {}) && = delete;
     // Owns the bytes before returning the cold task (exact std::string rvalues
     // move without copying); completes after all bytes are written. Failure may
     // have sent a prefix and always retires the stream.
-    [[nodiscard]] task<void> write(outbound_bytes bytes, operation_options options = {}) &;
+    [[nodiscard]] task<void> write(outbound_bytes bytes, operation_options operation = {}) &;
     task<void> write(outbound_bytes, operation_options = {}) && = delete;
 
-    // Immediate whole-connection cancellation, not a send half-close. TLS uses
+    // Immediate whole-connection teardown, not a send half-close. TLS uses
     // the shared transport's bounded best-effort close_notify before closing.
-    void close() noexcept;
-    // Closes immediately and waits for operation and socket retirement. This
+    void abort() noexcept;
+    // Aborts and waits for operation and socket retirement. This
     // is not a TLS graceful shutdown or a send half-close. Run on worker().
     [[nodiscard]] task<void> shutdown() &;
     task<void> shutdown() && = delete;

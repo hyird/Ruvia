@@ -358,24 +358,28 @@ bool is_valid_host_header(std::string_view value) noexcept {
     return value.empty() || parse_http_authority(value).has_value();
 }
 
-bool authority_matches_host(std::string_view authority, std::string_view host, std::uint16_t default_port) noexcept {
-    const auto authority_parts = parse_http_authority(authority);
-    const auto host_parts = parse_http_authority(host);
-    if (!authority_parts || !host_parts || !http_uri_host_equals(authority_parts->host(), host_parts->host())) {
+namespace {
+
+// Without a scheme default an omitted/empty port has no numeric value: it
+// equals only another omitted/empty port, never an explicit one.
+[[nodiscard]] bool authorities_equal(std::string_view left, std::string_view right, std::optional<std::uint16_t> default_port) noexcept {
+    const auto left_parts = parse_http_authority(left);
+    const auto right_parts = parse_http_authority(right);
+    if (!left_parts || !right_parts || !http_uri_host_equals(left_parts->host(), right_parts->host())) {
         return false;
     }
-    // With no known scheme default, an omitted/empty port has no numeric value.
-    // In particular, it must not compare equal to the explicit port `:0` merely
-    // because zero is also our "unknown default" sentinel.
-    if (default_port == 0) {
-        const bool authority_has_port = authority_parts->port_kind() == http_authority_port_kind::value;
-        const bool host_has_port = host_parts->port_kind() == http_authority_port_kind::value;
-        if (authority_has_port != host_has_port) {
-            return false;
-        }
-        return !authority_has_port || authority_parts->port() == host_parts->port();
+    if (!default_port) {
+        return left_parts->port() == right_parts->port();
     }
-    return authority_parts->effective_port(default_port) == host_parts->effective_port(default_port);
+    return left_parts->effective_port(*default_port) == right_parts->effective_port(*default_port);
+}
+
+}  // namespace
+
+// The binary-message engine carries the default port of an unknown scheme as
+// zero (http_uri_scheme_default_port).
+bool authority_matches_host(std::string_view authority, std::string_view host, std::uint16_t default_port) noexcept {
+    return authorities_equal(authority, host, default_port == 0 ? std::nullopt : std::optional<std::uint16_t>(default_port));
 }
 
 }  // namespace detail
@@ -429,8 +433,8 @@ std::optional<std::string_view> parse_http_authority_host(borrowed_text value) n
     return authority->host();
 }
 
-bool http_authorities_equal(borrowed_text left, borrowed_text right, port_number default_port) noexcept {
-    return detail::authority_matches_host(left.view(), right.view(), default_port.value());
+bool http_authorities_equal(borrowed_text left, borrowed_text right, std::optional<port_number> default_port) noexcept {
+    return detail::authorities_equal(left.view(), right.view(), default_port ? std::optional<std::uint16_t>(default_port->value()) : std::nullopt);
 }
 
 }  // namespace ruvia

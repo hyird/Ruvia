@@ -48,7 +48,7 @@ struct http_client_registry::origin_preparation final {
     origin_preparation(const http_client_config& source, const worker_ref& worker, stop_token owner_stop, stop_token user_stop, const std::optional<tls_trust_store>& system_trust) :
         alias_(source.alias_.view()),
         config_(source, client_tls_files::keep_paths),
-        cancellation_(owner_stop, user_stop) {
+        cancellation_{owner_stop, user_stop} {
         if (config_.scheme_ == http_scheme::https) {
             if (!config_.tls_.ca_file_.has_value()) {
                 config_.tls_.trust_store_ = system_trust;
