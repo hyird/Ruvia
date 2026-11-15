@@ -849,9 +849,9 @@ void worker_connections::accept_socket(std::size_t index, tcp_socket_type socket
 task<void> worker_connections::prepare_connection(std::size_t index, tcp_socket_type socket, std::vector<std::byte> prefix, std::optional<ip_endpoint> remote) {
     try {
         operation_interrupt_source source;
-        const auto completion = options_.server_.header_completion_timeout_;
+        const auto header_completion = options_.server_.header_completion_timeout_;
         const auto request = options_.server_.request_header_timeout_;
-        const auto limit = request && request->value() < completion.value() ? *request : completion;
+        const auto limit = request && request->value() < header_completion.value() ? *request : header_completion;
         operation_interrupt interrupt(source, worker_, {.timeout_ = operation_timeout(limit), .stop_token_ = stop_token_}, &socket, [](void* raw) noexcept {
             ruvia::close_socket(*static_cast<tcp_socket_type*>(raw));
         }, "PROXY protocol header");
