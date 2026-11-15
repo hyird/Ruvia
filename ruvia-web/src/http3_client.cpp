@@ -593,11 +593,7 @@ public:
     void consume_stream_event(stream& item, const http3_message_end_event& value) {
         auto& response = item.response_;
         if (const auto trailers = value.trailers(); !trailers.empty() && !item.retry_425_) {
-            response.trailers_.clear();
-            response.trailers_.reserve(trailers.size());
-            for (const auto& field : trailers) {
-                response.trailers_.emplace_back(field.name(), field.value());
-            }
+            retain_http_client_trailers(response, trailers);
         }
         if (item.retry_425_) {
             item.retry_ = true;

@@ -89,7 +89,9 @@ protocol_byte_limit http_request_body_limit(const route_resolution& resolution, 
 }
 
 http_request_rejection http_request_rejection::rate_limited(rate_limit_rejection rejection) noexcept {
-    return http_request_rejection(rate_limit_rejection_error(), rejection);
+    // The shared 429 metadata names static storage; its message is copied.
+    const auto error = rate_limit_rejection_error();
+    return http_request_rejection(http_protocol_error(error.status(), error.code(), error.message()), rejection);
 }
 
 task<http_response> respond_http_request_rejection(const route_table& routes, const http_request& request, http_request_rejection rejection, const context_services& services) {
@@ -174,17 +176,14 @@ http_request_admission admit_http_request(const http_request_admission_input& in
     // Before any expectation, limit or endpoint decision: a request this
     // connection cannot carry is not this server's to evaluate.
     if (policy.verify_target_origin_ && !connection_carries_target(request, services)) {
-        return reject(http_request_rejection::error(http_error_info({.status_ = http_status::misdirected_request, .message_ = "misdirected request"})));
+        return reject(http_request_rejection::error(http_status::misdirected_request, {}, "misdirected request"));
     }
 
     // Expect extensions are valid HTTP syntax. The protocol reports the
     // semantic fact; this product implements only 100-continue and chooses the
     // RFC 9110-permitted 417 before reading request content.
     if (input.expectation_ != nullptr && *input.expectation_ == http_server_expectation_plan::reject_unsupported) {
-        return reject(http_request_rejection::error([&] {
-            const auto err = http_unsupported_expectation_error();
-            return http_error_info({.status_ = err.status(), .code_ = err.code(), .message_ = std::string_view(err.what())});
-        }()));
+        return reject(http_request_rejection::error(http_unsupported_expectation_error()));
     }
     if (policy.apply_rate_limit_ && !request_stream) {
         if (const auto rejection = decide_request_rate_limit(admission.services_.rate_limiter(), client_address, input.pinned_arrival_)) {
@@ -194,10 +193,7 @@ http_request_admission admit_http_request(const http_request_admission_input& in
     // Content already in hand (buffered bodies and subrequests) is held
     // to the same ceiling a streaming protocol enforces while reading.
     if (admission.body_limit_.exceeds(request.body_bytes().size())) {
-        return reject(http_request_rejection::error([&] {
-            const auto err = make_http_protocol_error(http_request_body_failure::too_large);
-            return http_error_info({.status_ = err.status(), .code_ = err.code(), .message_ = std::string_view(err.what())});
-        }()));
+        return reject(http_request_rejection::error(make_http_protocol_error(http_request_body_failure::too_large)));
     }
     if (endpoint == nullptr) {
         admission.endpoint_ = http_request_endpoint::buffered;
@@ -206,7 +202,7 @@ http_request_admission admit_http_request(const http_request_admission_input& in
     if (const auto* tunnel = endpoint->tunnel()) {
         admission.udp_tunnel_ = tunnel->protocol() == "connect-udp" || (request_stream && (request.protocol() == "connect-udp" || is_http_connect_udp_upgrade_request(request)));
         if (admission.udp_tunnel_ && validate_http_connect_udp_request(request).has_value()) {
-            return reject(http_request_rejection::error(http_error_info({.status_ = http_status::bad_request, .message_ = "invalid CONNECT-UDP request head"})));
+            return reject(http_request_rejection::error(http_status::bad_request, {}, "invalid CONNECT-UDP request head"));
         }
         admission.endpoint_ = http_request_endpoint::tunnel;
         return admission;

@@ -758,6 +758,16 @@ private:
     friend class http_client_response_memory_domain;
 };
 
+// Stores a received HTTP/2 or HTTP/3 trailer section in the state, replacing
+// any earlier one.
+inline void retain_http_client_trailers(http_client_response_state& state_value, std::span<const http_header> trailers) {
+    state_value.trailers_.clear();
+    state_value.trailers_.reserve(trailers.size());
+    for (const auto& trailer : trailers) {
+        state_value.trailers_.emplace_back(trailer.name(), trailer.value());
+    }
+}
+
 enum class http_client_operation_lane : std::uint8_t {
     read,
     output,

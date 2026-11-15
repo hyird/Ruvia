@@ -67,38 +67,46 @@ struct http_request_admission_input final {
 // Effective request-body ceiling. A route may only tighten the deployment limit.
 [[nodiscard]] protocol_byte_limit http_request_body_limit(const route_resolution& resolution, request_body_mode mode, const http_request_admission_policy& policy) noexcept;
 
-// A server-layer rejection decided before any handler ran. The diagnostic is
-// borrowed from static storage or the request arena.
+// A server-layer rejection decided before any handler ran. It outlives the
+// scope that decided it and crosses the suspension of the error handler that
+// answers it, so it owns its error: the message is copied inline into an
+// http_protocol_error and only the code stays a view of static storage.
 class http_request_rejection final {
 public:
-    [[nodiscard]] static constexpr http_request_rejection error(http_error_info error) noexcept {
+    [[nodiscard]] static http_request_rejection error(const http_protocol_error& error) noexcept {
         return http_request_rejection(error, std::nullopt);
+    }
+    // `code` must name static storage (empty selects the status default);
+    // `message` is copied.
+    [[nodiscard]] static http_request_rejection error(http_status_code status, std::string_view code, std::string_view message) noexcept {
+        return http_request_rejection(http_protocol_error(status, code, message), std::nullopt);
     }
 
     [[nodiscard]] static http_request_rejection rate_limited(rate_limit_rejection rejection) noexcept;
 
-    [[nodiscard]] constexpr const http_error_info& error() const& noexcept RUVIA_LIFETIMEBOUND {
-        return error_;
+    // A view of this rejection's own storage.
+    [[nodiscard]] http_error_info error() const& noexcept RUVIA_LIFETIMEBOUND {
+        return http_error_info({.status_ = error_.status(), .code_ = error_.code(), .message_ = std::string_view(error_.what())});
     }
-    const http_error_info& error() const&& = delete;
+    http_error_info error() const&& = delete;
 
-    [[nodiscard]] constexpr const rate_limit_rejection* rate_limit() const& noexcept RUVIA_LIFETIMEBOUND {
+    [[nodiscard]] const rate_limit_rejection* rate_limit() const& noexcept RUVIA_LIFETIMEBOUND {
         return rate_limit_ ? &*rate_limit_ : nullptr;
     }
     const rate_limit_rejection* rate_limit() const&& = delete;
 
 private:
-    constexpr http_request_rejection(http_error_info error, std::optional<rate_limit_rejection> rate_limit) noexcept :
+    http_request_rejection(const http_protocol_error& error, std::optional<rate_limit_rejection> rate_limit) noexcept :
         error_(error),
         rate_limit_(rate_limit) {}
 
-    http_error_info error_;
+    http_protocol_error error_;
     std::optional<rate_limit_rejection> rate_limit_;
 };
 
 // Answers a rejection through the application's error handler, adding the
-// rate-limit headers when that is why the request was refused. The lazy task
-// owns this snapshot; its diagnostic text still borrows static/request storage.
+// rate-limit headers when that is why the request was refused. The task owns
+// the rejection, so the error view the handler reads lives in its frame.
 [[nodiscard]] task<http_response> respond_http_request_rejection(const route_table& routes, const http_request& request, http_request_rejection rejection, const context_services& services);
 
 // Result of the synchronous first preparation pass. ready() is null only when

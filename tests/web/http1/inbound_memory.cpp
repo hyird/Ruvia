@@ -79,6 +79,7 @@ class inbound_memory_routes final {
     RUVIA_POST("/inbound-stream", stream_body, ruvia::stream_body);
     RUVIA_POST("/inbound-held-view", held_view_body, ruvia::stream_body);
     RUVIA_CONNECT("inbound-tunnel.test:443", tunnel);
+    RUVIA_POST("/inbound-bounded", buffered_body, ruvia::body_limit<16>);
     RUVIA_ROUTES_END
 
     ruvia::task<ruvia::http_response> buffered_body(ruvia::context& context_value) {
@@ -210,6 +211,31 @@ constexpr std::string_view connect_request = "CONNECT inbound-tunnel.test:443 HT
 }
 
 }  // namespace
+
+// A rejection decided from the request head outlives the scope that decided
+// it: the error body must carry its own diagnostic text, not bytes of a stack
+// slot that died before the error handler ran.
+TEST(Ruvia, http1_head_rejections_answer_with_their_complete_error_text) {
+    auto& io = ruvia::test::new_test_io_context();
+    ruvia::test::http_server_fixture server(io, inbound_memory_config());
+    {
+        test_client client(io, server.endpoint());
+        client.send("POST /inbound-bounded HTTP/1.1\r\nHost: localhost\r\nContent-Length: 64\r\nConnection: close\r\n\r\n");
+        const auto response = client.read_to_end();
+        EXPECT_TRUE(response.starts_with("HTTP/1.1 413 "));
+        EXPECT_NE(response.find(R"("detail":"request body is too large","code":"request_body_too_large")"), std::string::npos);
+        client.close();
+    }
+    {
+        test_client client(io, server.endpoint());
+        client.send("POST /inbound-buffered HTTP/1.1\r\nHost: localhost\r\nExpect: unknown-extension\r\nContent-Length: 4\r\nConnection: close\r\n\r\n");
+        const auto response = client.read_to_end();
+        EXPECT_TRUE(response.starts_with("HTTP/1.1 417 "));
+        EXPECT_NE(response.find(R"("detail":"unsupported Expect header","code":"unsupported_expectation")"), std::string::npos);
+        client.close();
+    }
+    server.finish();
+}
 
 TEST(Ruvia, streamed_request_body_reads_count_against_the_connection_inbound_budget) {
     auto& io = ruvia::test::new_test_io_context();

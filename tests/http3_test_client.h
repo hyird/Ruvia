@@ -1141,36 +1141,60 @@ public:
     // SETTINGS arrived. end_stream=false leaves the request send half open.
     // Returns once the response ended or the stream closed or was reset.
     [[nodiscard]] http3_test_response request(std::initializer_list<std::pair<std::string_view, std::string_view>> fields, bool end_stream = true) {
-        wait_or_throw([this] {
-            return settings_received_;
-        }, "HTTP/3 raw client did not receive SETTINGS");
-        std::int64_t stream_id = -1;
-        wait_or_throw([&] {
-            return ngtcp2_conn_open_bidi_stream(connection_, &stream_id, nullptr) == 0;
-        }, "HTTP/3 raw client cannot open a request stream");
-        std::vector<nghttp3_nv> native;
-        native.reserve(fields.size());
-        for (const auto& [name, value] : fields) {
-            native.push_back({
-                .name = reinterpret_cast<std::uint8_t*>(const_cast<char*>(name.data())),
-                .value = reinterpret_cast<std::uint8_t*>(const_cast<char*>(value.data())),
-                .namelen = name.size(),
-                .valuelen = value.size(),
-                .flags = NGHTTP3_NV_FLAG_NONE,
-            });
-        }
         const nghttp3_data_reader open_send_half{.read_data = provide_no_content};
-        if (nghttp3_conn_submit_request(http3_, stream_id, native.data(), native.size(), end_stream ? nullptr : &open_send_half, nullptr) != 0) {
-            throw std::runtime_error("HTTP/3 raw client cannot submit the field section");
-        }
-        stream_id_ = stream_id;
-        response_ = {};
-        complete_ = false;
+        submit(fields, end_stream ? nullptr : &open_send_half);
+        return finish_response();
+    }
+
+    // Sends `fields` and then `content` as DATA ending the stream, without
+    // waiting for any response, as an optimistic client sends tunnel bytes
+    // after a CONNECT head (RFC 9114 §4.4). One request is in flight at a time.
+    void start_request(std::initializer_list<std::pair<std::string_view, std::string_view>> fields, std::string content) {
+        content_ = std::move(content);
+        content_offset_ = 0;
+        const nghttp3_data_reader content_reader{.read_data = provide_content};
+        submit(fields, &content_reader);
+    }
+
+    // Waits until the request in flight ended, closed or was reset.
+    [[nodiscard]] http3_test_response finish_response() {
         wait_or_throw([this] {
             return complete_;
         }, "HTTP/3 raw response did not complete");
         stream_id_ = -1;
         return std::move(response_);
+    }
+
+    // Pumps the connection until `done` holds; false once the client's
+    // timeout passed or the connection failed.
+    template <typename predicate_type>
+    [[nodiscard]] bool wait_until(predicate_type&& done) {
+        const auto deadline = std::chrono::steady_clock::now() + timeout_;
+        for (;;) {
+            if (done()) {
+                return true;
+            }
+            if (failed_ || std::chrono::steady_clock::now() >= deadline) {
+                return false;
+            }
+            pump(deadline);
+        }
+    }
+
+    // Request stream bytes (field section and DATA framing included) the
+    // peer acknowledged for the request in flight.
+    [[nodiscard]] std::size_t acknowledged_bytes() const noexcept {
+        return acknowledged_bytes_;
+    }
+
+    // The final response head of the request in flight arrived.
+    [[nodiscard]] bool response_head_received() const noexcept {
+        return response_.status_ != 0;
+    }
+
+    // The request in flight was reset by the peer or closed with an error.
+    [[nodiscard]] const std::optional<http3_error_code>& reset_error() const noexcept {
+        return response_.reset_error_;
     }
 
     // The connection failed or entered its closing or draining period.
@@ -1193,6 +1217,52 @@ private:
     // An open request send half has no content to provide yet.
     static nghttp3_ssize provide_no_content(nghttp3_conn*, std::int64_t, nghttp3_vec*, std::size_t, std::uint32_t*, void*, void*) noexcept {
         return NGHTTP3_ERR_WOULDBLOCK;
+    }
+
+    // Hands out the whole of content_ once, ending the request.
+    static nghttp3_ssize provide_content(nghttp3_conn*, std::int64_t, nghttp3_vec* vectors, std::size_t count, std::uint32_t* flags, void* user_data, void*) noexcept {
+        auto& client = self(user_data);
+        const auto remaining = client.content_.size() - client.content_offset_;
+        if (remaining != 0 && count == 0) {
+            return 0;
+        }
+        *flags |= NGHTTP3_DATA_FLAG_EOF;
+        if (remaining == 0) {
+            return 0;
+        }
+        vectors[0] = {.base = reinterpret_cast<std::uint8_t*>(client.content_.data() + client.content_offset_), .len = remaining};
+        client.content_offset_ = client.content_.size();
+        return 1;
+    }
+
+    // Opens a request stream and submits `fields` with `reader` (null ends
+    // the stream with the field section) once the peer's SETTINGS arrived.
+    void submit(std::initializer_list<std::pair<std::string_view, std::string_view>> fields, const nghttp3_data_reader* reader) {
+        wait_or_throw([this] {
+            return settings_received_;
+        }, "HTTP/3 raw client did not receive SETTINGS");
+        std::int64_t stream_id = -1;
+        wait_or_throw([&] {
+            return ngtcp2_conn_open_bidi_stream(connection_, &stream_id, nullptr) == 0;
+        }, "HTTP/3 raw client cannot open a request stream");
+        std::vector<nghttp3_nv> native;
+        native.reserve(fields.size());
+        for (const auto& [name, value] : fields) {
+            native.push_back({
+                .name = reinterpret_cast<std::uint8_t*>(const_cast<char*>(name.data())),
+                .value = reinterpret_cast<std::uint8_t*>(const_cast<char*>(value.data())),
+                .namelen = name.size(),
+                .valuelen = value.size(),
+                .flags = NGHTTP3_NV_FLAG_NONE,
+            });
+        }
+        stream_id_ = stream_id;
+        response_ = {};
+        complete_ = false;
+        acknowledged_bytes_ = 0;
+        if (nghttp3_conn_submit_request(http3_, stream_id, native.data(), native.size(), reader, nullptr) != 0) {
+            throw std::runtime_error("HTTP/3 raw client cannot submit the field section");
+        }
     }
 
     static ngtcp2_conn* get_connection(ngtcp2_crypto_conn_ref* reference) noexcept {
@@ -1305,6 +1375,9 @@ private:
 
     static int acknowledge_stream_data(ngtcp2_conn*, std::int64_t stream_id, std::uint64_t, std::uint64_t size, void* user_data, void*) noexcept {
         auto& client = self(user_data);
+        if (stream_id == client.stream_id_) {
+            client.acknowledged_bytes_ += static_cast<std::size_t>(size);
+        }
         return client.http3_ == nullptr || nghttp3_conn_add_ack_offset(client.http3_, stream_id, size) == 0 ? 0 : NGTCP2_ERR_CALLBACK_FAILURE;
     }
 
@@ -1341,20 +1414,6 @@ private:
     static int extend_stream_data(ngtcp2_conn*, std::int64_t stream_id, std::uint64_t, void* user_data, void*) noexcept {
         auto& client = self(user_data);
         return client.http3_ == nullptr || nghttp3_conn_unblock_stream(client.http3_, stream_id) == 0 ? 0 : NGTCP2_ERR_CALLBACK_FAILURE;
-    }
-
-    template <typename predicate_type>
-    [[nodiscard]] bool wait_until(predicate_type&& done) {
-        const auto deadline = std::chrono::steady_clock::now() + timeout_;
-        for (;;) {
-            if (done()) {
-                return true;
-            }
-            if (failed_ || std::chrono::steady_clock::now() >= deadline) {
-                return false;
-            }
-            pump(deadline);
-        }
     }
 
     template <typename predicate_type>
@@ -1476,6 +1535,10 @@ private:
     std::vector<std::byte> input_ = std::vector<std::byte>(64 * 1024);
     http3_test_response response_;
     std::int64_t stream_id_{-1};
+    // start_request's content; nghttp3 borrows it until acknowledged.
+    std::string content_{};
+    std::size_t content_offset_{0};
+    std::size_t acknowledged_bytes_{0};
     bool handshake_completed_{false};
     bool settings_received_{false};
     bool complete_{false};

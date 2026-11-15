@@ -582,6 +582,12 @@ public:
         return signal_ ? &*signal_ : nullptr;
     }
     const multiplexed_stream_signal* signal() const&& = delete;
+    // Output capacity may have returned: a handler waiting for it retries.
+    void wake_output_waiter() noexcept {
+        if (signal_.has_value() && signal_->waiting_output()) {
+            signal_->wake();
+        }
+    }
 
     // `now_ms` is the time of the read that carried the request head or DATA.
     void mark_request_body_open(std::int64_t now_ms) noexcept {
@@ -1083,11 +1089,7 @@ private:
 
 [[nodiscard]] inline task<http_response> respond_http_request_body_failure(const route_table& routes, const http_request& request, http_request_body_failure failure, const context_services& services, http_response_tail& tail) {
     tail.disable_response_coding();
-    return respond_http_request_rejection(routes, request, http_request_rejection::error([&] {
-        const auto err = make_http_protocol_error(failure);
-        return http_error_info({.status_ = err.status(), .code_ = err.code(), .message_ = std::string_view(err.what())});
-    }()),
-        services);
+    return respond_http_request_rejection(routes, request, http_request_rejection::error(make_http_protocol_error(failure)), services);
 }
 
 // The error response of a WebSocket handshake that failed validation. A
@@ -1098,6 +1100,39 @@ private:
     auto response = co_await routes.respond_error(request, http_error_info({.status_ = protocol_error.status(), .code_ = protocol_error.code(), .message_ = std::string_view(protocol_error.what())}), services);
     apply_websocket_handshake_error_headers(failure, response);
     co_return response;
+}
+
+// What a request head decides before any content arrives, alike for HTTP/2
+// and HTTP/3.
+struct multiplexed_request_head_plan final {
+    // Submit 100 Continue now.
+    bool send_continue_{false};
+    // Dispatch now instead of after the content.
+    bool admit_{false};
+};
+
+// Same policy as HTTP/1. `resolved_route` names a resolved route of a
+// request that is not CONNECT; its declared length past the body limit is
+// recorded as the stream's body failure. 100 Continue is sent when the server
+// starts consuming the content -- now for a buffered route, at the first read
+// for a streaming one -- and never for a request answered from its head alone
+// (RFC 9110 §10.1.1): an unresolved, CONNECT, oversized or
+// rejected-expectation request, or one `dispatch_with_head` names, waiting
+// for content the client may withhold would stall it. A streaming route
+// whose body is still open is dispatched now to read it.
+[[nodiscard]] inline multiplexed_request_head_plan plan_multiplexed_request_head(multiplexed_request_stream_state& stream, const http_request_admission_policy& policy, http_server_expectation_plan expectation, bool resolved_route, std::optional<std::uint64_t> declared_content_length, bool body_open, bool dispatch_with_head) noexcept {
+    bool body_limit_exceeded = false;
+    if (resolved_route && declared_content_length.has_value()) {
+        if (const auto failure = http_request_body_size_failure(*declared_content_length, http_request_body_limit(stream.resolution(), stream.body_mode(), policy))) {
+            stream.mark_body_failure(*failure);
+            body_limit_exceeded = true;
+        }
+    }
+    const bool answered_from_head = !resolved_route || body_limit_exceeded || dispatch_with_head || expectation == http_server_expectation_plan::reject_unsupported;
+    return {
+        .send_continue_ = expectation == http_server_expectation_plan::send_continue && !answered_from_head && stream.body_mode() == request_body_mode::buffered,
+        .admit_ = answered_from_head || (stream.body_mode() == request_body_mode::stream && body_open),
+    };
 }
 
 // Stores one DATA chunk of a request body that is still wanted and applies
@@ -1144,6 +1179,19 @@ void store_multiplexed_request_body_chunk(multiplexed_request_stream_state& stre
         signal->wake();
     } else if (!admit_stream()) {
         reset_stream(false);
+    }
+}
+
+// Queues the bytes of an accepted tunnel for its reader, alike for HTTP/2 and
+// HTTP/3. The tunnel has no response left to report a backlog or inbound
+// budget overflow, so `cancel_stream() noexcept` resets the stream as
+// cancelled rather than truncating the byte stream.
+template <typename cancel_type>
+void store_multiplexed_tunnel_bytes(multiplexed_request_stream_state& stream, std::string_view bytes, http_received_data_credit&& credit, std::size_t backlog_limit, cancel_type&& cancel_stream) {
+    if (stream.body_queue().enqueue_bounded(bytes, std::move(credit), backlog_limit) != multiplexed_body_store_status::stored) {
+        cancel_stream();
+    } else if (auto* signal = stream.signal()) {
+        signal->wake();
     }
 }
 

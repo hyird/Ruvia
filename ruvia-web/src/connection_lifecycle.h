@@ -82,12 +82,14 @@ inline constexpr std::size_t http_body_buffer_bytes = std::size_t{8} * 1024;
 // much before any body bytes arrive; beyond it capacity doubles from arrivals.
 inline constexpr std::size_t known_length_min_read_bytes = std::size_t{64} * 1024;
 
-// http_error_info borrows its fields. The caller's http_protocol_error lvalue
-// must outlive any suspension of the error handler that reads this view.
-[[nodiscard]] inline http_error_info copy_http_protocol_error_info(const http_protocol_error& error RUVIA_LIFETIMEBOUND) noexcept {
+// A view of `error`'s own fields: it borrows, it does not copy. The caller's
+// http_protocol_error lvalue must outlive every read of the view, including
+// one by an error handler across a suspension; a rejection that leaves its
+// scope owns its error instead (http_request_rejection).
+[[nodiscard]] inline http_error_info borrow_http_protocol_error_info(const http_protocol_error& error RUVIA_LIFETIMEBOUND) noexcept {
     return http_error_info({.status_ = error.status(), .code_ = error.code(), .message_ = std::string_view(error.what())});
 }
-http_error_info copy_http_protocol_error_info(const http_protocol_error&&) = delete;
+http_error_info borrow_http_protocol_error_info(const http_protocol_error&&) = delete;
 
 // Owner-thread phase of one server worker:
 // - running: admits connections and requests;

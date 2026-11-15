@@ -1489,6 +1489,7 @@ void with_connected_redis_client(event_loop_attachment& attachment, redis_config
 
 }  // namespace ruvia::test
 
+#ifdef RUVIA_ENABLE_DATABASE
 // Callers shared by the pipelining tests of every driver.
 namespace pipeline_test {
 
@@ -1555,3 +1556,4 @@ inline ruvia::task<void> begin_and_commit(ruvia::db_executor handle, outcome& re
 }
 
 }  // namespace pipeline_test
+#endif

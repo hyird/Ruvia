@@ -666,13 +666,8 @@ void http_client_connection::finish_http2_message(std::uint32_t stream_id, http2
     }
     try {
         const bool content_semantics_present = end.content_semantics() == http_message_content_semantics::content;
-        const auto trailers = end.trailers();
         auto& state_value = *stream->state_;
-        state_value.trailers_.clear();
-        state_value.trailers_.reserve(trailers.size());
-        for (const auto& trailer : trailers) {
-            state_value.trailers_.emplace_back(trailer.name(), trailer.value());
-        }
+        retain_http_client_trailers(state_value, end.trailers());
         if (stream->timeout_ == nullptr) {
             std::terminate();
         }

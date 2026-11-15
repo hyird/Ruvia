@@ -158,7 +158,7 @@ struct test_app::impl_type final {
         std::optional<detail::http_request_admission> admission;
         http_response response;
         if (parse_error.has_value()) {
-            const auto rejection = detail::http_request_rejection::error(detail::copy_http_protocol_error_info(*parse_error));
+            const auto rejection = detail::http_request_rejection::error(*parse_error);
             response = co_await detail::respond_http_request_rejection(routes_value, parsed_value, rejection, services);
         } else {
             // These borrowed arguments must remain in the coroutine frame across

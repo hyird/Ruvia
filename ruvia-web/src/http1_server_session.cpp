@@ -2863,12 +2863,13 @@ task<std::variant<http1_serve_handoff, http_connection_close>> worker_connection
                         break;
                     }
                     if (auto_https_redirect_authority(parsed_value.request()).empty()) {
-                        request_rejection = http_request_rejection::error(http_error_info({.status_ = ruvia::http_status::bad_request, .message_ = "missing Host header"}));
+                        request_rejection = http_request_rejection::error(ruvia::http_status::bad_request, {}, "missing Host header");
                         break;
                     }
                     response = make_auto_https_redirect_response(parsed_value.request(), redirect->https_port_);
                     if (http_response_needs_not_acceptable(admission->tail().coding_policy(), parsed_value.request(), response)) {
-                        request_rejection = http_request_rejection::error(http_error_info(http_not_acceptable_coding_error()));
+                        const auto not_acceptable = http_not_acceptable_coding_error();
+                        request_rejection = http_request_rejection::error(not_acceptable.status_, not_acceptable.code_.view(), not_acceptable.message_.view());
                         break;
                     }
                     request_completion.emplace(close_with_framework_response(response, parsed_value.connection_plan()));
@@ -2880,10 +2881,7 @@ task<std::variant<http1_serve_handoff, http_connection_close>> worker_connection
                     break;
                 }
                 if (const auto body_failure = content_length_limit_failure(parsed_value.body_plan(), admission->body_limit())) {
-                    request_rejection = http_request_rejection::error([&] {
-                        const auto err = make_http_protocol_error(*body_failure);
-                        return http_error_info({.status_ = err.status(), .code_ = err.code(), .message_ = std::string_view(err.what())});
-                    }());
+                    request_rejection = http_request_rejection::error(make_http_protocol_error(*body_failure));
                     break;
                 }
 
@@ -2985,8 +2983,7 @@ task<std::variant<http1_serve_handoff, http_connection_close>> worker_connection
                         co_return http_connection_close::abort;
                     }
                 }
-                const auto error = make_http_protocol_error(failure->error());
-                request_rejection = http_request_rejection::error(copy_http_protocol_error_info(error));
+                request_rejection = http_request_rejection::error(make_http_protocol_error(failure->error()));
                 break;
             }
 

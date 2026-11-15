@@ -1570,26 +1570,11 @@ void http2_sans_io_session_engine::on_message_head(http2_request_head_event& mes
     if (snapshot.body_open_ && !connect_request) {
         stream_runtimes_.mark_request_body_open(stream_id, session_.scanner_entry().last_active_ms());
     }
-    const bool resolved_route = stream_runtime->route_selected() && stream_runtime->resolution().resolved() != nullptr;
-    const bool streaming_body = !connect_request && stream_runtime->route_selected() && stream_runtime->body_mode() == request_body_mode::stream && snapshot.body_open_;
-    const bool body_limit_exceeded = [&]() noexcept {
-        if (!resolved_route || connect_request || !snapshot.declared_content_length_.has_value()) {
-            return false;
-        }
-        const auto total_limit = http_request_body_limit(stream_runtime->resolution(), stream_runtime->body_mode(), admission_policy_);
-        const auto failure = http_request_body_size_failure(*snapshot.declared_content_length_, total_limit);
-        if (!failure.has_value()) {
-            return false;
-        }
-        stream_runtime->mark_body_failure(*failure);
-        return true;
-    }();
-    // Same policy as HTTP/1: 100 Continue is sent when the server starts
-    // consuming the content. A buffered route consumes it before dispatch, so
-    // it is sent now; a streaming handler's first body read sends it; an
-    // unresolved or already-oversized request never reads the content and
-    // answers with its final status alone (RFC 9110 §10.1.1).
-    if (expectation_plan == http_server_expectation_plan::send_continue && resolved_route && !connect_request && !body_limit_exceeded && stream_runtime->body_mode() == request_body_mode::buffered) {
+    const bool resolved_route = !connect_request && stream_runtime->route_selected() && stream_runtime->resolution().resolved() != nullptr;
+    // A request that ended with its head is dispatched at its END_STREAM
+    // event (on_message_end), never from its head.
+    const auto plan = plan_multiplexed_request_head(*stream_runtime, admission_policy_, expectation_plan, resolved_route, snapshot.declared_content_length_, snapshot.body_open_, false);
+    if (plan.send_continue_) {
         const auto status = connection_.submit_interim_response_head(stream_id, http_interim_response_head(ruvia::http_status::continue_));
         if (status == http_submit_status::accepted) {
             wake_writer();
@@ -1602,13 +1587,8 @@ void http2_sans_io_session_engine::on_message_head(http2_request_head_event& mes
             return;
         }
     }
-    // An unresolved or already-oversized request is answered from its head
-    // alone; waiting for content the client may withhold (Expect) would stall
-    // the stream.
-    if (expectation_plan == http_server_expectation_plan::reject_unsupported || connect_request || streaming_body || !resolved_route || body_limit_exceeded) {
-        if (!admit_stream(stream_id)) {
-            reset_event_stream(stream_id, http2_error_code::internal_error);
-        }
+    if (plan.admit_ && !admit_stream(stream_id)) {
+        reset_event_stream(stream_id, http2_error_code::internal_error);
     }
 }
 
@@ -1673,11 +1653,9 @@ void http2_sans_io_session_engine::on_tunnel_data(http2_tunnel_data_event& tunne
         wake_writer();
         return;
     }
-    if (stream_runtime->body_queue().enqueue_bounded(tunnel_data.bytes(), tunnel_data.take_credit(), options.server_.max_buffered_body_bytes_) != multiplexed_body_store_status::stored) {
+    store_multiplexed_tunnel_bytes(*stream_runtime, tunnel_data.bytes(), tunnel_data.take_credit(), options.server_.max_buffered_body_bytes_, [this, stream_id]() noexcept {
         reset_event_stream(stream_id, http2_error_code::cancel);
-        return;
-    }
-    signal->wake();
+    });
 }
 
 void http2_sans_io_session_engine::on_tunnel_end(const http2_tunnel_end_event& tunnel_end) noexcept {
@@ -1764,9 +1742,7 @@ void http2_sans_io_session_engine::drain_events() {
     // SETTINGS and WINDOW_UPDATE can restore DATA capacity without publishing
     // an application event; producers must retry their caller-owned suffixes.
     stream_runtimes_.for_each([](http2_sans_io_stream_runtime& runtime) {
-        if (auto* signal = runtime.signal(); signal != nullptr && signal->waiting_output()) {
-            signal->wake();
-        }
+        runtime.wake_output_waiter();
     });
 }
 

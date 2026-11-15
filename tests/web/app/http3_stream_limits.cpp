@@ -23,12 +23,14 @@
 #include "http_header.h"
 #include "http_request_head_view.h"
 #include "http_server_fixture.h"
+#include "middleware.h"
 #include "streaming.h"
 #include "worker_timer.h"
 // Per-stream and per-connection limits of the HTTP/3 server session, end to
 // end over loopback UDP: inbound buffer budgets, receive-credit return to a
-// slow consumer, the per-stream request-body and output-wait deadlines, and
-// the idle-timeout drain. Each case re-runs the process application with its
+// slow consumer and to a refused CONNECT's optimistic bytes, the per-stream
+// request-body and output-wait deadlines, and the idle-timeout drain. Each
+// case re-runs the process application with its
 // own server_config on one listener.
 
 namespace http3_stream_limits_test {
@@ -103,6 +105,24 @@ ruvia::task<void> await_release(ruvia::context& context) {
     }
 }
 
+// The CONNECT authority no route accepts: its refusal is answered by the
+// unmatched-request chain, which refused_connect_hold parks.
+constexpr std::string_view refused_connect_authority = "refused-tunnel.test:443";
+
+// Holds the refusal of refused_connect_authority until the test released it,
+// so the optimistic tunnel bytes reach a stream whose response is pending.
+// Every other request passes straight through.
+struct refused_connect_hold final {
+    static constexpr bool ruvia_runs_on_unmatched_requests = true;
+
+    ruvia::task<void> invoke(ruvia::context& context, ruvia::next& next) {
+        if (context.req().known_method() == ruvia::http_known_method::connect && context.req().authority() == refused_connect_authority) {
+            co_await await_release(context);
+        }
+        co_await next();
+    }
+};
+
 class stream_limit_routes final {
 public:
     RUVIA_ROUTES_BEGIN(stream_limit_routes)
@@ -114,6 +134,7 @@ public:
     RUVIA_POST("/slow-upload", slow_upload, ruvia::stream_body);
     RUVIA_CONNECT("slow-tunnel.test:443", slow_tunnel);
     RUVIA_POST("/upload", upload);
+    RUVIA_POST("/bounded-upload", upload, ruvia::body_limit<16>);
     RUVIA_GET("/brief", brief);
     RUVIA_GET("/large", large);
     RUVIA_ROUTES_END
@@ -227,6 +248,9 @@ public:
     [[nodiscard]] ruvia::test::http3_test_client connect() {
         return ruvia::test::http3_test_client(udp_.endpoint(), identity_.ca_file_, "localhost", client_timeout);
     }
+    [[nodiscard]] ruvia::test::http3_raw_request_client connect_raw() {
+        return ruvia::test::http3_raw_request_client(udp_.endpoint(), identity_.ca_file_, "localhost", client_timeout);
+    }
 
 private:
     listener() :
@@ -234,6 +258,7 @@ private:
         udp_(io_),
         identity_("localhost") {
         ruvia::app()
+            .use<refused_connect_hold>()
             .listen({
                 .address_ = "127.0.0.1",
                 .https_ = tcp_.endpoint().port(),
@@ -272,6 +297,12 @@ public:
             std::rethrow_exception(failure);
         }
         return listener_.connect();
+    }
+    [[nodiscard]] ruvia::test::http3_raw_request_client connect_raw() {
+        if (const auto failure = run_.failure()) {
+            std::rethrow_exception(failure);
+        }
+        return listener_.connect_raw();
     }
     // Call after every client of the case is gone.
     void finish() {
@@ -539,12 +570,32 @@ TEST(Ruvia, http3_output_wait_is_bounded_by_write_timeout) {
     server.finish();
 }
 
+// The 413 of a body past its route limit and the 417 of an unsupported
+// expectation carry their own diagnostic text: each rejection owns its
+// message across the error handler's suspension. The raw client sends the
+// heads verbatim: http3_connection refuses to emit an unsupported Expect.
+TEST(Ruvia, http3_request_rejections_answer_with_their_complete_error_text) {
+    observed().reset();
+    served_case server({});
+    {
+        auto client = server.connect_raw();
+        client.start_request({{":method", "POST"}, {":scheme", "https"}, {":authority", "localhost"}, {":path", "/bounded-upload"}}, std::string(64, 'b'));
+        const auto oversized = client.finish_response();
+        EXPECT_EQ(oversized.status_, 413);
+        EXPECT_NE(oversized.body_.find(R"("detail":"request body is too large","code":"request_body_too_large")"), std::string::npos);
+        client.start_request({{":method", "POST"}, {":scheme", "https"}, {":authority", "localhost"}, {":path", "/upload"}, {"expect", "unknown-extension"}}, "four");
+        const auto unsupported = client.finish_response();
+        EXPECT_EQ(unsupported.status_, 417);
+        EXPECT_NE(unsupported.body_.find(R"("detail":"unsupported Expect header","code":"unsupported_expectation")"), std::string::npos);
+        EXPECT_EQ(observed().uploads_.load(), 0);
+    }
+    server.finish();
+}
+
 // A connection timeout drains the connection (RFC 9114 §5.2) instead of
 // cutting it: the shutdown notice, the final GOAWAY within the round-trip
 // bound, then CONNECTION_CLOSE(H3_NO_ERROR). Idleness runs from the end of
-// the last stream: the client's QUIC PINGs open no stream and do not renew
-// it, and they keep the QUIC idle timeout -- the same duration, ending
-// without any frame -- from ending the connection first.
+// the last stream: the client's QUIC PINGs open no stream and do not renew it.
 TEST(Ruvia, http3_idle_timeout_drain_ends_with_final_goaway) {
     observed().reset();
     served_case server({.idle_timeout_ = 300ms, .connection_scan_interval_ = 5ms});
@@ -566,6 +617,64 @@ TEST(Ruvia, http3_idle_timeout_drain_ends_with_final_goaway) {
         EXPECT_TRUE(goaways.back().has_value() && *goaways.back() > last);
         EXPECT_EQ(client.application_error(), std::optional(ruvia::http3_error_code::no_error));
         EXPECT_FALSE(client.transport_error().has_value());
+    }
+    server.finish();
+}
+
+// The client stays silent after its response and advertises a QUIC idle
+// timeout (30 s) far above the server's HTTP one: the HTTP idle drain, not a
+// silent QUIC idle close, must end the connection.
+TEST(Ruvia, http3_idle_timeout_drain_precedes_quic_idle_close_for_silent_client) {
+    observed().reset();
+    served_case server({.idle_timeout_ = 300ms, .connection_scan_interval_ = 5ms});
+    {
+        auto client = server.connect();
+        const auto last = client.start_request("GET", "/brief");
+        const auto response = client.finish_response(last);
+        EXPECT_EQ(response.status_, 200);
+
+        EXPECT_TRUE(client.wait_until([&client] {
+            return client.closed();
+        }, 3s));
+        const auto& goaways = client.goaway_ids();
+        ASSERT_EQ(goaways.size(), std::size_t{2});
+        EXPECT_FALSE(goaways.front().has_value());
+        EXPECT_TRUE(goaways.back().has_value() && *goaways.back() > last);
+        EXPECT_EQ(client.application_error(), std::optional(ruvia::http3_error_code::no_error));
+        EXPECT_FALSE(client.transport_error().has_value());
+    }
+    server.finish();
+}
+
+// RFC 9114 §4.4: a client may send tunnel bytes before the CONNECT response.
+// For a CONNECT no route accepts they have no reader: they are dropped and
+// their credit returns, so more than the inbound budget passes while the
+// refusal is pending, the refusal is still delivered instead of an
+// H3_REQUEST_CANCELLED reset, and the connection serves on.
+TEST(Ruvia, http3_refused_connect_drops_optimistic_tunnel_bytes_and_answers) {
+    observed().reset();
+    served_case server({.max_inbound_buffer_bytes_per_connection_ = inbound_budget_bytes});
+    {
+        auto client = server.connect_raw();
+        client.start_request({{":method", "CONNECT"}, {":authority", refused_connect_authority}}, std::string(oversized_body_bytes, 't'));
+        // Acknowledged past the connection receive window (the inbound
+        // budget) only if the server returned the dropped bytes' credit.
+        EXPECT_TRUE(client.wait_until([&client] {
+            return client.acknowledged_bytes() >= oversized_body_bytes || client.response_head_received() || client.reset_error().has_value();
+        }));
+        EXPECT_GE(client.acknowledged_bytes(), oversized_body_bytes);
+        EXPECT_FALSE(client.response_head_received());
+        EXPECT_FALSE(client.reset_error().has_value());
+
+        observed().release_held_ = true;
+        const auto refusal = client.finish_response();
+        EXPECT_GE(refusal.status_, 400);
+        EXPECT_LT(refusal.status_, 500);
+        EXPECT_NE(refusal.reset_error_, std::optional(ruvia::http3_error_code::request_cancelled));
+
+        const auto next = client.request({{":method", "GET"}, {":scheme", "https"}, {":authority", "localhost"}, {":path", "/brief"}});
+        EXPECT_EQ(next.status_, 200);
+        EXPECT_EQ(next.body_, "brief");
     }
     server.finish();
 }

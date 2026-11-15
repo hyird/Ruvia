@@ -788,6 +788,10 @@ TEST(Ruvia, http2_oversized_request_body_answers_413_without_100_continue) {
         const auto code = error.get<ruvia::string>("code").value();
         EXPECT_TRUE(status && static_cast<std::uint32_t>(*status) == 413);
         EXPECT_TRUE(code && code->view() == "request_body_too_large");
+        // The rejection owns its message: a borrowed one would serialise a
+        // dead stack slot here.
+        const auto detail = error.get<ruvia::string>("detail").value();
+        EXPECT_TRUE(detail && detail->view() == "request body is too large");
     };
 
     // 1. Declared Content-Length exceeding route body_limit<16> with Expect: 100-continue

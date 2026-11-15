@@ -271,9 +271,11 @@ struct listen_config final {
     // validation is opt-in via http3_retry_, Stateless Reset is sent for
     // retired server connection IDs, and CONNECT, RFC 9220 WebSocket and
     // RFC 9297/9298 CONNECT-UDP / HTTP Datagrams are supported. The server
-    // limits apply per request stream as for HTTP/2: idle_timeout_ is also
-    // the QUIC max_idle_timeout, header_completion_timeout_ bounds the
-    // handshake, and a request body or an
+    // limits apply per request stream as for HTTP/2: idle_timeout_ governs an
+    // idle connection, the advertised QUIC max_idle_timeout exceeds it by two
+    // connection_scan_interval_ plus the 2 s close grace so the drain below
+    // ends first (a peer advertising less still bounds it, RFC 9000 §10.1),
+    // header_completion_timeout_ bounds the handshake, and a request body or an
     // output wait (the peer not acknowledging) that outlasts its timeout
     // resets only that stream with H3_REQUEST_CANCELLED. A request cap or
     // connection timeout sends the shutdown-notice GOAWAY, the final GOAWAY

@@ -445,7 +445,7 @@ task<std::error_code> write_websocket_handshake(stream_type& stream, const http1
 // Selects the refusal response the server sends after the callback returns.
 [[nodiscard]] inline websocket_rejection reject_request_stream_websocket(context& context_value, websocket_handshake_error failure) {
     const auto error = make_http_protocol_error(failure);
-    auto response = context_value.error(copy_http_protocol_error_info(error));
+    auto response = context_value.error(borrow_http_protocol_error_info(error));
     apply_websocket_handshake_error_headers(failure, response);
     const websocket_rejection rejection{response.status(), error.code()};
     context_access::set_response(context_value, std::move(response));
