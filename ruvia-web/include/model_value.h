@@ -68,17 +68,19 @@ public:
         value_.emplace<std::string>(std::move(value));
     }
 
+    void own_borrowed_in_place() {
+        if (const auto* borrowed = std::get_if<std::string_view>(&value_)) {
+            assign_owned(*borrowed);
+        }
+    }
+
     [[nodiscard]] model_text_storage rebind() const& {
         return model_text_storage(std::string(view()));
     }
 
     [[nodiscard]] model_text_storage rebind() && {
-        if (auto* owned = std::get_if<std::string>(&value_)) {
-            model_text_storage rebound(std::move(*owned));
-            assign_borrowed({});
-            return rebound;
-        }
-        auto rebound = static_cast<const model_text_storage&>(*this).rebind();
+        own_borrowed_in_place();
+        model_text_storage rebound(std::move(std::get<std::string>(value_)));
         assign_borrowed({});
         return rebound;
     }
@@ -189,6 +191,15 @@ struct model_value_rebind_access final {
     }
 
     template <typename t_type>
+    static void own_in_place(t_type& value) {
+        if constexpr (requires { typename t_type::ruvia_model_schema_type; }) {
+            value.fields_.own_in_place();
+        } else if constexpr (requires(t_type& target) { target.own_for_model(); }) {
+            value.own_for_model();
+        }
+    }
+
+    template <typename t_type>
     [[nodiscard]] static std::remove_cvref_t<t_type> own(t_type&& value) {
         using value_type = std::remove_cvref_t<t_type>;
         if constexpr (requires { typename value_type::ruvia_model_schema_type; }) {
@@ -291,6 +302,11 @@ public:
         storage_.assign_owned(value);
     }
 
+    template <std::same_as<std::string> string_type>
+    string(string_type&& value) noexcept {
+        storage_.assign_owned(std::move(value));
+    }
+
     string(const string&) = delete;
     string& operator=(const string&) = delete;
 
@@ -345,6 +361,10 @@ private:
 
     explicit string(detail::model_text_storage&& storage) noexcept :
         storage_(std::move(storage)) {}
+
+    void own_for_model() {
+        storage_.own_borrowed_in_place();
+    }
 
     [[nodiscard]] string rebind_for_model() const& {
         return string(storage_.rebind());
@@ -682,19 +702,20 @@ private:
         return rebound;
     }
 
-    [[nodiscard]] array rebind_for_model() && {
+    void own_for_model() {
         if constexpr (detail::model_value_rebind_access::has_rebind_for_model<t_type>()) {
-            // A later element may still allocate; retain every source until the
-            // complete candidate exists, including when assigning a field to itself.
-            auto rebound = std::as_const(*this).rebind_for_model();
-            clear();
-            return rebound;
-        } else {
-            array rebound;
-            rebound.items_ = std::move(items_);
-            clear();
-            return rebound;
+            for (auto& value : items_) {
+                detail::model_value_rebind_access::own_in_place(value);
+            }
         }
+    }
+
+    [[nodiscard]] array rebind_for_model() && {
+        own_for_model();
+        array rebound;
+        rebound.items_ = std::move(items_);
+        clear();
+        return rebound;
     }
 
     [[nodiscard]] bool owns_for_model(const void* address) const noexcept {
@@ -934,18 +955,20 @@ private:
         return rebound;
     }
 
-    [[nodiscard]] boxed_array rebind_for_model() && {
+    void own_for_model() {
         if constexpr (detail::model_value_rebind_access::has_rebind_for_model<t_type>()) {
-            // Prepare both nested values and their boxes before consuming the source.
-            auto rebound = std::as_const(*this).rebind_for_model();
-            clear();
-            return rebound;
-        } else {
-            boxed_array rebound;
-            rebound.items_ = std::move(items_);
-            items_.clear();
-            return rebound;
+            for (auto* value : items_) {
+                detail::model_value_rebind_access::own_in_place(*value);
+            }
         }
+    }
+
+    [[nodiscard]] boxed_array rebind_for_model() && {
+        own_for_model();
+        boxed_array rebound;
+        rebound.items_ = std::move(items_);
+        items_.clear();
+        return rebound;
     }
 
     [[nodiscard]] bool owns_for_model(const void* address) const noexcept {

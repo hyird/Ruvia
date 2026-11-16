@@ -4044,6 +4044,7 @@ UTF-8 文本字段（JSON 字符串）。内容可为任意字节，序列化时
 | --- | --- |
 | `string() noexcept = default` | 空串 |
 | `string(std::string_view value)` | 复制并拥有 `value`（隐式） |
+| `template <std::same_as<std::string> string_type> string(string_type&& value) noexcept` | 接管 `value` 的缓冲（隐式） |
 | `string(const string&) = delete` | 禁止拷贝 |
 | `string& operator=(const string&) = delete` | 禁止拷贝赋值 |
 | `string(string&& other) noexcept = default` | 保留借用/拥有状态；源变为空串 |

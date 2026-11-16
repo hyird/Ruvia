@@ -276,6 +276,8 @@ void assign_entity_value(t_type& out, v_type&& value) {
     } else if constexpr (std::is_same_v<t_type, string>) {
         if constexpr (movable_rvalue && std::is_same_v<std::remove_cvref_t<v_type>, string>) {
             commit_entity_value(out, rebind_model_value(std::move(value)));
+        } else if constexpr (movable_rvalue && std::is_same_v<std::remove_cvref_t<v_type>, std::string>) {
+            commit_entity_value(out, string(std::move(value)));
         } else {
             auto owned = string(std::string_view(value));
             commit_entity_value(out, std::move(owned));

@@ -317,7 +317,7 @@ task<websocket> http_client_websocket_request::connect_owned(http_client_websock
             protocols.emplace_back(protocol);
         }
         handshake = std::make_shared<detail::http_client_websocket_handshake>(websocket_client_negotiation_config_view{.subprotocols_ = std::span<const std::string_view>(protocols), .deflate_ = request.deflate_});
-        stored.emplace("GET", request.path_, headers.view());
+        stored.emplace(std::string("GET"), std::move(request.path_), std::move(request.headers_));
         stored->options_ = detail::copy_http_client_request_settings(request.request_options_);
         stored->informational_ = detail::share_http_client_informational(std::move(request.request_options_.informational_));
         stored->pool_owner_ = request.client_.pool_owner_;
@@ -325,8 +325,6 @@ task<websocket> http_client_websocket_request::connect_owned(http_client_websock
         stored->set_tunnel(pool.config().authority_, "websocket");
         stored->set_websocket(handshake);
     }
-    std::string(request.path_.get_allocator()).swap(request.path_);
-    std::vector<http_header>(request.headers_.get_allocator()).swap(request.headers_);
     std::vector<std::string>(request.subprotocols_.get_allocator()).swap(request.subprotocols_);
     // The opening deadline covers admission, transport establishment and every
     // handshake byte, but must not become the established tunnel's lifetime.

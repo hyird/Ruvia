@@ -68,6 +68,12 @@ http_client_request_storage::http_client_request_storage(std::string_view method
     }
 }
 
+http_client_request_storage::http_client_request_storage(std::string method, std::string target, std::vector<http_header> headers) noexcept :
+    method_(std::move(method)),
+    target_(std::move(target)),
+    headers_(std::move(headers)),
+    route_authority_(method_) {}
+
 http_client_request_storage::http_client_request_storage(std::string_view method, std::string_view target) :
     method_(method),
     target_(target),
@@ -105,6 +111,12 @@ void http_client_request_storage::set_tunnel(std::string_view authority, std::st
 
 http_client_request_storage& http_client_request_storage::set_body(std::string_view body) {
     body_.assign(body);
+    has_body_ = true;
+    return *this;
+}
+
+http_client_request_storage& http_client_request_storage::set_body(std::string&& body) noexcept {
+    body_ = std::move(body);
     has_body_ = true;
     return *this;
 }
@@ -493,22 +505,16 @@ task<http_client_tunnel_result> http_client_request::connect(http_client_tunnel_
     if (config.max_chunk_bytes_ == 0 || config.max_chunk_bytes_ > default_max_buffered_body_bytes) {
         throw std::invalid_argument("invalid HTTP Upgrade tunnel policy");
     }
-    const detail::inline_http_header_views<16> fields(headers_);
-    detail::http_client_request_storage request(method_, target_, fields.view());
-    request.options_ = detail::copy_http_client_request_settings(request_options_);
-    request.informational_ = informational_callback_;
+    detail::http_client_request_storage request(std::move(method_), std::move(target_), std::move(headers_));
+    request.options_ = std::move(request_options_);
+    request.informational_ = std::move(informational_callback_);
     request.pool_owner_ = client_.pool_owner_;
     request.set_host_stop(client_.host_stop_token_);
     request.set_upgrade();
     if (has_body_) {
-        request.set_body(body_);
+        request.set_body(std::move(body_));
     }
-    auto operation = client_.registration_.attach(client_.pool_->open_tunnel(std::move(request), config, client_.options_));
-    std::string(method_.get_allocator()).swap(method_);
-    std::string(target_.get_allocator()).swap(target_);
-    std::vector<http_header>(headers_.get_allocator()).swap(headers_);
-    std::string(body_.get_allocator()).swap(body_);
-    return operation;
+    return client_.registration_.attach(client_.pool_->open_tunnel(std::move(request), config, client_.options_));
 }
 
 std::vector<http_header_view> http_client_request::field_views() const {
@@ -559,25 +565,30 @@ task<http_client_response> http_client_request::follow_redirects(http_client_req
                 throw http_client_error(std::make_error_code(std::errc::timed_out), "HTTP redirect deadline expired", std::nullopt, nullptr, redirects != 0, redirects);
             }
             request.client_.options_.timeout_ = total.timeout();
-            std::optional<task<http_client_response>> dispatched;
-            {
-                const detail::inline_http_header_views<16> fields(request.headers_);
-                const http_request_head_view view{.method_ = request.method_, .target_ = request.target_, .headers_ = fields.view(), .content_ = detail::buffered_http_client_content(request.has_body_, request.body_)};
-                dispatched.emplace(request.client_.dispatch(view, request.request_options_, request.informational_callback_));
-            }
             if (redirects == request.max_redirects_) {
-                std::string(request.method_.get_allocator()).swap(request.method_);
-                std::string(request.target_.get_allocator()).swap(request.target_);
-                std::vector<http_header>(request.headers_.get_allocator()).swap(request.headers_);
-                std::string(request.body_.get_allocator()).swap(request.body_);
+                detail::http_client_request_storage stored(std::move(request.method_), std::move(request.target_), std::move(request.headers_));
+                stored.options_ = std::move(request.request_options_);
+                stored.informational_ = std::move(request.informational_callback_);
+                stored.pool_owner_ = request.client_.pool_owner_;
+                stored.set_host_stop(request.client_.host_stop_token_);
+                if (request.has_body_) {
+                    stored.set_body(std::move(request.body_));
+                }
+                auto dispatched = request.client_.registration_.attach(request.client_.pool_->execute(std::move(stored), request.client_.options_));
                 try {
-                    co_return co_await std::move(*dispatched);
+                    co_return co_await std::move(dispatched);
                 } catch (const http_client_error& error) {
                     if (redirects != 0 && error.redirect_hops() == 0) {
                         throw http_client_error(error.code(), error.what(), error.status(), error.connection_info(), error.request_written(), redirects);
                     }
                     throw;
                 }
+            }
+            std::optional<task<http_client_response>> dispatched;
+            {
+                const detail::inline_http_header_views<16> fields(request.headers_);
+                const http_request_head_view view{.method_ = request.method_, .target_ = request.target_, .headers_ = fields.view(), .content_ = detail::buffered_http_client_content(request.has_body_, request.body_)};
+                dispatched.emplace(request.client_.dispatch(view, request.request_options_, request.informational_callback_));
             }
             try {
                 hop_response.emplace(co_await std::move(*dispatched));
@@ -714,7 +725,14 @@ task<http_client_exchange> http_client_request::upload(http_client_upload_config
 
 task<http_client_exchange> http_client_request::upload_owned(http_client_request request, http_client_upload_config config) {
     std::optional<task<http_client_exchange>> dispatched;
-    {
+    if (request.max_redirects_ == 0) {
+        detail::http_client_request_storage storage(std::move(request.method_), std::move(request.target_), std::move(request.headers_));
+        storage.options_ = std::move(request.request_options_);
+        storage.informational_ = std::move(request.informational_callback_);
+        storage.pool_owner_ = request.client_.pool_owner_;
+        storage.set_host_stop(request.client_.host_stop_token_);
+        dispatched.emplace(request.client_.pool_->open_request(std::move(storage), config, request.client_.options_));
+    } else {
         const detail::inline_http_header_views<16> fields(request.headers_);
         detail::http_client_request_storage storage(request.method_, request.target_, fields.view());
         storage.options_ = detail::copy_http_client_request_settings(request.request_options_);

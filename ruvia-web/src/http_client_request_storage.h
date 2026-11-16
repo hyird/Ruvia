@@ -87,6 +87,7 @@ public:
     // Complete owning boundary: reserve field metadata once and normalize/copy
     // every field before asynchronous work can outlive caller storage.
     http_client_request_storage(std::string_view method, std::string_view target, std::span<const http_header_view> fields);
+    http_client_request_storage(std::string method, std::string target, std::vector<http_header> headers) noexcept;
 
     http_client_request_storage(const http_client_request_storage&) = delete;
     http_client_request_storage& operator=(const http_client_request_storage&) = delete;
@@ -94,6 +95,7 @@ public:
     http_client_request_storage& operator=(http_client_request_storage&&) noexcept = delete;
 
     http_client_request_storage& set_body(std::string_view body);
+    http_client_request_storage& set_body(std::string&& body) noexcept;
 
     void set_host_stop(stop_token token) noexcept {
         host_stop_ = std::move(token);

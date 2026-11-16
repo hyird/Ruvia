@@ -1519,13 +1519,29 @@ private:
         state_ = detail::model_field_state::parsed;
     }
 
-    [[nodiscard]] model_field rebind() const {
+    void own_in_place() {
+        if (value_) {
+            model_value_rebind_access::own_in_place(*value_);
+        }
+    }
+
+    [[nodiscard]] model_field rebind() const& {
         model_field rebound;
         rebound.state_ = state_;
         rebound.present_ = present_;
         if (value_) {
             rebound.value_.emplace(detail::rebind_model_value(*value_));
         }
+        return rebound;
+    }
+
+    [[nodiscard]] model_field rebind() && {
+        own_in_place();
+        model_field rebound;
+        rebound.state_ = state_;
+        rebound.present_ = present_;
+        rebound.value_ = std::move(value_);
+        reset_after_move();
         return rebound;
     }
 
@@ -2411,9 +2427,8 @@ public:
             ::ruvia::detail::throw_model_move_source_owns_destination();
         }
 
-        auto rebound = rebind_fields(other.fields_);
-        reset_moved_fields(other.fields_);
-        replace_fields(fields_, std::move(rebound));
+        auto rebound = std::move(other).rebind();
+        replace_fields(fields_, std::move(rebound.fields_));
         return *this;
     }
 
@@ -2497,10 +2512,15 @@ public:
         return rebound;
     }
 
+    void own_in_place() {
+        std::apply([](auto&... field) {
+            (field.own_in_place(), ...);
+        }, fields_);
+    }
+
     [[nodiscard]] model_storage rebind() && {
-        auto rebound = std::as_const(*this).rebind();
-        reset_moved_fields(fields_);
-        return rebound;
+        own_in_place();
+        return model_storage(std::move(*this));
     }
 
     // Whether `address` lies in storage owned by these fields beyond their
@@ -2777,6 +2797,10 @@ protected:
 
     void assign_owned(std::string_view value) {
         storage_.assign_owned(value);
+    }
+
+    void own_for_model() {
+        storage_.own_borrowed_in_place();
     }
 
     [[nodiscard]] derived_type rebind_for_model() const& {
