@@ -10,6 +10,7 @@
 #include <utility>
 #include <variant>
 
+#include <asio/bind_immediate_executor.hpp>
 #include <asio/buffer.hpp>
 #include <asio/error.hpp>
 #include <asio/io_context.hpp>
@@ -346,7 +347,10 @@ task<client_transport_result> client_tcp_transport::read_some(std::span<char> by
         stream_->async_read_some(buffer, std::move(handler));
     })
         : co_await async_asio<std::size_t>([this, buffer](auto handler) mutable {
-        stream_->next_layer().socket().async_read_some(buffer, std::move(handler));
+        auto& socket = stream_->next_layer().socket();
+        // await_suspend consumes an immediate completion without resuming a
+        // coroutine that has not suspended yet. TLS composed reads stay deferred.
+        socket.async_read_some(buffer, asio::bind_immediate_executor(socket.get_executor(), std::move(handler)));
     });
     // After a TLS failure the engine owes the peer no further records.
     if (is_tls_error(completion.error_code())) {

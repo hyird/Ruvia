@@ -866,11 +866,13 @@ task<void> detail::http_client_response_state::dispatch_informational(const oper
 }
 
 task<void> detail::http_client_response_state::await_head(std::string_view head_message) {
-    while ((!head_ready_ || informational_active_) && !failure_ && !pool_closed_) {
+    while ((!head_ready_ || informational_active()) && !failure_ && !pool_closed_) {
         throw_if_read_interrupted();
         co_await head_signal_.wait();
     }
-    rethrow_response_failure();
+    if (!head_ready_ || informational_active() || informational_phase_ == informational_delivery_phase::failed || body_decode_required_) {
+        rethrow_response_failure();
+    }
     if (pool_closed_) {
         throw http_client_error(make_error_code(http_client_errc::closing), head_message, std::nullopt, connection_info_.id_ != 0 ? &connection_info_ : nullptr);
     }

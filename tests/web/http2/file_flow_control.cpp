@@ -635,6 +635,68 @@ TEST(Ruvia, http2_failed_file_writes_release_output_budget_slots) {
     }
 }
 
+TEST(Ruvia, http2_concurrent_file_credit_waiters_survive_stream_abandonment) {
+    const http2_file_flow_control_test::test_file file;
+    auto& io = ruvia::test::new_test_io_context();
+    auto attachment = ruvia::attach_event_loop(io);
+    const auto worker = attachment.loop().worker();
+    ruvia::test::http_server_fixture server(io);
+    std::exception_ptr failure;
+    auto run = [&]() -> ruvia::task<void> {
+        const auto base_url = "http://127.0.0.1:" + std::to_string(server.endpoint().port());
+        ruvia::http_client_config config{.base_url_ = base_url, .request_timeout_ = std::chrono::seconds(5), .versions_ = ruvia::http_client_versions{.http1_ = false}};
+        config.connection_limits_.max_open_ = 1;
+        ruvia::http_client client(attachment.loop(), std::move(config));
+        ruvia::task_scope operations(worker);
+        std::array<bool, 32> received{};
+        const std::string expected(http2_file_flow_control_test::file_size, 'f');
+        const auto request = [&](std::size_t index) -> ruvia::task<void> {
+            auto response = co_await client.client().get("/http2-file-flow-control").send();
+            EXPECT_TRUE(response.ok());
+            if (index % 3 == 0) {
+                co_return;
+            }
+            const auto body = co_await response.bytes();
+            EXPECT_EQ(body.text(), expected);
+            received[index] = true;
+        };
+        try {
+            for (std::size_t i = 0; i < received.size(); ++i) {
+                operations.spawn(request(i));
+            }
+        } catch (...) {
+            failure = std::current_exception();
+        }
+        try {
+            co_await operations.join();
+        } catch (...) {
+            if (!failure) {
+                failure = std::current_exception();
+            }
+        }
+        try {
+            co_await client.shutdown();
+        } catch (...) {
+            if (!failure) {
+                failure = std::current_exception();
+            }
+        }
+        for (std::size_t i = 0; i < received.size(); ++i) {
+            if (i % 3 != 0) {
+                EXPECT_TRUE(received[i]);
+            }
+        }
+        attachment.request_stop();
+    };
+    auto root = attachment.loop().start(run());
+    attachment.run();
+    std::move(root).get();
+    server.finish();
+    if (failure) {
+        std::rethrow_exception(failure);
+    }
+}
+
 TEST(Ruvia, http2_empty_file_validation_precedes_end_stream_headers) {
     using namespace http2_file_flow_control_test;
     const auto& directory = empty_directory();

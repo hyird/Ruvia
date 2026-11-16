@@ -59,6 +59,7 @@
 #include "transport_stream_end.h"
 #include "websocket_handshake.h"
 #include "worker_connections.h"
+#include "worker_signal.h"
 
 namespace ruvia::detail {
 
@@ -73,6 +74,7 @@ public:
     explicit http2_data_output_budget(const worker_ref& worker_value) :
         changed_(worker_value) {}
     http2_data_output_budget(worker_ref&&) = delete;
+    http2_data_output_budget(const worker_ref&&) = delete;
     http2_data_output_budget(const http2_data_output_budget&) = delete;
     http2_data_output_budget& operator=(const http2_data_output_budget&) = delete;
 
@@ -89,17 +91,10 @@ public:
         return false;
     }
 
-    [[nodiscard]] task<bool> acquire(std::uint32_t stream_id, multiplexed_stream_signal& stream, const ruvia::http2_connection& connection, const bool* aborted) {
-        while (!stream.terminated() && !connection.stream_aborted(stream_id) && (aborted == nullptr || !*aborted)) {
-            if (try_acquire(stream_id)) {
-                co_return true;
-            }
-            // A stream may own only one DATA reservation; wait for the current
-            // chunk to drain rather than admitting another and confusing release.
-            co_await changed_.wait();
-        }
-        co_return false;
+    [[nodiscard]] worker_signal::wait_operation wait() & {
+        return changed_.wait();
     }
+    worker_signal::wait_operation wait() && = delete;
 
     void release(std::uint32_t stream_id) noexcept {
         for (std::size_t i = 0; i < held_.size(); ++i) {
@@ -132,10 +127,7 @@ public:
         }
     }
 
-    // Release a stream's reservation against the current core state immediately.
-    // This is required when reset/close discards encoded DATA without producing a
-    // socket completion callback. Already serialized bytes remain charged until
-    // their containing socket batch completes.
+    // Stream removal is not evidence that serialized DATA crossed the socket.
     void release_and_reconcile(std::uint32_t stream_id, const ruvia::http2_connection& connection) noexcept {
         release(stream_id);
         reconcile(connection, false);
@@ -152,8 +144,6 @@ public:
                 progress.written_ += progress.batch_output_;
                 progress.batch_output_ = 0;
             }
-            // Stream removal is not evidence that serialized DATA was written.
-            // Keep its credit until every submitted payload byte crossed the socket.
             if ((cancelled_[i] && progress.written_ >= progress.emitted_ && connection.pending_data_output_bytes(stream_id) == 0) || (!cancelled_[i] && progress.written_ >= progress.submitted_ && connection.pending_data_output_bytes(stream_id) == 0)) {
                 clear(i);
             }
@@ -2017,12 +2007,10 @@ task<http2_stream_data_write_status> write_http2_stream_data(ruvia::http2_connec
             }
         }
         if (!bytes.empty()) {
-            if (!output_budget.try_acquire(stream_id)) {
-                if (!(co_await output_budget.acquire(stream_id, *signal, connection, aborted))) {
-                    co_return classify_aborted_write(signal, aborted);
-                }
+            // A stream retains its sole credit until its current DATA drains.
+            while (!output_budget.try_acquire(stream_id)) {
+                co_await output_budget.wait();
                 if ((aborted != nullptr && *aborted) || signal->terminated() || connection.stream_aborted(stream_id)) {
-                    output_budget.release(stream_id);
                     co_return classify_aborted_write(signal, aborted);
                 }
             }

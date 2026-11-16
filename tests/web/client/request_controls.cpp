@@ -351,7 +351,13 @@ TEST(Ruvia, http_client_http2_operation_and_phase_limits_cannot_relax_origin_lim
     http_client_request_controls_test::read_timeout(true, true, true);
 }
 
-TEST(Ruvia, http_client_http2_informational_backpressure_does_not_block_other_streams) {
+namespace http_client_request_controls_test {
+
+struct informational_callback_error final : std::runtime_error {
+    using std::runtime_error::runtime_error;
+};
+
+void informational_backpressure(bool fail_callback) {
     auto& io = ruvia::test::new_test_io_context();
     auto attachment = ruvia::attach_event_loop(io);
     const auto worker = attachment.loop().worker();
@@ -414,6 +420,7 @@ TEST(Ruvia, http_client_http2_informational_backpressure_does_not_block_other_st
         ruvia::stop_source release;
         bool callback_entered = false;
         bool first_returned = false;
+        bool callback_failed = false;
         const auto first = [&]() -> ruvia::task<void> {
             try {
                 auto request = client.client().get("/first");
@@ -422,10 +429,15 @@ TEST(Ruvia, http_client_http2_informational_backpressure_does_not_block_other_st
                     entered.notify();
                     ruvia::stop_group cancellation{stop, release.token()};
                     (void)co_await ruvia::sleep_for(worker, std::chrono::hours(1), cancellation.token());
+                    if (fail_callback) {
+                        throw informational_callback_error("informational callback failed");
+                    }
                 }});
                 auto response = co_await std::move(request).send();
                 EXPECT_TRUE(response.ok());
                 first_returned = true;
+            } catch (const informational_callback_error&) {
+                callback_failed = true;
             } catch (...) {
                 failure = std::current_exception();
                 entered.notify();
@@ -446,6 +458,8 @@ TEST(Ruvia, http_client_http2_informational_backpressure_does_not_block_other_st
         }
         release.request_stop();
         co_await operations.join();
+        EXPECT_EQ(callback_failed, fail_callback);
+        EXPECT_EQ(first_returned, !fail_callback);
         co_await client.shutdown();
         std::error_code ignored;
         socket.close(ignored);
@@ -464,6 +478,16 @@ TEST(Ruvia, http_client_http2_informational_backpressure_does_not_block_other_st
     if (peer_failure) {
         std::rethrow_exception(peer_failure);
     }
+}
+
+}  // namespace http_client_request_controls_test
+
+TEST(Ruvia, http_client_http2_informational_backpressure_does_not_block_other_streams) {
+    http_client_request_controls_test::informational_backpressure(false);
+}
+
+TEST(Ruvia, http_client_http2_informational_failure_after_final_head_rejects_delivery) {
+    http_client_request_controls_test::informational_backpressure(true);
 }
 #endif
 

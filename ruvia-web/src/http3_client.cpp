@@ -336,7 +336,7 @@ public:
             if (item == preserve) {
                 continue;
             }
-            if (item->id_ >= 0 || item->response_.informational_active_) {
+            if (item->id_ >= 0 || item->response_.informational_active()) {
                 item->response_.request_informational_stop();
             }
             if (code != make_error_code(http_client_errc::closing)) {
@@ -440,7 +440,7 @@ public:
             }
             return;
         }
-        if (!item.response_.informational_active_ && item.response_.effective_read_timeout_ && !item.done_ && !item.response_.data_credit_) {
+        if (!item.response_.informational_active() && item.response_.effective_read_timeout_ && !item.done_ && !item.response_.data_credit_) {
             item.timer_.read_deadline_ = deadline_after(item.response_.effective_read_timeout_->value());
             schedule(item);
         }
@@ -747,9 +747,9 @@ public:
             if (auto* head = event->informational_head()) {
                 consume_event(*head);
                 auto* item = find(head->stream_id());
-                if (item && !item->error_ && !item->failure_ && item->response_.informational_callback_ && !item->response_.informational_active_) {
+                if (item && !item->error_ && !item->failure_ && item->response_.informational_callback_ && !item->response_.informational_active()) {
                     auto& response = item->response_;
-                    response.informational_active_ = true;
+                    response.begin_informational();
                     item->timer_.read_deadline_.reset();
                     schedule(*item);
                     response.retain_reference();
@@ -757,9 +757,9 @@ public:
                     try {
                         pool_.tasks().spawn(deliver_informational(item->id_, &response, item->timeout_));
                     } catch (...) {
+                        response.finish_informational(std::current_exception());
                         --borrowed_operations_;
                         response.release_reference();
-                        response.informational_active_ = false;
                         throw;
                     }
                 }
@@ -1925,7 +1925,7 @@ task<bool> http3_client_connection::execute(const http_client_request_storage& r
                         item.done_ = true;
                     }
                 }
-                while ((!item.done_ || response.informational_active_) && !item.retry_) {
+                while ((!item.done_ || response.informational_active()) && !item.retry_) {
                     self.check(item);
                     co_await item.signal_.wait();
                 }

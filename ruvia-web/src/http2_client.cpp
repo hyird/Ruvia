@@ -508,7 +508,7 @@ void http_client_connection::restart_http2_stream_read(http2_stream& stream) {
         schedule_http2_stream_timer(stream);
         return;
     }
-    if (!read_timeout || stream.complete_ || stream.state_->informational_active_ || (stream.state_->tunnel_ && stream.state_->tunnel_->receive_ended_)) {
+    if (!read_timeout || stream.complete_ || stream.state_->informational_active() || (stream.state_->tunnel_ && stream.state_->tunnel_->receive_ended_)) {
         return;
     }
     stream.timer_.read_deadline_ = deadline_after(read_timeout->value());
@@ -743,13 +743,13 @@ void http_client_connection::on_http2_event(http2_event& event) {
         }
         try {
             stream->state_->retain_informational(interim->head().status(), interim->head().headers(), interim->request_content_signal());
-            if (stream->state_->informational_callback_ && !stream->state_->informational_active_) {
-                stream->state_->informational_active_ = true;
+            if (stream->state_->informational_callback_ && !stream->state_->informational_active()) {
+                stream->state_->begin_informational();
                 stream->timer_.read_deadline_.reset();
                 try {
                     pool_.tasks().spawn(deliver_http2_informational(stream->stream_id_));
                 } catch (...) {
-                    stream->state_->informational_active_ = false;
+                    stream->state_->finish_informational(std::current_exception());
                     throw;
                 }
             }
@@ -1117,8 +1117,8 @@ task<bool> http_client_connection::execute_http2(const http_client_request_stora
         if (auto* upload = request.output(); upload != nullptr && stream.stream_id_ != 0 && !stream.failed() && !stream.retryable_) {
             co_await stream_http2_upload(request, stream, *upload);
         }
-        while ((!stream.complete_ || state_value.informational_active_) && !stream.failed() && !stream.retryable_) {
-            if (request.tunnel() != nullptr && request.tunnel()->accepted_ && request.tunnel()->receive_ended_ && request.tunnel()->output_.ended_ && !state_value.informational_active_) {
+        while ((!stream.complete_ || state_value.informational_active()) && !stream.failed() && !stream.retryable_) {
+            if (request.tunnel() != nullptr && request.tunnel()->accepted_ && request.tunnel()->receive_ended_ && request.tunnel()->output_.ended_ && !state_value.informational_active()) {
                 stream.complete_ = true;
                 break;
             }
@@ -1313,7 +1313,7 @@ task<void> http_client_pool::run_http2_push(std::unique_ptr<http2_push_driver> d
     try {
         // The registered stream's timer bounds the push (push_.timeout_ and
         // read_timeout_).
-        while ((!stream.complete_ || state_value.informational_active_) && !stream.failed()) {
+        while ((!stream.complete_ || state_value.informational_active()) && !stream.failed()) {
             co_await stream.signal_.wait();
         }
         state_value.failure_ = stream.failure_;

@@ -567,9 +567,9 @@ public:
     // when called off the worker that owns it.
     void require_owner_worker(const char* message) const;
     void notify_producer_space() noexcept;
-    // The consumer's wait for the final head: rethrows the producer's failure
-    // or reports `head_message` for its error code. An encoded body is decoded
-    // completely before the head is returned, so its failure is observed here.
+    // Final-head delivery waits for informational callbacks. Later body
+    // failures do not revoke a valid head; required content decoding must
+    // still finish successfully before delivery.
     [[nodiscard]] task<void> await_head(std::string_view head_message);
     void rethrow_response_failure() const;
     // The running consumer (body read or head receive) or output operation's
@@ -588,8 +588,14 @@ public:
     void discard_response_body() noexcept;
     void discard_failed_encoded_response() noexcept;
     [[nodiscard]] task<void> dispatch_informational(const operation_deadline& timeout);
+    [[nodiscard]] bool informational_active() const noexcept {
+        return informational_phase_ == informational_delivery_phase::active;
+    }
+    void begin_informational() noexcept {
+        informational_phase_ = informational_delivery_phase::active;
+    }
     void request_informational_stop() noexcept {
-        informational_stop_requested_ = informational_stop_requested_ || informational_active_;
+        informational_stop_requested_ = informational_stop_requested_ || informational_active();
         if (informational_abort_) {
             informational_abort_->request_stop();
         }
@@ -598,7 +604,7 @@ public:
     // outside its connection's event dispatch, returned: their failure, if
     // any, becomes the response's.
     void finish_informational(const std::exception_ptr& failure) noexcept {
-        informational_active_ = false;
+        informational_phase_ = failure ? informational_delivery_phase::failed : informational_delivery_phase::idle;
         if (failure) {
             failure_ = failure;
         }
@@ -703,7 +709,10 @@ public:
     std::shared_ptr<http_client_informational_callback> informational_callback_;
     stop_token informational_stop_;
     std::optional<stop_source> informational_abort_;
-    bool informational_active_{false};
+    enum class informational_delivery_phase : std::uint8_t { idle,
+        active,
+        failed };
+    informational_delivery_phase informational_phase_{informational_delivery_phase::idle};
     bool informational_stop_requested_{false};
     bool decode_content_{true};
     std::vector<http_client_informational_response> informational_;
