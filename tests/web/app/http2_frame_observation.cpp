@@ -217,7 +217,7 @@ TEST(Ruvia, http2_typed_observers_fingerprint_tls_frames_independently_of_record
                 }
             }
         }
-        app.stop();
+        app.request_stop();
         running.join();
     }
     app.callbacks({});

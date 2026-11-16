@@ -150,7 +150,7 @@ TEST(Ruvia, http2_upgrade_on_the_request_that_reaches_the_connection_limit_is_se
     app.listen({.address_ = "127.0.0.1", .http_ = endpoint.port()});
     ruvia::test::app_run thread(app);
     if (!started().try_acquire_for(3s)) {
-        app.stop();
+        app.request_stop();
         thread.join();
         throw std::runtime_error("HTTP/2 request limit app did not start");
     }
@@ -163,7 +163,7 @@ TEST(Ruvia, http2_upgrade_on_the_request_that_reaches_the_connection_limit_is_se
     } catch (...) {
         client_failure = std::current_exception();
     }
-    app.stop();
+    app.request_stop();
     thread.join();
     if (client_failure) {
         std::rethrow_exception(client_failure);

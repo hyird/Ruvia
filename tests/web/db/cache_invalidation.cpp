@@ -659,7 +659,7 @@ TEST(Ruvia, db_client_shutdown_cancels_inflight_cache_without_closing_borrowed_r
             try {
                 co_await database.connect();
                 redis_peer.stall_next_read([&database] {
-                    database.close();
+                    database.request_stop();
                 });
                 bool cancelled = false;
                 try {

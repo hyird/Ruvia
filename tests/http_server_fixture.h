@@ -323,7 +323,7 @@ public:
 
     ~app_run() {
         if (thread_.joinable()) {
-            app_.stop();
+            app_.request_stop();
             thread_.join();
         }
     }

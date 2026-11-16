@@ -133,7 +133,7 @@ int main(int argc, char** argv) {
                 }
             }
             // --create-index is a one-shot operation, never a serving mode.
-            ruvia::app().stop();
+            ruvia::app().request_stop();
         }).run();
         return failed ? 1 : 0;
     } catch (...) {

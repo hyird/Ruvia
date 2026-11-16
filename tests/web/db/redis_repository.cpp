@@ -310,7 +310,7 @@ void exercise_with_server(redis_test_worker& worker, ruvia::redis_client& client
         server.wait_until_commands_read();
     } catch (...) {
         peer_failure = std::current_exception();
-        client.close();
+        client.request_stop();
     }
     root.wait();
     worker.stop();
@@ -626,7 +626,7 @@ TEST(Ruvia, redis_repository_inflight_operation_observes_cancellation) {
             server.wait_until_commands_read();
         } catch (...) {
             peer_failure = std::current_exception();
-            client.close();
+            client.request_stop();
         }
         cancellation.request_stop();
         root.wait();
@@ -1081,6 +1081,7 @@ public:
         transaction_wrong_exec,
         transaction_queue_error,
         slow_blocking_connect,
+        stall_select,
         close_after_reply };
 
     explicit redis_peer(mode_type mode = mode_type::normal, asio::ssl::context* tls_context = nullptr) :
@@ -1223,7 +1224,7 @@ private:
                 input.ignore(2);
                 args.push_back(std::move(arg));
             }
-            if (args.front() == "STALL" || args.front() == "AUTH") {
+            if (args.front() == "STALL" || args.front() == "AUTH" || (args.front() == "SELECT" && mode_ == mode_type::stall_select)) {
                 if (args.front() == "AUTH") {
                     authentication_ = args;
                 }
@@ -2121,7 +2122,7 @@ TEST(Ruvia, redis_client_loop_stop_cancels_and_joins_pending_commands) {
     EXPECT_TRUE(cancelled);
 }
 
-TEST(Ruvia, redis_client_close_and_shutdown_waiters_join_pending_commands) {
+TEST(Ruvia, redis_client_request_stop_and_shutdown_waiters_join_pending_commands) {
     redis_peer peer;
     ruvia::event_loop_pool pool({.loop_count_ = 1});
     ruvia::redis_client client(pool.loop(0), peer.config());
@@ -2130,7 +2131,7 @@ TEST(Ruvia, redis_client_close_and_shutdown_waiters_join_pending_commands) {
     pool.start();
     auto pending = pool.loop(0).start(blocked_command(client, group.token()));
     peer.wait_for_blocked_command();
-    client.close();
+    client.request_stop();
     auto closing = pool.loop(0).start(client.shutdown());
     auto also_closing = pool.loop(0).start(client.shutdown());
     bool cancelled = false;
@@ -2227,7 +2228,7 @@ TEST(Ruvia, redis_client_authenticates_a_username_without_password) {
     EXPECT_TRUE(cancelled);
 }
 
-TEST(Ruvia, redis_client_fresh_close_and_loop_stop_share_worker_completion) {
+TEST(Ruvia, redis_client_fresh_request_stop_and_loop_stop_share_worker_completion) {
     for (int iteration = 0; iteration < 64; ++iteration) {
         ruvia::event_loop_pool pool({.loop_count_ = 1});
         ruvia::redis_client client(pool.loop(0), {.pool_size_per_worker_ = 1});
@@ -2235,7 +2236,7 @@ TEST(Ruvia, redis_client_fresh_close_and_loop_stop_share_worker_completion) {
         std::barrier rendezvous(2);
         std::thread closer([&] {
             rendezvous.arrive_and_wait();
-            client.close();
+            client.request_stop();
         });
         rendezvous.arrive_and_wait();
         pool.request_stop();
@@ -2342,7 +2343,7 @@ TEST(Ruvia, redis_tls_shutdown_joins_pending_authenticated_transport_io) {
     pool.start();
     auto pending = pool.loop(0).start(blocked_command(client));
     peer.wait_for_blocked_command();
-    client.close();
+    client.request_stop();
     bool cancelled = false;
     try {
         std::move(pending).get();
@@ -2352,4 +2353,104 @@ TEST(Ruvia, redis_tls_shutdown_joins_pending_authenticated_transport_io) {
     pool.loop(0).start(client.shutdown()).get();
     pool.join();
     EXPECT_TRUE(cancelled);
+}
+
+TEST(Ruvia, redis_client_connect_options_own_inputs_and_cover_authentication_and_selection) {
+    using namespace std::chrono_literals;
+    for (const bool select : {false, true}) {
+        for (const bool cancel : {false, true}) {
+            redis_peer peer(select ? redis_peer::mode_type::stall_select : redis_peer::mode_type::normal);
+            auto config = peer.config();
+            config.password_ = select ? "" : "stall-authentication";
+            config.database_ = select ? 1 : 0;
+            config.connect_timeout_ = 5s;
+            config.command_timeout_ = 5s;
+            ruvia::event_loop_pool pool({.loop_count_ = 1});
+            ruvia::redis_client client(pool.loop(0), config);
+            ruvia::stop_source stop;
+            ruvia::operation_options options{.timeout_ = cancel ? 5s : 100ms, .stop_token_ = stop.token()};
+            auto cold = client.connect(options);
+            // Neither later input changes nor time spent cold may alter the operation.
+            options = {};
+            if (!cancel) {
+                std::this_thread::sleep_for(150ms);
+            }
+            const auto started = std::chrono::steady_clock::now();
+            pool.start();
+            auto connecting = pool.loop(0).start(std::move(cold));
+            peer.wait_for_blocked_command();
+            if (cancel) {
+                stop.request_stop();
+            }
+            std::optional<ruvia::backend_error_code> observed;
+            try {
+                std::move(connecting).get();
+            } catch (const ruvia::redis_error& error) {
+                observed = error.code();
+            }
+            EXPECT_EQ(observed, cancel ? ruvia::backend_error_code::cancelled : ruvia::backend_error_code::timeout);
+            if (!cancel) {
+                const auto elapsed = std::chrono::steady_clock::now() - started;
+                EXPECT_GE(elapsed, 100ms);
+                EXPECT_LT(elapsed, 2s);
+            }
+            pool.loop(0).start(client.shutdown()).get();
+            pool.request_stop();
+            pool.join();
+        }
+    }
+}
+
+TEST(Ruvia, redis_client_connect_options_cannot_relax_configured_startup_limits) {
+    using namespace std::chrono_literals;
+    for (const bool command_limit : {false, true}) {
+        redis_peer peer;
+        auto config = peer.config();
+        config.password_ = "stall-authentication";
+        config.connect_timeout_ = command_limit ? 5s : 100ms;
+        config.command_timeout_ = command_limit ? 100ms : 5s;
+        ruvia::event_loop_pool pool({.loop_count_ = 1});
+        ruvia::redis_client client(pool.loop(0), config);
+        pool.start();
+        const auto started = std::chrono::steady_clock::now();
+        bool timed_out = false;
+        try {
+            pool.loop(0).start(client.connect({.timeout_ = 5s})).get();
+        } catch (const ruvia::redis_error& error) {
+            timed_out = error.code() == ruvia::backend_error_code::timeout;
+        }
+        EXPECT_TRUE(timed_out);
+        EXPECT_LT(std::chrono::steady_clock::now() - started, 2s);
+        pool.loop(0).start(client.shutdown()).get();
+        pool.request_stop();
+        pool.join();
+    }
+}
+
+TEST(Ruvia, redis_client_connect_preflight_observes_stopped_tokens_and_expired_deadlines_before_dns) {
+    using namespace std::chrono_literals;
+    for (const bool cancel : {false, true}) {
+        ruvia::event_loop_pool pool({.loop_count_ = 1});
+        ruvia::redis_client client(pool.loop(0), {.host_ = "must-not-resolve.invalid", .tls_ = {.mode_ = ruvia::client_tls_mode::disabled}, .pool_size_per_worker_ = 1});
+        ruvia::stop_source stop;
+        stop.request_stop();
+        ruvia::operation_options options;
+        if (cancel) {
+            options.stop_token_ = stop.token();
+        } else {
+            options.timeout_ = ruvia::operation_timeout(std::chrono::steady_clock::now() - 1ms);
+        }
+        auto cold = client.connect(options);
+        pool.start();
+        std::optional<ruvia::backend_error_code> observed;
+        try {
+            pool.loop(0).start(std::move(cold)).get();
+        } catch (const ruvia::redis_error& error) {
+            observed = error.code();
+        }
+        EXPECT_EQ(observed, cancel ? ruvia::backend_error_code::cancelled : ruvia::backend_error_code::timeout);
+        pool.loop(0).start(client.shutdown()).get();
+        pool.request_stop();
+        pool.join();
+    }
 }

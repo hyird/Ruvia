@@ -108,7 +108,7 @@ public:
     }
 };
 
-// Startup hooks may block independently of application::stop().
+// Startup hooks may block independently of application::request_stop().
 class startup_run final {
 public:
     explicit startup_run(ruvia::application& app, startup_state& state_value) :
@@ -118,12 +118,12 @@ public:
 
     ~startup_run() {
         if (!joined_) {
-            app_.stop();
+            app_.request_stop();
             state_.release_hook_.release();
         }
     }
     void stop_and_join() {
-        app_.stop();
+        app_.request_stop();
         state_.release_hook_.release();
         join();
     }
@@ -464,7 +464,7 @@ TEST(Ruvia, app_startup_barrier_orders_hooks_and_rolls_back) {
         const bool returned = failed_run.wait_for(3s) == std::future_status::ready;
         EXPECT_TRUE(returned);
         if (!returned) {
-            app.stop();
+            app.request_stop();
         }
         EXPECT_TRUE(failed_run.get() != nullptr);
         EXPECT_TRUE(app.workers().empty());
@@ -513,7 +513,7 @@ TEST(Ruvia, app_startup_barrier_orders_hooks_and_rolls_back) {
                 throw std::runtime_error("ready worker rejected startup initialization");
             }
             // The lifecycle caller can wait for cancellable worker initialization.
-            // application::stop() must wake it without requiring this caller to join first.
+            // application::request_stop() must wake it without requiring this caller to join first.
             done.get();
             return;
         }
@@ -523,7 +523,7 @@ TEST(Ruvia, app_startup_barrier_orders_hooks_and_rolls_back) {
             throw std::runtime_error("startup hook failed");
         }
         if (state_value->outcome_ == startup_outcome::stop_in_hook) {
-            app.stop();
+            app.request_stop();
         }
     });
     app.on_start([state_value] {
@@ -568,7 +568,7 @@ TEST(Ruvia, app_startup_barrier_orders_hooks_and_rolls_back) {
             std::this_thread::sleep_for(25ms);
             // No worker handle escapes before every worker is ready.
             EXPECT_TRUE(app.workers().empty());
-            app.stop();
+            app.request_stop();
             state_value->release_hook_.release();
             run.join();
             EXPECT_TRUE(run.failure_ == nullptr);
@@ -597,7 +597,7 @@ TEST(Ruvia, app_startup_barrier_orders_hooks_and_rolls_back) {
         EXPECT_EQ(app.stats().active_connections_, std::size_t{0});
         auto escaped_worker = app.workers().front();
         if (outcome == startup_outcome::stop_from_caller) {
-            app.stop();
+            app.request_stop();
         } else {
             state_value->release_hook_.release();
         }
@@ -630,7 +630,7 @@ TEST(Ruvia, app_startup_barrier_orders_hooks_and_rolls_back) {
             EXPECT_TRUE(tls_keep_alive_serves_decrypted_and_later_requests(io, tls_endpoint));
             EXPECT_TRUE(rejected_expect_upload_closes_without_body(io, endpoint));
             EXPECT_TRUE(tls_websocket_truncation_ends_read(io, tls_endpoint, *state_value));
-            app.stop();
+            app.request_stop();
         }
         run.join();
         EXPECT_TRUE(state_value->stop_thread_ == owner_thread);
@@ -666,14 +666,14 @@ TEST(Ruvia, app_startup_barrier_orders_hooks_and_rolls_back) {
         ruvia::test::tcp_port_reservation reservation(io);
         const auto endpoint = reservation.endpoint();
         app.listen({.address_ = "127.0.0.1", .http_ = endpoint.port()});
-        app.stop();
+        app.request_stop();
         auto latched = std::async(std::launch::async, [&app] {
             app.run();
         });
         const bool returned = latched.wait_for(3s) == std::future_status::ready;
         EXPECT_TRUE(returned);
         if (!returned) {
-            app.stop();
+            app.request_stop();
             state_value->release_hook_.release();
         }
         latched.get();
@@ -691,7 +691,7 @@ TEST(Ruvia, app_startup_barrier_orders_hooks_and_rolls_back) {
             }
             return;
         }
-        app.stop();
+        app.request_stop();
         state_value->release_hook_.release();
         run.join();
         EXPECT_TRUE(run.failure_ == nullptr);

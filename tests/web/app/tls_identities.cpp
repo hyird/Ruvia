@@ -555,7 +555,7 @@ TEST(Ruvia, https_selects_identity_by_exact_and_wildcard_sni_then_local_address)
     EXPECT_TRUE(https_response(io, client, second, nullptr, "127.0.0.2").starts_with("HTTP/1.1 200 "));
     EXPECT_TRUE(https_response(io, client, second, nullptr, "localhost").starts_with("HTTP/1.1 421 "));
     EXPECT_TRUE(https_response(io, client, first, nullptr, "localhost").starts_with("HTTP/1.1 200 "));
-    app.stop();
+    app.request_stop();
     runner.join();
 }
 
@@ -670,7 +670,7 @@ TEST(Ruvia, https_identities_are_replaced_at_runtime_for_new_handshakes) {
 #if defined(RUVIA_ENABLE_HTTP3)
         EXPECT_TRUE(http3_serves(http3_port, local.ca_file_, "127.0.0.1"));
 #endif
-        app.stop();
+        app.request_stop();
         runner.join();
     }
     EXPECT_EQ(failure_of([&] {
@@ -681,7 +681,7 @@ TEST(Ruvia, https_identities_are_replaced_at_runtime_for_new_handshakes) {
     ruvia::test::app_run runner(app);
     ASSERT_TRUE(started().try_acquire_for(10s));
     EXPECT_EQ(served_name(io, client, https_endpoint, nullptr), "local");
-    app.stop();
+    app.request_stop();
     runner.join();
 }
 
@@ -826,7 +826,7 @@ TEST(Ruvia, certificate_library_selector_uses_capabilities_rejects_and_preserves
 #endif
     EXPECT_EQ(invalid_metadata.load(), 0u);
     EXPECT_GT(calls.load(), 10u);
-    app.stop();
+    app.request_stop();
     runner.join();
 }
 
@@ -975,7 +975,7 @@ TEST(Ruvia, certificate_selector_retirement_can_schedule_async_application_repla
     retired.get().get();
     EXPECT_FALSE(static_cast<bool>(retirement_failure));
     EXPECT_EQ(served_name(io, client, port.endpoint(), "localhost"), "third");
-    app.stop();
+    app.request_stop();
     runner.join();
 }
 
@@ -1140,7 +1140,7 @@ TEST(Ruvia, public_certificate_preparation_leaves_caller_worker_responsive_and_p
     EXPECT_EQ(served_name(io, client, app_port.endpoint(), "localhost"), "second");
     expect_bad_identity(app.replace_tls_identities(caller.worker(), app_endpoint, {.identities_ = ruvia::tls_fixed_identities{.primary_ = invalid()}}));
     EXPECT_EQ(served_name(io, client, app_port.endpoint(), "localhost"), "second");
-    app.stop();
+    app.request_stop();
     runner.join();
     caller.start(group.shutdown(caller.worker())).get();
     caller.start(single.shutdown()).get();

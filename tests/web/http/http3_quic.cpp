@@ -1399,7 +1399,7 @@ ruvia::task<void> exercise_blocked_migration(ruvia::event_loop_attachment& attac
         if (mode == 0) {
             stop.request_stop();
         } else if (mode == 3) {
-            owner.close();
+            owner.request_stop();
         } else if (mode == 4) {
             attachment.request_stop();
         }

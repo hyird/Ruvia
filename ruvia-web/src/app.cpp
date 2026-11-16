@@ -137,7 +137,7 @@ void application::run() & {
     detail::run_app(*this, *state_);
 }
 
-void application::stop() & {
+void application::request_stop() & {
     auto& state_value = *state_;
     detail::app_runtime_graph* rollback = nullptr;
     {

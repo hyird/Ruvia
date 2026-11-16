@@ -86,7 +86,7 @@ private:
     }
 
     // Public configuration parses the TLS files every pool's context
-    // installs; allocator-rebound copies share them.
+    // installs; normalized owning copies share the parsed files.
     template <typename source_type>
     [[nodiscard]] static client_tls_config_storage tls_storage(const source_type& source_value) {
         if constexpr (std::same_as<source_type, redis_config>) {
@@ -96,8 +96,8 @@ private:
         }
     }
 
-    // Public configuration validation and allocator-rebound copies enter the
-    // same owning construction path; no intermediate string copies or views.
+    // Public configuration validation and normalized copies enter the same
+    // owning construction path; no intermediate string copies or views.
     template <typename source_type>
         requires(std::same_as<source_type, redis_config> || std::same_as<source_type, redis_config_storage>)
     redis_config_storage(validated_config_tag_type, const source_type& source_value) :
@@ -222,7 +222,7 @@ public:
     redis_pool(const redis_pool&) = delete;
     redis_pool& operator=(const redis_pool&) = delete;
 
-    task<void> connect();
+    task<void> connect(operation_options options = {});
     void close_now() noexcept;
     // `reply_timeout` starts when the command is written, so a server-side
     // block window is not consumed by slot acquisition or a lazy connect.
@@ -416,7 +416,7 @@ public:
     redis_client_runtime(const redis_client_runtime&) = delete;
     redis_client_runtime& operator=(const redis_client_runtime&) = delete;
 
-    [[nodiscard]] task<void> connect();
+    [[nodiscard]] task<void> connect(operation_options options = {});
     void close_now() noexcept;
     // An application-registry handle; `io_metrics` is the request's counter
     // block, or null outside a request.

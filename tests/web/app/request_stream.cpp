@@ -986,7 +986,7 @@ TEST(Ruvia, request_stream_listeners_serve_every_protocol_beside_routes) {
     ruvia::test::wait_until([&targets] {
         return failures_with(failure_message) + failures_with(silent_message) + failures_with(abort_message) + failures_with(reset_failure) == 4 * targets.size();
     }, 10s);
-    app.stop();
+    app.request_stop();
     runner.join();
     app.callbacks({.request_stream_ = &serve});
     EXPECT_EQ(middleware_runs().load(), 3 * targets.size() + 1);
@@ -1315,7 +1315,7 @@ TEST(Ruvia, request_stream_body_wait_cancellation_and_reset_are_isolated) {
                         // 等待真实连接退休通知，确定冷任务的宿主已销毁，不靠延时。
                         retiring_connection = std::stoull(std::string(response.header("x-connection-id").value_or("0")));
                         connection_retired = false;
-                        if (server.close_connection(retiring_connection)) {
+                        if (co_await server.close_connection(retiring_connection)) {
                             while (!connection_retired) {
                                 co_await retirement.wait();
                             }

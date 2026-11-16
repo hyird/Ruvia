@@ -108,7 +108,7 @@ ruvia_link_controllers(my_service user_controllers)
 ### 3.1 Shared-Nothing Worker 线程模型
 
 - **单 Worker 独占连接生命周期**：生产应用 `ruvia::app()` 按 `application_worker_config::worker_count_` 启动同构业务 worker 线程。每个 worker 独占一个 standalone Asio `io_context`、控制器实例、中间件实例以及绑定的 `db_client` / `redis_client` 连接池。POSIX 上每个 worker 以 `SO_REUSEPORT` 自行绑定监听器；Windows 由独立 Acceptor 线程以 `SO_EXCLUSIVEADDRUSE` 独占监听。
-- **连接亲和**：socket 一经业务 worker 接收（POSIX 自行 accept；Windows 接管 Acceptor 派发的未绑 IOCP 裸 `SOCKET` 并首次绑定自身 IOCP），其后的 TCP/TLS I/O、HTTP/1 / HTTP/2 / HTTP/3 解析、路由执行与协议定时器全程留在该 worker 线程，无需加锁访问 worker 局部状态（`c.worker_state<T>()`）。`stop()` 直接断开全部连接，不设排空阶段。
+- **连接亲和**：socket 一经业务 worker 接收（POSIX 自行 accept；Windows 接管 Acceptor 派发的未绑 IOCP 裸 `SOCKET` 并首次绑定自身 IOCP），其后的 TCP/TLS I/O、HTTP/1 / HTTP/2 / HTTP/3 解析、路由执行与协议定时器全程留在该 worker 线程，无需加锁访问 worker 局部状态（`c.worker_state<T>()`）。`request_stop()` 直接断开全部连接，不设排空阶段。
 - **跨线程调度与卸载**：
   - 跨 worker 通信通过 `web_worker_ref::post`、`worker_ref::post`（端点取自 `event_loop::worker()`）或有界通道 `make_channel` / `make_one_shot` 进行。
   - 阻塞或 CPU 密集型计算必须通过 `c.run_blocking(...)` 或 `ruvia::run_blocking(...)` 显式卸载到 worker 事件循环的 `blocking_pool`；独立事件循环（`event_loop_pool`、`attach_event_loop`）默认自带 1 线程池，`blocking_pool_` 选项可改为借用比它存活更久的池，或置 `nullptr` 不用池（此时返回 `blocking_status::unavailable`，主机不是 IP 字面量的数据库或 Redis 客户端也无法构造）。**卸载闭包必须按值/移动持有自有数据，严禁在阻塞池线程中访问 `ruvia::context` 或任何 worker 局部状态**。

@@ -192,7 +192,7 @@ TEST(Ruvia, app_multi_listener_tcp_tls_preserves_connection_worker_and_joins_pen
     };
     // A pending stop must retire even a graph whose worker threads never ran.
     configure();
-    app.stop();
+    app.request_stop();
     app.run();
     EXPECT_TRUE(app.workers().empty());
     EXPECT_EQ(observed->live_.load(), 0U);
@@ -202,7 +202,7 @@ TEST(Ruvia, app_multi_listener_tcp_tls_preserves_connection_worker_and_joins_pen
         ruvia::test::app_run run(app);
         if (!observed->started_.try_acquire_for(5s)) {
             // join 在此传播启动失败的原始异常。
-            app.stop();
+            app.request_stop();
             run.join();
             throw std::runtime_error("ownership test app did not start");
         }
@@ -238,7 +238,7 @@ TEST(Ruvia, app_multi_listener_tcp_tls_preserves_connection_worker_and_joins_pen
                 check_connection(secure);
             }
         }
-        app.stop();
+        app.request_stop();
         run.join();
         EXPECT_EQ(observed->live_.load(), 0U);
         EXPECT_EQ(observed->destroyed_.load(), cold_destroyed + (cycle + 1) * 3U);

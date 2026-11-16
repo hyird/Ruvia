@@ -3,8 +3,8 @@
 // first). Redis HASH lookup needs ordinary Redis, not Redis Search.
 // Build with RUVIA_ENABLE_POSTGRESQL=ON and RUVIA_ENABLE_REDIS=ON.
 // Configure the RUVIA_DB_* and RUVIA_REDIS_HOST variables used in main().
-// Each service is constructed and shut down on its own loop. Request data
-// may be borrowed only while that loop and its resource owners remain alive.
+// Each service is constructed and shut down on its own loop. Operation handles
+// borrow their client; mapped entity results own their nested values.
 // backend_config.h backend_tls() reads RUVIA_DB_TLS and RUVIA_REDIS_TLS plus CA/CERT/KEY.
 #include <cstdlib>
 #include <exception>
@@ -67,8 +67,8 @@ struct loop_backends final {
         auto cached = redis_.redis().repository<cached_device>();
         auto device = co_await devices.find_one({.where_ = device::column<"id">() == 1});
         auto cache = co_await cached.find_one({.where_ = cached_device::column<"id">() == "1"});
-        // Results stay in this coroutine on the owner loop and die before
-        // shutdown. Do not return client-PMR objects to the main thread.
+        // Keep worker-affine operations here; mapped entities own their values
+        // independently of the client pools.
         if (device && cache) {
             (void)(device->get<"name">() == cache->get<"name">().view());
         }
@@ -116,8 +116,8 @@ int main(int argc, char** argv) {
                         failure = std::current_exception();
                     }
                     for (auto& backend : backends) {
-                        backend->redis_.close();
-                        backend->db_.close();
+                        backend->redis_.request_stop();
+                        backend->db_.request_stop();
                     }
                 }
             }

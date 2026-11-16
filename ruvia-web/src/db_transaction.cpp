@@ -1,6 +1,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <exception>
 #include <limits>
 #include <memory>
 #include <optional>
@@ -26,6 +27,27 @@
 // rather than leak the connection.
 
 namespace ruvia {
+namespace {
+
+// 事务与流共用逐次准入：预算只能收紧，已停止的用户token不触及连接。
+template <typename guard_type>
+[[nodiscard]] linked_operation_options admit_db_operation(guard_type& operation, operation_options overrides, const stop_token& request_stop = {}) {
+    const bool replaces_user_stop = overrides.stop_token_.has_state();
+    auto effective = override_operation_options(operation.lease().options_, std::move(overrides));
+    if (effective.stop_token_.stop_requested()) {
+        operation.finish_active();
+        throw db_error(backend_error_code::cancelled, std::nullopt, "database operation cancelled");
+    }
+    try {
+        // 未替换用户token时，继承token已包含请求stop，不能重复分配链接。
+        return linked_operation_options(effective, replaces_user_stop ? request_stop : stop_token{});
+    } catch (...) {
+        operation.lease().abort();
+        throw;
+    }
+}
+
+}  // namespace
 
 db_transaction::lease_type::lease_type(detail::db_pool_ref_type client, std::size_t slot, operation_options options) noexcept :
     client_(client),
@@ -45,17 +67,32 @@ db_transaction::db_transaction(db_transaction&& other) noexcept :
     request_link_(std::move(other.request_link_)),
     state_(std::move(other.state_)),
     io_metrics_(other.io_metrics_),
-    registration_(std::move(other.registration_), *this) {}
+    request_stop_(std::move(other.request_stop_)),
+    registration_(std::move(other.registration_), *this) {
+    if (other.option_borrows_ != 0) {
+        std::terminate();
+    }
+}
 
-db_transaction::~db_transaction() = default;
+db_transaction::~db_transaction() {
+    if (option_borrows_ != 0) {
+        std::terminate();
+    }
+}
+
+db_transaction_operations db_transaction::with_options(operation_options options) & {
+    registration_.require_active();
+    return db_transaction_operations(*this, std::move(options));
+}
 
 bool db_transaction::active() const noexcept {
     return state_ != nullptr && state_->active();
 }
 
-void db_transaction::bind_operation_scope(detail::operation_scope& scope, detail::request_io_metrics* io_metrics, std::unique_ptr<const linked_operation_options> request_link) noexcept {
+void db_transaction::bind_operation_scope(detail::operation_scope& scope, detail::request_io_metrics* io_metrics, std::unique_ptr<const linked_operation_options> request_link, stop_token request_stop) noexcept {
     request_link_ = std::move(request_link);
     io_metrics_ = io_metrics;
+    request_stop_ = std::move(request_stop);
     registration_.bind(scope, *this);
 }
 
@@ -75,31 +112,32 @@ detail::db_query_backend db_transaction::query_backend(const lease_type& lease) 
     return detail::db_query_backend{lease.client_, lease.slot_, io_metrics_};
 }
 
-task<db_rows> db_transaction::query_task(const db_query& query) {
+task<db_rows> db_transaction::query_task(const db_query& query, operation_options options) {
     registration_.require_active();
     const auto backend = query_backend(state_->preparation_payload());
     auto plan = detail::db_query_plan::prepare(query, nullptr, backend);
     operation_guard_type operation(*state_);
-    return query_plan_prepared<false>(std::move(plan), backend, std::move(operation));
+    return query_plan_prepared<false>(std::move(plan), backend, std::move(operation), std::move(options), request_stop_);
 }
 
-task<std::pair<db_rows, db_rows>> db_transaction::query_and_count_task(const db_query& query, const db_query& count) {
+task<std::pair<db_rows, db_rows>> db_transaction::query_and_count_task(const db_query& query, const db_query& count, operation_options options) {
     registration_.require_active();
     const auto backend = query_backend(state_->preparation_payload());
     auto plan = detail::db_query_plan::prepare(query, &count, backend);
     operation_guard_type operation(*state_);
-    return query_plan_prepared<true>(std::move(plan), backend, std::move(operation));
+    return query_plan_prepared<true>(std::move(plan), backend, std::move(operation), std::move(options), request_stop_);
 }
 
 template <bool with_count>
-task<detail::db_query_result<with_count>> db_transaction::query_plan_prepared(detail::db_query_plan plan, detail::db_query_backend backend, operation_guard_type pending) {
+task<detail::db_query_result<with_count>> db_transaction::query_plan_prepared(detail::db_query_plan plan, detail::db_query_backend backend, operation_guard_type pending, operation_options options, stop_token request_stop) {
     operation_guard_type operation(std::move(pending));
     operation.start();
+    auto linked = admit_db_operation(operation, std::move(options), request_stop);
     auto& lease_value = operation.lease();
     bool backend_failed = false;
     backend.backend_failed_ = &backend_failed;
     try {
-        auto result_value = co_await detail::execute_db_query_plan<with_count>(std::move(plan), backend, lease_value.options_);
+        auto result_value = co_await detail::execute_db_query_plan<with_count>(std::move(plan), backend, linked.options());
         operation.finish_active();
         co_return result_value;
     } catch (...) {
@@ -113,20 +151,21 @@ task<detail::db_query_result<with_count>> db_transaction::query_plan_prepared(de
 }
 
 template <typename result_type, bool exec_statement>
-task<result_type> db_transaction::run_statement(std::string sql, std::vector<db_value> params) {
+task<result_type> db_transaction::run_statement(std::string sql, std::vector<db_value> params, operation_options options) {
     operation_guard_type operation(*state_);
-    return registration_.attach(statement_task<result_type, exec_statement>(std::move(sql), std::move(params), io_metrics_, std::move(operation)));
+    return registration_.attach(statement_task<result_type, exec_statement>(std::move(sql), std::move(params), io_metrics_, std::move(operation), std::move(options), request_stop_));
 }
 
 template <typename result_type, bool exec_statement>
-task<result_type> db_transaction::statement_task(std::string sql, std::vector<db_value> params, detail::request_io_metrics* io_metrics, operation_guard_type pending) {
+task<result_type> db_transaction::statement_task(std::string sql, std::vector<db_value> params, detail::request_io_metrics* io_metrics, operation_guard_type pending, operation_options options, stop_token request_stop) {
     detail::scoped_request_io_timer timer(io_metrics, detail::request_io_kind::db);
     operation_guard_type operation(std::move(pending));
     operation.start();
+    auto linked = admit_db_operation(operation, std::move(options), request_stop);
     auto& lease_value = operation.lease();
     if constexpr (exec_statement) {
         auto result_value = co_await detail::visit_db_pool(lease_value.client_, [&](auto& client) {
-            return client.execute_on_transaction_slot(lease_value.slot_, std::move(sql), std::move(params), lease_value.options_);
+            return client.execute_on_transaction_slot(lease_value.slot_, std::move(sql), std::move(params), linked.options());
         });
         operation.finish_active();
         if constexpr (!std::is_void_v<result_type>) {
@@ -134,7 +173,7 @@ task<result_type> db_transaction::statement_task(std::string sql, std::vector<db
         }
     } else {
         auto rows = co_await detail::visit_db_pool(lease_value.client_, [&](auto& client) {
-            return client.query_on_transaction_slot(lease_value.slot_, std::move(sql), std::move(params), lease_value.options_);
+            return client.query_on_transaction_slot(lease_value.slot_, std::move(sql), std::move(params), linked.options());
         });
         if constexpr (std::is_same_v<result_type, bool>) {
             try {
@@ -158,48 +197,49 @@ task<result_type> db_transaction::statement_task(std::string sql, std::vector<db
 }
 
 template <bool commit_lease>
-task<void> db_transaction::finish_task(detail::request_io_metrics* io_metrics, operation_guard_type pending) {
+task<void> db_transaction::finish_task(detail::request_io_metrics* io_metrics, operation_guard_type pending, operation_options options, stop_token request_stop) {
     detail::scoped_request_io_timer timer(io_metrics, detail::request_io_kind::db);
     operation_guard_type operation(std::move(pending));
     operation.start();
+    auto linked = admit_db_operation(operation, std::move(options), request_stop);
     auto& lease_value = operation.lease();
     co_await detail::visit_db_pool(lease_value.client_, [&](auto& client) {
-        return commit_lease ? client.commit_transaction(lease_value.slot_, lease_value.options_) : client.rollback_transaction(lease_value.slot_, lease_value.options_);
+        return commit_lease ? client.commit_transaction(lease_value.slot_, linked.options()) : client.rollback_transaction(lease_value.slot_, linked.options());
     });
     operation.finish_closed();
 }
 
-task<db_rows> db_transaction::start_query(std::string sql, std::vector<db_value> params) {
-    return run_statement<db_rows, false>(std::move(sql), std::move(params));
+task<db_rows> db_transaction::start_query(std::string sql, std::vector<db_value> params, operation_options options) {
+    return run_statement<db_rows, false>(std::move(sql), std::move(params), std::move(options));
 }
 
-task<db_exec_result> db_transaction::start_execute(std::string sql, std::vector<db_value> params) {
-    return run_statement<db_exec_result, true>(std::move(sql), std::move(params));
+task<db_exec_result> db_transaction::start_execute(std::string sql, std::vector<db_value> params, operation_options options) {
+    return run_statement<db_exec_result, true>(std::move(sql), std::move(params), std::move(options));
 }
 
-task<void> db_transaction::commit() & {
+task<void> db_transaction::commit(operation_options options) & {
     registration_.require_active();
-    return registration_.attach(finish_task<true>(io_metrics_, operation_guard_type(*state_)));
+    return registration_.attach(finish_task<true>(io_metrics_, operation_guard_type(*state_), std::move(options), request_stop_));
 }
 
-task<void> db_transaction::rollback() & {
+task<void> db_transaction::rollback(operation_options options) & {
     registration_.require_active();
-    return registration_.attach(finish_task<false>(io_metrics_, operation_guard_type(*state_)));
+    return registration_.attach(finish_task<false>(io_metrics_, operation_guard_type(*state_), std::move(options), request_stop_));
 }
 
-task<void> db_transaction::savepoint(std::string_view name) & {
-    return run_identifier_command("SAVEPOINT ", name);
+task<void> db_transaction::savepoint(std::string_view name, operation_options options) & {
+    return run_identifier_command("SAVEPOINT ", name, std::move(options));
 }
 
-task<void> db_transaction::rollback_to_savepoint(std::string_view name) & {
-    return run_identifier_command("ROLLBACK TO SAVEPOINT ", name);
+task<void> db_transaction::rollback_to_savepoint(std::string_view name, operation_options options) & {
+    return run_identifier_command("ROLLBACK TO SAVEPOINT ", name, std::move(options));
 }
 
-task<void> db_transaction::release_savepoint(std::string_view name) & {
-    return run_identifier_command("RELEASE SAVEPOINT ", name);
+task<void> db_transaction::release_savepoint(std::string_view name, operation_options options) & {
+    return run_identifier_command("RELEASE SAVEPOINT ", name, std::move(options));
 }
 
-task<void> db_transaction::run_identifier_command(std::string_view prefix, std::string_view name) {
+task<void> db_transaction::run_identifier_command(std::string_view prefix, std::string_view name, operation_options options) {
     registration_.require_active();
     const auto& lease_value = state_->preparation_payload();
     const auto driver = detail::db_pool_driver(lease_value.client_);
@@ -208,7 +248,7 @@ task<void> db_transaction::run_identifier_command(std::string_view prefix, std::
     sql.reserve(prefix.size() + name.size() + 2);
     sql.append(prefix);
     detail::append_db_identifier(sql, name, driver);
-    return run_statement<void, true>(std::move(sql), std::vector<db_value>{});
+    return run_statement<void, true>(std::move(sql), std::vector<db_value>{}, std::move(options));
 }
 
 void db_transaction::require_postgresql_transaction(std::string_view feature) const {
@@ -217,61 +257,61 @@ void db_transaction::require_postgresql_transaction(std::string_view feature) co
     }
 }
 
-task<void> db_transaction::query_void_prepared(std::string_view sql, std::span<const db_value> params) {
+task<void> db_transaction::query_void_prepared(std::string_view sql, std::span<const db_value> params, operation_options options) {
     registration_.require_active();
     auto statement = prepare_db_statement(sql, params);
-    return run_statement<void, false>(std::move(statement.sql_), std::move(statement.params_));
+    return run_statement<void, false>(std::move(statement.sql_), std::move(statement.params_), std::move(options));
 }
 
-task<bool> db_transaction::query_bool_prepared(std::string_view sql, std::span<const db_value> params) {
+task<bool> db_transaction::query_bool_prepared(std::string_view sql, std::span<const db_value> params, operation_options options) {
     registration_.require_active();
     auto statement = prepare_db_statement(sql, params);
-    return run_statement<bool, false>(std::move(statement.sql_), std::move(statement.params_));
+    return run_statement<bool, false>(std::move(statement.sql_), std::move(statement.params_), std::move(options));
 }
 
-task<void> db_transaction::notify(std::string_view channel, std::string_view payload) & {
+task<void> db_transaction::notify(std::string_view channel, std::string_view payload, operation_options options) & {
     require_postgresql_transaction("database notify");
     auto statement = prepare_db_notify(channel, payload);
-    return run_statement<void, false>(std::move(statement.sql_), std::move(statement.params_));
+    return run_statement<void, false>(std::move(statement.sql_), std::move(statement.params_), std::move(options));
 }
 
-task<void> db_transaction::advisory_lock(std::int64_t key) & {
+task<void> db_transaction::advisory_lock(std::int64_t key, operation_options options) & {
     require_postgresql_transaction("advisory_lock");
     const std::array<db_value, 1> params{db_value(key)};
-    return query_void_prepared("SELECT \"pg_advisory_xact_lock\"($1::bigint)", params);
+    return query_void_prepared("SELECT \"pg_advisory_xact_lock\"($1::bigint)", params, std::move(options));
 }
 
-task<void> db_transaction::advisory_lock(std::int32_t class_id, std::int32_t object_id) & {
+task<void> db_transaction::advisory_lock(std::int32_t class_id, std::int32_t object_id, operation_options options) & {
     require_postgresql_transaction("advisory_lock");
     const std::array<db_value, 2> params{db_value(class_id), db_value(object_id)};
-    return query_void_prepared("SELECT \"pg_advisory_xact_lock\"($1::integer, $2::integer)", params);
+    return query_void_prepared("SELECT \"pg_advisory_xact_lock\"($1::integer, $2::integer)", params, std::move(options));
 }
 
-task<void> db_transaction::advisory_lock(std::string_view key, std::int64_t seed) & {
+task<void> db_transaction::advisory_lock(std::string_view key, std::int64_t seed, operation_options options) & {
     require_postgresql_transaction("advisory_lock");
     const std::array<db_value, 2> params{db_value(key), db_value(seed)};
-    return query_void_prepared("SELECT \"pg_advisory_xact_lock\"(\"hashtextextended\"($1::text, $2::bigint))", params);
+    return query_void_prepared("SELECT \"pg_advisory_xact_lock\"(\"hashtextextended\"($1::text, $2::bigint))", params, std::move(options));
 }
 
-task<bool> db_transaction::try_advisory_lock(std::int64_t key) & {
+task<bool> db_transaction::try_advisory_lock(std::int64_t key, operation_options options) & {
     require_postgresql_transaction("try_advisory_lock");
     const std::array<db_value, 1> params{db_value(key)};
-    return query_bool_prepared("SELECT \"pg_try_advisory_xact_lock\"($1::bigint)", params);
+    return query_bool_prepared("SELECT \"pg_try_advisory_xact_lock\"($1::bigint)", params, std::move(options));
 }
 
-task<bool> db_transaction::try_advisory_lock(std::int32_t class_id, std::int32_t object_id) & {
+task<bool> db_transaction::try_advisory_lock(std::int32_t class_id, std::int32_t object_id, operation_options options) & {
     require_postgresql_transaction("try_advisory_lock");
     const std::array<db_value, 2> params{db_value(class_id), db_value(object_id)};
-    return query_bool_prepared("SELECT \"pg_try_advisory_xact_lock\"($1::integer, $2::integer)", params);
+    return query_bool_prepared("SELECT \"pg_try_advisory_xact_lock\"($1::integer, $2::integer)", params, std::move(options));
 }
 
-task<bool> db_transaction::try_advisory_lock(std::string_view key, std::int64_t seed) & {
+task<bool> db_transaction::try_advisory_lock(std::string_view key, std::int64_t seed, operation_options options) & {
     require_postgresql_transaction("try_advisory_lock");
     const std::array<db_value, 2> params{db_value(key), db_value(seed)};
-    return query_bool_prepared("SELECT \"pg_try_advisory_xact_lock\"(\"hashtextextended\"($1::text, $2::bigint))", params);
+    return query_bool_prepared("SELECT \"pg_try_advisory_xact_lock\"(\"hashtextextended\"($1::text, $2::bigint))", params, std::move(options));
 }
 
-task<void> db_transaction::declare_cursor(std::string_view name, std::string_view sql, std::span<const db_value> params, bool scroll) & {
+task<void> db_transaction::declare_cursor(std::string_view name, std::string_view sql, std::span<const db_value> params, bool scroll, operation_options options) & {
     require_postgresql_transaction("declare_cursor");
     validate_db_sql_text(sql);
     detail::validate_db_identifier(name, db_driver::postgresql);
@@ -283,10 +323,10 @@ task<void> db_transaction::declare_cursor(std::string_view name, std::string_vie
     command.append(mode);
     command.append(sql);
     auto owned_params = detail::clone_db_values(params);
-    return run_statement<void, true>(std::move(command), std::move(owned_params));
+    return run_statement<void, true>(std::move(command), std::move(owned_params), std::move(options));
 }
 
-task<db_rows> db_transaction::fetch_cursor(std::string_view name, std::uint64_t count) & {
+task<db_rows> db_transaction::fetch_cursor(std::string_view name, std::uint64_t count, operation_options options) & {
     require_postgresql_transaction("fetch_cursor");
     if (count > static_cast<std::uint64_t>((std::numeric_limits<std::int64_t>::max)())) {
         throw std::invalid_argument("cursor fetch count exceeds signed 64-bit range");
@@ -298,12 +338,12 @@ task<db_rows> db_transaction::fetch_cursor(std::string_view name, std::uint64_t 
     detail::append_db_number(sql, count);
     sql.append(" FROM ");
     detail::append_db_identifier(sql, name, db_driver::postgresql);
-    return run_statement<db_rows, false>(std::move(sql), std::vector<db_value>{});
+    return run_statement<db_rows, false>(std::move(sql), std::vector<db_value>{}, std::move(options));
 }
 
-task<void> db_transaction::close_cursor(std::string_view name) & {
+task<void> db_transaction::close_cursor(std::string_view name, operation_options options) & {
     require_postgresql_transaction("close_cursor");
-    return run_identifier_command("CLOSE ", name);
+    return run_identifier_command("CLOSE ", name, std::move(options));
 }
 
 void db_transaction::reset() noexcept {
@@ -362,24 +402,6 @@ void db_stream_result::expire_capability() noexcept {
     reset();
 }
 
-namespace {
-
-// The stream's handle options with this operation's own: its timeout only
-// tightens, a supplied token replaces the inherited one. An already-stopped
-// token gives the lease back before it reaches the connection, so the stream
-// stays usable.
-template <typename guard_type>
-[[nodiscard]] operation_options admit_stream_operation(guard_type& operation, operation_options operation_value) {
-    auto effective = override_operation_options(operation.lease().options_, std::move(operation_value));
-    if (effective.stop_token_.stop_requested()) {
-        operation.finish_active();
-        throw db_error(backend_error_code::cancelled, std::nullopt, "database stream operation cancelled");
-    }
-    return effective;
-}
-
-}  // namespace
-
 task<std::optional<db_row>> db_stream_result::read(operation_options operation) & {
     registration_.require_active();
     return registration_.attach(read_task(io_metrics_, operation_guard_type(state_->operation_), state_->column_names_, std::move(operation)));
@@ -389,10 +411,10 @@ task<std::optional<db_row>> db_stream_result::read_task(detail::request_io_metri
     detail::scoped_request_io_timer timer(io_metrics, detail::request_io_kind::db);
     operation_guard_type operation(std::move(pending));
     operation.start();
-    auto effective = admit_stream_operation(operation, std::move(operation_value));
+    auto effective = admit_db_operation(operation, std::move(operation_value));
     auto& lease_value = operation.lease();
     auto row = co_await detail::visit_db_pool(lease_value.client_, [&](auto& client) {
-        return client.read_stream_row(lease_value.slot_, lease_value.fields_, column_names, effective);
+        return client.read_stream_row(lease_value.slot_, lease_value.fields_, column_names, effective.options());
     });
     if (row) {
         operation.finish_active();
@@ -414,10 +436,10 @@ task<void> db_stream_result::close_task(detail::request_io_metrics* io_metrics, 
         co_return;
     }
     operation.start();
-    auto effective = admit_stream_operation(operation, std::move(operation_value));
+    auto effective = admit_db_operation(operation, std::move(operation_value));
     auto& lease_value = operation.lease();
     co_await detail::visit_db_pool(lease_value.client_, [&](auto& client) {
-        return client.close_stream(lease_value.slot_, effective);
+        return client.close_stream(lease_value.slot_, effective.options());
     });
     operation.finish_closed();
 }

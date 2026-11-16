@@ -226,7 +226,7 @@ TEST(Ruvia, file_failures_before_the_head_get_an_error_response_and_stalled_open
         }, 5s);
     }
     release_pool.store(true);
-    app.stop();
+    app.request_stop();
     runner.join();
     EXPECT_TRUE(runner.failure() == nullptr);
 
@@ -254,7 +254,7 @@ TEST(Ruvia, file_failures_before_the_head_get_an_error_response_and_stalled_open
             }, 5s);
         }
     }
-    app.stop();
+    app.request_stop();
     pool_less_runner.join();
     EXPECT_TRUE(pool_less_runner.failure() == nullptr);
     app.blocking_pool(ruvia::blocking_pool_options{});

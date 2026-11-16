@@ -408,7 +408,7 @@ TEST(Ruvia, readded_http3_listener_serves_new_and_retired_connections_on_every_w
         }
     }
     current.clear();
-    app.stop();
+    app.request_stop();
     runner.join();
 }
 
@@ -449,7 +449,7 @@ TEST(Ruvia, readded_http3_listener_without_connections_releases_its_udp_sockets)
         } while (std::chrono::steady_clock::now() < deadline);
         EXPECT_FALSE(error) << error.message();
     }
-    app.stop();
+    app.request_stop();
     runner.join();
 }
 #endif
@@ -530,7 +530,7 @@ TEST(Ruvia, listen_adopts_inherited_tcp_sockets_and_closes_rejected_ones) {
         ruvia::test::app_run runner(app);
         ASSERT_TRUE(started().try_acquire_for(10s));
         EXPECT_EQ(plain_body(io, exclusive_endpoint, "/hello"), "hello");
-        app.stop();
+        app.request_stop();
         runner.join();
     }
 
@@ -590,7 +590,7 @@ TEST(Ruvia, listen_adopts_inherited_tcp_sockets_and_closes_rejected_ones) {
         for (int request = 0; request < 8; ++request) {
             EXPECT_EQ(plain_body(io, endpoint, "/hello"), "hello");
         }
-        app.stop();
+        app.request_stop();
         runner.join();
     }
 }
@@ -625,7 +625,7 @@ TEST(Ruvia, listen_adopts_inherited_https_and_http3_sockets) {
         EXPECT_EQ(https_served_name(io, client, https), "adopted");
         EXPECT_TRUE(http3_serves(http3, identity));
     }
-    app.stop();
+    app.request_stop();
     runner.join();
 }
 #endif
@@ -700,7 +700,7 @@ TEST(Ruvia, duplicated_listener_sockets_serve_a_successor) {
             EXPECT_TRUE(listening(fd));
         }
         EXPECT_EQ(plain_body(io, http, "/hello"), "hello");
-        app.stop();
+        app.request_stop();
         runner.join();
     }
 
@@ -723,7 +723,7 @@ TEST(Ruvia, duplicated_listener_sockets_serve_a_successor) {
         EXPECT_TRUE(http3_serves(http3, identity));
 #endif
     }
-    app.stop();
+    app.request_stop();
     runner.join();
 }
 
@@ -777,7 +777,7 @@ TEST(Ruvia, added_listeners_adopt_inherited_sockets) {
         EXPECT_EQ(plain_body(io, adopted, "/hello"), "hello");
     }
     EXPECT_EQ(plain_body(io, base, "/hello"), "hello");
-    app.stop();
+    app.request_stop();
     runner.join();
 }
 #endif
@@ -893,7 +893,7 @@ TEST(Ruvia, listeners_are_added_while_running_and_kept_for_later_runs) {
         EXPECT_EQ(std::ranges::count(outcomes, std::string("none")), 1);
         EXPECT_EQ(std::ranges::count(outcomes, std::string("invalid_argument")), 1);
         EXPECT_EQ(plain_body(io, racing, "/hello"), "hello");
-        app.stop();
+        app.request_stop();
         runner.join();
     }
 
@@ -907,7 +907,7 @@ TEST(Ruvia, listeners_are_added_while_running_and_kept_for_later_runs) {
 #if defined(RUVIA_ENABLE_HTTP3)
     EXPECT_TRUE(http3_serves(http3, second));
 #endif
-    app.stop();
+    app.request_stop();
     runner.join();
 }
 
@@ -998,7 +998,7 @@ TEST(Ruvia, removed_listeners_refuse_new_connections_and_serve_established_ones)
         EXPECT_TRUE(serves_hello(established_http3));
 #endif
         EXPECT_EQ(plain_body(io, kept, "/hello"), "hello");
-        app.stop();
+        app.request_stop();
         runner.join();
     }
 
@@ -1007,7 +1007,7 @@ TEST(Ruvia, removed_listeners_refuse_new_connections_and_serve_established_ones)
     EXPECT_EQ(plain_body(io, kept, "/hello"), "hello");
     EXPECT_TRUE(refuses(io, removed));
     EXPECT_TRUE(refuses(io, secure));
-    app.stop();
+    app.request_stop();
     runner.join();
 }
 
@@ -1071,7 +1071,7 @@ TEST(Ruvia, mixed_listener_shares_one_socket_group_and_preserves_transport_throu
 #endif
         EXPECT_TRUE(serves_hello(established));
         EXPECT_TRUE(serves_hello(*established_tls));
-        app.stop();
+        app.request_stop();
         runner.join();
     }
     config.tls_ = tls_of(second);
@@ -1088,7 +1088,7 @@ TEST(Ruvia, mixed_listener_shares_one_socket_group_and_preserves_transport_throu
     }
     control_loop().start(app.remove_listener(control_loop().worker(), target)).get();
     EXPECT_TRUE(refuses(io, endpoint));
-    app.stop();
+    app.request_stop();
     successor.join();
 }
 
@@ -1113,7 +1113,7 @@ TEST(Ruvia, mixed_listener_redirects_only_plaintext_and_accepts_fragmented_clien
     stream.handshake(asio::ssl::stream_base::client);
     EXPECT_TRUE(serves_hello(stream));
     EXPECT_EQ(https_served_name(io, client, endpoint), "mixed-redirect");
-    app.stop();
+    app.request_stop();
     runner.join();
 }
 
@@ -1146,7 +1146,7 @@ TEST(Ruvia, mixed_listener_detection_and_partial_handshakes_share_deadlines_and_
     pending_tls.connect(endpoint);
     asio::write(pending_tls, asio::buffer(std::string_view("\x16", 1)));
     const auto stopped_at = std::chrono::steady_clock::now();
-    app.stop();
+    app.request_stop();
     runner.join();
     EXPECT_LT(std::chrono::steady_clock::now() - stopped_at, 10s);
     EXPECT_TRUE(eventually_closed(pending_detection));

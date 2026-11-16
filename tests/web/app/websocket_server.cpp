@@ -1154,7 +1154,7 @@ void exercise_protocol(ruvia::http_client_versions protocol) {
                     co_await pending.open(client, destination, "/host");
                     // Stopping this host must wake the accepted WebSocket read,
                     // retire its borrowed facade, and join every scanner write.
-                    server.stop();
+                    server.request_stop();
                     co_await server.shutdown();
                     EXPECT_EQ(observed.entered_, observed.retired_);
                     EXPECT_EQ(server.stats().active_connections_, 0U);

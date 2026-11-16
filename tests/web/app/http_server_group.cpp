@@ -689,7 +689,7 @@ TEST(Ruvia, independent_group_tls_preparation_keeps_caller_live_and_close_cancel
     auto timer_root = runtime.loops_[0].start(timer());
     const auto progress = tick.wait_for(2s);
     const auto queued = runtime.pool_.stats().queued_;
-    group.stop();
+    group.request_stop();
     held.release();
     EXPECT_EQ(progress, std::future_status::ready);
     EXPECT_GT(queued, 0U);

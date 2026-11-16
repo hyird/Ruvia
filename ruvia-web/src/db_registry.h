@@ -39,7 +39,7 @@ public:
     db_registry(const db_registry&) = delete;
     db_registry& operator=(const db_registry&) = delete;
 
-    task<void> connect();
+    task<void> connect(operation_options options = {});
     void close_now() noexcept;
     [[nodiscard]] bool empty() const noexcept;
     // `io_metrics` is the request's counter block, or null outside a request.

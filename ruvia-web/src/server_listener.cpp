@@ -366,7 +366,7 @@ namespace {
     return encoded;
 }
 
-void append_listen_config(std::vector<detail::http_server_listener_definition>& replacement, const listen_config& config) {
+[[nodiscard]] asio::ip::address validate_listen_config(const listen_config& config) {
     const auto address = detail::normalize_listen_address(config.address_.view());
     if (config.ipv6_only_ && !address.is_v6()) {
         throw std::invalid_argument("IPV6_V6ONLY requires an IPv6 listen address");
@@ -376,7 +376,6 @@ void append_listen_config(std::vector<detail::http_server_listener_definition>& 
     }
     detail::ensure_non_zero_optional_port(config.http_, "HTTP listen port must not be zero");
     detail::ensure_non_zero_optional_port(config.https_, "HTTPS listen port must not be zero");
-    const bool mixed = config.http_.has_value() && config.http_ == config.https_;
     if (config.auto_https_redirect_ && (!config.http_.has_value() || !config.https_.has_value())) {
         throw std::invalid_argument("automatic HTTPS redirect requires both HTTP and HTTPS ports");
     }
@@ -387,8 +386,12 @@ void append_listen_config(std::vector<detail::http_server_listener_definition>& 
     if (config.proxy_protocol_ && config.http3_) {
         throw std::invalid_argument("PROXY protocol is not supported on HTTP/3 listeners");
     }
-    const auto connection_alpn = connection_dispatch_alpn(config);
-    std::optional<detail::http_server_listener_definition::http3_service> http3;
+    if (config.dispatch_ || config.tls_.alpn_.empty()) {
+        (void)connection_dispatch_alpn(config);
+    }
+    if (config.https_) {
+        detail::validate_http_server_tls(config.tls_);
+    }
     if (config.http3_.has_value()) {
 #if defined(RUVIA_ENABLE_HTTP3)
         detail::ensure_non_zero_optional_port(config.http3_, "HTTP/3 listen port must not be zero");
@@ -398,11 +401,20 @@ void append_listen_config(std::vector<detail::http_server_listener_definition>& 
         if (config.http3_alt_svc_max_age_.count() <= 0) {
             throw std::invalid_argument("HTTP/3 Alt-Svc max age must be greater than zero");
         }
-        // The secret is generated per validated configuration.
-        http3.emplace(detail::http_server_listener_definition::http3_service{.port_ = config.http3_->value(), .alt_svc_max_age_ = config.http3_alt_svc_max_age_, .early_data_ = config.http3_early_data_, .retry_ = config.http3_retry_, .secret_ = {}});
 #else
         throw std::invalid_argument("HTTP/3 listen port requires a build with RUVIA_ENABLE_HTTP3");
 #endif
+    }
+    return address;
+}
+
+void append_listen_config(std::vector<detail::http_server_listener_definition>& replacement, const listen_config& config) {
+    const auto address = validate_listen_config(config);
+    const bool mixed = config.http_.has_value() && config.http_ == config.https_;
+    const auto connection_alpn = connection_dispatch_alpn(config);
+    std::optional<detail::http_server_listener_definition::http3_service> http3;
+    if (config.http3_) {
+        http3.emplace(detail::http_server_listener_definition::http3_service{.port_ = config.http3_->value(), .alt_svc_max_age_ = config.http3_alt_svc_max_age_, .early_data_ = config.http3_early_data_, .retry_ = config.http3_retry_, .secret_ = {}});
     }
 
     const auto ensure_unique_endpoint = [&](const asio::ip::tcp::endpoint& endpoint) {
@@ -516,6 +528,9 @@ void validate_owned_inherited_sockets(std::span<const listen_config> configs) {
         }
         const auto address = detail::normalize_listen_address(config.address_.view());
         const auto& sockets = *config.inherited_sockets_;
+        if (config.http_ && config.http_ == config.https_ && !sockets.http_.empty()) {
+            throw std::invalid_argument("a mixed HTTP/HTTPS listener inherits its single TCP socket group in https_, not http_");
+        }
         const auto tcp = [&](const auto& handles, const auto& port) {
             if (!handles.empty() && !port) {
                 throw std::invalid_argument("inherited TCP sockets require their service");
@@ -684,6 +699,32 @@ void detail::owned_listen_configs::own_addresses() {
         addresses_.emplace_back(config.address_.view());
         config.address_ = addresses_.back();
     }
+    std::vector<asio::ip::tcp::endpoint> tcp;
+    std::vector<asio::ip::udp::endpoint> udp;
+    tcp.reserve(configs_.size() * 2);
+    udp.reserve(configs_.size());
+    for (const auto& config : configs_) {
+        const auto address = validate_listen_config(config);
+        const std::array ports{config.http_, config.https_};
+        for (std::size_t index = 0; index != ports.size(); ++index) {
+            const auto port = ports[index];
+            if (!port || (index == 1 && port == config.http_)) {
+                continue;
+            }
+            const asio::ip::tcp::endpoint endpoint(address, port->value());
+            if (std::ranges::find(tcp, endpoint) != tcp.end()) {
+                throw std::invalid_argument("duplicate listen endpoint");
+            }
+            tcp.push_back(endpoint);
+        }
+        if (config.http3_) {
+            const asio::ip::udp::endpoint endpoint(address, config.http3_->value());
+            if (std::ranges::find(udp, endpoint) != udp.end()) {
+                throw std::invalid_argument("duplicate HTTP/3 listen endpoint");
+            }
+            udp.push_back(endpoint);
+        }
+    }
 }
 
 detail::owned_listen_configs::~owned_listen_configs() {
@@ -710,18 +751,20 @@ application& application::listen(listen_config config) & {
 
 application& application::listen(std::span<const listen_config> configs) & {
     const tls_secret_span_cleanser secret_cleanser(configs);
-    try {
-        std::lock_guard lock(state_->mutex_);
-        detail::ensure_app_not_running(state_->lifecycle_.active(), "cannot change listeners while app is running");
-    } catch (...) {
-        close_unowned_inherited_sockets(configs, {});
-        throw;
+    auto replacement = std::make_unique<detail::owned_listen_configs>(configs);
+    for (auto& config : replacement->configs_) {
+        if (!config.dispatch_) {
+            config.dispatch_ = listener_dispatch::routes;
+            (void)connection_dispatch_alpn(config);
+        }
     }
-    auto replacement = detail::load_server_listeners(configs);
-    // The replaced definitions retire with `replacement`, after the lock,
-    // closing inherited sockets no run consumed.
-    detail::mutate_stopped_app(*this, *state_, "cannot change listeners while app is running", [&replacement](detail::app_state& state_value) {
-        state_value.listeners_.swap(replacement);
+    if (configs.empty()) {
+        throw std::invalid_argument("listen config list must not be empty");
+    }
+    std::vector<detail::http_server_listener_definition> retired;
+    detail::mutate_stopped_app(*this, *state_, "cannot change listeners while app is running", [&replacement, &retired](detail::app_state& state_value) {
+        state_value.staged_listeners_.swap(replacement);
+        retired.swap(state_value.listeners_);
     });
     return *this;
 }

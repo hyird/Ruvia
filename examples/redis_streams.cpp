@@ -36,7 +36,7 @@ public:
 private:
     ruvia::task<ruvia::http_response> setup(ruvia::context& c) {
         // Commands without a typed convenience API still use the same bounded
-        // pool, cancellation token, PMR result ownership, and error handling.
+        // pool, cancellation token, owning standard results, and error handling.
         auto created = co_await c.redis().command("XGROUP", "CREATE", stream_key, group_name, "0", "MKSTREAM");
         // command() returns Redis error replies as values; BUSYGROUP means the
         // group already exists and is reported, never recreated.

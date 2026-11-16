@@ -43,6 +43,21 @@ RUVIA_DB_ENTITY(owned_container_entity, "owned_containers", ruvia::db_column<"te
 
 RUVIA_DB_ENTITY(numeric_input_entity, "numeric_input", ruvia::db_column<"signed_value", std::int32_t, ruvia::db_column_options{.nullable_ = true}>, ruvia::db_column<"unsigned_value", std::uint32_t, ruvia::db_column_options{.nullable_ = true}>, ruvia::db_column<"real_value", float, ruvia::db_column_options{.nullable_ = true}>, ruvia::db_column<"values", std::vector<std::int32_t>>, ruvia::db_column<"optional_values", std::vector<std::optional<std::int32_t>>>, ruvia::db_column<"real_values", std::vector<float>>)
 
+template <typename receiver_type>
+concept can_derive_db_options = requires(receiver_type&& receiver) {
+    std::forward<receiver_type>(receiver).with_options(ruvia::operation_options{});
+};
+template <typename receiver_type>
+concept has_db_close = requires(receiver_type& receiver) { receiver.close(); };
+
+static_assert(can_derive_db_options<ruvia::db_transaction&>);
+static_assert(!can_derive_db_options<const ruvia::db_transaction&>);
+static_assert(!can_derive_db_options<ruvia::db_transaction>);
+static_assert(can_derive_db_options<const ruvia::db_transaction_operations&>);
+static_assert(can_derive_db_options<ruvia::db_transaction_operations>);
+static_assert(!has_db_close<ruvia::db_client>);
+static_assert(has_db_close<ruvia::db_stream_result>);
+
 TEST(Ruvia, db_entity_tracks_unset_null_and_value_states) {
     entity entity;
     EXPECT_TRUE(!entity.is_set<"id">());
@@ -678,6 +693,62 @@ TEST(Ruvia, db_stream_read_takes_its_own_operation_options) {
     }
 }
 
+template <typename result_type>
+ruvia::task<void> expect_cancelled_db_operation(ruvia::task<result_type> operation) {
+    bool cancelled = false;
+    try {
+        (void)co_await std::move(operation);
+    } catch (const ruvia::db_error& error) {
+        cancelled = error.code() == ruvia::backend_error_code::cancelled;
+    }
+    EXPECT_TRUE(cancelled);
+}
+
+TEST(Ruvia, db_transaction_every_wait_accepts_owned_operation_options_without_consuming_a_precancelled_lease) {
+    using namespace ruvia;
+    using peer_type = test::backend_startup_peer;
+    peer_type peer(peer_type::protocol::postgresql, false, peer_type::after_startup::idle,
+        {{.column_ = "", .command_ = "BEGIN", .status_ = 'T'}, {.column_ = "", .command_ = "COMMIT"}});
+    auto& io = test::new_test_io_context();
+    auto attachment = attach_event_loop(io);
+    db_client client(attachment.loop(), peer.config());
+    test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
+        auto transaction = co_await connected.db().begin_transaction();
+        stop_source stop;
+        operation_options options{.stop_token_ = stop.token()};
+        auto cold = transaction.with_options(options).query<"SELECT $1">(1);
+        options = {};
+        stop.request_stop();
+        co_await expect_cancelled_db_operation(std::move(cold));
+        options.stop_token_ = stop.token();
+        const auto commands = transaction.with_options(options);
+        const auto copied = commands;
+        co_await expect_cancelled_db_operation(copied.with_options({}).query("SELECT $1", 2));
+        co_await expect_cancelled_db_operation(commands.execute<"UPDATE records SET v = $1">(3));
+        co_await expect_cancelled_db_operation(commands.repository<entity>().find());
+        co_await expect_cancelled_db_operation(commands.repository<entity>().find_and_count());
+        co_await expect_cancelled_db_operation(commands.repository<entity>().delete_by(entity::column<"id">() == 1));
+        co_await expect_cancelled_db_operation(transaction.commit(options));
+        co_await expect_cancelled_db_operation(transaction.rollback(options));
+        co_await expect_cancelled_db_operation(transaction.savepoint("s", options));
+        co_await expect_cancelled_db_operation(transaction.rollback_to_savepoint("s", options));
+        co_await expect_cancelled_db_operation(transaction.release_savepoint("s", options));
+        co_await expect_cancelled_db_operation(transaction.notify("events", "", options));
+        co_await expect_cancelled_db_operation(transaction.advisory_lock(std::int64_t{1}, options));
+        co_await expect_cancelled_db_operation(transaction.advisory_lock(1, 2, options));
+        co_await expect_cancelled_db_operation(transaction.advisory_lock("key", 0, options));
+        co_await expect_cancelled_db_operation(transaction.try_advisory_lock(std::int64_t{1}, options));
+        co_await expect_cancelled_db_operation(transaction.try_advisory_lock(1, 2, options));
+        co_await expect_cancelled_db_operation(transaction.try_advisory_lock("key", 0, options));
+        co_await expect_cancelled_db_operation(transaction.declare_cursor("c", "SELECT 1", std::span<const db_value>{}, false, options));
+        co_await expect_cancelled_db_operation(transaction.fetch_cursor("c", 1, options));
+        co_await expect_cancelled_db_operation(transaction.close_cursor("c", options));
+        EXPECT_TRUE(transaction.active());
+        co_await transaction.commit();
+    });
+    EXPECT_EQ(peer.postgres_parses().size(), std::size_t{2});
+}
+
 TEST(Ruvia, db_transaction_savepoint_commands_quote_identifiers_and_keep_transaction_active) {
     using namespace ruvia;
     test::backend_startup_peer peer(test::backend_startup_peer::protocol::postgresql, false, test::backend_startup_peer::after_startup::idle, std::vector<ruvia::test::backend_startup_peer::postgres_reply>({{.column_ = std::string(""), .command_ = std::string("BEGIN"), .status_ = 'T'}, {.column_ = std::string(""), .command_ = std::string("SAVEPOINT"), .status_ = 'T'}, {.column_ = std::string(""), .command_ = std::string("ROLLBACK"), .status_ = 'T'}, {.column_ = std::string(""), .command_ = std::string("RELEASE"), .status_ = 'T'}, {.column_ = std::string(""), .command_ = std::string("COMMIT")}}));
@@ -883,6 +954,40 @@ void drive_client(peer_type& peer, ruvia::db_driver driver, std::optional<ruvia:
     waits.join();
 }
 
+TEST(Ruvia, db_transaction_operation_views_tighten_inherited_budgets_on_every_execution_route) {
+    using namespace ruvia;
+    for (const auto driver : drivers) {
+        for (int route = 0; route != 4; ++route) {
+            auto peer = make_peer(driver, {step::begin, step::held_row});
+            drive_client(*peer, driver, std::chrono::seconds(5), [&](db_client& connected) -> task<void> {
+                auto transaction = co_await connected.db().with_options({.timeout_ = std::chrono::milliseconds(200)}).begin_transaction();
+                const auto commands = transaction.with_options({.timeout_ = std::chrono::milliseconds(100)});
+                const auto derived = commands.with_options({.timeout_ = std::chrono::seconds(5)});
+                const auto started = std::chrono::steady_clock::now();
+                std::optional<backend_error_code> code;
+                try {
+                    if (route == 0) {
+                        (void)co_await derived.query("SELECT v FROM records");
+                    } else if (route == 1) {
+                        (void)co_await derived.execute("UPDATE records SET v = 1");
+                    } else if (route == 2) {
+                        (void)co_await derived.repository<entity>().find_and_count();
+                    } else {
+                        co_await transaction.commit({.timeout_ = std::chrono::seconds(5)});
+                    }
+                } catch (const db_error& error) {
+                    code = error.code();
+                }
+                EXPECT_TRUE(code == backend_error_code::timeout);
+                EXPECT_TRUE(std::chrono::steady_clock::now() - started < std::chrono::seconds(1));
+                EXPECT_TRUE(!transaction.active());
+                peer->release_replies();
+                co_await await_disconnects(connected.worker(), *peer);
+            });
+        }
+    }
+}
+
 TEST(Ruvia, db_config_transaction_timeout_defaults_to_one_minute_and_rejects_non_positive_values) {
     using namespace ruvia;
     EXPECT_TRUE(db_config{}.transaction_timeout_->value() == std::chrono::milliseconds(60000));
@@ -954,7 +1059,7 @@ TEST(Ruvia, db_transaction_statement_is_bounded_by_the_remaining_transaction_tim
             (void)co_await sleep_for(connected.worker(), lease / 2);
             const auto started = std::chrono::steady_clock::now();
             try {
-                (void)co_await transaction.query("SELECT v FROM records");
+                (void)co_await transaction.with_options({.timeout_ = std::chrono::seconds(5)}).query("SELECT v FROM records");
             } catch (const db_error& error) {
                 code = error.code();
             }
@@ -1122,7 +1227,7 @@ TEST(Ruvia, db_client_rejects_duplicate_connect_without_closing_connected_client
     EXPECT_TRUE(std::move(ready).get());
 }
 
-TEST(Ruvia, db_client_fresh_close_and_loop_stop_share_worker_completion) {
+TEST(Ruvia, db_client_fresh_request_stop_and_loop_stop_share_worker_completion) {
     for (int iteration = 0; iteration < 64; ++iteration) {
         ruvia::event_loop_pool pool({.loop_count_ = 1});
         ruvia::db_client client(pool.loop(0), {.driver_ = ruvia::db_driver::postgresql});
@@ -1130,7 +1235,7 @@ TEST(Ruvia, db_client_fresh_close_and_loop_stop_share_worker_completion) {
         std::barrier rendezvous(2);
         std::thread closer([&] {
             rendezvous.arrive_and_wait();
-            client.close();
+            client.request_stop();
         });
         rendezvous.arrive_and_wait();
         pool.request_stop();

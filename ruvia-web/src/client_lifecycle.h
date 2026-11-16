@@ -11,6 +11,7 @@
 #include <asio/bind_executor.hpp>
 
 #include "event_loop.h"
+#include "operation_options.h"
 #include "operation_scope.h"
 #include "stop_token.h"
 #include "task.h"
@@ -77,8 +78,8 @@ public:
         }
     }
 
-    [[nodiscard]] task<void> connect() {
-        return connect_owned(owner_.shared_from_this());
+    [[nodiscard]] task<void> connect(operation_options options = {}) {
+        return connect_owned(owner_.shared_from_this(), std::move(options));
     }
 
     void require_ready() const {
@@ -140,11 +141,11 @@ private:
         }
     }
 
-    [[nodiscard]] static task<void> connect_owned(std::shared_ptr<owner_type> state_value) {
-        co_await state_value->lifecycle_.connect_on_worker();
+    [[nodiscard]] static task<void> connect_owned(std::shared_ptr<owner_type> state_value, operation_options options) {
+        co_await state_value->lifecycle_.connect_on_worker(std::move(options));
     }
 
-    task<void> connect_on_worker() {
+    task<void> connect_on_worker(operation_options options) {
         require_current(" must connect on its bound event loop");
         auto expected = client_phase::fresh;
         if (!phase_.compare_exchange_strong(expected, client_phase::connecting, std::memory_order_acq_rel, std::memory_order_acquire)) {
@@ -159,7 +160,9 @@ private:
             if (stop_.stop_requested() || !worker_.accepting()) {
                 throw std::runtime_error(message(" closed before connecting"));
             }
-            co_await owner_.backend().connect();
+            // Host shutdown closes the backend independently. Linking that
+            // stop into user cancellation would misreport closing as cancelled.
+            co_await owner_.backend().connect(std::move(options));
             expected = client_phase::connecting;
             if (!phase_.compare_exchange_strong(expected, client_phase::connected, std::memory_order_acq_rel, std::memory_order_acquire)) {
                 throw std::runtime_error(message(" stopped while connecting"));

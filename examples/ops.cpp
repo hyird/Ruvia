@@ -100,7 +100,7 @@ int main() {
         })
             .on_stop([] {
             // Stop external producers here. Worker teardown is joined after
-            // this hook; other threads should only request application::stop().
+            // this hook; other threads should only request application::request_stop().
             std::puts("admission closed; joining workers");
         })
             .callbacks({

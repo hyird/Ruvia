@@ -179,7 +179,7 @@ TEST(Ruvia, a_peer_reset_during_a_handlers_transport_write_is_a_normal_connectio
         // The failed write ended each handler; none ran to its end.
         EXPECT_EQ(handlers_finished.load(), std::size_t{0});
     }
-    app.stop();
+    app.request_stop();
     runner.join();
     EXPECT_TRUE(runner.failure() == nullptr);
 }

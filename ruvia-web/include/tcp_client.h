@@ -44,7 +44,7 @@ struct tcp_client_config final {
 
 // Address-stable owner of one outbound byte stream, with the shared DNS,
 // Happy Eyeballs and SAN-authenticating TLS/mTLS transport.
-// Operations run on worker(); construction, abort and destruction may run on
+// Operations run on worker(); construction, request_stop and destruction may run on
 // another thread. Connect once; one read and one write may run concurrently,
 // but overlapping operations in the same direction throw std::logic_error.
 // Timeouts begin when awaited; each call's `operation` may tighten the configured
@@ -65,7 +65,7 @@ public:
     [[nodiscard]] task<void> connect(operation_options operation = {}) &;
     task<void> connect(operation_options = {}) && = delete;
     // Owner loop, after connect(). Empty for TCP or if the peer skipped ALPN.
-    // The view borrows this connection until abort, shutdown or I/O failure.
+    // The view borrows this connection until request_stop, shutdown or I/O failure.
     [[nodiscard]] std::string_view alpn() const& RUVIA_LIFETIMEBOUND;
     std::string_view alpn() const&& = delete;
     // At most 4 KiB. nullopt is EOF (TCP FIN, TLS close_notify or truncation).
@@ -81,7 +81,7 @@ public:
 
     // Immediate whole-connection teardown, not a send half-close. TLS uses
     // the shared transport's bounded best-effort close_notify before closing.
-    void abort() noexcept;
+    void request_stop() noexcept;
     // Aborts and waits for operation and socket retirement. This
     // is not a TLS graceful shutdown or a send half-close. Run on worker().
     [[nodiscard]] task<void> shutdown() &;

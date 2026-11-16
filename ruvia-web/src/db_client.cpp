@@ -36,8 +36,8 @@ public:
     void bind_stop() {
         lifecycle_.bind_stop();
     }
-    [[nodiscard]] task<void> connect() {
-        return lifecycle_.connect();
+    [[nodiscard]] task<void> connect(operation_options options) {
+        return lifecycle_.connect(std::move(options));
     }
     void request_close() noexcept {
         lifecycle_.request_close();
@@ -108,15 +108,15 @@ db_client::~db_client() {
     state_->request_close();
 }
 
-task<void> db_client::connect() & {
-    return state_->connect();
+task<void> db_client::connect(operation_options options) & {
+    return state_->connect(std::move(options));
 }
 
 db_executor db_client::db() const& {
     return state_->db();
 }
 
-void db_client::close() noexcept {
+void db_client::request_stop() noexcept {
     state_->request_close();
 }
 
@@ -224,10 +224,12 @@ void detail::db_registry::add(asio::io_context& io_context, const worker_ref& wo
     entries_.emplace_back(std::move(owner));
 }
 
-task<void> detail::db_registry::connect() {
+task<void> detail::db_registry::connect(operation_options options) {
+    const operation_deadline deadline(options.timeout_);
+    options.timeout_ = deadline.timeout();
     for (auto& entry : entries_) {
-        co_await visit_db_pool(pool_ref(entry.pool_), [](auto& pool) {
-            return pool.connect();
+        co_await visit_db_pool(pool_ref(entry.pool_), [&](auto& pool) {
+            return pool.connect(options);
         });
     }
 }

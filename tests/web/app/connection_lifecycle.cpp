@@ -316,6 +316,7 @@ TEST(Ruvia, single_owner_connection_close_event_can_reenter_retired_id_control) 
     std::atomic<std::uint64_t> id{};
     std::binary_semaphore opened{0}, ended{0};
     ruvia::http_server* owner{};
+    std::optional<ruvia::root_task<bool>> reentered;
     ruvia::http_server server(runtime.handles_[0], {.connection_ = [&](ruvia::server_connection& connection) -> ruvia::task<void> {
         EXPECT_NE(connection.connection_state(), nullptr);
         opened.release();
@@ -327,7 +328,7 @@ TEST(Ruvia, single_owner_connection_close_event_can_reenter_retired_id_control) 
         id = event.connection_id();
         return std::make_shared<int>(42);
     }, .connection_close_ = [&](const ruvia::connection_event& event, const std::shared_ptr<void>& state, const ruvia::connection_close_info&) noexcept {
-        EXPECT_FALSE(owner->close_connection(event.connection_id()));
+        reentered.emplace(runtime.handles_[0].start(owner->close_connection(event.connection_id())));
         EXPECT_EQ(*std::static_pointer_cast<int>(state), 42);
         ended.release();
     }});
@@ -341,12 +342,13 @@ TEST(Ruvia, single_owner_connection_close_event_can_reenter_retired_id_control) 
     peer.connect(port.endpoint());
     ASSERT_TRUE(opened.try_acquire_for(5s));
     const auto close = [&]() -> ruvia::task<void> {
-        EXPECT_TRUE(server.close_connection(id.load()));
-        co_return;
+        EXPECT_TRUE(co_await server.close_connection(id.load()));
     };
     runtime.handles_[0].start(close()).get();
     EXPECT_TRUE(closed(peer));
     ASSERT_TRUE(ended.try_acquire_for(5s));
+    ASSERT_TRUE(reentered.has_value());
+    EXPECT_FALSE(std::move(*reentered).get());
     runtime.handles_[0].start(server.shutdown()).get();
 }
 
@@ -646,7 +648,7 @@ TEST(Ruvia, application_hooks_connection_id_control_context_abort_and_virtual_lo
         ASSERT_TRUE(opened.try_acquire_for(5s));
         ASSERT_TRUE(ended.try_acquire_for(5s));
     }
-    app.stop();
+    app.request_stop();
     runner.join();
     EXPECT_EQ(admissions.load(), 4u);
     EXPECT_EQ(opens.load(), closes.load());

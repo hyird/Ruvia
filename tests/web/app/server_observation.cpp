@@ -382,7 +382,7 @@ TEST(Ruvia, server_observers_see_client_hellos_and_http2_input_by_connection_id)
         EXPECT_EQ(hellos[0].remote_address_, "127.0.0.1");
         EXPECT_FALSE(records().http3_fingerprint(quic_id).empty());
 #endif
-        app.stop();
+        app.request_stop();
         runner.join();
     }
     EXPECT_EQ(connection_ids.count(0), 0U);
@@ -400,7 +400,7 @@ TEST(Ruvia, server_observers_see_client_hellos_and_http2_input_by_connection_id)
 #if defined(RUVIA_ENABLE_HTTP3)
         EXPECT_NE(http3_connection_id(http3_port, identity), 0U);
 #endif
-        app.stop();
+        app.request_stop();
         runner.join();
     }
     EXPECT_EQ(records().counts(), observed);

@@ -91,6 +91,6 @@ TEST(Ruvia, auto_https_redirect_points_cleartext_requests_at_the_https_service) 
         EXPECT_TRUE(refused.ends_with("rejected"));
         EXPECT_EQ(error_handler_calls.load(), 1);
     }
-    app.stop();
+    app.request_stop();
     runner.join();
 }

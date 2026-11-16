@@ -340,7 +340,7 @@ TEST(Ruvia, connection_listeners_serve_byte_streams_beside_routes) {
     ruvia::test::wait_until([] {
         return observed().size() == 2;
     }, 10s);
-    app.stop();
+    app.request_stop();
     runner.join();
 
     const auto views = observed().views();
@@ -507,7 +507,7 @@ TEST(Ruvia, raw_connection_abort_cancels_outputs_without_reporting_faults) {
             EXPECT_EQ(app.stats().connection_failures_, expected_faults) << "TLS: " << tls << ", command: " << command;
         }
     }
-    app.stop();
+    app.request_stop();
     runner.join();
     app.callbacks({});
     EXPECT_EQ(results->closed_reads_.load(), 2U);
@@ -545,7 +545,7 @@ TEST(Ruvia, connection_idle_timeout_closes_raw_connection) {
         return observed().size() == 1;
     }, 10s);
     EXPECT_EQ(app.stats().connection_failures_, 0U);
-    app.stop();
+    app.request_stop();
     runner.join();
     const auto views = observed().views();
     ASSERT_EQ(views.size(), 1U);
@@ -576,7 +576,7 @@ TEST(Ruvia, stop_disconnects_raw_connections) {
         ASSERT_TRUE(handler_entered().try_acquire_for(10s));
     }
     EXPECT_EQ(app.stats().active_connections_, sockets.size());
-    app.stop();
+    app.request_stop();
     runner.join();
     for (auto& socket : sockets) {
         EXPECT_EQ(read_until_closed(socket), "");
@@ -613,7 +613,7 @@ TEST(Ruvia, raw_handler_failure_reaches_connection_failure_hook) {
     ruvia::test::wait_until([&app] {
         return app.stats().connection_failures_ == 1;
     }, 10s);
-    app.stop();
+    app.request_stop();
     runner.join();
     app.callbacks({});
     std::lock_guard lock(failures_mutex());
@@ -677,7 +677,7 @@ TEST(Ruvia, raw_connection_return_expires_unstarted_read_write_and_finish) {
         return app.stats().active_connections_ == 0;
     }, 10s);
     EXPECT_EQ(app.stats().connection_failures_, 0U);
-    app.stop();
+    app.request_stop();
     runner.join();
 }
 
@@ -931,7 +931,7 @@ TEST(Ruvia, raw_connection_operation_options_bound_each_wait) {
         return app.stats().active_connections_ == 0;
     }, 10s);
     EXPECT_EQ(app.stats().connection_failures_, 0U);
-    app.stop();
+    app.request_stop();
     runner.join();
     EXPECT_EQ(results->rejected_.load(), 6U);
     EXPECT_EQ(results->read_timeouts_.load(), 2U);

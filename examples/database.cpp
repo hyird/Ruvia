@@ -129,9 +129,10 @@ private:
 
     static ruvia::task<void> transfer_funds(ruvia::context& c) {
         auto tx = co_await c.db().begin_transaction();
-        (void)co_await tx.execute(driver_ == ruvia::db_driver::postgresql ? "UPDATE accounts SET balance = balance - $1 WHERE id = $2" : "UPDATE accounts SET balance = balance - ? WHERE id = ?", 100, 1);
-        (void)co_await tx.execute(driver_ == ruvia::db_driver::postgresql ? "UPDATE accounts SET balance = balance + $1 WHERE id = $2" : "UPDATE accounts SET balance = balance + ? WHERE id = ?", 100, 2);
-        co_await tx.commit();
+        const auto operations = tx.with_options({.timeout_ = std::chrono::seconds(5)});
+        (void)co_await operations.execute(driver_ == ruvia::db_driver::postgresql ? "UPDATE accounts SET balance = balance - $1 WHERE id = $2" : "UPDATE accounts SET balance = balance - ? WHERE id = ?", 100, 1);
+        (void)co_await operations.execute(driver_ == ruvia::db_driver::postgresql ? "UPDATE accounts SET balance = balance + $1 WHERE id = $2" : "UPDATE accounts SET balance = balance + ? WHERE id = ?", 100, 2);
+        co_await tx.commit({.timeout_ = std::chrono::seconds(5)});
         co_return;
     }
 

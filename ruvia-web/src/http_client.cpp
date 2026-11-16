@@ -380,7 +380,7 @@ bool http_client::remove(std::string_view alias) & {
     return state_->remove(alias);
 }
 
-void http_client::close() noexcept {
+void http_client::request_stop() noexcept {
     state_->request_close();
 }
 

@@ -465,13 +465,15 @@ TEST(Ruvia, https_serves_credentials_from_non_ascii_paths_across_runs) {
             },
         };
     };
-    // Invalid credentials never replace the application's staged listeners.
+    // listen() owns configuration; credential failures belong to startup.
     app.workers({.worker_count_ = 1});
+    app.listen(listener("wrong password", certificate));
     EXPECT_TRUE(throws_system_error([&] {
-        app.listen(listener("wrong password", certificate));
+        app.run();
     }));
+    app.listen(listener(password, directory.file(u8"\u7f3a\u5931.pem")));
     EXPECT_TRUE(throws_system_error([&] {
-        app.listen(listener(password, directory.file(u8"\u7f3a\u5931.pem")));
+        app.run();
     }));
 
     static std::binary_semaphore started{0};
@@ -515,7 +517,7 @@ TEST(Ruvia, https_serves_credentials_from_non_ascii_paths_across_runs) {
                 EXPECT_TRUE(!resumes_tls_session_under(io, endpoint, version, "localhost", "unknown.test"));
             }
         }
-        app.stop();
+        app.request_stop();
         runner.join();
     }
 }

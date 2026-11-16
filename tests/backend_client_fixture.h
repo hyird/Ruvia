@@ -796,6 +796,12 @@ private:
         const auto setup_size = std::size_t{setup_header[0]} | (std::size_t{setup_header[1]} << 8) | (std::size_t{setup_header[2]} << 16);
         std::string setup(setup_size, '\0');
         co_await asio::async_read(socket, asio::buffer(setup), asio::use_awaitable);
+        // mysql_close() may send COM_QUIT when startup was cancelled before
+        // the deferred authentication reply. That is a normal disconnect.
+        if (setup == "\x01") {
+            socket.close();
+            co_return;
+        }
         constexpr std::string_view setup_start = "\x03SET SESSION session_track_system_variables = '";
         constexpr std::string_view setup_end = "', session_track_schema = ON";
         if (!setup.starts_with(setup_start) || !setup.ends_with(setup_end) || setup.find("sql_mode,") == std::string::npos || setup.find('*') != std::string::npos) {
@@ -1320,7 +1326,7 @@ private:
         } else if (selected == protocol::mariadb) {
             co_await maria_startup(socket);
         }
-        if (closing_) {
+        if (closing_ || !socket.is_open()) {
             co_return;
         }
         if (after_startup_ == after_startup::drop_mid_result) {

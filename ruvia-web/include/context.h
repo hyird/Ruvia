@@ -645,7 +645,7 @@ public:
     [[nodiscard]] const worker_ref& worker() const& noexcept RUVIA_LIFETIMEBOUND;
     const worker_ref& worker() const&& = delete;
 
-    // Observes worker shutdown (application::stop() closes every connection
+    // Observes worker shutdown (application::request_stop() closes every connection
     // at once, with no drain phase) and, for a subrequest, explicit
     // cancellation. db(), redis() and run_blocking() bind this
     // token automatically. Explicit operation tokens are combined with it.

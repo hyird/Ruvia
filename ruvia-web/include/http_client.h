@@ -744,7 +744,7 @@ public:
 
     // Idempotent and callable from any thread. It only requests immediate
     // shutdown; use shutdown() when the worker teardown must be awaited.
-    void close() noexcept;
+    void request_stop() noexcept;
     // Cancels and joins client producers/send operations, then retires their
     // transport borrows on the bound loop. Response body consumers are owned by
     // the response, not this shutdown: finish/join them and destroy responses

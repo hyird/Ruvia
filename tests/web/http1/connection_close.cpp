@@ -296,7 +296,7 @@ TEST(Ruvia, server_closes_connections_gracefully) {
         client.set_verify_mode(asio::ssl::verify_none);
         const auto unused = open_unused_tls_connection(io, client, tls_endpoint);
         std::thread stopper([&app] {
-            app.stop();
+            app.request_stop();
         });
         asio::error_code end;
         const auto received = read_to_end(*unused, end);
@@ -304,7 +304,7 @@ TEST(Ruvia, server_closes_connections_gracefully) {
         EXPECT_TRUE(received.empty());
         EXPECT_TRUE(end == asio::ssl::error::stream_truncated || end == asio::error::connection_reset);
     } else {
-        app.stop();
+        app.request_stop();
     }
     runner.join();
 }

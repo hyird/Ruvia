@@ -294,7 +294,7 @@ void redis_executor::expire_capability() noexcept {
     request_stop_ = {};
 }
 
-task<redis_value> redis_executor::command(std::span<const std::string_view> args) {
+task<redis_value> redis_executor::command(std::span<const std::string_view> args) const {
     registration_.require_active();
     const bool blocking = detail::validate_redis_pooled_command(args, true);
     if (blocking) {
@@ -317,19 +317,19 @@ task<redis_value> redis_executor::script_owned(const detail::redis_orm_script& s
     });
 }
 
-task<std::optional<redis_key_value>> redis_executor::blpop(std::span<const std::string_view> keys, redis_block_wait wait) {
+task<std::optional<redis_key_value>> redis_executor::blpop(std::span<const std::string_view> keys, redis_block_wait wait) const {
     registration_.require_active();
     const auto reply_timeout = redis_block_reply_timeout(detail::request_bound_options(operation_options_, request_stop_), wait);
     return execute_mapped<std::optional<redis_key_value>>(blocking_pool(), detail::redis_blocking_pop_args("BLPOP", keys, wait), detail::parse_redis_blocking_pop_reply, reply_timeout);
 }
 
-task<std::optional<redis_key_value>> redis_executor::brpop(std::span<const std::string_view> keys, redis_block_wait wait) {
+task<std::optional<redis_key_value>> redis_executor::brpop(std::span<const std::string_view> keys, redis_block_wait wait) const {
     registration_.require_active();
     const auto reply_timeout = redis_block_reply_timeout(detail::request_bound_options(operation_options_, request_stop_), wait);
     return execute_mapped<std::optional<redis_key_value>>(blocking_pool(), detail::redis_blocking_pop_args("BRPOP", keys, wait), detail::parse_redis_blocking_pop_reply, reply_timeout);
 }
 
-task<std::optional<std::vector<redis_stream_read_result>>> redis_executor::xread_group(std::string_view group, std::string_view consumer, std::span<const redis_stream_read_view> streams, redis_x_read_group_options options) {
+task<std::optional<std::vector<redis_stream_read_result>>> redis_executor::xread_group(std::string_view group, std::string_view consumer, std::span<const redis_stream_read_view> streams, redis_x_read_group_options options) const {
     registration_.require_active();
     auto args = detail::redis_x_read_group_args(group, consumer, streams, options);
     auto* selected_pool = &pool();
@@ -409,7 +409,7 @@ void redis_batch<mode>::expire_capability() noexcept {
 }
 
 template <redis_batch_mode mode>
-redis_batch<mode>& redis_batch<mode>::command(std::span<const std::string_view> args) {
+redis_batch<mode>& redis_batch<mode>::command(std::span<const std::string_view> args) & {
     require_ready();
     const bool barrier = detail::validate_redis_pooled_command(args, false, mode == redis_batch_mode::pipeline);
     if (barrier) {
@@ -443,7 +443,7 @@ task<std::vector<redis_value>> redis_batch<mode>::execute_owned(detail::request_
             throw redis_error(backend_error_code::command_failed, "unexpected redis transaction reply");
         }
 
-        // Every reply node lives in `resource`, so the EXEC elements move without copying.
+        // Transfer the owned EXEC elements without copying reply nodes.
         co_return std::move(detail::redis_types_access::elements(exec_reply));
     }
 }
@@ -460,345 +460,345 @@ template class redis_batch<redis_batch_mode::transaction>;
 // The typed command table: one encoding and one reply decoder per command,
 // shared by redis_executor and both batch modes.
 template <typename surface_type>
-auto redis_command_set<surface_type>::ping() -> reply<void> {
-    return typed<void>(detail::make_owned_redis_command("PING"), detail::parse_redis_pong);
+auto redis_command_set<surface_type>::ping_command(command_surface& self) -> reply<void> {
+    return typed<void>(self, detail::make_owned_redis_command("PING"), detail::parse_redis_pong);
 }
 
 template <typename surface_type>
-auto redis_command_set<surface_type>::ping(std::string_view message) -> reply<std::string> {
-    return typed<std::string>(detail::make_owned_redis_command({"PING", message}), detail::take_redis_string);
+auto redis_command_set<surface_type>::ping_command(command_surface& self, std::string_view message) -> reply<std::string> {
+    return typed<std::string>(self, detail::make_owned_redis_command({"PING", message}), detail::take_redis_string);
 }
 
 template <typename surface_type>
-auto redis_command_set<surface_type>::get(std::string_view key) -> reply<std::optional<std::string>> {
-    return typed<std::optional<std::string>>(detail::make_owned_redis_command({"GET", key}), detail::parse_redis_optional_string);
+auto redis_command_set<surface_type>::get_command(command_surface& self, std::string_view key) -> reply<std::optional<std::string>> {
+    return typed<std::optional<std::string>>(self, detail::make_owned_redis_command({"GET", key}), detail::parse_redis_optional_string);
 }
 
 template <typename surface_type>
-auto redis_command_set<surface_type>::mget(std::span<const std::string_view> keys) -> reply<std::vector<std::optional<std::string>>> {
-    return typed<std::vector<std::optional<std::string>>>(detail::redis_command_with_keys("MGET", keys), detail::parse_redis_optional_string_array);
+auto redis_command_set<surface_type>::mget_command(command_surface& self, std::span<const std::string_view> keys) -> reply<std::vector<std::optional<std::string>>> {
+    return typed<std::vector<std::optional<std::string>>>(self, detail::redis_command_with_keys("MGET", keys), detail::parse_redis_optional_string_array);
 }
 
 template <typename surface_type>
-auto redis_command_set<surface_type>::set(std::string_view key, std::string_view value, redis_set_options options) -> reply<redis_set_result> {
+auto redis_command_set<surface_type>::set_command(command_surface& self, std::string_view key, std::string_view value, redis_set_options options) -> reply<redis_set_result> {
     auto command = detail::redis_set_args(key, value, options);
-    return typed<redis_set_result>(std::move(command), [options = std::move(options)](redis_value&& reply_value) {
+    return typed<redis_set_result>(self, std::move(command), [options = std::move(options)](redis_value&& reply_value) {
         return detail::parse_redis_set_reply(std::move(reply_value), options);
     });
 }
 
 template <typename surface_type>
-auto redis_command_set<surface_type>::mset(std::span<const std::pair<std::string_view, std::string_view>> items) -> reply<void> {
-    return typed<void>(detail::redis_mset_args(items), detail::parse_redis_ok);
+auto redis_command_set<surface_type>::mset_command(command_surface& self, std::span<const std::pair<std::string_view, std::string_view>> items) -> reply<void> {
+    return typed<void>(self, detail::redis_mset_args(items), detail::parse_redis_ok);
 }
 
 template <typename surface_type>
-auto redis_command_set<surface_type>::get_del(std::string_view key) -> reply<std::optional<std::string>> {
-    return typed<std::optional<std::string>>(detail::make_owned_redis_command({"GETDEL", key}), detail::parse_redis_optional_string);
+auto redis_command_set<surface_type>::get_del_command(command_surface& self, std::string_view key) -> reply<std::optional<std::string>> {
+    return typed<std::optional<std::string>>(self, detail::make_owned_redis_command({"GETDEL", key}), detail::parse_redis_optional_string);
 }
 
 template <typename surface_type>
-auto redis_command_set<surface_type>::append(std::string_view key, std::string_view value) -> reply<std::int64_t> {
-    return typed<std::int64_t>(detail::make_owned_redis_command({"APPEND", key, value}), detail::parse_redis_integer);
+auto redis_command_set<surface_type>::append_command(command_surface& self, std::string_view key, std::string_view value) -> reply<std::int64_t> {
+    return typed<std::int64_t>(self, detail::make_owned_redis_command({"APPEND", key, value}), detail::parse_redis_integer);
 }
 
 template <typename surface_type>
-auto redis_command_set<surface_type>::strlen(std::string_view key) -> reply<std::int64_t> {
-    return typed<std::int64_t>(detail::make_owned_redis_command({"STRLEN", key}), detail::parse_redis_integer);
+auto redis_command_set<surface_type>::strlen_command(command_surface& self, std::string_view key) -> reply<std::int64_t> {
+    return typed<std::int64_t>(self, detail::make_owned_redis_command({"STRLEN", key}), detail::parse_redis_integer);
 }
 
 template <typename surface_type>
-auto redis_command_set<surface_type>::incr(std::string_view key) -> reply<std::int64_t> {
-    return typed<std::int64_t>(detail::make_owned_redis_command({"INCR", key}), detail::parse_redis_integer);
+auto redis_command_set<surface_type>::incr_command(command_surface& self, std::string_view key) -> reply<std::int64_t> {
+    return typed<std::int64_t>(self, detail::make_owned_redis_command({"INCR", key}), detail::parse_redis_integer);
 }
 
 template <typename surface_type>
-auto redis_command_set<surface_type>::incr_by(std::string_view key, std::int64_t value) -> reply<std::int64_t> {
-    return typed<std::int64_t>(detail::make_redis_integer_command("INCRBY", key, value), detail::parse_redis_integer);
+auto redis_command_set<surface_type>::incr_by_command(command_surface& self, std::string_view key, std::int64_t value) -> reply<std::int64_t> {
+    return typed<std::int64_t>(self, detail::make_redis_integer_command("INCRBY", key, value), detail::parse_redis_integer);
 }
 
 template <typename surface_type>
-auto redis_command_set<surface_type>::decr(std::string_view key) -> reply<std::int64_t> {
-    return typed<std::int64_t>(detail::make_owned_redis_command({"DECR", key}), detail::parse_redis_integer);
+auto redis_command_set<surface_type>::decr_command(command_surface& self, std::string_view key) -> reply<std::int64_t> {
+    return typed<std::int64_t>(self, detail::make_owned_redis_command({"DECR", key}), detail::parse_redis_integer);
 }
 
 template <typename surface_type>
-auto redis_command_set<surface_type>::decr_by(std::string_view key, std::int64_t value) -> reply<std::int64_t> {
-    return typed<std::int64_t>(detail::make_redis_integer_command("DECRBY", key, value), detail::parse_redis_integer);
+auto redis_command_set<surface_type>::decr_by_command(command_surface& self, std::string_view key, std::int64_t value) -> reply<std::int64_t> {
+    return typed<std::int64_t>(self, detail::make_redis_integer_command("DECRBY", key, value), detail::parse_redis_integer);
 }
 
 template <typename surface_type>
-auto redis_command_set<surface_type>::del(std::string_view key) -> reply<std::int64_t> {
-    return typed<std::int64_t>(detail::make_owned_redis_command({"DEL", key}), detail::parse_redis_integer);
+auto redis_command_set<surface_type>::del_command(command_surface& self, std::string_view key) -> reply<std::int64_t> {
+    return typed<std::int64_t>(self, detail::make_owned_redis_command({"DEL", key}), detail::parse_redis_integer);
 }
 
 template <typename surface_type>
-auto redis_command_set<surface_type>::del(std::span<const std::string_view> keys) -> reply<std::int64_t> {
-    return typed<std::int64_t>(detail::redis_command_with_keys("DEL", keys), detail::parse_redis_integer);
+auto redis_command_set<surface_type>::del_command(command_surface& self, std::span<const std::string_view> keys) -> reply<std::int64_t> {
+    return typed<std::int64_t>(self, detail::redis_command_with_keys("DEL", keys), detail::parse_redis_integer);
 }
 
 template <typename surface_type>
-auto redis_command_set<surface_type>::unlink(std::string_view key) -> reply<std::int64_t> {
-    return typed<std::int64_t>(detail::make_owned_redis_command({"UNLINK", key}), detail::parse_redis_integer);
+auto redis_command_set<surface_type>::unlink_command(command_surface& self, std::string_view key) -> reply<std::int64_t> {
+    return typed<std::int64_t>(self, detail::make_owned_redis_command({"UNLINK", key}), detail::parse_redis_integer);
 }
 
 template <typename surface_type>
-auto redis_command_set<surface_type>::unlink(std::span<const std::string_view> keys) -> reply<std::int64_t> {
-    return typed<std::int64_t>(detail::redis_command_with_keys("UNLINK", keys), detail::parse_redis_integer);
+auto redis_command_set<surface_type>::unlink_command(command_surface& self, std::span<const std::string_view> keys) -> reply<std::int64_t> {
+    return typed<std::int64_t>(self, detail::redis_command_with_keys("UNLINK", keys), detail::parse_redis_integer);
 }
 
 template <typename surface_type>
-auto redis_command_set<surface_type>::exists(std::string_view key) -> reply<bool> {
-    return typed<bool>(detail::make_owned_redis_command({"EXISTS", key}), detail::parse_redis_integer_bool);
+auto redis_command_set<surface_type>::exists_command(command_surface& self, std::string_view key) -> reply<bool> {
+    return typed<bool>(self, detail::make_owned_redis_command({"EXISTS", key}), detail::parse_redis_integer_bool);
 }
 
 template <typename surface_type>
-auto redis_command_set<surface_type>::touch(std::string_view key) -> reply<bool> {
-    return typed<bool>(detail::make_owned_redis_command({"TOUCH", key}), detail::parse_redis_integer_bool);
+auto redis_command_set<surface_type>::touch_command(command_surface& self, std::string_view key) -> reply<bool> {
+    return typed<bool>(self, detail::make_owned_redis_command({"TOUCH", key}), detail::parse_redis_integer_bool);
 }
 
 template <typename surface_type>
-auto redis_command_set<surface_type>::type(std::string_view key) -> reply<std::string> {
-    return typed<std::string>(detail::make_owned_redis_command({"TYPE", key}), detail::take_redis_string);
+auto redis_command_set<surface_type>::type_command(command_surface& self, std::string_view key) -> reply<std::string> {
+    return typed<std::string>(self, detail::make_owned_redis_command({"TYPE", key}), detail::take_redis_string);
 }
 
 template <typename surface_type>
-auto redis_command_set<surface_type>::rename(std::string_view key, std::string_view new_key) -> reply<void> {
-    return typed<void>(detail::make_owned_redis_command({"RENAME", key, new_key}), detail::parse_redis_ok);
+auto redis_command_set<surface_type>::rename_command(command_surface& self, std::string_view key, std::string_view new_key) -> reply<void> {
+    return typed<void>(self, detail::make_owned_redis_command({"RENAME", key, new_key}), detail::parse_redis_ok);
 }
 
 template <typename surface_type>
-auto redis_command_set<surface_type>::rename_nx(std::string_view key, std::string_view new_key) -> reply<bool> {
-    return typed<bool>(detail::make_owned_redis_command({"RENAMENX", key, new_key}), detail::parse_redis_integer_bool);
+auto redis_command_set<surface_type>::rename_nx_command(command_surface& self, std::string_view key, std::string_view new_key) -> reply<bool> {
+    return typed<bool>(self, detail::make_owned_redis_command({"RENAMENX", key, new_key}), detail::parse_redis_integer_bool);
 }
 
 template <typename surface_type>
-auto redis_command_set<surface_type>::expire(std::string_view key, std::chrono::seconds ttl) -> reply<bool> {
+auto redis_command_set<surface_type>::expire_command(command_surface& self, std::string_view key, std::chrono::seconds ttl) -> reply<bool> {
     require_positive_redis_ttl(ttl, "redis expire TTL must be greater than zero");
-    return typed<bool>(detail::make_redis_integer_command("EXPIRE", key, ttl.count()), detail::parse_redis_integer_bool);
+    return typed<bool>(self, detail::make_redis_integer_command("EXPIRE", key, ttl.count()), detail::parse_redis_integer_bool);
 }
 
 template <typename surface_type>
-auto redis_command_set<surface_type>::pexpire(std::string_view key, std::chrono::milliseconds ttl) -> reply<bool> {
+auto redis_command_set<surface_type>::pexpire_command(command_surface& self, std::string_view key, std::chrono::milliseconds ttl) -> reply<bool> {
     require_positive_redis_ttl(ttl, "redis pexpire TTL must be greater than zero");
-    return typed<bool>(detail::make_redis_integer_command("PEXPIRE", key, ttl.count()), detail::parse_redis_integer_bool);
+    return typed<bool>(self, detail::make_redis_integer_command("PEXPIRE", key, ttl.count()), detail::parse_redis_integer_bool);
 }
 
 template <typename surface_type>
-auto redis_command_set<surface_type>::expire_at(std::string_view key, std::chrono::system_clock::time_point expires_at) -> reply<bool> {
+auto redis_command_set<surface_type>::expire_at_command(command_surface& self, std::string_view key, std::chrono::system_clock::time_point expires_at) -> reply<bool> {
     const auto expires_ms = std::chrono::ceil<std::chrono::milliseconds>(expires_at.time_since_epoch()).count();
-    return typed<bool>(detail::make_redis_integer_command("PEXPIREAT", key, expires_ms), detail::parse_redis_integer_bool);
+    return typed<bool>(self, detail::make_redis_integer_command("PEXPIREAT", key, expires_ms), detail::parse_redis_integer_bool);
 }
 
 template <typename surface_type>
-auto redis_command_set<surface_type>::persist(std::string_view key) -> reply<bool> {
-    return typed<bool>(detail::make_owned_redis_command({"PERSIST", key}), detail::parse_redis_integer_bool);
+auto redis_command_set<surface_type>::persist_command(command_surface& self, std::string_view key) -> reply<bool> {
+    return typed<bool>(self, detail::make_owned_redis_command({"PERSIST", key}), detail::parse_redis_integer_bool);
 }
 
 template <typename surface_type>
-auto redis_command_set<surface_type>::ttl(std::string_view key) -> reply<redis_ttl> {
-    return typed<redis_ttl>(detail::make_owned_redis_command({"TTL", key}), parse_redis_seconds_ttl);
+auto redis_command_set<surface_type>::ttl_command(command_surface& self, std::string_view key) -> reply<redis_ttl> {
+    return typed<redis_ttl>(self, detail::make_owned_redis_command({"TTL", key}), parse_redis_seconds_ttl);
 }
 
 template <typename surface_type>
-auto redis_command_set<surface_type>::pttl(std::string_view key) -> reply<redis_ttl> {
-    return typed<redis_ttl>(detail::make_owned_redis_command({"PTTL", key}), parse_redis_milliseconds_ttl);
+auto redis_command_set<surface_type>::pttl_command(command_surface& self, std::string_view key) -> reply<redis_ttl> {
+    return typed<redis_ttl>(self, detail::make_owned_redis_command({"PTTL", key}), parse_redis_milliseconds_ttl);
 }
 
 template <typename surface_type>
-auto redis_command_set<surface_type>::hget(std::string_view key, std::string_view field) -> reply<std::optional<std::string>> {
-    return typed<std::optional<std::string>>(detail::make_owned_redis_command({"HGET", key, field}), detail::parse_redis_optional_string);
+auto redis_command_set<surface_type>::hget_command(command_surface& self, std::string_view key, std::string_view field) -> reply<std::optional<std::string>> {
+    return typed<std::optional<std::string>>(self, detail::make_owned_redis_command({"HGET", key, field}), detail::parse_redis_optional_string);
 }
 
 template <typename surface_type>
-auto redis_command_set<surface_type>::hset(std::string_view key, std::string_view field, std::string_view value) -> reply<std::int64_t> {
-    return typed<std::int64_t>(detail::make_owned_redis_command({"HSET", key, field, value}), detail::parse_redis_integer);
+auto redis_command_set<surface_type>::hset_command(command_surface& self, std::string_view key, std::string_view field, std::string_view value) -> reply<std::int64_t> {
+    return typed<std::int64_t>(self, detail::make_owned_redis_command({"HSET", key, field, value}), detail::parse_redis_integer);
 }
 
 template <typename surface_type>
-auto redis_command_set<surface_type>::hset(std::string_view key, std::span<const std::pair<std::string_view, std::string_view>> fields) -> reply<std::int64_t> {
-    return typed<std::int64_t>(detail::redis_hset_fields_args(key, fields), detail::parse_redis_integer);
+auto redis_command_set<surface_type>::hset_command(command_surface& self, std::string_view key, std::span<const std::pair<std::string_view, std::string_view>> fields) -> reply<std::int64_t> {
+    return typed<std::int64_t>(self, detail::redis_hset_fields_args(key, fields), detail::parse_redis_integer);
 }
 
 template <typename surface_type>
-auto redis_command_set<surface_type>::hmget(std::string_view key, std::span<const std::string_view> fields) -> reply<std::vector<std::optional<std::string>>> {
-    return typed<std::vector<std::optional<std::string>>>(detail::redis_command_with_key_fields("HMGET", key, fields), detail::parse_redis_optional_string_array);
+auto redis_command_set<surface_type>::hmget_command(command_surface& self, std::string_view key, std::span<const std::string_view> fields) -> reply<std::vector<std::optional<std::string>>> {
+    return typed<std::vector<std::optional<std::string>>>(self, detail::redis_command_with_key_fields("HMGET", key, fields), detail::parse_redis_optional_string_array);
 }
 
 template <typename surface_type>
-auto redis_command_set<surface_type>::hget_all(std::string_view key) -> reply<std::vector<redis_key_value>> {
-    return typed<std::vector<redis_key_value>>(detail::make_owned_redis_command({"HGETALL", key}), [](redis_value&& value) {
+auto redis_command_set<surface_type>::hget_all_command(command_surface& self, std::string_view key) -> reply<std::vector<redis_key_value>> {
+    return typed<std::vector<redis_key_value>>(self, detail::make_owned_redis_command({"HGETALL", key}), [](redis_value&& value) {
         return detail::parse_redis_key_value_array(std::move(value), "unexpected redis hgetall reply");
     });
 }
 
 template <typename surface_type>
-auto redis_command_set<surface_type>::hdel(std::string_view key, std::string_view field) -> reply<std::int64_t> {
-    return typed<std::int64_t>(detail::make_owned_redis_command({"HDEL", key, field}), detail::parse_redis_integer);
+auto redis_command_set<surface_type>::hdel_command(command_surface& self, std::string_view key, std::string_view field) -> reply<std::int64_t> {
+    return typed<std::int64_t>(self, detail::make_owned_redis_command({"HDEL", key, field}), detail::parse_redis_integer);
 }
 
 template <typename surface_type>
-auto redis_command_set<surface_type>::hexists(std::string_view key, std::string_view field) -> reply<bool> {
-    return typed<bool>(detail::make_owned_redis_command({"HEXISTS", key, field}), detail::parse_redis_integer_bool);
+auto redis_command_set<surface_type>::hexists_command(command_surface& self, std::string_view key, std::string_view field) -> reply<bool> {
+    return typed<bool>(self, detail::make_owned_redis_command({"HEXISTS", key, field}), detail::parse_redis_integer_bool);
 }
 
 template <typename surface_type>
-auto redis_command_set<surface_type>::hlen(std::string_view key) -> reply<std::int64_t> {
-    return typed<std::int64_t>(detail::make_owned_redis_command({"HLEN", key}), detail::parse_redis_integer);
+auto redis_command_set<surface_type>::hlen_command(command_surface& self, std::string_view key) -> reply<std::int64_t> {
+    return typed<std::int64_t>(self, detail::make_owned_redis_command({"HLEN", key}), detail::parse_redis_integer);
 }
 
 template <typename surface_type>
-auto redis_command_set<surface_type>::hkeys(std::string_view key) -> reply<std::vector<std::string>> {
-    return typed<std::vector<std::string>>(detail::make_owned_redis_command({"HKEYS", key}), detail::parse_redis_string_array);
+auto redis_command_set<surface_type>::hkeys_command(command_surface& self, std::string_view key) -> reply<std::vector<std::string>> {
+    return typed<std::vector<std::string>>(self, detail::make_owned_redis_command({"HKEYS", key}), detail::parse_redis_string_array);
 }
 
 template <typename surface_type>
-auto redis_command_set<surface_type>::hvals(std::string_view key) -> reply<std::vector<std::string>> {
-    return typed<std::vector<std::string>>(detail::make_owned_redis_command({"HVALS", key}), detail::parse_redis_string_array);
+auto redis_command_set<surface_type>::hvals_command(command_surface& self, std::string_view key) -> reply<std::vector<std::string>> {
+    return typed<std::vector<std::string>>(self, detail::make_owned_redis_command({"HVALS", key}), detail::parse_redis_string_array);
 }
 
 template <typename surface_type>
-auto redis_command_set<surface_type>::hincr_by(std::string_view key, std::string_view field, std::int64_t value) -> reply<std::int64_t> {
+auto redis_command_set<surface_type>::hincr_by_command(command_surface& self, std::string_view key, std::string_view field, std::int64_t value) -> reply<std::int64_t> {
     std::array<char, max_decimal_size> value_scratch{};
-    return typed<std::int64_t>(detail::make_owned_redis_command({"HINCRBY", key, field, format_decimal(value_scratch, value)}), detail::parse_redis_integer);
+    return typed<std::int64_t>(self, detail::make_owned_redis_command({"HINCRBY", key, field, format_decimal(value_scratch, value)}), detail::parse_redis_integer);
 }
 
 template <typename surface_type>
-auto redis_command_set<surface_type>::lpush(std::string_view key, std::string_view value) -> reply<std::int64_t> {
-    return typed<std::int64_t>(detail::make_owned_redis_command({"LPUSH", key, value}), detail::parse_redis_integer);
+auto redis_command_set<surface_type>::lpush_command(command_surface& self, std::string_view key, std::string_view value) -> reply<std::int64_t> {
+    return typed<std::int64_t>(self, detail::make_owned_redis_command({"LPUSH", key, value}), detail::parse_redis_integer);
 }
 
 template <typename surface_type>
-auto redis_command_set<surface_type>::rpush(std::string_view key, std::string_view value) -> reply<std::int64_t> {
-    return typed<std::int64_t>(detail::make_owned_redis_command({"RPUSH", key, value}), detail::parse_redis_integer);
+auto redis_command_set<surface_type>::rpush_command(command_surface& self, std::string_view key, std::string_view value) -> reply<std::int64_t> {
+    return typed<std::int64_t>(self, detail::make_owned_redis_command({"RPUSH", key, value}), detail::parse_redis_integer);
 }
 
 template <typename surface_type>
-auto redis_command_set<surface_type>::lpop(std::string_view key) -> reply<std::optional<std::string>> {
-    return typed<std::optional<std::string>>(detail::make_owned_redis_command({"LPOP", key}), detail::parse_redis_optional_string);
+auto redis_command_set<surface_type>::lpop_command(command_surface& self, std::string_view key) -> reply<std::optional<std::string>> {
+    return typed<std::optional<std::string>>(self, detail::make_owned_redis_command({"LPOP", key}), detail::parse_redis_optional_string);
 }
 
 template <typename surface_type>
-auto redis_command_set<surface_type>::rpop(std::string_view key) -> reply<std::optional<std::string>> {
-    return typed<std::optional<std::string>>(detail::make_owned_redis_command({"RPOP", key}), detail::parse_redis_optional_string);
+auto redis_command_set<surface_type>::rpop_command(command_surface& self, std::string_view key) -> reply<std::optional<std::string>> {
+    return typed<std::optional<std::string>>(self, detail::make_owned_redis_command({"RPOP", key}), detail::parse_redis_optional_string);
 }
 
 template <typename surface_type>
-auto redis_command_set<surface_type>::llen(std::string_view key) -> reply<std::int64_t> {
-    return typed<std::int64_t>(detail::make_owned_redis_command({"LLEN", key}), detail::parse_redis_integer);
+auto redis_command_set<surface_type>::llen_command(command_surface& self, std::string_view key) -> reply<std::int64_t> {
+    return typed<std::int64_t>(self, detail::make_owned_redis_command({"LLEN", key}), detail::parse_redis_integer);
 }
 
 template <typename surface_type>
-auto redis_command_set<surface_type>::lrange(std::string_view key, std::int64_t start, std::int64_t stop) -> reply<std::vector<std::string>> {
-    return typed<std::vector<std::string>>(detail::make_redis_range_command("LRANGE", key, start, stop), detail::parse_redis_string_array);
+auto redis_command_set<surface_type>::lrange_command(command_surface& self, std::string_view key, std::int64_t start, std::int64_t stop) -> reply<std::vector<std::string>> {
+    return typed<std::vector<std::string>>(self, detail::make_redis_range_command("LRANGE", key, start, stop), detail::parse_redis_string_array);
 }
 
 template <typename surface_type>
-auto redis_command_set<surface_type>::lindex(std::string_view key, std::int64_t index) -> reply<std::optional<std::string>> {
-    return typed<std::optional<std::string>>(detail::make_redis_integer_command("LINDEX", key, index), detail::parse_redis_optional_string);
+auto redis_command_set<surface_type>::lindex_command(command_surface& self, std::string_view key, std::int64_t index) -> reply<std::optional<std::string>> {
+    return typed<std::optional<std::string>>(self, detail::make_redis_integer_command("LINDEX", key, index), detail::parse_redis_optional_string);
 }
 
 template <typename surface_type>
-auto redis_command_set<surface_type>::lset(std::string_view key, std::int64_t index, std::string_view value) -> reply<void> {
+auto redis_command_set<surface_type>::lset_command(command_surface& self, std::string_view key, std::int64_t index, std::string_view value) -> reply<void> {
     std::array<char, max_decimal_size> index_scratch{};
-    return typed<void>(detail::make_owned_redis_command({"LSET", key, format_decimal(index_scratch, index), value}), detail::parse_redis_ok);
+    return typed<void>(self, detail::make_owned_redis_command({"LSET", key, format_decimal(index_scratch, index), value}), detail::parse_redis_ok);
 }
 
 template <typename surface_type>
-auto redis_command_set<surface_type>::ltrim(std::string_view key, std::int64_t start, std::int64_t stop) -> reply<void> {
-    return typed<void>(detail::make_redis_range_command("LTRIM", key, start, stop), detail::parse_redis_ok);
+auto redis_command_set<surface_type>::ltrim_command(command_surface& self, std::string_view key, std::int64_t start, std::int64_t stop) -> reply<void> {
+    return typed<void>(self, detail::make_redis_range_command("LTRIM", key, start, stop), detail::parse_redis_ok);
 }
 
 template <typename surface_type>
-auto redis_command_set<surface_type>::lrem(std::string_view key, std::int64_t count, std::string_view value) -> reply<std::int64_t> {
+auto redis_command_set<surface_type>::lrem_command(command_surface& self, std::string_view key, std::int64_t count, std::string_view value) -> reply<std::int64_t> {
     std::array<char, max_decimal_size> count_scratch{};
-    return typed<std::int64_t>(detail::make_owned_redis_command({"LREM", key, format_decimal(count_scratch, count), value}), detail::parse_redis_integer);
+    return typed<std::int64_t>(self, detail::make_owned_redis_command({"LREM", key, format_decimal(count_scratch, count), value}), detail::parse_redis_integer);
 }
 
 template <typename surface_type>
-auto redis_command_set<surface_type>::sadd(std::string_view key, std::string_view member) -> reply<std::int64_t> {
-    return typed<std::int64_t>(detail::make_owned_redis_command({"SADD", key, member}), detail::parse_redis_integer);
+auto redis_command_set<surface_type>::sadd_command(command_surface& self, std::string_view key, std::string_view member) -> reply<std::int64_t> {
+    return typed<std::int64_t>(self, detail::make_owned_redis_command({"SADD", key, member}), detail::parse_redis_integer);
 }
 
 template <typename surface_type>
-auto redis_command_set<surface_type>::srem(std::string_view key, std::string_view member) -> reply<std::int64_t> {
-    return typed<std::int64_t>(detail::make_owned_redis_command({"SREM", key, member}), detail::parse_redis_integer);
+auto redis_command_set<surface_type>::srem_command(command_surface& self, std::string_view key, std::string_view member) -> reply<std::int64_t> {
+    return typed<std::int64_t>(self, detail::make_owned_redis_command({"SREM", key, member}), detail::parse_redis_integer);
 }
 
 template <typename surface_type>
-auto redis_command_set<surface_type>::smembers(std::string_view key) -> reply<std::vector<std::string>> {
-    return typed<std::vector<std::string>>(detail::make_owned_redis_command({"SMEMBERS", key}), detail::parse_redis_string_array);
+auto redis_command_set<surface_type>::smembers_command(command_surface& self, std::string_view key) -> reply<std::vector<std::string>> {
+    return typed<std::vector<std::string>>(self, detail::make_owned_redis_command({"SMEMBERS", key}), detail::parse_redis_string_array);
 }
 
 template <typename surface_type>
-auto redis_command_set<surface_type>::scard(std::string_view key) -> reply<std::int64_t> {
-    return typed<std::int64_t>(detail::make_owned_redis_command({"SCARD", key}), detail::parse_redis_integer);
+auto redis_command_set<surface_type>::scard_command(command_surface& self, std::string_view key) -> reply<std::int64_t> {
+    return typed<std::int64_t>(self, detail::make_owned_redis_command({"SCARD", key}), detail::parse_redis_integer);
 }
 
 template <typename surface_type>
-auto redis_command_set<surface_type>::sismember(std::string_view key, std::string_view member) -> reply<bool> {
-    return typed<bool>(detail::make_owned_redis_command({"SISMEMBER", key, member}), detail::parse_redis_integer_bool);
+auto redis_command_set<surface_type>::sismember_command(command_surface& self, std::string_view key, std::string_view member) -> reply<bool> {
+    return typed<bool>(self, detail::make_owned_redis_command({"SISMEMBER", key, member}), detail::parse_redis_integer_bool);
 }
 
 template <typename surface_type>
-auto redis_command_set<surface_type>::spop(std::string_view key) -> reply<std::optional<std::string>> {
-    return typed<std::optional<std::string>>(detail::make_owned_redis_command({"SPOP", key}), detail::parse_redis_optional_string);
+auto redis_command_set<surface_type>::spop_command(command_surface& self, std::string_view key) -> reply<std::optional<std::string>> {
+    return typed<std::optional<std::string>>(self, detail::make_owned_redis_command({"SPOP", key}), detail::parse_redis_optional_string);
 }
 
 template <typename surface_type>
-auto redis_command_set<surface_type>::srand_member(std::string_view key) -> reply<std::optional<std::string>> {
-    return typed<std::optional<std::string>>(detail::make_owned_redis_command({"SRANDMEMBER", key}), detail::parse_redis_optional_string);
+auto redis_command_set<surface_type>::srand_member_command(command_surface& self, std::string_view key) -> reply<std::optional<std::string>> {
+    return typed<std::optional<std::string>>(self, detail::make_owned_redis_command({"SRANDMEMBER", key}), detail::parse_redis_optional_string);
 }
 
 template <typename surface_type>
-auto redis_command_set<surface_type>::sinter(std::span<const std::string_view> keys) -> reply<std::vector<std::string>> {
-    return typed<std::vector<std::string>>(detail::redis_command_with_keys("SINTER", keys), detail::parse_redis_string_array);
+auto redis_command_set<surface_type>::sinter_command(command_surface& self, std::span<const std::string_view> keys) -> reply<std::vector<std::string>> {
+    return typed<std::vector<std::string>>(self, detail::redis_command_with_keys("SINTER", keys), detail::parse_redis_string_array);
 }
 
 template <typename surface_type>
-auto redis_command_set<surface_type>::sunion(std::span<const std::string_view> keys) -> reply<std::vector<std::string>> {
-    return typed<std::vector<std::string>>(detail::redis_command_with_keys("SUNION", keys), detail::parse_redis_string_array);
+auto redis_command_set<surface_type>::sunion_command(command_surface& self, std::span<const std::string_view> keys) -> reply<std::vector<std::string>> {
+    return typed<std::vector<std::string>>(self, detail::redis_command_with_keys("SUNION", keys), detail::parse_redis_string_array);
 }
 
 template <typename surface_type>
-auto redis_command_set<surface_type>::sdiff(std::span<const std::string_view> keys) -> reply<std::vector<std::string>> {
-    return typed<std::vector<std::string>>(detail::redis_command_with_keys("SDIFF", keys), detail::parse_redis_string_array);
+auto redis_command_set<surface_type>::sdiff_command(command_surface& self, std::span<const std::string_view> keys) -> reply<std::vector<std::string>> {
+    return typed<std::vector<std::string>>(self, detail::redis_command_with_keys("SDIFF", keys), detail::parse_redis_string_array);
 }
 
 template <typename surface_type>
-auto redis_command_set<surface_type>::zadd(std::string_view key, double score, std::string_view member) -> reply<std::int64_t> {
-    return typed<std::int64_t>(detail::make_redis_zadd_command(key, score, member), detail::parse_redis_integer);
+auto redis_command_set<surface_type>::zadd_command(command_surface& self, std::string_view key, double score, std::string_view member) -> reply<std::int64_t> {
+    return typed<std::int64_t>(self, detail::make_redis_zadd_command(key, score, member), detail::parse_redis_integer);
 }
 
 template <typename surface_type>
-auto redis_command_set<surface_type>::zrem(std::string_view key, std::string_view member) -> reply<std::int64_t> {
-    return typed<std::int64_t>(detail::make_owned_redis_command({"ZREM", key, member}), detail::parse_redis_integer);
+auto redis_command_set<surface_type>::zrem_command(command_surface& self, std::string_view key, std::string_view member) -> reply<std::int64_t> {
+    return typed<std::int64_t>(self, detail::make_owned_redis_command({"ZREM", key, member}), detail::parse_redis_integer);
 }
 
 template <typename surface_type>
-auto redis_command_set<surface_type>::zrange(std::string_view key, std::int64_t start, std::int64_t stop) -> reply<std::vector<std::string>> {
-    return typed<std::vector<std::string>>(detail::make_redis_range_command("ZRANGE", key, start, stop), detail::parse_redis_string_array);
+auto redis_command_set<surface_type>::zrange_command(command_surface& self, std::string_view key, std::int64_t start, std::int64_t stop) -> reply<std::vector<std::string>> {
+    return typed<std::vector<std::string>>(self, detail::make_redis_range_command("ZRANGE", key, start, stop), detail::parse_redis_string_array);
 }
 
 template <typename surface_type>
-auto redis_command_set<surface_type>::zrange_with_scores(std::string_view key, std::int64_t start, std::int64_t stop) -> reply<std::vector<redis_scored_value>> {
-    return typed<std::vector<redis_scored_value>>(detail::make_redis_range_command("ZRANGE", key, start, stop, true), detail::parse_redis_scored_array);
+auto redis_command_set<surface_type>::zrange_with_scores_command(command_surface& self, std::string_view key, std::int64_t start, std::int64_t stop) -> reply<std::vector<redis_scored_value>> {
+    return typed<std::vector<redis_scored_value>>(self, detail::make_redis_range_command("ZRANGE", key, start, stop, true), detail::parse_redis_scored_array);
 }
 
 template <typename surface_type>
-auto redis_command_set<surface_type>::zscore(std::string_view key, std::string_view member) -> reply<std::optional<double>> {
-    return typed<std::optional<double>>(detail::make_owned_redis_command({"ZSCORE", key, member}), [](redis_value&& value) {
+auto redis_command_set<surface_type>::zscore_command(command_surface& self, std::string_view key, std::string_view member) -> reply<std::optional<double>> {
+    return typed<std::optional<double>>(self, detail::make_owned_redis_command({"ZSCORE", key, member}), [](redis_value&& value) {
         return detail::parse_redis_optional_double(std::move(value), "invalid redis zscore reply");
     });
 }
 
 template <typename surface_type>
-auto redis_command_set<surface_type>::zcard(std::string_view key) -> reply<std::int64_t> {
-    return typed<std::int64_t>(detail::make_owned_redis_command({"ZCARD", key}), detail::parse_redis_integer);
+auto redis_command_set<surface_type>::zcard_command(command_surface& self, std::string_view key) -> reply<std::int64_t> {
+    return typed<std::int64_t>(self, detail::make_owned_redis_command({"ZCARD", key}), detail::parse_redis_integer);
 }
 
 template <typename surface_type>
-auto redis_command_set<surface_type>::zcount(std::string_view key, double min_value, double max_value) -> reply<std::int64_t> {
+auto redis_command_set<surface_type>::zcount_command(command_surface& self, std::string_view key, double min_value, double max_value) -> reply<std::int64_t> {
     std::array<char, detail::redis_score_scratch_size> min_scratch{};
     std::array<char, detail::redis_score_scratch_size> max_scratch{};
     const std::string_view args[]{
@@ -807,52 +807,52 @@ auto redis_command_set<surface_type>::zcount(std::string_view key, double min_va
         detail::format_redis_score(min_scratch, min_value),
         detail::format_redis_score(max_scratch, max_value),
     };
-    return typed<std::int64_t>(detail::make_owned_redis_command(args), detail::parse_redis_integer);
+    return typed<std::int64_t>(self, detail::make_owned_redis_command(args), detail::parse_redis_integer);
 }
 
 template <typename surface_type>
-auto redis_command_set<surface_type>::scan(redis_scan_options options) -> reply<redis_scan_result> {
-    return typed<redis_scan_result>(make_redis_scan_command("SCAN", std::nullopt, options), detail::parse_redis_scan_result);
+auto redis_command_set<surface_type>::scan_command(command_surface& self, redis_scan_options options) -> reply<redis_scan_result> {
+    return typed<redis_scan_result>(self, make_redis_scan_command("SCAN", std::nullopt, options), detail::parse_redis_scan_result);
 }
 
 template <typename surface_type>
-auto redis_command_set<surface_type>::hscan(std::string_view key, redis_scan_options options) -> reply<redis_hash_scan_result> {
-    return typed<redis_hash_scan_result>(make_redis_scan_command("HSCAN", key, options), detail::parse_redis_hash_scan_result);
+auto redis_command_set<surface_type>::hscan_command(command_surface& self, std::string_view key, redis_scan_options options) -> reply<redis_hash_scan_result> {
+    return typed<redis_hash_scan_result>(self, make_redis_scan_command("HSCAN", key, options), detail::parse_redis_hash_scan_result);
 }
 
 template <typename surface_type>
-auto redis_command_set<surface_type>::sscan(std::string_view key, redis_scan_options options) -> reply<redis_scan_result> {
-    return typed<redis_scan_result>(make_redis_scan_command("SSCAN", key, options), detail::parse_redis_scan_result);
+auto redis_command_set<surface_type>::sscan_command(command_surface& self, std::string_view key, redis_scan_options options) -> reply<redis_scan_result> {
+    return typed<redis_scan_result>(self, make_redis_scan_command("SSCAN", key, options), detail::parse_redis_scan_result);
 }
 
 template <typename surface_type>
-auto redis_command_set<surface_type>::zscan(std::string_view key, redis_scan_options options) -> reply<redis_z_scan_result> {
-    return typed<redis_z_scan_result>(make_redis_scan_command("ZSCAN", key, options), detail::parse_redis_z_scan_result);
+auto redis_command_set<surface_type>::zscan_command(command_surface& self, std::string_view key, redis_scan_options options) -> reply<redis_z_scan_result> {
+    return typed<redis_z_scan_result>(self, make_redis_scan_command("ZSCAN", key, options), detail::parse_redis_z_scan_result);
 }
 
 template <typename surface_type>
-auto redis_command_set<surface_type>::eval(std::string_view script, std::span<const std::string_view> keys, std::span<const std::string_view> args) -> reply<redis_value> {
-    return typed<redis_value>(detail::redis_eval_args("EVAL", script, keys, args), take_redis_reply);
+auto redis_command_set<surface_type>::eval_command(command_surface& self, std::string_view script, std::span<const std::string_view> keys, std::span<const std::string_view> args) -> reply<redis_value> {
+    return typed<redis_value>(self, detail::redis_eval_args("EVAL", script, keys, args), take_redis_reply);
 }
 
 template <typename surface_type>
-auto redis_command_set<surface_type>::eval_sha(std::string_view sha1, std::span<const std::string_view> keys, std::span<const std::string_view> args) -> reply<redis_value> {
-    return typed<redis_value>(detail::redis_eval_args("EVALSHA", sha1, keys, args), take_redis_reply);
+auto redis_command_set<surface_type>::eval_sha_command(command_surface& self, std::string_view sha1, std::span<const std::string_view> keys, std::span<const std::string_view> args) -> reply<redis_value> {
+    return typed<redis_value>(self, detail::redis_eval_args("EVALSHA", sha1, keys, args), take_redis_reply);
 }
 
 template <typename surface_type>
-auto redis_command_set<surface_type>::script_load(std::string_view script) -> reply<std::string> {
-    return typed<std::string>(detail::make_owned_redis_command({"SCRIPT", "LOAD", script}), detail::take_redis_string);
+auto redis_command_set<surface_type>::script_load_command(command_surface& self, std::string_view script) -> reply<std::string> {
+    return typed<std::string>(self, detail::make_owned_redis_command({"SCRIPT", "LOAD", script}), detail::take_redis_string);
 }
 
 template <typename surface_type>
-auto redis_command_set<surface_type>::script_exists(std::span<const std::string_view> sha1s) -> reply<std::vector<bool>> {
-    return typed<std::vector<bool>>(detail::redis_command_with_key_fields("SCRIPT", "EXISTS", sha1s), detail::parse_redis_bool_array);
+auto redis_command_set<surface_type>::script_exists_command(command_surface& self, std::span<const std::string_view> sha1s) -> reply<std::vector<bool>> {
+    return typed<std::vector<bool>>(self, detail::redis_command_with_key_fields("SCRIPT", "EXISTS", sha1s), detail::parse_redis_bool_array);
 }
 
 template <typename surface_type>
-auto redis_command_set<surface_type>::publish(std::string_view channel, std::string_view payload) -> reply<std::int64_t> {
-    return typed<std::int64_t>(detail::make_owned_redis_command({"PUBLISH", channel, payload}), detail::parse_redis_integer);
+auto redis_command_set<surface_type>::publish_command(command_surface& self, std::string_view channel, std::string_view payload) -> reply<std::int64_t> {
+    return typed<std::int64_t>(self, detail::make_owned_redis_command({"PUBLISH", channel, payload}), detail::parse_redis_integer);
 }
 
 template class redis_command_set<redis_executor>;

@@ -828,8 +828,8 @@ public:
     const worker_ref& worker(std::size_t index) const {
         return workers_.at(index)->worker_;
     }
-    // A single-loop http_server is a one-member group; its synchronous
-    // controls reach the member directly on the owner loop.
+    // The single-loop host borrows its sole member for owner-local adoption
+    // and worker identity. Awaited controls share the group coordination chain.
     http_server_state& member() const noexcept {
         return *workers_.front();
     }
@@ -1444,8 +1444,8 @@ task<void> http_server::add_connection_service(listen_config config) & {
 void http_server::adopt(const listener_endpoint& service, native_socket socket, adopt_options options) & {
     state_->member().adopt(service, socket, options);
 }
-bool http_server::close_connection(std::uint64_t id) & {
-    return state_->member().close_connection(id);
+task<bool> http_server::close_connection(std::uint64_t id) & {
+    return state_->close_connection(worker(), id);
 }
 http_server& http_server::trusted_proxies(trusted_proxy_config config) & {
     state_->trusted_proxies(std::move(config));
@@ -1455,8 +1455,8 @@ task<void> http_server::start() & {
     const auto state = state_;
     return state->start(worker());
 }
-void http_server::remove_listener(const listener_endpoint& endpoint, listener_remove_options options) & {
-    state_->member().remove(detail::listener_target(endpoint), {}, options);
+task<void> http_server::remove_listener(const listener_endpoint& endpoint, listener_remove_options options) & {
+    return state_->remove(worker(), detail::listener_target(endpoint), options);
 }
 task<void> http_server::wait_connections_closed(const listener_endpoint& endpoint, operation_options options) & {
     return state_->wait_connections(worker(), detail::listener_target(endpoint), std::move(options));
@@ -1466,11 +1466,11 @@ task<void> http_server::replace_tls_identities(const listener_endpoint& endpoint
     return state_->replace_tls(worker(), detail::listener_target(endpoint), std::move(input));
 }
 #ifndef _WIN32
-listener_sockets http_server::duplicate_listener_sockets(const listener_endpoint& endpoint) const& {
-    return state_->member().duplicate(detail::listener_target(endpoint));
+task<listener_sockets> http_server::duplicate_listener_sockets(const listener_endpoint& endpoint) const& {
+    return state_->duplicate(worker(), detail::listener_target(endpoint));
 }
 #endif
-void http_server::stop() & noexcept {
+void http_server::request_stop() & noexcept {
     state_->close();
 }
 task<void> http_server::shutdown() & {
@@ -1549,7 +1549,7 @@ task<void> http_server_group::adopt(worker_ref caller, std::size_t index, const 
     detail::socket_owner owner(socket);
     return state->adopt(std::move(caller), index, detail::owned_endpoint(endpoint), std::move(owner), detail::owned_adopt_options(options));
 }
-void http_server_group::stop() & noexcept {
+void http_server_group::request_stop() & noexcept {
     state_->close();
 }
 task<void> http_server_group::shutdown(worker_ref caller) & {

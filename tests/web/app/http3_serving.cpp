@@ -1386,7 +1386,7 @@ TEST(Ruvia, a_multi_worker_app_serves_http3_and_closes_it_on_stop) {
             return slow_entered().load();
         }, client_timeout));
         std::thread stopper([&app] {
-            app.stop();
+            app.request_stop();
         });
         EXPECT_TRUE(client.wait_until([&client] {
             return client.closed();
@@ -1446,7 +1446,7 @@ TEST(Ruvia, a_multi_worker_app_serves_http3_and_closes_it_on_stop) {
         capped_loops.request_stop();
         capped_loops.join();
     }
-    app.stop();
+    app.request_stop();
     capped.join();
 
     // Rapid Reset (CVE-2023-44487), bounded as for HTTP/2: request streams the
@@ -1475,6 +1475,6 @@ TEST(Ruvia, a_multi_worker_app_serves_http3_and_closes_it_on_stop) {
         }, client_timeout));
         EXPECT_EQ(client.application_error(), std::optional(ruvia::http3_error_code::excessive_load));
     }
-    app.stop();
+    app.request_stop();
     resetting.join();
 }

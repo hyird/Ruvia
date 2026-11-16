@@ -107,13 +107,19 @@ redis_pool::~redis_pool() {
     close_now();
 }
 
-task<void> redis_pool::connect() {
-    for (auto& connection : connections_) {
-        if (!connection->connected()) {
-            co_await connection->connect(nullptr, command_timeout_);
+task<void> redis_pool::connect(operation_options options) {
+    const operation_deadline deadline(options.timeout_);
+    for (std::size_t slot = 0; slot < connections_.size(); ++slot) {
+        // Startup has exclusive access to these slots until the client is ready.
+        // Reuse command cancellation routing throughout DNS, TCP/TLS and setup.
+        slot_pool_type::cancellation_guard cancellation(slots_, slot, options.stop_token_);
+        slots_.throw_if_aborted(slot);
+        if (deadline.expired()) {
+            throw redis_error(backend_error_code::timeout, "redis connect timed out");
         }
+        co_await connections_[slot]->connect(&deadline, command_timeout_);
+        slots_.throw_if_aborted(slot);
     }
-    co_return;
 }
 
 void redis_pool::close_now() noexcept {

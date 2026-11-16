@@ -568,7 +568,7 @@ TEST(Ruvia, db_mariadb_close_ends_pipelined_statements_in_every_phase) {
         for (auto& result : outcomes) {
             statements.spawn(pipeline_test::query(handle, "SELECT v FROM t", result));
         }
-        connected.close();
+        connected.request_stop();
         co_await statements.join();
     });
     for (const auto& result : outcomes) {

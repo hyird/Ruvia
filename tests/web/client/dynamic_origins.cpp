@@ -680,7 +680,7 @@ void exercise_redirect_policy_cancellation(cancellation_case mode) {
         if (entered && mode == cancellation_case::caller_stop) {
             stop.request_stop();
         } else if (entered && mode == cancellation_case::owner_close) {
-            client.close();
+            client.request_stop();
         }
         co_await requests.join();
         co_await client.shutdown();
@@ -944,7 +944,7 @@ private:
         rejected = true;
     }
     EXPECT_TRUE(rejected);
-    client.abort();
+    client.request_stop();
     co_await scope.join();
     co_await client.shutdown();
 }

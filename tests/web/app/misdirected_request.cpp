@@ -253,7 +253,7 @@ TEST(Ruvia, requests_the_connection_cannot_carry_are_answered_421) {
             }
 #endif
         }
-        app.stop();
+        app.request_stop();
         runner.join();
     }
     app.trusted_proxies({});

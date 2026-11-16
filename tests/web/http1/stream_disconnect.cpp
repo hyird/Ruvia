@@ -799,7 +799,7 @@ TEST(Ruvia, http1_stream_peer_close_stops_request_and_recycles_connections) {
             const auto before_stop = finished.load();
             stopping.send(request("token"));
             EXPECT_TRUE(stopping.read_until("data: first").find("data: first") != std::string::npos);
-            app.stop();
+            app.request_stop();
             stopping.close();
             ruvia::test::wait_until([&] {
                 return finished.load() == before_stop + 1;
@@ -808,7 +808,7 @@ TEST(Ruvia, http1_stream_peer_close_stops_request_and_recycles_connections) {
     } catch (...) {
         client_failure = std::current_exception();
     }
-    app.stop();
+    app.request_stop();
     runner.join();
     EXPECT_EQ(errors.load(), std::size_t{0});
     EXPECT_EQ(app.stats().connection_failures_, std::size_t{0});

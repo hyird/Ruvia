@@ -455,8 +455,8 @@ TEST(Ruvia, independent_server_prepared_batch_cancel_and_shutdown_are_owning_tra
             EXPECT_NE(std::string_view(bytes.data(), received.result()).find(" 200 "), std::string_view::npos);
         }
         EXPECT_EQ(calls, 2U);
-        server.remove_listener({.address_ = "127.0.0.1", .port_ = port.endpoint().port()}, {.close_connections_ = true});
-        server.remove_listener({.address_ = "127.0.0.1", .port_ = second.endpoint().port()}, {.close_connections_ = true});
+        co_await server.remove_listener({.address_ = "127.0.0.1", .port_ = port.endpoint().port()}, {.close_connections_ = true});
+        co_await server.remove_listener({.address_ = "127.0.0.1", .port_ = second.endpoint().port()}, {.close_connections_ = true});
         auto pending = co_await server.prepare_listeners(configs);
         co_await server.shutdown();
         bool rejected = false;

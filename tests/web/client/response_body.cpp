@@ -1374,7 +1374,7 @@ TEST(Ruvia, http_client_ref_options_override_pool_timeout_and_start_when_operati
 
         auto operation = [&]() -> ruvia::task<void> {
             server.on_request([&client] {
-                client.close();
+                client.request_stop();
             });
             auto cold = client.client().get("/active-close").send();
             bool closing = false;
@@ -1785,7 +1785,7 @@ TEST(Ruvia, client_shutdown_keeps_incomplete_response_error_observable) {
             close_timer.expires_after(std::chrono::milliseconds(50));
             close_timer.async_wait([&client](const std::error_code& error) {
                 if (!error) {
-                    client.close();
+                    client.request_stop();
                 }
             });
             try {

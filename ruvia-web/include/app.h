@@ -82,7 +82,7 @@ struct application_worker_config final {
     // business worker holding the fewest connections; a socket that worker's
     // queue cannot admit is closed and counted in connections_refused_.
     std::size_t worker_count_{(std::max)(1U, std::thread::hardware_concurrency())};
-    // install: run() installs SIGINT/SIGTERM handlers that call stop().
+    // install: run() installs SIGINT/SIGTERM handlers that call request_stop().
     process_signal_handler_policy process_signal_handlers_{process_signal_handler_policy::external_owner};
     // Bound of each worker's cross-thread job queue.
     std::size_t worker_queue_capacity_{1024};
@@ -132,11 +132,10 @@ public:
     application& workers(application_worker_config config) && = delete;
     application& server(server_config config) &;
     application& server(server_config config) && = delete;
-    // Loads every TLS certificate, private key and client CA bundle of
-    // config.tls_ once, here: unreadable files or a wrong key password throw
-    // from listen(). The application keeps only the parsed credentials; this
-    // call's copy of each private-key password and in-memory PEM text is
-    // cleansed before it returns.
+    // Owns configuration without reading credential files. run() loads and
+    // validates TLS credentials before starting workers; loading failure
+    // propagates there. Replacing staged configuration cleanses its secrets
+    // and closes every inherited socket no run consumed.
     application& listen(listen_config config) &;
     application& listen(listen_config config) && = delete;
     application& listen(std::span<const listen_config> configs) &;
@@ -185,7 +184,7 @@ public:
     // Replaces the whole host callback set (see http_server_callbacks); empty
     // members clear. Stopped app only (std::logic_error while running). The
     // previous set is destroyed after releasing the application configuration
-    // lock, so a target's destructor may call stop() or query app state. A
+    // lock, so a target's destructor may call request_stop() or query app state. A
     // listener whose dispatch_ needs an absent request_stream_ or connection_
     // fails run() with std::invalid_argument.
     application& callbacks(http_server_callbacks callbacks) &;
@@ -224,7 +223,7 @@ public:
     application& client(http_client_config config) && = delete;
     application& client(std::nullptr_t) &;
     application& client(std::nullptr_t) && = delete;
-    // The app's start + wait: binds and serves until stop(), then returns
+    // The app's start + wait: binds and serves until request_stop(), then returns
     // after every worker retired (a host's start() then shutdown()). May run again
     // after it returns. The first preparation, startup, or worker failure is
     // rethrown to the caller, who is responsible for printing it; run() does
@@ -232,7 +231,7 @@ public:
     // equivalent worker failures collapsed into one line with their count.
     void run() &;
     void run() && = delete;
-    // Safe from any thread. A stop() issued while the app is not running is
+    // Safe from any thread. A request_stop() issued while the app is not running is
     // kept for the next run(), which then returns without serving. A stop
     // during startup rolls it back at once. A serving app stops by direct
     // disconnect, with no drain phase: admission stops (pending accepts and
@@ -242,8 +241,8 @@ public:
     // CONNECTION_CLOSE(H3_NO_ERROR) -- and handlers observe their stop token
     // (context::stop_token()); then worker I/O stops before background
     // operations are joined.
-    void stop() &;
-    void stop() && = delete;
+    void request_stop() &;
+    void request_stop() && = delete;
     // The blocking pool's counters, or all zero when no pool is configured or
     // the app is not running. Queue depth and the rejected count are what a
     // deployment sizes thread_count/queue_capacity from. Safe from any thread.

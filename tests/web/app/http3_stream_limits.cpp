@@ -306,7 +306,7 @@ public:
     }
     // Call after every client of the case is gone.
     void finish() {
-        ruvia::app().stop();
+        ruvia::app().request_stop();
         run_.join();
     }
     ~served_case() {

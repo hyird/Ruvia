@@ -585,9 +585,9 @@ namespace detail {
 struct redis_predicate_access;
 }
 
-// An owning Redis filter. Literal text is copied into the process resource when
+// An owning Redis filter. Literal text is copied into standard strings when
 // the filter is built, so the filter may outlive the strings used to build it.
-// Compilation copies every argument into the schema mapping's memory resource.
+// Compilation produces a command that owns every argument independently.
 // NUMERIC predicates retain literal precision: float operands keep float's
 // stored encoding for float32 columns and widen for other numeric columns;
 // double operands never narrow. Cast explicitly when float rounding is intended.
@@ -945,7 +945,7 @@ public:
 
     // rows uses limit_ or redis_find_default_limit; first caps that page at one.
     // count validates all options but counts all matches, ignoring pagination.
-    // Commands own all arguments in this mapping's resource.
+    // Commands own all arguments independently of this mapping.
     [[nodiscard]] redis_compiled_command compile_find(const redis_find_options& options = {}, redis_search_mode mode = redis_search_mode::rows) const;
     [[nodiscard]] redis_compiled_command compile_create_index() const;
     // Drops only the index, never its documents.

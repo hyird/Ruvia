@@ -939,6 +939,24 @@ std::shared_ptr<const http_server_tls_identities> tls_identity_plan::load() cons
     return mode;
 }
 
+[[nodiscard]] std::optional<tls_file_name> client_ca_file(const tls_config& config) {
+    const auto& client = config.client_certificates_;
+    if (!client.ca_file_.has_value() && client.requirement_ == tls_client_certificate_requirement::optional) {
+        return std::nullopt;
+    }
+    switch (client.requirement_) {
+        case tls_client_certificate_requirement::optional:
+        case tls_client_certificate_requirement::required:
+            break;
+        default:
+            throw std::invalid_argument("TLS client certificate requirement is invalid");
+    }
+    if (!client.ca_file_.has_value()) {
+        throw std::invalid_argument("TLS client certificates require a CA bundle");
+    }
+    return make_tls_file_name(*client.ca_file_);
+}
+
 }  // namespace
 
 tls_certificate load_server_tls_certificate(const tls_identity_config& identity) {
@@ -973,25 +991,18 @@ const http_server_tls_identities::identity& http_server_tls_identities::select(s
     return *primary_;
 }
 
+void validate_http_server_tls(const tls_config& config) {
+    validate_tls_record_limit(config.max_outgoing_records_);
+    const tls_identity_plan identities(config);
+    (void)client_ca_file(config);
+}
+
 http_server_listener_definition::tls load_http_server_tls(const tls_config& config) {
     validate_tls_record_limit(config.max_outgoing_records_);
     // Every setting is validated before any credential is read.
     const tls_identity_plan identities(config);
     const auto& client = config.client_certificates_;
-    std::optional<tls_file_name> client_ca;
-    if (client.ca_file_.has_value() || client.requirement_ != tls_client_certificate_requirement::optional) {
-        switch (client.requirement_) {
-            case tls_client_certificate_requirement::optional:
-            case tls_client_certificate_requirement::required:
-                break;
-            default:
-                throw std::invalid_argument("TLS client certificate requirement is invalid");
-        }
-        if (!client.ca_file_.has_value()) {
-            throw std::invalid_argument("TLS client certificates require a CA bundle");
-        }
-        client_ca.emplace(make_tls_file_name(*client.ca_file_));
-    }
+    auto client_ca = client_ca_file(config);
 
     http_server_listener_definition::tls tls(identities.load());
     tls.max_outgoing_records_ = config.max_outgoing_records_;

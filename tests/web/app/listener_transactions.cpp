@@ -144,7 +144,7 @@ TEST(Ruvia, adding_first_routed_listener_builds_controllers_and_route_rate_limit
     EXPECT_TRUE(request(io, routed.endpoint(), "/limited").starts_with("HTTP/1.1 200 "));
     EXPECT_TRUE(request(io, routed.endpoint(), "/limited").starts_with("HTTP/1.1 429 "));
     EXPECT_TRUE(request(io, raw.endpoint()).ends_with("ready"));
-    app.stop();
+    app.request_stop();
     run.join();
 }
 
@@ -189,7 +189,7 @@ TEST(Ruvia, add_listener_prepare_failure_discards_already_adopted_sockets_withou
     control_loop().start(app.add_listener(control_loop().worker(), std::move(config))).get();
     EXPECT_TRUE(request(io, addition.endpoint()).ends_with("ready"));
     EXPECT_TRUE(request(io, original.endpoint()).ends_with("ready"));
-    app.stop();
+    app.request_stop();
     run.join();
 }
 
@@ -231,7 +231,7 @@ TEST(Ruvia, mixed_listener_adopts_one_physical_socket_group_for_plain_and_tls_ra
         asio::write(stream, asio::buffer(std::string_view("GET /ready HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")));
         EXPECT_TRUE(ruvia::test::read_to_end(stream).ends_with("ready"));
     }
-    app.stop();
+    app.request_stop();
     runner.join();
 }
 
@@ -282,7 +282,7 @@ TEST(Ruvia, runtime_tls_listener_preparation_does_not_block_its_caller_worker) {
     stream.handshake(asio::ssl::stream_base::client);
     asio::write(stream, asio::buffer(std::string_view("GET /ready HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")));
     EXPECT_TRUE(ruvia::test::read_to_end(stream).ends_with("ready"));
-    app.stop();
+    app.request_stop();
     run.join();
 }
 
@@ -345,7 +345,7 @@ TEST(Ruvia, application_prepared_batch_waits_for_publication_and_rolls_back_fail
         auto pending = loop.start(app.prepare_listeners(loop.worker(), abandoned_configs)).get();
     }
     auto pending = loop.start(app.prepare_listeners(loop.worker(), abandoned_configs)).get();
-    app.stop();
+    app.request_stop();
     run.join();
     EXPECT_THROW(loop.start(std::move(pending).activate()).get(), std::logic_error);
     // Only the cancelled candidate remained; restart has zero bound listeners.
@@ -356,7 +356,7 @@ TEST(Ruvia, application_prepared_batch_waits_for_publication_and_rolls_back_fail
     auto first = loop.start(app.prepare_listeners(loop.worker(), first_config)).get();
     loop.start(std::move(first).activate()).get();
     EXPECT_TRUE(request(io, addition.endpoint()).ends_with("ready"));
-    app.stop();
+    app.request_stop();
     empty_run.join();
     app.callbacks({.connection_ = &serve_connection});
 }

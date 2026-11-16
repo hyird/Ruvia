@@ -909,9 +909,9 @@ void apply_entity_upsert(db_query& query, std::span<const std::string_view> inse
 }
 
 template <typename executor_type>
-using db_repository_executor_type = std::conditional_t<std::same_as<executor_type, db_executor>, db_executor, executor_type&>;
+using db_repository_executor_type = std::conditional_t<db_copyable_surface<executor_type>, executor_type, executor_type&>;
 template <typename executor_type>
-using db_repository_input_type = std::conditional_t<std::same_as<executor_type, db_executor>, const db_executor&, executor_type&>;
+using db_repository_input_type = std::conditional_t<db_copyable_surface<executor_type>, const executor_type&, executor_type&>;
 
 }  // namespace detail
 
@@ -1881,6 +1881,7 @@ private:
     static constexpr std::size_t column_capacity = std::tuple_size_v<typename entity_type::columns_type>;
     friend class db_executor;
     friend class db_transaction;
+    friend class db_transaction_operations;
     explicit db_repository(detail::db_repository_input_type<executor_type> executor) :
         executor_(executor) {}
     [[nodiscard]] db_write_query_builder<entity_type, executor_type> save_builder(std::span<const entity_type> entities) const {
@@ -1954,6 +1955,11 @@ db_repository<entity_type, db_executor> db_executor::repository() const {
 template <typename entity_type>
 db_repository<entity_type, db_transaction> db_transaction::repository() & {
     return db_repository<entity_type, db_transaction>(*this);
+}
+template <typename entity_type>
+db_repository<entity_type, db_transaction_operations> db_transaction_operations::repository() const {
+    registration_.require_active();
+    return db_repository<entity_type, db_transaction_operations>(*this);
 }
 
 }  // namespace ruvia

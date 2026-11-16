@@ -269,9 +269,13 @@ db_error db_pool<driver_type>::closing_error() const {
 }
 
 template <typename driver_type>
-task<void> db_pool<driver_type>::connect() {
-    const operation_deadline timeout(std::nullopt);
+task<void> db_pool<driver_type>::connect(operation_options options) {
+    const operation_deadline timeout(options.timeout_);
     for (std::size_t index = 0; index < slots_.size(); ++index) {
+        typename leases_type::cancellation_guard cancellation(leases_, index, options.stop_token_);
+        if (timeout.expired()) {
+            throw timed_out();
+        }
         co_await open_slot(index, timeout);
     }
 }
@@ -475,6 +479,10 @@ task<void> db_pool<driver_type>::open_slot(std::size_t index, const operation_de
     const operation_deadline deadline_value = timeout.constrained_by(config_.connect_timeout_);
     try {
         co_await driver_type::connect(*this, index, deadline_value);
+        leases_.throw_if_aborted(index);
+        if (deadline_value.expired()) {
+            throw timed_out();
+        }
         slot.connected_ = true;
     } catch (...) {
         close_slot(index);

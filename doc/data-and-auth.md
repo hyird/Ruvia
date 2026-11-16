@@ -46,13 +46,15 @@ ruvia::app().db({
 // ruvia::event_loop_pool loops({.loop_count_ = 1});
 // auto loop = loops.loop(0);
 // ruvia::db_client client(loop, config);
-// co_await client.connect();
+// co_await client.connect({.timeout_ = std::chrono::seconds(5)});
 // auto db = client.db().with_options({.timeout_ = std::chrono::seconds(5)});
 // ...
 // co_await client.shutdown();
 ```
 
 数据库 TLS 复用 `client_tls_config`（`"client_transport_config.h"`）。`verify_identity` 在握手内完成证书链与 RFC 9525 subjectAltName 校验，先于发送登录或启动消息：DNS 名只匹配 DNS SAN，IP 只匹配 IP SAN，不回退到主题 CN；PostgreSQL 可用 `tls_.server_name_` 覆盖验证名，MariaDB 当前要求数字 IP 且不接受覆盖名。`max_outgoing_records_` 默认 `2^23`（范围 `1..2^23`），限制单连接发出的全部 TLS 记录并在到达上限时终止连接。系统 DNS 查询超时、取消、客户端关闭或 Worker 停机时不等待不可抢占的底层 `getaddrinfo` 返回。
+
+独立 `db_client::connect(operation_options = {}) &` 在入口拥有选项，冷任务实际启动才开始相对计时；同一预算贯穿所有池槽位的 DNS、TCP/TLS、认证与会话初始化，且只能收紧 `connect_timeout_` 等配置限制。用户取消报 `cancelled`，预算到期报 `timeout`；任何失败都会立即关闭已建立和失败中的连接并退休该客户端，不可重试同一实例。`request_stop()` 是可跨线程、幂等、立即返回的停止请求；`co_await shutdown()` 必须在绑定循环等待资源退休。`db()`、事务、流与所有冷任务都借用拥有者的生命周期；必须先等待或丢弃操作，再销毁拥有者。
 
 `read_timeout_` / `write_timeout_` 按毫秒限制每次对应方向的 socket 等待，普通查询、事务和流式结果均适用；MariaDB 原生选项的秒级取整不会放宽框架配置。单次流式 `read()` 的 operation timeout 包含 EOF 后的最终状态排空，不会在阶段切换时重新计时；另一次显式 `close()` 使用自己的新预算。两者都不晚于下述流的整体截止期。
 
@@ -155,7 +157,10 @@ co_await tx.execute("UPDATE accounts SET balance = balance + 100 WHERE id = 2");
 co_await tx.commit();
 ```
 
-- **失败终结**：语句、提交或回滚失败后，事务不再活跃；驱动在编码参数时拒绝输入也按语句失败处理。
+- **逐次选项**：原始 SQL 与 ORM 使用 `tx.with_options(operation_options)` 派生轻量 `db_transaction_operations` 命令视图：`co_await tx.with_options({.timeout_ = 100ms}).query("SELECT ...", id)`；同一视图支持编译期 SQL、`execute()` 和 `.repository<Entity>()` 的全部读写路线。视图及其 repository/builder 按值复制选项，不复制租约、不延长事务生命周期；冷任务在调用返回前拥有选项与 SQL/参数，不借用临时视图。视图存活时不得移动或销毁事务（违反借用义务立即终止，而非留下悬垂指针）。
+- **控制操作**：`commit(options = {})`、`rollback(options = {})`、`savepoint(name, options = {})`、`rollback_to_savepoint(name, options = {})`、`release_savepoint(name, options = {})`，以及 PostgreSQL 的 `notify`、所有咨询锁与游标操作均接受尾参 `operation_options`；SQL 参数与操作选项不混入同一 variadic 参数包。
+- **合并规则**：逐次预算只能收紧继承选项与事务截止期，派生视图不能重新放宽已有预算；相对预算在冷操作启动时开始。指定用户 token 可替换继承的用户取消，但原请求作用域的 stop 始终独立链接、不可替换。已停止的用户 token 在触及连接前拒绝该次操作，事务保持可用；执行中的超时或取消则立即关闭连接、结束事务。
+- **失败终结**：除上述触及连接前的取消准入拒绝外，语句、提交或回滚失败后，事务不再活跃；驱动在编码参数时拒绝输入也按语句失败处理。
 - **错误与租约**：保留原始操作错误；异常回滚或清理协程构造失败时先关闭连接，再准确归还一次租约。
 
 事务整体受 `db_config::transaction_timeout_`（默认 `60s`）约束，包括两次调用之间的空闲时间：不要在事务中等待远程 I/O，超过截止期后连接即被关闭、服务端回滚并释放锁，下一次调用（含 `commit()`）以 `db_error`（`timeout`）失败，详见第 1.1 节。
@@ -423,6 +428,8 @@ ruvia::app()
 
 - 每个 worker 维护 `pool_size_per_worker_`（默认 4）条常规命令连接，以及按需建立的 `blocking_pool_size_per_worker_` 条阻塞命令专用连接（供 `blpop`、`brpop`、`xread_group` 等阻塞操作自动使用，不阻塞常规命令池）。
 - 同样支持在独立 `event_loop` 上构造 `ruvia::redis_client client(loop, config)`，通过 `client.redis()` 获取 `redis_executor`（规则见 [1.2](#12-直接查询编译期-sql-校验与流式游标db_executor)）；`host_` 不是 IP 字面量时在事件循环的阻塞池上做 DNS 查询（见 1.1）。
+- **独立建连**：`connect(operation_options = {})` 在调用处拥有选项，返回 lazy、单次启动的任务；相对超时从任务启动开始，绝对截止期不重置，同一预算贯穿全部常规连接的 DNS、TCP/TLS、`AUTH` 与 `SELECT`，取消也覆盖这些阶段。操作选项只能收紧配置的建连及启动命令超时。构造函数仍同步验证并拥有配置，但不发起网络 I/O。
+- **独立停止与所有权**：`request_stop()` 立即、非阻塞、线程安全地请求停止，在绑定循环执行连接关闭；`co_await shutdown()` 等待已启动操作与能力作用域退休。句柄／repository／操作仍是 worker 关联能力；命令结果的标准字符串与容器独立拥有数据，可以跨客户端退休与销毁保存。`redis_pubsub_event` 的文本是例外，仍借用订阅当前回复（见 4.3）。
 - **独立宿主借入**：`router::bind_redis(alias, client)` / `bind_db(alias, client)` 把同 worker 的独立客户端按别名借给该 router 分发的请求，`c.redis(alias)` / `c.db(alias)` 与 `session_middleware` 由此解析；约束见 [显式路由组合](web-guide.md#111-显式路由组合routerh)。
 - 每条连接复用回复解析根槽；嵌套值和字符串由返回结果独立持有，失败或取消时随未完成的回复一起回收。
 - **请求写缓冲**：传输结束后最多保留 `64 KiB` 容量，超限大块立即归还分配器。取消或异常同样等待传输借用结束后再清理，不提前释放在途 I/O 使用的存储。
@@ -451,8 +458,8 @@ ruvia::app()
 
 - **唯一命令表**：类型化命令只声明于 `redis_command_set`，`redis_executor` 与两种 `redis_batch` 共同继承；对照 redis-plus-plus `Pipeline` / `Transaction` 与 go-redis `Pipeliner`（实现同一 `Cmdable`）。
 - **执行器专有**：`blpop`、`brpop`、`xread_group`、`subscription()` 会阻塞或独占连接，不进入批处理。
-- **批处理结果**：batch 上的类型化命令返回 batch 自身以便链式调用；`exec()` 按入队顺序返回原始 `redis_value`，元素按同名执行器命令的结果类型解读。
-- **常量性**：命令调用为非 `const`（同 redis-plus-plus）；`with_options`、`pipeline`、`transaction`、`subscription`、`repository` 为 `const`。
+- **批处理结果**：batch 上的类型化命令与原始 `command()` 返回同一 batch；左值返回 `&`，右值返回 `&&`，因此可直接 `co_await redis.pipeline().set("key", "value").get("key").exec()`，具名 builder 则用 `std::move(batch).exec()`。`exec() &&` 同步消费 builder，lazy 任务独立拥有命令；按入队顺序返回原始 `redis_value`。
+- **常量性**：`redis_executor` 的全部池化命令（含类型化、原始与阻塞命令）均可通过 `const` 句柄调用；配置派生与工厂也为 `const`。追加命令会修改 batch，所以 `const redis_pipeline`／`const redis_transaction` 不允许追加。
 
 - **SET 结果所有权**：`redis_set_result` 复制时复制 `previous()` 文本，移动时转移存储；结果不借用回复缓冲。
 - **SET 结果语义**：赋值失败保持原结果；`previous()` 的 `std::nullopt` 与空字符串保持区分。

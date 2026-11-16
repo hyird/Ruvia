@@ -186,7 +186,7 @@ task<db_transaction> db_executor::begin_transaction_prepared(detail::db_query_ba
     auto transaction = co_await detail::visit_db_pool(backend.pool_, [&](auto& pool) {
         return pool.begin_transaction(std::move(transaction_operation_options), std::move(transaction_options));
     });
-    transaction.bind_operation_scope(operation_scope, backend.io_metrics_, std::move(request_link));
+    transaction.bind_operation_scope(operation_scope, backend.io_metrics_, std::move(request_link), std::move(request_stop));
     co_return transaction;
 }
 
@@ -241,6 +241,7 @@ task<db_exec_result> db_command_set<surface_type>::execute_prepared(surface_refe
 
 template class db_command_set<db_executor>;
 template class db_command_set<db_transaction>;
+template class db_command_set<db_transaction_operations>;
 
 }  // namespace ruvia
 

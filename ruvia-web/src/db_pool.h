@@ -253,7 +253,7 @@ public:
     db_pool(const db_pool&) = delete;
     db_pool& operator=(const db_pool&) = delete;
 
-    [[nodiscard]] task<void> connect();
+    [[nodiscard]] task<void> connect(operation_options options = {});
     void close_now() noexcept;
 
     // The only execution path for raw SQL, compiled queries and transactions.

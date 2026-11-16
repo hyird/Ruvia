@@ -925,6 +925,7 @@ struct db_result_access final {
 
 class db_executor;
 class db_transaction;
+class db_transaction_operations;
 class db_query;
 template <typename entity_type, typename executor_type>
 class db_repository;
@@ -1066,47 +1067,45 @@ void validate_db_sql_literal(db_driver actual_driver) {
     }
 }
 
-// db_executor is a pooled handle: copyable, and issuing a command through a
-// const reference or a temporary is safe. db_transaction, the other command
-// surface, owns one leased connection and the state its operations borrow.
+// Pooled executors and option views are copyable command capabilities. A
+// transaction itself owns the lease and only admits mutable lvalue calls.
 template <typename surface_type>
-concept db_pooled_surface = std::same_as<surface_type, db_executor>;
+concept db_copyable_surface = std::same_as<surface_type, db_executor> || std::same_as<surface_type, db_transaction_operations>;
 }  // namespace detail
 
-// The single SQL command surface, inherited by db_executor and db_transaction
-// the way redis_command_set serves redis_executor and redis_batch.
+// The single SQL command surface of pooled executors, owned transactions and
+// their borrowed operation-option views.
 //
 // Every entry validates the SQL and clones its parameters into the statement
 // before it returns -- never inside the returned operation -- so argument
 // temporaries only have to outlive the call, not the operation awaited
 // afterwards.
 //
-// Each entry is spelled once per receiver contract. db_executor issues
-// commands through a const reference or a temporary handle. db_transaction
-// issues them only through a mutable lvalue: the operation borrows state the
-// transaction object owns, so a const or temporary transaction finds no entry.
+// Copyable capabilities admit const references and temporary views. The
+// transaction owner itself only admits mutable lvalues: every operation
+// borrows its address-stable state, never the temporary command view.
 template <typename surface_type>
 class db_command_set {
 public:
     [[nodiscard]] task<db_rows> query(std::string_view sql, std::span<const db_value> params = {}) const&
-        requires detail::db_pooled_surface<surface_type>
+        requires detail::db_copyable_surface<surface_type>
     {
         return query_statement(surface(), sql, params);
     }
     [[nodiscard]] task<db_rows> query(std::string_view sql, std::span<const db_value> params = {}) &
-        requires(!detail::db_pooled_surface<surface_type>)
+        requires(!detail::db_copyable_surface<surface_type>)
     {
         return query_statement(surface(), sql, params);
     }
     task<db_rows> query(std::string_view sql, std::initializer_list<db_value> params) const& = delete;
 
     [[nodiscard]] task<db_exec_result> execute(std::string_view sql, std::span<const db_value> params = {}) const&
-        requires detail::db_pooled_surface<surface_type>
+        requires detail::db_copyable_surface<surface_type>
     {
         return execute_statement(surface(), sql, params);
     }
     [[nodiscard]] task<db_exec_result> execute(std::string_view sql, std::span<const db_value> params = {}) &
-        requires(!detail::db_pooled_surface<surface_type>)
+        requires(!detail::db_copyable_surface<surface_type>)
     {
         return execute_statement(surface(), sql, params);
     }
@@ -1116,26 +1115,26 @@ public:
     // that already holds a contiguous parameter sequence passes it as a span
     // instead; a span cannot construct a db_value, so it never reaches here.
     template <typename... params_type>
-        requires detail::db_pooled_surface<surface_type> && detail::db_parameter_pack<params_type...>
+        requires detail::db_copyable_surface<surface_type> && detail::db_parameter_pack<params_type...>
     [[nodiscard]] task<db_rows> query(std::string_view sql, params_type&&... params) const& {
         const db_value values[]{detail::make_immediate_db_parameter(std::forward<params_type>(params))...};
         return query_statement(surface(), sql, values);
     }
     template <typename... params_type>
-        requires(!detail::db_pooled_surface<surface_type>) && detail::db_parameter_pack<params_type...>
+        requires(!detail::db_copyable_surface<surface_type>) && detail::db_parameter_pack<params_type...>
     [[nodiscard]] task<db_rows> query(std::string_view sql, params_type&&... params) & {
         const db_value values[]{detail::make_immediate_db_parameter(std::forward<params_type>(params))...};
         return query_statement(surface(), sql, values);
     }
 
     template <typename... params_type>
-        requires detail::db_pooled_surface<surface_type> && detail::db_parameter_pack<params_type...>
+        requires detail::db_copyable_surface<surface_type> && detail::db_parameter_pack<params_type...>
     [[nodiscard]] task<db_exec_result> execute(std::string_view sql, params_type&&... params) const& {
         const db_value values[]{detail::make_immediate_db_parameter(std::forward<params_type>(params))...};
         return execute_statement(surface(), sql, values);
     }
     template <typename... params_type>
-        requires(!detail::db_pooled_surface<surface_type>) && detail::db_parameter_pack<params_type...>
+        requires(!detail::db_copyable_surface<surface_type>) && detail::db_parameter_pack<params_type...>
     [[nodiscard]] task<db_exec_result> execute(std::string_view sql, params_type&&... params) & {
         const db_value values[]{detail::make_immediate_db_parameter(std::forward<params_type>(params))...};
         return execute_statement(surface(), sql, values);
@@ -1147,26 +1146,26 @@ public:
     // MariaDB, '$n' PostgreSQL) and a literal mixing both needs an explicit
     // driver. A dialect other than the connection's throws std::invalid_argument.
     template <fixed_string sql, db_driver driver = db_driver::unspecified, typename... params_type>
-        requires detail::db_pooled_surface<surface_type> && (detail::db_parameter<params_type> && ...)
+        requires detail::db_copyable_surface<surface_type> && (detail::db_parameter<params_type> && ...)
     [[nodiscard]] task<db_rows> query(params_type&&... params) const& {
         detail::validate_db_sql_literal<sql, driver, sizeof...(params_type)>(surface().query_driver());
         return query(sql.view(), std::forward<params_type>(params)...);
     }
     template <fixed_string sql, db_driver driver = db_driver::unspecified, typename... params_type>
-        requires(!detail::db_pooled_surface<surface_type>) && (detail::db_parameter<params_type> && ...)
+        requires(!detail::db_copyable_surface<surface_type>) && (detail::db_parameter<params_type> && ...)
     [[nodiscard]] task<db_rows> query(params_type&&... params) & {
         detail::validate_db_sql_literal<sql, driver, sizeof...(params_type)>(surface().query_driver());
         return query(sql.view(), std::forward<params_type>(params)...);
     }
 
     template <fixed_string sql, db_driver driver = db_driver::unspecified, typename... params_type>
-        requires detail::db_pooled_surface<surface_type> && (detail::db_parameter<params_type> && ...)
+        requires detail::db_copyable_surface<surface_type> && (detail::db_parameter<params_type> && ...)
     [[nodiscard]] task<db_exec_result> execute(params_type&&... params) const& {
         detail::validate_db_sql_literal<sql, driver, sizeof...(params_type)>(surface().query_driver());
         return execute(sql.view(), std::forward<params_type>(params)...);
     }
     template <fixed_string sql, db_driver driver = db_driver::unspecified, typename... params_type>
-        requires(!detail::db_pooled_surface<surface_type>) && (detail::db_parameter<params_type> && ...)
+        requires(!detail::db_copyable_surface<surface_type>) && (detail::db_parameter<params_type> && ...)
     [[nodiscard]] task<db_exec_result> execute(params_type&&... params) & {
         detail::validate_db_sql_literal<sql, driver, sizeof...(params_type)>(surface().query_driver());
         return execute(sql.view(), std::forward<params_type>(params)...);
@@ -1188,20 +1187,18 @@ private:
     template <typename, typename>
     friend class db_write_query_builder;
 
-    // The surface as its receiver contract sees it: const for the pooled
-    // executor, mutable for the transaction. Starting a statement claims the
-    // transaction's single-operation state and its connection, so no path
-    // below reaches a transaction through const. The surface supplies
+    // Copyable capabilities are read through const; only their transaction
+    // target claims the single-operation state and connection. Each supplies
     // query_driver(), start_query(), start_execute(), query_task(),
     // query_and_count_task() and its capability registration.
-    using surface_reference = std::conditional_t<detail::db_pooled_surface<surface_type>, const surface_type&, surface_type&>;
+    using surface_reference = std::conditional_t<detail::db_copyable_surface<surface_type>, const surface_type&, surface_type&>;
     [[nodiscard]] surface_reference surface() const& noexcept
-        requires detail::db_pooled_surface<surface_type>
+        requires detail::db_copyable_surface<surface_type>
     {
         return static_cast<surface_reference>(*this);
     }
     [[nodiscard]] surface_reference surface() & noexcept
-        requires(!detail::db_pooled_surface<surface_type>)
+        requires(!detail::db_copyable_surface<surface_type>)
     {
         return static_cast<surface_reference>(*this);
     }
@@ -1248,47 +1245,52 @@ public:
 
     [[nodiscard]] bool active() const noexcept;
 
+    // 仅借用事务；视图、repository 和冷任务都不得超过此对象的生命周期。
+    [[nodiscard]] db_transaction_operations with_options(operation_options options) & RUVIA_LIFETIMEBOUND;
+    db_transaction_operations with_options(operation_options) && = delete;
+
     template <typename entity_type>
     [[nodiscard]] db_repository<entity_type, db_transaction> repository() &;
     template <typename entity_type>
     db_repository<entity_type, db_transaction> repository() && = delete;
 
-    [[nodiscard]] task<void> commit() &;
-    task<void> commit() && = delete;
-    [[nodiscard]] task<void> rollback() &;
-    task<void> rollback() && = delete;
-    [[nodiscard]] task<void> savepoint(std::string_view name) &;
-    task<void> savepoint(std::string_view) && = delete;
-    [[nodiscard]] task<void> rollback_to_savepoint(std::string_view name) &;
-    task<void> rollback_to_savepoint(std::string_view) && = delete;
-    [[nodiscard]] task<void> release_savepoint(std::string_view name) &;
-    task<void> release_savepoint(std::string_view) && = delete;
-    [[nodiscard]] task<void> notify(std::string_view channel, std::string_view payload = {}) &;
-    task<void> notify(std::string_view, std::string_view = {}) && = delete;
-    [[nodiscard]] task<void> advisory_lock(std::int64_t key) &;
-    task<void> advisory_lock(std::int64_t) && = delete;
-    [[nodiscard]] task<void> advisory_lock(std::int32_t class_id, std::int32_t object_id) &;
-    task<void> advisory_lock(std::int32_t, std::int32_t) && = delete;
-    [[nodiscard]] task<void> advisory_lock(std::string_view key, std::int64_t seed = 0) &;
-    task<void> advisory_lock(std::string_view, std::int64_t = 0) && = delete;
-    [[nodiscard]] task<bool> try_advisory_lock(std::int64_t key) &;
-    task<bool> try_advisory_lock(std::int64_t) && = delete;
-    [[nodiscard]] task<bool> try_advisory_lock(std::int32_t class_id, std::int32_t object_id) &;
-    task<bool> try_advisory_lock(std::int32_t, std::int32_t) && = delete;
-    [[nodiscard]] task<bool> try_advisory_lock(std::string_view key, std::int64_t seed = 0) &;
-    task<bool> try_advisory_lock(std::string_view, std::int64_t = 0) && = delete;
-    [[nodiscard]] task<void> declare_cursor(std::string_view name, std::string_view sql, std::span<const db_value> params = {}, bool scroll = false) &;
-    task<void> declare_cursor(std::string_view, std::string_view, std::span<const db_value> = {}, bool = false) && = delete;
-    task<void> declare_cursor(std::string_view, std::string_view, std::initializer_list<db_value>, bool = false) & = delete;
-    task<void> declare_cursor(std::string_view, std::string_view, std::initializer_list<db_value>, bool = false) && = delete;
-    [[nodiscard]] task<db_rows> fetch_cursor(std::string_view name, std::uint64_t count = 1) &;
-    task<db_rows> fetch_cursor(std::string_view, std::uint64_t = 1) && = delete;
-    [[nodiscard]] task<void> close_cursor(std::string_view name) &;
-    task<void> close_cursor(std::string_view) && = delete;
+    [[nodiscard]] task<void> commit(operation_options options = {}) &;
+    task<void> commit(operation_options = {}) && = delete;
+    [[nodiscard]] task<void> rollback(operation_options options = {}) &;
+    task<void> rollback(operation_options = {}) && = delete;
+    [[nodiscard]] task<void> savepoint(std::string_view name, operation_options options = {}) &;
+    task<void> savepoint(std::string_view, operation_options = {}) && = delete;
+    [[nodiscard]] task<void> rollback_to_savepoint(std::string_view name, operation_options options = {}) &;
+    task<void> rollback_to_savepoint(std::string_view, operation_options = {}) && = delete;
+    [[nodiscard]] task<void> release_savepoint(std::string_view name, operation_options options = {}) &;
+    task<void> release_savepoint(std::string_view, operation_options = {}) && = delete;
+    [[nodiscard]] task<void> notify(std::string_view channel, std::string_view payload = {}, operation_options options = {}) &;
+    task<void> notify(std::string_view, std::string_view = {}, operation_options = {}) && = delete;
+    [[nodiscard]] task<void> advisory_lock(std::int64_t key, operation_options options = {}) &;
+    task<void> advisory_lock(std::int64_t, operation_options = {}) && = delete;
+    [[nodiscard]] task<void> advisory_lock(std::int32_t class_id, std::int32_t object_id, operation_options options = {}) &;
+    task<void> advisory_lock(std::int32_t, std::int32_t, operation_options = {}) && = delete;
+    [[nodiscard]] task<void> advisory_lock(std::string_view key, std::int64_t seed = 0, operation_options options = {}) &;
+    task<void> advisory_lock(std::string_view, std::int64_t = 0, operation_options = {}) && = delete;
+    [[nodiscard]] task<bool> try_advisory_lock(std::int64_t key, operation_options options = {}) &;
+    task<bool> try_advisory_lock(std::int64_t, operation_options = {}) && = delete;
+    [[nodiscard]] task<bool> try_advisory_lock(std::int32_t class_id, std::int32_t object_id, operation_options options = {}) &;
+    task<bool> try_advisory_lock(std::int32_t, std::int32_t, operation_options = {}) && = delete;
+    [[nodiscard]] task<bool> try_advisory_lock(std::string_view key, std::int64_t seed = 0, operation_options options = {}) &;
+    task<bool> try_advisory_lock(std::string_view, std::int64_t = 0, operation_options = {}) && = delete;
+    [[nodiscard]] task<void> declare_cursor(std::string_view name, std::string_view sql, std::span<const db_value> params = {}, bool scroll = false, operation_options options = {}) &;
+    task<void> declare_cursor(std::string_view, std::string_view, std::span<const db_value> = {}, bool = false, operation_options = {}) && = delete;
+    task<void> declare_cursor(std::string_view, std::string_view, std::initializer_list<db_value>, bool = false, operation_options = {}) & = delete;
+    task<void> declare_cursor(std::string_view, std::string_view, std::initializer_list<db_value>, bool = false, operation_options = {}) && = delete;
+    [[nodiscard]] task<db_rows> fetch_cursor(std::string_view name, std::uint64_t count = 1, operation_options options = {}) &;
+    task<db_rows> fetch_cursor(std::string_view, std::uint64_t = 1, operation_options = {}) && = delete;
+    [[nodiscard]] task<void> close_cursor(std::string_view name, operation_options options = {}) &;
+    task<void> close_cursor(std::string_view, operation_options = {}) && = delete;
 
 private:
     friend class db_executor;
     friend class db_command_set<db_transaction>;
+    friend class db_transaction_operations;
     template <typename, typename>
     friend class db_repository;
     template <typename, typename>
@@ -1297,10 +1299,10 @@ private:
     friend class db_write_query_builder;
 
     [[nodiscard]] db_driver query_driver() const;
-    [[nodiscard]] task<db_rows> start_query(std::string sql, std::vector<db_value> params);
-    [[nodiscard]] task<db_exec_result> start_execute(std::string sql, std::vector<db_value> params);
-    [[nodiscard]] task<db_rows> query_task(const db_query& query);
-    [[nodiscard]] task<std::pair<db_rows, db_rows>> query_and_count_task(const db_query& query, const db_query& count);
+    [[nodiscard]] task<db_rows> start_query(std::string sql, std::vector<db_value> params, operation_options options = {});
+    [[nodiscard]] task<db_exec_result> start_execute(std::string sql, std::vector<db_value> params, operation_options options = {});
+    [[nodiscard]] task<db_rows> query_task(const db_query& query, operation_options options = {});
+    [[nodiscard]] task<std::pair<db_rows, db_rows>> query_and_count_task(const db_query& query, const db_query& count, operation_options options = {});
     template <typename driver_type>
     friend class detail::db_pool;
 
@@ -1320,29 +1322,89 @@ private:
 
     db_transaction(detail::db_pool_ref_type client, std::size_t slot, operation_options options);
     template <typename result_type, bool exec_statement>
-    task<result_type> run_statement(std::string sql, std::vector<db_value> params);
+    task<result_type> run_statement(std::string sql, std::vector<db_value> params, operation_options options = {});
     // `io_metrics` is the request's counter block, or null outside a request.
     template <typename result_type, bool exec_statement>
-    static task<result_type> statement_task(std::string sql, std::vector<db_value> params, detail::request_io_metrics* io_metrics, operation_guard_type operation);
+    static task<result_type> statement_task(std::string sql, std::vector<db_value> params, detail::request_io_metrics* io_metrics, operation_guard_type operation, operation_options options, stop_token request_stop);
     template <bool commit_lease>
-    static task<void> finish_task(detail::request_io_metrics* io_metrics, operation_guard_type operation);
+    static task<void> finish_task(detail::request_io_metrics* io_metrics, operation_guard_type operation, operation_options options, stop_token request_stop);
     // A command naming one identifier: SAVEPOINT, RELEASE, CLOSE and the like.
-    task<void> run_identifier_command(std::string_view prefix, std::string_view name);
+    task<void> run_identifier_command(std::string_view prefix, std::string_view name, operation_options options);
     void require_postgresql_transaction(std::string_view feature) const;
-    task<void> query_void_prepared(std::string_view sql, std::span<const db_value> params);
-    task<bool> query_bool_prepared(std::string_view sql, std::span<const db_value> params);
+    task<void> query_void_prepared(std::string_view sql, std::span<const db_value> params, operation_options options);
+    task<bool> query_bool_prepared(std::string_view sql, std::span<const db_value> params, operation_options options);
     void reset() noexcept;
-    void bind_operation_scope(detail::operation_scope& scope, detail::request_io_metrics* io_metrics, std::unique_ptr<const linked_operation_options> request_link) noexcept;
+    void bind_operation_scope(detail::operation_scope& scope, detail::request_io_metrics* io_metrics, std::unique_ptr<const linked_operation_options> request_link, stop_token request_stop) noexcept;
     void expire_capability() noexcept;
 
     [[nodiscard]] detail::db_query_backend query_backend(const lease_type& lease) const;
     template <bool with_count>
-    static task<std::conditional_t<with_count, std::pair<db_rows, db_rows>, db_rows>> query_plan_prepared(detail::db_query_plan plan, detail::db_query_backend backend, operation_guard_type operation);
+    static task<std::conditional_t<with_count, std::pair<db_rows, db_rows>, db_rows>> query_plan_prepared(detail::db_query_plan plan, detail::db_query_backend backend, operation_guard_type operation, operation_options options, stop_token request_stop);
     // Declared before state_: the lease token links through it until state_ dies.
     std::unique_ptr<const linked_operation_options> request_link_;
     state_owner_type state_;
     detail::request_io_metrics* io_metrics_{nullptr};
+    stop_token request_stop_;
+    std::size_t option_borrows_{0};
     detail::capability_registration<&db_transaction::expire_capability> registration_;
+};
+
+// 复制只登记借用并复制选项，不复制连接租约。视图存活时不可移动或销毁事务；
+// repository/builder 按值保存视图，返回的冷任务只借用事务而不借用视图。
+class db_transaction_operations final : public db_command_set<db_transaction_operations> {
+public:
+    db_transaction_operations(const db_transaction_operations& other) noexcept :
+        transaction_(other.transaction_),
+        options_(other.options_),
+        registration_(other.registration_) {
+        ++transaction_->option_borrows_;
+    }
+    db_transaction_operations& operator=(const db_transaction_operations&) = delete;
+    ~db_transaction_operations() {
+        --transaction_->option_borrows_;
+    }
+    [[nodiscard]] db_transaction_operations with_options(operation_options options) const {
+        registration_.require_active();
+        return db_transaction_operations(*transaction_, override_operation_options(options_, std::move(options)));
+    }
+    template <typename entity_type>
+    [[nodiscard]] db_repository<entity_type, db_transaction_operations> repository() const;
+
+private:
+    friend class db_transaction;
+    friend class db_command_set<db_transaction_operations>;
+    template <typename, typename>
+    friend class db_repository;
+    template <typename, typename>
+    friend class db_query_builder;
+    template <typename, typename>
+    friend class db_write_query_builder;
+
+    db_transaction_operations(db_transaction& transaction, operation_options options) noexcept :
+        transaction_(&transaction),
+        options_(std::move(options)),
+        registration_(transaction.registration_) {
+        ++transaction_->option_borrows_;
+    }
+    [[nodiscard]] db_driver query_driver() const {
+        return transaction_->query_driver();
+    }
+    [[nodiscard]] task<db_rows> start_query(std::string sql, std::vector<db_value> params) const {
+        return transaction_->start_query(std::move(sql), std::move(params), options_);
+    }
+    [[nodiscard]] task<db_exec_result> start_execute(std::string sql, std::vector<db_value> params) const {
+        return transaction_->start_execute(std::move(sql), std::move(params), options_);
+    }
+    [[nodiscard]] task<db_rows> query_task(const db_query& query) const {
+        return transaction_->query_task(query, options_);
+    }
+    [[nodiscard]] task<std::pair<db_rows, db_rows>> query_and_count_task(const db_query& query, const db_query& count) const {
+        return transaction_->query_and_count_task(query, count, options_);
+    }
+
+    db_transaction* transaction_;
+    operation_options options_;
+    detail::capability_registration<&db_transaction::expire_capability>& registration_;
 };
 
 #ifdef RUVIA_ENABLE_REDIS
@@ -1469,11 +1531,11 @@ public:
     db_client(db_client&&) = delete;
     db_client& operator=(db_client&&) = delete;
 
-    // Lazy and worker-affine: start/await it on the bound event loop. Creating
-    // more than one connect task is harmless; the first task that starts owns
-    // the one allowed connection attempt and later starters fail.
-    [[nodiscard]] task<void> connect() &;
-    task<void> connect() && = delete;
+    // Lazy and worker-affine. Options are owned at call time; the timeout
+    // starts with the task and covers DNS, connection and initialization.
+    // It may only tighten configuration. Only the first starter may connect.
+    [[nodiscard]] task<void> connect(operation_options options = {}) &;
+    task<void> connect(operation_options = {}) && = delete;
 
     // Handles and operations borrow this client's open lifecycle. A temporary
     // client would begin pool shutdown at the end of the full expression.
@@ -1486,7 +1548,7 @@ public:
 
     // Idempotent and callable from any thread. Pool teardown runs on the bound
     // event loop; use shutdown() when its completion must be awaited.
-    void close() noexcept;
+    void request_stop() noexcept;
     // Pending pool waiters report backend_error_code::closing, distinct from
     // user-token cancellation (backend_error_code::cancelled).
     // Requests cancellation, joins worker-owned operations, and completes on

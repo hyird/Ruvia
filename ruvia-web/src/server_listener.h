@@ -452,10 +452,8 @@ inline void cleanse_identity(tls_identity_config& identity) noexcept {
     return {address, endpoint.port_.value()};
 }
 
-// listen() and replace_tls_identities() own their tls_config, the only copy
-// of each private-key password and in-memory PEM text the application ever
-// holds: credentials are loaded from it and every such secret is cleansed
-// when the call returns or throws.
+// Owned TLS configuration retains passwords and PEM only until preparation
+// completes, fails, or the staged configuration is replaced or destroyed.
 class tls_secret_cleanser final {
 public:
     explicit tls_secret_cleanser(tls_config& config) noexcept :

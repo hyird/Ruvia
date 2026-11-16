@@ -972,7 +972,7 @@ ruvia::task<void> exercise(ruvia::event_loop loop, const ruvia::blocking_pool& l
             if (kind == stop_kind::cancellation) {
                 stop.request_stop();
             } else if (kind == stop_kind::client_close) {
-                client.close();
+                client.request_stop();
             } else {
                 ready.set_value();
             }

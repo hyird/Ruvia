@@ -112,9 +112,8 @@ public:
         cancellation_->detach(*this);
     }
 
-    [[nodiscard]] task<void> connect() {
-        // The lifecycle admits one startup; snapshot options before suspending.
-        return connect_transport(std::move(connect_options_));
+    [[nodiscard]] task<void> connect(operation_options options) {
+        return connect_transport(std::move(options));
     }
 
     [[nodiscard]] std::string_view alpn() noexcept {
@@ -170,8 +169,6 @@ public:
         }
     }
 
-    operation_options connect_options_;
-
 private:
     [[nodiscard]] task<void> connect_transport(operation_options options) {
         operation_deadline timeout(override_operation_options({.timeout_ = connect_timeout_}, options).timeout_);
@@ -214,7 +211,7 @@ public:
         lifecycle_.bind_stop();
     }
     [[nodiscard]] task<void> connect(operation_options options) {
-        return connect_owned(shared_from_this(), std::move(options));
+        return lifecycle_.connect(std::move(options));
     }
     [[nodiscard]] std::string_view alpn() {
         lifecycle_.require_ready();
@@ -247,14 +244,6 @@ private:
     [[nodiscard]] tcp_client_backend& backend() noexcept {
         return backend_;
     }
-    [[nodiscard]] static task<void> connect_owned(std::shared_ptr<tcp_client_state> state, operation_options options) {
-        if (!state->worker_.is_current()) {
-            throw std::logic_error("TCP client must connect on its bound event loop");
-        }
-        auto lease = claim_operation_lane(state->connecting_, "TCP client connect already in progress");
-        state->backend_.connect_options_ = std::move(options);
-        co_await state->lifecycle_.connect();
-    }
     [[nodiscard]] static task<std::optional<std::span<const std::byte>>> read_owned(std::shared_ptr<tcp_client_state> state, operation_options options) {
         state->lifecycle_.require_ready();
         // Lane admission errors are caller errors, not transport failures.
@@ -278,7 +267,6 @@ private:
     event_loop loop_;
     worker_ref worker_;
     tcp_client_backend backend_;
-    bool connecting_{};
     client_lifecycle<tcp_client_state> lifecycle_;
 };
 
@@ -310,7 +298,7 @@ task<void> tcp_client::write(outbound_bytes bytes, operation_options operation) 
     return state_->write(std::move(bytes).into_string(), std::move(operation));
 }
 
-void tcp_client::abort() noexcept {
+void tcp_client::request_stop() noexcept {
     state_->request_close();
 }
 

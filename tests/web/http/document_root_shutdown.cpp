@@ -93,7 +93,7 @@ TEST(Ruvia, document_root_shutdown_cancels_old_snapshot_lease_and_restarts_refre
             const auto response = ruvia::test::exchange(io, endpoint, get_version);
             return response.starts_with("HTTP/1.1 200") && response.ends_with("published while the old request remains held");
         }, 5s);
-        app.stop();
+        app.request_stop();
         runner.join();
         EXPECT_TRUE(held_request_cancelled.load(std::memory_order_acquire));
         std::error_code error;
@@ -109,7 +109,7 @@ TEST(Ruvia, document_root_shutdown_cancels_old_snapshot_lease_and_restarts_refre
             const auto response = ruvia::test::exchange(io, endpoint, get_version);
             return response.starts_with("HTTP/1.1 200") && response.ends_with("refreshed after cancellation");
         }, 5s);
-        app.stop();
+        app.request_stop();
         restarted.join();
     }
 }

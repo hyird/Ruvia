@@ -152,6 +152,9 @@ struct app_state final {
     app_state();
     ~app_state();
 
+    // Unloaded configuration owns paths, secrets and inherited sockets until
+    // run() prepares it; runtime controls operate only on loaded definitions.
+    std::unique_ptr<owned_listen_configs> staged_listeners_;
     std::vector<http_server_listener_definition> listeners_;
     // Heap-stable: options_ borrows its members. Replaced whole by callbacks().
     callback_registration<http_server_callbacks> callbacks_;

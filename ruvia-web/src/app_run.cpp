@@ -82,7 +82,7 @@ public:
             runtime_.finalize();
         },
             .failure_ = [&owner](std::exception_ptr) noexcept {
-            owner.stop();
+            owner.request_stop();
         },
         });
         // A failed registration or thread start must join the runtime while
@@ -94,7 +94,7 @@ public:
                 if (!ec) {
                     std::error_code ignored;
                     signals_.clear(ignored);
-                    owner.stop();
+                    owner.request_stop();
                 }
             });
             // Nothing else can reach this freshly built runtime, so no stop
@@ -170,7 +170,7 @@ public:
             }
         } catch (...) {
             primary_failure = std::current_exception();
-            owner_.stop();
+            owner_.request_stop();
         }
 
         stop_signal_handling();
@@ -222,6 +222,13 @@ private:
     }
 
     void build_and_publish_runtime() {
+        // run() is the blocking host boundary; credential I/O belongs here,
+        // before worker threads exist, never in the configuration setter.
+        if (state_.staged_listeners_) {
+            auto input = std::move(state_.staged_listeners_);
+            auto listeners = input->load();
+            state_.listeners_.swap(listeners);
+        }
         const bool routes_enabled = std::ranges::any_of(state_.listeners_, [](const auto& listener) {
             return !listener.connection_.has_value() && !listener.request_stream_ && !std::holds_alternative<detail::http_server_listener_definition::redirect_http_to_https>(listener.transport_);
         });
@@ -240,7 +247,7 @@ private:
         prepared_options.failure_ = detail::worker_failure_sink{
             .target_ = &owner_,
             .invoke_ = [](void* target, const std::exception_ptr&) noexcept {
-            static_cast<application*>(target)->stop();
+            static_cast<application*>(target)->request_stop();
         },
         };
 
@@ -400,7 +407,7 @@ private:
     void retire_runtime() noexcept {
         std::unique_ptr<detail::app_runtime_graph> retired;
         {
-            // run()/stop() remain synchronous main-thread lifecycle drivers.
+            // run()/request_stop() remain synchronous main-thread lifecycle drivers.
             // Controls suspend their callers; only this owner waits to retire
             // their borrowed runtime and frozen configuration after joining.
             std::unique_lock lock(state_.mutex_);

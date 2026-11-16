@@ -545,7 +545,7 @@ public:
     }
 
     void finish() {
-        ruvia::app().stop();
+        ruvia::app().request_stop();
         run_->join();
     }
 

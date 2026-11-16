@@ -159,6 +159,9 @@ struct http_server_tls_identities final {
     tls_certificate_id default_certificate_{};
 };
 
+// Validates only local configuration; never opens or parses credentials.
+void validate_http_server_tls(const tls_config& config);
+
 // Attaches the local address a connection arrived at, which identity
 // selection matches against local-address identities. The caller keeps it
 // alive and unchanged for the SSL's whole lifetime; a connection without one

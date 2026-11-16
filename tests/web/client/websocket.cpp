@@ -421,7 +421,7 @@ TEST(Ruvia, websocket_client_negotiates_deflate_and_can_skip_individual_messages
             EXPECT_TRUE(websocket.connected());
             EXPECT_TRUE(handle.connected());
         }
-        client.close();
+        client.request_stop();
         co_await client.shutdown();
         peer.close();
         attachment.request_stop();

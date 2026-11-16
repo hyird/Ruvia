@@ -92,10 +92,10 @@ redis_client_runtime::redis_client_runtime(asio::io_context& io_context, const w
 
 redis_client_runtime::~redis_client_runtime() = default;
 
-task<void> redis_client_runtime::connect() {
+task<void> redis_client_runtime::connect(operation_options options) {
     // Validate ordinary connections at startup; blocking slots and
     // subscriptions connect lazily.
-    co_await general_.connect();
+    co_await general_.connect(std::move(options));
 }
 
 void redis_client_runtime::close_now() noexcept {
@@ -122,8 +122,8 @@ public:
     void bind_stop() {
         lifecycle_.bind_stop();
     }
-    [[nodiscard]] task<void> connect() {
-        return lifecycle_.connect();
+    [[nodiscard]] task<void> connect(operation_options options) {
+        return lifecycle_.connect(std::move(options));
     }
     void request_close() noexcept {
         lifecycle_.request_close();
@@ -148,7 +148,7 @@ private:
     event_loop loop_;
     worker_ref worker_;
     redis_client_runtime runtime_;
-    // Retires scopes before backend storage and its allocator are destroyed.
+    // Retires scopes before backend storage is destroyed.
     client_lifecycle<redis_client_state> lifecycle_;
 };
 redis_client_state::redis_client_state(event_loop loop, const redis_config& config) :
@@ -183,15 +183,15 @@ redis_client::~redis_client() {
     state_->request_close();
 }
 
-task<void> redis_client::connect() & {
-    return state_->connect();
+task<void> redis_client::connect(operation_options options) & {
+    return state_->connect(std::move(options));
 }
 
 redis_executor redis_client::redis() const& {
     return state_->redis();
 }
 
-void redis_client::close() noexcept {
+void redis_client::request_stop() noexcept {
     state_->request_close();
 }
 

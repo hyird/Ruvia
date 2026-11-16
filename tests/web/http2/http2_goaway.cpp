@@ -171,7 +171,7 @@ frame next_of_type(peer& client, ruvia::http2_frame_type type) {
     return value;
 }
 
-// application::stop() disconnects directly (no drain): an HTTP/2 connection
+// application::request_stop() disconnects directly (no drain): an HTTP/2 connection
 // with a request in flight is closed at once, without GOAWAY or a response,
 // and the request's handler observes its stop token.
 void check_stop_closes_connection() {
@@ -203,7 +203,7 @@ void check_stop_closes_connection() {
     }, 3s);
 
     const auto stop_started = std::chrono::steady_clock::now();
-    app.stop();
+    app.request_stop();
     // Every frame the server still sends precedes the close; none is a
     // GOAWAY or a response to the admitted stream.
     for (;;) {
@@ -305,7 +305,7 @@ void check_idle_timeout_drain(bool stalled_stream) {
             return state.cancelled_.load();
         }, 3s);
     }
-    run.app().stop();
+    run.app().request_stop();
     run.join();
 }
 
@@ -432,7 +432,7 @@ TEST(Ruvia, http2_peer_end_of_input_gets_final_goaway_before_close) {
     run.socket().shutdown(asio::ip::tcp::socket::shutdown_send);
     expect_final_goaway_and_end(client, 0);
     run.socket().close();
-    run.app().stop();
+    run.app().request_stop();
     run.join();
 }
 
@@ -450,7 +450,7 @@ TEST(Ruvia, http2_idle_timeout_runs_from_last_stream_end_despite_pings) {
     EXPECT_EQ(uint32(frames.back().payload_) & 0x7fffffffU, 0x7fffffffU);
     expect_final_goaway_and_end(client, 1);
     run.socket().close();
-    run.app().stop();
+    run.app().request_stop();
     run.join();
 }
 
@@ -475,7 +475,7 @@ TEST(Ruvia, http2_request_body_timeout_resets_only_the_stalled_stream) {
     EXPECT_EQ(observed().uploads_.load(), 1);
     EXPECT_TRUE(observed().uploaded_bytes_.load() != 0);
     run.socket().close();
-    run.app().stop();
+    run.app().request_stop();
     run.join();
 }
 
@@ -497,7 +497,7 @@ TEST(Ruvia, http2_send_window_wait_is_bounded_by_write_timeout) {
     asio::write(run.socket(), asio::buffer(reopened));
     expect_stream_end(client, 3);
     run.socket().close();
-    run.app().stop();
+    run.app().request_stop();
     run.join();
 }
 
@@ -510,7 +510,7 @@ TEST(Ruvia, http2_readiness_is_bounded_by_header_completion_timeout) {
     expect_round_trip_start(client);
     expect_final_goaway_and_end(client, 0);
     run.socket().close();
-    run.app().stop();
+    run.app().request_stop();
     run.join();
 }
 
@@ -533,7 +533,7 @@ TEST(Ruvia, http2_idle_timeout_is_not_renewed_by_non_progress_frames) {
     ruvia::test::wait_until([&state] {
         return state.cancelled_.load();
     }, 3s);
-    run.app().stop();
+    run.app().request_stop();
     run.join();
 }
 
@@ -560,7 +560,7 @@ TEST(Ruvia, http2_idle_timeout_is_not_renewed_by_data_on_a_retired_stream) {
     EXPECT_EQ(uint32(std::string_view(frames.back().payload_).substr(4)), 0U);
     expect_final_goaway_and_end(client, 1);
     run.socket().close();
-    run.app().stop();
+    run.app().request_stop();
     run.join();
 }
 
@@ -593,6 +593,6 @@ TEST(Ruvia, http2_stream_write_is_bounded_by_write_completion_timeout) {
     asio::write(run.socket(), asio::buffer(reopened));
     expect_stream_end(client, 3);
     run.socket().close();
-    run.app().stop();
+    run.app().request_stop();
     run.join();
 }

@@ -223,7 +223,7 @@ TEST(Ruvia, a_handler_after_its_interim_head_is_timed_as_a_handler_not_a_write) 
         EXPECT_TRUE(refused.starts_with("HTTP/1.1 406 "));
         EXPECT_TRUE(refused.ends_with("refused"));
     }
-    app.stop();
+    app.request_stop();
     runner.join();
     EXPECT_TRUE(runner.failure() == nullptr);
 }

@@ -241,7 +241,7 @@ TEST(Ruvia, app_multi_worker_restarts_after_idle_connections_and_pending_accepts
         }
         // Cycle zero stops with no client; later cycles also retire connected
         // peers that never sent a request. Rebinding the port exercises reuse.
-        app.stop();
+        app.request_stop();
         run.join();
         EXPECT_TRUE(run.failure() == nullptr);
         for (auto& socket : idle) {
@@ -277,7 +277,7 @@ TEST(Ruvia, app_unsigned_max_timeouts_preserve_response_delivery) {
     EXPECT_TRUE(response.starts_with("HTTP/1.1 200 "));
     EXPECT_TRUE(response.ends_with("fast"));
     client.close();
-    app.stop();
+    app.request_stop();
     run.join();
     EXPECT_TRUE(run.failure() == nullptr);
 }
@@ -328,7 +328,7 @@ TEST(Ruvia, app_stop_closes_every_connection_at_once) {
     }, 3s);
 
     const auto stop_started = std::chrono::steady_clock::now();
-    app.stop();
+    app.request_stop();
     for (auto* socket : {&idle, &partial, &busy}) {
         std::string rest{};
         EXPECT_TRUE(read_to_end(*socket, rest, 3s));
@@ -366,7 +366,7 @@ TEST(Ruvia, app_stop_cancels_a_request_that_never_ends) {
     }, 3s);
 
     const auto stop_started = std::chrono::steady_clock::now();
-    app.stop();
+    app.request_stop();
     std::string response{};
     EXPECT_TRUE(read_to_end(socket, response, 3s));
     EXPECT_TRUE(response.empty());
@@ -401,7 +401,7 @@ TEST(Ruvia, app_stop_closes_an_upgrade_still_in_its_route_chain) {
     }, 3s);
 
     const auto stop_started = std::chrono::steady_clock::now();
-    app.stop();
+    app.request_stop();
     std::string received{};
     EXPECT_TRUE(read_to_end(upgrading, received, 3s));
     EXPECT_TRUE(received.empty());
@@ -439,7 +439,7 @@ TEST(Ruvia, app_stop_closes_websockets_without_close_handshake) {
     }, 3s);
 
     const auto stop_started = std::chrono::steady_clock::now();
-    app.stop();
+    app.request_stop();
     EXPECT_TRUE(read_to_end(client, received, 3s));
     EXPECT_TRUE(after_head(received).empty());
     run.join();
@@ -481,7 +481,7 @@ TEST(Ruvia, app_stop_closes_tunnels_at_once) {
     EXPECT_EQ(echoed, std::string("ping"));
 
     const auto stop_started = std::chrono::steady_clock::now();
-    app.stop();
+    app.request_stop();
     std::string rest{};
     EXPECT_TRUE(read_to_end(tunnel, rest, 3s));
     EXPECT_TRUE(rest.empty());
@@ -551,7 +551,7 @@ TEST(Ruvia, app_connection_cap_evicts_the_oldest_idle_connection) {
     EXPECT_TRUE(refused_bytes.empty());
     EXPECT_EQ(app.stats().connections_refused_, std::size_t{1});
 
-    app.stop();
+    app.request_stop();
     run.join();
     EXPECT_TRUE(run.failure() == nullptr);
 }
@@ -596,7 +596,7 @@ TEST(Ruvia, app_connection_timeouts_honor_coarse_scan_clock) {
     EXPECT_TRUE(std::chrono::steady_clock::now() - connected >= header_timeout);
     EXPECT_TRUE(silent_bytes.empty());
 
-    app.stop();
+    app.request_stop();
     run.join();
     EXPECT_TRUE(run.failure() == nullptr);
 }
@@ -632,7 +632,7 @@ TEST(Ruvia, app_stop_during_capability_connect_returns_normally) {
     EXPECT_TRUE(app.workers().empty());
     EXPECT_TRUE(!app.worker_for(std::uint64_t{0}).valid());
 
-    app.stop();
+    app.request_stop();
     run->join();
     EXPECT_TRUE(run->failure() == nullptr);
     run.reset();

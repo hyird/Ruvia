@@ -118,7 +118,7 @@ TEST(Ruvia, nonrouted_listeners_ignore_conflicts_and_unused_controller_and_middl
         const auto response = ruvia::test::exchange(io, endpoint, "GET /conflict/1 HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n");
         EXPECT_TRUE(response.starts_with("HTTP/1.1 200 "));
         EXPECT_NE(response.find(dispatch == ruvia::listener_dispatch::connection ? "connection" : "request-stream"), response.npos);
-        app.stop();
+        app.request_stop();
         run.join();
     }
     EXPECT_EQ(controller_constructions.load(), 0);
@@ -163,6 +163,6 @@ TEST(Ruvia, adding_first_routed_listener_rejects_conflicts_without_interrupting_
     }, 10s);
     EXPECT_THROW(control_loop().start(app.add_listener(control_loop().worker(), {.address_ = "127.0.0.1", .http_ = routed.endpoint().port()})).get(), std::invalid_argument);
     EXPECT_TRUE(ruvia::test::exchange(io, raw.endpoint(), "GET /still-serving HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n").ends_with("connection"));
-    app.stop();
+    app.request_stop();
     run.join();
 }

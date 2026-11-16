@@ -148,6 +148,115 @@ TEST(Ruvia, db_pool_failed_startup_retires_already_connected_slots) {
     }
 }
 
+TEST(Ruvia, db_client_connect_options_cover_authentication_and_own_their_values) {
+    using namespace ruvia;
+    using peer_type = test::backend_startup_peer;
+    for (const auto driver : database_drivers) {
+        for (const bool cancel : {false, true}) {
+            peer_type peer(driver == db_driver::postgresql ? peer_type::protocol::postgresql : peer_type::protocol::mariadb);
+            auto config = peer.config();
+            config.driver_ = driver;
+            config.connect_timeout_ = std::chrono::seconds(5);
+            event_loop_pool loops({.loop_count_ = 1});
+            db_client client(loops.loop(0), config);
+            stop_source stop;
+            operation_options options{.timeout_ = cancel ? std::chrono::seconds(5) : std::chrono::milliseconds(200), .stop_token_ = stop.token()};
+            auto cold = client.connect(options);
+            options = {};
+            loops.start();
+            auto connecting = loops.loop(0).start(std::move(cold));
+            peer.wait_for_startup();
+            if (cancel) {
+                stop.request_stop();
+            }
+            connecting.wait();
+            std::optional<backend_error_code> code;
+            try {
+                std::move(connecting).get();
+            } catch (const db_error& error) {
+                code = error.code();
+            }
+            auto shutdown = loops.loop(0).start(client.shutdown());
+            shutdown.wait();
+            std::move(shutdown).get();
+            loops.join();
+            EXPECT_TRUE(code == (cancel ? backend_error_code::cancelled : backend_error_code::timeout));
+            // Release the peer's authentication gate so it can observe EOF.
+            peer.authenticate();
+            peer.wait_for_disconnects();
+        }
+    }
+}
+
+TEST(Ruvia, db_client_connect_relative_timeout_starts_when_the_cold_task_starts) {
+    using namespace ruvia;
+    using peer_type = test::backend_startup_peer;
+    for (const auto driver : database_drivers) {
+        peer_type peer(driver == db_driver::postgresql ? peer_type::protocol::postgresql : peer_type::protocol::mariadb);
+        auto config = peer.config();
+        config.driver_ = driver;
+        event_loop_pool loops({.loop_count_ = 1});
+        db_client client(loops.loop(0), config);
+        auto cold = client.connect({.timeout_ = std::chrono::seconds(1)});
+        std::this_thread::sleep_for(std::chrono::milliseconds(1100));
+        loops.start();
+        auto connecting = loops.loop(0).start(std::move(cold));
+        peer.wait_for_startup();
+        peer.authenticate();
+        connecting.wait();
+        auto shutdown = loops.loop(0).start(client.shutdown());
+        shutdown.wait();
+        loops.join();
+        EXPECT_NO_THROW(std::move(connecting).get());
+        std::move(shutdown).get();
+    }
+}
+
+TEST(Ruvia, db_client_connect_options_cancel_and_timeout_queued_dns_without_waiting_for_lookup_threads) {
+    using namespace ruvia;
+    for (const auto driver : database_drivers) {
+        for (const bool cancel : {false, true}) {
+            blocking_pool lookups({.thread_count_ = 1});
+            std::promise<void> release;
+            auto released = release.get_future().share();
+            auto entered = std::make_shared<std::promise<void>>();
+            auto running = entered->get_future();
+            (void)lookups.post([entered, released] {
+                entered->set_value();
+                released.wait();
+            });
+            running.wait();
+            event_loop_pool loops({.loop_count_ = 1, .blocking_pool_ = &lookups});
+            db_client client(loops.loop(0), {.driver_ = driver, .host_ = "localhost", .port_ = 9, .tls_ = {.mode_ = client_tls_mode::disabled}});
+            stop_source stop;
+            loops.start();
+            auto connecting = loops.loop(0).start(client.connect({.timeout_ = cancel ? std::chrono::seconds(5) : std::chrono::milliseconds(500), .stop_token_ = stop.token()}));
+            const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(1);
+            while (lookups.stats().queued_ == 0 && std::chrono::steady_clock::now() < until) {
+                std::this_thread::yield();
+            }
+            EXPECT_GT(lookups.stats().queued_, std::size_t{0});
+            if (cancel) {
+                stop.request_stop();
+            }
+            connecting.wait();
+            std::optional<backend_error_code> code;
+            try {
+                std::move(connecting).get();
+            } catch (const db_error& error) {
+                code = error.code();
+            }
+            auto shutdown = loops.loop(0).start(client.shutdown());
+            shutdown.wait();
+            std::move(shutdown).get();
+            loops.join();
+            release.set_value();
+            lookups.join();
+            EXPECT_TRUE(code == (cancel ? backend_error_code::cancelled : backend_error_code::timeout));
+        }
+    }
+}
+
 #ifdef RUVIA_ENABLE_MARIADB
 TEST(Ruvia, db_pool_transaction_retirement_checks_server_state_before_reuse) {
     using namespace ruvia;
@@ -273,7 +382,7 @@ TEST(Ruvia, db_pool_shutdown_wakes_waiters_while_all_connections_are_leased) {
             }
         };
         pending.spawn(wait_for_connection());
-        value.close();
+        value.request_stop();
         co_await pending.join();
         EXPECT_TRUE(closing);
     });

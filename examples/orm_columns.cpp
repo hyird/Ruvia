@@ -5,6 +5,7 @@
 // retained entity results, transaction isolation and read-only transactions.
 // backend_config.h backend_tls() reads RUVIA_DB_TLS/CA/CERT/KEY for database transport.
 
+#include <chrono>
 #include <cstdlib>
 #include <exception>
 #include <iostream>
@@ -19,6 +20,8 @@
 #include "db_schema.h"
 #include "event_loop.h"
 #include "middleware.h"
+#include "task_scope.h"
+#include "worker_timer.h"
 
 namespace {
 using namespace ruvia;
@@ -35,6 +38,58 @@ auto migrations() {
     db_schema schema({.driver_ = db_driver::postgresql});
     schema.create_table<line_item>({.generated_columns_ = {{"total", db_expr::column("quantity") * db_expr::column("unit_price")}}});
     return schema.compile("orm_columns_001");
+}
+
+task<void> verify_operation_options(db_client& db) {
+    const auto session = db.db();
+    {
+        auto transaction = co_await session.begin_transaction();
+        stop_source stopped;
+        stopped.request_stop();
+        bool cancelled = false;
+        try {
+            (void)co_await transaction.with_options({.stop_token_ = stopped.token()}).repository<line_item>().find_and_count();
+        } catch (const db_error& error) {
+            cancelled = error.code() == backend_error_code::cancelled;
+        }
+        require(cancelled && transaction.active(), "pre-cancelled ORM operation consumed the transaction");
+        const auto rows = co_await transaction.with_options({.timeout_ = std::chrono::seconds(1)}).repository<line_item>().find();
+        (void)rows;
+        co_await transaction.savepoint("bounded", {.timeout_ = std::chrono::seconds(1)});
+        co_await transaction.rollback_to_savepoint("bounded", {.timeout_ = std::chrono::seconds(1)});
+        co_await transaction.release_savepoint("bounded", {.timeout_ = std::chrono::seconds(1)});
+        co_await transaction.commit({.timeout_ = std::chrono::seconds(1)});
+    }
+    {
+        auto transaction = co_await session.with_options({.timeout_ = std::chrono::milliseconds(200)}).begin_transaction();
+        bool timed_out = false;
+        try {
+            (void)co_await transaction.with_options({.timeout_ = std::chrono::milliseconds(100)}).with_options({.timeout_ = std::chrono::seconds(5)}).query("SELECT pg_sleep(3)");
+        } catch (const db_error& error) {
+            timed_out = error.code() == backend_error_code::timeout;
+        }
+        require(timed_out && !transaction.active(), "transaction options relaxed the inherited operation budget");
+    }
+    {
+        auto transaction = co_await session.begin_transaction();
+        stop_source stop;
+        bool cancelled = false;
+        task_scope pending(db.worker());
+        const auto query = [&]() -> task<void> {
+            try {
+                (void)co_await transaction.with_options({.timeout_ = std::chrono::seconds(5), .stop_token_ = stop.token()}).query("SELECT pg_sleep(3)");
+            } catch (const db_error& error) {
+                cancelled = error.code() == backend_error_code::cancelled;
+            }
+        };
+        pending.spawn(query());
+        (void)co_await sleep_for(db.worker(), std::chrono::milliseconds(50));
+        stop.request_stop();
+        co_await pending.join();
+        require(cancelled && !transaction.active(), "inflight transaction cancellation did not retire its lease");
+    }
+    const auto reusable = co_await session.query("SELECT 1 AS ready");
+    require(reusable.size() == 1, "retired transaction prevented the next connection from being used");
 }
 
 task<void> demonstrate(db_client& db, db_client& concurrent) {
@@ -85,15 +140,16 @@ task<void> demonstrate(db_client& db, db_client& concurrent) {
     const auto current = co_await items.find_one({.where_ = line_item::column<"id">() == 1});
     require(current && current->get<"total">() == 42, "default transaction failed to write");
     require(retained->get<"total">() == 35, "later operation changed retained entity data");
+    co_await verify_operation_options(db);
     std::cout << "Computed INSERT/UPDATE/UPSERT, retained results, repeatable-read snapshot, "
-                 "read-only rejection and default transaction verified.\n";
+                 "read-only rejection, default transaction, per-operation budgets and cancellation verified.\n";
 }
 
 task<void> run(db_client& db, db_client& concurrent, event_loop_attachment& attachment) {
     std::exception_ptr failure;
     try {
-        co_await db.connect();
-        co_await concurrent.connect();
+        co_await db.connect({.timeout_ = std::chrono::seconds(5)});
+        co_await concurrent.connect({.timeout_ = std::chrono::seconds(5)});
         co_await demonstrate(db, concurrent);
     } catch (...) {
         failure = std::current_exception();

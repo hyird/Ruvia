@@ -71,7 +71,7 @@ struct compression_config final {
 // response; a lingering connection still counts as active and is closed by
 // a worker stop. Idle and request-head timeout closes of a connection
 // awaiting a request send TLS close_notify (RFC 9112 §9.8); write timeouts,
-// transport errors and application::stop() close immediately.
+// transport errors and application::request_stop() close immediately.
 // An HTTP/2 connection ends gracefully on its own (RFC 9113 §6.8) when it
 // reaches max_requests_per_connection_ or a connection timeout fires: a
 // first GOAWAY with a PING, then the final GOAWAY after the PING round trip
@@ -281,7 +281,7 @@ struct listen_config final {
     // connection timeout sends the shutdown-notice GOAWAY, the final GOAWAY
     // after min(1 s, three probe timeouts), then CONNECTION_CLOSE with
     // H3_NO_ERROR once every admitted stream closed (RFC 9114 §5.2);
-    // application::stop() sends CONNECTION_CLOSE(H3_NO_ERROR) at once.
+    // application::request_stop() sends CONNECTION_CLOSE(H3_NO_ERROR) at once.
     std::optional<port_number> http3_{};
     // Alt-Svc freshness lifetime (RFC 7838 §3 "ma"); must be positive.
     std::chrono::seconds http3_alt_svc_max_age_{std::chrono::hours(24)};
@@ -623,12 +623,12 @@ public:
     // and have services added later.
     [[nodiscard]] task<void> start() &;
     task<void> start() && = delete;
-    // Owner loop only. Stops new admission immediately; by default established
-    // sessions continue. close_connections_ closes their transports immediately;
-    // session retirement is joined independently (also safe from their handlers).
-    // The endpoint may then be added again.
-    void remove_listener(const listener_endpoint& endpoint, listener_remove_options options = {}) &;
-    void remove_listener(const listener_endpoint&, listener_remove_options = {}) && = delete;
+    // Owner loop, while running. Completes after admission stopped, listening
+    // sockets closed and the accept loop exited, as listener_controls does.
+    // Existing sessions continue unless close_connections_ is set; their
+    // retirement is independent, so a handler may remove its own listener.
+    [[nodiscard]] task<void> remove_listener(const listener_endpoint& endpoint, listener_remove_options options = {}) &;
+    task<void> remove_listener(const listener_endpoint&, listener_remove_options = {}) && = delete;
     // Owner loop, while running. Completes once the listener `endpoint` names
     // -- serving, or the latest removed one still holding connections -- has
     // no live connection (listener_stats::active_connections_ reached zero),
@@ -643,21 +643,21 @@ public:
     [[nodiscard]] task<void> replace_tls_identities(const listener_endpoint& endpoint, tls_config config) &;
     task<void> replace_tls_identities(const listener_endpoint&, tls_config) && = delete;
 #ifndef _WIN32
-    [[nodiscard]] listener_sockets duplicate_listener_sockets(const listener_endpoint& endpoint) const&;
-    listener_sockets duplicate_listener_sockets(const listener_endpoint&) const&& = delete;
+    [[nodiscard]] task<listener_sockets> duplicate_listener_sockets(const listener_endpoint& endpoint) const&;
+    task<listener_sockets> duplicate_listener_sockets(const listener_endpoint&) const&& = delete;
 #endif
 
     // Owner loop, while running. Requests whole-connection termination, not
     // merely a stream reset. False means no live connection has this ID.
-    [[nodiscard]] bool close_connection(std::uint64_t connection_id) &;
-    bool close_connection(std::uint64_t) && = delete;
+    [[nodiscard]] task<bool> close_connection(std::uint64_t connection_id) &;
+    task<bool> close_connection(std::uint64_t) && = delete;
 
     // Any thread; requests the stop of this host only, not of unrelated work
     // on the loop. Destruction requests the same stop. The loop must keep
     // running until shutdown() completes, or its own retirement has joined the
     // stop callback. shutdown() also requests it, then waits for retirement.
-    void stop() & noexcept;
-    void stop() && = delete;
+    void request_stop() & noexcept;
+    void request_stop() && = delete;
     [[nodiscard]] task<void> shutdown() &;
     task<void> shutdown() && = delete;
     // Any thread.
@@ -675,7 +675,7 @@ using http_server_callbacks_factory = move_only_function<http_server_callbacks(c
 // A service shared by caller-owned loops. Configuration before start does not
 // require the loops to be driven. Controls suspend without blocking member
 // loops and resume on the explicit caller worker (which may itself be a
-// member). Drive live loops until shutdown completes. stop() never stops
+// member). Drive live loops until shutdown completes. request_stop() never stops
 // caller loops; member retirement stops the group.
 //
 // Each member serves its connections with its own callbacks, which the
@@ -717,9 +717,9 @@ public:
     // As http_server::adopt() otherwise.
     [[nodiscard]] task<void> adopt(worker_ref caller, std::size_t worker_index, const listener_endpoint& service, native_socket socket, adopt_options options = {}) &;
     task<void> adopt(worker_ref, std::size_t, const listener_endpoint&, native_socket, adopt_options = {}) && = delete;
-    // Any thread; as http_server::stop().
-    void stop() & noexcept;
-    void stop() && = delete;
+    // Any thread; as http_server::request_stop().
+    void request_stop() & noexcept;
+    void request_stop() && = delete;
     [[nodiscard]] task<void> shutdown(worker_ref caller) &;
     task<void> shutdown(worker_ref) && = delete;
     [[nodiscard]] std::size_t worker_count() const noexcept;
