@@ -75,12 +75,13 @@ ruvia::task<ruvia::http_response> upload_stream(ruvia::context& c) {
 - **输出中断**：`commit()`、`write()`、`writeln()`、`end()` 的 `operation` 超时或停止中止本请求（HTTP/2、HTTP/3 以 `CANCEL` / `H3_REQUEST_CANCELLED` 重置流，HTTP/1 关闭连接；已写出部分无法撤回），抛 `std::system_error`（`timed_out` / `operation_canceled`）。
 - **启动前停止**：令牌在操作启动前已停止时直接抛 `operation_canceled`，不发出任何字节、不中止请求。
 - **时限叠加**：服务器 `write_timeout_` 与 `write_completion_timeout_`（每次写入独立计时的绝对截止期）继续生效，逐次超时只收紧；非正超时抛 `std::invalid_argument`。
+- **写入块所有权**：`write()` 返回冷任务前完成输入拥有化，统一输出操作持有正文直到写出结束；丢弃未启动操作释放该块且不占用输出通道。
 - **HTTP/1 分帧**：提交时按最终响应头选择（与 Pingora 下游写法一致），HTTP/2、HTTP/3 始终以帧界定。
   - **定长**：响应自带合法 `Content-Length` 且无 `Transfer-Encoding` 时按定长原样写出，连接无需靠关闭界定（HTTP/1.0 请求带 keep-alive 时同样可复用，[RFC 9112 §6.3](https://www.rfc-editor.org/rfc/rfc9112.html#section-6.3)）；Trailer 被丢弃。
   - **超长与不足**：写入超出声明长度抛 `std::length_error` 且该块不写出；`end()` 时不足声明长度抛 `std::invalid_argument`。两者都中止本请求并在流结束后关闭连接（[RFC 9112 §8](https://www.rfc-editor.org/rfc/rfc9112.html#section-8)），与 HTTP/2 的同类错误一致。
   - **分块与关闭界定**：未声明长度（或带 `Transfer-Encoding: chunked` 提示）时，HTTP/1.1 用 `chunked`，HTTP/1.0 以关闭连接界定。
   - **压缩**：框架内容编码生效时 `Content-Length` 随编码移除，退回分块。
-- **HTTP/1 写出**：明文分块直接对分帧与正文视图执行 gather write，不另行拼接；TLS 在保留缓冲可容纳时合并小帧，避免分帧片段各占一条 TLS 记录。
+- **HTTP/1 写出**：明文分块直接对分帧与正文视图执行 gather write，不另行拼接；TLS 将最多 16 KiB 正文块及其分帧合并写出，较大正文块保留 gather write。大块拼接空间只随当前流式响应存活，不随空闲连接保留。
 
 HTTP/2 服务端写循环直接等待 Worker 信号；没有输出时不创建额外的等待协程。
 

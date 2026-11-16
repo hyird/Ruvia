@@ -120,12 +120,6 @@ task<std::optional<view_type>> read_body(detail::callback_ref<task<std::optional
     }
 }
 
-task<void> write_transferred_chunk(response_stream_output output, task<void> (*write)(void*, std::string_view), std::string chunk, operation_options operation) {
-    co_await run_response_stream_output(output, std::move(operation), "response stream write", [&] {
-        return write(output.target_, chunk);
-    });
-}
-
 task<void> end_owned(response_stream_output output, task<void> (*end)(void*, std::span<const http_header_view>), std::vector<http_header> fields, operation_options operation) {
     const detail::inline_http_header_views views(fields);
     co_await run_response_stream_output(output, std::move(operation), "response stream end", [&] {
@@ -169,7 +163,9 @@ task<stream_commit_result> sse_writer::commit(operation_options operation) & {
 task<void> response_stream_writer::write(outbound_bytes chunk, operation_options operation) & {
     require_active();
     require_output();
-    return operation_scope_.attach(write_transferred_chunk({target_, output_active_, *interrupts_, *worker_, context_}, write_, std::move(chunk).into_string(), std::move(operation)));
+    return operation_scope_.attach(run_response_stream_output({target_, output_active_, *interrupts_, *worker_, context_}, std::move(operation), "response stream write", [target = target_, write = write_, chunk = std::move(chunk).into_string()] {
+        return write(target, chunk);
+    }));
 }
 
 task<void> response_stream_writer::writeln(std::string_view chunk, operation_options operation) & {

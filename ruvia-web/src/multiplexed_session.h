@@ -769,21 +769,21 @@ public:
         throw_if_terminated();
         throw_if_body_failed();
         state_.ensure_body_allowed();
-        if (chunk.empty()) {
-            co_return;
+        if (chunk.empty() || !compression_.active()) {
+            return write_encoded(chunk);
         }
-        if (compression_.active()) {
-            try {
-                co_await compression_.write(chunk, [this](std::string_view encoded) {
-                    return write_encoded(encoded);
-                });
-            } catch (...) {
-                state_.mark_aborted();
-                throw;
-            }
-            co_return;
+        return write_compressed(chunk);
+    }
+
+    task<void> write_compressed(std::string_view chunk) {
+        try {
+            co_await compression_.write(chunk, [this](std::string_view encoded) {
+                return write_encoded(encoded);
+            });
+        } catch (...) {
+            state_.mark_aborted();
+            throw;
         }
-        co_await write_encoded(chunk);
     }
 
     task<void> write_encoded(std::string_view chunk) {

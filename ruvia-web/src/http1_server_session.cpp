@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <exception>
 #include <memory>
+#include <new>
 #include <optional>
 #include <span>
 #include <stdexcept>
@@ -20,6 +21,7 @@
 #include <asio/buffer.hpp>
 #include <asio/write.hpp>
 #include <openssl/ssl.h>
+#include <openssl/ssl3.h>
 
 #include "asio_completion.h"
 #include "borrowed_text.h"
@@ -1685,18 +1687,32 @@ private:
         });
     }
 
-    // Copies a small TLS frame into the head buffer so it leaves as one
-    // record; otherwise `buffers` stays the equivalent gather write. Plain TCP
-    // sends the gather write as one segment already.
+    // Keep bounded TLS frames contiguous instead of repeatedly linearising
+    // their fragments through Asio's smaller TLS scratch buffer. Plain TCP
+    // already sends the views directly; larger TLS writes keep the gather path.
     void coalesce_tls_frame(std::array<asio::const_buffer, 3>& buffers, std::string_view first, std::string_view second, std::string_view third) noexcept {
         if constexpr (!std::is_same_v<std::remove_cvref_t<stream_type>, inbound_socket_stream>) {
-            if (first.size() + second.size() + third.size() > response_head_retained_heap_bytes) {
+            const auto total_bytes = first.size() + second.size() + third.size();
+            if (total_bytes <= response_head_retained_heap_bytes) {
+                head_.reset();
+                if (try_coalesce_tls_frame(head_, {first, second, third})) {
+                    buffers = {asio::buffer(head_.view()), asio::const_buffer{}, asio::const_buffer{}};
+                }
                 return;
             }
-            head_.reset();
-            if (try_coalesce_tls_frame(head_, {first, second, third})) {
-                buffers = {asio::buffer(head_.view()), asio::const_buffer{}, asio::const_buffer{}};
+            if (second.size() > SSL3_RT_MAX_PLAIN_LENGTH) {
+                return;
             }
+            tls_frame_.clear();
+            try {
+                tls_frame_.reserve(total_bytes);
+            } catch (const std::bad_alloc&) {
+                return;
+            }
+            tls_frame_.append(first);
+            tls_frame_.append(second);
+            tls_frame_.append(third);
+            buffers = {asio::buffer(tls_frame_), asio::const_buffer{}, asio::const_buffer{}};
         }
     }
 
@@ -1779,23 +1795,21 @@ private:
     task<void> write(std::string_view chunk) {
         ensure_peer_writable();
         state_.ensure_body_allowed();
-        if (chunk.empty()) {
-            co_return;
+        if (chunk.empty() || !compression_.active()) {
+            return write_encoded(chunk);
         }
+        return write_compressed(chunk);
+    }
 
-        if (compression_.active()) {
-            try {
-                co_await compression_.write(chunk, [this](std::string_view encoded) {
-                    return write_encoded(encoded);
-                });
-            } catch (...) {
-                state_.mark_aborted();
-                throw;
-            }
-            co_return;
+    task<void> write_compressed(std::string_view chunk) {
+        try {
+            co_await compression_.write(chunk, [this](std::string_view encoded) {
+                return write_encoded(encoded);
+            });
+        } catch (...) {
+            state_.mark_aborted();
+            throw;
         }
-
-        co_await write_encoded(chunk);
     }
 
     task<void> write_encoded(std::string_view chunk) {
@@ -1901,6 +1915,8 @@ private:
     stream_type& stream_;
     http_response_head_buffer& head_;
     std::string trailers_;
+    // Large TLS framing scratch lives only until this response completes.
+    [[no_unique_address]] std::conditional_t<std::is_same_v<std::remove_cvref_t<stream_type>, inbound_socket_stream>, std::monostate, std::string> tls_frame_;
     connection_scanner::entry& scanner_entry_;
     // The connection/server owns an address-stable handle for the complete
     // route dispatch. Streaming must not acquire shared ownership per request.
