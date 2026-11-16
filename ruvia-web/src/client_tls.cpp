@@ -2,6 +2,8 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
+#include <chrono>
 #include <exception>
 #include <memory>
 #include <mutex>
@@ -23,9 +25,14 @@
 #include "task.h"
 #include "tls.h"
 #include "worker_ref.h"
+#include "worker_timer.h"
 
 namespace ruvia::detail {
 
+// The credentials every copy of one storage shares, on every worker. Idle
+// until a caller starts the one parse in flight; a parse that runs settles the
+// material for good, with credentials or with the configuration's failure,
+// while a flight that ends without running leaves it idle for the next caller.
 struct client_tls_material final {
     ~client_tls_material() {
         erase_password();
@@ -36,8 +43,66 @@ struct client_tls_material final {
             std::string{}.swap(password_);
         }
     }
-    std::once_flag preparation_;
+
+    [[nodiscard]] bool settled() const noexcept {
+        return settled_.load(std::memory_order_acquire);
+    }
+
+    // Requested once the parse in flight ends; empty while idle or settled.
+    [[nodiscard]] stop_token running_flight() {
+        std::lock_guard lock(mutex_);
+        return flight_ != nullptr ? flight_->token() : stop_token{};
+    }
+
+    // Makes `flight` the parse in flight of an idle material. Returns false,
+    // keeping `flight`, once another caller started one or the material settled.
+    [[nodiscard]] bool start_flight(std::unique_ptr<stop_source>& flight) {
+        std::lock_guard lock(mutex_);
+        if (flight_ != nullptr || settled_.load(std::memory_order_relaxed)) {
+            return false;
+        }
+        flight_ = std::move(flight);
+        return true;
+    }
+
+    // The one file read, on the pool thread of the flight's callable: the
+    // flight alone reads password_ and writes the credentials until it
+    // publishes settled_.
+    void parse(const client_tls_config_storage& config) noexcept {
+        try {
+            auto trust = config.ca_file_ ? load_tls_trust_store(*config.ca_file_) : tls_trust_store::load_default();
+            std::optional<tls_certificate> certificate;
+            if (config.identity_) {
+                certificate = load_tls_certificate(*config.identity_, password_);
+            }
+            trust_store_ = std::move(trust);
+            certificate_ = std::move(certificate);
+        } catch (...) {
+            failure_ = std::current_exception();
+        }
+        erase_password();
+    }
+
+    // Ends the flight, settling the material when it parsed, and wakes every
+    // follower outside the lock.
+    void end_flight(bool parsed) noexcept {
+        std::unique_ptr<stop_source> ended;
+        {
+            std::lock_guard lock(mutex_);
+            ended = std::move(flight_);
+            if (parsed) {
+                settled_.store(true, std::memory_order_release);
+            }
+        }
+        ended->request_stop();
+    }
+
+    std::mutex mutex_;
+    // Guarded by mutex_.
+    std::unique_ptr<stop_source> flight_;
+    std::atomic<bool> settled_{false};
     std::string password_;
+    // Immutable once settled_ is published.
     std::optional<tls_trust_store> trust_store_;
     std::optional<tls_certificate> certificate_;
     std::exception_ptr failure_;
@@ -45,28 +110,33 @@ struct client_tls_material final {
 
 namespace {
 
-task<client_tls_config_storage> prepare_client_tls_owned(worker_ref worker, client_tls_config_storage config, operation_options options) {
-    const operation_deadline deadline(options.timeout_);
-    const auto check = [&] {
-        if (options.stop_token_.stop_requested()) {
-            throw std::system_error(std::make_error_code(std::errc::operation_canceled), "client TLS preparation cancelled");
+// The one hold on a started flight, owned by its blocking callable so the
+// flight ends exactly once wherever that callable retires: its parse settles
+// the material; a callable dropped without running (a full queue, a stopped
+// pool, a worker without one) leaves it idle. Either end wakes the followers.
+class client_tls_flight_lead final {
+public:
+    explicit client_tls_flight_lead(std::shared_ptr<client_tls_material> material) noexcept :
+        material_(std::move(material)) {}
+    client_tls_flight_lead(const client_tls_flight_lead&) = delete;
+    client_tls_flight_lead& operator=(const client_tls_flight_lead&) = delete;
+    client_tls_flight_lead(client_tls_flight_lead&&) noexcept = default;
+    client_tls_flight_lead& operator=(client_tls_flight_lead&&) = delete;
+    ~client_tls_flight_lead() {
+        if (material_ != nullptr) {
+            material_->end_flight(false);
         }
-        if (deadline.expired()) {
-            throw std::system_error(std::make_error_code(std::errc::timed_out), "client TLS preparation deadline expired");
-        }
-    };
-    check();
-    // Do not cancel the blocking wait: OpenSSL cannot interrupt a file read,
-    // and retiring the owner must join that read before reporting completion.
-    auto result = co_await run_blocking(std::move(worker), [config = std::move(config), options, deadline]() mutable {
-        if (!options.stop_token_.stop_requested() && !deadline.expired()) {
-            config.parse_files();
-        }
-        return std::move(config);
-    });
-    check();
-    co_return std::move(result).take_value();
-}
+    }
+
+    void parse(const client_tls_config_storage& config) noexcept {
+        const auto material = std::move(material_);
+        material->parse(config);
+        material->end_flight(true);
+    }
+
+private:
+    std::shared_ptr<client_tls_material> material_;
+};
 
 constexpr std::array<unsigned char, 9> http11_alpn = {8, 'h', 't', 't', 'p', '/', '1', '.', '1'};
 constexpr std::array<unsigned char, 3> http2_alpn = {2, 'h', '2'};
@@ -170,37 +240,67 @@ client_tls_config_storage::client_tls_config_storage(const client_tls_config& so
     }
 }
 
-void client_tls_config_storage::parse_files() {
-    if (mode_ == client_tls_mode::disabled) {
-        return;
-    }
-    std::call_once(material_->preparation_, [&] {
-        try {
-            auto trust = trust_store_.has_value() ? *trust_store_ : (ca_file_ ? load_tls_trust_store(*ca_file_) : tls_trust_store::load_default());
-            std::optional<tls_certificate> certificate;
-            if (identity_) {
-                certificate = load_tls_certificate(*identity_, material_->password_);
-            }
-            material_->trust_store_ = std::move(trust);
-            material_->certificate_ = std::move(certificate);
-        } catch (...) {
-            material_->failure_ = std::current_exception();
-        }
-        material_->erase_password();
-    });
-    if (material_->failure_) {
-        std::rethrow_exception(material_->failure_);
-    }
-    trust_store_ = material_->trust_store_;
-    if (material_->certificate_) {
-        certificate_.emplace(*material_->certificate_);
-    } else {
-        certificate_.reset();
-    }
-}
-
 task<client_tls_config_storage> prepare_client_tls_config(worker_ref worker, client_tls_config_storage config, operation_options options) {
-    return prepare_client_tls_owned(std::move(worker), std::move(config), std::move(options));
+    const operation_deadline deadline(options.timeout_);
+    const auto check = [&] {
+        if (options.stop_token_.stop_requested()) {
+            throw std::system_error(std::make_error_code(std::errc::operation_canceled), "client TLS preparation cancelled");
+        }
+        if (deadline.expired()) {
+            throw std::system_error(std::make_error_code(std::errc::timed_out), "client TLS preparation deadline expired");
+        }
+    };
+    check();
+    if (config.material_ == nullptr) {
+        co_return std::move(config);
+    }
+    const auto material = config.material_;
+    std::unique_ptr<stop_source> flight;
+    bool leading = false;
+    while (!leading && !material->settled()) {
+        if (const auto running = material->running_flight(); running.has_state()) {
+            // A follower holds no blocking-pool admission and owns no read, so
+            // its own stop token and deadline end its wait.
+            timer_sleep_result woken{};
+            {
+                stop_group wake{options.stop_token_, running};
+                woken = co_await sleep_until(worker, deadline.deadline().value_or(std::chrono::steady_clock::time_point::max()), wake.token());
+            }
+            check();
+            if (woken == timer_sleep_result::stop_requested && !running.stop_requested()) {
+                // The worker's timers stopped with the read still in flight:
+                // the status the leader's own offload reports for that.
+                blocking_result<void>::with_status(blocking_status::worker_stopping).take_value();
+            }
+            continue;
+        }
+        if (flight == nullptr) {
+            flight = std::make_unique<stop_source>();
+        }
+        leading = material->start_flight(flight);
+    }
+    if (leading) {
+        // Do not cancel the blocking wait: OpenSSL cannot interrupt a file read,
+        // and retiring the owner must join that read before reporting
+        // completion. The read settles the material for every follower even if
+        // this caller stopped meanwhile.
+        auto result = co_await run_blocking(std::move(worker), [config = std::move(config), lead = client_tls_flight_lead(material)]() mutable {
+            lead.parse(config);
+            return std::move(config);
+        });
+        check();
+        config = std::move(result).take_value();
+    }
+    if (material->failure_) {
+        std::rethrow_exception(material->failure_);
+    }
+    config.trust_store_ = material->trust_store_;
+    if (material->certificate_) {
+        config.certificate_.emplace(*material->certificate_);
+    } else {
+        config.certificate_.reset();
+    }
+    co_return std::move(config);
 }
 
 client_tls_config_storage::client_tls_config_storage(const client_tls_config_storage& source_value) :

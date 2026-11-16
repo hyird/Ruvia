@@ -3133,9 +3133,11 @@ ruvia::task<ruvia::http_response> serve_asset(ruvia::context& c) {
 - **共享形状**：HTTP、原始 TCP、Redis 与数据库客户端都用这两个结构配置 TLS 与 TCP 套接字策略。
 - **TLS 总是认证对端**：默认 TLS 1.2 及以上，可经 `minimum_version_` 要求 TLS 1.3；TLS 1.2 只提供 ECDHE + AEAD 套件，所有版本拒绝重协商。
 - **身份校验（RFC 9525）**：DNS 名匹配 DNS-ID，IP 字面量匹配 IP SAN，从不使用主题 Common Name，DNS 通配符只覆盖完整的最左标签。
-- **异步准备**：HTTP、原始 TCP、Redis 与数据库的构造／注册只拥有配置并做纯校验，不读取凭据。凭据文件、默认 CA 与 TLS 上下文在 `connect()`、HTTP 首次请求或显式异步注册准备时经绑定的 `blocking_pool` 读取、解析及物化；缺池或拒绝传播失败，不回退到 worker 同步执行。准备计入同一次绝对预算与取消范围；已启动的不可抢占工作必须先 join，再拒绝过期／已取消结果的发布，因此取消返回可能晚于截止期。
+- **异步准备**：HTTP、原始 TCP、Redis 与数据库的构造／注册只拥有配置并做纯校验，不读取凭据。凭据文件、默认 CA 与 TLS 上下文在 `connect()`、HTTP 首次请求或显式异步注册准备时经绑定的 `blocking_pool` 读取、解析及物化；缺池或拒绝传播失败，不回退到 worker 同步执行。准备计入同一次绝对预算与取消范围；调用方已启动的不可抢占工作必须先 join，再拒绝过期／已取消结果的发布，因此取消返回可能晚于截止期。
 - **TCP 策略**：已启用的策略无法应用时建连失败。
 - **信任快照**：HTTP、TCP 与 Redis 成功准备后共享／复用不可变凭据与默认 CA 快照，握手不再延迟读取 hash 目录；系统 CA 更新只在新建或重新准备配置后生效。TLS 会话的 `SSL_new` 在异步 prepare 完成后执行。数据库驱动的原生启动边界见 [14.2](#api-db-executor-h)。
+- **共享准入**：HTTP、TCP 与 Redis 的同一 TLS 配置只保留一次在途解析；已就绪结果不再进入阻塞池。
+- **等待取消**：只等待共享结果的调用方可独立取消或超时，不终止其他调用方的准备。
 - `tls_version`、`tls_identity_config`、`max_outgoing_tls_records` 见 [`"tls_config.h"`](#api-tls-config-h)。
 
 #### 11.1.2 类型目录

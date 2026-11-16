@@ -67,7 +67,6 @@ struct client_tls_config_storage final {
     client_tls_config_storage(const client_tls_config_storage& source_value);
     client_tls_config_storage(client_tls_config_storage&&) noexcept = default;
     client_tls_config_storage& operator=(client_tls_config_storage&&) noexcept = default;
-    void parse_files();
 
     // SNI and verified peer name: the configured override, else the origin host.
     [[nodiscard]] std::string_view tls_host(std::string_view configured_host) const noexcept {
@@ -85,11 +84,19 @@ struct client_tls_config_storage final {
     std::optional<tls_certificate> certificate_;
 
 private:
+    friend task<client_tls_config_storage> prepare_client_tls_config(worker_ref worker, client_tls_config_storage config, operation_options options);
+
     std::shared_ptr<client_tls_material> material_;
 };
 
-// Blocking parsing is always joined, including after cancellation or deadline
-// expiry. The caller must check its host's state before publishing the result.
+// The one credential preparation of every TLS client. Copies of a storage
+// share one parse across workers: settled credentials, or the configuration's
+// failure, answer without offloading. The first caller of an idle material
+// offloads the file read and joins it, even after its own cancellation or
+// deadline, and that read settles the material for every caller. Callers
+// arriving meanwhile wait for it within their own stop token and deadline,
+// holding no blocking-pool admission. A rejected offload settles nothing.
+// The caller must check its host's state before publishing the result.
 [[nodiscard]] task<client_tls_config_storage> prepare_client_tls_config(worker_ref worker, client_tls_config_storage config, operation_options options);
 
 enum class client_tls_setup_error : std::uint8_t {
