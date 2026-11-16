@@ -7,6 +7,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstddef>
+#include <cstdint>
 #include <exception>
 #include <filesystem>
 #include <mutex>
@@ -24,6 +25,7 @@
 #include <asio/buffer.hpp>
 #include <asio/io_context.hpp>
 #include <asio/ip/tcp.hpp>
+#include <asio/post.hpp>
 #include <asio/read.hpp>
 #include <asio/read_until.hpp>
 #include <asio/write.hpp>
@@ -2375,3 +2377,142 @@ TEST(Ruvia, request_stream_text_and_event_streams_stage_their_default_head) {
     attachment.run();
     std::move(root).get();
 }
+
+#if defined(RUVIA_ENABLE_HTTP2)
+TEST(Ruvia, response_pipe_retains_blocked_body_when_upstream_pool_shuts_down) {
+    asio::io_context io;
+    auto attachment = ruvia::attach_event_loop(io);
+    ruvia::test::tcp_port_reservation port(io);
+    const auto worker = attachment.loop().worker();
+    ruvia::worker_signal head_seen(worker), peer_done(worker);
+    std::binary_semaphore ready(0), pool_stopped(0);
+    std::exception_ptr peer_failure;
+    std::string payload(65536, '\0');
+    for (std::size_t index = 0; index < payload.size(); ++index) {
+        payload[index] = static_cast<char>('A' + (index / 257) % 23);
+    }
+    const auto origin = "http://127.0.0.1:" + std::to_string(port.endpoint().port());
+    ruvia::http_client upstream(attachment.loop(), {.base_url_ = origin, .versions_ = {.http2_ = false}});
+    ruvia::http_server server(attachment.loop(), {.request_stream_ = [&](ruvia::request_stream& request) -> ruvia::task<void> {
+        if (request.request().path() == "/source") {
+            const auto length = std::to_string(payload.size());
+            const std::array fields{ruvia::http_header_view{"content-length", length}};
+            (void)co_await request.stream({.headers_ = fields}).commit();
+            co_await request.stream().write(payload);
+            co_await request.stream().end();
+        } else {
+            auto response = co_await upstream.client().get("/source").send();
+            co_await response.pipe_to(request);
+        }
+    }});
+    server.listen({.address_ = "127.0.0.1", .http_ = port.endpoint().port(), .dispatch_ = ruvia::listener_dispatch::request_stream});
+    std::thread peer([&] {
+        ready.acquire();
+        try {
+            asio::io_context peer_io;
+            asio::ip::tcp::socket socket(peer_io);
+            socket.connect(port.endpoint());
+            const auto deadline = std::chrono::steady_clock::now() + 5s;
+            std::string wire = "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n";
+            // Zero stream credit holds the forwarded input across pool retirement.
+            ruvia::test::append_frame(wire, ruvia::http2_frame_type::settings, 0, 0, std::string_view("\0\4\0\0\0\0", 6));
+            constexpr std::string_view request_headers = "\x82\x86\x01\x09localhost\x04\x06/proxy";
+            ruvia::test::append_frame(wire, ruvia::http2_frame_type::headers, 5, 1, request_headers);
+            asio::write(socket, asio::buffer(wire));
+            for (;;) {
+                const auto frame = ruvia::test::read_frame(socket, deadline);
+                if (frame.header_.type_ == static_cast<std::uint8_t>(ruvia::http2_frame_type::settings) && (frame.header_.flags_ & 1U) == 0) {
+                    wire.clear();
+                    ruvia::test::append_frame(wire, ruvia::http2_frame_type::settings, 1, 0, {});
+                    asio::write(socket, asio::buffer(wire));
+                }
+                if (frame.header_.type_ == static_cast<std::uint8_t>(ruvia::http2_frame_type::headers) && frame.header_.stream_id_ == 1) {
+                    EXPECT_EQ(frame.header_.flags_ & 1U, 0U);
+                    break;
+                }
+            }
+            asio::post(io, [&] {
+                head_seen.notify();
+            });
+            pool_stopped.acquire();
+            wire.clear();
+            ruvia::test::append_frame(wire, ruvia::http2_frame_type::window_update, 0, 0, std::string_view("\0\1\0\1", 4));
+            ruvia::test::append_frame(wire, ruvia::http2_frame_type::window_update, 0, 1, std::string_view("\0\1\0\1", 4));
+            asio::write(socket, asio::buffer(wire));
+            std::string received;
+            bool reset = false;
+            for (;;) {
+                const auto frame = ruvia::test::read_frame(socket, deadline);
+                if (frame.header_.stream_id_ != 1) {
+                    continue;
+                }
+                if (frame.header_.type_ == static_cast<std::uint8_t>(ruvia::http2_frame_type::data)) {
+                    auto content = std::string_view(frame.payload_);
+                    if ((frame.header_.flags_ & 8U) != 0) {
+                        if (content.empty() || static_cast<unsigned char>(content.front()) >= content.size()) {
+                            throw std::runtime_error("invalid padded HTTP/2 DATA");
+                        }
+                        const auto padding = static_cast<unsigned char>(content.front());
+                        content.remove_prefix(1);
+                        content.remove_suffix(padding);
+                    }
+                    received.append(content);
+                    if ((frame.header_.flags_ & 1U) != 0) {
+                        break;
+                    }
+                } else if (frame.header_.type_ == static_cast<std::uint8_t>(ruvia::http2_frame_type::rst_stream)) {
+                    reset = true;
+                    break;
+                }
+            }
+            EXPECT_FALSE(received.empty());
+            EXPECT_LE(received.size(), payload.size());
+            EXPECT_EQ(received, payload.substr(0, received.size()));
+            if (!reset) {
+                EXPECT_EQ(received, payload);
+            }
+        } catch (...) {
+            peer_failure = std::current_exception();
+        }
+        asio::post(io, [&] {
+            head_seen.notify();
+            peer_done.notify();
+        });
+    });
+    const auto run = [&]() -> ruvia::task<void> {
+        std::exception_ptr failure;
+        bool ready_sent = false, stopped_sent = false;
+        try {
+            co_await server.start();
+            ready.release();
+            ready_sent = true;
+            co_await head_seen.wait();
+            co_await upstream.shutdown();
+            pool_stopped.release();
+            stopped_sent = true;
+            co_await peer_done.wait();
+        } catch (...) {
+            failure = std::current_exception();
+        }
+        if (!ready_sent) {
+            ready.release();
+        }
+        if (!stopped_sent) {
+            pool_stopped.release();
+        }
+        co_await upstream.shutdown();
+        co_await server.shutdown();
+        attachment.request_stop();
+        if (failure) {
+            std::rethrow_exception(failure);
+        }
+    };
+    auto root = attachment.loop().start(run());
+    attachment.run();
+    peer.join();
+    std::move(root).get();
+    if (peer_failure) {
+        std::rethrow_exception(peer_failure);
+    }
+}
+#endif

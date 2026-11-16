@@ -3532,7 +3532,7 @@ co_return c.text(body.text());
 - **转发长度**：冷任务启动时按累计成功消费量重建未读 `Content-Length`，覆盖目标原有分帧字段；仅当上游字段中仍有未被 `Connection` 提名的 `Content-Length`、没有 `Transfer-Encoding` 且分帧为 `fixed_length` / `none` / `stream` 时才写出，否则由目标按流式分帧；解码后不沿用原始线面长度；上游 HEAD 转成普通正文响应时长度为零，HEAD / 304 的表示长度元数据仍按无正文规则处理。
 - **`take_headers()` 之后转发**：字段数组已移出，`pipe_to(c)` / `pipe_to(request_stream)` 只转发状态、未读正文与 Trailer：不转发任何上游字段，也不再按上游 `Content-Length` 重建长度（即使 `content_length()` 仍返回解析值；仅上游 HEAD 的零长度规则仍适用），Trailer 只按固定逐跳名单过滤（已无 `Connection` 提名可用）。
 - **转发 Trailer**：HTTP/1.1 在长度未知、已有 Trailer 或多路复用上游尚可能产生尾部字段时使用 `chunked`，不为定长分帧丢弃尾部字段；HTTP/1.0 按协议能力省略可选 Trailer。
-- **仅转发正文**：先设置目标元数据并 `commit()`，仅 `body` 结果才调用 `stream().pipe_to(writer)`；此入口不提交或结束目标。
+- **仅转发正文**：先设置目标元数据并 `commit()`，仅 `body` 结果才调用 `stream().pipe_to(writer)`；此入口不提交或结束目标。分块在下游接受后才推进消费，写出失败不预先丢弃未消费正文。
 - **SSE 上游**：把 `stream().read()` 的分块交给 `sse_parser`（见 [`"http_server_sent_events.h"`](ruvia-http.md#api-http-server-sent-events-h)）。
 - **通用 Upgrade**：`request.connect()` 总在 HTTP/1.1 上进行（复用 HTTP/1.1 空闲连接或新建只报价 `http/1.1` 的连接），只校验 HTTP 切换协定并交付 101 之后的原始字节；非 101 保留为普通 HTTP 响应。普通 `send()` 不接受意外的 101。
 - **放弃上传**：`exchange.body().abandon()` 只停止发送；HTTP/1 读完响应后关闭连接，HTTP/2 / HTTP/3 只结束发送方向。据 `writable()` 停止泵送正文。

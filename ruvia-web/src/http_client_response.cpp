@@ -1095,7 +1095,7 @@ task<std::conditional_t<std::is_void_v<view>, void, std::optional<view>>> detail
         const auto chunk = std::string_view(state_value.buffered_).substr(state_value.offset_, count);
         if constexpr (std::is_void_v<view>) {
             try {
-                co_await output.writer_.write(std::as_bytes(std::span(chunk.data(), chunk.size())), state_value.downstream_step(steps));
+                co_await streaming_access::write_borrowed(output.writer_, chunk, state_value.downstream_step(steps));
             } catch (...) {
                 state_value.rethrow_downstream_failure(steps);
             }

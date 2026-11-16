@@ -176,6 +176,13 @@ task<void> response_stream_writer::write(outbound_bytes chunk, operation_options
     }));
 }
 
+task<void> detail::streaming_access::write_borrowed(response_stream_writer& writer, borrowed_text chunk, operation_options operation) {
+    writer.require_output();
+    return writer.operation_scope_.attach(run_response_stream_output({writer.target_, writer.output_active_, *writer.interrupts_, *writer.worker_, writer.context_}, std::move(operation), "response stream write", [target = writer.target_, write = writer.write_, chunk] {
+        return write(target, chunk.view());
+    }));
+}
+
 task<void> response_stream_writer::writeln(std::string_view chunk, operation_options operation) & {
     require_active();
     std::string owned;

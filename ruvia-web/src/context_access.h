@@ -318,6 +318,10 @@ struct streaming_access final {
     // It runs inside the writer's output lane, before native head submission.
     [[nodiscard]] static task<stream_commit_result> commit_prepared(response_stream_writer& writer, callback_ref<void()> prepare, operation_options operation);
 
+    // The internal consumer pins immutable bytes until the awaited write finishes.
+    // Public write() still takes an owning snapshot before returning its cold task.
+    [[nodiscard]] static task<void> write_borrowed(response_stream_writer& writer, borrowed_text chunk, operation_options operation);
+
     static void bind_context(response_stream_writer& writer, context& context_value, stop_token stop_token_value) {
         writer.bind_context(context_value, std::move(stop_token_value));
     }
