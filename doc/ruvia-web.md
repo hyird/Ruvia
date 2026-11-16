@@ -110,7 +110,7 @@ target_link_libraries(my_service PRIVATE ruvia::web)
 | `redis_orm.h` | [16.2](#api-redis-orm-h) | `RUVIA_ENABLE_REDIS` | Redis 实体与 RediSearch |
 | `jwt.h` | [17.1](#api-jwt-h) | `RUVIA_ENABLE_JWT` | JWT 签发、`jwt_result` 与 `jwt_error_code` |
 | `test_app.h` | [18.1](#api-test-app-h) | — | 内存测试门面 |
-| `crypto.h` | [19](#web-crypto) | — | SHA-256、HMAC、常量时间比较与安全随机字节 |
+| `crypto.h` | [19](#api-crypto-h) | — | SHA-256、HMAC、常量时间比较与安全随机字节 |
 
 <a id="web-quickstart"></a>
 
@@ -218,7 +218,7 @@ flowchart LR
 | 结果 | 形状 | 示例 |
 | --- | --- | --- |
 | 正常推进 / 背压 | 状态枚举或结果类型 | `web_worker_post_result`、`blocking_result::status()`、WebSocket / 流读写状态 |
-| 不可信输入的数据错误 | 领域结果、`std::optional` 或状态值 | `parse_json<T>` / `parse_form<T>` 的 `model_parse_result<T>`、`jwt_verify` 的 `jwt_result`、`try_from_value`、流读取 EOF 的 `std::nullopt` |
+| 不可信输入的数据错误 | 领域结果、`std::optional` 或状态值 | `parse_json<T>` / `parse_form<T>` 的 `model_parse_result<T>`、`jwt_verify` 的 `jwt_result`、`try_from_value`、流读取 EOF 的 `std::nullopt`（客户端 WebSocket 未经 Close 的 EOF 例外，见 [9.3.2](#api-websocket-h)） |
 | 本地配置 / 编程错误 | 异常（`std::invalid_argument`、`std::logic_error`） | 非法 CIDR、运行中改配置、未注册的 `worker_state<T>` |
 | 后端失败 | 类型化异常 | `db_error`、`redis_error` 均继承 `std::system_error`，`code()` 为 `std::error_code`（[13.1](#api-entity-storage-h)）；文本转换失败为 `conversion_error` |
 | 请求处理失败 | 抛 `http_error`（[7.3](#api-http-error-h)）或任意异常，由框架映射为响应 | 见下表 |
@@ -2736,7 +2736,8 @@ ruvia::task<void> echo(ruvia::context& c) {
 ```
 
 - **通道**：同一时刻最多一个读取与一个输出操作；同方向重叠抛 `std::logic_error`。读者可与写者重叠，在消息边界轮询控制帧。
-- **结束信号**：`read()` 返回 `nullopt` 是唯一结束：双方关闭握手完成、EOF、拒收帧、`abort()`、心跳或关闭超时；原因由 `termination()` 区分，首个原因胜出。
+- **结束信号**：服务端会话（路由 `c.websocket()`、`accept_websocket()`）的 `read()` 返回 `nullopt` 是唯一结束：双方关闭握手完成、传输 EOF（未收到 Close 帧，`termination()` 为 `eof`）、拒收帧、`abort()`、心跳或关闭超时；原因由 `termination()` 区分，首个原因胜出。
+- **客户端 EOF**：`http_client_websocket_request::connect()` 返回的会话在对端未发送 Close 帧即结束传输（`termination()` 为 `eof`）时，观察到该结束的 `read()` 不返回 `nullopt`，而抛 `http_client_error`（`code()` 为 `http_client_errc::websocket_eof_before_close`，[11.2.11](#api-http-client-types-h)）；`close()` 完成时若 `termination()` 为 `eof` 同样抛出。其余结束原因与服务端相同，`read()` 返回 `nullopt`。
 - **优雅关闭**：`close()` 只占写通道，可与挂起的 `read()` 并发——对端应答后该读取返回 `nullopt`（`local_close`），关闭握手超时则返回 `nullopt`（`timeout`）且 `close()` 抛 `timed_out`；无挂起读取时 `close()` 自己读到对端 Close，期间启动的 `read()` 抛 `std::logic_error`。
 - **单会话接收限额**：`max_message_bytes_` 只能收紧 `server_config::max_websocket_message_bytes_`；帧声明、分片累计与解压后增长都受限，超限发送 Close `1009`、记为 `message_too_large`。
 - **入站预算**：服务端读缓冲、分片重组与解压输出计入 `server_config::max_inbound_buffer_bytes_per_connection_` / `_per_worker_`。
@@ -2817,7 +2818,7 @@ ruvia::task<void> echo(ruvia::context& c) {
 | `websocket(websocket&&) noexcept` | 移动构造；保留写入器与冷/运行中的操作，不延长服务端请求寿命 |
 | `websocket& operator=(websocket&&) noexcept` | 移动赋值；语义同移动构造 |
 | `~websocket()` | 析构；客户端拥有型会话中止并收束在途 I/O |
-| `task<std::optional<websocket_message>> read(operation_options operation = {}) &` | 读取下一条完整数据消息（分片重组与控制帧自动处理）；`nullopt` 为唯一结束；`operation` 超时/停止只结束本次读取（`std::system_error`：`operation_canceled` / `timed_out`），缓冲输入、读通道与会话保持可用。消息负载在下一次 `read()` 启动前有效 |
+| `task<std::optional<websocket_message>> read(operation_options operation = {}) &` | 读取下一条完整数据消息（分片重组与控制帧自动处理）；`nullopt` 与客户端 EOF 异常见使用指引“结束信号”“客户端 EOF”；`operation` 超时/停止只结束本次读取（`std::system_error`：`operation_canceled` / `timed_out`），缓冲输入、读通道与会话保持可用。消息负载在下一次 `read()` 启动前有效 |
 | `task<std::optional<websocket_message>> read(operation_options = {}) && = delete` | 禁止在临时对象上调用：返回的冷任务借用本对象，临时对象在任务运行前已销毁 |
 | `task<void> text(outbound_bytes payload, websocket_send_options options = {}, operation_options operation = {}) &` | 发送文本消息；接管构造时已拥有的负载（视图输入在构造时复制，精确 `std::string` 右值转移分配）；输出操作共用写通道，第二个并发启动抛 `std::logic_error`；`operation` 超时/停止中止会话并抛 `std::system_error`，启动前已停止则不输出 |
 | `task<void> text(outbound_bytes, websocket_send_options = {}, operation_options = {}) && = delete` | 禁止在临时对象上调用：返回的冷任务借用本对象，临时对象在任务运行前已销毁 |
@@ -2829,7 +2830,7 @@ ruvia::task<void> echo(ruvia::context& c) {
 | `task<void> ping(outbound_bytes = {}, operation_options = {}) && = delete` | 禁止在临时对象上调用：返回的冷任务借用本对象，临时对象在任务运行前已销毁 |
 | `task<void> send(websocket_message&& message, websocket_send_options options = {}, operation_options operation = {}) &` | 以消息自身 opcode 零拷贝发送本连接 `read()` 返回的消息（如回显）；帧借用读存储，因此立即占用读通道直到操作完成或销毁，期间 `read()`、`close()` 抛 `std::logic_error`，有挂起读取时本调用抛 `std::logic_error`；用 `websocket_message::borrow` 构造的消息须保持源存储不变直至完成 |
 | `task<void> send(websocket_message&&, websocket_send_options = {}, operation_options = {}) && = delete` | 禁止在临时对象上调用：返回的冷任务借用本对象，临时对象在任务运行前已销毁 |
-| `task<void> close(websocket_close_options options = {}, operation_options operation = {}) &` | 发起或完成关闭握手，只占写通道；行为见使用指引；握手超时抛 `std::system_error`（`timed_out`）；`operation` 像输出操作一样约束整个关闭 |
+| `task<void> close(websocket_close_options options = {}, operation_options operation = {}) &` | 发起或完成关闭握手，只占写通道；行为见使用指引（含客户端 EOF）；握手超时抛 `std::system_error`（`timed_out`）；`operation` 像输出操作一样约束整个关闭 |
 | `task<void> close(websocket_close_options = {}, operation_options = {}) && = delete` | 禁止在临时对象上调用：返回的冷任务借用本对象，临时对象在任务运行前已销毁 |
 | `void abort() & noexcept` | 立即中止传输，不执行关闭握手 |
 | `void abort() && = delete` | 禁止对临时对象调用：该操作只对仍被持有的对象有意义 |
@@ -3445,7 +3446,7 @@ ruvia::app().client({
 | `result_budget_exceeded` | `12` | 结果预算耗尽 |
 | `handshake_rejected` | `13` | WebSocket 握手被拒，`status()` 给出拒绝状态 |
 | `message_too_large` | `14` | 消息超过上限 |
-| `websocket_eof_before_close` | `15` | WebSocket 对端未发送 Close 帧即结束传输；按错误码识别，不匹配异常文本 |
+| `websocket_eof_before_close` | `15` | WebSocket 客户端会话的对端未发送 Close 帧即结束传输（抛出时机见 [9.3.2](#api-websocket-h)）；按错误码识别，不匹配异常文本 |
 
 | 声明 | 说明 |
 | --- | --- |
@@ -3526,8 +3527,10 @@ co_return c.text(body.text());
 
 - **重定向**：默认最多 5 跳，只跟随同一 origin 或当前拥有者已注册的其他 origin，未知 origin 或 HTTPS → HTTP 降级返回原响应；`on_redirect` 可在每一跳观察并停止；后续跳的期限与首跳共用同一绝对截止期。
 - **全文转发**：`response.pipe_to(c)` 与 `response.pipe_to(request_stream)` 共用提交、正文消费与结束主链；转发状态、端到端字段、未读正文与 Trailer，移除逐跳与 `Connection` 命名字段。
-- **转发准入**：元数据在目标输出通道内准备，不留存冷任务构造时的响应头引用；目标已提交时抛 `std::logic_error`。
-- **转发长度**：冷任务启动时按累计成功消费量重建未读 `Content-Length`，覆盖目标原有分帧字段；解码后不沿用原始线面长度；上游 HEAD 转成普通正文响应时长度为零，HEAD / 304 的表示长度元数据仍按无正文规则处理。
+- **转发准入**：元数据在冷任务启动后、目标输出通道内从本响应当前的 `headers()` 准备，不留存冷任务构造时的响应头引用；目标已提交时抛 `std::logic_error`。
+- **`Connection` 字段非法或超限**：上游 `Connection` 提名字段集不为 `http_connection_fields_status::valid`（状态与上限见 [ruvia-http 8.3.3](ruvia-http.md#api-http-proxy-forwarding-h)）时抛 `http_client_error`（`std::system_error` 派生，`code()` 为 `http_client_errc::protocol_error`）。准备转发头时检出：目标头未改动、仍未提交，异常按 [3.4](#web-errors) 提交前规则处理；正文结束、转发 Trailer 前按同一字段再次判定时检出：已提交下游随异常中止，不发送结束与 Trailer。
+- **转发长度**：冷任务启动时按累计成功消费量重建未读 `Content-Length`，覆盖目标原有分帧字段；仅当上游字段中仍有未被 `Connection` 提名的 `Content-Length`、没有 `Transfer-Encoding` 且分帧为 `fixed_length` / `none` / `stream` 时才写出，否则由目标按流式分帧；解码后不沿用原始线面长度；上游 HEAD 转成普通正文响应时长度为零，HEAD / 304 的表示长度元数据仍按无正文规则处理。
+- **`take_headers()` 之后转发**：字段数组已移出，`pipe_to(c)` / `pipe_to(request_stream)` 只转发状态、未读正文与 Trailer：不转发任何上游字段，也不再按上游 `Content-Length` 重建长度（即使 `content_length()` 仍返回解析值；仅上游 HEAD 的零长度规则仍适用），Trailer 只按固定逐跳名单过滤（已无 `Connection` 提名可用）。
 - **转发 Trailer**：HTTP/1.1 在长度未知、已有 Trailer 或多路复用上游尚可能产生尾部字段时使用 `chunked`，不为定长分帧丢弃尾部字段；HTTP/1.0 按协议能力省略可选 Trailer。
 - **仅转发正文**：先设置目标元数据并 `commit()`，仅 `body` 结果才调用 `stream().pipe_to(writer)`；此入口不提交或结束目标。
 - **SSE 上游**：把 `stream().read()` 的分块交给 `sse_parser`（见 [`"http_server_sent_events.h"`](ruvia-http.md#api-http-server-sent-events-h)）。
@@ -3711,7 +3714,7 @@ co_return c.text(body.text());
 | `void reprioritize(http_priority) && = delete` | 禁止对临时对象调用：该操作只对仍被持有的对象有意义 |
 | `std::span<const http_header> headers() const&` | 响应字段 |
 | `std::span<const http_header> headers() const&& = delete` | 禁止在临时对象上调用：返回值借用本对象，临时对象销毁后悬垂 |
-| `std::vector<http_header> take_headers() &&` | 移交原字段数组，不逐条复制；既有元数据借用失效 |
+| `std::vector<http_header> take_headers() &&` | 移交原字段数组，不逐条复制；此后 `headers()`、`header()`、`unique_header()` 看到空字段集，既有字段视图失效；`status()`、`framing()`、`content_length()` 等已解析元数据不变；对转发的影响见 11.3.2 |
 | `std::span<const http_header> trailers() const&` | Trailer 字段 |
 | `std::span<const http_header> trailers() const&& = delete` | 禁止在临时对象上调用：返回值借用本对象，临时对象销毁后悬垂 |
 | `std::optional<std::string_view> header(std::string_view name) const&` | 大小写不敏感，首行胜出 |
@@ -3726,7 +3729,7 @@ co_return c.text(body.text());
 | `task<http_client_response_bytes> bytes(std::size_t = default_max_buffered_body_bytes, operation_options = {}) && = delete` | 禁止在临时对象上调用：返回的冷任务借用本对象，临时对象在任务运行前已销毁 |
 | `template <typename value_type> requires detail::is_model_json_value<value_type> task<model_parse_result<value_type>> json(std::size_t max_bytes = default_max_buffered_body_bytes, operation_options operation = {}) &` | 收集正文并以 `parse_json<value_type>` 解析；语法、结构及字段规则失败返回领域错误，不抛本服务的 `http_error`；传输中断及分配／配置异常仍传播 |
 | `template <typename value_type> requires detail::is_model_json_value<value_type> task<model_parse_result<value_type>> json(std::size_t = default_max_buffered_body_bytes, operation_options = {}) && = delete` | 禁止在临时对象上调用：返回的冷任务借用本对象，临时对象在任务运行前已销毁 |
-| `task<void> pipe_to(context& output, operation_options operation = {}) &` | 转发状态、端到端字段、未读正文与 Trailer 到当前服务端响应；冷操作随本响应或目标失效 |
+| `task<void> pipe_to(context& output, operation_options operation = {}) &` | 转发状态、端到端字段、未读正文与 Trailer 到当前服务端响应；准入、`Connection` 错误（`protocol_error`）的提交前 / 后区别、长度与 `take_headers()` 之后的行为见 11.3.2；冷操作随本响应或目标失效 |
 | `task<void> pipe_to(context&, operation_options = {}) && = delete` | 禁止在临时对象上调用：返回的冷任务借用本对象，临时对象在任务运行前已销毁 |
 | `task<void> pipe_to(request_stream& output, operation_options operation = {}) &` | 同上，目标为 `request_stream` |
 | `task<void> pipe_to(request_stream&, operation_options = {}) && = delete` | 禁止在临时对象上调用：返回的冷任务借用本对象，临时对象在任务运行前已销毁 |
@@ -3780,7 +3783,12 @@ co_return c.text(body.text());
 | `std::span<const std::byte> bytes() const&& = delete` | 禁止在临时对象上调用：返回值借用本对象，临时对象销毁后悬垂 |
 | `std::string_view text() const& noexcept` | 字符视图 |
 | `std::string_view text() const&& = delete` | 禁止在临时对象上调用：返回值借用本对象，临时对象销毁后悬垂 |
-| `owned_allocation take_bytes() && noexcept` | 移交原 `unique_ptr<byte[], allocation_deleter>`；`get_deleter().size()` 为有效长度，保留字节预算随 allocation 最终释放，源恢复为空 |
+| `class allocation_deleter final`（`http_client_response_bytes::allocation_deleter`） | `owned_allocation` 的删除器：携带有效长度与本结果的保留字节预算；隐式可复制 / 移动，复制品共享同一预算域，只应由所属 `owned_allocation` 调用一次 |
+| `allocation_deleter() noexcept = default` | 空删除器：`size()` 为 `0`，不持有预算；供 `owned_allocation` 默认构造 |
+| `void allocation_deleter::operator()(std::byte* bytes) const noexcept` | `delete[] bytes` 后把保留字节归还结果预算 |
+| `std::size_t allocation_deleter::size() const noexcept` | 分配中的有效字节数 |
+| `using owned_allocation = std::unique_ptr<std::byte[], allocation_deleter>`（`http_client_response_bytes::owned_allocation`） | 移交出的正文存储；地址稳定，独立于客户端与 worker 生命周期；释放时才归还预算 |
+| `owned_allocation take_bytes() && noexcept` | 移交原分配与保留字节预算，不复制；`get_deleter().size()` 为有效长度；空结果得到空指针且 `size()` 为 `0`；源变为空结果（`size() == 0`，视图为空） |
 
 #### 11.3.12 上传：`http_client_exchange` 与 `http_client_request_body_writer`
 
@@ -4230,31 +4238,81 @@ UTF-8 文本字段（JSON 字符串）。内容可为任意字节，序列化时
 
 源码：[../ruvia-web/include/json_codec.h](../ruvia-web/include/json_codec.h)
 
-**定位**：作为安装头由 `"model.h"` 引入，提供模型编解码与动态 JSON 视图共用的 JSON 语法、字符串转义与容器遍历实现。
-**公开原语**：字符串、数字与容器扫描入口位于 `ruvia`；模型与动态 JSON 共用同一实现。十进制内部转换仍为 `detail`，平台 SIMD 选择宏不泄漏给包含方。
+**定位**：作为安装头由 `"model.h"` 引入，是模型编解码、动态 JSON token（[12.4.11](#api-model-h)）与对象字段查找共用的唯一 JSON 语法、字符串转义与容器遍历实现；也可被包含方直接用于自定义增量解析或写出。
+**范围**：下列 `ruvia` 命名空间符号全部公开；`detail::convert_decimal_number` / `detail::parse_decimal_number` 不是公开契约；SIMD 选择宏 `RUVIA_JSON_SCAN_SSE2` / `RUVIA_JSON_SCAN_NEON` 在头末 `#undef`，不泄漏给包含方。UTF-8 序列扫描与十六进制数字来自 [`"utf8.h"`](ruvia-http.md#api-utf8-h) 与 [`"binary_text_encoding.h"`](ruvia-http.md#api-binary-text-encoding-h)。
+**通用约定**：除注明外，原语以返回 `false` / `std::nullopt` / 空 token 报告输入不合法，不抛异常；输出容器的分配异常、调用方回调抛出的异常原样传播。以 `std::string_view&` 接收输入的入口只在成功时把游标推进到所消费值之后，例外在各行注明。
 
-| 主题 | 可观察行为 |
-| --- | --- |
-| **字符串输出转义** | `"`、`\` 与 `\b` `\f` `\n` `\r` `\t` 输出两字符转义；其余 `U+0000`–`U+001F` 输出小写 `\u00xx`（与 ECMAScript `JSON.stringify` 一致） |
-| **UTF-8 输出保证** | 输出始终为良构 UTF-8（RFC 8259 §8.1）；非良构序列的每个最大子部分（孤立续字节、截断/过长序列、代理码点、超出 U+10FFFF、其他编码文本）替换为一个 U+FFFD |
-| **模型键** | 字段 wire name 在编译期转义为 `,"<name>":` 常量；wire name 非良构 UTF-8 时编译失败（见 [12.4.5](#api-model-h)） |
-| **数字语法** | 严格 RFC 8259：可选 `-`、无前导 `+`、无空白、小数部分非空、指数可选；不接受 NaN/Infinity 拼写 |
-| **整数字段** | 带小数点或指数的数字不能解析为整数字段；超出目标类型范围视为类型错误 |
-| **浮点字段** | 全零有效数字得到带符号零；非零有效数字上溢或下溢视为错误 |
-| **嵌套深度** | 容器嵌套最大深度 64；超出视为非法 JSON |
-| **字符串解码** | 处理 `\uXXXX` 与代理对；含转义的字符串解码为拥有型文本，无转义字符串可直接借用输入字节 |
+#### 12.3.1 常量、枚举与 token 类型
 
-| 公开入口 | 契约 |
+| 声明 | 说明 |
 | --- | --- |
-| `json_string_size_hint(value)` / `append_json_string(output, value)` | 常数时间容量提示与单遍 JSON 字符串追加；不会先扫描长度再扫描转义。输出包含双引号。 |
-| `json_byte_needs_escape` / `append_json_escape` / `append_json_member_key` | 单字节转义分类、转义写出与编译期字段键写出；后者拒绝非法 UTF-8 键名。 |
-| `parse_json_string(input, decoded = nullptr)` | 从可变输入视图消费一个字符串；无转义借用切片，按需写入 decoded。预算重载在分配前调用预算回调。 |
-| `json_string_token` / `json_string_encoding` / `json_string_text` | 区分字面字符串与需要解码的转义字符串，按 token 类别读取文本。 |
-| `scan_json_number_token` / `skip_json_number_token` / `parse_json_number_value` | 单遍扫描、跳过或按类型读取 JSON 数字，保留语法与范围错误。 |
-| `skip_json_whitespace` / `consume_json_char` / `consume_json_literal` | 输入游标原语，按各入口推进 `string_view&`；调用方负责整体输入结束检查。 |
-| `consume_json_array_elements` / `consume_json_object_members` / `consume_json_object_fields` | 有界深度的增量容器消费；访问器消费当前值，不先构造整棵动态树。 |
-| `visit_json_object_fields` / `json_object_visit_result` | 遍历完整对象的借用字段切片，区分完成、访问器停止与格式错误。 |
-| `skip_json_value` / `skip_json_array` / `skip_json_object` / `max_json_depth` | 共用深度上限与跳过算法；预算重载可限制元素数量。 |
+| `inline constexpr std::size_t max_json_depth = 64` | 容器层级上限：各容器入口在 `depth > max_json_depth` 时失败；顶层值的 `depth` 为 `0`，成员 / 元素值由调用方以 `depth + 1` 继续 |
+| `enum class json_string_encoding : std::uint8_t { literal, escaped }` | 字符串 token 类别：`literal` 不含转义，原始字节即文本；`escaped` 含至少一个转义，文本须经解码 |
+| `class json_string_token final` | `parse_json_string` 的结果；构造函数私有，只能由 `parse_json_string` 生成，可平凡复制；不拥有字节 |
+| `std::string_view json_string_token::raw() const noexcept` | 引号之间的原始（未解码）字节，借用被扫描的输入 |
+| `json_string_encoding json_string_token::encoding() const noexcept` | token 类别；调用方不能得到不带类别的原始视图 |
+| `struct json_number_token final` | `scan_json_number_token` 的结果；聚合 |
+| `std::size_t json_number_token::length_ {0}` | 输入开头合法 RFC 8259 数字的字节数；`0` 表示开头不是合法数字 |
+| `bool json_number_token::nonzero_significand_ {false}` | 整数或小数部分是否含非零数字；全零有效数字决定浮点结果为带符号零 |
+| `enum class json_object_visit_result : unsigned char { complete, stopped, invalid }` | `visit_json_object_fields` 结果：完整遍历、访问器返回 `false` 停止、格式错误或尾随内容 |
+
+#### 12.3.2 输入游标与字节扫描
+
+| 声明 | 说明 |
+| --- | --- |
+| `inline void skip_json_whitespace(std::string_view& input) noexcept` | 跳过前导 JSON 空白（SP、HT、CR、LF） |
+| `[[nodiscard]] inline bool consume_json_char(std::string_view& input, char expected) noexcept` | 先跳过空白，再消费一个 `expected`；失败返回 `false`，已跳过的空白不回退 |
+| `[[nodiscard]] inline bool consume_json_literal(std::string_view& input, std::string_view literal) noexcept` | 先跳过空白，再消费完整前缀 `literal`（如 `true`）；不检查其后字节；失败时已跳过的空白不回退 |
+| `[[nodiscard]] inline std::size_t find_json_string_token_byte(std::string_view input, std::size_t offset) noexcept` | 返回 `offset` 起首个 `"`、`\`、`< 0x20` 或 `>= 0x80` 字节的下标；没有或 `offset >= input.size()` 时为 `std::string_view::npos`；SSE2 / NEON 可用时每次扫描 16 字节 |
+| `[[nodiscard]] inline bool read_json_hex4(std::string_view input, std::uint32_t& value) noexcept` | 把 `input` 前 4 个十六进制数字（大小写均可）读为一个 UTF-16 码元；不足 4 字节或含非十六进制数字返回 `false`，此时 `value` 内容未指定；第 4 字节之后的输入不检查 |
+| `[[nodiscard]] inline bool is_json_high_surrogate(std::uint32_t code_unit) noexcept` | `code_unit` 在 `0xD800`–`0xDBFF` |
+| `[[nodiscard]] inline bool is_json_low_surrogate(std::uint32_t code_unit) noexcept` | `code_unit` 在 `0xDC00`–`0xDFFF` |
+
+#### 12.3.3 字符串写出
+
+输出类型要求：`append_json_escape` / `append_json_member_key` 需要 `push_back(char)` 与 `append(std::string_view)`；`append_json_string` 需要 `push_back(char)` 与 `append(const char*, std::size_t)`；`append_json_utf8` 只需要 `push_back(char)`。
+
+| 声明 | 说明 |
+| --- | --- |
+| `[[nodiscard]] constexpr std::size_t json_string_size_hint(std::string_view value) noexcept` | 返回 `value.size() + 2`（含双引号）：常数时间的容量预留下界，不预扫描转义；转义或 U+FFFD 替换可使实际输出更长 |
+| `[[nodiscard]] constexpr bool json_byte_needs_escape(unsigned char byte) noexcept` | RFC 8259 §7 禁止在字符串中原样出现的 ASCII 字节：`< 0x20`、`"`、`\` |
+| `template <typename output_type> constexpr void append_json_escape(output_type& output, unsigned char byte)` | 前置条件 `json_byte_needs_escape(byte)`。`"`、`\`、`\b`、`\f`、`\n`、`\r`、`\t` 写两字符转义，其余写小写 `\u00xx`（与 ECMAScript `JSON.stringify` 一致）；运行期字符串与编译期模型键的唯一转义拼写 |
+| `template <typename string_t_type> inline void append_json_string(string_t_type& output, std::string_view value)` | 单遍写出带双引号的 JSON 字符串：需要转义的字节按 `append_json_escape`；`/` 与 `0x7F` 原样输出；良构多字节 UTF-8 原样复制；非良构序列的每个最大子部分（孤立续字节、截断 / 过长序列、代理码点、超出 U+10FFFF、其他编码文本）替换为一个 U+FFFD（Unicode 3.9 最大子部分替换），因此输出总是良构 UTF-8（RFC 8259 §8.1） |
+| `template <typename output_type> [[nodiscard]] constexpr bool append_json_member_key(output_type& output, std::string_view name)` | 写出 `,"<name>":`（总以逗号开头，首成员由调用方处理）；`name` 非良构 UTF-8 时返回 `false`，`output` 已含部分写出内容，由调用方丢弃。`RUVIA_MODEL` 以它在编译期生成字段键并据此拒绝非法 wire name（[12.4.5](#api-model-h)） |
+| `template <typename output_t_type> void append_json_utf8(output_t_type& output, std::uint32_t code_point)` | 把码点机械编码为 1–4 字节 UTF-8；不校验：前置条件为 Unicode 标量值（非代理且 `<= 0x10FFFF`），否则输出非良构字节 |
+
+#### 12.3.4 字符串解析
+
+| 声明 | 说明 |
+| --- | --- |
+| `template <typename escaped_budget_type> [[nodiscard]] inline std::optional<json_string_token> parse_json_string(std::string_view& input, std::string* decoded, escaped_budget_type&& consume_escaped_bytes)` | 跳过前导空白后扫描一个字符串：校验转义（`\"` `\\` `\/` `\b` `\f` `\n` `\r` `\t` 与 `\uXXXX`，高代理须紧跟低代理，孤立低代理拒绝）、拒绝未转义的 `< 0x20` 字节与非良构 UTF-8。成功时游标推进到右引号之后；失败返回 `std::nullopt` 且 `input` 不变（含前导空白）。`literal` 字符串从不触碰 `decoded`；`decoded` 非空且遇到首个转义时，本遍清空并写入解码文本，不回扫、不预先复制。仅当 `decoded` 非空时，每次向 `decoded` 追加前以本段原始字节数调用 `consume_escaped_bytes(std::size_t)`，返回假即解析失败。失败后 `decoded` 内容未指定 |
+| `[[nodiscard]] inline std::optional<json_string_token> parse_json_string(std::string_view& input, std::string* decoded = nullptr)` | 同上，不设解码预算 |
+| `[[nodiscard]] inline std::string_view json_string_text(const json_string_token& token, const std::string& decoded) noexcept` | `literal` 返回 `token.raw()`，`escaped` 返回 `decoded`；`decoded` 须是扫描该 token 时传入的缓冲 |
+
+#### 12.3.5 数字
+
+| 声明 | 说明 |
+| --- | --- |
+| `[[nodiscard]] inline json_number_token scan_json_number_token(std::string_view input) noexcept` | 从 `input` 开头（不跳过空白）按 RFC 8259 扫描：可选 `-`、无前导 `+`、不允许前导零（`0` 后紧跟数字返回长度 `0`）、小数部分非空、指数可选；不接受 NaN / Infinity 拼写；不检查数字之后的字节 |
+| `[[nodiscard]] inline bool skip_json_number_token(std::string_view& input) noexcept` | 不跳过空白；开头为合法数字时推进其长度并返回 `true` |
+| `template <typename number_t_type> [[nodiscard]] bool parse_json_number_value(std::string_view& input, number_t_type& value)` | 跳过空白（失败时不回退）后读取一个数字。浮点类型：全零有效数字得到带符号零，非零有效数字上溢或下溢返回 `false`，结果须有限；其他类型以 `std::from_chars` 读取整个 token：带小数点或指数、超出类型范围返回 `false`。成功才推进游标；失败时 `value` 可能已被写入 |
+
+#### 12.3.6 容器消费、跳过与对象遍历
+
+| 声明 | 说明 |
+| --- | --- |
+| `template <typename visitor_type> [[nodiscard]] bool consume_json_array_elements(std::string_view& input, std::size_t depth, visitor_type&& visitor)` | 消费一个数组；`visitor(std::string_view&)` 从同一游标（已跳过空白、位于元素首字节）消费一个元素并返回可转 `bool` 的值，假即拒绝整个数组；嵌套值由调用方以 `depth + 1` 处理。整个数组接受后才推进到 `]` 之后 |
+| `template <typename visitor_type, typename key_budget_type> [[nodiscard]] bool consume_json_object_members(std::string_view& input, std::size_t depth, std::string* decoded_key, visitor_type&& visitor, key_budget_type&& consume_key_bytes)` | 消费一个对象；每个成员以 `visitor(const json_string_token& key, std::string_view& value_input)` 调用，`value_input` 位于 `:` 之后，访问器消费值并返回假以拒绝；`decoded_key` 与 `consume_key_bytes` 按 `parse_json_string` 契约解码转义键（解码内容只在本次回调内有效）；不检测重复键。整个对象接受后才推进到 `}` 之后 |
+| `template <typename visitor_type> [[nodiscard]] bool consume_json_object_members(std::string_view& input, std::size_t depth, std::string* decoded_key, visitor_type&& visitor)` | 同上，不设键解码预算 |
+| `template <typename visitor_type, typename key_allocation_type> [[nodiscard]] bool consume_json_object_fields(std::string_view& input, std::size_t depth, visitor_type&& visitor, key_allocation_type&& consume_key_allocation)` | 按需（On-Demand）消费对象：`visitor(std::string_view key, std::string_view& value_input)` 收到已解码键（转义键借用内部缓冲，只在回调内有效）并直接从游标消费值，已知字段无需先切出原始切片再二次解析；每个转义键在访问器看到之前以 `consume_key_allocation(std::size_t bytes, bool first)` 计入其原始字节，`first` 标记该键的首次计费。`RUVIA_MODEL` 解析走此入口 |
+| `template <typename visitor_type> [[nodiscard]] bool consume_json_object_fields(std::string_view& input, std::size_t depth, visitor_type&& visitor)` | 同上，不设键计费 |
+| `[[nodiscard]] inline bool skip_json_value(std::string_view& input, std::size_t depth) noexcept` | 跳过位于 `depth` 的一个任意值（跳过的前导空白在失败时不回退）；字符串、字面量与数字语法同上文各原语 |
+| `template <typename element_budget_type> [[nodiscard]] bool skip_json_value(std::string_view& input, std::size_t depth, element_budget_type& consume_element) noexcept` | 同上；每个数组元素（任意嵌套层）跳过前调用一次 `consume_element()`，返回假即失败；对象成员不计数。处于 `noexcept` 路径，回调抛出即 `std::terminate` |
+| `template <typename element_budget_type> [[nodiscard]] bool skip_json_array(std::string_view& input, std::size_t depth, element_budget_type& consume_element) noexcept` | 跳过一个数组（首个非空白字节须为 `[`），元素计数同上 |
+| `template <typename element_budget_type> [[nodiscard]] bool skip_json_object(std::string_view& input, std::size_t depth, element_budget_type& consume_element) noexcept` | 跳过一个对象（首个非空白字节须为 `{`），成员值内的数组元素计数同上 |
+| `template <typename visitor_type> requires std::predicate<visitor_type&, std::string_view, std::string_view> [[nodiscard]] json_object_visit_result visit_json_object_fields(std::string_view body, visitor_type&& visitor)` | `body` 须恰为一个对象（前后可有空白）；按出现顺序以（已解码键、原始值切片）调用访问器，值切片借用 `body` 且可含前导空白，值在深度 `1` 跳过；访问器返回 `false` 立即得 `stopped`（不再检查剩余输入），格式错误或尾随内容得 `invalid`，否则 `complete`。`json_object::get` 以此实现重复字段检测 |
+
+模型 JSON 的整数 / 浮点字段（[12.4.3](#api-model-h)）直接经 `parse_json_number_value` 读取；整文档资源预算见 [12.4.4 `model_parse_options`](#api-model-h)。
 
 <a id="api-model-h"></a>
 
@@ -4585,8 +4643,9 @@ JSON 解析的整文档资源预算（含嵌套数组），用于 `parse_json`�
 | `template <typename t_type> requires detail::is_model_json_value<t_type> model_parse_result<t_type> parse_json(std::string_view body, model_parse_options options = {})` | 类型约束同 `to_json`；解析恰好一个 JSON 值（允许前后空白）；成功值拥有全部字符串与动态 token；类型含模型时执行结构与字段规则；错误见 12.4.2 |
 | `template <typename t_type> requires detail::is_model<t_type> model_parse_result<t_type> parse_form(std::string_view body)` | `t_type` 为 `RUVIA_MODEL`；解析 URL 编码表单；成功值拥有字符串；只绑定字符串与标量字段；错误见 12.4.2 |
 | `template <typename model_type> requires detail::is_model<model_type> void validate_model(const model_type& model, validator& out)` | 把模型的结构问题（`required`/`invalid_type`/`duplicate`）与字段规则问题追加到 `out`，不因输入问题抛出；分配与自定义规则异常仍传播 |
-| `json_value(model)` / `json_object(model)` / `to_json_value(model)` / `to_json_object(model)` | 直接通过既有 writer 构造拥有型 token，不对生成文本再次解析；沿用输出省略与字段编码策略。 |
-| `from_json<Model>(const json_value&/const json_object&, model_parse_options = {})` | 直接消费 token 得到独立拥有的模型，复用 required、optional、nullable、default、规则与错误路径，不经 dump/预解析往返。 |
+| `template <typename model_type> requires detail::is_model<model_type> json_value to_json_value(const model_type& value)` | 返回 `json_value(value)`：模型 writer 直接把 JSON 写入 token 自有存储，不再解析生成文本；字段省略、`null` 与编码规则同 `to_json`；结果总是对象 token |
+| `template <typename model_type> requires detail::is_model<model_type> json_object to_json_object(const model_type& value)` | 返回 `json_object(value)`，契约同上 |
+| `template <typename model_type, typename token_type> requires (detail::is_model<model_type> && (detail::is_ruvia_json_value<token_type> \|\| detail::is_ruvia_json_object<token_type>)) model_parse_result<model_type> from_json(const token_type& value, model_parse_options options = {})` | 等价于 `parse_json<model_type>(value.view(), options)`：以 token 保留的原始文本走完整的模型 JSON 解析（语法、`options` 预算、未知字段策略、required / optional / nullable / default 与字段规则、错误类别均同 `parse_json`）；不经序列化往返（无 dump），也不是免解析的直接转换。结果拥有全部字符串与动态 token，独立于源 token |
 
 #### 12.4.11 `json_value` 与 `json_object`
 
@@ -4611,6 +4670,7 @@ JSON 解析的整文档资源预算（含嵌套数组），用于 `parse_json`�
 | --- | --- |
 | `enum class kind_type : unsigned char { object, array, string, number, boolean, null }` | token 种类 |
 | `json_value() noexcept` | `null` |
+| `template <typename model_type> requires detail::is_model<model_type> explicit json_value(const model_type& value)` | 以模型 writer 写出的对象文本构造拥有型 token；与 `to_json_value` 同一路径 |
 | `static model_parse_result<json_value> parse(std::string_view body, model_parse_options options = {})` | 校验 `body` 为恰好一个 JSON 值并借用；非法返回 `invalid_format`（`message()` 为 `"invalid JSON value"`） |
 | `template <typename traits_type, typename allocator_type> static model_parse_result<json_value> parse(std::basic_string<char, traits_type, allocator_type>&&, model_parse_options = {}) = delete` | 拒绝临时字符串 |
 | `template <typename traits_type, typename allocator_type> static model_parse_result<json_value> parse(const std::basic_string<char, traits_type, allocator_type>&&, model_parse_options = {}) = delete` | 同上 |
@@ -4636,6 +4696,7 @@ JSON 解析的整文档资源预算（含嵌套数组），用于 `parse_json`�
 | 声明 | 说明 |
 | --- | --- |
 | `json_object() noexcept` | `{}` |
+| `template <typename model_type> requires detail::is_model<model_type> explicit json_object(const model_type& value)` | 以模型 writer 写出的对象文本构造拥有型 token；与 `to_json_object` 同一路径 |
 | `static model_parse_result<json_object> parse(std::string_view body, model_parse_options options = {})` | 校验 `body` 为恰好一个 JSON 对象并借用；否则返回 `invalid_format`（`message()` 为 `"invalid JSON object"`） |
 | `template <typename traits_type, typename allocator_type> static model_parse_result<json_object> parse(std::basic_string<char, traits_type, allocator_type>&&, model_parse_options = {}) = delete` | 拒绝临时字符串 |
 | `template <typename traits_type, typename allocator_type> static model_parse_result<json_object> parse(const std::basic_string<char, traits_type, allocator_type>&&, model_parse_options = {}) = delete` | 同上 |
@@ -5172,9 +5233,12 @@ ruvia::task<void> handler(ruvia::db_executor db, std::int64_t id) {
 | `template <fixed_string sql, db_driver driver = db_driver::unspecified, typename... params_type> requires (db_parameter<params_type> && ...) task<db_rows> query(params_type&&... params) &` | 事务本体 | 同上 |
 | `template <fixed_string sql, db_driver driver = db_driver::unspecified, typename... params_type> requires (db_parameter<params_type> && ...) task<db_exec_result> execute(params_type&&... params) const&` | 可复制面 | 同上 |
 | `template <fixed_string sql, db_driver driver = db_driver::unspecified, typename... params_type> requires (db_parameter<params_type> && ...) task<db_exec_result> execute(params_type&&... params) &` | 事务本体 | 同上 |
-| `task<db_rows> query(const db_query&)` | 三个命令面 | 同步编译并拥有查询，不把已编译 SQL 送回占位符扫描 |
-| `task<db_exec_result> execute(const db_query&)` | 三个命令面 | 同上，返回执行进度 |
-| `task<std::pair<db_rows, std::uint64_t>> query_and_count(const db_query& rows, const db_query& count)` | 三个命令面 | 复用单次往返分页执行计划；count 必须恰好一行且有非 NULL `count` 列；事务仅允许可变左值调用 |
+| `task<db_rows> query(const db_query& query) const& requires detail::db_copyable_surface<surface_type>` | 可复制面 | 返回冷任务前按连接方言编译 `db_query` 并拥有 SQL 与参数，不把已编译 SQL 送回占位符扫描；语句不返回行时抛 `std::invalid_argument` |
+| `task<db_rows> query(const db_query& query) & requires (!detail::db_copyable_surface<surface_type>)` | 事务本体 | 同上 |
+| `task<db_exec_result> execute(const db_query& query) const& requires detail::db_copyable_surface<surface_type>` | 可复制面 | 同上，返回执行进度；语句返回行时抛 `std::invalid_argument` |
+| `task<db_exec_result> execute(const db_query& query) & requires (!detail::db_copyable_surface<surface_type>)` | 事务本体 | 同上 |
+| `task<std::pair<db_rows, std::uint64_t>> query_and_count(const db_query& query, const db_query& count) const& requires detail::db_copyable_surface<surface_type>` | 可复制面 | 返回前编译并拥有两条语句（任一不返回行抛 `std::invalid_argument`）；执行时依次运行 `query` 与 `count` 两条独立语句（不是单次往返，也不合并为一条 SQL），共用同一截止期；池路径每条语句独立取池连接、各自适用查询缓存策略（命中即不访问数据库），两者不保证同一快照。`count` 结果须恰好一行（否则 `conversion_error(unexpected_row_count)`），且 `count` 列非 NULL（否则 `conversion_error(unexpected_null)`）并可转 `std::uint64_t` |
+| `task<std::pair<db_rows, std::uint64_t>> query_and_count(const db_query& query, const db_query& count) & requires (!detail::db_copyable_surface<surface_type>)` | 事务本体 | 同上，但两条语句在同一事务连接上执行且绕过共享缓存 |
 
 编译期校验的诊断：SQL 含 NUL、`?` 与 `$n` 混用而 `driver` 为 `unspecified`、`$0` / 溢出等非法编号、占位符数与实参数不符，均为 `static_assert` 失败；方言与连接驱动不符在运行期抛 `std::invalid_argument`。校验只检查绑定契约，不检查语法或 schema。
 
@@ -7196,10 +7260,17 @@ for (;;) {
 
 - **借用访问器**：`string()`、`error()`、`array()` 借用该值；`const&&` 重载删除，禁止从临时 `redis_value` 取视图。
 
-**缓存脚本 `redis_script`**
+**`class redis_script final`**：不可变的拥有型 Lua 源码，构造时一次计算 SHA-1；隐式复制共享同一不可变存储，冷操作各自持有脚本所有权。执行入口为 [16.1.8](#api-redis-executor-h) 的 `redis_executor::eval_cached`。
 
-- **脚本对象**：`redis_script` 拥有 Lua 文本并一次计算 SHA-1；精确 `std::string` 右值零拷贝接管，复制共享不可变脚本存储。
-- **执行入口**：`redis_executor::eval_cached(const redis_script&, span<const string_view> keys = {}, span<const string_view> args = {})` 返回 `task<redis_value>`；返回前拥有全部输入，先 `EVALSHA`，仅精确 `NOSCRIPT` 错误 token 回退 `EVAL`，两次尝试共用截止期。ORM 复用同一主链。
+| 声明 | 说明 |
+| --- | --- |
+| `explicit redis_script(std::string_view body)` | 复制 `body` 并计算 SHA-1；摘要失败抛 `std::runtime_error`，分配失败抛 `std::bad_alloc` |
+| `template <std::same_as<std::string> string_type> explicit redis_script(string_type&& body)` | 仅接受 `std::string` 右值，零拷贝接管文本；失败同上 |
+| 隐式复制 / 移动构造与赋值、析构 | 复制共享存储；移出后的对象只可析构或被赋值，调用 `body()` / `sha1()` 是未定义行为 |
+| `std::string_view body() const& noexcept` | Lua 源码，借用共享存储 |
+| `std::string_view body() const&& = delete` | 禁止从临时脚本借用 |
+| `std::string_view sha1() const& noexcept` | 40 个小写十六进制字符的 SHA-1，即 `EVALSHA` 摘要 |
+| `std::string_view sha1() const&& = delete` | 禁止从临时脚本借用 |
 
 
 #### 16.1.6 类型化命令表 `redis_command_set<surface_type>`
@@ -7422,6 +7493,9 @@ for (;;) {
 | `task<redis_value> command(std::initializer_list<std::string_view> args) const = delete` | 拒绝花括号列表 |
 | `task<redis_value> command(redis_compiled_command command) const` | 同步接管已编译命令后返回冷任务；已被取空的命令抛 `std::invalid_argument` |
 | `template <typename... args_type> requires detail::redis_argument_pack<args_type...> task<redis_value> command(args_type&&... args) const` | 至少 1 个、每个可转 `std::string_view`；返回前复制参数 |
+| `task<redis_value> eval_cached(const redis_script& script, std::span<const std::string_view> keys = {}, std::span<const std::string_view> args = {}) const` | 返回冷任务前复制脚本所有权与全部键 / 参数（实参只需活过本调用）；先发 `EVALSHA <sha1> <numkeys> keys… args…`，回复错误恰为 `NOSCRIPT` 或以 `NOSCRIPT ` 开头时改发 `EVAL <body>` 同参数重试一次，两次尝试共用本句柄选项决定的同一截止期；其他回复（含其他错误回复）原样返回。能力过期抛 `std::logic_error`；键与参数总数不可表示时抛 `std::length_error`。Redis ORM 写入 / 删除复用同一主链 |
+| `task<redis_value> eval_cached(const redis_script&, std::initializer_list<std::string_view>, std::span<const std::string_view> = {}) const = delete` | 拒绝花括号键列表（与 `command` 一致），改用具名数组或 `std::span` |
+| `task<redis_value> eval_cached(const redis_script&, std::span<const std::string_view>, std::initializer_list<std::string_view>) const = delete` | 拒绝花括号参数列表，理由同上 |
 | `task<std::optional<redis_key_value>> blpop(std::string_view key, redis_block_wait wait) const` | 单键 `BLPOP`；阻塞池；超时返回 `std::nullopt`；结果 `key()` 为弹出所在键、`value()` 为元素 |
 | `task<std::optional<redis_key_value>> blpop(std::span<const std::string_view> keys, redis_block_wait wait) const` | 多键 `BLPOP`；空列表抛 `std::invalid_argument` |
 | `task<std::optional<redis_key_value>> brpop(std::string_view key, redis_block_wait wait) const` | 单键 `BRPOP` |
@@ -8195,17 +8269,31 @@ auto res = app.request(
 **返回值 `dispatch_response`**：拥有状态、响应头与正文，提供 `status()`、`body()`、`headers()`、`header(name)`；完整签名与契约见 [`"context.h"`](#api-context-h)。
 
 <a id="web-crypto"></a>
+<a id="api-crypto-h"></a>
 
 ## 19. 密码学字节原语
 
 公开头 [`crypto.h`](../ruvia-web/include/crypto.h) 属于 `ruvia::web`，不向协议层引入 OpenSSL 依赖。
 
-| 公开入口 | 契约 |
+| 声明 | 契约 |
 | --- | --- |
-| `constant_time_bytes_equal(left, right) noexcept` | 等长字节按内容常量时间比较；长度不同立即返回假。 |
-| `compute_sha256(bytes, digest) noexcept` | 写入固定 32 字节摘要；底层失败返回假。`sha256_digest` 与 `sha256_digest_size` 描述输出。 |
-| `sha256::update` / `update_u64_le` / `finish` | 增量 SHA-256；短输入内联，长输入按需创建原生 context；`finish()` 结束摘要，失败抛异常。 |
-| `sha256_of(text)` | 返回独立摘要的一次性便捷入口。 |
-| `hmac_digest` / `hmac_digest_size` / `hmac_max_digest_size` / `hmac_max_input_size` | SHA-256/384/512 HMAC 选择、输出与输入上限。 |
-| `compute_hmac(digest, key, message, output) noexcept` | 直接写调用方输出；尺寸非法或底层失败返回假。 |
-| `fill_random_bytes(span<unsigned char>) noexcept` | CSPRNG 填充调用方缓冲；底层失败返回假，调用方决定错误映射。 |
+| `[[nodiscard]] bool constant_time_bytes_equal(std::string_view left, std::string_view right) noexcept` | 等长输入按内容做数据无关（常量时间）比较，不在首个差异字节提前返回；长度不同立即返回 `false`（长度不视为秘密）；两者皆空为 `true` |
+| `inline constexpr std::size_t sha256_digest_size = 32` | SHA-256 摘要字节数 |
+| `using sha256_digest = std::array<unsigned char, sha256_digest_size>` | 拥有型摘要值 |
+| `[[nodiscard]] bool compute_sha256(std::span<const unsigned char> bytes, std::span<unsigned char, sha256_digest_size> digest) noexcept` | 一次性摘要写入调用方 32 字节缓冲；仅 OpenSSL 失败时返回 `false`（此时 `digest` 内容未指定），供 `noexcept` 调用方映射为自身错误 |
+| `class sha256 final` | 增量 SHA-256：累计输入不超过对象内 512 字节缓冲时只缓存、`finish()` 一次摘要；溢出时创建 OpenSSL 摘要 context 并改为流式更新。不可复制，也不可移动（复制构造 / 赋值 `= delete` 且未声明移动操作）；无内部同步 |
+| `sha256() noexcept = default` | 空摘要状态，不分配 |
+| `~sha256()` | 释放 OpenSSL context（若已创建）；任何状态下（含异常之后）都可安全析构 |
+| `sha256(const sha256&) = delete` | 禁止复制：摘要状态可能持有原生 context |
+| `sha256& operator=(const sha256&) = delete` | 禁止复制赋值 |
+| `void update(std::string_view bytes)` | 追加字节；空输入无操作。创建 / 初始化 context 或 `EVP_DigestUpdate` 失败抛 `std::runtime_error("SHA-256 digest failed")` |
+| `void update_u64_le(std::uint64_t value)` | 追加 `value` 的 8 字节小端编码，契约同 `update` |
+| `[[nodiscard]] sha256_digest finish()` | 结束并返回摘要；OpenSSL 失败抛 `std::runtime_error`。`finish()` 返回后不得再调用 `update` / `update_u64_le` / `finish` |
+| 异常后的状态 | `update` / `update_u64_le` / `finish` 抛出后摘要状态未指定，对象只能析构；需要结果时以新对象重新计算 |
+| `[[nodiscard]] sha256_digest sha256_of(std::string_view bytes)` | 以局部 `sha256` 一次性计算；失败抛 `std::runtime_error` |
+| `enum class hmac_digest : std::uint8_t { sha256, sha384, sha512 }` | HMAC 摘要算法：签名 Cookie（SHA-256）与 JWT HS256 / HS384 / HS512 |
+| `inline constexpr std::size_t hmac_max_digest_size = 64` | 最大 HMAC 输出字节数，可用于固定输出缓冲 |
+| `inline constexpr std::size_t hmac_max_input_size = static_cast<std::size_t>((std::numeric_limits<int>::max)())` | OpenSSL 一次性 MAC 接受的密钥 / 消息长度上限 |
+| `[[nodiscard]] constexpr std::size_t hmac_digest_size(hmac_digest digest) noexcept` | `32` / `48` / `64`；非枚举值返回 `0` |
+| `[[nodiscard]] bool compute_hmac(hmac_digest digest, std::string_view key, std::string_view message, std::span<std::uint8_t> output) noexcept` | 把 `hmac_digest_size(digest)` 字节的 HMAC 写到 `output` 前部；`key` 或 `message` 超过 `hmac_max_input_size`、`output` 小于摘要长度、非枚举算法或 OpenSSL 失败返回 `false`；调用方应先自行检查尺寸以按自身语义报告 |
+| `[[nodiscard]] bool fill_random_bytes(std::span<unsigned char> bytes) noexcept` | 以 OpenSSL CSPRNG 填满调用方缓冲；生成器无法产出时返回 `false`，调用方决定错误映射 |

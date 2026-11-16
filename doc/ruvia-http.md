@@ -178,7 +178,7 @@ if (step.holds<ruvia::decode_need_input>()) {
 
 ## 3. 公开头索引
 
-共 67 个安装头：无条件 62 个，`RUVIA_ENABLE_HTTP2` 2 个，`RUVIA_ENABLE_HTTP3` 3 个。
+共 70 个安装头：无条件 65 个，`RUVIA_ENABLE_HTTP2` 2 个，`RUVIA_ENABLE_HTTP3` 3 个。
 
 | 章节 | 头文件 | 安装条件 | 领域 |
 | --- | --- | --- | --- |
@@ -928,7 +928,7 @@ enum class decoder_state : std::uint8_t {
 | 类别 | 成员 | 终态后再次调用 |
 | --- | --- | --- |
 | 终态结果供提取的解析器 | [`http1_server_request_parser`](#api-http1-server-request-h) 与 [`http1_client_response_parser`](#api-http1-client-response-h) 的 `parse()`、[`proxy_protocol_parser`](#api-proxy-protocol-h) 与 [`sse_parser`](#api-http-server-sent-events-h) 的 `parse()`、[`multipart_parser::feed()`](#api-http-multipart-h) | 抛 `std::logic_error`。 |
-| 流式解码器 | [`http1_chunked_body_decoder`](#api-http1-chunked-body-h)、[传输编码栈](#api-http-transfer-coding-h)、[`http1_body_decoder`](#api-http1-message-body-h)、[Capsule 解码器](#api-http-capsule-h) 的 `decode()` / `feed()` / `poll()`，以及 `multipart_parser::poll()` | 重放同一终态结果，`consumed_bytes()` 为 0，状态不变。 |
+| 流式解码器 | [`http_content_decoder`](#api-http-content-codec-h)、[`http1_chunked_body_decoder`](#api-http1-chunked-body-h)、[传输编码栈](#api-http-transfer-coding-h)、[`http1_body_decoder`](#api-http1-message-body-h)、[Capsule 解码器](#api-http-capsule-h) 的 `decode()` / `feed()` / `poll()`，以及 `multipart_parser::poll()` | 重放同一终态结果，`consumed_bytes()` 为 0，状态不变。 |
 
 #### 4.8.2 备选项类型
 
@@ -3205,7 +3205,7 @@ public:
 ### 7.2 `"http_content_codec.h"`
 <a id="api-http-content-codec-h"></a>
 
-整段缓冲编解码门面、唯一的内容编码器（整段与增量）、编解码器内部故障异常，以及每 worker 的编码器池与 RAII 租约。依赖 [`"http_content_coding.h"`](#api-http-content-coding-h)、[`"borrowed_text.h"`](#api-borrowed-text-h)。Web 层缓冲响应的压缩预算策略见 [ruvia-web](ruvia-web.md)。源码：[`ruvia-http/include/http_content_codec.h`](../ruvia-http/include/http_content_codec.h)
+整段缓冲编解码门面、唯一的内容编码器（整段与增量）、唯一的流式内容解码器、编解码器内部故障异常，以及每 worker 的编码器池与 RAII 租约。公开 include [`"decode_step.h"`](#api-decode-step-h)、[`"http_codec_memory.h"`](#api-http-codec-memory-h)、[`"http_content_coding.h"`](#api-http-content-coding-h)、[`"borrowed_text.h"`](#api-borrowed-text-h)。Web 层缓冲响应的压缩预算策略见 [ruvia-web](ruvia-web.md)。源码：[`ruvia-http/include/http_content_codec.h`](../ruvia-http/include/http_content_codec.h)
 
 #### 7.2.1 异常、选项与整段门面
 
@@ -3225,6 +3225,12 @@ struct http_content_decode_options final {
     http_codec_memory* memory_{nullptr};
 };
 
+struct http_content_encoder_options final {
+    std::size_t max_memory_bytes_{(std::numeric_limits<std::size_t>::max)()};
+    http_codec_memory* memory_{nullptr};
+    std::optional<int> compression_level_{};
+};
+
 [[nodiscard]] std::variant<std::string, http_content_decode_error>
 decode_http_content(http_content_coding coding, std::string_view input, http_content_decode_options options);
 [[nodiscard]] std::variant<std::string, http_content_decode_error>
@@ -3239,15 +3245,23 @@ encode_http_content(http_content_coding coding, std::string_view input, http_con
 - `http_content_decode_error`（值）：表示本身的数据错误，见 [7.1.1](#api-http-content-coding-h)。
 - 编码返回 `std::nullopt`：仅表示超出 `max_encoded_bytes_`，属正常结果。
 
-输出字节上限默认 `0`；解码工作内存上限默认不额外收紧，可经 `max_memory_bytes_` 与共享 `memory_` 同时约束。
+三个选项结构是本头唯一的上限与内存配置来源：
+
+| 字段 | 默认 | 契约 |
+| --- | --- | --- |
+| `http_content_encode_options::max_encoded_bytes_` | `0` | 一个完整表示的精确编码输出上限；会超出时编码返回 `std::nullopt`，`0` 只允许零字节编码。 |
+| `http_content_decode_options::max_decoded_bytes_` | `0` | 累计解码输出的精确上限；超出报告 `decoded_size_exceeded`。 |
+| `max_memory_bytes_`（`http_content_decode_options` / `http_content_encoder_options`） | `SIZE_MAX` | 单个原生 codec 的工作内存上限，只计负载字节；`SIZE_MAX` 表示不另设单 codec 上限。显式上限被超出时原生分配失败，以 `std::bad_alloc` 抛出且 codec 进入失败态（Brotli 解码的例外见下文）。identity 不使用原生内存。 |
+| `memory_`（`http_content_decode_options` / `http_content_encoder_options`） | `nullptr` | 可选的请求共享预算与分配回调（[7.6](#api-http-codec-memory-h)），与 `max_memory_bytes_` 同时生效；`nullptr` 使用 `operator new` / `delete` 且无共享预算。所指对象须活过使用它的 codec。 |
+| `http_content_encoder_options::compression_level_` | `std::nullopt` | `std::nullopt` 使用该 coding 的默认级别。显式值须在 gzip/deflate `-1..9`、Brotli `0..11`、zstd `ZSTD_minCLevel()..ZSTD_maxCLevel()` 内；identity 拒绝任何显式级别。违反时编码器构造抛 `std::invalid_argument`。 |
 
 | 函数 | 语义 |
 | --- | --- |
 | `decode_http_content(coding, input, options)` | 解码一个完整表示。gzip 多成员与 zstd 多帧一直消费到输入末尾；Brotli 尾随字节被拒绝（`invalid_content`）。精确解码上限 `max_decoded_bytes_` 适用于整个表示；超过上限的 identity 表示在分配前即被拒绝（`decoded_size_exceeded`）。空表示对任何 coding 都解码为空内容。 |
 | `decode_http_content(codings, input, options)` | 按 `codings`（应用顺序，即 `Content-Encoding` 顺序）逆序逐层解码；上述规则逐层适用，精确上限约束每个中间表示，每个中间表示在下一级完成前释放。 |
-| `encode_http_content(coding, input, options)` | 等价于新建 `http_content_encoder(coding)` 调用一次 `encode(input, options)`。 |
+| `encode_http_content(coding, input, options, encoder_options = {})` | 等价于新建 `http_content_encoder(coding, encoder_options)` 并调用一次 `encode(input, options)`；构造与编码异常同 `http_content_encoder`。 |
 
-解码器工作内存同样受解码上限约束：`br` 声明的环形缓冲超过该上限可容纳的大小时（约为上限的三倍加 3 MiB 固定表空间）直接返回 `decoded_size_exceeded`，不按对端声明的窗口分配；`zstd` 解码器按 RFC 9659 接受最大 8 MiB 窗口（协议要求的下限）。编码侧 Brotli 一律使用 19 位窗口，zstd 编码窗口不超过 RFC 9659 的 8 MiB。
+解码器工作内存同样受解码上限约束：`br` 声明的环形缓冲超过该上限可容纳的大小时（约为上限的三倍加 3 MiB 固定表空间）直接返回 `decoded_size_exceeded`，不按对端声明的窗口分配；若显式 `max_memory_bytes_` 比该推导上限更紧，则按上表抛 `std::bad_alloc`。`zstd` 解码器按 RFC 9659 接受最大 8 MiB 窗口（协议要求的下限）。编码侧 Brotli 一律使用 19 位窗口，zstd 编码窗口不超过 RFC 9659 的 8 MiB。
 
 #### 7.2.2 `class http_content_encoder`
 
@@ -3265,6 +3279,7 @@ public:
     void finish(std::string& output);
     [[nodiscard]] std::optional<std::string> encode(std::string_view input, http_content_encode_options options);
     void reset();
+    [[nodiscard]] decoder_state state() const noexcept;
 };
 ```
 
@@ -3272,14 +3287,15 @@ public:
 
 | 成员 | 语义 |
 | --- | --- |
-| 构造 | 未知 coding 或非法压缩级别抛 `std::invalid_argument`；`http_content_encoder_options` 的 `max_memory_bytes_` 限制单 codec 工作内存，`memory_` 可绑定共享请求预算。`compression_level_` 缺省沿用算法默认，gzip/deflate 为 `-1..9`、Brotli 为 `0..11`、zstd 为原生合法范围，identity 不接受级别。 |
+| 构造 | 未知 coding 或 `compression_level_` 违反 [7.2.1](#api-http-content-codec-h) 选项表抛 `std::invalid_argument`；原生状态无法创建抛 `http_content_codec_error`，内存上限或分配失败抛 `std::bad_alloc`（回调异常保留原类型）。 |
 | `coding()` | 构造时的 coding。 |
 | `write(input, output, flush = false)` | 消费全部 `input` 并把编码字节追加到调用方拥有的 `output`，不保留任一视图。`input` 可以借用 `output`（压缩写入在追加可能使其失效前先做快照）。`flush == true` 时输出所有待发字节，用于 SSE 等低延迟流。空输入合法（包括重复 flush），不结束流。 |
 | `finish(output)` | 结束流并追加剩余字节；幂等。 |
-| `encode(input, options)` | 在精确输出上限内编码一个完整表示；`std::nullopt` 仅表示会超过 `max_encoded_bytes_`，上限为零时只允许零字节编码。等同 `write()` + `finish()` 消费流，下一个表示前须 `reset()`。 |
-| `reset()` | 让任意阶段的编码器回到全新活动流。zlib 与 zstd 复用工作内存；Brotli 无原生重置，重建状态可能分配。重置失败（抛异常）使编码器保持失败态。 |
+| `encode(input, options)` | 在 `max_encoded_bytes_` 精确输出上限内编码一个完整表示（上限语义见 [7.2.1](#api-http-content-codec-h)）。等同 `write()` + `finish()` 消费流，下一个表示前须 `reset()`。 |
+| `reset()` | 让任意阶段的编码器回到全新活动流。zlib 与 zstd 复用工作内存；Brotli 无原生重置，重建状态可能分配。重置失败（抛异常）使编码器保持 `failed`。 |
+| `state()` | `active`：可 `write()` / `encode()`；`finished`：成功 `finish()` 或 `encode()`（含返回 `std::nullopt`）之后；`failed`：`write()` / `finish()` / `encode()` / `reset()` 抛出任何异常之后。只有成功的 `reset()` 回到 `active`。 |
 
-状态规则：编解码器故障（`http_content_codec_error`）或分配异常是终态，因为输入/输出可能已部分推进；之后除 `reset()` 外的操作抛 `std::logic_error`，显式 `reset()` 成功后才可继续。成功 `finish()` 后再 `write()` 抛 `std::logic_error` 且不改变 `output`。`output` 可以在调用之间清空，并在编码器销毁后仍有效。分配异常在编解码器经其 C API 返回时保留原类型；内部 OOM 时直接退出的 Brotli 构建无法在此边界恢复。
+状态规则：任何异常都是终态，因为输入/输出可能已部分推进。`finished` 时 `write()` / `encode()` 抛 `std::logic_error` 且不改变 `output`，`finish()` 为无操作；`failed` 时 `write()` / `finish()` / `encode()` 抛 `std::logic_error`。`coding()` 与 `state()` 在任何状态可用。`output` 可以在调用之间清空，并在编码器销毁后仍有效。分配异常在编解码器经其 C API 返回时保留原类型；内部 OOM 时直接退出的 Brotli 构建无法在此边界恢复。
 
 #### 7.2.3 `class http_worker_codecs` 与 `class http_content_encoder_lease`
 
@@ -3328,25 +3344,48 @@ lease.encoder().finish(out);
 
 #### 7.2.4 `class http_content_decoder`
 
-| 公开入口 | 契约 |
+```cpp
+using http_content_decode_failure = decode_failure<http_content_decode_error>;
+using http_content_decode_result =
+    decode_step<decode_need_input, decode_output, decode_complete, http_content_decode_failure>;
+
+class http_content_decoder final {
+public:
+    http_content_decoder(http_content_coding coding, http_content_decode_options options);
+    ~http_content_decoder();
+    http_content_decoder(const http_content_decoder&) = delete;
+    http_content_decoder& operator=(const http_content_decoder&) = delete;
+    http_content_decoder(http_content_decoder&&) = delete;
+    http_content_decoder& operator=(http_content_decoder&&) = delete;
+    [[nodiscard]] http_content_decode_result decode(std::string_view input, std::span<char> output);
+    [[nodiscard]] http_content_decode_result finish_input() noexcept;
+    [[nodiscard]] decoder_state state() const noexcept;
+    void reset();
+};
+```
+
+| 符号 | 契约 |
 | --- | --- |
-| `http_content_decoder(coding, http_content_decode_options)` | identity、gzip、deflate、Brotli、zstd 的唯一流式主链；整段解码与传输解码复用，不缓存完整输入。不可复制或移动。 |
-| `decode(input, span<char> output)` | 返回 `http_content_decode_result`：`need_input`、`decode_output`、完成或数据错误。identity 输出直接借用输入，压缩输出借用调用方 scratch。按 `consumed_bytes()` 丢弃输入前缀；scratch 非空，压缩输入不得与其重叠。 |
-| `finish_input() noexcept` | 显式 EOF；拒绝截断流，gzip 多成员与 zstd 多帧直到 EOF 才确认最终边界。空表示在 EOF 完成。 |
-| `state()` / `reset()` | `active/finished/failed`；终态调用消费零字节并重放终态，仅显式 reset 复用。内部/分配异常标记失败且保留原异常类型。 |
+| `http_content_decode_failure` | `decode_failure<http_content_decode_error>`，`error()` 见 [7.1.1](#api-http-content-coding-h)。 |
+| `http_content_decode_result` | 单步结果：`decode_need_input`、`decode_output`、`decode_complete` 或 `http_content_decode_failure`（[4.8](#api-decode-step-h)）。 |
+| 构造 | identity、gzip、deflate、Brotli、zstd 的唯一流式主链；整段解码与传输解码复用，不缓存完整输入。`coding` 不是已知枚举值抛 `std::invalid_argument`；原生状态无法创建抛 `http_content_codec_error`；内存上限或分配失败抛 `std::bad_alloc`。选项见 [7.2.1](#api-http-content-codec-h)，`options.memory_` 须活过解码器。不可复制或移动。 |
+| `decode(input, output)` | 不保留 `input`。identity 输出直接借用 `input`（每步至多 `output.size()` 字节），压缩输出借用 `output`。`output` 为空，或压缩 coding 的非空 `input` 与 `output` 重叠，抛 `std::invalid_argument`。累计输出超过 `max_decoded_bytes_` 返回 `decoded_size_exceeded`；deflate、Brotli 流结束后同一输入仍有字节返回 `invalid_content`，gzip、zstd 继续下一成员 / 帧。原生库在同一步既产出有效字节又报告数据错误时，本步先交付这些字节（`state()` 已为 `failed`），下一次 `decode()` / `finish_input()` 返回类型化失败。 |
+| `finish_input() noexcept` | 显式 EOF：identity、已到达编码结束边界或从未收到编码字节（空表示）时完成；否则即截断，返回 `invalid_content`。gzip 多成员与 zstd 多帧只在 EOF 确认最终边界。 |
+| `state()` | `active` / `finished` / `failed`。终态下 `decode()` / `finish_input()` 消费 0 字节并重放终态结果。任何异常（含上述参数错误）都把解码器置为 `failed` 并保留原异常类型，之后返回失败结果。 |
+| `reset()` | 以构造时的 coding 与选项开始新表示：zlib、zstd 复用原生状态，Brotli 重建（可能分配）。无法重启抛 `http_content_codec_error` 或分配异常，解码器保持 `failed`。 |
 
-- **排空顺序**：输出须在复用 scratch 前消费；交付更多输入或 EOF 前，先以 `decode({}, scratch)` 排空剩余输出。
-- **双重限额**：每个交付字节均受累计解码上限约束；原生工作内存另受单 codec 上限和 [7.6](#api-http-codec-memory-h) 的请求共享预算约束。
-
+- **排空顺序**：输出须在复用 `output` 前消费；交付更多输入或 EOF 前，先以 `decode({}, output)` 排空剩余输出。按 `consumed_bytes()` 丢弃输入前缀。
 
 ### 7.3 `"http_transfer_coding.h"`
 <a id="api-http-transfer-coding-h"></a>
 
-`Transfer-Encoding` 压缩传输编码（`gzip`、`deflate`）的唯一增量解码入口，结果采用 [`decode_step`](#api-decode-step-h) 三态契约。依赖 [`"decode_step.h"`](#api-decode-step-h)、[`"http_content_coding.h"`](#api-http-content-coding-h)、[`"http_protocol.h"`](#api-http-protocol-h)（`protocol_byte_limit`）。HTTP/1 正文解码器如何组合它见 [`"http1_message_body.h"`](#api-http1-message-body-h)。源码：[`ruvia-http/include/http_transfer_coding.h`](../ruvia-http/include/http_transfer_coding.h)
+`Transfer-Encoding` 压缩传输编码（`gzip`、`deflate`）的唯一增量解码入口，结果采用 [`decode_step`](#api-decode-step-h) 三态契约。公开 include [`"decode_step.h"`](#api-decode-step-h)、[`"http_content_coding.h"`](#api-http-content-coding-h)、[`"http_protocol.h"`](#api-http-protocol-h)（`protocol_byte_limit`）、[`"borrowed_text.h"`](#api-borrowed-text-h)；`http_codec_memory` 仅前置声明，传入非空预算时须包含 [`"http_codec_memory.h"`](#api-http-codec-memory-h)。HTTP/1 正文解码器如何组合它见 [`"http1_message_body.h"`](#api-http1-message-body-h)。源码：[`ruvia-http/include/http_transfer_coding.h`](../ruvia-http/include/http_transfer_coding.h)
 
 #### 7.3.1 `class http_transfer_coding_stack_decoder`
 
 ```cpp
+class http_codec_memory;
+
 using http_transfer_coding_decode_failure = decode_failure<http_content_decode_error>;
 using http_transfer_coding_decode_result =
     decode_step<decode_need_input, decode_output, decode_complete, http_transfer_coding_decode_failure>;
@@ -3370,9 +3409,9 @@ public:
 
 | 成员 | 语义 |
 | --- | --- |
-| 构造 | 复制协议顺序的 `codings` 并逆序解码。每个 coding 须满足 `is_http_transfer_coding()`（只允许 `gzip`、`deflate`），否则抛 `std::invalid_argument`；`decoded_limit` 由每一层独立执行。编解码器无法创建抛 `http_content_codec_error`。 |
-| `decode(input, output)` | 消费输入并把解码字节写入 `output`；不保留 `input`，输出视图借用调用方暂存区，复用前须消费。请求更多输入前须先用 `decode({}, scratch)` 排空输出。 |
-| `finish_input() noexcept` | 提交分帧 EOF；只能在所有输入与输出排空后调用。在 EOF 前未收到任何编码字节的层按空内容完成。 |
+| 构造 | 复制协议顺序的 `codings` 并逆序解码。`codings` 为空或多于 `max_content_codings`（8），或任一 coding 不满足 `is_http_transfer_coding()`（只允许 `gzip`、`deflate`），抛 `std::invalid_argument`。`decoded_limit` 由每一层独立执行（取 `read_ceiling()`）。`memory` 为所有层共享的 [`http_codec_memory`](#api-http-codec-memory-h) 请求预算，不另设单 codec 上限；`nullptr` 使用标准分配器且无共享预算；非空时须活过解码器。编解码器无法创建抛 `http_content_codec_error`，预算不足或分配失败抛 `std::bad_alloc`。 |
+| `decode(input, output)` | 消费输入并把解码字节写入 `output`；`output` 为空抛 `std::invalid_argument`。不保留 `input`，输出视图借用调用方暂存区，复用前须消费。请求更多输入前须先用 `decode({}, scratch)` 排空输出。 |
+| `finish_input() noexcept` | 提交分帧 EOF；层间仍有待解码字节时返回 `decode_need_input`。线上从未收到字节时各层按空内容完成；线上已收到字节而某内层未收到任何字节时返回 `invalid_content`；未到结束边界的截断层同样返回 `invalid_content`。 |
 | `state()` | `active` / `finished` / `failed`。 |
 | `reset()` | 用构造时的 codings 与上限开始新的编码体，保留编解码器存储；编解码器无法重启时抛 `http_content_codec_error`，解码器随后不可用。 |
 
@@ -3661,14 +3700,35 @@ for (;;) {
 ### 7.6 `"http_codec_memory.h"`
 <a id="api-http-codec-memory-h"></a>
 
+一个请求内全部原生 codec（内容编码器、内容解码器、传输编码栈解码器）共享的工作内存预算与可选分配回调。只依赖标准库。使用方见 [7.2](#api-http-content-codec-h) 选项表的 `memory_` 与 [7.3](#api-http-transfer-coding-h) 构造参数 `memory`。源码：[`ruvia-http/include/http_codec_memory.h`](../ruvia-http/include/http_codec_memory.h)
+
+```cpp
+namespace ruvia {
+struct http_codec_allocation_callbacks final {
+    void* context_{nullptr};
+    void* (*allocate_)(std::size_t bytes, std::size_t alignment, void* context){nullptr};
+    void (*deallocate_)(void* pointer, std::size_t bytes, std::size_t alignment, void* context) noexcept {nullptr};
+};
+
+class http_codec_memory final {
+public:
+    explicit http_codec_memory(std::size_t max_bytes = (std::numeric_limits<std::size_t>::max)(), http_codec_allocation_callbacks callbacks = {});
+    http_codec_memory(const http_codec_memory&) = delete;
+    http_codec_memory& operator=(const http_codec_memory&) = delete;
+    [[nodiscard]] std::size_t live_bytes() const noexcept;
+    [[nodiscard]] std::size_t max_bytes() const noexcept;
+};
+}
+```
+
 | 公开入口 | 契约 |
 | --- | --- |
-| `http_codec_allocation_callbacks` | `context_`、`allocate_(bytes, alignment, context)`、`deallocate_(pointer, bytes, alignment, context) noexcept`；两个回调必须成对配置，缺省使用标准分配器。 |
-| `http_codec_memory(max_bytes = SIZE_MAX, callbacks = {})` | 请求级原生 codec 工作内存预算；只计活跃原生负载字节，不含分配器元数据。不引入池、Arena 或 pmr 层。 |
-| `live_bytes()` / `max_bytes()` | 当前原生工作内存用量与上限；最终 codec 释放后归零。 |
+| `http_codec_allocation_callbacks` | `context_` 原样传给两个回调。`allocate_` 返回至少 `bytes` 字节、按 `alignment` 对齐的块，可抛任意异常，返回 `nullptr` 视为 `std::bad_alloc`；`deallocate_` 收到与分配时相同的 `pointer` / `bytes` / `alignment`，不得抛异常。回调收到的 `bytes` 含库内部记录块大小的前缀，因而大于计入预算的负载字节。 |
+| `http_codec_memory(max_bytes, callbacks)` | 请求级原生 codec 工作内存预算，默认无上限、使用 `operator new` / `delete`。`allocate_` 与 `deallocate_` 必须同时为空或同时非空，否则抛 `std::invalid_argument`。不引入池、Arena 或 pmr 层。不可复制或移动。 |
+| `live_bytes()` / `max_bytes()` | 当前活跃原生负载字节（不含分配器元数据）与构造时上限；全部绑定的 codec 释放后 `live_bytes()` 归零。 |
 
-- **寿命与并发**：不可复制，非线程安全；其地址及回调上下文必须活到所有绑定的 encoder、decoder 与 transfer decoder 销毁。
-- **异常边界**：预算不足或回调返回空指针产生 `std::bad_alloc`；回调异常在 C 边界捕获，返回 C++ 后保留原类型重抛；释放回调不得抛异常。
+- **寿命与并发**：非线程安全；其地址及回调上下文必须活到所有绑定的 encoder、decoder 与 transfer decoder 销毁。
+- **异常边界**：单次负载请求超过 `max_bytes() - live_bytes()` 时不调用回调、产生 `std::bad_alloc`；回调异常在 C 边界捕获，返回 C++ 后保留原类型重抛。异常后 codec 的状态见 [7.2](#api-http-content-codec-h)、[7.3](#api-http-transfer-coding-h)。
 
 ## 8. 目标、源站、转发与连接元数据
 
@@ -3849,7 +3909,7 @@ public:
 ### 8.3 `"http_proxy_forwarding.h"`
 <a id="api-http-proxy-forwarding-h"></a>
 
-代理转发辅助：请求目标规范化、`Max-Forwards`（RFC 9110 §7.6.2）、`Connection` 提名字段与逐跳字段判定（RFC 9110 §7.6.1）、禁止出现在 trailer 中的字段名。字段视图类型来自 [`"http_header.h"`](#api-http-header-h)，方法枚举来自 [`"http_message.h"`](#api-http-message-h)。源码：[`ruvia-http/include/http_proxy_forwarding.h`](../ruvia-http/include/http_proxy_forwarding.h)
+代理转发辅助：请求目标规范化、`Max-Forwards`（RFC 9110 §7.6.2）、`Connection` 提名字段与逐跳字段判定（RFC 9110 §7.6.1）、禁止出现在 trailer 中的字段名。字段视图类型与 `http_header_field_source` 来自 [`"http_header.h"`](#api-http-header-h)，方法枚举来自 [`"http_message.h"`](#api-http-message-h)，`borrowed_text` 来自 [`"borrowed_text.h"`](#api-borrowed-text-h)。源码：[`ruvia-http/include/http_proxy_forwarding.h`](../ruvia-http/include/http_proxy_forwarding.h)
 
 #### 8.3.1 请求目标规范化
 
@@ -3916,15 +3976,27 @@ public:
 
 ```cpp
 namespace ruvia {
+enum class http_connection_fields_status : std::uint8_t {
+    valid,
+    invalid,
+    budget_exceeded,
+};
+
 class http_connection_nominated_fields final {
 public:
     http_connection_nominated_fields() noexcept = default;
 
-    void update(borrowed_text connection_field_value) noexcept;
-    void update_headers(const http_header_range_view& headers) noexcept;
-    [[nodiscard]] constexpr http_connection_fields_status status() const noexcept;
     static constexpr std::size_t capacity = 128;
     static constexpr std::size_t max_input_bytes = 16384;
+
+    void update(borrowed_text connection_field_value) noexcept;
+    void update_headers(const http_header_range_view& headers) noexcept;
+    template <typename source_type>
+        requires http_header_field_source<source_type> && (!std::is_lvalue_reference_v<source_type&&>) && (!std::ranges::borrowed_range<source_type>)
+    void update_headers(source_type&&) = delete;
+    void update_headers(std::initializer_list<http_header_view>) = delete;
+
+    [[nodiscard]] constexpr http_connection_fields_status status() const noexcept;
 
     [[nodiscard]] bool contains(std::string_view field_name) const noexcept;
     [[nodiscard]] constexpr bool has_close() const noexcept;
@@ -3942,6 +4014,10 @@ public:
 
 [[nodiscard]] http_connection_nominated_fields parse_http_connection_nominated_fields(borrowed_text connection_field_value) noexcept;
 [[nodiscard]] http_connection_nominated_fields parse_http_connection_nominated_fields(const http_header_range_view& headers) noexcept;
+template <typename source_type>
+    requires http_header_field_source<source_type> && (!std::is_lvalue_reference_v<source_type&&>) && (!std::ranges::borrowed_range<source_type>)
+http_connection_nominated_fields parse_http_connection_nominated_fields(source_type&&) = delete;
+http_connection_nominated_fields parse_http_connection_nominated_fields(std::initializer_list<http_header_view>) = delete;
 
 [[nodiscard]] bool is_http_hop_by_hop_field_name(std::string_view field_name) noexcept;
 [[nodiscard]] bool is_http_standard_connection_option(std::string_view option) noexcept;
@@ -3954,20 +4030,33 @@ public:
 
 | 符号 | 语义 |
 | --- | --- |
-| `http_connection_nominated_fields` | 固定容量借用 token 集合，按 ASCII 大小写不敏感去重，保留原始拼写；解析不分配，不复制或小写化文本。输入 owner 必须保持存活且不变，拒绝临时拥有型字符串/容器与 initializer_list。 |
-| `update(value)` | 追加逗号分隔 token；非法 token 将 `status()` 置为 `invalid`，超过 128 个不同名称或累计 16384 输入字节为 `budget_exceeded`。失败状态粘滞，转发方必须拒绝，不能只使用已解析前缀。 |
-| `update_headers(headers)` | 对全部 `Connection` 行复用同一解析器与预算。 |
+| `http_connection_nominated_fields` | 固定容量借用 token 集合，按 ASCII 大小写不敏感去重，保留首次出现的原始拼写；解析不分配，不复制或小写化文本。输入 owner 必须保持存活且不变；`= delete` 重载拒绝临时拥有型字段容器 / 消息与 `initializer_list`（[`http_header_field_source`](#api-http-header-h)）。 |
+| `capacity` / `max_input_bytes` | 上限常量（值见声明）；超出语义只在下方状态表定义。 |
+| `update(value)` | 解析一个 `Connection` 字段值（逗号分隔、成员首尾 OWS 被修剪）并并入集合；结果状态见下方状态表。 |
+| `update_headers(headers)` | 按出现顺序对每个 `Connection` 行（名称大小写不敏感）调用 `update`，共享同一集合与累计预算。 |
+| `status()` | 当前 `http_connection_fields_status`。 |
 | `contains(name)` | 大小写不敏感地判断 token 是否被提名。 |
 | `has_close()` / `has_keep_alive()` / `has_upgrade()` / `has_te()` | 是否出现 `close` / `keep-alive` / `Upgrade` / `TE`。 |
 | `empty()` / `size()` / `tokens()` | token 集合；`tokens()` 借用本对象，右值重载删除。 |
-| `non_standard_options()` | 不属于标准连接选项（见 `is_http_standard_connection_option`）的 token 副本。 |
-| `rebuild_connection_field(retain_upgrade, include_non_standard)` | 生成转发用的 `Connection` 值：`retain_upgrade` 且提名了 `Upgrade` 时以 `Upgrade` 开头；`include_non_standard` 时追加非标准 token（`", "` 分隔）。可能返回空串。 |
-| `parse_http_connection_nominated_fields(...)` | 以单值或字段块构造新集合。 |
+| `non_standard_options()` | 不属于标准连接选项（见 `is_http_standard_connection_option`）的 token 的 ASCII 小写副本。 |
+| `rebuild_connection_field(retain_upgrade, include_non_standard)` | 生成转发用的 `Connection` 值：`retain_upgrade` 且提名了 `Upgrade` 时以 `Upgrade` 开头；`include_non_standard` 时追加非标准 token 的 ASCII 小写形式（`", "` 分隔）。可能返回空串。 |
+| `parse_http_connection_nominated_fields(...)` | 以默认构造的集合调用 `update(value)` 或 `update_headers(headers)` 后返回；借用与删除重载同上。 |
 | `is_http_hop_by_hop_field_name(name)` | 协议逐跳字段：`Connection`、`Keep-Alive`、`Proxy-Connection`、`TE`、`Transfer-Encoding`、`Trailer`、`Upgrade`、`Proxy-Authenticate`、`Proxy-Authorization`（大小写不敏感）。 |
 | `is_http_standard_connection_option(option)` | `close` 或上述逐跳字段名（含 `keep-alive`）。 |
 | `is_http_hop_by_hop_or_nominated_field(name, nominated, retain_upgrade)` | 协议逐跳字段或被 `Connection` 提名的字段；`retain_upgrade` 且已提名 `Upgrade` 时，`Upgrade` 本身不视为待剥离。 |
 | `is_http_hop_by_hop_trailer_field(name, nominated)` | trailer 字段是否为逐跳或被提名字段。 |
 | `is_forbidden_http_request_trailer_field_name` / `is_forbidden_http_response_trailer_field_name` | 字段名是否不得出现在请求 / 响应 trailer 中（RFC 9110 §6.5.1）；HTTP/1 chunked、HTTP/2、HTTP/3 的 trailer 收发校验使用同一规则。名称一律按 ASCII 大小写不敏感比较，完整清单见下文。 |
+
+`http_connection_fields_status` 是 `Connection` 解析结果的唯一权威状态（`capacity`、`max_input_bytes` 与空成员上限只在此处定义）：
+
+| 状态 | 进入条件 |
+| --- | --- |
+| `valid`（0） | 迄今所有 `update` 的成员都是合法字段名 token，且未触及下列任一上限。 |
+| `invalid`（1） | 某个非空成员不是合法字段名 token。 |
+| `budget_exceeded`（2） | 三个相互独立的上限之一被超出：所有 `update` 累计输入字节将超过 `max_input_bytes`（16384）——在解析该值前判定，该值不并入任何 token；不同 token 数将超过 `capacity`（128），重复 token 不计数；单次 `update`（即一个字段值）内的空成员超过 32 个。 |
+
+- **粘滞**：一旦离开 `valid`，后续 `update` / `update_headers` 为无操作，只有新建对象才能重新开始。
+- **部分结果不可用**：失败时集合与 `has_*()` 可能已含失败字段值中失败点之前的 token；观察器与 `is_http_hop_by_hop_or_nominated_field` / `is_http_hop_by_hop_trailer_field` 不检查 `status()`。转发方必须先拒绝任何非 `valid` 状态，不能只使用已解析前缀。
 
 两个 trailer 判定函数的完整禁止集合（名称均按 ASCII 大小写不敏感比较，不在集合中的名称返回 `false`）：
 
@@ -4569,18 +4658,46 @@ ruvia::http_priority_fields local{.urgency_ = 2, .incremental_ = true};
 ### 8.10 `"http_uri.h"`
 <a id="api-http-uri-h"></a>
 
+DNS 名称原语、`host[:port]` 分隔符拆分与零拷贝 HTTP(S)/WS(S) URL 拆解。公开 include [`"borrowed_text.h"`](#api-borrowed-text-h)、[`"http_authority.h"`](#api-http-authority-h)（`http_authority_view`、`http_authority_policy`）、[`"http_message.h"`](#api-http-message-h)。源码：[`ruvia-http/include/http_uri.h`](../ruvia-http/include/http_uri.h)
+
+```cpp
+namespace ruvia {
+[[nodiscard]] bool is_valid_dns_domain_name(std::string_view name) noexcept;
+[[nodiscard]] constexpr bool is_dns_subdomain_of(std::string_view host, std::string_view domain) noexcept;
+
+[[nodiscard]] bool split_uri_host_port(std::string_view value, std::string_view& host, std::string_view& port, bool& has_port) noexcept;
+template </* 未指定实现类型：拥有字符的临时字符串 */ text_type>
+bool split_uri_host_port(text_type&&, std::string_view&, std::string_view&, bool&) = delete;
+
+class http_url_view final {
+public:
+    [[nodiscard]] constexpr std::string_view scheme() const noexcept;
+    [[nodiscard]] constexpr std::string_view authority_text() const noexcept;
+    [[nodiscard]] constexpr const http_authority_view& authority() const& noexcept RUVIA_LIFETIMEBOUND;
+    const http_authority_view& authority() const&& = delete;
+    [[nodiscard]] constexpr std::string_view path() const noexcept;
+    [[nodiscard]] constexpr bool has_path() const noexcept;
+    [[nodiscard]] constexpr std::optional<std::string_view> query() const noexcept;
+    [[nodiscard]] constexpr std::optional<std::string_view> fragment() const noexcept;
+    [[nodiscard]] constexpr std::array<std::string_view, 2> target() const noexcept;
+};
+
+[[nodiscard]] std::optional<http_url_view> parse_http_url(borrowed_text value, http_authority_policy policy = http_authority_policy::rfc) noexcept;
+}
+```
+
 | 公开入口 | 契约 |
 | --- | --- |
-| `is_valid_dns_domain_name(std::string_view)` | ASCII LDH 域名，标签 1–63 字节、总长至多 253；拒绝根点、空标签、首尾连字符、Unicode 与百分号转义；IDNA 与公共后缀策略由调用方负责。 |
-| `is_dns_subdomain_of(host, domain)` | 已校验域名之间按标签边界、ASCII 大小写不敏感匹配严格子域；相同名称不是子域。 |
-| `split_uri_host_port(value, host, port, has_port)` | 借用拆分 `host[:port]`，保留 IP-literal 方括号；只校验分隔符，不替代 authority 校验。失败返回假，输出未指定；拒绝临时拥有型字符串。 |
-| `parse_http_url(borrowed_text, http_authority_policy = rfc)` | 零分配拆解 HTTP(S)/WS(S) URL，保留 scheme 大小写与 authority 原文；拒绝 userinfo、zone、非法转义、裸空白、反斜线及路径中的编码 NUL。严格端点策略见 [8.1](#api-http-authority-h)。 |
-| `http_url_view::scheme()` / `authority_text()` / `authority()` | 原始 scheme、authority 文本及已解析 authority，无重复解析。 |
-| `path()` / `has_path()` | 路径切片；缺省路径读取为静态 `"/"`，`has_path()` 仍区分是否实际存在。 |
-| `query()` / `fragment()` | `optional<string_view>` 区分缺省与显式空 `?` / `#`；fragment 被校验但不进入请求目标。 |
-| `target()` | 两片 `array<string_view, 2>` 按序构成 origin-form target；缺省路径且存在 query 时为 `"/"` 与 `"?query"`，无需分配不存在于输入中的连续字符串。 |
+| `is_valid_dns_domain_name(name)` | ASCII LDH 域名，标签 1–63 字节、总长至多 253；拒绝根点、空标签、首尾连字符、Unicode 与百分号转义；IDNA 与公共后缀策略由调用方负责。 |
+| `is_dns_subdomain_of(host, domain)` | 前置条件：两者均为已校验域名（本函数不校验）。按标签边界、ASCII 大小写不敏感匹配严格子域；相同名称不是子域。 |
+| `split_uri_host_port(value, host, port, has_port)` | 借用拆分 RFC 3986 `host [":" port]`，保留 IP-literal 方括号；只校验分隔符，不校验 host / port 语法，不替代 authority 校验。拒绝不配对或不在开头的方括号、`]` 后除 `:` 外的字节、port 中的 `:` / `[` / `]`；空 host / port 可表示。成功时输出借用 `value`，失败返回 `false` 且输出未指定。`= delete` 重载拒绝拥有字符的临时字符串。 |
+| `parse_http_url(value, policy = rfc)` | 零分配拆解完整 URL：scheme 须为 `http` / `https` / `ws` / `wss`（ASCII 大小写不敏感）且后接 `//`；authority 按 `policy` 经 [`parse_http_authority`](#api-http-authority-h) 解析（拒绝 userinfo 与 IPv6 zone，`endpoint` 严格策略见 8.1）；path、query、fragment 只接受 RFC 3986 字符（pchar 与 `/`，query / fragment 另含 `?`）及良构百分号转义，因而拒绝裸空白、反斜线与非 ASCII，path 另拒绝编码 NUL（`%00`）。不做解码或点段归一化。任一不满足返回 `std::nullopt`。 |
+| `http_url_view` | 只能由 `parse_http_url` 产生。`scheme()` / `authority_text()` 为原始拼写（保留大小写与端口数字），`authority()` 为已解析 authority（右值重载删除），无重复解析。 |
+| `path()` / `has_path()` | 路径切片；缺省路径读取为静态 `"/"`，`has_path()` 区分是否实际存在。 |
+| `query()` / `fragment()` | `std::nullopt` 表示缺省，空视图表示显式的 `?` / `#`；fragment 被校验但不进入请求目标。 |
+| `target()` | 两片按序拼接即 origin-form target：有路径时为原始 path（含 `?query`）与空片；缺省路径时为静态 `"/"` 与原始 `?query`（无 query 时为空片）。不分配输入中不存在的连续字符串。 |
 
-- **寿命**：所有非缺省切片借用原始输入；解析拒绝临时拥有型字符串，不做解码或点段归一化。
+- **寿命**：所有非缺省切片借用原始输入；`borrowed_text` 拒绝临时拥有型字符串。
 
 ## 9. 缓存、条件请求、范围、Cookie、CORS 与内容协商
 
@@ -5844,15 +5961,99 @@ enum class http_response_content_coding_status : std::uint8_t {
 ### 9.8 `"http_structured_field.h"`
 <a id="api-http-structured-field-h"></a>
 
-| 公开类型或操作 | 契约 |
-| --- | --- |
-| `http_structured_text_input` | 借用单段输入的游标：`remaining_`、`empty/peek/data/contiguous_size/advance`。 |
-| `http_structured_header_input<iterator>` | 通过首尾迭代器与字段名选择重复字段行，在边界按 `, ` 流式折叠，不预先拼接整个字段。 |
-| `http_structured_item` | `kind_` 分类为 other/integer/boolean/token/string/inner_list，附整数、布尔值与原始字符串拼写；`text() const&` 借用文本，右值访问删除，`has_escapes_` 标记转义。 |
-| `http_structured_parser<input_type>` | 通过 `input_` 组合输入；`take/spaces/ows/key` 消费分隔符、空白与键；`item/parameters/member` 校验项目、参数与内部列表。顶层列表或字典遍历由调用方负责。 |
+RFC 9651 Structured Field Values 的项目（item）、参数与内部列表扫描器：调用方组合输入游标与解析器，自行遍历顶层 List / Dictionary。连续 token / string 借用输入，跨字段行的 string 才拥有文本。公开 include [`"binary_text_encoding.h"`](#api-binary-text-encoding-h)、[`"borrowed_text.h"`](#api-borrowed-text-h)、[`"http_header.h"`](#api-http-header-h)。源码：[`ruvia-http/include/http_structured_field.h`](../ruvia-http/include/http_structured_field.h)
 
-- **按需拥有**：连续 token/string 借用输入；quoted-string 跨重复字段行时按需拥有折叠文本，避免把不连续地址伪装为单个视图。`item/member(..., false)` 仅校验与分类，不保留文本或分配。
-- **错误**：语法拒绝返回假；必要分配失败正常传播，不通过 `noexcept` 终止进程。
+#### 9.8.1 输入游标
+
+```cpp
+namespace ruvia {
+struct http_structured_text_input {
+    std::string_view remaining_;
+    [[nodiscard]] bool empty() const noexcept;
+    [[nodiscard]] char peek() const noexcept;
+    [[nodiscard]] const char* data() const noexcept;
+    [[nodiscard]] std::size_t contiguous_size() const noexcept;
+    void advance() noexcept;
+};
+
+template <typename iterator_type>
+class http_structured_header_input final {
+public:
+    http_structured_header_input(iterator_type first, iterator_type last, std::string_view field_name) noexcept;
+    [[nodiscard]] bool empty() const noexcept;
+    [[nodiscard]] char peek() const noexcept;
+    [[nodiscard]] const char* data() const noexcept;
+    [[nodiscard]] std::size_t contiguous_size() const noexcept;
+    void advance() noexcept;
+};
+}
+```
+
+两种游标提供同一组操作，也是 `http_structured_parser<input_type>` 对 `input_type` 的要求（无正式 concept）：
+
+| 操作 | 契约 |
+| --- | --- |
+| `empty()` | 输入已耗尽。 |
+| `peek()` / `advance()` | 读取 / 跳过下一字节；前置条件 `!empty()`。 |
+| `data()` / `contiguous_size()` | 当前连续片段的起点与剩余长度；单个视图不跨越片段。 |
+| `http_structured_text_input` | 单段输入，聚合类型，片段即 `remaining_`；借用其指向的文本。 |
+| `http_structured_header_input(first, last, field_name)` | 按序选出 `[first, last)` 中名称与 `field_name` ASCII 大小写不敏感相等的字段行（`*iterator` 须提供 `name()` / `value()`，如 [`http_header_view`](#api-http-header-h)），在相邻选中行之间注入 `", "`，流式折叠而不预先拼接；空字段行不被跳过。每个片段是一行剩余部分或注入的分隔符。借用迭代器范围、字段文本与 `field_name`，它们须在游标使用期间存活且不变。 |
+
+#### 9.8.2 `struct http_structured_item` 与 `struct http_structured_parser`
+
+```cpp
+namespace ruvia {
+struct http_structured_item {
+    enum class kind_type { other, integer, boolean, token, string, inner_list } kind_{kind_type::other};
+    std::int64_t integer_{0};
+    bool boolean_{false};
+    std::variant<std::string_view, std::string> text_{std::string_view{}};
+    bool has_escapes_{false};
+
+    [[nodiscard]] std::string_view text() const& noexcept RUVIA_LIFETIMEBOUND;
+    std::string_view text() const&& = delete;
+};
+
+template <typename input_type>
+struct http_structured_parser {
+    input_type input_;
+
+    [[nodiscard]] bool empty() const noexcept;
+    bool take(char ch);
+    void spaces();
+    void ows();
+    std::string_view key();
+    bool item(http_structured_item& value, bool retain_text = true);
+    bool parameters();
+    bool member(http_structured_item& value, bool retain_text = true);
+};
+}
+```
+
+| `http_structured_item::kind_type` | 产生条件与字段 |
+| --- | --- |
+| `other` | 默认值；也用于校验通过但不再细分的 Byte Sequence（`:base64:`，允许省略填充）与 Decimal（整数部分至多 12 位、小数 1–3 位），此时 `text()` 为空。 |
+| `integer` | 至多 15 位十进制数字，可带 `-`；值在 `integer_`。 |
+| `boolean` | `?0` / `?1`；值在 `boolean_`。 |
+| `token` | sf-token；`text()` 借用输入。 |
+| `string` | sf-string；`text()` 为引号内原始拼写（转义未还原），含 `\\` 或 `\"` 时 `has_escapes_` 为 `true`。 |
+| `inner_list` | 仅由 `member()` 产生；内部项目只校验，不对外暴露，`text()` 为空。 |
+
+`text() const&` 借用 `text_`：借用变体指向输入，拥有变体指向本对象；右值重载删除。RFC 9651 的 Date（`@`）与 Display String（`%"`）不受支持，`item()` 对其返回 `false`。
+
+| 成员 | 契约 |
+| --- | --- |
+| `input_` | 聚合初始化的输入游标（[9.8.1](#api-http-structured-field-h)）。 |
+| `empty()` | 输入已耗尽。 |
+| `take(ch)` | 下一字节为 `ch` 时消费并返回 `true`。 |
+| `spaces()` / `ows()` | 跳过 SP / 跳过 SP 与 HTAB。 |
+| `key()` | 下一字节为小写字母或 `*` 时消费整个 key（小写字母、数字、`_`、`-`、`.`、`*`）并返回借用输入的视图；否则返回空视图且不消费。注入的 `", "` 分隔符保证 key 不跨字段行。 |
+| `item(value, retain_text = true)` | 解析一个 bare item 写入 `value`（输入为空时直接返回 `false`，否则先重置 `value`）。`retain_text == false` 只校验与分类，不保留文本、不分配。 |
+| `parameters()` | 解析零个或多个 `;` 参数（`;` 后可有 SP，key 后可接 `=` bare item）；参数值只校验不保留，参数不对外暴露。 |
+| `member(value, retain_text = true)` | List / Dictionary 成员：`(` 开头时解析以 SP 分隔、各自带参数的内部列表及其参数，`value.kind_` 为 `inner_list`；否则为 `item()` 后接 `parameters()`。 |
+
+- **按需拥有**：quoted-string 跨字段行时才把折叠文本复制进 `std::string`，避免把不连续地址伪装为单个视图；只有此时可能分配。
+- **错误**：语法拒绝返回 `false`，此后输入位置与 `value` 内容未指定；分配失败（`std::bad_alloc`）正常传播，不通过 `noexcept` 终止进程。
 
 ## 10. HTTP/1.x
 
